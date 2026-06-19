@@ -186,6 +186,17 @@ gap 1 의 진짜 핵심(임의 명령 실행)을 옵트인으로 구현하되 co
 - [x] 검증: tsc 0 · 신규 11테스트(embed 8: cosine·resolveEmbedModel + semanticQuery 3: 폴백·rerank·캐시) · stub LLM 결정적 검증.
 - 잔여(인증 정공법): 클라이언트 `document.cookie` 토큰을 서버 `/auth/login`+HttpOnly Set-Cookie 로 — 별도 인증 리팩터.
 
+### ✅ 21. 프론트 UI 노출 + 자율 알림/일일 브리핑
+- [x] **프론트 UI 노출**(`frontend/`): 셸 명령 승인 danger UX(명령 전문 코드블록), 도구 사용 한국어 라벨(`toolVisual.ts`), wiki_query 그라운딩 활동 표시(reducer `case`), 대시보드 칩(🔔 승인대기·🤖 자율), 직원 자율레벨 칩(off/읽기/초안승인/자동). 워크스페이스 툴 저장 버그(단축형 필터링) 수정. 백엔드 `GET /autonomy/status`.
+- [x] **자율 알림**(`autonomy/notify.ts`): 웹훅(Slack/Discord/커스텀)+텔레그램, 미설정 no-op. 자율 사이클 런 완료 시 발송.
+- [x] **일일 브리핑**(`autonomy/briefing.ts` + `scheduler.startDaily`): `DAILY_BRIEFING_TIME="HH:MM"`에 위키·결정·학습·승인 다이제스트 발송. `GET /briefing`·`POST /briefing/send`. 시크릿 UI에 채널 자격 등록.
+- [x] 검증: tsc 0(백+프론트) · vite build · 신규 테스트(tools 15·scheduler 6·embed 8·shell 12·briefing 3 등) · 라이브(직원 자율칩 스크린샷·`/briefing` 실데이터·`/autonomy/status`).
+
+### ✅ 22. 통합 검증·마무리
+- [x] **hwpx 테스트 해결** — 사전존재 실패(테스트가 옛 `•` 마커 기대, 소스는 개조식 계층 `-` 마커+전각공백 들여쓰기로 의도 변경)를 실제 출력 확인 후 테스트 갱신 → **suite 121/121 green**.
+- [x] **엔드투엔드 라이브 런** — 서버에 AGENT_TOOL_LOOP·임베딩 켜고 실런: 파이프라인 구조(run_started→company_started→분해→라우팅→팀 spawn→위임→work) 정상 실행·에러 0 확인. **단, 완료 전 스톨** — 직접 Ollama 프로브(`1+1=?`, 내 코드 우회)가 40s+ 무응답으로, 병목은 **gepa 코드가 아니라 로컬 Ollama/하드웨어**임을 입증(gemma4:12b 8.3GB + bge-m3 동시 상주 @24GB).
+- 튜닝 메모(실측): 로컬 LLM 속도가 본질 제약(README 명시). 임베딩(bge-m3)은 채팅모델과 별도로 상주해 메모리 제약 환경에선 경합 가중 → 필요시 `USE_EMBEDDINGS=false` 또는 더 작은 채팅모델·`serve_ollama_tuned.sh`. 큰 num_predict 런 취소 후 Ollama 서버측 생성이 잔존할 수 있음(다음 런 지연).
+
 ## 설계 메모(원본 실측 교훈)
 - num_ctx 요청 미포함(서버 env 전담) — 리로드 스래시 방지.
 - 로컬 동시성=1(단일 KV 슬롯). 마이크로 호출은 작은 모델로 별도 슬롯 여지.

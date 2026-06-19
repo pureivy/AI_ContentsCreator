@@ -329,3 +329,4 @@ tsx src/bench/bench.ts
 - 소형 모델 폭주 백스톱: `num_predict` 캡(8192), 통합만 16000.
 - 마이크로 단발(분해/배정/수렴/분류)은 풀 에이전틱 루프 금지 → 단발 호출.
 - thinking 모델은 `think:false`로 호출(추론에 `num_predict` 소진 → content 공백 방지).
+- 임베딩 의미검색(`USE_EMBEDDINGS`)은 채팅모델과 **별도 모델**(예: bge-m3 ~0.66GB)을 상주시킨다 — 메모리 제약 환경(예: 24GB에 12B 채팅모델)에선 경합이 가중되니, 느리면 `USE_EMBEDDINGS=false`(휴리스틱 폴백)나 더 작은 채팅모델을 쓴다. 의미검색은 전 위키를 임베딩하지 않고 휴리스틱 후보만 rerank해 비용을 억제한다.

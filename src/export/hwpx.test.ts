@@ -8,7 +8,8 @@ describe('markdownToSection', () => {
     const xml = markdownToSection(md, '문서제목');
     expect(xml).toContain('</hs:sec>');
     expect(xml).toContain('<hp:t>제목</hp:t>');
-    expect(xml).toContain('<hp:t>• 항목1</hp:t>');
+    // 개조식 계층 렌더(hwpx.ts): 마크다운 '-' → 레벨2 '-' 마커 + 전각공백(U+3000) 들여쓰기.
+    expect(xml).toContain('- 항목1'); // 마커·본문 보존(들여쓰기 접두엔 무관한 substring 검증)
     expect(xml).toContain('<hp:tbl'); // 마크다운 표 → 한글 표
     expect(xml).toContain('charPrIDRef="7"'); // 제목 스타일
   });
