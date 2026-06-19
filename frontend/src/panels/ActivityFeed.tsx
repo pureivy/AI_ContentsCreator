@@ -5,12 +5,13 @@
 //   07:52:48 · ●─ [avatar] 박정민 → 코다리  (위키 작성)  detail…
 import { ActivityItem, ActivityKind, AgentNode, Team } from "../events/types";
 import { agentColor, agentGlyph, resolveName } from "./agentVisual";
+import { toolLabel } from "./toolVisual";
 import Avatar from "./Avatar";
 
 export const KIND_ICON: Record<ActivityKind, string> = {
   run: "🏁", user: "🗣️", spawn: "🚪", team: "🏷️", delegation: "📨", phase: "🧭",
   message: "💬", critique: "🔍", rebuttal: "↩️", deliverable: "📦",
-  wiki: "📝", edge: "🔗", tool: "🔧", skill: "🧩",
+  wiki: "📝", edge: "🔗", tool: "🔧", skill: "🧩", query: "📚",
   approval: "🔔", lesson: "🎓", session: "📁", fail: "⚠️",
   chat: "💬", rest: "☕", stroll: "🚶", phone: "📞",
 };
@@ -88,9 +89,9 @@ export default function ActivityFeed({
                     <b className="act-target">{nameOf(it.targetId)}</b>
                   </>
                 )}
-                <span className="act-chip">{KIND_ICON[it.kind]} {it.label}</span>
+                <span className="act-chip">{it.kind === "tool" ? toolLabel(it.detail) : `${KIND_ICON[it.kind]} ${it.label}`}</span>
               </div>
-              {it.detail && <div className="act-detail">{cleanDetail(it.detail, nameOf(actor))}</div>}
+              {it.detail && it.kind !== "tool" && <div className="act-detail">{cleanDetail(it.detail, nameOf(actor))}</div>}
             </div>
           </div>
         );

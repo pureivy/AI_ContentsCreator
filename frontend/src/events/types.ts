@@ -147,7 +147,7 @@ export interface WikiEdge {
 export type ActivityKind =
   | "run" | "user" | "spawn" | "team" | "delegation" | "phase"
   | "message" | "critique" | "rebuttal" | "deliverable"
-  | "wiki" | "edge" | "tool" | "skill"
+  | "wiki" | "edge" | "tool" | "skill" | "query"
   | "approval" | "lesson" | "session" | "fail"
   | "chat" | "rest" | "stroll" | "phone";
 

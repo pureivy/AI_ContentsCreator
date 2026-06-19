@@ -83,7 +83,7 @@ export default function EmployeesView() {
       setProfile(p);
       if (p) {
         setGoal(p.goal?.replace(/^#.*\n+/, "").trim() ?? "");
-        setWeb(p.tools.includes("web"));
+        setWeb(p.tools.includes("web") || p.tools.includes("web_search"));
         setAutonomy(p.autonomy_effective);
         setTitle(p.title ?? "");
         setSysPrompt(p.system_prompt ?? "");
@@ -105,7 +105,9 @@ export default function EmployeesView() {
   const saveWorkspace = async () => {
     if (!sel) return;
     setSaving(true);
-    const ok = await patchAgent(sel, { goal, tools: web ? ["wiki", "web"] : ["wiki"], autonomy });
+    // 백엔드 ALLOWED_TOOLS·선그라운딩(agent.ts)이 인식하는 정식(long) 툴명으로 저장 — 'wiki'/'web' 단축형은
+    // 필터링돼 저장이 비워지던 버그 수정. 쓰기 도구(save_note)·셸(run_command)은 역할 툴이 아니라 자율도+AGENT_SHELL 로 게이팅.
+    const ok = await patchAgent(sel, { goal, tools: web ? ["wiki_query", "wiki_ingest", "web_search"] : ["wiki_query", "wiki_ingest"], autonomy });
     setSaving(false);
     if (ok) { flash("워크스페이스 저장됨 ✓"); load(sel); } else flash("저장 실패");
   };
@@ -160,7 +162,12 @@ export default function EmployeesView() {
         </span>
         <span className="emp-dir-info">
           <span className="emp-dir-name">{r.title}{r.name ? <span className="emp-person"> · {r.name}</span> : null}</span>
-          <span className="emp-dir-sub">{tierLabel(r.model)} · {r.tools.join("/") || "툴 없음"}{r.is_critic ? " · 비평가" : ""}</span>
+          <span className="emp-dir-sub">
+            {typeof r.autonomy === "number" && (
+              <span className={`emp-auto a${r.autonomy}`} title={`자율도 ${r.autonomy}`}>{AUTONOMY_LABEL[r.autonomy] ?? r.autonomy}</span>
+            )}
+            {tierLabel(r.model)} · {r.tools.join("/") || "툴 없음"}{r.is_critic ? " · 비평가" : ""}
+          </span>
         </span>
       </button>
       {deletable && (
@@ -283,6 +290,9 @@ export default function EmployeesView() {
                   onChange={(e) => setWeb(e.target.checked)} /><span>🌐 웹 검색 툴</span></label>
                 <button className="btn start emp-save" disabled={saving} onClick={saveWorkspace}>💾 워크스페이스 저장</button>
               </div>
+              <p className="muted" style={{ margin: "4px 0 0", fontSize: 11 }}>
+                자율도 2↑면 쓰기 도구(🗒️ 노트 저장)·⌨️ 셸(서버 <code>AGENT_SHELL=1</code>)을 <b>승인 후</b> 사용합니다. 0=도구 없음 · 1=읽기만.
+              </p>
               <h4>🧩 스킬</h4>
               <div className="emp-skill-list">
                 {profile.skills_loaded.length ? profile.skills_loaded.map((s) => (

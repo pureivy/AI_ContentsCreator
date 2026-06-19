@@ -3,7 +3,7 @@
 // values are live from the same folded uiState the office renders.
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
-import { fetchWikiStats } from "../api";
+import { fetchWikiStats, fetchAutonomyStatus, type AutonomyStatus } from "../api";
 import { countWorking } from "../events/working";
 import type { MetricKind } from "./MetricDrawer";
 
@@ -37,8 +37,16 @@ export default function DashboardBar({ companyName, total, runsCount, onMetric }
   const s = useStore();
   const [now, setNow] = useState(() => new Date());
   const [wikiTotal, setWikiTotal] = useState(0);
+  const [auto, setAuto] = useState<AutonomyStatus | null>(null);
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  // 자율 사이클 상태 — 8초 폴링(활성/대기). AUTO_CYCLE_MINUTES=0 이면 enabled=false → 칩 숨김.
+  useEffect(() => {
+    const load = () => fetchAutonomyStatus().then(setAuto).catch(() => {});
+    load();
+    const t = setInterval(load, 8000);
     return () => clearInterval(t);
   }, []);
   // 위키 = 저장소 지식 페이지 수(원문 source 제외; 현재 런 한정 아님). 마운트 + 8초 폴링으로 업로드/타 세션 반영.
@@ -81,6 +89,12 @@ export default function DashboardBar({ companyName, total, runsCount, onMetric }
         onClick={onMetric && (() => onMetric("wiki"))} />
       <Chip icon="🏆" label="교훈" value={s.lessons.length}
         onClick={onMetric && (() => onMetric("lessons"))} />
+      {s.approvals.length > 0 && (
+        <Chip icon="🔔" label="승인대기" value={s.approvals.length} accent />
+      )}
+      {auto?.enabled && (
+        <Chip icon="🤖" label="자율" value={auto.active ? "동작 중" : "대기"} accent={auto.active} />
+      )}
       <div className={`dash-live${live ? " on" : ""}`}>
         <span className="dash-dot" />
         {live ? "가동 중" : "대기"}

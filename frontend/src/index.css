@@ -897,6 +897,21 @@ button.upload-retry:hover { background: var(--panel2); }
 .approval-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .btn.approve { background: var(--pro); padding: 6px 14px; }
 .btn.reject { background: var(--con); padding: 6px 14px; }
+/* 셸 명령 승인 — 위험 시각화 + 명령 전문 코드블록(휴먼 검토자가 무엇을 실행하는지 명확히 보게). */
+.approval-item.danger { border-left: 3px solid var(--con); background: rgba(210,60,60,0.10);
+  padding: 8px 10px; border-radius: 8px; width: 100%; }
+.approval-act { font-weight: 700; }
+.approval-cmd { margin: 6px 0 0; padding: 6px 9px; background: #1a0f0f; border-radius: 6px;
+  overflow-x: auto; max-width: 100%; }
+.approval-cmd code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  color: #ffd9d9; white-space: pre-wrap; word-break: break-all; }
+/* 직원 카드 자율도 칩 — off(회색)/읽기(파랑)/초안승인(황색)/자동(녹색). */
+.emp-auto { margin-right: 6px; padding: 0 6px; border-radius: 999px; font-size: 10px; font-weight: 700;
+  border: 1px solid currentColor; flex-shrink: 0; }
+.emp-auto.a0 { color: var(--muted); }
+.emp-auto.a1 { color: #5aa0e6; }
+.emp-auto.a2 { color: var(--critic); }
+.emp-auto.a3 { color: var(--pro); }
 
 /* --- live activity in the timeline (what each agent is doing right now) --- */
 .live-activity { margin: 0 0 14px; padding: 10px 11px; background: var(--panel);

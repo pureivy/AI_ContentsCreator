@@ -478,6 +478,15 @@ export function fold(state: UIState, ev: EventEnvelope): UIState {
     case "log":
       return { ...next, log: [...state.log, p.message ?? ""] };
 
+    case "wiki_query": {
+      // 위키 그라운딩(임베딩 의미검색 포함) — '무엇으로 그라운딩했나'를 활동피드에 표시.
+      const id = p.agent_id ?? ev.agent_id;
+      const hits = Array.isArray(p.hits) ? (p.hits as Array<{ page_id?: string }>) : [];
+      if (!id || !hits.length) return next;
+      const slugs = hits.slice(0, 3).map((h) => h.page_id).filter(Boolean).join(", ");
+      return { ...next, activity: act("query", "그라운딩", { actorId: id as string, detail: `${hits.length}개 자료 참조${slugs ? `: ${slugs}` : ""}` }) };
+    }
+
     default:
       return next;
   }

@@ -1136,19 +1136,31 @@ export default function App() {
     ...pendingApprovals.filter((p) => !liveIds.has(p.approval_id) && !decidedIds.has(p.approval_id)),
   ];
 
+  // 승인 행동 라벨 — run_command(셸)는 위험이라 danger 시각화 + 명령 전문을 코드블록으로 노출.
+  const ACTION_LABEL: Record<string, { label: string; danger?: boolean }> = {
+    run_command: { label: "⌨️ 셸 명령 실행", danger: true },
+    save_note: { label: "🗒️ 노트 저장" },
+    publish: { label: "📤 산출물 발행" },
+    write: { label: "✏️ 쓰기" },
+  };
   const approvalsBanner = mergedApprovals.length > 0 && (
     <div className="approvals-banner">
       {mergedApprovals.map((ap) => {
         const aa = ap.agent_id ? s.agents[ap.agent_id] : undefined;
+        const meta = ACTION_LABEL[ap.action_type] ?? { label: ap.action_type };
+        const isShell = ap.action_type === "run_command";
         return (
-        <div key={ap.approval_id} className="approval-item">
+        <div key={ap.approval_id} className={`approval-item${meta.danger ? " danger" : ""}`}>
           <span className="approval-text">
             🔔{" "}
             {ap.agent_id && (
               <Avatar id={ap.agent_id} glyph={agentGlyph(aa?.level, ap.agent_id, aa?.persona?.role ?? "")} size={20} head />
             )}{" "}
             <b>{empLabel(ap.agent_id, aa?.persona) || "시스템"}</b>
-            {" "}승인 요청 · {ap.action_type} — {ap.summary}
+            {" "}승인 요청 · <span className="approval-act">{meta.label}</span>
+            {isShell
+              ? <pre className="approval-cmd"><code>{ap.summary.replace(/^명령 실행:\s*/, "")}</code></pre>
+              : <> — {ap.summary}</>}
           </span>
           <span className="approval-actions">
             <button className="btn approve" onClick={() => decide(ap.approval_id, true)}>승인</button>

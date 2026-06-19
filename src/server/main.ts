@@ -56,6 +56,8 @@ interface RunHandle {
 
 const RUNS = new Map<string, RunHandle>();
 const RUNS_CAP = 200;
+// 마지막 자율 사이클 런(있으면) — /autonomy/status 표출용.
+let lastAutoRun: { ts: string; topic: string } | null = null;
 /** RUNS 무한 누적 방지 — 캡 초과 시 오래된 '종료' 런부터 제거(running 보존, 이벤트는 events.jsonl 영속). */
 function evictRuns(): void {
   if (RUNS.size <= RUNS_CAP) return;
@@ -151,6 +153,7 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
   const abort = new AbortController();
   const handle: RunHandle = { status: 'running', abort, topic, created_ts: new Date().toISOString(), auto: !!opts.auto };
   RUNS.set(id, handle);
+  if (opts.auto) lastAutoRun = { ts: handle.created_ts, topic };
   evictRuns();
 
   startRun(bus, {
@@ -386,6 +389,16 @@ app.get('/api/llm', async (c) => {
 });
 app.get('/api/health', (c) => c.json({ ok: true, backend: CONFIG.backend }));
 app.get('/healthz', (c) => c.json({ ok: true }));
+
+// 자율 사이클 상태 — 프론트 대시보드의 '🤖 자율' 칩용. enabled 면 주기, active 면 자율 런 진행 중.
+app.get('/autonomy/status', (c) => c.json({
+  enabled: CONFIG.autoCycleMinutes > 0,
+  interval_minutes: CONFIG.autoCycleMinutes,
+  shell: CONFIG.agentShell,
+  active: [...RUNS.values()].some((h) => h.auto && h.status === 'running'),
+  last_auto_ts: lastAutoRun?.ts ?? null,
+  last_auto_topic: lastAutoRun?.topic ?? null,
+}));
 
 // ============================================================
 // 회사 — GEPA 프론트 계약(/company, teams 구조) + 자체 UI(/api/company)

@@ -30,6 +30,11 @@ const LEAD_PHASE_DOING: Record<string, string> = {
 const TOOL_ACTION: Array<[RegExp, string]> = [
   [/wiki_(query|list|read|search)/i, "위키 검색 중"],
   [/wiki_(save|add|ingest|write|page)/i, "위키 기록 중"],
+  // 신규 백엔드 도구 — 일반 search/web 패턴보다 먼저 둬야 law_search/dart_search 가 '웹 조사'로 오분류되지 않는다.
+  [/^law/i, "법령 조회 중"],
+  [/^dart/i, "공시 조회 중"],
+  [/save_note/i, "노트 기록 중"],
+  [/run_command|shell/i, "셸 실행 중"],
   [/(^read$|read_source)/i, "원자료 읽는 중"],
   [/^(write|edit|notebookedit)$/i, "문서 작성 중"],
   [/(bash|python|repl|run_code)/i, "데이터 분석 중"],
@@ -47,6 +52,7 @@ function actionLabel(it: ActivityItem): string {
       return d ? `${d} 사용 중` : "도구 사용 중";
     }
     case "wiki": return "위키 기록 중";
+    case "query": return "자료 검색 중";
     case "skill": return it.detail ? `${it.detail} 사용 중` : "스킬 사용 중";
     case "message": case "rebuttal": return "보고 작성 중";
     case "critique": return "교차검증 중";
