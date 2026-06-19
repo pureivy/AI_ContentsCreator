@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle } from './scheduler';
+import { startAutoCycle, startDaily } from './scheduler';
 
 describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -62,6 +62,39 @@ describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
     });
     await vi.advanceTimersByTimeAsync(2000); // 두 틱
     expect(launch).not.toHaveBeenCalled();
+    stop();
+  });
+});
+
+describe('startDaily (일일 브리핑 스케줄)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('시각 형식이 잘못되면 no-op', () => {
+    const run = vi.fn();
+    const stop = startDaily({ time: 'bad', run });
+    vi.advanceTimersByTime(3 * 86_400_000);
+    expect(run).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('지정 시각에 1회 발송하고 같은 날 재발송하지 않는다', () => {
+    vi.setSystemTime(new Date(2026, 5, 19, 8, 59, 0)); // 08:59 로컬
+    const run = vi.fn();
+    const stop = startDaily({ time: '09:00', run });
+    vi.advanceTimersByTime(60_000); // → 09:00, 발화
+    expect(run).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(60_000 * 30); // 09:30 까지 — 당일 1회 가드
+    expect(run).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('지정 시각 전에는 발송하지 않는다', () => {
+    vi.setSystemTime(new Date(2026, 5, 19, 7, 0, 0)); // 07:00
+    const run = vi.fn();
+    const stop = startDaily({ time: '09:00', run });
+    vi.advanceTimersByTime(60_000 * 30); // 07:30 — 아직 전
+    expect(run).not.toHaveBeenCalled();
     stop();
   });
 });

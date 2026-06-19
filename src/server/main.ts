@@ -36,7 +36,9 @@ import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
-import { startAutoCycle, proposeAutonomousTask } from '../autonomy/scheduler';
+import { startAutoCycle, proposeAutonomousTask, startDaily } from '../autonomy/scheduler';
+import { notify, notifyConfigured } from '../autonomy/notify';
+import { buildBriefing } from '../autonomy/briefing';
 import { buildHwpx, hwpxAvailable } from '../export/hwpx';
 import { extractText, isSupportedExt } from '../tools/extract';
 import { classifyAndAssign, getStatuses, reassign, setIngestStatus } from '../tools/classify';
@@ -165,6 +167,10 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
       handle.deliverable = outcome.deliverable;
       handle.positions = outcome.positions;
       handle.subproblems = outcome.subproblems;
+      // 자율 사이클 런 완료 → 알림(채널 설정 시에만 실제 발송).
+      if (opts.auto && CONFIG.notifyAutoCycle && notifyConfigured()) {
+        void notify({ title: `🤖 자율 사이클 완료 · ${topic}`, body: (outcome.deliverable || '(산출물 없음)').slice(0, 1200) });
+      }
     })
     .catch((e: unknown) => {
       if (abort.signal.aborted || isAbort(e)) {
@@ -399,6 +405,13 @@ app.get('/autonomy/status', (c) => c.json({
   last_auto_ts: lastAutoRun?.ts ?? null,
   last_auto_topic: lastAutoRun?.topic ?? null,
 }));
+
+// 일일 브리핑 — 미리보기(GET) + 수동 발송(POST). 설정 시각엔 자동 발송(startDaily).
+app.get('/briefing', (c) => c.json({ ...buildBriefing(), configured: notifyConfigured(), time: CONFIG.dailyBriefingTime }));
+app.post('/briefing/send', async (c) => {
+  const sent = await notify(buildBriefing());
+  return c.json({ sent, configured: notifyConfigured() });
+});
 
 // ============================================================
 // 회사 — GEPA 프론트 계약(/company, teams 구조) + 자체 UI(/api/company)
@@ -1009,6 +1022,18 @@ if (CONFIG.autoCycleMinutes > 0) {
   console.log(`[gepa-ai-office] 자율 사이클 활성 — ${CONFIG.autoCycleMinutes}분 주기(유휴 게이트)`);
 }
 void stopAutoCycle; // 프로세스 생존 동안 유지(unref 타이머라 종료는 막지 않음)
+
+// 일일 브리핑(옵트인: DAILY_BRIEFING_TIME="HH:MM"). 지정 시각에 다이제스트를 알림 채널로 발송. 빈값=off.
+const stopDaily = startDaily({
+  time: CONFIG.dailyBriefingTime,
+  run: () => { void notify(buildBriefing()); },
+  log: (m) => console.log('[briefing]', m),
+});
+if (CONFIG.dailyBriefingTime) {
+  // eslint-disable-next-line no-console
+  console.log(`[gepa-ai-office] 일일 브리핑 활성 — ${CONFIG.dailyBriefingTime}${notifyConfigured() ? '' : ' (알림 채널 미설정 — /api-keys 에서 웹훅/텔레그램 설정 필요)'}`);
+}
+void stopDaily;
 
 const port = CONFIG.port;
 serve({ fetch: app.fetch, hostname: CONFIG.host, port }, (info) => {

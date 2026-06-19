@@ -113,6 +113,10 @@ export interface Config {
   readonly agentShellAllow: readonly string[];
   /** 셸 명령 타임아웃(ms) — 초과 시 SIGKILL. */
   readonly agentShellTimeoutMs: number;
+  /** 일일 브리핑 시각 "HH:MM"(로컬 시간). 빈 문자열=off. 알림 채널 설정 시 그 시각에 다이제스트 전송. */
+  readonly dailyBriefingTime: string;
+  /** 자율 사이클 런 완료 시 알림 전송(알림 채널 설정돼 있을 때만 실제 발송). */
+  readonly notifyAutoCycle: boolean;
 }
 
 const isLocal = (env('BACKEND', 'local') as Backend) === 'local' || envBool('LOCAL_LLM', true);
@@ -196,6 +200,8 @@ export const CONFIG: Config = {
     'ls,cat,grep,rg,wc,head,tail,echo,pwd,sort,uniq,cut,tr,date,which,file,stat,diff,nl,basename,dirname',
   ).split(',').map((s) => s.trim()).filter(Boolean),
   agentShellTimeoutMs: Math.min(Math.max(1000, envInt('AGENT_SHELL_TIMEOUT_MS', 60_000)), 600_000),
+  dailyBriefingTime: env('DAILY_BRIEFING_TIME', '').trim(),
+  notifyAutoCycle: envBool('NOTIFY_AUTO_CYCLE', true),
 };
 
 /** 로컬 모델용 간결·수렴 지시(시스템 프롬프트 말미에 덧붙임). 소형 모델 장황함 억제. */

@@ -21,6 +21,10 @@ interface BuiltinDef { key: string; label: string; icon: string; desc: string; p
 const BUILTIN: BuiltinDef[] = [
   { key: 'ANTHROPIC_API_KEY', label: 'Anthropic (Claude)', icon: '🟣', desc: 'Claude 클라우드 백엔드 사용 시 필요', placeholder: 'sk-ant-…', needs_restart: true },
   { key: 'OPENAI_API_KEY', label: 'OpenAI', icon: '🟢', desc: 'OpenAI 호환 백엔드(선택)', placeholder: 'sk-…', needs_restart: true },
+  // 알림 채널(자율 사이클 완료·일일 브리핑) — 설정하면 자동 발송. 미설정이면 알림 no-op.
+  { key: 'NOTIFY_WEBHOOK_URL', label: '알림 웹훅', icon: '🔔', desc: '자율 사이클·일일 브리핑을 POST 할 URL(Slack/Discord/커스텀)', placeholder: 'https://hooks.…', needs_restart: false },
+  { key: 'TELEGRAM_BOT_TOKEN', label: '텔레그램 봇 토큰', icon: '📨', desc: '텔레그램 알림(봇 토큰 + 챗 ID 둘 다 설정 시 발송)', placeholder: '123456:ABC…', needs_restart: false },
+  { key: 'TELEGRAM_CHAT_ID', label: '텔레그램 챗 ID', icon: '💬', desc: '알림을 받을 텔레그램 chat_id', placeholder: '123456789', needs_restart: false },
   // 법령(LAW)·DART 등 외부 데이터 소스 키는 그라운딩 커넥터(grounding/)가 선언 → connectorKeyDefs 로 합류.
 ];
 // 커넥터가 선언한 키도 '내장 키'처럼 다룬다(값 편집만, 삭제 불가, 설정 시 자동 연동).

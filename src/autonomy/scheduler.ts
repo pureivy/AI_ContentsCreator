@@ -53,6 +53,35 @@ export function startAutoCycle(deps: AutoCycleDeps): () => void {
   return () => clearInterval(timer);
 }
 
+export interface DailyDeps {
+  /** "HH:MM" 로컬 시각. 형식 불일치면 no-op. */
+  time: string;
+  run: () => void;
+  log?: (msg: string) => void;
+}
+
+/** 매일 지정 시각(로컬)에 1회 run() 호출 — 1분 간격 체크 + 당일 1회 가드. 정지 함수 반환. */
+export function startDaily(deps: DailyDeps): () => void {
+  const m = /^(\d{1,2}):(\d{2})$/.exec((deps.time || '').trim());
+  if (!m) return () => {};
+  const hh = Number(m[1]); const mm = Number(m[2]);
+  if (hh > 23 || mm > 59) return () => {};
+  let lastFired = '';
+  const tick = (): void => {
+    const now = new Date();
+    const today = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+    if (today === lastFired) return; // 당일 1회만
+    if (now.getHours() === hh && now.getMinutes() >= mm) {
+      lastFired = today;
+      try { deps.log?.(`일일 브리핑 발송(${deps.time})`); deps.run(); }
+      catch (e) { deps.log?.(`일일 브리핑 오류: ${e instanceof Error ? e.message : String(e)}`); }
+    }
+  };
+  const timer = setInterval(tick, 60_000);
+  if (typeof timer.unref === 'function') timer.unref();
+  return () => clearInterval(timer);
+}
+
 function readSafe(p: string): string {
   try { return fs.readFileSync(p, 'utf-8'); } catch { return ''; }
 }
