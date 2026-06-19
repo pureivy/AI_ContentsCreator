@@ -189,6 +189,8 @@ pnpm start
 | `REQUIRE_APPROVAL` / `APPROVAL_TIMEOUT_S` | `false` / `600` | 발행 승인 게이트 |
 | `WRITE_SESSION_DIGEST` | `true` | 세션 다이제스트 영속화 |
 | `WEB_SEARCH` | `true` | 인-프로세스 웹검색(DDG) |
+| `USE_EMBEDDINGS` | `true` | 위키 **의미검색**(retrieve→임베딩 rerank). 임베딩 모델 미설치면 휴리스틱으로 자동 폴백(회귀 0) |
+| `EMBED_MODEL` | `bge-m3` | Ollama 임베딩 모델(다국어). 활성하려면 `ollama pull bge-m3`. 미설치/미해당이면 설치된 임베딩류 자동 탐색→없으면 폴백 |
 | `AGENT_TOOL_LOOP` | `false` | **능동 다단계 tool-loop**(opt-in). on 이면 `work` 단계 에이전트가 `<tool name="…">` 태그로 추가 자료를 스스로 조회·재호출 |
 | `AGENT_MAX_TOOL_CALLS` | `4` | 한 에이전트 턴의 총 도구 호출 캡(`[1,12]`, 로컬 속도 백스톱) |
 | `ENFORCE_AUTONOMY` | `true` | 자율레벨(0~3) 강제 — 쓰기성 도구를 게이팅(2=승인, 3=자동, ≤1=차단). 쓰기 도구가 없으면 no-op |
@@ -220,7 +222,7 @@ data/
 | 워크플로우 | 코드 | 설명 |
 |---|---|---|
 | **ingest** | `ingest()` | LLM 주도: 산출물/소스 → 엔티티·개념 추출 → 페이지 생성·갱신([[링크]]) → index 재생성 → log 기록. 재적재 시 '갱신' 섹션 머지(compounding). |
-| **query** | `query()` | 인덱스 우선 탐색(임베딩 불필요) → 에이전트 작업 전 관련 지식 주입(그라운딩, `wiki_query` 이벤트). |
+| **query** | `query()` / `semanticQuery()` | 휴리스틱 인덱스 탐색(임베딩 불필요) → 에이전트 작업 전 관련 지식 주입(그라운딩). `USE_EMBEDDINGS`+임베딩 모델 설치 시 **retrieve→임베딩 rerank**(휴리스틱으로 후보 recall 후 코사인 재정렬, 전 위키 임베딩 회피·hash 캐시). 모델 없으면 휴리스틱 폴백. |
 | **lint** | `lint()` | 고아 페이지·끊긴 링크 = 지식 갭 탐지. → `GET /wiki/lint`. |
 | **maintain** | `maintain()` | 자가수선: lint가 찾은 끊긴 링크를 LLM이 보충해 페이지 생성·연결. `POST /wiki/maintain?n=N` + **런 종료 시 자동**(maxFill 2). |
 | **audit** | `findContradictions()` | 토픽 겹치는 페이지 쌍을 LLM 비교 → 상충 주장 탐지. `?resolve=1`이면 ⚖️ 해소 노트 기록. `POST /wiki/audit?n=N&resolve=1`. |

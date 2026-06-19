@@ -12,8 +12,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { CONFIG } from '../config';
 import { ollama } from '../llm/ollama';
+import { cosineSim, resolveEmbedModel } from './embed';
 
 export type PageType = 'entity' | 'concept' | 'source' | 'overview' | 'answer' | 'lesson';
 
@@ -404,6 +406,35 @@ export class LlmWiki {
     return filled;
   }
 
+  /** 고아(인바운드 없는 concept/entity)를 그래프에 연결 — 고아가 이미 [[링크]]한 대상에 역링크([[고아]])를
+   *  추가해 양방향화한다(토큰 추측이 아니라 고아 자신이 선언한 관계 사용). 가능하면 비-고아(이미 연결된)
+   *  대상에 역링크해 고아가 본 그래프에 합류하게 한다. 해소한 고아 수 반환. */
+  linkOrphans(): number {
+    const all = this.allPages();
+    const bySlug = new Map(all.map((p) => [p.slug, p] as const));
+    const inbound = new Set<string>();
+    for (const p of all) for (const l of p.links) inbound.add(l);
+    const orphans = all.filter((p) => (p.type === 'entity' || p.type === 'concept') && !inbound.has(p.slug));
+    let fixed = 0;
+    for (const o of orphans) {
+      const targets = o.links.map((l) => bySlug.get(l)).filter((t): t is WikiPage => !!t && t.slug !== o.slug);
+      if (!targets.length) continue;
+      // 비-고아(연결된) 대상 우선 → 고아가 본 그래프에 합류.
+      const target = targets.find((t) => inbound.has(t.slug)) ?? targets[0]!;
+      if (!target.links.includes(o.slug)) {
+        const body = target.body.includes('## 관련')
+          ? target.body.replace('## 관련', `## 관련\n- [[${o.title}]]`)
+          : target.body.trim() + `\n\n## 관련\n- [[${o.title}]]`;
+        this.writePage({ ...target, body, links: outboundLinks(body), updated: nowDate() });
+        target.body = body; target.links = outboundLinks(body); // in-memory 갱신(후속 반복 반영)
+      }
+      inbound.add(o.slug);
+      fixed++;
+    }
+    if (fixed) this.rebuildIndex();
+    return fixed;
+  }
+
   // ---- QUERY (인덱스 우선): 질의 관련 페이지 본문을 그라운딩 컨텍스트로 반환 ----
   query(question: string, limit = 4): { hits: WikiPage[]; context: string } {
     const qt = tokenize(question);
@@ -434,6 +465,62 @@ export class LlmWiki {
     const context = hits.map((p) => `### ${p.title}\n${excerpt(p.body, qt, p.type === 'source' ? 3500 : 800)}`).join('\n\n');
     return { hits, context };
   }
+
+  // ---- 의미검색(임베딩 rerank) — retrieve(휴리스틱 recall) → rerank(코사인). 임베딩 모델 없으면 query() 로 폴백. ----
+  //  전 위키를 임베딩하지 않고, 값싼 휴리스틱으로 후보 K개를 먼저 뽑은 뒤 그 후보만 임베딩해 재정렬한다
+  //  (수천 페이지 일괄 임베딩 회피 + 캐시). USE_EMBEDDINGS=false 또는 모델 미설치면 휴리스틱과 동일(회귀 0).
+  async semanticQuery(question: string, limit = 4, signal?: AbortSignal): Promise<{ hits: WikiPage[]; context: string }> {
+    if (!CONFIG.useEmbeddings || !question.trim()) return this.query(question, limit);
+    const model = resolveEmbedModel(await ollama.listModels());
+    if (!model) return this.query(question, limit); // 임베딩 모델 미설치 → 휴리스틱
+    // 1) recall — 휴리스틱으로 후보 K개(충분히 넓게).
+    const K = Math.max(limit * 8, 30);
+    const cand = this.query(question, K).hits;
+    if (cand.length <= limit) return this.query(question, limit);
+    // 2) 질의 + 후보 임베딩(후보는 hash 캐시 — 변경된 페이지만 재임베딩).
+    const qEmb = await ollama.embed(model, [question], signal);
+    if (!qEmb?.[0]) return this.query(question, limit); // 임베딩 실패 → 휴리스틱
+    const qv = qEmb[0];
+    const cache = this.loadEmbedCache(model);
+    const texts = cand.map((p) => `${p.title}\n${p.body.slice(0, 2000)}`);
+    const vecs: Array<number[] | null> = cand.map((p, i) => {
+      const c = cache.vecs[p.slug];
+      return c && c.hash === sha1(texts[i]!) ? c.vec : null;
+    });
+    const missIdx = vecs.map((v, i) => (v ? -1 : i)).filter((i) => i >= 0);
+    if (missIdx.length) {
+      const emb = await ollama.embed(model, missIdx.map((i) => texts[i]!), signal);
+      if (emb) missIdx.forEach((i, j) => {
+        const v = emb[j];
+        if (v) { vecs[i] = v; cache.vecs[cand[i]!.slug] = { hash: sha1(texts[i]!), vec: v }; }
+      });
+      this.saveEmbedCache(model, cache);
+    }
+    // 3) rerank — 코사인 내림차순. 임베딩이 빈(실패) 후보는 뒤로.
+    const ranked = cand
+      .map((p, i) => ({ p, sim: vecs[i] ? cosineSim(qv, vecs[i]!) : -1 }))
+      .sort((a, b) => b.sim - a.sim)
+      .slice(0, limit)
+      .filter((x) => x.sim > -1)
+      .map((x) => x.p);
+    const hits = ranked.length ? ranked : this.query(question, limit).hits;
+    const qt = tokenize(question);
+    const context = hits.map((p) => `### ${p.title}\n${excerpt(p.body, qt, p.type === 'source' ? 3500 : 800)}`).join('\n\n');
+    return { hits, context };
+  }
+
+  private embedCachePath(): string { return path.join(this.dir, '.embeddings.json'); }
+  private loadEmbedCache(model: string): { model: string; vecs: Record<string, { hash: string; vec: number[] }> } {
+    try {
+      const c = JSON.parse(fs.readFileSync(this.embedCachePath(), 'utf-8')) as { model?: string; vecs?: Record<string, { hash: string; vec: number[] }> };
+      if (c && c.model === model && c.vecs) return { model, vecs: c.vecs }; // 모델 바뀌면 캐시 무효(차원 불일치 방지)
+    } catch { /* 신규/손상 */ }
+    return { model, vecs: {} };
+  }
+  private saveEmbedCache(model: string, cache: { vecs: Record<string, { hash: string; vec: number[] }> }): void {
+    try { fs.writeFileSync(this.embedCachePath(), JSON.stringify({ model, vecs: cache.vecs })); } catch { /* 캐시 실패 무해 */ }
+  }
+
   /** store.ts 호환 검색(슬러그/점수). */
   search(q: string, limit = 8): Array<{ page_id: string; title: string; score: number }> {
     return this.query(q, limit).hits.map((p) => ({ page_id: p.slug, title: p.title, score: 1 }));
@@ -708,6 +795,9 @@ export function chunkBody(body: string, maxChunks = 60, minSize = 3500): string[
 
 function tokenize(s: string): string[] {
   return (s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => t.length > 1);
+}
+function sha1(s: string): string {
+  return createHash('sha1').update(s).digest('hex');
 }
 function extractJson<T>(raw: string): T | null {
   if (!raw) return null;

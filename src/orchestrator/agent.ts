@@ -118,7 +118,8 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
   let grounding = '';
   if (args.groundQuery && tools.includes('wiki_query')) {
     // 데이터 그라운딩 폭 — 결산보고서처럼 여러 자료의 실수치를 종합해야 하므로 6건(이슈12). source 우대+넉넉한 본문은 query() 에서.
-    const { hits, context } = llmWiki().query(args.groundQuery, 6);
+    // 임베딩 모델 설치 시 의미검색(retrieve→rerank), 없으면 휴리스틱 query() 로 자동 폴백.
+    const { hits, context } = await llmWiki().semanticQuery(args.groundQuery, 6, args.signal);
     if (context) {
       grounding = context;
       bus.emit(

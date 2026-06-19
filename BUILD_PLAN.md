@@ -178,6 +178,14 @@ gap 1 의 진짜 핵심(임의 명령 실행)을 옵트인으로 구현하되 co
 - [x] 검증: tsc 0 · 신규 14테스트(checkCommand/runCommand 12 + 통합 2) · 라이브 스모크로 안전명령 실행 + 보안리뷰 PoC 8종 전부 차단 실증.
 - 잔존(문서화): 운영자가 인터프리터를 allowlist 에 추가하거나 샌드박스에 외부 심볼릭링크를 심는 경우 — LLM 위협모델 밖, 운영자 책임.
 
+### ✅ 20. 위키 임베딩 의미검색 + 인증 하드닝
+- [x] **임베딩 의미검색**(`src/wiki/embed.ts` 신규 + `llmwiki.semanticQuery`) — 비교보고서가 지적한 '평면 토큰 스코어링'을 보완. **retrieve→rerank**: 값싼 휴리스틱 `query()` 로 후보 K개 recall → 그 후보만 Ollama `/api/embed`(`ollama.embed`)로 임베딩→코사인 재정렬. 전 위키(수천 페이지) 일괄 임베딩 회피 + hash 캐시(`data/wiki/.embeddings.json`, 모델 변경 시 무효).
+- [x] **graceful 폴백** — `USE_EMBEDDINGS=false`·임베딩 모델 미설치·임베딩 실패 시 모든 경로가 휴리스틱 `query()` 로 폴백(회귀 0). `resolveEmbedModel` 이 설정모델→설치 임베딩류 자동탐색→null. 기본 `EMBED_MODEL=bge-m3`(`ollama pull` 필요).
+- [x] `agent.ts` 그라운딩을 `semanticQuery`(async) 로 전환 — 메인 그라운딩 경로에 의미검색 적용.
+- [x] **인증 하드닝**(커밋 보안리뷰 대응) — `/wiki/inject` 의 `?token=` 쿼리 폴백 제거(URL/로그/referrer 유출 차단) + 상수시간 비교 `timingSafeEqual`(타이밍 공격 방지).
+- [x] 검증: tsc 0 · 신규 11테스트(embed 8: cosine·resolveEmbedModel + semanticQuery 3: 폴백·rerank·캐시) · stub LLM 결정적 검증.
+- 잔여(인증 정공법): 클라이언트 `document.cookie` 토큰을 서버 `/auth/login`+HttpOnly Set-Cookie 로 — 별도 인증 리팩터.
+
 ## 설계 메모(원본 실측 교훈)
 - num_ctx 요청 미포함(서버 env 전담) — 리로드 스래시 방지.
 - 로컬 동시성=1(단일 KV 슬롯). 마이크로 호출은 작은 모델로 별도 슬롯 여지.

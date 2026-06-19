@@ -131,6 +131,27 @@ export class OllamaClient {
   }
 
   /**
+   * 임베딩(POST /api/embed) — 위키 의미검색용. input 배열을 한 번에 보내 임베딩 배열을 받는다.
+   * 실패(모델 미설치·연결오류)는 null 반환 → 호출측이 휴리스틱으로 폴백(회귀 0).
+   */
+  async embed(model: string, input: string[], signal?: AbortSignal): Promise<number[][] | null> {
+    if (!model || !input.length) return null;
+    try {
+      const r = await fetch(this.url('/api/embed'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, input, keep_alive: CONFIG.keepAlive }),
+        signal: signal ?? AbortSignal.timeout(120_000),
+      });
+      if (!r.ok) return null;
+      const data = (await r.json()) as { embeddings?: number[][] };
+      return Array.isArray(data.embeddings) && data.embeddings.length ? data.embeddings : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * 채팅 완성 — /api/chat 스트리밍(NDJSON). onDelta 로 토큰을 흘리고, 완료 시 집계 반환.
    * num_ctx 는 의도적으로 미포함(서버 env 전담).
    */

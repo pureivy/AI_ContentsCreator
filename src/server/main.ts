@@ -7,7 +7,7 @@
 import { readFile } from 'node:fs/promises';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { serve } from '@hono/node-server';
@@ -466,11 +466,19 @@ app.post('/company/teams/:id/members', async (c) => {
 app.get('/wiki/graph', (c) => c.json(llmWiki().graph()));
 app.get('/wiki/stats', (c) => { const s = llmWiki().stats(); return c.json({ pages: s.pages, sources: s.sources }); });
 // 외부 지식 주입(Connect AI /api/brain-inject 벤치마킹) — {title, markdown} 를 위키 source 로 저장+ingest.
-// 인증 필수: 시크릿 INJECT_TOKEN(또는 env)과 Bearer/?token 일치해야 함(Connect 의 무인증 취약점 보완).
+/** 상수시간 토큰 비교 — 타이밍 공격 방지. 길이 불일치도 안전 처리(timingSafeEqual 은 동일 길이만 허용). */
+function safeEqual(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const ba = Buffer.from(a), bb = Buffer.from(b);
+  return ba.length === bb.length && timingSafeEqual(ba, bb);
+}
+
+// 인증 필수: 시크릿 INJECT_TOKEN(또는 env)과 **Bearer 헤더만** 일치해야 함(Connect 의 무인증 취약점 보완).
+// 쿼리 토큰(?token=)은 URL·로그·referrer 로 유출되므로 폐기. 비교는 상수시간(safeEqual).
 app.post('/wiki/inject', async (c) => {
   const expected = getSecret('INJECT_TOKEN') || process.env.INJECT_TOKEN || '';
-  const token = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '') || c.req.query('token') || '';
-  if (!expected || token !== expected) return c.json({ error: '인증 실패 — 시크릿 INJECT_TOKEN 을 설정하고 Bearer 토큰을 일치시키세요' }, 401);
+  const token = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '');
+  if (!expected || !safeEqual(token, expected)) return c.json({ error: '인증 실패 — 시크릿 INJECT_TOKEN 을 설정하고 Bearer 토큰을 일치시키세요' }, 401);
   const body = await c.req.json<{ title?: string; markdown?: string; content?: string }>().catch(() => ({}) as { title?: string; markdown?: string; content?: string });
   const title = (body.title ?? '').trim();
   const content = (body.markdown ?? body.content ?? '').trim();

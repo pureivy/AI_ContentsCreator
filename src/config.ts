@@ -174,7 +174,8 @@ export const CONFIG: Config = {
   evolveEmployees: envBool('EVOLVE_EMPLOYEES', true), // 자가학습 — 런 종료 후 교훈 누적(백그라운드)
 
   useEmbeddings: envBool('USE_EMBEDDINGS', true),
-  embedModel: env('EMBED_MODEL', 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'),
+  // Ollama 임베딩 모델(다국어·한국어 양호). 미설치면 위키 query 는 휴리스틱으로 자동 폴백(`ollama pull bge-m3`).
+  embedModel: env('EMBED_MODEL', 'bge-m3'),
   dedupSimThreshold: Number(env('DEDUP_SIM_THRESHOLD', '0.85')),
   relateSimThreshold: Number(env('RELATE_SIM_THRESHOLD', '0.55')),
   relateTopK: envInt('RELATE_TOP_K', 3),
