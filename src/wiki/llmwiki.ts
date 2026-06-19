@@ -1,0 +1,756 @@
+/**
+ * LLM Wiki — Andrej Karpathy 의 "LLM Wiki" 패턴 구현 (2026-04).
+ * 참고: https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
+ *
+ * RAG(쿼리 시 임베딩 청크 검색)와 달리, 에이전트가 직접 유지하는 **마크다운 지식베이스**:
+ *  - raw/        : 원본 소스(불변)
+ *  - wiki/*.md   : LLM이 유지하는 엔티티/개념/소스요약 페이지. YAML 프런트매터 + `[[위키링크]]`.
+ *  - wiki/index.md : 카탈로그(페이지 1줄 요약, 카테고리별) — 인덱스 우선 탐색의 진입점.
+ *  - wiki/log.md   : append-only 타임라인 `## [YYYY-MM-DD] op | Title`.
+ *  - WIKI_SCHEMA.md: 유지 규칙(스키마) 문서.
+ * 지식은 한 번 컴파일해 계속 갱신(compounding) — ingest/query/lint 3워크플로우.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { CONFIG } from '../config';
+import { ollama } from '../llm/ollama';
+
+export type PageType = 'entity' | 'concept' | 'source' | 'overview' | 'answer' | 'lesson';
+
+export interface WikiPage {
+  title: string;
+  slug: string;
+  type: PageType;
+  aliases: string[];
+  sources: string[];
+  contributors: string[];
+  updated: string;
+  summary: string;
+  body: string;
+  /** 본문의 [[링크]] 대상 슬러그들. */
+  links: string[];
+}
+
+const FM_RE = /^---\n([\s\S]*?)\n---\n?/;
+const LINK_RE = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
+const ARRAY_KEYS = new Set(['aliases', 'sources', 'contributors']);
+// wiki 루트의 비-페이지 파일(평면 구조에서 페이지와 구분) — 카탈로그·타임라인·스키마.
+const RESERVED_FILES = new Set(['index.md', 'log.md', 'WIKI_SCHEMA.md', 'README.md']);
+
+export function slugify(s: string): string {
+  return (s || '').trim().toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]/gu, '')
+    .replace(/\s+/g, '-')
+    .slice(0, 80) || 'page';
+}
+/** 로컬 타임존 기준 YYYY-MM-DD (UTC 자정 어긋남 방지). */
+function nowDate(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function esc(s: string): string { return s.replace(/\n+/g, ' ').trim(); }
+
+function parseFrontmatter(text: string): { meta: Record<string, unknown>; body: string } {
+  const m = text.match(FM_RE);
+  if (!m) return { meta: {}, body: text };
+  const meta: Record<string, unknown> = {};
+  for (const line of m[1]!.split('\n')) {
+    const i = line.indexOf(':');
+    if (i < 0) continue;
+    const k = line.slice(0, i).trim();
+    const v: string = line.slice(i + 1).trim();
+    if (ARRAY_KEYS.has(k)) {
+      // 배열 키만 배열로 — summary/title 등 스칼라가 대괄호로 시작해도 오파싱 안 됨.
+      try {
+        const j = JSON.parse(v);
+        meta[k] = Array.isArray(j) ? j : [String(j)];
+      } catch {
+        meta[k] = v.replace(/^\[|\]$/g, '').split(',').map((x) => x.trim()).filter(Boolean);
+      }
+    } else {
+      meta[k] = v;
+    }
+  }
+  return { meta, body: text.slice(m[0].length) };
+}
+function serialize(p: WikiPage): string {
+  const fm = [
+    '---',
+    `title: ${esc(p.title)}`,
+    `slug: ${p.slug}`,
+    `type: ${p.type}`,
+    `aliases: ${JSON.stringify(p.aliases)}`,
+    `sources: ${JSON.stringify(p.sources)}`,
+    `contributors: ${JSON.stringify(p.contributors)}`,
+    `updated: ${p.updated}`,
+    `summary: ${esc(p.summary)}`,
+    '---',
+    '',
+  ].join('\n');
+  return fm + p.body.trim() + '\n';
+}
+function outboundLinks(body: string): string[] {
+  const out = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = LINK_RE.exec(body)) !== null) out.add(slugify(m[1]!));
+  return [...out];
+}
+
+export class LlmWiki {
+  readonly dir: string;
+  readonly rawDir: string;
+  private readonly pagesDir: string;
+  private chain: Promise<unknown> = Promise.resolve();
+
+  /** 위키 변경 작업을 직렬화 — 동시 런/maintain/sources 의 read-modify-write 경합 방지. */
+  private serialize<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.chain.then(fn, fn);
+    this.chain = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  constructor(dir: string = CONFIG.wikiDir) {
+    this.dir = dir;
+    this.pagesDir = dir; // 평면 — 페이지를 wiki 루트에 직접(obsidian vault 호환). index/log/schema 는 RESERVED_FILES.
+    this.rawDir = path.join(path.dirname(dir), 'raw');
+    fs.mkdirSync(this.pagesDir, { recursive: true });
+    fs.mkdirSync(this.rawDir, { recursive: true });
+    this.migrateFlat();
+    this.ensureSchema();
+  }
+
+  /** 기존 pages/ 하위 페이지를 wiki 루트로 1회 평면 이동(구조 변경 마이그레이션). */
+  private migrateFlat(): void {
+    const old = path.join(this.dir, 'pages');
+    if (!fs.existsSync(old)) return;
+    try {
+      for (const f of fs.readdirSync(old)) {
+        if (!f.endsWith('.md')) continue;
+        const dst = path.join(this.dir, f);
+        if (!fs.existsSync(dst)) fs.renameSync(path.join(old, f), dst);
+      }
+      fs.rmdirSync(old);
+    } catch { /* 무해 */ }
+  }
+
+  private pagePath(slug: string): string { return path.join(this.pagesDir, `${slug}.md`); }
+
+  private ensureSchema(): void {
+    const sp = path.join(this.dir, 'WIKI_SCHEMA.md');
+    if (fs.existsSync(sp)) return;
+    fs.writeFileSync(sp, SCHEMA_DOC, 'utf-8');
+  }
+
+  // ---- 읽기 ----
+  getPage(slug: string): WikiPage | undefined {
+    // 경로 탈출 방지(외부 입력 /wiki/page/:id, refs) — 슬러그에 구분자·.. 금지 + 컨테인먼트.
+    if (!slug || /[/\\]|\.\./.test(slug)) return undefined;
+    if (RESERVED_FILES.has(`${slug}.md`)) return undefined; // 예약 파일(index/log/schema)은 페이지 아님
+    const fp = this.pagePath(slug);
+    if (!path.resolve(fp).startsWith(path.resolve(this.pagesDir) + path.sep)) return undefined;
+    if (!fs.existsSync(fp)) return undefined;
+    return this.readPage(fp);
+  }
+  private readPage(fp: string): WikiPage {
+    const text = fs.readFileSync(fp, 'utf-8');
+    const { meta, body } = parseFrontmatter(text);
+    const arr = (k: string): string[] => Array.isArray(meta[k]) ? (meta[k] as string[]) : [];
+    const slug = (meta.slug as string) || path.basename(fp, '.md');
+    return {
+      title: (meta.title as string) || slug,
+      slug,
+      type: ((meta.type as string) || 'concept') as PageType,
+      aliases: arr('aliases'),
+      sources: arr('sources'),
+      contributors: arr('contributors'),
+      updated: (meta.updated as string) || '',
+      summary: (meta.summary as string) || '',
+      body,
+      links: outboundLinks(body),
+    };
+  }
+  allPages(): WikiPage[] {
+    if (!fs.existsSync(this.pagesDir)) return [];
+    return fs.readdirSync(this.pagesDir)
+      .filter((f) => f.endsWith('.md') && !RESERVED_FILES.has(f))
+      .map((f) => this.readPage(path.join(this.pagesDir, f)));
+  }
+  list(type?: PageType): WikiPage[] {
+    let ps = this.allPages();
+    if (type) ps = ps.filter((p) => p.type === type);
+    return ps.sort((a, b) => b.updated.localeCompare(a.updated));
+  }
+  stats(): { pages: number; entities: number; concepts: number; sources: number; links: number } {
+    const ps = this.allPages();
+    return {
+      pages: ps.length,
+      entities: ps.filter((p) => p.type === 'entity').length,
+      concepts: ps.filter((p) => p.type === 'concept').length,
+      sources: ps.filter((p) => p.type === 'source').length,
+      links: ps.reduce((n, p) => n + p.links.length, 0),
+    };
+  }
+
+  // ---- 쓰기(페이지 머지) ----
+  private writePage(p: WikiPage): void {
+    fs.writeFileSync(this.pagePath(p.slug), serialize(p), 'utf-8');
+  }
+  /** 같은 슬러그가 있으면 본문에 '갱신' 섹션을 덧대고 메타 합집합(Karpathy: kept current). */
+  upsertPage(input: {
+    title: string; type: PageType; body: string; summary?: string;
+    sources?: string[]; contributors?: string[]; aliases?: string[];
+  }): WikiPage {
+    const slug = slugify(input.title);
+    const existing = this.getPage(slug);
+    const today = nowDate();
+    if (existing) {
+      const merged: WikiPage = {
+        ...existing,
+        // source → entity/concept 승격은 허용(반대 강등은 막음).
+        type: existing.type === 'source' && input.type !== 'source' ? input.type : existing.type,
+        summary: input.summary || existing.summary,
+        sources: [...new Set([...existing.sources, ...(input.sources ?? [])])],
+        contributors: [...new Set([...existing.contributors, ...(input.contributors ?? [])])],
+        aliases: [...new Set([...existing.aliases, ...(input.aliases ?? [])])],
+        updated: today,
+        body: existing.body.trim() + `\n\n## 갱신 (${today})\n${input.body.trim()}\n`,
+        links: [],
+      };
+      merged.links = outboundLinks(merged.body);
+      this.writePage(merged);
+      return merged;
+    }
+    const page: WikiPage = {
+      title: input.title, slug, type: input.type,
+      aliases: [...new Set(input.aliases ?? [])], sources: [...new Set(input.sources ?? [])],
+      contributors: [...new Set(input.contributors ?? [])], updated: today,
+      summary: input.summary ?? esc(input.body).slice(0, 120),
+      body: input.body.trim() + '\n', links: outboundLinks(input.body),
+    };
+    this.writePage(page);
+    return page;
+  }
+
+  saveRaw(name: string, content: string): string {
+    const day = nowDate();
+    const dir = path.join(this.rawDir, day);
+    fs.mkdirSync(dir, { recursive: true });
+    // 경로 제거(폴더 업로드 시 상대경로 유입) + 확장자 보존하며 본체 길이 제한(긴 파일명 잘림 방지).
+    const base = path.basename((name || 'source').replace(/\\/g, '/')) || 'source';
+    const ext = path.extname(base).slice(0, 12);
+    const stem = (base.slice(0, base.length - path.extname(base).length).replace(/\s+/g, '_').slice(0, 80)) || 'source';
+    const safe = stem + ext;
+    const rel = `raw/${day}/${safe}`;
+    fs.writeFileSync(path.join(dir, safe), content, 'utf-8');
+    return rel;
+  }
+
+  /** 원본 바이너리 보존(프로비넌스) — raw/<day>/originals/ 에 원본을 그대로 저장. 추출이 부실해도 나중에
+   *  더 나은 추출기로 재처리할 수 있게 한다(이전엔 추출 텍스트만 저장 → 원본 소실로 재추출 불가했음). */
+  saveOriginal(name: string, data: Buffer): string {
+    try {
+      const day = nowDate();
+      const dir = path.join(this.rawDir, day, 'originals');
+      fs.mkdirSync(dir, { recursive: true });
+      const base = path.basename((name || 'source').replace(/\\/g, '/')) || 'source';
+      const ext = path.extname(base).slice(0, 12);
+      const stem = (base.slice(0, base.length - path.extname(base).length).replace(/\s+/g, '_').slice(0, 80)) || 'source';
+      const safe = stem + ext;
+      fs.writeFileSync(path.join(dir, safe), data);
+      return `raw/${day}/originals/${safe}`;
+    } catch { return ''; }
+  }
+
+  /** 원문 source 저장 — 대형이면 청크 페이지로 분할(검색이 깊은 행까지 닿게). 첫 페이지를 반환(분류·ingest 용). */
+  addSourceDoc(input: { title: string; body: string; sources?: string[]; aliases?: string[] }): WikiPage {
+    const chunks = chunkBody(input.body);
+    if (chunks.length === 1) return this.upsertPage({ ...input, type: 'source' });
+    let first: WikiPage | null = null;
+    for (let k = 0; k < chunks.length; k++) {
+      const title = k === 0 ? input.title : `${input.title} (${k + 1}/${chunks.length})`;
+      const p = this.upsertPage({ title, type: 'source', body: chunks[k]!, sources: input.sources, aliases: input.aliases });
+      if (k === 0) first = p;
+    }
+    return first!;
+  }
+
+  /** 페이지 1건 삭제(파일 제거) — 선택적 재정비(대형 원문 재청크) 등에서 원본 교체용. */
+  deletePage(slug: string): boolean {
+    try { fs.unlinkSync(this.pagePath(slug)); return true; } catch { return false; }
+  }
+
+  appendLog(op: string, title: string): void {
+    const line = `## [${nowDate()}] ${op} | ${esc(title)}\n`;
+    fs.appendFileSync(path.join(this.dir, 'log.md'), line, 'utf-8');
+  }
+
+  rebuildIndex(): void {
+    const ps = this.allPages();
+    const byType: Record<string, WikiPage[]> = { entity: [], concept: [], source: [], overview: [], answer: [] };
+    for (const p of ps) (byType[p.type] ?? (byType[p.type] = [])).push(p);
+    const sect = (label: string, arr: WikiPage[]): string =>
+      arr.length ? `\n## ${label}\n` + arr.sort((a, b) => a.title.localeCompare(b.title))
+        .map((p) => `- [[${p.title}]] — ${esc(p.summary).slice(0, 100)}${p.sources.length ? ` (sources: ${p.sources.length})` : ''}`).join('\n') + '\n' : '';
+    const md =
+      `# 📇 LLM Wiki 인덱스\n\n> 페이지 ${ps.length}개 · 갱신 ${nowDate()} · Karpathy LLM Wiki 패턴\n` +
+      sect('🔑 엔티티', byType.entity!) +
+      sect('💡 개념', byType.concept!) +
+      sect('📄 소스 요약', byType.source!) +
+      sect('🧭 종합', byType.overview!) +
+      sect('❓ 답변', byType.answer!);
+    fs.writeFileSync(path.join(this.dir, 'index.md'), md, 'utf-8');
+  }
+
+  // ---- INGEST (LLM 주도): 소스/산출물 → 요약 + 엔티티/개념 페이지 + 인덱스 + 로그 ----
+  async ingest(input: {
+    title: string; content: string; model: string;
+    sources?: string[]; contributors?: string[]; isRawSource?: boolean; skipSummary?: boolean; signal?: AbortSignal;
+  }): Promise<{ summary: string; pages: string[] }> {
+   return this.serialize(async () => {
+    const sources = [...(input.sources ?? [])];
+    if (input.isRawSource) sources.push(this.saveRaw(input.title, input.content));
+
+    // 전체 내용을 윈도우로 나눠 개념 추출(이전엔 앞 6000자만 봐 대형 문서의 깊은 데이터가 개념화 안 됐다).
+    //   윈도우당 extract 1회, 같은 제목 개념은 병합(링크 union). 대형 문서 비용은 윈도우 상한으로 통제.
+    const WIN = 6000, MAX_WIN = 20;
+    const windows: string[] = [];
+    for (let i = 0; i < input.content.length && windows.length < MAX_WIN; i += WIN) windows.push(input.content.slice(i, i + WIN));
+    if (!windows.length) windows.push(input.content);
+    const merged = new Map<string, { title: string; type: PageType; body: string; links: Set<string> }>();
+    let summary = '';
+    for (const win of windows) {
+      if (input.signal?.aborted) break;
+      const ex = await this.extract(input.model, input.title, win, input.signal);
+      if (!ex) continue;
+      if (!summary && ex.summary) summary = ex.summary;
+      for (const pg of ex.pages ?? []) {
+        if (!pg.title || !pg.body) continue;
+        const key = slugify(pg.title);
+        const e = merged.get(key) ?? { title: pg.title, type: (pg.type === 'entity' ? 'entity' : 'concept') as PageType, body: pg.body.trim(), links: new Set<string>() };
+        for (const l of pg.links ?? []) if (l) e.links.add(l);
+        merged.set(key, e);
+      }
+    }
+    summary = summary || esc(input.content).slice(0, 160);
+
+    // 1) 소스 요약 페이지(자료 업로드는 원본 페이지가 따로 있어 skipSummary 로 생략 — 중복 방지)
+    const written: string[] = [];
+    if (!input.skipSummary) {
+      this.upsertPage({
+        title: `${input.title} (요약)`, type: 'source', body: summary,
+        summary, sources, contributors: input.contributors,
+      });
+      written.push(`${input.title} (요약)`);
+    }
+
+    // 2) 병합된 엔티티/개념 페이지 — 본문에 [[링크]]('## 관련') 보존
+    for (const e of merged.values()) {
+      const linked = [...e.links];
+      const body = e.body + (linked.length ? `\n\n## 관련\n${linked.map((l) => `- [[${l}]]`).join('\n')}` : '');
+      this.upsertPage({
+        title: e.title, type: e.type, body,
+        summary: esc(e.body).slice(0, 120), sources, contributors: input.contributors,
+      });
+      written.push(e.title);
+    }
+
+    this.rebuildIndex();
+    this.appendLog('ingest', input.title);
+    return { summary, pages: written };
+   });
+  }
+
+  private async extract(model: string, title: string, content: string, signal?: AbortSignal): Promise<ExtractResult | null> {
+    const sys = '너는 LLM Wiki 관리자다. 주어진 내용에서 위키 페이지로 만들 핵심 엔티티(사람/조직/도구/개념)와 개념을 뽑는다. 각 페이지는 사실 위주 2~4문장 본문과, 관련된 다른 엔티티명(links)을 포함한다. ' +
+      '각 페이지의 links 는 비우지 마라 — 같은 묶음의 다른 페이지명이나 본문에서 언급/관련된 개념을 1개 이상 넣어 고립 페이지를 만들지 않는다.';
+    const user =
+      `제목: ${title}\n\n내용:\n${content.slice(0, 6000)}\n\n` +
+      'JSON만 출력: {"summary":"한 줄 요약","pages":[{"title":"엔티티명","type":"entity|concept","body":"2~4문장","links":["다른엔티티명"]}]}. 페이지는 3~6개. ' +
+      '각 page 의 links 에는 이 묶음의 다른 title 이나 본문에서 관련된 개념을 반드시 1개 이상 포함하라(빈 배열 금지).';
+    try {
+      const res = await ollama.chat({
+        model,
+        messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
+        maxOutputTokens: 1200, temperature: 0.3, signal,
+      });
+      return extractJson<ExtractResult>(res.text);
+    } catch {
+      return null;
+    }
+  }
+
+  /** 링크 없는 concept/entity 페이지에 토큰 유사도로 관련 페이지를 찾아 '## 관련' 보충.
+   *  (임베딩 미구현 대체 — query() 와 같은 토큰화로 겹침 점수.) 보충된 페이지 수 반환. */
+  backfillRelated(topK = 3, minOverlap = 2): number {
+    const pages = this.allPages().filter((p) => p.type === 'entity' || p.type === 'concept');
+    const toks = new Map<string, Set<string>>();
+    for (const p of pages) toks.set(p.slug, new Set([...tokenize(p.title), ...tokenize(p.body)].filter((t) => t.length >= 2)));
+    let filled = 0;
+    for (const p of pages) {
+      if (p.links.length || p.body.includes('## 관련')) continue; // 이미 관련 링크가 있으면 스킵
+      const pt = toks.get(p.slug)!;
+      const scored = pages
+        .filter((q) => q.slug !== p.slug)
+        .map((q) => { let s = 0; const qt = toks.get(q.slug)!; for (const t of pt) if (qt.has(t)) s++; return { q, s }; })
+        .filter((x) => x.s >= minOverlap)
+        .sort((a, b) => b.s - a.s || a.q.title.localeCompare(b.q.title))
+        .slice(0, topK);
+      if (!scored.length) continue;
+      const body = p.body.trim() + `\n\n## 관련\n${scored.map((x) => `- [[${x.q.title}]]`).join('\n')}`;
+      this.writePage({ ...p, body, links: outboundLinks(body), updated: nowDate() });
+      filled++;
+    }
+    if (filled) this.rebuildIndex();
+    return filled;
+  }
+
+  // ---- QUERY (인덱스 우선): 질의 관련 페이지 본문을 그라운딩 컨텍스트로 반환 ----
+  query(question: string, limit = 4): { hits: WikiPage[]; context: string } {
+    const qt = tokenize(question);
+    if (!qt.length) return { hits: [], context: '' };
+    const scored = this.allPages().map((p) => {
+      const title = p.title; const a = tokenize(p.aliases.join(' ')); const b = new Set(tokenize(p.body));
+      let s = 0;
+      for (const tok of qt) {
+        // 제목은 '부분일치' — 업로드 원문 제목이 '2026년도세출예산집행현황...'처럼 공백 없이 붙어 있어
+        // 토큰 일치로는 '세출'/'집행'이 안 걸린다. substring 으로 타깃 원문이 상위로 오게 한다.
+        if (tok.length >= 2 && title.includes(tok)) s += 8;
+        if (a.includes(tok)) s += 4;
+        if (b.has(tok)) s += 1;        // 본문은 '빈도'가 아니라 '존재' 1점 — 거대 문서(회의록 등)가 토큰 빈도로 랭킹 지배 방지.
+      }
+      // 업로드된 원문(source) 우대 — 실제 수치·표는 source 본문에 있고, 파생 요약(concept/entity)에는 없다(이슈12).
+      if (p.type === 'source') s *= 1.4;
+      // 업로드 1차 원문(sources=raw/...) 을 런 파생 요약(sources=run:...)·생성 concept 보다 강하게 우대 —
+      // 실제 결산 수치(세출예산집행현황 등)가 런이 만든 요약 페이지에 밀려 검색에서 빠지던 문제(이슈12) 해결.
+      if (p.sources.some((src) => src.startsWith('raw/'))) s *= 2;
+      // 런 파생 요약(sources=run:...)은 역가중 — 이전 런 보고서의 순환 요약이 1차 원문을 밀어내지 않게.
+      if (p.sources.some((src) => src.startsWith('run:'))) s *= 0.5;
+      return { p, s };
+    }).filter((x) => x.s > 0)
+      .sort((a, b) => b.s - a.s || b.p.updated.localeCompare(a.p.updated) || a.p.title.localeCompare(b.p.title))
+      .slice(0, limit);
+    const hits = scored.map((x) => x.p);
+    // 관련 구간 발췌 — 헤더만 잘려 실수치가 안 닿던 문제(이슈12) 해소: source 는 헤더+데이터행 발췌(3500자), 그 외 800자.
+    const context = hits.map((p) => `### ${p.title}\n${excerpt(p.body, qt, p.type === 'source' ? 3500 : 800)}`).join('\n\n');
+    return { hits, context };
+  }
+  /** store.ts 호환 검색(슬러그/점수). */
+  search(q: string, limit = 8): Array<{ page_id: string; title: string; score: number }> {
+    return this.query(q, limit).hits.map((p) => ({ page_id: p.slug, title: p.title, score: 1 }));
+  }
+
+  // ---- LINT: 고아·중복·교차참조 누락 점검 ----
+  lint(): { orphans: string[]; danglingLinks: Array<{ from: string; to: string }>; total: number } {
+    const ps = this.allPages();
+    const inbound = new Set<string>();
+    for (const p of ps) for (const l of p.links) inbound.add(l);
+    // 원문(source)·교훈(lesson)·개요(overview)는 인바운드 링크 대상이 아니므로 고아 점검에서 제외
+    //   — 원문 데이터·교훈은 개념 노드가 아니다. 의미있는 고아 = 아무도 안 가리키는 concept/entity/answer.
+    const ORPHAN_SKIP = new Set(['overview', 'source', 'lesson']);
+    const orphans = ps.filter((p) => !ORPHAN_SKIP.has(p.type) && !inbound.has(p.slug)).map((p) => p.title);
+    // danglingTargets 가 원제목을 보존 → from/to 둘 다 제목으로 일관(슬러그 노출 방지).
+    const danglingLinks: Array<{ from: string; to: string }> = [];
+    for (const t of this.danglingTargets().values()) for (const from of t.refs) danglingLinks.push({ from, to: t.title });
+    return { orphans, danglingLinks, total: ps.length };
+  }
+
+  // ---- MAINTAIN(자가수선): lint 의 끊긴 링크(지식 갭)를 LLM 으로 채워 그래프를 연결 ----
+  /** 페이지가 없는 [[링크]] 대상 → {원제목, 참조 페이지들}. (lint 의 dangling 을 보충 가능한 형태로) */
+  private danglingTargets(): Map<string, { title: string; refs: string[] }> {
+    const pages = this.allPages();
+    const slugs = new Set(pages.map((p) => p.slug));
+    const map = new Map<string, { title: string; refs: string[] }>();
+    for (const p of pages) {
+      const re = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(p.body)) !== null) {
+        const title = m[1]!.trim();
+        const slug = slugify(title);
+        if (slugs.has(slug)) continue; // 이미 페이지 존재
+        const e = map.get(slug) ?? { title, refs: [] };
+        if (!e.refs.includes(p.title)) e.refs.push(p.title);
+        map.set(slug, e);
+      }
+    }
+    return map;
+  }
+
+  private async generateStub(model: string, title: string, refs: string[], signal?: AbortSignal): Promise<string | null> {
+    const sys = '너는 LLM Wiki 관리자다. 주어진 개념/엔티티의 위키 페이지 본문을 사실 위주 2~3문장으로 쓴다. 본문에서 관련 개념은 [[이름]]으로 링크한다. 잘 모르면 일반적 정의만 간결히.';
+    const user = `항목: ${title}\n맥락(이 항목을 참조하는 페이지): ${refs.slice(0, 4).join(', ') || '없음'}\n\n본문만 출력(머리말·맺음말 없이).`;
+    try {
+      const res = await ollama.chat({
+        model, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
+        maxOutputTokens: 300, temperature: 0.3, signal,
+      });
+      const t = res.text.trim();
+      return t || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 지식 갭(끊긴 링크) 상위 maxFill 개를 LLM 으로 보충 → 페이지 생성 → index/log. compounding 가속. */
+  async maintain(model: string, opts: { maxFill?: number; signal?: AbortSignal } = {}): Promise<{ filled: string[]; gaps: number }> {
+   return this.serialize(async () => {
+    const targets = this.danglingTargets();
+    // 가장 많이 참조되는 갭부터(가치 높은 빈틈 우선).
+    const sorted = [...targets.values()].sort((a, b) => b.refs.length - a.refs.length).slice(0, opts.maxFill ?? 4);
+    const filled: string[] = [];
+    for (const t of sorted) {
+      const body = await this.generateStub(model, t.title, t.refs, opts.signal);
+      if (body) {
+        this.upsertPage({ title: t.title, type: 'entity', body, sources: ['maintain:auto'], summary: esc(body).slice(0, 120) });
+        filled.push(t.title);
+      }
+    }
+    if (filled.length) {
+      this.rebuildIndex();
+      this.appendLog('maintain', `지식 갭 ${filled.length}건 보충: ${filled.join(', ')}`);
+    }
+    return { filled, gaps: targets.size };
+   });
+  }
+
+  /** 끊긴 링크 대상이 원문(source)에서 언급된 발췌를 모은다(조작 방지 — 추측 대신 원문 근거). */
+  private sourceMentions(title: string, maxExcerpts = 5, window = 220): string[] {
+    const out: string[] = [];
+    const lc = title.toLowerCase();
+    if (lc.length < 2) return out;
+    for (const p of this.allPages()) {
+      if (p.type !== 'source') continue;
+      const low = p.body.toLowerCase();
+      let idx = low.indexOf(lc); let n = 0;
+      while (idx >= 0 && out.length < maxExcerpts && n < 2) {
+        out.push(p.body.slice(Math.max(0, idx - window), Math.min(p.body.length, idx + window)).replace(/\s+/g, ' ').trim());
+        idx = low.indexOf(lc, idx + lc.length); n++;
+      }
+      if (out.length >= maxExcerpts) break;
+    }
+    return out;
+  }
+
+  /** 원문 발췌에 있는 사실만으로 stub 본문 생성(추측·일반상식 금지). 발췌 없으면 null. */
+  private async stubFromSource(model: string, title: string, excerpts: string[], refs: string[], signal?: AbortSignal): Promise<string | null> {
+    if (!excerpts.length) return null;
+    const sys = '너는 LLM Wiki 관리자다. 아래 [원문 발췌]에 실제로 있는 사실만으로 항목의 위키 본문을 2~3문장으로 쓴다. ' +
+      '발췌에 없는 정보는 절대 지어내지 마라(추측·일반상식으로 채우지 말 것). 관련 개념은 [[이름]]으로 링크한다. ' +
+      '발췌가 단순 언급뿐이면 "원문 상 <맥락>으로 언급됨"처럼 정직하게 쓴다.';
+    const user = `항목: ${title}\n참조 페이지: ${refs.slice(0, 4).join(', ') || '없음'}\n\n[원문 발췌]\n${excerpts.map((e, i) => `(${i + 1}) …${e}…`).join('\n')}\n\n본문만 출력(머리말·맺음말 없이).`;
+    try {
+      const res = await ollama.chat({ model, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], maxOutputTokens: 300, temperature: 0.2, signal });
+      return res.text.trim() || null;
+    } catch { return null; }
+  }
+
+  /** 끊긴 링크를 원문 근거로 채운다 — 원문 언급이 있는 대상만 그 맥락으로 stub 생성(조작 금지).
+   *  원문 맥락이 없는 대상은 건드리지 않고 dangling 으로 둔다(정직한 '미정의' 회색 노드). */
+  async fillDanglingFromSource(model: string, opts: { signal?: AbortSignal } = {}): Promise<{ filled: number; noSource: number }> {
+   return this.serialize(async () => {
+    const targets = [...this.danglingTargets().values()].sort((a, b) => b.refs.length - a.refs.length);
+    let filled = 0; let noSource = 0;
+    for (const t of targets) {
+      if (opts.signal?.aborted) break;
+      const excerpts = this.sourceMentions(t.title);
+      if (!excerpts.length) { noSource++; continue; } // 원문 근거 없음 → 조작 금지, dangling 유지
+      const body = await this.stubFromSource(model, t.title, excerpts, t.refs, opts.signal);
+      if (body) {
+        this.upsertPage({ title: t.title, type: 'entity', body, sources: ['stub:source'], summary: esc(body).slice(0, 120) });
+        filled++;
+      } else noSource++;
+    }
+    if (filled) { this.rebuildIndex(); this.appendLog('maintain', `소스 근거 stub ${filled}건 생성(원문 발췌 기반)`); }
+    return { filled, noSource };
+   });
+  }
+
+  // ---- AUDIT(모순 검출): 토픽이 겹치는 페이지 쌍을 LLM 으로 비교해 상충 주장 탐지 ----
+  /** 후보 쌍: 상호 링크 또는 공유 링크가 있는(토픽 겹치는) 페이지 쌍, 겹침 큰 순. */
+  private contradictionCandidates(maxPairs: number): Array<[WikiPage, WikiPage]> {
+    const pages = this.allPages().filter((p) => p.type !== 'source' && p.body.trim().length > 40);
+    const scored: Array<{ a: WikiPage; b: WikiPage; s: number }> = [];
+    for (let i = 0; i < pages.length; i++) {
+      for (let j = i + 1; j < pages.length; j++) {
+        const a = pages[i]!; const b = pages[j]!;
+        const linked = a.links.includes(b.slug) || b.links.includes(a.slug);
+        const shared = a.links.filter((l) => b.links.includes(l)).length;
+        const s = (linked ? 3 : 0) + shared;
+        if (s > 0) scored.push({ a, b, s });
+      }
+    }
+    scored.sort((x, y) => y.s - x.s);
+    return scored.slice(0, maxPairs).map((p) => [p.a, p.b] as [WikiPage, WikiPage]);
+  }
+
+  private async checkPair(model: string, a: WikiPage, b: WikiPage, signal?: AbortSignal): Promise<{ contradicts: boolean; issue: string; reconciliation: string } | null> {
+    const sys = '너는 LLM Wiki 감사자다. 두 위키 페이지가 같은 사실에 대해 서로 모순되는 주장을 하는지만 판단한다. 단순히 다른 주제면 모순이 아니다.';
+    const user =
+      `[A: ${a.title}]\n${a.body.slice(0, 1200)}\n\n[B: ${b.title}]\n${b.body.slice(0, 1200)}\n\n` +
+      'JSON만: {"contradicts": true/false, "issue": "무엇이 충돌하는지 한 줄(없으면 빈칸)", "reconciliation": "어느 쪽이 맞는지/어떻게 통합할지 한 줄"}';
+    try {
+      const res = await ollama.chat({ model, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], maxOutputTokens: 300, temperature: 0.2, signal });
+      const j = extractJson<{ contradicts?: boolean; issue?: string; reconciliation?: string }>(res.text);
+      if (!j) return null;
+      return { contradicts: !!j.contradicts, issue: j.issue ?? '', reconciliation: j.reconciliation ?? '' };
+    } catch {
+      return null;
+    }
+  }
+
+  private appendNote(slug: string, note: string): void {
+    const p = this.getPage(slug);
+    if (!p) return;
+    const today = nowDate();
+    p.body = p.body.trim() + `\n\n## ⚖️ 모순 해소 (${today})\n${note}\n`;
+    p.updated = today;
+    this.writePage({ ...p, links: outboundLinks(p.body) });
+  }
+
+  /** 모순 감사: 후보 쌍을 LLM 비교 → 상충 보고. resolve 면 해소 노트를 페이지에 기록. */
+  async findContradictions(model: string, opts: { maxChecks?: number; resolve?: boolean; signal?: AbortSignal } = {}): Promise<{ checked: number; contradictions: Array<{ pages: string[]; titles: string[]; issue: string; reconciliation: string }> }> {
+   return this.serialize(async () => {
+    const cands = this.contradictionCandidates(opts.maxChecks ?? 6);
+    const found: Array<{ pages: string[]; titles: string[]; issue: string; reconciliation: string }> = [];
+    for (const [a, b] of cands) {
+      const r = await this.checkPair(model, a, b, opts.signal);
+      if (r?.contradicts) {
+        found.push({ pages: [a.slug, b.slug], titles: [a.title, b.title], issue: r.issue, reconciliation: r.reconciliation });
+        if (opts.resolve && r.reconciliation) {
+          // 양쪽 페이지 모두에 해소 노트 — 어느 쪽을 봐도 보이게(그래프 대칭).
+          this.appendNote(a.slug, `[[${b.title}]]와(과)의 모순: ${r.issue}\n→ ${r.reconciliation}`);
+          this.appendNote(b.slug, `[[${a.title}]]와(과)의 모순: ${r.issue}\n→ ${r.reconciliation}`);
+        }
+      }
+    }
+    if (opts.resolve && found.length) {
+      this.rebuildIndex();
+      this.appendLog('audit', `모순 ${found.length}건 해소`);
+    }
+    return { checked: cands.length, contradictions: found };
+   });
+  }
+
+  // ---- GRAPH: [[위키링크]] → 노드/엣지(프론트 /wiki/graph) ----
+  graph(): { nodes: unknown[]; links: unknown[]; stats: Record<string, number> } {
+    const ps = this.allPages();
+    const bySlug = new Map(ps.map((p) => [p.slug, p]));
+    const nodes: Array<Record<string, unknown>> = ps.map((p) => ({
+      id: p.slug, type: 'page', label: p.title, // 모든 위키 페이지를 page 노드로(자료·지식은 category 로 구분) — 두뇌 기본 뷰 표출
+      slug: p.slug, category: p.type, stance: 'neutral', status: 'active',
+      contributors: p.contributors, source_count: p.sources.length,
+      degree: p.links.length, summary: p.summary, updated_ts: p.updated, tags: p.aliases,
+    }));
+    const links: Array<Record<string, unknown>> = [];
+    let pageLinks = 0;
+    const stubs = new Set<string>();
+    for (const p of ps) for (const l of p.links) {
+      if (!l) continue;
+      if (!bySlug.has(l)) stubs.add(l); // dangling — 아직 생성 안 된 대상(미생성 페이지)
+      links.push({ source: p.slug, target: l, kind: 'relates' }); pageLinks++;
+    }
+    // 미생성 페이지(dangling)도 노드로 표시해 [[링크]] 연결을 보존(obsidian 회색 노드 식, category:stub).
+    for (const s of stubs) nodes.push({ id: s, type: 'page', label: s, category: 'stub', stance: 'neutral', status: 'missing', degree: 0, source_count: 0 });
+    // 직원(작성자) 노드 + author 링크 — 프론트 '직원' 레이어 토글
+    const agents = new Set<string>();
+    for (const p of ps) for (const a of p.contributors) if (a) agents.add(a);
+    for (const a of agents) nodes.push({ id: `agent:${a}`, type: 'agent', label: a });
+    for (const p of ps) for (const a of p.contributors) if (a) links.push({ source: `agent:${a}`, target: p.slug, kind: 'author' });
+    // 자료(출처) 노드 + source 링크 — 프론트 '자료' 레이어 토글
+    const sources = new Set<string>();
+    for (const p of ps) for (const s of p.sources) if (s) sources.add(s);
+    for (const s of sources) nodes.push({ id: `source:${s}`, type: 'source', label: s });
+    for (const p of ps) for (const s of p.sources) if (s) links.push({ source: p.slug, target: `source:${s}`, kind: 'source' });
+    // 태그(별칭) 노드 + tag 링크 — 프론트 '태그' 레이어 토글
+    const tags = new Set<string>();
+    for (const p of ps) for (const t of p.aliases) if (t) tags.add(t);
+    for (const t of tags) nodes.push({ id: `tag:${t}`, type: 'tag', label: t });
+    for (const p of ps) for (const t of p.aliases) if (t) links.push({ source: `tag:${t}`, target: p.slug, kind: 'tag' });
+    return { nodes, links, stats: { pages: ps.length, tags: tags.size, sources: sources.size, agents: agents.size, links: pageLinks } };
+  }
+}
+
+interface ExtractResult {
+  summary?: string;
+  pages?: Array<{ title?: string; type?: string; body?: string; links?: string[] }>;
+}
+
+// 관련 구간 발췌 — body 가 budget 보다 길면 앞부분(헤더/총괄) + 쿼리 토큰이 등장하는 구간 윈도우를 모은다.
+// 거대한 표/문서(세출예산집행현황 1.1MB 등)에서 앞부분만 잘려 실제 데이터 행·수치가 에이전트에 안 닿던
+// 문제(이슈12) 완화 — 데이터 행을 포함하도록.
+function excerpt(body: string, qt: string[], budget: number): string {
+  if (body.length <= budget) return body;
+  const headLen = Math.min(1600, budget);
+  const head = body.slice(0, headLen);
+  let rest = budget - headLen;
+  if (rest <= 0) return head;
+  const low = body.toLowerCase();
+  const wins: string[] = [];
+  for (const tok of qt) {
+    if (rest <= 0) break;
+    if (tok.length < 2) continue;
+    const idx = low.indexOf(tok.toLowerCase(), headLen);
+    if (idx < 0) continue;
+    const w = body.slice(Math.max(headLen, idx - 150), Math.min(body.length, idx + 350));
+    wins.push(w); rest -= w.length;
+  }
+  return wins.length ? head + '\n…\n' + wins.join('\n…\n') : head;
+}
+
+// 대형 원문(거대 표 등)을 검색 가능한 청크로 분할 — 청크당 ~minSize, 문서당 최대 maxChunks(위키 팽창 억제).
+// 각 청크가 작아 query 발췌가 깊은 행·수치까지 닿는다(1.1MB 표가 head 발췌로 안 닿던 이슈12 잔여 해소).
+export function chunkBody(body: string, maxChunks = 60, minSize = 3500): string[] {
+  if (body.length <= minSize) return [body];
+  const size = Math.max(minSize, Math.ceil(body.length / maxChunks));
+  const chunks: string[] = [];
+  for (let i = 0; i < body.length; i += size) chunks.push(body.slice(i, i + size));
+  return chunks;
+}
+
+function tokenize(s: string): string[] {
+  return (s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => t.length > 1);
+}
+function extractJson<T>(raw: string): T | null {
+  if (!raw) return null;
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const body = fenced ? fenced[1]! : raw;
+  const start = body.search(/[[{]/);
+  if (start < 0) return null;
+  const open = body[start]!; const close = open === '{' ? '}' : ']';
+  let depth = 0, inStr = false, esc2 = false;
+  for (let i = start; i < body.length; i++) {
+    const ch = body[i]!;
+    if (inStr) { if (esc2) esc2 = false; else if (ch === '\\') esc2 = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') inStr = true;
+    else if (ch === open) depth++;
+    else if (ch === close) { depth--; if (depth === 0) { try { return JSON.parse(body.slice(start, i + 1)) as T; } catch { return null; } } }
+  }
+  return null;
+}
+
+const SCHEMA_DOC = `# LLM Wiki 스키마 (Karpathy 패턴)
+
+이 폴더는 에이전트가 유지하는 **LLM Wiki** 다. RAG 가 아니라, 지식을 한 번 컴파일해 계속 갱신한다.
+
+## 레이아웃
+- \`../raw/<날짜>/\` — 원본 소스(불변)
+- \`pages/*.md\` — 엔티티/개념/소스요약 페이지. YAML 프런트매터 + 본문 \`[[위키링크]]\`.
+- \`index.md\` — 전 페이지 카탈로그(카테고리별, 1줄 요약). 인덱스 우선 탐색의 진입점.
+- \`log.md\` — append-only 타임라인 \`## [YYYY-MM-DD] op | Title\`.
+
+## 페이지 타입
+entity(사람·조직·도구) · concept(개념·주제) · source(소스 요약) · overview(종합) · answer(질의 답변)
+
+## 워크플로우
+- ingest: 소스/산출물 읽기 → 요약 페이지 작성 → 엔티티/개념 페이지 생성·갱신([[링크]] 유지) → index 재생성 → log 추가
+- query: index 로 관련 페이지 탐색 → 본문으로 답 종합(인용) → 좋은 답은 answer 페이지로 환류
+- lint: 고아 페이지·끊긴 링크·모순·오래된 주장 점검
+
+## 원칙
+지식은 컴파일 1회 + 지속 갱신(compounding). 작은 위키는 임베딩 없이 index 우선 탐색으로 충분.
+`;
+
+let _wiki: LlmWiki | null = null;
+export function llmWiki(): LlmWiki {
+  if (!_wiki) _wiki = new LlmWiki();
+  return _wiki;
+}

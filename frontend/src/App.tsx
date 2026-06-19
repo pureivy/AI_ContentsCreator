@@ -1,0 +1,1556 @@
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useStore } from "./store";
+import { startRun, resumeRun, watchRun, RunHandle } from "./transport/sse";
+import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, downloadRunHwpx, fetchEta, reviseRun, fetchTemplates, saveTemplate, deleteTemplate, runTemplate, RunInfo, UploadFileResult, LlmStatus, EtaStats, TemplateInfo } from "./api";
+import { ActivityItem, ApprovalItem, DebateMsg, UIState } from "./events/types";
+import AgentGraph from "./panels/AgentGraph";
+import OfficeView from "./panels/OfficeView";
+import EmployeesView from "./panels/EmployeesView";
+import ApiKeysView from "./panels/ApiKeysView";
+import LlmSettingsView from "./panels/LlmSettingsView";
+import McpView from "./panels/McpView";
+import { useStageWidths } from "./panels/useStageWidths";
+import { countWorking } from "./events/working";
+import OfficeTicker, { ga } from "./panels/OfficeTicker";
+import Avatar from "./panels/Avatar";
+import ActivityFeed from "./panels/ActivityFeed";
+import WorkflowBoard, { PhaseStepper, OfficeProgressBar } from "./panels/WorkflowBoard";
+import ReplayBar from "./panels/ReplayBar";
+import DashboardBar from "./panels/DashboardBar";
+import MetricDrawer, { MetricKind } from "./panels/MetricDrawer";
+import UploadSummary from "./panels/UploadSummary";
+import LiveNowStrip from "./panels/LiveNowStrip";
+import { debateGist } from "./events/debateSummary";
+import { agentColor, agentGlyph, personLabel } from "./panels/agentVisual";
+// 무거운 그래프 라이브러리(react-force-graph)는 모달을 열 때만 로드(초기 번들에서 분리).
+const WikiGraphView = lazy(() => import("./panels/WikiGraphView"));
+
+const AUTONOMY_LABEL = ["Off", "읽기전용", "초안(승인)", "자동"];
+
+// Timeline move → colored mission-control tag (label + css class), like the reference's
+// protocol chips. Unknown moves fall back to a neutral "보고/report" tag.
+const MOVE_TAG: Record<string, { label: string; cls: string }> = {
+  position: { label: "입장", cls: "position" },
+  critique: { label: "비평", cls: "critique" },
+  rebuttal: { label: "반박", cls: "rebuttal" },
+  agent_message: { label: "보고", cls: "report" },
+  deliverable: { label: "산출물", cls: "deliverable" },
+  user: { label: "지시", cls: "user" },
+  synthesis: { label: "종합", cls: "synth" },
+};
+// Run state → uppercase protocol label for the timeline status banner
+// (RUN · ACTIVE / SESSION · COMPLETE), matching the reference's mission-control header.
+function protocolLabel(status: string): string {
+  switch (status) {
+    case "running": return "RUN · ACTIVE";
+    case "ok": return "SESSION · COMPLETE";
+    case "partial": return "SESSION · PARTIAL";
+    case "cancelled": return "SESSION · CANCELLED";
+    case "interrupted": return "SESSION · INTERRUPTED";
+    case "error": case "budget_exceeded": return "SESSION · ERROR";
+    default: return status.toUpperCase();
+  }
+}
+
+// A live "현재 진행" line for the timeline, derived from team/_ceo phases — so the
+// decompose/brief/assign stages (run by forced-tool queries that DON'T stream into the
+// timeline) still show what's happening instead of a bare "RUN · ACTIVE". Teams run
+// sequentially, so at most one team phase is non-idle at a time.
+const PHASE_NOTE: Record<string, (team: string) => string> = {
+  brief: (n) => `📋 ${n} 팀장이 사장에게 브리핑 받는 중…`,
+  decompose: (n) => `🧩 ${n} 팀장이 팀원 과제를 분해·배정하는 중…`,
+  assign: (n) => `📌 ${n} 팀장이 팀원에게 과제를 지시하는 중…`,
+  work: (n) => `✍️ ${n} 팀원들이 각자 작업하는 중…`,
+  debate: (n) => `💬 ${n} 팀원들이 상호검증 토론 중…`,
+  report: (n) => `🔍 ${n} 팀장이 팀원 보고를 검토·취합하는 중…`,
+  report_ceo: (n) => `📋 ${n} 팀장이 사장에게 보고하는 중…`,
+};
+function progressNote(
+  phases: Record<string, string>,
+  teams: Record<string, { name: string }>,
+  status: string,
+): string {
+  if (status !== "running") return "";
+  const ceo = phases["_ceo"];
+  if (ceo === "delegate") return "🧩 사장이 목표를 팀별 과제로 분해하는 중…";
+  if (ceo === "review") return "🔎 사장이 팀 산출물을 검토하는 중…";
+  if (ceo === "integrate") return "🤝 사장이 팀 산출물을 통합하는 중…";
+  for (const tid in phases) {
+    if (tid === "_ceo") continue;
+    const ph = phases[tid];
+    if (ph && ph !== "idle" && PHASE_NOTE[ph]) return PHASE_NOTE[ph](teams[tid]?.name ?? tid);
+  }
+  return "⏳ 사장이 목표를 분석하는 중…";
+}
+
+type View = "office" | "graph" | "detail" | "employees" | "apikeys" | "llm" | "mcp";
+type TLTab = "timeline" | "activity" | "workflow";
+
+const STATUS_LABEL: Record<string, string> = {
+  idle: "대기",
+  running: "진행 중",
+  ok: "완료",
+  done: "완료",
+  partial: "부분 완료",
+  cancelled: "취소됨",
+  budget_exceeded: "예산 초과",
+  error: "오류",
+  interrupted: "중단됨",
+};
+const TERMINAL = new Set(["ok", "partial", "cancelled", "budget_exceeded", "error", "interrupted"]);
+// 외부 자료로 받을 확장자. 폴더 업로드 시 하위 파일을 이 목록으로 거른다(이미지·기타 제외).
+// 백엔드(kordoc·내장 파서·OCR)가 추출 가능한 + 시도해볼 만한 공문서 포맷.
+// kordoc: hwp/hwpx/hwpml/pdf/xls/xlsx/docx · 내장: txt/md/csv/rtf · OCR: 이미지.
+// ppt/pptx/doc(구포맷)는 현재 미지원이지만 프론트에서 막지 않고 올려 '미지원'으로
+// 정산에 보고한다(조용한 누락 제거 — 사용자 지시).
+const ALLOWED_EXT = [".pdf", ".docx", ".doc", ".xlsx", ".xlsm", ".xls", ".pptx", ".ppt",
+  ".hwp", ".hwpx", ".hwpml", ".txt", ".md", ".markdown", ".rtf", ".csv", ".log",
+  ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"];
+
+type Employee = { id: string; title: string; name?: string; level?: string };
+
+// Detect a leading "직원명" in the timeline-chat text → route to a single-employee
+// directed run. "권이담 4천만원 용역?" → {id, rest:"4천만원 용역?"}. Consumes an
+// optional title token ("권이담 과장 …") and trailing particles ("권이담에게").
+// Requires a remaining question, so a bare name never routes. null = none named.
+const _TITLE_TOKEN = /^(팀장|차장|과장|대리|주임|사원|부장|이사|사장|대표)$/;
+function matchEmployee(text: string, roster: Employee[]): { id: string; rest: string } | null {
+  if (!roster.length) return null;
+  const parts = text.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return null;
+  const take = parts.length >= 2 && _TITLE_TOKEN.test(parts[1].replace(/[,.:]/g, "")) ? 2 : 1;
+  const cand = parts.slice(0, take).join("").replace(/[\s,.:/·]+$/, "").replace(/(에게|한테|께|님|씨|분)+$/, "");
+  const norm = cand.replace(/\s+/g, "");
+  if (!norm) return null;
+  const rest = parts.slice(take).join(" ").trim();
+  if (!rest) return null;
+  const hit = roster.find((r) => {
+    const rt = r.title.replace(/\s+/g, "");          // 직무(예: 전략기획팀장)
+    const person = (r.name || "").replace(/\s+/g, ""); // 실명(예: 장은영)
+    if (rt === norm || person === norm) return true;   // 직무·실명 둘 다로 지명 가능
+    if (person && norm.length >= 2 && (person.startsWith(norm) || norm.startsWith(person))) return true;
+    return norm.length >= 2 && rt.startsWith(norm);
+  });
+  return hit ? { id: hit.id, rest } : null;
+}
+
+// 입력이 '직원명 [직책]' 만으로 완성됐는지(질문 없이) 판정 — 대상 칩 토큰화용.
+// 이름 파싱은 matchEmployee 를 재사용(더미 질문 'q' 부착)하고, 질문이 이미 있으면 null.
+function matchEmployeeName(
+  text: string, roster: Employee[],
+): { id: string; label: string; lead: boolean } | null {
+  const m = matchEmployee(text.trim() + " q", roster);
+  if (!m || m.rest !== "q") return null;
+  const r = roster.find((x) => x.id === m.id);
+  if (!r) return null;
+  return { id: m.id, label: personLabel(r.name, r.title) || r.title, lead: r.level === "lead" };
+}
+
+// One timeline message: text is clamped to a few lines and expands on demand,
+// so the column stays scannable. "더보기" only appears when the text actually
+// overflows the clamp (measured after render while clamped).
+function TimelineMessage({
+  m,
+  roleLabel,
+  avatarId,
+  glyph,
+  wikiPages,
+  selfName,
+  rosterNames,
+}: {
+  m: DebateMsg;
+  roleLabel: string;
+  avatarId?: string | null;
+  glyph?: string;
+  wikiPages: UIState["wikiPages"];
+  selfName?: string;
+  rosterNames?: string[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const textRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = textRef.current;
+    if (el && !expanded) setOverflows(el.scrollHeight - el.clientHeight > 4);
+  }, [m.text, expanded]);
+  // user(사용자 지시)·deliverable(팀 산출물)·synthesis(최종 종합)는 완결·중요 메시지라
+  // 전문 유지. 그 외 토론 발언은 2줄 요지(누구/무엇 + 어떻게/왜) + 대상 동료(→)로 압축,
+  // 클릭 시 전문 펼침. gist는 순수 텍스트 파생(LLM 없음).
+  const full = m.move === "user" || m.move === "deliverable" || m.move === "synthesis";
+  const gist = useMemo(
+    () => (full ? null : debateGist(m.text, selfName, rosterNames)),
+    [full, m.text, selfName, rosterNames],
+  );
+  const targets = gist?.targets ?? [];
+  return (
+    <div className={`msg move-${m.move}`}>
+      <div className="msg-head">
+        <span className="msg-who">
+          {avatarId && <Avatar id={avatarId} glyph={glyph ?? "🧑‍💻"} size={22} head />}
+          <b>{roleLabel}</b>
+          {targets.length > 0 && (
+            <span className="msg-target" title={`대상: ${targets.join(", ")}`}>
+              <span className="msg-target-arrow">→</span>
+              {targets.slice(0, 2).join("·")}{targets.length > 2 ? ` 외${targets.length - 2}` : ""}
+            </span>
+          )}
+        </span>
+        <span className={`msg-tag tag-${(MOVE_TAG[m.move] ?? { cls: "report" }).cls}`}>
+          {m.move === "user" || m.move === "deliverable" || m.move === "synthesis"
+            ? MOVE_TAG[m.move]?.label ?? m.move
+            : `R${m.round} · ${MOVE_TAG[m.move]?.label ?? m.move}`}
+        </span>
+      </div>
+      {full ? (
+        <>
+          <div ref={textRef} className={`msg-text${expanded ? "" : " clamped"}`}>{m.text}</div>
+          {(overflows || expanded) && (
+            <button className="msg-more" onClick={() => setExpanded((v) => !v)}>
+              {expanded ? "접기" : "더보기"}
+            </button>
+          )}
+        </>
+      ) : expanded ? (
+        <>
+          <div className="msg-text">{m.text}</div>
+          <button className="msg-more" onClick={() => setExpanded(false)}>접기</button>
+        </>
+      ) : (
+        <button className="msg-gist" onClick={() => setExpanded(true)} title="클릭하면 전문 보기">
+          <span className="msg-gist-body">
+            <span className="msg-gist-headline">{gist?.headline || "(내용 보기)"}</span>
+            {gist?.detail && <span className="msg-gist-detail">{gist.detail}</span>}
+          </span>
+          <span className="msg-gist-caret">▸</span>
+        </button>
+      )}
+      {m.refs.length > 0 && (
+        <div className="refs">
+          {m.refs.map((r) => (
+            <span key={r} className="ref-chip">[[{wikiPages[r]?.title ?? r}]]</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function App() {
+  const s = useStore();
+  const apply = useStore((st) => st.applyEvent);
+  const reset = useStore((st) => st.reset);
+  const clearToIdle = useStore((st) => st.clearToIdle);
+  const setRunId = useStore((st) => st.setRunId);
+  const loadReplay = useStore((st) => st.loadReplay);
+  const snapshotLive = useStore((st) => st.snapshotLive);
+  const [runs, setRuns] = useState<RunInfo[]>([]);
+  const [view, setView] = useState<View>("office");
+  const [tlTab, setTlTab] = useState<TLTab>("timeline");  // 토론 타임라인 창: 타임라인 | 활동
+  const [showHist, setShowHist] = useState(false);
+  const histWrapRef = useRef<HTMLDivElement>(null);  // '📑 기록' 풀다운 바깥클릭 닫기용
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [chat, setChat] = useState("");
+  // 좌하단 입력 대상 칩 — 직원명을 토큰화해 입력창엔 질문만 남긴다. null=전사 토론/지시.
+  const [directedTarget, setDirectedTarget] = useState<{ id: string; label: string; lead: boolean } | null>(null);
+  const [roster, setRoster] = useState<Employee[]>([]);
+  const [ceoName, setCeoName] = useState("");  // 이름 표시용(roster엔 제외 — 지명 라우팅 대상 아님)
+  const [companyMeta, setCompanyMeta] = useState({ name: "", total: 0 });
+  const [uploadProg, setUploadProg] = useState<{ done: number; total: number } | null>(null);
+  // 업로드 정산 — 끝나면 저장/중복/미지원/실패/필터제외 집계를 패널로 표시.
+  const [uploadDone, setUploadDone] = useState<{ results: UploadFileResult[] } | null>(null);
+  // 파일·폴더 통합 업로드 풀다운(상단바 '📎 자료 ▾')
+  const [uploadMenu, setUploadMenu] = useState(false);
+  const uploadMenuRef = useRef<HTMLDivElement>(null);
+  // ② 반복 업무 템플릿 풀다운(상단바 '📋 템플릿 ▾')
+  const [tplMenu, setTplMenu] = useState(false);
+  const tplMenuRef = useRef<HTMLDivElement>(null);
+  const [templates, setTemplates] = useState<TemplateInfo[]>([]);
+  const refreshTemplates = () => fetchTemplates().then(setTemplates);
+  // 상단 LLM 배지 → 모델 선택 풀다운
+  const [llmMenu, setLlmMenu] = useState(false);
+  const llmMenuRef = useRef<HTMLDivElement>(null);
+  const [llmBusy, setLlmBusy] = useState(false);
+  const [hwpxBusy, setHwpxBusy] = useState(false);  // 한글(HWPX) 내보내기 진행 중
+  const [showBrain, setShowBrain] = useState(false);  // "제2의 두뇌" 위키 그래프 모달
+  const [metric, setMetric] = useState<MetricKind | null>(null);  // 대시보드 지표 드릴다운
+  // 3패널(타임라인|사무실|산출물) 가로 폭 — 핸들 드래그로 조절, localStorage 영속.
+  const { widths, startDrag, reset: resetWidth, outputsOpen, setOutputsOpen } = useStageWidths();
+  const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
+  // 런별 LLM 백엔드 오버라이드. "" = 전역 기본값 따름 / "claude" / "local:<model>".
+  const [runLlm, setRunLlm] = useState("");
+  // 3단 런 경로(①). "" = 자동 추천 / "team"(경량) / "full"(전사).
+  const [runPath, setRunPath] = useState("");
+  // 런별 예산 캡(USD). "" = 전역 기본 / "0" = 무제한 명시 / 그 외 = 캡.
+  const [runBudget, setRunBudget] = useState("");
+  const handleRef = useRef<RunHandle | null>(null);
+  const submittingRef = useRef(false); // double-submit guard
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+
+  const refreshRuns = () => fetchRuns().then(setRuns);
+  useEffect(() => { refreshRuns(); }, []);
+  // ⑧ 최소 인증 부트스트랩 — 서버에 AUTH_TOKEN 이 설정돼 있으면(401) 토큰을 물어
+  // 쿠키(gepa_token)로 저장 후 재로드. fetch/SSE 모두 same-origin 쿠키로 통과.
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch("/runs");
+        if (r.status === 401) {
+          const tok = window.prompt("🔒 이 서버는 접근 토큰이 필요합니다 (서버 AUTH_TOKEN 값):");
+          if (tok && tok.trim()) {
+            document.cookie = `gepa_token=${encodeURIComponent(tok.trim())}; path=/; max-age=2592000; samesite=lax`;
+            location.reload();
+          }
+        }
+      } catch { /* 서버 다운 등 — 기존 흐름이 처리 */ }
+    })();
+  }, []);
+  // Globally-pending approvals (incl. run-end tool-grant recommendations), hydrated
+  // from GET /approvals so they survive reload / show across runs — not only while
+  // watching the run that emitted them live.
+  const [pendingApprovals, setPendingApprovals] = useState<ApprovalItem[]>([]);
+  const refreshApprovals = () => fetchApprovals().then(setPendingApprovals);
+  useEffect(() => { refreshApprovals(); }, []);
+  // Roster for the timeline-chat "직원 지명" routing (CEO + every team member).
+  useEffect(() => {
+    fetchCompany().then((c) => {
+      if (!c) return;
+      // CEO는 directed 라우팅에서 제외(= 명명 시 전사 런과 동일). 팀장/팀원만 지명 대상.
+      setRoster(
+        c.teams.flatMap((t) => [t.lead, ...t.members]).map((r) => ({
+          id: r.id, title: r.title, name: r.name, level: r.level,
+        })),
+      );
+      setCeoName(c.ceo?.title ?? "");
+      const total = 1 + c.teams.reduce((n, t) => n + 1 + t.members.length, 0); // CEO + 팀장/팀원
+      setCompanyMeta({ name: c.name, total });
+    });
+  }, []);
+  // when a live run finishes, add it to the history list + pull any approvals it
+  // queued at the end (e.g. tool-grant recommendations).
+  useEffect(() => {
+    if (s.mode === "live" && s.runId && TERMINAL.has(s.status)) { refreshRuns(); refreshApprovals(); }
+  }, [s.status, s.runId, s.mode]);
+
+  // LLM 백엔드 상태(런 셀렉터 옵션 + 현재 effective 배지). 마운트 + 사무실 복귀 시 로드
+  // (LLM 설정 변경 후 돌아오면 상단 배지가 최신값을 반영).
+  useEffect(() => { if (view === "office" || view === "graph") fetchLlmStatus().then(setLlmStatus); }, [view]);
+
+  // 상단 LLM 배지에 표시할 '현재 사용 LLM' — 런 셀렉터(runLlm) 우선, 없으면 전역 기본값.
+  const effLlm = (): { backend: string; model: string } => {
+    if (runLlm === "claude") return { backend: "claude", model: "" };
+    if (runLlm.startsWith("local:")) return { backend: "local", model: runLlm.slice(6) };
+    if (llmStatus) return { backend: llmStatus.setting.backend, model: llmStatus.setting.local_model };
+    return { backend: "claude", model: "" };
+  };
+
+  // 업로드 풀다운 바깥 클릭 시 닫기
+  useEffect(() => {
+    if (!uploadMenu) return;
+    const h = (e: MouseEvent) => {
+      if (uploadMenuRef.current && !uploadMenuRef.current.contains(e.target as Node)) setUploadMenu(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [uploadMenu]);
+  useEffect(() => {
+    if (!tplMenu) return;
+    const h = (e: MouseEvent) => {
+      if (tplMenuRef.current && !tplMenuRef.current.contains(e.target as Node)) setTplMenu(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [tplMenu]);
+  // '📑 기록' 풀다운 바깥 클릭 시 닫기(자료·템플릿과 동일 동작)
+  useEffect(() => {
+    if (!showHist) return;
+    const h = (e: MouseEvent) => {
+      if (histWrapRef.current && !histWrapRef.current.contains(e.target as Node)) setShowHist(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [showHist]);
+
+  // LLM 배지 풀다운 바깥 클릭 시 닫기
+  useEffect(() => {
+    if (!llmMenu) return;
+    const h = (e: MouseEvent) => {
+      if (llmMenuRef.current && !llmMenuRef.current.contains(e.target as Node)) setLlmMenu(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [llmMenu]);
+
+  // 배지에서 모델 선택 → 전역 기본값 저장 + 런 셀렉터 동기화(즉시 반영). 실패 시 알림.
+  const applyLlm = async (backend: string, model: string) => {
+    setLlmBusy(true);
+    const res = await saveLlmSetting(backend, model);
+    setLlmBusy(false);
+    setLlmMenu(false);
+    if (res.ok && res.status) {
+      setLlmStatus(res.status);
+      setRunLlm(backend === "local" ? `local:${model}` : "claude");
+    } else {
+      alert(`LLM 변경 실패: ${res.error || "알 수 없는 오류"}`);
+    }
+  };
+
+  // 런별 오버라이드 선택값("" | "claude" | "local:<model>") → startRun opts.llm.
+  // "" 면 undefined(전역 기본값 따름).
+  const runLlmOpt = (): { backend: string; model: string } | undefined => {
+    if (runLlm === "claude") return { backend: "claude", model: "" };
+    if (runLlm.startsWith("local:")) return { backend: "local", model: runLlm.slice(6) };
+    return undefined;
+  };
+
+  const cancel = () => handleRef.current?.cancel();
+
+  // Upload external materials. A folder pick (webkitdirectory) yields every file under
+  // it (recursively); we keep only supported extensions, then send them to /sources in
+  // small batches so a progress bar can advance as each batch is ingested.
+  const doUpload = async (fileList: FileList | null) => {
+    if (!fileList || !fileList.length) return;
+    const picked = Array.from(fileList);
+    const files = picked.filter((f) => ALLOWED_EXT.some((ext) => f.name.toLowerCase().endsWith(ext)));
+    // 확장자 필터로 빠진 파일도 정산에 기록(조용한 누락 제거).
+    const filtered: UploadFileResult[] = picked
+      .filter((f) => !files.includes(f))
+      .map((f) => ({ file: f.name, status: "filtered", note: "지원 확장자 아님" }));
+    if (!files.length) {
+      setUploadDone({ results: filtered });
+      return;
+    }
+    const BATCH = 4;
+    const results: UploadFileResult[] = [];
+    setUploadProg({ done: 0, total: files.length });
+    try {
+      for (let i = 0; i < files.length; i += BATCH) {
+        const slice = files.slice(i, i + BATCH);
+        // Per-batch resilience: a single slow/dropped batch must NOT abort the whole
+        // folder upload (the old behavior — one 'Failed to fetch' nuked everything).
+        let done = false;
+        for (let attempt = 0; attempt < 3 && !done; attempt++) {
+          try {
+            const res = await uploadSources(slice);
+            results.push(...res.results);
+            done = true;
+          } catch {
+            if (attempt < 2) {
+              await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+            } else {
+              results.push(...slice.map((f) => ({ file: f.name, status: "network", note: "네트워크 오류" })));
+            }
+          }
+        }
+        setUploadProg({ done: Math.min(i + BATCH, files.length), total: files.length });
+      }
+      setUploadDone({ results: [...results, ...filtered] });  // 정산 패널 표시
+    } catch (err) {
+      setUploadDone({ results: [{ file: "업로드", status: "failed", note: String(err) }, ...filtered] });
+    } finally {
+      setUploadProg(null);
+    }
+  };
+
+  const loadPast = async (runId: string) => {
+    if (!runId) return;
+    handleRef.current?.detach();
+    handleRef.current = null;
+    const info = runs.find((r) => r.run_id === runId);
+    const events = await fetchRunLog(runId);
+    loadReplay(runId, info?.topic ?? runId, events);
+  };
+
+  // Resume an interrupted run (server-restart recovery): re-drive it from the last
+  // completed boundary and watch live. The SSE backlog rebuilds prior progress first.
+  // 단, 서버는 아직 재구동을 지원하지 않고 501 을 돌려준다(오케스트레이터에 체크포인트
+  // 인프라 부재 — server/main.ts 참고). 실패 시 idle 로 떨어뜨리지 말고 '기록 다시 보기'
+  // (loadPast)로 우회해, 사용자가 빈 화면 대신 진행 과정·산출물을 보게 한다.
+  const resume = async (runId: string) => {
+    if (!runId || s.status === "running") return;
+    handleRef.current?.detach();
+    const info = runs.find((r) => r.run_id === runId);
+    reset(info?.topic ?? runId);
+    setRunId(runId);
+    setShowHist(false);
+    try {
+      handleRef.current = await resumeRun(
+        runId,
+        (ev) => apply(ev),
+        () => useStore.getState().lastSeq,
+      );
+    } catch (e) {
+      window.alert(`재개 불가: ${(e as Error).message}\n기록(다시 보기)으로 엽니다.`);
+      handleRef.current = null;
+      await loadPast(runId);   // 빈 화면 대신 과거 진행을 재생
+      refreshRuns();
+    }
+  };
+
+  // Re-attach to an ALREADY-running run's live stream WITHOUT re-driving it. resume()
+  // re-enters run_company (only valid for an interrupted run); after a page reload a
+  // still-"running" run has no resume button, so this is the way back to watching it live.
+  //
+  // 과거 안무를 처음부터 재생하지 않도록: 먼저 백로그(/runs/:id/log)를 받아 snapshotLive
+  // 로 '한 번에' 최종 상태로 fold(애니메이션 없이 현재 진행 상태로 즉시 스냅)한 뒤,
+  // 마지막 seq 부터 watchRun 으로 라이브 tail 한다. getLastSeq()=lastSeq 이므로 SSE 재연결이
+  // Last-Event-ID=lastSeq 를 보내 서버는 그 이후 이벤트만 보낸다(백로그 재전송·재애니메이션 없음).
+  // 백로그 fetch 실패 시엔 종전대로 seq 0 부터 watchRun(안전 폴백).
+  const watchLive = async (runId: string) => {
+    if (!runId) return;
+    handleRef.current?.detach();
+    const info = runs.find((r) => r.run_id === runId);
+    reset(info?.topic ?? runId);
+    setRunId(runId);
+    setShowHist(false);
+    try {
+      const backlog = await fetchRunLog(runId);
+      // reset/setRunId 직후 동일 런을 보는 중일 때만 스냅(사용자가 그새 다른 화면으로
+      // 이동했으면 존중 — 늦게 도착한 백로그가 새 화면을 덮어쓰지 않게).
+      if (useStore.getState().runId === runId) {
+        snapshotLive(runId, info?.topic ?? runId, backlog);
+      }
+    } catch {
+      // 백로그 로드 실패 — watchRun 이 seq 0 부터 다시 채운다(기존 동작).
+    }
+    if (useStore.getState().runId !== runId) return; // 그새 떠났으면 스트림 안 붙임
+    handleRef.current = watchRun(
+      runId,
+      (ev) => apply(ev),
+      () => useStore.getState().lastSeq,
+    );
+  };
+
+  // 좌상단 로고 클릭 → 초기화면. 실행 중인 런은 취소가 아니라 라이브 스트림만
+  // 떼고(detach) 빈 홈으로 — 런은 서버에서 계속되고 기록에서 다시 열 수 있다.
+  const goHome = () => {
+    handleRef.current?.detach();
+    handleRef.current = null;
+    clearToIdle();          // 런 상태를 초기(빈)값으로
+    setView("office");      // 기본 뷰(사무실)
+    setShowHist(false);
+    setShowBrain(false);
+    setMetric(null);
+    setUploadDone(null);
+    setDirectedTarget(null);
+  };
+
+  // ⑦ URL 상태 복구 — 보고 있는 런을 ?run=<id>&mode=live|replay 로 주소창에 반영
+  // (replaceState라 히스토리 오염 없음). 새로고침해도 idle로 떨어지지 않고, 링크를
+  // 복사하면 같은 런 화면이 공유된다.
+  const urlRestoredRef = useRef(false);   // 최초 복구 시도 완료 전엔 초기 ""가 파라미터를 못 지우게
+  const hadRunRef = useRef(false);
+  useEffect(() => {
+    if (!urlRestoredRef.current && !s.runId) return;
+    const url = new URL(window.location.href);
+    if (s.runId) {
+      url.searchParams.set("run", s.runId);
+      url.searchParams.set("mode", s.mode);
+      hadRunRef.current = true;
+    } else if (hadRunRef.current) {
+      url.searchParams.delete("run");
+      url.searchParams.delete("mode");
+    }
+    window.history.replaceState(null, "", url);
+  }, [s.runId, s.mode]);
+  // 첫 런 목록이 도착하면 1회 복구: running 런은 라이브 재접속(watchLive — 재구동
+  // 아님), 끝난 런(또는 이미 끝났는데 mode=live로 남은 경우)은 리플레이로 연다.
+  useEffect(() => {
+    if (urlRestoredRef.current || runs.length === 0) return;
+    urlRestoredRef.current = true;
+    const p = new URLSearchParams(window.location.search);
+    const rid = p.get("run");
+    if (!rid || useStore.getState().runId) return;  // 이미 다른 런을 보는 중이면 존중
+    const info = runs.find((r) => r.run_id === rid);
+    if (!info) {                                    // 삭제된/모르는 런 → 파라미터 정리
+      const url = new URL(window.location.href);
+      url.searchParams.delete("run");
+      url.searchParams.delete("mode");
+      window.history.replaceState(null, "", url);
+      return;
+    }
+    if (p.get("mode") === "live" && info.status === "running") watchLive(rid);
+    else loadPast(rid);
+  }, [runs]);
+
+  const toggleCheck = (id: string) =>
+    setChecked((prev) => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+
+  const deleteChecked = async () => {
+    const ids = [...checked];
+    if (ids.length === 0) return;
+    if (!window.confirm(`${ids.length}개 기록을 삭제할까요? (되돌릴 수 없습니다)`)) return;
+    await Promise.all(ids.map((id) => deleteRun(id)));
+    if (s.runId && checked.has(s.runId)) clearToIdle();
+    setChecked(new Set());
+    refreshRuns();
+  };
+
+  const isReplay = s.mode === "replay";
+  // ⑧ 예산 경고 — cap 대비 사용률(무제한이면 0). 80% 경고 / 95% 위험.
+  const budgetRatio = s.budget && s.budget.cap_usd > 0 ? s.budget.spent_usd / s.budget.cap_usd : 0;
+  // ④ ETA — 과거 런 중앙값. 런 시작 시 1회 갱신, 현재 단계는 스토어에서 도출.
+  const [eta, setEta] = useState<EtaStats | null>(null);
+  useEffect(() => {
+    if (s.status === "running" || eta === null) fetchEta().then(setEta);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.status]);
+  const etaStage = s.synthesis ? "통합·마무리"
+    : Object.keys(s.phases).length ? "팀 작업·토론" : "위임";
+  const fmtDur = (sec: number) => sec >= 90 ? `${Math.round(sec / 60)}분` : `${Math.round(sec)}초`;
+
+  const sendChat = async () => {
+    const t = chat.trim();
+    if (!t || isReplay) return;
+    // Read the latest status from the store directly (not from the render-time closure)
+    // so two quick Enter presses both see the updated status after the first submit.
+    const currentStatus = useStore.getState().status;
+    if (submittingRef.current) return; // in-flight guard
+    // 대상 칩이 있으면 그 직원에게, 없으면 입력 텍스트에서 직원명 추정(미토큰화 폴백).
+    const directed = directedTarget ? { id: directedTarget.id, rest: t } : matchEmployee(t, roster);
+    setChat("");
+    setDirectedTarget(null);
+    submittingRef.current = true;
+    try {
+      if (directed) {
+        // 직원 지명 → 그 직원 단독(필요 시 ask_colleague 협업) 런 시작.
+        // 진행 중 런이 있으면 먼저 취소(고아 런·예산 누수·이벤트/seq 오염 방지).
+        handleRef.current?.cancel();
+        reset(directed.rest);
+        try {
+          handleRef.current = await startRun(
+            directed.rest,
+            (ev) => apply(ev),
+            (rid) => setRunId(rid),
+            () => useStore.getState().lastSeq,
+            { agent: directed.id, llm: runLlmOpt() },
+          );
+        } catch (e) {
+          window.alert(`런 시작 실패: ${(e as Error).message}`);
+          clearToIdle();
+        }
+      } else if (currentStatus === "running" && useStore.getState().runId) {
+        await sendMessage(useStore.getState().runId!, t); // inject a direct instruction into the running run
+      } else {
+        handleRef.current?.detach();
+        reset(t); // idle → start a new run with this instruction
+        try {
+          handleRef.current = await startRun(
+            t,
+            (ev) => apply(ev),
+            (rid) => setRunId(rid),
+            () => useStore.getState().lastSeq,
+            { llm: runLlmOpt(), path: runPath || undefined,
+              budget: runBudget === "" ? undefined : Number(runBudget) },
+          );
+        } catch (e) {
+          window.alert(`런 시작 실패: ${(e as Error).message}`);
+          clearToIdle();
+        }
+      }
+    } finally {
+      submittingRef.current = false;
+    }
+  };
+
+  // 칩·플레이스홀더·버튼은 토큰화된 대상(directedTarget)으로 — 실명직책 표시. 직원명은
+  // 입력 후 스페이스를 누르면 칩으로 토큰화되고 입력창엔 질문만 남는다(어색한 중복 제거).
+  const directedTitle = directedTarget?.label ?? "";
+  const directedLead = directedTarget?.lead ?? false;
+  // 통합 커맨드 바 — 상단 주제 입력창을 흡수한 단일 입력. 유휴=전사 토론 시작 ·
+  // 직원명+질문=지명 질의 · 실행 중=지시 주입. LLM 런 셀렉터와 중지 버튼도 여기.
+  const chatBar = !isReplay ? (
+    <form
+      className="chat-input"
+      onSubmit={(e) => {
+        e.preventDefault();
+        sendChat();
+      }}
+    >
+      {directedTarget && (
+        <span className="directed-chip">
+          {directedLead ? `👥 ${directedTitle} · 팀 가동` : `👤 ${directedTitle}`}
+          <button type="button" className="directed-chip-x" title="대상 해제"
+            onClick={() => setDirectedTarget(null)}>×</button>
+        </span>
+      )}
+      <textarea
+        rows={1}
+        value={chat}
+        title="Enter = 보내기 · Shift+Enter = 줄바꿈"
+        onChange={(e) => {
+          const v = e.target.value;
+          // 대상 없을 때 '직원명 + 스페이스' → 칩으로 토큰화하고 입력창엔 질문만 남긴다(IME 안전).
+          if (!directedTarget && /\s$/.test(v)) {
+            const m = matchEmployeeName(v, roster);
+            if (m) { setDirectedTarget(m); setChat(""); e.target.value = ""; e.target.style.height = "auto"; return; }
+          }
+          setChat(v);
+          e.target.style.height = "auto";                       // 줄 수에 맞춰 자동 높이(상한 132px)
+          e.target.style.height = Math.min(e.target.scrollHeight, 132) + "px";
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+          else if (e.key === "Backspace" && chat === "" && directedTarget) setDirectedTarget(null);
+          // Shift+Enter → 기본 동작(줄바꿈)
+        }}
+        placeholder={
+          directedTarget
+            ? directedLead
+              ? `${directedTitle} 팀에 맡길 질문…`
+              : `${directedTitle}에게 맡길 질문…`
+            : s.status === "running"
+              ? "진행 중인 토론에 지시 추가…"
+              : "주제 입력(전사 토론) 또는 직원명+질문…"
+        }
+      />
+      {s.status !== "running" && (
+        <select
+          className="llm-run-select run-opt"
+          value={runLlm}
+          onChange={(e) => setRunLlm(e.target.value)}
+          title={
+            llmStatus
+              ? `이 런의 LLM 백엔드. 전역 기본값: ${llmStatus.setting.backend === "local"
+                  ? `로컬 ${llmStatus.setting.local_model}` : "Claude 클라우드"}`
+              : "이 런의 LLM 백엔드 선택"
+          }
+        >
+          <option value="">⚙️ 기본값 따름</option>
+          <option value="claude">🧠 Claude 클라우드</option>
+          {(llmStatus?.local_models ?? []).map((m) => (
+            <option key={m} value={`local:${m}`}>💻 {m}</option>
+          ))}
+        </select>
+      )}
+      {!directedTarget && s.status !== "running" && (
+        <select
+          className="llm-run-select run-opt"
+          value={runPath}
+          onChange={(e) => setRunPath(e.target.value)}
+          title="실행 경로(검토 ①) — 자동: 주제로 추천(타임라인에 사유 표시) · 팀: 가장 적합한 한 팀 경량 1라운드(빠름·저비용) · 전사: 풀 토론(전략·계획 등 산출물 과제)"
+        >
+          <option value="">🧭 경로 자동</option>
+          <option value="team">⚡ 팀(경량)</option>
+          <option value="full">🏛️ 전사(풀)</option>
+        </select>
+      )}
+      {!directedTarget && s.status !== "running" && (
+        <select
+          className="llm-run-select run-opt"
+          value={runBudget}
+          onChange={(e) => setRunBudget(e.target.value)}
+          title="이 런의 예산 캡(USD) — 도달 시 정직하게 budget_exceeded 종료, 80%/95%에서 경고. 참고 실측: 경량 ~$4 · 풀런 ~$16~30"
+        >
+          <option value="">💰 예산 기본</option>
+          <option value="2">$2 캡</option>
+          <option value="5">$5 캡</option>
+          <option value="10">$10 캡</option>
+          <option value="30">$30 캡</option>
+          <option value="0">∞ 무제한</option>
+        </select>
+      )}
+      <button className="btn start" type="submit">
+        {directedTarget ? "전달" : s.status === "running" ? "지시" : "시작"}
+      </button>
+      {s.status === "running" && (
+        <button className="btn cancel" type="button" onClick={cancel}>중지</button>
+      )}
+    </form>
+  ) : null;
+
+  // 라이브 스트리밍 표시는 LiveNowStrip(타임라인 상단 '지금 작업 중' 띠)이 담당 —
+  // 현재 작업자만 실명직책 + 한 줄 현황으로 압축(과거의 700자 스트리밍 덤프 제거).
+
+  // 표시명 헬퍼 — '실명 직책'(장은영 팀장). progress·티커·renderTimeline 이 empLabel 을
+  // 쓰므로 **그것들보다 먼저** 선언해야 한다(TDZ 방지). 단독 지명 런은 CEO/팀 phase 가
+  // 없어 progress 가 empLabel 분기까지 내려가는데, 아래에 선언돼 있으면 'Cannot access
+  // before initialization' 으로 전 화면이 죽었다(2026-06-12 수정).
+  const personNames = useMemo(() => {
+    const m = Object.fromEntries(roster.map((r) => [r.id, personLabel(r.name, r.title)]));
+    m["ceo"] = "CEO";
+    return m;
+  }, [roster]);
+  const empLabel = (id?: string | null, persona?: { name?: string; role?: string }): string => {
+    if (persona?.name) return personLabel(persona.name, persona.role);
+    if (id && personNames[id]) return personNames[id];
+    return persona?.role || id || "";
+  };
+
+  // One-line "what's happening now" for the timeline (covers the forced-tool decompose
+  // stages that don't stream). "" when not running. 직원 지명(단독) 런은 CEO/팀 phase 가
+  // 없으므로 progressNote 의 "사장이…" fallback 대신 실제 일하는 그 직원을 보여준다.
+  const progress = useMemo((): string => {
+    if (s.status !== "running") return "";
+    const ceoPhase = s.phases["_ceo"];
+    const hasTeamPhase = Object.keys(s.phases)
+      .some((k) => k !== "_ceo" && s.phases[k] && s.phases[k] !== "idle");
+    if (ceoPhase || hasTeamPhase) return progressNote(s.phases, s.teams, s.status);
+    const w = s.agentOrder.map((id) => s.agents[id])
+      .find((a) => a && a.level !== "ceo" && !a.placeholder
+        && (a.status === "thinking" || a.status === "spawned"));
+    if (w) {
+      const r = empLabel(w.agent_id, w.persona) || "직원";
+      return `✍️ ${r}${ga(r)} 지시를 수행하고 있습니다`;
+    }
+    return "⏳ 작업을 준비하는 중…";
+  }, [s.status, s.phases, s.teams, s.agents, s.agentOrder]);
+
+  // 활동 피드: folded real-event activity ∪ live-only ambient office-life, sorted
+  // ascending by ts (oldest → newest, like the message log). Tie-break by seq so
+  // same-timestamp events keep their emit order.
+  const mergedActivity = useMemo(() => {
+    return [...s.activity, ...s.liveActivity].sort((a, b) =>
+      a.ts === b.ts ? (a.seq ?? 0) - (b.seq ?? 0) : a.ts < b.ts ? -1 : 1,
+    );
+  }, [s.activity, s.liveActivity]);
+
+  // 2D 사무실 상단 실시간 상태 띠 — "지금 사무실에서 무슨 일이 일어나는지" 한 줄.
+  // 실행 중에는 한 phase가 수 분 지속돼 멘트가 고정되므로, phase 멘트(닻)와 최근
+  // 활동(실제 이벤트 ∪ ambient 사무실 생활)을 4초 간격으로 순환시킨다. 유휴+ambient면
+  // 최신 사무실 생활 1건, 리플레이/빈 사무실은 텍스트 멘트.
+  const [tickerIdx, setTickerIdx] = useState(0);
+  useEffect(() => {
+    if (isReplay || s.status !== "running") return;
+    const t = setInterval(() => setTickerIdx((v) => v + 1), 4000);
+    return () => clearInterval(t);
+  }, [isReplay, s.status]);
+  // 회전 후보: "{직원}이 {label} 중입니다"로 읽어도 자연스러운 종류만(allowlist),
+  // 최근 2분 내, 같은 직원·같은 종류는 최신 1건으로 묶어 최대 5건.
+  const tickerPool = useMemo((): ActivityItem[] => {
+    if (isReplay || s.status !== "running") return [];
+    // 티커는 "지금 사무실 상황"을 보여준다 — 내부 동작(tool=그라운딩 커넥터 호출, skill)은 phase 와 무관하게
+    // "사장이 툴 사용 중" 처럼 오해를 주므로 제외. 의미있는 활동(위임·발언·비평·산출물·교훈·위키)과 ambient 만.
+    const ok = new Set(["wiki", "delegation", "message", "critique", "rebuttal",
+      "deliverable", "lesson", "chat", "rest", "stroll", "phone"]);
+    const now = Date.now();
+    const seen = new Set<string>();
+    const picked: ActivityItem[] = [];
+    for (let i = mergedActivity.length - 1; i >= 0 && picked.length < 5; i--) {
+      const a = mergedActivity[i];
+      const t = new Date(a.ts).getTime();
+      if (isNaN(t) || now - t > 120_000) break;  // ts 오름차순이라 더 과거는 전부 stale
+      if (!a.actorId || !ok.has(a.kind)) continue;
+      const key = `${a.actorId}|${a.kind}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      picked.push(a);
+    }
+    return picked.reverse();
+    // tickerIdx 의존: 신선도(2분) 창을 회전 주기마다 재평가해 stale 활동을 흘려보냄
+  }, [isReplay, s.status, mergedActivity, tickerIdx]);
+  // slot 0 = phase 멘트(닻) → 활동 1..N → 다시 닻 — 닻이 주기적으로 돌아온다.
+  const tickerSlot = !isReplay && s.status === "running" ? tickerIdx % (1 + tickerPool.length) : 0;
+  const tickerItem = useMemo((): ActivityItem | null => {
+    if (!isReplay && s.status === "running")
+      return tickerSlot > 0 ? tickerPool[tickerSlot - 1] ?? null : null;
+    if (!isReplay && !progress)
+      return s.liveActivity[s.liveActivity.length - 1] ?? null;  // 유휴: 최신 ambient
+    return null;
+  }, [isReplay, s.status, progress, tickerSlot, tickerPool, s.liveActivity]);
+  const tickerText = useMemo(() => {
+    if (isReplay) return "📼 지난 토론을 리플레이하는 중입니다";
+    if (tickerItem) return "";  // OfficeTicker 가 item 으로 렌더
+    // progress 가 이미 directed-aware(풀 org=phase 멘트 / 단독=그 직원). 풀 org 런만
+    // 참여 인원을 덧붙인다(단독 런은 1명이라 불필요).
+    if (progress) {
+      const hasTeam = !!s.phases["_ceo"] || Object.keys(s.phases)
+        .some((k) => k !== "_ceo" && s.phases[k] && s.phases[k] !== "idle");
+      const n = hasTeam ? countWorking(s) : 0;
+      return n > 0 ? `${progress} · 👥 ${n}명 참여 중` : progress;
+    }
+    return "🏢 직원들이 각자 자리에서 업무를 보는 중 — 아래에 주제를 입력해 토론을 시작하세요";
+  }, [isReplay, progress, s.status, s.phases, tickerItem]);
+  // roster id→이름 — pre-run ambient actors (no agent_spawned yet) still get a Korean name.
+  // 직무(안정) 표시명 — 라벨 전반에 쓰여 '직무 우선'을 전역 달성. id→직무.
+  const rosterNames = useMemo(
+    () => {
+      const m = Object.fromEntries(roster.map((r) => [r.id, r.title]));
+      if (ceoName) m["ceo"] = ceoName;  // 교훈 패널 등 이름 표시용(라우팅 roster와 무관)
+      return m;
+    },
+    [roster, ceoName],
+  );
+  // 현 담당자 실명 — 상세 화면에서 직무 뒤에 보조로 병기. id→실명(없으면 생략).
+  const rosterPersons = useMemo(
+    () => Object.fromEntries(roster.filter((r) => r.name).map((r) => [r.id, r.name as string])),
+    [roster],
+  );
+  // 토론 발언 대상 추출 시 오탐 차단용 동료 실명 목록(현 로스터 기준 — 과거 런도 안전).
+  const rosterNameList = useMemo(() => Object.values(rosterPersons), [rosterPersons]);
+  // personNames·empLabel 은 위(progress 앞)로 이동했다 — TDZ 방지.
+
+  const renderTimeline = (showSynthesis: boolean, heading = true) => (
+    <>
+      {heading && <h2>토론 타임라인</h2>}
+      {(s.status !== "idle" || s.messages.length > 0) && (
+        <div className={`tl-protocol status-${s.status}`}>
+          <span className="tl-protocol-dot" />
+          <b>{protocolLabel(s.status)}</b>
+          {s.convergence && (
+            <span className="tl-protocol-meta">R{s.convergence.round} · {s.convergence.state}</span>
+          )}
+        </div>
+      )}
+      <PhaseStepper compact />
+      {progress && <div className="tl-progress"><span className="tl-progress-dot" />{progress}</div>}
+      <LiveNowStrip names={personNames} />
+      {s.messages.length === 0 && s.status !== "running" && !progress && <p className="muted">토론 메시지 없음.</p>}
+      {(() => {
+        // Group debate messages by round with a divider so round 1 reads as PARALLEL
+        // positions (팀원 동시 작성), not a sequence — the members run concurrently and
+        // only appear in finish-time order, which can look like a wrong ordering.
+        const rows: JSX.Element[] = [];
+        let lastRound = -1;
+        for (const m of s.messages) {
+          const isDebate = m.move === "position" || m.move === "critique" || m.move === "rebuttal";
+          if (isDebate && m.round !== lastRound) {
+            lastRound = m.round;
+            rows.push(
+              <div key={`div-r${m.round}`} className="tl-round-div">
+                {m.round === 1 ? "라운드 1 · 동시 입장 (팀원 병렬 작성)" : `라운드 ${m.round} · 상호검증 토론`}
+              </div>,
+            );
+          }
+          const a = m.agent_id ? s.agents[m.agent_id] : undefined;
+          const isEmp = !!m.agent_id && m.move !== "user";
+          rows.push(
+            <TimelineMessage
+              key={m.seq}
+              m={m}
+              roleLabel={m.move === "user" ? "👤 나" : empLabel(m.agent_id, a?.persona) || "팀 산출물"}
+              avatarId={isEmp ? m.agent_id : null}
+              glyph={isEmp ? agentGlyph(a?.level, m.agent_id!, a?.persona?.role ?? "") : undefined}
+              wikiPages={s.wikiPages}
+              selfName={a?.persona?.name || rosterPersons[m.agent_id ?? ""]}
+              rosterNames={rosterNameList}
+            />,
+          );
+        }
+        return rows;
+      })()}
+      {showSynthesis && s.synthesis && (
+        <div className="synthesis">
+          <h3>📝 종합 결과</h3>
+          <pre>{s.synthesis}</pre>
+        </div>
+      )}
+    </>
+  );
+
+  const wikiPanel = (
+    <>
+      <h2>LLM 위키 ({s.wikiOrder.length})</h2>
+      {s.wikiOrder.length === 0 && <p className="muted">아직 페이지 없음.</p>}
+      {s.wikiOrder.map((pid) => {
+        const w = s.wikiPages[pid];
+        return (
+          <div key={pid} className={`wiki-card status-${w.status} stance-${w.stance}`}>
+            <div className="wiki-title">{w.title}</div>
+            <div className="wiki-meta">
+              <span className="tag">{w.category}</span>
+              <span className="tag">{w.status}</span>
+              <span className="tag">{w.stance}</span>
+            </div>
+          </div>
+        );
+      })}
+      {s.wikiEdges.length > 0 && (
+        <div className="edges">
+          <h3>관계</h3>
+          {s.wikiEdges.map((e, i) => (
+            <div key={i} className={`edge rel-${e.relation}`}>
+              {s.wikiPages[e.src_id]?.title ?? e.src_id}
+              <b> —{e.relation}→ </b>
+              {s.wikiPages[e.dst_id]?.title ?? e.dst_id}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+
+  // 산출물 패널 (오른쪽): 최종 결과물 + 팀 산출물 + 에이전트별 최신 산출.
+  const latestByAgent: Record<string, (typeof s.messages)[number]> = {};
+  for (const m of s.messages) if (m.agent_id && (m.text || "").trim()) latestByAgent[m.agent_id] = m;
+  const teamDeliverables = s.messages.filter((m) => m.move === "deliverable" && (m.text || "").trim());
+  const hasOutputs = !!s.synthesis.trim() || teamDeliverables.length > 0 || Object.keys(latestByAgent).length > 0;
+
+  const outputsPanel = (
+    <>
+      <div className="panel-head">
+        <h2>📄 산출물</h2>
+        <button className="outputs-close" onClick={() => setOutputsOpen(false)}
+          title="산출물 창 닫기">✕</button>
+      </div>
+      {!hasOutputs && <p className="muted">아직 산출물이 없습니다. 토론이 진행되면 여기에 쌓입니다.</p>}
+
+      {s.synthesis.trim() && (
+        <div className="output-card final">
+          <div className="output-head">
+            <span className="output-glyph">🧭</span>
+            <b>최종 결과물</b>
+            {s.status === "running" && <span className="output-live">작성 중…</span>}
+            {s.runId && s.status !== "running" && (
+              <button
+                className="output-hwpx"
+                title="한글(HWPX) 문서로 내보내기"
+                disabled={hwpxBusy}
+                onClick={async () => {
+                  // 팝업(window.open) 다운로드는 Chrome '저장 위치 묻기'와 충돌해
+                  // 조용히 취소될 수 있어 메인 탭 fetch→blob 다운로드로 처리.
+                  if (!s.runId || hwpxBusy) return;
+                  setHwpxBusy(true);
+                  try {
+                    await downloadRunHwpx(s.runId);
+                  } catch (e) {
+                    alert(e instanceof Error ? e.message : String(e));
+                  } finally {
+                    setHwpxBusy(false);
+                  }
+                }}
+              >
+                {hwpxBusy ? "⏳ 생성 중…" : "📄 한글"}
+              </button>
+            )}
+            {s.runId && s.status !== "running" && (
+              <button
+                className="output-hwpx"
+                title="피드백을 반영한 개정판(v+1) — 팀 작업 재실행 없이 CEO 통합만 다시 수행(빠르고 저렴). 리플레이로 연 과거 런에서도 가능"
+                onClick={async () => {
+                  if (!s.runId) return;
+                  const fb = window.prompt(
+                    "수정 지시(피드백)를 입력하세요.\n예: 예산 표를 사업별로 나누고, 3장 결론을 더 단정적으로.");
+                  if (!fb || !fb.trim()) return;
+                  try {
+                    const { run_id } = await reviseRun(s.runId, fb.trim());
+                    refreshRuns();
+                    watchLive(run_id);
+                  } catch (e) {
+                    alert(e instanceof Error ? e.message : String(e));
+                  }
+                }}
+              >✏️ 수정 요청</button>
+            )}
+          </div>
+          <div className="output-body">{s.synthesis}</div>
+        </div>
+      )}
+
+      {teamDeliverables.map((m) => (
+        <div key={m.seq} className="output-card deliverable">
+          <div className="output-head">
+            <span className="output-glyph">📦</span>
+            <b>팀 산출물</b>
+          </div>
+          <div className="output-body">{m.text}</div>
+        </div>
+      ))}
+
+      {s.agentOrder.map((id) => {
+        const m = latestByAgent[id];
+        if (!m) return null;
+        const a = s.agents[id];
+        const color = agentColor(id);
+        return (
+          <div key={id} className="output-card" style={{ borderLeftColor: color }}>
+            <div className="output-head">
+              <Avatar id={id} glyph={agentGlyph(a?.level, id, a?.persona?.role ?? "")} size={22} head />
+              <b style={{ color }}>{empLabel(id, a?.persona)}</b>
+              <span className="output-meta">R{m.round} · {m.move}</span>
+            </div>
+            <div className="output-body">{m.text}</div>
+          </div>
+        );
+      })}
+    </>
+  );
+
+  const employeePanel = (
+    <>
+      <h2>👥 직원 활동 ({s.agentOrder.length})</h2>
+      {s.agentOrder.length === 0 && <p className="muted">아직 출근 전.</p>}
+      {s.agentOrder.map((id) => {
+        const a = s.agents[id];
+        if (!a) return null;
+        const used = Object.entries(a.toolsUsed ?? {});
+        return (
+          <div key={id} className="emp-card">
+            <div className="emp-head">
+              <span className="msg-who">
+                <Avatar id={id} glyph={agentGlyph(a.level, id, a.persona?.role ?? "")} size={20} head />
+                <b>{empLabel(id, a.persona)}</b>
+              </span>
+              <span className="emp-meta">
+                {a.team ? `${a.team} · ` : ""}{a.level ?? ""}
+                {typeof a.autonomy === "number" && (
+                  <span className="emp-autonomy" title="AUTONOMY_LEVEL">
+                    {" · "}자율 {a.autonomy}({AUTONOMY_LABEL[a.autonomy] ?? "?"})
+                  </span>
+                )}
+              </span>
+            </div>
+            {(a.skills?.length ?? 0) > 0 && (
+              <div className="emp-row">
+                스킬: {a.skills!.map((sk) => (
+                  <span key={sk} className="chip skill-chip">🧩 {sk}</span>
+                ))}
+              </div>
+            )}
+            <div className="emp-row">
+              사용 툴 ({a.toolUseCount ?? 0}):{" "}
+              {used.length === 0 ? (
+                <span className="muted">없음</span>
+              ) : (
+                used.map(([t, n]) => (
+                  <span key={t} className="chip tool-chip">🔧 {t}×{n}</span>
+                ))
+              )}
+            </div>
+          </div>
+        );
+      })}
+      {s.sessionDigest && (
+        <div className="digest-note">📁 세션 산출물 {s.sessionDigest.files.length}개 파일 저장됨</div>
+      )}
+    </>
+  );
+
+  const decide = async (id: string, approved: boolean) => {
+    // The reducer folds the approval_decided SSE event (live path); re-fetch covers
+    // hydrated recommendations from past runs (no live event for those).
+    await decideApproval(id, approved);
+    refreshApprovals();
+  };
+
+  // Banner = live (this run's SSE) ∪ hydrated globally-pending, deduped, minus any
+  // already decided live this session.
+  const liveIds = new Set(s.approvals.map((a) => a.approval_id));
+  const decidedIds = new Set(s.approvalHistory.map((a) => a.approval_id));
+  const mergedApprovals: ApprovalItem[] = [
+    ...s.approvals,
+    ...pendingApprovals.filter((p) => !liveIds.has(p.approval_id) && !decidedIds.has(p.approval_id)),
+  ];
+
+  const approvalsBanner = mergedApprovals.length > 0 && (
+    <div className="approvals-banner">
+      {mergedApprovals.map((ap) => {
+        const aa = ap.agent_id ? s.agents[ap.agent_id] : undefined;
+        return (
+        <div key={ap.approval_id} className="approval-item">
+          <span className="approval-text">
+            🔔{" "}
+            {ap.agent_id && (
+              <Avatar id={ap.agent_id} glyph={agentGlyph(aa?.level, ap.agent_id, aa?.persona?.role ?? "")} size={20} head />
+            )}{" "}
+            <b>{empLabel(ap.agent_id, aa?.persona) || "시스템"}</b>
+            {" "}승인 요청 · {ap.action_type} — {ap.summary}
+          </span>
+          <span className="approval-actions">
+            <button className="btn approve" onClick={() => decide(ap.approval_id, true)}>승인</button>
+            <button className="btn reject" onClick={() => decide(ap.approval_id, false)}>거부</button>
+          </span>
+        </div>
+        );
+      })}
+    </div>
+  );
+
+  const emptyStage = (
+    <div className="graph-empty">
+      <p className="muted">주제를 입력하고 시작하면<br />에이전트들이 사무실에 출근합니다.</p>
+    </div>
+  );
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <button className="brand" type="button" onClick={goHome} title="초기화면으로">🏢 GEPA AI Office</button>
+        {(() => {
+          const e = effLlm();
+          const local = e.backend === "local";
+          const localAvail = llmStatus?.backends.find((b) => b.id === "local")?.available ?? false;
+          const claudeAvail = llmStatus?.backends.find((b) => b.id === "claude")?.available ?? true;
+          const models = llmStatus?.local_models ?? [];
+          const isCur = (b: string, m: string) =>
+            e.backend === b && (b === "claude" || e.model === m);
+          return (
+            <div className="llm-badge-wrap" ref={llmMenuRef}>
+              <button className={`llm-badge${local ? " local" : " claude"}`}
+                onClick={() => setLlmMenu((v) => !v)}
+                title="현재 사용 중인 LLM · 클릭하면 모델 선택">
+                <span className="llm-badge-dot" />
+                <span className="llm-badge-txt">{local ? `로컬 · ${e.model || "?"}` : "Claude 클라우드"}</span>
+                <span className="llm-badge-caret">▾</span>
+              </button>
+              {llmMenu && (
+                <div className="llm-menu">
+                  <div className="llm-menu-head">LLM 모델 선택{llmBusy ? " · 적용 중…" : ""}</div>
+                  <button className={`llm-menu-item${isCur("claude", "") ? " sel" : ""}`}
+                    disabled={llmBusy || !claudeAvail} onClick={() => applyLlm("claude", "")}>
+                    <span className="llm-dot claude" /> Claude 클라우드
+                    <span className="llm-menu-sub">사장=opus · 팀원=sonnet 라우팅</span>
+                    {isCur("claude", "") && <span className="llm-check">✓</span>}
+                  </button>
+                  {models.length === 0 && (
+                    <div className="llm-menu-empty">{localAvail ? "로컬 모델 없음" : "Ollama 미연결"}</div>
+                  )}
+                  {models.map((m) => (
+                    <button key={m} className={`llm-menu-item${isCur("local", m) ? " sel" : ""}`}
+                      disabled={llmBusy || !localAvail} onClick={() => applyLlm("local", m)}>
+                      <span className="llm-dot local" /> 로컬 · {m}
+                      {isCur("local", m) && <span className="llm-check">✓</span>}
+                    </button>
+                  ))}
+                  <div className="llm-menu-foot">전역 기본값으로 저장 · 다음 런부터 적용</div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+        {/* 주제 입력·토론 시작·LLM 셀렉터는 좌하단 통합 커맨드 바로 이동 — 상단은
+            업로드/기록/뷰 전환/상태만 남겨 깔끔하게. */}
+        <div className="topbar-actions">
+        <div className="upload-wrap" ref={uploadMenuRef}>
+          <button className="btn" onClick={() => setUploadMenu((v) => !v)}
+            title="외부 자료 업로드(PDF/Word/Excel/PPT/HWPX/txt 등) → 위키 적재">📎 자료 ▾</button>
+          {uploadMenu && (
+            <div className="upload-menu">
+              <button onClick={() => { setUploadMenu(false); fileInputRef.current?.click(); }}>📄 파일 선택</button>
+              <button onClick={() => { setUploadMenu(false); folderInputRef.current?.click(); }}>📁 폴더 선택</button>
+            </div>
+          )}
+        </div>
+        <input ref={fileInputRef} type="file" multiple style={{ display: "none" }}
+          accept={ALLOWED_EXT.join(",")}
+          onChange={async (e) => { await doUpload(e.target.files); e.target.value = ""; }} />
+        <input ref={folderInputRef} type="file" multiple style={{ display: "none" }}
+          {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+          onChange={async (e) => { await doUpload(e.target.files); e.target.value = ""; }} />
+        <div className="upload-wrap" ref={tplMenuRef}>
+          <button className="btn" title="반복 업무 프리셋 — 클릭=입력 채우기 · ▶=즉시 실행 · 예약(schedule)은 자동 실행"
+            onClick={() => { setTplMenu((v) => !v); if (!tplMenu) refreshTemplates(); }}>
+            📋 템플릿 ▾
+          </button>
+          {tplMenu && (
+            <div className="upload-menu tpl-menu">
+              {templates.length === 0 && <span className="tpl-empty">저장된 템플릿 없음</span>}
+              {templates.map((t) => (
+                <div key={t.id} className="tpl-row">
+                  <button className="tpl-pick" title={t.topic}
+                    onClick={() => { setChat(t.topic); setRunPath(t.path ?? ""); setTplMenu(false); }}>
+                    {t.name}{t.schedule ? <span className="tpl-sched"> ⏰ {t.schedule}</span> : null}
+                  </button>
+                  <button className="tpl-act" title="즉시 실행"
+                    onClick={async () => {
+                      setTplMenu(false);
+                      try {
+                        const { run_id } = await runTemplate(t.id);
+                        refreshRuns();
+                        watchLive(run_id);
+                      } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
+                    }}>▶</button>
+                  <button className="tpl-act" title="삭제"
+                    onClick={async () => {
+                      if (!window.confirm(`템플릿 '${t.name}' 삭제?`)) return;
+                      await deleteTemplate(t.id);
+                      refreshTemplates();
+                    }}>✕</button>
+                </div>
+              ))}
+              <button className="tpl-save"
+                onClick={async () => {
+                  const topic = chat.trim();
+                  if (!topic) { alert("먼저 아래 입력창에 주제를 적어주세요."); return; }
+                  const name = window.prompt("템플릿 이름:", topic.slice(0, 20));
+                  if (!name) return;
+                  const schedule = window.prompt(
+                    "예약(선택) — 비우면 수동 실행 전용\n예: daily 10:00 · weekly mon 10:00 · monthly 1 09:30", "") || null;
+                  try {
+                    await saveTemplate({ name, topic, path: runPath || null, schedule, enabled: true });
+                    refreshTemplates();
+                  } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
+                }}>＋ 현재 입력을 템플릿으로 저장</button>
+            </div>
+          )}
+        </div>
+        <div className="hist-wrap" ref={histWrapRef}>
+          <button className="btn hist-toggle" onClick={() => setShowHist((v) => !v)} title="토론 기록">
+            📑 기록{runs.length > 0 ? ` (${runs.length})` : ""}
+          </button>
+          {showHist && (
+            <div className="hist-panel">
+              <div className="hist-head">
+                <b>토론 기록 ({runs.length})</b>
+                <button className="hist-close" onClick={() => setShowHist(false)}>✕</button>
+              </div>
+              <div className="hist-list">
+                {runs.length === 0 && <p className="muted hist-empty">기록 없음</p>}
+                {runs.map((r) => (
+                  <div key={r.run_id} className={`hist-row${checked.has(r.run_id) ? " checked" : ""}`}>
+                    <input
+                      type="checkbox"
+                      checked={checked.has(r.run_id)}
+                      onChange={() => toggleCheck(r.run_id)}
+                    />
+                    <button
+                      className="hist-load"
+                      onClick={() => {
+                        loadPast(r.run_id);
+                        setShowHist(false);
+                      }}
+                    >
+                      <span className={`hist-badge status-${r.status}`}>
+                        {STATUS_LABEL[r.status] ?? r.status}
+                      </span>
+                      <span className="hist-topic">{r.topic.slice(0, 40) || "(제목 없음)"}</span>
+                    </button>
+                    {r.status === "interrupted" && (
+                      <button
+                        className="hist-resume"
+                        title="중단된 지점부터 이어가기"
+                        onClick={() => resume(r.run_id)}
+                      >
+                        ▶ 이어가기
+                      </button>
+                    )}
+                    {r.status === "running" && (
+                      <button
+                        className="hist-resume"
+                        title="실행 중인 런에 라이브로 다시 연결 (재실행이 아니라 화면만 따라붙음)"
+                        onClick={() => watchLive(r.run_id)}
+                      >
+                        ▶ 라이브로 보기
+                      </button>
+                    )}
+                    {r.status !== "running" && r.status !== "interrupted" && (
+                      <button
+                        className="hist-resume"
+                        title="완료된 기록을 다시 열어 진행 과정·산출물을 재생"
+                        onClick={() => {
+                          loadPast(r.run_id);
+                          setShowHist(false);
+                        }}
+                      >
+                        🔁 다시 보기
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {checked.size > 0 && (
+                <div className="hist-foot">
+                  <button className="btn" onClick={() => setChecked(new Set())}>선택 해제</button>
+                  <button className="btn reject" onClick={deleteChecked}>🗑 선택 {checked.size}개 삭제</button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <button className="btn" onClick={() => setShowBrain(true)}
+          title="제2의 두뇌 — 위키 지식 그래프(옵시디언 뷰)">🧠 두뇌</button>
+        </div>
+        <div className="viewtoggle">
+          <button className={view === "office" ? "active" : ""} onClick={() => setView("office")}>🏢 사무실</button>
+          <button className={view === "graph" ? "active" : ""} onClick={() => setView("graph")}>🔗 그래프</button>
+          <button className={view === "employees" ? "active" : ""} onClick={() => setView("employees")}>👥 직원</button>
+          <button className={view === "detail" ? "active" : ""} onClick={() => setView("detail")}>📋 상세</button>
+        </div>
+        <div className="viewtoggle">
+          <button className={view === "apikeys" ? "active" : ""} onClick={() => setView("apikeys")}>🔑 API 키</button>
+          <button className={view === "llm" ? "active" : ""}
+            onClick={() => { setView("llm"); fetchLlmStatus().then(setLlmStatus); }}>🧩 LLM</button>
+          <button className={view === "mcp" ? "active" : ""} onClick={() => setView("mcp")}>🧷 MCP</button>
+        </div>
+        <div className={`status status-${s.status}`}>
+          {isReplay ? "리플레이" : STATUS_LABEL[s.status] ?? s.status}
+        </div>
+        {s.status === "running" && !isReplay && eta && eta.sample > 0 && (
+          <div className="hud" title={
+            `최근 ${eta.sample}개 런 중앙값 — ` +
+            Object.entries(eta.stages).map(([k, v]) => `${k} ${fmtDur(v)}`).join(" · ") +
+            (eta.total_sec ? ` · 전체 ${fmtDur(eta.total_sec)}` : "") +
+            (eta.cost_usd ? ` · 비용 ~$${eta.cost_usd}` : "") +
+            (effLlm().backend === "local" ? " · 🐢 로컬 LLM은 보통 2~3배 더 걸립니다" : "")
+          }>
+            ⏱ {etaStage}{eta.stages[etaStage] ? ` · 보통 ~${fmtDur(eta.stages[etaStage])}` : ""}
+            {effLlm().backend === "local" ? " 🐢" : ""}
+          </div>
+        )}
+        {s.budget && (
+          <div
+            className={`hud${budgetRatio >= 0.95 ? " budget-crit" : budgetRatio >= 0.8 ? " budget-warn" : ""}`}
+            title={s.budget.cap_usd > 0 ? `예산 ${Math.round(budgetRatio * 100)}% 사용` : "예산 무제한"}
+          >
+            ${s.budget.spent_usd.toFixed(3)} / {s.budget.cap_usd > 0 ? `$${s.budget.cap_usd.toFixed(2)}` : "∞"}
+          </div>
+        )}
+        {s.convergence && (
+          <div className="hud conv" title="라운드 기반 상태 (적응형 수렴 감지는 phase 2)">
+            라운드 {s.convergence.round} · {s.convergence.state}
+          </div>
+        )}
+      </header>
+
+      {budgetRatio >= 0.8 && s.status === "running" && s.budget && (
+        <div className={`budget-banner${budgetRatio >= 0.95 ? " crit" : ""}`}>
+          ⚠️ 예산 {Math.round(budgetRatio * 100)}% 사용 — 남은 한도 $
+          {Math.max(0, s.budget.cap_usd - s.budget.spent_usd).toFixed(2)}
+          {budgetRatio >= 0.95 && " · 한도 도달 시 런이 자동 중단됩니다"}
+        </div>
+      )}
+
+      {uploadProg && (
+        <div className="upload-toast">
+          <div className="upload-toast-label">
+            📁 자료 적재 중… {uploadProg.done}/{uploadProg.total}
+            <span className="upload-pct"> ({Math.round((uploadProg.done / uploadProg.total) * 100)}%)</span>
+          </div>
+          <div className="upload-bar">
+            <div className="upload-bar-fill"
+              style={{ width: `${Math.round((uploadProg.done / Math.max(uploadProg.total, 1)) * 100)}%` }} />
+          </div>
+        </div>
+      )}
+
+      {uploadDone && <UploadSummary results={uploadDone.results} roster={roster} onClose={() => setUploadDone(null)} />}
+
+      {showBrain && (
+        <Suspense fallback={null}><WikiGraphView onClose={() => setShowBrain(false)} /></Suspense>
+      )}
+
+      {metric && (
+        <MetricDrawer metric={metric} runs={runs} names={rosterNames} persons={rosterPersons}
+          onOpenRun={loadPast} onOpenOutputs={() => setOutputsOpen(true)}
+          onClose={() => setMetric(null)} />
+      )}
+
+      {approvalsBanner}
+
+      {s.subproblems.length > 0 && (
+        <div className="subproblem-strip">
+          <span className="strip-label">{s.debateGated ? "단일 관점" : "하위 문제"}:</span>
+          {s.subproblems.map((sp) => (
+            <span key={sp.id} className="chip">{sp.id} · {sp.text}</span>
+          ))}
+        </div>
+      )}
+
+      {view === "apikeys" ? (
+        <main className="employees-stage">
+          <ApiKeysView />
+        </main>
+      ) : view === "llm" ? (
+        <main className="employees-stage">
+          <LlmSettingsView />
+        </main>
+      ) : view === "mcp" ? (
+        <main className="employees-stage">
+          <McpView />
+        </main>
+      ) : view === "employees" ? (
+        <main className="employees-stage">
+          <EmployeesView />
+        </main>
+      ) : view === "detail" ? (
+        <main className="panels">
+          <section className="panel graph-panel">
+            {s.agentOrder.length === 0 ? emptyStage : <AgentGraph />}
+          </section>
+          <section className="panel timeline-detail">
+            <div className="td-scroll">{renderTimeline(true)}</div>
+            {chatBar}
+          </section>
+          <section className="panel employees">{employeePanel}</section>
+          <section className="panel wiki">{wikiPanel}</section>
+        </main>
+      ) : (
+        <main
+          className="stage"
+          // 5컬럼: 좌패널 | 핸들 | 중앙(1fr) | 핸들 | 우패널 — 핸들 드래그로 좌/우 폭 조절.
+          // 산출물 창을 닫으면 우측 핸들+패널 2컬럼을 제거해 중앙이 그만큼 넓어진다.
+          style={{ gridTemplateColumns: outputsOpen
+            ? `${widths.left}px 5px 1fr 5px ${widths.right}px`
+            : `${widths.left}px 5px 1fr` }}
+        >
+          <aside className="sidechat">
+            <div className="tl-tabs" role="tablist">
+              <button
+                className={`tl-tab${tlTab === "timeline" ? " active" : ""}`}
+                role="tab" aria-selected={tlTab === "timeline"}
+                onClick={() => setTlTab("timeline")}
+              >
+                📜 타임라인
+              </button>
+              <button
+                className={`tl-tab${tlTab === "activity" ? " active" : ""}`}
+                role="tab" aria-selected={tlTab === "activity"}
+                onClick={() => setTlTab("activity")}
+              >
+                ✨ 활동{mergedActivity.length ? ` ${mergedActivity.length}` : ""}
+              </button>
+              <button
+                className={`tl-tab${tlTab === "workflow" ? " active" : ""}`}
+                role="tab" aria-selected={tlTab === "workflow"}
+                onClick={() => setTlTab("workflow")}
+              >
+                🔀 워크플로우
+              </button>
+            </div>
+            <div className="sidechat-scroll">
+              {tlTab === "timeline"
+                ? renderTimeline(false, false)
+                : tlTab === "workflow"
+                ? <WorkflowBoard names={personNames} />
+                : <ActivityFeed items={mergedActivity} agents={s.agents} teams={s.teams} names={personNames} />}
+            </div>
+            {chatBar}
+          </aside>
+          <div className="stage-split" onMouseDown={startDrag("left")}
+            onDoubleClick={() => resetWidth("left")}
+            title="드래그 = 타임라인 폭 조절 · 더블클릭 = 기본 폭" />
+          <section className="stage-main">
+            {view === "office" ? (
+              <div className="office-stage">
+                <DashboardBar companyName={companyMeta.name} total={companyMeta.total}
+                  runsCount={runs.length} onMetric={setMetric} />
+                <OfficeTicker item={tickerItem} text={tickerText}
+                  agents={s.agents} names={personNames} live={s.status === "running"} />
+                <OfficeView />
+                <OfficeProgressBar />
+              </div>
+            ) : s.agentOrder.length === 0 ? (
+              emptyStage
+            ) : (
+              <AgentGraph />
+            )}
+          </section>
+          {outputsOpen ? (
+            <>
+              <div className="stage-split" onMouseDown={startDrag("right")}
+                onDoubleClick={() => resetWidth("right")}
+                title="드래그 = 산출물 폭 조절 · 더블클릭 = 기본 폭" />
+              <aside className="outputs">{outputsPanel}</aside>
+            </>
+          ) : (
+            // 닫힌 상태: 중앙 우측 가장자리에 얇은 "산출물 열기" 탭.
+            <button className="outputs-reopen" onClick={() => setOutputsOpen(true)}
+              title="산출물 창 열기">📄 산출물 ◀</button>
+          )}
+        </main>
+      )}
+
+      {isReplay && <ReplayBar />}
+
+      {s.errors.length > 0 && (
+        <footer className="errors">
+          {s.errors.map((e, i) => (<div key={i}>⚠ {e}</div>))}
+        </footer>
+      )}
+    </div>
+  );
+}

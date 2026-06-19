@@ -1,0 +1,266 @@
+/**
+ * 직원 워크스페이스 — `data/agents/<id>/` 의 진화 파일(원본 GEPA org/workspace.py 포팅).
+ *  - goal.md     : 개인 목표(자가학습이 비면 자동 생성, 사람 편집 우선). 직무 정체성은 company.yaml 의 system_prompt 가 담당.
+ *  - skills/*.md : 검증된 재사용 패턴(주입)
+ *  - capabilities.json : { tools, autonomy } — company.yaml 위 오버레이
+ *  - knowledge.md : 귀속된 자료(자동분류용)
+ *  - activity.log : append 활동 로그
+ * persona_extra(=goal+skills+memory)와 effective tools/autonomy 를 오케스트레이터가 주입한다.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { CONFIG } from '../config';
+import { ollama } from '../llm/ollama';
+import type { RoleDef } from './company';
+
+const ALLOWED_TOOLS = new Set(['wiki_query', 'wiki_ingest', 'web_search']);
+
+function dir(id: string): string {
+  const d = path.join(CONFIG.agentsDir, id);
+  return d;
+}
+function safeId(id: string): boolean {
+  return !!id && !/[/\\]|\.\./.test(id);
+}
+function read(p: string): string {
+  try { return fs.readFileSync(p, 'utf-8'); } catch { return ''; }
+}
+function write(p: string, text: string): void {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, text, 'utf-8');
+}
+function skillSlug(name: string): string {
+  return (name || 'skill').trim().toLowerCase().replace(/[^\p{L}\p{N}-]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'skill';
+}
+/** append 누적 파일의 무한 성장 방지 — 줄 수가 max 를 넘으면 마지막 keep 줄만 남긴다(디스크 누수·조회 지연 차단). */
+function tailTrim(p: string, max: number, keep: number): void {
+  try {
+    const lines = read(p).split('\n');
+    if (lines.length > max) write(p, lines.slice(-keep).join('\n'));
+  } catch { /* 무해 */ }
+}
+
+export function ensureScaffold(id: string): void {
+  if (!safeId(id)) return;
+  const d = dir(id);
+  fs.mkdirSync(path.join(d, 'skills'), { recursive: true });
+}
+
+export function writeGoal(id: string, text: string): void {
+  if (safeId(id)) write(path.join(dir(id), 'goal.md'), text);
+}
+export function readGoal(id: string): string { return safeId(id) ? read(path.join(dir(id), 'goal.md')) : ''; }
+export function readKnowledge(id: string): string { return safeId(id) ? read(path.join(dir(id), 'knowledge.md')) : ''; }
+
+export function appendKnowledge(id: string, line: string): void {
+  if (!safeId(id)) return;
+  const p = path.join(dir(id), 'knowledge.md');
+  fs.mkdirSync(dir(id), { recursive: true });
+  fs.appendFileSync(p, line.trim() + '\n', 'utf-8');
+}
+export function removeKnowledge(id: string, marker: string): void {
+  if (!safeId(id)) return;
+  const p = path.join(dir(id), 'knowledge.md');
+  const cur = read(p);
+  if (!cur) return;
+  write(p, cur.split('\n').filter((l) => !l.includes(marker)).join('\n'));
+}
+export function appendActivity(id: string, line: string): void {
+  if (!safeId(id)) return;
+  fs.mkdirSync(dir(id), { recursive: true });
+  const p = path.join(dir(id), 'activity.log');
+  fs.appendFileSync(p, `${new Date().toISOString()} ${line}\n`, 'utf-8');
+  tailTrim(p, 200, 100); // 무한 성장 방지(최근 100줄 유지)
+}
+
+// --- 자가학습(self-learning): memory.md 누적 + 다음 런 주입 ---
+export function appendMemory(id: string, insight: string): void {
+  if (!safeId(id) || !insight.trim()) return;
+  fs.mkdirSync(dir(id), { recursive: true });
+  const date = new Date().toISOString().slice(0, 10);
+  const p = path.join(dir(id), 'memory.md');
+  fs.appendFileSync(p, `- (${date}) ${insight.trim().replace(/\s+/g, ' ')}\n`, 'utf-8');
+  tailTrim(p, 400, 200); // 자가학습 누적 상한(최근 200줄) — 파일·주입 비용 통제
+}
+export function readMemory(id: string, maxChars = 1500): string {
+  if (!safeId(id)) return '';
+  const m = read(path.join(dir(id), 'memory.md')).trim();
+  return m.length > maxChars ? '...\n' + m.slice(-maxChars) : m; // 최근 학습 우선
+}
+// 오래된 학습 압축·아카이브 — memory.md 가 임계(줄)를 넘으면 오래된 부분을 micro 로 요약해
+// '이전 학습 요약'으로 갈음하고 원본은 memory_archive.md 에 보존. 단순 폐기(tailTrim) 대신
+// 지식을 잃지 않고 주입 컨텍스트 비용만 줄인다(Connect AI recency 개념 차용, 1000+ 런 오염 방지).
+const MEMORY_ARCHIVE_LINES = 60;
+export async function archiveMemory(id: string, microModel: string, signal?: AbortSignal): Promise<boolean> {
+  if (!safeId(id)) return false;
+  const p = path.join(dir(id), 'memory.md');
+  const cur = read(p).trim();
+  if (!cur) return false;
+  const lines = cur.split('\n').filter((l) => l.trim());
+  if (lines.length <= MEMORY_ARCHIVE_LINES) return false;
+  const keep = Math.floor(MEMORY_ARCHIVE_LINES / 2);
+  const old = lines.slice(0, lines.length - keep);
+  const recent = lines.slice(lines.length - keep);
+  try { fs.appendFileSync(path.join(dir(id), 'memory_archive.md'), old.join('\n') + '\n', 'utf-8'); } catch { /* 보존 실패 무해 */ }
+  let summary = '';
+  try {
+    const res = await ollama.chat({
+      model: microModel,
+      messages: [
+        { role: 'system', content: '너는 학습 정리자다. 아래 누적 교훈을 중복 제거하고 핵심만 5~8개 불릿으로 압축하라. 한국어, 구체적으로.' },
+        { role: 'user', content: old.join('\n') },
+      ],
+      maxOutputTokens: 500, temperature: 0.2, signal,
+    });
+    summary = res.text.trim();
+  } catch { /* 요약 실패해도 원본은 archive 에 보존됨 */ }
+  const head = summary ? `## 이전 학습 요약 (${new Date().toISOString().slice(0, 10)})\n${summary}\n` : '';
+  write(p, [head, recent.join('\n')].filter(Boolean).join('\n') + '\n');
+  return true;
+}
+// --- 검증 지식(Self-RAG, Connect AI verified.md 벤치마킹) ---
+// 에이전트 출력에서 [근거: 출처] 태그가 붙은 주장만 '검증 지식'으로 승격해 verified.md 에 누적.
+// 다음 런 시스템프롬프트에 memory 보다 우선 주입 → 근거 있는 사실 위에 compounding(환각 억제).
+
+/** 텍스트에서 [근거: 출처] 태그가 붙은 주장 추출 — 태그 직전 문장(클레임) + 출처. */
+export function extractVerifiedClaims(text: string): Array<{ claim: string; source: string }> {
+  const out: Array<{ claim: string; source: string }> = [];
+  if (!text) return out;
+  const re = /([^.\n!?•]{8,}?)\s*\[\s*근거\s*[:：]\s*([^\]]+)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const claim = (m[1] ?? '').replace(/^[-*\s>]+/, '').trim();
+    const source = (m[2] ?? '').trim();
+    if (claim.length >= 8 && source) out.push({ claim, source });
+    if (out.length >= 20) break; // 폭주 방지
+  }
+  return out;
+}
+
+/** 검증 주장 1건을 직원 verified.md 에 누적(중복은 스킵). 승격되면 true. */
+export function appendVerified(id: string, claim: string, source: string): boolean {
+  if (!safeId(id)) return false;
+  const c = (claim || '').replace(/\s+/g, ' ').trim();
+  const src = (source || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (c.length < 8 || !src) return false;
+  const p = path.join(dir(id), 'verified.md');
+  const cur = read(p);
+  if (cur.includes(c.slice(0, 40))) return false; // 동일 주장 중복 방지
+  fs.mkdirSync(dir(id), { recursive: true });
+  fs.appendFileSync(p, `- (${new Date().toISOString().slice(0, 10)}) ${c} _(근거: ${src})_\n`, 'utf-8');
+  tailTrim(p, 200, 120); // 상한
+  return true;
+}
+export function readVerified(id: string, maxChars = 1000): string {
+  if (!safeId(id)) return '';
+  const v = read(path.join(dir(id), 'verified.md')).trim();
+  return v.length > maxChars ? '...\n' + v.slice(-maxChars) : v;
+}
+
+/** CEO 의사결정 로그(공유). */
+export function appendDecision(topic: string, summary: string): void {
+  try {
+    const d = path.join(CONFIG.dataDir, '_shared');
+    fs.mkdirSync(d, { recursive: true });
+    fs.appendFileSync(path.join(d, 'decisions.md'), `## [${new Date().toISOString().slice(0, 10)}] ${topic}\n${summary.trim()}\n\n`, 'utf-8');
+  } catch { /* */ }
+}
+
+// --- capabilities 오버레이 ---
+export interface Capabilities { tools?: string[]; autonomy?: number; }
+export function readCapabilities(id: string): Capabilities {
+  if (!safeId(id)) return {};
+  try { return JSON.parse(read(path.join(dir(id), 'capabilities.json'))) as Capabilities; } catch { return {}; }
+}
+export function writeCapabilities(id: string, cap: Capabilities): void {
+  if (!safeId(id)) return;
+  const cur = readCapabilities(id);
+  const next: Capabilities = { ...cur };
+  if (cap.tools) next.tools = cap.tools.filter((t) => ALLOWED_TOOLS.has(t));
+  if (typeof cap.autonomy === 'number') next.autonomy = Math.max(0, Math.min(3, Math.floor(cap.autonomy)));
+  write(path.join(dir(id), 'capabilities.json'), JSON.stringify(next, null, 2));
+}
+
+// --- skills ---
+export function skillNames(id: string): string[] {
+  if (!safeId(id)) return [];
+  try {
+    return fs.readdirSync(path.join(dir(id), 'skills'))
+      .filter((f) => f.endsWith('.md') && f.toLowerCase() !== 'readme.md')
+      .map((f) => f.replace(/\.md$/, ''));
+  } catch { return []; }
+}
+export function addSkill(id: string, name: string, content: string): boolean {
+  if (!safeId(id)) return false;
+  const slug = skillSlug(name);
+  if (slug === 'readme') return false;
+  write(path.join(dir(id), 'skills', `${slug}.md`), content || `# ${name}\n`);
+  return true;
+}
+export function deleteSkill(id: string, slug: string): boolean {
+  if (!safeId(id) || /[/\\]|\.\./.test(slug)) return false;
+  try { fs.rmSync(path.join(dir(id), 'skills', `${skillSlug(slug)}.md`), { force: true }); return true; } catch { return false; }
+}
+// 스킬 플레이북 주입 — 로컬 프리필 비용 통제를 위해 스킬당 600자·총 1500자로 캡(긴 절차서는
+// 앞부분만 주입, 전문은 스킬 파일·직원 탭에서 참조). 격상된 system_prompt 가 주 식별자.
+function readSkills(id: string, maxTotal = 1500): string {
+  const parts: string[] = [];
+  let used = 0;
+  for (const s of skillNames(id)) {
+    if (used >= maxTotal) break;
+    const body = read(path.join(dir(id), 'skills', `${s}.md`)).trim();
+    if (!body) continue;
+    const slice = body.length > 600 ? body.slice(0, 600).trimEnd() + ' …(상세는 스킬 파일)' : body;
+    parts.push(slice);
+    used += slice.length;
+  }
+  return parts.join('\n\n');
+}
+
+// --- 오케스트레이터 주입: persona_extra + effective tools/autonomy ---
+export function personaExtra(id: string): string {
+  if (!safeId(id)) return '';
+  const parts: string[] = [];
+  const goal = readGoal(id).trim();
+  const skills = readSkills(id);
+  const verified = readVerified(id, 1000);
+  const memory = readMemory(id, 1000);
+  if (goal) parts.push(`[개인 목표]\n${goal}`);
+  // 검증 지식(근거 확인됨)을 교훈보다 먼저·우선 신뢰하도록 배치.
+  if (verified) parts.push(`[검증된 지식(근거 확인됨 — 우선 신뢰)]\n${verified}`);
+  if (skills) parts.push(`[검증된 작업 패턴(스킬)]\n${skills}`);
+  if (memory) parts.push(`[과거 학습·교훈(자가학습)]\n${memory}`);
+  return parts.join('\n\n');
+}
+export function effectiveTools(role: RoleDef): string[] {
+  const cap = readCapabilities(role.id);
+  return cap.tools ?? role.tools;
+}
+export function effectiveAutonomy(role: RoleDef): number {
+  const cap = readCapabilities(role.id);
+  const a = typeof cap.autonomy === 'number' ? cap.autonomy : role.autonomy;
+  // 게이트(toolsForAutonomy·gateWrite)가 항상 정수 0~3 만 보도록 정규화 — 디스크 직접편집 등으로 들어온
+  // 범위 밖·소수 값이 자동승인(≥3)이나 경계 불일치로 새지 않게(신뢰경계 방어).
+  return Math.max(0, Math.min(3, Math.floor(a)));
+}
+
+/** GET /agents/:id 의 AgentProfile 페이로드(프론트 EmployeesView). */
+export function agentDetail(role: RoleDef): Record<string, unknown> {
+  const id = role.id;
+  return {
+    id, title: role.title, name: role.name,
+    level: role.level ?? 'member', team: role.team ?? null,
+    tools: effectiveTools(role), skills: skillNames(id), model: role.tier,
+    stance: role.stance, is_critic: role.isCritic, autonomy: effectiveAutonomy(role),
+    // AgentProfile 확장 필드
+    system_prompt: role.systemPrompt ?? '',
+    skills_loaded: skillNames(id),
+    autonomy_effective: effectiveAutonomy(role),
+    goal: readGoal(id),
+    memory: read(path.join(dir(id), 'memory.md')),
+    verified: read(path.join(dir(id), 'verified.md')),
+    tools_md: JSON.stringify(readCapabilities(id)),
+    activity_tail: read(path.join(dir(id), 'activity.log')).split('\n').filter(Boolean).slice(-20),
+    usage_pages: [] as Array<{ page_id: string; title: string }>,
+  };
+}

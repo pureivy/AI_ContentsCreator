@@ -1,0 +1,29 @@
+{
+  "name": "gepa-ai-office",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "로컬 LLM 우선 멀티에이전트 AI 오피스 — Ollama 직접 호출·소형 프롬프트·RAM예산 모델 자동선택으로 속도를 최우선한 GEPA AI Office 재구현 (Connect AI 벤치마킹)",
+  "engines": {
+    "node": ">=20.6"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server/main.ts",
+    "start": "tsx src/server/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "hono": "^4.6.14",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

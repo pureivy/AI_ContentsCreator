@@ -1,0 +1,15 @@
+# 실명 매핑(role_id → 현 담당자 실명) — git 비추적(개인정보 분리).
+# 인사이동 시 여기만 바꾸면 됩니다. 전문성·기록은 role_id(직무)에 남습니다.
+planning_lead: 장은영
+planning_research: 권하경
+planning_risk: 박정민
+planning_strategy: 박용식
+support_budget: 박영희
+support_lead: 박재희
+support_legal: 이주리
+support_m: 전진영
+support_m2: 하예림
+support_m3: 이윤아
+support_m4: 권이담
+support_m5: 김홍수
+support_ops: 김현창

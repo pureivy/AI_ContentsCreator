@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.local
+*.log
+.DS_Store
+.vite/
+.omc/
+
+# 런타임 데이터 (런 로그·세션·위키 DB) — 코드가 아닌 산출물
+data/
+!data/.gitkeep
+runs/
+sessions/*/
