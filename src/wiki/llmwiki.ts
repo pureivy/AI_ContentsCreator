@@ -182,13 +182,14 @@ export class LlmWiki {
     if (type) ps = ps.filter((p) => p.type === type);
     return ps.sort((a, b) => b.updated.localeCompare(a.updated));
   }
-  stats(): { pages: number; entities: number; concepts: number; sources: number; links: number } {
+  stats(): { pages: number; entities: number; concepts: number; sources: number; lessons: number; links: number } {
     const ps = this.allPages();
     return {
       pages: ps.length,
       entities: ps.filter((p) => p.type === 'entity').length,
       concepts: ps.filter((p) => p.type === 'concept').length,
       sources: ps.filter((p) => p.type === 'source').length,
+      lessons: ps.filter((p) => p.type === 'lesson').length,
       links: ps.reduce((n, p) => n + p.links.length, 0),
     };
   }

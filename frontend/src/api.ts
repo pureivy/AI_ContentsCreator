@@ -100,13 +100,14 @@ export async function fetchAutonomyStatus(): Promise<AutonomyStatus | null> {
   }
 }
 
-export async function fetchWikiStats(): Promise<{ pages: number; sources: number }> {
+export async function fetchWikiStats(): Promise<{ pages: number; sources: number; lessons: number }> {
   try {
     const r = await fetch("/wiki/stats");
-    if (!r.ok) return { pages: 0, sources: 0 };
-    return await r.json();
+    if (!r.ok) return { pages: 0, sources: 0, lessons: 0 };
+    const d = await r.json();
+    return { pages: d.pages ?? 0, sources: d.sources ?? 0, lessons: d.lessons ?? 0 };
   } catch {
-    return { pages: 0, sources: 0 };
+    return { pages: 0, sources: 0, lessons: 0 };
   }
 }
 

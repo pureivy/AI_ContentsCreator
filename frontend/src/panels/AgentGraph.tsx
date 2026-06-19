@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Background,
   Edge,
@@ -10,6 +10,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { motion } from "framer-motion";
+import { fetchWikiStats } from "../api";
 import { useStore } from "../store";
 import { AgentNode, Team } from "../events/types";
 
@@ -77,7 +78,7 @@ function orgGraph(
   blocks: Record<string, string>,
   teamOrder: string[],
   teams: Record<string, Team>,
-  lessons: string[],
+  lessonCount: number,
   wikiCount: number,
   running: boolean,
 ): { nodes: Node[]; edges: Edge[] } {
@@ -148,8 +149,14 @@ function orgGraph(
     type: "card",
     position: { x: rightX, y: 360 },
     draggable: true,
-    data: { kind: "wiki", kindLabel: "교훈 메모리", role: "역할·팀 학습", status: "spoke", count: lessons.length },
+    data: { kind: "wiki", kindLabel: "교훈 메모리", role: "역할·팀 학습", status: "spoke", count: lessonCount },
   });
+  // 두 지식 노드(공유지식·팀학습)를 오케스트레이터(CEO)에서 항상 연결 — 이전엔 lessons 노드가 어떤 엣지도
+  // 없어 고아였고, wiki 도 팀원에서만 연결돼(팀원 없으면 끊김) spoke 가 안 보였다.
+  if (ceo) {
+    edges.push({ id: "ceo-wiki", source: ceo.agent_id, target: "wiki", animated: running, style: { stroke: "#2f4030", strokeDasharray: "4 4" } });
+    edges.push({ id: "ceo-lessons", source: ceo.agent_id, target: "lessons", animated: running, style: { stroke: "#3a3320", strokeDasharray: "4 4" } });
+  }
 
   // 팀장 row (grouped by team x-offset)
   for (const lead of leads) {
@@ -221,13 +228,20 @@ function orgGraph(
           markerEnd: { type: MarkerType.ArrowClosed, color: "#3b4252" },
         });
       }
-      // member contributes to the wiki
+      // member contributes to the wiki + 역할·팀 학습(교훈 메모리)
       edges.push({
         id: `${m.agent_id}-w`,
         source: m.agent_id,
         target: "wiki",
         animated: m.status === "thinking",
         style: { stroke: "#2f4030", strokeDasharray: "4 4" },
+      });
+      edges.push({
+        id: `${m.agent_id}-l`,
+        source: m.agent_id,
+        target: "lessons",
+        animated: m.status === "thinking",
+        style: { stroke: "#3a3320", strokeDasharray: "4 4" },
       });
     });
   }
@@ -245,15 +259,26 @@ export default function AgentGraph() {
   const teamOrder = useStore((s) => s.teamOrder);
   const lessons = useStore((s) => s.lessons);
 
+  // 공유지식·팀학습 노드 카운트는 **영속 위키 총량**이어야 한다(현 런 델타가 아니라). 라이브 스토어
+  // (wikiOrder/lessons)는 이번 런이 추가한 분만 담아 평소 0 → '0페이지'로 보였다. /wiki/stats 로 보강.
+  const [persisted, setPersisted] = useState({ wiki: 0, lessons: 0 });
+  useEffect(() => {
+    fetchWikiStats()
+      .then((s) => setPersisted({ wiki: Math.max(0, s.pages - s.sources), lessons: s.lessons }))
+      .catch(() => {});
+  }, [status]); // 런 시작/종료 시 갱신
+
   const { nodes, edges } = useMemo(() => {
     const running = status === "running";
+    const effWiki = Math.max(persisted.wiki, wikiCount);       // 영속 총량 우선, 런 중 델타가 크면 그것
+    const effLessons = Math.max(persisted.lessons, lessons.length);
 
     // ---- org mode: nested CEO -> 팀장 -> 팀원 organization chart ----
     // teamOrder populates on team_spawned (before any member spawns), so it is a
     // reliable early signal that this run is an org run. The debate path below is
     // left untouched for RUN_MODE=debate.
     if (teamOrder.length > 0) {
-      return orgGraph(agents, agentOrder, blocks, teamOrder, teams, lessons, wikiCount, running);
+      return orgGraph(agents, agentOrder, blocks, teamOrder, teams, effLessons, effWiki, running);
     }
 
     const specialists = agentOrder.filter((id) => id.startsWith("agent"));
@@ -272,7 +297,7 @@ export default function AgentGraph() {
     // wiki node (right)
     nodes.push({
       id: "wiki", type: "card", position: { x: 760, y: 200 }, draggable: true,
-      data: { kind: "wiki", kindLabel: "LLM 위키", role: "공유 지식", status: "spoke", count: wikiCount },
+      data: { kind: "wiki", kindLabel: "LLM 위키", role: "공유 지식", status: "spoke", count: effWiki },
     });
 
     const lane = hasAnalyst ? ["analyst"] : specialists;
@@ -321,7 +346,7 @@ export default function AgentGraph() {
     }
 
     return { nodes, edges };
-  }, [agents, agentOrder, blocks, wikiCount, status, teams, teamOrder, lessons]);
+  }, [agents, agentOrder, blocks, wikiCount, status, teams, teamOrder, lessons, persisted]);
 
   return (
     <div style={{ width: "100%", height: "100%" }}>

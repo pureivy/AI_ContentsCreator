@@ -37,6 +37,7 @@ export default function DashboardBar({ companyName, total, runsCount, onMetric }
   const s = useStore();
   const [now, setNow] = useState(() => new Date());
   const [wikiTotal, setWikiTotal] = useState(0);
+  const [lessonsTotal, setLessonsTotal] = useState(0);
   const [auto, setAuto] = useState<AutonomyStatus | null>(null);
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -49,15 +50,16 @@ export default function DashboardBar({ companyName, total, runsCount, onMetric }
     const t = setInterval(load, 8000);
     return () => clearInterval(t);
   }, []);
-  // 위키 = 저장소 지식 페이지 수(원문 source 제외; 현재 런 한정 아님). 마운트 + 8초 폴링으로 업로드/타 세션 반영.
+  // 위키 = 저장소 지식 페이지 수(원문 source 제외; 현재 런 한정 아님). 교훈도 같은 호출로 영속 총계를
+  // 받는다 — 라이브 스토어(s.lessons)는 이번 런 델타만 담아 평소 0 으로 보이던 문제(위키 칩과 동일 패턴) 보강.
   useEffect(() => {
-    const load = () => fetchWikiStats().then((w) => setWikiTotal(w.pages - w.sources)).catch(() => {});
+    const load = () => fetchWikiStats().then((w) => { setWikiTotal(w.pages - w.sources); setLessonsTotal(w.lessons); }).catch(() => {});
     load();
     const t = setInterval(load, 8000);
     return () => clearInterval(t);
   }, []);
   // 현재 런이 위키 페이지를 추가하면 즉시 총계도 다시 가져온다.
-  useEffect(() => { fetchWikiStats().then((w) => setWikiTotal(w.pages - w.sources)).catch(() => {}); }, [s.wikiOrder.length]);
+  useEffect(() => { fetchWikiStats().then((w) => { setWikiTotal(w.pages - w.sources); setLessonsTotal(w.lessons); }).catch(() => {}); }, [s.wikiOrder.length]);
 
   const hhmm = now.toTimeString().slice(0, 5);
   // "WORKING" = 사무실 안무가 작업 중으로 보여주는 아바타 수 — events/working.ts 의
@@ -87,7 +89,7 @@ export default function DashboardBar({ companyName, total, runsCount, onMetric }
         onClick={onMetric && (() => onMetric("output"))} />
       <Chip icon="📚" label="위키" value={wikiTotal}
         onClick={onMetric && (() => onMetric("wiki"))} />
-      <Chip icon="🏆" label="교훈" value={s.lessons.length}
+      <Chip icon="🏆" label="교훈" value={Math.max(lessonsTotal, s.lessons.length)}
         onClick={onMetric && (() => onMetric("lessons"))} />
       {s.approvals.length > 0 && (
         <Chip icon="🔔" label="승인대기" value={s.approvals.length} accent />

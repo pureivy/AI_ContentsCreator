@@ -490,7 +490,7 @@ app.post('/company/teams/:id/members', async (c) => {
 // 위키 지식그래프 (GEPA 계약)
 // ============================================================
 app.get('/wiki/graph', (c) => c.json(llmWiki().graph()));
-app.get('/wiki/stats', (c) => { const s = llmWiki().stats(); return c.json({ pages: s.pages, sources: s.sources }); });
+app.get('/wiki/stats', (c) => { const s = llmWiki().stats(); return c.json({ pages: s.pages, sources: s.sources, lessons: s.lessons }); });
 // 외부 지식 주입(Connect AI /api/brain-inject 벤치마킹) — {title, markdown} 를 위키 source 로 저장+ingest.
 /** 상수시간 토큰 비교 — 타이밍 공격 방지. 길이 불일치도 안전 처리(timingSafeEqual 은 동일 길이만 허용). */
 function safeEqual(a: string, b: string): boolean {
