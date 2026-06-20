@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   Background,
   Edge,
@@ -10,7 +10,6 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { motion } from "framer-motion";
-import { fetchWikiStats } from "../api";
 import { useStore } from "../store";
 import { AgentNode, Team } from "../events/types";
 
@@ -259,19 +258,13 @@ export default function AgentGraph() {
   const teamOrder = useStore((s) => s.teamOrder);
   const lessons = useStore((s) => s.lessons);
 
-  // 공유지식·팀학습 노드 카운트는 **영속 위키 총량**이어야 한다(현 런 델타가 아니라). 라이브 스토어
-  // (wikiOrder/lessons)는 이번 런이 추가한 분만 담아 평소 0 → '0페이지'로 보였다. /wiki/stats 로 보강.
-  const [persisted, setPersisted] = useState({ wiki: 0, lessons: 0 });
-  useEffect(() => {
-    fetchWikiStats()
-      .then((s) => setPersisted({ wiki: Math.max(0, s.pages - s.sources), lessons: s.lessons }))
-      .catch(() => {});
-  }, [status]); // 런 시작/종료 시 갱신
-
   const { nodes, edges } = useMemo(() => {
     const running = status === "running";
-    const effWiki = Math.max(persisted.wiki, wikiCount);       // 영속 총량 우선, 런 중 델타가 크면 그것
-    const effLessons = Math.max(persisted.lessons, lessons.length);
+    // 노드 카운트 = **이번 세션이 생성한 양**(영속 누적 총량 아님). LLM위키 = 이번 런이 작성한 위키 페이지
+    // 수(s.wikiOrder), 교훈 = 이번 런 reflect 가 emit 한 lesson_learned 수(s.lessons). 런 중/직후 생성량을
+    // 그대로 보여준다(사용자 요청 — 세션별). 자율런 자동관전 시에도 그 런의 생성량이 보인다.
+    const effWiki = wikiCount;
+    const effLessons = lessons.length;
 
     // ---- org mode: nested CEO -> 팀장 -> 팀원 organization chart ----
     // teamOrder populates on team_spawned (before any member spawns), so it is a
@@ -346,7 +339,7 @@ export default function AgentGraph() {
     }
 
     return { nodes, edges };
-  }, [agents, agentOrder, blocks, wikiCount, status, teams, teamOrder, lessons, persisted]);
+  }, [agents, agentOrder, blocks, wikiCount, status, teams, teamOrder, lessons]);
 
   return (
     <div style={{ width: "100%", height: "100%" }}>
