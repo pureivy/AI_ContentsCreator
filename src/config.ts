@@ -64,6 +64,8 @@ export interface Config {
   readonly maxSpecialists: number;
   readonly debateRounds: number;
   readonly debateRoundsCap: number;
+  /** org(팀) 모드에서 팀 산출물에 적용할 비평→반박 라운드 수. 0=현행(비평 1회만). 팀 위계를 유지한 채 토론 추가. */
+  readonly orgDebateRounds: number;
   readonly termination: Termination;
 
   // --- 오피스 연출(LLM 비용 0, 벽시계만) ---
@@ -163,6 +165,7 @@ export const CONFIG: Config = {
   maxSpecialists: envInt('MAX_SPECIALISTS', isLocal ? 3 : 4),
   debateRounds: envInt('DEBATE_ROUNDS', isLocal ? 1 : 2),
   debateRoundsCap: envInt('DEBATE_ROUNDS_CAP', isLocal ? 2 : 3),
+  orgDebateRounds: Math.min(Math.max(0, envInt('ORG_DEBATE_ROUNDS', 0)), 3),
   termination: (env('TERMINATION', 'adaptive') as Termination),
 
   choreoPauseMs: envInt('CHOREO_PAUSE_MS', 300),

@@ -244,6 +244,54 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
     return { deliverable: '', modelAssignment: assign };
   }
 
+  // --- 팀 토론(옵트인: ORG_DEBATE_ROUNDS>0) — 팀 위계를 유지한 채 산출물을 비평→반박으로 정련한다.
+  //     비평가가 전 팀 산출물의 교차 약점(모순·중복·누락·약한 근거)을 지적하면, 각 팀장이 비평+동료 팀
+  //     산출물을 반영해 자기 산출물을 갱신(rebuttal)한다. 기본 0 이면 건너뛰어 기존 동작과 동일(회귀 0). ---
+  const debateCritic = company.specialists.find((s) => s.isCritic);
+  if (CONFIG.orgDebateRounds > 0 && debateCritic) {
+    bus.emit('log', { message: `팀 토론 ${CONFIG.orgDebateRounds}라운드 — 비평→반박으로 팀 산출물 정련` });
+  }
+  for (let round = 1; round <= CONFIG.orgDebateRounds && debateCritic && !signal?.aborted; round++) {
+    bus.emit('phase', { team_id: '_ceo', phase: 'review' });
+    // 1) 비평 — 전 팀 산출물의 교차 약점을 팀별로 지적
+    const combined = usableTeams.map((t) => `## ${t.team.name}\n${t.deliverable}`).join('\n\n');
+    const crit = await runAgent({
+      bus, role: debateCritic, model: modelForTier(assign, debateCritic.tier),
+      task: `라운드 ${round}: 각 팀 산출물을 비판적으로 검토하라. 팀 간 모순·중복·누락·약한 근거를 구체적으로 지적하고, 어느 팀이 무엇을 어떻게 보완해야 하는지 팀별로 명시하라.`,
+      context: combined, stage: 'critique', emitSpawn: round === 1, signal,
+    });
+    bus.emit('critique', { round, text: crit.text }, { agentId: debateCritic.id });
+    if (signal?.aborted) break;
+    // 2) 반박/정련 — 각 팀장이 비평 + 동료 팀 산출물을 반영해 자기 산출물을 갱신(팀 단위 병렬)
+    const revised = await mapLimit(
+      CONFIG.teamParallel,
+      usableTeams.map((t) => async (): Promise<TeamResult> => {
+        try {
+          bus.emit('phase', { team_id: t.team.id, phase: 'work' });
+          const peers = usableTeams.filter((o) => o.team.id !== t.team.id)
+            .map((o) => `## ${o.team.name} 산출물\n${o.deliverable}`).join('\n\n');
+          const out = await runAgent({
+            bus, role: t.team.lead, model: modelForTier(assign, t.team.lead.tier),
+            task: `라운드 ${round} 반박: 아래 [비평]과 [동료 팀 산출물]을 반영해 '${t.team.name}'의 산출물을 보완·갱신하라.\n` +
+              `- 지적된 약점·모순을 해소하고, 동료 팀과 중복되는 부분은 줄이며, 누락은 채워라.\n` +
+              `- 기존의 실수치·근거([근거: ...])는 보존·강화하되 지어내지 마라(없으면 "⚠️ 데이터 없음").\n` +
+              `- 차이만 쓰지 말고 갱신된 완성 산출물 전체를 출력하라.`,
+            context: [`[비평]\n${crit.text}`, peers ? `[동료 팀 산출물]\n${peers}` : '', `[현재 ${t.team.name} 산출물]\n${t.deliverable}`].filter(Boolean).join('\n\n'),
+            stage: 'rebuttal', signal,
+          });
+          const next = out.text.trim() || t.deliverable;
+          if (next !== t.deliverable) bus.emit('team_deliverable', { team_id: t.team.id, text: next });
+          bus.emit('phase', { team_id: t.team.id, phase: 'idle' });
+          return { ...t, deliverable: next };
+        } catch (e) {
+          if (isAbort(e)) throw e;
+          return t; // 반박 실패 팀은 기존 산출물 유지
+        }
+      }),
+    );
+    for (let i = 0; i < usableTeams.length; i++) if (revised[i]) usableTeams[i] = revised[i]!;
+  }
+
   // --- 회사급 비평(선택) ---
   const critic = company.specialists.find((s) => s.isCritic);
   let critiqueText = '';
