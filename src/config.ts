@@ -103,6 +103,10 @@ export interface Config {
   readonly agentToolLoop: boolean;
   /** 한 에이전트 턴에서 허용하는 총 도구 호출 수(로컬 속도 백스톱). */
   readonly agentMaxToolCalls: number;
+  /** 생성 단계(작업·비평·종합)에서 모델 추론(thinking) 활성. 구조적 JSON 호출은 제외. 기본 off(속도·예산). */
+  readonly agentThinking: boolean;
+  /** thinking 활성 시 num_predict 에 더하는 추론 토큰 여유 — 추론이 답변 예산을 잠식해 '빈 출력' 나는 것 방지. */
+  readonly thinkingBudgetTokens: number;
   /** 자율 레벨(0~3) 강제 — 쓰기성 도구를 autonomy 로 게이팅(2=승인, 3=자동, ≤1=차단). */
   readonly enforceAutonomy: boolean;
   /** 유휴 게이트 자율 사이클 주기(분). 0=off. 사용자 런이 없을 때만 진입하고 사용자 런 도착 시 양보. */
@@ -136,6 +140,8 @@ export const CONFIG: Config = {
     standard: env('STANDARD_MODEL', 'gemma4:12b'),
     heavy: env('HEAVY_MODEL', 'gemma4:12b'),
   },
+  agentThinking: envBool('AGENT_THINKING', false),
+  thinkingBudgetTokens: Math.min(Math.max(0, envInt('THINKING_BUDGET_TOKENS', 1500)), 16_384),
   keepAlive: env('LOCAL_LLM_KEEP_ALIVE', '30m'),
   requestTimeoutMs: envInt('LOCAL_LLM_TIMEOUT_MS', 600_000),
   // num_predict 캡은 [1, 32768] 로 클램프 — env 0/음수가 빈 출력/무한생성을 유발하지 않게.

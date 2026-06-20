@@ -160,18 +160,22 @@ export class OllamaClient {
   }
 
   private async _chat(params: ChatParams): Promise<ChatResult> {
+    // 추론(thinking) — AGENT_THINKING 활성 + 생성 단계(구조적 JSON 호출 제외)에서만 켠다. 추론은 답변
+    // 품질을 높이지만 토큰 예산을 잠식하므로(이 모델은 단순 질문에도 ~500~1000토큰 추론) 활성 시 num_predict 에
+    // thinkingBudgetTokens 를 더해 답변(content)이 잘리지 않게 한다. 미설정(기본)이면 기존대로 think:false.
+    const wantThink = CONFIG.agentThinking && params.format !== 'json';
+    const baseOut = Math.max(1, params.maxOutputTokens ?? CONFIG.maxOutputTokens);
+    const numPredict = wantThink ? Math.min(baseOut + CONFIG.thinkingBudgetTokens, 32_768) : baseOut;
     const body = {
       model: params.model,
       messages: params.messages,
       stream: true,
-      // thinking 모델(qwen3·deepseek-r1 등)의 추론을 끔 — 추론이 별도 채널로 가 content 가
-      // 비거나 num_predict 예산을 소진하는 '빈 출력'을 차단(원본 GEPA MAX_THINKING_TOKENS=0 의도).
-      think: false,
+      think: wantThink,
       // 구조화 출력 — format:'json' 이면 Ollama 가 유효 JSON 만 생성(코드펜스·머리말 잡음 제거).
       ...(params.format ? { format: params.format } : {}),
       keep_alive: params.keepAlive ?? CONFIG.keepAlive,
       options: {
-        num_predict: Math.max(1, params.maxOutputTokens ?? CONFIG.maxOutputTokens),
+        num_predict: numPredict,
         temperature: params.temperature ?? CONFIG.temperature,
         top_p: params.topP ?? CONFIG.topP,
         top_k: params.topK ?? CONFIG.topK,
@@ -268,6 +272,7 @@ export class OllamaClient {
     return result;
   }
 }
+
 
 /** 모듈 공용 싱글톤. */
 export const ollama = new OllamaClient();
