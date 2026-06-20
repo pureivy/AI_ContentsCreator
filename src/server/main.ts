@@ -17,6 +17,7 @@ import { CONFIG } from '../config';
 import { ollama } from '../llm/ollama';
 import { getSystemSpecs, autoAssignModels } from '../llm/models';
 import { getLlmSetting, setLlmSetting, tierOverrides } from '../llm/setting';
+import { getRunSettings, setRunSettings } from '../runsettings';
 import { EventType } from '../events/types';
 import { createBus, getBus, disposeBus } from '../events/bus';
 import type { EventBus } from '../events/bus';
@@ -393,6 +394,18 @@ app.get('/api/llm', async (c) => {
   const assignment = models.length ? autoAssignModels(models, undefined, tierOverrides()) : null;
   return c.json({ backend: getLlmSetting().backend || CONFIG.backend, ollama_url: CONFIG.ollamaBaseUrl, version, available: !!version, specs: getSystemSpecs().summary, models, loaded, assignment });
 });
+// 런타임 품질 설정(토론·추론) — UI 토글로 바꾸면 다음 런부터 즉시 반영(서버 재시작 불필요).
+app.get('/runsettings', (c) => c.json(getRunSettings()));
+app.post('/runsettings', async (c) => {
+  const body = await c.req.json<{ orgDebateRounds?: number; agentThinking?: boolean }>().catch(() => ({}) as { orgDebateRounds?: number; agentThinking?: boolean });
+  return c.json(setRunSettings({ orgDebateRounds: body.orgDebateRounds, agentThinking: body.agentThinking }));
+});
+app.get('/api/runsettings', (c) => c.json(getRunSettings()));
+app.post('/api/runsettings', async (c) => {
+  const body = await c.req.json<{ orgDebateRounds?: number; agentThinking?: boolean }>().catch(() => ({}) as { orgDebateRounds?: number; agentThinking?: boolean });
+  return c.json(setRunSettings({ orgDebateRounds: body.orgDebateRounds, agentThinking: body.agentThinking }));
+});
+
 app.get('/api/health', (c) => c.json({ ok: true, backend: CONFIG.backend }));
 app.get('/healthz', (c) => c.json({ ok: true }));
 

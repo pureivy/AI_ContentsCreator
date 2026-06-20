@@ -16,6 +16,7 @@ import { runAgent, microJSON, buildSystemPrompt, findTemplateNumbers } from './a
 import { prepareRun } from './prepare';
 import { finalizeRun } from './finalize';
 import { llmWiki } from '../wiki/llmwiki';
+import { getRunSettings } from '../runsettings';
 import type { RunOptions, RunOutcome } from './run';
 
 interface TeamResult {
@@ -248,10 +249,11 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   //     비평가가 전 팀 산출물의 교차 약점(모순·중복·누락·약한 근거)을 지적하면, 각 팀장이 비평+동료 팀
   //     산출물을 반영해 자기 산출물을 갱신(rebuttal)한다. 기본 0 이면 건너뛰어 기존 동작과 동일(회귀 0). ---
   const debateCritic = company.specialists.find((s) => s.isCritic);
-  if (CONFIG.orgDebateRounds > 0 && debateCritic) {
-    bus.emit('log', { message: `팀 토론 ${CONFIG.orgDebateRounds}라운드 — 비평→반박으로 팀 산출물 정련` });
+  const debateRounds = getRunSettings().orgDebateRounds; // UI 토글(런타임) 우선 — 미설정이면 env 기본
+  if (debateRounds > 0 && debateCritic) {
+    bus.emit('log', { message: `팀 토론 ${debateRounds}라운드 — 비평→반박으로 팀 산출물 정련` });
   }
-  for (let round = 1; round <= CONFIG.orgDebateRounds && debateCritic && !signal?.aborted; round++) {
+  for (let round = 1; round <= debateRounds && debateCritic && !signal?.aborted; round++) {
     bus.emit('phase', { team_id: '_ceo', phase: 'review' });
     // 1) 비평 — 전 팀 산출물의 교차 약점을 팀별로 지적
     const combined = usableTeams.map((t) => `## ${t.team.name}\n${t.deliverable}`).join('\n\n');

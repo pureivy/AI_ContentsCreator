@@ -371,6 +371,10 @@ button.upload-retry:hover { background: var(--panel2); }
 }
 .viewtoggle button.active { background: var(--bg-primary); color: var(--fg-on-color); }
 .viewtoggle button:hover { filter: brightness(1.1); }
+/* 품질 토글(토론·추론) — ON 은 녹색으로 활성 탭과 구분. OFF 는 흐릿하게. div 가 viewtoggle 도 겸하므로
+   specificity 를 .viewtoggle.qual-toggles 로 올려 기존 .viewtoggle button.active(파랑)를 확실히 이긴다. */
+.viewtoggle.qual-toggles button { opacity: 0.6; }
+.viewtoggle.qual-toggles button.active { background: #2f9e44; color: #fff; opacity: 1; }
 
 /* 5컬럼: 좌패널 | 핸들(5px) | 중앙 1fr | 핸들(5px) | 우패널 — 실제 폭은 App 이
    인라인 grid-template-columns 로 주입(드래그 조절 + localStorage 영속). */

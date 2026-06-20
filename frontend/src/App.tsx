@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "./store";
 import { startRun, resumeRun, watchRun, RunHandle } from "./transport/sse";
-import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, downloadRunHwpx, fetchEta, reviseRun, fetchTemplates, saveTemplate, deleteTemplate, runTemplate, RunInfo, UploadFileResult, LlmStatus, EtaStats, TemplateInfo } from "./api";
+import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, downloadRunHwpx, fetchEta, reviseRun, fetchTemplates, saveTemplate, deleteTemplate, runTemplate, fetchRunSettings, updateRunSettings, RunInfo, UploadFileResult, LlmStatus, EtaStats, TemplateInfo, RunSettings } from "./api";
 import { ActivityItem, ApprovalItem, DebateMsg, UIState } from "./events/types";
 import AgentGraph from "./panels/AgentGraph";
 import OfficeView from "./panels/OfficeView";
@@ -335,6 +335,12 @@ export default function App() {
   // LLM 백엔드 상태(런 셀렉터 옵션 + 현재 effective 배지). 마운트 + 사무실 복귀 시 로드
   // (LLM 설정 변경 후 돌아오면 상단 배지가 최신값을 반영).
   useEffect(() => { if (view === "office" || view === "graph") fetchLlmStatus().then(setLlmStatus); }, [view]);
+
+  // 런타임 품질 설정(토론·추론) — 헤더 토글. 마운트 시 로드, 토글 시 POST 후 즉시 반영(다음 런부터 적용).
+  const [runSettings, setRunSettingsState] = useState<RunSettings>({ orgDebateRounds: 0, agentThinking: false });
+  useEffect(() => { fetchRunSettings().then(setRunSettingsState); }, []);
+  const toggleDebate = () => updateRunSettings({ orgDebateRounds: runSettings.orgDebateRounds > 0 ? 0 : 1 }).then(setRunSettingsState);
+  const toggleThinking = () => updateRunSettings({ agentThinking: !runSettings.agentThinking }).then(setRunSettingsState);
 
   // 상단 LLM 배지에 표시할 '현재 사용 LLM' — 런 셀렉터(runLlm) 우선, 없으면 전역 기본값.
   const effLlm = (): { backend: string; model: string } => {
@@ -1377,6 +1383,14 @@ export default function App() {
           <button className={view === "llm" ? "active" : ""}
             onClick={() => { setView("llm"); fetchLlmStatus().then(setLlmStatus); }}>🧩 LLM</button>
           <button className={view === "mcp" ? "active" : ""} onClick={() => setView("mcp")}>🧷 MCP</button>
+        </div>
+        <div className="viewtoggle qual-toggles" title="품질 모드 — 켜면 다음 런부터 적용(서버 재시작 불필요)">
+          <button className={runSettings.orgDebateRounds > 0 ? "active" : ""} onClick={toggleDebate}
+            title="팀 토론(비평→반박): 켜면 팀들이 서로의 산출물을 비판·정련. 품질↑ 속도↓">
+            🗣️ 토론 {runSettings.orgDebateRounds > 0 ? "ON" : "OFF"}</button>
+          <button className={runSettings.agentThinking ? "active" : ""} onClick={toggleThinking}
+            title="추론(thinking): 켜면 답 전에 단계적 사고. 품질↑ 속도↓">
+            🧠 추론 {runSettings.agentThinking ? "ON" : "OFF"}</button>
         </div>
         <div className={`status status-${s.status}`}>
           {isReplay ? "리플레이" : STATUS_LABEL[s.status] ?? s.status}

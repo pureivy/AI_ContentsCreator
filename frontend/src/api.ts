@@ -111,6 +111,30 @@ export async function fetchWikiStats(): Promise<{ pages: number; sources: number
   }
 }
 
+// 런타임 품질 설정(토론·추론) — 서버 재시작 없이 토글, 다음 런부터 반영.
+export interface RunSettings { orgDebateRounds: number; agentThinking: boolean }
+const DEFAULT_RUN_SETTINGS: RunSettings = { orgDebateRounds: 0, agentThinking: false };
+export async function fetchRunSettings(): Promise<RunSettings> {
+  try {
+    const r = await fetch("/runsettings");
+    return r.ok ? await r.json() : DEFAULT_RUN_SETTINGS;
+  } catch {
+    return DEFAULT_RUN_SETTINGS;
+  }
+}
+export async function updateRunSettings(patch: Partial<RunSettings>): Promise<RunSettings> {
+  try {
+    const r = await fetch("/runsettings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    return r.ok ? await r.json() : fetchRunSettings();
+  } catch {
+    return fetchRunSettings();
+  }
+}
+
 // ── API 키 통합 관리 (.env) ──
 export interface ApiKeyInfo {
   key: string; label: string; icon: string; desc: string;

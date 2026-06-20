@@ -14,6 +14,7 @@ import { CONFIG } from '../config';
 import type { InstalledModel } from './models';
 import { anySignal } from '../util/abort';
 import { Semaphore } from '../util/semaphore';
+import { getRunSettings } from '../runsettings';
 
 /** 전역 LLM 슬롯 — 모든 chat() 호출을 프로세스 단위로 게이트. 로컬 concurrency=1 이면 동시 런이
  *  여럿이어도 한 번에 하나의 생성만(단일 Ollama KV 슬롯 불변식을 런 경계를 넘어 보장). */
@@ -163,7 +164,7 @@ export class OllamaClient {
     // 추론(thinking) — AGENT_THINKING 활성 + 생성 단계(구조적 JSON 호출 제외)에서만 켠다. 추론은 답변
     // 품질을 높이지만 토큰 예산을 잠식하므로(이 모델은 단순 질문에도 ~500~1000토큰 추론) 활성 시 num_predict 에
     // thinkingBudgetTokens 를 더해 답변(content)이 잘리지 않게 한다. 미설정(기본)이면 기존대로 think:false.
-    const wantThink = CONFIG.agentThinking && params.format !== 'json';
+    const wantThink = getRunSettings().agentThinking && params.format !== 'json';
     const baseOut = Math.max(1, params.maxOutputTokens ?? CONFIG.maxOutputTokens);
     const numPredict = wantThink ? Math.min(baseOut + CONFIG.thinkingBudgetTokens, 32_768) : baseOut;
     const body = {
