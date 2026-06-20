@@ -371,10 +371,14 @@ button.upload-retry:hover { background: var(--panel2); }
 }
 .viewtoggle button.active { background: var(--bg-primary); color: var(--fg-on-color); }
 .viewtoggle button:hover { filter: brightness(1.1); }
-/* 품질 토글(토론·추론) — ON 은 녹색으로 활성 탭과 구분. OFF 는 흐릿하게. div 가 viewtoggle 도 겸하므로
-   specificity 를 .viewtoggle.qual-toggles 로 올려 기존 .viewtoggle button.active(파랑)를 확실히 이긴다. */
-.viewtoggle.qual-toggles button { opacity: 0.6; }
-.viewtoggle.qual-toggles button.active { background: #2f9e44; color: #fff; opacity: 1; }
+/* 품질 토글(토론·추론) — 컴포저의 per-run 옵션. 셀렉터(run-opt)와 같은 pill 모양, ON 은 녹색. */
+.chat-input .run-opt-toggle {
+  flex: 0 0 auto; border-radius: 999px; padding: 6px 12px; font-size: 12px; cursor: pointer;
+  color: var(--muted); background: var(--bg); border: 1px solid var(--border); opacity: 0.8;
+  white-space: nowrap;
+}
+.chat-input .run-opt-toggle:hover { color: var(--text); border-color: var(--accent); }
+.chat-input .run-opt-toggle.active { background: #2f9e44; color: #fff; border-color: #2f9e44; opacity: 1; }
 
 /* 5컬럼: 좌패널 | 핸들(5px) | 중앙 1fr | 핸들(5px) | 우패널 — 실제 폭은 App 이
    인라인 grid-template-columns 로 주입(드래그 조절 + localStorage 영속). */

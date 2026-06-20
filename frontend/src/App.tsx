@@ -714,24 +714,22 @@ export default function App() {
               : "주제 입력(전사 토론) 또는 직원명+질문…"
         }
       />
+      {/* 품질 토글(토론·추론) — per-run 옵션이라 컴포저에 배치. type="button" 필수(form submit 방지). */}
       {s.status !== "running" && (
-        <select
-          className="llm-run-select run-opt"
-          value={runLlm}
-          onChange={(e) => setRunLlm(e.target.value)}
-          title={
-            llmStatus
-              ? `이 런의 LLM 백엔드. 전역 기본값: ${llmStatus.setting.backend === "local"
-                  ? `로컬 ${llmStatus.setting.local_model}` : "Claude 클라우드"}`
-              : "이 런의 LLM 백엔드 선택"
-          }
-        >
-          <option value="">⚙️ 기본값 따름</option>
-          <option value="claude">🧠 Claude 클라우드</option>
-          {(llmStatus?.local_models ?? []).map((m) => (
-            <option key={m} value={`local:${m}`}>💻 {m}</option>
-          ))}
-        </select>
+        <button type="button"
+          className={`run-opt-toggle ${runSettings.orgDebateRounds > 0 ? "active" : ""}`}
+          onClick={toggleDebate}
+          title="팀 토론(비평→반박): 켜면 팀들이 서로의 산출물을 비판·정련. 품질↑ 속도↓">
+          🗣️ 토론 {runSettings.orgDebateRounds > 0 ? "ON" : "OFF"}
+        </button>
+      )}
+      {s.status !== "running" && (
+        <button type="button"
+          className={`run-opt-toggle ${runSettings.agentThinking ? "active" : ""}`}
+          onClick={toggleThinking}
+          title="추론(thinking): 켜면 답 전에 단계적으로 사고. 품질↑ 속도↓">
+          🧠 추론 {runSettings.agentThinking ? "ON" : "OFF"}
+        </button>
       )}
       {!directedTarget && s.status !== "running" && (
         <select
@@ -743,21 +741,6 @@ export default function App() {
           <option value="">🧭 경로 자동</option>
           <option value="team">⚡ 팀(경량)</option>
           <option value="full">🏛️ 전사(풀)</option>
-        </select>
-      )}
-      {!directedTarget && s.status !== "running" && (
-        <select
-          className="llm-run-select run-opt"
-          value={runBudget}
-          onChange={(e) => setRunBudget(e.target.value)}
-          title="이 런의 예산 캡(USD) — 도달 시 정직하게 budget_exceeded 종료, 80%/95%에서 경고. 참고 실측: 경량 ~$4 · 풀런 ~$16~30"
-        >
-          <option value="">💰 예산 기본</option>
-          <option value="2">$2 캡</option>
-          <option value="5">$5 캡</option>
-          <option value="10">$10 캡</option>
-          <option value="30">$30 캡</option>
-          <option value="0">∞ 무제한</option>
         </select>
       )}
       <button className="btn start" type="submit">
@@ -1383,14 +1366,6 @@ export default function App() {
           <button className={view === "llm" ? "active" : ""}
             onClick={() => { setView("llm"); fetchLlmStatus().then(setLlmStatus); }}>🧩 LLM</button>
           <button className={view === "mcp" ? "active" : ""} onClick={() => setView("mcp")}>🧷 MCP</button>
-        </div>
-        <div className="viewtoggle qual-toggles" title="품질 모드 — 켜면 다음 런부터 적용(서버 재시작 불필요)">
-          <button className={runSettings.orgDebateRounds > 0 ? "active" : ""} onClick={toggleDebate}
-            title="팀 토론(비평→반박): 켜면 팀들이 서로의 산출물을 비판·정련. 품질↑ 속도↓">
-            🗣️ 토론 {runSettings.orgDebateRounds > 0 ? "ON" : "OFF"}</button>
-          <button className={runSettings.agentThinking ? "active" : ""} onClick={toggleThinking}
-            title="추론(thinking): 켜면 답 전에 단계적 사고. 품질↑ 속도↓">
-            🧠 추론 {runSettings.agentThinking ? "ON" : "OFF"}</button>
         </div>
         <div className={`status status-${s.status}`}>
           {isReplay ? "리플레이" : STATUS_LABEL[s.status] ?? s.status}
