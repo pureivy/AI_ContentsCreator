@@ -260,7 +260,6 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   if (debateRounds > 0 && debateCritic) {
     bus.emit('log', { message: `팀 토론 ${debateRounds}라운드 — 비평→반박으로 팀 산출물 정련` });
   }
-  let critiqueText = ''; // 마지막 비평(토론 라운드 또는 회사급)을 CEO 합성 컨텍스트로 전달
   for (let round = 1; round <= debateRounds && debateCritic && !signal?.aborted; round++) {
     bus.emit('phase', { team_id: '_ceo', phase: 'review' });
     // 1) 비평 — 전 팀 산출물의 교차 약점을 팀별로 지적
@@ -271,7 +270,6 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
       context: combined, stage: 'critique', emitSpawn: round === 1, signal,
     });
     bus.emit('critique', { round, text: crit.text }, { agentId: debateCritic.id });
-    critiqueText = crit.text; // 마지막 라운드 비평을 synthContext 로 전달(이전엔 토론 비평이 합성에서 누락됐다)
     if (signal?.aborted) break;
     // 2) 반박/정련 — 각 팀장이 비평 + 동료 팀 산출물을 반영해 자기 산출물을 갱신(팀 단위 병렬)
     const revised = await mapLimit(
@@ -303,12 +301,12 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
     for (let i = 0; i < usableTeams.length; i++) if (revised[i]) usableTeams[i] = revised[i]!;
   }
 
-  // --- 회사급 비평(선택) — 토론을 돌리지 않은 경우에만 실행한다. 토론이 이미 매 라운드 같은 critic 으로
-  //     비평을 생성했으면(critiqueText 에 마지막 라운드 비평이 담김) 동일 critic 을 또 호출하지 않는다
-  //     (이전엔 토론 후에도 회사급 비평이 무조건 돌아 critic 이 2회+ 호출됐다). ---
+  // --- 회사급 비평(선택) — 토론 여부와 무관하게 **최종(반박 후) 산출물**을 신선하게 비평해 합성 입력으로
+  //     쓴다. 토론 라운드 비평은 그 라운드의 '반박 전' 상태를 가리켜 합성엔 stale 하므로 여기서 재비평한다.
+  //     (라운드 critic 은 반박을 구동하고, 이 회사급 critic 은 합성용 최종 비평 — 역할이 다르다.) ---
   const critic = company.specialists.find((s) => s.isCritic);
-  const debated = debateRounds > 0 && !!debateCritic;
-  if (critic && !debated) {
+  let critiqueText = '';
+  if (critic) {
     const combined = usableTeams.map((t) => `## ${t.team.name}\n${t.deliverable}`).join('\n\n');
     const c = await runAgent({
       bus, role: critic, model: modelForTier(assign, critic.tier),
