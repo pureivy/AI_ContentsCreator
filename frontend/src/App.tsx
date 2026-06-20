@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "./store";
 import { startRun, resumeRun, watchRun, RunHandle } from "./transport/sse";
-import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, downloadRunHwpx, fetchEta, reviseRun, fetchTemplates, saveTemplate, deleteTemplate, runTemplate, fetchRunSettings, updateRunSettings, RunInfo, UploadFileResult, LlmStatus, EtaStats, TemplateInfo, RunSettings } from "./api";
+import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, downloadRunHwpx, fetchEta, reviseRun, fetchTemplates, saveTemplate, deleteTemplate, runTemplate, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, RunInfo, UploadFileResult, LlmStatus, EtaStats, TemplateInfo, RunSettings } from "./api";
 import { ActivityItem, ApprovalItem, DebateMsg, UIState } from "./events/types";
 import AgentGraph from "./panels/AgentGraph";
 import OfficeView from "./panels/OfficeView";
@@ -578,6 +578,27 @@ export default function App() {
     if (p.get("mode") === "live" && info.status === "running") watchLive(rid);
     else loadPast(rid);
   }, [runs]);
+
+  // 자율런 자동 관전 — 사용자가 라이브 런을 보고 있지 않고(=running 아님) 과거 런 리플레이도 아닐 때,
+  // 진행 중인 자율런에 자동 연결해 오피스뷰가 살아 움직이게 한다(능동실행 오토플레이 취지). watchLive 가
+  // 붙으면 status=running 이 되어 폴링이 멈추고, 자율런이 끝나면 status 가 종료로 바뀌어 다시 폴링 →
+  // 다음 자율런으로 이어진다. 사용자가 자기 런을 시작하면 그게 우선하고 백엔드가 자율런을 양보한다.
+  useEffect(() => {
+    if (s.status === "running" || s.mode === "replay") return;
+    let stopped = false;
+    const tick = async () => {
+      if (stopped) return;
+      const st = await fetchAutonomyStatus();
+      const id = st?.auto_run_id;
+      if (id && id !== useStore.getState().runId && useStore.getState().status !== "running") {
+        watchLive(id); // 백로그+라이브 구독 → 아바타 안무 시작
+      }
+    };
+    tick();
+    const t = setInterval(tick, 6000);
+    return () => { stopped = true; clearInterval(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.status, s.mode]);
 
   const toggleCheck = (id: string) =>
     setChecked((prev) => {

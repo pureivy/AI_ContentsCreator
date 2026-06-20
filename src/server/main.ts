@@ -410,14 +410,19 @@ app.get('/api/health', (c) => c.json({ ok: true, backend: CONFIG.backend }));
 app.get('/healthz', (c) => c.json({ ok: true }));
 
 // 자율 사이클 상태 — 프론트 대시보드의 '🤖 자율' 칩용. enabled 면 주기, active 면 자율 런 진행 중.
-app.get('/autonomy/status', (c) => c.json({
-  enabled: CONFIG.autoCycleMinutes > 0,
-  interval_minutes: CONFIG.autoCycleMinutes,
-  shell: CONFIG.agentShell,
-  active: [...RUNS.values()].some((h) => h.auto && h.status === 'running'),
-  last_auto_ts: lastAutoRun?.ts ?? null,
-  last_auto_topic: lastAutoRun?.topic ?? null,
-}));
+app.get('/autonomy/status', (c) => {
+  // 진행 중인 자율런 — 프론트가 유휴 시 자동 관전(watchLive)할 수 있게 run_id 를 노출한다.
+  const activeAuto = [...RUNS.entries()].find(([, h]) => h.auto && h.status === 'running');
+  return c.json({
+    enabled: CONFIG.autoCycleMinutes > 0,
+    interval_minutes: CONFIG.autoCycleMinutes,
+    shell: CONFIG.agentShell,
+    active: !!activeAuto,
+    auto_run_id: activeAuto ? activeAuto[0] : null,
+    last_auto_ts: lastAutoRun?.ts ?? null,
+    last_auto_topic: lastAutoRun?.topic ?? null,
+  });
+});
 
 // 일일 브리핑 — 미리보기(GET) + 수동 발송(POST). 설정 시각엔 자동 발송(startDaily).
 app.get('/briefing', (c) => c.json({ ...buildBriefing(), configured: notifyConfigured(), time: CONFIG.dailyBriefingTime }));

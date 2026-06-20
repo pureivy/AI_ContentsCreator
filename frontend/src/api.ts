@@ -89,6 +89,8 @@ export async function fetchSources(): Promise<SourceInfo[]> {
 // Total stored wiki page count (+ raw source count) for the dashboard 위키 metric.
 export interface AutonomyStatus {
   enabled: boolean; interval_minutes: number; shell: boolean; active: boolean;
+  /** 진행 중인 자율런 id(있으면) — 유휴 시 오피스뷰 자동 관전용. */
+  auto_run_id?: string | null;
   last_auto_ts: string | null; last_auto_topic: string | null;
 }
 export async function fetchAutonomyStatus(): Promise<AutonomyStatus | null> {
