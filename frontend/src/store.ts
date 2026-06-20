@@ -25,9 +25,22 @@ interface Store extends UIState {
   seek: (pos: number) => void; // re-fold to position (supports scrubbing both ways)
 }
 
+// 후진 스크럽 시 매번 0부터 재fold 하던 O(n) 비용을 줄이는 체크포인트 캐시. fold 가 순수 함수이므로
+// CKPT 개마다 스냅샷을 저장하고 가장 가까운 체크포인트부터 fold 한다(결과는 0부터 fold 한 것과 동일).
+// replayBuffer 배열이 바뀌면(새 런 로드) identity 비교로 캐시를 버린다.
+const CKPT = 200;
+let _ckptBuf: EventEnvelope[] | null = null;
+const _ckpts = new Map<number, UIState>(); // key = CKPT 배수, value = 그 지점까지 fold 한 상태
 function foldUpTo(events: EventEnvelope[], pos: number): UIState {
-  let st = initialState();
-  for (let i = 0; i < pos && i < events.length; i++) st = fold(st, events[i]);
+  if (events !== _ckptBuf) { _ckptBuf = events; _ckpts.clear(); }
+  const base = Math.floor(pos / CKPT) * CKPT;
+  let st = _ckpts.get(base) ?? initialState();
+  const start = _ckpts.has(base) ? base : 0;
+  for (let i = start; i < pos && i < events.length; i++) {
+    st = fold(st, events[i]);
+    const next = i + 1;
+    if (next % CKPT === 0 && !_ckpts.has(next)) _ckpts.set(next, st); // 경계마다 스냅샷 적립
+  }
   return st;
 }
 
