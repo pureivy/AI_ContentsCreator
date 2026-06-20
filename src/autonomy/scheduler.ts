@@ -94,8 +94,10 @@ const recentAuto: string[] = [];
  * 지식베이스가 비어 있으면 null(아무 일도 안 함). 모델은 RAM 예산으로 자체 해석.
  */
 export async function proposeAutonomousTask(signal?: AbortSignal): Promise<string | null> {
-  const idx = readSafe(path.join(CONFIG.wikiDir, 'index.md')).slice(0, 4000);
-  const dec = readSafe(path.join(CONFIG.dataDir, '_shared', 'decisions.md')).slice(-2000);
+  // 컨텍스트는 짧게 — 이 로컬 모델은 입력이 크면(>~3k자) 과도하게 '사고'(thinking 채널)해 정작 답(content)을
+  // 비워버린다(실측: 1500자 → 정상 제목, 6000자 → content 0자). 인덱스 상단 엔티티 + 최근 결정 일부면 충분.
+  const idx = readSafe(path.join(CONFIG.wikiDir, 'index.md')).slice(0, 1600);
+  const dec = readSafe(path.join(CONFIG.dataDir, '_shared', 'decisions.md')).slice(-700);
   if (!idx.trim() && !dec.trim()) return null; // 종잣거리 없음
 
   const installed = await ollama.listModels();
@@ -121,7 +123,7 @@ export async function proposeAutonomousTask(signal?: AbortSignal): Promise<strin
           `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}`,
       },
     ],
-    maxOutputTokens: 80,
+    maxOutputTokens: 120,
     temperature: 0.5,
     signal,
   });
