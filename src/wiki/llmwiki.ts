@@ -795,32 +795,31 @@ function excerpt(body: string, qt: string[], budget: number): string {
 
 // 대형 원문(거대 표 등)을 검색 가능한 청크로 분할 — 청크당 ~minSize, 문서당 최대 maxChunks(위키 팽창 억제).
 // 각 청크가 작아 query 발췌가 깊은 행·수치까지 닿는다(1.1MB 표가 head 발췌로 안 닿던 이슈12 잔여 해소).
+// 표 행(| a | b | …)이 '컬럼 헤더 행'인지 내용으로 판정 — 라벨 셀(한글/영문 텍스트, 순수 숫자 아님)이
+// 다수면 헤더. 결산표는 데이터 행이 숫자 위주(과목명 1~2개 라벨 + 숫자 다수)라 헤더와 구분된다.
+function isHeaderRow(l: string): boolean {
+  if (!l.includes('|')) return false;
+  const cells = l.split('|').map((c) => c.trim()).filter(Boolean);
+  if (cells.length < 3) return false;
+  const labels = cells.filter((c) => /[가-힣A-Za-z]/.test(c) && !/^[\d,.\s()\-+]+$/.test(c));
+  return labels.length >= Math.max(2, Math.ceil(cells.length * 0.5));
+}
 export function chunkBody(body: string, maxChunks = 60, minSize = 3500): string[] {
   if (body.length <= minSize) return [body];
   const lines = body.split('\n');
-  // 표(markdown table) 인식 — xlsx/결산표는 컬럼 헤더 행이 상단에만 있어, 문자 단위로 자르면 데이터 청크에
-  // 헤더가 사라져 '라벨 없는 숫자벽'이 된다. 그래서 (1) 행 경계로 분할하고 (2) 표 상단 헤더 블록(시트 헤딩 +
-  // 첫 HEADER_ROWS 개 표 행 — 제목·그룹·컬럼 헤더 포함)을 각 청크에 반복 주입해 모든 청크를 자기서술적으로 만든다.
-  const HEADER_ROWS = 5;
-  const tableLines = lines.filter((l) => l.includes('|')).length;
-  const isTable = tableLines > Math.max(3, lines.length * 0.4);
-  let header = '';
-  if (isTable) {
-    const head: string[] = [];
-    let tbl = 0;
-    for (const l of lines) {
-      if (l.includes('|')) { head.push(l); if (++tbl >= HEADER_ROWS) break; }
-      else if (tbl === 0 && l.trim()) head.push(l); // 표 시작 전 헤딩(예: '## sheet1.xml')
-      else if (tbl > 0) break;
-    }
-    header = head.length ? head.join('\n') + '\n' : '';
-  }
-  // 행 경계 분할 + (표면) 헤더 반복. 헤더 자체 길이를 빼고 데이터 예산을 잡아 청크 수 폭증 방지.
-  const size = Math.max(minSize, Math.ceil(body.length / maxChunks)) + header.length;
+  // xlsx/결산표는 여러 표(세입·세출·기금 등)가 각자 컬럼 헤더를 가지며, 헤더는 각 표 섹션 앞에 한 번만 나온다.
+  // 문자 단위로 자르면 데이터 청크에 헤더가 사라져 '라벨 없는 숫자벽'이 된다. 그래서 (1) 행 경계로 분할하고
+  // (2) '직전에 본 헤더 행'을 carry-forward 해 각 청크 첫머리에 주입 → 청크 데이터가 속한 표의 헤더가 항상 붙는다.
+  const size = Math.max(minSize, Math.ceil(body.length / maxChunks));
   const chunks: string[] = [];
   let cur = '';
+  let lastHeader = '';
   for (const line of lines) {
-    if (cur && cur.length + line.length + 1 > size) { chunks.push(cur); cur = header; }
+    if (isHeaderRow(line)) lastHeader = line;
+    if (cur && cur.length + line.length + 1 > size) {
+      chunks.push(cur);
+      cur = lastHeader ? lastHeader + '\n' : ''; // 새 청크는 직전 헤더로 시작(데이터가 속한 표의 컬럼 맥락)
+    }
     cur += line + '\n';
   }
   if (cur.trim()) chunks.push(cur);
