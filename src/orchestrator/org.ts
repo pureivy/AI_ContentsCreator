@@ -293,7 +293,7 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
           bus.emit('phase', { team_id: t.team.id, phase: 'idle' });
           return { ...t, deliverable: next };
         } catch (e) {
-          if (isAbort(e)) throw e;
+          if (isAbort(e, signal)) throw e;
           return t; // 반박 실패 팀은 기존 산출물 유지
         }
       }),
