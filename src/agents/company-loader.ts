@@ -66,10 +66,14 @@ function ensureLoaded(): void {
 }
 function save(): void {
   if (!_doc) return;
-  const tmp = dataYamlPath() + '.tmp';
-  fs.writeFileSync(tmp, YAML.stringify(_doc), 'utf-8');
-  fs.renameSync(tmp, dataYamlPath());
-  fs.writeFileSync(peoplePath(), YAML.stringify(_people), 'utf-8');
+  // 두 파일 모두 tmp 에 먼저 쓰고 원자적으로 교체 — company.yaml 저장 후 people.yaml 쓰기 전 충돌 시
+  // 실명 매핑만 소실되던 비일관 상태를 방지(둘 다 rename 으로 커밋).
+  const companyTmp = dataYamlPath() + '.tmp';
+  const peopleTmp = peoplePath() + '.tmp';
+  fs.writeFileSync(companyTmp, YAML.stringify(_doc), 'utf-8');
+  fs.writeFileSync(peopleTmp, YAML.stringify(_people), 'utf-8');
+  fs.renameSync(companyTmp, dataYamlPath());
+  fs.renameSync(peopleTmp, peoplePath());
   _cached = null;
 }
 

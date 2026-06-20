@@ -939,8 +939,16 @@ app.delete('/api-keys/:key', (c) => c.json(deleteKey(c.req.param('key') ?? '')))
 app.get('/favicon.ico', (c) => c.body(null, 204));
 // 수정 요청(v+1) — 부모 런의 전문가 입장 + 피드백으로 CEO 재종합.
 async function reviseHandler(c: Context): Promise<Response> {
-  const parent = RUNS.get(c.req.param('id') ?? '');
-  if (!parent) return c.json({ error: 'unknown run' }, 404);
+  const parentId = c.req.param('id') ?? '';
+  const parent = RUNS.get(parentId);
+  if (!parent) {
+    // 메모리에 없으면(재시작/evict) 디스크에 런이 실재하는지 구분 — positions 는 메모리에만 있어 복원 불가하므로,
+    // '모르는 런'(404)과 '재시작으로 입장 데이터 소실'(409)을 구분해 안내한다(이전엔 둘 다 혼란스런 404였다).
+    const meta = loadRunMeta(parentId) ?? legacyMetaFromFiles(parentId);
+    return meta
+      ? c.json({ error: '서버 재시작으로 입장 데이터가 소실되었습니다. 원본 런을 다시 실행한 뒤 수정해 주세요.' }, 409)
+      : c.json({ error: 'unknown run' }, 404);
+  }
   if (!parent.positions?.length) return c.json({ error: '원본 입장 데이터가 없습니다(런 완료 후 다시 시도).' }, 409);
   const body = await c.req.json<{ feedback?: string }>().catch(() => ({}) as { feedback?: string });
   const feedback = (body.feedback ?? '').trim();

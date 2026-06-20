@@ -259,10 +259,15 @@ export class OllamaClient {
           handleLine(line);
         }
       }
-      // 마지막 잔여 라인(주로 done 메트릭) — 파싱 실패는 진단만(text 는 이미 수집됨).
+      // 마지막 잔여 라인(주로 done 메트릭). Ollama 가 스트림 말미에 error 패킷을 보내는 경우 그 에러는
+      // 전파해야 한다 — 안 그러면 빈 text 가 정상 결과로 위장된다. JSON 부분 파싱 실패는 handleLine 내부에서
+      // 이미 무해 처리(return)되므로, 여기로 올라오는 예외는 사실상 OllamaError 뿐이다.
       if (buffer.trim()) {
         try { handleLine(buffer); }
-        catch (e) { console.warn('[ollama] 종료 라인 파싱 실패:', (e as Error).message); }
+        catch (e) {
+          if (e instanceof OllamaError) throw e;
+          console.warn('[ollama] 종료 라인 파싱 실패:', (e as Error).message);
+        }
       }
     } finally {
       // throw/abort 시에도 스트림·소켓 해제(단일 KV 슬롯 누수 방지).
