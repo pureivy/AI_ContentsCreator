@@ -464,6 +464,12 @@ export default function App() {
     handleRef.current = null;
     const info = runs.find((r) => r.run_id === runId);
     const events = await fetchRunLog(runId);
+    if (!events.length) {  // 삭제됐거나 없는 런 — URL 파라미터 정리하고 종료(빈 리플레이 방지)
+      const url = new URL(window.location.href);
+      url.searchParams.delete("run"); url.searchParams.delete("mode");
+      window.history.replaceState(null, "", url);
+      return;
+    }
     loadReplay(runId, info?.topic ?? runId, events);
   };
 
@@ -568,14 +574,9 @@ export default function App() {
     const rid = p.get("run");
     if (!rid || useStore.getState().runId) return;  // 이미 다른 런을 보는 중이면 존중
     const info = runs.find((r) => r.run_id === rid);
-    if (!info) {                                    // 삭제된/모르는 런 → 파라미터 정리
-      const url = new URL(window.location.href);
-      url.searchParams.delete("run");
-      url.searchParams.delete("mode");
-      window.history.replaceState(null, "", url);
-      return;
-    }
-    if (p.get("mode") === "live" && info.status === "running") watchLive(rid);
+    // info 가 없어도(자율런은 /runs 목록에서 제외됨) loadPast 가 직접 fetch 해 리플레이한다.
+    // 정말 없는 런이면 loadPast 가 빈 이벤트를 보고 URL 을 정리한다.
+    if (p.get("mode") === "live" && info?.status === "running") watchLive(rid);
     else loadPast(rid);
   }, [runs]);
 
@@ -587,7 +588,7 @@ export default function App() {
     if (s.status === "running" || s.mode === "replay") return;
     let stopped = false;
     const tick = async () => {
-      if (stopped) return;
+      if (stopped || !urlRestoredRef.current) return; // URL 복구(특정 런 보기)가 끝나기 전엔 자동관전 보류 — 리플레이 하이재킹 방지
       const st = await fetchAutonomyStatus();
       const id = st?.auto_run_id;
       if (id && id !== useStore.getState().runId && useStore.getState().status !== "running") {
