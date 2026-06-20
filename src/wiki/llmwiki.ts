@@ -497,10 +497,19 @@ export class LlmWiki {
       });
       this.saveEmbedCache(model, cache);
     }
-    // 3) rerank — 코사인 내림차순. 임베딩이 빈(실패) 후보는 뒤로.
+    // 3) rerank — 코사인 × 출처 가중. query() 휴리스틱과 동일하게 1차 원문(raw/)을 우대하고 런 파생 요약
+    //    (sources=run: 또는 제목에 "(요약)")을 역가중한다. 안 그러면 반복 주제에서 이전 런 요약이 '의미
+    //    유사도만'으로 top-k 를 점유해 1차 수치 자료를 밀어낸다(수치 오참조의 근본 원인). deprioritize-not-exclude.
+    const srcW = (p: WikiPage): number => {
+      let w = 1;
+      if (p.sources.some((s) => s.startsWith('raw/'))) w *= 1.5; // 업로드 1차 원문 우대
+      if (p.sources.some((s) => s.startsWith('run:')) || p.title.includes('(요약)')) w *= 0.6; // 런 파생 요약 역가중(누적분도 제목으로 포착)
+      return w;
+    };
     const ranked = cand
       .map((p, i) => ({ p, sim: vecs[i] ? cosineSim(qv, vecs[i]!) : -1 }))
-      .sort((a, b) => b.sim - a.sim)
+      .map((x) => ({ ...x, score: x.sim > -1 ? x.sim * srcW(x.p) : -1 }))
+      .sort((a, b) => b.score - a.score)
       .slice(0, limit)
       .filter((x) => x.sim > -1)
       .map((x) => x.p);
