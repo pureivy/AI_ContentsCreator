@@ -68,6 +68,11 @@ export interface AgentRunArgs {
   subproblemId?: string;
   /** 위키 그라운딩 질의 — 역할이 wiki_query 툴을 가지면 작업 전 관련 지식을 조회·주입. */
   groundQuery?: string;
+  /** 그라운딩 히트 수(기본 6). 합성 섹션처럼 1차 원문이 집중된 경우 작게(예: 3) 주면 프리필이 줄어 빨라진다. */
+  groundLimit?: number;
+  /** true 면 웹·외부 커넥터(법령·KOSIS 등) 그라운딩을 건너뛰고 위키만 사용. 합성 단계는 팀이 이미 외부
+   *  데이터를 모았으므로 섹션마다 느린 외부 API 를 재호출하지 않게 한다(통합 속도 — 사용자 요청). */
+  groundWikiOnly?: boolean;
   signal?: AbortSignal;
 }
 
@@ -119,7 +124,7 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
   if (args.groundQuery && tools.includes('wiki_query')) {
     // 데이터 그라운딩 폭 — 결산보고서처럼 여러 자료의 실수치를 종합해야 하므로 6건(이슈12). source 우대+넉넉한 본문은 query() 에서.
     // 임베딩 모델 설치 시 의미검색(retrieve→rerank), 없으면 휴리스틱 query() 로 자동 폴백.
-    const { hits, context } = await llmWiki().semanticQuery(args.groundQuery, 6, args.signal);
+    const { hits, context } = await llmWiki().semanticQuery(args.groundQuery, args.groundLimit ?? 6, args.signal);
     if (context) {
       grounding = context;
       bus.emit(
@@ -134,7 +139,7 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
   //     결산·회계·규정·인사 등 업로드된 내부 문서로 답해야 할 과제에 외부 웹검색이 끼어들어 추측·외부수치를
   //     주입하던 문제(이슈2)를 차단. 위키 히트가 전혀 없을 때만(외부 지식이 필요한 주제) 웹을 폴백으로 쓴다. ---
   let webContext = '';
-  if (args.groundQuery && !grounding && CONFIG.webSearch && tools.includes('web_search')) {
+  if (args.groundQuery && !args.groundWikiOnly && !grounding && CONFIG.webSearch && tools.includes('web_search')) {
     const results = await webSearch(args.groundQuery, 5, args.signal);
     if (results.length) {
       webContext = results
@@ -147,7 +152,7 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
   // --- 외부 데이터 소스 커넥터 그라운딩(법령·DART 등) — 등록된 커넥터를 순회하며, 키가 설정되고
   //     scope(전역/역할 도구)가 맞으면 관련 자료를 자동 주입. 새 소스는 커넥터만 추가하면 자동 합류. ---
   const connectorBlocks: string[] = [];
-  if (args.groundQuery) {
+  if (args.groundQuery && !args.groundWikiOnly) {
     for (const conn of connectors()) {
       if (!conn.enabled()) continue;
       if (conn.scope !== 'global' && !conn.scope.some((t) => tools.includes(t))) continue;
