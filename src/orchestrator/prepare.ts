@@ -10,6 +10,7 @@ import { EventType } from '../events/types';
 import type { EventBus } from '../events/bus';
 import type { CompanyDef } from '../agents/company';
 import { microJSON } from './agent';
+import { asString } from '../util/str';
 
 export interface SubProblem {
   id: string;
@@ -56,8 +57,8 @@ async function decompose(microModel: string, topic: string, signal?: AbortSignal
     { signal, maxOutputTokens: 700 },
   );
   const subs = (parsed?.subproblems ?? [])
-    .filter((s) => s.text)
-    .map((s, i) => ({ id: s.id || `sp${i + 1}`, text: s.text! }));
+    .map((s, i) => ({ id: asString(s?.id).trim() || `sp${i + 1}`, text: asString(s?.text).trim() })) // LLM 비문자열 필드 안전화
+    .filter((s) => s.text);
   return subs.length ? subs : [{ id: 'sp1', text: topic }];
 }
 

@@ -6,6 +6,7 @@
 import { EventType } from '../events/types';
 import type { EventBus } from '../events/bus';
 import { microJSON } from './agent';
+import { asString } from '../util/str';
 import { appendMemory, appendDecision, appendActivity, readGoal, writeGoal, archiveMemory, extractVerifiedClaims, appendVerified } from '../agents/workspace';
 import { getCompany } from '../agents/company-loader';
 import { llmWiki } from '../wiki/llmwiki';
@@ -42,12 +43,14 @@ export async function reflectAndLearn(
   const learned = new Set<string>();
   const lessonsByAgent = new Map<string, string[]>();
   for (const l of j?.lessons ?? []) {
-    if (l.id && l.insight && valid.has(l.id)) {
-      appendMemory(l.id, l.insight); // 역량 강화: memory.md 누적 → 다음 런 시스템프롬프트 주입(compounding)
-      appendActivity(l.id, `🎓 학습: ${l.insight.slice(0, 50).replace(/\s+/g, ' ')}${l.insight.length > 50 ? '…' : ''}`);
-      bus.emit(EventType.lesson_learned, { title: l.insight, agent_id: l.id }, { agentId: l.id });
-      learned.add(l.id);
-      const arr = lessonsByAgent.get(l.id) ?? []; arr.push(l.insight); lessonsByAgent.set(l.id, arr);
+    const id = asString(l.id).trim();
+    const insight = asString(l.insight).trim(); // LLM 이 insight 를 비문자열로 반환해도 안전(빈 문자열→스킵)
+    if (id && insight && valid.has(id)) {
+      appendMemory(id, insight); // 역량 강화: memory.md 누적 → 다음 런 시스템프롬프트 주입(compounding)
+      appendActivity(id, `🎓 학습: ${insight.slice(0, 50).replace(/\s+/g, ' ')}${insight.length > 50 ? '…' : ''}`);
+      bus.emit(EventType.lesson_learned, { title: insight, agent_id: id }, { agentId: id });
+      learned.add(id);
+      const arr = lessonsByAgent.get(id) ?? []; arr.push(insight); lessonsByAgent.set(id, arr);
       n++;
     }
   }
@@ -79,9 +82,11 @@ export async function reflectAndLearn(
   }
   // 개인목표 자동 채움(자가학습) — goal.md 가 비어있는 직원만. 사람이 직접 적은 목표는 보호.
   for (const g of j?.goals ?? []) {
-    if (g.id && g.goal && valid.has(g.id) && !readGoal(g.id).trim()) {
-      writeGoal(g.id, `# 개인 목표\n${g.goal.trim()}`);
-      appendActivity(g.id, '🎯 개인목표 자동 설정(자가학습)');
+    const id = asString(g.id).trim();
+    const goal = asString(g.goal).trim(); // LLM 이 goal 을 비문자열로 반환해도 안전
+    if (id && goal && valid.has(id) && !readGoal(id).trim()) {
+      writeGoal(id, `# 개인 목표\n${goal}`);
+      appendActivity(id, '🎯 개인목표 자동 설정(자가학습)');
     }
   }
   appendDecision(topic, deliverable.slice(0, 300));

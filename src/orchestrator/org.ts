@@ -12,6 +12,7 @@ import { DEFAULT_COMPANY } from '../agents/company';
 import type { TeamDef } from '../agents/company';
 import { mapLimit } from '../util/semaphore';
 import { isAbort } from '../util/abort';
+import { asString } from '../util/str';
 import { runAgent, microJSON, buildSystemPrompt, findTemplateNumbers } from './agent';
 import { prepareRun } from './prepare';
 import { finalizeRun } from './finalize';
@@ -71,8 +72,8 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   // ② 라우팅 결과 → 팀별 담당 작업 맵 + 관련 부서 선별(유효 id·중복 제거·원래 순서 보존).
   const teamTaskById = new Map<string, string>();
   for (const a of route?.assignments ?? []) {
-    const tid = (a?.team ?? '').trim();
-    const tk = (a?.task ?? '').trim();
+    const tid = asString(a?.team).trim();
+    const tk = asString(a?.task).trim();
     if (tid && tk && allTeams.some((t) => t.id === tid) && !teamTaskById.has(tid)) teamTaskById.set(tid, tk);
   }
   const routed = allTeams.filter((t) => teamTaskById.has(t.id));
@@ -160,7 +161,7 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
       const rawAssignments = Array.isArray(plan?.assignments) ? plan!.assignments! : [];
       // 비어있지 않은 작업만, LLM 출력 순서 보존 — 인덱스로 식별해 동일 텍스트도 별개 작업으로 구분.
       const tasks = rawAssignments
-        .map((a) => ({ id: (a?.member ?? '').trim(), task: (a?.task ?? '').trim() }))
+        .map((a) => ({ id: asString(a?.member).trim(), task: asString(a?.task).trim() }))
         .filter((a) => a.task);
       // member.id → 작업 인덱스(중복 id 는 첫 매칭만). 매칭에 소비된 인덱스를 consumed 에.
       const idToIdx = new Map<string, number>();
