@@ -45,6 +45,8 @@ export interface Config {
   /** 모델 상주 시간 — 요청에 같이 보내되, 정식 경로는 서버 env(OLLAMA_KEEP_ALIVE). */
   readonly keepAlive: string;
   readonly requestTimeoutMs: number;
+  /** 외부 그라운딩 커넥터(법령·KOSIS·DART 등) fetch 타임아웃(ms). 무응답 외부 API 무한 대기 방지. */
+  readonly groundingTimeoutMs: number;
   /** 소형 로컬 모델의 장황/폭주 백스톱(num_predict). 통합 단계만 별도 상향. */
   readonly maxOutputTokens: number;
   readonly integrationMaxOutputTokens: number;
@@ -146,6 +148,7 @@ export const CONFIG: Config = {
   thinkingBudgetTokens: Math.min(Math.max(0, envInt('THINKING_BUDGET_TOKENS', 1500)), 16_384),
   keepAlive: env('LOCAL_LLM_KEEP_ALIVE', '30m'),
   requestTimeoutMs: envInt('LOCAL_LLM_TIMEOUT_MS', 600_000),
+  groundingTimeoutMs: Math.min(Math.max(3000, envInt('GROUNDING_TIMEOUT_MS', 15_000)), 120_000),
   // num_predict 캡은 [1, 32768] 로 클램프 — env 0/음수가 빈 출력/무한생성을 유발하지 않게.
   maxOutputTokens: Math.min(Math.max(1, envInt('LOCAL_LLM_MAX_OUTPUT_TOKENS', 8192)), 32_768),
   // CEO 종합·검토 출력 캡. 최종 산출물은 10페이지+ 완결 문서가 필요(≈15,000자≈~22k 토큰)하므로 24k 로 둔다.

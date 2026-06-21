@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { getSecret } from '../secrets/store';
+import { fetchTimeout } from '../util/fetch';
 import { unzip } from '../util/unzip';
 import { registerConnector } from './registry';
 
@@ -29,7 +30,7 @@ async function ensureCorpCodes(signal?: AbortSignal): Promise<Map<string, string
   const key = getSecret(KEY);
   if (!key) { _corp = new Map(); return _corp; }
   try {
-    const r = await fetch(`https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key=${encodeURIComponent(key)}`, { signal });
+    const r = await fetchTimeout(`https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key=${encodeURIComponent(key)}`, {}, signal, Math.max(CONFIG.groundingTimeoutMs, 30_000));
     const buf = Buffer.from(await r.arrayBuffer());
     const files = unzip(buf);
     let xml = '';
@@ -62,7 +63,7 @@ async function dartGround(query: string, signal?: AbortSignal): Promise<string> 
       const parts: string[] = [];
       for (const n of names) {
         try {
-          const r = await fetch(`https://opendart.fss.or.kr/api/company.json?crtfc_key=${encodeURIComponent(key)}&corp_code=${map.get(n)}`, { signal });
+          const r = await fetchTimeout(`https://opendart.fss.or.kr/api/company.json?crtfc_key=${encodeURIComponent(key)}&corp_code=${map.get(n)}`, {}, signal);
           const j = await r.json() as Record<string, string>;
           if (j.status === '000') {
             parts.push(`· ${j.corp_name}${j.stock_code ? `(상장 ${j.stock_code})` : '(비상장)'} 대표:${j.ceo_nm || '-'} 업종코드:${j.induty_code || '-'} 설립:${j.est_dt || '-'} 결산:${j.acc_mt || '-'}월 주소:${(j.adres || '').slice(0, 30)}`);

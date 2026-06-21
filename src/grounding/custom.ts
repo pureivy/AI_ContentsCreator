@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { getSecret } from '../secrets/store';
+import { fetchTimeout } from '../util/fetch';
 import { setCustomProvider, type GroundingConnector } from './registry';
 
 export interface ExtractRule {
@@ -107,7 +108,7 @@ export async function runCustomConnector(cfg: CustomConnectorCfg, query: string,
     const url = cfg.endpoint
       .replace(/\{key\}/g, encodeURIComponent(key))
       .replace(/\{query\}/g, encodeURIComponent(query.slice(0, 60)));
-    const r = await fetch(url, { method: 'GET', signal });
+    const r = await fetchTimeout(url, { method: 'GET' }, signal);
     const raw = (await r.text()).slice(0, 20000);
     text = applyExtract(raw, cfg.extract);
   } catch { text = ''; }
@@ -158,7 +159,7 @@ export async function autoConfigConnector(
   let docs = '';
   if (input.docsUrl) {
     try {
-      const r = await fetch(input.docsUrl, { signal: input.signal });
+      const r = await fetchTimeout(input.docsUrl, {}, input.signal);
       docs = htmlToText(await r.text()).slice(0, 5000);
     } catch { /* 문서 없이도 진행 */ }
   }

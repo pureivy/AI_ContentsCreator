@@ -6,6 +6,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { getSecret } from '../secrets/store';
+import { CONFIG } from '../config';
 
 const ENDPOINT = 'https://korean-law-mcp.fly.dev/mcp';
 
@@ -26,7 +27,14 @@ async function getClient(): Promise<Client | null> {
   if (_client) { try { await _client.close(); } catch { /* */ } _client = null; }
   try {
     const client = new Client({ name: 'gepa-ai-office', version: '1.0.0' }, { capabilities: {} });
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${ENDPOINT}?oc=${encodeURIComponent(oc)}`)));
+    // 연결에도 타임아웃 — 원격 MCP 서버 무응답 시 connect 가 무한 대기하지 않게(타임아웃 시 미연결로 폴백).
+    const connect = client.connect(new StreamableHTTPClientTransport(new URL(`${ENDPOINT}?oc=${encodeURIComponent(oc)}`)));
+    const timer = new Promise<never>((_, rej) => {
+      const t = setTimeout(() => rej(new Error('MCP 연결 타임아웃')), CONFIG.groundingTimeoutMs);
+      if (typeof t.unref === 'function') t.unref();
+    });
+    await Promise.race([connect, timer]);
+    connect.catch(() => { /* 타임아웃 후 늦게 끝나는 연결의 unhandled rejection 방지 */ });
     _client = client;
     _connectedOc = oc;
     _groundCache.clear(); // OC 변경 시 캐시 무효
@@ -55,7 +63,7 @@ export async function lawGround(topic: string, signal?: AbortSignal): Promise<st
     const r = await client.callTool(
       { name: 'search_law', arguments: { query: topic.slice(0, 60) } },
       undefined,
-      signal ? { signal } : undefined,
+      { timeout: CONFIG.groundingTimeoutMs, ...(signal ? { signal } : {}) }, // 무응답 MCP 무한 대기 방지
     ) as { content?: Array<{ text?: string }> };
     const text = (r.content ?? []).map((c) => c.text ?? '').join('').slice(0, 800).trim();
     _groundCache.set(key, text);
