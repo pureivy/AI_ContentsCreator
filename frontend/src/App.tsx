@@ -69,6 +69,7 @@ function progressNote(
   phases: Record<string, string>,
   teams: Record<string, { name: string }>,
   status: string,
+  soloNote?: (tid: string, ph: string) => string | null,  // 팀원 없는 솔로 팀(비서실) 전용 멘트
 ): string {
   if (status !== "running") return "";
   const ceo = phases["_ceo"];
@@ -78,7 +79,8 @@ function progressNote(
   for (const tid in phases) {
     if (tid === "_ceo") continue;
     const ph = phases[tid];
-    if (ph && ph !== "idle" && PHASE_NOTE[ph]) return PHASE_NOTE[ph](teams[tid]?.name ?? tid);
+    if (ph && ph !== "idle" && PHASE_NOTE[ph])
+      return soloNote?.(tid, ph) ?? PHASE_NOTE[ph](teams[tid]?.name ?? tid);
   }
   return "⏳ 사장이 목표를 분석하는 중…";
 }
@@ -800,7 +802,18 @@ export default function App() {
     const ceoPhase = s.phases["_ceo"];
     const hasTeamPhase = Object.keys(s.phases)
       .some((k) => k !== "_ceo" && s.phases[k] && s.phases[k] !== "idle");
-    if (ceoPhase || hasTeamPhase) return progressNote(s.phases, s.teams, s.status);
+    // 팀원 없는 솔로 팀(예: 비서실)은 '팀원들이 각자'가 아니라 팀장(비서)이 직접 작업 → 그에 맞는 멘트.
+    const soloNote = (tid: string, ph: string): string | null => {
+      if (ph !== "work") return null;
+      const hasMembers = s.agentOrder.some((id) => {
+        const a = s.agents[id]; return !!a && a.team === tid && a.level === "member";
+      });
+      if (hasMembers) return null;  // 팀원 있는 일반 팀 → 기본 멘트
+      const lead = s.agentOrder.map((id) => s.agents[id]).find((a) => a && a.team === tid && a.level === "lead");
+      const r = lead ? (empLabel(lead.agent_id, lead.persona) || "담당") : (s.teams[tid]?.name ?? tid);
+      return `✍️ ${r}${ga(r)} 작업하는 중…`;
+    };
+    if (ceoPhase || hasTeamPhase) return progressNote(s.phases, s.teams, s.status, soloNote);
     const w = s.agentOrder.map((id) => s.agents[id])
       .find((a) => a && a.level !== "ceo" && !a.placeholder
         && (a.status === "thinking" || a.status === "spawned"));

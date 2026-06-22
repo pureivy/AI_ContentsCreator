@@ -239,16 +239,20 @@ function layout(
   //  head · report → own desk (검토) · integrate(ceoIntegrating) → CEO desk (보고).
   leads.forEach((lead, j) => {
     const tid = lead.team ?? "";
-    // 비서: 하단 팀존이 아니라 상단 비서실(CEO실 옆 [33~45%])에 고정 — CEO 처럼 자리를 지킨다.
+    // 비서: 하단 팀존이 아니라 상단 비서실에 고정 — CEO 처럼 자리를 지킨다. 팀원이 없어 비서(팀장)가
+    // 직접 작업하므로, 비서실 phase 가 'work' 인 동안(스트리밍 전 그라운딩 포함) 줄곧 '작업 중'으로 애니메이션.
     if (tid === SECRETARIAT) {
+      const secPh = running ? phases[SECRETARIAT] : undefined;
+      const atWork = lead.status === "thinking" || secPh === "work";
+      const done = lead.status === "spoke" && secPh !== "work";
       placed.push({
         agent: lead, glyph: glyphFor("lead", lead.agent_id, lead.persona?.role),
-        ring: lead.status === "thinking" ? RING.thinking : (RING[lead.status] ?? RING.spawned),
+        ring: atWork ? RING.thinking : (RING[lead.status] ?? RING.spawned),
         deskX: SECRETARY_DESK.x, deskY: SECRETARY_DESK.y,
         x: SECRETARY_DESK.x, y: SECRETARY_DESK.y,
-        bubble: lead.status === "thinking" ? "✍️ 작업 중" : "",
-        thinking: lead.status === "thinking",
-        isCritic: false, badge: "", roomLabel: "", face: "up",
+        bubble: atWork ? "✍️ 작업 중" : done ? "☕ 작업 완료" : "",
+        thinking: atWork,  // 작업 phase 동안 잔걸음 애니메이션(스트리밍 전 그라운딩 포함)
+        isCritic: false, badge: anyDeliverable ? "📄" : "", roomLabel: "", face: "up",
       });
       return;
     }
