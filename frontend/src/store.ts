@@ -23,6 +23,10 @@ interface Store extends UIState {
   // tail 하므로(Last-Event-ID=lastSeq) 백로그 안무를 처음부터 재생하지 않는다.
   snapshotLive: (runId: string, topic: string, events: EventEnvelope[]) => void;
   seek: (pos: number) => void; // re-fold to position (supports scrubbing both ways)
+  speakingSeq: number | null;
+  recording: boolean;
+  setSpeaking: (seq: number | null) => void;
+  setRecording: (b: boolean) => void;
 }
 
 // 후진 스크럽 시 매번 0부터 재fold 하던 O(n) 비용을 줄이는 체크포인트 캐시. fold 가 순수 함수이므로
@@ -50,6 +54,8 @@ export const useStore = create<Store>((set, get) => ({
   replayBuffer: [],
   replayPos: 0,
   liveActivity: [],
+  speakingSeq: null,
+  recording: false,
 
   applyEvent: (ev) => set((s) => {
     if (s.mode === "replay") return s;                      // live events never touch replay state
@@ -68,6 +74,8 @@ export const useStore = create<Store>((set, get) => ({
     set(() => ({ ...initialState(), mode: "live", replayBuffer: [], replayPos: 0, liveActivity: [] })),
 
   setRunId: (runId) => set(() => ({ runId })),
+  setSpeaking: (speakingSeq) => set(() => ({ speakingSeq })),
+  setRecording: (recording) => set(() => ({ recording })),
 
   loadReplay: (runId, topic, events) =>
     set(() => ({
