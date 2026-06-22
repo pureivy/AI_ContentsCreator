@@ -102,6 +102,10 @@ export interface Config {
   // --- 외부 툴 ---
   readonly webSearch: boolean;
 
+  // --- 음성 입출력 ---
+  readonly voiceTtsVoice: string;
+  readonly voiceSttModel: string;
+
   // --- 에이전트 도구 루프 / 자율 사이클 (전부 옵트인 — 기본 off 라 기본 런 경로는 바이트 동일) ---
   /** 능동 다단계 tool-loop. on 이면 stage='work' 에이전트가 <tool> 태그로 추가 자료를 스스로 조회·재호출. */
   readonly agentToolLoop: boolean;
@@ -198,6 +202,9 @@ export const CONFIG: Config = {
   relateTopK: envInt('RELATE_TOP_K', 3),
 
   webSearch: envBool('WEB_SEARCH', true),
+
+  voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
+  voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),
 
   // 옵트인 기능(기본 off/보수값). connect-ai 패리티(능동 실행·거버넌스 강제·자율 사이클)를 켜는 노브.
   agentToolLoop: envBool('AGENT_TOOL_LOOP', false),
