@@ -53,17 +53,16 @@ function protocolLabel(status: string): string {
 }
 
 // A live "현재 진행" line for the timeline, derived from team/_ceo phases — so the
-// decompose/brief/assign stages (run by forced-tool queries that DON'T stream into the
+// decompose/assign stages (run by forced-tool queries that DON'T stream into the
 // timeline) still show what's happening instead of a bare "RUN · ACTIVE". Teams run
 // sequentially, so at most one team phase is non-idle at a time.
+// (백엔드가 emit 하는 phase 와 1:1 — brief·report_ceo 는 발행되지 않으므로 멘트도 두지 않는다.)
 const PHASE_NOTE: Record<string, (team: string) => string> = {
-  brief: (n) => `📋 ${n} 팀장이 사장에게 브리핑 받는 중…`,
   decompose: (n) => `🧩 ${n} 팀장이 팀원 과제를 분해·배정하는 중…`,
   assign: (n) => `📌 ${n} 팀장이 팀원에게 과제를 지시하는 중…`,
-  work: (n) => `✍️ ${n} 팀원들이 각자 작업하는 중…`,
+  work: (n) => `✍️ ${n} 팀원들이 작업하는 중…`,
   debate: (n) => `💬 ${n} 팀원들이 상호검증 토론 중…`,
   report: (n) => `🔍 ${n} 팀장이 팀원 보고를 검토·취합하는 중…`,
-  report_ceo: (n) => `📋 ${n} 팀장이 사장에게 보고하는 중…`,
 };
 function progressNote(
   phases: Record<string, string>,

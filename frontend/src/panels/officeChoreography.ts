@@ -73,11 +73,18 @@ export const CORRIDOR_SPOTS: Pt[] = [{ x: 14, y: 29 }, { x: 86, y: 29 }];
 // lane 분산은 둘째 산책도 띠 안에 남도록 [0,2](y21 → 발 31.8%).
 export const STROLL = { y: 19, xMin: 9, xMax: 91, step: 16, lanes: [0, 2] };
 
-// 회의실(top-left) 팀간(cross-team) 회의 좌석. 부서를 가로질러 모일 때(현재: CEO 통합 —
-// 원장+팀장들이 팀 산출물을 종합) 회의 테이블 둘레에 앉는다. 좌석은 테이블의 우/하단에 둬
-// 벽 책장(상단)·화이트보드(좌)·화분(좌하단)을 피한다. index 0 = 원장(좌장).
-export const MEETING_SEATS: Pt[] = [
-  { x: 27, y: 11 },   // 원장(좌장)
-  { x: 27, y: 22 },   // 팀장
-  { x: 16.5, y: 25 }, // 팀장
-];
+// 회의실(top-left) 팀간(cross-team) 회의 — CEO 통합 시 원장+팀장들이 회의 테이블을 빙 둘러앉아
+// '모여서 회의'하는 모습. 테이블 중심(16.5,16) 둘레 타원: CEO=상석(12시), 팀장=하단 호(좌→우)로
+// 균등 배치해 모두 테이블을 향한다. 팀장 수에 맞춰 동적으로 자리 생성(고정 3좌석 한계 제거).
+const CONF_MEET = { cx: 16.5, cy: 16, rx: 9.5, ry: 7.5 };
+export function confMeetingSeats(nLeads: number): { ceo: Pt; leads: Pt[] } {
+  const { cx, cy, rx, ry } = CONF_MEET;
+  const ceo: Pt = { x: cx, y: cy - ry };          // 상석(12시, 테이블 위쪽)
+  const leads: Pt[] = [];
+  for (let i = 0; i < nLeads; i++) {
+    const deg = nLeads === 1 ? 90 : 150 - (120 * i) / (nLeads - 1); // 좌하(150°)→하(90°)→우하(30°)
+    const a = (deg * Math.PI) / 180;
+    leads.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+  }
+  return { ceo, leads };
+}

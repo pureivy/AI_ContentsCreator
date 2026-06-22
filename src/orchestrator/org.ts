@@ -279,7 +279,9 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
       CONFIG.teamParallel,
       usableTeams.map((t) => async (): Promise<TeamResult> => {
         try {
-          bus.emit('phase', { team_id: t.team.id, phase: 'work' });
+          // 토론 라운드 = 팀원이 회의 테이블에 모여 비평을 놓고 토의하는 모습(work 아님).
+          // 'debate' phase 를 emit 해 OfficeView 가 팀장→상석·팀원→테이블 둘레로 모이게 한다.
+          bus.emit('phase', { team_id: t.team.id, phase: 'debate' });
           const peers = usableTeams.filter((o) => o.team.id !== t.team.id)
             .map((o) => `## ${o.team.name} 산출물\n${o.deliverable}`).join('\n\n');
           const out = await runAgent({
@@ -330,7 +332,10 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   // 합성 단계의 CEO 는 '문서 저자' 역할로 — 결재메모·경영평가 과편향 유발하는 기본 CEO 프롬프트를 교체.
   const ceoAuthor = { ...company.ceo, systemPrompt: SYNTH_AUTHOR_PROMPT };
   const ceoModel = modelForTier(assign, company.ceo.tier);
-  bus.emit('phase', { team_id: '_ceo', phase: 'review' }); // CEO 검토·확정 단계(🔎 검토 중)
+  // CEO 종합 단계 = 팀장들과 회의실에 모여 팀 산출물을 통합(🤝 팀간 회의). 무대(ceoIntegrating)와
+  // 타임라인이 일치하도록 'integrate' 를 emit — 'review'(🔎 검토)는 아래 데이터 검증 패스에서만 쓴다.
+  // (목차 microJSON 구간[ceo-synth 블록 전]도 OfficeView/working 이 phase==='integrate' 를 통합으로 인정.)
+  bus.emit('phase', { team_id: '_ceo', phase: 'integrate' });
 
   // --- 최종 산출물: 섹션별 생성으로 충분한 분량(10p+) 확보 ---
   //  단일 합성은 로컬 모델이 ~5~6k 토큰에서 조기 종결해 분량이 1~2p 에 묶인다(brevity·캡 해제로도 동일).

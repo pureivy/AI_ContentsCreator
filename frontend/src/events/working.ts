@@ -16,12 +16,12 @@
 import { AgentNode, UIState } from "./types";
 
 // Phases in which a member / a lead is actually "working" (OfficeView의 안무 기준).
-// A lead also works while reporting to the CEO (report_ceo); a member never does.
 // 'work' phase(팀원 작업 구간)에는 팀장이 실제 LLM 호출 없이 자리에서 대기하므로
 // LEAD_WORK_PHASES에서 'work'를 뺀다 — 팀원만 working으로 집계/표시되게 한다.
+// (brief·report_ceo 는 백엔드가 emit 하지 않는 phase 라 제외 — 통합은 ceoIntegrating 로 따로 게이트.)
 export const MEMBER_WORK_PHASES = new Set(["assign", "work", "debate", "report"]);
 export const LEAD_WORK_PHASES = new Set([
-  "brief", "assign", "decompose", "debate", "report", "report_ceo",
+  "assign", "decompose", "debate", "report",
 ]);
 
 // spawned→thinking 승격: 런이 살아있고 실제 참여자(placeholder 아님)면 "spawned"를
@@ -36,7 +36,7 @@ export function isWorkingNow(a: AgentNode, s: WorkingSlice): boolean {
   const running = s.status === "running";
   if (!running || a.placeholder) return false;
   const ph = s.phases;
-  const ceoIntegrating = !!s.blocks["ceo-synth"];
+  const ceoIntegrating = !!s.blocks["ceo-synth"] || s.phases["_ceo"] === "integrate";
   if (a.level === "ceo") {
     return ph["_ceo"] === "delegate" || ph["_ceo"] === "review" || ceoIntegrating;
   }

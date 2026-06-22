@@ -22,7 +22,7 @@ import { LEAD_WORK_PHASES, MEMBER_WORK_PHASES } from "../events/working";
 import { fetchCompany, CompanyInfo, RoleInfo } from "../api";
 import Avatar from "./Avatar";
 import { personLabel } from "./agentVisual";
-import { clusterBelow, meetingCircle, REST_SPOTS, CORRIDOR_SPOTS, STROLL, MEETING_SEATS, AVATAR_W, AVATAR_H, Pt } from "./officeChoreography";
+import { clusterBelow, meetingCircle, REST_SPOTS, CORRIDOR_SPOTS, STROLL, confMeetingSeats, AVATAR_W, AVATAR_H, Pt } from "./officeChoreography";
 
 // Fixed 4:3 design canvas. Everything inside is laid out against this constant
 // size (positions in %, furniture in px), then the whole floor is uniformly
@@ -188,6 +188,8 @@ function layout(
   const live = agentOrder.map((id) => agents[id]).filter((a): a is AgentNode => !!a);
   const ceo = live.find((a) => a.level === "ceo");
   const leads = live.filter((a) => a.level === "lead");
+  // 팀간 회의(CEO 통합) 좌석 — 회의 테이블 둘레로 CEO(상석)+팀장들이 모여 앉는다(팀장 수에 맞춰 동적).
+  const confMeet = confMeetingSeats(leads.length);
   const members = live.filter((a) => a.level === "member");
   const placed: Placed[] = [];
 
@@ -221,8 +223,8 @@ function layout(
       agent: ceo, glyph: glyphFor("ceo", ceo.agent_id, ceo.persona?.role),
       ring: ceoWorking ? RING.thinking : RING.spawned,
       deskX: CEO_DESK.x, deskY: CEO_DESK.y,
-      x: ceoIntegrating ? MEETING_SEATS[0].x : CEO_DESK.x,
-      y: ceoIntegrating ? MEETING_SEATS[0].y : CEO_DESK.y,
+      x: ceoIntegrating ? confMeet.ceo.x : CEO_DESK.x,
+      y: ceoIntegrating ? confMeet.ceo.y : CEO_DESK.y,
       bubble,
       thinking: ceoWorking,
       isCritic: false, badge: synthesisReady ? "📄" : "", roomLabel: "", face: "up",
@@ -235,8 +237,8 @@ function layout(
   const { geom: zoneGeom } = teamZones(teamOrder);
 
   // Leads: at their team-zone desk by default. Choreography by phase:
-  //  brief → CEO desk (지시 받음) · decompose → own desk (분해) · debate → team table
-  //  head · report → own desk (검토) · integrate(ceoIntegrating) → CEO desk (보고).
+  //  decompose → own desk (분해) · assign → own desk (배정) · debate → team table head
+  //  (회의 주재) · report → own desk (검토) · integrate(ceoIntegrating) → 회의실 팀간 회의.
   leads.forEach((lead, j) => {
     const tid = lead.team ?? "";
     // 비서: 하단 팀존이 아니라 상단 비서실에 고정 — CEO 처럼 자리를 지킨다. 팀원이 없어 비서(팀장)가
@@ -268,14 +270,8 @@ function layout(
     let seat: { x: number; y: number };
     let bubble: string;
     if (interTeam) {
-      seat = MEETING_SEATS[j + 1] ?? ceoVisitorSeat(j, leads.length); // 회의실 팀간 회의
+      seat = confMeet.leads[j] ?? ceoVisitorSeat(j, leads.length); // 회의실 팀간 회의(테이블 둘러앉기)
       bubble = "🤝 팀간 회의";
-    } else if (ph === "brief") {
-      seat = { x: 48, y: 18 };                     // CEO실([47~67]) 에서 지시 받는 중
-      bubble = "📋 지시 받는 중";
-    } else if (ph === "report_ceo") {
-      seat = { x: 48, y: 20 };                     // CEO실에서 사장에게 산출물 보고
-      bubble = "📋 사장 보고";
     } else if (ph === "assign") {
       seat = { x: deskX, y: deskY };               // 자기 자리에서 팀원에게 과제 배정
       bubble = "📌 과제 배정 중";
@@ -370,7 +366,7 @@ function layout(
         if (st === "spoke" || st === "converged") { bubble = "☕ 작업 완료"; thinking = false; }
         else if (st === "thinking") { bubble = "✍️ 작업 중"; thinking = true; }   // 실제 스트리밍 중
         else { bubble = "⏳ 대기"; thinking = false; }                            // 아직 차례 안 옴(직렬 대기/placeholder)
-      } else if (engaged && (ph === "brief" || ph === "decompose")) {  // 팀장 지시/분해 중 → 대기
+      } else if (engaged && ph === "decompose") {  // 팀장 분해 중 → 자기 자리에서 대기
         pos = desk; bubble = ""; thinking = false;
       } else if (engaged && ph) {                    // idle 등 → 자기 자리
         pos = desk; bubble = statusText(m, running); thinking = st === "thinking";
@@ -546,8 +542,10 @@ export default function OfficeView() {
     // frozen in the "🤝 팀간 회의" pose forever AFTER the run finishes. A done run is idle.
     if (status !== "running") return false;
     const ceo = agentOrder.map((id) => agents[id]).find((a) => a?.level === "ceo");
-    return !!ceo && (ceo.status === "thinking" || !!blocks["ceo-synth"]);
-  }, [agents, agentOrder, blocks, status]);
+    // 'integrate' phase 도 통합으로 인정 — 합성 시작 직후 목차 microJSON 구간(ceo-synth 블록 생성 전)에
+    // 타임라인은 '🤝 통합'인데 CEO가 자리에서 멍하니 있고 팀장이 안 모이는 '깜빡임'을 막는다.
+    return !!ceo && (ceo.status === "thinking" || !!blocks["ceo-synth"] || phases["_ceo"] === "integrate");
+  }, [agents, agentOrder, blocks, status, phases]);
 
   const placed = useMemo(() => {
     const running = status === "running";
@@ -614,8 +612,9 @@ export default function OfficeView() {
       setWander((prev) => {
         // 잡담은 (A) 동료의 '자리'로 찾아가거나 (B) 팀 경계에서 양 팀이 한 명씩 만난다.
         const active = new Set(teamOrder.filter((t) => phases[t] && phases[t] !== "idle"));
-        const nTeams = Math.max(teamOrder.length, 1);
-        const zw = (100 - 4) / nTeams;               // 팀존 폭(경계 x 계산용)
+        // 실제(가중) 팀존 기하 — 균등분할이 아니라 teamZones 의 가중 폭·비서실 제외를 그대로 써야
+        // 경계 잡담 두 사람이 레이아웃과 동일한 '진짜' 팀 경계에 마주 선다(layout 과 1:1).
+        const { ids: floorTeams, geom: wgeom } = teamZones(teamOrder);
         const restSpots: Pt[] = [...REST_SPOTS];     // 휴게실 휴식
         const corridor: Pt[] = [...CORRIDOR_SPOTS];  // 중앙 로비(로고) 산책/통화
 
@@ -676,9 +675,9 @@ export default function OfficeView() {
             }
             // (B) 팀간 경계 잡담: 인접 두 팀에서 한 명씩 뽑아 경계선 양쪽(각자 본인 팀 쪽)에
             //     마주 세운다 — 둘 다 남의 사무실에 있지 않고, 한 명은 본인 팀에서.
-            if (!done && teamOrder.length >= 2) {
-              const boundary = 2 + zw;                 // 첫 두 팀(전략기획팀|경영지원팀)의 경계 x
-              const leftT = teamOrder[0], rightT = teamOrder[1];
+            if (!done && floorTeams.length >= 2) {
+              const leftT = floorTeams[0], rightT = floorTeams[1];
+              const boundary = (wgeom[leftT]?.x ?? 2) + (wgeom[leftT]?.w ?? 47); // 두 팀의 실제 경계 x
               const left = atDesk.find((k) => deskPos[k] && deskPos[k].team === leftT);
               const right = atDesk.find((k) => k !== left && deskPos[k] && deskPos[k].team === rightT);
               if (left && right) {
