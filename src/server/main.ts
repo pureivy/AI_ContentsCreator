@@ -43,6 +43,9 @@ import { buildBriefing } from '../autonomy/briefing';
 import { buildHwpx, hwpxAvailable } from '../export/hwpx';
 import { extractText, isSupportedExt } from '../tools/extract';
 import { classifyAndAssign, getStatuses, reassign, setIngestStatus } from '../tools/classify';
+import { transcribe, sttAvailable } from '../voice/stt';
+import { synthesize, listKoreanVoices, ttsAvailable } from '../voice/tts';
+import { getVoiceSettings } from '../voice/setting';
 
 interface RunHandle {
   status: 'running' | 'done' | 'error' | 'cancelled';
@@ -1008,6 +1011,50 @@ app.get('/runs/:id/export/hwpx', hwpxHandler);
 app.post('/runs/:id/resume', (c) =>
   c.json({ error: '중단된 런의 자동 재구동은 아직 지원되지 않습니다. "다시 보기"로 기록을 열어 진행 과정·산출물을 확인하세요.' }, 501));
 
+// --- 음성 입출력 (Voice I/O) ---
+const sttHandler = async (c: Context): Promise<Response> => {
+  if (!sttAvailable()) return c.json({ error: 'STT 미설치(mlx_whisper/ffmpeg 필요)' }, 503);
+  const body = await c.req.parseBody({ all: true });
+  const files = ([] as unknown[]).concat(body['files'] ?? []).filter((f): f is File => f instanceof File);
+  const f = files[0];
+  if (!f) return c.json({ error: '오디오 파일 없음' }, 400);
+  if (f.size > 25_000_000) return c.json({ error: '오디오가 너무 큼(25MB 초과)' }, 400);
+  try {
+    const text = await transcribe(Buffer.from(await f.arrayBuffer()), { signal: c.req.raw.signal });
+    return c.json({ text });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+};
+
+const ttsHandler = async (c: Context): Promise<Response> => {
+  if (!ttsAvailable()) return c.json({ error: 'TTS 미설치(say/ffmpeg 필요)' }, 503);
+  const body = await c.req.json<{ text?: string; voice?: string }>().catch(() => ({} as { text?: string; voice?: string }));
+  const text = (body.text ?? '').trim();
+  if (!text) return c.json({ error: '텍스트 없음' }, 400);
+  try {
+    const mp3 = await synthesize(text, { voice: body.voice, signal: c.req.raw.signal });
+    return new Response(new Uint8Array(mp3), {
+      headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' },
+    });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+};
+
+const voicesHandler = async (c: Context): Promise<Response> => {
+  const available = ttsAvailable();
+  const voices = available ? await listKoreanVoices() : [];
+  return c.json({ available, voices, defaultVoice: getVoiceSettings().ttsVoice });
+};
+
+app.post('/voice/stt', sttHandler);
+app.post('/api/voice/stt', sttHandler);
+app.post('/voice/tts', ttsHandler);
+app.post('/api/voice/tts', ttsHandler);
+app.get('/voice/voices', voicesHandler);
+app.get('/api/voice/voices', voicesHandler);
+
 // ============================================================
 // 정적 — React 프론트(/) + 경량 자체 UI(/lite)
 // ============================================================
@@ -1062,7 +1109,7 @@ if (CONFIG.dailyBriefingTime) {
 void stopDaily;
 
 const port = CONFIG.port;
-serve({ fetch: app.fetch, hostname: CONFIG.host, port }, (info) => {
+if (!process.env.VITEST) serve({ fetch: app.fetch, hostname: CONFIG.host, port }, (info) => {
   // eslint-disable-next-line no-console
   console.log(`[gepa-ai-office] http://${CONFIG.host}:${info.port}  (backend=${CONFIG.backend}, ollama=${CONFIG.ollamaBaseUrl})  · React=/ · lite=/lite`);
 });
