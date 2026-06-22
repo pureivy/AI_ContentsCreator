@@ -19,6 +19,10 @@ const STATUS_RING: Record<string, string> = {
   spoke: "#3fb950",
   converged: "#3fb950",
   failed: "#f85149",
+  // 지식 노드(공유지식·역할팀 학습) 전용 — 작업 중 '생성 중'(앰버) → finalize 적재 후 '적재완료'(그린).
+  "생성 중": "#d29922",
+  "적재완료": "#3fb950",
+  "대기": "#6b7a99",
 };
 
 function NodeCard({ data }: { data: any }) {
@@ -60,7 +64,7 @@ function NodeCard({ data }: { data: any }) {
         </div>
       )}
       {data.kind === "wiki" && (
-        <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4, color: "#3fb950" }}>{data.count}</div>
+        <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4, color: ring }}>{data.count}</div>
       )}
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </motion.div>
@@ -80,6 +84,8 @@ function orgGraph(
   lessonCount: number,
   wikiCount: number,
   running: boolean,
+  wikiStatus: string,
+  lessonStatus: string,
 ): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
@@ -141,14 +147,14 @@ function orgGraph(
     type: "card",
     position: { x: rightX, y: 160 },
     draggable: true,
-    data: { kind: "wiki", kindLabel: "LLM 위키", role: "공유 지식", status: "spoke", count: wikiCount },
+    data: { kind: "wiki", kindLabel: "LLM 위키", role: "공유 지식", status: wikiStatus, count: wikiCount },
   });
   nodes.push({
     id: "lessons",
     type: "card",
     position: { x: rightX, y: 360 },
     draggable: true,
-    data: { kind: "wiki", kindLabel: "교훈 메모리", role: "역할·팀 학습", status: "spoke", count: lessonCount },
+    data: { kind: "wiki", kindLabel: "교훈 메모리", role: "역할·팀 학습", status: lessonStatus, count: lessonCount },
   });
   // 두 지식 노드(공유지식·팀학습)를 오케스트레이터(CEO)에서 항상 연결 — 이전엔 lessons 노드가 어떤 엣지도
   // 없어 고아였고, wiki 도 팀원에서만 연결돼(팀원 없으면 끊김) spoke 가 안 보였다.
@@ -257,21 +263,32 @@ export default function AgentGraph() {
   const teams = useStore((s) => s.teams);
   const teamOrder = useStore((s) => s.teamOrder);
   const lessons = useStore((s) => s.lessons);
+  const messages = useStore((s) => s.messages); // 작업 중 '생성 중' 예고 카운트 산출용(팀 산출물·멤버 발언)
 
   const { nodes, edges } = useMemo(() => {
     const running = status === "running";
-    // 노드 카운트 = **이번 세션이 생성한 양**(영속 누적 총량 아님). LLM위키 = 이번 런이 작성한 위키 페이지
-    // 수(s.wikiOrder), 교훈 = 이번 런 reflect 가 emit 한 lesson_learned 수(s.lessons). 런 중/직후 생성량을
-    // 그대로 보여준다(사용자 요청 — 세션별). 자율런 자동관전 시에도 그 런의 생성량이 보인다.
-    const effWiki = wikiCount;
-    const effLessons = lessons.length;
+    // 노드 카운트 = **이번 세션이 생성한 양**(영속 누적 총량 아님). 공유지식/교훈은 finalize(런 끝)에만 실제
+    // 적재되므로(wiki_page_written·lesson_learned) 작업 중엔 0 이다. 두뇌 적재는 그대로 두고(오염 0) UI 만 개선:
+    // 작업 중엔 직원 산출물(messages)로 '생성 중' 예고 카운트를 보여주고, finalize 적재 후 실제 수로 확정한다.
+    // 직원 산출물만 — 비평(critic 검토)과 사용자 본인 입력(user)은 제외.
+    const isWork = (mv: string): boolean => mv !== "critique" && mv !== "user";
+    const workOutputs = messages.filter((m) => isWork(m.move)).length; // 팀산출물·멤버발언·반박
+    const contributors = new Set(
+      messages.filter((m) => m.agent_id && m.agent_id !== "user" && isWork(m.move)).map((m) => m.agent_id),
+    ).size;
+    const wikiIngested = wikiCount > 0;
+    const lessonsIngested = lessons.length > 0;
+    const effWiki = wikiIngested ? wikiCount : running ? workOutputs : 0;
+    const effLessons = lessonsIngested ? lessons.length : running ? contributors : 0;
+    const wikiStatus = wikiIngested ? "적재완료" : running ? "생성 중" : "대기";
+    const lessonStatus = lessonsIngested ? "적재완료" : running ? "생성 중" : "대기";
 
     // ---- org mode: nested CEO -> 팀장 -> 팀원 organization chart ----
     // teamOrder populates on team_spawned (before any member spawns), so it is a
     // reliable early signal that this run is an org run. The debate path below is
     // left untouched for RUN_MODE=debate.
     if (teamOrder.length > 0) {
-      return orgGraph(agents, agentOrder, blocks, teamOrder, teams, effLessons, effWiki, running);
+      return orgGraph(agents, agentOrder, blocks, teamOrder, teams, effLessons, effWiki, running, wikiStatus, lessonStatus);
     }
 
     const specialists = agentOrder.filter((id) => id.startsWith("agent"));
@@ -290,7 +307,7 @@ export default function AgentGraph() {
     // wiki node (right)
     nodes.push({
       id: "wiki", type: "card", position: { x: 760, y: 200 }, draggable: true,
-      data: { kind: "wiki", kindLabel: "LLM 위키", role: "공유 지식", status: "spoke", count: effWiki },
+      data: { kind: "wiki", kindLabel: "LLM 위키", role: "공유 지식", status: wikiStatus, count: effWiki },
     });
 
     const lane = hasAnalyst ? ["analyst"] : specialists;
@@ -339,7 +356,7 @@ export default function AgentGraph() {
     }
 
     return { nodes, edges };
-  }, [agents, agentOrder, blocks, wikiCount, status, teams, teamOrder, lessons]);
+  }, [agents, agentOrder, blocks, wikiCount, status, teams, teamOrder, lessons, messages]);
 
   return (
     <div style={{ width: "100%", height: "100%" }}>
