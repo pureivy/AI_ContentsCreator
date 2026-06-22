@@ -14,6 +14,7 @@ import { CONFIG } from '../config';
 import { ollama } from '../llm/ollama';
 import { getSystemSpecs, autoAssignModels } from '../llm/models';
 import { tierOverrides } from '../llm/setting';
+import { getCompany } from '../agents/company-loader';
 
 export interface AutoCycleDeps {
   /** 사이클 주기(ms). ≤0 이면 스케줄러는 no-op. */
@@ -90,15 +91,24 @@ function readSafe(p: string): string {
 const recentAuto: string[] = [];
 
 /**
- * 위키 인덱스 + CEO 결정 로그를 보고 '다음에 하면 가치있는 단일 작업'을 micro 로 한 줄 제안.
- * 지식베이스가 비어 있으면 null(아무 일도 안 함). 모델은 RAM 예산으로 자체 해석.
+ * '다음에 하면 가치있는 단일 작업'을 micro 로 한 줄 제안 — **조직 헌장(팀·업무 범위)에 그라운딩**한다.
+ *
+ * 핵심: 과거엔 위키 인덱스를 주제 소스로 썼는데, 인덱스는 과거 자율런이 적재한 '특정 기업의 기술·공정 자료'
+ * (염폐수 수질·지하수 관정·제련 공정 등)로 가득 차 있어, 플래너가 기관 업무 밖 주제로 드리프트했다(실측: AUTO
+ * 주제 대부분이 ㈜OO 공정 디테일). + 자율런→그 기업 자료 재적재→인덱스 더 편향 의 피드백 루프. 그래서 인덱스를
+ * 주제 '생성'에서 제외하고, 팀 focus(기관이 실제 담당하는 업무)를 재료로, 최근 수행 주제만 '중복 회피'로 쓴다.
  */
 export async function proposeAutonomousTask(signal?: AbortSignal): Promise<string | null> {
-  // 컨텍스트는 짧게 — 이 로컬 모델은 입력이 크면(>~3k자) 과도하게 '사고'(thinking 채널)해 정작 답(content)을
-  // 비워버린다(실측: 1500자 → 정상 제목, 6000자 → content 0자). 인덱스 상단 엔티티 + 최근 결정 일부면 충분.
-  const idx = readSafe(path.join(CONFIG.wikiDir, 'index.md')).slice(0, 1600);
-  const dec = readSafe(path.join(CONFIG.dataDir, '_shared', 'decisions.md')).slice(-700);
-  if (!idx.trim() && !dec.trim()) return null; // 종잣거리 없음
+  const c = getCompany();
+  // 팀·업무 범위(헌장) — 이게 주제 생성의 재료다(기관 정체성·업무가 focus 에 담겨 있음).
+  const teamLines = (c.teams ?? [])
+    .map((t) => `- ${t.name}: ${(t.lead?.specialty || '').replace(/\s+/g, ' ').slice(0, 200)}`)
+    .filter((l) => l.length > 6)
+    .join('\n');
+  if (!teamLines.trim()) return null; // 조직 구성이 없으면 제안 불가
+
+  // 중복 회피용으로만 최근 수행 주제(결정 로그)를 짧게 — '생성 재료'가 아니라 '피할 목록'.
+  const done = readSafe(path.join(CONFIG.dataDir, '_shared', 'decisions.md')).slice(-500);
 
   const installed = await ollama.listModels();
   if (installed.length === 0) return null;
@@ -112,19 +122,25 @@ export async function proposeAutonomousTask(signal?: AbortSignal): Promise<strin
       {
         role: 'system',
         content:
-          '너는 자율 운영 플래너다. 아래 지식베이스 인덱스와 최근 결정 로그를 보고, 조직이 다음에 수행하면 ' +
-          '가치있는 "단일" 작업 주제를 제안하라. 이미 충분히 다뤄진 주제·최근 자율주제는 피하고, 구체적이고 ' +
-          '실행 가능한 한 문장만 출력하라(따옴표·머리말·설명 없이 제목 한 줄).',
+          '너는 이 공공기관의 자율 운영 플래너다. 아래 [팀·업무 범위]가 이 기관이 실제로 담당하는 업무다. ' +
+          '이 기관·팀이 다음에 수행하면 가치있는 "단일" 작업 주제를 반드시 이 업무 범위 안에서 제안하라.\n' +
+          '- 기관의 정책·지원사업 기획/효과분석, 기관 전략·경영평가 대응, 예산·회계·기금·계약·인사 등 기관 운영 관점이어야 한다.\n' +
+          '- 기업을 "지원"하는 정책·사업은 이 기관의 업무다(예: 입주기업 전기요금 부담 완화 지원방안). 그러나 특정 ' +
+          '민간기업의 내부 기술·공정 문제(수질·폐수·설비·제련/제조 공정 개선, 지하수 관정 개발 등)는 그 기업의 일이지 ' +
+          '이 기관의 업무가 아니다 — 절대 제안하지 마라.\n' +
+          '- [최근 수행]·[최근 자율주제]와 중복되는 주제는 피하라.\n' +
+          '- 따옴표·머리말·설명 없이 제목 한 줄만 출력하라.',
       },
       {
         role: 'user',
         content:
-          `[위키 인덱스]\n${idx || '(비어있음)'}\n\n[최근 결정]\n${dec || '(없음)'}\n\n` +
+          `[팀·업무 범위]\n${teamLines}\n\n` +
+          `[최근 수행 — 중복 회피]\n${done || '(없음)'}\n\n` +
           `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}`,
       },
     ],
     maxOutputTokens: 120,
-    temperature: 0.5,
+    temperature: 0.6,
     signal,
   });
   const topic = (res.text.trim().split('\n')[0] ?? '').replace(/^["'\-•\s]+/, '').slice(0, 120).trim();
