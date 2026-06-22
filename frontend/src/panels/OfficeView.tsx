@@ -490,17 +490,28 @@ export default function OfficeView() {
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
+    // 모바일/태블릿(≤900px)에선 .office-root padding 이 8px(모바일 CSS)이라 pad 가 작다.
+    const MOBILE_MQ = "(max-width: 900px)";
+    const LEGIBLE = 0.42; // 폭맞춤 scale 이 이보다 작으면(아바타 < ~44px) 글자가 안 읽힌다.
     const compute = () => {
-      const pad = 36; // .office-root padding (18px × 2)
+      const mobile = window.matchMedia(MOBILE_MQ).matches;
+      const pad = mobile ? 16 : 36; // .office-root padding ×2 (모바일 8px·2, 데스크톱 18px·2)
       const availW = el.clientWidth - pad;
       const availH = el.clientHeight - pad;
-      const s = Math.min(availW / BASE_W, availH / BASE_H);
+      const fitW = availW / BASE_W, fitH = availH / BASE_H;
+      // 모바일에서 폭맞춤이 너무 작아 글자가 안 읽히면(폰: fitW≈0.22) '높이맞춤'으로 키워 가독 확보 →
+      // 가로가 뷰포트보다 넓어지면 좌우 패닝(.office-root overflow-x:auto + 음수마진 footprint 보정).
+      // 폭맞춤이 충분하면(태블릿: fitW≈0.46) 그대로 전체 오피스 표시(패닝 불필요). 데스크톱은 기존 min().
+      const s = mobile && fitW < LEGIBLE && fitH > fitW ? fitH : Math.min(fitW, fitH);
       setScale(s > 0 && Number.isFinite(s) ? s : 1);
     };
     compute();
     const ro = new ResizeObserver(compute);
     ro.observe(el);
-    return () => ro.disconnect();
+    // 회전·뷰포트 경계 변화 시 ResizeObserver 가 안정적으로 재발화하지 않을 수 있어 matchMedia 로 보강.
+    const mq = window.matchMedia(MOBILE_MQ);
+    mq.addEventListener("change", compute);
+    return () => { ro.disconnect(); mq.removeEventListener("change", compute); };
   }, []);
 
   const { agents, agentOrder, teamOrder, teams } = useMemo(() => {
@@ -773,7 +784,10 @@ export default function OfficeView() {
 
   return (
     <div className="office-root" ref={rootRef}>
-      <div className="office-floor" style={{ transform: `scale(${scale})` }}>
+      {/* --office-scale: 모바일 @media 가 말풍선·이름표를 역보정(scale 의 역수)해 ≥10px 가독 확보.
+          데스크톱은 이 변수를 읽는 규칙이 없어 inert(>900px 무변경). */}
+      <div className="office-floor"
+        style={{ transform: `scale(${scale})`, ["--office-scale" as string]: scale }}>
         {/* 회의실 (conference room) — top-left */}
         <div className="office-room meeting-room" style={roomStyle(ROOMS.conf)}>
           <span className="office-room-label">🗣️ 회의실</span>

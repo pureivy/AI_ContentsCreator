@@ -360,6 +360,8 @@ button.upload-retry:hover { background: var(--panel2); }
   background: var(--bg-neutral); border-radius: var(--radius-10); padding: 3px;
 }
 .viewtoggle { margin-left: 9px; }
+/* 데스크톱: 래퍼를 투명화(자식이 topbar 직속처럼 동작) → 기존 레이아웃 무변경. 폰에서만 한 줄 탭바로. */
+.viewtabs { display: contents; }
 .topbar-actions .btn, .viewtoggle button {
   background: transparent; border: none; border-radius: var(--radius-8);
   font-size: 10.5px; font-weight: 600; padding: 5px 8px; white-space: nowrap;  /* ~20% 축소 */
@@ -1260,3 +1262,96 @@ button.upload-retry:hover { background: var(--panel2); }
 .msg-target { font-size: 11px; font-weight: 600; color: var(--muted); white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; max-width: 48%; }
 .msg-target-arrow { color: var(--muted); margin: 0 3px 0 2px; }
+
+/* =========================================================================
+   MOBILE / RESPONSIVE OVERRIDES
+   데스크톱(>900px)은 이 블록 전체가 미적용 — base 규칙 100% 보존(전부 @media 오버라이드).
+   전략: '오피스 우선(가독 최우선) + 패널 세로 스택 스크롤'. 오피스는 fit-height(OfficeView
+   compute()) 로 키우고, 말풍선·이름표는 --office-scale 의 역수로 font-size 를 역보정해 ≥10px 가독.
+   (말풍선은 framer-motion 이 inline transform 을 점유하므로 transform 이 아닌 font-size 로 역보정.)
+   ========================================================================= */
+
+/* ---- (1) ≤900px 폰·태블릿: 다중 컬럼 그리드 완화(아래 (2) 블록의 .stage 스택과 함께 적용) ---- */
+@media (max-width: 900px) {
+  /* 상세 뷰 .panels(3·4컬럼) → 세로 스택 */
+  .panels { grid-template-columns: none; display: flex; flex-direction: column; overflow-y: auto; }
+  .panels .graph-panel { min-height: 56vh; }
+  /* 드래그 핸들(터치 무동작) 제거 */
+  .stage-split { display: none; }
+  /* 설정/모달 그리드 1컬럼 */
+  .apikeys-grid { grid-template-columns: 1fr; max-width: none; }
+  .emp-dir { grid-template-columns: 1fr; }
+}
+
+/* ---- (2) ≤900px 폰·태블릿: 오피스 우선 + 세로 스택 ----
+   (데스크톱 3컬럼은 고정 사이드(300+360px) 때문에 ~900px 이하에선 오피스가 찌부됨 → 스택으로 전환) */
+@media (max-width: 900px) {
+  /* 2-a. topbar: 줄바꿈 허용(브랜드·badge·액션 1줄, 탭 다음 줄) */
+  .topbar { flex-wrap: wrap; gap: 6px 8px; padding: 7px 10px; }
+  .brand { font-size: 14px; }              /* 데스크톱 ~20% 축소 역전 */
+  .llm-badge { font-size: 11px; }
+  .topbar .hud { display: none; }          /* eta/budget/conv — 폰에선 생략(가로 예산 확보) */
+  /* viewtabs: 두 그룹을 한 줄 가로스크롤 탭바로(세로 예산 절약). 탭타깃 ≥44px */
+  .viewtabs { display: flex; flex: 1 1 100%; flex-wrap: nowrap; gap: 6px;
+              overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .viewtoggle { margin-left: 0; flex: 0 0 auto; white-space: nowrap; }
+  .viewtoggle button { min-height: 44px; padding: 8px 13px; font-size: 13px; flex: 0 0 auto; }
+
+  /* 2-b. DashboardBar(office-stage 내) — 데스크톱 ~20% 축소 역상향 + 가로스크롤 */
+  .dashboard-bar { flex-wrap: nowrap; }
+  .dash-value { font-size: 15px; }
+  .dash-label { font-size: 11px; }
+  .dash-icon  { font-size: 16px; }
+  .dash-company-txt b { font-size: 13px; }
+  .dash-company { position: sticky; left: 0; z-index: 1; background: var(--panel); }
+  .dash-chip { padding: 7px 12px; }
+
+  /* 2-c. .stage: 인라인 grid 무력화 → 세로 스택 스크롤(오피스 먼저, 패널은 아래로).
+     flex 자식은 기본 flex-shrink:1 이라 스크롤 컨테이너 안에서 찌그러진다 → flex:0 0 auto 로
+     각자 제 높이를 지키게 하고 .stage 가 세로 스크롤하게 한다(오피스가 380px 로 줄던 버그 차단). */
+  .stage { display: flex; flex-direction: column; overflow-x: hidden; overflow-y: auto; }
+  .stage-main { order: -1; flex: 0 0 auto; height: 78vh; height: 78dvh; overflow: hidden; }
+  .sidechat { order: 1; flex: 0 0 auto; overflow: visible; border-top: 3px solid var(--border); }
+  .sidechat-scroll { overflow: visible; }
+  .outputs { order: 2; flex: 0 0 auto; overflow: visible; border-top: 3px solid var(--border); padding-top: 8px; }
+  .outputs-reopen { position: static; order: 2; width: 100%; border-radius: 0; min-height: 44px;
+                    border: none; border-top: 3px solid var(--border); padding: 13px; text-align: center; }
+
+  /* 2-d. 오피스 바닥: fit-height → 가로는 뷰포트보다 넓어 좌우 패닝(네이티브 스와이프).
+     transform:scale 은 '레이아웃 크기'를 안 바꿔(스크롤 영역=원본 1664, 스케일 콘텐츠는 가운데로
+     모임 → scroll 0 에서 빈 좌측만 보임). 그래서 transform-origin 을 top-left 로 두고, 음수 마진으로
+     레이아웃 footprint 를 '실제 표시 크기(=scale×원본)'만큼으로 접어 콘텐츠가 좌상단부터 보이게 한다. */
+  .office-root { display: block; overflow-x: auto; overflow-y: hidden;
+                 -webkit-overflow-scrolling: touch; padding: 8px; }
+  .office-floor { transform-origin: top left;
+                  margin-right: calc(-1664px * (1 - var(--office-scale, 1)));
+                  margin-bottom: calc(-960px * (1 - var(--office-scale, 1))); }
+  /* ★ 가독 핵심 — 말풍선·이름표 font-size 를 scale 의 역수로 역보정(화면 ≈11px).
+     font-size = 11 / scale, clamp 으로 11~26px 캡(과확대·겹침 방지). transform 아님(motion 충돌 회피). */
+  .office-bubble.status-chip { font-size: clamp(11px, calc(11px / var(--office-scale, 1)), 30px); }
+  .office-name { font-size: clamp(11px, calc(11px / var(--office-scale, 1)), 30px); max-width: 230px; }
+  /* 비활성(resting: 휴식·완료·잡담 등) 말풍선은 폰에서 숨겨 클러터·겹침 최소 — 작업중(active)만 노출 */
+  .office-bubble.status-chip.resting { display: none; }
+
+  /* 2-e. 컴포저: 입력 16px(iOS 포커스 줌 방지) + 탭타깃 ≥44px */
+  .chat-input { padding: 10px; }
+  .chat-input input, .chat-input textarea { font-size: 16px; }
+  .chat-input .btn { min-height: 44px; }
+
+  /* 2-f. 풀스크린 설정 뷰 스크롤 보장 */
+  .employees-stage { overflow-y: auto; }
+
+  /* 2-g. 모달 → 하단 시트 */
+  .metric-overlay { align-items: flex-end; }
+  .metric-modal { width: 100%; max-width: none; height: 88vh; height: 88dvh; border-radius: 16px 16px 0 0; }
+  .metric-x, .metric-modal .close { min-height: 44px; min-width: 44px; }
+}
+
+/* ---- (3) ≤400px 소형 폰: 크롬 한 단계 더 압축(가독 바닥값은 유지) ---- */
+@media (max-width: 400px) {
+  .brand { font-size: 0; }
+  .brand::before { content: "🏢"; font-size: 17px; }
+  .dashboard-bar { gap: 4px; padding: 6px 8px; }
+  .dash-chip { padding: 6px 9px; }
+  .chat-input { flex-wrap: wrap; }
+}

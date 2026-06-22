@@ -1389,6 +1389,9 @@ export default function App() {
         <button className="btn" onClick={() => setShowBrain(true)}
           title="제2의 두뇌 — 위키 지식 그래프(옵시디언 뷰)">🧠 두뇌</button>
         </div>
+        {/* viewtabs: 데스크톱은 display:contents 라 두 그룹이 그대로 topbar 직속(무변경).
+            폰(≤640)에선 한 줄 가로스크롤 탭바로 묶여 세로 예산을 절약한다. */}
+        <div className="viewtabs">
         <div className="viewtoggle">
           <button className={view === "office" ? "active" : ""} onClick={() => setView("office")}>🏢 사무실</button>
           <button className={view === "graph" ? "active" : ""} onClick={() => setView("graph")}>🔗 그래프</button>
@@ -1400,6 +1403,7 @@ export default function App() {
           <button className={view === "llm" ? "active" : ""}
             onClick={() => { setView("llm"); fetchLlmStatus().then(setLlmStatus); }}>🧩 LLM</button>
           <button className={view === "mcp" ? "active" : ""} onClick={() => setView("mcp")}>🧷 MCP</button>
+        </div>
         </div>
         <div className={`status status-${s.status}`}>
           {isReplay ? "리플레이" : STATUS_LABEL[s.status] ?? s.status}
