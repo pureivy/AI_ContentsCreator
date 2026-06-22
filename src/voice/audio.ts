@@ -16,10 +16,17 @@ export const audio = {
       child.stdout?.on('data', (d: Buffer) => chunks.push(d));
       child.stderr?.on('data', (d: Buffer) => errChunks.push(d));
       child.on('error', (e) => { clearTimeout(timer); reject(e); });
-      child.on('close', (code) => {
+      child.on('close', (code, signal) => {
         clearTimeout(timer);
         if (code === 0) resolve({ stdout: Buffer.concat(chunks), code: 0 });
-        else reject(new Error(`${bin} 종료코드 ${code}: ${Buffer.concat(errChunks).toString('utf-8').slice(0, 500)}`));
+        else {
+          const stderr = Buffer.concat(errChunks).toString('utf-8').slice(0, 500);
+          if (code !== null) {
+            reject(new Error(`${bin} 종료코드 ${code}: ${stderr}`));
+          } else {
+            reject(new Error(`${bin} 신호종료(${signal}): ${stderr}`));
+          }
+        }
       });
       if (opts.input) { child.stdin?.write(opts.input); child.stdin?.end(); }
     });
