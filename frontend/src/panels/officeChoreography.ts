@@ -8,7 +8,7 @@
 
 export interface Pt { x: number; y: number }
 
-export const AVATAR_W = (104 / 1280) * 100; // ≈ 8.13 (% of canvas width)
+export const AVATAR_W = (104 / 1664) * 100; // ≈ 6.25 (% of canvas width; 캔버스 가로 30% 확대 1280→1664)
 export const AVATAR_H = (104 / 960) * 100;  // ≈ 10.83 (% of canvas height)
 const HGAP = AVATAR_W + 1.4;                // ≈ 9.5  — min horizontal center spacing
 const VGAP = AVATAR_H + 1.3;                // ≈ 12.1 — min vertical center spacing

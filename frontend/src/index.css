@@ -32,18 +32,18 @@ button, input, select, textarea { font-family: inherit; }
 .app { display: flex; flex-direction: column; height: 100vh; }
 
 .topbar {
-  display: flex; align-items: center; gap: 7px;
-  padding: 10px 14px; background: var(--panel);
+  display: flex; align-items: center; gap: 5px;     /* ~20% 축소(오피스 뷰 폭에 맞게) */
+  padding: 8px 11px; background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
-.brand { font-weight: 700; font-size: 16px; white-space: nowrap; margin-right: 4px;
-  background: none; border: none; color: var(--text); cursor: pointer; padding: 2px 4px;
+.brand { font-weight: 700; font-size: 13px; white-space: nowrap; margin-right: 3px;
+  background: none; border: none; color: var(--text); cursor: pointer; padding: 2px 3px;
   border-radius: 8px; font-family: inherit; }
 .brand:hover { color: var(--accent); background: var(--panel2); }
 /* 현재 사용 중 LLM 배지 — 브랜드 옆에 눈에 띄게(클릭 → LLM 설정) */
-.llm-badge { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
-  border-radius: 999px; padding: 4px 11px 4px 9px; margin-right: 8px; white-space: nowrap;
-  font-size: 12px; font-weight: 800; letter-spacing: .01em;
+.llm-badge { display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  border-radius: 999px; padding: 3px 9px 3px 7px; margin-right: 6px; white-space: nowrap;
+  font-size: 10px; font-weight: 800; letter-spacing: .01em;
   border: 1px solid transparent; transition: filter .12s, border-color .12s; }
 .llm-badge:hover { filter: brightness(1.12); }
 .llm-badge.claude { background: #11243e; color: #58a6ff; border-color: #1f6feb55; }
@@ -90,7 +90,7 @@ button, input, select, textarea { font-family: inherit; }
 /* 상단 액션 버튼(파일/폴더/기록/두뇌)을 viewtoggle 탭과 같은 크기·톤으로 통일 +
    줄바꿈 방지(좁아져도 "파\n일" 안 깨지게). */
 .topbar > .btn, .topbar .hist-toggle {
-  font-size: 13px; font-weight: 600; padding: 7px 11px; white-space: nowrap;
+  font-size: 10.5px; font-weight: 600; padding: 5px 9px; white-space: nowrap;  /* ~20% 축소 */
 }
 .btn {
   padding: 9px 16px; border-radius: 8px; border: none; cursor: pointer;
@@ -108,7 +108,7 @@ button, input, select, textarea { font-family: inherit; }
 .status-ok { color: var(--pro); }
 .status-partial { color: var(--critic); }
 .status-error, .status-budget_exceeded { color: var(--con); }
-.hud { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.hud { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }  /* ~20% 축소 */
 .hud.conv { color: var(--critic); }
 /* ⑧ 예산 경고 — 80% 경고(주황) / 95% 위험(빨강+점멸) */
 .hud.budget-warn { color: var(--critic); font-weight: 700; }
@@ -121,41 +121,41 @@ button, input, select, textarea { font-family: inherit; }
 .budget-banner.crit { border-color: var(--con); color: var(--con); }
 
 /* ── 대시보드 메트릭 바 (상단바 아래, 오피스 sim 툴바 스타일) ── */
-.dashboard-bar {
-  display: flex; align-items: stretch; gap: 8px; padding: 8px 16px;
+.dashboard-bar {                                       /* ~20% 축소(오피스 뷰 폭에 맞게) */
+  display: flex; align-items: stretch; gap: 6px; padding: 6px 13px;
   background: var(--panel); border-bottom: 1px solid var(--border); overflow-x: auto;
 }
 .dash-company {
-  display: flex; align-items: center; gap: 10px; padding: 6px 16px 6px 8px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 8px; padding: 5px 13px 5px 6px; flex-shrink: 0;
   background: linear-gradient(135deg, #18233a, #11161f);
-  border: 1px solid var(--border); border-radius: 12px;
+  border: 1px solid var(--border); border-radius: 10px;
 }
 .dash-logo {
-  width: 34px; height: 34px; display: grid; place-items: center; font-size: 18px;
-  background: #1f6f3f; border-radius: 9px; box-shadow: inset 0 0 0 1px #3fb95066;
+  width: 27px; height: 27px; display: grid; place-items: center; font-size: 14px;
+  background: #1f6f3f; border-radius: 7px; box-shadow: inset 0 0 0 1px #3fb95066;
 }
 .dash-company-txt { display: flex; flex-direction: column; line-height: 1.15; }
-.dash-company-txt b { font-size: 14px; color: #fff; }
-.dash-company-txt span { font-size: 11px; color: var(--muted); }
+.dash-company-txt b { font-size: 11px; color: #fff; }
+.dash-company-txt span { font-size: 9px; color: var(--muted); }
 .dash-chip {
-  display: flex; align-items: center; gap: 9px; padding: 6px 15px; flex-shrink: 0;
-  background: var(--panel2); border: 1px solid var(--border); border-radius: 12px;
+  display: flex; align-items: center; gap: 7px; padding: 5px 12px; flex-shrink: 0;
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
 }
 .dash-chip.accent { border-color: #3fb95066; background: #14241a; }
-.dash-icon { font-size: 17px; line-height: 1; }
+.dash-icon { font-size: 14px; line-height: 1; }
 .dash-meta { display: flex; flex-direction: column; line-height: 1.1; }
-.dash-label { font-size: 10px; letter-spacing: .04em; color: var(--muted); text-transform: uppercase; }
-.dash-value { font-size: 16px; font-weight: 700; color: var(--text); }
+.dash-label { font-size: 8px; letter-spacing: .04em; color: var(--muted); text-transform: uppercase; }
+.dash-value { font-size: 13px; font-weight: 700; color: var(--text); }
 .dash-value.mono { font-variant-numeric: tabular-nums; }
 .dash-chip.accent .dash-value { color: var(--pro); }
 /* 교훈 칩 옆 왼쪽 정렬 — 우측 끝에 두면 산출물 닫힘 탭(.outputs-reopen)과 겹친다 */
 .dash-live {
-  display: flex; align-items: center; gap: 7px; padding: 6px 16px; flex-shrink: 0;
-  background: var(--panel2); border: 1px solid var(--border); border-radius: 12px;
-  font-size: 12px; font-weight: 700; color: var(--muted);
+  display: flex; align-items: center; gap: 6px; padding: 5px 13px; flex-shrink: 0;
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+  font-size: 10px; font-weight: 700; color: var(--muted);
 }
 .dash-live.on { color: var(--pro); border-color: #3fb95066; background: #14241a; }
-.dash-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.dash-dot { width: 6.5px; height: 6.5px; border-radius: 50%; background: var(--muted); }
 .dash-live.on .dash-dot { background: var(--pro); box-shadow: 0 0 7px var(--pro); animation: dashpulse 1.4s infinite; }
 /* 클릭 가능한 지표 칩(button 리셋 + 호버 강조) → 드릴다운 패널 진입 */
 .dash-chip.clickable { cursor: pointer; font: inherit; text-align: left; transition: border-color .12s, background .12s; }
@@ -359,10 +359,10 @@ button.upload-retry:hover { background: var(--panel2); }
   display: flex; align-items: center; gap: 2px; flex: 0 0 auto;
   background: var(--bg-neutral); border-radius: var(--radius-10); padding: 3px;
 }
-.viewtoggle { margin-left: 12px; }
+.viewtoggle { margin-left: 9px; }
 .topbar-actions .btn, .viewtoggle button {
   background: transparent; border: none; border-radius: var(--radius-8);
-  font-size: 13px; font-weight: 600; padding: 6px 10px; white-space: nowrap;
+  font-size: 10.5px; font-weight: 600; padding: 5px 8px; white-space: nowrap;  /* ~20% 축소 */
   color: var(--muted); cursor: pointer; transition: background .12s, color .12s;
 }
 .topbar-actions .btn { color: var(--fg-neutral); }
@@ -613,8 +613,8 @@ button.upload-retry:hover { background: var(--panel2); }
 .office-root { width: 100%; height: 100%; overflow: hidden; padding: 18px;
   display: flex; align-items: center; justify-content: center; background:
   radial-gradient(circle at 50% 0%, #1b2230 0%, #0d1117 60%); }
-.office-floor {            /* fixed 4:3 design canvas — scaled to fit via JS transform */
-  position: relative; width: 1280px; height: 960px; flex: none; border-radius: 18px;
+.office-floor {            /* design canvas — 가로 30% 확대(1664×960, ~1.73:1) — scaled to fit via JS transform */
+  position: relative; width: 1664px; height: 960px; flex: none; border-radius: 18px;
   transform-origin: center center;
   background: repeating-linear-gradient(90deg, #d9c39a 0 38px, #d2bb8f 38px 76px);
   box-shadow:
@@ -638,6 +638,16 @@ button.upload-retry:hover { background: var(--panel2); }
     0 8px 13px #0007;                           /* drop shadow = wall height */
 }
 .ceo-room { background: #d2992220; }
+.secretariat-room { background: #f778ba1c; }   /* 비서실 — CEO실 좌측(상단 별도 방) */
+/* 마주보는 벽 제거 — 비서실↔CEO실 개방 연결. 벽 두께 0 + 외곽/내곽 윤곽선을 '닫힌 3면'에만(방향성 그림자). */
+.office-room.wall-open-right { border-right-width: 0;
+  box-shadow: -2px 0 0 #9c8456, 0 -2px 0 #9c8456, 0 2px 0 #9c8456,
+    inset 2px 0 0 #efe6cf, inset 0 2px 0 #efe6cf, inset 0 -2px 0 #efe6cf,
+    inset 0 -8px 10px #00000026, 0 8px 13px #0007; }
+.office-room.wall-open-left { border-left-width: 0;
+  box-shadow: 2px 0 0 #9c8456, 0 -2px 0 #9c8456, 0 2px 0 #9c8456,
+    inset -2px 0 0 #efe6cf, inset 0 2px 0 #efe6cf, inset 0 -2px 0 #efe6cf,
+    inset 0 -8px 10px #00000026, 0 8px 13px #0007; }
 .team-zone { background: #58a6ff18; }
 .office-room-label {
   position: absolute; top: 7px; left: 11px; font-size: 12px; font-weight: 700; z-index: 7;
