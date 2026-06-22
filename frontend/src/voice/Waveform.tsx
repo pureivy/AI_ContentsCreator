@@ -10,7 +10,11 @@ export function Waveform({ analyser, variant, active }: {
   const ref = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
     const canvas = ref.current;
-    if (!canvas || !analyser || !active) return;
+    // Minor: active→false 또는 analyser null 시 캔버스를 클리어하여 frozen frame 방지
+    if (!canvas || !analyser || !active) {
+      if (canvas) { const ctx2d = canvas.getContext("2d"); if (ctx2d) ctx2d.clearRect(0, 0, canvas.width, canvas.height); }
+      return;
+    }
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const buf = new Uint8Array(analyser.frequencyBinCount);
