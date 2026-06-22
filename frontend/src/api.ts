@@ -642,6 +642,42 @@ export async function decideApproval(
   }
 }
 
+// --- 음성 입출력 ---
+export async function getVoices(): Promise<{ available: boolean; voices: string[]; defaultVoice: string }> {
+  try {
+    const r = await fetch("/voice/voices");
+    if (!r.ok) return { available: false, voices: [], defaultVoice: "Yuna" };
+    return await r.json();
+  } catch { return { available: false, voices: [], defaultVoice: "Yuna" }; }
+}
+
+/** 녹음 Blob 업로드 → 전사 텍스트. 실패 시 빈 문자열. */
+export async function sttUpload(blob: Blob, timeoutMs = 60_000): Promise<string> {
+  const fd = new FormData();
+  fd.append("files", blob, "speech.webm");        // 필드명 'files' = 서버 parseBody 기대값
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch("/voice/stt", { method: "POST", body: fd, signal: ctrl.signal });
+    if (!r.ok) return "";
+    return ((await r.json()).text ?? "").trim();
+  } catch { return ""; }
+  finally { clearTimeout(timer); }
+}
+
+/** 텍스트 → 오디오 Blob(mp3). 실패 시 null. */
+export async function ttsFetch(text: string, voice?: string): Promise<Blob | null> {
+  try {
+    const r = await fetch("/voice/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice }),
+    });
+    if (!r.ok) return null;
+    return await r.blob();
+  } catch { return null; }
+}
+
 // 저장 파일명 정리 — 60자 절단 문장형 이름은 macOS 저장 패널이 저장 버튼을
 // 비활성화하는 사례가 있어(짧은 이름은 전부 정상 저장됨) 40자 내 단어 경계로 줄인다.
 function safeDownloadName(raw: string, fallback = "최종결과물"): string {
