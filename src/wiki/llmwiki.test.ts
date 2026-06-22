@@ -60,6 +60,58 @@ describe('LlmWiki', () => {
     expect(g.links.length).toBe(1); // A→B
   });
 
+  it('recordDebate — 토론을 1급 노드 + 반박(rebuts) 엣지로 영속화', async () => {
+    const w = new LlmWiki(dir);
+    w.upsertPage({ title: '전기요금', type: 'concept', body: '산업용 전기요금 체계.' }); // 산출 개념(relates 대상)
+    const created = await w.recordDebate({
+      topic: '전기료 지원', runId: 'abcd1234ef',
+      critique: { name: '비평가', text: '근거가 약하다.' },
+      positions: [
+        { name: '기획팀', text: '바우처 도입을 제안한다.' },
+        { name: '법무팀', text: '법령 개정이 필요하다.' },
+      ],
+      relatesTo: ['전기요금'],
+    });
+    expect(created.length).toBe(3); // 입장 2 + 비평 1
+    const critSlug = created.find((s) => s.includes('비평'))!;
+    expect(w.getPage(critSlug)?.type).toBe('debate');
+    expect(w.getPage(critSlug)?.rebuts.length).toBe(2); // 비평 → 두 입장
+    const g = w.graph();
+    const rebuts = (g.links as Array<{ kind: string; target: string }>).filter((l) => l.kind === 'rebuts');
+    expect(rebuts.length).toBe(2); // 비평 → 두 입장(빨강 반박 엣지 2개)
+    // 두 입장 노드가 산출 개념([[전기요금]])으로 relates 연결돼 지식 그래프에 합류
+    const relSrc = (g.links as Array<{ kind: string; target: string; source: string }>)
+      .filter((l) => l.kind === 'relates' && l.target === '전기요금').map((l) => l.source);
+    expect(relSrc).toContain(created[0]); // 기획팀 입장
+    expect(relSrc).toContain(created[1]); // 법무팀 입장
+  });
+
+  it('recordDebate — rebuts 가 프런트매터 라운드트립으로 보존', async () => {
+    await new LlmWiki(dir).recordDebate({
+      topic: 'T', runId: 'r1',
+      critique: { name: 'C', text: '비평' }, positions: [{ name: 'P', text: '입장' }],
+    });
+    const crit = new LlmWiki(dir).list('debate').find((p) => p.title.includes('비평'))!; // 디스크 재로드
+    expect(crit.rebuts.length).toBe(1);
+  });
+
+  it('recordDebate — prune 그룹 무결성·현재 run 보호(dangling rebuts 0)', async () => {
+    const w = new LlmWiki(dir);
+    let lastRun = '';
+    for (let i = 0; i < 35; i++) { // keepRuns(30) 초과로 prune 유발
+      lastRun = `run${i}`;
+      await w.recordDebate({ topic: `토픽${i}`, runId: lastRun, critique: { name: 'C', text: '비평' }, positions: [{ name: 'P', text: '입장' }] });
+    }
+    expect(w.list('debate').length).toBeLessThanOrEqual(30 * 2); // 캡 적용 — 무한 증식 X
+    const survived = w.list('debate').filter((p) => p.aliases.includes(`run:${lastRun}`));
+    expect(survived.length).toBe(2); // 현재(마지막) run 의 입장+비평 보호 — 방금 만든 토론이 안 지워짐
+    // 그룹 무결성 — 비평의 rebuts 가 살아있는 입장만 가리킴(dangling 빨강 엣지/유령 stub 0)
+    const g = w.graph();
+    const real = new Set((g.nodes as Array<{ id: string; category?: string }>).filter((n) => n.category !== 'stub').map((n) => n.id));
+    const dangling = (g.links as Array<{ kind: string; target: string }>).filter((l) => l.kind === 'rebuts' && !real.has(l.target));
+    expect(dangling.length).toBe(0);
+  });
+
   it('lint — 고아·끊긴 링크 탐지', () => {
     const w = new LlmWiki(dir);
     w.upsertPage({ title: 'A', type: 'entity', body: '[[없는페이지]] 참조' });

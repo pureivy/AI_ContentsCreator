@@ -108,6 +108,26 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
         });
       }
       a.bus.emit(EventType.log, { message: `LLM Wiki 적재 — ${r.pages.length}개 페이지(엔티티/개념) 갱신` });
+      // 토론(비평→반박)을 두뇌 그래프에 1급 노드·엣지로 영속화 — 빨강 rebuts 엣지로 토론 과정 가시화.
+      // (산출 개념 r.pages 로 입장 노드를 relates 연결 → 지식 그래프에 합류. 비평 노드가 입장들을 rebuts.)
+      try {
+        const created = await llmWiki().recordDebate({
+          topic: a.topic, runId: a.bus.runId,
+          critique: a.critique ? { name: a.critique.name, text: a.critique.text } : undefined,
+          positions: a.positions.map((p) => ({ name: p.name, text: p.text })),
+          relatesTo: r.pages,
+        });
+        if (created.length) {
+          for (const slug of created) {
+            a.bus.emit(EventType.wiki_page_written, {
+              page_id: slug, slug, title: slug, category: 'debate', status: 'active', stance: 'neutral', op: 'create',
+            });
+          }
+          a.bus.emit(EventType.log, { message: `토론 적재 — 비평·입장 ${created.length}개 노드(반박 엣지)로 두뇌 그래프에 연결` });
+        }
+      } catch (e) {
+        a.bus.emit(EventType.log, { message: `토론 적재 실패: ${e instanceof Error ? e.message : String(e)}` });
+      }
     } catch (e) {
       a.bus.emit(EventType.log, { message: `위키 적재 실패: ${e instanceof Error ? e.message : String(e)}` });
     }

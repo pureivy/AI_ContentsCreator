@@ -113,7 +113,7 @@ export interface Config {
   readonly thinkingBudgetTokens: number;
   /** 자율 레벨(0~3) 강제 — 쓰기성 도구를 autonomy 로 게이팅(2=승인, 3=자동, ≤1=차단). */
   readonly enforceAutonomy: boolean;
-  /** 유휴 게이트 자율 사이클 주기(분). 0=off. 사용자 런이 없을 때만 진입하고 사용자 런 도착 시 양보. */
+  /** 유휴 게이트 자율 사이클 주기(분). 기본 30(ON), 0=off. 사용자 런이 없을 때만 진입하고 사용자 런 도착 시 양보. */
   readonly autoCycleMinutes: number;
   /** 능동 셸 실행 도구(run_command) — tool-loop 와 별개로 명시 옵트인(기본 false). 위험 표면이라 이중 게이트. */
   readonly agentShell: boolean;
@@ -168,7 +168,8 @@ export const CONFIG: Config = {
   maxSpecialists: envInt('MAX_SPECIALISTS', isLocal ? 3 : 4),
   debateRounds: envInt('DEBATE_ROUNDS', isLocal ? 1 : 2),
   debateRoundsCap: envInt('DEBATE_ROUNDS_CAP', isLocal ? 2 : 3),
-  orgDebateRounds: Math.min(Math.max(0, envInt('ORG_DEBATE_ROUNDS', 0)), 3),
+  // 기본 1(ON) — 팀토론(비평→반박) 1라운드를 기본 활성. 끄려면 ORG_DEBATE_ROUNDS=0(또는 UI 토글).
+  orgDebateRounds: Math.min(Math.max(0, envInt('ORG_DEBATE_ROUNDS', 1)), 3),
   termination: (env('TERMINATION', 'adaptive') as Termination),
 
   choreoPauseMs: envInt('CHOREO_PAUSE_MS', 300),
@@ -202,7 +203,8 @@ export const CONFIG: Config = {
   agentToolLoop: envBool('AGENT_TOOL_LOOP', false),
   agentMaxToolCalls: Math.min(Math.max(1, envInt('AGENT_MAX_TOOL_CALLS', 4)), 12),
   enforceAutonomy: envBool('ENFORCE_AUTONOMY', true),
-  autoCycleMinutes: Math.max(0, envInt('AUTO_CYCLE_MINUTES', 0)),
+  // 기본 ON(30분) — 서버 기동 시 자율 사이클 자동 활성. 끄려면 AUTO_CYCLE_MINUTES=0.
+  autoCycleMinutes: Math.max(0, envInt('AUTO_CYCLE_MINUTES', 30)),
   agentShell: envBool('AGENT_SHELL', false),
   // 기본 allowlist 는 '읽기 전용 분석 명령'만 — python3/node/awk/sed/find 같은 범용 코드 실행기는 제외(임의
   // 실행기는 메타문자 없이도 RCE 가 되어 allowlist 를 무력화). 스크립트 실행이 필요하면 AGENT_SHELL_ALLOW 로

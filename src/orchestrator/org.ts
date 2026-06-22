@@ -85,7 +85,7 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   // CEO 라우팅 완료 → 부서 작업 동안은 '대기'.
   bus.emit('phase', { team_id: '_ceo', phase: 'idle' });
   // 무거운 지침 대신 '수용 기준'만 컨텍스트로 — 작성 기준이자 마지막 CEO 검토의 준거(라우팅 실패 시 빈 값).
-  const acceptance = (route?.acceptance ?? '').trim();
+  const acceptance = asString(route?.acceptance).trim(); // LLM 라우팅 acceptance 가 비문자열이어도 안전(?? 만으론 throw)
   const acceptanceBlock = acceptance ? `[최종 산출물 수용 기준]\n${acceptance}` : '';
 
   // --- 팀별 실행(team_parallel 병렬) ---
@@ -344,7 +344,7 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
     { maxOutputTokens: 900, signal },
   );
   const planned = (outline?.sections ?? [])
-    .map((s) => ({ title: (s?.title ?? '').trim(), focus: (s?.focus ?? '').trim() }))
+    .map((s) => ({ title: asString(s?.title).trim(), focus: asString(s?.focus).trim() })) // LLM 비문자열 필드 안전화
     .filter((s) => s.title).slice(0, 8);
   const sectionList = planned.length ? planned : subproblems.map((s) => ({ title: s.text, focus: '' }));
   bus.emit('log', { message: `최종 문서를 ${sectionList.length}개 섹션으로 작성: ${sectionList.map((s) => s.title).join(' · ')}` });

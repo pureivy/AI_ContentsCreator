@@ -17,7 +17,7 @@ import { CONFIG } from '../config';
 import { ollama } from '../llm/ollama';
 import { cosineSim, resolveEmbedModel } from './embed';
 
-export type PageType = 'entity' | 'concept' | 'source' | 'overview' | 'answer' | 'lesson';
+export type PageType = 'entity' | 'concept' | 'source' | 'overview' | 'answer' | 'lesson' | 'debate';
 
 export interface WikiPage {
   title: string;
@@ -31,11 +31,13 @@ export interface WikiPage {
   body: string;
   /** 본문의 [[링크]] 대상 슬러그들. */
   links: string[];
+  /** 반박(rebuts) 대상 슬러그들 — 토론 노드 전용 타입드 엣지(graph 에서 kind:'rebuts' 빨강 엣지로 표출). */
+  rebuts: string[];
 }
 
 const FM_RE = /^---\n([\s\S]*?)\n---\n?/;
 const LINK_RE = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
-const ARRAY_KEYS = new Set(['aliases', 'sources', 'contributors']);
+const ARRAY_KEYS = new Set(['aliases', 'sources', 'contributors', 'rebuts']);
 // wiki 루트의 비-페이지 파일(평면 구조에서 페이지와 구분) — 카탈로그·타임라인·스키마.
 const RESERVED_FILES = new Set(['index.md', 'log.md', 'WIKI_SCHEMA.md', 'README.md']);
 
@@ -84,6 +86,8 @@ function serialize(p: WikiPage): string {
     `aliases: ${JSON.stringify(p.aliases)}`,
     `sources: ${JSON.stringify(p.sources)}`,
     `contributors: ${JSON.stringify(p.contributors)}`,
+    // rebuts 는 토론 노드에만 있음 — 비어있으면 프런트매터에 안 써 기존 페이지 형식 불변(churn 0).
+    ...(p.rebuts.length ? [`rebuts: ${JSON.stringify(p.rebuts)}`] : []),
     `updated: ${p.updated}`,
     `summary: ${esc(p.summary)}`,
     '---',
@@ -169,6 +173,7 @@ export class LlmWiki {
       summary: (meta.summary as string) || '',
       body,
       links: outboundLinks(body),
+      rebuts: arr('rebuts'),
     };
   }
   allPages(): WikiPage[] {
@@ -201,7 +206,7 @@ export class LlmWiki {
   /** 같은 슬러그가 있으면 본문에 '갱신' 섹션을 덧대고 메타 합집합(Karpathy: kept current). */
   upsertPage(input: {
     title: string; type: PageType; body: string; summary?: string;
-    sources?: string[]; contributors?: string[]; aliases?: string[];
+    sources?: string[]; contributors?: string[]; aliases?: string[]; rebuts?: string[];
   }): WikiPage {
     const slug = slugify(input.title);
     const existing = this.getPage(slug);
@@ -215,6 +220,7 @@ export class LlmWiki {
         sources: [...new Set([...existing.sources, ...(input.sources ?? [])])],
         contributors: [...new Set([...existing.contributors, ...(input.contributors ?? [])])],
         aliases: [...new Set([...existing.aliases, ...(input.aliases ?? [])])],
+        rebuts: [...new Set([...existing.rebuts, ...(input.rebuts ?? [])])],
         updated: today,
         body: existing.body.trim() + `\n\n## 갱신 (${today})\n${input.body.trim()}\n`,
         links: [],
@@ -229,9 +235,86 @@ export class LlmWiki {
       contributors: [...new Set(input.contributors ?? [])], updated: today,
       summary: input.summary ?? esc(input.body).slice(0, 120),
       body: input.body.trim() + '\n', links: outboundLinks(input.body),
+      rebuts: [...new Set(input.rebuts ?? [])],
     };
     this.writePage(page);
     return page;
+  }
+
+  /**
+   * 토론(비평→반박)을 두뇌에 1급 노드·엣지로 영속화 — 비평 노드가 각 팀 입장 노드를 rebuts(빨강 엣지)로
+   * 가리키고, 입장 노드는 산출 개념([[relates]])으로 연결돼 '토론 과정' 자체가 그래프에 보인다.
+   * 토픽이 반복되는 자율 사이클에서도 run 별로 구분되게 slug 에 runId 단편을 넣는다(머지 방지).
+   * 과적재 방지: type:'debate' 페이지를 run 그룹 단위로 최근 KEEP_RUNS 개만 유지(현재 run 보호).
+   * 동시 런 경합 방지를 위해 위키 쓰기 체인(serialize)에 올린다. relatesTo 는 '제목 또는 슬러그' 모두 허용
+   * (outboundLinks 가 다시 slugify 하므로 동일 페이지로 해석됨). 반환=생성된 슬러그들.
+   */
+  recordDebate(input: {
+    topic: string; runId: string;
+    critique?: { name: string; text: string };
+    positions: Array<{ name: string; text: string }>;
+    relatesTo?: string[];
+  }): Promise<string[]> {
+    return this.serialize(async () => {
+      const rid = (input.runId || '').slice(0, 8);
+      const tag = `run:${input.runId}`;
+      const rel = [...new Set((input.relatesTo ?? []).filter(Boolean))].slice(0, 6);
+      const relBlock = rel.length ? `\n\n## 관련\n${rel.map((s) => `- [[${s}]]`).join('\n')}` : '';
+      const created: string[] = [];
+      // 1) 입장 노드(팀/직원별) — 산출 개념으로 relates 연결돼 지식 그래프에 합류
+      const posSlugs: string[] = [];
+      for (const p of input.positions) {
+        const name = (p.name || '').trim();
+        const text = (p.text || '').trim();
+        if (!name || !text) continue;
+        const page = this.upsertPage({
+          title: `${input.topic} · ${name} 입장 (${rid})`, type: 'debate',
+          body: text.slice(0, 1200) + relBlock,
+          contributors: [name], aliases: [tag, 'debate'],
+          summary: `[${name} 입장] ${esc(text).slice(0, 80)}`,
+        });
+        posSlugs.push(page.slug); created.push(page.slug);
+      }
+      // 2) 비평 노드 — 각 입장을 rebuts(빨강 엣지). 입장이 없으면 반박 관계가 성립 안 하므로 생성 안 함.
+      const crit = input.critique;
+      if (crit && (crit.text || '').trim() && posSlugs.length) {
+        const cp = this.upsertPage({
+          title: `${input.topic} · 비평 (${rid})`, type: 'debate',
+          body: crit.text.trim().slice(0, 1500) + relBlock,
+          contributors: [(crit.name || '비평가').trim()], aliases: [tag, 'debate'],
+          rebuts: posSlugs,
+          summary: `[비평] ${esc(crit.text).slice(0, 80)}`,
+        });
+        created.push(cp.slug);
+      }
+      if (created.length) this.pruneDebate(30, input.runId);
+      return created;
+    });
+  }
+
+  /**
+   * type:'debate' 페이지를 run 그룹 단위로 최근 keepRuns 개만 유지(그래프·디스크 과적재 방지).
+   *  - 그룹 단위 삭제: 같은 run 의 입장+비평을 통째로 유지/삭제 → 비평의 rebuts 가 살아남은 입장만 가리켜
+   *    dangling 엣지·유령 stub 노드가 안 생긴다(개별 노드 prune 의 그룹 분할 문제 해소).
+   *  - 최근성: updated 는 날짜 단위라 같은 날 다수 런을 구분 못함 → 파일 mtime(ms)으로 정렬.
+   *  - 현재 run(protectRunId)은 절대 삭제 안 함(같은 날 캡 도달 시 방금 만든 토론이 지워지는 문제 해소).
+   */
+  private pruneDebate(keepRuns: number, protectRunId?: string): void {
+    const deb = this.allPages().filter((p) => p.type === 'debate');
+    if (!deb.length) return;
+    const groupOf = (p: WikiPage): string => p.aliases.find((a) => a.startsWith('run:')) ?? `slug:${p.slug}`;
+    const groups = new Map<string, { mtime: number; slugs: string[] }>();
+    for (const p of deb) {
+      const g = groupOf(p);
+      let mt = 0; try { mt = fs.statSync(this.pagePath(p.slug)).mtimeMs; } catch { /* 삭제됨 등 — 0 */ }
+      const e = groups.get(g) ?? { mtime: 0, slugs: [] };
+      e.mtime = Math.max(e.mtime, mt); e.slugs.push(p.slug); groups.set(g, e);
+    }
+    const protectKey = protectRunId ? `run:${protectRunId}` : '';
+    const others = [...groups.entries()].filter(([k]) => k !== protectKey)
+      .sort((a, b) => b[1].mtime - a[1].mtime); // 최근 그룹 우선
+    const keepOthers = Math.max(0, keepRuns - (groups.has(protectKey) ? 1 : 0));
+    for (const [, e] of others.slice(keepOthers)) for (const s of e.slugs) this.deletePage(s);
   }
 
   saveRaw(name: string, content: string): string {
@@ -744,6 +827,12 @@ export class LlmWiki {
       if (!l) continue;
       if (!bySlug.has(l)) stubs.add(l); // dangling — 아직 생성 안 된 대상(미생성 페이지)
       links.push({ source: p.slug, target: l, kind: 'relates' }); pageLinks++;
+    }
+    // 반박(rebuts) 타입드 엣지 — 토론 노드의 비평→입장 관계(프런트 빨강 시냅스). 페이지 링크로 카운트(pageLinks).
+    for (const p of ps) for (const r of p.rebuts) {
+      if (!r) continue;
+      if (!bySlug.has(r)) stubs.add(r);
+      links.push({ source: p.slug, target: r, kind: 'rebuts' }); pageLinks++;
     }
     // 미생성 페이지(dangling)도 노드로 표시해 [[링크]] 연결을 보존(obsidian 회색 노드 식, category:stub).
     for (const s of stubs) nodes.push({ id: s, type: 'page', label: s, category: 'stub', stance: 'neutral', status: 'missing', degree: 0, source_count: 0 });

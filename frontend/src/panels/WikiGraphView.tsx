@@ -43,7 +43,7 @@ function getGlowSprite(color: string): HTMLCanvasElement {
 // 실제 데이터 카테고리(concept/entity/source/stub)와 LLM-wiki 원래 스키마 모두 커버.
 const CAT_COLOR: Record<string, string> = {
   // 실제 데이터 카테고리
-  concept: "#58a6ff", entity: "#3fb950", source: "#e3b341", stub: "#8b949e",
+  concept: "#58a6ff", entity: "#3fb950", source: "#e3b341", stub: "#8b949e", debate: "#f778ba",
   // LLM wiki 원래 스키마 카테고리 (데이터 확장 시 대비)
   claim: "#58a6ff", evidence: "#3fb950", research: "#56d4dd", decision: "#bc8cff",
   synthesis: "#d29922", reference: "#6b7a99", "debate-transcript": "#f778ba", lesson: "#db6d28",
@@ -67,7 +67,7 @@ const SYNAPSE_GLOW: Record<string, string> = {
 };
 const CAT_LABEL: Record<string, string> = {
   // 실제 데이터 카테고리
-  concept: "개념", entity: "개체", source: "출처", stub: "미완성",
+  concept: "개념", entity: "개체", source: "출처", stub: "미완성", debate: "토론",
   // LLM wiki 원래 스키마
   claim: "주장", evidence: "근거", research: "리서치", decision: "결정",
   synthesis: "종합", reference: "참고자료", "debate-transcript": "토론기록", lesson: "교훈",
