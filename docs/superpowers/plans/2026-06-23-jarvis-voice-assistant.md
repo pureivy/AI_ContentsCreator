@@ -12,7 +12,7 @@
 
 - 대화 상대는 항상 **자비스(secretary, role id `secretary`)** 고정. 사용자가 직원 이름을 부르지 않는다.
 - 대화 코어 = 신규 `POST /jarvis/chat`(+`/api/jarvis/chat`), ollama **단일 chat** 호출. 모델 = `getLlmSetting().localModel`(standard 티어). **`.micro` 사용 금지**, **`format:'json'` 설정 금지**(자유응답 깨짐) — 자유 텍스트로 응답받고 `firstJson`으로 delegate 추출.
-- `firstJson`은 `src/tools/classify.ts:52`에 있으나 **export 안 됨 → `src/jarvis/chat.ts`로 복사**.
+- `firstJson`은 `src/tools/classify.ts:52`에 있으나 export 안 됨 → **classify.ts에서 `export function firstJson` 으로 노출**하고 `src/jarvis/chat.ts`가 import(복사 금지·DRY).
 - 자비스 페르소나 = `getCompany()`의 secretary lead `.systemPrompt`(camelCase) + 이름 `.name`(people.yaml에서 '자비스'). 팀 id는 `secretariat`이나 lead role id는 `secretary` — lead.id로 매칭.
 - 업무 위임은 기존 `startRun(task, onEvent, onRunId, getLastSeq, opts?)` 재사용(org 자동 라우팅). opts.budget→body `budget_usd`는 startRun 내부 처리.
 - **이중 낭독 방지**: 기존 자동낭독 useEffect(App.tsx)는 모든 live 런의 TERMINAL에서 synthesis를 1회 읽는다. **자비스-주도 런 id는 Set에 기록해 그 effect가 skip**, 자비스 보고 턴이 낭독 전담.
@@ -28,9 +28,10 @@
 
 **Files:**
 - Create: `src/jarvis/chat.ts`, `src/jarvis/chat.test.ts`
+- Modify: `src/tools/classify.ts` (`function firstJson` → `export function firstJson`)
 
 **Interfaces:**
-- Consumes: `ollama`(`../llm/ollama`), `getLlmSetting`(`../llm/setting`), `getCompany`(`../agents/company-loader`)
+- Consumes: `ollama`(`../llm/ollama`), `getLlmSetting`(`../llm/setting`), `getCompany`(`../agents/company-loader`), `firstJson`(`../tools/classify`)
 - Produces:
   - `interface JarvisTurn { role: 'user' | 'assistant'; content: string }`
   - `interface JarvisReply { reply: string; delegate?: { task: string } }`
@@ -79,6 +80,10 @@ describe('jarvisChat', () => {
 Run: `npx vitest run src/jarvis/chat.test.ts`
 Expected: FAIL — `Cannot find module './chat'`
 
+- [ ] **Step 3a: classify.ts에서 firstJson export 노출**
+
+`src/tools/classify.ts:52` 의 `function firstJson<T>(raw: string): T | null {` 를 `export function firstJson<T>(raw: string): T | null {` 로 변경(시그니처·본문 동일, export 만 추가). 다른 호출부 영향 없음(같은 모듈 내 호출 그대로 동작).
+
 - [ ] **Step 3: 구현**
 
 `src/jarvis/chat.ts`:
@@ -88,28 +93,10 @@ Expected: FAIL — `Cannot find module './chat'`
 import { ollama } from '../llm/ollama';
 import { getLlmSetting } from '../llm/setting';
 import { getCompany } from '../agents/company-loader';
+import { firstJson } from '../tools/classify';   // Step 3a 에서 classify.ts 가 export 노출
 
 export interface JarvisTurn { role: 'user' | 'assistant'; content: string }
 export interface JarvisReply { reply: string; delegate?: { task: string } }
-
-// classify.ts:52 의 firstJson 복사(거기선 export 안 됨). 균형 괄호 슬라이스 파싱.
-function firstJson<T>(raw: string): T | null {
-  if (!raw) return null;
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const body = fenced ? fenced[1]! : raw;
-  const s = body.search(/[[{]/);
-  if (s < 0) return null;
-  const open = body[s]!; const close = open === '{' ? '}' : ']';
-  let depth = 0, inStr = false, esc = false;
-  for (let i = s; i < body.length; i++) {
-    const ch = body[i]!;
-    if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
-    if (ch === '"') inStr = true;
-    else if (ch === open) depth++;
-    else if (ch === close) { depth--; if (depth === 0) { try { return JSON.parse(body.slice(s, i + 1)) as T; } catch { return null; } } }
-  }
-  return null;
-}
 
 export function jarvisSystemPrompt(): string {
   const co = getCompany();
@@ -163,7 +150,7 @@ Expected: PASS (3 tests)
 - [ ] **Step 5: 커밋**
 
 ```bash
-git add src/jarvis/chat.ts src/jarvis/chat.test.ts
+git add src/jarvis/chat.ts src/jarvis/chat.test.ts src/tools/classify.ts
 git commit -m "feat(jarvis): 자비스 대화 코어(페르소나 chat + delegate 파싱)"
 ```
 
