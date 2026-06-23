@@ -85,7 +85,7 @@ export const useStore = create<Store>((set, get) => ({
   setRecording: (recording) => set(() => ({ recording })),
   pushJarvisTurn: (t) => set((s) => ({ jarvisTurns: [...s.jarvisTurns, t] })),
   setJarvisBusy: (jarvisBusy) => set(() => ({ jarvisBusy })),
-  clearJarvis: () => set(() => ({ jarvisTurns: [] })),
+  clearJarvis: () => set(() => ({ jarvisTurns: [], jarvisBusy: false })),
 
   loadReplay: (runId, topic, events) =>
     set(() => ({
