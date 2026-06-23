@@ -49,6 +49,10 @@ export interface Config {
   readonly groundingTimeoutMs: number;
   /** 소형 로컬 모델의 장황/폭주 백스톱(num_predict). 통합 단계만 별도 상향. */
   readonly maxOutputTokens: number;
+  /** 로컬 모델 컨텍스트 창(num_ctx). Ollama.app 데스크톱은 OLLAMA_CONTEXT_LENGTH(env)를 무시하고
+   *  모델 최대치(gemma=256K)를 강제 → KV 캐시 폭증으로 ~1/20 속도. 그래서 요청마다 '일정한'
+   *  num_ctx 를 실어 모델을 적정 크기로 로드한다(값이 일정하므로 리로드 스래시 없음). */
+  readonly numCtx: number;
   readonly integrationMaxOutputTokens: number;
   readonly temperature: number;
   readonly topP: number;
@@ -155,6 +159,8 @@ export const CONFIG: Config = {
   groundingTimeoutMs: Math.min(Math.max(3000, envInt('GROUNDING_TIMEOUT_MS', 15_000)), 120_000),
   // num_predict 캡은 [1, 32768] 로 클램프 — env 0/음수가 빈 출력/무한생성을 유발하지 않게.
   maxOutputTokens: Math.min(Math.max(1, envInt('LOCAL_LLM_MAX_OUTPUT_TOKENS', 8192)), 32_768),
+  // 컨텍스트 창 — env LOCAL_LLM_NUM_CTX 로 조정(기본 32K). [4K, 128K] 클램프. 자비스·런 공통(일정값).
+  numCtx: Math.min(Math.max(4096, envInt('LOCAL_LLM_NUM_CTX', 32_768)), 131_072),
   // CEO 종합·검토 출력 캡. 최종 산출물은 10페이지+ 완결 문서가 필요(≈15,000자≈~22k 토큰)하므로 24k 로 둔다.
   // (합성 단계는 buildSystemPrompt brevity=false 로 2000~4000자 상한도 해제됨.) env 로 조정 가능(최대 32768).
   integrationMaxOutputTokens: Math.min(Math.max(1, envInt('LOCAL_LLM_INTEGRATION_MAX_OUTPUT_TOKENS', 24_000)), 32_768),

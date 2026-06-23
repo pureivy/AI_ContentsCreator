@@ -157,7 +157,7 @@ export class OllamaClient {
 
   /**
    * 채팅 완성 — /api/chat 스트리밍(NDJSON). onDelta 로 토큰을 흘리고, 완료 시 집계 반환.
-   * num_ctx 는 의도적으로 미포함(서버 env 전담).
+   * num_ctx 는 CONFIG.numCtx(일정값)로 명시 — Ollama.app 의 256K 강제 회피(아래 options 주석 참조).
    */
   async chat(params: ChatParams): Promise<ChatResult> {
     return LLM_SLOT.run(() => this._chat(params));
@@ -183,7 +183,10 @@ export class OllamaClient {
         temperature: params.temperature ?? CONFIG.temperature,
         top_p: params.topP ?? CONFIG.topP,
         top_k: params.topK ?? CONFIG.topK,
-        // ⚠ num_ctx 절대 금지 — 서버 env(OLLAMA_CONTEXT_LENGTH)로만.
+        // num_ctx — 모든 호출에 '일정한' 값을 실어 모델을 적정 크기로 로드한다. Ollama.app 데스크톱이
+        // OLLAMA_CONTEXT_LENGTH(env)를 무시하고 모델 최대(256K)를 강제해 ~1/20 속도가 되는 문제 회피.
+        // 값이 일정하므로(자비스·런 공통) 리로드 스래시는 없다. 조정은 LOCAL_LLM_NUM_CTX.
+        num_ctx: CONFIG.numCtx,
       },
     };
 
