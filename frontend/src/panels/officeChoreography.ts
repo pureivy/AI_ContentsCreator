@@ -89,16 +89,22 @@ export function confMeetingSeats(nLeads: number): { ceo: Pt; leads: Pt[] } {
   return { ceo, leads };
 }
 
-// 방 안 비겹침 슬롯(절대 office-%) — 한 방에 여러 명이 모여도 서로 겹치지 않게 고정 간격으로 배치한다
-// (사용자 요청: 일렬이어도 좋으니 겹치지 마라). 아바타는 framer-motion 이 style 의 translate(-50%,-50%)
-// 를 덮어써 (x,y)가 '중심'이 아니라 스택 '상단'에 앵커된다(실측) → y≈9 면 스택(~12.6% 높이)이
-// 방(y2–27) 안에 든다. 가로 간격 ≥ AVATAR_W(≈6.25) 라 슬롯끼리 비겹침. 방 용량을 넘는 인원은 그 방에
-// 안 들어가고 다른 행동을 한다(틱 분기). 휴게실 x69–98, 회의실 x2–31.
-export const LOUNGE_SOFA_SLOTS: Pt[] = [{ x: 73, y: 9 }, { x: 80, y: 9 }];           // 소파존(휴식) 2석
-export const PANTRY_SLOTS: Pt[]     = [{ x: 87, y: 9 }, { x: 94, y: 9 }];            // 탕비존(잡담·커피) 2석
-export const CONF_SLOTS: Pt[]       = [{ x: 13, y: 9 }, { x: 20, y: 9 }, { x: 27, y: 9 }]; // 회의실(업무협의) 3석
-// 회의실 화이트보드 앞 — 메모 1인(회의실 좌측, CONF_SLOTS 와 비겹침).
+// 방 안 ambient 배치 영역(절대 office-%) — 한 방에 여러 명이 모일 때 '겹쳐도 되지만 일직선으로
+// 줄세우지 않게' 영역 안에 2D 무작위 배치한다(사용자 요청). 고정 슬롯(같은 y)은 가로 일직선이 돼
+// 보기 싫다는 피드백 → x·y 둘 다 산포. 아바타는 framer-motion 이 translate(-50%,-50%) 를 덮어써
+// (x,y)가 스택 '상단'에 앵커(실측) → y≈6~11 이면 스택(~12.6% 높이)이 방(y2–27) 안에 든다.
+// 휴게실 x69–98, 회의실 x2–31.
+export interface Zone { xMin: number; xMax: number; yMin: number; yMax: number }
+export const LOUNGE_SOFA_ZONE: Zone = { xMin: 73, xMax: 81, yMin: 6, yMax: 11 }; // 휴게실 좌(소파존): 휴식
+export const PANTRY_ZONE: Zone     = { xMin: 85, xMax: 94, yMin: 6, yMax: 11 }; // 휴게실 우(탕비존): 잡담·커피
+export const CONF_ZONE: Zone       = { xMin: 6,  xMax: 27, yMin: 6, yMax: 11 }; // 회의실: 업무협의
+// 회의실 화이트보드 앞 — 메모 1인(회의실 좌측).
 export const WHITEBOARD_SPOT: Pt = { x: 6, y: 9 };
+
+// 영역 안의 한 점 — rx·ry 는 [0,1] 난수(틱이 주입). 비겹침을 강제하지 않는다(겹침 허용 + 2D 산포).
+export function pointInZone(z: Zone, rx: number, ry: number): Pt {
+  return { x: z.xMin + (z.xMax - z.xMin) * rx, y: z.yMin + (z.yMax - z.yMin) * ry };
+}
 
 // 자료 찾기 — 팀존(상단 책장 벽) 앞 1석. 팀존 사각형에서 파생(매직넘버 금지).
 export function shelfSpot(zone: { x: number; w: number }): Pt {

@@ -23,7 +23,7 @@ import { fetchCompany, CompanyInfo, RoleInfo } from "../api";
 import Avatar from "./Avatar";
 import { personLabel } from "./agentVisual";
 import { clusterBelow, meetingCircle, CORRIDOR_SPOTS, STROLL, AVATAR_W, AVATAR_H, Pt,
-  LOUNGE_SOFA_SLOTS, PANTRY_SLOTS, CONF_SLOTS, WHITEBOARD_SPOT, shelfSpot } from "./officeChoreography";
+  LOUNGE_SOFA_ZONE, PANTRY_ZONE, CONF_ZONE, WHITEBOARD_SPOT, pointInZone, shelfSpot } from "./officeChoreography";
 
 // Fixed 4:3 design canvas. Everything inside is laid out against this constant
 // size (positions in %, furniture in px), then the whole floor is uniformly
@@ -669,27 +669,27 @@ export default function OfficeView() {
           const atDesk = freeList.filter((k) => !next[k]);
           const used = occupied();
           const openCorridor = corridor.filter((s) => !used.has(key(s)));
-          const free = (slots: Pt[]) => slots.filter((s) => !used.has(key(s)));
-          const openSofa = free(LOUNGE_SOFA_SLOTS), openPantry = free(PANTRY_SLOTS), openConf = free(CONF_SLOTS);
+          const rnd = () => Math.random();
           const r = Math.random();
-          if (r < 0.20 && atDesk.length >= 2 && openPantry.length >= 2) {  // 잡담 — 탕비존 빈 2석(비겹침)
+          if (r < 0.20 && atDesk.length >= 2) {                    // 잡담 — 탕비존 2D 산포(겹침 OK·줄세움 X)
             const a = pick(atDesk);
             const b = pick(atDesk.filter((k) => k !== a));
-            next[a] = { x: openPantry[0].x, y: openPantry[0].y, bubble: "💬 잡담", act: "chat", partner: b };
-            next[b] = { x: openPantry[1].x, y: openPantry[1].y, bubble: "💬 잡담", act: "chat", partner: a };
-          } else if (r < 0.35 && atDesk.length >= 2 && openConf.length >= 2) { // 업무협의 — 회의실 빈 슬롯(비겹침, 최대 3)
-            const n = Math.min(atDesk.length, openConf.length);
+            const pa = pointInZone(PANTRY_ZONE, rnd(), rnd()), pb = pointInZone(PANTRY_ZONE, rnd(), rnd());
+            next[a] = { x: pa.x, y: pa.y, bubble: "💬 잡담", act: "chat", partner: b };
+            next[b] = { x: pb.x, y: pb.y, bubble: "💬 잡담", act: "chat", partner: a };
+          } else if (r < 0.35 && atDesk.length >= 2) {             // 업무협의 — 회의실 2D 산포(2~4인, 겹침 OK)
+            const n = Math.min(atDesk.length, 2 + Math.floor(Math.random() * 3));
             const pool = [...atDesk];
             const people: string[] = [];
             for (let i = 0; i < n && pool.length; i++) {
               people.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
             }
-            people.forEach((p, i) => {
-              next[p] = { x: openConf[i].x, y: openConf[i].y, bubble: "🤝 업무협의", act: "huddle",
-                partner: people.find((q) => q !== p) };
+            people.forEach((p) => {
+              const s = pointInZone(CONF_ZONE, rnd(), rnd());
+              next[p] = { x: s.x, y: s.y, bubble: "🤝 업무협의", act: "huddle", partner: people.find((q) => q !== p) };
             });
-          } else if (r < 0.50 && atDesk.length && openSofa.length) {  // 휴식 — 소파존 빈 슬롯(비겹침)
-            const who = pick(atDesk); const s = openSofa[0];
+          } else if (r < 0.50 && atDesk.length) {                  // 휴식 — 소파존 산포
+            const who = pick(atDesk); const s = pointInZone(LOUNGE_SOFA_ZONE, rnd(), rnd());
             next[who] = { x: s.x, y: s.y, bubble: "☕ 휴식", act: "rest" };
           } else if (r < 0.65 && atDesk.length) {                  // 산책 — 복도 왕복
             const who = pick(atDesk);
@@ -701,8 +701,8 @@ export default function OfficeView() {
           } else if (r < 0.75 && atDesk.length && openCorridor.length) { // 통화 — 복도(비겹침)
             const who = pick(atDesk); const s = pick(openCorridor);
             next[who] = { x: s.x, y: s.y, bubble: "📞 통화 중", act: "phone" };
-          } else if (r < 0.85 && atDesk.length && openPantry.length) {   // 커피·간식 — 탕비존 빈 슬롯(비겹침)
-            const who = pick(atDesk); const s = openPantry[0];
+          } else if (r < 0.85 && atDesk.length) {                  // 커피·간식 — 탕비존 산포
+            const who = pick(atDesk); const s = pointInZone(PANTRY_ZONE, rnd(), rnd());
             next[who] = { x: s.x, y: s.y, bubble: "🍵 커피·간식", act: "coffee" };
           } else if (r < 0.95 && atDesk.length) {                  // 자료 찾기 — 팀존 책장(팀 idle, 비겹침)
             const cand = atDesk.filter((k) => {
@@ -713,7 +713,7 @@ export default function OfficeView() {
               const s = shelfSpot(wgeom[deskPos[who]!.team!]);
               if (!used.has(key(s))) next[who] = { x: s.x, y: s.y, bubble: "📚 자료 찾기", act: "shelf" };
             }
-          } else if (atDesk.length && !used.has(key(WHITEBOARD_SPOT))) {  // 화이트보드 — 회의실 보드 앞(비겹침)
+          } else if (atDesk.length) {                              // 화이트보드 — 회의실 보드 앞(겹침 OK)
             const who = pick(atDesk);
             next[who] = { x: WHITEBOARD_SPOT.x, y: WHITEBOARD_SPOT.y, bubble: "✍️ 화이트보드", act: "board" };
           }
