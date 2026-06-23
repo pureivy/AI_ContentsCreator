@@ -375,7 +375,7 @@ button.upload-retry:hover { background: var(--panel2); }
 .viewtoggle button:hover { filter: brightness(1.1); }
 /* 품질 토글(토론·추론) — 컴포저의 per-run 옵션. 셀렉터(run-opt)와 같은 pill 모양, ON 은 녹색. */
 .chat-input .run-opt-toggle {
-  flex: 0 0 auto; border-radius: 999px; padding: 4px 9px; font-size: 11px; line-height: 1.25; cursor: pointer;
+  flex: 0 0 auto; border-radius: 999px; padding: 4px 8px; font-size: 10px; line-height: 1.25; cursor: pointer;
   color: var(--muted); background: var(--bg); border: 1px solid var(--border); opacity: 0.8;
   white-space: nowrap;
 }
@@ -1357,7 +1357,7 @@ button.upload-retry:hover { background: var(--panel2); }
 }
 
 /* 음성 입출력 */
-.voice-mic { border: none; background: transparent; font-size: 15px; cursor: pointer; padding: 3px 6px; border-radius: 8px; }
+.voice-mic { border: none; background: transparent; font-size: 13px; cursor: pointer; padding: 3px 5px; border-radius: 8px; }
 .voice-mic.rec { background: #c0392b33; animation: voicePulse 1s ease-in-out infinite; }
 @keyframes voicePulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
 .voice-speak { border: none; background: transparent; cursor: pointer; font-size: 13px; opacity: .6; }
