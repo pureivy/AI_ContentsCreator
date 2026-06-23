@@ -50,6 +50,10 @@ export function useJarvisVoice(opts: {
   const setStat = (s: JarvisVoiceStatus) => { if (statusRef.current !== s) { statusRef.current = s; setStatus(s); } };
   const setAct = (v: boolean) => { if (activeRef.current !== v) { activeRef.current = v; setActive(v); } };
 
+  /** 탭으로 대화 모드 즉시 활성화 — 음성 웨이크워드("자비스") STT 실패와 무관한 확실한 진입.
+   *  활성 후엔 웨이크워드 없이 발화가 바로 처리되고, 침묵 타임아웃 전까지 대화가 이어진다. */
+  function activate(): void { setAct(true); lastUtterRef.current = performance.now(); }
+
   // 자비스 발화 종료 시각 기록(쿨다운용)
   useEffect(() => { if (!speaking) speakEndRef.current = performance.now(); }, [speaking]);
 
@@ -157,5 +161,5 @@ export function useJarvisVoice(opts: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
 
-  return { status, active, lastHeard };
+  return { status, active, lastHeard, activate };
 }

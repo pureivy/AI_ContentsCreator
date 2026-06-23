@@ -292,10 +292,9 @@ export default function App() {
       );
     } catch (e) { useStore.getState().pushJarvisTurn({ role: "jarvis", text: `(위임 실패) ${(e as Error).message}` }); }
   });
-  const [micMuted, setMicMuted] = useState(false);   // 핸즈프리 마이크 일시정지(탭 토글)
-  // 핸즈프리 자비스 — JARVIS 모드(convo) 동안 상시 청취 + 웨이크워드("자비스") + VAD 발화끝 자동감지.
+  // 핸즈프리 자비스 — JARVIS 모드(convo) 동안 상시 청취 + 웨이크워드("자비스") 또는 버튼 탭 활성화 + VAD.
   const jv = useJarvisVoice({
-    enabled: convo && voiceAvail.stt && !micMuted,
+    enabled: convo && voiceAvail.stt,
     speaking: tts.speakingSeq !== null,
     sttUpload,
     send: jarvis.send,
@@ -1336,7 +1335,7 @@ export default function App() {
           <button type="button" className="jarvis-close" onClick={toggleConvo} title="닫기">×</button>
           <JarvisAvatar analyser={tts.analyser} speaking={tts.speakingSeq !== null} />
           <div className="jarvis-thread">
-            {s.jarvisTurns.length === 0 && <p className="muted">🎙 “자비스”라고 부르면 대화가 시작됩니다</p>}
+            {s.jarvisTurns.length === 0 && <p className="muted">🎙 아래 버튼을 탭하거나 “자비스”라고 부르면 대화가 시작됩니다</p>}
             {s.jarvisTurns.map((t, i) => (
               <div key={i} className={`jarvis-turn ${t.role}`}>
                 <b>{t.role === "jarvis" ? "자비스" : "나"}</b> {t.text}
@@ -1348,17 +1347,16 @@ export default function App() {
           {jv.lastHeard && <p className="jarvis-heard">🗨 들린 말: “{jv.lastHeard}”</p>}
           <button
             type="button"
-            className={`jarvis-mic jv-${jv.status}${micMuted ? " muted" : ""}`}
+            className={`jarvis-mic jv-${jv.status}`}
             disabled={!voiceAvail.stt}
-            title={voiceAvail.stt ? '탭 = 마이크 켜기/끄기 (켜져 있으면 "자비스"라고 부르세요)' : "음성 입력 미설치(mlx-whisper 필요)"}
-            onClick={() => { tts.prime(); setMicMuted((m) => !m); }}
+            title={voiceAvail.stt ? '탭하면 바로 대화 시작 (또는 "자비스"라고 부르세요)' : "음성 입력 미설치(mlx-whisper 필요)"}
+            onClick={() => { tts.prime(); jv.activate(); }}
           >{!voiceAvail.stt ? "🎙️ 음성 미설치"
-            : micMuted ? "🔇 마이크 꺼짐 · 탭하여 켜기"
             : jv.status === "speaking" ? "🗣️ 자비스가 말하는 중…"
             : jv.status === "thinking" ? "💭 생각 중…"
             : jv.status === "listening" ? "👂 듣는 중…"
-            : jv.active ? "🟢 대화 중 · 말씀하세요"
-            : "🎙️ “자비스”라고 불러주세요"}</button>
+            : jv.active ? "🟢 대화 중 · 편히 말씀하세요"
+            : "🎙️ 탭하고 말하기 (또는 “자비스”)"}</button>
         </div>
       )}
       <header className="topbar">
