@@ -1345,6 +1345,7 @@ export default function App() {
             ))}
             {s.jarvisBusy && <p className="muted">자비스가 생각 중…</p>}
           </div>
+          {jv.lastHeard && <p className="jarvis-heard">🗨 들린 말: “{jv.lastHeard}”</p>}
           <button
             type="button"
             className={`jarvis-mic jv-${jv.status}${micMuted ? " muted" : ""}`}

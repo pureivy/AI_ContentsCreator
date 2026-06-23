@@ -2,8 +2,12 @@ import { useEffect, useRef, useState } from "react";
 
 export type JarvisVoiceStatus = "off" | "idle" | "listening" | "thinking" | "speaking";
 
-/** 웨이크워드 — "자비스"(STT 변형 재비스/자비쓰 허용, 공백 무시). */
-const WAKE = /(자|재)비(스|쓰|즈)/;
+/** 웨이크워드 매칭 — 짧은 "자비스"는 mlx-whisper 가 차비스/짜비스 등으로 자주 오전사한다.
+ *  ㅈ↔ㅊ↔ㅉ 초성·종성 혼동과 영어 전사(jarvis)를 폭넓게 흡수한다(공백·구두점 무시). */
+function isWake(text: string): boolean {
+  const t = text.replace(/[\s.,!?·]/g, "").toLowerCase();
+  return /(자|차|짜|재|채|저|쟈)비(스|쓰|즈|시|수|쯔)/.test(t) || /(jar?vis|jabis|javis|chavis)/.test(t);
+}
 
 /** 핸즈프리 자비스(Siri/Bixby식). enabled 동안 마이크를 상시 열고 VAD 로 발화구간을
  *  자동 감지 → 말이 끝나면(침묵) STT→처리. 대기 중엔 "자비스" 호출이 있어야 활성화하고,
@@ -19,6 +23,7 @@ export function useJarvisVoice(opts: {
   const { enabled, speaking } = opts;
   const [status, setStatus] = useState<JarvisVoiceStatus>("off");
   const [active, setActive] = useState(false);
+  const [lastHeard, setLastHeard] = useState("");   // 마지막으로 STT 가 들은 말(피드백·디버그)
 
   // 루프에서 최신값을 보도록 ref 동기화(stale closure 방지)
   const speakingRef = useRef(speaking); speakingRef.current = speaking;
@@ -83,11 +88,14 @@ export function useJarvisVoice(opts: {
       setStat("thinking");
       try {
         const text = (await sttRef.current(blob)).trim();
-        const wake = WAKE.test(text.replace(/\s/g, ""));
+        if (text) setLastHeard(text);                        // 들린 말(피드백·디버그)
+        const wake = isWake(text);
         if (!text || (!activeRef.current && !wake)) return;  // 대기 중 호출 없음/빈 텍스트 → 무시
         setAct(true);
         lastUtterRef.current = performance.now();
-        await sendRef.current(text);   // 자비스 응답 + TTS 트리거
+        // 오전사된 웨이크 토큰(차비스 등)을 '자비스'로 정규화해 보낸다(gemma 가 깔끔히 인식)
+        const toSend = wake ? text.replace(/^\s*(자|차|짜|재|채|저|쟈)비(스|쓰|즈|시|수|쯔)\s*/, "자비스 ").trim() : text;
+        await sendRef.current(toSend);   // 자비스 응답 + TTS 트리거
       } catch { /* STT/전송 실패 → 조용히 계속 */ }
       finally { processingRef.current = false; lastUtterRef.current = performance.now(); }
     }
@@ -149,5 +157,5 @@ export function useJarvisVoice(opts: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
 
-  return { status, active };
+  return { status, active, lastHeard };
 }
