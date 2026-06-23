@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "./store";
 import { startRun, resumeRun, watchRun, RunHandle } from "./transport/sse";
-import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, downloadRunHwpx, fetchEta, reviseRun, fetchTemplates, saveTemplate, deleteTemplate, runTemplate, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, RunInfo, UploadFileResult, LlmStatus, EtaStats, TemplateInfo, RunSettings } from "./api";
+import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, downloadRunHwpx, fetchEta, reviseRun, fetchTemplates, saveTemplate, deleteTemplate, runTemplate, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, RunInfo, UploadFileResult, LlmStatus, EtaStats, TemplateInfo, RunSettings } from "./api";
 import { ActivityItem, ApprovalItem, DebateMsg, UIState } from "./events/types";
 import AgentGraph from "./panels/AgentGraph";
 import OfficeView from "./panels/OfficeView";
@@ -22,6 +22,10 @@ import UploadSummary from "./panels/UploadSummary";
 import LiveNowStrip from "./panels/LiveNowStrip";
 import { debateGist } from "./events/debateSummary";
 import { agentColor, agentGlyph, personLabel } from "./panels/agentVisual";
+import { useRecorder } from "./voice/useRecorder";
+import { useTts } from "./voice/useTts";
+import { Waveform } from "./voice/Waveform";
+import { mergeTranscript } from "./voice/transcript";
 // 무거운 그래프 라이브러리(react-force-graph)는 모달을 열 때만 로드(초기 번들에서 분리).
 const WikiGraphView = lazy(() => import("./panels/WikiGraphView"));
 
@@ -158,6 +162,7 @@ function TimelineMessage({
   wikiPages,
   selfName,
   rosterNames,
+  tts,
 }: {
   m: DebateMsg;
   roleLabel: string;
@@ -166,7 +171,10 @@ function TimelineMessage({
   wikiPages: UIState["wikiPages"];
   selfName?: string;
   rosterNames?: string[];
+  tts: ReturnType<typeof useTts>;
 }) {
+  // 카드 파형 표시 게이트 — store.speakingSeq 가 이 카드의 seq 와 같을 때만(useTts 가 갱신).
+  const speakingSeq = useStore((st) => st.speakingSeq);
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const textRef = useRef<HTMLDivElement>(null);
@@ -201,6 +209,15 @@ function TimelineMessage({
             ? MOVE_TAG[m.move]?.label ?? m.move
             : `R${m.round} · ${MOVE_TAG[m.move]?.label ?? m.move}`}
         </span>
+        <button
+          type="button"
+          className="voice-speak"
+          title="이 메시지 음성으로 듣기"
+          onClick={() => tts.speak(m.text, m.seq)}
+        >🔊</button>
+        {speakingSeq === m.seq && tts.analyser && (
+          <Waveform analyser={tts.analyser} variant="card" active />
+        )}
       </div>
       {full ? (
         <>
@@ -251,6 +268,16 @@ export default function App() {
   const histWrapRef = useRef<HTMLDivElement>(null);  // '📑 기록' 풀다운 바깥클릭 닫기용
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [chat, setChat] = useState("");
+  const recorder = useRecorder();  // 홀드 녹음(push-to-talk) → STT
+  const tts = useTts();            // 메시지/최종결과 낭독(단일 인스턴스 = AudioContext 1개 공유)
+
+  // 홀드 녹음 종료 → STT → 입력창 합성(자동 전송 아님). textarea 자동높이도 갱신.
+  const handleMicUp = async () => {
+    const blob = await recorder.stop();
+    if (!blob) return;
+    const text = await sttUpload(blob);
+    if (text) setChat((prev) => mergeTranscript(prev, text));
+  };
   // 좌하단 입력 대상 칩 — 직원명을 토큰화해 입력창엔 질문만 남긴다. null=전사 토론/지시.
   const [directedTarget, setDirectedTarget] = useState<{ id: string; label: string; lead: boolean } | null>(null);
   const [roster, setRoster] = useState<Employee[]>([]);
@@ -332,6 +359,21 @@ export default function App() {
   useEffect(() => {
     if (s.mode === "live" && s.runId && TERMINAL.has(s.status)) { refreshRuns(); refreshApprovals(); }
   }, [s.status, s.runId, s.mode]);
+
+  // 최종 결과(synthesis) 자동 낭독 — running→TERMINAL 전이 시 1회(라이브 한정). 합성은
+  // DebateMsg 카드가 아니라 s.synthesis 문자열이므로 seq=-1(가상 식별자)로 읽는다.
+  const autoReadRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (s.mode !== "live") return;                 // 리플레이 제외
+    if (!TERMINAL.has(s.status)) return;            // 런 종료 시점만
+    const key = `${s.runId}`;
+    if (autoReadRef.current === key) return;        // 런당 1회
+    const text = (s.synthesis ?? "").trim();
+    if (!text) return;
+    autoReadRef.current = key;
+    tts.speak(text, -1);                            // seq=-1: 최종 종합(카드 아님)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.status, s.runId, s.mode, s.synthesis]);
 
   // LLM 백엔드 상태(런 셀렉터 옵션 + 현재 effective 배지). 마운트 + 사무실 복귀 시 로드
   // (LLM 설정 변경 후 돌아오면 상단 배지가 최신값을 반영).
@@ -693,13 +735,21 @@ export default function App() {
   // 통합 커맨드 바 — 상단 주제 입력창을 흡수한 단일 입력. 유휴=전사 토론 시작 ·
   // 직원명+질문=지명 질의 · 실행 중=지시 주입. LLM 런 셀렉터와 중지 버튼도 여기.
   const chatBar = !isReplay ? (
-    <form
-      className="chat-input"
-      onSubmit={(e) => {
-        e.preventDefault();
-        sendChat();
-      }}
-    >
+    <>
+      {/* 녹음 중 음파 스트립 — 컴포저 위(스크롤 컨테이너 밖, 고정)에 두어 '듣는 중'이 항상 보이게. */}
+      {recorder.recording && (
+        <div className="waveform-strip-wrap">
+          <Waveform analyser={recorder.analyser} variant="strip" active={recorder.recording} />
+          <span className="muted">🎙 듣는 중…</span>
+        </div>
+      )}
+      <form
+        className="chat-input"
+        onSubmit={(e) => {
+          e.preventDefault();
+          sendChat();
+        }}
+      >
       {directedTarget && (
         <span className="directed-chip">
           {directedLead ? `👥 ${directedTitle} · 팀 가동` : `👤 ${directedTitle}`}
@@ -737,6 +787,14 @@ export default function App() {
               : "주제 입력(전사 토론) 또는 직원명+질문…"
         }
       />
+      <button
+        type="button"
+        className={`voice-mic ${recorder.recording ? "rec" : ""}`}
+        title="누르고 말하기(떼면 입력창에 채움)"
+        onPointerDown={(e) => { e.preventDefault(); recorder.start(); }}
+        onPointerUp={(e) => { e.preventDefault(); handleMicUp(); }}
+        onPointerLeave={() => { if (recorder.recording) handleMicUp(); }}
+      >🎙️</button>
       {/* 품질 토글(토론·추론) — per-run 옵션이라 컴포저에 배치. type="button" 필수(form submit 방지). */}
       {s.status !== "running" && (
         <button type="button"
@@ -772,7 +830,8 @@ export default function App() {
       {s.status === "running" && (
         <button className="btn cancel" type="button" onClick={cancel}>중지</button>
       )}
-    </form>
+      </form>
+    </>
   ) : null;
 
   // 라이브 스트리밍 표시는 LiveNowStrip(타임라인 상단 '지금 작업 중' 띠)이 담당 —
@@ -951,6 +1010,7 @@ export default function App() {
               wikiPages={s.wikiPages}
               selfName={a?.persona?.name || rosterPersons[m.agent_id ?? ""]}
               rosterNames={rosterNameList}
+              tts={tts}
             />,
           );
         }
