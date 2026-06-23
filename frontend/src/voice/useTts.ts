@@ -28,6 +28,13 @@ export function useTts() {
     setLocalSeq(null); setSpeaking(null); setAnalyser(null);
   }
 
+  /** 사용자 제스처(마이크 누름) 때 AudioContext 를 생성·resume 해 이후 자동재생을 언락. */
+  async function prime(): Promise<void> {
+    const ctx = acRef.current ?? new AudioContext();
+    acRef.current = ctx;
+    if (ctx.state === 'suspended') await ctx.resume();
+  }
+
   async function speak(text: string, seq?: number): Promise<void> {
     stop();
     const blob = await ttsFetch(text);
@@ -54,5 +61,5 @@ export function useTts() {
     await el.play().catch(() => stop());
   }
 
-  return { speak, stop, speakingSeq, analyser };
+  return { speak, stop, prime, speakingSeq, analyser };
 }
