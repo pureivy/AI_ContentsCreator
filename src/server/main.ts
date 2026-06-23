@@ -48,6 +48,10 @@ import { synthesize, listKoreanVoices, ttsAvailable } from '../voice/tts';
 import { getVoiceSettings, setVoiceSettings } from '../voice/setting';
 import { jarvisChat } from '../jarvis/chat';
 
+// 시간 기준 = 대한민국 표준시(KST). 스크립트(package.json)가 TZ 를 주지만, 직접 실행 대비 방어적으로
+// 고정한다(이미 설정돼 있으면 존중). 로컬시간 기반 코드(nowDate·스케줄러)가 호스트 OS 와 무관하게 KST.
+process.env.TZ ??= 'Asia/Seoul';
+
 interface RunHandle {
   status: 'running' | 'done' | 'error' | 'cancelled';
   abort: AbortController;

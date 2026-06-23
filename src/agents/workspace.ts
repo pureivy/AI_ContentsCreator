@@ -12,6 +12,7 @@ import path from 'node:path';
 import { CONFIG } from '../config';
 import { ollama } from '../llm/ollama';
 import type { RoleDef } from './company';
+import { kstDate } from '../util/time';
 
 const ALLOWED_TOOLS = new Set(['wiki_query', 'wiki_ingest', 'web_search']);
 
@@ -77,7 +78,7 @@ export function appendActivity(id: string, line: string): void {
 export function appendMemory(id: string, insight: string): void {
   if (!safeId(id) || !insight.trim()) return;
   fs.mkdirSync(dir(id), { recursive: true });
-  const date = new Date().toISOString().slice(0, 10);
+  const date = kstDate();
   const p = path.join(dir(id), 'memory.md');
   fs.appendFileSync(p, `- (${date}) ${insight.trim().replace(/\s+/g, ' ')}\n`, 'utf-8');
   tailTrim(p, 400, 200); // 자가학습 누적 상한(최근 200줄) — 파일·주입 비용 통제
@@ -114,7 +115,7 @@ export async function archiveMemory(id: string, microModel: string, signal?: Abo
     });
     summary = res.text.trim();
   } catch { /* 요약 실패해도 원본은 archive 에 보존됨 */ }
-  const head = summary ? `## 이전 학습 요약 (${new Date().toISOString().slice(0, 10)})\n${summary}\n` : '';
+  const head = summary ? `## 이전 학습 요약 (${kstDate()})\n${summary}\n` : '';
   write(p, [head, recent.join('\n')].filter(Boolean).join('\n') + '\n');
   return true;
 }
@@ -147,7 +148,7 @@ export function appendVerified(id: string, claim: string, source: string): boole
   const cur = read(p);
   if (cur.includes(c.slice(0, 40))) return false; // 동일 주장 중복 방지
   fs.mkdirSync(dir(id), { recursive: true });
-  fs.appendFileSync(p, `- (${new Date().toISOString().slice(0, 10)}) ${c} _(근거: ${src})_\n`, 'utf-8');
+  fs.appendFileSync(p, `- (${kstDate()}) ${c} _(근거: ${src})_\n`, 'utf-8');
   tailTrim(p, 200, 120); // 상한
   return true;
 }
@@ -162,7 +163,7 @@ export function appendDecision(topic: string, summary: string): void {
   try {
     const d = path.join(CONFIG.dataDir, '_shared');
     fs.mkdirSync(d, { recursive: true });
-    fs.appendFileSync(path.join(d, 'decisions.md'), `## [${new Date().toISOString().slice(0, 10)}] ${topic}\n${summary.trim()}\n\n`, 'utf-8');
+    fs.appendFileSync(path.join(d, 'decisions.md'), `## [${kstDate()}] ${topic}\n${summary.trim()}\n\n`, 'utf-8');
   } catch { /* */ }
 }
 

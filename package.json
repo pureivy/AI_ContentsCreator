@@ -8,8 +8,8 @@
     "node": ">=20.6"
   },
   "scripts": {
-    "dev": "tsx watch src/server/main.ts",
-    "start": "tsx src/server/main.ts",
+    "dev": "TZ=Asia/Seoul tsx watch src/server/main.ts",
+    "start": "TZ=Asia/Seoul tsx src/server/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

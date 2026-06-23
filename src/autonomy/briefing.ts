@@ -8,6 +8,7 @@ import { CONFIG } from '../config';
 import { llmWiki } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
 import type { NotifyMessage } from './notify';
+import { kstDate } from '../util/time';
 
 function readTail(p: string, max: number): string {
   try {
@@ -28,7 +29,7 @@ export function composeBriefing(date: string, sections: Array<{ heading: string;
 
 /** 실제 데이터(위키·결정·학습·승인)에서 일일 브리핑을 구성. */
 export function buildBriefing(): NotifyMessage {
-  const date = new Date().toISOString().slice(0, 10);
+  const date = kstDate();
   const sections: Array<{ heading: string; body: string }> = [];
   try {
     const w = llmWiki().stats();

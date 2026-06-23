@@ -13,6 +13,7 @@ import type { ChatMessage, ChatResult } from '../llm/ollama';
 import { EventType } from '../events/types';
 import type { EventBus } from '../events/bus';
 import type { RoleDef } from '../agents/company';
+import { kstNowKo } from '../util/time';
 import { genId } from '../util/ids';
 import { isAbort } from '../util/abort';
 import { llmWiki } from '../wiki/llmwiki';
@@ -34,13 +35,16 @@ export function buildSystemPrompt(role: RoleDef, extra = '', opts: { brevity?: b
   const brev = opts.brevity === false ? '' : localBrevityNote();
   // 워크스페이스 진화(prompt.md·goal.md·skills) 주입 → 직원 편집이 런에 실제 반영.
   const tail = [extra, personaExtra(role.id)].filter(Boolean).join('\n\n');
+  // 현재 시각(KST) 주입 — 에이전트가 '오늘'을 실제 날짜로 인지(학습시점 추측 방지).
+  const dateNote = `오늘은 ${kstNowKo()} 입니다.`;
   if (role.systemPrompt) {
     // company.yaml 의 풍부한 시스템 프롬프트 사용(실명·직책·기관 맥락 보존).
     const head = `당신은 "${role.name}"(${role.title})입니다.`;
-    return [head, role.systemPrompt, tail].filter(Boolean).join('\n\n') + brev + VERIFIED_NOTE;
+    return [head, dateNote, role.systemPrompt, tail].filter(Boolean).join('\n\n') + brev + VERIFIED_NOTE;
   }
   const lines = [
     `당신은 "${role.name}" — ${role.title}.`,
+    dateNote,
     `전문 영역: ${role.specialty}.`,
   ];
   if (role.persona) lines.push(`태도/말투: ${role.persona}`);

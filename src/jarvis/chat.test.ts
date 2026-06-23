@@ -42,6 +42,13 @@ describe('jarvisChat', () => {
     expect(p).toContain('직원 목록');
   });
 
+  it('jarvisSystemPrompt 는 현재 KST 시각을 주입한다(날짜 추측 방지)', () => {
+    const p = jarvisSystemPrompt();
+    expect(p).toContain('현재 시각');
+    expect(p).toContain('(KST)');
+    expect(p).toMatch(/\d{4}년/); // 연도 포함
+  });
+
   it('jarvisSystemPrompt 로스터는 비서(자비스) 자신을 위임 후보로 넣지 않는다', () => {
     const p = jarvisSystemPrompt();
     expect(p).toContain('support_budget');   // 실제 직원은 후보에 있음
