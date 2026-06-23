@@ -123,7 +123,9 @@ export function JarvisAvatar({ analyser, speaking }: { analyser: AnalyserNode | 
       // 아바타 이미지(머리+어깨 크롭)
       const im = avImg.current;
       if (im && im.complete && im.naturalWidth) {
-        ctx.drawImage(im, 76, 30, 360, 360, cx - cR, cy - cR, cR * 2, cR * 2);
+        // 1024² 이미지: 머리(올림머리 y72~턱 y560, 가로중심 x511)를 얼굴중심(~511,360)이 원 중앙에
+        // 오도록 정사각 크롭(231,72,560,560) → 원 안에 얼굴이 채워진다.
+        ctx.drawImage(im, 231, 72, 560, 560, cx - cR, cy - cR, cR * 2, cR * 2);
       }
       // 시안 틴트
       ctx.globalCompositeOperation = "lighter";
@@ -142,14 +144,14 @@ export function JarvisAvatar({ analyser, speaking }: { analyser: AnalyserNode | 
 
       // 헤드셋: 헤드밴드 아크(머리 위)
       ctx.shadowBlur = 12;
-      ring(cR * 0.9, 4, CY(0.7 + act * 0.3), Math.PI * 1.18, Math.PI * 1.82);
+      ring(cR * 0.84, 4, CY(0.7 + act * 0.3), Math.PI * 1.18, Math.PI * 1.82);
       // 이어셋(좌측 귀)
-      const ex = cx - cR * 0.80, ey = cy - cR * 0.04;
+      const ex = cx - cR * 0.66, ey = cy - cR * 0.02;
       ctx.fillStyle = CY(0.92); ctx.shadowBlur = 18;
       ctx.beginPath(); ctx.arc(ex, ey, 6 + act * 5, 0, Math.PI * 2); ctx.fill();
       ctx.strokeStyle = MG(0.6); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ex, ey, 9 + act * 5, 0, Math.PI * 2); ctx.stroke();
       // 마이크 붐(이어셋→입)
-      const mx = cx - cR * 0.04, my = cy + cR * 0.42;
+      const mx = cx - cR * 0.02, my = cy + cR * 0.46;
       ctx.strokeStyle = CY(0.8); ctx.lineWidth = 2.6; ctx.shadowBlur = 10;
       ctx.beginPath(); ctx.moveTo(ex, ey); ctx.quadraticCurveTo(cx - cR * 0.72, cy + cR * 0.55, mx, my); ctx.stroke();
       // 마이크 팁(말할 때 보라 발광)
