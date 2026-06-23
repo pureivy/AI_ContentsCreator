@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 
 export type JarvisVoiceStatus = "off" | "idle" | "listening" | "thinking" | "speaking";
 
-/** 웨이크워드 매칭 — 짧은 "자비스"는 mlx-whisper 가 차비스/짜비스 등으로 자주 오전사한다.
- *  ㅈ↔ㅊ↔ㅉ 초성·종성 혼동과 영어 전사(jarvis)를 폭넓게 흡수한다(공백·구두점 무시). */
+/** 웨이크워드 매칭 — 짧은 "자비스"는 mlx-whisper 가 차비스/짜비스, 심지어 초성 ㅈ 을 탈락시켜
+ *  "아비스"로도 자주 오전사한다. 첫음절을 ㅈ-계열 + ㅈ-탈락 모음(아/하/와/어/오)까지 흡수하고
+ *  종성 혼동·영어 전사도 받는다. ('서비스' 오탐은 첫음절에 서 를 넣지 않아 방지.) */
+const WAKE_RE = /(자|차|짜|쨔|재|채|저|쟈|아|하|와|어|오)비(스|쓰|즈|시|수|쯔)/;
 function isWake(text: string): boolean {
-  const t = text.replace(/[\s.,!?·]/g, "").toLowerCase();
-  return /(자|차|짜|재|채|저|쟈)비(스|쓰|즈|시|수|쯔)/.test(t) || /(jar?vis|jabis|javis|chavis)/.test(t);
+  const t = text.replace(/[\s.,!?·~]/g, "").toLowerCase();
+  return WAKE_RE.test(t) || /(jar?vis|jabis|javis|chavis|abis)/.test(t);
 }
 
 /** 핸즈프리 자비스(Siri/Bixby식). enabled 동안 마이크를 상시 열고 VAD 로 발화구간을
@@ -98,7 +100,7 @@ export function useJarvisVoice(opts: {
         setAct(true);
         lastUtterRef.current = performance.now();
         // 오전사된 웨이크 토큰(차비스 등)을 '자비스'로 정규화해 보낸다(gemma 가 깔끔히 인식)
-        const toSend = wake ? text.replace(/^\s*(자|차|짜|재|채|저|쟈)비(스|쓰|즈|시|수|쯔)\s*/, "자비스 ").trim() : text;
+        const toSend = wake ? text.replace(/^\s*(자|차|짜|쨔|재|채|저|쟈|아|하|와|어|오)비(스|쓰|즈|시|수|쯔)\s*/, "자비스 ").trim() : text;
         await sendRef.current(toSend);   // 자비스 응답 + TTS 트리거
       } catch { /* STT/전송 실패 → 조용히 계속 */ }
       finally { processingRef.current = false; lastUtterRef.current = performance.now(); }
