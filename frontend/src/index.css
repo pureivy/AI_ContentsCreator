@@ -1369,7 +1369,9 @@ button.upload-retry:hover { background: var(--panel2); }
 /* 자비스 대화 오버레이 */
 .jarvis-overlay { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 16px; background: rgba(4, 10, 22, 0.72); backdrop-filter: blur(4px); }
-.jarvis-orb { width: min(42vmin, 360px); height: auto; will-change: transform, filter; }
+.jarvis-avatar { position: relative; width: min(48vmin, 420px); aspect-ratio: 1 / 1; display: grid; place-items: center; }
+.jarvis-viz { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.jarvis-orb { position: relative; width: 66%; height: auto; will-change: transform, filter; }
 .jarvis-close { position: absolute; top: 18px; right: 22px; font-size: 28px; background: none; border: none; color: #cfe3ff; cursor: pointer; }
 .jarvis-thread { width: min(92vw, 560px); max-height: 32vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .jarvis-turn { padding: 6px 10px; border-radius: 10px; background: rgba(255,255,255,0.06); color: #e8f1ff; }
