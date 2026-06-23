@@ -36,6 +36,9 @@ export interface ChatParams {
   signal?: AbortSignal;
   /** Ollama 구조화 출력 — 'json' 이면 유효 JSON 강제(분해·배정·수렴판정 등 파싱 신뢰도↑). */
   format?: 'json';
+  /** 추론(thinking) per-call 오버라이드. 미지정이면 기존대로 runSettings.agentThinking 을 따른다.
+   *  false 로 주면 전역 추론 토글과 무관하게 이 호출은 추론을 끈다(잡담 등 저지연 응답용). */
+  think?: boolean;
   /** 토큰 델타 콜백(스트리밍 UI용). */
   onDelta?: (text: string) => void;
 }
@@ -164,7 +167,7 @@ export class OllamaClient {
     // 추론(thinking) — AGENT_THINKING 활성 + 생성 단계(구조적 JSON 호출 제외)에서만 켠다. 추론은 답변
     // 품질을 높이지만 토큰 예산을 잠식하므로(이 모델은 단순 질문에도 ~500~1000토큰 추론) 활성 시 num_predict 에
     // thinkingBudgetTokens 를 더해 답변(content)이 잘리지 않게 한다. 미설정(기본)이면 기존대로 think:false.
-    const wantThink = getRunSettings().agentThinking && params.format !== 'json';
+    const wantThink = (params.think ?? getRunSettings().agentThinking) && params.format !== 'json';
     const baseOut = Math.max(1, params.maxOutputTokens ?? CONFIG.maxOutputTokens);
     const numPredict = wantThink ? Math.min(baseOut + CONFIG.thinkingBudgetTokens, 32_768) : baseOut;
     const body = {
