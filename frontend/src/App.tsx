@@ -787,8 +787,10 @@ export default function App() {
   // 직원명+질문=지명 질의 · 실행 중=지시 주입. LLM 런 셀렉터와 중지 버튼도 여기.
   const chatBar = !isReplay ? (
     <>
-      {/* 녹음 중 음파 스트립 — 컴포저 위(스크롤 컨테이너 밖, 고정)에 두어 '듣는 중'이 항상 보이게. */}
-      {recorder.recording && (
+      {/* 녹음 중 음파 스트립 — 컴포저 위(스크롤 컨테이너 밖, 고정)에 두어 '듣는 중'이 항상 보이게.
+          단, 자비스 오버레이(convo) 중에는 오버레이 자체 마이크 버튼이 '듣는 중'을 표시하므로
+          중복·중첩 방지로 이 전역 스트립은 숨긴다. */}
+      {recorder.recording && !convo && (
         <div className="waveform-strip-wrap">
           <Waveform analyser={recorder.analyser} variant="strip" active={recorder.recording} />
           <span className="muted">🎙 듣는 중…</span>

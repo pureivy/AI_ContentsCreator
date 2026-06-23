@@ -1389,12 +1389,34 @@ button.upload-retry:hover { background: var(--panel2); }
 /* 자비스 대화 오버레이 */
 .jarvis-overlay { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 16px; background: rgba(4, 10, 22, 0.72); backdrop-filter: blur(4px); }
-.jarvis-orb-canvas { width: min(50vmin, 440px); height: auto; aspect-ratio: 1 / 1; }
+.jarvis-orb-canvas { width: min(58vmin, 460px); height: auto; aspect-ratio: 1 / 1;
+  filter: drop-shadow(0 10px 34px rgba(0,160,255,0.28)); }
 .jarvis-close { position: absolute; top: 18px; right: 22px; font-size: 28px; background: none; border: none; color: #cfe3ff; cursor: pointer; }
 .jarvis-thread { width: min(92vw, 560px); max-height: 32vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .jarvis-turn { padding: 6px 10px; border-radius: 10px; background: rgba(255,255,255,0.06); color: #e8f1ff; }
 .jarvis-turn.user { align-self: flex-end; background: rgba(90,140,255,0.18); }
-.jarvis-mic { margin-top: 8px; padding: 14px 28px; font-size: 18px; border-radius: 999px; border: 1px solid #5a8cff66;
-  background: rgba(90,140,255,0.18); color: #e8f1ff; cursor: pointer; }
-.jarvis-mic.rec { background: #c0392b44; animation: voicePulse 1s ease-in-out infinite; }
-.jarvis-mic:disabled { opacity: .5; cursor: not-allowed; }
+.jarvis-mic { margin-top: 6px; display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+  padding: 14px 32px; font-size: 17px; font-weight: 600; letter-spacing: .2px; min-height: 52px;
+  border-radius: 999px; border: 1px solid rgba(120,170,255,0.55); color: #eaf3ff;
+  background: linear-gradient(135deg, rgba(48,98,210,0.46), rgba(96,150,255,0.30));
+  box-shadow: 0 6px 20px rgba(40,90,200,0.35), inset 0 1px 0 rgba(255,255,255,0.18);
+  cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: none;
+  transition: transform .12s ease, box-shadow .2s ease, background .2s ease, border-color .2s ease; }
+.jarvis-mic:hover { box-shadow: 0 8px 28px rgba(70,130,255,0.5), inset 0 1px 0 rgba(255,255,255,0.22); }
+.jarvis-mic:active { transform: scale(0.96); }
+.jarvis-mic.rec { color: #fff; border-color: rgba(255,110,130,0.78);
+  background: linear-gradient(135deg, rgba(225,55,80,0.62), rgba(255,108,124,0.42));
+  animation: micPulse 1.25s ease-out infinite; }
+.jarvis-mic:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; animation: none; }
+@keyframes micPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(255,84,108,0.55), 0 6px 22px rgba(255,72,96,0.45); }
+  70%  { box-shadow: 0 0 0 20px rgba(255,84,108,0), 0 6px 22px rgba(255,72,96,0.45); }
+  100% { box-shadow: 0 0 0 0 rgba(255,84,108,0), 0 6px 22px rgba(255,72,96,0.45); }
+}
+/* 모바일(≤900px): 자비스 오버레이 — 아바타 크게, 스레드·버튼 손가락 친화 */
+@media (max-width: 900px) {
+  .jarvis-orb-canvas { width: min(80vw, 360px); }
+  .jarvis-thread { width: 92vw; max-height: 26vh; }
+  .jarvis-mic { padding: 15px 34px; font-size: 17px; min-height: 54px; }
+  .jarvis-close { top: 14px; right: 16px; font-size: 32px; padding: 6px; }
+}
