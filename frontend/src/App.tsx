@@ -27,6 +27,7 @@ import { useTts } from "./voice/useTts";
 import { Waveform } from "./voice/Waveform";
 import { mergeTranscript } from "./voice/transcript";
 import { useJarvis } from "./jarvis/useJarvis";
+import { useJarvisVoice } from "./voice/useJarvisVoice";
 import { JarvisAvatar } from "./jarvis/JarvisAvatar";
 // 무거운 그래프 라이브러리(react-force-graph)는 모달을 열 때만 로드(초기 번들에서 분리).
 const WikiGraphView = lazy(() => import("./panels/WikiGraphView"));
@@ -291,7 +292,15 @@ export default function App() {
       );
     } catch (e) { useStore.getState().pushJarvisTurn({ role: "jarvis", text: `(위임 실패) ${(e as Error).message}` }); }
   });
-  const toggleConvo = () => { const next = !convo; setConvo(next); setVoiceConversational(next); };
+  const [micMuted, setMicMuted] = useState(false);   // 핸즈프리 마이크 일시정지(탭 토글)
+  // 핸즈프리 자비스 — JARVIS 모드(convo) 동안 상시 청취 + 웨이크워드("자비스") + VAD 발화끝 자동감지.
+  const jv = useJarvisVoice({
+    enabled: convo && voiceAvail.stt && !micMuted,
+    speaking: tts.speakingSeq !== null,
+    sttUpload,
+    send: jarvis.send,
+  });
+  const toggleConvo = () => { const next = !convo; if (next) tts.prime(); setConvo(next); setVoiceConversational(next); };
 
   // 마운트 시 1회 — 음성 도구 가용성 체크(mlx_whisper/say/ffmpeg 설치 여부)
   useEffect(() => {
@@ -1327,7 +1336,7 @@ export default function App() {
           <button type="button" className="jarvis-close" onClick={toggleConvo} title="닫기">×</button>
           <JarvisAvatar analyser={tts.analyser} speaking={tts.speakingSeq !== null} />
           <div className="jarvis-thread">
-            {s.jarvisTurns.length === 0 && <p className="muted">🎙 마이크를 누르고 자비스에게 말하세요</p>}
+            {s.jarvisTurns.length === 0 && <p className="muted">🎙 “자비스”라고 부르면 대화가 시작됩니다</p>}
             {s.jarvisTurns.map((t, i) => (
               <div key={i} className={`jarvis-turn ${t.role}`}>
                 <b>{t.role === "jarvis" ? "자비스" : "나"}</b> {t.text}
@@ -1338,13 +1347,17 @@ export default function App() {
           </div>
           <button
             type="button"
-            className={`jarvis-mic ${recorder.recording ? "rec" : ""}`}
+            className={`jarvis-mic jv-${jv.status}${micMuted ? " muted" : ""}`}
             disabled={!voiceAvail.stt}
-            title={voiceAvail.stt ? "누르고 자비스에게 말하기" : "음성 입력 미설치(mlx-whisper 필요)"}
-            onPointerDown={(e) => { e.preventDefault(); tts.stop(); tts.prime(); recorder.start(); }}
-            onPointerUp={(e) => { e.preventDefault(); handleMicUp(); }}
-            onPointerLeave={() => { if (recorder.recording) handleMicUp(); }}
-          >🎙️ {recorder.recording ? "듣는 중…" : "누르고 말하기"}</button>
+            title={voiceAvail.stt ? '탭 = 마이크 켜기/끄기 (켜져 있으면 "자비스"라고 부르세요)' : "음성 입력 미설치(mlx-whisper 필요)"}
+            onClick={() => { tts.prime(); setMicMuted((m) => !m); }}
+          >{!voiceAvail.stt ? "🎙️ 음성 미설치"
+            : micMuted ? "🔇 마이크 꺼짐 · 탭하여 켜기"
+            : jv.status === "speaking" ? "🗣️ 자비스가 말하는 중…"
+            : jv.status === "thinking" ? "💭 생각 중…"
+            : jv.status === "listening" ? "👂 듣는 중…"
+            : jv.active ? "🟢 대화 중 · 말씀하세요"
+            : "🎙️ “자비스”라고 불러주세요"}</button>
         </div>
       )}
       <header className="topbar">
