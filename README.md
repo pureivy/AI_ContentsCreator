@@ -305,7 +305,21 @@ gepa-ai-office/
 
 ---
 
-## 8. 테스트
+## 8. 음성 입출력 (Voice I/O)
+
+좌하단 🎙 버튼을 누르고 말하면 한국어가 입력창에 채워지고, 런 종료 시 최종 결과를 음성으로 읽어준다.
+
+### 셋업(1회)
+- STT: `pip install mlx-whisper` (모델 `mlx-community/whisper-large-v3-turbo`는 첫 사용 시 자동 다운로드, 약 1.5GB)
+- TTS: macOS `say`(내장, 한국어 음성 Yuna) — 설치 불필요
+- 변환: `ffmpeg` (`brew install ffmpeg`)
+- 미설치 시 음성 버튼은 비활성화되고 나머지 기능은 정상 동작한다.
+
+설정은 `data/voice.json`(enabled / ttsVoice / sttModel / autoReadFinal).
+
+---
+
+## 9. 테스트
 
 ```bash
 pnpm test          # vitest run (1회)
