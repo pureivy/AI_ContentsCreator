@@ -1,18 +1,23 @@
 import { useEffect, useRef } from "react";
 
-/** 코드 생성 JARVIS 오브 — 사이버틱 네온 HUD. 가운데 원에는 사이버펑크 자비스 얼굴
- *  (/avatars/jarvis_face.png — 크롬+골드 헬멧·시안 이어피스·네온)을 클립해 넣는다.
- *  이미지가 자체 헬멧/이어피스를 가지므로 코드 헤드셋은 두지 않고, 사이버 림·시안 틴트/
- *  스캔라인만 덧댄다. 둘레 HUD(헥사·틱·아크·레이더·막대·입자)와 림이 tts.analyser
- *  주파수/진폭에 반응. */
+/** 코드 생성 JARVIS 오브 — 사이버틱 네온 HUD. 가운데 원에는 정면 사이버펑크 자비스 얼굴
+ *  (/avatars/jarvis_face.png)을 클립해 넣고, 위에 두 오버레이를 합성해 '말하는' 모습을 만든다:
+ *   · jarvis_mouth.png(입벌림) — 음성 진폭(act)에 비례 페이드인 → 말하면 입이 열고 닫힘
+ *   · jarvis_eyes.png(눈감음) — 약 3.4초마다 깜빡임
+ *  발화 시 이어피스·눈·볼 마킹이 가산광으로 발광하고, 사이버 림·둘레 HUD(헥사·틱·아크·
+ *  레이더·막대·입자)가 tts.analyser 주파수/진폭에 맥동한다. (세 프레임은 gpt-image-1로
+ *  정면 생성 후 눈·입 영역만 마스크 인페인트해 정합을 맞춘 것.) */
 export function JarvisAvatar({ analyser, speaking }: { analyser: AnalyserNode | null; speaking: boolean }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
-  const avImg = useRef<HTMLImageElement | null>(null);
+  const avImg = useRef<HTMLImageElement | null>(null);    // 정면 기본(입 다물·눈 뜸)
+  const eyesImg = useRef<HTMLImageElement | null>(null);  // 눈감음 오버레이(깜빡임)
+  const mouthImg = useRef<HTMLImageElement | null>(null); // 입벌림 오버레이(발화)
 
   useEffect(() => {
-    const im = new Image();
-    im.src = "/avatars/jarvis_face.png";   // 동일 오리진 → canvas 오염 없음
-    avImg.current = im;
+    const load = (src: string, into: typeof avImg) => { const im = new Image(); im.src = src; into.current = im; };
+    load("/avatars/jarvis_face.png", avImg);   // 동일 오리진 → canvas 오염 없음
+    load("/avatars/jarvis_eyes.png", eyesImg);
+    load("/avatars/jarvis_mouth.png", mouthImg);
   }, []);
 
   useEffect(() => {
@@ -121,11 +126,25 @@ export function JarvisAvatar({ analyser, speaking }: { analyser: AnalyserNode | 
       const bg = ctx.createRadialGradient(cx, cy - cR * 0.2, cR * 0.2, cx, cy, cR);
       bg.addColorStop(0, "rgba(14,32,58,1)"); bg.addColorStop(1, "rgba(4,12,28,1)");
       ctx.fillStyle = bg; ctx.fillRect(cx - cR, cy - cR, cR * 2, cR * 2);
-      // 아바타 이미지 — 이미 머리(이어피스+헬멧+얼굴) 중심으로 정사각(920²) 크롭된 자산이라
-      // 전체를 원에 그대로 채운다(코너는 원 클립이 잘라냄).
+      // 아바타 이미지 — 정면 자비스(1024², 머리 중심). 전체를 원에 채우고(코너는 원 클립이 잘라냄),
+      // 그 위에 입벌림(발화)·눈감음(깜빡임) 오버레이를 동일 좌표계(1024²→원)로 합성한다.
+      const s = (cR * 2) / 1024, ix = cx - cR, iy = cy - cR; // 1024² 소스 → 원 그리기 좌표 매핑
       const im = avImg.current;
       if (im && im.complete && im.naturalWidth) {
-        ctx.drawImage(im, cx - cR, cy - cR, cR * 2, cR * 2);
+        ctx.drawImage(im, ix, iy, cR * 2, cR * 2);
+        // 입: 음성 진폭(act)에 비례해 입벌림 오버레이를 페이드인 → 말하면 입이 열고 닫힌다
+        const mo = mouthImg.current;
+        const mAlpha = Math.max(0, Math.min(1, (act - 0.03) * 7));
+        if (mo && mo.complete && mo.naturalWidth && mAlpha > 0.02) {
+          ctx.globalAlpha = mAlpha;
+          ctx.drawImage(mo, ix + 412 * s, iy + 630 * s, 232 * s, 160 * s);
+          ctx.globalAlpha = 1;
+        }
+        // 눈: 약 3.4초마다 0.14초 깜빡임(발화 무관, 항상 살아있게)
+        const eo = eyesImg.current;
+        if (eo && eo.complete && eo.naturalWidth && (t % 3.4) < 0.14) {
+          ctx.drawImage(eo, ix + 322 * s, iy + 395 * s, 360 * s, 124 * s);
+        }
       }
       // 시안 틴트
       ctx.globalCompositeOperation = "lighter";
@@ -135,6 +154,21 @@ export function JarvisAvatar({ analyser, speaking }: { analyser: AnalyserNode | 
       // 스캔라인
       ctx.strokeStyle = CY(0.05); ctx.lineWidth = 1;
       for (let yy = cy - cR; yy < cy + cR; yy += 5) { ctx.beginPath(); ctx.moveTo(cx - cR, yy); ctx.lineTo(cx + cR, yy); ctx.stroke(); }
+      // 발화 시 특정 부분 발광(이어피스·눈·볼 마킹) — act 비례 가산광(원 클립 내부)
+      if (act > 0.03) {
+        ctx.globalCompositeOperation = "lighter";
+        const A = Math.min(0.5, act * 1.6);
+        const glow = (gx: number, gy: number, rad: number, col: string) => {
+          const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, rad);
+          g.addColorStop(0, col); g.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.fillStyle = g; ctx.fillRect(gx - rad, gy - rad, rad * 2, rad * 2);
+        };
+        glow(ix + 110 * s, iy + 432 * s, cR * 0.34, `rgba(0,210,255,${A})`);        // 좌 이어피스
+        glow(ix + 915 * s, iy + 432 * s, cR * 0.34, `rgba(0,210,255,${A})`);        // 우 이어피스
+        glow(ix + 392 * s, iy + 465 * s, cR * 0.16, `rgba(90,200,255,${A * 0.8})`); // 좌 눈
+        glow(ix + 611 * s, iy + 438 * s, cR * 0.16, `rgba(90,200,255,${A * 0.8})`); // 우 눈
+        glow(ix + 350 * s, iy + 560 * s, cR * 0.14, `rgba(255,40,150,${A})`);       // 볼 마킹
+      }
       ctx.restore();
 
       // 사이버 림(이중) — 음성 진폭(act)에 맥동. 코드 헤드셋은 이미지가 자체 헬멧을 가지므로 제거.
