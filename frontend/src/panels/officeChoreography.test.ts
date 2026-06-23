@@ -1,8 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
   LOUNGE_SOFA_ZONE, PANTRY_ZONE, CONF_ZONE, WHITEBOARD_SPOT,
-  pointInZone, shelfSpot, Pt,
+  pointInZone, shelfSpot, overlapFrac, placeInZone, MAX_OVERLAP,
+  AVATAR_W, AVATAR_H, Pt, Zone,
 } from "./officeChoreography";
+
+// 결정적 난수(LCG) — placeInZone 의 산포가 재현 가능하도록.
+function lcg(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+}
+const inZone = (p: Pt, z: Zone) => p.x >= z.xMin && p.x <= z.xMax && p.y >= z.yMin && p.y <= z.yMax;
 
 // 사용자 요청: 휴게실/탕비실·회의실 액션은 '겹쳐도 되지만 일직선으로 줄세우지 않게' 영역 안 2D 산포.
 // → 검증: 영역이 해당 방 안에 들고, pointInZone 결과가 항상 그 영역(=방) 안. (겹침 허용이라 비겹침은 검증 X)
@@ -48,8 +56,52 @@ describe("pointInZone — [0,1] 난수를 영역 안 좌표로", () => {
   });
 });
 
-describe("자료 찾기 — 팀존 책장 앞", () => {
-  it("shelfSpot 은 팀존 중앙·상단(y=35)", () => {
-    expect(shelfSpot({ x: 2, w: 48 })).toEqual({ x: 26, y: 35 });
+describe("자료 찾기 — 팀존 서류함(캐비넷) 앞", () => {
+  it("shelfSpot 은 팀존 우상단 서류함 코너(중앙 책상이 아님)", () => {
+    // 서류함은 office-cabinet 과 동일 x(g.x + g.w - 3, 상단 벽). 자료찾기는 그 바로 앞.
+    const g = { x: 2, w: 48 };
+    const cabinetX = g.x + g.w - 3;
+    const s = shelfSpot(g);
+    expect(Math.abs(s.x - cabinetX)).toBeLessThanOrEqual(2.5); // 서류함 코앞(±2.5%)
+    expect(s.x).toBeLessThan(cabinetX);                        // 벽 쪽이 아니라 방 안쪽(앞)에서
+    expect(s.x).toBeGreaterThan(g.x + g.w / 2);                // 중앙(책상)보다 오른쪽 — 책상에서 자료찾기 X
+    expect(s.y).toBeLessThan(39);                              // 팀장 책상(y=39)보다 위(상단 벽 캐비넷)
+  });
+});
+
+describe("overlapFrac — 아바타 박스 면적 겹침 비율(한쪽 박스 대비)", () => {
+  it("같은 점=완전 겹침(1), 한 칸 이상 떨어지면 0", () => {
+    expect(overlapFrac({ x: 50, y: 50 }, { x: 50, y: 50 })).toBeCloseTo(1, 5);
+    expect(overlapFrac({ x: 50, y: 50 }, { x: 50 + AVATAR_W, y: 50 })).toBeCloseTo(0, 5);
+    expect(overlapFrac({ x: 50, y: 50 }, { x: 50, y: 50 + AVATAR_H })).toBeCloseTo(0, 5);
+  });
+  it("같은 y, dx=AVATAR_W/2 → 면적 1/2 (세로 완전 겹침 × 가로 1/2)", () => {
+    expect(overlapFrac({ x: 50, y: 50 }, { x: 50 + AVATAR_W / 2, y: 50 })).toBeCloseTo(0.5, 5);
+  });
+  it("1/3 경계: dx=AVATAR_W*2/3, dy=0 → 정확히 1/3", () => {
+    expect(overlapFrac({ x: 50, y: 50 }, { x: 50 + (AVATAR_W * 2) / 3, y: 50 })).toBeCloseTo(1 / 3, 5);
+  });
+});
+
+describe("placeInZone — 영역 안 산포, 쌍별 겹침 < 1/3", () => {
+  it("배치된 점은 항상 영역 안", () => {
+    const rng = lcg(7);
+    const placed: Pt[] = [];
+    for (let i = 0; i < 4; i++) {
+      const p = placeInZone(CONF_ZONE, placed, rng);
+      expect(inZone(p, CONF_ZONE)).toBe(true);
+      placed.push(p);
+    }
+  });
+  it("충분히 넓은 영역(회의실)에선 4명 쌍별 겹침이 모두 1/3 미만", () => {
+    const rng = lcg(42);
+    const placed: Pt[] = [];
+    for (let i = 0; i < 4; i++) placed.push(placeInZone(CONF_ZONE, placed, rng));
+    for (let i = 0; i < placed.length; i++)
+      for (let j = i + 1; j < placed.length; j++)
+        expect(overlapFrac(placed[i], placed[j])).toBeLessThan(MAX_OVERLAP);
+  });
+  it("MAX_OVERLAP 은 1/3", () => {
+    expect(MAX_OVERLAP).toBeCloseTo(1 / 3, 10);
   });
 });

@@ -94,9 +94,10 @@ export function confMeetingSeats(nLeads: number): { ceo: Pt; leads: Pt[] } {
 // 보기 싫다는 피드백 → x·y 둘 다 산포. 아바타는 framer-motion 이 translate(-50%,-50%) 를 덮어써
 // (x,y)가 스택 '상단'에 앵커(실측) → y≈6~11 이면 스택(~12.6% 높이)이 방(y2–27) 안에 든다.
 // 휴게실 x69–98, 회의실 x2–31.
+// 영역을 가로로 넓혀(휴게실 x69–98 안) 여러 명이 모여도 1/3 미만으로만 겹치게 산포 여유를 둔다.
 export interface Zone { xMin: number; xMax: number; yMin: number; yMax: number }
-export const LOUNGE_SOFA_ZONE: Zone = { xMin: 73, xMax: 81, yMin: 6, yMax: 11 }; // 휴게실 좌(소파존): 휴식
-export const PANTRY_ZONE: Zone     = { xMin: 85, xMax: 94, yMin: 6, yMax: 11 }; // 휴게실 우(탕비존): 잡담·커피
+export const LOUNGE_SOFA_ZONE: Zone = { xMin: 71, xMax: 82, yMin: 6, yMax: 11 }; // 휴게실 좌(소파존): 휴식
+export const PANTRY_ZONE: Zone     = { xMin: 84, xMax: 96, yMin: 6, yMax: 11 }; // 휴게실 우(탕비존): 잡담·커피
 export const CONF_ZONE: Zone       = { xMin: 6,  xMax: 27, yMin: 6, yMax: 11 }; // 회의실: 업무협의
 // 회의실 화이트보드 앞 — 메모 1인(회의실 좌측).
 export const WHITEBOARD_SPOT: Pt = { x: 6, y: 9 };
@@ -106,7 +107,42 @@ export function pointInZone(z: Zone, rx: number, ry: number): Pt {
   return { x: z.xMin + (z.xMax - z.xMin) * rx, y: z.yMin + (z.yMax - z.yMin) * ry };
 }
 
-// 자료 찾기 — 팀존(상단 책장 벽) 앞 1석. 팀존 사각형에서 파생(매직넘버 금지).
+// 두 아바타 박스가 겹치는 면적 비율(한쪽 박스 면적 대비, 0~1). 가로·세로 겹침 길이를 각 박스
+// 변으로 나눠 곱한다 → 같은 점=1, AVATAR_W/H 이상 벌어지면 0. '겹침 정도'의 충실한 척도.
+export function overlapFrac(a: Pt, b: Pt): number {
+  const ox = Math.max(0, AVATAR_W - Math.abs(a.x - b.x));
+  const oy = Math.max(0, AVATAR_H - Math.abs(a.y - b.y));
+  return (ox / AVATAR_W) * (oy / AVATAR_H);
+}
+
+// 사용자 요청: 같은 방에 모여 겹치더라도 '면적의 1/3 이상' 겹치지 않게.
+export const MAX_OVERLAP = 1 / 3;
+
+// 영역 안에서 이미 놓인 점들과 1/3 미만으로만 겹치는 한 점을 고른다. rng=[0,1) 난수(틱/테스트가
+// 주입 → 결정성). tries 번 거절 표집해 조건을 만족하는 점을 찾고, 못 찾으면(영역이 너무 좁은
+// 경우) '가장 덜 겹치는' 후보를 반환해 배치는 항상 성공시킨다. existing 엔 그 방의 기존 아바타뿐
+// 아니라 전체 wander 점을 넣어도 무방하다(멀리 있는 점은 overlapFrac=0 이라 제약이 안 됨).
+export function placeInZone(z: Zone, existing: Pt[], rng: () => number, tries = 24): Pt {
+  let best: Pt = pointInZone(z, rng(), rng());
+  let bestWorst = Infinity;
+  for (let i = 0; i < tries; i++) {
+    const p = i === 0 ? best : pointInZone(z, rng(), rng());
+    let worst = 0;
+    for (const q of existing) {
+      const f = overlapFrac(p, q);
+      if (f > worst) worst = f;
+      if (worst >= MAX_OVERLAP) break;
+    }
+    if (worst < MAX_OVERLAP) return p;
+    if (worst < bestWorst) { bestWorst = worst; best = p; }
+  }
+  return best;
+}
+
+// 자료 찾기 — 팀존 우상단 '서류함(office-cabinet)' 앞 1석. 서류함은 x = g.x + g.w - 3(상단 벽)
+// 에 그려진다 → 그 바로 앞(왼쪽 2%)에 선다. 2% 보정은 framer-motion 이 아바타 translate 를 덮어써
+// 시각적으로 ~2% 우측으로 밀리는 것을 상쇄(실측) → 서류함에 붙되 우측 벽을 넘지 않는다.
+// 팀존 사각형에서 파생(매직넘버 금지) → 팀장 책상(중앙)이 아니라 캐비넷에서 자료를 찾는 모습.
 export function shelfSpot(zone: { x: number; w: number }): Pt {
-  return { x: zone.x + zone.w / 2, y: 35 };
+  return { x: zone.x + zone.w - 5, y: 36 };
 }
