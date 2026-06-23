@@ -281,6 +281,12 @@ export default function App() {
   useEffect(() => { getVoices().then((v) => setConvo(!!(v as { conversational?: boolean }).conversational)); }, []);
   // 자비스가 주도해 시작한 런 id 집합 — 자동낭독 skip 가드와 보고 턴 트리거에 사용.
   const jarvisRunIds = useRef<Set<string>>(new Set());
+  // 자비스 대화 스레드 — 새 턴/생각중 표시 시 항상 최신(맨 아래)으로 스크롤.
+  const jarvisThreadRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = jarvisThreadRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [s.jarvisTurns.length, s.jarvisBusy]);
   const jarvis = useJarvis(tts, async (task, agent) => {
     handleRef.current?.cancel();                              // 진행 중 런 취소(기존 directed 분기와 동일)
     reset(task);
@@ -1334,7 +1340,7 @@ export default function App() {
         <div className="jarvis-overlay">
           <button type="button" className="jarvis-close" onClick={toggleConvo} title="닫기">×</button>
           <JarvisAvatar analyser={tts.analyser} speaking={tts.speakingSeq !== null} />
-          <div className="jarvis-thread">
+          <div className="jarvis-thread" ref={jarvisThreadRef}>
             {s.jarvisTurns.length === 0 && <p className="muted">🎙 아래 버튼을 탭하거나 “자비스”라고 부르면 대화가 시작됩니다</p>}
             {s.jarvisTurns.map((t, i) => (
               <div key={i} className={`jarvis-turn ${t.role}`}>
