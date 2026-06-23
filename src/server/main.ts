@@ -27,7 +27,7 @@ import { getCompany, reloadCompany, editRole, deleteRole, addTeam, renameTeam, d
 import { rolesById } from '../agents/company';
 import type { RoleDef } from '../agents/company';
 import type { RolePatch, MemberBody } from '../agents/company-loader';
-import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appendActivity, ensureScaffold } from '../agents/workspace';
+import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appendActivity, ensureScaffold, effectiveAutonomy } from '../agents/workspace';
 import { listKeys, setKey, addCustom, deleteKey, getSecret } from '../secrets/store';
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
@@ -443,7 +443,11 @@ function roleInfo(r: RoleDef, level: string, team: string | null) {
     id: r.id, title: r.title, name: r.name,
     level: r.level ?? level, team: r.team ?? team,
     tools: r.tools, skills: [], model: r.tier, stance: r.stance,
-    is_critic: r.isCritic, autonomy: r.autonomy,
+    // 직원 탭 리스트 카드의 자율도 — 상세 패널(agentDetail)과 동일하게 '실효 자율도'를 쓴다.
+    // (자율도 편집은 PATCH /agents/:id → writeCapabilities 로 워크스페이스 캡에 저장되므로,
+    //  raw company.yaml 값을 보여주면 편집이 카드에 반영되지 않는다 — 비서 '자동' 설정이
+    //  '초안(승인)'으로 보이던 버그.)
+    is_critic: r.isCritic, autonomy: effectiveAutonomy(r),
   };
 }
 app.get('/company', (c) => {

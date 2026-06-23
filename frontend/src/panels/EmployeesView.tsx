@@ -109,7 +109,8 @@ export default function EmployeesView() {
     // 필터링돼 저장이 비워지던 버그 수정. 쓰기 도구(save_note)·셸(run_command)은 역할 툴이 아니라 자율도+AGENT_SHELL 로 게이팅.
     const ok = await patchAgent(sel, { goal, tools: web ? ["wiki_query", "wiki_ingest", "web_search"] : ["wiki_query", "wiki_ingest"], autonomy });
     setSaving(false);
-    if (ok) { flash("워크스페이스 저장됨 ✓"); load(sel); } else flash("저장 실패");
+    // reloadCompany — 자율도·툴 변경이 리스트 카드(실효 자율도)에 즉시 반영되게 /company 재요청.
+    if (ok) { flash("워크스페이스 저장됨 ✓"); await reloadCompany(); load(sel); } else flash("저장 실패");
   };
   // --- structure save ---
   const saveStruct = async () => {
