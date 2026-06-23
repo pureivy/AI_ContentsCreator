@@ -317,6 +317,10 @@ gepa-ai-office/
 
 설정은 `data/voice.json`(enabled / ttsVoice / sttModel / autoReadFinal).
 
+### 자비스 대화형
+좌하단 "🗣️ 자비스" 토글을 켜면 마이크로 자비스(비서)와 대화한다. 인사·간단 질의는 즉답하고,
+업무 지시는 office에 위임해 결과를 음성으로 보고한다. 화면 중앙에 음성반응 오브가 뜬다.
+
 ---
 
 ## 9. 테스트
