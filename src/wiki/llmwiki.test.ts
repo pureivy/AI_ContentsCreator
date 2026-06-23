@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { LlmWiki, slugify } from './llmwiki';
+
+const sha1 = (s: string) => createHash('sha1').update(s.trim()).digest('hex');
 
 let dir: string;
 beforeEach(() => {
@@ -159,5 +162,37 @@ describe('LlmWiki', () => {
     const idx = fs.readFileSync(path.join(dir, 'index.md'), 'utf-8');
     expect(idx).toContain('[[엔티티1]]');
     expect(idx).toContain('🔑 엔티티');
+  });
+});
+
+// 자료 업로드 내용 중복 판정 — /sources 가 '동일 내용'만 건너뛰도록 원문(raw) 해시를 쓴다.
+// 과거엔 페이지 본문(누적·청크) 해시로 비교해 청크/갱신된 문서의 재업로드를 놓쳤다.
+describe('referencedRawHashes — 업로드 원문(raw) 기준 내용 중복 판정', () => {
+  it('청크 분할 문서도 원문 해시로 재업로드를 잡는다(본문 해시 방식이 깨지는 경우)', () => {
+    const w = new LlmWiki(dir);
+    const big = Array.from({ length: 300 }, (_, i) => `행 ${i}: 데이터 값 항목 ${i} 내용 텍스트 라인`).join('\n');
+    const ref = w.saveRaw('큰문서.txt', big);
+    w.addSourceDoc({ title: '큰문서', body: big, sources: [ref] });
+    expect(w.list('source').length).toBeGreaterThan(1);             // 실제로 청크 분할됨(본문≠원문)
+    expect(w.referencedRawHashes().has(sha1(big))).toBe(true);      // 같은 파일 재업로드 → 건너뜀
+  });
+
+  it('같은 제목 다른 내용으로 갱신(append)된 뒤에도 원래 원문 재업로드를 잡는다', () => {
+    const w = new LlmWiki(dir);
+    const v1 = '버전1 본문 내용', v2 = '버전2 다른 본문 내용';
+    w.addSourceDoc({ title: '리포트', body: v1, sources: [w.saveRaw('리포트.txt', v1)] });
+    w.addSourceDoc({ title: '리포트', body: v2, sources: [w.saveRaw('리포트.txt', v2)] }); // 같은 slug → 갱신
+    const seen = w.referencedRawHashes();
+    expect(seen.has(sha1(v1))).toBe(true);   // v1 재업로드 → 건너뜀
+    expect(seen.has(sha1(v2))).toBe(true);   // v2 재업로드 → 건너뜀
+  });
+
+  it('삭제된 자료의 고아 raw 는 제외 — 삭제 후 같은 파일 재업로드 가능', () => {
+    const w = new LlmWiki(dir);
+    const body = '삭제 테스트 본문';
+    const p = w.addSourceDoc({ title: '지울자료', body, sources: [w.saveRaw('지울자료.txt', body)] });
+    expect(w.referencedRawHashes().has(sha1(body))).toBe(true);
+    w.deletePage(p.slug);
+    expect(w.referencedRawHashes().has(sha1(body))).toBe(false); // 참조 끊김 → 재업로드 허용
   });
 });

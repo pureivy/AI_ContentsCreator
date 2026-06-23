@@ -325,9 +325,17 @@ export class LlmWiki {
     const base = path.basename((name || 'source').replace(/\\/g, '/')) || 'source';
     const ext = path.extname(base).slice(0, 12);
     const stem = (base.slice(0, base.length - path.extname(base).length).replace(/\s+/g, '_').slice(0, 80)) || 'source';
-    const safe = stem + ext;
+    let safe = stem + ext;
+    // 원문 불변 보존 — 같은 날 같은 이름이지만 '다른 내용'이 오면 기존 raw 를 덮어쓰지 않고 내용 해시
+    // 접미사로 유니크화한다(덮어쓰면 v1 원문이 소실돼 v1 재업로드를 못 잡는다). 같은 내용이면 같은 이름 재사용.
+    let fp = path.join(dir, safe);
+    if (fs.existsSync(fp) && fs.readFileSync(fp, 'utf-8') !== content) {
+      const h8 = createHash('sha1').update(content).digest('hex').slice(0, 8);
+      safe = stem + '-' + h8 + ext;
+      fp = path.join(dir, safe);
+    }
     const rel = `raw/${day}/${safe}`;
-    fs.writeFileSync(path.join(dir, safe), content, 'utf-8');
+    fs.writeFileSync(fp, content, 'utf-8');
     return rel;
   }
 
@@ -345,6 +353,26 @@ export class LlmWiki {
       fs.writeFileSync(path.join(dir, safe), data);
       return `raw/${day}/originals/${safe}`;
     } catch { return ''; }
+  }
+
+  /** 업로드 원문(raw) 내용 해시 집합 — '동일 내용' 재업로드 판정용(/sources). 살아있는 source 페이지가
+   *  참조하는 raw/ 원문만 읽어 sha1(본문 trim)한다. 페이지 본문이 갱신으로 누적되거나 청크로 쪼개져도
+   *  '원문' 기준이라 재업로드를 안정적으로 잡고, 삭제된 자료의 고아 raw 는 참조가 끊겨 제외된다
+   *  (삭제 후 같은 파일 재업로드 허용). */
+  referencedRawHashes(): Set<string> {
+    const out = new Set<string>();
+    const base = path.dirname(this.rawDir);              // raw/ 상대참조의 기준 디렉터리
+    const rawRoot = path.resolve(this.rawDir) + path.sep;
+    for (const p of this.list('source')) {
+      for (const ref of p.sources) {
+        if (!ref.startsWith('raw/') || ref.includes('..')) continue;
+        const fp = path.join(base, ref);
+        if (!path.resolve(fp).startsWith(rawRoot)) continue; // 경로 이탈 방지
+        try { out.add(createHash('sha1').update(fs.readFileSync(fp, 'utf-8').trim()).digest('hex')); }
+        catch { /* 이동·삭제된 raw — 무해 */ }
+      }
+    }
+    return out;
   }
 
   /** 원문 source 저장 — 대형이면 청크 페이지로 분할(검색이 깊은 행까지 닿게). 첫 페이지를 반환(분류·ingest 용). */

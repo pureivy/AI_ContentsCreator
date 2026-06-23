@@ -862,9 +862,10 @@ app.post('/sources', async (c) => {
   let ok = 0;
   let dup = 0;
   // 내용해시 중복제거: 동일 텍스트(예: macOS 사본 'foo 2.pdf' 와 'foo.pdf' 동시 업로드, 혹은 재업로드)는
-  // 위키·raw 에 두 번 들어가지 않는다. 기존 source 페이지 본문 해시 + 이번 요청 내 해시를 함께 추적.
-  const seen = new Set<string>();
-  try { for (const p of w.list('source')) seen.add(createHash('sha1').update(p.body.trim()).digest('hex')); } catch { /* 빈 위키 무해 */ }
+  // 위키·raw 에 두 번 들어가지 않는다. 비교 기준은 살아있는 source 가 참조하는 '원문(raw)' 해시 —
+  // 페이지 본문이 갱신 누적·청크 분할로 변형돼도 원문 기준이라 재업로드를 놓치지 않는다(삭제된 자료의
+  // 고아 raw 는 제외 → 삭제 후 재업로드 가능). 이번 요청 내 해시는 아래 루프에서 함께 추적.
+  const seen = w.referencedRawHashes();
   for (const f of files) {
     const name = f.name || 'upload';
     if (!isSupportedExt(name)) { results.push({ file: name, status: 'unsupported', note: 'PDF/DOCX/HWPX/XLSX/PPTX/텍스트만 지원' }); continue; }
