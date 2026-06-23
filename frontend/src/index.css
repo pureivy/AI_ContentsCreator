@@ -1365,3 +1365,12 @@ button.upload-retry:hover { background: var(--panel2); }
 .waveform-strip-wrap { display: flex; align-items: center; gap: 8px; padding: 4px 8px; }
 .waveform-strip { display: block; }
 .waveform-card { display: inline-block; vertical-align: middle; margin-left: 6px; }
+
+/* 자비스 대화 오버레이 */
+.jarvis-overlay { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 16px; background: rgba(4, 10, 22, 0.72); backdrop-filter: blur(4px); }
+.jarvis-orb { width: min(42vmin, 360px); height: auto; will-change: transform, filter; }
+.jarvis-close { position: absolute; top: 18px; right: 22px; font-size: 28px; background: none; border: none; color: #cfe3ff; cursor: pointer; }
+.jarvis-thread { width: min(92vw, 560px); max-height: 32vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.jarvis-turn { padding: 6px 10px; border-radius: 10px; background: rgba(255,255,255,0.06); color: #e8f1ff; }
+.jarvis-turn.user { align-self: flex-end; background: rgba(90,140,255,0.18); }

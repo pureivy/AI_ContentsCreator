@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "./store";
 import { startRun, resumeRun, watchRun, RunHandle } from "./transport/sse";
-import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, downloadRunHwpx, fetchEta, reviseRun, fetchTemplates, saveTemplate, deleteTemplate, runTemplate, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, getVoices, RunInfo, UploadFileResult, LlmStatus, EtaStats, TemplateInfo, RunSettings } from "./api";
+import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, downloadRunHwpx, fetchEta, reviseRun, fetchTemplates, saveTemplate, deleteTemplate, runTemplate, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, getVoices, setVoiceConversational, RunInfo, UploadFileResult, LlmStatus, EtaStats, TemplateInfo, RunSettings } from "./api";
 import { ActivityItem, ApprovalItem, DebateMsg, UIState } from "./events/types";
 import AgentGraph from "./panels/AgentGraph";
 import OfficeView from "./panels/OfficeView";
@@ -26,6 +26,8 @@ import { useRecorder } from "./voice/useRecorder";
 import { useTts } from "./voice/useTts";
 import { Waveform } from "./voice/Waveform";
 import { mergeTranscript } from "./voice/transcript";
+import { useJarvis } from "./jarvis/useJarvis";
+import { JarvisAvatar } from "./jarvis/JarvisAvatar";
 // 무거운 그래프 라이브러리(react-force-graph)는 모달을 열 때만 로드(초기 번들에서 분리).
 const WikiGraphView = lazy(() => import("./panels/WikiGraphView"));
 
@@ -274,19 +276,25 @@ export default function App() {
   const recorder = useRecorder();  // 홀드 녹음(push-to-talk) → STT
   const tts = useTts();            // 메시지/최종결과 낭독(단일 인스턴스 = AudioContext 1개 공유)
   const [voiceAvail, setVoiceAvail] = useState({ stt: false, tts: false });
+  const [convo, setConvo] = useState(false);                 // 자비스 대화형
+  useEffect(() => { getVoices().then((v) => setConvo(!!(v as { conversational?: boolean }).conversational)); }, []);
+  const jarvis = useJarvis(tts);                             // Phase 2 에서 onDelegate 주입
+  const toggleConvo = () => { const next = !convo; setConvo(next); setVoiceConversational(next); };
 
   // 마운트 시 1회 — 음성 도구 가용성 체크(mlx_whisper/say/ffmpeg 설치 여부)
   useEffect(() => {
     getVoices().then(v => setVoiceAvail({ stt: v.sttAvailable, tts: v.ttsAvailable }));
   }, []);
 
-  // 홀드 녹음 종료 → STT → 입력창 합성(자동 전송 아님). textarea 자동높이도 갱신.
+  // 홀드 녹음 종료 → STT → (대화형이면)자비스 자동 전송 / 아니면 입력창 합성.
   const handleMicUp = async () => {
     if (!voiceAvail.stt) return;
     const blob = await recorder.stop();
     if (!blob) return;
     const text = await sttUpload(blob);
-    if (text) setChat((prev) => mergeTranscript(prev, text));
+    if (!text) return;
+    if (convo) await jarvis.send(text);                      // 대화형: 자비스에게 자동 전송
+    else setChat((prev) => mergeTranscript(prev, text));     // 기존: 입력창 채움
   };
   // 좌하단 입력 대상 칩 — 직원명을 토큰화해 입력창엔 질문만 남긴다. null=전사 토론/지시.
   const [directedTarget, setDirectedTarget] = useState<{ id: string; label: string; lead: boolean } | null>(null);
@@ -802,10 +810,14 @@ export default function App() {
         className={`voice-mic ${recorder.recording ? "rec" : ""}`}
         title={voiceAvail.stt ? "누르고 말하기(떼면 입력창에 채움)" : "음성 입력 미설치(mlx-whisper 필요)"}
         disabled={!voiceAvail.stt}
-        onPointerDown={(e) => { e.preventDefault(); tts.stop(); recorder.start(); }}
+        onPointerDown={(e) => { e.preventDefault(); tts.stop(); tts.prime(); recorder.start(); }}
         onPointerUp={(e) => { e.preventDefault(); handleMicUp(); }}
         onPointerLeave={() => { if (recorder.recording) handleMicUp(); }}
       >🎙️</button>
+      <button type="button"
+        className={`run-opt-toggle ${convo ? "active" : ""}`}
+        title="자비스 대화형 — 켜면 음성이 자비스에게 바로 전달되고 음성으로 답합니다"
+        onClick={toggleConvo}>🗣️ 자비스 {convo ? "ON" : "OFF"}</button>
       {/* 품질 토글(토론·추론) — per-run 옵션이라 컴포저에 배치. type="button" 필수(form submit 방지). */}
       {s.status !== "running" && (
         <button type="button"
@@ -1275,6 +1287,22 @@ export default function App() {
 
   return (
     <div className="app">
+      {convo && (
+        <div className="jarvis-overlay">
+          <button type="button" className="jarvis-close" onClick={toggleConvo} title="닫기">×</button>
+          <JarvisAvatar analyser={tts.analyser} speaking={tts.speakingSeq !== null} />
+          <div className="jarvis-thread">
+            {s.jarvisTurns.length === 0 && <p className="muted">🎙 마이크를 누르고 자비스에게 말하세요</p>}
+            {s.jarvisTurns.map((t, i) => (
+              <div key={i} className={`jarvis-turn ${t.role}`}>
+                <b>{t.role === "jarvis" ? "자비스" : "나"}</b> {t.text}
+                {t.role === "jarvis" && <button className="voice-speak" onClick={() => tts.speak(t.text, i)}>🔊</button>}
+              </div>
+            ))}
+            {s.jarvisBusy && <p className="muted">자비스가 생각 중…</p>}
+          </div>
+        </div>
+      )}
       <header className="topbar">
         <button className="brand" type="button" onClick={goHome} title="초기화면으로">🏢 GEPA AI Office</button>
         {(() => {
