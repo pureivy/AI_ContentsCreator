@@ -643,12 +643,32 @@ export async function decideApproval(
 }
 
 // --- 음성 입출력 ---
-export async function getVoices(): Promise<{ available: boolean; sttAvailable: boolean; ttsAvailable: boolean; voices: string[]; defaultVoice: string }> {
+export async function getVoices(): Promise<{ available: boolean; sttAvailable: boolean; ttsAvailable: boolean; voices: string[]; defaultVoice: string; conversational: boolean }> {
   try {
     const r = await fetch("/voice/voices");
-    if (!r.ok) return { available: false, sttAvailable: false, ttsAvailable: false, voices: [], defaultVoice: "Yuna" };
+    if (!r.ok) return { available: false, sttAvailable: false, ttsAvailable: false, voices: [], defaultVoice: "Yuna", conversational: false };
     return await r.json();
-  } catch { return { available: false, sttAvailable: false, ttsAvailable: false, voices: [], defaultVoice: "Yuna" }; }
+  } catch { return { available: false, sttAvailable: false, ttsAvailable: false, voices: [], defaultVoice: "Yuna", conversational: false }; }
+}
+
+// --- 자비스 채팅 ---
+export async function postJarvisChat(
+  messages: { role: 'user' | 'assistant'; content: string }[],
+): Promise<{ reply: string; delegate?: { task: string } }> {
+  const r = await fetch('/jarvis/chat', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages }),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `자비스 응답 실패 (${r.status})`);
+  return await r.json();
+}
+
+export async function setVoiceConversational(on: boolean): Promise<boolean> {
+  try {
+    const r = await fetch('/voice/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversational: on }),
+    });
+    return r.ok ? (await r.json()).conversational ?? on : on;
+  } catch { return on; }
 }
 
 /** 녹음 Blob 업로드 → 전사 텍스트. 실패 시 빈 문자열. */

@@ -27,6 +27,11 @@ interface Store extends UIState {
   recording: boolean;
   setSpeaking: (seq: number | null) => void;
   setRecording: (b: boolean) => void;
+  jarvisTurns: { role: 'user' | 'jarvis'; text: string }[];
+  jarvisBusy: boolean;
+  pushJarvisTurn: (t: { role: 'user' | 'jarvis'; text: string }) => void;
+  setJarvisBusy: (b: boolean) => void;
+  clearJarvis: () => void;
 }
 
 // 후진 스크럽 시 매번 0부터 재fold 하던 O(n) 비용을 줄이는 체크포인트 캐시. fold 가 순수 함수이므로
@@ -56,6 +61,8 @@ export const useStore = create<Store>((set, get) => ({
   liveActivity: [],
   speakingSeq: null,
   recording: false,
+  jarvisTurns: [],
+  jarvisBusy: false,
 
   applyEvent: (ev) => set((s) => {
     if (s.mode === "replay") return s;                      // live events never touch replay state
@@ -76,6 +83,9 @@ export const useStore = create<Store>((set, get) => ({
   setRunId: (runId) => set(() => ({ runId })),
   setSpeaking: (speakingSeq) => set(() => ({ speakingSeq })),
   setRecording: (recording) => set(() => ({ recording })),
+  pushJarvisTurn: (t) => set((s) => ({ jarvisTurns: [...s.jarvisTurns, t] })),
+  setJarvisBusy: (jarvisBusy) => set(() => ({ jarvisBusy })),
+  clearJarvis: () => set(() => ({ jarvisTurns: [] })),
 
   loadReplay: (runId, topic, events) =>
     set(() => ({
