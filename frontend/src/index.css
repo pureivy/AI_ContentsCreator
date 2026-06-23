@@ -729,6 +729,26 @@ button.upload-retry:hover { background: var(--panel2); }
   background: url(/furniture/sofa.png) center / contain no-repeat;
   filter: drop-shadow(0 6px 9px #0006); z-index: 2; }
 .office-sofa::before, .office-sofa span { display: none; }
+/* 탕비존 카운터 — 휴게실 우측 벽 앞 (싱크/커피머신 느낌) */
+.pantry-counter {
+  position: absolute;
+  width: 22%;
+  height: 12%;
+  transform: translate(-50%, -50%);
+  background: #2b3140;
+  border: 1px solid #3a4252;
+  border-radius: 4px;
+}
+/* 회의실 화이트보드 — 좌측 벽 */
+.whiteboard {
+  position: absolute;
+  width: 16%;
+  height: 22%;
+  transform: translate(-50%, -50%);
+  background: #f4f6fb;
+  border: 2px solid #cfd6e4;
+  border-radius: 3px;
+}
 .bookshelf { position: absolute; transform: translate(-50%, -50%); width: 80px; height: 30px;
   background: url(/furniture/bookshelf.png) center / contain no-repeat;
   filter: drop-shadow(0 5px 8px #0007); z-index: 2; }

@@ -8,8 +8,8 @@
 //  - 런이 살아있지 않으면(status!=="running") 아무도 working이 아니다.
 //  - 로스터 placeholder(이번 런에 스폰되지 않은 직원)는 절대 working이 아니다.
 //  - CEO: 위임(delegate)/검토(review) phase 또는 통합 스트리밍(ceo-synth) 중일 때만.
-//  - 팀장: 팀간회의(CEO 통합 보고) 중이거나, 실제 스트리밍(thinking)이거나,
-//    팀이 활성 phase(LEAD_WORK_PHASES — report_ceo 포함)에 있을 때.
+//  - 팀장: 실제 스트리밍(thinking)이거나, 팀이 활성 phase(LEAD_WORK_PHASES)에 있을 때.
+//    (CEO 통합 단계는 CEO 단독 작업 — 팀장은 보고를 마쳐 대기. ceoIntegrating 으로 집계하지 않는다.)
 //  - 팀원: 팀의 '현재 위임 웨이브'(engaged)에 선발된 경우에만 — 그리고 팀이
 //    팀원-활성 phase(MEMBER_WORK_PHASES)에 있거나 실제 스트리밍 중일 때.
 //  - 토론 모드(level 없음): 실제 스트리밍(thinking)일 때만.
@@ -30,11 +30,14 @@ function effStatus(a: AgentNode, running: boolean): string {
   return running && a.status === "spawned" && !a.placeholder ? "thinking" : a.status;
 }
 
-type WorkingSlice = Pick<UIState, "agents" | "phases" | "engaged" | "blocks" | "status">;
+type WorkingSlice = Pick<UIState, "agents" | "phases" | "engaged" | "blocks" | "status" | "soloAgentId">;
 
 export function isWorkingNow(a: AgentNode, s: WorkingSlice): boolean {
   const running = s.status === "running";
   if (!running || a.placeholder) return false;
+  // 직원 지명(단독) 런 — 지명된 그 직원만 작업 중. 단독 응답을 ceo-synth 블록으로 흘리므로
+  // ceoIntegrating(blocks["ceo-synth"]) 가 켜지지만, 이 분기로 가짜 팀간회의 집계를 차단한다.
+  if (s.soloAgentId) return a.agent_id === s.soloAgentId;
   const ph = s.phases;
   const ceoIntegrating = !!s.blocks["ceo-synth"] || s.phases["_ceo"] === "integrate";
   if (a.level === "ceo") {
@@ -46,8 +49,9 @@ export function isWorkingNow(a: AgentNode, s: WorkingSlice): boolean {
     // 쓰면 팀원 'work' 구간에도 팀장이 자동 working이 된다. raw status==='thinking'(실제
     // 스트리밍, 즉 report 종합·report_ceo 등)만 working으로 보고, 단계 기반은
     // LEAD_WORK_PHASES('work' 제외)로 게이트한다.
-    return ceoIntegrating || a.status === "thinking"
-      || LEAD_WORK_PHASES.has(teamPhase);
+    // CEO 통합(integrate)은 CEO '단독' 작업 — 팀장은 이미 보고를 마쳐(team phase=idle) 대기다.
+    // 그래서 ceoIntegrating 으로 팀장을 working 집계하지 않는다(오피스뷰 '팀간회의' 연출 제거와 1:1).
+    return a.status === "thinking" || LEAD_WORK_PHASES.has(teamPhase);
   }
   if (a.level === "member") {
     const engaged = (s.engaged[a.team ?? ""] ?? []).includes(a.agent_id);

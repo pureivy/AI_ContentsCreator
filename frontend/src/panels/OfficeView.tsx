@@ -22,7 +22,8 @@ import { LEAD_WORK_PHASES, MEMBER_WORK_PHASES } from "../events/working";
 import { fetchCompany, CompanyInfo, RoleInfo } from "../api";
 import Avatar from "./Avatar";
 import { personLabel } from "./agentVisual";
-import { clusterBelow, meetingCircle, REST_SPOTS, CORRIDOR_SPOTS, STROLL, confMeetingSeats, AVATAR_W, AVATAR_H, Pt } from "./officeChoreography";
+import { clusterBelow, meetingCircle, CORRIDOR_SPOTS, STROLL, AVATAR_W, AVATAR_H, Pt,
+  LOUNGE_SOFA_SLOTS, PANTRY_SLOTS, CONF_SLOTS, WHITEBOARD_SPOT, shelfSpot } from "./officeChoreography";
 
 // Fixed 4:3 design canvas. Everything inside is laid out against this constant
 // size (positions in %, furniture in px), then the whole floor is uniformly
@@ -184,12 +185,15 @@ function layout(
   running: boolean,
   phases: Record<string, string>,
   engagedByTeam: Record<string, string[]>,
+  soloAgentId: string | null,
 ): Placed[] {
   const live = agentOrder.map((id) => agents[id]).filter((a): a is AgentNode => !!a);
+  // 직원 지명(단독) 런 — 이 직원만 자기 자리에서 작업 중(레벨 무관). phase/engaged 이벤트가 없으므로
+  // 각 레벨 분기에서 명시적으로 '작업 중' 자세를 준다(synthesis_chunk 는 status 를 spawned 로 두지만
+  // effStatus 가 running+non-placeholder 를 thinking 으로 승급하므로 raw status 게이트는 피한다).
+  const isSolo = (a: AgentNode): boolean => running && !!soloAgentId && a.agent_id === soloAgentId;
   const ceo = live.find((a) => a.level === "ceo");
   const leads = live.filter((a) => a.level === "lead");
-  // 팀간 회의(CEO 통합) 좌석 — 회의 테이블 둘레로 CEO(상석)+팀장들이 모여 앉는다(팀장 수에 맞춰 동적).
-  const confMeet = confMeetingSeats(leads.length);
   const members = live.filter((a) => a.level === "member");
   const placed: Placed[] = [];
 
@@ -202,9 +206,10 @@ function layout(
   const effStatus = (a: AgentNode) =>
     running && a.status === "spawned" && !a.placeholder ? "thinking" : a.status;
 
-  // CEO integration: the team leads walk up to the CEO's desk to report (members
-  // stay at their own desks). `phases[tid]` drives the per-team choreography below.
-  const interTeam = ceoIntegrating;
+  // CEO integration is a CEO-SOLO beat: the CEO synthesizes the teams' already-submitted
+  // deliverables alone. The leads have finished reporting (team phase → idle) and are NOT
+  // gathered into a meeting — they read 휴식/대기 at their desks, matching the timeline.
+  // (사용자 피드백: 통합 중 '팀간 회의' 연출이 타임라인(팀장 대기)과 어긋나 가짜로 보였다 → 제거.)
 
   // CEO stays at its OWN desk; leads come TO the CEO (briefing / reporting). The CEO
   // only "works" while actually delegating (분해 중) or integrating (통합 중) — the rest
@@ -214,17 +219,19 @@ function layout(
   //  deliberately ignoring the spawned→thinking promotion that effStatus applies.)
   if (ceo) {
     const ceoPhase = running ? phases["_ceo"] : undefined;
-    const ceoWorking = ceoPhase === "delegate" || ceoPhase === "review" || ceoIntegrating;
-    const bubble = ceoPhase === "delegate" ? "🧩 지침 수립 중"
-      : ceoIntegrating ? "🤝 팀간 회의"          // 회의실에서 팀장들과 통합 회의
+    const ceoSolo = isSolo(ceo);                  // 단축경로(CEO 단독 즉답) — 자리에서 작업, 회의 아님
+    const ceoWorking = ceoSolo || ceoPhase === "delegate" || ceoPhase === "review" || ceoIntegrating;
+    const bubble = ceoSolo ? "✍️ 작업 중"
+      : ceoPhase === "delegate" ? "🧩 지침 수립 중"
+      : ceoIntegrating ? "🧩 통합 중"            // 자기 자리에서 단독으로 팀 산출물 통합(팀장은 보고 끝나 대기)
       : ceoPhase === "review" ? "🔎 검토·확정 중"  // 자리에서 부서 산출물 검토·최종 확정
       : "";  // 그 외 = 대기 중 → 말풍선 없음
     placed.push({
       agent: ceo, glyph: glyphFor("ceo", ceo.agent_id, ceo.persona?.role),
       ring: ceoWorking ? RING.thinking : RING.spawned,
       deskX: CEO_DESK.x, deskY: CEO_DESK.y,
-      x: ceoIntegrating ? confMeet.ceo.x : CEO_DESK.x,
-      y: ceoIntegrating ? confMeet.ceo.y : CEO_DESK.y,
+      x: CEO_DESK.x,   // 통합도 자기 자리에서 단독 수행 — 회의 테이블로 이동하지 않는다
+      y: CEO_DESK.y,
       bubble,
       thinking: ceoWorking,
       isCritic: false, badge: synthesisReady ? "📄" : "", roomLabel: "", face: "up",
@@ -245,7 +252,7 @@ function layout(
     // 직접 작업하므로, 비서실 phase 가 'work' 인 동안(스트리밍 전 그라운딩 포함) 줄곧 '작업 중'으로 애니메이션.
     if (tid === SECRETARIAT) {
       const secPh = running ? phases[SECRETARIAT] : undefined;
-      const atWork = lead.status === "thinking" || secPh === "work";
+      const atWork = isSolo(lead) || lead.status === "thinking" || secPh === "work";
       const done = lead.status === "spoke" && secPh !== "work";
       placed.push({
         agent: lead, glyph: glyphFor("lead", lead.agent_id, lead.persona?.role),
@@ -269,10 +276,7 @@ function layout(
     const teamN = members.filter((m) => (m.team ?? "") === tid).length;
     let seat: { x: number; y: number };
     let bubble: string;
-    if (interTeam) {
-      seat = confMeet.leads[j] ?? ceoVisitorSeat(j, leads.length); // 회의실 팀간 회의(테이블 둘러앉기)
-      bubble = "🤝 팀간 회의";
-    } else if (ph === "assign") {
+    if (ph === "assign") {
       seat = { x: deskX, y: deskY };               // 자기 자리에서 팀원에게 과제 배정
       bubble = "📌 과제 배정 중";
     } else if (ph === "work") {
@@ -291,11 +295,13 @@ function layout(
       seat = { x: deskX, y: deskY };
       bubble = statusText(lead, running);
     }
+    // 단독 런의 지명 팀장 — 자기 자리에서 '작업 중'(phase/스트리밍 신호 없이도).
+    if (isSolo(lead)) { seat = { x: deskX, y: deskY }; bubble = "✍️ 작업 중"; }
     // working(링 색·펄스) 게이트는 events/working.ts isWorkingNow의 팀장 분기와 1:1.
     // 팀장 분해는 microCall이라 status가 'spawned'에 머무니 effStatus 승격이 아니라
     // raw lead.status==='thinking'(실제 스트리밍, 즉 report 종합 등)만 working으로 본다.
     // → 팀원 'work' 구간(LEAD_WORK_PHASES에서 'work' 제외)에는 팀장이 idle 링으로 대기.
-    const working = interTeam || lead.status === "thinking" || LEAD_WORK_PHASES.has(ph ?? "");
+    const working = isSolo(lead) || lead.status === "thinking" || LEAD_WORK_PHASES.has(ph ?? "");
     // 대기 링 색은 effStatus 승격값이 아니라 raw lead.status로 — micro로 spawned에
     // 머문 팀장이 work 구간에 파란(thinking) 링으로 잘못 빛나지 않고 idle 색으로 앉아있게.
     const restRing = RING[lead.status] ?? RING.spawned;
@@ -348,7 +354,8 @@ function layout(
       const engaged = isEngaged(m);          // in this team's CURRENT delegation wave
       // A non-engaged member (idle, or STALE from a resumed run's earlier wave that died
       // mid-"thinking") reads as a plain idle avatar — never a leftover thinking ring/bubble.
-      const st = engaged ? effStatus(m) : "spawned";
+      // 단독 런의 지명 팀원은 engaged 이벤트가 없어도 작업 중 — effStatus 승급으로 thinking 링.
+      const st = (isSolo(m) || engaged) ? effStatus(m) : "spawned";
       const slot = engaged ? ei++ : -1;
       const desk = { x: deskX, y: deskY };
 
@@ -377,6 +384,8 @@ function layout(
         bubble = statusText(m, running, { meeting: fallbackMeeting });
         thinking = st === "thinking";
       }
+      // 단독 런의 지명 팀원 — 위 분기(engaged/phase 기반)에 안 걸리므로 자기 자리 '작업 중'으로 덮는다.
+      if (isSolo(m)) { pos = desk; bubble = "✍️ 작업 중"; thinking = true; }
       placed.push({
         agent: m, glyph: glyphFor("member", m.agent_id, m.persona?.role),
         ring: RING[st] ?? RING.spawned,
@@ -404,17 +413,15 @@ function Character({ p }: { p: Placed }) {
       return () => clearTimeout(t);
     }
   }, [p.x, p.y]);
-  // 걸음걸이: 이동 중=빠른 상하 bound + 좌우 흔들(뛰는 발걸음) · 작업 중=바쁜 잔걸음 · 그 외=정지.
+  // 걸음걸이: '이동 중'에만 상하 bound + 좌우 흔들(뛰는 발걸음). 제자리(작업/대기)는 정지 —
+  // 작업 중은 💭·작업aura·링·말풍선으로 표시하고 몸을 계속 흔들지 않는다. (effStatus 가 spawned 를
+  //  thinking 으로 승급해 '아무 일도 안 하는' 유휴 아바타까지 제자리 흔들리던 문제 제거 — 사용자 요청.)
   const gait = walking
     ? { y: [0, -7, 0, -7, 0], rotate: [-5, 5, -5, 5, 0] }
-    : p.thinking
-      ? { y: [0, -2.5, 0], rotate: [-2, 2, -2] }
-      : { y: 0, rotate: 0 };
+    : { y: 0, rotate: 0 };
   const gaitT = walking
     ? { repeat: Infinity, duration: 0.34, ease: "easeInOut" as const }
-    : p.thinking
-      ? { repeat: Infinity, duration: 0.34, ease: "easeInOut" as const }
-      : { duration: 0.2 };
+    : { duration: 0.2 };
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.4 }}
@@ -473,6 +480,7 @@ export default function OfficeView() {
   const synthesis = useStore((s) => s.synthesis);
   const phases = useStore((s) => s.phases);
   const engaged = useStore((s) => s.engaged);
+  const soloAgentId = useStore((s) => s.soloAgentId);
   const pushActivity = useStore((s) => s.pushActivity);
 
   // The office is furnished AND staffed by DEFAULT from the company roster
@@ -544,19 +552,21 @@ export default function OfficeView() {
     return { agents: ag, agentOrder: order, teamOrder: tOrder, teams: tmap };
   }, [roster, storeAgents, storeOrder, storeTeamOrder, storeTeams]);
 
-  // CEO is "integrating" once it streams the synthesis (block_id "ceo-synth") — drives
-  // both the leads-walk-to-CEO beat (layout) and the freeIds guard below, so it lives
-  // in its own memo rather than inside placed().
+  // CEO is "integrating" once it streams the synthesis (block_id "ceo-synth") — drives the
+  // CEO's own "🧩 통합 중" pose (layout) and the freeIds guard below, so it lives in its own
+  // memo rather than inside placed(). (통합은 CEO 단독 작업 — 팀장은 모이지 않는다.)
   const ceoIntegrating = useMemo(() => {
     // Integration is an ACTIVE-run state. blocks["ceo-synth"] latches (the synthesis text
-    // never clears once written), so without this running guard the CEO + leads would stay
-    // frozen in the "🤝 팀간 회의" pose forever AFTER the run finishes. A done run is idle.
+    // never clears once written), so without this running guard the CEO would stay frozen
+    // in the "🧩 통합 중" pose forever AFTER the run finishes. A done run is idle.
     if (status !== "running") return false;
+    // 직원 지명(단독) 런은 응답을 ceo-synth 블록으로 흘리지만 통합이 아니다 — 솔로면 팀간회의 억제.
+    if (soloAgentId) return false;
     const ceo = agentOrder.map((id) => agents[id]).find((a) => a?.level === "ceo");
     // 'integrate' phase 도 통합으로 인정 — 합성 시작 직후 목차 microJSON 구간(ceo-synth 블록 생성 전)에
-    // 타임라인은 '🤝 통합'인데 CEO가 자리에서 멍하니 있고 팀장이 안 모이는 '깜빡임'을 막는다.
+    // 타임라인은 '통합 중'인데 CEO 말풍선이 비어 보이는 '깜빡임'을 막는다(팀장은 더 이상 모으지 않음).
     return !!ceo && (ceo.status === "thinking" || !!blocks["ceo-synth"] || phases["_ceo"] === "integrate");
-  }, [agents, agentOrder, blocks, status, phases]);
+  }, [agents, agentOrder, blocks, status, phases, soloAgentId]);
 
   const placed = useMemo(() => {
     const running = status === "running";
@@ -564,21 +574,22 @@ export default function OfficeView() {
     const anyDeliverable = messages.some((m) => m.move === "deliverable");
     const synthesisReady = !!synthesis.trim();
     return layout(agents, agentOrder, teamOrder, anyDeliverable,
-                  ceoIntegrating, synthesisReady, running, phases, engaged);
-  }, [agents, agentOrder, teamOrder, blocks, messages, status, synthesis, phases, engaged, ceoIntegrating]);
+                  ceoIntegrating, synthesisReady, running, phases, engaged, soloAgentId);
+  }, [agents, agentOrder, teamOrder, blocks, messages, status, synthesis, phases, engaged, ceoIntegrating, soloAgentId]);
 
   // Who is NOT engaged in the live choreography right now → free to live their office
   // life (휴식·잡담·다른 부서 방문). The CEO never wanders (it waits at its desk).
-  // Engaged = the active team(s)' lead + members; AND during integration every lead is
-  // walking to the CEO (ceoVisitorSeat), so leads must not be free then either. Teams
+  // Engaged = the active team(s)' lead + members; AND during CEO integration the leads
+  // stay put at their desks (보고 직후 대기), so they must not wander off either. Teams
   // run sequentially, so every other employee is free to socialize while one works.
   const freeIds = useMemo(() => {
     const ids = new Set<string>();
     for (const id of agentOrder) {
       const a = agents[id];
       if (!a || a.level === "ceo") continue;              // CEO stays at its desk
+      if (soloAgentId && a.agent_id === soloAgentId) continue; // 단독 런의 지명 직원은 자기 자리에서 작업(산책 X)
       if (a.team === SECRETARIAT) continue;               // 비서는 비서실 자리를 지킴(산책/잡담 X)
-      if (ceoIntegrating && a.level === "lead") continue;  // 통합 중 팀장은 CEO실로
+      if (ceoIntegrating && a.level === "lead") continue;  // 통합 중 팀장은 자기 자리에서 대기(산책 X)
       const p = a.team && status === "running" ? phases[a.team] : undefined;  // 이 팀의 현재 단계
       if (p && p !== "idle") {
         // 팀이 활성(phase 존재 && idle 아님)인 동안 그 팀의 팀장은 항상 자기 자리 유지 —
@@ -592,7 +603,7 @@ export default function OfficeView() {
       ids.add(id);
     }
     return ids;
-  }, [agents, agentOrder, teamOrder, phases, engaged, ceoIntegrating]);
+  }, [agents, agentOrder, teamOrder, phases, engaged, ceoIntegrating, soloAgentId]);
 
   // Each avatar's home-desk position (+team) — lets ambient "deskside chat" send a
   // visitor to a colleague's actual seat. Recomputed from the same placed layout.
@@ -607,7 +618,7 @@ export default function OfficeView() {
   // (idle) team's zone. Engaged employees (the active team) and the CEO never wander.
   // Gentle: ~one avatar moves per tick; spots are mutually non-overlapping so no two
   // socializing avatars ever collide. Runs livelier (idle depts mingle) than pre-run.
-  type WSpot = { x: number; y: number; bubble: string; act?: "chat" | "phone" | "rest" | "stroll"; partner?: string; dir?: 1 | -1 };
+  type WSpot = { x: number; y: number; bubble: string; act?: "chat" | "phone" | "rest" | "stroll" | "huddle" | "coffee" | "shelf" | "board"; partner?: string; dir?: 1 | -1 };
   const [wander, setWander] = useState<Record<string, WSpot>>({});
   // Latest values for the ambient interval — read via a ref so the interval is created
   // ONCE (deps []) and never torn down by frequent phase/agent updates (which would
@@ -625,16 +636,15 @@ export default function OfficeView() {
         const active = new Set(teamOrder.filter((t) => phases[t] && phases[t] !== "idle"));
         // 실제(가중) 팀존 기하 — 균등분할이 아니라 teamZones 의 가중 폭·비서실 제외를 그대로 써야
         // 경계 잡담 두 사람이 레이아웃과 동일한 '진짜' 팀 경계에 마주 선다(layout 과 1:1).
-        const { ids: floorTeams, geom: wgeom } = teamZones(teamOrder);
-        const restSpots: Pt[] = [...REST_SPOTS];     // 휴게실 휴식
-        const corridor: Pt[] = [...CORRIDOR_SPOTS];  // 중앙 로비(로고) 산책/통화
+        const { geom: wgeom } = teamZones(teamOrder);
+        const corridor: Pt[] = [...CORRIDOR_SPOTS];  // 복도 산책/통화(비겹침 유지)
 
         // keep only still-free avatars; drop a chatter whose partner is gone (no lone 잡담)
         const next: Record<string, WSpot> = {};
         for (const k of Object.keys(prev)) if (freeIds.has(k)) next[k] = prev[k];
         for (const k of Object.keys(next)) {
           const w = next[k];
-          if (w.act === "chat" && (!w.partner || !next[w.partner])) delete next[k];
+          if ((w.act === "chat" || w.act === "huddle") && (!w.partner || !next[w.partner])) delete next[k];
         }
         const occupied = () => new Set(Object.values(next).map(key));
 
@@ -658,79 +668,58 @@ export default function OfficeView() {
         if (out.length < target) {                  // start one more activity
           const atDesk = freeList.filter((k) => !next[k]);
           const used = occupied();
+          const openCorridor = corridor.filter((s) => !used.has(key(s)));
+          const free = (slots: Pt[]) => slots.filter((s) => !used.has(key(s)));
+          const openSofa = free(LOUNGE_SOFA_SLOTS), openPantry = free(PANTRY_SLOTS), openConf = free(CONF_SLOTS);
           const r = Math.random();
-          if (r < 0.45 && atDesk.length >= 2) {     // 잡담 — 상대가 있는 대화
-            let done = false;
-            // (A) deskside: 한 명이 다른(한가한) 직원의 '자리'로 찾아가 잡담. 활성 작업존
-            //     자리는 피하고(working 멤버와 안 겹치게), 옆자리가 비었을 때만.
-            if (Math.random() < 0.5) {
-              const hosts = atDesk.filter((k) => deskPos[k] && !(deskPos[k].team && active.has(deskPos[k].team)));
-              if (hosts.length >= 2) {
-                const host = pick(hosts);
-                const hd = deskPos[host];
-                const visitor = pick(atDesk.filter((k) => k !== host));
-                const side = hd.x > 50 ? -9.6 : 9.6;       // 존 안쪽으로 옆에 선다
-                const vs = { x: hd.x + side, y: hd.y };
-                const others: Pt[] = [
-                  ...Object.values(next),
-                  ...atDesk.filter((k) => k !== host && k !== visitor && deskPos[k]).map((k) => deskPos[k]),
-                ];
-                const clear = vs.x > 4 && vs.x < 96 &&
-                  others.every((o) => Math.abs(o.x - vs.x) >= AVATAR_W || Math.abs(o.y - vs.y) >= AVATAR_H);
-                if (clear) {
-                  next[host] = { x: hd.x, y: hd.y, bubble: "💬 잡담", act: "chat", partner: visitor };
-                  next[visitor] = { x: vs.x, y: vs.y, bubble: "💬 잡담", act: "chat", partner: host };
-                  done = true;
-                }
-              }
+          if (r < 0.20 && atDesk.length >= 2 && openPantry.length >= 2) {  // 잡담 — 탕비존 빈 2석(비겹침)
+            const a = pick(atDesk);
+            const b = pick(atDesk.filter((k) => k !== a));
+            next[a] = { x: openPantry[0].x, y: openPantry[0].y, bubble: "💬 잡담", act: "chat", partner: b };
+            next[b] = { x: openPantry[1].x, y: openPantry[1].y, bubble: "💬 잡담", act: "chat", partner: a };
+          } else if (r < 0.35 && atDesk.length >= 2 && openConf.length >= 2) { // 업무협의 — 회의실 빈 슬롯(비겹침, 최대 3)
+            const n = Math.min(atDesk.length, openConf.length);
+            const pool = [...atDesk];
+            const people: string[] = [];
+            for (let i = 0; i < n && pool.length; i++) {
+              people.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
             }
-            // (B) 팀간 경계 잡담: 인접 두 팀에서 한 명씩 뽑아 경계선 양쪽(각자 본인 팀 쪽)에
-            //     마주 세운다 — 둘 다 남의 사무실에 있지 않고, 한 명은 본인 팀에서.
-            if (!done && floorTeams.length >= 2) {
-              const leftT = floorTeams[0], rightT = floorTeams[1];
-              const boundary = (wgeom[leftT]?.x ?? 2) + (wgeom[leftT]?.w ?? 47); // 두 팀의 실제 경계 x
-              const left = atDesk.find((k) => deskPos[k] && deskPos[k].team === leftT);
-              const right = atDesk.find((k) => k !== left && deskPos[k] && deskPos[k].team === rightT);
-              if (left && right) {
-                const lp = { x: boundary - 5, y: 50 };  // 왼쪽 팀원은 본인(왼쪽) 팀 쪽
-                const rp = { x: boundary + 5, y: 50 };  // 오른쪽 팀원은 본인(오른쪽) 팀 쪽
-                const others: Pt[] = [
-                  ...Object.values(next),
-                  ...atDesk.filter((k) => k !== left && k !== right && deskPos[k]).map((k) => deskPos[k]),
-                ];
-                const ok2 = [lp, rp].every((p) =>
-                  others.every((o) => Math.abs(o.x - p.x) >= AVATAR_W || Math.abs(o.y - p.y) >= AVATAR_H));
-                if (ok2) {
-                  next[left] = { x: lp.x, y: lp.y, bubble: "💬 잡담", act: "chat", partner: right };
-                  next[right] = { x: rp.x, y: rp.y, bubble: "💬 잡담", act: "chat", partner: left };
-                }
-              }
-            }
-          } else if (atDesk.length) {
+            people.forEach((p, i) => {
+              next[p] = { x: openConf[i].x, y: openConf[i].y, bubble: "🤝 업무협의", act: "huddle",
+                partner: people.find((q) => q !== p) };
+            });
+          } else if (r < 0.50 && atDesk.length && openSofa.length) {  // 휴식 — 소파존 빈 슬롯(비겹침)
+            const who = pick(atDesk); const s = openSofa[0];
+            next[who] = { x: s.x, y: s.y, bubble: "☕ 휴식", act: "rest" };
+          } else if (r < 0.65 && atDesk.length) {                  // 산책 — 복도 왕복
             const who = pick(atDesk);
-            const openCorridor = corridor.filter((s) => !used.has(key(s)));
-            const openRest = restSpots.filter((s) => !used.has(key(s)));
-            if (r < 0.55) {                            // 산책 — 가로 복도를 좌↔우 왕복
-              const dir: 1 | -1 = Math.random() < 0.5 ? 1 : -1;   // 좌→우 / 우→좌 시작
-              const lane = STROLL.lanes[
-                Object.values(next).filter((w) => w.act === "stroll").length % STROLL.lanes.length];
-              next[who] = { x: dir > 0 ? STROLL.xMin : STROLL.xMax, y: STROLL.y + lane,
-                bubble: "🚶 산책", act: "stroll", dir };
-            } else if (r < 0.75 && openRest.length) {  // 휴식 — 휴게실 소파/커피
-              const s = pick(openRest); next[who] = { x: s.x, y: s.y, bubble: "☕ 휴식", act: "rest" };
-            } else {                                    // 전화통화 — 자기자리/휴게실/복도 (다른 팀 사무실 X)
-              const spots: Pt[] = [...openRest, ...openCorridor];
-              const d = deskPos[who];
-              if (d && !(d.team && active.has(d.team))) spots.push({ x: d.x, y: d.y }); // 자기자리(비활성 존만)
-              if (spots.length) {
-                const s = pick(spots);
-                next[who] = { x: s.x, y: s.y, bubble: "📞 통화 중", act: "phone" };
-              }
+            const dir: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
+            const lane = STROLL.lanes[
+              Object.values(next).filter((w) => w.act === "stroll").length % STROLL.lanes.length];
+            next[who] = { x: dir > 0 ? STROLL.xMin : STROLL.xMax, y: STROLL.y + lane,
+              bubble: "🚶 산책", act: "stroll", dir };
+          } else if (r < 0.75 && atDesk.length && openCorridor.length) { // 통화 — 복도(비겹침)
+            const who = pick(atDesk); const s = pick(openCorridor);
+            next[who] = { x: s.x, y: s.y, bubble: "📞 통화 중", act: "phone" };
+          } else if (r < 0.85 && atDesk.length && openPantry.length) {   // 커피·간식 — 탕비존 빈 슬롯(비겹침)
+            const who = pick(atDesk); const s = openPantry[0];
+            next[who] = { x: s.x, y: s.y, bubble: "🍵 커피·간식", act: "coffee" };
+          } else if (r < 0.95 && atDesk.length) {                  // 자료 찾기 — 팀존 책장(팀 idle, 비겹침)
+            const cand = atDesk.filter((k) => {
+              const t = deskPos[k]?.team; return !!t && !active.has(t) && !!wgeom[t];
+            });
+            if (cand.length) {
+              const who = pick(cand);
+              const s = shelfSpot(wgeom[deskPos[who]!.team!]);
+              if (!used.has(key(s))) next[who] = { x: s.x, y: s.y, bubble: "📚 자료 찾기", act: "shelf" };
             }
+          } else if (atDesk.length && !used.has(key(WHITEBOARD_SPOT))) {  // 화이트보드 — 회의실 보드 앞(비겹침)
+            const who = pick(atDesk);
+            next[who] = { x: WHITEBOARD_SPOT.x, y: WHITEBOARD_SPOT.y, bubble: "✍️ 화이트보드", act: "board" };
           }
-        } else if (out.length && Math.random() < 0.3) { // end one (pairs leave together)
+        } else if (out.length && Math.random() < 0.3) { // end one (groups leave together)
           const k = pick(out); const w = next[k]; delete next[k];
-          if (w.act === "chat" && w.partner) delete next[w.partner];
+          if ((w.act === "chat" || w.act === "huddle") && w.partner) delete next[w.partner];
         }
         return next;
       });
@@ -751,6 +740,10 @@ export default function OfficeView() {
       rest: { kind: "rest", label: "휴식" },
       stroll: { kind: "stroll", label: "산책" },
       phone: { kind: "phone", label: "통화" },
+      huddle: { kind: "chat", label: "업무협의" },
+      coffee: { kind: "rest", label: "커피·간식" },
+      shelf: { kind: "stroll", label: "자료 찾기" },
+      board: { kind: "chat", label: "화이트보드" },
     };
     const prev = prevWanderRef.current;
     for (const k of Object.keys(wander)) {
@@ -788,10 +781,11 @@ export default function OfficeView() {
           데스크톱은 이 변수를 읽는 규칙이 없어 inert(>900px 무변경). */}
       <div className="office-floor"
         style={{ transform: `scale(${scale})`, ["--office-scale" as string]: scale }}>
-        {/* 회의실 (conference room) — top-left */}
+        {/* 회의실 (conference room) — top-left. 업무협의(허들)·화이트보드 메모 */}
         <div className="office-room meeting-room" style={roomStyle(ROOMS.conf)}>
-          <span className="office-room-label">🗣️ 회의실</span>
+          <span className="office-room-label">🗣️ 회의실 · 업무협의</span>
           <div className="room-rug oval blue" style={{ left: "50%", top: "58%", width: "82%", height: "66%" }} />
+          <div className="whiteboard" style={{ left: "14%", top: "20%" }} />
           <div className="conf-table">
             <span className="conf-chairs" />
           </div>
@@ -811,17 +805,19 @@ export default function OfficeView() {
           <div className="wall-frame pic1" style={{ left: "44%", top: "13%" }}><span className="pic" /></div>
         </div>
 
-        {/* 휴게실·탕비실 — top-right. 소파=12시 벽, 책장=3시 벽, 싱크대=9시 벽(아래 floor 배치) */}
+        {/* 휴게실·탕비실 — top-right. 좌=소파존(휴식), 우=탕비존(커피·간식·잡담) */}
         <div className="office-room lounge" style={roomStyle(ROOMS.lounge)}>
           <span className="office-room-label">🛋️ 휴게실 · 탕비실</span>
-          {/* 소파 2개 — 12시(상단) 벽에 나란히 */}
-          <div className="office-sofa" style={{ left: "33%", top: "27%" }} />
-          <div className="office-sofa" style={{ left: "69%", top: "27%" }} />
-          {/* 커피 테이블 + 러그(소파 앞 가운데) */}
-          <div className="room-rug oval green" style={{ left: "47%", top: "66%", width: "46%", height: "30%" }} />
-          <span className="lounge-item" style={{ left: "47%", top: "66%" }}>☕</span>
+          {/* 소파존(좌측 절반) — 소파 2개 + 러그 */}
+          <div className="office-sofa" style={{ left: "14%", top: "30%" }} />
+          <div className="office-sofa" style={{ left: "38%", top: "30%" }} />
+          <div className="room-rug oval green" style={{ left: "26%", top: "70%", width: "42%", height: "26%" }} />
+          {/* 탕비존(우측 절반) — 커피·간식 카운터 */}
+          <div className="pantry-counter" style={{ left: "74%", top: "20%" }} />
+          <span className="lounge-item" style={{ left: "74%", top: "20%" }}>☕</span>
+          <span className="lounge-item" style={{ left: "88%", top: "20%" }}>🍪</span>
           {/* 화분(하단 코너) */}
-          <div className="office-plant" style={{ left: "16%", top: "88%" }} />
+          <div className="office-plant" style={{ left: "16%", top: "90%" }} />
         </div>
 
         {/* team zones (비서실 제외 · 경영지원 가중 폭) */}

@@ -89,24 +89,16 @@ export function confMeetingSeats(nLeads: number): { ceo: Pt; leads: Pt[] } {
   return { ceo, leads };
 }
 
-// 휴게실(x69–98) 좌측 소파존 — 휴식 착석(소파 위). 절대 office-%.
-export const LOUNGE_SOFA_SPOTS: Pt[] = [{ x: 73, y: 9 }, { x: 80, y: 9 }];
-// 휴게실 우측 탕비존 — 잡담 페어(마주봄) + 커피·간식 1인.
-export const PANTRY_CHAT_PAIR: [Pt, Pt] = [{ x: 87, y: 9 }, { x: 94, y: 9 }];
-export const PANTRY_COFFEE_SPOTS: Pt[] = [{ x: 87, y: 21 }, { x: 94, y: 21 }];
-// 회의실 좌측 벽 화이트보드 앞 — 메모 1인.
+// 방 안 비겹침 슬롯(절대 office-%) — 한 방에 여러 명이 모여도 서로 겹치지 않게 고정 간격으로 배치한다
+// (사용자 요청: 일렬이어도 좋으니 겹치지 마라). 아바타는 framer-motion 이 style 의 translate(-50%,-50%)
+// 를 덮어써 (x,y)가 '중심'이 아니라 스택 '상단'에 앵커된다(실측) → y≈9 면 스택(~12.6% 높이)이
+// 방(y2–27) 안에 든다. 가로 간격 ≥ AVATAR_W(≈6.25) 라 슬롯끼리 비겹침. 방 용량을 넘는 인원은 그 방에
+// 안 들어가고 다른 행동을 한다(틱 분기). 휴게실 x69–98, 회의실 x2–31.
+export const LOUNGE_SOFA_SLOTS: Pt[] = [{ x: 73, y: 9 }, { x: 80, y: 9 }];           // 소파존(휴식) 2석
+export const PANTRY_SLOTS: Pt[]     = [{ x: 87, y: 9 }, { x: 94, y: 9 }];            // 탕비존(잡담·커피) 2석
+export const CONF_SLOTS: Pt[]       = [{ x: 13, y: 9 }, { x: 20, y: 9 }, { x: 27, y: 9 }]; // 회의실(업무협의) 3석
+// 회의실 화이트보드 앞 — 메모 1인(회의실 좌측, CONF_SLOTS 와 비겹침).
 export const WHITEBOARD_SPOT: Pt = { x: 6, y: 9 };
-
-// 회의실 업무협의(허들) — 회의 테이블(중심 16.5,16.5) 둘레 n인 좌석. 12시부터 균등.
-const HUDDLE = { cx: 16.5, cy: 16.5, rx: 10, ry: 7 };
-export function huddleSeats(n: number): Pt[] {
-  const out: Pt[] = [];
-  for (let i = 0; i < n; i++) {
-    const ang = (2 * Math.PI * i) / Math.max(n, 1) - Math.PI / 2;
-    out.push({ x: HUDDLE.cx + Math.cos(ang) * HUDDLE.rx, y: HUDDLE.cy + Math.sin(ang) * HUDDLE.ry });
-  }
-  return out;
-}
 
 // 자료 찾기 — 팀존(상단 책장 벽) 앞 1석. 팀존 사각형에서 파생(매직넘버 금지).
 export function shelfSpot(zone: { x: number; w: number }): Pt {
