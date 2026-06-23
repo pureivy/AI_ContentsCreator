@@ -41,4 +41,19 @@ describe('jarvisChat', () => {
     expect(p.length).toBeGreaterThan(20);
     expect(p).toContain('직원 목록');
   });
+
+  it('jarvisSystemPrompt 로스터는 비서(자비스) 자신을 위임 후보로 넣지 않는다', () => {
+    const p = jarvisSystemPrompt();
+    expect(p).toContain('support_budget');   // 실제 직원은 후보에 있음
+    expect(p).not.toContain('secretary |');  // 비서(자비스) 로스터 항목 제외(자기위임 방지)
+  });
+
+  it('위임: 비서(자비스) 자신 id 는 위임 대상으로 채택하지 않는다', async () => {
+    vi.spyOn(ollama, 'chat').mockResolvedValue({
+      text: '네.\n{"delegate":{"task":"회의 준비","agent":"secretary"}}',
+    } as never);
+    const r = await jarvisChat([{ role: 'user', content: '회의 준비해줘' }]);
+    expect(r.delegate?.task).toContain('회의');
+    expect(r.delegate?.agent).toBeUndefined();   // 자기위임 방지
+  });
 });

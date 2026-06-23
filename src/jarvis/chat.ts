@@ -8,12 +8,18 @@ import { firstJson } from '../tools/classify';   // Step 3a 에서 classify.ts �
 export interface JarvisTurn { role: 'user' | 'assistant'; content: string }
 export interface JarvisReply { reply: string; delegate?: { task: string; agent?: string } }
 
-/** 위임 대상 후보 — 비-CEO 직원(id | 실명 | 주력업무). 자비스가 이 중에서 1명을 고른다. */
+const SECRETARY_ID = 'secretary';   // 자비스 본인(비서실 lead) — 위임 대상에서 제외(자기위임 방지)
+
+/** 위임 대상 후보 — 비-CEO 직원에서 비서(자비스) 자신을 뺀 목록. 자비스가 이 중 1명을 고른다.
+ *  (specialists 자체는 office 뷰·org 모드가 쓰므로 건드리지 않고, 여기서만 필터.) */
+function delegatableSpecialists() {
+  return getCompany().specialists.filter((r) => r.id !== SECRETARY_ID);
+}
 function roster(): string {
-  return getCompany().specialists.map((r) => `${r.id} | ${r.name ?? ''} | ${r.title}`).join('\n');
+  return delegatableSpecialists().map((r) => `${r.id} | ${r.name ?? ''} | ${r.title}`).join('\n');
 }
 function validAgentIds(): Set<string> {
-  return new Set(getCompany().specialists.map((r) => r.id));
+  return new Set(delegatableSpecialists().map((r) => r.id));
 }
 
 export function jarvisSystemPrompt(): string {
