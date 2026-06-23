@@ -278,7 +278,18 @@ export default function App() {
   const [voiceAvail, setVoiceAvail] = useState({ stt: false, tts: false });
   const [convo, setConvo] = useState(false);                 // 자비스 대화형
   useEffect(() => { getVoices().then((v) => setConvo(!!(v as { conversational?: boolean }).conversational)); }, []);
-  const jarvis = useJarvis(tts);                             // Phase 2 에서 onDelegate 주입
+  // 자비스가 주도해 시작한 런 id 집합 — 자동낭독 skip 가드와 보고 턴 트리거에 사용.
+  const jarvisRunIds = useRef<Set<string>>(new Set());
+  const jarvis = useJarvis(tts, async (task /*, reply */) => {
+    handleRef.current?.cancel();                              // 진행 중 런 취소(기존 directed 분기와 동일)
+    reset(task);
+    try {
+      handleRef.current = await startRun(
+        task, (ev) => apply(ev), (rid) => { jarvisRunIds.current.add(String(rid)); setRunId(rid); },
+        () => useStore.getState().lastSeq, { llm: runLlmOpt() },
+      );
+    } catch (e) { useStore.getState().pushJarvisTurn({ role: "jarvis", text: `(위임 실패) ${(e as Error).message}` }); }
+  });
   const toggleConvo = () => { const next = !convo; setConvo(next); setVoiceConversational(next); };
 
   // 마운트 시 1회 — 음성 도구 가용성 체크(mlx_whisper/say/ffmpeg 설치 여부)
@@ -386,10 +397,27 @@ export default function App() {
     if (!TERMINAL.has(s.status)) return;            // 런 종료 시점만
     const key = `${s.runId}`;
     if (autoReadRef.current === key) return;        // 런당 1회
+    if (jarvisRunIds.current.has(key)) { autoReadRef.current = key; return; } // 자비스 런은 자비스가 낭독 전담
     const text = (s.synthesis ?? "").trim();
     if (!text) return;
     autoReadRef.current = key;
     tts.speak(text, -1);                            // seq=-1: 최종 종합(카드 아님)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.status, s.runId, s.mode, s.synthesis]);
+
+  // 자비스가 위임한 런 종료 시 — 합성 결과를 자비스 보고 턴으로 추가하고 낭독(1회).
+  // 위 자동낭독은 jarvisRunIds skip 가드로 건너뛰므로 이중낭독되지 않는다.
+  const jarvisReportRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (s.mode !== "live" || !TERMINAL.has(s.status)) return;
+    const key = String(s.runId);
+    if (!jarvisRunIds.current.has(key)) return;               // 자비스 런만
+    if (jarvisReportRef.current === key) return;              // 1회
+    const text = (s.synthesis ?? "").trim();
+    if (!text) return;
+    jarvisReportRef.current = key;
+    useStore.getState().pushJarvisTurn({ role: "jarvis", text });
+    tts.speak(text, useStore.getState().jarvisTurns.length);  // 보고 낭독(기존 자동낭독은 skip됨)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.status, s.runId, s.mode, s.synthesis]);
 
