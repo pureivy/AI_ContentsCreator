@@ -25,7 +25,20 @@ describe('jarvisChat', () => {
     expect(r.reply).toContain('전달');
   });
 
-  it('jarvisSystemPrompt 는 비어있지 않다', () => {
-    expect(jarvisSystemPrompt().length).toBeGreaterThan(20);
+  it('위임: 유효 직원 id 는 delegate.agent 로 채택, 무효 id 는 무시', async () => {
+    vi.spyOn(ollama, 'chat')
+      .mockResolvedValueOnce({ text: '네.\n{"delegate":{"task":"예산 정리","agent":"support_budget"}}' } as never)
+      .mockResolvedValueOnce({ text: '네.\n{"delegate":{"task":"예산 정리","agent":"nobody_xyz"}}' } as never);
+    const ok = await jarvisChat([{ role: 'user', content: '예산 정리해줘' }]);
+    expect(ok.delegate?.agent).toBe('support_budget');
+    const bad = await jarvisChat([{ role: 'user', content: '예산 정리해줘' }]);
+    expect(bad.delegate?.task).toContain('예산');
+    expect(bad.delegate?.agent).toBeUndefined();   // 무효 id → 미채택
+  });
+
+  it('jarvisSystemPrompt 는 직원 목록을 포함한다', () => {
+    const p = jarvisSystemPrompt();
+    expect(p.length).toBeGreaterThan(20);
+    expect(p).toContain('직원 목록');
   });
 });
