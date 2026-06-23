@@ -75,7 +75,7 @@ async function classifyLLM(model: string, title: string, text: string, signal?: 
   const user = `자료 제목: ${title}\n\n발췌:\n${(text || '').slice(0, 3000)}\n\nJSON만 출력: {"assignments":["employee_id", ...]}`;
   const res = await ollama.chat({
     model, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
-    maxOutputTokens: 200, temperature: 0.2, signal,
+    maxOutputTokens: 200, temperature: 0.2, think: false, signal, // 분류는 단순 라우팅 — 추론 끔(저지연; 자비스와 동일)
   });
   const j = firstJson<{ assignments?: string[] }>(res.text);
   const valid = validIds();
