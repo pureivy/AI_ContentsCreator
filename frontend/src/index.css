@@ -1374,3 +1374,7 @@ button.upload-retry:hover { background: var(--panel2); }
 .jarvis-thread { width: min(92vw, 560px); max-height: 32vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .jarvis-turn { padding: 6px 10px; border-radius: 10px; background: rgba(255,255,255,0.06); color: #e8f1ff; }
 .jarvis-turn.user { align-self: flex-end; background: rgba(90,140,255,0.18); }
+.jarvis-mic { margin-top: 8px; padding: 14px 28px; font-size: 18px; border-radius: 999px; border: 1px solid #5a8cff66;
+  background: rgba(90,140,255,0.18); color: #e8f1ff; cursor: pointer; }
+.jarvis-mic.rec { background: #c0392b44; animation: voicePulse 1s ease-in-out infinite; }
+.jarvis-mic:disabled { opacity: .5; cursor: not-allowed; }

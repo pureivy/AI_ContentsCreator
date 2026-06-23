@@ -1301,6 +1301,15 @@ export default function App() {
             ))}
             {s.jarvisBusy && <p className="muted">자비스가 생각 중…</p>}
           </div>
+          <button
+            type="button"
+            className={`jarvis-mic ${recorder.recording ? "rec" : ""}`}
+            disabled={!voiceAvail.stt}
+            title={voiceAvail.stt ? "누르고 자비스에게 말하기" : "음성 입력 미설치(mlx-whisper 필요)"}
+            onPointerDown={(e) => { e.preventDefault(); tts.stop(); tts.prime(); recorder.start(); }}
+            onPointerUp={(e) => { e.preventDefault(); handleMicUp(); }}
+            onPointerLeave={() => { if (recorder.recording) handleMicUp(); }}
+          >🎙️ {recorder.recording ? "듣는 중…" : "누르고 말하기"}</button>
         </div>
       )}
       <header className="topbar">
