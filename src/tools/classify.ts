@@ -49,7 +49,7 @@ function validIds(): Set<string> {
   return new Set(getCompany().specialists.map((r) => r.id)); // CEO 제외(specialists 는 비-CEO)
 }
 
-function firstJson<T>(raw: string): T | null {
+export function firstJson<T>(raw: string): T | null {
   if (!raw) return null;
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const body = fenced ? fenced[1]! : raw;
