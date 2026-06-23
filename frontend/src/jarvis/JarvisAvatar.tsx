@@ -1,16 +1,17 @@
 import { useEffect, useRef } from "react";
 
-/** 코드 생성 JARVIS 오브 — 사이버틱 네온 HUD. 가운데 원에는 오피스 자비스 아바타
- *  (/avatars/secretary.png)를 클립해 넣고 네온 헤드셋(헤드밴드·이어셋·마이크 붐)·사이버 림·
- *  시안 틴트/스캔라인·숄더 테크라인으로 꾸민다. 둘레 HUD(헥사·틱·아크·레이더·막대·입자)와
- *  중앙 장식이 tts.analyser 주파수/진폭에 반응. */
+/** 코드 생성 JARVIS 오브 — 사이버틱 네온 HUD. 가운데 원에는 사이버펑크 자비스 얼굴
+ *  (/avatars/jarvis_face.png — 크롬+골드 헬멧·시안 이어피스·네온)을 클립해 넣는다.
+ *  이미지가 자체 헬멧/이어피스를 가지므로 코드 헤드셋은 두지 않고, 사이버 림·시안 틴트/
+ *  스캔라인만 덧댄다. 둘레 HUD(헥사·틱·아크·레이더·막대·입자)와 림이 tts.analyser
+ *  주파수/진폭에 반응. */
 export function JarvisAvatar({ analyser, speaking }: { analyser: AnalyserNode | null; speaking: boolean }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   const avImg = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
     const im = new Image();
-    im.src = "/avatars/secretary.png";   // 동일 오리진 → canvas 오염 없음
+    im.src = "/avatars/jarvis_face.png";   // 동일 오리진 → canvas 오염 없음
     avImg.current = im;
   }, []);
 
@@ -120,12 +121,11 @@ export function JarvisAvatar({ analyser, speaking }: { analyser: AnalyserNode | 
       const bg = ctx.createRadialGradient(cx, cy - cR * 0.2, cR * 0.2, cx, cy, cR);
       bg.addColorStop(0, "rgba(14,32,58,1)"); bg.addColorStop(1, "rgba(4,12,28,1)");
       ctx.fillStyle = bg; ctx.fillRect(cx - cR, cy - cR, cR * 2, cR * 2);
-      // 아바타 이미지(머리+어깨 크롭)
+      // 아바타 이미지 — 이미 머리(이어피스+헬멧+얼굴) 중심으로 정사각(920²) 크롭된 자산이라
+      // 전체를 원에 그대로 채운다(코너는 원 클립이 잘라냄).
       const im = avImg.current;
       if (im && im.complete && im.naturalWidth) {
-        // 1024² 이미지: 머리(올림머리 y72~턱 y560, 가로중심 x511)를 얼굴중심(~511,360)이 원 중앙에
-        // 오도록 정사각 크롭(231,72,560,560) → 원 안에 얼굴이 채워진다.
-        ctx.drawImage(im, 231, 72, 560, 560, cx - cR, cy - cR, cR * 2, cR * 2);
+        ctx.drawImage(im, cx - cR, cy - cR, cR * 2, cR * 2);
       }
       // 시안 틴트
       ctx.globalCompositeOperation = "lighter";
@@ -137,30 +137,12 @@ export function JarvisAvatar({ analyser, speaking }: { analyser: AnalyserNode | 
       for (let yy = cy - cR; yy < cy + cR; yy += 5) { ctx.beginPath(); ctx.moveTo(cx - cR, yy); ctx.lineTo(cx + cR, yy); ctx.stroke(); }
       ctx.restore();
 
-      // 사이버 림(이중)
+      // 사이버 림(이중) — 음성 진폭(act)에 맥동. 코드 헤드셋은 이미지가 자체 헬멧을 가지므로 제거.
       ctx.globalCompositeOperation = "lighter"; ctx.shadowColor = "rgba(0,229,255,0.9)"; ctx.shadowBlur = 16;
       ring(cR, 3, CY(0.7 + act * 0.3));
       ring(cR + 5, 1.5, MG(0.4 + act * 0.3));
-
-      // 헤드셋: 헤드밴드 아크(머리 위)
-      ctx.shadowBlur = 12;
-      ring(cR * 0.86, 4, CY(0.7 + act * 0.3), Math.PI * 1.13, Math.PI * 1.87);
-      // 좌·우 이어컵(귀 위치)
-      const ey = cy - cR * 0.02, exL = cx - cR * 0.78, exR = cx + cR * 0.78;
-      ctx.shadowBlur = 18;
-      for (const ux of [exL, exR]) {
-        ctx.fillStyle = CY(0.92); ctx.beginPath(); ctx.arc(ux, ey, 6 + act * 5, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = MG(0.6); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ux, ey, 10 + act * 5, 0, Math.PI * 2); ctx.stroke();
-      }
-      // 마이크 붐(좌측 이어컵 → 턱선 따라 입 앞)
-      const mx = cx - cR * 0.04, my = cy + cR * 0.27;
-      ctx.strokeStyle = CY(0.8); ctx.lineWidth = 2.6; ctx.shadowBlur = 10;
-      ctx.beginPath(); ctx.moveTo(exL, ey); ctx.quadraticCurveTo(cx - cR * 0.68, cy + cR * 0.46, mx, my); ctx.stroke();
-      // 마이크 팁(말할 때 보라 발광)
-      ctx.fillStyle = act > 0.04 ? MG(0.95) : CY(0.85); ctx.shadowBlur = 14;
-      ctx.beginPath(); ctx.arc(mx, my, 3.5 + act * 6, 0, Math.PI * 2); ctx.fill();
-      // 숄더 테크라인(사이버 복장 악센트, 원 하단 호)
-      ctx.shadowBlur = 8; ring(cR * 0.97, 2.5, CY(0.5 + act * 0.4), Math.PI * 0.22, Math.PI * 0.78);
+      // 말할 때 원 테두리가 더 밝게 반응(헤드셋 제거분 보완)
+      if (act > 0.02) { ctx.shadowBlur = 22; ring(cR + 2, 2.5, CY(Math.min(0.9, 0.3 + act))); }
 
       // 10) 코너 타게팅 브래킷
       ctx.shadowBlur = 8; ctx.strokeStyle = HI(0.45 + act * 0.4); ctx.lineWidth = 2.4;
