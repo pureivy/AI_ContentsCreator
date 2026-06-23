@@ -144,21 +144,23 @@ export function JarvisAvatar({ analyser, speaking }: { analyser: AnalyserNode | 
 
       // 헤드셋: 헤드밴드 아크(머리 위)
       ctx.shadowBlur = 12;
-      ring(cR * 0.84, 4, CY(0.7 + act * 0.3), Math.PI * 1.18, Math.PI * 1.82);
-      // 이어셋(좌측 귀)
-      const ex = cx - cR * 0.66, ey = cy - cR * 0.02;
-      ctx.fillStyle = CY(0.92); ctx.shadowBlur = 18;
-      ctx.beginPath(); ctx.arc(ex, ey, 6 + act * 5, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = MG(0.6); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ex, ey, 9 + act * 5, 0, Math.PI * 2); ctx.stroke();
-      // 마이크 붐(이어셋→입)
-      const mx = cx - cR * 0.02, my = cy + cR * 0.46;
+      ring(cR * 0.86, 4, CY(0.7 + act * 0.3), Math.PI * 1.13, Math.PI * 1.87);
+      // 좌·우 이어컵(귀 위치)
+      const ey = cy - cR * 0.02, exL = cx - cR * 0.78, exR = cx + cR * 0.78;
+      ctx.shadowBlur = 18;
+      for (const ux of [exL, exR]) {
+        ctx.fillStyle = CY(0.92); ctx.beginPath(); ctx.arc(ux, ey, 6 + act * 5, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = MG(0.6); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ux, ey, 10 + act * 5, 0, Math.PI * 2); ctx.stroke();
+      }
+      // 마이크 붐(좌측 이어컵 → 턱선 따라 입 앞)
+      const mx = cx - cR * 0.04, my = cy + cR * 0.27;
       ctx.strokeStyle = CY(0.8); ctx.lineWidth = 2.6; ctx.shadowBlur = 10;
-      ctx.beginPath(); ctx.moveTo(ex, ey); ctx.quadraticCurveTo(cx - cR * 0.72, cy + cR * 0.55, mx, my); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(exL, ey); ctx.quadraticCurveTo(cx - cR * 0.68, cy + cR * 0.46, mx, my); ctx.stroke();
       // 마이크 팁(말할 때 보라 발광)
       ctx.fillStyle = act > 0.04 ? MG(0.95) : CY(0.85); ctx.shadowBlur = 14;
       ctx.beginPath(); ctx.arc(mx, my, 3.5 + act * 6, 0, Math.PI * 2); ctx.fill();
       // 숄더 테크라인(사이버 복장 악센트, 원 하단 호)
-      ctx.shadowBlur = 8; ring(cR * 0.96, 2.5, CY(0.5 + act * 0.4), Math.PI * 0.2, Math.PI * 0.8);
+      ctx.shadowBlur = 8; ring(cR * 0.97, 2.5, CY(0.5 + act * 0.4), Math.PI * 0.22, Math.PI * 0.78);
 
       // 10) 코너 타게팅 브래킷
       ctx.shadowBlur = 8; ctx.strokeStyle = HI(0.45 + act * 0.4); ctx.lineWidth = 2.4;
