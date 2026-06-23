@@ -425,7 +425,7 @@ function Character({ p }: { p: Placed }) {
     : p.act === "chat" || p.act === "huddle" ? "chat"
     : p.act === "coffee" ? "coffee"
     : p.act === "phone" ? "phone"
-    : p.act === "shelf" || p.act === "board" ? "work"
+    : p.act === "shelf" || p.act === "board" || p.act === "work" ? "work"
     : p.thinking ? "work"
     : "idle";
   const GAITS: Record<string, { g: Record<string, number | number[]>; d: number }> = {
@@ -636,6 +636,24 @@ export default function OfficeView() {
   // socializing avatars ever collide. Runs livelier (idle depts mingle) than pre-run.
   type WSpot = { x: number; y: number; bubble: string; act?: "chat" | "phone" | "rest" | "stroll" | "huddle" | "coffee" | "shelf" | "board"; partner?: string; dir?: 1 | -1 };
   const [wander, setWander] = useState<Record<string, WSpot>>({});
+  // 비서(자비스)는 비서실 자리를 지켜 wander 풀에서 빠진다(산책·잡담 X). 대신 자기 자리에서 '데스크
+  // 라이프'(메모·통화·문서·휴식)를 ~5초마다 바꿔 살아있게 한다 — 유휴일 때만 적용(작업 중엔 layout 의
+  // '✍️ 작업 중'이 우선). 위치는 SECRETARY_DESK 고정, 동작·말풍선만 바뀐다.
+  const [secLife, setSecLife] = useState<{ bubble: string; act: string }>({ bubble: "✍️ 메모 정리", act: "work" });
+  useEffect(() => {
+    const SEC_LIFE = [
+      { bubble: "✍️ 메모 정리", act: "work" },
+      { bubble: "🗓️ 일정 확인", act: "work" },
+      { bubble: "📞 통화 중", act: "phone" },
+      { bubble: "⌨️ 문서 작성", act: "work" },
+      { bubble: "☕ 잠깐 한숨", act: "rest" },
+    ];
+    const tick = setInterval(() => {
+      const pick = SEC_LIFE[Math.floor(Math.random() * SEC_LIFE.length)];
+      if (pick) setSecLife(pick);
+    }, 5000);
+    return () => clearInterval(tick);
+  }, []);
   // Latest values for the ambient interval — read via a ref so the interval is created
   // ONCE (deps []) and never torn down by frequent phase/agent updates (which would
   // reset the 3s timer and, at CHOREO_PAUSE_S=0, starve it entirely).
@@ -966,8 +984,11 @@ export default function OfficeView() {
           // honor a wander spot only if the avatar is STILL free this render — re-engaged
           // ones (team handoff / CEO integration) snap to their choreography seat at once.
           const w = freeIds.has(p.agent.agent_id) ? wander[p.agent.agent_id] : undefined;
+          // 비서가 유휴(작업 중 아님)면 데스크 라이프 적용 — 자리는 유지, 동작·말풍선만 살아있게.
+          const sec = !w && p.agent.team === SECRETARIAT && !p.thinking ? secLife : undefined;
           return <Character key={p.agent.agent_id}
-            p={w ? { ...p, x: w.x, y: w.y, bubble: w.bubble, thinking: false, act: w.act } : p} />;
+            p={w ? { ...p, x: w.x, y: w.y, bubble: w.bubble, thinking: false, act: w.act }
+                 : sec ? { ...p, bubble: sec.bubble, act: sec.act } : p} />;
         })}
         {placed.length === 0 && (
           <div className="office-hint">주제를 입력하면 직원들이 사무실로 출근합니다 🏢</div>
