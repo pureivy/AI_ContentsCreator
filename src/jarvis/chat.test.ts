@@ -48,6 +48,13 @@ describe('jarvisChat', () => {
     expect(p).not.toContain('secretary |');  // 비서(자비스) 로스터 항목 제외(자기위임 방지)
   });
 
+  it('jarvisSystemPrompt 로스터는 specialty(주요 업무)·담당선택 규칙을 포함한다', () => {
+    const p = jarvisSystemPrompt();
+    expect(p).toContain('급여');        // specialty(주요 업무) 노출 — 재원·겸장 변별 단서
+    expect(p).toContain('팀장');        // 복합 업무는 팀장 규칙
+    expect(p).toContain('비서 본연');   // 비서 본연 업무는 직접 처리(위임 안 함)
+  });
+
   it('위임: 비서(자비스) 자신 id 는 위임 대상으로 채택하지 않는다', async () => {
     vi.spyOn(ollama, 'chat').mockResolvedValue({
       text: '네.\n{"delegate":{"task":"회의 준비","agent":"secretary"}}',

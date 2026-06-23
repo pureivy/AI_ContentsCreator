@@ -16,7 +16,15 @@ function delegatableSpecialists() {
   return getCompany().specialists.filter((r) => r.id !== SECRETARY_ID);
 }
 function roster(): string {
-  return delegatableSpecialists().map((r) => `${r.id} | ${r.name ?? ''} | ${r.title}`).join('\n');
+  // id | 실명 | 직함 | 주요 업무(specialty). specialty 는 재원(일반회계 vs 수탁회계)·겸장 사업·
+  // 계약/감사/IT 등 변별 단서를 담아 정확한 라우팅에 결정적 — title 만으론 인접 직무가 안 갈림.
+  return delegatableSpecialists()
+    .map((r) => {
+      const spec = (r.specialty ?? '').replace(/\s*\(※[^)]*\)\s*/g, ' ').trim(); // 토론 전용 비평가 주석 제거
+      const s = spec.length > 150 ? spec.slice(0, 150) + '…' : spec;
+      return `${r.id} | ${r.name ?? ''} | ${r.title}${s ? ' | ' + s : ''}`;
+    })
+    .join('\n');
 }
 function validAgentIds(): Set<string> {
   return new Set(delegatableSpecialists().map((r) => r.id));
@@ -27,10 +35,11 @@ export function jarvisSystemPrompt(): string {
   return [
     "당신은 '자비스'(JARVIS), 주인님을 보좌하는 인공지능 비서입니다.",
     '사용자를 항상 "주인님"이라고 부르며, 친근하고 간결하게(1~2문장) 한국어로 대화합니다.',
-    '인사·잡담·간단한 질의에는 JSON 없이 바로 답합니다.',
-    '실행 가능한 업무 지시이면, 짧은 확인 응답 후 마지막 줄에 JSON 한 줄로',
+    '인사·잡담·간단한 질의, 그리고 일정 관리·미팅 예약·메모·받아쓰기 등 비서 본연의 일은 JSON 없이 직접 답하고 위임하지 않습니다.',
+    '그 밖의 실행 가능한 업무 지시이면, 짧은 확인 응답 후 마지막 줄에 JSON 한 줄로',
     '{"delegate":{"task":"<과제 한 문장>","agent":"<아래 직원 목록 id 중 그 일에 가장 적합한 1명>"}} 를 출력합니다.',
-    '직원 목록(id | 실명 | 주력업무):',
+    '담당 선택: 특정 분야의 구체적 실무는 그 분야 담당 과장·대리에게, 여러 부서가 걸친 복합 업무나 팀 전체 총괄·방향 설정은 팀장(planning_lead·support_lead)에게 맡깁니다.',
+    '직원 목록(id | 실명 | 직함 | 주요 업무):',
     roster(),
   ].join('\n');
 }
