@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "./store";
 import { startRun, resumeRun, watchRun, RunHandle } from "./transport/sse";
-import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, downloadRunHwpx, fetchEta, reviseRun, fetchTemplates, saveTemplate, deleteTemplate, runTemplate, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, RunInfo, UploadFileResult, LlmStatus, EtaStats, TemplateInfo, RunSettings } from "./api";
+import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, downloadRunHwpx, fetchEta, reviseRun, fetchTemplates, saveTemplate, deleteTemplate, runTemplate, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, getVoices, RunInfo, UploadFileResult, LlmStatus, EtaStats, TemplateInfo, RunSettings } from "./api";
 import { ActivityItem, ApprovalItem, DebateMsg, UIState } from "./events/types";
 import AgentGraph from "./panels/AgentGraph";
 import OfficeView from "./panels/OfficeView";
@@ -163,6 +163,7 @@ function TimelineMessage({
   selfName,
   rosterNames,
   tts,
+  ttsAvail,
 }: {
   m: DebateMsg;
   roleLabel: string;
@@ -172,6 +173,7 @@ function TimelineMessage({
   selfName?: string;
   rosterNames?: string[];
   tts: ReturnType<typeof useTts>;
+  ttsAvail?: boolean;
 }) {
   // 카드 파형 표시 게이트 — store.speakingSeq 가 이 카드의 seq 와 같을 때만(useTts 가 갱신).
   const speakingSeq = useStore((st) => st.speakingSeq);
@@ -212,7 +214,8 @@ function TimelineMessage({
         <button
           type="button"
           className="voice-speak"
-          title="이 메시지 음성으로 듣기"
+          title={ttsAvail ? "이 메시지 음성으로 듣기" : "음성 출력 미설치(say·ffmpeg 필요)"}
+          disabled={!ttsAvail}
           onClick={() => tts.speak(m.text, m.seq)}
         >🔊</button>
         {speakingSeq === m.seq && tts.analyser && (
@@ -270,9 +273,16 @@ export default function App() {
   const [chat, setChat] = useState("");
   const recorder = useRecorder();  // 홀드 녹음(push-to-talk) → STT
   const tts = useTts();            // 메시지/최종결과 낭독(단일 인스턴스 = AudioContext 1개 공유)
+  const [voiceAvail, setVoiceAvail] = useState({ stt: false, tts: false });
+
+  // 마운트 시 1회 — 음성 도구 가용성 체크(mlx_whisper/say/ffmpeg 설치 여부)
+  useEffect(() => {
+    getVoices().then(v => setVoiceAvail({ stt: v.sttAvailable, tts: v.ttsAvailable }));
+  }, []);
 
   // 홀드 녹음 종료 → STT → 입력창 합성(자동 전송 아님). textarea 자동높이도 갱신.
   const handleMicUp = async () => {
+    if (!voiceAvail.stt) return;
     const blob = await recorder.stop();
     if (!blob) return;
     const text = await sttUpload(blob);
@@ -790,8 +800,9 @@ export default function App() {
       <button
         type="button"
         className={`voice-mic ${recorder.recording ? "rec" : ""}`}
-        title="누르고 말하기(떼면 입력창에 채움)"
-        onPointerDown={(e) => { e.preventDefault(); recorder.start(); }}
+        title={voiceAvail.stt ? "누르고 말하기(떼면 입력창에 채움)" : "음성 입력 미설치(mlx-whisper 필요)"}
+        disabled={!voiceAvail.stt}
+        onPointerDown={(e) => { e.preventDefault(); tts.stop(); recorder.start(); }}
         onPointerUp={(e) => { e.preventDefault(); handleMicUp(); }}
         onPointerLeave={() => { if (recorder.recording) handleMicUp(); }}
       >🎙️</button>
@@ -1011,6 +1022,7 @@ export default function App() {
               selfName={a?.persona?.name || rosterPersons[m.agent_id ?? ""]}
               rosterNames={rosterNameList}
               tts={tts}
+              ttsAvail={voiceAvail.tts}
             />,
           );
         }

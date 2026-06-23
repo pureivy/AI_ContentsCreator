@@ -643,12 +643,12 @@ export async function decideApproval(
 }
 
 // --- 음성 입출력 ---
-export async function getVoices(): Promise<{ available: boolean; voices: string[]; defaultVoice: string }> {
+export async function getVoices(): Promise<{ available: boolean; sttAvailable: boolean; ttsAvailable: boolean; voices: string[]; defaultVoice: string }> {
   try {
     const r = await fetch("/voice/voices");
-    if (!r.ok) return { available: false, voices: [], defaultVoice: "Yuna" };
+    if (!r.ok) return { available: false, sttAvailable: false, ttsAvailable: false, voices: [], defaultVoice: "Yuna" };
     return await r.json();
-  } catch { return { available: false, voices: [], defaultVoice: "Yuna" }; }
+  } catch { return { available: false, sttAvailable: false, ttsAvailable: false, voices: [], defaultVoice: "Yuna" }; }
 }
 
 /** 녹음 Blob 업로드 → 전사 텍스트. 실패 시 빈 문자열. */

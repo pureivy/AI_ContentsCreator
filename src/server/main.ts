@@ -1045,7 +1045,7 @@ const ttsHandler = async (c: Context): Promise<Response> => {
 const voicesHandler = async (c: Context): Promise<Response> => {
   const available = ttsAvailable();
   const voices = available ? await listKoreanVoices() : [];
-  return c.json({ available, voices, defaultVoice: getVoiceSettings().ttsVoice });
+  return c.json({ available: ttsAvailable(), ttsAvailable: ttsAvailable(), sttAvailable: sttAvailable(), voices, defaultVoice: getVoiceSettings().ttsVoice });
 };
 
 app.post('/voice/stt', sttHandler);

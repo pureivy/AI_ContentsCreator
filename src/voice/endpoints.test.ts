@@ -17,8 +17,10 @@ describe('voice endpoints', () => {
     vi.spyOn(audio, 'which').mockReturnValue(true);
     vi.spyOn(audio, 'run').mockResolvedValue({ stdout: Buffer.from('Yuna  ko_KR  # 안녕'), code: 0 });
     const res = await app.request('/voice/voices');
-    const j = await res.json() as { available: boolean; voices: string[]; defaultVoice: string };
+    const j = await res.json() as { available: boolean; sttAvailable: boolean; ttsAvailable: boolean; voices: string[]; defaultVoice: string };
     expect(j.available).toBe(true);
+    expect(j.sttAvailable).toBe(true);
+    expect(j.ttsAvailable).toBe(true);
     expect(j.voices).toContain('Yuna');
     expect(typeof j.defaultVoice).toBe('string');
   });
