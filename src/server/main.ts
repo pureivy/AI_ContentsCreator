@@ -46,6 +46,7 @@ import { classifyAndAssign, getStatuses, reassign, setIngestStatus } from '../to
 import { transcribe, sttAvailable } from '../voice/stt';
 import { synthesize, listKoreanVoices, ttsAvailable } from '../voice/tts';
 import { getVoiceSettings } from '../voice/setting';
+import { jarvisChat } from '../jarvis/chat';
 
 interface RunHandle {
   status: 'running' | 'done' | 'error' | 'cancelled';
@@ -1054,6 +1055,23 @@ app.post('/voice/tts', ttsHandler);
 app.post('/api/voice/tts', ttsHandler);
 app.get('/voice/voices', voicesHandler);
 app.get('/api/voice/voices', voicesHandler);
+
+// --- 자비스 대화 ---
+const jarvisHandler = async (c: Context): Promise<Response> => {
+  const models = await ollama.listModels().catch(() => []);
+  if (!models.length) return c.json({ error: 'LLM 미가용(로컬 모델 없음)' }, 503);
+  const body = await c.req.json<{ messages?: { role: string; content: string }[] }>().catch(() => ({} as { messages?: { role: string; content: string }[] }));
+  const messages = (body.messages ?? []).filter((m) => m && typeof m.content === 'string');
+  if (!messages.length) return c.json({ error: '메시지 없음' }, 400);
+  try {
+    const out = await jarvisChat(messages as { role: 'user' | 'assistant'; content: string }[], { signal: c.req.raw.signal });
+    return c.json(out);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+};
+app.post('/jarvis/chat', jarvisHandler);
+app.post('/api/jarvis/chat', jarvisHandler);
 
 // ============================================================
 // 정적 — React 프론트(/) + 경량 자체 UI(/lite)
