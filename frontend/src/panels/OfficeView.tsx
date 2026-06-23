@@ -172,6 +172,7 @@ interface Placed {
   badge: string;   // e.g. 📄 when a deliverable/synthesis is ready
   roomLabel: string;
   face: Face;      // which wall the desk backs onto (desk rotation)
+  act?: string;    // ambient 활동(rest/chat/coffee/phone/stroll/huddle/shelf/board) — 활동별 제자리 모션·보행시간용
 }
 
 // Layout the whole company into container-% coordinates.
@@ -401,34 +402,49 @@ function layout(
 }
 
 function Character({ p }: { p: Placed }) {
-  // 이동 감지 — 목표 위치(p.x/p.y)가 바뀌면 활주(glide)하는 동안 '걷기/뛰기' 걸음걸이를 켠다.
+  // 이동 거리(렌더 직전 위치 대비) — 위치 트랜지션 시간(거리비례 보행)과 걷기 게이트에 쓴다.
+  const last = useRef({ x: p.x, y: p.y });
+  const dist = Math.hypot(p.x - last.current.x, p.y - last.current.y);
+  const stroll = p.act === "stroll";
+  // 보행 시간: 산책은 틱 간격(3s)에 맞춰 등속 '연속' 활주, 그 외 이동은 거리비례(순간이동 방지, ~20%/s).
+  const moveDur = stroll ? 3 : Math.min(2.4, Math.max(0.5, dist * 0.05));
   const [walking, setWalking] = useState(false);
-  const prev = useRef({ x: p.x, y: p.y });
   useEffect(() => {
-    const dist = Math.hypot(p.x - prev.current.x, p.y - prev.current.y);
-    prev.current = { x: p.x, y: p.y };
-    if (dist > 1.2) { // 의미있는 이동만(미세 흔들림 제외)
+    last.current = { x: p.x, y: p.y };
+    if (dist > 1.2) {                       // 의미있는 이동만
       setWalking(true);
-      const t = setTimeout(() => setWalking(false), Math.min(1500, 380 + dist * 48));
+      const t = setTimeout(() => setWalking(false), moveDur * 1000); // 도착(=이동시간)까지 걷기 유지
       return () => clearTimeout(t);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.x, p.y]);
-  // 걸음걸이: '이동 중'에만 상하 bound + 좌우 흔들(뛰는 발걸음). 제자리(작업/대기)는 정지 —
-  // 작업 중은 💭·작업aura·링·말풍선으로 표시하고 몸을 계속 흔들지 않는다. (effStatus 가 spawned 를
-  //  thinking 으로 승급해 '아무 일도 안 하는' 유휴 아바타까지 제자리 흔들리던 문제 제거 — 사용자 요청.)
-  const gait = walking
-    ? { y: [0, -7, 0, -7, 0], rotate: [-5, 5, -5, 5, 0] }
-    : { y: 0, rotate: 0 };
-  const gaitT = walking
-    ? { repeat: Infinity, duration: 0.34, ease: "easeInOut" as const }
-    : { duration: 0.2 };
+  // 활동별 '제자리 움직임' — 작업/휴식/잡담/커피/통화는 살아있게 미세 모션, 진짜 유휴(대기)만 정지
+  // (사용자 요청: 유휴는 안 흔들리되 활동 중엔 움직임). 이동 중(walking)엔 큰 걸음걸이.
+  const actKind = walking ? "walk"
+    : p.act === "rest" ? "rest"
+    : p.act === "chat" || p.act === "huddle" ? "chat"
+    : p.act === "coffee" ? "coffee"
+    : p.act === "phone" ? "phone"
+    : p.act === "shelf" || p.act === "board" ? "work"
+    : p.thinking ? "work"
+    : "idle";
+  const GAITS: Record<string, { g: Record<string, number | number[]>; d: number }> = {
+    walk:   { g: { y: [0, -7, 0, -7, 0], rotate: [-5, 5, -5, 5, 0] }, d: 0.34 }, // 이동: 뛰는 발걸음
+    work:   { g: { y: [0, -2, 0], rotate: [-1.5, 1.5, -1.5] }, d: 0.5 },         // 작업: 바쁜 잔걸음
+    rest:   { g: { y: [0, -1.6, 0] }, d: 1.8 },                                   // 휴식: 느긋한 호흡
+    chat:   { g: { rotate: [-3, 3, -3] }, d: 0.6 },                               // 잡담·업무협의: 말하는 제스처
+    coffee: { g: { rotate: [0, 3, 0, -1, 0] }, d: 1.4 },                          // 커피·간식: 한 모금
+    phone:  { g: { y: [0, -1, 0], rotate: [-2.5, 1.5, -2.5] }, d: 0.9 },          // 통화: 서성·제스처
+  };
+  const ga = GAITS[actKind];
+  const gait = ga ? ga.g : { y: 0, rotate: 0 };
+  const gaitT = ga ? { repeat: Infinity, duration: ga.d, ease: "easeInOut" as const } : { duration: 0.2 };
+  const posT = { type: "tween" as const, ease: stroll ? ("linear" as const) : ("easeInOut" as const), duration: moveDur };
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.4 }}
       animate={{ opacity: 1, scale: 1, left: `${p.x}%`, top: `${p.y}%` }}
-      transition={{ left: { type: "spring", stiffness: 120, damping: 18 },
-                    top: { type: "spring", stiffness: 120, damping: 18 },
-                    opacity: { duration: 0.4 }, scale: { duration: 0.4 } }}
+      transition={{ left: posT, top: posT, opacity: { duration: 0.4 }, scale: { duration: 0.4 } }}
       style={{ position: "absolute", transform: "translate(-50%, -50%)",
                display: "flex", flexDirection: "column", alignItems: "center", zIndex: 5 }}
     >
@@ -945,7 +961,7 @@ export default function OfficeView() {
           // ones (team handoff / CEO integration) snap to their choreography seat at once.
           const w = freeIds.has(p.agent.agent_id) ? wander[p.agent.agent_id] : undefined;
           return <Character key={p.agent.agent_id}
-            p={w ? { ...p, x: w.x, y: w.y, bubble: w.bubble, thinking: false } : p} />;
+            p={w ? { ...p, x: w.x, y: w.y, bubble: w.bubble, thinking: false, act: w.act } : p} />;
         })}
         {placed.length === 0 && (
           <div className="office-hint">주제를 입력하면 직원들이 사무실로 출근합니다 🏢</div>
