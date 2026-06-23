@@ -80,7 +80,7 @@ function progressNote(
   const ceo = phases["_ceo"];
   if (ceo === "delegate") return "🧩 사장이 목표를 팀별 과제로 분해하는 중…";
   if (ceo === "review") return "🔎 사장이 팀 산출물을 검토하는 중…";
-  if (ceo === "integrate") return "🤝 사장이 팀 산출물을 통합하는 중…";
+  if (ceo === "integrate") return "🧩 사장이 팀 산출물을 통합하는 중…";
   for (const tid in phases) {
     if (tid === "_ceo") continue;
     const ph = phases[tid];
@@ -717,8 +717,12 @@ export default function App() {
     if (s.status === "running" || eta === null) fetchEta().then(setEta);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.status]);
-  const etaStage = s.synthesis ? "통합·마무리"
-    : Object.keys(s.phases).length ? "팀 작업·토론" : "위임";
+  // 직원 지명(단독) 런은 phase 이벤트가 없어 "팀 작업·토론" 분기에 못 들어가 위임에 갇힌다 →
+  // 지명 직원이 산출물을 내기 시작하면(ceo-synth 스트리밍) '작업 진행'으로 전진.
+  const etaStage = s.soloAgentId
+    ? (s.blocks["ceo-synth"] ? "작업 진행" : "위임")
+    : s.synthesis ? "통합·마무리"
+      : Object.keys(s.phases).length ? "팀 작업·토론" : "위임";
   const fmtDur = (sec: number) => sec >= 90 ? `${Math.round(sec / 60)}분` : `${Math.round(sec)}초`;
 
   const sendChat = async () => {

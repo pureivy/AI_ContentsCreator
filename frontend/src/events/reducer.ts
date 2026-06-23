@@ -45,6 +45,8 @@ export function fold(state: UIState, ev: EventEnvelope): UIState {
     case "run_started":
       return {
         ...next, topic: p.topic ?? state.topic, status: "running",
+        // 직원 지명(단독) 런이면 그 직원 id — 오피스뷰 솔로 안무 게이트(없으면 null = 전사/토론 런).
+        soloAgentId: (p.directed_agent_id as string | undefined) ?? null,
         activity: act("run", "토론 시작", { detail: snippet(p.topic ?? state.topic, 100), tone: "info" }),
       };
 

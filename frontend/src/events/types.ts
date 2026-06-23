@@ -194,6 +194,9 @@ export interface UIState {
   // Reset when a team re-decomposes, so a RESUMED run's earlier (larger) waves don't keep
   // stale members "working" in the office. engaged ≠ "ever spawned in this run".
   engaged: Record<string, string[]>;
+  // 직원 지명(단독) 런의 그 직원 agent_id — 오피스뷰가 가짜 팀간회의 대신 이 직원만 자기 자리에서
+  // 작업하게 한다(없으면 전사/토론 런). run_started 에서 세팅, 다음 런 reset 에서 자동 해제.
+  soloAgentId: string | null;
   // employee workspace graft
   approvals: ApprovalItem[];          // pending requests awaiting a decision
   approvalHistory: ApprovalItem[];    // decided requests (newest last)
@@ -228,6 +231,7 @@ export function initialState(): UIState {
     lessons: [],
     phases: {},
     engaged: {},
+    soloAgentId: null,
     approvals: [],
     approvalHistory: [],
     sessionDigest: null,

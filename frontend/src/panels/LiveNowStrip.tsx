@@ -13,7 +13,8 @@ import Avatar from "./Avatar";
 const PHASE_DOING: Record<string, string> = {
   brief: "브리핑 받는 중", decompose: "과제 분해 중", assign: "과제 배정 중",
   work: "작업 중", debate: "상호검증 토론 중", report: "팀원 보고 검토·취합 중",
-  report_ceo: "사장께 보고 중", delegate: "지침 수립 중", review: "검토·확정 중", idle: "대기",
+  report_ceo: "사장께 보고 중", delegate: "지침 수립 중", review: "검토·확정 중",
+  integrate: "산출물 통합 중", idle: "대기",
 };
 
 // 팀장/CEO 전용 phase 라벨 — 오피스뷰의 팀장 말풍선(분해/배정/검토)과 의미를 일치시켜
@@ -22,7 +23,8 @@ const PHASE_DOING: Record<string, string> = {
 const LEAD_PHASE_DOING: Record<string, string> = {
   brief: "지시 받는 중", decompose: "과제 분해 중", assign: "과제 배정 중",
   work: "대기", debate: "회의 주재 중", report: "팀원 보고 검토·취합 중",
-  report_ceo: "사장께 보고 중", delegate: "지침 수립 중", review: "검토·확정 중", idle: "대기",
+  report_ceo: "사장께 보고 중", delegate: "지침 수립 중", review: "검토·확정 중",
+  integrate: "산출물 통합 중", idle: "대기",
 };
 
 // 작업자의 '현재 행동' — 가장 최근 활동(툴/위키/스킬/발언)을 '…중' 라벨로 매핑. line2가

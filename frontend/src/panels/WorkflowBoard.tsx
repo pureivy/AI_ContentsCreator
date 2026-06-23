@@ -7,33 +7,13 @@ import { useStore } from "../store";
 import { AgentNode } from "../events/types";
 import { agentColor, agentGlyph, resolveName } from "./agentVisual";
 import { isWorkingNow } from "../events/working";
+import { TERMINAL, macroStages, soloWorking } from "./workflowStages";
 import Avatar from "./Avatar";
 
-// the CEO dispatch protocol, in order. Team/_ceo phases map onto these macro stages.
-const MACRO = [
-  { key: "delegate", label: "위임" },
-  { key: "work", label: "작업 진행" },
-  { key: "debate", label: "팀 토론" },
-  { key: "report", label: "보고" },
-  { key: "integrate", label: "통합" },
-  { key: "done", label: "완료" },
-];
-function phaseMacro(phase?: string): number {
-  switch (phase) {
-    case "delegate": return 0;
-    case "brief": case "decompose": case "assign": case "work": return 1;
-    case "debate": return 2;
-    case "report": return 3;
-    case "review": case "integrate": return 4;
-    default: return -1;
-  }
-}
 const PHASE_LABEL: Record<string, string> = {
   brief: "브리핑", decompose: "업무 분해", assign: "업무 배정", work: "작업 진행",
   debate: "팀 토론", report: "보고", delegate: "위임", review: "검토", integrate: "통합", idle: "대기",
 };
-const TERMINAL = new Set(["ok", "partial", "cancelled", "budget_exceeded", "error", "interrupted"]);
-
 function clock(ts: string): string {
   const d = new Date(ts);
   if (isNaN(d.getTime())) return "--:--:--";
@@ -48,32 +28,24 @@ function ago(ms: number): string {
   if (m < 60) return `${m}분 ${sec % 60}초`;
   return `${Math.floor(m / 60)}시간 ${m % 60}분`;
 }
-// highest macro stage reached across every team + the CEO; terminal status ⇒ 완료.
-function currentMacro(phases: Record<string, string>, status: string): number {
-  if (TERMINAL.has(status)) return MACRO.length - 1;
-  let max = -1;
-  for (const ph of Object.values(phases)) max = Math.max(max, phaseMacro(ph));
-  if (max < 0 && (status === "running" || Object.keys(phases).length > 0)) max = 0;
-  return max;
-}
-
-// A real run-progress meter for the OFFICE view — a filled, segmented bar across the 6
-// DISPATCH PROTOCOL macro stages (위임→작업→토론→보고→통합→완료) with a %. This is the
-// office's actual 진행률 indicator; it is intentionally distinct from the 자료실 책장
-// (a knowledge shelf, not progress). Hidden when idle (no run yet).
+// A real run-progress meter for the OFFICE view — a filled, segmented bar across the
+// DISPATCH PROTOCOL macro stages (전사: 위임→작업→토론→보고→통합→완료, 솔로: 위임→작업→완료)
+// with a %. This is the office's actual 진행률 indicator; it is intentionally distinct from
+// the 자료실 책장 (a knowledge shelf, not progress). Hidden when idle (no run yet).
 export function OfficeProgressBar() {
   const phases = useStore((st) => st.phases);
   const status = useStore((st) => st.status);
-  const cur = currentMacro(phases, status);
+  const soloId = useStore((st) => st.soloAgentId);
+  const working = useStore(soloWorking);
+  const { stages, cur } = macroStages(phases, status, { id: soloId, working });
   if (cur < 0) return null;
-  const total = MACRO.length;                       // 6 stages
-  const pct = Math.round(((cur + 1) / total) * 100); // stages reached / total
+  const pct = Math.round(((cur + 1) / stages.length) * 100); // stages reached / total
   const terminal = TERMINAL.has(status);
   return (
     <div className="office-progress" title="DISPATCH PROTOCOL 진행 단계 (실제 런 진행률)">
       <span className="op-label">📊 진행률</span>
       <div className="op-track">
-        {MACRO.map((m, i) => {
+        {stages.map((m, i) => {
           const state = terminal ? "done" : i < cur ? "done" : i === cur ? "current" : "pending";
           return (
             <div key={m.key} className={`op-seg ${state}`}>
@@ -87,22 +59,25 @@ export function OfficeProgressBar() {
   );
 }
 
-// The DISPATCH PROTOCOL stepper — also used compactly at the top of the timeline.
+// The DISPATCH PROTOCOL stepper — also used compactly at the top of the timeline. 솔로(지명)
+// 런은 토론·보고·통합이 없는 축약 파이프라인(위임→작업 진행→완료)으로 표시(macroStages).
 export function PhaseStepper({ compact = false }: { compact?: boolean }) {
   const phases = useStore((st) => st.phases);
   const status = useStore((st) => st.status);
-  const cur = currentMacro(phases, status);
+  const soloId = useStore((st) => st.soloAgentId);
+  const working = useStore(soloWorking);
+  const { stages, cur } = macroStages(phases, status, { id: soloId, working });
   if (cur < 0) return null;
   return (
     <div className={`phase-stepper${compact ? " compact" : ""}`}>
       {!compact && <div className="wf-head">DISPATCH PROTOCOL</div>}
       <div className="phase-steps">
-        {MACRO.map((st, i) => {
+        {stages.map((m, i) => {
           const state = i < cur ? "done" : i === cur ? "current" : "pending";
           return (
-            <div key={st.key} className={`phase-step ${state}`}>
+            <div key={m.key} className={`phase-step ${state}`}>
               <span className="phase-dot">{state === "done" ? "✓" : i + 1}</span>
-              <span className="phase-label">{st.label}</span>
+              <span className="phase-label">{m.label}</span>
             </div>
           );
         })}
