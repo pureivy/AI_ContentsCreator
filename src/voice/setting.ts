@@ -8,13 +8,14 @@ export interface VoiceSettings {
   ttsVoice: string;
   sttModel: string;
   autoReadFinal: boolean;
+  conversational: boolean;
 }
 
 const file = (): string => path.join(CONFIG.dataDir, 'voice.json');
 let _cached: VoiceSettings | null = null;
 
 function defaults(): VoiceSettings {
-  return { enabled: true, ttsVoice: CONFIG.voiceTtsVoice, sttModel: CONFIG.voiceSttModel, autoReadFinal: true };
+  return { enabled: true, ttsVoice: CONFIG.voiceTtsVoice, sttModel: CONFIG.voiceSttModel, autoReadFinal: true, conversational: false };
 }
 
 export function getVoiceSettings(): VoiceSettings {
@@ -27,6 +28,7 @@ export function getVoiceSettings(): VoiceSettings {
       ttsVoice: typeof raw.ttsVoice === 'string' && raw.ttsVoice ? raw.ttsVoice : d.ttsVoice,
       sttModel: typeof raw.sttModel === 'string' && raw.sttModel ? raw.sttModel : d.sttModel,
       autoReadFinal: typeof raw.autoReadFinal === 'boolean' ? raw.autoReadFinal : d.autoReadFinal,
+      conversational: typeof raw.conversational === 'boolean' ? raw.conversational : d.conversational,
     };
   } catch {
     _cached = d;

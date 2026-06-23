@@ -45,7 +45,7 @@ import { extractText, isSupportedExt } from '../tools/extract';
 import { classifyAndAssign, getStatuses, reassign, setIngestStatus } from '../tools/classify';
 import { transcribe, sttAvailable } from '../voice/stt';
 import { synthesize, listKoreanVoices, ttsAvailable } from '../voice/tts';
-import { getVoiceSettings } from '../voice/setting';
+import { getVoiceSettings, setVoiceSettings } from '../voice/setting';
 import { jarvisChat } from '../jarvis/chat';
 
 interface RunHandle {
@@ -1046,7 +1046,15 @@ const ttsHandler = async (c: Context): Promise<Response> => {
 const voicesHandler = async (c: Context): Promise<Response> => {
   const available = ttsAvailable();
   const voices = available ? await listKoreanVoices() : [];
-  return c.json({ available: ttsAvailable(), ttsAvailable: ttsAvailable(), sttAvailable: sttAvailable(), voices, defaultVoice: getVoiceSettings().ttsVoice });
+  return c.json({ available: ttsAvailable(), ttsAvailable: ttsAvailable(), sttAvailable: sttAvailable(), voices, defaultVoice: getVoiceSettings().ttsVoice, conversational: getVoiceSettings().conversational });
+};
+
+const voiceSettingsHandler = async (c: Context): Promise<Response> => {
+  const body = await c.req.json<{ conversational?: boolean }>().catch(() => ({} as { conversational?: boolean }));
+  const patch: Partial<{ conversational: boolean }> = {};
+  if (typeof body.conversational === 'boolean') patch.conversational = body.conversational;
+  const next = setVoiceSettings(patch);
+  return c.json({ conversational: next.conversational });
 };
 
 app.post('/voice/stt', sttHandler);
@@ -1055,6 +1063,8 @@ app.post('/voice/tts', ttsHandler);
 app.post('/api/voice/tts', ttsHandler);
 app.get('/voice/voices', voicesHandler);
 app.get('/api/voice/voices', voicesHandler);
+app.post('/voice/settings', voiceSettingsHandler);
+app.post('/api/voice/settings', voiceSettingsHandler);
 
 // --- 자비스 대화 ---
 const jarvisHandler = async (c: Context): Promise<Response> => {
