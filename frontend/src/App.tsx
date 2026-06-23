@@ -280,13 +280,14 @@ export default function App() {
   useEffect(() => { getVoices().then((v) => setConvo(!!(v as { conversational?: boolean }).conversational)); }, []);
   // 자비스가 주도해 시작한 런 id 집합 — 자동낭독 skip 가드와 보고 턴 트리거에 사용.
   const jarvisRunIds = useRef<Set<string>>(new Set());
-  const jarvis = useJarvis(tts, async (task /*, reply */) => {
+  const jarvis = useJarvis(tts, async (task, agent) => {
     handleRef.current?.cancel();                              // 진행 중 런 취소(기존 directed 분기와 동일)
     reset(task);
     try {
+      // 자비스가 고른 직원이 있으면 그 직원 단독 런(directed) — 없으면 사장(전사) 런으로 위임.
       handleRef.current = await startRun(
         task, (ev) => apply(ev), (rid) => { jarvisRunIds.current.add(String(rid)); setRunId(rid); },
-        () => useStore.getState().lastSeq, { llm: runLlmOpt() },
+        () => useStore.getState().lastSeq, { agent, llm: runLlmOpt() },
       );
     } catch (e) { useStore.getState().pushJarvisTurn({ role: "jarvis", text: `(위임 실패) ${(e as Error).message}` }); }
   });

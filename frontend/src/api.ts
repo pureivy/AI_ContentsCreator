@@ -654,7 +654,7 @@ export async function getVoices(): Promise<{ available: boolean; sttAvailable: b
 // --- 자비스 채팅 ---
 export async function postJarvisChat(
   messages: { role: 'user' | 'assistant'; content: string }[],
-): Promise<{ reply: string; delegate?: { task: string } }> {
+): Promise<{ reply: string; delegate?: { task: string; agent?: string } }> {
   const r = await fetch('/jarvis/chat', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages }),
   });
