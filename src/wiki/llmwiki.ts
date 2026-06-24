@@ -485,7 +485,7 @@ export class LlmWiki {
       const res = await ollama.chat({
         model,
         messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
-        maxOutputTokens: 1200, temperature: 0.3, signal,
+        maxOutputTokens: 1200, temperature: 0.3, think: false, signal, // 엔티티 추출은 구조적 작업 — 추론 끔(윈도우당 저지연)
       });
       return extractJson<ExtractResult>(res.text);
     } catch {
