@@ -1,6 +1,8 @@
 /**
  * 런 마무리 — 세션 다이제스트 + 위키 적재 + run_done. debate·org 모드가 공유.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { CONFIG } from '../config';
 import { EventType } from '../events/types';
 import type { EventBus } from '../events/bus';
@@ -10,6 +12,7 @@ import { llmWiki, slugify } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
 import { reflectAndLearn } from './reflect';
 import { genId } from '../util/ids';
+import type { AssetBundle } from '../output';
 
 export interface FinalPosition {
   id: string;
@@ -32,6 +35,8 @@ export interface FinalizeArgs {
   critique?: { id: string; name: string; text: string };
   deliverable: string;
   converged: boolean;
+  /** 발행용 초안 자산(제목·메타·태그·SEO·렌더) — 설정 시 세션 dir 에 draft.* 로 저장. */
+  assets?: AssetBundle;
   /** 설정 시 LLM Wiki 적재(Karpathy ingest)에 쓸 micro 모델. */
   ingestModel?: string;
   /** 교훈 추출(reflect)용 모델 — 미지정 시 ingestModel. 약한 micro 가 교훈 JSON 을 못 내는 변동성 보완용(standard 권장). */
@@ -85,6 +90,18 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
       a.bus.emit(EventType.session_digest_written, { path: dir });
     } catch (e) {
       a.bus.emit(EventType.log, { message: `다이제스트 저장 실패: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  }
+
+  // --- 발행 초안 자산 저장 — draft.json/md/html(+image-prompts) 을 세션 dir 에. 사람이 검토·발행에 사용. ---
+  if (a.assets?.files?.length) {
+    try {
+      const dir = path.join(CONFIG.sessionsDir, a.bus.runId);
+      fs.mkdirSync(dir, { recursive: true });
+      for (const f of a.assets.files) fs.writeFileSync(path.join(dir, f.name), f.content, 'utf-8');
+      a.bus.emit(EventType.log, { message: `초안 자산 저장 — ${a.assets.files.map((f) => f.name).join(', ')} (SEO ${(a.assets.meta.seoScore as number) ?? '-'}/100)` });
+    } catch (e) {
+      a.bus.emit(EventType.log, { message: `초안 자산 저장 실패: ${e instanceof Error ? e.message : String(e)}` });
     }
   }
 
@@ -148,7 +165,7 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
     } catch { /* 무해 — 학습 실패가 발행을 막지 않음 */ }
   }
 
-  a.bus.emit(EventType.run_done, { status: 'ok', deliverable_ref: deliverableRef });
+  a.bus.emit(EventType.run_done, { status: 'ok', deliverable_ref: deliverableRef, ...(a.assets ? { draft_meta: a.assets.meta } : {}) });
 
   // 자가수선(lint→maintain)은 run_done 이후 **백그라운드**(파이어앤포겟) — 사용자 체감 지연 0,
   // 실패는 무해, 취소 신호는 전파. 끊긴 링크(지식 갭)를 소량 보충해 그래프 연결·compounding.

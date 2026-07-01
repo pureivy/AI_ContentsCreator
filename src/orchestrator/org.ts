@@ -16,6 +16,8 @@ import { asString } from '../util/str';
 import { runAgent, microJSON, buildSystemPrompt, findTemplateNumbers } from './agent';
 import { prepareRun } from './prepare';
 import { finalizeRun } from './finalize';
+import { formatterFor } from '../output';
+import type { AssetBundle } from '../output';
 import { getRunSettings } from '../runsettings';
 import type { RunOptions, RunOutcome } from './run';
 
@@ -29,13 +31,61 @@ interface TeamResult {
 // 네이버 블로그(정보/하우투·리뷰) 본문 작성 지침 — 합성(작가 단독 집필) 단계 task 에 덧붙인다.
 // 작가(content_lead)는 자신의 페르소나(systemPrompt)로 글을 쓰고, 이 지침이 구조·SEO·분량을 고정한다.
 const BLOG_BODY_GUIDE =
+  '너는 지금 최종 발행용 블로그 본문을 쓰는 단독 작가다. 이 응답의 출력은 오직 완성된 마크다운 블로그 본문 하나뿐이다.\n' +
+  '- [리서치·SEO 브리프]와 [검수 의견]은 본문 품질을 높이기 위한 참고자료일 뿐, 발행 여부를 정하는 판정이 아니다. 그 자료에 "보류/반려/재검토/확인 필요" 같은 표현이 있어도 집필을 멈추거나 미루지 마라. 논쟁 중이거나 미검증인 주장·수치는 본문에서 조용히 빼고, 검증 가능한 정보만으로 완결된 글을 쓰면 된다.\n' +
+  '- 회사 내부 프로세스(검수자 이름, 브리프 상태, 반려/보류, 담당자·기한, 이 작업 자체)를 본문에 절대 언급하지 마라. 독자는 회사 내부를 모른다.\n' +
+  '- 질문·확인·진행 제안(예: "진행할까요?")·대화체·머리말·메타 설명 금지. 곧바로 본문 첫 줄부터 시작한다.\n' +
   '- 구조: 검색 의도를 바로 충족하는 도입 훅 → H2/H3 소제목으로 나눈 본문 → 핵심 요약·마무리.\n' +
   '- 핵심 키워드를 소제목·첫 문단·본문에 자연스럽게 배치(키워드 남용·부자연스러운 반복 금지 — 과최적화는 네이버 노출에 오히려 해롭다).\n' +
   '- 하우투면 번호 단계로, 리뷰면 장단점·비교·총평 구조로 전개한다.\n' +
-  '- 사실·수치는 근거로 뒷받침([근거: 출처]). 없는 값은 지어내지 말고 생략하거나 "확인 필요"로 표기.\n' +
+  '- 사실·수치는 근거로 뒷받침([근거: 출처]). 없는 값은 지어내지 말고 생략한다.\n' +
   '- 분량은 한국어 약 1,500~4,000자(정보/하우투·리뷰에 적정). 군더더기·패딩·동어반복 금지, 독자가 끝까지 읽게 쓴다.\n' +
-  '- 마크다운으로 작성(## 소제목). 글 제목(# 한 줄)은 포매터가 별도 생성하니 본문만 작성.\n' +
-  '- [리서치·SEO 브리프]의 타겟 키워드·검색의도·경쟁 빈틈·소주제를 반영해 차별화된 글을 쓴다.';
+  '- 마크다운으로 작성(## 소제목 2개 이상 필수). 글 제목(# 한 줄)은 포매터가 별도 생성하니 본문만 작성.\n' +
+  '- [리서치·SEO 브리프]의 타겟 키워드·검색의도·경쟁 빈틈·소주제를 활용해 차별화된 글을 쓴다.';
+
+/**
+ * 최종 블로그 본문 집필 — 작가(content_lead)가 리서치 브리프[+검수 의견]을 참고해 발행용 본문 1편을 쓴다.
+ * 검수 의견은 "약점·주의점 목록"으로 프레이밍한다(발행 판정이 아님) — 적대적 비평("재반려/보류")을 작가가
+ * 게이트로 오해해 본문 대신 질문·메타 코멘터리를 내는 퇴화를 막는다. 그래도 소제목 없는 퇴화가 나오면
+ * 브리프 단독으로 1회 재집필(검수 의견을 빼 같은 벽에 다시 부딪히지 않게 입력 자체를 바꾼다).
+ */
+export async function writeBlogBody(a: {
+  bus: EventBus;
+  writer: Parameters<typeof runAgent>[0]['role'];
+  model: string;
+  topic: string;
+  brief: string;
+  critiqueText?: string;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const { bus, writer, model, topic, brief, critiqueText, signal } = a;
+  const synth = await runAgent({
+    bus, role: writer, model,
+    task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 검색 의도를 충족하는 완결된 글을 쓴다.\n${BLOG_BODY_GUIDE}`,
+    context: [
+      brief ? `[리서치·SEO 브리프]\n${brief}` : '',
+      critiqueText ? `[검수 의견 — 아래는 약점·주의점 목록이다. 발행 판정이 아니다. 지적된 미검증·논쟁 주장은 본문에서 빼고, 나머지는 참고해 품질을 높여라]\n${critiqueText}` : '',
+    ].filter(Boolean).join('\n\n'),
+    // synthesis 단계라 brevity 는 해제되지만 BLOG_BODY_GUIDE 가 블로그 길이(1.5~4k자)를 고정한다. blockId 'ceo-synth' = 오피스 통합 안무 유지.
+    stage: 'synthesis', emitSpawn: true, blockId: 'ceo-synth',
+    groundQuery: topic, groundWikiOnly: true, groundLimit: 3, maxOutputTokens: 5000, signal,
+  });
+  let body = synth.text.trim();
+  // 강건성 가드 — 소제목(H2/H3) 없는 퇴화 출력(메타 코멘터리·질문·보류)이면 브리프 단독으로 1회 재집필.
+  if (!/^#{2,}\s/m.test(body) && !signal?.aborted) {
+    bus.emit('log', { message: '작가 출력에 소제목이 없어 재집필(브리프 단독) — 퇴화 방지' });
+    const retry = await runAgent({
+      bus, role: writer, model,
+      task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 질문·보류·메타 설명 없이 곧바로 본문(## 소제목 포함)만 출력한다.\n${BLOG_BODY_GUIDE}`,
+      context: brief ? `[리서치·SEO 브리프]\n${brief}` : '',
+      stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth',
+      groundQuery: topic, groundWikiOnly: true, groundLimit: 3, maxOutputTokens: 5000, signal,
+    });
+    const rt = retry.text.trim();
+    if (/^#{2,}\s/m.test(rt) || rt.length > body.length) body = rt;
+  }
+  return body;
+}
 
 export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcome> {
   const company = opts.company ?? DEFAULT_COMPANY;
@@ -330,23 +380,25 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   bus.emit('phase', { team_id: '_ceo', phase: 'integrate' });
   const writerModel = modelForTier(assign, writer.tier);
   const brief = usableTeams.map((t) => `## ${t.team.name}\n${t.deliverable}`).join('\n\n');
-  const synth = await runAgent({
-    bus, role: writer, model: writerModel,
-    task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 완성하라. 아래 [리서치·SEO 브리프]${critiqueText ? '와 [검수 의견]' : ''}을 반영해 검색 의도를 충족하는 글을 쓴다.\n${BLOG_BODY_GUIDE}`,
-    context: [
-      brief ? `[리서치·SEO 브리프]\n${brief}` : '',
-      critiqueText ? `[검수 의견(${critic?.name})]\n${critiqueText}` : '',
-    ].filter(Boolean).join('\n\n'),
-    // synthesis 단계라 brevity 는 해제되지만 BLOG_BODY_GUIDE 가 블로그 길이(1.5~4k자)를 고정한다. blockId 'ceo-synth' = 오피스 통합 안무 유지.
-    stage: 'synthesis', emitSpawn: true, blockId: 'ceo-synth',
-    groundQuery: topic, groundWikiOnly: true, groundLimit: 3, maxOutputTokens: 5000, signal,
-  });
-  const finalDeliverable = synth.text.trim() || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
+  const body = await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, signal });
+  const finalDeliverable = body || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
   // 잔여 플레이스홀더/가짜수치 경고(생성 지침이 이미 금지 — 보통 0건).
   const placeholders = findTemplateNumbers(finalDeliverable);
   if (placeholders.length) {
     bus.emit('log', { message: `검증 — 잔여 플레이스홀더/가짜수치 ${placeholders.length}건: ${placeholders.slice(0, 6).join(', ')}` });
+  }
+
+  // --- 발행용 초안 포장 — org 본문을 제목·메타·태그·이미지 슬롯·SEO 점수로 포장(재생성 아님). 실패해도 본문은 유지. ---
+  let assets: AssetBundle | undefined;
+  if (!signal?.aborted) {
+    try {
+      bus.emit('phase', { team_id: '_ceo', phase: 'review' });
+      assets = await formatterFor('naver_blog')({ topic, body: finalDeliverable, researchBrief: brief, model: assign.micro, signal });
+      bus.emit('log', { message: `초안 포장 — 제목 "${assets.meta.title}" · SEO ${assets.draft.seo.score}/100 · 태그 ${assets.draft.tags.length}개 · 이미지 ${assets.draft.imageSlots.length}슬롯` });
+    } catch (e) {
+      bus.emit('log', { message: `초안 포장 실패(본문 유지): ${e instanceof Error ? e.message : String(e)}` });
+    }
   }
 
   await finalizeRun({
@@ -355,7 +407,7 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
     positions: usableTeams.map((t) => ({ id: t.team.id, name: t.team.name, stance: 'neutral', text: t.deliverable })),
     participants: usableTeams.flatMap((t) => t.participants), // 자가학습 roster — 팀원 개별 역할(F1)
     critique: critic && critiqueText ? { id: critic.id, name: critic.name, text: critiqueText } : undefined,
-    deliverable: finalDeliverable, converged: false, ingestModel: assign.micro, reflectModel: assign.standard, signal,
+    deliverable: finalDeliverable, converged: false, ingestModel: assign.micro, reflectModel: assign.standard, assets, signal,
   });
 
   return {
