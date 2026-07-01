@@ -5,6 +5,7 @@ import { getLlmSetting, isClaudeBackend, resolveAssignment } from '../llm/settin
 import { getCompany } from '../agents/company-loader';
 import { firstJson } from '../tools/classify';   // Step 3a 에서 classify.ts 가 export 노출
 import { kstNowKo } from '../util/time';
+import { pieceStore, type Piece, type PieceStage } from '../content/pieces';
 
 export interface JarvisTurn { role: 'user' | 'assistant'; content: string }
 export interface JarvisReply { reply: string; delegate?: { task: string; agent?: string } }
@@ -31,6 +32,34 @@ function validAgentIds(): Set<string> {
   return new Set(delegatableSpecialists().map((r) => r.id));
 }
 
+const STAGE_KO: Record<PieceStage, string> = {
+  idea: '아이디어', research: '리서치 중', draft: '초안 작성 중', ready: '검토 대기(발행 준비 완료)',
+  published: '발행됨', measured: '성과 측정됨', reflected: '회고 완료', error: '오류로 멈춤',
+};
+/** 콘텐츠 캘린더 브리핑 — '일정 정리/브리핑/다음 할 일' 질문에 자비스가 실제 데이터로 답하게 주입.
+ *  비서 본연의 일정 관리(사용자 요청): 추측 대신 piece 스토어(자율 캘린더의 단일 진실)를 근거로. */
+export function calendarBrief(): string {
+  try {
+    const all = pieceStore().list();
+    if (!all.length) return '등록된 콘텐츠가 아직 없습니다(자율 사이클이 아이디어를 만들면 채워집니다).';
+    const by = (s: PieceStage) => all.filter((p) => p.stage === s);
+    const fmt = (p: Piece) => `「${p.title}」${p.keyword ? `(${p.keyword})` : ''}`;
+    const stages: PieceStage[] = ['idea', 'research', 'draft', 'ready', 'published', 'measured', 'reflected', 'error'];
+    const counts = stages.map((s) => [s, by(s).length] as const).filter(([, n]) => n > 0)
+      .map(([s, n]) => `${STAGE_KO[s]} ${n}건`).join(', ');
+    const lines = [`전체 ${all.length}건 — ${counts}`];
+    const ready = by('ready').slice(-5);
+    if (ready.length) lines.push(`발행 대기(주인님 검토 필요): ${ready.map(fmt).join(' / ')}`);
+    const wip = all.filter((p) => ['idea', 'research', 'draft'].includes(p.stage)).slice(-5);
+    if (wip.length) lines.push(`진행 중: ${wip.map((p) => `${fmt(p)}[${STAGE_KO[p.stage]}]`).join(' / ')}`);
+    const pub = by('published').slice(-3);
+    if (pub.length) lines.push(`최근 발행: ${pub.map(fmt).join(' / ')}`);
+    const err = by('error');
+    if (err.length) lines.push(`주의 — 오류로 멈춘 콘텐츠 ${err.length}건: ${err.slice(-3).map(fmt).join(' / ')}`);
+    return lines.join('\n');
+  } catch { return ''; }
+}
+
 export function jarvisSystemPrompt(): string {
   // 짧은 페르소나 + 직원 명단(위임 대상 선택용). 잡담 저지연 위해 장문 회사 페르소나는 안 씀.
   // 팀장 id 는 실제 회사 로스터에서 동적으로 — 하드코딩(구 정부 팀 id) 제거.
@@ -43,6 +72,9 @@ export function jarvisSystemPrompt(): string {
     `현재 시각은 ${kstNowKo()} 입니다. 오늘 날짜·요일·시간을 묻는 질문에는 반드시 이 값(대한민국 표준시)을 기준으로 답하고, 학습 시점의 날짜를 추측하지 마세요.`,
     '사용자를 항상 "주인님"이라고 부르며, 친근하고 간결하게(1~2문장) 한국어로 대화합니다.',
     '인사·잡담·간단한 질의, 그리고 일정 관리·미팅 예약·메모·받아쓰기 등 비서 본연의 일은 JSON 없이 직접 답하고 위임하지 않습니다.',
+    '일정 정리·브리핑·다음 할 일·발행 대기 확인 등 콘텐츠 일정 질문에는 아래 [콘텐츠 캘린더 현황]을 근거로 직접 요약해 답합니다(추측·위임 금지). 발행 대기 건이 있으면 검토를 정중히 권합니다.',
+    '[콘텐츠 캘린더 현황]',
+    calendarBrief(),
     '그 밖의 실행 가능한 업무 지시이면, 짧은 확인 응답 후 마지막 줄에 JSON 한 줄로',
     '{"delegate":{"task":"<과제 한 문장>","agent":"<아래 직원 목록 id 중 그 일에 가장 적합한 1명>"}} 를 출력합니다.',
     leadRule,

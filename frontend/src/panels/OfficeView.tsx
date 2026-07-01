@@ -406,15 +406,26 @@ function Sprite({ char, pose, flip, glyph, working }: {
     return <div className="office-portrait office-glyph" style={{ fontSize: 32, lineHeight: 1 }}>{glyph}</div>;
   }
   if (char === "jarvis") {
-    // 자비스는 멀티포즈 세트가 아니라 채팅 아바타와 같은 '원래 이미지' 하나만 쓴다(복장·정체성 일관, 사용자 요청).
+    // 자비스는 멀티포즈 세트가 아니라 채팅 아바타와 같은 '원래 얼굴 이미지'를 쓴다(복장·정체성 일관).
+    // 머리만 떠 있지 않게(사용자 피드백) 네이비 정장 몸통(SVG)을 아래에 조합한 전신 피규어로 렌더.
     return (
-      <img
-        className={`office-sprite${working ? " working" : ""}`}
-        src="/avatars/jarvis_face.png" alt="" draggable={false}
-        onError={() => setErr(true)}
-        style={{ height: 96, width: 96, borderRadius: "50%", objectFit: "cover",
-                 border: "3px solid rgba(255,255,255,.85)", boxShadow: "0 4px 10px rgba(0,0,0,.25)" }}
-      />
+      <div className={`office-sprite${working ? " working" : ""}`}
+           style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <img
+          src="/avatars/jarvis_face.png" alt="" draggable={false}
+          onError={() => setErr(true)}
+          style={{ height: 64, width: 64, borderRadius: "50%", objectFit: "cover", zIndex: 1,
+                   border: "2px solid rgba(140,220,255,.85)", boxShadow: "0 0 10px rgba(80,180,255,.45)" }}
+        />
+        <svg width="80" height="58" viewBox="0 0 80 58" style={{ marginTop: -12 }} aria-hidden>
+          {/* 어깨·정장 몸통 — 안드로이드 헤드 톤(네이비+블루 라이트)에 맞춤 */}
+          <path d="M40 3 C52 5 62 11 68 21 L74 53 Q74 58 67 58 L13 58 Q6 58 6 53 L12 21 C18 11 28 5 40 3 Z"
+                fill="#232b3a" stroke="#3f5170" strokeWidth="1.5" />
+          <path d="M40 5 L31 17 L40 32 L49 17 Z" fill="#0f1622" />
+          <circle cx="40" cy="24" r="2.6" fill="#57c7ff" />
+          <path d="M21 31 L27 54 M59 31 L53 54" stroke="#3f5170" strokeWidth="1.2" fill="none" />
+        </svg>
+      </div>
     );
   }
   return (
@@ -463,8 +474,8 @@ function Character({ p, walkers }: { p: Placed; walkers: Walkers }) {
     const t = setInterval(() => setFrame((f) => (f ? 0 : 1)), 190);
     return () => clearInterval(t);
   }, [walking]);
-  // 활동별 '제자리 움직임' — 작업/휴식/잡담/커피/통화는 살아있게 미세 모션, 진짜 유휴(대기)만 정지
-  // (사용자 요청: 유휴는 안 흔들리되 활동 중엔 움직임). 이동 중(walking)엔 큰 걸음걸이.
+  // 활동별 '제자리 움직임' — CSS 키프레임(.gait-*, index.css)이라 리렌더에도 연속 재생(리셋 튐 없음).
+  // 유휴도 느린 호흡으로 살아있게(사용자 요청), 발 고정·상체만·작은 진폭. 이동 중엔 걸음 바운스.
   const actKind = walking ? "walk"
     : p.act === "rest" ? "rest"
     : p.act === "chat" || p.act === "huddle" ? "chat"
@@ -473,19 +484,9 @@ function Character({ p, walkers }: { p: Placed; walkers: Walkers }) {
     : p.act === "shelf" || p.act === "board" || p.act === "work" ? "work"
     : p.thinking ? "work"
     : "idle";
-  // 제자리 모션은 참고 엔진처럼 '발 고정·상체만' — gait 래퍼의 transformOrigin 이 발끝(하단)이라
-  // 회전·호흡(scaleY)이 발을 축으로 일어난다. 수직 이동(y)은 걷는 중에만(정지 시 전체가 까닥거리지 않게).
-  const GAITS: Record<string, { g: Record<string, number | number[]>; d: number }> = {
-    walk:   { g: { y: [0, -7, 0, -7, 0], rotate: [-5, 5, -5, 5, 0] }, d: 0.34 },    // 이동: 뛰는 발걸음(전신)
-    work:   { g: { rotate: [-1, 1, -1], scaleY: [1, 0.985, 1] }, d: 0.9 },           // 작업: 타이핑 상체 미동
-    rest:   { g: { scaleY: [1, 0.98, 1] }, d: 1.8 },                                 // 휴식: 느긋한 호흡
-    chat:   { g: { rotate: [-2.5, 2.5, -2.5] }, d: 0.8 },                            // 잡담·업무협의: 말하는 기울임
-    coffee: { g: { rotate: [0, 2, 0, -1, 0], scaleY: [1, 0.99, 1, 1, 1] }, d: 1.6 }, // 커피·간식: 한 모금
-    phone:  { g: { rotate: [-2, 1.5, -2], scaleY: [1, 0.99, 1] }, d: 1.1 },          // 통화: 상체 제스처
-  };
-  const ga = GAITS[actKind];
-  const gait = ga ? ga.g : { y: 0, rotate: 0 };
-  const gaitT = ga ? { repeat: Infinity, duration: ga.d, ease: "easeInOut" as const } : { duration: 0.2 };
+  // 아바타별 위상 오프셋(음수 delay) — 전원이 같은 박자로 흔들리지 않게(참고 엔진 _ph 대응).
+  let ph = 0;
+  for (const c of id) ph = (ph * 31 + c.charCodeAt(0)) % 4096;
   // 상태·이동 → 스프라이트 포즈(sit/stand/walk) + 좌우반전(참고 엔진 이식). 방향은 워커(경로 구간)가 판정.
   const { pose, flip } = poseFor(actKind, walking, w.movingDown, frame, w.faceLeft, p.face);
   return (
@@ -514,17 +515,16 @@ function Character({ p, walkers }: { p: Placed; walkers: Walkers }) {
         )}
       </AnimatePresence>
 
-      <motion.div
-        animate={gait}
-        transition={gaitT}
-        style={{ position: "relative", transformOrigin: "50% 100%" }}
+      <div
+        className={`office-gait gait-${actKind}`}
+        style={{ position: "relative", animationDelay: `-${ph % 1700}ms` }}
       >
         <div className={`office-avatar${p.thinking ? " working" : ""}${walking ? " walking" : ""}`}>
           <Sprite char={p.char} pose={pose} flip={flip} glyph={p.glyph} working={p.thinking} />
           {p.thinking && <span className="office-think">💭</span>}
           {p.badge && <span className="office-badge">{p.badge}</span>}
         </div>
-      </motion.div>
+      </div>
 
       <div className="office-name">
         {/* 아바타는 '사람' → '실명 직책'(장은영 팀장). CEO는 'CEO'로 표시 */}
