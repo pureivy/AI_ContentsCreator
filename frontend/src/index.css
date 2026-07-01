@@ -1452,3 +1452,60 @@ button.upload-retry:hover { background: var(--panel2); }
   .jarvis-mic { padding: 15px 34px; font-size: 17px; min-height: 54px; }
   .jarvis-close { top: 14px; right: 16px; font-size: 32px; padding: 6px; }
 }
+
+/* ============================================================
+   콘텐츠 캘린더 / 초안 검토 (6f) — 크로스-런 REST 폴링 패널
+   ============================================================ */
+.calendar-newidea { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 18px; }
+.calendar-newidea input { flex: 1; min-width: 160px; padding: 8px 10px; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); }
+.calendar-newidea input:focus { outline: none; border-color: var(--accent); }
+
+.calendar-board { display: grid; grid-template-columns: repeat(7, minmax(160px, 1fr)); gap: 10px; align-items: start; }
+@media (max-width: 1200px) { .calendar-board { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 720px) { .calendar-board { grid-template-columns: 1fr; } }
+.calendar-col { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; min-height: 80px; display: flex; flex-direction: column; }
+.calendar-col-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 13px; }
+.calendar-col-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.calendar-empty { text-align: center; padding: 8px 0; opacity: 0.5; }
+.calendar-errors { margin-top: 18px; }
+.calendar-errors h3 { color: var(--con); margin-bottom: 8px; }
+
+.piece-card { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.piece-card-title { font-size: 13px; font-weight: 600; line-height: 1.35; }
+.piece-card-meta { display: flex; flex-wrap: wrap; gap: 4px; }
+.piece-card-link { font-size: 12px; color: var(--accent); text-decoration: none; }
+.piece-card-link:hover { text-decoration: underline; }
+.piece-card-foot { font-size: 11px; }
+
+/* 초안 검토 — 좌 목록 / 우 상세 */
+.review-split { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: start; }
+@media (max-width: 900px) { .review-split { grid-template-columns: 1fr; } }
+.review-list { display: flex; flex-direction: column; gap: 8px; }
+.review-list-item { text-align: left; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: pointer; color: var(--text); display: flex; flex-direction: column; gap: 6px; }
+.review-list-item:hover { border-color: var(--accent); }
+.review-list-item.active { border-color: var(--accent); background: var(--panel2); }
+.review-list-title { font-size: 13px; font-weight: 600; line-height: 1.35; }
+.review-list-meta { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+
+.review-detail { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; min-height: 200px; }
+.review-section { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.review-section:last-child { border-bottom: none; }
+.review-section h3 { margin: 0 0 10px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.review-title-main { font-size: 16px; font-weight: 700; line-height: 1.4; }
+.review-title-alt { font-size: 12px; line-height: 1.6; }
+.review-meta { font-size: 12px; margin: 8px 0; }
+.review-seo { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.review-seo li.ok > span:first-child { color: var(--pro); }
+.review-seo li.no > span:first-child { color: var(--con); }
+.review-body-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.review-body-head > div { display: flex; gap: 6px; }
+.review-body { width: 100%; box-sizing: border-box; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 10px; font-family: inherit; font-size: 13px; line-height: 1.6; resize: vertical; }
+.review-images { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.review-imgslot { line-height: 1.5; }
+.review-inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.review-inline input { flex: 1; min-width: 200px; padding: 8px 10px; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); }
+.review-metrics-grid { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.review-metrics-grid label, .review-inflow-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.review-metrics-grid input, .review-inflow-label textarea { padding: 8px 10px; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: inherit; }
+.review-inflow-label { margin-bottom: 10px; }
+.review-msg { padding: 8px 16px; color: var(--accent); font-size: 13px; }

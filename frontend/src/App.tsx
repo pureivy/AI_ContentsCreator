@@ -9,6 +9,8 @@ import EmployeesView from "./panels/EmployeesView";
 import ApiKeysView from "./panels/ApiKeysView";
 import LlmSettingsView from "./panels/LlmSettingsView";
 import McpView from "./panels/McpView";
+import ContentCalendar from "./panels/ContentCalendar";
+import DraftReview from "./panels/DraftReview";
 import { useStageWidths } from "./panels/useStageWidths";
 import { countWorking } from "./events/working";
 import OfficeTicker, { ga } from "./panels/OfficeTicker";
@@ -91,7 +93,7 @@ function progressNote(
   return "⏳ 사장이 목표를 분석하는 중…";
 }
 
-type View = "office" | "graph" | "detail" | "employees" | "apikeys" | "llm" | "mcp";
+type View = "office" | "graph" | "detail" | "employees" | "apikeys" | "llm" | "mcp" | "calendar" | "review";
 type TLTab = "timeline" | "activity" | "workflow";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -1561,6 +1563,10 @@ export default function App() {
           <button className={view === "detail" ? "active" : ""} onClick={() => setView("detail")}>📋 상세</button>
         </div>
         <div className="viewtoggle">
+          <button className={view === "calendar" ? "active" : ""} onClick={() => setView("calendar")}>📅 캘린더</button>
+          <button className={view === "review" ? "active" : ""} onClick={() => setView("review")}>📝 검토</button>
+        </div>
+        <div className="viewtoggle">
           <button className={view === "apikeys" ? "active" : ""} onClick={() => setView("apikeys")}>🔑 API 키</button>
           <button className={view === "llm" ? "active" : ""}
             onClick={() => { setView("llm"); fetchLlmStatus().then(setLlmStatus); }}>🧩 LLM</button>
@@ -1652,6 +1658,14 @@ export default function App() {
       ) : view === "mcp" ? (
         <main className="employees-stage">
           <McpView />
+        </main>
+      ) : view === "calendar" ? (
+        <main className="employees-stage">
+          <ContentCalendar />
+        </main>
+      ) : view === "review" ? (
+        <main className="employees-stage">
+          <DraftReview />
         </main>
       ) : view === "employees" ? (
         <main className="employees-stage">

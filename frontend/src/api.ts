@@ -751,3 +751,74 @@ export async function downloadRunHwpx(runId: string): Promise<void> {
   }
 }
 
+
+// ============================================================
+// 콘텐츠 piece — 완전 자율 캘린더/초안검토(크로스-런, REST 폴링. store/fold 금지 — 스크럽 시 수치 변형 방지).
+// ============================================================
+export type PieceStage =
+  | "idea" | "research" | "draft" | "ready" | "published" | "measured" | "reflected" | "error";
+export interface PieceInfo {
+  id: string;
+  runId?: string;
+  title: string;
+  keyword?: string;
+  subNiche?: string;
+  stage: PieceStage;
+  publishedUrl?: string;
+  seoScore?: number;
+  errors?: number;
+  createdTs: string;
+  updatedTs: string;
+}
+export interface SeoCheck { label: string; ok: boolean; note?: string }
+export interface BlogDraft {
+  topic: string;
+  primaryKeyword: string;
+  titleCandidates: string[];
+  metaDescription: string;
+  tags: string[];
+  imageSlots: Array<{ alt: string; prompt: string }>;
+  internalLinks: string[];
+  bodyMarkdown: string;
+  seo: { score: number; checklist: SeoCheck[] };
+}
+export interface PieceDraftResp { piece: PieceInfo; draft: BlogDraft; md: string; html: string }
+export interface MetricSample {
+  measuredAt: string; views: number; dwellSec?: number;
+  searchInflow: Array<{ keyword: string; count: number; rank?: number }>; source?: string;
+}
+
+export async function fetchPieces(): Promise<PieceInfo[]> {
+  try { const r = await fetch("/pieces"); if (!r.ok) return []; return (await r.json()).pieces ?? []; }
+  catch { return []; }
+}
+export async function createPiece(body: { title: string; keyword?: string; subNiche?: string }): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch("/pieces", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return { ok: true };
+  } catch { return { ok: false, error: "network" }; }
+}
+export async function fetchPieceDraft(id: string): Promise<PieceDraftResp | null> {
+  try { const r = await fetch(`/pieces/${id}/draft`); return r.ok ? await r.json() : null; }
+  catch { return null; }
+}
+export async function publishPiece(id: string, url: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`/pieces/${id}/published`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return { ok: true };
+  } catch { return { ok: false, error: "network" }; }
+}
+export async function postPieceMetrics(id: string, body: unknown): Promise<{ ok: boolean; reinforced?: boolean }> {
+  try {
+    const r = await fetch(`/pieces/${id}/metrics`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) return { ok: false };
+    const j = await r.json().catch(() => ({}));
+    return { ok: true, reinforced: !!j.reinforced };
+  } catch { return { ok: false }; }
+}
+export async function fetchPieceMetrics(id: string): Promise<MetricSample[]> {
+  try { const r = await fetch(`/pieces/${id}/metrics`); if (!r.ok) return []; return (await r.json()).metrics ?? []; }
+  catch { return []; }
+}
