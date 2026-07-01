@@ -85,6 +85,16 @@ export function deleteKey(key: string): { ok: boolean; error?: string } {
   write(s);
   return { ok: true };
 }
+/** 저장된 값만 비운다(키 정의는 유지) — 기본 키·사용자 키 모두. 기본 키의 값을 지우는 유일한 경로. */
+export function clearKey(key: string): { ok: boolean; error?: string } {
+  if (!isBuiltinKey(key)) {
+    const s = read();
+    if (!s.custom.some((c) => c.key === key)) return { ok: false, error: '알 수 없는 키입니다.' };
+  }
+  const s = read();
+  if (key in s.values) { delete s.values[key]; write(s); }
+  return { ok: true };
+}
 /** 런타임 시크릿 조회(LLM 클라이언트 등) — 환경변수 우선, 없으면 저장소. */
 export function getSecret(key: string): string | undefined {
   return process.env[key] || read().values[key] || undefined;

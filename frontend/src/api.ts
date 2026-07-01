@@ -190,6 +190,16 @@ export async function deleteApiKey(key: string): Promise<{ ok: boolean; error?: 
     return { ok: false, error: "network" };
   }
 }
+// 저장된 값만 비우기(기본 키 포함) — 키 정의는 유지.
+export async function clearApiKey(key: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`/api-keys/${encodeURIComponent(key)}/clear`, { method: "POST" });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return await r.json();
+  } catch {
+    return { ok: false, error: "network" };
+  }
+}
 
 // status: ok | duplicate | unsupported | failed | too-large (백엔드) / network | filtered (프론트)
 // ref = raw/ 원자료 참조(저장 증거), page_id = wiki/ reference 페이지 id(적재 증거).
