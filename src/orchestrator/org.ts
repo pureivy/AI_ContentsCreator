@@ -16,7 +16,6 @@ import { asString } from '../util/str';
 import { runAgent, microJSON, buildSystemPrompt, findTemplateNumbers } from './agent';
 import { prepareRun } from './prepare';
 import { finalizeRun } from './finalize';
-import { llmWiki } from '../wiki/llmwiki';
 import { getRunSettings } from '../runsettings';
 import type { RunOptions, RunOutcome } from './run';
 
@@ -27,23 +26,16 @@ interface TeamResult {
   participants: Array<{ id: string; name: string; text: string }>;
 }
 
-// 최종 산출물 합성 단계용 '문서 저자' 시스템 프롬프트 — CEO 기본 역할(의사결정자+「경영평가편람」 1차기준+
-// "결정/사유/조건" 형식 강제)이 결재 메모와 경영평가 과편향을 유발하므로, 합성 때만 이 저자 프롬프트로 교체한다.
-export const SYNTH_AUTHOR_PROMPT =
-  '당신은 (재)경상북도경제진흥원의 최종 산출물 작성 책임자입니다. 두 팀(전략기획·경영지원)의 산출물을 통합해, ' +
-  '요청된 문서 유형에 충실한 완결된 최종 문서를 직접 작성합니다.\n' +
-  '원칙:\n' +
-  '1) "결정/사유/조건" 같은 결재·검토 메모가 아니라, 그대로 제출 가능한 완성 문서를 쓴다.\n' +
-  '2) 문서 유형의 표준 구성·범위를 엄수한다. 결산보고서는 재무 결산(세입·세출 집행·예산 대비 집행·재무제표·기금/잉여금·재정건전성·내부통제) 중심이며, 사업 성과/효과 분석은 결산 범위 밖이라 넣지 않는다(사업별은 예산 집행 내역·수치만).\n' +
-  '2-1) [예산≠결산] 결산 수치는 결산·집행 자료(감사보고서 재무제표·운영성과표, 세출예산집행현황, 결산서)에서만 인용한다. "주요업무보고"·"예산안"·"추가경정"의 편성예산(본예산·추경 합계 등)을 결산액(집행 실적)으로 쓰지 마라 — 이는 예산이지 결산이 아니다. 결산 자료에 해당 수치가 없으면 "⚠️ 데이터 없음(결산 확정자료 필요)"으로 표기한다.\n' +
-  '2-2) [합계 정합] 구성요소(재원별·항목별)를 나열하면 그 합이 명시한 총계와 일치해야 한다. 인용 전 검산하고, 합이 안 맞으면 수치를 다시 확인하거나 "검증 필요"로 표기한다.\n' +
-  '3) 주제와 무관한 프레임(「경영평가편람」·KPI·전략과제 등)을 억지로 끌어들이지 않는다 — 주제가 그것을 요구할 때만 사용한다.\n' +
-  '4) 팀 산출물의 실제 수치·근거·표를 압축·요약하지 말고 보존·통합·확장한다. 인용 수치엔 [근거: 자료]를 붙이고, 빠진 값은 "⚠️ 데이터 없음: <항목>"으로 표기한다(0·임의값 금지).\n' +
-  '5) 개조식으로 작성한다 — 서술형 산문은 금지(명사형·음슴체 종결)하되, 각 말단 항목은 "단어·구의 나열"이 ' +
-  '아니라 근거·수치·메커니즘·기준·효과를 담은 "완결된 실질 항목"으로 쓴다(필요하면 1~3줄). 빈 명사구만 나열하지 마라.\n' +
-  '6) 글의 계층을 글머리 기호로 드러낸다: □(대항목) → ○(중항목) → -(소항목) → ·(세부), 또는 1./가./1)/(1) 체계. 깊이에 맞춰 일관되게 사용한다.\n' +
-  '7) 분량은 섹션을 늘려서가 아니라 각 항목을 실데이터·수치로 깊이 있게 세분해 확보한다 — 각 ○(중항목)은 ' +
-  '최소 3개 이상의 실질 - 항목으로 전개하고, 핵심 수치는 표(헤더+데이터행)로 제시한다. 패딩·동어반복 금지.';
+// 네이버 블로그(정보/하우투·리뷰) 본문 작성 지침 — 합성(작가 단독 집필) 단계 task 에 덧붙인다.
+// 작가(content_lead)는 자신의 페르소나(systemPrompt)로 글을 쓰고, 이 지침이 구조·SEO·분량을 고정한다.
+const BLOG_BODY_GUIDE =
+  '- 구조: 검색 의도를 바로 충족하는 도입 훅 → H2/H3 소제목으로 나눈 본문 → 핵심 요약·마무리.\n' +
+  '- 핵심 키워드를 소제목·첫 문단·본문에 자연스럽게 배치(키워드 남용·부자연스러운 반복 금지 — 과최적화는 네이버 노출에 오히려 해롭다).\n' +
+  '- 하우투면 번호 단계로, 리뷰면 장단점·비교·총평 구조로 전개한다.\n' +
+  '- 사실·수치는 근거로 뒷받침([근거: 출처]). 없는 값은 지어내지 말고 생략하거나 "확인 필요"로 표기.\n' +
+  '- 분량은 한국어 약 1,500~4,000자(정보/하우투·리뷰에 적정). 군더더기·패딩·동어반복 금지, 독자가 끝까지 읽게 쓴다.\n' +
+  '- 마크다운으로 작성(## 소제목). 글 제목(# 한 줄)은 포매터가 별도 생성하니 본문만 작성.\n' +
+  '- [리서치·SEO 브리프]의 타겟 키워드·검색의도·경쟁 빈틈·소주제를 반영해 차별화된 글을 쓴다.';
 
 export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcome> {
   const company = opts.company ?? DEFAULT_COMPANY;
@@ -77,10 +69,20 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
     if (tid && tk && allTeams.some((t) => t.id === tid) && !teamTaskById.has(tid)) teamTaskById.set(tid, tk);
   }
   const routed = allTeams.filter((t) => teamTaskById.has(t.id));
-  // path='team' → 가장 적합한 1팀(라우팅 첫 팀). full/org → 라우팅된 팀들. 라우팅 실패 시 전체 폴백.
-  let teams = routed.length ? routed : allTeams;
-  if (opts.path === 'team') teams = teams.slice(0, 1);
-  bus.emit('log', { message: `CEO 라우팅 — ${teams.length}개 부서로 분배: ${teams.map((t) => t.name).join(', ')}` });
+  // 콘텐츠 경로: 작가(제작)팀은 병렬 팀 단계에서 빼고(합성에서 단독 집필), 리서치팀은 항상 실행해
+  // 리서치→집필 핸드오프를 보장한다. 작가팀 = lead.stance==='pro'(수석 작가), 없으면 CEO 가 집필 폴백.
+  const writerTeam = allTeams.find((t) => t.lead.stance === 'pro') ?? null;
+  const writer = writerTeam?.lead ?? company.ceo;
+  let teams: TeamDef[];
+  if (writerTeam) {
+    teams = allTeams.filter((t) => t.id !== writerTeam.id); // 리서치(비-작가) 팀 전부 강제 실행
+    if (teams.length === 0) teams = allTeams; // 리서치팀이 없으면 폴백(작가팀 포함)
+  } else {
+    // 폴백(작가팀 미식별): 기존 라우팅 동작.
+    teams = routed.length ? routed : allTeams;
+    if (opts.path === 'team') teams = teams.slice(0, 1);
+  }
+  bus.emit('log', { message: `라우팅 — 리서치: ${teams.map((t) => t.name).join(', ')} → 집필: ${writer.name}` });
 
   // CEO 라우팅 완료 → 부서 작업 동안은 '대기'.
   bus.emit('phase', { team_id: '_ceo', phase: 'idle' });
@@ -322,102 +324,29 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
     bus.emit('critique', { round: 1, text: critiqueText }, { agentId: critic.id });
   }
 
-  // --- CEO 검토·확정 — 부서 산출물이 ①의 실행 지침을 준수했는지 검토하고 최종 산출물(문서)을 확정 ---
-  const synthContext = [
-    acceptanceBlock,
-    ...usableTeams.map((t) => `## ${t.team.name} 산출물\n${t.deliverable}`),
-    critiqueText ? `## 비평(${critic?.name})\n${critiqueText}` : '',
-  ].filter(Boolean).join('\n\n');
-
-  // 합성 단계의 CEO 는 '문서 저자' 역할로 — 결재메모·경영평가 과편향 유발하는 기본 CEO 프롬프트를 교체.
-  const ceoAuthor = { ...company.ceo, systemPrompt: SYNTH_AUTHOR_PROMPT };
-  const ceoModel = modelForTier(assign, company.ceo.tier);
-  // CEO 종합 단계 = 팀장들과 회의실에 모여 팀 산출물을 통합(🤝 팀간 회의). 무대(ceoIntegrating)와
-  // 타임라인이 일치하도록 'integrate' 를 emit — 'review'(🔎 검토)는 아래 데이터 검증 패스에서만 쓴다.
-  // (목차 microJSON 구간[ceo-synth 블록 전]도 OfficeView/working 이 phase==='integrate' 를 통합으로 인정.)
+  // --- 최종 블로그 본문 — 작가(content_lead)가 리서치 브리프[+검수 의견]를 통합해 단일 글 1편을 집필.
+  //     구 8-섹션 CEO 문서 합성 + 결산 데이터감사 패스를 대체 — 비용·형태를 네이버 블로그(정보/하우투·리뷰)에 맞춘다.
+  //     제작팀(작가)은 병렬 팀 단계에서 빠졌고, 여기서 리서치팀 브리프를 받아 단독 집필한다(리서치→집필 핸드오프). ---
   bus.emit('phase', { team_id: '_ceo', phase: 'integrate' });
+  const writerModel = modelForTier(assign, writer.tier);
+  const brief = usableTeams.map((t) => `## ${t.team.name}\n${t.deliverable}`).join('\n\n');
+  const synth = await runAgent({
+    bus, role: writer, model: writerModel,
+    task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 완성하라. 아래 [리서치·SEO 브리프]${critiqueText ? '와 [검수 의견]' : ''}을 반영해 검색 의도를 충족하는 글을 쓴다.\n${BLOG_BODY_GUIDE}`,
+    context: [
+      brief ? `[리서치·SEO 브리프]\n${brief}` : '',
+      critiqueText ? `[검수 의견(${critic?.name})]\n${critiqueText}` : '',
+    ].filter(Boolean).join('\n\n'),
+    // synthesis 단계라 brevity 는 해제되지만 BLOG_BODY_GUIDE 가 블로그 길이(1.5~4k자)를 고정한다. blockId 'ceo-synth' = 오피스 통합 안무 유지.
+    stage: 'synthesis', emitSpawn: true, blockId: 'ceo-synth',
+    groundQuery: topic, groundWikiOnly: true, groundLimit: 3, maxOutputTokens: 5000, signal,
+  });
+  const finalDeliverable = synth.text.trim() || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
-  // --- 최종 산출물: 섹션별 생성으로 충분한 분량(10p+) 확보 ---
-  //  단일 합성은 로컬 모델이 ~5~6k 토큰에서 조기 종결해 분량이 1~2p 에 묶인다(brevity·캡 해제로도 동일).
-  //  그래서 문서를 ① 목차(섹션 목록) → ② 각 섹션 상세 생성(섹션별 위키 그라운딩) → ③ 조립 의 'bounded 생성 합' 으로 만든다.
-  //  (섹션별 그라운딩은 실데이터 검색도 정밀해져 이슈12와 시너지. 분량은 실데이터 상세화에서 — 패딩·가짜수치 금지.)
-  // ① 목차 — 문서 유형에 맞는 섹션 6~9개(제목+focus). 경영평가 등 무관 프레임 배제.
-  const outline = await microJSON<{ sections?: Array<{ title?: string; focus?: string }> }>(
-    assign.standard,
-    '너는 문서 편집자다. 요청된 문서의 유형에 맞는 표준 목차(서로 겹치지 않는 섹션 7~8개)를 만든다. 각 섹션은 제목과 핵심(focus)을 가진다(제목에 번호는 붙이지 마라). 주제와 무관한 프레임(경영평가·KPI 등)을 끌어들이지 마라. 결산보고서면 재무 결산만 다룬다(예: 결산 총괄·세입 결산·세출 결산·예산 대비 집행 분석·재무제표·기금/잉여금 처분·재정건전성 및 내부통제·결산 총평) — 사업 성과/효과 분석은 결산 범위 밖이니 섹션으로 넣지 마라(사업별은 예산 집행 내역만). 분량은 섹션 수가 아니라 각 섹션의 깊이로 확보하므로 섹션은 7~8개로 절제하라.',
-    `문서: ${topic}\n\n[하위문제]\n${subContext}\n\n[수용 기준]\n${acceptance || '(없음)'}\n\n형식: {"sections":[{"title":"...","focus":"..."}]}`,
-    { maxOutputTokens: 900, signal },
-  );
-  const planned = (outline?.sections ?? [])
-    .map((s) => ({ title: asString(s?.title).trim(), focus: asString(s?.focus).trim() })) // LLM 비문자열 필드 안전화
-    .filter((s) => s.title).slice(0, 8);
-  const sectionList = planned.length ? planned : subproblems.map((s) => ({ title: s.text, focus: '' }));
-  bus.emit('log', { message: `최종 문서를 ${sectionList.length}개 섹션으로 작성: ${sectionList.map((s) => s.title).join(' · ')}` });
-
-  // ② 각 섹션 상세 생성(섹션별 위키 그라운딩). synthesis 단계라 brevity(2000~4000자 상한) 면제 → 섹션마다 충분히 상세.
-  const sectionTexts: string[] = [];
-  for (let si = 0; si < sectionList.length; si++) {
-    if (signal?.aborted) break;
-    const sec = sectionList[si]!;
-    const out = await runAgent({
-      bus, role: ceoAuthor, model: ceoModel,
-      task: `「${topic}」 문서의 '${sec.title}' 섹션 본문을 개조식으로 깊이 있게 작성하라.${sec.focus ? ` 이 섹션 핵심: ${sec.focus}.` : ''}\n` +
-        `- 개조식: 서술형 산문 금지, 명사형(음슴체) 종결. 단 각 말단 항목(-/·)은 빈 명사구·단어 나열이 아니라 구체적 수치·근거·메커니즘·기준·효과를 담은 완결된 실질 항목으로 작성(필요시 1~3줄).\n` +
-        `- 계층 글머리: □(대항목) → ○(중항목) → -(소항목) → ·(세부). 각 ○은 최소 3개 이상의 실질 - 항목으로 전개하고, 깊은 항목일수록 더 구체적 수치·근거.\n` +
-        `- 분량은 깊이(세부 분해·수치·표·근거)로 확보 — 빈 문장 패딩 금지. 제공된 [부서 산출물]·[관련 지식(위키)]의 실제 수치·표를 보존·통합하고, 핵심 수치는 표(헤더+데이터행)로 제시.\n` +
-        `- 이 섹션 범위에만 집중(다른 섹션 중복 금지). 결산보고서이면 재무 집행·수치 중심이며 사업 성과/효과 분석은 제외(사업별은 예산 집행 내역만).\n` +
-        `- [예산≠결산] 결산 수치는 결산·집행 자료(감사보고서 재무제표·운영성과표, 세출예산집행현황, 결산서)에서만 인용. '주요업무보고'·'예산안'·'추경'의 편성예산(본예산·추경) 수치를 결산액으로 쓰지 마라. 없으면 "⚠️ 데이터 없음(결산 확정자료 필요)".\n` +
-        `- [합계 정합] 재원별·항목별을 나열하면 합이 총계와 일치하게 검산. 안 맞으면 "검증 필요" 표기.\n` +
-        `- 결재메모·플레이스홀더 금지, 인용 수치엔 [근거], 빠진 값은 "⚠️ 데이터 없음: <항목>"(0·임의값으로 분량 채우기 금지).\n` +
-        `- 섹션 제목(## )은 출력하지 말고 본문만 작성.`,
-      // blockId 'ceo-synth' 고정 — 오피스뷰 CEO '통합 중' 안무(ceoIntegrating)가 합성 내내 유지되게. 첫 섹션에 CEO 스폰.
-      // 심층 분량 — 섹션 수가 아니라 섹션 깊이로 분량 확보(사용자 요청). 개조식이라 토큰당 항목이 많으니 넉넉히.
-      context: synthContext, stage: 'synthesis', emitSpawn: si === 0, blockId: 'ceo-synth', groundQuery: `${topic} ${sec.title} ${sec.focus}`,
-      // 합성 그라운딩은 위키만·3건으로 좁힘 — 팀이 이미 작업 단계에서 외부 커넥터(법령·KOSIS 등)를 호출해
-      // 데이터를 모았으므로, 섹션마다 느린 외부 API 를 재호출하지 않는다(통합 느림의 큰 원인). C 수정 후
-      // 1차 원문(결산보고서 등)이 위키 상위에 집중되므로 위키 3건이면 핵심 수치 확보 + 프리필·외부호출 절감.
-      groundWikiOnly: true, groundLimit: 3, maxOutputTokens: 5500, signal,
-    });
-    // 목차 제목에 이미 번호가 있으면(예: "1. 결산 총괄") 제거 후 우리 번호를 붙인다 — "## 1. 1." 이중 번호 방지.
-    const cleanTitle = sec.title.replace(/^\s*\d+[.)]\s*/, '').trim();
-    if (out.text.trim()) sectionTexts.push(`## ${si + 1}. ${cleanTitle}\n\n${out.text.trim()}`);
-  }
-
-  // ③ 조립
-  let finalDeliverable = `# ${topic}\n\n${sectionTexts.join('\n\n')}`.trim();
-
-  // --- 검증(이슈12) — 조립 문서에 템플릿/가짜수치가 남았는지 확인. 섹션 생성이 이미 플레이스홀더를 금지하므로
-  //     보통 0건. 긴 문서 전체 재작성은 truncation 위험이 있어 하지 않고, 발견 시 로그로 가시화(패딩 방지 원칙은 섹션 프롬프트가 강제). ---
+  // 잔여 플레이스홀더/가짜수치 경고(생성 지침이 이미 금지 — 보통 0건).
   const placeholders = findTemplateNumbers(finalDeliverable);
   if (placeholders.length) {
-    bus.emit('log', { message: `검증 — 잔여 플레이스홀더/가짜수치 ${placeholders.length}건 발견: ${placeholders.slice(0, 6).join(', ')} (실데이터/데이터없음 표기 권장)` });
-  }
-
-  // --- 데이터 검증 패스(사용자 요청) — 인용 수치가 (1) 예산이 아닌 결산/집행 자료 근거인지, (2) 합계 정합한지 점검.
-  //     결산 원문(감사보고서·세출예산집행현황 등)을 다시 끌어와 대조하고, 발견된 문제를 보고서 말미 '검증 메모'로 가시화한다.
-  //     (긴 문서 전체 재작성은 truncation 위험 → 침묵 재작성 대신 flag. 합성 단계 가드[예산≠결산·합계정합]가 1차 예방.) ---
-  bus.emit('phase', { team_id: '_ceo', phase: 'review' });
-  if (!signal?.aborted) {
-    try {
-      const auditCtx = llmWiki().query(`${topic} 감사보고서 재무제표 운영성과 세출예산집행현황 결산 집행액 불용 이월 잉여금`, 6).context;
-      const verdict = await microJSON<{ issues?: Array<{ figure?: string; problem?: string; correct?: string }> }>(
-        assign.standard,
-        '너는 결산 데이터 감사관이다. [검증 대상 보고서]의 핵심 수치를 [결산 원문 근거]와 대조해 다음만 찾아라: ' +
-        '(1) 예산(편성예산·본예산·추경 — 업무보고/예산안 출처)을 결산(집행 실적·재무제표)값으로 잘못 인용한 것, ' +
-        '(2) 구성요소 합이 명시 총계와 불일치하는 것. 문제 없으면 issues 빈 배열. 추측 금지 — 근거에 있는 사실만.',
-        `[결산 원문 근거]\n${auditCtx.slice(0, 6000)}\n\n[검증 대상 보고서]\n${finalDeliverable.slice(0, 7000)}\n\n` +
-        `형식: {"issues":[{"figure":"인용 수치","problem":"무엇이 틀렸나","correct":"근거상 올바른 값 또는 데이터없음"}]}`,
-        { maxOutputTokens: 1500, signal },
-      );
-      const issues = (verdict?.issues ?? []).filter((i) => i && i.problem);
-      if (issues.length) {
-        const memo = issues.slice(0, 12).map((i) => `- ${i.figure ?? '(수치)'}: ${i.problem}${i.correct ? ` → ${i.correct}` : ''}`).join('\n');
-        finalDeliverable += `\n\n## ⚠️ 데이터 검증 메모\n_자동 검증에서 결산 원문 대조 결과 다음이 확인됨(확정 전 검토 요망)._\n${memo}`;
-        bus.emit('log', { message: `데이터 검증 — 이슈 ${issues.length}건(예산/결산 혼동·합계 불일치 등) → 보고서 말미 검증 메모 첨부` });
-      } else {
-        bus.emit('log', { message: '데이터 검증 — 핵심 수치가 결산 원문과 정합(이슈 없음)' });
-      }
-    } catch { /* 검증 실패는 산출물을 막지 않음 */ }
+    bus.emit('log', { message: `검증 — 잔여 플레이스홀더/가짜수치 ${placeholders.length}건: ${placeholders.slice(0, 6).join(', ')}` });
   }
 
   await finalizeRun({
