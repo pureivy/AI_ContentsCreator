@@ -31,6 +31,18 @@ import { clusterBelow, meetingCircle, CORRIDOR_SPOTS, corridorPath, randomLanePo
 // shrinks/grows every element together and the office always stays 4:3.
 const BASE_W = 1664; // .office-floor 폭(office_map.png 16:9 배경을 100%×100% 로 채움 → 화면 % == 이미지 %)
 const BASE_H = 960;  // .office-floor 높이
+
+// 오클루더 화분 — 참고 프로젝트 occluders.json(맵 동일). 아바타 발(baseY)보다 아래에 밑동이 있는 화분은
+// 그 아바타 앞에 그려져 깊이감을 준다(painter's — z-index 를 baseY 로). 좌표는 맵 이미지 분수(=floor %).
+const OCCLUDERS: { name: string; x: number; y: number; w: number; baseY: number }[] = [
+  { name: "plant_0", x: 0.27, y: 0.398, w: 0.02, baseY: 0.434 },
+  { name: "plant_2", x: 0.36, y: 0.566, w: 0.02, baseY: 0.593 },
+  { name: "plant_3", x: 0.405, y: 0.566, w: 0.03, baseY: 0.593 },
+  { name: "plant_4", x: 0.515, y: 0.566, w: 0.05, baseY: 0.593 },
+  { name: "plant_5", x: 0.59, y: 0.566, w: 0.065, baseY: 0.593 },
+  { name: "plant_6", x: 0.94, y: 0.575, w: 0.06, baseY: 0.646 },
+  { name: "plant_10", x: 0.0, y: 0.903, w: 0.015, baseY: 1.0 },
+];
 const SECRETARIAT = "secretariat";
 
 // office_map.png 의 8개 공간을 화면 %(=이미지 %, 배경이 floor 를 100%×100% 로 채우므로 1:1)로 고정.
@@ -454,7 +466,7 @@ function Character({ p }: { p: Placed }) {
   const gaitT = ga ? { repeat: Infinity, duration: ga.d, ease: "easeInOut" as const } : { duration: 0.2 };
   const posT = { type: "tween" as const, ease: stroll ? ("linear" as const) : ("easeInOut" as const), duration: moveDur };
   // 상태·이동 → 스프라이트 포즈(sit/stand/walk) + 좌우반전(참고 엔진 이식)
-  const { pose, flip } = poseFor(actKind, walking, movingDown, frame, faceRef.current);
+  const { pose, flip } = poseFor(actKind, walking, movingDown, frame, faceRef.current, p.face);
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.4, x: "-50%", y: "-50%" }}
@@ -463,7 +475,8 @@ function Character({ p }: { p: Placed }) {
       // x/y(-50%) 를 framer transform 으로 줘 scale 과 합성 → (left,top)이 스택의 '정중앙'에 앵커된다.
       // (CSS transform:translate 는 framer 의 scale 애니메이션이 덮어써 무력화되던 버그를 근본 수정.)
       style={{ position: "absolute",
-               display: "flex", flexDirection: "column", alignItems: "center", zIndex: 5 }}
+               display: "flex", flexDirection: "column", alignItems: "center",
+               zIndex: 10 + Math.round(p.y) }} // 깊이순 z(발 y%) — 오클루더 화분과 painter's 교차
     >
       <AnimatePresence>
         {p.bubble && (
@@ -860,6 +873,14 @@ export default function OfficeView() {
         {placed.length === 0 && (
           <div className="office-hint">주제를 입력하면 직원들이 사무실로 출근합니다 🏢</div>
         )}
+
+        {/* 오클루더 화분 — 밑동(baseY)보다 발이 위인 아바타 앞에 그려져 깊이감(z=baseY%). 참고 프로젝트 assets. */}
+        {OCCLUDERS.map((o) => (
+          <img key={o.name} src={`/occluders/${o.name}.png`} alt="" draggable={false}
+            className="office-occluder"
+            style={{ position: "absolute", left: `${o.x * 100}%`, top: `${o.y * 100}%`,
+                     width: `${o.w * 100}%`, zIndex: 10 + Math.round(o.baseY * 100), pointerEvents: "none" }} />
+        ))}
 
         {/* 자료실 (wiki) shelf + 교훈 trophies */}
         <div className="office-archive">

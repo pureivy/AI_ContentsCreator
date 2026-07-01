@@ -885,7 +885,7 @@ button.upload-retry:hover { background: var(--panel2); }
 
 .office-archive {          /* 위키 자료실 HUD — office_map.png 위에 반투명으로 떠 하단 라운지를 덜 가린다 */
   position: absolute; left: 50%; bottom: 1.8%; transform: translateX(-50%);
-  width: min(58%, 940px); max-width: 96%; z-index: 6;
+  width: min(58%, 940px); max-width: 96%; z-index: 130; /* 아바타 깊이밴드(10~110) 위 */
   background: #0d1117cc; border: 1px solid #ffffff22; border-radius: 12px; padding: 7px 14px;
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 8px 26px #000a;
 }

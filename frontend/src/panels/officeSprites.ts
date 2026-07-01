@@ -37,12 +37,18 @@ export function spriteFor(id = "", level = "", title = ""): string | null {
  */
 export function poseFor(
   actKind: string, walking: boolean, movingDown: boolean, frame: 0 | 1, faceLeft: boolean,
+  face: "up" | "down" | "left" | "right" = "down",
 ): { pose: Pose; flip: boolean } {
   if (walking) {
     if (movingDown) return { pose: frame ? "walkF2" : "walkF1", flip: false };
     return { pose: frame ? "walkR2" : "walkR1", flip: faceLeft };
   }
   if (actKind === "rest") return { pose: "lounge", flip: false };
-  if (actKind === "work") return { pose: "sit_front", flip: false };
+  if (actKind === "work") {
+    // 데스크 방향에 맞춰 착석 포즈 — 좌우 열은 측면 착석(sit_right, 한쪽은 반전), 상하 행은 정면.
+    if (face === "left") return { pose: "sit_right", flip: true };   // 오른쪽 열(왼쪽을 봄)
+    if (face === "right") return { pose: "sit_right", flip: false };  // 왼쪽 열(오른쪽을 봄)
+    return { pose: "sit_front", flip: false };
+  }
   return { pose: "stand", flip: false }; // chat/huddle/coffee/phone/idle
 }
