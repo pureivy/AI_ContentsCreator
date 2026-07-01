@@ -161,7 +161,7 @@ export function readVerified(id: string, maxChars = 1000): string {
 // --- 주입 지식(injected.md) — 사람이 UI로 특정 에이전트에 넣는 외부 지식. '우선 신뢰'로 시스템프롬프트에 주입.
 // 자가학습(memory)·근거추출(verified)과 달리 사람이 명시적으로 넣은 것이라 최우선 배치하되, '관련될 때
 // 우선 활용'으로 프레이밍(무관 출력에 억지로 끼워넣지 않게). 주입 한도(자 수) 초과분은 최신 우선(tail)로 잘린다. ---
-export const INJECTED_CAP = 2000;
+export const INJECTED_CAP = CONFIG.injectedKnowledgeCap; // 기본 10,000자 · env INJECTED_KNOWLEDGE_CAP 로 조절
 export function appendInjected(id: string, text: string, source = '외부 자료'): boolean {
   if (!safeId(id)) return false;
   const t = (text || '').trim();

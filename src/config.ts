@@ -150,6 +150,8 @@ export interface Config {
   readonly performanceSyncTime: string;
   /** 발행 후 성과 측정까지 대기일 — 네이버 트래픽이 축적될 시간(콜드스타트 지연). 이 창 도달 전 piece 는 측정 안 함. */
   readonly performanceWindowDays: number;
+  /** 주입 지식(injected.md) 반영 한도(자 수) — 에이전트 매 런 시스템프롬프트에 들어가는 양. 초과분은 최신 우선(tail)로 잘림. */
+  readonly injectedKnowledgeCap: number;
 }
 
 // 콘텐츠 스튜디오 피벗: 기본 백엔드 = claude(로컬 Ollama 제거). 로컬로 되돌리려면 BACKEND=local 또는 LOCAL_LLM=true.
@@ -261,6 +263,7 @@ export const CONFIG: Config = {
   contentReadyCap: Math.max(1, envInt('CONTENT_READY_CAP', 5)),
   performanceSyncTime: env('PERFORMANCE_SYNC_TIME', '').trim(),
   performanceWindowDays: Math.max(0, envInt('PERFORMANCE_WINDOW_DAYS', 14)),
+  injectedKnowledgeCap: Math.max(500, envInt('INJECTED_KNOWLEDGE_CAP', 10000)),
 };
 
 /** 로컬 모델용 간결·수렴 지시(시스템 프롬프트 말미에 덧붙임). 소형 모델 장황함 억제. */
