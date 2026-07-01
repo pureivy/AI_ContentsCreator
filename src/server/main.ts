@@ -42,6 +42,7 @@ import { pieceStore, selectResumablePiece } from '../content/pieces';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
 import { parseManualMetrics, readMetrics } from '../analytics/performance';
+import { getCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
 import { buildBriefing } from '../autonomy/briefing';
 import { buildHwpx, hwpxAvailable } from '../export/hwpx';
@@ -1235,9 +1236,20 @@ const isRunLive = (runId?: string): boolean => !!runId && RUNS.get(runId)?.statu
 // 이번 틱에 처리할 작업 — **재개 우선**: 사용자 양보·재시작으로 런이 죽어 stranded 된 비종료 piece 를 먼저
 // 회수하고(신규 생성보다 우선), 없을 때만 새 아이디어를 제안·생성한다. 이게 '완전 자율'의 내구성 핵심 —
 // 없으면 사용자가 앱을 쓸 때마다(유휴 게이트가 상시 양보) piece 가 idea 에서 고아가 되고 매 틱 새 piece 만 쌓인다.
+// 신규 아이디어 생성 케이던스/백로그 게이트(재개는 무관) — 사용자 결정(주 2~3개) 준수 + ready 홍수 방지.
+// 없으면 autoCycleMinutes 를 낮게 잡을 때 하루 수십 편이 생성돼 미발행 초안이 범람한다.
+function canGenerateNew(pieces: Piece[]): boolean {
+  if (pieces.filter((p) => p.stage === 'ready').length >= CONFIG.contentReadyCap) return false; // 미발행 초안 캡
+  const minIntervalMs = (7 * 24 * 60 * 60 * 1000) / CONFIG.contentCadencePerWeek;               // 주 N편 → 최소 간격
+  const lastCreated = pieces.reduce((mx, p) => (p.createdTs > mx ? p.createdTs : mx), '');
+  return !lastCreated || (Date.now() - new Date(lastCreated).getTime()) >= minIntervalMs;
+}
+
 async function pickAutoWork(signal?: AbortSignal): Promise<Piece | null> {
-  const resume = selectResumablePiece(pieceStore().list(), isRunLive);
-  if (resume) return resume;
+  const pieces = pieceStore().list();
+  const resume = selectResumablePiece(pieces, isRunLive);
+  if (resume) return resume;                 // 재개는 케이던스와 무관 — 죽은 piece 회수 우선.
+  if (!canGenerateNew(pieces)) return null;  // 케이던스/백로그 초과 → 신규 생성 보류.
   const idea = await proposeContentIdeas(signal);
   if (!idea) return null;
   return pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche });
@@ -1271,6 +1283,32 @@ if (CONFIG.dailyBriefingTime) {
   console.log(`[gepa-ai-office] 일일 브리핑 활성 — ${CONFIG.dailyBriefingTime}${notifyConfigured() ? '' : ' (알림 채널 미설정 — /api-keys 에서 웹훅/텔레그램 설정 필요)'}`);
 }
 void stopDaily;
+
+// 일일 성과 동기화(옵트인: PERFORMANCE_SYNC_TIME="HH:MM"). 발행 후 측정창 도달한 piece 를 등록 수집기로
+// 측정→강화(멱등). 기본 수집기(manual)는 measure 가 null 이라 no-op — 사람이 POST /pieces/:id/metrics 로
+// 수동 입력한다. 실제 브라우저 스크레이퍼를 setCollector 로 등록하면 자동화(스크레이퍼 마일스톤, 사용자 로그인 필요).
+async function syncPerformance(): Promise<void> {
+  const collector = getCollector();
+  const windowMs = CONFIG.performanceWindowDays * 24 * 60 * 60 * 1000;
+  for (const p of pieceStore().list()) {
+    if (p.stage !== 'published') continue;                                  // 측정 대상 = 발행됐고 아직 측정 안 된 것
+    if (Date.now() - new Date(p.updatedTs).getTime() < windowMs) continue;  // 측정창 미도달(updatedTs≈발행시각) — 대기
+    try {
+      const sample = await collector.measure(p);
+      if (sample) await ingestMetrics(p.id, sample);                        // 측정치 있으면 강화(measured→reflected)
+    } catch (e) { console.log('[perf-sync]', `${p.id} 측정 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+  }
+}
+const stopPerfSync = startDaily({
+  time: CONFIG.performanceSyncTime,
+  run: () => { void syncPerformance(); },
+  log: (m) => console.log('[perf-sync]', m),
+});
+if (CONFIG.performanceSyncTime) {
+  // eslint-disable-next-line no-console
+  console.log(`[gepa-ai-office] 성과 동기화 활성 — ${CONFIG.performanceSyncTime} · 수집기 "${getCollector().name}"(측정창 ${CONFIG.performanceWindowDays}일)`);
+}
+void stopPerfSync;
 
 const port = CONFIG.port;
 if (!process.env.VITEST) serve({ fetch: app.fetch, hostname: CONFIG.host, port }, (info) => {

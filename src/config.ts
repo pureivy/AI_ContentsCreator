@@ -142,6 +142,14 @@ export interface Config {
   readonly dailyBriefingTime: string;
   /** 자율 사이클 런 완료 시 알림 전송(알림 채널 설정돼 있을 때만 실제 발송). */
   readonly notifyAutoCycle: boolean;
+  /** 콘텐츠 발행 케이던스(주당 신규 편수 목표). 자율 사이클의 신규 아이디어 생성 최소 간격을 이걸로 산정(재개는 무관). 사용자 결정: 주 2~3개. */
+  readonly contentCadencePerWeek: number;
+  /** 미발행 'ready' 초안 백로그 캡 — 사람이 검토·발행 안 한 초안이 이만큼 쌓이면 신규 생성 중단(홍수 방지). */
+  readonly contentReadyCap: number;
+  /** 일일 성과 동기화 시각 "HH:MM"(로컬). 빈 문자열=off. 등록된 수집기로 발행 piece 성과를 측정→강화(수집기 미설정 시 no-op). */
+  readonly performanceSyncTime: string;
+  /** 발행 후 성과 측정까지 대기일 — 네이버 트래픽이 축적될 시간(콜드스타트 지연). 이 창 도달 전 piece 는 측정 안 함. */
+  readonly performanceWindowDays: number;
 }
 
 // 콘텐츠 스튜디오 피벗: 기본 백엔드 = claude(로컬 Ollama 제거). 로컬로 되돌리려면 BACKEND=local 또는 LOCAL_LLM=true.
@@ -249,6 +257,10 @@ export const CONFIG: Config = {
   agentShellTimeoutMs: Math.min(Math.max(1000, envInt('AGENT_SHELL_TIMEOUT_MS', 60_000)), 600_000),
   dailyBriefingTime: env('DAILY_BRIEFING_TIME', '').trim(),
   notifyAutoCycle: envBool('NOTIFY_AUTO_CYCLE', true),
+  contentCadencePerWeek: Math.max(1, envInt('CONTENT_CADENCE_PER_WEEK', 3)),
+  contentReadyCap: Math.max(1, envInt('CONTENT_READY_CAP', 5)),
+  performanceSyncTime: env('PERFORMANCE_SYNC_TIME', '').trim(),
+  performanceWindowDays: Math.max(0, envInt('PERFORMANCE_WINDOW_DAYS', 14)),
 };
 
 /** 로컬 모델용 간결·수렴 지시(시스템 프롬프트 말미에 덧붙임). 소형 모델 장황함 억제. */
