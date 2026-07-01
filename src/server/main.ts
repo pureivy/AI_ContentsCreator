@@ -464,6 +464,21 @@ app.post('/pieces/:id/metrics', pieceMetricsPostHandler);
 app.post('/api/pieces/:id/metrics', pieceMetricsPostHandler);
 app.get('/pieces/:id/metrics', pieceMetricsGetHandler);
 app.get('/api/pieces/:id/metrics', pieceMetricsGetHandler);
+// piece 온디맨드 실행 — 자율 케이던스를 기다리지 않고 지금 초안 런을 띄운다(사용자 트리거 = user run).
+// 완료 시 pieceId 로 advancePieceReady 가 'ready' 로 전진(자율 launch 와 동일 경로). 이미 초안이 있거나 실행 중이면 거절.
+function pieceRunHandler(c: Context): Response {
+  const id = c.req.param('id') ?? '';
+  const piece = pieceStore().get(id);
+  if (!piece) return c.json({ error: 'unknown piece' }, 404);
+  if (piece.runId && RUNS.get(piece.runId)?.status === 'running') return c.json({ error: '이미 실행 중입니다', run_id: piece.runId }, 409);
+  if (['ready', 'published', 'measured', 'reflected'].includes(piece.stage)) return c.json({ error: '이미 초안이 있습니다(검토·발행 단계)' }, 409);
+  const runId = launchRun(piece.title, { pieceId: piece.id }); // user run(양보 대상 아님)
+  if (!runId) return c.json({ error: '실행 시작 실패' }, 500);
+  pieceStore().update(id, { runId, stage: 'draft' });
+  return c.json({ ok: true, run_id: runId });
+}
+app.post('/pieces/:id/run', pieceRunHandler);
+app.post('/api/pieces/:id/run', pieceRunHandler);
 
 // ============================================================
 // LLM 상태 — GEPA 프론트 계약(/llm) + 자체 UI(/api/llm)

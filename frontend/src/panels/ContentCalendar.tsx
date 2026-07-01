@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchPieces, createPiece, PieceInfo, PieceStage } from "../api";
+import { fetchPieces, createPiece, runPiece, PieceInfo, PieceStage } from "../api";
+
+// 지금 실행 가능한(초안이 아직 없는) 스테이지 — idea·research·draft·error.
+const RUNNABLE = new Set<PieceStage>(["idea", "research", "draft", "error"]);
 
 // 크로스-런 캘린더 — REST 폴링만(store/fold 금지: 스크럽 시 성과 수치 변형 방지). 라이프사이클 칸반.
 const STAGES: { key: PieceStage; label: string; emoji: string }[] = [
@@ -24,7 +27,7 @@ function fmtWhen(iso: string): string {
   return `${Math.round(h / 24)}일 전`;
 }
 
-function PieceCard({ p }: { p: PieceInfo }) {
+function PieceCard({ p, onRun, running }: { p: PieceInfo; onRun: (id: string) => void; running: boolean }) {
   return (
     <div className="piece-card">
       <div className="piece-card-title">{p.title}</div>
@@ -36,7 +39,14 @@ function PieceCard({ p }: { p: PieceInfo }) {
       {p.publishedUrl && (
         <a className="piece-card-link" href={p.publishedUrl} target="_blank" rel="noreferrer">🔗 발행 글 보기</a>
       )}
-      <div className="piece-card-foot muted">{fmtWhen(p.updatedTs)}{p.errors ? ` · 실패 ${p.errors}` : ""}</div>
+      <div className="piece-card-foot">
+        <span className="muted">{fmtWhen(p.updatedTs)}{p.errors ? ` · 실패 ${p.errors}` : ""}</span>
+        {RUNNABLE.has(p.stage) && (
+          <button className="btn ghost piece-run-btn" disabled={running} onClick={() => onRun(p.id)}>
+            {running ? "실행 중…" : "▶ 실행"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -46,6 +56,7 @@ export default function ContentCalendar() {
   const [title, setTitle] = useState("");
   const [keyword, setKeyword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [runningId, setRunningId] = useState<string | null>(null);
   const [err, setErr] = useState("");
 
   const load = () => fetchPieces().then(setPieces);
@@ -61,6 +72,13 @@ export default function ContentCalendar() {
     return m;
   }, [pieces]);
   const errors = byStage["error"] ?? [];
+
+  const doRun = async (id: string) => {
+    setRunningId(id);
+    const r = await runPiece(id);
+    setRunningId(null);
+    if (r.ok) load(); else alert(r.error || "실행 실패");
+  };
 
   const addIdea = async () => {
     const t = title.trim();
@@ -109,7 +127,7 @@ export default function ContentCalendar() {
               </div>
               <div className="calendar-col-body">
                 {items.length === 0 && <div className="muted calendar-empty">—</div>}
-                {items.map((p) => <PieceCard key={p.id} p={p} />)}
+                {items.map((p) => <PieceCard key={p.id} p={p} onRun={doRun} running={runningId === p.id} />)}
               </div>
             </div>
           );
@@ -119,7 +137,7 @@ export default function ContentCalendar() {
       {errors.length > 0 && (
         <div className="calendar-errors">
           <h3>⚠️ 실패({errors.length}) — 자율 재시도 한도 초과</h3>
-          <div className="calendar-col-body">{errors.map((p) => <PieceCard key={p.id} p={p} />)}</div>
+          <div className="calendar-col-body">{errors.map((p) => <PieceCard key={p.id} p={p} onRun={doRun} running={runningId === p.id} />)}</div>
         </div>
       )}
     </div>

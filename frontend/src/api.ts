@@ -846,3 +846,12 @@ export async function clearInjectedKnowledge(id: string): Promise<boolean> {
   try { const r = await fetch(`/agents/${id}/knowledge`, { method: "DELETE" }); return r.ok; }
   catch { return false; }
 }
+
+// piece 온디맨드 실행 — 자율 케이던스를 안 기다리고 지금 초안 런을 띄운다.
+export async function runPiece(id: string): Promise<{ ok: boolean; run_id?: string; error?: string }> {
+  try {
+    const r = await fetch(`/pieces/${id}/run`, { method: "POST" });
+    const j = await r.json().catch(() => ({} as { run_id?: string; error?: string }));
+    return r.ok ? { ok: true, run_id: j.run_id } : { ok: false, error: j.error || `HTTP ${r.status}` };
+  } catch { return { ok: false, error: "network" }; }
+}
