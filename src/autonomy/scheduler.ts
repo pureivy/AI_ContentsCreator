@@ -12,38 +12,40 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { ollama } from '../llm/ollama';
-import { llm } from '../llm/client';
 import { getSystemSpecs, autoAssignModels } from '../llm/models';
-import { tierOverrides } from '../llm/setting';
+import { tierOverrides, isClaudeBackend, resolveAssignment } from '../llm/setting';
 import { getCompany } from '../agents/company-loader';
+import { microJSON } from '../orchestrator/agent';
+import { asString } from '../util/str';
 
-export interface AutoCycleDeps {
+export interface AutoCycleDeps<T = string> {
   /** 사이클 주기(ms). ≤0 이면 스케줄러는 no-op. */
   intervalMs: number;
   /** 사용자/기존 런이 진행 중인가(유휴 게이트). true 면 이번 틱을 건너뛴다. */
   isBusy: () => boolean;
-  /** 다음에 할 '단일 작업' 주제 제안. null 이면 띄우지 않음. */
-  proposeTask: (signal?: AbortSignal) => Promise<string | null>;
-  /** 제안된 주제로 자율 런을 띄운다(main.ts 의 launchRun 으로 위임). */
-  launch: (topic: string) => void;
+  /** 이번 틱에 처리할 작업(재개 대상 piece 또는 새 아이디어). null 이면 띄우지 않음. */
+  pickWork: (signal?: AbortSignal) => Promise<T | null>;
+  /** 선택된 작업으로 자율 런을 띄운다(main.ts 의 launchRun 으로 위임). */
+  launch: (work: T) => void;
+  /** 로그 표기용 — 작업을 한 줄로 요약. */
+  describe?: (work: T) => string;
   log?: (msg: string) => void;
 }
 
 /** 자율 사이클 시작. 반환값은 정지 함수. intervalMs≤0 이면 아무것도 하지 않는다. */
-export function startAutoCycle(deps: AutoCycleDeps): () => void {
+export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): () => void {
   if (!(deps.intervalMs > 0)) return () => {};
-  let ticking = false; // 재진입 가드 — proposeTask(LLM)이 주기보다 길어도 틱이 겹쳐 다중 자율런이 뜨지 않게.
+  let ticking = false; // 재진입 가드 — pickWork(LLM)이 주기보다 길어도 틱이 겹쳐 다중 자율런이 뜨지 않게.
   const tick = async (): Promise<void> => {
     if (ticking) return;
     ticking = true;
     try {
       if (deps.isBusy()) { deps.log?.('사용자 런 진행 중 — 자율 사이클 건너뜀'); return; }
-      const topic = await deps.proposeTask();
-      const t = (topic ?? '').trim();
+      const work = await deps.pickWork();
       // 제안 도중 사용자 런이 도착했을 수 있으니 launch 직전 재확인(유휴 게이트 비원자성 완화).
       if (deps.isBusy()) { deps.log?.('제안 도중 사용자 런 도착 — 자율 사이클 보류'); return; }
-      if (t) { deps.log?.(`자율 사이클 — "${t}"`); deps.launch(t); }
-      else deps.log?.('자율 사이클 — 제안할 작업 없음(지식베이스 비어있음 또는 중복)');
+      if (work != null) { deps.log?.(`자율 사이클 — "${deps.describe?.(work) ?? String(work)}"`); deps.launch(work); }
+      else deps.log?.('자율 사이클 — 처리할 작업 없음(재개 대상·신규 아이디어 모두 없음)');
     } catch (e) {
       deps.log?.(`자율 사이클 오류: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -91,62 +93,70 @@ function readSafe(p: string): string {
 // 최근 자율 주제(중복 회피) — Connect AI 의 '24h 내 반복 금지'에 대응하는 경량 메모리.
 const recentAuto: string[] = [];
 
+/** 다음에 제작할 콘텐츠 아이디어(구조화). */
+export interface ContentIdea { title: string; keyword?: string; subNiche?: string; }
+
+// 성과 전략(analytics/strategy.json, 6d 연동) 있으면 승자 키워드를 아이디어 재료로 — 없으면 콜드스타트(무시).
+function readStrategyWinners(): string {
+  try {
+    const raw = JSON.parse(readSafe(path.join(CONFIG.dataDir, 'analytics', 'strategy.json'))) as {
+      winners?: Array<{ keyword?: string; score?: number }>;
+    };
+    return (raw.winners ?? [])
+      .filter((w) => w && w.keyword)
+      .slice(0, 8)
+      .map((w) => `- ${w.keyword}${typeof w.score === 'number' ? ` (점수 ${w.score.toFixed(2)})` : ''}`)
+      .join('\n');
+  } catch { return ''; }
+}
+
+const IDEA_SYSTEM =
+  '너는 1인 AI 콘텐츠 회사의 자율 편집 기획자다. 아래 [팀·업무 범위]가 이 회사가 다루는 콘텐츠 영역이다. ' +
+  '다음에 제작하면 검색 노출·유입에 가치있는 네이버 블로그(정보/하우투·리뷰) 콘텐츠 아이디어 한 개를 제안하라.\n' +
+  '- 검색 의도가 뚜렷하고 실용적인 주제(하우투/비교/리뷰/체크리스트 등). 시의성·계절성도 고려한다.\n' +
+  '- [성과 상위 키워드]가 있으면 그 흐름을 잇거나 확장하는 주제를 우선한다. 없으면(콜드스타트) 영역 안에서 다양하게 탐색한다.\n' +
+  '- [최근 제작]·[최근 자율주제]와 중복되지 않게 하라.\n' +
+  '- title 은 클릭·검색에 유리한 한국어 제목, keyword 는 검색량 있을 법한 핵심 타겟 키워드 1개, subNiche 는 세부 분야다.';
+
 /**
- * '다음에 하면 가치있는 단일 작업'을 micro 로 한 줄 제안 — **조직 헌장(팀·업무 범위)에 그라운딩**한다.
- *
- * 핵심: 과거엔 위키 인덱스를 주제 소스로 썼는데, 인덱스는 과거 자율런이 적재한 '특정 기업의 기술·공정 자료'
- * (염폐수 수질·지하수 관정·제련 공정 등)로 가득 차 있어, 플래너가 기관 업무 밖 주제로 드리프트했다(실측: AUTO
- * 주제 대부분이 ㈜OO 공정 디테일). + 자율런→그 기업 자료 재적재→인덱스 더 편향 의 피드백 루프. 그래서 인덱스를
- * 주제 '생성'에서 제외하고, 팀 focus(기관이 실제 담당하는 업무)를 재료로, 최근 수행 주제만 '중복 회피'로 쓴다.
+ * 다음에 제작할 콘텐츠 아이디어 1건 제안 — 조직 헌장(팀·업무 범위) + 성과 전략(strategy.json)에 그라운딩.
+ * 위키 인덱스는 주제 생성에서 제외(anti-drift): 과거 적재 자료로 편향되는 피드백 루프를 끊는다(구 gov 버전의 근본 교훈 유지).
+ * 백엔드 인식 — claude 면 클라우드 micro(haiku), 아니면 로컬 설치 모델(구 ollama.listModels()→빈배열→항상 null 버그 수정).
  */
-export async function proposeAutonomousTask(signal?: AbortSignal): Promise<string | null> {
+export async function proposeContentIdeas(signal?: AbortSignal): Promise<ContentIdea | null> {
   const c = getCompany();
-  // 팀·업무 범위(헌장) — 이게 주제 생성의 재료다(기관 정체성·업무가 focus 에 담겨 있음).
+  // 팀·업무 범위(헌장) — 아이디어 생성의 재료(회사 정체성·콘텐츠 영역이 specialty 에 담겨 있음).
   const teamLines = (c.teams ?? [])
     .map((t) => `- ${t.name}: ${(t.lead?.specialty || '').replace(/\s+/g, ' ').slice(0, 200)}`)
     .filter((l) => l.length > 6)
     .join('\n');
   if (!teamLines.trim()) return null; // 조직 구성이 없으면 제안 불가
 
-  // 중복 회피용으로만 최근 수행 주제(결정 로그)를 짧게 — '생성 재료'가 아니라 '피할 목록'.
   const done = readSafe(path.join(CONFIG.dataDir, '_shared', 'decisions.md')).slice(-500);
+  const winners = readStrategyWinners();
 
-  const installed = await ollama.listModels();
-  if (installed.length === 0) return null;
-  const assign = CONFIG.localModel
-    ? { micro: CONFIG.localModel }
-    : autoAssignModels(installed, getSystemSpecs(), tierOverrides());
+  let micro: string;
+  if (isClaudeBackend()) {
+    micro = resolveAssignment().micro;
+  } else {
+    const installed = await ollama.listModels();
+    if (installed.length === 0) return null;
+    micro = CONFIG.localModel || autoAssignModels(installed, getSystemSpecs(), tierOverrides()).micro;
+  }
 
-  const res = await llm.chat({
-    model: assign.micro,
-    messages: [
-      {
-        role: 'system',
-        content:
-          '너는 이 공공기관의 자율 운영 플래너다. 아래 [팀·업무 범위]가 이 기관이 실제로 담당하는 업무다. ' +
-          '이 기관·팀이 다음에 수행하면 가치있는 "단일" 작업 주제를 반드시 이 업무 범위 안에서 제안하라.\n' +
-          '- 기관의 정책·지원사업 기획/효과분석, 기관 전략·경영평가 대응, 예산·회계·기금·계약·인사 등 기관 운영 관점이어야 한다.\n' +
-          '- 기업을 "지원"하는 정책·사업은 이 기관의 업무다(예: 입주기업 전기요금 부담 완화 지원방안). 그러나 특정 ' +
-          '민간기업의 내부 기술·공정 문제(수질·폐수·설비·제련/제조 공정 개선, 지하수 관정 개발 등)는 그 기업의 일이지 ' +
-          '이 기관의 업무가 아니다 — 절대 제안하지 마라.\n' +
-          '- [최근 수행]·[최근 자율주제]와 중복되는 주제는 피하라.\n' +
-          '- 따옴표·머리말·설명 없이 제목 한 줄만 출력하라.',
-      },
-      {
-        role: 'user',
-        content:
-          `[팀·업무 범위]\n${teamLines}\n\n` +
-          `[최근 수행 — 중복 회피]\n${done || '(없음)'}\n\n` +
-          `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}`,
-      },
-    ],
-    maxOutputTokens: 120,
-    temperature: 0.6,
-    signal,
-  });
-  const topic = (res.text.trim().split('\n')[0] ?? '').replace(/^["'\-•\s]+/, '').slice(0, 120).trim();
-  if (!topic || recentAuto.includes(topic)) return null;
-  recentAuto.push(topic);
+  const user =
+    `[팀·업무 범위]\n${teamLines}\n\n` +
+    `[성과 상위 키워드]\n${winners || '(없음 — 콜드스타트)'}\n\n` +
+    `[최근 제작 — 중복 회피]\n${done || '(없음)'}\n\n` +
+    `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}\n\n` +
+    `형식: {"title":"...","keyword":"...","subNiche":"..."}`;
+
+  const o = await microJSON<{ title?: unknown; keyword?: unknown; subNiche?: unknown }>(
+    micro, IDEA_SYSTEM, user, { maxOutputTokens: 200, signal },
+  ).catch(() => null);
+  const title = asString(o?.title).trim().replace(/^["'\-•\s]+/, '').slice(0, 120);
+  if (!title || recentAuto.includes(title)) return null;
+  recentAuto.push(title);
   if (recentAuto.length > 20) recentAuto.shift();
-  return topic;
+  return { title, keyword: asString(o?.keyword).trim() || undefined, subNiche: asString(o?.subNiche).trim() || undefined };
 }

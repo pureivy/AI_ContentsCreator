@@ -37,7 +37,9 @@ import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
-import { startAutoCycle, proposeAutonomousTask, startDaily } from '../autonomy/scheduler';
+import { startAutoCycle, proposeContentIdeas, startDaily } from '../autonomy/scheduler';
+import { pieceStore, selectResumablePiece } from '../content/pieces';
+import type { Piece } from '../content/pieces';
 import { notify, notifyConfigured } from '../autonomy/notify';
 import { buildBriefing } from '../autonomy/briefing';
 import { buildHwpx, hwpxAvailable } from '../export/hwpx';
@@ -141,7 +143,30 @@ function legacyMetaFromFiles(id: string): PersistedMeta | null {
 // ============================================================
 // 런 라이프사이클 (무접두 + /api 양쪽 등록)
 // ============================================================
-interface LaunchOpts { agent?: string; path?: string; budgetUsd?: number; auto?: boolean; }
+interface LaunchOpts { agent?: string; path?: string; budgetUsd?: number; auto?: boolean; pieceId?: string; }
+
+// draft.json(6c)에서 piece 표시 메타 재로드 — 초안 asset 은 finalize 가 이미 디스크에 씀(메모리 의존 없음).
+function readDraftMeta(runId: string): { title?: string; seoScore?: number; keyword?: string } | null {
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, runId, 'draft.json'), 'utf-8')) as {
+      titleCandidates?: string[]; primaryKeyword?: string; seo?: { score?: number };
+    };
+    return { title: d.titleCandidates?.[0], keyword: d.primaryKeyword, seoScore: d.seo?.score };
+  } catch { return null; }
+}
+
+// 런 완료 → piece 를 'ready'(검토 대기)로 승격. draft.json 우선, 없으면(포장 실패) 본문(deliverable)으로 폴백.
+// 초안·본문 모두 비면 산출 실패로 간주해 에러 카운트(다음 틱 재개 대상). '완전 자율'의 라이프사이클 전진 지점.
+function advancePieceReady(pieceId: string, runId: string, deliverable: string): void {
+  const draft = readDraftMeta(runId);
+  if (!draft && !deliverable.trim()) { pieceStore().recordError(pieceId); return; }
+  pieceStore().update(pieceId, {
+    runId, stage: 'ready',
+    ...(draft?.title ? { title: draft.title } : {}),
+    ...(typeof draft?.seoScore === 'number' ? { seoScore: draft.seoScore } : {}),
+    ...(draft?.keyword ? { keyword: draft.keyword } : {}),
+  });
+}
 
 /** 진행 중 자율(auto) 런을 모두 양보(abort) — 사용자 런(일반/revise) 도착 시 호출. */
 function yieldRunningAutos(): void {
@@ -176,6 +201,8 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
       handle.deliverable = outcome.deliverable;
       handle.positions = outcome.positions;
       handle.subproblems = outcome.subproblems;
+      // piece 라이프사이클 전진 — 초안 완성 → 'ready'(검토 대기, 지속형 레코드). 발행은 사람이 수동(POST /pieces/:id/published).
+      if (opts.pieceId) { try { advancePieceReady(opts.pieceId, id, outcome.deliverable ?? ''); } catch { /* 무해 — piece 는 draft 로 남아 재개 */ } }
       // 자율 사이클 런 완료 → 알림(채널 설정 시에만 실제 발송).
       if (opts.auto && CONFIG.notifyAutoCycle && notifyConfigured()) {
         void notify({ title: `🤖 자율 사이클 완료 · ${topic}`, body: (outcome.deliverable || '(산출물 없음)').slice(0, 1200) });
@@ -183,11 +210,13 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
     })
     .catch((e: unknown) => {
       if (abort.signal.aborted || isAbort(e)) {
-        // 사용자 취소를 '오류'로 오인하지 않게.
+        // 사용자 취소(양보)를 '오류'로 오인하지 않게. piece 는 비종료 스테이지로 남아 다음 틱에 재개(에러 카운트 안 함).
         handle.status = 'cancelled';
         bus.emit(EventType.run_done, { status: 'cancelled' });
       } else {
         handle.status = 'error';
+        // 실런 실패 → piece 에러 카운트(캡 초과 시 종료, 그 전엔 재개 대상). 취소와 구분해 폭주 방지.
+        if (opts.pieceId) { try { pieceStore().recordError(opts.pieceId); } catch { /* 무해 */ } }
         bus.emit(EventType.error, { message: e instanceof Error ? e.message : String(e) });
         bus.emit(EventType.run_done, { status: 'error' });
       }
@@ -364,6 +393,56 @@ app.delete('/runs/:id', (c) => {
   return c.json({ ok: true });
 });
 app.post('/runs/:id/message', (c) => c.json({ ok: true }));
+
+// ============================================================
+// 콘텐츠 piece — 완전 자율 캘린더 저장소(크로스-런). 프론트는 REST 폴링으로 읽는다(UIState/fold 금지 — 스크럽 시 수치 변형 방지).
+// ============================================================
+function piecesListHandler(c: Context): Response {
+  return c.json({ pieces: pieceStore().list() });
+}
+async function pieceCreateHandler(c: Context): Promise<Response> {
+  const body = await c.req.json<{ title?: string; keyword?: string; subNiche?: string }>().catch(() => ({}) as { title?: string; keyword?: string; subNiche?: string });
+  const title = (body.title ?? '').trim();
+  if (!title) return c.json({ error: 'title 이 필요합니다' }, 400);
+  return c.json({ piece: pieceStore().create({ title, keyword: body.keyword, subNiche: body.subNiche }) });
+}
+function pieceGetHandler(c: Context): Response {
+  const p = pieceStore().get(c.req.param('id') ?? '');
+  return p ? c.json({ piece: p }) : c.json({ error: 'unknown piece' }, 404);
+}
+// 발행(수동) — 사람이 네이버에 게시 후 URL 등록 → 'published'. 성과 측정(6d)의 앵커.
+async function piecePublishedHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
+  const body = await c.req.json<{ url?: string }>().catch(() => ({}) as { url?: string });
+  const url = (body.url ?? '').trim();
+  if (!url) return c.json({ error: 'url 이 필요합니다' }, 400);
+  return c.json({ piece: pieceStore().setPublished(id, url) });
+}
+// 초안 재로드 — DraftReview 가 본문/렌더/메타를 디스크(data/sessions/<runId>/)에서 읽는다(메모리 의존 없음).
+function pieceDraftHandler(c: Context): Response {
+  const p = pieceStore().get(c.req.param('id') ?? '');
+  if (!p) return c.json({ error: 'unknown piece' }, 404);
+  if (!p.runId) return c.json({ error: 'no draft yet' }, 404);
+  try {
+    const dir = path.join(CONFIG.sessionsDir, p.runId);
+    const draft = JSON.parse(fs.readFileSync(path.join(dir, 'draft.json'), 'utf-8')) as unknown;
+    const read = (n: string): string => { try { return fs.readFileSync(path.join(dir, n), 'utf-8'); } catch { return ''; } };
+    return c.json({ piece: p, draft, md: read('draft.md'), html: read('draft.html') });
+  } catch { return c.json({ error: 'draft not found' }, 404); }
+}
+app.get('/pieces', piecesListHandler);
+app.get('/api/pieces', piecesListHandler);
+app.get('/calendar', piecesListHandler); // 캘린더 데이터 = piece 목록(별칭)
+app.get('/api/calendar', piecesListHandler);
+app.post('/pieces', pieceCreateHandler);
+app.post('/api/pieces', pieceCreateHandler);
+app.get('/pieces/:id/draft', pieceDraftHandler); // :id 보다 먼저(구체 경로 우선)
+app.get('/api/pieces/:id/draft', pieceDraftHandler);
+app.get('/pieces/:id', pieceGetHandler);
+app.get('/api/pieces/:id', pieceGetHandler);
+app.post('/pieces/:id/published', piecePublishedHandler);
+app.post('/api/pieces/:id/published', piecePublishedHandler);
 
 // ============================================================
 // LLM 상태 — GEPA 프론트 계약(/llm) + 자체 UI(/api/llm)
@@ -1129,13 +1208,30 @@ app.notFound((c) => c.json({ error: 'not found' }, 404));
 // 직원 워크스페이스 스캐폴드 — 14명 전원 data/agents/<id>/ 폴더를 보장(아직 미참여 직원도 포함).
 for (const id of rolesById(getCompany()).keys()) ensureScaffold(id);
 
-// 유휴 게이트 자율 사이클(옵트인: AUTO_CYCLE_MINUTES>0). 사용자 런이 없을 때만 '가장 가치있는 단일 작업'
-// 1건을 자율 실행하고, 사용자 런 도착 시 양보(launchRun 이 abort). 기본 off 라 기본 동작엔 영향 없음.
-const stopAutoCycle = startAutoCycle({
+// 유휴 게이트 자율 사이클(옵트인: AUTO_CYCLE_MINUTES>0). 사용자 런이 없을 때만 콘텐츠 piece 1건을 전진시키고,
+// 사용자 런 도착 시 양보(launchRun 이 abort). 기본 off 라 기본 동작엔 영향 없음.
+const isRunLive = (runId?: string): boolean => !!runId && RUNS.get(runId)?.status === 'running';
+
+// 이번 틱에 처리할 작업 — **재개 우선**: 사용자 양보·재시작으로 런이 죽어 stranded 된 비종료 piece 를 먼저
+// 회수하고(신규 생성보다 우선), 없을 때만 새 아이디어를 제안·생성한다. 이게 '완전 자율'의 내구성 핵심 —
+// 없으면 사용자가 앱을 쓸 때마다(유휴 게이트가 상시 양보) piece 가 idea 에서 고아가 되고 매 틱 새 piece 만 쌓인다.
+async function pickAutoWork(signal?: AbortSignal): Promise<Piece | null> {
+  const resume = selectResumablePiece(pieceStore().list(), isRunLive);
+  if (resume) return resume;
+  const idea = await proposeContentIdeas(signal);
+  if (!idea) return null;
+  return pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche });
+}
+
+const stopAutoCycle = startAutoCycle<Piece>({
   intervalMs: CONFIG.autoCycleMinutes * 60_000,
-  isBusy: () => [...RUNS.values()].some((h) => h.status === 'running'),
-  proposeTask: (signal) => proposeAutonomousTask(signal),
-  launch: (topic) => { launchRun(topic, { auto: true }); },
+  isBusy: () => [...RUNS.values()].some((h) => h.status === 'running'), // 자율런 포함 — 동시 1런만(단일 KV 슬롯 불변식).
+  pickWork: (signal) => pickAutoWork(signal),
+  launch: (piece) => {
+    const id = launchRun(piece.title, { auto: true, pieceId: piece.id });
+    if (id) pieceStore().update(piece.id, { runId: id, stage: 'draft' }); // 시작 성공 → draft(진행중). ''(억제)면 유지, 다음 틱 재개.
+  },
+  describe: (piece) => piece.title,
   log: (m) => console.log('[auto-cycle]', m),
 });
 if (CONFIG.autoCycleMinutes > 0) {

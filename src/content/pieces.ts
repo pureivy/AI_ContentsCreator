@@ -1,0 +1,107 @@
+/**
+ * Piece 저장소 — 콘텐츠 1건의 라이프사이클(idea→research→draft→ready→published→measured→reflected)을
+ * 런과 별개로 영속한다. 완전 자율 캘린더가 여러 런·재시작에 걸쳐 piece 를 이동시키므로, 스테이지를 디스크에
+ * (data/pieces/index.json, 원자적 tmp+rename) 지속해 재시작·중단 후에도 stranded 되지 않게 한다.
+ *
+ * 초안 asset(draft.{json,md,html})은 이미 finalize 가 data/sessions/<runId>/ 에 쓰므로(6c), piece 는 runId
+ * 참조만 들고 초안은 디스크에서 재로드한다 — 메모리 전용 positions 의존(재시작 409)을 피한다.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { CONFIG } from '../config';
+import { genId } from '../util/ids';
+
+export type PieceStage =
+  | 'idea' | 'research' | 'draft' | 'ready' | 'published' | 'measured' | 'reflected' | 'error';
+
+/** 비종료 스테이지 — 자율 사이클이 '재개' 대상으로 스캔(런이 죽어 stranded 된 piece 회수). */
+export const RESUMABLE_STAGES: readonly PieceStage[] = ['idea', 'research', 'draft'];
+
+export interface Piece {
+  id: string;
+  /** 초안을 생산한 org 런 id — draft.* 는 data/sessions/<runId>/ 에서 재로드. */
+  runId?: string;
+  title: string;
+  keyword?: string;
+  subNiche?: string;
+  stage: PieceStage;
+  publishedUrl?: string;
+  seoScore?: number;
+  /** 실런 실패 횟수(사용자 양보=취소는 제외) — 폭주 방지 캡. */
+  errors?: number;
+  createdTs: string;
+  updatedTs: string;
+}
+
+export interface CreatePieceInput { title: string; keyword?: string; subNiche?: string; stage?: PieceStage; }
+
+const MAX_ERRORS = 3;
+
+export class PieceStore {
+  private file: string;
+  private items = new Map<string, Piece>();
+  constructor(dir: string = path.join(CONFIG.dataDir, 'pieces')) {
+    this.file = path.join(dir, 'index.json');
+    this.load();
+  }
+  private load(): void {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.file, 'utf-8')) as Piece[];
+      if (Array.isArray(raw)) for (const p of raw) if (p && p.id) this.items.set(p.id, p);
+    } catch { /* 없으면 빈 스토어 */ }
+  }
+  private persist(): void {
+    try {
+      fs.mkdirSync(path.dirname(this.file), { recursive: true });
+      const tmp = `${this.file}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify([...this.items.values()], null, 2), 'utf-8');
+      fs.renameSync(tmp, this.file); // 원자적 교체 — 부분 쓰기로 인덱스 오염 방지.
+    } catch { /* 영속 실패 무해(다음 변경에서 재시도) */ }
+  }
+  create(input: CreatePieceInput): Piece {
+    const now = new Date().toISOString();
+    const p: Piece = {
+      id: genId('piece'), title: input.title.trim(),
+      keyword: input.keyword?.trim() || undefined, subNiche: input.subNiche?.trim() || undefined,
+      stage: input.stage ?? 'idea', errors: 0, createdTs: now, updatedTs: now,
+    };
+    this.items.set(p.id, p);
+    this.persist();
+    return p;
+  }
+  get(id: string): Piece | undefined { return this.items.get(id); }
+  /** 생성순(오래된→최신) 정렬 사본. */
+  list(): Piece[] { return [...this.items.values()].sort((a, b) => a.createdTs.localeCompare(b.createdTs)); }
+  update(id: string, patch: Partial<Piece>): Piece | undefined {
+    const p = this.items.get(id);
+    if (!p) return undefined;
+    const next: Piece = { ...p, ...patch, id: p.id, createdTs: p.createdTs, updatedTs: new Date().toISOString() };
+    this.items.set(id, next);
+    this.persist();
+    return next;
+  }
+  setStage(id: string, stage: PieceStage): Piece | undefined { return this.update(id, { stage }); }
+  setPublished(id: string, url: string): Piece | undefined { return this.update(id, { stage: 'published', publishedUrl: url }); }
+  /** 실런 실패 기록 — 사용자 양보(취소)에는 호출하지 않는다. 캡 초과 시 'error' 로 종료(폭주 방지). */
+  recordError(id: string): Piece | undefined {
+    const p = this.items.get(id);
+    if (!p) return undefined;
+    const errors = (p.errors ?? 0) + 1;
+    return this.update(id, errors >= MAX_ERRORS ? { errors, stage: 'error' } : { errors });
+  }
+}
+
+/**
+ * 재개 대상 선택(순수 — 테스트 가능) — 비종료 스테이지 & 라이브 런 없음 중 가장 오래된 piece. 없으면 null.
+ * 자율 틱은 '새 아이디어 제안'보다 이 재개를 먼저 처리해, 사용자 런 양보·재시작으로 죽은 piece 를 회수한다.
+ */
+export function selectResumablePiece(pieces: Piece[], isLive: (runId?: string) => boolean): Piece | null {
+  const resumable = pieces
+    .filter((p) => RESUMABLE_STAGES.includes(p.stage) && !isLive(p.runId))
+    .sort((a, b) => a.createdTs.localeCompare(b.createdTs));
+  return resumable[0] ?? null;
+}
+
+let _store: PieceStore | null = null;
+/** 프로세스 공유 단일 스토어. */
+export function pieceStore(): PieceStore { return (_store ??= new PieceStore()); }
