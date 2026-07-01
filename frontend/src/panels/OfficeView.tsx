@@ -20,7 +20,7 @@ import { AgentNode } from "../events/types";
 // WORKING counter (events/working.ts) so choreography and counter can't diverge.
 import { LEAD_WORK_PHASES, MEMBER_WORK_PHASES } from "../events/working";
 import { fetchCompany, CompanyInfo, RoleInfo } from "../api";
-import Avatar from "./Avatar";
+import { spriteFor, poseFor } from "./officeSprites";
 import { personLabel } from "./agentVisual";
 import { clusterBelow, meetingCircle, CORRIDOR_SPOTS, corridorPath, randomLanePoint, PATH_STEP, Pt,
   LOUNGE_SOFA_ZONE, PANTRY_ZONE, CONF_ZONE, READING_ZONE, WHITEBOARD_SPOT, placeInZone } from "./officeChoreography";
@@ -145,6 +145,7 @@ function statusText(a: AgentNode, running: boolean,
 interface Placed {
   agent: AgentNode;
   glyph: string;
+  char: string | null; // 스프라이트 캐릭터(참고 아바타 세트). null=이모지 폴백.
   ring: string;
   deskX: number;   // % in container
   deskY: number;
@@ -213,7 +214,7 @@ function layout(
       : ceoPhase === "review" ? "🔎 검토·확정 중"  // 자리에서 부서 산출물 검토·최종 확정
       : "";  // 그 외 = 대기 중 → 말풍선 없음
     placed.push({
-      agent: ceo, glyph: glyphFor("ceo", ceo.agent_id, ceo.persona?.role),
+      agent: ceo, glyph: glyphFor("ceo", ceo.agent_id, ceo.persona?.role), char: spriteFor(ceo.agent_id, "ceo", ceo.persona?.role),
       ring: ceoWorking ? RING.thinking : RING.spawned,
       deskX: CEO_DESK.x, deskY: CEO_DESK.y,
       x: CEO_DESK.x,   // 통합도 자기 자리에서 단독 수행 — 회의 테이블로 이동하지 않는다
@@ -239,7 +240,7 @@ function layout(
       const atWork = isSolo(lead) || lead.status === "thinking" || secPh === "work";
       const done = lead.status === "spoke" && secPh !== "work";
       placed.push({
-        agent: lead, glyph: glyphFor("lead", lead.agent_id, lead.persona?.role),
+        agent: lead, glyph: glyphFor("lead", lead.agent_id, lead.persona?.role), char: spriteFor(lead.agent_id, "lead", lead.persona?.role),
         ring: atWork ? RING.thinking : (RING[lead.status] ?? RING.spawned),
         deskX: SECRETARY_DESK.x, deskY: SECRETARY_DESK.y,
         x: SECRETARY_DESK.x, y: SECRETARY_DESK.y,
@@ -289,7 +290,7 @@ function layout(
     // 머문 팀장이 work 구간에 파란(thinking) 링으로 잘못 빛나지 않고 idle 색으로 앉아있게.
     const restRing = RING[lead.status] ?? RING.spawned;
     placed.push({
-      agent: lead, glyph: glyphFor("lead", lead.agent_id, lead.persona?.role),
+      agent: lead, glyph: glyphFor("lead", lead.agent_id, lead.persona?.role), char: spriteFor(lead.agent_id, "lead", lead.persona?.role),
       ring: working ? RING.thinking : restRing,
       deskX, deskY,
       x: seat.x,
@@ -369,7 +370,7 @@ function layout(
       // 단독 런의 지명 팀원 — 위 분기(engaged/phase 기반)에 안 걸리므로 자기 자리 '작업 중'으로 덮는다.
       if (isSolo(m)) { pos = desk; bubble = "✍️ 작업 중"; thinking = true; }
       placed.push({
-        agent: m, glyph: glyphFor("member", m.agent_id, m.persona?.role),
+        agent: m, glyph: glyphFor("member", m.agent_id, m.persona?.role), char: spriteFor(m.agent_id, "member", m.persona?.role),
         ring: RING[st] ?? RING.spawned,
         deskX, deskY,
         x: pos.x, y: pos.y,
@@ -382,14 +383,45 @@ function layout(
   return placed;
 }
 
+// 스프라이트 아바타 높이(floor 좌표 px) — 참고 SPRITE_H(맵높이의 0.13) 대응. 스프라이트 없으면 이모지 폴백.
+const SPRITE_PX = 138;
+function Sprite({ char, pose, flip, glyph, working }: {
+  char: string | null; pose: string; flip: boolean; glyph: string; working: boolean;
+}) {
+  const [err, setErr] = useState(false);
+  if (err || !char) {
+    return <div className="office-portrait office-glyph" style={{ fontSize: 32, lineHeight: 1 }}>{glyph}</div>;
+  }
+  return (
+    <img
+      className={`office-sprite${working ? " working" : ""}`}
+      src={`/sprites/${char}_${pose}.png`}
+      alt="" draggable={false}
+      onError={() => setErr(true)}
+      style={{ height: SPRITE_PX, width: "auto", transform: flip ? "scaleX(-1)" : undefined }}
+    />
+  );
+}
+
 function Character({ p }: { p: Placed }) {
   // 이동 거리(렌더 직전 위치 대비) — 위치 트랜지션 시간(거리비례 보행)과 걷기 게이트에 쓴다.
   const last = useRef({ x: p.x, y: p.y });
-  const dist = Math.hypot(p.x - last.current.x, p.y - last.current.y);
+  const faceRef = useRef(false);   // 마지막 향한 방향(멈춰도 유지) — 좌향 워크사이클 반전용
+  const dxDir = p.x - last.current.x;
+  const dyDir = p.y - last.current.y;
+  const dist = Math.hypot(dxDir, dyDir);
+  const movingDown = Math.abs(dyDir) > Math.abs(dxDir) && dyDir > 0; // 정면(아래) 이동 → walkF, 그 외 walkR
+  if (dist > 1.2 && !movingDown && Math.abs(dxDir) > 0.1) faceRef.current = dxDir < 0;
   const stroll = p.act === "stroll" || !!p.moving;  // 복도 경로 이동(산책·활동이동·복귀) = 연속 보행
   // 보행 시간: 복도 이동은 틱 간격(3s)에 맞춰 등속 '연속' 활주, 그 외 이동은 거리비례(순간이동 방지, ~20%/s).
   const moveDur = stroll ? 3 : Math.min(2.4, Math.max(0.5, dist * 0.05));
   const [walking, setWalking] = useState(false);
+  const [frame, setFrame] = useState<0 | 1>(0);
+  useEffect(() => {                // 걷기 프레임 190ms 토글(참고 WALKMS) — walkR1↔R2 / walkF1↔F2
+    if (!walking) return;
+    const t = setInterval(() => setFrame((f) => (f ? 0 : 1)), 190);
+    return () => clearInterval(t);
+  }, [walking]);
   useEffect(() => {
     last.current = { x: p.x, y: p.y };
     if (dist > 1.2) {                       // 의미있는 이동만
@@ -421,6 +453,8 @@ function Character({ p }: { p: Placed }) {
   const gait = ga ? ga.g : { y: 0, rotate: 0 };
   const gaitT = ga ? { repeat: Infinity, duration: ga.d, ease: "easeInOut" as const } : { duration: 0.2 };
   const posT = { type: "tween" as const, ease: stroll ? ("linear" as const) : ("easeInOut" as const), duration: moveDur };
+  // 상태·이동 → 스프라이트 포즈(sit/stand/walk) + 좌우반전(참고 엔진 이식)
+  const { pose, flip } = poseFor(actKind, walking, movingDown, frame, faceRef.current);
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.4, x: "-50%", y: "-50%" }}
@@ -451,7 +485,7 @@ function Character({ p }: { p: Placed }) {
         style={{ position: "relative" }}
       >
         <div className={`office-avatar${p.thinking ? " working" : ""}${walking ? " walking" : ""}`}>
-          <Avatar id={p.agent.agent_id} glyph={p.glyph} size={40} className="office-portrait" />
+          <Sprite char={p.char} pose={pose} flip={flip} glyph={p.glyph} working={p.thinking} />
           {p.thinking && <span className="office-think">💭</span>}
           {p.badge && <span className="office-badge">{p.badge}</span>}
         </div>

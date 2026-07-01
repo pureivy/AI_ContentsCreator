@@ -840,10 +840,10 @@ button.upload-retry:hover { background: var(--panel2); }
 .timeline-detail { padding: 0 !important; display: flex; flex-direction: column; overflow: hidden; }
 .td-scroll { flex: 1; overflow-y: auto; padding: 14px; }
 
-.office-avatar {                 /* 1.5x bigger again, no circle frame / ring / background */
-  position: relative; width: 104px; height: 104px;
-  display: flex; align-items: center; justify-content: center;
-  filter: drop-shadow(0 4px 5px #0007);
+.office-avatar {                 /* 스프라이트 아바타 컨테이너 — 이미지 실크기에 맞춰 확대(바닥 정렬) */
+  position: relative; width: 138px; height: 138px;
+  display: flex; align-items: flex-end; justify-content: center;
+  filter: drop-shadow(0 5px 5px #0008);
 }
 /* Working aura: a soft pulsing halo behind an avatar that is ACTIVELY working
    (p.thinking). Painted before the portrait (::before) so it sits behind it, and
@@ -1544,3 +1544,7 @@ button.upload-retry:hover { background: var(--panel2); }
 /* piece 카드 온디맨드 실행 버튼 */
 .piece-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .piece-run-btn { font-size: 11px; padding: 2px 8px; white-space: nowrap; }
+
+/* 오피스 뷰 스프라이트 아바타 (참고 프로젝트 멀티포즈 PNG 재사용) */
+.office-sprite { display: block; object-fit: contain; }
+.office-avatar .office-glyph { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
