@@ -11,6 +11,9 @@
 import os from 'node:os';
 import path from 'node:path';
 
+// .env 로드 — CONFIG·getSecret(process.env 우선)이 값을 읽기 전에 반영. Node 20.12+/22 내장. 파일 없으면 무해.
+try { process.loadEnvFile(); } catch { /* .env 없음 — 무해 */ }
+
 const env = (k: string, d = ''): string => process.env[k] ?? d;
 const envInt = (k: string, d: number): number => {
   const v = parseInt(env(k), 10);
