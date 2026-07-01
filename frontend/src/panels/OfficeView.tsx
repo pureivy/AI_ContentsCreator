@@ -71,7 +71,7 @@ const regionCx = (r: Region): number => r.x + r.w / 2;
 const roomStyle = (r: Region) =>
   ({ left: `${r.x}%`, top: `${r.y}%`, width: `${r.w}%`, height: `${r.h}%` });
 // 비서 — CEO실 앞 리셉션(소파+콘솔) 공간. 콘솔(소형 모니터) 앞 바닥에 발이 닿도록(시각상 발≈앵커+3.6).
-const SECRETARY_DESK = { x: 12.5, y: 39.5 };
+const SECRETARY_DESK = { x: 17, y: 53 }; // 리셉션 데스크 의자 자리(스프라이트 착석 실측 보정)
 
 // Desk seats within a team zone (fx: 0..1 across, fy: 0..1 down), chosen by team size
 // so the big avatars never overlap each other and never cross the zone walls.
@@ -405,6 +405,18 @@ function Sprite({ char, pose, flip, glyph, working }: {
   if (err || !char) {
     return <div className="office-portrait office-glyph" style={{ fontSize: 32, lineHeight: 1 }}>{glyph}</div>;
   }
+  if (char === "jarvis") {
+    // 자비스는 멀티포즈 세트가 아니라 채팅 아바타와 같은 '원래 이미지' 하나만 쓴다(복장·정체성 일관, 사용자 요청).
+    return (
+      <img
+        className={`office-sprite${working ? " working" : ""}`}
+        src="/avatars/jarvis_face.png" alt="" draggable={false}
+        onError={() => setErr(true)}
+        style={{ height: 96, width: 96, borderRadius: "50%", objectFit: "cover",
+                 border: "3px solid rgba(255,255,255,.85)", boxShadow: "0 4px 10px rgba(0,0,0,.25)" }}
+      />
+    );
+  }
   return (
     <img
       className={`office-sprite${working ? " working" : ""}`}
@@ -461,13 +473,15 @@ function Character({ p, walkers }: { p: Placed; walkers: Walkers }) {
     : p.act === "shelf" || p.act === "board" || p.act === "work" ? "work"
     : p.thinking ? "work"
     : "idle";
+  // 제자리 모션은 참고 엔진처럼 '발 고정·상체만' — gait 래퍼의 transformOrigin 이 발끝(하단)이라
+  // 회전·호흡(scaleY)이 발을 축으로 일어난다. 수직 이동(y)은 걷는 중에만(정지 시 전체가 까닥거리지 않게).
   const GAITS: Record<string, { g: Record<string, number | number[]>; d: number }> = {
-    walk:   { g: { y: [0, -7, 0, -7, 0], rotate: [-5, 5, -5, 5, 0] }, d: 0.34 }, // 이동: 뛰는 발걸음
-    work:   { g: { y: [0, -2, 0], rotate: [-1.5, 1.5, -1.5] }, d: 0.5 },         // 작업: 바쁜 잔걸음
-    rest:   { g: { y: [0, -1.6, 0] }, d: 1.8 },                                   // 휴식: 느긋한 호흡
-    chat:   { g: { rotate: [-3, 3, -3] }, d: 0.6 },                               // 잡담·업무협의: 말하는 제스처
-    coffee: { g: { rotate: [0, 3, 0, -1, 0] }, d: 1.4 },                          // 커피·간식: 한 모금
-    phone:  { g: { y: [0, -1, 0], rotate: [-2.5, 1.5, -2.5] }, d: 0.9 },          // 통화: 서성·제스처
+    walk:   { g: { y: [0, -7, 0, -7, 0], rotate: [-5, 5, -5, 5, 0] }, d: 0.34 },    // 이동: 뛰는 발걸음(전신)
+    work:   { g: { rotate: [-1, 1, -1], scaleY: [1, 0.985, 1] }, d: 0.9 },           // 작업: 타이핑 상체 미동
+    rest:   { g: { scaleY: [1, 0.98, 1] }, d: 1.8 },                                 // 휴식: 느긋한 호흡
+    chat:   { g: { rotate: [-2.5, 2.5, -2.5] }, d: 0.8 },                            // 잡담·업무협의: 말하는 기울임
+    coffee: { g: { rotate: [0, 2, 0, -1, 0], scaleY: [1, 0.99, 1, 1, 1] }, d: 1.6 }, // 커피·간식: 한 모금
+    phone:  { g: { rotate: [-2, 1.5, -2], scaleY: [1, 0.99, 1] }, d: 1.1 },          // 통화: 상체 제스처
   };
   const ga = GAITS[actKind];
   const gait = ga ? ga.g : { y: 0, rotate: 0 };
@@ -503,7 +517,7 @@ function Character({ p, walkers }: { p: Placed; walkers: Walkers }) {
       <motion.div
         animate={gait}
         transition={gaitT}
-        style={{ position: "relative" }}
+        style={{ position: "relative", transformOrigin: "50% 100%" }}
       >
         <div className={`office-avatar${p.thinking ? " working" : ""}${walking ? " walking" : ""}`}>
           <Sprite char={p.char} pose={pose} flip={flip} glyph={p.glyph} working={p.thinking} />
@@ -653,6 +667,17 @@ export default function OfficeView() {
       for (const id of storeTeamOrder) { tOrder.push(id); tmap[id] = storeTeams[id] ?? { id, name: id }; }
     }
     for (const id of storeOrder) if (!ag[id] && storeAgents[id]) { ag[id] = storeAgents[id]; order.push(id); }
+    // 비서(자비스) — 콘텐츠 로스터에 없는 '상주 어시스턴트'. 오피스에선 CEO실 앞 리셉션을 지키는
+    // 아바타로 항상 표시한다(placeholder: 런·연출·집계 불참, 데스크 라이프(secLife)만 적용).
+    if (!ag["jarvis"]) {
+      order.push("jarvis");
+      ag["jarvis"] = {
+        agent_id: "jarvis",
+        persona: { role: "비서", name: "자비스", scope: "비서·어시스턴트", stance: "", is_critic: false },
+        model: "", status: "spawned", placeholder: true,
+        level: "lead", team: SECRETARIAT,
+      };
+    }
     return { agents: ag, agentOrder: order, teamOrder: tOrder, teams: tmap };
   }, [roster, storeAgents, storeOrder, storeTeamOrder, storeTeams]);
 
