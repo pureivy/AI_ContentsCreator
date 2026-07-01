@@ -615,20 +615,26 @@ button.upload-retry:hover { background: var(--panel2); }
 .office-root { width: 100%; height: 100%; overflow: hidden; padding: 18px;
   display: flex; align-items: center; justify-content: center; background:
   radial-gradient(circle at 50% 0%, #1b2230 0%, #0d1117 60%); }
-.office-floor {            /* design canvas — 가로 30% 확대(1664×960, ~1.73:1) — scaled to fit via JS transform */
-  position: relative; width: 1664px; height: 960px; flex: none; border-radius: 18px;
+.office-floor {            /* design canvas (1664×960) — office_map.png 는 ::before(필터 레이어)에 깐다.
+                              floor 에 100%×100% 로 채워 화면 % == 이미지 % (오버레이 좌표 1:1). */
+  position: relative; width: 1664px; height: 960px; flex: none; border-radius: 18px; overflow: hidden;
   transform-origin: center center;
-  background: repeating-linear-gradient(90deg, #d9c39a 0 38px, #d2bb8f 38px 76px);
-  box-shadow:
-    inset 0 0 0 14px #cdbf9c,                 /* outer perimeter wall */
-    inset 0 0 0 16px #9c8456,                 /* wall inner edge */
-    inset 0 0 22px 16px #00000022,            /* wall depth shadow on floor */
-    inset 0 0 110px rgba(70,45,15,0.30), 0 12px 40px #0009;
+  background: #11151c;
+  box-shadow: 0 12px 40px #0009;
 }
-.office-floor::before {    /* plank seams */
-  content: ""; position: absolute; inset: 0; border-radius: 18px; pointer-events: none;
-  background-image: linear-gradient(#00000010 1px, transparent 1px); background-size: 100% 30px;
+/* 배경 이미지 레이어(아바타·라벨·동선은 그 위 z≥1). office_map.png 가 이미 화이트톤이라 추가 보정
+   없이 원본 그대로 표시(예전 흰색 워시·brightness 필터 제거). ?v= 는 같은 파일명 교체 시 캐시 무효화. */
+.office-floor::before {
+  content: ""; position: absolute; inset: 0; z-index: 0; border-radius: inherit; pointer-events: none;
+  background: url(/officemap_white.jpeg) center / 100% 100% no-repeat;
 }
+/* 방 영역 핫스팟 — 벽·가구는 office_map.png 가 그리므로 기본은 투명(라벨만). 그 방의 팀이
+   작업 중(active)이면 파란 톤으로 살짝 강조해 '지금 누가 어디서 일하는지'를 보여준다. */
+.office-zone { position: absolute; border-radius: 12px; pointer-events: none; z-index: 1;
+  border: 1.5px solid transparent; transition: background .4s ease, border-color .4s ease, box-shadow .4s ease; }
+.office-zone.active { background: #58a6ff1f; border-color: #58a6ff77;
+  box-shadow: 0 0 0 1px #58a6ff33, inset 0 0 30px #58a6ff1f; }
+
 .office-room {            /* room/zone partitions drawn as thick walls with oblique height */
   position: absolute; border-radius: 10px;
   border: 12px solid #cdbf9c;                  /* the wall */
@@ -877,22 +883,33 @@ button.upload-retry:hover { background: var(--panel2); }
   border: 7px solid transparent; border-top-color: #f5f0e6; border-bottom: 0;
 }
 
-.office-archive {
-  position: absolute; left: 2%; right: 2%; bottom: 1.5%;
-  background: #1a130d; border: 2px solid #4a3a2a; border-radius: 10px; padding: 8px 12px;
+.office-archive {          /* 위키 자료실 HUD — office_map.png 위에 반투명으로 떠 하단 라운지를 덜 가린다 */
+  position: absolute; left: 50%; bottom: 1.8%; transform: translateX(-50%);
+  width: min(58%, 940px); max-width: 96%; z-index: 6;
+  background: #0d1117cc; border: 1px solid #ffffff22; border-radius: 12px; padding: 7px 14px;
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 8px 26px #000a;
 }
+/* 자료실 HUD 글자는 .office-floor 가 축소(scale)되면 같이 작아져 안 보인다 → --office-scale 의
+   역수로 역보정해 화면상 크기를 일정하게(읽히게) 유지한다(아바타 라벨과 같은 방식, 전 뷰포트 적용). */
+/* 자료실 HUD 글자는 .office-floor 축소(scale)에 맞춰 --office-scale 역수로 역보정(화면상 일정 크기).
+   사용자 지정: 제목(head) 11px · 범례(legend) 9px (on-screen). calc 기준값 = 그 화면상 px. */
 .archive-head { display: flex; justify-content: space-between; align-items: center;
-  font-size: 12px; font-weight: 700; color: #e6edf3cc; margin-bottom: 6px; }
+  font-size: clamp(9px, calc(11px / var(--office-scale, 1)), 28px);
+  font-weight: 700; color: #e6edf3cc; margin-bottom: 6px; }
 .archive-trophies { color: var(--critic); display: flex; gap: 8px; align-items: center; }
-.trophy-row { font-size: 11px; }
-.archive-shelf { display: flex; gap: 3px; align-items: flex-end; min-height: 28px;
+.trophy-row { font-size: clamp(8px, calc(10px / var(--office-scale, 1)), 24px); }
+.archive-shelf { display: flex; gap: 3px; align-items: flex-end;
+  min-height: clamp(20px, calc(22px / var(--office-scale, 1)), 56px);
   border-top: 3px solid #6b5336; padding-top: 4px; flex-wrap: wrap; }
-.book-spine { width: 7px; height: 24px; border-radius: 2px 2px 0 0; transform-origin: bottom; }
+.book-spine { width: clamp(5px, calc(6px / var(--office-scale, 1)), 15px);
+  height: clamp(17px, calc(19px / var(--office-scale, 1)), 48px);
+  border-radius: 2px 2px 0 0; transform-origin: bottom; }
 /* 책등 색 범례 — 막대=진행률 오해 방지(각 막대=지식 1건, 색=상태) */
-.archive-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-  margin-bottom: 6px; font-size: 10.5px; color: #e6edf399; }
+.archive-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 9px;
+  margin-bottom: 6px; font-size: clamp(7px, calc(9px / var(--office-scale, 1)), 22px); color: #e6edf399; }
 .archive-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-.archive-legend .lg-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.archive-legend .lg-dot { width: clamp(5px, calc(6.5px / var(--office-scale, 1)), 16px);
+  height: clamp(5px, calc(6.5px / var(--office-scale, 1)), 16px); border-radius: 2px; display: inline-block; }
 .archive-legend .lg-note { color: #e6edf366; font-style: italic; }
 
 /* 오피스 실제 진행률 바 — DISPATCH PROTOCOL 6단계 채움. 책장(지식 보관함)과 별개. */

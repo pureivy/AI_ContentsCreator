@@ -22,44 +22,42 @@ import { LEAD_WORK_PHASES, MEMBER_WORK_PHASES } from "../events/working";
 import { fetchCompany, CompanyInfo, RoleInfo } from "../api";
 import Avatar from "./Avatar";
 import { personLabel } from "./agentVisual";
-import { clusterBelow, meetingCircle, CORRIDOR_SPOTS, STROLL, AVATAR_W, AVATAR_H, Pt,
-  LOUNGE_SOFA_ZONE, PANTRY_ZONE, CONF_ZONE, WHITEBOARD_SPOT, placeInZone, shelfSpot } from "./officeChoreography";
+import { clusterBelow, meetingCircle, CORRIDOR_SPOTS, corridorPath, randomLanePoint, PATH_STEP, Pt,
+  LOUNGE_SOFA_ZONE, PANTRY_ZONE, CONF_ZONE, READING_ZONE, WHITEBOARD_SPOT, placeInZone } from "./officeChoreography";
 
 // Fixed 4:3 design canvas. Everything inside is laid out against this constant
 // size (positions in %, furniture in px), then the whole floor is uniformly
 // scaled with transform:scale() to fit the panel — so resizing the window
 // shrinks/grows every element together and the office always stays 4:3.
-const BASE_W = 1664; // 가로 30% 확대(1280→1664) — 4:3 → ~1.73:1. (.office-floor width / AVATAR_W 와 동기)
-
-// 하단 팀존 기하 — 비서실은 상단(CEO실 옆 별도 방)으로 빠지므로 제외하고, 경영지원팀(support)이
-// 늘어난 가로폭을 흡수해 크게(weight). layout()과 JSX 렌더가 같은 값을 쓰도록 공유 헬퍼로 1회 계산.
+const BASE_W = 1664; // .office-floor 폭(office_map.png 16:9 배경을 100%×100% 로 채움 → 화면 % == 이미지 %)
+const BASE_H = 960;  // .office-floor 높이
 const SECRETARIAT = "secretariat";
-const ZONE_WEIGHT: Record<string, number> = { support: 1.45 };
-const ZONE_PAD = 2;
-function teamZones(teamOrder: string[]): { ids: string[]; geom: Record<string, { x: number; w: number }> } {
-  const ids = teamOrder.filter((t) => t !== SECRETARIAT);
-  const total = ids.reduce((s, t) => s + (ZONE_WEIGHT[t] ?? 1), 0) || 1;
-  const avail = 100 - ZONE_PAD * 2;
-  const geom: Record<string, { x: number; w: number }> = {};
-  let x = ZONE_PAD;
-  for (const t of ids) { const w = (avail * (ZONE_WEIGHT[t] ?? 1)) / total; geom[t] = { x, w }; x += w; }
-  return { ids, geom };
-}
-// 상단 룸 사각형(office-%) — 회의실 | 비서실 | CEO실 | 휴게실. 집기·문·아바타 위치를 전부 여기서
-// 파생한다(매직넘버 금지 → 룸을 옮겨도 집기가 따라옴: advisor 권고의 근본 수정).
-const ROOM_TOP = 2, ROOM_H = 25;
+
+// office_map.png 의 8개 공간을 화면 %(=이미지 %, 배경이 floor 를 100%×100% 로 채우므로 1:1)로 고정.
+// 좌표는 grid_overlay(5% 격자) 분석값 → 스크린샷 루프에서 그림과 대조해 미세 보정한다.
+type Region = { x: number; y: number; w: number; h: number };
 const ROOMS = {
-  conf:        { x: 2,  w: 29 },
-  secretariat: { x: 33, w: 14 }, // 우측 끝 47 = CEO실 좌측과 인접(마주보는 벽 제거 → 개방 연결)
-  ceo:         { x: 47, w: 20 },
-  lounge:      { x: 69, w: 29 },
-} as const;
-const roomCx = (r: { x: number; w: number }): number => r.x + r.w / 2;
-const roomBottom = ROOM_TOP + ROOM_H; // 27 — 상단 방 하단 벽(=복도 쪽, 문 위치)
-const roomStyle = (r: { x: number; w: number }) =>
-  ({ left: `${r.x}%`, top: `${ROOM_TOP}%`, width: `${r.w}%`, height: `${ROOM_H}%` });
-const SECRETARY_DESK = { x: roomCx(ROOMS.secretariat), y: 13 }; // 비서실 중심(39)
-const BASE_H = 960;
+  ceo:         { x: 1.5,  y: 2,    w: 18.5, h: 27 },   // 좌상: CEO실(개인 집무실 — 책상·책장·시티뷰)
+  conf:        { x: 31,   y: 3,    w: 29,   h: 30 },   // 상중: 회의실(원형 회의 테이블 + 벽걸이 스크린)
+  planning:    { x: 61.5, y: 13,   w: 37,   h: 17 },   // 우상: 기획팀 — 창측 데스크 '바닥 띠'(상단 창/스카이라인 제외 → 팀장이 허공에 안 뜸)
+  secretariat: { x: 2,    y: 29,   w: 21,   h: 15 },   // 비서실 — CEO실 '앞'(바로 아래) 리셉션(소파+콘솔) 공간(사용자 요청)
+  support:     { x: 26,   y: 33.5, w: 35.5, h: 25 },   // 정중앙: 경영관리팀(오픈플랜 데스크 포드)
+  pantry:      { x: 62.5, y: 32,   w: 36,   h: 26 },   // 우중: 탕비실(커피 바 + 카페 테이블)
+  lounge:      { x: 11,   y: 60,   w: 31,   h: 38 },   // 좌하: 휴게실(소파 라운지)
+  reading:     { x: 61.5, y: 60,   w: 36.5, h: 38 },   // 우하: 휴식공간(서재 책장 + 안락의자)
+} as const satisfies Record<string, Region>;
+
+// 명단의 팀 id → 고정 방. planning→기획팀(우상), support→경영관리팀(정중앙), secretariat→비서실(좌중).
+const TEAM_REGION: Record<string, Region> = {
+  planning: ROOMS.planning,
+  support: ROOMS.support,
+  secretariat: ROOMS.secretariat,
+};
+const regionCx = (r: Region): number => r.x + r.w / 2;
+const roomStyle = (r: Region) =>
+  ({ left: `${r.x}%`, top: `${r.y}%`, width: `${r.w}%`, height: `${r.h}%` });
+// 비서 — CEO실 앞 리셉션(소파+콘솔) 공간. 콘솔(소형 모니터) 앞 바닥에 발이 닿도록(시각상 발≈앵커+3.6).
+const SECRETARY_DESK = { x: 12.5, y: 39.5 };
 
 // Desk seats within a team zone (fx: 0..1 across, fy: 0..1 down), chosen by team size
 // so the big avatars never overlap each other and never cross the zone walls.
@@ -73,12 +71,11 @@ function seatsFor(n: number): Seat[] {
   // 사이드 좌석: 아바타는 벽쪽, 책상은 안쪽(센터)으로 — 책상을 180° 돌려 의자가 아바타를 향하게 한다.
   //  R = 오른쪽 벽 좌석 → 아바타 오른쪽, 책상 왼쪽(face "left" = rotate-90).
   //  L = 왼쪽 벽 좌석   → 아바타 왼쪽,   책상 오른쪽(face "right" = rotate+90).
-  const R = (fy: number): Seat => ({ fx: 0.80, fy, face: "left" });   // 3시(오른쪽 벽)
-  // 9시 fx는 0.20이 아니라 0.008 — framer-motion이 Character의 translate(-50%,-50%)를
-  // 덮어써 모든 아바타가 ~31px 오른쪽으로 밀림. 왼쪽 열은 그만큼 벽에서 멀어지므로
-  // fx를 줄여 보정 → 벽-아바타 거리를 3시(오른쪽 열, ~18px)와 동일하게 맞춘다.
-  const L = (fy: number): Seat => ({ fx: 0.008, fy, face: "right" }); // 9시(왼쪽 벽)
-  const B = (fx: number): Seat => ({ fx, fy: 0.76, face: "down" });  // 하단 중앙
+  const R = (fy: number): Seat => ({ fx: 0.84, fy, face: "left" });   // 오른쪽 열(방 안쪽 — 데스크 위)
+  // 왼쪽 열 — 예전엔 framer 가 translate 를 덮어써 ~31px 우측으로 밀리던 걸 fx 0.008 로 보정했으나,
+  // Character 의 x/y(-50%) 합성 수정으로 그 밀림이 사라져 이제 정상값(0.16)을 쓴다(방 안쪽 열).
+  const L = (fy: number): Seat => ({ fx: 0.16, fy, face: "right" }); // 왼쪽 열(방 안쪽)
+  const B = (fx: number): Seat => ({ fx, fy: 0.74, face: "down" });  // 하단(앞) 행
   switch (n) {
     case 0: return [];
     case 1: return [{ fx: 0.50, fy: 0.75, face: "down" }];
@@ -101,21 +98,8 @@ function seatsFor(n: number): Seat[] {
 // book-spine colors for the wall bookshelves
 const SHELF = ["#e06c75", "#e5c07b", "#98c379", "#61afef", "#c678dd", "#56b6c2", "#d19a66"];
 
-// 회의실(conference room) table center in office-% (matches the .conf-table CSS).
-const CONF = { cx: 16.5, cy: 16.5, rx: 10, ry: 7 };
-function confSeat(i: number, n: number): { x: number; y: number } {
-  const ang = (2 * Math.PI * i) / Math.max(n, 1) - Math.PI / 2;
-  return { x: CONF.cx + Math.cos(ang) * CONF.rx, y: CONF.cy + Math.sin(ang) * CONF.ry };
-}
-
-// CEO desk is at (50,13). A lead "reports to the CEO" / "is briefed" by standing in
-// front of (just below) the CEO desk; multiple leads fan out in a short row.
-const CEO_DESK = { x: roomCx(ROOMS.ceo), y: 13 }; // CEO실 중심(57)
-function ceoVisitorSeat(i: number, n: number): { x: number; y: number } {
-  const span = Math.min(Math.max(n, 1), 4) * 8;        // total horizontal spread
-  const x = n > 1 ? 57 - span / 2 + (span * i) / (n - 1) : 57; // CEO실 중심 57
-  return { x, y: 20 };
-}
+// CEO 집무 책상 — office_map.png 좌상 개인 집무실. 책상 앞 러그(바닥)에 서서 발이 바닥에 닿게(뒤 책장 벽 X).
+const CEO_DESK = { x: regionCx(ROOMS.ceo), y: ROOMS.ceo.y + 18 };
 
 const RING: Record<string, string> = {
   spawned: "#3a4252",
@@ -172,7 +156,8 @@ interface Placed {
   badge: string;   // e.g. 📄 when a deliverable/synthesis is ready
   roomLabel: string;
   face: Face;      // which wall the desk backs onto (desk rotation)
-  act?: string;    // ambient 활동(rest/chat/coffee/phone/stroll/huddle/shelf/board) — 활동별 제자리 모션·보행시간용
+  act?: string;    // ambient 활동(rest/chat/coffee/phone/stroll/huddle/shelf/board/return) — 활동별 제자리 모션·보행시간용
+  moving?: boolean;// 복도 경로 이동 중(true) — 연속 보행(등속 글라이드)용
 }
 
 // Layout the whole company into container-% coordinates.
@@ -239,10 +224,8 @@ function layout(
     });
   }
 
-  // Team zones along the lower area — 비서실은 상단 별도 방으로 빠지므로 제외, 경영지원팀이 늘어난
-  // 가로폭을 흡수해 크게(weight). 공유 헬퍼 teamZones 로 layout()·JSX 가 동일 기하를 쓴다.
-  const zoneTop = 33, zoneH = 50, pad = ZONE_PAD;
-  const { geom: zoneGeom } = teamZones(teamOrder);
+  // 각 팀은 office_map.png 의 고정 방(TEAM_REGION)에 배치된다 — 균등분할이 아니라 그림 속 실제
+  // 방 사각형(x,y,w,h)을 그대로 zone 으로 쓴다. 팀장/팀원/회의 자리는 모두 그 방에서 파생.
 
   // Leads: at their team-zone desk by default. Choreography by phase:
   //  decompose → own desk (분해) · assign → own desk (배정) · debate → team table head
@@ -266,11 +249,10 @@ function layout(
       });
       return;
     }
-    const z = zoneGeom[tid];
-    const zx = z?.x ?? pad;
-    const zw = z?.w ?? 48;
+    const reg = TEAM_REGION[tid] ?? ROOMS.support;
+    const zx = reg.x, zw = reg.w, zoneTop = reg.y, zoneH = reg.h;
     const deskX = zx + zw / 2;
-    const deskY = zoneTop + 6;
+    const deskY = zoneTop + zoneH * 0.18;          // 팀장은 방 상단(데스크 열 머리쪽)
     const cx = zx + zw / 2;
     const cy = zoneTop + zoneH * 0.55;
     const ph = running ? phases[tid] : undefined;
@@ -330,13 +312,12 @@ function layout(
   for (const tid of Object.keys(byTeam)) {
     if (tid === SECRETARIAT) continue; // 비서실은 하단 팀존 없음(상단 배치)
     const list = byTeam[tid];
-    const z = zoneGeom[tid];
-    const zx = z?.x ?? pad;
-    const zw = z?.w ?? 48;
+    const reg = TEAM_REGION[tid] ?? ROOMS.support;
+    const zx = reg.x, zw = reg.w, zoneTop = reg.y, zoneH = reg.h;
     const cx = zx + zw / 2;
     const cy = zoneTop + zoneH * 0.55;
     const ph = running ? phases[tid] : undefined;
-    const leadDeskX = cx, leadDeskY = zoneTop + 6;
+    const leadDeskX = cx, leadDeskY = zoneTop + zoneH * 0.18;
     const n = list.length;
     const seats = seatsFor(n);
     // Only SPAWNED members (the ones the lead summoned this run) gather/debate; size
@@ -405,8 +386,8 @@ function Character({ p }: { p: Placed }) {
   // 이동 거리(렌더 직전 위치 대비) — 위치 트랜지션 시간(거리비례 보행)과 걷기 게이트에 쓴다.
   const last = useRef({ x: p.x, y: p.y });
   const dist = Math.hypot(p.x - last.current.x, p.y - last.current.y);
-  const stroll = p.act === "stroll";
-  // 보행 시간: 산책은 틱 간격(3s)에 맞춰 등속 '연속' 활주, 그 외 이동은 거리비례(순간이동 방지, ~20%/s).
+  const stroll = p.act === "stroll" || !!p.moving;  // 복도 경로 이동(산책·활동이동·복귀) = 연속 보행
+  // 보행 시간: 복도 이동은 틱 간격(3s)에 맞춰 등속 '연속' 활주, 그 외 이동은 거리비례(순간이동 방지, ~20%/s).
   const moveDur = stroll ? 3 : Math.min(2.4, Math.max(0.5, dist * 0.05));
   const [walking, setWalking] = useState(false);
   useEffect(() => {
@@ -442,10 +423,12 @@ function Character({ p }: { p: Placed }) {
   const posT = { type: "tween" as const, ease: stroll ? ("linear" as const) : ("easeInOut" as const), duration: moveDur };
   return (
     <motion.div
-      initial={{ opacity: 0, scale: 0.4 }}
-      animate={{ opacity: 1, scale: 1, left: `${p.x}%`, top: `${p.y}%` }}
+      initial={{ opacity: 0, scale: 0.4, x: "-50%", y: "-50%" }}
+      animate={{ opacity: 1, scale: 1, x: "-50%", y: "-50%", left: `${p.x}%`, top: `${p.y}%` }}
       transition={{ left: posT, top: posT, opacity: { duration: 0.4 }, scale: { duration: 0.4 } }}
-      style={{ position: "absolute", transform: "translate(-50%, -50%)",
+      // x/y(-50%) 를 framer transform 으로 줘 scale 과 합성 → (left,top)이 스택의 '정중앙'에 앵커된다.
+      // (CSS transform:translate 는 framer 의 scale 애니메이션이 덮어써 무력화되던 버그를 근본 수정.)
+      style={{ position: "absolute",
                display: "flex", flexDirection: "column", alignItems: "center", zIndex: 5 }}
     >
       <AnimatePresence>
@@ -634,7 +617,7 @@ export default function OfficeView() {
   // (idle) team's zone. Engaged employees (the active team) and the CEO never wander.
   // Gentle: ~one avatar moves per tick; spots are mutually non-overlapping so no two
   // socializing avatars ever collide. Runs livelier (idle depts mingle) than pre-run.
-  type WSpot = { x: number; y: number; bubble: string; act?: "chat" | "phone" | "rest" | "stroll" | "huddle" | "coffee" | "shelf" | "board"; partner?: string; dir?: 1 | -1 };
+  type WSpot = { x: number; y: number; bubble: string; act?: "chat" | "phone" | "rest" | "stroll" | "huddle" | "coffee" | "shelf" | "board" | "return"; partner?: string; path?: Pt[]; pi?: number; moving?: boolean };
   const [wander, setWander] = useState<Record<string, WSpot>>({});
   // 비서(자비스)는 비서실 자리를 지켜 wander 풀에서 빠진다(산책·잡담 X). 대신 자기 자리에서 '데스크
   // 라이프'(메모·통화·문서·휴식)를 ~5초마다 바꿔 살아있게 한다 — 유휴일 때만 적용(작업 중엔 layout 의
@@ -666,100 +649,94 @@ export default function OfficeView() {
       const { freeIds, phases, teamOrder, status, deskPos } = liveRef.current;
       const running = status === "running";
       setWander((prev) => {
-        // 잡담은 (A) 동료의 '자리'로 찾아가거나 (B) 팀 경계에서 양 팀이 한 명씩 만난다.
-        const active = new Set(teamOrder.filter((t) => phases[t] && phases[t] !== "idle"));
-        // 실제(가중) 팀존 기하 — 균등분할이 아니라 teamZones 의 가중 폭·비서실 제외를 그대로 써야
-        // 경계 잡담 두 사람이 레이아웃과 동일한 '진짜' 팀 경계에 마주 선다(layout 과 1:1).
-        const { geom: wgeom } = teamZones(teamOrder);
-        const corridor: Pt[] = [...CORRIDOR_SPOTS];  // 복도 산책/통화(비겹침 유지)
-
-        // keep only still-free avatars; drop a chatter whose partner is gone (no lone 잡담)
+        // 유휴 직원의 ambient 동선 — 모든 이동은 office_map.png 의 '빈 복도'(corridorPath)만 따라간다.
+        // 가구(책상·소파·테이블·화분) 위로 대각선 횡단 금지. 도착지(가구 위)는 경로의 마지막 점.
         const next: Record<string, WSpot> = {};
         for (const k of Object.keys(prev)) if (freeIds.has(k)) next[k] = prev[k];
+        // 짝(잡담/업무협의) 한쪽이 사라지면 남은 쪽도 해제(혼자 잡담 X)
         for (const k of Object.keys(next)) {
           const w = next[k];
           if ((w.act === "chat" || w.act === "huddle") && (!w.partner || !next[w.partner])) delete next[k];
         }
-        const occupied = () => new Set(Object.values(next).map(key));
 
-        // strollers walk the 가로 복도 — 매 틱 dir 방향으로 한 걸음(step) 이동, 좌끝↔우끝
-        // 에 닿으면 방향을 반대로(왕복). framer-motion 이 x 변화를 spring 으로 보간 → 걷는 모습.
+        // ── 복도 경로(path)를 한 걸음씩 전진 — 모든 이동이 lane 위에서만 일어난다 ──
         for (const k of Object.keys(next)) {
           const w = next[k];
-          if (w.act === "stroll") {
-            let dir = w.dir ?? 1;
-            let x = w.x + dir * STROLL.step;
-            if (x >= STROLL.xMax) { x = STROLL.xMax; dir = -1; }
-            else if (x <= STROLL.xMin) { x = STROLL.xMin; dir = 1; }
-            next[k] = { ...w, x, dir };
+          if (!w.path || w.pi == null || w.pi >= w.path.length) continue;   // 도착·정지 상태
+          const t = w.path[w.pi];
+          const dx = t.x - w.x, dy = t.y - w.y, d = Math.hypot(dx, dy);
+          if (d > PATH_STEP) {                                              // 구간 진행(등속 보행)
+            next[k] = { ...w, x: w.x + (dx / d) * PATH_STEP, y: w.y + (dy / d) * PATH_STEP, moving: true };
+            continue;
+          }
+          const npi = w.pi + 1;                                            // waypoint 도달
+          if (npi < w.path.length) { next[k] = { ...w, x: t.x, y: t.y, pi: npi, moving: true }; continue; }
+          if (w.act === "stroll") {                                        // 산책 → 새 복도 점으로 계속 배회
+            const np = randomLanePoint(Math.random);
+            next[k] = { ...w, x: t.x, y: t.y, path: corridorPath(t, np), pi: 0, moving: true };
+          } else if (w.act === "return") {                                 // 복귀 완료 → 자리에 안착(wander 해제)
+            delete next[k];
+          } else {                                                          // 활동 도착 → 제자리 활동(정지)
+            next[k] = { ...w, x: t.x, y: t.y, pi: npi, moving: false };
           }
         }
 
-        const freeList = [...freeIds];
-        const out = Object.keys(next);
-        const target = Math.min(12, Math.max(running ? 3 : 1, Math.round(freeList.length * (running ? 0.55 : 0.35))));
+        // 책상→목적지 복도 경로(도착지=경로 끝). 종료 시엔 책상으로 복도 복귀(도착 글리치=가구 위 직선 방지).
+        const startMove = (id: string, dest: Pt, bubble: string, act: WSpot["act"], partner?: string) => {
+          const desk = deskPos[id] ?? dest;
+          next[id] = { x: desk.x, y: desk.y, bubble, act, partner, path: corridorPath(desk, dest), pi: 0, moving: true };
+        };
+        const endMove = (id: string) => {
+          const w = next[id]; if (!w || w.act === "return") return;
+          const desk = deskPos[id] ?? { x: w.x, y: w.y };
+          next[id] = { x: w.x, y: w.y, bubble: "", act: "return", path: corridorPath({ x: w.x, y: w.y }, desk), pi: 0, moving: true };
+        };
 
-        if (out.length < target) {                  // start one more activity
+        const freeList = [...freeIds];
+        const active = Object.keys(next);
+        const target = Math.min(12, Math.max(running ? 3 : 1, Math.round(freeList.length * (running ? 0.55 : 0.35))));
+        const rnd = () => Math.random();
+        // 산포는 '도착지'끼리 1/3 미만 겹침(이동 중 현재위치가 아니라 목적지 기준)
+        const destOf = (w: WSpot): Pt => (w.path && w.path.length ? w.path[w.path.length - 1] : { x: w.x, y: w.y });
+        const exDest = (): Pt[] => Object.values(next).map(destOf);
+        const usedDest = (): Set<string> => new Set(Object.values(next).map((w) => key(destOf(w))));
+
+        if (active.length < target) {                    // 활동 하나 더 시작(자기 자리 직원이 출발)
           const atDesk = freeList.filter((k) => !next[k]);
-          const used = occupied();
-          const openCorridor = corridor.filter((s) => !used.has(key(s)));
-          const rnd = () => Math.random();
-          // 이미 배치된 모든 wander 아바타 점 — placeInZone 이 이들과 1/3 미만으로만 겹치게 한다.
-          const exPts = (): Pt[] => Object.values(next).map((w) => ({ x: w.x, y: w.y }));
           const r = Math.random();
-          if (r < 0.20 && atDesk.length >= 2) {                    // 잡담 — 탕비존 산포(겹쳐도 1/3 미만)
-            const a = pick(atDesk);
-            const b = pick(atDesk.filter((k) => k !== a));
-            const ex = exPts();
-            const pa = placeInZone(PANTRY_ZONE, ex, rnd);
-            const pb = placeInZone(PANTRY_ZONE, [...ex, pa], rnd);
-            next[a] = { x: pa.x, y: pa.y, bubble: "💬 잡담", act: "chat", partner: b };
-            next[b] = { x: pb.x, y: pb.y, bubble: "💬 잡담", act: "chat", partner: a };
-          } else if (r < 0.35 && atDesk.length >= 2) {             // 업무협의 — 회의실 산포(2~4인, 겹쳐도 1/3 미만)
+          if (r < 0.20 && atDesk.length >= 2) {                       // 잡담 — 탕비실
+            const a = pick(atDesk), b = pick(atDesk.filter((k) => k !== a));
+            const ex = exDest();
+            const pa = placeInZone(PANTRY_ZONE, ex, rnd), pb = placeInZone(PANTRY_ZONE, [...ex, pa], rnd);
+            startMove(a, pa, "💬 잡담", "chat", b); startMove(b, pb, "💬 잡담", "chat", a);
+          } else if (r < 0.35 && atDesk.length >= 2) {                // 업무협의 — 회의실
             const n = Math.min(atDesk.length, 2 + Math.floor(Math.random() * 3));
-            const pool = [...atDesk];
-            const people: string[] = [];
-            for (let i = 0; i < n && pool.length; i++) {
-              people.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
-            }
-            const ex = exPts();
-            people.forEach((p) => {
-              const s = placeInZone(CONF_ZONE, ex, rnd);
-              ex.push(s);                                          // 다음 협의자는 앞 사람과도 1/3 미만
-              next[p] = { x: s.x, y: s.y, bubble: "🤝 업무협의", act: "huddle", partner: people.find((q) => q !== p) };
-            });
-          } else if (r < 0.50 && atDesk.length) {                  // 휴식 — 소파존 산포(겹쳐도 1/3 미만)
-            const who = pick(atDesk); const s = placeInZone(LOUNGE_SOFA_ZONE, exPts(), rnd);
-            next[who] = { x: s.x, y: s.y, bubble: "☕ 휴식", act: "rest" };
-          } else if (r < 0.65 && atDesk.length) {                  // 산책 — 복도 왕복
-            const who = pick(atDesk);
-            const dir: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
-            const lane = STROLL.lanes[
-              Object.values(next).filter((w) => w.act === "stroll").length % STROLL.lanes.length];
-            next[who] = { x: dir > 0 ? STROLL.xMin : STROLL.xMax, y: STROLL.y + lane,
-              bubble: "🚶 산책", act: "stroll", dir };
-          } else if (r < 0.75 && atDesk.length && openCorridor.length) { // 통화 — 복도(비겹침)
-            const who = pick(atDesk); const s = pick(openCorridor);
-            next[who] = { x: s.x, y: s.y, bubble: "📞 통화 중", act: "phone" };
-          } else if (r < 0.85 && atDesk.length) {                  // 커피·간식 — 탕비존 산포(겹쳐도 1/3 미만)
-            const who = pick(atDesk); const s = placeInZone(PANTRY_ZONE, exPts(), rnd);
-            next[who] = { x: s.x, y: s.y, bubble: "🍵 커피·간식", act: "coffee" };
-          } else if (r < 0.95 && atDesk.length) {                  // 자료 찾기 — 팀존 책장(팀 idle, 비겹침)
-            const cand = atDesk.filter((k) => {
-              const t = deskPos[k]?.team; return !!t && !active.has(t) && !!wgeom[t];
-            });
-            if (cand.length) {
-              const who = pick(cand);
-              const s = shelfSpot(wgeom[deskPos[who]!.team!]);
-              if (!used.has(key(s))) next[who] = { x: s.x, y: s.y, bubble: "📚 자료 찾기", act: "shelf" };
-            }
-          } else if (atDesk.length) {                              // 화이트보드 — 회의실 보드 앞(겹침 OK)
-            const who = pick(atDesk);
-            next[who] = { x: WHITEBOARD_SPOT.x, y: WHITEBOARD_SPOT.y, bubble: "✍️ 화이트보드", act: "board" };
+            const pool = [...atDesk], people: string[] = [];
+            for (let i = 0; i < n && pool.length; i++) people.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+            const ex = exDest();
+            people.forEach((p) => { const s = placeInZone(CONF_ZONE, ex, rnd); ex.push(s);
+              startMove(p, s, "🤝 업무협의", "huddle", people.find((q) => q !== p)); });
+          } else if (r < 0.50 && atDesk.length) {                     // 휴식 — 휴게실 소파
+            startMove(pick(atDesk), placeInZone(LOUNGE_SOFA_ZONE, exDest(), rnd), "☕ 휴식", "rest");
+          } else if (r < 0.65 && atDesk.length) {                     // 산책 — 복도 배회
+            startMove(pick(atDesk), randomLanePoint(rnd), "🚶 산책", "stroll");
+          } else if (r < 0.75 && atDesk.length) {                     // 통화 — 빈 복도 점
+            const open = CORRIDOR_SPOTS.filter((s) => !usedDest().has(key(s)));
+            if (open.length) startMove(pick(atDesk), pick(open), "📞 통화 중", "phone");
+          } else if (r < 0.85 && atDesk.length) {                     // 커피·간식 — 탕비실
+            startMove(pick(atDesk), placeInZone(PANTRY_ZONE, exDest(), rnd), "🍵 커피·간식", "coffee");
+          } else if (r < 0.95 && atDesk.length) {                     // 자료 찾기 — 휴식공간 서재
+            startMove(pick(atDesk), placeInZone(READING_ZONE, exDest(), rnd), "📚 자료 찾기", "shelf");
+          } else if (atDesk.length) {                                  // 화이트보드 — 회의실 보드
+            startMove(pick(atDesk), WHITEBOARD_SPOT, "✍️ 화이트보드", "board");
           }
-        } else if (out.length && Math.random() < 0.3) { // end one (groups leave together)
-          const k = pick(out); const w = next[k]; delete next[k];
-          if ((w.act === "chat" || w.act === "huddle") && w.partner) delete next[w.partner];
+        } else if (active.length && Math.random() < 0.3) {            // 활동 종료 → 복도로 책상 복귀
+          const endable = active.filter((k) => next[k].act !== "return");
+          if (endable.length) {
+            const k = pick(endable), w = next[k];
+            endMove(k);
+            if ((w.act === "chat" || w.act === "huddle") && w.partner) endMove(w.partner);
+          }
         }
         return next;
       });
@@ -813,7 +790,13 @@ export default function OfficeView() {
     prevWanderRef.current = wander;
   }, [wander, pushActivity]);
 
-  const { ids: zoneIds, geom: zoneGeom } = teamZones(teamOrder); // 비서실 제외 + 경영지원 가중(layout 과 동일)
+  // 방 영역 — 이름표(라벨)는 제거(사용자 요청). team 이 지정된 방은 그 팀이 작업 중(phase≠idle)일 때만
+  // 은은히 강조해 '지금 어디가 바쁜지'만 보여준다(텍스트 없음).
+  const ZONES: { key: keyof typeof ROOMS; team?: string }[] = [
+    { key: "ceo" }, { key: "conf" }, { key: "planning", team: "planning" },
+    { key: "secretariat", team: "secretariat" }, { key: "support", team: "support" },
+    { key: "pantry" }, { key: "lounge" }, { key: "reading" },
+  ];
 
   return (
     <div className="office-root" ref={rootRef}>
@@ -821,163 +804,13 @@ export default function OfficeView() {
           데스크톱은 이 변수를 읽는 규칙이 없어 inert(>900px 무변경). */}
       <div className="office-floor"
         style={{ transform: `scale(${scale})`, ["--office-scale" as string]: scale }}>
-        {/* 회의실 (conference room) — top-left. 업무협의(허들)·화이트보드 메모 */}
-        <div className="office-room meeting-room" style={roomStyle(ROOMS.conf)}>
-          <span className="office-room-label">🗣️ 회의실 · 업무협의</span>
-          <div className="room-rug oval blue" style={{ left: "50%", top: "58%", width: "82%", height: "66%" }} />
-          <div className="whiteboard" style={{ left: "14%", top: "20%" }} />
-          <div className="conf-table">
-            <span className="conf-chairs" />
-          </div>
-        </div>
-
-        {/* 비서실 — CEO실 좌측(상단 별도 방). 비서가 상주(하단 팀존 아님) */}
-        {/* 비서실 — CEO실과 마주보는 우측 벽 제거(개방 연결, 사용자 요청) */}
-        <div className="office-room secretariat-room wall-open-right" style={roomStyle(ROOMS.secretariat)}>
-          <span className="office-room-label">🧑‍💼 비서실</span>
-        </div>
-
-        {/* CEO room — 비서실과 마주보는 좌측 벽 제거(개방 연결) */}
-        <div className="office-room ceo-room wall-open-left" style={roomStyle(ROOMS.ceo)}>
-          <span className="office-room-label">🏢 CEO실</span>
-          <div className="room-rug oval" style={{ left: "50%", top: "60%", width: "62%", height: "50%" }} />
-          <div className="wall-frame chart" style={{ left: "33%", top: "13%" }}><span className="pic" /></div>
-          <div className="wall-frame pic1" style={{ left: "44%", top: "13%" }}><span className="pic" /></div>
-        </div>
-
-        {/* 휴게실·탕비실 — top-right. 좌=소파존(휴식), 우=탕비존(커피·간식·잡담) */}
-        <div className="office-room lounge" style={roomStyle(ROOMS.lounge)}>
-          <span className="office-room-label">🛋️ 휴게실 · 탕비실</span>
-          {/* 소파존(좌측 절반) — 소파 2개 + 러그 */}
-          <div className="office-sofa" style={{ left: "14%", top: "30%" }} />
-          <div className="office-sofa" style={{ left: "38%", top: "30%" }} />
-          <div className="room-rug oval green" style={{ left: "26%", top: "70%", width: "42%", height: "26%" }} />
-          {/* 탕비존(우측 절반) — 커피·간식 카운터 */}
-          <div className="pantry-counter" style={{ left: "74%", top: "20%" }} />
-          <span className="lounge-item" style={{ left: "74%", top: "20%" }}>☕</span>
-          <span className="lounge-item" style={{ left: "88%", top: "20%" }}>🍪</span>
-          {/* 화분(하단 코너) */}
-          <div className="office-plant" style={{ left: "16%", top: "90%" }} />
-        </div>
-
-        {/* team zones (비서실 제외 · 경영지원 가중 폭) */}
-        {zoneIds.map((tid, i) => (
-          <div
-            key={tid}
-            className="office-room team-zone"
-            style={{ left: `${zoneGeom[tid].x}%`, top: "32%", width: `${zoneGeom[tid].w - 1}%`, height: "52%" }}
-          >
-            <span className="office-room-label">
-              {i === 0 ? "📊" : "💼"} {teams[tid]?.name ?? tid}
-            </span>
-          </div>
-        ))}
-
-        {/* 회의 테이블 러그 (테이블 아래) */}
-        {zoneIds.map((tid) => (
-          <div key={`mr-${tid}`} className="room-rug oval green"
-               style={{ left: `${zoneGeom[tid].x + zoneGeom[tid].w / 2}%`, top: "60.5%", width: "16%", height: "13%" }} />
-        ))}
-
-        {/* meeting tables (one per team — members gather here during debate) */}
-        {zoneIds.map((tid) => (
-          <div
-            key={`mt-${tid}`}
-            className="office-meeting"
-            style={{ left: `${zoneGeom[tid].x + zoneGeom[tid].w / 2}%`, top: "60.5%" }}
-          >
-            <span className="meeting-chairs" />
-            <span className="meeting-label">회의 테이블</span>
-          </div>
-        ))}
-
-        {/* 회의실/회의 테이블 둘레 의자 (위에서 본, 등받이가 바깥) */}
-        {[
-          { k: "conf", cx: 16.5, cy: 16, w: 208, h: 120, n: 6 },
-          ...zoneIds.map((tid) => ({ k: `mt-${tid}`, cx: zoneGeom[tid].x + zoneGeom[tid].w / 2, cy: 60.5, w: 98, h: 70, n: 6 })),
-        ].flatMap((t) =>
-          Array.from({ length: t.n }, (_, i) => {
-            const a = (2 * Math.PI * i) / t.n;
-            const left = t.cx + ((t.w / 2 + 16) * Math.cos(a)) / 12.8;
-            const top = t.cy + ((t.h / 2 + 14) * Math.sin(a)) / 9.6;
-            const deg = (a * 180) / Math.PI + 90;
-            return (
-              <div key={`${t.k}-ch${i}`} className="table-chair"
-                style={{ left: `${left}%`, top: `${top}%`, transform: `translate(-50%,-50%) rotate(${deg}deg)` }} />
-            );
-          })
-        )}
-
-        {/* desks (stay put while characters move to a meeting). Side desks (3시/9시)
-            rotate to face the wall; offsets keep desk + avatar inside the team zone. */}
-        {placed.map((p) => {
-          // 회전 책상은 translate 특성상 양쪽 모두 ~31px 왼쪽으로 밀려 렌더됨.
-          //  · 3시(face left, dx 0): 자연히 책상이 아바타 왼쪽(−31px) → 아바타 오른쪽.
-          //  · 9시(face right, dx +8.2): +63px 보정 → 책상이 아바타 +31px 오른쪽 → 아바타 왼쪽.
-          // 두 net이 ±31로 거울 대칭(좌우 균형). 6시 등은 0.
-          const dx = p.face === "right" ? 8.2 : 0;
-          // 9시·3시(swap 후 face right/left) 모두 책상 상단을 아바타 상단보다 3px 위로(=-3px) 정렬.
-          const dy = (p.face === "right" || p.face === "left") ? 3.18 : 4.5;
-          // 비서(secretariat lead)는 팀장급이 아니라 직원 책상 크기로 — is-lead 제외(사용자 요청).
-          const role = p.agent.level === "ceo" ? "is-ceo"
-            : (p.agent.level === "lead" && p.agent.team !== SECRETARIAT) ? "is-lead" : "";
+        {/* 방 영역(투명 핫스팟) — 벽·가구는 office_map.png 가 그린다. 이름표 없이 '활성 강조'만 오버레이. */}
+        {ZONES.map(({ key, team }) => {
+          const active = !!team && status === "running" && !!phases[team] && phases[team] !== "idle";
           return (
-            <div
-              key={`desk-${p.agent.agent_id}`}
-              className={`office-desk face-${p.face} ${role}`}
-              style={{ left: `${p.deskX + dx}%`, top: `${p.deskY + dy}%` }}
-            >
-              <span className="desk-monitor" />
-              <span className="desk-chair" />
-            </div>
+            <div key={key} className={`office-zone${active ? " active" : ""}`} style={roomStyle(ROOMS[key])} />
           );
         })}
-
-        {/* ── 출입문: 각 방 하단 벽(복도 쪽)에 문(위 스윙) · 각 팀존 상단 벽에 문(아래 스윙) — 기하 파생 ── */}
-        {([ROOMS.conf, ROOMS.secretariat, ROOMS.ceo, ROOMS.lounge]).map((r, i) => (
-          <div key={`rdoor-${i}`} className="office-door up" style={{ left: `${roomCx(r)}%`, top: `${roomBottom}%` }}>
-            <span className="door-arc" /><span className="door-leaf" />
-          </div>
-        ))}
-        {zoneIds.map((tid) => (
-          <div key={`zdoor-${tid}`} className="office-door down"
-               style={{ left: `${zoneGeom[tid].x + zoneGeom[tid].w / 2}%`, top: "32%" }}>
-            <span className="door-arc" /><span className="door-leaf" />
-          </div>
-        ))}
-
-        {/* ── 회의실: 책장(상단 벽, 폭을 방에 맞춤 26%) · 화이트보드(좌측 벽) · 화분(양 코너) ── */}
-        <div className="bookshelf wall" style={{ left: `${roomCx(ROOMS.conf)}%`, top: "4.6%", width: "26%" }} />
-        <div className="office-board" style={{ left: `${ROOMS.conf.x + 1.8}%`, top: "13.5%", transform: "translate(-50%,-50%) rotate(90deg)" }}><span className="board-scribble" /></div>
-        <div className="office-plant" style={{ left: `${ROOMS.conf.x + 3.2}%`, top: "23.5%" }} />
-        <div className="office-plant" style={{ left: `${ROOMS.conf.x + ROOMS.conf.w - 2.8}%`, top: "23.5%" }} />
-
-        {/* ── 비서실(좁은 공간): 화분(하단-좌 코너)만 — 우측은 CEO실과 개방 연결, 책상이 중앙 ── */}
-        <div className="office-plant" style={{ left: `${ROOMS.secretariat.x + 2.6}%`, top: "23.5%" }} />
-
-        {/* ── CEO실: 책장(상단 벽, 임원 책상 뒤; 폭을 방에 맞춤 17%) · 화분(코너) ── */}
-        <div className="bookshelf wall" style={{ left: `${roomCx(ROOMS.ceo)}%`, top: "4.6%", width: "17%" }} />
-        <div className="office-plant tall" style={{ left: `${ROOMS.ceo.x + ROOMS.ceo.w - 2.8}%`, top: "21%" }} />
-
-        {/* ── 휴게실: 주방 카운터(상단 벽) · 싱크(좌측 벽) · 책장(우측 벽 세로) · 정수기 · 화분 ── */}
-        <div className="kitchen-counter" style={{ left: `${roomCx(ROOMS.lounge)}%`, top: "5.4%" }} />
-        <div className="office-sink" style={{ left: `${ROOMS.lounge.x + 2.6}%`, top: "13.5%" }} />
-        <div className="bookshelf wall-v" style={{ left: `${ROOMS.lounge.x + ROOMS.lounge.w - 1.7}%`, top: "14.5%", width: "11%" }} />
-        <div className="office-cooler" style={{ left: `${ROOMS.lounge.x + 2.2}%`, top: "22.5%" }}><span className="cooler-bottle" /><span className="cooler-tap" /></div>
-
-        {/* ── 팀존 기자재: 각 존 상단 코너(복합기·서류함) — zoneGeom 파생(존 따라감, 책상·아바타 회피) ── */}
-        {zoneIds.map((tid) => {
-          const g = zoneGeom[tid];
-          return (
-            <div key={`eq-${tid}`}>
-              <div className="office-printer" style={{ left: `${g.x + 4}%`, top: "37.5%" }}><span className="printer-tray" /><span className="printer-label">복합기</span></div>
-              <div className="office-cabinet" style={{ left: `${g.x + g.w - 3}%`, top: "37%" }}><span /><span /><span /></div>
-            </div>
-          );
-        })}
-
-        {/* company logo — 로비 리셉션 사인(복도는 얇아 화분 대신 로고만으로 깔끔하게) */}
-        <img className="office-logo" src="/gepa_logo.png" alt="GEPA 경상북도경제진흥원" style={{ left: "50%", top: "29.3%" }} />
 
         {/* characters (resting ones wander to 회의실/휴게실/복도) */}
         {placed.map((p) => {
@@ -987,7 +820,7 @@ export default function OfficeView() {
           // 비서가 유휴(작업 중 아님)면 데스크 라이프 적용 — 자리는 유지, 동작·말풍선만 살아있게.
           const sec = !w && p.agent.team === SECRETARIAT && !p.thinking ? secLife : undefined;
           return <Character key={p.agent.agent_id}
-            p={w ? { ...p, x: w.x, y: w.y, bubble: w.bubble, thinking: false, act: w.act }
+            p={w ? { ...p, x: w.x, y: w.y, bubble: w.bubble, thinking: false, act: w.act, moving: w.moving }
                  : sec ? { ...p, bubble: sec.bubble, act: sec.act } : p} />;
         })}
         {placed.length === 0 && (

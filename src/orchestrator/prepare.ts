@@ -68,9 +68,12 @@ export async function prepareRun(
   topic: string,
   company: CompanyDef,
   signal?: AbortSignal,
+  directedAgentId?: string,
 ): Promise<Prepared | null> {
   bus.emit(EventType.run_started, {
     topic,
+    // 직원 지명(단독) 런이면 그 직원 id — 프론트 오피스뷰의 솔로 안무 + 가짜 팀간회의 억제 신호. 전사/토론 런은 undefined.
+    directed_agent_id: directedAgentId,
     config: { backend: CONFIG.backend, run_mode: CONFIG.runMode, concurrency: CONFIG.concurrency },
   });
   bus.emit(EventType.company_started, { name: company.name, mission: company.mission });

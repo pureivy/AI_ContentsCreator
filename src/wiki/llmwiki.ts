@@ -581,17 +581,53 @@ export class LlmWiki {
   // ---- 의미검색(임베딩 rerank) — retrieve(휴리스틱 recall) → rerank(코사인). 임베딩 모델 없으면 query() 로 폴백. ----
   //  전 위키를 임베딩하지 않고, 값싼 휴리스틱으로 후보 K개를 먼저 뽑은 뒤 그 후보만 임베딩해 재정렬한다
   //  (수천 페이지 일괄 임베딩 회피 + 캐시). USE_EMBEDDINGS=false 또는 모델 미설치면 휴리스틱과 동일(회귀 0).
+  // 인사·직무 질의 보강 — 사용자가 "직원별 업무"처럼 물으면 업로드된 '업무분장표'가 검색돼야 하는데,
+  // 질의 토큰(업무에/직원별)이 표 자료 제목·본문과 어휘적으로 안 맞고, 임베딩도 장문 서술 보고서
+  // (주요업무보고 등)에 밀려 표가 top-k 에서 빠진다(업무분장 8팀 0건 인출 → "62명·데이터 없음"). 인사/
+  // 직무 의도가 감지되면 표 자료를 가리키는 앵커 용어를 보태 recall·임베딩을 그 자료로 끌어온다. 보고서·
+  // 예산 질의는 의도 미감지 → 무변경(회귀 0).
+  private static readonly DUTY_INTENT_RE = /직원|전직원|인원|인력|담당자|인사|팀원|정원|명단|누구|누가|업무분장|담당업무|직무|분장|담당\s*업무|업무\s*담당/;
+  private static readonly DUTY_ANCHORS = ['업무분장', '담당업무'];
+  private static readonly DUTY_EXPANSION = '업무분장 담당업무 담당자 직책';
+  private expandIntent(question: string): { q: string; intent: boolean } {
+    const intent = LlmWiki.DUTY_INTENT_RE.test(question);
+    return { q: intent ? `${question} ${LlmWiki.DUTY_EXPANSION}` : question, intent };
+  }
+  // 앵커 set-pull — 의도질의에서 앵커 문서(업무분장표 등)가 상위에 잡히면 후보 풀의 동형 자료를 모두
+  // 보충한다. 8개 팀 업무분장표는 별개 파일이라 limit(=6)에 다 못 들어오는 구조적 누락이 있는데(완벽한
+  // rerank 라도 6/8), 이를 limit 밖에서 메워 '전직원' 질의가 8팀을 모두 본다. 의도 미감지/앵커 부재면 무변경.
+  private pullAnchorSet(hits: WikiPage[], pool: WikiPage[], intent: boolean, cap = 12): WikiPage[] {
+    if (!intent) return hits;
+    const anchored = (p: WikiPage): boolean => LlmWiki.DUTY_ANCHORS.some((a) => p.title.includes(a));
+    if (!hits.some(anchored)) return hits; // 앵커가 상위에 전혀 없으면(무관 질의) 보충 안 함
+    const seen = new Set(hits.map((p) => p.slug));
+    const extra = pool.filter((p) => !seen.has(p.slug) && anchored(p)).slice(0, cap);
+    return extra.length ? [...hits, ...extra] : hits;
+  }
+
   async semanticQuery(question: string, limit = 4, signal?: AbortSignal): Promise<{ hits: WikiPage[]; context: string }> {
-    if (!CONFIG.useEmbeddings || !question.trim()) return this.query(question, limit);
+    // 인사·직무 의도면 표 자료(업무분장표 등) 앵커로 질의 확장 — recall·임베딩·발췌 모두 확장질의 기준.
+    const { q, intent } = this.expandIntent(question);
+    const qt = tokenize(q);
+    const buildCtx = (hh: WikiPage[]): string =>
+      hh.map((p) => `### ${p.title}\n${excerpt(p.body, qt, p.type === 'source' ? 3500 : 800)}`).join('\n\n');
+    // 휴리스틱 폴백(임베딩 off/미설치/실패) — 확장질의 recall + 앵커 set-pull.
+    const heuristic = (): { hits: WikiPage[]; context: string } => {
+      const base = this.query(q, limit).hits;
+      const pool = intent ? this.query(q, Math.max(limit * 8, 48)).hits : base;
+      const hh = this.pullAnchorSet(base, pool, intent);
+      return { hits: hh, context: buildCtx(hh) };
+    };
+    if (!CONFIG.useEmbeddings || !question.trim()) return heuristic();
     const model = resolveEmbedModel(await ollama.listModels());
-    if (!model) return this.query(question, limit); // 임베딩 모델 미설치 → 휴리스틱
+    if (!model) return heuristic(); // 임베딩 모델 미설치 → 휴리스틱
     // 1) recall — 휴리스틱으로 후보 K개(충분히 넓게).
     const K = Math.max(limit * 8, 30);
-    const cand = this.query(question, K).hits;
-    if (cand.length <= limit) return this.query(question, limit);
+    const cand = this.query(q, K).hits;
+    if (cand.length <= limit) return heuristic();
     // 2) 질의 + 후보 임베딩(후보는 hash 캐시 — 변경된 페이지만 재임베딩).
-    const qEmb = await ollama.embed(model, [question], signal);
-    if (!qEmb?.[0]) return this.query(question, limit); // 임베딩 실패 → 휴리스틱
+    const qEmb = await ollama.embed(model, [q], signal);
+    if (!qEmb?.[0]) return heuristic(); // 임베딩 실패 → 휴리스틱
     const qv = qEmb[0];
     const cache = this.loadEmbedCache(model);
     const texts = cand.map((p) => `${p.title}\n${p.body.slice(0, 2000)}`);
@@ -624,10 +660,10 @@ export class LlmWiki {
       .slice(0, limit)
       .filter((x) => x.sim > -1)
       .map((x) => x.p);
-    const hits = ranked.length ? ranked : this.query(question, limit).hits;
-    const qt = tokenize(question);
-    const context = hits.map((p) => `### ${p.title}\n${excerpt(p.body, qt, p.type === 'source' ? 3500 : 800)}`).join('\n\n');
-    return { hits, context };
+    const base = ranked.length ? ranked : this.query(q, limit).hits;
+    // 4) 앵커 set-pull — 의도질의에서 표 자료가 잡히면 후보 풀의 동형 자료(다른 팀 업무분장표)를 모두 보충.
+    const hits = this.pullAnchorSet(base, cand, intent);
+    return { hits, context: buildCtx(hits) };
   }
 
   private embedCachePath(): string { return path.join(this.dir, '.embeddings.json'); }
