@@ -76,7 +76,7 @@ export default function DashboardBar({ companyName, total, runsCount, onMetric }
       <div className="dash-company">
         <span className="dash-logo">🏢</span>
         <div className="dash-company-txt">
-          <b>{companyName || "GEPA"}</b>
+          <b>{companyName || "AI 콘텐츠 스튜디오"}</b>
           <span>AI 에이전트 조직</span>
         </div>
       </div>

@@ -7,8 +7,8 @@ export const STAGE_DEFAULTS = { left: 300, right: 360 };
 // 패널이 못 쓰게 좁아지거나 중앙을 짓누르지 않게 클램프.
 const MIN = { left: 200, right: 240 };
 const MAX = { left: 560, right: 680 };
-const LS_KEY = "gepa-stage-widths";
-const LS_OUT = "gepa-outputs-open";
+const LS_KEY = "studio-stage-widths";
+const LS_OUT = "studio-outputs-open";
 
 type Side = "left" | "right";
 type Widths = { left: number; right: number };

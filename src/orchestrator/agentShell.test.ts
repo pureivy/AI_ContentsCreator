@@ -35,7 +35,7 @@ describe('run_command 통합(AGENT_SHELL)', () => {
     let n = 0;
     const spy = vi.spyOn(ollama, 'chat').mockImplementation(async () => {
       n++;
-      return fakeResult(n === 1 ? '<tool name="run_command">echo gepa-shell-itest</tool>' : '명령 결과를 반영했습니다.');
+      return fakeResult(n === 1 ? '<tool name="run_command">echo studio-shell-itest</tool>' : '명령 결과를 반영했습니다.');
     });
     const bus = createBus('shell-itest-1');
     const out = await runAgent({ bus, role: role(3), model: 'fake', task: 'x', stage: 'work', emitSpawn: true });

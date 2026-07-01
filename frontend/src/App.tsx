@@ -363,7 +363,7 @@ export default function App() {
   const refreshRuns = () => fetchRuns().then(setRuns);
   useEffect(() => { refreshRuns(); }, []);
   // ⑧ 최소 인증 부트스트랩 — 서버에 AUTH_TOKEN 이 설정돼 있으면(401) 토큰을 물어
-  // 쿠키(gepa_token)로 저장 후 재로드. fetch/SSE 모두 same-origin 쿠키로 통과.
+  // 쿠키(studio_token)로 저장 후 재로드. fetch/SSE 모두 same-origin 쿠키로 통과.
   useEffect(() => {
     (async () => {
       try {
@@ -371,7 +371,7 @@ export default function App() {
         if (r.status === 401) {
           const tok = window.prompt("🔒 이 서버는 접근 토큰이 필요합니다 (서버 AUTH_TOKEN 값):");
           if (tok && tok.trim()) {
-            document.cookie = `gepa_token=${encodeURIComponent(tok.trim())}; path=/; max-age=2592000; samesite=lax`;
+            document.cookie = `studio_token=${encodeURIComponent(tok.trim())}; path=/; max-age=2592000; samesite=lax`;
             location.reload();
           }
         }
@@ -1346,7 +1346,7 @@ export default function App() {
         </div>
       )}
       <header className="topbar">
-        <button className="brand" type="button" onClick={goHome} title="초기화면으로">🏢 GEPA AI Office</button>
+        <button className="brand" type="button" onClick={goHome} title="초기화면으로">🏢 AI 콘텐츠 스튜디오</button>
         {(() => {
           const e = effLlm();
           const local = e.backend === "local";

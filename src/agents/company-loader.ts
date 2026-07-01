@@ -156,7 +156,7 @@ function buildCompanyDef(doc: RawDoc): CompanyDef {
     specialists.push(lead, ...members);
   }
   return {
-    name: doc.company?.name ?? 'GEPA AI Office',
+    name: doc.company?.name ?? 'AI 콘텐츠 스튜디오',
     mission: '조직의 주제를 다관점으로 분석·토론·종합해 실행 가능한 결과물을 만든다.',
     ceo, specialists, teams,
   };

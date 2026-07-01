@@ -64,9 +64,9 @@ describe('checkCommand (셸 안전성 검사기 — 양성 컨테인먼트)', ()
 
 describe('runCommand (샌드박스 실행, shell:false)', () => {
   it('허용 명령을 샌드박스에서 실행하고 출력을 캡처한다', async () => {
-    const r = await runCommand('test_shell_agent', 'echo gepa-sandbox-ok');
+    const r = await runCommand('test_shell_agent', 'echo studio-sandbox-ok');
     expect(r.ok).toBe(true);
-    expect(r.output).toContain('gepa-sandbox-ok');
+    expect(r.output).toContain('studio-sandbox-ok');
   });
 
   it('shell:false 라 글로브가 확장되지 않는다(리터럴 인자)', async () => {

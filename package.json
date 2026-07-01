@@ -1,9 +1,9 @@
 {
-  "name": "gepa-ai-office",
+  "name": "ai-contents-studio",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "로컬 LLM 우선 멀티에이전트 AI 오피스 — Ollama 직접 호출·소형 프롬프트·RAM예산 모델 자동선택으로 속도를 최우선한 GEPA AI Office 재구현 (Connect AI 벤치마킹)",
+  "description": "AI 콘텐츠 스튜디오 — 멀티에이전트 AI 오피스가 네이버 블로그 콘텐츠를 자율 기획·제작·학습하는 1인 콘텐츠 회사 (Claude 백엔드)",
   "engines": {
     "node": ">=20.6"
   },

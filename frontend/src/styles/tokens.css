@@ -1,7 +1,7 @@
 /* ============================================================
-   GEPA AI Office — Design Tokens (Wanted Design System 적용)
+   AI 콘텐츠 스튜디오 — Design Tokens (Wanted Design System 적용)
    출처: Wanted Design System (Community).fig — CC BY 4.0
-   GEPA는 다크 전용이라 Wanted의 다크 시맨틱 값을 :root 기본으로 둔다.
+   스튜디오는 다크 전용이라 Wanted의 다크 시맨틱 값을 :root 기본으로 둔다.
    기존 13개 레거시 변수(--bg/--panel/--accent/--pro…)를 Wanted 토큰으로
    재매핑 → index.css 의 기존 var() 301곳이 자동으로 새 색을 승계한다.
    ============================================================ */
@@ -84,7 +84,7 @@
   --type-label2-size: 13px; --type-label2-lh: 18px; --type-label2-tracking: 0.0194em;
   --type-caption1-size: 12px; --type-caption1-lh: 16px; --type-caption1-tracking: 0.0252em;
 
-  /* ===== 레거시 GEPA 변수 → Wanted 토큰 재매핑 =====
+  /* ===== 레거시 변수 → Wanted 토큰 재매핑 =====
      index.css 의 기존 var() 들이 그대로 새 색을 받는다. */
   --bg:      var(--bg-base);            /* #17171a */
   --panel:   var(--bg-elevated);        /* #232427 */

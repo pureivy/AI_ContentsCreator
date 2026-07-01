@@ -1,5 +1,5 @@
 /**
- * 블로그 스킬 브릿지 — image_generate / blog_publish 를 gepa 툴로 연결.
+ * 블로그 스킬 브릿지 — image_generate / blog_publish 를 스튜디오 툴로 연결.
  *
  * 원본 naver-blog-agent-web 의 Python 스킬(gpt-image-2 이미지 생성 · Playwright 네이버 임시저장)을
  * 재사용한다. run_command 의 allowlist/경로 제약(임의 실행 방지)을 **우회하지 않고**, 여기서
@@ -195,7 +195,7 @@ export function containImageManifest(
 
 /**
  * blog_publish 툴 실행 — 네이버 SmartEditor 임시저장(draft). **발행 버튼은 누르지 않는다.**
- * 현재 gepa 산출물에는 smarteditor_text(sections/image_positions) 스키마가 없어, final_content 를
+ * 현재 스튜디오 산출물에는 smarteditor_text(sections/image_positions) 스키마가 없어, final_content 를
  * 인라인으로 받아야 실제 저장이 가능하다(draft→smarteditor 어댑터는 후속 작업). 없으면 명확히 안내.
  * 업로드 이미지는 샌드박스 하위 경로만 허용된다(containImageManifest) — 임의 파일 유출 방지.
  */

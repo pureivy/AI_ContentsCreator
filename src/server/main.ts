@@ -1,5 +1,5 @@
 /**
- * HTTP + SSE 서버 (Hono) — 단일 런타임. GEPA React 프론트(무접두 계약) + 자체 경량 UI(/lite).
+ * HTTP + SSE 서버 (Hono) — 단일 런타임. React 프론트(무접두 계약) + 자체 경량 UI(/lite).
  *
  * 런/이벤트/취소는 무접두(/runs…)와 /api/* 둘 다 등록(프론트는 무접두, 자체 UI는 /api).
  * 프론트 계약: /runs, /runs/:id/{events,log,cancel}, /llm, /company, /wiki/*, /approvals, 스텁들.
@@ -480,7 +480,7 @@ app.post('/pieces/:id/run', pieceRunHandler);
 app.post('/api/pieces/:id/run', pieceRunHandler);
 
 // ============================================================
-// LLM 상태 — GEPA 프론트 계약(/llm) + 자체 UI(/api/llm)
+// LLM 상태 — 프론트 계약(/llm) + 자체 UI(/api/llm)
 // ============================================================
 async function llmStatusPayload(): Promise<Record<string, unknown>> {
   const persisted = getLlmSetting(); // 영속된 사용자 선택(없으면 CONFIG 기본)
@@ -558,7 +558,7 @@ app.post('/briefing/send', async (c) => {
 });
 
 // ============================================================
-// 회사 — GEPA 프론트 계약(/company, teams 구조) + 자체 UI(/api/company)
+// 회사 — 프론트 계약(/company, teams 구조) + 자체 UI(/api/company)
 // ============================================================
 function roleInfo(r: RoleDef, level: string, team: string | null) {
   return {
@@ -690,7 +690,7 @@ app.post('/company/teams/:id/members', async (c) => {
 });
 
 // ============================================================
-// 위키 지식그래프 (GEPA 계약)
+// 위키 지식그래프 (프론트 계약)
 // ============================================================
 app.get('/wiki/graph', (c) => c.json(llmWiki().graph()));
 app.get('/wiki/stats', (c) => { const s = llmWiki().stats(); return c.json({ pages: s.pages, sources: s.sources, lessons: s.lessons }); });
@@ -937,7 +937,7 @@ app.get('/wiki/page/:id', (c) => {
 });
 
 // ============================================================
-// 승인 (GEPA 계약)
+// 승인 (프론트 계약)
 // ============================================================
 app.get('/approvals', (c) => c.json({ pending: approvalStore().list() }));
 app.post('/approvals/:id/decide', async (c) => {
@@ -1315,7 +1315,7 @@ const stopAutoCycle = startAutoCycle<Piece>({
 });
 if (CONFIG.autoCycleMinutes > 0) {
   // eslint-disable-next-line no-console
-  console.log(`[gepa-ai-office] 자율 사이클 활성 — ${CONFIG.autoCycleMinutes}분 주기(유휴 게이트)`);
+  console.log(`[ai-contents-studio] 자율 사이클 활성 — ${CONFIG.autoCycleMinutes}분 주기(유휴 게이트)`);
 }
 void stopAutoCycle; // 프로세스 생존 동안 유지(unref 타이머라 종료는 막지 않음)
 
@@ -1327,7 +1327,7 @@ const stopDaily = startDaily({
 });
 if (CONFIG.dailyBriefingTime) {
   // eslint-disable-next-line no-console
-  console.log(`[gepa-ai-office] 일일 브리핑 활성 — ${CONFIG.dailyBriefingTime}${notifyConfigured() ? '' : ' (알림 채널 미설정 — /api-keys 에서 웹훅/텔레그램 설정 필요)'}`);
+  console.log(`[ai-contents-studio] 일일 브리핑 활성 — ${CONFIG.dailyBriefingTime}${notifyConfigured() ? '' : ' (알림 채널 미설정 — /api-keys 에서 웹훅/텔레그램 설정 필요)'}`);
 }
 void stopDaily;
 
@@ -1353,14 +1353,14 @@ const stopPerfSync = startDaily({
 });
 if (CONFIG.performanceSyncTime) {
   // eslint-disable-next-line no-console
-  console.log(`[gepa-ai-office] 성과 동기화 활성 — ${CONFIG.performanceSyncTime} · 수집기 "${getCollector().name}"(측정창 ${CONFIG.performanceWindowDays}일)`);
+  console.log(`[ai-contents-studio] 성과 동기화 활성 — ${CONFIG.performanceSyncTime} · 수집기 "${getCollector().name}"(측정창 ${CONFIG.performanceWindowDays}일)`);
 }
 void stopPerfSync;
 
 const port = CONFIG.port;
 if (!process.env.VITEST) serve({ fetch: app.fetch, hostname: CONFIG.host, port }, (info) => {
   // eslint-disable-next-line no-console
-  console.log(`[gepa-ai-office] http://${CONFIG.host}:${info.port}  (backend=${CONFIG.backend}, ollama=${CONFIG.ollamaBaseUrl})  · React=/ · lite=/lite`);
+  console.log(`[ai-contents-studio] http://${CONFIG.host}:${info.port}  (backend=${CONFIG.backend}, ollama=${CONFIG.ollamaBaseUrl})  · React=/ · lite=/lite`);
 });
 
 export { app };
