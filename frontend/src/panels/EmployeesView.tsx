@@ -24,14 +24,14 @@ function tierLabel(tier: string): string {
 }
 
 function glyph(level: string, id: string, title: string): string {
-  if (level === "ceo") return "👔";
+  if (level === "ceo") return "🧑‍💼";
   const k = (id + " " + title).toLowerCase();
-  if (/(research|조사|시장|환경)/.test(k)) return "🔎";
-  if (/(strategy|전략|기획)/.test(k)) return "🧭";
-  if (/(risk|검증|비평|critic)/.test(k)) return "🛡️";
-  if (/(legal|법무|규정)/.test(k)) return "⚖️";
-  if (/(budget|예산|재무)/.test(k)) return "💰";
-  if (/(ops|일정|리소스|운영)/.test(k)) return "🗓️";
+  if (/(reviewer|팩트|리뷰|검증|비평)/.test(k)) return "🔎";
+  if (/(디렉터|리서치|research_lead)/.test(k)) return "🧭";
+  if (/(seo|키워드|strategist)/.test(k)) return "🔑";
+  if (/(트렌드|trend|리서처)/.test(k)) return "📈";
+  if (/(성과|분석|analyst|perf)/.test(k)) return "📊";
+  if (/(작가|카피|content_lead|copywriter)/.test(k)) return "✍️";
   if (level === "lead") return "🧑‍💼";
   return "🧑‍💻";
 }

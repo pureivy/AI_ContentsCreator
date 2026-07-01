@@ -49,8 +49,8 @@ const ROOMS = {
 
 // 명단의 팀 id → 고정 방. planning→기획팀(우상), support→경영관리팀(정중앙), secretariat→비서실(좌중).
 const TEAM_REGION: Record<string, Region> = {
-  planning: ROOMS.planning,
-  support: ROOMS.support,
+  content: ROOMS.planning,
+  research: ROOMS.support,
   secretariat: ROOMS.secretariat,
 };
 const regionCx = (r: Region): number => r.x + r.w / 2;
@@ -112,14 +112,14 @@ const RING: Record<string, string> = {
 
 // Pick a character glyph from the role id / title keywords.
 function glyphFor(level?: string, id = "", title = ""): string {
-  if (level === "ceo") return "👔";
+  if (level === "ceo") return "🧑‍💼";
   const k = (id + " " + title).toLowerCase();
-  if (/(research|조사|시장|환경)/.test(k)) return "🔎";
-  if (/(strategy|전략|기획)/.test(k)) return "🧭";
-  if (/(risk|검증|비평|critic)/.test(k)) return "🛡️";
-  if (/(legal|법무|규정|compliance)/.test(k)) return "⚖️";
-  if (/(budget|예산|재무|finance)/.test(k)) return "💰";
-  if (/(ops|일정|리소스|운영|schedule)/.test(k)) return "🗓️";
+  if (/(research_lead|디렉터)/.test(k)) return "🧭";
+  if (/(trend|트렌드)/.test(k)) return "📈";
+  if (/(seo|키워드)/.test(k)) return "🔑";
+  if (/(reviewer|팩트|리뷰)/.test(k)) return "🔎";
+  if (/(perf|성과|분석)/.test(k)) return "📊";
+  if (/(content|작가|카피)/.test(k)) return "✍️";
   if (level === "lead") return "🧑‍💼";
   return "🧑‍💻";
 }
@@ -793,8 +793,8 @@ export default function OfficeView() {
   // 방 영역 — 이름표(라벨)는 제거(사용자 요청). team 이 지정된 방은 그 팀이 작업 중(phase≠idle)일 때만
   // 은은히 강조해 '지금 어디가 바쁜지'만 보여준다(텍스트 없음).
   const ZONES: { key: keyof typeof ROOMS; team?: string }[] = [
-    { key: "ceo" }, { key: "conf" }, { key: "planning", team: "planning" },
-    { key: "secretariat", team: "secretariat" }, { key: "support", team: "support" },
+    { key: "ceo" }, { key: "conf" }, { key: "planning", team: "content" },
+    { key: "secretariat", team: "secretariat" }, { key: "support", team: "research" },
     { key: "pantry" }, { key: "lounge" }, { key: "reading" },
   ];
 

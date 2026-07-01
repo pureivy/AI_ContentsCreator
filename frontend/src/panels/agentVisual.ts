@@ -43,15 +43,19 @@ export function resolveName(
   return personLabel(persona?.name, persona?.role); // 실명 없음 → 직무/실장/""
 }
 
+// 콘텐츠 로스터 글리프 — OfficeView.glyphFor·EmployeesView.glyph 와 **동일 매핑**으로 유지해야
+// 티커·활동피드·워크플로보드·오피스에서 같은 에이전트가 같은 이모지로 보인다(글리프 일관성).
+// 순서 주의: trend_researcher(id에 'research' 포함)가 research_lead 규칙에 가로채이지 않도록,
+// research_lead 는 'research_lead|디렉터|리서치'로, trend 는 '트렌드|trend|리서처'로 상호배타 키잉.
 export function agentGlyph(level: string | undefined, id: string, title: string): string {
-  if (level === "ceo") return "👔";
+  if (level === "ceo") return "🧑‍💼";               // 편집장
   const k = (id + " " + title).toLowerCase();
-  if (/(research|조사|시장|환경)/.test(k)) return "🔎";
-  if (/(strategy|전략|기획)/.test(k)) return "🧭";
-  if (/(risk|검증|비평|critic)/.test(k)) return "🛡️";
-  if (/(legal|법무|규정)/.test(k)) return "⚖️";
-  if (/(budget|예산|재무)/.test(k)) return "💰";
-  if (/(ops|일정|리소스|운영)/.test(k)) return "🗓️";
+  if (/(reviewer|팩트|리뷰|검증|비평)/.test(k)) return "🔎"; // 팩트체커·리뷰어
+  if (/(디렉터|리서치|research_lead)/.test(k)) return "🧭";  // 리서치·전략 디렉터
+  if (/(seo|키워드|strategist)/.test(k)) return "🔑";        // SEO 키워드 전략가
+  if (/(트렌드|trend|리서처)/.test(k)) return "📈";          // 트렌드 리서처
+  if (/(성과|분석|analyst|perf)/.test(k)) return "📊";       // 성과 분석가
+  if (/(작가|카피|content_lead|copywriter)/.test(k)) return "✍️"; // 수석 작가·카피라이터(lead 보다 먼저)
   if (level === "lead") return "🧑‍💼";
   return "🧑‍💻";
 }

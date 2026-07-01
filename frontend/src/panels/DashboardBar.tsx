@@ -85,14 +85,14 @@ export default function DashboardBar({ companyName, total, runsCount, onMetric }
       <Chip icon="⏰" label="TIME" value={hhmm} mono />
       <Chip icon="👥" label="WORKING" value={`${working}/${total}`} accent={working > 0}
         onClick={onMetric && (() => onMetric("working"))} />
-      <Chip icon="📄" label="OUTPUT" value={output} accent={output > 0}
+      <Chip icon="📰" label="발행" value={output} accent={output > 0}
         onClick={onMetric && (() => onMetric("output"))} />
       <Chip icon="📚" label="위키" value={wikiTotal}
         onClick={onMetric && (() => onMetric("wiki"))} />
-      <Chip icon="🏆" label="교훈" value={Math.max(lessonsTotal, s.lessons.length)}
+      <Chip icon="💡" label="인사이트" value={Math.max(lessonsTotal, s.lessons.length)}
         onClick={onMetric && (() => onMetric("lessons"))} />
       {s.approvals.length > 0 && (
-        <Chip icon="🔔" label="승인대기" value={s.approvals.length} accent />
+        <Chip icon="🔔" label="검토 대기" value={s.approvals.length} accent />
       )}
       {auto?.enabled && (
         <Chip icon="🤖" label="자율" value={auto.active ? "동작 중" : "대기"} accent={auto.active} />
