@@ -159,7 +159,7 @@ export default function WorkflowBoard({ names }: { names?: Record<string, string
         {ceo && (
           <div className="wf-team">
             <div className="wf-team-head">
-              <b>CEO · 사장</b>
+              <b>CEO · 편집장</b>
               <span className="wf-phase">{PHASE_LABEL[s.phases["_ceo"] ?? "idle"] ?? s.phases["_ceo"] ?? "대기"}</span>
             </div>
             {Row(ceo)}

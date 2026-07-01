@@ -81,16 +81,16 @@ function progressNote(
 ): string {
   if (status !== "running") return "";
   const ceo = phases["_ceo"];
-  if (ceo === "delegate") return "🧩 사장이 목표를 팀별 과제로 분해하는 중…";
-  if (ceo === "review") return "🔎 사장이 팀 산출물을 검토하는 중…";
-  if (ceo === "integrate") return "🧩 사장이 팀 산출물을 통합하는 중…";
+  if (ceo === "delegate") return "🧩 편집장이 목표를 팀별 과제로 분해하는 중…";
+  if (ceo === "review") return "🔎 편집장이 팀 산출물을 검토하는 중…";
+  if (ceo === "integrate") return "🧩 편집장이 팀 산출물을 통합하는 중…";
   for (const tid in phases) {
     if (tid === "_ceo") continue;
     const ph = phases[tid];
     if (ph && ph !== "idle" && PHASE_NOTE[ph])
       return soloNote?.(tid, ph) ?? PHASE_NOTE[ph](teams[tid]?.name ?? tid);
   }
-  return "⏳ 사장이 목표를 분석하는 중…";
+  return "⏳ 편집장이 목표를 분석하는 중…";
 }
 
 type View = "office" | "graph" | "detail" | "employees" | "apikeys" | "llm" | "mcp" | "calendar" | "review";
@@ -1393,7 +1393,7 @@ export default function App() {
                   <button className={`llm-menu-item${isCur("claude", "") ? " sel" : ""}`}
                     disabled={llmBusy || !claudeAvail} onClick={() => applyLlm("claude", "")}>
                     <span className="llm-dot claude" /> Claude 클라우드
-                    <span className="llm-menu-sub">사장=opus · 팀원=sonnet 라우팅</span>
+                    <span className="llm-menu-sub">편집장=opus · 팀원=sonnet 라우팅</span>
                     {isCur("claude", "") && <span className="llm-check">✓</span>}
                   </button>
                   {models.length === 0 && (

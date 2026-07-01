@@ -13,7 +13,7 @@ import Avatar from "./Avatar";
 const PHASE_DOING: Record<string, string> = {
   brief: "브리핑 받는 중", decompose: "과제 분해 중", assign: "과제 배정 중",
   work: "작업 중", debate: "상호검증 토론 중", report: "팀원 보고 검토·취합 중",
-  report_ceo: "사장께 보고 중", delegate: "지침 수립 중", review: "검토·확정 중",
+  report_ceo: "편집장께 보고 중", delegate: "지침 수립 중", review: "검토·확정 중",
   integrate: "산출물 통합 중", idle: "대기",
 };
 
@@ -23,7 +23,7 @@ const PHASE_DOING: Record<string, string> = {
 const LEAD_PHASE_DOING: Record<string, string> = {
   brief: "지시 받는 중", decompose: "과제 분해 중", assign: "과제 배정 중",
   work: "대기", debate: "회의 주재 중", report: "팀원 보고 검토·취합 중",
-  report_ceo: "사장께 보고 중", delegate: "지침 수립 중", review: "검토·확정 중",
+  report_ceo: "편집장께 보고 중", delegate: "지침 수립 중", review: "검토·확정 중",
   integrate: "산출물 통합 중", idle: "대기",
 };
 

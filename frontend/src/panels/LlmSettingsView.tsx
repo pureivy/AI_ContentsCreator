@@ -56,7 +56,7 @@ export default function LlmSettingsView() {
             <span className="apikey-icon">🧠</span>
             <div className="apikey-titles">
               <b>Claude 클라우드</b>
-              <div className="apikey-desc">현행 동작. 역할별 모델 라우팅(사장=opus·팀원=sonnet) 유지.</div>
+              <div className="apikey-desc">현행 동작. 역할별 모델 라우팅(편집장=opus·팀원=sonnet) 유지.</div>
             </div>
             <input type="radio" name="llm-backend" checked={backend === "claude"}
               onChange={() => setBackend("claude")} />
