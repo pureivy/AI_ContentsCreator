@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { app } from '../server/main';
 import { ollama } from '../llm/ollama';
+import { llm } from '../llm/client';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -15,7 +16,7 @@ describe('POST /jarvis/chat', () => {
 
   it('정상 → {reply} 반환', async () => {
     vi.spyOn(ollama, 'listModels').mockResolvedValue([{ name: 'gemma4:12b', sizeGB: 8 }] as never);
-    vi.spyOn(ollama, 'chat').mockResolvedValue({ text: '안녕하세요, 자비스예요.' } as never);
+    vi.spyOn(llm, 'chat').mockResolvedValue({ text: '안녕하세요, 자비스예요.' } as never);
     const res = await app.request('/jarvis/chat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages: [{ role: 'user', content: '자비스' }] }),

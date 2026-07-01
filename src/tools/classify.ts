@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
-import { ollama } from '../llm/ollama';
+import { llm } from '../llm/client';
 import { getCompany } from '../agents/company-loader';
 import { appendKnowledge, removeKnowledge } from '../agents/workspace';
 
@@ -73,7 +73,7 @@ async function classifyLLM(model: string, title: string, text: string, signal?: 
     `직원 목록(id | 직책 | 주력업무):\n${roster()}\n\n` +
     '자료 내용을 보고 직접 관련된 직원 1~3명의 id 를 고르세요. 직책명 통념이 아니라 주력업무(업무분장)로 대조해 판단하고, 무리하게 여러 명에게 주지 마세요.';
   const user = `자료 제목: ${title}\n\n발췌:\n${(text || '').slice(0, 3000)}\n\nJSON만 출력: {"assignments":["employee_id", ...]}`;
-  const res = await ollama.chat({
+  const res = await llm.chat({
     model, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
     maxOutputTokens: 200, temperature: 0.2, think: false, signal, // 분류는 단순 라우팅 — 추론 끔(저지연; 자비스와 동일)
   });

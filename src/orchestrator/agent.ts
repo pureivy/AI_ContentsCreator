@@ -8,7 +8,7 @@
  * - microCall/microJSON: 분해·배정·수렴판정·분류 같은 구조적 단발 호출(작은 모델, 비스트리밍).
  */
 import { CONFIG, localBrevityNote } from '../config';
-import { ollama } from '../llm/ollama';
+import { llm } from '../llm/client';
 import type { ChatMessage, ChatResult } from '../llm/ollama';
 import { EventType } from '../events/types';
 import type { EventBus } from '../events/bus';
@@ -197,13 +197,13 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
 
   const maxOut = args.maxOutputTokens ?? CONFIG.maxOutputTokens;
   const onDelta = (d: string) => bus.emitDelta(deltaType, blockId, d, { agentId: role.id });
-  let result = await ollama.chat({ model, messages, maxOutputTokens: maxOut, signal: args.signal, onDelta });
+  let result = await llm.chat({ model, messages, maxOutputTokens: maxOut, signal: args.signal, onDelta });
   // 빈 출력 방어 — 1회 재시도. fallbackModel(상위 tier)이 있으면 그 모델로 승급(소형 모델
   // 무음 실패를 큰 모델로 구제), 없으면 온도↑로 재시도. 취소 중이면 생략.
   if (!result.text.trim() && !args.signal?.aborted) {
     const retryModel = args.fallbackModel && args.fallbackModel !== model ? args.fallbackModel : model;
     if (retryModel !== model) bus.emit(EventType.log, { message: `빈 출력 — ${role.name} 모델 승급 재시도(${model}→${retryModel})` }, { agentId: role.id });
-    result = await ollama.chat({ model: retryModel, messages, maxOutputTokens: maxOut, temperature: 0.9, signal: args.signal, onDelta });
+    result = await llm.chat({ model: retryModel, messages, maxOutputTokens: maxOut, temperature: 0.9, signal: args.signal, onDelta });
   }
 
   // --- 능동 도구 루프(옵트인) — 모델이 <tool> 태그로 추가 자료를 요청하면 실행해 주입·재호출.
@@ -234,7 +234,7 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
       // 대화에 직전 답(요청 포함)과 도구 결과를 추가하고 이어서 재호출.
       messages.push({ role: 'assistant', content: turnText });
       messages.push({ role: 'user', content: blocks.join('\n\n') + '\n\n위 도구 결과를 반영해 이어서 작성하라. 자료가 충분하면 도구 없이 최종 답을 완성하라.' });
-      const next = await ollama.chat({ model, messages, maxOutputTokens: maxOut, signal: args.signal, onDelta });
+      const next = await llm.chat({ model, messages, maxOutputTokens: maxOut, signal: args.signal, onDelta });
       accPrompt += next.promptEvalCount; accEval += next.evalCount; accMs += next.totalDurationMs;
       if (next.text.trim()) { turnText = next.text; result = next; }
       else { turnText = ''; break; }
@@ -292,7 +292,7 @@ export async function microCall(
   user: string,
   opts: { maxOutputTokens?: number; temperature?: number; format?: 'json'; signal?: AbortSignal } = {},
 ): Promise<string> {
-  const res = await ollama.chat({
+  const res = await llm.chat({
     model,
     messages: [
       { role: 'system', content: system },

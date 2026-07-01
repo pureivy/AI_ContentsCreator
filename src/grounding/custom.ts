@@ -132,6 +132,7 @@ setCustomProvider(() => listCustomConfigs().map(cfgToConnector));
 
 // ---- AI 자동설정 ----
 import { ollama } from '../llm/ollama';
+import { llm } from '../llm/client';
 import { getSystemSpecs, autoAssignModels } from '../llm/models';
 import { tierOverrides } from '../llm/setting';
 
@@ -176,7 +177,7 @@ export async function autoConfigConnector(
     '{"id":"kebab-id","label":"한글 이름","icon":"📈","desc":"한 줄 설명","endpoint":"https://.../api?serviceKey={key}&numOfRows=5&keyword={query}","blockLabel":"[표시 머리말]","scope":"global","extract":{"type":"json","itemsPath":"response.body.items.item","fields":["title","pblancNm"]}}\n' +
     'extract.type 은 반드시 "json"|"regex"|"text" 중 하나(다른 값 금지). 응답이 JSON 이면 "json"(itemsPath=결과배열 점경로, fields=뽑을 필드들), XML/텍스트면 "regex"(regex=한 항목을 잡는 정규식, 캡처그룹 1개), 불확실하면 "text". 정확한 실제 엔드포인트·파라미터명을 쓰고, 추측이면 "text"로 안전하게.';
   try {
-    const res = await ollama.chat({
+    const res = await llm.chat({
       model: heavy,
       messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
       maxOutputTokens: 800, temperature: 0.2, format: 'json', signal: input.signal,

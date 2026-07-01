@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
-import { ollama } from '../llm/ollama';
+import { llm } from '../llm/client';
 import type { RoleDef } from './company';
 import { kstDate } from '../util/time';
 
@@ -105,7 +105,7 @@ export async function archiveMemory(id: string, microModel: string, signal?: Abo
   try { fs.appendFileSync(path.join(dir(id), 'memory_archive.md'), old.join('\n') + '\n', 'utf-8'); } catch { /* 보존 실패 무해 */ }
   let summary = '';
   try {
-    const res = await ollama.chat({
+    const res = await llm.chat({
       model: microModel,
       messages: [
         { role: 'system', content: '너는 학습 정리자다. 아래 누적 교훈을 중복 제거하고 핵심만 5~8개 불릿으로 압축하라. 한국어, 구체적으로.' },

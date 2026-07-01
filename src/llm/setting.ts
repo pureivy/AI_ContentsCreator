@@ -8,6 +8,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
+import { autoAssignModels, getSystemSpecs } from './models';
+import type { ModelAssignment, InstalledModel } from './models';
 
 export interface LlmSetting {
   /** 'local' | 'claude' 등 — 현재 런 엔진은 로컬(Ollama)만 구동. */
@@ -54,4 +56,21 @@ export function tierOverrides(): { micro: string; standard: string; heavy: strin
   return lm
     ? { micro: CONFIG.tierModels.micro, standard: lm, heavy: lm }
     : CONFIG.tierModels;
+}
+
+/** 현재 백엔드가 Claude(클라우드)인가. */
+export function isClaudeBackend(): boolean {
+  return (getLlmSetting().backend || CONFIG.backend) === 'claude';
+}
+
+/**
+ * 백엔드 인식 모델 배정 — claude 면 고정 클라우드 티어맵(haiku/sonnet/opus, 네트워크 조회 불필요),
+ * local 이면 설치 모델을 RAM 예산으로 자동 배정(호출측이 ollama.listModels() 결과를 넘긴다).
+ */
+export function resolveAssignment(installedForLocal: InstalledModel[] = []): ModelAssignment {
+  if (isClaudeBackend()) {
+    const c = CONFIG.cloudTierModels;
+    return { micro: c.micro, standard: c.standard, heavy: c.heavy, reason: `Claude 클라우드 티어 — micro=${c.micro} standard=${c.standard} heavy=${c.heavy}` };
+  }
+  return autoAssignModels(installedForLocal, getSystemSpecs(), tierOverrides());
 }

@@ -16,7 +16,7 @@ import { streamSSE } from 'hono/streaming';
 import { CONFIG } from '../config';
 import { ollama } from '../llm/ollama';
 import { getSystemSpecs, autoAssignModels } from '../llm/models';
-import { getLlmSetting, setLlmSetting, tierOverrides } from '../llm/setting';
+import { getLlmSetting, setLlmSetting, tierOverrides, resolveAssignment, isClaudeBackend } from '../llm/setting';
 import { getRunSettings, setRunSettings } from '../runsettings';
 import { EventType } from '../events/types';
 import { createBus, getBus, disposeBus } from '../events/bus';
@@ -370,19 +370,22 @@ app.post('/runs/:id/message', (c) => c.json({ ok: true }));
 // ============================================================
 async function llmStatusPayload(): Promise<Record<string, unknown>> {
   const persisted = getLlmSetting(); // 영속된 사용자 선택(없으면 CONFIG 기본)
-  const models = await ollama.listModels();
-  const loaded = await ollama.loaded();
-  const assignment = models.length ? autoAssignModels(models, undefined, tierOverrides()) : null;
+  const claude = isClaudeBackend();
+  const models = claude ? [] : await ollama.listModels();
+  const loaded = claude ? [] : await ollama.loaded();
+  const assignment = claude ? resolveAssignment() : (models.length ? autoAssignModels(models, undefined, tierOverrides()) : null);
   return {
     setting: {
       backend: persisted.backend || CONFIG.backend,
-      // 영속된 선택 우선 → 새로고침해도 사용자가 고른 모델이 유지(예전엔 항상 standard=gemma4:12b로 되돌아감).
-      local_model: persisted.localModel || assignment?.standard || CONFIG.localModel || (models[0]?.name ?? ''),
+      // 영속된 선택 우선 → 새로고침해도 사용자가 고른 모델이 유지.
+      local_model: persisted.localModel || (claude ? '' : (assignment?.standard || CONFIG.localModel || (models[0]?.name ?? ''))),
     },
     backends: [
-      { id: 'claude', label: 'Claude 클라우드', available: false },
+      { id: 'claude', label: 'Claude 클라우드', available: claude },
       { id: 'local', label: '로컬 (Ollama)', available: models.length > 0 },
     ],
+    // 클라우드 tier→모델 맵(claude 백엔드) — UI 표시용.
+    cloud_tiers: claude && assignment ? { micro: assignment.micro, standard: assignment.standard, heavy: assignment.heavy } : undefined,
     local_models: models.map((m) => m.name),
     local_loaded: loaded.map((l) => ({ name: l.name, expires_at: l.expiresAt, size_vram: Math.round(l.sizeVramGB * 1e9), context_length: l.contextLength })),
     local_base_url: CONFIG.ollamaBaseUrl,
@@ -396,11 +399,12 @@ app.post('/llm', async (c) => {
   return c.json(await llmStatusPayload());
 });
 app.get('/api/llm', async (c) => {
-  const version = await ollama.version();
-  const models = await ollama.listModels();
-  const loaded = await ollama.loaded();
-  const assignment = models.length ? autoAssignModels(models, undefined, tierOverrides()) : null;
-  return c.json({ backend: getLlmSetting().backend || CONFIG.backend, ollama_url: CONFIG.ollamaBaseUrl, version, available: !!version, specs: getSystemSpecs().summary, models, loaded, assignment });
+  const claude = isClaudeBackend();
+  const version = claude ? 'claude' : await ollama.version();
+  const models = claude ? [] : await ollama.listModels();
+  const loaded = claude ? [] : await ollama.loaded();
+  const assignment = claude ? resolveAssignment() : (models.length ? autoAssignModels(models, undefined, tierOverrides()) : null);
+  return c.json({ backend: getLlmSetting().backend || CONFIG.backend, ollama_url: CONFIG.ollamaBaseUrl, version, available: claude || !!version, specs: claude ? 'Claude 클라우드' : getSystemSpecs().summary, models, loaded, assignment });
 });
 // 런타임 품질 설정(토론·추론) — UI 토글로 바꾸면 다음 런부터 즉시 반영(서버 재시작 불필요).
 app.get('/runsettings', (c) => c.json(getRunSettings()));
@@ -559,17 +563,19 @@ function parseN(c: Context, def = 6): number {
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : def;
 }
 app.post('/wiki/maintain', async (c) => {
-  const models = await ollama.listModels();
-  if (!models.length) return c.json({ error: 'no local models' }, 503);
-  const micro = autoAssignModels(models).micro;
+  const claude = isClaudeBackend();
+  const models = claude ? [] : await ollama.listModels();
+  if (!claude && !models.length) return c.json({ error: 'no local models' }, 503);
+  const micro = claude ? resolveAssignment().micro : autoAssignModels(models).micro;
   const r = await llmWiki().maintain(micro, { maxFill: parseN(c), signal: c.req.raw.signal });
   return c.json(r);
 });
 // 모순 감사 — 토픽 겹치는 페이지 쌍을 LLM 비교(?n=쌍수, ?resolve=1 이면 해소 노트 기록)
 app.post('/wiki/audit', async (c) => {
-  const models = await ollama.listModels();
-  if (!models.length) return c.json({ error: 'no local models' }, 503);
-  const micro = autoAssignModels(models).micro;
+  const claude = isClaudeBackend();
+  const models = claude ? [] : await ollama.listModels();
+  if (!claude && !models.length) return c.json({ error: 'no local models' }, 503);
+  const micro = claude ? resolveAssignment().micro : autoAssignModels(models).micro;
   const r = await llmWiki().findContradictions(micro, { maxChecks: parseN(c), resolve: c.req.query('resolve') === '1', signal: c.req.raw.signal });
   return c.json(r);
 });
@@ -847,11 +853,13 @@ app.post('/mcp/:id', async (c) => c.json({ ok: false, error: '위키·웹검색�
 
 // --- 외부 자료 업로드 → 멀티포맷 추출 → 위키 적재 + LLM 자동 직원귀속 분류 ---
 async function classifyModel(): Promise<string> {
+  if (isClaudeBackend()) return resolveAssignment().standard;
   const models = await ollama.listModels();
   return models.length ? autoAssignModels(models).standard : '';
 }
 // ingest(엔티티 추출)는 micro 모델 — classify(standard)와 단일 슬롯 경합 시 빠르게 처리(finalize 와 일관).
 async function ingestModel(): Promise<string> {
+  if (isClaudeBackend()) return resolveAssignment().micro;
   const models = await ollama.listModels();
   return models.length ? autoAssignModels(models).micro : '';
 }
@@ -1077,8 +1085,11 @@ app.post('/api/voice/settings', voiceSettingsHandler);
 
 // --- 자비스 대화 ---
 const jarvisHandler = async (c: Context): Promise<Response> => {
-  const models = await ollama.listModels().catch(() => []);
-  if (!models.length) return c.json({ error: 'LLM 미가용(로컬 모델 없음)' }, 503);
+  // 가용성 — Claude 백엔드는 항상 가용(호출 시 인증 오류는 그때 표면화). 로컬만 설치 모델 확인.
+  if (!isClaudeBackend()) {
+    const models = await ollama.listModels().catch(() => []);
+    if (!models.length) return c.json({ error: 'LLM 미가용(로컬 모델 없음)' }, 503);
+  }
   const body = await c.req.json<{ messages?: { role: string; content: string }[] }>().catch(() => ({} as { messages?: { role: string; content: string }[] }));
   const messages = (body.messages ?? []).filter((m) => m && typeof m.content === 'string');
   if (!messages.length) return c.json({ error: '메시지 없음' }, 400);

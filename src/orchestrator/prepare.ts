@@ -5,7 +5,7 @@ import { CONFIG } from '../config';
 import { ollama } from '../llm/ollama';
 import { getSystemSpecs, autoAssignModels, estimateModelMemoryGB } from '../llm/models';
 import type { ModelAssignment } from '../llm/models';
-import { tierOverrides } from '../llm/setting';
+import { tierOverrides, resolveAssignment, isClaudeBackend } from '../llm/setting';
 import { EventType } from '../events/types';
 import type { EventBus } from '../events/bus';
 import type { CompanyDef } from '../agents/company';
@@ -79,30 +79,36 @@ export async function prepareRun(
   bus.emit(EventType.company_started, { name: company.name, mission: company.mission });
 
   const specs = getSystemSpecs();
-  const installed = await ollama.listModels();
-  if (installed.length === 0) {
-    bus.emit(EventType.error, { message: 'Ollama 에서 모델을 찾지 못했습니다. `ollama serve` 와 모델 설치를 확인하세요.' });
-    bus.emit(EventType.run_done, { status: 'error' });
-    return null;
+  const claude = isClaudeBackend();
+  let assign: ModelAssignment;
+  if (claude) {
+    // Claude 백엔드: 고정 클라우드 티어맵. Ollama 조회·웜업·'모델 없음' 하드에러 브랜치를 건너뛴다.
+    assign = resolveAssignment();
+  } else {
+    const installed = await ollama.listModels();
+    if (installed.length === 0) {
+      bus.emit(EventType.error, { message: 'Ollama 에서 모델을 찾지 못했습니다. `ollama serve` 와 모델 설치를 확인하세요.' });
+      bus.emit(EventType.run_done, { status: 'error' });
+      return null;
+    }
+    // 웹 UI(LLM 설정)에서 고른 로컬 모델 우선. env LOCAL_LLM_MODEL 이 박혀 있으면 그것이 최우선(단일 모델 강제).
+    assign = CONFIG.localModel
+      ? { micro: CONFIG.localModel, standard: CONFIG.localModel, heavy: CONFIG.localModel, reason: `고정 모델 ${CONFIG.localModel}` }
+      : autoAssignModels(installed, specs, tierOverrides());
   }
-  // 웹 UI(LLM 설정)에서 고른 로컬 모델 우선 — 본작업(standard·heavy)에 반영, micro 는 빠른 소형 유지.
-  // env LOCAL_LLM_MODEL 이 박혀 있으면 그것이 최우선(단일 모델 강제).
-  const assign = CONFIG.localModel
-    ? { micro: CONFIG.localModel, standard: CONFIG.localModel, heavy: CONFIG.localModel, reason: `고정 모델 ${CONFIG.localModel}` }
-    : autoAssignModels(installed, specs, tierOverrides());
-  // 모델 배정 가시화(Connect AI 벤치마킹) — tier별 모델 + 예측 VRAM(GB)을 구조화해 함께 emit.
-  const vram = (m: string): number => Math.round(estimateModelMemoryGB(m) * 10) / 10;
+  // 모델 배정 가시화 — tier별 모델 + 예측 VRAM(GB, 로컬만 의미). claude 는 0.
+  const vram = (m: string): number => (claude ? 0 : Math.round(estimateModelMemoryGB(m) * 10) / 10);
   const modelMap = {
     micro: { model: assign.micro, vram_gb: vram(assign.micro) },
     standard: { model: assign.standard, vram_gb: vram(assign.standard) },
     heavy: { model: assign.heavy, vram_gb: vram(assign.heavy) },
   };
   bus.emit(EventType.log, {
-    message: `모델 배정 — micro=${assign.micro}(~${modelMap.micro.vram_gb}GB) · standard=${assign.standard}(~${modelMap.standard.vram_gb}GB) · heavy=${assign.heavy}(~${modelMap.heavy.vram_gb}GB)`,
-    specs: specs.summary, models: modelMap, budget_gb: specs.safeModelBudgetGB,
+    message: `모델 배정 — ${assign.reason}`,
+    specs: claude ? 'Claude 클라우드 백엔드' : specs.summary, models: modelMap, budget_gb: claude ? 0 : specs.safeModelBudgetGB,
   });
 
-  void ollama.warm(assign.standard);
+  if (!claude) void ollama.warm(assign.standard);
 
   // 분해는 런 전체의 프레임을 정하므로 도메인 충실성이 중요 → micro 대신 standard(문서 종류를 더 정확히 인식).
   const subproblems = await decompose(assign.standard, topic, signal);

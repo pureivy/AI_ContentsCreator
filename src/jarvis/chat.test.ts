@@ -1,12 +1,12 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { ollama } from '../llm/ollama';
+import { llm } from '../llm/client';
 import { jarvisChat, jarvisSystemPrompt } from './chat';
 
 afterEach(() => vi.restoreAllMocks());
 
 describe('jarvisChat', () => {
   it('잡담: 페르소나 system 메시지 + reply 반환(delegate 없음)', async () => {
-    const spy = vi.spyOn(ollama, 'chat').mockResolvedValue({ text: '안녕하세요, 자비스예요.' } as never);
+    const spy = vi.spyOn(llm, 'chat').mockResolvedValue({ text: '안녕하세요, 자비스예요.' } as never);
     const r = await jarvisChat([{ role: 'user', content: '자비스' }]);
     expect(r.reply).toContain('자비스');
     expect(r.delegate).toBeUndefined();
@@ -16,7 +16,7 @@ describe('jarvisChat', () => {
   });
 
   it('업무지시: 끝줄 delegate JSON 을 파싱하고 reply 에서 JSON 제거', async () => {
-    vi.spyOn(ollama, 'chat').mockResolvedValue({
+    vi.spyOn(llm, 'chat').mockResolvedValue({
       text: '네, 전달하겠습니다.\n{"delegate":{"task":"예산 회의 자료 준비"}}',
     } as never);
     const r = await jarvisChat([{ role: 'user', content: '예산 회의 자료 준비해줘' }]);
@@ -26,11 +26,11 @@ describe('jarvisChat', () => {
   });
 
   it('위임: 유효 직원 id 는 delegate.agent 로 채택, 무효 id 는 무시', async () => {
-    vi.spyOn(ollama, 'chat')
-      .mockResolvedValueOnce({ text: '네.\n{"delegate":{"task":"예산 정리","agent":"support_budget"}}' } as never)
+    vi.spyOn(llm, 'chat')
+      .mockResolvedValueOnce({ text: '네.\n{"delegate":{"task":"예산 정리","agent":"seo_strategist"}}' } as never)
       .mockResolvedValueOnce({ text: '네.\n{"delegate":{"task":"예산 정리","agent":"nobody_xyz"}}' } as never);
     const ok = await jarvisChat([{ role: 'user', content: '예산 정리해줘' }]);
-    expect(ok.delegate?.agent).toBe('support_budget');
+    expect(ok.delegate?.agent).toBe('seo_strategist');
     const bad = await jarvisChat([{ role: 'user', content: '예산 정리해줘' }]);
     expect(bad.delegate?.task).toContain('예산');
     expect(bad.delegate?.agent).toBeUndefined();   // 무효 id → 미채택
@@ -51,19 +51,19 @@ describe('jarvisChat', () => {
 
   it('jarvisSystemPrompt 로스터는 비서(자비스) 자신을 위임 후보로 넣지 않는다', () => {
     const p = jarvisSystemPrompt();
-    expect(p).toContain('support_budget');   // 실제 직원은 후보에 있음
+    expect(p).toContain('seo_strategist');   // 실제 직원은 후보에 있음
     expect(p).not.toContain('secretary |');  // 비서(자비스) 로스터 항목 제외(자기위임 방지)
   });
 
   it('jarvisSystemPrompt 로스터는 specialty(주요 업무)·담당선택 규칙을 포함한다', () => {
     const p = jarvisSystemPrompt();
-    expect(p).toContain('급여');        // specialty(주요 업무) 노출 — 재원·겸장 변별 단서
+    expect(p).toContain('키워드');      // specialty(주요 업무) 노출 — 콘텐츠 역할 변별 단서
     expect(p).toContain('팀장');        // 복합 업무는 팀장 규칙
     expect(p).toContain('비서 본연');   // 비서 본연 업무는 직접 처리(위임 안 함)
   });
 
   it('위임: 비서(자비스) 자신 id 는 위임 대상으로 채택하지 않는다', async () => {
-    vi.spyOn(ollama, 'chat').mockResolvedValue({
+    vi.spyOn(llm, 'chat').mockResolvedValue({
       text: '네.\n{"delegate":{"task":"회의 준비","agent":"secretary"}}',
     } as never);
     const r = await jarvisChat([{ role: 'user', content: '회의 준비해줘' }]);

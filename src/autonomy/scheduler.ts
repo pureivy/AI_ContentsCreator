@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { ollama } from '../llm/ollama';
+import { llm } from '../llm/client';
 import { getSystemSpecs, autoAssignModels } from '../llm/models';
 import { tierOverrides } from '../llm/setting';
 import { getCompany } from '../agents/company-loader';
@@ -116,7 +117,7 @@ export async function proposeAutonomousTask(signal?: AbortSignal): Promise<strin
     ? { micro: CONFIG.localModel }
     : autoAssignModels(installed, getSystemSpecs(), tierOverrides());
 
-  const res = await ollama.chat({
+  const res = await llm.chat({
     model: assign.micro,
     messages: [
       {

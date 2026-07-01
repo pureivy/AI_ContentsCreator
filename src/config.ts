@@ -42,6 +42,8 @@ export interface Config {
   readonly autoSelectModel: boolean;
   /** 등급별 모델 명시 지정(env). 설치돼 있으면 autoAssignModels 자동 배정을 오버라이드(미설치 시 자동 폴백). */
   readonly tierModels: { readonly micro: string; readonly standard: string; readonly heavy: string };
+  /** 클라우드(claude) 백엔드 tier→모델. micro=고빈도 구조작업(속도), standard=창의 본문, heavy=편집 최종/플래그십. */
+  readonly cloudTierModels: { readonly micro: string; readonly standard: string; readonly heavy: string };
   /** 모델 상주 시간 — 요청에 같이 보내되, 정식 경로는 서버 env(OLLAMA_KEEP_ALIVE). */
   readonly keepAlive: string;
   readonly requestTimeoutMs: number;
@@ -63,6 +65,10 @@ export interface Config {
   readonly concurrency: number;
   readonly teamParallel: number;
   readonly maxTurnsPerAgent: number;
+  /** Claude(클라우드) 동시 호출 상한 — KV 슬롯 경합이 없어 넉넉하게. 429 는 SDK 백오프. */
+  readonly anthropicConcurrency: number;
+  /** 월 예산 캡($) — 무감시 자율 폭주 안전장치. 0=캡 없음(정액 기본). 메터드로 쓰면 설정. */
+  readonly monthlyBudgetUsd: number;
 
   // --- 토론/조직 형태 ---
   readonly runMode: 'org' | 'debate';
@@ -135,7 +141,8 @@ export interface Config {
   readonly notifyAutoCycle: boolean;
 }
 
-const isLocal = (env('BACKEND', 'local') as Backend) === 'local' || envBool('LOCAL_LLM', true);
+// 콘텐츠 스튜디오 피벗: 기본 백엔드 = claude(로컬 Ollama 제거). 로컬로 되돌리려면 BACKEND=local 또는 LOCAL_LLM=true.
+const isLocal = (env('BACKEND', 'claude') as Backend) === 'local' || envBool('LOCAL_LLM', false);
 
 export const CONFIG: Config = {
   port: envInt('PORT', 8787),
@@ -151,6 +158,12 @@ export const CONFIG: Config = {
     micro: env('MICRO_MODEL', 'gemma4:12b'),
     standard: env('STANDARD_MODEL', 'gemma4:12b'),
     heavy: env('HEAVY_MODEL', 'gemma4:12b'),
+  },
+  // 정액 구독이라 모델 선택은 품질 우선(속도 목적의 haiku 만 micro). 개별 override 가능.
+  cloudTierModels: {
+    micro: env('CLOUD_MICRO_MODEL', 'claude-haiku-4-5'),
+    standard: env('CLOUD_STANDARD_MODEL', 'claude-sonnet-5'),
+    heavy: env('CLOUD_HEAVY_MODEL', 'claude-opus-4-8'),
   },
   agentThinking: envBool('AGENT_THINKING', false),
   thinkingBudgetTokens: Math.min(Math.max(0, envInt('THINKING_BUDGET_TOKENS', 1500)), 16_384),
@@ -172,10 +185,13 @@ export const CONFIG: Config = {
   concurrency: envInt('CONCURRENCY', isLocal ? 1 : 4),
   teamParallel: envInt('TEAM_PARALLEL', isLocal ? 1 : 4),
   maxTurnsPerAgent: envInt('MAX_TURNS_PER_AGENT', isLocal ? 8 : 20),
+  anthropicConcurrency: Math.max(1, envInt('ANTHROPIC_CONCURRENCY', 6)),
+  monthlyBudgetUsd: Math.max(0, Number(env('MONTHLY_BUDGET_USD', '0'))),
 
   runMode: (env('RUN_MODE', 'org') as 'org' | 'debate'),
-  minSpecialists: envInt('MIN_SPECIALISTS', isLocal ? 2 : 3),
-  maxSpecialists: envInt('MAX_SPECIALISTS', isLocal ? 3 : 4),
+  minSpecialists: envInt('MIN_SPECIALISTS', isLocal ? 2 : 2),
+  // 콘텐츠 v1: 초안당 활성 멤버 2명(트렌드+SEO). 리뷰어=회사 크리틱, 성과분석가=벤치(cap 밖).
+  maxSpecialists: envInt('MAX_SPECIALISTS', isLocal ? 3 : 2),
   debateRounds: envInt('DEBATE_ROUNDS', isLocal ? 1 : 2),
   debateRoundsCap: envInt('DEBATE_ROUNDS_CAP', isLocal ? 2 : 3),
   // 기본 1(ON) — 팀토론(비평→반박) 1라운드를 기본 활성. 끄려면 ORG_DEBATE_ROUNDS=0(또는 UI 토글).
@@ -216,8 +232,9 @@ export const CONFIG: Config = {
   agentToolLoop: envBool('AGENT_TOOL_LOOP', false),
   agentMaxToolCalls: Math.min(Math.max(1, envInt('AGENT_MAX_TOOL_CALLS', 4)), 12),
   enforceAutonomy: envBool('ENFORCE_AUTONOMY', true),
-  // 기본 ON(30분) — 서버 기동 시 자율 사이클 자동 활성. 끄려면 AUTO_CYCLE_MINUTES=0.
-  autoCycleMinutes: Math.max(0, envInt('AUTO_CYCLE_MINUTES', 30)),
+  // 클라우드(정액이라도 무감시 비용/레이트 보호) 기본 0(off) — 6e 자율 캘린더가 스로틀과 함께 재활성.
+  // 로컬은 기존대로 30분. 켜려면 AUTO_CYCLE_MINUTES=N.
+  autoCycleMinutes: Math.max(0, envInt('AUTO_CYCLE_MINUTES', isLocal ? 30 : 0)),
   agentShell: envBool('AGENT_SHELL', false),
   // 기본 allowlist 는 '읽기 전용 분석 명령'만 — python3/node/awk/sed/find 같은 범용 코드 실행기는 제외(임의
   // 실행기는 메타문자 없이도 RCE 가 되어 allowlist 를 무력화). 스크립트 실행이 필요하면 AGENT_SHELL_ALLOW 로

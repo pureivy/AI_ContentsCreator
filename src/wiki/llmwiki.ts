@@ -15,6 +15,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { CONFIG } from '../config';
 import { ollama } from '../llm/ollama';
+import { llm } from '../llm/client';
 import { cosineSim, resolveEmbedModel } from './embed';
 
 export type PageType = 'entity' | 'concept' | 'source' | 'overview' | 'answer' | 'lesson' | 'debate';
@@ -482,7 +483,7 @@ export class LlmWiki {
       'JSON만 출력: {"summary":"한 줄 요약","pages":[{"title":"엔티티명","type":"entity|concept","body":"2~4문장","links":["다른엔티티명"]}]}. 페이지는 3~6개. ' +
       '각 page 의 links 에는 이 묶음의 다른 title 이나 본문에서 관련된 개념을 반드시 1개 이상 포함하라(빈 배열 금지).';
     try {
-      const res = await ollama.chat({
+      const res = await llm.chat({
         model,
         messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
         maxOutputTokens: 1200, temperature: 0.3, think: false, signal, // 엔티티 추출은 구조적 작업 — 추론 끔(윈도우당 저지연)
@@ -723,7 +724,7 @@ export class LlmWiki {
     const sys = '너는 LLM Wiki 관리자다. 주어진 개념/엔티티의 위키 페이지 본문을 사실 위주 2~3문장으로 쓴다. 본문에서 관련 개념은 [[이름]]으로 링크한다. 잘 모르면 일반적 정의만 간결히.';
     const user = `항목: ${title}\n맥락(이 항목을 참조하는 페이지): ${refs.slice(0, 4).join(', ') || '없음'}\n\n본문만 출력(머리말·맺음말 없이).`;
     try {
-      const res = await ollama.chat({
+      const res = await llm.chat({
         model, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
         maxOutputTokens: 300, temperature: 0.3, signal,
       });
@@ -782,7 +783,7 @@ export class LlmWiki {
       '발췌가 단순 언급뿐이면 "원문 상 <맥락>으로 언급됨"처럼 정직하게 쓴다.';
     const user = `항목: ${title}\n참조 페이지: ${refs.slice(0, 4).join(', ') || '없음'}\n\n[원문 발췌]\n${excerpts.map((e, i) => `(${i + 1}) …${e}…`).join('\n')}\n\n본문만 출력(머리말·맺음말 없이).`;
     try {
-      const res = await ollama.chat({ model, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], maxOutputTokens: 300, temperature: 0.2, signal });
+      const res = await llm.chat({ model, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], maxOutputTokens: 300, temperature: 0.2, signal });
       return res.text.trim() || null;
     } catch { return null; }
   }
@@ -832,7 +833,7 @@ export class LlmWiki {
       `[A: ${a.title}]\n${a.body.slice(0, 1200)}\n\n[B: ${b.title}]\n${b.body.slice(0, 1200)}\n\n` +
       'JSON만: {"contradicts": true/false, "issue": "무엇이 충돌하는지 한 줄(없으면 빈칸)", "reconciliation": "어느 쪽이 맞는지/어떻게 통합할지 한 줄"}';
     try {
-      const res = await ollama.chat({ model, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], maxOutputTokens: 300, temperature: 0.2, signal });
+      const res = await llm.chat({ model, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], maxOutputTokens: 300, temperature: 0.2, signal });
       const j = extractJson<{ contradicts?: boolean; issue?: string; reconciliation?: string }>(res.text);
       if (!j) return null;
       return { contradicts: !!j.contradicts, issue: j.issue ?? '', reconciliation: j.reconciliation ?? '' };
