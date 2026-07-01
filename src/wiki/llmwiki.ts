@@ -18,7 +18,7 @@ import { ollama } from '../llm/ollama';
 import { llm } from '../llm/client';
 import { cosineSim, resolveEmbedModel } from './embed';
 
-export type PageType = 'entity' | 'concept' | 'source' | 'overview' | 'answer' | 'lesson' | 'debate';
+export type PageType = 'entity' | 'concept' | 'source' | 'overview' | 'answer' | 'lesson' | 'debate' | 'performance';
 
 export interface WikiPage {
   title: string;
@@ -401,7 +401,8 @@ export class LlmWiki {
 
   rebuildIndex(): void {
     const ps = this.allPages();
-    const byType: Record<string, WikiPage[]> = { entity: [], concept: [], source: [], overview: [], answer: [] };
+    // lesson·performance 포함 — 이전엔 초기화·렌더에서 빠져 교훈·성과 페이지가 인덱스에 안 보였다(기존 갭). query()는 allPages 라 검색은 됐지만 index.md 가시성만 누락.
+    const byType: Record<string, WikiPage[]> = { entity: [], concept: [], source: [], overview: [], answer: [], lesson: [], performance: [] };
     for (const p of ps) (byType[p.type] ?? (byType[p.type] = [])).push(p);
     const sect = (label: string, arr: WikiPage[]): string =>
       arr.length ? `\n## ${label}\n` + arr.sort((a, b) => a.title.localeCompare(b.title))
@@ -412,7 +413,9 @@ export class LlmWiki {
       sect('💡 개념', byType.concept!) +
       sect('📄 소스 요약', byType.source!) +
       sect('🧭 종합', byType.overview!) +
-      sect('❓ 답변', byType.answer!);
+      sect('❓ 답변', byType.answer!) +
+      sect('🎓 교훈', byType.lesson!) +
+      sect('📈 성과', byType.performance!);
     fs.writeFileSync(path.join(this.dir, 'index.md'), md, 'utf-8');
   }
 
@@ -564,6 +567,8 @@ export class LlmWiki {
       }
       // 업로드된 원문(source) 우대 — 실제 수치·표는 source 본문에 있고, 파생 요약(concept/entity)에는 없다(이슈12).
       if (p.type === 'source') s *= 1.4;
+      // 실측 성과(performance) 근거 우대 — 다음 콘텐츠 기획이 '무엇이 실제로 노출됐는지'를 참조하게(compounding).
+      if (p.type === 'performance') s *= 1.3;
       // 업로드 1차 원문(sources=raw/...) 을 런 파생 요약(sources=run:...)·생성 concept 보다 강하게 우대 —
       // 실제 결산 수치(세출예산집행현황 등)가 런이 만든 요약 페이지에 밀려 검색에서 빠지던 문제(이슈12) 해결.
       if (p.sources.some((src) => src.startsWith('raw/'))) s *= 2;

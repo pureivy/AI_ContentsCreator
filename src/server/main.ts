@@ -40,6 +40,8 @@ import type { FinalPosition } from '../orchestrator/finalize';
 import { startAutoCycle, proposeContentIdeas, startDaily } from '../autonomy/scheduler';
 import { pieceStore, selectResumablePiece } from '../content/pieces';
 import type { Piece } from '../content/pieces';
+import { ingestMetrics } from '../analytics/reinforce';
+import { parseManualMetrics, readMetrics } from '../analytics/performance';
 import { notify, notifyConfigured } from '../autonomy/notify';
 import { buildBriefing } from '../autonomy/briefing';
 import { buildHwpx, hwpxAvailable } from '../export/hwpx';
@@ -419,6 +421,20 @@ async function piecePublishedHandler(c: Context): Promise<Response> {
   if (!url) return c.json({ error: 'url 이 필요합니다' }, 400);
   return c.json({ piece: pieceStore().setPublished(id, url) });
 }
+// 성과 측정치 수집(v1 주 경로 = 수동 입력) — 사람이 네이버 통계에서 붙여넣기 → 강화 루프 트리거(멱등).
+async function pieceMetricsPostHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
+  const body = await c.req.json<unknown>().catch(() => ({}));
+  const sample = parseManualMetrics(body);
+  const r = await ingestMetrics(id, sample);
+  return c.json({ ok: r.recorded, reinforced: r.reinforced, sample, piece: pieceStore().get(id) });
+}
+function pieceMetricsGetHandler(c: Context): Response {
+  const id = c.req.param('id') ?? '';
+  if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
+  return c.json({ metrics: readMetrics(id) });
+}
 // 초안 재로드 — DraftReview 가 본문/렌더/메타를 디스크(data/sessions/<runId>/)에서 읽는다(메모리 의존 없음).
 function pieceDraftHandler(c: Context): Response {
   const p = pieceStore().get(c.req.param('id') ?? '');
@@ -443,6 +459,10 @@ app.get('/pieces/:id', pieceGetHandler);
 app.get('/api/pieces/:id', pieceGetHandler);
 app.post('/pieces/:id/published', piecePublishedHandler);
 app.post('/api/pieces/:id/published', piecePublishedHandler);
+app.post('/pieces/:id/metrics', pieceMetricsPostHandler);
+app.post('/api/pieces/:id/metrics', pieceMetricsPostHandler);
+app.get('/pieces/:id/metrics', pieceMetricsGetHandler);
+app.get('/api/pieces/:id/metrics', pieceMetricsGetHandler);
 
 // ============================================================
 // LLM 상태 — GEPA 프론트 계약(/llm) + 자체 UI(/api/llm)

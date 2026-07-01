@@ -1,0 +1,67 @@
+/**
+ * 성과 측정치 저장소 — piece 별 시계열(data/analytics/metrics/<pieceId>.jsonl, append-only).
+ * 네이버는 게시물별 공개 API 가 없어, v1 주 경로는 **수동 입력**(사람이 네이버 통계에서 붙여넣기 → POST
+ * /pieces/:id/metrics)이고, 브라우저 자동 수집은 스왑 가능한 수집기 뒤에 격리(별도 마일스톤).
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { CONFIG } from '../config';
+
+export interface SearchInflow { keyword: string; count: number; rank?: number; }
+export interface MetricSample {
+  measuredAt: string;
+  views: number;
+  dwellSec?: number;
+  searchInflow: SearchInflow[];
+  /** 'manual' | 'scrape:<collector>' — 수집 출처(신뢰도 구분). */
+  source?: string;
+}
+
+function metricsDir(): string { return path.join(CONFIG.dataDir, 'analytics', 'metrics'); }
+function metricsFile(pieceId: string): string { return path.join(metricsDir(), `${pieceId}.jsonl`); }
+
+/** 측정치 1건 append(append-only 시계열 — 증가는 의도된 것, 재강화는 stage 게이트로 별도 제어). */
+export function appendMetrics(pieceId: string, sample: MetricSample): void {
+  try {
+    fs.mkdirSync(metricsDir(), { recursive: true });
+    fs.appendFileSync(metricsFile(pieceId), JSON.stringify(sample) + '\n', 'utf-8');
+  } catch { /* 영속 실패 무해 */ }
+}
+export function readMetrics(pieceId: string): MetricSample[] {
+  try {
+    return fs.readFileSync(metricsFile(pieceId), 'utf-8').split('\n').filter(Boolean)
+      .map((l) => JSON.parse(l) as MetricSample);
+  } catch { return []; }
+}
+export function latestMetrics(pieceId: string): MetricSample | null {
+  const all = readMetrics(pieceId);
+  return all.length ? all[all.length - 1]! : null;
+}
+
+function num(v: unknown): number { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function normInflow(v: unknown): SearchInflow | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  const keyword = String(o.keyword ?? '').trim();
+  if (!keyword) return null;
+  const rank = o.rank != null ? num(o.rank) : undefined;
+  return { keyword, count: num(o.count), ...(rank ? { rank } : {}) };
+}
+
+/**
+ * 수동 입력 정규화(v1 주 경로) — {views, dwellSec?, searchInflow:[{keyword,count,rank?}]} JSON 을 안전 파싱.
+ * 프론트(6f)는 네이버 통계 붙여넣기(CSV 등)를 이 형태로 변환해 전송한다.
+ */
+export function parseManualMetrics(input: unknown): MetricSample {
+  const o = (input && typeof input === 'object' && !Array.isArray(input)) ? input as Record<string, unknown> : {};
+  const inflow = Array.isArray(o.searchInflow)
+    ? (o.searchInflow as unknown[]).map(normInflow).filter((x): x is SearchInflow => x !== null)
+    : [];
+  return {
+    measuredAt: new Date().toISOString(),
+    views: num(o.views),
+    ...(o.dwellSec != null ? { dwellSec: num(o.dwellSec) } : {}),
+    searchInflow: inflow,
+    source: 'manual',
+  };
+}
