@@ -13,6 +13,7 @@ import { approvalStore } from '../approvals/store';
 import { reflectAndLearn } from './reflect';
 import { genId } from '../util/ids';
 import type { AssetBundle } from '../output';
+import { generateImagesForDraft } from '../tools/blog_skills';
 
 export interface FinalPosition {
   id: string;
@@ -102,6 +103,25 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
       a.bus.emit(EventType.log, { message: `초안 자산 저장 — ${a.assets.files.map((f) => f.name).join(', ')} (SEO ${(a.assets.meta.seoScore as number) ?? '-'}/100)` });
     } catch (e) {
       a.bus.emit(EventType.log, { message: `초안 자산 저장 실패: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  }
+
+  // --- 블로그 이미지 자동 생성(옵트인 BLOG_AUTO_IMAGE, 기본 off) — 완성 초안(draft.json)의 imageSlots 를
+  //     gpt-image-2 로 생성해 세션 dir 에 images/ + image_manifest.json 을 남긴다. 기본 off 라 기본 런 경로는
+  //     불변. OPENAI_API_KEY 없으면 스크립트가 dry-run(계획만). 실패는 무해(런 종료·발행을 막지 않음). ---
+  if (CONFIG.blogAutoImage && a.assets?.files?.length && !a.signal?.aborted) {
+    try {
+      const dir = path.join(CONFIG.sessionsDir, a.bus.runId);
+      const draftPath = path.join(dir, 'draft.json');
+      if (fs.existsSync(draftPath)) {
+        const r = await generateImagesForDraft(
+          draftPath, path.join(dir, 'images'), path.join(dir, 'image_manifest.json'),
+          { topic: a.topic, imageStyle: 'photorealistic' }, a.signal,
+        );
+        a.bus.emit(EventType.log, { message: `블로그 이미지 — ${r.output.split('\n')[0]}` });
+      }
+    } catch (e) {
+      a.bus.emit(EventType.log, { message: `블로그 이미지 생성 실패(무해): ${e instanceof Error ? e.message : String(e)}` });
     }
   }
 

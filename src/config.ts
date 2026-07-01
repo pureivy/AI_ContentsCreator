@@ -115,6 +115,20 @@ export interface Config {
   // --- 외부 툴 ---
   readonly webSearch: boolean;
 
+  // --- 블로그 스킬(외부 Python 툴: image_generate / blog_publish) — 전부 옵트인 ---
+  /** 블로그 스킬 스크립트 전용 venv python 절대경로. 비면 블로그 툴이 '비활성' 반환(기본 안전). */
+  readonly blogPython: string;
+  /** openai_image.py·naver_publish.py 가 있는 디렉토리. */
+  readonly blogScriptsDir: string;
+  /** gpt-image-2 호출용 OpenAI 키 — 서브프로세스 env 로만 전달(로그·프롬프트에 안 실림). */
+  readonly openaiApiKey: string;
+  /** 이미지 생성 모델(기본 gpt-image-2). */
+  readonly openaiImageModel: string;
+  /** 네이버 로그인 세션(Playwright storage_state) 파일 경로 — blog_publish 용. */
+  readonly naverSessionFile: string;
+  /** finalize 후 완성 초안(draft.json)에 이미지 자동 생성(옵트인, 기본 off — 기본 런 경로 불변). */
+  readonly blogAutoImage: boolean;
+
   // --- 음성 입출력 ---
   readonly voiceTtsVoice: string;
   readonly voiceSttModel: string;
@@ -237,6 +251,14 @@ export const CONFIG: Config = {
   relateTopK: envInt('RELATE_TOP_K', 3),
 
   webSearch: envBool('WEB_SEARCH', true),
+
+  // 블로그 스킬(외부 Python) — 기본 비활성. BLOG_PYTHON 미설정 시 image_generate/blog_publish 가 '비활성' 반환.
+  blogPython: env('BLOG_PYTHON', ''),
+  blogScriptsDir: env('BLOG_SCRIPTS_DIR', path.join(process.cwd(), 'scripts', 'blog_skills')),
+  openaiApiKey: env('OPENAI_API_KEY', ''),
+  openaiImageModel: env('OPENAI_IMAGE_MODEL', 'gpt-image-2'),
+  naverSessionFile: env('NAVER_SESSION_FILE', path.join(ROOT, '.naver_session.json')),
+  blogAutoImage: envBool('BLOG_AUTO_IMAGE', false),
 
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
   voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),

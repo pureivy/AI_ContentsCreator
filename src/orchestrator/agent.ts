@@ -23,6 +23,7 @@ import { connectors } from '../grounding';
 import { approvalStore } from '../approvals/store';
 import { parseToolCalls, toolsForAutonomy, toolInstructions, stripToolTags, WRITE_TOOLS, type ToolCall } from './tools';
 import { runCommand } from './shell';
+import { runImageGenerate, runBlogPublish } from '../tools/blog_skills';
 
 // 검증 지식(Self-RAG) — 사실 주장에 [근거] 태그를 유도. 런 후 reflect 가 태그 붙은 주장만
 // verified.md 로 승격해 다음 런에 우선 신뢰 주입(환각 억제·근거 기반 compounding).
@@ -392,6 +393,11 @@ function availableLoopTools(tools: string[], autonomy: number): string[] {
   }
   base.push('save_note'); // 쓰기 후보 — autonomy<2 면 toolsForAutonomy 가 제거.
   if (CONFIG.agentShell) base.push('run_command'); // 셸 옵트인(AGENT_SHELL) 시에만 노출, 그래도 autonomy≥2 에서만 제시.
+  // 블로그 스킬(외부 Python 툴) — role 이 tools 로 grant 받았고 BLOG_PYTHON 이 설정됐을 때만 노출.
+  if (CONFIG.blogPython) {
+    if (tools.includes('image_generate')) base.push('image_generate');
+    if (tools.includes('blog_publish')) base.push('blog_publish');
+  }
   return toolsForAutonomy(base, autonomy);
 }
 
@@ -415,7 +421,11 @@ async function execLoopTool(
       if (name === 'run_command' && !CONFIG.agentShell) return '(셸 실행 비활성 — AGENT_SHELL=1 필요)';
       const summary = name === 'run_command'
         ? `명령 실행: ${arg.replace(/\s+/g, ' ').slice(0, 500)}` // 전체 명령 노출 — 휴먼 검토자가 위험한 꼬리까지 보게(80자 절단 금지)
-        : `노트 저장: ${arg.replace(/\s+/g, ' ').slice(0, 60)}`;
+        : name === 'image_generate'
+          ? `이미지 생성(gpt-image-2): ${arg.replace(/\s+/g, ' ').slice(0, 120)}`
+          : name === 'blog_publish'
+            ? `네이버 블로그 임시저장(초안 — 발행 아님): ${arg.replace(/\s+/g, ' ').slice(0, 120)}`
+            : `노트 저장: ${arg.replace(/\s+/g, ' ').slice(0, 60)}`;
       const ok = await gateWrite(role, autonomy, name, summary, bus, signal);
       // 승인 후라도 그 사이 취소됐으면 실행/쓰기를 하지 않는다(fail-open 타임아웃이 abort 와 경합해 늦게 발화하는 경로 차단).
       if (!ok || signal?.aborted) return '(거부됨 — 승인되지 않음)';
@@ -423,6 +433,10 @@ async function execLoopTool(
         const r = await runCommand(role.id, arg, signal);
         return r.output;
       }
+      // await 필수 — 미await 시 내부 fs.writeFileSync rejection 이 이 try 의 catch 를 건너뛰어 runAgent 를
+      // 통째로 실패시킨다(run_command 처럼 '(도구 실패)' 로 degrade 되게 await 로 catch 안에서 던지게 한다).
+      if (name === 'image_generate') return await runImageGenerate(role.id, arg, signal);
+      if (name === 'blog_publish') return await runBlogPublish(role.id, arg, signal);
       appendKnowledge(role.id, `- (자율노트) ${arg.replace(/\s+/g, ' ').slice(0, 300)}`);
       return '(노트 저장됨)';
     }
@@ -442,10 +456,13 @@ async function execLoopTool(
 /** 쓰기 행동 자율도 게이트(거버넌스 enforcement): ≥3 자동 · 2 승인대기(블로킹, 타임아웃 fail-open) · ≤1 차단.
  *  취소(signal)를 승인 대기에 배선 — abort 시 즉시 거부로 귀결해 좀비 승인·지연 쓰기를 막는다. */
 async function gateWrite(role: RoleDef, autonomy: number, actionType: string, summary: string, bus: EventBus, signal?: AbortSignal): Promise<boolean> {
-  // 셸 실행은 ENFORCE_AUTONOMY=false 라도 항상 게이트한다 — 전역 자율도 비활성이 셸 명령 승인까지 끄지 않게(심층방어).
-  const alwaysGate = actionType === 'run_command';
+  // 셸 실행·블로그 발행·이미지 생성(유료 API 과금)은 결제/부작용 확인이 필요해 ENFORCE_AUTONOMY=false 라도
+  // 항상 게이트한다(심층방어 + 사용자 선호: 외부 서비스 결제성 행동은 확인).
+  const alwaysGate = actionType === 'run_command' || actionType === 'blog_publish' || actionType === 'image_generate';
   if (!alwaysGate && !CONFIG.enforceAutonomy) return true;
-  if (autonomy >= 3) return true;
+  // blog_publish(외부 초안)·image_generate(유료 과금)는 autonomy≥3 에서도 자동승인하지 않고 항상 승인 요청.
+  // (run_command 는 기존대로 ≥3 자동승인 유지.)
+  if (autonomy >= 3 && actionType !== 'blog_publish' && actionType !== 'image_generate') return true;
   if (autonomy < 2 || signal?.aborted) return false;
   const { approval, decided } = approvalStore().request({ agent_id: role.id, action_type: actionType, summary, autonomy });
   bus.emit(EventType.approval_requested, {
@@ -457,8 +474,11 @@ async function gateWrite(role: RoleDef, autonomy: number, actionType: string, su
     if (signal) signal.addEventListener('abort', () => resolve({ approved: false, by: 'abort', note: '취소됨' }), { once: true });
   });
   const d = await Promise.race([decided, onAbort]);
+  // blog_publish(외부 네이버 초안 생성)는 타임아웃 fail-open(자동승인)을 거부로 뒤집어 fail-closed 로 만든다 —
+  // 무인 런에서 사람 확인 없이 외부 초안이 저장되지 않게. (run_command 등 기존 액션의 타임아웃 자동승인은 보존.)
+  const approved = actionType === 'blog_publish' && d.by === 'timeout' ? false : d.approved;
   bus.emit(EventType.approval_decided, {
-    approval_id: approval.id, approved: d.approved, decided_by: d.by ?? 'abort', note: d.note ?? '',
+    approval_id: approval.id, approved, decided_by: d.by ?? 'abort', note: d.note ?? '',
   });
-  return d.approved;
+  return approved;
 }

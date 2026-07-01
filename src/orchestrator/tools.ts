@@ -38,7 +38,7 @@ export const READ_TOOLS = new Set([
   'naver_search', 'naver_searchad', 'naver_datalab', 'naver_autocomplete',
 ]);
 /** 쓰기 도구(부작용) — autonomy≥2 + 호출 시점 승인 게이트 필요. */
-export const WRITE_TOOLS = new Set(['save_note', 'run_command']);
+export const WRITE_TOOLS = new Set(['save_note', 'run_command', 'image_generate', 'blog_publish']);
 
 /**
  * 자율 레벨로 '제시 가능' 도구 집합을 게이팅(거버넌스 enforcement 의 핵심).
@@ -65,6 +65,8 @@ const TOOL_DESC: Record<string, string> = {
   naver_autocomplete: '네이버 자동완성 연관 검색어',
   save_note: '확인한 핵심 사실을 본인 지식노트에 저장(부작용 — 승인 필요할 수 있음)',
   run_command: '샌드박스에서 셸 명령 1개 실행(allowlist 제한·승인 필요·파이프/리다이렉트 불가)',
+  image_generate: '초안 본문/슬롯을 gpt-image-2 로 이미지 생성(부작용·과금 — 승인 필요). arg 예: {"content":"본문 또는 [IMAGE:] 마커","image_style":"photorealistic","topic":"가게명"}',
+  blog_publish: '네이버 블로그 SmartEditor 임시저장(초안만 — 발행 안 함). 외부 부작용이라 항상 승인 게이트. arg: {"final_content":{...},"image_manifest":{...}}',
 };
 
 /** 루프 활성 시 시스템 프롬프트에 덧붙일 도구 사용 안내. 도구가 없으면 빈 문자열(=주입 안 함). */

@@ -34,6 +34,7 @@ const STANCES = new Set(['neutral', 'pro', 'con', 'critic', 'nuanced']);
 const YAML_TOOLS = new Set([
   'wiki', 'web',
   'naver_search', 'naver_searchad', 'naver_datalab', 'naver_autocomplete', 'naver_analytics',
+  'image_generate', 'blog_publish',
 ]);
 
 interface YRole {
