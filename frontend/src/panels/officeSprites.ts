@@ -5,14 +5,15 @@
 export type Pose = "stand" | "sit_front" | "sit_right" | "lounge" | "walkF1" | "walkF2" | "walkR1" | "walkR2";
 
 // 역할 id → 스프라이트 캐릭터(참고 아바타 세트). 캐릭터가 역할과 맞는 것으로 재사용.
+// 페르소나 성별에 맞춘 캐릭터 배정(사용자 확정): 남성=김도현·정하람 / 여성=서다인·오세라·이수민·문하은 / 중성=한지원.
 const ROLE_SPRITE: Record<string, string> = {
-  ceo: "main",             // 편집장·총괄 → 오케스트레이터
-  content_lead: "blogger", // 수석 작가 → 블로거
-  perf_analyst: "analyst", // 성과 분석가 → 분석
-  reviewer: "critic-fact", // 팩트체커·리뷰어 → 팩트검증
-  research_lead: "propose", // 리서치·전략 디렉터 → 주제제안
-  trend_researcher: "reflect",   // 트렌드 리서처 → 회고
-  seo_strategist: "wiki-ingest", // SEO 전략가 → 지식정리
+  ceo: "main",                  // 한지원 (중성 디렉터)
+  content_lead: "blogger",      // 문하은 (여)
+  perf_analyst: "analyst",      // 이수민 (여)
+  reviewer: "reflect",          // 정하람 (남) — critic-fact 는 여성이라 남성 캐릭터 사용
+  research_lead: "wiki-ingest", // 서다인 (여, 리서치·지식)
+  trend_researcher: "cardnews", // 오세라 (여, 트렌드·크리에이티브)
+  seo_strategist: "propose",    // 김도현 (남, 전략·제안)
 };
 
 /** 역할 id/레벨/직무 → 스프라이트 캐릭터. 매칭 없으면 null(이모지 폴백). */
@@ -22,11 +23,11 @@ export function spriteFor(id = "", level = "", title = ""): string | null {
   if (level === "ceo" || /편집장|총괄|editor|chief/.test(k)) return "main";
   if (/작가|카피|content|writer|copy/.test(k)) return "blogger";
   if (/성과|분석|analyst|perf/.test(k)) return "analyst";
-  if (/리뷰|팩트|검증|비평|review|critic|fact/.test(k)) return "critic-fact";
-  if (/디렉터|research_lead|기획|propose/.test(k)) return "propose";
-  if (/트렌드|trend|리서처|reflect/.test(k)) return "reflect";
-  if (/seo|키워드|keyword|wiki/.test(k)) return "wiki-ingest";
-  if (level === "lead") return "propose";   // 미지 리드 폴백
+  if (/트렌드|trend/.test(k)) return "cardnews";                              // 트렌드(여) — research 규칙보다 먼저(trend_researcher 가로채임 방지)
+  if (/디렉터|research_lead|리서치|wiki|사서/.test(k)) return "wiki-ingest";  // 리서치디렉터·지식(여)
+  if (/seo|키워드|keyword|strategist/.test(k)) return "propose";              // SEO(남)
+  if (/리뷰|팩트|검증|비평|review|critic|fact/.test(k)) return "reflect";     // 리뷰어(남)
+  if (level === "lead") return "wiki-ingest";   // 미지 리드 폴백
   return null;
 }
 
