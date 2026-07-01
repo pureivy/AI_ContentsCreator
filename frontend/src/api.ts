@@ -142,6 +142,7 @@ export interface ApiKeyInfo {
   key: string; label: string; icon: string; desc: string;
   placeholder: string; needs_restart: boolean; set: boolean; masked: string; builtin: boolean;
 }
+export interface HiddenKeyInfo { key: string; label: string; icon: string }
 export async function fetchApiKeys(): Promise<ApiKeyInfo[]> {
   try {
     const r = await fetch("/api-keys");
@@ -149,6 +150,17 @@ export async function fetchApiKeys(): Promise<ApiKeyInfo[]> {
     return (await r.json()).keys ?? [];
   } catch {
     return [];
+  }
+}
+// 보이는 키 + 숨긴 기본 키(복원 UI 용) 함께 조회 — ApiKeysView 전용.
+export async function fetchApiKeysAll(): Promise<{ keys: ApiKeyInfo[]; hidden: HiddenKeyInfo[] }> {
+  try {
+    const r = await fetch("/api-keys");
+    if (!r.ok) return { keys: [], hidden: [] };
+    const j = await r.json();
+    return { keys: j.keys ?? [], hidden: j.hidden ?? [] };
+  } catch {
+    return { keys: [], hidden: [] };
   }
 }
 export async function saveApiKey(
@@ -190,10 +202,10 @@ export async function deleteApiKey(key: string): Promise<{ ok: boolean; error?: 
     return { ok: false, error: "network" };
   }
 }
-// 저장된 값만 비우기(기본 키 포함) — 키 정의는 유지.
-export async function clearApiKey(key: string): Promise<{ ok: boolean; error?: string }> {
+// 숨긴 기본 키 복원 — 카드가 '미설정' 상태로 다시 나타난다.
+export async function restoreApiKey(key: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    const r = await fetch(`/api-keys/${encodeURIComponent(key)}/clear`, { method: "POST" });
+    const r = await fetch(`/api-keys/${encodeURIComponent(key)}/restore`, { method: "POST" });
     if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
     return await r.json();
   } catch {

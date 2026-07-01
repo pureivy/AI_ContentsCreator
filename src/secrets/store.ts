@@ -1,7 +1,8 @@
 /**
  * 시크릿(API 키) 저장소 — data/secrets.json 에 저장. 화면엔 항상 마스킹만 노출한다.
  * git 미추적: sync(gitsync.ts)는 wiki/raw/sessions 만 커밋하므로 data/ 루트의 secrets.json 은 자동 제외.
- * builtin 키(Anthropic/OpenAI/법제처)는 값 편집만 가능(삭제 불가), 사용자 키는 추가·삭제 가능.
+ * builtin 키(Anthropic/OpenAI/법제처)는 정의가 코드에 있으므로 삭제 시 '숨김'(값 제거+카드 제거, 복원 가능),
+ * 사용자 키는 추가·완전 삭제 가능.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,7 +16,7 @@ export interface ApiKeyInfo {
   placeholder: string; needs_restart: boolean; set: boolean; masked: string; builtin: boolean;
 }
 interface CustomDef { key: string; label: string; icon: string; desc: string }
-interface Store { values: Record<string, string>; custom: CustomDef[] }
+interface Store { values: Record<string, string>; custom: CustomDef[]; hidden: string[] }
 
 interface BuiltinDef { key: string; label: string; icon: string; desc: string; placeholder: string; needs_restart: boolean }
 const BUILTIN: BuiltinDef[] = [
@@ -36,8 +37,8 @@ const isBuiltinKey = (k: string): boolean => builtinDefs().some((b) => b.key ===
 function read(): Store {
   try {
     const s = JSON.parse(fs.readFileSync(FILE, 'utf-8')) as Partial<Store>;
-    return { values: s.values ?? {}, custom: s.custom ?? [] };
-  } catch { return { values: {}, custom: [] }; }
+    return { values: s.values ?? {}, custom: s.custom ?? [], hidden: s.hidden ?? [] };
+  } catch { return { values: {}, custom: [], hidden: [] }; }
 }
 function write(s: Store): void {
   fs.mkdirSync(path.dirname(FILE), { recursive: true });
@@ -53,7 +54,9 @@ function validKeyName(k: string): boolean { return /^[A-Z][A-Z0-9_]{1,48}$/.test
 
 export function listKeys(): ApiKeyInfo[] {
   const s = read();
-  const builtin: ApiKeyInfo[] = builtinDefs().map((b) => ({ ...b, set: !!s.values[b.key], masked: maskSecret(s.values[b.key] ?? ''), builtin: true }));
+  const builtin: ApiKeyInfo[] = builtinDefs()
+    .filter((b) => !s.hidden.includes(b.key))
+    .map((b) => ({ ...b, set: !!s.values[b.key], masked: maskSecret(s.values[b.key] ?? ''), builtin: true }));
   const custom: ApiKeyInfo[] = s.custom.map((c) => ({
     key: c.key, label: c.label || c.key, icon: c.icon || '🔑', desc: c.desc || '사용자 정의 키',
     placeholder: '값 입력…', needs_restart: false, set: !!s.values[c.key], masked: maskSecret(s.values[c.key] ?? ''), builtin: false,
@@ -77,22 +80,32 @@ export function addCustom(key: string, label: string, icon: string, value: strin
   write(s);
   return { ok: true };
 }
+/** 카드 삭제 — 사용자 키는 완전 제거, 기본 키는 값 제거 + 숨김(restoreKey 로 복원 가능). */
 export function deleteKey(key: string): { ok: boolean; error?: string } {
-  if (isBuiltinKey(key)) return { ok: false, error: '기본 키는 삭제할 수 없습니다(값만 비울 수 있음).' };
   const s = read();
-  s.custom = s.custom.filter((c) => c.key !== key);
+  if (isBuiltinKey(key)) {
+    if (!s.hidden.includes(key)) s.hidden.push(key);
+  } else {
+    if (!s.custom.some((c) => c.key === key)) return { ok: false, error: '알 수 없는 키입니다.' };
+    s.custom = s.custom.filter((c) => c.key !== key);
+  }
   delete s.values[key];
   write(s);
   return { ok: true };
 }
-/** 저장된 값만 비운다(키 정의는 유지) — 기본 키·사용자 키 모두. 기본 키의 값을 지우는 유일한 경로. */
-export function clearKey(key: string): { ok: boolean; error?: string } {
-  if (!isBuiltinKey(key)) {
-    const s = read();
-    if (!s.custom.some((c) => c.key === key)) return { ok: false, error: '알 수 없는 키입니다.' };
-  }
+/** 숨긴 기본 키 목록(복원 UI 용) — 커넥터 제거 등으로 정의가 사라진 키는 제외. */
+export function hiddenKeys(): { key: string; label: string; icon: string }[] {
   const s = read();
-  if (key in s.values) { delete s.values[key]; write(s); }
+  return builtinDefs()
+    .filter((b) => s.hidden.includes(b.key))
+    .map((b) => ({ key: b.key, label: b.label, icon: b.icon }));
+}
+/** 숨긴 기본 키 복원 — 카드가 '미설정' 상태로 다시 나타난다(값은 다시 입력). */
+export function restoreKey(key: string): { ok: boolean; error?: string } {
+  const s = read();
+  if (!s.hidden.includes(key)) return { ok: false, error: '숨긴 키가 아닙니다.' };
+  s.hidden = s.hidden.filter((k) => k !== key);
+  write(s);
   return { ok: true };
 }
 /** 런타임 시크릿 조회(LLM 클라이언트 등) — 환경변수 우선, 없으면 저장소. */

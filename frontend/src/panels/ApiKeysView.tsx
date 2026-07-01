@@ -2,17 +2,18 @@
 // (Anthropic / OpenAI / 법제처) are editable but protected; you can ADD custom keys
 // and DELETE them. Values are stored in .env on the server and shown masked.
 import { useEffect, useState } from "react";
-import { fetchApiKeys, saveApiKey, addApiKey, deleteApiKey, clearApiKey, ApiKeyInfo } from "../api";
+import { fetchApiKeysAll, saveApiKey, addApiKey, deleteApiKey, restoreApiKey, ApiKeyInfo, HiddenKeyInfo } from "../api";
 
 export default function ApiKeysView() {
   const [keys, setKeys] = useState<ApiKeyInfo[]>([]);
+  const [hidden, setHidden] = useState<HiddenKeyInfo[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [nk, setNk] = useState({ key: "", label: "", value: "" });
   const [addBusy, setAddBusy] = useState(false);
 
-  const load = () => fetchApiKeys().then(setKeys);
+  const load = () => fetchApiKeysAll().then(({ keys, hidden }) => { setKeys(keys); setHidden(hidden); });
   useEffect(() => { load(); }, []);
 
   const save = async (key: string) => {
@@ -40,19 +41,21 @@ export default function ApiKeysView() {
     else alert(`추가 실패: ${res.error || ""}`);
   };
 
-  const del = async (key: string) => {
-    if (!window.confirm(`'${key}' 키를 삭제할까요? (.env 값도 함께 제거됩니다)`)) return;
-    const res = await deleteApiKey(key);
+  // 카드 삭제 — 사용자 키는 완전 제거, 기본 키는 값 제거+숨김(아래 '숨긴 기본 키'에서 복원).
+  const del = async (k: ApiKeyInfo) => {
+    const msg = k.builtin
+      ? `'${k.label}' 카드를 삭제할까요? 저장된 값도 제거됩니다. (하단 '숨긴 기본 키'에서 복원 가능)`
+      : `'${k.key}' 키를 삭제할까요? (항목·저장된 값 모두 제거)`;
+    if (!window.confirm(msg)) return;
+    const res = await deleteApiKey(k.key);
     if (res.ok) load();
     else alert(`삭제 실패: ${res.error || ""}`);
   };
 
-  // 기본 키: 정의는 유지하고 저장된 값만 비운다(= '미설정'으로 되돌림).
-  const clear = async (key: string) => {
-    if (!window.confirm(`'${key}' 저장된 값을 삭제할까요? (.env 값 제거 · 키 항목은 유지)`)) return;
-    const res = await clearApiKey(key);
+  const restore = async (key: string) => {
+    const res = await restoreApiKey(key);
     if (res.ok) load();
-    else alert(`삭제 실패: ${res.error || ""}`);
+    else alert(`복원 실패: ${res.error || ""}`);
   };
 
   return (
@@ -61,8 +64,8 @@ export default function ApiKeysView() {
         <h1>🔑 API 키 한 곳에서 관리</h1>
         <p className="apikeys-sub">
           모든 자격증명을 한 곳에서 입력·저장합니다. 키는 서버의 <code>.env</code>(git 제외)에 저장되며,
-          화면에는 항상 <b>마스킹</b>되어 표시됩니다. 기본 키는 편집·<b>값 삭제</b>(🗑, 미설정으로 되돌림),
-          <b>사용자 키는 추가·삭제</b>할 수 있습니다.
+          화면에는 항상 <b>마스킹</b>되어 표시됩니다. 🗑는 카드를 삭제합니다 — 사용자 키는 완전 제거,
+          <b>기본 키는 값 제거 후 숨김</b>(하단에서 복원 가능).
         </p>
       </div>
       <div className="apikeys-grid">
@@ -77,12 +80,11 @@ export default function ApiKeysView() {
                   <div className="apikey-desc">{k.desc}</div>
                 </div>
                 <span className={`apikey-state${k.set ? " on" : ""}`}>{k.set ? "설정됨" : "미설정"}</span>
-                {!k.builtin && (
-                  <button className="apikey-del" title="이 키 삭제(항목·값 제거)" onClick={() => del(k.key)}>🗑</button>
-                )}
-                {k.builtin && k.set && (
-                  <button className="apikey-del" title="저장된 값 삭제(키 항목은 유지)" onClick={() => clear(k.key)}>🗑</button>
-                )}
+                <button
+                  className="apikey-del"
+                  title={k.builtin ? "카드 삭제(값 제거+숨김 · 복원 가능)" : "이 키 삭제(항목·값 제거)"}
+                  onClick={() => del(k)}
+                >🗑</button>
               </div>
               <div className="apikey-field">
                 <label>
@@ -145,6 +147,18 @@ export default function ApiKeysView() {
           </div>
         </div>
       </div>
+
+      {/* 삭제(숨김)한 기본 키 복원 — 정의는 코드에 있으므로 언제든 되살릴 수 있다 */}
+      {hidden.length > 0 && (
+        <div className="apikey-hidden">
+          <span className="apikey-hidden-label">숨긴 기본 키:</span>
+          {hidden.map((h) => (
+            <button key={h.key} className="apikey-restore" title={`${h.key} 카드 복원`} onClick={() => restore(h.key)}>
+              {h.icon} {h.label} ↩︎
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -28,7 +28,7 @@ import { rolesById } from '../agents/company';
 import type { RoleDef } from '../agents/company';
 import type { RolePatch, MemberBody } from '../agents/company-loader';
 import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appendActivity, ensureScaffold, effectiveAutonomy, appendInjected, injectedLength, clearInjected, INJECTED_CAP } from '../agents/workspace';
-import { listKeys, setKey, addCustom, deleteKey, clearKey, getSecret } from '../secrets/store';
+import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret } from '../secrets/store';
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
@@ -1116,7 +1116,7 @@ app.post('/sources/classify_retry', async (c) => {
   }
   return c.json({ retrying });
 });
-app.get('/api-keys', (c) => c.json({ keys: listKeys() }));
+app.get('/api-keys', (c) => c.json({ keys: listKeys(), hidden: hiddenKeys() }));
 app.post('/api-keys', async (c) => {
   const b = await c.req.json<{ key?: string; value?: string }>().catch(() => ({} as { key?: string; value?: string }));
   return c.json(setKey(b.key ?? '', b.value ?? ''));
@@ -1125,9 +1125,9 @@ app.post('/api-keys/add', async (c) => {
   const b = await c.req.json<{ key?: string; label?: string; icon?: string; value?: string }>().catch(() => ({} as { key?: string; label?: string; icon?: string; value?: string }));
   return c.json(addCustom(b.key ?? '', b.label ?? '', b.icon ?? '', b.value ?? ''));
 });
+// 카드 삭제 — 사용자 키는 완전 제거, 기본 키는 값 제거+숨김(restore 로 복원).
 app.delete('/api-keys/:key', (c) => c.json(deleteKey(c.req.param('key') ?? '')));
-// 값만 비우기(기본 키 포함) — 사용자 키 완전삭제(DELETE)와 별개.
-app.post('/api-keys/:key/clear', (c) => c.json(clearKey(c.req.param('key') ?? '')));
+app.post('/api-keys/:key/restore', (c) => c.json(restoreKey(c.req.param('key') ?? '')));
 app.get('/favicon.ico', (c) => c.body(null, 204));
 // 수정 요청(v+1) — 부모 런의 전문가 입장 + 피드백으로 CEO 재종합.
 async function reviseHandler(c: Context): Promise<Response> {
