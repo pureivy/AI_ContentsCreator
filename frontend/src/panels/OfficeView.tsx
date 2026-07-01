@@ -12,7 +12,7 @@
 //   wiki_page_written -> book spines fill the 자료실 shelf
 //   lesson_learned  -> trophies on the 교훈 shelf
 //   status          -> avatar ring color (thinking/spoke/failed)
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useStore } from "../store";
 import { AgentNode } from "../events/types";
@@ -22,8 +22,10 @@ import { LEAD_WORK_PHASES, MEMBER_WORK_PHASES } from "../events/working";
 import { fetchCompany, CompanyInfo, RoleInfo } from "../api";
 import { spriteFor, poseFor } from "./officeSprites";
 import { personLabel } from "./agentVisual";
-import { clusterBelow, meetingCircle, CORRIDOR_SPOTS, corridorPath, randomLanePoint, PATH_STEP, Pt,
+import { clusterBelow, meetingCircle, CORRIDOR_SPOTS, Pt,
   LOUNGE_SOFA_ZONE, PANTRY_ZONE, CONF_ZONE, READING_ZONE, WHITEBOARD_SPOT, placeInZone } from "./officeChoreography";
+// 참고 엔진(AI_Contents_Office) 이식 — 복도 노드 그래프 + 바닥 보행 격자 + LOS string-pull.
+import { routePath, randomNavPoint, WALK_SPEED_PX } from "./officeNav";
 
 // Fixed 4:3 design canvas. Everything inside is laid out against this constant
 // size (positions in %, furniture in px), then the whole floor is uniformly
@@ -169,8 +171,7 @@ interface Placed {
   badge: string;   // e.g. 📄 when a deliverable/synthesis is ready
   roomLabel: string;
   face: Face;      // which wall the desk backs onto (desk rotation)
-  act?: string;    // ambient 활동(rest/chat/coffee/phone/stroll/huddle/shelf/board/return) — 활동별 제자리 모션·보행시간용
-  moving?: boolean;// 복도 경로 이동 중(true) — 연속 보행(등속 글라이드)용
+  act?: string;    // ambient 활동(rest/chat/coffee/phone/stroll/huddle/shelf/board/return) — 활동별 제자리 모션용
 }
 
 // Layout the whole company into container-% coordinates.
@@ -415,34 +416,41 @@ function Sprite({ char, pose, flip, glyph, working }: {
   );
 }
 
-function Character({ p }: { p: Placed }) {
-  // 이동 거리(렌더 직전 위치 대비) — 위치 트랜지션 시간(거리비례 보행)과 걷기 게이트에 쓴다.
-  const last = useRef({ x: p.x, y: p.y });
-  const faceRef = useRef(false);   // 마지막 향한 방향(멈춰도 유지) — 좌향 워크사이클 반전용
-  const dxDir = p.x - last.current.x;
-  const dyDir = p.y - last.current.y;
-  const dist = Math.hypot(dxDir, dyDir);
-  const movingDown = Math.abs(dyDir) > Math.abs(dxDir) && dyDir > 0; // 정면(아래) 이동 → walkF, 그 외 walkR
-  if (dist > 1.2 && !movingDown && Math.abs(dxDir) > 0.1) faceRef.current = dxDir < 0;
-  const stroll = p.act === "stroll" || !!p.moving;  // 복도 경로 이동(산책·활동이동·복귀) = 연속 보행
-  // 보행 시간: 복도 이동은 틱 간격(3s)에 맞춰 등속 '연속' 활주, 그 외 이동은 거리비례(순간이동 방지, ~20%/s).
-  const moveDur = stroll ? 3 : Math.min(2.4, Math.max(0.5, dist * 0.05));
-  const [walking, setWalking] = useState(false);
+// ── rAF 보행 워커(참고 엔진 이식) — 모든 이동(연출·ambient)이 복도 경로(routePath)를 등속으로 걷는다.
+// 위치는 리액트 상태가 아니라 워커(ref)+DOM style 로 매 프레임 갱신(60fps 리렌더 방지)하고,
+// 포즈에 영향 주는 상태(walking/방향)가 바뀔 때만 Character 를 bump 해 리렌더한다.
+export interface Walker {
+  el: HTMLDivElement | null;
+  x: number; y: number;          // 현재 위치(floor %)
+  tx: number; ty: number;        // 목표(floor %)
+  path: Pt[];                    // 남은 waypoint(마지막=목표)
+  routeKey: string;              // 목표 변경 감지(참고 엔진 routeKey)
+  walking: boolean; movingDown: boolean; faceLeft: boolean;
+  settled: boolean;              // 도착 후 정지 — 산책 멈춤(2.5~6s)·복귀 해제 판단
+  bump: () => void;
+}
+type Walkers = Map<string, Walker>;
+const walkerKey = (x: number, y: number) => `${x.toFixed(2)},${y.toFixed(2)}`;
+
+function Character({ p, walkers }: { p: Placed; walkers: Walkers }) {
+  const id = p.agent.agent_id;
+  const [, bumpRender] = useReducer((n: number) => n + 1, 0);
+  let w = walkers.get(id);
+  if (!w) {                      // 최초 스폰: 자기 자리에서 시작(참고 엔진과 동일 — 걸어들어오지 않음)
+    w = { el: null, x: p.x, y: p.y, tx: p.x, ty: p.y, path: [], routeKey: walkerKey(p.x, p.y),
+          walking: false, movingDown: false, faceLeft: false, settled: true, bump: () => {} };
+    walkers.set(id, w);
+  }
+  w.bump = bumpRender as unknown as () => void;
+  w.tx = p.x; w.ty = p.y;        // 렌더마다 목표 갱신 — 엔진이 다음 프레임에 현재 위치에서 경로 재계산
+  useEffect(() => () => { walkers.delete(id); }, [walkers, id]);
+  const walking = w.walking;
   const [frame, setFrame] = useState<0 | 1>(0);
   useEffect(() => {                // 걷기 프레임 190ms 토글(참고 WALKMS) — walkR1↔R2 / walkF1↔F2
     if (!walking) return;
     const t = setInterval(() => setFrame((f) => (f ? 0 : 1)), 190);
     return () => clearInterval(t);
   }, [walking]);
-  useEffect(() => {
-    last.current = { x: p.x, y: p.y };
-    if (dist > 1.2) {                       // 의미있는 이동만
-      setWalking(true);
-      const t = setTimeout(() => setWalking(false), moveDur * 1000); // 도착(=이동시간)까지 걷기 유지
-      return () => clearTimeout(t);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.x, p.y]);
   // 활동별 '제자리 움직임' — 작업/휴식/잡담/커피/통화는 살아있게 미세 모션, 진짜 유휴(대기)만 정지
   // (사용자 요청: 유휴는 안 흔들리되 활동 중엔 움직임). 이동 중(walking)엔 큰 걸음걸이.
   const actKind = walking ? "walk"
@@ -464,19 +472,19 @@ function Character({ p }: { p: Placed }) {
   const ga = GAITS[actKind];
   const gait = ga ? ga.g : { y: 0, rotate: 0 };
   const gaitT = ga ? { repeat: Infinity, duration: ga.d, ease: "easeInOut" as const } : { duration: 0.2 };
-  const posT = { type: "tween" as const, ease: stroll ? ("linear" as const) : ("easeInOut" as const), duration: moveDur };
-  // 상태·이동 → 스프라이트 포즈(sit/stand/walk) + 좌우반전(참고 엔진 이식)
-  const { pose, flip } = poseFor(actKind, walking, movingDown, frame, faceRef.current, p.face);
+  // 상태·이동 → 스프라이트 포즈(sit/stand/walk) + 좌우반전(참고 엔진 이식). 방향은 워커(경로 구간)가 판정.
+  const { pose, flip } = poseFor(actKind, walking, w.movingDown, frame, w.faceLeft, p.face);
   return (
     <motion.div
+      ref={(el: HTMLDivElement | null) => { walkers.get(id)!.el = el; }}
       initial={{ opacity: 0, scale: 0.4, x: "-50%", y: "-50%" }}
-      animate={{ opacity: 1, scale: 1, x: "-50%", y: "-50%", left: `${p.x}%`, top: `${p.y}%` }}
-      transition={{ left: posT, top: posT, opacity: { duration: 0.4 }, scale: { duration: 0.4 } }}
+      animate={{ opacity: 1, scale: 1, x: "-50%", y: "-50%" }}
+      transition={{ opacity: { duration: 0.4 }, scale: { duration: 0.4 } }}
       // x/y(-50%) 를 framer transform 으로 줘 scale 과 합성 → (left,top)이 스택의 '정중앙'에 앵커된다.
-      // (CSS transform:translate 는 framer 의 scale 애니메이션이 덮어써 무력화되던 버그를 근본 수정.)
-      style={{ position: "absolute",
+      // left/top 은 rAF 보행 엔진이 매 프레임 직접 쓴다(framer 는 transform 만 관리 → 충돌 없음).
+      style={{ position: "absolute", left: `${w.x}%`, top: `${w.y}%`,
                display: "flex", flexDirection: "column", alignItems: "center",
-               zIndex: 10 + Math.round(p.y) }} // 깊이순 z(발 y%) — 오클루더 화분과 painter's 교차
+               zIndex: 10 + Math.round(w.y) }} // 깊이순 z(발 y%) — 오클루더 화분과 painter's 교차
     >
       <AnimatePresence>
         {p.bubble && (
@@ -535,6 +543,56 @@ export default function OfficeView() {
   const [roster, setRoster] = useState<CompanyInfo | null>(null);
   useEffect(() => {
     fetchCompany().then(setRoster);
+  }, []);
+
+  // ── rAF 보행 엔진(참고 엔진 frame 루프 이식) — 워커별로 목표 변경을 감지해 복도 경로를
+  // 재계산하고, 등속(WALK_SPEED_PX)으로 waypoint 를 소비하며 DOM(left/top/z)을 직접 쓴다.
+  // 리액트 리렌더는 포즈 상태(walking/방향) 변화 때만(bump) — 60fps 위치 갱신은 스타일만.
+  const walkersRef = useRef<Walkers>(new Map());
+  useEffect(() => {
+    let raf = 0;
+    let last = performance.now();
+    const step = (now: number) => {
+      raf = requestAnimationFrame(step);
+      const dt = Math.min(0.1, (now - last) / 1000); // 탭 복귀 등 큰 공백은 클램프(순간이동 방지)
+      last = now;
+      if (document.hidden) return;                   // 숨김 중 연산 스킵(루프는 유지)
+      for (const w of walkersRef.current.values()) {
+        if (!w.el) continue;
+        const key = walkerKey(w.tx, w.ty);
+        if (w.routeKey !== key) {                    // 목표 변경 → 현재 위치에서 복도 경로 재계산
+          w.routeKey = key;
+          w.path = routePath({ x: w.x, y: w.y }, { x: w.tx, y: w.ty }).slice(1);
+          w.settled = false;
+        }
+        let budget = WALK_SPEED_PX * dt;             // 등속 보행(px) — 가감속 없는 균일 걸음(참고 SPD)
+        let dirX = 0, dirY = 0;                      // 마지막 진행 방향(px) — 포즈 판정
+        while (budget > 0 && w.path.length) {
+          const wp = w.path[0];
+          const dx = ((wp.x - w.x) / 100) * BASE_W, dy = ((wp.y - w.y) / 100) * BASE_H;
+          const d = Math.hypot(dx, dy);
+          if (d <= budget) { w.x = wp.x; w.y = wp.y; w.path.shift(); budget -= d; }
+          else { w.x += (dx / d) * budget * (100 / BASE_W); w.y += (dy / d) * budget * (100 / BASE_H); budget = 0; }
+          if (d > 0.5) { dirX = dx; dirY = dy; }
+        }
+        const walking = w.path.length > 0;
+        let movingDown = w.movingDown, faceLeft = w.faceLeft;
+        if (dirX !== 0 || dirY !== 0) {
+          movingDown = Math.abs(dirY) > Math.abs(dirX) && dirY > 0;  // 정면: '아래로(다가옴)'만
+          if (!movingDown && Math.abs(dirX) > 1) faceLeft = dirX < 0; // 측면: 좌향은 반전(멈춰도 유지)
+        }
+        if (!walking) w.settled = true;              // 도착 — 산책 멈춤/복귀 해제는 ambient 틱이 판단
+        w.el.style.left = `${w.x}%`;
+        w.el.style.top = `${w.y}%`;
+        w.el.style.zIndex = String(10 + Math.round(w.y));
+        if (walking !== w.walking || movingDown !== w.movingDown || faceLeft !== w.faceLeft) {
+          w.walking = walking; w.movingDown = movingDown; w.faceLeft = faceLeft;
+          w.bump();                                  // 포즈 관련 상태 변화 → Character 리렌더
+        }
+      }
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
   }, []);
 
   // Scale the fixed 16:9 canvas to fit the panel — uniform shrink/grow of EVERY
@@ -664,7 +722,8 @@ export default function OfficeView() {
   // (idle) team's zone. Engaged employees (the active team) and the CEO never wander.
   // Gentle: ~one avatar moves per tick; spots are mutually non-overlapping so no two
   // socializing avatars ever collide. Runs livelier (idle depts mingle) than pre-run.
-  type WSpot = { x: number; y: number; bubble: string; act?: "chat" | "phone" | "rest" | "stroll" | "huddle" | "coffee" | "shelf" | "board" | "return"; partner?: string; path?: Pt[]; pi?: number; moving?: boolean };
+  // (x,y)=목적지 — 실제 위치·경로·보행은 rAF 워커 엔진이 맡는다(routePath 등속 보행).
+  type WSpot = { x: number; y: number; bubble: string; act?: "chat" | "phone" | "rest" | "stroll" | "huddle" | "coffee" | "shelf" | "board" | "return"; partner?: string; pauseUntil?: number };
   const [wander, setWander] = useState<Record<string, WSpot>>({});
   // 비서(자비스)는 비서실 자리를 지켜 wander 풀에서 빠진다(산책·잡담 X). 대신 자기 자리에서 '데스크
   // 라이프'(메모·통화·문서·휴식)를 ~5초마다 바꿔 살아있게 한다 — 유휴일 때만 적용(작업 중엔 layout 의
@@ -706,45 +765,38 @@ export default function OfficeView() {
           if ((w.act === "chat" || w.act === "huddle") && (!w.partner || !next[w.partner])) delete next[k];
         }
 
-        // ── 복도 경로(path)를 한 걸음씩 전진 — 모든 이동이 lane 위에서만 일어난다 ──
+        // ── 도착 후 상태 전이(위치·보행은 rAF 엔진 소관) — 참고 엔진의 '도착 → 2.5~6초 멈춤 →
+        //    다음 목적지' 산책 리듬 이식. 복귀(return)는 자리에 닿으면 wander 해제(자리 안착).
         for (const k of Object.keys(next)) {
           const w = next[k];
-          if (!w.path || w.pi == null || w.pi >= w.path.length) continue;   // 도착·정지 상태
-          const t = w.path[w.pi];
-          const dx = t.x - w.x, dy = t.y - w.y, d = Math.hypot(dx, dy);
-          if (d > PATH_STEP) {                                              // 구간 진행(등속 보행)
-            next[k] = { ...w, x: w.x + (dx / d) * PATH_STEP, y: w.y + (dy / d) * PATH_STEP, moving: true };
-            continue;
-          }
-          const npi = w.pi + 1;                                            // waypoint 도달
-          if (npi < w.path.length) { next[k] = { ...w, x: t.x, y: t.y, pi: npi, moving: true }; continue; }
-          if (w.act === "stroll") {                                        // 산책 → 새 복도 점으로 계속 배회
-            const np = randomLanePoint(Math.random);
-            next[k] = { ...w, x: t.x, y: t.y, path: corridorPath(t, np), pi: 0, moving: true };
-          } else if (w.act === "return") {                                 // 복귀 완료 → 자리에 안착(wander 해제)
-            delete next[k];
-          } else {                                                          // 활동 도착 → 제자리 활동(정지)
-            next[k] = { ...w, x: t.x, y: t.y, pi: npi, moving: false };
+          const wk = walkersRef.current.get(k);
+          if (!wk || !wk.settled) continue;                                // 아직 걷는 중
+          if (w.act === "return") { delete next[k]; continue; }            // 복귀 완료 → 안착
+          if (w.act === "stroll") {                                        // 산책: 잠시 서서 구경 후 다음 지점
+            if (!w.pauseUntil) next[k] = { ...w, pauseUntil: Date.now() + 2500 + Math.random() * 3500 };
+            else if (Date.now() > w.pauseUntil) {
+              const np = randomNavPoint(Math.random);
+              next[k] = { ...w, x: np.x, y: np.y, pauseUntil: undefined };
+            }
           }
         }
 
-        // 책상→목적지 복도 경로(도착지=경로 끝). 종료 시엔 책상으로 복도 복귀(도착 글리치=가구 위 직선 방지).
+        // 활동 시작/종료 — (x,y)는 목적지만. 출발 위치·복도 경로는 엔진이 현재 위치에서 계산한다.
         const startMove = (id: string, dest: Pt, bubble: string, act: WSpot["act"], partner?: string) => {
-          const desk = deskPos[id] ?? dest;
-          next[id] = { x: desk.x, y: desk.y, bubble, act, partner, path: corridorPath(desk, dest), pi: 0, moving: true };
+          next[id] = { x: dest.x, y: dest.y, bubble, act, partner };
         };
         const endMove = (id: string) => {
           const w = next[id]; if (!w || w.act === "return") return;
           const desk = deskPos[id] ?? { x: w.x, y: w.y };
-          next[id] = { x: w.x, y: w.y, bubble: "", act: "return", path: corridorPath({ x: w.x, y: w.y }, desk), pi: 0, moving: true };
+          next[id] = { x: desk.x, y: desk.y, bubble: "", act: "return" };
         };
 
         const freeList = [...freeIds];
         const active = Object.keys(next);
         const target = Math.min(12, Math.max(running ? 3 : 1, Math.round(freeList.length * (running ? 0.55 : 0.35))));
         const rnd = () => Math.random();
-        // 산포는 '도착지'끼리 1/3 미만 겹침(이동 중 현재위치가 아니라 목적지 기준)
-        const destOf = (w: WSpot): Pt => (w.path && w.path.length ? w.path[w.path.length - 1] : { x: w.x, y: w.y });
+        // 산포는 '도착지'끼리 1/3 미만 겹침 — WSpot 의 (x,y)가 곧 목적지.
+        const destOf = (w: WSpot): Pt => ({ x: w.x, y: w.y });
         const exDest = (): Pt[] => Object.values(next).map(destOf);
         const usedDest = (): Set<string> => new Set(Object.values(next).map((w) => key(destOf(w))));
 
@@ -765,8 +817,8 @@ export default function OfficeView() {
               startMove(p, s, "🤝 업무협의", "huddle", people.find((q) => q !== p)); });
           } else if (r < 0.50 && atDesk.length) {                     // 휴식 — 휴게실 소파
             startMove(pick(atDesk), placeInZone(LOUNGE_SOFA_ZONE, exDest(), rnd), "☕ 휴식", "rest");
-          } else if (r < 0.65 && atDesk.length) {                     // 산책 — 복도 배회
-            startMove(pick(atDesk), randomLanePoint(rnd), "🚶 산책", "stroll");
+          } else if (r < 0.65 && atDesk.length) {                     // 산책 — 개방 복도 노드 배회
+            startMove(pick(atDesk), randomNavPoint(rnd), "🚶 산책", "stroll");
           } else if (r < 0.75 && atDesk.length) {                     // 통화 — 빈 복도 점
             const open = CORRIDOR_SPOTS.filter((s) => !usedDest().has(key(s)));
             if (open.length) startMove(pick(atDesk), pick(open), "📞 통화 중", "phone");
@@ -866,8 +918,8 @@ export default function OfficeView() {
           const w = freeIds.has(p.agent.agent_id) ? wander[p.agent.agent_id] : undefined;
           // 비서가 유휴(작업 중 아님)면 데스크 라이프 적용 — 자리는 유지, 동작·말풍선만 살아있게.
           const sec = !w && p.agent.team === SECRETARIAT && !p.thinking ? secLife : undefined;
-          return <Character key={p.agent.agent_id}
-            p={w ? { ...p, x: w.x, y: w.y, bubble: w.bubble, thinking: false, act: w.act, moving: w.moving }
+          return <Character key={p.agent.agent_id} walkers={walkersRef.current}
+            p={w ? { ...p, x: w.x, y: w.y, bubble: w.bubble, thinking: false, act: w.act }
                  : sec ? { ...p, bubble: sec.bubble, act: sec.act } : p} />;
         })}
         {placed.length === 0 && (

@@ -65,111 +65,14 @@ export function meetingCircle(n: number, cx: number, cy: number,
 // 일어난다. 회의실(top-left)은 casual 잡담에 쓰지 않고 '팀간 회의' 전용으로 비워 둔다.
 export const CHAT_PAIRS: [Pt, Pt][] = []; // no static room chat — 잡담 lives inside the team zones
 export const REST_SPOTS: Pt[] = [{ x: 24, y: 70 }, { x: 30, y: 80 }];    // 휴게실(BL) 소파 앞
-// ── 복도(이동) 네트워크 ─────────────────────────────────────────────────────
-// office_map.png 의 '빈 바닥' 통로만 정의(가구 위 X). 2 세로(x24·x62) × 2 가로(y32·y59) 사다리.
-// 모든 ambient 이동(산책·휴식·잡담·커피·자료·통화…)은 이 통로를 따라간다 — 가구 위로 대각선 횡단 금지.
-// 도착지(책상·소파·테이블)는 가구 위일 수 있으나, 그 사이 '이동'은 전부 lane 위 + 축정렬 진입/이탈.
-export const PATH_STEP = 11; // 한 틱(3s)당 통로 이동(%)
-interface Lane { axis: "h" | "v"; at: number; lo: number; hi: number }
-const LANES: Lane[] = [
-  { axis: "v", at: 24, lo: 13, hi: 59 }, // 좌 세로(좌측 방들 ↔ 중앙)
-  { axis: "v", at: 62, lo: 13, hi: 59 }, // 우 세로(중앙 ↔ 우측 방들)
-  { axis: "h", at: 32, lo: 24, hi: 62 }, // 상 가로(상단 방들 ↔ 중단; 두 세로 연결)
-  { axis: "h", at: 59, lo: 11, hi: 91 }, // 하 가로(중단 ↔ 하단; 전폭)
-];
-const TOL = 0.6;
-const onLane = (p: Pt, L: Lane): boolean =>
-  L.axis === "h"
-    ? Math.abs(p.y - L.at) < TOL && p.x >= L.lo - TOL && p.x <= L.hi + TOL
-    : Math.abs(p.x - L.at) < TOL && p.y >= L.lo - TOL && p.y <= L.hi + TOL;
-export const pointOnAnyLane = (p: Pt): boolean => LANES.some((L) => onLane(p, L));
+// ── 이동 경로 ────────────────────────────────────────────────────────────────
+// (구) 4-lane 사다리 corridorPath 는 참고 엔진 이식(officeNav.ts: 80노드 복도 그래프 +
+// 바닥 보행 격자 + LOS string-pull)으로 대체됐다 — 모든 이동은 OfficeView 의 rAF 보행
+// 엔진이 officeNav.routePath 로 계산한다. 여기엔 '목적지' 기하만 남긴다.
 
-// 축정렬(수직/수평) 스냅 후보 — P 에서 각 lane 으로의 직각 진입점(대각선 금지 → 가구 가로지름 방지).
-// 여러 후보를 주고, corridorPath 가 '전체 경로'가 가장 짧은 조합을 고른다(가장 가까운 lane 이 목적지
-// 반대편이라 U턴하는 detour 방지). 각 hop 은 항상 수직 또는 수평.
-function snaps(p: Pt): Array<{ pt: Pt; cost: number }> {
-  const out: Array<{ pt: Pt; cost: number }> = [];
-  for (const L of LANES) {
-    if (L.axis === "h") {
-      if (p.x >= L.lo && p.x <= L.hi) out.push({ pt: { x: p.x, y: L.at }, cost: Math.abs(p.y - L.at) });
-    } else {
-      if (p.y >= L.lo && p.y <= L.hi) out.push({ pt: { x: L.at, y: p.y }, cost: Math.abs(p.x - L.at) });
-    }
-  }
-  return out;
-}
-
-// lane 교차점(사다리 꼭짓점) — 통로 그래프 고정 노드.
-const JUNCTIONS: Pt[] = (() => {
-  const out: Pt[] = [];
-  for (const A of LANES) for (const B of LANES) {
-    if (A.axis === B.axis) continue;
-    const h = A.axis === "h" ? A : B, v = A.axis === "h" ? B : A;
-    const p = { x: v.at, y: h.at };
-    if (p.x >= h.lo && p.x <= h.hi && p.y >= v.lo && p.y <= v.hi
-        && !out.some((q) => q.x === p.x && q.y === p.y)) out.push(p);
-  }
-  return out;
-})();
-
-const KEY = (p: Pt) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`;
-// lane 그래프(교차점 + a + b) 위 a→b 최단 통로(둘 다 lane 위). 미니 다익스트라.
-function laneRoute(a: Pt, b: Pt): { dist: number; path: Pt[] } {
-  const nodes: Pt[] = [];
-  for (const n of [...JUNCTIONS, a, b]) if (!nodes.some((u) => KEY(u) === KEY(n))) nodes.push(n);
-  const idx = (p: Pt) => nodes.findIndex((u) => KEY(u) === KEY(p));
-  const adj: Array<Array<{ to: number; w: number }>> = nodes.map(() => []);
-  for (const L of LANES) {                                  // 같은 lane 위 노드를 위치 순 인접 연결
-    const on = nodes.map((p, i) => ({ p, i })).filter(({ p }) => onLane(p, L));
-    on.sort((m, n) => (L.axis === "h" ? m.p.x - n.p.x : m.p.y - n.p.y));
-    for (let k = 1; k < on.length; k++) {
-      const u = on[k - 1], v = on[k];
-      const w = Math.abs(L.axis === "h" ? v.p.x - u.p.x : v.p.y - u.p.y);
-      adj[u.i].push({ to: v.i, w }); adj[v.i].push({ to: u.i, w });
-    }
-  }
-  const s = idx(a), t = idx(b);
-  const dist = nodes.map(() => Infinity), prev = nodes.map(() => -1), seen = new Set<number>();
-  dist[s] = 0;
-  for (let it = 0; it < nodes.length; it++) {
-    let u = -1, bd = Infinity;
-    for (let i = 0; i < nodes.length; i++) if (!seen.has(i) && dist[i] < bd) { bd = dist[i]; u = i; }
-    if (u < 0) break; seen.add(u);
-    for (const e of adj[u]) if (dist[u] + e.w < dist[e.to]) { dist[e.to] = dist[u] + e.w; prev[e.to] = u; }
-  }
-  const path: Pt[] = [];
-  if (dist[t] < Infinity) for (let c = t; c >= 0; c = prev[c]) path.unshift(nodes[c]);
-  else path.push(a, b);
-  return { dist: dist[t] < Infinity ? dist[t] : Math.hypot(a.x - b.x, a.y - b.y), path };
-}
-
-// 통로 경로 — from→to 를 '복도 위로만' 잇는다. from/to 는 가구 위(도착지)일 수 있고, 그 사이 이동은
-// 전부 lane 위 + 축정렬. 진입/이탈 lane 후보를 모두 시도해 '전체 경로(hop+통로+hop)'가 가장 짧은
-// 조합을 고른다 → 가까운 lane 이 목적지 반대편이라 U턴하는 detour 를 피한다.
-export function corridorPath(from: Pt, to: Pt): Pt[] {
-  const F = snaps(from), T = snaps(to);
-  const Fc = F.length ? F : [{ pt: from, cost: 0 }];
-  const Tc = T.length ? T : [{ pt: to, cost: 0 }];
-  let best: { total: number; lane: Pt[] } = { total: Infinity, lane: [from, to] };
-  for (const f of Fc) for (const t of Tc) {
-    const r = laneRoute(f.pt, t.pt);
-    const total = f.cost + r.dist + t.cost;
-    if (total < best.total) best = { total, lane: r.path };
-  }
-  const out: Pt[] = [];
-  for (const p of [from, ...best.lane, to]) if (!out.length || KEY(out[out.length - 1]) !== KEY(p)) out.push(p);
-  return out;
-}
-
-// 산책 목적지 — 통로(lane) 위 무작위 점(도착하면 또 새 점으로 → 복도를 계속 배회).
-export function randomLanePoint(rng: () => number): Pt {
-  const L = LANES[Math.floor(rng() * LANES.length)];
-  const tpos = L.lo + rng() * (L.hi - L.lo);
-  return L.axis === "h" ? { x: tpos, y: L.at } : { x: L.at, y: tpos };
-}
-
-// 통화/대기 — 세로 복도 중턱(빈 바닥, lane 위). 통화자는 통로를 걸어 이 점에 도착해 선다.
-export const CORRIDOR_SPOTS: Pt[] = [{ x: 24, y: 45 }, { x: 62, y: 45 }];
+// 통화/대기 — 빈 바닥(보행 격자 위) 지점. 통화자는 복도를 걸어 이 점에 도착해 선다.
+// (24,45)=좌 복도 중턱, (41,33)·(59,33)=상단 조용한 복도(참고 엔진 PHONE 스팟).
+export const CORRIDOR_SPOTS: Pt[] = [{ x: 24, y: 45 }, { x: 41, y: 33 }, { x: 59, y: 33 }];
 
 // 회의실(top-left) 팀간(cross-team) 회의 — CEO 통합 시 원장+팀장들이 회의 테이블을 빙 둘러앉아
 // '모여서 회의'하는 모습. 테이블 중심(16.5,16) 둘레 타원: CEO=상석(12시), 팀장=하단 호(좌→우)로

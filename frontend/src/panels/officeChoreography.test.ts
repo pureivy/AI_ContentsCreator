@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   LOUNGE_SOFA_ZONE, PANTRY_ZONE, CONF_ZONE, READING_ZONE, BEANBAG_ZONE, WHITEBOARD_SPOT,
   pointInZone, overlapFrac, placeInZone, MAX_OVERLAP,
-  corridorPath, pointOnAnyLane,
   AVATAR_W, AVATAR_H, Pt, Zone,
 } from "./officeChoreography";
 
@@ -97,33 +96,5 @@ describe("placeInZone — 영역 안 산포, 쌍별 겹침 < 1/3", () => {
   });
 });
 
-// 사용자 요청: 이동(산책·활동이동·복귀)은 '절대로 오브제 위를 지나가지 말고 복도로만'.
-// corridorPath 가 반환하는 모든 이동 구간이 (1) 축정렬(수직/수평, 대각선 금지)이고 (2) 중간 경유점이
-// 전부 복도(lane) 위임을 검증 → 가구 위 대각선 횡단이 구조적으로 불가능함을 보장.
-describe("corridorPath — 이동은 복도(lane)로만, 가구 위 대각선 금지", () => {
-  // (from=책상/존, to=책상/존) — 도착지(from/to)는 가구 위일 수 있으나 그 '사이 이동'은 복도여야 함.
-  const cases: Array<[string, Pt, Pt]> = [
-    ["경영지원 포드→휴게실 소파", { x: 44, y: 45 }, { x: 26, y: 78 }],
-    ["기획팀 데스크→탕비실",      { x: 80, y: 18 }, { x: 78, y: 42 }],
-    ["경영지원 포드→회의실",      { x: 44, y: 45 }, { x: 45, y: 20 }],
-    ["휴게실→탕비실(오피스 횡단)", { x: 26, y: 78 }, { x: 78, y: 42 }],
-    ["기획팀→휴식공간 서재",      { x: 85, y: 16 }, { x: 80, y: 72 }],
-    ["CEO앞 리셉션→회의실",       { x: 12, y: 40 }, { x: 45, y: 20 }],
-  ];
-  for (const [name, from, to] of cases) {
-    it(`${name}: 모든 구간 축정렬 + 중간 경유점은 복도 위`, () => {
-      const path = corridorPath(from, to);
-      expect(path.length).toBeGreaterThanOrEqual(2);
-      // 끝점은 from/to 그대로
-      expect(path[0].x).toBeCloseTo(from.x, 5); expect(path[0].y).toBeCloseTo(from.y, 5);
-      expect(path[path.length - 1].x).toBeCloseTo(to.x, 5); expect(path[path.length - 1].y).toBeCloseTo(to.y, 5);
-      // 모든 연속 구간이 수직 또는 수평(대각선 = 가구 횡단 → 금지)
-      for (let i = 1; i < path.length; i++) {
-        const dx = Math.abs(path[i].x - path[i - 1].x), dy = Math.abs(path[i].y - path[i - 1].y);
-        expect(dx < 0.6 || dy < 0.6).toBe(true);
-      }
-      // from/to(가구 위 도착지)를 뺀 중간 경유점은 전부 복도(lane) 위
-      for (let i = 1; i < path.length - 1; i++) expect(pointOnAnyLane(path[i])).toBe(true);
-    });
-  }
-});
+// (구) corridorPath(4-lane 사다리) 테스트는 참고 엔진 이식(officeNav.ts)으로 대체 —
+// '가구 위를 지나가지 않는 이동' 보장은 officeNav.test.ts(보행 격자 기반)가 검증한다.
