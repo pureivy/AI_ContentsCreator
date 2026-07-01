@@ -45,7 +45,6 @@ import { parseManualMetrics, readMetrics } from '../analytics/performance';
 import { getCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
 import { buildBriefing } from '../autonomy/briefing';
-import { buildHwpx, hwpxAvailable } from '../export/hwpx';
 import { extractText, isSupportedExt } from '../tools/extract';
 import { classifyAndAssign, getStatuses, reassign, setIngestStatus } from '../tools/classify';
 import { transcribe, sttAvailable } from '../voice/stt';
@@ -1165,32 +1164,8 @@ async function reviseHandler(c: Context): Promise<Response> {
   return c.json({ run_id: id, version });
 }
 
-// 한글(HWPX) 내보내기 — 산출물 마크다운을 HWPX(ZIP)로 변환·스트림.
-function hwpxHandler(c: Context): Response {
-  const id = c.req.param('id') ?? '';
-  const h = RUNS.get(id);
-  // 메모리에 없으면 디스크 메타로 폴백 — 재시작/evict 후에도 기록 런 HWPX 내보내기 동작.
-  const meta = h ? null : (loadRunMeta(id) ?? legacyMetaFromFiles(id));
-  const deliverable = h?.deliverable ?? meta?.deliverable ?? '';
-  const topic = h?.topic ?? meta?.topic ?? '';
-  if (!deliverable.trim()) return c.json({ error: '산출물이 없어 내보낼 수 없습니다' }, 404);
-  if (!hwpxAvailable()) return c.json({ error: 'HWPX 템플릿 누락(assets/hwpx)' }, 500);
-  try {
-    const buf = buildHwpx(deliverable, { title: topic, creator: 'GEPA AI Office' });
-    const fname = encodeURIComponent((topic || '최종결과물').replace(/[\s/\\]+/g, '_').slice(0, 40)) + '.hwpx';
-    return new Response(new Uint8Array(buf), {
-      headers: {
-        'Content-Type': 'application/haansofthwpx',
-        'Content-Disposition': `attachment; filename*=utf-8''${fname}`,
-      },
-    });
-  } catch (e) {
-    return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
-  }
-}
-
 app.post('/runs/:id/revise', reviseHandler);
-app.get('/runs/:id/export/hwpx', hwpxHandler);
+// (HWPX 내보내기 제거 — 콘텐츠 스튜디오는 최종 산출물을 한글 문서로 변환하지 않는다.)
 // 중단 런 재구동(resume) — 오케스트레이터에 체크포인트/경계-재시작 인프라가 없어(RunOptions
 // 에 resumeFrom 없음; runOffice/runOrg 는 항상 처음부터) 안전한 재구동이 불가하다. 무계획 재실행은
 // LLM 을 처음부터 다시 돌려 이벤트 seq 가 충돌하므로 막는다. 프론트는 이 501 을 받아 친절히 안내하고

@@ -699,58 +699,7 @@ export async function ttsFetch(text: string, voice?: string): Promise<Blob | nul
   } catch { return null; }
 }
 
-// 저장 파일명 정리 — 60자 절단 문장형 이름은 macOS 저장 패널이 저장 버튼을
-// 비활성화하는 사례가 있어(짧은 이름은 전부 정상 저장됨) 40자 내 단어 경계로 줄인다.
-function safeDownloadName(raw: string, fallback = "최종결과물"): string {
-  const base = raw.replace(/\.hwpx$/i, "").replace(/[\s_]+/g, " ").trim();
-  let cut = base.slice(0, 40);
-  if (base.length > 40) {
-    const sp = cut.lastIndexOf(" ");
-    if (sp > 20) cut = cut.slice(0, sp); // 단어 중간에서 끊기지 않게
-  }
-  cut = cut.replace(/[\s.,·]+$/g, "");
-  return (cut || fallback) + ".hwpx";
-}
-
-// 최종 결과물 한글(HWPX) 다운로드. window.open(팝업) 내비게이션 다운로드는 Chrome의
-// "다운로드 전 저장 위치 묻기" 설정과 만나면 팝업 탭이 닫히며 저장 대화상자까지
-// 같이 취소되는(USER_CANCELED, 0바이트) 사례가 실측됨 — 메인 탭에서 fetch→blob→
-// 앵커 클릭으로 받는다. 실패(400/500) 시 서버 JSON의 error 메시지를 throw.
-export async function downloadRunHwpx(runId: string): Promise<void> {
-  const r = await fetch(`/runs/${encodeURIComponent(runId)}/export/hwpx`);
-  if (!r.ok) {
-    // body는 한 번만 읽을 수 있으므로 text로 받고 JSON 파싱을 시도한다.
-    let msg = `다운로드 실패 (HTTP ${r.status})`;
-    try {
-      const t = (await r.text()).trim();
-      try {
-        const j = JSON.parse(t);
-        msg = j?.error || msg;
-      } catch {
-        // JSON 아님(프록시 502/HTML 에러 등) — 본문 일부라도 보여준다.
-        if (t) msg += ` — ${t.slice(0, 200)}`;
-      }
-    } catch { /* 본문도 못 읽음 — 기본 메시지 유지 */ }
-    throw new Error(msg);
-  }
-  const blob = await r.blob();
-  const cd = r.headers.get("content-disposition") ?? "";
-  const star = /filename\*=utf-8''([^;]+)/i.exec(cd);
-  const plain = /filename="?([^";]+)"?/i.exec(cd);
-  const filename = safeDownloadName(star ? decodeURIComponent(star[1]) : plain?.[1] ?? "");
-  const url = URL.createObjectURL(blob);
-  try {
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  } finally {
-    // 다운로드가 blob을 이미 캡처한 뒤라 지연 revoke로 충분(Safari 호환 위해 즉시 X).
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  }
-}
+// (HWPX 내보내기 제거 — 콘텐츠 스튜디오는 최종 산출물을 한글 문서로 변환하지 않는다.)
 
 
 // ============================================================

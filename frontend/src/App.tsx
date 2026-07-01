@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "./store";
 import { startRun, resumeRun, watchRun, RunHandle } from "./transport/sse";
-import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, downloadRunHwpx, fetchEta, reviseRun, fetchTemplates, saveTemplate, deleteTemplate, runTemplate, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, getVoices, setVoiceConversational, RunInfo, UploadFileResult, LlmStatus, EtaStats, TemplateInfo, RunSettings } from "./api";
+import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, fetchEta, reviseRun, fetchTemplates, saveTemplate, deleteTemplate, runTemplate, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, getVoices, setVoiceConversational, RunInfo, UploadFileResult, LlmStatus, EtaStats, TemplateInfo, RunSettings } from "./api";
 import { ActivityItem, ApprovalItem, DebateMsg, UIState } from "./events/types";
 import AgentGraph from "./panels/AgentGraph";
 import OfficeView from "./panels/OfficeView";
@@ -344,7 +344,6 @@ export default function App() {
   const [llmMenu, setLlmMenu] = useState(false);
   const llmMenuRef = useRef<HTMLDivElement>(null);
   const [llmBusy, setLlmBusy] = useState(false);
-  const [hwpxBusy, setHwpxBusy] = useState(false);  // 한글(HWPX) 내보내기 진행 중
   const [showBrain, setShowBrain] = useState(false);  // "제2의 두뇌" 위키 그래프 모달
   const [metric, setMetric] = useState<MetricKind | null>(null);  // 대시보드 지표 드릴다운
   // 3패널(타임라인|사무실|산출물) 가로 폭 — 핸들 드래그로 조절, localStorage 영속.
@@ -1154,28 +1153,6 @@ export default function App() {
             <span className="output-glyph">🧭</span>
             <b>최종 결과물</b>
             {s.status === "running" && <span className="output-live">작성 중…</span>}
-            {s.runId && s.status !== "running" && (
-              <button
-                className="output-hwpx"
-                title="한글(HWPX) 문서로 내보내기"
-                disabled={hwpxBusy}
-                onClick={async () => {
-                  // 팝업(window.open) 다운로드는 Chrome '저장 위치 묻기'와 충돌해
-                  // 조용히 취소될 수 있어 메인 탭 fetch→blob 다운로드로 처리.
-                  if (!s.runId || hwpxBusy) return;
-                  setHwpxBusy(true);
-                  try {
-                    await downloadRunHwpx(s.runId);
-                  } catch (e) {
-                    alert(e instanceof Error ? e.message : String(e));
-                  } finally {
-                    setHwpxBusy(false);
-                  }
-                }}
-              >
-                {hwpxBusy ? "⏳ 생성 중…" : "📄 한글"}
-              </button>
-            )}
             {s.runId && s.status !== "running" && (
               <button
                 className="output-hwpx"
