@@ -29,7 +29,12 @@ export function normalizeModel(m: string | undefined): string | null {
   return null;
 }
 const STANCES = new Set(['neutral', 'pro', 'con', 'critic', 'nuanced']);
-const YAML_TOOLS = new Set(['wiki', 'web']);
+// wiki/web 은 mapTools 가 확장(wiki→wiki_query+wiki_ingest, web→web_search); 나머지는 그대로 통과.
+// naver_* 는 UI editRole 재저장 시 필터로 스트립되지 않게 여기 포함(로드 시엔 mapTools 통과라 무관).
+const YAML_TOOLS = new Set([
+  'wiki', 'web',
+  'naver_search', 'naver_searchad', 'naver_datalab', 'naver_autocomplete', 'naver_analytics',
+]);
 
 interface YRole {
   id?: string; title?: string; level?: string; team?: string;
@@ -95,7 +100,7 @@ function mapTools(tools: unknown): string[] {
   }
   return [...new Set(out)];
 }
-const TEAM_EMOJI: Record<string, string> = { planning: '📊', support: '💼' };
+const TEAM_EMOJI: Record<string, string> = { planning: '📊', support: '💼', research: '🔍', content: '✍️' };
 function emojiFor(level: string | undefined, team: string | null | undefined, isCritic: boolean): string {
   if (level === 'ceo') return '🧭';
   if (isCritic) return '⚖️';
