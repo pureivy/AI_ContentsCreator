@@ -158,6 +158,34 @@ export function readVerified(id: string, maxChars = 1000): string {
   return v.length > maxChars ? '...\n' + v.slice(-maxChars) : v;
 }
 
+// --- 주입 지식(injected.md) — 사람이 UI로 특정 에이전트에 넣는 외부 지식. '우선 신뢰'로 시스템프롬프트에 주입.
+// 자가학습(memory)·근거추출(verified)과 달리 사람이 명시적으로 넣은 것이라 최우선 배치하되, '관련될 때
+// 우선 활용'으로 프레이밍(무관 출력에 억지로 끼워넣지 않게). 주입 한도(자 수) 초과분은 최신 우선(tail)로 잘린다. ---
+export const INJECTED_CAP = 2000;
+export function appendInjected(id: string, text: string, source = '외부 자료'): boolean {
+  if (!safeId(id)) return false;
+  const t = (text || '').trim();
+  if (!t) return false;
+  fs.mkdirSync(dir(id), { recursive: true });
+  const src = source.replace(/\s+/g, ' ').trim().slice(0, 80) || '외부 자료';
+  fs.appendFileSync(path.join(dir(id), 'injected.md'), `\n## ${src} (${kstDate()})\n${t}\n`, 'utf-8');
+  return true;
+}
+export function readInjected(id: string, maxChars = INJECTED_CAP): string {
+  if (!safeId(id)) return '';
+  const v = read(path.join(dir(id), 'injected.md')).trim();
+  return v.length > maxChars ? '...(이전 주입 일부 생략)\n' + v.slice(-maxChars) : v;
+}
+/** injected.md 전체 길이 — 엔드포인트의 한도초과 경고용(주입은 tail 로 잘리므로 총량>CAP 이면 일부 미반영). */
+export function injectedLength(id: string): number {
+  if (!safeId(id)) return 0;
+  return read(path.join(dir(id), 'injected.md')).trim().length;
+}
+export function clearInjected(id: string): void {
+  if (!safeId(id)) return;
+  try { fs.rmSync(path.join(dir(id), 'injected.md')); } catch { /* 없으면 무해 */ }
+}
+
 /** CEO 의사결정 로그(공유). */
 export function appendDecision(topic: string, summary: string): void {
   try {
@@ -224,9 +252,12 @@ export function personaExtra(id: string): string {
   const parts: string[] = [];
   const goal = readGoal(id).trim();
   const skills = readSkills(id);
+  const injected = readInjected(id).trim();
   const verified = readVerified(id, 1000);
   const memory = readMemory(id, 1000);
   if (goal) parts.push(`[개인 목표]\n${goal}`);
+  // 사람이 주입한 외부 지식 — 최우선 신뢰. 단 '관련될 때 우선 활용'으로, 무관한 출력에 억지로 끼워넣지 않게.
+  if (injected) parts.push(`[주입된 외부 지식(우선 신뢰 — 관련될 때 우선 활용, 무관하면 무시)]\n${injected}`);
   // 검증 지식(근거 확인됨)을 교훈보다 먼저·우선 신뢰하도록 배치.
   if (verified) parts.push(`[검증된 지식(근거 확인됨 — 우선 신뢰)]\n${verified}`);
   if (skills) parts.push(`[검증된 작업 패턴(스킬)]\n${skills}`);
@@ -260,6 +291,7 @@ export function agentDetail(role: RoleDef): Record<string, unknown> {
     goal: readGoal(id),
     memory: read(path.join(dir(id), 'memory.md')),
     verified: read(path.join(dir(id), 'verified.md')),
+    injected: read(path.join(dir(id), 'injected.md')),
     tools_md: JSON.stringify(readCapabilities(id)),
     activity_tail: read(path.join(dir(id), 'activity.log')).split('\n').filter(Boolean).slice(-20),
     usage_pages: [] as Array<{ page_id: string; title: string }>,

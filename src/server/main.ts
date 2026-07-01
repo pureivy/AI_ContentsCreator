@@ -27,7 +27,7 @@ import { getCompany, reloadCompany, editRole, deleteRole, addTeam, renameTeam, d
 import { rolesById } from '../agents/company';
 import type { RoleDef } from '../agents/company';
 import type { RolePatch, MemberBody } from '../agents/company-loader';
-import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appendActivity, ensureScaffold, effectiveAutonomy } from '../agents/workspace';
+import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appendActivity, ensureScaffold, effectiveAutonomy, appendInjected, injectedLength, clearInjected, INJECTED_CAP } from '../agents/workspace';
 import { listKeys, setKey, addCustom, deleteKey, getSecret } from '../secrets/store';
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
@@ -595,6 +595,61 @@ app.post('/agents/:id/skills', async (c) => {
 });
 app.delete('/agents/:id/skills/:skill', (c) =>
   deleteSkill(c.req.param('id') ?? '', c.req.param('skill') ?? '') ? c.json({ ok: true }) : c.json({ error: 'skill 삭제 실패' }, 400));
+
+// 지식 주입 — 업로드 파일(들)을 추출해 선택한 에이전트(들)의 injected.md 에 '우선 신뢰 지식'으로 누적.
+// (/sources 와 동일한 추출·가드 재사용. agent_ids 는 반복 필드 또는 콤마 문자열 모두 허용, roster+safeId 검증.)
+async function injectKnowledgeHandler(c: Context): Promise<Response> {
+  const body = await c.req.parseBody({ all: true });
+  const rawFiles = body['files'];
+  const files = (Array.isArray(rawFiles) ? rawFiles : [rawFiles]).filter((x): x is File => x instanceof File);
+  const rawIds = body['agent_ids'];
+  const idParts = (Array.isArray(rawIds) ? rawIds : [rawIds])
+    .flatMap((v) => String(v ?? '').split(',')).map((s) => s.trim()).filter(Boolean);
+  const roster = rolesById(getCompany());
+  const agentIds = [...new Set(idParts)].filter((id) => roster.has(id)); // 실재 멤버만(경로 traversal·유령 id 차단)
+  if (!agentIds.length) return c.json({ error: '대상 에이전트를 하나 이상 선택하세요' }, 400);
+  if (!files.length) return c.json({ error: '파일이 필요합니다' }, 400);
+
+  const docs: Array<{ name: string; text: string }> = [];
+  const fileResults: Array<Record<string, unknown>> = [];
+  for (const f of files) {
+    const name = f.name || 'upload';
+    if (!isSupportedExt(name)) { fileResults.push({ file: name, status: 'unsupported', note: 'PDF/DOCX/HWPX/XLSX/PPTX/텍스트만 지원' }); continue; }
+    if (f.size > 25_000_000) { fileResults.push({ file: name, status: 'too-large' }); continue; }
+    try {
+      const text = (await extractText(name, Buffer.from(await f.arrayBuffer()))).trim();
+      if (!text) { fileResults.push({ file: name, status: 'failed', note: '추출된 텍스트 없음' }); continue; }
+      docs.push({ name, text });
+      fileResults.push({ file: name, status: 'ok', chars: text.length });
+    } catch (e) { fileResults.push({ file: name, status: 'error', note: e instanceof Error ? e.message : String(e) }); }
+  }
+  if (!docs.length) return c.json({ error: '주입할 텍스트를 추출하지 못했습니다', files: fileResults }, 400);
+
+  const agents: Array<Record<string, unknown>> = [];
+  for (const id of agentIds) {
+    ensureScaffold(id);
+    for (const d of docs) appendInjected(id, d.text, d.name);
+    const total = injectedLength(id);
+    appendActivity(id, `📥 지식 주입: ${docs.map((d) => d.name).join(', ')}`);
+    agents.push({ agent: id, name: roster.get(id)?.name ?? id, totalChars: total, overCap: total > INJECTED_CAP });
+  }
+  const over = agents.some((a) => a.overCap);
+  return c.json({
+    ok: true, files: fileResults, agents,
+    warning: over ? `일부 에이전트의 주입 총량이 반영 한도(${INJECTED_CAP}자)를 넘어, 최신 주입 우선으로 잘려 일부는 프롬프트에 안 들어갑니다. '비우기'로 정리하거나 대용량은 자료실(위키 업로드)을 쓰세요.` : null,
+  });
+}
+app.post('/agents/knowledge', injectKnowledgeHandler);
+app.post('/api/agents/knowledge', injectKnowledgeHandler);
+function clearKnowledgeHandler(c: Context): Response {
+  const id = c.req.param('id') ?? '';
+  if (!rolesById(getCompany()).has(id)) return c.json({ error: 'unknown agent' }, 404);
+  clearInjected(id);
+  appendActivity(id, '🧹 주입 지식 비움');
+  return c.json({ ok: true });
+}
+app.delete('/agents/:id/knowledge', clearKnowledgeHandler);
+app.delete('/api/agents/:id/knowledge', clearKnowledgeHandler);
 
 // 회사(역할/팀) 편집 — 성공 시 reloadCompany 로 /company 즉시 반영.
 function companyEdit(c: Context, r: { ok: boolean; error?: string; [k: string]: unknown }): Response {

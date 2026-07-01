@@ -6,9 +6,10 @@ import { useEffect, useState } from "react";
 import {
   fetchCompany, fetchAgent, patchAgent, addSkill, deleteSkill,
   addTeam, renameTeam, deleteTeam, addMember, patchRole, deleteRole,
-  fetchLlmStatus, CompanyInfo, RoleInfo, AgentProfile, LlmSetting,
+  fetchLlmStatus, CompanyInfo, RoleInfo, AgentProfile, LlmSetting, clearInjectedKnowledge,
 } from "../api";
 import Avatar from "./Avatar";
+import KnowledgeInject from "./KnowledgeInject";
 
 const AUTONOMY_LABEL = ["Off", "읽기전용", "초안(승인)", "자동"];
 // 로컬 우선 제품: 직원별 '모델'을 '처리 등급(tier)' 으로 일원화. 백엔드 agentDetail 이
@@ -45,6 +46,7 @@ export default function EmployeesView() {
   const [profile, setProfile] = useState<AgentProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const [flashMsg, setFlashMsg] = useState("");
+  const [injectOpen, setInjectOpen] = useState(false);  // 지식 주입 모달
 
   // workspace edit state
   const [goal, setGoal] = useState("");
@@ -182,6 +184,7 @@ export default function EmployeesView() {
       <div className="emp-dir-roster">
         <div className="emp-roster-head">
           <span>👥 직원 편집</span>
+          <button className="btn ghost emp-inject-btn" onClick={() => setInjectOpen(true)} title="파일로 외부 지식을 특정 에이전트(들)에 주입">📥 지식 주입</button>
           <span className="emp-saved">{flashMsg}</span>
         </div>
 
@@ -308,6 +311,17 @@ export default function EmployeesView() {
               </div>
             </div>
 
+            <div className="emp-injected-head">
+              <h4>📥 주입된 외부 지식 (사람이 넣음 · 최우선 신뢰)</h4>
+              {profile.injected?.trim() && (
+                <button className="btn ghost emp-inject-clear" onClick={async () => {
+                  if (!window.confirm("이 에이전트의 주입 지식을 모두 비울까요?")) return;
+                  if (await clearInjectedKnowledge(profile.id)) { flash("주입 지식 비움"); load(profile.id); }
+                }}>🧹 비우기</button>
+              )}
+            </div>
+            <pre className="emp-dir-file">{profile.injected?.trim() ? profile.injected.trim() : "(없음 — 상단 📥 지식 주입 으로 파일을 이 에이전트에 넣으면 다음 런부터 우선 반영됩니다)"}</pre>
+
             <h4>✅ 검증 지식 (근거 확인됨 · 우선 신뢰)</h4>
             <pre className="emp-dir-file">{profile.verified?.trim() ? profile.verified.trim() : "(아직 없음 — 산출물에 [근거: 출처] 태그가 붙은 주장이 검증 지식으로 자동 승격되어 다음 런에 우선 주입됩니다)"}</pre>
 
@@ -319,6 +333,9 @@ export default function EmployeesView() {
           </>
         )}
       </div>
+      {injectOpen && company && (
+        <KnowledgeInject company={company} onClose={() => setInjectOpen(false)} onDone={() => { if (sel) load(sel); }} />
+      )}
     </div>
   );
 }

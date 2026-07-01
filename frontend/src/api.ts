@@ -518,6 +518,7 @@ export interface AgentProfile extends RoleInfo {
   goal: string;
   memory: string;
   verified: string;
+  injected: string;
   tools_md: string;
   activity_tail: string[];
   usage_pages: { page_id: string; title: string }[];
@@ -821,4 +822,27 @@ export async function postPieceMetrics(id: string, body: unknown): Promise<{ ok:
 export async function fetchPieceMetrics(id: string): Promise<MetricSample[]> {
   try { const r = await fetch(`/pieces/${id}/metrics`); if (!r.ok) return []; return (await r.json()).metrics ?? []; }
   catch { return []; }
+}
+
+// --- 지식 주입: 파일(들)을 선택한 에이전트(들)에 '우선 신뢰 지식'으로 주입 ---
+export interface InjectResult {
+  ok: boolean;
+  files?: { file: string; status: string; chars?: number; note?: string }[];
+  agents?: { agent: string; name: string; totalChars: number; overCap: boolean }[];
+  warning?: string | null;
+  error?: string;
+}
+export async function injectKnowledge(agentIds: string[], files: File[] | FileList): Promise<InjectResult> {
+  try {
+    const fd = new FormData();
+    for (const f of Array.from(files)) fd.append("files", f);
+    fd.append("agent_ids", agentIds.join(","));
+    const r = await fetch("/agents/knowledge", { method: "POST", body: fd });
+    const j = await r.json().catch(() => ({} as Record<string, unknown>));
+    return r.ok ? { ok: true, ...j } : { ok: false, error: (j as { error?: string }).error || `HTTP ${r.status}`, files: (j as InjectResult).files };
+  } catch { return { ok: false, error: "network" }; }
+}
+export async function clearInjectedKnowledge(id: string): Promise<boolean> {
+  try { const r = await fetch(`/agents/${id}/knowledge`, { method: "DELETE" }); return r.ok; }
+  catch { return false; }
 }
