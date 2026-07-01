@@ -137,7 +137,7 @@ export async function updateRunSettings(patch: Partial<RunSettings>): Promise<Ru
   }
 }
 
-// ── API 키 통합 관리 (서버 data/secrets.json 저장) ──
+// ── API 키 통합 관리 (프로젝트 .env 단일 저장) ──
 export interface ApiKeyInfo {
   key: string; label: string; icon: string; desc: string;
   placeholder: string; needs_restart: boolean; set: boolean; masked: string; builtin: boolean;

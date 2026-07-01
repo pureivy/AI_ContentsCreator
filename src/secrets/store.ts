@@ -1,22 +1,26 @@
 /**
- * 시크릿(API 키) 저장소 — data/secrets.json 에 저장. 화면엔 항상 마스킹만 노출한다.
- * git 미추적: sync(gitsync.ts)는 wiki/raw/sessions 만 커밋하므로 data/ 루트의 secrets.json 은 자동 제외.
- * builtin 키(Anthropic/OpenAI/법제처)는 정의가 코드에 있으므로 삭제 시 '숨김'(값 제거+카드 제거, 복원 가능),
- * 사용자 키는 추가·완전 삭제 가능.
+ * 시크릿(API 키) 저장소 — 값은 프로젝트 루트 `.env` 한 곳에만 저장한다(사용자 요청: 저장소 일원화).
+ * 부팅 시 process.loadEnvFile() 이 같은 파일을 읽으므로 '.env = 단일 소스'. UI 편집은 파일을
+ * 원자적으로 고쳐 쓰고(주석·다른 줄 보존, 0600) process.env 에도 미러링해 재시작 없이 반영한다.
+ * data/secrets.json 은 메타데이터(사용자 키 정의 custom·숨긴 기본 키 hidden)만 남고, 과거 값은
+ * 최초 접근 시 .env 로 1회 이관된다. 화면엔 항상 마스킹만 노출.
+ * builtin 키(Anthropic/OpenAI/커넥터)는 정의가 코드에 있으므로 삭제 시 '숨김'(값 제거+카드 제거,
+ * 복원 가능), 사용자 키는 추가·완전 삭제 가능.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { connectorKeyDefs } from '../grounding/registry'; // pure 모듈(순환 없음). 등록은 main 이 grounding 을 import 하며 수행.
 
-const FILE = path.join(CONFIG.dataDir, 'secrets.json');
+const FILE = path.join(CONFIG.dataDir, 'secrets.json');           // 메타데이터(custom·hidden)만
+const ENV_FILE = process.env.GEPA_ENV_FILE || path.resolve(process.cwd(), '.env'); // 값 저장소(단일)
 
 export interface ApiKeyInfo {
   key: string; label: string; icon: string; desc: string;
   placeholder: string; needs_restart: boolean; set: boolean; masked: string; builtin: boolean;
 }
 interface CustomDef { key: string; label: string; icon: string; desc: string }
-interface Store { values: Record<string, string>; custom: CustomDef[]; hidden: string[] }
+interface Meta { custom: CustomDef[]; hidden: string[] }
 
 interface BuiltinDef { key: string; label: string; icon: string; desc: string; placeholder: string; needs_restart: boolean }
 const BUILTIN: BuiltinDef[] = [
@@ -28,22 +32,93 @@ const BUILTIN: BuiltinDef[] = [
   { key: 'TELEGRAM_CHAT_ID', label: '텔레그램 챗 ID', icon: '💬', desc: '알림을 받을 텔레그램 chat_id', placeholder: '123456789', needs_restart: false },
   // 법령(LAW)·DART 등 외부 데이터 소스 키는 그라운딩 커넥터(grounding/)가 선언 → connectorKeyDefs 로 합류.
 ];
-// 커넥터가 선언한 키도 '내장 키'처럼 다룬다(값 편집만, 삭제 불가, 설정 시 자동 연동).
+// 커넥터가 선언한 키도 '내장 키'처럼 다룬다(값 편집만, 삭제=숨김, 설정 시 자동 연동).
 const connDefs = (): BuiltinDef[] =>
   connectorKeyDefs().map((d) => ({ key: d.key, label: d.label, icon: d.icon, desc: d.desc, placeholder: d.placeholder, needs_restart: false }));
 const builtinDefs = (): BuiltinDef[] => [...BUILTIN, ...connDefs()];
 const isBuiltinKey = (k: string): boolean => builtinDefs().some((b) => b.key === k);
 
-function read(): Store {
-  try {
-    const s = JSON.parse(fs.readFileSync(FILE, 'utf-8')) as Partial<Store>;
-    return { values: s.values ?? {}, custom: s.custom ?? [], hidden: s.hidden ?? [] };
-  } catch { return { values: {}, custom: [], hidden: [] }; }
+// ── .env 파싱/편집 (순수 텍스트 변환 — 테스트 대상) ─────────────────────────
+const ENV_LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/;
+
+/** .env 텍스트 → 값 맵. 주석 무시, 따옴표 제거, 같은 키 중복 시 마지막 값. */
+export function parseEnvText(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*#/.test(line)) continue;
+    const m = ENV_LINE.exec(line);
+    const k = m?.[1], raw = m?.[2];
+    if (!k || raw === undefined) continue;
+    let v = raw.trim();
+    if (v.length >= 2 && ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))) {
+      const dq = v.startsWith('"');
+      v = v.slice(1, -1);
+      // 이중따옴표만 이스케이프 해제(작성 시 quoteEnv 와 대칭)
+      if (dq) v = v.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    }
+    out[k] = v;
+  }
+  return out;
 }
-function write(s: Store): void {
+function quoteEnv(v: string): string {
+  return /[\s#'"\\]/.test(v) ? `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : v;
+}
+/**
+ * .env 텍스트에서 key 라인을 교체/삭제/추가한 새 텍스트 반환(순수).
+ * 주석·다른 키·빈 줄은 그대로 보존. 같은 키 중복 라인은 하나로 정리.
+ * value === undefined → 해당 키 라인 제거.
+ */
+export function upsertEnvText(text: string, key: string, value: string | undefined): string {
+  const lines = text.length ? text.split(/\r?\n/) : [];
+  const kept: string[] = [];
+  let replaced = false;
+  for (const line of lines) {
+    const m = ENV_LINE.exec(line);
+    if (m?.[1] === key && !/^\s*#/.test(line)) {
+      if (value !== undefined && !replaced) { kept.push(`${key}=${quoteEnv(value)}`); replaced = true; }
+      continue; // 삭제 대상 또는 중복 라인 스킵
+    }
+    kept.push(line);
+  }
+  if (value !== undefined && !replaced) {
+    while (kept.length && kept[kept.length - 1] === '') kept.pop();
+    kept.push(`${key}=${quoteEnv(value)}`);
+  }
+  return kept.join('\n').replace(/\n*$/, '\n');
+}
+
+function readEnvValues(): Record<string, string> {
+  try { return parseEnvText(fs.readFileSync(ENV_FILE, 'utf-8')); } catch { return {}; }
+}
+/** .env 원자적 갱신(0600) + process.env 미러링(부팅 loadEnvFile 값이 낡지 않게 즉시 반영). */
+function writeEnvValue(key: string, value: string | undefined): void {
+  let text = '';
+  try { text = fs.readFileSync(ENV_FILE, 'utf-8'); } catch { /* 새 파일 */ }
+  const tmp = `${ENV_FILE}.tmp`;
+  fs.writeFileSync(tmp, upsertEnvText(text, key, value), { mode: 0o600 });
+  fs.renameSync(tmp, ENV_FILE);
+  if (value !== undefined) process.env[key] = value;
+  else delete process.env[key];
+}
+
+// ── 메타데이터(secrets.json) — 레거시 values 는 최초 접근 시 .env 로 1회 이관 ──
+function writeMeta(m: Meta): void {
   fs.mkdirSync(path.dirname(FILE), { recursive: true });
-  fs.writeFileSync(FILE, JSON.stringify(s, null, 2), 'utf-8');
+  fs.writeFileSync(FILE, JSON.stringify(m, null, 2), { mode: 0o600 });
 }
+function readMeta(): Meta {
+  let raw: Partial<Meta> & { values?: Record<string, string> };
+  try { raw = JSON.parse(fs.readFileSync(FILE, 'utf-8')) as Partial<Meta> & { values?: Record<string, string> }; }
+  catch { raw = {}; }
+  const meta: Meta = { custom: raw.custom ?? [], hidden: raw.hidden ?? [] };
+  if (raw.values) {                                   // 레거시(이전 저장소) — .env 에 없는 값만 이관 후 제거
+    const cur = readEnvValues();
+    for (const [k, v] of Object.entries(raw.values)) if (v && !(k in cur)) writeEnvValue(k, v);
+    writeMeta(meta);
+  }
+  return meta;
+}
+
 /** 항상 마스킹 — 앞 4 + 점 + 뒤 4. 짧으면 전부 가림. */
 export function maskSecret(v: string): string {
   if (!v) return '';
@@ -53,62 +128,64 @@ export function maskSecret(v: string): string {
 function validKeyName(k: string): boolean { return /^[A-Z][A-Z0-9_]{1,48}$/.test(k); }
 
 export function listKeys(): ApiKeyInfo[] {
-  const s = read();
+  const meta = readMeta();
+  const vals = readEnvValues();
+  // 표시값 = 런타임(getSecret)과 동일 우선순위: .env 파일 → 실제 환경변수(셸 export 등)
+  const val = (k: string): string => vals[k] ?? process.env[k] ?? '';
   const builtin: ApiKeyInfo[] = builtinDefs()
-    .filter((b) => !s.hidden.includes(b.key))
-    .map((b) => ({ ...b, set: !!s.values[b.key], masked: maskSecret(s.values[b.key] ?? ''), builtin: true }));
-  const custom: ApiKeyInfo[] = s.custom.map((c) => ({
+    .filter((b) => !meta.hidden.includes(b.key))
+    .map((b) => ({ ...b, set: !!val(b.key), masked: maskSecret(val(b.key)), builtin: true }));
+  const custom: ApiKeyInfo[] = meta.custom.map((c) => ({
     key: c.key, label: c.label || c.key, icon: c.icon || '🔑', desc: c.desc || '사용자 정의 키',
-    placeholder: '값 입력…', needs_restart: false, set: !!s.values[c.key], masked: maskSecret(s.values[c.key] ?? ''), builtin: false,
+    placeholder: '값 입력…', needs_restart: false, set: !!val(c.key), masked: maskSecret(val(c.key)), builtin: false,
   }));
   return [...builtin, ...custom];
 }
 export function setKey(key: string, value: string): { ok: boolean; error?: string } {
-  const s = read();
-  if (!isBuiltinKey(key) && !s.custom.some((c) => c.key === key)) return { ok: false, error: '알 수 없는 키입니다.' };
+  const meta = readMeta();
+  if (!isBuiltinKey(key) && !meta.custom.some((c) => c.key === key)) return { ok: false, error: '알 수 없는 키입니다.' };
   if (typeof value !== 'string' || !value.trim()) return { ok: false, error: '값이 비었습니다.' };
-  s.values[key] = value.trim();
-  write(s);
+  writeEnvValue(key, value.trim());
   return { ok: true };
 }
 export function addCustom(key: string, label: string, icon: string, value: string): { ok: boolean; error?: string } {
   if (!validKeyName(key)) return { ok: false, error: '키 이름은 대문자·숫자·밑줄만 가능합니다(예: MY_API_KEY).' };
   if (isBuiltinKey(key)) return { ok: false, error: '기본 키와 중복됩니다.' };
-  const s = read();
-  if (!s.custom.some((c) => c.key === key)) s.custom.push({ key, label: label || key, icon: icon || '🔑', desc: '사용자 정의 키' });
-  if (value && value.trim()) s.values[key] = value.trim();
-  write(s);
+  const meta = readMeta();
+  if (!meta.custom.some((c) => c.key === key)) meta.custom.push({ key, label: label || key, icon: icon || '🔑', desc: '사용자 정의 키' });
+  writeMeta(meta);
+  if (value && value.trim()) writeEnvValue(key, value.trim());
   return { ok: true };
 }
 /** 카드 삭제 — 사용자 키는 완전 제거, 기본 키는 값 제거 + 숨김(restoreKey 로 복원 가능). */
 export function deleteKey(key: string): { ok: boolean; error?: string } {
-  const s = read();
+  const meta = readMeta();
   if (isBuiltinKey(key)) {
-    if (!s.hidden.includes(key)) s.hidden.push(key);
+    if (!meta.hidden.includes(key)) meta.hidden.push(key);
   } else {
-    if (!s.custom.some((c) => c.key === key)) return { ok: false, error: '알 수 없는 키입니다.' };
-    s.custom = s.custom.filter((c) => c.key !== key);
+    if (!meta.custom.some((c) => c.key === key)) return { ok: false, error: '알 수 없는 키입니다.' };
+    meta.custom = meta.custom.filter((c) => c.key !== key);
   }
-  delete s.values[key];
-  write(s);
+  writeMeta(meta);
+  writeEnvValue(key, undefined);
   return { ok: true };
 }
 /** 숨긴 기본 키 목록(복원 UI 용) — 커넥터 제거 등으로 정의가 사라진 키는 제외. */
 export function hiddenKeys(): { key: string; label: string; icon: string }[] {
-  const s = read();
+  const meta = readMeta();
   return builtinDefs()
-    .filter((b) => s.hidden.includes(b.key))
+    .filter((b) => meta.hidden.includes(b.key))
     .map((b) => ({ key: b.key, label: b.label, icon: b.icon }));
 }
 /** 숨긴 기본 키 복원 — 카드가 '미설정' 상태로 다시 나타난다(값은 다시 입력). */
 export function restoreKey(key: string): { ok: boolean; error?: string } {
-  const s = read();
-  if (!s.hidden.includes(key)) return { ok: false, error: '숨긴 키가 아닙니다.' };
-  s.hidden = s.hidden.filter((k) => k !== key);
-  write(s);
+  const meta = readMeta();
+  if (!meta.hidden.includes(key)) return { ok: false, error: '숨긴 키가 아닙니다.' };
+  meta.hidden = meta.hidden.filter((k) => k !== key);
+  writeMeta(meta);
   return { ok: true };
 }
-/** 런타임 시크릿 조회(LLM 클라이언트 등) — 환경변수 우선, 없으면 저장소. */
+/** 런타임 시크릿 조회(LLM 클라이언트 등) — .env 파일(단일 저장소) 우선, 실제 환경변수 폴백. */
 export function getSecret(key: string): string | undefined {
-  return process.env[key] || read().values[key] || undefined;
+  return readEnvValues()[key] || process.env[key] || undefined;
 }
