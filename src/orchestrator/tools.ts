@@ -33,7 +33,10 @@ export function parseToolCalls(text: string): ToolCall[] {
 }
 
 /** 읽기 도구(그라운딩) — 부작용 없음, autonomy≥1 에서 허용. */
-export const READ_TOOLS = new Set(['wiki_query', 'web_search', 'law', 'dart', 'custom']);
+export const READ_TOOLS = new Set([
+  'wiki_query', 'web_search', 'law', 'dart', 'custom',
+  'naver_search', 'naver_searchad', 'naver_datalab', 'naver_autocomplete',
+]);
 /** 쓰기 도구(부작용) — autonomy≥2 + 호출 시점 승인 게이트 필요. */
 export const WRITE_TOOLS = new Set(['save_note', 'run_command']);
 
@@ -56,6 +59,10 @@ const TOOL_DESC: Record<string, string> = {
   law: '법제처 법령 검색',
   dart: 'DART 기업공시 조회',
   custom: '등록된 외부 데이터 조회',
+  naver_search: '네이버 블로그 SERP(경쟁도·상위 제목)',
+  naver_searchad: '네이버 검색광고 실검색량·경쟁지수',
+  naver_datalab: '네이버 데이터랩 검색어트렌드 방향',
+  naver_autocomplete: '네이버 자동완성 연관 검색어',
   save_note: '확인한 핵심 사실을 본인 지식노트에 저장(부작용 — 승인 필요할 수 있음)',
   run_command: '샌드박스에서 셸 명령 1개 실행(allowlist 제한·승인 필요·파이프/리다이렉트 불가)',
 };
