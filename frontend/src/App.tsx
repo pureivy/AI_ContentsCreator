@@ -411,6 +411,7 @@ export default function App() {
   const autoReadRef = useRef<string | null>(null);
   useEffect(() => {
     if (s.mode !== "live") return;                 // 리플레이 제외
+    if (!convo) return;                             // 자비스(음성) OFF 면 자동 낭독 안 함 — 자율 런 산출물이 저절로 읽히던 문제.
     if (!TERMINAL.has(s.status)) return;            // 런 종료 시점만
     const key = `${s.runId}`;
     if (autoReadRef.current === key) return;        // 런당 1회
@@ -420,7 +421,7 @@ export default function App() {
     autoReadRef.current = key;
     tts.speak(text, -1);                            // seq=-1: 최종 종합(카드 아님)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.status, s.runId, s.mode, s.synthesis]);
+  }, [s.status, s.runId, s.mode, s.synthesis, convo]);
 
   // 자비스가 위임한 런 종료 시 — 합성 결과를 자비스 보고 턴으로 추가하고 낭독(1회).
   // 위 자동낭독은 jarvisRunIds skip 가드로 건너뛰므로 이중낭독되지 않는다.
