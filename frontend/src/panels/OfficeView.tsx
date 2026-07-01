@@ -405,29 +405,7 @@ function Sprite({ char, pose, flip, glyph, working }: {
   if (err || !char) {
     return <div className="office-portrait office-glyph" style={{ fontSize: 32, lineHeight: 1 }}>{glyph}</div>;
   }
-  if (char === "jarvis") {
-    // 자비스는 멀티포즈 세트가 아니라 채팅 아바타와 같은 '원래 얼굴 이미지'를 쓴다(복장·정체성 일관).
-    // 머리만 떠 있지 않게(사용자 피드백) 네이비 정장 몸통(SVG)을 아래에 조합한 전신 피규어로 렌더.
-    return (
-      <div className={`office-sprite${working ? " working" : ""}`}
-           style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-        <img
-          src="/avatars/jarvis_face.png" alt="" draggable={false}
-          onError={() => setErr(true)}
-          style={{ height: 64, width: 64, borderRadius: "50%", objectFit: "cover", zIndex: 1,
-                   border: "2px solid rgba(140,220,255,.85)", boxShadow: "0 0 10px rgba(80,180,255,.45)" }}
-        />
-        <svg width="80" height="58" viewBox="0 0 80 58" style={{ marginTop: -12 }} aria-hidden>
-          {/* 어깨·정장 몸통 — 안드로이드 헤드 톤(네이비+블루 라이트)에 맞춤 */}
-          <path d="M40 3 C52 5 62 11 68 21 L74 53 Q74 58 67 58 L13 58 Q6 58 6 53 L12 21 C18 11 28 5 40 3 Z"
-                fill="#232b3a" stroke="#3f5170" strokeWidth="1.5" />
-          <path d="M40 5 L31 17 L40 32 L49 17 Z" fill="#0f1622" />
-          <circle cx="40" cy="24" r="2.6" fill="#57c7ff" />
-          <path d="M21 31 L27 54 M59 31 L53 54" stroke="#3f5170" strokeWidth="1.2" fill="none" />
-        </svg>
-      </div>
-    );
-  }
+  if (char === "jarvis") return <JarvisFigure pose={pose} working={working} />;
   return (
     <img
       className={`office-sprite${working ? " working" : ""}`}
@@ -436,6 +414,53 @@ function Sprite({ char, pose, flip, glyph, working }: {
       onError={() => setErr(true)}
       style={{ height: SPRITE_PX, width: "auto", transform: flip ? "scaleX(-1)" : undefined }}
     />
+  );
+}
+
+// 자비스 피규어 — 우선순위: ① 생성 스프라이트(/sprites/jarvis_*.png — scripts/gen_jarvis_sprite.mjs 가
+// gpt-image 로 '기존 얼굴 유지' 생성, OPENAI_API_KEY 필요) ② 없으면 '원래 얼굴 + SVG 정장 몸통' 조합.
+// 어느 쪽이든 다른 아바타와 같은 스케일(SPRITE_PX)의 전신(사용자 요청).
+function JarvisFigure({ pose, working }: { pose: string; working: boolean }) {
+  const [failed, setFailed] = useState<Record<string, boolean>>({});
+  const want = pose === "sit_front" || pose === "sit_right" || pose === "lounge" ? "sit_front" : "stand";
+  const cand = !failed[want] ? want : want !== "stand" && !failed.stand ? "stand" : null;
+  if (cand) {
+    return (
+      <img
+        className={`office-sprite${working ? " working" : ""}`}
+        src={`/sprites/jarvis_${cand}.png`}
+        alt="" draggable={false}
+        onError={() => setFailed((f) => ({ ...f, [cand]: true }))}
+        style={{ height: SPRITE_PX, width: "auto" }}
+      />
+    );
+  }
+  return (
+      <div className={`office-sprite${working ? " working" : ""}`}
+           style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <img
+          src="/avatars/jarvis_face.png" alt="" draggable={false}
+          style={{ height: 56, width: 56, borderRadius: "50%", objectFit: "cover", zIndex: 1,
+                   border: "2px solid rgba(140,220,255,.85)", boxShadow: "0 0 10px rgba(80,180,255,.45)" }}
+        />
+        <svg width="76" height="94" viewBox="0 0 76 94" style={{ marginTop: -10 }} aria-hidden>
+          {/* 팔(재킷 소매) — 몸통 옆으로 자연스럽게 내림 */}
+          <path d="M16 18 L7 46 Q6 50 10 51 L16 52 Z" fill="#1d2432" stroke="#3f5170" strokeWidth="1.2" />
+          <path d="M60 18 L69 46 Q70 50 66 51 L60 52 Z" fill="#1d2432" stroke="#3f5170" strokeWidth="1.2" />
+          {/* 정장 상체(어깨→허리) */}
+          <path d="M38 2 C48 4 56 9 61 17 L64 46 Q64 50 59 50 L17 50 Q12 50 12 46 L15 17 C20 9 28 4 38 2 Z"
+                fill="#232b3a" stroke="#3f5170" strokeWidth="1.5" />
+          {/* 셔츠 V + 코어 라이트 */}
+          <path d="M38 4 L30 15 L38 28 L46 15 Z" fill="#0f1622" />
+          <circle cx="38" cy="21" r="2.4" fill="#57c7ff" />
+          {/* 바지(두 다리) */}
+          <path d="M18 50 L21 85 Q21 88 24 88 L32 88 Q35 88 35 85 L36 54 L40 54 L41 85 Q41 88 44 88 L52 88 Q55 88 55 85 L58 50 Z"
+                fill="#1a2130" stroke="#33415a" strokeWidth="1.2" />
+          {/* 구두 */}
+          <path d="M21 88 L21 90 Q21 93 25 93 L34 93 Q36 93 35 90 L35 88 Z" fill="#0c111b" />
+          <path d="M41 88 L41 90 Q41 93 45 93 L54 93 Q56 93 55 90 L55 88 Z" fill="#0c111b" />
+        </svg>
+      </div>
   );
 }
 
