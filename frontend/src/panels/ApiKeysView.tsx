@@ -1,6 +1,6 @@
 // ApiKeysView — "API 키 한 곳에서 관리": a card per credential. Built-in keys
 // (Anthropic / OpenAI / 법제처) are editable but protected; you can ADD custom keys
-// and DELETE them. Values are stored in .env on the server and shown masked.
+// and DELETE them. Values are stored in data/secrets.json on the server and shown masked.
 import { useEffect, useState } from "react";
 import { fetchApiKeysAll, saveApiKey, addApiKey, deleteApiKey, restoreApiKey, ApiKeyInfo, HiddenKeyInfo } from "../api";
 
@@ -63,7 +63,7 @@ export default function ApiKeysView() {
       <div className="apikeys-head">
         <h1>🔑 API 키 한 곳에서 관리</h1>
         <p className="apikeys-sub">
-          모든 자격증명을 한 곳에서 입력·저장합니다. 키는 서버의 <code>.env</code>(git 제외)에 저장되며,
+          모든 자격증명을 한 곳에서 입력·저장합니다. 키는 서버의 <code>data/secrets.json</code>(git 제외)에 저장되며,
           화면에는 항상 <b>마스킹</b>되어 표시됩니다. 🗑는 카드를 삭제합니다 — 사용자 키는 완전 제거,
           <b>기본 키는 값 제거 후 숨김</b>(하단에서 복원 가능).
         </p>
