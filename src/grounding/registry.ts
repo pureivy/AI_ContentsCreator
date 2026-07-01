@@ -18,7 +18,10 @@ export interface ConnectorKeyDef {
 
 export interface GroundingConnector {
   id: string;                 // 'law' | 'dart' | ...
-  keyDef: ConnectorKeyDef;    // 시크릿 UI 자동 등록용
+  keyDef: ConnectorKeyDef;    // 시크릿 UI 자동 등록용(대표 카드)
+  /** 키가 여러 개인 API(예: 검색광고 = 라이선스+비밀키+고객번호)는 여기에 전부 선언 — 카드가 각각 노출된다.
+   *  지정 시 keyDef 대신 이 목록을 쓴다(keyDef 도 목록에 포함할 것). */
+  keyDefs?: ConnectorKeyDef[];
   blockLabel: string;         // 프롬프트 주입 블록 머리말(예: '[기업 공시(DART)]')
   /** 'global' = 전 직원, 또는 이 도구를 가진 역할만(예: ['dart']). */
   scope: 'global' | string[];
@@ -46,7 +49,16 @@ export function connectors(): GroundingConnector[] {
   const staticIds = new Set(_static.map((c) => c.id));
   return [..._static, ...dynamic.filter((c) => !staticIds.has(c.id))];
 }
-/** 시크릿 UI 가 커넥터 키를 카드로 노출하기 위한 메타. */
+/** 시크릿 UI 가 커넥터 키를 카드로 노출하기 위한 메타 — keyDefs(복수) 우선, 같은 키는 첫 선언만(공용 키 중복 방지). */
 export function connectorKeyDefs(): ConnectorKeyDef[] {
-  return connectors().map((c) => c.keyDef);
+  const seen = new Set<string>();
+  const out: ConnectorKeyDef[] = [];
+  for (const c of connectors()) {
+    for (const d of c.keyDefs ?? [c.keyDef]) {
+      if (seen.has(d.key)) continue;
+      seen.add(d.key);
+      out.push(d);
+    }
+  }
+  return out;
 }

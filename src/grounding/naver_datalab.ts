@@ -58,11 +58,13 @@ async function ground(query: string, signal?: AbortSignal): Promise<string> {
 
 registerConnector({
   id: 'naver_datalab',
+  // 데이터랩은 검색 API 와 같은 키 쌍(Client ID/Secret)을 쓴다 — 카드는 naver_search 가 두 장을
+  // 선언하고, 여기 keyDef 는 동일 키라 connectorKeyDefs 의 중복 제거(첫 선언 우선)로 하나로 합쳐진다.
   keyDef: {
     key: CSEC,
-    label: '네이버 데이터랩 (Client Secret)',
-    icon: '🟢',
-    desc: '데이터랩 검색어트렌드 — 키워드 상승/하락 방향(검색 API 와 동일 키)',
+    label: '네이버 API — Client Secret',
+    icon: '🟩',
+    desc: '네이버 개발자센터 애플리케이션 Secret — 검색(SERP)·데이터랩 공용',
     placeholder: '네이버 개발자 Client Secret',
   },
   blockLabel: '[검색어트렌드(데이터랩)]',

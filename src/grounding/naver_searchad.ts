@@ -80,11 +80,35 @@ registerConnector({
   id: 'naver_searchad',
   keyDef: {
     key: APIKEY,
-    label: '네이버 검색광고 (실검색량)',
+    label: '네이버 검색광고 — 액세스 라이선스',
     icon: '📈',
-    desc: '검색광고 키워드도구 — 실제 월간 검색량·경쟁도. SECRET_KEY·CUSTOMER_ID 도 함께 설정',
+    desc: '검색광고 키워드도구(실제 월간 검색량·경쟁도). 비밀키·고객번호와 셋 다 설정해야 활성',
     placeholder: 'SearchAd 액세스 라이선스',
   },
+  // 검색광고 API 는 자격증명이 3개 — 카드도 3장 전부 노출(비밀키·고객번호가 UI 에서 빠져 있던 갭 보완).
+  keyDefs: [
+    {
+      key: APIKEY,
+      label: '네이버 검색광고 — 액세스 라이선스',
+      icon: '📈',
+      desc: '검색광고 키워드도구(실제 월간 검색량·경쟁도). 비밀키·고객번호와 셋 다 설정해야 활성',
+      placeholder: 'SearchAd 액세스 라이선스',
+    },
+    {
+      key: SECRET,
+      label: '네이버 검색광고 — 비밀키',
+      icon: '📈',
+      desc: '검색광고 API 비밀키(Secret Key) — HMAC 서명에 사용',
+      placeholder: 'SearchAd 비밀키',
+    },
+    {
+      key: CUSTOMER,
+      label: '네이버 검색광고 — 고객번호',
+      icon: '📈',
+      desc: '검색광고 계정의 CUSTOMER_ID(숫자)',
+      placeholder: '예: 1234567',
+    },
+  ],
   blockLabel: '[검색광고 실검색량]',
   scope: ['naver_searchad'], // SEO 역할(naver_searchad 툴 보유)에만 주입
   enabled: searchAdEnabled,

@@ -49,11 +49,28 @@ registerConnector({
   id: 'naver_search',
   keyDef: {
     key: CID,
-    label: '네이버 검색 (Client ID)',
+    label: '네이버 API — Client ID',
     icon: '🟩',
-    desc: '네이버 검색 API — 블로그 SERP 경쟁도·상위 제목. NAVER_CLIENT_SECRET 도 함께 설정',
+    desc: '네이버 개발자센터 애플리케이션 ID — 검색(SERP)·데이터랩 공용. Client Secret 과 함께 설정',
     placeholder: '네이버 개발자 Client ID',
   },
+  // 검색 API 는 ID+Secret 한 쌍 — 둘 다 카드로 노출(Secret 카드가 빠져 있던 갭 보완).
+  keyDefs: [
+    {
+      key: CID,
+      label: '네이버 API — Client ID',
+      icon: '🟩',
+      desc: '네이버 개발자센터 애플리케이션 ID — 검색(SERP)·데이터랩 공용. Client Secret 과 함께 설정',
+      placeholder: '네이버 개발자 Client ID',
+    },
+    {
+      key: CSEC,
+      label: '네이버 API — Client Secret',
+      icon: '🟩',
+      desc: '네이버 개발자센터 애플리케이션 Secret — 검색(SERP)·데이터랩 공용',
+      placeholder: '네이버 개발자 Client Secret',
+    },
+  ],
   blockLabel: '[네이버 블로그 SERP]',
   scope: ['naver_search'], // SEO/트렌드 역할(naver_search 툴 보유)에만 주입
   enabled: naverSearchEnabled,
