@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, startNaverDraft, fetchNaverDraftStatus, PieceInfo, PieceDraftResp } from "../api";
+import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, PieceInfo, PieceDraftResp } from "../api";
 
 // 초안 검토·발행·성과 입력 — 크로스-런 REST(폴링/온디맨드). 본문 편집은 컴포넌트-로컬(store 변이 금지).
 const REVIEWABLE = new Set(["ready", "published", "measured", "reflected"]);
@@ -31,6 +31,10 @@ export default function DraftReview() {
   // 네이버 임시저장(자동) — 서버 백그라운드 잡 + 폴링
   const [naverBusy, setNaverBusy] = useState(false);
   const [naverMsg, setNaverMsg] = useState("");
+  // 성과 자동 수집 — 서버 백그라운드 잡 + 폴링
+  const [collectBusy, setCollectBusy] = useState(false);
+  const [collectMsg, setCollectMsg] = useState("");
+  const collectPollRef = useRef<string | null>(null);
   const selRef = useRef<string | null>(null);      // 폴링 중 다른 초안으로 이동 시 stale 갱신 차단
   const pollingRef = useRef<string | null>(null);  // 같은 초안 중복 폴링 방지
 
@@ -47,16 +51,60 @@ export default function DraftReview() {
   const open = async (id: string) => {
     setSel(id); selRef.current = id;
     setData(null); setMsg(""); setPubUrl(""); setCopied(""); setFeedback(""); setView("md");
-    setNaverBusy(false); setNaverMsg("");
+    setNaverBusy(false); setNaverMsg(""); setCollectBusy(false); setCollectMsg("");
     const d = await fetchPieceDraft(id);
     setData(d);
     setBody(d?.draft.bodyMarkdown ?? d?.md ?? "");
-    // 이 초안의 네이버 임시저장 잡이 이미 돌고 있으면(새로고침·재선택) 이어서 폴링.
+    // 이 초안의 진행 중 잡(임시저장/성과수집)이 있으면(새로고침·재선택) 이어서 폴링.
     const s = await fetchNaverDraftStatus(id);
     if (selRef.current === id && s?.status === "running") {
       setNaverBusy(true); setNaverMsg("네이버에 저장 중… (열린 브라우저 창을 확인하세요)");
       void pollNaver(id);
     }
+    const cs = await fetchCollectStatus(id);
+    if (selRef.current === id && cs?.status === "running") {
+      setCollectBusy(true); setCollectMsg("네이버에서 성과 수집 중…");
+      void pollCollect(id);
+    }
+  };
+
+  // 성과 자동 수집 폴링 — 3초 간격, 최대 ~6분(서버 스크레이프 타임아웃 5분 커버).
+  const pollCollect = async (id: string) => {
+    if (collectPollRef.current === id) return;
+    collectPollRef.current = id;
+    try {
+      for (let i = 0; i < 120; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        if (selRef.current !== id) return;
+        const s = await fetchCollectStatus(id);
+        if (selRef.current !== id) return;
+        if (!s || s.status === "running") continue;
+        setCollectBusy(false);
+        if (s.status === "done") {
+          const kw = s.inflow_count ? `, 유입 키워드 ${s.inflow_count}개` : "";
+          const rf = s.reinforced ? " — 강화 반영됨(전략·위키 갱신)" : " — 이력만 추가(이미 강화됨)";
+          setCollectMsg(`✅ 성과 수집 완료: 조회 ${s.views ?? 0}회${s.dwell_sec ? `, 체류 ${s.dwell_sec}s` : ""}${kw}${rf}${s.dry_run ? " (dry-run)" : ""}`);
+          await load(); const d = await fetchPieceDraft(id); if (selRef.current === id && d) setData(d);
+        } else if (s.status === "idle") {
+          setCollectMsg("⚠ 진행 상태가 유실됐습니다(서버 재시작 가능성) — 다시 시도하세요.");
+        } else {
+          setCollectMsg(`❌ 자동 수집 실패: ${s.error ?? s.note ?? "원인 불명"} — 아래에 수동 입력할 수 있습니다.`);
+        }
+        return;
+      }
+      if (selRef.current === id) { setCollectBusy(false); setCollectMsg("⏱ 시간 초과 — 다시 시도하세요."); }
+    } finally {
+      if (collectPollRef.current === id) collectPollRef.current = null;
+    }
+  };
+
+  const doCollect = async () => {
+    if (!sel || collectBusy) return;
+    setCollectBusy(true);
+    setCollectMsg("네이버에서 성과 수집 중… (로그인 세션 필요 — 처음엔 브라우저 창이 열릴 수 있어요)");
+    const r = await startCollectMetrics(sel);
+    if (!r.ok) { setCollectBusy(false); setCollectMsg(`❌ 시작 실패: ${r.error ?? ""}`); return; }
+    void pollCollect(sel);
   };
 
   // 네이버 임시저장 폴링 — 3초 간격, 최대 ~16분(서버 쪽 Playwright 타임아웃 15분 커버).
@@ -263,18 +311,29 @@ export default function DraftReview() {
                 )}
               </div>
 
-              {/* 성과 입력(발행된 글만) — 수동 수집(v1 주 경로) → 강화 루프 트리거 */}
+              {/* 성과(발행된 글만) — ① 자동 수집(권장) ② 안 되면 수동 입력. 둘 다 강화 루프 트리거 */}
               {data.piece.publishedUrl && (
                 <div className="review-section">
-                  <h3>성과 입력 <span className="muted">(네이버 통계에서)</span></h3>
-                  <div className="review-metrics-grid">
-                    <label>조회수<input type="number" value={views} onChange={(e) => setViews(e.target.value)} placeholder="예: 1200" /></label>
-                    <label>평균 체류(초)<input type="number" value={dwell} onChange={(e) => setDwell(e.target.value)} placeholder="예: 90" /></label>
+                  <h3>성과 <span className="muted">(조회수·유입 키워드 → 강화 반영)</span></h3>
+                  <div className="review-inline">
+                    <button className="btn start" disabled={collectBusy} onClick={doCollect}>
+                      {collectBusy ? "성과 수집 중…" : "📊 성과 자동 수집(네이버)"}
+                    </button>
+                    <span className="muted">네이버 통계를 자동으로 읽어 강화에 반영합니다.</span>
                   </div>
-                  <label className="review-inflow-label">유입 키워드 <span className="muted">(줄마다 "키워드,횟수,순위")</span>
-                    <textarea value={inflow} onChange={(e) => setInflow(e.target.value)} rows={3} placeholder={"원두 고르는 법,420,2\n홈카페 원두,120"} />
-                  </label>
-                  <button className="btn start" onClick={doMetrics}>성과 저장 · 강화 반영</button>
+                  {collectMsg && <p className="review-msg">{collectMsg}</p>}
+
+                  <details className="review-manual-metrics" style={{ marginTop: 12 }}>
+                    <summary className="muted">수동 입력(자동 수집이 안 될 때)</summary>
+                    <div className="review-metrics-grid" style={{ marginTop: 10 }}>
+                      <label>조회수<input type="number" value={views} onChange={(e) => setViews(e.target.value)} placeholder="예: 1200" /></label>
+                      <label>평균 체류(초)<input type="number" value={dwell} onChange={(e) => setDwell(e.target.value)} placeholder="예: 90" /></label>
+                    </div>
+                    <label className="review-inflow-label">유입 키워드 <span className="muted">(줄마다 "키워드,횟수,순위")</span>
+                      <textarea value={inflow} onChange={(e) => setInflow(e.target.value)} rows={3} placeholder={"원두 고르는 법,420,2\n홈카페 원두,120"} />
+                    </label>
+                    <button className="btn start" onClick={doMetrics}>성과 저장 · 강화 반영</button>
+                  </details>
                 </div>
               )}
 

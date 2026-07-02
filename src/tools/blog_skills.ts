@@ -23,6 +23,8 @@ const OUTPUT_CAP = 12 * 1024;
 const BLOG_TIMEOUT_MS = Math.max(CONFIG.agentShellTimeoutMs, 180_000);
 // 검토 탭 트리거의 실제 네이버 임시저장 — 최초 로그인(수동·최대 10분 대기) + 글쓰기까지 여유(15분).
 const NAVER_PUBLISH_TIMEOUT_MS = 15 * 60_000;
+// 성과 수집(어드바이저 캡처) — 로그인된 세션 전제, 네비게이션·캡처까지 여유(5분).
+const NAVER_STATS_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * 고정 스크립트 실행 — shell:false(글로브·치환·체이닝 원천 차단), 인자는 전부 리터럴 argv,
@@ -337,4 +339,67 @@ export async function publishDraftToNaver(
   } catch {
     return { ok: false, status: 'ERROR', issues: ['발행 결과 파일 없음 — 스크립트 출력 참조'], output: r.output };
   }
+}
+
+// ====================== 성과 자동 수집(네이버 통계 스크레이프) ======================
+
+export interface CollectedMetrics {
+  ok: boolean;
+  views: number;
+  dwellSec?: number;
+  searchInflow: Array<{ keyword: string; count: number; rank?: number }>;
+  source: string;
+  /** 수집기가 남긴 안내(로그인 필요·자동추출 실패 등) — UI 표시용. */
+  note?: string;
+  captured?: number;
+}
+
+function num(v: unknown): number { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0; }
+
+/** naver_stats.py 의 `RESULT_JSON: {...}` 줄을 파싱해 수집 결과로 정규화. 순수 함수 — 단위 테스트 대상. */
+export function parseStatsOutput(output: string): CollectedMetrics | null {
+  const line = output.split('\n').reverse().find((l) => l.trim().startsWith('RESULT_JSON:'));
+  if (!line) return null;
+  let o: Record<string, unknown>;
+  try { o = JSON.parse(line.slice(line.indexOf('{'))) as Record<string, unknown>; } catch { return null; }
+  const inflow = Array.isArray(o.searchInflow)
+    ? (o.searchInflow as unknown[]).flatMap((it) => {
+        if (!it || typeof it !== 'object') return [];
+        const r = it as Record<string, unknown>;
+        const keyword = String(r.keyword ?? '').trim();
+        if (!keyword) return [];
+        const rank = r.rank != null ? num(r.rank) : undefined;
+        return [{ keyword, count: num(r.count), ...(rank ? { rank } : {}) }];
+      })
+    : [];
+  const dwell = o.dwellSec != null ? num(o.dwellSec) : undefined;
+  return {
+    ok: true,
+    views: num(o.views),
+    ...(dwell ? { dwellSec: dwell } : {}),
+    searchInflow: inflow,
+    source: String(o.source ?? 'scrape:naver_advisor'),
+    note: o.note ? String(o.note) : undefined,
+    captured: o.captured != null ? num(o.captured) : undefined,
+  };
+}
+
+/**
+ * 발행된 글 URL 의 성과(조회수·검색 유입 키워드)를 네이버에서 수집한다.
+ * 영속 프로필(발행 때 만든 로그인 세션) 재사용 — 미로그인이면 note 로 안내하고 빈 결과(fail-open).
+ * runDir 에 캡처 원본(naver_stats_capture.json)을 남겨 추출기 정밀화에 쓴다.
+ */
+export async function collectNaverMetrics(
+  publishedUrl: string, runDir: string, opts: { dryRun?: boolean } = {}, signal?: AbortSignal,
+): Promise<CollectedMetrics | null> {
+  try { fs.mkdirSync(runDir, { recursive: true }); } catch { /* 무해 */ }
+  const args = ['--url', publishedUrl, '--run-dir', runDir];
+  const creds = naverPublishCreds();
+  if (creds.headless) args.push('--headless');
+  if (opts.dryRun) args.push('--dry-run');
+  const env: Record<string, string> = {};
+  if (creds.loginId) env.NAVER_ID = creds.loginId;
+  if (creds.loginPw) env.NAVER_PW = creds.loginPw;
+  const r = await runScript('naver_stats.py', args, runDir, signal, { timeoutMs: NAVER_STATS_TIMEOUT_MS, env });
+  return parseStatsOutput(r.output);
 }

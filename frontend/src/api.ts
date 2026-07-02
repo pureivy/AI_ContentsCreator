@@ -822,6 +822,23 @@ export async function fetchNaverDraftStatus(id: string): Promise<NaverDraftStatu
   try { const r = await fetch(`/pieces/${id}/naver-draft`); return r.ok ? await r.json() : null; }
   catch { return null; }
 }
+// 성과 자동 수집(검토 탭) — 발행된 글의 조회수·유입 키워드를 네이버에서 수집→강화. 백그라운드 잡 폴링.
+export interface CollectStatus {
+  status: "idle" | "running" | "done" | "failed";
+  views?: number; dwell_sec?: number; inflow_count?: number;
+  reinforced?: boolean; note?: string; error?: string; dry_run?: boolean;
+}
+export async function startCollectMetrics(id: string, dryRun = false): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`/pieces/${id}/collect-metrics`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dry_run: dryRun }) });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return { ok: true };
+  } catch { return { ok: false, error: "network" }; }
+}
+export async function fetchCollectStatus(id: string): Promise<CollectStatus | null> {
+  try { const r = await fetch(`/pieces/${id}/collect-metrics`); return r.ok ? await r.json() : null; }
+  catch { return null; }
+}
 
 // --- 지식 주입: 파일(들)을 선택한 에이전트(들)에 '우선 신뢰 지식'으로 주입 ---
 export interface InjectResult {

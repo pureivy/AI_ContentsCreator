@@ -42,12 +42,13 @@ import { pieceStore, selectResumablePiece } from '../content/pieces';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
 import { parseManualMetrics, readMetrics } from '../analytics/performance';
-import { getCollector } from '../analytics/collector';
+import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
-import { publishDraftToNaver, naverPublishCreds } from '../tools/blog_skills';
+import { publishDraftToNaver, naverPublishCreds, collectNaverMetrics } from '../tools/blog_skills';
 import { coerceBlogDraft } from '../output/smarteditor';
+import type { MetricSample } from '../analytics/performance';
 import { classifyAndAssign, getStatuses, reassign, setIngestStatus } from '../tools/classify';
 import { transcribe, sttAvailable } from '../voice/stt';
 import { synthesize, listKoreanVoices, ttsAvailable } from '../voice/tts';
@@ -611,6 +612,85 @@ app.post('/pieces/:id/naver-draft', pieceNaverDraftHandler);
 app.post('/api/pieces/:id/naver-draft', pieceNaverDraftHandler);
 app.get('/pieces/:id/naver-draft', pieceNaverDraftStatusHandler);
 app.get('/api/pieces/:id/naver-draft', pieceNaverDraftStatusHandler);
+
+// 성과 자동 수집(검토 탭) — 발행된 글 URL 의 조회수·검색 유입 키워드를 네이버에서 수집→강화(멱등).
+// 스크레이프가 수십 초~분 걸릴 수 있어 백그라운드 잡+폴링. 수집 실패는 fail-open(수동 입력으로 대체).
+interface CollectJob {
+  status: 'running' | 'done' | 'failed';
+  startedTs: string; endedTs?: string;
+  views?: number; dwellSec?: number; inflowCount?: number;
+  reinforced?: boolean; note?: string; error?: string; dryRun: boolean;
+}
+const COLLECT_JOBS = new Map<string, CollectJob>();
+
+/** piece → 성과 수집치(MetricSample) 또는 null(수집 실패·데이터 없음 = fail-open). */
+async function measurePiece(piece: Piece, dryRun: boolean, signal?: AbortSignal): Promise<{ sample: MetricSample | null; note?: string }> {
+  if (!piece.publishedUrl) return { sample: null, note: '발행 URL 없음' };
+  const runDir = path.join(CONFIG.sessionsDir, piece.runId ?? piece.id, 'metrics');
+  const m = await collectNaverMetrics(piece.publishedUrl, runDir, { dryRun }, signal);
+  if (!m) return { sample: null, note: '수집 결과 파싱 실패' };
+  if (!m.views && m.searchInflow.length === 0) return { sample: null, note: m.note };
+  const sample: MetricSample = {
+    measuredAt: new Date().toISOString(),
+    views: m.views,
+    ...(m.dwellSec ? { dwellSec: m.dwellSec } : {}),
+    searchInflow: m.searchInflow,
+    source: m.source,
+  };
+  return { sample, note: m.note };
+}
+
+async function pieceCollectHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  const body = await c.req.json<{ dry_run?: boolean }>().catch(() => ({} as { dry_run?: boolean }));
+  const dryRun = body.dry_run === true;
+  // ── 여기부터 잡 등록까지 동기 — await 금지(동시 수집 이중 기동 방지, naver-draft 와 동일 방어).
+  const piece = pieceStore().get(id);
+  if (!piece) return c.json({ error: 'unknown piece' }, 404);
+  if (!piece.publishedUrl) return c.json({ error: '발행 URL 이 없습니다 — 네이버에 발행 후 글 URL을 먼저 등록하세요.' }, 409);
+  if (COLLECT_JOBS.get(id)?.status === 'running') return c.json({ error: '이미 성과 수집이 진행 중입니다.' }, 409);
+  const job: CollectJob = { status: 'running', startedTs: new Date().toISOString(), dryRun };
+  COLLECT_JOBS.set(id, job); // ── 동기 구간 끝
+  void measurePiece(piece, dryRun).then(async ({ sample, note }) => {
+    job.endedTs = new Date().toISOString();
+    job.note = note;
+    if (!sample) {
+      job.status = 'failed';
+      job.error = note || '자동 추출된 성과가 없습니다 — 수동 입력으로 대체하세요.';
+      return;
+    }
+    const r = await ingestMetrics(id, sample);
+    job.status = 'done';
+    job.views = sample.views; job.dwellSec = sample.dwellSec;
+    job.inflowCount = sample.searchInflow.length; job.reinforced = r.reinforced;
+  }).catch((e: unknown) => {
+    job.status = 'failed'; job.endedTs = new Date().toISOString();
+    job.error = e instanceof Error ? e.message : String(e);
+  });
+  return c.json({ ok: true, started: true, dry_run: dryRun });
+}
+function pieceCollectStatusHandler(c: Context): Response {
+  const id = c.req.param('id') ?? '';
+  if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
+  const job = COLLECT_JOBS.get(id);
+  if (!job) return c.json({ status: 'idle' });
+  return c.json({
+    status: job.status, views: job.views, dwell_sec: job.dwellSec, inflow_count: job.inflowCount,
+    reinforced: job.reinforced, note: job.note, error: job.error, dry_run: job.dryRun,
+    started_ts: job.startedTs, ended_ts: job.endedTs,
+  });
+}
+app.post('/pieces/:id/collect-metrics', pieceCollectHandler);
+app.post('/api/pieces/:id/collect-metrics', pieceCollectHandler);
+app.get('/pieces/:id/collect-metrics', pieceCollectStatusHandler);
+app.get('/api/pieces/:id/collect-metrics', pieceCollectStatusHandler);
+
+// 실제 네이버 수집기 등록 — 일일 성과 동기화(syncPerformance)가 publishedUrl 있는 piece 를 자동 수집.
+// measure 는 fail-open(미로그인·데이터 없음 → null) — 루프를 깨지 않는다. 수동 POST /metrics 는 계속 유효.
+setCollector({
+  name: 'naver_advisor',
+  async measure(p) { return (await measurePiece(p, false)).sample; },
+});
 
 // ============================================================
 // LLM 상태 — 프론트 계약(/llm) + 자체 UI(/api/llm)

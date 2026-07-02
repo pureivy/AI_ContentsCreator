@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { parseImagePayload, parsePublishPayload, containImageManifest } from './blog_skills';
+import { parseImagePayload, parsePublishPayload, containImageManifest, parseStatsOutput } from './blog_skills';
 
 describe('parseImagePayload', () => {
   it('평문 arg → content, 기본 스타일/limit', () => {
@@ -113,5 +113,44 @@ describe('containImageManifest(보안 — 샌드박스 경로 컨테인먼트)',
     const r = containImageManifest({ images: [{ file_path: '/tmp/sb/agent/workspace-evil/x.png' }] }, sb);
     expect(r.manifest.images).toHaveLength(0);
     expect(r.dropped).toBe(1);
+  });
+});
+
+describe('parseStatsOutput(성과 수집 스크립트 출력 파싱)', () => {
+  it('RESULT_JSON 줄을 정규화 — views·dwell·유입 키워드', () => {
+    const out = '진행 로그...\nRESULT_JSON: {"views":137,"dwellSec":52,"searchInflow":[{"keyword":"장마철 습도","count":18,"rank":1},{"keyword":"제습기 없이","count":7}],"source":"scrape:naver_advisor","note":"","captured":4}\n';
+    const r = parseStatsOutput(out)!;
+    expect(r.ok).toBe(true);
+    expect(r.views).toBe(137);
+    expect(r.dwellSec).toBe(52);
+    expect(r.searchInflow).toEqual([
+      { keyword: '장마철 습도', count: 18, rank: 1 },
+      { keyword: '제습기 없이', count: 7 },
+    ]);
+    expect(r.source).toBe('scrape:naver_advisor');
+    expect(r.captured).toBe(4);
+  });
+
+  it('RESULT_JSON 없으면 null', () => {
+    expect(parseStatsOutput('아무 로그도 결과 줄이 없음\n(exit 0)')).toBeNull();
+  });
+
+  it('마지막 RESULT_JSON 을 사용(재시도로 여러 줄이면 최신)', () => {
+    const out = 'RESULT_JSON: {"views":1,"searchInflow":[]}\nRESULT_JSON: {"views":9,"searchInflow":[]}';
+    expect(parseStatsOutput(out)!.views).toBe(9);
+  });
+
+  it('빈 수집(views 0·유입 0)도 ok=true 로 파싱(호출부가 fail-open 판단)', () => {
+    const r = parseStatsOutput('RESULT_JSON: {"views":0,"searchInflow":[],"note":"자동 추출 실패"}')!;
+    expect(r.ok).toBe(true);
+    expect(r.views).toBe(0);
+    expect(r.searchInflow).toEqual([]);
+    expect(r.note).toContain('자동 추출 실패');
+  });
+
+  it('음수·비정상 값 방어(count 음수→0, 비문자 keyword 드롭)', () => {
+    const r = parseStatsOutput('RESULT_JSON: {"views":-5,"searchInflow":[{"keyword":"","count":3},{"keyword":"ok","count":-2}]}')!;
+    expect(r.views).toBe(0);
+    expect(r.searchInflow).toEqual([{ keyword: 'ok', count: 0 }]);
   });
 });
