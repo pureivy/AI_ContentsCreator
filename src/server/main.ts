@@ -442,15 +442,34 @@ function pieceMetricsGetHandler(c: Context): Response {
 }
 // 초안 재로드 — DraftReview 가 본문/렌더/메타를 디스크(data/sessions/<runId>/)에서 읽는다(메모리 의존 없음).
 function pieceDraftHandler(c: Context): Response {
-  const p = pieceStore().get(c.req.param('id') ?? '');
+  const id = c.req.param('id') ?? '';
+  const p = pieceStore().get(id);
   if (!p) return c.json({ error: 'unknown piece' }, 404);
   if (!p.runId) return c.json({ error: 'no draft yet' }, 404);
   try {
     const dir = path.join(CONFIG.sessionsDir, p.runId);
     const draft = JSON.parse(fs.readFileSync(path.join(dir, 'draft.json'), 'utf-8')) as unknown;
     const read = (n: string): string => { try { return fs.readFileSync(path.join(dir, n), 'utf-8'); } catch { return ''; } };
-    return c.json({ piece: p, draft, md: read('draft.md'), html: read('draft.html') });
+    // 미리보기 iframe(srcDoc)에서 draft.html 의 상대 이미지(images/blog-image-0N.png)가 로드되게 <base> 주입.
+    let html = read('draft.html');
+    if (html) {
+      const base = `<base href="/pieces/${id}/">`;
+      html = html.includes('<head>') ? html.replace('<head>', `<head>\n${base}`) : `${base}\n${html}`;
+    }
+    return c.json({ piece: p, draft, md: read('draft.md'), html });
   } catch { return c.json({ error: 'draft not found' }, 404); }
+}
+// 세션 생성 이미지 서빙 — draft.html 의 상대경로가 위 <base> 로 이 라우트에 해석된다. 이름 화이트리스트(경로 이탈 차단).
+function pieceImageHandler(c: Context): Response {
+  const p = pieceStore().get(c.req.param('id') ?? '');
+  const name = c.req.param('name') ?? '';
+  if (!p?.runId) return c.json({ error: 'unknown piece' }, 404);
+  if (!/^blog-image-\d{2}\.(?:png|jpg|jpeg|webp)$/.test(name)) return c.json({ error: 'bad name' }, 400);
+  try {
+    const buf = fs.readFileSync(path.join(CONFIG.sessionsDir, p.runId, 'images', name));
+    const type = name.endsWith('.png') ? 'image/png' : name.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
+    return c.body(new Uint8Array(buf), 200, { 'Content-Type': type, 'Cache-Control': 'no-cache' });
+  } catch { return c.json({ error: 'image not found' }, 404); }
 }
 app.get('/pieces', piecesListHandler);
 app.get('/api/pieces', piecesListHandler);
@@ -460,6 +479,8 @@ app.post('/pieces', pieceCreateHandler);
 app.post('/api/pieces', pieceCreateHandler);
 app.get('/pieces/:id/draft', pieceDraftHandler); // :id 보다 먼저(구체 경로 우선)
 app.get('/api/pieces/:id/draft', pieceDraftHandler);
+app.get('/pieces/:id/images/:name', pieceImageHandler); // 미리보기 <base href="/pieces/:id/"> 상대경로 대상
+app.get('/api/pieces/:id/images/:name', pieceImageHandler);
 app.get('/pieces/:id', pieceGetHandler);
 app.get('/api/pieces/:id', pieceGetHandler);
 app.post('/pieces/:id/published', piecePublishedHandler);

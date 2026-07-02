@@ -7,7 +7,7 @@ import { firstJson } from '../tools/classify';
 import { asString } from '../util/str';
 import { seedKeyword } from '../grounding/naver_common';
 import { scoreSeo } from './seo';
-import { renderMarkdown, renderHtml } from './render';
+import { renderMarkdown, renderHtml, stripEmoji } from './render';
 import { registerFormatter } from './formatter';
 import type { AssetBundle, BlogDraft, FormatterInput } from './formatter';
 
@@ -15,13 +15,19 @@ const PACK_SYSTEM =
   '너는 네이버 블로그 SEO 편집자다. 주어진 블로그 본문을 바탕으로 발행용 메타데이터를 만든다.\n' +
   '- primaryKeyword: 이 글의 핵심 타겟 키워드 1개(검색량 있을 법한 명사구).\n' +
   '- titles: 검색 노출에 유리한 제목 후보 5개. 핵심 키워드를 앞쪽에 자연스럽게, 15~40자, 클릭 유도. 과장·낚시 금지.\n' +
+  '  [네이버 상위 노출 제목]이 주어지면 실제 상위 글들의 제목 패턴(구체 수치·대상·상황 명시)을 참고하되 그대로 베끼지 마라.\n' +
   '- meta: 100~200자 요약(검색 스니펫용). 핵심 키워드 포함, 글의 이득을 한 문장으로.\n' +
   '- tags: 5~10개(핵심·연관 키워드, # 없이). 본문과 무관한 태그 금지.\n' +
   '- images: 본문 흐름에 맞는 이미지 3개 슬롯. alt(대체텍스트)와 prompt(이미지 생성 프롬프트, 한국어).\n' +
-  '본문에 없는 사실을 지어내지 마라.';
+  '이모지·이모티콘·장식 특수문자는 제목·메타·태그 어디에도 쓰지 마라. 본문에 없는 사실을 지어내지 마라.';
 
 export async function packageNaverBlog(input: FormatterInput): Promise<AssetBundle> {
-  const { topic, body, researchBrief, model, signal } = input;
+  const { topic, researchBrief, serpText, model, signal } = input;
+  // 이모지 결정적 제거 — 지침(작가·편집자 프롬프트)이 1차 방어, 여기가 최종 보증(발행 초안엔 이모지 0).
+  // + 작가가 본문 끝에 남기는 "태그: #..." 줄 제거(태그는 별도 필드 — 렌더 태그 칩과 중복 방지).
+  const body = stripEmoji(input.body)
+    .replace(/\n+\s*(?:\*\*)?태그(?:\*\*)?\s*[:：][^\n]*$/u, '')
+    .trimEnd();
   let meta: {
     primaryKeyword?: string; titles?: unknown; meta?: string; tags?: unknown;
     images?: Array<{ alt?: string; prompt?: string }>;
@@ -29,22 +35,24 @@ export async function packageNaverBlog(input: FormatterInput): Promise<AssetBund
   try {
     meta = await microJSON(
       model, PACK_SYSTEM,
-      `[주제] ${topic}\n\n[본문]\n${body.slice(0, 6000)}\n${researchBrief ? `\n[리서치·SEO 브리프]\n${researchBrief.slice(0, 1500)}` : ''}\n\n` +
+      `[주제] ${topic}\n\n[본문]\n${body.slice(0, 6000)}\n` +
+      (serpText ? `\n[네이버 상위 노출 제목(실측)]\n${serpText.slice(0, 800)}\n` : '') +
+      `${researchBrief ? `\n[리서치·SEO 브리프]\n${researchBrief.slice(0, 1500)}` : ''}\n\n` +
       `형식: {"primaryKeyword":"...","titles":["...","...","...","...","..."],"meta":"...","tags":["...","..."],"images":[{"alt":"...","prompt":"..."}]}`,
       { maxOutputTokens: 900, signal },
     );
   } catch { /* 포장 실패 시 폴백 아래 */ }
 
-  const primaryKeyword = (asString(meta?.primaryKeyword).trim() || seedKeyword(topic));
+  const primaryKeyword = stripEmoji(asString(meta?.primaryKeyword).trim() || seedKeyword(topic));
   const titles = (Array.isArray(meta?.titles) ? meta!.titles as unknown[] : [])
-    .map((t) => asString(t).trim()).filter(Boolean).slice(0, 5);
+    .map((t) => stripEmoji(asString(t)).trim()).filter(Boolean).slice(0, 5);
   const titleCandidates = titles.length ? titles : [topic];
-  const metaDescription = asString(meta?.meta).trim().slice(0, 200);
+  const metaDescription = stripEmoji(asString(meta?.meta)).trim().slice(0, 200);
   const tags = (Array.isArray(meta?.tags) ? meta!.tags as unknown[] : [])
-    .map((t) => asString(t).replace(/^#/, '').trim()).filter(Boolean).slice(0, 10);
+    .map((t) => stripEmoji(asString(t)).replace(/^#/, '').trim()).filter(Boolean).slice(0, 10);
   const imageSlots = (meta?.images ?? [])
-    .map((im) => ({ alt: asString(im?.alt).trim(), prompt: asString(im?.prompt).trim() }))
-    .filter((im) => im.alt || im.prompt).slice(0, 5);
+    .map((im) => ({ alt: stripEmoji(asString(im?.alt)).trim(), prompt: asString(im?.prompt).trim() }))
+    .filter((im) => im.alt || im.prompt).slice(0, 3); // 이미지 실생성 한도(3장)와 일치 — 미생성 파일 참조 방지
   const internalLinks = input.internalLinks ?? [];
 
   const seo = scoreSeo({ title: titleCandidates[0] ?? topic, body, primaryKeyword, tags, imageSlots: imageSlots.length });
@@ -58,12 +66,15 @@ export async function packageNaverBlog(input: FormatterInput): Promise<AssetBund
   };
 }
 
-/** 초안 → 세션 파일 목록(draft.json/md/html + image-prompts.md). 슬롯이 갱신되면(디자이너 협의) 재호출해 동기화. */
-export function draftFiles(draft: BlogDraft): Array<{ name: string; content: string }> {
+/**
+ * 초안 → 세션 파일 목록(draft.json/md/html + image-prompts.md). 슬롯이 갱신되면(디자이너 협의) 재호출해 동기화.
+ * imagesReady=true 면 draft.html 이 세션 images/blog-image-0N.png 를 <img> 로 참조(이미지 실생성 런).
+ */
+export function draftFiles(draft: BlogDraft, imagesReady = false): Array<{ name: string; content: string }> {
   const files = [
     { name: 'draft.json', content: JSON.stringify(draft, null, 2) },
     { name: 'draft.md', content: renderMarkdown(draft) },
-    { name: 'draft.html', content: renderHtml(draft) },
+    { name: 'draft.html', content: renderHtml(draft, { imagesReady }) },
   ];
   if (draft.imageSlots.length) {
     files.push({ name: 'image-prompts.md', content: draft.imageSlots.map((s, i) => `${i + 1}. **${s.alt}**\n   ${s.prompt}`).join('\n\n') });

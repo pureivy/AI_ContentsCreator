@@ -20,6 +20,8 @@ import { finalizeRun } from './finalize';
 import { formatterFor } from '../output';
 import type { AssetBundle } from '../output';
 import { parseImagePlan, draftFiles } from '../output/naverBlog';
+import { naverSerp } from '../grounding/naver_search';
+import { seedKeyword } from '../grounding/naver_common';
 import { getRunSettings } from '../runsettings';
 import type { RunOptions, RunOutcome } from './run';
 
@@ -42,8 +44,25 @@ const BLOG_BODY_GUIDE =
   '- 하우투면 번호 단계로, 리뷰면 장단점·비교·총평 구조로 전개한다.\n' +
   '- 사실·수치는 근거로 뒷받침([근거: 출처]). 없는 값은 지어내지 말고 생략한다.\n' +
   '- 분량은 한국어 약 1,500~4,000자(정보/하우투·리뷰에 적정). 군더더기·패딩·동어반복 금지, 독자가 끝까지 읽게 쓴다.\n' +
+  '- 이모지·이모티콘·장식 특수문자(★✔♥ 등)를 소제목·본문 어디에도 쓰지 마라. 강조는 **굵게**만 사용한다.\n' +
+  '- 이미지가 어울리는 자리 2~3곳에 [IMAGE: 장면 설명] 마커를 한 줄로 남겨라(소제목 아래 등 글 흐름에 맞게) — 발행 시 그 위치에 이미지가 삽입된다.\n' +
+  '- [네이버 상위 노출 블로그(실측)]이 주어지면, 상위 글들이 답하는 질문·관심사·눈높이에 맞춰 검색 수요가 검증된 방향으로 쓰되 내용은 더 구체적·실용적으로 차별화한다(제목·구성 그대로 베끼기 금지).\n' +
   '- 마크다운으로 작성(## 소제목 2개 이상 필수). 글 제목(# 한 줄)은 포매터가 별도 생성하니 본문만 작성.\n' +
   '- [리서치·SEO 브리프]의 타겟 키워드·검색의도·경쟁 빈틈·소주제를 활용해 차별화된 글을 쓴다.';
+
+/**
+ * 네이버 블로그 SERP 실측 — 주제의 상위 노출 글 제목을 집필·제목 패키징의 '인기 방향' 근거로 쓴다.
+ * 키 미설정·API 실패 시 빈 문자열(fail-open) — 런을 절대 막지 않는다.
+ */
+async function serpPopularBrief(topic: string, signal?: AbortSignal): Promise<string> {
+  try {
+    const kw = seedKeyword(topic);
+    const { total, top } = await naverSerp(kw, signal);
+    if (!top.length) return '';
+    return `검색어 "${kw}" — 네이버 블로그 문서수 약 ${total.toLocaleString()}건. 상위 노출 글 제목:\n` +
+      top.slice(0, 8).map((t, i) => `${i + 1}. ${t.title}${t.postdate ? ` (${t.postdate})` : ''}`).join('\n');
+  } catch { return ''; }
+}
 
 /**
  * 최종 블로그 본문 집필 — 작가(content_lead)가 리서치 브리프[+검수 의견]을 참고해 발행용 본문 1편을 쓴다.
@@ -58,11 +77,13 @@ export async function writeBlogBody(a: {
   topic: string;
   brief: string;
   critiqueText?: string;
+  /** 네이버 블로그 SERP 실측(상위 노출 제목) — 인기가 검증된 방향으로 집필을 조향. */
+  serpText?: string;
   /** 리비전 모드(검토 탭 '수정 요청') — 새 집필이 아니라 기존 초안을 피드백에 따라 개정. */
   revise?: { baseBody: string; feedback: string };
   signal?: AbortSignal;
 }): Promise<string> {
-  const { bus, writer, model, topic, brief, critiqueText, revise, signal } = a;
+  const { bus, writer, model, topic, brief, critiqueText, serpText, revise, signal } = a;
   const reviseContext = revise
     ? `[기존 초안]\n${revise.baseBody}\n\n[검토자 수정 요청 — 반드시 반영]\n${revise.feedback}`
     : '';
@@ -72,6 +93,7 @@ export async function writeBlogBody(a: {
       ? `「${topic}」 아래 [기존 초안]을 [검토자 수정 요청]에 따라 개정하라. 요청된 변경은 빠짐없이 반영하고, 잘 쓰인 나머지 구조·내용은 유지한다. 이 응답의 출력은 오직 개정 완료된 마크다운 본문 하나뿐이다.\n${BLOG_BODY_GUIDE}`
       : `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 검색 의도를 충족하는 완결된 글을 쓴다.\n${BLOG_BODY_GUIDE}`,
     context: revise ? reviseContext : [
+      serpText ? `[네이버 상위 노출 블로그(실측) — 검색 수요가 검증된 방향·눈높이 참고. 제목·구성 그대로 베끼기 금지]\n${serpText}` : '',
       brief ? `[리서치·SEO 브리프]\n${brief}` : '',
       critiqueText ? `[검수 의견 — 아래는 약점·주의점 목록이다. 발행 판정이 아니다. 지적된 미검증·논쟁 주장은 본문에서 빼고, 나머지는 참고해 품질을 높여라]\n${critiqueText}` : '',
     ].filter(Boolean).join('\n\n'),
@@ -391,12 +413,15 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   bus.emit('phase', { team_id: '_ceo', phase: 'integrate' });
   const writerModel = modelForTier(assign, writer.tier);
   const brief = usableTeams.map((t) => `## ${t.team.name}\n${t.deliverable}`).join('\n\n');
-  const body = await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, signal });
+  // 인기 방향 조향 — 실제 네이버 블로그 상위 노출 글(실측 SERP)을 작가·제목 패키저에 주입(fail-open).
+  const serpText = await serpPopularBrief(topic, signal);
+  if (serpText) bus.emit('log', { message: `네이버 SERP 실측 — 상위 노출 ${serpText.split('\n').length - 1}건을 집필 방향에 반영` });
+  const body = await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, signal });
   const finalDeliverable = body || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
   return packageDesignFinalize({
     bus, topic, company, assign, subproblems, teams: usableTeams,
-    critic: critic ?? null, critiqueText, writerTeam, finalDeliverable, brief, signal,
+    critic: critic ?? null, critiqueText, writerTeam, finalDeliverable, brief, serpText, signal,
   });
 }
 
@@ -416,9 +441,11 @@ async function packageDesignFinalize(a: {
   writerTeam: TeamDef | null;
   finalDeliverable: string;
   brief: string;
+  /** 네이버 SERP 실측(상위 노출 제목) — 제목 후보가 인기 패턴을 따르게 패키저에 전달. */
+  serpText?: string;
   signal?: AbortSignal;
 }): Promise<RunOutcome> {
-  const { bus, topic, company, assign, subproblems, teams, critic, critiqueText, writerTeam, finalDeliverable, brief, signal } = a;
+  const { bus, topic, company, assign, subproblems, teams, critic, critiqueText, writerTeam, finalDeliverable, brief, serpText, signal } = a;
 
   // 잔여 플레이스홀더/가짜수치 경고(생성 지침이 이미 금지 — 보통 0건).
   const placeholders = findTemplateNumbers(finalDeliverable);
@@ -431,7 +458,7 @@ async function packageDesignFinalize(a: {
   if (!signal?.aborted) {
     try {
       bus.emit('phase', { team_id: '_ceo', phase: 'review' });
-      assets = await formatterFor('naver_blog')({ topic, body: finalDeliverable, researchBrief: brief, model: assign.micro, signal });
+      assets = await formatterFor('naver_blog')({ topic, body: finalDeliverable, researchBrief: brief, serpText, model: assign.micro, signal });
       bus.emit('log', { message: `초안 포장 — 제목 "${assets.meta.title}" · SEO ${assets.draft.seo.score}/100 · 태그 ${assets.draft.tags.length}개 · 이미지 ${assets.draft.imageSlots.length}슬롯` });
     } catch (e) {
       bus.emit('log', { message: `초안 포장 실패(본문 유지): ${e instanceof Error ? e.message : String(e)}` });
@@ -461,15 +488,19 @@ async function packageDesignFinalize(a: {
         stage: 'work', emitSpawn: true, groundWikiOnly: true, maxOutputTokens: 1600, signal,
       });
       const slots = parseImagePlan(plan.text, 3);
-      if (slots.length) {
-        assets.draft.imageSlots = slots;
-        assets.files = draftFiles(assets.draft);       // draft.json/md/html + image-prompts.md 재동기화
-      }
+      if (slots.length) assets.draft.imageSlots = slots;
       autoImages = true;                               // 슬롯 확정 → finalize 가 실제 이미지 생성
       bus.emit('log', { message: `이미지 기획(${designer.name} 디자이너) — 슬롯 ${assets.draft.imageSlots.length}개 확정${slots.length ? '' : ' (계획 파싱 실패 — 편집자 슬롯 유지)'}` });
     } catch (e) {
       bus.emit('log', { message: `이미지 기획 실패(무해 — 프롬프트 슬롯 유지): ${e instanceof Error ? e.message : String(e)}` });
     }
+  }
+  // 이미지 실생성이 예정된 런(finalize 게이트와 동일 조건)이면 draft.html 이 생성 파일(images/blog-image-0N.png)을
+  // <img> 로 참조하게 재렌더 — 본문 [IMAGE:] 마커 위치에 이미지가 실제로 삽입된 미리보기가 된다.
+  if (assets) {
+    const imagesReady = !!CONFIG.openaiApiKey && (CONFIG.blogAutoImage || autoImages)
+      && assets.draft.imageSlots.length > 0 && !signal?.aborted; // 키 없으면 dry-run(파일 미생성) — 자리표시 박스 유지
+    assets.files = draftFiles(assets.draft, imagesReady); // 슬롯 갱신 반영 겸 재동기화
   }
 
   await finalizeRun({
@@ -512,6 +543,8 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
 
   return packageDesignFinalize({
     bus, topic, company, assign, subproblems: [], teams: [],
-    critic: null, critiqueText: '', writerTeam, finalDeliverable, brief: '', signal,
+    critic: null, critiqueText: '', writerTeam, finalDeliverable, brief: '',
+    serpText: await serpPopularBrief(topic, signal), // 제목 재패키징도 인기 패턴 참고(fail-open)
+    signal,
   });
 }

@@ -278,7 +278,7 @@ button.upload-retry:hover { background: var(--panel2); }
   border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
 .apikey-restore:hover { border-color: var(--accent); }
 /* 검토 탭 — HTML 미리보기(원본 draft.html, sandbox iframe) + 보기 토글 + 수정 요청 */
-.review-html-preview { width: 100%; height: 480px; background: #fff; border: 1px solid var(--border); border-radius: 8px; }
+.review-html-preview { width: 100%; height: 640px; background: #fff; border: 1px solid var(--border); border-radius: 8px; }
 .review-viewtab { opacity: .6; }
 .review-viewtab.on { opacity: 1; font-weight: 700; text-decoration: underline; }
 .review-section > textarea { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--text);
