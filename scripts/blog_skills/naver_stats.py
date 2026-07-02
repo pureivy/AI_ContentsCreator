@@ -20,6 +20,7 @@ import os
 import re
 import sys
 import time
+from datetime import date, timedelta
 from pathlib import Path
 
 
@@ -80,6 +81,47 @@ def _num(v):
         return n if n >= 0 else 0
     except Exception:
         return 0
+
+
+def extract_advisor_metrics(captures: list) -> dict:
+    """실제 크리에이터 어드바이저 엔드포인트(home/*·inflow-*)에서 채널 단위 지표를 정밀 추출.
+    - 조회수(cv): yesterday-summary(data.cv.cv 날짜배열 합) + realtime-summary(metricRanks cv metricValue).
+    - 검색 유입 키워드: 유입/검색 엔드포인트의 keyword+수치 아이템.
+    글이 적으면 채널≈포스트 근사. 없으면 0/[]."""
+    views = 0
+    inflow = {}
+    for cap in captures:
+        body = cap.get("body")
+        if not isinstance(body, dict):
+            continue
+        path = str(body.get("path", ""))
+        data = body.get("data")
+        if data in (None, [], {}):
+            continue
+        if path.endswith("/yesterday-summary") and isinstance(data, dict):
+            cv = (data.get("cv") or {}).get("cv")
+            if isinstance(cv, list):
+                views += sum(_num(x) for x in cv)
+        elif path.endswith("/realtime-summary") and isinstance(data, dict):
+            for mr in (data.get("metricRanks") or []):
+                if isinstance(mr, dict) and mr.get("metricType") == "cv":
+                    views += _num(mr.get("metricValue"))
+        elif ("search" in path.lower() or "keyword" in path.lower() or "inflow" in path.lower()):
+            items = data if isinstance(data, list) else \
+                (data.get("rank") or data.get("list") or data.get("searchKeyword") or [])
+            if isinstance(items, list):
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    kw = it.get("keyword") or it.get("query") or it.get("searchKeyword")
+                    if not kw or str(kw).strip().lower() in ("null", "none", "기타", "직접유입"):
+                        continue
+                    cnt = _num(it.get("cv") or it.get("count") or it.get("cnt")
+                               or it.get("inflow") or it.get("value"))
+                    inflow[str(kw).strip()] = max(inflow.get(str(kw).strip(), 0), cnt)
+    ranked = sorted(inflow.items(), key=lambda kv: kv[1], reverse=True)[:12]
+    search_inflow = [{"keyword": k, "count": c, "rank": i + 1} for i, (k, c) in enumerate(ranked)]
+    return {"views": views, "dwellSec": None, "searchInflow": search_inflow}
 
 
 def _walk(obj, fn):
@@ -243,30 +285,38 @@ def main():
                       "source": "scrape:naver_advisor", "note": f"로그인 오류: {str(e)[:80]}", "captured": 0})
                 return
 
-        # 로그인 세션으로 크리에이터 어드바이저 진입 — Unauthorized 면 세션 미확립.
-        page.goto("https://creator-advisor.naver.com/", wait_until="domcontentloaded", timeout=20000)
-        time.sleep(2)
-
-        # 콘텐츠(블로그) 통계·유입분석 화면을 열어 SPA 가 api 를 호출하게 유도 → 응답 캡처.
-        # 정확한 경로는 버전에 따라 다르므로 후보를 순회하며 최대한 캡처한다(그라운딩은 캡처 덤프).
-        candidates = [
-            f"https://creator-advisor.naver.com/naver_blog/blog/{blog_id}/content?contentId={log_no}",
-            "https://creator-advisor.naver.com/naver_blog/blog/statistics",
-            "https://creator-advisor.naver.com/naver_blog/blog/inflow",
-            "https://creator-advisor.naver.com/",
-        ]
-        for u in candidates:
+        # 로그인 세션으로 크리에이터 어드바이저 진입 — SPA 가 홈 통계 api 를 호출(캡처됨).
+        page.goto("https://creator-advisor.naver.com/", wait_until="networkidle", timeout=20000)
+        time.sleep(2.5)
+        # 유입분석 화면도 열어 검색 유입 api 유도.
+        for u in ("https://creator-advisor.naver.com/naver_blog/inflow",
+                  "https://creator-advisor.naver.com/naver_blog/inflowSearch"):
             try:
-                page.goto(u, wait_until="networkidle", timeout=20000)
-                time.sleep(2.5)
+                page.goto(u, wait_until="networkidle", timeout=15000)
+                time.sleep(2)
             except Exception:
                 time.sleep(1)
 
-        # 추가로 페이지 내 탭/버튼 클릭으로 유입분석을 유도(있으면).
-        for label in ["유입분석", "유입 분석", "검색유입", "조회수", "통계"]:
+        # 로그인 쿠키를 상속한 api 직접 호출 — SPA 라우트에 의존하지 않고 실측 엔드포인트를 확실히 캡처한다.
+        # (조회수=cv, 검색 유입 키워드) 채널 단위. channelId 는 blog_id 와 동일.
+        cid = blog_id
+        today = date.today().isoformat()
+        yday = (date.today() - timedelta(days=1)).isoformat()
+        base = "https://creator-advisor.naver.com/api/v6"
+        api_urls = [
+            f"{base}/home/yesterday-summary?channelId={cid}&date={today}&service=naver_blog",
+            f"{base}/home/realtime-summary?channelId={cid}&date={today}&service=naver_blog",
+            # 검색 유입 키워드 — 정확 경로는 버전별 상이, 여러 후보 시도(404 는 무시). 응답 오면 추출기가 파싱.
+            f"{base}/inflow-analysis/inflow-search?channelId={cid}&date={yday}&interval=day&service=naver_blog",
+            f"{base}/inflow-analysis/search-keyword?channelId={cid}&date={yday}&interval=day&service=naver_blog",
+            f"{base}/rank/inflow-search?channelId={cid}&date={yday}&interval=day&service=naver_blog",
+            f"{base}/inflow-search/detail?channelId={cid}&date={yday}&interval=day&service=naver_blog",
+        ]
+        for u in api_urls:
             try:
-                page.get_by_text(label, exact=False).first.click(timeout=1500)
-                time.sleep(2)
+                resp = context.request.get(u, timeout=15000)
+                if resp.ok:
+                    captures.append({"url": u, "body": resp.json()})
             except Exception:
                 continue
 
@@ -285,12 +335,24 @@ def main():
         return isinstance(b, dict) and "unauthorized" in str(b.get("message", "")).lower()
     all_unauth = bool(captures) and all(_unauth(c) for c in captures)
 
-    metrics = extract_metrics(captures, log_no)
+    # 어드바이저 실측 엔드포인트 정밀 추출을 우선, 부족분은 범용 휴리스틱으로 보강.
+    adv = extract_advisor_metrics(captures)
+    gen = extract_metrics(captures, log_no)
+    metrics = {
+        "views": adv["views"] or gen["views"],
+        "dwellSec": adv["dwellSec"] or gen["dwellSec"],
+        "searchInflow": adv["searchInflow"] or gen["searchInflow"],
+    }
+    # 로그인은 됐지만(권한 응답 수신) 수치가 0 = 발행 직후 미집계일 가능성.
+    logged = any(isinstance(c.get("body"), dict) and c["body"].get("data") not in (None,) for c in captures)
     if metrics["views"] or metrics["searchInflow"]:
         note = ""
     elif all_unauth or not captures:
         note = ("어드바이저 로그인 세션 미확립 — 브라우저에서 네이버에 로그인(로그인 상태 유지 체크) 후 "
                 "다시 시도하세요. 계속 실패하면 수동 입력으로 대체할 수 있습니다.")
+    elif logged:
+        note = ("로그인·수집은 정상인데 통계가 0입니다 — 네이버 통계는 하루 지연 집계라 발행 직후에는 "
+                "수치가 없습니다. 하루 이상 지난 뒤 다시 시도하세요(수동 입력으로도 대체 가능).")
     else:
         note = "자동 추출 실패 — 캡처 덤프(naver_stats_capture.json) 확인 후 추출기 정밀화 필요. 수동 입력으로 대체 가능."
     emit({**metrics, "source": "scrape:naver_advisor", "note": note, "captured": len(captures)})
