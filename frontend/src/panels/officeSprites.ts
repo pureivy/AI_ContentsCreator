@@ -14,6 +14,7 @@ const ROLE_SPRITE: Record<string, string> = {
   research_lead: "wiki-ingest", // 서다인 (여, 리서치·지식)
   trend_researcher: "cardnews", // 오세라 (여, 트렌드·크리에이티브)
   seo_strategist: "propose",    // 김도현 (남, 전략·제안)
+  image_designer: "critic-platform", // 윤소이 (여, 이미지 디자이너 — 디지털 크리에이티브)
   jarvis: "jarvis",             // 자비스 — 멀티포즈 세트 없이 '원래 이미지'(채팅 아바타 jarvis_face) 단일 사용.
 };                              //   OfficeView Sprite 가 특수 처리(포즈 무관 동일 이미지 → 복장 일관성, 사용자 요청)
 
@@ -27,6 +28,7 @@ export function spriteFor(id = "", level = "", title = ""): string | null {
   if (/트렌드|trend/.test(k)) return "cardnews";                              // 트렌드(여) — research 규칙보다 먼저(trend_researcher 가로채임 방지)
   if (/디렉터|research_lead|리서치|wiki|사서/.test(k)) return "wiki-ingest";  // 리서치디렉터·지식(여)
   if (/seo|키워드|keyword|strategist/.test(k)) return "propose";              // SEO(남)
+  if (/디자이너|이미지|일러스트|designer|image/.test(k)) return "critic-platform"; // 이미지 디자이너(여)
   if (/비서|자비스|jarvis|assistant/.test(k)) return "jarvis";                // 비서 — 원래 자비스 이미지
   if (/리뷰|팩트|검증|비평|review|critic|fact/.test(k)) return "reflect";     // 리뷰어(남)
   if (level === "lead") return "wiki-ingest";   // 미지 리드 폴백

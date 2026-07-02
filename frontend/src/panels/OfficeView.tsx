@@ -68,6 +68,15 @@ const TEAM_REGION: Record<string, Region> = {
   secretariat: ROOMS.secretariat,
 };
 const regionCx = (r: Region): number => r.x + r.w / 2;
+// 팀장 자리 오버라이드(방 모양 보정) — 기획팀(planning)은 책상이 창측 '상단 띠'라 범용 앵커(상단 18%)가
+// 책상 위에 올라선 것처럼 보인다(사용자 피드백). 책상 '앞' 바닥 좌측에 세운다.
+const TEAM_LEAD_SPOT: Record<string, { fx: number; fy: number }> = {
+  content: { fx: 0.28, fy: 0.62 },
+};
+// 팀별 멤버 좌석 오버라이드 — 기획팀 멤버(이미지 디자이너)는 팀장 우측 바닥(창측 데스크 앞).
+const TEAM_MEMBER_SEATS: Record<string, Seat[]> = {
+  content: [{ fx: 0.62, fy: 0.68, face: "down" }],
+};
 const roomStyle = (r: Region) =>
   ({ left: `${r.x}%`, top: `${r.y}%`, width: `${r.w}%`, height: `${r.h}%` });
 // 비서 — CEO실 앞 리셉션(소파+콘솔) 공간. 콘솔(소형 모니터) 앞 바닥에 발이 닿도록(시각상 발≈앵커+3.6).
@@ -265,8 +274,9 @@ function layout(
     }
     const reg = TEAM_REGION[tid] ?? ROOMS.support;
     const zx = reg.x, zw = reg.w, zoneTop = reg.y, zoneH = reg.h;
-    const deskX = zx + zw / 2;
-    const deskY = zoneTop + zoneH * 0.18;          // 팀장은 방 상단(데스크 열 머리쪽)
+    const spot = TEAM_LEAD_SPOT[tid];              // 방 모양 보정(기획팀: 책상 '앞' 바닥 — 책상 위 X)
+    const deskX = zx + zw * (spot?.fx ?? 0.5);
+    const deskY = zoneTop + zoneH * (spot?.fy ?? 0.18); // 기본: 방 상단(데스크 열 머리쪽)
     const cx = zx + zw / 2;
     const cy = zoneTop + zoneH * 0.55;
     const ph = running ? phases[tid] : undefined;
@@ -331,9 +341,10 @@ function layout(
     const cx = zx + zw / 2;
     const cy = zoneTop + zoneH * 0.55;
     const ph = running ? phases[tid] : undefined;
-    const leadDeskX = cx, leadDeskY = zoneTop + zoneH * 0.18;
+    const lspot = TEAM_LEAD_SPOT[tid];
+    const leadDeskX = zx + zw * (lspot?.fx ?? 0.5), leadDeskY = zoneTop + zoneH * (lspot?.fy ?? 0.18);
     const n = list.length;
-    const seats = seatsFor(n);
+    const seats = TEAM_MEMBER_SEATS[tid] ?? seatsFor(n);
     // Only SPAWNED members (the ones the lead summoned this run) gather/debate; size
     // the cluster/ring to that count so the few who were called are spaced right.
     // Non-selected (placeholder) members stay idle → office life (handled by freeIds).

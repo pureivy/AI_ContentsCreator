@@ -38,6 +38,8 @@ export interface FinalizeArgs {
   converged: boolean;
   /** 발행용 초안 자산(제목·메타·태그·SEO·렌더) — 설정 시 세션 dir 에 draft.* 로 저장. */
   assets?: AssetBundle;
+  /** 이미지 디자이너가 슬롯을 확정한 런 — 초안 이미지 실생성(generateImagesForDraft) 트리거. */
+  autoImages?: boolean;
   /** 설정 시 LLM Wiki 적재(Karpathy ingest)에 쓸 micro 모델. */
   ingestModel?: string;
   /** 교훈 추출(reflect)용 모델 — 미지정 시 ingestModel. 약한 micro 가 교훈 JSON 을 못 내는 변동성 보완용(standard 권장). */
@@ -106,17 +108,18 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
     }
   }
 
-  // --- 블로그 이미지 자동 생성(옵트인 BLOG_AUTO_IMAGE, 기본 off) — 완성 초안(draft.json)의 imageSlots 를
-  //     gpt-image-2 로 생성해 세션 dir 에 images/ + image_manifest.json 을 남긴다. 기본 off 라 기본 런 경로는
-  //     불변. OPENAI_API_KEY 없으면 스크립트가 dry-run(계획만). 실패는 무해(런 종료·발행을 막지 않음). ---
-  if (CONFIG.blogAutoImage && a.assets?.files?.length && !a.signal?.aborted) {
+  // --- 블로그 이미지 자동 생성 — 완성 초안(draft.json)의 imageSlots 를 gpt-image-2 로 생성해 세션 dir 에
+  //     images/ + image_manifest.json 을 남긴다. 트리거: 이미지 디자이너가 슬롯을 확정한 런(autoImages —
+  //     제작팀 image_designer 협의 스테이지) 또는 옵트인 BLOG_AUTO_IMAGE. 둘 다 아니면 기존 런 경로 불변.
+  //     OPENAI_API_KEY 없으면 스크립트가 dry-run(계획만). 실패는 무해(런 종료·발행을 막지 않음). ---
+  if ((CONFIG.blogAutoImage || a.autoImages) && a.assets?.files?.length && !a.signal?.aborted) {
     try {
       const dir = path.join(CONFIG.sessionsDir, a.bus.runId);
       const draftPath = path.join(dir, 'draft.json');
       if (fs.existsSync(draftPath)) {
         const r = await generateImagesForDraft(
           draftPath, path.join(dir, 'images'), path.join(dir, 'image_manifest.json'),
-          { topic: a.topic, imageStyle: 'photorealistic' }, a.signal,
+          { topic: a.topic, imageStyle: 'photorealistic', limit: 3 }, a.signal,
         );
         a.bus.emit(EventType.log, { message: `블로그 이미지 — ${r.output.split('\n')[0]}` });
       }

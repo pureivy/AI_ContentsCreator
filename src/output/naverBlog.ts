@@ -3,6 +3,7 @@
  * 본문은 생성하지 않는다(작가가 이미 씀). 구조작업(제목/메타/태그/이미지 프롬프트)만 microJSON 1콜.
  */
 import { microJSON } from '../orchestrator/agent';
+import { firstJson } from '../tools/classify';
 import { asString } from '../util/str';
 import { seedKeyword } from '../grounding/naver_common';
 import { scoreSeo } from './seo';
@@ -49,21 +50,39 @@ export async function packageNaverBlog(input: FormatterInput): Promise<AssetBund
   const seo = scoreSeo({ title: titleCandidates[0] ?? topic, body, primaryKeyword, tags, imageSlots: imageSlots.length });
   const draft: BlogDraft = { topic, primaryKeyword, titleCandidates, metaDescription, tags, imageSlots, internalLinks, bodyMarkdown: body, seo };
 
-  const md = renderMarkdown(draft);
-  const files = [
-    { name: 'draft.json', content: JSON.stringify(draft, null, 2) },
-    { name: 'draft.md', content: md },
-    { name: 'draft.html', content: renderHtml(draft) },
-  ];
-  if (imageSlots.length) {
-    files.push({ name: 'image-prompts.md', content: imageSlots.map((s, i) => `${i + 1}. **${s.alt}**\n   ${s.prompt}`).join('\n\n') });
-  }
   return {
     platform: 'naver_blog',
-    files,
+    files: draftFiles(draft),
     meta: { title: titleCandidates[0], titleCandidates, seoScore: seo.score, tags, primaryKeyword },
     draft,
   };
+}
+
+/** 초안 → 세션 파일 목록(draft.json/md/html + image-prompts.md). 슬롯이 갱신되면(디자이너 협의) 재호출해 동기화. */
+export function draftFiles(draft: BlogDraft): Array<{ name: string; content: string }> {
+  const files = [
+    { name: 'draft.json', content: JSON.stringify(draft, null, 2) },
+    { name: 'draft.md', content: renderMarkdown(draft) },
+    { name: 'draft.html', content: renderHtml(draft) },
+  ];
+  if (draft.imageSlots.length) {
+    files.push({ name: 'image-prompts.md', content: draft.imageSlots.map((s, i) => `${i + 1}. **${s.alt}**\n   ${s.prompt}`).join('\n\n') });
+  }
+  return files;
+}
+
+/**
+ * 이미지 디자이너의 계획 텍스트 → 이미지 슬롯(alt/prompt). 자유 서술 뒤 JSON 한 줄
+ * ({"images":[{"alt","prompt"}]}) 을 firstJson 으로 추출, alt·prompt 둘 다 있는 항목만 최대 max.
+ * 실패/빈 계획이면 [] — 호출부가 기존 슬롯을 유지(fail-open). 순수 함수 — 단위 테스트 대상.
+ */
+export function parseImagePlan(text: string, max = 3): Array<{ alt: string; prompt: string }> {
+  const j = firstJson<{ images?: Array<{ alt?: unknown; prompt?: unknown }> }>(text ?? '');
+  const arr = Array.isArray(j?.images) ? j!.images : [];
+  return arr
+    .map((im) => ({ alt: asString(im?.alt).trim(), prompt: asString(im?.prompt).trim() }))
+    .filter((im) => im.alt && im.prompt)
+    .slice(0, Math.max(1, max));
 }
 
 registerFormatter('naver_blog', packageNaverBlog);

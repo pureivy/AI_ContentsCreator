@@ -18,6 +18,7 @@ import { prepareRun } from './prepare';
 import { finalizeRun } from './finalize';
 import { formatterFor } from '../output';
 import type { AssetBundle } from '../output';
+import { parseImagePlan, draftFiles } from '../output/naverBlog';
 import { getRunSettings } from '../runsettings';
 import type { RunOptions, RunOutcome } from './run';
 
@@ -401,13 +402,46 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
     }
   }
 
+  // --- 이미지 협의·기획 — 제작팀 이미지 디자이너가 작가의 최종 카피를 검토해(협의) 슬롯(alt/프롬프트)을 확정.
+  //     실제 파일 생성은 finalizeRun 의 generateImagesForDraft 가 '확정된 draft.json 슬롯'으로 수행한다.
+  //     디자이너가 로스터에 없거나 OPENAI 키 미설정이면 통째로 건너뜀(기존 동작 불변, fail-open). ---
+  let autoImages = false;
+  const designer = writerTeam?.members.find((m) => (m.tools ?? []).includes('image_generate'));
+  if (assets && designer && CONFIG.openaiApiKey && !signal?.aborted) {
+    try {
+      const slotLines = assets.draft.imageSlots.map((s, i) => `${i + 1}. ${s.alt} — ${s.prompt}`).join('\n') || '(초안 슬롯 없음)';
+      const markers = [...finalDeliverable.matchAll(/\[IMAGE:([^\]]+)\]/g)].map((m) => (m[1] ?? '').trim()).filter(Boolean).slice(0, 6);
+      const plan = await runAgent({
+        bus, role: designer, model: modelForTier(assign, designer.tier),
+        task:
+          '수석 작가의 최종 카피를 검토하고(협의), 본문 [IMAGE:] 슬롯과 글의 톤에 맞는 삽입 이미지 계획을 확정하라. ' +
+          '각 이미지: alt(대체텍스트, 한국어) · prompt(생성 프롬프트 — 피사체·구도·스타일·조명을 구체적으로, 한국 생활 맥락, 텍스트/워터마크/로고 금지). ' +
+          '최대 3장. 짧은 협의 코멘트 후 마지막 줄에 JSON 한 줄로 출력: {"images":[{"alt":"...","prompt":"..."}]}',
+        context:
+          `[작가 최종 카피(발췌)]\n${finalDeliverable.slice(0, 5000)}\n\n` +
+          (markers.length ? `[본문 IMAGE 마커]\n${markers.map((m, i) => `${i + 1}. ${m}`).join('\n')}\n\n` : '') +
+          `[슬롯 초안(편집자)]\n${slotLines}`,
+        stage: 'work', emitSpawn: true, groundWikiOnly: true, maxOutputTokens: 700, signal,
+      });
+      const slots = parseImagePlan(plan.text, 3);
+      if (slots.length) {
+        assets.draft.imageSlots = slots;
+        assets.files = draftFiles(assets.draft);       // draft.json/md/html + image-prompts.md 재동기화
+      }
+      autoImages = true;                               // 슬롯 확정 → finalize 가 실제 이미지 생성
+      bus.emit('log', { message: `이미지 기획(${designer.name} 디자이너) — 슬롯 ${assets.draft.imageSlots.length}개 확정${slots.length ? '' : ' (계획 파싱 실패 — 편집자 슬롯 유지)'}` });
+    } catch (e) {
+      bus.emit('log', { message: `이미지 기획 실패(무해 — 프롬프트 슬롯 유지): ${e instanceof Error ? e.message : String(e)}` });
+    }
+  }
+
   await finalizeRun({
     bus, topic, ceoId: company.ceo.id, ceoName: company.ceo.name,
     assignReason: assign.reason, subproblems,
     positions: usableTeams.map((t) => ({ id: t.team.id, name: t.team.name, stance: 'neutral', text: t.deliverable })),
     participants: usableTeams.flatMap((t) => t.participants), // 자가학습 roster — 팀원 개별 역할(F1)
     critique: critic && critiqueText ? { id: critic.id, name: critic.name, text: critiqueText } : undefined,
-    deliverable: finalDeliverable, converged: false, ingestModel: assign.micro, reflectModel: assign.standard, assets, signal,
+    deliverable: finalDeliverable, converged: false, ingestModel: assign.micro, reflectModel: assign.standard, assets, autoImages, signal,
   });
 
   return {
