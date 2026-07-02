@@ -547,6 +547,11 @@ interface NaverDraftJob {
 }
 const NAVER_DRAFT_JOBS = new Map<string, NaverDraftJob>();
 
+// 네이버 Chrome 영속 프로필(~/.naver-blog-profiles/cli)은 1개뿐 — 동시에 두 브라우저(임시저장·성과수집·
+// 일일동기화)를 열면 두 번째 launch_persistent_context 가 프로필 락으로 실패한다. 셋을 단일 뮤텍스로
+// 직렬화한다. dry-run 은 브라우저를 열지 않으므로 점유 대상이 아니다.
+let naverProfileBusy: string | null = null;
+
 async function pieceNaverDraftHandler(c: Context): Promise<Response> {
   const id = c.req.param('id') ?? '';
   if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
@@ -557,9 +562,9 @@ async function pieceNaverDraftHandler(c: Context): Promise<Response> {
   if (!piece) return c.json({ error: 'unknown piece' }, 404);
   if (!piece.runId) return c.json({ error: '초안이 아직 없습니다.' }, 409);
   if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') return c.json({ error: '이미 네이버 임시저장이 진행 중입니다.' }, 409);
-  // Chrome 영속 프로필(~/.naver-blog-profiles/cli)은 1개 — 다른 초안의 실런과 동시 실행 시 프로필 락 충돌.
-  if (!dryRun && [...NAVER_DRAFT_JOBS.values()].some((j) => j.status === 'running' && !j.dryRun)) {
-    return c.json({ error: '다른 초안의 네이버 임시저장이 진행 중입니다 — 완료 후 다시 시도하세요.' }, 409);
+  // 실런은 브라우저를 여니 프로필 뮤텍스 필요 — 수집·타 임시저장·일일동기화와 상호 배제.
+  if (!dryRun && naverProfileBusy) {
+    return c.json({ error: `네이버 브라우저 작업이 진행 중입니다(${naverProfileBusy}) — 완료 후 다시 시도하세요.` }, 409);
   }
   // 이 초안의 런(수정 요청 리비전 포함)이 실행 중이면 내용이 바뀌는 중 — 저장하지 않는다.
   if ([...RUNS.values()].some((h) => h.status === 'running' && h.topic === piece.title)) {
@@ -575,7 +580,8 @@ async function pieceNaverDraftHandler(c: Context): Promise<Response> {
   if (!draft) return c.json({ error: '초안(draft.json)을 읽을 수 없습니다.' }, 404);
 
   const job: NaverDraftJob = { status: 'running', startedTs: new Date().toISOString(), dryRun };
-  NAVER_DRAFT_JOBS.set(id, job); // ── 동기 구간 끝
+  NAVER_DRAFT_JOBS.set(id, job);
+  if (!dryRun) naverProfileBusy = `임시저장:${piece.title.slice(0, 20)}`; // ── 동기 구간 끝(뮤텍스 획득)
   void publishDraftToNaver(sessionDir, draft, { dryRun }).then((r) => {
     job.endedTs = new Date().toISOString();
     if (r.ok) {
@@ -592,7 +598,7 @@ async function pieceNaverDraftHandler(c: Context): Promise<Response> {
   }).catch((e: unknown) => {
     job.status = 'failed'; job.endedTs = new Date().toISOString();
     job.error = e instanceof Error ? e.message : String(e);
-  });
+  }).finally(() => { if (!dryRun) naverProfileBusy = null; }); // 뮤텍스 해제
   return c.json({ ok: true, started: true, dry_run: dryRun });
 }
 function pieceNaverDraftStatusHandler(c: Context): Response {
@@ -649,14 +655,25 @@ async function pieceCollectHandler(c: Context): Promise<Response> {
   if (!piece) return c.json({ error: 'unknown piece' }, 404);
   if (!piece.publishedUrl) return c.json({ error: '발행 URL 이 없습니다 — 네이버에 발행 후 글 URL을 먼저 등록하세요.' }, 409);
   if (COLLECT_JOBS.get(id)?.status === 'running') return c.json({ error: '이미 성과 수집이 진행 중입니다.' }, 409);
+  // 수집도 브라우저를 여니 프로필 뮤텍스 필요(dry-run 제외 — 브라우저 안 엶).
+  if (!dryRun && naverProfileBusy) {
+    return c.json({ error: `네이버 브라우저 작업이 진행 중입니다(${naverProfileBusy}) — 완료 후 다시 시도하세요.` }, 409);
+  }
   const job: CollectJob = { status: 'running', startedTs: new Date().toISOString(), dryRun };
-  COLLECT_JOBS.set(id, job); // ── 동기 구간 끝
+  COLLECT_JOBS.set(id, job);
+  if (!dryRun) naverProfileBusy = `성과수집:${piece.title.slice(0, 20)}`; // ── 동기 구간 끝(뮤텍스 획득)
   void measurePiece(piece, dryRun).then(async ({ sample, note }) => {
     job.endedTs = new Date().toISOString();
     job.note = note;
     if (!sample) {
       job.status = 'failed';
       job.error = note || '자동 추출된 성과가 없습니다 — 수동 입력으로 대체하세요.';
+      return;
+    }
+    // dry-run 은 실제 상태를 변이하지 않는다 — 샘플만 노출(강화·이력·전이 없음, naver-draft 와 동일 관례).
+    if (dryRun) {
+      job.status = 'done'; job.reinforced = false;
+      job.views = sample.views; job.dwellSec = sample.dwellSec; job.inflowCount = sample.searchInflow.length;
       return;
     }
     const r = await ingestMetrics(id, sample);
@@ -666,7 +683,7 @@ async function pieceCollectHandler(c: Context): Promise<Response> {
   }).catch((e: unknown) => {
     job.status = 'failed'; job.endedTs = new Date().toISOString();
     job.error = e instanceof Error ? e.message : String(e);
-  });
+  }).finally(() => { if (!dryRun) naverProfileBusy = null; }); // 뮤텍스 해제
   return c.json({ ok: true, started: true, dry_run: dryRun });
 }
 function pieceCollectStatusHandler(c: Context): Response {
@@ -1548,6 +1565,10 @@ void stopDaily;
 // 측정→강화(멱등). 기본 수집기(manual)는 measure 가 null 이라 no-op — 사람이 POST /pieces/:id/metrics 로
 // 수동 입력한다. 실제 브라우저 스크레이퍼를 setCollector 로 등록하면 자동화(스크레이퍼 마일스톤, 사용자 로그인 필요).
 async function syncPerformance(): Promise<void> {
+  // 사용자 트리거 브라우저 작업(임시저장·수집)이 프로필을 쓰는 중이면 이번 주기는 건너뛴다(프로필 락 충돌 방지).
+  if (naverProfileBusy) { console.log('[perf-sync]', `프로필 사용 중(${naverProfileBusy}) — 이번 주기 건너뜀`); return; }
+  naverProfileBusy = '일일동기화';
+  try {
   const collector = getCollector();
   const windowMs = CONFIG.performanceWindowDays * 24 * 60 * 60 * 1000;
   for (const p of pieceStore().list()) {
@@ -1558,6 +1579,7 @@ async function syncPerformance(): Promise<void> {
       if (sample) await ingestMetrics(p.id, sample);                        // 측정치 있으면 강화(measured→reflected)
     } catch (e) { console.log('[perf-sync]', `${p.id} 측정 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
   }
+  } finally { naverProfileBusy = null; }
 }
 const stopPerfSync = startDaily({
   time: CONFIG.performanceSyncTime,

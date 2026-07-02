@@ -45,12 +45,19 @@ describe('draftToFinalContent — 기본 구조', () => {
     ]);
   });
 
-  it('인라인 **강조** 마커 제거·리스트 표기 유지·구분선 생략·인용 마커 제거', () => {
+  it('본문은 굵게(**) 마커 보존·리스트 표기 유지·구분선 생략·인용 마커 제거', () => {
     const r = draftToFinalContent(mkDraft({
       bodyMarkdown: '이건 **아주** 중요.\n- 항목 하나\n1. 순서 항목\n---\n> 인용문입니다.',
     }));
     expect(r.smarteditor_text.sections).toEqual([
-      { heading: '', body: '이건 아주 중요.\n- 항목 하나\n1. 순서 항목\n인용문입니다.' },
+      { heading: '', body: '이건 **아주** 중요.\n- 항목 하나\n1. 순서 항목\n인용문입니다.' },
+    ]);
+  });
+
+  it('제목의 굵게 마커는 제거(제목은 이미 굵은 큰 글씨)', () => {
+    const r = draftToFinalContent(mkDraft({ bodyMarkdown: '## **핵심** 정리\n본문 **강조** 줄' }));
+    expect(r.smarteditor_text.sections).toEqual([
+      { heading: '핵심 정리', body: '본문 **강조** 줄' },
     ]);
   });
 });

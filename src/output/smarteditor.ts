@@ -27,8 +27,13 @@ export interface SeFinalContent {
 }
 
 /** 인라인 마크다운 정리 — **강조** 마커 제거, 남은 [IMAGE:] 인라인 잔재 제거. */
-function cleanInline(s: string): string {
+/** 제목 — [IMAGE:] 와 굵게 마커 모두 제거(제목은 이미 굵은 큰 글씨). */
+function cleanHeading(s: string): string {
   return s.replace(/\[IMAGE:[^\]]*\]/g, '').replace(/\*\*([^*]+)\*\*/g, '$1').trim();
+}
+/** 본문 — [IMAGE:] 만 제거하고 굵게 마커(**...**)는 보존한다(python 이 실제 굵은 글씨로 렌더). */
+function cleanBody(s: string): string {
+  return s.replace(/\[IMAGE:[^\]]*\]/g, '').trim();
 }
 
 /**
@@ -70,10 +75,10 @@ export function draftToFinalContent(d: BlogDraft): SeFinalContent {
       if (slotIdx < slots.length) positions.push({ after_section: flush(), image_index: slotIdx++ });
       continue; // 슬롯 소진 마커는 드롭(렌더러의 자리표시 박스에 대응하는 SE 요소 없음)
     }
-    if ((m = line.match(/^###\s+(.*)$/))) { flush(); heading = cleanInline(m[1]!); level = 'HEADING2'; continue; }
+    if ((m = line.match(/^###\s+(.*)$/))) { flush(); heading = cleanHeading(m[1]!); level = 'HEADING2'; continue; }
     if ((m = line.match(/^##\s+(.*)$/)) || (m = line.match(/^#\s+(.*)$/))) {
       flush();
-      heading = cleanInline(m[1]!);
+      heading = cleanHeading(m[1]!);
       level = 'HEADING1';
       h2Count++;
       // 마커 없는 본문 — 첫 H2들 바로 아래 배분(렌더러와 동일): 제목만 있는 섹션을 확정하고 그 뒤에 이미지.
@@ -86,7 +91,7 @@ export function draftToFinalContent(d: BlogDraft): SeFinalContent {
     let text = line.trim();
     const q = text.match(/^>\s?(.*)$/);
     if (q) text = q[1]!; // 인용 — 마커만 걷고 본문 유지
-    text = cleanInline(text);
+    text = cleanBody(text); // 굵게(**) 마커 보존 — python 이 실제 굵은 글씨로 렌더
     if (text) lines.push(text);
   }
   flush();

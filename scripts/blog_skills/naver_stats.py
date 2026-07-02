@@ -70,7 +70,8 @@ def parse_blog_url(url: str) -> tuple:
 # ── 캡처된 JSON 에서 휴리스틱 추출 ─────────────────────────────────────────────
 VIEW_KEYS = ("cnt", "count", "pv", "readcnt", "readcount", "viewcount", "hit", "hits", "pageview")
 KW_KEYS = ("keyword", "query", "searchkeyword", "keywordname", "refererkeyword")
-CNT_KEYS = ("cnt", "count", "pv", "value", "ratio", "inflow", "hit")
+# 유입 횟수 필드 — 우선순위 순. 'ratio'(백분율)는 횟수가 아니라 제외.
+CNT_KEYS = ("cnt", "count", "pv", "hit", "searchcnt", "searchcount", "inflow", "value")
 
 
 def _num(v):
@@ -91,37 +92,49 @@ def _walk(obj, fn):
             _walk(v, fn)
 
 
+DWELL_KEYS = ("avgreadtime", "readtime", "dwelltime", "usetime", "avgusetime")
+# logNo 무관 조회수 폴백에 허용할 '강한' 조회수 키(일반적인 count/cnt 는 유입수와 혼동돼 제외).
+STRONG_VIEW_KEYS = ("readcnt", "readcount", "viewcount", "pageview", "pv")
+
+
 def extract_metrics(captures: list, log_no: str) -> dict:
     """캡처된 api 응답 목록에서 조회수·유입 키워드를 최선 추출(휴리스틱). 확신 없으면 0/[]."""
     views = 0
-    dwell = None
-    inflow = {}  # keyword -> count
+    dwell = None        # logNo 무관 폴백
+    dwell_logno = None  # logNo 포함 노드에서 얻은 값(우선)
+    inflow = {}         # keyword -> count
 
     def visit(node):
-        nonlocal views, dwell
+        nonlocal views, dwell, dwell_logno
         if not isinstance(node, dict):
             return
         lower = {str(k).lower(): k for k in node.keys()}
-        # 조회수 — 이 노드가 logNo 를 담고 있으면 우선(포스트별), 아니면 최댓값 후보
-        has_logno = any(str(node.get(orig)) == log_no for orig in node.values() if isinstance(orig, (str, int))) \
-            or (log_no and log_no in json.dumps(node, ensure_ascii=False)[:400])
-        for lk, orig in lower.items():
-            if any(vk == lk for vk in VIEW_KEYS):
-                cand = _num(node[orig])
+        # 이 노드가 logNo 를 '직접 값'으로 가지면 포스트별 레코드로 간주(엔벌로프 총계 과대추출 방지).
+        has_logno = bool(log_no) and any(
+            str(v) == log_no for v in node.values() if isinstance(v, (str, int)))
+        # 조회수 — logNo 노드는 모든 view 키 허용, 아니면 강한 키 + views 미확정일 때만(유입수 오인 방지).
+        for vk in VIEW_KEYS:
+            if vk in lower:
+                cand = _num(node[lower[vk]])
                 if has_logno:
                     views = max(views, cand)
-                elif views == 0:
-                    views = max(views, cand) if cand < 10_000_000 else views
-            if lk in ("avgreadtime", "readtime", "dwelltime", "usetime", "avgusetime"):
-                d = _num(node[orig])
+                elif views == 0 and vk in STRONG_VIEW_KEYS and cand < 10_000_000:
+                    views = max(views, cand)
+        # 체류 — logNo 노드 우선, 아니면 첫 값만(마지막이 이기지 않게).
+        for dk in DWELL_KEYS:
+            if dk in lower:
+                d = _num(node[lower[dk]])
                 if d:
-                    dwell = d
-        # 유입 키워드 — keyword + count 를 함께 가진 노드
-        kw_field = next((lower[k] for k in lower if k in KW_KEYS), None)
+                    if has_logno:
+                        dwell_logno = d
+                    elif dwell is None:
+                        dwell = d
+        # 유입 키워드 — keyword + count. 필드는 KW_KEYS/CNT_KEYS '우선순위'로 선택(키 삽입 순서 비의존).
+        kw_field = next((lower[k] for k in KW_KEYS if k in lower), None)
         if kw_field:
             kw = str(node.get(kw_field, "")).strip()
             if kw and kw.lower() not in ("null", "none", "직접유입", "기타"):
-                cnt_field = next((lower[k] for k in lower if k in CNT_KEYS), None)
+                cnt_field = next((lower[k] for k in CNT_KEYS if k in lower), None)
                 cnt = _num(node.get(cnt_field)) if cnt_field else 0
                 inflow[kw] = max(inflow.get(kw, 0), cnt)
 
@@ -130,6 +143,8 @@ def extract_metrics(captures: list, log_no: str) -> dict:
             _walk(cap.get("body"), visit)
         except Exception:
             continue
+    if dwell_logno is not None:
+        dwell = dwell_logno
 
     ranked = sorted(inflow.items(), key=lambda kv: kv[1], reverse=True)[:12]
     search_inflow = [{"keyword": k, "count": c, "rank": i + 1} for i, (k, c) in enumerate(ranked)]
@@ -203,16 +218,34 @@ def main():
 
         page.on("response", on_response)
 
-        # 로그인 확인(영속 프로필 = 발행 때 로그인 세션 재사용)
+        # ── 로그인 — 발행 스크립트(naver_publish)와 동일 플로우 재사용. 영속 프로필에 세션 쿠키가
+        #    남지 않으면(로그인 상태 유지 미체크) 매 실행 로그인해야 한다. creator-advisor 는 blog.naver.com
+        #    로그인(nid 쿠키, .naver.com 도메인)으로 함께 인증되므로 blog 로그인만 확립하면 된다.
+        naver_id = os.environ.get("NAVER_ID", "")
+        naver_pw = os.environ.get("NAVER_PW", "")
+        page.goto("https://blog.naver.com", wait_until="domcontentloaded", timeout=15000)
+        time.sleep(1.5)
+        logged_in = page.locator("a[href*='nidlogin'], .link_login").count() == 0
+        if not logged_in:
+            try:
+                from naver_publish import full_auto_login  # 같은 디렉토리 스크립트 — sys.path[0]
+                full_auto_login(page, naver_id, naver_pw)
+            except SystemExit:
+                context.close()
+                emit({"views": 0, "dwellSec": None, "searchInflow": [],
+                      "source": "scrape:naver_advisor",
+                      "note": "네이버 로그인 실패(시간 초과) — 열린 브라우저에서 직접 로그인 후 다시 시도하세요.",
+                      "captured": 0})
+                return
+            except Exception as e:
+                context.close()
+                emit({"views": 0, "dwellSec": None, "searchInflow": [],
+                      "source": "scrape:naver_advisor", "note": f"로그인 오류: {str(e)[:80]}", "captured": 0})
+                return
+
+        # 로그인 세션으로 크리에이터 어드바이저 진입 — Unauthorized 면 세션 미확립.
         page.goto("https://creator-advisor.naver.com/", wait_until="domcontentloaded", timeout=20000)
         time.sleep(2)
-        if "nid.naver.com" in page.url or "nidlogin" in page.url:
-            context.close()
-            emit({"views": 0, "dwellSec": None, "searchInflow": [],
-                  "source": "scrape:naver_advisor",
-                  "note": "네이버 로그인 필요 — 발행/임시저장을 먼저 실행해 세션을 만들거나 브라우저에서 로그인하세요.",
-                  "captured": 0})
-            return
 
         # 콘텐츠(블로그) 통계·유입분석 화면을 열어 SPA 가 api 를 호출하게 유도 → 응답 캡처.
         # 정확한 경로는 버전에 따라 다르므로 후보를 순회하며 최대한 캡처한다(그라운딩은 캡처 덤프).
@@ -246,9 +279,20 @@ def main():
     except Exception:
         pass
 
+    # 어드바이저에 로그인 세션이 적용됐는지 — 캡처에 Unauthorized 가 남아 있으면 세션 미확립.
+    def _unauth(cap):
+        b = cap.get("body")
+        return isinstance(b, dict) and "unauthorized" in str(b.get("message", "")).lower()
+    all_unauth = bool(captures) and all(_unauth(c) for c in captures)
+
     metrics = extract_metrics(captures, log_no)
-    note = "" if (metrics["views"] or metrics["searchInflow"]) else \
-        "자동 추출 실패 — 캡처 덤프(naver_stats_capture.json) 확인 후 추출기 정밀화 필요. 수동 입력으로 대체 가능."
+    if metrics["views"] or metrics["searchInflow"]:
+        note = ""
+    elif all_unauth or not captures:
+        note = ("어드바이저 로그인 세션 미확립 — 브라우저에서 네이버에 로그인(로그인 상태 유지 체크) 후 "
+                "다시 시도하세요. 계속 실패하면 수동 입력으로 대체할 수 있습니다.")
+    else:
+        note = "자동 추출 실패 — 캡처 덤프(naver_stats_capture.json) 확인 후 추출기 정밀화 필요. 수동 입력으로 대체 가능."
     emit({**metrics, "source": "scrape:naver_advisor", "note": note, "captured": len(captures)})
 
 

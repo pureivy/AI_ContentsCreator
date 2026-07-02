@@ -15,11 +15,30 @@ import argparse
 import json
 import os
 import random
+import re
 import sys
 import time
 import uuid
 from datetime import datetime
 from pathlib import Path
+
+
+# ── 굵게(**...**) 파서 — API·사람 경로 공용 ─────────────────────────────────
+_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+
+
+def parse_bold_segments(text: str) -> list:
+    """'a **b** c' → [('a ',False),('b',True),(' c',False)]. 굵게 마커 없으면 [(text,False)]."""
+    segs = []
+    i = 0
+    for m in _BOLD_RE.finditer(text):
+        if m.start() > i:
+            segs.append((text[i:m.start()], False))
+        segs.append((m.group(1), True))
+        i = m.end()
+    if i < len(text):
+        segs.append((text[i:], False))
+    return segs or [(text, False)]
 
 
 # ── 경로 설정 ─────────────────────────────────────────────────────────────
@@ -358,10 +377,12 @@ def make_heading_para(text: str, level: str = "HEADING1") -> dict:
 
 
 def make_body_para(text: str) -> dict:
+    # 굵게(**...**) 세그먼트를 각각 textNode 로 — 굵은 구간은 font-weight:bold.
+    nodes = [make_text_node(seg, bold=b) for seg, b in parse_bold_segments(text) if seg]
     return {
         "@ctype": "paragraph",
         "id":     uid(),
-        "nodes":  [make_text_node(text)],
+        "nodes":  nodes or [make_text_node(text)],
     }
 
 
@@ -422,6 +443,21 @@ def human_type(page, text: str):
         if random.random() < 0.015:
             d += _rand(0.4, 1.1)  # 문장 중간 잠깐 생각
         time.sleep(d)
+
+
+def human_type_rich(page, text: str):
+    """굵게(**...**)를 사람처럼 반영 — 굵은 구간 앞뒤로 굵게 단축키(Cmd/Ctrl+B) 토글 후 타이핑.
+    Chrome 이 가로채는 숫자 단축키와 달리 B 는 편집영역 굵게 토글로 동작한다."""
+    for seg, bold in parse_bold_segments(text):
+        if not seg:
+            continue
+        if bold:
+            page.keyboard.press("ControlOrMeta+b")
+            time.sleep(_rand(0.05, 0.15))
+        human_type(page, seg)
+        if bold:
+            page.keyboard.press("ControlOrMeta+b")  # 굵게 해제
+            time.sleep(_rand(0.05, 0.15))
 
 
 def focus_body_editor(page) -> bool:
@@ -514,10 +550,9 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
             if not line:
                 continue
             newline_before()
-            human_type(page, line)
+            human_type_rich(page, line)  # 굵게(**) 반영
         for slot in after_map.get(i, []):
-            page.keyboard.press("Enter")
-            time.sleep(_rand(0.1, 0.3))
+            newline_before()  # 직전이 이미지면(first_block) Enter 생략 → 이미지 사이 빈 문단 방지
             insert_image(slot)
             first_block = True  # 이미지 직후는 새 문단 — 다음 블록 앞 Enter 생략
 
@@ -538,8 +573,10 @@ def apply_heading_styles(page, headings: list) -> str:
         const ds = ed?._documentService;
         if (!ds) return 'no_ds';
         const norm = s => (s||'').replace(/\\s+/g,' ').trim();
-        const hmap = {};
-        for (const h of headings) hmap[norm(h.text)] = h.level;
+        // 프로토타입 오염 방지(Object.create(null)) + 텍스트별 레벨 큐 — 문서 순서대로 1회씩 소비해
+        // 소제목과 우연히 같은 본문 줄이 제목으로 승격되지 않게 한다.
+        const hq = Object.create(null);
+        for (const h of headings) { const k = norm(h.text); (hq[k] || (hq[k] = [])).push(h.level); }
         const doc = ds.getDocumentData();
         let applied = 0;
         for (const c of doc.document.components) {
@@ -547,7 +584,8 @@ def apply_heading_styles(page, headings: list) -> str:
             for (const para of (c.value || [])) {
                 const txt = norm((para.nodes||[]).map(n => n.value||'').join(''));
                 if (!txt) continue;
-                const lvl = hmap[txt];
+                const q = Object.prototype.hasOwnProperty.call(hq, txt) ? hq[txt] : null;
+                const lvl = (q && q.length) ? q.shift() : null;
                 if (lvl) {
                     para.paragraphStyle = lvl;
                     const size = lvl === 'HEADING1' ? '24pt' : '18pt';
@@ -618,7 +656,7 @@ def write_post(
             loc = page.locator(sel).first
             loc.click(timeout=3000)
             time.sleep(0.3)
-            page.keyboard.press("Control+a")
+            page.keyboard.press("ControlOrMeta+a")  # macOS=Cmd+a — 전체선택(Ctrl+a 는 줄시작 이동)
             page.keyboard.press("Delete")
             if human:
                 human_type(page, title)       # 제목도 한 글자씩
@@ -632,6 +670,7 @@ def write_post(
 
     # ── 사람처럼 입력 경로 — 본문을 타이핑하고 이미지를 위치에 삽입, 제목 스타일만 반영 ──
     image_comps = []  # 대표사진 설정(STEP 9)용 — 두 경로 모두에서 채운다.
+    preexisting_image_ids = set()  # 폴백 시 제외할 '사람 경로에서 이미 삽입된' 이미지 컴포넌트 id.
     if human:
         log("\n[STEP 4~7] 본문 사람처럼 입력")
         if not focus_body_editor(page):
@@ -656,6 +695,17 @@ def write_post(
             except Exception as e:
                 log(f"  ⚠ 사람처럼 입력 중 오류 — API 일괄 경로로 폴백: {str(e)[:80]}")
                 issues.append(f"사람처럼 입력 실패(폴백): {str(e)[:80]}")
+                # 폴백 재업로드가 '사람 경로에서 이미 삽입한 이미지'를 자기 것으로 오인하지 않도록 id 스냅샷.
+                try:
+                    pre = page.evaluate("""() => {
+                        const ds = window.SE?.launcher?._editors?.blogpc001?._documentService;
+                        if (!ds) return [];
+                        return ds.getDocumentData().document.components.filter(c => c['@ctype']==='image').map(c => c.id);
+                    }""")
+                    preexisting_image_ids = set(pre or [])
+                except Exception:
+                    preexisting_image_ids = set()
+                image_comps = []
                 human = False
 
     if not human:
@@ -711,9 +761,11 @@ def write_post(
 
         image_comps = []
         if doc_data:
+            # 사람 경로에서 이미 삽입된 이미지(preexisting_image_ids)는 제외 — 이번 폴백이 재업로드한
+            # 것만 업로드 순서대로 담아야 comp_for 위치 매핑이 밀리지 않는다.
             image_comps = [
                 c for c in doc_data["document"]["components"]
-                if c.get("@ctype") == "image"
+                if c.get("@ctype") == "image" and c.get("id") not in preexisting_image_ids
             ]
             log(f"  이미지 컴포넌트 {len(image_comps)}개 확인")
         else:
@@ -857,7 +909,7 @@ def write_post(
             time.sleep(2)
 
     if not saved:
-        page.keyboard.press("Control+s")
+        page.keyboard.press("ControlOrMeta+s")  # macOS=Cmd+s 임시저장
         time.sleep(2)
         log("  Ctrl+S 임시저장 시도")
         saved = True
