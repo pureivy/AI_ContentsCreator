@@ -13,12 +13,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { sandboxDir } from '../orchestrator/shell';
+import { coerceBlogDraft, draftToFinalContent } from '../output/smarteditor';
+import type { BlogDraft } from '../output/formatter';
 
 export interface BlogSkillResult { ok: boolean; output: string }
 
 const OUTPUT_CAP = 12 * 1024;
 // 이미지 생성·Playwright 임시저장은 셸 분석 명령보다 오래 걸릴 수 있어 별도 타임아웃(3분).
 const BLOG_TIMEOUT_MS = Math.max(CONFIG.agentShellTimeoutMs, 180_000);
+// 검토 탭 트리거의 실제 네이버 임시저장 — 최초 로그인(수동·최대 10분 대기) + 글쓰기까지 여유(15분).
+const NAVER_PUBLISH_TIMEOUT_MS = 15 * 60_000;
 
 /**
  * 고정 스크립트 실행 — shell:false(글로브·치환·체이닝 원천 차단), 인자는 전부 리터럴 argv,
@@ -26,6 +30,7 @@ const BLOG_TIMEOUT_MS = Math.max(CONFIG.agentShellTimeoutMs, 180_000);
  */
 function runScript(
   script: string, args: string[], cwd: string, signal?: AbortSignal,
+  opts?: { timeoutMs?: number; env?: Record<string, string> },
 ): Promise<BlogSkillResult> {
   return new Promise((resolve) => {
     if (!CONFIG.blogPython) {
@@ -36,7 +41,7 @@ function runScript(
       resolve({ ok: false, output: `(스크립트/인터프리터 없음: ${CONFIG.blogPython} · ${scriptPath})` }); return;
     }
     if (signal?.aborted) { resolve({ ok: false, output: '(취소됨)' }); return; }
-    const childEnv: NodeJS.ProcessEnv = { ...process.env };
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, ...(opts?.env ?? {}) };
     if (CONFIG.openaiApiKey) childEnv.OPENAI_API_KEY = CONFIG.openaiApiKey;
     childEnv.OPENAI_IMAGE_MODEL = CONFIG.openaiImageModel;
 
@@ -52,7 +57,7 @@ function runScript(
     const onData = (d: Buffer): void => { if (out.length < OUTPUT_CAP) out += d.toString('utf-8'); };
     child.stdout?.on('data', onData);
     child.stderr?.on('data', onData);
-    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* 종료됨 */ } }, BLOG_TIMEOUT_MS);
+    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* 종료됨 */ } }, opts?.timeoutMs ?? BLOG_TIMEOUT_MS);
     if (typeof timer.unref === 'function') timer.unref();
     child.on('error', (e: Error) => {
       clearTimeout(timer);
@@ -153,6 +158,8 @@ export async function generateImagesForDraft(
 export interface PublishPayload {
   /** 05_final_content.json 인라인 객체(smarteditor_text.sections/image_positions·tags) 또는 JSON 문자열. */
   finalContent?: unknown;
+  /** BlogDraft(bodyMarkdown 등) — final_content 가 없으면 어댑터(draftToFinalContent)로 변환한다. */
+  draft?: unknown;
   /** 06_image_manifest.json 인라인 객체({images:[{file_path}]}). */
   imageManifest?: unknown;
   dryRun: boolean;
@@ -165,6 +172,8 @@ export function parsePublishPayload(arg: string): PublishPayload {
   if (t.startsWith('{')) { try { o = JSON.parse(t) as Record<string, unknown>; } catch { o = {}; } }
   return {
     finalContent: o.final_content ?? o.finalContent,
+    // draft 필드 또는 통째 BlogDraft(bodyMarkdown 최상위) 둘 다 수용.
+    draft: o.draft ?? (typeof o.bodyMarkdown === 'string' ? o : undefined),
     imageManifest: o.image_manifest ?? o.imageManifest,
     dryRun: o.dry_run === true || o.dryRun === true,
   };
@@ -195,15 +204,19 @@ export function containImageManifest(
 
 /**
  * blog_publish 툴 실행 — 네이버 SmartEditor 임시저장(draft). **발행 버튼은 누르지 않는다.**
- * 현재 스튜디오 산출물에는 smarteditor_text(sections/image_positions) 스키마가 없어, final_content 를
- * 인라인으로 받아야 실제 저장이 가능하다(draft→smarteditor 어댑터는 후속 작업). 없으면 명확히 안내.
- * 업로드 이미지는 샌드박스 하위 경로만 허용된다(containImageManifest) — 임의 파일 유출 방지.
+ * final_content(smarteditor_text 스키마)를 직접 받거나, BlogDraft(bodyMarkdown)를 받으면
+ * 어댑터(draftToFinalContent)로 변환한다. 업로드 이미지는 샌드박스 하위 경로만 허용(containImageManifest).
  */
 export async function runBlogPublish(roleId: string, arg: string, signal?: AbortSignal): Promise<string> {
   const p = parsePublishPayload(arg);
   if (!p.finalContent) {
-    return '(blog_publish: final_content 필요 — draft→smarteditor 어댑터 미구현. '
-      + '{"final_content":{smarteditor_text:{title,sections,image_positions},tags}, "image_manifest":{images:[{file_path}]}} 형태로 전달하거나 어댑터를 먼저 구현하세요.)';
+    const d = coerceBlogDraft(p.draft);
+    if (d) p.finalContent = draftToFinalContent(d);
+  }
+  if (!p.finalContent) {
+    return '(blog_publish: final_content 또는 draft(BlogDraft, bodyMarkdown 포함) 필요 — '
+      + '{"final_content":{smarteditor_text:{title,sections,image_positions},tags}} 또는 '
+      + '{"draft":{...BlogDraft}, "image_manifest":{images:[{file_path}]}} 형태로 전달하세요.)';
   }
   const cwd = sandboxDir(roleId);
   const finalPath = path.join(cwd, '05_final_content.json');
@@ -220,4 +233,108 @@ export async function runBlogPublish(roleId: string, arg: string, signal?: Abort
   const r = await runScript('naver_publish.py', args, cwd, signal);
   const note = dropped ? `\n(주의: 샌드박스 밖 이미지 ${dropped}건 제외 — 업로드 이미지는 샌드박스 하위만 허용)` : '';
   return r.output + note;
+}
+
+// ====================== 검토 탭 네이버 임시저장(신뢰 경로) ======================
+
+export interface NaverDraftResult {
+  ok: boolean;
+  /** DRAFT_SAVED | PARTIAL | FAILED | (실행 실패 시) ERROR */
+  status: string;
+  draftUrl?: string;
+  adminUrl?: string;
+  issues: string[];
+  /** 스크립트 stdout/stderr(캡) — 실패 원인 표시용. */
+  output: string;
+}
+
+/** 발행 자격증명 — .env 편집(API 키 탭) 후 재시작 없이 반영되도록 process.env 를 라이브로 읽는다. */
+export function naverPublishCreds(): { blogId: string; loginId: string; loginPw: string; headless: boolean } {
+  return {
+    blogId: (process.env.NAVER_BLOG_ID ?? '').trim(),
+    loginId: (process.env.NAVER_LOGIN_ID ?? '').trim(),
+    loginPw: (process.env.NAVER_LOGIN_PW ?? '').trim(),
+    headless: (process.env.NAVER_PUBLISH_HEADLESS ?? '').trim() === 'true',
+  };
+}
+
+/**
+ * 완성 초안(세션 dir 의 BlogDraft)을 네이버 블로그에 **임시저장**한다 — 검토 탭 버튼의 신뢰 경로
+ * (사용자 클릭 = 승인이므로 모델 툴 게이트와 별개). 발행 버튼은 누르지 않는다(발행은 사람이 네이버에서).
+ *
+ * - 이미지: 세션 image_manifest.json 을 세션 dir 하위·실존 파일로 제한해 업로드(없으면 텍스트만).
+ * - 브라우저: 기본 headful(최초 로그인·캡차를 사람이 처리) — NAVER_PUBLISH_HEADLESS=true 로 무헤드 옵트인.
+ * - 로그인: 영속 프로필(~/.naver-blog-profiles/cli) 재사용, 자격증명(NAVER_LOGIN_ID/PW)은 자동입력 보조일 뿐
+ *   없어도 열린 브라우저에서 직접 로그인하면 된다(최대 10분 대기, 전체 타임아웃 15분).
+ */
+export async function publishDraftToNaver(
+  sessionDir: string, draft: BlogDraft, opts: { dryRun?: boolean } = {}, signal?: AbortSignal,
+): Promise<NaverDraftResult> {
+  const creds = naverPublishCreds();
+  const dryRun = opts.dryRun === true;
+  if (!dryRun && !creds.blogId) {
+    return { ok: false, status: 'ERROR', issues: ['NAVER_BLOG_ID 미설정 — API 키 탭에서 블로그 ID 를 설정하세요.'], output: '' };
+  }
+  const finalContent = draftToFinalContent(draft);
+
+  // 세션 이미지 매니페스트 — 세션 dir 하위 + 실존 파일만(finalize 산출 외 임의 경로 차단).
+  // file_path 는 생성 시점 절대경로라 데이터 dir 이동 시 깨진다 — 세션 내 images/<filename> 사본을 우선.
+  let manifest: Record<string, unknown> = { images: [] };
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(sessionDir, 'image_manifest.json'), 'utf-8')) as unknown;
+    const src = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+    const norm = (Array.isArray(src.images) ? src.images : []).map((it) => {
+      if (!it || typeof it !== 'object') return it;
+      const o = { ...(it as Record<string, unknown>) };
+      const local = typeof o.filename === 'string' && o.filename
+        ? path.join(sessionDir, 'images', path.basename(o.filename)) : '';
+      if (local && fs.existsSync(local)) o.file_path = local;
+      return o;
+    });
+    manifest = containImageManifest({ ...src, images: norm }, sessionDir).manifest;
+    manifest.images = (manifest.images as Array<Record<string, unknown>>).filter(
+      (im) => typeof im.file_path === 'string' && fs.existsSync(im.file_path),
+    );
+  } catch { /* 이미지 없는 초안 — 텍스트만 저장 */ }
+
+  const finalPath = path.join(sessionDir, '05_final_content.json');
+  const manifestPath = path.join(sessionDir, '06_image_manifest.json');
+  try {
+    fs.writeFileSync(finalPath, JSON.stringify(finalContent, null, 2), 'utf-8');
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+  } catch (e) {
+    return { ok: false, status: 'ERROR', issues: [`발행 페이로드 기록 실패: ${e instanceof Error ? e.message : String(e)}`], output: '' };
+  }
+
+  // 이전 런의 결과 파일이 남아 있으면 이번 런 실패 시 낡은 성공으로 오판 — 실행 전 제거.
+  const resultPath = path.join(sessionDir, '07_publish_result.json');
+  try { fs.rmSync(resultPath, { force: true }); } catch { /* 없음 */ }
+
+  const args = ['--final-content', finalPath, '--image-manifest', manifestPath, '--run-dir', sessionDir];
+  if (CONFIG.naverSessionFile) args.push('--session-file', CONFIG.naverSessionFile);
+  if (creds.headless) args.push('--headless');
+  if (dryRun) args.push('--dry-run');
+
+  const env: Record<string, string> = {};
+  if (creds.blogId) env.NAVER_BLOG_ID = creds.blogId;
+  if (creds.loginId) env.NAVER_ID = creds.loginId;   // naver_publish.py 가 읽는 이름으로 매핑
+  if (creds.loginPw) env.NAVER_PW = creds.loginPw;
+
+  const r = await runScript('naver_publish.py', args, sessionDir, signal, { timeoutMs: NAVER_PUBLISH_TIMEOUT_MS, env });
+
+  // 스크립트가 남긴 구조화 결과(07_publish_result.json)가 stdout 보다 신뢰도 높다.
+  try {
+    const res = JSON.parse(fs.readFileSync(resultPath, 'utf-8')) as Record<string, unknown>;
+    const status = String(res.status ?? 'FAILED');
+    return {
+      ok: status === 'DRAFT_SAVED' || status === 'PARTIAL',
+      status,
+      draftUrl: typeof res.draft_url === 'string' && res.draft_url ? res.draft_url : undefined,
+      adminUrl: typeof res.admin_url === 'string' && res.admin_url ? res.admin_url : undefined,
+      issues: Array.isArray(res.issues) ? res.issues.map(String) : [],
+      output: r.output,
+    };
+  } catch {
+    return { ok: false, status: 'ERROR', issues: ['발행 결과 파일 없음 — 스크립트 출력 참조'], output: r.output };
+  }
 }

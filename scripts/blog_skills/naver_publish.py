@@ -107,8 +107,12 @@ def full_auto_login(page, naver_id: str, naver_pw: str):
     time.sleep(1.5)
 
     # 클립보드 붙여넣기 방식 (press_sequentially보다 캡차 회피 확률 높음)
+    # 자격증명이 없으면 자동입력을 건너뛰고 곧장 수동 로그인 대기(빈 값 제출로 인한 오류 화면 방지).
     auto_filled = False
-    try:
+    if not naver_id or not naver_pw:
+        log("  자격증명 미설정 — 브라우저에서 직접 로그인해주세요.")
+    else:
+      try:
         id_field = page.locator("input#id")
         id_field.click()
         time.sleep(0.3)
@@ -144,7 +148,7 @@ def full_auto_login(page, naver_id: str, naver_pw: str):
         log("  ID/PW 자동 입력 완료. 로그인 시도 중...")
         auto_filled = True
         time.sleep(3)
-    except Exception as e:
+      except Exception as e:
         log(f"  자동 입력 실패: {e}")
 
     # 캡차 발생 시 안내
@@ -373,15 +377,17 @@ def build_document_components(smarteditor_text: dict) -> list:
     """
     smarteditor_text의 sections를 SE ONE 컴포넌트 목록으로 변환.
     이미지는 업로드 후 image_comps로 별도 삽입.
+    heading_level: "HEADING1"(H2 상당, 기본) | "HEADING2"(H3 상당) — 어댑터(smarteditor.ts)가 지정.
     """
     sections = smarteditor_text.get("sections", [])
     comps = []
     for section in sections:
         heading = section.get("heading", "")
         body    = section.get("body", "")
+        level   = section.get("heading_level", "HEADING1")
         paras = []
         if heading:
-            paras.append(make_heading_para(heading, "HEADING1"))
+            paras.append(make_heading_para(heading, level))
         for line in body.split("\n"):
             line = line.strip()
             if line:
@@ -453,16 +459,22 @@ def write_post(
     log(f"\n[STEP 4] 이미지 업로드 ({len(images)}장)")
     img_btn = page.locator("button[data-name='image']").first
 
-    uploaded_image_comps = []
+    # 업로드 성공한 이미지의 '슬롯 순번'(순서 보존) — image_index 리매핑용.
+    # 슬롯 순번은 매니페스트 엔트리의 "index" 필드가 정본(openai_image.py 가 기록) — 상류(TS)가
+    # 실존 필터로 배열을 압축해도 보존된다. 없으면 enumerate 폴백(구형/모델 경유 매니페스트).
+    uploaded_manifest_indices = []
     for i, img_info in enumerate(images):
+        slot_idx = img_info.get("index", i)
         img_path = img_info.get("file_path", "")
         if not img_path or not Path(img_path).exists():
             log(f"  이미지 {i+1} 건너뜀 (파일 없음): {img_path}")
+            issues.append(f"이미지 {i+1} 파일 없음 — 본문 삽입 생략: {img_path}")
             continue
 
         dismiss_editor_popup(page)
         time.sleep(0.5)
 
+        uploaded = False
         for attempt in range(2):
             try:
                 with page.expect_file_chooser(timeout=12000) as fc_info:
@@ -471,11 +483,15 @@ def write_post(
                 time.sleep(7)
                 log(f"  이미지 {i+1}/{len(images)} 업로드 완료")
                 image_upload_count += 1
+                uploaded_manifest_indices.append(slot_idx)
+                uploaded = True
                 break
             except Exception as e:
                 log(f"  이미지 {i+1} 시도{attempt+1} 실패: {str(e)[:60]}")
                 dismiss_editor_popup(page)
                 time.sleep(2)
+        if not uploaded:
+            issues.append(f"이미지 {i+1} 업로드 실패 — 본문 삽입 생략")
 
         dismiss_editor_popup(page)
         time.sleep(1)
@@ -506,14 +522,33 @@ def write_post(
 
     # 이미지 삽입 위치에 따라 교차 배치
     # image_positions: [{"after_section": 0, "image_index": 0}, ...]
-    img_pos_map = {pos["after_section"]: pos["image_index"] for pos in image_positions}
+    # 같은 섹션 뒤 복수 이미지 허용(리스트 누적), after_section=-1 은 본문 맨 앞.
+    # image_index 는 '매니페스트 순번' — 일부 업로드가 실패하면 에디터의 image_comps 순서가
+    # 당겨지므로, 업로드 성공 인덱스 목록으로 리매핑한다(실패한 이미지 위치는 드롭).
+    def comp_for(img_idx):
+        if uploaded_manifest_indices:
+            if img_idx in uploaded_manifest_indices:
+                pos = uploaded_manifest_indices.index(img_idx)
+                if pos < len(image_comps):
+                    return image_comps[pos]
+            return None
+        # 리매핑 정보가 없으면(구형 호출 경로) 종전 동작 — 직접 인덱스
+        return image_comps[img_idx] if img_idx < len(image_comps) else None
+
+    img_pos_map = {}
+    for pos in image_positions:
+        img_pos_map.setdefault(pos["after_section"], []).append(pos["image_index"])
     final_comps = []
+    for img_idx in img_pos_map.get(-1, []):
+        comp = comp_for(img_idx)
+        if comp is not None:
+            final_comps.append(comp)
     for i, tc in enumerate(text_comps):
         final_comps.append(tc)
-        if i in img_pos_map:
-            img_idx = img_pos_map[i]
-            if img_idx < len(image_comps):
-                final_comps.append(image_comps[img_idx])
+        for img_idx in img_pos_map.get(i, []):
+            comp = comp_for(img_idx)
+            if comp is not None:
+                final_comps.append(comp)
 
     # ── STEP 7: SE ONE setDocumentData ────────────────────────────────────
     log("\n[STEP 7] SE ONE setDocumentData")

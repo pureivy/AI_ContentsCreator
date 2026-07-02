@@ -30,6 +30,10 @@ const BUILTIN: BuiltinDef[] = [
   { key: 'NOTIFY_WEBHOOK_URL', label: '알림 웹훅', icon: '🔔', desc: '자율 사이클·일일 브리핑을 POST 할 URL(Slack/Discord/커스텀)', placeholder: 'https://hooks.…', needs_restart: false },
   { key: 'TELEGRAM_BOT_TOKEN', label: '텔레그램 봇 토큰', icon: '📨', desc: '텔레그램 알림(봇 토큰 + 챗 ID 둘 다 설정 시 발송)', placeholder: '123456:ABC…', needs_restart: false },
   { key: 'TELEGRAM_CHAT_ID', label: '텔레그램 챗 ID', icon: '💬', desc: '알림을 받을 텔레그램 chat_id', placeholder: '123456789', needs_restart: false },
+  // 네이버 임시저장(검토 탭) — 블로그 ID 필수, 로그인 자격증명은 자동입력 보조(없으면 열린 브라우저에서 직접 로그인).
+  { key: 'NAVER_BLOG_ID', label: '네이버 블로그 — 블로그 ID', icon: '📗', desc: '임시저장 대상 블로그 아이디(blog.naver.com/<이 값>) — 검토 탭 "네이버 임시저장"에 필수', placeholder: '예: myblog', needs_restart: false },
+  { key: 'NAVER_LOGIN_ID', label: '네이버 로그인 — 아이디', icon: '🔑', desc: '(선택) 임시저장 브라우저 자동 로그인용 — 미설정 시 열린 브라우저에서 직접 로그인', placeholder: '네이버 아이디', needs_restart: false },
+  { key: 'NAVER_LOGIN_PW', label: '네이버 로그인 — 비밀번호', icon: '🔑', desc: '(선택) 자동 로그인용 비밀번호 — .env 에만 저장·화면엔 마스킹', placeholder: '비밀번호', needs_restart: false },
   // 법령(LAW)·DART 등 외부 데이터 소스 키는 그라운딩 커넥터(grounding/)가 선언 → connectorKeyDefs 로 합류.
 ];
 // 커넥터가 선언한 키도 '내장 키'처럼 다룬다(값 편집만, 삭제=숨김, 설정 시 자동 연동).
@@ -125,6 +129,12 @@ export function maskSecret(v: string): string {
   if (v.length <= 8) return '•'.repeat(Math.max(4, v.length));
   return `${v.slice(0, 4)}••••${v.slice(-4)}`;
 }
+/** 사람 비밀번호류 키 — 앞4+뒤4 부분노출(maskSecret)도 과다해 전체 마스킹한다(길이도 숨김). */
+const FULL_MASK_KEY = /(_PW|_PASSWORD|PASSWORD)$/;
+export function maskFor(key: string, v: string): string {
+  if (!v) return '';
+  return FULL_MASK_KEY.test(key) ? '••••••••' : maskSecret(v);
+}
 function validKeyName(k: string): boolean { return /^[A-Z][A-Z0-9_]{1,48}$/.test(k); }
 
 export function listKeys(): ApiKeyInfo[] {
@@ -134,10 +144,10 @@ export function listKeys(): ApiKeyInfo[] {
   const val = (k: string): string => vals[k] ?? process.env[k] ?? '';
   const builtin: ApiKeyInfo[] = builtinDefs()
     .filter((b) => !meta.hidden.includes(b.key))
-    .map((b) => ({ ...b, set: !!val(b.key), masked: maskSecret(val(b.key)), builtin: true }));
+    .map((b) => ({ ...b, set: !!val(b.key), masked: maskFor(b.key, val(b.key)), builtin: true }));
   const custom: ApiKeyInfo[] = meta.custom.map((c) => ({
     key: c.key, label: c.label || c.key, icon: c.icon || '🔑', desc: c.desc || '사용자 정의 키',
-    placeholder: '값 입력…', needs_restart: false, set: !!val(c.key), masked: maskSecret(val(c.key)), builtin: false,
+    placeholder: '값 입력…', needs_restart: false, set: !!val(c.key), masked: maskFor(c.key, val(c.key)), builtin: false,
   }));
   return [...builtin, ...custom];
 }

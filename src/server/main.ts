@@ -46,6 +46,8 @@ import { getCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
+import { publishDraftToNaver, naverPublishCreds } from '../tools/blog_skills';
+import { coerceBlogDraft } from '../output/smarteditor';
 import { classifyAndAssign, getStatuses, reassign, setIngestStatus } from '../tools/classify';
 import { transcribe, sttAvailable } from '../voice/stt';
 import { synthesize, listKoreanVoices, ttsAvailable } from '../voice/tts';
@@ -517,6 +519,10 @@ async function pieceReviseHandler(c: Context): Promise<Response> {
   if ([...RUNS.values()].some((h) => h.status === 'running' && h.topic === piece.title)) {
     return c.json({ error: '이 초안의 런이 이미 실행 중입니다.' }, 409);
   }
+  // 네이버 임시저장이 도는 중이면 개정 금지 — 저장 결과가 옛 내용과 뒤엉키는 것 방지(상호 가드).
+  if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') {
+    return c.json({ error: '네이버 임시저장이 진행 중입니다 — 완료 후 수정 요청하세요.' }, 409);
+  }
   let baseBody = '';
   try {
     const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, piece.runId ?? '', 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
@@ -529,6 +535,82 @@ async function pieceReviseHandler(c: Context): Promise<Response> {
 }
 app.post('/pieces/:id/revise', pieceReviseHandler);
 app.post('/api/pieces/:id/revise', pieceReviseHandler);
+
+// 네이버 임시저장(검토 탭) — 완성 초안을 실제 네이버 SmartEditor 에 임시저장한다(발행 아님).
+// Playwright 브라우저(기본 headful — 최초 로그인/캡차를 사람이 처리)가 최대 15분 걸릴 수 있어
+// 백그라운드 잡으로 돌리고, 프론트는 GET 으로 폴링한다. 사용자 클릭이 곧 승인(신뢰 경로).
+interface NaverDraftJob {
+  status: 'running' | 'saved' | 'failed';
+  startedTs: string; endedTs?: string;
+  url?: string; adminUrl?: string; error?: string; dryRun: boolean;
+}
+const NAVER_DRAFT_JOBS = new Map<string, NaverDraftJob>();
+
+async function pieceNaverDraftHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
+  const b = await c.req.json<{ dry_run?: boolean }>().catch(() => ({} as { dry_run?: boolean }));
+  const dryRun = b.dry_run === true;
+  // ── 여기부터 잡 등록(set)까지 동기 구간 — await 금지(TOCTOU 차단: 동시 POST 이중 기동 방지).
+  const piece = pieceStore().get(id); // await 후 재조회(그 사이 변경 가능)
+  if (!piece) return c.json({ error: 'unknown piece' }, 404);
+  if (!piece.runId) return c.json({ error: '초안이 아직 없습니다.' }, 409);
+  if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') return c.json({ error: '이미 네이버 임시저장이 진행 중입니다.' }, 409);
+  // Chrome 영속 프로필(~/.naver-blog-profiles/cli)은 1개 — 다른 초안의 실런과 동시 실행 시 프로필 락 충돌.
+  if (!dryRun && [...NAVER_DRAFT_JOBS.values()].some((j) => j.status === 'running' && !j.dryRun)) {
+    return c.json({ error: '다른 초안의 네이버 임시저장이 진행 중입니다 — 완료 후 다시 시도하세요.' }, 409);
+  }
+  // 이 초안의 런(수정 요청 리비전 포함)이 실행 중이면 내용이 바뀌는 중 — 저장하지 않는다.
+  if ([...RUNS.values()].some((h) => h.status === 'running' && h.topic === piece.title)) {
+    return c.json({ error: '이 초안의 런이 실행 중입니다 — 완료 후 저장하세요.' }, 409);
+  }
+  if (!dryRun && !naverPublishCreds().blogId) {
+    return c.json({ error: 'NAVER_BLOG_ID 미설정 — API 키 탭에서 "네이버 블로그 — 블로그 ID"를 설정하세요.' }, 400);
+  }
+  const runIdAtStart = piece.runId;
+  const sessionDir = path.join(CONFIG.sessionsDir, runIdAtStart);
+  let draft: ReturnType<typeof coerceBlogDraft> = null;
+  try { draft = coerceBlogDraft(JSON.parse(fs.readFileSync(path.join(sessionDir, 'draft.json'), 'utf-8'))); } catch { /* 아래에서 거절 */ }
+  if (!draft) return c.json({ error: '초안(draft.json)을 읽을 수 없습니다.' }, 404);
+
+  const job: NaverDraftJob = { status: 'running', startedTs: new Date().toISOString(), dryRun };
+  NAVER_DRAFT_JOBS.set(id, job); // ── 동기 구간 끝
+  void publishDraftToNaver(sessionDir, draft, { dryRun }).then((r) => {
+    job.endedTs = new Date().toISOString();
+    if (r.ok) {
+      job.status = 'saved'; job.url = r.draftUrl; job.adminUrl = r.adminUrl;
+      if (r.issues.length) job.error = r.issues.join(' · '); // PARTIAL — 저장은 됐지만 일부 문제(이미지 누락 등)
+      // 잡 도는 사이 리비전으로 runId 가 바뀌었다면 이 결과는 옛 내용 — 현재 초안의 기록으로 남기지 않는다.
+      if (!dryRun && pieceStore().get(id)?.runId === runIdAtStart) {
+        pieceStore().update(id, { naverDraftUrl: r.draftUrl ?? r.adminUrl, naverDraftTs: job.endedTs });
+      }
+    } else {
+      job.status = 'failed';
+      job.error = [...r.issues, r.output.slice(-400)].filter(Boolean).join(' · ') || '알 수 없는 실패';
+    }
+  }).catch((e: unknown) => {
+    job.status = 'failed'; job.endedTs = new Date().toISOString();
+    job.error = e instanceof Error ? e.message : String(e);
+  });
+  return c.json({ ok: true, started: true, dry_run: dryRun });
+}
+function pieceNaverDraftStatusHandler(c: Context): Response {
+  const id = c.req.param('id') ?? '';
+  const piece = pieceStore().get(id);
+  if (!piece) return c.json({ error: 'unknown piece' }, 404);
+  const job = NAVER_DRAFT_JOBS.get(id);
+  // 잡 없음 = 진행 중 아님 — 'idle'. 과거 저장 이력(url)은 참고용으로만 싣는다(재시작으로 잡이
+  // 유실된 폴링이 옛 'saved' 를 '방금 완료'로 오인하지 않도록 status 는 idle 고정).
+  if (!job) return c.json({ status: 'idle', url: piece.naverDraftUrl, saved_ts: piece.naverDraftTs });
+  return c.json({
+    status: job.status, url: job.url ?? piece.naverDraftUrl, admin_url: job.adminUrl,
+    error: job.error, dry_run: job.dryRun, started_ts: job.startedTs, ended_ts: job.endedTs,
+  });
+}
+app.post('/pieces/:id/naver-draft', pieceNaverDraftHandler);
+app.post('/api/pieces/:id/naver-draft', pieceNaverDraftHandler);
+app.get('/pieces/:id/naver-draft', pieceNaverDraftStatusHandler);
+app.get('/api/pieces/:id/naver-draft', pieceNaverDraftStatusHandler);
 
 // ============================================================
 // LLM 상태 — 프론트 계약(/llm) + 자체 UI(/api/llm)

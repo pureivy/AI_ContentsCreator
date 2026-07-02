@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, PieceInfo, PieceDraftResp } from "../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, startNaverDraft, fetchNaverDraftStatus, PieceInfo, PieceDraftResp } from "../api";
 
 // 초안 검토·발행·성과 입력 — 크로스-런 REST(폴링/온디맨드). 본문 편집은 컴포넌트-로컬(store 변이 금지).
 const REVIEWABLE = new Set(["ready", "published", "measured", "reflected"]);
@@ -28,9 +28,16 @@ export default function DraftReview() {
   const [view, setView] = useState<"md" | "html">("md");
   const [feedback, setFeedback] = useState("");
   const [revBusy, setRevBusy] = useState(false);
+  // 네이버 임시저장(자동) — 서버 백그라운드 잡 + 폴링
+  const [naverBusy, setNaverBusy] = useState(false);
+  const [naverMsg, setNaverMsg] = useState("");
+  const selRef = useRef<string | null>(null);      // 폴링 중 다른 초안으로 이동 시 stale 갱신 차단
+  const pollingRef = useRef<string | null>(null);  // 같은 초안 중복 폴링 방지
 
   const load = () => fetchPieces().then(setPieces);
   useEffect(() => { load(); }, []);
+  // 언마운트 시 폴링 루프 종료(다음 틱에서 selRef 불일치로 탈출) — 탭 전환 후 좀비 폴링·재진입 이중 폴링 방지.
+  useEffect(() => () => { selRef.current = null; }, []);
 
   const reviewable = useMemo(
     () => pieces.filter((p) => REVIEWABLE.has(p.stage) && p.runId).sort((a, b) => b.updatedTs.localeCompare(a.updatedTs)),
@@ -38,10 +45,59 @@ export default function DraftReview() {
   );
 
   const open = async (id: string) => {
-    setSel(id); setData(null); setMsg(""); setPubUrl(""); setCopied(""); setFeedback(""); setView("md");
+    setSel(id); selRef.current = id;
+    setData(null); setMsg(""); setPubUrl(""); setCopied(""); setFeedback(""); setView("md");
+    setNaverBusy(false); setNaverMsg("");
     const d = await fetchPieceDraft(id);
     setData(d);
     setBody(d?.draft.bodyMarkdown ?? d?.md ?? "");
+    // 이 초안의 네이버 임시저장 잡이 이미 돌고 있으면(새로고침·재선택) 이어서 폴링.
+    const s = await fetchNaverDraftStatus(id);
+    if (selRef.current === id && s?.status === "running") {
+      setNaverBusy(true); setNaverMsg("네이버에 저장 중… (열린 브라우저 창을 확인하세요)");
+      void pollNaver(id);
+    }
+  };
+
+  // 네이버 임시저장 폴링 — 3초 간격, 최대 ~16분(서버 쪽 Playwright 타임아웃 15분 커버).
+  const pollNaver = async (id: string) => {
+    if (pollingRef.current === id) return;
+    pollingRef.current = id;
+    try {
+      for (let i = 0; i < 320; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        if (selRef.current !== id) return;
+        const s = await fetchNaverDraftStatus(id);
+        if (selRef.current !== id) return; // fetch 대기 중 초안 전환 — 다른 초안 화면에 결과 표시 방지
+        if (!s || s.status === "running") continue;
+        setNaverBusy(false);
+        if (s.status === "saved") {
+          setNaverMsg(`✅ 네이버 임시저장 완료${s.dry_run ? " (dry-run)" : ""}${s.error ? ` — 일부 문제: ${s.error}` : ""} — 네이버 글쓰기의 임시저장 목록에서 확인 후 발행하고, 발행된 글 URL을 아래에 등록하세요.`);
+          await load();
+          // data.piece(선택 시점 스냅샷)도 갱신 — '네이버 글쓰기 열기' 링크가 즉시 나타나게.
+          const d = await fetchPieceDraft(id);
+          if (selRef.current === id && d) setData(d);
+        } else if (s.status === "idle") {
+          // 폴링 중 잡이 사라짐 = 서버 재시작 등으로 진행 상태 유실 — 성공/실패 단정 불가.
+          setNaverMsg("⚠ 진행 상태가 유실됐습니다(서버 재시작 가능성) — 네이버 글쓰기의 임시저장 목록에서 직접 확인하세요.");
+        } else {
+          setNaverMsg(`❌ 네이버 임시저장 실패: ${s.error ?? "원인 불명 — 서버 로그 확인"}`);
+        }
+        return;
+      }
+      if (selRef.current === id) { setNaverBusy(false); setNaverMsg("⏱ 시간 초과 — 서버 로그를 확인하세요."); }
+    } finally {
+      if (pollingRef.current === id) pollingRef.current = null;
+    }
+  };
+
+  const doNaverDraft = async () => {
+    if (!sel || naverBusy) return;
+    setNaverBusy(true);
+    setNaverMsg("네이버에 저장 중… (처음엔 열린 브라우저 창에서 네이버 로그인이 필요할 수 있어요)");
+    const r = await startNaverDraft(sel);
+    if (!r.ok) { setNaverBusy(false); setNaverMsg(`❌ 시작 실패: ${r.error ?? ""}`); return; }
+    void pollNaver(sel);
   };
 
   // 수정 요청 — 피드백으로 리비전 런(작가가 기존 초안 개정 → 디자이너 이미지 재협의). 완료 시 초안 자동 갱신.
@@ -182,16 +238,28 @@ export default function DraftReview() {
                 </div>
               )}
 
-              {/* 발행(수동) — 네이버 게시 후 URL 등록 */}
+              {/* 발행 — ① 네이버 임시저장(자동) → ② 네이버에서 발행 후 URL 등록(수동) */}
               <div className="review-section">
                 <h3>발행</h3>
                 {data.piece.publishedUrl ? (
                   <p className="muted">✅ 발행됨 — <a href={data.piece.publishedUrl} target="_blank" rel="noreferrer">{data.piece.publishedUrl}</a></p>
                 ) : (
-                  <div className="review-inline">
-                    <input type="text" placeholder="네이버 게시 후 글 URL 붙여넣기…" value={pubUrl} onChange={(e) => setPubUrl(e.target.value)} />
-                    <button className="btn start" disabled={!pubUrl.trim()} onClick={doPublish}>발행 등록</button>
-                  </div>
+                  <>
+                    <div className="review-inline">
+                      <button className="btn start" disabled={naverBusy} onClick={doNaverDraft}>
+                        {naverBusy ? "네이버에 저장 중…" : "📗 네이버 임시저장(자동)"}
+                      </button>
+                      {data.piece.naverDraftUrl && (
+                        /* postwrite 편집기 URL — 열리면 '임시저장 글 불러오기' 팝업/목록에서 저장본을 불러온다. */
+                        <a className="muted" href={data.piece.naverDraftUrl} target="_blank" rel="noreferrer">🗂 네이버 글쓰기 열기(임시저장 불러오기) ↗</a>
+                      )}
+                    </div>
+                    {naverMsg && <p className="review-msg">{naverMsg}</p>}
+                    <div className="review-inline">
+                      <input type="text" placeholder="네이버에서 발행 후 글 URL 붙여넣기…" value={pubUrl} onChange={(e) => setPubUrl(e.target.value)} />
+                      <button className="btn start" disabled={!pubUrl.trim()} onClick={doPublish}>발행 등록</button>
+                    </div>
+                  </>
                 )}
               </div>
 

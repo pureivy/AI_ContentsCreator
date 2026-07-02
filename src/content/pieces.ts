@@ -26,6 +26,10 @@ export interface Piece {
   subNiche?: string;
   stage: PieceStage;
   publishedUrl?: string;
+  /** 네이버 임시저장 성공 시 편집기 URL(발행 아님 — 사람이 네이버에서 확인 후 발행). */
+  naverDraftUrl?: string;
+  /** 마지막 네이버 임시저장 시각(ISO). */
+  naverDraftTs?: string;
   seoScore?: number;
   /** 실런 실패 횟수(사용자 양보=취소는 제외) — 폭주 방지 캡. */
   errors?: number;

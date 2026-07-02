@@ -737,6 +737,8 @@ export interface PieceInfo {
   subNiche?: string;
   stage: PieceStage;
   publishedUrl?: string;
+  naverDraftUrl?: string;
+  naverDraftTs?: string;
   seoScore?: number;
   errors?: number;
   createdTs: string;
@@ -802,6 +804,23 @@ export async function postPieceMetrics(id: string, body: unknown): Promise<{ ok:
 export async function fetchPieceMetrics(id: string): Promise<MetricSample[]> {
   try { const r = await fetch(`/pieces/${id}/metrics`); if (!r.ok) return []; return (await r.json()).metrics ?? []; }
   catch { return []; }
+}
+// 네이버 임시저장(검토 탭) — 서버가 백그라운드 잡으로 Playwright 임시저장을 수행. 상태는 폴링으로 확인.
+export interface NaverDraftStatus {
+  status: "idle" | "running" | "saved" | "failed";
+  url?: string; admin_url?: string; error?: string; dry_run?: boolean;
+  started_ts?: string; ended_ts?: string;
+}
+export async function startNaverDraft(id: string, dryRun = false): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`/pieces/${id}/naver-draft`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dry_run: dryRun }) });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return { ok: true };
+  } catch { return { ok: false, error: "network" }; }
+}
+export async function fetchNaverDraftStatus(id: string): Promise<NaverDraftStatus | null> {
+  try { const r = await fetch(`/pieces/${id}/naver-draft`); return r.ok ? await r.json() : null; }
+  catch { return null; }
 }
 
 // --- 지식 주입: 파일(들)을 선택한 에이전트(들)에 '우선 신뢰 지식'으로 주입 ---
