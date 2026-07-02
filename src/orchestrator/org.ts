@@ -7,6 +7,7 @@
  */
 import { CONFIG } from '../config';
 import { modelForTier } from '../llm/models';
+import type { ModelAssignment } from '../llm/models';
 import type { EventBus } from '../events/bus';
 import { DEFAULT_COMPANY } from '../agents/company';
 import type { TeamDef } from '../agents/company';
@@ -57,13 +58,20 @@ export async function writeBlogBody(a: {
   topic: string;
   brief: string;
   critiqueText?: string;
+  /** 리비전 모드(검토 탭 '수정 요청') — 새 집필이 아니라 기존 초안을 피드백에 따라 개정. */
+  revise?: { baseBody: string; feedback: string };
   signal?: AbortSignal;
 }): Promise<string> {
-  const { bus, writer, model, topic, brief, critiqueText, signal } = a;
+  const { bus, writer, model, topic, brief, critiqueText, revise, signal } = a;
+  const reviseContext = revise
+    ? `[기존 초안]\n${revise.baseBody}\n\n[검토자 수정 요청 — 반드시 반영]\n${revise.feedback}`
+    : '';
   const synth = await runAgent({
     bus, role: writer, model,
-    task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 검색 의도를 충족하는 완결된 글을 쓴다.\n${BLOG_BODY_GUIDE}`,
-    context: [
+    task: revise
+      ? `「${topic}」 아래 [기존 초안]을 [검토자 수정 요청]에 따라 개정하라. 요청된 변경은 빠짐없이 반영하고, 잘 쓰인 나머지 구조·내용은 유지한다. 이 응답의 출력은 오직 개정 완료된 마크다운 본문 하나뿐이다.\n${BLOG_BODY_GUIDE}`
+      : `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 검색 의도를 충족하는 완결된 글을 쓴다.\n${BLOG_BODY_GUIDE}`,
+    context: revise ? reviseContext : [
       brief ? `[리서치·SEO 브리프]\n${brief}` : '',
       critiqueText ? `[검수 의견 — 아래는 약점·주의점 목록이다. 발행 판정이 아니다. 지적된 미검증·논쟁 주장은 본문에서 빼고, 나머지는 참고해 품질을 높여라]\n${critiqueText}` : '',
     ].filter(Boolean).join('\n\n'),
@@ -78,7 +86,7 @@ export async function writeBlogBody(a: {
     const retry = await runAgent({
       bus, role: writer, model,
       task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 질문·보류·메타 설명 없이 곧바로 본문(## 소제목 포함)만 출력한다.\n${BLOG_BODY_GUIDE}`,
-      context: brief ? `[리서치·SEO 브리프]\n${brief}` : '',
+      context: revise ? reviseContext : (brief ? `[리서치·SEO 브리프]\n${brief}` : ''),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth',
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, maxOutputTokens: 5000, signal,
     });
@@ -90,6 +98,8 @@ export async function writeBlogBody(a: {
 
 export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcome> {
   const company = opts.company ?? DEFAULT_COMPANY;
+  // 리비전 런(검토 탭 '수정 요청') — 분해·라우팅·팀 병렬·검수 생략 fast-path 로 분기.
+  if (opts.revise) return runOrgRevise(bus, opts, company);
   const { topic, signal } = opts;
   const allTeams = company.teams ?? [];
 
@@ -384,6 +394,32 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   const body = await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, signal });
   const finalDeliverable = body || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
+  return packageDesignFinalize({
+    bus, topic, company, assign, subproblems, teams: usableTeams,
+    critic: critic ?? null, critiqueText, writerTeam, finalDeliverable, brief, signal,
+  });
+}
+
+/**
+ * 본문 확정 이후의 공통 꼬리 — 포장(포매터) → 이미지 디자이너 협의(슬롯 확정) → finalize(자산 저장·
+ * 이미지 실생성·위키 적재·회고). 일반 런(runOrg)과 리비전 런(runOrgRevise)이 공유한다.
+ */
+async function packageDesignFinalize(a: {
+  bus: EventBus;
+  topic: string;
+  company: NonNullable<RunOptions['company']>;
+  assign: ModelAssignment;
+  subproblems: Array<{ id: string; text: string }>;
+  teams: TeamResult[];
+  critic: { id: string; name: string } | null;
+  critiqueText: string;
+  writerTeam: TeamDef | null;
+  finalDeliverable: string;
+  brief: string;
+  signal?: AbortSignal;
+}): Promise<RunOutcome> {
+  const { bus, topic, company, assign, subproblems, teams, critic, critiqueText, writerTeam, finalDeliverable, brief, signal } = a;
+
   // 잔여 플레이스홀더/가짜수치 경고(생성 지침이 이미 금지 — 보통 0건).
   const placeholders = findTemplateNumbers(finalDeliverable);
   if (placeholders.length) {
@@ -415,13 +451,14 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
         bus, role: designer, model: modelForTier(assign, designer.tier),
         task:
           '수석 작가의 최종 카피를 검토하고(협의), 본문 [IMAGE:] 슬롯과 글의 톤에 맞는 삽입 이미지 계획을 확정하라. ' +
-          '각 이미지: alt(대체텍스트, 한국어) · prompt(생성 프롬프트 — 피사체·구도·스타일·조명을 구체적으로, 한국 생활 맥락, 텍스트/워터마크/로고 금지). ' +
-          '최대 3장. 짧은 협의 코멘트 후 마지막 줄에 JSON 한 줄로 출력: {"images":[{"alt":"...","prompt":"..."}]}',
+          '각 이미지: alt(대체텍스트, 한국어) · prompt(생성 프롬프트 — 피사체·구도·스타일·조명, 한국 생활 맥락, 텍스트/워터마크/로고 금지, 150자 이내로 간결하게). ' +
+          '최대 3장. 협의 코멘트는 1~2문장으로 짧게, 마지막 줄에 JSON 한 줄로 출력: {"images":[{"alt":"...","prompt":"..."}]}',
         context:
           `[작가 최종 카피(발췌)]\n${finalDeliverable.slice(0, 5000)}\n\n` +
           (markers.length ? `[본문 IMAGE 마커]\n${markers.map((m, i) => `${i + 1}. ${m}`).join('\n')}\n\n` : '') +
           `[슬롯 초안(편집자)]\n${slotLines}`,
-        stage: 'work', emitSpawn: true, groundWikiOnly: true, maxOutputTokens: 700, signal,
+        // 1600 토큰 — 한국어 상세 프롬프트 3개 + 코멘트가 700 에선 잘려 JSON 이 깨졌다(E2E 실측).
+        stage: 'work', emitSpawn: true, groundWikiOnly: true, maxOutputTokens: 1600, signal,
       });
       const slots = parseImagePlan(plan.text, 3);
       if (slots.length) {
@@ -438,15 +475,43 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   await finalizeRun({
     bus, topic, ceoId: company.ceo.id, ceoName: company.ceo.name,
     assignReason: assign.reason, subproblems,
-    positions: usableTeams.map((t) => ({ id: t.team.id, name: t.team.name, stance: 'neutral', text: t.deliverable })),
-    participants: usableTeams.flatMap((t) => t.participants), // 자가학습 roster — 팀원 개별 역할(F1)
+    positions: teams.map((t) => ({ id: t.team.id, name: t.team.name, stance: 'neutral', text: t.deliverable })),
+    participants: teams.flatMap((t) => t.participants), // 자가학습 roster — 팀원 개별 역할(F1)
     critique: critic && critiqueText ? { id: critic.id, name: critic.name, text: critiqueText } : undefined,
     deliverable: finalDeliverable, converged: false, ingestModel: assign.micro, reflectModel: assign.standard, assets, autoImages, signal,
   });
 
   return {
     deliverable: finalDeliverable, modelAssignment: assign,
-    positions: usableTeams.map((t) => ({ id: t.team.id, name: t.team.name, stance: 'neutral', text: t.deliverable })),
+    positions: teams.map((t) => ({ id: t.team.id, name: t.team.name, stance: 'neutral', text: t.deliverable })),
     subproblems,
   };
+}
+
+/**
+ * 리비전 런(검토 탭 '수정 요청') — 분해·라우팅·팀 병렬·검수를 생략하는 fast-path.
+ * 작가(수석 작가, 없으면 CEO)가 '기존 초안 + 검토자 피드백'으로 본문을 개정하고,
+ * 이후 포장·이미지 디자이너 협의·finalize 는 일반 런과 동일하게 수행된다.
+ */
+async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullable<RunOptions['company']>): Promise<RunOutcome> {
+  const { topic, signal } = opts;
+  const revise = opts.revise!;
+  bus.emit('phase', { team_id: '_ceo', phase: 'delegate' });
+  const prep = await prepareRun(bus, topic, company, signal, undefined, /* skipDecompose */ true);
+  if (!prep) throw new Error('no local models');
+  const { assign } = prep;
+  const allTeams = company.teams ?? [];
+  const writerTeam = allTeams.find((t) => t.lead.stance === 'pro') ?? null;
+  const writer = writerTeam?.lead ?? company.ceo;
+  bus.emit('log', { message: `리비전 런 — 검토자 수정 요청 반영 개정(리서치·검수 생략): "${revise.feedback.slice(0, 120)}"` });
+  bus.emit('phase', { team_id: '_ceo', phase: 'integrate' });
+  const body = await writeBlogBody({
+    bus, writer, model: modelForTier(assign, writer.tier), topic, brief: '', revise, signal,
+  });
+  const finalDeliverable = body || revise.baseBody;
+
+  return packageDesignFinalize({
+    bus, topic, company, assign, subproblems: [], teams: [],
+    critic: null, critiqueText: '', writerTeam, finalDeliverable, brief: '', signal,
+  });
 }

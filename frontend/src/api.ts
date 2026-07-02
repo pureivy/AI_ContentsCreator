@@ -775,6 +775,15 @@ export async function fetchPieceDraft(id: string): Promise<PieceDraftResp | null
   try { const r = await fetch(`/pieces/${id}/draft`); return r.ok ? await r.json() : null; }
   catch { return null; }
 }
+// 수정 요청(검토 탭) — 피드백으로 리비전 런을 띄운다. 완료되면 초안이 갱신(runId 교체)된다.
+export async function revisePiece(id: string, feedback: string): Promise<{ ok: boolean; run_id?: string; error?: string }> {
+  try {
+    const r = await fetch(`/pieces/${id}/revise`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ feedback }) });
+    const j = await r.json().catch(() => ({} as { run_id?: string; error?: string }));
+    if (!r.ok) return { ok: false, error: j.error };
+    return { ok: true, run_id: j.run_id };
+  } catch { return { ok: false, error: "network" }; }
+}
 export async function publishPiece(id: string, url: string): Promise<{ ok: boolean; error?: string }> {
   try {
     const r = await fetch(`/pieces/${id}/published`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });

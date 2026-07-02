@@ -145,7 +145,11 @@ function legacyMetaFromFiles(id: string): PersistedMeta | null {
 // ============================================================
 // 런 라이프사이클 (무접두 + /api 양쪽 등록)
 // ============================================================
-interface LaunchOpts { agent?: string; path?: string; budgetUsd?: number; auto?: boolean; pieceId?: string; }
+interface LaunchOpts {
+  agent?: string; path?: string; budgetUsd?: number; auto?: boolean; pieceId?: string;
+  /** 리비전 런(검토 탭 '수정 요청') — 기존 초안+피드백으로 개정. 실패해도 ready 초안은 보존(에러 카운트 X). */
+  revise?: { baseBody: string; feedback: string };
+}
 
 // draft.json(6c)에서 piece 표시 메타 재로드 — 초안 asset 은 finalize 가 이미 디스크에 씀(메모리 의존 없음).
 function readDraftMeta(runId: string): { title?: string; seoScore?: number; keyword?: string } | null {
@@ -196,7 +200,7 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
 
   startRun(bus, {
     topic, signal: abort.signal,
-    agentId: opts.agent, path: opts.path, budgetUsd: opts.budgetUsd,
+    agentId: opts.agent, path: opts.path, budgetUsd: opts.budgetUsd, revise: opts.revise,
   })
     .then((outcome) => {
       handle.status = 'done';
@@ -218,7 +222,8 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
       } else {
         handle.status = 'error';
         // 실런 실패 → piece 에러 카운트(캡 초과 시 종료, 그 전엔 재개 대상). 취소와 구분해 폭주 방지.
-        if (opts.pieceId) { try { pieceStore().recordError(opts.pieceId); } catch { /* 무해 */ } }
+        // 리비전 런 실패는 예외 — ready 초안이 멀쩡히 남아 있으므로 강등/카운트하지 않는다.
+        if (opts.pieceId && !opts.revise) { try { pieceStore().recordError(opts.pieceId); } catch { /* 무해 */ } }
         bus.emit(EventType.error, { message: e instanceof Error ? e.message : String(e) });
         bus.emit(EventType.run_done, { status: 'error' });
       }
@@ -478,6 +483,31 @@ function pieceRunHandler(c: Context): Response {
 }
 app.post('/pieces/:id/run', pieceRunHandler);
 app.post('/api/pieces/:id/run', pieceRunHandler);
+// 수정 요청(검토 탭) — ready 초안에 사용자 피드백을 걸어 리비전 런(기존 초안 개정)을 띄운다.
+// stage 는 'ready' 유지(수정 실패 시 기존 초안 보존) — 완료되면 advancePieceReady 가 runId 를 새 런으로 교체.
+async function pieceReviseHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  const piece = pieceStore().get(id);
+  if (!piece) return c.json({ error: 'unknown piece' }, 404);
+  const b = await c.req.json<{ feedback?: string }>().catch(() => ({} as { feedback?: string }));
+  const feedback = (b.feedback ?? '').trim();
+  if (!feedback) return c.json({ error: '수정 요청 내용이 비었습니다.' }, 400);
+  if (piece.stage !== 'ready') return c.json({ error: '검토 대기(ready) 초안만 수정 요청할 수 있습니다.' }, 409);
+  if ([...RUNS.values()].some((h) => h.status === 'running' && h.topic === piece.title)) {
+    return c.json({ error: '이 초안의 런이 이미 실행 중입니다.' }, 409);
+  }
+  let baseBody = '';
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, piece.runId ?? '', 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
+    baseBody = (d.bodyMarkdown ?? '').trim();
+  } catch { /* 아래에서 거절 */ }
+  if (!baseBody) return c.json({ error: '기존 초안 본문을 찾을 수 없습니다.' }, 404);
+  const runId = launchRun(piece.title, { pieceId: piece.id, revise: { baseBody, feedback: feedback.slice(0, 4000) } });
+  if (!runId) return c.json({ error: '실행 시작 실패' }, 500);
+  return c.json({ ok: true, run_id: runId });
+}
+app.post('/pieces/:id/revise', pieceReviseHandler);
+app.post('/api/pieces/:id/revise', pieceReviseHandler);
 
 // ============================================================
 // LLM 상태 — 프론트 계약(/llm) + 자체 UI(/api/llm)

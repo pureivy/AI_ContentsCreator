@@ -56,6 +56,8 @@ export async function prepareRun(
   company: CompanyDef,
   signal?: AbortSignal,
   directedAgentId?: string,
+  /** true 면 분해(decompose) 생략 — 리비전 런(기존 초안 개정)처럼 하위 문제가 무의미한 경로. */
+  skipDecompose = false,
 ): Promise<Prepared | null> {
   bus.emit(EventType.run_started, {
     topic,
@@ -97,9 +99,9 @@ export async function prepareRun(
 
   if (!claude) void ollama.warm(assign.standard);
 
-  // 콘텐츠 리서치 분해 — 구조적 단발이라 micro(haiku)로 충분·저비용.
-  const subproblems = await decompose(assign.micro, topic, signal);
-  bus.emit(EventType.topic_decomposed, { subproblems, debate_gated: false });
+  // 콘텐츠 리서치 분해 — 구조적 단발이라 micro(haiku)로 충분·저비용. (리비전 런은 생략)
+  const subproblems = skipDecompose ? [] : await decompose(assign.micro, topic, signal);
+  if (!skipDecompose) bus.emit(EventType.topic_decomposed, { subproblems, debate_gated: false });
 
   return { assign, subproblems };
 }

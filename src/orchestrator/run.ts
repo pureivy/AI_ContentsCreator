@@ -29,6 +29,8 @@ export interface RunOptions {
   path?: string;
   /** 런 예산 캡(USD). 로컬은 무료라 정보용. */
   budgetUsd?: number;
+  /** 리비전 런(검토 탭 '수정 요청') — 기존 초안을 사용자 피드백에 따라 개정. 리서치·검수 생략 fast-path. */
+  revise?: { baseBody: string; feedback: string };
 }
 
 export interface RunOutcome {

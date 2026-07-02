@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, PieceInfo, PieceDraftResp } from "../api";
+import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, PieceInfo, PieceDraftResp } from "../api";
 
 // 초안 검토·발행·성과 입력 — 크로스-런 REST(폴링/온디맨드). 본문 편집은 컴포넌트-로컬(store 변이 금지).
 const REVIEWABLE = new Set(["ready", "published", "measured", "reflected"]);
@@ -24,6 +24,10 @@ export default function DraftReview() {
   const [views, setViews] = useState("");
   const [dwell, setDwell] = useState("");
   const [inflow, setInflow] = useState(""); // "키워드,횟수" 줄단위
+  // 본문 보기 모드(편집 MD / HTML 미리보기) + 수정 요청
+  const [view, setView] = useState<"md" | "html">("md");
+  const [feedback, setFeedback] = useState("");
+  const [revBusy, setRevBusy] = useState(false);
 
   const load = () => fetchPieces().then(setPieces);
   useEffect(() => { load(); }, []);
@@ -34,10 +38,22 @@ export default function DraftReview() {
   );
 
   const open = async (id: string) => {
-    setSel(id); setData(null); setMsg(""); setPubUrl(""); setCopied("");
+    setSel(id); setData(null); setMsg(""); setPubUrl(""); setCopied(""); setFeedback(""); setView("md");
     const d = await fetchPieceDraft(id);
     setData(d);
     setBody(d?.draft.bodyMarkdown ?? d?.md ?? "");
+  };
+
+  // 수정 요청 — 피드백으로 리비전 런(작가가 기존 초안 개정 → 디자이너 이미지 재협의). 완료 시 초안 자동 갱신.
+  const doRevise = async () => {
+    if (!sel || !feedback.trim() || revBusy) return;
+    setRevBusy(true);
+    const r = await revisePiece(sel, feedback.trim());
+    setRevBusy(false);
+    if (r.ok) {
+      setMsg(`수정 런 시작됨(${r.run_id ?? ""}) — 팀이 초안을 개정 중입니다. 완료되면 이 초안이 갱신됩니다(잠시 후 다시 선택해 확인).`);
+      setFeedback("");
+    } else setMsg(`수정 요청 실패: ${r.error || ""}`);
   };
 
   const copy = async (text: string, which: string) => {
@@ -121,16 +137,25 @@ export default function DraftReview() {
                 </ul>
               </div>
 
-              {/* 본문 편집(컴포넌트-로컬) + 복사(네이버 붙여넣기) */}
+              {/* 본문 편집(컴포넌트-로컬) + HTML 미리보기 + 복사(네이버 붙여넣기) */}
               <div className="review-section">
                 <div className="review-body-head">
-                  <h3>본문(마크다운) · {body.length}자</h3>
+                  <h3>
+                    <button className={`btn ghost review-viewtab${view === "md" ? " on" : ""}`} onClick={() => setView("md")}>본문(마크다운)</button>
+                    <button className={`btn ghost review-viewtab${view === "html" ? " on" : ""}`} onClick={() => setView("html")}>HTML 미리보기</button>
+                    <span className="muted"> · {body.length}자</span>
+                  </h3>
                   <div>
                     <button className="btn ghost" onClick={() => copy(body, "md")}>{copied === "md" ? "복사됨!" : "본문 복사(MD)"}</button>
                     <button className="btn ghost" onClick={() => copy(data.html, "html")}>{copied === "html" ? "복사됨!" : "HTML 복사(원본)"}</button>
                   </div>
                 </div>
-                <textarea className="review-body" value={body} onChange={(e) => setBody(e.target.value)} rows={16} />
+                {view === "md" ? (
+                  <textarea className="review-body" value={body} onChange={(e) => setBody(e.target.value)} rows={16} />
+                ) : (
+                  /* 원본 렌더(draft.html) 미리보기 — sandbox iframe(스크립트 차단). 편집본이 아니라 포매터 원본이다. */
+                  <iframe className="review-html-preview" title="HTML 미리보기" sandbox="" srcDoc={data.html || "<p>draft.html 없음</p>"} />
+                )}
                 {data.draft.imageSlots.length > 0 && (
                   <div className="review-images">
                     <b className="muted">🖼 이미지 슬롯</b>
@@ -140,6 +165,22 @@ export default function DraftReview() {
                   </div>
                 )}
               </div>
+
+              {/* 수정 요청 — 검토 결과를 피드백으로 걸면 작가가 초안을 개정(리비전 런) */}
+              {data.piece.stage === "ready" && (
+                <div className="review-section">
+                  <h3>수정 요청 <span className="muted">(검토 결과를 팀에 되돌려 초안 개정)</span></h3>
+                  <textarea
+                    value={feedback} onChange={(e) => setFeedback(e.target.value)} rows={3}
+                    placeholder={"예: 도입부가 늘어져요 — 첫 문단을 절반으로 줄이고, 3번 소제목에 실제 제품 예시 2개를 추가해주세요."}
+                  />
+                  <div className="review-inline" style={{ justifyContent: "flex-end" }}>
+                    <button className="btn start" disabled={!feedback.trim() || revBusy} onClick={doRevise}>
+                      {revBusy ? "요청 중…" : "🔁 수정 요청(초안 개정)"}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* 발행(수동) — 네이버 게시 후 URL 등록 */}
               <div className="review-section">

@@ -22,6 +22,8 @@ export function startRun(bus: EventBus, opts: RunOptions): Promise<RunOutcome> {
   // 로드된 회사(data/company.yaml, 없으면 시드)를 주입 — 모든 런 엔진이 동일 로스터 사용.
   const company = opts.company ?? getCompany();
   const o: RunOptions = { ...opts, company };
+  // 리비전 런(검토 탭 '수정 요청') — 항상 org 엔진의 fast-path 로(단축경로·토론 모드 우회).
+  if (o.revise) return runOrg(bus, o);
   // 직원 지명 런 → 단독 응답(가장 빠름).
   if (o.agentId) return runDirected(bus, o);
   // 단축경로 — auto 모드(명시 path 없음)에서 단순 조회성 질의는 CEO 단독 즉답으로 빠르게.
