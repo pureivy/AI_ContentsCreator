@@ -14,6 +14,7 @@
 import argparse
 import json
 import os
+import random
 import sys
 import time
 import uuid
@@ -397,6 +398,173 @@ def build_document_components(smarteditor_text: dict) -> list:
     return comps
 
 
+# ── 사람처럼 입력 (봇 탐지 회피 + 자연스러운 작성) ─────────────────────────────
+def _rand(a: float, b: float) -> float:
+    return a + random.random() * (b - a)
+
+
+def human_typing_enabled() -> bool:
+    """기본 활성 — NAVER_HUMAN_TYPING=false/0/off 로만 끈다(끄면 setDocumentData 일괄 주입)."""
+    return os.environ.get("NAVER_HUMAN_TYPING", "true").strip().lower() not in ("0", "false", "no", "off")
+
+
+def human_type(page, text: str):
+    """한 글자씩 가변 속도로 입력 — 문장부호 뒤 쉼, 가끔 생각하는 듯한 멈춤(사람 타이핑 리듬)."""
+    for ch in text:
+        page.keyboard.type(ch)
+        d = _rand(0.035, 0.10)
+        if ch == " ":
+            d += _rand(0.0, 0.06)
+        elif ch in ".!?…":
+            d += _rand(0.15, 0.40)
+        elif ch in ",·、:;":
+            d += _rand(0.05, 0.16)
+        if random.random() < 0.015:
+            d += _rand(0.4, 1.1)  # 문장 중간 잠깐 생각
+        time.sleep(d)
+
+
+def focus_body_editor(page) -> bool:
+    """본문 편집 영역에 커서를 놓는다(제목이 아닌 contenteditable)."""
+    for sel in [
+        ".se-content .se-text-paragraph",
+        ".se-component.se-text .se-text-paragraph",
+        ".se-content[contenteditable='true']",
+        ".ProseMirror[contenteditable='true']",
+    ]:
+        try:
+            loc = page.locator(sel).first
+            loc.click(timeout=3000)
+            time.sleep(0.3)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
+    """
+    본문을 '사람처럼' 입력한다 — 문단은 한 글자씩 타이핑하고 사이사이 Enter, 이미지는 해당 위치에서
+    이미지 버튼으로 삽입(사람이 사진 올리듯). 제목(H2/H3) '스타일'만 마지막에 apply_heading_styles 로
+    가볍게 반영한다(내용은 전부 실제 타이핑 — 네이버가 관측하는 키 입력이 진짜다).
+    반환: (headings[{text,level}], upload_count)
+    """
+    sections = se_text.get("sections", [])
+    image_positions = se_text.get("image_positions", [])
+    img_by_slot = {}
+    for pos, entry in enumerate(images):
+        img_by_slot[entry.get("index", pos)] = entry
+    after_map = {}
+    for p in image_positions:
+        after_map.setdefault(p["after_section"], []).append(p["image_index"])
+
+    img_btn = page.locator("button[data-name='image']").first
+    headings = []
+    upload_count = [0]
+
+    def insert_image(slot_idx: int):
+        entry = img_by_slot.get(slot_idx)
+        img_path = entry.get("file_path", "") if entry else ""
+        if not img_path or not Path(img_path).exists():
+            issues.append(f"이미지(슬롯 {slot_idx+1}) 파일 없음 — 본문 삽입 생략")
+            return
+        dismiss_editor_popup(page)
+        time.sleep(_rand(0.3, 0.7))
+        for attempt in range(2):
+            try:
+                with page.expect_file_chooser(timeout=12000) as fc:
+                    img_btn.dispatch_event("click")
+                fc.value.set_files(str(img_path))
+                time.sleep(7)
+                upload_count[0] += 1
+                dismiss_editor_popup(page)
+                time.sleep(_rand(0.5, 1.0))
+                return
+            except Exception as e:
+                log(f"  이미지 업로드 시도{attempt+1} 실패: {str(e)[:60]}")
+                dismiss_editor_popup(page)
+                time.sleep(1.5)
+        issues.append(f"이미지(슬롯 {slot_idx+1}) 업로드 실패 — 본문 삽입 생략")
+
+    # first_block=True 면 이 블록 앞에 Enter 를 넣지 않는다(초기 빈 문단·이미지 직후 = 이미 새 문단).
+    first_block = True
+
+    def newline_before():
+        nonlocal first_block
+        if first_block:
+            first_block = False
+            return
+        page.keyboard.press("Enter")
+        time.sleep(_rand(0.1, 0.3))
+
+    for slot in after_map.get(-1, []):  # 본문 맨 앞 이미지
+        insert_image(slot)
+        first_block = True
+
+    for i, section in enumerate(sections):
+        heading = section.get("heading", "").strip()
+        body = section.get("body", "")
+        level = section.get("heading_level", "HEADING1")
+        if heading:
+            newline_before()
+            human_type(page, heading)
+            headings.append({"text": heading, "level": level})
+        for line in body.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            newline_before()
+            human_type(page, line)
+        for slot in after_map.get(i, []):
+            page.keyboard.press("Enter")
+            time.sleep(_rand(0.1, 0.3))
+            insert_image(slot)
+            first_block = True  # 이미지 직후는 새 문단 — 다음 블록 앞 Enter 생략
+
+    return headings, upload_count[0]
+
+
+def apply_heading_styles(page, headings: list) -> str:
+    """
+    타이핑된 문단 중 제목 텍스트와 일치하는 것에 paragraphStyle(H2/H3)+굵은 큰 글씨만 반영한다.
+    이미지·본문 컴포넌트는 위치·내용 그대로 보존(내용 주입 아님 — 스타일 메타만). 매칭 기반이라
+    단축키가 안 먹혀도 최종 구조가 정확하고, documentService 없으면 무해하게 스킵(본문은 이미 저장됨).
+    """
+    if not headings:
+        return "no_headings"
+    return page.evaluate(
+        """(headings) => {
+        const ed = window.SE?.launcher?._editors?.blogpc001;
+        const ds = ed?._documentService;
+        if (!ds) return 'no_ds';
+        const norm = s => (s||'').replace(/\\s+/g,' ').trim();
+        const hmap = {};
+        for (const h of headings) hmap[norm(h.text)] = h.level;
+        const doc = ds.getDocumentData();
+        let applied = 0;
+        for (const c of doc.document.components) {
+            if (c['@ctype'] !== 'text') continue;
+            for (const para of (c.value || [])) {
+                const txt = norm((para.nodes||[]).map(n => n.value||'').join(''));
+                if (!txt) continue;
+                const lvl = hmap[txt];
+                if (lvl) {
+                    para.paragraphStyle = lvl;
+                    const size = lvl === 'HEADING1' ? '24pt' : '18pt';
+                    for (const n of (para.nodes||[])) if (n['@ctype']==='textNode') n.spanStyle = 'font-size:'+size+';font-weight:bold;';
+                    applied++;
+                } else if (para.paragraphStyle && /HEADING/.test(para.paragraphStyle)) {
+                    delete para.paragraphStyle;
+                }
+            }
+        }
+        try { ds.setDocumentData(doc); return 'ok:'+applied; }
+        catch(e){ return 'error:'+e.message; }
+    }""",
+        headings,
+    )
+
+
 # ── 글쓰기 메인 함수 ───────────────────────────────────────────────────────
 def write_post(
     page,
@@ -435,6 +603,9 @@ def write_post(
     handle_draft_popup(page)
     time.sleep(1.5)
 
+    human = human_typing_enabled()
+    log(f"  입력 모드: {'사람처럼 타이핑' if human else 'API 일괄(setDocumentData)'}")
+
     # ── STEP 3: 제목 입력 ─────────────────────────────────────────────────
     log(f"\n[STEP 3] 제목 입력: {title[:50]}...")
     for sel in [
@@ -448,138 +619,171 @@ def write_post(
             loc.click(timeout=3000)
             time.sleep(0.3)
             page.keyboard.press("Control+a")
-            page.keyboard.type(title)
+            page.keyboard.press("Delete")
+            if human:
+                human_type(page, title)       # 제목도 한 글자씩
+            else:
+                page.keyboard.type(title)
             log("  제목 입력 완료")
             break
         except Exception:
             continue
     time.sleep(0.5)
 
-    # ── STEP 4: 이미지 업로드 ────────────────────────────────────────────
-    log(f"\n[STEP 4] 이미지 업로드 ({len(images)}장)")
-    img_btn = page.locator("button[data-name='image']").first
-
-    # 업로드 성공한 이미지의 '슬롯 순번'(순서 보존) — image_index 리매핑용.
-    # 슬롯 순번은 매니페스트 엔트리의 "index" 필드가 정본(openai_image.py 가 기록) — 상류(TS)가
-    # 실존 필터로 배열을 압축해도 보존된다. 없으면 enumerate 폴백(구형/모델 경유 매니페스트).
-    uploaded_manifest_indices = []
-    for i, img_info in enumerate(images):
-        slot_idx = img_info.get("index", i)
-        img_path = img_info.get("file_path", "")
-        if not img_path or not Path(img_path).exists():
-            log(f"  이미지 {i+1} 건너뜀 (파일 없음): {img_path}")
-            issues.append(f"이미지 {i+1} 파일 없음 — 본문 삽입 생략: {img_path}")
-            continue
-
-        dismiss_editor_popup(page)
-        time.sleep(0.5)
-
-        uploaded = False
-        for attempt in range(2):
+    # ── 사람처럼 입력 경로 — 본문을 타이핑하고 이미지를 위치에 삽입, 제목 스타일만 반영 ──
+    image_comps = []  # 대표사진 설정(STEP 9)용 — 두 경로 모두에서 채운다.
+    if human:
+        log("\n[STEP 4~7] 본문 사람처럼 입력")
+        if not focus_body_editor(page):
+            log("  ⚠ 본문 편집 영역 포커스 실패 — API 일괄 경로로 폴백")
+            human = False
+        else:
             try:
-                with page.expect_file_chooser(timeout=12000) as fc_info:
-                    img_btn.dispatch_event("click")
-                fc_info.value.set_files(str(img_path))
-                time.sleep(7)
-                log(f"  이미지 {i+1}/{len(images)} 업로드 완료")
-                image_upload_count += 1
-                uploaded_manifest_indices.append(slot_idx)
-                uploaded = True
-                break
+                headings, image_upload_count = type_body_human(page, se_text, images, issues)
+                log(f"  타이핑 완료 — 소제목 {len(headings)}개, 이미지 {image_upload_count}장")
+                style_result = apply_heading_styles(page, headings)
+                log(f"  제목 스타일 반영: {style_result}")
+                if isinstance(style_result, str) and style_result.startswith("error"):
+                    issues.append(f"제목 스타일 반영 실패: {style_result}")
+                time.sleep(1.0)
+                # 대표사진 설정용 — 삽입된 이미지 컴포넌트 재조회
+                doc_after = page.evaluate("""() => {
+                    const ds = window.SE?.launcher?._editors?.blogpc001?._documentService;
+                    return ds ? ds.getDocumentData() : null;
+                }""")
+                if doc_after:
+                    image_comps = [c for c in doc_after["document"]["components"] if c.get("@ctype") == "image"]
             except Exception as e:
-                log(f"  이미지 {i+1} 시도{attempt+1} 실패: {str(e)[:60]}")
-                dismiss_editor_popup(page)
-                time.sleep(2)
-        if not uploaded:
-            issues.append(f"이미지 {i+1} 업로드 실패 — 본문 삽입 생략")
+                log(f"  ⚠ 사람처럼 입력 중 오류 — API 일괄 경로로 폴백: {str(e)[:80]}")
+                issues.append(f"사람처럼 입력 실패(폴백): {str(e)[:80]}")
+                human = False
 
-        dismiss_editor_popup(page)
-        time.sleep(1)
+    if not human:
+        # ── STEP 4: 이미지 업로드 ────────────────────────────────────────────
+        log(f"\n[STEP 4] 이미지 업로드 ({len(images)}장)")
+        img_btn = page.locator("button[data-name='image']").first
 
-    # ── STEP 5: 업로드된 이미지 컴포넌트 읽기 ─────────────────────────────
-    log("\n[STEP 5] 이미지 컴포넌트 읽기")
-    doc_data = page.evaluate("""() => {
-        const ed = window.SE?.launcher?._editors?.blogpc001;
-        const ds = ed?._documentService;
-        if (!ds) return null;
-        return ds.getDocumentData();
-    }""")
+        # 업로드 성공한 이미지의 '슬롯 순번'(순서 보존) — image_index 리매핑용.
+        # 슬롯 순번은 매니페스트 엔트리의 "index" 필드가 정본(openai_image.py 가 기록) — 상류(TS)가
+        # 실존 필터로 배열을 압축해도 보존된다. 없으면 enumerate 폴백(구형/모델 경유 매니페스트).
+        uploaded_manifest_indices = []
+        for i, img_info in enumerate(images):
+            slot_idx = img_info.get("index", i)
+            img_path = img_info.get("file_path", "")
+            if not img_path or not Path(img_path).exists():
+                log(f"  이미지 {i+1} 건너뜀 (파일 없음): {img_path}")
+                issues.append(f"이미지 {i+1} 파일 없음 — 본문 삽입 생략: {img_path}")
+                continue
 
-    image_comps = []
-    if doc_data:
-        image_comps = [
-            c for c in doc_data["document"]["components"]
-            if c.get("@ctype") == "image"
-        ]
-        log(f"  이미지 컴포넌트 {len(image_comps)}개 확인")
-    else:
-        log("  ⚠ documentService 없음 — 텍스트만 삽입")
+            dismiss_editor_popup(page)
+            time.sleep(0.5)
 
-    # ── STEP 6: 본문 컴포넌트 조립 ────────────────────────────────────────
-    log("\n[STEP 6] 본문 컴포넌트 조립")
-    text_comps = build_document_components(se_text)
-    log(f"  텍스트 섹션 {len(text_comps)}개")
+            uploaded = False
+            for attempt in range(2):
+                try:
+                    with page.expect_file_chooser(timeout=12000) as fc_info:
+                        img_btn.dispatch_event("click")
+                    fc_info.value.set_files(str(img_path))
+                    time.sleep(7)
+                    log(f"  이미지 {i+1}/{len(images)} 업로드 완료")
+                    image_upload_count += 1
+                    uploaded_manifest_indices.append(slot_idx)
+                    uploaded = True
+                    break
+                except Exception as e:
+                    log(f"  이미지 {i+1} 시도{attempt+1} 실패: {str(e)[:60]}")
+                    dismiss_editor_popup(page)
+                    time.sleep(2)
+            if not uploaded:
+                issues.append(f"이미지 {i+1} 업로드 실패 — 본문 삽입 생략")
 
-    # 이미지 삽입 위치에 따라 교차 배치
-    # image_positions: [{"after_section": 0, "image_index": 0}, ...]
-    # 같은 섹션 뒤 복수 이미지 허용(리스트 누적), after_section=-1 은 본문 맨 앞.
-    # image_index 는 '매니페스트 순번' — 일부 업로드가 실패하면 에디터의 image_comps 순서가
-    # 당겨지므로, 업로드 성공 인덱스 목록으로 리매핑한다(실패한 이미지 위치는 드롭).
-    def comp_for(img_idx):
-        if uploaded_manifest_indices:
-            if img_idx in uploaded_manifest_indices:
-                pos = uploaded_manifest_indices.index(img_idx)
-                if pos < len(image_comps):
-                    return image_comps[pos]
-            return None
-        # 리매핑 정보가 없으면(구형 호출 경로) 종전 동작 — 직접 인덱스
-        return image_comps[img_idx] if img_idx < len(image_comps) else None
+            dismiss_editor_popup(page)
+            time.sleep(1)
 
-    img_pos_map = {}
-    for pos in image_positions:
-        img_pos_map.setdefault(pos["after_section"], []).append(pos["image_index"])
-    final_comps = []
-    for img_idx in img_pos_map.get(-1, []):
-        comp = comp_for(img_idx)
-        if comp is not None:
-            final_comps.append(comp)
-    for i, tc in enumerate(text_comps):
-        final_comps.append(tc)
-        for img_idx in img_pos_map.get(i, []):
+        # ── STEP 5: 업로드된 이미지 컴포넌트 읽기 ─────────────────────────────
+        log("\n[STEP 5] 이미지 컴포넌트 읽기")
+        doc_data = page.evaluate("""() => {
+            const ed = window.SE?.launcher?._editors?.blogpc001;
+            const ds = ed?._documentService;
+            if (!ds) return null;
+            return ds.getDocumentData();
+        }""")
+
+        image_comps = []
+        if doc_data:
+            image_comps = [
+                c for c in doc_data["document"]["components"]
+                if c.get("@ctype") == "image"
+            ]
+            log(f"  이미지 컴포넌트 {len(image_comps)}개 확인")
+        else:
+            log("  ⚠ documentService 없음 — 텍스트만 삽입")
+
+        # ── STEP 6: 본문 컴포넌트 조립 ────────────────────────────────────────
+        log("\n[STEP 6] 본문 컴포넌트 조립")
+        text_comps = build_document_components(se_text)
+        log(f"  텍스트 섹션 {len(text_comps)}개")
+
+        # 이미지 삽입 위치에 따라 교차 배치
+        # image_positions: [{"after_section": 0, "image_index": 0}, ...]
+        # 같은 섹션 뒤 복수 이미지 허용(리스트 누적), after_section=-1 은 본문 맨 앞.
+        # image_index 는 '매니페스트 순번' — 일부 업로드가 실패하면 에디터의 image_comps 순서가
+        # 당겨지므로, 업로드 성공 인덱스 목록으로 리매핑한다(실패한 이미지 위치는 드롭).
+        def comp_for(img_idx):
+            if uploaded_manifest_indices:
+                if img_idx in uploaded_manifest_indices:
+                    pos = uploaded_manifest_indices.index(img_idx)
+                    if pos < len(image_comps):
+                        return image_comps[pos]
+                return None
+            # 리매핑 정보가 없으면(구형 호출 경로) 종전 동작 — 직접 인덱스
+            return image_comps[img_idx] if img_idx < len(image_comps) else None
+
+        img_pos_map = {}
+        for pos in image_positions:
+            img_pos_map.setdefault(pos["after_section"], []).append(pos["image_index"])
+        final_comps = []
+        for img_idx in img_pos_map.get(-1, []):
             comp = comp_for(img_idx)
             if comp is not None:
                 final_comps.append(comp)
+        for i, tc in enumerate(text_comps):
+            final_comps.append(tc)
+            for img_idx in img_pos_map.get(i, []):
+                comp = comp_for(img_idx)
+                if comp is not None:
+                    final_comps.append(comp)
 
-    # ── STEP 7: SE ONE setDocumentData ────────────────────────────────────
-    log("\n[STEP 7] SE ONE setDocumentData")
-    result = page.evaluate("""(comps) => {
-        const ed = window.SE?.launcher?._editors?.blogpc001;
-        const ds = ed?._documentService;
-        if (!ds) return 'error:no_documentService';
+        # ── STEP 7: SE ONE setDocumentData ────────────────────────────────────
+        log("\n[STEP 7] SE ONE setDocumentData")
+        result = page.evaluate("""(comps) => {
+            const ed = window.SE?.launcher?._editors?.blogpc001;
+            const ds = ed?._documentService;
+            if (!ds) return 'error:no_documentService';
 
-        const docData = ds.getDocumentData();
-        const titleComp = docData.document.components.find(c => c['@ctype'] === 'documentTitle');
+            const docData = ds.getDocumentData();
+            const titleComp = docData.document.components.find(c => c['@ctype'] === 'documentTitle');
 
-        const newDocData = JSON.parse(JSON.stringify(docData));
-        newDocData.document.components = [
-            ...(titleComp ? [titleComp] : []),
-            ...comps
-        ];
+            const newDocData = JSON.parse(JSON.stringify(docData));
+            newDocData.document.components = [
+                ...(titleComp ? [titleComp] : []),
+                ...comps
+            ];
 
-        try {
-            ds.setDocumentData(newDocData);
-            const textCount  = comps.filter(c => c['@ctype'] === 'text').length;
-            const imageCount = comps.filter(c => c['@ctype'] === 'image').length;
-            return 'ok: text=' + textCount + ' image=' + imageCount;
-        } catch(e) {
-            return 'error:' + e.message;
-        }
-    }""", final_comps)
-    log(f"  setDocumentData 결과: {result}")
-    time.sleep(1.5)
+            try {
+                ds.setDocumentData(newDocData);
+                const textCount  = comps.filter(c => c['@ctype'] === 'text').length;
+                const imageCount = comps.filter(c => c['@ctype'] === 'image').length;
+                return 'ok: text=' + textCount + ' image=' + imageCount;
+            } catch(e) {
+                return 'error:' + e.message;
+            }
+        }""", final_comps)
+        log(f"  setDocumentData 결과: {result}")
+        time.sleep(1.5)
 
-    if result and result.startswith("error"):
-        issues.append(f"본문 삽입 실패: {result}")
+        if result and result.startswith("error"):
+            issues.append(f"본문 삽입 실패: {result}")
 
     # ── STEP 8: 태그 입력 ─────────────────────────────────────────────────
     if tags:
@@ -594,9 +798,14 @@ def write_post(
                 el = page.locator(sel).first
                 if el.is_visible(timeout=3000):
                     for tag in tags:
-                        el.fill(tag)
+                        if human:
+                            el.click()
+                            time.sleep(_rand(0.1, 0.3))
+                            human_type(page, tag)  # 태그도 한 글자씩
+                        else:
+                            el.fill(tag)
                         page.keyboard.press("Enter")
-                        time.sleep(0.3)
+                        time.sleep(_rand(0.2, 0.45))
                     log("  태그 입력 완료")
                     break
             except Exception:
