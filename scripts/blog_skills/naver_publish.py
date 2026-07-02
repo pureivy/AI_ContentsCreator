@@ -433,15 +433,15 @@ def human_type(page, text: str):
     """한 글자씩 가변 속도로 입력 — 문장부호 뒤 쉼, 가끔 생각하는 듯한 멈춤(사람 타이핑 리듬)."""
     for ch in text:
         page.keyboard.type(ch)
-        d = _rand(0.035, 0.10)
+        d = _rand(0.02, 0.06)
         if ch == " ":
-            d += _rand(0.0, 0.06)
+            d += _rand(0.0, 0.04)
         elif ch in ".!?…":
-            d += _rand(0.15, 0.40)
+            d += _rand(0.10, 0.30)
         elif ch in ",·、:;":
-            d += _rand(0.05, 0.16)
-        if random.random() < 0.015:
-            d += _rand(0.4, 1.1)  # 문장 중간 잠깐 생각
+            d += _rand(0.04, 0.12)
+        if random.random() < 0.01:
+            d += _rand(0.3, 0.9)  # 문장 중간 잠깐 생각
         time.sleep(d)
 
 
@@ -460,19 +460,34 @@ def human_type_rich(page, text: str):
             time.sleep(_rand(0.05, 0.15))
 
 
+def _body_focused(page) -> bool:
+    """현재 포커스(activeElement)가 '제목이 아닌 본문' 편집 영역에 있는지 검증."""
+    try:
+        return bool(page.evaluate("""() => {
+            const a = document.activeElement;
+            if (!a) return false;
+            const inTitle = a.closest('.se-title-text, .se-documentTitle, [data-type="title"], [class*="title"], [class*="Title"]');
+            const inBody = a.closest('.se-content, .se-component, [contenteditable="true"]');
+            return !inTitle && !!inBody;
+        }"""))
+    except Exception:
+        return False
+
+
 def focus_body_editor(page) -> bool:
-    """본문 편집 영역에 커서를 놓는다(제목이 아닌 contenteditable)."""
+    """본문 편집 영역에 커서를 놓고 '제목이 아님'을 검증한다(제목 문단을 잘못 클릭해 본문이
+    제목에 섞이는 버그 방지). 검증 실패면 False → 호출자는 깨끗한 API 경로로 폴백한다."""
     for sel in [
-        ".se-content .se-text-paragraph",
-        ".se-component.se-text .se-text-paragraph",
-        ".se-content[contenteditable='true']",
-        ".ProseMirror[contenteditable='true']",
+        ".se-component.se-text .se-text-paragraph",   # 본문 텍스트 컴포넌트(제목 컴포넌트 제외)
+        ".se-section-content .se-text-paragraph",
+        ".se-content [contenteditable='true']:not(.se-title-text):not([data-type='title'])",
     ]:
         try:
             loc = page.locator(sel).first
             loc.click(timeout=3000)
-            time.sleep(0.3)
-            return True
+            time.sleep(0.4)
+            if _body_focused(page):
+                return True
         except Exception:
             continue
     return False
