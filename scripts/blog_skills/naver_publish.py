@@ -706,7 +706,7 @@ def write_post(
     if human:
         log("\n[STEP 4~7] 본문 사람처럼 입력")
         if not focus_body_editor(page):
-            log("  ⚠ 본문 편집 영역 포커스 실패 — API 일괄 경로로 폴백")
+            log("  ⚠ 본문 편집 영역 포커스 실패(SE 본문 iframe) — API 일괄 경로로 폴백")
             human = False
         else:
             try:
