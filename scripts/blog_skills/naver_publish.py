@@ -461,53 +461,87 @@ def human_type_rich(page, text: str):
 
 
 def _body_focused(page) -> bool:
-    """현재 포커스(activeElement)가 '제목이 아닌' 편집 영역에 있는지 검증.
-    핵심은 '제목이 아님'(제목 오염 방지) — 제목만 아니고 편집 가능하면 본문으로 본다."""
+    """본문 포커스 검증. SE 는 본문 키 입력을 숨은 'input_buffer' iframe 으로 캡처하므로, 본문을
+    클릭하면 최상위 activeElement 가 그 IFRAME 이 된다(정상). 이걸 본문 포커스로 인정하고, 제목만 거부한다."""
     try:
         return bool(page.evaluate("""() => {
             const a = document.activeElement;
             if (!a || a === document.body) return false;
             if (a.closest('.se-title-text, .se-documentTitle, [data-type="title"]')) return false; // 제목이면 실패
+            // 본문 입력 버퍼 iframe(SE 가 IME/키 입력 캡처) = 본문 포커스 정상. 식별자는 id(name 은 빈값).
+            if (a.tagName === 'IFRAME' && /input_buffer/i.test((a.id || '') + '|' + (a.name || ''))) return true;
             return !!(a.isContentEditable || a.closest('[contenteditable="true"]') || a.closest('.se-content'));
         }"""))
     except Exception:
         return False
 
 
-def focus_body_editor(page) -> bool:
-    """본문 편집 영역에 커서를 놓고 '제목이 아님'을 검증한다(제목 문단을 잘못 클릭해 본문이
-    제목에 섞이는 버그 방지). 검증 실패면 False → 호출자는 깨끗한 API 경로로 폴백한다."""
-    # 1) 제목 아래의 첫 본문 문단(.se-text-paragraph, 제목 컨테이너 제외)을 좌표로 찾아 클릭 — 클래스 구조 비의존.
+def _active_info(page) -> dict:
+    """현재 activeElement 상세(진단·검증 공용)."""
     try:
-        pos = page.evaluate("""() => {
-            const paras = [...document.querySelectorAll('.se-text-paragraph, .se-component-content [contenteditable], [contenteditable="true"] p')];
-            const body = paras.find(p => !p.closest('.se-title-text') && !p.closest('.se-documentTitle') && !p.closest('[data-type="title"]'));
-            if (!body) return null;
-            const r = body.getBoundingClientRect();
-            if (r.width < 2 || r.height < 2) return null;
-            return { x: r.x + Math.min(30, r.width / 2), y: r.y + r.height / 2 };
+        return page.evaluate("""() => {
+            const a = document.activeElement;
+            if (!a) return {none: true};
+            return { tag: a.tagName, name: a.getAttribute('name') || a.name || '', id: a.id || '',
+                cls: (a.className && a.className.toString ? a.className.toString() : '').slice(0,80),
+                editable: !!a.isContentEditable,
+                inTitle: !!a.closest('.se-title-text, .se-documentTitle, [data-type="title"]'),
+                inContent: !!a.closest('.se-content') };
         }""")
-        if pos:
+    except Exception as e:
+        return {"err": str(e)[:60]}
+
+
+def focus_body_editor(page, run_dir: str = None) -> bool:
+    """본문 편집 영역에 커서를 놓고 '제목이 아님'을 검증한다. 클릭 후 activeElement 를 추적 파일로 남긴다.
+    검증 실패면 False → 호출자는 깨끗한 API 경로로 폴백."""
+    trace = []
+    # 본문 문단(.se-text-paragraph, 제목 컨테이너 제외)을 좌표로 클릭 — 여러 후보 시도.
+    try:
+        positions = page.evaluate("""() => {
+            const paras = [...document.querySelectorAll('.se-text-paragraph')];
+            const bodies = paras.filter(p => !p.closest('.se-title-text') && !p.closest('.se-documentTitle') && !p.closest('[data-type="title"]'));
+            return bodies.slice(0,3).map(b => { const r = b.getBoundingClientRect();
+                return { x: Math.round(r.x + Math.min(40, r.width/2)), y: Math.round(r.y + r.height/2), w: Math.round(r.width), h: Math.round(r.height) }; })
+                .filter(p => p.w > 2 && p.h > 2);
+        }""") or []
+    except Exception:
+        positions = []
+    ok = False
+    for pos in positions:
+        try:
             page.mouse.click(pos["x"], pos["y"])
             time.sleep(0.4)
-            if _body_focused(page):
-                return True
-    except Exception:
-        pass
-    # 2) 폴백 셀렉터 클릭.
-    for sel in [
-        ".se-component.se-text .se-text-paragraph",
-        ".se-content .se-text-paragraph",
-        ".se-content [contenteditable='true']:not(.se-title-text)",
-    ]:
+            info = _active_info(page)
+            trace.append({"click": pos, "active": info})
+            if not info.get("inTitle") and (
+                info.get("editable") or info.get("inContent")
+                or (info.get("tag") == "IFRAME" and "input_buffer" in ((info.get("id") or "") + (info.get("name") or "")).lower())):
+                ok = True
+                break
+        except Exception as e:
+            trace.append({"click": pos, "err": str(e)[:60]})
+    if not ok:
+        # 폴백 셀렉터 클릭.
+        for sel in [".se-component.se-text .se-text-paragraph", ".se-content .se-text-paragraph"]:
+            try:
+                page.locator(sel).first.click(timeout=3000)
+                time.sleep(0.4)
+                info = _active_info(page)
+                trace.append({"sel": sel, "active": info})
+                if not info.get("inTitle") and (info.get("editable") or info.get("inContent")
+                        or (info.get("tag") == "IFRAME" and "input_buffer" in ((info.get("id") or "") + (info.get("name") or "")).lower())):
+                    ok = True
+                    break
+            except Exception as e:
+                trace.append({"sel": sel, "err": str(e)[:60]})
+    if run_dir:
         try:
-            page.locator(sel).first.click(timeout=3000)
-            time.sleep(0.4)
-            if _body_focused(page):
-                return True
+            with open(os.path.join(run_dir, "focus_trace.json"), "w", encoding="utf-8") as f:
+                json.dump({"ok": ok, "trace": trace}, f, ensure_ascii=False, indent=1)
         except Exception:
-            continue
-    return False
+            pass
+    return ok
 
 
 def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
@@ -635,6 +669,25 @@ def apply_heading_styles(page, headings: list) -> str:
     )
 
 
+def set_images_ai(page) -> str:
+    """모든 이미지 컴포넌트의 ai 필드를 true 로 설정 — 'AI 활용(생성) 이미지' 표시(사용자 요청).
+    SE 이미지 컴포넌트에 ai 불리언 필드가 있어 documentService 로 직접 설정한다."""
+    try:
+        return str(page.evaluate("""() => {
+            const ds = window.SE?.launcher?._editors?.blogpc001?._documentService;
+            if (!ds) return 'no_ds';
+            const doc = ds.getDocumentData();
+            let n = 0;
+            for (const c of doc.document.components) {
+                if (c['@ctype'] === 'image') { c.ai = true; n++; }
+            }
+            if (n) { try { ds.setDocumentData(doc); } catch(e) { return 'err:' + e.message; } }
+            return 'ok:' + n;
+        }"""))
+    except Exception as e:
+        return 'err:' + str(e)[:60]
+
+
 # ── 글쓰기 메인 함수 ───────────────────────────────────────────────────────
 def write_post(
     page,
@@ -705,8 +758,8 @@ def write_post(
     preexisting_image_ids = set()  # 폴백 시 제외할 '사람 경로에서 이미 삽입된' 이미지 컴포넌트 id.
     if human:
         log("\n[STEP 4~7] 본문 사람처럼 입력")
-        if not focus_body_editor(page):
-            log("  ⚠ 본문 편집 영역 포커스 실패(SE 본문 iframe) — API 일괄 경로로 폴백")
+        if not focus_body_editor(page, run_dir):
+            log("  ⚠ 본문 편집 영역 포커스 실패 — API 일괄 경로로 폴백(focus_trace.json 참조)")
             human = False
         else:
             try:
@@ -868,6 +921,14 @@ def write_post(
 
         if result and result.startswith("error"):
             issues.append(f"본문 삽입 실패: {result}")
+
+    # ── 이미지 'AI 활용(생성) 이미지' 표시 ON — SE 이미지 컴포넌트 ai 필드 = true(사용자 요청). ──
+    if image_comps:
+        ai_result = set_images_ai(page)
+        log(f"  [image-ai] AI 이미지 표시: {ai_result}")
+        if ai_result.startswith("err"):
+            issues.append(f"이미지 AI 표시 실패: {ai_result}")
+        time.sleep(0.5)
 
     # ── STEP 8: 태그 입력 ─────────────────────────────────────────────────
     if tags:
