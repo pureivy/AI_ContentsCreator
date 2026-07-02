@@ -461,14 +461,14 @@ def human_type_rich(page, text: str):
 
 
 def _body_focused(page) -> bool:
-    """현재 포커스(activeElement)가 '제목이 아닌 본문' 편집 영역에 있는지 검증."""
+    """현재 포커스(activeElement)가 '제목이 아닌' 편집 영역에 있는지 검증.
+    핵심은 '제목이 아님'(제목 오염 방지) — 제목만 아니고 편집 가능하면 본문으로 본다."""
     try:
         return bool(page.evaluate("""() => {
             const a = document.activeElement;
-            if (!a) return false;
-            const inTitle = a.closest('.se-title-text, .se-documentTitle, [data-type="title"], [class*="title"], [class*="Title"]');
-            const inBody = a.closest('.se-content, .se-component, [contenteditable="true"]');
-            return !inTitle && !!inBody;
+            if (!a || a === document.body) return false;
+            if (a.closest('.se-title-text, .se-documentTitle, [data-type="title"]')) return false; // 제목이면 실패
+            return !!(a.isContentEditable || a.closest('[contenteditable="true"]') || a.closest('.se-content'));
         }"""))
     except Exception:
         return False
@@ -477,14 +477,31 @@ def _body_focused(page) -> bool:
 def focus_body_editor(page) -> bool:
     """본문 편집 영역에 커서를 놓고 '제목이 아님'을 검증한다(제목 문단을 잘못 클릭해 본문이
     제목에 섞이는 버그 방지). 검증 실패면 False → 호출자는 깨끗한 API 경로로 폴백한다."""
+    # 1) 제목 아래의 첫 본문 문단(.se-text-paragraph, 제목 컨테이너 제외)을 좌표로 찾아 클릭 — 클래스 구조 비의존.
+    try:
+        pos = page.evaluate("""() => {
+            const paras = [...document.querySelectorAll('.se-text-paragraph, .se-component-content [contenteditable], [contenteditable="true"] p')];
+            const body = paras.find(p => !p.closest('.se-title-text') && !p.closest('.se-documentTitle') && !p.closest('[data-type="title"]'));
+            if (!body) return null;
+            const r = body.getBoundingClientRect();
+            if (r.width < 2 || r.height < 2) return null;
+            return { x: r.x + Math.min(30, r.width / 2), y: r.y + r.height / 2 };
+        }""")
+        if pos:
+            page.mouse.click(pos["x"], pos["y"])
+            time.sleep(0.4)
+            if _body_focused(page):
+                return True
+    except Exception:
+        pass
+    # 2) 폴백 셀렉터 클릭.
     for sel in [
-        ".se-component.se-text .se-text-paragraph",   # 본문 텍스트 컴포넌트(제목 컴포넌트 제외)
-        ".se-section-content .se-text-paragraph",
-        ".se-content [contenteditable='true']:not(.se-title-text):not([data-type='title'])",
+        ".se-component.se-text .se-text-paragraph",
+        ".se-content .se-text-paragraph",
+        ".se-content [contenteditable='true']:not(.se-title-text)",
     ]:
         try:
-            loc = page.locator(sel).first
-            loc.click(timeout=3000)
+            page.locator(sel).first.click(timeout=3000)
             time.sleep(0.4)
             if _body_focused(page):
                 return True
