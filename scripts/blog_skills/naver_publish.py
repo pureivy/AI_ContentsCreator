@@ -689,31 +689,41 @@ def insert_divider_ui(page):
         log(f"  구분선 삽입 실패(무해): {str(e)[:50]}")
 
 
-def insert_quote_ui(page, quote_lines: list):
-    """인용구 삽입 — 툴바 버튼(명령) 후 내부에 각 줄 타이핑(굵게/이탤릭 포함), 인용구 밖으로 이탈."""
-    dismiss_editor_popup(page)
-    try:
-        page.locator("button[data-name='quotation']").first.click(timeout=3000)
-        time.sleep(0.7)
-        dismiss_editor_popup(page)
-        time.sleep(0.3)
-        for k, ql in enumerate(quote_lines):
-            if k > 0:
-                page.keyboard.press("Enter")
-                time.sleep(_rand(0.1, 0.2))
-            human_type_rich(page, ql)
-        # 인용구 밖으로 — 아래 화살표로 다음 본문 문단으로 이동(없으면 SE 가 새 문단 생성).
-        time.sleep(0.2)
-        page.keyboard.press("ArrowDown")
-        time.sleep(0.2)
-        page.keyboard.press("End")
-        time.sleep(0.1)
-    except Exception as e:
-        log(f"  인용구 삽입 실패(무해): {str(e)[:50]}")
-        # 실패 시 평문으로라도 남기기
-        for ql in quote_lines:
-            human_type_rich(page, ql)
-            page.keyboard.press("Enter")
+def convert_quotes_and_ai(page, quote_texts: list) -> str:
+    """평문으로 타이핑된 '인용구 문단'을 네이티브 인용구(quotation) 컴포넌트로 변환하고, 이미지는
+    'AI 활용(ai:true)' 표시를 켠다 — 단 한 번의 setDocumentData(순서·구조 보존). 스타일(굵게)은 이 호출
+    '이후' 명령으로 다시 입힌다(문서 API 가 spanStyle 을 제거하므로). 반환: 'ok:quotes=N' 등 상태."""
+    return page.evaluate("""(quoteTexts) => {
+        const ds = window.SE?.launcher?._editors?.blogpc001?._documentService;
+        if (!ds) return 'no_ds';
+        const rid = () => 'g'+Math.random().toString(36).slice(2,10);
+        const norm = s => (s||'').replace(/\\s+/g,' ').trim();
+        const targets = quoteTexts.map(norm).filter(Boolean);
+        const used = new Set();
+        const doc = ds.getDocumentData();
+        const out = [];
+        for (const c of doc.document.components) {
+            const ct = c['@ctype'];
+            if (ct === 'image') { c.ai = true; out.push(c); continue; }   // 이미지 AI 활용 표시 ON
+            if (ct !== 'text') { out.push(c); continue; }                  // 구분선 등 구조 컴포넌트 보존
+            let run = [];
+            const flush = () => { if (run.length) { out.push({...c, id: rid(), value: run}); run = []; } };
+            for (const p of (c.value||[])) {
+                const t = norm((p.nodes||[]).map(n=>n.value||'').join(''));
+                if (t && targets.includes(t) && !used.has(t)) {           // 인용구 대상 문단 → 인용구 컴포넌트
+                    used.add(t);
+                    flush();
+                    out.push({'@ctype':'quotation', id: rid(), layout:'line', value:[p], source:null});
+                } else {
+                    run.push(p);
+                }
+            }
+            flush();
+        }
+        doc.document.components = out;
+        try { ds.setDocumentData(doc); } catch(e){ return 'error:'+e.message; }
+        return 'ok:quotes='+used.size+'/'+targets.length;
+    }""", quote_texts)
 
 
 def toggle_image_ai_ui(page):
@@ -737,9 +747,9 @@ def toggle_image_ai_ui(page):
 def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
     """
     본문을 '사람처럼' 입력한다 — 문단은 한 글자씩 타이핑하고 사이사이 Enter, 이미지는 해당 위치에서
-    이미지 버튼으로 삽입(사람이 사진 올리듯). 제목(H2/H3) '스타일'만 마지막에 apply_heading_styles 로
-    가볍게 반영한다(내용은 전부 실제 타이핑 — 네이버가 관측하는 키 입력이 진짜다).
-    반환: (headings[{text,level}], upload_count)
+    이미지 버튼으로 삽입(사람이 사진 올리듯). 소제목·인용구는 '평문'으로 순서대로 타이핑만 하고, 굵게·
+    인용구 박스는 타이핑 이후 write_post 에서 (변환 setDocumentData → 명령 굵게) 순으로 입힌다.
+    반환: (headings[{text,level}], quote_texts[str], upload_count)
     """
     sections = se_text.get("sections", [])
     image_positions = se_text.get("image_positions", [])
@@ -752,6 +762,7 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
 
     img_btn = page.locator("button[data-name='image']").first
     headings = []
+    quote_texts = []   # 평문으로 타이핑한 인용구 문단 텍스트 — 타이핑 후 setDocumentData 로 인용구 변환.
     upload_count = [0]
 
     def insert_image(slot_idx: int):
@@ -800,7 +811,8 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
         level = section.get("heading_level", "HEADING1")
         if heading:
             newline_before()
-            # 소제목 = 굵게 ON → 타이핑 → 굵게 OFF(다음 문단으로 서식 상속 방지). 명령이라 저장본에 남는다.
+            # 소제목 = 굵게 ON → 타이핑 → 굵게 OFF(다음 문단 서식 상속 방지). 명령 굵게는 SE 내부 모델에
+            # 저장돼 인용구 변환 setDocumentData 를 거쳐도 유지된다(spanStyle 이 아니므로 제거 대상 아님).
             page.keyboard.press("ControlOrMeta+b")
             time.sleep(0.12)
             human_type(page, heading)
@@ -820,7 +832,8 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
                 first_block = True
                 k += 1
                 continue
-            # 인용구(연속된 >) — 툴바 명령 삽입 후 내부 타이핑. 최대 2줄, 초과분은 본문 문단으로.
+            # 인용구(연속된 >) — '평문 문단'으로 순서대로 타이핑(캐럿 싸움 없음). 타이핑 후 그 문단을
+            # setDocumentData 로 인용구 컴포넌트로 변환한다. 최대 2줄(합쳐 한 문단), 초과분은 본문 문단으로.
             mq = re.match(r"^>\s?(.*)$", line)
             if mq:
                 qlines = [mq.group(1)]
@@ -831,10 +844,13 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
                         break
                     qlines.append(m2.group(1))
                     k += 1
-                qlines = [q for q in qlines if q.strip()]
-                insert_quote_ui(page, qlines[:2])       # 인용구는 2줄까지
-                first_block = True
-                for extra in qlines[2:]:                # 초과분은 일반 문단
+                qlines = [q.strip() for q in qlines if q.strip()]
+                qtext = " ".join(qlines[:2])            # 인용구는 2줄까지 — 한 문단으로 합쳐 타이핑
+                if qtext:
+                    newline_before()
+                    human_type(page, qtext)             # 평문으로 타이핑(순서 보존) → 나중에 인용구로 변환
+                    quote_texts.append(qtext)
+                for extra in qlines[2:]:                # 초과분은 일반 본문 문단
                     newline_before()
                     human_type_rich(page, extra)
                 continue
@@ -847,7 +863,7 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
             insert_image(slot)
             first_block = True  # 이미지 직후는 새 문단 — 다음 블록 앞 Enter 생략
 
-    return headings, upload_count[0]
+    return headings, quote_texts, upload_count[0]
 
 
 def apply_heading_styles(page, headings: list) -> str:
@@ -971,7 +987,6 @@ def write_post(
     handle_draft_popup(page)
     time.sleep(1.5)
 
-
     human = human_typing_enabled()
     # 리치 블록(인용구·구분선·코드·표)은 키 입력으로 재현 불가 → 그런 글은 SE 문서 API 로 렌더(리치 우선).
     if human and _has_rich_blocks(se_text):
@@ -1013,17 +1028,39 @@ def write_post(
             human = False
         else:
             try:
-                headings, image_upload_count = type_body_human(page, se_text, images, issues)
-                log(f"  타이핑 완료 — 소제목 {len(headings)}개, 이미지 {image_upload_count}장")
-                # 소제목 굵게·이미지 AI 는 타이핑 중 '명령'으로 이미 적용됨. 여기서 setDocumentData 를 돌리면
-                # 그 스타일이 전부 제거되므로 절대 호출하지 않는다(대표사진 재조회만 read-only).
+                headings, quote_texts, image_upload_count = type_body_human(page, se_text, images, issues)
+                log(f"  타이핑 완료 — 소제목 {len(headings)}개, 인용구 {len(quote_texts)}개, 이미지 {image_upload_count}장")
                 time.sleep(1.0)
+                # ① 인용구 변환 + 이미지 AI 표시 — 단 한 번의 setDocumentData(순서·구조 보존, 스타일 제거).
+                if quote_texts or image_upload_count:
+                    conv = convert_quotes_and_ai(page, quote_texts)
+                    log(f"  [인용구 변환] {conv}")
+                    if isinstance(conv, str) and conv.startswith("error"):
+                        issues.append(f"인용구 변환 실패: {conv}")
+                    time.sleep(1.2)   # 재렌더 대기
+                # ② 소제목 굵게는 타이핑 중 명령(Cmd+B)으로 이미 반영됐고 변환을 거쳐도 유지된다(별도 재적용
+                #    불필요 — JS Range 로 설정한 선택은 SE 굵게 명령이 인식하지 않는다).
+                # ③ 대표사진용 이미지 컴포넌트 재조회 + 구조 덤프(검증용).
+                time.sleep(0.5)
                 doc_after = page.evaluate("""() => {
                     const ds = window.SE?.launcher?._editors?.blogpc001?._documentService;
                     return ds ? ds.getDocumentData() : null;
                 }""")
                 if doc_after:
                     image_comps = [c for c in doc_after["document"]["components"] if c.get("@ctype") == "image"]
+                    try:
+                        struct = []
+                        for c in doc_after["document"]["components"]:
+                            ct = c.get("@ctype")
+                            txt = ""
+                            if ct in ("text", "quotation"):
+                                for para in (c.get("value") or []):
+                                    txt += "".join(n.get("value", "") for n in (para.get("nodes") or []))
+                            struct.append({"type": ct, "text": txt[:40]})
+                        with open(os.path.join(run_dir, "doc_structure.json"), "w", encoding="utf-8") as f:
+                            json.dump(struct, f, ensure_ascii=False, indent=1)
+                    except Exception:
+                        pass
             except Exception as e:
                 log(f"  ⚠ 사람처럼 입력 중 오류 — API 일괄 경로로 폴백: {str(e)[:80]}")
                 issues.append(f"사람처럼 입력 실패(폴백): {str(e)[:80]}")
