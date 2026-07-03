@@ -20,7 +20,7 @@ import { AgentNode } from "../events/types";
 // WORKING counter (events/working.ts) so choreography and counter can't diverge.
 import { LEAD_WORK_PHASES, MEMBER_WORK_PHASES } from "../events/working";
 import { fetchCompany, CompanyInfo, RoleInfo } from "../api";
-import { spriteFor, poseFor } from "./officeSprites";
+import { spriteFor, poseFor, TWO_POSE_CHARS } from "./officeSprites";
 import { personLabel } from "./agentVisual";
 import { clusterBelow, meetingCircle, CORRIDOR_SPOTS, Pt,
   LOUNGE_SOFA_ZONE, PANTRY_ZONE, CONF_ZONE, READING_ZONE, WHITEBOARD_SPOT, placeInZone } from "./officeChoreography";
@@ -66,16 +66,19 @@ const TEAM_REGION: Record<string, Region> = {
   content: ROOMS.planning,
   research: ROOMS.support,
   secretariat: ROOMS.secretariat,
+  cardnews: ROOMS.planning, // 카드뉴스팀 — 우측 상단 사무실(사용자 지정). 콘텐츠팀과 같은 방, 우측 구역 좌석.
 };
 const regionCx = (r: Region): number => r.x + r.w / 2;
 // 팀장 자리 오버라이드(방 모양 보정) — 기획팀(planning)은 책상이 창측 '상단 띠'라 범용 앵커(상단 18%)가
 // 책상 위에 올라선 것처럼 보인다(사용자 피드백). 책상 '앞' 바닥 좌측에 세운다.
 const TEAM_LEAD_SPOT: Record<string, { fx: number; fy: number }> = {
   content: { fx: 0.28, fy: 0.62 },
+  cardnews: { fx: 0.78, fy: 0.62 }, // 같은 방 우측 구역 — 콘텐츠팀(좌측 0.28/0.62)과 겹침 방지
 };
 // 팀별 멤버 좌석 오버라이드 — 기획팀 멤버(이미지 디자이너)는 팀장 우측 바닥(창측 데스크 앞).
 const TEAM_MEMBER_SEATS: Record<string, Seat[]> = {
-  content: [{ fx: 0.62, fy: 0.68, face: "down" }],
+  content: [{ fx: 0.5, fy: 0.68, face: "down" }, { fx: 0.62, fy: 0.68, face: "down" }],
+  cardnews: [{ fx: 0.9, fy: 0.68, face: "down" }],
 };
 const roomStyle = (r: Region) =>
   ({ left: `${r.x}%`, top: `${r.y}%`, width: `${r.w}%`, height: `${r.h}%` });
@@ -417,7 +420,7 @@ function Sprite({ char, pose, flip, glyph, working }: {
   if (err || !char) {
     return <div className="office-portrait office-glyph" style={{ fontSize: 32, lineHeight: 1 }}>{glyph}</div>;
   }
-  if (char === "jarvis") return <JarvisFigure pose={pose} working={working} />;
+  if (TWO_POSE_CHARS.has(char)) return <TwoPoseFigure char={char} pose={pose} working={working} />;
   return (
     <img
       className={`office-sprite${working ? " working" : ""}`}
@@ -429,10 +432,10 @@ function Sprite({ char, pose, flip, glyph, working }: {
   );
 }
 
-// 자비스 피규어 — 우선순위: ① 생성 스프라이트(/sprites/jarvis_*.png — scripts/gen_jarvis_sprite.mjs 가
-// gpt-image 로 '기존 얼굴 유지' 생성, OPENAI_API_KEY 필요) ② 없으면 '원래 얼굴 + SVG 정장 몸통' 조합.
-// 어느 쪽이든 다른 아바타와 같은 스케일(SPRITE_PX)의 전신(사용자 요청).
-function JarvisFigure({ pose, working }: { pose: string; working: boolean }) {
+// 2포즈 피규어(자비스·카드뉴스팀) — 9포즈 풀세트 없이 stand/sit_front 2장으로 모든 포즈를 접는다.
+// 우선순위: ① 생성 스프라이트(/sprites/<char>_{stand,sit_front}.png — scripts/gen_*_sprite*.mjs,
+// OPENAI_API_KEY 필요) ② 둘 다 없으면 '얼굴 + (자비스 한정) SVG 정장 몸통' 폴백.
+function TwoPoseFigure({ char, pose, working }: { char: string; pose: string; working: boolean }) {
   const [failed, setFailed] = useState<Record<string, boolean>>({});
   const want = pose === "sit_front" || pose === "sit_right" || pose === "lounge" ? "sit_front" : "stand";
   const cand = !failed[want] ? want : want !== "stand" && !failed.stand ? "stand" : null;
@@ -440,11 +443,23 @@ function JarvisFigure({ pose, working }: { pose: string; working: boolean }) {
     return (
       <img
         className={`office-sprite${working ? " working" : ""}`}
-        src={`/sprites/jarvis_${cand}.png`}
+        src={`/sprites/${char}_${cand}.png`}
         alt="" draggable={false}
         onError={() => setFailed((f) => ({ ...f, [cand]: true }))}
         style={{ height: SPRITE_PX, width: "auto" }}
       />
+    );
+  }
+  // 신규 캐릭터 폴백: face 헤드샷 원형(정장 SVG 는 자비스 전용 복장이라 재사용하지 않음).
+  if (char !== "jarvis") {
+    return (
+      <div className={`office-sprite${working ? " working" : ""}`} style={{ display: "flex", justifyContent: "center" }}>
+        <img
+          src={`/sprites/${char}_face.png`} alt="" draggable={false}
+          style={{ height: 56, width: 56, borderRadius: "50%", objectFit: "cover",
+                   border: "2px solid rgba(255,255,255,.7)", boxShadow: "0 2px 8px rgba(0,0,0,.25)" }}
+        />
+      </div>
     );
   }
   return (

@@ -15,8 +15,13 @@ const ROLE_SPRITE: Record<string, string> = {
   trend_researcher: "cardnews", // 오세라 (여, 트렌드·크리에이티브)
   seo_strategist: "propose",    // 김도현 (남, 전략·제안)
   image_designer: "critic-platform", // 윤소이 (여, 이미지 디자이너 — 디지털 크리에이티브)
+  cardnews_planner: "cardplanner",   // 송하영 (여, 카드뉴스 기획자 — gpt-image 생성 2포즈 세트)
+  cardnews_designer: "carddesigner", // 민준호 (남, 카드 디자이너 — gpt-image 생성 2포즈 세트)
   jarvis: "jarvis",             // 자비스 — 멀티포즈 세트 없이 '원래 이미지'(채팅 아바타 jarvis_face) 단일 사용.
 };                              //   OfficeView Sprite 가 특수 처리(포즈 무관 동일 이미지 → 복장 일관성, 사용자 요청)
+
+/** 2포즈(stand/sit_front) 축약 캐릭터 — 9포즈 풀세트 없이 생성된 아바타. OfficeView 가 포즈를 둘로 접는다. */
+export const TWO_POSE_CHARS = new Set(["jarvis", "cardplanner", "carddesigner"]);
 
 /** 역할 id/레벨/직무 → 스프라이트 캐릭터. 매칭 없으면 null(이모지 폴백). */
 export function spriteFor(id = "", level = "", title = ""): string | null {
