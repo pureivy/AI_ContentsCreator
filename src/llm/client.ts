@@ -1,6 +1,6 @@
 /**
  * LLM 프로바이더 파사드 — 모델 id 프리픽스로 백엔드 분기.
- *   claude-*  → Anthropic Claude
+ *   claude-*  → Claude Code CLI(구독 인증 — llm/claudeCli.ts)
  *   그 외     → 로컬 Ollama(폴백/레거시; 콘텐츠 스튜디오 v1 은 claude 단독)
  *
  * 호출부는 `ollama.chat` 대신 `llm.chat` 을 쓰고, 임베딩·모델목록 등 Ollama 전용 기능은
@@ -8,10 +8,10 @@
  */
 import type { ChatParams, ChatResult } from './ollama';
 import { ollama } from './ollama';
-import { anthropic } from './anthropic';
+import { claudeCli } from './claudeCli';
 
 export const llm = {
   chat(params: ChatParams): Promise<ChatResult> {
-    return params.model.startsWith('claude-') ? anthropic.chat(params) : ollama.chat(params);
+    return params.model.startsWith('claude-') ? claudeCli.chat(params) : ollama.chat(params);
   },
 };

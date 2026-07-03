@@ -24,7 +24,7 @@ interface Meta { custom: CustomDef[]; hidden: string[] }
 
 interface BuiltinDef { key: string; label: string; icon: string; desc: string; placeholder: string; needs_restart: boolean }
 const BUILTIN: BuiltinDef[] = [
-  { key: 'ANTHROPIC_API_KEY', label: 'Anthropic (Claude)', icon: '🟣', desc: 'Claude 클라우드 백엔드 사용 시 필요', placeholder: 'sk-ant-…', needs_restart: true },
+  { key: 'ANTHROPIC_API_KEY', label: 'Anthropic (Claude)', icon: '🟣', desc: '미사용 — Claude 는 구독(claude CLI) 인증으로 호출됨', placeholder: 'sk-ant-…', needs_restart: true },
   { key: 'OPENAI_API_KEY', label: 'OpenAI', icon: '🟢', desc: 'OpenAI 호환 백엔드(선택)', placeholder: 'sk-…', needs_restart: true },
   // 알림 채널(자율 사이클 완료·일일 브리핑) — 설정하면 자동 발송. 미설정이면 알림 no-op.
   { key: 'NOTIFY_WEBHOOK_URL', label: '알림 웹훅', icon: '🔔', desc: '자율 사이클·일일 브리핑을 POST 할 URL(Slack/Discord/커스텀)', placeholder: 'https://hooks.…', needs_restart: false },

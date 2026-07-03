@@ -1,0 +1,177 @@
+/**
+ * Claude Code CLI 클라이언트 — 구독(OAuth) 인증으로 Claude 호출. 기존 ChatParams→ChatResult 계약 구현.
+ *
+ * 왜 CLI 경유인가: Anthropic SDK 직접 호출(구 llm/anthropic.ts)은 ant OAuth 프로필/API 키 경유로
+ * 조직의 API 크레딧에 과금된다(크레딧 소진 시 400). `claude -p` 는 Claude Code 구독 로그인으로
+ * 과금(정액) — 이 스튜디오의 전제와 일치. 대신 호출당 CLI 부팅 오버헤드(~1.5s)와 구독 rate limit
+ * (5시간 윈도, Claude Code 대화 세션과 쿼터 공유)을 감수한다.
+ *
+ * 격리 플래그(실측: 하니스 컨텍스트 31K→175 토큰, 레이턴시 11.6s→2.6s):
+ *  --tools ""            도구 전면 비활성(순수 텍스트 생성 — 에이전틱 루프 차단)
+ *  --setting-sources ""  사용자/프로젝트 설정·훅 미로딩
+ *  --strict-mcp-config   MCP 서버 미로딩(스키마 주입 방지)
+ *  --no-session-persistence · --max-turns 1 · 중립 cwd(프로젝트 CLAUDE.md 미주입)
+ *
+ * 파라미터 매핑(계약 대비 근사치):
+ *  - maxOutputTokens → CLAUDE_CODE_MAX_OUTPUT_TOKENS env
+ *  - think=false → --effort low (Sonnet/Opus 는 thinking 완전 비활성 노출이 없어 근사; haiku 는 effort 미지원 → 생략)
+ *  - temperature → CLI 미노출 → 무시(기존에도 haiku 전용 옵션이었음)
+ *  - format:'json' → 기존 SDK 경로와 동일하게 프롬프트 지시에 위임(호출부 microJSON 이 처리)
+ *  - onDelta → stream-json 의 content_block_delta/text_delta
+ */
+import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { CONFIG } from '../config';
+import { Semaphore } from '../util/semaphore';
+import { recordUsage } from './cost';
+import type { ChatParams, ChatResult, ChatMessage } from './ollama';
+
+// 클라우드는 KV 슬롯 경합이 없어 단일 슬롯 불필요 — 동시 spawn 상한만 둔다.
+const SLOT = new Semaphore(CONFIG.anthropicConcurrency);
+
+// 중립 작업 디렉토리 — 스튜디오 프로젝트의 CLAUDE.md/설정이 생성 프롬프트에 새어들지 않게.
+const NEUTRAL_CWD = path.join(os.tmpdir(), 'ai-contents-claude-cli');
+fs.mkdirSync(NEUTRAL_CWD, { recursive: true });
+
+/** ChatMessage[] → {system, prompt}. 멀티턴 이력은 단일 프롬프트로 직렬화(-p 는 1턴 입력). */
+function toPrompt(msgs: ChatMessage[]): { system?: string; prompt: string } {
+  const systemParts: string[] = [];
+  const turns: { role: 'user' | 'assistant'; content: string }[] = [];
+  for (const m of msgs) {
+    const content = (m.content ?? '').trim();
+    if (m.role === 'system') { if (content) systemParts.push(content); continue; }
+    if (!content) continue; // 빈 턴 제거(기존 SDK 경로와 동일)
+    turns.push({ role: m.role, content });
+  }
+  const system = systemParts.join('\n\n') || undefined;
+  if (!turns.length) return { system, prompt: '(빈 입력)' };
+  if (turns.length === 1 && turns[0]!.role === 'user') return { system, prompt: turns[0]!.content };
+  const lines = turns.map((t) => `[${t.role === 'user' ? '사용자' : '어시스턴트'}]\n${t.content}`);
+  return { system, prompt: `${lines.join('\n\n')}\n\n위 대화에 이어 어시스턴트로서 답하라. 답변 본문만 출력한다.` };
+}
+
+/** stream-json result 이벤트에서 쓰는 필드만. */
+interface CliResult {
+  subtype?: string;
+  is_error?: boolean;
+  result?: string;
+  stop_reason?: string | null;
+  usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
+}
+
+export class ClaudeCliClient {
+  async chat(params: ChatParams): Promise<ChatResult> {
+    return SLOT.run(() => this._chat(params));
+  }
+
+  private _chat(params: ChatParams): Promise<ChatResult> {
+    const model = params.model;
+    const isHaiku = /haiku/i.test(model);
+    const maxTokens = Math.min(Math.max(1, params.maxOutputTokens ?? CONFIG.maxOutputTokens), 64_000);
+    const wantThink = (params.think ?? false) && params.format !== 'json';
+    const { system, prompt } = toPrompt(params.messages);
+
+    const args = [
+      '-p',
+      '--output-format', 'stream-json',
+      '--include-partial-messages',
+      '--verbose', // print 모드의 stream-json 요구사항
+      '--model', model,
+      '--tools', '',
+      '--setting-sources', '',
+      '--strict-mcp-config',
+      '--no-session-persistence',
+      '--max-turns', '1',
+    ];
+    if (system) args.push('--system-prompt', system);
+    if (!isHaiku && !wantThink) args.push('--effort', 'low');
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(maxTokens),
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    };
+    // 구독 로그인 강제 — API 키/프로필이 있으면 그쪽으로 새서 크레딧 과금(400)으로 회귀한다.
+    delete env.ANTHROPIC_API_KEY;
+    delete env.ANTHROPIC_AUTH_TOKEN;
+    delete env.ANTHROPIC_PROFILE;
+
+    const t0 = Date.now();
+    return new Promise<ChatResult>((resolve, reject) => {
+      const child = spawn(CONFIG.claudeCliPath, args, { cwd: NEUTRAL_CWD, env, stdio: ['pipe', 'pipe', 'pipe'] });
+
+      let deltaText = '';
+      let result: CliResult | undefined;
+      let stderrTail = '';
+      let settled = false;
+      const fail = (msg: string) => {
+        if (settled) return; settled = true;
+        try { child.kill('SIGKILL'); } catch { /* 이미 종료 */ }
+        reject(new Error(`Claude CLI ${model}: ${msg}`));
+      };
+
+      const timer = setTimeout(() => fail(`타임아웃(${CONFIG.requestTimeoutMs}ms)`), CONFIG.requestTimeoutMs);
+      const onAbort = () => fail('중단됨(abort)');
+      if (params.signal) {
+        if (params.signal.aborted) { clearTimeout(timer); return fail('중단됨(abort)'); }
+        params.signal.addEventListener('abort', onAbort, { once: true });
+      }
+      const cleanup = () => {
+        clearTimeout(timer);
+        params.signal?.removeEventListener('abort', onAbort);
+      };
+
+      child.on('error', (e) => { cleanup(); fail(`실행 실패(${e.message}) — claude CLI 설치/PATH 확인`); });
+      child.stderr.on('data', (d: Buffer) => { stderrTail = (stderrTail + d.toString()).slice(-2000); });
+
+      const rl = createInterface({ input: child.stdout });
+      rl.on('line', (line) => {
+        if (!line.trim()) return;
+        let ev: Record<string, unknown>;
+        try { ev = JSON.parse(line) as Record<string, unknown>; } catch { return; } // 비JSON 잡음 무시
+        if (ev.type === 'stream_event') {
+          const inner = (ev as { event?: { type?: string; delta?: { type?: string; text?: string; thinking?: string } } }).event;
+          if (inner?.type === 'content_block_delta' && inner.delta?.type === 'text_delta' && inner.delta.text) {
+            deltaText += inner.delta.text;
+            params.onDelta?.(inner.delta.text);
+          }
+        } else if (ev.type === 'result') {
+          result = ev as CliResult;
+        }
+      });
+
+      child.on('close', (code) => {
+        cleanup();
+        if (settled) return;
+        if (!result) return fail(`결과 없음(exit=${code}) ${stderrTail.trim()}`.trim());
+        if (result.is_error || result.subtype !== 'success') {
+          return fail(`${result.subtype ?? 'error'} — ${(result.result ?? stderrTail).slice(0, 500)}`.trim());
+        }
+        settled = true;
+        const inTok = result.usage?.input_tokens ?? 0;
+        const outTok = result.usage?.output_tokens ?? 0;
+        const cacheRead = result.usage?.cache_read_input_tokens ?? 0;
+        recordUsage(model, inTok, outTok, cacheRead);
+        const stopReason = result.stop_reason ?? '';
+        resolve({
+          text: (result.result ?? deltaText).trim(),
+          model,
+          promptEvalCount: inTok,
+          evalCount: outTok,
+          totalDurationMs: Date.now() - t0,
+          loadDurationMs: 0,
+          truncated: stopReason === 'max_tokens',
+          doneReason: stopReason || (result.subtype ?? ''),
+        });
+      });
+
+      child.stdin.write(prompt);
+      child.stdin.end();
+    });
+  }
+}
+
+export const claudeCli = new ClaudeCliClient();

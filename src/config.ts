@@ -68,8 +68,10 @@ export interface Config {
   readonly concurrency: number;
   readonly teamParallel: number;
   readonly maxTurnsPerAgent: number;
-  /** Claude(클라우드) 동시 호출 상한 — KV 슬롯 경합이 없어 넉넉하게. 429 는 SDK 백오프. */
+  /** Claude(클라우드) 동시 호출 상한 — CLI spawn 동시 수(구독 rate limit 고려). */
   readonly anthropicConcurrency: number;
+  /** Claude Code CLI 실행 파일 경로 — 구독(OAuth) 인증 호출용. */
+  readonly claudeCliPath: string;
   /** 월 예산 캡($) — 무감시 자율 폭주 안전장치. 0=캡 없음(정액 기본). 메터드로 쓰면 설정. */
   readonly monthlyBudgetUsd: number;
 
@@ -128,6 +130,10 @@ export interface Config {
   readonly naverSessionFile: string;
   /** finalize 후 완성 초안(draft.json)에 이미지 자동 생성(옵트인, 기본 off — 기본 런 경로 불변). */
   readonly blogAutoImage: boolean;
+  /** ready 도달 시 자동 네이버 임시저장 — SEO 점수가 기준(naverDraftSeoMin) 이상일 때만. 발행은 여전히 사람 수동. */
+  readonly autoNaverDraft: boolean;
+  /** 자동 임시저장 SEO 최소 점수 — 미달이면 자동 리비전 1회 후 재평가, 그래도 미달이면 수동 검토로 남긴다. */
+  readonly naverDraftSeoMin: number;
 
   // --- 음성 입출력 ---
   readonly voiceTtsVoice: string;
@@ -213,6 +219,7 @@ export const CONFIG: Config = {
   teamParallel: envInt('TEAM_PARALLEL', isLocal ? 1 : 4),
   maxTurnsPerAgent: envInt('MAX_TURNS_PER_AGENT', isLocal ? 8 : 20),
   anthropicConcurrency: Math.max(1, envInt('ANTHROPIC_CONCURRENCY', 6)),
+  claudeCliPath: env('CLAUDE_CLI_PATH', 'claude'),
   monthlyBudgetUsd: Math.max(0, Number(env('MONTHLY_BUDGET_USD', '0'))),
 
   runMode: (env('RUN_MODE', 'org') as 'org' | 'debate'),
@@ -259,6 +266,8 @@ export const CONFIG: Config = {
   openaiImageModel: env('OPENAI_IMAGE_MODEL', 'gpt-image-2'),
   naverSessionFile: env('NAVER_SESSION_FILE', path.join(ROOT, '.naver_session.json')),
   blogAutoImage: envBool('BLOG_AUTO_IMAGE', false),
+  autoNaverDraft: envBool('AUTO_NAVER_DRAFT', true),
+  naverDraftSeoMin: Math.min(Math.max(0, envInt('NAVER_DRAFT_SEO_MIN', 80)), 100),
 
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
   voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),
