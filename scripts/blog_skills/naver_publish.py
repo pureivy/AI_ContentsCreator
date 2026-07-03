@@ -459,11 +459,13 @@ def make_table(rows: list) -> dict:
 
 
 _TABLE_SEP_RE = re.compile(r"^:?-{2,}:?$")
-_RICH_LINE_RE = re.compile(r"^(?:```|\||>\s|-{3,}$|\*{3,}$|_{3,}$)")
+# 사람 경로가 명령으로 처리 못 하는 블록만 API 로 강제 — 소스코드(```)·표(|).
+# 인용구(>)·구분선(---)은 사람 경로에서 툴바 명령으로 삽입하므로 여기서 제외(스타일과 공존).
+_RICH_LINE_RE = re.compile(r"^(?:```|\|)")
 
 
 def _has_rich_blocks(se_text: dict) -> bool:
-    """본문에 인용구(>)·구분선(---)·소스코드(```)·표(|) 블록이 있으면 True(사람 타이핑 대신 API 렌더)."""
+    """본문에 소스코드(```)·표(|) 블록이 있으면 True(사람 타이핑 불가 → API 렌더). 인용구·구분선은 제외."""
     for s in se_text.get("sections", []):
         for ln in (s.get("body", "") or "").split("\n"):
             if _RICH_LINE_RE.match(ln.strip()):
@@ -673,6 +675,45 @@ def focus_body_editor(page, run_dir: str = None) -> bool:
     return ok
 
 
+def insert_divider_ui(page):
+    """구분선 삽입 — 툴바 버튼(명령). setDocumentData 를 안 쓰므로 앞뒤 텍스트 스타일 보존."""
+    dismiss_editor_popup(page)
+    try:
+        page.locator("button[data-name='horizontal-line']").first.click(timeout=3000)
+        time.sleep(0.7)
+        dismiss_editor_popup(page)
+        time.sleep(0.3)
+    except Exception as e:
+        log(f"  구분선 삽입 실패(무해): {str(e)[:50]}")
+
+
+def insert_quote_ui(page, quote_lines: list):
+    """인용구 삽입 — 툴바 버튼(명령) 후 내부에 각 줄 타이핑(굵게/이탤릭 포함), 인용구 밖으로 이탈."""
+    dismiss_editor_popup(page)
+    try:
+        page.locator("button[data-name='quotation']").first.click(timeout=3000)
+        time.sleep(0.7)
+        dismiss_editor_popup(page)
+        time.sleep(0.3)
+        for k, ql in enumerate(quote_lines):
+            if k > 0:
+                page.keyboard.press("Enter")
+                time.sleep(_rand(0.1, 0.2))
+            human_type_rich(page, ql)
+        # 인용구 밖으로 — 아래 화살표로 다음 본문 문단으로 이동(없으면 SE 가 새 문단 생성).
+        time.sleep(0.2)
+        page.keyboard.press("ArrowDown")
+        time.sleep(0.2)
+        page.keyboard.press("End")
+        time.sleep(0.1)
+    except Exception as e:
+        log(f"  인용구 삽입 실패(무해): {str(e)[:50]}")
+        # 실패 시 평문으로라도 남기기
+        for ql in quote_lines:
+            human_type_rich(page, ql)
+            page.keyboard.press("Enter")
+
+
 def toggle_image_ai_ui(page):
     """업로드 직후 선택된 이미지의 'AI 활용 설정' 토글 ON(UI 명령 — setDocumentData 는 스타일 제거하므로)."""
     try:
@@ -764,12 +805,37 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
             page.keyboard.press("ControlOrMeta+b")
             time.sleep(0.12)
             headings.append({"text": heading, "level": level})
-        for line in body.split("\n"):
-            line = line.strip()
+        body_lines = body.split("\n")
+        k = 0
+        while k < len(body_lines):
+            line = body_lines[k].strip()
             if not line:
+                k += 1
                 continue
+            # 구분선(---) — 툴바 명령 삽입.
+            if re.match(r"^(?:-{3,}|\*{3,}|_{3,})$", line):
+                insert_divider_ui(page)
+                first_block = True
+                k += 1
+                continue
+            # 인용구(연속된 >) — 툴바 명령 삽입 후 내부 타이핑.
+            mq = re.match(r"^>\s?(.*)$", line)
+            if mq:
+                qlines = [mq.group(1)]
+                k += 1
+                while k < len(body_lines):
+                    m2 = re.match(r"^>\s?(.*)$", body_lines[k].strip())
+                    if not m2:
+                        break
+                    qlines.append(m2.group(1))
+                    k += 1
+                insert_quote_ui(page, qlines)
+                first_block = True
+                continue
+            # 일반 문단
             newline_before()
-            human_type_rich(page, line)  # 굵게(**) 반영
+            human_type_rich(page, line)  # 굵게·이탤릭 반영
+            k += 1
         for slot in after_map.get(i, []):
             newline_before()  # 직전이 이미지면(first_block) Enter 생략 → 이미지 사이 빈 문단 방지
             insert_image(slot)
@@ -1200,10 +1266,13 @@ def write_post(
     os.makedirs(screenshot_dir, exist_ok=True)
     screenshot_path = os.path.join(screenshot_dir, "draft_saved.png")
     try:
-        page.screenshot(path=screenshot_path)
+        page.screenshot(path=screenshot_path, full_page=True)  # 전체 글 확인용(스타일·구조 검증)
         log(f"  스크린샷 저장: {screenshot_path}")
     except Exception:
-        screenshot_path = None
+        try:
+            page.screenshot(path=screenshot_path)
+        except Exception:
+            screenshot_path = None
 
     draft_url = page.url
     status = "PARTIAL" if issues else "DRAFT_SAVED"
