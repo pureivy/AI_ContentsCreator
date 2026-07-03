@@ -23,22 +23,32 @@ from datetime import datetime
 from pathlib import Path
 
 
-# ── 굵게(**...**) 파서 — API·사람 경로 공용 ─────────────────────────────────
-_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+# ── 인라인 서식 파서(**굵게**, *이탤릭*/_이탤릭_) — API·사람 경로 공용 ──────────
+_INLINE_RE = re.compile(r"\*\*(.+?)\*\*|\*(.+?)\*|_(.+?)_")
+
+
+def parse_inline_segments(text: str) -> list:
+    """'a **b** *c* d' → [(seg, bold, italic), ...]. 마커 없으면 [(text, False, False)]."""
+    segs = []
+    i = 0
+    for m in _INLINE_RE.finditer(text):
+        if m.start() > i:
+            segs.append((text[i:m.start()], False, False))
+        if m.group(1) is not None:
+            segs.append((m.group(1), True, False))    # **굵게**
+        elif m.group(2) is not None:
+            segs.append((m.group(2), False, True))     # *이탤릭*
+        else:
+            segs.append((m.group(3), False, True))     # _이탤릭_
+        i = m.end()
+    if i < len(text):
+        segs.append((text[i:], False, False))
+    return segs or [(text, False, False)]
 
 
 def parse_bold_segments(text: str) -> list:
-    """'a **b** c' → [('a ',False),('b',True),(' c',False)]. 굵게 마커 없으면 [(text,False)]."""
-    segs = []
-    i = 0
-    for m in _BOLD_RE.finditer(text):
-        if m.start() > i:
-            segs.append((text[i:m.start()], False))
-        segs.append((m.group(1), True))
-        i = m.end()
-    if i < len(text):
-        segs.append((text[i:], False))
-    return segs or [(text, False)]
+    """하위호환 — (seg, bold) 형태(이탤릭 무시)."""
+    return [(s, b) for s, b, _ in parse_inline_segments(text)]
 
 
 # ── 경로 설정 ─────────────────────────────────────────────────────────────
@@ -356,11 +366,17 @@ def handle_draft_popup(page):
         log(f"  [임시저장 팝업] {result}")
 
 
+# 본문 기본 글자 크기 — 네이버 블로그 가독성 표준(16pt). 소제목은 make_heading_para 가 별도.
+BODY_FONT_PT = "16pt"
+
+
 # ── SE ONE 문서 데이터 변환 ────────────────────────────────────────────────
-def make_text_node(value: str, bold: bool = False) -> dict:
-    span_style = "font-size:14pt;"
+def make_text_node(value: str, bold: bool = False, italic: bool = False) -> dict:
+    span_style = f"font-size:{BODY_FONT_PT};"
     if bold:
         span_style += "font-weight:bold;"
+    if italic:
+        span_style += "font-style:italic;"
     return {
         "@ctype":    "textNode",
         "id":        uid(),
@@ -385,8 +401,9 @@ def make_heading_para(text: str, level: str = "HEADING1") -> dict:
 
 
 def make_body_para(text: str) -> dict:
-    # 굵게(**...**) 세그먼트를 각각 textNode 로 — 굵은 구간은 font-weight:bold.
-    nodes = [make_text_node(seg, bold=b) for seg, b in parse_bold_segments(text) if seg]
+    # 굵게(**)·이탤릭(*·_) 세그먼트를 각각 textNode 로 — 서식이 실제 SE 스타일로 반영.
+    nodes = [make_text_node(seg, bold=b, italic=it)
+             for seg, b, it in parse_inline_segments(text) if seg]
     return {
         "@ctype": "paragraph",
         "id":     uid(),
@@ -571,18 +588,20 @@ def human_type(page, text: str):
 
 
 def human_type_rich(page, text: str):
-    """굵게(**...**)를 사람처럼 반영 — 굵은 구간 앞뒤로 굵게 단축키(Cmd/Ctrl+B) 토글 후 타이핑.
-    Chrome 이 가로채는 숫자 단축키와 달리 B 는 편집영역 굵게 토글로 동작한다."""
-    for seg, bold in parse_bold_segments(text):
+    """굵게(**)·이탤릭(*·_)을 사람처럼 반영 — 구간 앞뒤로 굵게/이탤릭 단축키(Cmd/Ctrl+B, Cmd/Ctrl+I)
+    토글 후 타이핑. 숫자 단축키와 달리 B·I 는 Chrome 이 안 가로채고 편집영역 서식 토글로 동작한다."""
+    for seg, bold, italic in parse_inline_segments(text):
         if not seg:
             continue
         if bold:
-            page.keyboard.press("ControlOrMeta+b")
-            time.sleep(_rand(0.05, 0.15))
+            page.keyboard.press("ControlOrMeta+b"); time.sleep(_rand(0.05, 0.12))
+        if italic:
+            page.keyboard.press("ControlOrMeta+i"); time.sleep(_rand(0.05, 0.12))
         human_type(page, seg)
+        if italic:
+            page.keyboard.press("ControlOrMeta+i"); time.sleep(_rand(0.05, 0.12))
         if bold:
-            page.keyboard.press("ControlOrMeta+b")  # 굵게 해제
-            time.sleep(_rand(0.05, 0.15))
+            page.keyboard.press("ControlOrMeta+b"); time.sleep(_rand(0.05, 0.12))
 
 
 def _active_info(page) -> dict:
