@@ -793,6 +793,14 @@ export async function publishPiece(id: string, url: string): Promise<{ ok: boole
     return { ok: true };
   } catch { return { ok: false, error: "network" }; }
 }
+// 카드 삭제(캘린더·검토·성과 탭) — 서버는 실행 중 런/잡이 있으면 409 로 거절한다.
+export async function deletePiece(id: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`/pieces/${id}`, { method: "DELETE" });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return { ok: true };
+  } catch { return { ok: false, error: "network" }; }
+}
 export async function postPieceMetrics(id: string, body: unknown): Promise<{ ok: boolean; reinforced?: boolean }> {
   try {
     const r = await fetch(`/pieces/${id}/metrics`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, PieceInfo, PieceDraftResp } from "../api";
+import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, deletePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, PieceInfo, PieceDraftResp } from "../api";
 
 // 초안 검토·발행·성과 입력 — 크로스-런 REST(폴링/온디맨드). 본문 편집은 컴포넌트-로컬(store 변이 금지).
 const REVIEWABLE = new Set(["ready", "published", "measured", "reflected"]);
@@ -47,6 +47,17 @@ export default function DraftReview() {
     () => pieces.filter((p) => REVIEWABLE.has(p.stage) && p.runId).sort((a, b) => b.updatedTs.localeCompare(a.updatedTs)),
     [pieces],
   );
+
+  // 카드 삭제 — 선택 해제 후 목록 갱신(서버가 실행 중 런/잡이 있으면 409 로 거절).
+  const doDelete = async () => {
+    if (!sel) return;
+    const title = data?.piece.title ?? sel;
+    if (!confirm(`"${title}" 카드를 삭제할까요?\n(산출물 파일은 남고 카드만 제거됩니다)`)) return;
+    const r = await deletePiece(sel);
+    if (!r.ok) { setMsg(r.error || "삭제 실패"); return; }
+    selRef.current = null; setSel(null); setData(null); setMsg("");
+    load();
+  };
 
   const open = async (id: string) => {
     setSel(id); selRef.current = id;
@@ -217,10 +228,13 @@ export default function DraftReview() {
           {data && (
             <>
               <div className="review-section">
-                <div className="review-titlecands">
-                  {data.draft.titleCandidates.map((t, i) => (
-                    <div key={i} className={i === 0 ? "review-title-main" : "review-title-alt muted"}>{i === 0 ? "🏷 " : "· "}{t}</div>
-                  ))}
+                <div className="review-body-head">
+                  <div className="review-titlecands">
+                    {data.draft.titleCandidates.map((t, i) => (
+                      <div key={i} className={i === 0 ? "review-title-main" : "review-title-alt muted"}>{i === 0 ? "🏷 " : "· "}{t}</div>
+                    ))}
+                  </div>
+                  <button className="btn ghost" title="카드 삭제(산출물 파일은 남음)" onClick={doDelete}>🗑 삭제</button>
                 </div>
                 {data.draft.metaDescription && <p className="muted review-meta">{data.draft.metaDescription}</p>}
                 <div className="piece-card-meta">

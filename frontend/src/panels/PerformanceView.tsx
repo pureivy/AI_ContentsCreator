@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchPerformance, PerfData } from "../api";
+import { fetchPerformance, deletePiece, PerfData } from "../api";
 
 // 성과 대시보드 — 발행/측정된 글의 조회수·유입 키워드와 강화 학습(전략 EWMA)을 한눈에.
 const STAGE_LABEL: Record<string, string> = {
@@ -13,6 +13,13 @@ export default function PerformanceView() {
 
   const load = () => { setLoading(true); fetchPerformance().then((d) => { setData(d); setLoading(false); }); };
   useEffect(() => { load(); }, []);
+
+  // 카드(행) 삭제 — 성과 샘플 파일은 남고 목록에서만 제거(서버가 실행 중 런/잡이 있으면 거절).
+  const doDelete = async (id: string, title: string) => {
+    if (!confirm(`"${title}" 카드를 삭제할까요?\n(산출물·성과 파일은 남고 카드만 제거됩니다)`)) return;
+    const r = await deletePiece(id);
+    if (r.ok) load(); else alert(r.error || "삭제 실패");
+  };
 
   const s = data?.summary;
   const winners = data?.strategy.winners ?? [];
@@ -74,7 +81,7 @@ export default function PerformanceView() {
                   <thead>
                     <tr>
                       <th>제목</th><th>상태</th><th>조회수</th><th>체류</th>
-                      <th>유입 키워드(상위)</th><th>SEO</th><th>측정</th>
+                      <th>유입 키워드(상위)</th><th>SEO</th><th>측정</th><th></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -97,6 +104,7 @@ export default function PerformanceView() {
                         </td>
                         <td className="perf-r">{typeof p.seoScore === "number" ? p.seoScore : "—"}</td>
                         <td className="perf-r muted">{p.samples || "—"}</td>
+                        <td className="perf-r"><button className="btn ghost" title="카드 삭제" onClick={() => doDelete(p.id, p.title)}>🗑</button></td>
                       </tr>
                     ))}
                   </tbody>

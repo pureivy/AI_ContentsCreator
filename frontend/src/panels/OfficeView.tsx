@@ -142,6 +142,7 @@ function glyphFor(level?: string, id = "", title = ""): string {
   if (/(seo|키워드)/.test(k)) return "🔑";
   if (/(reviewer|팩트|리뷰)/.test(k)) return "🔎";
   if (/(perf|성과|분석)/.test(k)) return "📊";
+  if (/(발행|publish)/.test(k)) return "📮"; // content 규칙보다 먼저(content_mN id 가로채임 방지)
   if (/(content|작가|카피)/.test(k)) return "✍️";
   if (level === "lead") return "🧑‍💼";
   return "🧑‍💻";

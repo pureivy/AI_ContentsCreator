@@ -32,6 +32,7 @@ function glyph(level: string, id: string, title: string): string {
   if (/(seo|키워드|strategist)/.test(k)) return "🔑";
   if (/(트렌드|trend|리서처)/.test(k)) return "📈";
   if (/(성과|분석|analyst|perf)/.test(k)) return "📊";
+  if (/(발행|publish)/.test(k)) return "📮"; // content 규칙보다 먼저(content_mN id 가로채임 방지)
   if (/(작가|카피|content_lead|copywriter)/.test(k)) return "✍️";
   if (level === "lead") return "🧑‍💼";
   return "🧑‍💻";

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchPieces, createPiece, runPiece, PieceInfo, PieceStage } from "../api";
+import { fetchPieces, createPiece, runPiece, deletePiece, PieceInfo, PieceStage } from "../api";
 
 // 지금 실행 가능한(초안이 아직 없는) 스테이지 — idea·research·draft·error.
 const RUNNABLE = new Set<PieceStage>(["idea", "research", "draft", "error"]);
@@ -27,7 +27,7 @@ function fmtWhen(iso: string): string {
   return `${Math.round(h / 24)}일 전`;
 }
 
-function PieceCard({ p, onRun, running }: { p: PieceInfo; onRun: (id: string) => void; running: boolean }) {
+function PieceCard({ p, onRun, onDelete, running }: { p: PieceInfo; onRun: (id: string) => void; onDelete: (id: string) => void; running: boolean }) {
   return (
     <div className="piece-card">
       <div className="piece-card-title">{p.title}</div>
@@ -41,11 +41,14 @@ function PieceCard({ p, onRun, running }: { p: PieceInfo; onRun: (id: string) =>
       )}
       <div className="piece-card-foot">
         <span className="muted">{fmtWhen(p.updatedTs)}{p.errors ? ` · 실패 ${p.errors}` : ""}</span>
-        {RUNNABLE.has(p.stage) && (
-          <button className="btn ghost piece-run-btn" disabled={running} onClick={() => onRun(p.id)}>
-            {running ? "실행 중…" : "▶ 실행"}
-          </button>
-        )}
+        <span>
+          {RUNNABLE.has(p.stage) && (
+            <button className="btn ghost piece-run-btn" disabled={running} onClick={() => onRun(p.id)}>
+              {running ? "실행 중…" : "▶ 실행"}
+            </button>
+          )}
+          <button className="btn ghost piece-run-btn" title="카드 삭제" disabled={running} onClick={() => onDelete(p.id)}>🗑</button>
+        </span>
       </div>
     </div>
   );
@@ -78,6 +81,13 @@ export default function ContentCalendar() {
     const r = await runPiece(id);
     setRunningId(null);
     if (r.ok) load(); else alert(r.error || "실행 실패");
+  };
+
+  const doDelete = async (id: string) => {
+    const p = pieces.find((x) => x.id === id);
+    if (!confirm(`"${p?.title ?? id}" 카드를 삭제할까요?\n(산출물 파일은 남고 카드만 제거됩니다)`)) return;
+    const r = await deletePiece(id);
+    if (r.ok) load(); else alert(r.error || "삭제 실패");
   };
 
   const addIdea = async () => {
@@ -127,7 +137,7 @@ export default function ContentCalendar() {
               </div>
               <div className="calendar-col-body">
                 {items.length === 0 && <div className="muted calendar-empty">—</div>}
-                {items.map((p) => <PieceCard key={p.id} p={p} onRun={doRun} running={runningId === p.id} />)}
+                {items.map((p) => <PieceCard key={p.id} p={p} onRun={doRun} onDelete={doDelete} running={runningId === p.id} />)}
               </div>
             </div>
           );
@@ -137,7 +147,7 @@ export default function ContentCalendar() {
       {errors.length > 0 && (
         <div className="calendar-errors">
           <h3>⚠️ 실패({errors.length}) — 자율 재시도 한도 초과</h3>
-          <div className="calendar-col-body">{errors.map((p) => <PieceCard key={p.id} p={p} onRun={doRun} running={runningId === p.id} />)}</div>
+          <div className="calendar-col-body">{errors.map((p) => <PieceCard key={p.id} p={p} onRun={doRun} onDelete={doDelete} running={runningId === p.id} />)}</div>
         </div>
       )}
     </div>

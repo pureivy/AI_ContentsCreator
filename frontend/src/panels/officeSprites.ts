@@ -23,6 +23,9 @@ export function spriteFor(id = "", level = "", title = ""): string | null {
   if (ROLE_SPRITE[id]) return ROLE_SPRITE[id];
   const k = (id + " " + title).toLowerCase();
   if (level === "ceo" || /편집장|총괄|editor|chief/.test(k)) return "main";
+  // 발행 담당(배도윤, 여) — content 규칙보다 먼저: 자동 생성 멤버 id(content_mN)에 'content' 가 들어가
+  //   작가(blogger)와 같은 아바타로 떨어지는 것 방지(실사고: 배도윤·문하은 동일 아바타).
+  if (/발행|퍼블리|publish/.test(k)) return "critic-fact";
   if (/작가|카피|content|writer|copy/.test(k)) return "blogger";
   if (/성과|분석|analyst|perf/.test(k)) return "analyst";
   if (/트렌드|trend/.test(k)) return "cardnews";                              // 트렌드(여) — research 규칙보다 먼저(trend_researcher 가로채임 방지)
