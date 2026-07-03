@@ -395,28 +395,145 @@ def make_text_comp(paragraphs: list) -> dict:
     }
 
 
+# ── 리치 컴포넌트 빌더 (SE ONE 실측 스키마 기반) ─────────────────────────────
+def make_quotation(paragraphs: list, layout: str = "line") -> dict:
+    """인용구 — layout: default|line|corner|postit|bubble. value=문단들, source=출처(선택)."""
+    return {"@ctype": "quotation", "id": uid(), "layout": layout,
+            "value": paragraphs or [make_body_para("")], "source": None}
+
+
+def make_divider() -> dict:
+    """구분선(horizontalLine)."""
+    return {"@ctype": "horizontalLine", "id": uid(), "layout": "default", "align": "left"}
+
+
+def make_code(code_text: str) -> dict:
+    """소스코드 — codeContents 에 코드 문자열."""
+    return {"@ctype": "code", "id": uid(), "layout": "default",
+            "fontSizeCode": "fs13", "codeContents": code_text, "align": "left"}
+
+
+def make_table(rows: list) -> dict:
+    """표 — rows: [[셀텍스트,...], ...] (첫 행=헤더). 셀 value 는 text 컴포넌트."""
+    ncol = max((len(r) for r in rows), default=1) or 1
+    w = round(100.0 / ncol, 2)
+
+    def cell(text: str) -> dict:
+        text = (text or "").strip()
+        # 셀 value 는 문단(paragraph) 배열 — 빈 셀은 null(SE 실측 형태).
+        return {"@ctype": "tableCell", "id": uid(), "colSpan": 1, "rowSpan": 1,
+                "width": w, "height": 43,
+                "value": [make_body_para(text)] if text else None}
+
+    trows = [{"@ctype": "tableRow",
+              "cells": [cell(r[i] if i < len(r) else "") for i in range(ncol)]}
+             for r in rows]
+    return {"@ctype": "table", "id": uid(), "layout": "default", "align": "left",
+            "width": 100, "rows": trows, "columnCount": ncol, "borderStyleName": "thinLine"}
+
+
+_TABLE_SEP_RE = re.compile(r"^:?-{2,}:?$")
+_RICH_LINE_RE = re.compile(r"^(?:```|\||>\s|-{3,}$|\*{3,}$|_{3,}$)")
+
+
+def _has_rich_blocks(se_text: dict) -> bool:
+    """본문에 인용구(>)·구분선(---)·소스코드(```)·표(|) 블록이 있으면 True(사람 타이핑 대신 API 렌더)."""
+    for s in se_text.get("sections", []):
+        for ln in (s.get("body", "") or "").split("\n"):
+            if _RICH_LINE_RE.match(ln.strip()):
+                return True
+    return False
+
+
+def parse_body_to_comps(body: str) -> list:
+    """본문 마크다운을 SE 컴포넌트 목록으로 파싱 — 문단(굵게)·인용구(>)·구분선(---)·소스코드(```)·표(|).
+    글 성격에 맞게 작가가 넣은 마크업이 실제 SE 리치 컴포넌트가 된다."""
+    comps: list = []
+    para_buf: list = []
+    quote_buf: list = []
+    table_buf: list = []
+
+    def flush_paras():
+        if para_buf:
+            comps.append(make_text_comp(list(para_buf)))
+            para_buf.clear()
+
+    def flush_quote():
+        if quote_buf:
+            comps.append(make_quotation(list(quote_buf)))
+            quote_buf.clear()
+
+    def flush_table():
+        if table_buf:
+            rows = [r for r in table_buf
+                    if not (r and all(_TABLE_SEP_RE.match(c.strip()) for c in r if c.strip()))]
+            if rows:
+                comps.append(make_table(rows))
+            table_buf.clear()
+
+    lines = body.split("\n")
+    i = 0
+    while i < len(lines):
+        raw = lines[i].rstrip()
+        s = raw.strip()
+        # 소스코드 펜스
+        if s.startswith("```"):
+            flush_paras(); flush_quote(); flush_table()
+            code_lines = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            comps.append(make_code("\n".join(code_lines)))
+            i += 1
+            continue
+        # 표 행
+        if s.startswith("|") and s.count("|") >= 2:
+            flush_paras(); flush_quote()
+            table_buf.append([c.strip() for c in s.strip("|").split("|")])
+            i += 1
+            continue
+        flush_table()
+        # 구분선
+        if re.match(r"^(?:-{3,}|\*{3,}|_{3,})$", s):
+            flush_paras(); flush_quote()
+            comps.append(make_divider())
+            i += 1
+            continue
+        # 인용구
+        q = re.match(r"^>\s?(.*)$", s)
+        if q:
+            flush_paras()
+            quote_buf.append(make_body_para(q.group(1)))
+            i += 1
+            continue
+        flush_quote()
+        if s:
+            para_buf.append(make_body_para(s))
+        i += 1
+    flush_paras(); flush_quote(); flush_table()
+    return comps
+
+
 def build_document_components(smarteditor_text: dict) -> list:
     """
-    smarteditor_text의 sections를 SE ONE 컴포넌트 목록으로 변환.
-    이미지는 업로드 후 image_comps로 별도 삽입.
-    heading_level: "HEADING1"(H2 상당, 기본) | "HEADING2"(H3 상당) — 어댑터(smarteditor.ts)가 지정.
+    smarteditor_text의 sections를 '섹션별 컴포넌트 그룹' 목록으로 변환(그룹당 여러 SE 컴포넌트 가능 —
+    소제목 text + 인용구/구분선/코드/표/본문 text). 이미지는 그룹 뒤에 삽입돼 위치 정합이 유지된다.
+    반환: List[List[component]] — 각 원소가 한 섹션의 컴포넌트들.
+    heading_level: "HEADING1"(H2) | "HEADING2"(H3).
     """
     sections = smarteditor_text.get("sections", [])
-    comps = []
+    groups: list = []
     for section in sections:
         heading = section.get("heading", "")
         body    = section.get("body", "")
         level   = section.get("heading_level", "HEADING1")
-        paras = []
+        group: list = []
         if heading:
-            paras.append(make_heading_para(heading, level))
-        for line in body.split("\n"):
-            line = line.strip()
-            if line:
-                paras.append(make_body_para(line))
-        if paras:
-            comps.append(make_text_comp(paras))
-    return comps
+            group.append(make_text_comp([make_heading_para(heading, level)]))
+        group.extend(parse_body_to_comps(body))
+        groups.append(group)
+    return groups
 
 
 # ── 사람처럼 입력 (봇 탐지 회피 + 자연스러운 작성) ─────────────────────────────
@@ -726,7 +843,12 @@ def write_post(
     handle_draft_popup(page)
     time.sleep(1.5)
 
+
     human = human_typing_enabled()
+    # 리치 블록(인용구·구분선·코드·표)은 키 입력으로 재현 불가 → 그런 글은 SE 문서 API 로 렌더(리치 우선).
+    if human and _has_rich_blocks(se_text):
+        human = False
+        log("  리치 컴포넌트(인용구/구분선/코드/표) 포함 — 충실 렌더 위해 SE 문서 API 경로 사용")
     log(f"  입력 모드: {'사람처럼 타이핑' if human else 'API 일괄(setDocumentData)'}")
 
     # ── STEP 3: 제목 입력 ─────────────────────────────────────────────────
@@ -858,8 +980,8 @@ def write_post(
 
         # ── STEP 6: 본문 컴포넌트 조립 ────────────────────────────────────────
         log("\n[STEP 6] 본문 컴포넌트 조립")
-        text_comps = build_document_components(se_text)
-        log(f"  텍스트 섹션 {len(text_comps)}개")
+        groups = build_document_components(se_text)  # 섹션별 컴포넌트 그룹(리치 컴포넌트 포함)
+        log(f"  섹션 {len(groups)}개 · 컴포넌트 {sum(len(g) for g in groups)}개")
 
         # 이미지 삽입 위치에 따라 교차 배치
         # image_positions: [{"after_section": 0, "image_index": 0}, ...]
@@ -884,8 +1006,8 @@ def write_post(
             comp = comp_for(img_idx)
             if comp is not None:
                 final_comps.append(comp)
-        for i, tc in enumerate(text_comps):
-            final_comps.append(tc)
+        for i, group in enumerate(groups):
+            final_comps.extend(group)  # 섹션 그룹의 모든 컴포넌트(소제목·본문·인용구·구분선·코드·표)
             for img_idx in img_pos_map.get(i, []):
                 comp = comp_for(img_idx)
                 if comp is not None:

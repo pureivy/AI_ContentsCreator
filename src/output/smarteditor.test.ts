@@ -45,12 +45,12 @@ describe('draftToFinalContent — 기본 구조', () => {
     ]);
   });
 
-  it('본문은 굵게(**) 마커 보존·리스트 표기 유지·구분선 생략·인용 마커 제거', () => {
+  it('본문은 굵게(**)·인용(>)·구분선(---) 등 리치 마크다운을 원문 그대로 보존', () => {
     const r = draftToFinalContent(mkDraft({
       bodyMarkdown: '이건 **아주** 중요.\n- 항목 하나\n1. 순서 항목\n---\n> 인용문입니다.',
     }));
     expect(r.smarteditor_text.sections).toEqual([
-      { heading: '', body: '이건 **아주** 중요.\n- 항목 하나\n1. 순서 항목\n인용문입니다.' },
+      { heading: '', body: '이건 **아주** 중요.\n- 항목 하나\n1. 순서 항목\n---\n> 인용문입니다.' },
     ]);
   });
 

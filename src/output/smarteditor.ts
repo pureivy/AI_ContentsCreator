@@ -87,11 +87,9 @@ export function draftToFinalContent(d: BlogDraft): SeFinalContent {
       }
       continue;
     }
-    if (/^\s*(?:-{3,}|\*{3,})\s*$/.test(line)) continue; // 구분선 — SE 대응 요소 없음(생략)
-    let text = line.trim();
-    const q = text.match(/^>\s?(.*)$/);
-    if (q) text = q[1]!; // 인용 — 마커만 걷고 본문 유지
-    text = cleanBody(text); // 굵게(**) 마커 보존 — python 이 실제 굵은 글씨로 렌더
+    // 구분선(---)·인용(>)·소스코드(```)·표(|)는 원문 마크다운 그대로 보존 — python(parse_body_to_comps)이
+    // SE 리치 컴포넌트로 렌더한다. [IMAGE:] 만 제거하고 굵게(**)·리치 마커는 모두 유지.
+    const text = cleanBody(line.trim());
     if (text) lines.push(text);
   }
   flush();
