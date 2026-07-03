@@ -839,6 +839,23 @@ export async function fetchCollectStatus(id: string): Promise<CollectStatus | nu
   try { const r = await fetch(`/pieces/${id}/collect-metrics`); return r.ok ? await r.json() : null; }
   catch { return null; }
 }
+// 성과 대시보드 — 발행/측정된 piece 성과 + 전략(강화 EWMA) 집계.
+export interface PerfRow {
+  id: string; title: string; stage: PieceStage; keyword?: string; subNiche?: string;
+  publishedUrl?: string; seoScore?: number;
+  views: number | null; dwellSec?: number | null;
+  inflow: Array<{ keyword: string; count: number; rank?: number }>;
+  measuredAt?: string | null; source?: string; samples: number;
+}
+export interface PerfData {
+  strategy: { winners: Array<{ keyword: string; score: number; samples: number }>; subNiches: Record<string, number>; measuredPieces: number };
+  pieces: PerfRow[];
+  summary: { count: number; measured: number; totalViews: number };
+}
+export async function fetchPerformance(): Promise<PerfData | null> {
+  try { const r = await fetch("/performance"); return r.ok ? await r.json() : null; }
+  catch { return null; }
+}
 
 // --- 지식 주입: 파일(들)을 선택한 에이전트(들)에 '우선 신뢰 지식'으로 주입 ---
 export interface InjectResult {

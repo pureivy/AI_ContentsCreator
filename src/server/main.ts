@@ -41,7 +41,8 @@ import { startAutoCycle, proposeContentIdeas, startDaily } from '../autonomy/sch
 import { pieceStore, selectResumablePiece } from '../content/pieces';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
-import { parseManualMetrics, readMetrics } from '../analytics/performance';
+import { parseManualMetrics, readMetrics, latestMetrics } from '../analytics/performance';
+import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
 import { buildBriefing } from '../autonomy/briefing';
@@ -701,6 +702,36 @@ app.post('/pieces/:id/collect-metrics', pieceCollectHandler);
 app.post('/api/pieces/:id/collect-metrics', pieceCollectHandler);
 app.get('/pieces/:id/collect-metrics', pieceCollectStatusHandler);
 app.get('/api/pieces/:id/collect-metrics', pieceCollectStatusHandler);
+
+// 성과 집계 — 발행/측정된 piece 들의 최신 성과치 + 전략(강화 EWMA) 요약을 한 번에 반환(성과 대시보드용).
+function performanceHandler(c: Context): Response {
+  const rows = pieceStore().list()
+    .filter((p) => !!p.publishedUrl || ['published', 'measured', 'reflected'].includes(p.stage))
+    .map((p) => {
+      const m = latestMetrics(p.id);
+      return {
+        id: p.id, title: p.title, stage: p.stage, keyword: p.keyword, subNiche: p.subNiche,
+        publishedUrl: p.publishedUrl, seoScore: p.seoScore,
+        views: m ? m.views : null, dwellSec: m?.dwellSec ?? null,
+        inflow: m?.searchInflow ?? [], measuredAt: m?.measuredAt ?? null,
+        source: m?.source, samples: readMetrics(p.id).length,
+      };
+    })
+    .sort((a, b) => (b.views ?? -1) - (a.views ?? -1));
+  const s = readStrategy();
+  const measured = rows.filter((r) => r.views != null);
+  return c.json({
+    strategy: { winners: s.winners.slice(0, 20), subNiches: s.subNiches, measuredPieces: s.measuredPieces },
+    pieces: rows,
+    summary: {
+      count: rows.length,
+      measured: measured.length,
+      totalViews: measured.reduce((sum, r) => sum + (r.views ?? 0), 0),
+    },
+  });
+}
+app.get('/performance', performanceHandler);
+app.get('/api/performance', performanceHandler);
 
 // 실제 네이버 수집기 등록 — 일일 성과 동기화(syncPerformance)가 publishedUrl 있는 piece 를 자동 수집.
 // measure 는 fail-open(미로그인·데이터 없음 → null) — 루프를 깨지 않는다. 수동 POST /metrics 는 계속 유효.
