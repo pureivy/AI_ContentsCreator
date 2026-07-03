@@ -65,9 +65,6 @@ function CardRow({ card, onDelete }: { card: CardNewsInfo; onDelete: (id: string
         {card.planner && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Avatar id="cardnews_planner" glyph="🗂" size={18} head /> 기획 {card.planner}</span>}
         {card.designer && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Avatar id="cardnews_designer" glyph="🎨" size={18} head /> 디자인 {card.designer}</span>}
         {running && <span>… 작업 중(자동 갱신)</span>}
-        {card.stage === "ready" && typeof card.bgFallbacks === "number" && card.bgFallbacks > 0 && (
-          <span title="이미지 생성 실패분은 그라데이션 배경으로 대체됨">배경 폴백 {card.bgFallbacks}장</span>
-        )}
       </div>
       {card.stage === "error" && <p className="muted" style={{ color: "var(--con)", marginTop: 6 }}>{card.error || "알 수 없는 실패"}</p>}
       {card.stage === "ready" && (
@@ -143,7 +140,8 @@ export default function CardNewsView() {
         <h1>🃏 카드뉴스</h1>
         <p className="apikeys-sub">
           카드뉴스팀(기획·디자인)이 주제 또는 블로그 초안에서 인스타그램용 슬라이드를 만듭니다 —
-          배경은 이미지 생성, 한글 텍스트는 코드가 얹어 오타가 없습니다. 발행은 없고 다운로드까지만(총 {cards.length}건).
+          gpt-image-2가 텍스트까지 포함한 완성 카드를 직접 그리고, 비전 QA가 한글 오타를 검수해 문제 장만 재생성합니다.
+          발행은 없고 다운로드까지만(총 {cards.length}건).
         </p>
       </div>
 

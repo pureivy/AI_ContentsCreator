@@ -142,13 +142,14 @@ export async function runImageGenerate(roleId: string, arg: string, signal?: Abo
  */
 export async function generateImagesForDraft(
   draftJsonPath: string, outDir: string, manifestPath: string,
-  opts: { businessType?: string; imageStyle?: string; topic?: string; limit?: number; timeoutMs?: number; refImages?: readonly string[] } = {},
+  opts: { businessType?: string; imageStyle?: string; topic?: string; limit?: number; timeoutMs?: number; refImages?: readonly string[]; allowText?: boolean } = {},
   signal?: AbortSignal,
 ): Promise<BlogSkillResult> {
   const limit = Math.min(Math.max(1, opts.limit ?? 4), 8);
   const args = ['--draft', draftJsonPath, '--output-dir', outDir, '--manifest', manifestPath,
     '--image-style', opts.imageStyle ?? 'photorealistic',
     '--limit', String(limit)];
+  if (opts.allowText) args.push('--allow-text'); // 카드뉴스 완성 카드 — 명시 문구 렌더링 허용
   if (opts.businessType) args.push('--business-type', opts.businessType);
   if (opts.topic) args.push('--topic', opts.topic);
   // 레퍼런스 참조 생성(images.edit) — 존재 파일만 전달(캡 4장은 스크립트가 재검증). 스타일 트렌드 반영용.

@@ -87,7 +87,7 @@ def load_slots(draft: str, content: str, limit: int) -> list[dict]:
     return slots[: max(0, limit)] if limit else slots
 
 
-def build_prompt(slot: dict, style: str, business_type: str, topic: str) -> str:
+def build_prompt(slot: dict, style: str, business_type: str, topic: str, allow_text: bool = False) -> str:
     style_desc = STYLE_PRESETS.get(style, STYLE_PRESETS[DEFAULT_STYLE])
     parts = [slot["prompt"]]
     if business_type:
@@ -95,7 +95,11 @@ def build_prompt(slot: dict, style: str, business_type: str, topic: str) -> str:
     if topic:
         parts.append(f"주제/가게: {topic}")
     parts.append(style_desc)
-    parts.append("no text, no watermark, no logo")  # 블로그 이미지엔 글자 없이
+    if allow_text:
+        # 카드뉴스 완성 카드 — 슬롯 프롬프트에 명시된 한국어 문구는 렌더링, 그 외 잡글자는 차단.
+        parts.append("프롬프트에 명시된 한국어 문구만 정확히 그 표기 그대로 렌더링, 그 외 글자·워터마크·로고 금지")
+    else:
+        parts.append("no text, no watermark, no logo")  # 블로그 이미지엔 글자 없이
     return ", ".join(parts)
 
 
@@ -113,6 +117,8 @@ def main() -> int:
     ap.add_argument("--model", default=os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-2"))
     ap.add_argument("--ref-images", nargs="*", default=[],
                     help="참조 이미지 경로들 — 있으면 images.edit 로 참조 스타일 기반 생성(최대 4장 사용)")
+    ap.add_argument("--allow-text", action="store_true",
+                    help="프롬프트에 명시된 문구의 이미지 내 렌더링 허용(카드뉴스 완성 카드) — 기본은 no-text")
     ap.add_argument("--dry-run", action="store_true", help="API 미호출(키 불필요) — 매니페스트만 계획대로 기록")
     args = ap.parse_args()
 
@@ -147,7 +153,7 @@ def main() -> int:
 
     images = []
     for i, slot in enumerate(slots):
-        prompt = build_prompt(slot, args.image_style, args.business_type, args.topic)
+        prompt = build_prompt(slot, args.image_style, args.business_type, args.topic, args.allow_text)
         filename = f"blog-image-{i + 1:02d}.png"
         file_path = out_dir / filename
         entry = {
