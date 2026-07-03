@@ -673,6 +673,24 @@ def focus_body_editor(page, run_dir: str = None) -> bool:
     return ok
 
 
+def toggle_image_ai_ui(page):
+    """업로드 직후 선택된 이미지의 'AI 활용 설정' 토글 ON(UI 명령 — setDocumentData 는 스타일 제거하므로)."""
+    try:
+        page.evaluate("""() => {
+            const els = [...document.querySelectorAll('*')].filter(e =>
+                e.offsetParent !== null && (e.textContent||'').replace(/\\s/g,'').includes('AI활용'));
+            const target = els.sort((a,b)=>(a.textContent||'').length-(b.textContent||'').length)[0];
+            if (!target) return;
+            const inp = (target.closest('label')||target).querySelector?.('input[type=checkbox]')
+                || target.parentElement?.querySelector?.('input[type=checkbox]');
+            if (inp) { if (!inp.checked) inp.click(); }
+            else { (target.closest('label,button,[role=switch]')||target).click(); }
+        }""")
+        time.sleep(0.4)
+    except Exception:
+        pass
+
+
 def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
     """
     본문을 '사람처럼' 입력한다 — 문단은 한 글자씩 타이핑하고 사이사이 Enter, 이미지는 해당 위치에서
@@ -708,6 +726,7 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
                 fc.value.set_files(str(img_path))
                 time.sleep(7)
                 upload_count[0] += 1
+                toggle_image_ai_ui(page)  # AI 활용 표시 ON(UI 토글 — 스타일 보존 위해 setDocumentData 대신)
                 dismiss_editor_popup(page)
                 time.sleep(_rand(0.5, 1.0))
                 return
@@ -738,7 +757,12 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
         level = section.get("heading_level", "HEADING1")
         if heading:
             newline_before()
+            # 소제목 = 굵게 ON → 타이핑 → 굵게 OFF(다음 문단으로 서식 상속 방지). 명령이라 저장본에 남는다.
+            page.keyboard.press("ControlOrMeta+b")
+            time.sleep(0.12)
             human_type(page, heading)
+            page.keyboard.press("ControlOrMeta+b")
+            time.sleep(0.12)
             headings.append({"text": heading, "level": level})
         for line in body.split("\n"):
             line = line.strip()
@@ -811,6 +835,7 @@ def bold_title_via_command(page) -> str:
             time.sleep(0.1)
             page.keyboard.press("ControlOrMeta+b")
             time.sleep(0.2)
+            page.keyboard.press("End")  # 선택 해제
             return "ok"
         except Exception:
             continue
@@ -918,12 +943,9 @@ def write_post(
             try:
                 headings, image_upload_count = type_body_human(page, se_text, images, issues)
                 log(f"  타이핑 완료 — 소제목 {len(headings)}개, 이미지 {image_upload_count}장")
-                style_result = apply_heading_styles(page, headings)
-                log(f"  제목 스타일 반영: {style_result}")
-                if isinstance(style_result, str) and style_result.startswith("error"):
-                    issues.append(f"제목 스타일 반영 실패: {style_result}")
+                # 소제목 굵게·이미지 AI 는 타이핑 중 '명령'으로 이미 적용됨. 여기서 setDocumentData 를 돌리면
+                # 그 스타일이 전부 제거되므로 절대 호출하지 않는다(대표사진 재조회만 read-only).
                 time.sleep(1.0)
-                # 대표사진 설정용 — 삽입된 이미지 컴포넌트 재조회
                 doc_after = page.evaluate("""() => {
                     const ds = window.SE?.launcher?._editors?.blogpc001?._documentService;
                     return ds ? ds.getDocumentData() : null;
@@ -1080,8 +1102,9 @@ def write_post(
     log(f"  [title-bold] {bold_title_via_command(page)}")
     time.sleep(0.3)
 
-    # ── 이미지 'AI 활용(생성) 이미지' 표시 ON — SE 이미지 컴포넌트 ai 필드 = true(사용자 요청). ──
-    if image_comps:
+    # ── 이미지 'AI 활용' 표시 ON — API 경로만 setDocumentData(ai:true). 사람 경로는 타이핑 중 UI 토글로
+    #    이미 처리했다(여기서 setDocumentData 를 돌리면 명령으로 준 굵게·소제목 스타일이 전부 제거됨). ──
+    if image_comps and not human:
         ai_result = set_images_ai(page)
         log(f"  [image-ai] AI 이미지 표시: {ai_result}")
         if ai_result.startswith("err"):
@@ -1114,8 +1137,9 @@ def write_post(
             except Exception:
                 continue
 
-    # ── STEP 9: 대표사진 설정 ────────────────────────────────────────────
-    if image_comps:
+    # ── STEP 9: 대표사진 설정 — API 경로만(setDocumentData 사용). 사람 경로는 스타일 보존을 위해
+    #    건너뛴다(SE 가 보통 첫 이미지를 대표로 자동 사용). ──
+    if image_comps and not human:
         log("\n[STEP 9] 대표사진 설정")
         set_representative_image(page)
         time.sleep(1)
