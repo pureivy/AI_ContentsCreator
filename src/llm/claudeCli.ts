@@ -101,7 +101,10 @@ export class ClaudeCliClient {
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(maxTokens),
+      // 상한은 요청값의 3배 여유(최소 4천) — CLI 는 상한 초과를 '절단'이 아니라 오류로 반환하므로
+      // (실사고: microJSON 700 캡에서 런 전체 실패), 빠듯한 캡은 하드 에러를 유발한다. 초과분
+      // 회수는 아래 close 핸들러의 부분 텍스트 절단 경로가 담당.
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(Math.min(Math.max(maxTokens * 3, 4_000), 64_000)),
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     };
     // 구독 로그인 강제 — API 키/프로필이 있으면 그쪽으로 새서 크레딧 과금(400)으로 회귀한다.
@@ -158,6 +161,21 @@ export class ClaudeCliClient {
         if (settled) return;
         if (!result) return fail(`결과 없음(exit=${code}) ${stderrTail.trim()}`.trim());
         if (result.is_error || result.subtype !== 'success') {
+          // 출력 상한 초과 — CLI 는 오류로 반환하지만 스트리밍된 부분 텍스트가 있으면 SDK 절단
+          // 계약(text + truncated)으로 회수한다(마이크로 콜 하나 때문에 런 전체가 죽지 않게).
+          const emsg = String(result.result ?? '');
+          if (/exceeded the \d+ output token maximum/i.test(emsg) && deltaText.trim()) {
+            settled = true;
+            const inTok = result.usage?.input_tokens ?? 0;
+            const outTok = result.usage?.output_tokens ?? 0;
+            recordUsage(model, inTok, outTok, result.usage?.cache_read_input_tokens ?? 0);
+            return resolve({
+              text: deltaText.trim(), model,
+              promptEvalCount: inTok, evalCount: outTok,
+              totalDurationMs: Date.now() - t0, loadDurationMs: 0,
+              truncated: true, doneReason: 'max_tokens',
+            });
+          }
           return fail(`${result.subtype ?? 'error'} — ${(result.result ?? stderrTail).slice(0, 500)}`.trim());
         }
         settled = true;
