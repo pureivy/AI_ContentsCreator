@@ -38,6 +38,10 @@ import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
 import { startAutoCycle, proposeContentIdeas, startDaily } from '../autonomy/scheduler';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { cardNewsStore } from '../content/cardnews';
+import { runCardNewsJob, isCardNewsRunning } from '../orchestrator/cardnews';
 import { pieceStore, selectResumablePiece } from '../content/pieces';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
@@ -517,6 +521,113 @@ app.get('/pieces/:id', pieceGetHandler);
 app.get('/api/pieces/:id', pieceGetHandler);
 app.delete('/pieces/:id', pieceDeleteHandler);
 app.delete('/api/pieces/:id', pieceDeleteHandler);
+
+// ============================================================
+// 카드뉴스 — 카드뉴스팀(standby) 전용 파이프라인. 블로그 org 런과 무관, 발행 없음(다운로드 전용).
+// 잡은 백그라운드로 돌고 프론트는 목록/상세 GET 폴링(네이버 임시저장 잡과 동일 패턴).
+// ============================================================
+const execFileP = promisify(execFile);
+
+/** 담당자 실명(기획·디자인) — 로스터에서 해석해 카드 레코드에 표기(UI용). */
+function cardActorNames(): { planner?: string; designer?: string } {
+  try {
+    const roles = rolesById(getCompany());
+    return { planner: roles.get('cardnews_planner')?.name, designer: roles.get('cardnews_designer')?.name };
+  } catch { return {}; }
+}
+
+async function cardNewsCreateHandler(c: Context): Promise<Response> {
+  const b = await c.req.json<{ topic?: string; keyword?: string; slides?: number }>()
+    .catch(() => ({}) as { topic?: string; keyword?: string; slides?: number });
+  const topic = (b.topic ?? '').trim();
+  if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
+  const card = cardNewsStore().create({ topic, keyword: b.keyword, ...cardActorNames() });
+  void runCardNewsJob(card.id, { slideCount: b.slides });
+  return c.json({ card });
+}
+
+// 블로그 초안 → 카드뉴스 파생 — 초안 본문을 기획자에게 넘겨 슬라이드로 재구성(복붙 아님).
+async function cardNewsFromPieceHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  const piece = pieceStore().get(id);
+  if (!piece) return c.json({ error: 'unknown piece' }, 404);
+  if (!piece.runId) return c.json({ error: '초안이 아직 없습니다.' }, 409);
+  const b = await c.req.json<{ slides?: number }>().catch(() => ({}) as { slides?: number });
+  let body = '';
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, piece.runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
+    body = (d.bodyMarkdown ?? '').trim();
+  } catch { /* 아래에서 거절 */ }
+  if (!body) return c.json({ error: '초안 본문(draft.json)을 읽을 수 없습니다.' }, 404);
+  const card = cardNewsStore().create({
+    topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, ...cardActorNames(),
+  });
+  void runCardNewsJob(card.id, { sourceBody: body, slideCount: b.slides });
+  return c.json({ card });
+}
+
+function cardNewsListHandler(c: Context): Response {
+  return c.json({ cards: cardNewsStore().list().map((x) => ({ ...x, running: isCardNewsRunning(x.id) })) });
+}
+function cardNewsGetHandler(c: Context): Response {
+  const x = cardNewsStore().get(c.req.param('id') ?? '');
+  return x ? c.json({ card: { ...x, running: isCardNewsRunning(x.id) } }) : c.json({ error: 'unknown card' }, 404);
+}
+// 슬라이드 PNG 서빙 — 이름 화이트리스트(경로 이탈 차단).
+function cardNewsSlideHandler(c: Context): Response {
+  const id = c.req.param('id') ?? '';
+  const name = c.req.param('name') ?? '';
+  if (!cardNewsStore().get(id)) return c.json({ error: 'unknown card' }, 404);
+  if (!/^slide_\d{2}\.png$/.test(name)) return c.json({ error: 'bad name' }, 400);
+  try {
+    const buf = fs.readFileSync(path.join(cardNewsStore().dirFor(id), name));
+    return c.body(new Uint8Array(buf), 200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
+  } catch { return c.json({ error: 'slide not found' }, 404); }
+}
+// 전체 zip 다운로드 — 슬라이드 PNG + 캡션. 시스템 zip(-j 평탄화) 사용, 매 요청 재생성(간단·항상 최신).
+async function cardNewsZipHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  const card = cardNewsStore().get(id);
+  if (!card) return c.json({ error: 'unknown card' }, 404);
+  if (card.stage !== 'ready') return c.json({ error: '아직 완성되지 않았습니다.' }, 409);
+  const dir = cardNewsStore().dirFor(id);
+  const files = fs.readdirSync(dir).filter((f) => /^slide_\d{2}\.png$/.test(f) || f === 'caption.txt').sort();
+  if (!files.length) return c.json({ error: '산출물이 없습니다.' }, 404);
+  const zipPath = path.join(dir, 'cardnews.zip');
+  try { fs.rmSync(zipPath, { force: true }); } catch { /* 무해 */ }
+  try {
+    await execFileP('/usr/bin/zip', ['-j', '-q', zipPath, ...files.map((f) => path.join(dir, f))]);
+    const buf = fs.readFileSync(zipPath);
+    return c.body(new Uint8Array(buf), 200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="cardnews-${id}.zip"`,
+    });
+  } catch (e) {
+    return c.json({ error: `zip 생성 실패: ${e instanceof Error ? e.message : String(e)}` }, 500);
+  }
+}
+function cardNewsDeleteHandler(c: Context): Response {
+  const id = c.req.param('id') ?? '';
+  if (!cardNewsStore().get(id)) return c.json({ error: 'unknown card' }, 404);
+  if (isCardNewsRunning(id)) return c.json({ error: '생성이 진행 중입니다 — 완료 후 삭제하세요.' }, 409);
+  cardNewsStore().remove(id); // 산출물 파일은 남김(비파괴 — pieces 삭제와 동일 원칙)
+  return c.json({ ok: true });
+}
+
+app.post('/cardnews', cardNewsCreateHandler);
+app.post('/api/cardnews', cardNewsCreateHandler);
+app.post('/pieces/:id/cardnews', cardNewsFromPieceHandler);
+app.post('/api/pieces/:id/cardnews', cardNewsFromPieceHandler);
+app.get('/cardnews', cardNewsListHandler);
+app.get('/api/cardnews', cardNewsListHandler);
+app.get('/cardnews/:id/slides/:name', cardNewsSlideHandler); // :id 보다 먼저(구체 경로 우선)
+app.get('/api/cardnews/:id/slides/:name', cardNewsSlideHandler);
+app.get('/cardnews/:id/zip', cardNewsZipHandler);
+app.get('/api/cardnews/:id/zip', cardNewsZipHandler);
+app.get('/cardnews/:id', cardNewsGetHandler);
+app.get('/api/cardnews/:id', cardNewsGetHandler);
+app.delete('/cardnews/:id', cardNewsDeleteHandler);
+app.delete('/api/cardnews/:id', cardNewsDeleteHandler);
 app.post('/pieces/:id/published', piecePublishedHandler);
 app.post('/api/pieces/:id/published', piecePublishedHandler);
 app.post('/pieces/:id/metrics', pieceMetricsPostHandler);

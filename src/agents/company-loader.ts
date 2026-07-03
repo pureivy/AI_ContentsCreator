@@ -42,7 +42,7 @@ interface YRole {
   focus?: string; system_prompt?: string; tools?: unknown; model?: string;
   autonomy?: number; stance?: string; is_critic?: boolean;
 }
-interface YTeam { id?: string; name?: string; lead?: YRole; members?: YRole[] }
+interface YTeam { id?: string; name?: string; standby?: boolean; lead?: YRole; members?: YRole[] }
 interface RawDoc { company?: { name?: string }; ceo?: YRole; teams?: YTeam[] }
 
 let _doc: RawDoc | null = null;
@@ -152,8 +152,10 @@ function buildCompanyDef(doc: RawDoc): CompanyDef {
     const teamId = t.id ?? 'team';
     const lead = toRole(t.lead ?? {}, 'lead', teamId);
     const members = (t.members ?? []).map((m) => toRole(m, 'member', teamId));
-    teams.push({ id: teamId, name: t.name ?? teamId, lead, members });
-    specialists.push(lead, ...members);
+    const standby = !!t.standby;
+    teams.push({ id: teamId, name: t.name ?? teamId, lead, members, ...(standby ? { standby } : {}) });
+    // standby 팀은 specialists(토론 워커·비평가 풀)에서도 제외 — 전용 파이프라인 전담 역할.
+    if (!standby) specialists.push(lead, ...members);
   }
   return {
     name: doc.company?.name ?? 'AI 콘텐츠 스튜디오',

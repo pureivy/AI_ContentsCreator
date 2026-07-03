@@ -155,6 +155,19 @@ export async function generateImagesForDraft(
   return runScript('openai_image.py', args, path.dirname(manifestPath), signal);
 }
 
+/**
+ * 카드뉴스 텍스트 렌더 — cardnews_render.py(배경 PNG 위 Pillow 한글 오버레이).
+ * 배경 매니페스트가 비어도 스크립트가 그라데이션 폴백으로 전 장을 렌더한다(fail-open).
+ */
+export async function renderCardSlides(
+  planPath: string, backgroundsPath: string, outDir: string, manifestPath: string,
+  signal?: AbortSignal,
+): Promise<BlogSkillResult> {
+  return runScript('cardnews_render.py',
+    ['--plan', planPath, '--backgrounds', backgroundsPath, '--output-dir', outDir, '--manifest', manifestPath],
+    path.dirname(manifestPath), signal, { timeoutMs: 120_000 });
+}
+
 // ============================== blog_publish ==============================
 
 export interface PublishPayload {

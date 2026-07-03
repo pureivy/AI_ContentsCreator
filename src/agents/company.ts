@@ -36,6 +36,9 @@ export interface TeamDef {
   name: string;
   lead: RoleDef;
   members: RoleDef[];
+  /** 대기(standby) 팀 — 블로그 초안 org 런에 자동 편성하지 않는다(전용 파이프라인이 직접 호출).
+   *  예: 카드뉴스팀. 지명(directed) 런은 rolesById 팀 순회로 여전히 가능. */
+  standby?: boolean;
 }
 
 export interface CompanyDef {

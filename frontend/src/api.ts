@@ -888,6 +888,51 @@ export async function clearInjectedKnowledge(id: string): Promise<boolean> {
   catch { return false; }
 }
 
+// ── 카드뉴스(카드뉴스팀 전용 파이프라인) — 생성은 POST, 진행은 목록 GET 폴링, 발행 없음(다운로드 전용) ──
+export type CardNewsStage = "planning" | "designing" | "rendering" | "ready" | "error";
+export interface CardNewsInfo {
+  id: string;
+  topic: string;
+  keyword?: string;
+  sourcePieceId?: string;
+  stage: CardNewsStage;
+  slides?: number;
+  bgFallbacks?: number;
+  caption?: string;
+  hashtags?: string[];
+  planner?: string;
+  designer?: string;
+  error?: string;
+  running?: boolean;
+  createdTs: string;
+  updatedTs: string;
+}
+export async function fetchCardNews(): Promise<CardNewsInfo[]> {
+  try { const r = await fetch("/cardnews"); if (!r.ok) return []; return (await r.json()).cards ?? []; }
+  catch { return []; }
+}
+export async function createCardNews(body: { topic: string; keyword?: string; slides?: number }): Promise<{ ok: boolean; id?: string; error?: string }> {
+  try {
+    const r = await fetch("/cardnews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({} as { card?: { id: string }; error?: string }));
+    return r.ok ? { ok: true, id: j.card?.id } : { ok: false, error: j.error };
+  } catch { return { ok: false, error: "network" }; }
+}
+export async function createCardNewsFromPiece(pieceId: string, slides?: number): Promise<{ ok: boolean; id?: string; error?: string }> {
+  try {
+    const r = await fetch(`/pieces/${pieceId}/cardnews`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slides }) });
+    const j = await r.json().catch(() => ({} as { card?: { id: string }; error?: string }));
+    return r.ok ? { ok: true, id: j.card?.id } : { ok: false, error: j.error };
+  } catch { return { ok: false, error: "network" }; }
+}
+export async function deleteCardNews(id: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`/cardnews/${id}`, { method: "DELETE" });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return { ok: true };
+  } catch { return { ok: false, error: "network" }; }
+}
+
 // piece 온디맨드 실행 — 자율 케이던스를 안 기다리고 지금 초안 런을 띄운다.
 export async function runPiece(id: string): Promise<{ ok: boolean; run_id?: string; error?: string }> {
   try {

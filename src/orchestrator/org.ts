@@ -131,7 +131,8 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   // 리비전 런(검토 탭 '수정 요청') — 분해·라우팅·팀 병렬·검수 생략 fast-path 로 분기.
   if (opts.revise) return runOrgRevise(bus, opts, company);
   const { topic, signal } = opts;
-  const allTeams = company.teams ?? [];
+  // standby 팀(카드뉴스 등 전용 파이프라인 역할)은 블로그 런 편성·라우팅에서 제외.
+  const allTeams = (company.teams ?? []).filter((t) => !t.standby);
 
   bus.emit('phase', { team_id: '_ceo', phase: 'delegate' }); // CEO 의사결정·지침 수립 단계(🧩)
   const prep = await prepareRun(bus, topic, company, signal);
