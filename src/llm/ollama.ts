@@ -39,6 +39,8 @@ export interface ChatParams {
   /** 추론(thinking) per-call 오버라이드. 미지정이면 기존대로 runSettings.agentThinking 을 따른다.
    *  false 로 주면 전역 추론 토글과 무관하게 이 호출은 추론을 끈다(잡담 등 저지연 응답용). */
   think?: boolean;
+  /** 비전 입력(로컬 이미지 절대경로) — Claude CLI 백엔드 전용(Read 도구로 열어 봄). Ollama 경로는 무시. */
+  visionPaths?: readonly string[];
   /** 토큰 델타 콜백(스트리밍 UI용). */
   onDelta?: (text: string) => void;
 }

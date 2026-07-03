@@ -291,7 +291,7 @@ export async function microCall(
   model: string,
   system: string,
   user: string,
-  opts: { maxOutputTokens?: number; temperature?: number; format?: 'json'; signal?: AbortSignal } = {},
+  opts: { maxOutputTokens?: number; temperature?: number; format?: 'json'; signal?: AbortSignal; visionPaths?: readonly string[] } = {},
 ): Promise<string> {
   const res = await llm.chat({
     model,
@@ -303,6 +303,7 @@ export async function microCall(
     temperature: opts.temperature ?? 0.2,
     format: opts.format,
     signal: opts.signal,
+    visionPaths: opts.visionPaths,
   });
   return res.text;
 }
@@ -368,13 +369,14 @@ export async function microJSON<T = unknown>(
   model: string,
   system: string,
   user: string,
-  opts: { maxOutputTokens?: number; signal?: AbortSignal } = {},
+  opts: { maxOutputTokens?: number; signal?: AbortSignal; visionPaths?: readonly string[] } = {},
 ): Promise<T | null> {
   // format:'json' 으로 Ollama 구조화 출력 강제 — 코드펜스·머리말 잡음 제거로 파싱 신뢰도↑.
   const txt = await microCall(model, system, `${user}\n\nJSON만 출력하라.`, {
     maxOutputTokens: opts.maxOutputTokens ?? 1024,
     format: 'json',
     signal: opts.signal,
+    visionPaths: opts.visionPaths,
   });
   return extractFirstJson<T>(txt);
 }

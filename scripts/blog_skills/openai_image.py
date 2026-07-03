@@ -111,8 +111,13 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=4, help="최대 이미지 수(폭주/과금 방지)")
     ap.add_argument("--size", default="1024x1024", help="1024x1024 | 1536x1024 | 1024x1536")
     ap.add_argument("--model", default=os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-2"))
+    ap.add_argument("--ref-images", nargs="*", default=[],
+                    help="참조 이미지 경로들 — 있으면 images.edit 로 참조 스타일 기반 생성(최대 4장 사용)")
     ap.add_argument("--dry-run", action="store_true", help="API 미호출(키 불필요) — 매니페스트만 계획대로 기록")
     args = ap.parse_args()
+
+    # 참조 이미지 검증 — 존재하는 파일만, 캡 4장(요청 크기 폭주 방지). 전부 무효면 일반 생성으로 폴백.
+    ref_paths = [Path(p) for p in args.ref_images if p and Path(p).is_file()][:4]
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -157,7 +162,19 @@ def main() -> int:
             entry["dry_run"] = True
         else:
             try:
-                resp = client.images.generate(model=args.model, prompt=prompt, size=args.size, n=1)
+                if ref_paths:
+                    # 참조 스타일 생성 — 레퍼런스의 팔레트·무드·질감을 따르되 프롬프트 장면을 새로 그림.
+                    from contextlib import ExitStack
+                    edit_prompt = (
+                        f"{prompt}. Follow the color palette, mood, lighting and overall design style "
+                        f"of the reference images, but create a completely new scene as described."
+                    )
+                    with ExitStack() as stack:
+                        refs = [stack.enter_context(open(p, "rb")) for p in ref_paths]
+                        resp = client.images.edit(model=args.model, image=refs, prompt=edit_prompt, size=args.size, n=1)
+                    entry["ref_count"] = len(ref_paths)
+                else:
+                    resp = client.images.generate(model=args.model, prompt=prompt, size=args.size, n=1)
                 b64 = resp.data[0].b64_json  # gpt-image-* 는 항상 base64 반환
                 file_path.write_bytes(base64.b64decode(b64))
             except Exception as e:  # noqa: BLE001

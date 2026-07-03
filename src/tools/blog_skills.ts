@@ -142,17 +142,35 @@ export async function runImageGenerate(roleId: string, arg: string, signal?: Abo
  */
 export async function generateImagesForDraft(
   draftJsonPath: string, outDir: string, manifestPath: string,
-  opts: { businessType?: string; imageStyle?: string; topic?: string; limit?: number } = {},
+  opts: { businessType?: string; imageStyle?: string; topic?: string; limit?: number; timeoutMs?: number; refImages?: readonly string[] } = {},
   signal?: AbortSignal,
 ): Promise<BlogSkillResult> {
+  const limit = Math.min(Math.max(1, opts.limit ?? 4), 8);
   const args = ['--draft', draftJsonPath, '--output-dir', outDir, '--manifest', manifestPath,
     '--image-style', opts.imageStyle ?? 'photorealistic',
-    '--limit', String(Math.min(Math.max(1, opts.limit ?? 4), 8))];
+    '--limit', String(limit)];
   if (opts.businessType) args.push('--business-type', opts.businessType);
   if (opts.topic) args.push('--topic', opts.topic);
+  // 레퍼런스 참조 생성(images.edit) — 존재 파일만 전달(캡 4장은 스크립트가 재검증). 스타일 트렌드 반영용.
+  const refs = (opts.refImages ?? []).filter((p) => { try { return fs.existsSync(p); } catch { return false; } });
+  if (refs.length) args.push('--ref-images', ...refs);
   if (!CONFIG.openaiApiKey) args.push('--dry-run');
   // finalize 는 세션 dir 를 cwd 로(샌드박스 무관 — 경로는 인자로 절대지정).
-  return runScript('openai_image.py', args, path.dirname(manifestPath), signal);
+  // 타임아웃은 장수 비례 — 고품질 1장에 ~1분이라 기본 3분은 5장에서 SIGKILL 됐다(카드뉴스 E2E 실측).
+  const timeoutMs = opts.timeoutMs ?? Math.max(BLOG_TIMEOUT_MS, 90_000 * limit);
+  return runScript('openai_image.py', args, path.dirname(manifestPath), signal, { timeoutMs });
+}
+
+/**
+ * 카드뉴스 레퍼런스 검색 — cardnews_search.py(DuckDuckGo 이미지 검색·다운로드·Pillow 검증).
+ * 검색 실패·0장은 무해(빈 매니페스트, exit 0) — 호출부는 레퍼런스 없이 기존 경로로 진행(fail-open).
+ */
+export async function searchCardRefs(
+  query: string, outDir: string, manifestPath: string, num = 5, signal?: AbortSignal,
+): Promise<BlogSkillResult> {
+  return runScript('cardnews_search.py',
+    ['--query', query, '--num', String(Math.min(Math.max(1, num), 8)), '--output-dir', outDir, '--manifest', manifestPath],
+    path.dirname(manifestPath), signal, { timeoutMs: 90_000 });
 }
 
 /**

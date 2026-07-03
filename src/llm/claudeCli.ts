@@ -72,7 +72,15 @@ export class ClaudeCliClient {
     const isHaiku = /haiku/i.test(model);
     const maxTokens = Math.min(Math.max(1, params.maxOutputTokens ?? CONFIG.maxOutputTokens), 64_000);
     const wantThink = (params.think ?? false) && params.format !== 'json';
-    const { system, prompt } = toPrompt(params.messages);
+    let { system, prompt } = toPrompt(params.messages);
+
+    // 비전 입력 — 이미지가 있으면 Read 도구만 허용해 CLI 가 파일을 직접 보게 한다(다른 도구는 여전히 차단).
+    // 캡 8장: 컨텍스트·턴 폭주 방지. --add-dir 로 이미지 디렉토리를 읽기 허용(중립 cwd 밖 접근).
+    const vision = (params.visionPaths ?? []).filter((p) => { try { return fs.existsSync(p); } catch { return false; } }).slice(0, 8);
+    if (vision.length) {
+      prompt += `\n\n[이미지 ${vision.length}장 — 반드시 각 파일을 Read 도구로 열어 직접 본 뒤 답하라]\n`
+        + vision.map((p, i) => `${i + 1}. ${p}`).join('\n');
+    }
 
     const args = [
       '-p',
@@ -80,12 +88,14 @@ export class ClaudeCliClient {
       '--include-partial-messages',
       '--verbose', // print 모드의 stream-json 요구사항
       '--model', model,
-      '--tools', '',
+      '--tools', vision.length ? 'Read' : '',
       '--setting-sources', '',
       '--strict-mcp-config',
       '--no-session-persistence',
-      '--max-turns', '1',
+      // 비전은 Read 호출 턴이 필요 — 장수 비례 여유(그 외엔 기존 1턴 유지).
+      '--max-turns', vision.length ? String(2 + vision.length * 2) : '1',
     ];
+    for (const dir of [...new Set(vision.map((p) => path.dirname(p)))]) args.push('--add-dir', dir);
     if (system) args.push('--system-prompt', system);
     if (!isHaiku && !wantThink) args.push('--effort', 'low');
 
