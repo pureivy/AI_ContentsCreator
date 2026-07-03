@@ -386,11 +386,12 @@ def make_text_node(value: str, bold: bool = False, italic: bool = False) -> dict
 
 
 def make_heading_para(text: str, level: str = "HEADING1") -> dict:
-    font_size = "24pt" if level == "HEADING1" else "18pt"
+    # 네이버 블로그 소제목은 '큰 글씨 + 굵게'로 만든다(paragraphStyle=HEADING 은 SE 가 밋밋하게 덮어써
+    # 효과가 없어 제거). H2 26pt · H3 22pt — 본문 16pt 와 뚜렷이 차별화.
+    font_size = "26pt" if level == "HEADING1" else "22pt"
     return {
-        "@ctype":         "paragraph",
-        "id":             uid(),
-        "paragraphStyle": level,
+        "@ctype":  "paragraph",
+        "id":      uid(),
         "nodes": [{
             "@ctype":    "textNode",
             "id":        uid(),
@@ -781,8 +782,9 @@ def apply_heading_styles(page, headings: list) -> str:
                 const q = Object.prototype.hasOwnProperty.call(hq, txt) ? hq[txt] : null;
                 const lvl = (q && q.length) ? q.shift() : null;
                 if (lvl) {
-                    para.paragraphStyle = lvl;
-                    const size = lvl === 'HEADING1' ? '24pt' : '18pt';
+                    // paragraphStyle=HEADING 은 SE 가 밋밋하게 덮어써 효과 없음 → 큰 글씨+굵게로 차별화.
+                    if (para.paragraphStyle && /HEADING/.test(para.paragraphStyle)) delete para.paragraphStyle;
+                    const size = lvl === 'HEADING1' ? '26pt' : '22pt';
                     for (const n of (para.nodes||[])) if (n['@ctype']==='textNode') n.spanStyle = 'font-size:'+size+';font-weight:bold;';
                     applied++;
                 } else if (para.paragraphStyle && /HEADING/.test(para.paragraphStyle)) {
@@ -795,6 +797,24 @@ def apply_heading_styles(page, headings: list) -> str:
     }""",
         headings,
     )
+
+
+def bold_title_via_command(page) -> str:
+    """제목 굵게 — 제목 필드 포커스 → 전체 선택 → Cmd/Ctrl+B(에디터 명령). setDocumentData 는 spanStyle 을
+    제거하므로 굵게는 명령으로만 저장본에 남는다."""
+    for sel in ["div.se-title-text", "div[data-type='title'] [contenteditable]", ".se-title-input"]:
+        try:
+            loc = page.locator(sel).first
+            loc.click(timeout=3000)
+            time.sleep(0.2)
+            page.keyboard.press("ControlOrMeta+a")
+            time.sleep(0.1)
+            page.keyboard.press("ControlOrMeta+b")
+            time.sleep(0.2)
+            return "ok"
+        except Exception:
+            continue
+    return "no_title"
 
 
 def set_images_ai(page) -> str:
@@ -1054,6 +1074,11 @@ def write_post(
 
         if result and result.startswith("error"):
             issues.append(f"본문 삽입 실패: {result}")
+
+    # ── 제목 굵게 — 에디터 명령(Cmd+B)으로 적용. SE 문서 API(setDocumentData)는 spanStyle 을
+    #    제거하므로 굵게는 반드시 명령으로 해야 저장본에 남는다(setDocumentData 이후에 실행). ──
+    log(f"  [title-bold] {bold_title_via_command(page)}")
+    time.sleep(0.3)
 
     # ── 이미지 'AI 활용(생성) 이미지' 표시 ON — SE 이미지 컴포넌트 ai 필드 = true(사용자 요청). ──
     if image_comps:
