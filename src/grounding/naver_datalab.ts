@@ -48,7 +48,15 @@ async function ground(query: string, signal?: AbortSignal): Promise<string> {
   if (!datalabEnabled()) return '';
   const kw = seedKeyword(query);
   try {
-    const trends = await datalabTrend([kw], 6, signal);
+    // 니치 복합 키워드는 데이터랩에 데이터가 없어 0포인트가 흔하다("장마철 제습" 등) —
+    // 점진 축약(전체→2어절→1어절) 재시도로 트렌드 방향이라도 확보한다.
+    const words = kw.split(/\s+/).filter(Boolean);
+    const candidates = [...new Set([kw, words.slice(0, 2).join(' '), words[0] ?? ''])].filter(Boolean);
+    let trends: KeywordTrend[] = [];
+    for (const cand of candidates) {
+      trends = await datalabTrend([cand], 6, signal);
+      if (trends.length && trends[0]!.points.length) break;
+    }
     if (!trends.length || !trends[0]!.points.length) return '';
     const t = trends[0]!;
     const spark = t.points.map((p) => `${p.period.slice(2, 7)}:${Math.round(p.ratio)}`).join(' ');
