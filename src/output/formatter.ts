@@ -32,6 +32,9 @@ export interface FormatterInput {
   body: string;               // org 최종 본문(마크다운)
   researchBrief?: string;     // 리서치·SEO 팀 브리프(키워드·검색의도)
   serpText?: string;          // 네이버 블로그 상위 노출 실측(제목 목록) — 인기 제목 패턴 참고용
+  /** 핵심 타겟 키워드 고정(piece.keyword) — 지정 시 패키저가 재추출하지 않고 이 표기를 그대로 쓴다.
+   *  런마다 키워드가 바뀌면 SEO 게이트·리비전이 움직이는 과녁을 쫓게 된다(실사고: 78→56→67 하락 루프). */
+  keyword?: string;
   model: string;             // 구조작업용 모델(micro/haiku)
   internalLinks?: string[];
   signal?: AbortSignal;

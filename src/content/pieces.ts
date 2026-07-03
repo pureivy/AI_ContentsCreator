@@ -33,6 +33,8 @@ export interface Piece {
   seoScore?: number;
   /** 실런 실패 횟수(사용자 양보=취소는 제외) — 폭주 방지 캡. */
   errors?: number;
+  /** SEO 미달로 자동 리비전을 돌린 횟수 — 자동 임시저장 게이트의 무한 루프 방지(캡 1). */
+  autoRevisions?: number;
   createdTs: string;
   updatedTs: string;
 }
@@ -86,6 +88,12 @@ export class PieceStore {
   }
   setStage(id: string, stage: PieceStage): Piece | undefined { return this.update(id, { stage }); }
   setPublished(id: string, url: string): Piece | undefined { return this.update(id, { stage: 'published', publishedUrl: url }); }
+  /** piece 삭제(카드 제거) — 산출물 파일(sessions·성과 샘플)은 남긴다(비파괴: 인덱스에서만 제거). */
+  remove(id: string): boolean {
+    const existed = this.items.delete(id);
+    if (existed) this.persist();
+    return existed;
+  }
   /** 실런 실패 기록 — 사용자 양보(취소)에는 호출하지 않는다. 캡 초과 시 'error' 로 종료(폭주 방지). */
   recordError(id: string): Piece | undefined {
     const p = this.items.get(id);

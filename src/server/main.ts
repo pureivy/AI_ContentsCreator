@@ -153,6 +153,8 @@ interface LaunchOpts {
   agent?: string; path?: string; budgetUsd?: number; auto?: boolean; pieceId?: string;
   /** 리비전 런(검토 탭 '수정 요청') — 기존 초안+피드백으로 개정. 실패해도 ready 초안은 보존(에러 카운트 X). */
   revise?: { baseBody: string; feedback: string };
+  /** 핵심 타겟 키워드(piece.keyword) — 포장 primaryKeyword 고정(SEO 게이트·리비전 과녁 고정). */
+  keyword?: string;
 }
 
 // draft.json(6c)에서 piece 표시 메타 재로드 — 초안 asset 은 finalize 가 이미 디스크에 씀(메모리 의존 없음).
@@ -176,6 +178,8 @@ function advancePieceReady(pieceId: string, runId: string, deliverable: string):
     ...(typeof draft?.seoScore === 'number' ? { seoScore: draft.seoScore } : {}),
     ...(draft?.keyword ? { keyword: draft.keyword } : {}),
   });
+  // ready 도달 → 자동 네이버 임시저장 게이트(SEO 기준 통과 시 발행 담당이 저장, 미달 시 자동 리비전 1회).
+  try { maybeAutoNaverDraft(pieceId); } catch { /* 무해 — 수동(검토 탭 버튼) 경로는 그대로 살아있다 */ }
 }
 
 /** 진행 중 자율(auto) 런을 모두 양보(abort) — 사용자 런(일반/revise) 도착 시 호출. */
@@ -204,7 +208,7 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
 
   startRun(bus, {
     topic, signal: abort.signal,
-    agentId: opts.agent, path: opts.path, budgetUsd: opts.budgetUsd, revise: opts.revise,
+    agentId: opts.agent, path: opts.path, budgetUsd: opts.budgetUsd, revise: opts.revise, keyword: opts.keyword,
   })
     .then((outcome) => {
       handle.status = 'done';
@@ -397,6 +401,10 @@ app.get('/api/runs/:id', runGetHandler);
 // 미구현 런 동작(프론트가 실패를 우아하게 처리) — 명시적 스텁
 app.delete('/runs/:id', (c) => {
   const id = c.req.param('id') ?? '';
+  // 이 런의 세션(draft.json)을 참조하는 초안 카드가 있으면 거절 — 런 삭제가 검토 대기 초안을
+  // 소리 없이 증발시키는 사고 방지(실사고: 검토 탭 '초안 없음' 미스터리의 원인). 카드 먼저 삭제.
+  const ref = pieceStore().list().find((p) => p.runId === id);
+  if (ref) return c.json({ error: `초안 "${ref.title.slice(0, 30)}" 카드가 이 런을 참조합니다 — 캘린더/검토 탭에서 카드를 먼저 삭제하세요.` }, 409);
   RUNS.get(id)?.abort.abort();
   RUNS.delete(id);
   // 영속 세션(data/sessions/{id})도 삭제 — 안 지우면 /runs 가 영속에서 다시 복원해 '삭제 안 됨'으로 보인다.
@@ -420,6 +428,26 @@ async function pieceCreateHandler(c: Context): Promise<Response> {
 function pieceGetHandler(c: Context): Response {
   const p = pieceStore().get(c.req.param('id') ?? '');
   return p ? c.json({ piece: p }) : c.json({ error: 'unknown piece' }, 404);
+}
+// piece 삭제(캘린더·검토·성과 탭 카드 제거) — 실행 중 런/네이버 잡/성과 수집이 있으면 거절.
+// 산출물 파일(data/sessions, 성과 샘플)은 지우지 않는다 — 카드(인덱스)만 제거하는 비파괴 삭제.
+function pieceDeleteHandler(c: Context): Response {
+  const id = c.req.param('id') ?? '';
+  const piece = pieceStore().get(id);
+  if (!piece) return c.json({ error: 'unknown piece' }, 404);
+  if ([...RUNS.values()].some((h) => h.status === 'running' && h.topic === piece.title)) {
+    return c.json({ error: '이 카드의 런이 실행 중입니다 — 취소 후 삭제하세요.' }, 409);
+  }
+  if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') {
+    return c.json({ error: '네이버 임시저장이 진행 중입니다 — 완료 후 삭제하세요.' }, 409);
+  }
+  if (COLLECT_JOBS.get(id)?.status === 'running') {
+    return c.json({ error: '성과 수집이 진행 중입니다 — 완료 후 삭제하세요.' }, 409);
+  }
+  NAVER_DRAFT_JOBS.delete(id); // 지난 잡 기록 정리(메모리)
+  COLLECT_JOBS.delete(id);
+  pieceStore().remove(id);
+  return c.json({ ok: true });
 }
 // 발행(수동) — 사람이 네이버에 게시 후 URL 등록 → 'published'. 성과 측정(6d)의 앵커.
 async function piecePublishedHandler(c: Context): Promise<Response> {
@@ -487,6 +515,8 @@ app.get('/pieces/:id/images/:name', pieceImageHandler); // 미리보기 <base hr
 app.get('/api/pieces/:id/images/:name', pieceImageHandler);
 app.get('/pieces/:id', pieceGetHandler);
 app.get('/api/pieces/:id', pieceGetHandler);
+app.delete('/pieces/:id', pieceDeleteHandler);
+app.delete('/api/pieces/:id', pieceDeleteHandler);
 app.post('/pieces/:id/published', piecePublishedHandler);
 app.post('/api/pieces/:id/published', piecePublishedHandler);
 app.post('/pieces/:id/metrics', pieceMetricsPostHandler);
@@ -501,7 +531,7 @@ function pieceRunHandler(c: Context): Response {
   if (!piece) return c.json({ error: 'unknown piece' }, 404);
   if (piece.runId && RUNS.get(piece.runId)?.status === 'running') return c.json({ error: '이미 실행 중입니다', run_id: piece.runId }, 409);
   if (['ready', 'published', 'measured', 'reflected'].includes(piece.stage)) return c.json({ error: '이미 초안이 있습니다(검토·발행 단계)' }, 409);
-  const runId = launchRun(piece.title, { pieceId: piece.id }); // user run(양보 대상 아님)
+  const runId = launchRun(piece.title, { pieceId: piece.id, keyword: piece.keyword }); // user run(양보 대상 아님)
   if (!runId) return c.json({ error: '실행 시작 실패' }, 500);
   pieceStore().update(id, { runId, stage: 'draft' });
   return c.json({ ok: true, run_id: runId });
@@ -531,7 +561,7 @@ async function pieceReviseHandler(c: Context): Promise<Response> {
     baseBody = (d.bodyMarkdown ?? '').trim();
   } catch { /* 아래에서 거절 */ }
   if (!baseBody) return c.json({ error: '기존 초안 본문을 찾을 수 없습니다.' }, 404);
-  const runId = launchRun(piece.title, { pieceId: piece.id, revise: { baseBody, feedback: feedback.slice(0, 4000) } });
+  const runId = launchRun(piece.title, { pieceId: piece.id, keyword: piece.keyword, revise: { baseBody, feedback: feedback.slice(0, 4000) } });
   if (!runId) return c.json({ error: '실행 시작 실패' }, 500);
   return c.json({ ok: true, run_id: runId });
 }
@@ -545,6 +575,8 @@ interface NaverDraftJob {
   status: 'running' | 'saved' | 'failed';
   startedTs: string; endedTs?: string;
   url?: string; adminUrl?: string; error?: string; dryRun: boolean;
+  /** 자동 게이트가 기동한 잡의 담당자 표기(발행 담당) — 수동(검토 탭 버튼) 잡은 비움. */
+  actor?: string;
 }
 const NAVER_DRAFT_JOBS = new Map<string, NaverDraftJob>();
 
@@ -553,34 +585,33 @@ const NAVER_DRAFT_JOBS = new Map<string, NaverDraftJob>();
 // 직렬화한다. dry-run 은 브라우저를 열지 않으므로 점유 대상이 아니다.
 let naverProfileBusy: string | null = null;
 
-async function pieceNaverDraftHandler(c: Context): Promise<Response> {
-  const id = c.req.param('id') ?? '';
-  if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
-  const b = await c.req.json<{ dry_run?: boolean }>().catch(() => ({} as { dry_run?: boolean }));
-  const dryRun = b.dry_run === true;
-  // ── 여기부터 잡 등록(set)까지 동기 구간 — await 금지(TOCTOU 차단: 동시 POST 이중 기동 방지).
-  const piece = pieceStore().get(id); // await 후 재조회(그 사이 변경 가능)
-  if (!piece) return c.json({ error: 'unknown piece' }, 404);
-  if (!piece.runId) return c.json({ error: '초안이 아직 없습니다.' }, 409);
-  if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') return c.json({ error: '이미 네이버 임시저장이 진행 중입니다.' }, 409);
+// 임시저장 잡 기동(공용) — 검토 탭 버튼(pieceNaverDraftHandler)과 자동 게이트(maybeAutoNaverDraft)가
+// 같은 가드·프로필 뮤텍스를 공유한다. 잡 등록(set)까지 동기 — await 금지(TOCTOU 차단: 이중 기동 방지).
+type NaverDraftStart = { ok: true } | { error: string; status: 400 | 404 | 409 };
+function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string } = {}): NaverDraftStart {
+  const dryRun = opts.dryRun === true;
+  const piece = pieceStore().get(id);
+  if (!piece) return { error: 'unknown piece', status: 404 };
+  if (!piece.runId) return { error: '초안이 아직 없습니다.', status: 409 };
+  if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') return { error: '이미 네이버 임시저장이 진행 중입니다.', status: 409 };
   // 실런은 브라우저를 여니 프로필 뮤텍스 필요 — 수집·타 임시저장·일일동기화와 상호 배제.
   if (!dryRun && naverProfileBusy) {
-    return c.json({ error: `네이버 브라우저 작업이 진행 중입니다(${naverProfileBusy}) — 완료 후 다시 시도하세요.` }, 409);
+    return { error: `네이버 브라우저 작업이 진행 중입니다(${naverProfileBusy}) — 완료 후 다시 시도하세요.`, status: 409 };
   }
   // 이 초안의 런(수정 요청 리비전 포함)이 실행 중이면 내용이 바뀌는 중 — 저장하지 않는다.
   if ([...RUNS.values()].some((h) => h.status === 'running' && h.topic === piece.title)) {
-    return c.json({ error: '이 초안의 런이 실행 중입니다 — 완료 후 저장하세요.' }, 409);
+    return { error: '이 초안의 런이 실행 중입니다 — 완료 후 저장하세요.', status: 409 };
   }
   if (!dryRun && !naverPublishCreds().blogId) {
-    return c.json({ error: 'NAVER_BLOG_ID 미설정 — API 키 탭에서 "네이버 블로그 — 블로그 ID"를 설정하세요.' }, 400);
+    return { error: 'NAVER_BLOG_ID 미설정 — API 키 탭에서 "네이버 블로그 — 블로그 ID"를 설정하세요.', status: 400 };
   }
   const runIdAtStart = piece.runId;
   const sessionDir = path.join(CONFIG.sessionsDir, runIdAtStart);
   let draft: ReturnType<typeof coerceBlogDraft> = null;
   try { draft = coerceBlogDraft(JSON.parse(fs.readFileSync(path.join(sessionDir, 'draft.json'), 'utf-8'))); } catch { /* 아래에서 거절 */ }
-  if (!draft) return c.json({ error: '초안(draft.json)을 읽을 수 없습니다.' }, 404);
+  if (!draft) return { error: '초안(draft.json)을 읽을 수 없습니다.', status: 404 };
 
-  const job: NaverDraftJob = { status: 'running', startedTs: new Date().toISOString(), dryRun };
+  const job: NaverDraftJob = { status: 'running', startedTs: new Date().toISOString(), dryRun, actor: opts.actor };
   NAVER_DRAFT_JOBS.set(id, job);
   if (!dryRun) naverProfileBusy = `임시저장:${piece.title.slice(0, 20)}`; // ── 동기 구간 끝(뮤텍스 획득)
   void publishDraftToNaver(sessionDir, draft, { dryRun }).then((r) => {
@@ -599,7 +630,26 @@ async function pieceNaverDraftHandler(c: Context): Promise<Response> {
   }).catch((e: unknown) => {
     job.status = 'failed'; job.endedTs = new Date().toISOString();
     job.error = e instanceof Error ? e.message : String(e);
-  }).finally(() => { if (!dryRun) naverProfileBusy = null; }); // 뮤텍스 해제
+  }).finally(() => {
+    if (!dryRun) naverProfileBusy = null; // 뮤텍스 해제
+    // 자동(발행 담당) 잡 종료 알림 — 채널 설정 시에만. 수동 잡은 사용자가 화면에서 폴링하므로 제외.
+    if (opts.actor && !dryRun && notifyConfigured()) {
+      void notify({
+        title: `📗 ${opts.actor} — 네이버 임시저장 ${job.status === 'saved' ? '완료' : '실패'} · ${piece.title.slice(0, 40)}`,
+        body: job.url ?? job.adminUrl ?? job.error ?? '',
+      });
+    }
+  });
+  return { ok: true };
+}
+
+async function pieceNaverDraftHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
+  const b = await c.req.json<{ dry_run?: boolean }>().catch(() => ({} as { dry_run?: boolean }));
+  const dryRun = b.dry_run === true;
+  const r = startNaverDraftJob(id, { dryRun }); // 가드~잡 등록은 내부에서 동기 처리
+  if ('error' in r) return c.json({ error: r.error }, r.status);
   return c.json({ ok: true, started: true, dry_run: dryRun });
 }
 function pieceNaverDraftStatusHandler(c: Context): Response {
@@ -613,7 +663,72 @@ function pieceNaverDraftStatusHandler(c: Context): Response {
   return c.json({
     status: job.status, url: job.url ?? piece.naverDraftUrl, admin_url: job.adminUrl,
     error: job.error, dry_run: job.dryRun, started_ts: job.startedTs, ended_ts: job.endedTs,
+    actor: job.actor,
   });
+}
+
+// ── ready 이후 자동 네이버 임시저장 게이트 — SEO 기준 통과 시 발행 담당 명의로 저장, 미달이면
+//    자동 리비전 1회 후 재평가(리비전 완료 → advancePieceReady → 여기 재진입). 그래도 미달이거나
+//    점수 미측정이면 수동 검토로 남긴다. 실제 '발행'은 여전히 사람 수동(설계 유지).
+function publisherName(): string {
+  // 발행 담당 실명 — 회사 로스터에서 직함 '발행'으로 해석(별도 people.yaml 키 불필요 — 중복 방지).
+  // 로스터 name 은 실명(people.yaml)→직함 순 폴백이라 실명 미지정이어도 자연스러운 라벨이 나온다.
+  try {
+    const c = getCompany();
+    const r = [c.ceo, ...(c.teams ?? []).flatMap((t) => [t.lead, ...t.members])].find((x) => /발행|publish/i.test(x.title));
+    if (r?.name?.trim()) return r.name.trim();
+  } catch { /* 기본값 */ }
+  return '발행 담당';
+}
+
+/** draft.json 의 SEO 체크리스트 미달 항목 → 리비전 피드백 문자열(없으면 null). */
+function seoReviseFeedback(runId: string, keyword?: string): string | null {
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, runId, 'draft.json'), 'utf-8')) as {
+      seo?: { checklist?: Array<{ label: string; ok: boolean; note?: string }> };
+    };
+    const fails = (d.seo?.checklist ?? []).filter((c) => !c.ok);
+    if (!fails.length) return null;
+    return [
+      'SEO 점검에서 아래 항목이 미달했다. 본문의 구조·어조·분량은 유지하면서 미달 항목만 보완하라.',
+      ...fails.map((c) => `- ${c.label}${c.note ? ` (현재: ${c.note})` : ''}`),
+      ...(keyword ? [`핵심 키워드 "${keyword}" 를 첫 문단에 1회, 본문 전체에 2~4회 정확히 이 표기로 자연스럽게 포함하라.`] : []),
+    ].join('\n');
+  } catch { return null; }
+}
+
+function maybeAutoNaverDraft(pieceId: string): void {
+  if (!CONFIG.autoNaverDraft) return;
+  const piece = pieceStore().get(pieceId);
+  if (!piece?.runId || piece.stage !== 'ready') return;
+  if (piece.naverDraftUrl) return; // 이미 네이버에 초안 있음 — 재저장은 사람이 판단(중복 초안 방지)
+  const seo = piece.seoScore;
+  if (typeof seo === 'number' && seo >= CONFIG.naverDraftSeoMin) {
+    const r = startNaverDraftJob(pieceId, { actor: publisherName() });
+    console.log('error' in r
+      ? `[발행담당] ${piece.title.slice(0, 30)} — 임시저장 기동 실패: ${r.error}`
+      : `[발행담당] ${piece.title.slice(0, 30)} — SEO ${seo}점(기준 ${CONFIG.naverDraftSeoMin}) 통과 → 네이버 임시저장 시작`);
+    return;
+  }
+  if (typeof seo !== 'number' || (piece.autoRevisions ?? 0) >= 1) {
+    console.log(`[발행담당] ${piece.title.slice(0, 30)} — SEO ${seo ?? '미측정'}점 < ${CONFIG.naverDraftSeoMin} · 자동 리비전 소진 → 수동 검토 대기`);
+    return;
+  }
+  // 다른 런/잡이 도는 중이면 이번 틱은 건너뛴다(다음 ready 전이 때 재평가).
+  if ([...RUNS.values()].some((h) => h.status === 'running' && h.topic === piece.title)) return;
+  if (NAVER_DRAFT_JOBS.get(pieceId)?.status === 'running') return;
+  let baseBody = '';
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, piece.runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
+    baseBody = (d.bodyMarkdown ?? '').trim();
+  } catch { /* 아래에서 중단 */ }
+  const feedback = seoReviseFeedback(piece.runId, piece.keyword);
+  if (!baseBody || !feedback) return; // 본문·체크리스트 없이는 리비전 품질을 보장할 수 없다 — 수동으로
+  pieceStore().update(pieceId, { autoRevisions: (piece.autoRevisions ?? 0) + 1 });
+  const rid = launchRun(piece.title, { pieceId, keyword: piece.keyword, revise: { baseBody, feedback: feedback.slice(0, 4000) } });
+  console.log(rid
+    ? `[발행담당] ${piece.title.slice(0, 30)} — SEO ${seo}점 미달 → 자동 리비전 런 ${rid}`
+    : `[발행담당] ${piece.title.slice(0, 30)} — 리비전 런 기동 실패(다른 런 진행 중일 수 있음)`);
 }
 app.post('/pieces/:id/naver-draft', pieceNaverDraftHandler);
 app.post('/api/pieces/:id/naver-draft', pieceNaverDraftHandler);
@@ -1568,7 +1683,7 @@ const stopAutoCycle = startAutoCycle<Piece>({
   isBusy: () => [...RUNS.values()].some((h) => h.status === 'running'), // 자율런 포함 — 동시 1런만(단일 KV 슬롯 불변식).
   pickWork: (signal) => pickAutoWork(signal),
   launch: (piece) => {
-    const id = launchRun(piece.title, { auto: true, pieceId: piece.id });
+    const id = launchRun(piece.title, { auto: true, pieceId: piece.id, keyword: piece.keyword });
     if (id) pieceStore().update(piece.id, { runId: id, stage: 'draft' }); // 시작 성공 → draft(진행중). ''(억제)면 유지, 다음 틱 재개.
   },
   describe: (piece) => piece.title,

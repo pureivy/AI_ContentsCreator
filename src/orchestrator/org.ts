@@ -429,7 +429,7 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
 
   return packageDesignFinalize({
     bus, topic, company, assign, subproblems, teams: usableTeams,
-    critic: critic ?? null, critiqueText, writerTeam, finalDeliverable, brief, serpText, signal,
+    critic: critic ?? null, critiqueText, writerTeam, finalDeliverable, brief, serpText, keyword: opts.keyword, signal,
   });
 }
 
@@ -451,9 +451,11 @@ async function packageDesignFinalize(a: {
   brief: string;
   /** 네이버 SERP 실측(상위 노출 제목) — 제목 후보가 인기 패턴을 따르게 패키저에 전달. */
   serpText?: string;
+  /** 핵심 타겟 키워드(piece.keyword) — 패키저 primaryKeyword 고정(재추출 방지). */
+  keyword?: string;
   signal?: AbortSignal;
 }): Promise<RunOutcome> {
-  const { bus, topic, company, assign, subproblems, teams, critic, critiqueText, writerTeam, finalDeliverable, brief, serpText, signal } = a;
+  const { bus, topic, company, assign, subproblems, teams, critic, critiqueText, writerTeam, finalDeliverable, brief, serpText, keyword, signal } = a;
 
   // 잔여 플레이스홀더/가짜수치 경고(생성 지침이 이미 금지 — 보통 0건).
   const placeholders = findTemplateNumbers(finalDeliverable);
@@ -466,7 +468,7 @@ async function packageDesignFinalize(a: {
   if (!signal?.aborted) {
     try {
       bus.emit('phase', { team_id: '_ceo', phase: 'review' });
-      assets = await formatterFor('naver_blog')({ topic, body: finalDeliverable, researchBrief: brief, serpText, model: assign.micro, signal });
+      assets = await formatterFor('naver_blog')({ topic, body: finalDeliverable, researchBrief: brief, serpText, keyword, model: assign.micro, signal });
       bus.emit('log', { message: `초안 포장 — 제목 "${assets.meta.title}" · SEO ${assets.draft.seo.score}/100 · 태그 ${assets.draft.tags.length}개 · 이미지 ${assets.draft.imageSlots.length}슬롯` });
     } catch (e) {
       bus.emit('log', { message: `초안 포장 실패(본문 유지): ${e instanceof Error ? e.message : String(e)}` });
@@ -553,6 +555,6 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
     bus, topic, company, assign, subproblems: [], teams: [],
     critic: null, critiqueText: '', writerTeam, finalDeliverable, brief: '',
     serpText: await serpPopularBrief(topic, signal), // 제목 재패키징도 인기 패턴 참고(fail-open)
-    signal,
+    keyword: opts.keyword, signal,
   });
 }

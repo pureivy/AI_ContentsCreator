@@ -31,6 +31,8 @@ export interface RunOptions {
   budgetUsd?: number;
   /** 리비전 런(검토 탭 '수정 요청') — 기존 초안을 사용자 피드백에 따라 개정. 리서치·검수 생략 fast-path. */
   revise?: { baseBody: string; feedback: string };
+  /** 핵심 타겟 키워드(piece.keyword) — 포장 단계 primaryKeyword 고정(SEO 게이트·리비전 과녁 고정). */
+  keyword?: string;
 }
 
 export interface RunOutcome {
