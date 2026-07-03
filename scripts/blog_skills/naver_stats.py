@@ -265,13 +265,25 @@ def main():
         #    로그인(nid 쿠키, .naver.com 도메인)으로 함께 인증되므로 blog 로그인만 확립하면 된다.
         naver_id = os.environ.get("NAVER_ID", "")
         naver_pw = os.environ.get("NAVER_PW", "")
+        # 저장된 쿠키 복원 — 발행 스크립트와 같은 프로필·쿠키 파일 공유(같은 환경 재로그인 방지).
+        cookies_file = profile_dir / "naver_cookies.json"
+        if cookies_file.exists():
+            try:
+                with open(cookies_file, encoding="utf-8") as f:
+                    context.add_cookies(json.load(f))
+            except Exception:
+                pass
         page.goto("https://blog.naver.com", wait_until="domcontentloaded", timeout=15000)
         time.sleep(1.5)
         logged_in = page.locator("a[href*='nidlogin'], .link_login").count() == 0
         if not logged_in:
             try:
-                from naver_publish import full_auto_login  # 같은 디렉토리 스크립트 — sys.path[0]
+                from naver_publish import full_auto_login, save_cookies  # 같은 디렉토리 스크립트
                 full_auto_login(page, naver_id, naver_pw)
+                try:
+                    save_cookies(context, cookies_file)  # 로그인 세션 저장(다음 실행 복원)
+                except Exception:
+                    pass
             except SystemExit:
                 context.close()
                 emit({"views": 0, "dwellSec": None, "searchInflow": [],

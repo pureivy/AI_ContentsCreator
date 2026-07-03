@@ -160,6 +160,14 @@ def full_auto_login(page, naver_id: str, naver_pw: str):
         }""", naver_pw)
         time.sleep(0.5)
 
+        # '로그인 상태 유지' 체크 — NID 쿠키를 지속형으로(다음 실행 재로그인 방지).
+        page.evaluate("""() => {
+            const keep = document.querySelector('#keep, input[id=keep], .keep_check input, label[for=keep]');
+            if (keep && keep.tagName === 'INPUT' && !keep.checked) { keep.click(); }
+            else if (keep && keep.tagName === 'LABEL') { keep.click(); }
+        }""")
+        time.sleep(0.2)
+
         # 로그인 버튼 클릭
         page.evaluate("""() => {
             const btn = document.querySelector('button#log\\\\.login, button[type=submit], .btn_login');
@@ -575,22 +583,6 @@ def human_type_rich(page, text: str):
         if bold:
             page.keyboard.press("ControlOrMeta+b")  # 굵게 해제
             time.sleep(_rand(0.05, 0.15))
-
-
-def _body_focused(page) -> bool:
-    """본문 포커스 검증. SE 는 본문 키 입력을 숨은 'input_buffer' iframe 으로 캡처하므로, 본문을
-    클릭하면 최상위 activeElement 가 그 IFRAME 이 된다(정상). 이걸 본문 포커스로 인정하고, 제목만 거부한다."""
-    try:
-        return bool(page.evaluate("""() => {
-            const a = document.activeElement;
-            if (!a || a === document.body) return false;
-            if (a.closest('.se-title-text, .se-documentTitle, [data-type="title"]')) return false; // 제목이면 실패
-            // 본문 입력 버퍼 iframe(SE 가 IME/키 입력 캡처) = 본문 포커스 정상. 식별자는 id(name 은 빈값).
-            if (a.tagName === 'IFRAME' && /input_buffer/i.test((a.id || '') + '|' + (a.name || ''))) return true;
-            return !!(a.isContentEditable || a.closest('[contenteditable="true"]') || a.closest('.se-content'));
-        }"""))
-    except Exception:
-        return False
 
 
 def _active_info(page) -> dict:
@@ -1236,15 +1228,31 @@ def main():
             page = context.pages[0] if context.pages else context.new_page()
             page.on("dialog", lambda d: d.accept())
 
-            # 로그인 확인 (persistent context이므로 이전 세션 유지됨)
+            # 저장된 쿠키 복원 — 같은 환경에서 재로그인 방지(NID 세션 쿠키는 프로필에 안 남아 별도 저장/복원).
+            cookies_file = profile_dir / "naver_cookies.json"
+            if cookies_file.exists():
+                try:
+                    with open(cookies_file, encoding="utf-8") as f:
+                        context.add_cookies(json.load(f))
+                    log("[쿠키] 저장된 세션 복원")
+                except Exception as e:
+                    log(f"[쿠키] 복원 실패(무해): {str(e)[:60]}")
+
+            # 로그인 확인
             page.goto("https://blog.naver.com", wait_until="domcontentloaded", timeout=15000)
             time.sleep(1.5)
             logged_in = page.locator("a[href*='nidlogin'], .link_login").count() == 0
 
             if logged_in:
-                log("[로그인] 기존 세션으로 자동 로그인 완료")
+                log("[로그인] 기존 세션으로 자동 로그인 완료(재로그인 없음)")
             else:
                 full_auto_login(page, naver_id, naver_pw)
+
+            # 로그인 세션 쿠키 저장 — 다음 실행부터 같은 환경이면 재로그인 불필요.
+            try:
+                save_cookies(context, cookies_file)
+            except Exception as e:
+                log(f"[쿠키] 저장 실패(무해): {str(e)[:60]}")
 
             try:
                 result = write_post(page, blog_id, final_content, image_manifest, args.run_dir)
