@@ -64,6 +64,9 @@ export interface AgentRunArgs {
   context?: string;
   /** 'work' | 'critique' | 'rebuttal' | 'synthesis' | ... — 스트림 종류/지표 태깅. */
   stage: string;
+  /** 능동 도구 루프 강제 오버라이드 — 미지정 시 stage==='work' 규칙. 지명(directed) 런은
+   *  synthesis 스테이지지만 사용자가 특정 직원에게 조사를 시키는 경로라 true 로 켠다. */
+  toolLoop?: boolean;
   /** 빈 출력 시 승급 재시도할 상위 tier 모델(소형 모델 무음 실패 구제). */
   fallbackModel?: string;
   blockId?: string;
@@ -119,9 +122,9 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
 
   // --- LLM Wiki 그라운딩(Karpathy: 인덱스 우선 탐색 → 관련 페이지 본문 주입) ---
   const tools = effectiveTools(role); // 워크스페이스 capabilities 오버레이 반영
-  // 능동 다단계 도구 루프(옵트인: AGENT_TOOL_LOOP) — stage='work' + autonomy>0 일 때만 활성.
+  // 능동 다단계 도구 루프(옵트인: AGENT_TOOL_LOOP) — 기본 stage='work'(+지명 런 오버라이드) + autonomy>0.
   // 기본(off)에선 effectiveAutonomy 디스크 읽기조차 건너뛰어 기존 단발 경로가 추가 I/O 0 으로 유지된다.
-  const loopOn = CONFIG.agentToolLoop && stage === 'work';
+  const loopOn = CONFIG.agentToolLoop && (args.toolLoop ?? stage === 'work');
   const autonomy = loopOn ? effectiveAutonomy(role) : role.autonomy;
   const loopTools = (loopOn && autonomy > 0) ? availableLoopTools(tools, autonomy) : [];
   const loopActive = loopTools.length > 0;

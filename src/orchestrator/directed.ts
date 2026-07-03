@@ -28,7 +28,7 @@ export async function runDirected(bus: EventBus, opts: RunOptions): Promise<RunO
   const out = await runAgent({
     bus, role, model: modelForTier(assign, role.tier),
     task: subContext ? `${topic}\n\n관련 하위 문제:\n${subContext}` : topic,
-    stage: 'synthesis', emitSpawn: true, blockId: 'ceo-synth', groundQuery: topic,
+    stage: 'synthesis', toolLoop: true, emitSpawn: true, blockId: 'ceo-synth', groundQuery: topic,
     maxOutputTokens: CONFIG.integrationMaxOutputTokens, signal,
   });
 
