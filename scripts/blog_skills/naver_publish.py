@@ -488,7 +488,9 @@ def parse_body_to_comps(body: str) -> list:
 
     def flush_quote():
         if quote_buf:
-            comps.append(make_quotation(list(quote_buf)))
+            comps.append(make_quotation(list(quote_buf[:2])))   # 인용구는 최대 2줄
+            if len(quote_buf) > 2:                               # 초과분은 본문 문단으로
+                comps.append(make_text_comp(list(quote_buf[2:])))
             quote_buf.clear()
 
     def flush_table():
@@ -818,7 +820,7 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
                 first_block = True
                 k += 1
                 continue
-            # 인용구(연속된 >) — 툴바 명령 삽입 후 내부 타이핑.
+            # 인용구(연속된 >) — 툴바 명령 삽입 후 내부 타이핑. 최대 2줄, 초과분은 본문 문단으로.
             mq = re.match(r"^>\s?(.*)$", line)
             if mq:
                 qlines = [mq.group(1)]
@@ -829,8 +831,12 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
                         break
                     qlines.append(m2.group(1))
                     k += 1
-                insert_quote_ui(page, qlines)
+                qlines = [q for q in qlines if q.strip()]
+                insert_quote_ui(page, qlines[:2])       # 인용구는 2줄까지
                 first_block = True
+                for extra in qlines[2:]:                # 초과분은 일반 문단
+                    newline_before()
+                    human_type_rich(page, extra)
                 continue
             # 일반 문단
             newline_before()
