@@ -41,6 +41,7 @@ import { startAutoCycle, proposeContentIdeas, startDaily } from '../autonomy/sch
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore } from '../content/cardnews';
+import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning } from '../orchestrator/cardnews';
 import { pieceStore, selectResumablePiece } from '../content/pieces';
 import type { Piece } from '../content/pieces';
@@ -536,34 +537,77 @@ function cardActorNames(): { planner?: string; designer?: string } {
   } catch { return {}; }
 }
 
+// 카드뉴스 잡을 '런'으로 등록 — 오피스 뷰·활동 피드·타임라인이 런 이벤트로 구동되므로, 버스를
+// 흘리면 송하영·민준호가 실제로 일하는 모습(스폰·작업 애니메이션·스트림·지표)이 그대로 보인다.
+// 런 취소 버튼 → abort 로 잡 중단까지 연결. 완료 시 이벤트 영속(리플레이 가능).
+function launchCardNewsRun(cardId: string, topic: string, opts: { sourceBody?: string; slideCount?: number } = {}): string {
+  const id = runId();
+  const bus = createBus(id);
+  const abort = new AbortController();
+  const handle: RunHandle = {
+    status: 'running', abort, topic: `카드뉴스: ${topic}`.slice(0, 80), created_ts: new Date().toISOString(), auto: false,
+  };
+  RUNS.set(id, handle);
+  evictRuns();
+  bus.emit(EventType.run_started, { topic: handle.topic });
+  runCardNewsJob(cardId, { ...opts, bus, signal: abort.signal })
+    .then(() => {
+      const card = cardNewsStore().get(cardId);
+      if (abort.signal.aborted) { handle.status = 'cancelled'; bus.emit(EventType.run_done, { status: 'cancelled' }); return; }
+      if (card?.stage === 'ready') {
+        handle.status = 'done';
+        handle.deliverable = [`카드뉴스 ${card.slides ?? 0}장 완성 — ${card.topic}`, card.caption ?? ''].filter(Boolean).join('\n\n');
+        bus.emit(EventType.run_done, { status: 'done' });
+      } else {
+        handle.status = 'error';
+        bus.emit(EventType.error, { message: card?.error ?? '카드뉴스 생성 실패' });
+        bus.emit(EventType.run_done, { status: 'error' });
+      }
+    })
+    .catch((e: unknown) => {
+      handle.status = abort.signal.aborted ? 'cancelled' : 'error';
+      if (!abort.signal.aborted) bus.emit(EventType.error, { message: e instanceof Error ? e.message : String(e) });
+      bus.emit(EventType.run_done, { status: handle.status });
+    })
+    .finally(() => { persistEvents(id, bus); persistRunMeta(id, handle); });
+  return id;
+}
+
 async function cardNewsCreateHandler(c: Context): Promise<Response> {
   const b = await c.req.json<{ topic?: string; keyword?: string; slides?: number }>()
     .catch(() => ({}) as { topic?: string; keyword?: string; slides?: number });
   const topic = (b.topic ?? '').trim();
   if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
   const card = cardNewsStore().create({ topic, keyword: b.keyword, ...cardActorNames() });
-  void runCardNewsJob(card.id, { slideCount: b.slides });
-  return c.json({ card });
+  const run = launchCardNewsRun(card.id, topic, { slideCount: b.slides });
+  return c.json({ card, run_id: run });
 }
 
-// 블로그 초안 → 카드뉴스 파생 — 초안 본문을 기획자에게 넘겨 슬라이드로 재구성(복붙 아님).
-async function cardNewsFromPieceHandler(c: Context): Promise<Response> {
-  const id = c.req.param('id') ?? '';
-  const piece = pieceStore().get(id);
-  if (!piece) return c.json({ error: 'unknown piece' }, 404);
-  if (!piece.runId) return c.json({ error: '초안이 아직 없습니다.' }, 409);
-  const b = await c.req.json<{ slides?: number }>().catch(() => ({}) as { slides?: number });
+// 블로그 초안 → 카드뉴스 파생(공용) — 초안 본문을 기획자에게 넘겨 슬라이드로 재구성(복붙 아님).
+// 검토 탭 수동 버튼과 '네이버 임시저장 성공' 자동 훅이 공유한다.
+function deriveCardNewsFromPiece(pieceId: string, slides?: number): { card: CardNews } | { error: string } {
+  const piece = pieceStore().get(pieceId);
+  if (!piece) return { error: 'unknown piece' };
+  if (!piece.runId) return { error: '초안이 아직 없습니다.' };
   let body = '';
   try {
     const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, piece.runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
     body = (d.bodyMarkdown ?? '').trim();
   } catch { /* 아래에서 거절 */ }
-  if (!body) return c.json({ error: '초안 본문(draft.json)을 읽을 수 없습니다.' }, 404);
+  if (!body) return { error: '초안 본문(draft.json)을 읽을 수 없습니다.' };
   const card = cardNewsStore().create({
     topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, ...cardActorNames(),
   });
-  void runCardNewsJob(card.id, { sourceBody: body, slideCount: b.slides });
-  return c.json({ card });
+  launchCardNewsRun(card.id, piece.title, { sourceBody: body, slideCount: slides });
+  return { card };
+}
+async function cardNewsFromPieceHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
+  const b = await c.req.json<{ slides?: number }>().catch(() => ({}) as { slides?: number });
+  const r = deriveCardNewsFromPiece(id, b.slides);
+  if ('error' in r) return c.json({ error: r.error }, r.error === 'unknown piece' ? 404 : 409);
+  return c.json({ card: r.card });
 }
 
 function cardNewsListHandler(c: Context): Response {
@@ -733,6 +777,14 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
       // 잡 도는 사이 리비전으로 runId 가 바뀌었다면 이 결과는 옛 내용 — 현재 초안의 기록으로 남기지 않는다.
       if (!dryRun && pieceStore().get(id)?.runId === runIdAtStart) {
         pieceStore().update(id, { naverDraftUrl: r.draftUrl ?? r.adminUrl, naverDraftTs: job.endedTs });
+        // 저장 성공 = 본문 확정 → 카드뉴스 자동 파생(사용자 확정 워크플로우: 주제 하나 → 블로그+카드뉴스).
+        // piece당 1회(이미 이 초안에서 파생된 카드가 있으면 스킵), AUTO_CARDNEWS 로 켜고 끔.
+        if (CONFIG.autoCardNews && !cardNewsStore().list().some((x) => x.sourcePieceId === id)) {
+          const dc = deriveCardNewsFromPiece(id);
+          console.log('error' in dc
+            ? `[카드뉴스] 자동 파생 실패 — ${piece.title.slice(0, 25)}: ${dc.error}`
+            : `[카드뉴스] 자동 파생 시작 — ${piece.title.slice(0, 30)} (${dc.card.id})`);
+        }
       }
     } else {
       job.status = 'failed';
