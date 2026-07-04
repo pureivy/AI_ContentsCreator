@@ -90,11 +90,14 @@ export default function ContentCalendar() {
     if (r.ok) load(); else alert(r.error || "삭제 실패");
   };
 
+  // 주제 추가 = 아이디어 생성 + 즉시 블로그 런 시작(사용자 의도: 주제 입력 → 바로 생성).
+  // 런까지 못 띄워도(동시 실행 상한 등) 아이디어 카드는 남아 자율 사이클/수동 실행으로 이어진다.
   const addIdea = async () => {
     const t = title.trim();
     if (!t) return;
     setBusy(true); setErr("");
     const r = await createPiece({ title: t, keyword: keyword.trim() || undefined });
+    if (r.ok && r.id) { await runPiece(r.id); }
     setBusy(false);
     if (r.ok) { setTitle(""); setKeyword(""); load(); }
     else setErr(r.error || "생성 실패");
@@ -105,7 +108,7 @@ export default function ContentCalendar() {
       <div className="apikeys-head">
         <h1>📅 콘텐츠 캘린더</h1>
         <p className="apikeys-sub">
-          자율 스튜디오가 아이디어→초안→검토대기까지 만들고, 발행·성과는 사람이 관리합니다.
+          주제를 넣으면 바로 블로그 생성이 시작돼 초안→검토대기까지 이어지고, 발행·성과는 사람이 관리합니다.
           여기 카드는 크로스-런 실데이터를 8초마다 폴링합니다(총 {pieces.length}건).
         </p>
       </div>
@@ -122,7 +125,7 @@ export default function ContentCalendar() {
           onChange={(e) => setKeyword(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") addIdea(); }}
         />
-        <button className="btn start" disabled={busy || !title.trim()} onClick={addIdea}>+ 아이디어 추가</button>
+        <button className="btn start" disabled={busy || !title.trim()} onClick={addIdea}>{busy ? "생성 시작 중…" : "+ 주제 추가 · 생성 시작"}</button>
         {err && <span className="muted" style={{ color: "var(--con)" }}>{err}</span>}
       </div>
 

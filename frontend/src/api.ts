@@ -766,11 +766,12 @@ export async function fetchPieces(): Promise<PieceInfo[]> {
   try { const r = await fetch("/pieces"); if (!r.ok) return []; return (await r.json()).pieces ?? []; }
   catch { return []; }
 }
-export async function createPiece(body: { title: string; keyword?: string; subNiche?: string }): Promise<{ ok: boolean; error?: string }> {
+export async function createPiece(body: { title: string; keyword?: string; subNiche?: string }): Promise<{ ok: boolean; id?: string; error?: string }> {
   try {
     const r = await fetch("/pieces", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
-    return { ok: true };
+    const j = await r.json().catch(() => ({} as { piece?: { id: string }; error?: string }));
+    if (!r.ok) return { ok: false, error: j.error };
+    return { ok: true, id: j.piece?.id };
   } catch { return { ok: false, error: "network" }; }
 }
 export async function fetchPieceDraft(id: string): Promise<PieceDraftResp | null> {
