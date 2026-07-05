@@ -22,7 +22,13 @@
 /* ---- 인풋/셀렉트/텍스트에어리어 : 포커스 링은 Wanted violet -- */
 .chat-input input:focus, .chat-input textarea:focus,
 .apikey-field input:focus, .llm-run-select:focus,
-.llm-card input:focus, .llm-card select:focus {
+.llm-card input:focus, .llm-card select:focus,
+.emp-field input:focus, .emp-field textarea:focus, .emp-field select:focus,
+.emp-addmember input:focus, .emp-addteam input:focus,
+.emp-edit-area:focus, .emp-skill-add input:focus,
+.calendar-newidea input:focus, .review-inline input:focus,
+.review-body:focus, .review-section > textarea:focus,
+.brain-search:focus, .history:focus {
   outline: none;
   border-color: var(--line-focus);
   box-shadow: 0 0 0 3px rgba(151, 71, 255, 0.28);
@@ -33,8 +39,9 @@
   border-radius: var(--radius-full);
 }
 
-/* ---- 네비/탭 활성 강조도 primary 토큰으로 ------------------ */
-.viewtoggle button.active { background: var(--bg-primary); border-color: var(--bg-primary); }
+/* ---- 네비 활성: Wanted 헤더 문법(중성 배경 + 강한 전경) ------
+   브랜드 블루는 CTA(시작 버튼)에만 — 네비에서 색을 빼 위계를 정돈. */
+.viewtoggle button.active { background: var(--bg-neutral-strong); color: var(--fg-neutral-primary); border-color: transparent; }
 
 /* ---- 패널 제목 가중치 통일(Wanted label = 600 SemiBold) -----
    타임라인·활동·산출물의 역할명/카드 제목이 700 이라 본문 대비 과하게 진하고

@@ -50,7 +50,16 @@
   --line-neutral:        rgba(255,255,255,0.16);
   --line-neutral-strong: rgba(255,255,255,0.32);
   --line-primary:        #0066ff;
+  --line-primary-subtle: rgba(85,152,248,0.45);
   --line-focus:          #9747ff;
+
+  /* Subtle 상태 배경(다크) — ad-hoc 네이비/그린/레드 틴트 대체.
+     Wanted 라이트의 *-subtle(연한 단색)을 다크에선 저알파 틴트로 재현. */
+  --bg-success-subtle: rgba(0,191,64,0.14);
+  --bg-danger-subtle:  rgba(255,66,66,0.14);
+  --bg-warning-subtle: rgba(255,106,0,0.12);
+  --bg-info-subtle:    rgba(0,152,178,0.14);
+  --bg-violet-subtle:  rgba(151,71,255,0.16);
 
   /* ===== Shadow ===== */
   --shadow-1: 0 1px 2px rgba(0,0,0,0.24), 0 1px 3px rgba(0,0,0,0.28);
