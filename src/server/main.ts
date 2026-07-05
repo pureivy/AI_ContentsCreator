@@ -43,6 +43,9 @@ import { promisify } from 'node:util';
 import { cardNewsStore } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning } from '../orchestrator/cardnews';
+import { shortsStore } from '../content/shorts';
+import type { Shorts } from '../content/shorts';
+import { runShortsJob, isShortsRunning } from '../orchestrator/shorts';
 import { pieceStore, selectResumablePiece } from '../content/pieces';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
@@ -672,6 +675,175 @@ app.get('/cardnews/:id', cardNewsGetHandler);
 app.get('/api/cardnews/:id', cardNewsGetHandler);
 app.delete('/cardnews/:id', cardNewsDeleteHandler);
 app.delete('/api/cardnews/:id', cardNewsDeleteHandler);
+
+// ============================================================
+// 숏폼 — 숏폼팀(standby) 전용 파이프라인. 카드뉴스와 동일 구조(런 등록 = 오피스 뷰 연동,
+// GET 폴링, 발행 없음 — 다운로드 전용). 산출물: 세로 MP4 + srt + 캡션.
+// ============================================================
+
+/** 담당자 실명(작가·디렉터) — 로스터에서 해석해 레코드에 표기(UI용). */
+function shortsActorNames(): { writer?: string; director?: string } {
+  try {
+    const roles = rolesById(getCompany());
+    return { writer: roles.get('shorts_writer')?.name, director: roles.get('shorts_director')?.name };
+  } catch { return {}; }
+}
+
+// 숏폼 잡을 '런'으로 등록 — 유하린·서준영의 스폰·작업·지표가 오피스 뷰에 흐르고,
+// 런 취소 → abort 로 잡 중단, 완료 시 이벤트 영속(리플레이). launchCardNewsRun 과 동일 패턴.
+function launchShortsRun(shortsId: string, topic: string, opts: { sourceBody?: string; sceneCount?: number } = {}): string {
+  const id = runId();
+  const bus = createBus(id);
+  const abort = new AbortController();
+  const handle: RunHandle = {
+    status: 'running', abort, topic: `숏폼: ${topic}`.slice(0, 80), created_ts: new Date().toISOString(), auto: false,
+  };
+  RUNS.set(id, handle);
+  evictRuns();
+  bus.emit(EventType.run_started, { topic: handle.topic });
+  runShortsJob(shortsId, { ...opts, bus, signal: abort.signal })
+    .then(() => {
+      const s = shortsStore().get(shortsId);
+      if (abort.signal.aborted) { handle.status = 'cancelled'; bus.emit(EventType.run_done, { status: 'cancelled' }); return; }
+      if (s?.stage === 'ready') {
+        handle.status = 'done';
+        handle.deliverable = [
+          `숏폼 ${s.durationSec ?? 0}초 · 씬 ${s.scenes ?? 0}개 완성 — ${s.title ?? s.topic}`,
+          s.description ?? '', (s.hashtags ?? []).join(' '),
+        ].filter(Boolean).join('\n\n');
+        bus.emit(EventType.run_done, { status: 'done' });
+      } else {
+        handle.status = 'error';
+        bus.emit(EventType.error, { message: s?.error ?? '숏폼 생성 실패' });
+        bus.emit(EventType.run_done, { status: 'error' });
+      }
+    })
+    .catch((e: unknown) => {
+      handle.status = abort.signal.aborted ? 'cancelled' : 'error';
+      if (!abort.signal.aborted) bus.emit(EventType.error, { message: e instanceof Error ? e.message : String(e) });
+      bus.emit(EventType.run_done, { status: handle.status });
+    })
+    .finally(() => { persistEvents(id, bus); persistRunMeta(id, handle); });
+  return id;
+}
+
+async function shortsCreateHandler(c: Context): Promise<Response> {
+  const b = await c.req.json<{ topic?: string; keyword?: string; scenes?: number }>()
+    .catch(() => ({}) as { topic?: string; keyword?: string; scenes?: number });
+  const topic = (b.topic ?? '').trim();
+  if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
+  const short = shortsStore().create({ topic, keyword: b.keyword, ...shortsActorNames() });
+  const run = launchShortsRun(short.id, topic, { sceneCount: b.scenes });
+  return c.json({ short, run_id: run });
+}
+
+// 블로그 초안 → 숏폼 파생(공용) — 검토 탭 버튼·네이버 저장 성공 자동 훅이 공유.
+function deriveShortsFromPiece(pieceId: string, scenes?: number): { short: Shorts } | { error: string } {
+  const piece = pieceStore().get(pieceId);
+  if (!piece) return { error: 'unknown piece' };
+  if (!piece.runId) return { error: '초안이 아직 없습니다.' };
+  let body = '';
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, piece.runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
+    body = (d.bodyMarkdown ?? '').trim();
+  } catch { /* 아래에서 거절 */ }
+  if (!body) return { error: '초안 본문(draft.json)을 읽을 수 없습니다.' };
+  const short = shortsStore().create({
+    topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, ...shortsActorNames(),
+  });
+  launchShortsRun(short.id, piece.title, { sourceBody: body, sceneCount: scenes });
+  return { short };
+}
+async function shortsFromPieceHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
+  const b = await c.req.json<{ scenes?: number }>().catch(() => ({}) as { scenes?: number });
+  const r = deriveShortsFromPiece(id, b.scenes);
+  if ('error' in r) return c.json({ error: r.error }, r.error === 'unknown piece' ? 404 : 409);
+  return c.json({ short: r.short });
+}
+
+function shortsListHandler(c: Context): Response {
+  return c.json({ shorts: shortsStore().list().map((x) => ({ ...x, running: isShortsRunning(x.id) })) });
+}
+function shortsGetHandler(c: Context): Response {
+  const x = shortsStore().get(c.req.param('id') ?? '');
+  return x ? c.json({ short: { ...x, running: isShortsRunning(x.id) } }) : c.json({ error: 'unknown short' }, 404);
+}
+// MP4 서빙 — Range 지원(Safari 는 Range 없이는 <video> 재생 거부, Chrome 도 시킹에 필요).
+function shortsVideoHandler(c: Context): Response {
+  const id = c.req.param('id') ?? '';
+  if (!shortsStore().get(id)) return c.json({ error: 'unknown short' }, 404);
+  const fp = path.join(shortsStore().dirFor(id), 'final.mp4');
+  let size = 0;
+  try { size = fs.statSync(fp).size; } catch { return c.json({ error: 'video not found' }, 404); }
+  const range = c.req.header('range');
+  const m = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
+  if (m && (m[1] || m[2])) {
+    const start = m[1] ? parseInt(m[1], 10) : Math.max(0, size - parseInt(m[2]!, 10));
+    const end = m[1] && m[2] ? Math.min(parseInt(m[2], 10), size - 1) : size - 1;
+    if (!Number.isFinite(start) || start >= size || start > end) {
+      return c.body(null, 416, { 'Content-Range': `bytes */${size}` });
+    }
+    const fd = fs.openSync(fp, 'r');
+    try {
+      const buf = Buffer.alloc(end - start + 1);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      return c.body(new Uint8Array(buf), 206, {
+        'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes',
+        'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': String(buf.length),
+      });
+    } finally { fs.closeSync(fd); }
+  }
+  const buf = fs.readFileSync(fp);
+  return c.body(new Uint8Array(buf), 200, {
+    'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes', 'Content-Length': String(size),
+  });
+}
+// 전체 zip — MP4 + 자막(srt) + 캡션. 매 요청 재생성(항상 최신).
+async function shortsZipHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  const s = shortsStore().get(id);
+  if (!s) return c.json({ error: 'unknown short' }, 404);
+  if (s.stage !== 'ready') return c.json({ error: '아직 완성되지 않았습니다.' }, 409);
+  const dir = shortsStore().dirFor(id);
+  const files = ['final.mp4', 'subtitles.srt', 'caption.txt'].filter((f) => fs.existsSync(path.join(dir, f)));
+  if (!files.length) return c.json({ error: '산출물이 없습니다.' }, 404);
+  const zipPath = path.join(dir, 'shorts.zip');
+  try { fs.rmSync(zipPath, { force: true }); } catch { /* 무해 */ }
+  try {
+    await execFileP('/usr/bin/zip', ['-j', '-q', zipPath, ...files.map((f) => path.join(dir, f))]);
+    const buf = fs.readFileSync(zipPath);
+    return c.body(new Uint8Array(buf), 200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="shorts-${id}.zip"`,
+    });
+  } catch (e) {
+    return c.json({ error: `zip 생성 실패: ${e instanceof Error ? e.message : String(e)}` }, 500);
+  }
+}
+function shortsDeleteHandler(c: Context): Response {
+  const id = c.req.param('id') ?? '';
+  if (!shortsStore().get(id)) return c.json({ error: 'unknown short' }, 404);
+  if (isShortsRunning(id)) return c.json({ error: '생성이 진행 중입니다 — 완료 후 삭제하세요.' }, 409);
+  shortsStore().remove(id); // 산출물 파일은 남김(비파괴)
+  return c.json({ ok: true });
+}
+
+app.post('/shorts', shortsCreateHandler);
+app.post('/api/shorts', shortsCreateHandler);
+app.post('/pieces/:id/shorts', shortsFromPieceHandler);
+app.post('/api/pieces/:id/shorts', shortsFromPieceHandler);
+app.get('/shorts', shortsListHandler);
+app.get('/api/shorts', shortsListHandler);
+app.get('/shorts/:id/video', shortsVideoHandler); // :id 보다 먼저(구체 경로 우선)
+app.get('/api/shorts/:id/video', shortsVideoHandler);
+app.get('/shorts/:id/zip', shortsZipHandler);
+app.get('/api/shorts/:id/zip', shortsZipHandler);
+app.get('/shorts/:id', shortsGetHandler);
+app.get('/api/shorts/:id', shortsGetHandler);
+app.delete('/shorts/:id', shortsDeleteHandler);
+app.delete('/api/shorts/:id', shortsDeleteHandler);
 app.post('/pieces/:id/published', piecePublishedHandler);
 app.post('/api/pieces/:id/published', piecePublishedHandler);
 app.post('/pieces/:id/metrics', pieceMetricsPostHandler);
@@ -777,13 +949,19 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
       // 잡 도는 사이 리비전으로 runId 가 바뀌었다면 이 결과는 옛 내용 — 현재 초안의 기록으로 남기지 않는다.
       if (!dryRun && pieceStore().get(id)?.runId === runIdAtStart) {
         pieceStore().update(id, { naverDraftUrl: r.draftUrl ?? r.adminUrl, naverDraftTs: job.endedTs });
-        // 저장 성공 = 본문 확정 → 카드뉴스 자동 파생(사용자 확정 워크플로우: 주제 하나 → 블로그+카드뉴스).
-        // piece당 1회(이미 이 초안에서 파생된 카드가 있으면 스킵), AUTO_CARDNEWS 로 켜고 끔.
+        // 저장 성공 = 본문 확정 → 카드뉴스·숏폼 자동 파생(사용자 확정 워크플로우: 주제 하나 →
+        // 블로그+카드뉴스+숏폼 세트). piece당 각 1회, AUTO_CARDNEWS / AUTO_SHORTS 로 켜고 끔.
         if (CONFIG.autoCardNews && !cardNewsStore().list().some((x) => x.sourcePieceId === id)) {
           const dc = deriveCardNewsFromPiece(id);
           console.log('error' in dc
             ? `[카드뉴스] 자동 파생 실패 — ${piece.title.slice(0, 25)}: ${dc.error}`
             : `[카드뉴스] 자동 파생 시작 — ${piece.title.slice(0, 30)} (${dc.card.id})`);
+        }
+        if (CONFIG.autoShorts && !shortsStore().list().some((x) => x.sourcePieceId === id)) {
+          const ds = deriveShortsFromPiece(id);
+          console.log('error' in ds
+            ? `[숏폼] 자동 파생 실패 — ${piece.title.slice(0, 25)}: ${ds.error}`
+            : `[숏폼] 자동 파생 시작 — ${piece.title.slice(0, 30)} (${ds.short.id})`);
         }
       }
     } else {

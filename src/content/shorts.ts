@@ -1,0 +1,107 @@
+/**
+ * 숏폼 레코드 스토어 — cardnews.ts 와 동일한 파일 영속 패턴(원자적 교체).
+ * 산출물(final.mp4·subtitles.srt·caption.txt·plan.json·scenes/)은 data/shorts/<id>/ 에,
+ * 인덱스(index.json)는 목록·상태 폴링용 메타만 담는다.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { CONFIG } from '../config';
+import { genId } from '../util/ids';
+
+export type ShortsStage = 'planning' | 'designing' | 'rendering' | 'ready' | 'error';
+
+export interface Shorts {
+  id: string;
+  /** 주제(독립 생성) 또는 원본 블로그 제목(파생). */
+  topic: string;
+  keyword?: string;
+  /** 블로그 초안에서 파생된 경우 원본 piece id. */
+  sourcePieceId?: string;
+  stage: ShortsStage;
+  /** 대표 제목(ready 시 — 기획 확정 제목). */
+  title?: string;
+  /** 제목 후보 3종(정보형/후킹형/질문형). */
+  titles?: string[];
+  description?: string;
+  hashtags?: string[];
+  /** 완성 영상 길이(초)·씬 수(ready 시). */
+  durationSec?: number;
+  scenes?: number;
+  /** 배경 폴백(그라데이션)으로 렌더된 씬 수 — 이미지 생성 실패 진단용. */
+  bgFallbacks?: number;
+  /** 담당자 실명(작가·디렉터) — UI 표기. */
+  writer?: string;
+  director?: string;
+  error?: string;
+  createdTs: string;
+  updatedTs: string;
+}
+
+export interface CreateShortsInput {
+  topic: string;
+  keyword?: string;
+  sourcePieceId?: string;
+  writer?: string;
+  director?: string;
+}
+
+export class ShortsStore {
+  private file: string;
+  private items = new Map<string, Shorts>();
+  constructor(private dir: string = path.join(CONFIG.dataDir, 'shorts')) {
+    this.file = path.join(dir, 'index.json');
+    this.load();
+  }
+  private load(): void {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.file, 'utf-8')) as Shorts[];
+      if (Array.isArray(raw)) for (const s of raw) if (s && s.id) this.items.set(s.id, s);
+    } catch { /* 없으면 빈 스토어 */ }
+  }
+  private persist(): void {
+    try {
+      fs.mkdirSync(path.dirname(this.file), { recursive: true });
+      const tmp = `${this.file}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify([...this.items.values()], null, 2), 'utf-8');
+      fs.renameSync(tmp, this.file); // 원자적 교체 — 부분 쓰기로 인덱스 오염 방지.
+    } catch { /* 영속 실패 무해(다음 변경에서 재시도) */ }
+  }
+  /** 숏폼 산출물 디렉토리(data/shorts/<id>). */
+  dirFor(id: string): string { return path.join(this.dir, id); }
+  create(input: CreateShortsInput): Shorts {
+    const now = new Date().toISOString();
+    const s: Shorts = {
+      id: genId('short'), topic: input.topic.trim(),
+      keyword: input.keyword?.trim() || undefined,
+      sourcePieceId: input.sourcePieceId,
+      writer: input.writer, director: input.director,
+      stage: 'planning', createdTs: now, updatedTs: now,
+    };
+    this.items.set(s.id, s);
+    this.persist();
+    return s;
+  }
+  get(id: string): Shorts | undefined { return this.items.get(id); }
+  /** 최신순 정렬 사본. */
+  list(): Shorts[] { return [...this.items.values()].sort((a, b) => b.createdTs.localeCompare(a.createdTs)); }
+  update(id: string, patch: Partial<Shorts>): Shorts | undefined {
+    const s = this.items.get(id);
+    if (!s) return undefined;
+    const next: Shorts = { ...s, ...patch, id: s.id, createdTs: s.createdTs, updatedTs: new Date().toISOString() };
+    this.items.set(id, next);
+    this.persist();
+    return next;
+  }
+  /** 카드 제거 — 산출물 파일은 남긴다(비파괴: 인덱스에서만 제거, pieces·cardnews 와 동일 원칙). */
+  remove(id: string): boolean {
+    const existed = this.items.delete(id);
+    if (existed) this.persist();
+    return existed;
+  }
+}
+
+let _store: ShortsStore | null = null;
+export function shortsStore(): ShortsStore {
+  if (!_store) _store = new ShortsStore();
+  return _store;
+}

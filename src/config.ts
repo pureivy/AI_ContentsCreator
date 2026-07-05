@@ -136,6 +136,8 @@ export interface Config {
   readonly naverDraftSeoMin: number;
   /** 네이버 임시저장 성공(본문 확정) 시 카드뉴스 자동 파생 — piece당 1회. 글마다 이미지 5장 내외 생성 비용. */
   readonly autoCardNews: boolean;
+  /** 네이버 임시저장 성공 시 숏폼(MP4) 자동 파생 — piece당 1회. 글마다 이미지 ~6장 + TTS·ffmpeg(로컬) 비용. */
+  readonly autoShorts: boolean;
 
   // --- 음성 입출력 ---
   readonly voiceTtsVoice: string;
@@ -271,6 +273,7 @@ export const CONFIG: Config = {
   autoNaverDraft: envBool('AUTO_NAVER_DRAFT', true),
   naverDraftSeoMin: Math.min(Math.max(0, envInt('NAVER_DRAFT_SEO_MIN', 80)), 100),
   autoCardNews: envBool('AUTO_CARDNEWS', true),
+  autoShorts: envBool('AUTO_SHORTS', true),
 
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
   voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),
