@@ -13,6 +13,7 @@ import ContentCalendar from "./panels/ContentCalendar";
 import DraftReview from "./panels/DraftReview";
 import PerformanceView from "./panels/PerformanceView";
 import CardNewsView from "./panels/CardNewsView";
+import ShortsView from "./panels/ShortsView";
 import { useStageWidths } from "./panels/useStageWidths";
 import { countWorking } from "./events/working";
 import OfficeTicker, { ga } from "./panels/OfficeTicker";
@@ -95,7 +96,7 @@ function progressNote(
   return "⏳ 편집장이 목표를 분석하는 중…";
 }
 
-type View = "office" | "graph" | "detail" | "employees" | "apikeys" | "llm" | "mcp" | "calendar" | "review" | "perf" | "cardnews";
+type View = "office" | "graph" | "detail" | "employees" | "apikeys" | "llm" | "mcp" | "calendar" | "review" | "perf" | "cardnews" | "shorts";
 type TLTab = "timeline" | "activity" | "workflow";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -1547,6 +1548,7 @@ export default function App() {
           <button className={view === "review" ? "active" : ""} onClick={() => setView("review")}>📝 검토</button>
           <button className={view === "perf" ? "active" : ""} onClick={() => setView("perf")}>📊 성과</button>
           <button className={view === "cardnews" ? "active" : ""} onClick={() => setView("cardnews")}>🃏 카드뉴스</button>
+          <button className={view === "shorts" ? "active" : ""} onClick={() => setView("shorts")}>🎬 숏폼</button>
         </div>
         <div className="viewtoggle">
           <button className={view === "apikeys" ? "active" : ""} onClick={() => setView("apikeys")}>🔑 API 키</button>
@@ -1656,6 +1658,10 @@ export default function App() {
       ) : view === "cardnews" ? (
         <main className="employees-stage">
           <CardNewsView />
+        </main>
+      ) : view === "shorts" ? (
+        <main className="employees-stage">
+          <ShortsView />
         </main>
       ) : view === "employees" ? (
         <main className="employees-stage">

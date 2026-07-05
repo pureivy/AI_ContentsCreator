@@ -67,6 +67,7 @@ const TEAM_REGION: Record<string, Region> = {
   research: ROOMS.support,
   secretariat: ROOMS.secretariat,
   cardnews: ROOMS.planning, // 카드뉴스팀 — 우측 상단 사무실(사용자 지정). 콘텐츠팀과 같은 방, 우측 구역 좌석.
+  shorts: ROOMS.pantry,     // 숏폼팀 — 우중(탕비실 옆 카페 테이블 구역). 빈 방 중 우측 라인 유지.
 };
 const regionCx = (r: Region): number => r.x + r.w / 2;
 // 팀장 자리 오버라이드(방 모양 보정) — 기획팀(planning)은 책상이 창측 '상단 띠'라 범용 앵커(상단 18%)가
@@ -74,11 +75,13 @@ const regionCx = (r: Region): number => r.x + r.w / 2;
 const TEAM_LEAD_SPOT: Record<string, { fx: number; fy: number }> = {
   content: { fx: 0.28, fy: 0.62 },
   cardnews: { fx: 0.78, fy: 0.62 }, // 같은 방 우측 구역 — 콘텐츠팀(좌측 0.28/0.62)과 겹침 방지
+  shorts: { fx: 0.32, fy: 0.60 },   // 탕비실 좌측 바닥(카페 바 앞)
 };
 // 팀별 멤버 좌석 오버라이드 — 기획팀 멤버(이미지 디자이너)는 팀장 우측 바닥(창측 데스크 앞).
 const TEAM_MEMBER_SEATS: Record<string, Seat[]> = {
   content: [{ fx: 0.5, fy: 0.68, face: "down" }, { fx: 0.62, fy: 0.68, face: "down" }],
   cardnews: [{ fx: 0.9, fy: 0.68, face: "down" }],
+  shorts: [{ fx: 0.58, fy: 0.66, face: "down" }], // 카페 테이블 쪽
 };
 const roomStyle = (r: Region) =>
   ({ left: `${r.x}%`, top: `${r.y}%`, width: `${r.w}%`, height: `${r.h}%` });

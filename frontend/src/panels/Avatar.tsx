@@ -8,7 +8,7 @@ import { useState } from "react";
 import { spriteFor } from "./officeSprites";
 
 // 스프라이트/얼굴 파일 갱신 시 브라우저 캐시 무효화용.
-const AVATAR_VERSION = 11; // 카드뉴스팀(cardplanner·carddesigner) face 추가
+const AVATAR_VERSION = 12; // 숏폼팀(shortswriter·shortsdirector) face 추가
 
 export default function Avatar({
   id,

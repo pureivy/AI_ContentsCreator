@@ -934,6 +934,54 @@ export async function deleteCardNews(id: string): Promise<{ ok: boolean; error?:
   } catch { return { ok: false, error: "network" }; }
 }
 
+// ── 숏폼(숏폼팀 전용 파이프라인) — 생성은 POST, 진행은 목록 GET 폴링, 발행 없음(다운로드 전용) ──
+export type ShortsStage = "planning" | "designing" | "rendering" | "ready" | "error";
+export interface ShortsInfo {
+  id: string;
+  topic: string;
+  keyword?: string;
+  sourcePieceId?: string;
+  stage: ShortsStage;
+  title?: string;
+  titles?: string[];
+  description?: string;
+  hashtags?: string[];
+  durationSec?: number;
+  scenes?: number;
+  bgFallbacks?: number;
+  writer?: string;
+  director?: string;
+  error?: string;
+  running?: boolean;
+  createdTs: string;
+  updatedTs: string;
+}
+export async function fetchShorts(): Promise<ShortsInfo[]> {
+  try { const r = await fetch("/shorts"); if (!r.ok) return []; return (await r.json()).shorts ?? []; }
+  catch { return []; }
+}
+export async function createShorts(body: { topic: string; keyword?: string; scenes?: number }): Promise<{ ok: boolean; id?: string; error?: string }> {
+  try {
+    const r = await fetch("/shorts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({} as { short?: { id: string }; error?: string }));
+    return r.ok ? { ok: true, id: j.short?.id } : { ok: false, error: j.error };
+  } catch { return { ok: false, error: "network" }; }
+}
+export async function createShortsFromPiece(pieceId: string, scenes?: number): Promise<{ ok: boolean; id?: string; error?: string }> {
+  try {
+    const r = await fetch(`/pieces/${pieceId}/shorts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scenes }) });
+    const j = await r.json().catch(() => ({} as { short?: { id: string }; error?: string }));
+    return r.ok ? { ok: true, id: j.short?.id } : { ok: false, error: j.error };
+  } catch { return { ok: false, error: "network" }; }
+}
+export async function deleteShorts(id: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`/shorts/${id}`, { method: "DELETE" });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return { ok: true };
+  } catch { return { ok: false, error: "network" }; }
+}
+
 // piece 온디맨드 실행 — 자율 케이던스를 안 기다리고 지금 초안 런을 띄운다.
 export async function runPiece(id: string): Promise<{ ok: boolean; run_id?: string; error?: string }> {
   try {
