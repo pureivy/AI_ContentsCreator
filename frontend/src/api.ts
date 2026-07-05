@@ -12,33 +12,7 @@ export interface RunInfo {
   version?: number;
 }
 
-// --- 반복 업무 템플릿(②) -------------------------------------------------------
-export interface TemplateInfo {
-  id: string; name: string; topic: string;
-  path?: string | null; agent?: string | null;
-  schedule?: string | null; enabled: boolean;
-}
-export async function fetchTemplates(): Promise<TemplateInfo[]> {
-  try {
-    const r = await fetch("/templates");
-    return r.ok ? (await r.json()).templates ?? [] : [];
-  } catch { return []; }
-}
-export async function saveTemplate(t: Partial<TemplateInfo>): Promise<TemplateInfo> {
-  const r = await fetch("/templates", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(t),
-  });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({})) as { error?: string }).error ?? `저장 실패 (${r.status})`);
-  return r.json();
-}
-export async function deleteTemplate(id: string): Promise<void> {
-  await fetch(`/templates/${id}`, { method: "DELETE" });
-}
-export async function runTemplate(id: string): Promise<{ run_id: string }> {
-  const r = await fetch(`/templates/${id}/run`, { method: "POST" });
-  if (!r.ok) throw new Error(`템플릿 실행 실패 (${r.status})`);
-  return r.json();
-}
+// (반복 업무 템플릿 기능 제거됨 — 백엔드 미구현 스텁이었고, 역할은 자율 사이클·캘린더가 대체)
 
 /** 산출물 수정 루프(⑤): 끝난 런에 피드백 → CEO 통합만 재실행하는 v{n} 런 시작. */
 export async function reviseRun(runId: string, feedback: string):

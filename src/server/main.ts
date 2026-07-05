@@ -1679,8 +1679,6 @@ app.post('/approvals/:id/decide', async (c) => {
 });
 
 // ============================================================
-// 미구현 패널 스텁 — 프론트가 빈 상태로 우아하게 렌더
-app.get('/templates', (c) => c.json({ templates: [] }));
 // MCP 서버 목록 — 현재 in-process 도구(위키·웹검색)를 MCP 서버 형태로 표면화. used_by 는 해당
 // 툴을 보유한 직원(실명/직책)을 company 로스터에서 스캔. 외부(법제처 등) 서버는 미구현이라 표시 안 함.
 async function mcpServers() {

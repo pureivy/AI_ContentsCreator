@@ -79,13 +79,6 @@ button, input, select, textarea { font-family: inherit; }
   box-shadow: 0 10px 30px rgba(0,0,0,0.5); padding: 5px; min-width: 150px;
   display: flex; flex-direction: column; gap: 2px; }
 /* ② 반복 업무 템플릿 풀다운 */
-.tpl-menu { min-width: 260px; }
-.tpl-empty { font-size: 12px; color: var(--muted); padding: 6px 10px; display: block; }
-.tpl-row { display: flex; align-items: stretch; gap: 2px; }
-.tpl-row .tpl-pick { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tpl-sched { color: var(--accent); font-size: 11px; margin-left: 4px; }
-.tpl-menu .tpl-act { flex: 0 0 auto; padding: 6px 8px !important; color: var(--muted); }
-.tpl-menu .tpl-save { border-top: 1px solid var(--border) !important; margin-top: 4px; color: var(--accent); }
 .upload-menu button { text-align: left; background: transparent; border: none; cursor: pointer;
   color: var(--text); font-size: 13px; padding: 8px 11px; border-radius: 7px; }
 .upload-menu button:hover { background: var(--panel2); }
@@ -1413,8 +1406,8 @@ button.upload-retry:hover { background: var(--panel2); }
 
 /* ---- (3) ≤400px 소형 폰: 크롬 한 단계 더 압축(가독 바닥값은 유지) ---- */
 @media (max-width: 400px) {
-  .brand { font-size: 0; }
-  .brand::before { content: "🏢"; font-size: 17px; }
+  /* 브랜드: SVG 심볼만 남기고 워드마크 텍스트 숨김(구 이모지 ::before 핵 대체) */
+  .brand .brand-txt { display: none; }
   .dashboard-bar { gap: 4px; padding: 6px 8px; }
   .dash-chip { padding: 6px 9px; }
   .chat-input { flex-wrap: wrap; }

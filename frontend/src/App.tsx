@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "./store";
 import { startRun, resumeRun, watchRun, RunHandle } from "./transport/sse";
-import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, fetchEta, reviseRun, fetchTemplates, saveTemplate, deleteTemplate, runTemplate, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, getVoices, setVoiceConversational, RunInfo, UploadFileResult, LlmStatus, EtaStats, TemplateInfo, RunSettings } from "./api";
+import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, fetchEta, reviseRun, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, getVoices, setVoiceConversational, RunInfo, UploadFileResult, LlmStatus, EtaStats, RunSettings } from "./api";
 import { ActivityItem, ApprovalItem, DebateMsg, UIState } from "./events/types";
 import AgentGraph from "./panels/AgentGraph";
 import OfficeView from "./panels/OfficeView";
@@ -13,6 +13,7 @@ import ContentCalendar from "./panels/ContentCalendar";
 import DraftReview from "./panels/DraftReview";
 import PerformanceView from "./panels/PerformanceView";
 import StudioView from "./panels/StudioView";
+import Ico from "./panels/Ico";
 import { useStageWidths } from "./panels/useStageWidths";
 import { countWorking } from "./events/working";
 import OfficeTicker, { ga } from "./panels/OfficeTicker";
@@ -337,11 +338,6 @@ export default function App() {
   // 파일·폴더 통합 업로드 풀다운(상단바 '📎 자료 ▾')
   const [uploadMenu, setUploadMenu] = useState(false);
   const uploadMenuRef = useRef<HTMLDivElement>(null);
-  // ② 반복 업무 템플릿 풀다운(상단바 '📋 템플릿 ▾')
-  const [tplMenu, setTplMenu] = useState(false);
-  const tplMenuRef = useRef<HTMLDivElement>(null);
-  const [templates, setTemplates] = useState<TemplateInfo[]>([]);
-  const refreshTemplates = () => fetchTemplates().then(setTemplates);
   // 상단 LLM 배지 → 모델 선택 풀다운
   const [llmMenu, setLlmMenu] = useState(false);
   const llmMenuRef = useRef<HTMLDivElement>(null);
@@ -467,15 +463,7 @@ export default function App() {
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, [uploadMenu]);
-  useEffect(() => {
-    if (!tplMenu) return;
-    const h = (e: MouseEvent) => {
-      if (tplMenuRef.current && !tplMenuRef.current.contains(e.target as Node)) setTplMenu(false);
-    };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [tplMenu]);
-  // '📑 기록' 풀다운 바깥 클릭 시 닫기(자료·템플릿과 동일 동작)
+  // '📑 기록' 풀다운 바깥 클릭 시 닫기(자료와 동일 동작)
   useEffect(() => {
     if (!showHist) return;
     const h = (e: MouseEvent) => {
@@ -823,7 +811,7 @@ export default function App() {
       >
       {directedTarget && (
         <span className="directed-chip">
-          {directedLead ? `👥 ${directedTitle} · 팀 가동` : `👤 ${directedTitle}`}
+          <Ico name="person" size={12} />{directedLead ? ` ${directedTitle} · 팀 가동` : ` ${directedTitle}`}
           <button type="button" className="directed-chip-x" title="대상 해제"
             onClick={() => setDirectedTarget(null)}>×</button>
         </span>
@@ -877,7 +865,7 @@ export default function App() {
           className={`run-opt-toggle ${runSettings.orgDebateRounds > 0 ? "active" : ""}`}
           onClick={toggleDebate}
           title="팀 토론(비평→반박): 켜면 팀들이 서로의 산출물을 비판·정련. 품질↑ 속도↓">
-          🗣️ 토론 {runSettings.orgDebateRounds > 0 ? "ON" : "OFF"}
+          토론 {runSettings.orgDebateRounds > 0 ? "ON" : "OFF"}
         </button>
       )}
       {s.status !== "running" && (
@@ -885,7 +873,7 @@ export default function App() {
           className={`run-opt-toggle ${runSettings.agentThinking ? "active" : ""}`}
           onClick={toggleThinking}
           title="추론(thinking): 켜면 답 전에 단계적으로 사고. 품질↑ 속도↓">
-          🧠 추론 {runSettings.agentThinking ? "ON" : "OFF"}
+          추론 {runSettings.agentThinking ? "ON" : "OFF"}
         </button>
       )}
       {!directedTarget && s.status !== "running" && (
@@ -895,9 +883,9 @@ export default function App() {
           onChange={(e) => setRunPath(e.target.value)}
           title="실행 경로(검토 ①) — 자동: 주제로 추천(타임라인에 사유 표시) · 팀: 가장 적합한 한 팀 경량 1라운드(빠름·저비용) · 전사: 풀 토론(전략·계획 등 산출물 과제)"
         >
-          <option value="">🧭 경로 자동</option>
-          <option value="team">⚡ 팀(경량)</option>
-          <option value="full">🏛️ 전사(풀)</option>
+          <option value="">경로 자동</option>
+          <option value="team">팀(경량)</option>
+          <option value="full">전사(풀)</option>
         </select>
       )}
       <button className="btn start" type="submit">
@@ -1095,7 +1083,7 @@ export default function App() {
       })()}
       {showSynthesis && s.synthesis && (
         <div className="synthesis">
-          <h3>📝 종합 결과</h3>
+          <h3>종합 결과</h3>
           <pre>{s.synthesis}</pre>
         </div>
       )}
@@ -1143,7 +1131,7 @@ export default function App() {
   const outputsPanel = (
     <>
       <div className="panel-head">
-        <h2>📄 산출물</h2>
+        <h2><Ico name="document" size={12} /> 산출물</h2>
         <button className="outputs-close" onClick={() => setOutputsOpen(false)}
           title="산출물 창 닫기">✕</button>
       </div>
@@ -1152,7 +1140,7 @@ export default function App() {
       {s.synthesis.trim() && (
         <div className="output-card final">
           <div className="output-head">
-            <span className="output-glyph">🧭</span>
+            <span className="output-glyph"><Ico name="sparkle" size={15} /></span>
             <b>최종 결과물</b>
             {s.status === "running" && <span className="output-live">작성 중…</span>}
             {s.runId && s.status !== "running" && (
@@ -1172,7 +1160,7 @@ export default function App() {
                     alert(e instanceof Error ? e.message : String(e));
                   }
                 }}
-              >✏️ 수정 요청</button>
+              ><Ico name="pencil" size={11} /> 수정 요청</button>
             )}
           </div>
           <div className="output-body">{s.synthesis}</div>
@@ -1182,7 +1170,7 @@ export default function App() {
       {teamDeliverables.map((m) => (
         <div key={m.seq} className="output-card deliverable">
           <div className="output-head">
-            <span className="output-glyph">📦</span>
+            <span className="output-glyph"><Ico name="document" size={14} /></span>
             <b>팀 산출물</b>
           </div>
           <div className="output-body">{m.text}</div>
@@ -1210,7 +1198,7 @@ export default function App() {
 
   const employeePanel = (
     <>
-      <h2>👥 직원 활동 ({s.agentOrder.length})</h2>
+      <h2><Ico name="person" size={12} /> 직원 활동 ({s.agentOrder.length})</h2>
       {s.agentOrder.length === 0 && <p className="muted">아직 출근 전.</p>}
       {s.agentOrder.map((id) => {
         const a = s.agents[id];
@@ -1277,9 +1265,9 @@ export default function App() {
   // 승인 행동 라벨 — run_command(셸)는 위험이라 danger 시각화 + 명령 전문을 코드블록으로 노출.
   const ACTION_LABEL: Record<string, { label: string; danger?: boolean }> = {
     run_command: { label: "⌨️ 셸 명령 실행", danger: true },
-    save_note: { label: "🗒️ 노트 저장" },
-    publish: { label: "📤 산출물 발행" },
-    write: { label: "✏️ 쓰기" },
+    save_note: { label: "노트 저장" },
+    publish: { label: "산출물 발행" },
+    write: { label: "쓰기" },
   };
   const approvalsBanner = mergedApprovals.length > 0 && (
     <div className="approvals-banner">
@@ -1290,7 +1278,7 @@ export default function App() {
         return (
         <div key={ap.approval_id} className={`approval-item${meta.danger ? " danger" : ""}`}>
           <span className="approval-text">
-            🔔{" "}
+            <Ico name="bell" size={14} />{" "}
             {ap.agent_id && (
               <Avatar id={ap.agent_id} glyph={agentGlyph(aa?.level, ap.agent_id, aa?.persona?.role ?? "")} size={20} head />
             )}{" "}
@@ -1348,7 +1336,7 @@ export default function App() {
         </div>
       )}
       <header className="topbar">
-        <button className="brand" type="button" onClick={goHome} title="초기화면으로">🏢 AI 콘텐츠 스튜디오</button>
+        <button className="brand" type="button" onClick={goHome} title="초기화면으로"><Ico name="company" size={15} /> <span className="brand-txt">AI 콘텐츠 스튜디오</span></button>
         {(() => {
           const e = effLlm();
           const local = e.backend === "local";
@@ -1396,11 +1384,11 @@ export default function App() {
         <div className="topbar-actions">
         <div className="upload-wrap" ref={uploadMenuRef}>
           <button className="btn" onClick={() => setUploadMenu((v) => !v)}
-            title="외부 자료 업로드(PDF/Word/Excel/PPT/HWPX/txt 등) → 위키 적재">📎 자료 ▾</button>
+            title="외부 자료 업로드(PDF/Word/Excel/PPT/HWPX/txt 등) → 위키 적재"><Ico name="document" size={12} /> 자료 ▾</button>
           {uploadMenu && (
             <div className="upload-menu">
-              <button onClick={() => { setUploadMenu(false); fileInputRef.current?.click(); }}>📄 파일 선택</button>
-              <button onClick={() => { setUploadMenu(false); folderInputRef.current?.click(); }}>📁 폴더 선택</button>
+              <button onClick={() => { setUploadMenu(false); fileInputRef.current?.click(); }}>파일 선택</button>
+              <button onClick={() => { setUploadMenu(false); folderInputRef.current?.click(); }}>폴더 선택</button>
             </div>
           )}
         </div>
@@ -1410,56 +1398,9 @@ export default function App() {
         <input ref={folderInputRef} type="file" multiple style={{ display: "none" }}
           {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
           onChange={async (e) => { await doUpload(e.target.files); e.target.value = ""; }} />
-        <div className="upload-wrap" ref={tplMenuRef}>
-          <button className="btn" title="반복 업무 프리셋 — 클릭=입력 채우기 · ▶=즉시 실행 · 예약(schedule)은 자동 실행"
-            onClick={() => { setTplMenu((v) => !v); if (!tplMenu) refreshTemplates(); }}>
-            📋 템플릿 ▾
-          </button>
-          {tplMenu && (
-            <div className="upload-menu tpl-menu">
-              {templates.length === 0 && <span className="tpl-empty">저장된 템플릿 없음</span>}
-              {templates.map((t) => (
-                <div key={t.id} className="tpl-row">
-                  <button className="tpl-pick" title={t.topic}
-                    onClick={() => { setChat(t.topic); setRunPath(t.path ?? ""); setTplMenu(false); }}>
-                    {t.name}{t.schedule ? <span className="tpl-sched"> ⏰ {t.schedule}</span> : null}
-                  </button>
-                  <button className="tpl-act" title="즉시 실행"
-                    onClick={async () => {
-                      setTplMenu(false);
-                      try {
-                        const { run_id } = await runTemplate(t.id);
-                        refreshRuns();
-                        watchLive(run_id);
-                      } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
-                    }}>▶</button>
-                  <button className="tpl-act" title="삭제"
-                    onClick={async () => {
-                      if (!window.confirm(`템플릿 '${t.name}' 삭제?`)) return;
-                      await deleteTemplate(t.id);
-                      refreshTemplates();
-                    }}>✕</button>
-                </div>
-              ))}
-              <button className="tpl-save"
-                onClick={async () => {
-                  const topic = chat.trim();
-                  if (!topic) { alert("먼저 아래 입력창에 주제를 적어주세요."); return; }
-                  const name = window.prompt("템플릿 이름:", topic.slice(0, 20));
-                  if (!name) return;
-                  const schedule = window.prompt(
-                    "예약(선택) — 비우면 수동 실행 전용\n예: daily 10:00 · weekly mon 10:00 · monthly 1 09:30", "") || null;
-                  try {
-                    await saveTemplate({ name, topic, path: runPath || null, schedule, enabled: true });
-                    refreshTemplates();
-                  } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
-                }}>＋ 현재 입력을 템플릿으로 저장</button>
-            </div>
-          )}
-        </div>
         <div className="hist-wrap" ref={histWrapRef}>
           <button className="btn hist-toggle" onClick={() => setShowHist((v) => !v)} title="토론 기록">
-            📑 기록{runs.length > 0 ? ` (${runs.length})` : ""}
+            <Ico name="bubble" size={12} /> 기록{runs.length > 0 ? ` (${runs.length})` : ""}
           </button>
           {showHist && (
             <div className="hist-panel">
@@ -1515,7 +1456,7 @@ export default function App() {
                           setShowHist(false);
                         }}
                       >
-                        🔁 다시 보기
+                        다시 보기
                       </button>
                     )}
                   </div>
@@ -1524,35 +1465,35 @@ export default function App() {
               {checked.size > 0 && (
                 <div className="hist-foot">
                   <button className="btn" onClick={() => setChecked(new Set())}>선택 해제</button>
-                  <button className="btn reject" onClick={deleteChecked}>🗑 선택 {checked.size}개 삭제</button>
+                  <button className="btn reject" onClick={deleteChecked}><Ico name="trash" size={12} /> 선택 {checked.size}개 삭제</button>
                 </div>
               )}
             </div>
           )}
         </div>
         <button className="btn" onClick={() => setShowBrain(true)}
-          title="제2의 두뇌 — 위키 지식 그래프(옵시디언 뷰)">🧠 두뇌</button>
+          title="제2의 두뇌 — 위키 지식 그래프(옵시디언 뷰)"><Ico name="sparkle-line" size={12} /> 두뇌</button>
         </div>
         {/* viewtabs: 데스크톱은 display:contents 라 두 그룹이 그대로 topbar 직속(무변경).
             폰(≤640)에선 한 줄 가로스크롤 탭바로 묶여 세로 예산을 절약한다. */}
         <div className="viewtabs">
         <div className="viewtoggle">
-          <button className={view === "office" ? "active" : ""} onClick={() => setView("office")}>🏢 사무실</button>
-          <button className={view === "graph" ? "active" : ""} onClick={() => setView("graph")}>🔗 그래프</button>
-          <button className={view === "employees" ? "active" : ""} onClick={() => setView("employees")}>👥 직원</button>
-          <button className={view === "detail" ? "active" : ""} onClick={() => setView("detail")}>📋 상세</button>
+          <button className={view === "office" ? "active" : ""} onClick={() => setView("office")}><Ico name="home" size={12} /> 사무실</button>
+          <button className={view === "graph" ? "active" : ""} onClick={() => setView("graph")}><Ico name="share" size={12} /> 그래프</button>
+          <button className={view === "employees" ? "active" : ""} onClick={() => setView("employees")}><Ico name="person" size={12} /> 직원</button>
+          <button className={view === "detail" ? "active" : ""} onClick={() => setView("detail")}><Ico name="menu" size={12} /> 상세</button>
         </div>
         <div className="viewtoggle">
-          <button className={view === "calendar" ? "active" : ""} onClick={() => setView("calendar")}>📅 캘린더</button>
-          <button className={view === "review" ? "active" : ""} onClick={() => setView("review")}>📝 검토</button>
-          <button className={view === "perf" ? "active" : ""} onClick={() => setView("perf")}>📊 성과</button>
-          <button className={view === "studio" ? "active" : ""} onClick={() => setView("studio")}>🎨 제작실</button>
+          <button className={view === "calendar" ? "active" : ""} onClick={() => setView("calendar")}><Ico name="calendar" size={12} /> 캘린더</button>
+          <button className={view === "review" ? "active" : ""} onClick={() => setView("review")}><Ico name="eye" size={12} /> 검토</button>
+          <button className={view === "perf" ? "active" : ""} onClick={() => setView("perf")}><Ico name="chart" size={12} /> 성과</button>
+          <button className={view === "studio" ? "active" : ""} onClick={() => setView("studio")}><Ico name="pencil" size={12} /> 제작실</button>
         </div>
         <div className="viewtoggle">
-          <button className={view === "apikeys" ? "active" : ""} onClick={() => setView("apikeys")}>🔑 API 키</button>
+          <button className={view === "apikeys" ? "active" : ""} onClick={() => setView("apikeys")}><Ico name="key" size={12} /> API 키</button>
           <button className={view === "llm" ? "active" : ""}
-            onClick={() => { setView("llm"); fetchLlmStatus().then(setLlmStatus); }}>🧩 LLM</button>
-          <button className={view === "mcp" ? "active" : ""} onClick={() => setView("mcp")}>🧷 MCP</button>
+            onClick={() => { setView("llm"); fetchLlmStatus().then(setLlmStatus); }}><Ico name="sparkle" size={12} /> LLM</button>
+          <button className={view === "mcp" ? "active" : ""} onClick={() => setView("mcp")}><Ico name="globe" size={12} /> MCP</button>
         </div>
         </div>
         <div className={`status status-${s.status}`}>
@@ -1566,7 +1507,7 @@ export default function App() {
             (eta.cost_usd ? ` · 비용 ~$${eta.cost_usd}` : "") +
             (effLlm().backend === "local" ? " · 🐢 로컬 LLM은 보통 2~3배 더 걸립니다" : "")
           }>
-            ⏱ {etaStage}{eta.stages[etaStage] ? ` · 보통 ~${fmtDur(eta.stages[etaStage])}` : ""}
+            <Ico name="clock" size={11} /> {etaStage}{eta.stages[etaStage] ? ` · 보통 ~${fmtDur(eta.stages[etaStage])}` : ""}
             {effLlm().backend === "local" ? " 🐢" : ""}
           </div>
         )}
@@ -1689,21 +1630,21 @@ export default function App() {
                 role="tab" aria-selected={tlTab === "timeline"}
                 onClick={() => setTlTab("timeline")}
               >
-                📜 타임라인
+                <Ico name="chat" size={13} /> 타임라인
               </button>
               <button
                 className={`tl-tab${tlTab === "activity" ? " active" : ""}`}
                 role="tab" aria-selected={tlTab === "activity"}
                 onClick={() => setTlTab("activity")}
               >
-                ✨ 활동{mergedActivity.length ? ` ${mergedActivity.length}` : ""}
+                <Ico name="sparkle" size={13} /> 활동{mergedActivity.length ? ` ${mergedActivity.length}` : ""}
               </button>
               <button
                 className={`tl-tab${tlTab === "workflow" ? " active" : ""}`}
                 role="tab" aria-selected={tlTab === "workflow"}
                 onClick={() => setTlTab("workflow")}
               >
-                🔀 워크플로우
+                <Ico name="filter" size={13} /> 워크플로우
               </button>
             </div>
             <div className="sidechat-scroll">
@@ -1744,7 +1685,7 @@ export default function App() {
           ) : (
             // 닫힌 상태: 중앙 우측 가장자리에 얇은 "산출물 열기" 탭.
             <button className="outputs-reopen" onClick={() => setOutputsOpen(true)}
-              title="산출물 창 열기">📄 산출물 ◀</button>
+              title="산출물 창 열기"><Ico name="document" size={12} /> 산출물 ◀</button>
           )}
         </main>
       )}
