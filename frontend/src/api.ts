@@ -729,6 +729,11 @@ export async function ttsFetch(text: string, voice?: string): Promise<Blob | nul
 // ============================================================
 export type PieceStage =
   | "idea" | "research" | "draft" | "ready" | "published" | "measured" | "reflected" | "error";
+/** 파생 콘텐츠 요약(카드뉴스·숏폼) — 콘텐츠 세트 상태를 캘린더 배지·검토 미리보기·성과 컬럼에 표시. */
+export interface DerivedSummary {
+  cardnews?: { id: string; stage: string; slides?: number; running: boolean };
+  shorts?: { id: string; stage: string; durationSec?: number; running: boolean };
+}
 export interface PieceInfo {
   id: string;
   runId?: string;
@@ -741,6 +746,7 @@ export interface PieceInfo {
   naverDraftTs?: string;
   seoScore?: number;
   errors?: number;
+  derived?: DerivedSummary;
   createdTs: string;
   updatedTs: string;
 }
@@ -855,6 +861,7 @@ export interface PerfRow {
   views: number | null; dwellSec?: number | null;
   inflow: Array<{ keyword: string; count: number; rank?: number }>;
   measuredAt?: string | null; source?: string; samples: number;
+  derived?: DerivedSummary;
 }
 export interface PerfData {
   strategy: { winners: Array<{ keyword: string; score: number; samples: number }>; subNiches: Record<string, number>; measuredPieces: number };

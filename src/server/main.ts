@@ -424,8 +424,22 @@ app.post('/runs/:id/message', (c) => c.json({ ok: true }));
 // ============================================================
 // 콘텐츠 piece — 완전 자율 캘린더 저장소(크로스-런). 프론트는 REST 폴링으로 읽는다(UIState/fold 금지 — 스크럽 시 수치 변형 방지).
 // ============================================================
+/** 파생 콘텐츠 요약(카드뉴스·숏폼) — 캘린더 배지·검토 미리보기·성과 컬럼용. 최신 1건씩. */
+interface DerivedSummary {
+  cardnews?: { id: string; stage: string; slides?: number; running: boolean };
+  shorts?: { id: string; stage: string; durationSec?: number; running: boolean };
+}
+function derivedSummary(pieceId: string): DerivedSummary {
+  const out: DerivedSummary = {};
+  const cn = cardNewsStore().list().find((x) => x.sourcePieceId === pieceId); // list() 최신순 → 첫 매치 = 최신
+  if (cn) out.cardnews = { id: cn.id, stage: cn.stage, slides: cn.slides, running: isCardNewsRunning(cn.id) };
+  const sh = shortsStore().list().find((x) => x.sourcePieceId === pieceId);
+  if (sh) out.shorts = { id: sh.id, stage: sh.stage, durationSec: sh.durationSec, running: isShortsRunning(sh.id) };
+  return out;
+}
+
 function piecesListHandler(c: Context): Response {
-  return c.json({ pieces: pieceStore().list() });
+  return c.json({ pieces: pieceStore().list().map((p) => ({ ...p, derived: derivedSummary(p.id) })) });
 }
 async function pieceCreateHandler(c: Context): Promise<Response> {
   const body = await c.req.json<{ title?: string; keyword?: string; subNiche?: string }>().catch(() => ({}) as { title?: string; keyword?: string; subNiche?: string });
@@ -1171,6 +1185,7 @@ function performanceHandler(c: Context): Response {
         views: m ? m.views : null, dwellSec: m?.dwellSec ?? null,
         inflow: m?.searchInflow ?? [], measuredAt: m?.measuredAt ?? null,
         source: m?.source, samples: readMetrics(p.id).length,
+        derived: derivedSummary(p.id), // 콘텐츠 세트 완성 여부(카드뉴스·숏폼)
       };
     })
     .sort((a, b) => (b.views ?? -1) - (a.views ?? -1));

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, deletePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, PieceInfo, PieceDraftResp } from "../api";
+import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, deletePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, createCardNewsFromPiece, createShortsFromPiece, PieceInfo, PieceDraftResp } from "../api";
 
 // 초안 검토·발행·성과 입력 — 크로스-런 REST(폴링/온디맨드). 본문 편집은 컴포넌트-로컬(store 변이 금지).
 const REVIEWABLE = new Set(["ready", "published", "measured", "reflected"]);
@@ -39,7 +39,11 @@ export default function DraftReview() {
   const pollingRef = useRef<string | null>(null);  // 같은 초안 중복 폴링 방지
 
   const load = () => fetchPieces().then(setPieces);
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 8000); // 파생 콘텐츠(카드뉴스·숏폼) 진행 상태 갱신(캘린더와 동일 케이던스)
+    return () => clearInterval(t);
+  }, []);
   // 언마운트 시 폴링 루프 종료(다음 틱에서 selRef 불일치로 탈출) — 탭 전환 후 좀비 폴링·재진입 이중 폴링 방지.
   useEffect(() => () => { selRef.current = null; }, []);
 
@@ -47,6 +51,24 @@ export default function DraftReview() {
     () => pieces.filter((p) => REVIEWABLE.has(p.stage) && p.runId).sort((a, b) => b.updatedTs.localeCompare(a.updatedTs)),
     [pieces],
   );
+
+  // 파생 콘텐츠(카드뉴스·숏폼) — 선택 초안의 최신 파생 상태(pieces 목록의 derived, 8초 폴링으로 갱신).
+  const derived = pieces.find((p) => p.id === sel)?.derived;
+  const [deriveBusy, setDeriveBusy] = useState("");
+  const doDeriveCardnews = async () => {
+    if (!sel) return;
+    setDeriveBusy("cardnews");
+    const r = await createCardNewsFromPiece(sel);
+    setDeriveBusy("");
+    if (r.ok) load(); else alert(r.error || "카드뉴스 생성 실패");
+  };
+  const doDeriveShorts = async () => {
+    if (!sel) return;
+    setDeriveBusy("shorts");
+    const r = await createShortsFromPiece(sel);
+    setDeriveBusy("");
+    if (r.ok) load(); else alert(r.error || "숏폼 생성 실패");
+  };
 
   // 카드 삭제 — 선택 해제 후 목록 갱신(서버가 실행 중 런/잡이 있으면 409 로 거절).
   const doDelete = async () => {
@@ -282,6 +304,51 @@ export default function DraftReview() {
                     ))}
                   </div>
                 )}
+              </div>
+
+              {/* 파생 콘텐츠 — 같은 주제의 카드뉴스·숏폼을 검토 화면에서 함께 확인·생성(콘텐츠 세트) */}
+              <div className="review-section">
+                <h3>파생 콘텐츠 <span className="muted">(카드뉴스·숏폼 — 발행 전 세트로 검토)</span></h3>
+                <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "flex-start" }}>
+                  {/* 카드뉴스 */}
+                  <div style={{ flex: "1 1 320px", minWidth: 260 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                      <b>🃏 카드뉴스</b>
+                      {derived?.cardnews
+                        ? <span className="badge">{derived.cardnews.running || ["planning", "designing", "rendering"].includes(derived.cardnews.stage) ? "생성 중…" : derived.cardnews.stage === "ready" ? `완성 · ${derived.cardnews.slides ?? 0}장` : "⚠ 실패"}</span>
+                        : <button className="btn ghost" disabled={deriveBusy !== ""} onClick={doDeriveCardnews}>{deriveBusy === "cardnews" ? "시작 중…" : "만들기"}</button>}
+                      {derived?.cardnews?.stage === "ready" && (
+                        <a className="btn ghost" href={`/cardnews/${derived.cardnews.id}/zip`} download>⬇ zip</a>
+                      )}
+                    </div>
+                    {derived?.cardnews?.stage === "ready" && (derived.cardnews.slides ?? 0) > 0 && (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))", gap: 6 }}>
+                        {Array.from({ length: derived.cardnews.slides ?? 0 }, (_, i) => `slide_${String(i + 1).padStart(2, "0")}.png`).map((name) => (
+                          <a key={name} href={`/cardnews/${derived.cardnews!.id}/slides/${name}`} target="_blank" rel="noreferrer">
+                            <img src={`/cardnews/${derived.cardnews!.id}/slides/${name}`} alt={name} loading="lazy"
+                              style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 6, display: "block" }} />
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {/* 숏폼 */}
+                  <div style={{ flex: "0 1 260px", minWidth: 200 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                      <b>🎬 숏폼</b>
+                      {derived?.shorts
+                        ? <span className="badge">{derived.shorts.running || ["planning", "designing", "rendering"].includes(derived.shorts.stage) ? "생성 중…" : derived.shorts.stage === "ready" ? `완성 · ${derived.shorts.durationSec ?? 0}초` : "⚠ 실패"}</span>
+                        : <button className="btn ghost" disabled={deriveBusy !== ""} onClick={doDeriveShorts}>{deriveBusy === "shorts" ? "시작 중…" : "만들기"}</button>}
+                      {derived?.shorts?.stage === "ready" && (
+                        <a className="btn ghost" href={`/shorts/${derived.shorts.id}/video`} download={`shorts-${derived.shorts.id}.mp4`}>⬇ MP4</a>
+                      )}
+                    </div>
+                    {derived?.shorts?.stage === "ready" && (
+                      <video controls preload="metadata" src={`/shorts/${derived.shorts.id}/video`}
+                        style={{ width: 180, aspectRatio: "9/16", borderRadius: 8, background: "#000" }} />
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* 수정 요청 — 검토 결과를 피드백으로 걸면 작가가 초안을 개정(리비전 런) */}

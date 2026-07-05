@@ -27,6 +27,14 @@ function fmtWhen(iso: string): string {
   return `${Math.round(h / 24)}일 전`;
 }
 
+// 파생 콘텐츠(카드뉴스·숏폼) 상태 배지 — 주제 하나의 '콘텐츠 세트' 진행을 캘린더에서 한눈에.
+function DerivedBadge({ icon, name, d }: { icon: string; name: string; d?: { stage: string; running: boolean } }) {
+  if (!d) return null;
+  const working = d.running || ["planning", "designing", "rendering"].includes(d.stage);
+  const mark = working ? "생성 중…" : d.stage === "ready" ? "완성" : "실패";
+  return <span className="chip" title={`${name} ${mark}`}>{icon} {working ? "…" : d.stage === "ready" ? "✓" : "⚠"}</span>;
+}
+
 function PieceCard({ p, onRun, onDelete, running }: { p: PieceInfo; onRun: (id: string) => void; onDelete: (id: string) => void; running: boolean }) {
   return (
     <div className="piece-card">
@@ -35,6 +43,8 @@ function PieceCard({ p, onRun, onDelete, running }: { p: PieceInfo; onRun: (id: 
         {p.keyword && <span className="chip">🎯 {p.keyword}</span>}
         {p.subNiche && <span className="chip">{p.subNiche}</span>}
         {typeof p.seoScore === "number" && <span className="badge">SEO {p.seoScore}</span>}
+        <DerivedBadge icon="🃏" name="카드뉴스" d={p.derived?.cardnews} />
+        <DerivedBadge icon="🎬" name="숏폼" d={p.derived?.shorts} />
       </div>
       {p.publishedUrl && (
         <a className="piece-card-link" href={p.publishedUrl} target="_blank" rel="noreferrer">🔗 발행 글 보기</a>

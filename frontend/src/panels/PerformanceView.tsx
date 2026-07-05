@@ -81,7 +81,7 @@ export default function PerformanceView() {
                   <thead>
                     <tr>
                       <th>제목</th><th>상태</th><th>조회수</th><th>체류</th>
-                      <th>유입 키워드(상위)</th><th>SEO</th><th>측정</th><th></th>
+                      <th>유입 키워드(상위)</th><th>SEO</th><th title="카드뉴스">🃏</th><th title="숏폼">🎬</th><th>측정</th><th></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -103,6 +103,13 @@ export default function PerformanceView() {
                             ))}
                         </td>
                         <td className="perf-r">{typeof p.seoScore === "number" ? p.seoScore : "—"}</td>
+                        {/* 파생 콘텐츠 세트 완성 여부 — ✓ 완성 / … 생성 중 / — 없음 */}
+                        <td className="perf-r" title={p.derived?.cardnews ? `카드뉴스 ${p.derived.cardnews.stage}` : "카드뉴스 없음"}>
+                          {p.derived?.cardnews ? (p.derived.cardnews.stage === "ready" ? "✓" : p.derived.cardnews.stage === "error" ? "⚠" : "…") : "—"}
+                        </td>
+                        <td className="perf-r" title={p.derived?.shorts ? `숏폼 ${p.derived.shorts.stage}` : "숏폼 없음"}>
+                          {p.derived?.shorts ? (p.derived.shorts.stage === "ready" ? "✓" : p.derived.shorts.stage === "error" ? "⚠" : "…") : "—"}
+                        </td>
                         <td className="perf-r muted">{p.samples || "—"}</td>
                         <td className="perf-r"><button className="btn ghost" title="카드 삭제" onClick={() => doDelete(p.id, p.title)}>🗑</button></td>
                       </tr>
