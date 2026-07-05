@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, deletePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, createCardNewsFromPiece, createShortsFromPiece, PieceInfo, PieceDraftResp } from "../api";
+import Ico, { type IcoName } from "./Ico";
 
 // 초안 검토·발행·성과 입력 — 크로스-런 REST(폴링/온디맨드). 본문 편집은 컴포넌트-로컬(store 변이 금지).
 const REVIEWABLE = new Set(["ready", "published", "measured", "reflected"]);
 
+// 스테이지 어휘는 캘린더 칸반과 동일(검토 대기=eye · 발행=megaphone · 측정=chart · 강화=arrow-up-right).
 function StageBadge({ stage }: { stage: string }) {
-  const label: Record<string, string> = {
-    ready: "📝 검토 대기", published: "🚀 발행됨", measured: "📊 측정됨", reflected: "📈 강화 반영",
-    draft: "✍️ 초안 작성", idea: "💡 아이디어", research: "🔍 리서치", error: "⚠️ 실패",
+  const map: Record<string, { icon: IcoName; label: string }> = {
+    ready: { icon: "eye", label: "검토 대기" }, published: { icon: "megaphone", label: "발행됨" },
+    measured: { icon: "chart", label: "측정됨" }, reflected: { icon: "arrow-up-right", label: "강화 반영" },
+    draft: { icon: "pencil", label: "초안 작성" }, idea: { icon: "sparkle", label: "아이디어" },
+    research: { icon: "search", label: "리서치" }, error: { icon: "triangle-exclamation", label: "실패" },
   };
-  return <span className="badge">{label[stage] ?? stage}</span>;
+  const m = map[stage];
+  return <span className="badge">{m ? <><Ico name={m.icon} size={10} /> {m.label}</> : stage}</span>;
 }
 
 export default function DraftReview() {
@@ -116,12 +121,12 @@ export default function DraftReview() {
         if (s.status === "done") {
           const kw = s.inflow_count ? `, 유입 키워드 ${s.inflow_count}개` : "";
           const rf = s.reinforced ? " — 강화 반영됨(전략·위키 갱신)" : " — 이력만 추가(이미 강화됨)";
-          setCollectMsg(`✅ 성과 수집 완료: 조회 ${s.views ?? 0}회${s.dwell_sec ? `, 체류 ${s.dwell_sec}s` : ""}${kw}${rf}${s.dry_run ? " (dry-run)" : ""}`);
+          setCollectMsg(`✓ 성과 수집 완료: 조회 ${s.views ?? 0}회${s.dwell_sec ? `, 체류 ${s.dwell_sec}s` : ""}${kw}${rf}${s.dry_run ? " (dry-run)" : ""}`);
           await load(); const d = await fetchPieceDraft(id); if (selRef.current === id && d) setData(d);
         } else if (s.status === "idle") {
           setCollectMsg("⚠ 진행 상태가 유실됐습니다(서버 재시작 가능성) — 다시 시도하세요.");
         } else {
-          setCollectMsg(`❌ 자동 수집 실패: ${s.error ?? s.note ?? "원인 불명"} — 아래에 수동 입력할 수 있습니다.`);
+          setCollectMsg(`✗ 자동 수집 실패: ${s.error ?? s.note ?? "원인 불명"} — 아래에 수동 입력할 수 있습니다.`);
         }
         return;
       }
@@ -136,7 +141,7 @@ export default function DraftReview() {
     setCollectBusy(true);
     setCollectMsg("네이버에서 성과 수집 중… (로그인 세션 필요 — 처음엔 브라우저 창이 열릴 수 있어요)");
     const r = await startCollectMetrics(sel);
-    if (!r.ok) { setCollectBusy(false); setCollectMsg(`❌ 시작 실패: ${r.error ?? ""}`); return; }
+    if (!r.ok) { setCollectBusy(false); setCollectMsg(`✗ 시작 실패: ${r.error ?? ""}`); return; }
     void pollCollect(sel);
   };
 
@@ -153,7 +158,7 @@ export default function DraftReview() {
         if (!s || s.status === "running") continue;
         setNaverBusy(false);
         if (s.status === "saved") {
-          setNaverMsg(`✅ 네이버 임시저장 완료${s.dry_run ? " (dry-run)" : ""}${s.error ? ` — 일부 문제: ${s.error}` : ""} — 네이버 글쓰기의 임시저장 목록에서 확인 후 발행하고, 발행된 글 URL을 아래에 등록하세요.`);
+          setNaverMsg(`✓ 네이버 임시저장 완료${s.dry_run ? " (dry-run)" : ""}${s.error ? ` — 일부 문제: ${s.error}` : ""} — 네이버 글쓰기의 임시저장 목록에서 확인 후 발행하고, 발행된 글 URL을 아래에 등록하세요.`);
           await load();
           // data.piece(선택 시점 스냅샷)도 갱신 — '네이버 글쓰기 열기' 링크가 즉시 나타나게.
           const d = await fetchPieceDraft(id);
@@ -162,7 +167,7 @@ export default function DraftReview() {
           // 폴링 중 잡이 사라짐 = 서버 재시작 등으로 진행 상태 유실 — 성공/실패 단정 불가.
           setNaverMsg("⚠ 진행 상태가 유실됐습니다(서버 재시작 가능성) — 네이버 글쓰기의 임시저장 목록에서 직접 확인하세요.");
         } else {
-          setNaverMsg(`❌ 네이버 임시저장 실패: ${s.error ?? "원인 불명 — 서버 로그 확인"}`);
+          setNaverMsg(`✗ 네이버 임시저장 실패: ${s.error ?? "원인 불명 — 서버 로그 확인"}`);
         }
         return;
       }
@@ -177,7 +182,7 @@ export default function DraftReview() {
     setNaverBusy(true);
     setNaverMsg("네이버에 저장 중… (처음엔 열린 브라우저 창에서 네이버 로그인이 필요할 수 있어요)");
     const r = await startNaverDraft(sel);
-    if (!r.ok) { setNaverBusy(false); setNaverMsg(`❌ 시작 실패: ${r.error ?? ""}`); return; }
+    if (!r.ok) { setNaverBusy(false); setNaverMsg(`✗ 시작 실패: ${r.error ?? ""}`); return; }
     void pollNaver(sel);
   };
 
@@ -221,7 +226,7 @@ export default function DraftReview() {
   return (
     <div className="apikeys review-view">
       <div className="apikeys-head">
-        <h1>📝 초안 검토·발행</h1>
+        <h1><Ico name="eye" size={17} /> 초안 검토·발행</h1>
         <p className="apikeys-sub">
           자율 스튜디오가 만든 초안을 검토·편집하고, 네이버에 붙여넣어 발행한 뒤 URL·성과를 입력하면
           다음 기획에 강화 반영됩니다(검토 대기 {reviewable.filter((p) => p.stage === "ready").length}건).
@@ -253,14 +258,14 @@ export default function DraftReview() {
                 <div className="review-body-head">
                   <div className="review-titlecands">
                     {data.draft.titleCandidates.map((t, i) => (
-                      <div key={i} className={i === 0 ? "review-title-main" : "review-title-alt muted"}>{i === 0 ? "🏷 " : "· "}{t}</div>
+                      <div key={i} className={i === 0 ? "review-title-main" : "review-title-alt muted"}>{i === 0 ? "" : "· "}{t}</div>
                     ))}
                   </div>
-                  <button className="btn ghost" title="카드 삭제(산출물 파일은 남음)" onClick={doDelete}>🗑 삭제</button>
+                  <button className="btn ghost" title="카드 삭제(산출물 파일은 남음)" onClick={doDelete}><Ico name="trash" size={12} /> 삭제</button>
                 </div>
                 {data.draft.metaDescription && <p className="muted review-meta">{data.draft.metaDescription}</p>}
                 <div className="piece-card-meta">
-                  {data.draft.primaryKeyword && <span className="chip">🎯 {data.draft.primaryKeyword}</span>}
+                  {data.draft.primaryKeyword && <span className="chip"><Ico name="location" size={11} /> {data.draft.primaryKeyword}</span>}
                   {data.draft.tags.map((t) => <span key={t} className="chip">#{t}</span>)}
                 </div>
               </div>
@@ -298,7 +303,7 @@ export default function DraftReview() {
                 )}
                 {data.draft.imageSlots.length > 0 && (
                   <div className="review-images">
-                    <b className="muted">🖼 이미지 슬롯</b>
+                    <b className="muted">이미지 슬롯</b>
                     {data.draft.imageSlots.map((s, i) => (
                       <div key={i} className="muted review-imgslot">{i + 1}. {s.alt} — <i>{s.prompt}</i></div>
                     ))}
@@ -313,12 +318,12 @@ export default function DraftReview() {
                   {/* 카드뉴스 */}
                   <div style={{ flex: "1 1 320px", minWidth: 260 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                      <b>🃏 카드뉴스</b>
+                      <b><Ico name="cards" size={12} /> 카드뉴스</b>
                       {derived?.cardnews
-                        ? <span className="badge">{derived.cardnews.running || ["planning", "designing", "rendering"].includes(derived.cardnews.stage) ? "생성 중…" : derived.cardnews.stage === "ready" ? `완성 · ${derived.cardnews.slides ?? 0}장` : "⚠ 실패"}</span>
+                        ? <span className="badge">{derived.cardnews.running || ["planning", "designing", "rendering"].includes(derived.cardnews.stage) ? "생성 중…" : derived.cardnews.stage === "ready" ? `완성 · ${derived.cardnews.slides ?? 0}장` : "실패"}</span>
                         : <button className="btn ghost" disabled={deriveBusy !== ""} onClick={doDeriveCardnews}>{deriveBusy === "cardnews" ? "시작 중…" : "만들기"}</button>}
                       {derived?.cardnews?.stage === "ready" && (
-                        <a className="btn ghost" href={`/cardnews/${derived.cardnews.id}/zip`} download>⬇ zip</a>
+                        <a className="btn ghost" href={`/cardnews/${derived.cardnews.id}/zip`} download>zip</a>
                       )}
                     </div>
                     {derived?.cardnews?.stage === "ready" && (derived.cardnews.slides ?? 0) > 0 && (
@@ -335,12 +340,12 @@ export default function DraftReview() {
                   {/* 숏폼 */}
                   <div style={{ flex: "0 1 260px", minWidth: 200 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                      <b>🎬 숏폼</b>
+                      <b><Ico name="play" size={12} /> 숏폼</b>
                       {derived?.shorts
-                        ? <span className="badge">{derived.shorts.running || ["planning", "designing", "rendering"].includes(derived.shorts.stage) ? "생성 중…" : derived.shorts.stage === "ready" ? `완성 · ${derived.shorts.durationSec ?? 0}초` : "⚠ 실패"}</span>
+                        ? <span className="badge">{derived.shorts.running || ["planning", "designing", "rendering"].includes(derived.shorts.stage) ? "생성 중…" : derived.shorts.stage === "ready" ? `완성 · ${derived.shorts.durationSec ?? 0}초` : "실패"}</span>
                         : <button className="btn ghost" disabled={deriveBusy !== ""} onClick={doDeriveShorts}>{deriveBusy === "shorts" ? "시작 중…" : "만들기"}</button>}
                       {derived?.shorts?.stage === "ready" && (
-                        <a className="btn ghost" href={`/shorts/${derived.shorts.id}/video`} download={`shorts-${derived.shorts.id}.mp4`}>⬇ MP4</a>
+                        <a className="btn ghost" href={`/shorts/${derived.shorts.id}/video`} download={`shorts-${derived.shorts.id}.mp4`}>MP4</a>
                       )}
                     </div>
                     {derived?.shorts?.stage === "ready" && (
@@ -361,7 +366,7 @@ export default function DraftReview() {
                   />
                   <div className="review-inline" style={{ justifyContent: "flex-end" }}>
                     <button className="btn start" disabled={!feedback.trim() || revBusy} onClick={doRevise}>
-                      {revBusy ? "요청 중…" : "🔁 수정 요청(초안 개정)"}
+                      {revBusy ? "요청 중…" : <><Ico name="pencil" size={12} /> 수정 요청(초안 개정)</>}
                     </button>
                   </div>
                 </div>
@@ -371,16 +376,16 @@ export default function DraftReview() {
               <div className="review-section">
                 <h3>발행</h3>
                 {data.piece.publishedUrl ? (
-                  <p className="muted">✅ 발행됨 — <a href={data.piece.publishedUrl} target="_blank" rel="noreferrer">{data.piece.publishedUrl}</a></p>
+                  <p className="muted"><Ico name="circle-check" size={12} /> 발행됨 — <a href={data.piece.publishedUrl} target="_blank" rel="noreferrer">{data.piece.publishedUrl}</a></p>
                 ) : (
                   <>
                     <div className="review-inline">
                       <button className="btn start" disabled={naverBusy} onClick={doNaverDraft}>
-                        {naverBusy ? "네이버에 저장 중…" : "📗 네이버 임시저장(자동)"}
+                        {naverBusy ? "네이버에 저장 중…" : "네이버 임시저장(자동)"}
                       </button>
                       {data.piece.naverDraftUrl && (
                         /* postwrite 편집기 URL — 열리면 '임시저장 글 불러오기' 팝업/목록에서 저장본을 불러온다. */
-                        <a className="muted" href={data.piece.naverDraftUrl} target="_blank" rel="noreferrer">🗂 네이버 글쓰기 열기(임시저장 불러오기) ↗</a>
+                        <a className="muted" href={data.piece.naverDraftUrl} target="_blank" rel="noreferrer"><Ico name="external-link" size={11} /> 네이버 글쓰기 열기(임시저장 불러오기)</a>
                       )}
                     </div>
                     {naverMsg && <p className="review-msg">{naverMsg}</p>}
@@ -398,7 +403,7 @@ export default function DraftReview() {
                   <h3>성과 <span className="muted">(조회수·유입 키워드 → 강화 반영)</span></h3>
                   <div className="review-inline">
                     <button className="btn start" disabled={collectBusy} onClick={doCollect}>
-                      {collectBusy ? "성과 수집 중…" : "📊 성과 자동 수집(네이버)"}
+                      {collectBusy ? "성과 수집 중…" : <><Ico name="chart" size={12} /> 성과 자동 수집(네이버)</>}
                     </button>
                     <span className="muted">네이버 통계를 자동으로 읽어 강화에 반영합니다.</span>
                   </div>

@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
 import { fetchPerformance, deletePiece, PerfData } from "../api";
+import Ico, { type IcoName } from "./Ico";
 
 // 성과 대시보드 — 발행/측정된 글의 조회수·유입 키워드와 강화 학습(전략 EWMA)을 한눈에.
-const STAGE_LABEL: Record<string, string> = {
-  published: "🚀 발행됨", measured: "📊 측정됨", reflected: "📈 강화 반영",
-  ready: "📝 검토 대기", idea: "💡", research: "🔍", draft: "✍️", error: "⚠️",
+// 스테이지 어휘는 캘린더·검토 탭과 동일(Ico).
+const STAGE_LABEL: Record<string, { icon: IcoName; label: string }> = {
+  published: { icon: "megaphone", label: "발행됨" }, measured: { icon: "chart", label: "측정됨" },
+  reflected: { icon: "arrow-up-right", label: "강화 반영" }, ready: { icon: "eye", label: "검토 대기" },
+  idea: { icon: "sparkle", label: "아이디어" }, research: { icon: "search", label: "리서치" },
+  draft: { icon: "pencil", label: "초안" }, error: { icon: "triangle-exclamation", label: "실패" },
 };
 
 export default function PerformanceView() {
@@ -28,7 +32,7 @@ export default function PerformanceView() {
   return (
     <div className="apikeys perf-view">
       <div className="apikeys-head">
-        <h1>📊 성과 대시보드</h1>
+        <h1><Ico name="chart" size={17} /> 성과 대시보드</h1>
         <p className="apikeys-sub">
           발행한 글의 조회수·검색 유입과, 성과로 학습된 전략(키워드·서브니치 EWMA)을 모아 봅니다.
           <button className="btn ghost" style={{ marginLeft: 10 }} onClick={load}>새로고침</button>
@@ -81,19 +85,21 @@ export default function PerformanceView() {
                   <thead>
                     <tr>
                       <th>제목</th><th>상태</th><th>조회수</th><th>체류</th>
-                      <th>유입 키워드(상위)</th><th>SEO</th><th title="카드뉴스">🃏</th><th title="숏폼">🎬</th><th>측정</th><th></th>
+                      <th>유입 키워드(상위)</th><th>SEO</th><th title="카드뉴스"><Ico name="cards" size={13} /></th><th title="숏폼"><Ico name="play" size={13} /></th><th>측정</th><th></th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.pieces.map((p) => (
                       <tr key={p.id}>
                         <td className="perf-title">
-                          {p.publishedUrl
-                            ? <a href={p.publishedUrl} target="_blank" rel="noreferrer">{p.title}</a>
-                            : p.title}
-                          {p.keyword && <span className="chip" style={{ marginLeft: 6 }}>🎯 {p.keyword}</span>}
+                          <div className="perf-title-row">
+                            {p.publishedUrl
+                              ? <a href={p.publishedUrl} target="_blank" rel="noreferrer" title={p.title}>{p.title}</a>
+                              : <span className="perf-title-txt" title={p.title}>{p.title}</span>}
+                            {p.keyword && <span className="chip"><Ico name="location" size={11} /> {p.keyword}</span>}
+                          </div>
                         </td>
-                        <td><span className="badge">{STAGE_LABEL[p.stage] ?? p.stage}</span></td>
+                        <td><span className="badge">{STAGE_LABEL[p.stage] ? <><Ico name={STAGE_LABEL[p.stage].icon} size={10} /> {STAGE_LABEL[p.stage].label}</> : p.stage}</span></td>
                         <td className="perf-r">{p.views != null ? p.views.toLocaleString() : "—"}</td>
                         <td className="perf-r">{p.dwellSec != null ? `${p.dwellSec}s` : "—"}</td>
                         <td className="perf-inflow">
@@ -105,13 +111,13 @@ export default function PerformanceView() {
                         <td className="perf-r">{typeof p.seoScore === "number" ? p.seoScore : "—"}</td>
                         {/* 파생 콘텐츠 세트 완성 여부 — ✓ 완성 / … 생성 중 / — 없음 */}
                         <td className="perf-r" title={p.derived?.cardnews ? `카드뉴스 ${p.derived.cardnews.stage}` : "카드뉴스 없음"}>
-                          {p.derived?.cardnews ? (p.derived.cardnews.stage === "ready" ? "✓" : p.derived.cardnews.stage === "error" ? "⚠" : "…") : "—"}
+                          {p.derived?.cardnews ? (p.derived.cardnews.stage === "ready" ? "✓" : p.derived.cardnews.stage === "error" ? <Ico name="triangle-exclamation" size={11} /> : "…") : "—"}
                         </td>
                         <td className="perf-r" title={p.derived?.shorts ? `숏폼 ${p.derived.shorts.stage}` : "숏폼 없음"}>
-                          {p.derived?.shorts ? (p.derived.shorts.stage === "ready" ? "✓" : p.derived.shorts.stage === "error" ? "⚠" : "…") : "—"}
+                          {p.derived?.shorts ? (p.derived.shorts.stage === "ready" ? "✓" : p.derived.shorts.stage === "error" ? <Ico name="triangle-exclamation" size={11} /> : "…") : "—"}
                         </td>
                         <td className="perf-r muted">{p.samples || "—"}</td>
-                        <td className="perf-r"><button className="btn ghost" title="카드 삭제" onClick={() => doDelete(p.id, p.title)}>🗑</button></td>
+                        <td className="perf-r"><button className="btn ghost" title="카드 삭제" onClick={() => doDelete(p.id, p.title)}><Ico name="trash" size={12} /></button></td>
                       </tr>
                     ))}
                   </tbody>

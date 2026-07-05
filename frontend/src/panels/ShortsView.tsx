@@ -4,12 +4,15 @@ import {
   fetchPieces, ShortsInfo, PieceInfo,
 } from "../api";
 import Avatar from "./Avatar";
-import Ico from "./Ico";
+import Ico, { type IcoName } from "./Ico";
 
 // 숏폼 탭 — 숏폼팀(작가 → 디렉터 → 씬 이미지 → TTS+ffmpeg 조립)이 만드는 세로 MP4.
 // 발행 없음(다운로드 전용): 인라인 재생 + mp4/zip 다운로드. 진행은 8초 폴링(캘린더와 동일 케이던스).
-const STAGE_LABEL: Record<string, string> = {
-  planning: "📝 대본 중", designing: "🎬 연출 중", rendering: "🎞 조립 중", ready: "✅ 완성", error: "⚠️ 실패",
+// 스테이지 아이콘 어휘는 카드뉴스와 통일(대본=pencil · 연출=sparkle · 조립=setting · 완성=circle-check).
+const STAGE_LABEL: Record<string, { icon: IcoName; label: string }> = {
+  planning: { icon: "pencil", label: "대본 중" }, designing: { icon: "sparkle", label: "연출 중" },
+  rendering: { icon: "setting", label: "조립 중" }, ready: { icon: "circle-check", label: "완성" },
+  error: { icon: "triangle-exclamation", label: "실패" },
 };
 const RUNNING_STAGES = new Set(["planning", "designing", "rendering"]);
 // 파생 소스로 쓸 수 있는 블로그 초안 단계(초안 본문이 존재).
@@ -36,10 +39,10 @@ function ShortRow({ s, onDelete }: { s: ShortsInfo; onDelete: (id: string) => vo
   return (
     <div className="review-section">
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <span className="badge">{STAGE_LABEL[s.stage] ?? s.stage}</span>
+        <span className="badge">{STAGE_LABEL[s.stage] ? <><Ico name={STAGE_LABEL[s.stage].icon} size={10} /> {STAGE_LABEL[s.stage].label}</> : s.stage}</span>
         <strong>{s.title ?? s.topic}</strong>
-        {s.keyword && <span className="chip">🎯 {s.keyword}</span>}
-        {s.sourcePieceId && <span className="chip" title="블로그 초안에서 파생">📗 블로그 파생</span>}
+        {s.keyword && <span className="chip"><Ico name="location" size={11} /> {s.keyword}</span>}
+        {s.sourcePieceId && <span className="chip" title="블로그 초안에서 파생"><Ico name="document" size={11} /> 블로그 파생</span>}
         {typeof s.durationSec === "number" && <span className="chip">⏱ {s.durationSec}초</span>}
         <span className="muted" style={{ marginLeft: "auto" }}>{fmtWhen(s.updatedTs)}</span>
       </div>
@@ -64,7 +67,7 @@ function ShortRow({ s, onDelete }: { s: ShortsInfo; onDelete: (id: string) => vo
             {s.titles && s.titles.length > 1 && (
               <div style={{ marginBottom: 8 }}>
                 <div className="muted" style={{ marginBottom: 4 }}>제목 후보</div>
-                {s.titles.map((t, i) => <div key={i}>{i === 0 ? "🏷 " : "· "}{t}</div>)}
+                {s.titles.map((t, i) => <div key={i}>{i === 0 ? "" : "· "}{t}</div>)}
               </div>
             )}
             {captionFull && <div className="muted" style={{ whiteSpace: "pre-wrap" }}>{captionFull}</div>}
@@ -74,7 +77,7 @@ function ShortRow({ s, onDelete }: { s: ShortsInfo; onDelete: (id: string) => vo
       <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
         {s.stage === "ready" && (
           <>
-            <a className="btn start" href={`/shorts/${s.id}/video`} download={`shorts-${s.id}.mp4`}>⬇ MP4</a>
+            <a className="btn start" href={`/shorts/${s.id}/video`} download={`shorts-${s.id}.mp4`}>MP4</a>
             <a className="btn ghost" href={`/shorts/${s.id}/zip`} download>zip (mp4+자막+캡션)</a>
             {captionFull && <button className="btn ghost" onClick={copyCaption}>{copied ? "복사됨!" : "캡션 복사"}</button>}
           </>
@@ -153,7 +156,7 @@ export default function ShortsSection() {
             <option value="">블로그 초안에서 만들기 — 초안 선택…</option>
             {derivable.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
           </select>
-          <button className="btn ghost" disabled={busy || !srcPiece} onClick={doDerive}>📗 초안 → 숏폼</button>
+          <button className="btn ghost" disabled={busy || !srcPiece} onClick={doDerive}><Ico name="document" size={12} /> 초안 → 숏폼</button>
           {err && <span className="muted" style={{ color: "var(--con)" }}>{err}</span>}
         </div>
       </div>

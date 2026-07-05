@@ -241,6 +241,19 @@ button.upload-retry:hover { background: var(--panel2); }
 
 /* ── API 키 관리 페이지 ── */
 .apikeys { height: 100%; overflow-y: auto; padding: 24px 28px; }
+/* .employees-stage(main, display:flex row) 안에서 .apikeys 계열 뷰(캘린더·검토·성과·제작실·
+   설정)가 flex 아이템으로 '콘텐츠 폭만큼' 수축하던 문제 — 항상 스테이지 전체 폭을 채운다.
+   (제작실 카드뉴스/숏폼 서브탭 전환 시 가로 폭이 출렁이던 원인) */
+.employees-stage > .apikeys { flex: 1 1 auto; min-width: 0; }
+/* REST 뷰 공통 폼 컨트롤 — 클래스 없는 input/select 도 다크 토큰으로(브라우저 기본 흰색 차단).
+   포커스 링은 Wanted violet(components.css 규칙과 동일). */
+.apikeys input[type="text"], .apikeys input[type="number"], .apikeys select {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius-8); padding: 8px 10px; font-size: 13px; font-family: inherit;
+}
+.apikeys input[type="text"]:focus, .apikeys input[type="number"]:focus, .apikeys select:focus {
+  outline: none; border-color: var(--line-focus); box-shadow: 0 0 0 3px rgba(151, 71, 255, 0.28);
+}
 .apikeys-head h1 { font-size: 20px; margin: 0 0 6px; }
 .apikeys-sub { font-size: 13px; color: var(--muted); margin: 0 0 20px; max-width: 780px; line-height: 1.5; }
 .apikeys-sub code { background: var(--panel2); padding: 1px 6px; border-radius: 5px; color: var(--text); }
@@ -1595,10 +1608,24 @@ button.upload-retry:hover { background: var(--panel2); }
 .perf-table-wrap { overflow-x: auto; }
 .perf-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .perf-table th { text-align: left; padding: 10px 12px; border-bottom: 2px solid var(--line-neutral-strong); color: var(--muted); font-weight: 600; white-space: nowrap; }
-.perf-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+/* 셀 세로 중앙 정렬 — 칩·버튼(키 큰 셀)과 숫자(낮은 셀)가 한 시각선에 놓이게.
+   (top 정렬은 숫자만 위로 떠 보이던 원인) */
+/* 행 높이는 기존의 ~2/3(사용자 지정): 세로 패딩 축소 + 행 안의 칩·버튼을 콤팩트로. */
+.perf-table td { padding: 4px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.perf-table td .chip { padding: 2px 8px; font-size: 11px; }
+.perf-table td .btn { padding: 4px 9px; font-size: 12px; }
 .perf-table tr:hover td { background: var(--bg-neutral); }
 .perf-title { max-width: 320px; }
 .perf-title a { color: var(--fg-primary); text-decoration: none; }
 .perf-title a:hover { text-decoration: underline; }
+/* 제목 1줄 고정 — 긴 제목은 말줄임(title 속성으로 전문), 키워드 칩은 온전히 유지.
+   (칩이 인라인 흐름에 섞여 제목을 두 줄로 밀고 칩 텍스트까지 쪼개지던 문제) */
+.perf-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.perf-title-row > a, .perf-title-row > .perf-title-txt {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.perf-title-row .chip { flex: none; white-space: nowrap; }
 .perf-r { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.perf-inflow { display: flex; flex-wrap: wrap; gap: 4px; max-width: 320px; }
+/* td 에 display:flex 금지 — table-cell 이 깨져 border-bottom 이 행 높이를 안 따라가고
+   위로 떠 보인다. 칩은 inline-block 흐름으로 줄바꿈(칩 사이 간격은 margin). */
+.perf-inflow { max-width: 320px; }
+.perf-inflow .chip { display: inline-block; margin: 2px 4px 2px 0; white-space: nowrap; }

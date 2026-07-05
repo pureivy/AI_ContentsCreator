@@ -5,15 +5,18 @@
 //   07:52:48 · ●─ [avatar] 박정민 → 코다리  (위키 작성)  detail…
 import { ActivityItem, ActivityKind, AgentNode, Team } from "../events/types";
 import { agentColor, agentGlyph, resolveName } from "./agentVisual";
-import { toolLabel } from "./toolVisual";
+import { toolVisual } from "./toolVisual";
 import Avatar from "./Avatar";
+import Ico, { type IcoName } from "./Ico";
 
-export const KIND_ICON: Record<ActivityKind, string> = {
-  run: "🏁", user: "🗣️", spawn: "🚪", team: "🏷️", delegation: "📨", phase: "🧭",
-  message: "💬", critique: "🔍", rebuttal: "↩️", deliverable: "📦",
-  wiki: "📝", edge: "🔗", tool: "🔧", skill: "🧩", query: "📚",
-  approval: "🔔", lesson: "🎓", session: "📁", fail: "⚠️",
-  chat: "💬", rest: "☕", stroll: "🚶", phone: "📞",
+// 이벤트 종류 → Wanted 아이콘(Ico). 어휘는 다른 크롬과 일치(비평=eye · 검색=search ·
+// 산출물=document · 승인=bell · 실패=triangle-exclamation).
+export const KIND_ICON: Record<ActivityKind, IcoName> = {
+  run: "play", user: "person", spawn: "home", team: "bookmark", delegation: "send", phase: "filter",
+  message: "chat", critique: "eye", rebuttal: "bubble", deliverable: "document",
+  wiki: "pencil", edge: "share", tool: "setting", skill: "sparkle", query: "search",
+  approval: "bell", lesson: "sparkle-line", session: "document", fail: "triangle-exclamation",
+  chat: "bubble", rest: "moon", stroll: "location", phone: "phone",
 };
 
 // 24h zero-padded HH:MM:SS straight from the Date — locale-independent (matches the
@@ -68,9 +71,9 @@ export default function ActivityFeed({
         const isPerson = !!actor && actor !== "user"; // render the portrait for any employee
         const color = isPerson ? agentColor(actor!) : undefined;
         const a = actor ? agents[actor] : undefined;
-        // glyph only shows if the avatar image is missing; prefer the role glyph when we
-        // know the persona, else the action icon.
-        const glyphFallback = a ? agentGlyph(a.level, actor!, a.persona?.role ?? "") : KIND_ICON[it.kind];
+        // glyph only shows if the avatar image is missing — always the role glyph
+        // (KIND_ICON은 이제 IcoName이라 아바타 폴백 문자로 못 쓴다).
+        const glyphFallback = agentGlyph(a?.level ?? "member", actor ?? "", a?.persona?.role ?? "");
         return (
           <div key={it.id} className={`act-row kind-${it.kind}${it.tone ? ` tone-${it.tone}` : ""}`}>
             <span className="act-time">{clock(it.ts)}</span>
@@ -80,7 +83,7 @@ export default function ActivityFeed({
                 {isPerson ? (
                   <Avatar id={actor!} glyph={glyphFallback} size={18} head />
                 ) : (
-                  <span className="act-glyph">{KIND_ICON[it.kind]}</span>
+                  <span className="act-glyph"><Ico name={KIND_ICON[it.kind]} size={13} /></span>
                 )}
                 <b className="act-actor" style={color ? { color } : undefined}>{nameOf(actor)}</b>
                 {it.targetId && (
@@ -89,7 +92,11 @@ export default function ActivityFeed({
                     <b className="act-target">{nameOf(it.targetId)}</b>
                   </>
                 )}
-                <span className="act-chip">{it.kind === "tool" ? toolLabel(it.detail) : `${KIND_ICON[it.kind]} ${it.label}`}</span>
+                <span className="act-chip">
+                  {it.kind === "tool"
+                    ? (() => { const tv = toolVisual(it.detail); return <><Ico name={tv.icon} size={10} /> {tv.label}</>; })()
+                    : <><Ico name={KIND_ICON[it.kind]} size={10} /> {it.label}</>}
+                </span>
               </div>
               {it.detail && it.kind !== "tool" && <div className="act-detail">{cleanDetail(it.detail, nameOf(actor))}</div>}
             </div>

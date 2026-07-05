@@ -1,18 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchPieces, createPiece, runPiece, deletePiece, PieceInfo, PieceStage } from "../api";
+import Ico, { type IcoName } from "./Ico";
 
 // 지금 실행 가능한(초안이 아직 없는) 스테이지 — idea·research·draft·error.
 const RUNNABLE = new Set<PieceStage>(["idea", "research", "draft", "error"]);
 
 // 크로스-런 캘린더 — REST 폴링만(store/fold 금지: 스크럽 시 성과 수치 변형 방지). 라이프사이클 칸반.
-const STAGES: { key: PieceStage; label: string; emoji: string }[] = [
-  { key: "idea", label: "아이디어", emoji: "💡" },
-  { key: "research", label: "리서치", emoji: "🔍" },
-  { key: "draft", label: "초안 작성", emoji: "✍️" },
-  { key: "ready", label: "검토 대기", emoji: "📝" },
-  { key: "published", label: "발행됨", emoji: "🚀" },
-  { key: "measured", label: "측정됨", emoji: "📊" },
-  { key: "reflected", label: "강화 반영", emoji: "📈" },
+// 스테이지 아이콘은 뷰 탭과 같은 어휘를 재사용(검토 대기=eye, 발행=megaphone, 측정=chart).
+const STAGES: { key: PieceStage; label: string; icon: IcoName }[] = [
+  { key: "idea", label: "아이디어", icon: "sparkle" },
+  { key: "research", label: "리서치", icon: "search" },
+  { key: "draft", label: "초안 작성", icon: "pencil" },
+  { key: "ready", label: "검토 대기", icon: "eye" },
+  { key: "published", label: "발행됨", icon: "megaphone" },
+  { key: "measured", label: "측정됨", icon: "chart" },
+  { key: "reflected", label: "강화 반영", icon: "arrow-up-right" },
 ];
 
 function fmtWhen(iso: string): string {
@@ -28,11 +30,16 @@ function fmtWhen(iso: string): string {
 }
 
 // 파생 콘텐츠(카드뉴스·숏폼) 상태 배지 — 주제 하나의 '콘텐츠 세트' 진행을 캘린더에서 한눈에.
-function DerivedBadge({ icon, name, d }: { icon: string; name: string; d?: { stage: string; running: boolean } }) {
+function DerivedBadge({ icon, name, d }: { icon: IcoName; name: string; d?: { stage: string; running: boolean } }) {
   if (!d) return null;
   const working = d.running || ["planning", "designing", "rendering"].includes(d.stage);
   const mark = working ? "생성 중…" : d.stage === "ready" ? "완성" : "실패";
-  return <span className="chip" title={`${name} ${mark}`}>{icon} {working ? "…" : d.stage === "ready" ? "✓" : "⚠"}</span>;
+  return (
+    <span className="chip" title={`${name} ${mark}`}>
+      <Ico name={icon} size={11} />{" "}
+      {working ? "…" : d.stage === "ready" ? "✓" : <Ico name="triangle-exclamation" size={10} />}
+    </span>
+  );
 }
 
 function PieceCard({ p, onRun, onDelete, running }: { p: PieceInfo; onRun: (id: string) => void; onDelete: (id: string) => void; running: boolean }) {
@@ -40,14 +47,14 @@ function PieceCard({ p, onRun, onDelete, running }: { p: PieceInfo; onRun: (id: 
     <div className="piece-card">
       <div className="piece-card-title">{p.title}</div>
       <div className="piece-card-meta">
-        {p.keyword && <span className="chip">🎯 {p.keyword}</span>}
+        {p.keyword && <span className="chip"><Ico name="location" size={11} /> {p.keyword}</span>}
         {p.subNiche && <span className="chip">{p.subNiche}</span>}
         {typeof p.seoScore === "number" && <span className="badge">SEO {p.seoScore}</span>}
-        <DerivedBadge icon="🃏" name="카드뉴스" d={p.derived?.cardnews} />
-        <DerivedBadge icon="🎬" name="숏폼" d={p.derived?.shorts} />
+        <DerivedBadge icon="cards" name="카드뉴스" d={p.derived?.cardnews} />
+        <DerivedBadge icon="play" name="숏폼" d={p.derived?.shorts} />
       </div>
       {p.publishedUrl && (
-        <a className="piece-card-link" href={p.publishedUrl} target="_blank" rel="noreferrer">🔗 발행 글 보기</a>
+        <a className="piece-card-link" href={p.publishedUrl} target="_blank" rel="noreferrer"><Ico name="external-link" size={11} /> 발행 글 보기</a>
       )}
       <div className="piece-card-foot">
         <span className="muted">{fmtWhen(p.updatedTs)}{p.errors ? ` · 실패 ${p.errors}` : ""}</span>
@@ -57,7 +64,7 @@ function PieceCard({ p, onRun, onDelete, running }: { p: PieceInfo; onRun: (id: 
               {running ? "실행 중…" : "▶ 실행"}
             </button>
           )}
-          <button className="btn ghost piece-run-btn" title="카드 삭제" disabled={running} onClick={() => onDelete(p.id)}>🗑</button>
+          <button className="btn ghost piece-run-btn" title="카드 삭제" disabled={running} onClick={() => onDelete(p.id)}><Ico name="trash" size={11} /></button>
         </span>
       </div>
     </div>
@@ -116,7 +123,7 @@ export default function ContentCalendar() {
   return (
     <div className="apikeys calendar-view">
       <div className="apikeys-head">
-        <h1>📅 콘텐츠 캘린더</h1>
+        <h1><Ico name="calendar" size={17} /> 콘텐츠 캘린더</h1>
         <p className="apikeys-sub">
           주제를 넣으면 바로 블로그 생성이 시작돼 초안→검토대기까지 이어지고, 발행·성과는 사람이 관리합니다.
           여기 카드는 크로스-런 실데이터를 8초마다 폴링합니다(총 {pieces.length}건).
@@ -145,7 +152,7 @@ export default function ContentCalendar() {
           return (
             <div key={st.key} className="calendar-col">
               <div className="calendar-col-head">
-                <span>{st.emoji} {st.label}</span>
+                <span><Ico name={st.icon} size={12} /> {st.label}</span>
                 <span className="badge">{items.length}</span>
               </div>
               <div className="calendar-col-body">
@@ -159,7 +166,7 @@ export default function ContentCalendar() {
 
       {errors.length > 0 && (
         <div className="calendar-errors">
-          <h3>⚠️ 실패({errors.length}) — 자율 재시도 한도 초과</h3>
+          <h3><Ico name="triangle-exclamation" size={13} /> 실패({errors.length}) — 자율 재시도 한도 초과</h3>
           <div className="calendar-col-body">{errors.map((p) => <PieceCard key={p.id} p={p} onRun={doRun} onDelete={doDelete} running={runningId === p.id} />)}</div>
         </div>
       )}

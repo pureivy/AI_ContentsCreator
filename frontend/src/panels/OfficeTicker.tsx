@@ -7,6 +7,7 @@ import { ActivityItem, AgentNode } from "../events/types";
 import { agentColor, agentGlyph, resolveName } from "./agentVisual";
 import { KIND_ICON } from "./ActivityFeed";
 import Avatar from "./Avatar";
+import Ico from "./Ico";
 
 // 받침 유무에 맞춘 한국어 조사 — 서술형 ticker 문장이 어색하지 않게.
 const hasBatchim = (w: string): boolean => {
@@ -47,17 +48,18 @@ export default function OfficeTicker({
 
   if (item && item.actorId) {
     const a = agents[item.actorId];
-    const glyph = a ? agentGlyph(a.level, item.actorId, a.persona?.role ?? "") : KIND_ICON[item.kind];
+    // KIND_ICON은 이제 IcoName — 아바타 폴백 문자로는 역할 글리프만 쓴다.
+    const glyph = agentGlyph(a?.level ?? "member", item.actorId, a?.persona?.role ?? "");
     const color = agentColor(item.actorId);
     const actorName = nameOf(item.actorId);
     const target = item.targetId ? nameOf(item.targetId) : "";
     const tail = narrateTail(item, actorName, target);
     return (
-      <div className="office-ticker live" title={`${actorName}${tail} ${KIND_ICON[item.kind]}`}>
+      <div className="office-ticker live" title={`${actorName}${tail}`}>
         <span className="office-ticker-dot" />
         <Avatar id={item.actorId} glyph={glyph} size={17} head />
         <span className="office-ticker-text">
-          <b className="office-ticker-actor" style={{ color }}>{actorName}</b>{tail} {KIND_ICON[item.kind]}
+          <b className="office-ticker-actor" style={{ color }}>{actorName}</b>{tail} <Ico name={KIND_ICON[item.kind]} size={11} />
         </span>
       </div>
     );

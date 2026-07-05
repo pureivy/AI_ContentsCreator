@@ -4,12 +4,15 @@ import {
   fetchPieces, CardNewsInfo, PieceInfo,
 } from "../api";
 import Avatar from "./Avatar";
-import Ico from "./Ico";
+import Ico, { type IcoName } from "./Ico";
 
 // 카드뉴스 탭 — 카드뉴스팀(기획 → 디자인 → 배경 생성 → 렌더)이 만드는 인스타그램용 슬라이드.
 // 발행 없음(사용자 확정): 미리보기 + 개별/zip 다운로드까지만. 진행은 8초 폴링(캘린더와 동일 케이던스).
-const STAGE_LABEL: Record<string, string> = {
-  planning: "📝 기획 중", designing: "🎨 디자인 중", rendering: "🖼 렌더 중", ready: "✅ 완성", error: "⚠️ 실패",
+// 스테이지 아이콘 어휘는 숏폼과 통일(기획=pencil · 디자인=sparkle · 렌더=setting · 완성=circle-check).
+const STAGE_LABEL: Record<string, { icon: IcoName; label: string }> = {
+  planning: { icon: "pencil", label: "기획 중" }, designing: { icon: "sparkle", label: "디자인 중" },
+  rendering: { icon: "setting", label: "렌더 중" }, ready: { icon: "circle-check", label: "완성" },
+  error: { icon: "triangle-exclamation", label: "실패" },
 };
 const RUNNING_STAGES = new Set(["planning", "designing", "rendering"]);
 // 파생 소스로 쓸 수 있는 블로그 초안 단계(초안 본문이 존재).
@@ -56,10 +59,10 @@ function CardRow({ card, onDelete }: { card: CardNewsInfo; onDelete: (id: string
   return (
     <div className="review-section">
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <span className="badge">{STAGE_LABEL[card.stage] ?? card.stage}</span>
+        <span className="badge">{STAGE_LABEL[card.stage] ? <><Ico name={STAGE_LABEL[card.stage].icon} size={10} /> {STAGE_LABEL[card.stage].label}</> : card.stage}</span>
         <strong>{card.topic}</strong>
-        {card.keyword && <span className="chip">🎯 {card.keyword}</span>}
-        {card.sourcePieceId && <span className="chip" title="블로그 초안에서 파생">📗 블로그 파생</span>}
+        {card.keyword && <span className="chip"><Ico name="location" size={11} /> {card.keyword}</span>}
+        {card.sourcePieceId && <span className="chip" title="블로그 초안에서 파생"><Ico name="document" size={11} /> 블로그 파생</span>}
         <span className="muted" style={{ marginLeft: "auto" }}>{fmtWhen(card.updatedTs)}</span>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }} className="muted">
@@ -81,7 +84,7 @@ function CardRow({ card, onDelete }: { card: CardNewsInfo; onDelete: (id: string
       <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
         {card.stage === "ready" && (
           <>
-            <a className="btn start" href={`/cardnews/${card.id}/zip`} download>⬇ 전체 zip</a>
+            <a className="btn start" href={`/cardnews/${card.id}/zip`} download>전체 zip</a>
             {captionFull && <button className="btn ghost" onClick={copyCaption}>{copied ? "복사됨!" : "캡션 복사"}</button>}
           </>
         )}
@@ -159,7 +162,7 @@ export default function CardNewsSection() {
             <option value="">블로그 초안에서 만들기 — 초안 선택…</option>
             {derivable.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
           </select>
-          <button className="btn ghost" disabled={busy || !srcPiece} onClick={doDerive}>📗 초안 → 카드뉴스</button>
+          <button className="btn ghost" disabled={busy || !srcPiece} onClick={doDerive}><Ico name="document" size={12} /> 초안 → 카드뉴스</button>
           {err && <span className="muted" style={{ color: "var(--con)" }}>{err}</span>}
         </div>
       </div>
