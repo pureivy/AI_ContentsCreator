@@ -4,6 +4,7 @@ import {
   fetchPieces, ShortsInfo, PieceInfo,
 } from "../api";
 import Avatar from "./Avatar";
+import Ico from "./Ico";
 
 // 숏폼 탭 — 숏폼팀(작가 → 디렉터 → 씬 이미지 → TTS+ffmpeg 조립)이 만드는 세로 MP4.
 // 발행 없음(다운로드 전용): 인라인 재생 + mp4/zip 다운로드. 진행은 8초 폴링(캘린더와 동일 케이던스).
@@ -78,7 +79,7 @@ function ShortRow({ s, onDelete }: { s: ShortsInfo; onDelete: (id: string) => vo
             {captionFull && <button className="btn ghost" onClick={copyCaption}>{copied ? "복사됨!" : "캡션 복사"}</button>}
           </>
         )}
-        <button className="btn ghost" title="목록에서 삭제(산출물 파일은 남음)" disabled={running} onClick={() => onDelete(s.id)}>🗑 삭제</button>
+        <button className="btn ghost" title="목록에서 삭제(산출물 파일은 남음)" disabled={running} onClick={() => onDelete(s.id)}><Ico name="trash" size={12} /> 삭제</button>
       </div>
     </div>
   );

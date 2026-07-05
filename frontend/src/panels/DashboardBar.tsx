@@ -1,11 +1,12 @@
 // DashboardBar — a metrics strip under the top bar (회사 · 누적토론 · TIME · WORKING ·
 // OUTPUT · 위키 · 교훈 · 가동상태), styled like the reference office-sim toolbar. All
 // values are live from the same folded uiState the office renders.
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useStore } from "../store";
 import { fetchWikiStats, fetchAutonomyStatus, type AutonomyStatus } from "../api";
 import { countWorking } from "../events/working";
 import type { MetricKind } from "./MetricDrawer";
+import Ico from "./Ico";
 
 interface Props {
   companyName: string;
@@ -15,7 +16,7 @@ interface Props {
 }
 
 function Chip({ icon, label, value, accent, mono, onClick }: {
-  icon: string; label: string; value: string | number;
+  icon: ReactNode; label: string; value: string | number;
   accent?: boolean; mono?: boolean; onClick?: () => void;
 }) {
   const cls = `dash-chip${accent ? " accent" : ""}${onClick ? " clickable" : ""}`;
@@ -74,28 +75,28 @@ export default function DashboardBar({ companyName, total, runsCount, onMetric }
   return (
     <div className="dashboard-bar">
       <div className="dash-company">
-        <span className="dash-logo">🏢</span>
+        <span className="dash-logo"><Ico name="company" size={15} /></span>
         <div className="dash-company-txt">
           <b>{companyName || "AI 콘텐츠 스튜디오"}</b>
           <span>AI 에이전트 조직</span>
         </div>
       </div>
-      <Chip icon="📅" label="누적 토론" value={runsCount}
+      <Chip icon={<Ico name="bubble" size={14} />} label="누적 토론" value={runsCount}
         onClick={onMetric && (() => onMetric("runs"))} />
-      <Chip icon="⏰" label="TIME" value={hhmm} mono />
-      <Chip icon="👥" label="WORKING" value={`${working}/${total}`} accent={working > 0}
+      <Chip icon={<Ico name="clock" size={14} />} label="TIME" value={hhmm} mono />
+      <Chip icon={<Ico name="person" size={14} />} label="WORKING" value={`${working}/${total}`} accent={working > 0}
         onClick={onMetric && (() => onMetric("working"))} />
-      <Chip icon="📰" label="발행" value={output} accent={output > 0}
+      <Chip icon={<Ico name="megaphone" size={14} />} label="발행" value={output} accent={output > 0}
         onClick={onMetric && (() => onMetric("output"))} />
-      <Chip icon="📚" label="위키" value={wikiTotal}
+      <Chip icon={<Ico name="document" size={14} />} label="위키" value={wikiTotal}
         onClick={onMetric && (() => onMetric("wiki"))} />
-      <Chip icon="💡" label="인사이트" value={Math.max(lessonsTotal, s.lessons.length)}
+      <Chip icon={<Ico name="sparkle" size={14} />} label="인사이트" value={Math.max(lessonsTotal, s.lessons.length)}
         onClick={onMetric && (() => onMetric("lessons"))} />
       {s.approvals.length > 0 && (
-        <Chip icon="🔔" label="검토 대기" value={s.approvals.length} accent />
+        <Chip icon={<Ico name="bell" size={14} />} label="검토 대기" value={s.approvals.length} accent />
       )}
       {auto?.enabled && (
-        <Chip icon="🤖" label="자율" value={auto.active ? "동작 중" : "대기"} accent={auto.active} />
+        <Chip icon={<Ico name="setting" size={14} />} label="자율" value={auto.active ? "동작 중" : "대기"} accent={auto.active} />
       )}
       <div className={`dash-live${live ? " on" : ""}`}>
         <span className="dash-dot" />

@@ -10,6 +10,7 @@ import {
 } from "../api";
 import Avatar from "./Avatar";
 import KnowledgeInject from "./KnowledgeInject";
+import Ico from "./Ico";
 
 const AUTONOMY_LABEL = ["Off", "읽기전용", "초안(승인)", "자동"];
 // 로컬 우선 제품: 직원별 '모델'을 '처리 등급(tier)' 으로 일원화. 백엔드 agentDetail 이
@@ -184,8 +185,8 @@ export default function EmployeesView() {
     <div className="emp-dir">
       <div className="emp-dir-roster">
         <div className="emp-roster-head">
-          <span>👥 직원 편집</span>
-          <button className="btn ghost emp-inject-btn" onClick={() => setInjectOpen(true)} title="파일로 외부 지식을 특정 에이전트(들)에 주입">📥 지식 주입</button>
+          <span><Ico name="person" size={12} /> 직원 편집</span>
+          <button className="btn ghost emp-inject-btn" onClick={() => setInjectOpen(true)} title="파일로 외부 지식을 특정 에이전트(들)에 주입">지식 주입</button>
           <span className="emp-saved">{flashMsg}</span>
         </div>
 
@@ -197,17 +198,17 @@ export default function EmployeesView() {
         )}
 
         <div className="emp-dir-section">
-          <div className="emp-dir-team">🏢 {company.name}</div>
+          <div className="emp-dir-team"><Ico name="company" size={11} /> {company.name}</div>
           {card(company.ceo, false)}
         </div>
 
         {company.teams.map((t) => (
           <div key={t.id} className="emp-dir-section">
             <div className="emp-team-head">
-              <span className="emp-dir-team">👥 {t.name}</span>
+              <span className="emp-dir-team"><Ico name="person" size={11} /> {t.name}</span>
               <span className="emp-team-actions">
-                <button title="팀 이름 변경" onClick={() => doRenameTeam(t.id, t.name)}>✏️</button>
-                <button title="팀 삭제" onClick={() => doDeleteTeam(t.id, t.name)}>🗑</button>
+                <button title="팀 이름 변경" onClick={() => doRenameTeam(t.id, t.name)}><Ico name="pencil" size={12} /></button>
+                <button title="팀 삭제" onClick={() => doDeleteTeam(t.id, t.name)}><Ico name="trash" size={12} /></button>
               </span>
             </div>
             {card(t.lead, false)}
@@ -253,7 +254,7 @@ export default function EmployeesView() {
 
             {/* --- 구조 (company.yaml) --- */}
             <div className="emp-edit-box">
-              <h4>🏷️ 구조 (역할 정의)</h4>
+              <h4>구조 (역할 정의)</h4>
               <label className="emp-field"><span>이름/직책</span>
                 <input value={title} onChange={(e) => setTitle(e.target.value)} /></label>
               <label className="emp-field col"><span>역할 설명 (system prompt)</span>
@@ -273,13 +274,13 @@ export default function EmployeesView() {
                       onChange={(e) => setCritic(e.target.checked)} /><span>비평가</span></label>
                   </>
                 )}
-                <button className="btn start emp-save" disabled={saving} onClick={saveStruct}>💾 구조 저장</button>
+                <button className="btn start emp-save" disabled={saving} onClick={saveStruct}>구조 저장</button>
               </div>
             </div>
 
             {/* --- 워크스페이스 (org/agents/<id>) --- */}
             <div className="emp-edit-box">
-              <h4>🧬 워크스페이스 (목표·툴·스킬)</h4>
+              <h4>워크스페이스 (목표·툴·스킬)</h4>
               <p className="muted" style={{ margin: "0 0 8px", fontSize: 12 }}>
                 직무 정체성·성격은 위 <b>역할 설명(system prompt)</b>이 담당합니다. 여기선 개인 목표·툴·스킬만 조정하세요.
               </p>
@@ -292,13 +293,13 @@ export default function EmployeesView() {
                     {AUTONOMY_LABEL.map((l, i) => <option key={i} value={i}>{i} · {l}</option>)}
                   </select></label>
                 <label className="emp-field checkbox"><input type="checkbox" checked={web}
-                  onChange={(e) => setWeb(e.target.checked)} /><span>🌐 웹 검색 툴</span></label>
-                <button className="btn start emp-save" disabled={saving} onClick={saveWorkspace}>💾 워크스페이스 저장</button>
+                  onChange={(e) => setWeb(e.target.checked)} /><span><Ico name="globe" size={12} /> 웹 검색 툴</span></label>
+                <button className="btn start emp-save" disabled={saving} onClick={saveWorkspace}>워크스페이스 저장</button>
               </div>
               <p className="muted" style={{ margin: "4px 0 0", fontSize: 11 }}>
-                자율도 2↑면 쓰기 도구(🗒️ 노트 저장)·⌨️ 셸(서버 <code>AGENT_SHELL=1</code>)을 <b>승인 후</b> 사용합니다. 0=도구 없음 · 1=읽기만.
+                자율도 2↑면 쓰기 도구(노트 저장)·셸(서버 <code>AGENT_SHELL=1</code>)을 <b>승인 후</b> 사용합니다. 0=도구 없음 · 1=읽기만.
               </p>
-              <h4>🧩 스킬</h4>
+              <h4>스킬</h4>
               <div className="emp-skill-list">
                 {profile.skills_loaded.length ? profile.skills_loaded.map((s) => (
                   <span key={s} className="chip skill-chip emp-skill">{s}
@@ -313,7 +314,7 @@ export default function EmployeesView() {
             </div>
 
             <div className="emp-injected-head">
-              <h4>📥 주입된 외부 지식 (사람이 넣음 · 최우선 신뢰)</h4>
+              <h4>주입된 외부 지식 (사람이 넣음 · 최우선 신뢰)</h4>
               {profile.injected?.trim() && (
                 <button className="btn ghost emp-inject-clear" onClick={async () => {
                   if (!window.confirm("이 에이전트의 주입 지식을 모두 비울까요?")) return;

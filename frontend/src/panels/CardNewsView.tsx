@@ -4,6 +4,7 @@ import {
   fetchPieces, CardNewsInfo, PieceInfo,
 } from "../api";
 import Avatar from "./Avatar";
+import Ico from "./Ico";
 
 // 카드뉴스 탭 — 카드뉴스팀(기획 → 디자인 → 배경 생성 → 렌더)이 만드는 인스타그램용 슬라이드.
 // 발행 없음(사용자 확정): 미리보기 + 개별/zip 다운로드까지만. 진행은 8초 폴링(캘린더와 동일 케이던스).
@@ -84,7 +85,7 @@ function CardRow({ card, onDelete }: { card: CardNewsInfo; onDelete: (id: string
             {captionFull && <button className="btn ghost" onClick={copyCaption}>{copied ? "복사됨!" : "캡션 복사"}</button>}
           </>
         )}
-        <button className="btn ghost" title="카드 삭제(산출물 파일은 남음)" disabled={running} onClick={() => onDelete(card.id)}>🗑 삭제</button>
+        <button className="btn ghost" title="카드 삭제(산출물 파일은 남음)" disabled={running} onClick={() => onDelete(card.id)}><Ico name="trash" size={12} /> 삭제</button>
       </div>
     </div>
   );

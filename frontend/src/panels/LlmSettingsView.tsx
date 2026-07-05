@@ -4,6 +4,7 @@
 // 백엔드로 덮어쓰는 셀렉터는 별도). 다음 런부터 즉시 반영 — 서버 재시작 불필요.
 import { useEffect, useState } from "react";
 import { fetchLlmStatus, saveLlmSetting, LlmStatus, LlmBackendId } from "../api";
+import Ico from "./Ico";
 
 export default function LlmSettingsView() {
   const [status, setStatus] = useState<LlmStatus | null>(null);
@@ -41,7 +42,7 @@ export default function LlmSettingsView() {
   return (
     <div className="apikeys">
       <div className="apikeys-head">
-        <h1>🧩 LLM 백엔드</h1>
+        <h1><Ico name="sparkle" size={17} /> LLM 백엔드</h1>
         <p className="apikeys-sub">
           에이전트를 구동할 LLM을 고릅니다. <b>다음 런부터 즉시 적용</b>(재시작 불필요)되며,
           선택은 디스크에 저장되어 재시작 후에도 유지됩니다. 런 시작 시 그 런만 다른 백엔드로
@@ -53,7 +54,7 @@ export default function LlmSettingsView() {
         {/* Claude 클라우드 */}
         <label className={`apikey-card llm-card${backend === "claude" ? " sel" : ""}`}>
           <div className="apikey-card-head">
-            <span className="apikey-icon">🧠</span>
+            <span className="apikey-icon"><Ico name="sparkle" size={18} /></span>
             <div className="apikey-titles">
               <b>Claude 클라우드</b>
               <div className="apikey-desc">현행 동작. 역할별 모델 라우팅(편집장=opus·팀원=sonnet) 유지.</div>
@@ -66,7 +67,7 @@ export default function LlmSettingsView() {
         {/* 로컬 (Ollama) */}
         <label className={`apikey-card llm-card${backend === "local" ? " sel" : ""}`}>
           <div className="apikey-card-head">
-            <span className="apikey-icon">💻</span>
+            <span className="apikey-icon"><Ico name="setting" size={18} /></span>
             <div className="apikey-titles">
               <b>로컬 (Ollama)</b>
               <div className="apikey-desc">
@@ -104,7 +105,7 @@ export default function LlmSettingsView() {
           <div className="apikey-foot">
             {saved && <span className="apikey-ok">✓ 저장됨 — 다음 런부터 적용</span>}
             <button className="btn start" disabled={busy} onClick={save}>
-              {busy ? "저장 중…" : "💾 전역 기본값으로 저장"}
+              {busy ? "저장 중…" : "전역 기본값으로 저장"}
             </button>
             <button className="btn" disabled={busy} onClick={load} title="Ollama 모델 목록 새로고침">
               ↻ 새로고침

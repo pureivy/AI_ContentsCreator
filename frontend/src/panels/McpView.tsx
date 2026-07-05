@@ -2,6 +2,7 @@
 // 위키·웹검색(in-process)은 항상 활성, 법령·DART·커스텀 커넥터(external)는 API키 설정 시 활성.
 // 'AI 자동설정': API 이름(+문서 URL)으로 로컬 LLM 이 선언형 설정을 제안 → 테스트 미리보기 → 저장.
 import { useEffect, useState } from "react";
+import Ico from "./Ico";
 import {
   fetchMcp, toggleMcp, McpServer,
   listConnectors, autoconfigConnector, testConnector, saveConnector, deleteConnector, ConnectorCfg,
@@ -49,7 +50,7 @@ export default function McpView() {
 
   const onAuto = async () => {
     if (!keyName.trim() || !apiName.trim()) { setMsg("⚠ 시크릿 키 이름과 API 이름을 입력하세요."); return; }
-    setBusy("auto"); setMsg("🤖 AI가 설정 생성 중… (로컬 LLM, 최대 1분)"); setPreview(null);
+    setBusy("auto"); setMsg("AI가 설정 생성 중… (로컬 LLM, 최대 1분)"); setPreview(null);
     const r = await autoconfigConnector(keyName.trim(), apiName.trim(), docsUrl.trim());
     setBusy(null);
     if (r.ok && r.cfg) { setCfgJson(JSON.stringify(r.cfg, null, 2)); setMsg("✓ 설정 생성됨 — 검토·수정 후 반드시 테스트하세요(로컬 LLM 추정이라 틀릴 수 있음)."); }
@@ -57,7 +58,7 @@ export default function McpView() {
   };
   const onSearchDocs = async () => {
     if (!apiName.trim()) { setMsg("⚠ 먼저 API 이름을 입력하세요."); return; }
-    setBusy("docs"); setDocs([]); setMsg("🔎 문서 URL 검색 중…");
+    setBusy("docs"); setDocs([]); setMsg("문서 URL 검색 중…");
     const r = await searchDocs(apiName.trim());
     setBusy(null);
     if (r.ok && r.results?.length) { setDocs(r.results.slice(0, 6)); setMsg(`문서 후보 ${r.results.length}건 — 클릭하면 URL이 입력됩니다.`); }
@@ -91,9 +92,9 @@ export default function McpView() {
   return (
     <div className="apikeys">
       <div className="apikeys-head">
-        <h1>🧷 MCP · 외부 데이터 연동</h1>
+        <h1><Ico name="globe" size={17} /> MCP · 외부 데이터 연동</h1>
         <p className="apikeys-sub">
-          직원들이 작업에 활용하는 외부 데이터 소스 목록입니다. <b>API 키는 '🔑 API 키' 화면에서 먼저 입력</b>하고,
+          직원들이 작업에 활용하는 외부 데이터 소스 목록입니다. <b>API 키는 'API 키' 화면에서 먼저 입력</b>하고,
           여기서 새 API 를 <b>AI 자동설정</b>으로 연결하세요. 연결되면 관련 주제 작업에 자동 주입됩니다.
         </p>
       </div>
@@ -102,7 +103,7 @@ export default function McpView() {
       <div className="apikeys-grid">
         <div className="apikey-card">
           <div className="apikey-card-head">
-            <span className="apikey-icon">🤖</span>
+            <span className="apikey-icon"><Ico name="sparkle" size={18} /></span>
             <div className="apikey-titles">
               <b>AI로 외부 API 연동 추가</b>
               <div className="apikey-desc">API 이름(+문서 URL)을 넣고 AI 자동설정 → 테스트 → 저장. 키만으로는 안 되고, 한 번 설정을 만들면 그 다음부터 키로 켜고 끕니다.</div>
@@ -131,13 +132,13 @@ export default function McpView() {
             <label>API 문서 URL (선택 · 정확도↑)</label>
             <div style={{ display: "flex", gap: 6 }}>
               <input value={docsUrl} onChange={(e) => setDocsUrl(e.target.value)} placeholder="https://… 또는 우측 '문서 검색'으로 찾기" style={{ flex: 1 }} />
-              <button className="btn" type="button" disabled={busy !== null || !apiName.trim()} onClick={onSearchDocs}>{busy === "docs" ? "검색 중…" : "🔎 문서 검색"}</button>
+              <button className="btn" type="button" disabled={busy !== null || !apiName.trim()} onClick={onSearchDocs}>{busy === "docs" ? "검색 중…" : "문서 검색"}</button>
             </div>
             {docs.length > 0 && (
               <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
                 {docs.map((d) => (
                   <button key={d.url} type="button"
-                    onClick={() => { setDocsUrl(d.url); setMsg(`문서 URL 선택됨 — 이제 🤖 AI 자동설정을 누르세요.`); }}
+                    onClick={() => { setDocsUrl(d.url); setMsg(`문서 URL 선택됨 — 이제 AI 자동설정을 누르세요.`); }}
                     style={{ textAlign: "left", padding: "5px 9px", borderRadius: 5, cursor: "pointer",
                       border: docsUrl === d.url ? "1px solid var(--fg-success)" : "1px solid var(--line-neutral)", background: "transparent", color: "inherit" }}>
                     <div style={{ fontSize: 12, fontWeight: 600 }}>{d.title || d.url}</div>
@@ -148,7 +149,7 @@ export default function McpView() {
             )}
           </div>
           <div className="apikey-foot">
-            <button className="btn start" disabled={busy !== null} onClick={onAuto}>{busy === "auto" ? "생성 중…" : "🤖 AI 자동설정"}</button>
+            <button className="btn start" disabled={busy !== null} onClick={onAuto}>{busy === "auto" ? "생성 중…" : "AI 자동설정"}</button>
           </div>
 
           {cfgJson && (
@@ -158,8 +159,8 @@ export default function McpView() {
               <div className="apikey-field"><label>테스트 검색어</label>
                 <input value={testQ} onChange={(e) => setTestQ(e.target.value)} placeholder="예: 경상북도 일자리 지원" /></div>
               <div className="apikey-foot">
-                <button className="btn" disabled={busy !== null} onClick={onTest}>{busy === "test" ? "테스트 중…" : "🔎 테스트(미리보기)"}</button>
-                <button className="btn start" disabled={busy !== null} onClick={onSave}>{busy === "save" ? "저장 중…" : "💾 저장"}</button>
+                <button className="btn" disabled={busy !== null} onClick={onTest}>{busy === "test" ? "테스트 중…" : "테스트(미리보기)"}</button>
+                <button className="btn start" disabled={busy !== null} onClick={onSave}>{busy === "save" ? "저장 중…" : "저장"}</button>
               </div>
               {preview !== null && (
                 <div className="apikey-field"><label>미리보기 결과</label>
@@ -202,7 +203,7 @@ export default function McpView() {
                 </button>
               )}
               {customIds.has(s.id) && (
-                <button className="btn reject" onClick={() => onDelete(s.id)}>🗑 삭제</button>
+                <button className="btn reject" onClick={() => onDelete(s.id)}><Ico name="trash" size={12} /> 삭제</button>
               )}
             </div>
           </div>

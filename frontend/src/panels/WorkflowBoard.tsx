@@ -9,6 +9,7 @@ import { agentColor, agentGlyph, resolveName } from "./agentVisual";
 import { isWorkingNow } from "../events/working";
 import { TERMINAL, macroStages, soloWorking } from "./workflowStages";
 import Avatar from "./Avatar";
+import Ico from "./Ico";
 
 const PHASE_LABEL: Record<string, string> = {
   brief: "브리핑", decompose: "업무 분해", assign: "업무 배정", work: "작업 진행",
@@ -43,7 +44,7 @@ export function OfficeProgressBar() {
   const terminal = TERMINAL.has(status);
   return (
     <div className="office-progress" title="DISPATCH PROTOCOL 진행 단계 (실제 런 진행률)">
-      <span className="op-label">📊 진행률</span>
+      <span className="op-label"><Ico name="chart" size={11} /> 진행률</span>
       <div className="op-track">
         {stages.map((m, i) => {
           const state = terminal ? "done" : i < cur ? "done" : i === cur ? "current" : "pending";
@@ -108,16 +109,17 @@ export default function WorkflowBoard({ names }: { names?: Record<string, string
   // Uses the shared isWorkingNow rule (events/working.ts) for the working/idle decision
   // so CEO and members don't latch "작업 중" based on raw spawned status. Only the
   // 토론/작업 label distinction (debate phase → 토론 중) is kept locally.
+  // Wanted 원칙: 제품 UI 크롬에 이모지 금지 — 상태는 톤 컬러(tone-*) + 라벨로만 전달.
   const statusOf = (a: AgentNode) => {
-    if (a.status === "failed") return { icon: "⚠", label: "오류", cls: "con" };
+    if (a.status === "failed") return { label: "오류", cls: "con" };
     if (isWorkingNow(a, s)) {
       const teamPhase = a.team ? s.phases[a.team] : s.phases["_ceo"];
       return teamPhase === "debate"
-        ? { icon: "💬", label: "토론 중", cls: "info" }
-        : { icon: "✍️", label: "작업 중", cls: "info" };
+        ? { label: "토론 중", cls: "info" }
+        : { label: "작업 중", cls: "info" };
     }
-    if (a.status === "spoke" || a.status === "converged") return { icon: "☕", label: "휴식 중", cls: "pro" };
-    return { icon: "⏸", label: "대기", cls: "muted" };
+    if (a.status === "spoke" || a.status === "converged") return { label: "휴식 중", cls: "pro" };
+    return { label: "대기", cls: "muted" };
   };
 
   const Row = (a: AgentNode) => {
@@ -129,10 +131,10 @@ export default function WorkflowBoard({ names }: { names?: Record<string, string
         <div className="wf-member-body">
           <div className="wf-member-top">
             <span className="wf-name" style={{ color: agentColor(a.agent_id) }}>{resolveName(a.agent_id, a.persona, names) || a.persona?.role || a.agent_id}</span>
-            <span className={`wf-status tone-${ms.cls}`}>{ms.icon} {ms.label}</span>
+            <span className={`wf-status tone-${ms.cls}`}>{ms.label}</span>
           </div>
           <div className="wf-time">
-            🕘 {ts ? clock(ts) : "—"}
+            <Ico name="clock" size={10} /> {ts ? clock(ts) : "—"}
             {running && ts && <em className="wf-ago"> · {ago(now - new Date(ts).getTime())} 전</em>}
           </div>
         </div>

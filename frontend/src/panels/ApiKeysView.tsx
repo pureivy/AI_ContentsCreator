@@ -3,6 +3,7 @@
 // and DELETE them. Values live in the project's .env (the single store) and are shown masked.
 import { useEffect, useState } from "react";
 import { fetchApiKeysAll, saveApiKey, addApiKey, deleteApiKey, restoreApiKey, ApiKeyInfo, HiddenKeyInfo } from "../api";
+import Ico from "./Ico";
 
 export default function ApiKeysView() {
   const [keys, setKeys] = useState<ApiKeyInfo[]>([]);
@@ -61,10 +62,10 @@ export default function ApiKeysView() {
   return (
     <div className="apikeys">
       <div className="apikeys-head">
-        <h1>🔑 API 키 한 곳에서 관리</h1>
+        <h1><Ico name="key" size={17} /> API 키 한 곳에서 관리</h1>
         <p className="apikeys-sub">
           모든 자격증명을 한 곳에서 입력·저장합니다. 키는 프로젝트의 <code>.env</code>(git 제외) <b>한 곳에만</b> 저장되며,
-          화면에는 항상 <b>마스킹</b>되어 표시됩니다. 🗑는 카드를 삭제합니다 — 사용자 키는 완전 제거,
+          화면에는 항상 <b>마스킹</b>되어 표시됩니다. 휴지통 버튼은 카드를 삭제합니다 — 사용자 키는 완전 제거,
           <b>기본 키는 값 제거 후 숨김</b>(하단에서 복원 가능).
         </p>
       </div>
@@ -84,7 +85,7 @@ export default function ApiKeysView() {
                   className="apikey-del"
                   title={k.builtin ? "카드 삭제(값 제거+숨김 · 복원 가능)" : "이 키 삭제(항목·값 제거)"}
                   onClick={() => del(k)}
-                >🗑</button>
+                ><Ico name="trash" size={13} /></button>
               </div>
               <div className="apikey-field">
                 <label>
@@ -108,7 +109,7 @@ export default function ApiKeysView() {
                   disabled={busy === k.key || !draft.trim()}
                   onClick={() => save(k.key)}
                 >
-                  {busy === k.key ? "저장 중…" : "💾 저장"}
+                  {busy === k.key ? "저장 중…" : "저장"}
                 </button>
               </div>
             </div>
@@ -118,7 +119,7 @@ export default function ApiKeysView() {
         {/* 사용자 키 추가 */}
         <div className="apikey-card apikey-add">
           <div className="apikey-card-head">
-            <span className="apikey-icon">➕</span>
+            <span className="apikey-icon"><Ico name="plus" size={18} /></span>
             <div className="apikey-titles">
               <b>API 키 추가</b>
               <div className="apikey-desc">사용자 정의 키 등록. 이름은 대문자로 시작, 대문자/숫자/밑줄만 (예: MY_API_KEY).</div>
@@ -142,7 +143,7 @@ export default function ApiKeysView() {
           </div>
           <div className="apikey-foot">
             <button className="btn start" disabled={addBusy || !nk.key.trim()} onClick={addKey}>
-              {addBusy ? "추가 중…" : "➕ 추가"}
+              {addBusy ? "추가 중…" : "추가"}
             </button>
           </div>
         </div>
