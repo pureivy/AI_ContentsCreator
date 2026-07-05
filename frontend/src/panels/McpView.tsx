@@ -115,7 +115,7 @@ export default function McpView() {
                 {unconnected.map((k) => (
                   <button key={k.key} type="button"
                     className={`mcp-tool${keyName === k.key ? " sel" : ""}`}
-                    style={{ cursor: "pointer", border: keyName === k.key ? "1px solid #3fb950" : undefined }}
+                    style={{ cursor: "pointer", border: keyName === k.key ? "1px solid var(--fg-success)" : undefined }}
                     onClick={() => { setKeyName(k.key); if (!apiName) setApiName(k.label && k.label !== k.key ? k.label : ""); setMsg(`'${k.key}' 선택됨 — API 이름·문서 URL을 넣고 자동설정하세요.`); }}>
                     {k.icon} {k.key}
                   </button>
@@ -139,7 +139,7 @@ export default function McpView() {
                   <button key={d.url} type="button"
                     onClick={() => { setDocsUrl(d.url); setMsg(`문서 URL 선택됨 — 이제 🤖 AI 자동설정을 누르세요.`); }}
                     style={{ textAlign: "left", padding: "5px 9px", borderRadius: 5, cursor: "pointer",
-                      border: docsUrl === d.url ? "1px solid #3fb950" : "1px solid #30363d", background: "transparent", color: "inherit" }}>
+                      border: docsUrl === d.url ? "1px solid var(--fg-success)" : "1px solid var(--line-neutral)", background: "transparent", color: "inherit" }}>
                     <div style={{ fontSize: 12, fontWeight: 600 }}>{d.title || d.url}</div>
                     <div style={{ fontSize: 11, opacity: 0.65, wordBreak: "break-all" }}>{d.url}</div>
                   </button>

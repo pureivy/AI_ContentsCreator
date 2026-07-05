@@ -25,7 +25,7 @@ export function Waveform({ analyser, variant, active }: {
       const { width: w, height: h } = canvas;
       ctx.clearRect(0, 0, w, h);
       ctx.lineWidth = 2;
-      ctx.strokeStyle = variant === "strip" ? "#7c9cff" : "#9b8cff";
+      ctx.strokeStyle = variant === "strip" ? "#81b3fa" : "#9747ff";  // Wanted blue-70 / violet
       ctx.beginPath();
       const slice = w / buf.length;
       for (let i = 0; i < buf.length; i++) {
