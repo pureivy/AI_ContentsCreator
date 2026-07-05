@@ -84,7 +84,8 @@ function ShortRow({ s, onDelete }: { s: ShortsInfo; onDelete: (id: string) => vo
   );
 }
 
-export default function ShortsView() {
+// 제작실(StudioView) 탭의 숏폼 섹션 — 페이지 프레임·헤더는 StudioView 가 제공.
+export default function ShortsSection() {
   const [items, setItems] = useState<ShortsInfo[]>([]);
   const [pieces, setPieces] = useState<PieceInfo[]>([]);
   const [topic, setTopic] = useState("");
@@ -129,16 +130,7 @@ export default function ShortsView() {
   };
 
   return (
-    <div className="apikeys shorts-view">
-      <div className="apikeys-head">
-        <h1>🎬 숏폼</h1>
-        <p className="apikeys-sub">
-          숏폼팀(대본·연출)이 주제 또는 블로그 초안에서 유튜브 숏폼(세로 MP4)을 만듭니다 —
-          대본과 씬 이미지는 AI, 내레이션은 TTS, 자막·조립은 코드가 담당해 오타가 없습니다.
-          발행은 없고 다운로드까지만(총 {items.length}건).
-        </p>
-      </div>
-
+    <>
       {/* 새 숏폼 — 독립 주제 */}
       <div className="review-section">
         <h3>새 숏폼</h3>
@@ -167,6 +159,6 @@ export default function ShortsView() {
 
       {items.length === 0 && <p className="muted">아직 숏폼이 없습니다 — 위에서 주제를 입력해 첫 영상을 만들어 보세요.</p>}
       {items.map((s) => <ShortRow key={s.id} s={s} onDelete={doDelete} />)}
-    </div>
+    </>
   );
 }

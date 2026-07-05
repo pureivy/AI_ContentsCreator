@@ -90,7 +90,8 @@ function CardRow({ card, onDelete }: { card: CardNewsInfo; onDelete: (id: string
   );
 }
 
-export default function CardNewsView() {
+// 제작실(StudioView) 탭의 카드뉴스 섹션 — 페이지 프레임·헤더는 StudioView 가 제공.
+export default function CardNewsSection() {
   const [cards, setCards] = useState<CardNewsInfo[]>([]);
   const [pieces, setPieces] = useState<PieceInfo[]>([]);
   const [topic, setTopic] = useState("");
@@ -135,16 +136,7 @@ export default function CardNewsView() {
   };
 
   return (
-    <div className="apikeys cardnews-view">
-      <div className="apikeys-head">
-        <h1>🃏 카드뉴스</h1>
-        <p className="apikeys-sub">
-          카드뉴스팀(기획·디자인)이 주제 또는 블로그 초안에서 인스타그램용 슬라이드를 만듭니다 —
-          gpt-image-2가 텍스트까지 포함한 완성 카드를 직접 그리고, 비전 QA가 한글 오타를 검수해 문제 장만 재생성합니다.
-          발행은 없고 다운로드까지만(총 {cards.length}건).
-        </p>
-      </div>
-
+    <>
       {/* 새 카드뉴스 — 독립 주제 */}
       <div className="review-section">
         <h3>새 카드뉴스</h3>
@@ -173,6 +165,6 @@ export default function CardNewsView() {
 
       {cards.length === 0 && <p className="muted">아직 카드뉴스가 없습니다 — 위에서 주제를 입력해 첫 카드를 만들어 보세요.</p>}
       {cards.map((card) => <CardRow key={card.id} card={card} onDelete={doDelete} />)}
-    </div>
+    </>
   );
 }
