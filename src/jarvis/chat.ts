@@ -1,7 +1,7 @@
-/** 자비스(비서) 대화 코어 — 페르소나로 ollama 단일 chat, 업무지시면 delegate JSON 방출.
+/** 자비스(비서) 대화 코어 — 페르소나로 llm.chat 단일 호출, 업무지시면 delegate JSON 방출.
  *  format:'json' 미사용(자유응답 보존) → 자유 텍스트 후 firstJson 으로 delegate 추출. */
 import { llm } from '../llm/client';
-import { getLlmSetting, isClaudeBackend, resolveAssignment } from '../llm/setting';
+import { resolveAssignment } from '../llm/setting';
 import { getCompany } from '../agents/company-loader';
 import { firstJson } from '../tools/classify';   // Step 3a 에서 classify.ts 가 export 노출
 import { kstNowKo } from '../util/time';
@@ -84,10 +84,8 @@ export function jarvisSystemPrompt(): string {
 }
 
 function resolveModel(): string {
-  // Claude 백엔드: 자비스 잡담·위임판정은 저지연 micro(haiku). 로컬: 설정 모델 우선.
-  if (isClaudeBackend()) return resolveAssignment().micro;
-  const m = getLlmSetting().localModel;
-  return m && m.trim() ? m : 'gemma4:12b';
+  // 자비스 잡담·위임판정은 저지연 micro(haiku) — Claude 단일 백엔드.
+  return resolveAssignment().micro;
 }
 
 export async function jarvisChat(

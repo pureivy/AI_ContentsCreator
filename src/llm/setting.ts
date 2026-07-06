@@ -1,76 +1,44 @@
 /**
- * 런타임 LLM 설정 — 웹 UI(LlmSettingsView)에서 고른 백엔드·로컬 모델을 data/llm.json 에
- * 영속하고, 이후 모든 런의 모델 배정에 반영한다.
+ * 런타임 LLM 설정 — Claude 단일 백엔드로 고정.
  *
- * 기존 버그: POST /llm 이 echo 만 하고 영속·적용을 안 해서, UI 가 "디스크 저장 + 다음 런 적용"
- * 을 표방하지만 실제로는 무시됐고 모델이 항상 tierModels.standard(=gemma4:12b)로 고정됐다.
+ * 과거에는 웹 UI 에서 로컬(Ollama)·Claude 를 오가는 토글을 data/llm.json 에 영속했지만,
+ * 스튜디오가 Claude CLI 단독 운용으로 확정되며 Ollama 경로를 제거했다(2026-07-06, 1단계).
+ * 기존 호출부(서버 라우트·prepare·UI)와의 호환을 위해 export 시그니처는 유지하고,
+ * 값만 'claude' 로 고정한다 — data/llm.json 의 잔존 local 설정은 무시된다.
  */
-import fs from 'node:fs';
-import path from 'node:path';
 import { CONFIG } from '../config';
-import { autoAssignModels, getSystemSpecs } from './models';
 import type { ModelAssignment, InstalledModel } from './models';
 
 export interface LlmSetting {
-  /** 'local' | 'claude' 등 — 현재 런 엔진은 로컬(Ollama)만 구동. */
+  /** 항상 'claude' — Ollama 백엔드 제거됨. */
   backend: string;
-  /** 사용자가 고른 로컬 모델(빈 문자열이면 자동 배정/tierModels 사용). */
+  /** 항상 '' — 로컬 모델 선택 제거됨(하위 호환용 필드). */
   localModel: string;
 }
 
-const file = (): string => path.join(CONFIG.dataDir, 'llm.json');
-let _cached: LlmSetting | null = null;
+const FIXED: LlmSetting = { backend: 'claude', localModel: '' };
 
 export function getLlmSetting(): LlmSetting {
-  if (_cached) return _cached;
-  try {
-    const raw = JSON.parse(fs.readFileSync(file(), 'utf-8')) as Partial<LlmSetting>;
-    _cached = { backend: raw.backend || CONFIG.backend, localModel: raw.localModel || '' };
-  } catch {
-    _cached = { backend: CONFIG.backend, localModel: '' };
-  }
-  return _cached;
+  return FIXED;
 }
 
-export function setLlmSetting(s: { backend?: string; localModel?: string }): LlmSetting {
-  const cur = getLlmSetting();
-  const next: LlmSetting = {
-    backend: (s.backend ?? cur.backend) || CONFIG.backend,
-    localModel: (s.localModel ?? cur.localModel) || '',
-  };
-  _cached = next;
-  try {
-    fs.mkdirSync(CONFIG.dataDir, { recursive: true });
-    fs.writeFileSync(file(), JSON.stringify(next), 'utf-8');
-  } catch { /* 영속 실패 무해 */ }
-  return next;
+/** 하위 호환 no-op — 어떤 입력이 와도 Claude 고정 설정을 돌려준다(디스크 기록 없음). */
+export function setLlmSetting(_s: { backend?: string; localModel?: string }): LlmSetting {
+  return FIXED;
 }
 
-/**
- * 런의 tier 오버라이드 — 사용자가 UI 에서 로컬 모델을 골랐으면 본작업(standard·heavy)에 그 모델을
- * 쓰고, 구조적 단발 호출(micro)은 빠른 소형 모델(tierModels.micro)을 유지한다. 선택이 없으면
- * 기존 tierModels(env/기본) 그대로.
- */
+/** 하위 호환 — 로컬 모델 선택이 사라졌으므로 항상 env/기본 tierModels. */
 export function tierOverrides(): { micro: string; standard: string; heavy: string } {
-  const lm = getLlmSetting().localModel.trim();
-  return lm
-    ? { micro: CONFIG.tierModels.micro, standard: lm, heavy: lm }
-    : CONFIG.tierModels;
+  return CONFIG.tierModels;
 }
 
-/** 현재 백엔드가 Claude(클라우드)인가. */
+/** 현재 백엔드가 Claude(클라우드)인가 — 항상 true(Ollama 제거). */
 export function isClaudeBackend(): boolean {
-  return (getLlmSetting().backend || CONFIG.backend) === 'claude';
+  return true;
 }
 
-/**
- * 백엔드 인식 모델 배정 — claude 면 고정 클라우드 티어맵(haiku/sonnet/opus, 네트워크 조회 불필요),
- * local 이면 설치 모델을 RAM 예산으로 자동 배정(호출측이 ollama.listModels() 결과를 넘긴다).
- */
-export function resolveAssignment(installedForLocal: InstalledModel[] = []): ModelAssignment {
-  if (isClaudeBackend()) {
-    const c = CONFIG.cloudTierModels;
-    return { micro: c.micro, standard: c.standard, heavy: c.heavy, reason: `Claude 클라우드 티어 — micro=${c.micro} standard=${c.standard} heavy=${c.heavy}` };
-  }
-  return autoAssignModels(installedForLocal, getSystemSpecs(), tierOverrides());
+/** 모델 배정 — Claude 고정 클라우드 티어맵(haiku/sonnet/opus). 인자는 하위 호환용(무시). */
+export function resolveAssignment(_installedForLocal: InstalledModel[] = []): ModelAssignment {
+  const c = CONFIG.cloudTierModels;
+  return { micro: c.micro, standard: c.standard, heavy: c.heavy, reason: `Claude 클라우드 티어 — micro=${c.micro} standard=${c.standard} heavy=${c.heavy}` };
 }

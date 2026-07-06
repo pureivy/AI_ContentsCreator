@@ -1,6 +1,6 @@
 // McpView — 외부 데이터 소스(MCP/커넥터) 관리 + AI로 외부 API 연동 추가.
 // 위키·웹검색(in-process)은 항상 활성, 법령·DART·커스텀 커넥터(external)는 API키 설정 시 활성.
-// 'AI 자동설정': API 이름(+문서 URL)으로 로컬 LLM 이 선언형 설정을 제안 → 테스트 미리보기 → 저장.
+// 'AI 자동설정': API 이름(+문서 URL)으로 Claude 가 선언형 설정을 제안 → 테스트 미리보기 → 저장.
 import { useEffect, useState } from "react";
 import Ico from "./Ico";
 import {
@@ -50,10 +50,10 @@ export default function McpView() {
 
   const onAuto = async () => {
     if (!keyName.trim() || !apiName.trim()) { setMsg("⚠ 시크릿 키 이름과 API 이름을 입력하세요."); return; }
-    setBusy("auto"); setMsg("AI가 설정 생성 중… (로컬 LLM, 최대 1분)"); setPreview(null);
+    setBusy("auto"); setMsg("AI가 설정 생성 중… (최대 1분)"); setPreview(null);
     const r = await autoconfigConnector(keyName.trim(), apiName.trim(), docsUrl.trim());
     setBusy(null);
-    if (r.ok && r.cfg) { setCfgJson(JSON.stringify(r.cfg, null, 2)); setMsg("✓ 설정 생성됨 — 검토·수정 후 반드시 테스트하세요(로컬 LLM 추정이라 틀릴 수 있음)."); }
+    if (r.ok && r.cfg) { setCfgJson(JSON.stringify(r.cfg, null, 2)); setMsg("✓ 설정 생성됨 — 검토·수정 후 반드시 테스트하세요(AI 추정이라 틀릴 수 있음)."); }
     else setMsg(`생성 실패: ${r.error || ""}`);
   };
   const onSearchDocs = async () => {

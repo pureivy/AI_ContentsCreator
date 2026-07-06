@@ -131,10 +131,8 @@ function cfgToConnector(cfg: CustomConnectorCfg): GroundingConnector {
 setCustomProvider(() => listCustomConfigs().map(cfgToConnector));
 
 // ---- AI 자동설정 ----
-import { ollama } from '../llm/ollama';
 import { llm } from '../llm/client';
-import { getSystemSpecs, autoAssignModels } from '../llm/models';
-import { tierOverrides } from '../llm/setting';
+import { resolveAssignment } from '../llm/setting';
 
 /** 텍스트에서 첫 JSON 객체를 관대하게 파싱(format:json 응답용 — 순환 import 회피로 자체 구현). */
 function parseFirstJson<T>(raw: string): T | null {
@@ -151,7 +149,7 @@ function htmlToText(s: string): string {
 }
 
 /**
- * AI 자동설정 — API 이름(+선택 문서 URL)으로 로컬 LLM(heavy)이 선언형 설정을 제안.
+ * AI 자동설정 — API 이름(+선택 문서 URL)으로 Claude(heavy)가 선언형 설정을 제안.
  * 코드를 생성·실행하지 않고 '설정(JSON)'만 만든다. 저장 전 반드시 테스트로 검증할 것.
  */
 export async function autoConfigConnector(
@@ -164,9 +162,7 @@ export async function autoConfigConnector(
       docs = htmlToText(await r.text()).slice(0, 5000);
     } catch { /* 문서 없이도 진행 */ }
   }
-  const models = await ollama.listModels();
-  if (!models.length) return null;
-  const heavy = autoAssignModels(models, getSystemSpecs(), tierOverrides()).heavy;
+  const heavy = resolveAssignment().heavy;
   const sys =
     '너는 외부 REST API 연동 설정 생성기다. 주어진 API 를 "검색어로 호출해 결과를 받는" 선언형 설정(JSON)을 만든다. ' +
     '엔드포인트 URL 에서 인증키 자리는 {key}, 검색어 자리는 {query} 로 표기한다. 실제 동작하는 정확한 경로·파라미터명을 써라.';

@@ -6,15 +6,15 @@ import { useEffect, useState } from "react";
 import {
   fetchCompany, fetchAgent, patchAgent, addSkill, deleteSkill,
   addTeam, renameTeam, deleteTeam, addMember, patchRole, deleteRole,
-  fetchLlmStatus, CompanyInfo, RoleInfo, AgentProfile, LlmSetting, clearInjectedKnowledge,
+  CompanyInfo, RoleInfo, AgentProfile, clearInjectedKnowledge,
 } from "../api";
 import Avatar from "./Avatar";
 import KnowledgeInject from "./KnowledgeInject";
 import Ico from "./Ico";
 
 const AUTONOMY_LABEL = ["Off", "읽기전용", "초안(승인)", "자동"];
-// 로컬 우선 제품: 직원별 '모델'을 '처리 등급(tier)' 으로 일원화. 백엔드 agentDetail 이
-// role.tier(micro|standard|heavy) 를 내려주므로 클라우드/로컬 무관하게 등급으로 표시·저장한다.
+// 직원별 '모델'은 '처리 등급(tier)' 으로 일원화. 백엔드 agentDetail 이
+// role.tier(micro|standard|heavy) 를 내려주므로 등급으로 표시·저장한다(빠름=haiku·표준=sonnet·심층=opus).
 const TIER_OPTS = [
   { v: "micro", label: "⚡ 빠름 (경량)" },
   { v: "standard", label: "⚖️ 표준" },
@@ -43,7 +43,6 @@ export default function EmployeesView() {
   const [company, setCompany] = useState<CompanyInfo | null>(null);
   // 전역 LLM 설정 — 로컬 모드면 직원별 모델(opus/sonnet/haiku)이 전부 로컬 모델로
   // 덮인다는 사실을 디렉터리에 표시(설정 자체는 🧩 LLM 패널에서).
-  const [llm, setLlm] = useState<LlmSetting | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [profile, setProfile] = useState<AgentProfile | null>(null);
   const [loading, setLoading] = useState(false);
@@ -71,7 +70,6 @@ export default function EmployeesView() {
   const [newMember, setNewMember] = useState("");
 
   const reloadCompany = () => fetchCompany().then(setCompany);
-  useEffect(() => { fetchLlmStatus().then((st) => st && setLlm(st.setting)); }, []);
   useEffect(() => {
     reloadCompany();
   }, []);
@@ -189,13 +187,6 @@ export default function EmployeesView() {
           <button className="btn ghost emp-inject-btn" onClick={() => setInjectOpen(true)} title="파일로 외부 지식을 특정 에이전트(들)에 주입">지식 주입</button>
           <span className="emp-saved">{flashMsg}</span>
         </div>
-
-        {llm?.backend === "local" && (
-          <div className="emp-llm-note" title="🧩 LLM 패널에서 변경할 수 있습니다">
-            💻 현재 <b>로컬 LLM 모드</b> — 모든 직원이 <b>{llm.local_model}</b> 계열로 실행됩니다.
-            직원별 <b>처리 등급</b>(빠름·표준·심층)은 응답의 깊이·속도를 조절합니다.
-          </div>
-        )}
 
         <div className="emp-dir-section">
           <div className="emp-dir-team"><Ico name="company" size={11} /> {company.name}</div>
