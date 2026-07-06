@@ -1,6 +1,15 @@
 // 페르소나 주입(1회성) — data/company.yaml + assets/company/company.yaml 의 content_lead·reviewer
 // system_prompt 에 블로그 라이터/크리틱 규칙을 병합하고 툴을 grant 한다. YAML.stringify 로 안전 기록.
 // node 가 이 파일 위치에서 상위로 node_modules/yaml 을 해석하므로 프로젝트 안에서 실행해야 한다.
+//
+// [실행 차단 — 2026-07-06] 전 역할 시스템 프롬프트가 Claude 기준으로 전면 재작성되어
+// (company.yaml 참조), 이 스크립트의 내장 WRITER/CRITIC 은 구버전이다(이모지 사용 지시 등
+// 현행 '이모지 0' 정책과 정면 모순). 재실행하면 신규 프롬프트를 구버전으로 덮어쓴다.
+// 다시 쓰려면 아래 가드를 지우고 페르소나 원문을 현행 기준으로 갱신할 것.
+console.error('[중단] _inject_personas.mjs 는 2026-07-06 프롬프트 전면 재작성 이전의 1회성 스크립트입니다.');
+console.error('재실행하면 company.yaml 의 신규 시스템 프롬프트를 구버전으로 덮어씁니다. (가드 해제: 소스 참조)');
+process.exit(1);
+
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
