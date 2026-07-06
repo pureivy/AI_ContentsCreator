@@ -34,7 +34,7 @@ export async function youtubeTop(keyword: string, signal?: AbortSignal): Promise
   const key = getSecret(KEY);
   if (!kw || !key) return [];
   const sUrl = 'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8'
-    + `&regionCode=KR&relevanceLanguage=ko&q=${encodeURIComponent(kw)}&key=${key}`;
+    + `&regionCode=KR&relevanceLanguage=ko&q=${encodeURIComponent(kw)}&key=${encodeURIComponent(key)}`;
   const sr = await fetchTimeout(sUrl, {}, signal);
   if (!sr.ok) return [];
   const sj = await sr.json() as {
@@ -47,7 +47,7 @@ export async function youtubeTop(keyword: string, signal?: AbortSignal): Promise
   const stats = new Map<string, { views: number; durationMin: number }>();
   try {
     const ids = items.map((it) => it.id!.videoId!).join(',');
-    const vr = await fetchTimeout(`https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id=${ids}&key=${key}`, {}, signal);
+    const vr = await fetchTimeout(`https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id=${ids}&key=${encodeURIComponent(key)}`, {}, signal);
     if (vr.ok) {
       const vj = await vr.json() as {
         items?: Array<{ id?: string; statistics?: { viewCount?: string }; contentDetails?: { duration?: string } }>;

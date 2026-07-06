@@ -170,29 +170,50 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
 // (네이버 블로그·유튜브)를 조사하는 런을 제안한다. 조사→팀 토론→두뇌(위키) 적재→직원 학습(reflect)의
 // 지식 컴파운딩 루프 입구 — 시간이 갈수록 지식은 촘촘해지고 직원은 똑똑해진다(사용자 확정 2026-07-06).
 // ============================================================
-interface ResearchState { lastTs?: string; recent?: string[] }
-function researchStatePath(): string {
-  return path.join(CONFIG.dataDir, '_shared', `research-state${brandFileSuffix()}.json`); // 브랜드별 주기·이력 분리
+interface ResearchState { lastTs?: string; prevTs?: string; recent?: string[] }
+// slug 인자: 호출 시점의 활성 브랜드가 아니라 '틱 시작 시점에 고정한 브랜드'로 상태를 읽고 쓰기 위한 명시 전달.
+// (제안 LLM 대기 수 초 사이 브랜드가 전환되면 기록이 엉뚱한 브랜드 파일로 가던 버그의 봉합점.)
+function researchStatePath(slug?: string): string {
+  const suffix = slug === undefined ? brandFileSuffix() : (slug ? `-${slug}` : '');
+  return path.join(CONFIG.dataDir, '_shared', `research-state${suffix}.json`); // 브랜드별 주기·이력 분리
 }
-function readResearchState(): ResearchState {
-  try { return JSON.parse(readSafe(researchStatePath())) as ResearchState; } catch { return {}; }
+function readResearchState(slug?: string): ResearchState {
+  try { return JSON.parse(readSafe(researchStatePath(slug))) as ResearchState; } catch { return {}; }
+}
+function writeResearchState(st: ResearchState, slug?: string): void {
+  try {
+    fs.mkdirSync(path.dirname(researchStatePath(slug)), { recursive: true });
+    fs.writeFileSync(researchStatePath(slug), JSON.stringify(st, null, 2), 'utf-8');
+  } catch { /* 무해 — 기록 실패 시 다음 틱에 리서치가 한 번 더 뜰 뿐 */ }
 }
 
 /** 마지막 리서치 런 이후 주기(시간)가 지났는가 — 자율 사이클의 리서치/콘텐츠 분기 게이트. 0=off. */
-export function researchDue(hours: number): boolean {
+export function researchDue(hours: number, slug?: string): boolean {
   if (!(hours > 0)) return false;
-  const st = readResearchState();
-  return !st.lastTs || Date.now() - new Date(st.lastTs).getTime() >= hours * 3600_000;
+  const st = readResearchState(slug);
+  if (!st.lastTs) return true;
+  const t = new Date(st.lastTs).getTime();
+  if (!Number.isFinite(t)) return true; // 손상된 lastTs(NaN) — 게이트가 영구히 잠기지 않게 즉시 due 처리
+  return Date.now() - t >= hours * 3600_000;
 }
 
-/** 리서치 런 시작 기록 — 주기 게이트 갱신 + 최근 미션(중복 회피) 누적. 시작 시점 기록이라 실패해도 폭주하지 않는다. */
-export function recordResearchLaunch(title: string): void {
-  const st = readResearchState();
+/** 리서치 런 시작 기록 — 주기 게이트 갱신 + 최근 미션(중복 회피) 누적. 시작 시점 기록이라 실패해도 폭주하지
+ *  않고, 취소(양보) 시엔 rollbackResearchLaunch 가 직전 상태(prevTs)로 되돌려 창이 소각되지 않는다. */
+export function recordResearchLaunch(title: string, slug?: string): void {
+  const st = readResearchState(slug);
   const recent = [...(st.recent ?? []), title].slice(-10);
-  try {
-    fs.mkdirSync(path.dirname(researchStatePath()), { recursive: true });
-    fs.writeFileSync(researchStatePath(), JSON.stringify({ lastTs: new Date().toISOString(), recent }, null, 2), 'utf-8');
-  } catch { /* 무해 — 기록 실패 시 다음 틱에 리서치가 한 번 더 뜰 뿐 */ }
+  writeResearchState({ lastTs: new Date().toISOString(), prevTs: st.lastTs, recent }, slug);
+}
+
+/** 리서치 런 취소(사용자 양보) 롤백 — lastTs 를 직전 값으로 복원하고 미션을 recent 에서 제거해,
+ *  조사가 실제로 이뤄지지 않은 영역이 24h 창 소각·중복회피 블랙리스트에 걸리지 않게 한다.
+ *  오류 종료는 롤백하지 않는다(계속 실패하는 미션의 틱마다 재시도 폭주 방지 — 기록 시점 트레이드오프 유지). */
+export function rollbackResearchLaunch(title: string, slug?: string): void {
+  const st = readResearchState(slug);
+  writeResearchState({
+    ...(st.prevTs ? { lastTs: st.prevTs } : {}),
+    recent: (st.recent ?? []).filter((t) => t !== title),
+  }, slug);
 }
 
 const RESEARCH_SYSTEM =
@@ -203,8 +224,9 @@ const RESEARCH_SYSTEM =
   '- [최근 리서치]와 중복되지 않게 하라 — 아직 조사되지 않은 영역을 고른다.\n' +
   '- title 은 조사 대상을 담은 한국어 한 줄(예: "7월 장마철 텃밭 관리 — 독자 질문·경쟁 콘텐츠 분석").';
 
-/** 지식 리서치 미션 1건 제안 — 브랜드 컨텍스트·시드 키워드에 그라운딩, 최근 리서치와 중복 회피. */
-export async function proposeResearchMission(signal?: AbortSignal): Promise<string | null> {
+/** 지식 리서치 미션 1건 제안 — 브랜드 컨텍스트·시드 키워드에 그라운딩, 최근 리서치와 중복 회피.
+ *  slug: 틱 시작 시점에 고정한 브랜드(researchDue/recordResearchLaunch 와 동일 상태 파일을 보게). */
+export async function proposeResearchMission(signal?: AbortSignal, slug?: string): Promise<string | null> {
   const c = getCompany();
   const teamLines = (c.teams ?? [])
     .map((t) => `- ${t.name}: ${(t.lead?.specialty || '').replace(/\s+/g, ' ').slice(0, 200)}`)
@@ -213,7 +235,7 @@ export async function proposeResearchMission(signal?: AbortSignal): Promise<stri
   if (!teamLines.trim()) return null;
   const brand = brandContext();
   const seeds = brandSeedKeywords();
-  const st = readResearchState();
+  const st = readResearchState(slug);
   const user =
     (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +

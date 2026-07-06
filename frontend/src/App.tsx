@@ -361,11 +361,21 @@ export default function App() {
     const all = Array.from(files);
     const imgs = all.filter((f) => f.type.startsWith("image/"));
     const docs = all.filter((f) => !f.type.startsWith("image/") && DOC_EXTS.has((f.name.split(".").pop() || "").toLowerCase()));
-    if (imgs.length) setTopicImages((prev) =>
-      [...prev, ...imgs.map((f) => ({ file: f, url: URL.createObjectURL(f) }))].slice(0, 8)); // Claude 비전 캡 8장
-    if (docs.length) setTopicDocs((prev) => [...prev, ...docs].slice(0, 8));
-    const skipped = all.length - imgs.length - docs.length;
-    if (skipped > 0) window.alert(`지원하지 않는 형식 ${skipped}개는 제외했습니다 — 이미지·PDF·HWP/HWPX·DOCX·PPTX·XLSX·텍스트만 첨부됩니다`);
+    // objectURL 은 캡(각 8개)을 밖에서 적용한 뒤 이벤트 핸들러에서 1회 생성 — 상태 업데이터 안에서 만들면
+    // StrictMode 이중 호출·slice 탈락분이 revoke 없이 새어 나가고, 탈락 자체도 무통보였다.
+    const takeImgs = imgs.slice(0, Math.max(0, 8 - topicImages.length)); // Claude 비전 캡 8장
+    const takeDocs = docs.slice(0, Math.max(0, 8 - topicDocs.length));
+    if (takeImgs.length) {
+      const entries = takeImgs.map((f) => ({ file: f, url: URL.createObjectURL(f) }));
+      setTopicImages((prev) => [...prev, ...entries]);
+    }
+    if (takeDocs.length) setTopicDocs((prev) => [...prev, ...takeDocs]);
+    const unsupported = all.length - imgs.length - docs.length;
+    const overCap = (imgs.length - takeImgs.length) + (docs.length - takeDocs.length);
+    const msgs: string[] = [];
+    if (unsupported > 0) msgs.push(`미지원 형식 ${unsupported}개`);
+    if (overCap > 0) msgs.push(`개수 상한(각 8개) 초과 ${overCap}개`);
+    if (msgs.length) window.alert(`${msgs.join(", ")} 제외 — 이미지·PDF·HWP/HWPX·DOCX·PPTX·XLSX·텍스트, 각 최대 8개만 첨부됩니다`);
   };
   const removeTopicImage = (i: number) => {
     setTopicImages((prev) => { const t = prev[i]; if (t) URL.revokeObjectURL(t.url); return prev.filter((_, j) => j !== i); });
@@ -719,18 +729,32 @@ export default function App() {
     if (submittingRef.current) return; // in-flight guard
     // 대상 칩이 있으면 그 직원에게, 없으면 입력 텍스트에서 직원명 추정(미토큰화 폴백).
     const directed = directedTarget ? { id: directedTarget.id, rest: t } : matchEmployee(t, roster);
+    const prevTarget = directedTarget; // 실패 시 지명 칩 복원용 — 칩 토큰화로 입력 텍스트에서 이름이 이미 지워져 있다
     setChat("");
     setDirectedTarget(null);
     submittingRef.current = true;
     try {
-      // 첨부(이미지+문서) 업로드(새 런 시작 시에만) — 실패하면 시작을 중단하고 입력·첨부를 보존한다.
+      // 첨부(이미지+문서) 업로드 — 새 런을 시작하는 제출(지명은 진행 중에도 새 런)에만.
+      // 실패·부분 제외 거부 시 시작을 중단하고 입력·칩·첨부를 보존한다.
       let images: string[] | undefined;
       let docs: string[] | undefined;
-      if ((topicImages.length || topicDocs.length) && currentStatus !== "running") {
+      const startsNewRun = !!directed || currentStatus !== "running";
+      if ((topicImages.length || topicDocs.length) && startsNewRun) {
         const up = await uploadRunAttachments([...topicImages.map((x) => x.file), ...topicDocs]);
-        if (!up.ok) { window.alert(`첨부 업로드 실패: ${up.error || "알 수 없는 오류"}`); setChat(t); return; }
+        if (!up.ok) { window.alert(`첨부 업로드 실패: ${up.error || "알 수 없는 오류"}`); setChat(t); setDirectedTarget(prevTarget); return; }
+        if (up.skipped.length) {
+          // 서버가 제외한 파일(용량·형식·개수 상한)을 무통보로 흘리지 않는다 — 사용자가 계속 여부를 결정.
+          const list = up.skipped.slice(0, 5).map((s) => `· ${s.file} — ${s.reason}`).join("\n");
+          const more = up.skipped.length > 5 ? `\n… 외 ${up.skipped.length - 5}개` : "";
+          if (!window.confirm(`일부 첨부가 제외됩니다:\n${list}${more}\n\n제외한 채 시작할까요?`)) {
+            setChat(t); setDirectedTarget(prevTarget); return;
+          }
+        }
         images = up.images.length ? up.images : undefined;
         docs = up.docs.length ? up.docs : undefined;
+      } else if (topicImages.length || topicDocs.length) {
+        // 진행 중 런에 지시 주입 — 첨부는 전달되지 않고 남는다(다음 새 런에 함께). 무단 소실·무단 이월 방지 고지.
+        window.alert("첨부 파일은 진행 중 런에는 전달되지 않습니다 — 새 런을 시작할 때 함께 전달됩니다.");
       }
       if (directed) {
         // 직원 지명 → 그 직원 단독(필요 시 ask_colleague 협업) 런 시작.
@@ -746,6 +770,7 @@ export default function App() {
             { agent: directed.id, images, docs },
           );
           clearTopicAttachments();
+          setResearchMode(false); // 토글은 제출 1회성 — 지명 런으로 소진돼도 다음 일반 주제가 몰래 리서치가 되지 않게
         } catch (e) {
           window.alert(`런 시작 실패: ${(e as Error).message}`);
           clearToIdle();

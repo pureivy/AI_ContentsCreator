@@ -7,11 +7,29 @@
  *  - xls  : soffice(LibreOffice) 로 xlsx 변환 후 구조화 파서
  *  - txt/md/csv/json : UTF-8
  */
-import { execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { unzip } from '../util/unzip';
+
+/** 외부 도구 비동기 실행(stdin 입력 지원) — execFileSync 를 대체해 이벤트 루프 정지를 없앤다.
+ *  (동기 실행은 추출이 끝날 때까지 SSE·취소 포함 모든 요청을 얼렸다 — 대형 PDF/HWP 는 수십 초.) */
+function runTool(cmd: string, args: string[], opts: { input?: Buffer; timeoutMs: number }): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { stdio: [opts.input ? 'pipe' : 'ignore', 'pipe', 'ignore'] });
+    const chunks: Buffer[] = [];
+    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* 무해 */ } reject(new Error(`${cmd} 타임아웃`)); }, opts.timeoutMs);
+    child.stdout!.on('data', (c: Buffer) => chunks.push(c));
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(Buffer.concat(chunks));
+      else reject(new Error(`${cmd} 종료 코드 ${code}`));
+    });
+    if (opts.input) { child.stdin!.on('error', () => { /* EPIPE 무해 */ }); child.stdin!.end(opts.input); }
+  });
+}
 
 const TEXT_EXT = new Set(['txt', 'md', 'markdown', 'csv', 'json', 'text', 'log']);
 const ZIP_EXT = new Set(['docx', 'pptx', 'hwpx']); // ZIP+XML 텍스트 추출
@@ -97,9 +115,9 @@ export function xlsxToTables(data: Buffer): string {
   return out.join('\n\n');
 }
 
-function pdfText(data: Buffer): string {
+async function pdfText(data: Buffer): Promise<string> {
   try {
-    return execFileSync('pdftotext', ['-q', '-', '-'], { input: data, maxBuffer: 30 * 1024 * 1024, timeout: 60_000 }).toString('utf-8');
+    return (await runTool('pdftotext', ['-q', '-', '-'], { input: data, timeoutMs: 60_000 })).toString('utf-8');
   } catch {
     throw new Error('PDF 추출 실패 — pdftotext(poppler) 미설치(`brew install poppler`)');
   }
@@ -136,33 +154,33 @@ function xhtmlToMd(xh: string): string {
   if (tail) parts.push(tail);
   return parts.join('\n\n');
 }
-function hwpText(data: Buffer): string {
+async function hwpText(data: Buffer): Promise<string> {
   // HWP 5.x 는 OLE2 복합문서(D0CF11E0). 시그니처 불일치면 빠르게 실패(잘못된 입력에 hwp5html 실행 회피).
   if (data.length < 8 || data.readUInt32BE(0) !== 0xD0CF11E0) throw new Error('HWP 추출 실패 — 유효한 HWP(OLE2) 형식 아님');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hwp-'));
   try {
     const inp = path.join(tmp, 'in.hwp');
-    fs.writeFileSync(inp, data);
+    await fs.promises.writeFile(inp, data);
     let ran = false;
     for (const bin of HWP_BINS) {
-      try { execFileSync(bin, ['--output', tmp, inp], { timeout: 120_000, stdio: ['ignore', 'ignore', 'ignore'] }); ran = true; break; } catch { /* 다음 후보 */ }
+      try { await runTool(bin, ['--output', tmp, inp], { timeoutMs: 120_000 }); ran = true; break; } catch { /* 다음 후보 */ }
     }
     if (!ran) throw new Error('HWP 추출 실패 — hwp5html(pyhwp) 미설치. `pip install pyhwp` 후 PATH 또는 HWP5HTML 환경변수 설정.');
-    return xhtmlToMd(fs.readFileSync(path.join(tmp, 'index.xhtml'), 'utf-8'));
+    return xhtmlToMd(await fs.promises.readFile(path.join(tmp, 'index.xhtml'), 'utf-8'));
   } finally {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 무해 */ }
   }
 }
 
 /** 구형 xls(OLE 바이너리) — soffice 로 xlsx 변환 후 구조화 파서. */
-function xlsToText(data: Buffer): string {
+async function xlsToText(data: Buffer): Promise<string> {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'xls-'));
   try {
     const inp = path.join(tmp, 'in.xls');
-    fs.writeFileSync(inp, data);
-    execFileSync('soffice', ['--headless', '--convert-to', 'xlsx', '--outdir', tmp, inp], { timeout: 120_000, stdio: ['ignore', 'ignore', 'ignore'] });
+    await fs.promises.writeFile(inp, data);
+    await runTool('soffice', ['--headless', '--convert-to', 'xlsx', '--outdir', tmp, inp], { timeoutMs: 120_000 });
     const out = fs.readdirSync(tmp).find((f) => f.endsWith('.xlsx'));
-    if (out) { const t = xlsxToTables(fs.readFileSync(path.join(tmp, out))); if (t) return t; }
+    if (out) { const t = xlsxToTables(await fs.promises.readFile(path.join(tmp, out))); if (t) return t; }
     throw new Error('xls 변환 실패');
   } catch {
     throw new Error('XLS 추출 실패 — soffice(LibreOffice) 변환 불가');

@@ -127,7 +127,37 @@ export class LlmWiki {
     fs.mkdirSync(this.pagesDir, { recursive: true });
     fs.mkdirSync(this.rawDir, { recursive: true });
     this.migrateFlat();
+    if (suffix) this.migrateLegacyRaw(path.join(path.dirname(dir), 'raw'));
     this.ensureSchema();
+  }
+
+  /** 브랜드 raw 분리(2026-07-06) 이전 자료 1회 이관 — 이 위키의 source 페이지가 참조하는 raw/ 원문이
+   *  아직 공용 data/raw 에 있으면 브랜드 rawDir 로 이동한다(원본 originals 동반, 베스트에포트).
+   *  참조 기반이라 타 브랜드·범용 자료는 건드리지 않고, 이관 없인 중복 업로드 차단·재처리가 빈 폴더를 봤다. */
+  private migrateLegacyRaw(legacyDir: string): void {
+    try {
+      if (!fs.existsSync(legacyDir) || path.resolve(legacyDir) === path.resolve(this.rawDir)) return;
+      const legacyRoot = path.resolve(legacyDir) + path.sep;
+      for (const p of this.list('source')) {
+        for (const ref of p.sources) {
+          if (!ref.startsWith('raw/') || ref.includes('..')) continue;
+          const rel = ref.slice('raw/'.length);
+          const src = path.join(legacyDir, rel);
+          if (!path.resolve(src).startsWith(legacyRoot)) continue; // 경로 이탈 방지
+          const dst = path.join(this.rawDir, rel);
+          if (fs.existsSync(dst) || !fs.existsSync(src)) continue;
+          fs.mkdirSync(path.dirname(dst), { recursive: true });
+          fs.renameSync(src, dst);
+          // 원본 바이너리(originals/<파일명>)도 동반 이동 — 재추출 프로비넌스 유지.
+          const oSrc = path.join(path.dirname(src), 'originals', path.basename(src));
+          const oDst = path.join(path.dirname(dst), 'originals', path.basename(dst));
+          if (fs.existsSync(oSrc) && !fs.existsSync(oDst)) {
+            fs.mkdirSync(path.dirname(oDst), { recursive: true });
+            fs.renameSync(oSrc, oDst);
+          }
+        }
+      }
+    } catch { /* 무해 — 이관 실패분은 다음 인스턴스 생성 때 재시도 */ }
   }
 
   /** 기존 pages/ 하위 페이지를 wiki 루트로 1회 평면 이동(구조 변경 마이그레이션). */

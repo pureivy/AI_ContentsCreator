@@ -36,7 +36,7 @@ import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
-import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, proposeResearchMission } from '../autonomy/scheduler';
+import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore } from '../content/cardnews';
@@ -255,11 +255,16 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
     : Promise.resolve(topic);
 
   prepared
-    .then((fullTopic) => startRun(bus, {
-      topic: fullTopic, signal: abort.signal,
-      agentId: opts.agent, path: opts.path, budgetUsd: opts.budgetUsd, revise: opts.revise, keyword: opts.keyword,
-      mission: opts.mission,
-    }))
+    .then((fullTopic) => {
+      // 첨부 분석(수 초~수십 초) 중 취소되면 여기서 끊는다 — 취소된 런이 run_started 를 방출하며
+      // 되살아나 LLM 호출까지 이어지던 구멍(분석 헬퍼의 내부 catch 가 중단을 삼켜 prepared 는 resolve 됨).
+      if (abort.signal.aborted) throw new Error('중단됨(abort)');
+      return startRun(bus, {
+        topic: fullTopic, signal: abort.signal,
+        agentId: opts.agent, path: opts.path, budgetUsd: opts.budgetUsd, revise: opts.revise, keyword: opts.keyword,
+        mission: opts.mission,
+      });
+    })
     .then((outcome) => {
       handle.status = 'done';
       handle.deliverable = outcome.deliverable;
@@ -278,6 +283,9 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
       if (abort.signal.aborted || isAbort(e)) {
         // 사용자 취소(양보)를 '오류'로 오인하지 않게. piece 는 비종료 스테이지로 남아 다음 틱에 재개(에러 카운트 안 함).
         handle.status = 'cancelled';
+        // 리서치 런이 양보·취소로 죽으면 주기 게이트 롤백 — 조사 없이 24h 창이 소각되고 미션이
+        // 중복회피 목록에 박제되지 않게(다음 유휴 틱에 재제안). 오류 종료는 롤백 안 함(재시도 폭주 방지).
+        if (opts.mission === 'research') { try { rollbackResearchLaunch(topic, handle.brand ?? ''); } catch { /* 무해 */ } }
         bus.emit(EventType.run_done, { status: 'cancelled' });
       } else {
         handle.status = 'error';
@@ -305,23 +313,26 @@ async function attachmentsHandler(c: Context): Promise<Response> {
   fs.mkdirSync(ATTACH_DIR, { recursive: true });
   const images: string[] = [];
   const docs: string[] = [];
-  for (const f of files.slice(0, 16)) {
+  // 무통보 탈락 금지 — 저장 못 한 파일은 사유와 함께 회신, 클라이언트가 사용자에게 고지·확인한다.
+  const skipped: Array<{ file: string; reason: string }> = [];
+  for (const f of files) {
     const isImg = f.type.startsWith('image/');
-    if (isImg && images.length >= 8) continue;                              // claude CLI vision 상한(8장)과 일치
-    if (!isImg && (docs.length >= 8 || !isSupportedExt(f.name || ''))) continue; // 문서는 자료실 추출기 지원 형식만
-    if (f.size > (isImg ? 10_000_000 : 25_000_000)) continue;               // 문서 25MB — /sources 와 동일
+    if (isImg && images.length >= 8) { skipped.push({ file: f.name, reason: '이미지 개수 상한(8장) 초과' }); continue; } // claude CLI vision 상한과 일치
+    if (!isImg && docs.length >= 8) { skipped.push({ file: f.name, reason: '문서 개수 상한(8건) 초과' }); continue; }
+    if (!isImg && !isSupportedExt(f.name || '')) { skipped.push({ file: f.name, reason: '미지원 형식' }); continue; } // 문서는 자료실 추출기 지원 형식만
+    if (f.size > (isImg ? 10_000_000 : 25_000_000)) { skipped.push({ file: f.name, reason: `용량 초과(${isImg ? '10MB' : '25MB'})` }); continue; } // 문서 25MB — /sources 와 동일
     const ext = (path.extname(f.name || '').toLowerCase() || (isImg ? '.png' : '')).slice(0, 12);
     // 원 파일명 stem 보존 — 문서 추출기의 확장자 판별·주제 병합 블록의 표시명에 쓰인다.
     const stem = path.basename(f.name || 'file', path.extname(f.name || ''))
       .replace(/[^\w가-힣.\-]+/g, '_').slice(0, 40) || 'file';
     const name = `${Date.now()}-${createHash('sha1').update(`${f.name}:${f.size}:${images.length + docs.length}`).digest('hex').slice(0, 8)}-${stem}${ext}`;
-    fs.writeFileSync(path.join(ATTACH_DIR, name), Buffer.from(await f.arrayBuffer()));
+    await fs.promises.writeFile(path.join(ATTACH_DIR, name), Buffer.from(await f.arrayBuffer())); // 비동기 — 25MB 동기 쓰기의 이벤트 루프 정지 방지
     (isImg ? images : docs).push(path.join(ATTACH_DIR, name));
   }
   if (!images.length && !docs.length) {
-    return c.json({ error: '저장 가능한 파일이 없습니다 — 이미지(10MB)·문서 PDF/HWP/HWPX/DOCX/PPTX/XLSX/텍스트(25MB)만 지원' }, 400);
+    return c.json({ error: '저장 가능한 파일이 없습니다 — 이미지(10MB)·문서 PDF/HWP/HWPX/DOCX/PPTX/XLSX/텍스트(25MB)만 지원', skipped }, 400);
   }
-  return c.json({ ok: true, paths: [...images, ...docs], images, docs });
+  return c.json({ ok: true, paths: [...images, ...docs], images, docs, skipped });
 }
 
 // 첨부 문서 → 텍스트 추출(자료실 /sources 와 동일 추출기) 후 주제에 병합. 짧으면 원문 그대로,
@@ -332,7 +343,7 @@ async function digestAttachedDocs(topic: string, docs: string[], bus: EventBus, 
   for (const p of docs.slice(0, 8)) {
     const display = path.basename(p).replace(/^\d+-[0-9a-f]{8}-/, ''); // 저장 접두사 제거 → 원 파일명
     let text = '';
-    try { text = (await extractText(path.basename(p), fs.readFileSync(p))).trim(); }
+    try { text = (await extractText(path.basename(p), await fs.promises.readFile(p))).trim(); } // 비동기 — 25MB 동기 읽기의 이벤트 루프 정지 방지
     catch { /* 추출 실패 — 아래에서 표기 */ }
     if (!text) { parts.push(`## ${display}\n(텍스트 추출 실패 — 내용 미반영)`); continue; }
     if (text.length <= 2500) { parts.push(`## ${display}\n${text}`); continue; }
@@ -382,15 +393,18 @@ async function startHandler(c: Context): Promise<Response> {
   const images = safeAttachPaths(body.images);
   const docs = safeAttachPaths(body.docs);
 
+  // 리서치 런은 org 팀 경로에서만 의미가 있다(집필·포장 생략을 runOrg 만 해석) — 지명 런이나 팀 없는
+  // 회사에서는 일반 런으로 다루고 주기 게이트도 소모하지 않는다(조사 없이 24h 창이 잠기던 구멍 봉합).
+  const research = body.mission === 'research' && !body.agent && (getCompany().teams?.length ?? 0) > 0;
   // 수동 리서치 런도 주기 게이트에 반영 — 방금 조사한 영역을 자율 사이클이 중복 조사하지 않게.
-  if (body.mission === 'research') recordResearchLaunch(topic.replace(/^리서치:\s*/, ''));
+  if (research) recordResearchLaunch(topic.replace(/^리서치:\s*/, ''));
 
   const id = launchRun(topic, {
     agent: body.agent, path: body.path, budgetUsd: body.budget_usd,
     ...(images.length ? { images } : {}),
     ...(docs.length ? { docs } : {}),
     // 리서치 런 기본 경로 = 'team'(리서치 팀 경량) — 명시 path 가 있으면 존중.
-    ...(body.mission === 'research' ? { mission: 'research' as const, path: body.path || 'team' } : {}),
+    ...(research ? { mission: 'research' as const, path: body.path || 'team' } : {}),
   });
   return c.json({ run_id: id });
 }
@@ -1480,6 +1494,10 @@ function purgeBrandData(slug: string): { pieces: number; cards: number; shorts: 
   for (const r of runs) { move(path.join(CONFIG.sessionsDir, r.run_id), path.join('sessions', r.run_id)); RUNS.delete(r.run_id); }
   for (const [rid, h] of [...RUNS]) if ((h.brand ?? '') === slug && h.status !== 'running') RUNS.delete(rid);
   move(path.join(path.dirname(CONFIG.wikiDir), `${path.basename(CONFIG.wikiDir)}-${slug}`), 'wiki');
+  // 브랜드 스코프 신설 저장소도 동반 정리 — raw 원문(고객사 업로드 원본: 잔존 시 기밀 유출·slug 재사용 승계)
+  // 과 리서치 주기 상태(잔존 시 새 브랜드가 죽은 브랜드의 게이트·중복회피 이력을 승계).
+  move(path.join(path.dirname(CONFIG.wikiDir), `raw-${slug}`), 'raw');
+  move(path.join(CONFIG.dataDir, '_shared', `research-state-${slug}.json`), `research-state-${slug}.json`);
   move(path.join(CONFIG.dataDir, 'analytics', `strategy-${slug}.json`), `strategy-${slug}.json`);
   move(path.join(CONFIG.dataDir, '_shared', `decisions-${slug}.md`), `decisions-${slug}.md`);
   return { pieces: pieces.length, cards: cards.length, shorts: sh.length, runs: runs.length };
@@ -2207,7 +2225,7 @@ function canGenerateNew(pieces: Piece[]): boolean {
 }
 
 // 자율 틱 작업 유형 — 콘텐츠 piece(재개/신규) 또는 지식 리서치 미션(조사→토론→두뇌 적재→학습).
-type AutoWork = { kind: 'piece'; piece: Piece } | { kind: 'research'; title: string };
+type AutoWork = { kind: 'piece'; piece: Piece } | { kind: 'research'; title: string; brand: string };
 
 async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
   const pieces = pieceStore().list();
@@ -2215,9 +2233,11 @@ async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
   if (resume) return { kind: 'piece', piece: resume }; // 재개는 케이던스와 무관 — 죽은 piece 회수 우선.
   // 지식 리서치 게이트 — 주기 도래 시 신규 콘텐츠보다 먼저 1건. 조사 결과(두뇌·교훈)가 이후 콘텐츠 품질을
   // 끌어올리는 컴파운딩 순서(지식 먼저, 제작 나중). 제안 실패 시 콘텐츠 흐름으로 자연 폴백.
-  if (researchDue(CONFIG.researchCycleHours)) {
-    const title = await proposeResearchMission(signal);
-    if (title) return { kind: 'research', title };
+  // 브랜드는 틱 시작 시점에 고정 — 제안 LLM 대기(수 초) 중 브랜드가 전환돼도 상태·기록이 갈리지 않게.
+  const tickBrand = activeBrandSlug() || '';
+  if (researchDue(CONFIG.researchCycleHours, tickBrand)) {
+    const title = await proposeResearchMission(signal, tickBrand);
+    if (title) return { kind: 'research', title, brand: tickBrand };
   }
   if (!canGenerateNew(pieces)) return null;  // 케이던스/백로그 초과 → 신규 생성 보류.
   const idea = await proposeContentIdeas(signal);
@@ -2231,9 +2251,13 @@ const stopAutoCycle = startAutoCycle<AutoWork>({
   pickWork: (signal) => pickAutoWork(signal),
   launch: (w) => {
     if (w.kind === 'research') {
-      // 리서치 팀(teams[0]) 경량 경로 — 팀 협업·토론 후 보고서를 두뇌에 적재. piece 미생성(캘린더 비오염).
-      recordResearchLaunch(w.title);
-      launchRun(`리서치: ${w.title}`, { auto: true, mission: 'research', path: 'team' });
+      // 제안 도중 브랜드가 전환됐으면 이번 틱은 건너뜀 — A 컨텍스트 조사가 B 두뇌·게이트에 섞이지 않게.
+      if ((activeBrandSlug() || '') !== w.brand) return;
+      // 리서치 팀 1팀 경량 경로(path:'team') — 협업·토론 후 보고서를 두뇌에 적재. piece 미생성(캘린더 비오염).
+      // 주제에 '리서치:' 접두사를 붙이지 않는다 — seedKeyword 가 콜론에서 절단해 전 그라운딩 커넥터가
+      // 문자 그대로 '리서치'를 검색하던 버그(2b2d901 과 동일 부류). mission 필드가 이미 1급 신호다.
+      recordResearchLaunch(w.title, w.brand);
+      launchRun(w.title, { auto: true, mission: 'research', path: 'team' });
       return;
     }
     const id = launchRun(w.piece.title, { auto: true, pieceId: w.piece.id, keyword: w.piece.keyword });

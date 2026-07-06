@@ -307,18 +307,20 @@ export async function retryClassify(refs: string[]): Promise<number | null> {
 // --- 컴포저 첨부(멀티모달: 이미지 + 문서) --------------------------------------
 // 파일을 서버에 저장하고 경로를 받는다 — startRun opts.images/docs 로 전달되어
 // 런 시작 시 이미지는 비전 분석, 문서는 텍스트 추출 블록으로 주제에 합류한다.
+export interface SkippedAttachment { file: string; reason: string }
 export async function uploadRunAttachments(
   files: File[],
-): Promise<{ ok: boolean; images: string[]; docs: string[]; error?: string }> {
+): Promise<{ ok: boolean; images: string[]; docs: string[]; skipped: SkippedAttachment[]; error?: string }> {
   const fd = new FormData();
   for (const f of files) fd.append("files", f);
   try {
     const r = await fetch("/runs/attachments", { method: "POST", body: fd });
-    const j = (await r.json().catch(() => ({}))) as { images?: string[]; docs?: string[]; error?: string };
-    if (!r.ok) return { ok: false, images: [], docs: [], error: j.error };
-    return { ok: true, images: j.images ?? [], docs: j.docs ?? [] };
+    const j = (await r.json().catch(() => ({}))) as { images?: string[]; docs?: string[]; skipped?: SkippedAttachment[]; error?: string };
+    if (!r.ok) return { ok: false, images: [], docs: [], skipped: j.skipped ?? [], error: j.error };
+    // skipped: 서버가 용량·형식·개수 상한으로 제외한 파일 — 호출부가 사용자에게 고지하고 계속 여부를 묻는다.
+    return { ok: true, images: j.images ?? [], docs: j.docs ?? [], skipped: j.skipped ?? [] };
   } catch {
-    return { ok: false, images: [], docs: [], error: "network" };
+    return { ok: false, images: [], docs: [], skipped: [], error: "network" };
   }
 }
 

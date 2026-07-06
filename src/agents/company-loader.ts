@@ -30,10 +30,12 @@ export function normalizeModel(m: string | undefined): string | null {
 }
 const STANCES = new Set(['neutral', 'pro', 'con', 'critic', 'nuanced']);
 // wiki/web 은 mapTools 가 확장(wiki→wiki_query+wiki_ingest, web→web_search); 나머지는 그대로 통과.
-// naver_* 는 UI editRole 재저장 시 필터로 스트립되지 않게 여기 포함(로드 시엔 mapTools 통과라 무관).
+// naver_*·youtube 는 UI editRole 재저장 시 필터로 스트립되지 않게 여기 포함(로드 시엔 mapTools 통과라 무관).
+// ⚠ 새 그라운딩 커넥터의 도구명을 여기 빠뜨리면 역할 편집 한 번에 도구가 영구 소실된다(유튜브에서 실제 발생).
 const YAML_TOOLS = new Set([
   'wiki', 'web',
   'naver_search', 'naver_searchad', 'naver_datalab', 'naver_autocomplete', 'naver_analytics',
+  'youtube',
   'image_generate', 'blog_publish',
 ]);
 

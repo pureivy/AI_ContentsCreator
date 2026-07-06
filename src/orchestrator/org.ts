@@ -171,6 +171,9 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   if (writerTeam) {
     teams = allTeams.filter((t) => t.id !== writerTeam.id); // 리서치(비-작가) 팀 전부 강제 실행
     if (teams.length === 0) teams = allTeams; // 리서치팀이 없으면 폴백(작가팀 포함)
+    // 'team' 경로 = 1팀 경량 계약 — 작가팀 존재 분기에도 동일 적용. 없으면 자율 리서치 런(path:'team')이
+    // 비대기 팀 전부 + 토론 + 전사 비평을 도는 준-전사 런이 된다(현재는 cardnews·shorts 가 standby 라 잠복).
+    if (opts.path === 'team') teams = teams.slice(0, 1);
   } else {
     // 폴백(작가팀 미식별): 기존 라우팅 동작.
     teams = routed.length ? routed : allTeams;
