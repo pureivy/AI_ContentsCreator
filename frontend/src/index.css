@@ -19,14 +19,14 @@ button, input, select, textarea { font-family: inherit; }
 /* 전역 스크롤바 — 다크 배경에 녹아들게(얇게 + 트랙 투명 + 은은한 thumb). 기본 OS
    스크롤바(두껍고 회색/흰색)가 다크 UI와 이질감을 주던 것을 제거. Firefox는
    scrollbar-width/color, WebKit/Chrome 은 ::-webkit-scrollbar. */
-* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.13) transparent; }
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
 ::-webkit-scrollbar { width: 9px; height: 9px; background: transparent; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.12); border-radius: 999px;
+  background: var(--scrollbar-thumb); border-radius: 999px;
   border: 2px solid transparent; background-clip: padding-box;   /* 가장자리 패딩 → 더 얇게 */
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); background-clip: padding-box; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
 .app { display: flex; flex-direction: column; height: 100vh; }
@@ -86,11 +86,13 @@ button, input, select, textarea { font-family: inherit; }
 }
 .btn {
   padding: 9px 16px; border-radius: var(--radius-10); border: none; cursor: pointer;
-  font-weight: 600; font-size: 14px; color: #fff;
+  font-weight: 600; font-size: 14px; color: var(--text);   /* 평범한 버튼은 표면(panel2) 위 본문색 — 라이트에서도 보이게 */
   /* default surface so a modifier-less .btn (📎 자료, 선택 해제) isn't white-on-default-gray.
      .start/.cancel/.approve/.reject/.del-hist/.ghost/.hist-toggle override this. */
   background: var(--panel2);
 }
+/* 채도 높은 배경(파랑/초록/빨강) 위 버튼은 항상 흰 글자 — 라이트에서도 대비 유지. */
+.btn.start, .btn.cancel, .btn.approve, .btn.reject { color: #fff; }
 .btn.start { background: var(--bg-primary); }
 .btn.cancel { background: var(--con); }
 /* Wanted 호버 규칙: 색을 한 단계 이동(밝기 필터 아님). 상태색 버튼만 필터 유지. */
@@ -136,7 +138,7 @@ button.dash-company:hover { border-color: var(--accent); }
   background: var(--bg-success-subtle); border-radius: 7px; box-shadow: inset 0 0 0 1px #00bf4066;
 }
 .dash-company-txt { display: flex; flex-direction: column; line-height: 1.15; }
-.dash-company-txt b { font-size: 11px; color: #fff; }
+.dash-company-txt b { font-size: 11px; color: var(--text); }
 .dash-company-txt span { font-size: 9px; color: var(--muted); }
 .dash-chip {
   display: flex; align-items: center; gap: 7px; padding: 5px 12px; flex-shrink: 0;
@@ -540,6 +542,11 @@ button.upload-retry:hover { background: var(--panel2); }
 }
 .chat-input .run-opt:hover { color: var(--text); border-color: var(--accent); }
 .chat-input .run-opt:focus { outline: none; color: var(--text); border-color: var(--accent); }
+/* 페르소나 custom 말투 직접 입력 — run-opt 셀렉트와 같은 톤의 콤팩트 인풋(드롭다운 화살표 없음). */
+.chat-input .persona-custom { flex: 0 0 auto; max-width: 200px; border-radius: 999px; padding: 6px 12px;
+  font-size: 12px; color: var(--text); background: var(--bg); border: 1px solid var(--border); min-width: 0; }
+.chat-input .persona-custom:focus { outline: none; border-color: var(--accent); }
+.chat-input .persona-custom::placeholder { color: var(--muted); }
 
 /* 🔀 워크플로우 보드 — DISPATCH PROTOCOL 단계 스테퍼 + 팀원별 업무/시간 */
 .wf-board { display: flex; flex-direction: column; gap: 16px; }

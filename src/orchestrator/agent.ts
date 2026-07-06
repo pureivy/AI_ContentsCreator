@@ -80,6 +80,9 @@ export interface AgentRunArgs {
   /** agent_spawned 이벤트를 emit 할지(첫 등장 시 true). */
   emitSpawn?: boolean;
   subproblemId?: string;
+  /** 시스템 프롬프트에 덧붙일 런 스코프 지침(예: 블로그 작가 말투/페르소나). role.systemPrompt 뒤에
+   *  붙어 우선 적용된다. 도구 루프 안내와 함께 buildSystemPrompt 의 extra 로 합쳐진다. */
+  systemExtra?: string;
   /** 위키 그라운딩 질의 — 역할이 wiki_query 툴을 가지면 작업 전 관련 지식을 조회·주입. */
   groundQuery?: string;
   /** 그라운딩 히트 수(기본 6). 합성 섹션처럼 1차 원문이 집중된 경우 작게(예: 3) 주면 프리필이 줄어 빨라진다. */
@@ -201,7 +204,7 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
   const messages: ChatMessage[] = [
     // 최종 산출물(synthesis)은 간결지침(2000~4000자 상한)을 끈다 — 10페이지+ 완결 문서가 필요하므로.
     // 루프 활성 시에만 도구 사용 안내를 시스템 프롬프트에 덧붙인다(기본 경로엔 미주입).
-    { role: 'system', content: buildSystemPrompt(role, loopActive ? toolInstructions(loopTools) : '', { brevity: stage !== 'synthesis' }) },
+    { role: 'system', content: buildSystemPrompt(role, [loopActive ? toolInstructions(loopTools) : '', args.systemExtra].filter(Boolean).join('\n\n'), { brevity: stage !== 'synthesis' }) },
     { role: 'user', content: userContent },
   ];
 

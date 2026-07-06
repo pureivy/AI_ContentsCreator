@@ -324,6 +324,20 @@ export async function uploadRunAttachments(
   }
 }
 
+// --- 블로그 작가 말투(페르소나) -------------------------------------------------
+export interface PersonaOpt { id: string; label: string; desc: string }
+// 서버가 단일 소스 — 목록(id/label/desc)만 받아 드롭다운에 표시(프롬프트 본문은 서버 전용).
+export async function fetchPersonas(): Promise<PersonaOpt[]> {
+  try {
+    const r = await fetch("/personas");
+    if (!r.ok) return [];
+    const j = (await r.json()) as { personas?: PersonaOpt[] };
+    return j.personas ?? [];
+  } catch {
+    return [];
+  }
+}
+
 // --- MCP 서버 관리 -----------------------------------------------------------
 export interface McpServer {
   id: string; name: string; icon: string; kind: string; desc: string;

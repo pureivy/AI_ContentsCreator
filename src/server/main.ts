@@ -46,6 +46,7 @@ import { shortsStore } from '../content/shorts';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning } from '../orchestrator/shorts';
 import { pieceStore, selectResumablePiece } from '../content/pieces';
+import { listPersonas } from '../content/personas';
 import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeBrandSlug, deleteBrand, isSafeBrandSlug } from '../content/brand';
 import type { BrandProfile } from '../content/brand';
 import type { Piece } from '../content/pieces';
@@ -172,6 +173,9 @@ interface LaunchOpts {
   docs?: string[];
   /** 지식 리서치 런 — 집필·포장 생략(draft.json 없음 → piece 승격·캘린더 오염 자연 차단). 두뇌 적재·직원 학습 전용. */
   mission?: 'research';
+  /** 블로그 작가 말투(페르소나) id + custom 자유 텍스트 — 본문 집필 작가에 주입(personas.ts). */
+  persona?: string;
+  personaText?: string;
 }
 
 // draft.json(6c)에서 piece 표시 메타 재로드 — 초안 asset 은 finalize 가 이미 디스크에 씀(메모리 의존 없음).
@@ -262,7 +266,7 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
       return startRun(bus, {
         topic: fullTopic, signal: abort.signal,
         agentId: opts.agent, path: opts.path, budgetUsd: opts.budgetUsd, revise: opts.revise, keyword: opts.keyword,
-        mission: opts.mission,
+        mission: opts.mission, persona: opts.persona, personaText: opts.personaText,
       });
     })
     .then((outcome) => {
@@ -378,9 +382,8 @@ async function describeAttachedImages(topic: string, images: string[], bus: Even
 }
 
 async function startHandler(c: Context): Promise<Response> {
-  const body = await c.req
-    .json<{ topic?: string; agent?: string; path?: string; budget_usd?: number; images?: string[]; docs?: string[]; mission?: string }>()
-    .catch(() => ({}) as { topic?: string; agent?: string; path?: string; budget_usd?: number; images?: string[]; docs?: string[]; mission?: string });
+  type StartBody = { topic?: string; agent?: string; path?: string; budget_usd?: number; images?: string[]; docs?: string[]; mission?: string; persona?: string; personaText?: string };
+  const body = await c.req.json<StartBody>().catch(() => ({}) as StartBody);
   const topic = (body.topic ?? '').trim();
   if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
 
@@ -403,6 +406,9 @@ async function startHandler(c: Context): Promise<Response> {
     agent: body.agent, path: body.path, budgetUsd: body.budget_usd,
     ...(images.length ? { images } : {}),
     ...(docs.length ? { docs } : {}),
+    // 블로그 작가 말투 — 지명·리서치가 아닌 본문 집필 런에서만 의미(runOrg writeBlogBody 가 소비). 그 외엔 무시됨.
+    ...(typeof body.persona === 'string' && body.persona ? { persona: body.persona } : {}),
+    ...(typeof body.personaText === 'string' ? { personaText: body.personaText } : {}),
     // 리서치 런 기본 경로 = 'team'(리서치 팀 경량) — 명시 path 가 있으면 존중.
     ...(research ? { mission: 'research' as const, path: body.path || 'team' } : {}),
   });
@@ -1527,6 +1533,11 @@ app.put('/brand', async (c) => {
   console.log(`[브랜드] 프로필 저장 — ${b.name} (제품 ${b.products.length}종)`);
   return c.json({ brand: getBrand() });
 });
+
+// 블로그 작가 말투(페르소나) 목록 — 컴포저 드롭다운용(id/label/desc). 프롬프트 본문은 서버 전용(SSOT).
+const personasHandler = (c: Context): Response => c.json({ personas: listPersonas() });
+app.get('/personas', personasHandler);
+app.get('/api/personas', personasHandler);
 
 app.get('/company', (c) => {
   const co = getCompany();

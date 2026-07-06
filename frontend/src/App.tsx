@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "./store";
 import { startRun, resumeRun, watchRun, RunHandle } from "./transport/sse";
-import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, uploadRunAttachments, fetchEta, reviseRun, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, getVoices, setVoiceConversational, RunInfo, UploadFileResult, EtaStats, RunSettings } from "./api";
+import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, uploadRunAttachments, fetchPersonas, PersonaOpt, fetchEta, reviseRun, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, getVoices, setVoiceConversational, RunInfo, UploadFileResult, EtaStats, RunSettings } from "./api";
 import { ActivityItem, ApprovalItem, DebateMsg, UIState } from "./events/types";
 import AgentGraph from "./panels/AgentGraph";
 import OfficeView from "./panels/OfficeView";
@@ -15,6 +15,7 @@ import DraftReview from "./panels/DraftReview";
 import PerformanceView from "./panels/PerformanceView";
 import StudioView from "./panels/StudioView";
 import Ico from "./panels/Ico";
+import { Theme, initialTheme, applyTheme } from "./theme";
 import { useStageWidths } from "./panels/useStageWidths";
 import { countWorking } from "./events/working";
 import OfficeTicker, { ga } from "./panels/OfficeTicker";
@@ -354,6 +355,13 @@ export default function App() {
   const [topicDocs, setTopicDocs] = useState<File[]>([]);
   // 지식 리서치 런 토글 — 켜고 시작하면 조사→토론→두뇌 적재 런(발행 초안 없음, 캘린더 비오염). 시작 후 자동 해제.
   const [researchMode, setResearchMode] = useState(false);
+  // 테마(다크 기본 / 라이트 옵트인) — 초기값은 main.tsx 가 이미 <html>에 심었고, 여기선 상태만 동기.
+  const [theme, setTheme] = useState<Theme>(initialTheme);
+  const toggleTheme = () => setTheme((t) => { const next: Theme = t === "dark" ? "light" : "dark"; applyTheme(next); return next; });
+  // 블로그 작가 말투(페르소나) — 서버 목록에서 선택. custom 이면 personaText 입력창 노출. 시작 후에도 유지(다음 글도 같은 말투).
+  const [personas, setPersonas] = useState<PersonaOpt[]>([]);
+  const [persona, setPersona] = useState("");
+  const [personaText, setPersonaText] = useState("");
   const topicImgInputRef = useRef<HTMLInputElement>(null);
   // 서버 extract.ts 지원 확장자와 동기(isSupportedExt).
   const DOC_EXTS = new Set(["pdf", "docx", "pptx", "hwpx", "hwp", "hwp3", "hwpml", "xlsx", "xls", "txt", "md", "markdown", "csv", "json", "text", "log"]);
@@ -392,6 +400,7 @@ export default function App() {
 
   const refreshRuns = () => fetchRuns().then(setRuns);
   useEffect(() => { refreshRuns(); }, []);
+  useEffect(() => { fetchPersonas().then(setPersonas); }, []);
   // ⑧ 최소 인증 부트스트랩 — 서버에 AUTH_TOKEN 이 설정돼 있으면(401) 토큰을 물어
   // 쿠키(studio_token)로 저장 후 재로드. fetch/SSE 모두 same-origin 쿠키로 통과.
   useEffect(() => {
@@ -788,7 +797,9 @@ export default function App() {
             () => useStore.getState().lastSeq,
             { path: runPath || undefined,
               budget: runBudget === "" ? undefined : Number(runBudget), images, docs,
-              mission: researchMode ? "research" : undefined },
+              mission: researchMode ? "research" : undefined,
+              persona: persona || undefined,
+              personaText: persona === "custom" ? personaText : undefined },
           );
           clearTopicAttachments();
           setResearchMode(false);
@@ -932,6 +943,29 @@ export default function App() {
           title="추론(thinking): 켜면 답 전에 단계적으로 사고. 품질↑ 속도↓">
           추론 {runSettings.agentThinking ? "ON" : "OFF"}
         </button>
+      )}
+      {/* 블로그 작가 말투(페르소나) — 본문 집필 작가의 목소리 선택(전사 블로그 런에만 의미). custom 시 직접 입력. */}
+      {!directedTarget && s.status !== "running" && personas.length > 0 && (
+        <select
+          className="llm-run-select run-opt"
+          value={persona}
+          onChange={(e) => setPersona(e.target.value)}
+          title="블로그 작가 말투 — 본문을 쓰는 작가의 목소리를 고릅니다(기본: 지정 안 함)"
+        >
+          <option value="">말투 기본</option>
+          {personas.map((p) => (
+            <option key={p.id} value={p.id} title={p.desc}>{p.label}</option>
+          ))}
+        </select>
+      )}
+      {!directedTarget && s.status !== "running" && persona === "custom" && (
+        <input
+          className="persona-custom"
+          value={personaText}
+          onChange={(e) => setPersonaText(e.target.value)}
+          placeholder="원하는 말투 (예: 담백한 정보체)"
+          title="직접 입력한 말투가 작가에게 최우선으로 적용됩니다"
+        />
       )}
       {!directedTarget && s.status !== "running" && (
         <select
@@ -1403,6 +1437,11 @@ export default function App() {
         {/* 주제 입력·토론 시작·LLM 셀렉터는 좌하단 통합 커맨드 바로 이동 — 상단은
             업로드/기록/뷰 전환/상태만 남겨 깔끔하게. */}
         <div className="topbar-actions">
+        <button className="btn theme-toggle" type="button" onClick={toggleTheme}
+          title={theme === "dark" ? "라이트 모드로 전환" : "다크 모드로 전환"}
+          aria-label={theme === "dark" ? "라이트 모드로 전환" : "다크 모드로 전환"}>
+          {theme === "dark" ? "☀️" : "🌙"}
+        </button>
         <div className="upload-wrap" ref={uploadMenuRef}>
           <button className="btn" onClick={() => setUploadMenu((v) => !v)}
             title="외부 자료 업로드(PDF/Word/Excel/PPT/HWPX/txt 등) → 위키 적재"><Ico name="document" size={12} /> 자료 ▾</button>

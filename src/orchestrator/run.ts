@@ -36,6 +36,10 @@ export interface RunOptions {
   /** 지식 리서치 런 — 블로그 집필·포장(draft.json) 생략. 산출물은 리서치 보고서로 두뇌(위키) 적재·
    *  직원 학습(reflect)에만 쓰인다. draft.json 이 없어 piece 승격·캘린더 오염이 자연 차단된다. */
   mission?: 'research';
+  /** 블로그 작가 말투(페르소나) id — 컴포저에서 고른 목소리를 본문 집필 작가에 주입(personas.ts). */
+  persona?: string;
+  /** persona='custom' 일 때 사용자가 직접 입력한 말투 텍스트. */
+  personaText?: string;
 }
 
 export interface RunOutcome {
