@@ -192,6 +192,19 @@ function advancePieceReady(pieceId: string, runId: string, deliverable: string):
   try { maybeAutoNaverDraft(pieceId); } catch { /* 무해 — 수동(검토 탭 버튼) 경로는 그대로 살아있다 */ }
 }
 
+// 컴포저(타임라인) 런 조건부 승격 — 산출물이 블로그 초안 형태(finalize 가 draft.json 을 남김)면
+// piece 로 등록해 캘린더→검토→발행→성과 파이프라인에 합류시킨다. 질문·지시·지명 런처럼 초안
+// 포장이 없는 런은 draft.json 이 없어 자연히 제외된다(캘린더 오염 방지). 브랜드는 런 시작 시점 기준.
+function promoteRunToPiece(runId: string, topic: string, deliverable: string, brand?: string): PieceInfoLike | null {
+  if (!readDraftMeta(runId)) return null;                                   // 초안 형태 아님 — 승격 안 함
+  const dup = pieceStore().list().find((p) => p.runId === runId);
+  if (dup) return dup;                                                      // 이미 등록(자동/수동 이중 승격 방지)
+  const piece = pieceStore().create({ title: topic.slice(0, 120), brand });
+  advancePieceReady(piece.id, runId, deliverable);                          // draft 메타로 title/keyword/seo 갱신 + ready
+  return pieceStore().get(piece.id) ?? piece;
+}
+type PieceInfoLike = ReturnType<ReturnType<typeof pieceStore>['create']>;
+
 /** 진행 중 자율(auto) 런을 모두 양보(abort) — 사용자 런(일반/revise) 도착 시 호출. */
 function yieldRunningAutos(): void {
   for (const [, h] of RUNS) {
@@ -228,6 +241,8 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
       handle.subproblems = outcome.subproblems;
       // piece 라이프사이클 전진 — 초안 완성 → 'ready'(검토 대기, 지속형 레코드). 발행은 사람이 수동(POST /pieces/:id/published).
       if (opts.pieceId) { try { advancePieceReady(opts.pieceId, id, outcome.deliverable ?? ''); } catch { /* 무해 — piece 는 draft 로 남아 재개 */ } }
+      // pieceId 없는 런(컴포저 주제 등)도 초안을 만들었으면 파이프라인에 합류(조건부 승격 — 사용자 확정 2026-07-06).
+      else if (!opts.revise) { try { promoteRunToPiece(id, topic, outcome.deliverable ?? '', handle.brand); } catch { /* 무해 */ } }
       // 자율 사이클 런 완료 → 알림(채널 설정 시에만 실제 발송).
       if (opts.auto && CONFIG.notifyAutoCycle && notifyConfigured()) {
         void notify({ title: `🤖 자율 사이클 완료 · ${topic}`, body: (outcome.deliverable || '(산출물 없음)').slice(0, 1200) });
@@ -407,6 +422,18 @@ app.get('/api/runs/:id/events', eventsHandler);
 app.get('/runs/:id/log', runLogHandler);
 app.post('/runs/:id/cancel', cancelHandler);
 app.post('/api/runs/:id/cancel', cancelHandler);
+// 완료된 런을 piece 로 수동 승격(소급) — 자동 승격 도입 전의 런이나, 필요 시 상세 탭에서 회수용.
+const promoteHandler = (c: Context): Response => {
+  const id = c.req.param('id') ?? '';
+  const h = RUNS.get(id);
+  const meta = readDraftMeta(id);
+  if (!meta) return c.json({ error: '초안(draft.json)이 없는 런 — 블로그 초안 형태가 아니라 승격할 수 없습니다' }, 400);
+  const piece = promoteRunToPiece(id, h?.topic || meta.title || id, h?.deliverable ?? '', h?.brand ?? (activeBrandSlug() || undefined));
+  if (!piece) return c.json({ error: '승격 실패' }, 500);
+  return c.json({ ok: true, piece });
+};
+app.post('/runs/:id/promote', promoteHandler);
+app.post('/api/runs/:id/promote', promoteHandler);
 app.get('/runs/:id', runGetHandler);
 app.get('/api/runs/:id', runGetHandler);
 // 미구현 런 동작(프론트가 실패를 우아하게 처리) — 명시적 스텁
