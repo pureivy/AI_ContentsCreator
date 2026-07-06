@@ -350,6 +350,8 @@ export default function App() {
   // 컴포저 이미지 첨부(멀티모달) — 시작 시 /runs/attachments 로 업로드해 경로를 런에 전달.
   // objectURL 은 첨부 시 1회 생성·제거 시 revoke(렌더마다 생성하면 타이핑 중 누수).
   const [topicImages, setTopicImages] = useState<Array<{ file: File; url: string }>>([]);
+  // 지식 리서치 런 토글 — 켜고 시작하면 조사→토론→두뇌 적재 런(발행 초안 없음, 캘린더 비오염). 시작 후 자동 해제.
+  const [researchMode, setResearchMode] = useState(false);
   const topicImgInputRef = useRef<HTMLInputElement>(null);
   const addTopicImages = (files: FileList | File[]) => {
     const imgs = Array.from(files).filter((f) => f.type.startsWith("image/"));
@@ -748,9 +750,11 @@ export default function App() {
             (rid) => setRunId(rid),
             () => useStore.getState().lastSeq,
             { path: runPath || undefined,
-              budget: runBudget === "" ? undefined : Number(runBudget), images },
+              budget: runBudget === "" ? undefined : Number(runBudget), images,
+              mission: researchMode ? "research" : undefined },
           );
           clearTopicImages();
+          setResearchMode(false);
         } catch (e) {
           window.alert(`런 시작 실패: ${(e as Error).message}`);
           clearToIdle();
@@ -859,6 +863,14 @@ export default function App() {
       )}
       <input ref={topicImgInputRef} type="file" accept="image/*" multiple style={{ display: "none" }}
         onChange={(e) => { if (e.target.files) addTopicImages(e.target.files); e.target.value = ""; }} />
+      {/* 지식 리서치 런 — 조사→토론→두뇌 적재. 발행 초안을 만들지 않아 캘린더에 쌓이지 않는다. */}
+      {s.status !== "running" && !directedTarget && (
+        <button type="button" className={`run-opt-toggle ${researchMode ? "active" : ""}`}
+          title="지식 리서치 런 — 독자 궁금증·경쟁 콘텐츠(네이버·유튜브)를 리서치 팀이 조사·토론해 두뇌(위키)에 적재합니다. 발행 초안은 만들지 않습니다"
+          onClick={() => setResearchMode((v) => !v)}>
+          <Ico name="search" size={11} /> 리서치 {researchMode ? "ON" : "OFF"}
+        </button>
+      )}
       {/* 품질 토글(토론·추론) — per-run 옵션이라 컴포저에 배치. type="button" 필수(form submit 방지). */}
       {s.status !== "running" && (
         <button type="button"

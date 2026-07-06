@@ -340,7 +340,8 @@ async function startHandler(c: Context): Promise<Response> {
   const id = launchRun(topic, {
     agent: body.agent, path: body.path, budgetUsd: body.budget_usd,
     ...(images.length ? { images } : {}),
-    ...(body.mission === 'research' ? { mission: 'research' as const } : {}),
+    // 리서치 런 기본 경로 = 'team'(리서치 팀 경량) — 명시 path 가 있으면 존중.
+    ...(body.mission === 'research' ? { mission: 'research' as const, path: body.path || 'team' } : {}),
   });
   return c.json({ run_id: id });
 }

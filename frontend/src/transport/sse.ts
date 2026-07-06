@@ -65,7 +65,7 @@ export async function startRun(
   onRunId: (runId: string) => void,
   getLastSeq: () => number,
   opts?: { agent?: string; path?: string;
-           budget?: number; images?: string[] },
+           budget?: number; images?: string[]; mission?: string },
 ): Promise<RunHandle> {
   const res = await fetch("/runs", {
     method: "POST",
@@ -74,10 +74,12 @@ export async function startRun(
     // `path` picks the 3-tier run path ("team"|"full"); omitted = server auto-recommend.
     // `budget` caps THIS run's spend in USD (0 = explicit unlimited); omitted = global default.
     // `images` — /runs/attachments 로 업로드된 첨부 이미지 경로(멀티모달 주제 입력).
+    // `mission` — 'research' = 지식 리서치 런(조사→토론→두뇌 적재, 발행 초안 없음).
     body: JSON.stringify({
       topic,
       ...(opts?.agent ? { agent: opts.agent } : {}),
       ...(opts?.images?.length ? { images: opts.images } : {}),
+      ...(opts?.mission ? { mission: opts.mission } : {}),
       ...(opts?.path ? { path: opts.path } : {}),
       ...(opts?.budget !== undefined ? { budget_usd: opts.budget } : {}),
     }),
