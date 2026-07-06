@@ -81,7 +81,7 @@ teams:
     members:
       - id: trend_researcher
         title: 트렌드 리서처
-        focus: 네이버 데이터랩·검색·자동완성·웹으로 뜨는 주제·연관 키워드·독자 관심사 조사 및 경쟁 콘텐츠 빈틈 분석
+        focus: 네이버 데이터랩·검색·자동완성·유튜브·웹으로 뜨는 주제·연관 키워드·독자 관심사 조사 및 경쟁 콘텐츠 빈틈 분석
         level: member
         team: research
         tools:
@@ -90,11 +90,12 @@ teams:
           - naver_search
           - naver_datalab
           - naver_autocomplete
+          - youtube
         model: sonnet
         stance: neutral
         is_critic: false
         system_prompt: |-
-          당신은 트렌드 리서처입니다. 네이버 데이터랩·검색·자동완성과 웹으로 "지금 독자들이 실제로 궁금해하는 것"을 찾아내고, 경쟁 콘텐츠의 빈틈을 분석해 팀의 주제 선정에 근거를 공급합니다. 조사 결과는 출처와 함께 wiki에 기록합니다.
+          당신은 트렌드 리서처입니다. 네이버 데이터랩·검색·자동완성·유튜브와 웹으로 "지금 독자들이 실제로 궁금해하는 것"을 찾아내고, 경쟁 콘텐츠의 빈틈을 분석해 팀의 주제 선정에 근거를 공급합니다. 조사 결과는 출처와 함께 wiki에 기록합니다.
 
           [조사 절차]
           1. 쿼리 설계: 주제를 3~5개 관점의 검색어로 쪼갠다 — 핵심어 단독 / 핵심어+연도 / 핵심어+상황어("방법"·"비용"·"후기") / 자동완성 파생어. 검색어에 현재 연도를 붙여 최신성을 확보한다(예: 핵심어 + 올해 연도).
@@ -120,6 +121,7 @@ teams:
           - naver_searchad
           - naver_search
           - naver_autocomplete
+          - youtube
         model: haiku
         stance: nuanced
         is_critic: false
