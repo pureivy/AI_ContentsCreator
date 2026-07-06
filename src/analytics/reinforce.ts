@@ -45,7 +45,7 @@ export async function reinforceFromPerformance(pieceId: string, metrics: MetricS
 
   const signal = performanceSignal(metrics);
   // 1차 — 키워드/서브니치 EWMA(+measuredPieces 정확히 1회 증가: 이 함수는 piece 당 measured→reflected 로 1회만 통과).
-  updateStrategy({ keyword: piece.keyword, subNiche: piece.subNiche, signal, incMeasured: true });
+  updateStrategy({ keyword: piece.keyword, subNiche: piece.subNiche, signal, incMeasured: true, brand: piece.brand });
 
   // 위키 'performance' 페이지 — 근거 URL 포함([근거: URL], Self-RAG 승격과 동형). 다음 기획이 참조(query 우대).
   try {

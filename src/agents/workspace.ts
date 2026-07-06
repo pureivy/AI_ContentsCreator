@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
+import { brandFileSuffix } from '../content/brand';
 import { llm } from '../llm/client';
 import type { RoleDef } from './company';
 import { kstDate } from '../util/time';
@@ -191,7 +192,7 @@ export function appendDecision(topic: string, summary: string): void {
   try {
     const d = path.join(CONFIG.dataDir, '_shared');
     fs.mkdirSync(d, { recursive: true });
-    fs.appendFileSync(path.join(d, 'decisions.md'), `## [${kstDate()}] ${topic}\n${summary.trim()}\n\n`, 'utf-8');
+    fs.appendFileSync(path.join(d, `decisions${brandFileSuffix()}.md`), `## [${kstDate()}] ${topic}\n${summary.trim()}\n\n`, 'utf-8');
   } catch { /* */ }
 }
 

@@ -18,6 +18,7 @@ import { rolesById } from '../agents/company';
 import type { EventBus } from '../events/bus';
 import { stripEmoji } from '../output/render';
 import { cardNewsStore } from '../content/cardnews';
+import { brandContext } from '../content/brand';
 import { generateImagesForDraft, searchCardRefs } from '../tools/blog_skills';
 
 const RUNNING = new Set<string>();
@@ -29,9 +30,7 @@ const PRESET_ALIAS: Record<string, string> = {
   '사진풍': 'photorealistic', '수채화풍': 'watercolor', '플랫 일러스트': 'flat_design', '만화풍': 'manhwa',
 };
 
-const stdModel = (): string => (CONFIG.backend === 'local' ? CONFIG.tierModels.standard : CONFIG.cloudTierModels.standard);
-// visionPaths 는 Claude CLI 백엔드 전용(라우팅은 모델 id 프리픽스) — Ollama 는 조용히 무시하므로,
-// 가드 없이 호출하면 텍스트 모델이 '보지 않은 이미지'를 환각 판정해 유료 재생성을 유발한다.
+const stdModel = (): string => CONFIG.cloudTierModels.standard;
 const visionCapable = (): boolean => stdModel().startsWith('claude-');
 
 interface PlanSlide { headline: string; body: string }
@@ -57,7 +56,9 @@ async function callRoleJSON<T>(
     });
     return extractFirstJson<T>(out.text);
   }
-  return microJSON<T>(stdModel(), role?.systemPrompt || fallbackSystem, task, { maxOutputTokens, signal: io.signal });
+  // microJSON 폴백은 buildSystemPrompt 를 안 지나므로 브랜드 컨텍스트를 system 에 직접 합성.
+  const sys = [role?.systemPrompt || fallbackSystem, brandContext()].filter(Boolean).join('\n\n');
+  return microJSON<T>(stdModel(), sys, task, { maxOutputTokens, signal: io.signal });
 }
 
 /** 카드 텍스트 위생 — 이모지 제거(렌더 안정성)·길이 캡. */

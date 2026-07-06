@@ -11,12 +11,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
-import { ollama } from '../llm/ollama';
-import { getSystemSpecs, autoAssignModels } from '../llm/models';
-import { tierOverrides, isClaudeBackend, resolveAssignment } from '../llm/setting';
+import { resolveAssignment } from '../llm/setting';
 import { getCompany } from '../agents/company-loader';
 import { microJSON } from '../orchestrator/agent';
 import { asString } from '../util/str';
+import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix } from '../content/brand';
 
 export interface AutoCycleDeps<T = string> {
   /** 사이클 주기(ms). ≤0 이면 스케줄러는 no-op. */
@@ -99,7 +98,8 @@ export interface ContentIdea { title: string; keyword?: string; subNiche?: strin
 // 성과 전략(analytics/strategy.json, 6d 연동) 있으면 승자 키워드를 아이디어 재료로 — 없으면 콜드스타트(무시).
 function readStrategyWinners(): string {
   try {
-    const raw = JSON.parse(readSafe(path.join(CONFIG.dataDir, 'analytics', 'strategy.json'))) as {
+    const slug = activeBrandSlug();
+    const raw = JSON.parse(readSafe(path.join(CONFIG.dataDir, 'analytics', slug ? `strategy-${slug}.json` : 'strategy.json'))) as {
       winners?: Array<{ keyword?: string; score?: number }>;
     };
     return (raw.winners ?? [])
@@ -114,6 +114,7 @@ const IDEA_SYSTEM =
   '너는 1인 AI 콘텐츠 회사의 자율 편집 기획자다. 아래 [팀·업무 범위]가 이 회사가 다루는 콘텐츠 영역이다. ' +
   '다음에 제작하면 검색 노출·유입에 가치있는 네이버 블로그(정보/하우투·리뷰) 콘텐츠 아이디어 한 개를 제안하라.\n' +
   '- 검색 의도가 뚜렷하고 실용적인 주제(하우투/비교/리뷰/체크리스트 등). 시의성·계절성도 고려한다.\n' +
+  '- [브랜드 컨텍스트]가 있으면 그 기업의 제품·타겟 고객의 관심사와 자연스럽게 연결되는 주제를 우선하라(노골적 광고성 주제 금지 — 독자에게 유용한 정보가 우선).\n' +
   '- [성과 상위 키워드]가 있으면 그 흐름을 잇거나 확장하는 주제를 우선한다. 없으면(콜드스타트) 영역 안에서 다양하게 탐색한다.\n' +
   '- [최근 제작]·[최근 자율주제]와 중복되지 않게 하라.\n' +
   '- title 은 클릭·검색에 유리한 한국어 제목, keyword 는 검색량 있을 법한 핵심 타겟 키워드 1개, subNiche 는 세부 분야다.';
@@ -121,7 +122,7 @@ const IDEA_SYSTEM =
 /**
  * 다음에 제작할 콘텐츠 아이디어 1건 제안 — 조직 헌장(팀·업무 범위) + 성과 전략(strategy.json)에 그라운딩.
  * 위키 인덱스는 주제 생성에서 제외(anti-drift): 과거 적재 자료로 편향되는 피드백 루프를 끊는다(구 gov 버전의 근본 교훈 유지).
- * 백엔드 인식 — claude 면 클라우드 micro(haiku), 아니면 로컬 설치 모델(구 ollama.listModels()→빈배열→항상 null 버그 수정).
+ * 모델 — 클라우드 micro(haiku). (Ollama 로컬 분기는 백엔드 제거와 함께 삭제 — 2026-07-06)
  */
 export async function proposeContentIdeas(signal?: AbortSignal): Promise<ContentIdea | null> {
   const c = getCompany();
@@ -132,23 +133,26 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     .join('\n');
   if (!teamLines.trim()) return null; // 조직 구성이 없으면 제안 불가
 
-  const done = readSafe(path.join(CONFIG.dataDir, '_shared', 'decisions.md')).slice(-500);
+  const done = readSafe(path.join(CONFIG.dataDir, '_shared', `decisions${brandFileSuffix()}.md`)).slice(-500);
   const winners = readStrategyWinners();
 
-  let micro: string;
-  if (isClaudeBackend()) {
-    micro = resolveAssignment().micro;
-  } else {
-    const installed = await ollama.listModels();
-    if (installed.length === 0) return null;
-    micro = CONFIG.localModel || autoAssignModels(installed, getSystemSpecs(), tierOverrides()).micro;
-  }
+  const micro = resolveAssignment().micro;
 
+  // 브랜드 설정 시: 주제를 브랜드 제품·타겟에 조향 + 콜드스타트는 시드 키워드에서 출발 +
+  // subNiche 를 제품 라인으로 제약(기존 서브니치 EWMA 가 그대로 '제품 라인별 성과 학습'이 된다).
+  const brand = brandContext();
+  const seeds = brandSeedKeywords();
+  const productLines = brandProductLines();
+  const coldstart = seeds.length
+    ? `(성과 데이터 없음 — 아래 브랜드 시드 키워드에서 출발해 탐색)\n${seeds.map((k) => `- ${k}`).join('\n')}`
+    : '(없음 — 콜드스타트)';
   const user =
+    (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +
-    `[성과 상위 키워드]\n${winners || '(없음 — 콜드스타트)'}\n\n` +
+    `[성과 상위 키워드]\n${winners || coldstart}\n\n` +
     `[최근 제작 — 중복 회피]\n${done || '(없음)'}\n\n` +
     `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}\n\n` +
+    (productLines.length ? `subNiche 는 반드시 다음 제품 라인 중 가장 관련 있는 하나로: ${productLines.join(' | ')}\n\n` : '') +
     `형식: {"title":"...","keyword":"...","subNiche":"..."}`;
 
   const o = await microJSON<{ title?: unknown; keyword?: unknown; subNiche?: unknown }>(

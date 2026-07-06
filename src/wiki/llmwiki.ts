@@ -14,9 +14,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { CONFIG } from '../config';
-import { ollama } from '../llm/ollama';
+import { brandFileSuffix } from '../content/brand';
 import { llm } from '../llm/client';
-import { cosineSim, resolveEmbedModel } from './embed';
 
 export type PageType = 'entity' | 'concept' | 'source' | 'overview' | 'answer' | 'lesson' | 'debate' | 'performance';
 
@@ -611,78 +610,20 @@ export class LlmWiki {
     return extra.length ? [...hits, ...extra] : hits;
   }
 
-  async semanticQuery(question: string, limit = 4, signal?: AbortSignal): Promise<{ hits: WikiPage[]; context: string }> {
-    // 인사·직무 의도면 표 자료(업무분장표 등) 앵커로 질의 확장 — recall·임베딩·발췌 모두 확장질의 기준.
+  async semanticQuery(question: string, limit = 4, _signal?: AbortSignal): Promise<{ hits: WikiPage[]; context: string }> {
+    // 인사·직무 의도면 표 자료(업무분장표 등) 앵커로 질의 확장 — recall·발췌 모두 확장질의 기준.
+    // Ollama 임베딩 rerank 는 백엔드 제거(2026-07-06)와 함께 삭제 — 휴리스틱 랭킹 단일 경로.
+    // (query() 휴리스틱이 이미 출처 가중 raw/×2·run:×0.5 로 1차 원문을 우대한다.)
     const { q, intent } = this.expandIntent(question);
     const qt = tokenize(q);
     const buildCtx = (hh: WikiPage[]): string =>
       hh.map((p) => `### ${p.title}\n${excerpt(p.body, qt, p.type === 'source' ? 3500 : 800)}`).join('\n\n');
-    // 휴리스틱 폴백(임베딩 off/미설치/실패) — 확장질의 recall + 앵커 set-pull.
-    const heuristic = (): { hits: WikiPage[]; context: string } => {
-      const base = this.query(q, limit).hits;
-      const pool = intent ? this.query(q, Math.max(limit * 8, 48)).hits : base;
-      const hh = this.pullAnchorSet(base, pool, intent);
-      return { hits: hh, context: buildCtx(hh) };
-    };
-    if (!CONFIG.useEmbeddings || !question.trim()) return heuristic();
-    const model = resolveEmbedModel(await ollama.listModels());
-    if (!model) return heuristic(); // 임베딩 모델 미설치 → 휴리스틱
-    // 1) recall — 휴리스틱으로 후보 K개(충분히 넓게).
-    const K = Math.max(limit * 8, 30);
-    const cand = this.query(q, K).hits;
-    if (cand.length <= limit) return heuristic();
-    // 2) 질의 + 후보 임베딩(후보는 hash 캐시 — 변경된 페이지만 재임베딩).
-    const qEmb = await ollama.embed(model, [q], signal);
-    if (!qEmb?.[0]) return heuristic(); // 임베딩 실패 → 휴리스틱
-    const qv = qEmb[0];
-    const cache = this.loadEmbedCache(model);
-    const texts = cand.map((p) => `${p.title}\n${p.body.slice(0, 2000)}`);
-    const vecs: Array<number[] | null> = cand.map((p, i) => {
-      const c = cache.vecs[p.slug];
-      return c && c.hash === sha1(texts[i]!) ? c.vec : null;
-    });
-    const missIdx = vecs.map((v, i) => (v ? -1 : i)).filter((i) => i >= 0);
-    if (missIdx.length) {
-      const emb = await ollama.embed(model, missIdx.map((i) => texts[i]!), signal);
-      if (emb) missIdx.forEach((i, j) => {
-        const v = emb[j];
-        if (v) { vecs[i] = v; cache.vecs[cand[i]!.slug] = { hash: sha1(texts[i]!), vec: v }; }
-      });
-      this.saveEmbedCache(model, cache);
-    }
-    // 3) rerank — 코사인 × 출처 가중. query() 휴리스틱과 동일하게 1차 원문(raw/)을 우대하고 런 파생 요약
-    //    (sources=run: 또는 제목에 "(요약)")을 역가중한다. 안 그러면 반복 주제에서 이전 런 요약이 '의미
-    //    유사도만'으로 top-k 를 점유해 1차 수치 자료를 밀어낸다(수치 오참조의 근본 원인). deprioritize-not-exclude.
-    const srcW = (p: WikiPage): number => {
-      let w = 1;
-      if (p.sources.some((s) => s.startsWith('raw/'))) w *= 1.5; // 업로드 1차 원문 우대
-      if (p.sources.some((s) => s.startsWith('run:')) || p.title.includes('(요약)')) w *= 0.6; // 런 파생 요약 역가중(누적분도 제목으로 포착)
-      return w;
-    };
-    const ranked = cand
-      .map((p, i) => ({ p, sim: vecs[i] ? cosineSim(qv, vecs[i]!) : -1 }))
-      .map((x) => ({ ...x, score: x.sim > -1 ? x.sim * srcW(x.p) : -1 }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit)
-      .filter((x) => x.sim > -1)
-      .map((x) => x.p);
-    const base = ranked.length ? ranked : this.query(q, limit).hits;
-    // 4) 앵커 set-pull — 의도질의에서 표 자료가 잡히면 후보 풀의 동형 자료(다른 팀 업무분장표)를 모두 보충.
-    const hits = this.pullAnchorSet(base, cand, intent);
+    const base = this.query(q, limit).hits;
+    const pool = intent ? this.query(q, Math.max(limit * 8, 48)).hits : base;
+    const hits = this.pullAnchorSet(base, pool, intent);
     return { hits, context: buildCtx(hits) };
   }
 
-  private embedCachePath(): string { return path.join(this.dir, '.embeddings.json'); }
-  private loadEmbedCache(model: string): { model: string; vecs: Record<string, { hash: string; vec: number[] }> } {
-    try {
-      const c = JSON.parse(fs.readFileSync(this.embedCachePath(), 'utf-8')) as { model?: string; vecs?: Record<string, { hash: string; vec: number[] }> };
-      if (c && c.model === model && c.vecs) return { model, vecs: c.vecs }; // 모델 바뀌면 캐시 무효(차원 불일치 방지)
-    } catch { /* 신규/손상 */ }
-    return { model, vecs: {} };
-  }
-  private saveEmbedCache(model: string, cache: { vecs: Record<string, { hash: string; vec: number[] }> }): void {
-    try { fs.writeFileSync(this.embedCachePath(), JSON.stringify({ model, vecs: cache.vecs })); } catch { /* 캐시 실패 무해 */ }
-  }
 
   /** store.ts 호환 검색(슬러그/점수). */
   search(q: string, limit = 8): Array<{ page_id: string; title: string; score: number }> {
@@ -988,9 +929,6 @@ export function chunkBody(body: string, maxChunks = 60, minSize = 3500): string[
 function tokenize(s: string): string[] {
   return (s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => t.length > 1);
 }
-function sha1(s: string): string {
-  return createHash('sha1').update(s).digest('hex');
-}
 function extractJson<T>(raw: string): T | null {
   if (!raw) return null;
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -1032,7 +970,11 @@ entity(사람·조직·도구) · concept(개념·주제) · source(소스 요�
 `;
 
 let _wiki: LlmWiki | null = null;
+let _wikiDir = '';
+/** 브랜드(고객사)별 지식 분리 — 범용은 data/wiki, 브랜드는 data/wiki-<slug>. 전환 시 인스턴스 교체. */
 export function llmWiki(): LlmWiki {
-  if (!_wiki) _wiki = new LlmWiki();
+  const suffix = brandFileSuffix();
+  const dir = suffix ? path.join(path.dirname(CONFIG.wikiDir), `${path.basename(CONFIG.wikiDir)}${suffix}`) : CONFIG.wikiDir;
+  if (!_wiki || _wikiDir !== dir) { _wiki = new LlmWiki(dir); _wikiDir = dir; }
   return _wiki;
 }

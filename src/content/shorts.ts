@@ -6,12 +6,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
+import { activeBrandSlug } from './brand';
 import { genId } from '../util/ids';
 
 export type ShortsStage = 'planning' | 'designing' | 'rendering' | 'ready' | 'error';
 
 export interface Shorts {
   id: string;
+  /** 브랜드(고객사) 슬러그 — 생성 시점의 활성 브랜드(범용이면 undefined). */
+  brand?: string;
   /** 주제(독립 생성) 또는 원본 블로그 제목(파생). */
   topic: string;
   keyword?: string;
@@ -71,7 +74,8 @@ export class ShortsStore {
   create(input: CreateShortsInput): Shorts {
     const now = new Date().toISOString();
     const s: Shorts = {
-      id: genId('short'), topic: input.topic.trim(),
+      id: genId('short'),
+      brand: activeBrandSlug() || undefined, topic: input.topic.trim(),
       keyword: input.keyword?.trim() || undefined,
       sourcePieceId: input.sourcePieceId,
       writer: input.writer, director: input.director,

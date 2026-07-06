@@ -21,6 +21,8 @@ export interface Piece {
   id: string;
   /** 초안을 생산한 org 런 id — draft.* 는 data/sessions/<runId>/ 에서 재로드. */
   runId?: string;
+  /** 브랜드(고객사) 슬러그 — 생성 시점의 활성 브랜드. 범용 모드 생성물은 undefined. */
+  brand?: string;
   title: string;
   keyword?: string;
   subNiche?: string;
@@ -39,7 +41,7 @@ export interface Piece {
   updatedTs: string;
 }
 
-export interface CreatePieceInput { title: string; keyword?: string; subNiche?: string; stage?: PieceStage; }
+export interface CreatePieceInput { title: string; keyword?: string; subNiche?: string; stage?: PieceStage; brand?: string; }
 
 const MAX_ERRORS = 3;
 
@@ -69,6 +71,7 @@ export class PieceStore {
     const p: Piece = {
       id: genId('piece'), title: input.title.trim(),
       keyword: input.keyword?.trim() || undefined, subNiche: input.subNiche?.trim() || undefined,
+      brand: input.brand?.trim() || undefined,
       stage: input.stage ?? 'idea', errors: 0, createdTs: now, updatedTs: now,
     };
     this.items.set(p.id, p);

@@ -49,11 +49,9 @@ button, input, select, textarea { font-family: inherit; }
   border: 1px solid transparent; transition: filter .12s, border-color .12s; }
 .llm-badge:hover { filter: brightness(1.12); }
 .llm-badge.claude { background: var(--bg-primary-subtle); color: #5598f8; border-color: #0066ff55; }
-.llm-badge.local { background: var(--bg-success-subtle); color: #21cf60; border-color: #00bf4066; }
 .llm-badge-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor;
   box-shadow: 0 0 6px currentColor; animation: dashpulse 1.8s infinite; }
 .llm-badge-txt { line-height: 1; }
-.llm-badge-caret { font-size: 9px; opacity: .8; margin-left: 1px; }
 .llm-badge-wrap { position: relative; display: inline-flex; }
 .llm-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 50; min-width: 240px;
   background: var(--panel); border: 1px solid var(--border); border-radius: 11px;
@@ -67,7 +65,6 @@ button, input, select, textarea { font-family: inherit; }
 .llm-menu-item.sel { background: var(--bg-primary-subtle); }
 .llm-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .llm-dot.claude { background: #5598f8; box-shadow: 0 0 5px #5598f8; }
-.llm-dot.local { background: #21cf60; box-shadow: 0 0 5px #21cf60; }
 .llm-menu-sub { flex-basis: 100%; padding-left: 16px; font-size: 10.5px; font-weight: 400; color: var(--muted); }
 .llm-check { margin-left: auto; color: var(--accent); font-weight: 800; }
 .llm-menu-empty { font-size: 12px; color: var(--muted); padding: 7px 10px; }
@@ -124,11 +121,16 @@ button, input, select, textarea { font-family: inherit; }
   display: flex; align-items: stretch; gap: 6px; padding: 6px 13px;
   background: var(--panel); border-bottom: 1px solid var(--border); overflow-x: auto;
 }
+.dash-company-wrap { position: relative; flex-shrink: 0; }
 .dash-company {
   display: flex; align-items: center; gap: 8px; padding: 5px 13px 5px 6px; flex-shrink: 0;
   background: var(--bg-elevated);   /* Wanted: flat 표면(그라디언트 금지) */
   border: 1px solid var(--border); border-radius: 10px;
 }
+/* 브랜드(고객사) 스위처 — 회사 칩이 곧 선택 버튼(활성 브랜드명 표시) */
+button.dash-company { font-family: inherit; cursor: pointer; text-align: left; width: 100%; }
+button.dash-company:hover { border-color: var(--accent); }
+.brand-menu { min-width: 220px; }
 .dash-logo {
   width: 27px; height: 27px; display: grid; place-items: center; font-size: 14px;
   background: var(--bg-success-subtle); border-radius: 7px; box-shadow: inset 0 0 0 1px #00bf4066;

@@ -1,9 +1,9 @@
 // DashboardBar — a metrics strip under the top bar (회사 · 누적토론 · TIME · WORKING ·
 // OUTPUT · 위키 · 교훈 · 가동상태), styled like the reference office-sim toolbar. All
 // values are live from the same folded uiState the office renders.
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useStore } from "../store";
-import { fetchWikiStats, fetchAutonomyStatus, type AutonomyStatus } from "../api";
+import { fetchWikiStats, fetchAutonomyStatus, fetchBrands, activateBrand, type AutonomyStatus, type BrandListItem } from "../api";
 import { countWorking } from "../events/working";
 import type { MetricKind } from "./MetricDrawer";
 import Ico from "./Ico";
@@ -13,6 +13,7 @@ interface Props {
   total: number;      // 전체 직원 수 (CEO + 팀장/팀원)
   runsCount: number;  // 누적 토론(기록) 수
   onMetric?: (m: MetricKind) => void;  // 지표 클릭 → 드릴다운 패널 열기
+  onOpenBrand?: () => void;            // '브랜드 관리' → 브랜드 탭 이동
 }
 
 function Chip({ icon, label, value, accent, mono, onClick }: {
@@ -34,9 +35,43 @@ function Chip({ icon, label, value, accent, mono, onClick }: {
     : <div className={cls}>{inner}</div>;
 }
 
-export default function DashboardBar({ companyName, total, runsCount, onMetric }: Props) {
+export default function DashboardBar({ companyName, total, runsCount, onMetric, onOpenBrand }: Props) {
   const s = useStore();
   const [now, setNow] = useState(() => new Date());
+  // 브랜드(고객사) 전환 — 회사 칩이 활성 브랜드명을 보여주고, 클릭 시 저장된 브랜드 중 선택.
+  const [brands, setBrands] = useState<BrandListItem[]>([]);
+  const [activeBrand, setActiveBrand] = useState<string | null>(null);
+  const [brandMenu, setBrandMenu] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const brandRef = useRef<HTMLDivElement>(null);
+  // 대시보드 바가 overflow-x:auto 라 absolute 메뉴가 잘린다 — 버튼 위치 기준 fixed 로 띄운다.
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const toggleBrandMenu = () => {
+    const r = brandRef.current?.getBoundingClientRect();
+    setMenuPos(r ? { top: r.bottom + 6, left: r.left } : null);
+    setBrandMenu((v) => !v);
+  };
+  useEffect(() => {
+    const load = () => fetchBrands().then((r) => { setBrands(r.brands); setActiveBrand(r.active); }).catch(() => {});
+    load();
+    const t = setInterval(load, 8000);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => {
+    if (!brandMenu) return;
+    const h = (e: MouseEvent) => { if (brandRef.current && !brandRef.current.contains(e.target as Node)) setBrandMenu(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [brandMenu]);
+  const doSwitch = async (slug: string | null) => {
+    if (switching || slug === activeBrand) { setBrandMenu(false); return; }
+    setSwitching(true);
+    const r = await activateBrand(slug);
+    setSwitching(false); setBrandMenu(false);
+    if (r.ok) { const b = await fetchBrands(); setBrands(b.brands); setActiveBrand(b.active); }
+    else alert(r.error || "브랜드 전환 실패");
+  };
+  const activeName = brands.find((b) => b.slug === activeBrand)?.name;
   const [wikiTotal, setWikiTotal] = useState(0);
   const [lessonsTotal, setLessonsTotal] = useState(0);
   const [auto, setAuto] = useState<AutonomyStatus | null>(null);
@@ -74,12 +109,33 @@ export default function DashboardBar({ companyName, total, runsCount, onMetric }
 
   return (
     <div className="dashboard-bar">
-      <div className="dash-company">
-        <span className="dash-logo"><Ico name="company" size={15} /></span>
-        <div className="dash-company-txt">
-          <b>{companyName || "AI 콘텐츠 스튜디오"}</b>
-          <span>AI 에이전트 조직</span>
-        </div>
+      <div className="dash-company-wrap" ref={brandRef}>
+        <button type="button" className="dash-company clickable" title="브랜드(고객사) 선택"
+          onClick={toggleBrandMenu}>
+          <span className="dash-logo"><Ico name="company" size={15} /></span>
+          <div className="dash-company-txt">
+            <b>{activeName || companyName || "AI 콘텐츠 스튜디오"}</b>
+            <span>{activeName ? `${companyName || "AI 콘텐츠 스튜디오"} · 브랜드` : "AI 에이전트 조직"} ▾</span>
+          </div>
+        </button>
+        {brandMenu && (
+          <div className="upload-menu brand-menu"
+            style={menuPos ? { position: "fixed", top: menuPos.top, left: menuPos.left } : undefined}>
+            <button className="llm-menu-item" disabled={switching} onClick={() => doSwitch(null)}>
+              {activeBrand == null ? "✓ " : ""}범용 모드 <span className="muted">(브랜드 없음)</span>
+            </button>
+            {brands.map((b) => (
+              <button key={b.slug} className="llm-menu-item" disabled={switching} onClick={() => doSwitch(b.slug)}>
+                {b.slug === activeBrand ? "✓ " : ""}{b.name}{b.industry ? <span className="muted"> · {b.industry}</span> : null}
+              </button>
+            ))}
+            {onOpenBrand && (
+              <button className="llm-menu-item" onClick={() => { setBrandMenu(false); onOpenBrand(); }}>
+                ＋ 브랜드 관리…
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <Chip icon={<Ico name="bubble" size={14} />} label="누적 토론" value={runsCount}
         onClick={onMetric && (() => onMetric("runs"))} />

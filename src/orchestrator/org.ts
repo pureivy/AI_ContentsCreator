@@ -23,6 +23,7 @@ import { parseImagePlan, draftFiles } from '../output/naverBlog';
 import { naverSerp } from '../grounding/naver_search';
 import { seedKeyword } from '../grounding/naver_common';
 import { getRunSettings } from '../runsettings';
+import { brandContext } from '../content/brand';
 import type { RunOptions, RunOutcome } from './run';
 
 interface TeamResult {
@@ -149,7 +150,8 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   }>(
     assign.micro,
     '너는 CEO다. 목표를 직접 지시문으로 쓰지 말고, 각 부서의 주력업무(업무분장)에 맞춰 목표의 어느 부분을 어느 부서가 맡을지 분배하라. 부서 간 담당 범위가 서로 겹치지 않게 명확히 분리하고, 각 부서 작업에 그 부서만의 책임 범위를 구체적으로 명시하라. 직책명 통념이 아니라 업무분장으로 목표와 대조하라. 목표와 무관한 부서는 제외하라.',
-    `목표: ${topic}\n\n하위 문제:\n${subContext}\n\n부서 목록(id | 부서명 | 주력업무):\n${allTeams.map((t) => `- ${t.id} | ${t.name} | ${t.lead.specialty ?? t.lead.title}`).join('\n')}\n\n각 관련 부서에 맡길 구체적 작업과, 최종 산출물이 갖춰야 할 핵심 요건(수용 기준, 2~3줄)을 정하라.\n\n형식: {"assignments":[{"team":"<부서 id>","task":"<이 부서가 맡을 작업>"}],"acceptance":"<수용 기준>"}`,
+    // CEO 라우팅은 microJSON 직행(buildSystemPrompt 우회)이라 브랜드 컨텍스트를 user 에 별도 주입.
+    `${brandContext() ? `${brandContext()}\n\n` : ''}목표: ${topic}\n\n하위 문제:\n${subContext}\n\n부서 목록(id | 부서명 | 주력업무):\n${allTeams.map((t) => `- ${t.id} | ${t.name} | ${t.lead.specialty ?? t.lead.title}`).join('\n')}\n\n각 관련 부서에 맡길 구체적 작업과, 최종 산출물이 갖춰야 할 핵심 요건(수용 기준, 2~3줄)을 정하라.\n\n형식: {"assignments":[{"team":"<부서 id>","task":"<이 부서가 맡을 작업>"}],"acceptance":"<수용 기준>"}`,
     { maxOutputTokens: 700, signal },
   );
 

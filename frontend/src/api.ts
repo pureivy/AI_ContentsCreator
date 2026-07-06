@@ -14,6 +14,51 @@ export interface RunInfo {
 
 // (반복 업무 템플릿 기능 제거됨 — 백엔드 미구현 스텁이었고, 역할은 자율 사이클·캘린더가 대체)
 
+// --- 브랜드(고객사) 프로필 — 스튜디오가 '누구를 위해' 만드는지. 저장 즉시 다음 런부터 주입 ---
+export interface BrandProductInfo { name: string; features?: string; target?: string }
+export interface BrandInfo {
+  name: string;
+  industry?: string;
+  description?: string;
+  products: BrandProductInfo[];
+  audience?: string;
+  region?: string;
+  tone?: string;
+  banned?: string[];
+  seedKeywords?: string[];
+  channel?: string;
+}
+export async function fetchBrand(): Promise<BrandInfo | null> {
+  try { const r = await fetch("/brand"); if (!r.ok) return null; return (await r.json()).brand ?? null; }
+  catch { return null; }
+}
+export interface BrandListItem { slug: string; name: string; industry?: string }
+export async function fetchBrands(): Promise<{ active: string | null; brands: BrandListItem[] }> {
+  try { const r = await fetch("/brands"); if (!r.ok) return { active: null, brands: [] }; return await r.json(); }
+  catch { return { active: null, brands: [] }; }
+}
+export async function activateBrand(slug: string | null): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch("/brands/activate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slug }) });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return { ok: true };
+  } catch { return { ok: false, error: "network" }; }
+}
+export async function deleteBrandProfile(slug: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`/brands/${encodeURIComponent(slug)}`, { method: "DELETE" });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return { ok: true };
+  } catch { return { ok: false, error: "network" }; }
+}
+export async function saveBrandProfile(b: BrandInfo): Promise<{ ok: boolean; brand?: BrandInfo; error?: string }> {
+  try {
+    const r = await fetch("/brand", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
+    const j = await r.json().catch(() => ({} as { brand?: BrandInfo; error?: string }));
+    return r.ok ? { ok: true, brand: j.brand } : { ok: false, error: j.error };
+  } catch { return { ok: false, error: "network" }; }
+}
+
 /** 산출물 수정 루프(⑤): 끝난 런에 피드백 → CEO 통합만 재실행하는 v{n} 런 시작. */
 export async function reviseRun(runId: string, feedback: string):
   Promise<{ run_id: string; version: number }> {
@@ -256,43 +301,6 @@ export async function retryClassify(refs: string[]): Promise<number | null> {
     return (await r.json()).retrying ?? 0;
   } catch {
     return null;
-  }
-}
-
-// --- LLM 백엔드 선택 ---------------------------------------------------------
-export type LlmBackendId = "claude" | "local";
-export interface LlmSetting { backend: LlmBackendId; local_model: string; }
-export interface LlmBackend { id: LlmBackendId; label: string; available: boolean; }
-export interface LlmStatus {
-  setting: LlmSetting;
-  backends: LlmBackend[];
-  local_models: string[];
-  /** 메모리 상주 중인 Ollama 모델(/api/ps) — keep_alive 튜닝 확인용. 구 서버엔 없음. */
-  local_loaded?: { name: string; expires_at?: string; size_vram?: number; context_length?: number }[];
-  local_base_url: string;
-}
-export async function fetchLlmStatus(): Promise<LlmStatus | null> {
-  try {
-    const r = await fetch("/llm");
-    if (!r.ok) return null;
-    return await r.json();
-  } catch {
-    return null;
-  }
-}
-export async function saveLlmSetting(
-  backend: string, local_model: string,
-): Promise<{ ok: boolean; error?: string; status?: LlmStatus }> {
-  try {
-    const r = await fetch("/llm", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ backend, local_model }),
-    });
-    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
-    return { ok: true, status: await r.json() };
-  } catch {
-    return { ok: false, error: "network" };
   }
 }
 

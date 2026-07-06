@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
+import { brandFileSuffix } from '../content/brand';
 import { llmWiki } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
 import type { NotifyMessage } from './notify';
@@ -35,7 +36,7 @@ export function buildBriefing(): NotifyMessage {
     const w = llmWiki().stats();
     sections.push({ heading: '📚 지식베이스', body: `${w.pages}페이지 (개념 ${w.concepts} · 소스 ${w.sources} · 링크 ${w.links})` });
   } catch { /* 위키 없음 무해 */ }
-  const dec = readTail(path.join(CONFIG.dataDir, '_shared', 'decisions.md'), 1200);
+  const dec = readTail(path.join(CONFIG.dataDir, '_shared', `decisions${brandFileSuffix()}.md`), 1200);
   if (dec) sections.push({ heading: '⚖️ 최근 결정', body: dec });
   try {
     const lessons = llmWiki().list('lesson').slice(0, 5).map((p) => `- ${p.summary || p.title}`).join('\n');

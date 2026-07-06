@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "./store";
 import { startRun, resumeRun, watchRun, RunHandle } from "./transport/sse";
-import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchLlmStatus, saveLlmSetting, fetchEta, reviseRun, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, getVoices, setVoiceConversational, RunInfo, UploadFileResult, LlmStatus, EtaStats, RunSettings } from "./api";
+import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchEta, reviseRun, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, getVoices, setVoiceConversational, RunInfo, UploadFileResult, EtaStats, RunSettings } from "./api";
 import { ActivityItem, ApprovalItem, DebateMsg, UIState } from "./events/types";
 import AgentGraph from "./panels/AgentGraph";
 import OfficeView from "./panels/OfficeView";
@@ -9,6 +9,7 @@ import EmployeesView from "./panels/EmployeesView";
 import ApiKeysView from "./panels/ApiKeysView";
 import LlmSettingsView from "./panels/LlmSettingsView";
 import McpView from "./panels/McpView";
+import BrandView from "./panels/BrandView";
 import ContentCalendar from "./panels/ContentCalendar";
 import DraftReview from "./panels/DraftReview";
 import PerformanceView from "./panels/PerformanceView";
@@ -96,7 +97,7 @@ function progressNote(
   return "⏳ 편집장이 목표를 분석하는 중…";
 }
 
-type View = "office" | "graph" | "detail" | "employees" | "apikeys" | "llm" | "mcp" | "calendar" | "review" | "perf" | "studio";
+type View = "office" | "graph" | "detail" | "employees" | "apikeys" | "llm" | "mcp" | "calendar" | "review" | "perf" | "studio" | "brand";
 type TLTab = "timeline" | "activity" | "workflow";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -299,7 +300,7 @@ export default function App() {
       // 자비스가 고른 직원이 있으면 그 직원 단독 런(directed) — 없으면 사장(전사) 런으로 위임.
       handleRef.current = await startRun(
         task, (ev) => apply(ev), (rid) => { jarvisRunIds.current.add(String(rid)); setRunId(rid); },
-        () => useStore.getState().lastSeq, { agent, llm: runLlmOpt() },
+        () => useStore.getState().lastSeq, { agent },
       );
     } catch (e) { useStore.getState().pushJarvisTurn({ role: "jarvis", text: `(위임 실패) ${(e as Error).message}` }); }
   });
@@ -338,17 +339,10 @@ export default function App() {
   // 파일·폴더 통합 업로드 풀다운(상단바 '📎 자료 ▾')
   const [uploadMenu, setUploadMenu] = useState(false);
   const uploadMenuRef = useRef<HTMLDivElement>(null);
-  // 상단 LLM 배지 → 모델 선택 풀다운
-  const [llmMenu, setLlmMenu] = useState(false);
-  const llmMenuRef = useRef<HTMLDivElement>(null);
-  const [llmBusy, setLlmBusy] = useState(false);
   const [showBrain, setShowBrain] = useState(false);  // "제2의 두뇌" 위키 그래프 모달
   const [metric, setMetric] = useState<MetricKind | null>(null);  // 대시보드 지표 드릴다운
   // 3패널(타임라인|사무실|산출물) 가로 폭 — 핸들 드래그로 조절, localStorage 영속.
   const { widths, startDrag, reset: resetWidth, outputsOpen, setOutputsOpen } = useStageWidths();
-  const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
-  // 런별 LLM 백엔드 오버라이드. "" = 전역 기본값 따름 / "claude" / "local:<model>".
-  const [runLlm, setRunLlm] = useState("");
   // 3단 런 경로(①). "" = 자동 추천 / "team"(경량) / "full"(전사).
   const [runPath, setRunPath] = useState("");
   // 런별 예산 캡(USD). "" = 전역 기본 / "0" = 무제한 명시 / 그 외 = 캡.
@@ -437,22 +431,11 @@ export default function App() {
   }, [s.status, s.runId, s.mode, s.synthesis]);
 
   // LLM 백엔드 상태(런 셀렉터 옵션 + 현재 effective 배지). 마운트 + 사무실 복귀 시 로드
-  // (LLM 설정 변경 후 돌아오면 상단 배지가 최신값을 반영).
-  useEffect(() => { if (view === "office" || view === "graph") fetchLlmStatus().then(setLlmStatus); }, [view]);
-
   // 런타임 품질 설정(토론·추론) — 헤더 토글. 마운트 시 로드, 토글 시 POST 후 즉시 반영(다음 런부터 적용).
   const [runSettings, setRunSettingsState] = useState<RunSettings>({ orgDebateRounds: 0, agentThinking: false });
   useEffect(() => { fetchRunSettings().then(setRunSettingsState); }, []);
   const toggleDebate = () => updateRunSettings({ orgDebateRounds: runSettings.orgDebateRounds > 0 ? 0 : 1 }).then(setRunSettingsState);
   const toggleThinking = () => updateRunSettings({ agentThinking: !runSettings.agentThinking }).then(setRunSettingsState);
-
-  // 상단 LLM 배지에 표시할 '현재 사용 LLM' — 런 셀렉터(runLlm) 우선, 없으면 전역 기본값.
-  const effLlm = (): { backend: string; model: string } => {
-    if (runLlm === "claude") return { backend: "claude", model: "" };
-    if (runLlm.startsWith("local:")) return { backend: "local", model: runLlm.slice(6) };
-    if (llmStatus) return { backend: llmStatus.setting.backend, model: llmStatus.setting.local_model };
-    return { backend: "claude", model: "" };
-  };
 
   // 업로드 풀다운 바깥 클릭 시 닫기
   useEffect(() => {
@@ -472,38 +455,6 @@ export default function App() {
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, [showHist]);
-
-  // LLM 배지 풀다운 바깥 클릭 시 닫기
-  useEffect(() => {
-    if (!llmMenu) return;
-    const h = (e: MouseEvent) => {
-      if (llmMenuRef.current && !llmMenuRef.current.contains(e.target as Node)) setLlmMenu(false);
-    };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [llmMenu]);
-
-  // 배지에서 모델 선택 → 전역 기본값 저장 + 런 셀렉터 동기화(즉시 반영). 실패 시 알림.
-  const applyLlm = async (backend: string, model: string) => {
-    setLlmBusy(true);
-    const res = await saveLlmSetting(backend, model);
-    setLlmBusy(false);
-    setLlmMenu(false);
-    if (res.ok && res.status) {
-      setLlmStatus(res.status);
-      setRunLlm(backend === "local" ? `local:${model}` : "claude");
-    } else {
-      alert(`LLM 변경 실패: ${res.error || "알 수 없는 오류"}`);
-    }
-  };
-
-  // 런별 오버라이드 선택값("" | "claude" | "local:<model>") → startRun opts.llm.
-  // "" 면 undefined(전역 기본값 따름).
-  const runLlmOpt = (): { backend: string; model: string } | undefined => {
-    if (runLlm === "claude") return { backend: "claude", model: "" };
-    if (runLlm.startsWith("local:")) return { backend: "local", model: runLlm.slice(6) };
-    return undefined;
-  };
 
   const cancel = () => handleRef.current?.cancel();
 
@@ -755,7 +706,7 @@ export default function App() {
             (ev) => apply(ev),
             (rid) => setRunId(rid),
             () => useStore.getState().lastSeq,
-            { agent: directed.id, llm: runLlmOpt() },
+            { agent: directed.id },
           );
         } catch (e) {
           window.alert(`런 시작 실패: ${(e as Error).message}`);
@@ -772,7 +723,7 @@ export default function App() {
             (ev) => apply(ev),
             (rid) => setRunId(rid),
             () => useStore.getState().lastSeq,
-            { llm: runLlmOpt(), path: runPath || undefined,
+            { path: runPath || undefined,
               budget: runBudget === "" ? undefined : Number(runBudget) },
           );
         } catch (e) {
@@ -1337,48 +1288,12 @@ export default function App() {
       )}
       <header className="topbar">
         <button className="brand" type="button" onClick={goHome} title="초기화면으로"><Ico name="company" size={15} /> <span className="brand-txt">AI 콘텐츠 스튜디오</span></button>
-        {(() => {
-          const e = effLlm();
-          const local = e.backend === "local";
-          const localAvail = llmStatus?.backends.find((b) => b.id === "local")?.available ?? false;
-          const claudeAvail = llmStatus?.backends.find((b) => b.id === "claude")?.available ?? true;
-          const models = llmStatus?.local_models ?? [];
-          const isCur = (b: string, m: string) =>
-            e.backend === b && (b === "claude" || e.model === m);
-          return (
-            <div className="llm-badge-wrap" ref={llmMenuRef}>
-              <button className={`llm-badge${local ? " local" : " claude"}`}
-                onClick={() => setLlmMenu((v) => !v)}
-                title="현재 사용 중인 LLM · 클릭하면 모델 선택">
-                <span className="llm-badge-dot" />
-                <span className="llm-badge-txt">{local ? `로컬 · ${e.model || "?"}` : "Claude 클라우드"}</span>
-                <span className="llm-badge-caret">▾</span>
-              </button>
-              {llmMenu && (
-                <div className="llm-menu">
-                  <div className="llm-menu-head">LLM 모델 선택{llmBusy ? " · 적용 중…" : ""}</div>
-                  <button className={`llm-menu-item${isCur("claude", "") ? " sel" : ""}`}
-                    disabled={llmBusy || !claudeAvail} onClick={() => applyLlm("claude", "")}>
-                    <span className="llm-dot claude" /> Claude 클라우드
-                    <span className="llm-menu-sub">편집장=opus · 팀원=sonnet 라우팅</span>
-                    {isCur("claude", "") && <span className="llm-check">✓</span>}
-                  </button>
-                  {models.length === 0 && (
-                    <div className="llm-menu-empty">{localAvail ? "로컬 모델 없음" : "Ollama 미연결"}</div>
-                  )}
-                  {models.map((m) => (
-                    <button key={m} className={`llm-menu-item${isCur("local", m) ? " sel" : ""}`}
-                      disabled={llmBusy || !localAvail} onClick={() => applyLlm("local", m)}>
-                      <span className="llm-dot local" /> 로컬 · {m}
-                      {isCur("local", m) && <span className="llm-check">✓</span>}
-                    </button>
-                  ))}
-                  <div className="llm-menu-foot">전역 기본값으로 저장 · 다음 런부터 적용</div>
-                </div>
-              )}
-            </div>
-          );
-        })()}
+        {/* LLM 배지 — Claude 단일 백엔드(Ollama 제거). 클릭 시 LLM 정보 뷰로. */}
+        <button className="llm-badge claude" onClick={() => setView("llm")}
+          title="LLM 백엔드: Claude 클라우드 (편집장·심층=opus · 표준=sonnet · 빠름=haiku)">
+          <span className="llm-badge-dot" />
+          <span className="llm-badge-txt">Claude 클라우드</span>
+        </button>
         {/* 주제 입력·토론 시작·LLM 셀렉터는 좌하단 통합 커맨드 바로 이동 — 상단은
             업로드/기록/뷰 전환/상태만 남겨 깔끔하게. */}
         <div className="topbar-actions">
@@ -1492,8 +1407,9 @@ export default function App() {
         <div className="viewtoggle">
           <button className={view === "apikeys" ? "active" : ""} onClick={() => setView("apikeys")}><Ico name="key" size={12} /> API 키</button>
           <button className={view === "llm" ? "active" : ""}
-            onClick={() => { setView("llm"); fetchLlmStatus().then(setLlmStatus); }}><Ico name="sparkle" size={12} /> LLM</button>
+            onClick={() => setView("llm")}><Ico name="sparkle" size={12} /> LLM</button>
           <button className={view === "mcp" ? "active" : ""} onClick={() => setView("mcp")}><Ico name="globe" size={12} /> MCP</button>
+          <button className={view === "brand" ? "active" : ""} onClick={() => setView("brand")}><Ico name="company" size={12} /> 브랜드</button>
         </div>
         </div>
         <div className={`status status-${s.status}`}>
@@ -1504,11 +1420,9 @@ export default function App() {
             `최근 ${eta.sample}개 런 중앙값 — ` +
             Object.entries(eta.stages).map(([k, v]) => `${k} ${fmtDur(v)}`).join(" · ") +
             (eta.total_sec ? ` · 전체 ${fmtDur(eta.total_sec)}` : "") +
-            (eta.cost_usd ? ` · 비용 ~$${eta.cost_usd}` : "") +
-            (effLlm().backend === "local" ? " · 🐢 로컬 LLM은 보통 2~3배 더 걸립니다" : "")
+            (eta.cost_usd ? ` · 비용 ~$${eta.cost_usd}` : "")
           }>
             <Ico name="clock" size={11} /> {etaStage}{eta.stages[etaStage] ? ` · 보통 ~${fmtDur(eta.stages[etaStage])}` : ""}
-            {effLlm().backend === "local" ? " 🐢" : ""}
           </div>
         )}
         {s.budget && (
@@ -1598,6 +1512,10 @@ export default function App() {
         <main className="employees-stage">
           <StudioView />
         </main>
+      ) : view === "brand" ? (
+        <main className="employees-stage">
+          <BrandView />
+        </main>
       ) : view === "employees" ? (
         <main className="employees-stage">
           <EmployeesView />
@@ -1663,7 +1581,7 @@ export default function App() {
             {view === "office" ? (
               <div className="office-stage">
                 <DashboardBar companyName={companyMeta.name} total={companyMeta.total}
-                  runsCount={runs.length} onMetric={setMetric} />
+                  runsCount={runs.length} onMetric={setMetric} onOpenBrand={() => setView("brand")} />
                 <OfficeTicker item={tickerItem} text={tickerText}
                   agents={s.agents} names={personNames} live={s.status === "running"} />
                 <OfficeView />

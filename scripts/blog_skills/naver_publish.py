@@ -1384,7 +1384,8 @@ def main():
         print("네이버 블로그 임시저장 시작...")
 
         # persistent context로 세션 유지 (캡차 회피)
-        profile_dir = Path.home() / ".naver-blog-profiles" / "cli"
+        # 인스턴스별 프로필 분리(멀티 기업) — NAVER_PROFILE_DIR 지정 시 그 경로, 아니면 종전 홈 전역 경로.
+        profile_dir = Path(os.environ["NAVER_PROFILE_DIR"]) if os.environ.get("NAVER_PROFILE_DIR") else (Path.home() / ".naver-blog-profiles" / "cli")
         profile_dir.mkdir(parents=True, exist_ok=True)
 
         with sync_playwright() as pw:

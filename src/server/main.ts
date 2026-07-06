@@ -14,9 +14,7 @@ import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { streamSSE } from 'hono/streaming';
 import { CONFIG } from '../config';
-import { ollama } from '../llm/ollama';
-import { getSystemSpecs, autoAssignModels } from '../llm/models';
-import { getLlmSetting, setLlmSetting, tierOverrides, resolveAssignment, isClaudeBackend } from '../llm/setting';
+import { getLlmSetting, setLlmSetting, resolveAssignment } from '../llm/setting';
 import { getRunSettings, setRunSettings } from '../runsettings';
 import { EventType } from '../events/types';
 import { createBus, getBus, disposeBus } from '../events/bus';
@@ -47,6 +45,8 @@ import { shortsStore } from '../content/shorts';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning } from '../orchestrator/shorts';
 import { pieceStore, selectResumablePiece } from '../content/pieces';
+import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeBrandSlug, deleteBrand, isSafeBrandSlug } from '../content/brand';
+import type { BrandProfile } from '../content/brand';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
 import { parseManualMetrics, readMetrics, latestMetrics } from '../analytics/performance';
@@ -79,6 +79,8 @@ interface RunHandle {
   version?: number;
   /** 자율 사이클이 띄운 런 — 사용자 런 도착 시 양보(abort) 대상. */
   auto?: boolean;
+  /** 시작 시점의 활성 브랜드 슬러그 — 기록·누적 토론의 브랜드 필터 기준(범용은 undefined). */
+  brand?: string;
 }
 
 const RUNS = new Map<string, RunHandle>();
@@ -120,12 +122,12 @@ function loadPersistedEvents(id: string): unknown[] {
 
 // 런 메타 사이드카(run.json) — 목록·재열기·HWPX 가 재시작/메모리 evict 후에도 디스크에서
 // 완전 복원되도록 topic·status·deliverable 까지 영속. events.jsonl(이벤트 replay)과 별개.
-interface PersistedMeta { run_id: string; topic: string; status: string; created_ts: string; deliverable: string; auto?: boolean; }
+interface PersistedMeta { run_id: string; topic: string; status: string; created_ts: string; deliverable: string; auto?: boolean; brand?: string; }
 function persistRunMeta(id: string, h: RunHandle): void {
   try {
     const dir = path.join(CONFIG.sessionsDir, id);
     fs.mkdirSync(dir, { recursive: true });
-    const meta: PersistedMeta = { run_id: id, topic: h.topic, status: h.status, created_ts: h.created_ts, deliverable: h.deliverable ?? '', auto: !!h.auto };
+    const meta: PersistedMeta = { run_id: id, topic: h.topic, status: h.status, created_ts: h.created_ts, deliverable: h.deliverable ?? '', auto: !!h.auto, brand: h.brand };
     fs.writeFileSync(path.join(dir, 'run.json'), JSON.stringify(meta), 'utf-8');
   } catch { /* 영속 실패 무해 */ }
 }
@@ -133,7 +135,7 @@ function loadRunMeta(id: string): PersistedMeta | null {
   try {
     const m = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, id, 'run.json'), 'utf-8')) as Partial<PersistedMeta>;
     if (!m || typeof m.topic !== 'string') return null;
-    return { run_id: id, topic: m.topic, status: m.status ?? 'done', created_ts: m.created_ts ?? '', deliverable: m.deliverable ?? '', auto: !!m.auto };
+    return { run_id: id, topic: m.topic, status: m.status ?? 'done', created_ts: m.created_ts ?? '', deliverable: m.deliverable ?? '', auto: !!m.auto, brand: typeof m.brand === 'string' ? m.brand : undefined };
   } catch { return null; }
 }
 // 레거시 세션(run.json·events.jsonl 부재, _report.md 만 존재) — 과거 런을 잃지 않게 산출물 파일로 복원.
@@ -210,6 +212,7 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
   const bus = createBus(id);
   const abort = new AbortController();
   const handle: RunHandle = { status: 'running', abort, topic, created_ts: new Date().toISOString(), auto: !!opts.auto };
+  handle.brand = activeBrandSlug() || undefined;
   RUNS.set(id, handle);
   if (opts.auto) lastAutoRun = { ts: handle.created_ts, topic };
   evictRuns();
@@ -363,12 +366,12 @@ function listPersistedRuns(): PersistedMeta[] {
 function listRunsHandler(c: Context): Response {
   // 자율 사이클이 띄운 런(auto)은 사용자 기록 탭을 오염시키지 않게 제외(직접 /runs/:id 접근은 가능).
   const mem = [...RUNS.entries()]
-    .filter(([, h]) => !h.auto)
+    .filter(([, h]) => !h.auto && (h.brand ?? '') === activeBrandSlug())
     .map(([id, h]) => ({ run_id: id, topic: h.topic, status: h.status, total_cost: 0, created_ts: h.created_ts, active: h.status === 'running' }));
   const memIds = new Set(RUNS.keys());
   // 영속 세션 — 메모리에 없는 과거 런만 합쳐 재시작 후에도 기록 탭에 표출(자율런은 제외).
   const persisted = listPersistedRuns()
-    .filter((r) => !memIds.has(r.run_id) && !r.auto)
+    .filter((r) => !memIds.has(r.run_id) && !r.auto && (r.brand ?? '') === activeBrandSlug())
     .map((r) => ({ run_id: r.run_id, topic: r.topic, status: r.status, total_cost: 0, created_ts: r.created_ts, active: false }));
   const runs = [...mem, ...persisted].sort((a, b) => (b.created_ts || '').localeCompare(a.created_ts || ''));
   return c.json({ runs });
@@ -424,6 +427,9 @@ app.post('/runs/:id/message', (c) => c.json({ ok: true }));
 // ============================================================
 // 콘텐츠 piece — 완전 자율 캘린더 저장소(크로스-런). 프론트는 REST 폴링으로 읽는다(UIState/fold 금지 — 스크럽 시 수치 변형 방지).
 // ============================================================
+/** 활성 브랜드의 자료만 통과 — 범용 모드(활성 없음)면 브랜드 태그 없는 자료만. 탭 전환의 핵심. */
+function brandMatch(x: { brand?: string }): boolean { return (x.brand ?? '') === activeBrandSlug(); }
+
 /** 파생 콘텐츠 요약(카드뉴스·숏폼) — 캘린더 배지·검토 미리보기·성과 컬럼용. 최신 1건씩. */
 interface DerivedSummary {
   cardnews?: { id: string; stage: string; slides?: number; running: boolean };
@@ -439,13 +445,13 @@ function derivedSummary(pieceId: string): DerivedSummary {
 }
 
 function piecesListHandler(c: Context): Response {
-  return c.json({ pieces: pieceStore().list().map((p) => ({ ...p, derived: derivedSummary(p.id) })) });
+  return c.json({ pieces: pieceStore().list().filter(brandMatch).map((p) => ({ ...p, derived: derivedSummary(p.id) })) });
 }
 async function pieceCreateHandler(c: Context): Promise<Response> {
   const body = await c.req.json<{ title?: string; keyword?: string; subNiche?: string }>().catch(() => ({}) as { title?: string; keyword?: string; subNiche?: string });
   const title = (body.title ?? '').trim();
   if (!title) return c.json({ error: 'title 이 필요합니다' }, 400);
-  return c.json({ piece: pieceStore().create({ title, keyword: body.keyword, subNiche: body.subNiche }) });
+  return c.json({ piece: pieceStore().create({ title, keyword: body.keyword, subNiche: body.subNiche, brand: activeBrandSlug() || undefined }) });
 }
 function pieceGetHandler(c: Context): Response {
   const p = pieceStore().get(c.req.param('id') ?? '');
@@ -564,6 +570,7 @@ function launchCardNewsRun(cardId: string, topic: string, opts: { sourceBody?: s
   const handle: RunHandle = {
     status: 'running', abort, topic: `카드뉴스: ${topic}`.slice(0, 80), created_ts: new Date().toISOString(), auto: false,
   };
+  handle.brand = activeBrandSlug() || undefined;
   RUNS.set(id, handle);
   evictRuns();
   bus.emit(EventType.run_started, { topic: handle.topic });
@@ -628,7 +635,7 @@ async function cardNewsFromPieceHandler(c: Context): Promise<Response> {
 }
 
 function cardNewsListHandler(c: Context): Response {
-  return c.json({ cards: cardNewsStore().list().map((x) => ({ ...x, running: isCardNewsRunning(x.id) })) });
+  return c.json({ cards: cardNewsStore().list().filter(brandMatch).map((x) => ({ ...x, running: isCardNewsRunning(x.id) })) });
 }
 function cardNewsGetHandler(c: Context): Response {
   const x = cardNewsStore().get(c.req.param('id') ?? '');
@@ -712,6 +719,7 @@ function launchShortsRun(shortsId: string, topic: string, opts: { sourceBody?: s
   const handle: RunHandle = {
     status: 'running', abort, topic: `숏폼: ${topic}`.slice(0, 80), created_ts: new Date().toISOString(), auto: false,
   };
+  handle.brand = activeBrandSlug() || undefined;
   RUNS.set(id, handle);
   evictRuns();
   bus.emit(EventType.run_started, { topic: handle.topic });
@@ -778,7 +786,7 @@ async function shortsFromPieceHandler(c: Context): Promise<Response> {
 }
 
 function shortsListHandler(c: Context): Response {
-  return c.json({ shorts: shortsStore().list().map((x) => ({ ...x, running: isShortsRunning(x.id) })) });
+  return c.json({ shorts: shortsStore().list().filter(brandMatch).map((x) => ({ ...x, running: isShortsRunning(x.id) })) });
 }
 function shortsGetHandler(c: Context): Response {
   const x = shortsStore().get(c.req.param('id') ?? '');
@@ -1176,6 +1184,7 @@ app.get('/api/pieces/:id/collect-metrics', pieceCollectStatusHandler);
 // 성과 집계 — 발행/측정된 piece 들의 최신 성과치 + 전략(강화 EWMA) 요약을 한 번에 반환(성과 대시보드용).
 function performanceHandler(c: Context): Response {
   const rows = pieceStore().list()
+    .filter(brandMatch)
     .filter((p) => !!p.publishedUrl || ['published', 'measured', 'reflected'].includes(p.stage))
     .map((p) => {
       const m = latestMetrics(p.id);
@@ -1189,7 +1198,7 @@ function performanceHandler(c: Context): Response {
       };
     })
     .sort((a, b) => (b.views ?? -1) - (a.views ?? -1));
-  const s = readStrategy();
+  const s = readStrategy(activeBrandSlug()); // 활성 브랜드의 강화 학습만 표시
   const measured = rows.filter((r) => r.views != null);
   return c.json({
     strategy: { winners: s.winners.slice(0, 20), subNiches: s.subNiches, measuredPieces: s.measuredPieces },
@@ -1215,26 +1224,14 @@ setCollector({
 // LLM 상태 — 프론트 계약(/llm) + 자체 UI(/api/llm)
 // ============================================================
 async function llmStatusPayload(): Promise<Record<string, unknown>> {
-  const persisted = getLlmSetting(); // 영속된 사용자 선택(없으면 CONFIG 기본)
-  const claude = isClaudeBackend();
-  const models = claude ? [] : await ollama.listModels();
-  const loaded = claude ? [] : await ollama.loaded();
-  const assignment = claude ? resolveAssignment() : (models.length ? autoAssignModels(models, undefined, tierOverrides()) : null);
+  // Claude 단일 백엔드(Ollama 제거 — 2026-07-06). 프론트 계약 키는 유지하되 로컬 필드는 빈 값.
+  const assignment = resolveAssignment();
   return {
-    setting: {
-      backend: persisted.backend || CONFIG.backend,
-      // 영속된 선택 우선 → 새로고침해도 사용자가 고른 모델이 유지.
-      local_model: persisted.localModel || (claude ? '' : (assignment?.standard || CONFIG.localModel || (models[0]?.name ?? ''))),
-    },
-    backends: [
-      { id: 'claude', label: 'Claude 클라우드', available: claude },
-      { id: 'local', label: '로컬 (Ollama)', available: models.length > 0 },
-    ],
-    // 클라우드 tier→모델 맵(claude 백엔드) — UI 표시용.
-    cloud_tiers: claude && assignment ? { micro: assignment.micro, standard: assignment.standard, heavy: assignment.heavy } : undefined,
-    local_models: models.map((m) => m.name),
-    local_loaded: loaded.map((l) => ({ name: l.name, expires_at: l.expiresAt, size_vram: Math.round(l.sizeVramGB * 1e9), context_length: l.contextLength })),
-    local_base_url: CONFIG.ollamaBaseUrl,
+    setting: { backend: 'claude', local_model: '' },
+    backends: [{ id: 'claude', label: 'Claude 클라우드', available: true }],
+    cloud_tiers: { micro: assignment.micro, standard: assignment.standard, heavy: assignment.heavy },
+    local_models: [],
+    local_loaded: [],
   };
 }
 app.get('/llm', async (c) => c.json(await llmStatusPayload()));
@@ -1245,12 +1242,7 @@ app.post('/llm', async (c) => {
   return c.json(await llmStatusPayload());
 });
 app.get('/api/llm', async (c) => {
-  const claude = isClaudeBackend();
-  const version = claude ? 'claude' : await ollama.version();
-  const models = claude ? [] : await ollama.listModels();
-  const loaded = claude ? [] : await ollama.loaded();
-  const assignment = claude ? resolveAssignment() : (models.length ? autoAssignModels(models, undefined, tierOverrides()) : null);
-  return c.json({ backend: getLlmSetting().backend || CONFIG.backend, ollama_url: CONFIG.ollamaBaseUrl, version, available: claude || !!version, specs: claude ? 'Claude 클라우드' : getSystemSpecs().summary, models, loaded, assignment });
+  return c.json({ backend: 'claude', version: 'claude', available: true, specs: 'Claude 클라우드', models: [], loaded: [], assignment: resolveAssignment() });
 });
 // 런타임 품질 설정(토론·추론) — UI 토글로 바꾸면 다음 런부터 즉시 반영(서버 재시작 불필요).
 app.get('/runsettings', (c) => c.json(getRunSettings()));
@@ -1264,7 +1256,7 @@ app.post('/api/runsettings', async (c) => {
   return c.json(setRunSettings({ orgDebateRounds: body.orgDebateRounds, agentThinking: body.agentThinking }));
 });
 
-app.get('/api/health', (c) => c.json({ ok: true, backend: CONFIG.backend }));
+app.get('/api/health', (c) => c.json({ ok: true, backend: 'claude' }));
 app.get('/healthz', (c) => c.json({ ok: true }));
 
 // 자율 사이클 상태 — 프론트 대시보드의 '🤖 자율' 칩용. enabled 면 주기, active 면 자율 런 진행 중.
@@ -1304,6 +1296,74 @@ function roleInfo(r: RoleDef, level: string, team: string | null) {
     is_critic: r.isCritic, autonomy: effectiveAutonomy(r),
   };
 }
+// 브랜드(고객사) 프로필 — 이 스튜디오가 '누구를 위해' 만드는지. 저장 즉시 다음 런부터 전 파이프라인 주입.
+app.get('/brands', (c) => c.json({ active: activeBrandSlug() || null, brands: listBrands() }));
+app.post('/brands/activate', async (c) => {
+  const body = await c.req.json().catch(() => ({} as { slug?: string | null }));
+  try {
+    const b = activateBrand(body.slug ?? null);
+    console.log(`[브랜드] 전환 — ${b ? b.name : '범용 모드'}`);
+    return c.json({ active: activeBrandSlug() || null, brand: b });
+  } catch { return c.json({ error: '해당 브랜드를 찾을 수 없습니다' }, 404); }
+});
+/**
+ * 브랜드 자료 일괄 정리 — 영구 삭제가 아니라 data/.trash/brand-<slug>-<ts>/ 로 이동(복구 가능).
+ * 대상: 글(piece)+런 세션+성과 측정 이력, 카드뉴스·숏폼 산출물, 브랜드 태그 런, 위키·전략·제작 이력.
+ */
+function purgeBrandData(slug: string): { pieces: number; cards: number; shorts: number; runs: number } {
+  const trash = path.join(CONFIG.dataDir, '.trash', `brand-${slug}-${Date.now()}`);
+  const move = (src: string, sub: string): void => {
+    try {
+      if (!fs.existsSync(src)) return;
+      const dst = path.join(trash, sub);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.renameSync(src, dst);
+    } catch { /* 이동 실패 무해 — 잔여 파일은 수동 정리 */ }
+  };
+  const pieces = pieceStore().list().filter((x) => (x.brand ?? '') === slug);
+  for (const x of pieces) {
+    if (x.runId) move(path.join(CONFIG.sessionsDir, x.runId), path.join('sessions', x.runId));
+    move(path.join(CONFIG.dataDir, 'analytics', 'metrics', `piece_${x.id}.jsonl`), path.join('metrics', `piece_${x.id}.jsonl`));
+    pieceStore().remove(x.id);
+  }
+  const cards = cardNewsStore().list().filter((x) => (x.brand ?? '') === slug);
+  for (const x of cards) { move(path.join(CONFIG.dataDir, 'cardnews', x.id), path.join('cardnews', x.id)); cardNewsStore().remove(x.id); }
+  const sh = shortsStore().list().filter((x) => (x.brand ?? '') === slug);
+  for (const x of sh) { move(path.join(CONFIG.dataDir, 'shorts', x.id), path.join('shorts', x.id)); shortsStore().remove(x.id); }
+  const runs = listPersistedRuns().filter((r) => (r.brand ?? '') === slug);
+  for (const r of runs) { move(path.join(CONFIG.sessionsDir, r.run_id), path.join('sessions', r.run_id)); RUNS.delete(r.run_id); }
+  for (const [rid, h] of [...RUNS]) if ((h.brand ?? '') === slug && h.status !== 'running') RUNS.delete(rid);
+  move(path.join(path.dirname(CONFIG.wikiDir), `${path.basename(CONFIG.wikiDir)}-${slug}`), 'wiki');
+  move(path.join(CONFIG.dataDir, 'analytics', `strategy-${slug}.json`), `strategy-${slug}.json`);
+  move(path.join(CONFIG.dataDir, '_shared', `decisions-${slug}.md`), `decisions-${slug}.md`);
+  return { pieces: pieces.length, cards: cards.length, shorts: sh.length, runs: runs.length };
+}
+
+app.delete('/brands/:slug', (c) => {
+  const slug = c.req.param('slug') ?? '';
+  if (!isSafeBrandSlug(slug)) return c.json({ error: '무효한 슬러그' }, 400);
+  // 실행 중인 런·잡이 있는 브랜드는 삭제 거절 — 진행 중 산출물 디렉토리 이동으로 인한 잡 파손 방지.
+  const busy = [...RUNS.values()].some((h) => h.status === 'running' && (h.brand ?? '') === slug)
+    || cardNewsStore().list().some((x) => (x.brand ?? '') === slug && isCardNewsRunning(x.id))
+    || shortsStore().list().some((x) => (x.brand ?? '') === slug && isShortsRunning(x.id));
+  if (busy) return c.json({ error: '이 브랜드의 작업이 실행 중입니다 — 완료/취소 후 삭제하세요' }, 409);
+  try {
+    if (!deleteBrand(slug)) return c.json({ error: '해당 브랜드가 없습니다' }, 404);
+    const purged = purgeBrandData(slug);
+    console.log(`[브랜드] 삭제 — ${slug}: 글 ${purged.pieces}·카드뉴스 ${purged.cards}·숏폼 ${purged.shorts}·런 ${purged.runs} → data/.trash 이동 (활성: ${activeBrandSlug() || '범용 모드'})`);
+    return c.json({ ok: true, active: activeBrandSlug() || null, purged });
+  } catch { return c.json({ error: '무효한 슬러그' }, 400); }
+});
+app.get('/brand', (c) => c.json({ brand: getBrand() }));
+app.put('/brand', async (c) => {
+  const body = await c.req.json().catch(() => null) as Partial<BrandProfile> | null;
+  const b = normalizeBrand(body);
+  if (!b) return c.json({ error: '업체명(name)은 필수입니다' }, 400);
+  saveBrand(b);
+  console.log(`[브랜드] 프로필 저장 — ${b.name} (제품 ${b.products.length}종)`);
+  return c.json({ brand: getBrand() });
+});
+
 app.get('/company', (c) => {
   const co = getCompany();
   return c.json({
@@ -1464,19 +1524,13 @@ function parseN(c: Context, def = 6): number {
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : def;
 }
 app.post('/wiki/maintain', async (c) => {
-  const claude = isClaudeBackend();
-  const models = claude ? [] : await ollama.listModels();
-  if (!claude && !models.length) return c.json({ error: 'no local models' }, 503);
-  const micro = claude ? resolveAssignment().micro : autoAssignModels(models).micro;
+  const micro = resolveAssignment().micro;
   const r = await llmWiki().maintain(micro, { maxFill: parseN(c), signal: c.req.raw.signal });
   return c.json(r);
 });
 // 모순 감사 — 토픽 겹치는 페이지 쌍을 LLM 비교(?n=쌍수, ?resolve=1 이면 해소 노트 기록)
 app.post('/wiki/audit', async (c) => {
-  const claude = isClaudeBackend();
-  const models = claude ? [] : await ollama.listModels();
-  if (!claude && !models.length) return c.json({ error: 'no local models' }, 503);
-  const micro = claude ? resolveAssignment().micro : autoAssignModels(models).micro;
+  const micro = resolveAssignment().micro;
   const r = await llmWiki().findContradictions(micro, { maxChecks: parseN(c), resolve: c.req.query('resolve') === '1', signal: c.req.raw.signal });
   return c.json(r);
 });
@@ -1488,12 +1542,9 @@ function loadReingestDone(): Set<string> {
 }
 app.post('/wiki/reingest', async (c) => {
   if (reingestState.running) return c.json({ ok: false, error: '이미 진행 중', total: reingestState.total, done: reingestState.done });
-  const models = await ollama.listModels();
-  if (!models.length) return c.json({ error: 'no local models' }, 503);
-  // ?model= 으로 ingest 모델 지정(예: gemma4:12b). 미지정/미설치면 micro(소형) 자동.
-  const installed = new Set(models.map((m) => m.name));
+  // ?model= 으로 ingest 모델 지정. 미지정이면 micro(소형) 자동.
   const reqModel = (c.req.query('model') ?? '').trim();
-  const model = reqModel && installed.has(reqModel) ? reqModel : autoAssignModels(models).micro;
+  const model = reqModel || resolveAssignment().micro;
   const w = llmWiki();
   // 진행 영속 — 재기동 후엔 남은 것만(reset=1 이면 처음부터). 매 페이지 완료 시 done 기록.
   const done = c.req.query('reset') === '1' ? new Set<string>() : loadReingestDone();
@@ -1515,12 +1566,9 @@ app.get('/wiki/reingest_status', (c) => c.json(reingestState));
 const reclassifyState = { total: 0, done: 0, running: false, model: '' };
 app.post('/sources/reclassify', async (c) => {
   if (reclassifyState.running) return c.json({ ok: false, error: '이미 진행 중', total: reclassifyState.total, done: reclassifyState.done });
-  const models = await ollama.listModels();
-  if (!models.length) return c.json({ error: 'no local models' }, 503);
-  // ?model= 으로 분류 모델 지정. 미지정/미설치면 standard(분류는 standard 슬롯 — /sources 와 일관).
-  const installed = new Set(models.map((m) => m.name));
+  // ?model= 으로 분류 모델 지정. 미지정이면 standard(분류는 standard 슬롯 — /sources 와 일관).
   const reqModel = (c.req.query('model') ?? '').trim();
-  const model = reqModel && installed.has(reqModel) ? reqModel : autoAssignModels(models).standard;
+  const model = reqModel || resolveAssignment().standard;
   const w = llmWiki();
   // 대상: source 페이지 중 아직 귀속 안 된 것(classify_status 가 done+assigned 아님). reset=1 이면 전부 재분류.
   const reset = c.req.query('reset') === '1';
@@ -1557,12 +1605,9 @@ const reprocessState = {
 };
 app.post('/sources/reprocess_raw', async (c) => {
   if (reprocessState.running) return c.json({ ok: false, error: '이미 진행 중', ...reprocessState });
-  const models = await ollama.listModels();
-  if (!models.length) return c.json({ error: 'no local models' }, 503);
-  const installed = new Set(models.map((m) => m.name));
   const reqModel = (c.req.query('model') ?? '').trim();
-  const model = reqModel && installed.has(reqModel) ? reqModel : autoAssignModels(models).standard;
-  const imodel = autoAssignModels(models).micro || model;
+  const model = reqModel || resolveAssignment().standard;
+  const imodel = resolveAssignment().micro || model;
   const reset = c.req.query('reset') === '1';
   const doIngest = c.req.query('ingest') !== '0';
   const limit = Math.max(0, Number(c.req.query('limit') ?? '0') | 0);
@@ -1752,15 +1797,11 @@ app.post('/mcp/:id', async (c) => c.json({ ok: false, error: '위키·웹검색�
 
 // --- 외부 자료 업로드 → 멀티포맷 추출 → 위키 적재 + LLM 자동 직원귀속 분류 ---
 async function classifyModel(): Promise<string> {
-  if (isClaudeBackend()) return resolveAssignment().standard;
-  const models = await ollama.listModels();
-  return models.length ? autoAssignModels(models).standard : '';
+  return resolveAssignment().standard;
 }
-// ingest(엔티티 추출)는 micro 모델 — classify(standard)와 단일 슬롯 경합 시 빠르게 처리(finalize 와 일관).
+// ingest(엔티티 추출)는 micro 모델 — classify(standard)보다 빠르게 처리(finalize 와 일관).
 async function ingestModel(): Promise<string> {
-  if (isClaudeBackend()) return resolveAssignment().micro;
-  const models = await ollama.listModels();
-  return models.length ? autoAssignModels(models).micro : '';
+  return resolveAssignment().micro;
 }
 app.post('/sources', async (c) => {
   const body = await c.req.parseBody({ all: true });
@@ -1882,6 +1923,7 @@ async function reviseHandler(c: Context): Promise<Response> {
   const bus = createBus(id);
   const abort = new AbortController();
   const handle: RunHandle = { status: 'running', abort, topic: parent.topic, created_ts: new Date().toISOString(), version };
+  handle.brand = activeBrandSlug() || undefined;
   RUNS.set(id, handle);
   evictRuns();
 
@@ -1962,11 +2004,7 @@ app.post('/api/voice/settings', voiceSettingsHandler);
 
 // --- 자비스 대화 ---
 const jarvisHandler = async (c: Context): Promise<Response> => {
-  // 가용성 — Claude 백엔드는 항상 가용(호출 시 인증 오류는 그때 표면화). 로컬만 설치 모델 확인.
-  if (!isClaudeBackend()) {
-    const models = await ollama.listModels().catch(() => []);
-    if (!models.length) return c.json({ error: 'LLM 미가용(로컬 모델 없음)' }, 503);
-  }
+  // 가용성 — Claude 백엔드는 항상 가용(호출 시 인증 오류는 그때 표면화).
   const body = await c.req.json<{ messages?: { role: string; content: string }[] }>().catch(() => ({} as { messages?: { role: string; content: string }[] }));
   const messages = (body.messages ?? []).filter((m) => m && typeof m.content === 'string');
   if (!messages.length) return c.json({ error: '메시지 없음' }, 400);
@@ -2029,7 +2067,7 @@ async function pickAutoWork(signal?: AbortSignal): Promise<Piece | null> {
   if (!canGenerateNew(pieces)) return null;  // 케이던스/백로그 초과 → 신규 생성 보류.
   const idea = await proposeContentIdeas(signal);
   if (!idea) return null;
-  return pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche });
+  return pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche, brand: activeBrandSlug() || undefined });
 }
 
 const stopAutoCycle = startAutoCycle<Piece>({
@@ -2095,7 +2133,7 @@ void stopPerfSync;
 const port = CONFIG.port;
 if (!process.env.VITEST) serve({ fetch: app.fetch, hostname: CONFIG.host, port }, (info) => {
   // eslint-disable-next-line no-console
-  console.log(`[ai-contents-studio] http://${CONFIG.host}:${info.port}  (backend=${CONFIG.backend}, ollama=${CONFIG.ollamaBaseUrl})  · React=/ · lite=/lite`);
+  console.log(`[ai-contents-studio] http://${CONFIG.host}:${info.port}  (backend=claude)  · React=/ · lite=/lite`);
 });
 
 export { app };

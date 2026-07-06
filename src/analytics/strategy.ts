@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
+import { isSafeBrandSlug } from '../content/brand';
 
 export interface KeywordScore { keyword: string; score: number; samples: number; updatedAt: string; }
 export interface Strategy {
@@ -19,11 +20,16 @@ const EWMA_ALPHA = 0.3;      // 최신 성과 반영률(과거 0.7 유지) — �
 const COLD_START_N = 12;     // 측정 piece 이 이만큼 쌓이기 전까진 탐색(다양화) 우선.
 const MAX_WINNERS = 50;
 
-function strategyFile(): string { return path.join(CONFIG.dataDir, 'analytics', 'strategy.json'); }
+// 브랜드(고객사)별 전략 분리 — slug 없으면 종전 파일(범용 모드 하위 호환).
+// brand 는 파일명에 들어가므로 안전 슬러그만 통과(손편집된 piece.brand 등의 경로 탈출 차단).
+function strategyFile(brand = ''): string {
+  if (brand && !isSafeBrandSlug(brand)) throw new Error(`무효한 브랜드 슬러그: ${brand}`);
+  return path.join(CONFIG.dataDir, 'analytics', brand ? `strategy-${brand}.json` : 'strategy.json');
+}
 
-export function readStrategy(): Strategy {
+export function readStrategy(brand = ''): Strategy {
   try {
-    const s = JSON.parse(fs.readFileSync(strategyFile(), 'utf-8')) as Partial<Strategy>;
+    const s = JSON.parse(fs.readFileSync(strategyFile(brand), 'utf-8')) as Partial<Strategy>;
     return {
       winners: Array.isArray(s.winners) ? s.winners : [],
       subNiches: (s.subNiches && typeof s.subNiches === 'object') ? s.subNiches : {},
@@ -33,12 +39,13 @@ export function readStrategy(): Strategy {
   } catch { return { winners: [], subNiches: {}, measuredPieces: 0, updatedAt: '' }; }
 }
 
-function writeStrategy(s: Strategy): void {
+function writeStrategy(s: Strategy, brand = ''): void {
   try {
-    fs.mkdirSync(path.dirname(strategyFile()), { recursive: true });
-    const tmp = `${strategyFile()}.tmp`;
+    const file = strategyFile(brand);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(s, null, 2), 'utf-8');
-    fs.renameSync(tmp, strategyFile()); // 원자적 교체.
+    fs.renameSync(tmp, file); // 원자적 교체.
   } catch { /* 영속 실패 무해 */ }
 }
 
@@ -46,8 +53,8 @@ function writeStrategy(s: Strategy): void {
  * 성과 신호로 EWMA 갱신 — 키워드/서브니치 1차 귀속(작가 등 에이전트 2차·약: reinforce 에서 별도).
  * measuredPieces 증가(incMeasured)는 **piece 당 정확히 1회**만 호출자가 보장(멱등 — reinforce stage 게이트).
  */
-export function updateStrategy(input: { keyword?: string; subNiche?: string; signal: number; incMeasured?: boolean }): Strategy {
-  const s = readStrategy();
+export function updateStrategy(input: { keyword?: string; subNiche?: string; signal: number; incMeasured?: boolean; brand?: string }): Strategy {
+  const s = readStrategy(input.brand ?? '');
   const now = new Date().toISOString();
   const kw = input.keyword?.trim();
   if (kw) {
@@ -64,9 +71,9 @@ export function updateStrategy(input: { keyword?: string; subNiche?: string; sig
   }
   if (input.incMeasured) s.measuredPieces += 1;
   s.updatedAt = now;
-  writeStrategy(s);
+  writeStrategy(s, input.brand ?? '');
   return s;
 }
 
 /** 콜드스타트 여부 — 측정 piece 이 임계 미만이면 탐색(다양화) 국면. */
-export function isColdStart(): boolean { return readStrategy().measuredPieces < COLD_START_N; }
+export function isColdStart(brand = ''): boolean { return readStrategy(brand).measuredPieces < COLD_START_N; }

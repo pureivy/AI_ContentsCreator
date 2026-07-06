@@ -1,16 +1,16 @@
 /**
- * 런 공통 준비 — run_started/company_started/모델 배정/웜업/분해. debate·org 모드가 공유.
+ * 런 공통 준비 — run_started/company_started/모델 배정/분해. debate·org 모드가 공유.
+ * (Ollama 조회·웜업·로컬 자동배정은 백엔드 제거와 함께 삭제 — 2026-07-06)
  */
 import { CONFIG } from '../config';
-import { ollama } from '../llm/ollama';
-import { getSystemSpecs, autoAssignModels, estimateModelMemoryGB } from '../llm/models';
 import type { ModelAssignment } from '../llm/models';
-import { tierOverrides, resolveAssignment, isClaudeBackend } from '../llm/setting';
+import { resolveAssignment } from '../llm/setting';
 import { EventType } from '../events/types';
 import type { EventBus } from '../events/bus';
 import type { CompanyDef } from '../agents/company';
 import { microJSON } from './agent';
 import { asString } from '../util/str';
+import { brandContext } from '../content/brand';
 
 export interface SubProblem {
   id: string;
@@ -40,7 +40,8 @@ async function decompose(microModel: string, topic: string, signal?: AbortSignal
   const parsed = await microJSON<{ subproblems?: Array<{ id?: string; text?: string }> }>(
     microModel,
     DECOMPOSE_SYSTEM,
-    `주제: ${topic}\n\n위 지침에 따라 유형을 먼저 식별한 뒤 분해하라.\n형식: {"subproblems":[{"id":"sp1","text":"..."}]}`,
+    // 리서치 분해도 microJSON 직행 — 브랜드 설정 시 제품·타겟 관점의 하위 과제가 나오게 컨텍스트 주입.
+    `${brandContext() ? `${brandContext()}\n\n` : ''}주제: ${topic}\n\n위 지침에 따라 유형을 먼저 식별한 뒤 분해하라.\n형식: {"subproblems":[{"id":"sp1","text":"..."}]}`,
     { signal, maxOutputTokens: 700 },
   );
   const subs = (parsed?.subproblems ?? [])
@@ -63,41 +64,21 @@ export async function prepareRun(
     topic,
     // 직원 지명(단독) 런이면 그 직원 id — 프론트 오피스뷰의 솔로 안무 + 가짜 팀간회의 억제 신호. 전사/토론 런은 undefined.
     directed_agent_id: directedAgentId,
-    config: { backend: CONFIG.backend, run_mode: CONFIG.runMode, concurrency: CONFIG.concurrency },
+    config: { backend: 'claude', run_mode: CONFIG.runMode, concurrency: CONFIG.concurrency },
   });
   bus.emit(EventType.company_started, { name: company.name, mission: company.mission });
 
-  const specs = getSystemSpecs();
-  const claude = isClaudeBackend();
-  let assign: ModelAssignment;
-  if (claude) {
-    // Claude 백엔드: 고정 클라우드 티어맵. Ollama 조회·웜업·'모델 없음' 하드에러 브랜치를 건너뛴다.
-    assign = resolveAssignment();
-  } else {
-    const installed = await ollama.listModels();
-    if (installed.length === 0) {
-      bus.emit(EventType.error, { message: 'Ollama 에서 모델을 찾지 못했습니다. `ollama serve` 와 모델 설치를 확인하세요.' });
-      bus.emit(EventType.run_done, { status: 'error' });
-      return null;
-    }
-    // 웹 UI(LLM 설정)에서 고른 로컬 모델 우선. env LOCAL_LLM_MODEL 이 박혀 있으면 그것이 최우선(단일 모델 강제).
-    assign = CONFIG.localModel
-      ? { micro: CONFIG.localModel, standard: CONFIG.localModel, heavy: CONFIG.localModel, reason: `고정 모델 ${CONFIG.localModel}` }
-      : autoAssignModels(installed, specs, tierOverrides());
-  }
-  // 모델 배정 가시화 — tier별 모델 + 예측 VRAM(GB, 로컬만 의미). claude 는 0.
-  const vram = (m: string): number => (claude ? 0 : Math.round(estimateModelMemoryGB(m) * 10) / 10);
+  // Claude 고정 클라우드 티어맵.
+  const assign: ModelAssignment = resolveAssignment();
   const modelMap = {
-    micro: { model: assign.micro, vram_gb: vram(assign.micro) },
-    standard: { model: assign.standard, vram_gb: vram(assign.standard) },
-    heavy: { model: assign.heavy, vram_gb: vram(assign.heavy) },
+    micro: { model: assign.micro, vram_gb: 0 },
+    standard: { model: assign.standard, vram_gb: 0 },
+    heavy: { model: assign.heavy, vram_gb: 0 },
   };
   bus.emit(EventType.log, {
     message: `모델 배정 — ${assign.reason}`,
-    specs: claude ? 'Claude 클라우드 백엔드' : specs.summary, models: modelMap, budget_gb: claude ? 0 : specs.safeModelBudgetGB,
+    specs: 'Claude 클라우드 백엔드', models: modelMap, budget_gb: 0,
   });
-
-  if (!claude) void ollama.warm(assign.standard);
 
   // 콘텐츠 리서치 분해 — 구조적 단발이라 micro(haiku)로 충분·저비용. (리비전 런은 생략)
   const subproblems = skipDecompose ? [] : await decompose(assign.micro, topic, signal);

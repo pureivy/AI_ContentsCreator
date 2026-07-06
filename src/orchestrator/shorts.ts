@@ -18,6 +18,7 @@ import { stripEmoji } from '../output/render';
 import { shortsStore } from '../content/shorts';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { renderShortsVideo } from '../tools/shortsRender';
+import { brandContext } from '../content/brand';
 import type { ShortsScene } from '../tools/shortsRender';
 import type { EventBus } from '../events/bus';
 
@@ -29,7 +30,7 @@ const PRESET_ALIAS: Record<string, string> = {
   '사진풍': 'photorealistic', '수채화풍': 'watercolor', '플랫 일러스트': 'flat_design', '만화풍': 'manhwa',
 };
 
-const stdModel = (): string => (CONFIG.backend === 'local' ? CONFIG.tierModels.standard : CONFIG.cloudTierModels.standard);
+const stdModel = (): string => CONFIG.cloudTierModels.standard;
 
 interface Plan {
   title: string;
@@ -55,7 +56,9 @@ async function callRoleJSON<T>(
     });
     return extractFirstJson<T>(out.text);
   }
-  return microJSON<T>(stdModel(), role?.systemPrompt || fallbackSystem, task, { maxOutputTokens, signal: io.signal });
+  // microJSON 폴백은 buildSystemPrompt 를 안 지나므로 브랜드 컨텍스트를 system 에 직접 합성.
+  const sys = [role?.systemPrompt || fallbackSystem, brandContext()].filter(Boolean).join('\n\n');
+  return microJSON<T>(stdModel(), sys, task, { maxOutputTokens, signal: io.signal });
 }
 
 /** 내레이션 위생 — 이모지·괄호 지문 제거(TTS 가 읽어버림), 길이 캡. */

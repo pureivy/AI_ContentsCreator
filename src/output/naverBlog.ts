@@ -9,6 +9,7 @@ import { seedKeyword } from '../grounding/naver_common';
 import { scoreSeo } from './seo';
 import { renderMarkdown, renderHtml, stripEmoji } from './render';
 import { registerFormatter } from './formatter';
+import { brandContext } from '../content/brand';
 import type { AssetBundle, BlogDraft, FormatterInput } from './formatter';
 
 const PACK_SYSTEM =
@@ -37,6 +38,8 @@ export async function packageNaverBlog(input: FormatterInput): Promise<AssetBund
     meta = await microJSON(
       model, PACK_SYSTEM,
       `[주제] ${topic}\n\n[본문]\n${body.slice(0, 6000)}\n` +
+      // SEO 포장도 microJSON 직행 — 브랜드 설정 시 태그·메타에 브랜드 연관 키워드가 자연스럽게 실리게.
+      (brandContext() ? `\n${brandContext()}\n` : '') +
       (pinnedKeyword ? `\n[핵심 키워드(고정)] ${pinnedKeyword} — primaryKeyword 는 정확히 이 값으로 쓰고, titles 5개 중 4개 이상과 meta 에 이 표기를 그대로 포함하라.\n` : '') +
       (serpText ? `\n[네이버 상위 노출 제목(실측)]\n${serpText.slice(0, 800)}\n` : '') +
       `${researchBrief ? `\n[리서치·SEO 브리프]\n${researchBrief.slice(0, 1500)}` : ''}\n\n` +

@@ -7,9 +7,9 @@
  * - runAgent: 전문가/CEO 한 턴(spawn 이벤트 → 토큰 스트림 → 완성 메시지 → llm_metric).
  * - microCall/microJSON: 분해·배정·수렴판정·분류 같은 구조적 단발 호출(작은 모델, 비스트리밍).
  */
-import { CONFIG, localBrevityNote } from '../config';
+import { CONFIG } from '../config';
 import { llm } from '../llm/client';
-import type { ChatMessage, ChatResult } from '../llm/ollama';
+import type { ChatMessage, ChatResult } from '../llm/types';
 import { EventType } from '../events/types';
 import type { EventBus } from '../events/bus';
 import type { RoleDef } from '../agents/company';
@@ -19,6 +19,7 @@ import { isAbort } from '../util/abort';
 import { llmWiki } from '../wiki/llmwiki';
 import { webSearch } from '../tools/web_search';
 import { personaExtra, effectiveTools, effectiveAutonomy, appendActivity, appendKnowledge } from '../agents/workspace';
+import { brandContext } from '../content/brand';
 import { connectors } from '../grounding';
 import { approvalStore } from '../approvals/store';
 import { parseToolCalls, toolsForAutonomy, toolInstructions, stripToolTags, WRITE_TOOLS, type ToolCall } from './tools';
@@ -33,25 +34,30 @@ const VERIFIED_NOTE =
 /** 역할 → 최소 시스템 프롬프트. 길게 쓰지 않는다(프리필 절약이 목적).
  *  opts.brevity=false 면 로컬 간결지침(2000~4000자 상한)을 생략 — 최종 산출물(합성)처럼 충분한 분량이 필요한 단계용. */
 export function buildSystemPrompt(role: RoleDef, extra = '', opts: { brevity?: boolean } = {}): string {
-  const brev = opts.brevity === false ? '' : localBrevityNote();
+  // 로컬 간결지침(localBrevityNote)은 Ollama 백엔드 제거와 함께 삭제 — opts.brevity 는
+  // 호출부 호환을 위해 시그니처만 유지한다(Claude 는 분량을 프롬프트 규격으로 통제).
+  void opts;
   // 워크스페이스 진화(prompt.md·goal.md·skills) 주입 → 직원 편집이 런에 실제 반영.
   const tail = [extra, personaExtra(role.id)].filter(Boolean).join('\n\n');
   // 현재 시각(KST) 주입 — 에이전트가 '오늘'을 실제 날짜로 인지(학습시점 추측 방지).
   const dateNote = `오늘은 ${kstNowKo()} 입니다.`;
+  // 브랜드(고객사) 컨텍스트 — 설정 시 전 직원이 '누구를 위해' 만드는지 인지(미설정=빈 문자열, 기존 동작 불변).
+  const brandNote = brandContext();
   if (role.systemPrompt) {
     // company.yaml 의 풍부한 시스템 프롬프트 사용(실명·직책·기관 맥락 보존).
     const head = `당신은 "${role.name}"(${role.title})입니다.`;
-    return [head, dateNote, role.systemPrompt, tail].filter(Boolean).join('\n\n') + brev + VERIFIED_NOTE;
+    return [head, dateNote, brandNote, role.systemPrompt, tail].filter(Boolean).join('\n\n') + VERIFIED_NOTE;
   }
   const lines = [
     `당신은 "${role.name}" — ${role.title}.`,
     dateNote,
+    ...(brandNote ? [brandNote] : []),
     `전문 영역: ${role.specialty}.`,
   ];
   if (role.persona) lines.push(`태도/말투: ${role.persona}`);
   if (role.isCritic) lines.push('역할상 반드시 비판적으로 검토하고 약점·반례를 우선 제시하라.');
   if (tail) lines.push(tail);
-  return lines.join('\n') + brev + VERIFIED_NOTE;
+  return lines.join('\n') + VERIFIED_NOTE;
 }
 
 export interface AgentRunArgs {
