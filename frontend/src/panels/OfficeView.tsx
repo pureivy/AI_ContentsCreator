@@ -369,7 +369,12 @@ function layout(
       // A non-engaged member (idle, or STALE from a resumed run's earlier wave that died
       // mid-"thinking") reads as a plain idle avatar — never a leftover thinking ring/bubble.
       // 단독 런의 지명 팀원은 engaged 이벤트가 없어도 작업 중 — effStatus 승급으로 thinking 링.
-      const st = (isSolo(m) || engaged) ? effStatus(m) : "spawned";
+      // standby 팀(카드뉴스/숏폼)의 렌더링(팀 phase=integrate) — 코드가 이미지·영상을 생성하는
+      // 구간이라 위임(engaged) 웨이브가 없다. 스폰된 팀원을 작업 중으로 표시(working.ts와 1:1).
+      // solo 게이트: 단독 런은 isWorkingNow가 지명 직원 외 전원을 false로 보므로(조기 반환)
+      // 여기도 억제해야 1:1이 유지된다(현재 emit 조합상 도달 불가 — 방어).
+      const rendering = ph === "integrate" && !m.placeholder && !soloAgentId;
+      const st = (isSolo(m) || engaged) ? effStatus(m) : rendering ? "thinking" : "spawned";
       const slot = engaged ? ei++ : -1;
       const desk = { x: deskX, y: deskY };
 
@@ -389,6 +394,8 @@ function layout(
         else { bubble = "⏳ 대기"; thinking = false; }                            // 아직 차례 안 옴(직렬 대기/placeholder)
       } else if (engaged && ph === "decompose") {  // 팀장 분해 중 → 자기 자리에서 대기
         pos = desk; bubble = ""; thinking = false;
+      } else if (rendering) {                        // 카드뉴스 🎨 / 숏폼 🎬 — 산출물 렌더링 중
+        pos = desk; bubble = tid === "shorts" ? "🎬 렌더링 중" : "🎨 렌더링 중"; thinking = true;
       } else if (engaged && ph) {                    // idle 등 → 자기 자리
         pos = desk; bubble = statusText(m, running); thinking = st === "thinking";
       } else if (!engaged) {                         // 미선발(placeholder) → 자기 자리(free면 ambient가 덮음)
@@ -783,6 +790,9 @@ export default function OfficeView() {
         if (a.level === "lead" && !a.placeholder) continue;
         const memberEngaged = a.team ? (engaged[a.team] ?? []).includes(a.agent_id) : false;
         if (a.level === "member" && memberEngaged && MEMBER_WORK_PHASES.has(p)) continue;
+        // standby 팀(카드뉴스/숏폼) 렌더링(integrate) — 위임 웨이브 없이 스폰된 팀원이 렌더링 중
+        // (layout '렌더링 중' 버블과 1:1) → ambient 산책으로 떠돌지 않게 자리를 지킨다.
+        if (a.level === "member" && p === "integrate" && !a.placeholder && !soloAgentId) continue;
       }
       ids.add(id);
     }

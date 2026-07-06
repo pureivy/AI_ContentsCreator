@@ -107,7 +107,8 @@ export default function LiveNowStrip({ names }: { names: Record<string, string> 
         <div key={g.key} className="livenow-group">
           <div className="livenow-group-head">
             <b className="livenow-team">{g.title}</b>
-            <span className="livenow-badge">{PHASE_DOING[g.phase ?? ""] || "작업 중"}</span>
+            {/* 팀 스코프 integrate = standby 팀(카드뉴스/숏폼) 렌더링 — CEO 통합 문구와 구분. */}
+            <span className="livenow-badge">{(g.key !== "_ceo" && g.phase === "integrate" ? "렌더링 중" : PHASE_DOING[g.phase ?? ""]) || "작업 중"}</span>
             <span className="livenow-count">{g.members.length}명</span>
           </div>
           <div className="livenow-cards">
@@ -117,7 +118,9 @@ export default function LiveNowStrip({ names }: { names: Record<string, string> 
               const task = (a.subproblem_id ?? "").trim();
               // 팀장/CEO 는 phase 전용 라벨(분해·배정·진행 점검·검토) — 오피스뷰와 의미 일치.
               const isLead = a.level === "lead" || a.level === "ceo";
-              const phaseDoing = (isLead ? LEAD_PHASE_DOING[g.phase ?? ""] : PHASE_DOING[g.phase ?? ""]) || "작업 중";
+              const rendering = g.key !== "_ceo" && g.phase === "integrate"; // standby 팀 렌더링
+              const phaseDoing = rendering ? "렌더링 중"
+                : (isLead ? LEAD_PHASE_DOING[g.phase ?? ""] : PHASE_DOING[g.phase ?? ""]) || "작업 중";
               // 2줄 현황(직원명 제외, '무슨 일을 하는지'). 스트리밍이면 debateGist(무엇=headline
               // / 어떻게·왜=detail). detail이 비는 스트림(단독 지명·짧은 산출)에선 2번째 줄을
               // 배정 과제 → 단계 행동으로 폴백해 **항상 2줄**을 보장(1줄 회귀 방지).
@@ -131,6 +134,13 @@ export default function LiveNowStrip({ names }: { names: Record<string, string> 
                   const gi = debateGist(stream);
                   l2 = gi.headline && gi.headline !== l1 ? gi.headline : gi.detail;
                 }
+              } else if (rendering) {
+                // 렌더링 구간 팀원 — 지금 스트리밍 중이 아니라 직전 디자인 턴의 JSON 응답이
+                // 블록에 latch돼 있다(reducer는 run_done에서만 정리) → gist가 JSON 조각을
+                // 1줄 현황으로 뽑는다. 스트림·최근활동 대신 단계 라벨로 고정(오피스뷰
+                // '🎨/🎬 렌더링 중' 버블과 일치).
+                l1 = phaseDoing;
+                l2 = g.key === "shorts" ? "영상 합성 중" : "카드 이미지 생성 중";
               } else {
                 if (stream.trim()) {
                   const gi = debateGist(stream);

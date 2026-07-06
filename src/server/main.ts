@@ -2315,6 +2315,22 @@ if (CONFIG.performanceSyncTime) {
 }
 void stopPerfSync;
 
+// 부팅 복구 스윕 — 카드뉴스/숏폼 잡의 '진행 중'은 in-memory RUNNING 에만 있고 디스크에는
+// stage(planning/designing/rendering)만 남는다. 렌더링 도중 서버가 재시작되면(tsx watch 의
+// TS 편집 포함) 잡은 사라지는데 stage 는 그대로라 검토탭이 영구 "생성 중…"이 된다.
+// 새 프로세스엔 살아있는 잡이 없으므로 비종료 stage 는 전부 고아 — error 로 마감한다.
+if (!process.env.VITEST) {
+  const orphanErr = '서버 재시작으로 생성이 중단되었습니다 — 삭제 후 다시 만들어 주세요';
+  const orphanCards = cardNewsStore().list().filter((x) => x.stage !== 'ready' && x.stage !== 'error');
+  for (const x of orphanCards) cardNewsStore().update(x.id, { stage: 'error', error: orphanErr });
+  const orphanShorts = shortsStore().list().filter((x) => x.stage !== 'ready' && x.stage !== 'error');
+  for (const x of orphanShorts) shortsStore().update(x.id, { stage: 'error', error: orphanErr });
+  if (orphanCards.length || orphanShorts.length) {
+    // eslint-disable-next-line no-console
+    console.log(`[부팅 복구] 중단된 생성 잡 정리 — 카드뉴스 ${orphanCards.length}건 · 숏폼 ${orphanShorts.length}건 → 실패 처리`);
+  }
+}
+
 const port = CONFIG.port;
 if (!process.env.VITEST) serve({ fetch: app.fetch, hostname: CONFIG.host, port }, (info) => {
   // eslint-disable-next-line no-console
