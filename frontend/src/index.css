@@ -506,6 +506,16 @@ button.upload-retry:hover { background: var(--panel2); }
 .chat-input input:focus, .chat-input textarea:focus { outline: none; border-color: var(--line-focus); box-shadow: 0 0 0 3px rgba(151,71,255,0.28); }
 .chat-input .btn { padding: 9px 16px; white-space: nowrap; border-radius: 999px; }
 .chat-input .btn { margin-left: auto; }
+/* 첨부 이미지 썸네일 행 — textarea 위에 44px 정사각 썸네일 + 제거(×) 버튼 */
+.chat-attach-row { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+.chat-attach-thumb { position: relative; width: 44px; height: 44px; border-radius: var(--radius-8);
+  overflow: hidden; border: 1px solid var(--border); background: var(--bg); flex: none; }
+.chat-attach-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.chat-attach-thumb button { position: absolute; top: 1px; right: 1px; width: 16px; height: 16px;
+  border: none; border-radius: 50%; background: rgba(0,0,0,0.62); color: #fff; font-size: 11px;
+  line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0; }
+.chat-attach-thumb button:hover { background: var(--bg-danger); }
+
 /* 런 옵션 셀렉터(LLM·경로·예산) — 통일된 보조 pill. 입력+시작이 주 액션이므로
    muted 컬러·콤팩트 사이즈로 보조 위계. native <select> 이질감 제거(2026-06-15). */
 .chat-input .run-opt {

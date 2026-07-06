@@ -65,7 +65,7 @@ export async function startRun(
   onRunId: (runId: string) => void,
   getLastSeq: () => number,
   opts?: { agent?: string; path?: string;
-           budget?: number },
+           budget?: number; images?: string[] },
 ): Promise<RunHandle> {
   const res = await fetch("/runs", {
     method: "POST",
@@ -73,9 +73,11 @@ export async function startRun(
     // `agent` (a role id) routes to a single-employee directed run; omitted = full run.
     // `path` picks the 3-tier run path ("team"|"full"); omitted = server auto-recommend.
     // `budget` caps THIS run's spend in USD (0 = explicit unlimited); omitted = global default.
+    // `images` — /runs/attachments 로 업로드된 첨부 이미지 경로(멀티모달 주제 입력).
     body: JSON.stringify({
       topic,
       ...(opts?.agent ? { agent: opts.agent } : {}),
+      ...(opts?.images?.length ? { images: opts.images } : {}),
       ...(opts?.path ? { path: opts.path } : {}),
       ...(opts?.budget !== undefined ? { budget_usd: opts.budget } : {}),
     }),

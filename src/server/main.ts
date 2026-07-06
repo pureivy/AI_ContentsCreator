@@ -21,6 +21,7 @@ import { createBus, getBus, disposeBus } from '../events/bus';
 import type { EventBus } from '../events/bus';
 import { runId } from '../util/ids';
 import { startRun } from '../orchestrator/index';
+import { microCall } from '../orchestrator/agent';
 import { getCompany, reloadCompany, editRole, deleteRole, addTeam, renameTeam, deleteTeam, addMember } from '../agents/company-loader';
 import { rolesById } from '../agents/company';
 import type { RoleDef } from '../agents/company';
@@ -165,6 +166,8 @@ interface LaunchOpts {
   revise?: { baseBody: string; feedback: string };
   /** 핵심 타겟 키워드(piece.keyword) — 포장 primaryKeyword 고정(SEO 게이트·리비전 과녁 고정). */
   keyword?: string;
+  /** 첨부 이미지 경로(/runs/attachments 저장분) — 런 시작 전 vision 분석 결과를 주제에 병합. */
+  images?: string[];
 }
 
 // draft.json(6c)에서 piece 표시 메타 재로드 — 초안 asset 은 finalize 가 이미 디스크에 씀(메모리 의존 없음).
@@ -230,10 +233,19 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
   if (opts.auto) lastAutoRun = { ts: handle.created_ts, topic };
   evictRuns();
 
-  startRun(bus, {
-    topic, signal: abort.signal,
-    agentId: opts.agent, path: opts.path, budgetUsd: opts.budgetUsd, revise: opts.revise, keyword: opts.keyword,
-  })
+  // 첨부 이미지(멀티모달 주제) — 본 런 시작 전 vision 분석으로 관찰 텍스트를 만들어 주제에 병합.
+  // 텍스트 전용인 하위 전 단계(리서치·초안·검수)가 시각 정보를 공유한다. 분석 실패는 무해 — 원 주제로 진행.
+  const prepared = opts.images?.length
+    ? describeAttachedImages(topic, opts.images, bus, abort.signal)
+        .then((desc) => (desc ? `${topic}\n\n[첨부 이미지 분석]\n${desc}` : topic))
+        .catch(() => topic)
+    : Promise.resolve(topic);
+
+  prepared
+    .then((fullTopic) => startRun(bus, {
+      topic: fullTopic, signal: abort.signal,
+      agentId: opts.agent, path: opts.path, budgetUsd: opts.budgetUsd, revise: opts.revise, keyword: opts.keyword,
+    }))
     .then((outcome) => {
       handle.status = 'done';
       handle.deliverable = outcome.deliverable;
@@ -267,14 +279,59 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
   return id;
 }
 
+// ── 컴포저 멀티모달(이미지 첨부) ──
+// 업로드(POST /runs/attachments)가 저장 경로를 돌려주고, 클라이언트가 POST /runs 의 images 로 회신한다.
+const ATTACH_DIR = path.join(CONFIG.dataDir, 'attachments');
+
+async function attachmentsHandler(c: Context): Promise<Response> {
+  const body = await c.req.parseBody({ all: true });
+  const raw = body['images'];
+  const files = (Array.isArray(raw) ? raw : [raw]).filter((x): x is File => x instanceof File);
+  if (!files.length) return c.json({ error: '이미지 파일이 필요합니다' }, 400);
+  fs.mkdirSync(ATTACH_DIR, { recursive: true });
+  const paths: string[] = [];
+  for (const f of files.slice(0, 8)) {                       // claude CLI vision 상한(8장)과 일치
+    if (!f.type.startsWith('image/')) continue;
+    if (f.size > 10_000_000) continue;
+    const ext = (path.extname(f.name || '').toLowerCase() || '.png').slice(0, 8);
+    const name = `${Date.now()}-${createHash('sha1').update(`${f.name}:${f.size}:${paths.length}`).digest('hex').slice(0, 8)}${ext}`;
+    fs.writeFileSync(path.join(ATTACH_DIR, name), Buffer.from(await f.arrayBuffer()));
+    paths.push(path.join(ATTACH_DIR, name));
+  }
+  if (!paths.length) return c.json({ error: '저장 가능한 이미지가 없습니다(이미지 형식·10MB 이하만)' }, 400);
+  return c.json({ ok: true, paths });
+}
+
+// 런 시작 전 vision 사전 분석 — standard 모델이 Read 도구로 이미지를 직접 보고 관찰 사실을 서술.
+async function describeAttachedImages(topic: string, images: string[], bus: EventBus, signal: AbortSignal): Promise<string> {
+  const model = resolveAssignment().standard || resolveAssignment().micro;
+  if (!model) return '';
+  bus.emit(EventType.log, { message: `첨부 이미지 ${images.length}장 분석 중…` });
+  const out = await microCall(
+    model,
+    '너는 시각 자료 분석가다. 첨부 이미지에서 관찰되는 사실만 서술한다. 불확실한 내용은 "추정"으로 표시한다. 이모지 금지.',
+    `주제: ${topic}\n\n첨부 이미지 ${images.length}장을 각각 분석하라. 이미지마다 "- 이미지N:" 으로 시작해 (1) 무엇이 보이는지 (2) 식별 가능한 텍스트·수치 (3) 주제와의 연관성을 2~3문장으로 서술하라.`,
+    { maxOutputTokens: 900, signal, visionPaths: images },
+  );
+  bus.emit(EventType.log, { message: '첨부 이미지 분석 완료 — 주제에 병합' });
+  return out.trim();
+}
+
 async function startHandler(c: Context): Promise<Response> {
   const body = await c.req
-    .json<{ topic?: string; agent?: string; path?: string; budget_usd?: number }>()
-    .catch(() => ({}) as { topic?: string; agent?: string; path?: string; budget_usd?: number });
+    .json<{ topic?: string; agent?: string; path?: string; budget_usd?: number; images?: string[] }>()
+    .catch(() => ({}) as { topic?: string; agent?: string; path?: string; budget_usd?: number; images?: string[] });
   const topic = (body.topic ?? '').trim();
   if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
 
-  const id = launchRun(topic, { agent: body.agent, path: body.path, budgetUsd: body.budget_usd });
+  // 첨부 이미지 — /runs/attachments 가 저장한 경로만 신뢰(디렉토리 밖 경로 거부: 경로 주입 방지).
+  const images = (Array.isArray(body.images) ? body.images : [])
+    .filter((p): p is string => typeof p === 'string')
+    .map((p) => path.resolve(p))
+    .filter((p) => p.startsWith(ATTACH_DIR + path.sep) && fs.existsSync(p))
+    .slice(0, 8);
+
+  const id = launchRun(topic, { agent: body.agent, path: body.path, budgetUsd: body.budget_usd, ...(images.length ? { images } : {}) });
   return c.json({ run_id: id });
 }
 
@@ -415,6 +472,8 @@ function runLogHandler(c: Context): Response {
 
 app.post('/runs', startHandler);
 app.post('/api/runs', startHandler);
+app.post('/runs/attachments', attachmentsHandler);
+app.post('/api/runs/attachments', attachmentsHandler);
 app.get('/runs', listRunsHandler);
 app.get('/runs/eta', (c) => c.json({ sample: 0, stages: {}, total_sec: null, cost_usd: null })); // /runs/:id 보다 먼저
 app.get('/runs/:id/events', eventsHandler);

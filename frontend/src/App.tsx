@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "./store";
 import { startRun, resumeRun, watchRun, RunHandle } from "./transport/sse";
-import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, fetchEta, reviseRun, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, getVoices, setVoiceConversational, RunInfo, UploadFileResult, EtaStats, RunSettings } from "./api";
+import { fetchRuns, fetchRunLog, decideApproval, deleteRun, sendMessage, fetchApprovals, fetchCompany, uploadSources, uploadRunImages, fetchEta, reviseRun, fetchRunSettings, updateRunSettings, fetchAutonomyStatus, sttUpload, getVoices, setVoiceConversational, RunInfo, UploadFileResult, EtaStats, RunSettings } from "./api";
 import { ActivityItem, ApprovalItem, DebateMsg, UIState } from "./events/types";
 import AgentGraph from "./panels/AgentGraph";
 import OfficeView from "./panels/OfficeView";
@@ -347,6 +347,22 @@ export default function App() {
   const [runPath, setRunPath] = useState("");
   // 런별 예산 캡(USD). "" = 전역 기본 / "0" = 무제한 명시 / 그 외 = 캡.
   const [runBudget, setRunBudget] = useState("");
+  // 컴포저 이미지 첨부(멀티모달) — 시작 시 /runs/attachments 로 업로드해 경로를 런에 전달.
+  // objectURL 은 첨부 시 1회 생성·제거 시 revoke(렌더마다 생성하면 타이핑 중 누수).
+  const [topicImages, setTopicImages] = useState<Array<{ file: File; url: string }>>([]);
+  const topicImgInputRef = useRef<HTMLInputElement>(null);
+  const addTopicImages = (files: FileList | File[]) => {
+    const imgs = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    if (!imgs.length) return;
+    setTopicImages((prev) =>
+      [...prev, ...imgs.map((f) => ({ file: f, url: URL.createObjectURL(f) }))].slice(0, 8)); // Claude 비전 캡 8장
+  };
+  const removeTopicImage = (i: number) => {
+    setTopicImages((prev) => { const t = prev[i]; if (t) URL.revokeObjectURL(t.url); return prev.filter((_, j) => j !== i); });
+  };
+  const clearTopicImages = () => {
+    setTopicImages((prev) => { prev.forEach((t) => URL.revokeObjectURL(t.url)); return []; });
+  };
   const handleRef = useRef<RunHandle | null>(null);
   const submittingRef = useRef(false); // double-submit guard
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -695,6 +711,13 @@ export default function App() {
     setDirectedTarget(null);
     submittingRef.current = true;
     try {
+      // 첨부 이미지 업로드(새 런 시작 시에만) — 실패하면 시작을 중단하고 입력·첨부를 보존한다.
+      let images: string[] | undefined;
+      if (topicImages.length && currentStatus !== "running") {
+        const up = await uploadRunImages(topicImages.map((t) => t.file));
+        if (!up.ok) { window.alert(`이미지 업로드 실패: ${up.error || "알 수 없는 오류"}`); setChat(t); return; }
+        images = up.paths;
+      }
       if (directed) {
         // 직원 지명 → 그 직원 단독(필요 시 ask_colleague 협업) 런 시작.
         // 진행 중 런이 있으면 먼저 취소(고아 런·예산 누수·이벤트/seq 오염 방지).
@@ -706,8 +729,9 @@ export default function App() {
             (ev) => apply(ev),
             (rid) => setRunId(rid),
             () => useStore.getState().lastSeq,
-            { agent: directed.id },
+            { agent: directed.id, images },
           );
+          clearTopicImages();
         } catch (e) {
           window.alert(`런 시작 실패: ${(e as Error).message}`);
           clearToIdle();
@@ -724,8 +748,9 @@ export default function App() {
             (rid) => setRunId(rid),
             () => useStore.getState().lastSeq,
             { path: runPath || undefined,
-              budget: runBudget === "" ? undefined : Number(runBudget) },
+              budget: runBudget === "" ? undefined : Number(runBudget), images },
           );
+          clearTopicImages();
         } catch (e) {
           window.alert(`런 시작 실패: ${(e as Error).message}`);
           clearToIdle();
@@ -767,6 +792,16 @@ export default function App() {
             onClick={() => setDirectedTarget(null)}>×</button>
         </span>
       )}
+      {topicImages.length > 0 && (
+        <div className="chat-attach-row">
+          {topicImages.map((t, i) => (
+            <span key={t.url} className="chat-attach-thumb" title={t.file.name}>
+              <img src={t.url} alt={t.file.name} />
+              <button type="button" title="제거" onClick={() => removeTopicImage(i)}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
       <textarea
         rows={1}
         value={chat}
@@ -786,6 +821,10 @@ export default function App() {
           if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
           else if (e.key === "Backspace" && chat === "" && directedTarget) setDirectedTarget(null);
           // Shift+Enter → 기본 동작(줄바꿈)
+        }}
+        onPaste={(e) => {
+          // 클립보드 이미지 붙여넣기 → 첨부(스크린샷 워크플로). 파일이 있을 때만 기본 붙여넣기 취소.
+          if (e.clipboardData?.files?.length) { addTopicImages(e.clipboardData.files); e.preventDefault(); }
         }}
         placeholder={
           directedTarget
@@ -810,6 +849,16 @@ export default function App() {
         className={`run-opt-toggle ${convo ? "active" : ""}`}
         title="자비스 대화형 — 켜면 음성이 자비스에게 바로 전달되고 음성으로 답합니다"
         onClick={toggleConvo}>🗣️ 자비스 {convo ? "ON" : "OFF"}</button>
+      {/* 이미지 첨부(멀티모달) — 새 런에만. 붙여넣기(Cmd+V)로도 첨부된다. */}
+      {s.status !== "running" && (
+        <button type="button" className={`run-opt-toggle ${topicImages.length ? "active" : ""}`}
+          title="이미지 첨부 — 주제와 함께 분석되어 직원들에게 전달됩니다(붙여넣기도 가능, 최대 8장)"
+          onClick={() => topicImgInputRef.current?.click()}>
+          <Ico name="cards" size={11} /> 사진{topicImages.length ? ` ${topicImages.length}` : ""}
+        </button>
+      )}
+      <input ref={topicImgInputRef} type="file" accept="image/*" multiple style={{ display: "none" }}
+        onChange={(e) => { if (e.target.files) addTopicImages(e.target.files); e.target.value = ""; }} />
       {/* 품질 토글(토론·추론) — per-run 옵션이라 컴포저에 배치. type="button" 필수(form submit 방지). */}
       {s.status !== "running" && (
         <button type="button"

@@ -304,6 +304,24 @@ export async function retryClassify(refs: string[]): Promise<number | null> {
   }
 }
 
+// --- 컴포저 이미지 첨부(멀티모달) ---------------------------------------------
+// 이미지를 서버에 저장하고 경로를 받는다 — startRun opts.images 로 전달되어
+// 런 시작 시 비전 분석 블록으로 주제에 합류한다.
+export async function uploadRunImages(
+  files: File[],
+): Promise<{ ok: boolean; paths: string[]; error?: string }> {
+  const fd = new FormData();
+  for (const f of files) fd.append("images", f);
+  try {
+    const r = await fetch("/runs/attachments", { method: "POST", body: fd });
+    const j = (await r.json().catch(() => ({}))) as { paths?: string[]; error?: string };
+    if (!r.ok) return { ok: false, paths: [], error: j.error };
+    return { ok: true, paths: j.paths ?? [] };
+  } catch {
+    return { ok: false, paths: [], error: "network" };
+  }
+}
+
 // --- MCP 서버 관리 -----------------------------------------------------------
 export interface McpServer {
   id: string; name: string; icon: string; kind: string; desc: string;
