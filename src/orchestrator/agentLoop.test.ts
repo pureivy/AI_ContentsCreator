@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeAll } from 'vitest';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 let runAgent: any;
 let createBus: any;
-let ollama: any;
+let llm: any;
 
 const fakeResult = (text: string, model = 'fake') => ({
   text, model, promptEvalCount: 1, evalCount: 1, totalDurationMs: 1, loadDurationMs: 0, truncated: false, doneReason: 'stop',
@@ -30,7 +30,7 @@ beforeAll(async () => {
   process.env.AGENT_TOOL_LOOP = '1';
   process.env.AGENT_MAX_TOOL_CALLS = '3';
   process.env.WEB_SEARCH = 'false';
-  ({ ollama } = await import('../llm/ollama'));
+  ({ llm } = await import('../llm/client'));
   ({ runAgent } = await import('./agent'));
   ({ createBus } = await import('../events/bus'));
 });
@@ -38,7 +38,7 @@ beforeAll(async () => {
 describe('runAgent 능동 도구 루프(AGENT_TOOL_LOOP)', () => {
   it('모델이 <tool> 태그를 내면 도구를 실행·주입·재호출하고, 최종 답에서 태그를 제거한다', async () => {
     let n = 0;
-    const spy = vi.spyOn(ollama, 'chat').mockImplementation(async () => {
+    const spy = vi.spyOn(llm, 'chat').mockImplementation(async () => {
       n++;
       return fakeResult(n === 1 ? '<tool name="wiki_query">로컬 LLM 속도</tool>' : '최종 답변입니다. 자료를 반영했습니다.');
     });
@@ -57,7 +57,7 @@ describe('runAgent 능동 도구 루프(AGENT_TOOL_LOOP)', () => {
 
   it('autonomy 1(읽기 전용)에서는 쓰기 도구(save_note)를 실행하지 않는다(거버넌스 게이트)', async () => {
     let n = 0;
-    const spy = vi.spyOn(ollama, 'chat').mockImplementation(async () => {
+    const spy = vi.spyOn(llm, 'chat').mockImplementation(async () => {
       n++;
       return fakeResult(n === 1 ? '<tool name="save_note">중요 사실 저장</tool>' : '최종 답변.');
     });
@@ -69,7 +69,7 @@ describe('runAgent 능동 도구 루프(AGENT_TOOL_LOOP)', () => {
 
   it('turn0 본문 + 도구호출이 섞이면 turn0 본문이 최종 산출물에 보존된다(콘텐츠 유실 방지)', async () => {
     let n = 0;
-    const spy = vi.spyOn(ollama, 'chat').mockImplementation(async () => {
+    const spy = vi.spyOn(llm, 'chat').mockImplementation(async () => {
       n++;
       return fakeResult(n === 1 ? '핵심 분석: 로컬이 빠르다. <tool name="wiki_query">근거</tool>' : '추가로, 캐시가 중요하다.');
     });
@@ -82,7 +82,7 @@ describe('runAgent 능동 도구 루프(AGENT_TOOL_LOOP)', () => {
   });
 
   it('stage=synthesis 는 루프를 돌리지 않는다(단발 유지)', async () => {
-    const spy = vi.spyOn(ollama, 'chat').mockImplementation(async () =>
+    const spy = vi.spyOn(llm, 'chat').mockImplementation(async () =>
       fakeResult('<tool name="wiki_query">x</tool> 종합 결과'),
     );
     const bus = createBus('loop-test-3');

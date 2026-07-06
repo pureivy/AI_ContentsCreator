@@ -64,20 +64,18 @@ export async function startRun(
   onEvent: (ev: EventEnvelope) => void,
   onRunId: (runId: string) => void,
   getLastSeq: () => number,
-  opts?: { agent?: string; llm?: { backend: string; model: string }; path?: string;
+  opts?: { agent?: string; path?: string;
            budget?: number },
 ): Promise<RunHandle> {
   const res = await fetch("/runs", {
     method: "POST",
     headers: { "content-type": "application/json" },
     // `agent` (a role id) routes to a single-employee directed run; omitted = full run.
-    // `llm` overrides the LLM backend for THIS run only; omitted = persisted global default.
     // `path` picks the 3-tier run path ("team"|"full"); omitted = server auto-recommend.
     // `budget` caps THIS run's spend in USD (0 = explicit unlimited); omitted = global default.
     body: JSON.stringify({
       topic,
       ...(opts?.agent ? { agent: opts.agent } : {}),
-      ...(opts?.llm ? { llm: opts.llm } : {}),
       ...(opts?.path ? { path: opts.path } : {}),
       ...(opts?.budget !== undefined ? { budget_usd: opts.budget } : {}),
     }),

@@ -30,7 +30,7 @@ import { CONFIG } from '../config';
 import { getRunSettings } from '../runsettings';
 import { Semaphore } from '../util/semaphore';
 import { recordUsage } from './cost';
-import type { ChatParams, ChatResult, ChatMessage } from './ollama';
+import type { ChatParams, ChatResult, ChatMessage } from './types';
 
 // 클라우드는 KV 슬롯 경합이 없어 단일 슬롯 불필요 — 동시 spawn 상한만 둔다.
 const SLOT = new Semaphore(CONFIG.anthropicConcurrency);
@@ -74,7 +74,7 @@ export class ClaudeCliClient {
     const model = params.model;
     const isHaiku = /haiku/i.test(model);
     const maxTokens = Math.min(Math.max(1, params.maxOutputTokens ?? CONFIG.maxOutputTokens), 64_000);
-    // ollama.ts:172 와 동일 규칙 — UI '추론' 토글이 Claude 백엔드에서도 동작하게(기존엔 ?? false 로 무시).
+    // UI '추론' 토글(runSettings.agentThinking) 폴백 — 미지정 호출도 토글을 따른다.
     const wantThink = (params.think ?? getRunSettings().agentThinking) && params.format !== 'json';
     let { system, prompt } = toPrompt(params.messages);
 

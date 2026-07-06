@@ -7,7 +7,7 @@
  * 값만 'claude' 로 고정한다 — data/llm.json 의 잔존 local 설정은 무시된다.
  */
 import { CONFIG } from '../config';
-import type { ModelAssignment, InstalledModel } from './models';
+import type { ModelAssignment } from './models';
 
 export interface LlmSetting {
   /** 항상 'claude' — Ollama 백엔드 제거됨. */
@@ -27,18 +27,13 @@ export function setLlmSetting(_s: { backend?: string; localModel?: string }): Ll
   return FIXED;
 }
 
-/** 하위 호환 — 로컬 모델 선택이 사라졌으므로 항상 env/기본 tierModels. */
-export function tierOverrides(): { micro: string; standard: string; heavy: string } {
-  return CONFIG.tierModels;
-}
-
 /** 현재 백엔드가 Claude(클라우드)인가 — 항상 true(Ollama 제거). */
 export function isClaudeBackend(): boolean {
   return true;
 }
 
-/** 모델 배정 — Claude 고정 클라우드 티어맵(haiku/sonnet/opus). 인자는 하위 호환용(무시). */
-export function resolveAssignment(_installedForLocal: InstalledModel[] = []): ModelAssignment {
+/** 모델 배정 — Claude 고정 클라우드 티어맵(haiku/sonnet/opus). */
+export function resolveAssignment(): ModelAssignment {
   const c = CONFIG.cloudTierModels;
   return { micro: c.micro, standard: c.standard, heavy: c.heavy, reason: `Claude 클라우드 티어 — micro=${c.micro} standard=${c.standard} heavy=${c.heavy}` };
 }

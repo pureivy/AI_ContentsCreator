@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeAll } from 'vitest';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 let runAgent: any;
 let createBus: any;
-let ollama: any;
+let llm: any;
 
 const fakeResult = (text: string) => ({
   text, model: 'fake', promptEvalCount: 1, evalCount: 1, totalDurationMs: 1, loadDurationMs: 0, truncated: false, doneReason: 'stop',
@@ -25,7 +25,7 @@ beforeAll(async () => {
   process.env.AGENT_SHELL = '1';
   process.env.ENFORCE_AUTONOMY = '1';
   process.env.WEB_SEARCH = 'false';
-  ({ ollama } = await import('../llm/ollama'));
+  ({ llm } = await import('../llm/client'));
   ({ runAgent } = await import('./agent'));
   ({ createBus } = await import('../events/bus'));
 });
@@ -33,7 +33,7 @@ beforeAll(async () => {
 describe('run_command 통합(AGENT_SHELL)', () => {
   it('autonomy 3(자동)에서 allowlist 안전 명령을 실행하고 결과를 주입한다', async () => {
     let n = 0;
-    const spy = vi.spyOn(ollama, 'chat').mockImplementation(async () => {
+    const spy = vi.spyOn(llm, 'chat').mockImplementation(async () => {
       n++;
       return fakeResult(n === 1 ? '<tool name="run_command">echo studio-shell-itest</tool>' : '명령 결과를 반영했습니다.');
     });
@@ -46,7 +46,7 @@ describe('run_command 통합(AGENT_SHELL)', () => {
 
   it('autonomy 1(읽기 전용)에서는 run_command 가 제시·실행되지 않는다', async () => {
     let n = 0;
-    const spy = vi.spyOn(ollama, 'chat').mockImplementation(async () => {
+    const spy = vi.spyOn(llm, 'chat').mockImplementation(async () => {
       n++;
       return fakeResult(n === 1 ? '<tool name="run_command">echo x</tool>' : '답변.');
     });
