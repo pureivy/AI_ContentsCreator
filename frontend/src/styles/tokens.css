@@ -33,6 +33,10 @@
   --bg-danger:         #ff4242;
   --bg-inverse:        #ffffff;
 
+  /* 스크롤바 thumb — 다크는 흰색-알파. 라이트에서 검정-알파로 뒤집힌다(index.css 가 var 로 참조). */
+  --scrollbar-thumb:       rgba(255,255,255,0.12);
+  --scrollbar-thumb-hover: rgba(255,255,255,0.22);
+
   --fg-neutral-primary:     rgba(255,255,255,0.96);
   --fg-neutral-strong:      rgba(255,255,255,0.88);
   --fg-neutral:             rgba(255,255,255,0.74);
@@ -107,6 +111,60 @@
   --critic:  var(--fg-warning);         /* orange (경고/비평) */
   --rebut:   var(--color-red-70);       /* light red */
   --mono:    var(--font-mono);
+}
+
+/* ============================================================
+   라이트 테마 오버라이드 — <html data-theme="light"> 일 때만.
+   시맨틱/원자 토큰만 뒤집으면 레거시 매핑(--bg/--panel/--text…)과
+   index.css 의 var() 301곳이 자동 승계된다. 다크는 기본(:root) 유지 —
+   라이트는 옵트인(theme.ts). 오피스 픽셀아트 씬은 자체 어두운 배경
+   이미지 위라 흰색 오버레이 텍스트가 그대로 유지된다(의도).
+   ============================================================ */
+:root[data-theme="light"] {
+  --bg-base:        #f6f7f9;
+  --bg-base-alt:    #eceef1;
+  --bg-elevated:    #ffffff;
+  --bg-neutral:        rgba(0,0,0,0.045);
+  --bg-neutral-strong: rgba(0,0,0,0.09);
+  --bg-primary:        #0066ff;
+  --bg-primary-hover:  #005eeb;
+  --bg-primary-subtle: rgba(0,102,255,0.10);
+  --bg-inverse:        #17171a;
+
+  --fg-neutral-primary:     rgba(0,0,0,0.90);
+  --fg-neutral-strong:      rgba(0,0,0,0.82);
+  --fg-neutral:             rgba(0,0,0,0.68);
+  --fg-neutral-alternative: rgba(0,0,0,0.55);
+  --fg-neutral-assistive:   rgba(0,0,0,0.42);
+  --fg-neutral-disable:     rgba(0,0,0,0.22);
+  --fg-on-color:            #ffffff;
+  --fg-primary:             #0066ff;   /* 라이트 배경 대비 위해 blue-40 */
+  --fg-primary-hover:       #005eeb;
+  --fg-success:             #00a637;
+  --fg-danger:              #e11d1d;
+  --fg-warning:             #d95f00;
+  --fg-info:                #0087a0;
+
+  --line-neutral:        rgba(0,0,0,0.14);
+  --line-neutral-strong: rgba(0,0,0,0.26);
+  --line-primary-subtle: rgba(0,102,255,0.40);
+
+  /* Subtle 상태 배경(라이트) — 흰 배경 위 연한 단색 틴트. */
+  --bg-success-subtle: rgba(0,166,55,0.12);
+  --bg-danger-subtle:  rgba(225,29,29,0.10);
+  --bg-warning-subtle: rgba(217,95,0,0.12);
+  --bg-info-subtle:    rgba(0,135,160,0.12);
+  --bg-violet-subtle:  rgba(138,61,242,0.12);
+
+  /* 그림자 — 라이트에선 훨씬 옅게(청회색 틴트). */
+  --shadow-1: 0 1px 2px rgba(20,28,45,0.08), 0 1px 3px rgba(20,28,45,0.06);
+  --shadow-2: 0 2px 4px rgba(20,28,45,0.08), 0 4px 8px rgba(20,28,45,0.08);
+  --shadow-3: 0 4px 8px rgba(20,28,45,0.10), 0 8px 16px rgba(20,28,45,0.10);
+  --shadow-4: 0 8px 16px rgba(20,28,45,0.12), 0 16px 32px rgba(20,28,45,0.14);
+  --shadow-popover: 0 4px 16px rgba(20,28,45,0.18);
+
+  --scrollbar-thumb:       rgba(0,0,0,0.20);
+  --scrollbar-thumb-hover: rgba(0,0,0,0.32);
 }
 
 /* 타입 역할 헬퍼 — 필요 시 className 으로 적용 */
