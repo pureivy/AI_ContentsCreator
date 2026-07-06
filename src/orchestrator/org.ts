@@ -424,15 +424,20 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   bus.emit('phase', { team_id: '_ceo', phase: 'integrate' });
   const writerModel = modelForTier(assign, writer.tier);
   const brief = usableTeams.map((t) => `## ${t.team.name}\n${t.deliverable}`).join('\n\n');
+  // 지식 리서치 런 — 블로그 집필을 생략하고 팀 산출물 종합(brief)이 곧 산출물(리서치 보고서).
+  // 조사→토론→두뇌 적재→직원 학습만 수행한다(SERP 조향·포장도 불필요).
+  const research = opts.mission === 'research';
+  if (research) bus.emit('log', { message: '지식 리서치 런 — 집필·포장 생략, 리서치 보고서를 두뇌(위키)에 적재' });
   // 인기 방향 조향 — 실제 네이버 블로그 상위 노출 글(실측 SERP)을 작가·제목 패키저에 주입(fail-open).
-  const serpText = await serpPopularBrief(topic, signal);
+  const serpText = research ? '' : await serpPopularBrief(topic, signal);
   if (serpText) bus.emit('log', { message: `네이버 SERP 실측 — 상위 노출 ${serpText.split('\n').length - 1}건을 집필 방향에 반영` });
-  const body = await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, signal });
+  const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, signal });
   const finalDeliverable = body || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
   return packageDesignFinalize({
     bus, topic, company, assign, subproblems, teams: usableTeams,
-    critic: critic ?? null, critiqueText, writerTeam, finalDeliverable, brief, serpText, keyword: opts.keyword, signal,
+    critic: critic ?? null, critiqueText, writerTeam, finalDeliverable, brief, serpText, keyword: opts.keyword,
+    mission: opts.mission, signal,
   });
 }
 
@@ -456,9 +461,11 @@ async function packageDesignFinalize(a: {
   serpText?: string;
   /** 핵심 타겟 키워드(piece.keyword) — 패키저 primaryKeyword 고정(재추출 방지). */
   keyword?: string;
+  /** 지식 리서치 런 — 발행 포장(draft.json) 생략(캘린더 비오염). 위키 적재·자가학습은 그대로. */
+  mission?: 'research';
   signal?: AbortSignal;
 }): Promise<RunOutcome> {
-  const { bus, topic, company, assign, subproblems, teams, critic, critiqueText, writerTeam, finalDeliverable, brief, serpText, keyword, signal } = a;
+  const { bus, topic, company, assign, subproblems, teams, critic, critiqueText, writerTeam, finalDeliverable, brief, serpText, keyword, mission, signal } = a;
 
   // 잔여 플레이스홀더/가짜수치 경고(생성 지침이 이미 금지 — 보통 0건).
   const placeholders = findTemplateNumbers(finalDeliverable);
@@ -466,9 +473,10 @@ async function packageDesignFinalize(a: {
     bus.emit('log', { message: `검증 — 잔여 플레이스홀더/가짜수치 ${placeholders.length}건: ${placeholders.slice(0, 6).join(', ')}` });
   }
 
-  // --- 발행용 초안 포장 — org 본문을 제목·메타·태그·이미지 슬롯·SEO 점수로 포장(재생성 아님). 실패해도 본문은 유지. ---
+  // --- 발행용 초안 포장 — org 본문을 제목·메타·태그·이미지 슬롯·SEO 점수로 포장(재생성 아님). 실패해도 본문은 유지.
+  //     리서치 런은 통째로 생략 — draft.json 이 안 생겨 piece 승격·자동 네이버 임시저장이 자연 차단된다. ---
   let assets: AssetBundle | undefined;
-  if (!signal?.aborted) {
+  if (!signal?.aborted && mission !== 'research') {
     try {
       bus.emit('phase', { team_id: '_ceo', phase: 'review' });
       assets = await formatterFor('naver_blog')({ topic, body: finalDeliverable, researchBrief: brief, serpText, keyword, model: assign.micro, signal });

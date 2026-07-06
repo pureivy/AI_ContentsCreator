@@ -164,3 +164,66 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   if (recentAuto.length > 20) recentAuto.shift();
   return { title, keyword: asString(o?.keyword).trim() || undefined, subNiche: asString(o?.subNiche).trim() || undefined };
 }
+
+// ============================================================
+// 지식 리서치 미션(자율) — 콘텐츠 제작과 별개로, 주기적으로 브랜드 영역의 독자 궁금증·경쟁 콘텐츠
+// (네이버 블로그·유튜브)를 조사하는 런을 제안한다. 조사→팀 토론→두뇌(위키) 적재→직원 학습(reflect)의
+// 지식 컴파운딩 루프 입구 — 시간이 갈수록 지식은 촘촘해지고 직원은 똑똑해진다(사용자 확정 2026-07-06).
+// ============================================================
+interface ResearchState { lastTs?: string; recent?: string[] }
+function researchStatePath(): string {
+  return path.join(CONFIG.dataDir, '_shared', `research-state${brandFileSuffix()}.json`); // 브랜드별 주기·이력 분리
+}
+function readResearchState(): ResearchState {
+  try { return JSON.parse(readSafe(researchStatePath())) as ResearchState; } catch { return {}; }
+}
+
+/** 마지막 리서치 런 이후 주기(시간)가 지났는가 — 자율 사이클의 리서치/콘텐츠 분기 게이트. 0=off. */
+export function researchDue(hours: number): boolean {
+  if (!(hours > 0)) return false;
+  const st = readResearchState();
+  return !st.lastTs || Date.now() - new Date(st.lastTs).getTime() >= hours * 3600_000;
+}
+
+/** 리서치 런 시작 기록 — 주기 게이트 갱신 + 최근 미션(중복 회피) 누적. 시작 시점 기록이라 실패해도 폭주하지 않는다. */
+export function recordResearchLaunch(title: string): void {
+  const st = readResearchState();
+  const recent = [...(st.recent ?? []), title].slice(-10);
+  try {
+    fs.mkdirSync(path.dirname(researchStatePath()), { recursive: true });
+    fs.writeFileSync(researchStatePath(), JSON.stringify({ lastTs: new Date().toISOString(), recent }, null, 2), 'utf-8');
+  } catch { /* 무해 — 기록 실패 시 다음 틱에 리서치가 한 번 더 뜰 뿐 */ }
+}
+
+const RESEARCH_SYSTEM =
+  '너는 1인 AI 콘텐츠 회사의 리서치 디렉터다. 아래 [팀·업무 범위]가 이 회사의 콘텐츠 영역이다. ' +
+  '지금 조사하면 향후 콘텐츠 기획에 가장 가치있는 지식 리서치 미션 한 개를 제안하라.\n' +
+  '- 미션은 "독자들이 실제로 궁금해하는 것(질문·고민)"과 "경쟁 콘텐츠(네이버 블로그·유튜브 상위)의 강점·빈틈"을 파악하는 조사다 — 글 제작이 아니다.\n' +
+  '- [브랜드 컨텍스트]가 있으면 그 기업의 제품·타겟 고객 관심 영역을 우선하라. 시의성·계절성을 고려한다.\n' +
+  '- [최근 리서치]와 중복되지 않게 하라 — 아직 조사되지 않은 영역을 고른다.\n' +
+  '- title 은 조사 대상을 담은 한국어 한 줄(예: "7월 장마철 텃밭 관리 — 독자 질문·경쟁 콘텐츠 분석").';
+
+/** 지식 리서치 미션 1건 제안 — 브랜드 컨텍스트·시드 키워드에 그라운딩, 최근 리서치와 중복 회피. */
+export async function proposeResearchMission(signal?: AbortSignal): Promise<string | null> {
+  const c = getCompany();
+  const teamLines = (c.teams ?? [])
+    .map((t) => `- ${t.name}: ${(t.lead?.specialty || '').replace(/\s+/g, ' ').slice(0, 200)}`)
+    .filter((l) => l.length > 6)
+    .join('\n');
+  if (!teamLines.trim()) return null;
+  const brand = brandContext();
+  const seeds = brandSeedKeywords();
+  const st = readResearchState();
+  const user =
+    (brand ? `${brand}\n\n` : '') +
+    `[팀·업무 범위]\n${teamLines}\n\n` +
+    (seeds.length ? `[브랜드 시드 키워드]\n${seeds.map((k) => `- ${k}`).join('\n')}\n\n` : '') +
+    `[최근 리서치 — 중복 회피]\n${(st.recent ?? []).slice(-5).join('\n') || '(없음)'}\n\n` +
+    `형식: {"title":"..."}`;
+  const o = await microJSON<{ title?: unknown }>(
+    resolveAssignment().micro, RESEARCH_SYSTEM, user, { maxOutputTokens: 120, signal },
+  ).catch(() => null);
+  const title = asString(o?.title).trim().replace(/^["'\-•\s]+/, '').slice(0, 120);
+  if (!title || (st.recent ?? []).includes(title)) return null;
+  return title;
+}

@@ -33,6 +33,9 @@ export interface RunOptions {
   revise?: { baseBody: string; feedback: string };
   /** 핵심 타겟 키워드(piece.keyword) — 포장 단계 primaryKeyword 고정(SEO 게이트·리비전 과녁 고정). */
   keyword?: string;
+  /** 지식 리서치 런 — 블로그 집필·포장(draft.json) 생략. 산출물은 리서치 보고서로 두뇌(위키) 적재·
+   *  직원 학습(reflect)에만 쓰인다. draft.json 이 없어 piece 승격·캘린더 오염이 자연 차단된다. */
+  mission?: 'research';
 }
 
 export interface RunOutcome {

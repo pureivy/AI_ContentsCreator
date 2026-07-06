@@ -36,7 +36,7 @@ import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
-import { startAutoCycle, proposeContentIdeas, startDaily } from '../autonomy/scheduler';
+import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, proposeResearchMission } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore } from '../content/cardnews';
@@ -168,6 +168,8 @@ interface LaunchOpts {
   keyword?: string;
   /** 첨부 이미지 경로(/runs/attachments 저장분) — 런 시작 전 vision 분석 결과를 주제에 병합. */
   images?: string[];
+  /** 지식 리서치 런 — 집필·포장 생략(draft.json 없음 → piece 승격·캘린더 오염 자연 차단). 두뇌 적재·직원 학습 전용. */
+  mission?: 'research';
 }
 
 // draft.json(6c)에서 piece 표시 메타 재로드 — 초안 asset 은 finalize 가 이미 디스크에 씀(메모리 의존 없음).
@@ -245,6 +247,7 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
     .then((fullTopic) => startRun(bus, {
       topic: fullTopic, signal: abort.signal,
       agentId: opts.agent, path: opts.path, budgetUsd: opts.budgetUsd, revise: opts.revise, keyword: opts.keyword,
+      mission: opts.mission,
     }))
     .then((outcome) => {
       handle.status = 'done';
@@ -319,8 +322,8 @@ async function describeAttachedImages(topic: string, images: string[], bus: Even
 
 async function startHandler(c: Context): Promise<Response> {
   const body = await c.req
-    .json<{ topic?: string; agent?: string; path?: string; budget_usd?: number; images?: string[] }>()
-    .catch(() => ({}) as { topic?: string; agent?: string; path?: string; budget_usd?: number; images?: string[] });
+    .json<{ topic?: string; agent?: string; path?: string; budget_usd?: number; images?: string[]; mission?: string }>()
+    .catch(() => ({}) as { topic?: string; agent?: string; path?: string; budget_usd?: number; images?: string[]; mission?: string });
   const topic = (body.topic ?? '').trim();
   if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
 
@@ -331,7 +334,14 @@ async function startHandler(c: Context): Promise<Response> {
     .filter((p) => p.startsWith(ATTACH_DIR + path.sep) && fs.existsSync(p))
     .slice(0, 8);
 
-  const id = launchRun(topic, { agent: body.agent, path: body.path, budgetUsd: body.budget_usd, ...(images.length ? { images } : {}) });
+  // 수동 리서치 런도 주기 게이트에 반영 — 방금 조사한 영역을 자율 사이클이 중복 조사하지 않게.
+  if (body.mission === 'research') recordResearchLaunch(topic.replace(/^리서치:\s*/, ''));
+
+  const id = launchRun(topic, {
+    agent: body.agent, path: body.path, budgetUsd: body.budget_usd,
+    ...(images.length ? { images } : {}),
+    ...(body.mission === 'research' ? { mission: 'research' as const } : {}),
+  });
   return c.json({ run_id: id });
 }
 
@@ -2146,25 +2156,40 @@ function canGenerateNew(pieces: Piece[]): boolean {
   return !lastCreated || (Date.now() - new Date(lastCreated).getTime()) >= minIntervalMs;
 }
 
-async function pickAutoWork(signal?: AbortSignal): Promise<Piece | null> {
+// 자율 틱 작업 유형 — 콘텐츠 piece(재개/신규) 또는 지식 리서치 미션(조사→토론→두뇌 적재→학습).
+type AutoWork = { kind: 'piece'; piece: Piece } | { kind: 'research'; title: string };
+
+async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
   const pieces = pieceStore().list();
   const resume = selectResumablePiece(pieces, isRunLive);
-  if (resume) return resume;                 // 재개는 케이던스와 무관 — 죽은 piece 회수 우선.
+  if (resume) return { kind: 'piece', piece: resume }; // 재개는 케이던스와 무관 — 죽은 piece 회수 우선.
+  // 지식 리서치 게이트 — 주기 도래 시 신규 콘텐츠보다 먼저 1건. 조사 결과(두뇌·교훈)가 이후 콘텐츠 품질을
+  // 끌어올리는 컴파운딩 순서(지식 먼저, 제작 나중). 제안 실패 시 콘텐츠 흐름으로 자연 폴백.
+  if (researchDue(CONFIG.researchCycleHours)) {
+    const title = await proposeResearchMission(signal);
+    if (title) return { kind: 'research', title };
+  }
   if (!canGenerateNew(pieces)) return null;  // 케이던스/백로그 초과 → 신규 생성 보류.
   const idea = await proposeContentIdeas(signal);
   if (!idea) return null;
-  return pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche, brand: activeBrandSlug() || undefined });
+  return { kind: 'piece', piece: pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche, brand: activeBrandSlug() || undefined }) };
 }
 
-const stopAutoCycle = startAutoCycle<Piece>({
+const stopAutoCycle = startAutoCycle<AutoWork>({
   intervalMs: CONFIG.autoCycleMinutes * 60_000,
   isBusy: () => [...RUNS.values()].some((h) => h.status === 'running'), // 자율런 포함 — 동시 1런만(단일 KV 슬롯 불변식).
   pickWork: (signal) => pickAutoWork(signal),
-  launch: (piece) => {
-    const id = launchRun(piece.title, { auto: true, pieceId: piece.id, keyword: piece.keyword });
-    if (id) pieceStore().update(piece.id, { runId: id, stage: 'draft' }); // 시작 성공 → draft(진행중). ''(억제)면 유지, 다음 틱 재개.
+  launch: (w) => {
+    if (w.kind === 'research') {
+      // 리서치 팀(teams[0]) 경량 경로 — 팀 협업·토론 후 보고서를 두뇌에 적재. piece 미생성(캘린더 비오염).
+      recordResearchLaunch(w.title);
+      launchRun(`리서치: ${w.title}`, { auto: true, mission: 'research', path: 'team' });
+      return;
+    }
+    const id = launchRun(w.piece.title, { auto: true, pieceId: w.piece.id, keyword: w.piece.keyword });
+    if (id) pieceStore().update(w.piece.id, { runId: id, stage: 'draft' }); // 시작 성공 → draft(진행중). ''(억제)면 유지, 다음 틱 재개.
   },
-  describe: (piece) => piece.title,
+  describe: (w) => (w.kind === 'research' ? `리서치: ${w.title}` : w.piece.title),
   log: (m) => console.log('[auto-cycle]', m),
 });
 if (CONFIG.autoCycleMinutes > 0) {
