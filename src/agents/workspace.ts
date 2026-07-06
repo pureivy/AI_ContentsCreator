@@ -42,16 +42,24 @@ function tailTrim(p: string, max: number, keep: number): void {
   } catch { /* 무해 */ }
 }
 
+// 브랜드 스코프 경로 — 범용은 기본 파일, 브랜드 활성 시 -<slug> 접미(사용자 확정 2026-07-06).
+// 직원 워크스페이스의 지식·설정 전부가 브랜드별이다: goal(목표)·verified(검증 지식)·skills(패턴)·
+// memory(교훈)·injected(사람 주입 지식)·capabilities(툴·자율도 오버레이) — 브랜드 간 교차 주입 차단.
+const goalFile = (id: string): string => path.join(dir(id), `goal${brandFileSuffix()}.md`);
+const verifiedFile = (id: string): string => path.join(dir(id), `verified${brandFileSuffix()}.md`);
+const skillsDirOf = (id: string): string => path.join(dir(id), `skills${brandFileSuffix()}`);
+const injectedFile = (id: string): string => path.join(dir(id), `injected${brandFileSuffix()}.md`);
+const capabilitiesFile = (id: string): string => path.join(dir(id), `capabilities${brandFileSuffix()}.json`);
+
 export function ensureScaffold(id: string): void {
   if (!safeId(id)) return;
-  const d = dir(id);
-  fs.mkdirSync(path.join(d, 'skills'), { recursive: true });
+  fs.mkdirSync(skillsDirOf(id), { recursive: true });
 }
 
 export function writeGoal(id: string, text: string): void {
-  if (safeId(id)) write(path.join(dir(id), 'goal.md'), text);
+  if (safeId(id)) write(goalFile(id), text);
 }
-export function readGoal(id: string): string { return safeId(id) ? read(path.join(dir(id), 'goal.md')) : ''; }
+export function readGoal(id: string): string { return safeId(id) ? read(goalFile(id)) : ''; }
 export function readKnowledge(id: string): string { return safeId(id) ? read(path.join(dir(id), 'knowledge.md')) : ''; }
 
 export function appendKnowledge(id: string, line: string): void {
@@ -75,18 +83,23 @@ export function appendActivity(id: string, line: string): void {
   tailTrim(p, 200, 100); // 무한 성장 방지(최근 100줄 유지)
 }
 
-// --- 자가학습(self-learning): memory.md 누적 + 다음 런 주입 ---
+// --- 자가학습(self-learning): memory 누적 + 다음 런 주입 ---
+// 교훈은 브랜드(고객사)별로 분리 — 범용은 memory.md, 브랜드 활성 시 memory-<slug>.md.
+// (브랜드 A 런에서 배운 채널·독자 교훈이 다른 브랜드 런의 프롬프트에 주입되지 않게 — 사용자 확정 2026-07-06.
+//  위키 lesson 페이지는 llmWiki() 가 이미 브랜드별 디렉토리로 분리하므로 여기(주입용 memory)만 맞추면 된다.)
+const memoryFile = (id: string): string => path.join(dir(id), `memory${brandFileSuffix()}.md`);
+const memoryArchiveFile = (id: string): string => path.join(dir(id), `memory_archive${brandFileSuffix()}.md`);
 export function appendMemory(id: string, insight: string): void {
   if (!safeId(id) || !insight.trim()) return;
   fs.mkdirSync(dir(id), { recursive: true });
   const date = kstDate();
-  const p = path.join(dir(id), 'memory.md');
+  const p = memoryFile(id);
   fs.appendFileSync(p, `- (${date}) ${insight.trim().replace(/\s+/g, ' ')}\n`, 'utf-8');
   tailTrim(p, 400, 200); // 자가학습 누적 상한(최근 200줄) — 파일·주입 비용 통제
 }
 export function readMemory(id: string, maxChars = 1500): string {
   if (!safeId(id)) return '';
-  const m = read(path.join(dir(id), 'memory.md')).trim();
+  const m = read(memoryFile(id)).trim();
   return m.length > maxChars ? '...\n' + m.slice(-maxChars) : m; // 최근 학습 우선
 }
 // 오래된 학습 압축·아카이브 — memory.md 가 임계(줄)를 넘으면 오래된 부분을 micro 로 요약해
@@ -95,7 +108,7 @@ export function readMemory(id: string, maxChars = 1500): string {
 const MEMORY_ARCHIVE_LINES = 60;
 export async function archiveMemory(id: string, microModel: string, signal?: AbortSignal): Promise<boolean> {
   if (!safeId(id)) return false;
-  const p = path.join(dir(id), 'memory.md');
+  const p = memoryFile(id);
   const cur = read(p).trim();
   if (!cur) return false;
   const lines = cur.split('\n').filter((l) => l.trim());
@@ -103,7 +116,7 @@ export async function archiveMemory(id: string, microModel: string, signal?: Abo
   const keep = Math.floor(MEMORY_ARCHIVE_LINES / 2);
   const old = lines.slice(0, lines.length - keep);
   const recent = lines.slice(lines.length - keep);
-  try { fs.appendFileSync(path.join(dir(id), 'memory_archive.md'), old.join('\n') + '\n', 'utf-8'); } catch { /* 보존 실패 무해 */ }
+  try { fs.appendFileSync(memoryArchiveFile(id), old.join('\n') + '\n', 'utf-8'); } catch { /* 보존 실패 무해 */ }
   let summary = '';
   try {
     const res = await llm.chat({
@@ -145,7 +158,7 @@ export function appendVerified(id: string, claim: string, source: string): boole
   const c = (claim || '').replace(/\s+/g, ' ').trim();
   const src = (source || '').replace(/\s+/g, ' ').trim().slice(0, 80);
   if (c.length < 8 || !src) return false;
-  const p = path.join(dir(id), 'verified.md');
+  const p = verifiedFile(id);
   const cur = read(p);
   if (cur.includes(c.slice(0, 40))) return false; // 동일 주장 중복 방지
   fs.mkdirSync(dir(id), { recursive: true });
@@ -155,7 +168,7 @@ export function appendVerified(id: string, claim: string, source: string): boole
 }
 export function readVerified(id: string, maxChars = 1000): string {
   if (!safeId(id)) return '';
-  const v = read(path.join(dir(id), 'verified.md')).trim();
+  const v = read(verifiedFile(id)).trim();
   return v.length > maxChars ? '...\n' + v.slice(-maxChars) : v;
 }
 
@@ -169,22 +182,22 @@ export function appendInjected(id: string, text: string, source = '외부 자료
   if (!t) return false;
   fs.mkdirSync(dir(id), { recursive: true });
   const src = source.replace(/\s+/g, ' ').trim().slice(0, 80) || '외부 자료';
-  fs.appendFileSync(path.join(dir(id), 'injected.md'), `\n## ${src} (${kstDate()})\n${t}\n`, 'utf-8');
+  fs.appendFileSync(injectedFile(id), `\n## ${src} (${kstDate()})\n${t}\n`, 'utf-8');
   return true;
 }
 export function readInjected(id: string, maxChars = INJECTED_CAP): string {
   if (!safeId(id)) return '';
-  const v = read(path.join(dir(id), 'injected.md')).trim();
+  const v = read(injectedFile(id)).trim();
   return v.length > maxChars ? '...(이전 주입 일부 생략)\n' + v.slice(-maxChars) : v;
 }
 /** injected.md 전체 길이 — 엔드포인트의 한도초과 경고용(주입은 tail 로 잘리므로 총량>CAP 이면 일부 미반영). */
 export function injectedLength(id: string): number {
   if (!safeId(id)) return 0;
-  return read(path.join(dir(id), 'injected.md')).trim().length;
+  return read(injectedFile(id)).trim().length;
 }
 export function clearInjected(id: string): void {
   if (!safeId(id)) return;
-  try { fs.rmSync(path.join(dir(id), 'injected.md')); } catch { /* 없으면 무해 */ }
+  try { fs.rmSync(injectedFile(id)); } catch { /* 없으면 무해 */ }
 }
 
 /** CEO 의사결정 로그(공유). */
@@ -200,7 +213,7 @@ export function appendDecision(topic: string, summary: string): void {
 export interface Capabilities { tools?: string[]; autonomy?: number; }
 export function readCapabilities(id: string): Capabilities {
   if (!safeId(id)) return {};
-  try { return JSON.parse(read(path.join(dir(id), 'capabilities.json'))) as Capabilities; } catch { return {}; }
+  try { return JSON.parse(read(capabilitiesFile(id))) as Capabilities; } catch { return {}; }
 }
 export function writeCapabilities(id: string, cap: Capabilities): void {
   if (!safeId(id)) return;
@@ -208,14 +221,14 @@ export function writeCapabilities(id: string, cap: Capabilities): void {
   const next: Capabilities = { ...cur };
   if (cap.tools) next.tools = cap.tools.filter((t) => ALLOWED_TOOLS.has(t));
   if (typeof cap.autonomy === 'number') next.autonomy = Math.max(0, Math.min(3, Math.floor(cap.autonomy)));
-  write(path.join(dir(id), 'capabilities.json'), JSON.stringify(next, null, 2));
+  write(capabilitiesFile(id), JSON.stringify(next, null, 2));
 }
 
 // --- skills ---
 export function skillNames(id: string): string[] {
   if (!safeId(id)) return [];
   try {
-    return fs.readdirSync(path.join(dir(id), 'skills'))
+    return fs.readdirSync(skillsDirOf(id))
       .filter((f) => f.endsWith('.md') && f.toLowerCase() !== 'readme.md')
       .map((f) => f.replace(/\.md$/, ''));
   } catch { return []; }
@@ -224,12 +237,12 @@ export function addSkill(id: string, name: string, content: string): boolean {
   if (!safeId(id)) return false;
   const slug = skillSlug(name);
   if (slug === 'readme') return false;
-  write(path.join(dir(id), 'skills', `${slug}.md`), content || `# ${name}\n`);
+  write(path.join(skillsDirOf(id), `${slug}.md`), content || `# ${name}\n`);
   return true;
 }
 export function deleteSkill(id: string, slug: string): boolean {
   if (!safeId(id) || /[/\\]|\.\./.test(slug)) return false;
-  try { fs.rmSync(path.join(dir(id), 'skills', `${skillSlug(slug)}.md`), { force: true }); return true; } catch { return false; }
+  try { fs.rmSync(path.join(skillsDirOf(id), `${skillSlug(slug)}.md`), { force: true }); return true; } catch { return false; }
 }
 // 스킬 플레이북 주입 — 로컬 프리필 비용 통제를 위해 스킬당 600자·총 1500자로 캡(긴 절차서는
 // 앞부분만 주입, 전문은 스킬 파일·직원 탭에서 참조). 격상된 system_prompt 가 주 식별자.
@@ -238,7 +251,7 @@ function readSkills(id: string, maxTotal = 1500): string {
   let used = 0;
   for (const s of skillNames(id)) {
     if (used >= maxTotal) break;
-    const body = read(path.join(dir(id), 'skills', `${s}.md`)).trim();
+    const body = read(path.join(skillsDirOf(id), `${s}.md`)).trim();
     if (!body) continue;
     const slice = body.length > 600 ? body.slice(0, 600).trimEnd() + ' …(상세는 스킬 파일)' : body;
     parts.push(slice);
@@ -290,9 +303,10 @@ export function agentDetail(role: RoleDef): Record<string, unknown> {
     skills_loaded: skillNames(id),
     autonomy_effective: effectiveAutonomy(role),
     goal: readGoal(id),
-    memory: read(path.join(dir(id), 'memory.md')),
-    verified: read(path.join(dir(id), 'verified.md')),
-    injected: read(path.join(dir(id), 'injected.md')),
+    // 직원 탭 표시도 브랜드 스코프와 일치 — 직접 경로가 아니라 스코프 헬퍼 경유.
+    memory: read(memoryFile(id)),
+    verified: read(verifiedFile(id)),
+    injected: read(injectedFile(id)),
     tools_md: JSON.stringify(readCapabilities(id)),
     activity_tail: read(path.join(dir(id), 'activity.log')).split('\n').filter(Boolean).slice(-20),
     usage_pages: [] as Array<{ page_id: string; title: string }>,
