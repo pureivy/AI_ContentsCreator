@@ -118,7 +118,12 @@ export class LlmWiki {
   constructor(dir: string = CONFIG.wikiDir) {
     this.dir = dir;
     this.pagesDir = dir; // 평면 — 페이지를 wiki 루트에 직접(obsidian vault 호환). index/log/schema 는 RESERVED_FILES.
-    this.rawDir = path.join(path.dirname(dir), 'raw');
+    // 브랜드(고객사)별 자료 격리 — 위키 접미사를 raw 에 미러링(data/wiki-<slug> ↔ data/raw-<slug>).
+    // 원칙(사용자 확정 2026-07-06): 자료는 브랜드별로 따로 정리한다. 페이지의 raw/ 참조는 논리
+    // 접두사라 그대로 두고, 해석만 각자의 rawDir 로 한다(referencedRawHashes).
+    const base = path.basename(dir);
+    const suffix = base.startsWith('wiki') ? base.slice('wiki'.length) : '';
+    this.rawDir = path.join(path.dirname(dir), `raw${suffix}`);
     fs.mkdirSync(this.pagesDir, { recursive: true });
     fs.mkdirSync(this.rawDir, { recursive: true });
     this.migrateFlat();
@@ -361,12 +366,12 @@ export class LlmWiki {
    *  (삭제 후 같은 파일 재업로드 허용). */
   referencedRawHashes(): Set<string> {
     const out = new Set<string>();
-    const base = path.dirname(this.rawDir);              // raw/ 상대참조의 기준 디렉터리
     const rawRoot = path.resolve(this.rawDir) + path.sep;
     for (const p of this.list('source')) {
       for (const ref of p.sources) {
         if (!ref.startsWith('raw/') || ref.includes('..')) continue;
-        const fp = path.join(base, ref);
+        // 'raw/' 는 논리 접두사 — 실 디렉토리는 브랜드별 rawDir(raw 또는 raw-<slug>)로 해석.
+        const fp = path.join(this.rawDir, ref.slice('raw/'.length));
         if (!path.resolve(fp).startsWith(rawRoot)) continue; // 경로 이탈 방지
         try { out.add(createHash('sha1').update(fs.readFileSync(fp, 'utf-8').trim()).digest('hex')); }
         catch { /* 이동·삭제된 raw — 무해 */ }
