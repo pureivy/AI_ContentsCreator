@@ -14,7 +14,9 @@
  *
  * 파라미터 매핑(계약 대비 근사치):
  *  - maxOutputTokens → CLAUDE_CODE_MAX_OUTPUT_TOKENS env
- *  - think=false → --effort low (Sonnet/Opus 는 thinking 완전 비활성 노출이 없어 근사; haiku 는 effort 미지원 → 생략)
+ *  - think → ollama 경로와 동일하게 미지정 시 runSettings.agentThinking(UI '추론' 토글)을 따른다.
+ *    think off 시 sonnet 만 --effort low 근사(haiku 는 effort 미지원 → 생략). opus 는 편집장·리드의
+ *    판단 단계(통합·브리프·지명 런) 전용이므로 토글이 꺼져 있어도 low 로 강등하지 않는다(CLI 기본 effort).
  *  - temperature → CLI 미노출 → 무시(기존에도 haiku 전용 옵션이었음)
  *  - format:'json' → 기존 SDK 경로와 동일하게 프롬프트 지시에 위임(호출부 microJSON 이 처리)
  *  - onDelta → stream-json 의 content_block_delta/text_delta
@@ -25,6 +27,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CONFIG } from '../config';
+import { getRunSettings } from '../runsettings';
 import { Semaphore } from '../util/semaphore';
 import { recordUsage } from './cost';
 import type { ChatParams, ChatResult, ChatMessage } from './ollama';
@@ -71,7 +74,8 @@ export class ClaudeCliClient {
     const model = params.model;
     const isHaiku = /haiku/i.test(model);
     const maxTokens = Math.min(Math.max(1, params.maxOutputTokens ?? CONFIG.maxOutputTokens), 64_000);
-    const wantThink = (params.think ?? false) && params.format !== 'json';
+    // ollama.ts:172 와 동일 규칙 — UI '추론' 토글이 Claude 백엔드에서도 동작하게(기존엔 ?? false 로 무시).
+    const wantThink = (params.think ?? getRunSettings().agentThinking) && params.format !== 'json';
     let { system, prompt } = toPrompt(params.messages);
 
     // 비전 입력 — 이미지가 있으면 Read 도구만 허용해 CLI 가 파일을 직접 보게 한다(다른 도구는 여전히 차단).
@@ -97,7 +101,10 @@ export class ClaudeCliClient {
     ];
     for (const dir of [...new Set(vision.map((p) => path.dirname(p)))]) args.push('--add-dir', dir);
     if (system) args.push('--system-prompt', system);
-    if (!isHaiku && !wantThink) args.push('--effort', 'low');
+    // opus 는 편집장·리드 판단 단계 전용 — 추론 토글이 꺼져 있어도 low 강등 없이 CLI 기본 effort 로 돈다.
+    // sonnet(대량 work 단계)만 비용을 위해 low 근사 유지.
+    const isOpus = /opus/i.test(model);
+    if (!isHaiku && !isOpus && !wantThink) args.push('--effort', 'low');
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
