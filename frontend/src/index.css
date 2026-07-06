@@ -515,6 +515,15 @@ button.upload-retry:hover { background: var(--panel2); }
   border: none; border-radius: 50%; background: rgba(0,0,0,0.62); color: #fff; font-size: 11px;
   line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0; }
 .chat-attach-thumb button:hover { background: var(--bg-danger); }
+/* 문서 첨부 칩 — 아이콘 + 파일명 + 제거. 썸네일과 같은 행에 흐른다. */
+.chat-attach-doc { display: inline-flex; align-items: center; gap: 5px; height: 26px; max-width: 220px;
+  padding: 0 6px 0 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg);
+  font-size: 11.5px; color: var(--muted); flex: none; }
+.chat-attach-doc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.chat-attach-doc button { width: 15px; height: 15px; border: none; border-radius: 50%; flex: none;
+  background: transparent; color: var(--muted); font-size: 12px; line-height: 1; cursor: pointer;
+  display: grid; place-items: center; padding: 0; }
+.chat-attach-doc button:hover { background: var(--bg-danger); color: #fff; }
 
 /* 런 옵션 셀렉터(LLM·경로·예산) — 통일된 보조 pill. 입력+시작이 주 액션이므로
    muted 컬러·콤팩트 사이즈로 보조 위계. native <select> 이질감 제거(2026-06-15). */

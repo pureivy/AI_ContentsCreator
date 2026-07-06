@@ -304,21 +304,21 @@ export async function retryClassify(refs: string[]): Promise<number | null> {
   }
 }
 
-// --- 컴포저 이미지 첨부(멀티모달) ---------------------------------------------
-// 이미지를 서버에 저장하고 경로를 받는다 — startRun opts.images 로 전달되어
-// 런 시작 시 비전 분석 블록으로 주제에 합류한다.
-export async function uploadRunImages(
+// --- 컴포저 첨부(멀티모달: 이미지 + 문서) --------------------------------------
+// 파일을 서버에 저장하고 경로를 받는다 — startRun opts.images/docs 로 전달되어
+// 런 시작 시 이미지는 비전 분석, 문서는 텍스트 추출 블록으로 주제에 합류한다.
+export async function uploadRunAttachments(
   files: File[],
-): Promise<{ ok: boolean; paths: string[]; error?: string }> {
+): Promise<{ ok: boolean; images: string[]; docs: string[]; error?: string }> {
   const fd = new FormData();
-  for (const f of files) fd.append("images", f);
+  for (const f of files) fd.append("files", f);
   try {
     const r = await fetch("/runs/attachments", { method: "POST", body: fd });
-    const j = (await r.json().catch(() => ({}))) as { paths?: string[]; error?: string };
-    if (!r.ok) return { ok: false, paths: [], error: j.error };
-    return { ok: true, paths: j.paths ?? [] };
+    const j = (await r.json().catch(() => ({}))) as { images?: string[]; docs?: string[]; error?: string };
+    if (!r.ok) return { ok: false, images: [], docs: [], error: j.error };
+    return { ok: true, images: j.images ?? [], docs: j.docs ?? [] };
   } catch {
-    return { ok: false, paths: [], error: "network" };
+    return { ok: false, images: [], docs: [], error: "network" };
   }
 }
 

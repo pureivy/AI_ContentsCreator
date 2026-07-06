@@ -65,7 +65,7 @@ export async function startRun(
   onRunId: (runId: string) => void,
   getLastSeq: () => number,
   opts?: { agent?: string; path?: string;
-           budget?: number; images?: string[]; mission?: string },
+           budget?: number; images?: string[]; docs?: string[]; mission?: string },
 ): Promise<RunHandle> {
   const res = await fetch("/runs", {
     method: "POST",
@@ -79,6 +79,7 @@ export async function startRun(
       topic,
       ...(opts?.agent ? { agent: opts.agent } : {}),
       ...(opts?.images?.length ? { images: opts.images } : {}),
+      ...(opts?.docs?.length ? { docs: opts.docs } : {}),
       ...(opts?.mission ? { mission: opts.mission } : {}),
       ...(opts?.path ? { path: opts.path } : {}),
       ...(opts?.budget !== undefined ? { budget_usd: opts.budget } : {}),

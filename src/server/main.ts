@@ -168,6 +168,8 @@ interface LaunchOpts {
   keyword?: string;
   /** 첨부 이미지 경로(/runs/attachments 저장분) — 런 시작 전 vision 분석 결과를 주제에 병합. */
   images?: string[];
+  /** 첨부 문서 경로(/runs/attachments 저장분) — 런 시작 전 텍스트 추출(길면 micro 요약)해 주제에 병합. */
+  docs?: string[];
   /** 지식 리서치 런 — 집필·포장 생략(draft.json 없음 → piece 승격·캘린더 오염 자연 차단). 두뇌 적재·직원 학습 전용. */
   mission?: 'research';
 }
@@ -235,12 +237,21 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
   if (opts.auto) lastAutoRun = { ts: handle.created_ts, topic };
   evictRuns();
 
-  // 첨부 이미지(멀티모달 주제) — 본 런 시작 전 vision 분석으로 관찰 텍스트를 만들어 주제에 병합.
-  // 텍스트 전용인 하위 전 단계(리서치·초안·검수)가 시각 정보를 공유한다. 분석 실패는 무해 — 원 주제로 진행.
-  const prepared = opts.images?.length
-    ? describeAttachedImages(topic, opts.images, bus, abort.signal)
-        .then((desc) => (desc ? `${topic}\n\n[첨부 이미지 분석]\n${desc}` : topic))
-        .catch(() => topic)
+  // 첨부(멀티모달 주제) — 본 런 시작 전 문서는 텍스트 추출, 이미지는 vision 분석으로 텍스트 컨텍스트를
+  // 만들어 주제에 병합. 텍스트 전용인 하위 전 단계(리서치·초안·검수)가 공유한다. 실패는 무해 — 원 주제로 진행.
+  const prepared: Promise<string> = (opts.images?.length || opts.docs?.length)
+    ? (async () => {
+        let t = topic;
+        if (opts.docs?.length) {
+          const block = await digestAttachedDocs(topic, opts.docs, bus, abort.signal).catch(() => '');
+          if (block) t += `\n\n[첨부 자료]\n${block}`;
+        }
+        if (opts.images?.length) {
+          const desc = await describeAttachedImages(topic, opts.images, bus, abort.signal).catch(() => '');
+          if (desc) t += `\n\n[첨부 이미지 분석]\n${desc}`;
+        }
+        return t;
+      })()
     : Promise.resolve(topic);
 
   prepared
@@ -288,21 +299,56 @@ const ATTACH_DIR = path.join(CONFIG.dataDir, 'attachments');
 
 async function attachmentsHandler(c: Context): Promise<Response> {
   const body = await c.req.parseBody({ all: true });
-  const raw = body['images'];
+  const raw = body['files'] ?? body['images']; // 구 클라이언트(images 필드) 호환
   const files = (Array.isArray(raw) ? raw : [raw]).filter((x): x is File => x instanceof File);
-  if (!files.length) return c.json({ error: '이미지 파일이 필요합니다' }, 400);
+  if (!files.length) return c.json({ error: '첨부 파일이 필요합니다' }, 400);
   fs.mkdirSync(ATTACH_DIR, { recursive: true });
-  const paths: string[] = [];
-  for (const f of files.slice(0, 8)) {                       // claude CLI vision 상한(8장)과 일치
-    if (!f.type.startsWith('image/')) continue;
-    if (f.size > 10_000_000) continue;
-    const ext = (path.extname(f.name || '').toLowerCase() || '.png').slice(0, 8);
-    const name = `${Date.now()}-${createHash('sha1').update(`${f.name}:${f.size}:${paths.length}`).digest('hex').slice(0, 8)}${ext}`;
+  const images: string[] = [];
+  const docs: string[] = [];
+  for (const f of files.slice(0, 16)) {
+    const isImg = f.type.startsWith('image/');
+    if (isImg && images.length >= 8) continue;                              // claude CLI vision 상한(8장)과 일치
+    if (!isImg && (docs.length >= 8 || !isSupportedExt(f.name || ''))) continue; // 문서는 자료실 추출기 지원 형식만
+    if (f.size > (isImg ? 10_000_000 : 25_000_000)) continue;               // 문서 25MB — /sources 와 동일
+    const ext = (path.extname(f.name || '').toLowerCase() || (isImg ? '.png' : '')).slice(0, 12);
+    // 원 파일명 stem 보존 — 문서 추출기의 확장자 판별·주제 병합 블록의 표시명에 쓰인다.
+    const stem = path.basename(f.name || 'file', path.extname(f.name || ''))
+      .replace(/[^\w가-힣.\-]+/g, '_').slice(0, 40) || 'file';
+    const name = `${Date.now()}-${createHash('sha1').update(`${f.name}:${f.size}:${images.length + docs.length}`).digest('hex').slice(0, 8)}-${stem}${ext}`;
     fs.writeFileSync(path.join(ATTACH_DIR, name), Buffer.from(await f.arrayBuffer()));
-    paths.push(path.join(ATTACH_DIR, name));
+    (isImg ? images : docs).push(path.join(ATTACH_DIR, name));
   }
-  if (!paths.length) return c.json({ error: '저장 가능한 이미지가 없습니다(이미지 형식·10MB 이하만)' }, 400);
-  return c.json({ ok: true, paths });
+  if (!images.length && !docs.length) {
+    return c.json({ error: '저장 가능한 파일이 없습니다 — 이미지(10MB)·문서 PDF/HWP/HWPX/DOCX/PPTX/XLSX/텍스트(25MB)만 지원' }, 400);
+  }
+  return c.json({ ok: true, paths: [...images, ...docs], images, docs });
+}
+
+// 첨부 문서 → 텍스트 추출(자료실 /sources 와 동일 추출기) 후 주제에 병합. 짧으면 원문 그대로,
+// 길면 micro 발췌 요약 — 근거 수치·항목 보존이 목적이라 재서술이 아닌 발췌를 지시한다.
+async function digestAttachedDocs(topic: string, docs: string[], bus: EventBus, signal: AbortSignal): Promise<string> {
+  const micro = resolveAssignment().micro;
+  const parts: string[] = [];
+  for (const p of docs.slice(0, 8)) {
+    const display = path.basename(p).replace(/^\d+-[0-9a-f]{8}-/, ''); // 저장 접두사 제거 → 원 파일명
+    let text = '';
+    try { text = (await extractText(path.basename(p), fs.readFileSync(p))).trim(); }
+    catch { /* 추출 실패 — 아래에서 표기 */ }
+    if (!text) { parts.push(`## ${display}\n(텍스트 추출 실패 — 내용 미반영)`); continue; }
+    if (text.length <= 2500) { parts.push(`## ${display}\n${text}`); continue; }
+    const sum = micro
+      ? await microCall(
+          micro,
+          '너는 자료 요약가다. 문서에서 주제와 관련된 핵심 사실·수치·항목을 재서술 없이 발췌 요약한다. 이모지 금지.',
+          `주제: ${topic}\n\n[문서: ${display}]\n${text.slice(0, 24_000)}\n\n1500자 이내로 발췌 요약하라.`,
+          { maxOutputTokens: 900, signal },
+        ).catch(() => '')
+      : '';
+    parts.push(`## ${display}\n${(sum || text.slice(0, 2500)).trim()}`);
+  }
+  const block = parts.join('\n\n').slice(0, 12_000);
+  if (block) bus.emit(EventType.log, { message: `첨부 자료 ${docs.length}건 추출 — 주제에 병합` });
+  return block;
 }
 
 // 런 시작 전 vision 사전 분석 — standard 모델이 Read 도구로 이미지를 직접 보고 관찰 사실을 서술.
@@ -322,17 +368,19 @@ async function describeAttachedImages(topic: string, images: string[], bus: Even
 
 async function startHandler(c: Context): Promise<Response> {
   const body = await c.req
-    .json<{ topic?: string; agent?: string; path?: string; budget_usd?: number; images?: string[]; mission?: string }>()
-    .catch(() => ({}) as { topic?: string; agent?: string; path?: string; budget_usd?: number; images?: string[]; mission?: string });
+    .json<{ topic?: string; agent?: string; path?: string; budget_usd?: number; images?: string[]; docs?: string[]; mission?: string }>()
+    .catch(() => ({}) as { topic?: string; agent?: string; path?: string; budget_usd?: number; images?: string[]; docs?: string[]; mission?: string });
   const topic = (body.topic ?? '').trim();
   if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
 
-  // 첨부 이미지 — /runs/attachments 가 저장한 경로만 신뢰(디렉토리 밖 경로 거부: 경로 주입 방지).
-  const images = (Array.isArray(body.images) ? body.images : [])
+  // 첨부(이미지·문서) — /runs/attachments 가 저장한 경로만 신뢰(디렉토리 밖 경로 거부: 경로 주입 방지).
+  const safeAttachPaths = (v: unknown): string[] => (Array.isArray(v) ? v : [])
     .filter((p): p is string => typeof p === 'string')
     .map((p) => path.resolve(p))
     .filter((p) => p.startsWith(ATTACH_DIR + path.sep) && fs.existsSync(p))
     .slice(0, 8);
+  const images = safeAttachPaths(body.images);
+  const docs = safeAttachPaths(body.docs);
 
   // 수동 리서치 런도 주기 게이트에 반영 — 방금 조사한 영역을 자율 사이클이 중복 조사하지 않게.
   if (body.mission === 'research') recordResearchLaunch(topic.replace(/^리서치:\s*/, ''));
@@ -340,6 +388,7 @@ async function startHandler(c: Context): Promise<Response> {
   const id = launchRun(topic, {
     agent: body.agent, path: body.path, budgetUsd: body.budget_usd,
     ...(images.length ? { images } : {}),
+    ...(docs.length ? { docs } : {}),
     // 리서치 런 기본 경로 = 'team'(리서치 팀 경량) — 명시 path 가 있으면 존중.
     ...(body.mission === 'research' ? { mission: 'research' as const, path: body.path || 'team' } : {}),
   });
