@@ -72,7 +72,21 @@ def parse_blog_url(url: str) -> tuple:
 VIEW_KEYS = ("cnt", "count", "pv", "readcnt", "readcount", "viewcount", "hit", "hits", "pageview")
 KW_KEYS = ("keyword", "query", "searchkeyword", "keywordname", "refererkeyword")
 # 유입 횟수 필드 — 우선순위 순. 'ratio'(백분율)는 횟수가 아니라 제외.
-CNT_KEYS = ("cnt", "count", "pv", "hit", "searchcnt", "searchcount", "inflow", "value")
+# metricValue: 어드바이저가 검색어별 유입 수치를 담는 실제 필드(대소문자 무시 매칭 → 소문자로 등록).
+CNT_KEYS = ("cnt", "count", "pv", "hit", "searchcnt", "searchcount", "inflow", "value", "metricvalue")
+
+# 검색 유입 키워드는 '유입-검색' 전용 엔드포인트에서만 신뢰한다. 채널 대시보드(realtime-summary·
+# soaring-contents·yesterday-summary·popular-*-keyword 등 /home/*)의 키워드는 '이 글'의 검색 유입이
+# 아니라 채널 전체 실시간/인기 키워드라, 글별 성과에 붙이면 무관 키워드가 섞인다(오귀속 차단).
+_INFLOW_HINTS = ("inflow-search", "search-keyword", "inflow-analysis", "rank/inflow")
+
+
+def _is_search_inflow_endpoint(path: str, url: str = "") -> bool:
+    """이 캡처가 '이 글의 검색 유입 키워드'를 담는 전용 엔드포인트인가. /home/* 채널 대시보드는 제외."""
+    s = (str(path) + " " + str(url)).lower()
+    if "/home/" in s:
+        return False
+    return any(h in s for h in _INFLOW_HINTS)
 
 
 def _num(v):
@@ -84,10 +98,11 @@ def _num(v):
 
 
 def extract_advisor_metrics(captures: list) -> dict:
-    """실제 크리에이터 어드바이저 엔드포인트(home/*·inflow-*)에서 채널 단위 지표를 정밀 추출.
+    """실제 크리에이터 어드바이저 엔드포인트에서 지표를 정밀 추출.
     - 조회수(cv): yesterday-summary(data.cv.cv 날짜배열 합) + realtime-summary(metricRanks cv metricValue).
-    - 검색 유입 키워드: 유입/검색 엔드포인트의 keyword+수치 아이템.
-    글이 적으면 채널≈포스트 근사. 없으면 0/[]."""
+    - 검색 유입 키워드: 유입-검색 전용 엔드포인트(inflow-search/search-keyword)의 keyword+수치만.
+      키워드 수치 필드는 metricValue(어드바이저 표준)를 포함해 인식한다. 채널 대시보드(realtime/
+      soaring/popular)의 키워드는 '이 글' 유입이 아니므로 제외한다. 없으면 0/[]."""
     views = 0
     inflow = {}
     for cap in captures:
@@ -106,9 +121,16 @@ def extract_advisor_metrics(captures: list) -> dict:
             for mr in (data.get("metricRanks") or []):
                 if isinstance(mr, dict) and mr.get("metricType") == "cv":
                     views += _num(mr.get("metricValue"))
-        elif ("search" in path.lower() or "keyword" in path.lower() or "inflow" in path.lower()):
-            items = data if isinstance(data, list) else \
-                (data.get("rank") or data.get("list") or data.get("searchKeyword") or [])
+        elif _is_search_inflow_endpoint(path, cap.get("url", "")):
+            # 아이템 후보: data 리스트 · data.rank/list/searchKeyword · data.metricRanks[].rank[].
+            if isinstance(data, list):
+                items = data
+            else:
+                items = data.get("rank") or data.get("list") or data.get("searchKeyword") or []
+                if not items and isinstance(data.get("metricRanks"), list):
+                    items = [r for mr in data["metricRanks"]
+                             if isinstance(mr, dict) and isinstance(mr.get("rank"), list)
+                             for r in mr["rank"]]
             if isinstance(items, list):
                 for it in items:
                     if not isinstance(it, dict):
@@ -117,7 +139,7 @@ def extract_advisor_metrics(captures: list) -> dict:
                     if not kw or str(kw).strip().lower() in ("null", "none", "기타", "직접유입"):
                         continue
                     cnt = _num(it.get("cv") or it.get("count") or it.get("cnt")
-                               or it.get("inflow") or it.get("value"))
+                               or it.get("inflow") or it.get("value") or it.get("metricValue"))
                     inflow[str(kw).strip()] = max(inflow.get(str(kw).strip(), 0), cnt)
     ranked = sorted(inflow.items(), key=lambda kv: kv[1], reverse=True)[:12]
     search_inflow = [{"keyword": k, "count": c, "rank": i + 1} for i, (k, c) in enumerate(ranked)]
@@ -145,6 +167,7 @@ def extract_metrics(captures: list, log_no: str) -> dict:
     dwell = None        # logNo 무관 폴백
     dwell_logno = None  # logNo 포함 노드에서 얻은 값(우선)
     inflow = {}         # keyword -> count
+    allow_kw = False    # 현재 cap 이 유입-검색 엔드포인트일 때만 키워드 수집(루프에서 cap 별로 갱신)
 
     def visit(node):
         nonlocal views, dwell, dwell_logno
@@ -171,18 +194,24 @@ def extract_metrics(captures: list, log_no: str) -> dict:
                         dwell_logno = d
                     elif dwell is None:
                         dwell = d
-        # 유입 키워드 — keyword + count. 필드는 KW_KEYS/CNT_KEYS '우선순위'로 선택(키 삽입 순서 비의존).
-        kw_field = next((lower[k] for k in KW_KEYS if k in lower), None)
-        if kw_field:
-            kw = str(node.get(kw_field, "")).strip()
-            if kw and kw.lower() not in ("null", "none", "직접유입", "기타"):
-                cnt_field = next((lower[k] for k in CNT_KEYS if k in lower), None)
-                cnt = _num(node.get(cnt_field)) if cnt_field else 0
-                inflow[kw] = max(inflow.get(kw, 0), cnt)
+        # 유입 키워드 — 유입-검색 전용 엔드포인트(allow_kw)에서만. 채널 대시보드(realtime/soaring/
+        # popular)의 키워드는 '이 글' 유입이 아니라 채널 전체 키워드라 오귀속 방지 차원에서 건너뛴다.
+        # 필드는 KW_KEYS/CNT_KEYS '우선순위'로 선택(키 삽입 순서 비의존).
+        if allow_kw:
+            kw_field = next((lower[k] for k in KW_KEYS if k in lower), None)
+            if kw_field:
+                kw = str(node.get(kw_field, "")).strip()
+                if kw and kw.lower() not in ("null", "none", "직접유입", "기타"):
+                    cnt_field = next((lower[k] for k in CNT_KEYS if k in lower), None)
+                    cnt = _num(node.get(cnt_field)) if cnt_field else 0
+                    inflow[kw] = max(inflow.get(kw, 0), cnt)
 
     for cap in captures:
+        body = cap.get("body")
+        path = str(body.get("path", "")) if isinstance(body, dict) else ""
+        allow_kw = _is_search_inflow_endpoint(path, cap.get("url", ""))
         try:
-            _walk(cap.get("body"), visit)
+            _walk(body, visit)
         except Exception:
             continue
     if dwell_logno is not None:
@@ -358,7 +387,10 @@ def main():
     }
     # 로그인은 됐지만(권한 응답 수신) 수치가 0 = 발행 직후 미집계일 가능성.
     logged = any(isinstance(c.get("body"), dict) and c["body"].get("data") not in (None,) for c in captures)
-    if metrics["views"] or metrics["searchInflow"]:
+    if metrics["views"] and not metrics["searchInflow"]:
+        note = ("조회수는 수집됨. 검색 유입 키워드는 이 글 단위 어드바이저 데이터가 없어 비웠습니다 "
+                "(채널 전체 실시간·인기 키워드는 글별 성과에 섞지 않음).")
+    elif metrics["views"] or metrics["searchInflow"]:
         note = ""
     elif all_unauth or not captures:
         note = ("어드바이저 로그인 세션 미확립 — 브라우저에서 네이버에 로그인(로그인 상태 유지 체크) 후 "
