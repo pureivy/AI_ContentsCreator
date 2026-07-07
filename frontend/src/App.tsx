@@ -674,17 +674,24 @@ export default function App() {
     else loadPast(rid);
   }, [runs]);
 
-  // 자율런 자동 관전 — 사용자가 라이브 런을 보고 있지 않고(=running 아님) 과거 런 리플레이도 아닐 때,
-  // 진행 중인 자율런에 자동 연결해 오피스뷰가 살아 움직이게 한다(능동실행 오토플레이 취지). watchLive 가
-  // 붙으면 status=running 이 되어 폴링이 멈추고, 자율런이 끝나면 status 가 종료로 바뀌어 다시 폴링 →
-  // 다음 자율런으로 이어진다. 사용자가 자기 런을 시작하면 그게 우선하고 백엔드가 자율런을 양보한다.
+  // 활성 런 자동 관전 — 사용자가 라이브 런을 보고 있지 않고(=running 아님) 과거 런 리플레이도 아닐 때,
+  // 진행 중인 '최신 활성 런'에 자동 연결해 오피스뷰가 살아 움직이게 한다(능동실행 오토플레이 취지).
+  // 카드뉴스·숏폼 파생은 블로그 런 완료 뒤 서버가 별도 런으로 띄우므로(launchCardNewsRun/launchShortsRun,
+  // 독립 run_id·버스로 phase·작업 스트림 방출), 프론트가 최신 활성 런에 붙기만 하면 송하영·민준호·서준영이
+  // 실제로 일하는 모습이 오피스뷰에 그대로 이어진다. 자율 사이클 런도 동일하게 잡힌다(활성 런이라서).
+  // watchLive 가 붙으면 status=running 이 되어 폴링이 멈추고, 그 런이 끝나면 status 가 종료로 바뀌어 다시
+  // 폴링 → 다음 활성 런(카드뉴스→숏폼→자율런)으로 이어진다. 사용자가 자기 런을 시작하면 그게 우선한다.
   useEffect(() => {
     if (s.status === "running" || s.mode === "replay") return;
     let stopped = false;
     const tick = async () => {
       if (stopped || !urlRestoredRef.current) return; // URL 복구(특정 런 보기)가 끝나기 전엔 자동관전 보류 — 리플레이 하이재킹 방지
-      const st = await fetchAutonomyStatus();
-      const id = st?.auto_run_id;
+      if (useStore.getState().status === "running") return;
+      // 최신 생성된 활성 런을 따라간다(파생·자율 모두 포함). created_ts 는 ISO 라 문자열 내림차순=최신 우선.
+      const rs = await fetchRuns();
+      const active = rs.filter((r) => r.active).sort((a, b) => (a.created_ts < b.created_ts ? 1 : -1));
+      let id: string | null = active[0]?.run_id ?? null;
+      if (!id) { const st = await fetchAutonomyStatus(); id = st?.auto_run_id ?? null; } // 폴백(활성 런 목록이 빌 때)
       if (id && id !== useStore.getState().runId && useStore.getState().status !== "running") {
         watchLive(id); // 백로그+라이브 구독 → 아바타 안무 시작
       }
