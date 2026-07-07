@@ -68,9 +68,10 @@ export async function qaSceneImages(opts: {
       }),
     };
     fs.writeFileSync(retryDraftPath, JSON.stringify(retryDraft, null, 2), 'utf-8');
-    await generateImagesForDraft(retryDraftPath, retryDir, retryManifestPath,
+    const rr = await generateImagesForDraft(retryDraftPath, retryDir, retryManifestPath,
       { imageStyle: opts.preset, limit: bad.length, refImages: opts.refImages ?? [], size: '1024x1536', timeoutMs: 150_000 * bad.length },
       opts.signal);
+    if (!rr.ok) return out; // 재생성 스크립트 실패 — 스테일 매니페스트 오독 방지, 원본 유지
 
     const rm = JSON.parse(fs.readFileSync(retryManifestPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string }> };
     bad.forEach((k, j) => {
