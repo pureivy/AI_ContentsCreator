@@ -159,6 +159,34 @@ async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalys
 
 /** 카드뉴스 생성 잡 — create 직후 void 로 호출(백그라운드), 프론트는 GET 폴링.
  *  bus 를 주면 런 이벤트(스폰·스트림·log·phase)가 흘러 오피스 뷰·활동 피드와 실시간 연동된다. */
+/**
+ * 카드 이미지(gpt-image-2) 프롬프트 조립 — card-news-maker 의 에디토리얼 포스터 템플릿 이식.
+ * 실무팀 합의·구도(상단 2/3 헤드라인)·타이포·자소 정확도·완성 기준을 명시해 같은 모델로도 품질을 끌어올린다.
+ * gpt-image-2 가 한글 문구까지 직접 그리므로 '한 글자도 바꾸지 말고/자소 결합 틀리면 실패'를 강하게 못박는다.
+ * 이 프로젝트 무이모지 정책 유지, 페이지 번호는 기존 기능 보존. 순수 함수(생성 없이 프롬프트 검증 가능).
+ */
+export function buildCardImagePrompt(a: {
+  headline: string; body?: string; scene: string; style: string; title: string;
+  index: number; total: number; hasRefs: boolean;
+}): string {
+  const { headline, body, style, title, index: i, total, hasRefs } = a;
+  const ord = i === 0 ? '표지(1번)' : `${i + 1}번`;
+  const scene = a.scene.trim() || `${title} 를 상징하는 한국 생활 장면`;
+  const p: string[] = [];
+  p.push(`[전체 톤·스타일 — 모든 슬라이드 공통] ${style}`);
+  if (hasRefs) p.push('[레퍼런스 스타일 차용] 첨부된 레퍼런스 이미지의 색 팔레트·타이포 형식·질감·여백 규칙·대비 감각만 차용한다. 특정 오브젝트·배치·이미지는 복제하지 않고, 이 슬라이드만의 구도와 시각 모티프를 새로 구성한다.');
+  p.push('작업 방식: 브랜드 실무팀(브랜드전략가·아트디렉터·카피라이터·마케팅리드)이 짧게 토론해 합의한 최종안처럼 완성한다. 쟁점은 "헤드라인 임팩트 vs 정보 가독성" — 헤드라인은 과감하게 세우고 보조 정보는 질서 있게 후순위로 정리한다.');
+  p.push(`용도: 1:1 정사각(1080×1080) 인스타그램 카드뉴스 총 ${total}장 중 ${ord} 슬라이드 한 장.`);
+  p.push(`장면 설명: ${scene}. 한글 헤드라인과 핵심 정보가 전시 포스터처럼 강하게 보이는 구성.`);
+  p.push(`구도: 정방형 시야의 상단 2/3에 헤드라인, 하단 1/3에 보조 정보. 그리드 축을 지키고 안전 여백을 확보한다.${i > 0 ? ' 시리즈 내 다른 슬라이드와 구분되는 고유한 구도·시각 모티프를 쓴다.' : ''}`);
+  p.push('타이포/레이아웃: 굵고 큰 한글 산세리프 헤드라인 + 정돈된 중간 무게 본문. 자음·모음 결합이 또렷하게 그려져야 하고, 자간·행간은 인쇄 포스터 수준으로 관리한다.');
+  p.push('연출: 종이·잉크 물성이 살짝 느껴지는 인쇄 에디토리얼 질감. 배경은 단색 또는 미세한 텍스처, 타이포 대비를 뚜렷하게(디지털 플랫함 지양).');
+  p.push(`카드에 새길 한국어 문구(한 글자도 바꾸지 말 것) — 헤드라인: "${headline}"${body ? `, 본문: "${body.replace(/\n/g, ' / ')}"` : ''}. 정확히 그 표기 그대로 크고 선명한 고대비 한글 타이포그래피로 새긴다. 자소(자음·모음) 결합이 틀리면 실패로 간주한다.`);
+  p.push('완성 기준: 인쇄 품질, 한글 오타 없음, 이 한 장만 봐도 의미가 전달될 것. 제외할 것: 영문·로마자 혼용, 손글씨·장식체 과다, 흐릿한 글자, 가독성 낮은 배치, 산만한 장식 요소, 워터마크.');
+  if (i > 0 && total > 1) p.push(`우측 하단에 작은 페이지 표기 "${i + 1}/${total}".`);
+  return p.join('\n');
+}
+
 export async function runCardNewsJob(
   id: string,
   opts: { sourceBody?: string; slideCount?: number; bus?: EventBus; signal?: AbortSignal } = {},
@@ -199,16 +227,14 @@ export async function runCardNewsJob(
     opts.bus?.emit('phase', { team_id: 'cardnews', phase: 'integrate' });
     say(`카드 생성 시작 — gpt-image-2 ${plan.slides.length}장`);
     const total = plan.slides.length;
-    const cardPrompt = (i: number): string => {
-      const s = plan.slides[i]!;
-      return [
-        `${design.style}. ${design.prompts[i]}`,
-        `1:1 정사각 인스타그램 카드뉴스의 ${i === 0 ? '표지' : `${i + 1}번째`} 카드 디자인`,
-        `카드에 렌더링할 한국어 문구 — 헤드라인: "${s.headline}"${s.body ? ` / 본문: "${s.body.replace(/\n/g, ' / ')}"` : ''}`,
-        '위 문구를 정확히 그 표기 그대로(오타·누락·추가 글자 없이) 크고 선명한 고대비 한글 타이포그래피로 배치',
-        i > 0 && total > 1 ? `우측 하단에 작은 페이지 표기 "${i + 1}/${total}"` : '',
-      ].filter(Boolean).join('. ');
-    };
+    // 카드 이미지 프롬프트 — card-news-maker 의 에디토리얼 포스터 템플릿 이식(실무팀 합의·구도·타이포·
+    // 자소 정확도·완성 기준). gpt-image-2 가 한글 문구까지 직접 그리므로 '한 글자도 바꾸지 말고/자소
+    // 결합 틀리면 실패'를 강하게 명시(이 프로젝트 무이모지 정책 유지, 페이지 번호는 기존 기능 보존).
+    const hasRefs = refs.refPaths.length > 0;
+    const cardPrompt = (i: number): string => buildCardImagePrompt({
+      headline: plan.slides[i]!.headline, body: plan.slides[i]!.body, scene: design.prompts[i] ?? '',
+      style: design.style, title: plan.title, index: i, total, hasRefs,
+    });
     const bgDraft = { imageSlots: plan.slides.map((s, i) => ({ alt: s.headline, prompt: cardPrompt(i) })) };
     const bgDraftPath = path.join(dir, 'bg-draft.json');
     const bgManifestPath = path.join(dir, 'bg-manifest.json');
