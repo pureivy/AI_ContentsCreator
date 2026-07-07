@@ -110,6 +110,13 @@ export interface Config {
   readonly autoShorts: boolean;
 
   // --- 음성 입출력 ---
+  /** TTS 제공자: 'openai'(gpt-4o-mini-tts, 자연스러운 신경망 음성) | 'say'(macOS 로컬, 폴백). 기본 openai(키 없으면 자동 say 폴백). */
+  readonly ttsProvider: string;
+  /** OpenAI TTS 모델(기본 gpt-4o-mini-tts — instructions 로 톤 지시 가능). 미지원 시 tts-1-hd 로 바꿔 쓰면 된다. */
+  readonly openaiTtsModel: string;
+  /** OpenAI TTS 음색(alloy·echo·fable·onyx·nova·shimmer 등). 한국어 내레이션은 nova(따뜻·또렷) 기본. */
+  readonly openaiTtsVoice: string;
+  /** macOS say 폴백 음색. */
   readonly voiceTtsVoice: string;
   readonly voiceSttModel: string;
 
@@ -217,6 +224,9 @@ export const CONFIG: Config = {
   autoCardNews: envBool('AUTO_CARDNEWS', true),
   autoShorts: envBool('AUTO_SHORTS', true),
 
+  ttsProvider: env('TTS_PROVIDER', 'openai'),
+  openaiTtsModel: env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),
+  openaiTtsVoice: env('OPENAI_TTS_VOICE', 'nova'),
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
   voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),
 

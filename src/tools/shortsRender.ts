@@ -2,7 +2,8 @@
  * 숏폼 렌더러 — 씬 이미지 + TTS 내레이션 + 자막을 ffmpeg 로 세로(1080×1920) MP4 로 조립.
  *
  * 설계(참고 자산 이식 근거):
- *  - 내레이션은 로컬 TTS(voice/tts synthesize — macOS say, 기본 Yuna) → 씬 길이는 오디오 실측(ffprobe)
+ *  - 내레이션은 TTS(voice/tts synthesize — OpenAI gpt-4o-mini-tts 기본, 실패 시 macOS say 폴백) →
+ *    씬 길이는 오디오 실측(ffprobe). 숏폼 톤(활기·빠른 템포)은 instructions 로 전달
  *  - 화면 텍스트는 Pillow(shorts_frame.py)로 프레임에 미리 굽는다 — 홈브류 ffmpeg 가 drawtext
  *    (freetype) 없이 빌드돼 있어(실측 'No such filter') 자막 필터를 쓸 수 없고, AI 이미지에
  *    글자를 맡기지도 않는다(오타 원천 차단)
@@ -67,9 +68,13 @@ function fmtSrtTime(sec: number): string {
  * 씬 배열 → dir/final.mp4 + subtitles.srt. images[i] 는 씬 i 의 배경(없으면 null → 단색 폴백).
  * 개별 씬 실패는 이슈로 기록하고 해당 씬을 단색 배경·무음으로라도 완성(전체 실패 방지).
  */
+// 숏폼 낭독 톤(shorts-gen voice_style 이식) — gpt-4o-mini-tts instructions 로 전달.
+const SHORTS_TTS_TONE =
+  '활기차고 대화하듯, 약간 빠른 템포로 친근하게 낭독한다. 첫 훅은 궁금증을 자아내게 힘주어, 핵심 수치와 결론은 또렷하고 자신감 있게. 광고 성우톤이 아니라 아는 사람이 알려주듯.';
+
 export async function renderShortsVideo(
   dir: string, scenes: ShortsScene[], images: Array<string | null>,
-  opts: { voice?: string; signal?: AbortSignal } = {},
+  opts: { voice?: string; instructions?: string; signal?: AbortSignal } = {},
 ): Promise<ShortsRenderResult> {
   const issues: string[] = [];
   if (!CONFIG.blogPython || !fs.existsSync(CONFIG.blogPython)) {
@@ -92,7 +97,7 @@ export async function renderShortsVideo(
     let audioPath: string | null = null;
     let audioDur = 0;
     try {
-      const mp3 = await synthesize(scene.narration, { voice: opts.voice, signal: opts.signal });
+      const mp3 = await synthesize(scene.narration, { voice: opts.voice, instructions: opts.instructions ?? SHORTS_TTS_TONE, signal: opts.signal });
       audioPath = path.join(segDir, `narr_${nn}.mp3`);
       fs.writeFileSync(audioPath, mp3);
       audioDur = await probeDuration(audioPath);
