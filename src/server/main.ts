@@ -1117,9 +1117,13 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
   if ([...RUNS.values()].some((h) => h.status === 'running' && h.topic === piece.title)) {
     return { error: '이 초안의 런이 실행 중입니다 — 완료 후 저장하세요.', status: 409 };
   }
-  if (!dryRun && !naverPublishCreds(piece.brand).blogId) {
+  // 브랜드 없는(범용) piece 는 반드시 범용('') 계정으로 — piece.brand=undefined 를 그대로 넘기면
+  // blog_skills 의 `?? activeBrandSlug()` 가 활성 브랜드로 해석해 범용 글을 활성 브랜드 블로그로
+  // 오발행한다(격리 위반). undefined→'' 로 못박는다.
+  const pubBrand = piece.brand ?? '';
+  if (!dryRun && !naverPublishCreds(pubBrand).blogId) {
     const where = piece.brand ? `브랜드 '${piece.brand}' 의 ` : '';
-    return { error: `${where}네이버 블로그 ID 미설정 — API 키 탭 "네이버 발행 계정"에서 이 브랜드의 블로그 ID를 설정하세요.`, status: 400 };
+    return { error: `${where}네이버 블로그 ID 미설정 — API 키 탭 "네이버 발행 계정"에서 ${piece.brand ? '이 브랜드의' : '범용'} 블로그 ID를 설정하세요.`, status: 400 };
   }
   const runIdAtStart = piece.runId;
   const sessionDir = path.join(CONFIG.sessionsDir, runIdAtStart);
@@ -1130,7 +1134,7 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
   const job: NaverDraftJob = { status: 'running', startedTs: new Date().toISOString(), dryRun, actor: opts.actor };
   NAVER_DRAFT_JOBS.set(id, job);
   if (!dryRun) naverProfileBusy = `임시저장:${piece.title.slice(0, 20)}`; // ── 동기 구간 끝(뮤텍스 획득)
-  void publishDraftToNaver(sessionDir, draft, { dryRun, brand: piece.brand }).then((r) => {
+  void publishDraftToNaver(sessionDir, draft, { dryRun, brand: pubBrand }).then((r) => {
     job.endedTs = new Date().toISOString();
     if (r.ok) {
       job.status = 'saved'; job.url = r.draftUrl; job.adminUrl = r.adminUrl;
@@ -1279,7 +1283,8 @@ const COLLECT_JOBS = new Map<string, CollectJob>();
 async function measurePiece(piece: Piece, dryRun: boolean, signal?: AbortSignal): Promise<{ sample: MetricSample | null; note?: string }> {
   if (!piece.publishedUrl) return { sample: null, note: '발행 URL 없음' };
   const runDir = path.join(CONFIG.sessionsDir, piece.runId ?? piece.id, 'metrics');
-  const m = await collectNaverMetrics(piece.publishedUrl, runDir, { dryRun, brand: piece.brand }, signal);
+  // 범용 piece(brand=undefined)는 범용('') 계정/프로필로 수집 — activeBrandSlug 폴백 방지(격리).
+  const m = await collectNaverMetrics(piece.publishedUrl, runDir, { dryRun, brand: piece.brand ?? '' }, signal);
   if (!m) return { sample: null, note: '수집 결과 파싱 실패' };
   if (!m.views && m.searchInflow.length === 0) return { sample: null, note: m.note };
   const sample: MetricSample = {
