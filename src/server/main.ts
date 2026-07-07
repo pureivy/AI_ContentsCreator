@@ -27,7 +27,7 @@ import { rolesById } from '../agents/company';
 import type { RoleDef } from '../agents/company';
 import type { RolePatch, MemberBody } from '../agents/company-loader';
 import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appendActivity, ensureScaffold, effectiveAutonomy, appendInjected, injectedLength, clearInjected, INJECTED_CAP } from '../agents/workspace';
-import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret } from '../secrets/store';
+import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView } from '../secrets/store';
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
@@ -1117,8 +1117,9 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
   if ([...RUNS.values()].some((h) => h.status === 'running' && h.topic === piece.title)) {
     return { error: '이 초안의 런이 실행 중입니다 — 완료 후 저장하세요.', status: 409 };
   }
-  if (!dryRun && !naverPublishCreds().blogId) {
-    return { error: 'NAVER_BLOG_ID 미설정 — API 키 탭에서 "네이버 블로그 — 블로그 ID"를 설정하세요.', status: 400 };
+  if (!dryRun && !naverPublishCreds(piece.brand).blogId) {
+    const where = piece.brand ? `브랜드 '${piece.brand}' 의 ` : '';
+    return { error: `${where}네이버 블로그 ID 미설정 — API 키 탭 "네이버 발행 계정"에서 이 브랜드의 블로그 ID를 설정하세요.`, status: 400 };
   }
   const runIdAtStart = piece.runId;
   const sessionDir = path.join(CONFIG.sessionsDir, runIdAtStart);
@@ -1129,7 +1130,7 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
   const job: NaverDraftJob = { status: 'running', startedTs: new Date().toISOString(), dryRun, actor: opts.actor };
   NAVER_DRAFT_JOBS.set(id, job);
   if (!dryRun) naverProfileBusy = `임시저장:${piece.title.slice(0, 20)}`; // ── 동기 구간 끝(뮤텍스 획득)
-  void publishDraftToNaver(sessionDir, draft, { dryRun }).then((r) => {
+  void publishDraftToNaver(sessionDir, draft, { dryRun, brand: piece.brand }).then((r) => {
     job.endedTs = new Date().toISOString();
     if (r.ok) {
       job.status = 'saved'; job.url = r.draftUrl; job.adminUrl = r.adminUrl;
@@ -1278,7 +1279,7 @@ const COLLECT_JOBS = new Map<string, CollectJob>();
 async function measurePiece(piece: Piece, dryRun: boolean, signal?: AbortSignal): Promise<{ sample: MetricSample | null; note?: string }> {
   if (!piece.publishedUrl) return { sample: null, note: '발행 URL 없음' };
   const runDir = path.join(CONFIG.sessionsDir, piece.runId ?? piece.id, 'metrics');
-  const m = await collectNaverMetrics(piece.publishedUrl, runDir, { dryRun }, signal);
+  const m = await collectNaverMetrics(piece.publishedUrl, runDir, { dryRun, brand: piece.brand }, signal);
   if (!m) return { sample: null, note: '수집 결과 파싱 실패' };
   if (!m.views && m.searchInflow.length === 0) return { sample: null, note: m.note };
   const sample: MetricSample = {
@@ -2070,6 +2071,28 @@ app.post('/api-keys', async (c) => {
 app.post('/api-keys/add', async (c) => {
   const b = await c.req.json<{ key?: string; label?: string; icon?: string; value?: string }>().catch(() => ({} as { key?: string; label?: string; icon?: string; value?: string }));
   return c.json(addCustom(b.key ?? '', b.label ?? '', b.icon ?? '', b.value ?? ''));
+});
+// 네이버 발행 계정 — 브랜드별 분리(범용 '' 포함). blogId 는 공개값(평문), 로그인 아이디·비번은 마스킹.
+// 프로필·세션 파일은 발행 시 활성/piece 브랜드 슬러그로 자동 분리된다(blog_skills). 계정 섞임 차단.
+app.get('/api-keys/naver', (c) => {
+  const brands = [{ slug: '', name: '범용 (기본)' }, ...listBrands().map((b) => ({ slug: b.slug, name: b.name }))];
+  const accounts: Record<string, ReturnType<typeof naverAccountView>> = {};
+  for (const b of brands) accounts[b.slug] = naverAccountView(b.slug);
+  return c.json({ brands, accounts });
+});
+app.post('/api-keys/naver', async (c) => {
+  const b = await c.req.json<{ brand?: string; blogId?: string; loginId?: string; loginPw?: string }>()
+    .catch(() => ({} as { brand?: string; blogId?: string; loginId?: string; loginPw?: string }));
+  const slug = (b.brand ?? '').trim();
+  if (slug && !isSafeBrandSlug(slug)) return c.json({ ok: false, error: '무효한 브랜드 슬러그입니다.' }, 400);
+  // 빈 값은 '유지'(기존 키 탭 UX와 동일) — 비운 채 저장해도 지우지 않는다. 값이 온 필드만 갱신.
+  const patch: { blogId?: string; loginId?: string; loginPw?: string } = {};
+  if (typeof b.blogId === 'string' && b.blogId.trim()) patch.blogId = b.blogId;
+  if (typeof b.loginId === 'string' && b.loginId.trim()) patch.loginId = b.loginId;
+  if (typeof b.loginPw === 'string' && b.loginPw.trim()) patch.loginPw = b.loginPw;
+  if (!Object.keys(patch).length) return c.json({ ok: false, error: '변경할 값이 없습니다.' }, 400);
+  setNaverAccount(slug, patch);
+  return c.json({ ok: true, account: naverAccountView(slug) });
 });
 // 카드 삭제 — 사용자 키는 완전 제거, 기본 키는 값 제거+숨김(restore 로 복원).
 app.delete('/api-keys/:key', (c) => c.json(deleteKey(c.req.param('key') ?? '')));

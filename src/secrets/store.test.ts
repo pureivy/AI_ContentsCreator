@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { parseEnvText, upsertEnvText, maskSecret } from './store';
 
 // .env 가 '단일 값 저장소'가 되면서 UI 편집이 파일을 직접 고쳐 쓴다 — 손으로 관리하던
@@ -56,5 +59,67 @@ describe('maskSecret — 항상 마스킹', () => {
     expect(maskSecret('')).toBe('');
     expect(maskSecret('abcd')).toBe('••••');
     expect(maskSecret('sk-test-1234567890')).toBe('sk-t••••7890');
+  });
+});
+
+// 브랜드별 네이버 계정 — 범용('')은 평면 키, 브랜드는 NAVER_ACCOUNTS JSON blob, 폴백 없음(격리).
+// get/setNaverAccount 는 .env(ENV_FILE=GEPA_ENV_FILE)에 read/write 하므로 임시 파일을 가리키게 한 뒤
+// vi.resetModules + 동적 import 로 실제 파일 왕복을 검증한다(모듈 로드 시 ENV_FILE 고정 특성 우회).
+describe('네이버 브랜드별 계정 — 격리·라운드트립', () => {
+  const NAVER_ENV = ['NAVER_ACCOUNTS', 'NAVER_BLOG_ID', 'NAVER_LOGIN_ID', 'NAVER_LOGIN_PW'];
+  let tmpEnv: string;
+  let mod: typeof import('./store');
+  beforeEach(async () => {
+    tmpEnv = path.join(os.tmpdir(), 'naver-acct-store-test.env');
+    fs.writeFileSync(tmpEnv, '', { mode: 0o600 });
+    process.env.GEPA_ENV_FILE = tmpEnv;
+    for (const k of NAVER_ENV) delete process.env[k]; // 이전 테스트의 process.env 미러링 잔재 제거
+    vi.resetModules();
+    mod = await import('./store');
+  });
+  afterEach(() => {
+    try { fs.rmSync(tmpEnv); } catch { /* 이미 없음 */ }
+    delete process.env.GEPA_ENV_FILE;
+    for (const k of NAVER_ENV) delete process.env[k];
+  });
+
+  it('범용(빈 슬러그)은 평면 키에 저장·조회, blob 미사용', () => {
+    mod.setNaverAccount('', { blogId: 'myblog', loginId: 'me', loginPw: 'secret' });
+    const txt = fs.readFileSync(tmpEnv, 'utf-8');
+    expect(txt).toMatch(/^NAVER_BLOG_ID=myblog$/m);
+    expect(txt).not.toContain('NAVER_ACCOUNTS');
+    expect(mod.getNaverAccount('')).toEqual({ blogId: 'myblog', loginId: 'me', loginPw: 'secret' });
+  });
+
+  it('브랜드는 JSON blob 에 슬러그별 저장, 평면 키·타 브랜드와 섞이지 않음', () => {
+    mod.setNaverAccount('cafe-a', { blogId: 'blogA', loginId: 'idA' });
+    mod.setNaverAccount('cafe-b', { blogId: 'blogB' });
+    expect(mod.getNaverAccount('cafe-a')).toEqual({ blogId: 'blogA', loginId: 'idA', loginPw: '' });
+    expect(mod.getNaverAccount('cafe-b')).toEqual({ blogId: 'blogB', loginId: '', loginPw: '' });
+    const txt = fs.readFileSync(tmpEnv, 'utf-8');
+    expect(txt).toContain('NAVER_ACCOUNTS=');
+    expect(txt).not.toMatch(/^NAVER_BLOG_ID=/m); // 브랜드는 평면 키를 건드리지 않음
+  });
+
+  it('브랜드는 범용 평면 키로 폴백하지 않는다(미설정 브랜드 = 빈 계정)', () => {
+    mod.setNaverAccount('', { blogId: 'globalblog' });
+    expect(mod.getNaverAccount('unset-brand')).toEqual({ blogId: '', loginId: '', loginPw: '' });
+  });
+
+  it('부분 갱신은 기존 필드 보존, 빈 값은 해당 필드 삭제', () => {
+    mod.setNaverAccount('cafe-a', { blogId: 'b1', loginId: 'i1', loginPw: 'p1' });
+    mod.setNaverAccount('cafe-a', { loginPw: 'p2' });
+    expect(mod.getNaverAccount('cafe-a')).toEqual({ blogId: 'b1', loginId: 'i1', loginPw: 'p2' });
+    mod.setNaverAccount('cafe-a', { loginId: '' });
+    expect(mod.getNaverAccount('cafe-a')).toEqual({ blogId: 'b1', loginId: '', loginPw: 'p2' });
+  });
+
+  it('naverAccountView — blogId 평문, 로그인 마스킹·설정여부', () => {
+    mod.setNaverAccount('cafe-a', { blogId: 'openblog', loginId: 'longloginid', loginPw: 'pw' });
+    const v = mod.naverAccountView('cafe-a');
+    expect(v.blogId).toBe('openblog');
+    expect(v.loginIdSet).toBe(true);
+    expect(v.loginPwSet).toBe(true);
+    expect(v.loginIdMasked).not.toBe('longloginid');
   });
 });

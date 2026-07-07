@@ -30,10 +30,9 @@ const BUILTIN: BuiltinDef[] = [
   { key: 'NOTIFY_WEBHOOK_URL', label: '알림 웹훅', icon: '🔔', desc: '자율 사이클·일일 브리핑을 POST 할 URL(Slack/Discord/커스텀)', placeholder: 'https://hooks.…', needs_restart: false },
   { key: 'TELEGRAM_BOT_TOKEN', label: '텔레그램 봇 토큰', icon: '📨', desc: '텔레그램 알림(봇 토큰 + 챗 ID 둘 다 설정 시 발송)', placeholder: '123456:ABC…', needs_restart: false },
   { key: 'TELEGRAM_CHAT_ID', label: '텔레그램 챗 ID', icon: '💬', desc: '알림을 받을 텔레그램 chat_id', placeholder: '123456789', needs_restart: false },
-  // 네이버 임시저장(검토 탭) — 블로그 ID 필수, 로그인 자격증명은 자동입력 보조(없으면 열린 브라우저에서 직접 로그인).
-  { key: 'NAVER_BLOG_ID', label: '네이버 블로그 — 블로그 ID', icon: '📗', desc: '임시저장 대상 블로그 아이디(blog.naver.com/<이 값>) — 검토 탭 "네이버 임시저장"에 필수', placeholder: '예: myblog', needs_restart: false },
-  { key: 'NAVER_LOGIN_ID', label: '네이버 로그인 — 아이디', icon: '🔑', desc: '(선택) 임시저장 브라우저 자동 로그인용 — 미설정 시 열린 브라우저에서 직접 로그인', placeholder: '네이버 아이디', needs_restart: false },
-  { key: 'NAVER_LOGIN_PW', label: '네이버 로그인 — 비밀번호', icon: '🔑', desc: '(선택) 자동 로그인용 비밀번호 — .env 에만 저장·화면엔 마스킹', placeholder: '비밀번호', needs_restart: false },
+  // 네이버 발행 계정(블로그 ID·로그인)은 브랜드별로 갈리므로 일반 키 그리드가 아니라 전용
+  // "네이버 발행 계정" 섹션(브랜드 선택)에서 관리한다 — get/setNaverAccount·naverAccountView.
+  // 범용('') 계정은 여전히 평면 키(NAVER_BLOG_ID/NAVER_LOGIN_ID/NAVER_LOGIN_PW)에 저장된다.
   // 법령(LAW)·DART 등 외부 데이터 소스 키는 그라운딩 커넥터(grounding/)가 선언 → connectorKeyDefs 로 합류.
 ];
 // 커넥터가 선언한 키도 '내장 키'처럼 다룬다(값 편집만, 삭제=숨김, 설정 시 자동 연동).
@@ -198,4 +197,74 @@ export function restoreKey(key: string): { ok: boolean; error?: string } {
 /** 런타임 시크릿 조회(LLM 클라이언트 등) — .env 파일(단일 저장소) 우선, 실제 환경변수 폴백. */
 export function getSecret(key: string): string | undefined {
   return readEnvValues()[key] || process.env[key] || undefined;
+}
+
+// ── 브랜드별 네이버 발행 계정 ────────────────────────────────────────────────
+// 브랜드마다 다른 네이버 블로그로 임시저장/발행하려면 자격증명이 브랜드별로 갈려야 한다.
+// 슬러그가 한글일 수 있어 env 키 이름에 직접 못 박으므로, 브랜드 계정은 NAVER_ACCOUNTS
+// 한 키에 JSON({"<slug>":{blogId,loginId,loginPw}})으로 담는다(.env 단일 저장소 유지).
+// 범용('')은 기존 평면 키(NAVER_BLOG_ID/…)를 그대로 써 하위호환·기존 동작 불변.
+// 브랜드는 폴백하지 않는다 — 미설정 브랜드는 빈 계정(발행 시 명확히 에러) → 계정 섞임 원천 차단.
+export interface NaverAccount { blogId: string; loginId: string; loginPw: string }
+const ACCOUNTS_KEY = 'NAVER_ACCOUNTS';
+
+function readNaverAccounts(): Record<string, Partial<NaverAccount>> {
+  const raw = readEnvValues()[ACCOUNTS_KEY] ?? process.env[ACCOUNTS_KEY] ?? '';
+  if (!raw) return {};
+  try {
+    const o = JSON.parse(raw) as unknown;
+    return o && typeof o === 'object' ? (o as Record<string, Partial<NaverAccount>>) : {};
+  } catch { return {}; }
+}
+function writeNaverAccounts(map: Record<string, Partial<NaverAccount>>): void {
+  const clean: Record<string, Partial<NaverAccount>> = {};
+  for (const [slug, a] of Object.entries(map)) {
+    const e: Partial<NaverAccount> = {};
+    if (a.blogId?.trim()) e.blogId = a.blogId.trim();
+    if (a.loginId?.trim()) e.loginId = a.loginId.trim();
+    if (a.loginPw?.trim()) e.loginPw = a.loginPw.trim();
+    if (Object.keys(e).length) clean[slug] = e;
+  }
+  writeEnvValue(ACCOUNTS_KEY, Object.keys(clean).length ? JSON.stringify(clean) : undefined);
+}
+
+/** 발행에 쓸 계정 해석 — 범용('')은 평면 키, 브랜드는 NAVER_ACCOUNTS[slug](폴백 없음). */
+export function getNaverAccount(slug: string): NaverAccount {
+  if (!slug) {
+    const v = readEnvValues();
+    const env = (k: string): string => (v[k] ?? process.env[k] ?? '').trim();
+    return { blogId: env('NAVER_BLOG_ID'), loginId: env('NAVER_LOGIN_ID'), loginPw: env('NAVER_LOGIN_PW') };
+  }
+  const a = readNaverAccounts()[slug] ?? {};
+  return { blogId: (a.blogId ?? '').trim(), loginId: (a.loginId ?? '').trim(), loginPw: (a.loginPw ?? '').trim() };
+}
+
+/** 계정 저장(부분 갱신) — 빈 문자열은 해당 필드 삭제. 범용은 평면 키, 브랜드는 JSON blob. */
+export function setNaverAccount(slug: string, patch: Partial<NaverAccount>): void {
+  if (!slug) {
+    if (patch.blogId !== undefined) writeEnvValue('NAVER_BLOG_ID', patch.blogId.trim() || undefined);
+    if (patch.loginId !== undefined) writeEnvValue('NAVER_LOGIN_ID', patch.loginId.trim() || undefined);
+    if (patch.loginPw !== undefined) writeEnvValue('NAVER_LOGIN_PW', patch.loginPw.trim() || undefined);
+    return;
+  }
+  const map = readNaverAccounts();
+  const cur = { ...(map[slug] ?? {}) };
+  for (const [k, val] of Object.entries(patch)) {
+    const t = (val ?? '').trim();
+    if (t) cur[k as keyof NaverAccount] = t; else delete cur[k as keyof NaverAccount];
+  }
+  map[slug] = cur;
+  writeNaverAccounts(map);
+}
+
+/** UI 표시용 — 계정 각 필드의 설정 여부 + 마스킹(blogId 는 공개값이라 평문, 로그인은 마스킹). */
+export function naverAccountView(slug: string): {
+  blogId: string; loginIdSet: boolean; loginIdMasked: string; loginPwSet: boolean;
+} {
+  const a = getNaverAccount(slug);
+  return {
+    blogId: a.blogId,
+    loginIdSet: !!a.loginId, loginIdMasked: a.loginId ? maskSecret(a.loginId) : '',
+    loginPwSet: !!a.loginPw,
+  };
 }

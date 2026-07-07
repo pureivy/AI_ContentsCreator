@@ -10,9 +10,12 @@
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { sandboxDir } from '../orchestrator/shell';
+import { activeBrandSlug } from '../content/brand';
+import { getNaverAccount } from '../secrets/store';
 import { coerceBlogDraft, draftToFinalContent } from '../output/smarteditor';
 import type { BlogDraft } from '../output/formatter';
 
@@ -283,14 +286,33 @@ export interface NaverDraftResult {
   output: string;
 }
 
-/** 발행 자격증명 — .env 편집(API 키 탭) 후 재시작 없이 반영되도록 process.env 를 라이브로 읽는다. */
-export function naverPublishCreds(): { blogId: string; loginId: string; loginPw: string; headless: boolean } {
+/**
+ * 발행 자격증명 — 활성 브랜드 기준으로 계정을 해석한다(브랜드별 네이버 계정 분리).
+ * 범용(브랜드 미설정)은 기존 평면 키(NAVER_BLOG_ID/…), 브랜드는 NAVER_ACCOUNTS[slug].
+ * .env 편집(API 키 탭) 후 재시작 없이 반영되도록 store 가 .env 를 라이브로 읽는다.
+ */
+export function naverPublishCreds(slug: string = activeBrandSlug()): { blogId: string; loginId: string; loginPw: string; headless: boolean } {
+  const acct = getNaverAccount(slug);
   return {
-    blogId: (process.env.NAVER_BLOG_ID ?? '').trim(),
-    loginId: (process.env.NAVER_LOGIN_ID ?? '').trim(),
-    loginPw: (process.env.NAVER_LOGIN_PW ?? '').trim(),
+    blogId: acct.blogId,
+    loginId: acct.loginId,
+    loginPw: acct.loginPw,
     headless: (process.env.NAVER_PUBLISH_HEADLESS ?? '').trim() === 'true',
   };
+}
+
+/**
+ * 활성 브랜드 기준 네이버 Chrome 프로필 dir(로그인 쿠키가 사는 곳) — 브랜드마다 자기 채널로
+ * 로그인 상태를 격리한다. 범용('')은 '' 를 반환해 python 기본(~/.naver-blog-profiles/cli)을 유지.
+ */
+function naverProfileDir(slug: string): string {
+  return slug ? path.join(os.homedir(), '.naver-blog-profiles', slug) : '';
+}
+/** 활성 브랜드 기준 세션 파일 — 범용은 기존 CONFIG.naverSessionFile, 브랜드는 형제 경로에 -<slug>. */
+function naverSessionFileFor(slug: string): string {
+  const base = CONFIG.naverSessionFile;
+  if (!slug || !base) return base;
+  return path.join(path.dirname(base), `.naver_session-${slug}.json`);
 }
 
 /**
@@ -303,12 +325,15 @@ export function naverPublishCreds(): { blogId: string; loginId: string; loginPw:
  *   없어도 열린 브라우저에서 직접 로그인하면 된다(최대 10분 대기, 전체 타임아웃 15분).
  */
 export async function publishDraftToNaver(
-  sessionDir: string, draft: BlogDraft, opts: { dryRun?: boolean } = {}, signal?: AbortSignal,
+  sessionDir: string, draft: BlogDraft, opts: { dryRun?: boolean; brand?: string } = {}, signal?: AbortSignal,
 ): Promise<NaverDraftResult> {
-  const creds = naverPublishCreds();
+  // 발행 대상 브랜드 = piece 의 브랜드(호출부가 명시). 미지정이면 활성 브랜드(대화형 검토 탭 경로).
+  const slug = opts.brand ?? activeBrandSlug();
+  const creds = naverPublishCreds(slug);
   const dryRun = opts.dryRun === true;
   if (!dryRun && !creds.blogId) {
-    return { ok: false, status: 'ERROR', issues: ['NAVER_BLOG_ID 미설정 — API 키 탭에서 블로그 ID 를 설정하세요.'], output: '' };
+    const where = slug ? `브랜드 '${slug}' 의 ` : '';
+    return { ok: false, status: 'ERROR', issues: [`${where}네이버 블로그 ID 미설정 — API 키 탭에서 이 브랜드의 발행 계정을 설정하세요.`], output: '' };
   }
   const finalContent = draftToFinalContent(draft);
 
@@ -345,8 +370,11 @@ export async function publishDraftToNaver(
   const resultPath = path.join(sessionDir, '07_publish_result.json');
   try { fs.rmSync(resultPath, { force: true }); } catch { /* 없음 */ }
 
+  // 브랜드별 세션·프로필 격리 — 브랜드마다 자기 네이버 계정/쿠키로 발행(계정 섞임 차단). slug 는 위에서 해석.
+  const sessionFile = naverSessionFileFor(slug);
+  const profileDir = naverProfileDir(slug);
   const args = ['--final-content', finalPath, '--image-manifest', manifestPath, '--run-dir', sessionDir];
-  if (CONFIG.naverSessionFile) args.push('--session-file', CONFIG.naverSessionFile);
+  if (sessionFile) args.push('--session-file', sessionFile);
   if (creds.headless) args.push('--headless');
   if (dryRun) args.push('--dry-run');
 
@@ -354,6 +382,7 @@ export async function publishDraftToNaver(
   if (creds.blogId) env.NAVER_BLOG_ID = creds.blogId;
   if (creds.loginId) env.NAVER_ID = creds.loginId;   // naver_publish.py 가 읽는 이름으로 매핑
   if (creds.loginPw) env.NAVER_PW = creds.loginPw;
+  if (profileDir) env.NAVER_PROFILE_DIR = profileDir; // 미설정(범용)이면 python 기본 프로필(cli) 유지
 
   const r = await runScript('naver_publish.py', args, sessionDir, signal, { timeoutMs: NAVER_PUBLISH_TIMEOUT_MS, env });
 
@@ -423,16 +452,21 @@ export function parseStatsOutput(output: string): CollectedMetrics | null {
  * runDir 에 캡처 원본(naver_stats_capture.json)을 남겨 추출기 정밀화에 쓴다.
  */
 export async function collectNaverMetrics(
-  publishedUrl: string, runDir: string, opts: { dryRun?: boolean } = {}, signal?: AbortSignal,
+  publishedUrl: string, runDir: string, opts: { dryRun?: boolean; brand?: string } = {}, signal?: AbortSignal,
 ): Promise<CollectedMetrics | null> {
   try { fs.mkdirSync(runDir, { recursive: true }); } catch { /* 무해 */ }
+  // 이 글의 브랜드 계정/프로필로 통계 조회 — 미지정이면 활성 브랜드. 브랜드마다 로그인 세션이 다르다.
+  const slug = opts.brand ?? activeBrandSlug();
   const args = ['--url', publishedUrl, '--run-dir', runDir];
-  const creds = naverPublishCreds();
+  const creds = naverPublishCreds(slug);
   if (creds.headless) args.push('--headless');
   if (opts.dryRun) args.push('--dry-run');
+  // naver_stats.py 는 --session-file 을 받지 않는다(로그인 상태는 프로필로만) → NAVER_PROFILE_DIR 로 브랜드 분리.
+  const profileDir = naverProfileDir(slug);
   const env: Record<string, string> = {};
   if (creds.loginId) env.NAVER_ID = creds.loginId;
   if (creds.loginPw) env.NAVER_PW = creds.loginPw;
+  if (profileDir) env.NAVER_PROFILE_DIR = profileDir;
   const r = await runScript('naver_stats.py', args, runDir, signal, { timeoutMs: NAVER_STATS_TIMEOUT_MS, env });
   return parseStatsOutput(r.output);
 }
