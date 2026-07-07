@@ -1,6 +1,6 @@
 import React from 'react';
 import { z } from 'zod';
-import { AbsoluteFill, Series, Audio } from 'remotion';
+import { AbsoluteFill, Series, Audio, staticFile } from 'remotion';
 import { KenBurnsImage } from './KenBurnsImage';
 import { KineticCaption } from './KineticCaption';
 import { ProgressBar } from './ProgressBar';
@@ -24,7 +24,7 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number }> =
   <AbsoluteFill>
     <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} />
     <KineticCaption text={s.screenText} />
-    {s.audioSrc ? <Audio src={s.audioSrc} /> : null}
+    {s.audioSrc ? <Audio src={staticFile(s.audioSrc)} /> : null}
   </AbsoluteFill>
 );
 
