@@ -20,8 +20,8 @@ import { promisify } from 'node:util';
 import { CONFIG } from '../config';
 import { synthesize } from '../voice/tts';
 import {
-  FPS, W, H, MIN_SCENE_SEC, TAIL_PAD_SEC, FRAME_W, FRAME_H,
-  type ShortsScene, type ShortsRenderResult, sceneDurationSec, fmtSrtTime, probeDuration, SHORTS_TTS_TONE,
+  FPS, W, H, FRAME_W, FRAME_H,
+  type ShortsScene, type ShortsRenderResult, sceneDurationSec, sceneFrames, fmtSrtTime, probeDuration, SHORTS_TTS_TONE,
 } from './shortsCommon';
 
 export type { ShortsScene, ShortsRenderResult } from './shortsCommon';
@@ -70,7 +70,7 @@ export async function renderShortsVideo(
       issues.push(`씬${i + 1} TTS 실패(무음 진행): ${e instanceof Error ? e.message.slice(0, 80) : e}`);
     }
     const dur = sceneDurationSec(audioDur);
-    const frames = Math.round(dur * FPS);
+    const frames = sceneFrames(dur);
 
     // 2) 씬 프레임 합성(Pillow) — 배경 커버핏 + 화면 텍스트 굽기(이미지 누락 시 그라데이션 폴백)
     const img = images[i] && fs.existsSync(images[i]!) ? images[i]! : '';
