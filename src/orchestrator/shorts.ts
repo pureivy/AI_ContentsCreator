@@ -18,6 +18,7 @@ import { stripEmoji } from '../output/render';
 import { shortsStore } from '../content/shorts';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { renderShortsVideo } from '../tools/shortsRender';
+import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { brandContext } from '../content/brand';
 import type { ShortsScene } from '../tools/shortsRender';
 import type { EventBus } from '../events/bus';
@@ -218,9 +219,17 @@ export async function runShortsJob(
     } catch { /* 전 씬 폴백 */ }
     checkAbort();
 
-    // 4) 조립 — Pillow 자막 프레임 + TTS 내레이션 + ffmpeg 세로 MP4 + srt
-    say(`영상 조립 시작 — TTS 내레이션 + ffmpeg`);
-    const r = await renderShortsVideo(dir, plan.scenes, images, { signal: opts.signal });
+    // 4) 조립 — 기본 Remotion 모션그래픽, 실패 시 ffmpeg 슬라이드쇼로 폴백(무중단).
+    say(CONFIG.shortsRenderer === 'ffmpeg' ? '영상 조립 시작 — ffmpeg 슬라이드쇼' : '영상 조립 시작 — Remotion 모션그래픽');
+    let r = null as Awaited<ReturnType<typeof renderShortsVideo>> | null;
+    if (CONFIG.shortsRenderer !== 'ffmpeg') {
+      try { r = await renderShortsVideoRemotion(dir, plan.scenes, images, { signal: opts.signal }); }
+      catch (e) { say(`모션 렌더 예외 → ffmpeg 폴백: ${e instanceof Error ? e.message.slice(0, 80) : e}`); r = null; }
+    }
+    if (!r || !r.ok) {
+      if (r) say('모션 렌더 실패 → ffmpeg 슬라이드쇼로 폴백');
+      r = await renderShortsVideo(dir, plan.scenes, images, { signal: opts.signal });
+    }
     if (!r.ok || !r.videoPath) throw new Error(`조립 실패 — ${r.issues.join(' · ').slice(0, 250)}`);
     const fallbacks = r.issues.filter((x) => x.includes('배경 폴백')).length;
 
