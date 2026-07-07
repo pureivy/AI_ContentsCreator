@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { sandboxDir } from '../orchestrator/shell';
-import { activeBrandSlug } from '../content/brand';
+import { activeBrandSlug, isSafeBrandSlug } from '../content/brand';
 import { getNaverAccount } from '../secrets/store';
 import { coerceBlogDraft, draftToFinalContent } from '../output/smarteditor';
 import type { BlogDraft } from '../output/formatter';
@@ -306,13 +306,24 @@ export function naverPublishCreds(slug: string = activeBrandSlug()): { blogId: s
  * 로그인 상태를 격리한다. 범용('')은 '' 를 반환해 python 기본(~/.naver-blog-profiles/cli)을 유지.
  */
 function naverProfileDir(slug: string): string {
+  assertSafeSlug(slug);
   return slug ? path.join(os.homedir(), '.naver-blog-profiles', slug) : '';
 }
 /** 활성 브랜드 기준 세션 파일 — 범용은 기존 CONFIG.naverSessionFile, 브랜드는 형제 경로에 -<slug>. */
 function naverSessionFileFor(slug: string): string {
+  assertSafeSlug(slug);
   const base = CONFIG.naverSessionFile;
   if (!slug || !base) return base;
   return path.join(path.dirname(base), `.naver_session-${slug}.json`);
+}
+/**
+ * FS 경계 자체 방어(defense-in-depth) — 슬러그를 프로필 dir·세션 파일명에 그대로 끼워 넣기 전에
+ * isSafeBrandSlug([\p{L}\p{N}-], 구분자·점 없음)로 재검증한다. 현재 호출부(activeBrandSlug/piece.brand,
+ * 저장 엔드포인트)는 항상 검증된 슬러그만 넘기므로 이 경로는 정상 동작에서 도달하지 않지만, 미래에
+ * 미검증 슬러그를 넘기는 코드가 생겨도 경로 탈출(path traversal)이 불가능하도록 여기서 막는다.
+ */
+function assertSafeSlug(slug: string): void {
+  if (slug && !isSafeBrandSlug(slug)) throw new Error(`무효한 브랜드 슬러그(파일경로 차단): ${slug}`);
 }
 
 /**
@@ -329,6 +340,9 @@ export async function publishDraftToNaver(
 ): Promise<NaverDraftResult> {
   // 발행 대상 브랜드 = piece 의 브랜드(호출부가 명시). 미지정이면 활성 브랜드(대화형 검토 탭 경로).
   const slug = opts.brand ?? activeBrandSlug();
+  if (slug && !isSafeBrandSlug(slug)) {
+    return { ok: false, status: 'ERROR', issues: [`무효한 브랜드 슬러그: ${slug}`], output: '' };
+  }
   const creds = naverPublishCreds(slug);
   const dryRun = opts.dryRun === true;
   if (!dryRun && !creds.blogId) {
@@ -457,6 +471,7 @@ export async function collectNaverMetrics(
   try { fs.mkdirSync(runDir, { recursive: true }); } catch { /* 무해 */ }
   // 이 글의 브랜드 계정/프로필로 통계 조회 — 미지정이면 활성 브랜드. 브랜드마다 로그인 세션이 다르다.
   const slug = opts.brand ?? activeBrandSlug();
+  if (slug && !isSafeBrandSlug(slug)) return null; // 무효 슬러그 = 수집 생략(fail-open)
   const args = ['--url', publishedUrl, '--run-dir', runDir];
   const creds = naverPublishCreds(slug);
   if (creds.headless) args.push('--headless');

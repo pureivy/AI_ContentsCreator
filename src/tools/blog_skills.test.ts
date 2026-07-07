@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { parseImagePayload, parsePublishPayload, containImageManifest, parseStatsOutput } from './blog_skills';
+import os from 'node:os';
+import { parseImagePayload, parsePublishPayload, containImageManifest, parseStatsOutput,
+  publishDraftToNaver, collectNaverMetrics } from './blog_skills';
+import type { BlogDraft } from '../output/formatter';
 
 describe('parseImagePayload', () => {
   it('평문 arg → content, 기본 스타일/limit', () => {
@@ -152,5 +155,24 @@ describe('parseStatsOutput(성과 수집 스크립트 출력 파싱)', () => {
     const r = parseStatsOutput('RESULT_JSON: {"views":-5,"searchInflow":[{"keyword":"","count":3},{"keyword":"ok","count":-2}]}')!;
     expect(r.views).toBe(0);
     expect(r.searchInflow).toEqual([{ keyword: 'ok', count: 0 }]);
+  });
+});
+
+// 브랜드 슬러그는 프로필 dir(~/.naver-blog-profiles/<slug>)·세션 파일명(.naver_session-<slug>.json)에
+// 그대로 끼워지므로, 구분자·점이 든 슬러그가 FS 경계에 닿기 전에 거절돼야 한다(경로 탈출 차단).
+// 정상 경로(activeBrandSlug/piece.brand, 저장 엔드포인트)는 항상 검증된 슬러그만 넘기지만, 방어 계층.
+describe('브랜드 슬러그 FS 경계 방어(defense-in-depth)', () => {
+  const MINIMAL_DRAFT = { title: 't', bodyMarkdown: 'b' } as unknown as BlogDraft;
+  for (const bad of ['a/b', '..', 'a/../b', 'x\\y', 'has space', 'dot.slug']) {
+    it(`publishDraftToNaver — 무효 슬러그 '${bad}' 는 발행 전 거절(경로 미생성·spawn 없음)`, async () => {
+      const r = await publishDraftToNaver('/tmp/nonexistent-session', MINIMAL_DRAFT, { brand: bad, dryRun: true });
+      expect(r.ok).toBe(false);
+      expect(r.status).toBe('ERROR');
+      expect(r.issues.join(' ')).toContain('무효한 브랜드 슬러그');
+    });
+  }
+  it('collectNaverMetrics — 무효 슬러그는 수집 생략(null, spawn 없음)', async () => {
+    const runDir = path.join(os.tmpdir(), 'naver-slug-guard-test');
+    expect(await collectNaverMetrics('https://blog.naver.com/x/1', runDir, { brand: '../evil' })).toBeNull();
   });
 });
