@@ -232,6 +232,34 @@ export async function restoreApiKey(key: string): Promise<{ ok: boolean; error?:
   }
 }
 
+// ── 네이버 발행 계정(브랜드별) — 전용 섹션에서 브랜드 선택 후 blogId/로그인 편집 ──
+export interface NaverAccountView { blogId: string; loginIdSet: boolean; loginIdMasked: string; loginPwSet: boolean }
+export interface NaverAccountsResp { brands: { slug: string; name: string }[]; accounts: Record<string, NaverAccountView> }
+export async function fetchNaverAccounts(): Promise<NaverAccountsResp> {
+  try {
+    const r = await fetch("/api-keys/naver");
+    if (!r.ok) return { brands: [{ slug: "", name: "범용 (기본)" }], accounts: {} };
+    return await r.json();
+  } catch {
+    return { brands: [{ slug: "", name: "범용 (기본)" }], accounts: {} };
+  }
+}
+export async function saveNaverAccount(
+  brand: string, patch: { blogId?: string; loginId?: string; loginPw?: string },
+): Promise<{ ok: boolean; error?: string; account?: NaverAccountView }> {
+  try {
+    const r = await fetch("/api-keys/naver", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ brand, ...patch }),
+    });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return await r.json();
+  } catch {
+    return { ok: false, error: "network" };
+  }
+}
+
 // status: ok | duplicate | unsupported | failed | too-large (백엔드) / network | filtered (프론트)
 // ref = raw/ 원자료 참조(저장 증거), page_id = wiki/ reference 페이지 id(적재 증거).
 export interface UploadFileResult {

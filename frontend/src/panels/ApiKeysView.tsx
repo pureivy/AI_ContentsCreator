@@ -2,7 +2,8 @@
 // (Anthropic / OpenAI / 법제처) are editable but protected; you can ADD custom keys
 // and DELETE them. Values live in the project's .env (the single store) and are shown masked.
 import { useEffect, useState } from "react";
-import { fetchApiKeysAll, saveApiKey, addApiKey, deleteApiKey, restoreApiKey, ApiKeyInfo, HiddenKeyInfo } from "../api";
+import { fetchApiKeysAll, saveApiKey, addApiKey, deleteApiKey, restoreApiKey, ApiKeyInfo, HiddenKeyInfo,
+  fetchNaverAccounts, saveNaverAccount, NaverAccountsResp } from "../api";
 import Ico from "./Ico";
 
 export default function ApiKeysView() {
@@ -13,9 +14,36 @@ export default function ApiKeysView() {
   const [saved, setSaved] = useState<string | null>(null);
   const [nk, setNk] = useState({ key: "", label: "", value: "" });
   const [addBusy, setAddBusy] = useState(false);
+  // 네이버 발행 계정(브랜드별) — 전용 섹션. 프로필·세션은 발행 시 브랜드 슬러그로 자동 분리.
+  const [naver, setNaver] = useState<NaverAccountsResp>({ brands: [{ slug: "", name: "범용 (기본)" }], accounts: {} });
+  const [naverSel, setNaverSel] = useState("");
+  const [naverDraft, setNaverDraft] = useState({ blogId: "", loginId: "", loginPw: "" });
+  const [naverBusy, setNaverBusy] = useState(false);
+  const [naverSaved, setNaverSaved] = useState(false);
 
   const load = () => fetchApiKeysAll().then(({ keys, hidden }) => { setKeys(keys); setHidden(hidden); });
-  useEffect(() => { load(); }, []);
+  const loadNaver = () => fetchNaverAccounts().then(setNaver);
+  useEffect(() => { load(); loadNaver(); }, []);
+
+  const naverAcct = naver.accounts[naverSel];
+  const saveNaver = async () => {
+    const patch: { blogId?: string; loginId?: string; loginPw?: string } = {};
+    if (naverDraft.blogId.trim()) patch.blogId = naverDraft.blogId.trim();
+    if (naverDraft.loginId.trim()) patch.loginId = naverDraft.loginId.trim();
+    if (naverDraft.loginPw.trim()) patch.loginPw = naverDraft.loginPw.trim();
+    if (!Object.keys(patch).length) return;
+    setNaverBusy(true);
+    const res = await saveNaverAccount(naverSel, patch);
+    setNaverBusy(false);
+    if (res.ok) {
+      setNaverDraft({ blogId: "", loginId: "", loginPw: "" });
+      setNaverSaved(true);
+      loadNaver();
+      window.setTimeout(() => setNaverSaved(false), 2500);
+    } else {
+      alert(`저장 실패: ${res.error || ""}`);
+    }
+  };
 
   const save = async (key: string) => {
     const v = (drafts[key] ?? "").trim();
@@ -69,6 +97,69 @@ export default function ApiKeysView() {
           <b>기본 키는 값 제거 후 숨김</b>(하단에서 복원 가능).
         </p>
       </div>
+      {/* 네이버 발행 계정 — 브랜드별. blogId 는 공개값(평문), 로그인은 마스킹. 프로필·세션 자동 분리. */}
+      <div className="apikey-card" style={{ marginBottom: 18 }}>
+        <div className="apikey-card-head">
+          <span className="apikey-icon">📗</span>
+          <div className="apikey-titles">
+            <b>네이버 발행 계정 (브랜드별)</b>
+            <div className="apikey-desc">
+              브랜드마다 다른 네이버 블로그로 임시저장·발행합니다. 로그인 프로필·세션은 발행 시 브랜드별로 자동
+              분리돼 계정이 섞이지 않습니다. 비밀번호는 선택 — 최초 발행 때 열린 브라우저에서 직접 로그인하면 그
+              브랜드 프로필에 유지됩니다.
+            </div>
+          </div>
+          <select
+            value={naverSel}
+            onChange={(e) => { setNaverSel(e.target.value); setNaverDraft({ blogId: "", loginId: "", loginPw: "" }); }}
+            style={{ marginLeft: "auto", background: "var(--panel2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "5px 8px", fontSize: 13 }}
+            title="발행 계정을 설정할 브랜드"
+          >
+            {naver.brands.map((b) => <option key={b.slug} value={b.slug}>{b.name}</option>)}
+          </select>
+        </div>
+        <div className="apikey-field">
+          <label>블로그 ID{naverAcct?.blogId && <span className="apikey-cur"> · 현재 {naverAcct.blogId}</span>}</label>
+          <input
+            type="text" autoComplete="off"
+            placeholder={naverAcct?.blogId ? "변경하려면 새 값 입력…" : "예: myblog (blog.naver.com/<이 값>)"}
+            value={naverDraft.blogId}
+            onChange={(e) => setNaverDraft((d) => ({ ...d, blogId: e.target.value }))}
+            onKeyDown={(e) => e.key === "Enter" && saveNaver()}
+          />
+        </div>
+        <div className="apikey-field">
+          <label>로그인 아이디 (선택){naverAcct?.loginIdSet && <span className="apikey-cur"> · 현재 {naverAcct.loginIdMasked}</span>}</label>
+          <input
+            type="text" autoComplete="off"
+            placeholder={naverAcct?.loginIdSet ? "변경하려면 새 값…" : "네이버 아이디 (자동 로그인 보조)"}
+            value={naverDraft.loginId}
+            onChange={(e) => setNaverDraft((d) => ({ ...d, loginId: e.target.value }))}
+            onKeyDown={(e) => e.key === "Enter" && saveNaver()}
+          />
+        </div>
+        <div className="apikey-field">
+          <label>로그인 비밀번호 (선택){naverAcct?.loginPwSet && <span className="apikey-cur"> · 설정됨</span>}</label>
+          <input
+            type="password" autoComplete="off"
+            placeholder={naverAcct?.loginPwSet ? "변경하려면 새 값…" : "비밀번호 (.env 에만 저장·마스킹)"}
+            value={naverDraft.loginPw}
+            onChange={(e) => setNaverDraft((d) => ({ ...d, loginPw: e.target.value }))}
+            onKeyDown={(e) => e.key === "Enter" && saveNaver()}
+          />
+        </div>
+        <div className="apikey-foot">
+          {naverSaved && <span className="apikey-ok">✓ 저장됨</span>}
+          <button
+            className="btn start"
+            disabled={naverBusy || !(naverDraft.blogId.trim() || naverDraft.loginId.trim() || naverDraft.loginPw.trim())}
+            onClick={saveNaver}
+          >
+            {naverBusy ? "저장 중…" : "저장"}
+          </button>
+        </div>
+      </div>
+
       <div className="apikeys-grid">
         {keys.map((k) => {
           const draft = drafts[k.key] ?? "";
