@@ -108,6 +108,8 @@ export interface Config {
   readonly autoCardNews: boolean;
   /** 네이버 임시저장 성공 시 숏폼(MP4) 자동 파생 — piece당 1회. 글마다 이미지 ~6장 + TTS·ffmpeg(로컬) 비용. */
   readonly autoShorts: boolean;
+  /** 쇼츠 렌더 엔진 — 'remotion'(모션그래픽, 기본) | 'ffmpeg'(슬라이드쇼 폴백/강제). */
+  readonly shortsRenderer: 'remotion' | 'ffmpeg';
 
   // --- 음성 입출력 ---
   /** TTS 제공자: 'openai'(gpt-4o-mini-tts, 자연스러운 신경망 음성) | 'say'(macOS 로컬, 폴백). 기본 openai(키 없으면 자동 say 폴백). */
@@ -223,6 +225,7 @@ export const CONFIG: Config = {
   naverDraftSeoMin: Math.min(Math.max(0, envInt('NAVER_DRAFT_SEO_MIN', 80)), 100),
   autoCardNews: envBool('AUTO_CARDNEWS', true),
   autoShorts: envBool('AUTO_SHORTS', true),
+  shortsRenderer: env('SHORTS_RENDERER', 'remotion') === 'ffmpeg' ? 'ffmpeg' : 'remotion',
 
   ttsProvider: env('TTS_PROVIDER', 'openai'),
   openaiTtsModel: env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),
