@@ -19,58 +19,23 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CONFIG } from '../config';
 import { synthesize } from '../voice/tts';
+import {
+  FPS, W, H, MIN_SCENE_SEC, TAIL_PAD_SEC, FRAME_W, FRAME_H,
+  type ShortsScene, type ShortsRenderResult, sceneDurationSec, fmtSrtTime, probeDuration, SHORTS_TTS_TONE,
+} from './shortsCommon';
+
+export type { ShortsScene, ShortsRenderResult } from './shortsCommon';
 
 const execFileP = promisify(execFile);
 
-const FPS = 30;
-const W = 1080;
-const H = 1920;
-const FRAME_W = 1620;        // Pillow 프레임 렌더 해상도(1.5배) — zoompan 다운스케일용 헤드룸
-const FRAME_H = 2880;
-const MIN_SCENE_SEC = 2.8;   // 오디오가 아주 짧아도 읽을 시간 확보
-const TAIL_PAD_SEC = 0.6;    // 내레이션 끝 여백
-
-export interface ShortsScene {
-  narration: string;
-  screenText?: string;
-}
-export interface ShortsRenderResult {
-  ok: boolean;
-  videoPath?: string;
-  srtPath?: string;
-  durationSec?: number;
-  sceneCount?: number;
-  issues: string[];
-}
-
 async function ff(args: string[], timeoutMs: number, signal?: AbortSignal): Promise<void> {
   await execFileP('ffmpeg', ['-nostdin', '-y', ...args], { timeout: timeoutMs, signal, maxBuffer: 8 * 1024 * 1024 });
-}
-
-async function probeDuration(file: string): Promise<number> {
-  const { stdout } = await execFileP('ffprobe',
-    ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file],
-    { timeout: 15_000 });
-  const d = parseFloat(String(stdout).trim());
-  if (!Number.isFinite(d) || d <= 0) throw new Error(`ffprobe 길이 측정 실패: ${file}`);
-  return d;
-}
-
-function fmtSrtTime(sec: number): string {
-  const ms = Math.round(sec * 1000);
-  const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
-  const s = Math.floor((ms % 60000) / 1000), r = ms % 1000;
-  const p = (n: number, w = 2) => String(n).padStart(w, '0');
-  return `${p(h)}:${p(m)}:${p(s)},${p(r, 3)}`;
 }
 
 /**
  * 씬 배열 → dir/final.mp4 + subtitles.srt. images[i] 는 씬 i 의 배경(없으면 null → 단색 폴백).
  * 개별 씬 실패는 이슈로 기록하고 해당 씬을 단색 배경·무음으로라도 완성(전체 실패 방지).
  */
-// 숏폼 낭독 톤(shorts-gen voice_style 이식) — gpt-4o-mini-tts instructions 로 전달.
-const SHORTS_TTS_TONE =
-  '활기차고 대화하듯, 약간 빠른 템포로 친근하게 낭독한다. 첫 훅은 궁금증을 자아내게 힘주어, 핵심 수치와 결론은 또렷하고 자신감 있게. 광고 성우톤이 아니라 아는 사람이 알려주듯.';
 
 export async function renderShortsVideo(
   dir: string, scenes: ShortsScene[], images: Array<string | null>,
@@ -104,7 +69,7 @@ export async function renderShortsVideo(
     } catch (e) {
       issues.push(`씬${i + 1} TTS 실패(무음 진행): ${e instanceof Error ? e.message.slice(0, 80) : e}`);
     }
-    const dur = Math.max(MIN_SCENE_SEC, audioDur + TAIL_PAD_SEC);
+    const dur = sceneDurationSec(audioDur);
     const frames = Math.round(dur * FPS);
 
     // 2) 씬 프레임 합성(Pillow) — 배경 커버핏 + 화면 텍스트 굽기(이미지 누락 시 그라데이션 폴백)
