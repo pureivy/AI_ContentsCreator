@@ -133,6 +133,26 @@ async function designScenes(io: JobIO, topic: string, plan: Plan): Promise<{ pre
   return { preset, style, prompts };
 }
 
+/**
+ * 숏폼 씬 이미지(gpt-image-2, 세로 9:16) 프롬프트 조립 — shorts-gen 의 스타일 일관성(전 씬 공통 앵커
+ * 반복) + 시네마토그래피(구도·조명·씬 변주) + 자막 세이프존 이식. 자막·내레이션은 렌더러가 얹으므로
+ * 이미지엔 글자를 넣지 않는다(오타 원천 차단). 순수 함수(생성 없이 프롬프트 검증 가능).
+ */
+export function buildSceneImagePrompt(a: {
+  style: string; scene: string; index: number; total: number;
+}): string {
+  const { style, index: i, total } = a;
+  const scene = a.scene.trim() || '주제를 상징하는 한국 생활 장면';
+  const isHook = i === 0;
+  const p: string[] = [];
+  p.push(`[전 씬 공통 스타일] ${style}`);
+  p.push(`장면(씬 ${i + 1}/${total}${isHook ? ', 훅' : ''}): ${scene}.${isHook ? ' 첫 3초에 스크롤을 멈출, 가장 시선을 끄는 강렬한 장면으로 연출한다.' : ''}`);
+  p.push('구도: 세로 9:16 프레임. 핵심 피사체는 중상단(상단 60%)에 배치하고, 하단 25%는 자막이 얹히므로 하늘·벽·바닥 같은 단순한 여백으로 비운다.');
+  p.push('시네마토그래피: 얕은 심도와 부드러운 조명으로 피사체를 또렷하게. 이전 씬과 구분되는 앵글·피사체·범위로 변주하되, 전 씬 공통 팔레트·질감·조명을 동일하게 유지해 시리즈 일관성을 낸다.');
+  p.push('금지: 이미지 안에 글자·자막·숫자·로고·워터마크·간판 텍스트를 넣지 않는다(자막은 렌더러가 따로 얹는다). 손·손가락 왜곡과 어색한 합성을 피한다.');
+  return p.join('\n');
+}
+
 /** 숏폼 생성 잡 — launch 래퍼가 버스·시그널을 주입(오피스 뷰 연동). 프론트는 GET 폴링. */
 export async function runShortsJob(
   id: string,
@@ -175,7 +195,7 @@ export async function runShortsJob(
     const bgDraft = {
       imageSlots: plan.scenes.map((s, i) => ({
         alt: s.screenText || s.narration.slice(0, 30),
-        prompt: `${design.style}. ${design.prompts[i]}. 세로 화면 하단 4분의 1은 자막용 단순 여백, 핵심 피사체는 중상단`,
+        prompt: buildSceneImagePrompt({ style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length }),
       })),
     };
     const bgDraftPath = path.join(dir, 'bg-draft.json');
