@@ -1,17 +1,20 @@
 # AI 콘텐츠 스튜디오 (ai-contents-studio)
 
-> Claude Code CLI(구독 인증)를 백엔드로 쓰는 단일 Node/TS 런타임의 멀티에이전트 AI 콘텐츠 스튜디오. 편집장 + 전문가 팀이 주제를 분해·토론·종합해 네이버 블로그·카드뉴스·숏폼을 만들고, 그 지식을 마크다운 위키로 컴파일·유지한다.
+> **Claude Code CLI(구독 인증)를 백엔드로 쓰는 단일 Node/TS 런타임의 멀티에이전트 AI 콘텐츠 스튜디오.** 편집장 + 전문가 팀이 주제를 분해·토론·집필해 **네이버 블로그 → 카드뉴스 → 숏폼(MP4)** 세트를 만들고, 그 지식을 마크다운 위키로 컴파일·유지한다. 브랜드(고객사)별 자료·발행 계정을 격리하며, 유휴 시간에는 스스로 리서치·제작을 이어간다.
 
 ---
 
 ## 1. 배경
 
-로컬 LLM(Ollama) 우선으로 출발한 프로젝트였으나, 콘텐츠 스튜디오 피벗과 함께 **Claude 단일 백엔드**로 확정하고 Ollama 경로를 제거했다(2026-07). 현재 설계의 핵심:
+로컬 LLM(Ollama) 우선으로 출발했으나, 콘텐츠 스튜디오 피벗과 함께 **Claude 단일 백엔드**로 확정하고 Ollama 경로를 완전히 제거했다(2026-07). 현재 설계의 핵심:
 
-- **Claude Code CLI 경유 호출**(`claude -p`, 구독 정액) — API 크레딧 과금 없이 opus/sonnet/haiku 라우팅.
-- **역할 tier 라우팅** — 편집장·팀장(heavy)=opus, 팀원(standard)=sonnet, 구조적 단발 호출(micro)=haiku.
-- **마이크로 단발 호출** — 분해/배정/수렴판정/분류 같은 구조적 작업은 풀 에이전틱 루프 없이 1회 호출.
-- 직원 시스템 프롬프트는 `assets/company/company.yaml`(역할별 절차·판단기준·자기검증 포함, Claude 기준으로 설계).
+- **Claude Code CLI 경유 호출** — `claude -p --output-format stream-json` 서브프로세스 spawn. **구독(정액) 인증**이라 API 크레딧 과금이 없다(`src/llm/claudeCli.ts`). 대가로 호출당 CLI 부팅 오버헤드(~1.5s)와 구독 rate limit을 감수한다.
+- **구독 강제** — 호출 시 `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` 등을 env에서 제거해, 키가 있어도 크레딧 과금 경로로 회귀하지 않는다.
+- **역할 tier 라우팅** — 편집장·통합(heavy)=`claude-opus-4-8`, 전문가/팀원 본작업(standard)=`claude-sonnet-5`, 분해·배정·수렴판정·분류 같은 구조적 단발 호출(micro)=`claude-haiku-4-5`.
+- **마이크로 단발 호출** — 분해/배정/판정/분류는 풀 에이전틱 루프 없이 `microJSON` 1회로 처리.
+- 직원(역할) 시스템 프롬프트·절차·판단기준은 `data/company.yaml`(런타임) / `assets/company/`(시드).
+
+> 정액 구독이지만 무비용 보험으로 월별 사용량 원장(`data/llm_usage.json`)과 예산 캡(`MONTHLY_BUDGET_USD`, 0=무제한)을 유지한다(`src/llm/cost.ts`).
 
 ---
 
@@ -19,27 +22,29 @@
 
 ```
 브라우저 (React 프론트 /  ·  경량 자체 UI /lite)
-        │  HTTP + SSE (무접두 /runs… 계약 + /api/* 계약)
+        │  HTTP + SSE (무접두 /runs… 계약 + /api/* 별칭)
         ▼
 Hono 서버 (src/server/main.ts) ── 단일 Node/TS 런타임
         │
-   ┌────┼─────────────────────────────────────────────┐
-   ▼    ▼                    ▼                          ▼
-오케스트레이터        Karpathy LLM Wiki          거버넌스
-(run/org/directed)   (src/wiki/llmwiki.ts)     (승인·자율레벨)
-   │                        │
-   ▼                        ▼
-LLM 코어 (src/llm)    마크다운 지식베이스
- claudeCli.ts          (data/wiki/*.md)
- models.ts (tier 타입)
+   ┌────┼────────────────┬─────────────────┬──────────────┐
+   ▼    ▼                ▼                 ▼              ▼
+오케스트레이터     콘텐츠 파이프라인      LLM Wiki        거버넌스·자율
+(org/debate/     블로그→카드뉴스→숏폼   (data/wiki)     (승인·브랜드·
+ directed)        (org·cardnews·                       스케줄러)
+   │              shorts.ts)               │
+   ▼                    │                  ▼
+LLM 코어 (src/llm)      ▼             마크다운 지식베이스
+ claudeCli.ts     OpenAI(이미지·TTS)   그라운딩 커넥터
+ models/setting   네이버 발행(임시저장)  (naver·dart·law·youtube)
         │
         ▼
-   Claude Code CLI (구독 인증, stream-json)
+   Claude Code CLI (구독 인증, claude -p / stream-json)
 ```
 
 ### (a) LLM 코어 — `src/llm/`
-- `ollama.ts` — `/api/chat` 스트리밍 직접 클라이언트(`tags`/`ps`/`version`/warm). thinking 모델의 빈 출력 방지를 위해 요청에 `think:false`.
-- `models.ts` — `getSystemSpecs()`로 RAM/CPU/Apple Silicon 감지 → `autoAssignModels()`가 설치 모델을 **micro / standard / heavy** 3 tier로 배정. 예산 초과 모델은 후보에서 제외.
+- `claudeCli.ts` — Claude Code CLI를 `claude -p --output-format stream-json`로 spawn하고 stdout을 줄단위 파싱(`content_block_delta`→누적, `result`에서 usage 수확). 격리 cwd(`os.tmpdir()`)로 프로젝트 `CLAUDE.md` 오염 차단, 동시성 `Semaphore(ANTHROPIC_CONCURRENCY)`.
+- `client.ts` — 파사드 `llm.chat()`(단일 진입점). `models.ts`/`setting.ts` — tier(`micro`/`standard`/`heavy`) → 실제 모델 id 매핑(`CONFIG.cloudTierModels`). `cost.ts` — 사용량 원장·예산 캡.
+- Ollama 코드(`ollama.ts` 등)는 삭제됐고, 백엔드는 `{ backend: 'claude' }`로 고정(토글 폐지).
 
 ### (b) 3가지 런 모드 — `src/orchestrator/`
 디스패처 `index.ts`가 옵션에 따라 분기한다.
@@ -47,274 +52,320 @@ LLM 코어 (src/llm)    마크다운 지식베이스
 | 모드 | 트리거 | 동작 | 파일 |
 |---|---|---|---|
 | **directed** | `agent` 지정 | 직원 1명 단독 응답(가장 빠름) | `directed.ts` |
-| **org**(위계) | `path='team'`/`'full'` 또는 `RUN_MODE=org` + 팀 존재 | CEO→팀(리드+팀원)→비평→CEO 종합 | `org.ts` + `prepare.ts`/`finalize.ts` |
-| **debate**(평면) | 그 외(`RUN_MODE=debate`) | 전문가 평면 작업→비평/재반박 라운드→수렴판정→종합 | `run.ts` + `debate.ts` |
+| **org**(위계, 기본) | `path='team'`/`'full'` 또는 `RUN_MODE=org` | CEO 라우팅 → 리서치팀(병렬) → 토론·비평 → 작가 단독 집필 → 포장·finalize | `org.ts` + `prepare.ts`/`finalize.ts` |
+| **debate**(평면) | `RUN_MODE=debate` | 전문가 평면 작업 → 비평/반박 라운드 → 수렴판정 → 종합 | `run.ts` + `debate.ts` |
 
-공통: 작업 전 위키 그라운딩(`wiki_query` 툴 보유 역할이 관련 지식을 자동 조회·주입), 종료 후 산출물 위키 ingest + 자가수선 maintain. `revise.ts`는 부모 런의 전문가 입장 + 피드백으로 CEO 재종합(v+1).
+공통: 작업 전 위키 그라운딩(관련 지식 자동 주입), 종료 후 산출물 위키 ingest + 자가수선. `revise.ts`는 검토 피드백으로 초안을 개정(v+1).
 
-### (c) Karpathy "LLM Wiki" — `src/wiki/llmwiki.ts`
-RAG(쿼리 시 임베딩 청크 검색)가 아니라, 에이전트가 직접 유지하는 **마크다운 지식베이스**. 지식을 1회 컴파일하고 계속 갱신(compounding)한다. 자세한 워크플로우는 6절 참조.
+### (c) 콘텐츠 파이프라인 — 블로그 → 카드뉴스 → 숏폼
+- **블로그**(`org.ts`) — org 런이 본문을 집필·포장해 `draft.json/md/html`을 `data/sessions/<runId>/`에 쓰고 콘텐츠 **piece**로 승격한다.
+- **카드뉴스**(`orchestrator/cardnews.ts`, standby 팀) — 기획→디자인→`gpt-image-2`가 **한글 텍스트 포함 카드를 직접 렌더**→비전 QA(오타 검수, 문제 장만 재생성).
+- **숏폼**(`orchestrator/shorts.ts`, standby 팀) — 기획(훅·씬·내레이션)→씬 이미지(무텍스트)→렌더러가 자막 프레임 + **OpenAI TTS 내레이션** + ffmpeg로 **1080×1920 MP4 + srt** 조립.
+- 카드뉴스·숏폼은 블로그 org 런과 **별도 파이프라인**이다. 블로그 초안 완료 후 자동 파생되거나(`AUTO_CARDNEWS`/`AUTO_SHORTS`), 독립 주제로도 만들 수 있다. 자세한 흐름은 8절.
 
-### (d) 거버넌스 — `src/approvals/`, `src/config.ts`
-- 발행 휴먼 게이트(블로킹 + 타임아웃 fail-open), 자율 레벨(0=off,1=read,2=draft승인,3=auto), 동시성/팀병렬/턴캡 노브.
+### (d) Karpathy "LLM Wiki" — `src/wiki/llmwiki.ts`
+RAG가 아니라 에이전트가 직접 유지하는 **마크다운 지식베이스**. 지식을 1회 컴파일하고 계속 갱신(compounding)한다. 자세한 워크플로우는 6절.
 
-### (e) 프론트 — `frontend/`(React/Vite) + `public/index.html`(경량 SPA)
-- React 프론트는 오피스 연출·타임라인·위키 그래프 뷰(`@xyflow/react`, `react-force-graph-2d`)·실시간 SSE 스트리밍. `/`에서 `frontend/dist`를 서빙.
+### (e) 거버넌스·브랜드·자율 — `src/approvals/`, `src/content/brand.ts`, `src/autonomy/`
+- 발행 휴먼 게이트(블로킹 + 타임아웃 fail-open), 자율 레벨(0=off,1=read,2=draft승인,3=auto).
+- **브랜드(고객사)별 격리** — 자료·위키·발행 계정을 브랜드 슬러그로 분리(7절).
+- **유휴/정기 자율 사이클** — 사용자 런이 없을 때만 제작·리서치를 이어가고, 사용자 런 도착 시 양보(6-1절).
+
+### (f) 그라운딩 커넥터 — `src/grounding/`
+네이버(검색·데이터랩·검색광고·자동완성)·DART(전자공시)·국가법령·유튜브 Data API·커스텀 소스. 리서치 팀이 실측 데이터로 근거를 확보한다.
+
+### (g) 프론트 — `frontend/`(React/Vite) + `public/index.html`(경량 SPA)
+- React 프론트는 오피스 연출·타임라인·위키 그래프·성과 뷰·실시간 SSE 스트리밍. `/`에서 `frontend/dist`를 서빙.
 - 빌드 불필요한 경량 단일 페이지 UI는 `/lite`.
 
-### 내보내기 — `src/export/hwpx.ts` + `src/util/zip.ts`
-순수 Node(의존성 無)로 마크다운 산출물을 한글 **HWPX**(OWPML section + 최소 ZIP 라이터, `mimetype` STORED-first)로 변환.
+### (h) 내보내기 — `src/export/hwpx.ts` + `src/util/zip.ts`
+순수 Node(외부 의존성 無)로 마크다운 산출물을 한글 **HWPX**(OWPML section + 최소 ZIP 라이터)로 변환.
 
 ---
 
 ## 3. 빠른 시작
 
 ### 전제조건
-- Node.js **>= 20.6** (ESM)
-- [Ollama](https://ollama.com) 설치 + 최소 1개 채팅 모델 (예: `ollama pull gemma3:4b`)
-- 패키지 매니저 `pnpm` (npm 도 가능)
+- **Node.js >= 20.6** (ESM)
+- **Claude Code CLI** — 설치 후 구독 계정으로 로그인돼 있어야 한다(`claude` 실행 파일이 PATH에, 또는 `CLAUDE_CLI_PATH`로 지정). LLM 호출 전부가 이 CLI를 경유한다.
+- 패키지 매니저 **pnpm**(npm도 가능)
+- (선택) **OpenAI API 키** — 이미지 생성(`gpt-image-2`)·음성 TTS(`gpt-4o-mini-tts`)에 필요. 없으면 이미지는 dry-run, TTS는 macOS `say` 폴백.
+- (선택) **블로그 스킬 Python venv** — 네이버 임시저장·OpenAI 이미지 스크립트(`scripts/blog_skills/`). `BLOG_PYTHON`으로 venv python 경로 지정. 네이버 발행은 Playwright 사용.
+- (선택) **ffmpeg**(`brew install ffmpeg`) — 숏폼 렌더·음성 변환.
+- (선택) **mlx-whisper**(`pip install mlx-whisper`) — 음성 입력(STT).
 
 ### 설치
 ```bash
-git clone <repo> gepa-ai-office
-cd gepa-ai-office
+git clone <repo> ai-contents-studio
+cd ai-contents-studio
 pnpm install
-# (선택) React 프론트도 빌드
+# (선택) React 프론트 빌드 — 안 하면 /lite 사용
 cd frontend && pnpm install && pnpm build && cd ..
 ```
 
-### Ollama 튜닝 서버 띄우기 (속도 핵심, 권장)
-> ⚠️ 메뉴바 Ollama.app 이 11434 포트를 선점하면 튜닝 서버가 못 뜬다 — 먼저 종료할 것.
-
-```bash
-./scripts/serve_ollama_tuned.sh
-# 적용값: KEEP_ALIVE=30m · CONTEXT_LENGTH=16384 · FLASH_ATTENTION=1 · KV_CACHE_TYPE=q8_0 · NUM_PARALLEL=1
-# 큰 머신은 컨텍스트를 늘려서:
-OLLAMA_CONTEXT_LENGTH=32768 ./scripts/serve_ollama_tuned.sh
-```
-확인: `curl -s localhost:11434/api/ps` → `context_length` 16384, `expires_at` 약 30분 뒤.
-
 ### 개발 서버 실행
 ```bash
-pnpm dev          # tsx watch src/server/main.ts (핫리로드)
+pnpm dev          # TZ=Asia/Seoul tsx watch src/server/main.ts (핫리로드)
 # 또는 비-watch
-pnpm start
+pnpm start        # TZ=Asia/Seoul tsx src/server/main.ts
 ```
-브라우저에서 **http://localhost:8787** 접속.
+브라우저에서 **http://127.0.0.1:8787** 접속.
 - `/` — React 프론트(빌드돼 있으면)
 - `/lite` — 빌드 불필요 경량 UI
 
-주제를 입력하면 실시간으로 에이전트 스트리밍, 속도 메트릭(평균 프롬프트 토큰·tok/s·호출수·경과), 위키 자동 적재가 보인다.
+주제를 입력하면 실시간으로 에이전트 스트리밍, 속도 메트릭, 위키 자동 적재, 오피스 연출이 보인다. **"리서치" 토글이 켜져 있으면 블로그·카드뉴스·숏폼을 만들지 않고 조사·위키 적재만 하는 리서치 런으로 실행된다**(8절 참조).
+
+> API 키(OpenAI·네이버 계정)는 파일이 아니라 UI의 **API 키 탭** 또는 `data/secrets.json`(gitignore)에서 관리한다.
 
 ---
 
 ## 4. 주요 API
 
-서버는 GEPA React 프론트용 **무접두 계약**(`/runs…`)과 자체 UI용 **`/api/*` 계약**을 둘 다 등록한다. 아래는 무접두(프론트) 계약 기준.
+서버는 React 프론트용 **무접두 계약**(`/runs…`)과 자체 UI용 **`/api/*` 별칭**을 대부분 동일 핸들러로 이중 등록한다. 아래는 무접두 기준의 대표 라우트(전체는 `src/server/main.ts`).
 
-### 런 (run)
+### 런·콘텐츠 piece
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| POST | `/runs` | 런 시작. body `{ topic, agent?, path?, budget_usd? }` → `{ run_id }`. `agent`=directed, `path='team'\|'full'`=org |
-| GET | `/runs` | 런 목록 |
-| GET | `/runs/:id` | 런 상태(status·deliverable 등) |
-| GET | `/runs/:id/events` | **SSE** 이벤트 스트림(`Last-Event-ID` 재개 지원, 15s ping) |
-| GET | `/runs/:id/log` | 이벤트 전체(버스 생존 시 메모리, 폐기 후 영속 `events.jsonl` replay) |
-| POST | `/runs/:id/cancel` | 취소 → status `cancelled` |
-| POST | `/runs/:id/revise` | 수정 요청(v+1). body `{ feedback }` → `{ run_id, version }` |
-| GET | `/runs/:id/export/hwpx` | 산출물을 한글 **HWPX** 파일로 다운로드 |
+| POST | `/runs` | 런 시작. body `{ topic, agent?, path?, mission?, persona?, images?, docs? }`. `mission:'research'`=리서치 런 |
+| POST | `/runs/attachments` | 런 첨부(이미지≤8·문서≤8) 업로드·검증 |
+| GET | `/runs/:id/events` | **SSE** 이벤트 스트림(`Last-Event-ID` 재연결) |
+| POST | `/runs/:id/cancel` · `/promote` · `/revise` | 취소 · piece 승격 · 수정요청(v+1) |
+| GET · POST · DELETE | `/pieces …` | 콘텐츠 타임라인(캘린더). `/pieces/:id/draft`·`/run`·`/naver-draft`·`/metrics` |
 
-### 위키 (wiki)
+### 카드뉴스·숏폼·성과
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| GET | `/wiki/graph` | 지식 그래프(nodes/links/stats) |
-| GET | `/wiki/pages` | 페이지 목록(`?category=entity\|concept\|source…`) |
-| GET | `/wiki/page/:id` | 페이지 상세(본문·관계) |
-| GET | `/wiki/stats` | 페이지/소스 카운트 |
-| GET | `/wiki/lint` | 고아·끊긴링크(지식 갭) 점검 |
-| POST | `/wiki/maintain` | 자가수선: 끊긴링크를 LLM으로 보충(`?n=개수`, 기본 6) |
-| POST | `/wiki/audit` | 모순 감사(`?n=쌍수`, `?resolve=1`이면 해소 노트 기록) |
+| POST | `/cardnews` · `/pieces/:id/cardnews` | 카드뉴스 생성(독립 주제 / 초안 파생) |
+| GET | `/cardnews/:id` · `/cardnews/:id/slides/:name` · `/cardnews/:id/zip` | 상태 · 슬라이드 이미지 · 전체 zip |
+| POST | `/shorts` · `/pieces/:id/shorts` | 숏폼 생성(독립 주제 / 초안 파생) |
+| GET | `/shorts/:id/video` · `/shorts/:id/zip` | MP4 다운로드 · 자산 zip |
+| GET · POST | `/performance` · `/pieces/:id/collect-metrics` | 발행 후 성과 수집·분석 |
 
-### 승인 (approval)
+### 브랜드·위키·승인·자료
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| GET | `/approvals` | 대기 중 승인 목록 |
-| POST | `/approvals/:id/decide` | 승인/반려. body `{ approved, note? }` |
+| GET · POST · DELETE | `/brands` · `/brands/activate` · `/brands/:slug` | 브랜드 목록·전환·삭제 |
+| GET · PUT | `/brand` | 활성 브랜드 프로필 조회·수정 |
+| GET | `/wiki/graph` · `/wiki/pages` · `/wiki/page/:id` · `/wiki/stats` · `/wiki/lint` | 지식 그래프·페이지·갭 점검 |
+| POST | `/wiki/maintain` · `/wiki/audit` · `/wiki/inject` · `/wiki/reingest` | 자가수선 · 모순감사 · 지식주입 · 재적재 |
+| GET · POST | `/approvals` · `/approvals/:id/decide` | 대기 승인 목록 · 승인/반려 |
+| POST · GET | `/sources` | 자료(.md/.txt/.csv/.json 등) 업로드 → 위키 소스화 |
 
-### 자료/내보내기·기타
+### 음성·자비스·시스템
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| POST | `/sources` | multipart 텍스트(.md/.txt/.csv/.json) 업로드 → 위키 `source` 페이지 적재(에이전트 그라운딩 소스화) |
-| GET | `/sources` | 업로드된 소스 목록 |
-| GET | `/llm` · `/api/llm` | LLM 백엔드 상태(설치 모델·로드 상태·자동배정) |
-| GET | `/company` · `/api/company` | 회사 로스터(CEO·팀·팀원) |
-| GET | `/healthz` · `/api/health` | 헬스체크 |
-
-> 미구현 패널(`/sync`·`/templates`·`/mcp`·`/api-keys` 등)은 프론트가 빈 상태로 우아하게 렌더하도록 스텁 응답. 미구현 쓰기는 JSON 501.
+| POST | `/voice/stt` · `/voice/tts` · `/voice/settings` · GET `/voice/voices` | STT·TTS·설정·음색 목록 |
+| POST | `/jarvis/chat` | 자비스(비서) 대화 |
+| GET | `/company` · `/personas` · `/api-keys` · `/connectors` · `/autonomy/status` | 로스터·페르소나·키·커넥터·자율 상태 |
+| GET | `/healthz` · `/api/health` · `/llm` · `/runsettings` | 헬스체크 · LLM 상태 · 런타임 설정 |
 
 ---
 
 ## 5. 설정 (환경변수)
 
-모두 선택값이며, 비우면 로컬 우선 기본값이 적용된다(`src/config.ts`).
+모두 선택값이며, 비우면 기본값이 적용된다(`src/config.ts`). 인스턴스 분리는 `GEPA_ENV_FILE`로 로드할 `.env` 경로를 지정한다(이름은 레거시).
 
+### 서버 · LLM(Claude 단일)
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `PORT` / `HOST` | `8787` / `127.0.0.1` | 서버 바인딩 |
-| `BACKEND` / `LOCAL_LLM` | `local` / `true` | LLM 백엔드(현재 로컬 중심) |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama 주소 |
-| `LOCAL_LLM_MODEL` | `''` | 비우면 RAM 예산으로 자동 선택 |
-| `AUTO_SELECT_MODEL` | `true` | 모델 자동배정 on/off |
-| `LOCAL_LLM_KEEP_ALIVE` | `30m` | 모델 상주(정식 경로는 서버 env) |
-| `LOCAL_LLM_MAX_OUTPUT_TOKENS` | `8192` | `num_predict` 캡, [1,32768] 클램프 |
-| `LOCAL_LLM_INTEGRATION_MAX_OUTPUT_TOKENS` | `16000` | CEO 통합 단계 출력 캡 |
-| `LLM_TEMPERATURE` / `LLM_TOP_P` / `LLM_TOP_K` | `0.7` / `0.9` / `40` | 샘플링 |
-| `CONCURRENCY` | 로컬 `1` | 동시 LLM 세션(벽시계 1번 노브) |
-| `TEAM_PARALLEL` | 로컬 `1` | 팀 병렬도 |
-| `MAX_TURNS_PER_AGENT` | 로컬 `8` | 에이전트당 최대 턴 |
-| `RUN_MODE` | `org` | `org`(위계) 또는 `debate`(평면) |
-| `MIN_SPECIALISTS` / `MAX_SPECIALISTS` | 로컬 `2` / `3` | 전문가 수 범위 |
-| `DEBATE_ROUNDS` / `DEBATE_ROUNDS_CAP` | 로컬 `1` / `2` | 토론 라운드 |
-| `TERMINATION` | `adaptive` | 수렴 종료 방식 |
-| `DEFAULT_AUTONOMY` | `2` | 기본 자율 레벨(2=draft 승인) |
-| `REQUIRE_APPROVAL` / `APPROVAL_TIMEOUT_S` | `false` / `600` | 발행 승인 게이트 |
-| `WRITE_SESSION_DIGEST` | `true` | 세션 다이제스트 영속화 |
-| `WEB_SEARCH` | `true` | 인-프로세스 웹검색(DDG) |
-| `USE_EMBEDDINGS` | `true` | 위키 **의미검색**(retrieve→임베딩 rerank). 임베딩 모델 미설치면 휴리스틱으로 자동 폴백(회귀 0) |
-| `EMBED_MODEL` | `bge-m3` | Ollama 임베딩 모델(다국어). 활성하려면 `ollama pull bge-m3`. 미설치/미해당이면 설치된 임베딩류 자동 탐색→없으면 폴백 |
-| `AGENT_TOOL_LOOP` | `false` | **능동 다단계 tool-loop**(opt-in). on 이면 `work` 단계 에이전트가 `<tool name="…">` 태그로 추가 자료를 스스로 조회·재호출 |
-| `AGENT_MAX_TOOL_CALLS` | `4` | 한 에이전트 턴의 총 도구 호출 캡(`[1,12]`, 로컬 속도 백스톱) |
-| `ENFORCE_AUTONOMY` | `true` | 자율레벨(0~3) 강제 — 쓰기성 도구를 게이팅(2=승인, 3=자동, ≤1=차단). 쓰기 도구가 없으면 no-op |
-| `AUTO_CYCLE_MINUTES` | `0` | **유휴 게이트 자율 사이클**(0=off). 사용자 런이 없을 때만 '단일 작업'을 자율 실행, 사용자 런 도착 시 양보 |
-| `AGENT_SHELL` | `false` | **셸 실행 도구**(`run_command`) 옵트인. tool-loop 와 별개로 명시 활성해야 함(위험 표면) |
-| `AGENT_SHELL_ALLOW` | (읽기명령) | 셸 allowlist(argv[0] basename). 기본은 읽기전용 분석명령만 — `python3`/`node` 등 인터프리터는 사실상 임의실행이라 명시 추가해야 하며 `autonomy=2`(승인)와 함께 쓸 것 |
-| `GEPA_DATA_DIR` | `./data` | 데이터 루트(wiki/sessions/approvals) |
+| `CLOUD_MICRO_MODEL` | `claude-haiku-4-5` | micro tier(구조적 단발) 모델 |
+| `CLOUD_STANDARD_MODEL` | `claude-sonnet-5` | standard tier(본문 집필) 모델 |
+| `CLOUD_HEAVY_MODEL` | `claude-opus-4-8` | heavy tier(통합·편집) 모델 |
+| `CLAUDE_CLI_PATH` | `claude` | Claude Code CLI 실행 파일 경로 |
+| `ANTHROPIC_CONCURRENCY` | `6` | Claude CLI 동시 spawn 상한 |
+| `AGENT_THINKING` | `false` | 생성 단계 모델 추론(thinking) 활성 |
+| `REQUEST_TIMEOUT_MS` | `600000` | LLM 요청 타임아웃(ms) |
+| `MAX_OUTPUT_TOKENS` | `8192` | 일반 호출 출력 상한(1~32768 클램프) |
+| `INTEGRATION_MAX_OUTPUT_TOKENS` | `24000` | 통합(종합) 단계 출력 상한 |
+| `MONTHLY_BUDGET_USD` | `0` | 월 예산 캡($, 0=무제한, 무비용 보험) |
 
-> Ollama 서버 env(`OLLAMA_CONTEXT_LENGTH`·`OLLAMA_KEEP_ALIVE`·`OLLAMA_FLASH_ATTENTION`·`OLLAMA_KV_CACHE_TYPE`·`OLLAMA_NUM_PARALLEL`)는 앱이 아니라 `scripts/serve_ollama_tuned.sh`가 설정한다.
+### 조직 · 동시성 · 연출
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `RUN_MODE` | `org` | `org`(위계) 또는 `debate`(평면) |
+| `CONCURRENCY` / `TEAM_PARALLEL` | `4` / `4` | 동시 LLM 세션 / 팀 병렬도 |
+| `MAX_TURNS_PER_AGENT` | `20` | 에이전트당 최대 턴 |
+| `MIN_SPECIALISTS` / `MAX_SPECIALISTS` | `2` / `2` | 전문가 수 범위 |
+| `DEBATE_ROUNDS` / `DEBATE_ROUNDS_CAP` | `2` / `3` | debate 라운드 / 상한 |
+| `ORG_DEBATE_ROUNDS` | `1` | org 비평→반박 라운드(0~3) |
+| `TERMINATION` | `adaptive` | 수렴 종료 방식 |
+| `CHOREO_PAUSE_MS` / `TOKEN_COALESCE_MS` / `SSE_PING_SECONDS` | `300` / `80` / `15` | 연출·토큰병합·SSE ping |
+
+### 저장 · 승인 · 그라운딩
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `GEPA_DATA_DIR` | `./data` | 데이터 루트(wiki/sessions/agents/approvals 파생) — 이름은 레거시 |
+| `DEFAULT_AUTONOMY` | `2` | 기본 자율 레벨(2=draft 승인) |
+| `REQUIRE_APPROVAL` / `APPROVAL_TIMEOUT_S` | `false` / `600` | 쓰기 승인 게이트 |
+| `WRITE_SESSION_DIGEST` / `EVOLVE_EMPLOYEES` | `true` / `true` | 세션 다이제스트 / 직원 자가학습 |
+| `WEB_SEARCH` | `true` | 인-프로세스 웹검색 |
+| `GROUNDING_TIMEOUT_MS` | `15000` | 외부 커넥터 fetch 타임아웃(3000~120000) |
+
+### 콘텐츠 제작 — OpenAI 이미지 · 네이버 발행
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `OPENAI_API_KEY` | `''` | OpenAI 키(이미지·TTS) — 서브프로세스 env로만 전달 |
+| `OPENAI_IMAGE_MODEL` | `gpt-image-2` | 이미지 생성 모델 |
+| `BLOG_PYTHON` / `BLOG_SCRIPTS_DIR` | `''` / `scripts/blog_skills` | 블로그 스킬 venv python / 스크립트 디렉토리 |
+| `NAVER_SESSION_FILE` | `<data>/.naver_session.json` | 네이버 Playwright 세션(storage_state) 경로 |
+| `BLOG_AUTO_IMAGE` | `false` | finalize 후 블로그 이미지 자동 생성 옵트인 |
+| `AUTO_NAVER_DRAFT` / `NAVER_DRAFT_SEO_MIN` | `true` / `80` | ready 도달 시 자동 임시저장 / 최소 SEO 점수 |
+| `AUTO_CARDNEWS` / `AUTO_SHORTS` | `true` / `true` | 임시저장 성공 시 카드뉴스·숏폼 자동 파생 |
+
+> 브랜드별 네이버 계정은 `data/secrets.json`의 `NAVER_ACCOUNTS`(JSON `{"<slug>":{blogId,loginId,loginPw}}`)로 관리한다. 폴백이 없어(미설정 브랜드=발행 에러) 계정 섞임을 원천 차단한다. `ANTHROPIC_API_KEY`는 정의만 있고 **사용하지 않는다**(Claude는 구독 인증).
+
+### 음성 입출력
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `TTS_PROVIDER` | `openai` | TTS 제공자(`openai`\|`say`) — 키 없으면 `say` 폴백 |
+| `OPENAI_TTS_MODEL` / `OPENAI_TTS_VOICE` | `gpt-4o-mini-tts` / `nova` | OpenAI TTS 모델·음색 |
+| `VOICE_TTS_VOICE` | `Yuna` | macOS `say` 폴백 음색 |
+| `VOICE_STT_MODEL` | `mlx-community/whisper-large-v3-turbo` | STT(음성인식) 모델 |
+
+### 자율 사이클 · 능동 에이전트
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `AUTO_CYCLE_MINUTES` | `0` | 유휴 자율 사이클 주기(분, 0=off) |
+| `RESEARCH_CYCLE_HOURS` | `24` | 지식 리서치 런 주기(시간, 0=off) |
+| `CONTENT_CADENCE_PER_WEEK` / `CONTENT_READY_CAP` | `3` / `5` | 주당 목표 편수 / 미발행 백로그 캡 |
+| `DAILY_BRIEFING_TIME` / `PERFORMANCE_SYNC_TIME` | `''` / `''` | 일일 브리핑 / 성과 동기화 시각("HH:MM") |
+| `PERFORMANCE_WINDOW_DAYS` | `14` | 발행 후 성과 측정 대기일 |
+| `NOTIFY_AUTO_CYCLE` | `true` | 자율 사이클 완료 알림 |
+| `AGENT_TOOL_LOOP` / `AGENT_MAX_TOOL_CALLS` | `false` / `4` | 능동 다단계 tool-loop / 턴당 호출 캡(1~12) |
+| `ENFORCE_AUTONOMY` | `true` | 자율 레벨 강제 게이팅 |
+| `AGENT_SHELL` / `AGENT_SHELL_ALLOW` / `AGENT_SHELL_TIMEOUT_MS` | `false` / (읽기명령) / `60000` | 셸 실행 도구 + allowlist + 타임아웃 |
+| `INJECTED_KNOWLEDGE_CAP` | `10000` | 주입 지식 반영 한도(자 수) |
+
+> 하위호환 폴백으로 `LOCAL_LLM_TIMEOUT_MS` / `LOCAL_LLM_MAX_OUTPUT_TOKENS` / `LOCAL_LLM_INTEGRATION_MAX_OUTPUT_TOKENS` 세 개의 구 env 이름을 아직 읽는다(신규 이름의 폴백). `OLLAMA_*`·`EMBED_MODEL`·`USE_EMBEDDINGS`는 더 이상 유효하지 않다.
 
 ---
 
 ## 6. 위키 워크플로우 (Karpathy LLM Wiki)
 
-`data/wiki/` 아래에 LLM이 직접 유지하는 마크다운 지식베이스. RAG(쿼리 시 임베딩 청크 검색)가 아니라 지식을 1회 컴파일해 계속 갱신(compounding)한다. 구조:
+`data/wiki/`(브랜드별 `data/wiki-<slug>/`) 아래에 LLM이 직접 유지하는 마크다운 지식베이스. RAG가 아니라 지식을 1회 컴파일해 계속 갱신(compounding)한다. 구조:
 
 ```
 data/
-├── raw/                  # 업로드 원본(불변)
-└── wiki/
-    ├── index.md          # 카탈로그(카테고리별 1줄 요약) — 인덱스 우선 탐색 진입점
-    ├── log.md            # append-only 타임라인 (## [YYYY-MM-DD] op | Title)
-    ├── WIKI_SCHEMA.md    # 유지 규칙(스키마) 문서
-    └── pages/*.md        # 엔티티/개념/소스 페이지 (YAML 프런트매터 + [[위키링크]])
+├── raw/ · raw-<브랜드>/    # 업로드 원본(불변, 브랜드 격리)
+└── wiki/ · wiki-<브랜드>/
+    ├── index.md            # 카탈로그(카테고리별 1줄 요약) — 인덱스 우선 탐색 진입점
+    ├── log.md              # append-only 타임라인
+    ├── WIKI_SCHEMA.md      # 유지 규칙(스키마)
+    └── pages/*.md          # 엔티티/개념/소스 페이지(YAML 프런트매터 + [[위키링크]])
 ```
-
-각 페이지는 `title/slug/type/aliases/sources/contributors/updated/summary` 프런트매터와 본문(`[[다른-페이지]]` 위키링크 포함)을 가진다.
 
 | 워크플로우 | 코드 | 설명 |
 |---|---|---|
-| **ingest** | `ingest()` | LLM 주도: 산출물/소스 → 엔티티·개념 추출 → 페이지 생성·갱신([[링크]]) → index 재생성 → log 기록. 재적재 시 '갱신' 섹션 머지(compounding). |
-| **query** | `query()` / `semanticQuery()` | 휴리스틱 인덱스 탐색(임베딩 불필요) → 에이전트 작업 전 관련 지식 주입(그라운딩). `USE_EMBEDDINGS`+임베딩 모델 설치 시 **retrieve→임베딩 rerank**(휴리스틱으로 후보 recall 후 코사인 재정렬, 전 위키 임베딩 회피·hash 캐시). 모델 없으면 휴리스틱 폴백. |
-| **lint** | `lint()` | 고아 페이지·끊긴 링크 = 지식 갭 탐지. → `GET /wiki/lint`. |
-| **maintain** | `maintain()` | 자가수선: lint가 찾은 끊긴 링크를 LLM이 보충해 페이지 생성·연결. `POST /wiki/maintain?n=N` + **런 종료 시 자동**(maxFill 2). |
-| **audit** | `findContradictions()` | 토픽 겹치는 페이지 쌍을 LLM 비교 → 상충 주장 탐지. `?resolve=1`이면 ⚖️ 해소 노트 기록. `POST /wiki/audit?n=N&resolve=1`. |
+| **ingest** | `ingest()` | 산출물/소스 → 엔티티·개념 추출 → 페이지 생성·갱신([[링크]]) → index 재생성 → log 기록. 재적재 시 '갱신' 섹션 머지(compounding). |
+| **query** | `query()` / `semanticQuery()` | 휴리스틱 인덱스 탐색으로 관련 지식을 작업 전 주입(그라운딩). |
+| **lint** | `lint()` | 고아 페이지·끊긴 링크(지식 갭) 탐지 → `GET /wiki/lint`. |
+| **maintain** | `maintain()` | 자가수선: 끊긴 링크를 LLM으로 보충. `POST /wiki/maintain` + 런 종료 시 자동. |
+| **audit** | `findContradictions()` | 토픽 겹치는 페이지 쌍을 비교 → 상충 주장 탐지. `POST /wiki/audit?resolve=1`이면 해소 노트 기록. |
 
-흐름 예: 런이 끝나면 산출물이 `ingest`로 엔티티/개념 페이지가 되고, 끊긴 링크가 있으면 자동 `maintain`이 보충해 그래프 연결을 늘린다. 다음 런은 그 지식을 `query`로 자동 그라운딩한다 — 쓸수록 똑똑해지는 "제2의 두뇌".
-
----
-
-## 6-1. Connect AI 패리티 — 능동 실행·거버넌스·자율 (옵트인)
-
-기본 런은 "분해→작업→종합"의 빠른 단발 경로다. 그 위에 Connect AI 식 **능동 에이전트** 3종을 **opt-in**으로 얹었다 — 전부 기본 off 라 켜기 전까지 기본 동작은 바이트 단위로 동일하다.
-
-| 기능 | 켜기 | 동작 | 코드 |
-|---|---|---|---|
-| **능동 tool-loop** | `AGENT_TOOL_LOOP=1` | `work` 단계 에이전트가 응답 중 `<tool name="wiki_query">질의</tool>` 태그를 내면 → 도구 실행 → `<tool_result>` 주입 → 재호출(`AGENT_MAX_TOOL_CALLS` 캡). 선그라운딩(1회)을 넘어 모델이 **필요한 자료를 스스로 더 캐는** 다단계 루프 | `orchestrator/tools.ts`·`agent.ts` |
-| **거버넌스 enforcement** | `ENFORCE_AUTONOMY=1`(기본) | 자율레벨로 도구를 게이팅 — `0`=없음, `1`=읽기만, `2`=쓰기는 **승인 게이트**(블로킹·타임아웃 fail-open), `3`=자동. 취소 시 승인 대기도 즉시 거부로 양보 | `agent.ts gateWrite`·`workspace.ts` |
-| **쓰기 도구** | (위 루프 + autonomy≥2) | `<tool name="save_note">…</tool>` → 본인 `data/agents/<id>/knowledge.md` 에 한 줄(컨테인먼트) | `agent.ts execLoopTool` |
-| **셸 실행** | `AGENT_SHELL=1`(+autonomy≥2) | `<tool name="run_command">cmd</tool>` → 샌드박스에서 단일 명령 실행. **다층 방어**(아래) | `orchestrator/shell.ts` |
-| **유휴 게이트 자율 사이클** | `AUTO_CYCLE_MINUTES=N` | N분마다 **사용자 런이 없을 때만** 위키 인덱스/결정로그에서 '가장 가치있는 단일 작업'을 micro 로 제안→자율 실행. 사용자 런 도착 시 진행 중 자율런을 **양보(abort)**. 단일 KV 슬롯 속도철학과 충돌 회피 | `autonomy/scheduler.ts`·`server/main.ts` |
-
-> 설계 원칙: 로컬 속도·단일 KV 슬롯 불변식을 깨지 않도록 전부 보수적 기본값(off)·유계(캡)·양보(yield). 능동 실행이 열리는 순간 거버넌스가 필요해지므로 셋은 함께 설계됐다.
-
-**셸 실행(`run_command`) 보안 모델 — 양성 컨테인먼트.** connect-ai 의 `<run_command>`(보고서가 ACE 리스크로 지적)보다 근본적으로 방어적이다. 적대적 보안리뷰(3 에이전트)가 초기 '경로 블랙리스트' 구현을 글로브(`cat ~/.s?h/id_r*`)·틸드·중괄호·백슬래시·절대경로·재귀검색으로 전부 우회함을 입증해, **블랙리스트를 폐기하고 양성 컨테인먼트로 재설계**했다:
-
-- `spawn(shell:false)` — 셸 미경유라 글로브·틸드·치환·리다이렉트·체이닝 확장이 **원천 차단**(인자는 전부 리터럴).
-- **경로 컨테인먼트** — 모든 인자가 절대경로(`/`)·홈(`~`)·상위(`..`)를 못 써 샌드박스 `data/agents/<id>/workspace/` 하위로만 해석된다(시스템·홈·타사용자·시크릿 도달 불가).
-- argv[0] **allowlist**(기본 읽기명령) + 파국 **denylist**(rm/dd/sudo…) + 특수문자 거부 + 타임아웃 SIGKILL + 출력 30KB 하드캡.
-- autonomy 게이트는 셸에 대해 `ENFORCE_AUTONOMY=false` 라도 항상 적용. 잔존 리스크: 운영자가 인터프리터를 allowlist 에 넣거나 샌드박스에 외부 심볼릭링크를 심는 경우(LLM 위협모델 밖, 운영자 책임).
-
-## 7. 프로젝트 구조
-
-```
-gepa-ai-office/
-├── BUILD_PLAN.md             # 빌드 진행 현황·설계 메모
-├── package.json              # Node22·ESM·Hono·tsx·vitest
-├── tsconfig.json
-├── scripts/
-│   └── serve_ollama_tuned.sh # Ollama 튜닝 런처(ctx·keep_alive·flash·kv·single-slot)
-├── public/
-│   └── index.html            # 경량 자체 SPA(/lite, 빌드 불필요)
-├── frontend/                 # GEPA React/Vite 프론트(/ 에서 dist 서빙)
-│   └── dist/                 # 빌드 산출물 + 아바타/가구 에셋
-├── assets/hwpx/              # HWPX 템플릿(base/report — OWPML)
-├── data/                     # 런타임 데이터(GEPA_DATA_DIR)
-│   ├── wiki/                 # LLM Wiki 마크다운 지식베이스
-│   ├── sessions/             # 세션 다이제스트 + events.jsonl
-│   └── approvals/            # 승인 이력
-└── src/
-    ├── config.ts             # 전역 설정(env, 로컬 기본값)
-    ├── server/main.ts        # Hono HTTP + SSE 서버(전 엔드포인트)
-    ├── llm/
-    │   ├── ollama.ts         # /api/chat 직접 스트리밍 클라이언트
-    │   └── models.ts         # 사양 감지 + RAM 예산 모델 자동배정
-    ├── agents/company.ts     # CEO + 전문가/팀 페르소나·tier·툴 정의
-    ├── orchestrator/
-    │   ├── index.ts          # 디스패처(directed/org/debate 분기)
-    │   ├── run.ts            # debate(평면) 런
-    │   ├── org.ts            # org(위계) 런
-    │   ├── directed.ts       # 직원 단독 런
-    │   ├── debate.ts         # 토론 라운드·수렴판정
-    │   ├── prepare.ts        # 분해·배정
-    │   ├── finalize.ts       # CEO 종합 + 위키 ingest/maintain
-    │   ├── revise.ts         # 수정 요청 재종합(v+1)
-    │   └── agent.ts          # 경량 에이전트 호출(그라운딩·스트림·이벤트)
-    ├── wiki/llmwiki.ts       # Karpathy LLM Wiki(ingest/query/lint/maintain/audit)
-    ├── approvals/store.ts    # 승인 라이프사이클(pending→history)
-    ├── export/hwpx.ts        # markdown → HWPX(OWPML)
-    ├── util/
-    │   ├── zip.ts            # 순수 Node 최소 ZIP 라이터(STORED, CRC32)
-    │   ├── ids.ts            # id 생성
-    │   ├── semaphore.ts      # 동시성 세마포어
-    │   └── abort.ts          # AbortSignal 헬퍼/폴리필
-    ├── events/
-    │   ├── types.ts          # EventEnvelope(원본 와이어 호환) + llm_metric
-    │   └── bus.ts            # 런별 버스(seq·리플레이·델타 coalescing)
-    ├── sessions/digest.ts    # 세션 다이제스트(_brief/_report/<agent>.md)
-    ├── tools/web_search.ts   # 인-프로세스 DDG 웹검색(키 불필요)
-    └── bench/bench.ts        # 헤드리스 벤치(토큰·tok/s·벽시계)
-```
+흐름 예: 런이 끝나면 산출물이 `ingest`로 페이지가 되고, 끊긴 링크는 자동 `maintain`이 보충하며, 다음 런은 그 지식을 `query`로 자동 그라운딩한다 — 쓸수록 똑똑해지는 "제2의 두뇌".
 
 ---
 
-## 8. 음성 입출력 (Voice I/O)
+## 6-1. 능동 실행 · 거버넌스 · 자율 (옵트인)
+
+기본 런은 "분해→작업→집필"의 단발 경로다. 그 위에 **능동 에이전트**를 opt-in으로 얹었다 — 대부분 기본 off라 켜기 전까지 기본 동작은 동일하다.
+
+| 기능 | 켜기 | 동작 |
+|---|---|---|
+| **능동 tool-loop** | `AGENT_TOOL_LOOP=1` | `work` 단계 에이전트가 `<tool name="wiki_query">…</tool>` 태그로 자료를 스스로 더 캐고 재호출(`AGENT_MAX_TOOL_CALLS` 캡) |
+| **거버넌스 enforcement** | `ENFORCE_AUTONOMY=1`(기본) | 자율레벨로 도구 게이팅 — `0`=없음, `1`=읽기만, `2`=쓰기는 **승인 게이트**, `3`=자동 |
+| **셸 실행** | `AGENT_SHELL=1`(+autonomy≥2) | `<tool name="run_command">…</tool>` → 샌드박스 단일 명령. **다층 방어**(아래) |
+| **유휴 자율 사이클** | `AUTO_CYCLE_MINUTES=N` | N분마다 **사용자 런이 없을 때만** '가장 가치있는 단일 작업'을 제안→실행. 사용자 런 도착 시 진행 중 자율런을 **양보(abort)** |
+| **지식 리서치 사이클** | `RESEARCH_CYCLE_HOURS=24` | 주기적으로 리서치 런(조사→토론→위키 적재→직원 학습)을 돌려 두뇌를 컴파운딩. 블로그·카드뉴스·숏폼은 만들지 않아 캘린더를 오염시키지 않는다 |
+| **정기 운영** | `DAILY_BRIEFING_TIME` / `PERFORMANCE_SYNC_TIME` | 일일 브리핑 / 발행 성과 동기화(`PERFORMANCE_WINDOW_DAYS` 경과분) |
+
+> 설계 원칙: 단일 슬롯 속도 철학을 깨지 않도록 전부 보수적 기본값(off)·유계(캡)·양보(yield). 능동 실행이 열리면 거버넌스가 필요해지므로 함께 설계됐다.
+
+**셸 실행(`run_command`) 보안 모델 — 양성 컨테인먼트.** 적대적 보안리뷰가 '경로 블랙리스트'를 글로브·틸드·중괄호로 전부 우회함을 입증해, **블랙리스트를 폐기하고 컨테인먼트로 재설계**했다:
+- `spawn(shell:false)` — 셸 미경유라 글로브·치환·리다이렉트·체이닝이 원천 차단(인자 전부 리터럴).
+- **경로 컨테인먼트** — 인자가 절대경로(`/`)·홈(`~`)·상위(`..`)를 못 써 샌드박스 `data/agents/<id>/workspace/` 하위로만 해석.
+- argv[0] **allowlist**(읽기명령) + 특수문자 거부 + 타임아웃 SIGKILL + 출력 하드캡. 셸 게이트는 `ENFORCE_AUTONOMY=false`라도 항상 적용.
+
+---
+
+## 7. 브랜드(고객사) 격리
+
+여러 고객사의 콘텐츠를 한 스튜디오에서 다루되, **자료·지식·발행 계정을 브랜드별로 분리**한다.
+
+- **레지스트리** — `data/brands/<slug>.yaml`(이름·업종·타겟·톤·채널 등), 활성 브랜드는 `data/brand.yaml`. `activateBrand`로 전환.
+- **주입 방식** — 프롬프트를 고치지 않고 런타임 컨텍스트(`brandContext`)로 브랜드 정보를 주입하고, 생성물에 `piece.brand`/`cardnews.brand`/`shorts.brand`를 태깅한다.
+- **파일 격리** — 원본(`raw-<slug>/`)·위키(`wiki-<slug>/`)·공유 상태(decisions 등)를 브랜드 접미사로 분리. 슬러그는 경로 탈출 방어(`isSafeBrandSlug`)로 검증.
+- **발행 계정 격리** — 네이버 계정을 `NAVER_ACCOUNTS`에 브랜드별로 저장하고, 세션 파일·프로필도 브랜드별로 분리. **폴백이 없어** 미설정 브랜드는 발행 에러로 명확히 막는다(계정 섞임 방지).
+
+---
+
+## 8. 콘텐츠 파이프라인 상세
+
+한 편의 콘텐츠는 **piece**로 관리되며 스테이지를 따라 이동한다:
+
+```
+idea → research → draft → ready → published → measured → reflected   (실패 시 error)
+```
+
+- **블로그 런(org)** — CEO 라우팅 → 리서치팀 조사·토론 → 작가가 브리프·검수·네이버 SERP 실측을 반영해 본문 1편 집필 → 포장(제목·태그·SEO·이미지 슬롯) → `finalizeRun`이 `draft.json/md/html` 저장 + 위키 적재. 초안이 생기면 piece가 `draft`로 승격된다.
+- **리서치 런(`mission='research'`)** — UI "리서치" 토글로 실행. **집필·포장을 통째로 생략**해 `draft.json`을 만들지 않는다(→ piece 승격·자동 발행·파생이 자연 차단). 조사→토론→**위키 적재**→직원 학습만 남긴다. 캘린더를 오염시키지 않고 두뇌만 컴파운딩하는 용도다.
+- **네이버 발행** — 실제로는 SmartEditor **임시저장만** 한다(발행 버튼은 사람이 네이버에서 직접 누른다). 자동 임시저장은 `AUTO_NAVER_DRAFT` + SEO ≥ `NAVER_DRAFT_SEO_MIN`(기본 80)일 때만, 미달이면 자동 리비전 1회 후 수동 검토로 넘긴다.
+- **이미지 생성** — `gpt-image-2`(`openai_image.py` 서브프로세스). 블로그는 이미지 슬롯 확정 시 최대 3장, 카드뉴스는 한글 텍스트 포함 카드를 직접 렌더. OpenAI 키가 없으면 dry-run(계획만)으로 파이프라인을 막지 않는다. 모델이 직접 부르는 `image_generate`는 과금이라 승인 게이트.
+- **카드뉴스·숏폼 파생** — 블로그 초안이 완료·임시저장되면 서버가 같은 주제로 카드뉴스·숏폼 런을 자동 파생한다(`AUTO_CARDNEWS`/`AUTO_SHORTS`). 검토 화면이나 제작실에서 초안 기준으로 "만들기"를 눌러 수동 파생도 가능하다. **리서치 런에는 초안이 없으므로 파생도 일어나지 않는다.**
+
+---
+
+## 9. 음성 입출력 (Voice I/O)
 
 좌하단 🎙 버튼을 누르고 말하면 한국어가 입력창에 채워지고, 런 종료 시 최종 결과를 음성으로 읽어준다.
 
-### 셋업(1회)
-- STT: `pip install mlx-whisper` (모델 `mlx-community/whisper-large-v3-turbo`는 첫 사용 시 자동 다운로드, 약 1.5GB)
-- TTS: macOS `say`(내장, 한국어 음성 Yuna) — 설치 불필요
-- 변환: `ffmpeg` (`brew install ffmpeg`)
-- 미설치 시 음성 버튼은 비활성화되고 나머지 기능은 정상 동작한다.
+- **STT** — `mlx-whisper`(모델 `mlx-community/whisper-large-v3-turbo`, 첫 사용 시 자동 다운로드 ~1.5GB). 변환에 `ffmpeg` 필요.
+- **TTS** — 기본 **OpenAI `gpt-4o-mini-tts`**(음색 `nova`). 키가 없거나 실패하면 macOS `say`(음색 `Yuna`) + ffmpeg로 폴백. `src/voice/tts.ts`가 OpenAI HTTPS를 직접 호출(ffmpeg 불필요).
+- 미설치 시 음성 버튼은 비활성화되고 나머지 기능은 정상 동작한다. 설정은 `data/voice.json`.
 
-설정은 `data/voice.json`(enabled / ttsVoice / sttModel / autoReadFinal).
-
-### 자비스 대화형
-좌하단 "🗣️ 자비스" 토글을 켜면 마이크로 자비스(비서)와 대화한다. 인사·간단 질의는 즉답하고,
-업무 지시는 office에 위임해 결과를 음성으로 보고한다. 화면 중앙에 음성반응 오브가 뜬다.
+**자비스 대화형** — 좌하단 "🗣️ 자비스" 토글을 켜면 마이크로 비서와 대화한다. 인사·간단 질의는 즉답하고, 업무 지시는 office에 위임해 결과를 음성으로 보고한다(`src/jarvis/`, `POST /jarvis/chat`).
 
 ---
 
-## 9. 테스트
+## 10. 프로젝트 구조
+
+```
+ai-contents-studio/
+├── package.json              # Node≥20.6·ESM·Hono·tsx·vitest
+├── scripts/blog_skills/      # 네이버 발행·OpenAI 이미지 Python 스크립트(venv)
+├── public/index.html         # 경량 자체 SPA(/lite, 빌드 불필요)
+├── frontend/                 # React/Vite 프론트(/ 에서 dist 서빙)
+├── assets/                   # company 시드·HWPX 템플릿
+├── data/                     # 런타임 데이터(GEPA_DATA_DIR) — wiki·sessions·brands·cardnews·shorts (gitignore)
+└── src/
+    ├── config.ts             # 전역 설정(env)
+    ├── server/main.ts        # Hono HTTP + SSE 서버(전 엔드포인트)
+    ├── llm/                  # Claude CLI 클라이언트·tier 라우팅·비용 (claudeCli·client·models·setting·cost)
+    ├── orchestrator/         # 런 엔진(org·debate·directed)·집필·finalize·카드뉴스·숏폼·에이전트·툴·셸
+    ├── content/              # 브랜드·페르소나·piece·카드뉴스·숏폼 모델
+    ├── output/               # 렌더·SEO·네이버 블로그/스마트에디터 포맷·이미지 계획
+    ├── agents/               # 회사·역할 정의 + 직원 워크스페이스(자가진화)
+    ├── grounding/            # 커넥터: naver·dart·law·youtube·custom
+    ├── wiki/                 # Karpathy LLM Wiki(ingest/query/lint/maintain/audit)
+    ├── voice/                # STT·TTS·오디오·설정·엔드포인트
+    ├── jarvis/               # 자비스 대화형 어시스턴트
+    ├── autonomy/             # 자율 스케줄러·정기 브리핑·알림
+    ├── analytics/            # 성과 수집·분석·전략 강화
+    ├── approvals/            # 승인 라이프사이클(거버넌스)
+    ├── secrets/              # 비밀값(네이버 계정 등) 저장소
+    ├── research/             # 자율 리서치 주제 발굴
+    ├── sessions/             # 세션 다이제스트(_brief/_report/<agent>.md)
+    ├── mcp/                  # 법제처 법령 MCP 클라이언트
+    ├── events/               # 이벤트 버스 + 프론트 공유 와이어 타입
+    ├── export/               # markdown → HWPX(OWPML)
+    ├── tools/                # 웹검색·추출·분류·블로그 스킬·숏폼 렌더
+    └── util/                 # 세마포어·zip·fetch·abort·시간·문자열·id
+```
+
+---
+
+## 11. 테스트
 
 ```bash
 pnpm test          # vitest run (1회)
@@ -322,20 +373,15 @@ pnpm test:watch    # 워치 모드
 pnpm typecheck     # tsc --noEmit
 ```
 
-현재 **31개 통과**(models 5 · agent 5 · wiki 6 · web_search 4 · approvals 5 · llmwiki 8 · hwpx 4) · tsc 클린 · 프론트 빌드 OK.
-
-헤드리스 벤치(단계별 토큰·tok/s·벽시계):
-```bash
-tsx src/bench/bench.ts
-```
+현재 **테스트 40개 파일 · 301개 통과**, `tsc --noEmit` 클린. 헤드리스 벤치(단계별 토큰·tok/s·벽시계)는 `tsx src/bench/bench.ts`.
 
 ---
 
-## 부록: 설계 메모(로컬 실측 교훈)
+## 부록: 설계 메모
 
-- `num_ctx`를 요청에 포함하지 않는다 → 리로드 스래시 방지(서버 env 전담).
-- 로컬 동시성=1(단일 KV 슬롯). 마이크로 호출은 작은 모델로 별도 슬롯 여지.
-- 소형 모델 폭주 백스톱: `num_predict` 캡(8192), 통합만 16000.
-- 마이크로 단발(분해/배정/수렴/분류)은 풀 에이전틱 루프 금지 → 단발 호출.
-- thinking 모델은 `think:false`로 호출(추론에 `num_predict` 소진 → content 공백 방지).
-- 임베딩 의미검색(`USE_EMBEDDINGS`)은 채팅모델과 **별도 모델**(예: bge-m3 ~0.66GB)을 상주시킨다 — 메모리 제약 환경(예: 24GB에 12B 채팅모델)에선 경합이 가중되니, 느리면 `USE_EMBEDDINGS=false`(휴리스틱 폴백)나 더 작은 채팅모델을 쓴다. 의미검색은 전 위키를 임베딩하지 않고 휴리스틱 후보만 rerank해 비용을 억제한다.
+- **구독 인증 고정** — LLM 호출은 전부 `claude -p`(Claude Code 구독). 호출 시 `ANTHROPIC_API_KEY`류를 env에서 제거해 크레딧 과금 회귀를 막는다. 대가로 호출당 CLI 부팅(~1.5s)·구독 rate limit을 감수한다.
+- **tier 라우팅** — 정액 구독이라 "품질 우선": 구조적 단발만 haiku(micro), 본문은 sonnet(standard), 통합·편집은 opus(heavy).
+- **마이크로 단발** — 분해/배정/수렴/분류는 풀 에이전틱 루프 대신 `microJSON` 1회로 비용·지연을 억제한다.
+- **비용 보험** — 정액이라도 `data/llm_usage.json` 원장 + `MONTHLY_BUDGET_USD` 캡으로 폭주를 방어한다.
+- **자율은 양보 우선** — 유휴/정기 사이클은 사용자 런이 없을 때만 돌고, 사용자 런 도착 시 즉시 abort로 양보한다.
+- **네이버는 임시저장까지만** — 발행(공개)은 항상 사람이 최종 확인한다. 자동화는 임시저장·SEO 게이트에서 멈춘다.
