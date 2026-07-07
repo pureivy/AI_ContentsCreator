@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { bundle } from '@remotion/bundler';
-import { selectComposition, renderMedia } from '@remotion/renderer';
+import { selectComposition, renderMedia, makeCancelSignal } from '@remotion/renderer';
 import { prepareScenes, buildSrt } from './shortsCommon';
 import type { ShortsScene, ShortsRenderResult } from './shortsCommon';
 
@@ -39,12 +39,17 @@ export async function renderShortsVideoRemotion(
   // 3) 번들 + 렌더
   const videoPath = path.join(dir, 'final.mp4');
   try {
-    const serveUrl = await bundle({ entryPoint: entry, publicDir });
+    const serveUrl = await bundle({ entryPoint: entry, publicDir, outDir: path.join(work, 'bundle') });
     const composition = await selectComposition({ serveUrl, id: 'AutoShorts', inputProps });
-    await renderMedia({ serveUrl, composition, codec: 'h264', outputLocation: videoPath, inputProps });
+    const { cancelSignal, cancel } = makeCancelSignal();
+    if (opts.signal?.aborted) cancel();
+    opts.signal?.addEventListener('abort', () => cancel());
+    await renderMedia({ serveUrl, composition, codec: 'h264', outputLocation: videoPath, inputProps, cancelSignal });
   } catch (e) {
     return { ok: false, issues: [...issues, `Remotion 렌더 실패: ${e instanceof Error ? e.message.slice(0, 160) : e}`] };
   }
+  // 취소 레이스 가드 — renderMedia 가 취소 직전 프레임까지 쓰고 완주해버린 경우 대비.
+  if (opts.signal?.aborted) return { ok: false, issues: [...issues, '취소됨'] };
 
   // 4) SRT
   const srtPath = path.join(dir, 'subtitles.srt');
