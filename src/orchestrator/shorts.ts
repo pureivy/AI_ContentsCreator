@@ -17,6 +17,7 @@ import { rolesById } from '../agents/company';
 import { stripEmoji } from '../output/render';
 import { shortsStore } from '../content/shorts';
 import { generateImagesForDraft } from '../tools/blog_skills';
+import { qaSceneImages } from './shortsSceneQa';
 import { renderShortsVideo } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { brandContext } from '../content/brand';
@@ -217,6 +218,14 @@ export async function runShortsJob(
         });
       }
     } catch { /* 전 씬 폴백 */ }
+
+    // 3-b) 씬 배경 비전 QA — 잡글자·구도·왜곡 불량만 재생성(claude 비전, fail-open, 엔진 독립).
+    const qa = await qaSceneImages({
+      dir, images, scenePrompts: bgDraft.imageSlots.map((s) => s.prompt),
+      preset: design.preset, signal: opts.signal,
+    });
+    images = qa.images;
+    if (qa.regenerated) say(`씬 QA — ${qa.regenerated}장 재생성 (${qa.issues.slice(0, 3).join(' · ')})`);
     checkAbort();
 
     // 4) 조립 — 기본 Remotion 모션그래픽, 실패 시 ffmpeg 슬라이드쇼로 폴백(무중단).
