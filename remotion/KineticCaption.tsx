@@ -11,7 +11,7 @@ export const KineticCaption: React.FC<{ text: string; variant?: 'hook' | 'cta' }
   const isCta = variant === 'cta';
   const box: React.CSSProperties = isCta
     ? { background: '#e53935', borderRadius: 999, padding: '24px 56px', display: 'flex', flexWrap: 'wrap', gap: '0 14px', justifyContent: 'center' }
-    : { background: 'linear-gradient(transparent, rgba(0,0,0,.45))', padding: '32px 64px', display: 'flex', flexWrap: 'wrap', gap: '0 14px', justifyContent: 'center' };
+    : { padding: '32px 64px', display: 'flex', flexWrap: 'wrap', gap: '0 14px', justifyContent: 'center' }; // 자막 배경 없음(사용자 지정) — 가독성은 textShadow 담당
   return (
     <AbsoluteFill style={{ justifyContent: 'flex-end', alignItems: 'center', paddingBottom: '20%' }}>
       <div style={box}>

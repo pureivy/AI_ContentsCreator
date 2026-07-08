@@ -108,13 +108,8 @@ def main() -> int:
         lines = wrap_px(text, font, int(w * 0.86))
         lh = int(font.size * 1.35)
         block_h = lh * len(lines)
-        # 하단 20% 지점(디렉터 구도 제약 '하단 25% 자막 여백'과 짝) — 블록 세로 중심 y≈80%
+        # 하단 20% 지점 — 블록 세로 중심 y≈80%. 배경 박스 없음(사용자 지정) — 가독성은 그림자 담당.
         y0 = int(h * 0.80) - block_h // 2
-        widths = [font.getbbox(l)[2] for l in lines]
-        bw = max(widths)
-        pad_x, pad_y = int(w * 0.045), int(w * 0.03)
-        box = ((w - bw) / 2 - pad_x, y0 - pad_y, (w + bw) / 2 + pad_x, y0 + block_h + pad_y)
-        draw.rounded_rectangle(box, radius=int(w * 0.022), fill=(0, 0, 0, 120))
         y = y0
         for line in lines:
             lw = font.getbbox(line)[2]
