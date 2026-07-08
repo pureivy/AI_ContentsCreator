@@ -36,6 +36,9 @@ export interface Shorts {
   writer?: string;
   director?: string;
   error?: string;
+  /** 유튜브 비공개 업로드 결과(발행은 사람이 유튜브 스튜디오에서 공개 전환). */
+  youtubeId?: string;
+  youtubeUrl?: string;
   createdTs: string;
   updatedTs: string;
 }

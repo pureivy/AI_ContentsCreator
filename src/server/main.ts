@@ -27,10 +27,11 @@ import { rolesById } from '../agents/company';
 import type { RoleDef } from '../agents/company';
 import type { RolePatch, MemberBody } from '../agents/company-loader';
 import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appendActivity, ensureScaffold, effectiveAutonomy, appendInjected, injectedLength, clearInjected, INJECTED_CAP } from '../agents/workspace';
-import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView } from '../secrets/store';
+import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView, getYoutubeAccount, setYoutubeToken } from '../secrets/store';
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
+import { uploadShortsToYoutube } from '../tools/youtubeUpload';
 import { llmWiki, slugify } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
@@ -1024,6 +1025,62 @@ app.post('/pieces/:id/shorts', shortsFromPieceHandler);
 app.post('/api/pieces/:id/shorts', shortsFromPieceHandler);
 app.get('/shorts', shortsListHandler);
 app.get('/api/shorts', shortsListHandler);
+// ── 유튜브 발행(브랜드별 채널) — 공용 OAuth 클라이언트 + 브랜드 refresh token(YOUTUBE_TOKENS).
+//    비공개 업로드 고정 — 공개 전환은 사람이 유튜브 스튜디오에서(네이버 '임시저장' 원칙).
+const YT_REDIRECT = 'http://127.0.0.1:8787/youtube/oauth/callback';
+app.get('/youtube/status', (c) => {
+  const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
+  const client = !!(getSecret('YOUTUBE_OAUTH_CLIENT_ID') && getSecret('YOUTUBE_OAUTH_CLIENT_SECRET'));
+  return c.json({ client, connected: !!getYoutubeAccount(brand).refreshToken });
+});
+app.get('/youtube/oauth/start', (c) => {
+  const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
+  const id = getSecret('YOUTUBE_OAUTH_CLIENT_ID');
+  if (!id) return c.text('유튜브 OAuth 클라이언트 미설정 — 키 탭에서 먼저 입력하세요', 400);
+  const u = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  u.searchParams.set('client_id', id);
+  u.searchParams.set('redirect_uri', YT_REDIRECT);
+  u.searchParams.set('response_type', 'code');
+  u.searchParams.set('scope', 'https://www.googleapis.com/auth/youtube.upload');
+  u.searchParams.set('access_type', 'offline');
+  u.searchParams.set('prompt', 'consent');
+  u.searchParams.set('state', brand);
+  return c.redirect(u.toString());
+});
+app.get('/youtube/oauth/callback', async (c) => {
+  const code = c.req.query('code') ?? '';
+  const brand = c.req.query('state') ?? '';
+  const done = (msg: string): Response => c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">${msg} — 이 창을 닫으세요.</body>`);
+  if (!code) return done(`연결 실패: ${c.req.query('error') ?? '인증 코드 없음'}`);
+  try {
+    const r = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code, client_id: getSecret('YOUTUBE_OAUTH_CLIENT_ID') ?? '', client_secret: getSecret('YOUTUBE_OAUTH_CLIENT_SECRET') ?? '',
+        redirect_uri: YT_REDIRECT, grant_type: 'authorization_code',
+      }),
+    });
+    const j = await r.json() as { refresh_token?: string; error?: string };
+    if (!j.refresh_token) return done(`연결 실패: refresh token 없음(${j.error ?? r.status}) — 구글 계정 보안 설정에서 이 앱 액세스를 제거한 뒤 다시 연결하세요`);
+    setYoutubeToken(brand, j.refresh_token);
+    console.log(`[발행담당] 유튜브 채널 연결 — 브랜드 '${brand || '범용'}'`);
+    return done(`✅ 채널 연결 완료 (브랜드: ${brand || '범용'})`);
+  } catch (e) { return done(`연결 실패: ${e instanceof Error ? e.message.slice(0, 120) : e}`); }
+});
+app.post('/shorts/:id/youtube', async (c) => {
+  const id = c.req.param('id');
+  const s = shortsStore().get(id);
+  if (!s) return c.json({ error: 'unknown shorts' }, 404);
+  if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
+  const r = await uploadShortsToYoutube({
+    slug: s.brand ?? '', videoPath: path.join(shortsStore().dirFor(id), 'final.mp4'),
+    title: s.title ?? s.topic, description: s.description ?? '', hashtags: s.hashtags ?? [],
+  });
+  if (!r.ok) return c.json({ error: r.error }, 502);
+  shortsStore().update(id, { youtubeId: r.videoId, youtubeUrl: r.url });
+  console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 유튜브 비공개 업로드 완료 (${publisherName()})`);
+  return c.json({ ok: true, url: r.url });
+});
 app.get('/shorts/:id/video', shortsVideoHandler); // :id 보다 먼저(구체 경로 우선)
 app.get('/api/shorts/:id/video', shortsVideoHandler);
 app.get('/shorts/:id/zip', shortsZipHandler);
