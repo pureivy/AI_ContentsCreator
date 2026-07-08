@@ -116,6 +116,8 @@ export interface Config {
   readonly shortsI2v: 'fal' | 'off';
   /** fal I2V 모델 ID — env 한 줄로 Wan 등 교체. */
   readonly shortsI2vModel: string;
+  /** ready 쇼츠 자동 유튜브 비공개 업로드(옵트인). */
+  readonly autoYtUpload: boolean;
 
   // --- 음성 입출력 ---
   /** TTS 제공자: 'openai'(gpt-4o-mini-tts, 자연스러운 신경망 음성) | 'say'(macOS 로컬, 폴백). 기본 openai(키 없으면 자동 say 폴백). */
@@ -235,6 +237,7 @@ export const CONFIG: Config = {
   falKey: env('FAL_KEY', ''),
   shortsI2v: env('SHORTS_I2V', 'fal') === 'off' ? 'off' : 'fal',
   shortsI2vModel: env('SHORTS_I2V_MODEL', 'fal-ai/wan/v2.2-5b/image-to-video'), // LTX-2 는 가로 전용(실측) — 세로 쇼츠 기본은 Wan 5B
+  autoYtUpload: envBool('AUTO_YT_UPLOAD', false),
 
   ttsProvider: env('TTS_PROVIDER', 'openai'),
   openaiTtsModel: env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),
