@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
+import { probeDuration } from '../tools/shortsCommon';
 
 export interface SceneClipsResult { clips: Array<string | null>; issues: string[] }
 
@@ -17,10 +18,11 @@ export function buildMotionPrompt(scenePrompt: string): string {
 /** fal 응답에서 video.url 안전 추출(순수) — http(s) 문자열이 아니면 null. */
 export function extractVideoUrl(json: unknown): string | null {
   const v = (json as { video?: { url?: unknown } } | null)?.video?.url;
-  return typeof v === 'string' && v.startsWith('http') ? v : null;
+  return typeof v === 'string' && /^https?:\/\//.test(v) ? v : null;
 }
 
-const gate = (): boolean => CONFIG.shortsI2v === 'fal' && !!CONFIG.falKey;
+// ffmpeg 강제 렌더 시 클립을 쓸 수 없으므로 과금 방지 차원에서 스킵.
+const gate = (): boolean => CONFIG.shortsI2v === 'fal' && !!CONFIG.falKey && CONFIG.shortsRenderer !== 'ffmpeg';
 
 /** fal queue REST 1회 실행 — 제출→폴링(2초)→결과 JSON. 타임아웃·취소·비정상 응답은 throw. */
 async function falQueueRun(model: string, body: Record<string, unknown>, signal?: AbortSignal, timeoutMs = 120_000): Promise<unknown> {
@@ -29,12 +31,16 @@ async function falQueueRun(model: string, body: Record<string, unknown>, signal?
   const sub = await fetch(`https://queue.fal.run/${model}`, { method: 'POST', headers, body: JSON.stringify(body), signal });
   if (!sub.ok) throw new Error(`fal 제출 실패 HTTP ${sub.status}`);
   const q = await sub.json() as { status_url?: string; response_url?: string };
-  if (!q.status_url || !q.response_url) throw new Error('fal 큐 응답 이형');
+  const falHost = (u: string): boolean => { try { const h = new URL(u).host; return h === 'fal.run' || h.endsWith('.fal.run'); } catch { return false; } };
+  if (!q.status_url || !q.response_url || !falHost(q.status_url) || !falHost(q.response_url)) throw new Error('fal 큐 응답 이형');
   for (;;) {
     if (signal?.aborted) throw new Error('취소됨');
     if (Date.now() > deadline) throw new Error('fal 타임아웃(120s)');
-    const st = await fetch(q.status_url, { headers, signal });
-    const sj = await st.json() as { status?: string };
+    let sj: { status?: string } = {};
+    try {
+      const st = await fetch(q.status_url, { headers, signal });
+      sj = await st.json() as { status?: string };
+    } catch { /* 일시 오류 — 데드라인까지 폴링 지속(제출 재시도 아님, 과금 불변) */ }
     if (sj.status === 'COMPLETED') break;
     if (sj.status === 'FAILED' || sj.status === 'ERROR') throw new Error(`fal 실패: ${sj.status}`);
     await new Promise((r) => setTimeout(r, 2000));
@@ -63,10 +69,14 @@ export async function i2vSceneClips(opts: {
         }, opts.signal);
         const url = extractVideoUrl(json);
         if (!url) throw new Error('video.url 없음');
-        const dl = await fetch(url, { signal: opts.signal });
+        let dl = await fetch(url, { signal: opts.signal });
+        if (!dl.ok) dl = await fetch(url, { signal: opts.signal }); // CDN 일시 오류 1회 재시도(생성 재과금 없음)
         if (!dl.ok) throw new Error(`클립 다운로드 실패 HTTP ${dl.status}`);
+        const buf = Buffer.from(await dl.arrayBuffer());
+        if (buf.length < 10_000) throw new Error(`클립 데이터 이상(${buf.length}B)`);
         const fp = path.join(clipsDir, `clip_${String(i + 1).padStart(2, '0')}.mp4`);
-        fs.writeFileSync(fp, Buffer.from(await dl.arrayBuffer()));
+        fs.writeFileSync(fp, buf);
+        await probeDuration(fp); // 손상 mp4 거부 — 그 씬만 스틸 폴백(전체 렌더 강등 방지)
         out.clips[i] = fp;
       } catch (e) {
         out.issues.push(`씬${i + 1} I2V 실패(스틸 폴백): ${e instanceof Error ? e.message.slice(0, 60) : e}`);

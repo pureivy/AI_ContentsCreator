@@ -17,5 +17,6 @@ describe('extractVideoUrl — 정상/결측/이형 방어(순수)', () => {
     expect(extractVideoUrl(null)).toBeNull();
     expect(extractVideoUrl({ video: { url: 42 } })).toBeNull();
     expect(extractVideoUrl({ video: { url: 'ftp://x' } })).toBeNull();
+    expect(extractVideoUrl({ video: { url: 'httpx://a' } })).toBeNull();
   });
 });
