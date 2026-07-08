@@ -61,4 +61,13 @@ describe('normalizeSceneKind — 검증 추출, 실패 시 {} 강등', () => {
     expect(normalizeSceneKind({ kind: 'quote', quote: { text: '  ' } })).toEqual({});
     expect(normalizeSceneKind({ kind: 'quote' })).toEqual({});
   });
+  it('list 항목 18자 캡, 경계(2개) 통과', () => {
+    expect(normalizeSceneKind({ kind: 'list', items: ['다'.repeat(20), '물주기'] }))
+      .toEqual({ kind: 'list', items: ['다'.repeat(18), '물주기'] });
+    expect(normalizeSceneKind({ kind: 'list', items: ['하나', '둘'] })).toEqual({ kind: 'list', items: ['하나', '둘'] });
+  });
+  it('quote text 40자·source 15자 캡', () => {
+    expect(normalizeSceneKind({ kind: 'quote', quote: { text: '가'.repeat(45), source: '나'.repeat(20) } }))
+      .toEqual({ kind: 'quote', quote: { text: '가'.repeat(40), source: '나'.repeat(15) } });
+  });
 });
