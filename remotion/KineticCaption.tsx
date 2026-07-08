@@ -2,15 +2,20 @@ import React from 'react';
 import { AbsoluteFill, useCurrentFrame } from 'remotion';
 import { captionWordsVisible } from './anim';
 
-export const KineticCaption: React.FC<{ text: string }> = ({ text }) => {
+export const KineticCaption: React.FC<{ text: string; variant?: 'hook' | 'cta' }> = ({ text, variant }) => {
   const f = useCurrentFrame();
   const words = text.split(/\s+/).filter(Boolean);
   const vis = captionWordsVisible(f, words.length);
+  const isHook = variant === 'hook';
+  const isCta = variant === 'cta';
+  const box: React.CSSProperties = isCta
+    ? { background: '#e53935', borderRadius: 999, padding: '24px 56px', display: 'flex', flexWrap: 'wrap', gap: '0 14px', justifyContent: 'center' }
+    : { background: 'linear-gradient(transparent, rgba(0,0,0,.45))', padding: '32px 64px', display: 'flex', flexWrap: 'wrap', gap: '0 14px', justifyContent: 'center' };
   return (
     <AbsoluteFill style={{ justifyContent: 'flex-end', alignItems: 'center', paddingBottom: '20%' }}>
-      <div style={{ background: 'linear-gradient(transparent, rgba(0,0,0,.45))', padding: '32px 64px', display: 'flex', flexWrap: 'wrap', gap: '0 14px', justifyContent: 'center' }}>
+      <div style={box}>
         {words.map((w, i) => (
-          <span key={i} style={{ fontSize: 64, fontWeight: 800, color: '#fff', lineHeight: 1.25, textShadow: '0 3px 18px rgba(0,0,0,.75)', opacity: i < vis ? 1 : 0, transform: i < vis ? 'none' : 'translateY(16px)' }}>{w}</span>
+          <span key={i} style={{ fontSize: isHook ? 78 : 64, fontWeight: 800, color: isHook ? '#ffd54a' : '#fff', lineHeight: 1.25, textShadow: '0 3px 18px rgba(0,0,0,.75)', opacity: i < vis ? 1 : 0, transform: i < vis ? 'none' : 'translateY(16px)' }}>{w}</span>
         ))}
       </div>
     </AbsoluteFill>
