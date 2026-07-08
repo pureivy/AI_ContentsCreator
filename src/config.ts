@@ -110,6 +110,12 @@ export interface Config {
   readonly autoShorts: boolean;
   /** 쇼츠 렌더 엔진 — 'remotion'(모션그래픽, 기본) | 'ffmpeg'(슬라이드쇼 폴백/강제). */
   readonly shortsRenderer: 'remotion' | 'ffmpeg';
+  /** fal.ai API 키 — 쇼츠 씬 배경 I2V(Phase 3). 비면 I2V 완전 비활성(스틸 폴백). */
+  readonly falKey: string;
+  /** 쇼츠 I2V 스위치 — 'fal'(기본, 키 있을 때만 동작) | 'off'. */
+  readonly shortsI2v: 'fal' | 'off';
+  /** fal I2V 모델 ID — env 한 줄로 Wan 등 교체. */
+  readonly shortsI2vModel: string;
 
   // --- 음성 입출력 ---
   /** TTS 제공자: 'openai'(gpt-4o-mini-tts, 자연스러운 신경망 음성) | 'say'(macOS 로컬, 폴백). 기본 openai(키 없으면 자동 say 폴백). */
@@ -226,6 +232,9 @@ export const CONFIG: Config = {
   autoCardNews: envBool('AUTO_CARDNEWS', true),
   autoShorts: envBool('AUTO_SHORTS', true),
   shortsRenderer: env('SHORTS_RENDERER', 'remotion') === 'ffmpeg' ? 'ffmpeg' : 'remotion',
+  falKey: env('FAL_KEY', ''),
+  shortsI2v: env('SHORTS_I2V', 'fal') === 'off' ? 'off' : 'fal',
+  shortsI2vModel: env('SHORTS_I2V_MODEL', 'fal-ai/ltx-2/image-to-video/fast'),
 
   ttsProvider: env('TTS_PROVIDER', 'openai'),
   openaiTtsModel: env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),
