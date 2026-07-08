@@ -34,30 +34,32 @@ export interface ShortsScene extends SceneKindFields { narration: string; screen
  * LLM 씬 오브젝트에서 kind·페이로드를 검증 추출 — 실패 시 {} 로 강등(fail-open, 렌더 무중단).
  * 캡: stat unit 6자·label 15자, list 2~4개·각 18자, quote text 40자·source 15자.
  */
+const asText = (v: unknown): string => (typeof v === 'string' || typeof v === 'number') ? String(v).trim() : ''; // 오브젝트 등은 '' — '[object Object]' 렌더 유출 방지
+
 export function normalizeSceneKind(raw: unknown): SceneKindFields {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const kind = String(r.kind ?? '').trim().toLowerCase();
   if (kind === 'hook' || kind === 'cta') return { kind };
   if (kind === 'stat') {
     const s = (r.stat && typeof r.stat === 'object' ? r.stat : {}) as Record<string, unknown>;
-    const rawVal = String(s.value ?? '').replace(/,/g, '').trim();
+    const rawVal = asText(s.value).replace(/,/g, '').trim();
     const value = rawVal ? Number(rawVal) : NaN; // 빈 값은 Number('')=0 함정 회피 — 명시 거부
     if (!Number.isFinite(value)) return {};
-    const unit = String(s.unit ?? '').trim().slice(0, 6);
-    const label = String(s.label ?? '').trim().slice(0, 15);
+    const unit = asText(s.unit).slice(0, 6);
+    const label = asText(s.label).slice(0, 15);
     return { kind: 'stat', stat: { value, ...(unit ? { unit } : {}), ...(label ? { label } : {}) } };
   }
   if (kind === 'list') {
     const items = (Array.isArray(r.items) ? r.items : [])
-      .map((x) => String(x ?? '').trim().slice(0, 18)).filter(Boolean).slice(0, 4);
+      .map((x) => asText(x).slice(0, 18)).filter(Boolean).slice(0, 4);
     if (items.length < 2) return {};
     return { kind: 'list', items };
   }
   if (kind === 'quote') {
     const q = (r.quote && typeof r.quote === 'object' ? r.quote : {}) as Record<string, unknown>;
-    const text = String(q.text ?? '').trim().slice(0, 40);
+    const text = asText(q.text).slice(0, 40);
     if (!text) return {};
-    const source = String(q.source ?? '').trim().slice(0, 15);
+    const source = asText(q.source).slice(0, 15);
     return { kind: 'quote', quote: { text, ...(source ? { source } : {}) } };
   }
   return {};

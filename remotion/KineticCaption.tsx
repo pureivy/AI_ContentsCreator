@@ -6,6 +6,7 @@ export const KineticCaption: React.FC<{ text: string; variant?: 'hook' | 'cta' }
   const f = useCurrentFrame();
   const words = text.split(/\s+/).filter(Boolean);
   const vis = captionWordsVisible(f, words.length);
+  if (!words.length) return null; // 빈 자막 — 배경 박스(특히 cta 배지)도 그리지 않음
   const isHook = variant === 'hook';
   const isCta = variant === 'cta';
   const box: React.CSSProperties = isCta

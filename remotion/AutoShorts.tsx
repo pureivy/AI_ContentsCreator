@@ -16,7 +16,7 @@ export const autoShortsSchema = z.object({
     durationInFrames: z.number(),
     kind: z.enum(['hook', 'stat', 'list', 'quote', 'cta']).optional(),
     stat: z.object({ value: z.number(), unit: z.string().optional(), label: z.string().optional() }).optional(),
-    items: z.array(z.string()).optional(),
+    items: z.array(z.string()).max(4).optional(),
     quote: z.object({ text: z.string(), source: z.string().optional() }).optional(),
   })),
   totalFrames: z.number(),
