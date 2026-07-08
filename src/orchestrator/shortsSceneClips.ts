@@ -1,5 +1,5 @@
 /**
- * 쇼츠 씬 배경 I2V — 씬 QA 통과 이미지를 fal.ai I2V 모델(기본 LTX-2 fast)로 모션 클립(mp4)화.
+ * 쇼츠 씬 배경 I2V — 씬 QA 통과 이미지를 fal.ai I2V 모델(기본 Wan 2.2 5B)로 모션 클립(mp4)화.
  * 씬별 병렬, 실패 씬은 null(KenBurns 스틸 폴백), 전량 try/catch fail-open — 클립이 없어도
  * 쇼츠는 항상 완성. FAL_KEY 없거나 SHORTS_I2V=off 면 no-op. 씬당 1회·재시도 없음(과금 캡).
  */
@@ -19,6 +19,19 @@ export function buildMotionPrompt(scenePrompt: string): string {
 export function extractVideoUrl(json: unknown): string | null {
   const v = (json as { video?: { url?: unknown } } | null)?.video?.url;
   return typeof v === 'string' && /^https?:\/\//.test(v) ? v : null;
+}
+
+/**
+ * 모델별 요청 body(순수) — LTX 계열과 Wan 계열은 파라미터 스키마가 달라 비호환 필드는 422 로
+ * 무음 실패한다(실런 검증: LTX-2 는 aspect 파라미터가 없어 가로 전용 → 세로 쇼츠 기본은 Wan).
+ */
+export function buildI2vBody(model: string, prompt: string, imageUrl: string): Record<string, unknown> {
+  if (model.includes('wan')) {
+    // Wan 2.2: 145프레임@24fps ≈ 6초(Remotion CLIP_FRAMES=180 과 짝), 세로 9:16 명시(입력 2:3 이라 auto 대신 고정).
+    return { prompt, image_url: imageUrl, num_frames: 145, frames_per_second: 24, resolution: '720p', aspect_ratio: '9:16' };
+  }
+  // LTX-2 계열 — 가로 전용(세로 불가 실측). env 로 명시 선택 시에만 사용.
+  return { prompt, image_url: imageUrl, duration: 6, resolution: '1080p', fps: 25, generate_audio: false };
 }
 
 // ffmpeg 강제 렌더 시 클립을 쓸 수 없으므로 과금 방지 차원에서 스킵.
@@ -62,11 +75,9 @@ export async function i2vSceneClips(opts: {
       if (!img || !fs.existsSync(img)) return;
       try {
         const b64 = fs.readFileSync(img).toString('base64');
-        const json = await falQueueRun(CONFIG.shortsI2vModel, {
-          prompt: buildMotionPrompt(opts.scenePrompts[i] ?? ''),
-          image_url: `data:image/png;base64,${b64}`,
-          duration: 6, resolution: '1080p', fps: 25, generate_audio: false,
-        }, opts.signal);
+        const json = await falQueueRun(CONFIG.shortsI2vModel,
+          buildI2vBody(CONFIG.shortsI2vModel, buildMotionPrompt(opts.scenePrompts[i] ?? ''), `data:image/png;base64,${b64}`),
+          opts.signal);
         const url = extractVideoUrl(json);
         if (!url) throw new Error('video.url 없음');
         let dl = await fetch(url, { signal: opts.signal });

@@ -234,7 +234,7 @@ export const CONFIG: Config = {
   shortsRenderer: env('SHORTS_RENDERER', 'remotion') === 'ffmpeg' ? 'ffmpeg' : 'remotion',
   falKey: env('FAL_KEY', ''),
   shortsI2v: env('SHORTS_I2V', 'fal') === 'off' ? 'off' : 'fal',
-  shortsI2vModel: env('SHORTS_I2V_MODEL', 'fal-ai/ltx-2/image-to-video/fast'),
+  shortsI2vModel: env('SHORTS_I2V_MODEL', 'fal-ai/wan/v2.2-5b/image-to-video'), // LTX-2 는 가로 전용(실측) — 세로 쇼츠 기본은 Wan 5B
 
   ttsProvider: env('TTS_PROVIDER', 'openai'),
   openaiTtsModel: env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),
