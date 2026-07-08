@@ -21,7 +21,47 @@ export const FRAME_H = 2880;
 export const SHORTS_TTS_TONE =
   '활기차고 대화하듯, 약간 빠른 템포로 친근하게 낭독한다. 첫 훅은 궁금증을 자아내게 힘주어, 핵심 수치와 결론은 또렷하고 자신감 있게. 광고 성우톤이 아니라 아는 사람이 알려주듯.';
 
-export interface ShortsScene { narration: string; screenText?: string }
+export type SceneKind = 'hook' | 'stat' | 'list' | 'quote' | 'cta';
+export interface SceneKindFields {
+  kind?: SceneKind;
+  stat?: { value: number; unit?: string; label?: string };
+  items?: string[];
+  quote?: { text: string; source?: string };
+}
+export interface ShortsScene extends SceneKindFields { narration: string; screenText?: string }
+
+/**
+ * LLM 씬 오브젝트에서 kind·페이로드를 검증 추출 — 실패 시 {} 로 강등(fail-open, 렌더 무중단).
+ * 캡: stat unit 6자·label 15자, list 2~4개·각 18자, quote text 40자·source 15자.
+ */
+export function normalizeSceneKind(raw: unknown): SceneKindFields {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const kind = String(r.kind ?? '').trim().toLowerCase();
+  if (kind === 'hook' || kind === 'cta') return { kind };
+  if (kind === 'stat') {
+    const s = (r.stat && typeof r.stat === 'object' ? r.stat : {}) as Record<string, unknown>;
+    const rawVal = String(s.value ?? '').replace(/,/g, '').trim();
+    const value = rawVal ? Number(rawVal) : NaN; // 빈 값은 Number('')=0 함정 회피 — 명시 거부
+    if (!Number.isFinite(value)) return {};
+    const unit = String(s.unit ?? '').trim().slice(0, 6);
+    const label = String(s.label ?? '').trim().slice(0, 15);
+    return { kind: 'stat', stat: { value, ...(unit ? { unit } : {}), ...(label ? { label } : {}) } };
+  }
+  if (kind === 'list') {
+    const items = (Array.isArray(r.items) ? r.items : [])
+      .map((x) => String(x ?? '').trim().slice(0, 18)).filter(Boolean).slice(0, 4);
+    if (items.length < 2) return {};
+    return { kind: 'list', items };
+  }
+  if (kind === 'quote') {
+    const q = (r.quote && typeof r.quote === 'object' ? r.quote : {}) as Record<string, unknown>;
+    const text = String(q.text ?? '').trim().slice(0, 40);
+    if (!text) return {};
+    const source = String(q.source ?? '').trim().slice(0, 15);
+    return { kind: 'quote', quote: { text, ...(source ? { source } : {}) } };
+  }
+  return {};
+}
 export interface ShortsRenderResult {
   ok: boolean; videoPath?: string; srtPath?: string;
   durationSec?: number; sceneCount?: number; issues: string[];
