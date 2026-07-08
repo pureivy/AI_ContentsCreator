@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseEnvText, upsertEnvText, maskSecret } from './store';
+import { parseEnvText, upsertEnvText, maskSecret, getYoutubeAccount, setYoutubeToken } from './store';
 
 // .env 가 '단일 값 저장소'가 되면서 UI 편집이 파일을 직접 고쳐 쓴다 — 손으로 관리하던
 // 주석/빈 줄/모르는 키를 절대 훼손하지 않아야 한다(실 .env 엔 커밋 금지 실키가 있음).
@@ -121,5 +121,63 @@ describe('네이버 브랜드별 계정 — 격리·라운드트립', () => {
     expect(v.loginIdSet).toBe(true);
     expect(v.loginPwSet).toBe(true);
     expect(v.loginIdMasked).not.toBe('longloginid');
+  });
+});
+
+// 브랜드별 유튜브 채널 토큰 — NAVER_ACCOUNTS 와 동일 패턴(JSON blob, 폴백 없음, 범용('') 도 blob).
+// get/setYoutubeToken 은 .env(ENV_FILE=GEPA_ENV_FILE)에 read/write 하므로 임시 파일을 가리키게 한 뒤
+// vi.resetModules + 동적 import 로 실제 파일 왕복을 검증한다(모듈 로드 시 ENV_FILE 고정 특성 우회).
+describe('유튜브 브랜드별 채널 토큰 — 격리·라운드트립(네이버 미러)', () => {
+  const YT_ENV = ['YOUTUBE_TOKENS'];
+  let tmpEnv: string;
+  let mod: typeof import('./store');
+  beforeEach(async () => {
+    tmpEnv = path.join(os.tmpdir(), 'youtube-token-store-test.env');
+    fs.writeFileSync(tmpEnv, '', { mode: 0o600 });
+    process.env.GEPA_ENV_FILE = tmpEnv;
+    for (const k of YT_ENV) delete process.env[k]; // 이전 테스트의 process.env 미러링 잔재 제거
+    vi.resetModules();
+    mod = await import('./store');
+  });
+  afterEach(() => {
+    try { fs.rmSync(tmpEnv); } catch { /* 이미 없음 */ }
+    delete process.env.GEPA_ENV_FILE;
+    for (const k of YT_ENV) delete process.env[k];
+  });
+
+  it('미연결 브랜드는 빈 토큰 반환(폴백 없음)', () => {
+    expect(mod.getYoutubeAccount('unset-brand')).toEqual({ refreshToken: '' });
+  });
+
+  it('저장 후 라운드트립 — 브랜드 A 저장 → A로 읽힘', () => {
+    mod.setYoutubeToken('brand-a', 'refresh_token_a_value');
+    expect(mod.getYoutubeAccount('brand-a')).toEqual({ refreshToken: 'refresh_token_a_value' });
+  });
+
+  it('브랜드 격리 — A 저장이 B에 안 보임, B는 여전히 빈 토큰', () => {
+    mod.setYoutubeToken('brand-a', 'token_a');
+    expect(mod.getYoutubeAccount('brand-b')).toEqual({ refreshToken: '' });
+    expect(mod.getYoutubeAccount('brand-a')).toEqual({ refreshToken: 'token_a' });
+  });
+
+  it('다른 브랜드 보존 — A·B 저장 후 B 갱신 → A 불변', () => {
+    mod.setYoutubeToken('brand-a', 'token_a');
+    mod.setYoutubeToken('brand-b', 'token_b');
+    mod.setYoutubeToken('brand-b', 'token_b_updated');
+    expect(mod.getYoutubeAccount('brand-a')).toEqual({ refreshToken: 'token_a' });
+    expect(mod.getYoutubeAccount('brand-b')).toEqual({ refreshToken: 'token_b_updated' });
+  });
+
+  it('빈 문자열로 연결 해제 — A 저장 → setYoutubeToken("A", "") → 빈 토큰', () => {
+    mod.setYoutubeToken('brand-a', 'token_a');
+    mod.setYoutubeToken('brand-a', '');
+    expect(mod.getYoutubeAccount('brand-a')).toEqual({ refreshToken: '' });
+  });
+
+  it('범용("") 슬러그도 blob 라운드트립', () => {
+    mod.setYoutubeToken('', 'universal_token');
+    expect(mod.getYoutubeAccount('')).toEqual({ refreshToken: 'universal_token' });
+    const txt = fs.readFileSync(tmpEnv, 'utf-8');
+    expect(txt).toContain('YOUTUBE_TOKENS=');
   });
 });
