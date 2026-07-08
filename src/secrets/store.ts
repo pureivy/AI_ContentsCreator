@@ -30,6 +30,9 @@ const BUILTIN: BuiltinDef[] = [
   { key: 'NOTIFY_WEBHOOK_URL', label: '알림 웹훅', icon: '🔔', desc: '자율 사이클·일일 브리핑을 POST 할 URL(Slack/Discord/커스텀)', placeholder: 'https://hooks.…', needs_restart: false },
   { key: 'TELEGRAM_BOT_TOKEN', label: '텔레그램 봇 토큰', icon: '📨', desc: '텔레그램 알림(봇 토큰 + 챗 ID 둘 다 설정 시 발송)', placeholder: '123456:ABC…', needs_restart: false },
   { key: 'TELEGRAM_CHAT_ID', label: '텔레그램 챗 ID', icon: '💬', desc: '알림을 받을 텔레그램 chat_id', placeholder: '123456789', needs_restart: false },
+  // 유튜브 쇼츠 발행 — 공용 OAuth 클라이언트(웹) 1개. 브랜드별 채널 토큰은 YOUTUBE_TOKENS blob(스튜디오 '채널 연결').
+  { key: 'YOUTUBE_OAUTH_CLIENT_ID', label: '유튜브 OAuth 클라이언트 ID', icon: '▶️', desc: '쇼츠 업로드용 공용 OAuth 클라이언트(웹) ID — 설정 가이드는 스펙 §9', placeholder: '….apps.googleusercontent.com', needs_restart: false },
+  { key: 'YOUTUBE_OAUTH_CLIENT_SECRET', label: '유튜브 OAuth 시크릿', icon: '🔑', desc: '위 클라이언트의 Client Secret', placeholder: 'GOCSPX-…', needs_restart: false },
   // 네이버 발행 계정(블로그 ID·로그인)은 브랜드별로 갈리므로 일반 키 그리드가 아니라 전용
   // "네이버 발행 계정" 섹션(브랜드 선택)에서 관리한다 — get/setNaverAccount·naverAccountView.
   // 범용('') 계정은 여전히 평면 키(NAVER_BLOG_ID/NAVER_LOGIN_ID/NAVER_LOGIN_PW)에 저장된다.
@@ -255,6 +258,38 @@ export function setNaverAccount(slug: string, patch: Partial<NaverAccount>): voi
   }
   map[slug] = cur;
   writeNaverAccounts(map);
+}
+
+// ── 브랜드별 유튜브 채널 토큰 ────────────────────────────────────────────────
+// NAVER_ACCOUNTS 와 동일 패턴 — 공용 OAuth 클라이언트 1개 + 브랜드별 refresh token 을
+// YOUTUBE_TOKENS 한 키에 JSON({"<slug>":{refreshToken}})으로 저장(.env 단일 저장소).
+// 브랜드 폴백 없음 — 미연결 브랜드는 빈 토큰(업로드 시 명확히 에러) → 채널 섞임 원천 차단.
+export interface YoutubeAccount { refreshToken: string }
+const YT_TOKENS_KEY = 'YOUTUBE_TOKENS';
+
+function readYoutubeTokens(): Record<string, Partial<YoutubeAccount>> {
+  const raw = readEnvValues()[YT_TOKENS_KEY] ?? process.env[YT_TOKENS_KEY] ?? '';
+  if (!raw) return {};
+  try {
+    const o = JSON.parse(raw) as unknown;
+    return o && typeof o === 'object' ? (o as Record<string, Partial<YoutubeAccount>>) : {};
+  } catch { return {}; }
+}
+
+/** 업로드에 쓸 브랜드 채널 토큰 — 범용('')도 blob 의 '' 키(평면 키 없음). 미연결이면 빈 문자열. */
+export function getYoutubeAccount(slug: string): YoutubeAccount {
+  const a = readYoutubeTokens()[slug] ?? {};
+  return { refreshToken: (a.refreshToken ?? '').trim() };
+}
+
+/** 브랜드 채널 토큰 저장 — 빈 문자열이면 해당 브랜드 연결 해제. */
+export function setYoutubeToken(slug: string, refreshToken: string): void {
+  const map = readYoutubeTokens();
+  const clean: Record<string, Partial<YoutubeAccount>> = {};
+  for (const [s, a] of Object.entries(map)) if (a.refreshToken?.trim()) clean[s] = { refreshToken: a.refreshToken.trim() };
+  if (refreshToken.trim()) clean[slug] = { refreshToken: refreshToken.trim() };
+  else delete clean[slug];
+  writeEnvValue(YT_TOKENS_KEY, Object.keys(clean).length ? JSON.stringify(clean) : undefined);
 }
 
 /** UI 표시용 — 계정 각 필드의 설정 여부 + 마스킹(blogId 는 공개값이라 평문, 로그인은 마스킹). */
