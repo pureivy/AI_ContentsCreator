@@ -12,7 +12,7 @@ import type { ShortsScene, ShortsRenderResult } from './shortsCommon';
 
 export async function renderShortsVideoRemotion(
   dir: string, scenes: ShortsScene[], images: Array<string | null>,
-  opts: { voice?: string; instructions?: string; signal?: AbortSignal } = {},
+  opts: { voice?: string; instructions?: string; signal?: AbortSignal; clips?: Array<string | null> } = {},
 ): Promise<ShortsRenderResult> {
   const entry = path.resolve('remotion/index.ts');
   if (!fs.existsSync(entry)) return { ok: false, issues: ['remotion 엔트리 부재'] };
@@ -31,9 +31,12 @@ export async function renderShortsVideoRemotion(
     let imageSrc: string | null = null, audioSrc: string | null = null;
     if (p.imagePath) { const dst = `scene_${nn}${path.extname(p.imagePath) || '.png'}`; fs.copyFileSync(p.imagePath, path.join(publicDir, dst)); imageSrc = dst; }
     if (p.audioPath) { const dst = `narr_${nn}.mp3`; fs.copyFileSync(p.audioPath, path.join(publicDir, dst)); audioSrc = dst; }
+    let videoSrc: string | null = null;
+    const clip = opts.clips?.[p.index];
+    if (clip && fs.existsSync(clip)) { const dst = `clip_${nn}.mp4`; fs.copyFileSync(clip, path.join(publicDir, dst)); videoSrc = dst; }
     const sc = scenes[p.index];
     return {
-      imageSrc, audioSrc, screenText: p.screenText, durationInFrames: p.durationInFrames,
+      imageSrc, audioSrc, videoSrc, screenText: p.screenText, durationInFrames: p.durationInFrames,
       ...(sc?.kind ? { kind: sc.kind } : {}),
       ...(sc?.stat ? { stat: sc.stat } : {}),
       ...(sc?.items ? { items: sc.items } : {}),

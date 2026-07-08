@@ -1,6 +1,6 @@
 import React from 'react';
 import { z } from 'zod';
-import { AbsoluteFill, Series, Audio, staticFile } from 'remotion';
+import { AbsoluteFill, Series, Audio, staticFile, Loop, OffthreadVideo } from 'remotion';
 import { KenBurnsImage } from './KenBurnsImage';
 import { KineticCaption } from './KineticCaption';
 import { ProgressBar } from './ProgressBar';
@@ -14,6 +14,7 @@ export const autoShortsSchema = z.object({
     audioSrc: z.string().nullable(),
     screenText: z.string(),
     durationInFrames: z.number(),
+    videoSrc: z.string().nullable().optional(),
     kind: z.enum(['hook', 'stat', 'list', 'quote', 'cta']).optional(),
     stat: z.object({ value: z.number(), unit: z.string().optional(), label: z.string().optional() }).optional(),
     items: z.array(z.string()).max(4).optional(),
@@ -27,9 +28,17 @@ export const defaultProps: AutoShortsProps = {
   totalFrames: 90,
 };
 
+const CLIP_FRAMES = 180; // 6초 클립 × 30fps 컴포지션 — 씬이 클립보다 길면 루프
+
 const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number }> = ({ s, index }) => (
   <AbsoluteFill>
-    <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} />
+    {s.videoSrc ? (
+      <Loop durationInFrames={CLIP_FRAMES}>
+        <OffthreadVideo src={staticFile(s.videoSrc)} muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      </Loop>
+    ) : (
+      <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} />
+    )}
     {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} /> : null}
     {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}
     {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
