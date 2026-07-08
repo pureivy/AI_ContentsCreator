@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   fetchShorts, createShorts, createShortsFromPiece, deleteShorts,
-  fetchPieces, ShortsInfo, PieceInfo,
+  fetchPieces, ShortsInfo, PieceInfo, uploadShortsYoutube, fetchYoutubeStatus,
 } from "../api";
 import Avatar from "./Avatar";
 import Ico, { type IcoName } from "./Ico";
@@ -28,8 +28,19 @@ function fmtWhen(iso: string): string {
   return h < 24 ? `${h}시간 전` : `${Math.round(h / 24)}일 전`;
 }
 
-function ShortRow({ s, onDelete }: { s: ShortsInfo; onDelete: (id: string) => void }) {
+function ShortRow({ s, onDelete, yt, onChanged }: {
+  s: ShortsInfo; onDelete: (id: string) => void;
+  yt: { client: boolean; connected: boolean }; onChanged: () => void;
+}) {
   const [copied, setCopied] = useState(false);
+  const [ytBusy, setYtBusy] = useState(false);
+  const [ytErr, setYtErr] = useState("");
+  const doYoutube = async () => {
+    setYtBusy(true); setYtErr("");
+    const r = await uploadShortsYoutube(s.id);
+    setYtBusy(false);
+    if (r.ok) onChanged(); else setYtErr(r.error || "업로드 실패");
+  };
   const running = RUNNING_STAGES.has(s.stage);
   const captionFull = [s.title, s.description, (s.hashtags ?? []).join(" ")].filter(Boolean).join("\n\n");
   const copyCaption = async () => {
@@ -80,6 +91,14 @@ function ShortRow({ s, onDelete }: { s: ShortsInfo; onDelete: (id: string) => vo
             <a className="btn start" href={`/shorts/${s.id}/video`} download={`shorts-${s.id}.mp4`}>MP4</a>
             <a className="btn ghost" href={`/shorts/${s.id}/zip`} download>zip (mp4+자막+캡션)</a>
             {captionFull && <button className="btn ghost" onClick={copyCaption}>{copied ? "복사됨!" : "캡션 복사"}</button>}
+            {s.youtubeUrl ? (
+              <a className="btn ghost" href={s.youtubeUrl} target="_blank" rel="noreferrer" title="비공개 업로드됨 — 공개 전환은 유튜브 스튜디오에서">▶ 유튜브(비공개)</a>
+            ) : yt.connected ? (
+              <button className="btn ghost" disabled={ytBusy} onClick={doYoutube}>{ytBusy ? "업로드 중…" : "▶ 유튜브 업로드"}</button>
+            ) : yt.client ? (
+              <a className="btn ghost" href="/youtube/oauth/start" target="_blank" rel="noreferrer" title="이 브랜드의 유튜브 채널 구글 계정으로 로그인해 1회 연결">▶ 채널 연결</a>
+            ) : null}
+            {ytErr && <span className="muted" style={{ color: "var(--con)" }}>{ytErr}</span>}
           </>
         )}
         <button className="btn ghost" title="목록에서 삭제(산출물 파일은 남음)" disabled={running} onClick={() => onDelete(s.id)}><Ico name="trash" size={12} /> 삭제</button>
@@ -98,8 +117,9 @@ export default function ShortsSection() {
   const [srcPiece, setSrcPiece] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [yt, setYt] = useState<{ client: boolean; connected: boolean }>({ client: false, connected: false });
 
-  const load = () => { fetchShorts().then(setItems); fetchPieces().then(setPieces); };
+  const load = () => { fetchShorts().then(setItems); fetchPieces().then(setPieces); fetchYoutubeStatus().then(setYt); };
   useEffect(() => {
     load();
     const t = setInterval(load, 8000); // 진행 중 상태 폴링(캘린더와 동일 케이던스)
@@ -162,7 +182,7 @@ export default function ShortsSection() {
       </div>
 
       {items.length === 0 && <p className="muted">아직 숏폼이 없습니다 — 위에서 주제를 입력해 첫 영상을 만들어 보세요.</p>}
-      {items.map((s) => <ShortRow key={s.id} s={s} onDelete={doDelete} />)}
+      {items.map((s) => <ShortRow key={s.id} s={s} onDelete={doDelete} yt={yt} onChanged={load} />)}
     </>
   );
 }

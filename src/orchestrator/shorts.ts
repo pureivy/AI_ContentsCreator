@@ -21,6 +21,7 @@ import { qaSceneImages } from './shortsSceneQa';
 import { i2vSceneClips } from './shortsSceneClips';
 import { renderShortsVideo } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
+import { uploadShortsToYoutube } from '../tools/youtubeUpload';
 import { brandContext } from '../content/brand';
 import type { ShortsScene } from '../tools/shortsRender';
 import { normalizeSceneKind } from '../tools/shortsCommon';
@@ -267,6 +268,17 @@ export async function runShortsJob(
       topic: plan.title || short.topic,
     });
     say(`${plan.title.slice(0, 30)} — ${r.durationSec}초 · 씬 ${r.sceneCount}개 완성${fallbacks ? ` (배경 폴백 ${fallbacks}씬)` : ''}`);
+
+    // ready 이후 자동 유튜브 업로드(옵트인) — 비공개 고정. 실패해도 잡은 이미 완성(수동 재시도 가능).
+    if (CONFIG.autoYtUpload) {
+      const up = await uploadShortsToYoutube({
+        slug: short.brand ?? '', videoPath: r.videoPath,
+        title: plan.title, description: plan.description, hashtags: plan.hashtags,
+        signal: opts.signal,
+      });
+      if (up.ok) { store.update(id, { youtubeId: up.videoId, youtubeUrl: up.url }); say(`유튜브 비공개 업로드 완료 — ${up.url}`); }
+      else say(`유튜브 자동 업로드 실패(수동 재시도 가능) — ${up.error}`);
+    }
   } catch (e) {
     const msg = opts.signal?.aborted ? '취소됨' : e instanceof Error ? e.message.slice(0, 300) : String(e);
     store.update(id, { stage: 'error', error: msg });

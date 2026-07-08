@@ -1003,6 +1003,7 @@ export interface ShortsInfo {
   writer?: string;
   director?: string;
   error?: string;
+  youtubeUrl?: string;
   running?: boolean;
   createdTs: string;
   updatedTs: string;
@@ -1031,6 +1032,18 @@ export async function deleteShorts(id: string): Promise<{ ok: boolean; error?: s
     if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
     return { ok: true };
   } catch { return { ok: false, error: "network" }; }
+}
+export async function uploadShortsYoutube(id: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+  try {
+    const r = await fetch(`/shorts/${id}/youtube`, { method: "POST" });
+    const j = await r.json().catch(() => ({} as { url?: string; error?: string }));
+    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `HTTP ${r.status}` };
+    return { ok: true, url: (j as { url?: string }).url };
+  } catch { return { ok: false, error: "network" }; }
+}
+export async function fetchYoutubeStatus(): Promise<{ client: boolean; connected: boolean }> {
+  try { const r = await fetch("/youtube/status"); return await r.json() as { client: boolean; connected: boolean }; }
+  catch { return { client: false, connected: false }; }
 }
 
 // piece 온디맨드 실행 — 자율 케이던스를 안 기다리고 지금 초안 런을 띄운다.
