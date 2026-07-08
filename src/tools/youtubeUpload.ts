@@ -11,10 +11,11 @@ export interface YtUploadResult { ok: boolean; videoId?: string; url?: string; e
 
 /** snippet/status 메타데이터(순수) — 제목 100자·꺾쇠 제거, 설명 5000자, tags ≤15개·30자, private 고정. */
 export function buildVideoMeta(title: string, description: string, hashtags: string[]): Record<string, unknown> {
-  const t = title.replace(/[<>]/g, '').trim().slice(0, 100) || '쇼츠';
+  const clean = (s: string): string => s.replace(/[<>]/g, ''); // 유튜브 API 는 제목·설명·태그에 <> 금지
+  const t = clean(title).trim().slice(0, 100) || '쇼츠';
   const tagLine = hashtags.filter(Boolean).join(' ');
-  const desc = [description.trim(), tagLine].filter(Boolean).join('\n\n').slice(0, 5000);
-  const tags = hashtags.map((h) => h.replace(/^#/, '').trim().slice(0, 30)).filter(Boolean).slice(0, 15);
+  const desc = clean([description.trim(), tagLine].filter(Boolean).join('\n\n')).slice(0, 5000);
+  const tags = hashtags.map((h) => clean(h.replace(/^#/, '')).trim().slice(0, 30)).filter(Boolean).slice(0, 15);
   return {
     snippet: { title: t, description: desc, tags, categoryId: '22' },
     status: { privacyStatus: 'private', selfDeclaredMadeForKids: false },

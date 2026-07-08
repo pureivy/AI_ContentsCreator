@@ -1084,6 +1084,7 @@ app.post('/shorts/:id/youtube', async (c) => {
   const s = shortsStore().get(id);
   if (!s) return c.json({ error: 'unknown shorts' }, 404);
   if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
+  if (s.youtubeUrl) return c.json({ error: '이미 업로드됨', url: s.youtubeUrl }, 409); // 중복 영상·쿼터 낭비 방지
   const r = await uploadShortsToYoutube({
     slug: s.brand ?? '', videoPath: path.join(shortsStore().dirFor(id), 'final.mp4'),
     title: s.title ?? s.topic, description: s.description ?? '', hashtags: s.hashtags ?? [],

@@ -21,6 +21,11 @@ describe('buildVideoMeta — 캡·해시태그 합성·private 고정(순수)', 
     const empty = buildVideoMeta('  ', '', []) as { snippet: { title: string } };
     expect(empty.snippet.title).toBe('쇼츠');
   });
+  it('설명·태그의 꺾쇠도 제거(유튜브 API 제약)', () => {
+    const m = buildVideoMeta('t', '1->2단계 <중요>', ['#a<b>']) as { snippet: { description: string; tags: string[] } };
+    expect(m.snippet.description).toBe('1-2단계 중요\n\n#ab');
+    expect(m.snippet.tags).toEqual(['ab']);
+  });
 });
 describe('buildMultipartBody — multipart/related 조립(순수)', () => {
   it('메타 JSON + 비디오 바이트 + 종료 경계', () => {
