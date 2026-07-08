@@ -7,7 +7,7 @@
 import { readFile } from 'node:fs/promises';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual, randomBytes } from 'node:crypto';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { serve } from '@hono/node-server';
@@ -1028,6 +1028,9 @@ app.get('/api/shorts', shortsListHandler);
 // ── 유튜브 발행(브랜드별 채널) — 공용 OAuth 클라이언트 + 브랜드 refresh token(YOUTUBE_TOKENS).
 //    비공개 업로드 고정 — 공개 전환은 사람이 유튜브 스튜디오에서(네이버 '임시저장' 원칙).
 const YT_REDIRECT = 'http://127.0.0.1:8787/youtube/oauth/callback';
+// OAuth state = 1회용 난수 논스(브랜드는 서버 메모리에서 복원, 10분 TTL) — 위조 콜백으로 임의
+// 브랜드에 공격자 토큰을 심는 CSRF 차단 + 비정상 슬러그가 토큰 blob 에 저장되는 것 차단.
+const YT_OAUTH_PENDING = new Map<string, { brand: string; exp: number }>();
 app.get('/youtube/status', (c) => {
   const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
   const client = !!(getSecret('YOUTUBE_OAUTH_CLIENT_ID') && getSecret('YOUTUBE_OAUTH_CLIENT_SECRET'));
@@ -1035,8 +1038,12 @@ app.get('/youtube/status', (c) => {
 });
 app.get('/youtube/oauth/start', (c) => {
   const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
+  if (brand && !isSafeBrandSlug(brand)) return c.text('비정상 브랜드 슬러그', 400);
   const id = getSecret('YOUTUBE_OAUTH_CLIENT_ID');
   if (!id) return c.text('유튜브 OAuth 클라이언트 미설정 — 키 탭에서 먼저 입력하세요', 400);
+  const nonce = randomBytes(16).toString('hex');
+  for (const [k, v] of YT_OAUTH_PENDING) if (v.exp < Date.now()) YT_OAUTH_PENDING.delete(k); // 만료 청소
+  YT_OAUTH_PENDING.set(nonce, { brand, exp: Date.now() + 10 * 60_000 });
   const u = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   u.searchParams.set('client_id', id);
   u.searchParams.set('redirect_uri', YT_REDIRECT);
@@ -1044,13 +1051,18 @@ app.get('/youtube/oauth/start', (c) => {
   u.searchParams.set('scope', 'https://www.googleapis.com/auth/youtube.upload');
   u.searchParams.set('access_type', 'offline');
   u.searchParams.set('prompt', 'consent');
-  u.searchParams.set('state', brand);
+  u.searchParams.set('state', nonce);
   return c.redirect(u.toString());
 });
 app.get('/youtube/oauth/callback', async (c) => {
   const code = c.req.query('code') ?? '';
-  const brand = c.req.query('state') ?? '';
-  const done = (msg: string): Response => c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">${msg} — 이 창을 닫으세요.</body>`);
+  const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const done = (msg: string): Response => c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">${esc(msg)} — 이 창을 닫으세요.</body>`);
+  const state = c.req.query('state') ?? '';
+  const pending = YT_OAUTH_PENDING.get(state);
+  if (!pending || pending.exp < Date.now()) return done('연결 실패: 유효하지 않거나 만료된 연결 요청 — 채널 연결을 다시 시작하세요');
+  YT_OAUTH_PENDING.delete(state); // 1회용
+  const brand = pending.brand;
   if (!code) return done(`연결 실패: ${c.req.query('error') ?? '인증 코드 없음'}`);
   try {
     const r = await fetch('https://oauth2.googleapis.com/token', {
