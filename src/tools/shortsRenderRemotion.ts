@@ -31,7 +31,14 @@ export async function renderShortsVideoRemotion(
     let imageSrc: string | null = null, audioSrc: string | null = null;
     if (p.imagePath) { const dst = `scene_${nn}${path.extname(p.imagePath) || '.png'}`; fs.copyFileSync(p.imagePath, path.join(publicDir, dst)); imageSrc = dst; }
     if (p.audioPath) { const dst = `narr_${nn}.mp3`; fs.copyFileSync(p.audioPath, path.join(publicDir, dst)); audioSrc = dst; }
-    return { imageSrc, audioSrc, screenText: p.screenText, durationInFrames: p.durationInFrames };
+    const sc = scenes[p.index];
+    return {
+      imageSrc, audioSrc, screenText: p.screenText, durationInFrames: p.durationInFrames,
+      ...(sc?.kind ? { kind: sc.kind } : {}),
+      ...(sc?.stat ? { stat: sc.stat } : {}),
+      ...(sc?.items ? { items: sc.items } : {}),
+      ...(sc?.quote ? { quote: sc.quote } : {}),
+    };
   });
   const totalFrames = prepared.reduce((a, p) => a + p.durationInFrames, 0);
   const inputProps = { scenes: propScenes, totalFrames };

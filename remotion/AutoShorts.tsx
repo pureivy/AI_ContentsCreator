@@ -4,6 +4,9 @@ import { AbsoluteFill, Series, Audio, staticFile } from 'remotion';
 import { KenBurnsImage } from './KenBurnsImage';
 import { KineticCaption } from './KineticCaption';
 import { ProgressBar } from './ProgressBar';
+import { StatCountUp } from './StatCountUp';
+import { ListReveal } from './ListReveal';
+import { QuoteCard } from './QuoteCard';
 
 export const autoShortsSchema = z.object({
   scenes: z.array(z.object({
@@ -11,6 +14,10 @@ export const autoShortsSchema = z.object({
     audioSrc: z.string().nullable(),
     screenText: z.string(),
     durationInFrames: z.number(),
+    kind: z.enum(['hook', 'stat', 'list', 'quote', 'cta']).optional(),
+    stat: z.object({ value: z.number(), unit: z.string().optional(), label: z.string().optional() }).optional(),
+    items: z.array(z.string()).optional(),
+    quote: z.object({ text: z.string(), source: z.string().optional() }).optional(),
   })),
   totalFrames: z.number(),
 });
@@ -23,7 +30,10 @@ export const defaultProps: AutoShortsProps = {
 const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number }> = ({ s, index }) => (
   <AbsoluteFill>
     <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} />
-    <KineticCaption text={s.screenText} />
+    {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} /> : null}
+    {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}
+    {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
+    <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} />
     {s.audioSrc ? <Audio src={staticFile(s.audioSrc)} /> : null}
   </AbsoluteFill>
 );
