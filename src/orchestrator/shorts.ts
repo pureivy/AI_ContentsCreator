@@ -18,6 +18,7 @@ import { stripEmoji } from '../output/render';
 import { shortsStore } from '../content/shorts';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
+import { i2vSceneClips } from './shortsSceneClips';
 import { renderShortsVideo } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { brandContext } from '../content/brand';
@@ -232,6 +233,15 @@ export async function runShortsJob(
     images = qa.images;
     if (qa.regenerated) say(`씬 QA — ${qa.regenerated}장 재생성 (${qa.issues.slice(0, 3).join(' · ')})`);
     else if (qa.issues.length) say(`씬 QA — 이슈 ${qa.issues.length}건, 재생성 없음 (${qa.issues.slice(0, 3).join(' · ')})`);
+    checkAbort();
+
+    // 3-c) 씬 배경 I2V — fal 클립화(키 없으면 no-op, 실패 씬은 스틸 폴백, fail-open).
+    const cv = await i2vSceneClips({
+      dir, images, scenePrompts: bgDraft.imageSlots.map((s) => s.prompt), signal: opts.signal,
+    });
+    const clipCount = cv.clips.filter(Boolean).length;
+    if (clipCount) say(`씬 I2V — ${clipCount}/${plan.scenes.length}장 클립화${cv.issues.length ? ` (${cv.issues[0]})` : ''}`);
+    else if (cv.issues.length) say(`씬 I2V — 클립 0장 (${cv.issues.slice(0, 2).join(' · ')})`);
     checkAbort();
 
     // 4) 조립 — 기본 Remotion 모션그래픽, 실패 시 ffmpeg 슬라이드쇼로 폴백(무중단).
