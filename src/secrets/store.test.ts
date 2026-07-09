@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseEnvText, upsertEnvText, maskSecret, getYoutubeAccount, setYoutubeToken } from './store';
+import { parseEnvText, upsertEnvText, maskSecret, getYoutubeAccount, setYoutubeToken, parseMetaTokens } from './store';
 
 // .env 가 '단일 값 저장소'가 되면서 UI 편집이 파일을 직접 고쳐 쓴다 — 손으로 관리하던
 // 주석/빈 줄/모르는 키를 절대 훼손하지 않아야 한다(실 .env 엔 커밋 금지 실키가 있음).
@@ -179,5 +179,18 @@ describe('유튜브 브랜드별 채널 토큰 — 격리·라운드트립(네�
     expect(mod.getYoutubeAccount('')).toEqual({ refreshToken: 'universal_token' });
     const txt = fs.readFileSync(tmpEnv, 'utf-8');
     expect(txt).toContain('YOUTUBE_TOKENS=');
+  });
+});
+
+// 메타(인스타·페북) 계정 파서 — 순수 함수(테스트만 실행, .env 접근 없음)
+describe('parseMetaTokens', () => {
+  it('정상 blob → 슬러그별 계정', () => {
+    const raw = JSON.stringify({ 'brand-a': { pageId: '1', igUserId: '2', pageAccessToken: 't' } });
+    expect(parseMetaTokens(raw)['brand-a']).toEqual({ pageId: '1', igUserId: '2', pageAccessToken: 't' });
+  });
+  it('빈 문자열·깨진 JSON·비객체 → 빈 맵', () => {
+    expect(parseMetaTokens('')).toEqual({});
+    expect(parseMetaTokens('{broken')).toEqual({});
+    expect(parseMetaTokens('"str"')).toEqual({});
   });
 });

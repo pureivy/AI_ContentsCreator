@@ -33,6 +33,9 @@ const BUILTIN: BuiltinDef[] = [
   // 유튜브 쇼츠 발행 — 공용 OAuth 클라이언트(웹) 1개. 브랜드별 채널 토큰은 YOUTUBE_TOKENS blob(스튜디오 '채널 연결').
   { key: 'YOUTUBE_OAUTH_CLIENT_ID', label: '유튜브 OAuth 클라이언트 ID', icon: '▶️', desc: '쇼츠 업로드용 공용 OAuth 클라이언트(웹) ID — 설정 가이드는 스펙 §9', placeholder: '….apps.googleusercontent.com', needs_restart: false },
   { key: 'YOUTUBE_OAUTH_CLIENT_SECRET', label: '유튜브 OAuth 시크릿', icon: '🔑', desc: '위 클라이언트의 Client Secret', placeholder: 'GOCSPX-…', needs_restart: false },
+  // 메타(인스타·페북) 발행 — 공용 개발자 앱 1개. 브랜드별 페이지·IG 토큰은 META_TOKENS blob(스튜디오 '메타 연결').
+  { key: 'META_OAUTH_CLIENT_ID', label: '메타 앱 ID', icon: '📸', desc: '카드뉴스 인스타·페북 발행용 Meta 개발자 앱 ID — 설정 가이드는 스펙 §4', placeholder: '1234567890', needs_restart: false },
+  { key: 'META_OAUTH_CLIENT_SECRET', label: '메타 앱 시크릿', icon: '🔑', desc: '위 앱의 App Secret', placeholder: 'abc123…', needs_restart: false },
   // 네이버 발행 계정(블로그 ID·로그인)은 브랜드별로 갈리므로 일반 키 그리드가 아니라 전용
   // "네이버 발행 계정" 섹션(브랜드 선택)에서 관리한다 — get/setNaverAccount·naverAccountView.
   // 범용('') 계정은 여전히 평면 키(NAVER_BLOG_ID/NAVER_LOGIN_ID/NAVER_LOGIN_PW)에 저장된다.
@@ -290,6 +293,40 @@ export function setYoutubeToken(slug: string, refreshToken: string): void {
   if (refreshToken.trim()) clean[slug] = { refreshToken: refreshToken.trim() };
   else delete clean[slug];
   writeEnvValue(YT_TOKENS_KEY, Object.keys(clean).length ? JSON.stringify(clean) : undefined);
+}
+
+// ── 브랜드별 메타(인스타·페북) 계정 ──────────────────────────────────────────
+// YOUTUBE_TOKENS 와 동일 패턴 — 공용 개발자 앱 1개 + 브랜드별 {pageId, igUserId, pageAccessToken}을
+// META_TOKENS 한 키에 JSON 으로 저장. 브랜드 폴백 없음 — 미연결은 빈값(발행 시 명확히 에러).
+export interface MetaAccount { pageId: string; igUserId: string; pageAccessToken: string }
+const META_TOKENS_KEY = 'META_TOKENS';
+
+/** blob 파싱(순수) — 깨진 JSON·비객체는 빈 맵. */
+export function parseMetaTokens(raw: string): Record<string, Partial<MetaAccount>> {
+  if (!raw) return {};
+  try {
+    const o = JSON.parse(raw) as unknown;
+    return o && typeof o === 'object' && !Array.isArray(o) ? (o as Record<string, Partial<MetaAccount>>) : {};
+  } catch { return {}; }
+}
+function readMetaTokens(): Record<string, Partial<MetaAccount>> {
+  return parseMetaTokens(readEnvValues()[META_TOKENS_KEY] ?? process.env[META_TOKENS_KEY] ?? '');
+}
+/** 발행에 쓸 브랜드 계정 — 범용('')도 blob 의 '' 키. 미연결이면 빈 문자열들. */
+export function getMetaAccount(slug: string): MetaAccount {
+  const a = readMetaTokens()[slug] ?? {};
+  return { pageId: (a.pageId ?? '').trim(), igUserId: (a.igUserId ?? '').trim(), pageAccessToken: (a.pageAccessToken ?? '').trim() };
+}
+/** 브랜드 계정 저장 — null 이면 해당 브랜드 연결 해제. */
+export function setMetaToken(slug: string, acct: MetaAccount | null): void {
+  const map = readMetaTokens();
+  const clean: Record<string, Partial<MetaAccount>> = {};
+  for (const [s, a] of Object.entries(map)) {
+    if (a.pageId?.trim() && a.igUserId?.trim() && a.pageAccessToken?.trim()) clean[s] = a;
+  }
+  if (acct && acct.pageId.trim() && acct.igUserId.trim() && acct.pageAccessToken.trim()) clean[slug] = acct;
+  else delete clean[slug];
+  writeEnvValue(META_TOKENS_KEY, Object.keys(clean).length ? JSON.stringify(clean) : undefined);
 }
 
 /** UI 표시용 — 계정 각 필드의 설정 여부 + 마스킹(blogId 는 공개값이라 평문, 로그인은 마스킹). */
