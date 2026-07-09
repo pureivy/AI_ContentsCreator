@@ -10,7 +10,7 @@ import { getSecret } from '../secrets/store';
 import { fetchTimeout } from '../util/fetch';
 import { appendMetrics, readMetrics, type MetricSample } from './performance';
 import { shortsStore, type Shorts } from '../content/shorts';
-import { llmWiki } from '../wiki/llmwiki';
+import { llmWikiFor } from '../wiki/llmwiki';
 import { appendMemory, appendActivity } from '../agents/workspace';
 import { pieceStore } from '../content/pieces';
 
@@ -85,13 +85,13 @@ function reinforceShorts(s: Shorts, m: MetricSample): number {
   if (shouldRecordMemory(signal, readMetrics(s.id).length)) {
     for (const role of ['shorts_writer', 'shorts_director']) {
       try {
-        appendMemory(role, `쇼츠 성과: "${title}"${keyword ? ` (키워드 "${keyword}")` : ''} — 조회 ${m.views}·좋아요 ${m.likes ?? 0}, 성과신호 ${signal.toFixed(2)}. ${verdict}.`);
+        appendMemory(role, `쇼츠 성과: "${title}"${keyword ? ` (키워드 "${keyword}")` : ''} — 조회 ${m.views}·좋아요 ${m.likes ?? 0}, 성과신호 ${signal.toFixed(2)}. ${verdict}.`, s.brand ?? '');
         appendActivity(role, `📈 쇼츠 성과 학습: ${title.slice(0, 40)}`);
       } catch { /* 역할 부재 등 — 무해 */ }
     }
   }
   try {
-    llmWiki().upsertPage({
+    llmWikiFor(s.brand).upsertPage({
       title: `쇼츠 성과: ${title}`, type: 'performance',
       body:
         `조회 ${m.views}회 · 좋아요 ${m.likes ?? 0} · 댓글 ${m.comments ?? 0} · 성과신호 ${signal.toFixed(2)}\n` +

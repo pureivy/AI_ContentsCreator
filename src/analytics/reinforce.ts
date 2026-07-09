@@ -12,7 +12,7 @@ import { pieceStore } from '../content/pieces';
 import { updateStrategy } from './strategy';
 import { appendMetrics } from './performance';
 import type { MetricSample } from './performance';
-import { llmWiki } from '../wiki/llmwiki';
+import { llmWikiFor } from '../wiki/llmwiki';
 import { appendMemory, appendActivity } from '../agents/workspace';
 import { getCompany } from '../agents/company-loader';
 
@@ -24,13 +24,13 @@ export function performanceSignal(m: MetricSample): number {
 }
 
 /** content_lead(작가) 등 실재 역할이면 memory 에 가벼운 성과 신호 누적(2차 귀속, 강성과 한정). */
-function reinforceWriter(title: string, keyword: string | undefined, signal: number): void {
+function reinforceWriter(title: string, keyword: string | undefined, signal: number, brand: string | undefined): void {
   try {
     const c = getCompany();
     const valid = new Set([c.ceo, ...c.specialists].map((r) => r.id));
     const writerId = 'content_lead';
     if (!valid.has(writerId)) return;
-    appendMemory(writerId, `성과 좋았던 글: "${title}"${keyword ? ` (타겟 "${keyword}")` : ''} — 이 주제·접근이 노출로 이어짐(성과신호 ${signal.toFixed(2)}). 유사 각도 유지.`);
+    appendMemory(writerId, `성과 좋았던 글: "${title}"${keyword ? ` (타겟 "${keyword}")` : ''} — 이 주제·접근이 노출로 이어짐(성과신호 ${signal.toFixed(2)}). 유사 각도 유지.`, brand ?? '');
     appendActivity(writerId, `📈 성과 학습: ${title.slice(0, 40)}`);
   } catch { /* 무해 */ }
 }
@@ -51,7 +51,7 @@ export async function reinforceFromPerformance(pieceId: string, metrics: MetricS
   try {
     const topKw = (metrics.searchInflow ?? []).slice(0, 5)
       .map((k) => `- ${k.keyword} (${k.count}${k.rank ? `, ${k.rank}위` : ''})`).join('\n');
-    llmWiki().upsertPage({
+    llmWikiFor(piece.brand).upsertPage({
       title: `성과: ${piece.title}`, type: 'performance',
       body:
         `조회 ${metrics.views}회${metrics.dwellSec ? ` · 체류 ${metrics.dwellSec}s` : ''} · 성과신호 ${signal.toFixed(2)}\n` +
@@ -65,7 +65,7 @@ export async function reinforceFromPerformance(pieceId: string, metrics: MetricS
   } catch { /* 위키 실패는 강화를 막지 않음 */ }
 
   // 2차(약) — 강성과일 때만 작가에게 가벼운 신호(에이전트 과적합 회피).
-  if (signal >= 0.6) reinforceWriter(piece.title, piece.keyword, signal);
+  if (signal >= 0.6) reinforceWriter(piece.title, piece.keyword, signal, piece.brand);
 
   store.setStage(pieceId, 'reflected'); // 멱등 전이 — 이후 재호출은 measured 아니라 skip.
   return true;
