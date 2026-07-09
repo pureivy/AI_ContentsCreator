@@ -6,7 +6,9 @@
  * 스펙: docs/superpowers/specs/2026-07-10-naver-publish-discovery-design.md
  */
 
+import { pieceStore } from '../content/pieces';
 import type { Piece } from '../content/pieces';
+import { getNaverAccount } from '../secrets/store';
 
 export interface RssItem { title: string; link: string; pubDate: string /* ISO */ }
 
@@ -97,4 +99,51 @@ export function matchPublished(
     }
   }
   return { matched, ambiguous };
+}
+
+const noticed = new Set<string>(); // 모호/포기 안내는 piece 당 1회(프로세스 생애)
+
+/** 브랜드별 RSS 조회 → 보수적 매칭 → publishedUrl 자동 설정 + 피드 로그.
+ *  전량 fail-open — 어떤 실패도 throw 로 새지 않는다(이어지는 syncPerformance 보장). */
+export async function discoverPublishedNaver(): Promise<void> {
+  try {
+    const { targets, gaveUp } = selectDiscoveryTargets(pieceStore().list(), Date.now());
+    for (const p of gaveUp) {
+      if (noticed.has(p.id)) continue;
+      noticed.add(p.id);
+      console.log(`[성과분석] ${p.title.slice(0, 30)} — 임시저장 30일 경과, 자동 감지 포기. 발행했다면 URL 을 수동 등록해 주세요`);
+    }
+    if (!targets.length) return; // 대상 없으면 RSS 조회 0회
+    const byBrand = new Map<string, Piece[]>();
+    for (const p of targets) {
+      const slug = p.brand ?? '';
+      byBrand.set(slug, [...(byBrand.get(slug) ?? []), p]);
+    }
+    for (const [slug, pieces] of byBrand) {
+      try {
+        const blogId = getNaverAccount(slug).blogId;
+        if (!blogId) { console.log(`[publish-discover] 브랜드 "${slug || '범용'}" blogId 미설정 — 건너뜀`); continue; }
+        const res = await fetch(`https://rss.blog.naver.com/${encodeURIComponent(blogId)}.xml`,
+          { signal: AbortSignal.timeout(10_000) });
+        if (!res.ok) { console.log(`[publish-discover] RSS HTTP ${res.status} ("${slug || '범용'}") — 건너뜀`); continue; }
+        const items = parseRssItems(await res.text());
+        const { matched, ambiguous } = matchPublished(
+          pieces.map((p) => ({ id: p.id, title: p.title, draftTs: p.naverDraftTs! })), items);
+        for (const m of matched) {
+          const p = pieceStore().setPublished(m.pieceId, m.url); // 삭제 경합이면 undefined — 무해
+          if (p) console.log(`[성과분석] ${p.title.slice(0, 30)} — 네이버 발행 감지, 성과 추적 시작`);
+        }
+        for (const id of ambiguous) {
+          if (noticed.has(id)) continue;
+          noticed.add(id);
+          const p = pieces.find((x) => x.id === id);
+          console.log(`[성과분석] ${(p?.title ?? id).slice(0, 30)} — 동명 후보 복수, 자동 연결 보류. 발행 URL 을 수동 등록해 주세요`);
+        }
+      } catch (e) {
+        console.log(`[publish-discover] "${slug || '범용'}" 감지 실패(무해): ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  } catch (e) {
+    console.log(`[publish-discover] 감지 실패(무해): ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
