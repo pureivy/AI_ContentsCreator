@@ -164,7 +164,7 @@ export function parseRssItems(xml: string): RssItem[] {
 - [ ] **Step 4: 통과 확인**
 
 Run: `npx vitest run src/analytics/naverDiscovery.test.ts`
-Expected: PASS (6 tests).
+Expected: PASS (5 tests).
 
 - [ ] **Step 5: 커밋**
 
@@ -330,7 +330,7 @@ export function matchPublished(
 - [ ] **Step 4: 통과 확인**
 
 Run: `npx vitest run src/analytics/naverDiscovery.test.ts`
-Expected: PASS (13 tests).
+Expected: PASS (12 tests).
 
 - [ ] **Step 5: 커밋**
 
