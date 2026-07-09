@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   fetchShorts, createShorts, createShortsFromPiece, deleteShorts,
   fetchPieces, ShortsInfo, PieceInfo, uploadShortsYoutube, fetchYoutubeStatus,
+  publishShortsMeta, fetchMetaStatus,
 } from "../api";
 import Avatar from "./Avatar";
 import Ico, { type IcoName } from "./Ico";
@@ -35,9 +36,9 @@ function fmtCount(n: number): string {
   return String(n);
 }
 
-function ShortRow({ s, onDelete, yt, onChanged }: {
+function ShortRow({ s, onDelete, yt, metaReady, onChanged }: {
   s: ShortsInfo; onDelete: (id: string) => void;
-  yt: { client: boolean; connected: boolean }; onChanged: () => void;
+  yt: { client: boolean; connected: boolean }; metaReady: boolean; onChanged: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [ytBusy, setYtBusy] = useState(false);
@@ -47,6 +48,15 @@ function ShortRow({ s, onDelete, yt, onChanged }: {
     const r = await uploadShortsYoutube(s.id);
     setYtBusy(false);
     if (r.ok) onChanged(); else setYtErr(r.error || "업로드 실패");
+  };
+  const [metaBusy, setMetaBusy] = useState(false);
+  const [metaErr, setMetaErr] = useState("");
+  const doMeta = async () => {
+    setMetaBusy(true); setMetaErr("");
+    const r = await publishShortsMeta(s.id);
+    setMetaBusy(false);
+    if (r.error) setMetaErr(r.error);
+    onChanged(); // 부분 성공 링크도 즉시 반영
   };
   const running = RUNNING_STAGES.has(s.stage);
   const captionFull = [s.title, s.description, (s.hashtags ?? []).join(" ")].filter(Boolean).join("\n\n");
@@ -110,6 +120,19 @@ function ShortRow({ s, onDelete, yt, onChanged }: {
             ) : yt.client ? (
               <a className="btn ghost" href="/youtube/oauth/start" target="_blank" rel="noreferrer" title="이 브랜드의 유튜브 채널 구글 계정으로 로그인해 1회 연결">▶ 채널 연결</a>
             ) : null}
+            {s.igPermalink || s.fbReelId ? (
+              <span style={{ display: "inline-flex", gap: 6 }}>
+                {s.igPermalink && <a className="btn ghost" href={s.igPermalink} target="_blank" rel="noreferrer">📸 릴스</a>}
+                {s.fbReelId && <a className="btn ghost" href={`https://www.facebook.com/reel/${s.fbReelId}`} target="_blank" rel="noreferrer">📘 FB 릴스</a>}
+              </span>
+            ) : metaReady ? (
+              <button className="btn ghost" disabled={metaBusy} onClick={doMeta} title="인스타 릴스+페북 릴스로 발행 — 릴스는 즉시 공개됩니다">
+                {metaBusy ? "릴스 발행 중…" : "📤 릴스 발행(즉시 공개)"}
+              </button>
+            ) : (
+              <a className="btn ghost" href="/meta/oauth/start" target="_blank" rel="noreferrer" title="이 브랜드의 메타 계정으로 1회 연결(카드뉴스와 공용)">📤 메타 연결</a>
+            )}
+            {metaErr && <span className="muted" style={{ color: "var(--con)" }}>{metaErr}</span>}
             {ytErr && <span className="muted" style={{ color: "var(--con)" }}>{ytErr}</span>}
           </>
         )}
@@ -130,8 +153,12 @@ export default function ShortsSection() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [yt, setYt] = useState<{ client: boolean; connected: boolean }>({ client: false, connected: false });
+  const [metaReady, setMetaReady] = useState(false);
 
-  const load = () => { fetchShorts().then(setItems); fetchPieces().then(setPieces); fetchYoutubeStatus().then(setYt); };
+  const load = () => {
+    fetchShorts().then(setItems); fetchPieces().then(setPieces); fetchYoutubeStatus().then(setYt);
+    fetchMetaStatus().then((m) => setMetaReady(m.client && m.connected));
+  };
   useEffect(() => {
     load();
     const t = setInterval(load, 8000); // 진행 중 상태 폴링(캘린더와 동일 케이던스)
@@ -194,7 +221,7 @@ export default function ShortsSection() {
       </div>
 
       {items.length === 0 && <p className="muted">아직 숏폼이 없습니다 — 위에서 주제를 입력해 첫 영상을 만들어 보세요.</p>}
-      {items.map((s) => <ShortRow key={s.id} s={s} onDelete={doDelete} yt={yt} onChanged={load} />)}
+      {items.map((s) => <ShortRow key={s.id} s={s} onDelete={doDelete} yt={yt} metaReady={metaReady} onChanged={load} />)}
     </>
   );
 }

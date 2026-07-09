@@ -1007,6 +1007,8 @@ export interface ShortsInfo {
   director?: string;
   error?: string;
   youtubeUrl?: string;
+  igPermalink?: string;
+  fbReelId?: string;
   views?: number;
   likes?: number;
   running?: boolean;
@@ -1045,6 +1047,10 @@ export async function uploadShortsYoutube(id: string): Promise<{ ok: boolean; ur
     if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `HTTP ${r.status}` };
     return { ok: true, url: (j as { url?: string }).url };
   } catch { return { ok: false, error: "network" }; }
+}
+export async function publishShortsMeta(id: string): Promise<{ ok?: boolean; igPermalink?: string; fbReelId?: string; error?: string }> {
+  try { const r = await fetch(`/shorts/${id}/meta`, { method: "POST" }); return await r.json(); }
+  catch { return { error: "요청 실패" }; }
 }
 export async function fetchYoutubeStatus(): Promise<{ client: boolean; connected: boolean }> {
   try { const r = await fetch("/youtube/status"); return await r.json() as { client: boolean; connected: boolean }; }
