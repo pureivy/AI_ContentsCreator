@@ -105,11 +105,14 @@ describe('publishCardNewsToMeta', () => {
         : u.includes('/media_publish') ? {}                       // ← 이형: id 없음
         : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
         : u.includes('/IG/media') ? { id: 'ct1' }
+        : u.includes('/PG/feed') ? { id: 'PG_POST' }
         : {};
       return new Response(JSON.stringify(json), { status: 200 });
     });
     const r = await publishCardNewsToMeta({ slug: '', slidePaths: ['/a/slide_01.png'], caption: 'c', hashtags: [] });
     expect(r.ok).toBe(false);
     expect(r.error).toContain('이형');
+    expect(r.error).toContain('IG 발행');        // IG 단계 가드가 발동했음을 특정
+    expect(r.fbPostId).toBeUndefined();          // 가드가 FB 단계 진행을 막았음을 검증
   });
 });
