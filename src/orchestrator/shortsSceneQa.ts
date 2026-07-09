@@ -5,28 +5,25 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { CONFIG } from '../config';
 import { microJSON } from './agent';
 import { generateImagesForDraft } from '../tools/blog_skills';
-
-const stdModel = (): string => CONFIG.cloudTierModels.standard;
-const visionCapable = (): boolean => stdModel().startsWith('claude-');
+import { stdModel, visionCapable, parseBadIndices } from './visionCommon';
 
 export interface SceneQaResult { images: Array<string | null>; regenerated: number; issues: string[] }
 
-/** 비전 이슈 배열 → 유효(1..count)·중복 제거·정렬된 1-base 불량 순번. Math.floor 방어. */
+/** 비전 이슈 배열 → 불량 씬 순번 — parseBadIndices('scene') 위임(기존 소비 호환 유지). */
 export function parseBadScenes(issues: Array<{ scene?: unknown }>, count: number): number[] {
-  const set = new Set<number>();
-  for (const it of issues ?? []) {
-    const k = Math.floor(Number(it?.scene));
-    if (Number.isFinite(k) && k >= 1 && k <= count) set.add(k);
-  }
-  return [...set].sort((a, b) => a - b);
+  return parseBadIndices(issues, 'scene', count);
 }
 
 /** 재생성 프롬프트 — 원본 + 글자·구도 강화 접미(순수 문자열). */
 export function buildRetryPrompt(base: string): string {
   return `${base} 이미지 안에 어떤 글자·문자·숫자·워터마크도 넣지 말 것. 주 피사체를 화면 안에 온전히, 안정적 구도로.`;
+}
+
+/** 불량 순번(1-base, checked 기준) → 원본 images 인덱스(순수). 범위밖은 제외. */
+export function mapBadToOrig(bad: number[], checked: Array<{ origIndex: number }>): number[] {
+  return bad.map((k) => checked[k - 1]?.origIndex).filter((v): v is number => v !== undefined);
 }
 
 export async function qaSceneImages(opts: {
@@ -53,19 +50,20 @@ export async function qaSceneImages(opts: {
       ].join('\n'),
       { maxOutputTokens: 500, visionPaths: checked.map((c) => c.path), signal: opts.signal },
     );
-    out.issues = (qa?.issues ?? []).map((x) => `씬${x?.scene}: ${String(x?.problem ?? '').slice(0, 60)}`);
-    const bad = parseBadScenes(qa?.issues ?? [], checked.length);
+    const rawIssues = qa?.issues ?? [];
+    const bad = parseBadScenes(rawIssues, checked.length);
+    out.issues = rawIssues
+      .filter((x) => bad.includes(Math.floor(Number(x?.scene))))
+      .map((x) => `씬${Math.floor(Number(x?.scene))}: ${String(x?.problem ?? '').slice(0, 60)}`);
     if (!bad.length || bad.length >= checked.length) return out; // 없음 or 전량 불량(스킵)
 
     // 불량 씬만 재생성(강화 프롬프트).
     const retryDir = path.join(opts.dir, 'scenes-retry');
     const retryDraftPath = path.join(opts.dir, 'scenes-retry-draft.json');
     const retryManifestPath = path.join(opts.dir, 'scenes-retry-manifest.json');
+    const origIdxs = mapBadToOrig(bad, checked);
     const retryDraft = {
-      imageSlots: bad.map((k) => {
-        const orig = checked[k - 1]!.origIndex;
-        return { alt: `scene ${orig + 1}`, prompt: buildRetryPrompt(opts.scenePrompts[orig] ?? '') };
-      }),
+      imageSlots: origIdxs.map((orig) => ({ alt: `scene ${orig + 1}`, prompt: buildRetryPrompt(opts.scenePrompts[orig] ?? '') })),
     };
     fs.writeFileSync(retryDraftPath, JSON.stringify(retryDraft, null, 2), 'utf-8');
     const rr = await generateImagesForDraft(retryDraftPath, retryDir, retryManifestPath,
@@ -74,8 +72,7 @@ export async function qaSceneImages(opts: {
     if (!rr.ok) return out; // 재생성 스크립트 실패 — 스테일 매니페스트 오독 방지, 원본 유지
 
     const rm = JSON.parse(fs.readFileSync(retryManifestPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string }> };
-    bad.forEach((k, j) => {
-      const orig = checked[k - 1]!.origIndex;
+    origIdxs.forEach((orig, j) => {
       const im = rm.images?.[j];
       const fp = im?.file_path ? String(im.file_path) : '';
       if (fp && !im?.error && fs.existsSync(fp)) { out.images[orig] = fp; out.regenerated++; }

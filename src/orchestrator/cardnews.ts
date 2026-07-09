@@ -20,6 +20,7 @@ import { stripEmoji } from '../output/render';
 import { cardNewsStore } from '../content/cardnews';
 import { brandContext } from '../content/brand';
 import { generateImagesForDraft, searchCardRefs } from '../tools/blog_skills';
+import { stdModel, visionCapable, parseBadIndices } from './visionCommon';
 
 const RUNNING = new Set<string>();
 export function isCardNewsRunning(id: string): boolean { return RUNNING.has(id); }
@@ -29,9 +30,6 @@ const PRESETS = new Set(['photorealistic', 'manhwa', 'watercolor', 'ink_wash', '
 const PRESET_ALIAS: Record<string, string> = {
   '사진풍': 'photorealistic', '수채화풍': 'watercolor', '플랫 일러스트': 'flat_design', '만화풍': 'manhwa',
 };
-
-const stdModel = (): string => CONFIG.cloudTierModels.standard;
-const visionCapable = (): boolean => stdModel().startsWith('claude-');
 
 interface PlanSlide { headline: string; body: string }
 interface Plan { title: string; slides: PlanSlide[]; caption: string; hashtags: string[] }
@@ -298,9 +296,7 @@ export async function runCardNewsJob(
           ].join('\n'),
           { maxOutputTokens: 600, visionPaths: slidePaths, signal: opts.signal },
         );
-        const bad = [...new Set((qa?.issues ?? [])
-          .map((x) => Math.floor(Number(x?.slide)))
-          .filter((k) => Number.isFinite(k) && k >= 1 && k <= slideMap.length))];
+        const bad = parseBadIndices(qa?.issues, 'slide', slideMap.length);
         // 전장 불량 판정은 재생성해도 같은 결과일 확률이 높아 스킵(과금 폭주 방지) — 일부 장만 교정.
         if (bad.length && bad.length < slideMap.length) {
           say(`QA — 슬라이드 ${bad.join(',')} 재생성(오타/품질)`);
@@ -313,18 +309,22 @@ export async function runCardNewsJob(
           const retryDraftPath = path.join(dir, 'bg-retry-draft.json');
           const retryManifestPath = path.join(dir, 'bg-retry-manifest.json');
           fs.writeFileSync(retryDraftPath, JSON.stringify(retryDraft, null, 2), 'utf-8');
-          await generateImagesForDraft(retryDraftPath, path.join(dir, 'bg-retry'), retryManifestPath,
+          const rr = await generateImagesForDraft(retryDraftPath, path.join(dir, 'bg-retry'), retryManifestPath,
             { imageStyle: design.preset, limit: bad.length, refImages: refs.refPaths, allowText: true, timeoutMs: 150_000 * bad.length }, opts.signal);
-          const rem = JSON.parse(fs.readFileSync(retryManifestPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string }> };
-          let replaced = 0;
-          bad.forEach((k, j) => {
-            const fp = rem.images?.[j]?.file_path;
-            if (fp && !rem.images?.[j]?.error && fs.existsSync(String(fp))) {
-              fs.copyFileSync(String(fp), slidePaths[k - 1]!);
-              replaced++;
-            }
-          });
-          if (replaced) say(`QA — ${replaced}장 교정 완료`);
+          if (!rr.ok) {
+            say('QA — 재생성 스크립트 실패(기존 완성본 유지)');
+          } else {
+            const rem = JSON.parse(fs.readFileSync(retryManifestPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string }> };
+            let replaced = 0;
+            bad.forEach((k, j) => {
+              const fp = rem.images?.[j]?.file_path;
+              if (fp && !rem.images?.[j]?.error && fs.existsSync(String(fp))) {
+                fs.copyFileSync(String(fp), slidePaths[k - 1]!);
+                replaced++;
+              }
+            });
+            if (replaced) say(`QA — ${replaced}장 교정 완료`);
+          }
         }
       }
     } catch { /* QA 실패 무해 — 기존 완성본 유지 */ }
