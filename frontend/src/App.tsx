@@ -428,8 +428,10 @@ export default function App() {
     fetchCompany().then((c) => {
       if (!c) return;
       // CEO는 directed 라우팅에서 제외(= 명명 시 전사 런과 동일). 팀장/팀원만 지명 대상.
+      // 비서(secretary·자비스)도 제외 — 자비스 대화는 자비스 패널 전담이라, '자비스/비서…' 접두 문장이
+      // 지명 매칭돼 라이브 런을 취소하고 응대용 페르소나 솔로 런을 시작하는 오라우팅을 막는다.
       setRoster(
-        c.teams.flatMap((t) => [t.lead, ...t.members]).map((r) => ({
+        c.teams.flatMap((t) => [t.lead, ...t.members]).filter((r) => r.id !== "secretary").map((r) => ({
           id: r.id, title: r.title, name: r.name, level: r.level,
         })),
       );

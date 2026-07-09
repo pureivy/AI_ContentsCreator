@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { llm } from '../llm/client';
-import { jarvisChat, jarvisSystemPrompt } from './chat';
+import { getCompany } from '../agents/company-loader';
+import { jarvisChat, jarvisSystemPrompt, jarvisPersona } from './chat';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -60,6 +61,21 @@ describe('jarvisChat', () => {
     expect(p).toContain('키워드');      // specialty(주요 업무) 노출 — 콘텐츠 역할 변별 단서
     expect(p).toContain('팀장');        // 복합 업무는 팀장 규칙
     expect(p).toContain('비서 본연');   // 비서 본연 업무는 직접 처리(위임 안 함)
+  });
+
+  it('jarvisPersona: secretary 역할 system_prompt(직원 탭 편집)가 있으면 그것을 페르소나로 쓴다', () => {
+    expect(jarvisPersona({ systemPrompt: '나는 커스텀 비서다.' })).toEqual(['나는 커스텀 비서다.']);
+    expect(jarvisPersona({ systemPrompt: '   ' }).join('\n')).toContain('자비스');  // 공백뿐 → 내장 기본
+    expect(jarvisPersona(undefined).join('\n')).toContain('주인님');                // 역할 미등록 → 내장 기본
+  });
+
+  it('jarvisSystemPrompt 팀장 규칙·로스터는 standby 팀(위임 불가)을 제외한다', () => {
+    const p = jarvisSystemPrompt();
+    // standby 팀장은 specialists 에 없어 위임 불가 — 규칙에만 있으면 모델이 골라도 강등되므로 아예 비노출.
+    // 특정 팀 id 하드코딩 대신 라이브 로스터에서 도출 — 데이터에서 standby 구성이 바뀌어도 위양성 없음.
+    const standbyLeads = (getCompany().teams ?? []).filter((t) => t.standby).map((t) => t.lead.id);
+    expect(standbyLeads.length).toBeGreaterThan(0);   // 비서실은 ensureSecretariat 로 항상 존재
+    for (const id of standbyLeads) expect(p).not.toContain(id);
   });
 
   it('위임: 비서(자비스) 자신 id 는 위임 대상으로 채택하지 않는다', async () => {

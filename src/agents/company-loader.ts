@@ -68,9 +68,37 @@ function ensureLoaded(): void {
       const p = YAML.parse(fs.readFileSync(peoplePath(), 'utf-8')) as Record<string, unknown> | null;
       if (p) for (const [k, v] of Object.entries(p)) if (v) _people[k] = String(v);
     }
+    ensureSecretariat();
   } catch {
     _doc = {};
   }
+}
+/** 비서실(자비스) 시스템 역할 보강 — 시드 복사는 data/company.yaml 부재 시에만 일어나므로 기존
+ *  데이터 보유 환경(업그레이드)에는 secretary 가 없어 직원 탭 표시·역할 편집이 불가했다. ceo 가 있는
+ *  정상 문서에 secretary 역할이 없으면 1회 자동 추가(실수로 팀을 삭제해도 재기동 시 복원되는 시스템 역할 —
+ *  UI 로는 id 'secretary'·standby 플래그를 재생성할 방법이 없다). */
+function ensureSecretariat(): void {
+  if (!_doc?.ceo) return;
+  const teams = (_doc.teams ??= []);
+  const roles = [_doc.ceo, ...teams.flatMap((t) => [t.lead, ...(t.members ?? [])])];
+  if (roles.some((r) => r?.id === 'secretary') || teams.some((t) => t.id === 'secretariat')) return;
+  teams.push({
+    id: 'secretariat', name: '비서실', standby: true,
+    lead: {
+      id: 'secretary', title: '비서실장',
+      focus: '주인님 응대·콘텐츠 캘린더 브리핑·업무 위임 라우팅(적임 직원/팀 선정) — 잡담·일정 등 비서 본연 업무는 직접 처리',
+      level: 'lead', team: 'secretariat', tools: ['wiki'], model: 'haiku', autonomy: 3,
+      stance: 'neutral', is_critic: false,
+      system_prompt: [
+        "당신은 '자비스'(JARVIS), 주인님을 보좌하는 인공지능 비서입니다.",
+        '사용자를 항상 "주인님"이라고 부르며, 친근하고 간결하게(1~2문장) 한국어로 대화합니다.',
+        '확실하지 않은 것은 아는 척하지 않고 확인하겠다고 답하며, 보고는 결론부터 짧게 전합니다.',
+      ].join('\n'),
+    },
+    members: [],
+  });
+  if (!_people['secretary']) _people['secretary'] = '자비스';
+  save();
 }
 function save(): void {
   if (!_doc) return;
@@ -104,7 +132,8 @@ function mapTools(tools: unknown): string[] {
   return [...new Set(out)];
 }
 const TEAM_EMOJI: Record<string, string> = { planning: '📊', support: '💼', research: '🔍', content: '✍️' };
-function emojiFor(level: string | undefined, team: string | null | undefined, isCritic: boolean): string {
+function emojiFor(level: string | undefined, team: string | null | undefined, isCritic: boolean, id?: string): string {
+  if (id === 'secretary') return '🤖';   // 비서(자비스) — 팀장 넥타이 대신 AI 비서 글리프
   if (level === 'ceo') return '🧭';
   if (isCritic) return '⚖️';
   if (level === 'lead') return '👔';
@@ -132,7 +161,7 @@ function toRole(y: YRole, fallbackLevel: string, teamId: string | null): RoleDef
     id,
     name: sanitizeField(_people[id] || y.title || id, 80),
     title: sanitizeField(y.title || id, 120),
-    emoji: emojiFor(level, teamId, isCritic),
+    emoji: emojiFor(level, teamId, isCritic, id),
     tier: tierFor(y.model, level),
     stance: (y.stance as Stance) || 'neutral',
     persona: '',

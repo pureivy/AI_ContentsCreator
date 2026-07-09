@@ -28,6 +28,7 @@ function tierLabel(tier: string): string {
 function glyph(level: string, id: string, title: string): string {
   if (level === "ceo") return "🧑‍💼";
   const k = (id + " " + title).toLowerCase();
+  if (/(secretary|비서|자비스)/.test(k)) return "🤖";
   if (/(reviewer|팩트|리뷰|검증|비평)/.test(k)) return "🔎";
   if (/(디렉터|리서치|research_lead)/.test(k)) return "🧭";
   if (/(seo|키워드|strategist)/.test(k)) return "🔑";

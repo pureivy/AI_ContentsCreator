@@ -127,7 +127,9 @@ const IDEA_SYSTEM =
 export async function proposeContentIdeas(signal?: AbortSignal): Promise<ContentIdea | null> {
   const c = getCompany();
   // 팀·업무 범위(헌장) — 아이디어 생성의 재료(회사 정체성·콘텐츠 영역이 specialty 에 담겨 있음).
+  // 비서실(자비스)은 응대·라우팅 헌장이라 콘텐츠 영역이 아님 — 주제 그라운딩 오염 방지 위해 제외.
   const teamLines = (c.teams ?? [])
+    .filter((t) => t.id !== 'secretariat')
     .map((t) => `- ${t.name}: ${(t.lead?.specialty || '').replace(/\s+/g, ' ').slice(0, 200)}`)
     .filter((l) => l.length > 6)
     .join('\n');
@@ -229,6 +231,7 @@ const RESEARCH_SYSTEM =
 export async function proposeResearchMission(signal?: AbortSignal, slug?: string): Promise<string | null> {
   const c = getCompany();
   const teamLines = (c.teams ?? [])
+    .filter((t) => t.id !== 'secretariat')   // 비서실(자비스) 헌장은 콘텐츠 영역 아님 — 리서치 그라운딩 제외
     .map((t) => `- ${t.name}: ${(t.lead?.specialty || '').replace(/\s+/g, ' ').slice(0, 200)}`)
     .filter((l) => l.length > 6)
     .join('\n');

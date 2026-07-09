@@ -729,9 +729,10 @@ export default function OfficeView() {
       for (const id of storeTeamOrder) { tOrder.push(id); tmap[id] = storeTeams[id] ?? { id, name: id }; }
     }
     for (const id of storeOrder) if (!ag[id] && storeAgents[id]) { ag[id] = storeAgents[id]; order.push(id); }
-    // 비서(자비스) — 콘텐츠 로스터에 없는 '상주 어시스턴트'. 오피스에선 CEO실 앞 리셉션을 지키는
-    // 아바타로 항상 표시한다(placeholder: 런·연출·집계 불참, 데스크 라이프(secLife)만 적용).
-    if (!ag["jarvis"]) {
+    // 비서(자비스) — 로스터에 비서실(secretariat) 직원이 있으면 그 실제 노드를 쓰고, 없는(구 데이터)
+    // 경우에만 합성 아바타를 추가한다 — 둘 다 리셉션 데스크에 배치돼 자비스가 2명 겹치던 중복 방지.
+    const hasSecretary = Object.values(ag).some((a) => a?.team === SECRETARIAT);
+    if (!hasSecretary && !ag["jarvis"]) {
       order.push("jarvis");
       ag["jarvis"] = {
         agent_id: "jarvis",

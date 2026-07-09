@@ -3,6 +3,7 @@
 import { llm } from '../llm/client';
 import { resolveAssignment } from '../llm/setting';
 import { getCompany } from '../agents/company-loader';
+import { rolesById } from '../agents/company';
 import { firstJson } from '../tools/classify';   // Step 3a 에서 classify.ts 가 export 노출
 import { kstNowKo } from '../util/time';
 import { pieceStore, type Piece, type PieceStage } from '../content/pieces';
@@ -11,6 +12,20 @@ export interface JarvisTurn { role: 'user' | 'assistant'; content: string }
 export interface JarvisReply { reply: string; delegate?: { task: string; agent?: string } }
 
 const SECRETARY_ID = 'secretary';   // 자비스 본인(비서실 lead) — 위임 대상에서 제외(자기위임 방지)
+
+/** 로스터의 비서(자비스) 역할 — 직원 탭에서 편집한 페르소나·처리 등급이 자비스에 실반영되는 연결점. */
+function secretaryRole() {
+  return rolesById(getCompany()).get(SECRETARY_ID);
+}
+/** 페르소나 머리말 — secretary 역할 system_prompt(직원 탭에서 편집 가능)가 있으면 그것을, 없으면 내장 기본. */
+export function jarvisPersona(role?: { systemPrompt?: string }): string[] {
+  const p = role?.systemPrompt?.trim();
+  if (p) return [p];
+  return [
+    "당신은 '자비스'(JARVIS), 주인님을 보좌하는 인공지능 비서입니다.",
+    '사용자를 항상 "주인님"이라고 부르며, 친근하고 간결하게(1~2문장) 한국어로 대화합니다.',
+  ];
+}
 
 /** 위임 대상 후보 — 비-CEO 직원에서 비서(자비스) 자신을 뺀 목록. 자비스가 이 중 1명을 고른다.
  *  (specialists 자체는 office 뷰·org 모드가 쓰므로 건드리지 않고, 여기서만 필터.) */
@@ -63,14 +78,18 @@ export function calendarBrief(): string {
 export function jarvisSystemPrompt(): string {
   // 짧은 페르소나 + 직원 명단(위임 대상 선택용). 잡담 저지연 위해 장문 회사 페르소나는 안 씀.
   // 팀장 id 는 실제 회사 로스터에서 동적으로 — 하드코딩(구 정부 팀 id) 제거.
-  const leads = (getCompany().teams ?? []).map((t) => t.lead.id).filter((id) => id !== SECRETARY_ID);
+  // standby 팀장(카드뉴스·숏폼·비서실)은 specialists 에 없어 위임이 불가하므로 팀장 규칙에서도 제외
+  // — 규칙에만 있고 로스터에 없는 id 를 모델이 고르면 validAgentIds 에서 버려져 전사 런으로 강등되던 불일치 해소.
+  const leads = (getCompany().teams ?? [])
+    .filter((t) => !t.standby)
+    .map((t) => t.lead.id)
+    .filter((id) => id !== SECRETARY_ID);
   const leadRule = leads.length
     ? `담당 선택: 특정 분야의 구체적 실무는 그 분야 담당자에게, 여러 분야가 걸친 복합 업무나 팀 전체 총괄·방향 설정은 팀장(${leads.join('·')})에게 맡깁니다.`
     : '담당 선택: 각 업무를 가장 적합한 담당자에게 맡깁니다.';
   return [
-    "당신은 '자비스'(JARVIS), 주인님을 보좌하는 인공지능 비서입니다.",
+    ...jarvisPersona(secretaryRole()),
     `현재 시각은 ${kstNowKo()} 입니다. 오늘 날짜·요일·시간을 묻는 질문에는 반드시 이 값(대한민국 표준시)을 기준으로 답하고, 학습 시점의 날짜를 추측하지 마세요.`,
-    '사용자를 항상 "주인님"이라고 부르며, 친근하고 간결하게(1~2문장) 한국어로 대화합니다.',
     '인사·잡담·간단한 질의, 그리고 일정 관리·미팅 예약·메모·받아쓰기 등 비서 본연의 일은 JSON 없이 직접 답하고 위임하지 않습니다.',
     '일정 정리·브리핑·다음 할 일·발행 대기 확인 등 콘텐츠 일정 질문에는 아래 [콘텐츠 캘린더 현황]을 근거로 직접 요약해 답합니다(추측·위임 금지). 발행 대기 건이 있으면 검토를 정중히 권합니다.',
     '[콘텐츠 캘린더 현황]',
@@ -84,8 +103,11 @@ export function jarvisSystemPrompt(): string {
 }
 
 function resolveModel(): string {
-  // 자비스 잡담·위임판정은 저지연 micro(haiku) — Claude 단일 백엔드.
-  return resolveAssignment().micro;
+  // 비서 역할(secretary)의 처리 등급을 따른다(직원 탭 편집 반영). 역할 미등록 시 저지연 micro 폴백.
+  // 주의: YAML 손편집으로 secretary.model 을 지우거나 비표준 값으로 두면 tierFor 의 lead 기본(heavy)이
+  // 적용돼 잡담이 조용히 승격된다 — UI 편집(normalizeModel 검증)에서는 발생하지 않는 손편집 한정 엣지.
+  const tier = secretaryRole()?.tier ?? 'micro';
+  return resolveAssignment()[tier];
 }
 
 export async function jarvisChat(
