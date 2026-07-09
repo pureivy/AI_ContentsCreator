@@ -19,3 +19,10 @@ describe('메타 OAuth·상태 라우트', () => {
     expect(await res.text()).toContain('연결 실패');
   });
 });
+
+describe('POST /cardnews/:id/publish 가드', () => {
+  it('미존재 id → 404', async () => {
+    const res = await app.request('/cardnews/nope-xyz/publish', { method: 'POST' });
+    expect(res.status).toBe(404);
+  });
+});

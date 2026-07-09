@@ -1182,6 +1182,33 @@ app.get('/meta/oauth/pick', (c) => {
   const err = saveMetaPage(pending.brand, page);
   return done(err ? `연결 실패: ${err}` : `✅ 메타 연결 완료 (브랜드: ${pending.brand || '범용'} ← ${page.name})`);
 });
+app.post('/cardnews/:id/publish', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const card = cardNewsStore().get(id);
+  if (!card) return c.json({ error: 'unknown cardnews' }, 404);
+  if (card.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
+  if (card.igPermalink && card.fbPostId) return c.json({ error: '이미 발행됨', igPermalink: card.igPermalink }, 409);
+  const dir = path.join(CONFIG.dataDir, 'cardnews', id);
+  const slides = (() => {
+    try { return fs.readdirSync(dir).filter((f) => /^slide_\d{2}\.png$/.test(f)).sort().map((f) => path.join(dir, f)); }
+    catch { return [] as string[]; }
+  })();
+  if (!slides.length) return c.json({ error: '슬라이드 파일 없음' }, 409);
+  const r = await publishCardNewsToMeta({
+    slug: card.brand ?? '', slidePaths: slides,
+    caption: card.caption ?? card.topic, hashtags: card.hashtags ?? [],
+    existing: { igPermalink: card.igPermalink, fbPostId: card.fbPostId },
+  });
+  // 부분 성공도 저장 — 재시도 시 성공 채널은 existing 으로 스킵(멱등).
+  const patch: Partial<CardNews> = {};
+  if (r.igMediaId) { patch.igMediaId = r.igMediaId; patch.igPermalink = r.igPermalink; }
+  if (r.fbPostId) patch.fbPostId = r.fbPostId;
+  if ((r.igMediaId || r.fbPostId) && !card.publishedTs) patch.publishedTs = new Date().toISOString();
+  if (Object.keys(patch).length) cardNewsStore().update(id, patch);
+  if (!r.ok) return c.json({ error: r.error, ...patch }, 502);
+  console.log(`[발행담당] 카드뉴스 "${card.topic.slice(0, 30)}" — 인스타·페북 발행 완료`);
+  return c.json({ ok: true, igPermalink: r.igPermalink ?? card.igPermalink, fbPostId: r.fbPostId ?? card.fbPostId });
+});
 app.get('/shorts/:id/video', shortsVideoHandler); // :id 보다 먼저(구체 경로 우선)
 app.get('/api/shorts/:id/video', shortsVideoHandler);
 app.get('/shorts/:id/zip', shortsZipHandler);
