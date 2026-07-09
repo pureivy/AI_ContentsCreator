@@ -53,7 +53,7 @@ import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeB
 import type { BrandProfile } from '../content/brand';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
-import { syncShortsPerformance } from '../analytics/shortsPerf';
+import { syncShortsPerformance, syncShortsMetaPerformance } from '../analytics/shortsPerf';
 import { syncCardnewsPerformance } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { parseManualMetrics, readMetrics, latestMetrics } from '../analytics/performance';
@@ -2557,7 +2557,7 @@ async function syncPerformance(): Promise<void> {
 const stopPerfSync = startDaily({
   time: CONFIG.performanceSyncTime,
   // 네이버 발행 감지(공개 RSS — 프로필 락 무관)가 publishedUrl 을 채운 뒤 piece 동기화. 쇼츠·카드뉴스는 순수 API 라 병행.
-  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); void syncShortsPerformance(); void syncCardnewsPerformance(); },
+  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); }, // 쇼츠·카드뉴스·릴스는 순수 API — 프로필 락 무관
   log: (m) => console.log('[perf-sync]', m),
 });
 if (CONFIG.performanceSyncTime) {

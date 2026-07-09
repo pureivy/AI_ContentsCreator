@@ -6,7 +6,7 @@
  * 전량 fail-open — 실패는 해당 쇼츠만 스킵, 다음 틱 재시도. reinforceFromPerformance(piece)의 사촌.
  */
 import { CONFIG } from '../config';
-import { getSecret } from '../secrets/store';
+import { getSecret, getMetaAccount } from '../secrets/store';
 import { fetchTimeout } from '../util/fetch';
 import { appendMetrics, readMetrics, type MetricSample } from './performance';
 import { shortsStore, type Shorts } from '../content/shorts';
@@ -14,6 +14,9 @@ import { isSafeBrandSlug } from '../content/brand';
 import { llmWikiFor } from '../wiki/llmwiki';
 import { appendMemory, appendActivity } from '../agents/workspace';
 import { pieceStore } from '../content/pieces';
+import { GRAPH } from '../tools/metaPublish';
+// cardnewsPerf ↔ shortsPerf 순환 — 함수 선언만이라 안전(최상위 상호 호출 없음)
+import { cardnewsSignal, parseIgInsights } from './cardnewsPerf';
 
 export interface VideoStats { views: number; likes: number; comments: number }
 
@@ -154,4 +157,66 @@ export async function syncShortsPerformance(): Promise<void> {
       } catch (e) { console.log('[perf-sync]', `쇼츠 ${s.id} 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
     }
   } catch (e) { console.log('[perf-sync]', `쇼츠 동기화 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+}
+
+/** 릴스 강화 1회 — reinforceShorts 의 메타 채널 판. 신호는 도달·저장률·공유율(cardnewsSignal 재사용). */
+function reinforceShortsMeta(s: Shorts, m: MetricSample): number {
+  const signal = cardnewsSignal(m.reach ?? 0, m.saved ?? 0, m.shares ?? 0);
+  const keyword = s.sourcePieceId
+    ? (() => { try { return pieceStore().get(s.sourcePieceId!)?.keyword; } catch { return undefined; } })() ?? s.keyword
+    : s.keyword;
+  const brand = s.brand && isSafeBrandSlug(s.brand) ? s.brand : '';
+  const title = s.title ?? s.topic;
+  const verdict = signal >= 0.6 ? '이 주제·훅이 릴스에서 저장·공유로 이어짐 — 유사 각도 유지' : '릴스 저장·공유 저조 — 훅·초반 5초 재고';
+  if (shouldRecordMemory(signal, countSamples(readMetrics(s.id), 'meta:ig'))) {
+    for (const role of ['shorts_writer', 'shorts_director']) {
+      try {
+        appendMemory(role, `릴스 성과: "${title}"${keyword ? ` (키워드 "${keyword}")` : ''} — 도달 ${m.reach ?? 0}·저장 ${m.saved ?? 0}·공유 ${m.shares ?? 0}·조회 ${m.views}, 성과신호 ${signal.toFixed(2)}. ${verdict}.`, brand);
+        appendActivity(role, `📈 릴스 성과 학습: ${title.slice(0, 40)}`);
+      } catch { /* 역할 부재 등 — 무해 */ }
+    }
+  }
+  try {
+    llmWikiFor(brand).upsertPage({
+      title: `릴스 성과: ${title}`, type: 'performance',
+      body:
+        `도달 ${m.reach ?? 0} · 저장 ${m.saved ?? 0} · 공유 ${m.shares ?? 0} · 조회 ${m.views} · 좋아요 ${m.likes ?? 0} · 댓글 ${m.comments ?? 0} · 성과신호 ${signal.toFixed(2)}\n` +
+        `키워드: ${keyword ?? '-'} · 브랜드: ${s.brand ?? '범용'}\n` +
+        (s.igPermalink ? `\n[근거: ${s.igPermalink}]` : ''),
+      summary: `릴스 "${title}" 성과신호 ${signal.toFixed(2)} (도달 ${m.reach ?? 0}·저장 ${m.saved ?? 0})`,
+      sources: [s.igPermalink ? `perf:${s.igPermalink}` : 'perf:meta'],
+      aliases: keyword ? [keyword] : [],
+    });
+  } catch { /* 위키 실패는 강화를 막지 않음 */ }
+  return signal;
+}
+
+/** 일일 릴스 성과 동기화 — perf-sync 틱에서 유튜브·카드뉴스 동기화와 나란히 호출. 전량 fail-open. */
+export async function syncShortsMetaPerformance(): Promise<void> {
+  try {
+    const days = CONFIG.shortsPerfDays;
+    const now = Date.now();
+    const due = shortsStore().list().filter((s) => shortsMetaPerfDue(s, now, days));
+    for (const s of due) {
+      try {
+        const acct = getMetaAccount(s.brand ?? '');
+        if (!acct.pageAccessToken) continue; // 브랜드 미연결(연결 해제됨) — 스킵
+        const r = await fetchTimeout(`${GRAPH}/${s.igReelId}/insights?metric=views,reach,likes,comments,saved,shares&access_token=${encodeURIComponent(acct.pageAccessToken)}`, {});
+        if (!r.ok) throw new Error(`IG insights HTTP ${r.status}`);
+        const ig = parseIgInsights(await r.json());
+        const sample: MetricSample = {
+          measuredAt: new Date().toISOString(),
+          views: ig.views ?? 0, reach: ig.reach ?? 0, saved: ig.saved ?? 0, shares: ig.shares ?? 0,
+          likes: ig.likes ?? 0, comments: ig.comments ?? 0, searchInflow: [], source: 'meta:ig',
+        };
+        appendMetrics(s.id, sample);
+        const windowOver = now - new Date(s.metaPublishedTs!).getTime() > days * 86_400_000;
+        if (windowOver && !s.metaPerfReflected) {
+          const sig = reinforceShortsMeta(s, sample);
+          shortsStore().update(s.id, { metaPerfReflected: true });
+          console.log('[perf-sync]', `릴스 강화 완료: ${(s.title ?? s.topic).slice(0, 30)} (신호 ${sig.toFixed(2)})`);
+        }
+      } catch (e) { console.log('[perf-sync]', `릴스 ${s.id} 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+    }
+  } catch (e) { console.log('[perf-sync]', `릴스 동기화 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
 }
