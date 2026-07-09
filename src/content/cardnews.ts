@@ -30,6 +30,14 @@ export interface CardNews {
   /** 담당자 실명(기획·디자인) — UI 표기. */
   planner?: string;
   designer?: string;
+  /** 메타 발행 결과(인스타 캐러셀 미디어 id·퍼머링크, 페북 게시물 id). 부분 성공 시 채널별 개별 기록. */
+  igMediaId?: string;
+  igPermalink?: string;
+  fbPostId?: string;
+  /** 첫 채널 발행 성공 시각 — 성과 측정 창 기준점. */
+  publishedTs?: string;
+  /** 측정 창 경과 후 강화 1회 완료(멱등 플래그) — shorts.perfReflected 미러. */
+  perfReflected?: boolean;
   error?: string;
   createdTs: string;
   updatedTs: string;
