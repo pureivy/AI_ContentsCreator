@@ -45,7 +45,9 @@ export default function Avatar({
     );
   }
 
-  const src = `/sprites/${char}_face.png?v=${AVATAR_VERSION}`;
+  // 자비스는 스프라이트 세트에 face 가 없고 채팅 아바타 원본(/avatars/jarvis_face.png)이 단일 진실
+  // — OfficeView·JarvisAvatar 와 같은 파일을 써서 직원 탭·타임라인 얼굴이 오브 아바타와 동일 인물로 보인다.
+  const src = char === "jarvis" ? "/avatars/jarvis_face.png" : `/sprites/${char}_face.png?v=${AVATAR_VERSION}`;
   if (head) {
     return (
       <span className={`avatar-head ${className}`} style={{ width: size, height: size }}>
