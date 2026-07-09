@@ -1004,6 +1004,8 @@ export interface ShortsInfo {
   director?: string;
   error?: string;
   youtubeUrl?: string;
+  views?: number;
+  likes?: number;
   running?: boolean;
   createdTs: string;
   updatedTs: string;

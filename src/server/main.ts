@@ -52,6 +52,7 @@ import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeB
 import type { BrandProfile } from '../content/brand';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
+import { syncShortsPerformance } from '../analytics/shortsPerf';
 import { parseManualMetrics, readMetrics, latestMetrics } from '../analytics/performance';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
@@ -953,7 +954,12 @@ async function shortsFromPieceHandler(c: Context): Promise<Response> {
 }
 
 function shortsListHandler(c: Context): Response {
-  return c.json({ shorts: shortsStore().list().filter(brandMatch).map((x) => ({ ...x, running: isShortsRunning(x.id) })) });
+  return c.json({
+    shorts: shortsStore().list().filter(brandMatch).map((x) => {
+      const m = x.youtubeUrl ? latestMetrics(x.id) : null; // 업로드된 쇼츠만 — 최신 수집값 뱃지용
+      return { ...x, running: isShortsRunning(x.id), ...(m ? { views: m.views, likes: m.likes ?? 0 } : {}) };
+    }),
+  });
 }
 function shortsGetHandler(c: Context): Response {
   const x = shortsStore().get(c.req.param('id') ?? '');
@@ -2415,7 +2421,7 @@ async function syncPerformance(): Promise<void> {
 }
 const stopPerfSync = startDaily({
   time: CONFIG.performanceSyncTime,
-  run: () => { void syncPerformance(); },
+  run: () => { void syncPerformance(); void syncShortsPerformance(); }, // 쇼츠는 순수 API — 프로필 락 무관
   log: (m) => console.log('[perf-sync]', m),
 });
 if (CONFIG.performanceSyncTime) {

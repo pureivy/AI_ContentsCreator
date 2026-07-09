@@ -28,6 +28,13 @@ function fmtWhen(iso: string): string {
   return h < 24 ? `${h}시간 전` : `${Math.round(h / 24)}일 전`;
 }
 
+// 성과 수 축약 — 1234→"1.2천", 12345→"1.2만"(뱃지 폭 절약).
+function fmtCount(n: number): string {
+  if (n >= 10_000) return `${(n / 10_000).toFixed(1)}만`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}천`;
+  return String(n);
+}
+
 function ShortRow({ s, onDelete, yt, onChanged }: {
   s: ShortsInfo; onDelete: (id: string) => void;
   yt: { client: boolean; connected: boolean }; onChanged: () => void;
@@ -92,7 +99,12 @@ function ShortRow({ s, onDelete, yt, onChanged }: {
             <a className="btn ghost" href={`/shorts/${s.id}/zip`} download>zip (mp4+자막+캡션)</a>
             {captionFull && <button className="btn ghost" onClick={copyCaption}>{copied ? "복사됨!" : "캡션 복사"}</button>}
             {s.youtubeUrl ? (
-              <a className="btn ghost" href={s.youtubeUrl} target="_blank" rel="noreferrer" title="비공개 업로드됨 — 공개 전환은 유튜브 스튜디오에서">▶ 유튜브(비공개)</a>
+              <>
+                <a className="btn ghost" href={s.youtubeUrl} target="_blank" rel="noreferrer" title="비공개 업로드됨 — 공개 전환은 유튜브 스튜디오에서">▶ 유튜브(비공개)</a>
+                {typeof s.views === "number" && (
+                  <span className="chip" title="유튜브 성과(최신 수집 — 매일 갱신)">👁 {fmtCount(s.views)}{typeof s.likes === "number" ? ` · 👍 ${fmtCount(s.likes)}` : ""}</span>
+                )}
+              </>
             ) : yt.connected ? (
               <button className="btn ghost" disabled={ytBusy} onClick={doYoutube}>{ytBusy ? "업로드 중…" : "▶ 유튜브 업로드"}</button>
             ) : yt.client ? (
