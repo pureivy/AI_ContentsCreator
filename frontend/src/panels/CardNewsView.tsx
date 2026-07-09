@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   fetchCardNews, createCardNews, createCardNewsFromPiece, deleteCardNews,
-  fetchPieces, CardNewsInfo, PieceInfo,
+  fetchPieces, CardNewsInfo, PieceInfo, publishCardNews, fetchMetaStatus,
 } from "../api";
 import Avatar from "./Avatar";
 import Ico, { type IcoName } from "./Ico";
 
 // 카드뉴스 탭 — 카드뉴스팀(기획 → 디자인 → 배경 생성 → 렌더)이 만드는 인스타그램용 슬라이드.
-// 발행 없음(사용자 확정): 미리보기 + 개별/zip 다운로드까지만. 진행은 8초 폴링(캘린더와 동일 케이던스).
+// 발행: 메타(인스타·페북) 연결 시 발행 버튼, 미연결 시 연결 링크 — 그 외엔 미리보기 + 개별/zip 다운로드. 진행은 8초 폴링(캘린더와 동일 케이던스).
 // 스테이지 아이콘 어휘는 숏폼과 통일(기획=pencil · 디자인=sparkle · 렌더=setting · 완성=circle-check).
 const STAGE_LABEL: Record<string, { icon: IcoName; label: string }> = {
   planning: { icon: "pencil", label: "기획 중" }, designing: { icon: "sparkle", label: "디자인 중" },
@@ -48,8 +48,18 @@ function SlideGrid({ card }: { card: CardNewsInfo }) {
   );
 }
 
-function CardRow({ card, onDelete }: { card: CardNewsInfo; onDelete: (id: string) => void }) {
+function CardRow({ card, onDelete, metaReady, onChanged }: {
+  card: CardNewsInfo; onDelete: (id: string) => void; metaReady: boolean; onChanged: () => void;
+}) {
   const [copied, setCopied] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const doPublish = async () => {
+    setPublishing(true);
+    const r = await publishCardNews(card.id);
+    setPublishing(false);
+    if (r.error) alert(`발행 실패: ${r.error}`); // doDelete 의 기존 alert 관례
+    onChanged(); // 부분 성공도 링크가 바로 보이게 즉시 재조회(폴링 8초 대기 없이)
+  };
   const running = RUNNING_STAGES.has(card.stage);
   const captionFull = [card.caption, (card.hashtags ?? []).join(" ")].filter(Boolean).join("\n\n");
   const copyCaption = async () => {
@@ -86,6 +96,18 @@ function CardRow({ card, onDelete }: { card: CardNewsInfo; onDelete: (id: string
           <>
             <a className="btn start" href={`/cardnews/${card.id}/zip`} download>전체 zip</a>
             {captionFull && <button className="btn ghost" onClick={copyCaption}>{copied ? "복사됨!" : "캡션 복사"}</button>}
+            {card.igPermalink || card.fbPostId ? (
+              <span style={{ display: "inline-flex", gap: 6 }}>
+                {card.igPermalink && <a className="btn ghost" href={card.igPermalink} target="_blank" rel="noreferrer">📸 인스타그램</a>}
+                {card.fbPostId && <a className="btn ghost" href={`https://www.facebook.com/${card.fbPostId}`} target="_blank" rel="noreferrer">📘 페이스북</a>}
+              </span>
+            ) : metaReady ? (
+              <button className="btn" disabled={publishing} onClick={doPublish}>
+                {publishing ? "발행 중…" : "📤 인스타·페북 발행"}
+              </button>
+            ) : (
+              <a className="btn ghost" href="/meta/oauth/start" target="_blank" rel="noreferrer" title="이 브랜드의 메타(페이스북) 계정으로 로그인해 1회 연결 — 앱 ID/시크릿은 키 탭에서 먼저 설정">📤 메타 연결</a>
+            )}
           </>
         )}
         <button className="btn ghost" title="카드 삭제(산출물 파일은 남음)" disabled={running} onClick={() => onDelete(card.id)}><Ico name="trash" size={12} /> 삭제</button>
@@ -104,6 +126,7 @@ export default function CardNewsSection() {
   const [srcPiece, setSrcPiece] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [metaReady, setMetaReady] = useState(false);
 
   const load = () => { fetchCardNews().then(setCards); fetchPieces().then(setPieces); };
   useEffect(() => {
@@ -111,6 +134,7 @@ export default function CardNewsSection() {
     const t = setInterval(load, 8000); // 진행 중 카드 상태 폴링(캘린더와 동일 케이던스)
     return () => clearInterval(t);
   }, []);
+  useEffect(() => { fetchMetaStatus().then((s) => setMetaReady(s.client && s.connected)); }, []);
 
   const derivable = useMemo(
     () => pieces.filter((p) => DERIVABLE.has(p.stage) && p.runId).sort((a, b) => b.updatedTs.localeCompare(a.updatedTs)),
@@ -168,7 +192,7 @@ export default function CardNewsSection() {
       </div>
 
       {cards.length === 0 && <p className="muted">아직 카드뉴스가 없습니다 — 위에서 주제를 입력해 첫 카드를 만들어 보세요.</p>}
-      {cards.map((card) => <CardRow key={card.id} card={card} onDelete={doDelete} />)}
+      {cards.map((card) => <CardRow key={card.id} card={card} onDelete={doDelete} metaReady={metaReady} onChanged={load} />)}
     </>
   );
 }

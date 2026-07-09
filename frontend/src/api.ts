@@ -940,7 +940,7 @@ export async function clearInjectedKnowledge(id: string): Promise<boolean> {
   catch { return false; }
 }
 
-// ── 카드뉴스(카드뉴스팀 전용 파이프라인) — 생성은 POST, 진행은 목록 GET 폴링, 발행 없음(다운로드 전용) ──
+// ── 카드뉴스(카드뉴스팀 전용 파이프라인) — 생성은 POST, 진행은 목록 GET 폴링, 발행은 메타(인스타·페북) 연결 시에만 ──
 export type CardNewsStage = "planning" | "designing" | "rendering" | "ready" | "error";
 export interface CardNewsInfo {
   id: string;
@@ -958,6 +958,9 @@ export interface CardNewsInfo {
   running?: boolean;
   createdTs: string;
   updatedTs: string;
+  igPermalink?: string;
+  fbPostId?: string;
+  publishedTs?: string;
 }
 export async function fetchCardNews(): Promise<CardNewsInfo[]> {
   try { const r = await fetch("/cardnews"); if (!r.ok) return []; return (await r.json()).cards ?? []; }
@@ -1045,6 +1048,14 @@ export async function uploadShortsYoutube(id: string): Promise<{ ok: boolean; ur
 }
 export async function fetchYoutubeStatus(): Promise<{ client: boolean; connected: boolean }> {
   try { const r = await fetch("/youtube/status"); return await r.json() as { client: boolean; connected: boolean }; }
+  catch { return { client: false, connected: false }; }
+}
+export async function publishCardNews(id: string): Promise<{ ok?: boolean; igPermalink?: string; fbPostId?: string; error?: string }> {
+  try { const r = await fetch(`/cardnews/${id}/publish`, { method: "POST" }); return await r.json(); }
+  catch { return { error: "요청 실패" }; }
+}
+export async function fetchMetaStatus(): Promise<{ client: boolean; connected: boolean }> {
+  try { const r = await fetch("/meta/status"); return await r.json() as { client: boolean; connected: boolean }; }
   catch { return { client: false, connected: false }; }
 }
 
