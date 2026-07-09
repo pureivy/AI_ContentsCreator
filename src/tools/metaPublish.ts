@@ -189,10 +189,11 @@ async function publishFbReel(pageId: string, token: string, videoPath: string, d
   }, 'FB 릴스 시작') as { video_id?: string; upload_url?: string };
   if (!start.video_id || !start.upload_url) throw new Error('FB 릴스 시작 응답 이형');
   await uploadVideoBinary(start.upload_url, token, videoPath, 'FB 릴스 업로드', signal);
-  await graphJson(`${GRAPH}/${pageId}/video_reels`, {
+  const fin = await graphJson(`${GRAPH}/${pageId}/video_reels`, {
     method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ upload_phase: 'finish', video_id: start.video_id, video_state: 'PUBLISHED', description, access_token: token }),
-  }, 'FB 릴스 발행');
+  }, 'FB 릴스 발행') as { success?: boolean };
+  if (!fin.success) throw new Error('FB 릴스 발행 응답 이형(success 없음)');
   return start.video_id;
 }
 

@@ -166,6 +166,7 @@ describe('publishShortsToMeta', () => {
       const body = String((init as RequestInit | undefined)?.body ?? '');
       const json =
         u.includes('rupload.facebook.com') ? {}                         // ← 이형: success 없음
+        : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
         : u.includes('/IG/media') ? { id: 'CT1' }
         : u.includes('/PG/video_reels') && body.includes('upload_phase=start') ? { video_id: 'FBV1', upload_url: 'https://rupload.facebook.com/UPLOAD_URL' }
         : u.includes('/PG/video_reels') ? { success: true }
@@ -199,6 +200,30 @@ describe('publishShortsToMeta', () => {
     expect(r.ok).toBe(false);
     expect(r.error).toContain('FB 릴스 시작');
     expect(r.igReelId).toBe('REEL9');   // 부분 성공 보존 — 라우트가 저장·재시도 시 IG 스킵
+  });
+  it('FB finish 이형(success 없음) → ok:false + IG 부분 성공 보존', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url);
+      const body = String((init as RequestInit | undefined)?.body ?? '');
+      const json =
+        u.includes('rupload.facebook.com') || u.includes('UPLOAD_URL') ? { success: true }
+        : u.includes('/media_publish') ? { id: 'REEL7' }
+        : u.includes('fields=permalink') ? { permalink: 'https://www.instagram.com/reel/z/' }
+        : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
+        : u.includes('/IG/media') ? { id: 'CT7' }
+        : u.includes('/PG/video_reels') && body.includes('upload_phase=start') ? { video_id: 'FBV7', upload_url: 'https://rupload.facebook.com/UPLOAD_URL' }
+        : u.includes('/PG/video_reels') && body.includes('upload_phase=finish') ? {}   // ← 이형
+        : {};
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const r = await publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: 'c', hashtags: [] });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('FB 릴스 발행');
+    expect(r.igReelId).toBe('REEL7');       // IG 부분 성공 보존
+    expect(r.fbReelId).toBeUndefined();
   });
   it('부분 성공 멱등: existing.igPermalink 있으면 IG 경로 무호출, FB 만 발행', async () => {
     vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
