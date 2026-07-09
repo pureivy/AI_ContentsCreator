@@ -58,14 +58,21 @@ export async function renderShortsVideo(
     const scene = scenes[i]!;
     const nn = String(i + 1).padStart(2, '0');
 
-    // 1) 내레이션 TTS → mp3 (실패 시 무음 씬으로 폴백)
+    // 1) 내레이션 TTS → mp3 (실패 시 무음 씬으로 폴백).
+    //    Remotion 경로가 먼저 합성해 둔 mp3(dir/remotion/narr_NN.mp3)가 있으면 재사용 — 폴백 시 TTS 이중 과금 방지.
     let audioPath: string | null = null;
     let audioDur = 0;
     try {
-      const mp3 = await synthesize(scene.narration, { voice: opts.voice, instructions: opts.instructions ?? SHORTS_TTS_TONE, signal: opts.signal });
-      audioPath = path.join(segDir, `narr_${nn}.mp3`);
-      fs.writeFileSync(audioPath, mp3);
-      audioDur = await probeDuration(audioPath);
+      const remotionMp3 = path.join(dir, 'remotion', `narr_${nn}.mp3`);
+      const dst = path.join(segDir, `narr_${nn}.mp3`);
+      if (fs.existsSync(remotionMp3)) {
+        fs.copyFileSync(remotionMp3, dst);
+      } else {
+        const mp3 = await synthesize(scene.narration, { voice: opts.voice, instructions: opts.instructions ?? SHORTS_TTS_TONE, signal: opts.signal });
+        fs.writeFileSync(dst, mp3);
+      }
+      audioDur = await probeDuration(dst);
+      audioPath = dst;
     } catch (e) {
       issues.push(`씬${i + 1} TTS 실패(무음 진행): ${e instanceof Error ? e.message.slice(0, 80) : e}`);
     }
