@@ -57,3 +57,74 @@ export function cardnewsPerfDue(
   if (age > days * 4 * 86_400_000) return false;
   return age <= days * 86_400_000 || !c.perfReflected;
 }
+
+/** 강화 1회 — reinforceShorts 미러. 역할 부재·위키 실패는 무해. 신호를 반환. */
+function reinforceCardnews(card: CardNews, m: MetricSample): number {
+  const signal = cardnewsSignal(m.reach ?? 0, m.saved ?? 0, m.shares ?? 0);
+  const brand = card.brand && isSafeBrandSlug(card.brand) ? card.brand : '';
+  const verdict = signal >= 0.6
+    ? '이 주제·표지 훅·비주얼이 저장·공유로 이어짐 — 유사 각도 유지'
+    : '저장·공유 저조 — 표지 훅과 장당 메시지 밀도 재고';
+  const igOnlySamples = readMetrics(card.id).filter((s) => s.source === 'meta:ig').length;
+  if (shouldRecordMemory(signal, igOnlySamples)) {
+    for (const role of ['cardnews_planner', 'cardnews_designer']) {
+      try {
+        appendMemory(role, `카드뉴스 성과: "${card.topic}"${card.keyword ? ` (키워드 "${card.keyword}")` : ''} — 도달 ${m.reach ?? 0}·저장 ${m.saved ?? 0}·공유 ${m.shares ?? 0}, 성과신호 ${signal.toFixed(2)}. ${verdict}.`, brand);
+        appendActivity(role, `📈 카드뉴스 성과 학습: ${card.topic.slice(0, 40)}`);
+      } catch { /* 역할 부재 등 — 무해 */ }
+    }
+  }
+  try {
+    llmWikiFor(brand).upsertPage({
+      title: `카드뉴스 성과: ${card.topic}`, type: 'performance',
+      body:
+        `도달 ${m.reach ?? 0} · 저장 ${m.saved ?? 0} · 공유 ${m.shares ?? 0} · 조회 ${m.views} · 좋아요 ${m.likes ?? 0} · 댓글 ${m.comments ?? 0} · 성과신호 ${signal.toFixed(2)}\n` +
+        `키워드: ${card.keyword ?? '-'} · 브랜드: ${card.brand ?? '범용'}\n` +
+        (card.igPermalink ? `\n[근거: ${card.igPermalink}]` : ''),
+      summary: `카드뉴스 "${card.topic}" 성과신호 ${signal.toFixed(2)} (도달 ${m.reach ?? 0}·저장 ${m.saved ?? 0})`,
+      sources: [card.igPermalink ? `perf:${card.igPermalink}` : 'perf:meta'],
+      aliases: card.keyword ? [card.keyword] : [],
+    });
+  } catch { /* 위키 실패는 강화를 막지 않음 */ }
+  return signal;
+}
+
+/** 일일 카드뉴스 성과 동기화 — perf-sync 틱에서 piece·쇼츠 동기화와 나란히 호출. */
+export async function syncCardnewsPerformance(): Promise<void> {
+  try {
+    const days = CONFIG.shortsPerfDays; // 측정 창은 쇼츠와 동일 상수 재사용(스펙 §7)
+    const now = Date.now();
+    const due = cardNewsStore().list().filter((x) => cardnewsPerfDue(x, now, days));
+    for (const card of due) {
+      try {
+        const acct = getMetaAccount(card.brand ?? '');
+        if (!acct.pageAccessToken) continue; // 브랜드 미연결(연결 해제됨) — 스킵
+        const qs = `access_token=${encodeURIComponent(acct.pageAccessToken)}`;
+        const ir = await fetchTimeout(`${GRAPH}/${card.igMediaId}/insights?metric=views,reach,saved,shares,likes,comments&${qs}`, {});
+        if (!ir.ok) throw new Error(`IG insights HTTP ${ir.status}`);
+        const ig = parseIgInsights(await ir.json());
+        const igSample: MetricSample = {
+          measuredAt: new Date().toISOString(),
+          views: ig.views ?? 0, reach: ig.reach ?? 0, saved: ig.saved ?? 0, shares: ig.shares ?? 0,
+          likes: ig.likes ?? 0, comments: ig.comments ?? 0, searchInflow: [], source: 'meta:ig',
+        };
+        appendMetrics(card.id, igSample);
+        if (card.fbPostId) { // FB 는 부가 채널 — 실패해도 IG 수집·강화를 막지 않음
+          try {
+            const fr = await fetchTimeout(`${GRAPH}/${card.fbPostId}?fields=reactions.summary(true),comments.summary(true),shares&${qs}`, {});
+            if (fr.ok) {
+              const fb = parseFbEngagement(await fr.json());
+              appendMetrics(card.id, { measuredAt: new Date().toISOString(), views: 0, likes: fb.likes, comments: fb.comments, shares: fb.shares, searchInflow: [], source: 'meta:fb' });
+            }
+          } catch { /* 부가 채널 fail-open */ }
+        }
+        const windowOver = now - new Date(card.publishedTs!).getTime() > days * 86_400_000;
+        if (windowOver && !card.perfReflected) {
+          const sig = reinforceCardnews(card, igSample);
+          cardNewsStore().update(card.id, { perfReflected: true });
+          console.log('[perf-sync]', `카드뉴스 강화 완료: ${card.topic.slice(0, 30)} (신호 ${sig.toFixed(2)})`);
+        }
+      } catch (e) { console.log('[perf-sync]', `카드뉴스 ${card.id} 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+    }
+  } catch (e) { console.log('[perf-sync]', `카드뉴스 동기화 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+}

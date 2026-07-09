@@ -54,6 +54,7 @@ import type { BrandProfile } from '../content/brand';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
 import { syncShortsPerformance } from '../analytics/shortsPerf';
+import { syncCardnewsPerformance } from '../analytics/cardnewsPerf';
 import { parseManualMetrics, readMetrics, latestMetrics } from '../analytics/performance';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
@@ -2530,7 +2531,7 @@ async function syncPerformance(): Promise<void> {
 }
 const stopPerfSync = startDaily({
   time: CONFIG.performanceSyncTime,
-  run: () => { void syncPerformance(); void syncShortsPerformance(); }, // 쇼츠는 순수 API — 프로필 락 무관
+  run: () => { void syncPerformance(); void syncShortsPerformance(); void syncCardnewsPerformance(); }, // 쇼츠·카드뉴스는 순수 API — 프로필 락 무관
   log: (m) => console.log('[perf-sync]', m),
 });
 if (CONFIG.performanceSyncTime) {
