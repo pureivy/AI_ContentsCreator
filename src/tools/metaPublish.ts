@@ -66,9 +66,9 @@ async function uploadUnpublishedPhoto(pageId: string, token: string, filePath: s
   if (!id) throw new Error('FB 사진 업로드 응답 이형(id 없음)');
   return id;
 }
-/** 캐러셀 컨테이너 처리 대기 — FINISHED 까지 3초×10회 폴링. */
-async function waitContainer(containerId: string, token: string, signal?: AbortSignal): Promise<void> {
-  for (let i = 0; i < 10; i++) {
+/** 캐러셀 컨테이너 처리 대기 — FINISHED 까지 3초×maxTries회 폴링. */
+async function waitContainer(containerId: string, token: string, signal?: AbortSignal, maxTries = 10): Promise<void> {
+  for (let i = 0; i < maxTries; i++) {
     const j = await graphJson(`${GRAPH}/${containerId}?fields=status_code&${tokenQs(token)}`, { signal }, '컨테이너 상태');
     const st = (j as { status_code?: string }).status_code;
     if (st === 'FINISHED') return;
@@ -156,6 +156,93 @@ export async function publishCardNewsToMeta(opts: {
     out.error = e instanceof Error ? e.message.slice(0, 200) : String(e);
     // 발행 한도 도달 힌트(스펙 §6) — 메타 에러 문구에 limit 이 보이면 확인 경로 안내.
     if (/limit/i.test(out.error)) out.error += ' — 24시간 발행 한도(100건) 가능성: GET /{ig-user-id}/content_publishing_limit 로 확인';
+    return out;
+  }
+}
+
+// ── 쇼츠 릴스 발행 ───────────────────────────────────────────────────────────
+// 영상은 공개 URL 불필요 — IG 는 resumable(rupload 바이너리), FB 는 video_reels 3단계(start→binary→finish).
+// 릴스는 발행 즉시 공개(비공개·초안 없음, 스펙 §3) — 버튼 클릭=공개 발행 정책.
+const RUPLOAD = 'https://rupload.facebook.com/ig-api-upload/v23.0'; // 버전은 GRAPH 와 동일 유지
+
+export interface MetaReelsResult {
+  ok: boolean; igReelId?: string; igPermalink?: string; fbReelId?: string; error?: string;
+}
+
+/** 업로드 URI 에 영상 바이너리 POST(IG rupload·FB upload_url 공통 규약) — {success:true} 아니면 throw. */
+async function uploadVideoBinary(uploadUrl: string, token: string, videoPath: string, what: string, signal?: AbortSignal): Promise<void> {
+  const buf = fs.readFileSync(videoPath);
+  const r = await fetch(uploadUrl, {
+    method: 'POST', signal,
+    headers: { Authorization: `OAuth ${token}`, offset: '0', file_size: String(buf.byteLength), 'Content-Type': 'application/octet-stream' },
+    body: buf,
+  });
+  const j: unknown = await r.json().catch(() => ({}));
+  if (!r.ok || !(j as { success?: boolean }).success) throw new Error(`${what} 실패: ${graphError(j, r.status)}`);
+}
+
+/** FB 릴스 3단계 — start(video_id·upload_url) → 바이너리 → finish(PUBLISHED). video_id 반환. */
+async function publishFbReel(pageId: string, token: string, videoPath: string, description: string, signal?: AbortSignal): Promise<string> {
+  const start = await graphJson(`${GRAPH}/${pageId}/video_reels`, {
+    method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ upload_phase: 'start', access_token: token }),
+  }, 'FB 릴스 시작') as { video_id?: string; upload_url?: string };
+  if (!start.video_id || !start.upload_url) throw new Error('FB 릴스 시작 응답 이형');
+  await uploadVideoBinary(start.upload_url, token, videoPath, 'FB 릴스 업로드', signal);
+  await graphJson(`${GRAPH}/${pageId}/video_reels`, {
+    method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ upload_phase: 'finish', video_id: start.video_id, video_state: 'PUBLISHED', description, access_token: token }),
+  }, 'FB 릴스 발행');
+  return start.video_id;
+}
+
+export async function publishShortsToMeta(opts: {
+  slug: string; videoPath: string; caption: string; hashtags: string[];
+  existing?: { igPermalink?: string; fbReelId?: string }; signal?: AbortSignal;
+}): Promise<MetaReelsResult> {
+  const out: MetaReelsResult = { ok: false };
+  try {
+    const acct = getMetaAccount(opts.slug);
+    if (!acct.pageId || !acct.igUserId || !acct.pageAccessToken) {
+      return { ok: false, error: '메타 미연결 — 카드뉴스/숏폼 탭에서 메타 연결을 먼저 하세요' };
+    }
+    if (!fs.existsSync(opts.videoPath)) return { ok: false, error: '영상 파일 없음' };
+    const timeout = AbortSignal.timeout(600_000); // 영상 업로드+인코딩 — 카드뉴스(5분)의 2배 여유
+    const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
+    const message = buildIgCaption(opts.caption, opts.hashtags);
+    const token = acct.pageAccessToken;
+
+    // ① IG 릴스 — 기발행(existing.igPermalink)이면 스킵(부분 성공 재시도 멱등).
+    if (!opts.existing?.igPermalink) {
+      const container = await graphJson(`${GRAPH}/${acct.igUserId}/media`, {
+        method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ media_type: 'REELS', upload_type: 'resumable', caption: message, share_to_feed: 'true', access_token: token }),
+      }, 'IG 릴스 컨테이너');
+      const cid = extractId(container);
+      if (!cid) throw new Error('IG 릴스 컨테이너 응답 이형');
+      await uploadVideoBinary(`${RUPLOAD}/${cid}`, token, opts.videoPath, 'IG 릴스 업로드', signal);
+      await waitContainer(cid, token, signal, 60); // 영상 인코딩 — 3초×60회(이미지 캐러셀 10회보다 여유)
+      const pub = await graphJson(`${GRAPH}/${acct.igUserId}/media_publish`, {
+        method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ creation_id: cid, access_token: token }),
+      }, 'IG 릴스 발행');
+      out.igReelId = extractId(pub) ?? undefined;
+      if (!out.igReelId) throw new Error('IG 릴스 발행 응답 이형(id 없음)');
+      const perma = await graphJson(`${GRAPH}/${out.igReelId}?fields=permalink&${tokenQs(token)}`, { signal }, 'IG 퍼머링크').catch(() => null);
+      out.igPermalink = (perma === null ? null : parsePermalink(perma)) ?? 'https://www.instagram.com/';
+    }
+
+    // ② FB 릴스 — 기발행(existing.fbReelId)이면 스킵.
+    if (!opts.existing?.fbReelId) {
+      out.fbReelId = await publishFbReel(acct.pageId, token, opts.videoPath, message, signal);
+    }
+
+    out.ok = true;
+    return out;
+  } catch (e) {
+    // 채널별 부분 성공은 out 에 남아 있음 — 라우트가 성공분을 저장하고 실패 원인만 보고(성공 위장 금지).
+    out.error = e instanceof Error ? e.message.slice(0, 200) : String(e);
+    if (/limit/i.test(out.error)) out.error += ' — 24시간 발행 한도 가능성: content_publishing_limit 확인';
     return out;
   }
 }

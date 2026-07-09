@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildIgCaption, extractId, pickPhotoUrl, parsePermalink, graphError, publishCardNewsToMeta } from './metaPublish';
+import { buildIgCaption, extractId, pickPhotoUrl, parsePermalink, graphError, publishCardNewsToMeta, publishShortsToMeta } from './metaPublish';
 import { getMetaAccount } from '../secrets/store';
 import fs from 'node:fs';
 
@@ -114,5 +114,113 @@ describe('publishCardNewsToMeta', () => {
     expect(r.error).toContain('이형');
     expect(r.error).toContain('IG 발행');        // IG 단계 가드가 발동했음을 특정
     expect(r.fbPostId).toBeUndefined();          // 가드가 FB 단계 진행을 막았음을 검증
+  });
+});
+
+describe('publishShortsToMeta', () => {
+  it('브랜드 미연결 → 명확한 에러(네트워크 호출 없음)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: '', pageAccessToken: '' });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const r = await publishShortsToMeta({ slug: 'x', videoPath: '/tmp/none.mp4', caption: 'c', hashtags: [] });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('메타 미연결');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+  it('영상 파일 없음 → 에러', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+    const r = await publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: 'c', hashtags: [] });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('영상 파일');
+  });
+  it('happy path: IG 컨테이너→rupload→폴링→발행→permalink + FB start→upload→finish', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
+    const calls: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url); calls.push(u);
+      const body = String((init as RequestInit | undefined)?.body ?? '');
+      const json =
+        u.includes('rupload.facebook.com') || u.includes('UPLOAD_URL') ? { success: true }
+        : u.includes('/media_publish') ? { id: 'REEL1' }
+        : u.includes('fields=permalink') ? { permalink: 'https://www.instagram.com/reel/x/' }
+        : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
+        : u.includes('/IG/media') ? { id: 'CT1' }
+        : u.includes('/PG/video_reels') && body.includes('upload_phase=start') ? { video_id: 'FBV1', upload_url: 'https://rupload.facebook.com/UPLOAD_URL' }
+        : u.includes('/PG/video_reels') ? { success: true }   // finish
+        : {};
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const r = await publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: '제목\n\n설명', hashtags: ['#t'] });
+    expect(r).toMatchObject({ ok: true, igReelId: 'REEL1', igPermalink: 'https://www.instagram.com/reel/x/', fbReelId: 'FBV1' });
+    expect(calls.filter((c) => c.includes('rupload.facebook.com')).length).toBe(2); // IG 바이너리 + FB 바이너리
+  });
+  it('rupload 이형(success 없음) → ok:false + FB 미진행(변별력: FB 성공 mock 준비)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
+    const calls: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url); calls.push(u);
+      const body = String((init as RequestInit | undefined)?.body ?? '');
+      const json =
+        u.includes('rupload.facebook.com') ? {}                         // ← 이형: success 없음
+        : u.includes('/IG/media') ? { id: 'CT1' }
+        : u.includes('/PG/video_reels') && body.includes('upload_phase=start') ? { video_id: 'FBV1', upload_url: 'https://rupload.facebook.com/UPLOAD_URL' }
+        : u.includes('/PG/video_reels') ? { success: true }
+        : {};
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const r = await publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: 'c', hashtags: [] });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('릴스 업로드');
+    expect(r.fbReelId).toBeUndefined();                                  // IG 실패가 FB 진행을 막음
+    expect(calls.some((c) => c.includes('/PG/video_reels'))).toBe(false);
+  });
+  it('FB start 이형(video_id 없음) → ok:false, 단 IG 부분 성공은 결과에 보존', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url);
+      const body = String((init as RequestInit | undefined)?.body ?? '');
+      const json =
+        u.includes('rupload.facebook.com') ? { success: true }
+        : u.includes('/media_publish') ? { id: 'REEL9' }
+        : u.includes('fields=permalink') ? { permalink: 'https://www.instagram.com/reel/y/' }
+        : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
+        : u.includes('/IG/media') ? { id: 'CT9' }
+        : u.includes('/PG/video_reels') && body.includes('upload_phase=start') ? {}   // ← 이형: video_id 없음
+        : {};
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const r = await publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: 'c', hashtags: [] });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('FB 릴스 시작');
+    expect(r.igReelId).toBe('REEL9');   // 부분 성공 보존 — 라우트가 저장·재시도 시 IG 스킵
+  });
+  it('부분 성공 멱등: existing.igPermalink 있으면 IG 경로 무호출, FB 만 발행', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
+    const calls: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url); calls.push(u);
+      const body = String((init as RequestInit | undefined)?.body ?? '');
+      const json =
+        u.includes('/PG/video_reels') && body.includes('upload_phase=start') ? { video_id: 'FBV2', upload_url: 'https://rupload.facebook.com/UPLOAD_URL' }
+        : u.includes('UPLOAD_URL') ? { success: true }
+        : u.includes('/PG/video_reels') ? { success: true }
+        : {};
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const r = await publishShortsToMeta({
+      slug: '', videoPath: '/a/final.mp4', caption: 'c', hashtags: [],
+      existing: { igPermalink: 'https://www.instagram.com/reel/done/' },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.fbReelId).toBe('FBV2');
+    expect(calls.some((c) => c.includes('/IG/media'))).toBe(false);
   });
 });
