@@ -15,6 +15,10 @@ export interface MetricSample {
   /** 유튜브 쇼츠 수집(youtube:api) 전용 — 네이버 piece 샘플엔 없음(하위호환 optional). */
   likes?: number;
   comments?: number;
+  /** 메타(인스타) 수집(meta:ig) 전용 — 도달·저장·공유(하위호환 optional). */
+  reach?: number;
+  saved?: number;
+  shares?: number;
   searchInflow: SearchInflow[];
   /** 'manual' | 'scrape:<collector>' — 수집 출처(신뢰도 구분). */
   source?: string;
