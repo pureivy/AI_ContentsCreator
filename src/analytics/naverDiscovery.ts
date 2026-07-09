@@ -6,6 +6,8 @@
  * 스펙: docs/superpowers/specs/2026-07-10-naver-publish-discovery-design.md
  */
 
+import type { Piece } from '../content/pieces';
+
 export interface RssItem { title: string; link: string; pubDate: string /* ISO */ }
 
 /** HTML 엔티티 디코드 — 숫자(10/16진) → named 4종 → &amp; 마지막(이중 디코드 방지). */
@@ -42,4 +44,57 @@ export function parseRssItems(xml: string): RssItem[] {
     out.push({ title, link, pubDate: new Date(t).toISOString() });
   }
   return out;
+}
+
+const HOUR = 3_600_000;
+const GIVE_UP_MS = 30 * 24 * HOUR; // 포기 지평 30일 — 이후는 수동 등록 안내만(스펙 §4.1)
+
+/** 감지 대상 선별(순수) — 임시저장됐고 아직 publishedUrl 없는 piece. 지평 초과분은 gaveUp. */
+export function selectDiscoveryTargets(pieces: Piece[], now: number): { targets: Piece[]; gaveUp: Piece[] } {
+  const targets: Piece[] = [];
+  const gaveUp: Piece[] = [];
+  for (const p of pieces) {
+    if (!p.naverDraftTs || p.publishedUrl || p.stage === 'error') continue;
+    const t = Date.parse(p.naverDraftTs);
+    if (!Number.isFinite(t)) continue;
+    (now - t > GIVE_UP_MS ? gaveUp : targets).push(p);
+  }
+  return { targets, gaveUp };
+}
+
+/** 네이버 블로그 글 링크인지(m.blog 포함) — naver_stats 의 parse_blog_url 이 소화 가능한 형태만. */
+function isBlogLink(link: string): boolean {
+  try { const h = new URL(link).host; return h === 'blog.naver.com' || h === 'm.blog.naver.com'; } catch { return false; }
+}
+
+/** 보수적 매칭(순수) — 정규화 제목 완전일치 && pubDate ≥ draftTs−1h && 양방향 유일.
+ *  유일성 실패(동명 아이템 복수 또는 동명 대기 piece 복수)는 ambiguous — 자동 설정 금지. */
+export function matchPublished(
+  pending: Array<{ id: string; title: string; draftTs: string }>,
+  items: RssItem[],
+): { matched: Array<{ pieceId: string; url: string }>; ambiguous: string[] } {
+  const matched: Array<{ pieceId: string; url: string }> = [];
+  const ambiguous: string[] = [];
+  const candidates = new Map<string, RssItem[]>();          // pieceId → 후보 아이템
+  const titleOwners = new Map<string, number>();            // 정규화 제목 → 후보 보유 piece 수
+  for (const p of pending) {
+    const key = normalizeTitle(p.title);
+    const draft = Date.parse(p.draftTs);
+    if (!key || !Number.isFinite(draft)) continue;
+    const cs = items.filter((it) =>
+      normalizeTitle(it.title) === key && Date.parse(it.pubDate) >= draft - HOUR && isBlogLink(it.link));
+    if (!cs.length) continue;                                // 후보 0 = 아직 미발행/제목 수정 — 침묵(다음 틱 재시도)
+    candidates.set(p.id, cs);
+    titleOwners.set(key, (titleOwners.get(key) ?? 0) + 1);
+  }
+  for (const p of pending) {
+    const cs = candidates.get(p.id);
+    if (!cs) continue;
+    if (cs.length === 1 && titleOwners.get(normalizeTitle(p.title)) === 1) {
+      matched.push({ pieceId: p.id, url: cs[0]!.link });
+    } else {
+      ambiguous.push(p.id);
+    }
+  }
+  return { matched, ambiguous };
 }
