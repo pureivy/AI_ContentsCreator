@@ -24,5 +24,6 @@ describe('POST /cardnews/:id/publish 가드', () => {
   it('미존재 id → 404', async () => {
     const res = await app.request('/cardnews/nope-xyz/publish', { method: 'POST' });
     expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'unknown cardnews' });
   });
 });
