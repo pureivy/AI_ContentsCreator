@@ -128,6 +128,7 @@ export async function publishCardNewsToMeta(opts: {
         body: new URLSearchParams({ creation_id: carId, access_token: token }),
       }, 'IG 발행');
       out.igMediaId = extractId(pub) ?? undefined;
+      if (!out.igMediaId) throw new Error('IG 발행 응답 이형(id 없음)');
       if (out.igMediaId) {
         const perma = await graphJson(`${GRAPH}/${out.igMediaId}?fields=permalink&${tokenQs(token)}`, { signal }, 'IG 퍼머링크').catch(() => null);
         out.igPermalink = (perma === null ? null : parsePermalink(perma)) ?? `https://www.instagram.com/`;

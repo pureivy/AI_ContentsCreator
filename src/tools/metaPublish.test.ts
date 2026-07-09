@@ -93,4 +93,23 @@ describe('publishCardNewsToMeta', () => {
     expect(r.fbPostId).toBe('PG_POST2');
     expect(calls.some((c) => c.includes('/IG/media'))).toBe(false); // IG 경로 미호출
   });
+  it('media_publish 이형 응답(id 없음) → ok:false(성공 위장 금지)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('png'));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      const json =
+        u.includes('/PG/photos') ? { id: 'ph1' }
+        : u.includes('fields=images') ? { images: [{ source: 'https://cdn/x.png' }] }
+        : u.includes('/media_publish') ? {}                       // ← 이형: id 없음
+        : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
+        : u.includes('/IG/media') ? { id: 'ct1' }
+        : {};
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const r = await publishCardNewsToMeta({ slug: '', slidePaths: ['/a/slide_01.png'], caption: 'c', hashtags: [] });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('이형');
+  });
 });
