@@ -276,7 +276,7 @@ export async function runShortsJob(
         title: plan.title, description: plan.description, hashtags: plan.hashtags,
         signal: opts.signal,
       });
-      if (up.ok) { store.update(id, { youtubeId: up.videoId, youtubeUrl: up.url }); say(`유튜브 비공개 업로드 완료 — ${up.url}`); }
+      if (up.ok) { store.update(id, { youtubeId: up.videoId, youtubeUrl: up.url, youtubeTs: new Date().toISOString() }); say(`유튜브 비공개 업로드 완료 — ${up.url}`); }
       else say(`유튜브 자동 업로드 실패(수동 재시도 가능) — ${up.error}`);
     }
   } catch (e) {

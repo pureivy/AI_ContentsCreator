@@ -12,6 +12,9 @@ export interface MetricSample {
   measuredAt: string;
   views: number;
   dwellSec?: number;
+  /** 유튜브 쇼츠 수집(youtube:api) 전용 — 네이버 piece 샘플엔 없음(하위호환 optional). */
+  likes?: number;
+  comments?: number;
   searchInflow: SearchInflow[];
   /** 'manual' | 'scrape:<collector>' — 수집 출처(신뢰도 구분). */
   source?: string;

@@ -39,6 +39,10 @@ export interface Shorts {
   /** 유튜브 비공개 업로드 결과(발행은 사람이 유튜브 스튜디오에서 공개 전환). */
   youtubeId?: string;
   youtubeUrl?: string;
+  /** 업로드 성공 시각 — 성과 측정창(SHORTS_PERF_DAYS) 기준점. */
+  youtubeTs?: string;
+  /** 성과 강화(1회) 완료 마킹 — 멱등 게이트. */
+  perfReflected?: boolean;
   createdTs: string;
   updatedTs: string;
 }

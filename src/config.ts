@@ -118,6 +118,8 @@ export interface Config {
   readonly shortsI2vModel: string;
   /** ready 쇼츠 자동 유튜브 비공개 업로드(옵트인). */
   readonly autoYtUpload: boolean;
+  /** 쇼츠 성과 측정창(일) — 업로드 후 이 기간 매일 수집, 경과 시 강화 1회. */
+  readonly shortsPerfDays: number;
 
   // --- 음성 입출력 ---
   /** TTS 제공자: 'openai'(gpt-4o-mini-tts, 자연스러운 신경망 음성) | 'say'(macOS 로컬, 폴백). 기본 openai(키 없으면 자동 say 폴백). */
@@ -238,6 +240,7 @@ export const CONFIG: Config = {
   shortsI2v: env('SHORTS_I2V', 'fal') === 'off' ? 'off' : 'fal',
   shortsI2vModel: env('SHORTS_I2V_MODEL', 'fal-ai/wan/v2.2-5b/image-to-video'), // LTX-2 는 가로 전용(실측) — 세로 쇼츠 기본은 Wan 5B
   autoYtUpload: envBool('AUTO_YT_UPLOAD', false),
+  shortsPerfDays: Math.max(1, envInt('SHORTS_PERF_DAYS', 7)),
 
   ttsProvider: env('TTS_PROVIDER', 'openai'),
   openaiTtsModel: env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),

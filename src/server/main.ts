@@ -1090,7 +1090,7 @@ app.post('/shorts/:id/youtube', async (c) => {
     title: s.title ?? s.topic, description: s.description ?? '', hashtags: s.hashtags ?? [],
   });
   if (!r.ok) return c.json({ error: r.error }, 502);
-  shortsStore().update(id, { youtubeId: r.videoId, youtubeUrl: r.url });
+  shortsStore().update(id, { youtubeId: r.videoId, youtubeUrl: r.url, youtubeTs: new Date().toISOString() });
   console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 유튜브 비공개 업로드 완료 (${publisherName()})`);
   return c.json({ ok: true, url: r.url });
 });
