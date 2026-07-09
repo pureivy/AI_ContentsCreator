@@ -38,7 +38,7 @@ export function parseStatsResponse(json: unknown): Map<string, VideoStats> {
   return out;
 }
 
-/** 이번 틱 수집 대상인가(순pure) — 창 내 매일, 또는 창 경과 후 미강화(강화 기회 유실 방지). */
+/** 이번 틱 수집 대상인가(순수) — 창 내 매일, 또는 창 경과 후 미강화(강화 기회 유실 방지). */
 export function shortsPerfDue(s: Pick<Shorts, 'youtubeId' | 'youtubeTs' | 'perfReflected'>, now: number, days: number): boolean {
   if (!s.youtubeId || !s.youtubeTs) return false;
   const t = new Date(s.youtubeTs).getTime();
