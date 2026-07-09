@@ -8,7 +8,7 @@
 import { CONFIG } from '../config';
 import { getSecret } from '../secrets/store';
 import { fetchTimeout } from '../util/fetch';
-import { appendMetrics, type MetricSample } from './performance';
+import { appendMetrics, readMetrics, type MetricSample } from './performance';
 import { shortsStore, type Shorts } from '../content/shorts';
 import { llmWiki } from '../wiki/llmwiki';
 import { appendMemory, appendActivity } from '../agents/workspace';
@@ -38,7 +38,7 @@ export function parseStatsResponse(json: unknown): Map<string, VideoStats> {
   return out;
 }
 
-/** 이번 틱 수집 대상인가(순수) — 창 내 매일, 또는 창 경과 후 미강화(강화 기회 유실 방지). */
+/** 이번 틱 수집 대상인가(순pure) — 창 내 매일, 또는 창 경과 후 미강화(강화 기회 유실 방지). */
 export function shortsPerfDue(s: Pick<Shorts, 'youtubeId' | 'youtubeTs' | 'perfReflected'>, now: number, days: number): boolean {
   if (!s.youtubeId || !s.youtubeTs) return false;
   const t = new Date(s.youtubeTs).getTime();
@@ -46,34 +46,49 @@ export function shortsPerfDue(s: Pick<Shorts, 'youtubeId' | 'youtubeTs' | 'perfR
   return now - t <= days * 86_400_000 || !s.perfReflected;
 }
 
-/** videos.list 50개 배치 — 키 없으면 빈 Map. HTTP 오류는 throw(호출자 fail-open). */
+/**
+ * 강화 시 역할 메모리 기록 여부(순수) — 긍정(≥0.6)은 즉시, 부정은 공개 상태 실측 2틱 이상일 때만.
+ * 비공개→늦공개 쇼츠가 공개 직후 낮은 조회수로 "저조" 오귀속되는 것을 차단(스펙 §9 상호작용).
+ * 위키 적재는 이 게이트와 무관하게 항상 수행(수치 보존).
+ */
+export function shouldRecordMemory(signal: number, publicSampleCount: number): boolean {
+  return signal >= 0.6 || publicSampleCount >= 2;
+}
+
+/** videos.list 50개 배치 — 키 없으면 빈 Map. 배치별 fail-open — 성공한 배치는 보존. */
 async function fetchVideoStats(videoIds: string[], signal?: AbortSignal): Promise<Map<string, VideoStats>> {
   const key = getSecret('YOUTUBE_API_KEY');
   const out = new Map<string, VideoStats>();
   if (!key || !videoIds.length) return out;
   for (let i = 0; i < videoIds.length; i += 50) {
     const ids = videoIds.slice(i, i + 50).join(',');
-    const r = await fetchTimeout(
-      `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${ids}&key=${encodeURIComponent(key)}`, {}, signal);
-    if (!r.ok) throw new Error(`videos.list HTTP ${r.status}`);
-    for (const [id, st] of parseStatsResponse(await r.json())) out.set(id, st);
+    try {
+      const r = await fetchTimeout(
+        `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${ids}&key=${encodeURIComponent(key)}`, {}, signal);
+      if (!r.ok) throw new Error(`videos.list HTTP ${r.status}`);
+      for (const [id, st] of parseStatsResponse(await r.json())) out.set(id, st);
+    } catch (e) { // 배치별 fail-open — 성공한 배치 결과는 보존, 실패분은 다음 틱 재시도
+      console.log('[perf-sync]', `videos.list 배치 실패(해당 ≤50건 이번 틱 스킵): ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
   return out;
 }
 
-/** 강화 1회 — reinforceFromPerformance(piece) 미러. 역할 부재·위키 실패는 무해. */
-function reinforceShorts(s: Shorts, m: MetricSample): void {
+/** 강화 1회 — reinforceFromPerformance(piece) 미러. 역할 부재·위키 실패는 무해. 신호를 반환. */
+function reinforceShorts(s: Shorts, m: MetricSample): number {
   const signal = shortsSignal(m.views, m.likes ?? 0);
   const keyword = s.sourcePieceId
     ? (() => { try { return pieceStore().get(s.sourcePieceId!)?.keyword; } catch { return undefined; } })() ?? s.keyword
     : s.keyword;
   const title = s.title ?? s.topic;
   const verdict = signal >= 0.6 ? '이 주제·구성이 노출로 이어짐 — 유사 각도 유지' : '노출 저조 — 훅·주제 각도 재고';
-  for (const role of ['shorts_writer', 'shorts_director']) {
-    try {
-      appendMemory(role, `쇼츠 성과: "${title}"${keyword ? ` (키워드 "${keyword}")` : ''} — 조회 ${m.views}·좋아요 ${m.likes ?? 0}, 성과신호 ${signal.toFixed(2)}. ${verdict}.`);
-      appendActivity(role, `📈 쇼츠 성과 학습: ${title.slice(0, 40)}`);
-    } catch { /* 역할 부재 등 — 무해 */ }
+  if (shouldRecordMemory(signal, readMetrics(s.id).length)) {
+    for (const role of ['shorts_writer', 'shorts_director']) {
+      try {
+        appendMemory(role, `쇼츠 성과: "${title}"${keyword ? ` (키워드 "${keyword}")` : ''} — 조회 ${m.views}·좋아요 ${m.likes ?? 0}, 성과신호 ${signal.toFixed(2)}. ${verdict}.`);
+        appendActivity(role, `📈 쇼츠 성과 학습: ${title.slice(0, 40)}`);
+      } catch { /* 역할 부재 등 — 무해 */ }
+    }
   }
   try {
     llmWiki().upsertPage({
@@ -87,6 +102,7 @@ function reinforceShorts(s: Shorts, m: MetricSample): void {
       aliases: keyword ? [keyword] : [],
     });
   } catch { /* 위키 실패는 강화를 막지 않음 */ }
+  return signal;
 }
 
 /** 일일 쇼츠 성과 동기화 — perf-sync 틱에서 piece 동기화와 나란히 호출(Task 3). */
@@ -109,9 +125,9 @@ export async function syncShortsPerformance(): Promise<void> {
         appendMetrics(s.id, sample);
         const windowOver = now - new Date(s.youtubeTs!).getTime() > days * 86_400_000;
         if (windowOver && !s.perfReflected) {
-          reinforceShorts(s, sample);
+          const sig = reinforceShorts(s, sample);
           shortsStore().update(s.id, { perfReflected: true });
-          console.log('[perf-sync]', `쇼츠 강화 완료: ${(s.title ?? s.topic).slice(0, 30)} (신호 ${shortsSignal(st.views, st.likes).toFixed(2)})`);
+          console.log('[perf-sync]', `쇼츠 강화 완료: ${(s.title ?? s.topic).slice(0, 30)} (신호 ${sig.toFixed(2)})`);
         }
       } catch (e) { console.log('[perf-sync]', `쇼츠 ${s.id} 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
     }

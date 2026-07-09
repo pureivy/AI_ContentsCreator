@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shortsSignal, parseStatsResponse, shortsPerfDue } from './shortsPerf';
+import { shortsSignal, parseStatsResponse, shortsPerfDue, shouldRecordMemory } from './shortsPerf';
 
 describe('shortsSignal — 로그 스케일 + 좋아요율(순수)', () => {
   it('0뷰=0, 1만뷰≈0.8(뷰만), 좋아요율 1% 이상이면 +0.2 만점', () => {
@@ -38,5 +38,13 @@ describe('shortsPerfDue — 창 내 매일·경과 후 미강화 1회(순수)', 
     expect(shortsPerfDue({ youtubeTs: base.youtubeTs }, now, 7)).toBe(false);
     expect(shortsPerfDue({ youtubeId: 'v' }, now, 7)).toBe(false);
     expect(shortsPerfDue({ youtubeId: 'v', youtubeTs: '이상한값' }, now, 7)).toBe(false);
+  });
+});
+describe('shouldRecordMemory — 긍정 즉시·부정은 실측 2틱 게이트(순수)', () => {
+  it('signal≥0.6 이면 샘플 수 무관 true, 미만이면 2틱부터', () => {
+    expect(shouldRecordMemory(0.7, 0)).toBe(true);
+    expect(shouldRecordMemory(0.6, 1)).toBe(true);
+    expect(shouldRecordMemory(0.3, 1)).toBe(false);
+    expect(shouldRecordMemory(0.3, 2)).toBe(true);
   });
 });
