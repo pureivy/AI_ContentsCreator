@@ -18,6 +18,7 @@ function decodeEntities(s: string): string {
     .replace(/&#x([0-9a-fA-F]+);/g, (_, h: string) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch { return ''; } })
     .replace(/&#(\d+);/g, (_, d: string) => { try { return String.fromCodePoint(Number(d)); } catch { return ''; } })
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    // 숫자형 앰퍼샌드(&#38;lt; 등)는 이중 디코드됨 — 알려진 비대칭. 최악이 매칭 실패(침묵→수동 폴백)라 수용.
     .replace(/&amp;/g, '&');
 }
 
@@ -78,7 +79,10 @@ export function matchPublished(
   const matched: Array<{ pieceId: string; url: string }> = [];
   const ambiguous: string[] = [];
   const candidates = new Map<string, RssItem[]>();          // pieceId → 후보 아이템
-  const titleOwners = new Map<string, number>();            // 정규화 제목 → 후보 보유 piece 수
+  // 정규화 제목 → 후보 보유 piece 수. "후보 없는 동명 piece" 는 세지 않아도 유일성 판정이 성립하는데,
+  // 이는 piece 의존 필터가 단방향 시각 조건(≥ draftTs−1h)뿐이라 동명 piece 들의 후보 집합이 전순서로
+  // 중첩되기 때문 — 양방향 시각 창 등으로 바꾸면 이 등가성이 깨진다(주의).
+  const titleOwners = new Map<string, number>();
   for (const p of pending) {
     const key = normalizeTitle(p.title);
     const draft = Date.parse(p.draftTs);
