@@ -1004,13 +1004,17 @@ entity(사람·조직·도구) · concept(개념·주제) · source(소스 요�
 지식은 컴파일 1회 + 지속 갱신(compounding). 작은 위키는 임베딩 없이 index 우선 탐색으로 충분.
 `;
 
-let _wiki: LlmWiki | null = null;
-let _wikiDir = '';
-/** 명시 브랜드의 위키 인스턴스 — 강화 등 "콘텐츠 브랜드 ≠ 활성 브랜드" 일 수 있는 경로용. */
+// 디렉터리별 인스턴스 캐시 — 브랜드 교차 호출(강화 vs 활성 런)에도 디렉터리별 쓰기 직렬화 체인 보존.
+const _wikis = new Map<string, LlmWiki>();
+/**
+ * 명시 브랜드의 위키 인스턴스 — 강화 등 "콘텐츠 브랜드 ≠ 활성 브랜드" 일 수 있는 경로용.
+ * 주의: undefined = 범용(활성 브랜드 아님 — appendMemory 의 brand? 와 의미가 다르다).
+ */
 export function llmWikiFor(brand: string | undefined): LlmWiki {
   const suffix = brandFileSuffixFor(brand);
   const dir = suffix ? path.join(path.dirname(CONFIG.wikiDir), `${path.basename(CONFIG.wikiDir)}${suffix}`) : CONFIG.wikiDir;
-  if (!_wiki || _wikiDir !== dir) { _wiki = new LlmWiki(dir); _wikiDir = dir; }
-  return _wiki;
+  let w = _wikis.get(dir);
+  if (!w) { w = new LlmWiki(dir); _wikis.set(dir, w); }
+  return w;
 }
 export function llmWiki(): LlmWiki { return llmWikiFor(activeBrandSlug() || undefined); }

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -194,5 +194,26 @@ describe('referencedRawHashes — 업로드 원문(raw) 기준 내용 중복 판
     expect(w.referencedRawHashes().has(sha1(body))).toBe(true);
     w.deletePage(p.slug);
     expect(w.referencedRawHashes().has(sha1(body))).toBe(false); // 참조 끊김 → 재업로드 허용
+  });
+});
+
+describe('llmWikiFor — 명시 브랜드 디렉터리 귀속(오귀속 회귀)', () => {
+  const tmp = path.join(os.tmpdir(), 'llmwiki-brand-attr-test');
+  afterEach(() => {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 무해 */ }
+    delete process.env.GEPA_DATA_DIR;
+    vi.resetModules();
+  });
+  it('활성 브랜드(범용)와 무관하게 명시 브랜드 위키 디렉터리에 기록', async () => {
+    fs.mkdirSync(tmp, { recursive: true });
+    process.env.GEPA_DATA_DIR = tmp;
+    vi.resetModules();
+    const w = await import('./llmwiki');
+    w.llmWikiFor('브랜드x').upsertPage({
+      title: '귀속 테스트', type: 'performance',
+      body: '본문', summary: '요약', sources: ['perf:test'], aliases: [],
+    });
+    expect(fs.existsSync(path.join(tmp, 'wiki-브랜드x'))).toBe(true);   // 명시 브랜드 디렉터리
+    expect(fs.existsSync(path.join(tmp, 'wiki'))).toBe(false);          // 활성(범용) 디렉터리로 새지 않음
   });
 });
