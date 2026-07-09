@@ -43,6 +43,14 @@ export interface Shorts {
   youtubeTs?: string;
   /** 성과 강화(1회) 완료 마킹 — 멱등 게이트. */
   perfReflected?: boolean;
+  /** 메타 발행 결과(인스타 릴스 미디어 id·퍼머링크, 페북 릴스 video id) — 유튜브 발행과 독립. */
+  igReelId?: string;
+  igPermalink?: string;
+  fbReelId?: string;
+  /** 메타 첫 채널 발행 성공 시각 — 메타 성과 측정 창 기준점(youtubeTs 와 독립). */
+  metaPublishedTs?: string;
+  /** 메타 측정 창 경과 후 강화 1회 완료(멱등) — perfReflected(유튜브)와 독립. */
+  metaPerfReflected?: boolean;
   createdTs: string;
   updatedTs: string;
 }
