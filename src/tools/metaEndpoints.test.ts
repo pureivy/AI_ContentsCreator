@@ -27,3 +27,11 @@ describe('POST /cardnews/:id/publish 가드', () => {
     expect(await res.json()).toEqual({ error: 'unknown cardnews' });
   });
 });
+
+describe('POST /shorts/:id/meta 가드', () => {
+  it('미존재 id → 404(JSON 본문 단언 — Hono 폴백과 변별)', async () => {
+    const res = await app.request('/shorts/nope-xyz/meta', { method: 'POST' });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'unknown shorts' });
+  });
+});

@@ -32,7 +32,7 @@ import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law�
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
-import { publishCardNewsToMeta, GRAPH } from '../tools/metaPublish';
+import { publishCardNewsToMeta, publishShortsToMeta, GRAPH } from '../tools/metaPublish';
 import { llmWiki, slugify } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
@@ -1106,7 +1106,7 @@ app.post('/shorts/:id/youtube', async (c) => {
 // ── 메타(인스타·페북) 발행 — 공용 개발자 앱 + 브랜드별 페이지·IG 토큰(META_TOKENS).
 //    콜백: code→장기 사용자 토큰→/me/accounts. 페이지 1개면 즉시 저장, 여러 개면 pick 화면.
 const META_REDIRECT = `http://127.0.0.1:${CONFIG.port}/meta/oauth/callback`; // 앱 설정의 리디렉션 URI 와 일치 필수
-const META_SCOPES = 'pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish,instagram_manage_insights';
+const META_SCOPES = 'pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish,instagram_manage_insights,publish_video';
 interface MetaPage { id: string; name: string; access_token: string; instagram_business_account?: { id: string } }
 const META_OAUTH_PENDING = new Map<string, { brand: string; exp: number; pages?: MetaPage[] }>();
 // 그래프 호스트·버전은 metaPublish.GRAPH 단일 선언을 재사용(전역 제약). dialog URL 만 www.facebook.com 호스트.
@@ -1210,6 +1210,30 @@ app.post('/cardnews/:id/publish', async (c) => {
   if (!r.ok) return c.json({ error: r.error, ...patch }, 502);
   console.log(`[발행담당] 카드뉴스 "${card.topic.slice(0, 30)}" — 인스타·페북 발행 완료`);
   return c.json({ ok: true, igPermalink: r.igPermalink ?? card.igPermalink, fbPostId: r.fbPostId ?? card.fbPostId });
+});
+app.post('/shorts/:id/meta', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const s = shortsStore().get(id);
+  if (!s) return c.json({ error: 'unknown shorts' }, 404);
+  if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
+  if (s.igPermalink && s.fbReelId) return c.json({ error: '이미 발행됨', igPermalink: s.igPermalink }, 409);
+  const videoPath = path.join(shortsStore().dirFor(id), 'final.mp4');
+  if (!fs.existsSync(videoPath)) return c.json({ error: '영상 파일 없음' }, 409);
+  const r = await publishShortsToMeta({
+    slug: s.brand ?? '', videoPath,
+    caption: [s.title ?? s.topic, s.description ?? ''].filter(Boolean).join('\n\n'),
+    hashtags: s.hashtags ?? [],
+    existing: { igPermalink: s.igPermalink, fbReelId: s.fbReelId },
+  });
+  // 부분 성공도 저장 — 재시도 시 성공 채널은 existing 으로 스킵(멱등). 릴스는 즉시 공개(스펙 §3).
+  const patch: Partial<Shorts> = {};
+  if (r.igReelId) { patch.igReelId = r.igReelId; patch.igPermalink = r.igPermalink; }
+  if (r.fbReelId) patch.fbReelId = r.fbReelId;
+  if ((r.igReelId || r.fbReelId) && !s.metaPublishedTs) patch.metaPublishedTs = new Date().toISOString();
+  if (Object.keys(patch).length) shortsStore().update(id, patch);
+  if (!r.ok) return c.json({ error: r.error, ...patch }, 502);
+  console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 릴스 발행 완료(IG·FB, 즉시 공개)`);
+  return c.json({ ok: true, igPermalink: r.igPermalink ?? s.igPermalink, fbReelId: r.fbReelId ?? s.fbReelId });
 });
 app.get('/shorts/:id/video', shortsVideoHandler); // :id 보다 먼저(구체 경로 우선)
 app.get('/api/shorts/:id/video', shortsVideoHandler);
