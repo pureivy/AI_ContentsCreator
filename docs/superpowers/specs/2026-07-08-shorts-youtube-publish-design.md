@@ -133,3 +133,5 @@ export async function uploadShortsToYoutube(opts: {
 5. 발급된 **클라이언트 ID/Secret** 을 앱 키 탭(`YOUTUBE_OAUTH_CLIENT_ID`/`YOUTUBE_OAUTH_CLIENT_SECRET`)에 입력.
 6. 스튜디오 쇼츠 탭에서 브랜드 전환 후 "채널 연결" → 그 브랜드의 유튜브 채널 구글 계정으로
    로그인·동의 → "연결 완료" 확인. 브랜드마다 반복.
+7. **`PORT` 를 8787 에서 바꾸면** 4번의 리디렉션 URI 도 같은 포트로 구글 콘솔에서 갱신해야 한다
+   (앱은 `CONFIG.port` 로 자동 추종).

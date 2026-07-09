@@ -37,7 +37,7 @@ describe('extractVerifiedClaims (검증 지식 Self-RAG)', () => {
 });
 
 describe('appendMemory — 명시 brand 귀속(오귀속 회귀)', () => {
-  const tmp = path.join(os.tmpdir(), 'workspace-brand-attr-test');
+  const tmp = path.join(os.tmpdir(), `workspace-brand-attr-test-${process.pid}`);
   afterEach(() => {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 무해 */ }
     delete process.env.GEPA_DATA_DIR;

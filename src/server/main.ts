@@ -1033,7 +1033,7 @@ app.get('/shorts', shortsListHandler);
 app.get('/api/shorts', shortsListHandler);
 // ── 유튜브 발행(브랜드별 채널) — 공용 OAuth 클라이언트 + 브랜드 refresh token(YOUTUBE_TOKENS).
 //    비공개 업로드 고정 — 공개 전환은 사람이 유튜브 스튜디오에서(네이버 '임시저장' 원칙).
-const YT_REDIRECT = 'http://127.0.0.1:8787/youtube/oauth/callback';
+const YT_REDIRECT = `http://127.0.0.1:${CONFIG.port}/youtube/oauth/callback`; // PORT 변경 시 구글 콘솔 리디렉션 URI 도 함께 갱신
 // OAuth state = 1회용 난수 논스(브랜드는 서버 메모리에서 복원, 10분 TTL) — 위조 콜백으로 임의
 // 브랜드에 공격자 토큰을 심는 CSRF 차단 + 비정상 슬러그가 토큰 blob 에 저장되는 것 차단.
 const YT_OAUTH_PENDING = new Map<string, { brand: string; exp: number }>();

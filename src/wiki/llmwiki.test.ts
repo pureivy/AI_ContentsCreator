@@ -198,7 +198,7 @@ describe('referencedRawHashes — 업로드 원문(raw) 기준 내용 중복 판
 });
 
 describe('llmWikiFor — 명시 브랜드 디렉터리 귀속(오귀속 회귀)', () => {
-  const tmp = path.join(os.tmpdir(), 'llmwiki-brand-attr-test');
+  const tmp = path.join(os.tmpdir(), `llmwiki-brand-attr-test-${process.pid}`);
   afterEach(() => {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 무해 */ }
     delete process.env.GEPA_DATA_DIR;

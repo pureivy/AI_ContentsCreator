@@ -30,7 +30,7 @@ function fmtWhen(iso: string): string {
 
 // 성과 수 축약 — 1234→"1.2천", 12345→"1.2만"(뱃지 폭 절약).
 function fmtCount(n: number): string {
-  if (n >= 10_000) return `${(n / 10_000).toFixed(1)}만`;
+  if (n >= 9_950) return `${(n / 10_000).toFixed(1)}만`; // 9950+ 는 반올림상 "10.0천" 대신 "1.0만"
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}천`;
   return String(n);
 }

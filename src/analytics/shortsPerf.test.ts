@@ -39,6 +39,10 @@ describe('shortsPerfDue — 창 내 매일·경과 후 미강화 1회(순수)', 
     expect(shortsPerfDue({ youtubeId: 'v' }, now, 7)).toBe(false);
     expect(shortsPerfDue({ youtubeId: 'v', youtubeTs: '이상한값' }, now, 7)).toBe(false);
   });
+  it('포기 지평(측정창 4배) 경과 시 미강화라도 false — 영구 비공개/삭제 영상 무한 재시도 방지', () => {
+    expect(shortsPerfDue(base, now + 27 * DAY, 7)).toBe(true);   // 4배(28일) 이내 — 아직 due
+    expect(shortsPerfDue(base, now + 29 * DAY, 7)).toBe(false);  // 4배 초과 — 포기
+  });
 });
 describe('shouldRecordMemory — 긍정 즉시·부정은 실측 2틱 게이트(순수)', () => {
   it('signal≥0.6 이면 샘플 수 무관 true, 미만이면 2틱부터', () => {
