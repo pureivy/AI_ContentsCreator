@@ -1,5 +1,8 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind } from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc } from './shortsCommon';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
   it('오디오 + 꼬리여백(0.6), 하한 2.8', () => {
@@ -75,5 +78,25 @@ describe('normalizeSceneKind — 검증 추출, 실패 시 {} 강등', () => {
     expect(normalizeSceneKind({ kind: 'quote', quote: { text: { nested: true } } })).toEqual({});
     expect(normalizeSceneKind({ kind: 'stat', stat: { value: 42, unit: 7, label: 3 } }))
       .toEqual({ kind: 'stat', stat: { value: 42, unit: '7', label: '3' } });
+  });
+});
+describe('resolveClipSrc — 클립 존재 판정(픽스처)', () => {
+  it('존재 파일 → clip_NN.mp4, 부재/null/undefined → null', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `clip-src-${process.pid}-`));
+    const f = path.join(tmp, 'c.mp4');
+    fs.writeFileSync(f, 'x');
+    expect(resolveClipSrc(f, '01')).toBe('clip_01.mp4');
+    expect(resolveClipSrc(path.join(tmp, 'none.mp4'), '02')).toBeNull();
+    expect(resolveClipSrc(null, '03')).toBeNull();
+    expect(resolveClipSrc(undefined, '04')).toBeNull();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+});
+describe('normalizeSceneKind — stat 자릿수 상한', () => {
+  it('1e12 이상은 강등(CountUp 패널 넘침 방지)', () => {
+    expect(normalizeSceneKind({ kind: 'stat', stat: { value: 1e12 } })).toEqual({});
+    expect(normalizeSceneKind({ kind: 'stat', stat: { value: -1e12 } })).toEqual({});
+    expect(normalizeSceneKind({ kind: 'stat', stat: { value: 999_999_999_999 } }))
+      .toEqual({ kind: 'stat', stat: { value: 999_999_999_999 } });
   });
 });

@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { selectComposition, renderMedia, makeCancelSignal } from '@remotion/renderer';
-import { prepareScenes, buildSrt } from './shortsCommon';
+import { prepareScenes, buildSrt, resolveClipSrc } from './shortsCommon';
 import type { ShortsScene, ShortsRenderResult } from './shortsCommon';
 
 export async function renderShortsVideoRemotion(
@@ -31,9 +31,8 @@ export async function renderShortsVideoRemotion(
     let imageSrc: string | null = null, audioSrc: string | null = null;
     if (p.imagePath) { const dst = `scene_${nn}${path.extname(p.imagePath) || '.png'}`; fs.copyFileSync(p.imagePath, path.join(publicDir, dst)); imageSrc = dst; }
     if (p.audioPath) { const dst = `narr_${nn}.mp3`; fs.copyFileSync(p.audioPath, path.join(publicDir, dst)); audioSrc = dst; }
-    let videoSrc: string | null = null;
-    const clip = opts.clips?.[p.index];
-    if (clip && fs.existsSync(clip)) { const dst = `clip_${nn}.mp4`; fs.copyFileSync(clip, path.join(publicDir, dst)); videoSrc = dst; }
+    const videoSrc = resolveClipSrc(opts.clips?.[p.index], nn);
+    if (videoSrc) fs.copyFileSync(opts.clips![p.index]!, path.join(publicDir, videoSrc));
     const sc = scenes[p.index];
     return {
       imageSrc, audioSrc, videoSrc, screenText: p.screenText, durationInFrames: p.durationInFrames,

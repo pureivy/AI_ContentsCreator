@@ -44,7 +44,7 @@ export function normalizeSceneKind(raw: unknown): SceneKindFields {
     const s = (r.stat && typeof r.stat === 'object' ? r.stat : {}) as Record<string, unknown>;
     const rawVal = asText(s.value).replace(/,/g, '').trim();
     const value = rawVal ? Number(rawVal) : NaN; // 빈 값은 Number('')=0 함정 회피 — 명시 거부
-    if (!Number.isFinite(value)) return {};
+    if (!Number.isFinite(value) || Math.abs(value) >= 1e12) return {}; // 12자리+ 는 CountUp 패널 넘침 — 강등
     const unit = asText(s.unit).slice(0, 6);
     const label = asText(s.label).slice(0, 15);
     return { kind: 'stat', stat: { value, ...(unit ? { unit } : {}), ...(label ? { label } : {}) } };
@@ -132,4 +132,9 @@ export async function prepareScenes(
     startFrame += durationInFrames;
   }
   return { prepared, issues };
+}
+
+/** 클립 스테이징 판정 — 존재하는 클립이면 public 파일명(clip_NN.mp4), 아니면 null. 복사는 호출자. */
+export function resolveClipSrc(clip: string | null | undefined, nn: string): string | null {
+  return clip && fs.existsSync(clip) ? `clip_${nn}.mp4` : null;
 }
