@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
-import { brandFileSuffix } from '../content/brand';
+import { brandFileSuffix, brandFileSuffixFor } from '../content/brand';
 import { llm } from '../llm/client';
 import type { RoleDef } from './company';
 import { kstDate } from '../util/time';
@@ -87,13 +87,15 @@ export function appendActivity(id: string, line: string): void {
 // 교훈은 브랜드(고객사)별로 분리 — 범용은 memory.md, 브랜드 활성 시 memory-<slug>.md.
 // (브랜드 A 런에서 배운 채널·독자 교훈이 다른 브랜드 런의 프롬프트에 주입되지 않게 — 사용자 확정 2026-07-06.
 //  위키 lesson 페이지는 llmWiki() 가 이미 브랜드별 디렉토리로 분리하므로 여기(주입용 memory)만 맞추면 된다.)
-const memoryFile = (id: string): string => path.join(dir(id), `memory${brandFileSuffix()}.md`);
+const memoryFile = (id: string, brand?: string): string =>
+  path.join(dir(id), `memory${brand !== undefined ? brandFileSuffixFor(brand) : brandFileSuffix()}.md`);
 const memoryArchiveFile = (id: string): string => path.join(dir(id), `memory_archive${brandFileSuffix()}.md`);
-export function appendMemory(id: string, insight: string): void {
+/** brand 명시 시 그 브랜드의 memory 파일에 귀속(성과 강화 등 활성≠콘텐츠 브랜드 경로용). 미지정=활성 브랜드(현행). */
+export function appendMemory(id: string, insight: string, brand?: string): void {
   if (!safeId(id) || !insight.trim()) return;
   fs.mkdirSync(dir(id), { recursive: true });
   const date = kstDate();
-  const p = memoryFile(id);
+  const p = memoryFile(id, brand);
   fs.appendFileSync(p, `- (${date}) ${insight.trim().replace(/\s+/g, ' ')}\n`, 'utf-8');
   tailTrim(p, 400, 200); // 자가학습 누적 상한(최근 200줄) — 파일·주입 비용 통제
 }

@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { extractVerifiedClaims } from './workspace';
 
 describe('extractVerifiedClaims (검증 지식 Self-RAG)', () => {
@@ -30,5 +33,26 @@ describe('extractVerifiedClaims (검증 지식 Self-RAG)', () => {
 
   it('빈 입력은 빈 배열', () => {
     expect(extractVerifiedClaims('')).toEqual([]);
+  });
+});
+
+describe('appendMemory — 명시 brand 귀속(오귀속 회귀)', () => {
+  const tmp = path.join(os.tmpdir(), 'workspace-brand-attr-test');
+  afterEach(() => {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 무해 */ }
+    delete process.env.GEPA_DATA_DIR;
+    vi.resetModules();
+  });
+  it('활성 브랜드(범용)와 무관하게 명시 브랜드 파일에 기록되고, 활성 파일로 새지 않는다', async () => {
+    fs.mkdirSync(tmp, { recursive: true });
+    process.env.GEPA_DATA_DIR = tmp;
+    vi.resetModules();
+    const ws = await import('./workspace');
+    ws.appendMemory('tester', '명시 귀속 교훈', '브랜드a');
+    const brandFile = path.join(tmp, 'agents', 'tester', 'memory-브랜드a.md');
+    expect(fs.existsSync(brandFile)).toBe(true);
+    expect(fs.readFileSync(brandFile, 'utf-8')).toContain('명시 귀속 교훈');
+    // 활성 브랜드(신선한 tmp = 범용)의 memory.md 로 새지 않음 — 오귀속 회귀 가드
+    expect(fs.existsSync(path.join(tmp, 'agents', 'tester', 'memory.md'))).toBe(false);
   });
 });

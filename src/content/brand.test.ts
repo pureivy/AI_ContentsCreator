@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug } from './brand';
+import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug, brandFileSuffixFor } from './brand';
 
 // 브랜드 프로필 — 정규화·주입 블록(순수 함수) 회귀 방지.
 describe('normalizeBrand', () => {
@@ -67,5 +67,13 @@ describe('보조 헬퍼', () => {
   it('null 안전', () => {
     expect(brandProductLines(null)).toEqual([]);
     expect(brandSeedKeywords(null)).toEqual([]);
+  });
+});
+
+describe('brandFileSuffixFor — 명시 슬러그 접미(순수)', () => {
+  it("undefined·''(범용) → '', 슬러그 → '-슬러그'", () => {
+    expect(brandFileSuffixFor(undefined)).toBe('');
+    expect(brandFileSuffixFor('')).toBe('');
+    expect(brandFileSuffixFor('브랜드a')).toBe('-브랜드a');
   });
 });

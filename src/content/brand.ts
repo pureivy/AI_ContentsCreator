@@ -68,11 +68,11 @@ export function activeBrandSlug(): string {
   return b ? brandSlug(b.name) : '';
 }
 
-/** 브랜드 스코프 파일 접미사 — 범용 '' / 브랜드 '-<slug>'. decisions·위키 등 공유 상태의 브랜드 분리에 사용. */
-export function brandFileSuffix(): string {
-  const s = activeBrandSlug();
-  return s ? `-${s}` : '';
+/** 슬러그 → 브랜드 파일 접미(순수). undefined/''(범용) → ''. */
+export function brandFileSuffixFor(slug: string | undefined): string {
+  return slug ? `-${slug}` : '';
 }
+export function brandFileSuffix(): string { return brandFileSuffixFor(activeBrandSlug()); }
 
 /** 브랜드 프로필 로드(캐시) — 없거나 name 이 비면 null(미설정). */
 export function getBrand(): BrandProfile | null {

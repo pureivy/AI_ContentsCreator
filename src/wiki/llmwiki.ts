@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { CONFIG } from '../config';
-import { brandFileSuffix } from '../content/brand';
+import { brandFileSuffixFor, activeBrandSlug } from '../content/brand';
 import { llm } from '../llm/client';
 
 export type PageType = 'entity' | 'concept' | 'source' | 'overview' | 'answer' | 'lesson' | 'debate' | 'performance';
@@ -1006,10 +1006,11 @@ entity(사람·조직·도구) · concept(개념·주제) · source(소스 요�
 
 let _wiki: LlmWiki | null = null;
 let _wikiDir = '';
-/** 브랜드(고객사)별 지식 분리 — 범용은 data/wiki, 브랜드는 data/wiki-<slug>. 전환 시 인스턴스 교체. */
-export function llmWiki(): LlmWiki {
-  const suffix = brandFileSuffix();
+/** 명시 브랜드의 위키 인스턴스 — 강화 등 "콘텐츠 브랜드 ≠ 활성 브랜드" 일 수 있는 경로용. */
+export function llmWikiFor(brand: string | undefined): LlmWiki {
+  const suffix = brandFileSuffixFor(brand);
   const dir = suffix ? path.join(path.dirname(CONFIG.wikiDir), `${path.basename(CONFIG.wikiDir)}${suffix}`) : CONFIG.wikiDir;
   if (!_wiki || _wikiDir !== dir) { _wiki = new LlmWiki(dir); _wikiDir = dir; }
   return _wiki;
 }
+export function llmWiki(): LlmWiki { return llmWikiFor(activeBrandSlug() || undefined); }
