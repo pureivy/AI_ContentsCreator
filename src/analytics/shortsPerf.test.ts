@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shortsSignal, parseStatsResponse, shortsPerfDue, shouldRecordMemory } from './shortsPerf';
+import { shortsSignal, parseStatsResponse, shortsPerfDue, shouldRecordMemory, countSamples, shortsMetaPerfDue } from './shortsPerf';
 
 describe('shortsSignal — 로그 스케일 + 좋아요율(순수)', () => {
   it('0뷰=0, 1만뷰≈0.8(뷰만), 좋아요율 1% 이상이면 +0.2 만점', () => {
@@ -50,5 +50,31 @@ describe('shouldRecordMemory — 긍정 즉시·부정은 실측 2틱 게이트(
     expect(shouldRecordMemory(0.6, 1)).toBe(true);
     expect(shouldRecordMemory(0.3, 1)).toBe(false);
     expect(shouldRecordMemory(0.3, 2)).toBe(true);
+  });
+});
+describe('countSamples', () => {
+  it('소스 필터 카운트 — 메타 샘플 혼입 시 유튜브 카운트 불변(게이트 회귀)', () => {
+    const samples = [
+      { source: 'youtube:api' }, { source: 'meta:ig' }, { source: 'meta:fb' },
+      { source: 'youtube:api' }, { source: undefined },
+    ];
+    expect(countSamples(samples, 'youtube:api')).toBe(2);   // 메타 3건 혼입돼도 2
+    expect(countSamples(samples, 'meta:ig')).toBe(1);
+    expect(countSamples([], 'youtube:api')).toBe(0);
+  });
+});
+describe('shortsMetaPerfDue', () => {
+  const day = 86_400_000;
+  it('igReelId·metaPublishedTs 없음 → false', () => {
+    expect(shortsMetaPerfDue({}, Date.now(), 7)).toBe(false);
+    expect(shortsMetaPerfDue({ igReelId: 'r' }, Date.now(), 7)).toBe(false);
+  });
+  it('창 내 매일 true / 창 경과+미강화 true / 강화 완료 false / 포기 지평(4배) false', () => {
+    const now = Date.now();
+    const at = (d: number): string => new Date(now - d * day).toISOString();
+    expect(shortsMetaPerfDue({ igReelId: 'r', metaPublishedTs: at(3) }, now, 7)).toBe(true);
+    expect(shortsMetaPerfDue({ igReelId: 'r', metaPublishedTs: at(10) }, now, 7)).toBe(true);
+    expect(shortsMetaPerfDue({ igReelId: 'r', metaPublishedTs: at(10), metaPerfReflected: true }, now, 7)).toBe(false);
+    expect(shortsMetaPerfDue({ igReelId: 'r', metaPublishedTs: at(30) }, now, 7)).toBe(false);
   });
 });

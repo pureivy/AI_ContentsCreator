@@ -58,6 +58,24 @@ export function shouldRecordMemory(signal: number, publicSampleCount: number): b
   return signal >= 0.6 || publicSampleCount >= 2;
 }
 
+/** 소스별 샘플 수(순수) — 유튜브·메타 샘플이 한 JSONL 에 공존하므로 게이트 카운트는 소스 필터 필수
+ *  (무필터 시 메타 샘플 혼입으로 카운트가 부풀어 비공개→늦공개 오귀속 방지 게이트가 무력화됨, 스펙 §4.3). */
+export function countSamples(samples: Pick<MetricSample, 'source'>[], source: string): number {
+  return samples.filter((s) => s.source === source).length;
+}
+
+/** 이번 틱 메타(릴스) 수집 대상인가(순수) — shortsPerfDue 의 메타 채널 판. 유튜브 창과 독립. */
+export function shortsMetaPerfDue(
+  s: Pick<Shorts, 'igReelId' | 'metaPublishedTs' | 'metaPerfReflected'>, now: number, days: number,
+): boolean {
+  if (!s.igReelId || !s.metaPublishedTs) return false;
+  const t = new Date(s.metaPublishedTs).getTime();
+  if (!Number.isFinite(t)) return false;
+  const age = now - t;
+  if (age > days * 4 * 86_400_000) return false; // 포기 지평(측정창 4배) — 삭제 릴스 무한 재시도 방지
+  return age <= days * 86_400_000 || !s.metaPerfReflected;
+}
+
 /** videos.list 50개 배치 — 키 없으면 빈 Map. 배치별 fail-open — 성공한 배치는 보존. */
 async function fetchVideoStats(videoIds: string[], signal?: AbortSignal): Promise<Map<string, VideoStats>> {
   const key = getSecret('YOUTUBE_API_KEY');
@@ -86,7 +104,7 @@ function reinforceShorts(s: Shorts, m: MetricSample): number {
   const brand = s.brand && isSafeBrandSlug(s.brand) ? s.brand : ''; // 경로 싱크 재검증(관례) — 비정상 슬러그는 범용 강등
   const title = s.title ?? s.topic;
   const verdict = signal >= 0.6 ? '이 주제·구성이 노출로 이어짐 — 유사 각도 유지' : '노출 저조 — 훅·주제 각도 재고';
-  if (shouldRecordMemory(signal, readMetrics(s.id).length)) {
+  if (shouldRecordMemory(signal, countSamples(readMetrics(s.id), 'youtube:api'))) {
     for (const role of ['shorts_writer', 'shorts_director']) {
       try {
         appendMemory(role, `쇼츠 성과: "${title}"${keyword ? ` (키워드 "${keyword}")` : ''} — 조회 ${m.views}·좋아요 ${m.likes ?? 0}, 성과신호 ${signal.toFixed(2)}. ${verdict}.`, brand);
