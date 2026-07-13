@@ -1,7 +1,10 @@
-name: 국민원예종묘
-industry: 원예종묘
-description: 원예 종묘
+name: 경상북도경제진흥원
+industry: 중소기업 및 소상공인 지원(경상북도 출연기관)
+description: 경상북도경제진흥원은 경상북도 소재 중소기업 소상공인을 위한 자금,마케팅, 기업지원 등의 업무를 수행하는 경상북도 출연기관
 products: []
-region: 경북 경산
+audience: 경북 소재 중소기업 및 소상공인
+region: 경상북도
+tone: 친근한
 banned: []
 seedKeywords: []
+channel: 네이버 블로그 - 지원사업 안내 및 소개
