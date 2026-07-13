@@ -160,8 +160,14 @@ export async function updateRunSettings(patch: Partial<RunSettings>): Promise<Ru
 export interface ApiKeyInfo {
   key: string; label: string; icon: string; desc: string;
   placeholder: string; needs_restart: boolean; set: boolean; masked: string; builtin: boolean;
+  brand?: string; // 커스텀 키의 소속 브랜드 슬러그('' = 공용). 내장 키는 앱 공용이라 없음.
 }
 export interface HiddenKeyInfo { key: string; label: string; icon: string }
+export interface ApiKeysResp {
+  keys: ApiKeyInfo[]; hidden: HiddenKeyInfo[];
+  brands: { slug: string; name: string }[];
+  activeBrand: string | null; // null = 조회 실패(브랜드 선택 초기화를 미루라는 뜻)
+}
 export async function fetchApiKeys(): Promise<ApiKeyInfo[]> {
   try {
     const r = await fetch("/api-keys");
@@ -171,15 +177,19 @@ export async function fetchApiKeys(): Promise<ApiKeyInfo[]> {
     return [];
   }
 }
-// 보이는 키 + 숨긴 기본 키(복원 UI 용) 함께 조회 — ApiKeysView 전용.
-export async function fetchApiKeysAll(): Promise<{ keys: ApiKeyInfo[]; hidden: HiddenKeyInfo[] }> {
+// 보이는 키 + 숨긴 기본 키(복원 UI 용) + 브랜드 목록·활성 브랜드 함께 조회 — ApiKeysView 전용.
+export async function fetchApiKeysAll(): Promise<ApiKeysResp> {
+  const empty: ApiKeysResp = { keys: [], hidden: [], brands: [{ slug: "", name: "공용 (기본)" }], activeBrand: null };
   try {
     const r = await fetch("/api-keys");
-    if (!r.ok) return { keys: [], hidden: [] };
+    if (!r.ok) return empty;
     const j = await r.json();
-    return { keys: j.keys ?? [], hidden: j.hidden ?? [] };
+    return {
+      keys: j.keys ?? [], hidden: j.hidden ?? [],
+      brands: j.brands ?? empty.brands, activeBrand: j.activeBrand ?? "",
+    };
   } catch {
-    return { keys: [], hidden: [] };
+    return empty;
   }
 }
 export async function saveApiKey(
@@ -198,13 +208,13 @@ export async function saveApiKey(
   }
 }
 export async function addApiKey(
-  key: string, label: string, desc: string, value: string,
+  key: string, label: string, desc: string, value: string, brand = "",
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     const r = await fetch("/api-keys/add", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ key, label, desc, value }),
+      body: JSON.stringify({ key, label, desc, value, brand }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
     return await r.json();

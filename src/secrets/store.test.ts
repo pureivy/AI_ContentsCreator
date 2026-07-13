@@ -194,3 +194,116 @@ describe('parseMetaTokens', () => {
     expect(parseMetaTokens('"str"')).toEqual({});
   });
 });
+
+// 브랜드별 커스텀 키 카드 — 정의(secrets.json)에 brand 를 달아 카드가 브랜드별로 갈린다.
+// 값은 여전히 .env 평면 키(단일 저장소·process.env 미러 유지) — 같은 키 이름은 브랜드 간
+// 공유가 아니라 '충돌'이므로 다른 브랜드에서의 동명 추가는 거부한다(값 덮어쓰기 원천 차단).
+describe('브랜드별 커스텀 키 — 정의 격리·동명 충돌 거부', () => {
+  let tmpEnv: string;
+  let tmpData: string;
+  let mod: typeof import('./store');
+  beforeEach(async () => {
+    tmpEnv = path.join(os.tmpdir(), `custom-keys-store-test-${process.pid}.env`);
+    tmpData = fs.mkdtempSync(path.join(os.tmpdir(), 'custom-keys-data-'));
+    fs.writeFileSync(tmpEnv, '', { mode: 0o600 });
+    process.env.GEPA_ENV_FILE = tmpEnv;
+    process.env.GEPA_DATA_DIR = tmpData;
+    delete process.env.MY_TEST_KEY;
+    vi.resetModules();
+    mod = await import('./store');
+  });
+  afterEach(() => {
+    try { fs.rmSync(tmpEnv); } catch { /* 이미 없음 */ }
+    try { fs.rmSync(tmpData, { recursive: true, force: true }); } catch { /* 이미 없음 */ }
+    delete process.env.GEPA_ENV_FILE;
+    delete process.env.GEPA_DATA_DIR;
+    delete process.env.MY_TEST_KEY;
+  });
+
+  const customs = (): { key: string; brand?: string }[] =>
+    mod.listKeys().filter((k) => !k.builtin).map((k) => ({ key: k.key, brand: k.brand }));
+
+  it('브랜드로 추가한 키 카드는 brand 를 달고 나온다(값은 .env 평면 키)', () => {
+    expect(mod.addCustom('MY_TEST_KEY', '내 키', '', 'v1', 'cafe-a').ok).toBe(true);
+    expect(customs()).toEqual([{ key: 'MY_TEST_KEY', brand: 'cafe-a' }]);
+    expect(fs.readFileSync(tmpEnv, 'utf-8')).toMatch(/^MY_TEST_KEY=v1$/m);
+  });
+
+  it('공용(빈 브랜드) 추가·기존(brand 없는) 정의는 brand="" 로 나온다', () => {
+    expect(mod.addCustom('MY_TEST_KEY', '', '', '', '').ok).toBe(true);
+    expect(customs()).toEqual([{ key: 'MY_TEST_KEY', brand: '' }]);
+    // 레거시 정의(brand 필드 자체가 없음)도 "" 로 정규화되는지 — secrets.json 직접 기록으로 재현
+    fs.writeFileSync(path.join(tmpData, 'secrets.json'),
+      JSON.stringify({ custom: [{ key: 'LEGACY_KEY', label: 'L', icon: '', desc: '' }], hidden: [] }));
+    expect(customs()).toEqual([{ key: 'LEGACY_KEY', brand: '' }]);
+  });
+
+  it('다른 브랜드의 동명 키 추가는 거부 — 정의·값 모두 불변', () => {
+    expect(mod.addCustom('MY_TEST_KEY', '', '', 'v1', 'cafe-a').ok).toBe(true);
+    const r = mod.addCustom('MY_TEST_KEY', '', '', 'v2', 'cafe-b');
+    expect(r.ok).toBe(false);
+    expect(r.error).toBeTruthy();
+    expect(customs()).toEqual([{ key: 'MY_TEST_KEY', brand: 'cafe-a' }]);
+    expect(fs.readFileSync(tmpEnv, 'utf-8')).toMatch(/^MY_TEST_KEY=v1$/m);
+  });
+
+  it('같은 브랜드 재추가는 값만 갱신(정의 중복 없음)', () => {
+    expect(mod.addCustom('MY_TEST_KEY', '', '', 'v1', 'cafe-a').ok).toBe(true);
+    expect(mod.addCustom('MY_TEST_KEY', '', '', 'v2', 'cafe-a').ok).toBe(true);
+    expect(customs()).toEqual([{ key: 'MY_TEST_KEY', brand: 'cafe-a' }]);
+    expect(fs.readFileSync(tmpEnv, 'utf-8')).toMatch(/^MY_TEST_KEY=v2$/m);
+  });
+
+  it('브랜드 키 삭제 — 정의·값 완전 제거(기존 동작 유지)', () => {
+    expect(mod.addCustom('MY_TEST_KEY', '', '', 'v1', 'cafe-a').ok).toBe(true);
+    expect(mod.deleteKey('MY_TEST_KEY').ok).toBe(true);
+    expect(customs()).toEqual([]);
+    expect(fs.readFileSync(tmpEnv, 'utf-8')).not.toContain('MY_TEST_KEY');
+  });
+});
+
+// 브랜드 삭제 동반 정리 — 남기면 카드 도달 불가(선택자에 없는 브랜드) + 동명 재추가 영구 거부
+// + .env 값이 앱 전역(process.env)에 계속 주입되는 고아 정의가 된다.
+describe('purgeCustomKeysForBrand — 브랜드 삭제 시 커스텀 키 동반 제거', () => {
+  let tmpEnv: string;
+  let tmpData: string;
+  let mod: typeof import('./store');
+  beforeEach(async () => {
+    tmpEnv = path.join(os.tmpdir(), `purge-keys-store-test-${process.pid}.env`);
+    tmpData = fs.mkdtempSync(path.join(os.tmpdir(), 'purge-keys-data-'));
+    fs.writeFileSync(tmpEnv, '', { mode: 0o600 });
+    process.env.GEPA_ENV_FILE = tmpEnv;
+    process.env.GEPA_DATA_DIR = tmpData;
+    for (const k of ['KEY_A', 'KEY_B', 'KEY_COMMON']) delete process.env[k];
+    vi.resetModules();
+    mod = await import('./store');
+  });
+  afterEach(() => {
+    try { fs.rmSync(tmpEnv); } catch { /* 이미 없음 */ }
+    try { fs.rmSync(tmpData, { recursive: true, force: true }); } catch { /* 이미 없음 */ }
+    delete process.env.GEPA_ENV_FILE;
+    delete process.env.GEPA_DATA_DIR;
+    for (const k of ['KEY_A', 'KEY_B', 'KEY_COMMON']) delete process.env[k];
+  });
+
+  it('해당 브랜드 정의·값만 제거, 타 브랜드·공용은 보존', () => {
+    mod.addCustom('KEY_A', '', '', 'va', 'cafe-a');
+    mod.addCustom('KEY_B', '', '', 'vb', 'cafe-b');
+    mod.addCustom('KEY_COMMON', '', '', 'vc', '');
+    expect(mod.purgeCustomKeysForBrand('cafe-a')).toBe(1);
+    const customs = mod.listKeys().filter((k) => !k.builtin).map((k) => k.key);
+    expect(customs.sort()).toEqual(['KEY_B', 'KEY_COMMON']);
+    const txt = fs.readFileSync(tmpEnv, 'utf-8');
+    expect(txt).not.toContain('KEY_A');
+    expect(txt).toMatch(/^KEY_B=vb$/m);
+    expect(txt).toMatch(/^KEY_COMMON=vc$/m);
+    // 제거 후 같은 이름을 다른 브랜드에서 재사용 가능(점유 해제)
+    expect(mod.addCustom('KEY_A', '', '', 'v2', 'cafe-b').ok).toBe(true);
+  });
+
+  it('빈 슬러그는 no-op(공용 키 대량 삭제 방지) — 0 반환', () => {
+    mod.addCustom('KEY_COMMON', '', '', 'vc', '');
+    expect(mod.purgeCustomKeysForBrand('')).toBe(0);
+    expect(mod.listKeys().filter((k) => !k.builtin)).toHaveLength(1);
+  });
+});

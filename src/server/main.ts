@@ -27,7 +27,7 @@ import { rolesById } from '../agents/company';
 import type { RoleDef } from '../agents/company';
 import type { RolePatch, MemberBody } from '../agents/company-loader';
 import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appendActivity, ensureScaffold, effectiveAutonomy, appendInjected, injectedLength, clearInjected, INJECTED_CAP } from '../agents/workspace';
-import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView, getYoutubeAccount, setYoutubeToken, getMetaAccount, setMetaToken } from '../secrets/store';
+import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView, getYoutubeAccount, setYoutubeToken, getMetaAccount, setMetaToken, purgeCustomKeysForBrand } from '../secrets/store';
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
@@ -1693,7 +1693,7 @@ app.post('/brands/activate', async (c) => {
  * 브랜드 자료 일괄 정리 — 영구 삭제가 아니라 data/.trash/brand-<slug>-<ts>/ 로 이동(복구 가능).
  * 대상: 글(piece)+런 세션+성과 측정 이력, 카드뉴스·숏폼 산출물, 브랜드 태그 런, 위키·전략·제작 이력.
  */
-function purgeBrandData(slug: string): { pieces: number; cards: number; shorts: number; runs: number } {
+function purgeBrandData(slug: string): { pieces: number; cards: number; shorts: number; runs: number; keys: number } {
   const trash = path.join(CONFIG.dataDir, '.trash', `brand-${slug}-${Date.now()}`);
   const move = (src: string, sub: string): void => {
     try {
@@ -1723,7 +1723,9 @@ function purgeBrandData(slug: string): { pieces: number; cards: number; shorts: 
   move(path.join(CONFIG.dataDir, '_shared', `research-state-${slug}.json`), `research-state-${slug}.json`);
   move(path.join(CONFIG.dataDir, 'analytics', `strategy-${slug}.json`), `strategy-${slug}.json`);
   move(path.join(CONFIG.dataDir, '_shared', `decisions-${slug}.md`), `decisions-${slug}.md`);
-  return { pieces: pieces.length, cards: cards.length, shorts: sh.length, runs: runs.length };
+  // 브랜드 스코프 커스텀 API 키도 동반 제거 — 잔존 시 카드 도달 불가·동명 재추가 영구 거부·값 전역 주입.
+  const keys = purgeCustomKeysForBrand(slug);
+  return { pieces: pieces.length, cards: cards.length, shorts: sh.length, runs: runs.length, keys };
 }
 
 app.delete('/brands/:slug', (c) => {
@@ -1737,7 +1739,7 @@ app.delete('/brands/:slug', (c) => {
   try {
     if (!deleteBrand(slug)) return c.json({ error: '해당 브랜드가 없습니다' }, 404);
     const purged = purgeBrandData(slug);
-    console.log(`[브랜드] 삭제 — ${slug}: 글 ${purged.pieces}·카드뉴스 ${purged.cards}·숏폼 ${purged.shorts}·런 ${purged.runs} → data/.trash 이동 (활성: ${activeBrandSlug() || '범용 모드'})`);
+    console.log(`[브랜드] 삭제 — ${slug}: 글 ${purged.pieces}·카드뉴스 ${purged.cards}·숏폼 ${purged.shorts}·런 ${purged.runs}·키 ${purged.keys} → data/.trash 이동 (활성: ${activeBrandSlug() || '범용 모드'})`);
     return c.json({ ok: true, active: activeBrandSlug() || null, purged });
   } catch { return c.json({ error: '무효한 슬러그' }, 400); }
 });
@@ -2279,14 +2281,24 @@ app.post('/sources/classify_retry', async (c) => {
   }
   return c.json({ retrying });
 });
-app.get('/api-keys', (c) => c.json({ keys: listKeys(), hidden: hiddenKeys() }));
+// 키 목록 — 카드마다 brand('' = 공용)가 실려 있어 UI가 브랜드별로 필터한다(내장 키는 앱 공용).
+// brands·activeBrand 는 키 탭의 브랜드 선택자 초기화용(탭을 열면 활성 브랜드 카드가 보이도록).
+app.get('/api-keys', (c) => c.json({
+  keys: listKeys(), hidden: hiddenKeys(), activeBrand: activeBrandSlug(),
+  brands: [{ slug: '', name: '공용 (기본)' }, ...listBrands().map((b) => ({ slug: b.slug, name: b.name }))],
+}));
 app.post('/api-keys', async (c) => {
   const b = await c.req.json<{ key?: string; value?: string }>().catch(() => ({} as { key?: string; value?: string }));
   return c.json(setKey(b.key ?? '', b.value ?? ''));
 });
 app.post('/api-keys/add', async (c) => {
-  const b = await c.req.json<{ key?: string; label?: string; icon?: string; value?: string }>().catch(() => ({} as { key?: string; label?: string; icon?: string; value?: string }));
-  return c.json(addCustom(b.key ?? '', b.label ?? '', b.icon ?? '', b.value ?? ''));
+  const b = await c.req.json<{ key?: string; label?: string; icon?: string; value?: string; brand?: string }>()
+    .catch(() => ({} as { key?: string; label?: string; icon?: string; value?: string; brand?: string }));
+  const brand = (b.brand ?? '').trim();
+  if (brand && !isSafeBrandSlug(brand)) return c.json({ ok: false, error: '무효한 브랜드 슬러그입니다.' }, 400);
+  // 존재하는 브랜드만 허용 — 오탈자 슬러그로 태생부터 도달 불가한 고아 정의가 생기는 것 차단.
+  if (brand && !listBrands().some((x) => x.slug === brand)) return c.json({ ok: false, error: '존재하지 않는 브랜드입니다.' }, 400);
+  return c.json(addCustom(b.key ?? '', b.label ?? '', b.icon ?? '', b.value ?? '', brand));
 });
 // 네이버 발행 계정 — 브랜드별 분리(범용 '' 포함). blogId 는 공개값(평문), 로그인 아이디·비번은 마스킹.
 // 프로필·세션 파일은 발행 시 활성/piece 브랜드 슬러그로 자동 분리된다(blog_skills). 계정 섞임 차단.

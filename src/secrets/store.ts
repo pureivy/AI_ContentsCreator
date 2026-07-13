@@ -18,8 +18,10 @@ const ENV_FILE = process.env.GEPA_ENV_FILE || path.resolve(process.cwd(), '.env'
 export interface ApiKeyInfo {
   key: string; label: string; icon: string; desc: string;
   placeholder: string; needs_restart: boolean; set: boolean; masked: string; builtin: boolean;
+  /** 커스텀 키의 소속 브랜드 슬러그('' = 공용). 내장 키는 앱 공용이라 없음. */
+  brand?: string;
 }
-interface CustomDef { key: string; label: string; icon: string; desc: string }
+interface CustomDef { key: string; label: string; icon: string; desc: string; brand?: string }
 interface Meta { custom: CustomDef[]; hidden: string[] }
 
 interface BuiltinDef { key: string; label: string; icon: string; desc: string; placeholder: string; needs_restart: boolean }
@@ -153,6 +155,7 @@ export function listKeys(): ApiKeyInfo[] {
   const custom: ApiKeyInfo[] = meta.custom.map((c) => ({
     key: c.key, label: c.label || c.key, icon: c.icon || '🔑', desc: c.desc || '사용자 정의 키',
     placeholder: '값 입력…', needs_restart: false, set: !!val(c.key), masked: maskFor(c.key, val(c.key)), builtin: false,
+    brand: c.brand ?? '', // 레거시(브랜드 도입 전) 정의는 공용
   }));
   return [...builtin, ...custom];
 }
@@ -163,11 +166,17 @@ export function setKey(key: string, value: string): { ok: boolean; error?: strin
   writeEnvValue(key, value.trim());
   return { ok: true };
 }
-export function addCustom(key: string, label: string, icon: string, value: string): { ok: boolean; error?: string } {
+export function addCustom(key: string, label: string, icon: string, value: string, brand = ''): { ok: boolean; error?: string } {
   if (!validKeyName(key)) return { ok: false, error: '키 이름은 대문자·숫자·밑줄만 가능합니다(예: MY_API_KEY).' };
   if (isBuiltinKey(key)) return { ok: false, error: '기본 키와 중복됩니다.' };
   const meta = readMeta();
-  if (!meta.custom.some((c) => c.key === key)) meta.custom.push({ key, label: label || key, icon: icon || '🔑', desc: '사용자 정의 키' });
+  const existing = meta.custom.find((c) => c.key === key);
+  // 값은 .env 평면 키(브랜드 무관 단일 이름)라, 다른 브랜드의 동명 추가를 허용하면 그 브랜드
+  // 값을 조용히 덮어쓰게 된다 — 격리 원칙대로 충돌로 거부(같은 브랜드 재추가만 값 갱신).
+  if (existing && (existing.brand ?? '') !== brand) {
+    return { ok: false, error: `이미 ${existing.brand ? `'${existing.brand}' 브랜드` : '공용'}에 있는 키 이름입니다. 다른 이름을 쓰세요.` };
+  }
+  if (!existing) meta.custom.push({ key, label: label || key, icon: icon || '🔑', desc: '사용자 정의 키', ...(brand ? { brand } : {}) });
   writeMeta(meta);
   if (value && value.trim()) writeEnvValue(key, value.trim());
   return { ok: true };
@@ -184,6 +193,21 @@ export function deleteKey(key: string): { ok: boolean; error?: string } {
   writeMeta(meta);
   writeEnvValue(key, undefined);
   return { ok: true };
+}
+/**
+ * 브랜드 삭제 동반 정리 — 그 브랜드의 커스텀 키 정의·.env 값을 함께 제거한다(개수 반환).
+ * 남기면 선택자에 없는 브랜드라 카드 도달 불가 + addCustom 동명 가드가 죽은 브랜드를 근거로
+ * 영구 거부 + 값이 process.env 로 전역 주입되는 고아가 된다. 빈 슬러그는 no-op(공용 보호).
+ */
+export function purgeCustomKeysForBrand(slug: string): number {
+  if (!slug) return 0;
+  const meta = readMeta();
+  const doomed = meta.custom.filter((c) => (c.brand ?? '') === slug);
+  if (!doomed.length) return 0;
+  meta.custom = meta.custom.filter((c) => (c.brand ?? '') !== slug);
+  writeMeta(meta);
+  for (const c of doomed) writeEnvValue(c.key, undefined);
+  return doomed.length;
 }
 /** 숨긴 기본 키 목록(복원 UI 용) — 커넥터 제거 등으로 정의가 사라진 키는 제외. */
 export function hiddenKeys(): { key: string; label: string; icon: string }[] {

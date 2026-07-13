@@ -9,6 +9,10 @@ import Ico from "./Ico";
 export default function ApiKeysView() {
   const [keys, setKeys] = useState<ApiKeyInfo[]>([]);
   const [hidden, setHidden] = useState<HiddenKeyInfo[]>([]);
+  // 커스텀 키의 브랜드 스코프 — 탭을 열면 활성 브랜드가 기본 선택돼 그 브랜드 카드가 보인다.
+  // null = 아직 미초기화(첫 응답의 activeBrand 로 1회 설정, 이후 재조회에도 선택 유지).
+  const [brands, setBrands] = useState<{ slug: string; name: string }[]>([{ slug: "", name: "공용 (기본)" }]);
+  const [kbrand, setKbrand] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -21,7 +25,11 @@ export default function ApiKeysView() {
   const [naverBusy, setNaverBusy] = useState(false);
   const [naverSaved, setNaverSaved] = useState(false);
 
-  const load = () => fetchApiKeysAll().then(({ keys, hidden }) => { setKeys(keys); setHidden(hidden); });
+  const load = () => fetchApiKeysAll().then(({ keys, hidden, brands, activeBrand }) => {
+    setKeys(keys); setHidden(hidden); setBrands(brands);
+    // 첫 성공 응답에서만 활성 브랜드로 초기화 — 실패(null)면 미루고, 사용자의 선택은 재조회에도 유지.
+    if (activeBrand !== null) setKbrand((prev) => prev ?? activeBrand);
+  });
   const loadNaver = () => fetchNaverAccounts().then(setNaver);
   useEffect(() => { load(); loadNaver(); }, []);
 
@@ -64,7 +72,7 @@ export default function ApiKeysView() {
   const addKey = async () => {
     if (!nk.key.trim()) return;
     setAddBusy(true);
-    const res = await addApiKey(nk.key.trim(), nk.label.trim(), "", nk.value.trim());
+    const res = await addApiKey(nk.key.trim(), nk.label.trim(), "", nk.value.trim(), kbrand ?? "");
     setAddBusy(false);
     if (res.ok) { setNk({ key: "", label: "", value: "" }); load(); }
     else alert(`추가 실패: ${res.error || ""}`);
@@ -94,7 +102,8 @@ export default function ApiKeysView() {
         <p className="apikeys-sub">
           모든 자격증명을 한 곳에서 입력·저장합니다. 키는 프로젝트의 <code>.env</code>(git 제외) <b>한 곳에만</b> 저장되며,
           화면에는 항상 <b>마스킹</b>되어 표시됩니다. 휴지통 버튼은 카드를 삭제합니다 — 사용자 키는 완전 제거,
-          <b>기본 키는 값 제거 후 숨김</b>(하단에서 복원 가능).
+          <b>기본 키는 값 제거 후 숨김</b>(하단에서 복원 가능). <b>사용자 키는 브랜드별</b>로 관리됩니다 —
+          탭을 열면 활성 브랜드의 카드가 보이고, 아래 선택자로 다른 브랜드·공용 키를 볼 수 있습니다(기본 키는 앱 공용).
         </p>
       </div>
       {/* 네이버 발행 계정 — 브랜드별. blogId 는 공개값(평문), 로그인은 마스킹. 프로필·세션 자동 분리. */}
@@ -160,8 +169,21 @@ export default function ApiKeysView() {
         </div>
       </div>
 
+      {/* 사용자 키 브랜드 선택 — 카드·추가 폼이 이 브랜드로 스코프된다(내장 키는 항상 표시). */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 12px" }}>
+        <span style={{ fontSize: 13, color: "var(--muted)" }}>사용자 키 브랜드</span>
+        <select
+          value={kbrand ?? ""}
+          onChange={(e) => setKbrand(e.target.value)}
+          style={{ background: "var(--panel2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "5px 8px", fontSize: 13 }}
+          title="이 브랜드에서 설정한 사용자 키 카드를 표시·추가"
+        >
+          {brands.map((b) => <option key={b.slug} value={b.slug}>{b.name}</option>)}
+        </select>
+      </div>
+
       <div className="apikeys-grid">
-        {keys.map((k) => {
+        {keys.filter((k) => k.builtin || (k.brand ?? "") === (kbrand ?? "")).map((k) => {
           const draft = drafts[k.key] ?? "";
           return (
             <div key={k.key} className="apikey-card">
@@ -213,7 +235,10 @@ export default function ApiKeysView() {
             <span className="apikey-icon"><Ico name="plus" size={18} /></span>
             <div className="apikey-titles">
               <b>API 키 추가</b>
-              <div className="apikey-desc">사용자 정의 키 등록. 이름은 대문자로 시작, 대문자/숫자/밑줄만 (예: MY_API_KEY).</div>
+              <div className="apikey-desc">
+                사용자 정의 키 등록 — <b>{brands.find((b) => b.slug === (kbrand ?? ""))?.name ?? "공용 (기본)"}</b>에 저장됩니다.
+                이름은 대문자로 시작, 대문자/숫자/밑줄만 (예: MY_API_KEY).
+              </div>
             </div>
           </div>
           <div className="apikey-field">
