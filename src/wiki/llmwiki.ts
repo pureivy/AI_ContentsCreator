@@ -41,11 +41,28 @@ const ARRAY_KEYS = new Set(['aliases', 'sources', 'contributors', 'rebuts']);
 // wiki 루트의 비-페이지 파일(평면 구조에서 페이지와 구분) — 카탈로그·타임라인·스키마.
 const RESERVED_FILES = new Set(['index.md', 'log.md', 'WIKI_SCHEMA.md', 'README.md']);
 
+// macOS(HFS+·iCloud 동기화)는 파일명을 NFD 기준 ~255바이트에서 자르고 충돌 시 'x 2.md'로 복제해,
+// 한글 장제목 슬러그가 잘린 파일명·중복 파일로 깨졌다(2026-07-13 실측: 한글 80자는 NFD 최대 720바이트).
+// NFD 바이트로 캡하고 잘린 몫은 원 슬러그 해시 8자로 구분 — 같은 입력이면 항상 같은 슬러그(결정적).
+const MAX_SLUG_NFD_BYTES = 180;
+const nfdBytes = (s: string): number => Buffer.byteLength(s.normalize('NFD'), 'utf-8');
+function capSlugBytes(slug: string): string {
+  if (nfdBytes(slug) <= MAX_SLUG_NFD_BYTES) return slug;
+  const hash = createHash('sha256').update(slug).digest('hex').slice(0, 8);
+  const budget = MAX_SLUG_NFD_BYTES - hash.length - 1; // '-<hash8>' 몫
+  let prefix = '';
+  for (const ch of slug) {
+    if (nfdBytes(prefix + ch) > budget) break;
+    prefix += ch;
+  }
+  return `${prefix.replace(/-+$/, '')}-${hash}`;
+}
 export function slugify(s: string): string {
-  return (s || '').trim().toLowerCase()
+  const base = (s || '').trim().toLowerCase()
     .replace(/[^\p{L}\p{N}\s-]/gu, '')
     .replace(/\s+/g, '-')
     .slice(0, 80) || 'page';
+  return capSlugBytes(base);
 }
 /** 로컬 타임존 기준 YYYY-MM-DD (UTC 자정 어긋남 방지). */
 function nowDate(): string {
@@ -128,7 +145,29 @@ export class LlmWiki {
     fs.mkdirSync(this.rawDir, { recursive: true });
     this.migrateFlat();
     if (suffix) this.migrateLegacyRaw(path.join(path.dirname(dir), 'raw'));
+    this.repairOverlongSlugs();
     this.ensureSchema();
+  }
+
+  /** 장슬러그 파일 1회 수선 — 캡 도입(2026-07-13) 전 macOS/iCloud 가 자른 파일명(basename≠slug)을
+   *  캡 슬러그로 재작성한다. 수선 없이는 pagePath(slug) 기반 조회·갱신·prune 이 실파일과 어긋난다. */
+  private repairOverlongSlugs(): void {
+    try {
+      for (const f of fs.readdirSync(this.pagesDir)) {
+        if (!f.endsWith('.md') || RESERVED_FILES.has(f)) continue;
+        const fp = path.join(this.pagesDir, f);
+        let page: WikiPage;
+        try { page = this.readPage(fp); } catch { continue; }
+        if (!page.slug || /[/\\]|\.\./.test(page.slug)) continue;
+        const canonical = capSlugBytes(page.slug);
+        if (canonical === page.slug && f === `${canonical}.md`) continue;
+        const dst = this.pagePath(canonical);
+        if (path.resolve(dst) !== path.resolve(fp) && fs.existsSync(dst)) continue; // 충돌 — 기존 페이지 보존
+        page.slug = canonical;
+        fs.writeFileSync(dst, serialize(page), 'utf-8');
+        if (path.resolve(dst) !== path.resolve(fp)) fs.unlinkSync(fp);
+      }
+    } catch { /* 무해 — 다음 인스턴스 생성 때 재시도 */ }
   }
 
   /** 브랜드 raw 분리(2026-07-06) 이전 자료 1회 이관 — 이 위키의 source 페이지가 참조하는 raw/ 원문이

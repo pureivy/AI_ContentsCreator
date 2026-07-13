@@ -19,6 +19,53 @@ describe('slugify', () => {
   });
 });
 
+// macOS/iCloud 가 한글 장슬러그 파일명을 NFD ~255바이트에서 잘라 'x 2.md' 중복까지 만든 회귀(2026-07-13).
+describe('slugify — 장슬러그 NFD 바이트 캡(+해시)', () => {
+  const longTitle = '8월 휴가철·하반기 성수기 대비 경북 숙박·관광·식음료 중소·소상공인의 자금 확보·마케팅 고민 분석 (요약)';
+  const nfdBytes = (s: string) => Buffer.byteLength(s.normalize('NFD'), 'utf-8');
+
+  it('NFD 180바이트 초과 시 접두사+해시8로 캡, 결정적', () => {
+    const s = slugify(longTitle);
+    expect(nfdBytes(`${s}.md`)).toBeLessThanOrEqual(200); // 파일명 전체가 255바이트 한계 안쪽
+    expect(s).toMatch(/-[0-9a-f]{8}$/);
+    expect(slugify(longTitle)).toBe(s); // 같은 제목 → 같은 슬러그([[링크]] 해석 일치)
+  });
+
+  it('긴 공통 접두사를 가진 다른 제목은 다른 슬러그(절단 충돌 방지)', () => {
+    const a = slugify(longTitle);
+    const b = slugify(longTitle.replace('(요약)', '· 비평 (b0ff1796)'));
+    expect(a).not.toBe(b);
+  });
+
+  it('짧은 슬러그는 기존 동작 불변', () => {
+    expect(slugify('제2의 두뇌')).toBe('제2의-두뇌');
+    expect(slugify('Local LLM!')).toBe('local-llm');
+  });
+
+  it('장제목 페이지 저장·조회 라운드트립 — 파일명=슬러그', () => {
+    const w = new LlmWiki(dir);
+    const p = w.upsertPage({ title: longTitle, type: 'concept', body: '본문' });
+    expect(fs.existsSync(path.join(dir, `${p.slug}.md`))).toBe(true);
+    expect(w.getPage(slugify(longTitle))?.title).toBe(longTitle);
+  });
+
+  it('생성자 수선 — 잘린 파일명(basename≠slug) 레거시 파일을 캡 슬러그로 복구', () => {
+    new LlmWiki(dir); // 레이아웃 생성
+    const fullSlug = '박'.repeat(60); // 캡 도입 전 80자 캡만 통과한 장슬러그(NFD 360바이트)
+    const legacy = [
+      '---', 'title: 긴 제목', `slug: ${fullSlug}`, 'type: concept',
+      'aliases: []', 'sources: []', 'contributors: []',
+      'updated: 2026-07-01', 'summary: s', '---', '', '본문', '',
+    ].join('\n');
+    fs.writeFileSync(path.join(dir, `${'박'.repeat(20)} 2.md`), legacy, 'utf-8'); // iCloud 절단+중복 재현
+    const w = new LlmWiki(dir);
+    const canonical = slugify(fullSlug); // 캡 적용 결과(슬러그 재정규화와 동일)
+    expect(fs.existsSync(path.join(dir, `${'박'.repeat(20)} 2.md`))).toBe(false); // 잔재 제거
+    expect(fs.existsSync(path.join(dir, `${canonical}.md`))).toBe(true);
+    expect(w.getPage(canonical)?.title).toBe('긴 제목');
+  });
+});
+
 describe('LlmWiki', () => {
   it('스키마 문서를 초기화한다', () => {
     new LlmWiki(dir);
