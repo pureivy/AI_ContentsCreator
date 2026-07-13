@@ -77,3 +77,13 @@ describe('brandFileSuffixFor — 명시 슬러그 접미(순수)', () => {
     expect(brandFileSuffixFor('브랜드a')).toBe('-브랜드a');
   });
 });
+
+describe('brandSlug — NFC 정규화(macOS/iCloud NFD 파일명 대비)', () => {
+  it('NFD 입력도 NFC 슬러그로 수렴 — 이름 유래·파일명 유래 슬러그 동치', () => {
+    const nfc = '국민원예종묘';
+    const nfd = nfc.normalize('NFD');
+    expect(nfd).not.toBe(nfc); // 전제: 두 표현이 실제로 다른 바이트
+    expect(brandSlug(nfd)).toBe(brandSlug(nfc));
+    expect(brandSlug(nfd)).toBe(nfc.toLowerCase());
+  });
+});

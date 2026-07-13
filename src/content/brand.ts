@@ -50,7 +50,9 @@ export function reloadBrand(): void { _cached = undefined; }
 
 /** 브랜드명 → 파일/태깅용 슬러그(결정적) — new_studio.mjs 와 동일 규칙. */
 export function brandSlug(name: string): string {
-  return name.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').toLowerCase() || 'brand';
+  // NFC 정규화 — macOS/iCloud 가 파일명을 NFD 로 되돌려도(위키 장슬러그 사고와 동일 축)
+  // 이름 유래 슬러그(activeBrandSlug)와 파일명 유래 슬러그(listBrands)가 같은 바이트로 만난다.
+  return name.normalize('NFC').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').toLowerCase() || 'brand';
 }
 
 /**
@@ -107,7 +109,7 @@ export function listBrands(): Array<{ slug: string; name: string; industry?: str
   for (const f of files) {
     try {
       const b = normalizeBrand(YAML.parse(fs.readFileSync(path.join(brandsDir(), f), 'utf-8')));
-      if (b) out.push({ slug: f.replace(/\.yaml$/, ''), name: b.name, industry: b.industry });
+      if (b) out.push({ slug: f.replace(/\.yaml$/, '').normalize('NFC'), name: b.name, industry: b.industry });
     } catch { /* 무효 파일 스킵 */ }
   }
   return out.sort((a, b) => a.name.localeCompare(b.name, 'ko'));
