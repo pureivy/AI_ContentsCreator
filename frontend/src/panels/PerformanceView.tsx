@@ -28,6 +28,13 @@ export default function PerformanceView() {
   const s = data?.summary;
   const winners = data?.strategy.winners ?? [];
   const subNiches = Object.entries(data?.strategy.subNiches ?? {}).sort((a, b) => b[1] - a[1]);
+  const ch = data?.channels;
+  // null = 아직 수집 전(발행 후 첫 일일 틱 대기) — 0 과 구분해 "—" 로 표시.
+  const fmt = (n: number | null | undefined) => (n == null ? "—" : n.toLocaleString());
+  // 측정창 종료 후 학습 반영 여부 — 채널별 칩(✓ 반영됨, … 측정 중).
+  const refl = (r: { youtube?: { reflected: boolean } | null; meta?: { reflected: boolean } | null }) =>
+    [r.youtube && `YT${r.youtube.reflected ? "✓" : "…"}`, r.meta && `IG${r.meta.reflected ? "✓" : "…"}`]
+      .filter(Boolean).join(" ");
 
   return (
     <div className="apikeys perf-view">
@@ -49,6 +56,78 @@ export default function PerformanceView() {
             <div className="perf-card"><div className="perf-num">{s?.measured ?? 0}</div><div className="perf-lbl">성과 측정됨</div></div>
             <div className="perf-card"><div className="perf-num">{(s?.totalViews ?? 0).toLocaleString()}</div><div className="perf-lbl">누적 조회수</div></div>
             <div className="perf-card"><div className="perf-num">{data.strategy.measuredPieces}</div><div className="perf-lbl">강화 반영 글</div></div>
+          </div>
+
+          {/* 채널 성과 — 쇼츠(유튜브·릴스)·카드뉴스(IG·FB). 발행된 것만, 수집 전 값은 — 표시. */}
+          <div className="review-section">
+            <h3>채널 성과 <span className="muted">(쇼츠·카드뉴스 — 매일 자동 수집)</span></h3>
+            {ch && (ch.shorts.length > 0 || ch.cardnews.length > 0) ? (
+              <>
+                <div className="perf-summary">
+                  <div className="perf-card"><div className="perf-num">{ch.summary.shortsYtViews.toLocaleString()}</div><div className="perf-lbl">쇼츠 유튜브 조회</div></div>
+                  <div className="perf-card"><div className="perf-num">{ch.summary.reelsViews.toLocaleString()}</div><div className="perf-lbl">릴스 조회</div></div>
+                  <div className="perf-card"><div className="perf-num">{ch.summary.cardnewsViews.toLocaleString()}</div><div className="perf-lbl">카드뉴스 조회</div></div>
+                </div>
+                {ch.shorts.length > 0 && (
+                  <div className="perf-table-wrap">
+                    <table className="perf-table">
+                      <thead>
+                        <tr><th>숏폼</th><th>유튜브 조회</th><th>👍</th><th>릴스 조회</th><th>👍</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
+                      </thead>
+                      <tbody>
+                        {ch.shorts.map((r) => (
+                          <tr key={r.id}>
+                            <td className="perf-title">
+                              <div className="perf-title-row">
+                                {r.youtube?.url
+                                  ? <a href={r.youtube.url} target="_blank" rel="noreferrer" title={r.title}>{r.title}</a>
+                                  : <span className="perf-title-txt" title={r.title}>{r.title}</span>}
+                                {r.meta?.permalink && <a className="chip" href={r.meta.permalink} target="_blank" rel="noreferrer" title="인스타 릴스 열기">IG ↗</a>}
+                              </div>
+                            </td>
+                            <td className="perf-r">{r.youtube ? fmt(r.youtube.views) : "—"}</td>
+                            <td className="perf-r">{r.youtube ? fmt(r.youtube.likes) : "—"}</td>
+                            <td className="perf-r">{r.meta ? fmt(r.meta.views) : "—"}</td>
+                            <td className="perf-r">{r.meta ? fmt(r.meta.likes) : "—"}</td>
+                            <td className="perf-r">{refl(r)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {ch.cardnews.length > 0 && (
+                  <div className="perf-table-wrap" style={{ marginTop: 10 }}>
+                    <table className="perf-table">
+                      <thead>
+                        <tr><th>카드뉴스</th><th>IG 조회</th><th>도달</th><th>👍</th><th>FB 👍</th><th>공유</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
+                      </thead>
+                      <tbody>
+                        {ch.cardnews.map((r) => (
+                          <tr key={r.id}>
+                            <td className="perf-title">
+                              <div className="perf-title-row">
+                                {r.ig?.permalink
+                                  ? <a href={r.ig.permalink} target="_blank" rel="noreferrer" title={r.topic}>{r.topic}</a>
+                                  : <span className="perf-title-txt" title={r.topic}>{r.topic}</span>}
+                              </div>
+                            </td>
+                            <td className="perf-r">{r.ig ? fmt(r.ig.views) : "—"}</td>
+                            <td className="perf-r">{r.ig ? fmt(r.ig.reach) : "—"}</td>
+                            <td className="perf-r">{r.ig ? fmt(r.ig.likes) : "—"}</td>
+                            <td className="perf-r">{r.fb ? fmt(r.fb.likes) : "—"}</td>
+                            <td className="perf-r">{r.fb ? fmt(r.fb.shares) : "—"}</td>
+                            <td className="perf-r">{r.reflected ? "✓" : "…"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="muted">발행된 쇼츠·카드뉴스가 아직 없습니다. 채널 연결 후 발행하면 성과가 매일 수집돼 여기에 나타납니다.</p>
+            )}
           </div>
 
           {/* 강화 학습 전략 */}

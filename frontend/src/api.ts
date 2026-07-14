@@ -917,10 +917,26 @@ export interface PerfRow {
   measuredAt?: string | null; source?: string; samples: number;
   derived?: DerivedSummary;
 }
+// 채널 성과(쇼츠·카드뉴스) — 채널 미발행이면 null, 발행됐지만 수집 전이면 views null.
+export interface ShortsPerfRow {
+  id: string; title: string; ts: string;
+  youtube: { url: string | null; views: number | null; likes: number | null; reflected: boolean } | null;
+  meta: { permalink: string | null; views: number | null; likes: number | null; reflected: boolean } | null;
+}
+export interface CardnewsPerfRow {
+  id: string; topic: string; ts: string; reflected: boolean;
+  ig: { permalink: string | null; views: number | null; reach: number | null; likes: number | null } | null;
+  fb: { likes: number | null; shares: number | null } | null;
+}
 export interface PerfData {
   strategy: { winners: Array<{ keyword: string; score: number; samples: number }>; subNiches: Record<string, number>; measuredPieces: number };
   pieces: PerfRow[];
   summary: { count: number; measured: number; totalViews: number };
+  channels?: {
+    shorts: ShortsPerfRow[];
+    cardnews: CardnewsPerfRow[];
+    summary: { shortsYtViews: number; reelsViews: number; cardnewsViews: number };
+  };
 }
 export async function fetchPerformance(): Promise<PerfData | null> {
   try { const r = await fetch("/performance"); return r.ok ? await r.json() : null; }

@@ -1,6 +1,26 @@
 import { describe, it, expect } from 'vitest';
-import { parseManualMetrics } from './performance';
+import { parseManualMetrics, latestSampleBySource, type MetricSample } from './performance';
 import { performanceSignal } from './reinforce';
+
+// 한 콘텐츠 id 의 시계열엔 유튜브(youtube:api)·인스타(meta:ig)·페북(meta:fb) 샘플이 섞인다 —
+// 채널별 최신치는 소스 접두로 갈라 뒤에서부터(최신) 골라야 한다(latestMetrics 는 소스 무시).
+describe('latestSampleBySource (채널별 최신 샘플)', () => {
+  const s = (source: string, views: number): MetricSample =>
+    ({ measuredAt: `2026-07-${String(10 + views).padStart(2, '0')}T00:00:00Z`, views, searchInflow: [], source });
+  const mixed = [s('youtube:api', 1), s('meta:ig', 2), s('youtube:api', 3), s('meta:fb', 4), s('meta:ig', 5)];
+
+  it('접두 일치하는 마지막(최신) 샘플 — 유튜브·IG·FB 각각', () => {
+    expect(latestSampleBySource(mixed, 'youtube:')?.views).toBe(3);
+    expect(latestSampleBySource(mixed, 'meta:ig')?.views).toBe(5);
+    expect(latestSampleBySource(mixed, 'meta:fb')?.views).toBe(4);
+  });
+  it('일치 없음·빈 시계열·source 없는 레거시 샘플 → null 안전', () => {
+    expect(latestSampleBySource(mixed, 'naver:')).toBeNull();
+    expect(latestSampleBySource([], 'youtube:')).toBeNull();
+    const legacy = [{ measuredAt: '2026-07-10T00:00:00Z', views: 9, searchInflow: [] }] as MetricSample[];
+    expect(latestSampleBySource(legacy, 'youtube:')).toBeNull();
+  });
+});
 
 describe('parseManualMetrics (수동 성과 입력 정규화)', () => {
   it('구조화 JSON 을 안전 파싱(유입 키워드 포함)', () => {

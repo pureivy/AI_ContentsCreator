@@ -56,7 +56,7 @@ import { ingestMetrics } from '../analytics/reinforce';
 import { syncShortsPerformance, syncShortsMetaPerformance } from '../analytics/shortsPerf';
 import { syncCardnewsPerformance } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
-import { parseManualMetrics, readMetrics, latestMetrics } from '../analytics/performance';
+import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource } from '../analytics/performance';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
@@ -1583,6 +1583,32 @@ function performanceHandler(c: Context): Response {
     .sort((a, b) => (b.views ?? -1) - (a.views ?? -1));
   const s = readStrategy(activeBrandSlug()); // 활성 브랜드의 강화 학습만 표시
   const measured = rows.filter((r) => r.views != null);
+  // 채널 성과(쇼츠·카드뉴스) — 발행된 것만, 채널별 최신 샘플(한 시계열에 유튜브·메타가 섞여 소스로 분리).
+  const shortsRows = shortsStore().list().filter(brandMatch)
+    .filter((x) => !!x.youtubeTs || !!x.metaPublishedTs)
+    .map((x) => {
+      const yt = x.youtubeTs ? latestMetricsBySource(x.id, 'youtube:') : null;
+      const ig = x.metaPublishedTs ? latestMetricsBySource(x.id, 'meta:ig') : null;
+      return {
+        id: x.id, title: x.title || x.topic,
+        youtube: x.youtubeTs ? { url: x.youtubeUrl ?? null, views: yt?.views ?? null, likes: yt?.likes ?? null, reflected: !!x.perfReflected } : null,
+        meta: x.metaPublishedTs ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, likes: ig?.likes ?? null, reflected: !!x.metaPerfReflected } : null,
+        ts: [x.youtubeTs, x.metaPublishedTs].filter(Boolean).sort().pop()!,
+      };
+    })
+    .sort((a, b) => b.ts.localeCompare(a.ts));
+  const cardRows = cardNewsStore().list().filter(brandMatch)
+    .filter((x) => !!x.publishedTs)
+    .map((x) => {
+      const ig = latestMetricsBySource(x.id, 'meta:ig');
+      const fb = latestMetricsBySource(x.id, 'meta:fb');
+      return {
+        id: x.id, topic: x.topic, ts: x.publishedTs!, reflected: !!x.perfReflected,
+        ig: x.igMediaId ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, reach: ig?.reach ?? null, likes: ig?.likes ?? null } : null,
+        fb: x.fbPostId ? { likes: fb?.likes ?? null, shares: fb?.shares ?? null } : null,
+      };
+    })
+    .sort((a, b) => b.ts.localeCompare(a.ts));
   return c.json({
     strategy: { winners: s.winners.slice(0, 20), subNiches: s.subNiches, measuredPieces: s.measuredPieces },
     pieces: rows,
@@ -1590,6 +1616,15 @@ function performanceHandler(c: Context): Response {
       count: rows.length,
       measured: measured.length,
       totalViews: measured.reduce((sum, r) => sum + (r.views ?? 0), 0),
+    },
+    channels: {
+      shorts: shortsRows,
+      cardnews: cardRows,
+      summary: {
+        shortsYtViews: shortsRows.reduce((n, r) => n + (r.youtube?.views ?? 0), 0),
+        reelsViews: shortsRows.reduce((n, r) => n + (r.meta?.views ?? 0), 0),
+        cardnewsViews: cardRows.reduce((n, r) => n + (r.ig?.views ?? 0), 0),
+      },
     },
   });
 }

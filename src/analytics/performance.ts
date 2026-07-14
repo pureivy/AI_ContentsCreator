@@ -44,6 +44,16 @@ export function latestMetrics(pieceId: string): MetricSample | null {
   const all = readMetrics(pieceId);
   return all.length ? all[all.length - 1]! : null;
 }
+/** 채널별 최신 샘플(순수) — 한 시계열에 youtube:api·meta:ig·meta:fb 가 섞이므로 소스 접두로 갈라 고른다. */
+export function latestSampleBySource(samples: MetricSample[], prefix: string): MetricSample | null {
+  for (let i = samples.length - 1; i >= 0; i--) {
+    if ((samples[i]!.source ?? '').startsWith(prefix)) return samples[i]!;
+  }
+  return null;
+}
+export function latestMetricsBySource(pieceId: string, prefix: string): MetricSample | null {
+  return latestSampleBySource(readMetrics(pieceId), prefix);
+}
 
 function num(v: unknown): number { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function normInflow(v: unknown): SearchInflow | null {
