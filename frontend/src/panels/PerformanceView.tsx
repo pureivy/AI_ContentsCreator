@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { fetchPerformance, deletePiece, PerfData } from "../api";
 import Ico, { type IcoName } from "./Ico";
 
-// 성과 대시보드 — 발행/측정된 글의 조회수·유입 키워드와 강화 학습(전략 EWMA)을 한눈에.
+// 성과 대시보드 — 채널 통합 요약(블로그·쇼츠·카드뉴스) → 블로그 글별 → 쇼츠·카드뉴스 → 강화 학습 순.
 // 스테이지 어휘는 캘린더·검토 탭과 동일(Ico).
 const STAGE_LABEL: Record<string, { icon: IcoName; label: string }> = {
   published: { icon: "megaphone", label: "발행됨" }, measured: { icon: "chart", label: "측정됨" },
@@ -41,7 +41,7 @@ export default function PerformanceView() {
       <div className="apikeys-head">
         <h1><Ico name="chart" size={17} /> 성과 대시보드</h1>
         <p className="apikeys-sub">
-          발행한 글의 조회수·검색 유입과, 성과로 학습된 전략(키워드·서브니치 EWMA)을 모아 봅니다.
+          블로그·쇼츠·카드뉴스 채널별 성과와, 성과로 학습된 전략(키워드·서브니치 EWMA)을 모아 봅니다.
           <button className="btn ghost" style={{ marginLeft: 10 }} onClick={load}>새로고침</button>
         </p>
       </div>
@@ -50,24 +50,71 @@ export default function PerformanceView() {
 
       {data && (
         <>
-          {/* 요약 카드 */}
+          {/* 요약 카드 — 채널 통합(블로그·쇼츠·카드뉴스 한눈 비교) */}
           <div className="perf-summary">
-            <div className="perf-card"><div className="perf-num">{s?.count ?? 0}</div><div className="perf-lbl">발행/측정 글</div></div>
-            <div className="perf-card"><div className="perf-num">{s?.measured ?? 0}</div><div className="perf-lbl">성과 측정됨</div></div>
-            <div className="perf-card"><div className="perf-num">{(s?.totalViews ?? 0).toLocaleString()}</div><div className="perf-lbl">누적 조회수</div></div>
-            <div className="perf-card"><div className="perf-num">{data.strategy.measuredPieces}</div><div className="perf-lbl">강화 반영 글</div></div>
+            <div className="perf-card"><div className="perf-num">{(s?.totalViews ?? 0).toLocaleString()}</div><div className="perf-lbl">블로그 조회</div></div>
+            <div className="perf-card"><div className="perf-num">{(ch?.summary.shortsYtViews ?? 0).toLocaleString()}</div><div className="perf-lbl">쇼츠 유튜브 조회</div></div>
+            <div className="perf-card"><div className="perf-num">{(ch?.summary.reelsViews ?? 0).toLocaleString()}</div><div className="perf-lbl">릴스 조회</div></div>
+            <div className="perf-card"><div className="perf-num">{(ch?.summary.cardnewsViews ?? 0).toLocaleString()}</div><div className="perf-lbl">카드뉴스 조회</div></div>
           </div>
 
-          {/* 채널 성과 — 쇼츠(유튜브·릴스)·카드뉴스(IG·FB). 발행된 것만, 수집 전 값은 — 표시. */}
+          {/* 블로그 성과 — 글별 표. 발행/측정/반영 카운트는 제목 옆(요약 카드는 채널 통합으로 승격). */}
           <div className="review-section">
-            <h3>채널 성과 <span className="muted">(쇼츠·카드뉴스 — 매일 자동 수집)</span></h3>
+            <h3>블로그 성과 <span className="muted">발행 {s?.count ?? 0} · 측정 {s?.measured ?? 0} · 강화 반영 {data.strategy.measuredPieces}</span></h3>
+            {data.pieces.length === 0 ? (
+              <p className="muted">발행된 글이 아직 없습니다. 검토 탭에서 발행 후 성과를 수집하세요.</p>
+            ) : (
+              <div className="perf-table-wrap">
+                <table className="perf-table">
+                  <thead>
+                    <tr>
+                      <th>제목</th><th>상태</th><th>조회수</th><th>체류</th>
+                      <th>유입 키워드(상위)</th><th>SEO</th><th title="카드뉴스"><Ico name="cards" size={13} /></th><th title="숏폼"><Ico name="play" size={13} /></th><th>측정</th><th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.pieces.map((p) => (
+                      <tr key={p.id}>
+                        <td className="perf-title">
+                          <div className="perf-title-row">
+                            {p.publishedUrl
+                              ? <a href={p.publishedUrl} target="_blank" rel="noreferrer" title={p.title}>{p.title}</a>
+                              : <span className="perf-title-txt" title={p.title}>{p.title}</span>}
+                            {p.keyword && <span className="chip"><Ico name="location" size={11} /> {p.keyword}</span>}
+                          </div>
+                        </td>
+                        <td><span className="badge">{STAGE_LABEL[p.stage] ? <><Ico name={STAGE_LABEL[p.stage].icon} size={10} /> {STAGE_LABEL[p.stage].label}</> : p.stage}</span></td>
+                        <td className="perf-r">{p.views != null ? p.views.toLocaleString() : "—"}</td>
+                        <td className="perf-r">{p.dwellSec != null ? `${p.dwellSec}s` : "—"}</td>
+                        <td className="perf-inflow">
+                          {p.inflow.length === 0 ? <span className="muted">—</span>
+                            : p.inflow.slice(0, 4).map((k) => (
+                              <span key={k.keyword} className="chip">{k.keyword} {k.count}</span>
+                            ))}
+                        </td>
+                        <td className="perf-r">{typeof p.seoScore === "number" ? p.seoScore : "—"}</td>
+                        {/* 파생 콘텐츠 세트 완성 여부 — ✓ 완성 / … 생성 중 / — 없음 */}
+                        <td className="perf-r" title={p.derived?.cardnews ? `카드뉴스 ${p.derived.cardnews.stage}` : "카드뉴스 없음"}>
+                          {p.derived?.cardnews ? (p.derived.cardnews.stage === "ready" ? "✓" : p.derived.cardnews.stage === "error" ? <Ico name="triangle-exclamation" size={11} /> : "…") : "—"}
+                        </td>
+                        <td className="perf-r" title={p.derived?.shorts ? `숏폼 ${p.derived.shorts.stage}` : "숏폼 없음"}>
+                          {p.derived?.shorts ? (p.derived.shorts.stage === "ready" ? "✓" : p.derived.shorts.stage === "error" ? <Ico name="triangle-exclamation" size={11} /> : "…") : "—"}
+                        </td>
+                        <td className="perf-r muted">{p.samples || "—"}</td>
+                        <td className="perf-r"><button className="btn ghost" title="카드 삭제" onClick={() => doDelete(p.id, p.title)}><Ico name="trash" size={12} /></button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* 쇼츠·카드뉴스 성과 — 발행된 것만, 수집 전 값은 — 표시(합계는 상단 요약 카드). */}
+          <div className="review-section">
+            <h3>쇼츠·카드뉴스 성과 <span className="muted">(매일 자동 수집)</span></h3>
             {ch && (ch.shorts.length > 0 || ch.cardnews.length > 0) ? (
               <>
-                <div className="perf-summary">
-                  <div className="perf-card"><div className="perf-num">{ch.summary.shortsYtViews.toLocaleString()}</div><div className="perf-lbl">쇼츠 유튜브 조회</div></div>
-                  <div className="perf-card"><div className="perf-num">{ch.summary.reelsViews.toLocaleString()}</div><div className="perf-lbl">릴스 조회</div></div>
-                  <div className="perf-card"><div className="perf-num">{ch.summary.cardnewsViews.toLocaleString()}</div><div className="perf-lbl">카드뉴스 조회</div></div>
-                </div>
                 {ch.shorts.length > 0 && (
                   <div className="perf-table-wrap">
                     <table className="perf-table">
@@ -153,57 +200,6 @@ export default function PerformanceView() {
             )}
           </div>
 
-          {/* 글별 성과 표 */}
-          <div className="review-section">
-            <h3>글별 성과</h3>
-            {data.pieces.length === 0 ? (
-              <p className="muted">발행된 글이 아직 없습니다. 검토 탭에서 발행 후 성과를 수집하세요.</p>
-            ) : (
-              <div className="perf-table-wrap">
-                <table className="perf-table">
-                  <thead>
-                    <tr>
-                      <th>제목</th><th>상태</th><th>조회수</th><th>체류</th>
-                      <th>유입 키워드(상위)</th><th>SEO</th><th title="카드뉴스"><Ico name="cards" size={13} /></th><th title="숏폼"><Ico name="play" size={13} /></th><th>측정</th><th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.pieces.map((p) => (
-                      <tr key={p.id}>
-                        <td className="perf-title">
-                          <div className="perf-title-row">
-                            {p.publishedUrl
-                              ? <a href={p.publishedUrl} target="_blank" rel="noreferrer" title={p.title}>{p.title}</a>
-                              : <span className="perf-title-txt" title={p.title}>{p.title}</span>}
-                            {p.keyword && <span className="chip"><Ico name="location" size={11} /> {p.keyword}</span>}
-                          </div>
-                        </td>
-                        <td><span className="badge">{STAGE_LABEL[p.stage] ? <><Ico name={STAGE_LABEL[p.stage].icon} size={10} /> {STAGE_LABEL[p.stage].label}</> : p.stage}</span></td>
-                        <td className="perf-r">{p.views != null ? p.views.toLocaleString() : "—"}</td>
-                        <td className="perf-r">{p.dwellSec != null ? `${p.dwellSec}s` : "—"}</td>
-                        <td className="perf-inflow">
-                          {p.inflow.length === 0 ? <span className="muted">—</span>
-                            : p.inflow.slice(0, 4).map((k) => (
-                              <span key={k.keyword} className="chip">{k.keyword} {k.count}</span>
-                            ))}
-                        </td>
-                        <td className="perf-r">{typeof p.seoScore === "number" ? p.seoScore : "—"}</td>
-                        {/* 파생 콘텐츠 세트 완성 여부 — ✓ 완성 / … 생성 중 / — 없음 */}
-                        <td className="perf-r" title={p.derived?.cardnews ? `카드뉴스 ${p.derived.cardnews.stage}` : "카드뉴스 없음"}>
-                          {p.derived?.cardnews ? (p.derived.cardnews.stage === "ready" ? "✓" : p.derived.cardnews.stage === "error" ? <Ico name="triangle-exclamation" size={11} /> : "…") : "—"}
-                        </td>
-                        <td className="perf-r" title={p.derived?.shorts ? `숏폼 ${p.derived.shorts.stage}` : "숏폼 없음"}>
-                          {p.derived?.shorts ? (p.derived.shorts.stage === "ready" ? "✓" : p.derived.shorts.stage === "error" ? <Ico name="triangle-exclamation" size={11} /> : "…") : "—"}
-                        </td>
-                        <td className="perf-r muted">{p.samples || "—"}</td>
-                        <td className="perf-r"><button className="btn ghost" title="카드 삭제" onClick={() => doDelete(p.id, p.title)}><Ico name="trash" size={12} /></button></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
         </>
       )}
     </div>
