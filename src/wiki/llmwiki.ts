@@ -77,6 +77,10 @@ export function slugify(s: string): string {
   }
   return capSlugBytes(base);
 }
+/** 표기 변형 흡수 키(2026-07-16 근사중복 병합) — NFC·소문자·문자/숫자 외 제거. '가을 등산'='가을등산'. */
+function compactKey(s: string): string {
+  return (s || '').normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
 /** 구 슬러그 알고리즘 재현(1회 수선 판정용) — v1: 80자 절단만, v2: 절단+NFD 캡. */
 function legacySlugsOf(title: string): Set<string> {
   const base = (title || '').trim().toLowerCase()
@@ -334,7 +338,14 @@ export class LlmWiki {
     sources?: string[]; contributors?: string[]; aliases?: string[]; rebuts?: string[];
   }): WikiPage {
     const slug = slugify(input.title);
-    const existing = this.getPage(slug);
+    let existing = this.getPage(slug);
+    // 표기 변형 근사중복 흡수(2026-07-16) — 공백·특수문자만 다른 제목이 slugify 정확 일치를 비껴가
+    // 병렬 페이지가 되던 문제(감사: 가을-등산/가을등산 등). compact 키가 같은 기존 페이지(제목·별칭)가
+    // 있으면 새 페이지 대신 그쪽으로 머지한다. 결정적 계층 — 의미 중복 판정·병합은 mergePages 몫.
+    if (!existing) {
+      const key = compactKey(input.title);
+      existing = this.allPages().find((p) => compactKey(p.title) === key || p.aliases.some((al) => compactKey(al) === key));
+    }
     const today = nowDate();
     if (existing) {
       const merged: WikiPage = {
@@ -344,7 +355,8 @@ export class LlmWiki {
         summary: input.summary || existing.summary,
         sources: [...new Set([...existing.sources, ...(input.sources ?? [])])],
         contributors: [...new Set([...existing.contributors, ...(input.contributors ?? [])])],
-        aliases: [...new Set([...existing.aliases, ...(input.aliases ?? [])])],
+        aliases: [...new Set([...existing.aliases, ...(input.aliases ?? []),
+          ...(input.title !== existing.title ? [input.title] : [])])], // 흡수된 표기는 별칭으로 보존
         rebuts: [...new Set([...existing.rebuts, ...(input.rebuts ?? [])])],
         updated: today,
         body: existing.body.trim() + `\n\n## 갱신 (${today})\n${input.body.trim()}\n`,
@@ -558,6 +570,66 @@ export class LlmWiki {
   }
 
   /** 페이지 1건 삭제(파일 제거) — 선택적 재정비(대형 원문 재청크) 등에서 원본 교체용. */
+  /**
+   * 근사중복 병합(2026-07-16, 감사 잔여 ①) — loser 를 winner 로 흡수: 본문은 '병합' 섹션으로 덧대고
+   * 메타(aliases·sources·contributors·rebuts)는 합집합, 전 페이지의 [[링크]](파이프 표시명 보존)와
+   * rebuts 를 winner 로 재지정한 뒤 loser 를 삭제한다. '같은 개념인가'의 판정은 호출자(LLM 판정 백필·
+   * 표기 흡수는 upsertPage) 책임 — 엔진은 실행만. 실패·미존재는 false(무해).
+   */
+  mergePages(winnerSlug: string, loserSlug: string): Promise<boolean> {
+    return this.serialize(async () => {
+      if (!winnerSlug || !loserSlug || winnerSlug === loserSlug) return false;
+      const w = this.getPage(winnerSlug);
+      const l = this.getPage(loserSlug);
+      if (!w || !l) return false;
+      const today = nowDate();
+      const merged: WikiPage = {
+        ...w,
+        aliases: [...new Set([...w.aliases, ...l.aliases, l.title])].filter((al) => al !== w.title),
+        sources: [...new Set([...w.sources, ...l.sources])],
+        contributors: [...new Set([...w.contributors, ...l.contributors])],
+        rebuts: [...new Set([...w.rebuts, ...l.rebuts])].filter((r) => r !== winnerSlug && r !== loserSlug),
+        updated: today,
+        body: w.body.trim() + `\n\n## 병합 (${today} — "${l.title}" 흡수)\n${l.body.trim()}\n`,
+        links: [],
+      };
+      // 승자 자신의 본문·요약 속 loser 링크는 자기참조가 되므로 평문으로 치환.
+      const LINKS = /\[\[([^\]|]+)(\|[^\]]+)?\]\]/g;
+      const unlinkLoser = (s: string): string =>
+        s.replace(LINKS, (m0, target: string, pipe?: string) =>
+          slugify(target) === loserSlug ? ((pipe ?? '').slice(1) || w.title) : m0);
+      merged.body = unlinkLoser(merged.body);
+      merged.summary = unlinkLoser(merged.summary);
+      merged.links = outboundLinks(merged.body);
+      this.writePage(merged);
+      // 참조 재지정 — 본문·요약의 [[링크]] 해석이 loser 인 것과 rebuts 배열(파이프 표시명 보존).
+      for (const p of this.allPages()) {
+        if (p.slug === winnerSlug) continue;
+        let changed = false;
+        const relink = (s: string): string => s.replace(LINKS, (m0, target: string, pipe?: string) => {
+          if (slugify(target) !== loserSlug) return m0;
+          changed = true;
+          return `[[${w.title}${pipe ?? ''}]]`;
+        });
+        const body = relink(p.body);
+        const summary = relink(p.summary);
+        const rebuts = [...new Set(p.rebuts.map((r) => (r === loserSlug ? winnerSlug : r)))].filter((r) => r !== p.slug);
+        const rebChanged = rebuts.length !== p.rebuts.length || rebuts.some((r, i) => r !== p.rebuts[i]);
+        if (changed || rebChanged) {
+          p.body = body;
+          p.summary = summary;
+          p.rebuts = rebuts;
+          p.links = outboundLinks(body);
+          this.writePage(p);
+        }
+      }
+      this.deletePage(loserSlug);
+      this.rebuildIndex();
+      this.appendLog('maintain', `근사중복 병합 — "${l.title}" → "${w.title}"`);
+      return true;
+    });
+  }
+
   deletePage(slug: string): boolean {
     try { fs.unlinkSync(this.pagePath(slug)); return true; } catch { return false; }
   }

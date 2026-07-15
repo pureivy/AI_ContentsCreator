@@ -379,3 +379,53 @@ describe('compileDebateOverview — 토론→종합 증분 컴파일', () => {
     expect(await w.compileDebateOverview({ topic: 't', model: 'm', positions: [] })).toBeNull();
   });
 });
+
+// 근사중복 병합(2026-07-16, 감사 잔여 ①) — 표기 변형은 결정적 흡수, 의미 중복은 mergePages 로 병합.
+describe('upsertPage — 표기 변형(공백·특수문자) 근사중복 흡수', () => {
+  it("'가을 등산'이 이미 있으면 '가을등산' upsert 는 새 페이지 대신 기존에 머지", () => {
+    const w = new LlmWiki(dir);
+    const a = w.upsertPage({ title: '가을 등산', type: 'concept', body: '원본' });
+    const b = w.upsertPage({ title: '가을등산', type: 'concept', body: '변형 표기 본문' });
+    expect(b.slug).toBe(a.slug); // 새 파일 없음
+    const p = w.getPage(a.slug)!;
+    expect(p.body).toContain('## 갱신');
+    expect(p.aliases).toContain('가을등산'); // 흡수된 표기는 별칭으로
+    expect(w.allPages().filter((x) => x.type === 'concept')).toHaveLength(1);
+  });
+  it('별칭(alias)과의 표기 일치도 흡수한다', () => {
+    const w = new LlmWiki(dir);
+    const a = w.upsertPage({ title: 'SERP 경쟁', type: 'concept', body: 'b', aliases: ['검색결과 경쟁'] });
+    const b = w.upsertPage({ title: '검색결과경쟁', type: 'concept', body: 'b2' });
+    expect(b.slug).toBe(a.slug);
+  });
+});
+
+describe('mergePages — 의미 중복 병합(메타 합집합·참조 재지정·흡수 삭제)', () => {
+  it('본문 병합 섹션·aliases/sources 합집합·타 페이지 [[링크]]·rebuts 재지정·loser 삭제·index 반영', async () => {
+    const w = new LlmWiki(dir);
+    w.upsertPage({ title: '심사 프로세스', type: 'concept', body: '5단계 절차', sources: ['run:a'] });
+    w.upsertPage({ title: '심사절차', type: 'concept', body: '4단계 요약', sources: ['run:b'], aliases: ['심사 단계'] });
+    w.upsertPage({ title: '지정 신청', type: 'concept', body: '신청 후 [[심사절차]]를 거친다. 상세는 [[심사절차|절차 문서]] 참고.' });
+    const critique = w.upsertPage({ title: '비평 노드', type: 'debate', body: 'x', rebuts: [slugify('심사절차')] });
+    const ok = await w.mergePages(slugify('심사 프로세스'), slugify('심사절차'));
+    expect(ok).toBe(true);
+    expect(w.getPage(slugify('심사절차'))).toBeUndefined(); // loser 삭제
+    const win = w.getPage(slugify('심사 프로세스'))!;
+    expect(win.body).toContain('## 병합');
+    expect(win.body).toContain('4단계 요약');
+    expect(win.aliases).toEqual(expect.arrayContaining(['심사절차', '심사 단계']));
+    expect(win.sources).toEqual(expect.arrayContaining(['run:a', 'run:b']));
+    const ref = w.getPage(slugify('지정 신청'))!;
+    expect(ref.body).toContain('[[심사 프로세스]]');
+    expect(ref.body).toContain('[[심사 프로세스|절차 문서]]'); // 파이프 표시명 보존
+    expect(ref.body).not.toContain('[[심사절차');
+    expect(w.getPage(critique.slug)!.rebuts).toEqual([slugify('심사 프로세스')]);
+    expect(fs.readFileSync(path.join(dir, 'index.md'), 'utf-8')).not.toContain('[[심사절차]]');
+  });
+  it('없는 슬러그·자기 병합은 false', async () => {
+    const w = new LlmWiki(dir);
+    w.upsertPage({ title: 'x', type: 'concept', body: 'b' });
+    expect(await w.mergePages(slugify('x'), slugify('x'))).toBe(false);
+    expect(await w.mergePages(slugify('x'), '없는것')).toBe(false);
+  });
+});
