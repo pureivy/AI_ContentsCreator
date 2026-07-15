@@ -75,12 +75,14 @@ function reinforceCardnews(card: CardNews, m: MetricSample): number {
     }
   }
   try {
-    llmWikiFor(brand).upsertPage({
+    const w = llmWikiFor(brand);
+    w.upsertPage({
       title: `카드뉴스 성과: ${card.topic}`, type: 'performance',
       body:
         `도달 ${m.reach ?? 0} · 저장 ${m.saved ?? 0} · 공유 ${m.shares ?? 0} · 조회 ${m.views} · 좋아요 ${m.likes ?? 0} · 댓글 ${m.comments ?? 0} · 성과신호 ${signal.toFixed(2)}\n` +
         `키워드: ${card.keyword ?? '-'} · 브랜드: ${card.brand ?? '범용'}\n` +
-        (card.igPermalink ? `\n[근거: ${card.igPermalink}]` : ''),
+        (card.igPermalink ? `\n[근거: ${card.igPermalink}]` : '') +
+        w.relatedLine([card.keyword], [`${card.topic} (요약)`]),
       summary: `카드뉴스 "${card.topic}" 성과신호 ${signal.toFixed(2)} (도달 ${m.reach ?? 0}·저장 ${m.saved ?? 0})`,
       sources: [card.igPermalink ? `perf:${card.igPermalink}` : 'perf:meta'],
       aliases: card.keyword ? [card.keyword] : [],

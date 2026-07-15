@@ -51,13 +51,15 @@ export async function reinforceFromPerformance(pieceId: string, metrics: MetricS
   try {
     const topKw = (metrics.searchInflow ?? []).slice(0, 5)
       .map((k) => `- ${k.keyword} (${k.count}${k.rank ? `, ${k.rank}위` : ''})`).join('\n');
-    llmWikiFor(piece.brand).upsertPage({
+    const w = llmWikiFor(piece.brand);
+    w.upsertPage({
       title: `성과: ${piece.title}`, type: 'performance',
       body:
         `조회 ${metrics.views}회${metrics.dwellSec ? ` · 체류 ${metrics.dwellSec}s` : ''} · 성과신호 ${signal.toFixed(2)}\n` +
         `타겟 키워드: ${piece.keyword ?? '-'} · 서브니치: ${piece.subNiche ?? '-'}\n` +
         `유입 키워드:\n${topKw || '- (없음)'}\n` +
-        (piece.publishedUrl ? `\n[근거: ${piece.publishedUrl}]` : ''),
+        (piece.publishedUrl ? `\n[근거: ${piece.publishedUrl}]` : '') +
+        w.relatedLine([piece.keyword], [`${piece.title} (요약)`]),
       summary: `${piece.title} 성과신호 ${signal.toFixed(2)} (조회 ${metrics.views})`,
       sources: [piece.publishedUrl ? `perf:${piece.publishedUrl}` : 'perf:manual'],
       aliases: piece.keyword ? [piece.keyword] : [],

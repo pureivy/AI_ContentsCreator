@@ -116,12 +116,14 @@ function reinforceShorts(s: Shorts, m: MetricSample): number {
     }
   }
   try {
-    llmWikiFor(brand).upsertPage({
+    const w = llmWikiFor(brand);
+    w.upsertPage({
       title: `쇼츠 성과: ${title}`, type: 'performance',
       body:
         `조회 ${m.views}회 · 좋아요 ${m.likes ?? 0} · 댓글 ${m.comments ?? 0} · 성과신호 ${signal.toFixed(2)}\n` +
         `키워드: ${keyword ?? '-'} · 브랜드: ${s.brand ?? '범용'}\n` +
-        (s.youtubeUrl ? `\n[근거: ${s.youtubeUrl}]` : ''),
+        (s.youtubeUrl ? `\n[근거: ${s.youtubeUrl}]` : '') +
+        w.relatedLine([keyword], [`${s.topic} (요약)`]),
       summary: `쇼츠 "${title}" 성과신호 ${signal.toFixed(2)} (조회 ${m.views})`,
       sources: [s.youtubeUrl ? `perf:${s.youtubeUrl}` : 'perf:youtube'],
       aliases: keyword ? [keyword] : [],

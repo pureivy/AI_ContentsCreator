@@ -59,9 +59,12 @@ export async function reflectAndLearn(
   for (const [id, insights] of lessonsByAgent) {
     try {
       const nm = roleById.get(id)?.name ?? id;
-      llmWiki().upsertPage({
+      const w = llmWiki();
+      w.upsertPage({
         title: `${nm} 교훈`, type: 'lesson',
-        body: insights.map((s) => `- ${s}`).join('\n'),
+        // 발원 런의 주제 요약 페이지와 [[링크]](실재 시) — 교훈 노드가 그래프에서 지식 본체와
+        // 분리된 위성 섬이 되던 문제(2026-07-16 그래프 검토) 해소. ingest 가 reflect 보다 먼저라 대개 실재.
+        body: insights.map((s) => `- ${s}`).join('\n') + w.relatedLine([], [`${topic} (요약)`]),
         aliases: [`role:${id}`], contributors: [nm], summary: insights[0]!.slice(0, 100),
       });
     } catch { /* 위키 적재 실패는 학습을 막지 않음 */ }

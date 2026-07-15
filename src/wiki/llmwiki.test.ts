@@ -334,3 +334,16 @@ describe('ensureSchema — 스키마 문서를 엔진 현행판으로 동기화'
     expect(doc).not.toContain('pages/*.md');
   });
 });
+
+// 교훈·성과 페이지가 작성자·태그로만 연결된 '위성 섬'이 되던 문제(2026-07-16 그래프 검토) —
+// 생성부가 이 헬퍼로 지식 본체와 [[링크]]를 만든다. always=무조건(스텁=생성 후보 신호), ifExists=실재 시만.
+describe('relatedLine — 그래프 연결용 관련 링크 줄', () => {
+  it('always 는 무조건, ifExists 는 실재 페이지만, 없으면 빈 문자열', () => {
+    const w = new LlmWiki(dir);
+    w.upsertPage({ title: '여름 화분 (요약)', type: 'source', body: 'b' });
+    expect(w.relatedLine(['여름화분'], ['여름 화분 (요약)', '없는 페이지']))
+      .toBe('\n\n관련: [[여름화분]] · [[여름 화분 (요약)]]');
+    expect(w.relatedLine([], ['없는 페이지'])).toBe('');
+    expect(w.relatedLine([undefined, '여름화분', '여름화분'], [])).toBe('\n\n관련: [[여름화분]]'); // 빈값·중복 정리
+  });
+});

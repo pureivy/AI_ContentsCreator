@@ -518,6 +518,16 @@ export class LlmWiki {
     try { fs.unlinkSync(this.pagePath(slug)); return true; } catch { return false; }
   }
 
+  /** 그래프 연결용 '관련' 링크 줄 — 교훈·성과 페이지가 작성자·태그로만 연결된 위성 섬이 되던 문제
+   *  (2026-07-16 그래프 검토) 해소. always=무조건 링크(미생성이면 스텁=정직한 생성 후보 신호),
+   *  ifExists=실재 페이지만(스텁 남발 방지). 링크가 없으면 빈 문자열. */
+  relatedLine(always: Array<string | undefined>, ifExists: Array<string | undefined>): string {
+    const links: string[] = [];
+    for (const t of always) if (t?.trim()) links.push(`[[${t.trim()}]]`);
+    for (const t of ifExists) if (t?.trim() && this.getPage(slugify(t.trim()))) links.push(`[[${t.trim()}]]`);
+    return links.length ? `\n\n관련: ${[...new Set(links)].join(' · ')}` : '';
+  }
+
   appendLog(op: string, title: string): void {
     const line = `## [${nowDate()}] ${op} | ${esc(title)}\n`;
     fs.appendFileSync(path.join(this.dir, 'log.md'), line, 'utf-8');
