@@ -1255,16 +1255,18 @@ button.upload-retry:hover { background: var(--panel2); }
 
 .brain-body { flex: 1; display: flex; min-height: 0; position: relative; }
 .brain-canvas { flex: 1; position: relative; min-width: 0; background: var(--bg); }
+/* 두뇌 캔버스 오버레이(빈 상태·범례)는 테마 fg 변수 금지 — 그래프 캔버스가 고정 다크(#0d1117)라
+   라이트 테마에서 fg 변수가 검정으로 뒤집히면 검은 바탕 위 검은 글자가 된다(2026-07-15 사용자 보고). */
 .brain-empty {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  color: var(--fg-neutral-alternative); font-size: 14px; text-align: center; padding: 20px;
+  color: rgba(255,255,255,0.61); font-size: 14px; text-align: center; padding: 20px;
 }
 .brain-legend {
   position: absolute; left: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 8px 12px;
   max-width: 60%; padding: 8px 12px; background: rgba(22,27,34,0.82);
-  border: 1px solid var(--border); border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.14); border-radius: 10px;
 }
-.legend-item { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--fg-neutral-strong); }
+.legend-item { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: rgba(255,255,255,0.88); }
 .legend-item i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .legend-item i.ring-rebut { background: transparent; border: 1.5px dashed #ff4242; }
 
