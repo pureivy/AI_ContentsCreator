@@ -5,7 +5,7 @@ type: debate
 aliases: ["run:05cc0efb9ef8","debate"]
 sources: []
 contributors: ["정하람"]
-rebuts: ["여름-욕실-곰팡이-예방제거-방법-습기-제거-팁까지-리서치seo팀-입장-05cc0efb"]
+rebuts: ["여름-욕실-곰팡이-예방제거-방법-습기-제거-팁까지-리서-b6c76582"]
 updated: 2026-07-07
 summary: [비평] ## 팩트체커 검토 — 리서치·SEO팀 브리프 v2 먼저 절차 확인: 이번 라운드 산출물은 **리서치 브리프 1건뿐이고 작가 초안이 없다.**
 ---

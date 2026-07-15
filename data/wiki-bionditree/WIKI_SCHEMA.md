@@ -4,12 +4,12 @@
 
 ## 레이아웃
 - `../raw/<날짜>/` — 원본 소스(불변)
-- `pages/*.md` — 엔티티/개념/소스요약 페이지. YAML 프런트매터 + 본문 `[[위키링크]]`.
+- `*.md`(위키 루트, 평면) — 페이지. YAML 프런트매터 + 본문 `[[위키링크]]`. (`index.md`·`log.md`·`WIKI_SCHEMA.md` 는 예약 파일)
 - `index.md` — 전 페이지 카탈로그(카테고리별, 1줄 요약). 인덱스 우선 탐색의 진입점.
 - `log.md` — append-only 타임라인 `## [YYYY-MM-DD] op | Title`.
 
 ## 페이지 타입
-entity(사람·조직·도구) · concept(개념·주제) · source(소스 요약) · overview(종합) · answer(질의 답변)
+entity(사람·조직·도구) · concept(개념·주제) · source(소스 요약) · overview(종합) · answer(질의 답변) · lesson(직원 교훈) · debate(런별 토론 입장·비평 — rebuts 엣지) · performance(성과 신호)
 
 ## 워크플로우
 - ingest: 소스/산출물 읽기 → 요약 페이지 작성 → 엔티티/개념 페이지 생성·갱신([[링크]] 유지) → index 재생성 → log 추가
