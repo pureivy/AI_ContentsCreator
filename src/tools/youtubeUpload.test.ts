@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { buildVideoMeta, buildMultipartBody, extractVideoId } from './youtubeUpload';
 
-describe('buildVideoMeta — 캡·해시태그 합성·private 고정(순수)', () => {
+describe('buildVideoMeta — 캡·해시태그 합성·private·AI 공개 고정(순수)', () => {
   it('꺾쇠 제거·설명에 해시태그 줄·tags 변환(# 제거·빈 항목 제외)', () => {
     const m = buildVideoMeta('제목 <b>테스트</b>', '설명', ['#shorts', '#화분', '']) as {
       snippet: { title: string; description: string; tags: string[]; categoryId: string };
-      status: { privacyStatus: string; selfDeclaredMadeForKids: boolean };
+      status: { privacyStatus: string; selfDeclaredMadeForKids: boolean; containsSyntheticMedia: boolean };
     };
     expect(m.snippet.title).toBe('제목 b테스트/b');
     expect(m.snippet.description).toBe('설명\n\n#shorts #화분');
@@ -13,6 +13,8 @@ describe('buildVideoMeta — 캡·해시태그 합성·private 고정(순수)', 
     expect(m.snippet.categoryId).toBe('22');
     expect(m.status.privacyStatus).toBe('private');
     expect(m.status.selfDeclaredMadeForKids).toBe(false);
+    // AI 사용 공개('예') — 쇼츠는 전량 AI 생성(스크립트·TTS·배경)이라 상시 선언(유튜브 정책 의무).
+    expect(m.status.containsSyntheticMedia).toBe(true);
   });
   it('제목 100자 캡·빈 제목 폴백, 설명 5000자 캡', () => {
     const m = buildVideoMeta('x'.repeat(120), 'y'.repeat(6000), []) as { snippet: { title: string; description: string } };

@@ -18,7 +18,9 @@ export function buildVideoMeta(title: string, description: string, hashtags: str
   const tags = hashtags.map((h) => clean(h.replace(/^#/, '')).trim().slice(0, 30)).filter(Boolean).slice(0, 15);
   return {
     snippet: { title: t, description: desc, tags, categoryId: '22' },
-    status: { privacyStatus: 'private', selfDeclaredMadeForKids: false },
+    // containsSyntheticMedia: 스튜디오의 'AI 사용(변형·합성 콘텐츠) 공개 — 예' 체크와 동일.
+    // 쇼츠는 전량 AI 생성(스크립트·TTS 음성·AI 배경/클립)이라 상시 true — 유튜브 공개 의무 준수.
+    status: { privacyStatus: 'private', selfDeclaredMadeForKids: false, containsSyntheticMedia: true },
   };
 }
 
