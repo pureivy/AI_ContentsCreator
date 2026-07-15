@@ -16,6 +16,7 @@ import { getCompany } from '../agents/company-loader';
 import { microJSON } from '../orchestrator/agent';
 import { asString } from '../util/str';
 import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix } from '../content/brand';
+import { collectExistingContent, findSimilarContent } from '../content/novelty';
 
 export interface AutoCycleDeps<T = string> {
   /** 사이클 주기(ms). ≤0 이면 스케줄러는 no-op. */
@@ -115,8 +116,9 @@ const IDEA_SYSTEM =
   '다음에 제작하면 검색 노출·유입에 가치있는 네이버 블로그(정보/하우투·리뷰) 콘텐츠 아이디어 한 개를 제안하라.\n' +
   '- 검색 의도가 뚜렷하고 실용적인 주제(하우투/비교/리뷰/체크리스트 등). 시의성·계절성도 고려한다.\n' +
   '- [브랜드 컨텍스트]가 있으면 그 기업의 제품·타겟 고객의 관심사와 자연스럽게 연결되는 주제를 우선하라(노골적 광고성 주제 금지 — 독자에게 유용한 정보가 우선).\n' +
-  '- [성과 상위 키워드]가 있으면 그 흐름을 잇거나 확장하는 주제를 우선한다. 없으면(콜드스타트) 영역 안에서 다양하게 탐색한다.\n' +
+  '- [성과 상위 키워드]는 어떤 분야가 통했는지의 참고다 — 그 분야의 인접·연관 영역에서 새로운 키워드를 발굴하라(성과 키워드 자체나 그 변형의 재사용은 금지). 없으면(콜드스타트) 영역 안에서 다양하게 탐색한다.\n' +
   '- [최근 제작]·[최근 자율주제]와 중복되지 않게 하라.\n' +
+  '- [기존 콘텐츠] 목록과 주제·키워드가 유사하면 안 된다 — 같은 키워드나 그것을 포함·확장한 키워드 재사용 금지, 완전히 새로운 각도의 주제를 골라라(사용자 원칙).\n' +
   '- title 은 클릭·검색에 유리한 한국어 제목, keyword 는 검색량 있을 법한 핵심 타겟 키워드 1개, subNiche 는 세부 분야다.';
 
 /**
@@ -148,23 +150,41 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   const coldstart = seeds.length
     ? `(성과 데이터 없음 — 아래 브랜드 시드 키워드에서 출발해 탐색)\n${seeds.map((k) => `- ${k}`).join('\n')}`
     : '(없음 — 콜드스타트)';
-  const user =
+  // 신규성 가드(사용자 원칙 2026-07-15) — 브랜드의 기존 글·쇼츠·카드뉴스 제목+키워드와 유사 금지.
+  // 프롬프트 주입(사전)과 findSimilarContent 사후 검사 이중 방어 — 유사하면 기각 사유를 담아 1회 재시도.
+  const existing = collectExistingContent(activeBrandSlug() || undefined);
+  const existingLines = existing.slice(0, 30)
+    .map((e) => `- (${e.kind}) ${e.title}${e.keyword ? ` [키워드: ${e.keyword}]` : ''}`).join('\n');
+  const baseUser =
     (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +
     `[성과 상위 키워드]\n${winners || coldstart}\n\n` +
+    `[기존 콘텐츠 — 주제·키워드 유사 금지]\n${existingLines || '(없음)'}\n\n` +
     `[최근 제작 — 중복 회피]\n${done || '(없음)'}\n\n` +
     `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}\n\n` +
     (productLines.length ? `subNiche 는 반드시 다음 제품 라인 중 가장 관련 있는 하나로: ${productLines.join(' | ')}\n\n` : '') +
     `형식: {"title":"...","keyword":"...","subNiche":"..."}`;
 
-  const o = await microJSON<{ title?: unknown; keyword?: unknown; subNiche?: unknown }>(
-    micro, IDEA_SYSTEM, user, { maxOutputTokens: 200, signal },
-  ).catch(() => null);
-  const title = asString(o?.title).trim().replace(/^["'\-•\s]+/, '').slice(0, 120);
-  if (!title || recentAuto.includes(title)) return null;
-  recentAuto.push(title);
-  if (recentAuto.length > 20) recentAuto.shift();
-  return { title, keyword: asString(o?.keyword).trim() || undefined, subNiche: asString(o?.subNiche).trim() || undefined };
+  let rejectNote = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const o = await microJSON<{ title?: unknown; keyword?: unknown; subNiche?: unknown }>(
+      micro, IDEA_SYSTEM, rejectNote ? `${baseUser}\n\n${rejectNote}` : baseUser, { maxOutputTokens: 200, signal },
+    ).catch(() => null);
+    const title = asString(o?.title).trim().replace(/^["'\-•\s]+/, '').slice(0, 120);
+    if (!title || recentAuto.includes(title)) return null;
+    const keyword = asString(o?.keyword).trim() || undefined;
+    const sim = findSimilarContent({ title, ...(keyword ? { keyword } : {}) }, existing);
+    if (sim.length) {
+      const top = sim[0]!;
+      rejectNote = `[직전 제안 기각 — 기존 ${top.kind} "${top.title}"와(과) ${top.via === 'keyword' ? '키워드' : '주제'} 유사] 완전히 다른 주제·키워드로 다시 제안하라.`;
+      console.log(`[auto-cycle] 아이디어 기각(기존과 유사) — "${title}" ≈ (${top.kind}) "${top.title}"`);
+      continue;
+    }
+    recentAuto.push(title);
+    if (recentAuto.length > 20) recentAuto.shift();
+    return { title, keyword, subNiche: asString(o?.subNiche).trim() || undefined };
+  }
+  return null; // 2회 모두 유사 — 이번 주기 스킵(다음 주기에 새 각도로 재시도)
 }
 
 // ============================================================

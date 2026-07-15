@@ -1,0 +1,109 @@
+/**
+ * 콘텐츠 신규성 가드(사용자 원칙 2026-07-15) — 신규 블로그·쇼츠·카드뉴스 기획은 기존 콘텐츠와
+ * 주제(제목)·키워드가 유사하면 지양한다. 판정은 한글 복합어에 강한 '문자 바이그램 자카드'(공백·
+ * 표기 변형에 관대) — 임베딩 없이 결정적·즉시 계산. 파생 생성(글→쇼츠·카드뉴스, sourcePieceId)은
+ * 같은 주제의 채널 전개가 설계 의도라 가드 대상이 아니다.
+ */
+import { pieceStore } from './pieces';
+import { shortsStore } from './shorts';
+import { cardNewsStore } from './cardnews';
+
+export interface ExistingContent { title: string; keyword?: string; kind: '블로그' | '쇼츠' | '카드뉴스' }
+export interface SimilarMatch { title: string; kind: string; score: number; via: 'keyword' | 'title' }
+
+/** NFC·소문자·문자/숫자 외 제거(공백 포함) — 표기 변형을 흡수한 압축 문자열. */
+function compact(s: string): string {
+  return (s || '').normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+function bigrams(s: string): Set<string> {
+  const out = new Set<string>();
+  if (s.length <= 1) { if (s) out.add(s); return out; }
+  for (let i = 0; i < s.length - 1; i++) out.add(s.slice(i, i + 2));
+  return out;
+}
+export function bigramJaccard(a: string, b: string): number {
+  const A = bigrams(compact(a)), B = bigrams(compact(b));
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const g of A) if (B.has(g)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+
+// 임계값 — 실데이터로 보정: '7월에 심는 꽃 5가지…' vs '칠월에…' ≈ 0.55(유사), 무관 주제 < 0.2.
+// 키워드는 짧아 포함·동치가 흔한 재탕 패턴('장마철 제습' ⊂ '장마철 제습기')이라 별도 규칙.
+const KW_JACCARD = 0.6;
+const TITLE_JACCARD = 0.45;
+const KW_CONTAIN_MIN = 4; // 4자 미만 포함('꽃' ⊂ '꽃나무')은 우연 — 무시
+
+export function keywordSimilar(a: string, b: string): boolean {
+  const na = compact(a), nb = compact(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const [shorter, longer] = na.length <= nb.length ? [na, nb] : [nb, na];
+  if (shorter.length >= KW_CONTAIN_MIN && longer.includes(shorter)) return true;
+  return bigramJaccard(a, b) >= KW_JACCARD;
+}
+/** 콘텐츠 제목의 범용 꼬리 토큰 — 하우투·리스트형 제목 어디에나 붙어 변별력이 없다.
+ *  이걸 세면 '여름 장미 관리 방법 총정리' vs '겨울 동백 관리 방법 총정리'처럼 무관 주제가
+ *  '관리·방법·총정리' 3겹침으로 오탐된다(2026-07-15 리뷰 실재현) — 핵심 토큰 산정에서 제외. */
+const STOP_TOKENS = new Set([
+  '방법', '총정리', '정리', '요령', '추천', '방지', '시기', '준비물', '꿀팁', '가이드',
+  '체크리스트', '비교', '후기', '리뷰', '관리', '노하우', '하는법', '초보자', '완벽', '실전',
+]);
+/** 2자 이상·비범용 토큰 집합 — 공백·구두점 분리, NFC·소문자. */
+function tokens(s: string): string[] {
+  return (s || '').normalize('NFC').toLowerCase().split(/[^\p{L}\p{N}]+/u)
+    .filter((t) => t.length >= 2 && !STOP_TOKENS.has(t));
+}
+/** 두 제목의 핵심 토큰 겹침 수 — 동치 또는 포함('제습' ⊂ '제습기')을 1로 센다(후보 토큰당 최대 1). */
+function sharedTokenCount(a: string, b: string): number {
+  const bt = tokens(b);
+  let n = 0;
+  for (const t of new Set(tokens(a))) {
+    if (bt.some((u) => t === u || t.includes(u) || u.includes(t))) n++;
+  }
+  return n;
+}
+const TITLE_SHARED_TOKENS = 3; // '장마철·실내·제습' 처럼 핵심어 3개 겹치면 문구가 달라도 같은 주제
+export function titleSimilar(a: string, b: string): boolean {
+  return bigramJaccard(a, b) >= TITLE_JACCARD || sharedTokenCount(a, b) >= TITLE_SHARED_TOKENS;
+}
+
+/** 후보(제목·키워드)를 기존 콘텐츠와 대조 — 유사 근거를 점수 내림차순으로 반환(빈 배열 = 신규). */
+export function findSimilarContent(
+  cand: { title: string; keyword?: string },
+  existing: ExistingContent[],
+): SimilarMatch[] {
+  const out: SimilarMatch[] = [];
+  for (const e of existing) {
+    if (cand.keyword && e.keyword && keywordSimilar(cand.keyword, e.keyword)) {
+      out.push({ title: e.title, kind: e.kind, score: bigramJaccard(cand.keyword, e.keyword), via: 'keyword' });
+      continue;
+    }
+    if (titleSimilar(cand.title, e.title)) {
+      out.push({ title: e.title, kind: e.kind, score: bigramJaccard(cand.title, e.title), via: 'title' });
+    }
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+
+/**
+ * 브랜드의 기존 콘텐츠 수집(제목+키워드) — 글·쇼츠·카드뉴스 최신순 limit 건.
+ * 브랜드 격리: (brand ?? '') 정확 일치만(폴백 없음 — 타 브랜드 콘텐츠는 비교 대상 아님).
+ */
+export function collectExistingContent(brand: string | undefined, limit = 60): ExistingContent[] {
+  const slug = brand ?? '';
+  const match = (b: string | undefined): boolean => (b ?? '') === slug;
+  const rows: Array<ExistingContent & { ts: string }> = [];
+  for (const p of pieceStore().list()) {
+    if (match(p.brand)) rows.push({ title: p.title, keyword: p.keyword, kind: '블로그', ts: p.updatedTs });
+  }
+  for (const s of shortsStore().list()) {
+    if (match(s.brand)) rows.push({ title: s.title || s.topic, keyword: s.keyword, kind: '쇼츠', ts: s.updatedTs });
+  }
+  for (const x of cardNewsStore().list()) {
+    if (match(x.brand)) rows.push({ title: x.topic, keyword: x.keyword, kind: '카드뉴스', ts: x.updatedTs });
+  }
+  return rows.sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, limit)
+    .map(({ ts: _ts, ...e }) => e);
+}

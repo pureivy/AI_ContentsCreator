@@ -28,6 +28,7 @@ import type { RoleDef } from '../agents/company';
 import type { RolePatch, MemberBody } from '../agents/company-loader';
 import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appendActivity, ensureScaffold, effectiveAutonomy, appendInjected, injectedLength, clearInjected, INJECTED_CAP } from '../agents/workspace';
 import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView, getYoutubeAccount, setYoutubeToken, getMetaAccount, setMetaToken, purgeCustomKeysForBrand } from '../secrets/store';
+import { collectExistingContent, findSimilarContent, type SimilarMatch } from '../content/novelty';
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
@@ -618,10 +619,27 @@ function derivedSummary(pieceId: string): DerivedSummary {
 function piecesListHandler(c: Context): Response {
   return c.json({ pieces: pieceStore().list().filter(brandMatch).map((p) => ({ ...p, derived: derivedSummary(p.id) })) });
 }
+/**
+ * 신규 기획 신규성 가드(사용자 원칙 2026-07-15) — 활성 브랜드의 기존 글·쇼츠·카드뉴스와 주제·키워드가
+ * 유사하면 유사 근거를 반환(호출부가 409 응답). force=true 로 의도적 우회 가능. 파생 생성(글→쇼츠·
+ * 카드뉴스)은 같은 주제 채널 전개가 의도라 이 가드를 타지 않는다.
+ */
+function noveltyViolation(title: string, keyword: string | undefined, force: boolean | undefined): SimilarMatch[] | null {
+  if (force) return null;
+  const sim = findSimilarContent({ title, ...(keyword ? { keyword } : {}) }, collectExistingContent(activeBrandSlug() || undefined));
+  return sim.length ? sim.slice(0, 3) : null;
+}
+const noveltyError = (sim: SimilarMatch[]): { error: string; similar: SimilarMatch[] } => ({
+  error: `기존 ${sim[0]!.kind} "${sim[0]!.title}"와(과) ${sim[0]!.via === 'keyword' ? '키워드' : '주제'}가 유사합니다 — 다른 주제·키워드로 바꿔 주세요. (의도한 재도전이면 force 로 강행)`,
+  similar: sim,
+});
+
 async function pieceCreateHandler(c: Context): Promise<Response> {
-  const body = await c.req.json<{ title?: string; keyword?: string; subNiche?: string }>().catch(() => ({}) as { title?: string; keyword?: string; subNiche?: string });
+  const body = await c.req.json<{ title?: string; keyword?: string; subNiche?: string; force?: boolean }>().catch(() => ({}) as { title?: string; keyword?: string; subNiche?: string; force?: boolean });
   const title = (body.title ?? '').trim();
   if (!title) return c.json({ error: 'title 이 필요합니다' }, 400);
+  const sim = noveltyViolation(title, body.keyword, body.force);
+  if (sim) return c.json(noveltyError(sim), 409);
   return c.json({ piece: pieceStore().create({ title, keyword: body.keyword, subNiche: body.subNiche, brand: activeBrandSlug() || undefined }) });
 }
 function pieceGetHandler(c: Context): Response {
@@ -769,10 +787,12 @@ function launchCardNewsRun(cardId: string, topic: string, opts: { sourceBody?: s
 }
 
 async function cardNewsCreateHandler(c: Context): Promise<Response> {
-  const b = await c.req.json<{ topic?: string; keyword?: string; slides?: number }>()
-    .catch(() => ({}) as { topic?: string; keyword?: string; slides?: number });
+  const b = await c.req.json<{ topic?: string; keyword?: string; slides?: number; force?: boolean }>()
+    .catch(() => ({}) as { topic?: string; keyword?: string; slides?: number; force?: boolean });
   const topic = (b.topic ?? '').trim();
   if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
+  const sim = noveltyViolation(topic, b.keyword, b.force);
+  if (sim) return c.json(noveltyError(sim), 409);
   const card = cardNewsStore().create({ topic, keyword: b.keyword, ...cardActorNames() });
   const run = launchCardNewsRun(card.id, topic, { slideCount: b.slides });
   return c.json({ card, run_id: run });
@@ -921,10 +941,12 @@ function launchShortsRun(shortsId: string, topic: string, opts: { sourceBody?: s
 }
 
 async function shortsCreateHandler(c: Context): Promise<Response> {
-  const b = await c.req.json<{ topic?: string; keyword?: string; scenes?: number }>()
-    .catch(() => ({}) as { topic?: string; keyword?: string; scenes?: number });
+  const b = await c.req.json<{ topic?: string; keyword?: string; scenes?: number; force?: boolean }>()
+    .catch(() => ({}) as { topic?: string; keyword?: string; scenes?: number; force?: boolean });
   const topic = (b.topic ?? '').trim();
   if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
+  const sim = noveltyViolation(topic, b.keyword, b.force);
+  if (sim) return c.json(noveltyError(sim), 409);
   const short = shortsStore().create({ topic, keyword: b.keyword, ...shortsActorNames() });
   const run = launchShortsRun(short.id, topic, { sceneCount: b.scenes });
   return c.json({ short, run_id: run });

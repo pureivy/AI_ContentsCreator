@@ -1,0 +1,66 @@
+import { describe, it, expect } from 'vitest';
+import { bigramJaccard, keywordSimilar, titleSimilar, findSimilarContent, type ExistingContent } from './novelty';
+
+// 콘텐츠 신규성 가드(2026-07-15 사용자 원칙) — 신규 블로그·쇼츠·카드뉴스는 기존 콘텐츠와
+// 주제·키워드가 유사하면 안 된다. 한글 복합어에 강하도록 문자 바이그램 자카드로 판정한다.
+
+describe('bigramJaccard — 정규화(NFC·소문자·특수문자/공백 제거) 후 문자 2그램 자카드', () => {
+  it('동일 문자열 = 1, 무관 문자열 ≈ 0', () => {
+    expect(bigramJaccard('장마철 제습', '장마철 제습')).toBe(1);
+    expect(bigramJaccard('장마철 제습', '가을 등산 준비물')).toBeLessThan(0.1);
+  });
+  it('표기 변형(숫자↔한글·공백)에 관대 — 같은 주제는 높은 점수', () => {
+    expect(bigramJaccard('7월에 심는 꽃 5가지, 한여름 파종 성공법', '칠월에 심는 꽃 다섯 가지 한여름 파종 성공법')).toBeGreaterThan(0.5);
+  });
+});
+
+describe('keywordSimilar — 동치·포함·고유사 키워드 차단', () => {
+  it('정규화 동치·포함관계는 유사', () => {
+    expect(keywordSimilar('장마철 제습', '장마철제습')).toBe(true);
+    expect(keywordSimilar('장마철 제습', '장마철 제습기')).toBe(true); // 포함
+  });
+  it('짧은 우연 포함은 비유사(4자 미만 포함 무시), 다른 주제는 비유사', () => {
+    expect(keywordSimilar('꽃', '꽃나무 관리')).toBe(false);
+    expect(keywordSimilar('장마철 제습', '베란다 텃밭')).toBe(false);
+  });
+});
+
+describe('titleSimilar — 주제 재탕 차단', () => {
+  it('같은 주제의 문구 변형은 유사', () => {
+    expect(titleSimilar('7월에 심는 꽃 5가지, 한여름 파종 성공법', '칠월에 심는 꽃 다섯 가지, 한여름 파종 성공법')).toBe(true);
+    expect(titleSimilar('장마철 실내 제습 꿀팁, 곰팡이 없는 여름나기', '장마철 실내 습도 낮추는 법 — 제습기 없이도')).toBe(true);
+  });
+  it('다른 주제는 통과', () => {
+    expect(titleSimilar('7월에 심는 꽃 5가지', '가을 텃밭 김장 배추 파종 시기')).toBe(false);
+  });
+});
+
+describe('findSimilarContent — 후보 vs 기존 콘텐츠(제목·키워드) 대조', () => {
+  const existing: ExistingContent[] = [
+    { title: '7월에 심는 꽃 5가지, 한여름 파종 성공법', keyword: '7월에 심는 꽃', kind: '블로그' },
+    { title: '장마철 베란다 텃밭 배수 관리', keyword: '베란다 텃밭 배수', kind: '쇼츠' },
+  ];
+  it('유사 제목·키워드를 근거와 함께 반환(점수 내림차순)', () => {
+    const m = findSimilarContent({ title: '칠월에 심는 꽃 다섯 가지 총정리', keyword: '7월에 심는 꽃 추천' }, existing);
+    expect(m.length).toBeGreaterThan(0);
+    expect(m[0]!.kind).toBe('블로그');
+    expect(['keyword', 'title']).toContain(m[0]!.via);
+  });
+  it('신규 주제는 빈 배열', () => {
+    expect(findSimilarContent({ title: '8월 화분 물주기 자동화 도구 3종', keyword: '자동 급수기' }, existing)).toEqual([]);
+  });
+  it('키워드 없는 후보는 제목만으로 판정', () => {
+    expect(findSimilarContent({ title: '장마철 베란다 텃밭 배수 관리법' }, existing).length).toBeGreaterThan(0);
+  });
+});
+
+// 리뷰 실재현 오탐(2026-07-15) — 범용 꼬리토큰('관리·방법·총정리')만 겹치는 무관 주제가 차단되면 안 된다.
+describe('titleSimilar — 범용 토큰 오탐 방지(스톱토큰)', () => {
+  it('범용 꼬리만 겹치는 무관 주제는 통과', () => {
+    expect(titleSimilar('여름 장미 관리 방법 총정리', '겨울 동백 관리 방법 총정리')).toBe(false);
+    expect(titleSimilar('실내 다육이 물주기 방법 총정리', '베란다 허브 물주기 방법 총정리')).toBe(false);
+  });
+  it('핵심 토큰 3개 겹침은 여전히 유사(스톱토큰 제외 후)', () => {
+    expect(titleSimilar('장마철 실내 제습 꿀팁, 곰팡이 없는 여름나기', '장마철 실내 습도 낮추는 법 — 제습기 없이도')).toBe(true);
+  });
+});
