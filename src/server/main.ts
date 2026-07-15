@@ -39,7 +39,7 @@ import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
-import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission } from '../autonomy/scheduler';
+import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore } from '../content/cardnews';
@@ -1699,12 +1699,22 @@ app.post('/api/runsettings', async (c) => {
 app.get('/api/health', (c) => c.json({ ok: true, backend: 'claude' }));
 app.get('/healthz', (c) => c.json({ ok: true }));
 
+// 오토런 온/오프(사용자 토글 — 대시보드 '자율' 칩 클릭). body.enabled 생략 시 반전. 재시작에도 유지.
+app.post('/autonomy/toggle', async (c) => {
+  const b = await c.req.json<{ enabled?: boolean }>().catch(() => ({} as { enabled?: boolean }));
+  const next = typeof b.enabled === 'boolean' ? b.enabled : !autoRunEnabled();
+  setAutoRunEnabled(next);
+  console.log(`[auto-cycle] 오토런 ${next ? '켜짐' : '꺼짐'} (사용자 토글)`);
+  return c.json({ ok: true, run_enabled: next });
+});
+
 // 자율 사이클 상태 — 프론트 대시보드의 '🤖 자율' 칩용. enabled 면 주기, active 면 자율 런 진행 중.
 app.get('/autonomy/status', (c) => {
   // 진행 중인 자율런 — 프론트가 유휴 시 자동 관전(watchLive)할 수 있게 run_id 를 노출한다.
   const activeAuto = [...RUNS.entries()].find(([, h]) => h.auto && h.status === 'running');
   return c.json({
     enabled: CONFIG.autoCycleMinutes > 0,
+    run_enabled: autoRunEnabled(), // 사용자 토글(칩 클릭) — enabled(주기 설정 존재)와 별개
     interval_minutes: CONFIG.autoCycleMinutes,
     shell: CONFIG.agentShell,
     active: !!activeAuto,
@@ -2566,6 +2576,7 @@ async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
 
 const stopAutoCycle = startAutoCycle<AutoWork>({
   intervalMs: CONFIG.autoCycleMinutes * 60_000,
+  isEnabled: autoRunEnabled, // 사용자 토글(대시보드 '자율' 칩 클릭) — 꺼짐이면 틱이 조용히 통과
   isBusy: () => [...RUNS.values()].some((h) => h.status === 'running'), // 자율런 포함 — 동시 1런만(단일 KV 슬롯 불변식).
   pickWork: (signal) => pickAutoWork(signal),
   launch: (w) => {

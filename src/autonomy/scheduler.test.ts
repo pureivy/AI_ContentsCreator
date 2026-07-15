@@ -98,3 +98,43 @@ describe('startDaily (일일 브리핑 스케줄)', () => {
     stop();
   });
 });
+
+// 오토런 온/오프 토글(사용자 요청 2026-07-16) — 꺼짐 상태면 틱이 아무 일도 하지 않는다.
+describe('startAutoCycle — isEnabled 게이트(오토런 토글)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it('isEnabled=false 면 pickWork 호출 없음, 켜면 다음 틱부터 재개', async () => {
+    const pickWork = vi.fn(async () => 'x');
+    const launch = vi.fn();
+    let enabled = false;
+    const stop = startAutoCycle({ intervalMs: 1000, isBusy: () => false, isEnabled: () => enabled, pickWork, launch });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(pickWork).not.toHaveBeenCalled();
+    enabled = true;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(pickWork).toHaveBeenCalled();
+    stop();
+  });
+});
+
+// 토글 영속 — 재시작에도 유지(data/_shared/autorun.json), 기본값은 온(기존 동작 불변).
+describe('autoRunEnabled/setAutoRunEnabled — 영속 라운드트립', () => {
+  it('기본 온 → 끄면 파일 영속 → 모듈 재로드에도 꺼짐 유지', async () => {
+    const os = await import('node:os');
+    const fs = await import('node:fs');
+    const pathm = await import('node:path');
+    const tmp = fs.mkdtempSync(pathm.join(os.tmpdir(), 'autorun-'));
+    process.env.GEPA_DATA_DIR = tmp;
+    vi.resetModules();
+    let mod = await import('./scheduler');
+    expect(mod.autoRunEnabled()).toBe(true); // 기본 온
+    mod.setAutoRunEnabled(false);
+    expect(mod.autoRunEnabled()).toBe(false);
+    vi.resetModules();
+    mod = await import('./scheduler'); // 재시작 시뮬레이션
+    expect(mod.autoRunEnabled()).toBe(false);
+    mod.setAutoRunEnabled(true);
+    delete process.env.GEPA_DATA_DIR;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+});

@@ -3,7 +3,7 @@
 // values are live from the same folded uiState the office renders.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useStore } from "../store";
-import { fetchWikiStats, fetchAutonomyStatus, fetchBrands, activateBrand, type AutonomyStatus, type BrandListItem } from "../api";
+import { fetchWikiStats, fetchAutonomyStatus, fetchBrands, activateBrand, toggleAutonomy, type AutonomyStatus, type BrandListItem } from "../api";
 import { countWorking } from "../events/working";
 import type { MetricKind } from "./MetricDrawer";
 import Ico from "./Ico";
@@ -152,7 +152,11 @@ export default function DashboardBar({ companyName, total, runsCount, onMetric, 
         <Chip icon={<Ico name="bell" size={14} />} label="검토 대기" value={s.approvals.length} accent />
       )}
       {auto?.enabled && (
-        <Chip icon={<Ico name="setting" size={14} />} label="자율" value={auto.active ? "동작 중" : "대기"} accent={auto.active} />
+        /* 클릭 = 오토런 온/오프 토글(영속) — 꺼짐이면 30분 틱이 조용히 통과한다. */
+        <Chip icon={<Ico name="setting" size={14} />} label="자율"
+          value={auto.run_enabled === false ? "꺼짐" : auto.active ? "동작 중" : "대기"}
+          accent={auto.active && auto.run_enabled !== false}
+          onClick={() => { void toggleAutonomy().then(() => fetchAutonomyStatus().then(setAuto).catch(() => {})); }} />
       )}
       <div className={`dash-live${live ? " on" : ""}`}>
         <span className="dash-dot" />

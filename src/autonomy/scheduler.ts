@@ -23,6 +23,8 @@ export interface AutoCycleDeps<T = string> {
   intervalMs: number;
   /** 사용자/기존 런이 진행 중인가(유휴 게이트). true 면 이번 틱을 건너뛴다. */
   isBusy: () => boolean;
+  /** 오토런 스위치(사용자 토글) — false 면 틱이 조용히 아무 일도 하지 않는다(타이머는 유지). 미지정 = 항상 온. */
+  isEnabled?: () => boolean;
   /** 이번 틱에 처리할 작업(재개 대상 piece 또는 새 아이디어). null 이면 띄우지 않음. */
   pickWork: (signal?: AbortSignal) => Promise<T | null>;
   /** 선택된 작업으로 자율 런을 띄운다(main.ts 의 launchRun 으로 위임). */
@@ -38,6 +40,7 @@ export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): () => void {
   let ticking = false; // 재진입 가드 — pickWork(LLM)이 주기보다 길어도 틱이 겹쳐 다중 자율런이 뜨지 않게.
   const tick = async (): Promise<void> => {
     if (ticking) return;
+    if (deps.isEnabled && !deps.isEnabled()) return; // 오토런 오프 — 조용히 통과(토글 온이면 다음 틱부터 재개)
     ticking = true;
     try {
       if (deps.isBusy()) { deps.log?.('사용자 런 진행 중 — 자율 사이클 건너뜀'); return; }
@@ -55,6 +58,26 @@ export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): () => void {
   const timer = setInterval(() => { void tick(); }, deps.intervalMs);
   if (typeof timer.unref === 'function') timer.unref(); // 프로세스 종료를 막지 않게
   return () => clearInterval(timer);
+}
+
+// ── 오토런 온/오프 토글(사용자 요청 2026-07-16) — 앱 전역 스위치(브랜드 무관), 재시작에도 유지 ──
+// AUTO_CYCLE_MINUTES(주기 설정)와 별개다: 주기는 기능의 존재, 토글은 사용자의 일시 정지 스위치.
+const autorunFile = (): string => path.join(CONFIG.dataDir, '_shared', 'autorun.json');
+let _autorunCache: boolean | undefined;
+/** 오토런 켜짐 여부 — 파일 없음/깨짐은 온(기존 동작 불변). 1회 읽고 캐시(틱마다 디스크 안 침). */
+export function autoRunEnabled(): boolean {
+  if (_autorunCache === undefined) {
+    try { _autorunCache = (JSON.parse(fs.readFileSync(autorunFile(), 'utf-8')) as { enabled?: unknown }).enabled !== false; }
+    catch { _autorunCache = true; }
+  }
+  return _autorunCache;
+}
+export function setAutoRunEnabled(v: boolean): void {
+  _autorunCache = v;
+  try {
+    fs.mkdirSync(path.dirname(autorunFile()), { recursive: true });
+    fs.writeFileSync(autorunFile(), JSON.stringify({ enabled: v }));
+  } catch { /* 영속 실패해도 런타임 토글은 유효(다음 재시작에 기본 온) */ }
 }
 
 export interface DailyDeps {

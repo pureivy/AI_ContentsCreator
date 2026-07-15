@@ -108,9 +108,20 @@ export async function fetchSources(): Promise<SourceInfo[]> {
 // Total stored wiki page count (+ raw source count) for the dashboard 위키 metric.
 export interface AutonomyStatus {
   enabled: boolean; interval_minutes: number; shell: boolean; active: boolean;
+  /** 오토런 사용자 토글(칩 클릭) — false 면 주기는 살아있지만 틱이 아무 일도 하지 않는다. */
+  run_enabled?: boolean;
   /** 진행 중인 자율런 id(있으면) — 유휴 시 오피스뷰 자동 관전용. */
   auto_run_id?: string | null;
   last_auto_ts: string | null; last_auto_topic: string | null;
+}
+/** 오토런 온/오프 토글 — enabled 생략 시 서버가 반전. */
+export async function toggleAutonomy(): Promise<{ ok: boolean; run_enabled?: boolean }> {
+  try {
+    const r = await fetch("/autonomy/toggle", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    return r.ok ? await r.json() : { ok: false };
+  } catch {
+    return { ok: false };
+  }
 }
 export async function fetchAutonomyStatus(): Promise<AutonomyStatus | null> {
   try {
