@@ -14,3 +14,5 @@ summary: 창문 단열 4단계 DIY, 폭염 대비 냉방비 절약하기 성과�
 - (없음)
 
 [근거: https://m.blog.naver.com/pureivy/224336112392]
+
+관련: [[창문 단열]]
