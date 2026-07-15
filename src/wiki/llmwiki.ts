@@ -418,6 +418,50 @@ export class LlmWiki {
   }
 
   /**
+   * 토론(입장·비평)을 '<topic> (종합)' overview 페이지로 증분 컴파일(2026-07-16 설계) — 런별 토론이
+   * pruneDebate 상한에서 증발하기 전에 지식으로 응축한다. 같은 topic 재런은 upsertPage 머지(갱신 섹션
+   * 누적) = 컴파일 1회 + 지속 갱신(카파시). LLM 호출은 쓰기 체인(serialize) 밖에서 — 실패는 무해(fail-open).
+   */
+  async compileDebateOverview(input: {
+    topic: string; model: string;
+    positions: Array<{ name: string; text: string }>;
+    critique?: { name: string; text: string };
+    relatesTo?: string[]; signal?: AbortSignal;
+  }): Promise<string | null> {
+    const pos = input.positions.filter((p) => (p.name || '').trim() && (p.text || '').trim());
+    if (!pos.length) return null;
+    const sys =
+      '너는 팀 토론을 지식으로 응축하는 편집자다. 입장들과 비평을 종합해 ① 합의·검증된 것(근거 포함) ' +
+      '② 반박·기각된 주장 ③ 열린 질문을 6~10문장으로 정리하라. 본문의 핵심 개념은 [[위키링크]]로 감싼다(1개 이상). ' +
+      '근거 없는 절대수치 단정은 쓰지 않는다. 마크다운 본문만 출력한다.';
+    const user =
+      `주제: ${input.topic}\n\n` +
+      pos.map((p) => `[${p.name} 입장]\n${p.text.slice(0, 1500)}`).join('\n\n') +
+      (input.critique?.text?.trim() ? `\n\n[비평 — ${(input.critique.name || '비평가').trim()}]\n${input.critique.text.slice(0, 1500)}` : '');
+    try {
+      const res = await llm.chat({
+        model: input.model,
+        messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
+        maxOutputTokens: 800, temperature: 0.3, think: false, signal: input.signal,
+      });
+      const text = (res.text || '').trim();
+      if (!text) return null;
+      return await this.serialize(async () => {
+        const rel = [...new Set((input.relatesTo ?? []).filter(Boolean))].slice(0, 4);
+        const page = this.upsertPage({
+          title: `${input.topic} (종합)`, type: 'overview',
+          body: text + this.relatedLine(rel, [`${input.topic} (요약)`]),
+          contributors: [...new Set([...pos.map((p) => p.name.trim()), ...(input.critique?.name ? [input.critique.name.trim()] : [])])],
+          summary: esc(text).replace(/#+\s*/g, '').replace(/\*\*/g, '').slice(0, 100), // 마크다운 헤더·볼드 제거(1줄 요약용)
+        });
+        this.rebuildIndex();
+        this.appendLog('ingest', `${input.topic} (종합) — 토론 컴파일`);
+        return page.slug;
+      });
+    } catch { return null; /* 컴파일 실패는 런·토론 기록을 막지 않는다 */ }
+  }
+
+  /**
    * type:'debate' 페이지를 run 그룹 단위로 최근 keepRuns 개만 유지(그래프·디스크 과적재 방지).
    *  - 그룹 단위 삭제: 같은 run 의 입장+비평을 통째로 유지/삭제 → 비평의 rebuts 가 살아남은 입장만 가리켜
    *    dangling 엣지·유령 stub 노드가 안 생긴다(개별 노드 prune 의 그룹 분할 문제 해소).

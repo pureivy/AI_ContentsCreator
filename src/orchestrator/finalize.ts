@@ -168,6 +168,24 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
       } catch (e) {
         a.bus.emit(EventType.log, { message: `토론 적재 실패: ${e instanceof Error ? e.message : String(e)}` });
       }
+      // 토론 → 종합(overview) 증분 컴파일(2026-07-16) — 런별 토론이 pruneDebate 상한에서 증발하기 전에
+      // '<topic> (종합)' 페이지로 응축. 같은 topic 재런은 같은 페이지에 갱신 누적(컴파일 1회+지속 갱신).
+      try {
+        const ovSlug = await llmWiki().compileDebateOverview({
+          topic: a.topic, model: a.ingestModel,
+          positions: a.positions.map((p) => ({ name: p.name, text: p.text })),
+          critique: a.critique ? { name: a.critique.name, text: a.critique.text } : undefined,
+          relatesTo: r.pages, signal: a.signal,
+        });
+        if (ovSlug) {
+          a.bus.emit(EventType.wiki_page_written, {
+            page_id: ovSlug, slug: ovSlug, title: `${a.topic} (종합)`, category: 'overview', status: 'active', stance: 'neutral', op: 'update',
+          });
+          a.bus.emit(EventType.log, { message: `토론 종합 컴파일 — "${a.topic} (종합)" 갱신(두뇌 영구 지식)` });
+        }
+      } catch (e) {
+        a.bus.emit(EventType.log, { message: `토론 종합 컴파일 실패(무해): ${e instanceof Error ? e.message : String(e)}` });
+      }
     } catch (e) {
       a.bus.emit(EventType.log, { message: `위키 적재 실패: ${e instanceof Error ? e.message : String(e)}` });
     }

@@ -5,6 +5,11 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { LlmWiki, slugify } from './llmwiki';
 
+// compileDebateOverview 테스트용 LLM 목킹 — 다른 테스트는 llm 을 호출하지 않아 무해.
+vi.mock('../llm/client', () => ({
+  llm: { chat: vi.fn(async () => ({ text: '합의: [[장마철 배수]]가 우선 대응이다. 반박·기각: 절대 검색량 단정. 열린 질문: 지역별 편차.' })) },
+}));
+
 const sha1 = (s: string) => createHash('sha1').update(s.trim()).digest('hex');
 
 let dir: string;
@@ -345,5 +350,32 @@ describe('relatedLine — 그래프 연결용 관련 링크 줄', () => {
       .toBe('\n\n관련: [[여름화분]] · [[여름 화분 (요약)]]');
     expect(w.relatedLine([], ['없는 페이지'])).toBe('');
     expect(w.relatedLine([undefined, '여름화분', '여름화분'], [])).toBe('\n\n관련: [[여름화분]]'); // 빈값·중복 정리
+  });
+});
+
+// 토론(입장·비평)이 상한 프루닝으로 증발하기 전 '<topic> (종합)' overview 로 응축(2026-07-16 설계).
+// 같은 topic 재컴파일은 같은 페이지에 갱신 섹션 누적 = 컴파일 1회 + 지속 갱신(카파시).
+describe('compileDebateOverview — 토론→종합 증분 컴파일', () => {
+  it('overview 페이지 생성(+요약 링크·LLM 본문 [[링크]]) 및 재컴파일 머지(갱신 누적)', async () => {
+    const w = new LlmWiki(dir);
+    w.upsertPage({ title: '장마철 관리 (요약)', type: 'source', body: 'b' });
+    const slug = await w.compileDebateOverview({
+      topic: '장마철 관리', model: 'micro',
+      positions: [{ name: '갑', text: '배수 우선 입장' }], critique: { name: '을', text: '검색량 단정 비평' },
+    });
+    expect(slug).toBe(slugify('장마철 관리 (종합)'));
+    const p = w.getPage(slug!)!;
+    expect(p.type).toBe('overview');
+    expect(p.body).toContain('[[장마철 관리 (요약)]]');
+    expect(p.links).toContain(slugify('장마철 배수'));
+    const again = await w.compileDebateOverview({ topic: '장마철 관리', model: 'micro', positions: [{ name: '갑', text: '2차 입장' }] });
+    expect(again).toBe(slug);
+    expect(w.getPage(slug!)!.body).toContain('## 갱신');
+    const idx = fs.readFileSync(path.join(dir, 'index.md'), 'utf-8');
+    expect(idx).toContain('[[장마철 관리 (종합)]]'); // 인덱스 즉시 반영(🧭 종합 섹션)
+  });
+  it('입장이 비면 컴파일 생략(null)', async () => {
+    const w = new LlmWiki(dir);
+    expect(await w.compileDebateOverview({ topic: 't', model: 'm', positions: [] })).toBeNull();
   });
 });
