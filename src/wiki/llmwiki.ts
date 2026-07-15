@@ -18,6 +18,12 @@ import { brandFileSuffixFor, activeBrandSlug } from '../content/brand';
 import { llm } from '../llm/client';
 
 export type PageType = 'entity' | 'concept' | 'source' | 'overview' | 'answer' | 'lesson' | 'debate' | 'performance';
+// index 섹션 스펙 — Record<PageType,…> 전수 매핑이라 타입을 새로 추가하면 누락 시 컴파일 에러.
+// 과거 lesson·performance, 2026-07-15 감사의 debate 처럼 '타입은 있는데 인덱스에 안 보이는' 재발 차단.
+const INDEX_SECTIONS: Record<PageType, string> = {
+  entity: '🔑 엔티티', concept: '💡 개념', source: '📄 소스 요약', overview: '🧭 종합',
+  answer: '❓ 답변', lesson: '🎓 교훈', debate: '🗣 토론', performance: '📈 성과',
+};
 
 export interface WikiPage {
   title: string;
@@ -58,11 +64,24 @@ function capSlugBytes(slug: string): string {
   return `${prefix.replace(/-+$/, '')}-${hash}`;
 }
 export function slugify(s: string): string {
-  const base = (s || '').trim().toLowerCase()
+  const full = (s || '').trim().toLowerCase()
     .replace(/[^\p{L}\p{N}\s-]/gu, '')
-    .replace(/\s+/g, '-')
-    .slice(0, 80) || 'page';
+    .replace(/\s+/g, '-');
+  let base = full.slice(0, 80) || 'page';
+  // 80자 문자 절단이 일어나면 절단 전 원문 해시8을 붙인다 — 같은 80자 접두의 서로 다른 장제목
+  // (입장/비평 등)이 같은 슬러그로 붕괴해 서로를 덮어쓰던(본문 소실·자기반박 루프) 충돌 차단.
+  // 같은 입력=같은 슬러그(결정적)는 유지된다.
+  if (full.length > 80) {
+    const hash = createHash('sha256').update(full).digest('hex').slice(0, 8);
+    base = `${base.slice(0, 80 - hash.length - 1).replace(/-+$/, '')}-${hash}`;
+  }
   return capSlugBytes(base);
+}
+/** 구 슬러그 알고리즘 재현(1회 수선 판정용) — v1: 80자 절단만, v2: 절단+NFD 캡. */
+function legacySlugsOf(title: string): Set<string> {
+  const base = (title || '').trim().toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-').slice(0, 80) || 'page';
+  return new Set([base, capSlugBytes(base)]);
 }
 /** 로컬 타임존 기준 YYYY-MM-DD (UTC 자정 어긋남 방지). */
 function nowDate(): string {
@@ -145,27 +164,57 @@ export class LlmWiki {
     fs.mkdirSync(this.rawDir, { recursive: true });
     this.migrateFlat();
     if (suffix) this.migrateLegacyRaw(path.join(path.dirname(dir), 'raw'));
-    this.repairOverlongSlugs();
+    this.repairSlugsAndRefs();
     this.ensureSchema();
   }
 
-  /** 장슬러그 파일 1회 수선 — 캡 도입(2026-07-13) 전 macOS/iCloud 가 자른 파일명(basename≠slug)을
-   *  캡 슬러그로 재작성한다. 수선 없이는 pagePath(slug) 기반 조회·갱신·prune 이 실파일과 어긋난다. */
-  private repairOverlongSlugs(): void {
+  /** 슬러그 변천 1회 수선 — (a) 캡 도입(07-13) 전 잘린 파일명(basename≠slug), (b) 80자 절단 해시
+   *  (07-15) 도입 전 구슬러그(제목 유래) 페이지를 현행 슬러그로 개명하고, (c) 전 페이지의 rebuts 참조를
+   *  재매핑(개명 맵 → 캡 폴백)·자기반박 제거한다. 참조를 안 고치면 pagePath 기반 조회·prune 이 실파일과
+   *  어긋나고 토론 그래프 빨강 엣지가 유령을 가리킨다(2026-07-15 감사: rebuts 10/30 끊김). */
+  private repairSlugsAndRefs(): void {
     try {
+      const renamed = new Map<string, string>();
       for (const f of fs.readdirSync(this.pagesDir)) {
         if (!f.endsWith('.md') || RESERVED_FILES.has(f)) continue;
         const fp = path.join(this.pagesDir, f);
         let page: WikiPage;
         try { page = this.readPage(fp); } catch { continue; }
         if (!page.slug || /[/\\]|\.\./.test(page.slug)) continue;
-        const canonical = capSlugBytes(page.slug);
+        // 제목 유래 슬러그(구 알고리즘 흔적)면 현행 slugify(title) 로, 아니면 캡만 보정.
+        const fromTitle = slugify(page.title);
+        const canonical = page.slug !== fromTitle && legacySlugsOf(page.title).has(page.slug)
+          ? fromTitle : capSlugBytes(page.slug);
         if (canonical === page.slug && f === `${canonical}.md`) continue;
         const dst = this.pagePath(canonical);
         if (path.resolve(dst) !== path.resolve(fp) && fs.existsSync(dst)) continue; // 충돌 — 기존 페이지 보존
+        if (canonical !== page.slug) renamed.set(page.slug, canonical);
         page.slug = canonical;
         fs.writeFileSync(dst, serialize(page), 'utf-8');
         if (path.resolve(dst) !== path.resolve(fp)) fs.unlinkSync(fp);
+      }
+      // rebuts 재매핑 — 실존하면 유지, 개명 맵 → 캡 폴백 순으로 복원, 자기참조 제거. 진짜 미존재
+      // 대상은 그대로 둔다(graph 의 missing 스텁 lint 대상 — 참조를 지어내지 않는다).
+      let touched = 0;
+      for (const p of this.allPages()) {
+        if (!p.rebuts.length) continue;
+        const fixed = [...new Set(p.rebuts.map((r) => {
+          if (this.getPage(r)) return r;
+          const m = renamed.get(r);
+          if (m && this.getPage(m)) return m;
+          const c = capSlugBytes(r);
+          if (c !== r && this.getPage(c)) return c;
+          return r;
+        }))].filter((r) => r !== p.slug);
+        if (fixed.length !== p.rebuts.length || fixed.some((v, i) => v !== p.rebuts[i])) {
+          p.rebuts = fixed;
+          this.writePage(p);
+          touched++;
+        }
+      }
+      if (renamed.size || touched) {
+        this.rebuildIndex();
+        this.appendLog('maintain', `슬러그·참조 1회 수선 — 개명 ${renamed.size}건 · rebuts 정리 ${touched}건`);
       }
     } catch { /* 무해 — 다음 인스턴스 생성 때 재시도 */ }
   }
@@ -217,7 +266,9 @@ export class LlmWiki {
 
   private ensureSchema(): void {
     const sp = path.join(this.dir, 'WIKI_SCHEMA.md');
-    if (fs.existsSync(sp)) return;
+    // 엔진 소유 문서(RESERVED) — 현행판과 다르면 동기화. 구판은 pages/ 레이아웃·5타입만 기술해
+    // 실제(평면·8타입)와 어긋났고, LLM 이 이 문서를 읽고 위키를 유지하므로 방치 시 오분류를 유발한다.
+    try { if (fs.readFileSync(sp, 'utf-8') === SCHEMA_DOC) return; } catch { /* 없음 → 작성 */ }
     fs.writeFileSync(sp, SCHEMA_DOC, 'utf-8');
   }
 
@@ -474,21 +525,14 @@ export class LlmWiki {
 
   rebuildIndex(): void {
     const ps = this.allPages();
-    // lesson·performance 포함 — 이전엔 초기화·렌더에서 빠져 교훈·성과 페이지가 인덱스에 안 보였다(기존 갭). query()는 allPages 라 검색은 됐지만 index.md 가시성만 누락.
-    const byType: Record<string, WikiPage[]> = { entity: [], concept: [], source: [], overview: [], answer: [], lesson: [], performance: [] };
-    for (const p of ps) (byType[p.type] ?? (byType[p.type] = [])).push(p);
+    const byType = new Map<PageType, WikiPage[]>();
+    for (const p of ps) { const a = byType.get(p.type); if (a) a.push(p); else byType.set(p.type, [p]); }
     const sect = (label: string, arr: WikiPage[]): string =>
       arr.length ? `\n## ${label}\n` + arr.sort((a, b) => a.title.localeCompare(b.title))
         .map((p) => `- [[${p.title}]] — ${esc(p.summary).slice(0, 100)}${p.sources.length ? ` (sources: ${p.sources.length})` : ''}`).join('\n') + '\n' : '';
     const md =
       `# 📇 LLM Wiki 인덱스\n\n> 페이지 ${ps.length}개 · 갱신 ${nowDate()} · Karpathy LLM Wiki 패턴\n` +
-      sect('🔑 엔티티', byType.entity!) +
-      sect('💡 개념', byType.concept!) +
-      sect('📄 소스 요약', byType.source!) +
-      sect('🧭 종합', byType.overview!) +
-      sect('❓ 답변', byType.answer!) +
-      sect('🎓 교훈', byType.lesson!) +
-      sect('📈 성과', byType.performance!);
+      (Object.keys(INDEX_SECTIONS) as PageType[]).map((t) => sect(INDEX_SECTIONS[t], byType.get(t) ?? [])).join('');
     fs.writeFileSync(path.join(this.dir, 'index.md'), md, 'utf-8');
   }
 
@@ -1027,12 +1071,12 @@ const SCHEMA_DOC = `# LLM Wiki 스키마 (Karpathy 패턴)
 
 ## 레이아웃
 - \`../raw/<날짜>/\` — 원본 소스(불변)
-- \`pages/*.md\` — 엔티티/개념/소스요약 페이지. YAML 프런트매터 + 본문 \`[[위키링크]]\`.
+- \`*.md\`(위키 루트, 평면) — 페이지. YAML 프런트매터 + 본문 \`[[위키링크]]\`. (\`index.md\`·\`log.md\`·\`WIKI_SCHEMA.md\` 는 예약 파일)
 - \`index.md\` — 전 페이지 카탈로그(카테고리별, 1줄 요약). 인덱스 우선 탐색의 진입점.
 - \`log.md\` — append-only 타임라인 \`## [YYYY-MM-DD] op | Title\`.
 
 ## 페이지 타입
-entity(사람·조직·도구) · concept(개념·주제) · source(소스 요약) · overview(종합) · answer(질의 답변)
+entity(사람·조직·도구) · concept(개념·주제) · source(소스 요약) · overview(종합) · answer(질의 답변) · lesson(직원 교훈) · debate(런별 토론 입장·비평 — rebuts 엣지) · performance(성과 신호)
 
 ## 워크플로우
 - ingest: 소스/산출물 읽기 → 요약 페이지 작성 → 엔티티/개념 페이지 생성·갱신([[링크]] 유지) → index 재생성 → log 추가

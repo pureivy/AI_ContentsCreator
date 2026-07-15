@@ -264,3 +264,73 @@ describe('llmWikiFor — 명시 브랜드 디렉터리 귀속(오귀속 회귀)'
     expect(fs.existsSync(path.join(tmp, 'wiki'))).toBe(false);          // 활성(범용) 디렉터리로 새지 않음
   });
 });
+
+// 80자 문자 절단 충돌(2026-07-15 실측): 같은 80자 접두의 장제목 입장·비평이 같은 슬러그로 붕괴해
+// 서로를 덮어쓰고(본문 소실) 자기반박 루프까지 만들었다 — 절단 시 원문 해시8로 구분한다.
+describe('slugify — 80자 절단 충돌 방지(원문 해시8)', () => {
+  it('같은 80자 접두의 서로 다른 장제목 → 서로 다른 슬러그(결정적)', () => {
+    const prefix = '가'.repeat(40) + ' ' + 'b'.repeat(45); // 정규화 후 86자 > 80
+    const a = `${prefix} 리서치SEO팀 입장`;
+    const b = `${prefix} 비평`;
+    expect(slugify(a)).not.toBe(slugify(b));
+    expect(slugify(a)).toBe(slugify(a)); // 결정적
+  });
+  it('80자 이하 제목은 종전과 동일(해시 없음)', () => {
+    expect(slugify('제2의 두뇌')).toBe('제2의-두뇌');
+  });
+});
+
+describe('rebuildIndex — PageType 전 타입 등재(debate 포함)', () => {
+  it('8타입 각 1페이지 → index.md 에 전부 등재·헤더 수 일치', () => {
+    const w = new LlmWiki(dir);
+    const types = ['entity', 'concept', 'source', 'overview', 'answer', 'lesson', 'debate', 'performance'] as const;
+    for (const t of types) w.upsertPage({ title: `${t} 페이지`, type: t, body: `${t} 본문` });
+    w.rebuildIndex();
+    const idx = fs.readFileSync(path.join(dir, 'index.md'), 'utf-8');
+    expect(idx).toContain('페이지 8개');
+    for (const t of types) expect(idx).toContain(`[[${t} 페이지]]`);
+  });
+});
+
+// 슬러그 알고리즘 변천(절단→캡→절단해시)의 1회 수선 — 파일 rename 만 하고 참조(rebuts)를 안 고치면
+// 토론 그래프 빨강 엣지가 유령을 가리킨다(2026-07-15 감사: 10/30 끊김).
+describe('생성자 1회 수선 — 레거시 슬러그 rename + rebuts 재매핑', () => {
+  it('구절단(80자) 슬러그 페이지가 새 슬러그로 개명되고, rebuts 참조도 따라온다', () => {
+    fs.mkdirSync(dir, { recursive: true });
+    const longTitle = 'a'.repeat(100);
+    const legacySlug = 'a'.repeat(80); // 구 알고리즘: slice(0,80), 캡 비적용(ASCII 는 NFD 180B 이내)
+    fs.writeFileSync(path.join(dir, `${legacySlug}.md`),
+      `---\ntitle: ${longTitle}\nslug: ${legacySlug}\ntype: debate\naliases: []\nsources: []\ncontributors: []\nupdated: 2026-07-10\nsummary: s\n---\n본문\n`, 'utf-8');
+    fs.writeFileSync(path.join(dir, '비평.md'),
+      `---\ntitle: 비평\nslug: 비평\ntype: debate\naliases: []\nsources: []\ncontributors: []\nrebuts: ["${legacySlug}"]\nupdated: 2026-07-10\nsummary: s\n---\n비평 본문\n`, 'utf-8');
+    const w = new LlmWiki(dir);
+    const target = slugify(longTitle);
+    expect(target).not.toBe(legacySlug);
+    expect(fs.existsSync(path.join(dir, `${target}.md`))).toBe(true);
+    expect(fs.existsSync(path.join(dir, `${legacySlug}.md`))).toBe(false);
+    expect(w.getPage('비평')!.rebuts).toEqual([target]);
+  });
+  it('캡 이전 원 슬러그를 가리키는 rebuts 는 캡 슬러그로 재매핑, 자기반박은 제거', () => {
+    fs.mkdirSync(dir, { recursive: true });
+    const hangul = '위'.repeat(79); // NFD 180B 초과 → 캡 대상(문자수 80 이하 → 절단 없음)
+    const capped = slugify(hangul);
+    expect(capped).not.toBe(hangul.toLowerCase());
+    fs.writeFileSync(path.join(dir, `${capped}.md`),
+      `---\ntitle: ${hangul}\nslug: ${capped}\ntype: debate\naliases: []\nsources: []\ncontributors: []\nupdated: 2026-07-10\nsummary: s\n---\n입장\n`, 'utf-8');
+    fs.writeFileSync(path.join(dir, '자기비평.md'),
+      `---\ntitle: 자기비평\nslug: 자기비평\ntype: debate\naliases: []\nsources: []\ncontributors: []\nrebuts: ["${hangul.toLowerCase()}", "자기비평"]\nupdated: 2026-07-10\nsummary: s\n---\n비평\n`, 'utf-8');
+    const w = new LlmWiki(dir);
+    expect(w.getPage('자기비평')!.rebuts).toEqual([capped]); // 원슬러그→캡 재매핑 + 자기참조 제거
+  });
+});
+
+describe('ensureSchema — 스키마 문서를 엔진 현행판으로 동기화', () => {
+  it('낡은 WIKI_SCHEMA.md(pages/ 표기·5타입)는 현행판으로 덮어써진다', () => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'WIKI_SCHEMA.md'), '# 구버전\n- pages/*.md\n', 'utf-8');
+    void new LlmWiki(dir);
+    const doc = fs.readFileSync(path.join(dir, 'WIKI_SCHEMA.md'), 'utf-8');
+    expect(doc).toContain('debate');
+    expect(doc).not.toContain('pages/*.md');
+  });
+});
