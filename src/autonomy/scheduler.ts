@@ -60,6 +60,16 @@ export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): () => void {
   return () => clearInterval(timer);
 }
 
+/** 파생 콘텐츠 일일 케이던스 게이트(순수) — 마지막 생성에서 24h/N 경과 여부(수동 생성도 포함해
+ *  그날은 자율이 쉰다). perDay<=0 = 기능 off. 손상 ts 는 게이트가 영구히 잠기지 않게 즉시 due. */
+export function derivedContentDue(perDay: number, lastCreatedTs: string | undefined, now = Date.now()): boolean {
+  if (!(perDay > 0)) return false;
+  if (!lastCreatedTs) return true;
+  const t = new Date(lastCreatedTs).getTime();
+  if (!Number.isFinite(t)) return true;
+  return now - t >= 86_400_000 / perDay;
+}
+
 // ── 오토런 온/오프 토글(사용자 요청 2026-07-16) — 앱 전역 스위치(브랜드 무관), 재시작에도 유지 ──
 // AUTO_CYCLE_MINUTES(주기 설정)와 별개다: 주기는 기능의 존재, 토글은 사용자의 일시 정지 스위치.
 const autorunFile = (): string => path.join(CONFIG.dataDir, '_shared', 'autorun.json');

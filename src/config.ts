@@ -146,6 +146,9 @@ export interface Config {
   /** 지식 리서치 런 주기(시간) — 자율 사이클 틱에서 마지막 리서치 후 이 시간이 지나면 콘텐츠 제작 대신
    *  리서치 런 1건(독자 궁금증·경쟁 콘텐츠 조사→팀 토론→두뇌 적재→직원 학습)을 띄운다. 0=off. */
   readonly researchCycleHours: number;
+  /** 자율 파생 케이던스(일일 N편, 0=off) — 쇼츠·카드뉴스를 초안 있는 최신 블로그에서 자동 파생. */
+  readonly autoShortsPerDay: number;
+  readonly autoCardnewsPerDay: number;
   /** 능동 셸 실행 도구(run_command) — tool-loop 와 별개로 명시 옵트인(기본 false). 위험 표면이라 이중 게이트. */
   readonly agentShell: boolean;
   /** 셸 allowlist — 명령 argv[0]의 basename 이 이 목록에 있을 때만 실행(env AGENT_SHELL_ALLOW, 쉼표구분). */
@@ -255,6 +258,8 @@ export const CONFIG: Config = {
   // 무감시 비용/레이트 보호 기본 0(off) — 켜려면 AUTO_CYCLE_MINUTES=N.
   autoCycleMinutes: Math.max(0, envInt('AUTO_CYCLE_MINUTES', 0)),
   researchCycleHours: Math.max(0, envInt('RESEARCH_CYCLE_HOURS', 24)),
+  autoShortsPerDay: Math.max(0, envInt('AUTO_SHORTS_PER_DAY', 0)),
+  autoCardnewsPerDay: Math.max(0, envInt('AUTO_CARDNEWS_PER_DAY', 0)),
   agentShell: envBool('AGENT_SHELL', false),
   // 기본 allowlist 는 '읽기 전용 분석 명령'만 — python3/node/awk/sed/find 같은 범용 코드 실행기는 제외(임의
   // 실행기는 메타문자 없이도 RCE 가 되어 allowlist 를 무력화). 스크립트 실행이 필요하면 AGENT_SHELL_ALLOW 로

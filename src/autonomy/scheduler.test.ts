@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue } from './scheduler';
 
 describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -136,5 +136,19 @@ describe('autoRunEnabled/setAutoRunEnabled — 영속 라운드트립', () => {
     mod.setAutoRunEnabled(true);
     delete process.env.GEPA_DATA_DIR;
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+});
+
+// 파생 콘텐츠 일일 케이던스(사용자 지시 2026-07-16: 쇼츠·카드뉴스 매일 1편) — 24h/N 간격 게이트.
+describe('derivedContentDue — 일일 N편 케이던스(순수)', () => {
+  const now = new Date('2026-07-16T12:00:00Z').getTime();
+  it('perDay<=0 은 off, 기록 없음·손상 ts 는 즉시 due', () => {
+    expect(derivedContentDue(0, '2026-07-01T00:00:00Z', now)).toBe(false);
+    expect(derivedContentDue(1, undefined, now)).toBe(true);
+    expect(derivedContentDue(1, '깨진값', now)).toBe(true);
+  });
+  it('매일 1편: 24h 경과 전 false, 이후 true', () => {
+    expect(derivedContentDue(1, '2026-07-15T13:00:00Z', now)).toBe(false); // 23h
+    expect(derivedContentDue(1, '2026-07-15T11:00:00Z', now)).toBe(true);  // 25h
   });
 });

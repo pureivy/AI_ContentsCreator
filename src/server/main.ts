@@ -39,7 +39,7 @@ import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
-import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled } from '../autonomy/scheduler';
+import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore } from '../content/cardnews';
@@ -2554,7 +2554,8 @@ function canGenerateNew(pieces: Piece[]): boolean {
 }
 
 // 자율 틱 작업 유형 — 콘텐츠 piece(재개/신규) 또는 지식 리서치 미션(조사→토론→두뇌 적재→학습).
-type AutoWork = { kind: 'piece'; piece: Piece } | { kind: 'research'; title: string; brand: string };
+type AutoWork = { kind: 'piece'; piece: Piece } | { kind: 'research'; title: string; brand: string }
+  | { kind: 'shorts'; pieceId: string; title: string } | { kind: 'cardnews'; pieceId: string; title: string };
 
 async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
   const pieces = pieceStore().list();
@@ -2568,10 +2569,33 @@ async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
     const title = await proposeResearchMission(signal, tickBrand);
     if (title) return { kind: 'research', title, brand: tickBrand };
   }
-  if (!canGenerateNew(pieces)) return null;  // 케이던스/백로그 초과 → 신규 생성 보류.
-  const idea = await proposeContentIdeas(signal);
-  if (!idea) return null;
-  return { kind: 'piece', piece: pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche, brand: activeBrandSlug() || undefined }) };
+  if (canGenerateNew(pieces)) {  // 케이던스/백로그 초과면 신규 블로그 보류 → 아래 파생 케이던스로 폴백.
+    const idea = await proposeContentIdeas(signal);
+    if (idea) return { kind: 'piece', piece: pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche, brand: activeBrandSlug() || undefined }) };
+  }
+  // 파생 콘텐츠 일일 케이던스(사용자 지시 2026-07-16: 쇼츠·카드뉴스 매일 1편) — 초안 있는 최신 블로그
+  // 에서 파생(리서치된 내용 재사용 = 같은 주제 채널 전개라 신규성 가드 비대상). 수동 생성도 케이던스에
+  // 포함돼 그날은 자율이 쉰다. 파생 소스는 아직 그 채널로 전개 안 된 최신 초안.
+  const derivable = pieces
+    .filter((p) => (p.brand ?? '') === tickBrand && p.runId && ['ready', 'published', 'measured', 'reflected'].includes(p.stage))
+    .sort((a, b) => b.updatedTs.localeCompare(a.updatedTs));
+  if (CONFIG.autoShortsPerDay > 0) {
+    const all = shortsStore().list().filter((s) => (s.brand ?? '') === tickBrand);
+    const last = all.reduce((mx, s) => (s.createdTs > mx ? s.createdTs : mx), '');
+    if (derivedContentDue(CONFIG.autoShortsPerDay, last || undefined) && !all.some((s) => isShortsRunning(s.id))) {
+      const src = derivable.find((p) => !all.some((s) => s.sourcePieceId === p.id));
+      if (src) return { kind: 'shorts', pieceId: src.id, title: src.title };
+    }
+  }
+  if (CONFIG.autoCardnewsPerDay > 0) {
+    const all = cardNewsStore().list().filter((x) => (x.brand ?? '') === tickBrand);
+    const last = all.reduce((mx, x) => (x.createdTs > mx ? x.createdTs : mx), '');
+    if (derivedContentDue(CONFIG.autoCardnewsPerDay, last || undefined) && !all.some((x) => isCardNewsRunning(x.id))) {
+      const src = derivable.find((p) => !all.some((x) => x.sourcePieceId === p.id));
+      if (src) return { kind: 'cardnews', pieceId: src.id, title: src.title };
+    }
+  }
+  return null;
 }
 
 const stopAutoCycle = startAutoCycle<AutoWork>({
@@ -2590,15 +2614,23 @@ const stopAutoCycle = startAutoCycle<AutoWork>({
       launchRun(w.title, { auto: true, mission: 'research', path: 'team' });
       return;
     }
+    if (w.kind === 'shorts' || w.kind === 'cardnews') {
+      // 파생은 자체 잡 시스템(런 슬롯 비점유) — derive 가 생성+런 기동까지 처리, 실패는 무해 로그.
+      const r = w.kind === 'shorts' ? deriveShortsFromPiece(w.pieceId) : deriveCardNewsFromPiece(w.pieceId);
+      if ('error' in r) console.log(`[auto-cycle] ${w.kind === 'shorts' ? '쇼츠' : '카드뉴스'} 파생 실패(무해): ${r.error}`);
+      return;
+    }
     const id = launchRun(w.piece.title, { auto: true, pieceId: w.piece.id, keyword: w.piece.keyword });
     if (id) pieceStore().update(w.piece.id, { runId: id, stage: 'draft' }); // 시작 성공 → draft(진행중). ''(억제)면 유지, 다음 틱 재개.
   },
-  describe: (w) => (w.kind === 'research' ? `리서치: ${w.title}` : w.piece.title),
+  describe: (w) => (w.kind === 'research' ? `리서치: ${w.title}`
+    : w.kind === 'shorts' ? `쇼츠 파생: ${w.title}`
+    : w.kind === 'cardnews' ? `카드뉴스 파생: ${w.title}` : w.piece.title),
   log: (m) => console.log('[auto-cycle]', m),
 });
 if (CONFIG.autoCycleMinutes > 0) {
   // eslint-disable-next-line no-console
-  console.log(`[ai-contents-studio] 자율 사이클 활성 — ${CONFIG.autoCycleMinutes}분 주기(유휴 게이트)`);
+  console.log(`[ai-contents-studio] 자율 사이클 활성 — ${CONFIG.autoCycleMinutes}분 주기(유휴 게이트) · 리서치 ${CONFIG.researchCycleHours}h/건 · 블로그 주 ${CONFIG.contentCadencePerWeek}편${CONFIG.autoShortsPerDay ? ` · 쇼츠 일 ${CONFIG.autoShortsPerDay}편` : ''}${CONFIG.autoCardnewsPerDay ? ` · 카드뉴스 일 ${CONFIG.autoCardnewsPerDay}편` : ''}`);
 }
 void stopAutoCycle; // 프로세스 생존 동안 유지(unref 타이머라 종료는 막지 않음)
 
