@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchPerformance, deletePiece, PerfData } from "../api";
+import { fetchPerformance, refreshPerformance, deletePiece, PerfData } from "../api";
 import Ico, { type IcoName } from "./Ico";
 
 // 성과 대시보드 — 채널 통합 요약(블로그·쇼츠·카드뉴스) → 블로그 글별 → 쇼츠·카드뉴스 → 강화 학습 순.
@@ -15,8 +15,22 @@ export default function PerformanceView() {
   const [data, setData] = useState<PerfData | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const load = () => { setLoading(true); fetchPerformance().then((d) => { setData(d); setLoading(false); }); };
-  useEffect(() => { load(); }, []);
+  const load = () => { setLoading(true); return fetchPerformance().then((d) => { setData(d); setLoading(false); }); };
+  useEffect(() => { void load(); }, []);
+
+  // 새로고침 = 채널 성과 즉시 재수집(쇼츠 유튜브·릴스·카드뉴스) 후 재조회 — 종전엔 저장값 재조회뿐이라
+  // 숫자가 안 변해 '죽은 버튼'으로 보였다(2026-07-20 사용자 보고). 블로그 수집은 검토 탭·07:30 틱.
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState("");
+  const doRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true); setRefreshMsg("");
+    const r = await refreshPerformance();
+    await load(); // 재수집 실패해도 표시는 최신 저장값으로 갱신
+    setRefreshing(false);
+    const t = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+    setRefreshMsg(r.ok ? `✓ ${t} 재수집됨` : `⚠ ${r.error || "재수집 실패"} — 표시만 갱신됨`);
+  };
 
   // 카드(행) 삭제 — 성과 샘플 파일은 남고 목록에서만 제거(서버가 실행 중 런/잡이 있으면 거절).
   const doDelete = async (id: string, title: string) => {
@@ -42,7 +56,11 @@ export default function PerformanceView() {
         <h1><Ico name="chart" size={17} /> 성과 대시보드</h1>
         <p className="apikeys-sub">
           블로그·쇼츠·카드뉴스 채널별 성과와, 성과로 학습된 전략(키워드·서브니치 EWMA)을 모아 봅니다.
-          <button className="btn ghost" style={{ marginLeft: 10 }} onClick={load}>새로고침</button>
+          <button className="btn ghost" style={{ marginLeft: 10 }} onClick={() => { void doRefresh(); }} disabled={refreshing}
+            title="쇼츠 유튜브·릴스·카드뉴스 성과를 즉시 재수집합니다 (블로그는 검토 탭 수집·매일 07:30 자동)">
+            {refreshing ? "재수집 중…" : "새로고침"}
+          </button>
+          {refreshMsg && <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>{refreshMsg}</span>}
         </p>
       </div>
 

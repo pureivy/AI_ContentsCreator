@@ -953,6 +953,16 @@ export async function fetchPerformance(): Promise<PerfData | null> {
   try { const r = await fetch("/performance"); return r.ok ? await r.json() : null; }
   catch { return null; }
 }
+/** 채널 성과 즉시 재수집(쇼츠 유튜브·릴스·카드뉴스 — API 채널만; 블로그는 검토 탭 수집·일일 틱). */
+export async function refreshPerformance(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch("/performance/refresh", { method: "POST" });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return await r.json();
+  } catch {
+    return { ok: false, error: "network" };
+  }
+}
 
 // --- 지식 주입: 파일(들)을 선택한 에이전트(들)에 '우선 신뢰 지식'으로 주입 ---
 export interface InjectResult {

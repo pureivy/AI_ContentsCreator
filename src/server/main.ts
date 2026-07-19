@@ -1652,6 +1652,20 @@ function performanceHandler(c: Context): Response {
 }
 app.get('/performance', performanceHandler);
 app.get('/api/performance', performanceHandler);
+// 성과 즉시 재수집(대시보드 새로고침 버튼) — API 채널(쇼츠 유튜브·릴스·카드뉴스 메타)만. 순수 HTTP 라
+// 프로필 락 무관·측정창 게이트는 각 sync 가 판정. 네이버 블로그는 브라우저·프로필 뮤텍스 필요라 제외
+// (검토 탭 수동 수집·07:30 틱 유지). 동시 트리거는 중복 샘플 append 를 만들므로 in-flight 가드.
+let perfRefreshBusy = false;
+async function perfRefreshHandler(c: Context): Promise<Response> {
+  if (perfRefreshBusy) return c.json({ error: '이미 재수집이 진행 중입니다.' }, 409);
+  perfRefreshBusy = true;
+  try {
+    await Promise.allSettled([syncShortsPerformance(), syncShortsMetaPerformance(), syncCardnewsPerformance()]);
+    return c.json({ ok: true });
+  } finally { perfRefreshBusy = false; }
+}
+app.post('/performance/refresh', perfRefreshHandler);
+app.post('/api/performance/refresh', perfRefreshHandler);
 
 // 실제 네이버 수집기 등록 — 일일 성과 동기화(syncPerformance)가 publishedUrl 있는 piece 를 자동 수집.
 // measure 는 fail-open(미로그인·데이터 없음 → null) — 루프를 깨지 않는다. 수동 POST /metrics 는 계속 유효.
