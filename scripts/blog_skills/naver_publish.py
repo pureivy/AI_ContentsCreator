@@ -156,14 +156,33 @@ def full_auto_login(page, naver_id: str, naver_pw: str):
             _type_field("input#id", naver_id)
             _type_field("input#pw", naver_pw)
 
-            # '로그인 상태 유지' 체크 — NID 쿠키를 지속형으로(다음 실행 재로그인 방지). 실클릭(라벨).
+            # '로그인 상태 유지' 체크 — NID 쿠키를 지속형(persistent)으로 만들어 다음 실행이 재로그인
+            # 없이 프로필 세션을 재사용하게 하는 핵심 레버. 이게 안 먹으면 NID_AUT/NID_SES 가 세션쿠키
+            # (만료 없음)로 남아 런 종료 시 소멸 → 매 실행 재로그인 → 네이버 봇탐지 악순환(2026-07-20 실측).
+            # 라벨 클릭이 숨은 체크박스에서 자주 빗나가므로 JS 로 확실히 checked=on 세팅 + 라벨 클릭 병행,
+            # 최종 상태를 로그로 검증(제출 트리거는 아래 trusted 버튼 클릭이므로 서버가 keep=on 을 받는다).
+            keep_state = "미확인"
             try:
-                keep = page.locator("input#keep")
-                if keep.count() > 0 and not keep.first.is_checked():
-                    page.locator("label[for=keep], .keep_check").first.click()
-                    time.sleep(_rand(0.2, 0.4))
-            except Exception:
-                pass  # 체크 실패는 무해 — 로그인 자체엔 영향 없음
+                keep_state = page.evaluate("""() => {
+                    const el = document.querySelector('#keep, input[name=keep], input#nvlong, input[name=nvlong]');
+                    if (!el) return 'no-checkbox';
+                    if (!el.checked) {
+                        el.checked = true;
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                    }
+                    return el.checked ? 'checked' : 'uncheck-failed';
+                }""")
+                try:
+                    lbl = page.locator("label[for=keep], label[for=nvlong], .keep_check, .login_keep")
+                    if lbl.count() > 0:
+                        lbl.first.click(timeout=1500)  # 트러스티드 클릭 병행(짧은 타임아웃 — 없으면 스킵)
+                except Exception:
+                    pass  # 라벨 클릭 실패해도 JS 세팅으로 충분
+                time.sleep(_rand(0.2, 0.4))
+            except Exception as e:
+                keep_state = f"오류:{str(e)[:40]}"
+            log(f"  로그인 상태 유지: {keep_state}")
 
             # 로그인 버튼 실클릭 — JS dispatch(비신뢰 이벤트) 대신 trusted 클릭.
             page.locator("button#log\\.login, button[type=submit], .btn_login").first.click()
