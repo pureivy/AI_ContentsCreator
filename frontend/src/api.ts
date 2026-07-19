@@ -923,6 +923,7 @@ export async function fetchCollectStatus(id: string): Promise<CollectStatus | nu
 export interface PerfRow {
   id: string; title: string; stage: PieceStage; keyword?: string; subNiche?: string;
   publishedUrl?: string; seoScore?: number;
+  date: string; // 발행일(없으면 작성일 폴백) — 날짜 정렬·표시용
   views: number | null; dwellSec?: number | null;
   inflow: Array<{ keyword: string; count: number; rank?: number }>;
   measuredAt?: string | null; source?: string; samples: number;

@@ -1652,6 +1652,7 @@ button.upload-retry:hover { background: var(--panel2); }
 .perf-title a { color: var(--fg-primary); text-decoration: none; }
 .perf-title a:hover { text-decoration: underline; }
 /* 조회수 추이 스파크라인 — 셀 폭 고정, SVG 세로 중앙. 상승 초록·하강 빨강(테마 무관 고정 대비색). */
+.perf-date { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
 .perf-spark { width: 72px; padding-top: 6px; padding-bottom: 6px; }
 .spark { display: block; }
 .spark-empty { color: var(--muted); font-size: 13px; }

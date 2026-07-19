@@ -32,6 +32,8 @@ export interface Piece {
   naverDraftUrl?: string;
   /** 마지막 네이버 임시저장 시각(ISO). */
   naverDraftTs?: string;
+  /** 네이버 발행 성공 시각(ISO) — 성과 대시보드 '발행일'·날짜 정렬 기준(2026-07-20). 최초 발행 1회 기록. */
+  publishedTs?: string;
   seoScore?: number;
   /** 실런 실패 횟수(사용자 양보=취소는 제외) — 폭주 방지 캡. */
   errors?: number;
@@ -90,7 +92,11 @@ export class PieceStore {
     return next;
   }
   setStage(id: string, stage: PieceStage): Piece | undefined { return this.update(id, { stage }); }
-  setPublished(id: string, url: string): Piece | undefined { return this.update(id, { stage: 'published', publishedUrl: url }); }
+  setPublished(id: string, url: string): Piece | undefined {
+    const cur = this.items.get(id);
+    // publishedTs 는 최초 발행 1회만 기록(재감지·URL 갱신에도 최초 발행일 보존).
+    return this.update(id, { stage: 'published', publishedUrl: url, ...(cur?.publishedTs ? {} : { publishedTs: new Date().toISOString() }) });
+  }
   /** piece 삭제(카드 제거) — 산출물 파일(sessions·성과 샘플)은 남긴다(비파괴: 인덱스에서만 제거). */
   remove(id: string): boolean {
     const existed = this.items.delete(id);

@@ -1596,13 +1596,14 @@ function performanceHandler(c: Context): Response {
       return {
         id: p.id, title: p.title, stage: p.stage, keyword: p.keyword, subNiche: p.subNiche,
         publishedUrl: p.publishedUrl, seoScore: p.seoScore,
+        date: p.publishedTs ?? p.createdTs, // 발행일(없으면 작성일 폴백 — 레거시 piece)
         views: m ? m.views : null, dwellSec: m?.dwellSec ?? null,
         inflow: m?.searchInflow ?? [], measuredAt: m?.measuredAt ?? null,
         source: m?.source, samples: readMetrics(p.id).length,
         derived: derivedSummary(p.id), // 콘텐츠 세트 완성 여부(카드뉴스·숏폼)
       };
     })
-    .sort((a, b) => (b.views ?? -1) - (a.views ?? -1));
+    .sort((a, b) => b.date.localeCompare(a.date)); // 발행일 내림차순(최신 먼저)
   const s = readStrategy(activeBrandSlug()); // 활성 브랜드의 강화 학습만 표시
   const measured = rows.filter((r) => r.views != null);
   // 채널 성과(쇼츠·카드뉴스) — 발행된 것만, 채널별 최신 샘플(한 시계열에 유튜브·메타가 섞여 소스로 분리).

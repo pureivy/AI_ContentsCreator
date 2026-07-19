@@ -67,6 +67,13 @@ export default function PerformanceView() {
   const ch = data?.channels;
   // null = 아직 수집 전(발행 후 첫 일일 틱 대기) — 0 과 구분해 "—" 로 표시.
   const fmt = (n: number | null | undefined) => (n == null ? "—" : n.toLocaleString());
+  // 발행·업로드 날짜 표기 — YYYY.MM.DD(로컬). 없으면 "—".
+  const fmtDate = (iso: string | null | undefined) => {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? "—"
+      : `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`;
+  };
   // 측정창 종료 후 학습 반영 여부 — 채널별 칩(✓ 반영됨, … 측정 중).
   const refl = (r: { youtube?: { reflected: boolean } | null; meta?: { reflected: boolean } | null }) =>
     [r.youtube && `YT${r.youtube.reflected ? "✓" : "…"}`, r.meta && `IG${r.meta.reflected ? "✓" : "…"}`]
@@ -108,7 +115,7 @@ export default function PerformanceView() {
                 <table className="perf-table">
                   <thead>
                     <tr>
-                      <th>제목</th><th>상태</th><th>조회수</th><th>체류</th>
+                      <th>제목</th><th>발행일</th><th>상태</th><th>조회수</th><th>체류</th>
                       <th>유입 키워드(상위)</th><th>SEO</th><th title="카드뉴스"><Ico name="cards" size={13} /></th><th title="숏폼"><Ico name="play" size={13} /></th><th>측정</th><th></th>
                     </tr>
                   </thead>
@@ -123,6 +130,7 @@ export default function PerformanceView() {
                             {p.keyword && <span className="chip"><Ico name="location" size={11} /> {p.keyword}</span>}
                           </div>
                         </td>
+                        <td className="perf-date">{fmtDate(p.date)}</td>
                         <td><span className="badge">{STAGE_LABEL[p.stage] ? <><Ico name={STAGE_LABEL[p.stage].icon} size={10} /> {STAGE_LABEL[p.stage].label}</> : p.stage}</span></td>
                         <td className="perf-r">{p.views != null ? p.views.toLocaleString() : "—"}</td>
                         <td className="perf-r">{p.dwellSec != null ? `${p.dwellSec}s` : "—"}</td>
@@ -159,7 +167,7 @@ export default function PerformanceView() {
                   <div className="perf-table-wrap">
                     <table className="perf-table">
                       <thead>
-                        <tr><th>숏폼</th><th title="유튜브 조회수 일별 추이">추이</th><th>유튜브 조회</th><th>👍</th><th>릴스 조회</th><th>👍</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
+                        <tr><th>숏폼</th><th>업로드일</th><th title="유튜브 조회수 일별 추이">추이</th><th>유튜브 조회</th><th>👍</th><th>릴스 조회</th><th>👍</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
                       </thead>
                       <tbody>
                         {ch.shorts.map((r) => (
@@ -172,6 +180,7 @@ export default function PerformanceView() {
                                 {r.meta?.permalink && <a className="chip" href={r.meta.permalink} target="_blank" rel="noreferrer" title="인스타 릴스 열기">IG ↗</a>}
                               </div>
                             </td>
+                            <td className="perf-date">{fmtDate(r.ts)}</td>
                             <td className="perf-spark"><Sparkline data={r.youtube?.series ?? []} title={`${r.title} 유튜브 조회 추이`} /></td>
                             <td className="perf-r">{r.youtube ? fmt(r.youtube.views) : "—"}</td>
                             <td className="perf-r">{r.youtube ? fmt(r.youtube.likes) : "—"}</td>
@@ -188,7 +197,7 @@ export default function PerformanceView() {
                   <div className="perf-table-wrap" style={{ marginTop: 10 }}>
                     <table className="perf-table">
                       <thead>
-                        <tr><th>카드뉴스</th><th title="인스타 조회수 일별 추이">추이</th><th>IG 조회</th><th>도달</th><th>👍</th><th>FB 👍</th><th>공유</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
+                        <tr><th>카드뉴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>IG 조회</th><th>도달</th><th>👍</th><th>FB 👍</th><th>공유</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
                       </thead>
                       <tbody>
                         {ch.cardnews.map((r) => (
@@ -200,6 +209,7 @@ export default function PerformanceView() {
                                   : <span className="perf-title-txt" title={r.topic}>{r.topic}</span>}
                               </div>
                             </td>
+                            <td className="perf-date">{fmtDate(r.ts)}</td>
                             <td className="perf-spark"><Sparkline data={r.ig?.series ?? []} title={`${r.topic} 인스타 조회 추이`} /></td>
                             <td className="perf-r">{r.ig ? fmt(r.ig.views) : "—"}</td>
                             <td className="perf-r">{r.ig ? fmt(r.ig.reach) : "—"}</td>
