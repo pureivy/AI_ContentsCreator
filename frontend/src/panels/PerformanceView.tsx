@@ -4,6 +4,28 @@ import Ico, { type IcoName } from "./Ico";
 
 // 성과 대시보드 — 채널 통합 요약(블로그·쇼츠·카드뉴스) → 블로그 글별 → 쇼츠·카드뉴스 → 강화 학습 순.
 // 스테이지 어휘는 캘린더·검토 탭과 동일(Ico).
+
+// 조회수 추이 스파크라인 — 인라인 SVG(의존성·외부요청 없음). 하루 1점 시계열(뒤가 최신).
+// 데이터 2점 미만이면 미표시(추세 없음), 마지막 점은 강조 dot. 값 범위 flat 이면 중앙선.
+function Sparkline({ data, title }: { data: number[]; title?: string }) {
+  if (!data || data.length < 2) return <span className="spark-empty" title="추이 데이터 부족">–</span>;
+  const w = 64, h = 18, pad = 2;
+  const min = Math.min(...data), max = Math.max(...data);
+  const span = max - min || 1;
+  const x = (i: number) => pad + (i / (data.length - 1)) * (w - pad * 2);
+  const y = (v: number) => h - pad - ((v - min) / span) * (h - pad * 2);
+  const pts = data.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const up = data[data.length - 1]! >= data[0]!; // 상승/하강 색
+  const stroke = up ? "var(--spark-up, #3fb950)" : "var(--spark-down, #f85149)";
+  const lx = x(data.length - 1), ly = y(data[data.length - 1]!);
+  return (
+    <svg className="spark" width={w} height={h} viewBox={`0 0 ${w} ${h}`} role="img"
+      aria-label={title || "조회수 추이"} preserveAspectRatio="none">
+      <polyline points={pts} fill="none" stroke={stroke} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={lx} cy={ly} r="2" fill={stroke} />
+    </svg>
+  );
+}
 const STAGE_LABEL: Record<string, { icon: IcoName; label: string }> = {
   published: { icon: "megaphone", label: "발행됨" }, measured: { icon: "chart", label: "측정됨" },
   reflected: { icon: "arrow-up-right", label: "강화 반영" }, ready: { icon: "eye", label: "검토 대기" },
@@ -137,7 +159,7 @@ export default function PerformanceView() {
                   <div className="perf-table-wrap">
                     <table className="perf-table">
                       <thead>
-                        <tr><th>숏폼</th><th>유튜브 조회</th><th>👍</th><th>릴스 조회</th><th>👍</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
+                        <tr><th>숏폼</th><th title="유튜브 조회수 일별 추이">추이</th><th>유튜브 조회</th><th>👍</th><th>릴스 조회</th><th>👍</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
                       </thead>
                       <tbody>
                         {ch.shorts.map((r) => (
@@ -150,6 +172,7 @@ export default function PerformanceView() {
                                 {r.meta?.permalink && <a className="chip" href={r.meta.permalink} target="_blank" rel="noreferrer" title="인스타 릴스 열기">IG ↗</a>}
                               </div>
                             </td>
+                            <td className="perf-spark"><Sparkline data={r.youtube?.series ?? []} title={`${r.title} 유튜브 조회 추이`} /></td>
                             <td className="perf-r">{r.youtube ? fmt(r.youtube.views) : "—"}</td>
                             <td className="perf-r">{r.youtube ? fmt(r.youtube.likes) : "—"}</td>
                             <td className="perf-r">{r.meta ? fmt(r.meta.views) : "—"}</td>
@@ -165,7 +188,7 @@ export default function PerformanceView() {
                   <div className="perf-table-wrap" style={{ marginTop: 10 }}>
                     <table className="perf-table">
                       <thead>
-                        <tr><th>카드뉴스</th><th>IG 조회</th><th>도달</th><th>👍</th><th>FB 👍</th><th>공유</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
+                        <tr><th>카드뉴스</th><th title="인스타 조회수 일별 추이">추이</th><th>IG 조회</th><th>도달</th><th>👍</th><th>FB 👍</th><th>공유</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
                       </thead>
                       <tbody>
                         {ch.cardnews.map((r) => (
@@ -177,6 +200,7 @@ export default function PerformanceView() {
                                   : <span className="perf-title-txt" title={r.topic}>{r.topic}</span>}
                               </div>
                             </td>
+                            <td className="perf-spark"><Sparkline data={r.ig?.series ?? []} title={`${r.topic} 인스타 조회 추이`} /></td>
                             <td className="perf-r">{r.ig ? fmt(r.ig.views) : "—"}</td>
                             <td className="perf-r">{r.ig ? fmt(r.ig.reach) : "—"}</td>
                             <td className="perf-r">{r.ig ? fmt(r.ig.likes) : "—"}</td>

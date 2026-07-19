@@ -1,6 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { parseManualMetrics, latestSampleBySource, type MetricSample } from './performance';
+import { parseManualMetrics, latestSampleBySource, viewsSeriesBySource, type MetricSample } from './performance';
 import { performanceSignal } from './reinforce';
+
+// 스파크라인용 시계열(2026-07-20) — 소스 접두로 거른 샘플을 '하루 1점(그날 마지막 값)'으로 압축해
+// 조회수 추이를 반환한다. 하루 여러 번 수집돼도 스파크라인이 노이즈로 톱니치지 않게 일 단위로 정규화.
+describe('viewsSeriesBySource (채널 조회수 추이)', () => {
+  const s = (day: string, hh: string, views: number, source = 'youtube:api'): MetricSample =>
+    ({ measuredAt: `2026-07-${day}T${hh}:00:00Z`, views, searchInflow: [], source });
+  it('소스 접두 필터 + 하루 1점(그날 마지막) + 조회수 배열', () => {
+    const rows = [s('14', '01', 4), s('15', '03', 855), s('15', '22', 900), s('16', '10', 1124), s('16', '02', 999, 'meta:ig')];
+    expect(viewsSeriesBySource(rows, 'youtube:')).toEqual([4, 900, 1124]); // 15일은 마지막(900), meta 제외
+    expect(viewsSeriesBySource(rows, 'meta:ig')).toEqual([999]);
+  });
+  it('빈/무일치/레거시(source 없음) → 빈 배열, 최근 maxPoints 개로 제한', () => {
+    expect(viewsSeriesBySource([], 'youtube:')).toEqual([]);
+    expect(viewsSeriesBySource([s('14', '01', 4)], 'naver:')).toEqual([]);
+    const many = Array.from({ length: 20 }, (_, i) => s(String(10 + i).padStart(2, '0'), '00', i * 10));
+    expect(viewsSeriesBySource(many, 'youtube:', 5)).toEqual([150, 160, 170, 180, 190]); // 최근 5일
+  });
+});
 
 // 한 콘텐츠 id 의 시계열엔 유튜브(youtube:api)·인스타(meta:ig)·페북(meta:fb) 샘플이 섞인다 —
 // 채널별 최신치는 소스 접두로 갈라 뒤에서부터(최신) 골라야 한다(latestMetrics 는 소스 무시).

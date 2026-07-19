@@ -931,12 +931,12 @@ export interface PerfRow {
 // 채널 성과(쇼츠·카드뉴스) — 채널 미발행이면 null, 발행됐지만 수집 전이면 views null.
 export interface ShortsPerfRow {
   id: string; title: string; ts: string;
-  youtube: { url: string | null; views: number | null; likes: number | null; reflected: boolean } | null;
-  meta: { permalink: string | null; views: number | null; likes: number | null; reflected: boolean } | null;
+  youtube: { url: string | null; views: number | null; likes: number | null; reflected: boolean; series: number[] } | null;
+  meta: { permalink: string | null; views: number | null; likes: number | null; reflected: boolean; series: number[] } | null;
 }
 export interface CardnewsPerfRow {
   id: string; topic: string; ts: string; reflected: boolean;
-  ig: { permalink: string | null; views: number | null; reach: number | null; likes: number | null } | null;
+  ig: { permalink: string | null; views: number | null; reach: number | null; likes: number | null; series: number[] } | null;
   fb: { likes: number | null; shares: number | null } | null;
 }
 export interface PerfData {

@@ -1651,6 +1651,13 @@ button.upload-retry:hover { background: var(--panel2); }
 .perf-title { max-width: 320px; }
 .perf-title a { color: var(--fg-primary); text-decoration: none; }
 .perf-title a:hover { text-decoration: underline; }
+/* 조회수 추이 스파크라인 — 셀 폭 고정, SVG 세로 중앙. 상승 초록·하강 빨강(테마 무관 고정 대비색). */
+.perf-spark { width: 72px; padding-top: 6px; padding-bottom: 6px; }
+.spark { display: block; }
+.spark-empty { color: var(--muted); font-size: 13px; }
+:root { --spark-up: #2ea043; --spark-down: #e5534b; }
+:root[data-theme="dark"] { --spark-up: #3fb950; --spark-down: #f85149; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --spark-up: #3fb950; --spark-down: #f85149; } }
 /* 제목 1줄 고정 — 긴 제목은 말줄임(title 속성으로 전문), 키워드 칩은 온전히 유지.
    (칩이 인라인 흐름에 섞여 제목을 두 줄로 밀고 칩 텍스트까지 쪼개지던 문제) */
 .perf-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }

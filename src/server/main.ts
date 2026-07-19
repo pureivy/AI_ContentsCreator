@@ -57,7 +57,7 @@ import { ingestMetrics } from '../analytics/reinforce';
 import { syncShortsPerformance, syncShortsMetaPerformance } from '../analytics/shortsPerf';
 import { syncCardnewsPerformance } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
-import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource } from '../analytics/performance';
+import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor } from '../analytics/performance';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
@@ -1613,8 +1613,8 @@ function performanceHandler(c: Context): Response {
       const ig = x.metaPublishedTs ? latestMetricsBySource(x.id, 'meta:ig') : null;
       return {
         id: x.id, title: x.title || x.topic,
-        youtube: x.youtubeTs ? { url: x.youtubeUrl ?? null, views: yt?.views ?? null, likes: yt?.likes ?? null, reflected: !!x.perfReflected } : null,
-        meta: x.metaPublishedTs ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, likes: ig?.likes ?? null, reflected: !!x.metaPerfReflected } : null,
+        youtube: x.youtubeTs ? { url: x.youtubeUrl ?? null, views: yt?.views ?? null, likes: yt?.likes ?? null, reflected: !!x.perfReflected, series: viewsSeriesFor(x.id, 'youtube:') } : null,
+        meta: x.metaPublishedTs ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, likes: ig?.likes ?? null, reflected: !!x.metaPerfReflected, series: viewsSeriesFor(x.id, 'meta:ig') } : null,
         ts: [x.youtubeTs, x.metaPublishedTs].filter(Boolean).sort().pop()!,
       };
     })
@@ -1626,7 +1626,7 @@ function performanceHandler(c: Context): Response {
       const fb = latestMetricsBySource(x.id, 'meta:fb');
       return {
         id: x.id, topic: x.topic, ts: x.publishedTs!, reflected: !!x.perfReflected,
-        ig: x.igMediaId ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, reach: ig?.reach ?? null, likes: ig?.likes ?? null } : null,
+        ig: x.igMediaId ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, reach: ig?.reach ?? null, likes: ig?.likes ?? null, series: viewsSeriesFor(x.id, 'meta:ig') } : null,
         fb: x.fbPostId ? { likes: fb?.likes ?? null, shares: fb?.shares ?? null } : null,
       };
     })

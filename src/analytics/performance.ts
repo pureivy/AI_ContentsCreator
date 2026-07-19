@@ -54,6 +54,22 @@ export function latestSampleBySource(samples: MetricSample[], prefix: string): M
 export function latestMetricsBySource(pieceId: string, prefix: string): MetricSample | null {
   return latestSampleBySource(readMetrics(pieceId), prefix);
 }
+/**
+ * 채널 조회수 추이(순수, 스파크라인용) — 소스 접두로 거른 샘플을 '하루 1점(그날 마지막 값)'으로 압축.
+ * 하루 여러 번 수집돼도 스파크라인이 톱니치지 않게 일 단위 정규화, 최근 maxPoints 일만 반환.
+ */
+export function viewsSeriesBySource(samples: MetricSample[], prefix: string, maxPoints = 14): number[] {
+  const byDay = new Map<string, number>();
+  for (const m of [...samples].filter((x) => (x.source ?? '').startsWith(prefix))
+    .sort((a, b) => a.measuredAt.localeCompare(b.measuredAt))) {
+    byDay.set(m.measuredAt.slice(0, 10), num(m.views)); // 같은 날은 마지막(최신) 값이 덮어씀
+  }
+  const series = [...byDay.values()];
+  return series.length > maxPoints ? series.slice(-maxPoints) : series;
+}
+export function viewsSeriesFor(pieceId: string, prefix: string, maxPoints = 14): number[] {
+  return viewsSeriesBySource(readMetrics(pieceId), prefix, maxPoints);
+}
 
 function num(v: unknown): number { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function normInflow(v: unknown): SearchInflow | null {
