@@ -148,6 +148,13 @@ def full_auto_login(page, naver_id: str, naver_pw: str):
                 field = page.locator(sel).first
                 field.click()
                 time.sleep(_rand(0.4, 0.8))
+                # 기존 값(네이버 프로필 자동완성 등)을 먼저 비운다 — 안 지우면 새 입력이 기존값 뒤에
+                # 덧붙어 '기존+새값' 깨진 자격증명이 된다(2026-07-20 사용자 실측: 아이디·비번 필드가
+                # 이미 채워진 상태에서 뒤에 덧붙어 로그인 실패). 전체선택→삭제로 확실히 비운다.
+                page.keyboard.press("ControlOrMeta+a")
+                time.sleep(_rand(0.05, 0.12))
+                page.keyboard.press("Delete")
+                time.sleep(_rand(0.1, 0.2))
                 for ch in val:
                     page.keyboard.type(ch)
                     time.sleep(_rand(0.07, 0.18))
@@ -184,11 +191,29 @@ def full_auto_login(page, naver_id: str, naver_pw: str):
                 keep_state = f"오류:{str(e)[:40]}"
             log(f"  로그인 상태 유지: {keep_state}")
 
-            # 로그인 버튼 실클릭 — JS dispatch(비신뢰 이벤트) 대신 trusted 클릭.
-            page.locator("button#log\\.login, button[type=submit], .btn_login").first.click()
-            log("  ID/PW 사람 타이핑 입력 완료. 로그인 시도 중...")
-            auto_filled = True
-            time.sleep(3)
+            # 제출 전 검증(사용자 제안 2026-07-20) — 필드 값이 의도한 자격증명과 정확히 일치할 때만
+            # 로그인 제출. 불일치(덧붙음·오타·자동완성 잔재)면 자동 제출을 보류하고 수동 안내로 넘긴다.
+            id_val = pw_val = ""
+            try:
+                id_val = page.locator("input#id").first.input_value()
+                pw_val = page.locator("input#pw").first.input_value()
+            except Exception:
+                pass
+            if id_val == naver_id and pw_val == naver_pw:
+                # 제출은 비번 필드에서 Enter — 버튼 셀렉터(네이버 마크업 변동으로 타임아웃 이력)에
+                # 의존하지 않는 표준 폼 제출. 실패 시 버튼 클릭 폴백.
+                try:
+                    page.locator("input#pw").first.press("Enter")
+                except Exception:
+                    try: page.locator("button#log\\.login, button[type=submit], .btn_login").first.click(timeout=3000)
+                    except Exception: pass
+                log("  ID/PW 입력·검증 완료(일치). 로그인 시도 중...")
+                auto_filled = True
+                time.sleep(3)
+            else:
+                # 값 자체는 로그에 남기지 않는다 — 길이만으로 진단(자격증명 노출 방지).
+                log(f"  ⚠ 입력 검증 불일치 — 자동 제출 보류. id(입력 {len(id_val)}자/기대 {len(naver_id)}자) "
+                    f"pw(입력 {len(pw_val)}자/기대 {len(naver_pw)}자). 열린 창에서 값 확인 후 직접 로그인해주세요.")
         except Exception as e:
             log(f"  자동 입력 실패: {e}")
 
