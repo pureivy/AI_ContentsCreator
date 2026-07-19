@@ -136,58 +136,42 @@ def full_auto_login(page, naver_id: str, naver_pw: str):
     )
     time.sleep(1.5)
 
-    # 클립보드 붙여넣기 방식 (press_sequentially보다 캡차 회피 확률 높음)
+    # 사람 타이핑 방식(2026-07-20) — 종전 JS 값 주입(클립보드 모사)이 네이버 봇탐지 강화로 자동 로그인
+    # 거부·캡차 유발(사용자 보고). 본문(human_type)과 동일하게 실제 키 입력을 가변 리듬으로 흘린다.
     # 자격증명이 없으면 자동입력을 건너뛰고 곧장 수동 로그인 대기(빈 값 제출로 인한 오류 화면 방지).
     auto_filled = False
     if not naver_id or not naver_pw:
         log("  자격증명 미설정 — 브라우저에서 직접 로그인해주세요.")
     else:
-      try:
-        id_field = page.locator("input#id")
-        id_field.click()
-        time.sleep(0.3)
-        # JS로 값을 직접 세팅 + input 이벤트 발생
-        page.evaluate("""(val) => {
-            const el = document.querySelector('input#id');
-            if (el) {
-                el.value = val;
-                el.dispatchEvent(new Event('input', {bubbles: true}));
-                el.dispatchEvent(new Event('change', {bubbles: true}));
-            }
-        }""", naver_id)
-        time.sleep(0.3)
+        try:
+            def _type_field(sel: str, val: str):
+                field = page.locator(sel).first
+                field.click()
+                time.sleep(_rand(0.4, 0.8))
+                for ch in val:
+                    page.keyboard.type(ch)
+                    time.sleep(_rand(0.07, 0.18))
+                time.sleep(_rand(0.3, 0.6))
 
-        pw_field = page.locator("input#pw")
-        pw_field.click()
-        time.sleep(0.3)
-        page.evaluate("""(val) => {
-            const el = document.querySelector('input#pw');
-            if (el) {
-                el.value = val;
-                el.dispatchEvent(new Event('input', {bubbles: true}));
-                el.dispatchEvent(new Event('change', {bubbles: true}));
-            }
-        }""", naver_pw)
-        time.sleep(0.5)
+            _type_field("input#id", naver_id)
+            _type_field("input#pw", naver_pw)
 
-        # '로그인 상태 유지' 체크 — NID 쿠키를 지속형으로(다음 실행 재로그인 방지).
-        page.evaluate("""() => {
-            const keep = document.querySelector('#keep, input[id=keep], .keep_check input, label[for=keep]');
-            if (keep && keep.tagName === 'INPUT' && !keep.checked) { keep.click(); }
-            else if (keep && keep.tagName === 'LABEL') { keep.click(); }
-        }""")
-        time.sleep(0.2)
+            # '로그인 상태 유지' 체크 — NID 쿠키를 지속형으로(다음 실행 재로그인 방지). 실클릭(라벨).
+            try:
+                keep = page.locator("input#keep")
+                if keep.count() > 0 and not keep.first.is_checked():
+                    page.locator("label[for=keep], .keep_check").first.click()
+                    time.sleep(_rand(0.2, 0.4))
+            except Exception:
+                pass  # 체크 실패는 무해 — 로그인 자체엔 영향 없음
 
-        # 로그인 버튼 클릭
-        page.evaluate("""() => {
-            const btn = document.querySelector('button#log\\\\.login, button[type=submit], .btn_login');
-            if (btn) btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
-        }""")
-        log("  ID/PW 자동 입력 완료. 로그인 시도 중...")
-        auto_filled = True
-        time.sleep(3)
-      except Exception as e:
-        log(f"  자동 입력 실패: {e}")
+            # 로그인 버튼 실클릭 — JS dispatch(비신뢰 이벤트) 대신 trusted 클릭.
+            page.locator("button#log\\.login, button[type=submit], .btn_login").first.click()
+            log("  ID/PW 사람 타이핑 입력 완료. 로그인 시도 중...")
+            auto_filled = True
+            time.sleep(3)
+        except Exception as e:
+            log(f"  자동 입력 실패: {e}")
 
     # 캡차 발생 시 안내
     if not auto_filled or "nidlogin" in page.url:
