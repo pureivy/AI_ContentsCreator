@@ -97,14 +97,34 @@ def _num(v):
         return 0
 
 
-def extract_advisor_metrics(captures: list) -> dict:
-    """실제 크리에이터 어드바이저 엔드포인트에서 지표를 정밀 추출.
-    - 조회수(cv): yesterday-summary(data.cv.cv 날짜배열 합) + realtime-summary(metricRanks cv metricValue).
-    - 검색 유입 키워드: 유입-검색 전용 엔드포인트(inflow-search/search-keyword)의 keyword+수치만.
-      키워드 수치 필드는 metricValue(어드바이저 표준)를 포함해 인식한다. 채널 대시보드(realtime/
-      soaring/popular)의 키워드는 '이 글' 유입이 아니므로 제외한다. 없으면 0/[]."""
-    views = 0
+def extract_advisor_metrics(captures: list, log_no: str = "") -> dict:
+    """크리에이터 어드바이저에서 '이 글(log_no)' 지표를 정밀 추출.
+    - 조회수(cv): 채널 순위 리스트(realtime-summary·soaring-contents 의 metricRanks[].rank[])에서
+      contentId 가 이 글인 항목의 metricValue 만 취한다. 종전엔 yesterday-summary(블로그 전체 일별 합)+
+      realtime 채널 총계를 그 글에 붙여 '블로그 전체 조회수'를 글 조회수로 오귀속했다(2026-07-20 실측
+      수정). 어드바이저는 채널 중심이라 글별 '누적' 조회수는 없다 — 여기 값은 최근(당일) 글별 cv 이며,
+      네이버 통계의 누적 게시물 조회수와 다를 수 있어 정확값은 수동 입력이 권장된다.
+    - 검색 유입 키워드: 유입-검색 전용 엔드포인트의 keyword+수치만(채널 대시보드 키워드는 제외).
+    log_no 미지정이면 글별 cv 를 특정할 수 없어 0(블로그 전체 오귀속 방지)."""
+    post_cv = None  # 글별 cv(찾으면 값, 없으면 None → 0)
     inflow = {}
+
+    def _post_cv_from_ranks(data) -> "int|None":
+        # metricRanks[].rank[] 중 metricType=cv 이고 contentId(글 URL)에 이 log_no 가 있는 항목.
+        best = None
+        for mr in (data.get("metricRanks") or []) if isinstance(data, dict) else []:
+            if not isinstance(mr, dict) or mr.get("metricType") != "cv":
+                continue
+            for it in (mr.get("rank") or []):
+                if isinstance(it, dict) and log_no and log_no in str(it.get("contentId", "")):
+                    best = max(best or 0, _num(it.get("metricValue")))
+        # soaring-contents 등 data 가 곧 리스트인 경우도 지원
+        if isinstance(data, list):
+            for it in data:
+                if isinstance(it, dict) and log_no and log_no in str(it.get("contentId", "")):
+                    best = max(best or 0, _num(it.get("cv") or it.get("metricValue") or it.get("count")))
+        return best
+
     for cap in captures:
         body = cap.get("body")
         if not isinstance(body, dict):
@@ -113,14 +133,10 @@ def extract_advisor_metrics(captures: list) -> dict:
         data = body.get("data")
         if data in (None, [], {}):
             continue
-        if path.endswith("/yesterday-summary") and isinstance(data, dict):
-            cv = (data.get("cv") or {}).get("cv")
-            if isinstance(cv, list):
-                views += sum(_num(x) for x in cv)
-        elif path.endswith("/realtime-summary") and isinstance(data, dict):
-            for mr in (data.get("metricRanks") or []):
-                if isinstance(mr, dict) and mr.get("metricType") == "cv":
-                    views += _num(mr.get("metricValue"))
+        if path.endswith("/realtime-summary") or path.endswith("/soaring-contents"):
+            cv = _post_cv_from_ranks(data)
+            if cv is not None:
+                post_cv = max(post_cv or 0, cv)
         elif _is_search_inflow_endpoint(path, cap.get("url", "")):
             # 아이템 후보: data 리스트 · data.rank/list/searchKeyword · data.metricRanks[].rank[].
             if isinstance(data, list):
@@ -143,7 +159,7 @@ def extract_advisor_metrics(captures: list) -> dict:
                     inflow[str(kw).strip()] = max(inflow.get(str(kw).strip(), 0), cnt)
     ranked = sorted(inflow.items(), key=lambda kv: kv[1], reverse=True)[:12]
     search_inflow = [{"keyword": k, "count": c, "rank": i + 1} for i, (k, c) in enumerate(ranked)]
-    return {"views": views, "dwellSec": None, "searchInflow": search_inflow}
+    return {"views": post_cv or 0, "dwellSec": None, "searchInflow": search_inflow}
 
 
 def _walk(obj, fn):
@@ -378,7 +394,7 @@ def main():
     all_unauth = bool(captures) and all(_unauth(c) for c in captures)
 
     # 어드바이저 실측 엔드포인트 정밀 추출을 우선, 부족분은 범용 휴리스틱으로 보강.
-    adv = extract_advisor_metrics(captures)
+    adv = extract_advisor_metrics(captures, log_no)
     gen = extract_metrics(captures, log_no)
     metrics = {
         "views": adv["views"] or gen["views"],
@@ -387,17 +403,19 @@ def main():
     }
     # 로그인은 됐지만(권한 응답 수신) 수치가 0 = 발행 직후 미집계일 가능성.
     logged = any(isinstance(c.get("body"), dict) and c["body"].get("data") not in (None,) for c in captures)
-    if metrics["views"] and not metrics["searchInflow"]:
-        note = ("조회수는 수집됨. 검색 유입 키워드는 이 글 단위 어드바이저 데이터가 없어 비웠습니다 "
-                "(채널 전체 실시간·인기 키워드는 글별 성과에 섞지 않음).")
-    elif metrics["views"] or metrics["searchInflow"]:
+    if metrics["views"]:
+        note = ("글별 최근(당일) 조회수입니다 — 어드바이저는 글 '누적' 조회수를 제공하지 않아 "
+                "네이버 통계의 누적 게시물 조회수와 다를 수 있습니다. 정확한 누적값은 수동 입력을 권장합니다."
+                + ("" if metrics["searchInflow"] else " (검색 유입은 글 단위 데이터가 없어 비웠습니다.)"))
+    elif metrics["searchInflow"]:
         note = ""
     elif all_unauth or not captures:
         note = ("어드바이저 로그인 세션 미확립 — 브라우저에서 네이버에 로그인(로그인 상태 유지 체크) 후 "
                 "다시 시도하세요. 계속 실패하면 수동 입력으로 대체할 수 있습니다.")
     elif logged:
-        note = ("로그인·수집은 정상인데 통계가 0입니다 — 네이버 통계는 하루 지연 집계라 발행 직후에는 "
-                "수치가 없습니다. 하루 이상 지난 뒤 다시 시도하세요(수동 입력으로도 대체 가능).")
+        note = ("로그인·수집 정상인데 이 글의 어드바이저 조회수가 0입니다 — 조회가 적은 글은 채널 순위 "
+                "리스트에 안 잡히거나 당일 조회가 0일 수 있습니다. 누적 게시물 조회수는 네이버 통계에서 "
+                "확인해 수동 입력을 권장합니다(발행 당일은 지연 집계로 0일 수 있음).")
     else:
         note = "자동 추출 실패 — 캡처 덤프(naver_stats_capture.json) 확인 후 추출기 정밀화 필요. 수동 입력으로 대체 가능."
     emit({**metrics, "source": "scrape:naver_advisor", "note": note, "captured": len(captures)})
