@@ -1131,28 +1131,32 @@ app.post('/shorts/:id/youtube', async (c) => {
 // 메타는 OAuth 리디렉션 HTTPS 강제 → 콜백 전용 HTTPS 포트(기본 port+1). 페이스북 앱의 리디렉션 URI 와 일치 필수.
 const META_HTTPS_PORT = Number(process.env.META_HTTPS_PORT) || (CONFIG.port + 1);
 const META_REDIRECT = `https://localhost:${META_HTTPS_PORT}/meta/oauth/callback`;
-// 최신 메타 앱은 'Instagram API with Facebook Login' 권한 이름 사용(instagram_business_*). 옛 이름
-// (instagram_content_publish·pages_manage_posts)은 신규 앱에서 Invalid Scopes(2026-07-20 실측).
-// IG 발행이 핵심 — pages_show_list/read_engagement 로 페이지→IG 계정 해석. FB 페이지 게시는 best-effort.
-const META_SCOPES = 'pages_show_list,pages_read_engagement,instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights';
+// 인스타그램 로그인 방식(2026-07-20 전환) — instagram.com/oauth 는 instagram_business_* 만 받는다
+// (pages_* 는 페북 로그인 전용이라 넣으면 Invalid Scopes). 인스타 앱 ID/시크릿(페북 앱과 별개)을 쓴다.
+const META_SCOPES = 'instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights';
 interface MetaPage { id: string; name: string; access_token: string; instagram_business_account?: { id: string } }
 const META_OAUTH_PENDING = new Map<string, { brand: string; exp: number; pages?: MetaPage[] }>();
 // 그래프 호스트·버전은 metaPublish.GRAPH 단일 선언을 재사용(전역 제약). dialog URL 만 www.facebook.com 호스트.
+// 인스타그램 로그인 방식(2026-07-20) — 인스타 앱 ID/시크릿(INSTAGRAM_APP_ID/SECRET, 페북 앱과 별개).
+// instagram.com/oauth → code → api.instagram.com(단기) → graph.instagram.com(장기 60일). 페이지 없음.
+const IG_AUTHORIZE = 'https://www.instagram.com/oauth/authorize';
+const IG_TOKEN = 'https://api.instagram.com/oauth/access_token';
+const IG_GRAPH = 'https://graph.instagram.com';
 app.get('/meta/status', (c) => {
   const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
-  const client = !!(getSecret('META_OAUTH_CLIENT_ID') && getSecret('META_OAUTH_CLIENT_SECRET'));
+  const client = !!(getSecret('INSTAGRAM_APP_ID') && getSecret('INSTAGRAM_APP_SECRET'));
   const a = getMetaAccount(brand);
-  return c.json({ client, connected: !!(a.pageId && a.igUserId && a.pageAccessToken) });
+  return c.json({ client, connected: !!(a.igUserId && a.pageAccessToken) });
 });
 app.get('/meta/oauth/start', (c) => {
   const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
   if (brand && !isSafeBrandSlug(brand)) return c.text('비정상 브랜드 슬러그', 400);
-  const id = getSecret('META_OAUTH_CLIENT_ID');
-  if (!id) return c.text('메타 앱 미설정 — 키 탭에서 앱 ID/시크릿을 먼저 입력하세요(스펙 §4 가이드)', 400);
+  const id = getSecret('INSTAGRAM_APP_ID');
+  if (!id) return c.text('인스타그램 앱 미설정 — .env 의 INSTAGRAM_APP_ID/SECRET 에 Instagram 제품의 앱 ID/시크릿을 입력하세요(페북 앱과 별개)', 400);
   const nonce = randomBytes(16).toString('hex');
   for (const [k, v] of META_OAUTH_PENDING) if (v.exp < Date.now()) META_OAUTH_PENDING.delete(k);
   META_OAUTH_PENDING.set(nonce, { brand, exp: Date.now() + 10 * 60_000 });
-  const u = new URL('https://www.facebook.com/v23.0/dialog/oauth');
+  const u = new URL(IG_AUTHORIZE);
   u.searchParams.set('client_id', id);
   u.searchParams.set('redirect_uri', META_REDIRECT);
   u.searchParams.set('response_type', 'code');
@@ -1160,14 +1164,6 @@ app.get('/meta/oauth/start', (c) => {
   u.searchParams.set('state', nonce);
   return c.redirect(u.toString());
 });
-/** 페이지 1건을 브랜드에 저장(IG 연결 검증 포함) — callback·pick 공용. */
-function saveMetaPage(brand: string, page: MetaPage): string | null {
-  const ig = page.instagram_business_account?.id ?? '';
-  if (!ig) return `페이지 "${page.name}"에 연결된 인스타그램 프로페셔널 계정이 없습니다 — 페이지 설정에서 IG 계정을 먼저 연결하세요`;
-  setMetaToken(brand, { pageId: page.id, igUserId: ig, pageAccessToken: page.access_token });
-  console.log(`[발행담당] 메타 연결 — 브랜드 '${brand || '범용'}' ← 페이지 "${page.name}"`);
-  return null;
-}
 app.get('/meta/oauth/callback', async (c) => {
   const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   const done = (msg: string): Response => c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">${esc(msg)} — 이 창을 닫으세요.</body>`);
@@ -1176,41 +1172,25 @@ app.get('/meta/oauth/callback', async (c) => {
   if (!pending || pending.exp < Date.now()) return done('연결 실패: 유효하지 않거나 만료된 연결 요청 — 메타 연결을 다시 시작하세요');
   META_OAUTH_PENDING.delete(state);
   const code = c.req.query('code') ?? '';
-  if (!code) return done(`연결 실패: ${c.req.query('error') ?? '인증 코드 없음'}`);
+  if (!code) return done(`연결 실패: ${c.req.query('error_description') ?? c.req.query('error') ?? '인증 코드 없음'}`);
   try {
-    const cid = getSecret('META_OAUTH_CLIENT_ID') ?? '';
-    const sec = getSecret('META_OAUTH_CLIENT_SECRET') ?? '';
-    const tok = await fetch(`${GRAPH}/oauth/access_token?client_id=${encodeURIComponent(cid)}&redirect_uri=${encodeURIComponent(META_REDIRECT)}&client_secret=${encodeURIComponent(sec)}&code=${encodeURIComponent(code)}`);
-    const tj = await tok.json() as { access_token?: string };
-    if (!tj.access_token) return done('연결 실패: 액세스 토큰 없음');
-    const long = await fetch(`${GRAPH}/oauth/access_token?grant_type=fb_exchange_token&client_id=${encodeURIComponent(cid)}&client_secret=${encodeURIComponent(sec)}&fb_exchange_token=${encodeURIComponent(tj.access_token)}`);
+    const cid = getSecret('INSTAGRAM_APP_ID') ?? '';
+    const sec = getSecret('INSTAGRAM_APP_SECRET') ?? '';
+    // ① 단기 토큰 + user_id — api.instagram.com(form-urlencoded POST). Instagram Login 네이티브.
+    const tok = await fetch(IG_TOKEN, {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: cid, client_secret: sec, grant_type: 'authorization_code', redirect_uri: META_REDIRECT, code }),
+    });
+    const tj = await tok.json() as { access_token?: string; user_id?: number | string; error_message?: string };
+    if (!tj.access_token || !tj.user_id) return done(`연결 실패: ${tj.error_message ?? '토큰/사용자 ID 없음'}`);
+    // ② 장기 토큰(60일) — graph.instagram.com/access_token?grant_type=ig_exchange_token.
+    const long = await fetch(`${IG_GRAPH}/access_token?grant_type=ig_exchange_token&client_secret=${encodeURIComponent(sec)}&access_token=${encodeURIComponent(tj.access_token)}`);
     const lj = await long.json() as { access_token?: string };
-    const userToken = lj.access_token ?? tj.access_token; // 장기 교환 실패 시 단기로 진행(페이지 토큰은 어차피 페이지별)
-    const pr = await fetch(`${GRAPH}/me/accounts?fields=id,name,access_token,instagram_business_account&access_token=${encodeURIComponent(userToken)}`);
-    const pj = await pr.json() as { data?: MetaPage[] };
-    const pages = (pj.data ?? []).filter((p) => p.id && p.access_token);
-    if (!pages.length) return done('연결 실패: 관리 중인 페이스북 페이지가 없습니다 — 페이지를 먼저 만드세요(스펙 §4)');
-    if (pages.length === 1) {
-      const err = saveMetaPage(pending.brand, pages[0]!);
-      return done(err ? `연결 실패: ${err}` : `✅ 메타 연결 완료 (브랜드: ${pending.brand || '범용'} ← ${pages[0]!.name})`);
-    }
-    const nonce2 = randomBytes(16).toString('hex');
-    META_OAUTH_PENDING.set(nonce2, { brand: pending.brand, exp: Date.now() + 10 * 60_000, pages });
-    const links = pages.map((p) =>
-      `<li><a href="/meta/oauth/pick?state=${nonce2}&page=${esc(p.id)}">${esc(p.name)}</a>${p.instagram_business_account ? '' : ' (IG 미연결)'}</li>`).join('');
-    return c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">브랜드 '${esc(pending.brand || '범용')}'에 연결할 페이지를 선택하세요:<ul>${links}</ul></body>`);
+    const igToken = lj.access_token ?? tj.access_token; // 장기 교환 실패 시 단기로 진행(1h) — 다음 연결에 갱신
+    setMetaToken(pending.brand, { pageId: '', igUserId: String(tj.user_id), pageAccessToken: igToken });
+    console.log(`[발행담당] 인스타그램 연결 — 브랜드 '${pending.brand || '범용'}' (IG user ${String(tj.user_id)})`);
+    return done(`✅ 인스타그램 연결 완료 (브랜드: ${pending.brand || '범용'})`);
   } catch (e) { return done(`연결 실패: ${e instanceof Error ? e.message.slice(0, 120) : e}`); }
-});
-app.get('/meta/oauth/pick', (c) => {
-  const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  const done = (msg: string): Response => c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">${esc(msg)} — 이 창을 닫으세요.</body>`);
-  const pending = META_OAUTH_PENDING.get(c.req.query('state') ?? '');
-  if (!pending?.pages || pending.exp < Date.now()) return done('선택 실패: 만료된 요청 — 메타 연결을 다시 시작하세요');
-  META_OAUTH_PENDING.delete(c.req.query('state') ?? '');
-  const page = pending.pages.find((p) => p.id === (c.req.query('page') ?? ''));
-  if (!page) return done('선택 실패: 페이지 없음');
-  const err = saveMetaPage(pending.brand, page);
-  return done(err ? `연결 실패: ${err}` : `✅ 메타 연결 완료 (브랜드: ${pending.brand || '범용'} ← ${page.name})`);
 });
 app.post('/cardnews/:id/publish', async (c) => {
   const id = c.req.param('id') ?? '';

@@ -36,8 +36,9 @@ const BUILTIN: BuiltinDef[] = [
   { key: 'YOUTUBE_OAUTH_CLIENT_ID', label: '유튜브 OAuth 클라이언트 ID', icon: '▶️', desc: '쇼츠 업로드용 공용 OAuth 클라이언트(웹) ID — 설정 가이드는 스펙 §9', placeholder: '….apps.googleusercontent.com', needs_restart: false },
   { key: 'YOUTUBE_OAUTH_CLIENT_SECRET', label: '유튜브 OAuth 시크릿', icon: '🔑', desc: '위 클라이언트의 Client Secret', placeholder: 'GOCSPX-…', needs_restart: false },
   // 메타(인스타·페북) 발행 — 공용 개발자 앱 1개. 브랜드별 페이지·IG 토큰은 META_TOKENS blob(스튜디오 '메타 연결').
-  { key: 'META_OAUTH_CLIENT_ID', label: '메타 앱 ID', icon: '📸', desc: '카드뉴스 인스타·페북 발행용 Meta 개발자 앱 ID — 설정 가이드는 스펙 §4', placeholder: '1234567890', needs_restart: false },
-  { key: 'META_OAUTH_CLIENT_SECRET', label: '메타 앱 시크릿', icon: '🔑', desc: '위 앱의 App Secret', placeholder: 'abc123…', needs_restart: false },
+  // 인스타그램 로그인 방식(2026-07-20 전환) — Instagram 제품의 앱 ID/시크릿(페북 앱과 별개). 이게 발행 연결에 쓰인다.
+  { key: 'INSTAGRAM_APP_ID', label: '인스타그램 앱 ID', icon: '📸', desc: '메타 앱 > Instagram 제품 > API 설정(Instagram 로그인)의 앱 ID — 릴스·카드뉴스 인스타 발행 연결용', placeholder: '1234567890', needs_restart: true },
+  { key: 'INSTAGRAM_APP_SECRET', label: '인스타그램 앱 시크릿', icon: '🔑', desc: '위 Instagram 앱의 App Secret', placeholder: 'abc123…', needs_restart: true },
   // 네이버 발행 계정(블로그 ID·로그인)은 브랜드별로 갈리므로 일반 키 그리드가 아니라 전용
   // "네이버 발행 계정" 섹션(브랜드 선택)에서 관리한다 — get/setNaverAccount·naverAccountView.
   // 범용('') 계정은 여전히 평면 키(NAVER_BLOG_ID/NAVER_LOGIN_ID/NAVER_LOGIN_PW)에 저장된다.
@@ -322,6 +323,8 @@ export function setYoutubeToken(slug: string, refreshToken: string): void {
 // ── 브랜드별 메타(인스타·페북) 계정 ──────────────────────────────────────────
 // YOUTUBE_TOKENS 와 동일 패턴 — 공용 개발자 앱 1개 + 브랜드별 {pageId, igUserId, pageAccessToken}을
 // META_TOKENS 한 키에 JSON 으로 저장. 브랜드 폴백 없음 — 미연결은 빈값(발행 시 명확히 에러).
+// pageId 는 페이스북-로그인 방식 전용(페이지 게시용). 인스타그램-로그인 방식(2026-07-20 전환)은
+// 페이지가 없어 pageId=''; 발행 인증은 igUserId + pageAccessToken(=IG 장기 토큰)으로 성립한다.
 export interface MetaAccount { pageId: string; igUserId: string; pageAccessToken: string }
 const META_TOKENS_KEY = 'META_TOKENS';
 
@@ -345,10 +348,11 @@ export function getMetaAccount(slug: string): MetaAccount {
 export function setMetaToken(slug: string, acct: MetaAccount | null): void {
   const map = readMetaTokens();
   const clean: Record<string, Partial<MetaAccount>> = {};
+  // 인증 최소 요건: igUserId + pageAccessToken(토큰). pageId 는 페북-로그인 전용(옵셔널).
   for (const [s, a] of Object.entries(map)) {
-    if (a.pageId?.trim() && a.igUserId?.trim() && a.pageAccessToken?.trim()) clean[s] = a;
+    if (a.igUserId?.trim() && a.pageAccessToken?.trim()) clean[s] = a;
   }
-  if (acct && acct.pageId.trim() && acct.igUserId.trim() && acct.pageAccessToken.trim()) clean[slug] = acct;
+  if (acct && acct.igUserId.trim() && acct.pageAccessToken.trim()) clean[slug] = acct;
   else delete clean[slug];
   writeEnvValue(META_TOKENS_KEY, Object.keys(clean).length ? JSON.stringify(clean) : undefined);
 }
