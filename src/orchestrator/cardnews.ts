@@ -88,7 +88,8 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
       ? `슬라이드 ${n}장(표지 1 + 본문 ${Math.max(1, n - 2)} + 마무리 1)의 카드뉴스를 기획하라.`
       : '슬라이드 수는 스토리라인의 핵심 메시지 개수에 맞게 3~8장 사이에서 스스로 정하라(표지 1 + 본문 여러 장 + 마무리 1). 억지로 채우거나 줄이지 말고 내용 밀도에 맞춰라.',
     '표지와 마무리 장의 body 는 비우거나 한 줄로 짧게. 카드 텍스트에 이모지 금지(캡션에는 허용).',
-    'JSON 형식: {"title":"...","slides":[{"headline":"...","body":"줄바꿈은 \\n"}],"caption":"...","hashtags":["#태그1","#태그2"]}',
+    'caption 은 인스타그램 게시글 본문 — 한 덩어리 문장 금지. 슬라이드 body 처럼 줄바꿈 \\n 으로 문단을 나눠 읽기 쉽게: 첫 줄 훅 한 문장 → 빈 줄 → 핵심 포인트 2~4줄(각 줄 짧게, 줄마다 \\n) → 빈 줄 → 마무리 행동유도 한 줄. 이모지는 적당히.',
+    'JSON 형식: {"title":"...","slides":[{"headline":"...","body":"줄바꿈은 \\n"}],"caption":"훅 한 줄\\n\\n핵심 포인트 한 줄\\n다음 포인트 한 줄\\n\\n마무리 행동유도","hashtags":["#태그1","#태그2"]}',
   ].filter(Boolean).join('\n');
   type PlannerSlide = { headline?: unknown; body?: unknown };
   type PlannerRaw = { title?: unknown; slides?: PlannerSlide[]; caption?: unknown; hashtags?: unknown };
