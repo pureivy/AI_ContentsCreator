@@ -1131,7 +1131,10 @@ app.post('/shorts/:id/youtube', async (c) => {
 // 메타는 OAuth 리디렉션 HTTPS 강제 → 콜백 전용 HTTPS 포트(기본 port+1). 페이스북 앱의 리디렉션 URI 와 일치 필수.
 const META_HTTPS_PORT = Number(process.env.META_HTTPS_PORT) || (CONFIG.port + 1);
 const META_REDIRECT = `https://localhost:${META_HTTPS_PORT}/meta/oauth/callback`;
-const META_SCOPES = 'pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish,instagram_manage_insights,publish_video';
+// 최신 메타 앱은 'Instagram API with Facebook Login' 권한 이름 사용(instagram_business_*). 옛 이름
+// (instagram_content_publish·pages_manage_posts)은 신규 앱에서 Invalid Scopes(2026-07-20 실측).
+// IG 발행이 핵심 — pages_show_list/read_engagement 로 페이지→IG 계정 해석. FB 페이지 게시는 best-effort.
+const META_SCOPES = 'pages_show_list,pages_read_engagement,instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights';
 interface MetaPage { id: string; name: string; access_token: string; instagram_business_account?: { id: string } }
 const META_OAUTH_PENDING = new Map<string, { brand: string; exp: number; pages?: MetaPage[] }>();
 // 그래프 호스트·버전은 metaPublish.GRAPH 단일 선언을 재사용(전역 제약). dialog URL 만 www.facebook.com 호스트.

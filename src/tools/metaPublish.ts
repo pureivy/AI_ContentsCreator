@@ -135,18 +135,22 @@ export async function publishCardNewsToMeta(opts: {
       }
     }
 
-    // ③ FB 피드 게시 — 기발행(existing.fbPostId)이면 스킵.
+    // ③ FB 피드 게시 — best-effort. 최신 메타 앱은 pages_manage_posts 미부여라 실패할 수 있는데,
+    //    IG 발행(핵심)은 이미 성공했으므로 FB 실패로 전체를 실패시키지 않는다(부분 성공). 사유만 로그.
     if (!opts.existing?.fbPostId) {
-      const feed = await graphJson(`${GRAPH}/${acct.pageId}/feed`, {
-        method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          message,
-          attached_media: JSON.stringify(photoIds.map((id) => ({ media_fbid: id }))),
-          access_token: token,
-        }),
-      }, 'FB 피드 게시');
-      out.fbPostId = extractId(feed) ?? undefined;
-      if (!out.fbPostId) throw new Error('FB 피드 응답 이형(id 없음)');
+      try {
+        const feed = await graphJson(`${GRAPH}/${acct.pageId}/feed`, {
+          method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            message,
+            attached_media: JSON.stringify(photoIds.map((id) => ({ media_fbid: id }))),
+            access_token: token,
+          }),
+        }, 'FB 피드 게시');
+        out.fbPostId = extractId(feed) ?? undefined;
+      } catch (fe) {
+        console.log('[meta] FB 피드 게시 건너뜀(IG 성공 유지) — ' + (fe instanceof Error ? fe.message.slice(0, 120) : String(fe)));
+      }
     }
 
     out.ok = true;
@@ -233,9 +237,14 @@ export async function publishShortsToMeta(opts: {
       out.igPermalink = (perma === null ? null : parsePermalink(perma)) ?? 'https://www.instagram.com/';
     }
 
-    // ② FB 릴스 — 기발행(existing.fbReelId)이면 스킵.
+    // ② FB 릴스 — best-effort. 페이지 권한(pages_manage_posts) 미부여면 실패할 수 있으나 IG 릴스(핵심)는
+    //    이미 성공했으므로 전체를 실패시키지 않는다(부분 성공). 사유만 로그.
     if (!opts.existing?.fbReelId) {
-      out.fbReelId = await publishFbReel(acct.pageId, token, opts.videoPath, message, signal);
+      try {
+        out.fbReelId = await publishFbReel(acct.pageId, token, opts.videoPath, message, signal);
+      } catch (fe) {
+        console.log('[meta] FB 릴스 건너뜀(IG 성공 유지) — ' + (fe instanceof Error ? fe.message.slice(0, 120) : String(fe)));
+      }
     }
 
     out.ok = true;
