@@ -85,11 +85,13 @@ function ShortRow({ s, onDelete, yt, metaReady, onChanged }: {
       {s.stage === "error" && <p className="muted" style={{ color: "var(--con)", marginTop: 6 }}>{s.error || "알 수 없는 실패"}</p>}
       {s.stage === "ready" && (
         <div style={{ display: "flex", gap: 14, marginTop: 10, flexWrap: "wrap", alignItems: "flex-start" }}>
-          {/* 세로 영상 미리보기 — 실사이즈(1080×1920)의 축소판. key 로 갱신 시 리로드 */}
+          {/* 세로 영상 미리보기 — 훅 프레임 포스터(가벼운 이미지)를 먼저 띄우고, 재생 시에만 영상 로드(preload=none).
+              poster 는 updatedTs 로 캐시버스트(재렌더 시 새 프레임). key 로 갱신 시 리로드 */}
           <video
-            key={s.updatedTs} controls preload="metadata"
+            key={s.updatedTs} controls preload="none"
+            poster={`/shorts/${s.id}/thumbnail?v=${encodeURIComponent(s.updatedTs)}`}
             src={`/shorts/${s.id}/video`}
-            style={{ width: 220, aspectRatio: "9/16", borderRadius: 10, background: "#000" }}
+            style={{ width: 220, aspectRatio: "9/16", borderRadius: 10, background: "#000", objectFit: "cover" }}
           />
           <div style={{ flex: "1 1 260px", minWidth: 220 }}>
             {s.titles && s.titles.length > 1 && (

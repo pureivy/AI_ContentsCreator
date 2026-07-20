@@ -49,6 +49,7 @@ import { runCardNewsJob, isCardNewsRunning } from '../orchestrator/cardnews';
 import { shortsStore } from '../content/shorts';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning } from '../orchestrator/shorts';
+import { ensureShortsThumbnail } from '../tools/shortsRender';
 import { pieceStore, selectResumablePiece } from '../content/pieces';
 import { listPersonas } from '../content/personas';
 import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeBrandSlug, deleteBrand, isSafeBrandSlug } from '../content/brand';
@@ -1021,6 +1022,19 @@ function shortsVideoHandler(c: Context): Response {
     'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes', 'Content-Length': String(size),
   });
 }
+// 썸네일 서빙 — final.mp4 훅 프레임 1장(lazy 생성·캐시). 카드 <video poster> 용. 동시 요청은 한 번의 생성을 공유.
+const thumbJobs = new Map<string, Promise<string | null>>();
+async function shortsThumbnailHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  if (!shortsStore().get(id)) return c.json({ error: 'unknown short' }, 404);
+  const thumb = path.join(shortsStore().dirFor(id), 'thumbnail.jpg');
+  let job = thumbJobs.get(id);
+  if (!job) { job = ensureShortsThumbnail(shortsStore().dirFor(id)).finally(() => thumbJobs.delete(id)); thumbJobs.set(id, job); }
+  await job;
+  let buf: Buffer;
+  try { buf = fs.readFileSync(thumb); } catch { return c.json({ error: 'thumbnail not found' }, 404); }
+  return c.body(new Uint8Array(buf), 200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=3600' });
+}
 // 전체 zip — MP4 + 자막(srt) + 캡션. 매 요청 재생성(항상 최신).
 async function shortsZipHandler(c: Context): Promise<Response> {
   const id = c.req.param('id') ?? '';
@@ -1287,6 +1301,8 @@ app.post('/shorts/meta-reconcile', async (c) => {
 });
 app.get('/shorts/:id/video', shortsVideoHandler); // :id 보다 먼저(구체 경로 우선)
 app.get('/api/shorts/:id/video', shortsVideoHandler);
+app.get('/shorts/:id/thumbnail', shortsThumbnailHandler);
+app.get('/api/shorts/:id/thumbnail', shortsThumbnailHandler);
 app.get('/shorts/:id/zip', shortsZipHandler);
 app.get('/api/shorts/:id/zip', shortsZipHandler);
 app.get('/shorts/:id', shortsGetHandler);

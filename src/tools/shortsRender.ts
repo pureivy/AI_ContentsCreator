@@ -33,6 +33,24 @@ async function ff(args: string[], timeoutMs: number, signal?: AbortSignal): Prom
 }
 
 /**
+ * 숏폼 썸네일 — final.mp4 의 훅 프레임(≈1s, 페이드인 이후·제목이 이미 구워진 첫 장면)을 dir/thumbnail.jpg 로 1장 추출.
+ * 이미 있으면 그대로 반환. 영상 없으면 null. 스튜디오 카드 포스터·다운로드용(발행엔 미사용). best-effort — 실패는 null.
+ */
+export async function ensureShortsThumbnail(dir: string, signal?: AbortSignal): Promise<string | null> {
+  const thumb = path.join(dir, 'thumbnail.jpg');
+  const video = path.join(dir, 'final.mp4');
+  if (!fs.existsSync(video)) return fs.existsSync(thumb) ? thumb : null;
+  // 썸네일이 영상보다 최신이면 재사용(재렌더 시 mtime 이 앞서면 재생성).
+  if (fs.existsSync(thumb)) {
+    try { if (fs.statSync(thumb).mtimeMs >= fs.statSync(video).mtimeMs) return thumb; } catch { return thumb; }
+  }
+  try {
+    await ff(['-ss', '1', '-i', video, '-frames:v', '1', '-vf', 'scale=-2:720', '-q:v', '4', thumb], 20_000, signal);
+    return fs.existsSync(thumb) ? thumb : null;
+  } catch { return fs.existsSync(thumb) ? thumb : null; } // 렌더 폴백처럼 무해 — 없으면 포스터 없이 진행
+}
+
+/**
  * 씬 배열 → dir/final.mp4 + subtitles.srt. images[i] 는 씬 i 의 배경(없으면 null → 단색 폴백).
  * 개별 씬 실패는 이슈로 기록하고 해당 씬을 단색 배경·무음으로라도 완성(전체 실패 방지).
  */
