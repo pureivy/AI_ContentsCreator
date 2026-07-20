@@ -604,6 +604,12 @@ def human_typing_enabled() -> bool:
     return os.environ.get("NAVER_HUMAN_TYPING", "true").strip().lower() not in ("0", "false", "no", "off")
 
 
+def hybrid_rich_enabled() -> bool:
+    """표/코드가 있는 글도 본문은 사람 타이핑하고 표·코드만 컴포넌트로 스플라이스(기본 활성).
+    NAVER_HYBRID_RICH=false/0/off 로 끄면 예전처럼 글 전체를 SE 문서 API 로 배치 주입한다(킬스위치)."""
+    return os.environ.get("NAVER_HYBRID_RICH", "true").strip().lower() not in ("0", "false", "no", "off")
+
+
 def human_type(page, text: str):
     """한 글자씩 가변 속도로 입력 — 문장부호 뒤 쉼, 가끔 생각하는 듯한 멈춤(사람 타이핑 리듬)."""
     for ch in text:
@@ -777,7 +783,9 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
     본문을 '사람처럼' 입력한다 — 문단은 한 글자씩 타이핑하고 사이사이 Enter, 이미지는 해당 위치에서
     이미지 버튼으로 삽입(사람이 사진 올리듯). 소제목·인용구는 '평문'으로 순서대로 타이핑만 하고, 굵게·
     인용구 박스는 타이핑 이후 write_post 에서 (변환 setDocumentData → 명령 굵게) 순으로 입힌다.
-    반환: (headings[{text,level}], quote_texts[str], upload_count)
+    표(|)·소스코드(```)는 키 입력 불가 → 위치에 플레이스홀더 문단을 타이핑하고 (마커, 컴포넌트)를
+    모아 반환한다. write_post 가 타이핑 후 splice_rich_blocks 로 실제 표/코드 컴포넌트로 교체한다.
+    반환: (headings[{text,level}], quote_texts[str], rich_blocks[(marker,comp)], upload_count)
     """
     sections = se_text.get("sections", [])
     image_positions = se_text.get("image_positions", [])
@@ -791,6 +799,7 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
     img_btn = page.locator("button[data-name='image']").first
     headings = []
     quote_texts = []   # 평문으로 타이핑한 인용구 문단 텍스트 — 타이핑 후 setDocumentData 로 인용구 변환.
+    rich_blocks = []   # (마커, 표/코드 컴포넌트) — 위치에 플레이스홀더 타이핑 후 splice_rich_blocks 로 교체.
     upload_count = [0]
 
     def insert_image(slot_idx: int):
@@ -854,6 +863,37 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
             if not line:
                 k += 1
                 continue
+            # 소스코드 펜스(```) — 키 입력 불가 → 플레이스홀더 문단을 타이핑하고, 타이핑 후 splice 로
+            # 실제 코드 컴포넌트로 교체(하이브리드: 본문은 사람 타이핑, 표/코드만 컴포넌트).
+            if line.startswith("```"):
+                code_lines = []
+                k += 1
+                while k < len(body_lines) and not body_lines[k].strip().startswith("```"):
+                    code_lines.append(body_lines[k])   # 코드는 원문 그대로(strip 안 함)
+                    k += 1
+                k += 1  # 닫는 ``` 소비
+                marker = f"RICHBLOCK-{len(rich_blocks)}-PLACEHOLDER"  # 순수 ASCII — insertText 변형 위험 제거
+                newline_before()
+                human_type(page, marker)
+                rich_blocks.append((marker, make_code("\n".join(code_lines))))
+                continue
+            # 표(|) — 연속된 표 행 수집 → 플레이스홀더 타이핑 후 splice 로 표 컴포넌트 교체.
+            if line.startswith("|") and line.count("|") >= 2:
+                trows = []
+                while k < len(body_lines):
+                    tl = body_lines[k].strip()
+                    if not (tl.startswith("|") and tl.count("|") >= 2):
+                        break
+                    cells = [c.strip() for c in tl.strip("|").split("|")]
+                    if not all(_TABLE_SEP_RE.match(c) for c in cells if c):  # 구분행(---) 제외
+                        trows.append(cells)
+                    k += 1
+                if trows:
+                    marker = f"RICHBLOCK-{len(rich_blocks)}-PLACEHOLDER"  # 순수 ASCII — insertText 변형 위험 제거
+                    newline_before()
+                    human_type(page, marker)
+                    rich_blocks.append((marker, make_table(trows)))
+                continue
             # 구분선(---) — 툴바 명령 삽입.
             if re.match(r"^(?:-{3,}|\*{3,}|_{3,})$", line):
                 insert_divider_ui(page)
@@ -891,7 +931,57 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
             insert_image(slot)
             first_block = True  # 이미지 직후는 새 문단 — 다음 블록 앞 Enter 생략
 
-    return headings, quote_texts, upload_count[0]
+    return headings, quote_texts, rich_blocks, upload_count[0]
+
+
+def splice_rich_blocks(page, rich_blocks: list) -> str:
+    """타이핑된 플레이스홀더 문단(RICHBLOCK-N-PLACEHOLDER)을 실제 표/코드 컴포넌트로 교체 — 한 번의 setDocumentData.
+    본문은 사람 타이핑으로 남기고 표·코드만 정확한 위치에 끼워 넣는다(하이브리드). 매칭 실패한 블록은
+    플레이스홀더가 남아 issue 로 보고된다(무해 degrade). documentService 없으면 무해 스킵."""
+    if not rich_blocks:
+        return "no_blocks"
+    mapping = {marker: comp for marker, comp in rich_blocks}
+    # 마커 문단은 소제목·본문과 함께 하나의 text 컴포넌트에 병합돼 있다(SE 는 연속 문단을 non-text
+    # 컴포넌트로만 분리). 따라서 문단 단위로 스캔해 text 컴포넌트를 [앞 문단들][표/코드][뒤 문단들] 로
+    # 쪼개 교체한다(컴포넌트 전체 텍스트 매칭은 병합 때문에 실패).
+    return page.evaluate(
+        """(mapping) => {
+        const ds = window.SE?.launcher?._editors?.blogpc001?._documentService;
+        if (!ds) return 'no_ds';
+        const norm = s => (s||'').replace(/\\s+/g,'').trim();
+        const keys = Object.create(null);
+        for (const k of Object.keys(mapping)) keys[norm(k)] = mapping[k];
+        let seq = 0;
+        const newId = () => 'SE-splice-' + Date.now() + '-' + (seq++);
+        const textComp = paras => ({ '@ctype': 'text', id: newId(), layout: 'default', value: paras });
+        const doc = ds.getDocumentData();
+        const out = [];
+        let replaced = 0;
+        for (const c of doc.document.components) {
+            if (c['@ctype'] !== 'text') { out.push(c); continue; }
+            const paras = c.value || [];
+            let buf = [], hit = false;
+            for (const para of paras) {
+                const ptxt = norm((para.nodes||[]).map(n => n.value||'').join(''));
+                if (Object.prototype.hasOwnProperty.call(keys, ptxt)) {
+                    hit = true;
+                    if (buf.length) { out.push(textComp(buf)); buf = []; }
+                    out.push(keys[ptxt]);   // 마커 문단 → 표/코드 컴포넌트
+                    replaced++;
+                } else {
+                    buf.push(para);
+                }
+            }
+            if (!hit) { out.push(c); }                 // 마커 없음 → 원본 그대로(id 보존)
+            else if (buf.length) { out.push(textComp(buf)); }
+        }
+        doc.document.components = out;
+        const total = Object.keys(mapping).length;
+        try { ds.setDocumentData(doc); return (replaced === total ? 'ok:' : 'partial:') + replaced + '/' + total; }
+        catch(e){ return 'err:' + e.message; }
+    }""",
+        mapping,
+    )
 
 
 def apply_heading_styles(page, headings: list) -> str:
@@ -1016,10 +1106,14 @@ def write_post(
     time.sleep(1.5)
 
     human = human_typing_enabled()
-    # 리치 블록(인용구·구분선·코드·표)은 키 입력으로 재현 불가 → 그런 글은 SE 문서 API 로 렌더(리치 우선).
-    if human and _has_rich_blocks(se_text):
+    # 표(|)·소스코드(```) 는 키 입력으로 못 만든다. 예전엔 이런 블록이 하나라도 있으면 글 전체를
+    # setDocumentData 로 배치 주입해 '본문 전체가 통째 입력'됐다(2026-07-20 사용자 보고). 하이브리드:
+    # 본문은 사람처럼 타이핑하고 표/코드만 해당 위치에 컴포넌트로 스플라이스한다(킬스위치로 즉시 되돌림).
+    if human and _has_rich_blocks(se_text) and not hybrid_rich_enabled():
         human = False
-        log("  리치 컴포넌트(인용구/구분선/코드/표) 포함 — 충실 렌더 위해 SE 문서 API 경로 사용")
+        log("  표/코드 포함 + 하이브리드 off(NAVER_HYBRID_RICH) — SE 문서 API 일괄 경로")
+    elif human and _has_rich_blocks(se_text):
+        log("  표/코드 포함 — 하이브리드(본문 타이핑 + 표/코드 컴포넌트 스플라이스) 경로")
     log(f"  입력 모드: {'사람처럼 타이핑' if human else 'API 일괄(setDocumentData)'}")
 
     # ── STEP 3: 제목 입력 ─────────────────────────────────────────────────
@@ -1056,8 +1150,8 @@ def write_post(
             human = False
         else:
             try:
-                headings, quote_texts, image_upload_count = type_body_human(page, se_text, images, issues)
-                log(f"  타이핑 완료 — 소제목 {len(headings)}개, 인용구 {len(quote_texts)}개, 이미지 {image_upload_count}장")
+                headings, quote_texts, rich_blocks, image_upload_count = type_body_human(page, se_text, images, issues)
+                log(f"  타이핑 완료 — 소제목 {len(headings)}개, 인용구 {len(quote_texts)}개, 표/코드 {len(rich_blocks)}개, 이미지 {image_upload_count}장")
                 time.sleep(1.0)
                 # ① 인용구 변환 + 이미지 AI 표시 — 단 한 번의 setDocumentData(순서·구조 보존, 스타일 제거).
                 if quote_texts or image_upload_count:
@@ -1065,6 +1159,15 @@ def write_post(
                     log(f"  [인용구 변환] {conv}")
                     if isinstance(conv, str) and conv.startswith("error"):
                         issues.append(f"인용구 변환 실패: {conv}")
+                    time.sleep(1.2)   # 재렌더 대기
+                # ①-b 표/코드 스플라이스 — 타이핑한 플레이스홀더 문단을 실제 표·코드 컴포넌트로 교체.
+                #     실패하면 플레이스홀더가 남고 표/코드 내용은 유실되므로 issue 로 보고(수동 발행 전 검토·
+                #     NAVER_HYBRID_RICH=false 킬스위치로 즉시 기존 API 경로 복귀 가능).
+                if rich_blocks:
+                    sp = splice_rich_blocks(page, rich_blocks)
+                    log(f"  [표/코드 스플라이스] {sp}")
+                    if not (isinstance(sp, str) and sp.startswith("ok")):
+                        issues.append(f"표/코드 삽입 실패(플레이스홀더 잔존 가능): {sp}")
                     time.sleep(1.2)   # 재렌더 대기
                 # ② 소제목 굵게는 타이핑 중 명령(Cmd+B)으로 이미 반영됐고 변환을 거쳐도 유지된다(별도 재적용
                 #    불필요 — JS Range 로 설정한 선택은 SE 굵게 명령이 인식하지 않는다).
@@ -1249,30 +1352,59 @@ def write_post(
         time.sleep(0.5)
 
     # ── STEP 8: 태그 입력 ─────────────────────────────────────────────────
+    # 태그 필드는 에디터 하단에 있어 렌더·스크롤 전이면 셀렉터가 안 잡힌다 → 조용히 스킵되며 '어떤 땐
+    # 태그 있고 어떤 땐 없음'을 유발(2026-07-20 사용자 보고). 하단 스크롤 + 셀렉터 보강 + 실패 시 issue·
+    # 진단 덤프(조용한 스킵 금지)로 고친다.
     if tags:
-        log(f"\n[STEP 8] 태그 입력: {tags[:5]}")
+        log(f"\n[STEP 8] 태그 입력: {tags[:5]} (총 {len(tags)}개)")
+        try:  # 태그 영역을 뷰포트로 — 문서 끝으로 스크롤
+            page.mouse.wheel(0, 24000)
+            time.sleep(0.6)
+        except Exception:
+            pass
         tag_selectors = [
             "input[placeholder*='태그']",
-            ".se-tag-input input",
-            "#tagInput",
+            "input#tag-input", "#tagInput",
+            ".se-tag-input input", "input.tag_input",
+            "[class*='tag'] input[type='text']",
         ]
+        entered = False
         for sel in tag_selectors:
             try:
                 el = page.locator(sel).first
-                if el.is_visible(timeout=3000):
-                    for tag in tags:
-                        if human:
-                            el.click()
-                            time.sleep(_rand(0.1, 0.3))
-                            human_type(page, tag)  # 태그도 한 글자씩
-                        else:
-                            el.fill(tag)
-                        page.keyboard.press("Enter")
-                        time.sleep(_rand(0.2, 0.45))
-                    log("  태그 입력 완료")
-                    break
-            except Exception:
+                if el.count() == 0 or not el.is_visible(timeout=2000):
+                    continue
+                el.scroll_into_view_if_needed(timeout=2000)
+                for tag in tags:
+                    el.click()
+                    time.sleep(_rand(0.1, 0.25))
+                    if human:
+                        human_type(page, tag)  # 태그도 한 글자씩
+                    else:
+                        page.keyboard.type(tag)
+                    page.keyboard.press("Enter")
+                    time.sleep(_rand(0.2, 0.45))
+                entered = True
+                log(f"  태그 입력 완료 (셀렉터: {sel})")
+                break
+            except Exception as e:
+                log(f"  태그 셀렉터 시도 실패 {sel}: {str(e)[:50]}")
                 continue
+        if not entered:
+            # 조용한 스킵 금지 — issue 로 남기고 태그 후보 DOM 을 덤프(다음에 정확한 셀렉터 확정용).
+            issues.append(f"태그 입력 실패 — 태그 필드 못 찾음(해시태그 {len(tags)}개 누락 가능)")
+            log("  ⚠ 태그 필드를 못 찾음 — tag_field_debug.json 에 후보 덤프")
+            try:
+                cand = page.evaluate(
+                    """() => [...document.querySelectorAll('input,textarea,[contenteditable]')]
+                        .filter(e => /태그|tag/i.test((e.getAttribute('placeholder')||'')+' '+(e.className||'')+' '+(e.id||'')))
+                        .map(e => ({tag:e.tagName, id:e.id, cls:(e.className||'').slice(0,80), ph:e.getAttribute('placeholder')||''})).slice(0,10)"""
+                )
+                with open(os.path.join(run_dir, "tag_field_debug.json"), "w", encoding="utf-8") as f:
+                    json.dump(cand, f, ensure_ascii=False, indent=1)
+                log(f"  [진단] 태그 후보 필드: {cand}")
+            except Exception:
+                pass
 
     # ── STEP 9: 대표사진 설정 — API 경로만(setDocumentData 사용). 사람 경로는 스타일 보존을 위해
     #    건너뛴다(SE 가 보통 첫 이미지를 대표로 자동 사용). ──
