@@ -752,7 +752,7 @@ function cardActorNames(): { planner?: string; designer?: string } {
 // 카드뉴스 잡을 '런'으로 등록 — 오피스 뷰·활동 피드·타임라인이 런 이벤트로 구동되므로, 버스를
 // 흘리면 송하영·민준호가 실제로 일하는 모습(스폰·작업 애니메이션·스트림·지표)이 그대로 보인다.
 // 런 취소 버튼 → abort 로 잡 중단까지 연결. 완료 시 이벤트 영속(리플레이 가능).
-function launchCardNewsRun(cardId: string, topic: string, opts: { sourceBody?: string; slideCount?: number } = {}): string {
+function launchCardNewsRun(cardId: string, topic: string, opts: { sourceBody?: string; slideCount?: number; stylePreset?: string } = {}): string {
   const id = runId();
   const bus = createBus(id);
   const abort = new AbortController();
@@ -787,20 +787,20 @@ function launchCardNewsRun(cardId: string, topic: string, opts: { sourceBody?: s
 }
 
 async function cardNewsCreateHandler(c: Context): Promise<Response> {
-  const b = await c.req.json<{ topic?: string; keyword?: string; slides?: number; force?: boolean }>()
-    .catch(() => ({}) as { topic?: string; keyword?: string; slides?: number; force?: boolean });
+  const b = await c.req.json<{ topic?: string; keyword?: string; slides?: number; style?: string; force?: boolean }>()
+    .catch(() => ({}) as { topic?: string; keyword?: string; slides?: number; style?: string; force?: boolean });
   const topic = (b.topic ?? '').trim();
   if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
   const sim = noveltyViolation(topic, b.keyword, b.force);
   if (sim) return c.json(noveltyError(sim), 409);
   const card = cardNewsStore().create({ topic, keyword: b.keyword, ...cardActorNames() });
-  const run = launchCardNewsRun(card.id, topic, { slideCount: b.slides });
+  const run = launchCardNewsRun(card.id, topic, { slideCount: b.slides, stylePreset: b.style });
   return c.json({ card, run_id: run });
 }
 
 // 블로그 초안 → 카드뉴스 파생(공용) — 초안 본문을 기획자에게 넘겨 슬라이드로 재구성(복붙 아님).
 // 검토 탭 수동 버튼과 '네이버 임시저장 성공' 자동 훅이 공유한다.
-function deriveCardNewsFromPiece(pieceId: string, slides?: number): { card: CardNews } | { error: string } {
+function deriveCardNewsFromPiece(pieceId: string, slides?: number, style?: string): { card: CardNews } | { error: string } {
   const piece = pieceStore().get(pieceId);
   if (!piece) return { error: 'unknown piece' };
   if (!piece.runId) return { error: '초안이 아직 없습니다.' };
@@ -813,14 +813,14 @@ function deriveCardNewsFromPiece(pieceId: string, slides?: number): { card: Card
   const card = cardNewsStore().create({
     topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, ...cardActorNames(),
   });
-  launchCardNewsRun(card.id, piece.title, { sourceBody: body, slideCount: slides });
+  launchCardNewsRun(card.id, piece.title, { sourceBody: body, slideCount: slides, stylePreset: style });
   return { card };
 }
 async function cardNewsFromPieceHandler(c: Context): Promise<Response> {
   const id = c.req.param('id') ?? '';
   if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
-  const b = await c.req.json<{ slides?: number }>().catch(() => ({}) as { slides?: number });
-  const r = deriveCardNewsFromPiece(id, b.slides);
+  const b = await c.req.json<{ slides?: number; style?: string }>().catch(() => ({}) as { slides?: number; style?: string });
+  const r = deriveCardNewsFromPiece(id, b.slides, b.style);
   if ('error' in r) return c.json({ error: r.error }, r.error === 'unknown piece' ? 404 : 409);
   return c.json({ card: r.card });
 }

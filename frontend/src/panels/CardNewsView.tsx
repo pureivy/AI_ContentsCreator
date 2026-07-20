@@ -5,6 +5,7 @@ import {
 } from "../api";
 import Avatar from "./Avatar";
 import Ico, { type IcoName } from "./Ico";
+import { CARD_STYLE_OPTIONS } from "../cardStyles";
 
 // 카드뉴스 탭 — 카드뉴스팀(기획 → 디자인 → 배경 생성 → 렌더)이 만드는 인스타그램용 슬라이드.
 // 발행: 메타(인스타·페북) 연결 시 발행 버튼, 미연결 시 연결 링크 — 그 외엔 미리보기 + 개별/zip 다운로드. 진행은 8초 폴링(캘린더와 동일 케이던스).
@@ -122,7 +123,8 @@ export default function CardNewsSection() {
   const [pieces, setPieces] = useState<PieceInfo[]>([]);
   const [topic, setTopic] = useState("");
   const [keyword, setKeyword] = useState("");
-  const [slides, setSlides] = useState(5);
+  const [slides, setSlides] = useState(0); // 0 = 자동(기획자가 스토리라인에 맞게 3~8장)
+  const [style, setStyle] = useState("auto");
   const [srcPiece, setSrcPiece] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -145,14 +147,14 @@ export default function CardNewsSection() {
     const t = topic.trim();
     if (!t) return;
     setBusy(true); setErr("");
-    const r = await createCardNews({ topic: t, keyword: keyword.trim() || undefined, slides });
+    const r = await createCardNews({ topic: t, keyword: keyword.trim() || undefined, slides, style: style === "auto" ? undefined : style });
     setBusy(false);
     if (r.ok) { setTopic(""); setKeyword(""); load(); } else setErr(r.error || "생성 실패");
   };
   const doDerive = async () => {
     if (!srcPiece) return;
     setBusy(true); setErr("");
-    const r = await createCardNewsFromPiece(srcPiece, slides);
+    const r = await createCardNewsFromPiece(srcPiece, slides, style === "auto" ? undefined : style);
     setBusy(false);
     if (r.ok) { setSrcPiece(""); load(); } else setErr(r.error || "생성 실패");
   };
@@ -174,8 +176,14 @@ export default function CardNewsSection() {
           <input type="text" value={keyword} placeholder="핵심 키워드(선택)" style={{ flex: "0 1 180px" }}
             onChange={(e) => setKeyword(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doCreate(); }} />
           <label className="muted">장수&nbsp;
-            <select value={slides} onChange={(e) => setSlides(Number(e.target.value))}>
-              {[3, 4, 5, 6, 7, 8].map((n) => <option key={n} value={n}>{n}</option>)}
+            <select value={slides} onChange={(e) => setSlides(Number(e.target.value))} title="자동은 기획자가 스토리라인의 핵심 개수에 맞게 3~8장 정함">
+              <option value={0}>자동 (내용에 맞게)</option>
+              {[3, 4, 5, 6, 7, 8].map((n) => <option key={n} value={n}>{n}장</option>)}
+            </select>
+          </label>
+          <label className="muted">스타일&nbsp;
+            <select value={style} onChange={(e) => setStyle(e.target.value)} title="이미지 스타일 — 자동은 주제에 맞게 디자이너가 선택. 아래 초안 파생에도 적용됩니다.">
+              {CARD_STYLE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </label>
           <button className="btn start" disabled={busy || !topic.trim()} onClick={doCreate}>+ 생성</button>

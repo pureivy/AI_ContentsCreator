@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildCardImagePrompt } from './cardnews';
+import { buildCardImagePrompt, resolveForcedPreset } from './cardnews';
 
 const base = {
   headline: '가을 첫인사',
@@ -46,6 +46,17 @@ describe('buildCardImagePrompt — handwritten_poster 분기', () => {
     const body = buildCardImagePrompt({ ...base, index: 1, preset: 'handwritten_poster' });
     expect(cover).toContain('히어로 캘리그래피');
     expect(body).toContain('가독성 우선');
+  });
+});
+
+describe('resolveForcedPreset — 사용자 강제 스타일 정규화(순수)', () => {
+  it('자동·미지정·불명은 undefined(디자이너 자율), 유효 키/별칭은 정규화', () => {
+    expect(resolveForcedPreset(undefined)).toBeUndefined();     // 미지정 → 디자이너
+    expect(resolveForcedPreset('auto')).toBeUndefined();        // 자동 → 디자이너
+    expect(resolveForcedPreset('made-up')).toBeUndefined();     // 불명 → 안전하게 디자이너
+    expect(resolveForcedPreset('handwritten_poster')).toBe('handwritten_poster'); // 유효 키
+    expect(resolveForcedPreset('photorealistic')).toBe('photorealistic');
+    expect(resolveForcedPreset('손글씨 포스터')).toBe('handwritten_poster');       // 한글 별칭
   });
 });
 

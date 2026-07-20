@@ -1014,16 +1014,16 @@ export async function fetchCardNews(): Promise<CardNewsInfo[]> {
   try { const r = await fetch("/cardnews"); if (!r.ok) return []; return (await r.json()).cards ?? []; }
   catch { return []; }
 }
-export async function createCardNews(body: { topic: string; keyword?: string; slides?: number }): Promise<{ ok: boolean; id?: string; error?: string }> {
+export async function createCardNews(body: { topic: string; keyword?: string; slides?: number; style?: string }): Promise<{ ok: boolean; id?: string; error?: string }> {
   try {
     const r = await fetch("/cardnews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json().catch(() => ({} as { card?: { id: string }; error?: string }));
     return r.ok ? { ok: true, id: j.card?.id } : { ok: false, error: j.error };
   } catch { return { ok: false, error: "network" }; }
 }
-export async function createCardNewsFromPiece(pieceId: string, slides?: number): Promise<{ ok: boolean; id?: string; error?: string }> {
+export async function createCardNewsFromPiece(pieceId: string, slides?: number, style?: string): Promise<{ ok: boolean; id?: string; error?: string }> {
   try {
-    const r = await fetch(`/pieces/${pieceId}/cardnews`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slides }) });
+    const r = await fetch(`/pieces/${pieceId}/cardnews`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slides, style }) });
     const j = await r.json().catch(() => ({} as { card?: { id: string }; error?: string }));
     return r.ok ? { ok: true, id: j.card?.id } : { ok: false, error: j.error };
   } catch { return { ok: false, error: "network" }; }

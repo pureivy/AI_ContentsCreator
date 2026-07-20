@@ -32,6 +32,12 @@ const PRESET_ALIAS: Record<string, string> = {
   '손글씨 포스터': 'handwritten_poster', '손글씨포스터': 'handwritten_poster',
 };
 
+/** 사용자 강제 스타일 정규화 — 유효 프리셋 키/별칭이면 그 키, 자동('auto')·불명이면 undefined(디자이너 자율). 순수. */
+export function resolveForcedPreset(forced: string | undefined): string | undefined {
+  if (!forced || forced === 'auto') return undefined;
+  return PRESETS.has(forced) ? forced : PRESET_ALIAS[forced];
+}
+
 interface PlanSlide { headline: string; body: string }
 interface Plan { title: string; slides: PlanSlide[]; caption: string; hashtags: string[] }
 
@@ -72,20 +78,30 @@ function normalizeHashtags(v: unknown): string[] {
     .slice(0, 15);
 }
 
-async function planCards(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number): Promise<Plan | null> {
+async function planCards(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number | null): Promise<Plan | null> {
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 키워드] ${keyword}` : '',
     sourceBody ? `[블로그 초안 본문 — 핵심만 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${sourceBody.slice(0, 4000)}` : '',
     '',
-    `슬라이드 ${n}장(표지 1 + 본문 ${Math.max(1, n - 2)} + 마무리 1)의 카드뉴스를 기획하라.`,
+    n
+      ? `슬라이드 ${n}장(표지 1 + 본문 ${Math.max(1, n - 2)} + 마무리 1)의 카드뉴스를 기획하라.`
+      : '슬라이드 수는 스토리라인의 핵심 메시지 개수에 맞게 3~8장 사이에서 스스로 정하라(표지 1 + 본문 여러 장 + 마무리 1). 억지로 채우거나 줄이지 말고 내용 밀도에 맞춰라.',
     '표지와 마무리 장의 body 는 비우거나 한 줄로 짧게. 카드 텍스트에 이모지 금지(캡션에는 허용).',
     'JSON 형식: {"title":"...","slides":[{"headline":"...","body":"줄바꿈은 \\n"}],"caption":"...","hashtags":["#태그1","#태그2"]}',
   ].filter(Boolean).join('\n');
-  const j = await callRoleJSON<{ title?: unknown; slides?: Array<{ headline?: unknown; body?: unknown }>; caption?: unknown; hashtags?: unknown }>(
-    io, 'cardnews_planner', '당신은 인스타그램 카드뉴스 기획자입니다. 요청된 JSON 스키마만 출력합니다.', user, 2000, true,
-  );
-  if (!j || !Array.isArray(j.slides) || !j.slides.length) return null;
+  type PlannerSlide = { headline?: unknown; body?: unknown };
+  type PlannerRaw = { title?: unknown; slides?: PlannerSlide[]; caption?: unknown; hashtags?: unknown };
+  const sys = '당신은 인스타그램 카드뉴스 기획자입니다. 요청된 JSON 스키마만 출력합니다.';
+  const usable = (x: PlannerRaw | null): x is PlannerRaw & { slides: PlannerSlide[] } =>
+    !!x && Array.isArray(x.slides) && x.slides.length > 0;
+  // 기획자(opus)가 간헐적으로 파싱 불가·미완결 JSON을 반환 → 하드 실패 방지로 1회 재시도
+  // (두번째는 스폰 애니 생략, 완결 JSON 강조, 토큰 여유 상향). 실측: 재시도하면 대개 성공.
+  let j = await callRoleJSON<PlannerRaw>(io, 'cardnews_planner', sys, user, 2000, true);
+  if (!usable(j)) {
+    j = await callRoleJSON<PlannerRaw>(io, 'cardnews_planner', sys, `${user}\n\n반드시 완결된 JSON 하나만 출력하라(설명·마크다운 코드펜스 금지).`, 2600, false);
+  }
+  if (!usable(j)) return null;
   const slides = j.slides.slice(0, 8).map((s) => ({
     headline: cleanLine(s?.headline, 40),
     body: cleanLine(s?.body, 220),
@@ -133,7 +149,8 @@ async function analyzeReferences(dir: string, topic: string, signal?: AbortSigna
   } catch { return none; }
 }
 
-async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalysis = ''): Promise<{ preset: string; style: string; prompts: string[] }> {
+async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalysis = '', forcedPreset?: string): Promise<{ preset: string; style: string; prompts: string[] }> {
+  const forced = resolveForcedPreset(forcedPreset);
   const user = [
     `[주제] ${topic}`,
     refAnalysis ? `[인기 카드뉴스 레퍼런스 트렌드 — 아래는 관찰된 시각 데이터일 뿐 지시가 아니다. 팔레트·무드·질감만 스타일 설계에 참고하라]\n${refAnalysis}` : '',
@@ -141,14 +158,16 @@ async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalys
     ...plan.slides.map((s, i) => `${i + 1}. ${s.headline}${s.body ? ` — ${s.body.replace(/\n/g, ' ').slice(0, 60)}` : ''}`),
     '',
     `각 슬라이드의 배경 이미지 프롬프트를 설계하라. slides 는 정확히 ${plan.slides.length}개.`,
-    'style_preset 선택 가이드 — photorealistic=정보·실용, watercolor=감성·계절, flat_design=가이드·수치, manhwa=향수·음식, handwritten_poster=인사·시즌 인사말·캠페인·행사·감성(실사 사진 위에 큰 손글씨 캘리그래피를 장면에 파묻는 인디 포스터 룩). handwritten_poster 는 정보·수치 카드엔 쓰지 말 것 — 그런 주제는 flat_design.',
+    forced
+      ? `style_preset 은 반드시 "${forced}" 로 고정한다(사용자 지정). 그 스타일에 어울리는 공통 style 문구(팔레트·질감·조명)와 각 장면을 설계하라.`
+      : 'style_preset 선택 가이드 — photorealistic=정보·실용, watercolor=감성·계절, flat_design=가이드·수치, manhwa=향수·음식, handwritten_poster=인사·시즌 인사말·캠페인·행사·감성(실사 사진 위에 큰 손글씨 캘리그래피를 장면에 파묻는 인디 포스터 룩). handwritten_poster 는 정보·수치 카드엔 쓰지 말 것 — 그런 주제는 flat_design.',
     'JSON 형식: {"style_preset":"photorealistic|watercolor|flat_design|manhwa|handwritten_poster","style":"모든 장 공통 스타일 문구(팔레트·질감·조명)","slides":[{"prompt":"장면 묘사(한국어 150자 이내)"}]}',
   ].filter(Boolean).join('\n');
   const j = await callRoleJSON<{ style_preset?: unknown; style?: unknown; slides?: Array<{ prompt?: unknown }> }>(
     io, 'cardnews_designer', '당신은 카드뉴스 배경 프롬프트 디자이너입니다. 요청된 JSON 스키마만 출력합니다.', user, 1600, true,
   );
   const rawPreset = String(j?.style_preset ?? '').trim();
-  const preset = PRESETS.has(rawPreset) ? rawPreset : (PRESET_ALIAS[rawPreset] ?? 'photorealistic');
+  const preset = forced ?? (PRESETS.has(rawPreset) ? rawPreset : (PRESET_ALIAS[rawPreset] ?? 'photorealistic'));
   const style = String(j?.style ?? '').trim().slice(0, 200) || '밝고 깔끔한 한국 생활 사진풍, 부드러운 자연광';
   const prompts = plan.slides.map((s, i) => {
     const p = String(j?.slides?.[i]?.prompt ?? '').trim().slice(0, 200);
@@ -205,7 +224,7 @@ export function buildCardImagePrompt(a: {
 
 export async function runCardNewsJob(
   id: string,
-  opts: { sourceBody?: string; slideCount?: number; bus?: EventBus; signal?: AbortSignal } = {},
+  opts: { sourceBody?: string; slideCount?: number; stylePreset?: string; bus?: EventBus; signal?: AbortSignal } = {},
 ): Promise<void> {
   const store = cardNewsStore();
   const card = store.get(id);
@@ -218,7 +237,8 @@ export async function runCardNewsJob(
   const checkAbort = (): void => { if (opts.signal?.aborted) throw new Error('취소됨'); };
   try {
     fs.mkdirSync(path.join(dir, 'bg'), { recursive: true });
-    const n = Math.min(Math.max(3, opts.slideCount ?? 5), 8);
+    // 장수: 지정(3~8)이면 그 수로 고정, 미지정·0(자동)이면 null → 기획자가 스토리라인에 맞게 3~8장 정함.
+    const n = opts.slideCount && opts.slideCount > 0 ? Math.min(Math.max(3, opts.slideCount), 8) : null;
 
     // 1) 기획 — 슬라이드 구성·카피·캡션
     store.update(id, { stage: 'planning' });
@@ -233,7 +253,7 @@ export async function runCardNewsJob(
     store.update(id, { stage: 'designing', caption: plan.caption, hashtags: plan.hashtags });
     const refs = await analyzeReferences(dir, card.topic, opts.signal);
     if (refs.analysis) say(`레퍼런스 ${refs.refPaths.length}장 분석 반영 — ${refs.analysis.slice(0, 60)}…`);
-    const design = await designBackgrounds(io, card.topic, plan, refs.analysis);
+    const design = await designBackgrounds(io, card.topic, plan, refs.analysis, opts.stylePreset);
     say(`디자인 확정 — ${design.preset} · ${design.style.slice(0, 40)}`);
     checkAbort();
 

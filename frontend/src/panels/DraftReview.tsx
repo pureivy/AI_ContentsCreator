@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, deletePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, createCardNewsFromPiece, createShortsFromPiece, PieceInfo, PieceDraftResp } from "../api";
+import { CARD_STYLE_OPTIONS } from "../cardStyles";
 import Ico, { type IcoName } from "./Ico";
 
 // 초안 검토·발행·성과 입력 — 크로스-런 REST(폴링/온디맨드). 본문 편집은 컴포넌트-로컬(store 변이 금지).
@@ -60,10 +61,11 @@ export default function DraftReview() {
   // 파생 콘텐츠(카드뉴스·숏폼) — 선택 초안의 최신 파생 상태(pieces 목록의 derived, 8초 폴링으로 갱신).
   const derived = pieces.find((p) => p.id === sel)?.derived;
   const [deriveBusy, setDeriveBusy] = useState("");
+  const [cardStyle, setCardStyle] = useState("auto"); // 검토탭 카드뉴스 파생 시 이미지 스타일(자동=디자이너 선택)
   const doDeriveCardnews = async () => {
     if (!sel) return;
     setDeriveBusy("cardnews");
-    const r = await createCardNewsFromPiece(sel);
+    const r = await createCardNewsFromPiece(sel, undefined, cardStyle === "auto" ? undefined : cardStyle);
     setDeriveBusy("");
     if (r.ok) load(); else alert(r.error || "카드뉴스 생성 실패");
   };
@@ -317,11 +319,16 @@ export default function DraftReview() {
                 <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "flex-start" }}>
                   {/* 카드뉴스 */}
                   <div style={{ flex: "1 1 320px", minWidth: 260 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
                       <b><Ico name="cards" size={12} /> 카드뉴스</b>
                       {derived?.cardnews
                         ? <span className="badge">{derived.cardnews.running || ["planning", "designing", "rendering"].includes(derived.cardnews.stage) ? "생성 중…" : derived.cardnews.stage === "ready" ? `완성 · ${derived.cardnews.slides ?? 0}장` : "실패"}</span>
-                        : <button className="btn ghost" disabled={deriveBusy !== ""} onClick={doDeriveCardnews}>{deriveBusy === "cardnews" ? "시작 중…" : "만들기"}</button>}
+                        : <>
+                            <select value={cardStyle} onChange={(e) => setCardStyle(e.target.value)} disabled={deriveBusy !== ""} title="이미지 스타일 — 자동은 주제에 맞게 디자이너가 선택">
+                              {CARD_STYLE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                            </select>
+                            <button className="btn ghost" disabled={deriveBusy !== ""} onClick={doDeriveCardnews}>{deriveBusy === "cardnews" ? "시작 중…" : "만들기"}</button>
+                          </>}
                       {derived?.cardnews?.stage === "ready" && (
                         <a className="btn ghost" href={`/cardnews/${derived.cardnews.id}/zip`} download>zip</a>
                       )}
