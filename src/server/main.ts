@@ -11,6 +11,7 @@ import { createHash, timingSafeEqual, randomBytes } from 'node:crypto';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { serve } from '@hono/node-server';
+import { createServer as createHttpsServer } from 'node:https';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { streamSSE } from 'hono/streaming';
 import { CONFIG } from '../config';
@@ -1127,7 +1128,9 @@ app.post('/shorts/:id/youtube', async (c) => {
 });
 // ── 메타(인스타·페북) 발행 — 공용 개발자 앱 + 브랜드별 페이지·IG 토큰(META_TOKENS).
 //    콜백: code→장기 사용자 토큰→/me/accounts. 페이지 1개면 즉시 저장, 여러 개면 pick 화면.
-const META_REDIRECT = `http://127.0.0.1:${CONFIG.port}/meta/oauth/callback`; // 앱 설정의 리디렉션 URI 와 일치 필수
+// 메타는 OAuth 리디렉션 HTTPS 강제 → 콜백 전용 HTTPS 포트(기본 port+1). 페이스북 앱의 리디렉션 URI 와 일치 필수.
+const META_HTTPS_PORT = Number(process.env.META_HTTPS_PORT) || (CONFIG.port + 1);
+const META_REDIRECT = `https://localhost:${META_HTTPS_PORT}/meta/oauth/callback`;
 const META_SCOPES = 'pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish,instagram_manage_insights,publish_video';
 interface MetaPage { id: string; name: string; access_token: string; instagram_business_account?: { id: string } }
 const META_OAUTH_PENDING = new Map<string, { brand: string; exp: number; pages?: MetaPage[] }>();
@@ -2714,5 +2717,22 @@ if (!process.env.VITEST) serve({ fetch: app.fetch, hostname: CONFIG.host, port }
   // eslint-disable-next-line no-console
   console.log(`[ai-contents-studio] http://${CONFIG.host}:${info.port}  (backend=claude)  · React=/ · lite=/lite`);
 });
+
+// 메타(페이스북) OAuth 콜백 전용 HTTPS 리스너 — 페이스북은 OAuth 리디렉션에 HTTPS 를 강제한다
+// (구글은 로컬 http 허용, 페이스북은 불가). data/certs/localhost.{key,crt}(자체 서명) 있으면 콜백 포트에
+// 같은 app 을 HTTPS 로도 서빙 → META_REDIRECT 가 https://localhost:<port>/meta/oauth/callback 로 성립.
+if (!process.env.VITEST) {
+  try {
+    const key = fs.readFileSync(path.join(CONFIG.dataDir, 'certs', 'localhost.key'));
+    const cert = fs.readFileSync(path.join(CONFIG.dataDir, 'certs', 'localhost.crt'));
+    serve({ fetch: app.fetch, hostname: CONFIG.host, port: META_HTTPS_PORT, createServer: createHttpsServer, serverOptions: { key, cert } }, () => {
+      // eslint-disable-next-line no-console
+      console.log(`[ai-contents-studio] https://localhost:${META_HTTPS_PORT}  (메타 OAuth 콜백 전용)`);
+    });
+  } catch {
+    // eslint-disable-next-line no-console
+    console.log('[ai-contents-studio] 메타 HTTPS 콜백 미기동 — data/certs/localhost.{key,crt} 없음(메타 연결 시 필요)');
+  }
+}
 
 export { app };
