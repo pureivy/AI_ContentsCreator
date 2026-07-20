@@ -1,9 +1,10 @@
 /**
- * 카드뉴스 메타(인스타·페북) 발행 — 브랜드별 계정(META_TOKENS)으로 ①FB 페이지 미공개 사진
- * 업로드(바이너리) ②그 CDN URL 로 IG 캐러셀 발행 ③같은 사진으로 FB 피드 게시.
- * IG API 는 공개 image_url 만 받으므로 FB CDN 을 재사용(외부 호스팅 무의존, 스펙 §6).
- * Node 내장 fetch/FormData 만 사용. 명시 실패 반환 — 사용자 트리거 액션(fail-open 아님).
- * 부분 성공 멱등: existing 에 있는 채널은 스킵. 토큰은 로그·에러에 싣지 않는다.
+ * 카드뉴스·쇼츠 메타(인스타그램) 발행 — 브랜드별 계정(META_TOKENS)으로 발행.
+ * 인스타 로그인 방식(graph.instagram.com)은 공개 URL 만 받고 로컬·resumable 업로드 미지원(Meta 문서) →
+ * 슬라이드 이미지·릴스 영상을 fal 스토리지 공개 URL 로 올려 image_url/video_url 로 전달([[falStorage]]).
+ * 카드뉴스는 1장=단일 이미지·2~10장=캐러셀. FB 페이지 경로(피드·릴스)는 pageId 있을 때만(현재 IG 로그인은 미실행).
+ * Node 내장 fetch 만 사용. 명시 실패 반환 — 사용자 트리거 액션(fail-open 아님). 토큰은 로그·에러에 싣지 않는다.
+ * 멱등: 발행된 미디어 id(existing.igMediaId/igReelId)로 스킵 — 중복 공개 발행 방지. 퍼머링크는 재시도로 보강.
  */
 import fs from 'node:fs';
 import { getMetaAccount } from '../secrets/store';
@@ -29,17 +30,19 @@ export function extractId(json: unknown): string | null {
   return typeof id === 'string' && id ? id : null;
 }
 
-/** FB 사진 images 배열에서 최대 해상도 URL(첫 항목 = 최대, 순수). */
-export function pickPhotoUrl(json: unknown): string | null {
-  const imgs = (json as { images?: Array<{ source?: unknown }> } | null)?.images;
-  const src = Array.isArray(imgs) ? imgs[0]?.source : undefined;
-  return typeof src === 'string' && src ? src : null;
-}
-
 /** IG 미디어 {permalink} 추출(순수). */
 export function parsePermalink(json: unknown): string | null {
   const p = (json as { permalink?: unknown } | null)?.permalink;
   return typeof p === 'string' && p ? p : null;
+}
+
+/**
+ * 실제 게시물 퍼머링크만 인정(순수) — 일반 홈 URL(과거 폴백 잔재)은 '미보유'로 취급해
+ * 재시도가 진짜 링크로 보강하게 한다. 발행 성공 후 퍼머링크 GET 이 일시 실패해도 홈 URL 을 저장하지 않는다.
+ */
+export function realPermalink(p: string | null | undefined): string | undefined {
+  if (!p) return undefined;
+  return /^https?:\/\/(www\.)?instagram\.com\/?$/i.test(p) ? undefined : p;
 }
 
 /** 그래프 에러 → 사람이 읽을 메시지(순수, 토큰류 미포함). */
@@ -57,18 +60,6 @@ async function graphJson(url: string, init: RequestInit, what: string): Promise<
   return j;
 }
 const tokenQs = (token: string): string => `access_token=${encodeURIComponent(token)}`;
-
-/** FB 페이지에 미공개 사진 업로드(바이너리) → photoId. */
-async function uploadUnpublishedPhoto(pageId: string, token: string, filePath: string, signal?: AbortSignal): Promise<string> {
-  const form = new FormData();
-  form.append('source', new Blob([fs.readFileSync(filePath)], { type: 'image/png' }), 'slide.png');
-  form.append('published', 'false');
-  form.append('access_token', token);
-  const j = await graphJson(`${GRAPH}/${pageId}/photos`, { method: 'POST', body: form, signal }, 'FB 사진 업로드');
-  const id = extractId(j);
-  if (!id) throw new Error('FB 사진 업로드 응답 이형(id 없음)');
-  return id;
-}
 /** 캐러셀 컨테이너 처리 대기 — FINISHED 까지 3초×maxTries회 폴링. */
 async function waitContainer(containerId: string, token: string, signal?: AbortSignal, maxTries = 10): Promise<void> {
   for (let i = 0; i < maxTries; i++) {
@@ -83,19 +74,13 @@ async function waitContainer(containerId: string, token: string, signal?: AbortS
 
 export async function publishCardNewsToMeta(opts: {
   slug: string; slidePaths: string[]; caption: string; hashtags: string[];
-  existing?: { igPermalink?: string; fbPostId?: string }; signal?: AbortSignal;
+  existing?: { igMediaId?: string; igPermalink?: string; fbPostId?: string }; signal?: AbortSignal;
 }): Promise<MetaPublishResult> {
   const out: MetaPublishResult = { ok: false };
   try {
     const acct = getMetaAccount(opts.slug);
     if (!acct.igUserId || !acct.pageAccessToken) {
       return { ok: false, error: '메타 미연결 — 카드뉴스 탭에서 메타 연결을 먼저 하세요' };
-    }
-    // 카드뉴스 IG 캐러셀은 슬라이드마다 '공개 이미지 URL'이 필요하고, 현재는 그 URL 을 페이스북 페이지
-    // 미공개 사진 업로드로 호스팅한다. 인스타그램 로그인 방식(pageId 없음)은 페이지가 없어 이 호스팅이
-    // 불가 — 릴스(영상 resumable 업로드)와 달리 이미지는 별도 공개 호스팅이 있어야 한다(후속).
-    if (!acct.pageId) {
-      return { ok: false, error: '카드뉴스 인스타 발행은 이미지 공개 호스팅이 필요해 현재 인스타그램 로그인 방식에선 미지원입니다 — 쇼츠 릴스는 발행 가능합니다.' };
     }
     if (opts.slidePaths.length > 10) return { ok: false, error: `IG 캐러셀은 최대 10장(현재 ${opts.slidePaths.length}장)` };
     if (!opts.slidePaths.length || !opts.slidePaths.every((p) => fs.existsSync(p))) {
@@ -106,31 +91,46 @@ export async function publishCardNewsToMeta(opts: {
     const message = buildIgCaption(opts.caption, opts.hashtags);
     const token = acct.pageAccessToken;
 
-    // ① FB 미공개 사진 업로드 — IG(CDN URL)·FB(attached_media) 양쪽의 재료(순서 보존).
-    const photoIds: string[] = [];
-    for (const p of opts.slidePaths) photoIds.push(await uploadUnpublishedPhoto(acct.pageId, token, p, signal));
+    // IG 발행 — 이미 발행된 미디어 id(existing.igMediaId) 있으면 스킵(중복 공개 발행 방지, 라우트가 영속).
+    out.igMediaId = opts.existing?.igMediaId;
+    out.igPermalink = realPermalink(opts.existing?.igPermalink);
+    if (!out.igMediaId) {
+      // ① 슬라이드를 fal 스토리지 공개 URL 로 올림 — 인스타 로그인은 공개 image_url 필수(로컬 업로드 미지원, Meta 문서).
+      //    PNG 그대로 허용 실측. 순서 보존(슬라이드 정렬 순).
+      const imageUrls: string[] = [];
+      for (const p of opts.slidePaths) imageUrls.push(await uploadToFalStorage(p, 'image/png', signal));
 
-    // ② IG 캐러셀 — 기발행(existing.igPermalink)이면 스킵(부분 성공 재시도 멱등).
-    if (!opts.existing?.igPermalink) {
-      const childIds: string[] = [];
-      for (const phId of photoIds) {
-        // CDN URL 은 서명 만료가 있어 저장·재사용 금지 — 획득 즉시 컨테이너 생성(스펙 §6).
-        const cdn = pickPhotoUrl(await graphJson(`${GRAPH}/${phId}?fields=images&${tokenQs(token)}`, { signal }, 'FB 사진 URL 조회'));
-        if (!cdn) throw new Error('FB 사진 CDN URL 없음');
-        const child = await graphJson(`${GRAPH}/me/media`, {
+      // ② 컨테이너 — 1장은 단일 이미지 포스트(캐러셀은 2~10장), 2장 이상은 캐러셀.
+      let carId: string;
+      if (imageUrls.length === 1) {
+        const single = await graphJson(`${GRAPH}/me/media`, {
           method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ image_url: cdn, is_carousel_item: 'true', access_token: token }),
-        }, 'IG 자식 컨테이너');
-        const cid = extractId(child);
-        if (!cid) throw new Error('IG 자식 컨테이너 응답 이형');
-        childIds.push(cid);
+          body: new URLSearchParams({ image_url: imageUrls[0]!, caption: message, access_token: token }),
+        }, 'IG 이미지 컨테이너');
+        const sid = extractId(single);
+        if (!sid) throw new Error('IG 이미지 컨테이너 응답 이형');
+        carId = sid;
+      } else {
+        const childIds: string[] = [];
+        for (const url of imageUrls) {
+          const child = await graphJson(`${GRAPH}/me/media`, {
+            method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ image_url: url, is_carousel_item: 'true', access_token: token }),
+          }, 'IG 자식 컨테이너');
+          const cid = extractId(child);
+          if (!cid) throw new Error('IG 자식 컨테이너 응답 이형');
+          childIds.push(cid);
+        }
+        const carousel = await graphJson(`${GRAPH}/me/media`, {
+          method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ media_type: 'CAROUSEL', children: childIds.join(','), caption: message, access_token: token }),
+        }, 'IG 캐러셀 컨테이너');
+        const cid = extractId(carousel);
+        if (!cid) throw new Error('IG 캐러셀 컨테이너 응답 이형');
+        carId = cid;
       }
-      const carousel = await graphJson(`${GRAPH}/me/media`, {
-        method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ media_type: 'CAROUSEL', children: childIds.join(','), caption: message, access_token: token }),
-      }, 'IG 캐러셀 컨테이너');
-      const carId = extractId(carousel);
-      if (!carId) throw new Error('IG 캐러셀 컨테이너 응답 이형');
+
+      // ③ 처리 완료 대기 후 발행.
       await waitContainer(carId, token, signal);
       const pub = await graphJson(`${GRAPH}/me/media_publish`, {
         method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -138,29 +138,13 @@ export async function publishCardNewsToMeta(opts: {
       }, 'IG 발행');
       out.igMediaId = extractId(pub) ?? undefined;
       if (!out.igMediaId) throw new Error('IG 발행 응답 이형(id 없음)');
-      if (out.igMediaId) {
-        const perma = await graphJson(`${GRAPH}/${out.igMediaId}?fields=permalink&${tokenQs(token)}`, { signal }, 'IG 퍼머링크').catch(() => null);
-        out.igPermalink = (perma === null ? null : parsePermalink(perma)) ?? `https://www.instagram.com/`;
-      }
     }
-
-    // ③ FB 피드 게시 — best-effort. 최신 메타 앱은 pages_manage_posts 미부여라 실패할 수 있는데,
-    //    IG 발행(핵심)은 이미 성공했으므로 FB 실패로 전체를 실패시키지 않는다(부분 성공). 사유만 로그.
-    if (!opts.existing?.fbPostId) {
-      try {
-        const feed = await graphJson(`${GRAPH}/${acct.pageId}/feed`, {
-          method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({
-            message,
-            attached_media: JSON.stringify(photoIds.map((id) => ({ media_fbid: id }))),
-            access_token: token,
-          }),
-        }, 'FB 피드 게시');
-        out.fbPostId = extractId(feed) ?? undefined;
-      } catch (fe) {
-        console.log('[meta] FB 피드 게시 건너뜀(IG 성공 유지) — ' + (fe instanceof Error ? fe.message.slice(0, 120) : String(fe)));
-      }
+    // 퍼머링크 보강 — 발행됐고(미디어 id) 아직 실제 링크 없으면 조회. 일시 실패 시 undefined(홈 URL 폴백 없음) → 다음 재시도가 채움.
+    if (out.igMediaId && !out.igPermalink) {
+      const perma = await graphJson(`${GRAPH}/${out.igMediaId}?fields=permalink&${tokenQs(token)}`, { signal }, 'IG 퍼머링크').catch(() => null);
+      out.igPermalink = realPermalink(perma ? parsePermalink(perma) : null);
     }
+    // FB 피드 게시는 인스타 로그인 방식(페이지 없음)에선 불가 — 제거(과거 FB 페이지 경로는 pageId 있을 때만 유효했음).
 
     out.ok = true;
     return out;
@@ -211,7 +195,7 @@ async function publishFbReel(pageId: string, token: string, videoPath: string, d
 
 export async function publishShortsToMeta(opts: {
   slug: string; videoPath: string; caption: string; hashtags: string[];
-  existing?: { igPermalink?: string; fbReelId?: string }; signal?: AbortSignal;
+  existing?: { igReelId?: string; igPermalink?: string; fbReelId?: string }; signal?: AbortSignal;
 }): Promise<MetaReelsResult> {
   const out: MetaReelsResult = { ok: false };
   try {
@@ -225,9 +209,11 @@ export async function publishShortsToMeta(opts: {
     const message = buildIgCaption(opts.caption, opts.hashtags);
     const token = acct.pageAccessToken;
 
-    // ① IG 릴스 — 기발행(existing.igPermalink)이면 스킵(부분 성공 재시도 멱등).
+    // ① IG 릴스 — 이미 발행된 릴스 id(existing.igReelId) 있으면 스킵(중복 공개 발행 방지, 라우트가 영속).
     // 인스타 로그인 방식은 로컬·resumable 업로드 미지원(Meta 문서) → 영상을 fal 스토리지 공개 URL 로 올려 video_url 로 전달.
-    if (!opts.existing?.igPermalink) {
+    out.igReelId = opts.existing?.igReelId;
+    out.igPermalink = realPermalink(opts.existing?.igPermalink);
+    if (!out.igReelId) {
       const videoUrl = await uploadToFalStorage(opts.videoPath, 'video/mp4', signal);
       const container = await graphJson(`${GRAPH}/me/media`, {
         method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -242,8 +228,11 @@ export async function publishShortsToMeta(opts: {
       }, 'IG 릴스 발행');
       out.igReelId = extractId(pub) ?? undefined;
       if (!out.igReelId) throw new Error('IG 릴스 발행 응답 이형(id 없음)');
+    }
+    // 퍼머링크 보강 — 발행됐고(릴스 id) 아직 실제 링크 없으면 조회. 일시 실패 시 undefined(홈 URL 폴백 없음) → 다음 재시도가 채움.
+    if (out.igReelId && !out.igPermalink) {
       const perma = await graphJson(`${GRAPH}/${out.igReelId}?fields=permalink&${tokenQs(token)}`, { signal }, 'IG 퍼머링크').catch(() => null);
-      out.igPermalink = (perma === null ? null : parsePermalink(perma)) ?? 'https://www.instagram.com/';
+      out.igPermalink = realPermalink(perma ? parsePermalink(perma) : null);
     }
 
     // ② FB 릴스 — 페이지 연결(pageId) 있을 때만. 인스타그램 로그인 방식은 페이지가 없어 스킵(IG 릴스만).

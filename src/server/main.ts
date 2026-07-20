@@ -34,7 +34,7 @@ import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law�
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
-import { publishCardNewsToMeta, publishShortsToMeta, GRAPH } from '../tools/metaPublish';
+import { publishCardNewsToMeta, publishShortsToMeta, realPermalink, GRAPH } from '../tools/metaPublish';
 import { llmWiki, slugify } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
@@ -1200,56 +1200,74 @@ app.get('/meta/oauth/callback', async (c) => {
     return done(`✅ 인스타그램 연결 완료 (브랜드: ${pending.brand || '범용'})`);
   } catch (e) { return done(`연결 실패: ${e instanceof Error ? e.message.slice(0, 120) : e}`); }
 });
+// 메타(인스타) 발행 in-flight 락 — 카드뉴스·릴스 공용. 동시/이중 제출로 같은 공개 게시물이 두 번 올라가는 것 차단(되돌리기 어려움).
+const metaPublishInFlight = new Set<string>();
 app.post('/cardnews/:id/publish', async (c) => {
   const id = c.req.param('id') ?? '';
   const card = cardNewsStore().get(id);
   if (!card) return c.json({ error: 'unknown cardnews' }, 404);
   if (card.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
-  if (card.igPermalink && card.fbPostId) return c.json({ error: '이미 발행됨', igPermalink: card.igPermalink }, 409);
+  // 완료 판정 = 미디어 id + 실제 퍼머링크. 홈 URL 잔재만 있으면 완료 아님 → 재시도가 링크를 보강하게 통과시킨다.
+  if (card.igMediaId && realPermalink(card.igPermalink)) return c.json({ error: '이미 발행됨', igPermalink: card.igPermalink }, 409);
+  if (metaPublishInFlight.has(id)) return c.json({ error: '이미 발행 처리 중입니다' }, 409); // 동시/이중 제출 → 중복 공개 발행 차단
   const dir = path.join(CONFIG.dataDir, 'cardnews', id);
   const slides = (() => {
     try { return fs.readdirSync(dir).filter((f) => /^slide_\d{2}\.png$/.test(f)).sort().map((f) => path.join(dir, f)); }
     catch { return [] as string[]; }
   })();
   if (!slides.length) return c.json({ error: '슬라이드 파일 없음' }, 409);
-  const r = await publishCardNewsToMeta({
-    slug: card.brand ?? '', slidePaths: slides,
-    caption: card.caption ?? card.topic, hashtags: card.hashtags ?? [],
-    existing: { igPermalink: card.igPermalink, fbPostId: card.fbPostId },
-  });
-  // 부분 성공도 저장 — 재시도 시 성공 채널은 existing 으로 스킵(멱등).
-  const patch: Partial<CardNews> = {};
-  if (r.igMediaId) { patch.igMediaId = r.igMediaId; patch.igPermalink = r.igPermalink; }
-  if (r.fbPostId) patch.fbPostId = r.fbPostId;
-  if ((r.igMediaId || r.fbPostId) && !card.publishedTs) patch.publishedTs = new Date().toISOString();
-  if (Object.keys(patch).length) cardNewsStore().update(id, patch);
-  if (!r.ok) return c.json({ error: r.error, ...patch }, 502);
-  console.log(`[발행담당] 카드뉴스 "${card.topic.slice(0, 30)}" — 인스타·페북 발행 완료`);
-  return c.json({ ok: true, igPermalink: r.igPermalink ?? card.igPermalink, fbPostId: r.fbPostId ?? card.fbPostId });
+  const wasPublished = !!card.igMediaId;
+  metaPublishInFlight.add(id);
+  try {
+    const r = await publishCardNewsToMeta({
+      slug: card.brand ?? '', slidePaths: slides,
+      caption: card.caption ?? card.topic, hashtags: card.hashtags ?? [],
+      existing: { igMediaId: card.igMediaId, igPermalink: card.igPermalink, fbPostId: card.fbPostId },
+    });
+    // 부분 성공도 저장 — 재시도 시 성공 채널은 existing 으로 스킵(멱등). 퍼머링크는 실제 링크 있을 때만 갱신(홈 URL 덮어쓰기 방지).
+    const patch: Partial<CardNews> = {};
+    if (r.igMediaId) { patch.igMediaId = r.igMediaId; if (r.igPermalink) patch.igPermalink = r.igPermalink; }
+    if (r.fbPostId) patch.fbPostId = r.fbPostId;
+    if ((r.igMediaId || r.fbPostId) && !card.publishedTs) patch.publishedTs = new Date().toISOString();
+    if (Object.keys(patch).length) cardNewsStore().update(id, patch);
+    if (!r.ok) return c.json({ error: r.error, ...patch }, 502);
+    console.log(`[발행담당] 카드뉴스 "${card.topic.slice(0, 30)}" — 인스타 ${wasPublished ? '퍼머링크 보강' : '발행 완료'}`);
+    return c.json({ ok: true, igPermalink: r.igPermalink ?? card.igPermalink, fbPostId: r.fbPostId ?? card.fbPostId });
+  } finally {
+    metaPublishInFlight.delete(id);
+  }
 });
 app.post('/shorts/:id/meta', async (c) => {
   const id = c.req.param('id') ?? '';
   const s = shortsStore().get(id);
   if (!s) return c.json({ error: 'unknown shorts' }, 404);
   if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
-  if (s.igPermalink && s.fbReelId) return c.json({ error: '이미 발행됨', igPermalink: s.igPermalink }, 409);
+  // 완료 판정 = 릴스 id + 실제 퍼머링크. 홈 URL 잔재만 있으면 재시도가 링크를 보강하게 통과.
+  if (s.igReelId && realPermalink(s.igPermalink)) return c.json({ error: '이미 발행됨', igPermalink: s.igPermalink }, 409);
+  if (metaPublishInFlight.has(id)) return c.json({ error: '이미 발행 처리 중입니다' }, 409); // 동시/이중 제출 → 중복 공개 발행 차단
   const videoPath = path.join(shortsStore().dirFor(id), 'final.mp4');
   if (!fs.existsSync(videoPath)) return c.json({ error: '영상 파일 없음' }, 409);
-  const r = await publishShortsToMeta({
-    slug: s.brand ?? '', videoPath,
-    caption: [s.title ?? s.topic, s.description ?? ''].filter(Boolean).join('\n\n'),
-    hashtags: s.hashtags ?? [],
-    existing: { igPermalink: s.igPermalink, fbReelId: s.fbReelId },
-  });
-  // 부분 성공도 저장 — 재시도 시 성공 채널은 existing 으로 스킵(멱등). 릴스는 즉시 공개(스펙 §3).
-  const patch: Partial<Shorts> = {};
-  if (r.igReelId) { patch.igReelId = r.igReelId; patch.igPermalink = r.igPermalink; }
-  if (r.fbReelId) patch.fbReelId = r.fbReelId;
-  if ((r.igReelId || r.fbReelId) && !s.metaPublishedTs) patch.metaPublishedTs = new Date().toISOString();
-  if (Object.keys(patch).length) shortsStore().update(id, patch);
-  if (!r.ok) return c.json({ error: r.error, ...patch }, 502);
-  console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 릴스 발행 완료(IG·FB, 즉시 공개)`);
-  return c.json({ ok: true, igPermalink: r.igPermalink ?? s.igPermalink, fbReelId: r.fbReelId ?? s.fbReelId });
+  const wasPublished = !!s.igReelId;
+  metaPublishInFlight.add(id);
+  try {
+    const r = await publishShortsToMeta({
+      slug: s.brand ?? '', videoPath,
+      caption: [s.title ?? s.topic, s.description ?? ''].filter(Boolean).join('\n\n'),
+      hashtags: s.hashtags ?? [],
+      existing: { igReelId: s.igReelId, igPermalink: s.igPermalink, fbReelId: s.fbReelId },
+    });
+    // 부분 성공도 저장 — 재시도 시 성공 채널은 existing 으로 스킵(멱등). 릴스는 즉시 공개(스펙 §3). 퍼머링크는 실제 링크 있을 때만 갱신.
+    const patch: Partial<Shorts> = {};
+    if (r.igReelId) { patch.igReelId = r.igReelId; if (r.igPermalink) patch.igPermalink = r.igPermalink; }
+    if (r.fbReelId) patch.fbReelId = r.fbReelId;
+    if ((r.igReelId || r.fbReelId) && !s.metaPublishedTs) patch.metaPublishedTs = new Date().toISOString();
+    if (Object.keys(patch).length) shortsStore().update(id, patch);
+    if (!r.ok) return c.json({ error: r.error, ...patch }, 502);
+    console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 릴스 ${wasPublished ? '퍼머링크 보강' : '발행 완료(즉시 공개)'}`);
+    return c.json({ ok: true, igPermalink: r.igPermalink ?? s.igPermalink, fbReelId: r.fbReelId ?? s.fbReelId });
+  } finally {
+    metaPublishInFlight.delete(id);
+  }
 });
 app.get('/shorts/:id/video', shortsVideoHandler); // :id 보다 먼저(구체 경로 우선)
 app.get('/api/shorts/:id/video', shortsVideoHandler);
@@ -1608,8 +1626,9 @@ function performanceHandler(c: Context): Response {
       const ig = x.metaPublishedTs ? latestMetricsBySource(x.id, 'meta:ig') : null;
       return {
         id: x.id, title: x.title || x.topic,
-        youtube: x.youtubeTs ? { url: x.youtubeUrl ?? null, views: yt?.views ?? null, likes: yt?.likes ?? null, reflected: !!x.perfReflected, series: viewsSeriesFor(x.id, 'youtube:') } : null,
-        meta: x.metaPublishedTs ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, likes: ig?.likes ?? null, reflected: !!x.metaPerfReflected, series: viewsSeriesFor(x.id, 'meta:ig') } : null,
+        // 업로드일은 채널별로 분리 — 유튜브 섹션은 youtubeTs, 릴스 섹션은 metaPublishedTs(양쪽 발행 시 상단 ts 는 최신값으로 정렬용).
+        youtube: x.youtubeTs ? { url: x.youtubeUrl ?? null, views: yt?.views ?? null, likes: yt?.likes ?? null, reflected: !!x.perfReflected, series: viewsSeriesFor(x.id, 'youtube:'), ts: x.youtubeTs } : null,
+        meta: x.metaPublishedTs ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, likes: ig?.likes ?? null, reflected: !!x.metaPerfReflected, series: viewsSeriesFor(x.id, 'meta:ig'), ts: x.metaPublishedTs } : null,
         ts: [x.youtubeTs, x.metaPublishedTs].filter(Boolean).sort().pop()!,
       };
     })

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildIgCaption, extractId, pickPhotoUrl, parsePermalink, graphError, publishCardNewsToMeta, publishShortsToMeta } from './metaPublish';
+import { buildIgCaption, extractId, parsePermalink, realPermalink, graphError, publishCardNewsToMeta, publishShortsToMeta } from './metaPublish';
+import { uploadToFalStorage } from './falStorage';
 import { getMetaAccount } from '../secrets/store';
 import fs from 'node:fs';
 
@@ -26,14 +27,17 @@ describe('metaPublish 순수 헬퍼', () => {
     expect(extractId(null)).toBeNull();
     expect(extractId({ id: 42 })).toBeNull();
   });
-  it('pickPhotoUrl: images[0].source(최대 해상도), 이형은 null', () => {
-    expect(pickPhotoUrl({ images: [{ source: 'https://cdn/a.png' }, { source: 'https://cdn/small.png' }] })).toBe('https://cdn/a.png');
-    expect(pickPhotoUrl({ images: [] })).toBeNull();
-    expect(pickPhotoUrl({})).toBeNull();
-  });
   it('parsePermalink: {permalink} 추출', () => {
     expect(parsePermalink({ permalink: 'https://www.instagram.com/p/x/' })).toBe('https://www.instagram.com/p/x/');
     expect(parsePermalink({})).toBeNull();
+  });
+  it('realPermalink: 실제 게시물 링크만 인정, 홈 URL·빈값은 undefined(재시도 보강용)', () => {
+    expect(realPermalink('https://www.instagram.com/reel/AbC/')).toBe('https://www.instagram.com/reel/AbC/');
+    expect(realPermalink('https://www.instagram.com/p/x/')).toBe('https://www.instagram.com/p/x/');
+    expect(realPermalink('https://www.instagram.com/')).toBeUndefined();   // 홈 URL 잔재 → 미보유
+    expect(realPermalink('https://instagram.com')).toBeUndefined();
+    expect(realPermalink(null)).toBeUndefined();
+    expect(realPermalink(undefined)).toBeUndefined();
   });
   it('graphError: 그래프 에러 메시지 추출(토큰 미노출), 없으면 HTTP 코드', () => {
     expect(graphError({ error: { message: 'Invalid parameter', code: 100 } }, 400)).toBe('Invalid parameter(code 100)');
@@ -56,67 +60,102 @@ describe('publishCardNewsToMeta', () => {
     expect(r.ok).toBe(false);
     expect(r.error).toContain('10장');
   });
-  it('happy path: 사진 2장 업로드→IG 캐러셀→FB 피드, 두 채널 id 반환', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+  it('happy path: 슬라이드 2장 fal 업로드→IG 캐러셀→발행→permalink(IG 전용, FB 없음)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('png'));
-    const calls: string[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
-      const u = String(url); calls.push(u);
+    // fal 은 슬라이드 파일명별 고유 공개 URL 반환 — image_url 로 흘렀는지·순서 보존을 값으로 검증.
+    vi.mocked(uploadToFalStorage).mockImplementation(async (p) => `https://v3.fal.media/${p.split('/').pop()}`);
+    const bodies: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url); const body = String((init as RequestInit | undefined)?.body ?? ''); bodies.push(body);
       const json =
-        u.includes('/PG/photos') ? { id: `ph${calls.filter((c) => c.includes('/PG/photos')).length}` }
-        : u.includes('fields=images') ? { images: [{ source: 'https://cdn/x.png' }] }
-        : u.includes('/media_publish') ? { id: 'IGMEDIA' }
+        u.includes('/me/media_publish') ? { id: 'IGMEDIA' }
         : u.includes('fields=permalink') ? { permalink: 'https://www.instagram.com/p/x/' }
         : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
-        : u.includes('/me/media') ? { id: `ct${calls.filter((c) => c.includes('/me/media')).length}` }
-        : u.includes('/PG/feed') ? { id: 'PG_POST1' }
+        : u.includes('/me/media') && body.includes('media_type=CAROUSEL') ? { id: 'CAR1' }
+        : u.includes('/me/media') ? { id: `ct${bodies.filter((b) => b.includes('is_carousel_item')).length}` }
         : {};
       return new Response(JSON.stringify(json), { status: 200 });
     });
     const r = await publishCardNewsToMeta({ slug: '', slidePaths: ['/a/slide_01.png', '/a/slide_02.png'], caption: '본문', hashtags: ['#t'] });
-    expect(r).toMatchObject({ ok: true, igMediaId: 'IGMEDIA', igPermalink: 'https://www.instagram.com/p/x/', fbPostId: 'PG_POST1' });
-    expect(calls.filter((c) => c.includes('/PG/photos')).length).toBe(2);
+    expect(r).toMatchObject({ ok: true, igMediaId: 'IGMEDIA', igPermalink: 'https://www.instagram.com/p/x/' });
+    expect(r.fbPostId).toBeUndefined();                                     // FB 경로 제거됨
+    // fal 업로드: 슬라이드 수·순서·contentType 검증(로컬 경로/스킵 회귀를 잡음)
+    expect(vi.mocked(uploadToFalStorage).mock.calls.map((c) => [c[0], c[1]])).toEqual([['/a/slide_01.png', 'image/png'], ['/a/slide_02.png', 'image/png']]);
+    // fal 공개 URL 이 자식 image_url 로, 슬라이드 순서대로 전달됐는지(로컬 경로 회귀 시 실패)
+    const children = bodies.filter((b) => b.includes('is_carousel_item=true'));
+    expect(children.length).toBe(2);
+    expect(children.every((b) => b.includes('fal.media') && b.includes('image_url'))).toBe(true);
+    expect(children[0]).toContain('slide_01.png');
+    expect(children[1]).toContain('slide_02.png');
   });
-  it('부분 성공 멱등: existing.igPermalink 있으면 IG 스킵하고 FB 만 발행', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+  it('단일 슬라이드 → 캐러셀 아닌 일반 이미지 포스트(fal URL)로 발행', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('png'));
-    const calls: string[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
-      const u = String(url); calls.push(u);
-      const json = u.includes('/PG/photos') ? { id: 'ph1' } : u.includes('/PG/feed') ? { id: 'PG_POST2' } : {};
+    const bodies: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url); const body = String((init as RequestInit | undefined)?.body ?? ''); bodies.push(body);
+      const json =
+        u.includes('/me/media_publish') ? { id: 'IGONE' }
+        : u.includes('fields=permalink') ? { permalink: 'https://www.instagram.com/p/one/' }
+        : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
+        : u.includes('/me/media') ? { id: 'IMG1' }
+        : {};
       return new Response(JSON.stringify(json), { status: 200 });
     });
-    const r = await publishCardNewsToMeta({
-      slug: '', slidePaths: ['/a/slide_01.png'], caption: 'c', hashtags: [],
-      existing: { igPermalink: 'https://www.instagram.com/p/done/' },
-    });
-    expect(r.ok).toBe(true);
-    expect(r.fbPostId).toBe('PG_POST2');
-    expect(calls.some((c) => c.includes('/me/media'))).toBe(false); // IG 경로 미호출
+    const r = await publishCardNewsToMeta({ slug: '', slidePaths: ['/a/slide_01.png'], caption: 'c', hashtags: [] });
+    expect(r).toMatchObject({ ok: true, igMediaId: 'IGONE' });
+    expect(vi.mocked(uploadToFalStorage)).toHaveBeenCalledWith('/a/slide_01.png', 'image/png', expect.anything());
+    expect(bodies.some((b) => b.includes('is_carousel_item') || b.includes('media_type=CAROUSEL'))).toBe(false); // 캐러셀 아님
+    expect(bodies.some((b) => b.includes('image_url') && b.includes('caption') && b.includes('fal.media'))).toBe(true); // 단일 이미지+캡션+fal URL
   });
-  it('media_publish 이형 응답(id 없음) → ok:false(성공 위장 금지)', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+  it('단일 이미지 발행 이형(id 없음) → ok:false(fail-closed, 단일 경로도 위장 금지)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('png'));
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
       const u = String(url);
       const json =
-        u.includes('/PG/photos') ? { id: 'ph1' }
-        : u.includes('fields=images') ? { images: [{ source: 'https://cdn/x.png' }] }
-        : u.includes('/media_publish') ? {}                       // ← 이형: id 없음
+        u.includes('/me/media_publish') ? {}                       // ← 이형: id 없음
         : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
-        : u.includes('/me/media') ? { id: 'ct1' }
-        : u.includes('/PG/feed') ? { id: 'PG_POST' }
+        : u.includes('/me/media') ? { id: 'IMG1' }
         : {};
       return new Response(JSON.stringify(json), { status: 200 });
     });
     const r = await publishCardNewsToMeta({ slug: '', slidePaths: ['/a/slide_01.png'], caption: 'c', hashtags: [] });
     expect(r.ok).toBe(false);
     expect(r.error).toContain('이형');
-    expect(r.error).toContain('IG 발행');        // IG 단계 가드가 발동했음을 특정
-    expect(r.fbPostId).toBeUndefined();          // 가드가 FB 단계 진행을 막았음을 검증
+  });
+  it('부분 성공 멱등: existing.igMediaId 있으면 IG 스킵·fal 미업로드(재발행·중복 없음)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    const calls: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => { calls.push(String(url)); return new Response('{}', { status: 200 }); });
+    const r = await publishCardNewsToMeta({
+      slug: '', slidePaths: ['/a/slide_01.png'], caption: 'c', hashtags: [],
+      existing: { igMediaId: 'MDONE', igPermalink: 'https://www.instagram.com/p/done/' },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.igMediaId).toBe('MDONE');                              // 기존 미디어 id 이월
+    expect(vi.mocked(uploadToFalStorage)).not.toHaveBeenCalled();   // 재업로드 없음
+    expect(calls.some((c) => c.includes('/me/media'))).toBe(false); // IG 경로 미호출(중복 방지)
+  });
+  it('media_publish 이형 응답(id 없음) → ok:false(성공 위장 금지)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url); const body = String((init as RequestInit | undefined)?.body ?? '');
+      const json =
+        u.includes('/me/media_publish') ? {}                       // ← 이형: id 없음
+        : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
+        : u.includes('/me/media') && body.includes('media_type=CAROUSEL') ? { id: 'CAR1' }
+        : u.includes('/me/media') ? { id: 'ct1' }
+        : {};
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const r = await publishCardNewsToMeta({ slug: '', slidePaths: ['/a/slide_01.png', '/a/slide_02.png'], caption: 'c', hashtags: [] });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('이형');
+    expect(r.error).toContain('IG 발행');        // IG 발행 단계 가드가 발동했음을 특정
   });
 });
 
@@ -228,7 +267,7 @@ describe('publishShortsToMeta', () => {
     expect(r.igReelId).toBe('REEL7');        // IG 릴스 성공
     expect(r.fbReelId).toBeUndefined();      // FB 는 스킵됨
   });
-  it('부분 성공 멱등: existing.igPermalink 있으면 IG 경로 무호출, FB 만 발행', async () => {
+  it('부분 성공 멱등: existing.igReelId 있으면 IG 경로 무호출·fal 미업로드, FB 만 발행', async () => {
     vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
@@ -245,10 +284,12 @@ describe('publishShortsToMeta', () => {
     });
     const r = await publishShortsToMeta({
       slug: '', videoPath: '/a/final.mp4', caption: 'c', hashtags: [],
-      existing: { igPermalink: 'https://www.instagram.com/reel/done/' },
+      existing: { igReelId: 'RDONE', igPermalink: 'https://www.instagram.com/reel/done/', fbReelId: undefined },
     });
     expect(r.ok).toBe(true);
+    expect(r.igReelId).toBe('RDONE');                              // 기존 릴스 id 이월
     expect(r.fbReelId).toBe('FBV2');
-    expect(calls.some((c) => c.includes('/me/media'))).toBe(false);
+    expect(vi.mocked(uploadToFalStorage)).not.toHaveBeenCalled();  // 재업로드 없음
+    expect(calls.some((c) => c.includes('/me/media'))).toBe(false); // IG 경로 미호출(중복 방지)
   });
 });
