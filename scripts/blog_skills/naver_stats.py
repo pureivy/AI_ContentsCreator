@@ -97,6 +97,56 @@ def _num(v):
         return 0
 
 
+def blog_stat_cumulative_cv(context, log_no: str):
+    """네이버 블로그 통계(blog.stat.naver.com)에서 이 글(log_no)의 '누적 조회수'를 집계(2026-07-20 역추적).
+    통계 '게시물 조회수'의 실제 소스 — rank/cvContentPc(주별 글별 cv) 합 + 이번 주 daily/rankCv(일별)로
+    보강(주별 롤업 지연분). referer 헤더 필수(없으면 채널 API 처럼 400/403). 실패·미발견은 None(폴백)."""
+    if not log_no:
+        return None
+    hdr = {"referer": "https://m.blog.naver.com/", "accept": "application/json"}
+    base = "https://blog.stat.naver.com/api/blog"
+
+    def _rows(url):
+        try:
+            r = context.request.get(url, headers=hdr, timeout=15000)
+            if r.status == 200 and "json" in r.headers.get("content-type", ""):
+                return r.json().get("result", {}).get("statDataList", [{}])[0].get("data", {}).get("rows", {})
+        except Exception:
+            pass
+        return {}
+
+    def _sum(rows):
+        s = 0
+        for u, cv in zip(rows.get("uri", []), rows.get("cv", [])):
+            if log_no in str(u):
+                s += _num(cv)
+        return s
+
+    today = date.today()
+    this_mon = today - timedelta(days=today.weekday())
+    total = 0
+    found = False
+    # 완료된 주(최근 16주 캡) — 주별 글별 cv 합
+    w = this_mon - timedelta(weeks=16)
+    while w < this_mon:
+        rows = _rows(f"{base}/rank/cvContentPc?timeDimension=WEEK&startDate={w.isoformat()}")
+        if rows.get("uri"):
+            v = _sum(rows)
+            if v:
+                total += v; found = True
+        w += timedelta(weeks=1)
+    # 이번 주(월~오늘) — 주별 롤업 전이라 일별로 보강
+    d = this_mon
+    while d <= today:
+        rows = _rows(f"{base}/daily/rankCv?timeDimension=DATE&startDate={d.isoformat()}&exclude=dashboard,weekAndMonthAnalysis")
+        if rows.get("uri"):
+            v = _sum(rows)
+            if v:
+                total += v; found = True
+        d += timedelta(days=1)
+    return total if found else None
+
+
 def extract_advisor_metrics(captures: list, log_no: str = "") -> dict:
     """크리에이터 어드바이저에서 '이 글(log_no)' 지표를 정밀 추출.
     - 조회수(cv): 채널 순위 리스트(realtime-summary·soaring-contents 의 metricRanks[].rank[])에서
@@ -279,6 +329,7 @@ def main():
     profile_dir = Path(os.environ["NAVER_PROFILE_DIR"]) if os.environ.get("NAVER_PROFILE_DIR") else (Path.home() / ".naver-blog-profiles" / "cli")
     profile_dir.mkdir(parents=True, exist_ok=True)
     captures = []
+    stat_cv = None  # 블로그 통계 누적 조회수(있으면 어드바이저보다 우선) — 브라우저 블록에서 채움
 
     from playwright.sync_api import sync_playwright
     with sync_playwright() as pw:
@@ -319,9 +370,26 @@ def main():
                     context.add_cookies(json.load(f))
             except Exception:
                 pass
+        # 인증 확인 + 누적 조회수 — blog.stat(context.request, 쿠키 인증)로 판정. DOM 로그인 링크 체크가
+        # 헤드리스에서 헛발질(로그인돼 있어도 링크 존재로 오판→10분 로그인 루프 stuck)하는 문제를 우회한다.
+        # blog.stat 이 200 JSON 을 주면 인증된 것 — 그 세션으로 게시물 누적 조회수까지 바로 얻는다.
+        authed = False
+        try:
+            _ai = context.request.get("https://blog.stat.naver.com/api/blog/user-info",
+                                      headers={"referer": "https://m.blog.naver.com/", "accept": "application/json"}, timeout=15000)
+            authed = (_ai.status == 200 and "json" in _ai.headers.get("content-type", ""))
+        except Exception:
+            authed = False
+        if authed:
+            try:
+                stat_cv = blog_stat_cumulative_cv(context, log_no)
+            except Exception:
+                stat_cv = None
+
         page.goto("https://blog.naver.com", wait_until="domcontentloaded", timeout=15000)
         time.sleep(1.5)
-        logged_in = page.locator("a[href*='nidlogin'], .link_login").count() == 0
+        # API 인증(authed) 우선 — 성공이면 DOM 체크 무시(헤드리스 오판 회피). 실패 시에만 DOM 폴백.
+        logged_in = authed or page.locator("a[href*='nidlogin'], .link_login").count() == 0
         if not logged_in:
             try:
                 from naver_publish import full_auto_login, save_cookies  # 같은 디렉토리 스크립트
@@ -378,6 +446,13 @@ def main():
             except Exception:
                 continue
 
+        # 글별 '누적' 조회수 — 위 authed 경로에서 못 구했으면(로그인 후 등) 여기서 1회 시도.
+        if stat_cv is None:
+            try:
+                stat_cv = blog_stat_cumulative_cv(context, log_no)
+            except Exception:
+                stat_cv = None
+
         context.close()
 
     # 캡처 덤프(추출기 정밀화용) — 자격증명 없음.
@@ -396,16 +471,20 @@ def main():
     # 어드바이저 실측 엔드포인트 정밀 추출을 우선, 부족분은 범용 휴리스틱으로 보강.
     adv = extract_advisor_metrics(captures, log_no)
     gen = extract_metrics(captures, log_no)
+    # 조회수 우선순위: blog.stat 누적(게시물 조회수 실소스) > 어드바이저 글별 당일 > 휴리스틱.
+    views = stat_cv if stat_cv is not None else (adv["views"] or gen["views"])
     metrics = {
-        "views": adv["views"] or gen["views"],
+        "views": views,
         "dwellSec": adv["dwellSec"] or gen["dwellSec"],
         "searchInflow": adv["searchInflow"] or gen["searchInflow"],
     }
     # 로그인은 됐지만(권한 응답 수신) 수치가 0 = 발행 직후 미집계일 가능성.
     logged = any(isinstance(c.get("body"), dict) and c["body"].get("data") not in (None,) for c in captures)
-    if metrics["views"]:
-        note = ("글별 최근(당일) 조회수입니다 — 어드바이저는 글 '누적' 조회수를 제공하지 않아 "
-                "네이버 통계의 누적 게시물 조회수와 다를 수 있습니다. 정확한 누적값은 수동 입력을 권장합니다."
+    if stat_cv is not None:
+        note = ("네이버 통계 게시물 누적 조회수입니다."
+                + ("" if metrics["searchInflow"] else " (검색 유입 키워드는 별도 수집.)"))
+    elif metrics["views"]:
+        note = ("어드바이저 글별 당일 조회수 — 누적(통계 게시물 조회수)과 다를 수 있어 정확값은 수동 입력 권장."
                 + ("" if metrics["searchInflow"] else " (검색 유입은 글 단위 데이터가 없어 비웠습니다.)"))
     elif metrics["searchInflow"]:
         note = ""
