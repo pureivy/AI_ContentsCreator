@@ -1,0 +1,119 @@
+/**
+ * 숏폼 디자인 썸네일 — 훅 씬(첫 장면)을 배경으로 그 위에 손글씨 제목+핵심을 gpt-image(edit)로 그려 넣은
+ * '시선 끌기' 커버. 카드뉴스 handwritten_poster 와 동일 엔진(openai_image --allow-text, images.edit) 재사용.
+ * best-effort — 키 없거나 실패하면 false 를 반환(호출부·엔드포인트가 영상 첫 프레임으로 폴백).
+ * AI 가 한글을 그리므로 오타 위험 → 비전 QA 로 검수하고 1회 재생성으로 커버(카드뉴스와 동일 원리).
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { CONFIG } from '../config';
+import { microJSON } from './agent';
+import { stdModel, visionCapable } from './visionCommon';
+import { generateImagesForDraft } from '../tools/blog_skills';
+
+const execFileP = promisify(execFile);
+
+interface ThumbCopy { line1: string; line2: string; points: string[] }
+
+/** 썸네일 카피 — 시선 끄는 2줄 제목 + 핵심 2~3줄. LLM 실패 시 제목을 반으로 갈라 폴백. */
+async function planThumbnailCopy(input: { title: string; description: string; titles?: string[] }, signal?: AbortSignal): Promise<ThumbCopy> {
+  const fallback = (): ThumbCopy => {
+    const t = (input.title || '').replace(/[,·].*$/, '').trim();
+    const mid = Math.max(1, Math.ceil(t.length / 2));
+    return { line1: t.slice(0, mid) || t || '숏폼', line2: t.slice(mid), points: [] };
+  };
+  try {
+    const j = await microJSON<{ line1?: unknown; line2?: unknown; points?: unknown }>(
+      stdModel(),
+      '당신은 유튜브 숏폼 썸네일 카피라이터입니다. 요청 JSON 스키마만 출력합니다.',
+      [
+        `[제목] ${input.title}`,
+        input.description ? `[설명] ${input.description}` : '',
+        (input.titles && input.titles.length) ? `[제목 후보] ${input.titles.join(' / ')}` : '',
+        '',
+        '위 숏폼의 썸네일 문구를 만들어라. 시선을 확 끄는 2줄 제목(각 줄 3~8자, 두 줄 합쳐 핵심 메시지 — 손글씨로 크게 들어감)과,',
+        '핵심 포인트 2~3개(각 14자 이내, 궁금증·이득 자극). 과장·낚시성 금지, 내용에 근거.',
+        'JSON: {"line1":"첫 줄","line2":"둘째 줄","points":["포인트1","포인트2","포인트3"]}',
+      ].filter(Boolean).join('\n'),
+      { maxOutputTokens: 400, signal },
+    );
+    const line1 = String(j?.line1 ?? '').trim().slice(0, 12);
+    const line2 = String(j?.line2 ?? '').trim().slice(0, 12);
+    const points = (Array.isArray(j?.points) ? j.points : []).map((p) => String(p ?? '').trim().slice(0, 20)).filter(Boolean).slice(0, 3);
+    return line1 ? { line1, line2, points } : fallback();
+  } catch { return fallback(); }
+}
+
+/** 카피 → gpt-image 프롬프트(실측 검증본). 지정 한국어만, 오타 없이. */
+function buildThumbnailPrompt(copy: ThumbCopy): string {
+  const pts = copy.points.length ? copy.points.map((p) => `'${p}'`).join(', ') : '';
+  return [
+    '세로 유튜브/인스타 썸네일. 참조로 준 사진을 배경으로 그대로 사용하고, 상단 45%를 부드러운 검정 그라데이션으로 살짝 덮어 글자 가독성을 확보한다.',
+    `그 위에 손으로 쓴 듯한 굵은 한국어 캘리그래피 제목을 2줄로 크게 배치한다: 1줄 '${copy.line1}' 는 크림 화이트, 2줄 '${copy.line2}' 는 선명한 노랑. 붓펜 질감에 밑줄 획으로 강조.`,
+    pts ? `왼쪽 하단에는 작은 손글씨로 핵심 ${copy.points.length}줄: ${pts}. 밑줄과 동그라미로 포인트.` : '',
+    '별·구름 모양의 작은 손그림 낙서를 여백에 소량 추가. 밝고 생기있는 무드.',
+    '한글 맞춤법을 정확히 지키고 글자가 깨지거나 오타가 없게 한다. 지정한 한국어 텍스트만 사용하고 영어나 의미 없는 글자는 넣지 않는다.',
+  ].filter(Boolean).join(' ');
+}
+
+/** 비전 QA — 이미지의 한글이 기대 문구대로 정확한지. 비전 불가/판정 실패면 통과(파이프라인 차단 방지). */
+async function qaKoreanText(imagePath: string, expected: string, signal?: AbortSignal): Promise<boolean> {
+  if (!visionCapable()) return true;
+  const j = await microJSON<{ ok?: boolean }>(
+    stdModel(),
+    '당신은 한국어 텍스트 검수자입니다. JSON 만 출력합니다.',
+    `이 썸네일 이미지에 그려진 한국어 글자에 오타·깨진 자소·이상한 글자가 있는지 판정하라. 기대 문구(순서 무관): ${expected}. 모두 정확하면 ok=true, 하나라도 깨졌으면 ok=false. JSON: {"ok":true}`,
+    { maxOutputTokens: 150, signal, visionPaths: [imagePath] },
+  ).catch(() => null);
+  return j?.ok !== false;
+}
+
+/** png → dir/thumbnail.jpg 변환(ffmpeg). */
+async function toThumbnailJpg(pngPath: string, dir: string, signal?: AbortSignal): Promise<void> {
+  await execFileP('ffmpeg', ['-nostdin', '-y', '-i', pngPath, '-q:v', '3', path.join(dir, 'thumbnail.jpg')], { timeout: 20_000, signal });
+}
+
+function manifestFirstImage(manifestPath: string): string | null {
+  try {
+    const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as { images?: Array<{ file_path?: string }> };
+    const p = m.images?.[0]?.file_path;
+    return p && fs.existsSync(p) ? p : null;
+  } catch { return null; }
+}
+
+/**
+ * 훅 씬 배경 위에 디자인 썸네일 생성 → dir/thumbnail.jpg. 성공 true / 폴백해야 하면 false.
+ * hookImage 없거나 키 없으면 false(영상 프레임 폴백). QA 2회 실패 시 마지막 생성본 사용(디자인 우선 방침).
+ */
+export async function generateDesignedThumbnail(input: {
+  dir: string; title: string; description: string; titles?: string[]; hookImage: string | null; signal?: AbortSignal;
+}): Promise<boolean> {
+  if (!CONFIG.openaiApiKey) return false;
+  if (!input.hookImage || !fs.existsSync(input.hookImage)) return false;
+  const copy = await planThumbnailCopy(input, input.signal);
+  const prompt = buildThumbnailPrompt(copy);
+  const expected = [copy.line1, copy.line2, ...copy.points].filter(Boolean).join(' / ');
+  const work = path.join(input.dir, '.thumb');
+  fs.mkdirSync(work, { recursive: true });
+  const draftPath = path.join(work, 'draft.json');
+  fs.writeFileSync(draftPath, JSON.stringify({ topic: copy.line1, imageSlots: [{ alt: '썸네일', prompt }] }), 'utf-8');
+
+  let lastPng: string | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const outDir = path.join(work, `out${attempt}`);
+    const manifest = path.join(work, `m${attempt}.json`);
+    try {
+      await generateImagesForDraft(draftPath, outDir, manifest,
+        { imageStyle: 'photorealistic', allowText: true, size: '1024x1536', limit: 1, refImages: [input.hookImage], topic: copy.line1, timeoutMs: 150_000 },
+        input.signal);
+    } catch { continue; } // 이 시도 실패 → 다음 시도(또는 폴백)
+    const png = manifestFirstImage(manifest);
+    if (!png) continue;
+    lastPng = png;
+    if (await qaKoreanText(png, expected, input.signal)) { await toThumbnailJpg(png, input.dir, input.signal); return true; }
+  }
+  if (lastPng) { await toThumbnailJpg(lastPng, input.dir, input.signal); return true; } // QA 못 넘겨도 디자인본 우선
+  return false;
+}

@@ -14,9 +14,8 @@ describe('ensureShortsThumbnail', () => {
     vi.spyOn(fs, 'existsSync').mockImplementation((p) => String(p).endsWith('thumbnail.jpg'));
     expect(await ensureShortsThumbnail('/d')).toBe('/d/thumbnail.jpg');
   });
-  it('썸네일이 영상보다 최신이면 ffmpeg 없이 재사용', async () => {
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'statSync').mockImplementation((p) => ({ mtimeMs: String(p).endsWith('thumbnail.jpg') ? 200 : 100 }) as fs.Stats);
+  it('썸네일이 이미 있으면 그대로 재사용(디자인 썸네일 보존 — 프레임 재추출 안 함)', async () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true); // 썸네일·영상 모두 존재
     expect(await ensureShortsThumbnail('/d')).toBe('/d/thumbnail.jpg');
   });
 });

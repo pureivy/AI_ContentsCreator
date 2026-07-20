@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   fetchShorts, createShorts, createShortsFromPiece, deleteShorts,
   fetchPieces, ShortsInfo, PieceInfo, uploadShortsYoutube, fetchYoutubeStatus,
-  publishShortsMeta, fetchMetaStatus,
+  publishShortsMeta, fetchMetaStatus, regenerateShortsThumbnail,
 } from "../api";
 import Avatar from "./Avatar";
 import Ico, { type IcoName } from "./Ico";
@@ -58,6 +58,14 @@ function ShortRow({ s, onDelete, yt, metaReady, onChanged }: {
     if (r.error) setMetaErr(r.error);
     onChanged(); // 부분 성공 링크도 즉시 반영
   };
+  const [thumbBusy, setThumbBusy] = useState(false);
+  const [thumbErr, setThumbErr] = useState("");
+  const doThumbnail = async () => {
+    setThumbBusy(true); setThumbErr("");
+    const r = await regenerateShortsThumbnail(s.id);
+    setThumbBusy(false);
+    if (r.error) setThumbErr(r.error); else onChanged(); // updatedTs 갱신 → 포스터 새로고침
+  };
   const running = RUNNING_STAGES.has(s.stage);
   const captionFull = [s.title, s.description, (s.hashtags ?? []).join(" ")].filter(Boolean).join("\n\n");
   const copyCaption = async () => {
@@ -110,6 +118,9 @@ function ShortRow({ s, onDelete, yt, metaReady, onChanged }: {
             <a className="btn start" href={`/shorts/${s.id}/video`} download={`shorts-${s.id}.mp4`}>MP4</a>
             <a className="btn ghost" href={`/shorts/${s.id}/zip`} download>zip (mp4+자막+캡션)</a>
             {captionFull && <button className="btn ghost" onClick={copyCaption}>{copied ? "복사됨!" : "캡션 복사"}</button>}
+            <button className="btn ghost" disabled={thumbBusy} onClick={doThumbnail} title="훅 장면 배경에 제목·핵심을 얹은 디자인 썸네일을 새로 만듭니다(약 1분, 이미지 생성 과금)">
+              {thumbBusy ? "썸네일 생성 중…" : "🖼 썸네일 생성"}
+            </button>
             {s.youtubeUrl ? (
               <>
                 <a className="btn ghost" href={s.youtubeUrl} target="_blank" rel="noreferrer" title="비공개 업로드됨 — 공개 전환은 유튜브 스튜디오에서">▶ 유튜브(비공개)</a>
@@ -136,6 +147,7 @@ function ShortRow({ s, onDelete, yt, metaReady, onChanged }: {
             )}
             {metaErr && <span className="muted" style={{ color: "var(--con)" }}>{metaErr}</span>}
             {ytErr && <span className="muted" style={{ color: "var(--con)" }}>{ytErr}</span>}
+            {thumbErr && <span className="muted" style={{ color: "var(--con)" }}>{thumbErr}</span>}
           </>
         )}
         <button className="btn ghost" title="목록에서 삭제(산출물 파일은 남음)" disabled={running} onClick={() => onDelete(s.id)}><Ico name="trash" size={12} /> 삭제</button>

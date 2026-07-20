@@ -50,6 +50,7 @@ import { shortsStore } from '../content/shorts';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning } from '../orchestrator/shorts';
 import { ensureShortsThumbnail } from '../tools/shortsRender';
+import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece } from '../content/pieces';
 import { listPersonas } from '../content/personas';
 import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeBrandSlug, deleteBrand, isSafeBrandSlug } from '../content/brand';
@@ -1303,6 +1304,32 @@ app.get('/shorts/:id/video', shortsVideoHandler); // :id 보다 먼저(구체 �
 app.get('/api/shorts/:id/video', shortsVideoHandler);
 app.get('/shorts/:id/thumbnail', shortsThumbnailHandler);
 app.get('/api/shorts/:id/thumbnail', shortsThumbnailHandler);
+// 디자인 썸네일 재생성(온디맨드) — 훅 씬 배경 위에 손글씨 제목/핵심(gpt-image). 기존 쇼츠 업그레이드·재시도용.
+const thumbGenInFlight = new Set<string>();
+async function shortsThumbnailRegenHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  const s = shortsStore().get(id);
+  if (!s) return c.json({ error: 'unknown short' }, 404);
+  if (!CONFIG.openaiApiKey) return c.json({ error: 'OPENAI_API_KEY 미설정 — 디자인 썸네일은 이미지 생성 키가 필요합니다' }, 400);
+  if (thumbGenInFlight.has(id)) return c.json({ error: '이미 생성 중입니다' }, 409);
+  const dir = shortsStore().dirFor(id);
+  const hook = (() => {
+    try {
+      const f = fs.readdirSync(path.join(dir, 'scenes')).filter((x) => /\.(png|jpe?g)$/i.test(x)).sort()[0];
+      return f ? path.join(dir, 'scenes', f) : null;
+    } catch { return null; }
+  })();
+  if (!hook) return c.json({ error: '훅 씬 이미지가 없어 디자인 썸네일을 만들 수 없습니다(영상 프레임만 가능)' }, 409);
+  thumbGenInFlight.add(id);
+  try {
+    const ok = await generateDesignedThumbnail({ dir, title: s.title ?? s.topic, description: s.description ?? '', titles: s.titles, hookImage: hook });
+    if (!ok) return c.json({ error: '썸네일 생성 실패(무해 — 기존 유지)' }, 502);
+    shortsStore().update(id, {}); // updatedTs 갱신 → 포스터 캐시버스트
+    return c.json({ ok: true });
+  } finally { thumbGenInFlight.delete(id); }
+}
+app.post('/shorts/:id/thumbnail/regenerate', shortsThumbnailRegenHandler);
+app.post('/api/shorts/:id/thumbnail/regenerate', shortsThumbnailRegenHandler);
 app.get('/shorts/:id/zip', shortsZipHandler);
 app.get('/api/shorts/:id/zip', shortsZipHandler);
 app.get('/shorts/:id', shortsGetHandler);

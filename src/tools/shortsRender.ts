@@ -38,12 +38,11 @@ async function ff(args: string[], timeoutMs: number, signal?: AbortSignal): Prom
  */
 export async function ensureShortsThumbnail(dir: string, signal?: AbortSignal): Promise<string | null> {
   const thumb = path.join(dir, 'thumbnail.jpg');
+  // 이미 있으면 그대로 사용 — 디자인 썸네일(완성부 gpt-image)을 프레임으로 덮어쓰지 않는다.
+  // 재렌더 시엔 완성부가 디자인 썸네일을 새로 덮어쓴다(이 함수는 폴백 전용).
+  if (fs.existsSync(thumb)) return thumb;
   const video = path.join(dir, 'final.mp4');
-  if (!fs.existsSync(video)) return fs.existsSync(thumb) ? thumb : null;
-  // 썸네일이 영상보다 최신이면 재사용(재렌더 시 mtime 이 앞서면 재생성).
-  if (fs.existsSync(thumb)) {
-    try { if (fs.statSync(thumb).mtimeMs >= fs.statSync(video).mtimeMs) return thumb; } catch { return thumb; }
-  }
+  if (!fs.existsSync(video)) return null;
   try {
     await ff(['-ss', '1', '-i', video, '-frames:v', '1', '-vf', 'scale=-2:720', '-q:v', '4', thumb], 20_000, signal);
     return fs.existsSync(thumb) ? thumb : null;

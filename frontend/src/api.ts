@@ -1100,6 +1100,10 @@ export async function publishShortsMeta(id: string): Promise<{ ok?: boolean; igP
   try { const r = await fetch(`/shorts/${id}/meta`, { method: "POST" }); return await r.json(); }
   catch { return { error: "요청 실패" }; }
 }
+export async function regenerateShortsThumbnail(id: string): Promise<{ ok?: boolean; error?: string }> {
+  try { const r = await fetch(`/shorts/${id}/thumbnail/regenerate`, { method: "POST" }); return await r.json(); }
+  catch { return { error: "요청 실패" }; }
+}
 export async function fetchYoutubeStatus(): Promise<{ client: boolean; connected: boolean }> {
   try { const r = await fetch("/youtube/status"); return await r.json() as { client: boolean; connected: boolean }; }
   catch { return { client: false, connected: false }; }
