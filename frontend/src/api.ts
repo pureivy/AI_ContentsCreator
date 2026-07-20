@@ -932,8 +932,8 @@ export interface PerfRow {
 // 채널 성과(쇼츠·카드뉴스) — 채널 미발행이면 null, 발행됐지만 수집 전이면 views null.
 export interface ShortsPerfRow {
   id: string; title: string; ts: string;
-  youtube: { url: string | null; views: number | null; likes: number | null; reflected: boolean; series: number[] } | null;
-  meta: { permalink: string | null; views: number | null; likes: number | null; reflected: boolean; series: number[] } | null;
+  youtube: { url: string | null; views: number | null; likes: number | null; reflected: boolean; series: number[]; ts: string } | null;
+  meta: { permalink: string | null; views: number | null; likes: number | null; reflected: boolean; series: number[]; ts: string } | null;
 }
 export interface CardnewsPerfRow {
   id: string; topic: string; ts: string; reflected: boolean;

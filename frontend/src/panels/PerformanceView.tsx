@@ -76,11 +76,18 @@ export default function PerformanceView() {
     return Number.isNaN(d.getTime()) ? "—"
       : `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`;
   };
-  // 측정창 종료 후 학습 반영 칩(✓ 반영됨, … 측정 중).
-  const reflOne = (reflected: boolean) => (reflected ? "✓" : "…");
+  // 측정창 종료 후 학습 강화 반영 여부 칩 — 명시 라벨(✓ 반영 / 측정 중).
+  const reflBadge = (reflected: boolean) => (
+    <span className={reflected ? "chip" : "chip muted"} title="측정창 종료 후 성과가 학습 강화(키워드·서브니치 EWMA)에 반영됐는지">
+      {reflected ? "✓ 반영" : "측정 중"}
+    </span>
+  );
   // 채널별 분리 — 한 숏폼이 유튜브·인스타 양쪽에 발행됐으면 각 섹션에 각각 나타난다(채널별 성과 독립).
-  const ytShorts = ch?.shorts.filter((r) => r.youtube) ?? [];
-  const reels = ch?.shorts.filter((r) => r.meta) ?? [];
+  // 정렬·업로드일도 채널별 타임스탬프 사용(youtube.ts / meta.ts) — 상단 r.ts(최신값)와 달라 섹션별로 정확.
+  const ytShorts = (ch?.shorts.filter((r) => r.youtube) ?? [])
+    .sort((a, b) => (b.youtube!.ts).localeCompare(a.youtube!.ts));
+  const reels = (ch?.shorts.filter((r) => r.meta) ?? [])
+    .sort((a, b) => (b.meta!.ts).localeCompare(a.meta!.ts));
   const cardnews = ch?.cardnews ?? [];
 
   // 최근 5개만 기본 표시, 나머지는 '더 보기'로 펼침(표별 독립 상태). 배열은 이미 최신순.
@@ -194,11 +201,11 @@ export default function PerformanceView() {
                               : <span className="perf-title-txt" title={r.title}>{r.title}</span>}
                           </div>
                         </td>
-                        <td className="perf-date">{fmtDate(r.ts)}</td>
+                        <td className="perf-date">{fmtDate(r.youtube?.ts ?? r.ts)}</td>
                         <td className="perf-spark"><Sparkline data={r.youtube?.series ?? []} title={`${r.title} 유튜브 조회 추이`} /></td>
                         <td className="perf-r">{r.youtube ? fmt(r.youtube.views) : "—"}</td>
                         <td className="perf-r">{r.youtube ? fmt(r.youtube.likes) : "—"}</td>
-                        <td className="perf-r">{r.youtube ? reflOne(r.youtube.reflected) : "—"}</td>
+                        <td className="perf-r">{r.youtube ? reflBadge(r.youtube.reflected) : "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -228,11 +235,11 @@ export default function PerformanceView() {
                               : <span className="perf-title-txt" title={r.title}>{r.title}</span>}
                           </div>
                         </td>
-                        <td className="perf-date">{fmtDate(r.ts)}</td>
+                        <td className="perf-date">{fmtDate(r.meta?.ts ?? r.ts)}</td>
                         <td className="perf-spark"><Sparkline data={r.meta?.series ?? []} title={`${r.title} 릴스 조회 추이`} /></td>
                         <td className="perf-r">{r.meta ? fmt(r.meta.views) : "—"}</td>
                         <td className="perf-r">{r.meta ? fmt(r.meta.likes) : "—"}</td>
-                        <td className="perf-r">{r.meta ? reflOne(r.meta.reflected) : "—"}</td>
+                        <td className="perf-r">{r.meta ? reflBadge(r.meta.reflected) : "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -269,7 +276,7 @@ export default function PerformanceView() {
                         <td className="perf-r">{r.ig ? fmt(r.ig.likes) : "—"}</td>
                         <td className="perf-r">{r.fb ? fmt(r.fb.likes) : "—"}</td>
                         <td className="perf-r">{r.fb ? fmt(r.fb.shares) : "—"}</td>
-                        <td className="perf-r">{r.reflected ? "✓" : "…"}</td>
+                        <td className="perf-r">{reflBadge(r.reflected)}</td>
                       </tr>
                     ))}
                   </tbody>
