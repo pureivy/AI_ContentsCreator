@@ -7,6 +7,7 @@
  */
 import fs from 'node:fs';
 import { getMetaAccount } from '../secrets/store';
+import { uploadToFalStorage } from './falStorage';
 
 // 인스타그램 로그인 방식(2026-07-20) — 콘텐츠 발행은 graph.instagram.com. 페이지 없음.
 // FB 페이지 경로(video_reels·feed·photos)는 pageId 있을 때만 호출(현재 IG 로그인은 pageId='' → 미실행).
@@ -116,7 +117,7 @@ export async function publishCardNewsToMeta(opts: {
         // CDN URL 은 서명 만료가 있어 저장·재사용 금지 — 획득 즉시 컨테이너 생성(스펙 §6).
         const cdn = pickPhotoUrl(await graphJson(`${GRAPH}/${phId}?fields=images&${tokenQs(token)}`, { signal }, 'FB 사진 URL 조회'));
         if (!cdn) throw new Error('FB 사진 CDN URL 없음');
-        const child = await graphJson(`${GRAPH}/${acct.igUserId}/media`, {
+        const child = await graphJson(`${GRAPH}/me/media`, {
           method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({ image_url: cdn, is_carousel_item: 'true', access_token: token }),
         }, 'IG 자식 컨테이너');
@@ -124,14 +125,14 @@ export async function publishCardNewsToMeta(opts: {
         if (!cid) throw new Error('IG 자식 컨테이너 응답 이형');
         childIds.push(cid);
       }
-      const carousel = await graphJson(`${GRAPH}/${acct.igUserId}/media`, {
+      const carousel = await graphJson(`${GRAPH}/me/media`, {
         method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ media_type: 'CAROUSEL', children: childIds.join(','), caption: message, access_token: token }),
       }, 'IG 캐러셀 컨테이너');
       const carId = extractId(carousel);
       if (!carId) throw new Error('IG 캐러셀 컨테이너 응답 이형');
       await waitContainer(carId, token, signal);
-      const pub = await graphJson(`${GRAPH}/${acct.igUserId}/media_publish`, {
+      const pub = await graphJson(`${GRAPH}/me/media_publish`, {
         method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ creation_id: carId, access_token: token }),
       }, 'IG 발행');
@@ -173,9 +174,8 @@ export async function publishCardNewsToMeta(opts: {
 }
 
 // ── 쇼츠 릴스 발행 ───────────────────────────────────────────────────────────
-// 영상은 공개 URL 불필요 — IG 는 resumable(rupload 바이너리), FB 는 video_reels 3단계(start→binary→finish).
+// IG(인스타 로그인)는 공개 video_url 필요 → fal 스토리지 경유. FB 는 video_reels 3단계(start→binary→finish, pageId 있을 때만).
 // 릴스는 발행 즉시 공개(비공개·초안 없음, 스펙 §3) — 버튼 클릭=공개 발행 정책.
-const RUPLOAD = 'https://rupload.facebook.com/ig-api-upload/v23.0'; // 버전은 GRAPH 와 동일 유지
 
 export interface MetaReelsResult {
   ok: boolean; igReelId?: string; igPermalink?: string; fbReelId?: string; error?: string;
@@ -226,16 +226,17 @@ export async function publishShortsToMeta(opts: {
     const token = acct.pageAccessToken;
 
     // ① IG 릴스 — 기발행(existing.igPermalink)이면 스킵(부분 성공 재시도 멱등).
+    // 인스타 로그인 방식은 로컬·resumable 업로드 미지원(Meta 문서) → 영상을 fal 스토리지 공개 URL 로 올려 video_url 로 전달.
     if (!opts.existing?.igPermalink) {
-      const container = await graphJson(`${GRAPH}/${acct.igUserId}/media`, {
+      const videoUrl = await uploadToFalStorage(opts.videoPath, 'video/mp4', signal);
+      const container = await graphJson(`${GRAPH}/me/media`, {
         method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ media_type: 'REELS', upload_type: 'resumable', caption: message, share_to_feed: 'true', access_token: token }),
+        body: new URLSearchParams({ media_type: 'REELS', video_url: videoUrl, caption: message, share_to_feed: 'true', access_token: token }),
       }, 'IG 릴스 컨테이너');
       const cid = extractId(container);
       if (!cid) throw new Error('IG 릴스 컨테이너 응답 이형');
-      await uploadVideoBinary(`${RUPLOAD}/${cid}`, token, opts.videoPath, 'IG 릴스 업로드', signal);
-      await waitContainer(cid, token, signal, 60); // 영상 인코딩 — 3초×60회(이미지 캐러셀 10회보다 여유)
-      const pub = await graphJson(`${GRAPH}/${acct.igUserId}/media_publish`, {
+      await waitContainer(cid, token, signal, 90); // 영상 다운로드+인코딩 — 3초×90회(호스티드 다운로드 여유)
+      const pub = await graphJson(`${GRAPH}/me/media_publish`, {
         method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ creation_id: cid, access_token: token }),
       }, 'IG 릴스 발행');

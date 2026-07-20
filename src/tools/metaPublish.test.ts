@@ -9,6 +9,9 @@ vi.mock('../secrets/store', async (importOriginal) => {
   return { ...mod, getMetaAccount: vi.fn(() => ({ pageId: '', igUserId: '', pageAccessToken: '' })) };
 });
 
+// fal 스토리지 업로드는 네트워크·FAL_KEY 의존 → 고정 공개 URL 로 목킹(발행 로직만 검증).
+vi.mock('./falStorage', () => ({ uploadToFalStorage: vi.fn(async () => 'https://v3.fal.media/files/test.mp4') }));
+
 afterEach(() => vi.restoreAllMocks());
 
 describe('metaPublish 순수 헬퍼', () => {
@@ -66,7 +69,7 @@ describe('publishCardNewsToMeta', () => {
         : u.includes('/media_publish') ? { id: 'IGMEDIA' }
         : u.includes('fields=permalink') ? { permalink: 'https://www.instagram.com/p/x/' }
         : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
-        : u.includes('/IG/media') ? { id: `ct${calls.filter((c) => c.includes('/IG/media')).length}` }
+        : u.includes('/me/media') ? { id: `ct${calls.filter((c) => c.includes('/me/media')).length}` }
         : u.includes('/PG/feed') ? { id: 'PG_POST1' }
         : {};
       return new Response(JSON.stringify(json), { status: 200 });
@@ -91,7 +94,7 @@ describe('publishCardNewsToMeta', () => {
     });
     expect(r.ok).toBe(true);
     expect(r.fbPostId).toBe('PG_POST2');
-    expect(calls.some((c) => c.includes('/IG/media'))).toBe(false); // IG 경로 미호출
+    expect(calls.some((c) => c.includes('/me/media'))).toBe(false); // IG 경로 미호출
   });
   it('media_publish 이형 응답(id 없음) → ok:false(성공 위장 금지)', async () => {
     vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
@@ -104,7 +107,7 @@ describe('publishCardNewsToMeta', () => {
         : u.includes('fields=images') ? { images: [{ source: 'https://cdn/x.png' }] }
         : u.includes('/media_publish') ? {}                       // ← 이형: id 없음
         : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
-        : u.includes('/IG/media') ? { id: 'ct1' }
+        : u.includes('/me/media') ? { id: 'ct1' }
         : u.includes('/PG/feed') ? { id: 'PG_POST' }
         : {};
       return new Response(JSON.stringify(json), { status: 200 });
@@ -133,7 +136,7 @@ describe('publishShortsToMeta', () => {
     expect(r.ok).toBe(false);
     expect(r.error).toContain('영상 파일');
   });
-  it('happy path: IG 컨테이너→rupload→폴링→발행→permalink + FB start→upload→finish', async () => {
+  it('happy path: IG 컨테이너(fal video_url)→폴링→발행→permalink + FB start→upload→finish', async () => {
     vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
@@ -146,7 +149,7 @@ describe('publishShortsToMeta', () => {
         : u.includes('/media_publish') ? { id: 'REEL1' }
         : u.includes('fields=permalink') ? { permalink: 'https://www.instagram.com/reel/x/' }
         : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
-        : u.includes('/IG/media') ? { id: 'CT1' }
+        : u.includes('/me/media') ? { id: 'CT1' }
         : u.includes('/PG/video_reels') && body.includes('upload_phase=start') ? { video_id: 'FBV1', upload_url: 'https://rupload.facebook.com/UPLOAD_URL' }
         : u.includes('/PG/video_reels') ? { success: true }   // finish
         : {};
@@ -154,9 +157,10 @@ describe('publishShortsToMeta', () => {
     });
     const r = await publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: '제목\n\n설명', hashtags: ['#t'] });
     expect(r).toMatchObject({ ok: true, igReelId: 'REEL1', igPermalink: 'https://www.instagram.com/reel/x/', fbReelId: 'FBV1' });
-    expect(calls.filter((c) => c.includes('rupload.facebook.com')).length).toBe(2); // IG 바이너리 + FB 바이너리
+    expect(calls.filter((c) => c.includes('rupload.facebook.com')).length).toBe(1); // FB 바이너리만(IG 는 fal video_url)
+    expect(calls.some((c) => c.includes('/me/media') && !c.includes('media_publish'))).toBe(true); // IG 컨테이너는 me/media
   });
-  it('rupload 이형(success 없음) → ok:false + FB 미진행(변별력: FB 성공 mock 준비)', async () => {
+  it('IG 발행 이형(id 없음) → ok:false + FB 미진행(변별력: FB 성공 mock 준비)', async () => {
     vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
@@ -165,9 +169,9 @@ describe('publishShortsToMeta', () => {
       const u = String(url); calls.push(u);
       const body = String((init as RequestInit | undefined)?.body ?? '');
       const json =
-        u.includes('rupload.facebook.com') ? {}                         // ← 이형: success 없음
+        u.includes('/me/media_publish') ? {}                            // ← 이형: id 없음 → throw
         : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
-        : u.includes('/IG/media') ? { id: 'CT1' }
+        : u.includes('/me/media') ? { id: 'CT1' }                       // 컨테이너 생성 성공
         : u.includes('/PG/video_reels') && body.includes('upload_phase=start') ? { video_id: 'FBV1', upload_url: 'https://rupload.facebook.com/UPLOAD_URL' }
         : u.includes('/PG/video_reels') ? { success: true }
         : {};
@@ -175,7 +179,7 @@ describe('publishShortsToMeta', () => {
     });
     const r = await publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: 'c', hashtags: [] });
     expect(r.ok).toBe(false);
-    expect(r.error).toContain('릴스 업로드');
+    expect(r.error).toContain('릴스 발행');
     expect(r.fbReelId).toBeUndefined();                                  // IG 실패가 FB 진행을 막음
     expect(calls.some((c) => c.includes('/PG/video_reels'))).toBe(false);
   });
@@ -191,7 +195,7 @@ describe('publishShortsToMeta', () => {
         : u.includes('/media_publish') ? { id: 'REEL9' }
         : u.includes('fields=permalink') ? { permalink: 'https://www.instagram.com/reel/y/' }
         : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
-        : u.includes('/IG/media') ? { id: 'CT9' }
+        : u.includes('/me/media') ? { id: 'CT9' }
         : u.includes('/PG/video_reels') && body.includes('upload_phase=start') ? {}   // ← 이형: video_id 없음
         : {};
       return new Response(JSON.stringify(json), { status: 200 });
@@ -213,7 +217,7 @@ describe('publishShortsToMeta', () => {
         : u.includes('/media_publish') ? { id: 'REEL7' }
         : u.includes('fields=permalink') ? { permalink: 'https://www.instagram.com/reel/z/' }
         : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
-        : u.includes('/IG/media') ? { id: 'CT7' }
+        : u.includes('/me/media') ? { id: 'CT7' }
         : u.includes('/PG/video_reels') && body.includes('upload_phase=start') ? { video_id: 'FBV7', upload_url: 'https://rupload.facebook.com/UPLOAD_URL' }
         : u.includes('/PG/video_reels') && body.includes('upload_phase=finish') ? {}   // ← 이형
         : {};
@@ -245,6 +249,6 @@ describe('publishShortsToMeta', () => {
     });
     expect(r.ok).toBe(true);
     expect(r.fbReelId).toBe('FBV2');
-    expect(calls.some((c) => c.includes('/IG/media'))).toBe(false);
+    expect(calls.some((c) => c.includes('/me/media'))).toBe(false);
   });
 });

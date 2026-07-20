@@ -1187,8 +1187,16 @@ app.get('/meta/oauth/callback', async (c) => {
     const long = await fetch(`${IG_GRAPH}/access_token?grant_type=ig_exchange_token&client_secret=${encodeURIComponent(sec)}&access_token=${encodeURIComponent(tj.access_token)}`);
     const lj = await long.json() as { access_token?: string };
     const igToken = lj.access_token ?? tj.access_token; // 장기 교환 실패 시 단기로 진행(1h) — 다음 연결에 갱신
-    setMetaToken(pending.brand, { pageId: '', igUserId: String(tj.user_id), pageAccessToken: igToken });
-    console.log(`[발행담당] 인스타그램 연결 — 브랜드 '${pending.brand || '범용'}' (IG user ${String(tj.user_id)})`);
+    // user_id 는 토큰 응답에서 JSON 숫자(>2^53)로 와 JSON.parse 가 마지막 자리를 반올림(정밀도 손실).
+    // /me?fields=user_id 로 문자열 id 를 다시 받아 저장(발행 URL 은 me 별칭이라 무의존이지만 상태·게이트 정확값용).
+    let igUserId = String(tj.user_id);
+    try {
+      const me = await fetch(`${IG_GRAPH}/me?fields=user_id&access_token=${encodeURIComponent(igToken)}`);
+      const mj = await me.json() as { user_id?: string };
+      if (mj.user_id) igUserId = String(mj.user_id);
+    } catch { /* /me 실패 시 토큰 user_id 유지(정밀도 주의) — me 별칭 발행이라 발행엔 무영향 */ }
+    setMetaToken(pending.brand, { pageId: '', igUserId, pageAccessToken: igToken });
+    console.log(`[발행담당] 인스타그램 연결 — 브랜드 '${pending.brand || '범용'}' (IG user ${igUserId})`);
     return done(`✅ 인스타그램 연결 완료 (브랜드: ${pending.brand || '범용'})`);
   } catch (e) { return done(`연결 실패: ${e instanceof Error ? e.message.slice(0, 120) : e}`); }
 });
