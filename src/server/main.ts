@@ -34,7 +34,7 @@ import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law�
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
-import { publishCardNewsToMeta, publishShortsToMeta, realPermalink, GRAPH } from '../tools/metaPublish';
+import { publishCardNewsToMeta, publishShortsToMeta, realPermalink, listIgMedia, matchOrphanReels, GRAPH } from '../tools/metaPublish';
 import { llmWiki, slugify } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
@@ -1268,6 +1268,22 @@ app.post('/shorts/:id/meta', async (c) => {
   } finally {
     metaPublishInFlight.delete(id);
   }
+});
+// 릴스 재조정 — 라이브 IG 릴스인데 로컬 영속이 유실된 쇼츠(발행 중 재시작 등)를 캡션=제목 매칭으로 백필.
+// 안전: igReelId 없는 쇼츠만 채우고 재발행하지 않음(중복 공개 방지). 성과 대시보드 누락 복구용.
+app.post('/shorts/meta-reconcile', async (c) => {
+  const brand = c.req.query('brand') ?? '';
+  let media;
+  try { media = await listIgMedia(brand); }
+  catch (e) { return c.json({ error: e instanceof Error ? e.message : String(e) }, 502); }
+  const reels = media.filter((m) => m.type === 'REELS' || m.type === 'VIDEO');
+  const targets = shortsStore().list()
+    .filter((s) => (s.brand ?? '') === brand)
+    .map((s) => ({ id: s.id, title: s.title ?? s.topic ?? '', igReelId: s.igReelId }));
+  const matches = matchOrphanReels(targets, reels);
+  for (const m of matches) shortsStore().update(m.shortsId, { igReelId: m.reelId, igPermalink: m.permalink, metaPublishedTs: m.timestamp });
+  if (matches.length) console.log(`[발행담당] 릴스 재조정 — 브랜드 '${brand || '범용'}': ${matches.length}건 백필(라이브 릴스 ${reels.length}개)`);
+  return c.json({ ok: true, reconciled: matches.length, reelsOnIg: reels.length, items: matches.map((m) => ({ shortsId: m.shortsId, permalink: m.permalink })) });
 });
 app.get('/shorts/:id/video', shortsVideoHandler); // :id 보다 먼저(구체 경로 우선)
 app.get('/api/shorts/:id/video', shortsVideoHandler);

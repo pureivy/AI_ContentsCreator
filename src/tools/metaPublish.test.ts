@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildIgCaption, extractId, parsePermalink, realPermalink, graphError, publishCardNewsToMeta, publishShortsToMeta } from './metaPublish';
+import { buildIgCaption, extractId, parsePermalink, realPermalink, graphError, matchOrphanReels, publishCardNewsToMeta, publishShortsToMeta } from './metaPublish';
 import { uploadToFalStorage } from './falStorage';
 import { getMetaAccount } from '../secrets/store';
 import fs from 'node:fs';
@@ -42,6 +42,33 @@ describe('metaPublish 순수 헬퍼', () => {
   it('graphError: 그래프 에러 메시지 추출(토큰 미노출), 없으면 HTTP 코드', () => {
     expect(graphError({ error: { message: 'Invalid parameter', code: 100 } }, 400)).toBe('Invalid parameter(code 100)');
     expect(graphError({}, 500)).toBe('HTTP 500');
+  });
+});
+
+describe('matchOrphanReels', () => {
+  it('제목=캡션 접두 매칭, igReelId 있는 쇼츠 제외·매칭 릴스 없으면 스킵', () => {
+    const shorts = [
+      { id: 's1', title: '여름꽃 여섯 가지', igReelId: undefined },
+      { id: 's2', title: '베란다 채소 다섯 가지', igReelId: 'R99' }, // 이미 추적됨 → 제외
+      { id: 's3', title: '없는 제목', igReelId: undefined },        // 매칭 릴스 없음
+    ];
+    const reels = [
+      { id: 'R1', permalink: 'https://www.instagram.com/reel/a/', timestamp: '2026-07-20T07:40:44+0000', caption: '여름꽃 여섯 가지 지금 심어도\n\n본문' },
+      { id: 'R2', permalink: 'https://www.instagram.com/reel/b/', timestamp: '2026-07-20T07:40:41+0000', caption: '베란다 채소 다섯 가지 …' },
+    ];
+    expect(matchOrphanReels(shorts, reels)).toEqual([
+      { shortsId: 's1', reelId: 'R1', permalink: 'https://www.instagram.com/reel/a/', timestamp: '2026-07-20T07:40:44+0000' },
+    ]);
+  });
+  it('한 릴스가 여러 쇼츠에 중복 매칭되지 않음(선점)', () => {
+    const shorts = [{ id: 's1', title: '같은 제목', igReelId: undefined }, { id: 's2', title: '같은 제목', igReelId: undefined }];
+    const reels = [{ id: 'R1', permalink: 'p', timestamp: 't', caption: '같은 제목 뒤' }];
+    const m = matchOrphanReels(shorts, reels);
+    expect(m.length).toBe(1);
+    expect(m[0]!.shortsId).toBe('s1');
+  });
+  it('빈 제목 쇼츠는 매칭 안 함(무분별 매칭 방지)', () => {
+    expect(matchOrphanReels([{ id: 's1', title: '  ', igReelId: undefined }], [{ id: 'R1', permalink: 'p', timestamp: 't', caption: '아무거나' }])).toEqual([]);
   });
 });
 

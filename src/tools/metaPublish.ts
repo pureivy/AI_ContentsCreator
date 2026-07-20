@@ -253,3 +253,48 @@ export async function publishShortsToMeta(opts: {
     return out;
   }
 }
+
+export interface IgMediaItem { id: string; permalink: string; timestamp: string; caption: string; type: string; }
+
+/**
+ * 계정의 IG 미디어 목록(페이지네이션) — 재조정(reconcile)용. 발행 중 서버 재시작 등으로 로컬 영속이 유실돼도
+ * 라이브 릴스를 다시 찾아 백필하기 위해 사용. 미연결이면 throw, 페이징 next 는 graph.instagram.com 호스트만 따른다.
+ */
+export async function listIgMedia(slug: string): Promise<IgMediaItem[]> {
+  const acct = getMetaAccount(slug);
+  if (!acct.igUserId || !acct.pageAccessToken) throw new Error('메타 미연결');
+  const token = acct.pageAccessToken;
+  const out: IgMediaItem[] = [];
+  let url: string | null = `${GRAPH}/me/media?fields=id,media_type,media_product_type,permalink,timestamp,caption&limit=50&${tokenQs(token)}`;
+  for (let guard = 0; url && guard < 20; guard++) {
+    const j = await graphJson(url, {}, 'IG 미디어 목록') as { data?: Array<Record<string, string>>; paging?: { next?: string } };
+    for (const m of j.data ?? []) {
+      out.push({ id: m.id ?? '', permalink: m.permalink ?? '', timestamp: m.timestamp ?? '', caption: m.caption ?? '', type: m.media_product_type ?? m.media_type ?? '' });
+    }
+    const next = j.paging?.next;
+    url = next && /^https:\/\/graph\.instagram\.com\//.test(next) ? next : null;
+  }
+  return out;
+}
+
+/**
+ * 라이브 IG 릴스를 미추적 쇼츠에 매칭(순수) — 캡션이 쇼츠 제목으로 시작하면 동일 콘텐츠로 본다.
+ * igReelId 이미 있는 쇼츠는 건너뛰고, 한 릴스 id 는 한 쇼츠에만 선점(중복 매칭 방지). 재조정 백필용.
+ */
+export function matchOrphanReels(
+  shorts: Array<{ id: string; title: string; igReelId?: string }>,
+  reels: Array<{ id: string; permalink: string; timestamp: string; caption: string }>,
+): Array<{ shortsId: string; reelId: string; permalink: string; timestamp: string }> {
+  const claimed = new Set(shorts.map((s) => s.igReelId).filter((x): x is string => !!x));
+  const matches: Array<{ shortsId: string; reelId: string; permalink: string; timestamp: string }> = [];
+  for (const s of shorts) {
+    if (s.igReelId) continue;
+    const title = s.title.trim();
+    if (!title) continue;
+    const m = reels.find((r) => !claimed.has(r.id) && r.caption.trim().startsWith(title));
+    if (!m) continue;
+    claimed.add(m.id);
+    matches.push({ shortsId: s.id, reelId: m.id, permalink: m.permalink, timestamp: m.timestamp });
+  }
+  return matches;
+}
