@@ -36,6 +36,8 @@ const STAGE_LABEL: Record<string, { icon: IcoName; label: string }> = {
 export default function PerformanceView() {
   const [data, setData] = useState<PerfData | null>(null);
   const [loading, setLoading] = useState(true);
+  // 표별 '더 보기' 펼침 상태 — 기본은 최근 5개만, 펼치면 전체(각 표는 이미 최신순 정렬).
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const load = () => { setLoading(true); return fetchPerformance().then((d) => { setData(d); setLoading(false); }); };
   useEffect(() => { void load(); }, []);
@@ -74,10 +76,24 @@ export default function PerformanceView() {
     return Number.isNaN(d.getTime()) ? "—"
       : `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`;
   };
-  // 측정창 종료 후 학습 반영 여부 — 채널별 칩(✓ 반영됨, … 측정 중).
-  const refl = (r: { youtube?: { reflected: boolean } | null; meta?: { reflected: boolean } | null }) =>
-    [r.youtube && `YT${r.youtube.reflected ? "✓" : "…"}`, r.meta && `IG${r.meta.reflected ? "✓" : "…"}`]
-      .filter(Boolean).join(" ");
+  // 측정창 종료 후 학습 반영 칩(✓ 반영됨, … 측정 중).
+  const reflOne = (reflected: boolean) => (reflected ? "✓" : "…");
+  // 채널별 분리 — 한 숏폼이 유튜브·인스타 양쪽에 발행됐으면 각 섹션에 각각 나타난다(채널별 성과 독립).
+  const ytShorts = ch?.shorts.filter((r) => r.youtube) ?? [];
+  const reels = ch?.shorts.filter((r) => r.meta) ?? [];
+  const cardnews = ch?.cardnews ?? [];
+
+  // 최근 5개만 기본 표시, 나머지는 '더 보기'로 펼침(표별 독립 상태). 배열은 이미 최신순.
+  const LIMIT = 5;
+  const take = <T,>(key: string, rows: T[]) => (expanded[key] ? rows : rows.slice(0, LIMIT));
+  const moreBtn = (key: string, total: number) =>
+    total > LIMIT ? (
+      <div className="perf-more-row">
+        <button className="btn ghost" onClick={() => setExpanded((e) => ({ ...e, [key]: !e[key] }))}>
+          {expanded[key] ? "접기" : `더 보기 (+${total - LIMIT})`}
+        </button>
+      </div>
+    ) : null;
 
   return (
     <div className="apikeys perf-view">
@@ -120,7 +136,7 @@ export default function PerformanceView() {
                     </tr>
                   </thead>
                   <tbody>
-                    {data.pieces.map((p) => (
+                    {take("blog", data.pieces).map((p) => (
                       <tr key={p.id}>
                         <td className="perf-title">
                           <div className="perf-title-row">
@@ -154,78 +170,114 @@ export default function PerformanceView() {
                     ))}
                   </tbody>
                 </table>
+                {moreBtn("blog", data.pieces.length)}
               </div>
             )}
           </div>
 
-          {/* 쇼츠·카드뉴스 성과 — 발행된 것만, 수집 전 값은 — 표시(합계는 상단 요약 카드). */}
+          {/* 채널별 성과 — 유튜브 쇼츠 / 인스타 릴스 / 카드뉴스 각각 구분(매일 자동 수집). 한 숏폼이 양쪽 발행이면 각 표에 각각. */}
           <div className="review-section">
-            <h3>쇼츠·카드뉴스 성과 <span className="muted">(매일 자동 수집)</span></h3>
-            {ch && (ch.shorts.length > 0 || ch.cardnews.length > 0) ? (
-              <>
-                {ch.shorts.length > 0 && (
-                  <div className="perf-table-wrap">
-                    <table className="perf-table">
-                      <thead>
-                        <tr><th>숏폼</th><th>업로드일</th><th title="유튜브 조회수 일별 추이">추이</th><th>유튜브 조회</th><th>👍</th><th>릴스 조회</th><th>👍</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
-                      </thead>
-                      <tbody>
-                        {ch.shorts.map((r) => (
-                          <tr key={r.id}>
-                            <td className="perf-title">
-                              <div className="perf-title-row">
-                                {r.youtube?.url
-                                  ? <a href={r.youtube.url} target="_blank" rel="noreferrer" title={r.title}>{r.title}</a>
-                                  : <span className="perf-title-txt" title={r.title}>{r.title}</span>}
-                                {r.meta?.permalink && <a className="chip" href={r.meta.permalink} target="_blank" rel="noreferrer" title="인스타 릴스 열기">IG ↗</a>}
-                              </div>
-                            </td>
-                            <td className="perf-date">{fmtDate(r.ts)}</td>
-                            <td className="perf-spark"><Sparkline data={r.youtube?.series ?? []} title={`${r.title} 유튜브 조회 추이`} /></td>
-                            <td className="perf-r">{r.youtube ? fmt(r.youtube.views) : "—"}</td>
-                            <td className="perf-r">{r.youtube ? fmt(r.youtube.likes) : "—"}</td>
-                            <td className="perf-r">{r.meta ? fmt(r.meta.views) : "—"}</td>
-                            <td className="perf-r">{r.meta ? fmt(r.meta.likes) : "—"}</td>
-                            <td className="perf-r">{refl(r)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                {ch.cardnews.length > 0 && (
-                  <div className="perf-table-wrap" style={{ marginTop: 10 }}>
-                    <table className="perf-table">
-                      <thead>
-                        <tr><th>카드뉴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>IG 조회</th><th>도달</th><th>👍</th><th>FB 👍</th><th>공유</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
-                      </thead>
-                      <tbody>
-                        {ch.cardnews.map((r) => (
-                          <tr key={r.id}>
-                            <td className="perf-title">
-                              <div className="perf-title-row">
-                                {r.ig?.permalink
-                                  ? <a href={r.ig.permalink} target="_blank" rel="noreferrer" title={r.topic}>{r.topic}</a>
-                                  : <span className="perf-title-txt" title={r.topic}>{r.topic}</span>}
-                              </div>
-                            </td>
-                            <td className="perf-date">{fmtDate(r.ts)}</td>
-                            <td className="perf-spark"><Sparkline data={r.ig?.series ?? []} title={`${r.topic} 인스타 조회 추이`} /></td>
-                            <td className="perf-r">{r.ig ? fmt(r.ig.views) : "—"}</td>
-                            <td className="perf-r">{r.ig ? fmt(r.ig.reach) : "—"}</td>
-                            <td className="perf-r">{r.ig ? fmt(r.ig.likes) : "—"}</td>
-                            <td className="perf-r">{r.fb ? fmt(r.fb.likes) : "—"}</td>
-                            <td className="perf-r">{r.fb ? fmt(r.fb.shares) : "—"}</td>
-                            <td className="perf-r">{r.reflected ? "✓" : "…"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </>
+            <h3>유튜브 쇼츠 성과 <span className="muted">(매일 자동 수집)</span></h3>
+            {ytShorts.length > 0 ? (
+              <div className="perf-table-wrap">
+                <table className="perf-table">
+                  <thead>
+                    <tr><th>숏폼</th><th>업로드일</th><th title="유튜브 조회수 일별 추이">추이</th><th>조회</th><th>👍</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
+                  </thead>
+                  <tbody>
+                    {take("yt", ytShorts).map((r) => (
+                      <tr key={r.id}>
+                        <td className="perf-title">
+                          <div className="perf-title-row">
+                            {r.youtube?.url
+                              ? <a href={r.youtube.url} target="_blank" rel="noreferrer" title={r.title}>{r.title}</a>
+                              : <span className="perf-title-txt" title={r.title}>{r.title}</span>}
+                          </div>
+                        </td>
+                        <td className="perf-date">{fmtDate(r.ts)}</td>
+                        <td className="perf-spark"><Sparkline data={r.youtube?.series ?? []} title={`${r.title} 유튜브 조회 추이`} /></td>
+                        <td className="perf-r">{r.youtube ? fmt(r.youtube.views) : "—"}</td>
+                        <td className="perf-r">{r.youtube ? fmt(r.youtube.likes) : "—"}</td>
+                        <td className="perf-r">{r.youtube ? reflOne(r.youtube.reflected) : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {moreBtn("yt", ytShorts.length)}
+              </div>
             ) : (
-              <p className="muted">발행된 쇼츠·카드뉴스가 아직 없습니다. 채널 연결 후 발행하면 성과가 매일 수집돼 여기에 나타납니다.</p>
+              <p className="muted">유튜브에 발행된 쇼츠가 아직 없습니다.</p>
+            )}
+          </div>
+
+          <div className="review-section">
+            <h3>인스타 릴스 성과 <span className="muted">(매일 자동 수집)</span></h3>
+            {reels.length > 0 ? (
+              <div className="perf-table-wrap">
+                <table className="perf-table">
+                  <thead>
+                    <tr><th>릴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>조회</th><th>👍</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
+                  </thead>
+                  <tbody>
+                    {take("reels", reels).map((r) => (
+                      <tr key={r.id}>
+                        <td className="perf-title">
+                          <div className="perf-title-row">
+                            {r.meta?.permalink
+                              ? <a href={r.meta.permalink} target="_blank" rel="noreferrer" title={r.title}>{r.title}</a>
+                              : <span className="perf-title-txt" title={r.title}>{r.title}</span>}
+                          </div>
+                        </td>
+                        <td className="perf-date">{fmtDate(r.ts)}</td>
+                        <td className="perf-spark"><Sparkline data={r.meta?.series ?? []} title={`${r.title} 릴스 조회 추이`} /></td>
+                        <td className="perf-r">{r.meta ? fmt(r.meta.views) : "—"}</td>
+                        <td className="perf-r">{r.meta ? fmt(r.meta.likes) : "—"}</td>
+                        <td className="perf-r">{r.meta ? reflOne(r.meta.reflected) : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {moreBtn("reels", reels.length)}
+              </div>
+            ) : (
+              <p className="muted">인스타그램에 발행된 릴스가 아직 없습니다.</p>
+            )}
+          </div>
+
+          <div className="review-section">
+            <h3>카드뉴스 성과 <span className="muted">(매일 자동 수집)</span></h3>
+            {cardnews.length > 0 ? (
+              <div className="perf-table-wrap">
+                <table className="perf-table">
+                  <thead>
+                    <tr><th>카드뉴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>IG 조회</th><th>도달</th><th>👍</th><th>FB 👍</th><th>공유</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
+                  </thead>
+                  <tbody>
+                    {take("cardnews", cardnews).map((r) => (
+                      <tr key={r.id}>
+                        <td className="perf-title">
+                          <div className="perf-title-row">
+                            {r.ig?.permalink
+                              ? <a href={r.ig.permalink} target="_blank" rel="noreferrer" title={r.topic}>{r.topic}</a>
+                              : <span className="perf-title-txt" title={r.topic}>{r.topic}</span>}
+                          </div>
+                        </td>
+                        <td className="perf-date">{fmtDate(r.ts)}</td>
+                        <td className="perf-spark"><Sparkline data={r.ig?.series ?? []} title={`${r.topic} 인스타 조회 추이`} /></td>
+                        <td className="perf-r">{r.ig ? fmt(r.ig.views) : "—"}</td>
+                        <td className="perf-r">{r.ig ? fmt(r.ig.reach) : "—"}</td>
+                        <td className="perf-r">{r.ig ? fmt(r.ig.likes) : "—"}</td>
+                        <td className="perf-r">{r.fb ? fmt(r.fb.likes) : "—"}</td>
+                        <td className="perf-r">{r.fb ? fmt(r.fb.shares) : "—"}</td>
+                        <td className="perf-r">{r.reflected ? "✓" : "…"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {moreBtn("cardnews", cardnews.length)}
+              </div>
+            ) : (
+              <p className="muted">발행된 카드뉴스가 아직 없습니다.</p>
             )}
           </div>
 

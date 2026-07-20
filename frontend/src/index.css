@@ -1639,6 +1639,9 @@ button.upload-retry:hover { background: var(--panel2); }
 .perf-num { font-size: 26px; font-weight: 800; letter-spacing: -0.0253em; }
 .perf-lbl { margin-top: 4px; font-size: 13px; color: var(--muted); }
 .perf-table-wrap { overflow-x: auto; }
+/* '더 보기 / 접기' 버튼 행 — 표 아래 가운데, 은은하게. */
+.perf-more-row { display: flex; justify-content: center; padding: 8px 0 2px; }
+.perf-more-row .btn { font-size: 12px; }
 .perf-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .perf-table th { text-align: left; padding: 10px 12px; border-bottom: 2px solid var(--line-neutral-strong); color: var(--muted); font-weight: 600; white-space: nowrap; }
 /* 셀 세로 중앙 정렬 — 칩·버튼(키 큰 셀)과 숫자(낮은 셀)가 한 시각선에 놓이게.
