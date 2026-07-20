@@ -24,7 +24,8 @@ import { parseImagePlan, draftFiles } from '../output/naverBlog';
 import { naverSerp } from '../grounding/naver_search';
 import { seedKeyword } from '../grounding/naver_common';
 import { getRunSettings } from '../runsettings';
-import { brandContext } from '../content/brand';
+import { brandContext, activeBrandSlug } from '../content/brand';
+import { priorCoverageBrief } from '../content/priorCoverage';
 import type { RunOptions, RunOutcome } from './run';
 
 interface TeamResult {
@@ -94,18 +95,23 @@ export async function writeBlogBody(a: {
   revise?: { baseBody: string; feedback: string };
   /** 작가 말투(페르소나) 지침 — 작가 시스템 프롬프트에 주입(personaPrompt 결과, 없으면 현행 목소리). */
   personaGuide?: string;
+  /** 핵심 키워드 — 같은 주제 재작성 시 '관점 다양성' 주입의 유사도 판정에 쓴다. */
+  keyword?: string;
   signal?: AbortSignal;
 }): Promise<string> {
-  const { bus, writer, model, topic, brief, critiqueText, serpText, revise, personaGuide, signal } = a;
+  const { bus, writer, model, topic, brief, critiqueText, serpText, revise, personaGuide, keyword, signal } = a;
   const reviseContext = revise
     ? `[기존 초안]\n${revise.baseBody}\n\n[검토자 수정 요청 — 반드시 반영]\n${revise.feedback}`
     : '';
+  // 같은 주제 기존 글이 있으면 '관점을 완전히 다르게' 지시를 주입(revise 는 자기 초안 개정이라 제외).
+  const priorCoverage = revise ? '' : priorCoverageBrief('블로그', topic, keyword, { brandSlug: activeBrandSlug() || undefined });
   const synth = await runAgent({
     bus, role: writer, model,
     task: revise
       ? `「${topic}」 아래 [기존 초안]을 [검토자 수정 요청]에 따라 개정하라. 요청된 변경은 빠짐없이 반영하고, 잘 쓰인 나머지 구조·내용은 유지한다. 이 응답의 출력은 오직 개정 완료된 마크다운 본문 하나뿐이다.\n${BLOG_BODY_GUIDE}`
       : `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 검색 의도를 충족하는 완결된 글을 쓴다.\n${BLOG_BODY_GUIDE}`,
     context: revise ? reviseContext : [
+      priorCoverage,
       serpText ? `[네이버 상위 노출 블로그(실측) — 검색 수요가 검증된 방향·눈높이 참고. 제목·구성 그대로 베끼기 금지]\n${serpText}` : '',
       brief ? `[리서치·SEO 브리프]\n${brief}` : '',
       critiqueText ? `[검수 의견 — 아래는 약점·주의점 목록이다. 발행 판정이 아니다. 지적된 미검증·논쟁 주장은 본문에서 빼고, 나머지는 참고해 품질을 높여라]\n${critiqueText}` : '',
@@ -121,7 +127,7 @@ export async function writeBlogBody(a: {
     const retry = await runAgent({
       bus, role: writer, model,
       task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 질문·보류·메타 설명 없이 곧바로 본문(## 소제목 포함)만 출력한다.\n${BLOG_BODY_GUIDE}`,
-      context: revise ? reviseContext : (brief ? `[리서치·SEO 브리프]\n${brief}` : ''),
+      context: revise ? reviseContext : [priorCoverage, brief ? `[리서치·SEO 브리프]\n${brief}` : ''].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, maxOutputTokens: 5000, signal,
     });
@@ -438,7 +444,7 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   // 인기 방향 조향 — 실제 네이버 블로그 상위 노출 글(실측 SERP)을 작가·제목 패키저에 주입(fail-open).
   const serpText = research ? '' : await serpPopularBrief(topic, signal);
   if (serpText) bus.emit('log', { message: `네이버 SERP 실측 — 상위 노출 ${serpText.split('\n').length - 1}건을 집필 방향에 반영` });
-  const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), signal });
+  const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, signal });
   const finalDeliverable = body || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
   return packageDesignFinalize({

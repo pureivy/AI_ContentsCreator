@@ -19,6 +19,7 @@ import type { EventBus } from '../events/bus';
 import { stripEmoji } from '../output/render';
 import { cardNewsStore } from '../content/cardnews';
 import { brandContext } from '../content/brand';
+import { priorCoverageBrief } from '../content/priorCoverage';
 import { generateImagesForDraft, searchCardRefs } from '../tools/blog_skills';
 import { stdModel, visionCapable, parseBadIndices } from './visionCommon';
 
@@ -78,10 +79,11 @@ function normalizeHashtags(v: unknown): string[] {
     .slice(0, 15);
 }
 
-async function planCards(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number | null): Promise<Plan | null> {
+async function planCards(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number | null, priorCoverage = ''): Promise<Plan | null> {
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 키워드] ${keyword}` : '',
+    priorCoverage,
     sourceBody ? `[블로그 초안 본문 — 핵심만 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${sourceBody.slice(0, 4000)}` : '',
     '',
     n
@@ -244,7 +246,9 @@ export async function runCardNewsJob(
     // 1) 기획 — 슬라이드 구성·카피·캡션
     store.update(id, { stage: 'planning' });
     opts.bus?.emit('phase', { team_id: 'cardnews', phase: 'work' });
-    const plan = await planCards(io, card.topic, card.keyword, opts.sourceBody, n);
+    // 같은 주제 기존 카드뉴스가 있으면 '관점 다르게' 주입(자기 자신·같은 글 파생 형제 제외).
+    const priorCoverage = priorCoverageBrief('카드뉴스', card.topic, card.keyword, { excludeId: card.id, excludeSourcePieceId: card.sourcePieceId, brandSlug: card.brand });
+    const plan = await planCards(io, card.topic, card.keyword, opts.sourceBody, n, priorCoverage);
     if (!plan) throw new Error('기획 실패 — 기획자 JSON 응답을 해석할 수 없습니다');
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ title: plan.title, slides: plan.slides }, null, 2), 'utf-8');
     say(`기획 완료 — ${plan.title.slice(0, 30)} · 슬라이드 ${plan.slides.length}장`);

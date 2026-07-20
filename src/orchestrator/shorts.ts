@@ -23,6 +23,7 @@ import { renderShortsVideo } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
 import { brandContext } from '../content/brand';
+import { priorCoverageBrief } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
 import { normalizeSceneKind } from '../tools/shortsCommon';
 import type { EventBus } from '../events/bus';
@@ -84,10 +85,11 @@ function normalizeHashtags(v: unknown): string[] {
   return [...new Set(tags)].slice(0, 8);
 }
 
-async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number): Promise<Plan | null> {
+async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = ''): Promise<Plan | null> {
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 키워드] ${keyword}` : '',
+    priorCoverage,
     sourceBody ? `[블로그 초안 본문 — 핵심 1~2개만 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${sourceBody.slice(0, 4000)}` : '',
     '',
     `씬 ${n}개의 유튜브 숏폼 대본을 기획하라. 씬1=훅(3패턴 중 택1), 마지막 씬=CTA.`,
@@ -182,7 +184,9 @@ export async function runShortsJob(
     // 1) 기획 — 대본(훅·씬·내레이션·자막)·제목 3후보·설명·해시태그
     store.update(id, { stage: 'planning' });
     opts.bus?.emit('phase', { team_id: 'shorts', phase: 'work' });
-    const plan = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n);
+    // 같은 주제 기존 숏폼이 있으면 '관점 다르게' 주입(자기 자신·같은 글 파생 형제 제외).
+    const priorCoverage = priorCoverageBrief('숏폼', short.topic, short.keyword, { excludeId: short.id, excludeSourcePieceId: short.sourcePieceId, brandSlug: short.brand });
+    const plan = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, priorCoverage);
     if (!plan) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
     say(`대본 완성 — ${plan.title.slice(0, 30)} · 씬 ${plan.scenes.length}개`);
