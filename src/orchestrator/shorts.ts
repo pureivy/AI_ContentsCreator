@@ -280,6 +280,7 @@ export async function runShortsJob(
       const ok = await generateDesignedThumbnail({
         dir, title: plan.title, description: plan.description, titles: plan.titles, hookImage: hook, signal: opts.signal,
       });
+      if (ok) store.update(id, {}); // updatedTs 갱신 → 포스터 URL(?v=updatedTs) 캐시버스트, 프레임 폴백본 대신 디자인 썸네일 표시
       say(ok ? '썸네일 생성 완료' : '썸네일 생성 스킵(프레임 폴백)');
     } catch (e) { say(`썸네일 생성 건너뜀(무해): ${e instanceof Error ? e.message.slice(0, 60) : e}`); }
 

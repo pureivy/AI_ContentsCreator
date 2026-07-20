@@ -49,9 +49,12 @@ async function planThumbnailCopy(input: { title: string; description: string; ti
 /** 카피 → gpt-image 프롬프트(실측 검증본). 지정 한국어만, 오타 없이. */
 function buildThumbnailPrompt(copy: ThumbCopy): string {
   const pts = copy.points.length ? copy.points.map((p) => `'${p}'`).join(', ') : '';
+  const titleLine = copy.line2
+    ? `그 위에 손으로 쓴 듯한 굵은 한국어 캘리그래피 제목을 2줄로 크게 배치한다: 1줄 '${copy.line1}' 는 크림 화이트, 2줄 '${copy.line2}' 는 선명한 노랑. 붓펜 질감에 밑줄 획으로 강조.`
+    : `그 위에 손으로 쓴 듯한 굵은 한국어 캘리그래피 제목 '${copy.line1}' 를 크게 배치한다(크림 화이트 바탕에 노랑 포인트, 붓펜 질감에 밑줄 획).`;
   return [
     '세로 유튜브/인스타 썸네일. 참조로 준 사진을 배경으로 그대로 사용하고, 상단 45%를 부드러운 검정 그라데이션으로 살짝 덮어 글자 가독성을 확보한다.',
-    `그 위에 손으로 쓴 듯한 굵은 한국어 캘리그래피 제목을 2줄로 크게 배치한다: 1줄 '${copy.line1}' 는 크림 화이트, 2줄 '${copy.line2}' 는 선명한 노랑. 붓펜 질감에 밑줄 획으로 강조.`,
+    titleLine,
     pts ? `왼쪽 하단에는 작은 손글씨로 핵심 ${copy.points.length}줄: ${pts}. 밑줄과 동그라미로 포인트.` : '',
     '별·구름 모양의 작은 손그림 낙서를 여백에 소량 추가. 밝고 생기있는 무드.',
     '한글 맞춤법을 정확히 지키고 글자가 깨지거나 오타가 없게 한다. 지정한 한국어 텍스트만 사용하고 영어나 의미 없는 글자는 넣지 않는다.',
@@ -70,50 +73,58 @@ async function qaKoreanText(imagePath: string, expected: string, signal?: AbortS
   return j?.ok !== false;
 }
 
-/** png → dir/thumbnail.jpg 변환(ffmpeg). */
+/** png → dir/thumbnail.jpg 변환(ffmpeg) — 임시파일에 쓰고 원자적 rename(찢긴 JPEG·부분 기록 방지). */
 async function toThumbnailJpg(pngPath: string, dir: string, signal?: AbortSignal): Promise<void> {
-  await execFileP('ffmpeg', ['-nostdin', '-y', '-i', pngPath, '-q:v', '3', path.join(dir, 'thumbnail.jpg')], { timeout: 20_000, signal });
+  const tmp = path.join(dir, `.thumb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`);
+  await execFileP('ffmpeg', ['-nostdin', '-y', '-i', pngPath, '-q:v', '3', tmp], { timeout: 20_000, signal });
+  fs.renameSync(tmp, path.join(dir, 'thumbnail.jpg')); // 같은 파일시스템 → 원자적 교체
 }
 
+/** 매니페스트 첫 이미지 — 슬롯 error(생성 실패)면 남아있는 stale 파일이라도 무시(형제 shorts.ts 가드와 동일). */
 function manifestFirstImage(manifestPath: string): string | null {
   try {
-    const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as { images?: Array<{ file_path?: string }> };
-    const p = m.images?.[0]?.file_path;
-    return p && fs.existsSync(p) ? p : null;
+    const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: unknown }> };
+    const im = m.images?.[0];
+    if (!im || im.error) return null;
+    return im.file_path && fs.existsSync(im.file_path) ? im.file_path : null;
   } catch { return null; }
 }
 
 /**
  * 훅 씬 배경 위에 디자인 썸네일 생성 → dir/thumbnail.jpg. 성공 true / 폴백해야 하면 false.
  * hookImage 없거나 키 없으면 false(영상 프레임 폴백). QA 2회 실패 시 마지막 생성본 사용(디자인 우선 방침).
+ * 작업물은 실행별 고유 디렉터리(.thumb/<run>)에 격리하고 종료 시 정리 — 동시 실행·stale 재사용 방지. 어떤 예외도 밖으로 던지지 않음(폴백 유도).
  */
 export async function generateDesignedThumbnail(input: {
   dir: string; title: string; description: string; titles?: string[]; hookImage: string | null; signal?: AbortSignal;
 }): Promise<boolean> {
   if (!CONFIG.openaiApiKey) return false;
   if (!input.hookImage || !fs.existsSync(input.hookImage)) return false;
-  const copy = await planThumbnailCopy(input, input.signal);
-  const prompt = buildThumbnailPrompt(copy);
-  const expected = [copy.line1, copy.line2, ...copy.points].filter(Boolean).join(' / ');
-  const work = path.join(input.dir, '.thumb');
-  fs.mkdirSync(work, { recursive: true });
-  const draftPath = path.join(work, 'draft.json');
-  fs.writeFileSync(draftPath, JSON.stringify({ topic: copy.line1, imageSlots: [{ alt: '썸네일', prompt }] }), 'utf-8');
+  const work = path.join(input.dir, '.thumb', `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  try {
+    fs.mkdirSync(work, { recursive: true });
+    const copy = await planThumbnailCopy(input, input.signal);
+    const prompt = buildThumbnailPrompt(copy);
+    const expected = [copy.line1, copy.line2, ...copy.points].filter(Boolean).join(' / ');
+    const draftPath = path.join(work, 'draft.json');
+    fs.writeFileSync(draftPath, JSON.stringify({ topic: copy.line1, imageSlots: [{ alt: '썸네일', prompt }] }), 'utf-8');
 
-  let lastPng: string | null = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const outDir = path.join(work, `out${attempt}`);
-    const manifest = path.join(work, `m${attempt}.json`);
-    try {
-      await generateImagesForDraft(draftPath, outDir, manifest,
-        { imageStyle: 'photorealistic', allowText: true, size: '1024x1536', limit: 1, refImages: [input.hookImage], topic: copy.line1, timeoutMs: 150_000 },
-        input.signal);
-    } catch { continue; } // 이 시도 실패 → 다음 시도(또는 폴백)
-    const png = manifestFirstImage(manifest);
-    if (!png) continue;
-    lastPng = png;
-    if (await qaKoreanText(png, expected, input.signal)) { await toThumbnailJpg(png, input.dir, input.signal); return true; }
-  }
-  if (lastPng) { await toThumbnailJpg(lastPng, input.dir, input.signal); return true; } // QA 못 넘겨도 디자인본 우선
-  return false;
+    let lastPng: string | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const outDir = path.join(work, `out${attempt}`);
+      const manifest = path.join(work, `m${attempt}.json`);
+      try {
+        await generateImagesForDraft(draftPath, outDir, manifest,
+          { imageStyle: 'photorealistic', allowText: true, size: '1024x1536', limit: 1, refImages: [input.hookImage], topic: copy.line1, timeoutMs: 150_000 },
+          input.signal);
+      } catch { continue; } // 이 시도 실패 → 다음 시도(또는 폴백)
+      const png = manifestFirstImage(manifest); // 실패 슬롯이면 null → 이 시도 이미지 안 씀
+      if (!png) continue;
+      lastPng = png;
+      if (await qaKoreanText(png, expected, input.signal)) { await toThumbnailJpg(png, input.dir, input.signal); return true; }
+    }
+    if (lastPng) { await toThumbnailJpg(lastPng, input.dir, input.signal); return true; } // QA 못 넘겨도 디자인본 우선
+    return false;
+  } catch { return false; } // 어떤 실패도 밖으로 던지지 않음 — 호출부(완성부·엔드포인트)는 프레임 폴백
+  finally { try { fs.rmSync(work, { recursive: true, force: true }); } catch { /* 정리 실패 무해 */ } }
 }

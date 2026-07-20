@@ -1311,7 +1311,9 @@ async function shortsThumbnailRegenHandler(c: Context): Promise<Response> {
   const s = shortsStore().get(id);
   if (!s) return c.json({ error: 'unknown short' }, 404);
   if (!CONFIG.openaiApiKey) return c.json({ error: 'OPENAI_API_KEY 미설정 — 디자인 썸네일은 이미지 생성 키가 필요합니다' }, 400);
-  if (thumbGenInFlight.has(id)) return c.json({ error: '이미 생성 중입니다' }, 409);
+  // 완성 잡이 아직 실행 중이면 그 잡의 자동 썸네일 생성과 겹쳐 이중 과금·작업물 충돌 → 완료 후 재시도 안내(락 공유 효과).
+  if (isShortsRunning(id)) return c.json({ error: '생성이 진행 중입니다 — 완료 후 다시 시도하세요' }, 409);
+  if (thumbGenInFlight.has(id)) return c.json({ error: '이미 썸네일 생성 중입니다' }, 409);
   const dir = shortsStore().dirFor(id);
   const hook = (() => {
     try {
@@ -1322,7 +1324,8 @@ async function shortsThumbnailRegenHandler(c: Context): Promise<Response> {
   if (!hook) return c.json({ error: '훅 씬 이미지가 없어 디자인 썸네일을 만들 수 없습니다(영상 프레임만 가능)' }, 409);
   thumbGenInFlight.add(id);
   try {
-    const ok = await generateDesignedThumbnail({ dir, title: s.title ?? s.topic, description: s.description ?? '', titles: s.titles, hookImage: hook });
+    // 클라이언트 이탈해도 작업·락이 무한 점유되지 않게 상한(4분) — generateDesignedThumbnail 은 예외를 던지지 않음.
+    const ok = await generateDesignedThumbnail({ dir, title: s.title ?? s.topic, description: s.description ?? '', titles: s.titles, hookImage: hook, signal: AbortSignal.timeout(240_000) });
     if (!ok) return c.json({ error: '썸네일 생성 실패(무해 — 기존 유지)' }, 502);
     shortsStore().update(id, {}); // updatedTs 갱신 → 포스터 캐시버스트
     return c.json({ ok: true });
