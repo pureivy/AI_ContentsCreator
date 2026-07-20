@@ -179,7 +179,7 @@ describe('publishShortsToMeta', () => {
     expect(r.fbReelId).toBeUndefined();                                  // IG 실패가 FB 진행을 막음
     expect(calls.some((c) => c.includes('/PG/video_reels'))).toBe(false);
   });
-  it('FB start 이형(video_id 없음) → ok:false, 단 IG 부분 성공은 결과에 보존', async () => {
+  it('FB start 이형(video_id 없음) → FB best-effort 스킵, IG 릴스 성공은 ok:true 로 유지', async () => {
     vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
@@ -197,11 +197,11 @@ describe('publishShortsToMeta', () => {
       return new Response(JSON.stringify(json), { status: 200 });
     });
     const r = await publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: 'c', hashtags: [] });
-    expect(r.ok).toBe(false);
-    expect(r.error).toContain('FB 릴스 시작');
-    expect(r.igReelId).toBe('REEL9');   // 부분 성공 보존 — 라우트가 저장·재시도 시 IG 스킵
+    expect(r.ok).toBe(true);            // FB best-effort — 실패해도 IG 성공으로 ok:true
+    expect(r.igReelId).toBe('REEL9');   // IG 릴스 성공
+    expect(r.fbReelId).toBeUndefined(); // FB 는 스킵됨
   });
-  it('FB finish 이형(success 없음) → ok:false + IG 부분 성공 보존', async () => {
+  it('FB finish 이형(success 없음) → FB best-effort 스킵, IG 릴스 성공 유지', async () => {
     vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
@@ -220,10 +220,9 @@ describe('publishShortsToMeta', () => {
       return new Response(JSON.stringify(json), { status: 200 });
     });
     const r = await publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: 'c', hashtags: [] });
-    expect(r.ok).toBe(false);
-    expect(r.error).toContain('FB 릴스 발행');
-    expect(r.igReelId).toBe('REEL7');       // IG 부분 성공 보존
-    expect(r.fbReelId).toBeUndefined();
+    expect(r.ok).toBe(true);                 // FB best-effort — IG 성공으로 ok:true
+    expect(r.igReelId).toBe('REEL7');        // IG 릴스 성공
+    expect(r.fbReelId).toBeUndefined();      // FB 는 스킵됨
   });
   it('부분 성공 멱등: existing.igPermalink 있으면 IG 경로 무호출, FB 만 발행', async () => {
     vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
