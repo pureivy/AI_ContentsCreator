@@ -39,7 +39,7 @@ function SlideGrid({ card }: { card: CardNewsInfo }) {
           <img
             src={`/cardnews/${card.id}/slides/${name}?v=${card.updatedTs}`}
             alt={`${card.topic} ${name}`}
-            style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 8, display: "block" }}
+            style={{ width: "100%", aspectRatio: "2/3", objectFit: "cover", borderRadius: 8, display: "block" }}
             loading="lazy"
           />
         </a>

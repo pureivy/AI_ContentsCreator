@@ -25,10 +25,11 @@ import { stdModel, visionCapable, parseBadIndices } from './visionCommon';
 const RUNNING = new Set<string>();
 export function isCardNewsRunning(id: string): boolean { return RUNNING.has(id); }
 
-const PRESETS = new Set(['photorealistic', 'manhwa', 'watercolor', 'ink_wash', 'flat_design', 'retro_poster']);
+const PRESETS = new Set(['photorealistic', 'manhwa', 'watercolor', 'ink_wash', 'flat_design', 'retro_poster', 'handwritten_poster']);
 // 디자이너가 한국어 스타일명으로 답해도 수용 — 프리셋 키로 정규화.
 const PRESET_ALIAS: Record<string, string> = {
   '사진풍': 'photorealistic', '수채화풍': 'watercolor', '플랫 일러스트': 'flat_design', '만화풍': 'manhwa',
+  '손글씨 포스터': 'handwritten_poster', '손글씨포스터': 'handwritten_poster',
 };
 
 interface PlanSlide { headline: string; body: string }
@@ -140,7 +141,8 @@ async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalys
     ...plan.slides.map((s, i) => `${i + 1}. ${s.headline}${s.body ? ` — ${s.body.replace(/\n/g, ' ').slice(0, 60)}` : ''}`),
     '',
     `각 슬라이드의 배경 이미지 프롬프트를 설계하라. slides 는 정확히 ${plan.slides.length}개.`,
-    'JSON 형식: {"style_preset":"photorealistic|watercolor|flat_design|manhwa","style":"모든 장 공통 스타일 문구(팔레트·질감·조명)","slides":[{"prompt":"장면 묘사(한국어 150자 이내)"}]}',
+    'style_preset 선택 가이드 — photorealistic=정보·실용, watercolor=감성·계절, flat_design=가이드·수치, manhwa=향수·음식, handwritten_poster=인사·시즌 인사말·캠페인·행사·감성(실사 사진 위에 큰 손글씨 캘리그래피를 장면에 파묻는 인디 포스터 룩). handwritten_poster 는 정보·수치 카드엔 쓰지 말 것 — 그런 주제는 flat_design.',
+    'JSON 형식: {"style_preset":"photorealistic|watercolor|flat_design|manhwa|handwritten_poster","style":"모든 장 공통 스타일 문구(팔레트·질감·조명)","slides":[{"prompt":"장면 묘사(한국어 150자 이내)"}]}',
   ].filter(Boolean).join('\n');
   const j = await callRoleJSON<{ style_preset?: unknown; style?: unknown; slides?: Array<{ prompt?: unknown }> }>(
     io, 'cardnews_designer', '당신은 카드뉴스 배경 프롬프트 디자이너입니다. 요청된 JSON 스키마만 출력합니다.', user, 1600, true,
@@ -165,22 +167,38 @@ async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalys
  */
 export function buildCardImagePrompt(a: {
   headline: string; body?: string; scene: string; style: string; title: string;
-  index: number; total: number; hasRefs: boolean;
+  index: number; total: number; hasRefs: boolean; preset: string;
 }): string {
-  const { headline, body, style, title, index: i, total, hasRefs } = a;
+  const { headline, body, style, title, index: i, total, hasRefs, preset } = a;
   const ord = i === 0 ? '표지(1번)' : `${i + 1}번`;
   const scene = a.scene.trim() || `${title} 를 상징하는 한국 생활 장면`;
   const p: string[] = [];
   p.push(`[전체 톤·스타일 — 모든 슬라이드 공통] ${style}`);
   if (hasRefs) p.push('[레퍼런스 스타일 차용] 첨부된 레퍼런스 이미지의 색 팔레트·타이포 형식·질감·여백 규칙·대비 감각만 차용한다. 특정 오브젝트·배치·이미지는 복제하지 않고, 이 슬라이드만의 구도와 시각 모티프를 새로 구성한다.');
-  p.push('작업 방식: 브랜드 실무팀(브랜드전략가·아트디렉터·카피라이터·마케팅리드)이 짧게 토론해 합의한 최종안처럼 완성한다. 쟁점은 "헤드라인 임팩트 vs 정보 가독성" — 헤드라인은 과감하게 세우고 보조 정보는 질서 있게 후순위로 정리한다.');
-  p.push(`용도: 1:1 정사각(1080×1080) 인스타그램 카드뉴스 총 ${total}장 중 ${ord} 슬라이드 한 장.`);
-  p.push(`장면 설명: ${scene}. 한글 헤드라인과 핵심 정보가 전시 포스터처럼 강하게 보이는 구성.`);
-  p.push(`구도: 정방형 시야의 상단 2/3에 헤드라인, 하단 1/3에 보조 정보. 그리드 축을 지키고 안전 여백을 확보한다.${i > 0 ? ' 시리즈 내 다른 슬라이드와 구분되는 고유한 구도·시각 모티프를 쓴다.' : ''}`);
-  p.push('타이포/레이아웃: 굵고 큰 한글 산세리프 헤드라인 + 정돈된 중간 무게 본문. 자음·모음 결합이 또렷하게 그려져야 하고, 자간·행간은 인쇄 포스터 수준으로 관리한다.');
-  p.push('연출: 종이·잉크 물성이 살짝 느껴지는 인쇄 에디토리얼 질감. 배경은 단색 또는 미세한 텍스처, 타이포 대비를 뚜렷하게(디지털 플랫함 지양).');
-  p.push(`카드에 새길 한국어 문구(한 글자도 바꾸지 말 것) — 헤드라인: "${headline}"${body ? `, 본문: "${body.replace(/\n/g, ' / ')}"` : ''}. 정확히 그 표기 그대로 크고 선명한 고대비 한글 타이포그래피로 새긴다. 자소(자음·모음) 결합이 틀리면 실패로 간주한다.`);
-  p.push('완성 기준: 인쇄 품질, 한글 오타 없음, 이 한 장만 봐도 의미가 전달될 것. 제외할 것: 영문·로마자 혼용, 손글씨·장식체 과다, 흐릿한 글자, 가독성 낮은 배치, 산만한 장식 요소, 워터마크.');
+  if (preset === 'handwritten_poster') {
+    // 손글씨 임베드 포스터 — 실사 사진 위에 손글씨 캘리그래피 한글을 깊이·가림(occlusion)·원근으로 장면에
+    // 물리적으로 파묻는 인디 페스티벌/청춘 캠페인 룩. 표지는 큰 히어로 캘리, 본문은 헤드라인만 임베드하고
+    // 보조 정보는 읽기 쉬운 손글씨로(가독성 우선 — 캘리 남발로 정보 카드가 안 읽히는 것 방지).
+    const isCover = i === 0;
+    p.push(`용도: 2:3 세로(1080×1620, 인스타 피드 세로형) 인스타그램 카드뉴스 총 ${total}장 중 ${ord} 슬라이드 한 장. 핵심 텍스트는 세로 중앙 안전영역에 두고 상하에 여백을 살짝 남긴다(피드에서 상하가 살짝 크롭될 수 있음).`);
+    p.push('컨셉: 실사 사진 위에 큰 손그림 캘리그래피 한글을 깊이·가림(occlusion)·원근으로 장면에 물리적으로 파묻는다. 평면 스티커처럼 얹지 않는다 — 일부 획은 피사체 뒤로 지나가고 일부는 피사체에 가려진다.');
+    p.push(`장면 설명: ${scene}.${isCover ? ' 스크롤을 멈출 가장 강렬한 히어로 컷으로 연출한다.' : ' 시리즈 내 다른 슬라이드와 구분되는 고유한 구도·피사체·시점을 쓴다.'}`);
+    p.push('피사체-텍스트 상호작용: 피사체가 글자를 들거나 기대거나 가리키거나 통과하듯, 텍스트가 장면과 물리적으로 상호작용하게 한다. 글자가 잔디 경사·길의 원근·하늘의 곡선을 따라 자연스럽게 흐른다.');
+    p.push(`타이포: 굵고 자유분방한 손글씨 캘리그래피 한글 — 마커·붓 질감, 살짝 불규칙한 자형, 생동감. 포스터 제목급 시각 위계. ${isCover ? '헤드라인을 화면을 지배하는 큰 히어로 캘리그래피로 배치한다.' : '헤드라인은 중간 크기 임베드 캘리그래피, 보조 정보는 정갈하고 읽기 쉬운 손글씨로 또렷하게(가독성 우선, 캘리 남발 금지).'}`);
+    p.push('손그림 주석: 화살표·별·밑줄·구름·해 같은 작고 귀여운 손그림을 얇고 불완전한 선으로 최소한만 더한다. 여백을 살리고 메인 문구를 방해하지 않는다.');
+    p.push('무드/연출: 인디 페스티벌·청춘 캠페인 키비주얼. 선명하되 네온 아님, 부드러운 자연광·연한 그림자·미세한 필름 그레인. 실사 배경은 믿을 만하되 최종물은 프로가 아트디렉션한 포스터로 보이게.');
+    p.push(`카드에 새길 한국어 문구(한 글자도 바꾸지 말 것) — 헤드라인: "${headline}"${body ? `, 본문: "${body.replace(/\n/g, ' / ')}"` : ''}. 정확히 그 표기 그대로 크고 또렷한 한글 손글씨 타이포그래피로 새긴다. 자소(자음·모음) 결합이 틀리면 실패로 간주한다.`);
+    p.push('완성 기준: 상업 포스터·인디 뮤직 페스티벌 포스터 마감 수준, 한글 오타 없음. 제외할 것: 평면 텍스트 오버레이·스티커식 타이포·글자와 겉도는 배치·영문/로마자 혼용·깨진 글자·과한 장식·워터마크·로고·QR·UI 요소.');
+  } else {
+    p.push('작업 방식: 브랜드 실무팀(브랜드전략가·아트디렉터·카피라이터·마케팅리드)이 짧게 토론해 합의한 최종안처럼 완성한다. 쟁점은 "헤드라인 임팩트 vs 정보 가독성" — 헤드라인은 과감하게 세우고 보조 정보는 질서 있게 후순위로 정리한다.');
+    p.push(`용도: 2:3 세로(1080×1620, 인스타 피드 세로형) 인스타그램 카드뉴스 총 ${total}장 중 ${ord} 슬라이드 한 장. 핵심 텍스트는 세로 중앙 안전영역에 두고 상하에 여백을 살짝 남긴다(피드에서 상하가 살짝 크롭될 수 있음).`);
+    p.push(`장면 설명: ${scene}. 한글 헤드라인과 핵심 정보가 전시 포스터처럼 강하게 보이는 구성.`);
+    p.push(`구도: 세로 2:3 시야의 상단 2/3에 헤드라인, 하단 1/3에 보조 정보. 그리드 축을 지키고 안전 여백을 확보한다.${i > 0 ? ' 시리즈 내 다른 슬라이드와 구분되는 고유한 구도·시각 모티프를 쓴다.' : ''}`);
+    p.push('타이포/레이아웃: 굵고 큰 한글 산세리프 헤드라인 + 정돈된 중간 무게 본문. 자음·모음 결합이 또렷하게 그려져야 하고, 자간·행간은 인쇄 포스터 수준으로 관리한다.');
+    p.push('연출: 종이·잉크 물성이 살짝 느껴지는 인쇄 에디토리얼 질감. 배경은 단색 또는 미세한 텍스처, 타이포 대비를 뚜렷하게(디지털 플랫함 지양).');
+    p.push(`카드에 새길 한국어 문구(한 글자도 바꾸지 말 것) — 헤드라인: "${headline}"${body ? `, 본문: "${body.replace(/\n/g, ' / ')}"` : ''}. 정확히 그 표기 그대로 크고 선명한 고대비 한글 타이포그래피로 새긴다. 자소(자음·모음) 결합이 틀리면 실패로 간주한다.`);
+    p.push('완성 기준: 인쇄 품질, 한글 오타 없음, 이 한 장만 봐도 의미가 전달될 것. 제외할 것: 영문·로마자 혼용, 손글씨·장식체 과다, 흐릿한 글자, 가독성 낮은 배치, 산만한 장식 요소, 워터마크.');
+  }
   if (i > 0 && total > 1) p.push(`우측 하단에 작은 페이지 표기 "${i + 1}/${total}".`);
   return p.join('\n');
 }
@@ -231,7 +249,7 @@ export async function runCardNewsJob(
     const hasRefs = refs.refPaths.length > 0;
     const cardPrompt = (i: number): string => buildCardImagePrompt({
       headline: plan.slides[i]!.headline, body: plan.slides[i]!.body, scene: design.prompts[i] ?? '',
-      style: design.style, title: plan.title, index: i, total, hasRefs,
+      style: design.style, title: plan.title, index: i, total, hasRefs, preset: design.preset,
     });
     const bgDraft = { imageSlots: plan.slides.map((s, i) => ({ alt: s.headline, prompt: cardPrompt(i) })) };
     const bgDraftPath = path.join(dir, 'bg-draft.json');
@@ -240,7 +258,7 @@ export async function runCardNewsJob(
     const r = await generateImagesForDraft(bgDraftPath, path.join(dir, 'bg'), bgManifestPath,
       // 텍스트 포함 완성 카드는 장당 생성이 배경보다 느리다(~100초+) — 기본 예산(90초/장)이
       // 5장에서 마지막 장을 SIGKILL(풀체인 E2E 실측) → 150초/장으로 상향.
-      { imageStyle: design.preset, limit: total, refImages: refs.refPaths, allowText: true, timeoutMs: 150_000 * total }, opts.signal);
+      { imageStyle: design.preset, limit: total, refImages: refs.refPaths, allowText: true, size: '1024x1536', timeoutMs: 150_000 * total }, opts.signal);
     // 매니페스트 복원 — 생성이 도중 중단(타임아웃 등)돼도 완성된 배경 파일은 살려 쓴다(폴백 최소화).
     // 파일명 blog-image-NN 의 NN 이 슬롯 번호 — 압축하지 않고 NN-1 인덱스에 배치해야 중간 슬롯 실패 시
     // 배경이 다음 슬라이드로 밀리지 않는다(빈 슬롯 null 은 렌더러가 장별 그라데이션 폴백으로 처리).
@@ -310,7 +328,7 @@ export async function runCardNewsJob(
           const retryManifestPath = path.join(dir, 'bg-retry-manifest.json');
           fs.writeFileSync(retryDraftPath, JSON.stringify(retryDraft, null, 2), 'utf-8');
           const rr = await generateImagesForDraft(retryDraftPath, path.join(dir, 'bg-retry'), retryManifestPath,
-            { imageStyle: design.preset, limit: bad.length, refImages: refs.refPaths, allowText: true, timeoutMs: 150_000 * bad.length }, opts.signal);
+            { imageStyle: design.preset, limit: bad.length, refImages: refs.refPaths, allowText: true, size: '1024x1536', timeoutMs: 150_000 * bad.length }, opts.signal);
           if (!rr.ok) {
             say('QA — 재생성 스크립트 실패(기존 완성본 유지)');
           } else {

@@ -331,7 +331,7 @@ export default function DraftReview() {
                         {Array.from({ length: derived.cardnews.slides ?? 0 }, (_, i) => `slide_${String(i + 1).padStart(2, "0")}.png`).map((name) => (
                           <a key={name} href={`/cardnews/${derived.cardnews!.id}/slides/${name}`} target="_blank" rel="noreferrer">
                             <img src={`/cardnews/${derived.cardnews!.id}/slides/${name}`} alt={name} loading="lazy"
-                              style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 6, display: "block" }} />
+                              style={{ width: "100%", aspectRatio: "2/3", objectFit: "cover", borderRadius: 6, display: "block" }} />
                           </a>
                         ))}
                       </div>

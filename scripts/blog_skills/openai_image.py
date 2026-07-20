@@ -36,6 +36,7 @@ STYLE_PRESETS = {
     "ink_wash":       "East Asian ink wash painting style, minimal elegant composition, ink brushwork accents",
     "flat_design":    "modern flat design vector illustration, minimalist Korean design aesthetic, 2D style",
     "retro_poster":   "vintage retro Korean poster-style illustration, strong composition, nostalgic atmosphere",
+    "handwritten_poster": "realistic outdoor photograph fused with large hand-drawn calligraphic HANGUL lettering embedded in the scene via depth and occlusion, indie-festival key-visual mood, boosted-natural saturation, soft sunlight, subtle film grain",
 }
 DEFAULT_STYLE = "photorealistic"
 
