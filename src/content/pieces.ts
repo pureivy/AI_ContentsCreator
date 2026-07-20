@@ -92,10 +92,11 @@ export class PieceStore {
     return next;
   }
   setStage(id: string, stage: PieceStage): Piece | undefined { return this.update(id, { stage }); }
-  setPublished(id: string, url: string): Piece | undefined {
+  setPublished(id: string, url: string, publishedTs?: string): Piece | undefined {
     const cur = this.items.get(id);
-    // publishedTs 는 최초 발행 1회만 기록(재감지·URL 갱신에도 최초 발행일 보존).
-    return this.update(id, { stage: 'published', publishedUrl: url, ...(cur?.publishedTs ? {} : { publishedTs: new Date().toISOString() }) });
+    // publishedTs 는 최초 발행 1회만 기록(재감지·URL 갱신에도 최초 발행일 보존). RSS 감지는 실제
+    // 발행시각(pubDate)을 넘겨 정확한 발행일이 되고, 수동 발행은 미지정 → now(발행 등록 시각).
+    return this.update(id, { stage: 'published', publishedUrl: url, ...(cur?.publishedTs ? {} : { publishedTs: publishedTs || new Date().toISOString() }) });
   }
   /** piece 삭제(카드 제거) — 산출물 파일(sessions·성과 샘플)은 남긴다(비파괴: 인덱스에서만 제거). */
   remove(id: string): boolean {

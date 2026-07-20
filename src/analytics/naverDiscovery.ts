@@ -75,8 +75,8 @@ function isBlogLink(link: string): boolean {
 export function matchPublished(
   pending: Array<{ id: string; title: string; draftTs: string }>,
   items: RssItem[],
-): { matched: Array<{ pieceId: string; url: string }>; ambiguous: string[] } {
-  const matched: Array<{ pieceId: string; url: string }> = [];
+): { matched: Array<{ pieceId: string; url: string; pubDate: string }>; ambiguous: string[] } {
+  const matched: Array<{ pieceId: string; url: string; pubDate: string }> = [];
   const ambiguous: string[] = [];
   const candidates = new Map<string, RssItem[]>();          // pieceId → 후보 아이템
   // 정규화 제목 → 후보 보유 piece 수. "후보 없는 동명 piece" 는 세지 않아도 유일성 판정이 성립하는데,
@@ -97,7 +97,7 @@ export function matchPublished(
     const cs = candidates.get(p.id);
     if (!cs) continue;
     if (cs.length === 1 && titleOwners.get(normalizeTitle(p.title)) === 1) {
-      matched.push({ pieceId: p.id, url: cs[0]!.link });
+      matched.push({ pieceId: p.id, url: cs[0]!.link, pubDate: cs[0]!.pubDate }); // pubDate = 실제 발행시각(발행일 앵커)
     } else {
       ambiguous.push(p.id);
     }
@@ -134,7 +134,7 @@ export async function discoverPublishedNaver(): Promise<void> {
         const { matched, ambiguous } = matchPublished(
           pieces.map((p) => ({ id: p.id, title: p.title, draftTs: p.naverDraftTs! })), items);
         for (const m of matched) {
-          const p = pieceStore().setPublished(m.pieceId, m.url); // 삭제 경합이면 undefined — 무해
+          const p = pieceStore().setPublished(m.pieceId, m.url, m.pubDate); // pubDate = 실제 발행시각 → publishedTs (삭제 경합이면 undefined — 무해)
           if (p) console.log(`[성과분석] ${p.title.slice(0, 30)} — 네이버 발행 감지, 성과 추적 시작`);
         }
         for (const id of ambiguous) {

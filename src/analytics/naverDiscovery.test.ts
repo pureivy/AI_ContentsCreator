@@ -98,7 +98,7 @@ describe('matchPublished — 보수적 exact + 양방향 유일(순수)', () => 
   it('정규화 exact 1:1 이면 매칭 — 엔티티·공백 차이 흡수', () => {
     const r = matchPublished([pend('p1', '카드뉴스 & 숏폼  활용법')],
       [item({ title: '카드뉴스 &amp; 숏폼 활용법' })]);
-    expect(r.matched).toEqual([{ pieceId: 'p1', url: 'https://blog.naver.com/tb/223900000001' }]);
+    expect(r.matched).toEqual([{ pieceId: 'p1', url: 'https://blog.naver.com/tb/223900000001', pubDate: iso(NOW - HOUR) }]);
     expect(r.ambiguous).toEqual([]);
   });
   it('시각 조건 — 임시저장 1시간 전 경계는 포함, 그 이전은 제외', () => {
