@@ -99,7 +99,8 @@ function ShortRow({ s, onDelete, yt, metaReady, onChanged }: {
             key={s.updatedTs} controls preload="none"
             poster={`/shorts/${s.id}/thumbnail?v=${encodeURIComponent(s.updatedTs)}`}
             src={`/shorts/${s.id}/video`}
-            style={{ width: 220, aspectRatio: "9/16", borderRadius: 10, background: "#000", objectFit: "cover" }}
+            // contain: 2:3 썸네일을 9:16 칸에 잘림 없이 전체 표시(좌우 텍스트 안 잘림). 9:16 영상은 그대로 꽉 참.
+            style={{ width: 220, aspectRatio: "9/16", borderRadius: 10, background: "#000", objectFit: "contain" }}
           />
           <div style={{ flex: "1 1 260px", minWidth: 220 }}>
             {s.titles && s.titles.length > 1 && (
