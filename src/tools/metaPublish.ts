@@ -8,7 +8,9 @@
 import fs from 'node:fs';
 import { getMetaAccount } from '../secrets/store';
 
-export const GRAPH = 'https://graph.facebook.com/v23.0';
+// 인스타그램 로그인 방식(2026-07-20) — 콘텐츠 발행은 graph.instagram.com. 페이지 없음.
+// FB 페이지 경로(video_reels·feed·photos)는 pageId 있을 때만 호출(현재 IG 로그인은 pageId='' → 미실행).
+export const GRAPH = 'https://graph.instagram.com/v23.0';
 
 export interface MetaPublishResult {
   ok: boolean; igMediaId?: string; igPermalink?: string; fbPostId?: string; error?: string;
@@ -85,8 +87,14 @@ export async function publishCardNewsToMeta(opts: {
   const out: MetaPublishResult = { ok: false };
   try {
     const acct = getMetaAccount(opts.slug);
-    if (!acct.pageId || !acct.igUserId || !acct.pageAccessToken) {
+    if (!acct.igUserId || !acct.pageAccessToken) {
       return { ok: false, error: '메타 미연결 — 카드뉴스 탭에서 메타 연결을 먼저 하세요' };
+    }
+    // 카드뉴스 IG 캐러셀은 슬라이드마다 '공개 이미지 URL'이 필요하고, 현재는 그 URL 을 페이스북 페이지
+    // 미공개 사진 업로드로 호스팅한다. 인스타그램 로그인 방식(pageId 없음)은 페이지가 없어 이 호스팅이
+    // 불가 — 릴스(영상 resumable 업로드)와 달리 이미지는 별도 공개 호스팅이 있어야 한다(후속).
+    if (!acct.pageId) {
+      return { ok: false, error: '카드뉴스 인스타 발행은 이미지 공개 호스팅이 필요해 현재 인스타그램 로그인 방식에선 미지원입니다 — 쇼츠 릴스는 발행 가능합니다.' };
     }
     if (opts.slidePaths.length > 10) return { ok: false, error: `IG 캐러셀은 최대 10장(현재 ${opts.slidePaths.length}장)` };
     if (!opts.slidePaths.length || !opts.slidePaths.every((p) => fs.existsSync(p))) {
@@ -208,7 +216,7 @@ export async function publishShortsToMeta(opts: {
   const out: MetaReelsResult = { ok: false };
   try {
     const acct = getMetaAccount(opts.slug);
-    if (!acct.pageId || !acct.igUserId || !acct.pageAccessToken) {
+    if (!acct.igUserId || !acct.pageAccessToken) {
       return { ok: false, error: '메타 미연결 — 카드뉴스/숏폼 탭에서 메타 연결을 먼저 하세요' };
     }
     if (!fs.existsSync(opts.videoPath)) return { ok: false, error: '영상 파일 없음' };
@@ -237,9 +245,8 @@ export async function publishShortsToMeta(opts: {
       out.igPermalink = (perma === null ? null : parsePermalink(perma)) ?? 'https://www.instagram.com/';
     }
 
-    // ② FB 릴스 — best-effort. 페이지 권한(pages_manage_posts) 미부여면 실패할 수 있으나 IG 릴스(핵심)는
-    //    이미 성공했으므로 전체를 실패시키지 않는다(부분 성공). 사유만 로그.
-    if (!opts.existing?.fbReelId) {
+    // ② FB 릴스 — 페이지 연결(pageId) 있을 때만. 인스타그램 로그인 방식은 페이지가 없어 스킵(IG 릴스만).
+    if (acct.pageId && !opts.existing?.fbReelId) {
       try {
         out.fbReelId = await publishFbReel(acct.pageId, token, opts.videoPath, message, signal);
       } catch (fe) {
