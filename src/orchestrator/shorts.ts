@@ -286,13 +286,12 @@ export async function runShortsJob(
 
     // ready 이후 자동 유튜브 업로드(옵트인) — 비공개 고정. 실패해도 잡은 이미 완성(수동 재시도 가능).
     if (CONFIG.autoYtUpload) {
-      const ytThumb = path.join(dir, 'thumbnail.jpg');
       // 쇼츠 피드 커버는 API 설정 불가 → 인트로(1.6초=디자인 썸네일) 붙은 영상 업로드(첫 프레임=커버). 실패·썸네일 없음 시 원본.
+      // 일반 썸네일(thumbnails.set)은 미설정 — 사용자 방침(2026-07-22): 유튜브 커버는 인트로 첫 프레임으로만.
       const ytVideo = (await ensureShortsDownload(dir).catch(() => null)) ?? r.videoPath;
       const up = await uploadShortsToYoutube({
         slug: short.brand ?? '', videoPath: ytVideo,
         title: plan.title, description: plan.description, hashtags: plan.hashtags,
-        thumbnailPath: fs.existsSync(ytThumb) ? ytThumb : undefined,
         signal: opts.signal,
       });
       if (up.ok) { store.update(id, { youtubeId: up.videoId, youtubeUrl: up.url, youtubeTs: new Date().toISOString() }); say(`유튜브 비공개 업로드 완료 — ${up.url}`); }
