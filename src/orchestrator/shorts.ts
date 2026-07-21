@@ -286,9 +286,11 @@ export async function runShortsJob(
 
     // ready 이후 자동 유튜브 업로드(옵트인) — 비공개 고정. 실패해도 잡은 이미 완성(수동 재시도 가능).
     if (CONFIG.autoYtUpload) {
+      const ytThumb = path.join(dir, 'thumbnail.jpg');
       const up = await uploadShortsToYoutube({
         slug: short.brand ?? '', videoPath: r.videoPath,
         title: plan.title, description: plan.description, hashtags: plan.hashtags,
+        thumbnailPath: fs.existsSync(ytThumb) ? ytThumb : undefined,
         signal: opts.signal,
       });
       if (up.ok) { store.update(id, { youtubeId: up.videoId, youtubeUrl: up.url, youtubeTs: new Date().toISOString() }); say(`유튜브 비공개 업로드 완료 — ${up.url}`); }

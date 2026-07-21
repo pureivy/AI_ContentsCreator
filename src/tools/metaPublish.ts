@@ -194,7 +194,7 @@ async function publishFbReel(pageId: string, token: string, videoPath: string, d
 }
 
 export async function publishShortsToMeta(opts: {
-  slug: string; videoPath: string; caption: string; hashtags: string[];
+  slug: string; videoPath: string; caption: string; hashtags: string[]; thumbnailPath?: string;
   existing?: { igReelId?: string; igPermalink?: string; fbReelId?: string }; signal?: AbortSignal;
 }): Promise<MetaReelsResult> {
   const out: MetaReelsResult = { ok: false };
@@ -215,9 +215,17 @@ export async function publishShortsToMeta(opts: {
     out.igPermalink = realPermalink(opts.existing?.igPermalink);
     if (!out.igReelId) {
       const videoUrl = await uploadToFalStorage(opts.videoPath, 'video/mp4', signal);
+      // 디자인 썸네일이 있으면 릴스 커버로 지정(cover_url = fal 공개 이미지 URL). 없거나 실패하면 IG 가 영상 프레임으로 자동.
+      let coverUrl: string | null = null;
+      if (opts.thumbnailPath && fs.existsSync(opts.thumbnailPath)) {
+        try { coverUrl = await uploadToFalStorage(opts.thumbnailPath, 'image/jpeg', signal); }
+        catch { coverUrl = null; }
+      }
+      const body = new URLSearchParams({ media_type: 'REELS', video_url: videoUrl, caption: message, share_to_feed: 'true', access_token: token });
+      if (coverUrl) body.set('cover_url', coverUrl);
       const container = await graphJson(`${GRAPH}/me/media`, {
         method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ media_type: 'REELS', video_url: videoUrl, caption: message, share_to_feed: 'true', access_token: token }),
+        body,
       }, 'IG 릴스 컨테이너');
       const cid = extractId(container);
       if (!cid) throw new Error('IG 릴스 컨테이너 응답 이형');

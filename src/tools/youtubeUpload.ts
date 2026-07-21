@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import { getSecret, getYoutubeAccount } from '../secrets/store';
 
-export interface YtUploadResult { ok: boolean; videoId?: string; url?: string; error?: string }
+export interface YtUploadResult { ok: boolean; videoId?: string; url?: string; error?: string; thumbnailError?: string }
 
 /** snippet/status 메타데이터(순수) — 제목 100자·꺾쇠 제거, 설명 5000자, tags ≤15개·30자, private 고정. */
 export function buildVideoMeta(title: string, description: string, hashtags: string[]): Record<string, unknown> {
@@ -56,7 +56,7 @@ async function refreshAccessToken(clientId: string, clientSecret: string, refres
 export async function uploadShortsToYoutube(opts: {
   slug: string; videoPath: string;
   title: string; description: string; hashtags: string[];
-  signal?: AbortSignal;
+  thumbnailPath?: string; signal?: AbortSignal;
 }): Promise<YtUploadResult> {
   try {
     const clientId = getSecret('YOUTUBE_OAUTH_CLIENT_ID') ?? '';
@@ -86,7 +86,23 @@ export async function uploadShortsToYoutube(opts: {
     }
     const id = extractVideoId(j);
     if (!id) return { ok: false, error: '업로드 응답 이형(id 없음)' };
-    return { ok: true, videoId: id, url: `https://youtube.com/watch?v=${id}` };
+    // 커스텀 썸네일 설정(best-effort) — 채널 전화 인증이 안 된 계정은 403(영상 업로드는 이미 성공). 실패는 note 만.
+    let thumbnailError: string | undefined;
+    if (opts.thumbnailPath && fs.existsSync(opts.thumbnailPath)) {
+      try {
+        const tr = await fetch(`https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${id}`, {
+          method: 'POST', signal,
+          headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'image/jpeg' },
+          body: fs.readFileSync(opts.thumbnailPath),
+        });
+        if (!tr.ok) {
+          const tj: unknown = await tr.json().catch(() => ({}));
+          const reason = (tj as { error?: { errors?: Array<{ reason?: string }> } })?.error?.errors?.[0]?.reason ?? String(tr.status);
+          thumbnailError = /forbidden|unverified/i.test(reason) ? '채널 전화 인증 후 커스텀 썸네일 가능(영상은 업로드됨)' : `썸네일 설정 실패(${reason})`;
+        }
+      } catch (te) { thumbnailError = te instanceof Error ? te.message.slice(0, 80) : String(te); }
+    }
+    return { ok: true, videoId: id, url: `https://youtube.com/watch?v=${id}`, thumbnailError };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message.slice(0, 120) : String(e) };
   }
