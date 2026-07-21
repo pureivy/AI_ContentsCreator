@@ -76,10 +76,13 @@ async function synthesizeElevenLabs(
   if (!key) throw new Error('ELEVENLABS_API_KEY 없음');
   const voiceId = opts.voiceId || CONFIG.elevenLabsVoiceId;
   const url = `${ELEVENLABS_TTS_URL}/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`;
+  // 낭독 속도 — voice_settings.speed(1.0 기본, >1.0 빠르게). 1.0 이면 생략(음성 기본 설정 유지).
+  const body: Record<string, unknown> = { text, model_id: CONFIG.elevenLabsModel };
+  if (CONFIG.elevenLabsSpeed !== 1.0) body.voice_settings = { speed: CONFIG.elevenLabsSpeed };
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'xi-api-key': key, 'content-type': 'application/json', accept: 'audio/mpeg' },
-    body: JSON.stringify({ text, model_id: CONFIG.elevenLabsModel }),
+    body: JSON.stringify(body),
     signal: opts.signal,
   });
   if (!r.ok) throw new Error(`ElevenLabs TTS ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
