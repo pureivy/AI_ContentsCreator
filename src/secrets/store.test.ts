@@ -307,3 +307,47 @@ describe('purgeCustomKeysForBrand — 브랜드 삭제 시 커스텀 키 동반 
     expect(mod.listKeys().filter((k) => !k.builtin)).toHaveLength(1);
   });
 });
+
+// 브랜드 삭제 시 채널 계정 blob 동반 정리 — 잔존 시 죽은 브랜드의 로그인·토큰이 .env 에 남고
+// 동명 재생성 브랜드가 옛 계정을 승계한다(실사고: 국민원예종묘 삭제 후 YOUTUBE_TOKENS 잔재, 2026-07-22).
+describe('purgeBrandAccounts — 삭제 브랜드의 계정 blob 정리', () => {
+  const KEYS = ['NAVER_ACCOUNTS', 'YOUTUBE_TOKENS', 'META_TOKENS'];
+  let tmpEnv: string;
+  let mod: typeof import('./store');
+  beforeEach(async () => {
+    tmpEnv = path.join(os.tmpdir(), 'purge-acct-store-test.env');
+    fs.writeFileSync(tmpEnv, '', { mode: 0o600 });
+    process.env.GEPA_ENV_FILE = tmpEnv;
+    for (const k of KEYS) delete process.env[k];
+    vi.resetModules();
+    mod = await import('./store');
+  });
+  afterEach(() => {
+    try { fs.rmSync(tmpEnv); } catch { /* 이미 없음 */ }
+    delete process.env.GEPA_ENV_FILE;
+    for (const k of KEYS) delete process.env[k];
+  });
+
+  it('세 blob 에서 해당 슬러그만 제거, 타 브랜드는 보존', () => {
+    mod.setNaverAccount('dead', { blogId: 'b', loginId: 'i', loginPw: 'p' });
+    mod.setNaverAccount('alive', { blogId: 'keep' });
+    mod.setYoutubeToken('dead', 'rt-dead');
+    mod.setYoutubeToken('alive', 'rt-alive');
+    mod.setMetaToken('dead', { pageId: '', igUserId: 'ig1', pageAccessToken: 'tok1' });
+    expect(mod.purgeBrandAccounts('dead')).toBe(3);
+    expect(mod.getNaverAccount('dead')).toEqual({ blogId: '', loginId: '', loginPw: '' });
+    expect(mod.getYoutubeAccount('dead').refreshToken).toBe('');
+    expect(mod.getMetaAccount('dead').pageAccessToken).toBe('');
+    expect(mod.getNaverAccount('alive').blogId).toBe('keep');
+    expect(mod.getYoutubeAccount('alive').refreshToken).toBe('rt-alive');
+    const txt = fs.readFileSync(tmpEnv, 'utf-8');
+    expect(txt).not.toContain('dead'); // 기밀 잔존 없음(.env 텍스트 차원)
+  });
+
+  it('항목 없는 브랜드·범용은 no-op 0', () => {
+    mod.setYoutubeToken('', 'rt-generic'); // 범용('') 은 브랜드 아님 — 보호
+    expect(mod.purgeBrandAccounts('ghost')).toBe(0);
+    expect(mod.purgeBrandAccounts('')).toBe(0);
+    expect(mod.getYoutubeAccount('').refreshToken).toBe('rt-generic');
+  });
+});

@@ -357,6 +357,20 @@ export function setMetaToken(slug: string, acct: MetaAccount | null): void {
   writeEnvValue(META_TOKENS_KEY, Object.keys(clean).length ? JSON.stringify(clean) : undefined);
 }
 
+/**
+ * 브랜드 삭제 동반 정리 — 채널 계정 blob(NAVER_ACCOUNTS·YOUTUBE_TOKENS·META_TOKENS)에서 해당 슬러그
+ * 항목 제거. 잔존 시 죽은 브랜드의 로그인·토큰이 .env 에 남고(기밀 잔존), 동명 재생성 브랜드가 옛 계정을
+ * 그대로 승계한다. 범용('')은 브랜드가 아니므로 no-op. 제거된 blob 항목 수 반환.
+ */
+export function purgeBrandAccounts(slug: string): number {
+  if (!slug) return 0;
+  let n = 0;
+  if (readNaverAccounts()[slug]) { setNaverAccount(slug, { blogId: '', loginId: '', loginPw: '' }); n++; }
+  if (readYoutubeTokens()[slug]) { setYoutubeToken(slug, ''); n++; }
+  if (readMetaTokens()[slug]) { setMetaToken(slug, null); n++; }
+  return n;
+}
+
 /** UI 표시용 — 계정 각 필드의 설정 여부 + 마스킹(blogId 는 공개값이라 평문, 로그인은 마스킹). */
 export function naverAccountView(slug: string): {
   blogId: string; loginIdSet: boolean; loginIdMasked: string; loginPwSet: boolean;
