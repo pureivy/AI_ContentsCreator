@@ -19,7 +19,7 @@ import { shortsStore } from '../content/shorts';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
 import { i2vSceneClips } from './shortsSceneClips';
-import { renderShortsVideo } from '../tools/shortsRender';
+import { renderShortsVideo, ensureShortsDownload } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail } from './shortsThumbnail';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
@@ -287,8 +287,10 @@ export async function runShortsJob(
     // ready 이후 자동 유튜브 업로드(옵트인) — 비공개 고정. 실패해도 잡은 이미 완성(수동 재시도 가능).
     if (CONFIG.autoYtUpload) {
       const ytThumb = path.join(dir, 'thumbnail.jpg');
+      // 쇼츠 피드 커버는 API 설정 불가 → 인트로(1.6초=디자인 썸네일) 붙은 영상 업로드(첫 프레임=커버). 실패·썸네일 없음 시 원본.
+      const ytVideo = (await ensureShortsDownload(dir).catch(() => null)) ?? r.videoPath;
       const up = await uploadShortsToYoutube({
-        slug: short.brand ?? '', videoPath: r.videoPath,
+        slug: short.brand ?? '', videoPath: ytVideo,
         title: plan.title, description: plan.description, hashtags: plan.hashtags,
         thumbnailPath: fs.existsSync(ytThumb) ? ytThumb : undefined,
         signal: opts.signal,

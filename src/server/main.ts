@@ -1134,10 +1134,13 @@ app.post('/shorts/:id/youtube', async (c) => {
   if (s.youtubeUrl) return c.json({ error: '이미 업로드됨', url: s.youtubeUrl }, 409); // 중복 영상·쿼터 낭비 방지
   const ytDir = shortsStore().dirFor(id);
   const ytThumb = path.join(ytDir, 'thumbnail.jpg');
+  // 쇼츠 피드/Studio Shorts 탭 썸네일은 API 로 설정 불가(유튜브 별도 관리) → 인트로(1.6초=디자인 썸네일) 붙은
+  // 영상을 업로드해 첫 프레임이 쇼츠 커버가 되게 한다. 썸네일 없으면 원본 폴백(ensureShortsDownload 내장).
+  const ytVideo = (await ensureShortsDownload(ytDir)) ?? path.join(ytDir, 'final.mp4');
   const r = await uploadShortsToYoutube({
-    slug: s.brand ?? '', videoPath: path.join(ytDir, 'final.mp4'),
+    slug: s.brand ?? '', videoPath: ytVideo,
     title: s.title ?? s.topic, description: s.description ?? '', hashtags: s.hashtags ?? [],
-    thumbnailPath: fs.existsSync(ytThumb) ? ytThumb : undefined,
+    thumbnailPath: fs.existsSync(ytThumb) ? ytThumb : undefined, // 검색·채널 페이지용 일반 썸네일은 별도 유지
   });
   if (!r.ok) return c.json({ error: r.error }, 502);
   shortsStore().update(id, { youtubeId: r.videoId, youtubeUrl: r.url, youtubeTs: new Date().toISOString() });
