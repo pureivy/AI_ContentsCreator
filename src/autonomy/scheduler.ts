@@ -60,8 +60,9 @@ export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): () => void {
   return () => clearInterval(timer);
 }
 
-/** 파생 콘텐츠 일일 케이던스 게이트(순수) — 마지막 생성에서 24h/N 경과 여부(수동 생성도 포함해
- *  그날은 자율이 쉰다). perDay<=0 = 기능 off. 손상 ts 는 게이트가 영구히 잠기지 않게 즉시 due. */
+/** 파생 콘텐츠 일일 케이던스 게이트(순수) — lastCreatedTs 에서 24h/N 경과 여부. 호출부가 '자율 생산분의
+ *  마지막 생성 ts'만 넘겨(수동 제외) 오토런은 사용자와 무관하게 자기 몫을 채운다. perDay<=0 = off.
+ *  손상 ts 는 게이트가 영구히 잠기지 않게 즉시 due. */
 export function derivedContentDue(perDay: number, lastCreatedTs: string | undefined, now = Date.now()): boolean {
   if (!(perDay > 0)) return false;
   if (!lastCreatedTs) return true;

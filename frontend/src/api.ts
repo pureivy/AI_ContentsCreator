@@ -1088,7 +1088,7 @@ export async function deleteShorts(id: string): Promise<{ ok: boolean; error?: s
     return { ok: true };
   } catch { return { ok: false, error: "network" }; }
 }
-export async function uploadShortsYoutube(id: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+export async function uploadShortsYoutube(id: string): Promise<{ ok: boolean; url?: string; error?: string; thumbnailError?: string }> {
   try {
     const r = await fetch(`/shorts/${id}/youtube`, { method: "POST" });
     const j = await r.json().catch(() => ({} as { url?: string; error?: string }));

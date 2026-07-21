@@ -20,6 +20,8 @@ export interface Shorts {
   keyword?: string;
   /** 블로그 초안에서 파생된 경우 원본 piece id. */
   sourcePieceId?: string;
+  /** 자율 사이클이 만든 것인지(수동 생성과 카덴스 쿼터 분리용). */
+  auto?: boolean;
   stage: ShortsStage;
   /** 대표 제목(ready 시 — 기획 확정 제목). */
   title?: string;
@@ -61,6 +63,7 @@ export interface CreateShortsInput {
   sourcePieceId?: string;
   writer?: string;
   director?: string;
+  auto?: boolean;
 }
 
 export class ShortsStore {
@@ -92,7 +95,7 @@ export class ShortsStore {
       id: genId('short'),
       brand: activeBrandSlug() || undefined, topic: input.topic.trim(),
       keyword: input.keyword?.trim() || undefined,
-      sourcePieceId: input.sourcePieceId,
+      sourcePieceId: input.sourcePieceId, auto: input.auto,
       writer: input.writer, director: input.director,
       stage: 'planning', createdTs: now, updatedTs: now,
     };

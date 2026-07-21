@@ -39,11 +39,13 @@ export interface Piece {
   errors?: number;
   /** SEO 미달로 자동 리비전을 돌린 횟수 — 자동 임시저장 게이트의 무한 루프 방지(캡 1). */
   autoRevisions?: number;
+  /** 자율 사이클이 만든 것인지(수동 생성과 카덴스 쿼터 분리용). */
+  auto?: boolean;
   createdTs: string;
   updatedTs: string;
 }
 
-export interface CreatePieceInput { title: string; keyword?: string; subNiche?: string; stage?: PieceStage; brand?: string; }
+export interface CreatePieceInput { title: string; keyword?: string; subNiche?: string; stage?: PieceStage; brand?: string; auto?: boolean; }
 
 const MAX_ERRORS = 3;
 
@@ -73,7 +75,7 @@ export class PieceStore {
     const p: Piece = {
       id: genId('piece'), title: input.title.trim(),
       keyword: input.keyword?.trim() || undefined, subNiche: input.subNiche?.trim() || undefined,
-      brand: input.brand?.trim() || undefined,
+      brand: input.brand?.trim() || undefined, auto: input.auto,
       stage: input.stage ?? 'idea', errors: 0, createdTs: now, updatedTs: now,
     };
     this.items.set(p.id, p);

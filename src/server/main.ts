@@ -803,7 +803,7 @@ async function cardNewsCreateHandler(c: Context): Promise<Response> {
 
 // 블로그 초안 → 카드뉴스 파생(공용) — 초안 본문을 기획자에게 넘겨 슬라이드로 재구성(복붙 아님).
 // 검토 탭 수동 버튼과 '네이버 임시저장 성공' 자동 훅이 공유한다.
-function deriveCardNewsFromPiece(pieceId: string, slides?: number, style?: string): { card: CardNews } | { error: string } {
+function deriveCardNewsFromPiece(pieceId: string, slides?: number, style?: string, auto = false): { card: CardNews } | { error: string } {
   const piece = pieceStore().get(pieceId);
   if (!piece) return { error: 'unknown piece' };
   if (!piece.runId) return { error: '초안이 아직 없습니다.' };
@@ -814,7 +814,7 @@ function deriveCardNewsFromPiece(pieceId: string, slides?: number, style?: strin
   } catch { /* 아래에서 거절 */ }
   if (!body) return { error: '초안 본문(draft.json)을 읽을 수 없습니다.' };
   const card = cardNewsStore().create({
-    topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, ...cardActorNames(),
+    topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, auto, ...cardActorNames(),
   });
   launchCardNewsRun(card.id, piece.title, { sourceBody: body, slideCount: slides, stylePreset: style });
   return { card };
@@ -956,7 +956,7 @@ async function shortsCreateHandler(c: Context): Promise<Response> {
 }
 
 // 블로그 초안 → 숏폼 파생(공용) — 검토 탭 버튼·네이버 저장 성공 자동 훅이 공유.
-function deriveShortsFromPiece(pieceId: string, scenes?: number): { short: Shorts } | { error: string } {
+function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false): { short: Shorts } | { error: string } {
   const piece = pieceStore().get(pieceId);
   if (!piece) return { error: 'unknown piece' };
   if (!piece.runId) return { error: '초안이 아직 없습니다.' };
@@ -967,7 +967,7 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number): { short: Short
   } catch { /* 아래에서 거절 */ }
   if (!body) return { error: '초안 본문(draft.json)을 읽을 수 없습니다.' };
   const short = shortsStore().create({
-    topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, ...shortsActorNames(),
+    topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, auto, ...shortsActorNames(),
   });
   launchShortsRun(short.id, piece.title, { sourceBody: body, sceneCount: scenes });
   return { short };
@@ -1143,7 +1143,7 @@ app.post('/shorts/:id/youtube', async (c) => {
   shortsStore().update(id, { youtubeId: r.videoId, youtubeUrl: r.url, youtubeTs: new Date().toISOString() });
   if (r.thumbnailError) console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 24)} — 썸네일 미적용: ${r.thumbnailError}`);
   console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 유튜브 비공개 업로드 완료 (${publisherName()})`);
-  return c.json({ ok: true, url: r.url });
+  return c.json({ ok: true, url: r.url, thumbnailError: r.thumbnailError });
 });
 // ── 메타(인스타·페북) 발행 — 공용 개발자 앱 + 브랜드별 페이지·IG 토큰(META_TOKENS).
 //    콜백: code→장기 사용자 토큰→/me/accounts. 페이지 1개면 즉시 저장, 여러 개면 pick 화면.
@@ -2663,9 +2663,11 @@ const isRunLive = (runId?: string): boolean => !!runId && RUNS.get(runId)?.statu
 // 신규 아이디어 생성 케이던스/백로그 게이트(재개는 무관) — 사용자 결정(주 2~3개) 준수 + ready 홍수 방지.
 // 없으면 autoCycleMinutes 를 낮게 잡을 때 하루 수십 편이 생성돼 미발행 초안이 범람한다.
 function canGenerateNew(pieces: Piece[]): boolean {
-  if (pieces.filter((p) => p.stage === 'ready').length >= CONFIG.contentReadyCap) return false; // 미발행 초안 캡
-  const minIntervalMs = (7 * 24 * 60 * 60 * 1000) / CONFIG.contentCadencePerWeek;               // 주 N편 → 최소 간격
-  const lastCreated = pieces.reduce((mx, p) => (p.createdTs > mx ? p.createdTs : mx), '');
+  // 카덴스 쿼터는 자율 생산분만 계산 — 사용자 수동 생성은 오토런 쿼터에서 제외(사용자 지시).
+  const autoPieces = pieces.filter((p) => p.auto);
+  if (autoPieces.filter((p) => p.stage === 'ready').length >= CONFIG.contentReadyCap) return false; // 미발행 자율 초안 캡
+  const minIntervalMs = (7 * 24 * 60 * 60 * 1000) / CONFIG.contentCadencePerWeek;                    // 주 N편 → 최소 간격
+  const lastCreated = autoPieces.reduce((mx, p) => (p.createdTs > mx ? p.createdTs : mx), '');
   return !lastCreated || (Date.now() - new Date(lastCreated).getTime()) >= minIntervalMs;
 }
 
@@ -2687,17 +2689,17 @@ async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
   }
   if (canGenerateNew(pieces)) {  // 케이던스/백로그 초과면 신규 블로그 보류 → 아래 파생 케이던스로 폴백.
     const idea = await proposeContentIdeas(signal);
-    if (idea) return { kind: 'piece', piece: pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche, brand: activeBrandSlug() || undefined }) };
+    if (idea) return { kind: 'piece', piece: pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche, brand: activeBrandSlug() || undefined, auto: true }) };
   }
   // 파생 콘텐츠 일일 케이던스(사용자 지시 2026-07-16: 쇼츠·카드뉴스 매일 1편) — 초안 있는 최신 블로그
-  // 에서 파생(리서치된 내용 재사용 = 같은 주제 채널 전개라 신규성 가드 비대상). 수동 생성도 케이던스에
-  // 포함돼 그날은 자율이 쉰다. 파생 소스는 아직 그 채널로 전개 안 된 최신 초안.
+  // 에서 파생(리서치된 내용 재사용 = 같은 주제 채널 전개라 신규성 가드 비대상). 케이던스는 자율 생산분만
+  // 계산해(수동 제외) 사용자가 직접 만들어도 오토런은 자기 몫을 채운다. 파생 소스는 아직 그 채널로 전개 안 된 최신 초안.
   const derivable = pieces
     .filter((p) => (p.brand ?? '') === tickBrand && p.runId && ['ready', 'published', 'measured', 'reflected'].includes(p.stage))
     .sort((a, b) => b.updatedTs.localeCompare(a.updatedTs));
   if (CONFIG.autoShortsPerDay > 0) {
     const all = shortsStore().list().filter((s) => (s.brand ?? '') === tickBrand);
-    const last = all.reduce((mx, s) => (s.createdTs > mx ? s.createdTs : mx), '');
+    const last = all.filter((s) => s.auto).reduce((mx, s) => (s.createdTs > mx ? s.createdTs : mx), ''); // 자율 생산분만(수동 제외)
     if (derivedContentDue(CONFIG.autoShortsPerDay, last || undefined) && !all.some((s) => isShortsRunning(s.id))) {
       const src = derivable.find((p) => !all.some((s) => s.sourcePieceId === p.id));
       if (src) return { kind: 'shorts', pieceId: src.id, title: src.title };
@@ -2705,7 +2707,7 @@ async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
   }
   if (CONFIG.autoCardnewsPerDay > 0) {
     const all = cardNewsStore().list().filter((x) => (x.brand ?? '') === tickBrand);
-    const last = all.reduce((mx, x) => (x.createdTs > mx ? x.createdTs : mx), '');
+    const last = all.filter((x) => x.auto).reduce((mx, x) => (x.createdTs > mx ? x.createdTs : mx), ''); // 자율 생산분만(수동 제외)
     if (derivedContentDue(CONFIG.autoCardnewsPerDay, last || undefined) && !all.some((x) => isCardNewsRunning(x.id))) {
       const src = derivable.find((p) => !all.some((x) => x.sourcePieceId === p.id));
       if (src) return { kind: 'cardnews', pieceId: src.id, title: src.title };
@@ -2732,7 +2734,7 @@ const stopAutoCycle = startAutoCycle<AutoWork>({
     }
     if (w.kind === 'shorts' || w.kind === 'cardnews') {
       // 파생은 자체 잡 시스템(런 슬롯 비점유) — derive 가 생성+런 기동까지 처리, 실패는 무해 로그.
-      const r = w.kind === 'shorts' ? deriveShortsFromPiece(w.pieceId) : deriveCardNewsFromPiece(w.pieceId);
+      const r = w.kind === 'shorts' ? deriveShortsFromPiece(w.pieceId, undefined, true) : deriveCardNewsFromPiece(w.pieceId, undefined, undefined, true);
       if ('error' in r) console.log(`[auto-cycle] ${w.kind === 'shorts' ? '쇼츠' : '카드뉴스'} 파생 실패(무해): ${r.error}`);
       return;
     }

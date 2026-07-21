@@ -47,7 +47,8 @@ function ShortRow({ s, onDelete, yt, metaReady, onChanged }: {
     setYtBusy(true); setYtErr("");
     const r = await uploadShortsYoutube(s.id);
     setYtBusy(false);
-    if (r.ok) onChanged(); else setYtErr(r.error || "업로드 실패");
+    if (r.ok) { onChanged(); if (r.thumbnailError) setYtErr(`⚠ 썸네일 미적용: ${r.thumbnailError}`); }
+    else setYtErr(r.error || "업로드 실패");
   };
   const [metaBusy, setMetaBusy] = useState(false);
   const [metaErr, setMetaErr] = useState("");

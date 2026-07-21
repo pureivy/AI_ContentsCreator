@@ -20,6 +20,8 @@ export interface CardNews {
   keyword?: string;
   /** 블로그 초안에서 파생된 경우 원본 piece id. */
   sourcePieceId?: string;
+  /** 자율 사이클이 만든 것인지(수동 생성과 카덴스 쿼터 분리용). */
+  auto?: boolean;
   stage: CardNewsStage;
   /** 완성 슬라이드 수(ready 시). */
   slides?: number;
@@ -49,6 +51,7 @@ export interface CreateCardNewsInput {
   sourcePieceId?: string;
   planner?: string;
   designer?: string;
+  auto?: boolean;
 }
 
 export class CardNewsStore {
@@ -80,7 +83,7 @@ export class CardNewsStore {
       id: genId('card'),
       brand: activeBrandSlug() || undefined, topic: input.topic.trim(),
       keyword: input.keyword?.trim() || undefined,
-      sourcePieceId: input.sourcePieceId,
+      sourcePieceId: input.sourcePieceId, auto: input.auto,
       planner: input.planner, designer: input.designer,
       stage: 'planning', createdTs: now, updatedTs: now,
     };
