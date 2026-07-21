@@ -98,7 +98,8 @@ export async function uploadShortsToYoutube(opts: {
         if (!tr.ok) {
           const tj: unknown = await tr.json().catch(() => ({}));
           const reason = (tj as { error?: { errors?: Array<{ reason?: string }> } })?.error?.errors?.[0]?.reason ?? String(tr.status);
-          thumbnailError = /forbidden|unverified/i.test(reason) ? '채널 전화 인증 후 커스텀 썸네일 가능(영상은 업로드됨)' : `썸네일 설정 실패(${reason})`;
+          // 403 forbidden 은 채널 미인증뿐 아니라 토큰·권한 문제일 수도 있어 사유를 그대로 노출(영상은 업로드됨).
+          thumbnailError = `사유 ${reason} — 채널 재연결·전화 인증 상태 확인`;
         }
       } catch (te) { thumbnailError = te instanceof Error ? te.message.slice(0, 80) : String(te); }
     }
