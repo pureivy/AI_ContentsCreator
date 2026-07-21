@@ -13,19 +13,25 @@ import { audio, sanitizeForTts, parseSayVoices } from './audio';
 import { getVoiceSettings } from './setting';
 
 const OPENAI_TTS_URL = 'https://api.openai.com/v1/audio/speech';
+const ELEVENLABS_TTS_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 
 /** 라이브 OpenAI 키(시크릿 스토어 우선, 시작 시 env 폴백). */
 function openaiKey(): string {
   return getSecret('OPENAI_API_KEY') || CONFIG.openaiApiKey || '';
 }
 
+/** 라이브 ElevenLabs 키(시크릿 스토어 우선, 시작 시 env 폴백). */
+function elevenLabsKey(): string {
+  return getSecret('ELEVENLABS_API_KEY') || CONFIG.elevenLabsApiKey || '';
+}
+
 function sayAvailable(): boolean {
   return audio.which('say') && audio.which('ffmpeg');
 }
 
-/** TTS 가용 여부 — OpenAI 키가 있거나(say 불필요) macOS say+ffmpeg 가 있으면 true. */
+/** TTS 가용 여부 — ElevenLabs·OpenAI 키가 있거나(say 불필요) macOS say+ffmpeg 가 있으면 true. */
 export function ttsAvailable(): boolean {
-  return !!openaiKey() || sayAvailable();
+  return !!elevenLabsKey() || !!openaiKey() || sayAvailable();
 }
 
 export async function listKoreanVoices(): Promise<string[]> {
@@ -58,6 +64,28 @@ async function synthesizeOpenAI(
   return Buffer.from(await r.arrayBuffer());
 }
 
+/**
+ * ElevenLabs TTS(/v1/text-to-speech/{voice_id}) → mp3 Buffer. 음성은 voice_id 로 지정(음색 자체가 캐릭터).
+ * output_format=mp3_44100_128, model 은 CONFIG.elevenLabsModel(기본 eleven_multilingual_v2, 한국어 지원).
+ * OpenAI 의 instructions 같은 자유 톤 지시는 없음 — 선택한 voice_id 가 낭독 캐릭터를 담는다.
+ */
+async function synthesizeElevenLabs(
+  text: string, opts: { voiceId?: string; signal?: AbortSignal },
+): Promise<Buffer> {
+  const key = elevenLabsKey();
+  if (!key) throw new Error('ELEVENLABS_API_KEY 없음');
+  const voiceId = opts.voiceId || CONFIG.elevenLabsVoiceId;
+  const url = `${ELEVENLABS_TTS_URL}/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'xi-api-key': key, 'content-type': 'application/json', accept: 'audio/mpeg' },
+    body: JSON.stringify({ text, model_id: CONFIG.elevenLabsModel }),
+    signal: opts.signal,
+  });
+  if (!r.ok) throw new Error(`ElevenLabs TTS ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
+  return Buffer.from(await r.arrayBuffer());
+}
+
 /** macOS say(-v <voice> -o aiff) → ffmpeg(mp3). OpenAI 미가용 시 폴백. */
 async function synthesizeSay(text: string, voice: string, signal?: AbortSignal): Promise<Buffer> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tts-'));
@@ -80,10 +108,23 @@ async function synthesizeSay(text: string, voice: string, signal?: AbortSignal):
  */
 export async function synthesize(
   text: string,
-  opts: { voice?: string; openaiVoice?: string; instructions?: string; signal?: AbortSignal } = {},
+  opts: { voice?: string; openaiVoice?: string; elevenVoiceId?: string; instructions?: string; signal?: AbortSignal } = {},
 ): Promise<Buffer> {
   const clean = sanitizeForTts(text);
   if (!clean) throw new Error('낭독할 텍스트가 비어 있음');
+
+  // 폴백 체인: elevenlabs → openai → say. 각 단계는 키/가용성이 없거나 실패하면 다음으로 넘어간다
+  // (취소는 폴백하지 않음). 숏폼 내레이션·자비스 음성이 한 제공자 장애로 끊기지 않게 한다.
+  const wantEleven = CONFIG.ttsProvider === 'elevenlabs' && !!elevenLabsKey();
+  if (wantEleven) {
+    try {
+      return await synthesizeElevenLabs(clean, { voiceId: opts.elevenVoiceId, signal: opts.signal });
+    } catch (e) {
+      if (opts.signal?.aborted) throw e;
+      if (!openaiKey() && !sayAvailable()) throw e;   // 폴백 불가면 원 오류 노출
+      // ElevenLabs 실패(키·레이트·네트워크) → openai/say 로 폴백
+    }
+  }
 
   const wantOpenAI = CONFIG.ttsProvider !== 'say' && !!openaiKey();
   if (wantOpenAI) {

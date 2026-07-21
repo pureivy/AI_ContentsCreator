@@ -122,12 +122,18 @@ export interface Config {
   readonly shortsPerfDays: number;
 
   // --- 음성 입출력 ---
-  /** TTS 제공자: 'openai'(gpt-4o-mini-tts, 자연스러운 신경망 음성) | 'say'(macOS 로컬, 폴백). 기본 openai(키 없으면 자동 say 폴백). */
+  /** TTS 제공자: 'elevenlabs'(ElevenLabs, 고품질) | 'openai'(gpt-4o-mini-tts) | 'say'(macOS 로컬, 폴백). 기본 elevenlabs. 폴백 체인: elevenlabs→openai→say(키/가용성에 따라 자동). */
   readonly ttsProvider: string;
   /** OpenAI TTS 모델(기본 gpt-4o-mini-tts — instructions 로 톤 지시 가능). 미지원 시 tts-1-hd 로 바꿔 쓰면 된다. */
   readonly openaiTtsModel: string;
   /** OpenAI TTS 음색(alloy·echo·fable·onyx·nova·shimmer 등). 한국어 내레이션은 nova(따뜻·또렷) 기본. */
   readonly openaiTtsVoice: string;
+  /** ElevenLabs API 키(env/시크릿 ELEVENLABS_API_KEY). 없으면 openai 로 폴백. */
+  readonly elevenLabsApiKey: string;
+  /** ElevenLabs 음성 ID(기본 iWLjl1zCuqXRkW6494ve). POST /v1/text-to-speech/{voice_id} 경로에 사용. */
+  readonly elevenLabsVoiceId: string;
+  /** ElevenLabs 모델(기본 eleven_multilingual_v2 — 한국어 지원). */
+  readonly elevenLabsModel: string;
   /** macOS say 폴백 음색. */
   readonly voiceTtsVoice: string;
   readonly voiceSttModel: string;
@@ -245,9 +251,12 @@ export const CONFIG: Config = {
   autoYtUpload: envBool('AUTO_YT_UPLOAD', false),
   shortsPerfDays: Math.max(1, envInt('SHORTS_PERF_DAYS', 7)),
 
-  ttsProvider: env('TTS_PROVIDER', 'openai'),
+  ttsProvider: env('TTS_PROVIDER', 'elevenlabs'),
   openaiTtsModel: env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),
   openaiTtsVoice: env('OPENAI_TTS_VOICE', 'nova'),
+  elevenLabsApiKey: env('ELEVENLABS_API_KEY', ''),
+  elevenLabsVoiceId: env('ELEVENLABS_VOICE_ID', 'iWLjl1zCuqXRkW6494ve'),
+  elevenLabsModel: env('ELEVENLABS_MODEL', 'eleven_multilingual_v2'),
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
   voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),
 
