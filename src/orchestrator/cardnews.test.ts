@@ -25,9 +25,16 @@ describe('buildCardImagePrompt — 공통 보존(두 프리셋 모두)', () => {
     });
   }
 
-  it('페이지 표기는 본문(i>0)에만, 표지(i=0)엔 없음', () => {
-    expect(buildCardImagePrompt({ ...base, index: 0, preset: 'handwritten_poster' })).not.toContain('페이지 표기');
-    expect(buildCardImagePrompt({ ...base, index: 2, preset: 'handwritten_poster' })).toContain('"3/4"');
+  it('페이지 번호(1/8·2/3 등)는 어떤 슬라이드에도 넣지 않고, 제외 목록에 명시(사용자 요청 2026-07-22)', () => {
+    for (const preset of ['photorealistic', 'handwritten_poster']) {
+      for (const index of [0, 2, 4]) {
+        const p = buildCardImagePrompt({ ...base, index, total: 5, preset });
+        expect(p).not.toContain('페이지 표기');        // 페이지 표기 지시 제거
+        expect(p).not.toContain('우측 하단에 작은');    // 옛 페이지번호 문구 흔적 없음
+        expect(p).not.toContain(`"${index + 1}/5"`);   // "3/5" 같은 표기 지시 없음
+        expect(p).toContain('페이지 번호');            // 제외 목록에 페이지 번호 금지 명시
+      }
+    }
   });
 });
 
