@@ -1068,6 +1068,91 @@ def set_images_ai(page) -> str:
 
 
 # ── 글쓰기 메인 함수 ───────────────────────────────────────────────────────
+def publish_mode() -> str:
+    """발행 방식 — 기본 'private_publish'(발행 레이어를 열어 태그+비공개로 실제 발행: 태그 확실히 저장,
+    글은 비공개라 검토 후 사람이 전체공개로 전환). 킬스위치 NAVER_PUBLISH_MODE=draft 로 예전 임시저장 복귀.
+    태그는 '발행 설정' 레이어에만 있어 임시저장으론 저장되지 않는다(2026-07-21 DOM 프로브 실증)."""
+    return os.environ.get("NAVER_PUBLISH_MODE", "private_publish").strip().lower()
+
+
+def publish_private_with_tags(page, tags: list, run_dir: str, issues: list) -> bool:
+    """발행 레이어 → 태그 입력 → 공개설정=비공개 → 확정 발행. 태그는 이 레이어(input#tag-input)에만 있다.
+    [하드 세이프가드] 비공개 라디오(input#open_private)가 checked 로 확인될 때만 확정 발행한다 — 확인 실패 시
+    발행을 취소하고 False 반환(호출부가 임시저장으로 폴백). 실수로 '전체공개' 되는 것을 원천 차단.
+    성공(비공개 발행 완료) 시 True."""
+    try:
+        # 1) 발행 레이어 열기 — 우상단 '발행' 버튼(publish_btn). 확정(confirm_btn) 아님.
+        opened = page.evaluate("""() => {
+            const b = [...document.querySelectorAll('button')].find(
+                x => /publish_btn/.test(x.className) && x.textContent.trim() === '발행');
+            if (b) { b.click(); return true; } return false; }""")
+        if not opened:
+            log("  발행 레이어 열기 실패(publish_btn 못 찾음) — 임시저장 폴백")
+            return False
+        # 태그 입력칸이 뜰 때까지 대기(레이어 렌더 확인)
+        ti = page.locator("input#tag-input").first
+        ti.wait_for(state="visible", timeout=6000)
+        time.sleep(0.4)
+
+        # 2) 태그 입력 — 칸 클릭 후 한 글자씩 + Enter(칩 변환)
+        entered = 0
+        for tag in tags:
+            try:
+                ti.click(); time.sleep(_rand(0.1, 0.25))
+                human_type(page, tag)
+                page.keyboard.press("Enter"); time.sleep(_rand(0.2, 0.4))
+                entered += 1
+            except Exception as e:
+                log(f"  태그 '{tag}' 입력 실패: {str(e)[:40]}")
+        log(f"  태그 {entered}/{len(tags)}개 입력(발행 레이어)")
+
+        # 3) 공개설정=비공개 — 라디오 input + 라벨 병행 클릭(React 핸들러 확실히 트리거)
+        page.evaluate("""() => {
+            const r = document.querySelector('input#open_private');
+            if (r) { r.click();
+                const lb = r.closest('label') || document.querySelector('label[for=open_private]');
+                if (lb) lb.click(); } }""")
+        time.sleep(0.5)
+
+        # 4) [하드 세이프가드] 비공개가 실제 checked 인지 검증 — 아니면 절대 발행하지 않는다.
+        is_private = page.evaluate("() => { const r=document.querySelector('input#open_private'); return !!(r && r.checked); }")
+        if not is_private:
+            log("  ⚠ 비공개 선택 확인 실패 — 확정 발행 취소(전체공개 위험 차단), 임시저장 폴백")
+            issues.append("비공개 확인 실패 → 발행 안 함(임시저장 폴백)")
+            try: page.keyboard.press("Escape")
+            except Exception: pass
+            return False
+        log("  비공개 확인됨 ✓ — 확정 발행 진행")
+
+        # 진단 스크린샷(발행 직전 레이어 상태)
+        try:
+            sd = os.path.join(run_dir, "screenshots"); os.makedirs(sd, exist_ok=True)
+            page.screenshot(path=os.path.join(sd, "publish_layer.png"))
+        except Exception:
+            pass
+
+        # 5) 확정 발행 — 레이어 하단 '발행'(confirm_btn). 비공개 검증 통과 후에만 도달.
+        confirmed = page.evaluate("""() => {
+            const b = [...document.querySelectorAll('button')].find(
+                x => /confirm_btn/.test(x.className) && x.textContent.trim() === '발행');
+            if (b) { b.click(); return true; } return false; }""")
+        if not confirmed:
+            log("  확정 발행 버튼(confirm_btn) 못 찾음 — 임시저장 폴백")
+            try: page.keyboard.press("Escape")
+            except Exception: pass
+            return False
+        time.sleep(4)  # 발행 처리·네비게이션 대기
+        dismiss_editor_popup(page)
+        log(f"  비공개 발행 완료 — {page.url}")
+        return True
+    except Exception as e:
+        log(f"  비공개 발행 중 예외 — 임시저장 폴백: {str(e)[:80]}")
+        issues.append(f"비공개 발행 실패(임시저장 폴백): {str(e)[:80]}")
+        try: page.keyboard.press("Escape")
+        except Exception: pass
+        return False
+
+
 def write_post(
     page,
     blog_id: str,
@@ -1355,8 +1440,8 @@ def write_post(
     # 태그 필드는 에디터 하단에 있어 렌더·스크롤 전이면 셀렉터가 안 잡힌다 → 조용히 스킵되며 '어떤 땐
     # 태그 있고 어떤 땐 없음'을 유발(2026-07-20 사용자 보고). 하단 스크롤 + 셀렉터 보강 + 실패 시 issue·
     # 진단 덤프(조용한 스킵 금지)로 고친다.
-    if tags:
-        log(f"\n[STEP 8] 태그 입력: {tags[:5]} (총 {len(tags)}개)")
+    if tags and publish_mode() == 'draft':  # private_publish 는 발행 레이어에서 태그 입력(STEP 10)
+        log(f"\n[STEP 8] 태그 입력(임시저장 모드): {tags[:5]} (총 {len(tags)}개)")
         try:  # 태그 영역을 뷰포트로 — 문서 끝으로 스크롤
             page.mouse.wheel(0, 24000)
             time.sleep(0.6)
@@ -1413,13 +1498,25 @@ def write_post(
         set_representative_image(page)
         time.sleep(1)
 
-    # ── STEP 10: 임시저장 ─────────────────────────────────────────────────
-    log("\n[STEP 10] 임시저장")
+    # ── STEP 10: 발행(비공개) 또는 임시저장 ────────────────────────────────
     dismiss_help_panels(page)
     time.sleep(0.5)
 
     saved = False
-    draft_selectors = [
+    published_private = False
+    # 기본: 비공개 발행(태그를 발행 레이어에서 확실히 저장). 비공개 검증 실패·오류 시 임시저장으로 폴백.
+    if publish_mode() != 'draft' and tags:
+        log("\n[STEP 10] 비공개 발행(태그 포함) — 검토 후 사람이 전체공개로 전환")
+        if publish_private_with_tags(page, tags, run_dir, issues):
+            saved = True
+            published_private = True
+        else:
+            log("  → 임시저장으로 폴백")
+    if published_private:
+        pass  # 이미 발행됨 — 아래 임시저장 로직 건너뜀
+    else:
+        log("\n[STEP 10] 임시저장")
+    draft_selectors = [] if published_private else [
         "button[data-name='draftSave']",
         "button[data-name='draft']",
         "button[data-name='tempSave']",
@@ -1458,11 +1555,13 @@ def write_post(
         log("  Ctrl+S 임시저장 시도")
         saved = True
 
-    if saved:
+    if saved and not published_private:
         time.sleep(2)
         dismiss_editor_popup(page)
         time.sleep(1)
         log("  임시저장 완료!")
+    elif published_private:
+        log("  비공개 발행 완료 — 네이버에서 검토 후 '전체공개'로 전환하세요.")
 
     # ── 스크린샷 ──────────────────────────────────────────────────────────
     screenshot_dir = os.path.join(run_dir, "screenshots")
@@ -1484,6 +1583,7 @@ def write_post(
 
     return {
         "status":               status,
+        "publish_mode":         "private_published" if published_private else "draft_saved",
         "draft_url":            draft_url,
         "admin_url":            f"https://blog.naver.com/{blog_id}/postlist",
         "saved_at":             datetime.now().strftime("%Y-%m-%dT%H:%M:%S+09:00"),
