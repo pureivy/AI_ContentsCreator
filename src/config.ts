@@ -138,7 +138,7 @@ export interface Config {
   readonly elevenLabsVoiceId: string;
   /** ElevenLabs 모델(기본 eleven_multilingual_v2 — 한국어 지원). */
   readonly elevenLabsModel: string;
-  /** ElevenLabs 낭독 속도(voice_settings.speed) — 1.0 기본, >1.0 빠르게. 기본 1.1(약간 빠르게), 안전범위 0.7~1.2. */
+  /** ElevenLabs 낭독 속도(voice_settings.speed) — 1.0 기본(voice_settings 미전송 → 음성 기본값=playground와 동일). >1.0 빠르게, 안전범위 0.7~1.2. ELEVENLABS_SPEED 로 조절. */
   readonly elevenLabsSpeed: number;
   /** macOS say 폴백 음색. */
   readonly voiceTtsVoice: string;
@@ -263,7 +263,7 @@ export const CONFIG: Config = {
   elevenLabsApiKey: env('ELEVENLABS_API_KEY', ''),
   elevenLabsVoiceId: env('ELEVENLABS_VOICE_ID', 'iWLjl1zCuqXRkW6494ve'),
   elevenLabsModel: env('ELEVENLABS_MODEL', 'eleven_multilingual_v2'),
-  elevenLabsSpeed: Math.min(1.2, Math.max(0.7, envFloat('ELEVENLABS_SPEED', 1.1))),
+  elevenLabsSpeed: Math.min(1.2, Math.max(0.7, envFloat('ELEVENLABS_SPEED', 1.0))),
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
   voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),
 
