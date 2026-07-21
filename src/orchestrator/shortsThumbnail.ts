@@ -17,12 +17,28 @@ const execFileP = promisify(execFile);
 
 interface ThumbCopy { line1: string; line2: string; points: string[] }
 
-/** 썸네일 카피 — 시선 끄는 2줄 제목 + 핵심 2~3줄. LLM 실패 시 제목을 반으로 갈라 폴백. */
+/** 제목을 두 줄로 — 단어(공백) 경계에서만 분할(단어를 중간에서 쪼개지 않음). 단어 하나면 한 줄. 순수. */
+export function splitTwoLines(t: string): { line1: string; line2: string } {
+  const words = t.split(/\s+/).filter(Boolean);
+  if (words.length <= 1) return { line1: t, line2: '' };
+  const half = t.length / 2;
+  let best = 1, bestDiff = Infinity;
+  for (let i = 1; i < words.length; i++) {
+    const diff = Math.abs(words.slice(0, i).join(' ').length - half);
+    if (diff < bestDiff) { bestDiff = diff; best = i; }
+  }
+  return { line1: words.slice(0, best).join(' '), line2: words.slice(best).join(' ') };
+}
+/** 설명에서 핵심 포인트 파생(순수) — 문장/구를 짧게 잘라 2~3개. LLM 이 points 를 비우거나 실패했을 때 폴백. */
+export function derivePoints(desc: string): string[] {
+  return (desc || '').split(/[.。!?\n·]/).map((s) => s.trim()).filter((s) => s.length >= 4 && s.length <= 22).slice(0, 3);
+}
+
+/** 썸네일 카피 — 시선 끄는 2줄 제목(단어 온전) + 핵심 2~3줄. LLM 실패·누락 시 제목·설명에서 폴백. */
 async function planThumbnailCopy(input: { title: string; description: string; titles?: string[] }, signal?: AbortSignal): Promise<ThumbCopy> {
   const fallback = (): ThumbCopy => {
-    const t = (input.title || '').replace(/[,·].*$/, '').trim();
-    const mid = Math.max(1, Math.ceil(t.length / 2));
-    return { line1: t.slice(0, mid) || t || '숏폼', line2: t.slice(mid), points: [] };
+    const t = (input.title || '').replace(/[,·].*$/, '').trim() || '숏폼';
+    return { ...splitTwoLines(t), points: derivePoints(input.description) };
   };
   try {
     const j = await microJSON<{ line1?: unknown; line2?: unknown; points?: unknown }>(
@@ -33,16 +49,19 @@ async function planThumbnailCopy(input: { title: string; description: string; ti
         input.description ? `[설명] ${input.description}` : '',
         (input.titles && input.titles.length) ? `[제목 후보] ${input.titles.join(' / ')}` : '',
         '',
-        '위 숏폼의 썸네일 문구를 만들어라. 시선을 확 끄는 2줄 제목(각 줄 3~8자, 두 줄 합쳐 핵심 메시지 — 손글씨로 크게 들어감)과,',
-        '핵심 포인트 2~3개(각 14자 이내, 궁금증·이득 자극). 과장·낚시성 금지, 내용에 근거.',
+        '위 숏폼의 썸네일 문구를 만들어라.',
+        '제목: 시선을 확 끄는 2줄. 각 줄은 짧게(공백 포함 8자 이내), 두 줄 합쳐 핵심 메시지. 절대 한 단어를 두 줄에 쪼개지 마라(단어는 통째로 한 줄, 줄바꿈은 단어·어절 경계에서만).',
+        '핵심 포인트: 반드시 2~3개. 각 14자 이내, 궁금증·이득 자극. 과장·낚시성 금지, 내용에 근거.',
         'JSON: {"line1":"첫 줄","line2":"둘째 줄","points":["포인트1","포인트2","포인트3"]}',
       ].filter(Boolean).join('\n'),
       { maxOutputTokens: 400, signal },
     );
     const line1 = String(j?.line1 ?? '').trim().slice(0, 12);
     const line2 = String(j?.line2 ?? '').trim().slice(0, 12);
-    const points = (Array.isArray(j?.points) ? j.points : []).map((p) => String(p ?? '').trim().slice(0, 20)).filter(Boolean).slice(0, 3);
-    return line1 ? { line1, line2, points } : fallback();
+    if (!line1) return fallback();
+    let points = (Array.isArray(j?.points) ? j.points : []).map((p) => String(p ?? '').trim().slice(0, 20)).filter(Boolean).slice(0, 3);
+    if (!points.length) points = derivePoints(input.description); // LLM 이 포인트 누락 → 설명에서 보강(좌하단 빔 방지)
+    return { line1, line2, points };
   } catch { return fallback(); }
 }
 
@@ -50,8 +69,8 @@ async function planThumbnailCopy(input: { title: string; description: string; ti
 function buildThumbnailPrompt(copy: ThumbCopy): string {
   const pts = copy.points.length ? copy.points.map((p) => `'${p}'`).join(', ') : '';
   const titleLine = copy.line2
-    ? `그 위에 손으로 쓴 듯한 굵은 한국어 캘리그래피 제목을 2줄로 크게 배치한다: 1줄 '${copy.line1}' 는 크림 화이트, 2줄 '${copy.line2}' 는 선명한 노랑. 붓펜 질감에 밑줄 획으로 강조.`
-    : `그 위에 손으로 쓴 듯한 굵은 한국어 캘리그래피 제목 '${copy.line1}' 를 크게 배치한다(크림 화이트 바탕에 노랑 포인트, 붓펜 질감에 밑줄 획).`;
+    ? `그 위에 손으로 쓴 듯한 굵은 한국어 캘리그래피 제목을 정확히 2줄로 크게 배치한다: 1줄 '${copy.line1}' 는 크림 화이트, 2줄 '${copy.line2}' 는 선명한 노랑. 붓펜 질감에 밑줄 획으로 강조. 각 줄은 지정한 그대로 한 줄에 넣고, 한 단어를 글자 중간에서 쪼개 다음 줄로 넘기지 않는다.`
+    : `그 위에 손으로 쓴 듯한 굵은 한국어 캘리그래피 제목 '${copy.line1}' 를 한 줄로 크게 배치한다(크림 화이트 바탕에 노랑 포인트, 붓펜 질감에 밑줄 획). 단어를 글자 중간에서 쪼개지 않는다.`;
   return [
     '세로 유튜브/인스타 썸네일. 참조로 준 사진을 배경으로 그대로 사용하고, 상단 45%를 부드러운 검정 그라데이션으로 살짝 덮어 글자 가독성을 확보한다.',
     titleLine,
