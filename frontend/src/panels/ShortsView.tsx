@@ -116,7 +116,8 @@ function ShortRow({ s, onDelete, yt, metaReady, onChanged }: {
       <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
         {s.stage === "ready" && (
           <>
-            <a className="btn start" href={`/shorts/${s.id}/video`} download={`shorts-${s.id}.mp4`}>MP4</a>
+            <a className="btn start" href={`/shorts/${s.id}/download`} download={`shorts-${s.id}.mp4`}
+              title="썸네일을 앞 1.6초 인트로로 붙인 MP4 (첫 다운로드는 인코딩으로 잠시 걸릴 수 있음)">MP4</a>
             <a className="btn ghost" href={`/shorts/${s.id}/zip`} download>zip (mp4+자막+캡션)</a>
             {captionFull && <button className="btn ghost" onClick={copyCaption}>{copied ? "복사됨!" : "캡션 복사"}</button>}
             <button className="btn ghost" disabled={thumbBusy} onClick={doThumbnail} title="훅 장면 배경에 제목·핵심을 얹은 디자인 썸네일을 새로 만듭니다(약 1분, 이미지 생성 과금)">

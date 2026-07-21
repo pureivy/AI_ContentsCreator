@@ -49,7 +49,7 @@ import { runCardNewsJob, isCardNewsRunning } from '../orchestrator/cardnews';
 import { shortsStore } from '../content/shorts';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning } from '../orchestrator/shorts';
-import { ensureShortsThumbnail } from '../tools/shortsRender';
+import { ensureShortsThumbnail, ensureShortsDownload } from '../tools/shortsRender';
 import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece } from '../content/pieces';
 import { listPersonas } from '../content/personas';
@@ -1311,6 +1311,25 @@ app.get('/shorts/:id/video', shortsVideoHandler); // :id 보다 먼저(구체 �
 app.get('/api/shorts/:id/video', shortsVideoHandler);
 app.get('/shorts/:id/thumbnail', shortsThumbnailHandler);
 app.get('/api/shorts/:id/thumbnail', shortsThumbnailHandler);
+// 다운로드 — 썸네일 인트로(1.6초) 붙인 mp4(lazy 빌드·캐시, 동시 요청 1회 빌드 공유). 없으면 원본. 첫 다운로드는 인코딩으로 수 초~십수 초.
+const dlJobs = new Map<string, Promise<string | null>>();
+async function shortsDownloadHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  if (!shortsStore().get(id)) return c.json({ error: 'unknown short' }, 404);
+  const dir = shortsStore().dirFor(id);
+  let job = dlJobs.get(id);
+  if (!job) { job = ensureShortsDownload(dir).finally(() => dlJobs.delete(id)); dlJobs.set(id, job); }
+  const file = (await job) ?? path.join(dir, 'final.mp4');
+  let buf: Buffer;
+  try { buf = fs.readFileSync(file); } catch { return c.json({ error: 'video not found' }, 404); }
+  return c.body(new Uint8Array(buf), 200, {
+    'Content-Type': 'video/mp4',
+    'Content-Disposition': `attachment; filename="shorts-${id}.mp4"`,
+    'Content-Length': String(buf.length),
+  });
+}
+app.get('/shorts/:id/download', shortsDownloadHandler);
+app.get('/api/shorts/:id/download', shortsDownloadHandler);
 // 디자인 썸네일 재생성(온디맨드) — 훅 씬 배경 위에 손글씨 제목/핵심(gpt-image). 기존 쇼츠 업그레이드·재시도용.
 const thumbGenInFlight = new Set<string>();
 async function shortsThumbnailRegenHandler(c: Context): Promise<Response> {
