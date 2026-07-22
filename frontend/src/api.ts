@@ -27,6 +27,8 @@ export interface BrandInfo {
   banned?: string[];
   seedKeywords?: string[];
   channel?: string;
+  /** 카드뉴스 기본 이미지 스타일(브랜드 고정 — 자동 파생 포함). 미설정=디자이너 자동. */
+  cardStyle?: string;
 }
 export async function fetchBrand(): Promise<BrandInfo | null> {
   try { const r = await fetch("/brand"); if (!r.ok) return null; return (await r.json()).brand ?? null; }
@@ -40,6 +42,14 @@ export async function fetchBrands(): Promise<{ active: string | null; brands: Br
 export async function activateBrand(slug: string | null): Promise<{ ok: boolean; error?: string }> {
   try {
     const r = await fetch("/brands/activate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slug }) });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return { ok: true };
+  } catch { return { ok: false, error: "network" }; }
+}
+/** 카드뉴스 기본 스타일(브랜드 고정) 저장 — 'auto' = 고정 해제(디자이너 자동). */
+export async function saveBrandCardStyle(style: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch("/brand/cardstyle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ style }) });
     if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
     return { ok: true };
   } catch { return { ok: false, error: "network" }; }

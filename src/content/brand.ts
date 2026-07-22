@@ -39,6 +39,9 @@ export interface BrandProfile {
   seedKeywords?: string[];
   /** 채널 설명(예: 네이버 블로그 — 제품 활용 하우투·후기 중심). */
   channel?: string;
+  /** 카드뉴스 기본 이미지 스타일 프리셋(브랜드 고정, 2026-07-22) — 수동·검토탭·자동 파생 전부 적용.
+   *  미설정 = 디자이너가 주제 보고 자동 선택. 값 검증은 소비처(resolveForcedPreset)가 담당. */
+  cardStyle?: string;
 }
 
 const brandPath = (): string => path.join(CONFIG.dataDir, 'brand.yaml');
@@ -185,6 +188,7 @@ export function normalizeBrand(raw: Partial<BrandProfile> | null | undefined): B
     banned: arr(raw?.banned, 20, 60),
     seedKeywords: arr(raw?.seedKeywords, 30),
     channel: s(raw?.channel, 200),
+    cardStyle: s(raw?.cardStyle, 40),
   };
 }
 

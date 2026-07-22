@@ -45,7 +45,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
-import { runCardNewsJob, isCardNewsRunning } from '../orchestrator/cardnews';
+import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset } from '../orchestrator/cardnews';
 import { shortsStore } from '../content/shorts';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning } from '../orchestrator/shorts';
@@ -792,7 +792,9 @@ function launchCardNewsRun(cardId: string, topic: string, opts: { sourceBody?: s
   RUNS.set(id, handle);
   evictRuns();
   bus.emit(EventType.run_started, { topic: handle.topic });
-  runCardNewsJob(cardId, { ...opts, bus, signal: abort.signal })
+  // 스타일 해석: 명시 선택 > 브랜드 기본(cardStyle, 자동 파생 포함 전 경로) > 디자이너 자동.
+  const stylePreset = opts.stylePreset ?? getBrand()?.cardStyle;
+  runCardNewsJob(cardId, { ...opts, stylePreset, bus, signal: abort.signal })
     .then(() => {
       const card = cardNewsStore().get(cardId);
       if (abort.signal.aborted) { handle.status = 'cancelled'; bus.emit(EventType.run_done, { status: 'cancelled' }); return; }
@@ -1971,11 +1973,28 @@ app.delete('/brands/:slug', (c) => {
 app.get('/brand', (c) => c.json({ brand: getBrand() }));
 app.put('/brand', async (c) => {
   const body = await c.req.json().catch(() => null) as Partial<BrandProfile> | null;
+  // cardStyle 은 프로필 편집 폼 밖(검토탭·제작실)에서 관리 — body 에 없으면 기존값 보존(소실 방지).
+  if (body && body.cardStyle === undefined) {
+    const cur = getBrand();
+    if (cur?.cardStyle) body.cardStyle = cur.cardStyle;
+  }
   const b = normalizeBrand(body);
   if (!b) return c.json({ error: '업체명(name)은 필수입니다' }, 400);
   saveBrand(b);
   console.log(`[브랜드] 프로필 저장 — ${b.name} (제품 ${b.products.length}종)`);
   return c.json({ brand: getBrand() });
+});
+// 카드뉴스 기본 스타일(브랜드 고정) — 검토탭·제작실 드롭다운이 저장. 'auto'/'' = 고정 해제(디자이너 자동).
+app.post('/brand/cardstyle', async (c) => {
+  const b = await c.req.json().catch(() => ({}) as { style?: string }) as { style?: string };
+  const cur = getBrand();
+  if (!cur) return c.json({ error: '브랜드 프로필이 없습니다 — 브랜드 탭에서 먼저 설정하세요' }, 409);
+  const raw = String(b.style ?? '').trim();
+  const resolved = resolveForcedPreset(raw); // 유효 프리셋 키/별칭 → 키, auto·불명 → undefined(해제)
+  if (raw && raw !== 'auto' && !resolved) return c.json({ error: `알 수 없는 스타일: ${raw.slice(0, 30)}` }, 400);
+  saveBrand({ ...cur, cardStyle: resolved });
+  console.log(`[브랜드] 카드뉴스 기본 스타일 — ${cur.name}: ${resolved ?? '자동(해제)'}`);
+  return c.json({ ok: true, cardStyle: resolved ?? null });
 });
 
 // 블로그 작가 말투(페르소나) 목록 — 컴포저 드롭다운용(id/label/desc). 프롬프트 본문은 서버 전용(SSOT).

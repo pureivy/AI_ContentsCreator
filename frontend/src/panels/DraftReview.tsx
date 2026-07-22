@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, deletePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, createCardNewsFromPiece, createShortsFromPiece, PieceInfo, PieceDraftResp } from "../api";
+import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, deletePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, createCardNewsFromPiece, createShortsFromPiece, fetchBrand, saveBrandCardStyle, PieceInfo, PieceDraftResp } from "../api";
 import { CARD_STYLE_OPTIONS, loadCardStyle, saveCardStyle } from "../cardStyles";
 import Ico, { type IcoName } from "./Ico";
 
@@ -61,9 +61,14 @@ export default function DraftReview() {
   // 파생 콘텐츠(카드뉴스·숏폼) — 선택 초안의 최신 파생 상태(pieces 목록의 derived, 8초 폴링으로 갱신).
   const derived = pieces.find((p) => p.id === sel)?.derived;
   const [deriveBusy, setDeriveBusy] = useState("");
-  // 검토탭 카드뉴스 파생 시 이미지 스타일 — localStorage 영속(탭 이동·새로고침에도 유지, 제작실과 공유).
+  // 카드뉴스 스타일 — 브랜드 고정(서버 cardStyle, 자동 파생 포함 전 경로 적용, 2026-07-22).
+  // localStorage 는 fetch 전 초기 렌더 캐시. 변경 즉시 서버 저장 → 이후 자동 파생도 이 스타일로.
   const [cardStyle, setCardStyleRaw] = useState(loadCardStyle);
-  const setCardStyle = (v: string): void => { setCardStyleRaw(v); saveCardStyle(v); };
+  useEffect(() => { fetchBrand().then((b) => { if (b) setCardStyleRaw(b.cardStyle || "auto"); }); }, []);
+  const setCardStyle = (v: string): void => {
+    setCardStyleRaw(v); saveCardStyle(v);
+    void saveBrandCardStyle(v).then((r) => { if (!r.ok && r.error) alert(`스타일 고정 저장 실패: ${r.error}`); });
+  };
   const doDeriveCardnews = async () => {
     if (!sel) return;
     setDeriveBusy("cardnews");
@@ -323,14 +328,13 @@ export default function DraftReview() {
                   <div style={{ flex: "1 1 320px", minWidth: 260 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
                       <b><Ico name="cards" size={12} /> 카드뉴스</b>
+                      {/* 스타일 드롭다운 — 만들기 전·후 항상 표시. 브랜드 고정값(서버 저장, 자동 파생 포함 전 경로 적용). */}
+                      <select value={cardStyle} onChange={(e) => setCardStyle(e.target.value)} disabled={deriveBusy !== ""} title="이 브랜드 카드뉴스 고정 스타일 — 변경 즉시 저장되어 수동·자동 파생 모든 생성에 적용. 자동=디자이너가 주제 보고 선택">
+                        {CARD_STYLE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
                       {derived?.cardnews
                         ? <span className="badge">{derived.cardnews.running || ["planning", "designing", "rendering"].includes(derived.cardnews.stage) ? "생성 중…" : derived.cardnews.stage === "ready" ? `완성 · ${derived.cardnews.slides ?? 0}장` : "실패"}</span>
-                        : <>
-                            <select value={cardStyle} onChange={(e) => setCardStyle(e.target.value)} disabled={deriveBusy !== ""} title="이미지 스타일 — 자동은 주제에 맞게 디자이너가 선택">
-                              {CARD_STYLE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                            </select>
-                            <button className="btn ghost" disabled={deriveBusy !== ""} onClick={doDeriveCardnews}>{deriveBusy === "cardnews" ? "시작 중…" : "만들기"}</button>
-                          </>}
+                        : <button className="btn ghost" disabled={deriveBusy !== ""} onClick={doDeriveCardnews}>{deriveBusy === "cardnews" ? "시작 중…" : "만들기"}</button>}
                       {derived?.cardnews?.stage === "ready" && (
                         <a className="btn ghost" href={`/cardnews/${derived.cardnews.id}/zip`} download>zip</a>
                       )}

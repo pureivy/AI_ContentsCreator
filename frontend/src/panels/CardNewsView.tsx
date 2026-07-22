@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   fetchCardNews, createCardNews, createCardNewsFromPiece, deleteCardNews,
   fetchPieces, CardNewsInfo, PieceInfo, publishCardNews, fetchMetaStatus,
+  fetchBrand, saveBrandCardStyle,
 } from "../api";
 import Avatar from "./Avatar";
 import Ico, { type IcoName } from "./Ico";
@@ -124,9 +125,14 @@ export default function CardNewsSection() {
   const [topic, setTopic] = useState("");
   const [keyword, setKeyword] = useState("");
   const [slides, setSlides] = useState(0); // 0 = 자동(기획자가 스토리라인에 맞게 3~8장)
-  // 이미지 스타일 — localStorage 영속(탭 이동·새로고침에도 유지, 검토탭과 공유).
+  // 이미지 스타일 — 브랜드 고정(서버 cardStyle)이 소스, localStorage 는 fetch 전 초기 캐시.
+  // 변경 즉시 서버 저장 → 검토탭·자동 파생까지 같은 스타일로 고정(2026-07-22).
   const [style, setStyleRaw] = useState(loadCardStyle);
-  const setStyle = (v: string): void => { setStyleRaw(v); saveCardStyle(v); };
+  useEffect(() => { fetchBrand().then((b) => { if (b) setStyleRaw(b.cardStyle || "auto"); }); }, []);
+  const setStyle = (v: string): void => {
+    setStyleRaw(v); saveCardStyle(v);
+    void saveBrandCardStyle(v).then((r) => { if (!r.ok && r.error) alert(`스타일 고정 저장 실패: ${r.error}`); });
+  };
   const [srcPiece, setSrcPiece] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
