@@ -111,6 +111,32 @@ function evictRuns(): void {
 }
 const app = new Hono();
 
+// ── 보안 미들웨어(2026-07-22 보안점검) — 서버는 무인증 로컬 도구(127.0.0.1)라 원격 직격은 없지만,
+//   브라우저는 localhost 를 특별취급하지 않아 (a) 악성 페이지 방문 시 cross-origin 요청으로 상태변경
+//   (CSRF), (b) DNS 리바인딩(공개 이름이 127.0.0.1 로 해석)으로 바인딩 우회가 성립한다. 두 벡터를 차단.
+// 루프백 + 실제 바인딩 주소(CONFIG.host 를 LAN IP 로 바꿔 의도적으로 노출한 경우도 허용, 리바인딩만 차단).
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', CONFIG.host.toLowerCase()]);
+app.use('*', async (c, next) => {
+  // (1) Host 헤더 화이트리스트 — DNS 리바인딩 차단(공격자 이름의 Host 는 루프백이 아니므로 거부). 전 메서드.
+  const host = ((c.req.header('host') ?? '').split(':')[0] ?? '').trim().toLowerCase();
+  if (host && !LOOPBACK_HOSTS.has(host)) return c.json({ error: 'forbidden host' }, 403);
+  // (2) 상태변경 요청의 cross-origin 차단(CSRF) — 브라우저가 강제로 붙이는 Sec-Fetch-Site/Origin 를 검사.
+  //     우리 UI(same-origin)·curl/스크립트(헤더 없음)는 통과, 타 사이트 브라우저 요청만 거부.
+  const m = c.req.method;
+  if (m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS') {
+    const sfs = c.req.header('sec-fetch-site');
+    if (sfs && sfs !== 'same-origin' && sfs !== 'none') return c.json({ error: 'cross-origin blocked' }, 403);
+    const origin = c.req.header('origin');
+    if (origin) {
+      try {
+        const oh = new URL(origin).hostname.toLowerCase();
+        if (!LOOPBACK_HOSTS.has(oh)) return c.json({ error: 'cross-origin blocked' }, 403);
+      } catch { return c.json({ error: 'bad origin' }, 403); }
+    }
+  }
+  await next();
+});
+
 // 런 종료 시 이벤트 스트림을 디스크로 영속화 — 버스 폐기(30s)·재시작 후에도 replay 가능.
 function persistEvents(id: string, busRef?: EventBus): void {
   // 클로저로 받은 버스 참조 우선 — eventsHandler 가 SSE 끊김 30초 뒤 disposeBus 로 맵에서

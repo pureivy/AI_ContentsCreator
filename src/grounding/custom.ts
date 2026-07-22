@@ -10,6 +10,7 @@ import path from 'node:path';
 import { CONFIG } from '../config';
 import { getSecret } from '../secrets/store';
 import { fetchTimeout } from '../util/fetch';
+import { assertPublicHttpsUrl } from '../util/ssrf';
 import { setCustomProvider, type GroundingConnector } from './registry';
 
 export interface ExtractRule {
@@ -108,6 +109,9 @@ export async function runCustomConnector(cfg: CustomConnectorCfg, query: string,
     const url = cfg.endpoint
       .replace(/\{key\}/g, encodeURIComponent(key))
       .replace(/\{query\}/g, encodeURIComponent(query.slice(0, 60)));
+    // SSRF·시크릿 유출 가드 — {key}(시크릿)가 URL 에 실리므로, https 공개 호스트가 아니면 fetch 자체를 막는다.
+    const safe = await assertPublicHttpsUrl(url);
+    if (!safe.ok) { _groundCache.set(ck, ''); return ''; }
     const r = await fetchTimeout(url, { method: 'GET' }, signal);
     const raw = (await r.text()).slice(0, 20000);
     text = applyExtract(raw, cfg.extract);
@@ -158,8 +162,11 @@ export async function autoConfigConnector(
   let docs = '';
   if (input.docsUrl) {
     try {
-      const r = await fetchTimeout(input.docsUrl, {}, input.signal);
-      docs = htmlToText(await r.text()).slice(0, 5000);
+      const safe = await assertPublicHttpsUrl(input.docsUrl); // SSRF 가드 — 내부망·평문 문서 URL 차단
+      if (safe.ok) {
+        const r = await fetchTimeout(input.docsUrl, {}, input.signal);
+        docs = htmlToText(await r.text()).slice(0, 5000);
+      }
     } catch { /* 문서 없이도 진행 */ }
   }
   const heavy = resolveAssignment().heavy;
