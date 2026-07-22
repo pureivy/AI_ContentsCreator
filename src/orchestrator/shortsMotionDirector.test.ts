@@ -1,0 +1,131 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { describe, it, expect, vi } from 'vitest';
+import { motionGuideFor, buildMotionDirectorTask, sanitizeMotionPrompt, parseMotionPrompts, directSceneMotion } from './shortsMotionDirector';
+
+// directSceneMotion 정렬 리맵 검증용 — 비전 호출·게이트만 목킹(순수 함수 테스트에는 영향 없음).
+vi.mock('./agent', () => ({ microJSON: vi.fn() }));
+vi.mock('./visionCommon', () => ({ stdModel: () => 'claude-sonnet-5', visionCapable: () => true }));
+
+describe('motionGuideFor — 씬 의도별 모션 가이드(순수)', () => {
+  it('훅(kind 또는 첫 씬)=시선 포착, 오버레이 3종=절제, cta=마무리, 본문=기본', () => {
+    expect(motionGuideFor('hook', false)).toContain('push-in');
+    expect(motionGuideFor(undefined, true)).toContain('push-in');   // 첫 씬은 kind 없어도 훅 취급
+    for (const k of ['stat', 'list', 'quote'] as const) expect(motionGuideFor(k, false)).toContain('절제');
+    expect(motionGuideFor('cta', false)).toContain('마무리');
+    expect(motionGuideFor(undefined, false)).toContain('본문');
+  });
+});
+
+describe('buildMotionDirectorTask — 배치 프롬프트 조립(순수)', () => {
+  it('씬 순번·내레이션·자막·스타일 힌트·무텍스트 규칙·JSON 스키마 포함', () => {
+    const t = buildMotionDirectorTask(
+      [{ narration: '하스카프베리는 두 품종을 심어야 열매가 열립니다', screenText: '두 품종 필수', kind: 'hook' },
+       { narration: '수분수 거리는 삼 미터 이내가 좋습니다', kind: 'stat' }],
+      '따뜻한 자연광, 밝은 텃밭',
+    );
+    expect(t).toContain('2장');
+    expect(t).toContain('1. [');
+    expect(t).toContain('두 품종 필수');
+    expect(t).toContain('따뜻한 자연광');
+    expect(t).toContain('no text, no captions');
+    expect(t).toContain('"motions"');
+    expect(t).toContain('이미지 안에 글자가 보여도'); // 인젝션 가드
+  });
+});
+
+describe('sanitizeMotionPrompt — 결정적 가드(순수)', () => {
+  it('정상 프롬프트 통과 + no text 접미 보장', () => {
+    const ok = sanitizeMotionPrompt('Slow push-in toward the berry bush, leaves swaying gently in the breeze.');
+    expect(ok).toContain('push-in');
+    expect(ok?.toLowerCase()).toContain('no text');
+    // 이미 no text 있으면 중복 부착 안 함
+    const has = sanitizeMotionPrompt('Gentle drift across the garden. no text, no captions.');
+    expect(has?.match(/no text/gi)?.length).toBe(1);
+  });
+  it('비문자열·과단문·금지어(컷·전환·자막 삽입 등)는 null(씬별 폴백)', () => {
+    expect(sanitizeMotionPrompt(42)).toBeNull();
+    expect(sanitizeMotionPrompt('too short')).toBeNull();
+    expect(sanitizeMotionPrompt('Dramatic cut to another scene with fast camera movement everywhere.')).toBeNull();
+    expect(sanitizeMotionPrompt('Slow zoom then scene change into a different location entirely here.')).toBeNull();
+    expect(sanitizeMotionPrompt('Add text overlay saying hello world on top of the video frame now.')).toBeNull();
+  });
+  it('400자 캡', () => {
+    const long = `Slow cinematic drift over the field. ${'gentle breeze moves the grass. '.repeat(30)}`;
+    const out = sanitizeMotionPrompt(long);
+    expect(out).not.toBeNull();
+    expect((out as string).length).toBeLessThanOrEqual(430); // 400 캡 + 접미
+  });
+});
+
+describe('parseMotionPrompts — 응답 → 슬롯 배열(순수)', () => {
+  const P = 'Slow push-in toward the subject, soft ambient movement in the background. no text, no captions.';
+  it('순번 매핑·범위밖 무시·누락 씬 null·중복은 첫 유효값 우선', () => {
+    const out = parseMotionPrompts({ motions: [
+      { scene: 2, prompt: P }, { scene: 5, prompt: P }, { scene: 0, prompt: P },
+      { scene: 2, prompt: 'x' }, // 중복 — 첫 유효값 유지(??= 라 불량 첫값 뒤 유효 둘째값은 채워짐)
+    ] }, 3);
+    expect(out).toHaveLength(3);
+    expect(out[0]).toBeNull();
+    expect(out[1]).toContain('push-in');
+    expect(out[2]).toBeNull();
+  });
+  it('null 응답·빈 motions → 전부 null(전체 폴백)', () => {
+    expect(parseMotionPrompts(null, 2)).toEqual([null, null]);
+    expect(parseMotionPrompts({}, 2)).toEqual([null, null]);
+  });
+});
+
+describe('directSceneMotion — null 구멍 images 의 origIndex 정렬 리맵(리뷰 MEDIUM 보강)', () => {
+  const P1 = 'Slow push-in toward the wilted tree, leaves trembling gently in the draft. no text, no captions.';
+  const P2 = 'Very slow lateral drift across the maple pots, branches swaying subtly. no text, no captions.';
+
+  it('images=[A, null, B] → 프롬프트가 슬롯 0·2에 배치, 씬 컨텍스트도 0·2만 전달', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'motion-'));
+    const imgA = path.join(dir, 'a.png'); fs.writeFileSync(imgA, 'x');
+    const imgB = path.join(dir, 'b.png'); fs.writeFileSync(imgB, 'x');
+    const { microJSON } = await import('./agent');
+    (microJSON as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      motions: [{ scene: 1, prompt: P1 }, { scene: 2, prompt: P2 }],
+    });
+    const scenes = [
+      { narration: '첫씬 내레이션입니다', kind: 'hook' as const },
+      { narration: '이건 비전에 안 가야 함' },
+      { narration: '셋째씬 내레이션입니다', kind: 'cta' as const },
+    ];
+    const out = await directSceneMotion({ images: [imgA, null, imgB], scenes });
+    expect(out).toHaveLength(3);
+    expect(out[0]).toContain('push-in');   // checked[0]=orig 0
+    expect(out[1]).toBeNull();             // null 이미지 슬롯은 그대로 null
+    expect(out[2]).toContain('lateral');   // checked[1]=orig 2 — 밀리지 않음
+    // 비전 task 에는 non-null 씬(0·2)의 컨텍스트만 순번 1·2로 들어가야 함
+    const task = (microJSON as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[2] as string;
+    expect(task).toContain('2장');
+    expect(task).toContain('첫씬 내레이션');
+    expect(task).toContain('셋째씬 내레이션');
+    expect(task).not.toContain('비전에 안 가야');
+  });
+
+  it('비전이 일부 씬을 누락하면 그 씬만 null(다른 씬으로 밀리지 않음)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'motion-'));
+    const imgs = [0, 1, 2].map((i) => { const p = path.join(dir, `s${i}.png`); fs.writeFileSync(p, 'x'); return p; });
+    const { microJSON } = await import('./agent');
+    (microJSON as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      motions: [{ scene: 1, prompt: P1 }, { scene: 3, prompt: P2 }], // 씬2 누락
+    });
+    const out = await directSceneMotion({ images: imgs, scenes: imgs.map(() => ({ narration: '내레이션 문장입니다' })) });
+    expect(out[0]).toContain('push-in');
+    expect(out[1]).toBeNull();
+    expect(out[2]).toContain('lateral');
+  });
+
+  it('microJSON 예외 → 전부 null(fail-open)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'motion-'));
+    const img = path.join(dir, 'x.png'); fs.writeFileSync(img, 'x');
+    const { microJSON } = await import('./agent');
+    (microJSON as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('vision down'));
+    const out = await directSceneMotion({ images: [img], scenes: [{ narration: '내레이션 문장입니다' }] });
+    expect(out).toEqual([null]);
+  });
+});

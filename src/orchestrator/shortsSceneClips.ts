@@ -10,7 +10,9 @@ import { probeDuration } from '../tools/shortsCommon';
 
 export interface SceneClipsResult { clips: Array<string | null>; issues: string[] }
 
-/** 모션 프롬프트 — 씬 프롬프트 + 고정 모션·무텍스트 접미(순수 문자열). */
+/** 모션 프롬프트(정적 폴백) — 씬 프롬프트 + 고정 모션·무텍스트 접미(순수 문자열).
+ *  기본 경로는 모션 디렉터(shortsMotionDirector)가 이미지를 보고 쓴 씬별 프롬프트이고,
+ *  비전 실패·누락 씬만 이 정적 접미로 강등된다. */
 export function buildMotionPrompt(scenePrompt: string): string {
   return `${scenePrompt} subtle cinematic motion, slow camera drift, natural ambient movement, no text, no captions.`;
 }
@@ -35,7 +37,8 @@ export function buildI2vBody(model: string, prompt: string, imageUrl: string): R
 }
 
 // ffmpeg 강제 렌더 시 클립을 쓸 수 없으므로 과금 방지 차원에서 스킵.
-const gate = (): boolean => CONFIG.shortsI2v === 'fal' && !!CONFIG.falKey && CONFIG.shortsRenderer !== 'ffmpeg';
+// export — 호출부(shorts.ts)가 모션 디렉터 비전 호출 전 같은 게이트로 낭비를 막는다.
+export const i2vGate = (): boolean => CONFIG.shortsI2v === 'fal' && !!CONFIG.falKey && CONFIG.shortsRenderer !== 'ffmpeg';
 
 /** fal queue REST 1회 실행 — 제출→폴링(2초)→결과 JSON. 타임아웃·취소·비정상 응답은 throw.
  *  중단 시 서버측 잡도 취소(cancel_url PUT, fire-and-forget) — 과금 즉시 종료. */
@@ -70,11 +73,13 @@ async function falQueueRun(model: string, body: Record<string, unknown>, signal?
 }
 
 export async function i2vSceneClips(opts: {
-  dir: string; images: Array<string | null>; scenePrompts: string[]; signal?: AbortSignal;
+  dir: string; images: Array<string | null>; scenePrompts: string[];
+  /** 모션 디렉터(비전)가 쓴 씬별 프롬프트 — null/누락 씬은 buildMotionPrompt 정적 접미로 폴백. */
+  motionPrompts?: Array<string | null>; signal?: AbortSignal;
 }): Promise<SceneClipsResult> {
   const out: SceneClipsResult = { clips: opts.images.map(() => null), issues: [] };
   try {
-    if (!gate()) return out;
+    if (!i2vGate()) return out;
     const clipsDir = path.join(opts.dir, 'clips');
     fs.mkdirSync(clipsDir, { recursive: true });
     await Promise.all(opts.images.map(async (img, i) => {
@@ -82,8 +87,10 @@ export async function i2vSceneClips(opts: {
       try {
         const sceneSignal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000);
         const b64 = fs.readFileSync(img).toString('base64');
+        // 씬별 모션: 디렉터(비전) 프롬프트 우선, 없으면 정적 접미 폴백.
+        const motion = opts.motionPrompts?.[i] ?? buildMotionPrompt(opts.scenePrompts[i] ?? '');
         const json = await falQueueRun(CONFIG.shortsI2vModel,
-          buildI2vBody(CONFIG.shortsI2vModel, buildMotionPrompt(opts.scenePrompts[i] ?? ''), `data:image/png;base64,${b64}`),
+          buildI2vBody(CONFIG.shortsI2vModel, motion, `data:image/png;base64,${b64}`),
           sceneSignal);
         const url = extractVideoUrl(json);
         if (!url) throw new Error('video.url 없음');

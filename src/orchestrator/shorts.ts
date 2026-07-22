@@ -18,7 +18,8 @@ import { stripEmoji } from '../output/render';
 import { shortsStore } from '../content/shorts';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
-import { i2vSceneClips } from './shortsSceneClips';
+import { i2vSceneClips, i2vGate } from './shortsSceneClips';
+import { directSceneMotion } from './shortsMotionDirector';
 import { renderShortsVideo, ensureShortsDownload } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail } from './shortsThumbnail';
@@ -241,9 +242,21 @@ export async function runShortsJob(
     else if (qa.issues.length) say(`씬 QA — 이슈 ${qa.issues.length}건, 재생성 없음 (${qa.issues.slice(0, 3).join(' · ')})`);
     checkAbort();
 
+    // 3-c-i) 모션 디렉터 — 비전이 QA 통과 이미지를 '직접 보고' 씬 의도(내레이션·kind)에 맞는
+    //        씬별 I2V 모션 프롬프트 설계. I2V 게이트가 닫혀 있으면 비전 호출도 생략(낭비 방지).
+    const motionPrompts = i2vGate()
+      ? await directSceneMotion({
+          images,
+          scenes: plan.scenes.map((s) => ({ narration: s.narration, screenText: s.screenText, kind: s.kind })),
+          styleHint: design.style, signal: opts.signal,
+        })
+      : images.map(() => null);
+    const directed = motionPrompts.filter(Boolean).length;
+    if (directed) say(`모션 디렉팅 — ${directed}/${plan.scenes.length}씬 맞춤 연출(나머지 정적 폴백)`);
+
     // 3-c) 씬 배경 I2V — fal 클립화(키 없으면 no-op, 실패 씬은 스틸 폴백, fail-open).
     const cv = await i2vSceneClips({
-      dir, images, scenePrompts: bgDraft.imageSlots.map((s) => s.prompt), signal: opts.signal,
+      dir, images, scenePrompts: bgDraft.imageSlots.map((s) => s.prompt), motionPrompts, signal: opts.signal,
     });
     const clipCount = cv.clips.filter(Boolean).length;
     if (clipCount) say(`씬 I2V — ${clipCount}/${plan.scenes.length}장 클립화${cv.issues.length ? ` (${cv.issues[0]})` : ''}`);

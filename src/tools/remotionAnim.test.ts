@@ -8,12 +8,41 @@ describe('kenBurnsScale', () => {
     expect(A.kenBurnsScale(100, 100)).toBeGreaterThan(1.05);
     expect(A.kenBurnsScale(100, 100)).toBeLessThanOrEqual(1.12);
   });
+  it('씬별 변주 — 홀수 index 는 줌아웃(max→1)', () => {
+    expect(A.kenBurnsScale(0, 100, 1.08, 1)).toBeCloseTo(1.08, 3);
+    expect(A.kenBurnsScale(100, 100, 1.08, 1)).toBeCloseTo(1, 3);
+  });
 });
-describe('captionWordsVisible', () => {
-  it('스태거 증가, 상한 count', () => {
-    expect(A.captionWordsVisible(0, 3, 6)).toBe(0);
-    expect(A.captionWordsVisible(6, 3, 6)).toBe(1);
-    expect(A.captionWordsVisible(600, 3, 6)).toBe(3);
+describe('smoothstep — 이징 곡선', () => {
+  it('경계 0/1, 중앙 0.5, 선형보다 완만한 시작', () => {
+    expect(A.smoothstep(0)).toBe(0);
+    expect(A.smoothstep(1)).toBe(1);
+    expect(A.smoothstep(0.5)).toBeCloseTo(0.5, 5);
+    expect(A.smoothstep(0.1)).toBeLessThan(0.1); // ease-in 구간
+  });
+});
+describe('kenBurnsPan — 방향 4종 순환', () => {
+  it('index 별 방향이 다르고, 시작·끝 대칭(±12px)', () => {
+    const p0 = A.kenBurnsPan(100, 100, 0), p1 = A.kenBurnsPan(100, 100, 1);
+    expect(p0.x).toBeCloseTo(12, 3); expect(p0.y).toBeCloseTo(-12, 3);
+    expect(p1.x).toBeCloseTo(-12, 3); expect(p1.y).toBeCloseTo(12, 3);
+    expect(A.kenBurnsPan(0, 100, 0).x).toBeCloseTo(-12, 3);
+  });
+});
+describe('sceneEnterFade — 씬 시작 페이드인', () => {
+  it('0에서 0, fade 프레임에 1, 이후 유지', () => {
+    expect(A.sceneEnterFade(0, 6)).toBe(0);
+    expect(A.sceneEnterFade(6, 6)).toBe(1);
+    expect(A.sceneEnterFade(999, 6)).toBe(1);
+  });
+});
+describe('captionWordProgress — 단어별 부드러운 등장', () => {
+  it('앞 단어가 먼저 완료, rise 동안 0..1 단조 증가', () => {
+    expect(A.captionWordProgress(0, 0)).toBe(0);
+    expect(A.captionWordProgress(5, 0)).toBe(1);   // rise=5 완료
+    expect(A.captionWordProgress(5, 1)).toBeLessThan(1); // 둘째 단어는 아직
+    const a = A.captionWordProgress(2, 0), b = A.captionWordProgress(3, 0);
+    expect(b).toBeGreaterThanOrEqual(a);
   });
 });
 describe('sceneFadeOpacity', () => {

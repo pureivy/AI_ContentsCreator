@@ -1,6 +1,7 @@
 import React from 'react';
 import { z } from 'zod';
-import { AbsoluteFill, Series, Audio, staticFile, Loop, OffthreadVideo } from 'remotion';
+import { AbsoluteFill, Series, Audio, staticFile, Loop, OffthreadVideo, useCurrentFrame } from 'remotion';
+import { sceneEnterFade } from './anim';
 import { KenBurnsImage } from './KenBurnsImage';
 import { KineticCaption } from './KineticCaption';
 import { ProgressBar } from './ProgressBar';
@@ -30,22 +31,27 @@ export const defaultProps: AutoShortsProps = {
 
 const CLIP_FRAMES = 180; // 6초 클립 × 30fps 컴포지션 — 씬이 클립보다 길면 루프
 
-const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number }> = ({ s, index }) => (
-  <AbsoluteFill>
-    {s.videoSrc ? (
-      <Loop durationInFrames={CLIP_FRAMES}>
-        <OffthreadVideo src={staticFile(s.videoSrc)} muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-      </Loop>
-    ) : (
-      <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} />
-    )}
-    {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} /> : null}
-    {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}
-    {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
-    <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} />
-    {s.audioSrc ? <Audio src={staticFile(s.audioSrc)} /> : null}
-  </AbsoluteFill>
-);
+const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number }> = ({ s, index }) => {
+  const f = useCurrentFrame();
+  // 씬 시작 6프레임 페이드인(첫 씬 제외 — 훅은 즉시) — 하드컷 완화. 씬 길이 불변이라 TTS 싱크 무손상.
+  const fade = index > 0 ? sceneEnterFade(f, 6) : 1;
+  return (
+    <AbsoluteFill style={{ opacity: fade }}>
+      {s.videoSrc ? (
+        <Loop durationInFrames={CLIP_FRAMES}>
+          <OffthreadVideo src={staticFile(s.videoSrc)} muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        </Loop>
+      ) : (
+        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} />
+      )}
+      {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} /> : null}
+      {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}
+      {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
+      <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} />
+      {s.audioSrc ? <Audio src={staticFile(s.audioSrc)} /> : null}
+    </AbsoluteFill>
+  );
+};
 
 export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes }) => (
   <AbsoluteFill style={{ background: '#000', fontFamily: '"Noto Sans KR", sans-serif' }}>
