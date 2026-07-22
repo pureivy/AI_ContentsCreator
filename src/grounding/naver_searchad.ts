@@ -53,7 +53,13 @@ export async function searchAdVolumes(hints: string[], signal?: AbortSignal): Pr
       'X-Signature': sig,
     },
   }, signal);
-  if (!r.ok) return [];
+  if (!r.ok) {
+    // 인증 실패(잘린 키 등)가 '무응답'으로 오인되지 않게 서버 로그에 원인 노출(2026-07-22 실사고:
+    // .env 세 자격증명이 앞 2자만 남아 403인데 직원은 '절대검색량 확보 불가'로만 보고).
+    const body = await r.text().catch(() => '');
+    console.log(`[searchad] keywordstool HTTP ${r.status} — ${body.slice(0, 120) || '응답 없음'}${r.status === 401 || r.status === 403 ? ' (키 설정 확인: searchad.naver.com → 도구 → API 사용 관리)' : ''}`);
+    return [];
+  }
   const j = await r.json() as { keywordList?: Array<{ relKeyword?: string; monthlyPcQcCnt?: unknown; monthlyMobileQcCnt?: unknown; compIdx?: string }> };
   return (j.keywordList ?? [])
     .map((k) => {
