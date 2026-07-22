@@ -42,8 +42,9 @@ export default function PerformanceView() {
   const load = () => { setLoading(true); return fetchPerformance().then((d) => { setData(d); setLoading(false); }); };
   useEffect(() => { void load(); }, []);
 
-  // 새로고침 = 채널 성과 즉시 재수집(쇼츠 유튜브·릴스·카드뉴스) 후 재조회 — 종전엔 저장값 재조회뿐이라
-  // 숫자가 안 변해 '죽은 버튼'으로 보였다(2026-07-20 사용자 보고). 블로그 수집은 검토 탭·07:30 틱.
+  // 새로고침 = 채널 성과 즉시 재수집(쇼츠 유튜브·릴스·카드뉴스 API + 네이버 블로그 Playwright) 후 재조회 —
+  // 종전엔 저장값 재조회뿐이라 숫자가 안 변해 '죽은 버튼'으로 보였다(2026-07-20 사용자 보고).
+  // 블로그는 발행 감지 후 측정창 지난 미측정 글만 수집(브라우저 열릴 수 있음·로그인 세션 필요·프로필 사용 중이면 건너뜀).
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState("");
   const doRefresh = async () => {
@@ -121,7 +122,7 @@ export default function PerformanceView() {
         <p className="apikeys-sub">
           블로그·쇼츠·카드뉴스 채널별 성과와, 성과로 학습된 전략(키워드·서브니치 EWMA)을 모아 봅니다.
           <button className="btn ghost" style={{ marginLeft: 10 }} onClick={() => { void doRefresh(); }} disabled={refreshing}
-            title="쇼츠 유튜브·릴스·카드뉴스 성과를 즉시 재수집합니다 (블로그는 검토 탭 수집·매일 07:30 자동)">
+            title="블로그·쇼츠 유튜브·릴스·카드뉴스 성과를 즉시 재수집합니다 (블로그는 발행 감지 후 측정창 지난 미측정 글만 — 브라우저가 열릴 수 있고 네이버 로그인 세션이 필요)">
             {refreshing ? "재수집 중…" : "새로고침"}
           </button>
           {refreshMsg && <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>{refreshMsg}</span>}

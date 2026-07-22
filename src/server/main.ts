@@ -1902,7 +1902,15 @@ async function perfRefreshHandler(c: Context): Promise<Response> {
   if (perfRefreshBusy) return c.json({ error: '이미 재수집이 진행 중입니다.' }, 409);
   perfRefreshBusy = true;
   try {
-    await Promise.allSettled([syncShortsPerformance(), syncShortsMetaPerformance(), syncCardnewsPerformance()]);
+    // 네이버 블로그: 발행 감지(공개 RSS — 프로필 락 무관) 후 성과 수집. syncPerformance 가 프로필 락·측정창·
+    // 미측정(stage=published) 게이트를 스스로 처리하므로, 수집 대상이 없거나 프로필 사용 중이면 조용히 건너뛴다
+    // (일일 동기화와 동일 동작·안전). 쇼츠·릴스·카드뉴스는 순수 API 라 병행. allSettled — 한 채널 실패가 다른 채널을 막지 않음.
+    await Promise.allSettled([
+      discoverPublishedNaver().then(() => syncPerformance()),
+      syncShortsPerformance(),
+      syncShortsMetaPerformance(),
+      syncCardnewsPerformance(),
+    ]);
     return c.json({ ok: true });
   } finally { perfRefreshBusy = false; }
 }
