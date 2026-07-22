@@ -125,8 +125,8 @@ export default function DashboardBar({ companyName, total, runsCount, onMetric, 
               {activeBrand == null ? "✓ " : ""}범용 모드 <span className="muted">(브랜드 없음)</span>
             </button>
             {brands.map((b) => (
-              <button key={b.slug} className="llm-menu-item" disabled={switching} onClick={() => doSwitch(b.slug)}>
-                {b.slug === activeBrand ? "✓ " : ""}{b.name}{b.industry ? <span className="muted"> · {b.industry}</span> : null}
+              <button key={b.slug} className="llm-menu-item" disabled={switching} onClick={() => doSwitch(b.slug)} title={b.industry || undefined}>
+                {b.slug === activeBrand ? "✓ " : ""}{b.name}
               </button>
             ))}
             {onOpenBrand && (

@@ -80,8 +80,9 @@ export default function BrandView() {
             </button>
             {registry.map((r) => (
               <span key={r.slug} style={{ display: "inline-flex", gap: 2 }}>
-                <button className={`btn ghost${r.slug === activeSlug ? " start" : ""}`} onClick={() => doActivate(r.slug)}>
-                  {r.slug === activeSlug ? "✓ " : ""}{r.name}{r.industry ? ` · ${r.industry}` : ""}
+                {/* 이름만 표시(업종은 툴팁) — 업종이 길면 버튼이 과대해짐(사용자 지적 2026-07-22). */}
+                <button className={`btn ghost${r.slug === activeSlug ? " start" : ""}`} onClick={() => doActivate(r.slug)} title={r.industry || undefined}>
+                  {r.slug === activeSlug ? "✓ " : ""}{r.name}
                 </button>
                 <button className="btn ghost" title={`"${r.name}" 브랜드 삭제`} onClick={() => doDelete(r.slug, r.name)}>
                   <Ico name="trash" size={11} />
