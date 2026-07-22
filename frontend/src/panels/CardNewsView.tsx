@@ -5,7 +5,7 @@ import {
 } from "../api";
 import Avatar from "./Avatar";
 import Ico, { type IcoName } from "./Ico";
-import { CARD_STYLE_OPTIONS } from "../cardStyles";
+import { CARD_STYLE_OPTIONS, loadCardStyle, saveCardStyle } from "../cardStyles";
 
 // 카드뉴스 탭 — 카드뉴스팀(기획 → 디자인 → 배경 생성 → 렌더)이 만드는 인스타그램용 슬라이드.
 // 발행: 메타(인스타·페북) 연결 시 발행 버튼, 미연결 시 연결 링크 — 그 외엔 미리보기 + 개별/zip 다운로드. 진행은 8초 폴링(캘린더와 동일 케이던스).
@@ -124,7 +124,9 @@ export default function CardNewsSection() {
   const [topic, setTopic] = useState("");
   const [keyword, setKeyword] = useState("");
   const [slides, setSlides] = useState(0); // 0 = 자동(기획자가 스토리라인에 맞게 3~8장)
-  const [style, setStyle] = useState("auto");
+  // 이미지 스타일 — localStorage 영속(탭 이동·새로고침에도 유지, 검토탭과 공유).
+  const [style, setStyleRaw] = useState(loadCardStyle);
+  const setStyle = (v: string): void => { setStyleRaw(v); saveCardStyle(v); };
   const [srcPiece, setSrcPiece] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, deletePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, createCardNewsFromPiece, createShortsFromPiece, PieceInfo, PieceDraftResp } from "../api";
-import { CARD_STYLE_OPTIONS } from "../cardStyles";
+import { CARD_STYLE_OPTIONS, loadCardStyle, saveCardStyle } from "../cardStyles";
 import Ico, { type IcoName } from "./Ico";
 
 // 초안 검토·발행·성과 입력 — 크로스-런 REST(폴링/온디맨드). 본문 편집은 컴포넌트-로컬(store 변이 금지).
@@ -61,7 +61,9 @@ export default function DraftReview() {
   // 파생 콘텐츠(카드뉴스·숏폼) — 선택 초안의 최신 파생 상태(pieces 목록의 derived, 8초 폴링으로 갱신).
   const derived = pieces.find((p) => p.id === sel)?.derived;
   const [deriveBusy, setDeriveBusy] = useState("");
-  const [cardStyle, setCardStyle] = useState("auto"); // 검토탭 카드뉴스 파생 시 이미지 스타일(자동=디자이너 선택)
+  // 검토탭 카드뉴스 파생 시 이미지 스타일 — localStorage 영속(탭 이동·새로고침에도 유지, 제작실과 공유).
+  const [cardStyle, setCardStyleRaw] = useState(loadCardStyle);
+  const setCardStyle = (v: string): void => { setCardStyleRaw(v); saveCardStyle(v); };
   const doDeriveCardnews = async () => {
     if (!sel) return;
     setDeriveBusy("cardnews");
