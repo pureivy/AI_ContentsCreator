@@ -93,6 +93,19 @@ export default function ContentCalendar() {
   }, [pieces]);
   const errors = byStage["error"] ?? [];
 
+  // 보기 모드(칸반↔목록) — localStorage 영속. 자료가 많으면 목록(표)이 관리 쉬움(사용자 요청 2026-07-22).
+  const [view, setViewRaw] = useState<"board" | "list">(() => {
+    try { return localStorage.getItem("gepa.calendarView") === "list" ? "list" : "board"; } catch { return "board"; }
+  });
+  const setView = (v: "board" | "list"): void => { setViewRaw(v); try { localStorage.setItem("gepa.calendarView", v); } catch { /* 무해 */ } };
+  // 완료 칸(발행됨·측정됨·강화 반영)은 무한 누적 — 기본 최근 5개만, 칸별 '더 보기'(성과 대시보드 패턴).
+  const TERMINAL = useMemo(() => new Set<string>(["published", "measured", "reflected"]), []);
+  const [colExpanded, setColExpanded] = useState<Record<string, boolean>>({});
+  // 목록 보기 행 — 최신 갱신순(모든 단계 포함, 실패도 한 표에서 관리).
+  const listRows = useMemo(() => [...pieces].sort((a, b) => b.updatedTs.localeCompare(a.updatedTs)), [pieces]);
+  const stageOf = (key: string): { label: string; icon: IcoName } =>
+    STAGES.find((s) => s.key === key) ?? { label: "실패", icon: "triangle-exclamation" };
+
   const doRun = async (id: string) => {
     setRunningId(id);
     const r = await runPiece(id);
@@ -146,29 +159,90 @@ export default function ContentCalendar() {
         {err && <span className="muted" style={{ color: "var(--con)" }}>{err}</span>}
       </div>
 
-      <div className="calendar-board">
-        {STAGES.map((st) => {
-          const items = byStage[st.key] ?? [];
-          return (
-            <div key={st.key} className="calendar-col">
-              <div className="calendar-col-head">
-                <span><Ico name={st.icon} size={12} /> {st.label}</span>
-                <span className="badge">{items.length}</span>
-              </div>
-              <div className="calendar-col-body">
-                {items.length === 0 && <div className="muted calendar-empty">—</div>}
-                {items.map((p) => <PieceCard key={p.id} p={p} onRun={doRun} onDelete={doDelete} running={runningId === p.id} />)}
-              </div>
-            </div>
-          );
-        })}
+      {/* 보기 전환 — 칸반(진행 흐름) ↔ 목록(대량 관리). 선택은 localStorage 로 유지. */}
+      <div style={{ display: "flex", gap: 6, margin: "2px 0 10px" }}>
+        <button className={view === "board" ? "btn start" : "btn ghost"} onClick={() => setView("board")}><Ico name="cards" size={12} /> 칸반</button>
+        <button className={view === "list" ? "btn start" : "btn ghost"} onClick={() => setView("list")}><Ico name="document" size={12} /> 목록</button>
       </div>
 
-      {errors.length > 0 && (
-        <div className="calendar-errors">
-          <h3><Ico name="triangle-exclamation" size={13} /> 실패({errors.length}) — 자율 재시도 한도 초과</h3>
-          <div className="calendar-col-body">{errors.map((p) => <PieceCard key={p.id} p={p} onRun={doRun} onDelete={doDelete} running={runningId === p.id} />)}</div>
+      {view === "list" ? (
+        // 목록(표) 보기 — 전 단계 한 표(최신 갱신순), 자료가 많을 때 관리용.
+        <div className="perf-table-wrap">
+          <table className="perf-table">
+            <thead>
+              <tr><th>제목</th><th>단계</th><th>키워드</th><th title="파생 콘텐츠(카드뉴스·숏폼)">파생</th><th>SEO</th><th>갱신</th><th></th></tr>
+            </thead>
+            <tbody>
+              {listRows.length === 0 && <tr><td colSpan={7} className="muted">아직 콘텐츠가 없습니다.</td></tr>}
+              {listRows.map((p) => {
+                const st = stageOf(p.stage);
+                return (
+                  <tr key={p.id}>
+                    <td className="perf-title">
+                      <div className="perf-title-row">
+                        {p.publishedUrl
+                          ? <a href={p.publishedUrl} target="_blank" rel="noreferrer" title={p.title}>{p.title}</a>
+                          : <span className="perf-title-txt" title={p.title}>{p.title}</span>}
+                      </div>
+                    </td>
+                    <td><span className="badge"><Ico name={st.icon} size={10} /> {st.label}</span></td>
+                    <td>{p.keyword ? <span className="chip"><Ico name="location" size={10} /> {p.keyword}</span> : <span className="muted">—</span>}</td>
+                    <td>
+                      <DerivedBadge icon="cards" name="카드뉴스" d={p.derived?.cardnews} />
+                      <DerivedBadge icon="play" name="숏폼" d={p.derived?.shorts} />
+                    </td>
+                    <td className="perf-r">{typeof p.seoScore === "number" ? p.seoScore : "—"}</td>
+                    <td className="perf-date">{fmtWhen(p.updatedTs)}{p.errors ? ` · 실패 ${p.errors}` : ""}</td>
+                    <td className="perf-r">
+                      {RUNNABLE.has(p.stage) && (
+                        <button className="btn ghost piece-run-btn" disabled={runningId === p.id} onClick={() => doRun(p.id)}>
+                          {runningId === p.id ? "실행 중…" : "▶"}
+                        </button>
+                      )}
+                      <button className="btn ghost piece-run-btn" title="카드 삭제" disabled={runningId === p.id} onClick={() => doDelete(p.id)}><Ico name="trash" size={11} /></button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
+      ) : (
+        <>
+          <div className="calendar-board">
+            {STAGES.map((st) => {
+              const items = byStage[st.key] ?? [];
+              // 완료 칸은 최신순 정렬 후 기본 5개만(더 보기 토글) — 진행 칸은 전량 표시(작업 대상 누락 방지).
+              const sorted = TERMINAL.has(st.key) ? [...items].sort((a, b) => b.updatedTs.localeCompare(a.updatedTs)) : items;
+              const shown = TERMINAL.has(st.key) && !colExpanded[st.key] ? sorted.slice(0, 5) : sorted;
+              return (
+                <div key={st.key} className="calendar-col">
+                  <div className="calendar-col-head">
+                    <span><Ico name={st.icon} size={12} /> {st.label}</span>
+                    <span className="badge">{items.length}</span>
+                  </div>
+                  <div className="calendar-col-body">
+                    {items.length === 0 && <div className="muted calendar-empty">—</div>}
+                    {shown.map((p) => <PieceCard key={p.id} p={p} onRun={doRun} onDelete={doDelete} running={runningId === p.id} />)}
+                    {TERMINAL.has(st.key) && items.length > 5 && (
+                      <button className="btn ghost" style={{ width: "100%", fontSize: 12 }}
+                        onClick={() => setColExpanded((e) => ({ ...e, [st.key]: !e[st.key] }))}>
+                        {colExpanded[st.key] ? "접기" : `더 보기 (+${items.length - 5})`}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {errors.length > 0 && (
+            <div className="calendar-errors">
+              <h3><Ico name="triangle-exclamation" size={13} /> 실패({errors.length}) — 자율 재시도 한도 초과</h3>
+              <div className="calendar-col-body">{errors.map((p) => <PieceCard key={p.id} p={p} onRun={doRun} onDelete={doDelete} running={runningId === p.id} />)}</div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
