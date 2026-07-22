@@ -22,6 +22,7 @@ import OfficeTicker, { ga } from "./panels/OfficeTicker";
 import Avatar from "./panels/Avatar";
 import ActivityFeed from "./panels/ActivityFeed";
 import WorkflowBoard, { PhaseStepper, OfficeProgressBar } from "./panels/WorkflowBoard";
+import { TERMINAL } from "./panels/workflowStages";
 import ReplayBar from "./panels/ReplayBar";
 import DashboardBar from "./panels/DashboardBar";
 import MetricDrawer, { MetricKind } from "./panels/MetricDrawer";
@@ -112,7 +113,7 @@ const STATUS_LABEL: Record<string, string> = {
   error: "오류",
   interrupted: "중단됨",
 };
-const TERMINAL = new Set(["ok", "partial", "cancelled", "budget_exceeded", "error", "interrupted"]);
+// TERMINAL 은 workflowStages 의 단일 정의를 공유 — 사본이 'done'(잡 런 종료 status) 누락으로 갈라졌던 실사고(2026-07-22).
 // 외부 자료로 받을 확장자. 폴더 업로드 시 하위 파일을 이 목록으로 거른다(이미지·기타 제외).
 // 백엔드(kordoc·내장 파서·OCR)가 추출 가능한 + 시도해볼 만한 공문서 포맷.
 // kordoc: hwp/hwpx/hwpml/pdf/xls/xlsx/docx · 내장: txt/md/csv/rtf · OCR: 이미지.

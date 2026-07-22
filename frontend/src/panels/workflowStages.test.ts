@@ -25,6 +25,11 @@ describe("currentMacro — 전사/토론 런(회귀 가드)", () => {
   it("종료(ok) → 마지막(완료)", () => {
     expect(currentMacro({ planning: "work" }, "ok")).toBe(MACRO.length - 1);
   });
+  it("잡 런 종료(done) → 마지막(완료) — integrate 에 갇히지 않음(2026-07-22 실사고 회귀 가드)", () => {
+    // 카드뉴스·숏폼 잡 런은 phase work→integrate 를 흘리고 status 'done' 으로 끝난다.
+    // 'done' 이 TERMINAL 에 없으면 완료 점프가 안 돼 타임라인이 '통합'에 고정됐다.
+    expect(currentMacro({ cardnews: "integrate" }, "done")).toBe(MACRO.length - 1);
+  });
 });
 
 describe("soloWorking — 지명 직원 작업 시작 신호", () => {

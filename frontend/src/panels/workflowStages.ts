@@ -10,7 +10,9 @@
 import { UIState } from "../events/types";
 
 export const TERMINAL = new Set([
-  "ok", "partial", "cancelled", "budget_exceeded", "error", "interrupted",
+  // 'done' = 잡 런(카드뉴스·숏폼) 종료 status — 누락 시 완료 점프가 안 돼 타임라인이 마지막
+  // phase(integrate=통합)에 갇힌다(사용자 보고 2026-07-22: 기록엔 완료인데 타임라인은 통합).
+  "ok", "done", "partial", "cancelled", "budget_exceeded", "error", "interrupted",
 ]);
 
 export interface Stage { key: string; label: string; }
