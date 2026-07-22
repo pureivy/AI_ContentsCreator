@@ -22,6 +22,7 @@ export default function DraftReview() {
   const [pieces, setPieces] = useState<PieceInfo[]>([]);
   const [sel, setSel] = useState<string | null>(null);
   const [data, setData] = useState<PieceDraftResp | null>(null);
+  const [draftMissing, setDraftMissing] = useState(false); // 초안(draft.json) 부재(브리프 단계 등) — 로딩과 구분
   const [body, setBody] = useState("");            // 컴포넌트-로컬 편집 본문(store 변이 금지)
   const [copied, setCopied] = useState("");
   const [pubUrl, setPubUrl] = useState("");
@@ -97,10 +98,12 @@ export default function DraftReview() {
 
   const open = async (id: string) => {
     setSel(id); selRef.current = id;
-    setData(null); setMsg(""); setPubUrl(""); setCopied(""); setFeedback(""); setView("md");
+    setData(null); setDraftMissing(false); setMsg(""); setPubUrl(""); setCopied(""); setFeedback(""); setView("md");
     setNaverBusy(false); setNaverMsg(""); setCollectBusy(false); setCollectMsg("");
     const d = await fetchPieceDraft(id);
+    if (selRef.current !== id) return; // 로딩 중 다른 초안 선택 시 stale 갱신 방지
     setData(d);
+    if (!d) setDraftMissing(true); // 초안(draft.json) 없음 — '불러오는 중' 무한 멈춤 대신 명확히 안내
     setBody(d?.draft.bodyMarkdown ?? d?.md ?? "");
     // 이 초안의 진행 중 잡(임시저장/성과수집)이 있으면(새로고침·재선택) 이어서 폴링.
     const s = await fetchNaverDraftStatus(id);
@@ -260,7 +263,14 @@ export default function DraftReview() {
         {/* 우측 — 상세(초안/편집/발행/성과) */}
         <div className="review-detail">
           {!sel && <div className="muted" style={{ padding: 24 }}>왼쪽에서 초안을 선택하세요.</div>}
-          {sel && !data && <div className="muted" style={{ padding: 24 }}>불러오는 중…</div>}
+          {sel && !data && !draftMissing && <div className="muted" style={{ padding: 24 }}>불러오는 중…</div>}
+          {sel && !data && draftMissing && (
+            <div className="muted" style={{ padding: 24, lineHeight: 1.7 }}>
+              <p><Ico name="triangle-exclamation" size={13} /> 이 글은 <b>본문 초안이 없습니다</b>(리서치·브리프 단계에서 끝난 런).</p>
+              <p>검토·발행할 원고가 아직 만들어지지 않았습니다. 캘린더 탭에서 <b>▶ 실행</b>으로 본문 생성을 다시 시도하거나, 불필요하면 카드를 삭제하세요.</p>
+              <button className="btn ghost" onClick={doDelete}><Ico name="trash" size={12} /> 이 카드 삭제</button>
+            </div>
+          )}
           {data && (
             <>
               <div className="review-section">
