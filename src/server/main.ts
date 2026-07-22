@@ -49,7 +49,7 @@ import { runCardNewsJob, isCardNewsRunning } from '../orchestrator/cardnews';
 import { shortsStore } from '../content/shorts';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning } from '../orchestrator/shorts';
-import { ensureShortsThumbnail, ensureShortsDownload } from '../tools/shortsRender';
+import { ensureShortsThumbnail, ensureShortsDownload, extractFirstFrame } from '../tools/shortsRender';
 import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece } from '../content/pieces';
 import { listPersonas } from '../content/personas';
@@ -1161,13 +1161,14 @@ app.post('/shorts/:id/youtube', async (c) => {
   if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
   if (s.youtubeUrl) return c.json({ error: '이미 업로드됨', url: s.youtubeUrl }, 409); // 중복 영상·쿼터 낭비 방지
   const ytDir = shortsStore().dirFor(id);
-  // 쇼츠 피드/Studio Shorts 탭 썸네일은 API 로 설정 불가(유튜브 별도 관리) → 인트로(1.6초=디자인 썸네일) 붙은
-  // 영상을 업로드해 첫 프레임이 쇼츠 커버가 되게 한다. 썸네일 없으면 원본 폴백(ensureShortsDownload 내장).
-  // 일반 썸네일(thumbnails.set)은 미설정 — 사용자 방침(2026-07-22): 유튜브 커버는 인트로 첫 프레임으로만.
+  // 인트로(1.6초=디자인 썸네일) 붙은 영상을 업로드하고, 썸네일은 그 '영상 첫 프레임'으로 지정 —
+  // 미지정 시 유튜브가 중간 프레임을 자동 선택해 커버가 엉뚱해짐(실측 2026-07-22, 사용자 방침: 맨 처음이 보이게).
   const ytVideo = (await ensureShortsDownload(ytDir)) ?? path.join(ytDir, 'final.mp4');
+  const ytCover = await extractFirstFrame(ytVideo, path.join(ytDir, 'yt-cover.jpg'));
   const r = await uploadShortsToYoutube({
     slug: s.brand ?? '', videoPath: ytVideo,
     title: s.title ?? s.topic, description: s.description ?? '', hashtags: s.hashtags ?? [],
+    thumbnailPath: ytCover ?? undefined,
   });
   if (!r.ok) return c.json({ error: r.error }, 502);
   shortsStore().update(id, { youtubeId: r.videoId, youtubeUrl: r.url, youtubeTs: new Date().toISOString() });

@@ -50,6 +50,21 @@ export async function ensureShortsThumbnail(dir: string, signal?: AbortSignal): 
 }
 
 /**
+ * 업로드용 커버 — 업로드할 영상의 첫 프레임(인트로가 있으면 그게 곧 디자인 썸네일)을 jpg 로 추출.
+ * 유튜브는 썸네일 미지정 시 중간 프레임을 자동 선택하므로(실측 2026-07-22), '영상 맨 처음이 보이게'
+ * 첫 프레임을 thumbnails.set 에 쓴다. 임시파일+rename(원자적). 실패 시 null(썸네일 미지정 폴백).
+ */
+export async function extractFirstFrame(videoPath: string, outPath: string, signal?: AbortSignal): Promise<string | null> {
+  if (!fs.existsSync(videoPath)) return null;
+  const tmp = `${outPath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+  try {
+    await ff(['-i', videoPath, '-frames:v', '1', '-q:v', '3', tmp], 20_000, signal);
+    fs.renameSync(tmp, outPath);
+    return outPath;
+  } catch { try { fs.rmSync(tmp, { force: true }); } catch { /* 무해 */ } return null; }
+}
+
+/**
  * 다운로드용 — 디자인 썸네일을 영상 앞 1.6초 인트로로 붙인 dir/download.mp4(캐시). 썸네일 없으면 원본 그대로.
  * 썸네일(2:3)은 9:16 프레임에 레터박스(검정 여백)로 넣고 인트로 구간은 무음. 원본·썸네일 갱신 시 재생성.
  * 실패하면 원본 final.mp4 경로 반환(인트로 없이 폴백). 오디오는 44100·스테레오·fltp 로 정규화해 concat 안정화.
