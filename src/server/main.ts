@@ -15,6 +15,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { streamSSE } from 'hono/streaming';
 import { secureHeaders } from 'hono/secure-headers';
+import net from 'node:net';
 import { CONFIG } from '../config';
 import { getLlmSetting, setLlmSetting, resolveAssignment } from '../llm/setting';
 import { getRunSettings, setRunSettings } from '../runsettings';
@@ -115,8 +116,30 @@ const app = new Hono();
 // ── 보안 미들웨어(2026-07-22 보안점검) — 서버는 무인증 로컬 도구(127.0.0.1)라 원격 직격은 없지만,
 //   브라우저는 localhost 를 특별취급하지 않아 (a) 악성 페이지 방문 시 cross-origin 요청으로 상태변경
 //   (CSRF), (b) DNS 리바인딩(공개 이름이 127.0.0.1 로 해석)으로 바인딩 우회가 성립한다. 두 벡터를 차단.
-// 루프백 + 실제 바인딩 주소(CONFIG.host 를 LAN IP 로 바꿔 의도적으로 노출한 경우도 허용, 리바인딩만 차단).
+// 허용 호스트 = 루프백 + 바인딩 주소 + Tailscale(사설 메시 VPN: MagicDNS .ts.net·CGNAT 100.64/10·ULA fd7a:115c:a1e0)
+//  + ALLOWED_HOSTS env(쉼표구분 추가 호스트). Tailscale 은 tailnet 내부에서만 도달 가능한 사설 경로라 허용해도
+//  외부 DNS 리바인딩 표면이 넓어지지 않는다(공격자가 그 호스트에 도달하려면 사용자의 tailnet 소속이어야 함).
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', CONFIG.host.toLowerCase()]);
+const ALLOWED_HOSTS = new Set(
+  (process.env.ALLOWED_HOSTS ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean),
+);
+/** Host/Origin 헤더에서 순수 호스트명 추출(포트·IPv6 대괄호·끝점 제거, 순수). */
+function bareHost(raw: string): string {
+  let h = raw.trim().toLowerCase().replace(/\.$/, '');
+  if (h.startsWith('[')) { const i = h.indexOf(']'); return i > 0 ? h.slice(1, i) : h.slice(1); } // [ipv6]:port
+  const c = h.indexOf(':');
+  return c >= 0 ? h.slice(0, c) : h; // host:port (이름/ipv4)
+}
+/** 이 호스트로의 접속을 허용하나 — 리바인딩 차단은 유지하되 Tailscale·env 지정 호스트는 통과. */
+function isAllowedHost(raw: string): boolean {
+  const h = bareHost(raw);
+  if (!h) return true; // Host 헤더 없음(비브라우저) — 통과
+  if (LOOPBACK_HOSTS.has(h) || ALLOWED_HOSTS.has(h)) return true;
+  if (h.endsWith('.ts.net')) return true;                    // Tailscale MagicDNS
+  if (net.isIP(h) === 4) { const p = h.split('.').map(Number); if (p[0] === 100 && (p[1] ?? -1) >= 64 && (p[1] ?? -1) <= 127) return true; } // Tailscale CGNAT 100.64/10
+  if (net.isIP(h) === 6 && h.startsWith('fd7a:115c:a1e0')) return true; // Tailscale IPv6 ULA
+  return false;
+}
 
 // 보안 헤더(#14) — 클릭재킹(frame-ancestors)·MIME 스니핑·리퍼러 유출 차단. CSP 는 SPA 실제 사용에 맞춤:
 // 스크립트는 self(외부 모듈만, 인라인 없음), 스타일은 인라인(React style prop) 허용, 이미지·미디어는 self+data:+blob:.
@@ -154,11 +177,12 @@ app.use('*', async (c, next) => {
 });
 
 app.use('*', async (c, next) => {
-  // (1) Host 헤더 화이트리스트 — DNS 리바인딩 차단(공격자 이름의 Host 는 루프백이 아니므로 거부). 전 메서드.
-  const host = ((c.req.header('host') ?? '').split(':')[0] ?? '').trim().toLowerCase();
-  if (host && !LOOPBACK_HOSTS.has(host)) return c.json({ error: 'forbidden host' }, 403);
-  // (2) 상태변경 요청의 cross-origin 차단(CSRF) — 브라우저가 강제로 붙이는 Sec-Fetch-Site/Origin 를 검사.
-  //     우리 UI(same-origin)·curl/스크립트(헤더 없음)는 통과, 타 사이트 브라우저 요청만 거부.
+  const hostHeader = c.req.header('host') ?? '';
+  // (1) Host 허용목록 — DNS 리바인딩 차단(공격자 이름 Host 는 미허용). Tailscale·env 지정 호스트는 통과.
+  if (!isAllowedHost(hostHeader)) return c.json({ error: 'forbidden host' }, 403);
+  // (2) 상태변경 요청의 cross-origin 차단(CSRF) — Sec-Fetch-Site/Origin 검사. Origin 은 요청 Host 와
+  //     같은 호스트(same-origin)이거나 허용 호스트여야 통과 → 우리 UI(로컬·Tailscale)·스크립트(헤더없음)는
+  //     통과, 타 사이트 브라우저 요청만 거부.
   const m = c.req.method;
   if (m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS') {
     const sfs = c.req.header('sec-fetch-site');
@@ -167,7 +191,7 @@ app.use('*', async (c, next) => {
     if (origin) {
       try {
         const oh = new URL(origin).hostname.toLowerCase();
-        if (!LOOPBACK_HOSTS.has(oh)) return c.json({ error: 'cross-origin blocked' }, 403);
+        if (oh !== bareHost(hostHeader) && !isAllowedHost(oh)) return c.json({ error: 'cross-origin blocked' }, 403);
       } catch { return c.json({ error: 'bad origin' }, 403); }
     }
   }
