@@ -23,6 +23,7 @@ export default function DraftReview() {
   const [sel, setSel] = useState<string | null>(null);
   const [data, setData] = useState<PieceDraftResp | null>(null);
   const [draftMissing, setDraftMissing] = useState(false); // 초안(draft.json) 부재(브리프 단계 등) — 로딩과 구분
+  const [brief, setBrief] = useState("");          // 본문 대신 남은 브리프·반려 사유(run.json deliverable / _brief.md)
   const [body, setBody] = useState("");            // 컴포넌트-로컬 편집 본문(store 변이 금지)
   const [copied, setCopied] = useState("");
   const [pubUrl, setPubUrl] = useState("");
@@ -98,13 +99,18 @@ export default function DraftReview() {
 
   const open = async (id: string) => {
     setSel(id); selRef.current = id;
-    setData(null); setDraftMissing(false); setMsg(""); setPubUrl(""); setCopied(""); setFeedback(""); setView("md");
+    setData(null); setDraftMissing(false); setBrief(""); setMsg(""); setPubUrl(""); setCopied(""); setFeedback(""); setView("md");
     setNaverBusy(false); setNaverMsg(""); setCollectBusy(false); setCollectMsg("");
     const d = await fetchPieceDraft(id);
     if (selRef.current !== id) return; // 로딩 중 다른 초안 선택 시 stale 갱신 방지
-    setData(d);
-    if (!d) setDraftMissing(true); // 초안(draft.json) 없음 — '불러오는 중' 무한 멈춤 대신 명확히 안내
-    setBody(d?.draft.bodyMarkdown ?? d?.md ?? "");
+    if (d && "draft" in d) {           // 정상 초안 — 편집·발행 화면
+      setData(d);
+      setBody(d.draft.bodyMarkdown ?? d.md ?? "");
+    } else {                            // 본문 없음(브리프 종료·반려) 또는 로드 실패 — '불러오는 중' 무한멈춤 대신 안내
+      setData(null); setBody("");
+      setBrief(d && "brief" in d ? d.brief : "");
+      setDraftMissing(true);
+    }
     // 이 초안의 진행 중 잡(임시저장/성과수집)이 있으면(새로고침·재선택) 이어서 폴링.
     const s = await fetchNaverDraftStatus(id);
     if (selRef.current === id && s?.status === "running") {
@@ -134,7 +140,7 @@ export default function DraftReview() {
           const kw = s.inflow_count ? `, 유입 키워드 ${s.inflow_count}개` : "";
           const rf = s.reinforced ? " — 강화 반영됨(전략·위키 갱신)" : " — 이력만 추가(이미 강화됨)";
           setCollectMsg(`✓ 성과 수집 완료: 조회 ${s.views ?? 0}회${s.dwell_sec ? `, 체류 ${s.dwell_sec}s` : ""}${kw}${rf}${s.dry_run ? " (dry-run)" : ""}`);
-          await load(); const d = await fetchPieceDraft(id); if (selRef.current === id && d) setData(d);
+          await load(); const d = await fetchPieceDraft(id); if (selRef.current === id && d && "draft" in d) setData(d);
         } else if (s.status === "idle") {
           setCollectMsg("⚠ 진행 상태가 유실됐습니다(서버 재시작 가능성) — 다시 시도하세요.");
         } else {
@@ -174,7 +180,7 @@ export default function DraftReview() {
           await load();
           // data.piece(선택 시점 스냅샷)도 갱신 — '네이버 글쓰기 열기' 링크가 즉시 나타나게.
           const d = await fetchPieceDraft(id);
-          if (selRef.current === id && d) setData(d);
+          if (selRef.current === id && d && "draft" in d) setData(d);
         } else if (s.status === "idle") {
           // 폴링 중 잡이 사라짐 = 서버 재시작 등으로 진행 상태 유실 — 성공/실패 단정 불가.
           setNaverMsg("⚠ 진행 상태가 유실됐습니다(서버 재시작 가능성) — 네이버 글쓰기의 임시저장 목록에서 직접 확인하세요.");
@@ -265,10 +271,16 @@ export default function DraftReview() {
           {!sel && <div className="muted" style={{ padding: 24 }}>왼쪽에서 초안을 선택하세요.</div>}
           {sel && !data && !draftMissing && <div className="muted" style={{ padding: 24 }}>불러오는 중…</div>}
           {sel && !data && draftMissing && (
-            <div className="muted" style={{ padding: 24, lineHeight: 1.7 }}>
-              <p><Ico name="triangle-exclamation" size={13} /> 이 글은 <b>본문 초안이 없습니다</b>(리서치·브리프 단계에서 끝난 런).</p>
-              <p>검토·발행할 원고가 아직 만들어지지 않았습니다. 캘린더 탭에서 <b>▶ 실행</b>으로 본문 생성을 다시 시도하거나, 불필요하면 카드를 삭제하세요.</p>
+            <div style={{ padding: 24, lineHeight: 1.7 }}>
+              <p className="muted"><Ico name="triangle-exclamation" size={13} /> 이 글은 <b>본문 초안이 없습니다</b> — 리서치·브리프 단계에서 끝났거나 편집 게이트가 <b>보류(반려)</b>한 런입니다.</p>
+              <p className="muted">캘린더 탭 <b>▶ 실행</b>으로 재시도할 수 있으나, 아래 사유의 데이터가 채워지지 않으면 다시 보류될 수 있습니다. 불필요하면 카드를 삭제하세요.</p>
               <button className="btn ghost" onClick={doDelete}><Ico name="trash" size={12} /> 이 카드 삭제</button>
+              {brief && (
+                <>
+                  <h3 style={{ marginTop: 20 }}>보류 사유 · 브리프</h3>
+                  <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", background: "var(--panel, #f6f6f6)", padding: 16, borderRadius: 8, fontSize: 13, lineHeight: 1.6, maxHeight: "60vh", overflow: "auto" }}>{brief}</pre>
+                </>
+              )}
             </div>
           )}
           {data && (

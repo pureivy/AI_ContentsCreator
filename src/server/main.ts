@@ -817,10 +817,10 @@ function pieceDraftHandler(c: Context): Response {
   const p = pieceStore().get(id);
   if (!p) return c.json({ error: 'unknown piece' }, 404);
   if (!p.runId) return c.json({ error: 'no draft yet' }, 404);
+  const dir = path.join(CONFIG.sessionsDir, p.runId);
+  const read = (n: string): string => { try { return fs.readFileSync(path.join(dir, n), 'utf-8'); } catch { return ''; } };
   try {
-    const dir = path.join(CONFIG.sessionsDir, p.runId);
     const draft = JSON.parse(fs.readFileSync(path.join(dir, 'draft.json'), 'utf-8')) as unknown;
-    const read = (n: string): string => { try { return fs.readFileSync(path.join(dir, n), 'utf-8'); } catch { return ''; } };
     // 미리보기 iframe(srcDoc)에서 draft.html 의 상대 이미지(images/blog-image-0N.png)가 로드되게 <base> 주입.
     let html = read('draft.html');
     if (html) {
@@ -828,7 +828,15 @@ function pieceDraftHandler(c: Context): Response {
       html = html.includes('<head>') ? html.replace('<head>', `<head>\n${base}`) : `${base}\n${html}`;
     }
     return c.json({ piece: p, draft, md: read('draft.md'), html });
-  } catch { return c.json({ error: 'draft not found' }, 404); }
+  } catch {
+    // draft.json 없음 — 리서치·브리프 단계에서 끝났거나 편집 게이트가 반려한 런. run.json deliverable / _brief.md 로
+    // 폴백해 검토 탭이 '본문 없음' 대신 보류 사유·브리프를 보여준다(발행용 초안 아니므로 brief 로 구분, 200).
+    let deliverable = '';
+    try { deliverable = (JSON.parse(read('run.json')) as { deliverable?: string }).deliverable ?? ''; } catch { /* run.json 없음/파손 */ }
+    const brief = deliverable.trim() || read('_brief.md').trim();
+    if (!brief) return c.json({ error: 'draft not found' }, 404);
+    return c.json({ piece: p, brief });
+  }
 }
 // 세션 생성 이미지 서빙 — draft.html 의 상대경로가 위 <base> 로 이 라우트에 해석된다. 이름 화이트리스트(경로 이탈 차단).
 function pieceImageHandler(c: Context): Response {

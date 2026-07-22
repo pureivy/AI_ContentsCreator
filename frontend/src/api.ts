@@ -838,6 +838,8 @@ export interface BlogDraft {
   seo: { score: number; checklist: SeoCheck[] };
 }
 export interface PieceDraftResp { piece: PieceInfo; draft: BlogDraft; md: string; html: string }
+// 본문(draft.json) 없이 끝난 런(브리프 단계 종료·편집 게이트 반려) — 검토 탭이 보류 사유를 보여주도록 폴백.
+export interface PieceBriefResp { piece: PieceInfo; brief: string }
 export interface MetricSample {
   measuredAt: string; views: number; dwellSec?: number;
   searchInflow: Array<{ keyword: string; count: number; rank?: number }>; source?: string;
@@ -855,7 +857,7 @@ export async function createPiece(body: { title: string; keyword?: string; subNi
     return { ok: true, id: j.piece?.id };
   } catch { return { ok: false, error: "network" }; }
 }
-export async function fetchPieceDraft(id: string): Promise<PieceDraftResp | null> {
+export async function fetchPieceDraft(id: string): Promise<PieceDraftResp | PieceBriefResp | null> {
   try { const r = await fetch(`/pieces/${id}/draft`); return r.ok ? await r.json() : null; }
   catch { return null; }
 }
