@@ -329,8 +329,10 @@ export default function DraftReview() {
                 {view === "md" ? (
                   <textarea className="review-body" value={body} onChange={(e) => setBody(e.target.value)} rows={16} />
                 ) : (
-                  /* 원본 렌더(draft.html) 미리보기 — sandbox iframe(스크립트 차단). 편집본이 아니라 포매터 원본이다. */
-                  <iframe className="review-html-preview" title="HTML 미리보기" sandbox="" srcDoc={data.html || "<p>draft.html 없음</p>"} />
+                  /* 원본 렌더(draft.html) 미리보기 — sandbox iframe. allow-same-origin 만 부여(allow-scripts 없음):
+                     스크립트는 여전히 차단하되 문서 오리진을 실제 오리진으로 복원 → CSP img-src 'self' 가 같은 오리진
+                     이미지(/pieces/:id/images/…)를 허용(불투명 오리진일 때 'self' 불일치로 이미지가 막히던 회귀 수정). */
+                  <iframe className="review-html-preview" title="HTML 미리보기" sandbox="allow-same-origin" srcDoc={data.html || "<p>draft.html 없음</p>"} />
                 )}
                 {data.draft.imageSlots.length > 0 && (
                   <div className="review-images">
