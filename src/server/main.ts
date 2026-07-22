@@ -1504,7 +1504,13 @@ function pieceRunHandler(c: Context): Response {
   const piece = pieceStore().get(id);
   if (!piece) return c.json({ error: 'unknown piece' }, 404);
   if (piece.runId && RUNS.get(piece.runId)?.status === 'running') return c.json({ error: '이미 실행 중입니다', run_id: piece.runId }, 409);
-  if (['ready', 'published', 'measured', 'reflected'].includes(piece.stage)) return c.json({ error: '이미 초안이 있습니다(검토·발행 단계)' }, 409);
+  if (['published', 'measured', 'reflected'].includes(piece.stage)) return c.json({ error: '이미 발행·측정 단계입니다' }, 409);
+  if (piece.stage === 'ready') {
+    // ready 지만 실제 본문(draft.json)이 없는 고아 조각(리서치·브리프 단계에서 끝난 런)은 본문 생성 재실행 허용.
+    // 진짜 초안을 가진 ready 는 재실행 대신 검토·수정(revise) 경로를 쓰도록 거절.
+    const hasDraft = !!piece.runId && fs.existsSync(path.join(CONFIG.sessionsDir, piece.runId, 'draft.json'));
+    if (hasDraft) return c.json({ error: '이미 초안이 있습니다(검토·발행 단계)' }, 409);
+  }
   const runId = launchRun(piece.title, { pieceId: piece.id, keyword: piece.keyword }); // user run(양보 대상 아님)
   if (!runId) return c.json({ error: '실행 시작 실패' }, 500);
   pieceStore().update(id, { runId, stage: 'draft' });
