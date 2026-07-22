@@ -866,9 +866,9 @@ export async function publishPiece(id: string, url: string): Promise<{ ok: boole
   } catch { return { ok: false, error: "network" }; }
 }
 // 카드 삭제(캘린더·검토·성과 탭) — 서버는 실행 중 런/잡이 있으면 409 로 거절한다.
-export async function deletePiece(id: string): Promise<{ ok: boolean; error?: string }> {
+export async function deletePiece(id: string, opts?: { purge?: boolean }): Promise<{ ok: boolean; error?: string }> {
   try {
-    const r = await fetch(`/pieces/${id}`, { method: "DELETE" });
+    const r = await fetch(`/pieces/${id}${opts?.purge ? "?purge=1" : ""}`, { method: "DELETE" });
     if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
     return { ok: true };
   } catch { return { ok: false, error: "network" }; }
@@ -1028,9 +1028,9 @@ export async function createCardNewsFromPiece(pieceId: string, slides?: number, 
     return r.ok ? { ok: true, id: j.card?.id } : { ok: false, error: j.error };
   } catch { return { ok: false, error: "network" }; }
 }
-export async function deleteCardNews(id: string): Promise<{ ok: boolean; error?: string }> {
+export async function deleteCardNews(id: string, opts?: { purge?: boolean }): Promise<{ ok: boolean; error?: string }> {
   try {
-    const r = await fetch(`/cardnews/${id}`, { method: "DELETE" });
+    const r = await fetch(`/cardnews/${id}${opts?.purge ? "?purge=1" : ""}`, { method: "DELETE" });
     if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
     return { ok: true };
   } catch { return { ok: false, error: "network" }; }
@@ -1081,9 +1081,9 @@ export async function createShortsFromPiece(pieceId: string, scenes?: number): P
     return r.ok ? { ok: true, id: j.short?.id } : { ok: false, error: j.error };
   } catch { return { ok: false, error: "network" }; }
 }
-export async function deleteShorts(id: string): Promise<{ ok: boolean; error?: string }> {
+export async function deleteShorts(id: string, opts?: { purge?: boolean }): Promise<{ ok: boolean; error?: string }> {
   try {
-    const r = await fetch(`/shorts/${id}`, { method: "DELETE" });
+    const r = await fetch(`/shorts/${id}${opts?.purge ? "?purge=1" : ""}`, { method: "DELETE" });
     if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
     return { ok: true };
   } catch { return { ok: false, error: "network" }; }

@@ -651,6 +651,27 @@ function pieceGetHandler(c: Context): Response {
 }
 // piece 삭제(캘린더·검토·성과 탭 카드 제거) — 실행 중 런/네이버 잡/성과 수집이 있으면 거절.
 // 산출물 파일(data/sessions, 성과 샘플)은 지우지 않는다 — 카드(인덱스)만 제거하는 비파괴 삭제.
+/**
+ * 완전 삭제(purge) 동반 정리 — 카드 제거에 더해 연결 파일(산출물 디렉토리·성과 시계열·블로그는 런 세션)을
+ * data/.trash 로 이동한다(rm 아님 — 브랜드 삭제와 동일한 복구 가능 원칙). 유튜브·인스타·네이버에 이미
+ * 게시된 원격 게시물은 건드리지 않는다(로컬 파일만). 이동 실패는 무해(잔여는 수동 정리).
+ */
+function trashContentFiles(kind: 'pieces' | 'shorts' | 'cardnews', id: string, runId?: string): void {
+  const trash = path.join(CONFIG.dataDir, '.trash', `${kind}-${id}-${Date.now()}`);
+  const move = (src: string, sub: string): void => {
+    try {
+      if (!fs.existsSync(src)) return;
+      const dst = path.join(trash, sub);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.renameSync(src, dst);
+    } catch { /* 이동 실패 무해 */ }
+  };
+  if (kind === 'shorts') move(path.join(CONFIG.dataDir, 'shorts', id), id);
+  if (kind === 'cardnews') move(path.join(CONFIG.dataDir, 'cardnews', id), id);
+  if (kind === 'pieces' && runId) move(path.join(CONFIG.sessionsDir, runId), path.join('sessions', runId));
+  move(path.join(CONFIG.dataDir, 'analytics', 'metrics', `${id}.jsonl`), `${id}.jsonl`);
+}
+
 function pieceDeleteHandler(c: Context): Response {
   const id = c.req.param('id') ?? '';
   const piece = pieceStore().get(id);
@@ -667,6 +688,11 @@ function pieceDeleteHandler(c: Context): Response {
   NAVER_DRAFT_JOBS.delete(id); // 지난 잡 기록 정리(메모리)
   COLLECT_JOBS.delete(id);
   pieceStore().remove(id);
+  // purge=1(성과 대시보드 완전 삭제) — 초안 런 세션·성과 시계열도 휴지통 이동. 기본(무파라미터)은 종전 비파괴 유지.
+  if (c.req.query('purge') === '1') {
+    if (piece.runId && RUNS.get(piece.runId)?.status !== 'running') RUNS.delete(piece.runId);
+    trashContentFiles('pieces', id, piece.runId);
+  }
   return c.json({ ok: true });
 }
 // 발행(수동) — 사람이 네이버에 게시 후 URL 등록 → 'published'. 성과 측정(6d)의 앵커.
@@ -872,7 +898,8 @@ function cardNewsDeleteHandler(c: Context): Response {
   const id = c.req.param('id') ?? '';
   if (!cardNewsStore().get(id)) return c.json({ error: 'unknown card' }, 404);
   if (isCardNewsRunning(id)) return c.json({ error: '생성이 진행 중입니다 — 완료 후 삭제하세요.' }, 409);
-  cardNewsStore().remove(id); // 산출물 파일은 남김(비파괴 — pieces 삭제와 동일 원칙)
+  cardNewsStore().remove(id); // 기본은 산출물 파일 남김(비파괴 — pieces 삭제와 동일 원칙)
+  if (c.req.query('purge') === '1') trashContentFiles('cardnews', id); // 완전 삭제 — 산출물·성과도 휴지통 이동
   return c.json({ ok: true });
 }
 
@@ -1062,7 +1089,8 @@ function shortsDeleteHandler(c: Context): Response {
   const id = c.req.param('id') ?? '';
   if (!shortsStore().get(id)) return c.json({ error: 'unknown short' }, 404);
   if (isShortsRunning(id)) return c.json({ error: '생성이 진행 중입니다 — 완료 후 삭제하세요.' }, 409);
-  shortsStore().remove(id); // 산출물 파일은 남김(비파괴)
+  shortsStore().remove(id); // 기본은 산출물 파일 남김(비파괴)
+  if (c.req.query('purge') === '1') trashContentFiles('shorts', id); // 완전 삭제 — 산출물·성과도 휴지통 이동
   return c.json({ ok: true });
 }
 
@@ -1891,13 +1919,22 @@ function purgeBrandData(slug: string): { pieces: number; cards: number; shorts: 
   const pieces = pieceStore().list().filter((x) => (x.brand ?? '') === slug);
   for (const x of pieces) {
     if (x.runId) move(path.join(CONFIG.sessionsDir, x.runId), path.join('sessions', x.runId));
-    move(path.join(CONFIG.dataDir, 'analytics', 'metrics', `piece_${x.id}.jsonl`), path.join('metrics', `piece_${x.id}.jsonl`));
+    // id 가 이미 'piece_' 접두를 포함(genId) — 종전 `piece_${x.id}` 는 이중 접두라 이동이 항상 no-op 이던 버그.
+    move(path.join(CONFIG.dataDir, 'analytics', 'metrics', `${x.id}.jsonl`), path.join('metrics', `${x.id}.jsonl`));
     pieceStore().remove(x.id);
   }
   const cards = cardNewsStore().list().filter((x) => (x.brand ?? '') === slug);
-  for (const x of cards) { move(path.join(CONFIG.dataDir, 'cardnews', x.id), path.join('cardnews', x.id)); cardNewsStore().remove(x.id); }
+  for (const x of cards) {
+    move(path.join(CONFIG.dataDir, 'cardnews', x.id), path.join('cardnews', x.id));
+    move(path.join(CONFIG.dataDir, 'analytics', 'metrics', `${x.id}.jsonl`), path.join('metrics', `${x.id}.jsonl`)); // 성과 시계열 동반
+    cardNewsStore().remove(x.id);
+  }
   const sh = shortsStore().list().filter((x) => (x.brand ?? '') === slug);
-  for (const x of sh) { move(path.join(CONFIG.dataDir, 'shorts', x.id), path.join('shorts', x.id)); shortsStore().remove(x.id); }
+  for (const x of sh) {
+    move(path.join(CONFIG.dataDir, 'shorts', x.id), path.join('shorts', x.id));
+    move(path.join(CONFIG.dataDir, 'analytics', 'metrics', `${x.id}.jsonl`), path.join('metrics', `${x.id}.jsonl`)); // 성과 시계열 동반
+    shortsStore().remove(x.id);
+  }
   const runs = listPersistedRuns().filter((r) => (r.brand ?? '') === slug);
   for (const r of runs) { move(path.join(CONFIG.sessionsDir, r.run_id), path.join('sessions', r.run_id)); RUNS.delete(r.run_id); }
   for (const [rid, h] of [...RUNS]) if ((h.brand ?? '') === slug && h.status !== 'running') RUNS.delete(rid);

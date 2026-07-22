@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchPerformance, refreshPerformance, deletePiece, PerfData } from "../api";
+import { fetchPerformance, refreshPerformance, deletePiece, deleteShorts, deleteCardNews, PerfData } from "../api";
 import Ico, { type IcoName } from "./Ico";
 
 // 성과 대시보드 — 채널 통합 요약(블로그·쇼츠·카드뉴스) → 블로그 글별 → 쇼츠·카드뉴스 → 강화 학습 순.
@@ -56,10 +56,22 @@ export default function PerformanceView() {
     setRefreshMsg(r.ok ? `✓ ${t} 재수집됨` : `⚠ ${r.error || "재수집 실패"} — 표시만 갱신됨`);
   };
 
-  // 카드(행) 삭제 — 성과 샘플 파일은 남고 목록에서만 제거(서버가 실행 중 런/잡이 있으면 거절).
+  // 행 삭제(완전 삭제) — 대시보드 카드 + 연결 파일(산출물·초안 세션·성과 기록)을 휴지통(data/.trash)으로
+  // 이동(사용자 요청 2026-07-22). 네이버·유튜브·인스타에 이미 게시된 원격 게시물은 남는다.
   const doDelete = async (id: string, title: string) => {
-    if (!confirm(`"${title}" 카드를 삭제할까요?\n(산출물·성과 파일은 남고 카드만 제거됩니다)`)) return;
-    const r = await deletePiece(id);
+    if (!confirm(`"${title}" 글을 삭제할까요?\n카드와 초안·성과 기록이 함께 삭제(휴지통 이동)됩니다.\n네이버에 발행된 글은 남습니다.`)) return;
+    const r = await deletePiece(id, { purge: true });
+    if (r.ok) load(); else alert(r.error || "삭제 실패");
+  };
+  // 숏폼 한 레코드가 유튜브·릴스 양쪽 행으로 나타남 — 삭제 시 두 표 모두에서 사라진다(명시 안내).
+  const doDeleteShorts = async (id: string, title: string) => {
+    if (!confirm(`"${title}" 숏폼을 삭제할까요?\n제작실 카드·영상 산출물·성과 기록이 함께 삭제(휴지통 이동)되고, 유튜브·릴스 성과 행이 모두 사라집니다.\n유튜브·인스타에 게시된 영상은 남습니다.`)) return;
+    const r = await deleteShorts(id, { purge: true });
+    if (r.ok) load(); else alert(r.error || "삭제 실패");
+  };
+  const doDeleteCardnews = async (id: string, topic: string) => {
+    if (!confirm(`"${topic}" 카드뉴스를 삭제할까요?\n제작실 카드·슬라이드 산출물·성과 기록이 함께 삭제(휴지통 이동)됩니다.\n인스타에 게시된 게시물은 남습니다.`)) return;
+    const r = await deleteCardNews(id, { purge: true });
     if (r.ok) load(); else alert(r.error || "삭제 실패");
   };
 
@@ -189,7 +201,7 @@ export default function PerformanceView() {
               <div className="perf-table-wrap">
                 <table className="perf-table">
                   <thead>
-                    <tr><th>숏폼</th><th>업로드일</th><th title="유튜브 조회수 일별 추이">추이</th><th>조회</th><th>👍</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
+                    <tr><th>숏폼</th><th>업로드일</th><th title="유튜브 조회수 일별 추이">추이</th><th>조회</th><th>👍</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th><th></th></tr>
                   </thead>
                   <tbody>
                     {take("yt", ytShorts).map((r) => (
@@ -206,6 +218,7 @@ export default function PerformanceView() {
                         <td className="perf-r">{r.youtube ? fmt(r.youtube.views) : "—"}</td>
                         <td className="perf-r">{r.youtube ? fmt(r.youtube.likes) : "—"}</td>
                         <td className="perf-r">{r.youtube ? reflBadge(r.youtube.reflected) : "—"}</td>
+                        <td className="perf-r"><button className="btn ghost" title="숏폼 삭제 — 산출물·성과 포함(유튜브·릴스 행 모두 사라짐)" onClick={() => doDeleteShorts(r.id, r.title)}><Ico name="trash" size={12} /></button></td>
                       </tr>
                     ))}
                   </tbody>
@@ -223,7 +236,7 @@ export default function PerformanceView() {
               <div className="perf-table-wrap">
                 <table className="perf-table">
                   <thead>
-                    <tr><th>릴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>조회</th><th>👍</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
+                    <tr><th>릴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>조회</th><th>👍</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th><th></th></tr>
                   </thead>
                   <tbody>
                     {take("reels", reels).map((r) => (
@@ -240,6 +253,7 @@ export default function PerformanceView() {
                         <td className="perf-r">{r.meta ? fmt(r.meta.views) : "—"}</td>
                         <td className="perf-r">{r.meta ? fmt(r.meta.likes) : "—"}</td>
                         <td className="perf-r">{r.meta ? reflBadge(r.meta.reflected) : "—"}</td>
+                        <td className="perf-r"><button className="btn ghost" title="숏폼 삭제 — 산출물·성과 포함(유튜브·릴스 행 모두 사라짐)" onClick={() => doDeleteShorts(r.id, r.title)}><Ico name="trash" size={12} /></button></td>
                       </tr>
                     ))}
                   </tbody>
@@ -257,7 +271,7 @@ export default function PerformanceView() {
               <div className="perf-table-wrap">
                 <table className="perf-table">
                   <thead>
-                    <tr><th>카드뉴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>IG 조회</th><th>도달</th><th>👍</th><th>FB 👍</th><th>공유</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th></tr>
+                    <tr><th>카드뉴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>IG 조회</th><th>도달</th><th>👍</th><th>FB 👍</th><th>공유</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th><th></th></tr>
                   </thead>
                   <tbody>
                     {take("cardnews", cardnews).map((r) => (
@@ -277,6 +291,7 @@ export default function PerformanceView() {
                         <td className="perf-r">{r.fb ? fmt(r.fb.likes) : "—"}</td>
                         <td className="perf-r">{r.fb ? fmt(r.fb.shares) : "—"}</td>
                         <td className="perf-r">{reflBadge(r.reflected)}</td>
+                        <td className="perf-r"><button className="btn ghost" title="카드뉴스 삭제 — 산출물·성과 포함" onClick={() => doDeleteCardnews(r.id, r.topic)}><Ico name="trash" size={12} /></button></td>
                       </tr>
                     ))}
                   </tbody>
