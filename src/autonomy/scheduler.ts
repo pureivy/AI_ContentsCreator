@@ -35,12 +35,14 @@ export interface AutoCycleDeps<T = string> {
 }
 
 /** 자율 사이클 시작. 반환값은 정지 함수. intervalMs≤0 이면 아무것도 하지 않는다. */
-export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): () => void {
-  if (!(deps.intervalMs > 0)) return () => {};
+/** 정지 함수 + runNow(수동 즉시 1틱, isEnabled 토글 무시·isBusy·재진입 가드는 유지). */
+export type AutoCycleControl = (() => void) & { runNow: () => Promise<void> };
+
+export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): AutoCycleControl {
   let ticking = false; // 재진입 가드 — pickWork(LLM)이 주기보다 길어도 틱이 겹쳐 다중 자율런이 뜨지 않게.
-  const tick = async (): Promise<void> => {
+  // 핵심 1틱 — isEnabled 게이트 제외(타이머 틱과 수동 실행이 공유). isBusy·재진입은 항상 적용.
+  const core = async (): Promise<void> => {
     if (ticking) return;
-    if (deps.isEnabled && !deps.isEnabled()) return; // 오토런 오프 — 조용히 통과(토글 온이면 다음 틱부터 재개)
     ticking = true;
     try {
       if (deps.isBusy()) { deps.log?.('사용자 런 진행 중 — 자율 사이클 건너뜀'); return; }
@@ -55,9 +57,16 @@ export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): () => void {
       ticking = false;
     }
   };
-  const timer = setInterval(() => { void tick(); }, deps.intervalMs);
-  if (typeof timer.unref === 'function') timer.unref(); // 프로세스 종료를 막지 않게
-  return () => clearInterval(timer);
+  const timer = (deps.intervalMs > 0)
+    ? setInterval(() => {
+        if (deps.isEnabled && !deps.isEnabled()) return; // 오토런 오프 — 타이머 틱만 조용히 통과(수동 runNow 는 무관)
+        void core();
+      }, deps.intervalMs)
+    : null;
+  if (timer && typeof timer.unref === 'function') timer.unref(); // 프로세스 종료를 막지 않게
+  const stop = (() => { if (timer) clearInterval(timer); }) as AutoCycleControl;
+  stop.runNow = core; // 수동 즉시 실행(사용자 '자율런 돌려줘') — 토글 무시, isBusy·재진입 가드 유지
+  return stop;
 }
 
 /** 파생 콘텐츠 일일 케이던스 게이트(순수) — lastCreatedTs 에서 24h/N 경과 여부. 호출부가 '자율 생산분의

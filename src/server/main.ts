@@ -2881,6 +2881,13 @@ if (CONFIG.autoCycleMinutes > 0) {
   console.log(`[ai-contents-studio] 자율 사이클 활성 — ${CONFIG.autoCycleMinutes}분 주기(유휴 게이트) · 리서치 ${CONFIG.researchCycleHours}h/건 · 블로그 주 ${CONFIG.contentCadencePerWeek}편${CONFIG.autoShortsPerDay ? ` · 쇼츠 일 ${CONFIG.autoShortsPerDay}편` : ''}${CONFIG.autoCardnewsPerDay ? ` · 카드뉴스 일 ${CONFIG.autoCardnewsPerDay}편` : ''}`);
 }
 void stopAutoCycle; // 프로세스 생존 동안 유지(unref 타이머라 종료는 막지 않음)
+// 수동 즉시 실행 — 30분 타이머를 기다리지 않고 지금 한 틱(pickAutoWork→launch). 토글 무시, isBusy·재진입 가드는 유지.
+app.post('/autonomy/tick', async (c) => {
+  if ([...RUNS.values()].some((h) => h.status === 'running')) return c.json({ error: '런이 진행 중입니다 — 완료 후 다시 시도하세요' }, 409);
+  void stopAutoCycle.runNow(); // 비동기 기동(제안 LLM 수 초) — 즉시 응답, 진행은 사무실/기록 탭에서.
+  return c.json({ ok: true, note: '자율 사이클 1틱 실행 — 처리할 작업이 있으면 런이 시작됩니다(사무실 탭에서 관전).' });
+});
+app.post('/api/autonomy/tick', (c) => c.redirect('/autonomy/tick', 307));
 
 // 일일 브리핑(옵트인: DAILY_BRIEFING_TIME="HH:MM"). 지정 시각에 다이제스트를 알림 채널로 발송. 빈값=off.
 const stopDaily = startDaily({
