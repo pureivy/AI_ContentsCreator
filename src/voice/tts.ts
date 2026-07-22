@@ -95,7 +95,8 @@ async function synthesizeSay(text: string, voice: string, signal?: AbortSignal):
   const aiff = path.join(dir, 'out.aiff');
   const mp3 = path.join(dir, 'out.mp3');
   try {
-    await audio.run('say', ['-v', voice, '-o', aiff, text], { signal, timeoutMs: 60_000 });
+    // '--' 로 옵션 종료 — text 가 '-' 로 시작해도 say 플래그(임의 파일 읽기·쓰기)로 해석되지 않게(보안점검).
+    await audio.run('say', ['-v', voice, '-o', aiff, '--', text], { signal, timeoutMs: 60_000 });
     await audio.run('ffmpeg', ['-nostdin', '-y', '-i', aiff, '-f', 'mp3', mp3], { signal, timeoutMs: 60_000 });
     return fs.readFileSync(mp3);
   } finally {

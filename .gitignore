@@ -2,6 +2,9 @@ node_modules/
 dist/
 .env
 .env.local
+.env.tmp
+.env.*.tmp
+*.tmp
 *.log
 .DS_Store
 .vite/

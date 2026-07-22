@@ -14,6 +14,7 @@ import { serve } from '@hono/node-server';
 import { createServer as createHttpsServer } from 'node:https';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { streamSSE } from 'hono/streaming';
+import { secureHeaders } from 'hono/secure-headers';
 import { CONFIG } from '../config';
 import { getLlmSetting, setLlmSetting, resolveAssignment } from '../llm/setting';
 import { getRunSettings, setRunSettings } from '../runsettings';
@@ -116,6 +117,42 @@ const app = new Hono();
 //   (CSRF), (b) DNS 리바인딩(공개 이름이 127.0.0.1 로 해석)으로 바인딩 우회가 성립한다. 두 벡터를 차단.
 // 루프백 + 실제 바인딩 주소(CONFIG.host 를 LAN IP 로 바꿔 의도적으로 노출한 경우도 허용, 리바인딩만 차단).
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', CONFIG.host.toLowerCase()]);
+
+// 보안 헤더(#14) — 클릭재킹(frame-ancestors)·MIME 스니핑·리퍼러 유출 차단. CSP 는 SPA 실제 사용에 맞춤:
+// 스크립트는 self(외부 모듈만, 인라인 없음), 스타일은 인라인(React style prop) 허용, 이미지·미디어는 self+data:+blob:.
+app.use('*', secureHeaders({
+  contentSecurityPolicy: {
+    defaultSrc: ["'self'"],
+    scriptSrc: ["'self'"],
+    // 스타일·폰트는 self+인라인 + 웹폰트 CDN(jsdelivr — Pretendard/wanted-sans, index.html 이 로드).
+    styleSrc: ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net'],
+    fontSrc: ["'self'", 'data:', 'https://cdn.jsdelivr.net'],
+    imgSrc: ["'self'", 'data:', 'blob:'],
+    mediaSrc: ["'self'", 'data:', 'blob:'],
+    connectSrc: ["'self'"],
+    frameAncestors: ["'none'"],
+    baseUri: ["'self'"],
+    objectSrc: ["'none'"],
+  },
+  xFrameOptions: 'DENY',
+  referrerPolicy: 'no-referrer',
+  strictTransportSecurity: false, // 로컬 http — HSTS 부적합
+}));
+
+// 선택적 접근 토큰(#12) — AUTH_TOKEN 시크릿이 설정된 경우에만 활성(기본은 게이트 없음, 기존 동작 유지).
+// 프론트의 401→토큰입력→studio_token 쿠키 부트스트랩과 정합. OAuth 콜백(외부 리디렉션)·정적 에셋은 면제.
+app.use('*', async (c, next) => {
+  const expected = getSecret('AUTH_TOKEN') || process.env.AUTH_TOKEN || '';
+  if (!expected) return next(); // 미설정 = 게이트 off
+  const p = c.req.path;
+  if (p.startsWith('/youtube/oauth/callback') || p.startsWith('/meta/oauth/callback') || p.startsWith('/assets/')) return next();
+  const cookie = /(?:^|;\s*)studio_token=([^;]+)/.exec(c.req.header('cookie') ?? '')?.[1];
+  const bearer = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '');
+  const tok = decodeURIComponent(cookie ?? '') || bearer;
+  if (!safeEqual(tok, expected)) return c.json({ error: '인증 필요 — AUTH_TOKEN' }, 401);
+  return next();
+});
+
 app.use('*', async (c, next) => {
   // (1) Host 헤더 화이트리스트 — DNS 리바인딩 차단(공격자 이름의 Host 는 루프백이 아니므로 거부). 전 메서드.
   const host = ((c.req.header('host') ?? '').split(':')[0] ?? '').trim().toLowerCase();
@@ -458,8 +495,12 @@ function cancelHandler(c: Context): Response {
   return c.json({ ok: true });
 }
 
+// 런 id 경로 조작 가드 — 슬래시·상위경로 포함 id 는 data/sessions 밖 파일을 읽게 하므로 즉시 거부(순수).
+function isSafeRunId(id: string): boolean { return !!id && !/[/\\]|\.\./.test(id); }
+
 function runGetHandler(c: Context): Response {
   const id = c.req.param('id') ?? '';
+  if (!isSafeRunId(id)) return c.json({ error: 'unknown run' }, 404);
   const h = RUNS.get(id);
   if (h) return c.json({ run_id: id, status: h.status, topic: h.topic, deliverable: h.deliverable ?? null, created_ts: h.created_ts });
   // 메모리에 없으면(재시작/evict 후) 디스크에서 복원 — 기록 런 재열기 시 산출물까지 표출.
@@ -576,6 +617,7 @@ function synthEventsFromMeta(m: PersistedMeta): unknown[] {
 }
 function runLogHandler(c: Context): Response {
   const id = c.req.param('id') ?? '';
+  if (!isSafeRunId(id)) return c.json({ error: 'unknown run' }, 404);
   const bus = getBus(id);
   if (bus) return c.json({ events: bus.replay(0) }); // 버스 생존 시 메모리 버퍼
   const evs = loadPersistedEvents(id);
@@ -599,6 +641,7 @@ app.post('/api/runs/:id/cancel', cancelHandler);
 // 완료된 런을 piece 로 수동 승격(소급) — 자동 승격 도입 전의 런이나, 필요 시 상세 탭에서 회수용.
 const promoteHandler = (c: Context): Response => {
   const id = c.req.param('id') ?? '';
+  if (!isSafeRunId(id)) return c.json({ error: 'unknown run' }, 404);
   const h = RUNS.get(id);
   const meta = readDraftMeta(id);
   if (!meta) return c.json({ error: '초안(draft.json)이 없는 런 — 블로그 초안 형태가 아니라 승격할 수 없습니다' }, 400);

@@ -351,3 +351,27 @@ describe('purgeBrandAccounts — 삭제 브랜드의 계정 blob 정리', () => 
     expect(mod.getYoutubeAccount('').refreshToken).toBe('rt-generic');
   });
 });
+
+// setKey 값 위생 — 개행·제어문자로 .env 에 임의 env 라인을 주입하는 것 차단(보안점검 2026-07-22).
+describe('setKey — 개행·제어문자 주입 거부', () => {
+  const KEYS = ['ANTHROPIC_API_KEY'];
+  let tmpEnv: string; let mod: typeof import('./store');
+  beforeEach(async () => {
+    tmpEnv = path.join(os.tmpdir(), 'setkey-inject-test.env');
+    fs.writeFileSync(tmpEnv, '', { mode: 0o600 });
+    process.env.GEPA_ENV_FILE = tmpEnv;
+    for (const k of KEYS) delete process.env[k];
+    vi.resetModules(); mod = await import('./store');
+  });
+  afterEach(() => { try { fs.rmSync(tmpEnv); } catch { /* */ } delete process.env.GEPA_ENV_FILE; for (const k of KEYS) delete process.env[k]; });
+
+  it('개행 포함 값 거부 — .env 에 EVIL 라인 안 생김', () => {
+    const r = mod.setKey('ANTHROPIC_API_KEY', 'sk-ant-abc\nEVIL_KEY=pwned');
+    expect(r.ok).toBe(false);
+    const txt = fs.readFileSync(tmpEnv, 'utf-8');
+    expect(txt).not.toContain('EVIL_KEY');
+  });
+  it('정상 값은 통과', () => {
+    expect(mod.setKey('ANTHROPIC_API_KEY', 'sk-ant-valid123').ok).toBe(true);
+  });
+});

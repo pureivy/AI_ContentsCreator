@@ -73,13 +73,28 @@ function dig(obj: unknown, p?: string): unknown {
 }
 function asText(v: unknown): string { return v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v); }
 
+/** 정규식 소스 안전성 휴리스틱(순수) — 과장 길이·중첩 수량자(치명적 백트래킹) 거부. ReDoS 완화. */
+export function isSafeRegexSource(src: string): boolean {
+  if (typeof src !== 'string' || src.length > 200) return false;
+  // (…+)+ / (…*)* / (…+)* 류 중첩 수량자 — 지수 백트래킹의 전형.
+  if (/\([^)]*[+*][^)]*\)[+*]/.test(src)) return false;
+  return true;
+}
+
 /** 설정대로 응답에서 텍스트 추출. */
 function applyExtract(raw: string, ex: ExtractRule): string {
   const max = ex.max ?? 800, limit = ex.limit ?? 5;
   if (ex.type === 'regex' && ex.regex) {
+    // ReDoS 완화 — 위험 패턴(중첩 수량자)·과장 소스는 거부하고, 입력을 8KB 로 캡, 매칭 진행 실패 시 강제 전진.
+    if (!isSafeRegexSource(ex.regex)) return '';
     try {
       const re = new RegExp(ex.regex, 'g'); const out: string[] = []; let m: RegExpExecArray | null;
-      while ((m = re.exec(raw)) !== null && out.length < limit) out.push((m[1] ?? m[0]).trim());
+      const input = raw.slice(0, 8000);
+      let guard = 0;
+      while ((m = re.exec(input)) !== null && out.length < limit && guard++ < 1000) {
+        out.push((m[1] ?? m[0]).trim());
+        if (m.index === re.lastIndex) re.lastIndex++; // 영길이 매칭 무한루프 방지
+      }
       return out.join('\n').slice(0, max);
     } catch { return ''; }
   }

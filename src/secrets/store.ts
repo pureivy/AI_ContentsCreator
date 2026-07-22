@@ -164,6 +164,8 @@ export function setKey(key: string, value: string): { ok: boolean; error?: strin
   const meta = readMeta();
   if (!isBuiltinKey(key) && !meta.custom.some((c) => c.key === key)) return { ok: false, error: '알 수 없는 키입니다.' };
   if (typeof value !== 'string' || !value.trim()) return { ok: false, error: '값이 비었습니다.' };
+  // 개행·제어문자 거부 — 값에 '\nOTHER_KEY=evil' 을 넣어 .env 에 임의 env 라인을 주입하는 것 차단(보안점검).
+  if (/[\x00-\x1f]/.test(value)) return { ok: false, error: '값에 줄바꿈·제어문자를 넣을 수 없습니다.' };
   writeEnvValue(key, value.trim());
   return { ok: true };
 }
