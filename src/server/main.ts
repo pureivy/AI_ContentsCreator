@@ -843,15 +843,16 @@ function pieceDraftHandler(c: Context): Response {
     return c.json({ piece: p, brief });
   }
 }
-// 미리보기(HTML) — draft.html 의 이미지를 data: URI 로 인라인해 text/html 로 반환. iframe src 로 로드하면
-// sandbox/CSP/오리진·브라우저 캐시 특성과 무관하게 이미지가 렌더된다(외부 요청·<base> 상대경로 해석 불필요).
-// data: 는 CSP img-src 허용. 원본 복사용 draft.html(pieceDraftHandler)은 외부참조 그대로 유지(깔끔).
+// 미리보기 HTML — draft.html 의 이미지를 data: URI 로 인라인해 **JSON({html})** 로 반환한다. text/html 로
+// 앱 오리진에 서빙하면 직접 내비게이션 시 LLM 생성 HTML 의 스크립트가 앱 오리진에서 실행돼(iframe sandbox 우회)
+// 쿠키(AUTH_TOKEN) 탈취 등 XSS 가 된다 → JSON 이라 브라우저가 렌더하지 않음. 프론트가 이 html 을 sandbox
+// srcDoc(allow-scripts 없음)에 넣어 렌더 — 스크립트 차단 + data: 이미지 렌더(오리진·캐시 무관). draft.html
+// 원본(pieceDraftHandler)은 외부참조 그대로(복사용·경량). 지연 로드(HTML 미리보기 탭 열 때만 fetch).
 function piecePreviewHandler(c: Context): Response {
   const p = pieceStore().get(c.req.param('id') ?? '');
-  const placeholder = (msg: string): Response => c.html(`<!doctype html><meta charset=utf-8><body style="margin:0;font:14px -apple-system,sans-serif;color:#888;padding:16px">${msg}</body>`);
-  if (!p?.runId) return placeholder('미리보기 없음');
+  if (!p?.runId) return c.json({ html: '' });
   let html = '';
-  try { html = fs.readFileSync(path.join(CONFIG.sessionsDir, p.runId, 'draft.html'), 'utf-8'); } catch { return placeholder('draft.html 없음'); }
+  try { html = fs.readFileSync(path.join(CONFIG.sessionsDir, p.runId, 'draft.html'), 'utf-8'); } catch { return c.json({ html: '' }); }
   html = html.replace(/(<img\b[^>]*\bsrc=["'])(?:\.\/)?images\/(blog-image-\d{2}\.(?:png|jpe?g|webp))(["'])/gi, (m, pre: string, name: string, post: string) => {
     try {
       const buf = fs.readFileSync(path.join(CONFIG.sessionsDir, p.runId!, 'images', name));
@@ -860,7 +861,7 @@ function piecePreviewHandler(c: Context): Response {
       return `${pre}data:${mime};base64,${buf.toString('base64')}${post}`;
     } catch { return m; } // 이미지 누락 시 원본 참조 유지(폴백)
   });
-  return c.html(html);
+  return c.json({ html });
 }
 // 세션 생성 이미지 서빙 — draft.html 의 상대경로가 위 <base> 로 이 라우트에 해석된다. 이름 화이트리스트(경로 이탈 차단).
 function pieceImageHandler(c: Context): Response {

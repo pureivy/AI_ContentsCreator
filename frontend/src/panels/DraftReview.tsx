@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchPieces, fetchPieceDraft, publishPiece, postPieceMetrics, revisePiece, deletePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, createCardNewsFromPiece, createShortsFromPiece, fetchBrand, saveBrandCardStyle, PieceInfo, PieceDraftResp } from "../api";
+import { fetchPieces, fetchPieceDraft, fetchPiecePreview, publishPiece, postPieceMetrics, revisePiece, deletePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, createCardNewsFromPiece, createShortsFromPiece, fetchBrand, saveBrandCardStyle, PieceInfo, PieceDraftResp } from "../api";
 import { CARD_STYLE_OPTIONS, loadCardStyle, saveCardStyle } from "../cardStyles";
 import Ico, { type IcoName } from "./Ico";
 
@@ -24,6 +24,7 @@ export default function DraftReview() {
   const [data, setData] = useState<PieceDraftResp | null>(null);
   const [draftMissing, setDraftMissing] = useState(false); // 초안(draft.json) 부재(브리프 단계 등) — 로딩과 구분
   const [brief, setBrief] = useState("");          // 본문 대신 남은 브리프·반려 사유(run.json deliverable / _brief.md)
+  const [previewHtml, setPreviewHtml] = useState(""); // HTML 미리보기(이미지 data: 인라인) — 탭 열 때만 지연 로드
   const [body, setBody] = useState("");            // 컴포넌트-로컬 편집 본문(store 변이 금지)
   const [copied, setCopied] = useState("");
   const [pubUrl, setPubUrl] = useState("");
@@ -54,6 +55,14 @@ export default function DraftReview() {
   }, []);
   // 언마운트 시 폴링 루프 종료(다음 틱에서 selRef 불일치로 탈출) — 탭 전환 후 좀비 폴링·재진입 이중 폴링 방지.
   useEffect(() => () => { selRef.current = null; }, []);
+  // HTML 미리보기 탭을 열 때만 미리보기 HTML(이미지 data: 인라인)을 지연 로드 → sandbox srcDoc 에 넣어 렌더.
+  useEffect(() => {
+    if (view !== "html" || !data) return;
+    let alive = true;
+    setPreviewHtml("");
+    void fetchPiecePreview(data.piece.id).then((h) => { if (alive) setPreviewHtml(h); });
+    return () => { alive = false; };
+  }, [view, data?.piece.id]);
 
   const reviewable = useMemo(
     () => pieces.filter((p) => REVIEWABLE.has(p.stage) && p.runId).sort((a, b) => b.updatedTs.localeCompare(a.updatedTs)),
@@ -99,7 +108,7 @@ export default function DraftReview() {
 
   const open = async (id: string) => {
     setSel(id); selRef.current = id;
-    setData(null); setDraftMissing(false); setBrief(""); setMsg(""); setPubUrl(""); setCopied(""); setFeedback(""); setView("md");
+    setData(null); setDraftMissing(false); setBrief(""); setPreviewHtml(""); setMsg(""); setPubUrl(""); setCopied(""); setFeedback(""); setView("md");
     setNaverBusy(false); setNaverMsg(""); setCollectBusy(false); setCollectMsg("");
     const d = await fetchPieceDraft(id);
     if (selRef.current !== id) return; // 로딩 중 다른 초안 선택 시 stale 갱신 방지
@@ -329,10 +338,10 @@ export default function DraftReview() {
                 {view === "md" ? (
                   <textarea className="review-body" value={body} onChange={(e) => setBody(e.target.value)} rows={16} />
                 ) : (
-                  /* 원본 렌더(draft.html) 미리보기 — /pieces/:id/preview 를 iframe src 로 로드한다. 그 엔드포인트가
-                     이미지를 data: URI 로 인라인해 반환하므로 sandbox/CSP/오리진·브라우저 캐시 특성과 무관하게 렌더된다
-                     (srcDoc+상대 <base>+오리진 조합의 취약성 제거). sandbox 로 스크립트는 계속 차단. */
-                  <iframe className="review-html-preview" title="HTML 미리보기" sandbox="allow-same-origin" src={`/pieces/${data.piece.id}/preview`} />
+                  /* 원본 렌더(draft.html) 미리보기 — 서버가 이미지를 data: URI 로 인라인한 HTML(JSON 으로 지연 수신)을
+                     sandbox srcDoc(allow-scripts 없음)에 넣어 렌더. 스크립트 차단 + data: 이미지가 오리진·캐시 무관하게
+                     렌더된다. text/html 엔드포인트를 앱 오리진에 두지 않아 직접 내비게이션 XSS 도 없음(보안 리뷰 대응). */
+                  <iframe className="review-html-preview" title="HTML 미리보기" sandbox="allow-same-origin" srcDoc={previewHtml || "<p style=\"font:14px sans-serif;color:#888;padding:16px\">미리보기 불러오는 중…</p>"} />
                 )}
                 {data.draft.imageSlots.length > 0 && (
                   <div className="review-images">

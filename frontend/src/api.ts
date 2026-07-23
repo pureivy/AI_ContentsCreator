@@ -865,6 +865,11 @@ export async function fetchPieceDraft(id: string): Promise<PieceDraftResp | Piec
   try { const r = await fetch(`/pieces/${id}/draft`); return r.ok ? await r.json() : null; }
   catch { return null; }
 }
+// 미리보기 HTML(이미지 data: 인라인) — JSON 반환(직접 내비게이션 시 렌더 안 됨=앱 오리진 XSS 방지). srcDoc(sandbox)에 넣는다.
+export async function fetchPiecePreview(id: string): Promise<string> {
+  try { const r = await fetch(`/pieces/${id}/preview`); return r.ok ? ((await r.json()).html ?? "") : ""; }
+  catch { return ""; }
+}
 // 수정 요청(검토 탭) — 피드백으로 리비전 런을 띄운다. 완료되면 초안이 갱신(runId 교체)된다.
 export async function revisePiece(id: string, feedback: string): Promise<{ ok: boolean; run_id?: string; error?: string }> {
   try {
