@@ -9,6 +9,8 @@ export interface RunInfo {
   active: boolean;
   /** 자율(백그라운드) 런 여부 — 기록엔 진행 중 자율런만 표출(완료 자율런 제외). */
   auto?: boolean;
+  /** 리비전(개정) 런 — 새 글 생성이 아니라 기존 초안을 다듬은 런(자동 SEO 개정 등). 기록에서 원본과 구분 표시. */
+  revise?: boolean;
   /** 수정 런 계보(⑤): 부모 런 id + 버전(v2부터 서버가 채움). */
   parent_run_id?: string | null;
   version?: number;

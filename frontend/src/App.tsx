@@ -1500,6 +1500,11 @@ export default function App() {
                         {STATUS_LABEL[r.status] ?? r.status}
                       </span>
                       {r.auto && <span className="hist-badge" title="자율(백그라운드) 런 — 진행 중">🤖 자율</span>}
+                      {(r.revise || (r.version ?? 0) > 1) && (
+                        <span className="hist-badge" title="개정판 — 새로 생성한 글이 아니라 기존 초안을 다듬은 런입니다(자동 SEO 개정 등). 본문이 원본과 비슷한 게 정상입니다.">
+                          ↻ 개정{(r.version ?? 0) > 1 ? ` v${r.version}` : ""}
+                        </span>
+                      )}
                       <span className="hist-topic">{r.topic.slice(0, 40) || "(제목 없음)"}</span>
                     </button>
                     {r.status === "interrupted" && (

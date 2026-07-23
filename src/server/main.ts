@@ -90,6 +90,8 @@ interface RunHandle {
   positions?: FinalPosition[];
   subproblems?: Array<{ id: string; text: string }>;
   version?: number;
+  /** 리비전(개정) 런 — 기존 초안 개정 fast-path(자동 SEO 개정 등). 기록에서 원본 생성과 구분 표시용. */
+  revise?: boolean;
   /** 자율 사이클이 띄운 런 — 사용자 런 도착 시 양보(abort) 대상. */
   auto?: boolean;
   /** 시작 시점의 활성 브랜드 슬러그 — 기록·누적 토론의 브랜드 필터 기준(범용은 undefined). */
@@ -220,12 +222,12 @@ function loadPersistedEvents(id: string): unknown[] {
 
 // 런 메타 사이드카(run.json) — 목록·재열기·HWPX 가 재시작/메모리 evict 후에도 디스크에서
 // 완전 복원되도록 topic·status·deliverable 까지 영속. events.jsonl(이벤트 replay)과 별개.
-interface PersistedMeta { run_id: string; topic: string; status: string; created_ts: string; deliverable: string; auto?: boolean; brand?: string; }
+interface PersistedMeta { run_id: string; topic: string; status: string; created_ts: string; deliverable: string; auto?: boolean; brand?: string; revise?: boolean; }
 function persistRunMeta(id: string, h: RunHandle): void {
   try {
     const dir = path.join(CONFIG.sessionsDir, id);
     fs.mkdirSync(dir, { recursive: true });
-    const meta: PersistedMeta = { run_id: id, topic: h.topic, status: h.status, created_ts: h.created_ts, deliverable: h.deliverable ?? '', auto: !!h.auto, brand: h.brand };
+    const meta: PersistedMeta = { run_id: id, topic: h.topic, status: h.status, created_ts: h.created_ts, deliverable: h.deliverable ?? '', auto: !!h.auto, brand: h.brand, revise: !!h.revise };
     fs.writeFileSync(path.join(dir, 'run.json'), JSON.stringify(meta), 'utf-8');
   } catch { /* 영속 실패 무해 */ }
 }
@@ -233,7 +235,7 @@ function loadRunMeta(id: string): PersistedMeta | null {
   try {
     const m = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, id, 'run.json'), 'utf-8')) as Partial<PersistedMeta>;
     if (!m || typeof m.topic !== 'string') return null;
-    return { run_id: id, topic: m.topic, status: m.status ?? 'done', created_ts: m.created_ts ?? '', deliverable: m.deliverable ?? '', auto: !!m.auto, brand: typeof m.brand === 'string' ? m.brand : undefined };
+    return { run_id: id, topic: m.topic, status: m.status ?? 'done', created_ts: m.created_ts ?? '', deliverable: m.deliverable ?? '', auto: !!m.auto, brand: typeof m.brand === 'string' ? m.brand : undefined, revise: !!m.revise };
   } catch { return null; }
 }
 // 레거시 세션(run.json·events.jsonl 부재, _report.md 만 존재) — 과거 런을 잃지 않게 산출물 파일로 복원.
@@ -333,6 +335,7 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
   const abort = new AbortController();
   const handle: RunHandle = { status: 'running', abort, topic, created_ts: new Date().toISOString(), auto: !!opts.auto };
   handle.brand = activeBrandSlug() || undefined;
+  if (opts.revise) handle.revise = true; // 개정 런 표식 — 기록에서 원본 생성과 구분(중복 오해 방지)
   RUNS.set(id, handle);
   if (opts.auto) lastAutoRun = { ts: handle.created_ts, topic };
   evictRuns();
@@ -620,12 +623,12 @@ function listRunsHandler(c: Context): Response {
   // 완료된 자율런 수십 건이 기록을 오염시키는 건 방지(사용자 결정 2026-07-23). 완료 자율런은 직접 /runs/:id 접근만.
   const mem = [...RUNS.entries()]
     .filter(([, h]) => (!h.auto || h.status === 'running') && (h.brand ?? '') === activeBrandSlug())
-    .map(([id, h]) => ({ run_id: id, topic: h.topic, status: h.status, total_cost: 0, created_ts: h.created_ts, active: h.status === 'running', auto: !!h.auto }));
+    .map(([id, h]) => ({ run_id: id, topic: h.topic, status: h.status, total_cost: 0, created_ts: h.created_ts, active: h.status === 'running', auto: !!h.auto, revise: !!h.revise, version: h.version }));
   const memIds = new Set(RUNS.keys());
   // 영속 세션 — 메모리에 없는 과거 런만 합쳐 재시작 후에도 기록 탭에 표출(완료 자율런은 제외 — 진행 중만 mem 에 있음).
   const persisted = listPersistedRuns()
     .filter((r) => !memIds.has(r.run_id) && !r.auto && (r.brand ?? '') === activeBrandSlug())
-    .map((r) => ({ run_id: r.run_id, topic: r.topic, status: r.status, total_cost: 0, created_ts: r.created_ts, active: false, auto: false }));
+    .map((r) => ({ run_id: r.run_id, topic: r.topic, status: r.status, total_cost: 0, created_ts: r.created_ts, active: false, auto: false, revise: !!r.revise }));
   const runs = [...mem, ...persisted].sort((a, b) => (b.created_ts || '').localeCompare(a.created_ts || ''));
   return c.json({ runs });
 }
