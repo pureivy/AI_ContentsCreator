@@ -5,7 +5,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
-import { brandFileSuffix } from '../content/brand';
+import { brandFileSuffix, activeBrandSlug } from '../content/brand';
+import { pieceStore } from '../content/pieces';
+import { markdownHeadings } from '../content/priorCoverage';
 import { llmWiki } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
 import type { NotifyMessage } from './notify';
@@ -28,6 +30,56 @@ export function composeBriefing(date: string, sections: Array<{ heading: string;
   return { title: `📋 일일 브리핑 · ${date}`, body };
 }
 
+interface DiversityBaseline {
+  date: string; blog_count: number; existing_runIds: string[];
+  metrics: { closer_cliche: number; contrarian_hook: number; nstep_check: number; total: number };
+  reportedTs?: string;
+}
+/**
+ * 콘텐츠 다양성 감시(사용자 요청 2026-07-23 "완전 무인") — data/_shared/diversity-baseline.json 이 있으면
+ * 기준선 이후 활성 브랜드 신규 블로그(본문 有)를 세어, 6편+ 쌓이면 상투 지표(마무리·대비훅·N단계)를 기준선과
+ * before/after 로 비교해 브리핑에 넣는다. 한 번 보고하면 reportedTs 를 남겨 반복하지 않는다(요약만). 전량 fail-open.
+ * 지표 규칙은 기준선 산정(파이썬)과 동일 — 마무리 소제목/본문 정규식으로 결정적 계산.
+ */
+function diversityWatchSection(): { heading: string; body: string } | null {
+  const p = path.join(CONFIG.dataDir, '_shared', 'diversity-baseline.json');
+  let base: DiversityBaseline;
+  try { base = JSON.parse(fs.readFileSync(p, 'utf-8')) as DiversityBaseline; } catch { return null; } // 기준선 없음 = 감시 off
+  if (!Array.isArray(base.existing_runIds) || !base.metrics) return null;
+  const seen = new Set(base.existing_runIds);
+  const brand = activeBrandSlug() || '';
+  const bodies: Array<{ title: string; body: string }> = [];
+  try {
+    for (const pc of pieceStore().list()) {
+      if ((pc.brand ?? '') !== brand || !pc.runId || seen.has(pc.runId)) continue; // 활성 브랜드 · 기준선 이후 신규만
+      try {
+        const b = (JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, pc.runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string }).bodyMarkdown ?? '';
+        if (b.trim()) bodies.push({ title: pc.title ?? '', body: b });
+      } catch { /* draft 없음(브리프/리서치 등) 스킵 */ }
+    }
+  } catch { return null; }
+  const N = bodies.length;
+  if (base.reportedTs) return { heading: '🎨 콘텐츠 다양성', body: `개선 점검 완료(${base.reportedTs.slice(0, 10)}). 이후 신규 블로그 ${N}편 누적.` };
+  if (N < 6) return { heading: '🎨 콘텐츠 다양성', body: `개선 효과 점검 대기 — 기준선(${base.date}) 이후 신규 블로그 ${N}/6편.` };
+  const closer = bodies.filter(({ body }) => { const h = markdownHeadings(body); return h.length > 0 && /오늘\s*바로|정리|요약|한 일/.test(h[h.length - 1]!); }).length;
+  const nstep = bodies.filter(({ body }) => /\d\s*단계\s*체크|단계 체크법/.test(body)).length;
+  const contra = bodies.filter(({ title, body }) => /아니라|보다\s*\S+\s*(먼저|중요)/.test(`${title} ${body.slice(0, 400)}`)).length;
+  const m = base.metrics; const bt = m.total || base.blog_count || 1;
+  const pct = (n: number, d: number): number => (d > 0 ? Math.round((n / d) * 100) : 0);
+  const row = (label: string, bn: number, nn: number): string =>
+    `- ${label}: 기준선 ${pct(bn, bt)}% → 신규 ${pct(nn, N)}% ${nn / N < bn / bt ? '✓개선' : '↑악화/동일'}`;
+  const lines = [
+    row('상투 마무리(오늘/정리/요약)', m.closer_cliche, closer),
+    row('대비 훅(아니라/보다먼저)', m.contrarian_hook, contra),
+    row('N단계 체크 반복', m.nstep_check, nstep),
+  ];
+  try { fs.writeFileSync(p, JSON.stringify({ ...base, reportedTs: kstDate() })); } catch { /* 영속 실패 무해 — 다음 날 재보고 */ }
+  return {
+    heading: `🎨 콘텐츠 다양성 개선 점검 (신규 ${N}편)`,
+    body: ['다양성 개선(2026-07-23) 전후 비교:', ...lines, '3지표 모두 ✓개선이면 효과 확인. 안 낮아졌으면 임계값·킬스위치를 세션에서 상의하세요.'].join('\n'),
+  };
+}
+
 /** 실제 데이터(위키·결정·학습·승인)에서 일일 브리핑을 구성. */
 export function buildBriefing(): NotifyMessage {
   const date = kstDate();
@@ -46,5 +98,6 @@ export function buildBriefing(): NotifyMessage {
     const n = approvalStore().list().length;
     if (n > 0) sections.push({ heading: '🔔 대기 승인', body: `${n}건 — 결재 대기 중` });
   } catch { /* */ }
+  try { const dv = diversityWatchSection(); if (dv) sections.push(dv); } catch { /* 감시 실패 무해 */ }
   return composeBriefing(date, sections);
 }
