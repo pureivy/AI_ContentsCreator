@@ -86,7 +86,8 @@ export async function uploadShortsToYoutube(opts: {
     }
     const id = extractVideoId(j);
     if (!id) return { ok: false, error: '업로드 응답 이형(id 없음)' };
-    // 커스텀 썸네일 설정(best-effort) — 채널 전화 인증이 안 된 계정은 403(영상 업로드는 이미 성공). 실패는 note 만.
+    // 커스텀 썸네일 설정(best-effort) — 쇼츠는 Data API(thumbnails.set)로 커버 지정이 안 돼 403 이 정상(영상 업로드는 성공).
+    // 쇼츠 커버는 스튜디오/앱의 '동영상 프레임' 선택으로만 지정된다(첫 프레임=디자인 썸네일). 실패는 note 만.
     let thumbnailError: string | undefined;
     if (opts.thumbnailPath && fs.existsSync(opts.thumbnailPath)) {
       try {
@@ -99,7 +100,7 @@ export async function uploadShortsToYoutube(opts: {
           const tj: unknown = await tr.json().catch(() => ({}));
           const reason = (tj as { error?: { errors?: Array<{ reason?: string }> } })?.error?.errors?.[0]?.reason ?? String(tr.status);
           // 403 forbidden 은 채널 미인증뿐 아니라 토큰·권한 문제일 수도 있어 사유를 그대로 노출(영상은 업로드됨).
-          thumbnailError = `사유 ${reason} — 채널 재연결·전화 인증 상태 확인`;
+          thumbnailError = `쇼츠 커버는 API 지정 불가(사유 ${reason}) — 스튜디오/앱에서 '동영상 프레임' 맨 앞(0초=디자인 썸네일)으로 지정`;
         }
       } catch (te) { thumbnailError = te instanceof Error ? te.message.slice(0, 80) : String(te); }
     }
