@@ -62,6 +62,7 @@ import { ingestMetrics } from '../analytics/reinforce';
 import { syncShortsPerformance, syncShortsMetaPerformance } from '../analytics/shortsPerf';
 import { syncCardnewsPerformance } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
+import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
 import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor } from '../analytics/performance';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
@@ -1994,6 +1995,12 @@ app.get('/autonomy/status', (c) => {
 
 // 일일 브리핑 — 미리보기(GET) + 수동 발송(POST). 설정 시각엔 자동 발송(startDaily).
 app.get('/briefing', (c) => c.json({ ...buildBriefing(), configured: notifyConfigured(), time: CONFIG.dailyBriefingTime }));
+// 네이버 색인 점검(온디맨드) — 라이브 검색 후 캐시 갱신. 없음(발행 오래된 글)=저품질 강한 음성, 있음=약한 양성.
+app.get('/naver/indexing', async (c) => {
+  const report = await refreshNaverIndexingCache().catch(() => null);
+  if (!report) return c.json({ enabled: false, note: 'NAVER_CLIENT_ID/SECRET 미설정 — 검색 API 자격증명 필요' });
+  return c.json({ enabled: true, ...report, graceDays: 7 });
+});
 app.post('/briefing/send', async (c) => {
   const sent = await notify(buildBriefing());
   return c.json({ sent, configured: notifyConfigured() });
@@ -2942,7 +2949,7 @@ app.post('/api/autonomy/tick', (c) => c.redirect('/autonomy/tick', 307));
 // 일일 브리핑(옵트인: DAILY_BRIEFING_TIME="HH:MM"). 지정 시각에 다이제스트를 알림 채널로 발송. 빈값=off.
 const stopDaily = startDaily({
   time: CONFIG.dailyBriefingTime,
-  run: () => { void notify(buildBriefing()); },
+  run: () => { void refreshNaverIndexingCache().catch(() => {}).finally(() => { void notify(buildBriefing()); }); }, // 색인 캐시 갱신 후 브리핑(색인 섹션 최신화)
   log: (m) => console.log('[briefing]', m),
 });
 if (CONFIG.dailyBriefingTime) {

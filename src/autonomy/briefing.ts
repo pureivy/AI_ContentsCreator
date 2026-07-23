@@ -8,6 +8,7 @@ import { CONFIG } from '../config';
 import { brandFileSuffix, activeBrandSlug } from '../content/brand';
 import { pieceStore } from '../content/pieces';
 import { markdownHeadings } from '../content/priorCoverage';
+import { readNaverIndexingReport, GRACE_DAYS } from '../analytics/naverIndexing';
 import { llmWiki } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
 import type { NotifyMessage } from './notify';
@@ -80,6 +81,23 @@ function diversityWatchSection(): { heading: string; body: string } | null {
   };
 }
 
+/**
+ * 네이버 색인 점검(사용자 요청 2026-07-23) — 캐시(refreshNaverIndexingCache 가 채움)를 읽어, 발행 글이
+ * 네이버 블로그 검색에 자기 postId 로 뜨는지 요약. **없음(발행 GRACE_DAYS+ 경과)=저품질 강한 음성 신호**,
+ * 있음=약한 양성(통합검색 색인보다 관대하므로 "정상" 단정 아님). 발행 직후는 '색인 대기'로 구분.
+ */
+function naverIndexingSection(): { heading: string; body: string } | null {
+  const rep = readNaverIndexingReport();
+  if (!rep || !rep.results.length) return null;
+  const found = rep.results.filter((r) => r.found);
+  const suspect = rep.results.filter((r) => !r.found && r.checkable && r.ageDays >= GRACE_DAYS);
+  const waiting = rep.results.filter((r) => !r.found && r.checkable && r.ageDays < GRACE_DAYS);
+  const lines = [`발행 ${rep.results.length}편 · 검색결과 있음 ${found.length} · 저품질 의심 ${suspect.length} · 색인 대기 ${waiting.length}`];
+  for (const r of suspect) lines.push(`✗ "${r.title.slice(0, 26)}" — 자기 제목 검색에도 없음(발행 ${r.ageDays}일차) · 저품질 의심`);
+  if (!suspect.length) lines.push('저품질 의심 없음 — 오래된 글이 자기 제목 검색에 노출됨(있음=약한 양성이지 "정상" 단정은 아님).');
+  return { heading: '🔍 네이버 색인 점검', body: lines.join('\n') };
+}
+
 /** 실제 데이터(위키·결정·학습·승인)에서 일일 브리핑을 구성. */
 export function buildBriefing(): NotifyMessage {
   const date = kstDate();
@@ -99,5 +117,6 @@ export function buildBriefing(): NotifyMessage {
     if (n > 0) sections.push({ heading: '🔔 대기 승인', body: `${n}건 — 결재 대기 중` });
   } catch { /* */ }
   try { const dv = diversityWatchSection(); if (dv) sections.push(dv); } catch { /* 감시 실패 무해 */ }
+  try { const ix = naverIndexingSection(); if (ix) sections.push(ix); } catch { /* 색인 섹션 실패 무해 */ }
   return composeBriefing(date, sections);
 }
