@@ -104,6 +104,24 @@ def build_prompt(slot: dict, style: str, business_type: str, topic: str, allow_t
     return ", ".join(parts)
 
 
+def _normalize_ref(path: Path, work_dir: Path):
+    """참조 이미지를 gpt-image-2 지원 포맷(PNG·RGB)으로 정규화 — 애니메이션(GIF 등)은 첫 프레임.
+    Pillow 로 못 열면 None(스킵). GIF/webp·CMYK·확장자↔내용 불일치를 흡수해 invalid_image_file 을 방지한다
+    (실측 2026-07-24: .jpg 로 저장된 네이버 카페 GIF 가 카드뉴스 배경 7/7 실패시킴)."""
+    try:
+        from PIL import Image  # 지연 임포트 — Pillow 없어도 일반 생성 경로는 동작
+        with Image.open(path) as im:
+            try:
+                im.seek(0)  # 애니메이션이면 첫 프레임
+            except Exception:  # noqa: BLE001
+                pass
+            out = work_dir / f"norm-{path.stem}.png"
+            im.convert("RGB").save(out, format="PNG")
+            return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="블로그 이미지 생성(gpt-image-2)")
     ap.add_argument("--draft", default="", help="draft.json(BlogDraft) 경로 또는 JSON 문자열")
@@ -128,6 +146,12 @@ def main() -> int:
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # 참조 정규화 — gpt-image-2 미지원 포맷(GIF 등)·확장자 불일치를 PNG·RGB 로 변환(못 열면 스킵)해
+    # images.edit 의 invalid_image_file 을 막는다. 전부 무효면 일반 생성으로 폴백(아래 ref_paths 빈 분기).
+    if ref_paths:
+        _nd = out_dir / "_refnorm"
+        _nd.mkdir(parents=True, exist_ok=True)
+        ref_paths = [q for q in (_normalize_ref(p, _nd) for p in ref_paths) if q is not None]
     manifest_path = Path(args.manifest)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
