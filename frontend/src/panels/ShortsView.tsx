@@ -47,7 +47,8 @@ function ShortRow({ s, onDelete, yt, metaReady, onChanged }: {
     setYtBusy(true); setYtErr("");
     const r = await uploadShortsYoutube(s.id);
     setYtBusy(false);
-    if (r.ok) { onChanged(); if (r.thumbnailError) setYtErr(`⚠ 썸네일 미적용: ${r.thumbnailError}`); }
+    // 쇼츠 커버는 API 로 지정 불가(thumbnailError 는 정상 — 유튜브 한계) → 오해 메시지 대신 스튜디오 안내를 지속 표시.
+    if (r.ok) { onChanged(); setYtErr(""); }
     else setYtErr(r.error || "업로드 실패");
   };
   const [metaBusy, setMetaBusy] = useState(false);
@@ -126,7 +127,7 @@ function ShortRow({ s, onDelete, yt, metaReady, onChanged }: {
             </button>
             {s.youtubeUrl ? (
               <>
-                <a className="btn ghost" href={s.youtubeUrl} target="_blank" rel="noreferrer" title="비공개 업로드됨 — 공개 전환은 유튜브 스튜디오에서">▶ 유튜브(비공개)</a>
+                <a className="btn ghost" href={s.youtubeUrl} target="_blank" rel="noreferrer" title="비공개 업로드됨 — 공개 전환은 유튜브 스튜디오에서. 그때 커버를 '동영상 프레임' 맨 앞(0초=디자인 썸네일)으로 지정하세요">▶ 유튜브(비공개)</a>
                 {typeof s.views === "number" && (
                   <span className="chip" title="유튜브 성과(최신 수집 — 매일 갱신)">👁 {fmtCount(s.views)}{typeof s.likes === "number" ? ` · 👍 ${fmtCount(s.likes)}` : ""}</span>
                 )}
@@ -150,6 +151,11 @@ function ShortRow({ s, onDelete, yt, metaReady, onChanged }: {
             )}
             {metaErr && <span className="muted" style={{ color: "var(--con)" }}>{metaErr}</span>}
             {ytErr && <span className="muted" style={{ color: "var(--con)" }}>{ytErr}</span>}
+            {s.youtubeUrl && (
+              <span className="muted" style={{ fontSize: 11, flexBasis: "100%" }} title="유튜브 쇼츠는 커버를 API 로 못 바꿉니다 — 스튜디오/앱의 프레임 선택으로만 지정됩니다. 인트로 덕분에 맨 앞 프레임이 곧 디자인 썸네일입니다.">
+                🎬 공개 전환 시 <b>커버를 '동영상 프레임' 맨 앞(0초)</b>으로 지정하세요 — 그게 디자인 썸네일입니다.
+              </span>
+            )}
             {thumbErr && <span className="muted" style={{ color: "var(--con)" }}>{thumbErr}</span>}
           </>
         )}
