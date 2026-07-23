@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bigramJaccard, keywordSimilar, titleSimilar, findSimilarContent, type ExistingContent } from './novelty';
+import { bigramJaccard, keywordSimilar, titleSimilar, findSimilarContent, saturatedThemeMatches, saturatedThemes, type ExistingContent } from './novelty';
 
 // 콘텐츠 신규성 가드(2026-07-15 사용자 원칙) — 신규 블로그·쇼츠·카드뉴스는 기존 콘텐츠와
 // 주제·키워드가 유사하면 안 된다. 한글 복합어에 강하도록 문자 바이그램 자카드로 판정한다.
@@ -62,5 +62,36 @@ describe('titleSimilar — 범용 토큰 오탐 방지(스톱토큰)', () => {
   });
   it('핵심 토큰 3개 겹침은 여전히 유사(스톱토큰 제외 후)', () => {
     expect(titleSimilar('장마철 실내 제습 꿀팁, 곰팡이 없는 여름나기', '장마철 실내 습도 낮추는 법 — 제습기 없이도')).toBe(true);
+  });
+});
+
+// 개념 포화(2026-07-23 감사) — bigramJaccard 표면 유사론 0쌍이나 실제론 '여름·물주기' 소재로 쏠린 코퍼스를 잡는다.
+describe('saturatedThemeMatches — 표면 문자열론 안 겹쳐도 소재 쏠림(개념 포화) 감지', () => {
+  const existing: ExistingContent[] = [
+    { title: '여름화분물주기 속흙 3단계 체크법으로 과습 방지하기', keyword: '여름화분물주기', kind: '블로그' },
+    { title: '폭염 나무 물주기, 이른 아침 깊이 급수 완벽 가이드', keyword: '폭염 나무 물주기', kind: '블로그' },
+    { title: '장마철나무관리 물을 빼야 나무가 산다', keyword: '장마철나무관리', kind: '블로그' },
+    { title: '반려동물 안전한 식물 5가지', keyword: '반려동물 안전한 식물', kind: '블로그' },
+  ];
+  it('같은 소재(물주기·여름·과습)로 쏠린 후보는 매치', () => {
+    const m = saturatedThemeMatches({ title: '식물 고사 막는 법, 과습 vs 건조 진단부터 물주기 여름', keyword: '물주기' }, existing);
+    expect(m.length).toBeGreaterThan(0);
+  });
+  it('완전히 다른 소재는 빈 배열(소재 신선)', () => {
+    expect(saturatedThemeMatches({ title: '겨울 김장 배추 절이기 소금 비율', keyword: '김장 배추' }, existing)).toEqual([]);
+  });
+});
+
+describe('saturatedThemes — 여러 편에 겹치는 포화 소재어(빈도순)', () => {
+  it('minPieces 이상 편에 등장하는 내용어만 반환', () => {
+    const existing: ExistingContent[] = [
+      { title: '여름 물주기 화분 과습', kind: '블로그' },
+      { title: '여름 물주기 나무 급수', kind: '블로그' },
+      { title: '여름 채소 베란다 수확', kind: '블로그' },
+    ];
+    const toks = saturatedThemes(existing, 2).map((s) => s.token);
+    expect(toks).toContain('여름');    // 3편
+    expect(toks).toContain('물주기');  // 2편
+    expect(toks).not.toContain('과습'); // 1편만 → 미포화
   });
 });

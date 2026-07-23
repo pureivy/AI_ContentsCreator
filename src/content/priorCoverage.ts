@@ -41,6 +41,28 @@ export function markdownHeadings(body: string, cap = 6): string[] {
   return out;
 }
 
+/** 본문 마크다운의 '스타일 지문'(순수) — 도입 첫 문장·마무리 소제목·소제목 골격. 교차-글 다양성 지시의 원자료. */
+export function styleSignatureOf(body: string): { opening: string; closing: string; headings: string } {
+  const hs = markdownHeadings(body);
+  const plain = (body || '')
+    .replace(/^#{1,6}.*$/gm, ' ')          // 소제목 줄 제거
+    .replace(/\[IMAGE:[^\]]*\]/g, ' ')     // 이미지 마커 제거
+    .replace(/[#*>`|_~-]/g, ' ')           // 서식 문자 제거
+    .replace(/\s+/g, ' ').trim();
+  const opening = (plain.split(/(?<=[.!?。])\s/)[0] ?? plain).slice(0, 60);
+  return { opening, closing: hs[hs.length - 1] ?? '', headings: hs.join(' · ') };
+}
+/** 블로그 초안 스타일 지문 — piece.runId → draft.json 의 bodyMarkdown(디스크). 실패 시 null. */
+function blogStyleSig(runId: string | undefined): { opening: string; closing: string; headings: string } | null {
+  if (!runId) return null;
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
+    const body = d.bodyMarkdown ?? '';
+    if (!body.trim()) return null;
+    const s = styleSignatureOf(body);
+    return (s.opening || s.headings) ? s : null;
+  } catch { return null; }
+}
 /** 블로그 초안 소제목 — piece.runId → data/sessions/<runId>/draft.json 의 bodyMarkdown. */
 function blogOutline(runId: string | undefined): string {
   if (!runId) return '';
@@ -124,6 +146,36 @@ export function priorCoverageBrief(
       '· 다른 독자 상황(예: 이미 심었는데 열매가 안 달리는 사람 / 공간·화분 제약 / 특정 계절·시기)',
       '· 다른 글 유형(통념 반박 / 실패·시행착오 복기 / 단계별 체크리스트 / 자주 묻는 질문 / 한 가지 쟁점 심화)',
       '주제의 정의적 핵심 사실은 한두 줄로만 짚고, 나머지 분량은 위 글이 다루지 않은 새 정보·상황·예시로 채워라.',
+    ].join('\n');
+  } catch { return ''; }
+}
+
+/**
+ * 최근 발행한 같은 유형(블로그) 글의 '스타일 지문'(도입 첫 문장·마무리 소제목·소제목 골격)을 모아,
+ * 작가에게 "이 도입·마무리·구성을 반복하지 말고 다르게 쓰라"는 교차-글 다양성 지시 블록으로 만든다.
+ * novelty(주제 중복)·priorCoverage(같은 주제 각도)를 넘어, **다른 주제인데도 매번 같은 틀로 수렴**하는 것을
+ * 막는다(2026-07-23 감사: 도입 공식·"N단계 체크"·"오늘 바로 할 일" 마무리·"A가 아니라 B" 훅 과반복). 전량 fail-open.
+ */
+export function recentStyleToAvoid(
+  brandSlug: string | undefined, opts: { excludeRunId?: string; limit?: number } = {},
+): string {
+  try {
+    const brandOk = (b?: string): boolean => brandSlug === undefined || (b ?? undefined) === brandSlug;
+    const sigs: Array<{ opening: string; closing: string; headings: string }> = [];
+    for (const e of [...pieceStore().list()].reverse()) {   // 최신부터
+      if (e.runId === opts.excludeRunId || !brandOk(e.brand)) continue;
+      const s = blogStyleSig(e.runId);
+      if (s) sigs.push(s);
+      if (sigs.length >= (opts.limit ?? 4)) break;
+    }
+    if (!sigs.length) return '';
+    const lines = sigs.map((s, i) => `${i + 1}. 도입: "${s.opening}…" / 마무리 소제목: "${s.closing}" / 구성: ${s.headings}`);
+    return [
+      '[최근 발행한 같은 유형 글의 도입·마무리·구성 — 아래와 겹치지 말 것]',
+      ...lines,
+      '위 글들과 다른 진입 방식·다른 마무리·다른 소제목 구성으로 써라. 특히 아래 과반복 틀을 이번 글에서 반복하지 마라: '
+        + '①도입 공식(계절/날씨 장면→독자의 흔한 실수→"결론부터/그런데" 반전) ②"N단계 체크법" 소제목 ③"오늘 바로 할 일/정리/요약" 식 마무리 '
+        + '④"A가 아니라 B"·"X보다 Y가 먼저" 대비 훅. 같은 소재라도 진입 프레임·구성·마무리 방식을 반드시 바꿔라.',
     ].join('\n');
   } catch { return ''; }
 }

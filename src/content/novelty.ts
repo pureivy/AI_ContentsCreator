@@ -88,6 +88,34 @@ export function findSimilarContent(
 }
 
 /**
+ * 개념 포화(테마 쏠림) 감지 — 표면 문자열(bigram)론 안 겹쳐도 '핵심 내용어'가 겹치면 같은 소재로 본다.
+ * '폭염 나무 물주기' ↔ '여름화분물주기' ↔ '장마철 물빼기'처럼 글자는 달라도 소재가 쏠린 경우를 잡는다
+ * (bigramJaccard 는 이들을 0.35 미만으로 흘려보낸다 — 실측). tokens() 는 범용 꼬리말(방법·가이드·관리…)을
+ * STOP_TOKENS 로 제외하므로 남는 건 변별력 있는 내용어(물주기·여름·품종·과습…)다.
+ */
+/** 후보가 기존 콘텐츠와 핵심 내용어를 minShared개 이상 공유하는 것들(공유 수 내림차순). 빈 배열 = 소재 신선. */
+export function saturatedThemeMatches(
+  cand: { title: string; keyword?: string },
+  existing: ExistingContent[],
+  minShared = 2,
+): SimilarMatch[] {
+  const a = `${cand.title} ${cand.keyword ?? ''}`;
+  return existing
+    .map((e) => ({ e, shared: sharedTokenCount(a, `${e.title} ${e.keyword ?? ''}`) }))
+    .filter((x) => x.shared >= minShared)
+    .sort((x, y) => y.shared - x.shared)
+    .map((x) => ({ title: x.e.title, kind: x.e.kind, score: x.shared, via: 'title' as const }));
+}
+/** 코퍼스에서 minPieces편 이상에 등장하는 핵심 내용어 = '이미 포화된 소재'. 아이디어 생성이 피하도록 프롬프트에 주입. */
+export function saturatedThemes(existing: ExistingContent[], minPieces = 3): Array<{ token: string; count: number }> {
+  const freq = new Map<string, number>();
+  for (const e of existing) {
+    for (const t of new Set(tokens(`${e.title} ${e.keyword ?? ''}`))) freq.set(t, (freq.get(t) ?? 0) + 1);
+  }
+  return [...freq.entries()].filter(([, c]) => c >= minPieces).sort((x, y) => y[1] - x[1]).map(([token, count]) => ({ token, count }));
+}
+
+/**
  * 브랜드의 기존 콘텐츠 수집(제목+키워드) — 글·쇼츠·카드뉴스 최신순 limit 건.
  * 브랜드 격리: (brand ?? '') 정확 일치만(폴백 없음 — 타 브랜드 콘텐츠는 비교 대상 아님).
  */
