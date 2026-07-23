@@ -25,7 +25,7 @@ import { naverSerp } from '../grounding/naver_search';
 import { seedKeyword } from '../grounding/naver_common';
 import { getRunSettings } from '../runsettings';
 import { brandContext, activeBrandSlug } from '../content/brand';
-import { priorCoverageBrief } from '../content/priorCoverage';
+import { priorCoverageBrief, recentStyleToAvoid } from '../content/priorCoverage';
 import type { RunOptions, RunOutcome } from './run';
 
 interface TeamResult {
@@ -105,6 +105,10 @@ export async function writeBlogBody(a: {
     : '';
   // 같은 주제 기존 글이 있으면 '관점을 완전히 다르게' 지시를 주입(revise 는 자기 초안 개정이라 제외).
   const priorCoverage = revise ? '' : priorCoverageBrief('블로그', topic, keyword, { brandSlug: activeBrandSlug() || undefined });
+  // 교차-글 스타일 다양성(2026-07-23 감사) — 다른 주제인데도 도입 공식·"N단계 체크"·"오늘 바로 할 일" 마무리·
+  // "A가 아니라 B" 훅으로 매번 수렴하는 것을 막는다. 킬스위치 WRITER_STYLE_DIVERGE=off. revise 는 본문 유지가
+  // 목적이라 제외. (효과는 향후 몇 편의 실제 산출로만 검증 가능.)
+  const styleAvoid = (revise || process.env.WRITER_STYLE_DIVERGE === 'off') ? '' : recentStyleToAvoid(activeBrandSlug() || undefined, { limit: 4 });
   const synth = await runAgent({
     bus, role: writer, model,
     task: revise
@@ -112,6 +116,7 @@ export async function writeBlogBody(a: {
       : `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 검색 의도를 충족하는 완결된 글을 쓴다.\n${BLOG_BODY_GUIDE}`,
     context: revise ? reviseContext : [
       priorCoverage,
+      styleAvoid,
       serpText ? `[네이버 상위 노출 블로그(실측) — 검색 수요가 검증된 방향·눈높이 참고. 제목·구성 그대로 베끼기 금지]\n${serpText}` : '',
       brief ? `[리서치·SEO 브리프]\n${brief}` : '',
       critiqueText ? `[검수 의견 — 아래는 약점·주의점 목록이다. 발행 판정이 아니다. 지적된 미검증·논쟁 주장은 본문에서 빼고, 나머지는 참고해 품질을 높여라]\n${critiqueText}` : '',
@@ -127,7 +132,7 @@ export async function writeBlogBody(a: {
     const retry = await runAgent({
       bus, role: writer, model,
       task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 질문·보류·메타 설명 없이 곧바로 본문(## 소제목 포함)만 출력한다.\n${BLOG_BODY_GUIDE}`,
-      context: revise ? reviseContext : [priorCoverage, brief ? `[리서치·SEO 브리프]\n${brief}` : ''].filter(Boolean).join('\n\n'),
+      context: revise ? reviseContext : [priorCoverage, styleAvoid, brief ? `[리서치·SEO 브리프]\n${brief}` : ''].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, maxOutputTokens: 5000, signal,
     });

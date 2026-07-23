@@ -16,7 +16,7 @@ import { getCompany } from '../agents/company-loader';
 import { microJSON } from '../orchestrator/agent';
 import { asString } from '../util/str';
 import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix } from '../content/brand';
-import { collectExistingContent, findSimilarContent } from '../content/novelty';
+import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 
 export interface AutoCycleDeps<T = string> {
   /** 사이클 주기(ms). ≤0 이면 스케줄러는 no-op. */
@@ -169,6 +169,12 @@ const IDEA_SYSTEM =
  * 위키 인덱스는 주제 생성에서 제외(anti-drift): 과거 적재 자료로 편향되는 피드백 루프를 끊는다(구 gov 버전의 근본 교훈 유지).
  * 모델 — 클라우드 micro(haiku). (Ollama 로컬 분기는 백엔드 제거와 함께 삭제 — 2026-07-06)
  */
+// 콘텐츠 각도 메뉴(브랜드 무관) — 아이디어가 매번 '계절 케어 하우투'로 수렴하지 않게 각도를 로테이션한다.
+const IDEA_ANGLES = [
+  '하우투(단계별 실행 절차)', '구매·선택 가이드(옵션 비교·고르는 기준)', '흔한 실패·오해 바로잡기',
+  '초보 입문(처음 시작하는 사람 기준)', '다음 시즌·시기 대비(지금 준비할 것)', '증상·상황별 진단',
+  '실제 사례·후기 관점', '한 가지 쟁점 깊이 파기',
+];
 export async function proposeContentIdeas(signal?: AbortSignal): Promise<ContentIdea | null> {
   const c = getCompany();
   // 팀·업무 범위(헌장) — 아이디어 생성의 재료(회사 정체성·콘텐츠 영역이 specialty 에 담겨 있음).
@@ -198,13 +204,22 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   const existing = collectExistingContent(activeBrandSlug() || undefined);
   const existingLines = existing.slice(0, 30)
     .map((e) => `- (${e.kind}) ${e.title}${e.keyword ? ` [키워드: ${e.keyword}]` : ''}`).join('\n');
+  // 다양성 강제(2026-07-23 감사) — 킬스위치 CONTENT_DIVERSITY=off 로 끔. 표면 novelty 가 못 잡는 '소재 쏠림'을
+  // 포화 소재어 회피 + 각도 로테이션으로 완화(탐색 예산). 실효는 향후 몇 편의 실제 산출로만 판단 가능.
+  const diversityOn = process.env.CONTENT_DIVERSITY !== 'off';
+  const satTokens = diversityOn ? saturatedThemes(existing, 3).slice(0, 15).map((t) => t.token) : []; // 상위 15개(빈도순)만 — 과도한 회피목록 방지
+  const diversityBlock = diversityOn
+    ? `[이미 포화된 소재 — 이번엔 이 소재어들을 피하라]\n${satTokens.length ? satTokens.join(', ') : '(아직 포화 없음 — 자유롭게)'}\n\n`
+      + `[이번 글의 각도 — 아래 중 최근 자율주제와 다른 각도 하나를 골라 그 각도로 잡아라]\n${IDEA_ANGLES.join(' | ')}\n\n`
+    : '';
   const baseUser =
     (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +
-    `[성과 상위 키워드]\n${winners || coldstart}\n\n` +
+    `[성과 상위 키워드(참고용 씨앗 — 이 테마만 반복하지 말 것)]\n${winners || coldstart}\n\n` +
     `[기존 콘텐츠 — 주제·키워드 유사 금지]\n${existingLines || '(없음)'}\n\n` +
     `[최근 제작 — 중복 회피]\n${done || '(없음)'}\n\n` +
     `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}\n\n` +
+    diversityBlock +
     (productLines.length ? `subNiche 는 반드시 다음 제품 라인 중 가장 관련 있는 하나로: ${productLines.join(' | ')}\n\n` : '') +
     `형식: {"title":"...","keyword":"...","subNiche":"..."}`;
 
@@ -222,6 +237,16 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       rejectNote = `[직전 제안 기각 — 기존 ${top.kind} "${top.title}"와(과) ${top.via === 'keyword' ? '키워드' : '주제'} 유사] 완전히 다른 주제·키워드로 다시 제안하라.`;
       console.log(`[auto-cycle] 아이디어 기각(기존과 유사) — "${title}" ≈ (${top.kind}) "${top.title}"`);
       continue;
+    }
+    // 개념 포화 기각 — 표면 유사(findSimilarContent)는 통과했지만 핵심 소재가 여러 편과 겹치면 1회만 다른 축 유도.
+    // attempt 0 에서만(2번째 시도는 통과시켜 기아 방지 — 다양성은 강제하되 생산은 막지 않는다).
+    if (diversityOn && attempt === 0) {
+      const sat = saturatedThemeMatches({ title, ...(keyword ? { keyword } : {}) }, existing, 3);
+      if (sat.length) {
+        rejectNote = `[직전 제안 기각 — 이미 포화된 소재(기존 "${sat[0]!.title}"와 핵심 소재 다수 겹침)] 소재 자체를 바꿔라: 계절·대상·각도·포맷 중 최소 하나를 확 틀어라.`;
+        console.log(`[auto-cycle] 아이디어 기각(소재 포화) — "${title}" ≈ "${sat[0]!.title}"`);
+        continue;
+      }
     }
     recentAuto.push(title);
     if (recentAuto.length > 20) recentAuto.shift();

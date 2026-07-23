@@ -49,6 +49,8 @@ export function keywordSimilar(a: string, b: string): boolean {
 const STOP_TOKENS = new Set([
   '방법', '총정리', '정리', '요령', '추천', '방지', '시기', '준비물', '꿀팁', '가이드',
   '체크리스트', '비교', '후기', '리뷰', '관리', '노하우', '하는법', '초보자', '완벽', '실전',
+  // 순수 filler(테마 아님) — 제목에 흔하나 변별력 없어 유사·포화 신호를 오염(2026-07-23 감사).
+  '지금', '이유', '완전', '이것',
 ]);
 /** 2자 이상·비범용 토큰 집합 — 공백·구두점 분리, NFC·소문자. */
 function tokens(s: string): string[] {
