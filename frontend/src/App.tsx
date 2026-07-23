@@ -444,7 +444,9 @@ export default function App() {
   // when a live run finishes, add it to the history list + pull any approvals it
   // queued at the end (e.g. tool-grant recommendations).
   useEffect(() => {
-    if (s.mode === "live" && s.runId && TERMINAL.has(s.status)) { refreshRuns(); refreshApprovals(); }
+    // 라이브 런의 상태가 바뀔 때마다(시작=running 포함) 기록 목록 갱신 — 종전엔 완료(TERMINAL) 시에만 갱신해
+    // '진행 중' 런이 기록에 안 떴다(사용자 보고: 완료된 것만 나옴). approvals 는 종료 시에만 필요.
+    if (s.mode === "live" && s.runId) { refreshRuns(); if (TERMINAL.has(s.status)) refreshApprovals(); }
   }, [s.status, s.runId, s.mode]);
 
   // 최종 결과(synthesis) 자동 낭독 — running→TERMINAL 전이 시 1회(라이브 한정). 합성은
@@ -1469,7 +1471,7 @@ export default function App() {
           {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
           onChange={async (e) => { await doUpload(e.target.files); e.target.value = ""; }} />
         <div className="hist-wrap" ref={histWrapRef}>
-          <button className="btn hist-toggle" onClick={() => setShowHist((v) => !v)} title="토론 기록">
+          <button className="btn hist-toggle" onClick={() => { if (!showHist) void refreshRuns(); setShowHist((v) => !v); }} title="토론 기록">
             <Ico name="bubble" size={12} /> 기록{runs.length > 0 ? ` (${runs.length})` : ""}
           </button>
           {showHist && (
