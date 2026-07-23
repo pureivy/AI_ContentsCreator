@@ -1499,6 +1499,7 @@ export default function App() {
                       <span className={`hist-badge status-${r.status}`}>
                         {STATUS_LABEL[r.status] ?? r.status}
                       </span>
+                      {r.auto && <span className="hist-badge" title="자율(백그라운드) 런 — 진행 중">🤖 자율</span>}
                       <span className="hist-topic">{r.topic.slice(0, 40) || "(제목 없음)"}</span>
                     </button>
                     {r.status === "interrupted" && (

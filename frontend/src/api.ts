@@ -7,6 +7,8 @@ export interface RunInfo {
   total_cost: number;
   created_ts: string;
   active: boolean;
+  /** 자율(백그라운드) 런 여부 — 기록엔 진행 중 자율런만 표출(완료 자율런 제외). */
+  auto?: boolean;
   /** 수정 런 계보(⑤): 부모 런 id + 버전(v2부터 서버가 채움). */
   parent_run_id?: string | null;
   version?: number;

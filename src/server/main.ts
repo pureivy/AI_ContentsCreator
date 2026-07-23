@@ -616,15 +616,16 @@ function listPersistedRuns(): PersistedMeta[] {
   return out;
 }
 function listRunsHandler(c: Context): Response {
-  // 자율 사이클이 띄운 런(auto)은 사용자 기록 탭을 오염시키지 않게 제외(직접 /runs/:id 접근은 가능).
+  // 사용자 런은 전부, 자율(auto) 런은 '진행 중(running)'인 것만 기록에 포함 — 사용자가 지금 뭐가 도는지 보되,
+  // 완료된 자율런 수십 건이 기록을 오염시키는 건 방지(사용자 결정 2026-07-23). 완료 자율런은 직접 /runs/:id 접근만.
   const mem = [...RUNS.entries()]
-    .filter(([, h]) => !h.auto && (h.brand ?? '') === activeBrandSlug())
-    .map(([id, h]) => ({ run_id: id, topic: h.topic, status: h.status, total_cost: 0, created_ts: h.created_ts, active: h.status === 'running' }));
+    .filter(([, h]) => (!h.auto || h.status === 'running') && (h.brand ?? '') === activeBrandSlug())
+    .map(([id, h]) => ({ run_id: id, topic: h.topic, status: h.status, total_cost: 0, created_ts: h.created_ts, active: h.status === 'running', auto: !!h.auto }));
   const memIds = new Set(RUNS.keys());
-  // 영속 세션 — 메모리에 없는 과거 런만 합쳐 재시작 후에도 기록 탭에 표출(자율런은 제외).
+  // 영속 세션 — 메모리에 없는 과거 런만 합쳐 재시작 후에도 기록 탭에 표출(완료 자율런은 제외 — 진행 중만 mem 에 있음).
   const persisted = listPersistedRuns()
     .filter((r) => !memIds.has(r.run_id) && !r.auto && (r.brand ?? '') === activeBrandSlug())
-    .map((r) => ({ run_id: r.run_id, topic: r.topic, status: r.status, total_cost: 0, created_ts: r.created_ts, active: false }));
+    .map((r) => ({ run_id: r.run_id, topic: r.topic, status: r.status, total_cost: 0, created_ts: r.created_ts, active: false, auto: false }));
   const runs = [...mem, ...persisted].sort((a, b) => (b.created_ts || '').localeCompare(a.created_ts || ''));
   return c.json({ runs });
 }
