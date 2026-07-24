@@ -16,6 +16,7 @@ export const autoShortsSchema = z.object({
     screenText: z.string(),
     durationInFrames: z.number(),
     videoSrc: z.string().nullable().optional(),
+    clipFrames: z.number().optional(), // 실제 클립 길이(30fps 기준 프레임) — 루프 경계 정합용. 없으면 CLIP_FRAMES 폴백.
     kind: z.enum(['hook', 'stat', 'list', 'quote', 'cta']).optional(),
     stat: z.object({ value: z.number(), unit: z.string().optional(), label: z.string().optional() }).optional(),
     items: z.array(z.string()).max(4).optional(),
@@ -38,7 +39,7 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number }> =
   return (
     <AbsoluteFill style={{ opacity: fade }}>
       {s.videoSrc ? (
-        <Loop durationInFrames={CLIP_FRAMES}>
+        <Loop durationInFrames={s.clipFrames ?? CLIP_FRAMES}>
           <OffthreadVideo src={staticFile(s.videoSrc)} muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         </Loop>
       ) : (

@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { selectComposition, renderMedia, makeCancelSignal } from '@remotion/renderer';
-import { prepareScenes, buildSrt, resolveClipSrc } from './shortsCommon';
+import { prepareScenes, buildSrt, resolveClipSrc, FPS, probeDuration } from './shortsCommon';
 import type { ShortsScene, ShortsRenderResult } from './shortsCommon';
 
 export async function renderShortsVideoRemotion(
@@ -26,22 +26,29 @@ export async function renderShortsVideoRemotion(
   if (!prepared.length) return { ok: false, issues: [...issues, '조립할 씬 없음'] };
 
   // 2) 에셋 스테이징(public/) — staticFile 참조용 bare 파일명으로 복사
-  const propScenes = prepared.map((p) => {
+  const propScenes = await Promise.all(prepared.map(async (p) => {
     const nn = String(p.index + 1).padStart(2, '0');
     let imageSrc: string | null = null, audioSrc: string | null = null;
     if (p.imagePath) { const dst = `scene_${nn}${path.extname(p.imagePath) || '.png'}`; fs.copyFileSync(p.imagePath, path.join(publicDir, dst)); imageSrc = dst; }
     if (p.audioPath) { const dst = `narr_${nn}.mp3`; fs.copyFileSync(p.audioPath, path.join(publicDir, dst)); audioSrc = dst; }
     const videoSrc = resolveClipSrc(opts.clips?.[p.index], nn);
-    if (videoSrc) fs.copyFileSync(opts.clips![p.index]!, path.join(publicDir, videoSrc));
+    let clipFrames: number | undefined;
+    if (videoSrc) {
+      const clipPath = opts.clips![p.index]!;
+      fs.copyFileSync(clipPath, path.join(publicDir, videoSrc));
+      // 실제 클립 길이(ffprobe)로 Loop 프레임 산정 — '모든 클립 6초' 하드코딩 가정 제거(길이 가변 시 루프 경계 프리즈/점프 방지).
+      try { const d = await probeDuration(clipPath); if (d > 0) clipFrames = Math.max(1, Math.round(d * FPS)); } catch { /* 산정 실패 시 AutoShorts CLIP_FRAMES 상수 폴백 */ }
+    }
     const sc = scenes[p.index];
     return {
       imageSrc, audioSrc, videoSrc, screenText: p.screenText, durationInFrames: p.durationInFrames,
+      ...(clipFrames ? { clipFrames } : {}),
       ...(sc?.kind ? { kind: sc.kind } : {}),
       ...(sc?.stat ? { stat: sc.stat } : {}),
       ...(sc?.items ? { items: sc.items } : {}),
       ...(sc?.quote ? { quote: sc.quote } : {}),
     };
-  });
+  }));
   const totalFrames = prepared.reduce((a, p) => a + p.durationInFrames, 0);
   const inputProps = { scenes: propScenes, totalFrames };
 
