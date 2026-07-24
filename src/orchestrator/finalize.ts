@@ -15,6 +15,26 @@ import { genId } from '../util/ids';
 import type { AssetBundle } from '../output';
 import { generateImagesForDraft } from '../tools/blog_skills';
 
+/**
+ * 완성된 blog-image-NN.png 파일명들 → 슬롯 번호(NN) 정렬 매니페스트 images 배열(순수).
+ * 이미지 생성이 도중 중단(부분 실패·타임아웃)돼 매니페스트가 안 써졌을 때, 살아있는 이미지를
+ * 원래 슬롯 위치(NN-1 인덱스)에 복원한다 — 번호 압축 없이(중간 슬롯 실패 시 뒤 이미지가 당겨지지 않게).
+ * 실패 슬롯은 null(발행이 건너뜀). cardnews 배경 복원과 동일 원리.
+ */
+export function reconstructImageManifest(filenames: string[], imagesDir: string): Array<{ file_path: string } | null> {
+  const re = /^blog-image-(\d{2})\.png$/;
+  const nums = filenames.map((f) => re.exec(f)?.[1]).filter((n): n is string => !!n).map(Number);
+  const len = nums.length ? Math.max(...nums) : 0;
+  const images: Array<{ file_path: string } | null> = Array.from({ length: len }, () => null);
+  for (const f of filenames) {
+    const m = re.exec(f);
+    if (!m) continue;
+    const nb = Number(m[1]);
+    if (nb >= 1 && nb <= len) images[nb - 1] = { file_path: path.join(imagesDir, f) };
+  }
+  return images;
+}
+
 export interface FinalPosition {
   id: string;
   name: string;
@@ -116,12 +136,27 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
     try {
       const dir = path.join(CONFIG.sessionsDir, a.bus.runId);
       const draftPath = path.join(dir, 'draft.json');
+      const imagesDir = path.join(dir, 'images');
+      const manifestPath = path.join(dir, 'image_manifest.json');
       if (fs.existsSync(draftPath)) {
         const r = await generateImagesForDraft(
-          draftPath, path.join(dir, 'images'), path.join(dir, 'image_manifest.json'),
+          draftPath, imagesDir, manifestPath,
           { topic: a.topic, imageStyle: 'photorealistic', limit: 3 }, a.signal,
         );
-        a.bus.emit(EventType.log, { message: `블로그 이미지 — ${r.output.split('\n')[0]}` });
+        // 매니페스트 복원 — 생성이 도중 중단돼 매니페스트가 안 써졌어도 완성된 images/blog-image-NN.png 를
+        // 슬롯 번호대로 살려 발행이 쓰게 한다. 없으면 부분 이미지(예: 2/3)가 전부 유실돼 텍스트만 발행되던
+        // 회귀 차단(2026-07-24 실측). cardnews 배경 복원과 동일 원리.
+        let recovered = 0;
+        if (!fs.existsSync(manifestPath) && fs.existsSync(imagesDir)) {
+          try {
+            const done = fs.readdirSync(imagesDir).filter((f) => /^blog-image-\d{2}\.png$/.test(f));
+            const images = reconstructImageManifest(done, imagesDir);
+            recovered = images.filter(Boolean).length;
+            if (recovered) fs.writeFileSync(manifestPath, JSON.stringify({ images }, null, 2), 'utf-8');
+          } catch { /* 복원 실패는 무해 — 텍스트만 발행 */ }
+        }
+        const head = r.output.split('\n')[0];
+        a.bus.emit(EventType.log, { message: `블로그 이미지 — ${head}${recovered ? ` · 매니페스트 복원 ${recovered}장(부분 실패 살림)` : ''}` });
       }
     } catch (e) {
       a.bus.emit(EventType.log, { message: `블로그 이미지 생성 실패(무해): ${e instanceof Error ? e.message : String(e)}` });
