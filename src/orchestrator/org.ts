@@ -109,6 +109,12 @@ export async function writeBlogBody(a: {
   // "A가 아니라 B" 훅으로 매번 수렴하는 것을 막는다. 킬스위치 WRITER_STYLE_DIVERGE=off. revise 는 본문 유지가
   // 목적이라 제외. (효과는 향후 몇 편의 실제 산출로만 검증 가능.)
   const styleAvoid = (revise || process.env.WRITER_STYLE_DIVERGE === 'off') ? '' : recentStyleToAvoid(activeBrandSlug() || undefined, { limit: 4 });
+  // 어휘 상투구 회피(2026-07-24) — recentStyleToAvoid(구조)를 넘어, 하우투 글마다 단골로 반복되는 정형 표현
+  // ('물주기 리듬'·'손가락 넣어 습도 확인' 등)을 어휘 층위에서 막는다. 같은 킬스위치·revise 제외.
+  const phraseAvoid = (revise || process.env.WRITER_STYLE_DIVERGE === 'off') ? '' :
+    "[상투 표현 회피] 하우투 글마다 단골로 반복되는 정형 표현을 이번 글에선 쓰지 말고 다른 어휘·비유로 풀어써라. "
+    + "예: '물주기 리듬', '손가락을 흙에 넣어/찔러 물기·습도 확인', '흙이 마를 시간을 주다' 같은 관용구. "
+    + "같은 정보라도 매번 신선한 문장·설명 방식으로 표현하라(형식적 상투구 반복 금지).";
   const synth = await runAgent({
     bus, role: writer, model,
     task: revise
@@ -117,6 +123,7 @@ export async function writeBlogBody(a: {
     context: revise ? reviseContext : [
       priorCoverage,
       styleAvoid,
+      phraseAvoid,
       serpText ? `[네이버 상위 노출 블로그(실측) — 검색 수요가 검증된 방향·눈높이 참고. 제목·구성 그대로 베끼기 금지]\n${serpText}` : '',
       brief ? `[리서치·SEO 브리프]\n${brief}` : '',
       critiqueText ? `[검수 의견 — 아래는 약점·주의점 목록이다. 발행 판정이 아니다. 지적된 미검증·논쟁 주장은 본문에서 빼고, 나머지는 참고해 품질을 높여라]\n${critiqueText}` : '',
@@ -132,7 +139,7 @@ export async function writeBlogBody(a: {
     const retry = await runAgent({
       bus, role: writer, model,
       task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 질문·보류·메타 설명 없이 곧바로 본문(## 소제목 포함)만 출력한다.\n${BLOG_BODY_GUIDE}`,
-      context: revise ? reviseContext : [priorCoverage, styleAvoid, brief ? `[리서치·SEO 브리프]\n${brief}` : ''].filter(Boolean).join('\n\n'),
+      context: revise ? reviseContext : [priorCoverage, styleAvoid, phraseAvoid, brief ? `[리서치·SEO 브리프]\n${brief}` : ''].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, maxOutputTokens: 5000, signal,
     });
