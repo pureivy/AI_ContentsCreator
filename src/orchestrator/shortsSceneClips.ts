@@ -40,9 +40,13 @@ export function buildI2vBody(model: string, prompt: string, imageUrl: string): R
 // export — 호출부(shorts.ts)가 모션 디렉터 비전 호출 전 같은 게이트로 낭비를 막는다.
 export const i2vGate = (): boolean => CONFIG.shortsI2v === 'fal' && !!CONFIG.falKey && CONFIG.shortsRenderer !== 'ffmpeg';
 
+// I2V 폴링 타임아웃 — 제출 후 결과 대기(폴링 연장은 재제출/재과금 아님, '과금 불변'). fal 큐 혼잡 시 120s는
+// 잦은 타임아웃→스틸 폴백(모션 상실)이라 180s 로 완화해 느린 생성을 회수. 재시도는 여전히 없음(과금 캡 유지).
+const I2V_TIMEOUT_MS = 180_000;
+
 /** fal queue REST 1회 실행 — 제출→폴링(2초)→결과 JSON. 타임아웃·취소·비정상 응답은 throw.
  *  중단 시 서버측 잡도 취소(cancel_url PUT, fire-and-forget) — 과금 즉시 종료. */
-async function falQueueRun(model: string, body: Record<string, unknown>, signal?: AbortSignal, timeoutMs = 120_000): Promise<unknown> {
+async function falQueueRun(model: string, body: Record<string, unknown>, signal?: AbortSignal, timeoutMs = I2V_TIMEOUT_MS): Promise<unknown> {
   const deadline = Date.now() + timeoutMs;
   const headers = { Authorization: `Key ${CONFIG.falKey}`, 'Content-Type': 'application/json' };
   const sub = await fetch(`https://queue.fal.run/${model}`, { method: 'POST', headers, body: JSON.stringify(body), signal });
@@ -56,7 +60,7 @@ async function falQueueRun(model: string, body: Record<string, unknown>, signal?
   try {
     for (;;) {
       if (signal?.aborted) throw new Error('취소됨');
-      if (Date.now() > deadline) throw new Error('fal 타임아웃(120s)');
+      if (Date.now() > deadline) throw new Error(`fal 타임아웃(${Math.round(timeoutMs / 1000)}s)`);
       let sj: { status?: string } = {};
       try {
         const st = await fetch(q.status_url, { headers, signal });
@@ -85,7 +89,7 @@ export async function i2vSceneClips(opts: {
     await Promise.all(opts.images.map(async (img, i) => {
       if (!img || !fs.existsSync(img)) return;
       try {
-        const sceneSignal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000);
+        const sceneSignal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(I2V_TIMEOUT_MS)]) : AbortSignal.timeout(I2V_TIMEOUT_MS);
         const b64 = fs.readFileSync(img).toString('base64');
         // 씬별 모션: 디렉터(비전) 프롬프트 우선, 없으면 정적 접미 폴백.
         const motion = opts.motionPrompts?.[i] ?? buildMotionPrompt(opts.scenePrompts[i] ?? '');
