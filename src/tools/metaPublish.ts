@@ -53,6 +53,22 @@ export function graphError(json: unknown, status: number): string {
     : `HTTP ${status}`;
 }
 
+/**
+ * 발행 실패 힌트(순수) — 두 가지 다른 한도를 구분해 오안내 방지.
+ * - code 4 'Application request limit reached' = 앱 API 레이트리밋(호출량 초과) → 일시적, 잠시 후 재시도. 발행 수 한도 아님.
+ * - 그 외 'limit'(발행 quota 초과 등) = 24시간 발행 한도(quota_total, 실측 100건).
+ * (graph.instagram.com 은 /me 노드 — content_publishing_limit 도 /me 경로.)
+ */
+export function metaLimitHint(error: string): string {
+  if (/\(code 4\)|request limit reached/i.test(error)) {
+    return ' — 앱 API 레이트리밋(호출량 초과, 일시적): 잠시(수십 분) 후 재시도하세요. 발행 수 한도가 아닙니다(멱등이라 재발행해도 중복 안 됨).';
+  }
+  if (/limit/i.test(error)) {
+    return ' — 24시간 발행 한도 가능성: 발행 quota 확인(GET /me/content_publishing_limit).';
+  }
+  return '';
+}
+
 async function graphJson(url: string, init: RequestInit, what: string): Promise<unknown> {
   const r = await fetch(url, init);
   const j: unknown = await r.json().catch(() => ({}));
@@ -151,8 +167,8 @@ export async function publishCardNewsToMeta(opts: {
   } catch (e) {
     // 채널별 부분 성공은 out 에 남아 있음 — 라우트가 성공분을 저장하고 실패 원인만 보고(성공 위장 금지).
     out.error = e instanceof Error ? e.message.slice(0, 200) : String(e);
-    // 발행 한도 도달 힌트(스펙 §6) — 메타 에러 문구에 limit 이 보이면 확인 경로 안내.
-    if (/limit/i.test(out.error)) out.error += ' — 24시간 발행 한도(100건) 가능성: GET /{ig-user-id}/content_publishing_limit 로 확인';
+    // 한도 힌트(스펙 §6) — 앱 레이트리밋(code 4)과 24h 발행 한도를 구분해 오안내 방지.
+    out.error += metaLimitHint(out.error);
     return out;
   }
 }
@@ -257,7 +273,7 @@ export async function publishShortsToMeta(opts: {
   } catch (e) {
     // 채널별 부분 성공은 out 에 남아 있음 — 라우트가 성공분을 저장하고 실패 원인만 보고(성공 위장 금지).
     out.error = e instanceof Error ? e.message.slice(0, 200) : String(e);
-    if (/limit/i.test(out.error)) out.error += ' — 24시간 발행 한도 가능성: content_publishing_limit 확인';
+    out.error += metaLimitHint(out.error);
     return out;
   }
 }

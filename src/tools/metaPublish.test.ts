@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildIgCaption, extractId, parsePermalink, realPermalink, graphError, matchOrphanReels, publishCardNewsToMeta, publishShortsToMeta } from './metaPublish';
+import { buildIgCaption, extractId, parsePermalink, realPermalink, graphError, metaLimitHint, matchOrphanReels, publishCardNewsToMeta, publishShortsToMeta } from './metaPublish';
 import { uploadToFalStorage } from './falStorage';
 import { getMetaAccount } from '../secrets/store';
 import fs from 'node:fs';
@@ -42,6 +42,19 @@ describe('metaPublish 순수 헬퍼', () => {
   it('graphError: 그래프 에러 메시지 추출(토큰 미노출), 없으면 HTTP 코드', () => {
     expect(graphError({ error: { message: 'Invalid parameter', code: 100 } }, 400)).toBe('Invalid parameter(code 100)');
     expect(graphError({}, 500)).toBe('HTTP 500');
+  });
+  it('metaLimitHint: code 4(앱 레이트리밋)와 24h 발행 한도를 구분', () => {
+    // code 4 = 앱 API 레이트리밋 → 재시도 안내, 발행 수 한도 아님 명시
+    const rate = metaLimitHint('IG 발행 실패: Application request limit reached(code 4)');
+    expect(rate).toContain('레이트리밋');
+    expect(rate).toContain('재시도');
+    expect(rate).not.toContain('24시간 발행 한도');
+    // 그 외 limit(발행 quota 초과 등) → 발행 한도 안내
+    const quota = metaLimitHint('IG 발행 실패: The user has reached the limit of posts(code 9)');
+    expect(quota).toContain('24시간 발행 한도');
+    expect(quota).toContain('/me/content_publishing_limit');
+    // limit 무관 에러 → 힌트 없음
+    expect(metaLimitHint('IG 컨테이너 응답 이형')).toBe('');
   });
 });
 
