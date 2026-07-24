@@ -65,7 +65,7 @@ export async function extractFirstFrame(videoPath: string, outPath: string, sign
 }
 
 /**
- * 다운로드용 — 디자인 썸네일을 영상 앞 introSec(현재 3초) 인트로로 붙인 dir/download.mp4(캐시). 썸네일 없으면 원본 그대로.
+ * 다운로드용 — 디자인 썸네일을 영상 앞 1.6초 인트로로 붙인 dir/download.mp4(캐시). 썸네일 없으면 원본 그대로.
  * 썸네일(2:3)은 9:16 프레임에 레터박스(검정 여백)로 넣고 인트로 구간은 무음. 원본·썸네일 갱신 시 재생성.
  * 실패하면 원본 final.mp4 경로 반환(인트로 없이 폴백). 오디오는 44100·스테레오·fltp 로 정규화해 concat 안정화.
  */
@@ -82,16 +82,15 @@ export async function ensureShortsDownload(dir: string, signal?: AbortSignal): P
     } catch { /* 재생성 */ }
   }
   const tmp = path.join(dir, `.download-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`);
-  const introSec = 3; // 인트로(디자인 썸네일) 길이 초 — 유튜브가 이 구간 프레임을 쇼츠 커버로 고를 확률↑ 실험(1.6→3). 무음·이미지 두 곳이 반드시 동일해야 concat 정합.
   const fc =
     `[0:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=${FPS},format=yuv420p[intro];` +
     `[1:v]scale=${W}:${H},setsar=1,fps=${FPS},format=yuv420p[main];` +
     `[intro][main]concat=n=2:v=1:a=0[v];` +
-    `anullsrc=channel_layout=stereo:sample_rate=44100:d=${introSec},aformat=sample_fmts=fltp:channel_layouts=stereo:sample_rates=44100[sil];` +
+    `anullsrc=channel_layout=stereo:sample_rate=44100:d=1.6,aformat=sample_fmts=fltp:channel_layouts=stereo:sample_rates=44100[sil];` +
     `[1:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo:sample_rates=44100[maina];` +
     `[sil][maina]concat=n=2:v=0:a=1[a]`;
   try {
-    await ff(['-loop', '1', '-t', String(introSec), '-i', thumb, '-i', video, '-filter_complex', fc,
+    await ff(['-loop', '1', '-t', '1.6', '-i', thumb, '-i', video, '-filter_complex', fc,
       '-map', '[v]', '-map', '[a]', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-c:a', 'aac', '-movflags', '+faststart', tmp],
       300_000, signal);
     fs.renameSync(tmp, out);
