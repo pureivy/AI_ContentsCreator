@@ -30,7 +30,7 @@ from pathlib import Path
 
 # 블로그 톤앤매너 스타일 프리셋(원본 image-generator STYLE_PRESETS 축약).
 STYLE_PRESETS = {
-    "photorealistic": "high-quality photorealistic photograph, natural lighting, authentic lifestyle aesthetic, not stock-photo-like",
+    "photorealistic": "high-quality photorealistic photograph, bright and airy natural daylight, clean well-lit scene with soft highlights, warm and vivid true-to-life colors, authentic lifestyle aesthetic, avoid dark moody or muddy low-light, not stock-photo-like",
     "manhwa":         "Korean manhwa-style illustration, clean line art, soft cel shading",
     "watercolor":     "soft watercolor illustration, warm dreamy atmosphere, Korean art style",
     "ink_wash":       "East Asian ink wash painting style, minimal elegant composition, ink brushwork accents",
