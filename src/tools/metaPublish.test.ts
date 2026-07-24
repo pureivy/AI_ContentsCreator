@@ -39,21 +39,29 @@ describe('metaPublish 순수 헬퍼', () => {
     expect(realPermalink(null)).toBeUndefined();
     expect(realPermalink(undefined)).toBeUndefined();
   });
-  it('graphError: 그래프 에러 메시지 추출(토큰 미노출), 없으면 HTTP 코드', () => {
+  it('graphError: 메시지+subcode+사용자제목 추출(토큰 미노출), 없으면 HTTP 코드', () => {
     expect(graphError({ error: { message: 'Invalid parameter', code: 100 } }, 400)).toBe('Invalid parameter(code 100)');
+    // 행동차단: subcode·error_user_title 동봉 → 하류(metaLimitHint)가 구분 가능
+    expect(graphError({ error: { message: 'Application request limit reached', code: 4, error_subcode: 2207051, error_user_title: '행동이 차단되었습니다' } }, 403))
+      .toBe('Application request limit reached(code 4, subcode 2207051) — 행동이 차단되었습니다');
     expect(graphError({}, 500)).toBe('HTTP 500');
   });
-  it('metaLimitHint: code 4(앱 레이트리밋)와 24h 발행 한도를 구분', () => {
-    // code 4 = 앱 API 레이트리밋 → 재시도 안내, 발행 수 한도 아님 명시
+  it('metaLimitHint: 행동차단(2207051) vs 앱 레이트리밋(code 4) vs 24h 발행 한도 구분', () => {
+    // 행동차단(subcode 2207051) → '행동 차단·반복 금지', 앱 레이트리밋 안내는 안 붙음
+    const block = metaLimitHint('IG 발행 실패: Application request limit reached(code 4, subcode 2207051) — 행동이 차단되었습니다');
+    expect(block).toContain('행동 차단');
+    expect(block).toContain('반복 클릭은 금지');
+    expect(block).not.toContain('앱 API 레이트리밋');
+    // subcode 없는 순수 code 4 → 앱 레이트리밋
     const rate = metaLimitHint('IG 발행 실패: Application request limit reached(code 4)');
-    expect(rate).toContain('레이트리밋');
-    expect(rate).toContain('재시도');
+    expect(rate).toContain('앱 API 레이트리밋');
+    expect(rate).not.toContain('행동 차단');
     expect(rate).not.toContain('24시간 발행 한도');
-    // 그 외 limit(발행 quota 초과 등) → 발행 한도 안내
+    // 그 외 limit → 24h 발행 한도
     const quota = metaLimitHint('IG 발행 실패: The user has reached the limit of posts(code 9)');
     expect(quota).toContain('24시간 발행 한도');
     expect(quota).toContain('/me/content_publishing_limit');
-    // limit 무관 에러 → 힌트 없음
+    // limit 무관 → 힌트 없음
     expect(metaLimitHint('IG 컨테이너 응답 이형')).toBe('');
   });
 });

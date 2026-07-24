@@ -45,12 +45,14 @@ export function realPermalink(p: string | null | undefined): string | undefined 
   return /^https?:\/\/(www\.)?instagram\.com\/?$/i.test(p) ? undefined : p;
 }
 
-/** 그래프 에러 → 사람이 읽을 메시지(순수, 토큰류 미포함). */
+/** 그래프 에러 → 사람이 읽을 메시지(순수, 토큰류 미포함). subcode·사용자대면 제목 동봉 — 'Application
+ *  request limit reached'(code 4)만으론 앱 레이트리밋과 행동차단(subcode 2207051)을 구분 못 하므로. */
 export function graphError(json: unknown, status: number): string {
-  const e = (json as { error?: { message?: unknown; code?: unknown } } | null)?.error;
-  return e && typeof e.message === 'string'
-    ? `${e.message}${e.code != null ? `(code ${e.code})` : ''}`.slice(0, 160)
-    : `HTTP ${status}`;
+  const e = (json as { error?: { message?: unknown; code?: unknown; error_subcode?: unknown; error_user_title?: unknown } } | null)?.error;
+  if (!e || typeof e.message !== 'string') return `HTTP ${status}`;
+  const sub = e.error_subcode != null ? `, subcode ${e.error_subcode}` : '';
+  const title = typeof e.error_user_title === 'string' && e.error_user_title ? ` — ${e.error_user_title}` : '';
+  return `${e.message}${e.code != null ? `(code ${e.code}${sub})` : ''}${title}`.slice(0, 200);
 }
 
 /**
@@ -60,9 +62,16 @@ export function graphError(json: unknown, status: number): string {
  * (graph.instagram.com 은 /me 노드 — content_publishing_limit 도 /me 경로.)
  */
 export function metaLimitHint(error: string): string {
-  if (/\(code 4\)|request limit reached/i.test(error)) {
-    return ' — 앱 API 레이트리밋(호출량 초과, 일시적): 잠시(수십 분) 후 재시도하세요. 발행 수 한도가 아닙니다(멱등이라 재발행해도 중복 안 됨).';
+  // ① 인스타 행동 차단(게시 빈도/스팸 보호) — subcode 2207051. code 4·'request limit'로 오지만 앱 레이트리밋과
+  //    다르다(is_transient=false, 게시 행동 자체 차단). 실측: 짧은 시간 다건 발행/재시도 시 발생. 회복은 수 시간~하루.
+  if (/2207051|행동이 차단|action.?block/i.test(error)) {
+    return ' — 인스타그램 행동 차단(게시 빈도 제한): 짧은 시간에 너무 많이 올려 일시 차단됐습니다. 수 시간~하루 후 재시도하고, 지금 반복 클릭은 금지(차단이 더 심해짐). 이미 인스타에 올라갔을 수 있으니 확인 후 재시도하세요.';
   }
+  // ② 앱 API 레이트리밋 — 호출량(x-app-usage) 초과. 행동차단이 아닌 순수 code 4.
+  if (/\(code 4\b|request limit reached/i.test(error)) {
+    return ' — 앱 API 레이트리밋(호출량 초과, 일시적): 잠시(수십 분) 후 재시도. 발행 수 한도가 아닙니다.';
+  }
+  // ③ 24시간 발행 수 한도(quota_total).
   if (/limit/i.test(error)) {
     return ' — 24시간 발행 한도 가능성: 발행 quota 확인(GET /me/content_publishing_limit).';
   }
