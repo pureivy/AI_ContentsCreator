@@ -1,0 +1,8 @@
+{
+  "tools": [
+    "wiki_query",
+    "wiki_ingest",
+    "web_search"
+  ],
+  "autonomy": 3
+}
