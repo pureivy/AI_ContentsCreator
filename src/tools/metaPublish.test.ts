@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildIgCaption, extractId, parsePermalink, realPermalink, graphError, metaLimitHint, matchOrphanReels, publishCardNewsToMeta, publishShortsToMeta } from './metaPublish';
+import { buildIgCaption, extractId, parsePermalink, realPermalink, graphError, metaLimitHint, matchRecentPublish, matchOrphanReels, publishCardNewsToMeta, publishShortsToMeta } from './metaPublish';
 import { uploadToFalStorage } from './falStorage';
 import { getMetaAccount } from '../secrets/store';
 import fs from 'node:fs';
@@ -63,6 +63,24 @@ describe('metaPublish 순수 헬퍼', () => {
     expect(quota).toContain('/me/content_publishing_limit');
     // limit 무관 → 힌트 없음
     expect(metaLimitHint('IG 컨테이너 응답 이형')).toBe('');
+  });
+  it('matchRecentPublish: 캡션 프리픽스+타입+3분이내 매칭(행동차단 후 회수)', () => {
+    const now = Date.parse('2026-07-24T08:25:00Z');
+    const posts = [
+      { id: 'reel1', caption: '라임오렌지나무여름관리 어쩌고', timestamp: '2026-07-24T08:24:30Z', media_type: 'VIDEO' },
+      { id: 'car1', caption: '방학 시작에 10개였던 열매, 끝날 때 몇 개', timestamp: '2026-07-24T08:24:52Z', media_type: 'CAROUSEL_ALBUM' },
+    ];
+    // 캡션 프리픽스+타입 일치 + 3분 이내 → 그 id
+    expect(matchRecentPublish(posts, '방학 시작에 10개였던 열매, 끝날 때 몇 개 남을까요\n\n#태그', 'CAROUSEL_ALBUM', now)).toBe('car1');
+    // 타입 불일치(릴스로 찾으면 캐러셀 제외) → 릴스 캡션과 다르면 null
+    expect(matchRecentPublish(posts, '전혀 다른 릴스 캡션입니다 여기', 'VIDEO', now)).toBeNull();
+    // 3분 초과 → null
+    const later = Date.parse('2026-07-24T08:29:00Z');
+    expect(matchRecentPublish(posts, '방학 시작에 10개였던 열매', 'CAROUSEL_ALBUM', later)).toBeNull();
+    // 캡션 프리픽스 불일치 → null
+    expect(matchRecentPublish(posts, '완전히 다른 카드뉴스 캡션', 'CAROUSEL_ALBUM', now)).toBeNull();
+    // 캡션 너무 짧음(<8자) → 오매칭 방지로 null
+    expect(matchRecentPublish(posts, '방학', 'CAROUSEL_ALBUM', now)).toBeNull();
   });
 });
 

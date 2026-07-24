@@ -16,6 +16,8 @@ export const GRAPH = 'https://graph.instagram.com/v23.0';
 
 export interface MetaPublishResult {
   ok: boolean; igMediaId?: string; igPermalink?: string; fbPostId?: string; error?: string;
+  /** 행동차단(2207051) 후 최근 미디어에서 회수해 기록한 발행(발행은 됐으나 응답에 id 없던 케이스). */
+  recovered?: boolean;
 }
 
 /** IG 캡션(순수) — 본문+해시태그 줄바꿈 결합, IG 한도 2200자 캡. */
@@ -97,6 +99,34 @@ async function waitContainer(containerId: string, token: string, signal?: AbortS
   throw new Error('IG 컨테이너 처리 시간 초과 — 잠시 후 재시도하세요');
 }
 
+/** 최근 미디어 목록에서 방금 올린 것 매칭(순수) — 캡션 프리픽스(24자)+미디어 타입 일치+nowMs 기준 3분 이내. */
+export function matchRecentPublish(
+  posts: Array<{ id?: string; caption?: string; timestamp?: string; media_type?: string }>,
+  caption: string, mediaType: string, nowMs: number,
+): string | null {
+  const head = caption.replace(/\s+/g, ' ').trim().slice(0, 24);
+  if (head.length < 8) return null; // 프리픽스 너무 짧으면 오매칭 위험 → 포기
+  for (const p of posts) {
+    if (!p.id || !p.caption || !p.timestamp || p.media_type !== mediaType) continue;
+    if (nowMs - new Date(p.timestamp).getTime() > 3 * 60_000) continue; // 3분 이내만
+    if (p.caption.replace(/\s+/g, ' ').trim().startsWith(head)) return p.id;
+  }
+  return null;
+}
+
+/**
+ * 행동차단(subcode 2207051)은 발행을 처리하고도 403(응답에 id 없음)을 반환할 수 있다(실측 2026-07-24: 카드/릴스당
+ * 정확히 1건만 게시 — 중복 아님). 그 경우 최근 내 미디어에서 방금 올린 것을 회수해 id 를 돌려준다 — '발행됐는데 미기록'
+ * 으로 버튼이 안 바뀌고 재시도 중복을 유발하던 것을 막는다. 실패 시 null(원래 에러 유지).
+ */
+async function recoverPublishedId(token: string, caption: string, mediaType: string, signal?: AbortSignal): Promise<string | null> {
+  try {
+    const j = await graphJson(`${GRAPH}/me/media?fields=id,caption,timestamp,media_type&limit=5&${tokenQs(token)}`, { signal }, '최근 미디어');
+    const posts = (j as { data?: Array<{ id?: string; caption?: string; timestamp?: string; media_type?: string }> }).data ?? [];
+    return matchRecentPublish(posts, caption, mediaType, Date.now());
+  } catch { return null; }
+}
+
 export async function publishCardNewsToMeta(opts: {
   slug: string; slidePaths: string[]; caption: string; hashtags: string[];
   existing?: { igMediaId?: string; igPermalink?: string; fbPostId?: string }; signal?: AbortSignal;
@@ -157,11 +187,20 @@ export async function publishCardNewsToMeta(opts: {
 
       // ③ 처리 완료 대기 후 발행.
       await waitContainer(carId, token, signal);
-      const pub = await graphJson(`${GRAPH}/me/media_publish`, {
-        method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ creation_id: carId, access_token: token }),
-      }, 'IG 발행');
-      out.igMediaId = extractId(pub) ?? undefined;
+      try {
+        const pub = await graphJson(`${GRAPH}/me/media_publish`, {
+          method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ creation_id: carId, access_token: token }),
+        }, 'IG 발행');
+        out.igMediaId = extractId(pub) ?? undefined;
+      } catch (e) {
+        // 행동차단(2207051)은 발행을 처리하고도 403(id 없음)을 반환할 수 있다 — 방금 올린 게시물을 회수해 기록.
+        if (/2207051|행동이 차단/i.test(e instanceof Error ? e.message : String(e))) {
+          const rec = await recoverPublishedId(token, message, imageUrls.length === 1 ? 'IMAGE' : 'CAROUSEL_ALBUM', signal);
+          if (rec) { out.igMediaId = rec; out.recovered = true; }
+        }
+        if (!out.igMediaId) throw e; // 회복 못 하면 원래 에러(메시지 힌트 유지)
+      }
       if (!out.igMediaId) throw new Error('IG 발행 응답 이형(id 없음)');
     }
     // 퍼머링크 보강 — 발행됐고(미디어 id) 아직 실제 링크 없으면 조회. 일시 실패 시 undefined(홈 URL 폴백 없음) → 다음 재시도가 채움.
@@ -188,6 +227,8 @@ export async function publishCardNewsToMeta(opts: {
 
 export interface MetaReelsResult {
   ok: boolean; igReelId?: string; igPermalink?: string; fbReelId?: string; error?: string;
+  /** 행동차단(2207051) 후 최근 미디어에서 회수해 기록한 발행. */
+  recovered?: boolean;
 }
 
 /** 업로드 URI 에 영상 바이너리 POST(IG rupload·FB upload_url 공통 규약) — {success:true} 아니면 throw. */
@@ -255,11 +296,20 @@ export async function publishShortsToMeta(opts: {
       const cid = extractId(container);
       if (!cid) throw new Error('IG 릴스 컨테이너 응답 이형');
       await waitContainer(cid, token, signal, 90); // 영상 다운로드+인코딩 — 3초×90회(호스티드 다운로드 여유)
-      const pub = await graphJson(`${GRAPH}/me/media_publish`, {
-        method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ creation_id: cid, access_token: token }),
-      }, 'IG 릴스 발행');
-      out.igReelId = extractId(pub) ?? undefined;
+      try {
+        const pub = await graphJson(`${GRAPH}/me/media_publish`, {
+          method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ creation_id: cid, access_token: token }),
+        }, 'IG 릴스 발행');
+        out.igReelId = extractId(pub) ?? undefined;
+      } catch (e) {
+        // 행동차단(2207051)은 릴스도 발행하고 403(id 없음)을 반환할 수 있다 — 방금 올린 영상을 회수해 기록.
+        if (/2207051|행동이 차단/i.test(e instanceof Error ? e.message : String(e))) {
+          const rec = await recoverPublishedId(token, message, 'VIDEO', signal);
+          if (rec) { out.igReelId = rec; out.recovered = true; }
+        }
+        if (!out.igReelId) throw e;
+      }
       if (!out.igReelId) throw new Error('IG 릴스 발행 응답 이형(id 없음)');
     }
     // 퍼머링크 보강 — 발행됐고(릴스 id) 아직 실제 링크 없으면 조회. 일시 실패 시 undefined(홈 URL 폴백 없음) → 다음 재시도가 채움.
