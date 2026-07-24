@@ -87,24 +87,59 @@ def do_login(slug: str) -> None:
         log("로그인이 감지되면 자동으로 세션을 저장하고 창을 닫습니다(Enter 불필요).")
         log("최대 6분 대기합니다...")
         log("=" * 60)
-        # TTY 없이도 되도록 input() 대신 로그인 완료를 폴링 감지.
+        # TTY 없이도 되도록 input() 대신 로그인 완료를 폴링 감지 + 실패 원인 진단.
         deadline = time.time() + 360
         ok = False
+        blocked = None
+        shot = str(profile_dir / "login-current.png")  # 진단용 현재 화면(로컬 전용)
+        block_msgs = [
+            "안전하지 않을 수 있", "browser or app may not be secure",
+            "Couldn't sign you in", "로그인할 수 없", "확인할 수 없는 브라우저",
+            "This browser or app may not be secure",
+        ]
+        tick = 0
         while time.time() < deadline:
             time.sleep(3)
+            tick += 1
             if _logged_in(page):
                 # 대시보드 진입 확인 후 채널 전환 여유 10초.
                 log("[로그인] 감지됨 — 10초 후 세션 저장")
                 time.sleep(10)
                 ok = _logged_in(page)
                 break
+            if tick % 5 == 0:  # ~15초마다 진단 스냅샷 + 구글 차단 문구 감지
+                try:
+                    page.screenshot(path=shot)
+                except Exception:
+                    pass
+                try:
+                    txt = page.evaluate("() => document.body ? document.body.innerText.slice(0,3000) : ''")
+                    hit = next((m for m in block_msgs if m in txt), None)
+                    if hit:
+                        blocked = hit
+                        log(f"[차단감지] 구글이 자동화 브라우저 로그인을 거부하는 문구 발견: '{hit}'")
+                        try:
+                            page.screenshot(path=shot)
+                        except Exception:
+                            pass
+                        break
+                except Exception:
+                    pass
         try:
             ctx.storage_state(path=str(profile_dir / "yt_storage.json"))
         except Exception as e:
             log(f"[세션] storage_state 저장 실패(무해, 프로필로도 지속): {str(e)[:80]}")
+        last_url = ""
+        try:
+            last_url = page.url
+        except Exception:
+            pass
         ctx.close()
+        note = "로그인 확인됨" if ok else (
+            f"구글 자동화 차단 감지: '{blocked}' — Playwright 로그인 불가, 확장/쿠키이관 대안 필요" if blocked
+            else "로그인 미확인(6분 초과) — 다시 --login 실행")
         emit({"ok": ok, "mode": "login", "profile": str(profile_dir),
-              "note": "로그인 확인됨" if ok else "로그인 미확인(6분 초과) — 다시 --login 실행"})
+              "blocked": blocked, "last_url": last_url, "screenshot": shot, "note": note})
 
 
 def _goto_edit(page, video_id: str) -> None:
