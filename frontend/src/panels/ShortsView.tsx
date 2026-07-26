@@ -36,9 +36,9 @@ function fmtCount(n: number): string {
   return String(n);
 }
 
-function ShortRow({ s, onDelete, yt, metaReady, onChanged }: {
+function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
   s: ShortsInfo; onDelete: (id: string) => void;
-  yt: { client: boolean; connected: boolean }; metaReady: boolean; onChanged: () => void;
+  yt: { client: boolean; connected: boolean }; metaReady: boolean; fbReady: boolean; onChanged: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [ytBusy, setYtBusy] = useState(false);
@@ -58,6 +58,7 @@ function ShortRow({ s, onDelete, yt, metaReady, onChanged }: {
     const r = await publishShortsMeta(s.id);
     setMetaBusy(false);
     if (r.error) setMetaErr(r.error);
+    else setMetaErr(r.fbError ? `인스타 릴스는 발행됨 / 페북 릴스 실패: ${r.fbError}` : "");
     onChanged(); // 부분 성공 링크도 즉시 반영
   };
   const [thumbBusy, setThumbBusy] = useState(false);
@@ -137,18 +138,27 @@ function ShortRow({ s, onDelete, yt, metaReady, onChanged }: {
             ) : yt.client ? (
               <a className="btn ghost" href="/youtube/oauth/start" target="_blank" rel="noreferrer" title="이 브랜드의 유튜브 채널 구글 계정으로 로그인해 1회 연결">▶ 채널 연결</a>
             ) : null}
-            {s.igPermalink || s.fbReelId ? (
+            {(s.igPermalink || s.fbReelId) && (
               <span style={{ display: "inline-flex", gap: 6 }}>
                 {s.igPermalink && <a className="btn ghost" href={s.igPermalink} target="_blank" rel="noreferrer">📸 릴스</a>}
                 {s.fbReelId && <a className="btn ghost" href={`https://www.facebook.com/reel/${s.fbReelId}`} target="_blank" rel="noreferrer">📘 FB 릴스</a>}
               </span>
-            ) : metaReady ? (
-              <button className="btn ghost" disabled={metaBusy} onClick={doMeta} title="인스타 릴스+페북 릴스로 발행 — 릴스는 즉시 공개됩니다">
-                {metaBusy ? "릴스 발행 중…" : "📤 릴스 발행(즉시 공개)"}
-              </button>
-            ) : (
-              <a className="btn ghost" href="/meta/oauth/start" target="_blank" rel="noreferrer" title="이 브랜드의 메타 계정으로 1회 연결(카드뉴스와 공용)">📤 메타 연결</a>
             )}
+            {!s.igPermalink && !s.fbReelId ? (
+              metaReady || fbReady ? (
+                <button className="btn ghost" disabled={metaBusy} onClick={doMeta} title="릴스로 발행 — 릴스는 즉시 공개됩니다(연결된 채널 모두)">
+                  {metaBusy ? "릴스 발행 중…" : "📤 릴스 발행(즉시 공개)"}
+                </button>
+              ) : (
+                <a className="btn ghost" href="/meta/oauth/start" target="_blank" rel="noreferrer" title="이 브랜드의 인스타 계정으로 1회 연결(카드뉴스와 공용)">📤 메타 연결</a>
+              )
+            ) : fbReady && !s.fbReelId ? (
+              // 인스타엔 올라간 릴스를 페이스북 페이지에도(IG 재발행 없음 — 같은 final.mp4 업로드)
+              <button className="btn ghost" disabled={metaBusy} onClick={doMeta}
+                title="이미 인스타에 올라간 이 릴스를 페이스북 페이지에도 게시합니다(인스타 재발행 없음)">
+                {metaBusy ? "페북 게시 중…" : "📘 페북에도 올리기"}
+              </button>
+            ) : null}
             {metaErr && <span className="muted" style={{ color: "var(--con)" }}>{metaErr}</span>}
             {ytErr && <span className="muted" style={{ color: "var(--con)" }}>{ytErr}</span>}
             {s.youtubeUrl && (
@@ -177,10 +187,12 @@ export default function ShortsSection() {
   const [err, setErr] = useState("");
   const [yt, setYt] = useState<{ client: boolean; connected: boolean }>({ client: false, connected: false });
   const [metaReady, setMetaReady] = useState(false);
+  // 페이스북 페이지는 인스타와 독립 연결(앱·토큰이 다름) — 별 상태.
+  const [fbReady, setFbReady] = useState(false);
 
   const load = () => {
     fetchShorts().then(setItems); fetchPieces().then(setPieces); fetchYoutubeStatus().then(setYt);
-    fetchMetaStatus().then((m) => setMetaReady(m.client && m.connected));
+    fetchMetaStatus().then((m) => { setMetaReady(m.client && m.connected); setFbReady(!!m.fbClient && !!m.fbConnected); });
   };
   useEffect(() => {
     load();
@@ -244,7 +256,7 @@ export default function ShortsSection() {
       </div>
 
       {items.length === 0 && <p className="muted">아직 숏폼이 없습니다 — 위에서 주제를 입력해 첫 영상을 만들어 보세요.</p>}
-      {items.map((s) => <ShortRow key={s.id} s={s} onDelete={doDelete} yt={yt} metaReady={metaReady} onChanged={load} />)}
+      {items.map((s) => <ShortRow key={s.id} s={s} onDelete={doDelete} yt={yt} metaReady={metaReady} fbReady={fbReady} onChanged={load} />)}
     </>
   );
 }

@@ -1,21 +1,27 @@
 /**
- * 카드뉴스·쇼츠 메타(인스타그램) 발행 — 브랜드별 계정(META_TOKENS)으로 발행.
+ * 카드뉴스·쇼츠 메타(인스타그램·페이스북 페이지) 발행 — 브랜드별 계정(META_TOKENS)으로 발행.
  * 인스타 로그인 방식(graph.instagram.com)은 공개 URL 만 받고 로컬·resumable 업로드 미지원(Meta 문서) →
  * 슬라이드 이미지·릴스 영상을 fal 스토리지 공개 URL 로 올려 image_url/video_url 로 전달([[falStorage]]).
- * 카드뉴스는 1장=단일 이미지·2~10장=캐러셀. FB 페이지 경로(피드·릴스)는 pageId 있을 때만(현재 IG 로그인은 미실행).
+ * 카드뉴스는 1장=단일 이미지·2~10장=캐러셀. 페이스북은 호스트·토큰이 완전히 다르다(FB_GRAPH + pageToken):
+ * 카드뉴스=미공개 /photos → /feed attached_media(FB 엔 캐러셀 객체가 없음), 쇼츠=/video_reels 3단계.
  * Node 내장 fetch 만 사용. 명시 실패 반환 — 사용자 트리거 액션(fail-open 아님). 토큰은 로그·에러에 싣지 않는다.
- * 멱등: 발행된 미디어 id(existing.igMediaId/igReelId)로 스킵 — 중복 공개 발행 방지. 퍼머링크는 재시도로 보강.
+ * 멱등: 발행된 미디어 id(existing.igMediaId/igReelId/fbPostId/fbReelId)로 채널별 스킵 — 중복 공개 발행 방지.
+ * 채널 독립: FB 실패가 IG 성공을 취소하지 않는다(부분 성공 + fbError 로 사유 보고, 성공 위장 금지).
  */
 import fs from 'node:fs';
 import { getMetaAccount } from '../secrets/store';
 import { uploadToFalStorage } from './falStorage';
 
 // 인스타그램 로그인 방식(2026-07-20) — 콘텐츠 발행은 graph.instagram.com. 페이지 없음.
-// FB 페이지 경로(video_reels·feed·photos)는 pageId 있을 때만 호출(현재 IG 로그인은 pageId='' → 미실행).
 export const GRAPH = 'https://graph.instagram.com/v23.0';
+// 페이스북 페이지 발행 — 페이지 노드(photos·feed·video_reels)는 graph.facebook.com 이고 인증도
+// 페이지 액세스 토큰이다. IG 호스트·IG 토큰으로는 절대 호출되지 않는다(둘을 섞으면 100% 실패).
+export const FB_GRAPH = 'https://graph.facebook.com/v23.0';
 
 export interface MetaPublishResult {
   ok: boolean; igMediaId?: string; igPermalink?: string; fbPostId?: string; error?: string;
+  /** FB 페이지 발행만 실패한 사유(IG 는 성공) — 라우트가 사용자에게 표시. */
+  fbError?: string;
   /** 행동차단(2207051) 후 최근 미디어에서 회수해 기록한 발행(발행은 됐으나 응답에 id 없던 케이스). */
   recovered?: boolean;
 }
@@ -127,6 +133,53 @@ async function recoverPublishedId(token: string, caption: string, mediaType: str
   } catch { return null; }
 }
 
+// ── 페이스북 페이지 발행(카드뉴스) ───────────────────────────────────────────
+// FB 엔 IG 같은 '캐러셀 객체'가 없다 → 미공개(published=false) 사진을 순서대로 올려 photoId 를 모으고,
+// 그 id 들을 한 피드 게시물의 attached_media 로 묶는다(사용자 눈엔 다중 사진 게시물 1개).
+// 미공개 사진은 피드에 단독 노출되지 않으므로 중간 실패 시에도 '반쪽 게시물'이 공개되지 않는다.
+
+/** FB 페이지에 미공개 사진 업로드(멀티파트 바이너리) → photoId. */
+async function uploadUnpublishedPhoto(pageId: string, token: string, filePath: string, signal?: AbortSignal): Promise<string> {
+  const form = new FormData();
+  form.append('source', new Blob([fs.readFileSync(filePath)], { type: 'image/png' }), 'slide.png');
+  form.append('published', 'false');
+  form.append('access_token', token);
+  const j = await graphJson(`${FB_GRAPH}/${pageId}/photos`, { method: 'POST', body: form, signal }, 'FB 사진 업로드');
+  const id = extractId(j);
+  if (!id) throw new Error('FB 사진 업로드 응답 이형(id 없음)');
+  return id;
+}
+
+/** FB 페이지 다중 사진 게시 → 게시물 id. 슬라이드 순서 보존. */
+export async function publishFbCardNews(
+  pageId: string, token: string, slidePaths: string[], message: string, signal?: AbortSignal,
+): Promise<string> {
+  const photoIds: string[] = [];
+  for (const p of slidePaths) photoIds.push(await uploadUnpublishedPhoto(pageId, token, p, signal));
+  const feed = await graphJson(`${FB_GRAPH}/${pageId}/feed`, {
+    method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      message,
+      attached_media: JSON.stringify(photoIds.map((id) => ({ media_fbid: id }))),
+      access_token: token,
+    }),
+  }, 'FB 피드 게시');
+  const id = extractId(feed);
+  if (!id) throw new Error('FB 피드 응답 이형(id 없음)');
+  return id;
+}
+
+/** FB 채널 실패 메시지(순수) — IG 성공을 취소하지 않되 사유는 감추지 않는다. 권한 누락은 조치까지 안내. */
+export function fbFailHint(msg: string): string {
+  if (/\(#?200\)|permission|pages_manage_posts|OAuthException.*200/i.test(msg)) {
+    return `${msg} — 페이지 게시 권한(pages_manage_posts) 누락: 페이스북 연결을 다시 하며 권한을 허용하세요`;
+  }
+  if (/\(#?190\)|expired|Session has been invalidated|access token/i.test(msg)) {
+    return `${msg} — 페이지 토큰 만료·무효: 페이스북 페이지를 다시 연결하세요`;
+  }
+  return msg;
+}
+
 export async function publishCardNewsToMeta(opts: {
   slug: string; slidePaths: string[]; caption: string; hashtags: string[];
   existing?: { igMediaId?: string; igPermalink?: string; fbPostId?: string }; signal?: AbortSignal;
@@ -134,8 +187,10 @@ export async function publishCardNewsToMeta(opts: {
   const out: MetaPublishResult = { ok: false };
   try {
     const acct = getMetaAccount(opts.slug);
-    if (!acct.igUserId || !acct.pageAccessToken) {
-      return { ok: false, error: '메타 미연결 — 카드뉴스 탭에서 메타 연결을 먼저 하세요' };
+    const igLinked = !!(acct.igUserId && acct.pageAccessToken);
+    const fbLinked = !!(acct.pageId && acct.pageToken);
+    if (!igLinked && !fbLinked) {
+      return { ok: false, error: '메타 미연결 — 카드뉴스 탭에서 인스타그램(또는 페이스북) 연결을 먼저 하세요' };
     }
     if (opts.slidePaths.length > 10) return { ok: false, error: `IG 캐러셀은 최대 10장(현재 ${opts.slidePaths.length}장)` };
     if (!opts.slidePaths.length || !opts.slidePaths.every((p) => fs.existsSync(p))) {
@@ -149,7 +204,7 @@ export async function publishCardNewsToMeta(opts: {
     // IG 발행 — 이미 발행된 미디어 id(existing.igMediaId) 있으면 스킵(중복 공개 발행 방지, 라우트가 영속).
     out.igMediaId = opts.existing?.igMediaId;
     out.igPermalink = realPermalink(opts.existing?.igPermalink);
-    if (!out.igMediaId) {
+    if (igLinked && !out.igMediaId) {
       // ① 슬라이드를 fal 스토리지 공개 URL 로 올림 — 인스타 로그인은 공개 image_url 필수(로컬 업로드 미지원, Meta 문서).
       //    PNG 그대로 허용 실측. 순서 보존(슬라이드 정렬 순).
       const imageUrls: string[] = [];
@@ -204,12 +259,28 @@ export async function publishCardNewsToMeta(opts: {
       if (!out.igMediaId) throw new Error('IG 발행 응답 이형(id 없음)');
     }
     // 퍼머링크 보강 — 발행됐고(미디어 id) 아직 실제 링크 없으면 조회. 일시 실패 시 undefined(홈 URL 폴백 없음) → 다음 재시도가 채움.
-    if (out.igMediaId && !out.igPermalink) {
+    if (igLinked && out.igMediaId && !out.igPermalink) {
       const perma = await graphJson(`${GRAPH}/${out.igMediaId}?fields=permalink&${tokenQs(token)}`, { signal }, 'IG 퍼머링크').catch(() => null);
       out.igPermalink = realPermalink(perma ? parsePermalink(perma) : null);
     }
-    // FB 피드 게시는 인스타 로그인 방식(페이지 없음)에선 불가 — 제거(과거 FB 페이지 경로는 pageId 있을 때만 유효했음).
 
+    // FB 페이지 다중 사진 게시 — 페이지 연결(pageId+페이지토큰) 있을 때만. 기발행이면 스킵(멱등).
+    // 실패해도 throw 하지 않는다: IG 는 이미 공개 발행됐으므로 취소 불가 — 사유만 fbError 로 올려보낸다.
+    out.fbPostId = opts.existing?.fbPostId;
+    if (fbLinked && !out.fbPostId) {
+      try {
+        out.fbPostId = await publishFbCardNews(acct.pageId, acct.pageToken, opts.slidePaths, message, signal);
+      } catch (fe) {
+        out.fbError = fbFailHint(fe instanceof Error ? fe.message.slice(0, 200) : String(fe));
+        console.log('[meta] FB 페이지 게시 실패(IG 성공 유지) — ' + out.fbError.slice(0, 160));
+      }
+    }
+
+    // 한 채널도 못 올렸으면 성공이 아니다(성공 위장 금지) — FB 전용 연결에서 FB 가 실패한 경우.
+    if (!out.igMediaId && !out.fbPostId) {
+      out.error = out.fbError ?? '발행된 채널 없음';
+      return out;
+    }
     out.ok = true;
     return out;
   } catch (e) {
@@ -227,6 +298,8 @@ export async function publishCardNewsToMeta(opts: {
 
 export interface MetaReelsResult {
   ok: boolean; igReelId?: string; igPermalink?: string; fbReelId?: string; error?: string;
+  /** FB 릴스만 실패한 사유(IG 는 성공) — 라우트가 사용자에게 표시. */
+  fbError?: string;
   /** 행동차단(2207051) 후 최근 미디어에서 회수해 기록한 발행. */
   recovered?: boolean;
 }
@@ -243,15 +316,18 @@ async function uploadVideoBinary(uploadUrl: string, token: string, videoPath: st
   if (!r.ok || !(j as { success?: boolean }).success) throw new Error(`${what} 실패: ${graphError(j, r.status)}`);
 }
 
-/** FB 릴스 3단계 — start(video_id·upload_url) → 바이너리 → finish(PUBLISHED). video_id 반환. */
-async function publishFbReel(pageId: string, token: string, videoPath: string, description: string, signal?: AbortSignal): Promise<string> {
-  const start = await graphJson(`${GRAPH}/${pageId}/video_reels`, {
+/**
+ * FB 릴스 3단계 — start(video_id·upload_url) → 바이너리 → finish(PUBLISHED). video_id 반환.
+ * 호스트는 FB_GRAPH, 토큰은 페이지 액세스 토큰(pageToken) — IG 호스트·IG 토큰으로는 동작하지 않는다.
+ */
+export async function publishFbReel(pageId: string, token: string, videoPath: string, description: string, signal?: AbortSignal): Promise<string> {
+  const start = await graphJson(`${FB_GRAPH}/${pageId}/video_reels`, {
     method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ upload_phase: 'start', access_token: token }),
   }, 'FB 릴스 시작') as { video_id?: string; upload_url?: string };
   if (!start.video_id || !start.upload_url) throw new Error('FB 릴스 시작 응답 이형');
   await uploadVideoBinary(start.upload_url, token, videoPath, 'FB 릴스 업로드', signal);
-  const fin = await graphJson(`${GRAPH}/${pageId}/video_reels`, {
+  const fin = await graphJson(`${FB_GRAPH}/${pageId}/video_reels`, {
     method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ upload_phase: 'finish', video_id: start.video_id, video_state: 'PUBLISHED', description, access_token: token }),
   }, 'FB 릴스 발행') as { success?: boolean };
@@ -266,8 +342,10 @@ export async function publishShortsToMeta(opts: {
   const out: MetaReelsResult = { ok: false };
   try {
     const acct = getMetaAccount(opts.slug);
-    if (!acct.igUserId || !acct.pageAccessToken) {
-      return { ok: false, error: '메타 미연결 — 카드뉴스/숏폼 탭에서 메타 연결을 먼저 하세요' };
+    const igLinked = !!(acct.igUserId && acct.pageAccessToken);
+    const fbLinked = !!(acct.pageId && acct.pageToken);
+    if (!igLinked && !fbLinked) {
+      return { ok: false, error: '메타 미연결 — 카드뉴스/숏폼 탭에서 인스타그램(또는 페이스북) 연결을 먼저 하세요' };
     }
     if (!fs.existsSync(opts.videoPath)) return { ok: false, error: '영상 파일 없음' };
     const timeout = AbortSignal.timeout(600_000); // 영상 업로드+인코딩 — 카드뉴스(5분)의 2배 여유
@@ -279,7 +357,7 @@ export async function publishShortsToMeta(opts: {
     // 인스타 로그인 방식은 로컬·resumable 업로드 미지원(Meta 문서) → 영상을 fal 스토리지 공개 URL 로 올려 video_url 로 전달.
     out.igReelId = opts.existing?.igReelId;
     out.igPermalink = realPermalink(opts.existing?.igPermalink);
-    if (!out.igReelId) {
+    if (igLinked && !out.igReelId) {
       const videoUrl = await uploadToFalStorage(opts.videoPath, 'video/mp4', signal);
       // 디자인 썸네일이 있으면 릴스 커버로 지정(cover_url = fal 공개 이미지 URL). 없거나 실패하면 IG 가 영상 프레임으로 자동.
       let coverUrl: string | null = null;
@@ -313,20 +391,28 @@ export async function publishShortsToMeta(opts: {
       if (!out.igReelId) throw new Error('IG 릴스 발행 응답 이형(id 없음)');
     }
     // 퍼머링크 보강 — 발행됐고(릴스 id) 아직 실제 링크 없으면 조회. 일시 실패 시 undefined(홈 URL 폴백 없음) → 다음 재시도가 채움.
-    if (out.igReelId && !out.igPermalink) {
+    if (igLinked && out.igReelId && !out.igPermalink) {
       const perma = await graphJson(`${GRAPH}/${out.igReelId}?fields=permalink&${tokenQs(token)}`, { signal }, 'IG 퍼머링크').catch(() => null);
       out.igPermalink = realPermalink(perma ? parsePermalink(perma) : null);
     }
 
-    // ② FB 릴스 — 페이지 연결(pageId) 있을 때만. 인스타그램 로그인 방식은 페이지가 없어 스킵(IG 릴스만).
-    if (acct.pageId && !opts.existing?.fbReelId) {
+    // ② FB 릴스 — 페이지 연결(pageId+페이지토큰) 있을 때만. 기발행이면 스킵(멱등).
+    // 실패해도 throw 하지 않는다: IG 릴스는 이미 공개됐으므로 취소 불가 — 사유만 fbError 로 보고.
+    out.fbReelId = opts.existing?.fbReelId;
+    if (fbLinked && !out.fbReelId) {
       try {
-        out.fbReelId = await publishFbReel(acct.pageId, token, opts.videoPath, message, signal);
+        out.fbReelId = await publishFbReel(acct.pageId, acct.pageToken, opts.videoPath, message, signal);
       } catch (fe) {
-        console.log('[meta] FB 릴스 건너뜀(IG 성공 유지) — ' + (fe instanceof Error ? fe.message.slice(0, 120) : String(fe)));
+        out.fbError = fbFailHint(fe instanceof Error ? fe.message.slice(0, 200) : String(fe));
+        console.log('[meta] FB 릴스 실패(IG 성공 유지) — ' + out.fbError.slice(0, 160));
       }
     }
 
+    // 한 채널도 못 올렸으면 성공이 아니다(성공 위장 금지) — FB 전용 연결에서 FB 가 실패한 경우.
+    if (!out.igReelId && !out.fbReelId) {
+      out.error = out.fbError ?? '발행된 채널 없음';
+      return out;
+    }
     out.ok = true;
     return out;
   } catch (e) {

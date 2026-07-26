@@ -50,8 +50,8 @@ function SlideGrid({ card }: { card: CardNewsInfo }) {
   );
 }
 
-function CardRow({ card, onDelete, metaReady, onChanged }: {
-  card: CardNewsInfo; onDelete: (id: string) => void; metaReady: boolean; onChanged: () => void;
+function CardRow({ card, onDelete, metaReady, fbReady, onChanged }: {
+  card: CardNewsInfo; onDelete: (id: string) => void; metaReady: boolean; fbReady: boolean; onChanged: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -60,6 +60,7 @@ function CardRow({ card, onDelete, metaReady, onChanged }: {
     const r = await publishCardNews(card.id);
     setPublishing(false);
     if (r.error) alert(`발행 실패: ${r.error}`); // doDelete 의 기존 alert 관례
+    else if (r.fbError) alert(`인스타는 발행됐지만 페이스북 페이지 게시는 실패했습니다:\n${r.fbError}`);
     onChanged(); // 부분 성공도 링크가 바로 보이게 즉시 재조회(폴링 8초 대기 없이)
   };
   const running = RUNNING_STAGES.has(card.stage);
@@ -98,18 +99,27 @@ function CardRow({ card, onDelete, metaReady, onChanged }: {
           <>
             <a className="btn start" href={`/cardnews/${card.id}/zip`} download>전체 zip</a>
             {captionFull && <button className="btn ghost" onClick={copyCaption}>{copied ? "복사됨!" : "캡션 복사"}</button>}
-            {card.igPermalink || card.fbPostId ? (
+            {(card.igPermalink || card.fbPostId) && (
               <span style={{ display: "inline-flex", gap: 6 }}>
                 {card.igPermalink && <a className="btn ghost" href={card.igPermalink} target="_blank" rel="noreferrer">📸 인스타그램</a>}
                 {card.fbPostId && <a className="btn ghost" href={`https://www.facebook.com/${card.fbPostId}`} target="_blank" rel="noreferrer">📘 페이스북</a>}
               </span>
-            ) : metaReady ? (
-              <button className="btn" disabled={publishing} onClick={doPublish}>
-                {publishing ? "발행 중…" : "📤 인스타·페북 발행"}
-              </button>
-            ) : (
-              <a className="btn ghost" href="/meta/oauth/start" target="_blank" rel="noreferrer" title="이 브랜드의 메타(페이스북) 계정으로 로그인해 1회 연결 — 앱 ID/시크릿은 키 탭에서 먼저 설정">📤 메타 연결</a>
             )}
+            {!card.igPermalink && !card.fbPostId ? (
+              metaReady || fbReady ? (
+                <button className="btn" disabled={publishing} onClick={doPublish}>
+                  {publishing ? "발행 중…" : fbReady && metaReady ? "📤 인스타·페북 발행" : fbReady ? "📘 페북 발행" : "📸 인스타 발행"}
+                </button>
+              ) : (
+                <a className="btn ghost" href="/meta/oauth/start" target="_blank" rel="noreferrer" title="이 브랜드의 인스타그램 계정으로 로그인해 1회 연결 — 앱 ID/시크릿은 키 탭에서 먼저 설정">📤 메타 연결</a>
+              )
+            ) : fbReady && !card.fbPostId ? (
+              // 인스타엔 올라갔지만 페이스북 페이지엔 아직 — 같은 슬라이드로 페북만 게시(인스타 재발행 없음)
+              <button className="btn ghost" disabled={publishing} onClick={doPublish}
+                title="이미 인스타에 올라간 이 카드뉴스를 페이스북 페이지에도 게시합니다(인스타 재발행 없음)">
+                {publishing ? "게시 중…" : "📘 페북에도 올리기"}
+              </button>
+            ) : null}
           </>
         )}
         <button className="btn ghost" title="카드 삭제(산출물 파일은 남음)" disabled={running} onClick={() => onDelete(card.id)}><Ico name="trash" size={12} /> 삭제</button>
@@ -137,6 +147,9 @@ export default function CardNewsSection() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [metaReady, setMetaReady] = useState(false);
+  // 페이스북 페이지는 인스타와 독립 연결(앱·토큰이 다름) — 별 상태로 들고 있어야 어느 쪽이 빠졌는지 UI 가 말할 수 있다.
+  const [fbReady, setFbReady] = useState(false);
+  const [fbClient, setFbClient] = useState(false);
 
   const load = () => { fetchCardNews().then(setCards); fetchPieces().then(setPieces); };
   useEffect(() => {
@@ -144,7 +157,13 @@ export default function CardNewsSection() {
     const t = setInterval(load, 8000); // 진행 중 카드 상태 폴링(캘린더와 동일 케이던스)
     return () => clearInterval(t);
   }, []);
-  useEffect(() => { fetchMetaStatus().then((s) => setMetaReady(s.client && s.connected)); }, []);
+  useEffect(() => {
+    fetchMetaStatus().then((s) => {
+      setMetaReady(s.client && s.connected);
+      setFbReady(!!s.fbClient && !!s.fbConnected);
+      setFbClient(!!s.fbClient);
+    });
+  }, []);
 
   const derivable = useMemo(
     () => pieces.filter((p) => DERIVABLE.has(p.stage) && p.runId).sort((a, b) => b.updatedTs.localeCompare(a.updatedTs)),
@@ -207,8 +226,16 @@ export default function CardNewsSection() {
         </div>
       </div>
 
+      {/* 페이스북 페이지 연결 — 키가 설정됐는데 미연결일 때만 안내(연결되면 사라짐) */}
+      {fbClient && !fbReady && (
+        <p className="muted" style={{ marginTop: 8 }}>
+          📘 페이스북 페이지가 연결되지 않아 인스타에만 올라갑니다 —{" "}
+          <a href="/meta/fb/oauth/start" target="_blank" rel="noreferrer">페이스북 페이지 연결</a>
+          {" "}(페이지 관리자 계정으로 1회 로그인)
+        </p>
+      )}
       {cards.length === 0 && <p className="muted">아직 카드뉴스가 없습니다 — 위에서 주제를 입력해 첫 카드를 만들어 보세요.</p>}
-      {cards.map((card) => <CardRow key={card.id} card={card} onDelete={doDelete} metaReady={metaReady} onChanged={load} />)}
+      {cards.map((card) => <CardRow key={card.id} card={card} onDelete={doDelete} metaReady={metaReady} fbReady={fbReady} onChanged={load} />)}
     </>
   );
 }

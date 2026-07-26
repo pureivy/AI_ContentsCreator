@@ -39,6 +39,10 @@ const BUILTIN: BuiltinDef[] = [
   // 인스타그램 로그인 방식(2026-07-20 전환) — Instagram 제품의 앱 ID/시크릿(페북 앱과 별개). 이게 발행 연결에 쓰인다.
   { key: 'INSTAGRAM_APP_ID', label: '인스타그램 앱 ID', icon: '📸', desc: '메타 앱 > Instagram 제품 > API 설정(Instagram 로그인)의 앱 ID — 릴스·카드뉴스 인스타 발행 연결용', placeholder: '1234567890', needs_restart: true },
   { key: 'INSTAGRAM_APP_SECRET', label: '인스타그램 앱 시크릿', icon: '🔑', desc: '위 Instagram 앱의 App Secret', placeholder: 'abc123…', needs_restart: true },
+  // 페이스북 페이지 발행(선택) — 인스타 앱 ID 와 다른 '메타 앱' 자체의 ID/시크릿(설정 > 기본 설정).
+  // 페이스북 로그인으로 페이지 액세스 토큰을 받아 페이지 피드·릴스에 게시한다(인스타 연결과 독립·병행).
+  { key: 'META_APP_ID', label: '메타 앱 ID (페북 페이지용)', icon: '📘', desc: '메타 앱 > 설정 > 기본 설정의 앱 ID — 페이스북 페이지 발행 연결용(인스타 앱 ID 와 다름)', placeholder: '1234567890123456', needs_restart: true },
+  { key: 'META_APP_SECRET', label: '메타 앱 시크릿 (페북 페이지용)', icon: '🔑', desc: '위 메타 앱의 App Secret', placeholder: 'abc123…', needs_restart: true },
   // 네이버 발행 계정(블로그 ID·로그인)은 브랜드별로 갈리므로 일반 키 그리드가 아니라 전용
   // "네이버 발행 계정" 섹션(브랜드 선택)에서 관리한다 — get/setNaverAccount·naverAccountView.
   // 범용('') 계정은 여전히 평면 키(NAVER_BLOG_ID/NAVER_LOGIN_ID/NAVER_LOGIN_PW)에 저장된다.
@@ -323,12 +327,20 @@ export function setYoutubeToken(slug: string, refreshToken: string): void {
 }
 
 // ── 브랜드별 메타(인스타·페북) 계정 ──────────────────────────────────────────
-// YOUTUBE_TOKENS 와 동일 패턴 — 공용 개발자 앱 1개 + 브랜드별 {pageId, igUserId, pageAccessToken}을
-// META_TOKENS 한 키에 JSON 으로 저장. 브랜드 폴백 없음 — 미연결은 빈값(발행 시 명확히 에러).
-// pageId 는 페이스북-로그인 방식 전용(페이지 게시용). 인스타그램-로그인 방식(2026-07-20 전환)은
-// 페이지가 없어 pageId=''; 발행 인증은 igUserId + pageAccessToken(=IG 장기 토큰)으로 성립한다.
-export interface MetaAccount { pageId: string; igUserId: string; pageAccessToken: string }
+// YOUTUBE_TOKENS 와 동일 패턴 — 공용 개발자 앱 + 브랜드별 계정을 META_TOKENS 한 키에 JSON 으로 저장.
+// 브랜드 폴백 없음 — 미연결은 빈값(발행 시 명확히 에러).
+//
+// 두 연결이 독립·병행한다(각각 다른 앱·다른 로그인, 한쪽만 연결돼도 그쪽 채널은 발행 가능):
+//  · 인스타그램 로그인(INSTAGRAM_APP_ID) → igUserId + pageAccessToken(=IG 장기 토큰, 이름은 역사적 잔재).
+//  · 페이스북 로그인(META_APP_ID)        → pageId  + pageToken(=페이지 액세스 토큰, FB 페이지 게시용).
+// 토큰 필드를 절대 겹쳐 쓰지 않는다 — 한쪽 재연결이 다른 쪽 자격증명을 조용히 깨뜨리면
+// '연결됐는데 발행 실패'를 진단 불가로 만든다(setMetaToken·setMetaPage 가 서로를 보존).
+export interface MetaAccount { pageId: string; igUserId: string; pageAccessToken: string; pageToken: string }
 const META_TOKENS_KEY = 'META_TOKENS';
+/** 보존 요건(순수) — IG 연결(igUserId+토큰) 또는 FB 페이지 연결(pageId+페이지토큰) 중 하나라도 성립하면 유지. */
+function hasAnyMetaLink(a: Partial<MetaAccount>): boolean {
+  return !!((a.igUserId?.trim() && a.pageAccessToken?.trim()) || (a.pageId?.trim() && a.pageToken?.trim()));
+}
 
 /** blob 파싱(순수) — 깨진 JSON·비객체는 빈 맵. */
 export function parseMetaTokens(raw: string): Record<string, Partial<MetaAccount>> {
@@ -344,19 +356,57 @@ function readMetaTokens(): Record<string, Partial<MetaAccount>> {
 /** 발행에 쓸 브랜드 계정 — 범용('')도 blob 의 '' 키. 미연결이면 빈 문자열들. */
 export function getMetaAccount(slug: string): MetaAccount {
   const a = readMetaTokens()[slug] ?? {};
-  return { pageId: (a.pageId ?? '').trim(), igUserId: (a.igUserId ?? '').trim(), pageAccessToken: (a.pageAccessToken ?? '').trim() };
+  return {
+    pageId: (a.pageId ?? '').trim(), igUserId: (a.igUserId ?? '').trim(),
+    pageAccessToken: (a.pageAccessToken ?? '').trim(), pageToken: (a.pageToken ?? '').trim(),
+  };
 }
-/** 브랜드 계정 저장 — null 이면 해당 브랜드 연결 해제. */
-export function setMetaToken(slug: string, acct: MetaAccount | null): void {
+/** blob 쓰기 공용 — 유효 연결 없는 항목은 떨어낸다(죽은 자격증명 잔존 방지). */
+function writeMetaTokens(clean: Record<string, Partial<MetaAccount>>): void {
+  writeEnvValue(META_TOKENS_KEY, Object.keys(clean).length ? JSON.stringify(clean) : undefined);
+}
+/**
+ * 인스타그램 연결 저장 — null 이면 IG 연결만 해제. 같은 브랜드의 FB 페이지 연결(pageId/pageToken)은
+ * 그대로 보존한다(인스타 재연결이 페북 발행을 깨뜨리지 않게).
+ */
+export function setMetaToken(slug: string, acct: { igUserId: string; pageAccessToken: string } | null): void {
   const map = readMetaTokens();
   const clean: Record<string, Partial<MetaAccount>> = {};
-  // 인증 최소 요건: igUserId + pageAccessToken(토큰). pageId 는 페북-로그인 전용(옵셔널).
-  for (const [s, a] of Object.entries(map)) {
-    if (a.igUserId?.trim() && a.pageAccessToken?.trim()) clean[s] = a;
+  for (const [s, a] of Object.entries(map)) if (hasAnyMetaLink(a)) clean[s] = a;
+  const prev = clean[slug] ?? map[slug] ?? {};
+  if (acct && acct.igUserId.trim() && acct.pageAccessToken.trim()) {
+    clean[slug] = { ...prev, igUserId: acct.igUserId, pageAccessToken: acct.pageAccessToken };
+  } else {
+    const kept: Partial<MetaAccount> = { pageId: prev.pageId, pageToken: prev.pageToken };
+    if (hasAnyMetaLink(kept)) clean[slug] = kept; // FB 페이지 연결만 남기고 IG 자격증명 제거
+    else delete clean[slug];
   }
-  if (acct && acct.igUserId.trim() && acct.pageAccessToken.trim()) clean[slug] = acct;
-  else delete clean[slug];
-  writeEnvValue(META_TOKENS_KEY, Object.keys(clean).length ? JSON.stringify(clean) : undefined);
+  writeMetaTokens(clean);
+}
+/** 브랜드의 메타 항목 통째 제거 — IG·FB 양쪽 자격증명 모두. 브랜드 삭제 동반 정리용. */
+export function deleteMetaAccount(slug: string): void {
+  const map = readMetaTokens();
+  const clean: Record<string, Partial<MetaAccount>> = {};
+  for (const [s, a] of Object.entries(map)) if (s !== slug && hasAnyMetaLink(a)) clean[s] = a;
+  writeMetaTokens(clean);
+}
+/**
+ * 페이스북 페이지 연결 저장 — null 이면 페이지 연결만 해제. 같은 브랜드의 IG 연결은 보존한다.
+ * (페이지 토큰은 IG 토큰과 별 필드 — 겹쳐 쓰면 잘 되던 인스타 발행이 조용히 깨진다.)
+ */
+export function setMetaPage(slug: string, page: { pageId: string; pageToken: string } | null): void {
+  const map = readMetaTokens();
+  const clean: Record<string, Partial<MetaAccount>> = {};
+  for (const [s, a] of Object.entries(map)) if (hasAnyMetaLink(a)) clean[s] = a;
+  const prev = clean[slug] ?? map[slug] ?? {};
+  if (page && page.pageId.trim() && page.pageToken.trim()) {
+    clean[slug] = { ...prev, pageId: page.pageId, pageToken: page.pageToken };
+  } else {
+    const kept: Partial<MetaAccount> = { igUserId: prev.igUserId, pageAccessToken: prev.pageAccessToken };
+    if (hasAnyMetaLink(kept)) clean[slug] = kept; // IG 연결만 남기고 페이지 자격증명 제거
+    else delete clean[slug];
+  }
+  writeMetaTokens(clean);
 }
 
 /**
@@ -369,7 +419,9 @@ export function purgeBrandAccounts(slug: string): number {
   let n = 0;
   if (readNaverAccounts()[slug]) { setNaverAccount(slug, { blogId: '', loginId: '', loginPw: '' }); n++; }
   if (readYoutubeTokens()[slug]) { setYoutubeToken(slug, ''); n++; }
-  if (readMetaTokens()[slug]) { setMetaToken(slug, null); n++; }
+  // 메타는 IG·FB 두 연결이 한 항목에 공존 — 부분 해제(setMetaToken/setMetaPage)는 다른 쪽을 보존하므로
+  // 브랜드 삭제엔 항목 통째 제거를 쓴다(죽은 브랜드의 페이지 토큰 잔존 방지).
+  if (readMetaTokens()[slug]) { deleteMetaAccount(slug); n++; }
   return n;
 }
 

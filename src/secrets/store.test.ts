@@ -333,7 +333,7 @@ describe('purgeBrandAccounts — 삭제 브랜드의 계정 blob 정리', () => 
     mod.setNaverAccount('alive', { blogId: 'keep' });
     mod.setYoutubeToken('dead', 'rt-dead');
     mod.setYoutubeToken('alive', 'rt-alive');
-    mod.setMetaToken('dead', { pageId: '', igUserId: 'ig1', pageAccessToken: 'tok1' });
+    mod.setMetaToken('dead', { igUserId: 'ig1', pageAccessToken: 'tok1' });
     expect(mod.purgeBrandAccounts('dead')).toBe(3);
     expect(mod.getNaverAccount('dead')).toEqual({ blogId: '', loginId: '', loginPw: '' });
     expect(mod.getYoutubeAccount('dead').refreshToken).toBe('');
@@ -349,6 +349,75 @@ describe('purgeBrandAccounts — 삭제 브랜드의 계정 blob 정리', () => 
     expect(mod.purgeBrandAccounts('ghost')).toBe(0);
     expect(mod.purgeBrandAccounts('')).toBe(0);
     expect(mod.getYoutubeAccount('').refreshToken).toBe('rt-generic');
+  });
+
+  // 메타는 IG·FB 두 연결이 한 항목에 공존 → 부분 해제 setter 로는 절반이 남는다. 브랜드 삭제는 통째 제거여야
+  // 죽은 브랜드의 페이지 토큰이 .env 에 잔존하지 않는다(위 '기밀 잔존 없음' 계약을 FB 축까지 확장).
+  it('메타 IG+FB 양쪽 연결된 브랜드도 통째 제거(페이지 토큰 잔존 없음)', () => {
+    mod.setMetaToken('dead', { igUserId: 'ig-dead', pageAccessToken: 'igtok-dead' });
+    mod.setMetaPage('dead', { pageId: 'PG-dead', pageToken: 'pgtok-dead' });
+    mod.setMetaPage('alive', { pageId: 'PG-alive', pageToken: 'pgtok-alive' });
+    expect(mod.purgeBrandAccounts('dead')).toBe(1);
+    expect(mod.getMetaAccount('dead')).toEqual({ pageId: '', igUserId: '', pageAccessToken: '', pageToken: '' });
+    expect(mod.getMetaAccount('alive').pageToken).toBe('pgtok-alive'); // 타 브랜드 페이지 연결 보존
+    const txt = fs.readFileSync(tmpEnv, 'utf-8');
+    expect(txt).not.toContain('pgtok-dead');
+    expect(txt).not.toContain('igtok-dead');
+  });
+});
+
+// 인스타 연결과 페이스북 페이지 연결은 앱·토큰·호스트가 다른 독립 축이다. 한쪽 재연결·해제가 다른 쪽
+// 자격증명을 지우면 '연결됐다고 표시되는데 발행만 실패'가 되어 진단이 불가능해진다(설계 불변식).
+describe('메타 IG·FB 연결 독립성', () => {
+  let tmpEnv: string; let mod: typeof import('./store');
+  beforeEach(async () => {
+    tmpEnv = path.join(os.tmpdir(), 'meta-link-store-test.env');
+    fs.writeFileSync(tmpEnv, '', { mode: 0o600 });
+    process.env.GEPA_ENV_FILE = tmpEnv;
+    delete process.env.META_TOKENS;
+    vi.resetModules();
+    mod = await import('./store');
+  });
+  afterEach(() => {
+    try { fs.rmSync(tmpEnv); } catch { /* 이미 없음 */ }
+    delete process.env.GEPA_ENV_FILE;
+    delete process.env.META_TOKENS;
+  });
+
+  it('페이지 연결이 IG 자격증명을 보존하고, IG 재연결이 페이지 토큰을 보존', () => {
+    mod.setMetaToken('b', { igUserId: 'IG1', pageAccessToken: 'IGTOK1' });
+    mod.setMetaPage('b', { pageId: 'PG1', pageToken: 'PGTOK1' });
+    expect(mod.getMetaAccount('b')).toEqual({ igUserId: 'IG1', pageAccessToken: 'IGTOK1', pageId: 'PG1', pageToken: 'PGTOK1' });
+    mod.setMetaToken('b', { igUserId: 'IG2', pageAccessToken: 'IGTOK2' }); // 인스타 재연결(60일 토큰 갱신)
+    expect(mod.getMetaAccount('b')).toEqual({ igUserId: 'IG2', pageAccessToken: 'IGTOK2', pageId: 'PG1', pageToken: 'PGTOK1' });
+    mod.setMetaPage('b', { pageId: 'PG2', pageToken: 'PGTOK2' });          // 페이지 재연결
+    expect(mod.getMetaAccount('b')).toEqual({ igUserId: 'IG2', pageAccessToken: 'IGTOK2', pageId: 'PG2', pageToken: 'PGTOK2' });
+  });
+
+  it('한쪽 해제는 다른 쪽만 남긴다(연결 축 부분 해제)', () => {
+    mod.setMetaToken('b', { igUserId: 'IG1', pageAccessToken: 'IGTOK1' });
+    mod.setMetaPage('b', { pageId: 'PG1', pageToken: 'PGTOK1' });
+    mod.setMetaPage('b', null);                                  // 페북만 해제
+    expect(mod.getMetaAccount('b')).toEqual({ igUserId: 'IG1', pageAccessToken: 'IGTOK1', pageId: '', pageToken: '' });
+    mod.setMetaPage('b', { pageId: 'PG1', pageToken: 'PGTOK1' });
+    mod.setMetaToken('b', null);                                 // 인스타만 해제
+    expect(mod.getMetaAccount('b')).toEqual({ igUserId: '', pageAccessToken: '', pageId: 'PG1', pageToken: 'PGTOK1' });
+  });
+
+  it('FB 전용 연결(IG 없음)도 blob 에 보존된다 — 페북 먼저 연결하는 순서 지원', () => {
+    mod.setMetaPage('b', { pageId: 'PG1', pageToken: 'PGTOK1' });
+    expect(mod.getMetaAccount('b').pageToken).toBe('PGTOK1');
+    // 다른 브랜드를 저장해도(정리 루프 통과) FB 전용 항목이 떨어져 나가지 않아야 한다
+    mod.setMetaToken('other', { igUserId: 'IG9', pageAccessToken: 'IGTOK9' });
+    expect(mod.getMetaAccount('b').pageToken).toBe('PGTOK1');
+  });
+
+  it('양쪽 다 해제되면 항목 자체가 사라진다(빈 자격증명 잔존 금지)', () => {
+    mod.setMetaToken('b', { igUserId: 'IG1', pageAccessToken: 'IGTOK1' });
+    mod.setMetaPage('b', { pageId: 'PG1', pageToken: 'PGTOK1' });
+    mod.setMetaToken('b', null);
+    mod.setMetaPage('b', null);
+    expect(fs.readFileSync(tmpEnv, 'utf-8')).not.toContain('META_TOKENS');
   });
 });
 

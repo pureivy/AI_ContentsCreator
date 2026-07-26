@@ -14,7 +14,8 @@ import { isSafeBrandSlug } from '../content/brand';
 import { llmWikiFor } from '../wiki/llmwiki';
 import { appendMemory, appendActivity } from '../agents/workspace';
 import { pieceStore } from '../content/pieces';
-import { GRAPH } from '../tools/metaPublish';
+import { GRAPH, FB_GRAPH } from '../tools/metaPublish';
+import { parseFbEngagement } from './cardnewsPerf';
 // cardnewsPerf ↔ shortsPerf 순환 — 함수 선언만이라 안전(최상위 상호 호출 없음)
 import { cardnewsSignal, parseIgInsights } from './cardnewsPerf';
 
@@ -230,6 +231,22 @@ export async function syncShortsMetaPerformance(): Promise<void> {
           likes: ig.likes ?? 0, comments: ig.comments ?? 0, searchInflow: [], source: 'meta:ig',
         };
         appendMetrics(s.id, sample);
+        // FB 릴스 반응 — 부가 채널(fail-open). 영상 노드는 리액션을 직접 안 들고 있어 post_id 로 페이지 게시물을
+        // 찾아 조회한다. 호스트·토큰은 FB 전용(graph.facebook.com + 페이지 토큰). 강화 신호는 IG 표본만 쓴다.
+        if (s.fbReelId && acct.pageToken) {
+          try {
+            const fbQs = `access_token=${encodeURIComponent(acct.pageToken)}`;
+            const vr = await fetchTimeout(`${FB_GRAPH}/${s.fbReelId}?fields=post_id&${fbQs}`, {});
+            const postId = vr.ok ? (await vr.json() as { post_id?: string }).post_id : undefined;
+            if (postId) {
+              const fr = await fetchTimeout(`${FB_GRAPH}/${postId}?fields=reactions.summary(true),comments.summary(true),shares&${fbQs}`, {});
+              if (fr.ok) {
+                const fb = parseFbEngagement(await fr.json());
+                appendMetrics(s.id, { measuredAt: new Date().toISOString(), views: 0, likes: fb.likes, comments: fb.comments, shares: fb.shares, searchInflow: [], source: 'meta:fb' });
+              }
+            }
+          } catch { /* 부가 채널 fail-open */ }
+        }
         const windowOver = now - new Date(s.metaPublishedTs!).getTime() > days * 86_400_000;
         if (windowOver && !s.metaPerfReflected) {
           const sig = reinforceShortsMeta(s, sample);

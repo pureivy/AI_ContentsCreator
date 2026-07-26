@@ -1118,7 +1118,7 @@ export async function uploadShortsYoutube(id: string): Promise<{ ok: boolean; ur
     return { ok: true, url: (j as { url?: string }).url };
   } catch { return { ok: false, error: "network" }; }
 }
-export async function publishShortsMeta(id: string): Promise<{ ok?: boolean; igPermalink?: string; fbReelId?: string; error?: string }> {
+export async function publishShortsMeta(id: string): Promise<{ ok?: boolean; igPermalink?: string; fbReelId?: string; error?: string; fbError?: string }> {
   try { const r = await fetch(`/shorts/${id}/meta`, { method: "POST" }); return await r.json(); }
   catch { return { error: "요청 실패" }; }
 }
@@ -1130,12 +1130,17 @@ export async function fetchYoutubeStatus(): Promise<{ client: boolean; connected
   try { const r = await fetch("/youtube/status"); return await r.json() as { client: boolean; connected: boolean }; }
   catch { return { client: false, connected: false }; }
 }
-export async function publishCardNews(id: string): Promise<{ ok?: boolean; igPermalink?: string; fbPostId?: string; error?: string }> {
+export async function publishCardNews(id: string): Promise<{ ok?: boolean; igPermalink?: string; fbPostId?: string; error?: string; fbError?: string }> {
   try { const r = await fetch(`/cardnews/${id}/publish`, { method: "POST" }); return await r.json(); }
   catch { return { error: "요청 실패" }; }
 }
-export async function fetchMetaStatus(): Promise<{ client: boolean; connected: boolean }> {
-  try { const r = await fetch("/meta/status"); return await r.json() as { client: boolean; connected: boolean }; }
+export interface MetaStatus {
+  client: boolean; connected: boolean;            // 인스타그램 앱 설정 / 인스타 계정 연결
+  fbClient?: boolean; fbConnected?: boolean;      // 메타 앱 설정 / 페이스북 페이지 연결(독립 축)
+  pageId?: string;
+}
+export async function fetchMetaStatus(): Promise<MetaStatus> {
+  try { const r = await fetch("/meta/status"); return await r.json() as MetaStatus; }
   catch { return { client: false, connected: false }; }
 }
 

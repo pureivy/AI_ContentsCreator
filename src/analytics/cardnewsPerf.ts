@@ -7,7 +7,7 @@
 import { CONFIG } from '../config';
 import { fetchTimeout } from '../util/fetch';
 import { getMetaAccount } from '../secrets/store';
-import { GRAPH } from '../tools/metaPublish';
+import { GRAPH, FB_GRAPH } from '../tools/metaPublish';
 import { appendMetrics, readMetrics, type MetricSample } from './performance';
 import { shouldRecordMemory } from './shortsPerf';
 import { cardNewsStore, type CardNews } from '../content/cardnews';
@@ -118,9 +118,12 @@ export async function syncCardnewsPerformance(): Promise<void> {
           likes: ig.likes ?? 0, comments: ig.comments ?? 0, searchInflow: [], source: 'meta:ig',
         };
         appendMetrics(card.id, igSample);
-        if (card.fbPostId) { // FB 는 부가 채널 — 실패해도 IG 수집·강화를 막지 않음
+        // FB 는 부가 채널 — 실패해도 IG 수집·강화를 막지 않음. 호스트·토큰이 IG 와 완전히 다르다
+        // (graph.facebook.com + 페이지 액세스 토큰) — IG 쪽을 재사용하면 전건 실패한다.
+        if (card.fbPostId && acct.pageToken) {
           try {
-            const fr = await fetchTimeout(`${GRAPH}/${card.fbPostId}?fields=reactions.summary(true),comments.summary(true),shares&${qs}`, {});
+            const fbQs = `access_token=${encodeURIComponent(acct.pageToken)}`;
+            const fr = await fetchTimeout(`${FB_GRAPH}/${card.fbPostId}?fields=reactions.summary(true),comments.summary(true),shares&${fbQs}`, {});
             if (fr.ok) {
               const fb = parseFbEngagement(await fr.json());
               appendMetrics(card.id, { measuredAt: new Date().toISOString(), views: 0, likes: fb.likes, comments: fb.comments, shares: fb.shares, searchInflow: [], source: 'meta:fb' });

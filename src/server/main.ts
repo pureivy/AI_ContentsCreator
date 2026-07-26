@@ -30,7 +30,7 @@ import { rolesById } from '../agents/company';
 import type { RoleDef } from '../agents/company';
 import type { RolePatch, MemberBody } from '../agents/company-loader';
 import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appendActivity, ensureScaffold, effectiveAutonomy, appendInjected, injectedLength, clearInjected, INJECTED_CAP } from '../agents/workspace';
-import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView, getYoutubeAccount, setYoutubeToken, getMetaAccount, setMetaToken, purgeCustomKeysForBrand, purgeBrandAccounts } from '../secrets/store';
+import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView, getYoutubeAccount, setYoutubeToken, getMetaAccount, setMetaToken, setMetaPage, purgeCustomKeysForBrand, purgeBrandAccounts } from '../secrets/store';
 import { collectExistingContent, findSimilarContent, type SimilarMatch } from '../content/novelty';
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
@@ -1313,7 +1313,7 @@ const META_REDIRECT = `https://localhost:${META_HTTPS_PORT}/meta/oauth/callback`
 // 인스타그램 로그인 방식(2026-07-20 전환) — instagram.com/oauth 는 instagram_business_* 만 받는다
 // (pages_* 는 페북 로그인 전용이라 넣으면 Invalid Scopes). 인스타 앱 ID/시크릿(페북 앱과 별개)을 쓴다.
 const META_SCOPES = 'instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights';
-interface MetaPage { id: string; name: string; access_token: string; instagram_business_account?: { id: string } }
+interface MetaPage { id: string; name: string; access_token: string; tasks?: string[]; instagram_business_account?: { id: string } }
 const META_OAUTH_PENDING = new Map<string, { brand: string; exp: number; pages?: MetaPage[] }>();
 // 그래프 호스트·버전은 metaPublish.GRAPH 단일 선언을 재사용(전역 제약). dialog URL 만 www.facebook.com 호스트.
 // 인스타그램 로그인 방식(2026-07-20) — 인스타 앱 ID/시크릿(INSTAGRAM_APP_ID/SECRET, 페북 앱과 별개).
@@ -1321,11 +1321,23 @@ const META_OAUTH_PENDING = new Map<string, { brand: string; exp: number; pages?:
 const IG_AUTHORIZE = 'https://www.instagram.com/oauth/authorize';
 const IG_TOKEN = 'https://api.instagram.com/oauth/access_token';
 const IG_GRAPH = 'https://graph.instagram.com';
+// 페이스북 페이지 발행(선택·독립 연결) — 페북 로그인은 '메타 앱' 자체의 ID/시크릿(META_APP_ID)을 쓴다.
+// 인스타 연결과 앱·토큰·호스트가 모두 달라 한쪽만 연결돼도 그쪽 채널은 발행된다.
+// 스코프는 페이지 목록·게시·인사이트 + 영상(릴스). 앱에서 일부 권한이 요청 불가면 META_FB_SCOPES 로 조정.
+const FB_AUTHORIZE = 'https://www.facebook.com/v23.0/dialog/oauth';
+const FB_GRAPH_HOST = 'https://graph.facebook.com/v23.0';
+const FB_REDIRECT = `https://localhost:${META_HTTPS_PORT}/meta/fb/oauth/callback`;
+const FB_SCOPES = process.env.META_FB_SCOPES || 'pages_show_list,pages_manage_posts,pages_read_engagement,publish_video';
 app.get('/meta/status', (c) => {
   const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
   const client = !!(getSecret('INSTAGRAM_APP_ID') && getSecret('INSTAGRAM_APP_SECRET'));
+  const fbClient = !!(getSecret('META_APP_ID') && getSecret('META_APP_SECRET'));
   const a = getMetaAccount(brand);
-  return c.json({ client, connected: !!(a.igUserId && a.pageAccessToken) });
+  // pageId 는 공개 식별자(토큰류 절대 미포함) — UI 가 페이지 링크·연결 상태 표시에 쓴다.
+  return c.json({
+    client, connected: !!(a.igUserId && a.pageAccessToken),
+    fbClient, fbConnected: !!(a.pageId && a.pageToken), pageId: a.pageId || undefined,
+  });
 });
 app.get('/meta/oauth/start', (c) => {
   const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
@@ -1374,10 +1386,88 @@ app.get('/meta/oauth/callback', async (c) => {
       const mj = await me.json() as { user_id?: string };
       if (mj.user_id) igUserId = String(mj.user_id);
     } catch { /* /me 실패 시 토큰 user_id 유지(정밀도 주의) — me 별칭 발행이라 발행엔 무영향 */ }
-    setMetaToken(pending.brand, { pageId: '', igUserId, pageAccessToken: igToken });
+    setMetaToken(pending.brand, { igUserId, pageAccessToken: igToken }); // FB 페이지 연결은 보존(setMetaToken 계약)
     console.log(`[발행담당] 인스타그램 연결 — 브랜드 '${pending.brand || '범용'}' (IG user ${igUserId})`);
     return done(`✅ 인스타그램 연결 완료 (브랜드: ${pending.brand || '범용'})`);
   } catch (e) { return done(`연결 실패: ${e instanceof Error ? e.message.slice(0, 120) : e}`); }
+});
+// ── 페이스북 페이지 연결(페북 로그인) ────────────────────────────────────────
+// code → 단기 사용자 토큰 → 장기 사용자 토큰(fb_exchange_token) → /me/accounts 의 페이지 액세스 토큰.
+// 장기 사용자 토큰에서 받은 페이지 토큰은 사실상 만료가 없다(비밀번호 변경·권한 회수 시 무효).
+app.get('/meta/fb/oauth/start', (c) => {
+  const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
+  if (brand && !isSafeBrandSlug(brand)) return c.text('비정상 브랜드 슬러그', 400);
+  const id = getSecret('META_APP_ID');
+  if (!id) return c.text('메타 앱 미설정 — 키 탭의 META_APP_ID/META_APP_SECRET 에 메타 앱(설정>기본 설정)의 앱 ID/시크릿을 입력하세요(인스타 앱 ID 와 다름)', 400);
+  const nonce = randomBytes(16).toString('hex');
+  for (const [k, v] of META_OAUTH_PENDING) if (v.exp < Date.now()) META_OAUTH_PENDING.delete(k);
+  META_OAUTH_PENDING.set(nonce, { brand, exp: Date.now() + 10 * 60_000 });
+  const u = new URL(FB_AUTHORIZE);
+  u.searchParams.set('client_id', id);
+  u.searchParams.set('redirect_uri', FB_REDIRECT);
+  u.searchParams.set('response_type', 'code');
+  u.searchParams.set('scope', FB_SCOPES);
+  u.searchParams.set('state', nonce);
+  return c.redirect(u.toString());
+});
+app.get('/meta/fb/oauth/callback', async (c) => {
+  const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const done = (msg: string): Response => c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">${esc(msg)} — 이 창을 닫으세요.</body>`);
+  const state = c.req.query('state') ?? '';
+  const pending = META_OAUTH_PENDING.get(state);
+  if (!pending || pending.exp < Date.now()) return done('연결 실패: 유효하지 않거나 만료된 연결 요청 — 페이스북 연결을 다시 시작하세요');
+  META_OAUTH_PENDING.delete(state);
+  const code = c.req.query('code') ?? '';
+  if (!code) return done(`연결 실패: ${c.req.query('error_description') ?? c.req.query('error') ?? '인증 코드 없음'}`);
+  try {
+    const cid = getSecret('META_APP_ID') ?? '';
+    const sec = getSecret('META_APP_SECRET') ?? '';
+    // ① code → 단기 사용자 토큰.
+    const t1 = await fetch(`${FB_GRAPH_HOST}/oauth/access_token?client_id=${encodeURIComponent(cid)}&client_secret=${encodeURIComponent(sec)}&redirect_uri=${encodeURIComponent(FB_REDIRECT)}&code=${encodeURIComponent(code)}`);
+    const j1 = await t1.json() as { access_token?: string; error?: { message?: string } };
+    if (!j1.access_token) return done(`연결 실패: ${j1.error?.message ?? '사용자 토큰 없음'}`);
+    // ② 장기 사용자 토큰(60일) — 이걸로 받은 페이지 토큰이 장수(단기로 받으면 1시간 뒤 발행 실패).
+    const t2 = await fetch(`${FB_GRAPH_HOST}/oauth/access_token?grant_type=fb_exchange_token&client_id=${encodeURIComponent(cid)}&client_secret=${encodeURIComponent(sec)}&fb_exchange_token=${encodeURIComponent(j1.access_token)}`);
+    const j2 = await t2.json() as { access_token?: string };
+    const userToken = j2.access_token ?? j1.access_token;
+    // ③ 관리 페이지 목록. 게시 가능(CREATE_CONTENT) 페이지를 우선 후보로 좁힌다 — 단 tasks 가 응답에
+    //    없을 수도 있어(필드 미제공) 그때는 전체를 후보로 둔다(빈 목록으로 오안내하는 것보다 낫다).
+    const pr = await fetch(`${FB_GRAPH_HOST}/me/accounts?fields=id,name,access_token,tasks&access_token=${encodeURIComponent(userToken)}`);
+    const pj = await pr.json() as { data?: MetaPage[]; error?: { message?: string } };
+    const all = (pj.data ?? []).filter((p) => p.id && p.access_token);
+    const creatable = all.filter((p) => p.tasks?.includes('CREATE_CONTENT'));
+    const pages = creatable.length ? creatable : all;
+    if (!pages.length) return done(`연결 실패: 관리하는 페이스북 페이지가 없습니다(${pj.error?.message ?? '페이지 목록 비어 있음'}) — 페이지 관리자 계정으로 로그인했는지, 권한 화면에서 페이지를 선택했는지 확인하세요`);
+    if (pages.length === 1) return done(saveFbPage(pending.brand, pages[0]!));
+    // 여러 페이지 → 선택 화면(새 nonce 에 페이지 목록 보관, 토큰은 서버에만 둔다).
+    const pick = randomBytes(16).toString('hex');
+    META_OAUTH_PENDING.set(pick, { brand: pending.brand, exp: Date.now() + 10 * 60_000, pages });
+    const rows = pages.map((p) => `<li><a href="/meta/fb/pick?state=${pick}&page=${encodeURIComponent(p.id)}">${esc(p.name || p.id)}</a></li>`).join('');
+    return c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px"><p>발행할 페이지를 고르세요 (브랜드: ${esc(pending.brand || '범용')})</p><ul>${rows}</ul></body>`);
+  } catch (e) { return done(`연결 실패: ${e instanceof Error ? e.message.slice(0, 120) : e}`); }
+});
+/** 페이지 저장 공용 — 결과 메시지 반환(토큰 미포함). */
+function saveFbPage(brand: string, page: MetaPage): string {
+  setMetaPage(brand, { pageId: page.id, pageToken: page.access_token });
+  console.log(`[발행담당] 페이스북 페이지 연결 — 브랜드 '${brand || '범용'}' (page ${page.id})`);
+  return `✅ 페이스북 페이지 연결 완료: ${page.name || page.id} (브랜드: ${brand || '범용'})`;
+}
+app.get('/meta/fb/pick', (c) => {
+  const state = c.req.query('state') ?? '';
+  const pending = META_OAUTH_PENDING.get(state);
+  if (!pending || pending.exp < Date.now() || !pending.pages) return c.text('만료된 선택 요청 — 페이스북 연결을 다시 시작하세요', 400);
+  const page = pending.pages.find((p) => p.id === (c.req.query('page') ?? ''));
+  if (!page) return c.text('알 수 없는 페이지', 400);
+  META_OAUTH_PENDING.delete(state);
+  return c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">${saveFbPage(pending.brand, page).replace(/</g, '&lt;')} — 이 창을 닫으세요.</body>`);
+});
+/** 페이스북 페이지 연결 해제 — IG 연결은 보존(브랜드별). */
+app.post('/meta/fb/disconnect', (c) => {
+  const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
+  if (brand && !isSafeBrandSlug(brand)) return c.json({ error: '비정상 브랜드 슬러그' }, 400);
+  setMetaPage(brand, null);
+  console.log(`[발행담당] 페이스북 페이지 연결 해제 — 브랜드 '${brand || '범용'}'`);
+  return c.json({ ok: true });
 });
 // 메타(인스타) 발행 in-flight 락 — 카드뉴스·릴스 공용. 동시/이중 제출로 같은 공개 게시물이 두 번 올라가는 것 차단(되돌리기 어려움).
 const metaPublishInFlight = new Set<string>();
@@ -1386,8 +1476,13 @@ app.post('/cardnews/:id/publish', async (c) => {
   const card = cardNewsStore().get(id);
   if (!card) return c.json({ error: 'unknown cardnews' }, 404);
   if (card.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
-  // 완료 판정 = 미디어 id + 실제 퍼머링크. 홈 URL 잔재만 있으면 완료 아님 → 재시도가 링크를 보강하게 통과시킨다.
-  if (card.igMediaId && realPermalink(card.igPermalink)) return c.json({ error: '이미 발행됨', igPermalink: card.igPermalink }, 409);
+  // 완료 판정 = 인스타(미디어 id + 실제 퍼머링크) + 페이스북 페이지 연결 시 FB 게시물 id.
+  // 홈 URL 잔재만 있으면 완료 아님 → 재시도가 링크를 보강하게 통과시킨다.
+  // FB 페이지를 나중에 연결한 경우 IG 완료만으로 막으면 페북에 영구히 못 올라간다 → FB 미게시면 통과.
+  const cardFbPending = !!getMetaAccount(card.brand ?? '').pageId && !card.fbPostId;
+  if (card.igMediaId && realPermalink(card.igPermalink) && !cardFbPending) {
+    return c.json({ error: '이미 발행됨', igPermalink: card.igPermalink }, 409);
+  }
   if (metaPublishInFlight.has(id)) return c.json({ error: '이미 발행 처리 중입니다' }, 409); // 동시/이중 제출 → 중복 공개 발행 차단
   const dir = path.join(CONFIG.dataDir, 'cardnews', id);
   const slides = (() => {
@@ -1410,8 +1505,11 @@ app.post('/cardnews/:id/publish', async (c) => {
     if ((r.igMediaId || r.fbPostId) && !card.publishedTs) patch.publishedTs = new Date().toISOString();
     if (Object.keys(patch).length) cardNewsStore().update(id, patch);
     if (!r.ok) return c.json({ error: r.error, ...patch }, 502);
-    console.log(`[발행담당] 카드뉴스 "${card.topic.slice(0, 30)}" — 인스타 ${wasPublished ? '퍼머링크 보강' : '발행 완료'}`);
-    return c.json({ ok: true, igPermalink: r.igPermalink ?? card.igPermalink, fbPostId: r.fbPostId ?? card.fbPostId });
+    const fbNote = r.fbError ? ' / 페북 실패' : r.fbPostId ? ' + 페북 페이지' : '';
+    console.log(`[발행담당] 카드뉴스 "${card.topic.slice(0, 30)}" — 인스타 ${wasPublished ? '퍼머링크 보강' : '발행 완료'}${fbNote}`);
+    if (r.fbError) console.log(`[발행담당] 페북 게시 실패 사유: ${r.fbError}`);
+    // fbError 는 200 과 함께 올려보낸다 — IG 는 실제로 성공했으므로 502 로 뒤집으면 '실패 위장'이 된다.
+    return c.json({ ok: true, igPermalink: r.igPermalink ?? card.igPermalink, fbPostId: r.fbPostId ?? card.fbPostId, fbError: r.fbError });
   } finally {
     metaPublishInFlight.delete(id);
   }
@@ -1421,8 +1519,12 @@ app.post('/shorts/:id/meta', async (c) => {
   const s = shortsStore().get(id);
   if (!s) return c.json({ error: 'unknown shorts' }, 404);
   if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
-  // 완료 판정 = 릴스 id + 실제 퍼머링크. 홈 URL 잔재만 있으면 재시도가 링크를 보강하게 통과.
-  if (s.igReelId && realPermalink(s.igPermalink)) return c.json({ error: '이미 발행됨', igPermalink: s.igPermalink }, 409);
+  // 완료 판정 = 릴스 id + 실제 퍼머링크 + (페이지 연결 시) FB 릴스 id. 홈 URL 잔재만 있으면 재시도가 링크를 보강하게 통과.
+  // FB 페이지를 나중에 연결한 경우 IG 완료만으로 막으면 페북 릴스는 영구히 못 올라간다 → FB 미게시면 통과.
+  const shortsFbPending = !!getMetaAccount(s.brand ?? '').pageId && !s.fbReelId;
+  if (s.igReelId && realPermalink(s.igPermalink) && !shortsFbPending) {
+    return c.json({ error: '이미 발행됨', igPermalink: s.igPermalink }, 409);
+  }
   if (metaPublishInFlight.has(id)) return c.json({ error: '이미 발행 처리 중입니다' }, 409); // 동시/이중 제출 → 중복 공개 발행 차단
   const metaDir = shortsStore().dirFor(id);
   const videoPath = path.join(metaDir, 'final.mp4');
@@ -1445,8 +1547,11 @@ app.post('/shorts/:id/meta', async (c) => {
     if ((r.igReelId || r.fbReelId) && !s.metaPublishedTs) patch.metaPublishedTs = new Date().toISOString();
     if (Object.keys(patch).length) shortsStore().update(id, patch);
     if (!r.ok) return c.json({ error: r.error, ...patch }, 502);
-    console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 릴스 ${wasPublished ? '퍼머링크 보강' : '발행 완료(즉시 공개)'}`);
-    return c.json({ ok: true, igPermalink: r.igPermalink ?? s.igPermalink, fbReelId: r.fbReelId ?? s.fbReelId });
+    const fbNote = r.fbError ? ' / 페북 실패' : r.fbReelId ? ' + 페북 릴스' : '';
+    console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 릴스 ${wasPublished ? '퍼머링크 보강' : '발행 완료(즉시 공개)'}${fbNote}`);
+    if (r.fbError) console.log(`[발행담당] 페북 릴스 실패 사유: ${r.fbError}`);
+    // fbError 는 200 과 함께(IG 릴스는 실제 공개됨 — 502 로 뒤집으면 실패 위장).
+    return c.json({ ok: true, igPermalink: r.igPermalink ?? s.igPermalink, fbReelId: r.fbReelId ?? s.fbReelId, fbError: r.fbError });
   } finally {
     metaPublishInFlight.delete(id);
   }

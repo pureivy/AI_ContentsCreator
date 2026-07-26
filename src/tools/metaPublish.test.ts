@@ -7,7 +7,7 @@ import fs from 'node:fs';
 // ESM 모듈 함수는 spyOn 불가 — vi.mock 부분 목킹(파서 등 순수부는 원본 유지).
 vi.mock('../secrets/store', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../secrets/store')>();
-  return { ...mod, getMetaAccount: vi.fn(() => ({ pageId: '', igUserId: '', pageAccessToken: '' })) };
+  return { ...mod, getMetaAccount: vi.fn(() => ({ pageId: '', igUserId: '', pageAccessToken: '' , pageToken: '' })) };
 });
 
 // fal 스토리지 업로드는 네트워크·FAL_KEY 의존 → 고정 공개 URL 로 목킹(발행 로직만 검증).
@@ -113,7 +113,7 @@ describe('matchOrphanReels', () => {
 
 describe('publishCardNewsToMeta', () => {
   it('브랜드 미연결 → 명확한 에러(네트워크 호출 없음)', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: '', pageAccessToken: '' });
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: '', pageAccessToken: '' , pageToken: '' });
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const r = await publishCardNewsToMeta({ slug: 'x', slidePaths: ['/tmp/none.png'], caption: 'c', hashtags: [] });
     expect(r.ok).toBe(false);
@@ -121,13 +121,13 @@ describe('publishCardNewsToMeta', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
   it('11장 이상 → 캐러셀 한도 에러', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'p', igUserId: 'ig', pageAccessToken: 't' });
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'p', igUserId: 'ig', pageAccessToken: 't' , pageToken: '' });
     const r = await publishCardNewsToMeta({ slug: '', slidePaths: Array.from({ length: 11 }, (_, i) => `/tmp/s${i}.png`), caption: 'c', hashtags: [] });
     expect(r.ok).toBe(false);
     expect(r.error).toContain('10장');
   });
   it('happy path: 슬라이드 2장 fal 업로드→IG 캐러셀→발행→permalink(IG 전용, FB 없음)', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' , pageToken: '' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     // fal 은 슬라이드 파일명별 고유 공개 URL 반환 — image_url 로 흘렀는지·순서 보존을 값으로 검증.
     vi.mocked(uploadToFalStorage).mockImplementation(async (p) => `https://v3.fal.media/${p.split('/').pop()}`);
@@ -145,7 +145,7 @@ describe('publishCardNewsToMeta', () => {
     });
     const r = await publishCardNewsToMeta({ slug: '', slidePaths: ['/a/slide_01.png', '/a/slide_02.png'], caption: '본문', hashtags: ['#t'] });
     expect(r).toMatchObject({ ok: true, igMediaId: 'IGMEDIA', igPermalink: 'https://www.instagram.com/p/x/' });
-    expect(r.fbPostId).toBeUndefined();                                     // FB 경로 제거됨
+    expect(r.fbPostId).toBeUndefined();                                     // 페이지 미연결 → FB 경로 미실행
     // fal 업로드: 슬라이드 수·순서·contentType 검증(로컬 경로/스킵 회귀를 잡음)
     expect(vi.mocked(uploadToFalStorage).mock.calls.map((c) => [c[0], c[1]])).toEqual([['/a/slide_01.png', 'image/png'], ['/a/slide_02.png', 'image/png']]);
     // fal 공개 URL 이 자식 image_url 로, 슬라이드 순서대로 전달됐는지(로컬 경로 회귀 시 실패)
@@ -156,7 +156,7 @@ describe('publishCardNewsToMeta', () => {
     expect(children[1]).toContain('slide_02.png');
   });
   it('단일 슬라이드 → 캐러셀 아닌 일반 이미지 포스트(fal URL)로 발행', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' , pageToken: '' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     const bodies: string[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
@@ -176,7 +176,7 @@ describe('publishCardNewsToMeta', () => {
     expect(bodies.some((b) => b.includes('image_url') && b.includes('caption') && b.includes('fal.media'))).toBe(true); // 단일 이미지+캡션+fal URL
   });
   it('단일 이미지 발행 이형(id 없음) → ok:false(fail-closed, 단일 경로도 위장 금지)', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' , pageToken: '' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
       const u = String(url);
@@ -192,7 +192,7 @@ describe('publishCardNewsToMeta', () => {
     expect(r.error).toContain('이형');
   });
   it('부분 성공 멱등: existing.igMediaId 있으면 IG 스킵·fal 미업로드(재발행·중복 없음)', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' , pageToken: '' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     const calls: string[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => { calls.push(String(url)); return new Response('{}', { status: 200 }); });
@@ -206,7 +206,7 @@ describe('publishCardNewsToMeta', () => {
     expect(calls.some((c) => c.includes('/me/media'))).toBe(false); // IG 경로 미호출(중복 방지)
   });
   it('media_publish 이형 응답(id 없음) → ok:false(성공 위장 금지)', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T' , pageToken: '' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
       const u = String(url); const body = String((init as RequestInit | undefined)?.body ?? '');
@@ -225,9 +225,121 @@ describe('publishCardNewsToMeta', () => {
   });
 });
 
+// 페이스북 페이지 채널 — 과거 결함(FB 엔드포인트를 graph.instagram.com 호스트 + IG 토큰으로 호출)이
+// 되살아나지 않게 호스트·토큰을 값으로 검증한다. 둘 중 하나라도 IG 쪽이면 실사용에서 100% 실패한다.
+describe('페이스북 페이지 발행(카드뉴스)', () => {
+  const BOTH = { pageId: 'PG', igUserId: 'IG', pageAccessToken: 'IGTOK', pageToken: 'PGTOK' };
+  /** IG(성공) + FB 응답을 흉내내는 fetch 목 — 호출 URL·바디를 수집해 반환. */
+  function mockFetch(fbFail?: number): { urls: string[]; bodies: string[] } {
+    const urls: string[] = []; const bodies: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url); urls.push(u);
+      const raw = (init as RequestInit | undefined)?.body;
+      const body = raw instanceof FormData ? [...raw.keys()].join(',') : String(raw ?? '');
+      bodies.push(body);
+      if (u.startsWith('https://graph.facebook.com/')) {
+        if (fbFail && u.includes('/photos')) {
+          return new Response(JSON.stringify({ error: { message: 'permissions error', code: 200 } }), { status: fbFail });
+        }
+        return new Response(JSON.stringify({ id: u.includes('/photos') ? `PH${urls.filter((x) => x.includes('/photos')).length}` : 'PG_POST1' }), { status: 200 });
+      }
+      const json =
+        u.includes('/me/media_publish') ? { id: 'IGMEDIA' }
+        : u.includes('fields=permalink') ? { permalink: 'https://www.instagram.com/p/x/' }
+        : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
+        : u.includes('/me/media') && body.includes('media_type=CAROUSEL') ? { id: 'CAR1' }
+        : u.includes('/me/media') ? { id: 'ct' }
+        : {};
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    return { urls, bodies };
+  }
+
+  it('IG 캐러셀 발행 후 FB 페이지 다중 사진 게시 — 호스트=graph.facebook.com·토큰=페이지 토큰', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue(BOTH);
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('png'));
+    const { urls, bodies } = mockFetch();
+    const r = await publishCardNewsToMeta({ slug: '', slidePaths: ['/a/slide_01.png', '/a/slide_02.png'], caption: '본문', hashtags: ['#t'] });
+    expect(r).toMatchObject({ ok: true, igMediaId: 'IGMEDIA', fbPostId: 'PG_POST1' });
+    expect(r.fbError).toBeUndefined();
+    // 슬라이드마다 미공개 사진 업로드 → 한 피드 게시물로 묶기
+    expect(urls.filter((u) => u === 'https://graph.facebook.com/v23.0/PG/photos')).toHaveLength(2);
+    const feedIdx = urls.findIndex((u) => u.endsWith('/PG/feed'));
+    expect(feedIdx).toBeGreaterThan(-1);
+    expect(bodies[feedIdx]).toContain('attached_media');
+    expect(bodies[feedIdx]).toContain(encodeURIComponent('{"media_fbid":"PH1"}').replace(/%2C/g, '%2C')); // 순서: 1번 슬라이드 먼저
+    expect(bodies[feedIdx]).toContain('PH2');
+    expect(bodies[feedIdx]).toContain('access_token=PGTOK'); // ← 페이지 토큰(IG 토큰이면 회귀)
+    expect(bodies[feedIdx]).not.toContain('IGTOK');
+    // FB 엔드포인트가 IG 호스트로 새지 않았는지(과거 결함)
+    expect(urls.some((u) => u.startsWith('https://graph.instagram.com/') && /photos|\/feed/.test(u))).toBe(false);
+  });
+
+  it('FB 만 실패하면 IG 성공 유지 + fbError 로 사유 보고(성공 위장·실패 위장 둘 다 금지)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue(BOTH);
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('png'));
+    mockFetch(403);
+    const r = await publishCardNewsToMeta({ slug: '', slidePaths: ['/a/slide_01.png'], caption: 'c', hashtags: [] });
+    expect(r.ok).toBe(true);                       // IG 는 실제로 공개 발행됨 → 취소 불가
+    expect(r.igMediaId).toBe('IGMEDIA');
+    expect(r.fbPostId).toBeUndefined();
+    expect(r.fbError).toContain('pages_manage_posts'); // 권한 누락 → 조치까지 안내
+  });
+
+  it('FB 멱등: existing.fbPostId 있으면 FB 재게시 안 함(중복 공개 방지)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue(BOTH);
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('png'));
+    const { urls } = mockFetch();
+    const r = await publishCardNewsToMeta({
+      slug: '', slidePaths: ['/a/slide_01.png'], caption: 'c', hashtags: [],
+      existing: { igMediaId: 'MDONE', igPermalink: 'https://www.instagram.com/p/done/', fbPostId: 'FBDONE' },
+    });
+    expect(r).toMatchObject({ ok: true, igMediaId: 'MDONE', fbPostId: 'FBDONE' });
+    expect(urls.some((u) => u.startsWith('https://graph.facebook.com/'))).toBe(false);
+  });
+
+  it('IG 완료·FB 미게시 상태로 재시도하면 FB 만 올린다(페이지를 나중에 연결한 경우)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue(BOTH);
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('png'));
+    const { urls } = mockFetch();
+    const r = await publishCardNewsToMeta({
+      slug: '', slidePaths: ['/a/slide_01.png'], caption: 'c', hashtags: [],
+      existing: { igMediaId: 'MDONE', igPermalink: 'https://www.instagram.com/p/done/' },
+    });
+    expect(r).toMatchObject({ ok: true, igMediaId: 'MDONE', fbPostId: 'PG_POST1' });
+    expect(urls.some((u) => u.includes('/me/media'))).toBe(false); // IG 재발행 없음
+    expect(vi.mocked(uploadToFalStorage)).not.toHaveBeenCalled();  // fal 재업로드도 없음(FB 는 바이너리 직접 업로드)
+  });
+
+  it('FB 페이지만 연결(IG 미연결) → FB 만 발행하고 ok, IG 호출 없음', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: '', pageAccessToken: '', pageToken: 'PGTOK' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('png'));
+    const { urls } = mockFetch();
+    const r = await publishCardNewsToMeta({ slug: '', slidePaths: ['/a/slide_01.png'], caption: 'c', hashtags: [] });
+    expect(r).toMatchObject({ ok: true, fbPostId: 'PG_POST1' });
+    expect(r.igMediaId).toBeUndefined();
+    expect(urls.some((u) => u.startsWith('https://graph.instagram.com/'))).toBe(false);
+  });
+
+  it('FB 전용 연결에서 FB 가 실패하면 ok:false(올라간 채널이 없으므로 성공 아님)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: '', pageAccessToken: '', pageToken: 'PGTOK' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('png'));
+    mockFetch(403);
+    const r = await publishCardNewsToMeta({ slug: '', slidePaths: ['/a/slide_01.png'], caption: 'c', hashtags: [] });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('permissions error');
+  });
+});
+
 describe('publishShortsToMeta', () => {
   it('브랜드 미연결 → 명확한 에러(네트워크 호출 없음)', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: '', pageAccessToken: '' });
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: '', pageAccessToken: '' , pageToken: '' });
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const r = await publishShortsToMeta({ slug: 'x', videoPath: '/tmp/none.mp4', caption: 'c', hashtags: [] });
     expect(r.ok).toBe(false);
@@ -235,20 +347,20 @@ describe('publishShortsToMeta', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
   it('영상 파일 없음 → 에러', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T', pageToken: 'PGTOK' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(false);
     const r = await publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: 'c', hashtags: [] });
     expect(r.ok).toBe(false);
     expect(r.error).toContain('영상 파일');
   });
   it('happy path: IG 컨테이너(fal video_url)→폴링→발행→permalink + FB start→upload→finish', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T', pageToken: 'PGTOK' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
-    const calls: string[] = [];
+    const calls: string[] = []; const bodies: string[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
       const u = String(url); calls.push(u);
-      const body = String((init as RequestInit | undefined)?.body ?? '');
+      const body = String((init as RequestInit | undefined)?.body ?? ''); bodies.push(body);
       const json =
         u.includes('rupload.facebook.com') || u.includes('UPLOAD_URL') ? { success: true }
         : u.includes('/media_publish') ? { id: 'REEL1' }
@@ -264,9 +376,15 @@ describe('publishShortsToMeta', () => {
     expect(r).toMatchObject({ ok: true, igReelId: 'REEL1', igPermalink: 'https://www.instagram.com/reel/x/', fbReelId: 'FBV1' });
     expect(calls.filter((c) => c.includes('rupload.facebook.com')).length).toBe(1); // FB 바이너리만(IG 는 fal video_url)
     expect(calls.some((c) => c.includes('/me/media') && !c.includes('media_publish'))).toBe(true); // IG 컨테이너는 me/media
+    // FB 릴스는 FB 호스트 + 페이지 토큰 — 과거엔 graph.instagram.com + IG 토큰으로 호출해 실사용에서 전건 실패했다.
+    expect(calls.filter((c) => c.includes('/PG/video_reels')).every((c) => c.startsWith('https://graph.facebook.com/v23.0/'))).toBe(true);
+    const reelBodies = bodies.filter((b) => b.includes('upload_phase'));
+    expect(reelBodies.length).toBe(2);                                    // start + finish
+    expect(reelBodies.every((b) => b.includes('access_token=PGTOK'))).toBe(true);
+    expect(reelBodies.some((b) => b.includes('access_token=T'))).toBe(false); // IG 토큰 유출 없음
   });
   it('IG 발행 이형(id 없음) → ok:false + FB 미진행(변별력: FB 성공 mock 준비)', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T', pageToken: 'PGTOK' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
     const calls: string[] = [];
@@ -289,7 +407,7 @@ describe('publishShortsToMeta', () => {
     expect(calls.some((c) => c.includes('/PG/video_reels'))).toBe(false);
   });
   it('FB start 이형(video_id 없음) → FB best-effort 스킵, IG 릴스 성공은 ok:true 로 유지', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T', pageToken: 'PGTOK' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
@@ -311,7 +429,7 @@ describe('publishShortsToMeta', () => {
     expect(r.fbReelId).toBeUndefined(); // FB 는 스킵됨
   });
   it('FB finish 이형(success 없음) → FB best-effort 스킵, IG 릴스 성공 유지', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T', pageToken: 'PGTOK' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
@@ -334,7 +452,7 @@ describe('publishShortsToMeta', () => {
     expect(r.fbReelId).toBeUndefined();      // FB 는 스킵됨
   });
   it('부분 성공 멱등: existing.igReelId 있으면 IG 경로 무호출·fal 미업로드, FB 만 발행', async () => {
-    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T' });
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: 'IG', pageAccessToken: 'T', pageToken: 'PGTOK' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
     const calls: string[] = [];
