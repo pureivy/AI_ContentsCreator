@@ -1649,6 +1649,8 @@ button.upload-retry:hover { background: var(--panel2); }
 /* 행 높이는 기존의 ~2/3(사용자 지정): 세로 패딩 축소 + 행 안의 칩·버튼을 콤팩트로. */
 .perf-table td { padding: 4px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .perf-table td .chip { padding: 2px 8px; font-size: 11px; }
+/* 수집 불가 — 비공개·삭제·기한 경과로 영구 정체. '측정 중'(회색 대기)과 색으로 즉시 구분. */
+.chip.stale { background: var(--bg-warning-subtle); color: var(--critic); }
 .perf-table td .btn { padding: 4px 9px; font-size: 12px; }
 .perf-table tr:hover td { background: var(--bg-neutral); }
 .perf-title { max-width: 320px; }

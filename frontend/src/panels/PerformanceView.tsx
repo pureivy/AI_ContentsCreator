@@ -89,12 +89,15 @@ export default function PerformanceView() {
     return Number.isNaN(d.getTime()) ? "—"
       : `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`;
   };
-  // 측정창 종료 후 학습 강화 반영 여부 칩 — 명시 라벨(✓ 반영 / 측정 중).
-  const reflBadge = (reflected: boolean) => (
-    <span className={reflected ? "chip" : "chip muted"} title="측정창 종료 후 성과가 학습 강화(키워드·서브니치 EWMA)에 반영됐는지">
-      {reflected ? "✓ 반영" : "측정 중"}
-    </span>
-  );
+  // 측정창 종료 후 학습 강화 반영 여부 칩 — 3상태. '측정 중'(창 안, 정상 대기)과 '수집 불가'(비공개·삭제·
+  // 포기 지평 경과로 영구 정체)를 구분해야 죽은 행이 대기 중인 척 남지 않는다.
+  // 채널(쇼츠·릴스·카드뉴스) 강화는 담당 직원 메모리 + 위키를 갱신한다. 키워드·서브니치 EWMA 전략은
+  // 블로그 경로 전용(reinforce.ts 의 updateStrategy)이라 여기 문구에 섞으면 안 된다.
+  const reflBadge = (reflected: boolean, stale?: boolean) => {
+    if (reflected) return <span className="chip" title="측정창이 끝나 성과가 담당 직원 메모리·위키에 학습 반영됐습니다.">✓ 반영</span>;
+    if (stale) return <span className="chip stale" title="수집 대상에서 빠졌습니다 — 영상·게시물이 비공개·삭제됐거나 측정 기한이 지나 성과를 더는 가져올 수 없습니다. 학습에 반영되지 않습니다.">수집 불가</span>;
+    return <span className="chip muted" title="측정창이 아직 진행 중입니다 — 창이 끝나면 성과가 담당 직원 메모리·위키에 1회 학습 반영됩니다.">측정 중</span>;
+  };
   // 채널별 분리 — 한 숏폼이 유튜브·인스타 양쪽에 발행됐으면 각 섹션에 각각 나타난다(채널별 성과 독립).
   // 정렬·업로드일도 채널별 타임스탬프 사용(youtube.ts / meta.ts) — 상단 r.ts(최신값)와 달라 섹션별로 정확.
   const ytShorts = (ch?.shorts.filter((r) => r.youtube) ?? [])
@@ -202,7 +205,7 @@ export default function PerformanceView() {
               <div className="perf-table-wrap">
                 <table className="perf-table">
                   <thead>
-                    <tr><th>숏폼</th><th>업로드일</th><th title="유튜브 조회수 일별 추이">추이</th><th>조회</th><th>👍</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th><th></th></tr>
+                    <tr><th>숏폼</th><th>업로드일</th><th title="유튜브 조회수 일별 추이">추이</th><th>조회</th><th>👍</th><th title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th><th></th></tr>
                   </thead>
                   <tbody>
                     {take("yt", ytShorts).map((r) => (
@@ -218,7 +221,7 @@ export default function PerformanceView() {
                         <td className="perf-spark"><Sparkline data={r.youtube?.series ?? []} title={`${r.title} 유튜브 조회 추이`} /></td>
                         <td className="perf-r">{r.youtube ? fmt(r.youtube.views) : "—"}</td>
                         <td className="perf-r">{r.youtube ? fmt(r.youtube.likes) : "—"}</td>
-                        <td className="perf-r">{r.youtube ? reflBadge(r.youtube.reflected) : "—"}</td>
+                        <td className="perf-r">{r.youtube ? reflBadge(r.youtube.reflected, r.youtube.stale) : "—"}</td>
                         <td className="perf-r"><button className="btn ghost" title="숏폼 삭제 — 산출물·성과 포함(유튜브·릴스 행 모두 사라짐)" onClick={() => doDeleteShorts(r.id, r.title)}><Ico name="trash" size={12} /></button></td>
                       </tr>
                     ))}
@@ -237,7 +240,7 @@ export default function PerformanceView() {
               <div className="perf-table-wrap">
                 <table className="perf-table">
                   <thead>
-                    <tr><th>릴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>조회</th><th>👍</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th><th></th></tr>
+                    <tr><th>릴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>조회</th><th>👍</th><th title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th><th></th></tr>
                   </thead>
                   <tbody>
                     {take("reels", reels).map((r) => (
@@ -253,7 +256,7 @@ export default function PerformanceView() {
                         <td className="perf-spark"><Sparkline data={r.meta?.series ?? []} title={`${r.title} 릴스 조회 추이`} /></td>
                         <td className="perf-r">{r.meta ? fmt(r.meta.views) : "—"}</td>
                         <td className="perf-r">{r.meta ? fmt(r.meta.likes) : "—"}</td>
-                        <td className="perf-r">{r.meta ? reflBadge(r.meta.reflected) : "—"}</td>
+                        <td className="perf-r">{r.meta ? reflBadge(r.meta.reflected, r.meta.stale) : "—"}</td>
                         <td className="perf-r"><button className="btn ghost" title="숏폼 삭제 — 산출물·성과 포함(유튜브·릴스 행 모두 사라짐)" onClick={() => doDeleteShorts(r.id, r.title)}><Ico name="trash" size={12} /></button></td>
                       </tr>
                     ))}
@@ -272,7 +275,7 @@ export default function PerformanceView() {
               <div className="perf-table-wrap">
                 <table className="perf-table">
                   <thead>
-                    <tr><th>카드뉴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>IG 조회</th><th>도달</th><th>👍</th><th>FB 👍</th><th>공유</th><th title="측정창 종료 후 학습 반영(✓) / 측정 중(…)">반영</th><th></th></tr>
+                    <tr><th>카드뉴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>IG 조회</th><th>도달</th><th>👍</th><th>FB 👍</th><th>공유</th><th title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th><th></th></tr>
                   </thead>
                   <tbody>
                     {take("cardnews", cardnews).map((r) => (
@@ -291,7 +294,7 @@ export default function PerformanceView() {
                         <td className="perf-r">{r.ig ? fmt(r.ig.likes) : "—"}</td>
                         <td className="perf-r">{r.fb ? fmt(r.fb.likes) : "—"}</td>
                         <td className="perf-r">{r.fb ? fmt(r.fb.shares) : "—"}</td>
-                        <td className="perf-r">{reflBadge(r.reflected)}</td>
+                        <td className="perf-r">{reflBadge(r.reflected, r.stale)}</td>
                         <td className="perf-r"><button className="btn ghost" title="카드뉴스 삭제 — 산출물·성과 포함" onClick={() => doDeleteCardnews(r.id, r.topic)}><Ico name="trash" size={12} /></button></td>
                       </tr>
                     ))}

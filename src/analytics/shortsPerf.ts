@@ -79,6 +79,24 @@ export function shortsMetaPerfDue(
   return age <= days * 86_400_000 || !s.metaPerfReflected;
 }
 
+/**
+ * 대시보드 '수집 불가'(순수) — 미반영인데 수집 대상도 아님 = 영구 정체(비공개·삭제·id 없음·포기 지평 경과).
+ * due 술어를 그대로 뒤집어 쓰므로 수집 게이트가 바뀌면 표시도 저절로 따라온다(로직 이원화 금지).
+ * '측정 중'(창 안 정상 대기)과 구분하지 않으면 죽은 행이 대기 중인 척 대시보드에 영원히 남는다.
+ */
+export function shortsPerfStale(
+  s: Pick<Shorts, 'youtubeId' | 'youtubeTs' | 'perfReflected'>, now: number, days: number,
+): boolean {
+  return !s.perfReflected && !shortsPerfDue(s, now, days);
+}
+
+/** 대시보드 '수집 불가' — 메타(릴스) 판. shortsPerfStale 의 메타 채널 미러. */
+export function shortsMetaPerfStale(
+  s: Pick<Shorts, 'igReelId' | 'metaPublishedTs' | 'metaPerfReflected'>, now: number, days: number,
+): boolean {
+  return !s.metaPerfReflected && !shortsMetaPerfDue(s, now, days);
+}
+
 /** videos.list 50개 배치 — 키 없으면 빈 Map. 배치별 fail-open — 성공한 배치는 보존. */
 async function fetchVideoStats(videoIds: string[], signal?: AbortSignal): Promise<Map<string, VideoStats>> {
   const key = getSecret('YOUTUBE_API_KEY');

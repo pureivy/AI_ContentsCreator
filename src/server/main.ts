@@ -59,8 +59,8 @@ import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeB
 import type { BrandProfile } from '../content/brand';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
-import { syncShortsPerformance, syncShortsMetaPerformance } from '../analytics/shortsPerf';
-import { syncCardnewsPerformance } from '../analytics/cardnewsPerf';
+import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shortsMetaPerfStale } from '../analytics/shortsPerf';
+import { syncCardnewsPerformance, cardnewsPerfStale } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
 import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor } from '../analytics/performance';
@@ -1873,6 +1873,10 @@ function performanceHandler(c: Context): Response {
   const s = readStrategy(activeBrandSlug()); // 활성 브랜드의 강화 학습만 표시
   const measured = rows.filter((r) => r.views != null);
   // 채널 성과(쇼츠·카드뉴스) — 발행된 것만, 채널별 최신 샘플(한 시계열에 유튜브·메타가 섞여 소스로 분리).
+  // stale = 미반영인데 수집 대상도 아님(비공개·삭제·포기 지평 경과) → 영구 정체라 '측정 중'과 구분해 표시.
+  // 판정은 수집 틱과 같은 due 술어를 그대로 재사용 — 게이트가 바뀌어도 대시보드가 따라오도록(로직 이원화 금지).
+  const perfNow = Date.now();
+  const perfDays = CONFIG.shortsPerfDays;
   const shortsRows = shortsStore().list().filter(brandMatch)
     .filter((x) => !!x.youtubeTs || !!x.metaPublishedTs)
     .map((x) => {
@@ -1881,8 +1885,8 @@ function performanceHandler(c: Context): Response {
       return {
         id: x.id, title: x.title || x.topic,
         // 업로드일은 채널별로 분리 — 유튜브 섹션은 youtubeTs, 릴스 섹션은 metaPublishedTs(양쪽 발행 시 상단 ts 는 최신값으로 정렬용).
-        youtube: x.youtubeTs ? { url: x.youtubeUrl ?? null, views: yt?.views ?? null, likes: yt?.likes ?? null, reflected: !!x.perfReflected, series: viewsSeriesFor(x.id, 'youtube:'), ts: x.youtubeTs } : null,
-        meta: x.metaPublishedTs ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, likes: ig?.likes ?? null, reflected: !!x.metaPerfReflected, series: viewsSeriesFor(x.id, 'meta:ig'), ts: x.metaPublishedTs } : null,
+        youtube: x.youtubeTs ? { url: x.youtubeUrl ?? null, views: yt?.views ?? null, likes: yt?.likes ?? null, reflected: !!x.perfReflected, stale: shortsPerfStale(x, perfNow, perfDays), series: viewsSeriesFor(x.id, 'youtube:'), ts: x.youtubeTs } : null,
+        meta: x.metaPublishedTs ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, likes: ig?.likes ?? null, reflected: !!x.metaPerfReflected, stale: shortsMetaPerfStale(x, perfNow, perfDays), series: viewsSeriesFor(x.id, 'meta:ig'), ts: x.metaPublishedTs } : null,
         ts: [x.youtubeTs, x.metaPublishedTs].filter(Boolean).sort().pop()!,
       };
     })
@@ -1894,6 +1898,7 @@ function performanceHandler(c: Context): Response {
       const fb = latestMetricsBySource(x.id, 'meta:fb');
       return {
         id: x.id, topic: x.topic, ts: x.publishedTs!, reflected: !!x.perfReflected,
+        stale: cardnewsPerfStale(x, perfNow, perfDays),
         ig: x.igMediaId ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, reach: ig?.reach ?? null, likes: ig?.likes ?? null, series: viewsSeriesFor(x.id, 'meta:ig') } : null,
         fb: x.fbPostId ? { likes: fb?.likes ?? null, shares: fb?.shares ?? null } : null,
       };

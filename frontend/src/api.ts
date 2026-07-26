@@ -951,13 +951,14 @@ export interface PerfRow {
   derived?: DerivedSummary;
 }
 // 채널 성과(쇼츠·카드뉴스) — 채널 미발행이면 null, 발행됐지만 수집 전이면 views null.
+// stale = 미반영인데 수집 대상에서도 빠진 상태(비공개·삭제·포기 지평 경과) → '측정 중'이 아니라 '수집 불가'.
 export interface ShortsPerfRow {
   id: string; title: string; ts: string;
-  youtube: { url: string | null; views: number | null; likes: number | null; reflected: boolean; series: number[]; ts: string } | null;
-  meta: { permalink: string | null; views: number | null; likes: number | null; reflected: boolean; series: number[]; ts: string } | null;
+  youtube: { url: string | null; views: number | null; likes: number | null; reflected: boolean; stale: boolean; series: number[]; ts: string } | null;
+  meta: { permalink: string | null; views: number | null; likes: number | null; reflected: boolean; stale: boolean; series: number[]; ts: string } | null;
 }
 export interface CardnewsPerfRow {
-  id: string; topic: string; ts: string; reflected: boolean;
+  id: string; topic: string; ts: string; reflected: boolean; stale: boolean;
   ig: { permalink: string | null; views: number | null; reach: number | null; likes: number | null; series: number[] } | null;
   fb: { likes: number | null; shares: number | null } | null;
 }

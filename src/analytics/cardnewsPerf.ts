@@ -58,6 +58,13 @@ export function cardnewsPerfDue(
   return age <= days * 86_400_000 || !c.perfReflected;
 }
 
+/** 대시보드 '수집 불가'(순수) — shortsPerfStale 의 카드뉴스 판(미반영 + 수집 대상 아님 = 영구 정체). */
+export function cardnewsPerfStale(
+  c: Pick<CardNews, 'igMediaId' | 'publishedTs' | 'perfReflected'>, now: number, days: number,
+): boolean {
+  return !c.perfReflected && !cardnewsPerfDue(c, now, days);
+}
+
 /** 강화 1회 — reinforceShorts 미러. 역할 부재·위키 실패는 무해. 신호를 반환. */
 function reinforceCardnews(card: CardNews, m: MetricSample): number {
   const signal = cardnewsSignal(m.reach ?? 0, m.saved ?? 0, m.shares ?? 0);
