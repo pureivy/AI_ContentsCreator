@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildIgCaption, extractId, parsePermalink, realPermalink, graphError, metaLimitHint, matchRecentPublish, matchOrphanReels, publishCardNewsToMeta, publishShortsToMeta } from './metaPublish';
+import { buildIgCaption, extractId, parsePermalink, realPermalink, graphError, metaLimitHint, matchRecentPublish, matchRecentFbPost, matchOrphanReels, publishCardNewsToMeta, publishShortsToMeta } from './metaPublish';
 import { uploadToFalStorage } from './falStorage';
 import { getMetaAccount } from '../secrets/store';
 import fs from 'node:fs';
@@ -326,6 +326,38 @@ describe('페이스북 페이지 발행(카드뉴스)', () => {
     expect(urls.some((u) => u.startsWith('https://graph.instagram.com/'))).toBe(false);
   });
 
+  it('/feed 실패 후 실제로 게시돼 있으면 id 를 회수한다(중복 공개 게시 방지)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue(BOTH);
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('png'));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url);
+      const raw = (init as RequestInit | undefined)?.body;
+      const isPost = (init as RequestInit | undefined)?.method === 'POST';
+      if (u.startsWith('https://graph.facebook.com/')) {
+        if (u.includes('/photos')) return new Response(JSON.stringify({ id: 'PH1' }), { status: 200 });
+        if (u.includes('/feed') && isPost) return new Response(JSON.stringify({ error: { message: 'timeout', code: 1 } }), { status: 500 });
+        if (u.includes('/feed')) { // ← 회수 조회: 방금 올라간 게시물이 실제로 존재
+          return new Response(JSON.stringify({ data: [{ id: 'PG_RECOVERED', message: '방학 시작에 10개였던 열매 어쩌고', created_time: new Date().toISOString() }] }), { status: 200 });
+        }
+      }
+      const body = String(raw ?? '');
+      const json =
+        u.includes('/me/media_publish') ? { id: 'IGMEDIA' }
+        : u.includes('fields=permalink') ? { permalink: 'https://www.instagram.com/p/x/' }
+        : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
+        : u.includes('/me/media') && body.includes('media_type=CAROUSEL') ? { id: 'CAR1' }
+        : u.includes('/me/media') ? { id: 'ct' }
+        : {};
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const r = await publishCardNewsToMeta({ slug: '', slidePaths: ['/a/slide_01.png'], caption: '방학 시작에 10개였던 열매 어쩌고', hashtags: [] });
+    expect(r.ok).toBe(true);
+    expect(r.fbPostId).toBe('PG_RECOVERED'); // 재시도가 두 번째 게시를 만들지 않게 id 확보
+    expect(r.recovered).toBe(true);
+    expect(r.fbError).toBeUndefined();       // 결과적으로 게시됐으므로 실패로 보고하지 않음
+  });
+
   it('FB 전용 연결에서 FB 가 실패하면 ok:false(올라간 채널이 없으므로 성공 아님)', async () => {
     vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: '', pageAccessToken: '', pageToken: 'PGTOK' });
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
@@ -475,5 +507,23 @@ describe('publishShortsToMeta', () => {
     expect(r.fbReelId).toBe('FBV2');
     expect(vi.mocked(uploadToFalStorage)).not.toHaveBeenCalled();  // 재업로드 없음
     expect(calls.some((c) => c.includes('/me/media'))).toBe(false); // IG 경로 미호출(중복 방지)
+  });
+});
+
+// /feed 응답 유실 회수의 순수 매처 — 오매칭은 남의 게시물을 우리 것으로 기록하므로 경계를 못박는다.
+describe('matchRecentFbPost', () => {
+  const now = Date.parse('2026-07-27T08:25:00Z');
+  const posts = [
+    { id: 'p1', message: '방학 시작에 10개였던 열매, 끝날 때 몇 개 남을까요\n\n#태그', created_time: '2026-07-27T08:24:30Z' },
+    { id: 'p2', message: '완전히 다른 페이지 게시물', created_time: '2026-07-27T08:24:50Z' },
+  ];
+  it('메시지 프리픽스 일치 + 3분 이내 → 그 id', () => {
+    expect(matchRecentFbPost(posts, '방학 시작에 10개였던 열매, 끝날 때 몇 개 남을까요\n\n#태그', now)).toBe('p1');
+  });
+  it('3분 초과·프리픽스 불일치·짧은 메시지·필드 결측 → null', () => {
+    expect(matchRecentFbPost(posts, '방학 시작에 10개였던 열매', Date.parse('2026-07-27T08:29:00Z'))).toBeNull();
+    expect(matchRecentFbPost(posts, '전혀 다른 카드뉴스 캡션입니다', now)).toBeNull();
+    expect(matchRecentFbPost(posts, '방학', now)).toBeNull();                       // <8자 → 오매칭 방지
+    expect(matchRecentFbPost([{ id: 'x', created_time: '2026-07-27T08:24:30Z' }], '방학 시작에 10개였던 열매', now)).toBeNull();
   });
 });

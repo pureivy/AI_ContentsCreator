@@ -48,9 +48,10 @@ export function parseFbEngagement(json: unknown): { likes: number; comments: num
 }
 /** 이번 틱 수집 대상인가(순수) — shortsPerfDue 미러(igMediaId·publishedTs 기준, 포기 지평 4배). */
 export function cardnewsPerfDue(
-  c: Pick<CardNews, 'igMediaId' | 'publishedTs' | 'perfReflected'>, now: number, days: number,
+  c: Pick<CardNews, 'igMediaId' | 'fbPostId' | 'publishedTs' | 'perfReflected'>, now: number, days: number,
 ): boolean {
-  if (!c.igMediaId || !c.publishedTs) return false;
+  // 어느 채널이든 게시됐으면 대상 — 페북 페이지만 연결된 카드가 수집에서 통째 빠지지 않게.
+  if ((!c.igMediaId && !c.fbPostId) || !c.publishedTs) return false;
   const t = new Date(c.publishedTs).getTime();
   if (!Number.isFinite(t)) return false;
   const age = now - t;
@@ -107,19 +108,24 @@ export async function syncCardnewsPerformance(): Promise<void> {
     for (const card of due) {
       try {
         const acct = getMetaAccount(card.brand ?? '');
-        if (!acct.pageAccessToken) continue; // 브랜드 미연결(연결 해제됨) — 스킵
-        const qs = `access_token=${encodeURIComponent(acct.pageAccessToken)}`;
-        const ir = await fetchTimeout(`${GRAPH}/${card.igMediaId}/insights?metric=views,reach,saved,shares,likes,comments&${qs}`, {});
-        if (!ir.ok) throw new Error(`IG insights HTTP ${ir.status}`);
-        const ig = parseIgInsights(await ir.json());
-        const igSample: MetricSample = {
-          measuredAt: new Date().toISOString(),
-          views: ig.views ?? 0, reach: ig.reach ?? 0, saved: ig.saved ?? 0, shares: ig.shares ?? 0,
-          likes: ig.likes ?? 0, comments: ig.comments ?? 0, searchInflow: [], source: 'meta:ig',
-        };
-        appendMetrics(card.id, igSample);
-        // FB 는 부가 채널 — 실패해도 IG 수집·강화를 막지 않음. 호스트·토큰이 IG 와 완전히 다르다
-        // (graph.facebook.com + 페이지 액세스 토큰) — IG 쪽을 재사용하면 전건 실패한다.
+        if (!acct.pageAccessToken && !acct.pageToken) continue; // 양쪽 다 미연결 — 스킵
+        // 채널별로 독립 수집한다. IG 실패(삭제된 게시물·토큰 만료)가 FB 수집을 함께 죽이던 구조를 피한다.
+        let igSample: MetricSample | null = null;
+        if (card.igMediaId && acct.pageAccessToken) {
+          try {
+            const qs = `access_token=${encodeURIComponent(acct.pageAccessToken)}`;
+            const ir = await fetchTimeout(`${GRAPH}/${card.igMediaId}/insights?metric=views,reach,saved,shares,likes,comments&${qs}`, {});
+            if (!ir.ok) throw new Error(`IG insights HTTP ${ir.status}`);
+            const ig = parseIgInsights(await ir.json());
+            igSample = {
+              measuredAt: new Date().toISOString(),
+              views: ig.views ?? 0, reach: ig.reach ?? 0, saved: ig.saved ?? 0, shares: ig.shares ?? 0,
+              likes: ig.likes ?? 0, comments: ig.comments ?? 0, searchInflow: [], source: 'meta:ig',
+            };
+            appendMetrics(card.id, igSample);
+          } catch (e) { console.log('[perf-sync]', `카드뉴스 ${card.id} IG 수집 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+        }
+        // FB 는 부가 채널 — 호스트·토큰이 IG 와 완전히 다르다(graph.facebook.com + 페이지 액세스 토큰).
         if (card.fbPostId && acct.pageToken) {
           try {
             const fbQs = `access_token=${encodeURIComponent(acct.pageToken)}`;
@@ -130,8 +136,9 @@ export async function syncCardnewsPerformance(): Promise<void> {
             }
           } catch { /* 부가 채널 fail-open */ }
         }
+        // 강화 신호는 IG 지표 정의 기반 — IG 표본을 못 얻었으면 다음 틱으로 미룬다(0 으로 잘못 강화 금지).
         const windowOver = now - new Date(card.publishedTs!).getTime() > days * 86_400_000;
-        if (windowOver && !card.perfReflected) {
+        if (windowOver && !card.perfReflected && igSample) {
           const sig = reinforceCardnews(card, igSample);
           cardNewsStore().update(card.id, { perfReflected: true });
           console.log('[perf-sync]', `카드뉴스 강화 완료: ${card.topic.slice(0, 30)} (신호 ${sig.toFixed(2)})`);

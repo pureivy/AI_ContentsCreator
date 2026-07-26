@@ -1453,13 +1453,14 @@ function saveFbPage(brand: string, page: MetaPage): string {
   return `✅ 페이스북 페이지 연결 완료: ${page.name || page.id} (브랜드: ${brand || '범용'})`;
 }
 app.get('/meta/fb/pick', (c) => {
+  const esc = (x: string): string => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   const state = c.req.query('state') ?? '';
   const pending = META_OAUTH_PENDING.get(state);
   if (!pending || pending.exp < Date.now() || !pending.pages) return c.text('만료된 선택 요청 — 페이스북 연결을 다시 시작하세요', 400);
   const page = pending.pages.find((p) => p.id === (c.req.query('page') ?? ''));
   if (!page) return c.text('알 수 없는 페이지', 400);
   META_OAUTH_PENDING.delete(state);
-  return c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">${saveFbPage(pending.brand, page).replace(/</g, '&lt;')} — 이 창을 닫으세요.</body>`);
+  return c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">${esc(saveFbPage(pending.brand, page))} — 이 창을 닫으세요.</body>`);
 });
 /** 페이스북 페이지 연결 해제 — IG 연결은 보존(브랜드별). */
 app.post('/meta/fb/disconnect', (c) => {
@@ -1479,7 +1480,8 @@ app.post('/cardnews/:id/publish', async (c) => {
   // 완료 판정 = 인스타(미디어 id + 실제 퍼머링크) + 페이스북 페이지 연결 시 FB 게시물 id.
   // 홈 URL 잔재만 있으면 완료 아님 → 재시도가 링크를 보강하게 통과시킨다.
   // FB 페이지를 나중에 연결한 경우 IG 완료만으로 막으면 페북에 영구히 못 올라간다 → FB 미게시면 통과.
-  const cardFbPending = !!getMetaAccount(card.brand ?? '').pageId && !card.fbPostId;
+  const cardAcct = getMetaAccount(card.brand ?? '');
+  const cardFbPending = !!(cardAcct.pageId && cardAcct.pageToken) && !card.fbPostId; // 발행기와 동일 판정(토큰까지)
   if (card.igMediaId && realPermalink(card.igPermalink) && !cardFbPending) {
     return c.json({ error: '이미 발행됨', igPermalink: card.igPermalink }, 409);
   }
@@ -1521,7 +1523,8 @@ app.post('/shorts/:id/meta', async (c) => {
   if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
   // 완료 판정 = 릴스 id + 실제 퍼머링크 + (페이지 연결 시) FB 릴스 id. 홈 URL 잔재만 있으면 재시도가 링크를 보강하게 통과.
   // FB 페이지를 나중에 연결한 경우 IG 완료만으로 막으면 페북 릴스는 영구히 못 올라간다 → FB 미게시면 통과.
-  const shortsFbPending = !!getMetaAccount(s.brand ?? '').pageId && !s.fbReelId;
+  const shortsAcct = getMetaAccount(s.brand ?? '');
+  const shortsFbPending = !!(shortsAcct.pageId && shortsAcct.pageToken) && !s.fbReelId; // 발행기와 동일 판정(토큰까지)
   if (s.igReelId && realPermalink(s.igPermalink) && !shortsFbPending) {
     return c.json({ error: '이미 발행됨', igPermalink: s.igPermalink }, 409);
   }

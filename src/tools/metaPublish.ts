@@ -169,6 +169,34 @@ export async function publishFbCardNews(
   return id;
 }
 
+/**
+ * 최근 페이지 게시물에서 방금 올린 것 매칭(순수) — 메시지 프리픽스(24자) + nowMs 기준 3분 이내.
+ * matchRecentPublish(IG)의 페이스북 판. /feed POST 응답만 유실된 경우(게시는 성공) 재시도가 같은
+ * 카드뉴스를 두 번 공개 게시하는 것을 막는다 — 되돌리기 어려운 실수라 id 회수가 재시도보다 낫다.
+ */
+export function matchRecentFbPost(
+  posts: Array<{ id?: string; message?: string; created_time?: string }>,
+  message: string, nowMs: number,
+): string | null {
+  const head = message.replace(/\s+/g, ' ').trim().slice(0, 24);
+  if (head.length < 8) return null; // 프리픽스 너무 짧으면 오매칭 위험 → 포기
+  for (const p of posts) {
+    if (!p.id || !p.message || !p.created_time) continue;
+    if (nowMs - new Date(p.created_time).getTime() > 3 * 60_000) continue;
+    if (p.message.replace(/\s+/g, ' ').trim().startsWith(head)) return p.id;
+  }
+  return null;
+}
+
+/** /feed 실패 후 실제로 게시됐는지 확인해 id 회수(실패 시 null — 원래 에러 유지). */
+async function recoverFbPostId(pageId: string, token: string, message: string, signal?: AbortSignal): Promise<string | null> {
+  try {
+    const j = await graphJson(`${FB_GRAPH}/${pageId}/feed?fields=id,message,created_time&limit=5&${tokenQs(token)}`, { signal }, '최근 페이지 게시물');
+    const posts = (j as { data?: Array<{ id?: string; message?: string; created_time?: string }> }).data ?? [];
+    return matchRecentFbPost(posts, message, Date.now());
+  } catch { return null; }
+}
+
 /** FB 채널 실패 메시지(순수) — IG 성공을 취소하지 않되 사유는 감추지 않는다. 권한 누락은 조치까지 안내. */
 export function fbFailHint(msg: string): string {
   if (/\(#?200\)|permission|pages_manage_posts|OAuthException.*200/i.test(msg)) {
@@ -271,8 +299,14 @@ export async function publishCardNewsToMeta(opts: {
       try {
         out.fbPostId = await publishFbCardNews(acct.pageId, acct.pageToken, opts.slidePaths, message, signal);
       } catch (fe) {
-        out.fbError = fbFailHint(fe instanceof Error ? fe.message.slice(0, 200) : String(fe));
-        console.log('[meta] FB 페이지 게시 실패(IG 성공 유지) — ' + out.fbError.slice(0, 160));
+        // 게시는 됐는데 응답만 유실된 경우가 있다(IG 의 2207051 사례와 같은 부류) → 최근 게시물에서 회수.
+        // 회수 못 하면 사유 보고. 회수 성공은 recovered 로 표시(재시도가 두 번째 공개 게시를 만들지 않게).
+        const rec = await recoverFbPostId(acct.pageId, acct.pageToken, message, signal);
+        if (rec) { out.fbPostId = rec; out.recovered = true; }
+        else {
+          out.fbError = fbFailHint(fe instanceof Error ? fe.message.slice(0, 200) : String(fe));
+          console.log('[meta] FB 페이지 게시 실패(IG 성공 유지) — ' + out.fbError.slice(0, 160));
+        }
       }
     }
 
@@ -398,6 +432,8 @@ export async function publishShortsToMeta(opts: {
 
     // ② FB 릴스 — 페이지 연결(pageId+페이지토큰) 있을 때만. 기발행이면 스킵(멱등).
     // 실패해도 throw 하지 않는다: IG 릴스는 이미 공개됐으므로 취소 불가 — 사유만 fbError 로 보고.
+    // 알려진 한계: finish 응답만 유실된 경우의 id 회수는 카드뉴스(/feed)에만 있다. 릴스는 재시도가
+    // start 부터 새 video_id 를 만들어 중복 공개가 될 수 있다 — 실패 후 재시도 전 페이지를 눈으로 확인할 것.
     out.fbReelId = opts.existing?.fbReelId;
     if (fbLinked && !out.fbReelId) {
       try {

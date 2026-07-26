@@ -15,9 +15,8 @@ import { llmWikiFor } from '../wiki/llmwiki';
 import { appendMemory, appendActivity } from '../agents/workspace';
 import { pieceStore } from '../content/pieces';
 import { GRAPH, FB_GRAPH } from '../tools/metaPublish';
-import { parseFbEngagement } from './cardnewsPerf';
 // cardnewsPerf ↔ shortsPerf 순환 — 함수 선언만이라 안전(최상위 상호 호출 없음)
-import { cardnewsSignal, parseIgInsights } from './cardnewsPerf';
+import { cardnewsSignal, parseIgInsights, parseFbEngagement } from './cardnewsPerf';
 
 export interface VideoStats { views: number; likes: number; comments: number }
 
@@ -70,9 +69,10 @@ export function countSamples(samples: Pick<MetricSample, 'source'>[], source: st
 
 /** 이번 틱 메타(릴스) 수집 대상인가(순수) — shortsPerfDue 의 메타 채널 판. 유튜브 창과 독립. */
 export function shortsMetaPerfDue(
-  s: Pick<Shorts, 'igReelId' | 'metaPublishedTs' | 'metaPerfReflected'>, now: number, days: number,
+  s: Pick<Shorts, 'igReelId' | 'fbReelId' | 'metaPublishedTs' | 'metaPerfReflected'>, now: number, days: number,
 ): boolean {
-  if (!s.igReelId || !s.metaPublishedTs) return false;
+  // 어느 채널이든 게시됐으면 대상 — 페북 페이지만 연결된 쇼츠가 수집에서 통째 빠지지 않게.
+  if ((!s.igReelId && !s.fbReelId) || !s.metaPublishedTs) return false;
   const t = new Date(s.metaPublishedTs).getTime();
   if (!Number.isFinite(t)) return false;
   const age = now - t;
@@ -93,7 +93,7 @@ export function shortsPerfStale(
 
 /** 대시보드 '수집 불가' — 메타(릴스) 판. shortsPerfStale 의 메타 채널 미러. */
 export function shortsMetaPerfStale(
-  s: Pick<Shorts, 'igReelId' | 'metaPublishedTs' | 'metaPerfReflected'>, now: number, days: number,
+  s: Pick<Shorts, 'igReelId' | 'fbReelId' | 'metaPublishedTs' | 'metaPerfReflected'>, now: number, days: number,
 ): boolean {
   return !s.metaPerfReflected && !shortsMetaPerfDue(s, now, days);
 }
@@ -221,16 +221,22 @@ export async function syncShortsMetaPerformance(): Promise<void> {
     for (const s of due) {
       try {
         const acct = getMetaAccount(s.brand ?? '');
-        if (!acct.pageAccessToken) continue; // 브랜드 미연결(연결 해제됨) — 스킵
-        const r = await fetchTimeout(`${GRAPH}/${s.igReelId}/insights?metric=views,reach,likes,comments,saved,shares&access_token=${encodeURIComponent(acct.pageAccessToken)}`, {});
-        if (!r.ok) throw new Error(`IG insights HTTP ${r.status}`);
-        const ig = parseIgInsights(await r.json());
-        const sample: MetricSample = {
-          measuredAt: new Date().toISOString(),
-          views: ig.views ?? 0, reach: ig.reach ?? 0, saved: ig.saved ?? 0, shares: ig.shares ?? 0,
-          likes: ig.likes ?? 0, comments: ig.comments ?? 0, searchInflow: [], source: 'meta:ig',
-        };
-        appendMetrics(s.id, sample);
+        if (!acct.pageAccessToken && !acct.pageToken) continue; // 양쪽 다 미연결 — 스킵
+        // 채널별 독립 수집 — IG 실패(삭제된 릴스·토큰 만료)가 FB 수집을 함께 죽이지 않게.
+        let sample: MetricSample | null = null;
+        if (s.igReelId && acct.pageAccessToken) {
+          try {
+            const r = await fetchTimeout(`${GRAPH}/${s.igReelId}/insights?metric=views,reach,likes,comments,saved,shares&access_token=${encodeURIComponent(acct.pageAccessToken)}`, {});
+            if (!r.ok) throw new Error(`IG insights HTTP ${r.status}`);
+            const ig = parseIgInsights(await r.json());
+            sample = {
+              measuredAt: new Date().toISOString(),
+              views: ig.views ?? 0, reach: ig.reach ?? 0, saved: ig.saved ?? 0, shares: ig.shares ?? 0,
+              likes: ig.likes ?? 0, comments: ig.comments ?? 0, searchInflow: [], source: 'meta:ig',
+            };
+            appendMetrics(s.id, sample);
+          } catch (e) { console.log('[perf-sync]', `릴스 ${s.id} IG 수집 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+        }
         // FB 릴스 반응 — 부가 채널(fail-open). 영상 노드는 리액션을 직접 안 들고 있어 post_id 로 페이지 게시물을
         // 찾아 조회한다. 호스트·토큰은 FB 전용(graph.facebook.com + 페이지 토큰). 강화 신호는 IG 표본만 쓴다.
         if (s.fbReelId && acct.pageToken) {
@@ -247,8 +253,9 @@ export async function syncShortsMetaPerformance(): Promise<void> {
             }
           } catch { /* 부가 채널 fail-open */ }
         }
+        // 강화 신호는 IG 지표 정의 기반 — IG 표본을 못 얻었으면 다음 틱으로 미룬다(0 으로 잘못 강화 금지).
         const windowOver = now - new Date(s.metaPublishedTs!).getTime() > days * 86_400_000;
-        if (windowOver && !s.metaPerfReflected) {
+        if (windowOver && !s.metaPerfReflected && sample) {
           const sig = reinforceShortsMeta(s, sample);
           shortsStore().update(s.id, { metaPerfReflected: true });
           console.log('[perf-sync]', `릴스 강화 완료: ${(s.title ?? s.topic).slice(0, 30)} (신호 ${sig.toFixed(2)})`);
