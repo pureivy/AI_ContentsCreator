@@ -957,12 +957,12 @@ export interface ShortsPerfRow {
   youtube: { url: string | null; views: number | null; likes: number | null; reflected: boolean; stale: boolean; series: number[]; ts: string } | null;
   meta: { permalink: string | null; views: number | null; likes: number | null; reflected: boolean; stale: boolean; series: number[]; ts: string } | null;
   // 페북 릴스 — 미게시면 null. coverPending 이면 커버(썸네일) 미적용 상태.
-  fb: { url: string; views: number | null; likes: number | null; coverPending: boolean } | null;
+  fb: { url: string; views: number | null; likes: number | null; series: number[]; ts: string | null; coverPending: boolean } | null;
 }
 export interface CardnewsPerfRow {
   id: string; topic: string; ts: string; reflected: boolean; stale: boolean;
-  ig: { permalink: string | null; views: number | null; reach: number | null; likes: number | null; series: number[] } | null;
-  fb: { url: string; likes: number | null; shares: number | null } | null;
+  ig: { permalink: string | null; views: number | null; reach: number | null; likes: number | null; series: number[]; ts: string } | null;
+  fb: { url: string; likes: number | null; shares: number | null; series: number[]; ts: string | null } | null; // series = 좋아요 추이(FB 게시물은 조회 미제공)
 }
 export interface PerfData {
   strategy: { winners: Array<{ keyword: string; score: number; samples: number }>; subNiches: Record<string, number>; measuredPieces: number };

@@ -58,6 +58,29 @@ export function latestMetricsBySource(pieceId: string, prefix: string): MetricSa
  * 채널 조회수 추이(순수, 스파크라인용) — 소스 접두로 거른 샘플을 '하루 1점(그날 마지막 값)'으로 압축.
  * 하루 여러 번 수집돼도 스파크라인이 톱니치지 않게 일 단위 정규화, 최근 maxPoints 일만 반환.
  */
+/**
+ * 지표별 일별 시계열(순수) — views 외 지표도 추이로 그릴 수 있게 필드를 인자로 받는다.
+ * 페이스북 게시물(카드뉴스)은 조회 지표를 주지 않아(반응만) views 추이가 항상 0이 된다 →
+ * 그 경우 좋아요 추이를 쓴다. 같은 날 여러 표본은 마지막(최신) 값이 덮어쓴다.
+ */
+export function metricSeriesBySource(
+  samples: MetricSample[], prefix: string, field: 'views' | 'likes' | 'comments' | 'shares', maxPoints = 14,
+): number[] {
+  const byDay = new Map<string, number>();
+  for (const m of [...samples].filter((x) => (x.source ?? '').startsWith(prefix))
+    .sort((a, b) => a.measuredAt.localeCompare(b.measuredAt))) {
+    byDay.set(m.measuredAt.slice(0, 10), num(m[field]));
+  }
+  const series = [...byDay.values()];
+  return series.length > maxPoints ? series.slice(-maxPoints) : series;
+}
+/** 지표 시계열 — piece id 로 읽어서. viewsSeriesFor 의 일반화판. */
+export function metricSeriesFor(
+  pieceId: string, prefix: string, field: 'views' | 'likes' | 'comments' | 'shares', maxPoints = 14,
+): number[] {
+  return metricSeriesBySource(readMetrics(pieceId), prefix, field, maxPoints);
+}
+
 export function viewsSeriesBySource(samples: MetricSample[], prefix: string, maxPoints = 14): number[] {
   const byDay = new Map<string, number>();
   for (const m of [...samples].filter((x) => (x.source ?? '').startsWith(prefix))

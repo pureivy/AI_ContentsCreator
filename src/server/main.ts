@@ -63,7 +63,7 @@ import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shor
 import { syncCardnewsPerformance, cardnewsPerfStale } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
-import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor } from '../analytics/performance';
+import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor } from '../analytics/performance';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
@@ -1599,7 +1599,7 @@ app.post('/cardnews/:id/publish', async (c) => {
     // 부분 성공도 저장 — 재시도 시 성공 채널은 existing 으로 스킵(멱등). 퍼머링크는 실제 링크 있을 때만 갱신(홈 URL 덮어쓰기 방지).
     const patch: Partial<CardNews> = {};
     if (r.igMediaId) { patch.igMediaId = r.igMediaId; if (r.igPermalink) patch.igPermalink = r.igPermalink; }
-    if (r.fbPostId) patch.fbPostId = r.fbPostId;
+    if (r.fbPostId) { patch.fbPostId = r.fbPostId; if (!card.fbPostTs) patch.fbPostTs = new Date().toISOString(); }
     if ((r.igMediaId || r.fbPostId) && !card.publishedTs) patch.publishedTs = new Date().toISOString();
     if (Object.keys(patch).length) cardNewsStore().update(id, patch);
     if (!r.ok) return c.json({ error: r.error, ...patch }, 502);
@@ -1646,7 +1646,7 @@ app.post('/shorts/:id/meta', async (c) => {
     // 부분 성공도 저장 — 재시도 시 성공 채널은 existing 으로 스킵(멱등). 릴스는 즉시 공개(스펙 §3). 퍼머링크는 실제 링크 있을 때만 갱신.
     const patch: Partial<Shorts> = {};
     if (r.igReelId) { patch.igReelId = r.igReelId; if (r.igPermalink) patch.igPermalink = r.igPermalink; }
-    if (r.fbReelId) patch.fbReelId = r.fbReelId;
+    if (r.fbReelId) { patch.fbReelId = r.fbReelId; if (!s.fbReelTs) patch.fbReelTs = new Date().toISOString(); }
     if (r.fbCoverSet) patch.fbReelCoverTs = new Date().toISOString(); // 재시도마다 커버 재업로드 방지
     if ((r.igReelId || r.fbReelId) && !s.metaPublishedTs) patch.metaPublishedTs = new Date().toISOString();
     if (Object.keys(patch).length) shortsStore().update(id, patch);
@@ -2103,6 +2103,8 @@ function performanceHandler(c: Context): Response {
         fb: x.fbReelId ? {
           url: `https://www.facebook.com/reel/${x.fbReelId}`,
           views: fbv?.views ?? null, likes: fbv?.likes ?? null,
+          series: metricSeriesFor(x.id, 'meta:fb', 'views'),
+          ts: x.fbReelTs ?? null, // 페북 게시일(인스타와 다를 수 있음). 구 데이터는 null → '—'
           coverPending: !x.fbReelCoverTs,
         } : null,
         ts: [x.youtubeTs, x.metaPublishedTs].filter(Boolean).sort().pop()!,
@@ -2117,8 +2119,13 @@ function performanceHandler(c: Context): Response {
       return {
         id: x.id, topic: x.topic, ts: x.publishedTs!, reflected: !!x.perfReflected,
         stale: cardnewsPerfStale(x, perfNow, perfDays),
-        ig: x.igMediaId ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, reach: ig?.reach ?? null, likes: ig?.likes ?? null, series: viewsSeriesFor(x.id, 'meta:ig') } : null,
-        fb: x.fbPostId ? { url: `https://www.facebook.com/${x.fbPostId}`, likes: fb?.likes ?? null, shares: fb?.shares ?? null } : null,
+        ig: x.igMediaId ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, reach: ig?.reach ?? null, likes: ig?.likes ?? null, series: viewsSeriesFor(x.id, 'meta:ig'), ts: x.publishedTs! } : null,
+        fb: x.fbPostId ? {
+          url: `https://www.facebook.com/${x.fbPostId}`,
+          likes: fb?.likes ?? null, shares: fb?.shares ?? null,
+          series: metricSeriesFor(x.id, 'meta:fb', 'likes'), // FB 게시물은 조회 지표 미제공 → 좋아요 추이
+          ts: x.fbPostTs ?? null,
+        } : null,
       };
     })
     .sort((a, b) => b.ts.localeCompare(a.ts));

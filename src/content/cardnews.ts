@@ -36,6 +36,8 @@ export interface CardNews {
   igMediaId?: string;
   igPermalink?: string;
   fbPostId?: string;
+  /** 페이스북 페이지 게시 시각 — 인스타와 다른 날에 올릴 수 있어 채널별로 따로 기록. */
+  fbPostTs?: string;
   /** 첫 채널 발행 성공 시각 — 성과 측정 창 기준점. */
   publishedTs?: string;
   /** 측정 창 경과 후 강화 1회 완료(멱등 플래그) — shorts.perfReflected 미러. */

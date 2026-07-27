@@ -49,6 +49,9 @@ export interface Shorts {
   igReelId?: string;
   igPermalink?: string;
   fbReelId?: string;
+  /** 페이스북 릴스 게시 시각 — 인스타와 다른 날에 올릴 수 있어 채널별로 따로 기록한다.
+   *  (metaPublishedTs 는 '메타 채널 최초 게시' = 측정창 기준이라 페북 게시일과 다를 수 있다.) */
+  fbReelTs?: string;
   /** FB 릴스 커버(썸네일)를 지정한 시각 — 릴스 발행 API 에 커버 파라미터가 없어 별 호출로 붙이므로,
    *  이 값이 없으면 '커버 미적용' 상태로 보고 재시도가 보강한다(매 재시도마다 재업로드하지 않게 기록). */
   fbReelCoverTs?: string;
