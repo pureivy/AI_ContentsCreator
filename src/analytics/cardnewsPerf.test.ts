@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cardnewsSignal, parseIgInsights, parseFbEngagement, cardnewsPerfDue } from './cardnewsPerf';
+import { cardnewsSignal, parseIgInsights, parseFbEngagement, parseFbPostViews, cardnewsPerfDue } from './cardnewsPerf';
 
 describe('cardnewsSignal', () => {
   it('0 도달 → 0(0나눗셈 안전)', () => expect(cardnewsSignal(0, 0, 0)).toBe(0));
@@ -23,6 +23,18 @@ describe('parseFbEngagement', () => {
     const j = { reactions: { summary: { total_count: 5 } }, comments: { summary: { total_count: 2 } }, shares: { count: 1 } };
     expect(parseFbEngagement(j)).toEqual({ likes: 5, comments: 2, shares: 1 });
     expect(parseFbEngagement({})).toEqual({ likes: 0, comments: 0, shares: 0 });
+  });
+});
+describe('parseFbPostViews', () => {
+  it('post_media_view 를 조회수로 읽는다', () => {
+    expect(parseFbPostViews({ data: [{ name: 'post_media_view', values: [{ value: 137 }] }] })).toBe(137);
+  });
+  it('read_insights 권한 없을 때의 빈 응답 → 0(반응 수집은 별개로 살아야 한다)', () => {
+    expect(parseFbPostViews({ data: [] })).toBe(0);
+    expect(parseFbPostViews(null)).toBe(0);
+  });
+  it('폐기된 post_impressions 만 오면 0 — 지표명이 바뀌었음을 조용히 넘기지 않게', () => {
+    expect(parseFbPostViews({ data: [{ name: 'post_impressions', values: [{ value: 999 }] }] })).toBe(0);
   });
 });
 describe('cardnewsPerfDue', () => {

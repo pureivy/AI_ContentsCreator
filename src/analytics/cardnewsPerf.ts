@@ -46,6 +46,17 @@ export function parseFbEngagement(json: unknown): { likes: number; comments: num
   const n = (v: unknown): number => { const x = Number(v); return Number.isFinite(x) && x >= 0 ? x : 0; };
   return { likes: n(o?.reactions?.summary?.total_count), comments: n(o?.comments?.summary?.total_count), shares: n(o?.shares?.count) };
 }
+/**
+ * FB 게시물 인사이트 응답 → 조회수(순수).
+ *
+ * 사진 게시물(카드뉴스)의 '조회수'는 릴스와 달리 노드 필드가 아니다 — `?fields=views` 는
+ * "nonexisting field (views)" 로 거부되고, 인사이트 지표로만 온다(실측 2026-07-27).
+ * 지표명은 post_media_view — post_impressions 계열은 2025-11-15 자로 폐기돼 이제
+ * "must be a valid insights metric" 오류가 난다. 응답 형태는 IG 인사이트와 같다.
+ */
+export function parseFbPostViews(json: unknown): number {
+  return parseIgInsights(json).post_media_view ?? 0;
+}
 /** 이번 틱 수집 대상인가(순수) — shortsPerfDue 미러(igMediaId·publishedTs 기준, 포기 지평 4배). */
 export function cardnewsPerfDue(
   c: Pick<CardNews, 'igMediaId' | 'fbPostId' | 'publishedTs' | 'perfReflected'>, now: number, days: number,
@@ -132,7 +143,14 @@ export async function syncCardnewsPerformance(): Promise<void> {
             const fr = await fetchTimeout(`${FB_GRAPH}/${card.fbPostId}?fields=reactions.summary(true),comments.summary(true),shares&${fbQs}`, {});
             if (fr.ok) {
               const fb = parseFbEngagement(await fr.json());
-              appendMetrics(card.id, { measuredAt: new Date().toISOString(), views: 0, likes: fb.likes, comments: fb.comments, shares: fb.shares, searchInflow: [], source: 'meta:fb' });
+              // 조회수는 별도 인사이트 호출 — 사진 게시물엔 views 필드가 없다(릴스와 다른 점).
+              // 실패·무권한이어도 반응·댓글·공유는 그대로 남긴다(조회수만 0).
+              let views = 0;
+              try {
+                const vr = await fetchTimeout(`${FB_GRAPH}/${card.fbPostId}/insights?metric=post_media_view&${fbQs}`, {});
+                if (vr.ok) views = parseFbPostViews(await vr.json());
+              } catch { /* 조회수만 실패 — 나머지 지표는 살린다 */ }
+              appendMetrics(card.id, { measuredAt: new Date().toISOString(), views, likes: fb.likes, comments: fb.comments, shares: fb.shares, searchInflow: [], source: 'meta:fb' });
             }
           } catch { /* 부가 채널 fail-open */ }
         }
