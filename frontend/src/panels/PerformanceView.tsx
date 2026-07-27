@@ -111,6 +111,9 @@ export default function PerformanceView() {
   const reels = (ch?.shorts.filter((r) => r.meta) ?? [])
     .sort((a, b) => (b.meta!.ts).localeCompare(a.meta!.ts));
   const cardnews = ch?.cardnews ?? [];
+  // 전체 조회 합계 — 위 조회 카드 5종의 합. 좋아요(단위 다름)는 제외한다.
+  const totalViews = (s?.totalViews ?? 0) + (ch?.summary.shortsYtViews ?? 0) + (ch?.summary.reelsViews ?? 0)
+    + (ch?.summary.cardnewsViews ?? 0) + (ch?.summary.fbReelViews ?? 0);
 
   // 최근 5개만 기본 표시, 나머지는 '더 보기'로 펼침(표별 독립 상태). 배열은 이미 최신순.
   const LIMIT = 5;
@@ -148,6 +151,14 @@ export default function PerformanceView() {
             <div className="perf-card"><div className="perf-num">{(ch?.summary.shortsYtViews ?? 0).toLocaleString()}</div><div className="perf-lbl">쇼츠 유튜브 조회</div></div>
             <div className="perf-card"><div className="perf-num">{(ch?.summary.reelsViews ?? 0).toLocaleString()}</div><div className="perf-lbl" title="인스타그램 릴스만의 조회 합계 — 페이스북은 합산하지 않고 릴스 표의 페이스북 그룹에서 따로 봅니다">인스타 릴스 조회</div></div>
             <div className="perf-card"><div className="perf-num">{(ch?.summary.cardnewsViews ?? 0).toLocaleString()}</div><div className="perf-lbl" title="인스타그램 카드뉴스만의 조회 합계 — 페이스북 사진 게시물은 조회·노출 지표를 제공하지 않아 합산할 값이 없습니다(반응만 수집)">인스타 카드뉴스 조회</div></div>
+            <div className="perf-card"><div className="perf-num">{(ch?.summary.fbReelViews ?? 0).toLocaleString()}</div><div className="perf-lbl" title="페이스북 페이지 릴스 조회 합계. 페이스북은 영상만 조회 지표가 있어 카드뉴스는 여기 포함되지 않습니다">페이스북 릴스 조회</div></div>
+            {/* 좋아요는 조회와 단위가 달라 합계에 섞지 않는다 — 별도 카드로 두고 라벨에 단위를 밝힌다. */}
+            <div className="perf-card"><div className="perf-num">{(ch?.summary.fbLikes ?? 0).toLocaleString()}</div><div className="perf-lbl" title="페이스북 페이지의 릴스+카드뉴스 좋아요 합계 — 조회와 단위가 다르므로 아래 조회 합계에는 포함되지 않습니다">페이스북 좋아요</div></div>
+            {/* 전체 합계 = 화면에 있는 조회 카드 5개의 합(사용자가 눈으로 검산할 수 있게 같은 값에서 계산). */}
+            <div className="perf-card total">
+              <div className="perf-num">{totalViews.toLocaleString()}</div>
+              <div className="perf-lbl" title="블로그 + 쇼츠 유튜브 + 인스타 릴스 + 인스타 카드뉴스 + 페이스북 릴스 조회의 합계. 좋아요는 단위가 달라 제외됩니다">전체 조회 합계</div>
+            </div>
           </div>
 
           {/* 블로그 성과 — 글별 표. 발행/측정/반영 카운트는 제목 옆(요약 카드는 채널 통합으로 승격). */}
@@ -175,15 +186,15 @@ export default function PerformanceView() {
                     <tr>
                       <th>제목</th>
                       <th className="perf-c">링크</th>
-                      <th className="perf-c">발행일</th>
+                      <th className="perf-c perf-grp-edge">발행일</th>
                       <th className="perf-c">상태</th>
                       <th className="perf-r">조회수</th>
                       <th className="perf-r">체류</th>
                       <th>유입 키워드(상위)</th>
                       <th className="perf-r">SEO</th>
-                      <th className="perf-c" title="파생 카드뉴스 완성 여부"><Ico name="cards" size={13} /></th>
+                      <th className="perf-c perf-grp-edge" title="파생 카드뉴스 완성 여부"><Ico name="cards" size={13} /></th>
                       <th className="perf-c" title="파생 숏폼 완성 여부"><Ico name="play" size={13} /></th>
-                      <th className="perf-r" title="성과 측정 표본 수">측정</th>
+                      <th className="perf-r perf-grp-edge" title="성과 측정 표본 수">측정</th>
                       <th className="perf-c"></th>
                     </tr>
                   </thead>
@@ -201,7 +212,7 @@ export default function PerformanceView() {
                             {linkBadge("naver", p.publishedUrl, "네이버 블로그에서 열기", "네이버 미발행")}
                           </span>
                         </td>
-                        <td className="perf-date perf-c">{fmtDate(p.date)}</td>
+                        <td className="perf-date perf-c perf-grp-edge">{fmtDate(p.date)}</td>
                         <td className="perf-c"><span className="badge">{STAGE_LABEL[p.stage] ? <><Ico name={STAGE_LABEL[p.stage].icon} size={10} /> {STAGE_LABEL[p.stage].label}</> : p.stage}</span></td>
                         <td className="perf-r">{p.views != null ? p.views.toLocaleString() : "—"}</td>
                         <td className="perf-r">{p.dwellSec != null ? `${p.dwellSec}s` : "—"}</td>
@@ -251,7 +262,7 @@ export default function PerformanceView() {
                     <tr>
                       <th>숏폼</th>
                       <th className="perf-c">링크</th>
-                      <th className="perf-c">업로드일</th>
+                      <th className="perf-c perf-grp-edge">업로드일</th>
                       <th className="perf-c" title="유튜브 조회수 일별 추이">추이</th>
                       <th className="perf-r">조회</th>
                       <th className="perf-r">👍</th>
@@ -270,7 +281,7 @@ export default function PerformanceView() {
                         <td className="perf-c">
                           <span className="perf-links">{linkBadge("youtube", r.youtube?.url, "유튜브에서 열기", "유튜브 미업로드")}</span>
                         </td>
-                        <td className="perf-date perf-c">{fmtDate(r.youtube?.ts ?? r.ts)}</td>
+                        <td className="perf-date perf-c perf-grp-edge">{fmtDate(r.youtube?.ts ?? r.ts)}</td>
                         <td className="perf-spark perf-c"><Sparkline data={r.youtube?.series ?? []} title={`${r.title} 유튜브 조회 추이`} /></td>
                         <td className="perf-r">{r.youtube ? fmt(r.youtube.views) : "—"}</td>
                         <td className="perf-r">{r.youtube ? fmt(r.youtube.likes) : "—"}</td>
@@ -311,7 +322,7 @@ export default function PerformanceView() {
                       <th>릴스</th>
                       <th className="perf-c">링크</th>
                       {/* 게시일은 채널 소속 — 같은 릴스를 인스타·페북에 다른 날 올릴 수 있어 한 열로는 한쪽이 거짓이 된다. */}
-                      <th className="perf-c">게시일</th>
+                      <th className="perf-c perf-grp-edge">게시일</th>
                       <th className="perf-c" title="인스타 릴스 조회수 일별 추이">추이</th>
                       <th className="perf-r">조회</th>
                       <th className="perf-r">👍</th>
@@ -338,7 +349,7 @@ export default function PerformanceView() {
                             {linkBadge("facebook", r.fb?.url, "페이스북 릴스 열기", "페이스북 페이지 미게시")}
                           </span>
                         </td>
-                        <td className="perf-date perf-c">{fmtDate(r.meta?.ts)}</td>
+                        <td className="perf-date perf-c perf-grp-edge">{fmtDate(r.meta?.ts)}</td>
                         <td className="perf-spark perf-c"><Sparkline data={r.meta?.series ?? []} title={`${r.title} 인스타 릴스 조회 추이`} /></td>
                         <td className="perf-r">{r.meta ? fmt(r.meta.views) : "—"}</td>
                         <td className="perf-r">{r.meta ? fmt(r.meta.likes) : "—"}</td>
@@ -385,7 +396,7 @@ export default function PerformanceView() {
                     <tr>
                       <th>카드뉴스</th>
                       <th className="perf-c">링크</th>
-                      <th className="perf-c">게시일</th>
+                      <th className="perf-c perf-grp-edge">게시일</th>
                       <th className="perf-c" title="인스타 조회수 일별 추이">추이</th>
                       <th className="perf-r">조회</th>
                       <th className="perf-r">도달</th>
@@ -414,7 +425,7 @@ export default function PerformanceView() {
                             {linkBadge("facebook", r.fb?.url, "페이스북 페이지 게시물 열기", "페이스북 페이지 미게시")}
                           </span>
                         </td>
-                        <td className="perf-date perf-c">{fmtDate(r.ig?.ts ?? r.ts)}</td>
+                        <td className="perf-date perf-c perf-grp-edge">{fmtDate(r.ig?.ts ?? r.ts)}</td>
                         <td className="perf-spark perf-c"><Sparkline data={r.ig?.series ?? []} title={`${r.topic} 인스타 조회 추이`} /></td>
                         <td className="perf-r">{r.ig ? fmt(r.ig.views) : "—"}</td>
                         <td className="perf-r">{r.ig ? fmt(r.ig.reach) : "—"}</td>
