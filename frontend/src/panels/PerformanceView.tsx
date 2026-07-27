@@ -235,12 +235,12 @@ export default function PerformanceView() {
           </div>
 
           <div className="review-section">
-            <h3>인스타 릴스 성과 <span className="muted">(매일 자동 수집)</span></h3>
+            <h3>릴스 성과 <span className="muted">(인스타·페이스북 · 매일 자동 수집)</span></h3>
             {reels.length > 0 ? (
               <div className="perf-table-wrap">
                 <table className="perf-table">
                   <thead>
-                    <tr><th>릴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>조회</th><th>👍</th><th title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th><th></th></tr>
+                    <tr><th>릴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>IG 조회</th><th>IG 👍</th><th title="페이스북 페이지 릴스 조회 — 미게시면 '—'">FB 조회</th><th title="페이스북 릴스 좋아요. 🖼 는 커버(썸네일) 미적용 — 쇼츠 탭에서 '페북 커버 적용'">FB 👍</th><th title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th><th></th></tr>
                   </thead>
                   <tbody>
                     {take("reels", reels).map((r) => (
@@ -256,6 +256,17 @@ export default function PerformanceView() {
                         <td className="perf-spark"><Sparkline data={r.meta?.series ?? []} title={`${r.title} 릴스 조회 추이`} /></td>
                         <td className="perf-r">{r.meta ? fmt(r.meta.views) : "—"}</td>
                         <td className="perf-r">{r.meta ? fmt(r.meta.likes) : "—"}</td>
+                        {/* 페북 릴스 — 게시된 것만 링크. 커버 미적용이면 🖼 로 표시해 보강이 필요함을 성과 탭에서도 알린다. */}
+                        <td className="perf-r">
+                          {r.fb
+                            ? <a href={r.fb.url} target="_blank" rel="noreferrer" title="페이스북 릴스 열기">{fmt(r.fb.views)}</a>
+                            : "—"}
+                        </td>
+                        <td className="perf-r">
+                          {r.fb
+                            ? <>{fmt(r.fb.likes)}{r.fb.coverPending && <span title="커버(썸네일) 미적용 — 쇼츠 탭의 '🖼 페북 커버 적용'으로 보강" style={{ marginLeft: 3 }}>🖼</span>}</>
+                            : "—"}
+                        </td>
                         <td className="perf-r">{r.meta ? reflBadge(r.meta.reflected, r.meta.stale) : "—"}</td>
                         <td className="perf-r"><button className="btn ghost" title="숏폼 삭제 — 산출물·성과 포함(유튜브·릴스 행 모두 사라짐)" onClick={() => doDeleteShorts(r.id, r.title)}><Ico name="trash" size={12} /></button></td>
                       </tr>

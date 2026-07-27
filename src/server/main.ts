@@ -2092,11 +2092,19 @@ function performanceHandler(c: Context): Response {
     .map((x) => {
       const yt = x.youtubeTs ? latestMetricsBySource(x.id, 'youtube:') : null;
       const ig = x.metaPublishedTs ? latestMetricsBySource(x.id, 'meta:ig') : null;
+      const fbv = x.fbReelId ? latestMetricsBySource(x.id, 'meta:fb') : null;
       return {
         id: x.id, title: x.title || x.topic,
         // 업로드일은 채널별로 분리 — 유튜브 섹션은 youtubeTs, 릴스 섹션은 metaPublishedTs(양쪽 발행 시 상단 ts 는 최신값으로 정렬용).
         youtube: x.youtubeTs ? { url: x.youtubeUrl ?? null, views: yt?.views ?? null, likes: yt?.likes ?? null, reflected: !!x.perfReflected, stale: shortsPerfStale(x, perfNow, perfDays), series: viewsSeriesFor(x.id, 'youtube:'), ts: x.youtubeTs } : null,
         meta: x.metaPublishedTs ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, likes: ig?.likes ?? null, reflected: !!x.metaPerfReflected, stale: shortsMetaPerfStale(x, perfNow, perfDays), series: viewsSeriesFor(x.id, 'meta:ig'), ts: x.metaPublishedTs } : null,
+        // 페북 릴스 — 게시된 조각만(fbReelId). 지표는 비디오 노드에서 수집한 meta:fb 표본.
+        // 커버 미적용 여부(coverPending)도 함께 보내 성과 탭에서 바로 보이게 한다(발행 탭까지 가지 않아도 알게).
+        fb: x.fbReelId ? {
+          url: `https://www.facebook.com/reel/${x.fbReelId}`,
+          views: fbv?.views ?? null, likes: fbv?.likes ?? null,
+          coverPending: !x.fbReelCoverTs,
+        } : null,
         ts: [x.youtubeTs, x.metaPublishedTs].filter(Boolean).sort().pop()!,
       };
     })

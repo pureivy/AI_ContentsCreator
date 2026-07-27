@@ -956,6 +956,8 @@ export interface ShortsPerfRow {
   id: string; title: string; ts: string;
   youtube: { url: string | null; views: number | null; likes: number | null; reflected: boolean; stale: boolean; series: number[]; ts: string } | null;
   meta: { permalink: string | null; views: number | null; likes: number | null; reflected: boolean; stale: boolean; series: number[]; ts: string } | null;
+  // 페북 릴스 — 미게시면 null. coverPending 이면 커버(썸네일) 미적용 상태.
+  fb: { url: string; views: number | null; likes: number | null; coverPending: boolean } | null;
 }
 export interface CardnewsPerfRow {
   id: string; topic: string; ts: string; reflected: boolean; stale: boolean;
