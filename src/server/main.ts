@@ -1329,8 +1329,15 @@ const FB_GRAPH_HOST = 'https://graph.facebook.com/v23.0';
 const FB_REDIRECT = `https://localhost:${META_HTTPS_PORT}/meta/fb/oauth/callback`;
 // 스코프 오버라이드는 요청 시점에 읽는다(.env 즉시 반영) — 'Invalid Scopes' 진단 중 서버 재시작 없이
 // 권한을 하나씩 빼며 어느 것이 앱에 없는지 좁힐 수 있어야 한다.
-const FB_SCOPES_DEFAULT = 'pages_show_list,pages_manage_posts,pages_read_engagement,publish_video';
+// business_management 포함 이유(실측 2026-07-27): 페이지 권한이 전부 허용됐는데도 /me/accounts 가 비고
+// /me/businesses 가 '(#100) Missing Permission' 이었다 — 비즈니스 포트폴리오 소유 페이지를 찾으려면 필요하다.
+// 이 권한은 '페이지의 모든 부분 관리' 이용 사례의 필수 권한이라 앱에 이미 붙어 있다.
+const FB_SCOPES_DEFAULT = 'pages_show_list,pages_manage_posts,pages_read_engagement,publish_video,business_management';
 const fbScopes = (): string => getSecret('META_FB_SCOPES') || FB_SCOPES_DEFAULT;
+// 비즈니스용 Facebook 로그인(FBLB)의 '구성' 방식 — 구성 ID 를 주면 권한·자산 선택이 구성에서 온다.
+// scope 방식으로는 자산(페이지) 선택 화면이 아예 안 나올 수 있어(권한만 승인되고 페이지 0개) 그때의 정공법이다.
+// 대시보드: 비즈니스용 Facebook 로그인 → 구성 에서 만들고 그 ID 를 .env 의 META_FB_CONFIG_ID 에 넣는다.
+const fbConfigId = (): string => getSecret('META_FB_CONFIG_ID') || '';
 app.get('/meta/status', (c) => {
   const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
   const client = !!(getSecret('INSTAGRAM_APP_ID') && getSecret('INSTAGRAM_APP_SECRET'));
@@ -1409,8 +1416,16 @@ app.get('/meta/fb/oauth/start', (c) => {
   u.searchParams.set('client_id', id);
   u.searchParams.set('redirect_uri', FB_REDIRECT);
   u.searchParams.set('response_type', 'code');
-  u.searchParams.set('scope', fbScopes());
   u.searchParams.set('state', nonce);
+  const cfg = fbConfigId();
+  if (cfg) {
+    // 구성 방식 — 권한·자산 목록은 구성이 정하므로 scope 를 함께 보내지 않는다(충돌 방지).
+    // override_default_response_type: 구성 기본 응답형이 토큰이어도 code 를 받게 강제(서버 교환 유지).
+    u.searchParams.set('config_id', cfg);
+    u.searchParams.set('override_default_response_type', 'true');
+  } else {
+    u.searchParams.set('scope', fbScopes());
+  }
   return c.redirect(u.toString());
 });
 app.get('/meta/fb/oauth/callback', async (c) => {

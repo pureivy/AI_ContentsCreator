@@ -60,6 +60,31 @@ describe('페이스북 페이지 연결 라우트', () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('연결 실패');
   });
+  // 구성(config_id) 방식이 설정되면 권한·자산 목록은 구성이 정한다 — scope 를 함께 보내면 충돌하므로 빼야 한다.
+  it('META_FB_CONFIG_ID 설정 시 config_id 로 전환하고 scope 를 보내지 않는다', async () => {
+    const st = await (await app.request('/meta/status')).json() as { fbClient: boolean };
+    if (!st.fbClient) return; // 앱 미설정 환경에선 리디렉트 자체가 없음(다른 테스트가 그 계약을 지킴)
+    const prev = process.env.META_FB_CONFIG_ID;
+    process.env.META_FB_CONFIG_ID = '999888777';
+    try {
+      const res = await app.request('/meta/fb/oauth/start');
+      const loc = new URL(res.headers.get('location') ?? '');
+      expect(loc.searchParams.get('config_id')).toBe('999888777');
+      expect(loc.searchParams.get('scope')).toBeNull();
+      expect(loc.searchParams.get('override_default_response_type')).toBe('true');
+      expect(loc.searchParams.get('response_type')).toBe('code'); // 서버측 코드 교환 유지
+    } finally {
+      if (prev === undefined) delete process.env.META_FB_CONFIG_ID; else process.env.META_FB_CONFIG_ID = prev;
+    }
+  });
+  it('구성 미설정이면 scope 방식이고 business_management 를 포함한다(비즈니스 소유 페이지 탐색용)', async () => {
+    const st = await (await app.request('/meta/status')).json() as { fbClient: boolean };
+    if (!st.fbClient) return;
+    const res = await app.request('/meta/fb/oauth/start');
+    const loc = new URL(res.headers.get('location') ?? '');
+    expect(loc.searchParams.get('config_id')).toBeNull();
+    expect(loc.searchParams.get('scope')).toContain('business_management');
+  });
   it('GET /meta/fb/pick: 만료·미상 state → 400(임의 페이지 저장 불가)', async () => {
     const res = await app.request('/meta/fb/pick?state=bogus&page=123');
     expect(res.status).toBe(400);
