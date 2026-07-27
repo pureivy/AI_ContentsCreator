@@ -334,6 +334,10 @@ export interface MetaReelsResult {
   ok: boolean; igReelId?: string; igPermalink?: string; fbReelId?: string; error?: string;
   /** FB 릴스만 실패한 사유(IG 는 성공) — 라우트가 사용자에게 표시. */
   fbError?: string;
+  /** FB 릴스 커버(썸네일)를 이번에 지정했는가 — 라우트가 재시도 스킵용 타임스탬프를 남긴다. */
+  fbCoverSet?: boolean;
+  /** 커버 지정만 실패한 사유(릴스 자체는 살아 있음). */
+  fbCoverError?: string;
   /** 행동차단(2207051) 후 최근 미디어에서 회수해 기록한 발행. */
   recovered?: boolean;
 }
@@ -369,9 +373,24 @@ export async function publishFbReel(pageId: string, token: string, videoPath: st
   return start.video_id;
 }
 
+/**
+ * FB 릴스 커버(썸네일) 지정 — 릴스 발행 API(video_reels)에는 커버 파라미터가 없어서(Meta 문서) 발행 후
+ * /{video-id}/thumbnails 에 이미지를 멀티파트로 올리고 is_preferred 로 대표 지정한다. 이미 공개된 릴스에도
+ * 적용되므로 커버 없이 올라간 과거 릴스를 보강할 수 있다.
+ * 필요 권한: pages_read_user_content · pages_manage_engagement · pages_show_list — 하나라도 없으면 (#10)/(#200).
+ */
+export async function setFbReelCover(videoId: string, token: string, imagePath: string, signal?: AbortSignal): Promise<void> {
+  const form = new FormData();
+  form.append('source', new Blob([fs.readFileSync(imagePath)], { type: 'image/jpeg' }), 'cover.jpg');
+  form.append('is_preferred', 'true');
+  form.append('access_token', token);
+  const j = await graphJson(`${FB_GRAPH}/${videoId}/thumbnails`, { method: 'POST', body: form, signal }, 'FB 릴스 커버');
+  if (!(j as { success?: boolean }).success) throw new Error('FB 릴스 커버 응답 이형(success 없음)');
+}
+
 export async function publishShortsToMeta(opts: {
   slug: string; videoPath: string; caption: string; hashtags: string[]; thumbnailPath?: string;
-  existing?: { igReelId?: string; igPermalink?: string; fbReelId?: string }; signal?: AbortSignal;
+  existing?: { igReelId?: string; igPermalink?: string; fbReelId?: string; fbCoverTs?: string }; signal?: AbortSignal;
 }): Promise<MetaReelsResult> {
   const out: MetaReelsResult = { ok: false };
   try {
@@ -441,6 +460,18 @@ export async function publishShortsToMeta(opts: {
       } catch (fe) {
         out.fbError = fbFailHint(fe instanceof Error ? fe.message.slice(0, 200) : String(fe));
         console.log('[meta] FB 릴스 실패(IG 성공 유지) — ' + out.fbError.slice(0, 160));
+      }
+    }
+
+    // ③ FB 릴스 커버 — 발행 직후든 과거 릴스든, 아직 지정 안 됐고 디자인 썸네일이 있으면 지정한다.
+    // 커버 실패는 릴스 자체를 되돌리지 않는다(이미 공개됨) — 사유만 올려보낸다.
+    if (fbLinked && out.fbReelId && !opts.existing?.fbCoverTs && opts.thumbnailPath && fs.existsSync(opts.thumbnailPath)) {
+      try {
+        await setFbReelCover(out.fbReelId, acct.pageToken, opts.thumbnailPath, signal);
+        out.fbCoverSet = true;
+      } catch (ce) {
+        out.fbCoverError = fbFailHint(ce instanceof Error ? ce.message.slice(0, 200) : String(ce));
+        console.log('[meta] FB 릴스 커버 미적용 — ' + out.fbCoverError.slice(0, 160));
       }
     }
 

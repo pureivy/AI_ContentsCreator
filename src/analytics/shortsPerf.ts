@@ -16,7 +16,7 @@ import { appendMemory, appendActivity } from '../agents/workspace';
 import { pieceStore } from '../content/pieces';
 import { GRAPH, FB_GRAPH } from '../tools/metaPublish';
 // cardnewsPerf ↔ shortsPerf 순환 — 함수 선언만이라 안전(최상위 상호 호출 없음)
-import { cardnewsSignal, parseIgInsights, parseFbEngagement } from './cardnewsPerf';
+import { cardnewsSignal, parseIgInsights } from './cardnewsPerf';
 
 export interface VideoStats { views: number; likes: number; comments: number }
 
@@ -65,6 +65,20 @@ export function shouldRecordMemory(signal: number, publicSampleCount: number): b
  *  (무필터 시 메타 샘플 혼입으로 카운트가 부풀어 비공개→늦공개 오귀속 방지 게이트가 무력화됨, 스펙 §4.3). */
 export function countSamples(samples: Pick<MetricSample, 'source'>[], source: string): number {
   return samples.filter((s) => s.source === source).length;
+}
+
+/**
+ * FB 비디오(릴스) 노드 응답 → 지표(순수). 게시물 노드와 형태가 다르다 — views 는 스칼라,
+ * likes·comments 는 edge 의 summary.total_count. 이형·결측·음수 방어.
+ */
+export function parseFbVideoStats(json: unknown): { views: number; likes: number; comments: number } {
+  const o = json as {
+    views?: unknown;
+    likes?: { summary?: { total_count?: unknown } };
+    comments?: { summary?: { total_count?: unknown } };
+  } | null;
+  const n = (v: unknown): number => { const x = Number(v); return Number.isFinite(x) && x >= 0 ? x : 0; };
+  return { views: n(o?.views), likes: n(o?.likes?.summary?.total_count), comments: n(o?.comments?.summary?.total_count) };
 }
 
 /** 이번 틱 메타(릴스) 수집 대상인가(순수) — shortsPerfDue 의 메타 채널 판. 유튜브 창과 독립. */
@@ -237,19 +251,15 @@ export async function syncShortsMetaPerformance(): Promise<void> {
             appendMetrics(s.id, sample);
           } catch (e) { console.log('[perf-sync]', `릴스 ${s.id} IG 수집 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
         }
-        // FB 릴스 반응 — 부가 채널(fail-open). 영상 노드는 리액션을 직접 안 들고 있어 post_id 로 페이지 게시물을
-        // 찾아 조회한다. 호스트·토큰은 FB 전용(graph.facebook.com + 페이지 토큰). 강화 신호는 IG 표본만 쓴다.
+        // FB 릴스 반응 — 부가 채널(fail-open). 비디오 노드를 직접 조회한다: post_id 로 게시물 노드를 거치는
+        // 2단 경로는 '(#12) singular statuses API is deprecated' 로 실패했다(실측 2026-07-27).
+        // 호스트·토큰은 FB 전용(graph.facebook.com + 페이지 토큰). 강화 신호는 IG 표본만 쓴다.
         if (s.fbReelId && acct.pageToken) {
           try {
-            const fbQs = `access_token=${encodeURIComponent(acct.pageToken)}`;
-            const vr = await fetchTimeout(`${FB_GRAPH}/${s.fbReelId}?fields=post_id&${fbQs}`, {});
-            const postId = vr.ok ? (await vr.json() as { post_id?: string }).post_id : undefined;
-            if (postId) {
-              const fr = await fetchTimeout(`${FB_GRAPH}/${postId}?fields=reactions.summary(true),comments.summary(true),shares&${fbQs}`, {});
-              if (fr.ok) {
-                const fb = parseFbEngagement(await fr.json());
-                appendMetrics(s.id, { measuredAt: new Date().toISOString(), views: 0, likes: fb.likes, comments: fb.comments, shares: fb.shares, searchInflow: [], source: 'meta:fb' });
-              }
+            const fr = await fetchTimeout(`${FB_GRAPH}/${s.fbReelId}?fields=views,likes.summary(true),comments.summary(true)&access_token=${encodeURIComponent(acct.pageToken)}`, {});
+            if (fr.ok) {
+              const fb = parseFbVideoStats(await fr.json());
+              appendMetrics(s.id, { measuredAt: new Date().toISOString(), views: fb.views, likes: fb.likes, comments: fb.comments, shares: 0, searchInflow: [], source: 'meta:fb' });
             }
           } catch { /* 부가 채널 fail-open */ }
         }

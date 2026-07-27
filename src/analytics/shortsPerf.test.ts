@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shortsSignal, parseStatsResponse, shortsPerfDue, shouldRecordMemory, countSamples, shortsMetaPerfDue } from './shortsPerf';
+import { shortsSignal, parseStatsResponse, shortsPerfDue, shouldRecordMemory, countSamples, shortsMetaPerfDue, parseFbVideoStats } from './shortsPerf';
 
 describe('shortsSignal — 로그 스케일 + 좋아요율(순수)', () => {
   it('0뷰=0, 1만뷰≈0.8(뷰만), 좋아요율 1% 이상이면 +0.2 만점', () => {
@@ -76,5 +76,26 @@ describe('shortsMetaPerfDue', () => {
     expect(shortsMetaPerfDue({ igReelId: 'r', metaPublishedTs: at(10) }, now, 7)).toBe(true);
     expect(shortsMetaPerfDue({ igReelId: 'r', metaPublishedTs: at(10), metaPerfReflected: true }, now, 7)).toBe(false);
     expect(shortsMetaPerfDue({ igReelId: 'r', metaPublishedTs: at(30) }, now, 7)).toBe(false);
+  });
+});
+
+// FB 비디오(릴스) 노드 응답 파서 — 게시물 노드와 형태가 달라 그대로 쓰면 전부 0 이 된다.
+// 실측(2026-07-27): post_id 로 게시물을 거치는 2단 경로는 '(#12) singular statuses API deprecated' 로 실패하고,
+// 비디오 노드 직접 조회(views + likes/comments summary)만 현재 권한으로 통과한다.
+describe('parseFbVideoStats', () => {
+  it('views 스칼라 + likes/comments summary 추출', () => {
+    expect(parseFbVideoStats({
+      views: 1,
+      likes: { data: [], summary: { total_count: 3 } },
+      comments: { data: [], summary: { total_count: 2 } },
+    })).toEqual({ views: 1, likes: 3, comments: 2 });
+  });
+  it('결측·이형·음수는 0(가짜 수치 금지)', () => {
+    expect(parseFbVideoStats({})).toEqual({ views: 0, likes: 0, comments: 0 });
+    expect(parseFbVideoStats(null)).toEqual({ views: 0, likes: 0, comments: 0 });
+    expect(parseFbVideoStats({ views: -5, likes: { summary: { total_count: 'x' } } })).toEqual({ views: 0, likes: 0, comments: 0 });
+  });
+  it('게시물 노드 형태(reactions)를 줘도 0 — 잘못된 쿼리를 조용히 통과시키지 않는다', () => {
+    expect(parseFbVideoStats({ reactions: { summary: { total_count: 9 } } })).toEqual({ views: 0, likes: 0, comments: 0 });
   });
 });

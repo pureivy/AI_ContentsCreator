@@ -158,6 +158,12 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
                 title="이미 인스타에 올라간 이 릴스를 페이스북 페이지에도 게시합니다(인스타 재발행 없음)">
                 {metaBusy ? "페북 게시 중…" : "📘 페북에도 올리기"}
               </button>
+            ) : fbReady && s.fbReelId && !s.fbReelCoverTs ? (
+              // 페북 릴스는 올라갔지만 커버가 없다 — 릴스 발행 API 에 커버 파라미터가 없어 별 호출로 붙인다
+              <button className="btn ghost" disabled={metaBusy} onClick={doMeta}
+                title="페이스북 릴스에 디자인 썸네일을 커버로 지정합니다(재발행 없음)">
+                {metaBusy ? "커버 적용 중…" : "🖼 페북 커버 적용"}
+              </button>
             ) : null}
             {metaErr && <span className="muted" style={{ color: "var(--con)" }}>{metaErr}</span>}
             {ytErr && <span className="muted" style={{ color: "var(--con)" }}>{ytErr}</span>}

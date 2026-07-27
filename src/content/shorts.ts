@@ -49,6 +49,9 @@ export interface Shorts {
   igReelId?: string;
   igPermalink?: string;
   fbReelId?: string;
+  /** FB 릴스 커버(썸네일)를 지정한 시각 — 릴스 발행 API 에 커버 파라미터가 없어 별 호출로 붙이므로,
+   *  이 값이 없으면 '커버 미적용' 상태로 보고 재시도가 보강한다(매 재시도마다 재업로드하지 않게 기록). */
+  fbReelCoverTs?: string;
   /** 메타 첫 채널 발행 성공 시각 — 메타 성과 측정 창 기준점(youtubeTs 와 독립). */
   metaPublishedTs?: string;
   /** 메타 측정 창 경과 후 강화 1회 완료(멱등) — perfReflected(유튜브)와 독립. */

@@ -1332,7 +1332,9 @@ const FB_REDIRECT = `https://localhost:${META_HTTPS_PORT}/meta/fb/oauth/callback
 // business_management 포함 이유(실측 2026-07-27): 페이지 권한이 전부 허용됐는데도 /me/accounts 가 비고
 // /me/businesses 가 '(#100) Missing Permission' 이었다 — 비즈니스 포트폴리오 소유 페이지를 찾으려면 필요하다.
 // 이 권한은 '페이지의 모든 부분 관리' 이용 사례의 필수 권한이라 앱에 이미 붙어 있다.
-const FB_SCOPES_DEFAULT = 'pages_show_list,pages_manage_posts,pages_read_engagement,publish_video,business_management';
+// pages_read_user_content·pages_manage_engagement 포함 이유(실측 2026-07-27): 게시물 반응 조회
+// (reactions/comments/shares)와 릴스 커버 지정(/{video-id}/thumbnails)이 이 둘을 요구한다 — 없으면 (#10).
+const FB_SCOPES_DEFAULT = 'pages_show_list,pages_manage_posts,pages_read_engagement,pages_read_user_content,pages_manage_engagement,publish_video,business_management';
 const fbScopes = (): string => getSecret('META_FB_SCOPES') || FB_SCOPES_DEFAULT;
 // 비즈니스용 Facebook 로그인(FBLB)의 '구성' 방식 — 구성 ID 를 주면 권한·자산 선택이 구성에서 온다.
 // scope 방식으로는 자산(페이지) 선택 화면이 아예 안 나올 수 있어(권한만 승인되고 페이지 0개) 그때의 정공법이다.
@@ -1618,15 +1620,19 @@ app.post('/shorts/:id/meta', async (c) => {
   // 완료 판정 = 릴스 id + 실제 퍼머링크 + (페이지 연결 시) FB 릴스 id. 홈 URL 잔재만 있으면 재시도가 링크를 보강하게 통과.
   // FB 페이지를 나중에 연결한 경우 IG 완료만으로 막으면 페북 릴스는 영구히 못 올라간다 → FB 미게시면 통과.
   const shortsAcct = getMetaAccount(s.brand ?? '');
-  const shortsFbPending = !!(shortsAcct.pageId && shortsAcct.pageToken) && !s.fbReelId; // 발행기와 동일 판정(토큰까지)
+  const fbLinked = !!(shortsAcct.pageId && shortsAcct.pageToken); // 발행기와 동일 판정(토큰까지)
+  const metaDir = shortsStore().dirFor(id);
+  const metaThumb = path.join(metaDir, 'thumbnail.jpg');
+  // 커버 보강 대기 — 릴스는 올라갔는데 커버가 아직 없고 디자인 썸네일 파일이 있는 경우. 썸네일이 없으면
+  // 보강할 게 없으므로 대기로 보지 않는다(그래야 '이미 발행됨' 게이트가 계속 살아 있다).
+  const coverPending = fbLinked && !!s.fbReelId && !s.fbReelCoverTs && fs.existsSync(metaThumb);
+  const shortsFbPending = fbLinked && (!s.fbReelId || coverPending);
   if (s.igReelId && realPermalink(s.igPermalink) && !shortsFbPending) {
     return c.json({ error: '이미 발행됨', igPermalink: s.igPermalink }, 409);
   }
   if (metaPublishInFlight.has(id)) return c.json({ error: '이미 발행 처리 중입니다' }, 409); // 동시/이중 제출 → 중복 공개 발행 차단
-  const metaDir = shortsStore().dirFor(id);
   const videoPath = path.join(metaDir, 'final.mp4');
   if (!fs.existsSync(videoPath)) return c.json({ error: '영상 파일 없음' }, 409);
-  const metaThumb = path.join(metaDir, 'thumbnail.jpg');
   const wasPublished = !!s.igReelId;
   metaPublishInFlight.add(id);
   try {
@@ -1635,20 +1641,22 @@ app.post('/shorts/:id/meta', async (c) => {
       caption: [s.title ?? s.topic, s.description ?? ''].filter(Boolean).join('\n\n'),
       hashtags: s.hashtags ?? [],
       thumbnailPath: fs.existsSync(metaThumb) ? metaThumb : undefined,
-      existing: { igReelId: s.igReelId, igPermalink: s.igPermalink, fbReelId: s.fbReelId },
+      existing: { igReelId: s.igReelId, igPermalink: s.igPermalink, fbReelId: s.fbReelId, fbCoverTs: s.fbReelCoverTs },
     });
     // 부분 성공도 저장 — 재시도 시 성공 채널은 existing 으로 스킵(멱등). 릴스는 즉시 공개(스펙 §3). 퍼머링크는 실제 링크 있을 때만 갱신.
     const patch: Partial<Shorts> = {};
     if (r.igReelId) { patch.igReelId = r.igReelId; if (r.igPermalink) patch.igPermalink = r.igPermalink; }
     if (r.fbReelId) patch.fbReelId = r.fbReelId;
+    if (r.fbCoverSet) patch.fbReelCoverTs = new Date().toISOString(); // 재시도마다 커버 재업로드 방지
     if ((r.igReelId || r.fbReelId) && !s.metaPublishedTs) patch.metaPublishedTs = new Date().toISOString();
     if (Object.keys(patch).length) shortsStore().update(id, patch);
     if (!r.ok) return c.json({ error: r.error, ...patch }, 502);
-    const fbNote = r.fbError ? ' / 페북 실패' : r.fbReelId ? ' + 페북 릴스' : '';
+    const fbNote = r.fbError ? ' / 페북 실패' : r.fbCoverSet ? ' + 페북 커버 적용' : r.fbReelId ? ' + 페북 릴스' : '';
     console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 릴스 ${wasPublished ? '퍼머링크 보강' : '발행 완료(즉시 공개)'}${fbNote}`);
     if (r.fbError) console.log(`[발행담당] 페북 릴스 실패 사유: ${r.fbError}`);
     // fbError 는 200 과 함께(IG 릴스는 실제 공개됨 — 502 로 뒤집으면 실패 위장).
-    return c.json({ ok: true, igPermalink: r.igPermalink ?? s.igPermalink, fbReelId: r.fbReelId ?? s.fbReelId, fbError: r.fbError });
+    if (r.fbCoverError) console.log(`[발행담당] 페북 릴스 커버 미적용: ${r.fbCoverError}`);
+    return c.json({ ok: true, igPermalink: r.igPermalink ?? s.igPermalink, fbReelId: r.fbReelId ?? s.fbReelId, fbError: r.fbError ?? r.fbCoverError });
   } finally {
     metaPublishInFlight.delete(id);
   }

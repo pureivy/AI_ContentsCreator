@@ -1079,6 +1079,7 @@ export interface ShortsInfo {
   youtubeUrl?: string;
   igPermalink?: string;
   fbReelId?: string;
+  fbReelCoverTs?: string;   // 없으면 페북 릴스 커버 미적용 → '페북에도 올리기'가 보강한다
   views?: number;
   likes?: number;
   running?: boolean;
