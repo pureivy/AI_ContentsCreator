@@ -1433,14 +1433,11 @@ app.get('/meta/fb/oauth/callback', async (c) => {
     const t2 = await fetch(`${FB_GRAPH_HOST}/oauth/access_token?grant_type=fb_exchange_token&client_id=${encodeURIComponent(cid)}&client_secret=${encodeURIComponent(sec)}&fb_exchange_token=${encodeURIComponent(j1.access_token)}`);
     const j2 = await t2.json() as { access_token?: string };
     const userToken = j2.access_token ?? j1.access_token;
-    // ③ 관리 페이지 목록. 게시 가능(CREATE_CONTENT) 페이지를 우선 후보로 좁힌다 — 단 tasks 가 응답에
-    //    없을 수도 있어(필드 미제공) 그때는 전체를 후보로 둔다(빈 목록으로 오안내하는 것보다 낫다).
-    const pr = await fetch(`${FB_GRAPH_HOST}/me/accounts?fields=id,name,access_token,tasks&access_token=${encodeURIComponent(userToken)}`);
-    const pj = await pr.json() as { data?: MetaPage[]; error?: { message?: string } };
-    const all = (pj.data ?? []).filter((p) => p.id && p.access_token);
-    const creatable = all.filter((p) => p.tasks?.includes('CREATE_CONTENT'));
-    const pages = creatable.length ? creatable : all;
-    if (!pages.length) return done(`연결 실패: 관리하는 페이스북 페이지가 없습니다(${pj.error?.message ?? '페이지 목록 비어 있음'}) — 페이지 관리자 계정으로 로그인했는지, 권한 화면에서 페이지를 선택했는지 확인하세요`);
+    // ③ 연결할 페이지 수집(비즈니스 포트폴리오 경유 포함) + 실패 시 원인 진단.
+    const { pages, diag } = await collectFbPages(userToken);
+    if (!pages.length) {
+      return done(`연결 실패: 연결할 페이스북 페이지를 찾지 못했습니다 — ${diag.join(' / ') || '원인 미상'} · 권한 화면에서 페이지를 체크했는지, 그 계정이 해당 페이지의 관리자인지 확인하세요`);
+    }
     if (pages.length === 1) return done(saveFbPage(pending.brand, pages[0]!));
     // 여러 페이지 → 선택 화면(새 nonce 에 페이지 목록 보관, 토큰은 서버에만 둔다).
     const pick = randomBytes(16).toString('hex');
@@ -1449,6 +1446,85 @@ app.get('/meta/fb/oauth/callback', async (c) => {
     return c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px"><p>발행할 페이지를 고르세요 (브랜드: ${esc(pending.brand || '범용')})</p><ul>${rows}</ul></body>`);
   } catch (e) { return done(`연결 실패: ${e instanceof Error ? e.message.slice(0, 120) : e}`); }
 });
+/**
+ * 게시 가능 페이지 우선 선별(순수) — CREATE_CONTENT 작업을 가진 페이지가 있으면 그것만, 없으면 전체.
+ * tasks 필드가 응답에 없을 수도 있어(필드 미제공) 그때 전체를 후보로 둔다 — 빈 목록으로 오안내하는 것보다 낫다.
+ */
+export function pickPublishablePages(all: MetaPage[]): MetaPage[] {
+  const ok = all.filter((p) => p.id && p.access_token);
+  const creatable = ok.filter((p) => p.tasks?.includes('CREATE_CONTENT'));
+  return creatable.length ? creatable : ok;
+}
+
+/**
+ * 연결 가능한 페이지 수집 — /me/accounts 가 1순위. 비즈니스 포트폴리오가 소유한 페이지는 개인 역할이 아니라
+ * 비즈니스 경유로 접근돼 /me/accounts 가 빌 수 있으므로 /me/businesses → owned_pages·client_pages 까지 훑고
+ * 페이지 토큰은 페이지 노드에서 개별 조회한다.
+ * 빈 결과일 때 원인을 구분할 수 있도록 진단 문구(diag)를 함께 돌려준다 — '페이지 없음' 한 줄로는
+ * (승인 계정 착오 / 권한 미허용 / 페이지 미선택 / 비즈니스 소유) 네 경우가 구분되지 않는다. 토큰류는 담지 않는다.
+ */
+async function collectFbPages(userToken: string): Promise<{ pages: MetaPage[]; diag: string[] }> {
+  const tk = encodeURIComponent(userToken);
+  const diag: string[] = [];
+  const get = async (path: string): Promise<Record<string, unknown>> => {
+    const r = await fetch(`${FB_GRAPH_HOST}/${path}${path.includes('?') ? '&' : '?'}access_token=${tk}`);
+    const j: unknown = await r.json().catch(() => ({}));
+    return (j && typeof j === 'object' ? j : {}) as Record<string, unknown>;
+  };
+  const rows = (j: Record<string, unknown>): Array<Record<string, unknown>> =>
+    Array.isArray(j.data) ? (j.data as Array<Record<string, unknown>>) : [];
+  const errOf = (j: Record<string, unknown>): string | undefined =>
+    (j.error as { message?: string } | undefined)?.message;
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+  const acc = await get('me/accounts?fields=id,name,access_token,tasks');
+  const direct = pickPublishablePages(rows(acc).map((p) => ({
+    id: str(p.id), name: str(p.name), access_token: str(p.access_token),
+    tasks: Array.isArray(p.tasks) ? (p.tasks as string[]) : undefined,
+  })));
+  if (direct.length) return { pages: direct, diag };
+  if (errOf(acc)) diag.push(`페이지 목록 오류: ${errOf(acc)}`);
+
+  // 누가 승인했고 어떤 권한이 실제로 허용됐는가 — 여기서 대부분의 오인이 드러난다.
+  const me = await get('me?fields=id,name').catch(() => ({} as Record<string, unknown>));
+  if (str(me.name)) diag.push(`승인 계정: ${str(me.name)}`);
+  const perm = await get('me/permissions').catch(() => ({} as Record<string, unknown>));
+  const granted = rows(perm).filter((p) => str(p.status) === 'granted').map((p) => str(p.permission)).filter(Boolean);
+  const denied = rows(perm).filter((p) => str(p.status) !== 'granted').map((p) => str(p.permission)).filter(Boolean);
+  if (granted.length || denied.length) {
+    diag.push(`허용 권한: ${granted.join(' ') || '없음'}`);
+    if (denied.length) diag.push(`미허용: ${denied.join(' ')}`);
+  }
+
+  // 비즈니스 포트폴리오 경유 — 소유/고객 페이지를 훑어 페이지 토큰을 개별 확보.
+  try {
+    const bz = await get('me/businesses?fields=id,name');
+    if (errOf(bz)) diag.push(`비즈니스 조회 오류: ${errOf(bz)}`);
+    const bs = rows(bz);
+    diag.push(`비즈니스: ${bs.map((b) => str(b.name) || str(b.id)).filter(Boolean).join(', ') || '없음'}`);
+    const found: MetaPage[] = [];
+    for (const b of bs.slice(0, 5)) {
+      const bid = str(b.id);
+      if (!bid) continue;
+      for (const edge of ['owned_pages', 'client_pages']) {
+        const pr = await get(`${bid}/${edge}?fields=id,name`);
+        for (const p of rows(pr).slice(0, 20)) {
+          const pid = str(p.id);
+          if (!pid || found.some((f) => f.id === pid)) continue;
+          const tj = await get(`${pid}?fields=access_token,name`); // 페이지 토큰은 페이지 노드에서만 나온다
+          const tok = str(tj.access_token);
+          if (tok) found.push({ id: pid, name: str(tj.name) || str(p.name) || pid, access_token: tok });
+        }
+      }
+    }
+    if (found.length) {
+      diag.push(`비즈니스 소유 페이지에서 ${found.length}개 확보`);
+      return { pages: found, diag };
+    }
+  } catch { diag.push('비즈니스 경유 조회 실패'); }
+  return { pages: [], diag };
+}
+
 /** 페이지 저장 공용 — 결과 메시지 반환(토큰 미포함). */
 function saveFbPage(brand: string, page: MetaPage): string {
   setMetaPage(brand, { pageId: page.id, pageToken: page.access_token });

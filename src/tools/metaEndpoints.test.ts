@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { app } from '../server/main';
+import { app, pickPublishablePages } from '../server/main';
 
 describe('메타 OAuth·상태 라우트', () => {
   it('GET /meta/status → client/connected 불리언', async () => {
@@ -67,6 +67,34 @@ describe('페이스북 페이지 연결 라우트', () => {
   it('POST /meta/fb/disconnect: 비정상 슬러그 400', async () => {
     const res = await app.request('/meta/fb/disconnect?brand=../evil', { method: 'POST' });
     expect(res.status).toBe(400);
+  });
+});
+
+// 페이지 후보 선별(순수) — 토큰 없는 항목을 후보로 넘기면 발행 시점에야 실패한다(연결됐다고 표시된 채).
+describe('pickPublishablePages', () => {
+  it('CREATE_CONTENT 있는 페이지만 후보로 좁힌다', () => {
+    const r = pickPublishablePages([
+      { id: 'A', name: '읽기전용', access_token: 't1', tasks: ['ANALYZE'] },
+      { id: 'B', name: '게시가능', access_token: 't2', tasks: ['ANALYZE', 'CREATE_CONTENT'] },
+    ]);
+    expect(r.map((p) => p.id)).toEqual(['B']);
+  });
+  it('tasks 가 아예 없으면(필드 미제공) 전체를 후보로 — 빈 목록 오안내 방지', () => {
+    const r = pickPublishablePages([
+      { id: 'A', name: 'a', access_token: 't1' },
+      { id: 'B', name: 'b', access_token: 't2' },
+    ]);
+    expect(r.map((p) => p.id)).toEqual(['A', 'B']);
+  });
+  it('토큰·id 없는 항목은 후보에서 제외', () => {
+    expect(pickPublishablePages([
+      { id: 'A', name: 'a', access_token: '' },
+      { id: '', name: 'b', access_token: 't' },
+    ])).toEqual([]);
+  });
+  it('CREATE_CONTENT 가 하나도 없으면 tasks 가 있어도 전체 유지(권한 판정은 발행에서)', () => {
+    const r = pickPublishablePages([{ id: 'A', name: 'a', access_token: 't', tasks: ['ANALYZE'] }]);
+    expect(r.map((p) => p.id)).toEqual(['A']);
   });
 });
 
