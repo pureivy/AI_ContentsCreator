@@ -1327,7 +1327,10 @@ const IG_GRAPH = 'https://graph.instagram.com';
 const FB_AUTHORIZE = 'https://www.facebook.com/v23.0/dialog/oauth';
 const FB_GRAPH_HOST = 'https://graph.facebook.com/v23.0';
 const FB_REDIRECT = `https://localhost:${META_HTTPS_PORT}/meta/fb/oauth/callback`;
-const FB_SCOPES = process.env.META_FB_SCOPES || 'pages_show_list,pages_manage_posts,pages_read_engagement,publish_video';
+// 스코프 오버라이드는 요청 시점에 읽는다(.env 즉시 반영) — 'Invalid Scopes' 진단 중 서버 재시작 없이
+// 권한을 하나씩 빼며 어느 것이 앱에 없는지 좁힐 수 있어야 한다.
+const FB_SCOPES_DEFAULT = 'pages_show_list,pages_manage_posts,pages_read_engagement,publish_video';
+const fbScopes = (): string => getSecret('META_FB_SCOPES') || FB_SCOPES_DEFAULT;
 app.get('/meta/status', (c) => {
   const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
   const client = !!(getSecret('INSTAGRAM_APP_ID') && getSecret('INSTAGRAM_APP_SECRET'));
@@ -1406,7 +1409,7 @@ app.get('/meta/fb/oauth/start', (c) => {
   u.searchParams.set('client_id', id);
   u.searchParams.set('redirect_uri', FB_REDIRECT);
   u.searchParams.set('response_type', 'code');
-  u.searchParams.set('scope', FB_SCOPES);
+  u.searchParams.set('scope', fbScopes());
   u.searchParams.set('state', nonce);
   return c.redirect(u.toString());
 });

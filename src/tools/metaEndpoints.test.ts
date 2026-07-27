@@ -32,12 +32,28 @@ describe('페이스북 페이지 연결 라우트', () => {
     expect(Object.keys(j)).not.toContain('pageAccessToken');
     expect(JSON.stringify(j)).not.toMatch(/access_token/i);
   });
-  it('GET /meta/fb/oauth/start: 메타 앱 미설정이면 400(안내), 비정상 슬러그 400', async () => {
+  it('GET /meta/fb/oauth/start: 비정상 슬러그 400', async () => {
     const bad = await app.request('/meta/fb/oauth/start?brand=../evil');
     expect(bad.status).toBe(400);
-    const noApp = await app.request('/meta/fb/oauth/start');
-    expect(noApp.status).toBe(400); // META_APP_ID 미설정(테스트 환경) → 조치 안내
-    expect(await noApp.text()).toContain('META_APP_ID');
+  });
+  // 이 라우트의 결과는 로컬 .env(META_APP_ID 설정 여부)에 좌우된다 — 앰비언트 상태에 기대면
+  // '키를 넣었더니 테스트가 깨지는' 가짜 실패가 난다. 두 상태 각각의 계약을 명시해 양쪽에서 변별력 유지.
+  it('GET /meta/fb/oauth/start: 앱 미설정이면 조치 안내 400, 설정됐으면 페북 대화상자로 리디렉트', async () => {
+    const st = await (await app.request('/meta/status')).json() as { fbClient: boolean };
+    const res = await app.request('/meta/fb/oauth/start');
+    if (!st.fbClient) {
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain('META_APP_ID'); // 어느 키를 채워야 하는지 지목
+      return;
+    }
+    expect(res.status).toBe(302);
+    const loc = new URL(res.headers.get('location') ?? '');
+    expect(loc.host).toBe('www.facebook.com');
+    expect(loc.pathname).toContain('/dialog/oauth');
+    expect(loc.searchParams.get('redirect_uri')).toBe('https://localhost:8788/meta/fb/oauth/callback');
+    expect(loc.searchParams.get('scope')).toContain('pages_manage_posts');
+    expect(loc.searchParams.get('state')).toBeTruthy();   // CSRF nonce 없으면 콜백이 거부돼야 함
+    expect(loc.search).not.toContain('client_secret');    // 시크릿은 프런트채널에 절대 실리지 않는다
   });
   it('GET /meta/fb/oauth/callback: state 없음 → 실패 안내(200 HTML)', async () => {
     const res = await app.request('/meta/fb/oauth/callback');
