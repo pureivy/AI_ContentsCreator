@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchPieces, fetchPieceDraft, fetchPiecePreview, publishPiece, postPieceMetrics, revisePiece, deletePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, createCardNewsFromPiece, createShortsFromPiece, fetchBrand, saveBrandCardStyle, PieceInfo, PieceDraftResp } from "../api";
 import { CARD_STYLE_OPTIONS, loadCardStyle, saveCardStyle } from "../cardStyles";
 import Ico, { type IcoName } from "./Ico";
+import SlideStrip from "./SlideStrip";
 
 // 초안 검토·발행·성과 입력 — 크로스-런 REST(폴링/온디맨드). 본문 편집은 컴포넌트-로컬(store 변이 금지).
 const REVIEWABLE = new Set(["ready", "published", "measured", "reflected"]);
@@ -373,14 +374,8 @@ export default function DraftReview() {
                       )}
                     </div>
                     {derived?.cardnews?.stage === "ready" && (derived.cardnews.slides ?? 0) > 0 && (
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))", gap: 6 }}>
-                        {Array.from({ length: derived.cardnews.slides ?? 0 }, (_, i) => `slide_${String(i + 1).padStart(2, "0")}.png`).map((name) => (
-                          <a key={name} href={`/cardnews/${derived.cardnews!.id}/slides/${name}`} target="_blank" rel="noreferrer">
-                            <img src={`/cardnews/${derived.cardnews!.id}/slides/${name}`} alt={name} loading="lazy"
-                              style={{ width: "100%", aspectRatio: "2/3", objectFit: "cover", borderRadius: 6, display: "block" }} />
-                          </a>
-                        ))}
-                      </div>
+                      <SlideStrip cardId={derived.cardnews.id} slides={derived.cardnews.slides ?? 0}
+                        title={data.piece.title} compact />
                     )}
                   </div>
                   {/* 숏폼 */}

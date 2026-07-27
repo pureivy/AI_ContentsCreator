@@ -165,6 +165,39 @@ button.dash-company:hover { border-color: var(--accent); }
 .dash-chip.clickable:hover { border-color: var(--accent); background: var(--panel); }
 .dash-chip.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* ── 카드뉴스 슬라이드 썸네일·전체화면 뷰어 (SlideStrip / SlideLightbox) ── */
+.slide-thumb { display: block; width: 100%; padding: 0; border: none; background: transparent; cursor: zoom-in; }
+.slide-thumb img { width: 100%; aspect-ratio: 2/3; object-fit: cover; display: block;
+  outline: 1px solid transparent; transition: outline-color .12s; }
+.slide-thumb:hover img { outline-color: var(--accent); }
+.slide-thumb:focus-visible img { outline: 2px solid var(--accent); }
+
+.slide-overlay {
+  position: fixed; inset: 0; z-index: 220; background: rgba(2, 5, 10, 0.86);
+  backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.slide-box { display: flex; flex-direction: column; align-items: center; gap: 10px; max-height: 96vh; }
+.slide-head { display: flex; align-items: center; gap: 12px; width: 100%; color: var(--text); }
+.slide-title { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slide-count { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.slide-x { cursor: pointer; border: none; background: transparent; color: var(--muted);
+  font-size: 16px; line-height: 1; padding: 4px 8px; border-radius: 6px; }
+.slide-x:hover { color: var(--text); background: var(--panel2); }
+.slide-stage { display: flex; align-items: center; gap: 12px; min-height: 0; }
+/* 슬라이드는 세로 2:3 — 높이 기준으로 맞추고 폭은 그 비율(78vh × 2/3)과 화면 폭 중 작은 쪽 */
+.slide-img { max-height: 78vh; max-width: min(52vh, 84vw); object-fit: contain; display: block;
+  border-radius: 10px; box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6); }
+.slide-arrow { flex: none; width: 44px; height: 44px; border-radius: 50%; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; font-size: 24px; line-height: 1;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); }
+.slide-arrow:hover:not(:disabled) { border-color: var(--accent); background: var(--panel2); }
+.slide-arrow:disabled { opacity: .3; cursor: default; }
+.slide-foot { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
+.slide-dots { display: flex; gap: 6px; }
+.slide-dot { width: 8px; height: 8px; padding: 0; border-radius: 50%; cursor: pointer;
+  border: 1px solid var(--muted); background: transparent; }
+.slide-dot.on { background: var(--accent); border-color: var(--accent); }
+
 /* ── 대시보드 지표 드릴다운 패널 (MetricDrawer) ── */
 .metric-overlay {
   position: fixed; inset: 0; z-index: 210; background: rgba(2, 5, 10, 0.72);

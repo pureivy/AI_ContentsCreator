@@ -6,6 +6,7 @@ import {
 } from "../api";
 import Avatar from "./Avatar";
 import Ico, { type IcoName } from "./Ico";
+import SlideStrip from "./SlideStrip";
 import { CARD_STYLE_OPTIONS, loadCardStyle, saveCardStyle } from "../cardStyles";
 
 // 카드뉴스 탭 — 카드뉴스팀(기획 → 디자인 → 배경 생성 → 렌더)이 만드는 인스타그램용 슬라이드.
@@ -28,26 +29,6 @@ function fmtWhen(iso: string): string {
   if (m < 60) return `${m}분 전`;
   const h = Math.round(m / 60);
   return h < 24 ? `${h}시간 전` : `${Math.round(h / 24)}일 전`;
-}
-
-function SlideGrid({ card }: { card: CardNewsInfo }) {
-  const n = card.slides ?? 0;
-  if (!n) return null;
-  const names = Array.from({ length: n }, (_, i) => `slide_${String(i + 1).padStart(2, "0")}.png`);
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8, marginTop: 8 }}>
-      {names.map((name) => (
-        <a key={name} href={`/cardnews/${card.id}/slides/${name}`} target="_blank" rel="noreferrer" title={`${name} 새 탭으로 열기`}>
-          <img
-            src={`/cardnews/${card.id}/slides/${name}?v=${card.updatedTs}`}
-            alt={`${card.topic} ${name}`}
-            style={{ width: "100%", aspectRatio: "2/3", objectFit: "cover", borderRadius: 8, display: "block" }}
-            loading="lazy"
-          />
-        </a>
-      ))}
-    </div>
-  );
 }
 
 function CardRow({ card, onDelete, metaReady, fbReady, onChanged }: {
@@ -86,7 +67,7 @@ function CardRow({ card, onDelete, metaReady, fbReady, onChanged }: {
       {card.stage === "error" && <p className="muted" style={{ color: "var(--con)", marginTop: 6 }}>{card.error || "알 수 없는 실패"}</p>}
       {card.stage === "ready" && (
         <>
-          <SlideGrid card={card} />
+          <SlideStrip cardId={card.id} slides={card.slides ?? 0} title={card.topic} version={card.updatedTs} />
           {captionFull && (
             <div style={{ marginTop: 8 }}>
               <div style={{ whiteSpace: "pre-wrap" }} className="muted">{captionFull}</div>
