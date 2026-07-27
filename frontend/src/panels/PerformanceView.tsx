@@ -171,10 +171,10 @@ export default function PerformanceView() {
                 <table className="perf-table">
                   <colgroup>
                     <col className="perf-col-title" /><col className="perf-col-link" />
-                    <col className="perf-col-date" /><col className="perf-col-state" />
+                    <col className="perf-col-date perf-grp-start" /><col className="perf-col-state" />
                     <col className="perf-col-num" /><col className="perf-col-num" /><col className="perf-col-inflow" /><col className="perf-col-num" />
-                    <col className="perf-col-num" /><col className="perf-col-num" />
-                    <col className="perf-col-refl" /><col className="perf-col-act" />
+                    <col className="perf-col-num perf-grp-start" /><col className="perf-col-num" />
+                    <col className="perf-col-refl perf-grp-start" /><col className="perf-col-act" />
                   </colgroup>
                   <thead>
                     <tr className="perf-grouprow">
@@ -190,7 +190,7 @@ export default function PerformanceView() {
                       <th className="perf-c">상태</th>
                       <th className="perf-r">조회수</th>
                       <th className="perf-r">체류</th>
-                      <th>유입 키워드(상위)</th>
+                      <th className="perf-c">유입 키워드(상위)</th>
                       <th className="perf-r">SEO</th>
                       <th className="perf-c perf-grp-edge" title="파생 카드뉴스 완성 여부"><Ico name="cards" size={13} /></th>
                       <th className="perf-c" title="파생 숏폼 완성 여부"><Ico name="play" size={13} /></th>
@@ -216,7 +216,7 @@ export default function PerformanceView() {
                         <td className="perf-c"><span className="badge">{STAGE_LABEL[p.stage] ? <><Ico name={STAGE_LABEL[p.stage].icon} size={10} /> {STAGE_LABEL[p.stage].label}</> : p.stage}</span></td>
                         <td className="perf-r">{p.views != null ? p.views.toLocaleString() : "—"}</td>
                         <td className="perf-r">{p.dwellSec != null ? `${p.dwellSec}s` : "—"}</td>
-                        <td className="perf-inflow">
+                        <td className="perf-inflow perf-c">
                           {p.inflow.length === 0 ? <span className="muted">—</span>
                             : p.inflow.slice(0, 4).map((k) => (
                               <span key={k.keyword} className="chip">{k.keyword} {k.count}</span>
@@ -249,8 +249,8 @@ export default function PerformanceView() {
                 <table className="perf-table">
                   <colgroup>
                     <col className="perf-col-title" /><col className="perf-col-link" />
-                    <col className="perf-col-date" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" />
-                    <col className="perf-col-refl" /><col className="perf-col-act" />
+                    <col className="perf-col-date perf-grp-start" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" />
+                    <col className="perf-col-refl perf-grp-start" /><col className="perf-col-act" />
                   </colgroup>
                   <thead>
                     {/* 릴스·카드뉴스와 같은 2단 구조 — 네 표의 헤더 리듬을 맞춘다(단일 채널이라 그룹은 하나). */}
@@ -305,9 +305,9 @@ export default function PerformanceView() {
                 <table className="perf-table">
                   <colgroup>
                     <col className="perf-col-title" /><col className="perf-col-link" />
-                    <col className="perf-col-date" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" />
-                    <col className="perf-col-date" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" />
-                    <col className="perf-col-refl" /><col className="perf-col-act" />
+                    <col className="perf-col-date perf-grp-start" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" />
+                    <col className="perf-col-date perf-grp-start" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" />
+                    <col className="perf-col-refl perf-grp-start" /><col className="perf-col-act" />
                   </colgroup>
                   <thead>
                     {/* 2단 헤더 — 같은 릴스가 두 플랫폼에 올라가므로 지표 열을 채널로 묶는다.
@@ -381,9 +381,9 @@ export default function PerformanceView() {
                 <table className="perf-table">
                   <colgroup>
                     <col className="perf-col-title" /><col className="perf-col-link" />
-                    <col className="perf-col-date" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" /><col className="perf-col-num" />
-                    <col className="perf-col-date" /><col className="perf-col-spark-w" /><col className="perf-col-num" /><col className="perf-col-num" />
-                    <col className="perf-col-refl" /><col className="perf-col-act" />
+                    <col className="perf-col-date perf-grp-start" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" /><col className="perf-col-num" />
+                    <col className="perf-col-date perf-grp-start" /><col className="perf-col-spark-w" /><col className="perf-col-num" /><col className="perf-col-num" />
+                    <col className="perf-col-refl perf-grp-start" /><col className="perf-col-act" />
                   </colgroup>
                   <thead>
                     {/* 릴스 표와 동일 구조 — 두 표를 나란히 볼 때 열 의미가 흔들리지 않게 통일. */}

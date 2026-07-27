@@ -1632,15 +1632,15 @@ button.upload-retry:hover { background: var(--panel2); }
 .office-avatar .office-glyph { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
 
 /* 성과 대시보드 */
-.perf-summary { display: flex; gap: 12px; flex-wrap: wrap; margin: 4px 0 20px; }
+.perf-summary { display: flex; gap: 11px; flex-wrap: wrap; margin: 4px 0 18px; }
 /* 성과 대시보드 — 라이트 잔재 제거, Wanted 다크 카드/테이블 토큰으로 통일 */
-.perf-card { flex: 1 1 140px; background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--radius-12); padding: 16px 18px; box-shadow: var(--shadow-1); }
-.perf-num { font-size: 26px; font-weight: 800; letter-spacing: -0.0253em; }
-.perf-lbl { margin-top: 4px; font-size: 13px; color: var(--muted); }
+.perf-card { flex: 1 1 126px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-12); padding: 14px 16px; box-shadow: var(--shadow-1); }
+.perf-num { font-size: 23px; font-weight: 800; letter-spacing: -0.0253em; }
+.perf-lbl { margin-top: 4px; font-size: 12px; color: var(--muted); }
 /* 전체 합계 — 채널 카드들과 같은 무게로 두면 '여섯 번째 채널'로 읽힌다. 강조 테두리로 집계임을 표시. */
 .perf-card.total { border-color: var(--line-neutral-strong); box-shadow: var(--shadow-2, var(--shadow-1)); }
-.perf-card.total .perf-num { font-size: 28px; }
+.perf-card.total .perf-num { font-size: 25px; }
 .perf-card.total .perf-lbl { color: var(--fg-primary); font-weight: 600; }
 .perf-table-wrap { overflow-x: auto; }
 /* '더 보기 / 접기' 버튼 행 — 표 아래 가운데, 은은하게. */
@@ -1715,7 +1715,10 @@ button.upload-retry:hover { background: var(--panel2); }
 .perf-table thead tr.perf-grouprow th .perf-grp-in { display: inline-flex; align-items: center; gap: 5px; }
 /* 라벨 행도 같은 밴드 위에 얹어 헤더가 두 줄 한 덩어리로 보이게. */
 .perf-table thead tr:last-child th { background: var(--bg-neutral); }
-.perf-table th.perf-grp-edge, .perf-table td.perf-grp-edge { border-left: 1px solid var(--line-neutral-strong); }
+/* 그룹 세로선은 <col> 에 그린다 — border-collapse 에서 열 테두리는 헤더~마지막 행까지 한 줄로 이어져
+   셀마다 클래스를 붙일 때 생기는 '한 칸 빠져 끊긴' 상태가 구조적으로 불가능해진다. */
+.perf-table col.perf-grp-start { border-left: 1px solid var(--border); }
+.perf-table th.perf-grp-edge, .perf-table td.perf-grp-edge { border-left: 1px solid var(--border); }
 /* 채널 링크 배지 — 숫자를 링크로 만들지 않는다(숫자는 읽는 값, 배지는 누르는 것).
    미게시 채널도 같은 폭의 흐린 배지로 자리를 지켜 행마다 열이 흔들리지 않게 한다. */
 .perf-links { display: inline-flex; gap: 4px; align-items: center; }
