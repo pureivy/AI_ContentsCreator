@@ -1650,12 +1650,12 @@ button.upload-retry:hover { background: var(--panel2); }
    업로드일이 x=464, 카드뉴스는 x=364) 표끼리 열이 어긋난다. colgroup 합 그대로 두면 앞쪽 공통 열이
    네 표에서 같은 x 에 놓인다. 지표 개수가 다르니 표의 총 폭은 서로 다르고, 그게 정상이다. */
 .perf-table { width: max-content; table-layout: fixed; border-collapse: collapse; font-size: 14px; }
-.perf-col-title { width: 340px; }
+.perf-col-title { width: 352px; }
 .perf-col-date  { width: 104px; }
 .perf-col-link  { width: 84px; }
 .perf-col-spark { width: 84px; }
 /* 좋아요 추이 열 — '👍 추이' 라벨이 84px 에 끼어 붙어 보여 이 열만 넓힌다(카드뉴스 페이스북 그룹). */
-.perf-col-spark-w { width: 96px; }
+.perf-col-spark-w { width: 84px; }
 .perf-col-num   { width: 78px; }
 .perf-col-state { width: 84px; }
 .perf-col-inflow{ width: 168px; }
@@ -1694,14 +1694,23 @@ button.upload-retry:hover { background: var(--panel2); }
    숫자=오른쪽(자릿수 비교), 날짜·배지·기호=가운데, 긴 텍스트(제목·키워드)=왼쪽(스캔 속도). */
 .perf-table th.perf-r { text-align: right; }
 .perf-table th.perf-c, .perf-table td.perf-c { text-align: center; white-space: nowrap; }
-/* 플랫폼 그룹 헤더(인스타그램 | 페이스북) — 같은 콘텐츠의 채널별 수치를 색이 아니라 구조로 묶는다. */
+/* 플랫폼 그룹 헤더(인스타그램 | 페이스북) — 같은 콘텐츠의 채널별 수치를 색이 아니라 구조로 묶는다.
+   헤더는 '밴드 + 라벨 행' 두 줄이 한 블록으로 읽혀야 한다: 그룹 행에 배경을 깔고 아래 선을 없애
+   라벨 행의 2px 선만 남긴다(선이 두 겹이면 헤더가 잘려 만들다 만 것처럼 보였다). */
 .perf-table thead tr.perf-grouprow th {
-  padding: 7px 12px 3px; border-bottom: 1px solid var(--border);
-  font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: var(--muted); text-align: center; }
-/* 그룹 행은 모든 열을 덮는다 — 앞뒤가 빈 칸으로 남으면 '만들다 만' 헤더로 보인다.
-   채널 그룹만 강조하고 공통·학습 그룹은 약하게(위계). */
-.perf-table thead tr.perf-grouprow th.perf-grp-soft { color: var(--muted); opacity: 0.62; font-weight: 600; }
+  padding: 6px 12px; background: var(--bg-neutral); border-bottom: none;
+  border-top: 1px solid var(--border);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: var(--fg-primary); text-align: center; }
+/* 그룹 사이 수직 구분선 — 밴드가 몇 덩어리인지 즉시 보이게. */
+.perf-table thead tr.perf-grouprow th + th { border-left: 1px solid var(--border); }
+/* 밴드 양끝 라운딩 — 표 폭 안에서 의도된 블록으로 끝맺음. */
+.perf-table thead tr.perf-grouprow th:first-child { border-top-left-radius: 8px; }
+.perf-table thead tr.perf-grouprow th:last-child { border-top-right-radius: 8px; }
+/* 공통·학습 그룹은 채널보다 약하게(위계) — 단 opacity 로 흐리게 하지 않는다(미완성으로 읽혔다). */
+.perf-table thead tr.perf-grouprow th.perf-grp-soft { color: var(--muted); font-weight: 600; }
 .perf-table thead tr.perf-grouprow th .perf-grp-in { display: inline-flex; align-items: center; gap: 5px; }
+/* 라벨 행도 같은 밴드 위에 얹어 헤더가 두 줄 한 덩어리로 보이게. */
+.perf-table thead tr:last-child th { background: var(--bg-neutral); }
 .perf-table th.perf-grp-edge, .perf-table td.perf-grp-edge { border-left: 1px solid var(--border); }
 /* 채널 링크 배지 — 숫자를 링크로 만들지 않는다(숫자는 읽는 값, 배지는 누르는 것).
    미게시 채널도 같은 폭의 흐린 배지로 자리를 지켜 행마다 열이 흔들리지 않게 한다. */

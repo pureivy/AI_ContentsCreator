@@ -393,7 +393,7 @@ export default function PerformanceView() {
                       {/* 페이스북 사진 게시물은 조회·노출 지표를 주지 않는다(실측: post_impressions 계열 전부 무효) →
                           이 그룹의 추이는 좋아요 기준. 헤더에 '👍 추이'로 명시해 조회 추이로 오해되지 않게. */}
                       <th className="perf-c perf-grp-edge" title="페이스북 페이지 게시일 — 인스타와 다른 날일 수 있습니다">게시일</th>
-                      <th className="perf-c" title="페이스북 좋아요 일별 추이 — 페이스북 사진 게시물은 조회·노출 지표를 제공하지 않습니다">👍 추이</th>
+                      <th className="perf-c" title="좋아요 일별 추이 — 페이스북 사진 게시물은 조회·노출 지표를 제공하지 않아(실측: post_impressions 계열 전부 무효) 좋아요를 추이로 씁니다">추이</th>
                       <th className="perf-r">👍</th>
                       <th className="perf-r">공유</th>
                       <th className="perf-c perf-grp-edge" title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th>
