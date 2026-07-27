@@ -1334,10 +1334,13 @@ const FB_REDIRECT = `https://localhost:${META_HTTPS_PORT}/meta/fb/oauth/callback
 // 이 권한은 '페이지의 모든 부분 관리' 이용 사례의 필수 권한이라 앱에 이미 붙어 있다.
 // pages_read_user_content·pages_manage_engagement 포함 이유(실측 2026-07-27): 게시물 반응 조회
 // (reactions/comments/shares)와 릴스 커버 지정(/{video-id}/thumbnails)이 이 둘을 요구한다 — 없으면 (#10).
-// read_insights 포함 이유(실측 2026-07-27): 사진 게시물(카드뉴스)의 조회수는 인사이트로만 온다
-// (릴스는 비디오 노드의 views 필드라 권한 불필요). 이 권한 없이 /insights 를 부르면 메타는 권한
-// 오류가 아니라 빈 data 배열을 돌려줘 조회수가 조용히 0 이 된다 — 진단이 어려우니 처음부터 넣는다.
-const FB_SCOPES_DEFAULT = 'pages_show_list,pages_manage_posts,pages_read_engagement,pages_read_user_content,pages_manage_engagement,publish_video,business_management,read_insights';
+// read_insights 는 여기 넣지 않는다(실측 2026-07-27). 사진 게시물(카드뉴스) 조회수는 이 권한이
+// 있어야 인사이트로 읽히지만(없으면 빈 data → 조회수가 조용히 0), 앱 대시보드의 이용 사례에
+// 이 권한이 추가돼 있지 않으면 메타가 로그인 창 자체를 "Invalid Scopes: read_insights" 로 거부한다.
+// 즉 앱에 없는 권한 하나가 재연결 전체를 막는다 — 기본값에 넣으면 연결이 통째로 죽는다.
+// 활성화 순서: ① 앱 대시보드 이용 사례에 read_insights 추가 → ② .env 의 META_FB_SCOPES 에
+// 이 목록 + ,read_insights 를 넣어 검증 → ③ 통과하면 그때 이 기본값에 편입.
+const FB_SCOPES_DEFAULT = 'pages_show_list,pages_manage_posts,pages_read_engagement,pages_read_user_content,pages_manage_engagement,publish_video,business_management';
 const fbScopes = (): string => getSecret('META_FB_SCOPES') || FB_SCOPES_DEFAULT;
 // 비즈니스용 Facebook 로그인(FBLB)의 '구성' 방식 — 구성 ID 를 주면 권한·자산 선택이 구성에서 온다.
 // scope 방식으로는 자산(페이지) 선택 화면이 아예 안 나올 수 있어(권한만 승인되고 페이지 0개) 그때의 정공법이다.
