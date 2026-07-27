@@ -27,10 +27,22 @@ function sign(timestamp: string, method: string, uri: string, secret: string): s
 
 export interface KeywordVolume {
   keyword: string;
-  pc: number;      // 월간 PC 검색수
-  mobile: number;  // 월간 모바일 검색수
-  total: number;   // pc + mobile
-  comp: string;    // 경쟁정도(낮음/중간/높음)
+  pc: number;          // 월간 PC 검색수 — "< 10"(10 미만) 응답은 0 으로 취급(하한 불명, 과대평가 방지)
+  mobile: number;      // 월간 모바일 검색수 — 위와 동일
+  total: number;       // pc + mobile
+  comp: string;        // 경쟁정도(낮음/중간/높음)
+  pcApprox: boolean;    // pc 가 "10 미만" 표기였나(정확값 아님 — 표시·판단 시 구분 필요)
+  mobileApprox: boolean;
+}
+
+// 네이버 키워드도구는 월 10 미만 검색량을 숫자가 아니라 "< 10" 문자열로 준다. 일반 숫자 파서(toInt)로
+// 이 문자열의 숫자만 뽑으면 10 으로 둔갑해 "월 20회(PC10+모바일10)" 같은 가짜 실측값이 된다(실측
+// 2026-07-28 — SEO 전략가가 이 가짜 20회를 근거로 사실상 검색되지 않는 표현을 계속 선정했다).
+// "10 미만"은 진짜 값이 0~9 중 어디인지 알 수 없으므로 0(가장 보수적인 하한)으로 두고, approx 플래그로
+// "정확값 아님"을 downstream(ground 문구·정렬)에 전달한다.
+export function toVolume(v: unknown): { value: number; approx: boolean } {
+  if (typeof v === 'string' && v.trim().startsWith('<')) return { value: 0, approx: true };
+  return { value: toInt(v), approx: false };
 }
 
 /**
@@ -63,12 +75,20 @@ export async function searchAdVolumes(hints: string[], signal?: AbortSignal): Pr
   const j = await r.json() as { keywordList?: Array<{ relKeyword?: string; monthlyPcQcCnt?: unknown; monthlyMobileQcCnt?: unknown; compIdx?: string }> };
   return (j.keywordList ?? [])
     .map((k) => {
-      const pc = toInt(k.monthlyPcQcCnt);
-      const mobile = toInt(k.monthlyMobileQcCnt);
-      return { keyword: (k.relKeyword ?? '').trim(), pc, mobile, total: pc + mobile, comp: (k.compIdx ?? '').trim() || '-' };
+      const pc = toVolume(k.monthlyPcQcCnt);
+      const mobile = toVolume(k.monthlyMobileQcCnt);
+      return {
+        keyword: (k.relKeyword ?? '').trim(), pc: pc.value, mobile: mobile.value, total: pc.value + mobile.value,
+        comp: (k.compIdx ?? '').trim() || '-', pcApprox: pc.approx, mobileApprox: mobile.approx,
+      };
     })
     .filter((k) => k.keyword)
     .sort((a, b) => b.total - a.total);
+}
+
+/** "10 미만"이면 정확한 숫자 대신 그 사실을 그대로 문구로 남긴다 — 가짜 정밀도(예: "20회")를 만들지 않는다. */
+export function fmtVolume(n: number, approx: boolean): string {
+  return approx ? '10미만' : n.toLocaleString();
 }
 
 async function ground(query: string, signal?: AbortSignal): Promise<string> {
@@ -77,7 +97,12 @@ async function ground(query: string, signal?: AbortSignal): Promise<string> {
   try {
     const vols = await searchAdVolumes([seed], signal);
     if (!vols.length) return '';
-    const rows = vols.slice(0, 8).map((v) => `· ${v.keyword} — 월 ${v.total.toLocaleString()}회(PC ${v.pc.toLocaleString()}/모바일 ${v.mobile.toLocaleString()}), 경쟁 ${v.comp}`).join('\n');
+    const rows = vols.slice(0, 8).map((v) => {
+      // PC·모바일 둘 다 10 미만이면 총량도 진짜 숫자가 아니라 "사실상 검색되지 않는다"는 판단 자체를
+      // 명시해 SEO 전략가가 이런 키워드를 실검색량 있는 것처럼 선정하지 않게 한다.
+      const total = v.pcApprox && v.mobileApprox ? '10미만(사실상 무의미)' : `${v.total.toLocaleString()}회`;
+      return `· ${v.keyword} — 월 ${total}(PC ${fmtVolume(v.pc, v.pcApprox)}/모바일 ${fmtVolume(v.mobile, v.mobileApprox)}), 경쟁 ${v.comp}`;
+    }).join('\n');
     return `검색광고 실검색량 — 시드 "${seed}"의 연관 키워드(월간 검색수·경쟁도):\n${rows}`.slice(0, GROUND_CAP);
   } catch { return ''; }
 }
