@@ -191,7 +191,7 @@ export const CONFIG: Config = {
   cloudTierModels: {
     micro: env('CLOUD_MICRO_MODEL', 'claude-haiku-4-5'),
     standard: env('CLOUD_STANDARD_MODEL', 'claude-sonnet-5'),
-    heavy: env('CLOUD_HEAVY_MODEL', 'claude-opus-4-8'),
+    heavy: env('CLOUD_HEAVY_MODEL', 'claude-opus-5'),
   },
   agentThinking: envBool('AGENT_THINKING', false),
   // 구 env 이름(LOCAL_LLM_*)은 하위 호환 폴백으로 유지.
