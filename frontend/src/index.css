@@ -1671,6 +1671,25 @@ button.upload-retry:hover { background: var(--panel2); }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .perf-title-row .chip { flex: none; white-space: nowrap; }
 .perf-r { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* 열 성격별 정렬 — 헤더는 반드시 그 열 값과 같은 정렬을 쓴다. th 기본(left)에 숫자 td(right)를 조합하면
+   라벨이 값 위에 없어 왼쪽 열 라벨처럼 읽힌다("제목과 내용이 안 맞는" 실제 원인).
+   숫자=오른쪽(자릿수 비교), 날짜·배지·기호=가운데, 긴 텍스트(제목·키워드)=왼쪽(스캔 속도). */
+.perf-table th.perf-r { text-align: right; }
+.perf-table th.perf-c, .perf-table td.perf-c { text-align: center; white-space: nowrap; }
+/* 플랫폼 그룹 헤더(인스타그램 | 페이스북) — 같은 콘텐츠의 채널별 수치를 색이 아니라 구조로 묶는다. */
+.perf-table thead tr.perf-grouprow th {
+  padding: 7px 12px 3px; border-bottom: 1px solid var(--border);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: var(--muted); text-align: center; }
+.perf-table thead tr.perf-grouprow th.perf-grp-none { border-bottom-color: transparent; }
+.perf-table th.perf-grp-edge, .perf-table td.perf-grp-edge { border-left: 1px solid var(--border); }
+/* 채널 링크 배지 — 숫자를 링크로 만들지 않는다(숫자는 읽는 값, 배지는 누르는 것).
+   미게시 채널도 같은 폭의 흐린 배지로 자리를 지켜 행마다 열이 흔들리지 않게 한다. */
+.perf-links { display: inline-flex; gap: 4px; align-items: center; }
+.perf-link-badge { display: inline-flex; align-items: center; justify-content: center;
+  width: 25px; height: 22px; border: 1px solid var(--border); border-radius: 6px;
+  font-size: 12px; line-height: 1; text-decoration: none; color: var(--fg-primary); background: var(--panel); }
+.perf-link-badge:hover { background: var(--bg-neutral); border-color: var(--line-neutral-strong); }
+.perf-link-badge.off { opacity: 0.26; }
 /* td 에 display:flex 금지 — table-cell 이 깨져 border-bottom 이 행 높이를 안 따라가고
    위로 떠 보인다. 칩은 inline-block 흐름으로 줄바꿈(칩 사이 간격은 margin). */
 .perf-inflow { max-width: 320px; }

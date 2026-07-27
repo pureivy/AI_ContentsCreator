@@ -140,7 +140,7 @@ export default function PerformanceView() {
           <div className="perf-summary">
             <div className="perf-card"><div className="perf-num">{(s?.totalViews ?? 0).toLocaleString()}</div><div className="perf-lbl">블로그 조회</div></div>
             <div className="perf-card"><div className="perf-num">{(ch?.summary.shortsYtViews ?? 0).toLocaleString()}</div><div className="perf-lbl">쇼츠 유튜브 조회</div></div>
-            <div className="perf-card"><div className="perf-num">{(ch?.summary.reelsViews ?? 0).toLocaleString()}</div><div className="perf-lbl">릴스 조회</div></div>
+            <div className="perf-card"><div className="perf-num">{(ch?.summary.reelsViews ?? 0).toLocaleString()}</div><div className="perf-lbl" title="인스타그램 릴스 조회 합계 — 같은 콘텐츠를 두 플랫폼에서 합산하면 수치가 부풀려지므로 페이스북은 표에서 따로 봅니다">인스타 릴스 조회</div></div>
             <div className="perf-card"><div className="perf-num">{(ch?.summary.cardnewsViews ?? 0).toLocaleString()}</div><div className="perf-lbl">카드뉴스 조회</div></div>
           </div>
 
@@ -154,8 +154,18 @@ export default function PerformanceView() {
                 <table className="perf-table">
                   <thead>
                     <tr>
-                      <th>제목</th><th>발행일</th><th>상태</th><th>조회수</th><th>체류</th>
-                      <th>유입 키워드(상위)</th><th>SEO</th><th title="카드뉴스"><Ico name="cards" size={13} /></th><th title="숏폼"><Ico name="play" size={13} /></th><th>측정</th><th></th>
+                      <th>제목</th>
+                      <th className="perf-c">발행일</th>
+                      <th className="perf-c">링크</th>
+                      <th className="perf-c">상태</th>
+                      <th className="perf-r">조회수</th>
+                      <th className="perf-r">체류</th>
+                      <th>유입 키워드(상위)</th>
+                      <th className="perf-r">SEO</th>
+                      <th className="perf-c" title="파생 카드뉴스 완성 여부"><Ico name="cards" size={13} /></th>
+                      <th className="perf-c" title="파생 숏폼 완성 여부"><Ico name="play" size={13} /></th>
+                      <th className="perf-r" title="성과 측정 표본 수">측정</th>
+                      <th className="perf-c"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -163,14 +173,19 @@ export default function PerformanceView() {
                       <tr key={p.id}>
                         <td className="perf-title">
                           <div className="perf-title-row">
-                            {p.publishedUrl
-                              ? <a href={p.publishedUrl} target="_blank" rel="noreferrer" title={p.title}>{p.title}</a>
-                              : <span className="perf-title-txt" title={p.title}>{p.title}</span>}
+                            <span className="perf-title-txt" title={p.title}>{p.title}</span>
                             {p.keyword && <span className="chip"><Ico name="location" size={11} /> {p.keyword}</span>}
                           </div>
                         </td>
-                        <td className="perf-date">{fmtDate(p.date)}</td>
-                        <td><span className="badge">{STAGE_LABEL[p.stage] ? <><Ico name={STAGE_LABEL[p.stage].icon} size={10} /> {STAGE_LABEL[p.stage].label}</> : p.stage}</span></td>
+                        <td className="perf-date perf-c">{fmtDate(p.date)}</td>
+                        <td className="perf-c">
+                          <span className="perf-links">
+                            {p.publishedUrl
+                              ? <a className="perf-link-badge" href={p.publishedUrl} target="_blank" rel="noreferrer" title="네이버 블로그에서 열기">N</a>
+                              : <span className="perf-link-badge off" title="미발행">N</span>}
+                          </span>
+                        </td>
+                        <td className="perf-c"><span className="badge">{STAGE_LABEL[p.stage] ? <><Ico name={STAGE_LABEL[p.stage].icon} size={10} /> {STAGE_LABEL[p.stage].label}</> : p.stage}</span></td>
                         <td className="perf-r">{p.views != null ? p.views.toLocaleString() : "—"}</td>
                         <td className="perf-r">{p.dwellSec != null ? `${p.dwellSec}s` : "—"}</td>
                         <td className="perf-inflow">
@@ -181,14 +196,14 @@ export default function PerformanceView() {
                         </td>
                         <td className="perf-r">{typeof p.seoScore === "number" ? p.seoScore : "—"}</td>
                         {/* 파생 콘텐츠 세트 완성 여부 — ✓ 완성 / … 생성 중 / — 없음 */}
-                        <td className="perf-r" title={p.derived?.cardnews ? `카드뉴스 ${p.derived.cardnews.stage}` : "카드뉴스 없음"}>
+                        <td className="perf-c" title={p.derived?.cardnews ? `카드뉴스 ${p.derived.cardnews.stage}` : "카드뉴스 없음"}>
                           {p.derived?.cardnews ? (p.derived.cardnews.stage === "ready" ? "✓" : p.derived.cardnews.stage === "error" ? <Ico name="triangle-exclamation" size={11} /> : "…") : "—"}
                         </td>
-                        <td className="perf-r" title={p.derived?.shorts ? `숏폼 ${p.derived.shorts.stage}` : "숏폼 없음"}>
+                        <td className="perf-c" title={p.derived?.shorts ? `숏폼 ${p.derived.shorts.stage}` : "숏폼 없음"}>
                           {p.derived?.shorts ? (p.derived.shorts.stage === "ready" ? "✓" : p.derived.shorts.stage === "error" ? <Ico name="triangle-exclamation" size={11} /> : "…") : "—"}
                         </td>
                         <td className="perf-r muted">{p.samples || "—"}</td>
-                        <td className="perf-r"><button className="btn ghost" title="카드 삭제" onClick={() => doDelete(p.id, p.title)}><Ico name="trash" size={12} /></button></td>
+                        <td className="perf-c"><button className="btn ghost" title="카드 삭제" onClick={() => doDelete(p.id, p.title)}><Ico name="trash" size={12} /></button></td>
                       </tr>
                     ))}
                   </tbody>
@@ -205,24 +220,38 @@ export default function PerformanceView() {
               <div className="perf-table-wrap">
                 <table className="perf-table">
                   <thead>
-                    <tr><th>숏폼</th><th>업로드일</th><th title="유튜브 조회수 일별 추이">추이</th><th>조회</th><th>👍</th><th title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th><th></th></tr>
+                    <tr>
+                      <th>숏폼</th>
+                      <th className="perf-c">업로드일</th>
+                      <th className="perf-c">링크</th>
+                      <th className="perf-c" title="유튜브 조회수 일별 추이">추이</th>
+                      <th className="perf-r">조회</th>
+                      <th className="perf-r">👍</th>
+                      <th className="perf-c" title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th>
+                      <th className="perf-c"></th>
+                    </tr>
                   </thead>
                   <tbody>
                     {take("yt", ytShorts).map((r) => (
                       <tr key={r.id}>
                         <td className="perf-title">
                           <div className="perf-title-row">
-                            {r.youtube?.url
-                              ? <a href={r.youtube.url} target="_blank" rel="noreferrer" title={r.title}>{r.title}</a>
-                              : <span className="perf-title-txt" title={r.title}>{r.title}</span>}
+                            <span className="perf-title-txt" title={r.title}>{r.title}</span>
                           </div>
                         </td>
-                        <td className="perf-date">{fmtDate(r.youtube?.ts ?? r.ts)}</td>
-                        <td className="perf-spark"><Sparkline data={r.youtube?.series ?? []} title={`${r.title} 유튜브 조회 추이`} /></td>
+                        <td className="perf-date perf-c">{fmtDate(r.youtube?.ts ?? r.ts)}</td>
+                        <td className="perf-c">
+                          <span className="perf-links">
+                            {r.youtube?.url
+                              ? <a className="perf-link-badge" href={r.youtube.url} target="_blank" rel="noreferrer" title="유튜브에서 열기">▶</a>
+                              : <span className="perf-link-badge off" title="유튜브 미업로드">▶</span>}
+                          </span>
+                        </td>
+                        <td className="perf-spark perf-c"><Sparkline data={r.youtube?.series ?? []} title={`${r.title} 유튜브 조회 추이`} /></td>
                         <td className="perf-r">{r.youtube ? fmt(r.youtube.views) : "—"}</td>
                         <td className="perf-r">{r.youtube ? fmt(r.youtube.likes) : "—"}</td>
-                        <td className="perf-r">{r.youtube ? reflBadge(r.youtube.reflected, r.youtube.stale) : "—"}</td>
-                        <td className="perf-r"><button className="btn ghost" title="숏폼 삭제 — 산출물·성과 포함(유튜브·릴스 행 모두 사라짐)" onClick={() => doDeleteShorts(r.id, r.title)}><Ico name="trash" size={12} /></button></td>
+                        <td className="perf-c">{r.youtube ? reflBadge(r.youtube.reflected, r.youtube.stale) : "—"}</td>
+                        <td className="perf-c"><button className="btn ghost" title="숏폼 삭제 — 산출물·성과 포함(유튜브·릴스 행 모두 사라짐)" onClick={() => doDeleteShorts(r.id, r.title)}><Ico name="trash" size={12} /></button></td>
                       </tr>
                     ))}
                   </tbody>
@@ -240,35 +269,58 @@ export default function PerformanceView() {
               <div className="perf-table-wrap">
                 <table className="perf-table">
                   <thead>
-                    <tr><th>릴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>IG 조회</th><th>IG 👍</th><th title="페이스북 페이지 릴스 조회 — 미게시면 '—'">FB 조회</th><th title="페이스북 릴스 좋아요. 🖼 는 커버(썸네일) 미적용 — 쇼츠 탭에서 '페북 커버 적용'">FB 👍</th><th title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th><th></th></tr>
+                    {/* 2단 헤더 — 같은 릴스가 두 플랫폼에 올라가므로 숫자 열이 어느 채널인지 그룹으로 묶는다.
+                        (평면 나열이면 'FB 조회'가 인스타 열 위에 걸쳐 보여 제목과 값이 안 맞게 읽혔다.) */}
+                    <tr className="perf-grouprow">
+                      <th className="perf-grp-none" colSpan={3}></th>
+                      <th colSpan={3}>📸 인스타그램</th>
+                      <th className="perf-grp-edge" colSpan={2}>📘 페이스북</th>
+                      <th className="perf-grp-none perf-grp-edge" colSpan={2}></th>
+                    </tr>
+                    <tr>
+                      <th>릴스</th>
+                      <th className="perf-c">업로드일</th>
+                      <th className="perf-c">링크</th>
+                      <th className="perf-c" title="인스타 조회수 일별 추이">추이</th>
+                      <th className="perf-r">조회</th>
+                      <th className="perf-r">👍</th>
+                      <th className="perf-r perf-grp-edge" title="페이스북 페이지 릴스 조회 — 미게시면 '—'">조회</th>
+                      <th className="perf-r" title="페이스북 릴스 좋아요. 🖼 는 커버(썸네일) 미적용 — 쇼츠 탭에서 '페북 커버 적용'">👍</th>
+                      <th className="perf-c perf-grp-edge" title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th>
+                      <th className="perf-c"></th>
+                    </tr>
                   </thead>
                   <tbody>
                     {take("reels", reels).map((r) => (
                       <tr key={r.id}>
                         <td className="perf-title">
                           <div className="perf-title-row">
-                            {r.meta?.permalink
-                              ? <a href={r.meta.permalink} target="_blank" rel="noreferrer" title={r.title}>{r.title}</a>
-                              : <span className="perf-title-txt" title={r.title}>{r.title}</span>}
+                            <span className="perf-title-txt" title={r.title}>{r.title}</span>
                           </div>
                         </td>
-                        <td className="perf-date">{fmtDate(r.meta?.ts ?? r.ts)}</td>
-                        <td className="perf-spark"><Sparkline data={r.meta?.series ?? []} title={`${r.title} 릴스 조회 추이`} /></td>
+                        <td className="perf-date perf-c">{fmtDate(r.meta?.ts ?? r.ts)}</td>
+                        {/* 링크는 전용 열의 배지로 — 제목·숫자에 링크를 섞지 않는다(어느 채널로 가는지 모호했다). */}
+                        <td className="perf-c">
+                          <span className="perf-links">
+                            {r.meta?.permalink
+                              ? <a className="perf-link-badge" href={r.meta.permalink} target="_blank" rel="noreferrer" title="인스타그램 릴스 열기">📸</a>
+                              : <span className="perf-link-badge off" title="인스타그램 미게시">📸</span>}
+                            {r.fb
+                              ? <a className="perf-link-badge" href={r.fb.url} target="_blank" rel="noreferrer" title="페이스북 릴스 열기">📘</a>
+                              : <span className="perf-link-badge off" title="페이스북 페이지 미게시">📘</span>}
+                          </span>
+                        </td>
+                        <td className="perf-spark perf-c"><Sparkline data={r.meta?.series ?? []} title={`${r.title} 인스타 릴스 조회 추이`} /></td>
                         <td className="perf-r">{r.meta ? fmt(r.meta.views) : "—"}</td>
                         <td className="perf-r">{r.meta ? fmt(r.meta.likes) : "—"}</td>
-                        {/* 페북 릴스 — 게시된 것만 링크. 커버 미적용이면 🖼 로 표시해 보강이 필요함을 성과 탭에서도 알린다. */}
-                        <td className="perf-r">
-                          {r.fb
-                            ? <a href={r.fb.url} target="_blank" rel="noreferrer" title="페이스북 릴스 열기">{fmt(r.fb.views)}</a>
-                            : "—"}
-                        </td>
+                        <td className="perf-r perf-grp-edge">{r.fb ? fmt(r.fb.views) : "—"}</td>
                         <td className="perf-r">
                           {r.fb
                             ? <>{fmt(r.fb.likes)}{r.fb.coverPending && <span title="커버(썸네일) 미적용 — 쇼츠 탭의 '🖼 페북 커버 적용'으로 보강" style={{ marginLeft: 3 }}>🖼</span>}</>
                             : "—"}
                         </td>
-                        <td className="perf-r">{r.meta ? reflBadge(r.meta.reflected, r.meta.stale) : "—"}</td>
-                        <td className="perf-r"><button className="btn ghost" title="숏폼 삭제 — 산출물·성과 포함(유튜브·릴스 행 모두 사라짐)" onClick={() => doDeleteShorts(r.id, r.title)}><Ico name="trash" size={12} /></button></td>
+                        <td className="perf-c perf-grp-edge">{r.meta ? reflBadge(r.meta.reflected, r.meta.stale) : "—"}</td>
+                        <td className="perf-c"><button className="btn ghost" title="숏폼 삭제 — 산출물·성과 포함(유튜브·릴스 행 모두 사라짐)" onClick={() => doDeleteShorts(r.id, r.title)}><Ico name="trash" size={12} /></button></td>
                       </tr>
                     ))}
                   </tbody>
@@ -286,27 +338,54 @@ export default function PerformanceView() {
               <div className="perf-table-wrap">
                 <table className="perf-table">
                   <thead>
-                    <tr><th>카드뉴스</th><th>업로드일</th><th title="인스타 조회수 일별 추이">추이</th><th>IG 조회</th><th>도달</th><th>👍</th><th>FB 👍</th><th>공유</th><th title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th><th></th></tr>
+                    {/* 릴스 표와 동일 구조 — 두 표를 나란히 볼 때 열 의미가 흔들리지 않게 통일. */}
+                    <tr className="perf-grouprow">
+                      <th className="perf-grp-none" colSpan={3}></th>
+                      <th colSpan={4}>📸 인스타그램</th>
+                      <th className="perf-grp-edge" colSpan={2}>📘 페이스북</th>
+                      <th className="perf-grp-none perf-grp-edge" colSpan={2}></th>
+                    </tr>
+                    <tr>
+                      <th>카드뉴스</th>
+                      <th className="perf-c">업로드일</th>
+                      <th className="perf-c">링크</th>
+                      <th className="perf-c" title="인스타 조회수 일별 추이">추이</th>
+                      <th className="perf-r">조회</th>
+                      <th className="perf-r">도달</th>
+                      <th className="perf-r">👍</th>
+                      <th className="perf-r perf-grp-edge">👍</th>
+                      <th className="perf-r">공유</th>
+                      <th className="perf-c perf-grp-edge" title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th>
+                      <th className="perf-c"></th>
+                    </tr>
                   </thead>
                   <tbody>
                     {take("cardnews", cardnews).map((r) => (
                       <tr key={r.id}>
                         <td className="perf-title">
                           <div className="perf-title-row">
-                            {r.ig?.permalink
-                              ? <a href={r.ig.permalink} target="_blank" rel="noreferrer" title={r.topic}>{r.topic}</a>
-                              : <span className="perf-title-txt" title={r.topic}>{r.topic}</span>}
+                            <span className="perf-title-txt" title={r.topic}>{r.topic}</span>
                           </div>
                         </td>
-                        <td className="perf-date">{fmtDate(r.ts)}</td>
-                        <td className="perf-spark"><Sparkline data={r.ig?.series ?? []} title={`${r.topic} 인스타 조회 추이`} /></td>
+                        <td className="perf-date perf-c">{fmtDate(r.ts)}</td>
+                        <td className="perf-c">
+                          <span className="perf-links">
+                            {r.ig?.permalink
+                              ? <a className="perf-link-badge" href={r.ig.permalink} target="_blank" rel="noreferrer" title="인스타그램 게시물 열기">📸</a>
+                              : <span className="perf-link-badge off" title="인스타그램 미게시">📸</span>}
+                            {r.fb
+                              ? <a className="perf-link-badge" href={r.fb.url} target="_blank" rel="noreferrer" title="페이스북 페이지 게시물 열기">📘</a>
+                              : <span className="perf-link-badge off" title="페이스북 페이지 미게시">📘</span>}
+                          </span>
+                        </td>
+                        <td className="perf-spark perf-c"><Sparkline data={r.ig?.series ?? []} title={`${r.topic} 인스타 조회 추이`} /></td>
                         <td className="perf-r">{r.ig ? fmt(r.ig.views) : "—"}</td>
                         <td className="perf-r">{r.ig ? fmt(r.ig.reach) : "—"}</td>
                         <td className="perf-r">{r.ig ? fmt(r.ig.likes) : "—"}</td>
-                        <td className="perf-r">{r.fb ? fmt(r.fb.likes) : "—"}</td>
+                        <td className="perf-r perf-grp-edge">{r.fb ? fmt(r.fb.likes) : "—"}</td>
                         <td className="perf-r">{r.fb ? fmt(r.fb.shares) : "—"}</td>
-                        <td className="perf-r">{reflBadge(r.reflected, r.stale)}</td>
-                        <td className="perf-r"><button className="btn ghost" title="카드뉴스 삭제 — 산출물·성과 포함" onClick={() => doDeleteCardnews(r.id, r.topic)}><Ico name="trash" size={12} /></button></td>
+                        <td className="perf-c perf-grp-edge">{reflBadge(r.reflected, r.stale)}</td>
+                        <td className="perf-c"><button className="btn ghost" title="카드뉴스 삭제 — 산출물·성과 포함" onClick={() => doDeleteCardnews(r.id, r.topic)}><Ico name="trash" size={12} /></button></td>
                       </tr>
                     ))}
                   </tbody>

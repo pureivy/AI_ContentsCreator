@@ -962,7 +962,7 @@ export interface ShortsPerfRow {
 export interface CardnewsPerfRow {
   id: string; topic: string; ts: string; reflected: boolean; stale: boolean;
   ig: { permalink: string | null; views: number | null; reach: number | null; likes: number | null; series: number[] } | null;
-  fb: { likes: number | null; shares: number | null } | null;
+  fb: { url: string; likes: number | null; shares: number | null } | null;
 }
 export interface PerfData {
   strategy: { winners: Array<{ keyword: string; score: number; samples: number }>; subNiches: Record<string, number>; measuredPieces: number };

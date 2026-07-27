@@ -2118,7 +2118,7 @@ function performanceHandler(c: Context): Response {
         id: x.id, topic: x.topic, ts: x.publishedTs!, reflected: !!x.perfReflected,
         stale: cardnewsPerfStale(x, perfNow, perfDays),
         ig: x.igMediaId ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, reach: ig?.reach ?? null, likes: ig?.likes ?? null, series: viewsSeriesFor(x.id, 'meta:ig') } : null,
-        fb: x.fbPostId ? { likes: fb?.likes ?? null, shares: fb?.shares ?? null } : null,
+        fb: x.fbPostId ? { url: `https://www.facebook.com/${x.fbPostId}`, likes: fb?.likes ?? null, shares: fb?.shares ?? null } : null,
       };
     })
     .sort((a, b) => b.ts.localeCompare(a.ts));
