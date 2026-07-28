@@ -67,6 +67,7 @@ import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, 
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
+import { notifyBlogReady, contentReadyNotifyEnabled } from '../autonomy/contentNotify';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
 import { publishDraftToNaver, naverPublishCreds, collectNaverMetrics } from '../tools/blog_skills';
@@ -81,6 +82,11 @@ import { jarvisChat } from '../jarvis/chat';
 // 시간 기준 = 대한민국 표준시(KST). 스크립트(package.json)가 TZ 를 주지만, 직접 실행 대비 방어적으로
 // 고정한다(이미 설정돼 있으면 존중). 로컬시간 기반 코드(nowDate·스케줄러)가 호스트 OS 와 무관하게 KST.
 process.env.TZ ??= 'Asia/Seoul';
+
+// 듀얼스택(IPv4+IPv6) API 의 아웃바운드 안정화 — IPv6 광고는 되는데 라우팅이 죽은 망(실측: api.telegram.org,
+// 2026-07-29)에서 Node Happy Eyeballs 기본 폴백 대기(250ms)로는 fetch 가 ETIMEDOUT 으로 굳는다.
+// 폴백 대기를 1초로 늘리면 IPv6 시도 실패 후 IPv4 로 정상 전환(실측 200). 건강한 망에는 영향 없음(폴백 페이싱만).
+net.setDefaultAutoSelectFamilyAttemptTimeout(1000);
 
 interface RunHandle {
   status: 'running' | 'done' | 'error' | 'cancelled';
@@ -289,9 +295,10 @@ function readDraftMeta(runId: string): { title?: string; seoScore?: number; keyw
 
 // 런 완료 → piece 를 'ready'(검토 대기)로 승격. draft.json 우선, 없으면(포장 실패) 본문(deliverable)으로 폴백.
 // 초안·본문 모두 비면 산출 실패로 간주해 에러 카운트(다음 틱 재개 대상). '완전 자율'의 라이프사이클 전진 지점.
-function advancePieceReady(pieceId: string, runId: string, deliverable: string): void {
+// 반환: 조각별 알림 채널이 이 piece 의 메시징을 소유하는지(리비전 유예 포함) — 자율 사이클이 산출물 덤프 알림을 억제하는 데 쓴다.
+function advancePieceReady(pieceId: string, runId: string, deliverable: string, revised = false): boolean {
   const draft = readDraftMeta(runId);
-  if (!draft && !deliverable.trim()) { pieceStore().recordError(pieceId); return; }
+  if (!draft && !deliverable.trim()) { pieceStore().recordError(pieceId); return false; }
   pieceStore().update(pieceId, {
     runId, stage: 'ready',
     ...(draft?.title ? { title: draft.title } : {}),
@@ -299,19 +306,28 @@ function advancePieceReady(pieceId: string, runId: string, deliverable: string):
     ...(draft?.keyword ? { keyword: draft.keyword } : {}),
   });
   // ready 도달 → 자동 네이버 임시저장 게이트(SEO 기준 통과 시 발행 담당이 저장, 미달 시 자동 리비전 1회).
-  try { maybeAutoNaverDraft(pieceId); } catch { /* 무해 — 수동(검토 탭 버튼) 경로는 그대로 살아있다 */ }
+  // 알림보다 먼저 실행 — 리비전이 뜨면 이 초안은 곧 대체되므로 낡은 '검토 대기' 푸시를 만들지 않는다(리비전 완료가 다시 여기로 와 알림).
+  let revisionLaunched = false;
+  try { revisionLaunched = maybeAutoNaverDraft(pieceId); } catch { /* 무해 — 수동(검토 탭 버튼) 경로는 그대로 살아있다 */ }
+  // 검토 대기 알림(조각별) — 텔레그램이면 본문 발췌 동봉. 전송 실패 무해(fire-and-forget).
+  const owned = contentReadyNotifyEnabled();
+  if (owned && !revisionLaunched) {
+    const p = pieceStore().get(pieceId);
+    if (p) void notifyBlogReady({ id: p.id, title: p.title, keyword: p.keyword, seoScore: p.seoScore, brand: p.brand, revised }, runId);
+  }
+  return owned;
 }
 
 // 컴포저(타임라인) 런 조건부 승격 — 산출물이 블로그 초안 형태(finalize 가 draft.json 을 남김)면
 // piece 로 등록해 캘린더→검토→발행→성과 파이프라인에 합류시킨다. 질문·지시·지명 런처럼 초안
 // 포장이 없는 런은 draft.json 이 없어 자연히 제외된다(캘린더 오염 방지). 브랜드는 런 시작 시점 기준.
-function promoteRunToPiece(runId: string, topic: string, deliverable: string, brand?: string): PieceInfoLike | null {
-  if (!readDraftMeta(runId)) return null;                                   // 초안 형태 아님 — 승격 안 함
+function promoteRunToPiece(runId: string, topic: string, deliverable: string, brand?: string): { piece: PieceInfoLike | null; notified: boolean } {
+  if (!readDraftMeta(runId)) return { piece: null, notified: false };       // 초안 형태 아님 — 승격 안 함
   const dup = pieceStore().list().find((p) => p.runId === runId);
-  if (dup) return dup;                                                      // 이미 등록(자동/수동 이중 승격 방지)
+  if (dup) return { piece: dup, notified: false };                          // 이미 등록(자동/수동 이중 승격 방지)
   const piece = pieceStore().create({ title: topic.slice(0, 120), brand });
-  advancePieceReady(piece.id, runId, deliverable);                          // draft 메타로 title/keyword/seo 갱신 + ready
-  return pieceStore().get(piece.id) ?? piece;
+  const notified = advancePieceReady(piece.id, runId, deliverable);         // draft 메타로 title/keyword/seo 갱신 + ready
+  return { piece: pieceStore().get(piece.id) ?? piece, notified };
 }
 type PieceInfoLike = ReturnType<ReturnType<typeof pieceStore>['create']>;
 
@@ -375,11 +391,14 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
       handle.positions = outcome.positions;
       handle.subproblems = outcome.subproblems;
       // piece 라이프사이클 전진 — 초안 완성 → 'ready'(검토 대기, 지속형 레코드). 발행은 사람이 수동(POST /pieces/:id/published).
-      if (opts.pieceId) { try { advancePieceReady(opts.pieceId, id, outcome.deliverable ?? ''); } catch { /* 무해 — piece 는 draft 로 남아 재개 */ } }
+      let readyNotified = false;
+      if (opts.pieceId) { try { readyNotified = advancePieceReady(opts.pieceId, id, outcome.deliverable ?? '', !!opts.revise); } catch { /* 무해 — piece 는 draft 로 남아 재개 */ } }
       // pieceId 없는 런(컴포저 주제 등)도 초안을 만들었으면 파이프라인에 합류(조건부 승격 — 사용자 확정 2026-07-06).
-      else if (!opts.revise) { try { promoteRunToPiece(id, topic, outcome.deliverable ?? '', handle.brand); } catch { /* 무해 */ } }
-      // 자율 사이클 런 완료 → 알림(채널 설정 시에만 실제 발송).
-      if (opts.auto && CONFIG.notifyAutoCycle && notifyConfigured()) {
+      else if (!opts.revise) {
+        try { readyNotified = promoteRunToPiece(id, topic, outcome.deliverable ?? '', handle.brand).notified; } catch { /* 무해 */ }
+      }
+      // 자율 사이클 런 완료 → 알림(채널 설정 시에만 실제 발송). 조각별 검토 대기 알림이 메시징을 소유하는 런은 산출물 덤프를 생략(이중 핑·낡은 덤프 방지).
+      if (opts.auto && CONFIG.notifyAutoCycle && notifyConfigured() && !readyNotified) {
         void notify({ title: `🤖 자율 사이클 완료 · ${topic}`, body: (outcome.deliverable || '(산출물 없음)').slice(0, 1200) });
       }
     })
@@ -674,7 +693,7 @@ const promoteHandler = (c: Context): Response => {
   const h = RUNS.get(id);
   const meta = readDraftMeta(id);
   if (!meta) return c.json({ error: '초안(draft.json)이 없는 런 — 블로그 초안 형태가 아니라 승격할 수 없습니다' }, 400);
-  const piece = promoteRunToPiece(id, h?.topic || meta.title || id, h?.deliverable ?? '', h?.brand ?? (activeBrandSlug() || undefined));
+  const piece = promoteRunToPiece(id, h?.topic || meta.title || id, h?.deliverable ?? '', h?.brand ?? (activeBrandSlug() || undefined)).piece;
   if (!piece) return c.json({ error: '승격 실패' }, 500);
   return c.json({ ok: true, piece });
 };
@@ -1946,38 +1965,40 @@ function seoReviseFeedback(runId: string, keyword?: string): string | null {
   } catch { return null; }
 }
 
-function maybeAutoNaverDraft(pieceId: string): void {
-  if (!CONFIG.autoNaverDraft) return;
+// 반환: 자동 리비전 런을 띄웠는지 — 호출측(advancePieceReady)이 곧 대체될 초안의 '검토 대기' 알림을 유예하는 데 쓴다.
+function maybeAutoNaverDraft(pieceId: string): boolean {
+  if (!CONFIG.autoNaverDraft) return false;
   const piece = pieceStore().get(pieceId);
-  if (!piece?.runId || piece.stage !== 'ready') return;
-  if (piece.naverDraftUrl) return; // 이미 네이버에 초안 있음 — 재저장은 사람이 판단(중복 초안 방지)
+  if (!piece?.runId || piece.stage !== 'ready') return false;
+  if (piece.naverDraftUrl) return false; // 이미 네이버에 초안 있음 — 재저장은 사람이 판단(중복 초안 방지)
   const seo = piece.seoScore;
   if (typeof seo === 'number' && seo >= CONFIG.naverDraftSeoMin) {
     const r = startNaverDraftJob(pieceId, { actor: publisherName() });
     console.log('error' in r
       ? `[발행담당] ${piece.title.slice(0, 30)} — 임시저장 기동 실패: ${r.error}`
       : `[발행담당] ${piece.title.slice(0, 30)} — SEO ${seo}점(기준 ${CONFIG.naverDraftSeoMin}) 통과 → 네이버 임시저장 시작`);
-    return;
+    return false;
   }
   if (typeof seo !== 'number' || (piece.autoRevisions ?? 0) >= 1) {
     console.log(`[발행담당] ${piece.title.slice(0, 30)} — SEO ${seo ?? '미측정'}점 < ${CONFIG.naverDraftSeoMin} · 자동 리비전 소진 → 수동 검토 대기`);
-    return;
+    return false;
   }
   // 다른 런/잡이 도는 중이면 이번 틱은 건너뛴다(다음 ready 전이 때 재평가).
-  if ([...RUNS.values()].some((h) => h.status === 'running' && h.topic === piece.title)) return;
-  if (NAVER_DRAFT_JOBS.get(pieceId)?.status === 'running') return;
+  if ([...RUNS.values()].some((h) => h.status === 'running' && h.topic === piece.title)) return false;
+  if (NAVER_DRAFT_JOBS.get(pieceId)?.status === 'running') return false;
   let baseBody = '';
   try {
     const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, piece.runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
     baseBody = (d.bodyMarkdown ?? '').trim();
   } catch { /* 아래에서 중단 */ }
   const feedback = seoReviseFeedback(piece.runId, piece.keyword);
-  if (!baseBody || !feedback) return; // 본문·체크리스트 없이는 리비전 품질을 보장할 수 없다 — 수동으로
+  if (!baseBody || !feedback) return false; // 본문·체크리스트 없이는 리비전 품질을 보장할 수 없다 — 수동으로
   pieceStore().update(pieceId, { autoRevisions: (piece.autoRevisions ?? 0) + 1 });
   const rid = launchRun(piece.title, { pieceId, keyword: piece.keyword, revise: { baseBody, feedback: feedback.slice(0, 4000) } });
   console.log(rid
     ? `[발행담당] ${piece.title.slice(0, 30)} — SEO ${seo}점 미달 → 자동 리비전 런 ${rid}`
     : `[발행담당] ${piece.title.slice(0, 30)} — 리비전 런 기동 실패(다른 런 진행 중일 수 있음)`);
+  return !!rid;
 }
 app.post('/pieces/:id/naver-draft', pieceNaverDraftHandler);
 app.post('/api/pieces/:id/naver-draft', pieceNaverDraftHandler);

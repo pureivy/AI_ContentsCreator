@@ -16,6 +16,7 @@ import { getCompany } from '../agents/company-loader';
 import { rolesById } from '../agents/company';
 import { stripEmoji } from '../output/render';
 import { shortsStore } from '../content/shorts';
+import { notifyShortsReady } from '../autonomy/contentNotify';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
@@ -286,6 +287,16 @@ export async function runShortsJob(
       topic: plan.title || short.topic,
     });
     say(`${plan.title.slice(0, 30)} — ${r.durationSec}초 · 씬 ${r.sceneCount}개 완성${fallbacks ? ` (배경 폴백 ${fallbacks}씬)` : ''}`);
+    // 검토 대기 알림(완성 영상 동봉, 50MB 초과 시 텍스트 폴백) — fire-and-forget, 실패 무해.
+    {
+      const done = store.get(id);
+      if (done) {
+        void notifyShortsReady({
+          id, topic: done.topic, brand: done.brand, durationSec: r.durationSec, scenes: r.sceneCount,
+          sourcePieceId: done.sourcePieceId, writer: done.writer, director: done.director,
+        }, r.videoPath);
+      }
+    }
 
     // 디자인 썸네일 — 훅 씬 배경 위에 손글씨 제목/핵심(gpt-image). best-effort: 실패해도 완성 유지(엔드포인트가 영상 프레임 폴백).
     try {

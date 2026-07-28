@@ -171,6 +171,10 @@ export interface Config {
   readonly dailyBriefingTime: string;
   /** 자율 사이클 런 완료 시 알림 전송(알림 채널 설정돼 있을 때만 실제 발송). */
   readonly notifyAutoCycle: boolean;
+  /** 조각별 ready(검토 대기) 알림 — 블로그·카드뉴스·쇼츠가 완성되는 순간 push(텔레그램이면 미리보기 동봉). 킬스위치. */
+  readonly notifyContentReady: boolean;
+  /** 알림 속 검토 링크의 베이스 URL — 폰에서 열려면 Tailscale 주소(예: https://mac.tailnet.ts.net). 빈 값=로컬(127.0.0.1:PORT). */
+  readonly studioBaseUrl: string;
   /** 콘텐츠 발행 케이던스(주당 신규 편수 목표). 자율 사이클의 신규 아이디어 생성 최소 간격을 이걸로 산정(재개는 무관). 사용자 결정: 주 2~3개. */
   readonly contentCadencePerWeek: number;
   /** 미발행 'ready' 초안 백로그 캡 — 사람이 검토·발행 안 한 초안이 이만큼 쌓이면 신규 생성 중단(홍수 방지). */
@@ -287,6 +291,8 @@ export const CONFIG: Config = {
   agentShellTimeoutMs: Math.min(Math.max(1000, envInt('AGENT_SHELL_TIMEOUT_MS', 60_000)), 600_000),
   dailyBriefingTime: env('DAILY_BRIEFING_TIME', '').trim(),
   notifyAutoCycle: envBool('NOTIFY_AUTO_CYCLE', true),
+  notifyContentReady: envBool('NOTIFY_CONTENT_READY', true),
+  studioBaseUrl: env('STUDIO_BASE_URL', '').trim().replace(/\/+$/, ''),
   contentCadencePerWeek: Math.max(1, envInt('CONTENT_CADENCE_PER_WEEK', 3)),
   contentReadyCap: Math.max(1, envInt('CONTENT_READY_CAP', 5)),
   performanceSyncTime: env('PERFORMANCE_SYNC_TIME', '').trim(),

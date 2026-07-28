@@ -18,6 +18,7 @@ import { rolesById } from '../agents/company';
 import type { EventBus } from '../events/bus';
 import { stripEmoji } from '../output/render';
 import { cardNewsStore } from '../content/cardnews';
+import { notifyCardnewsReady } from '../autonomy/contentNotify';
 import { brandContext } from '../content/brand';
 import { priorCoverageBrief } from '../content/priorCoverage';
 import { generateImagesForDraft, searchCardRefs } from '../tools/blog_skills';
@@ -377,6 +378,16 @@ export async function runCardNewsJob(
 
     store.update(id, { stage: 'ready', slides: ok, topic: plan.title || card.topic });
     say(`${plan.title.slice(0, 30)} — ${ok}/${count}장 완성${ok < count ? ` (생성 실패 ${count - ok}장 건너뜀)` : ''}`);
+    // 검토 대기 알림(슬라이드 앨범 동봉) — fire-and-forget, 실패 무해.
+    {
+      const done = store.get(id);
+      if (done) {
+        void notifyCardnewsReady({
+          id, topic: done.topic, brand: done.brand, slides: ok,
+          sourcePieceId: done.sourcePieceId, planner: done.planner, designer: done.designer,
+        }, dir);
+      }
+    }
   } catch (e) {
     const msg = opts.signal?.aborted ? '취소됨' : e instanceof Error ? e.message.slice(0, 300) : String(e);
     store.update(id, { stage: 'error', error: msg });
