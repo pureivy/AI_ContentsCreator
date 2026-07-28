@@ -19,7 +19,7 @@ function StageBadge({ stage }: { stage: string }) {
   return <span className="badge">{m ? <><Ico name={m.icon} size={10} /> {m.label}</> : stage}</span>;
 }
 
-export default function DraftReview() {
+export default function DraftReview({ initialPieceId }: { initialPieceId?: string }) {
   const [pieces, setPieces] = useState<PieceInfo[]>([]);
   const [sel, setSel] = useState<string | null>(null);
   const [data, setData] = useState<PieceDraftResp | null>(null);
@@ -54,6 +54,18 @@ export default function DraftReview() {
     const t = setInterval(load, 8000); // 파생 콘텐츠(카드뉴스·숏폼) 진행 상태 갱신(캘린더와 동일 케이던스)
     return () => clearInterval(t);
   }, []);
+  // 딥링크(?piece=<id>) 초기 선택 — 텔레그램 알림 링크로 진입 시 해당 초안을 1회 자동 오픈.
+  // 목록(fetchPieces)과 무관하게 open 이 직접 fetch 하므로 목록 도착을 기다릴 필요 없다.
+  // 클린업에서 ref 를 되돌리는 이유: StrictMode(dev)의 언마운트 시뮬레이션이 selRef 를 지워 open 이
+  // 중단되는데, ref 가 남아 있으면 재실행이 막혀 '불러오는 중…'에 영구 고정된다.
+  const deepLinkDoneRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkDoneRef.current || !initialPieceId) return;
+    deepLinkDoneRef.current = true;
+    void open(initialPieceId);
+    return () => { deepLinkDoneRef.current = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPieceId]);
   // 언마운트 시 폴링 루프 종료(다음 틱에서 selRef 불일치로 탈출) — 탭 전환 후 좀비 폴링·재진입 이중 폴링 방지.
   useEffect(() => () => { selRef.current = null; }, []);
   // HTML 미리보기 탭을 열 때만 미리보기 HTML(이미지 data: 인라인)을 지연 로드 → sandbox srcDoc 에 넣어 렌더.
@@ -280,7 +292,13 @@ export default function DraftReview() {
         <div className="review-detail">
           {!sel && <div className="muted" style={{ padding: 24 }}>왼쪽에서 초안을 선택하세요.</div>}
           {sel && !data && !draftMissing && <div className="muted" style={{ padding: 24 }}>불러오는 중…</div>}
-          {sel && !data && draftMissing && (
+          {/* 소실 링크(삭제된 piece 딥링크 등) — 목록이 로드됐는데 id 가 없으면 '보류' 오진 대신 명확히 안내 */}
+          {sel && !data && draftMissing && pieces.length > 0 && !pieces.some((p) => p.id === sel) && (
+            <div style={{ padding: 24, lineHeight: 1.7 }}>
+              <p className="muted"><Ico name="triangle-exclamation" size={13} /> 이 링크의 초안을 찾을 수 없습니다 — 삭제되었거나 잘못된 링크입니다.</p>
+            </div>
+          )}
+          {sel && !data && draftMissing && !(pieces.length > 0 && !pieces.some((p) => p.id === sel)) && (
             <div style={{ padding: 24, lineHeight: 1.7 }}>
               <p className="muted"><Ico name="triangle-exclamation" size={13} /> 이 글은 <b>본문 초안이 없습니다</b> — 리서치·브리프 단계에서 끝났거나 편집 게이트가 <b>보류(반려)</b>한 런입니다.</p>
               <p className="muted">캘린더 탭 <b>▶ 실행</b>으로 재시도할 수 있으나, 아래 사유의 데이터가 채워지지 않으면 다시 보류될 수 있습니다. 불필요하면 카드를 삭제하세요.</p>

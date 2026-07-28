@@ -173,6 +173,8 @@ export interface Config {
   readonly notifyAutoCycle: boolean;
   /** 조각별 ready(검토 대기) 알림 — 블로그·카드뉴스·쇼츠가 완성되는 순간 push(텔레그램이면 미리보기 동봉). 킬스위치. */
   readonly notifyContentReady: boolean;
+  /** 텔레그램 봇 수신 폴러 — 검토 알림의 발행 버튼·수정요청 답장 처리(자격 설정 시에만 실동작). 킬스위치. */
+  readonly telegramBot: boolean;
   /** 알림 속 검토 링크의 베이스 URL — 폰에서 열려면 Tailscale 주소(예: https://mac.tailnet.ts.net). 빈 값=로컬(127.0.0.1:PORT). */
   readonly studioBaseUrl: string;
   /** 콘텐츠 발행 케이던스(주당 신규 편수 목표). 자율 사이클의 신규 아이디어 생성 최소 간격을 이걸로 산정(재개는 무관). 사용자 결정: 주 2~3개. */
@@ -292,6 +294,7 @@ export const CONFIG: Config = {
   dailyBriefingTime: env('DAILY_BRIEFING_TIME', '').trim(),
   notifyAutoCycle: envBool('NOTIFY_AUTO_CYCLE', true),
   notifyContentReady: envBool('NOTIFY_CONTENT_READY', true),
+  telegramBot: envBool('TELEGRAM_BOT', true),
   studioBaseUrl: env('STUDIO_BASE_URL', '').trim().replace(/\/+$/, ''),
   contentCadencePerWeek: Math.max(1, envInt('CONTENT_CADENCE_PER_WEEK', 3)),
   contentReadyCap: Math.max(1, envInt('CONTENT_READY_CAP', 5)),

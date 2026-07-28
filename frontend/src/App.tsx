@@ -276,7 +276,16 @@ export default function App() {
   const loadReplay = useStore((st) => st.loadReplay);
   const snapshotLive = useStore((st) => st.snapshotLive);
   const [runs, setRuns] = useState<RunInfo[]>([]);
-  const [view, setView] = useState<View>("office");
+  // 딥링크 ?piece=<id> — 텔레그램 검토 알림 링크가 검토 탭의 해당 초안을 바로 연다(1회성, 마운트 시 확정).
+  const [deepLinkPiece] = useState<string | null>(() => new URLSearchParams(window.location.search).get("piece"));
+  const [view, setView] = useState<View>(() => (deepLinkPiece ? "review" : "office"));
+  // 파라미터는 캡처 즉시 URL 에서 제거 — 남겨두면 새로고침마다 검토 탭으로 끌려간다(?run= 정리와 동일한 위생).
+  useEffect(() => {
+    if (!deepLinkPiece) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("piece");
+    window.history.replaceState(null, "", url);
+  }, [deepLinkPiece]);
   const [tlTab, setTlTab] = useState<TLTab>("timeline");  // 토론 타임라인 창: 타임라인 | 활동
   const [showHist, setShowHist] = useState(false);
   const histWrapRef = useRef<HTMLDivElement>(null);  // '📑 기록' 풀다운 바깥클릭 닫기용
@@ -1665,7 +1674,7 @@ export default function App() {
         </main>
       ) : view === "review" ? (
         <main className="employees-stage">
-          <DraftReview />
+          <DraftReview initialPieceId={deepLinkPiece ?? undefined} />
         </main>
       ) : view === "perf" ? (
         <main className="employees-stage">

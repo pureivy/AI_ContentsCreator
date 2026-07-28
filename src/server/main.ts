@@ -68,6 +68,7 @@ import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
 import { notifyBlogReady, contentReadyNotifyEnabled } from '../autonomy/contentNotify';
+import { startTelegramBot } from '../autonomy/telegramBot';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
 import { publishDraftToNaver, naverPublishCreds, collectNaverMetrics } from '../tools/blog_skills';
@@ -1302,27 +1303,36 @@ app.get('/youtube/oauth/callback', async (c) => {
     return done(`✅ 채널 연결 완료 (브랜드: ${brand || '범용'})`);
   } catch (e) { return done(`연결 실패: ${e instanceof Error ? e.message.slice(0, 120) : e}`); }
 });
+// 유튜브 업로드 in-flight 락 — youtubeUrl 은 업로드 '완료 후'에야 기록되므로 그 가드만으로는
+// 동시/이중 제출(특히 텔레그램 버튼 이중 탭)이 같은 영상을 두 번 올린다(중복 영상+쿼터 낭비).
+const ytPublishInFlight = new Set<string>();
 app.post('/shorts/:id/youtube', async (c) => {
   const id = c.req.param('id');
   const s = shortsStore().get(id);
   if (!s) return c.json({ error: 'unknown shorts' }, 404);
   if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
   if (s.youtubeUrl) return c.json({ error: '이미 업로드됨', url: s.youtubeUrl }, 409); // 중복 영상·쿼터 낭비 방지
-  const ytDir = shortsStore().dirFor(id);
-  // 인트로(1.6초=디자인 썸네일) 붙은 영상을 업로드하고, 썸네일은 그 '영상 첫 프레임'으로 지정 —
-  // 미지정 시 유튜브가 중간 프레임을 자동 선택해 커버가 엉뚱해짐(실측 2026-07-22, 사용자 방침: 맨 처음이 보이게).
-  const ytVideo = (await ensureShortsDownload(ytDir)) ?? path.join(ytDir, 'final.mp4');
-  const ytCover = await extractFirstFrame(ytVideo, path.join(ytDir, 'yt-cover.jpg'));
-  const r = await uploadShortsToYoutube({
-    slug: s.brand ?? '', videoPath: ytVideo,
-    title: s.title ?? s.topic, description: s.description ?? '', hashtags: s.hashtags ?? [],
-    thumbnailPath: ytCover ?? undefined,
-  });
-  if (!r.ok) return c.json({ error: r.error }, 502);
-  shortsStore().update(id, { youtubeId: r.videoId, youtubeUrl: r.url, youtubeTs: new Date().toISOString() });
-  if (r.thumbnailError) console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 24)} — 썸네일 미적용: ${r.thumbnailError}`);
-  console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 유튜브 비공개 업로드 완료 (${publisherName()})`);
-  return c.json({ ok: true, url: r.url, thumbnailError: r.thumbnailError });
+  if (ytPublishInFlight.has(id)) return c.json({ error: '이미 업로드 처리 중입니다' }, 409);
+  ytPublishInFlight.add(id);
+  try {
+    const ytDir = shortsStore().dirFor(id);
+    // 인트로(1.6초=디자인 썸네일) 붙은 영상을 업로드하고, 썸네일은 그 '영상 첫 프레임'으로 지정 —
+    // 미지정 시 유튜브가 중간 프레임을 자동 선택해 커버가 엉뚱해짐(실측 2026-07-22, 사용자 방침: 맨 처음이 보이게).
+    const ytVideo = (await ensureShortsDownload(ytDir)) ?? path.join(ytDir, 'final.mp4');
+    const ytCover = await extractFirstFrame(ytVideo, path.join(ytDir, 'yt-cover.jpg'));
+    const r = await uploadShortsToYoutube({
+      slug: s.brand ?? '', videoPath: ytVideo,
+      title: s.title ?? s.topic, description: s.description ?? '', hashtags: s.hashtags ?? [],
+      thumbnailPath: ytCover ?? undefined,
+    });
+    if (!r.ok) return c.json({ error: r.error }, 502);
+    shortsStore().update(id, { youtubeId: r.videoId, youtubeUrl: r.url, youtubeTs: new Date().toISOString() });
+    if (r.thumbnailError) console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 24)} — 썸네일 미적용: ${r.thumbnailError}`);
+    console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 유튜브 비공개 업로드 완료 (${publisherName()})`);
+    return c.json({ ok: true, url: r.url, thumbnailError: r.thumbnailError });
+  } finally {
+    ytPublishInFlight.delete(id);
+  }
 });
 // ── 메타(인스타·페북) 발행 — 공용 개발자 앱 + 브랜드별 페이지·IG 토큰(META_TOKENS).
 //    콜백: code→장기 사용자 토큰→/me/accounts. 페이지 1개면 즉시 저장, 여러 개면 pick 화면.
@@ -1914,9 +1924,11 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
 async function pieceNaverDraftHandler(c: Context): Promise<Response> {
   const id = c.req.param('id') ?? '';
   if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
-  const b = await c.req.json<{ dry_run?: boolean }>().catch(() => ({} as { dry_run?: boolean }));
+  const b = await c.req.json<{ dry_run?: boolean; actor?: string }>().catch(() => ({} as { dry_run?: boolean; actor?: string }));
   const dryRun = b.dry_run === true;
-  const r = startNaverDraftJob(id, { dryRun }); // 가드~잡 등록은 내부에서 동기 처리
+  // actor 지정(텔레그램 봇 등 비-UI 트리거) — 설정 시 잡 완료 알림이 발송된다(자동 게이트와 동일 경로).
+  const actor = typeof b.actor === 'string' && b.actor.trim() ? b.actor.trim().slice(0, 20) : undefined;
+  const r = startNaverDraftJob(id, { dryRun, actor }); // 가드~잡 등록은 내부에서 동기 처리
   if ('error' in r) return c.json({ error: r.error }, r.status);
   return c.json({ ok: true, started: true, dry_run: dryRun });
 }
@@ -3272,6 +3284,10 @@ if (CONFIG.performanceSyncTime) {
   console.log(`[ai-contents-studio] 성과 동기화 활성 — ${CONFIG.performanceSyncTime} · 수집기 "${getCollector().name}"(측정창 ${CONFIG.performanceWindowDays}일)`);
 }
 void stopPerfSync;
+
+// 텔레그램 봇 수신 폴러 — 검토 대기 알림의 발행 버튼(callback)·수정요청 답장 처리.
+// 자격(TELEGRAM_BOT_TOKEN/CHAT_ID) 미설정이면 내부에서 유휴 대기(설정 즉시 자동 재개).
+if (CONFIG.telegramBot && !process.env.VITEST) startTelegramBot();
 
 // 부팅 복구 스윕 — 카드뉴스/숏폼 잡의 '진행 중'은 in-memory RUNNING 에만 있고 디스크에는
 // stage(planning/designing/rendering)만 남는다. 렌더링 도중 서버가 재시작되면(tsx watch 의

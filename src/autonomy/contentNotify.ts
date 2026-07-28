@@ -11,6 +11,7 @@ import {
   notifyConfigured, notifyWebhookOnly, telegramCreds,
   sendTelegramHtml, sendTelegramPhotos, sendTelegramVideo,
 } from './notify';
+import type { TgButton } from './notify';
 
 export interface BlogReadyInfo {
   id: string; title?: string; keyword?: string; seoScore?: number; brand?: string;
@@ -122,12 +123,23 @@ export function shortsCaptionHtml(s: ShortsReadyInfo): string {
   ].filter(Boolean).join('\n');
 }
 
+// 발행 버튼(인라인 키보드) — callback_data 규격은 telegramBot.parseCallback 과 한 쌍("<op>:<id>", ≤64바이트).
+const blogButtons = (id: string): TgButton[][] => [[
+  { text: '📗 네이버 임시저장', callback_data: `bp:${id}` },
+  { text: '✍ 수정요청', callback_data: `rv:${id}` },
+]];
+const cardnewsButtons = (id: string): TgButton[][] => [[{ text: '📸 인스타 발행', callback_data: `cp:${id}` }]];
+const shortsButtons = (id: string): TgButton[][] => [[
+  { text: '▶️ 유튜브 업로드', callback_data: `sy:${id}` },
+  { text: '🎬 릴스 발행', callback_data: `sm:${id}` },
+]];
+
 /** 블로그 초안 ready → 발췌 미리보기 알림. fire-and-forget(void 호출) 전제, 절대 throw 하지 않는다. */
 export async function notifyBlogReady(p: BlogReadyInfo, runId: string): Promise<void> {
   try {
     if (!contentReadyNotifyEnabled()) return;
     const excerpt = readDraftExcerpt(runId);
-    if (telegramCreds()) await sendTelegramHtml(blogReadyHtml(p, excerpt));
+    if (telegramCreds()) await sendTelegramHtml(blogReadyHtml(p, excerpt), blogButtons(p.id));
     await notifyWebhookOnly({
       title: `${blogReadyLabel(p.revised)}${brandTag(p.brand)} · ${p.title ?? '(제목 미정)'}`,
       body: [excerpt, `검토: ${reviewLink(p.id)}`].filter(Boolean).join('\n'),
@@ -148,7 +160,9 @@ export async function notifyCardnewsReady(c: CardReadyInfo, dir: string): Promis
           .map((f) => path.join(dir, f));
       } catch { /* 디렉토리 없음 — 텍스트 폴백 */ }
       const sent = await sendTelegramPhotos(slides, caption);
-      if (!sent) await sendTelegramHtml(caption);
+      // 앨범(sendMediaGroup)은 인라인 키보드를 지원하지 않아 버튼은 후속 메시지로 붙인다.
+      if (sent) await sendTelegramHtml(`🖼 ${escapeHtml(clip(c.topic, 40))} — 발행:`, cardnewsButtons(c.id));
+      else await sendTelegramHtml(caption, cardnewsButtons(c.id));
     }
     await notifyWebhookOnly({
       title: `🖼 카드뉴스 검토 대기${brandTag(c.brand)} · ${c.topic}`,
@@ -163,8 +177,8 @@ export async function notifyShortsReady(s: ShortsReadyInfo, videoPath: string): 
     if (!contentReadyNotifyEnabled()) return;
     const caption = shortsCaptionHtml(s);
     if (telegramCreds()) {
-      const sent = await sendTelegramVideo(videoPath, caption);
-      if (!sent) await sendTelegramHtml(`${caption}\n(영상은 스튜디오에서 확인 — 전송 한도 초과/실패)`);
+      const sent = await sendTelegramVideo(videoPath, caption, shortsButtons(s.id));
+      if (!sent) await sendTelegramHtml(`${caption}\n(영상은 스튜디오에서 확인 — 전송 한도 초과/실패)`, shortsButtons(s.id));
     }
     await notifyWebhookOnly({
       title: `🎬 쇼츠 검토 대기${brandTag(s.brand)} · ${s.topic}`,
