@@ -67,7 +67,7 @@ import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, 
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
-import { notifyBlogReady, contentReadyNotifyEnabled } from '../autonomy/contentNotify';
+import { notifyBlogReady, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
 import { startTelegramBot } from '../autonomy/telegramBot';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
@@ -398,9 +398,18 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
       else if (!opts.revise) {
         try { readyNotified = promoteRunToPiece(id, topic, outcome.deliverable ?? '', handle.brand).notified; } catch { /* 무해 */ }
       }
-      // 자율 사이클 런 완료 → 알림(채널 설정 시에만 실제 발송). 조각별 검토 대기 알림이 메시징을 소유하는 런은 산출물 덤프를 생략(이중 핑·낡은 덤프 방지).
+      // 자율 사이클 런 완료 → 알림(채널 설정 시에만 실제 발송). 조각별 검토 대기 알림이 메시징을 소유하는 런은 생략(이중 핑 방지).
+      // 요약형(2026-07-29 사용자 확정) — 원문 덤프는 텔레그램에서 마크다운 표가 깨지고 1200자 캡에 중간 잘림.
+      // 상세는 런 리플레이 딥링크로 위임(자율런은 /runs 목록에 없어도 loadPast 가 직접 fetch 해 리플레이됨).
       if (opts.auto && CONFIG.notifyAutoCycle && notifyConfigured() && !readyNotified) {
-        void notify({ title: `🤖 자율 사이클 완료 · ${topic}`, body: (outcome.deliverable || '(산출물 없음)').slice(0, 1200) });
+        const recordLink = `전체 기록: ${studioBase()}/?run=${id}&mode=replay`;
+        if (opts.mission === 'research') {
+          void notify({ title: `🧠 리서치 완료 · ${topic}`, body: `두뇌 적재·직원 학습 반영 완료\n${recordLink}` });
+        } else {
+          const head = (outcome.deliverable || '(산출물 없음)').replace(/\s+/g, ' ').trim();
+          const excerpt = head.length > 200 ? `${head.slice(0, 200)}…` : head;
+          void notify({ title: `🤖 자율 사이클 완료 · ${topic}`, body: `${excerpt}\n${recordLink}` });
+        }
       }
     })
     .catch((e: unknown) => {
