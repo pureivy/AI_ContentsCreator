@@ -81,6 +81,16 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
     () => pieces.filter((p) => REVIEWABLE.has(p.stage) && p.runId).sort((a, b) => b.updatedTs.localeCompare(a.updatedTs)),
     [pieces],
   );
+  // 목록 접기 — 발행 이력이 쌓일수록 카드가 늘어 스캔이 힘들다(사용자 요청 2026-07-29).
+  // 기본 5개(최신순)만 보이고 나머지는 더보기로. 선택 초안이 미리보기 밖이면 자동 펼침(선택이 안 보이는 혼란 방지).
+  const LIST_PREVIEW = 5;
+  const [showAll, setShowAll] = useState(false);
+  const visibleList = showAll ? reviewable : reviewable.slice(0, LIST_PREVIEW);
+  useEffect(() => {
+    if (!sel || showAll) return;
+    if (reviewable.findIndex((p) => p.id === sel) >= LIST_PREVIEW) setShowAll(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sel, reviewable]);
 
   // 파생 콘텐츠(카드뉴스·숏폼) — 선택 초안의 최신 파생 상태(pieces 목록의 derived, 8초 폴링으로 갱신).
   const derived = pieces.find((p) => p.id === sel)?.derived;
@@ -277,7 +287,7 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
         {/* 좌측 — 검토 가능한 piece 목록 */}
         <div className="review-list">
           {reviewable.length === 0 && <div className="muted" style={{ padding: 12 }}>검토할 초안이 아직 없습니다.</div>}
-          {reviewable.map((p) => (
+          {visibleList.map((p) => (
             <button key={p.id} className={`review-list-item ${sel === p.id ? "active" : ""}`} onClick={() => open(p.id)}>
               <div className="review-list-title">{p.title}</div>
               <div className="review-list-meta">
@@ -286,6 +296,11 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
               </div>
             </button>
           ))}
+          {reviewable.length > LIST_PREVIEW && (
+            <button className="btn ghost" style={{ width: "100%", marginTop: 4 }} onClick={() => setShowAll((v) => !v)}>
+              {showAll ? "접기" : `더보기 (${reviewable.length - LIST_PREVIEW}개)`}
+            </button>
+          )}
         </div>
 
         {/* 우측 — 상세(초안/편집/발행/성과) */}
