@@ -2196,6 +2196,11 @@ function performanceHandler(c: Context): Response {
         shortsYtViews: shortsRows.reduce((n, r) => n + (r.youtube?.views ?? 0), 0),
         reelsViews: shortsRows.reduce((n, r) => n + (r.meta?.views ?? 0), 0),
         cardnewsViews: cardRows.reduce((n, r) => n + (r.ig?.views ?? 0), 0),
+        // 채널별 좋아요 — 요약 카드가 조회(크게)+좋아요(작게)를 함께 보여준다(사용자 제안 2026-07-30).
+        // 각 값은 해당 표의 좋아요 열 합과 1:1 로 일치.
+        ytLikes: shortsRows.reduce((n, r) => n + (r.youtube?.likes ?? 0), 0),
+        reelsLikes: shortsRows.reduce((n, r) => n + (r.meta?.likes ?? 0), 0),
+        cardnewsLikes: cardRows.reduce((n, r) => n + (r.ig?.likes ?? 0), 0),
         // 페이스북 — 릴스만 조회 지표가 있다(사진 게시물은 조회·노출 미제공, 실측 확인).
         // 그래서 페북은 '조회'와 '좋아요'를 따로 보낸다: 좋아요를 조회 합계에 섞으면 단위가 다른 수를 더하게 된다.
         fbReelViews: shortsRows.reduce((n, r) => n + (r.fb?.views ?? 0), 0),
