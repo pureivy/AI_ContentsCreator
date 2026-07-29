@@ -51,6 +51,27 @@ def parse_bold_segments(text: str) -> list:
     return [(s, b) for s, b, _ in parse_inline_segments(text)]
 
 
+# ── 링크 정규화(자동링크 유도) ────────────────────────────────────────────
+# SE ONE 은 'https://…' 토큰 '직후에 공백/Enter 가 타이핑될 때'만 자동으로 링크를 건다.
+# 초안에는 자동링크가 못 걸리는 형태가 흔하다(실측 2026-07-30: "[근거: … youtube.com/watch?v=…]"
+# 처럼 ①스킴 없음 ②URL 직후가 ']'). 타이핑 직전에 클릭 가능한 형태로 정규화한다. 순수 함수.
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+_SCHEMELESS_RE = re.compile(r"(?<![\w/@.:])((?:www\.|youtube\.com/|youtu\.be/|blog\.naver\.com/)[^\s\])>,]+)")
+_URL_CHARS = r"A-Za-z0-9\-._~:/?#@!$&'*+;=%"
+
+def linkify_for_typing(text: str) -> str:
+    """①마크다운 링크 [t](u) → 't u'(라벨+실주소 — SE 인라인 링크 다이얼로그 자동화는 취약해 배제)
+    ②스킴 없는 친숙 도메인(www./유튜브/네이버블로그)에 https:// 부여
+    ③URL 직후에 ]·)·, 가 붙으면 공백 삽입(자동링크 트리거 확보 — 시각상 공백 하나 늘어나는 비용만)."""
+    text = _MD_LINK_RE.sub(lambda m: f"{m.group(1)} {m.group(2)}", text)
+    text = _SCHEMELESS_RE.sub(lambda m: "https://" + m.group(1), text)
+    # URL(ASCII 토큰) 직후가 공백이 아니면 공백 삽입 — ']'·')' 뿐 아니라 한국어 조사가 바로 붙는
+    # 경우("…go.kr에서")도 흔해서 비공백 전체를 트리거 대상으로 본다. (?![…]) = 토큰 경계 단언 —
+    # 없으면 백트래킹이 토큰 끝 글자를 떼어 "abc12 3"처럼 URL 중간에 공백을 꽂는다(실측 버그).
+    text = re.sub(rf"(https?://[{_URL_CHARS}]+)(?![{_URL_CHARS}])(?=\S)", r"\1 ", text)
+    return text
+
+
 # ── 경로 설정 ─────────────────────────────────────────────────────────────
 # 이식 주의: 원본은 <blogroot>/.claude/skills/blog-publisher/scripts 라 parents[3]=<blogroot> 였다.
 # 새 위치는 <gepa>/scripts/blog_skills 라 parents[1]=<gepa> 로 프로젝트 루트를 잡는다(.env 로드 위치).
@@ -628,7 +649,9 @@ def human_type(page, text: str):
 
 def human_type_rich(page, text: str):
     """굵게(**)·이탤릭(*·_)을 사람처럼 반영 — 구간 앞뒤로 굵게/이탤릭 단축키(Cmd/Ctrl+B, Cmd/Ctrl+I)
-    토글 후 타이핑. 숫자 단축키와 달리 B·I 는 Chrome 이 안 가로채고 편집영역 서식 토글로 동작한다."""
+    토글 후 타이핑. 숫자 단축키와 달리 B·I 는 Chrome 이 안 가로채고 편집영역 서식 토글로 동작한다.
+    타이핑 전 링크 정규화 — 본문 속 주소가 클릭 가능한 링크로 걸리게(자동링크 유도)."""
+    text = linkify_for_typing(text)
     for seg, bold, italic in parse_inline_segments(text):
         if not seg:
             continue
@@ -915,6 +938,7 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
                 qlines = [q.strip() for q in qlines if q.strip()]
                 qtext = " ".join(qlines[:2])            # 인용구는 2줄까지 — 한 문단으로 합쳐 타이핑
                 if qtext:
+                    qtext = linkify_for_typing(qtext)   # 인용구 속 주소도 링크로(자동링크는 인용구 변환을 통과해 유지)
                     newline_before()
                     human_type(page, qtext)             # 평문으로 타이핑(순서 보존) → 나중에 인용구로 변환
                     quote_texts.append(qtext)
