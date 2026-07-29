@@ -109,3 +109,21 @@ export async function uploadShortsToYoutube(opts: {
     return { ok: false, error: e instanceof Error ? e.message.slice(0, 120) : String(e) };
   }
 }
+
+/** 브랜드 채널의 구독자 수 조회 — 팔로워 추적(analytics/followers)용. 미연결·실패는 null(무해). */
+export async function fetchYoutubeSubscribers(slug: string, signal?: AbortSignal): Promise<number | null> {
+  try {
+    const clientId = getSecret('YOUTUBE_OAUTH_CLIENT_ID') ?? '';
+    const clientSecret = getSecret('YOUTUBE_OAUTH_CLIENT_SECRET') ?? '';
+    const { refreshToken } = getYoutubeAccount(slug);
+    if (!clientId || !clientSecret || !refreshToken) return null;
+    const sg = signal ?? AbortSignal.timeout(15_000);
+    const access = await refreshAccessToken(clientId, clientSecret, refreshToken, sg);
+    const r = await fetch('https://www.googleapis.com/youtube/v3/channels?part=statistics&mine=true', {
+      headers: { Authorization: `Bearer ${access}` }, signal: sg,
+    });
+    const j = await r.json() as { items?: Array<{ statistics?: { subscriberCount?: string } }> };
+    const n = Number(j.items?.[0]?.statistics?.subscriberCount);
+    return Number.isFinite(n) ? n : null;
+  } catch { return null; }
+}

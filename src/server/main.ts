@@ -62,6 +62,7 @@ import { ingestMetrics } from '../analytics/reinforce';
 import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shortsMetaPerfStale } from '../analytics/shortsPerf';
 import { syncCardnewsPerformance, cardnewsPerfStale } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
+import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
 import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor } from '../analytics/performance';
 import { readStrategy } from '../analytics/strategy';
@@ -1281,7 +1282,9 @@ app.get('/youtube/oauth/start', (c) => {
   u.searchParams.set('client_id', id);
   u.searchParams.set('redirect_uri', YT_REDIRECT);
   u.searchParams.set('response_type', 'code');
-  u.searchParams.set('scope', 'https://www.googleapis.com/auth/youtube.upload');
+  // readonly 추가(2026-07-29) — 구독자 수 조회(channels.list mine=true)용. 기존 연결 토큰은 upload 뿐이라
+  // 재연결 전까지는 팔로워 추적이 API 키 공개 통계 폴백으로 동작한다(analytics/followers).
+  u.searchParams.set('scope', 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly');
   u.searchParams.set('access_type', 'offline');
   u.searchParams.set('prompt', 'consent');
   u.searchParams.set('state', nonce);
@@ -2306,9 +2309,18 @@ app.get('/naver/indexing', async (c) => {
   return c.json({ enabled: true, ...report, graceDays: 7 });
 });
 app.post('/briefing/send', async (c) => {
+  await recordFollowersSnapshot().catch(() => { /* 무해 — 섹션 생략/이전 값 */ });
   const sent = await notify(buildBriefing());
   return c.json({ sent, configured: notifyConfigured() });
 });
+// 팔로워 현황 — 스냅샷 이력 조회(+?refresh=1 이면 즉시 재수집). 채널 미연결은 null.
+const followersHandler = async (c: Context): Promise<Response> => {
+  if (c.req.query('refresh') === '1') await recordFollowersSnapshot().catch(() => { /* 무해 */ });
+  const snapshots = readSnapshots(activeBrandSlug() || '');
+  return c.json({ snapshots, latest: snapshots[snapshots.length - 1] ?? null, goal: 1000 });
+};
+app.get('/followers', followersHandler);
+app.get('/api/followers', followersHandler);
 
 // ============================================================
 // 회사 — 프론트 계약(/company, teams 구조) + 자체 UI(/api/company)
@@ -3253,7 +3265,8 @@ app.post('/api/autonomy/tick', (c) => c.redirect('/autonomy/tick', 307));
 // 일일 브리핑(옵트인: DAILY_BRIEFING_TIME="HH:MM"). 지정 시각에 다이제스트를 알림 채널로 발송. 빈값=off.
 const stopDaily = startDaily({
   time: CONFIG.dailyBriefingTime,
-  run: () => { void refreshNaverIndexingCache().catch(() => {}).finally(() => { void notify(buildBriefing()); }); }, // 색인 캐시 갱신 후 브리핑(색인 섹션 최신화)
+  // 팔로워 스냅샷 → 색인 캐시 갱신 → 브리핑(두 섹션 모두 최신값으로). 수집 실패는 무해(섹션 생략/이전 값).
+  run: () => { void recordFollowersSnapshot().catch(() => {}).finally(() => { void refreshNaverIndexingCache().catch(() => {}).finally(() => { void notify(buildBriefing()); }); }); },
   log: (m) => console.log('[briefing]', m),
 });
 if (CONFIG.dailyBriefingTime) {
