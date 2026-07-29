@@ -144,7 +144,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
           description: fixed.description || plan.description,
           hashtags: fixed.hashtags.length ? fixed.hashtags : plan.hashtags,
         };
-      }(검산이 기획을 막지 않는다)
+      }
     }
   } catch { /* 무해 */ }
   return plan;

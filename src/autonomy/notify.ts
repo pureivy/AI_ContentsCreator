@@ -131,8 +131,13 @@ export async function sendTelegramPhotos(files: string[], captionHtml: string): 
 /** 텔레그램 봇 업로드 한도(50MB) — 초과 영상은 호출측이 텍스트로 폴백. */
 export const TELEGRAM_VIDEO_MAX_BYTES = 49 * 1024 * 1024;
 
-/** 텔레그램 영상 + 캡션(HTML). 한도 초과·파일 없음이면 false(호출측 폴백 — 예상 경로라 로그 없음). buttons=인라인 키보드(선택). */
-export async function sendTelegramVideo(file: string, captionHtml: string, buttons?: TgButton[][]): Promise<boolean> {
+/** 텔레그램 영상 + 캡션(HTML). 한도 초과·파일 없음이면 false(호출측 폴백 — 예상 경로라 로그 없음). buttons=인라인 키보드(선택).
+ *  opts.width/height: 미전달 시 텔레그램이 비율을 잘못 추정해 세로 영상이 짜부러져 보인다(실측 2026-07-29).
+ *  opts.thumbnailPath: 커버(JPEG, 최장변 ≤320px·200KB 미만 — 규격 밖이면 텔레그램이 무시). */
+export async function sendTelegramVideo(
+  file: string, captionHtml: string, buttons?: TgButton[][],
+  opts?: { width?: number; height?: number; thumbnailPath?: string },
+): Promise<boolean> {
   const tg = telegramCreds();
   if (!tg) return false;
   try {
@@ -143,6 +148,11 @@ export async function sendTelegramVideo(file: string, captionHtml: string, butto
     fd.append('caption', captionHtml.slice(0, 1000));
     fd.append('parse_mode', 'HTML');
     fd.append('supports_streaming', 'true');
+    if (opts?.width) fd.append('width', String(opts.width));
+    if (opts?.height) fd.append('height', String(opts.height));
+    if (opts?.thumbnailPath && fs.existsSync(opts.thumbnailPath)) {
+      fd.append('thumbnail', await fileBlob(opts.thumbnailPath, 'image/jpeg'), 'thumb.jpg');
+    }
     if (buttons?.length) fd.append('reply_markup', JSON.stringify({ inline_keyboard: buttons }));
     fd.append('video', await fileBlob(file, 'video/mp4'), path.basename(file));
     const r = await fetch(`${TG_API}${encodeURIComponent(tg.token)}/sendVideo`, {

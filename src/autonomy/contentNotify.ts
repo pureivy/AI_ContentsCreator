@@ -6,6 +6,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { promisify } from 'node:util';
+import { execFile } from 'node:child_process';
 import { CONFIG } from '../config';
 import {
   notifyConfigured, notifyWebhookOnly, telegramCreds,
@@ -171,13 +173,32 @@ export async function notifyCardnewsReady(c: CardReadyInfo, dir: string): Promis
   } catch { /* 무해 */ }
 }
 
+const execFileP = promisify(execFile);
+
+/** 텔레그램용 소형 커버(최장변 320px JPEG) — 디자인 썸네일 축소, 없으면 영상 첫 프레임. 실패 시 null(커버 없이 전송). */
+async function tgVideoThumb(videoPath: string): Promise<string | null> {
+  try {
+    const dir = path.dirname(videoPath);
+    const out = path.join(dir, 'tg-thumb.jpg');
+    if (fs.existsSync(out)) return out;
+    const design = path.join(dir, 'thumbnail.jpg');
+    const src = fs.existsSync(design) ? design : videoPath;
+    await execFileP('ffmpeg', ['-nostdin', '-y', '-i', src, '-frames:v', '1', '-vf', 'scale=-2:320', '-q:v', '5', out],
+      { timeout: 20_000, maxBuffer: 8 * 1024 * 1024 });
+    return fs.existsSync(out) ? out : null;
+  } catch { return null; }
+}
+
 /** 쇼츠 ready → 완성 영상 알림(50MB 초과·전송 실패 시 텍스트 폴백). */
 export async function notifyShortsReady(s: ShortsReadyInfo, videoPath: string): Promise<void> {
   try {
     if (!contentReadyNotifyEnabled()) return;
     const caption = shortsCaptionHtml(s);
     if (telegramCreds()) {
-      const sent = await sendTelegramVideo(videoPath, caption, shortsButtons(s.id));
+      // 1080×1920 고정 — Remotion 컴포지션·ffmpeg 폴백 모두 이 규격으로 렌더(shortsRender). 커버는 320px 축소본.
+      const thumb = await tgVideoThumb(videoPath);
+      const sent = await sendTelegramVideo(videoPath, caption, shortsButtons(s.id),
+        { width: 1080, height: 1920, thumbnailPath: thumb ?? undefined });
       if (!sent) await sendTelegramHtml(`${caption}\n(영상은 스튜디오에서 확인 — 전송 한도 초과/실패)`, shortsButtons(s.id));
     }
     await notifyWebhookOnly({
