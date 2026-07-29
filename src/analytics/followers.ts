@@ -10,13 +10,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { activeBrandSlug } from '../content/brand';
-import { getMetaAccount, getSecret } from '../secrets/store';
+import { getMetaAccount, getNaverAccount, getSecret } from '../secrets/store';
 import { shortsStore } from '../content/shorts';
 import { fetchYoutubeSubscribers } from '../tools/youtubeUpload';
 import { GRAPH, FB_GRAPH } from '../tools/metaPublish';
 
 export interface FollowerSnapshot {
   date: string; // KST YYYY-MM-DD
+  /** 네이버 블로그 이웃 수 — 공개 모바일 API(subscriberCount), 로그인·자동화 불요. */
+  naver?: number | null;
   youtube: number | null;
   instagram: number | null;
   facebook: number | null;
@@ -30,6 +32,19 @@ export function readSnapshots(slug: string): FollowerSnapshot[] {
     const raw = JSON.parse(fs.readFileSync(fileFor(slug), 'utf-8')) as FollowerSnapshot[];
     return Array.isArray(raw) ? raw : [];
   } catch { return []; }
+}
+
+/** 네이버 블로그 이웃 수 — 공개 모바일 API(비로그인 GET, 실측 2026-07-30: result.subscriberCount). */
+async function fetchNaverNeighbors(blogId: string, signal?: AbortSignal): Promise<number | null> {
+  try {
+    const r = await fetch(`https://m.blog.naver.com/api/blogs/${encodeURIComponent(blogId)}`, {
+      headers: { Referer: `https://m.blog.naver.com/${encodeURIComponent(blogId)}` },
+      signal: signal ?? AbortSignal.timeout(15_000),
+    });
+    const j = await r.json() as { result?: { subscriberCount?: number } };
+    const n = j.result?.subscriberCount;
+    return typeof n === 'number' ? n : null;
+  } catch { return null; }
 }
 
 async function fetchIgFollowers(token: string, signal?: AbortSignal): Promise<number | null> {
@@ -85,13 +100,16 @@ async function fetchFbFollowers(pageId: string, token: string, signal?: AbortSig
 export async function recordFollowersSnapshot(signal?: AbortSignal): Promise<FollowerSnapshot> {
   const slug = activeBrandSlug() || '';
   const meta = getMetaAccount(slug);
-  const [youtube, instagram, facebook] = await Promise.all([
+  let naverBlogId = '';
+  try { naverBlogId = getNaverAccount(slug).blogId; } catch { /* 계정 미설정 — 이웃 수 생략 */ }
+  const [naver, youtube, instagram, facebook] = await Promise.all([
+    naverBlogId ? fetchNaverNeighbors(naverBlogId, signal) : Promise.resolve(null),
     // OAuth(mine=true) 우선 — 스코프가 upload 뿐이면 403 → API 키 공개 통계 폴백(실측 2026-07-29).
     fetchYoutubeSubscribers(slug, signal).then((n) => n ?? fetchYoutubeSubscribersViaApiKey(slug, signal)),
     meta.pageAccessToken ? fetchIgFollowers(meta.pageAccessToken, signal) : Promise.resolve(null),
     meta.pageId && meta.pageToken ? fetchFbFollowers(meta.pageId, meta.pageToken, signal) : Promise.resolve(null),
   ]);
-  const snap: FollowerSnapshot = { date: kstDate(), youtube, instagram, facebook };
+  const snap: FollowerSnapshot = { date: kstDate(), naver, youtube, instagram, facebook };
   try {
     const file = fileFor(slug);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -99,7 +117,13 @@ export async function recordFollowersSnapshot(signal?: AbortSignal): Promise<Fol
     // 전 채널 null(전부 미연결/실패)이고 기존 기록이 있으면 그날 값을 null 로 덮지 않는다(일시 장애로 이력 훼손 방지).
     const todayExisting = readSnapshots(slug).find((s) => s.date === snap.date);
     const merged: FollowerSnapshot = todayExisting
-      ? { date: snap.date, youtube: snap.youtube ?? todayExisting.youtube, instagram: snap.instagram ?? todayExisting.instagram, facebook: snap.facebook ?? todayExisting.facebook }
+      ? {
+          date: snap.date,
+          naver: snap.naver ?? todayExisting.naver ?? null,
+          youtube: snap.youtube ?? todayExisting.youtube,
+          instagram: snap.instagram ?? todayExisting.instagram,
+          facebook: snap.facebook ?? todayExisting.facebook,
+        }
       : snap;
     const all = [...rest, merged].sort((a, b) => a.date.localeCompare(b.date)).slice(-400);
     const tmp = `${file}.tmp`;
@@ -134,6 +158,11 @@ export function followersSection(): { heading: string; body: string } | null {
   };
   return {
     heading: '📈 팔로워 (목표 1,000)',
-    body: [fmt('유튜브', cur.youtube, prev?.youtube), fmt('인스타', cur.instagram, prev?.instagram), fmt('페북', cur.facebook, prev?.facebook)].join(' · '),
+    body: [
+      fmt('네이버 이웃', cur.naver ?? null, prev?.naver),
+      fmt('유튜브', cur.youtube, prev?.youtube),
+      fmt('인스타', cur.instagram, prev?.instagram),
+      fmt('페북', cur.facebook, prev?.facebook),
+    ].join(' · '),
   };
 }
