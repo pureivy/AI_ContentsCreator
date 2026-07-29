@@ -19,6 +19,7 @@ import type { EventBus } from '../events/bus';
 import { stripEmoji } from '../output/render';
 import { cardNewsStore } from '../content/cardnews';
 import { notifyCardnewsReady } from '../autonomy/contentNotify';
+import { standaloneIssues } from './standaloneQa';
 import { brandContext } from '../content/brand';
 import { priorCoverageBrief } from '../content/priorCoverage';
 import { generateImagesForDraft, searchCardRefs } from '../tools/blog_skills';
@@ -85,13 +86,15 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     `[주제] ${topic}`,
     keyword ? `[핵심 키워드] ${keyword}` : '',
     priorCoverage,
-    sourceBody ? `[블로그 초안 본문 — 핵심만 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${sourceBody.slice(0, 4000)}` : '',
+    sourceBody ? `[블로그 초안 본문 — 핵심과 그것이 성립하는 이유(전제 인과)를 함께 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${sourceBody.slice(0, 4000)}` : '',
+    sourceBody ? '[주제]는 블로그 SEO 제목이다 — 제목의 수사(앵글)를 표지에 그대로 옮기지 말고, 표지는 대상(무엇에 관한 카드인지)을 앞세워 재작성하라.' : '',
     '',
+    '독자는 원문 블로그를 본 적이 없다 — 카드 단독으로 완결되게 써라: 표지(headline 또는 body)에 핵심 주제어(식물명·행위명 등)를 반드시 명시하고(훅과 병행 — 훅을 위해 주제어를 빼지 말 것), 각 장은 앞 장과 표지만으로 무슨 대상 이야기인지 읽히게 하라.',
     n
       ? `슬라이드 ${n}장(표지 1 + 본문 ${Math.max(1, n - 2)} + 마무리 1)의 카드뉴스를 기획하라.`
       : '슬라이드 수는 스토리라인의 핵심 메시지 개수에 맞게 3~8장 사이에서 스스로 정하라(표지 1 + 본문 여러 장 + 마무리 1). 억지로 채우거나 줄이지 말고 내용 밀도에 맞춰라.',
     '표지와 마무리 장의 body 는 비우거나 한 줄로 짧게. 카드 텍스트에 이모지 금지(캡션에는 허용).',
-    'caption 은 인스타그램 게시글 본문 — 한 덩어리 문장 금지. 슬라이드 body 처럼 줄바꿈 \\n 으로 문단을 나눠 읽기 쉽게: 첫 줄 훅 한 문장 → 빈 줄 → 핵심 포인트 2~4줄(각 줄 짧게, 줄마다 \\n) → 빈 줄 → 마무리 행동유도 한 줄. 이모지는 적당히.',
+    'caption 은 인스타그램 게시글 본문 — 한 덩어리 문장 금지. 슬라이드 body 처럼 줄바꿈 \\n 으로 문단을 나눠 읽기 쉽게: 첫 줄 훅 한 문장(핵심 주제어 포함) → 빈 줄 → 핵심 포인트 2~4줄(각 줄 짧게, 줄마다 \\n) → 빈 줄 → 마무리 행동유도 한 줄. 이모지는 적당히.',
     'JSON 형식: {"title":"...","slides":[{"headline":"...","body":"줄바꿈은 \\n"}],"caption":"훅 한 줄\\n\\n핵심 포인트 한 줄\\n다음 포인트 한 줄\\n\\n마무리 행동유도","hashtags":["#태그1","#태그2"]}',
   ].filter(Boolean).join('\n');
   type PlannerSlide = { headline?: unknown; body?: unknown };
@@ -106,17 +109,36 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     j = await callRoleJSON<PlannerRaw>(io, 'cardnews_planner', sys, `${user}\n\n반드시 완결된 JSON 하나만 출력하라(설명·마크다운 코드펜스 금지).`, 2600, false);
   }
   if (!usable(j)) return null;
-  const slides = j.slides.slice(0, 8).map((s) => ({
-    headline: cleanLine(s?.headline, 40),
-    body: cleanLine(s?.body, 220),
-  })).filter((s) => s.headline);
-  if (slides.length < 2) return null;
-  return {
-    title: cleanLine(j.title, 60) || topic,
-    slides,
-    caption: String(j.caption ?? '').trim().slice(0, 1000),
-    hashtags: normalizeHashtags(j.hashtags),
+  const toPlan = (raw: PlannerRaw & { slides: PlannerSlide[] }): Plan | null => {
+    const slides = raw.slides.slice(0, 8).map((s) => ({
+      headline: cleanLine(s?.headline, 40),
+      body: cleanLine(s?.body, 220),
+    })).filter((s) => s.headline);
+    if (slides.length < 2) return null;
+    return {
+      title: cleanLine(raw.title, 60) || topic,
+      slides,
+      caption: String(raw.caption ?? '').trim().slice(0, 1000),
+      hashtags: normalizeHashtags(raw.hashtags),
+    };
   };
+  let plan = toPlan(j);
+  if (!plan) return null;
+  // 단독 이해 검산 — 원문을 안 본 독자 관점 텍스트 검사 후 1회 수정 라운드(fail-open, 실측 2026-07-29 결함 대응:
+  // 표지에 주제어가 없어 8장 어디에도 '제라늄'이 등장하지 않는 카드가 발행됐다).
+  try {
+    // body 의 \n 은 한 줄로 접는다 — 검산 프롬프트가 번호 목록이라 줄바꿈이 항목 경계처럼 보이면 판정 정밀도가 떨어진다.
+    const cardTexts = plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / '));
+    const probs = await standaloneIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', cardTexts, topic, keyword, io.signal);
+    if (probs.length) {
+      const m = `단독 이해 검산 — ${probs.length}건 → 수정 라운드 (${probs[0]?.slice(0, 50)})`;
+      console.log(`[카드뉴스] ${m}`); io.bus?.emit('log', { message: m });
+      const j2 = await callRoleJSON<PlannerRaw>(io, 'cardnews_planner', sys,
+        `${user}\n\n[단독 이해 검산 실패 — 아래 문제를 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지)]\n${probs.map((p) => `- ${p}`).join('\n')}`, 2600, false);
+      if (usable(j2)) { const fixed = toPlan(j2); if (fixed) plan = fixed; } // 수정본 불량 시 원본 유지
+    }
+  } catch { /* 무해 */ }
+  return plan;
 }
 
 /**

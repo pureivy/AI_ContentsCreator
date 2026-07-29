@@ -21,9 +21,13 @@ describe('extractVideoUrl — 정상/결측/이형 방어(순수)', () => {
   });
 });
 describe('buildI2vBody — 모델별 스키마 분기(순수)', () => {
-  it('wan 계열: 세로 9:16 고정 + 145프레임@24fps(≈6초)', () => {
+  it('wan 계열: 세로 9:16 고정 + 145프레임@24fps(≈6초) + 붕괴 억제 negative_prompt', () => {
     const b = buildI2vBody('fal-ai/wan/v2.2-5b/image-to-video', 'p', 'data:x');
-    expect(b).toEqual({ prompt: 'p', image_url: 'data:x', num_frames: 145, frames_per_second: 24, resolution: '720p', aspect_ratio: '9:16' });
+    // toEqual 유지 — 예기치 않은 필드 추가(fal 은 비호환 필드에 422 무음 실패)를 잡는 가드.
+    expect(b).toEqual({
+      prompt: 'p', image_url: 'data:x', num_frames: 145, frames_per_second: 24, resolution: '720p', aspect_ratio: '9:16',
+      negative_prompt: 'distortion, morphing, warping, melting, deformed face, deformed hands, extra limbs, mutated fingers, objects appearing or disappearing, text, letters, watermark, flickering',
+    });
   });
   it('ltx 계열: duration·1080p·무오디오', () => {
     const b = buildI2vBody('fal-ai/ltx-2/image-to-video/fast', 'p', 'data:x');

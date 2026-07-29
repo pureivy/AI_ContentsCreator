@@ -19,6 +19,8 @@ import { shortsStore } from '../content/shorts';
 import { notifyShortsReady } from '../autonomy/contentNotify';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
+import { qaSceneClips } from './shortsClipQa';
+import { standaloneIssues } from './standaloneQa';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion } from './shortsMotionDirector';
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame } from '../tools/shortsRender';
@@ -93,34 +95,50 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     `[주제] ${topic}`,
     keyword ? `[핵심 키워드] ${keyword}` : '',
     priorCoverage,
-    sourceBody ? `[블로그 초안 본문 — 핵심 1~2개만 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${sourceBody.slice(0, 4000)}` : '',
+    sourceBody ? `[블로그 초안 본문 — 핵심 1~2개와 그것이 성립하는 이유(전제 인과 한 줄)를 함께 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${sourceBody.slice(0, 4000)}` : '',
     '',
-    `씬 ${n}개의 유튜브 숏폼 대본을 기획하라. 씬1=훅(3패턴 중 택1), 마지막 씬=CTA.`,
+    `씬 ${n}개의 유튜브 숏폼 대본을 기획하라. 씬1=훅(3패턴 중 택1), 씬2=전제(이 영상이 무엇에 대한 이야기이고 왜 문제/중요한지를 못박는다 — 원문의 핵심 인과 한 줄), 마지막 씬=CTA.`,
+    '시청자는 원문 블로그를 본 적이 없다 — 영상 단독으로 완결되게 써라: 핵심 주제어(식물명·행위명 등)를 훅 또는 씬2에서 반드시 명시하고, 지시어·축약어("짝"·"그 방법"·"두 그루" 류)는 앞 씬에서 뜻을 세운 뒤에만 사용하라.',
     '내레이션은 TTS 낭독용: 구어체 존댓말, 숫자는 한글로("30%"→"삼십 퍼센트"), 이모지·괄호 지문 금지.',
-    '본문 씬 내레이션은 반드시 2문장(합쳐서 40~65자, 낭독 6~9초) — 방법 한 문장 + 이유/효과 한 문장. 훅·CTA 씬은 1~2문장(20~40자). 총 낭독 시간 30~55초를 맞춘다.',
+    '본문 씬 내레이션은 반드시 2문장(합쳐서 40~65자, 낭독 6~9초) — 방법 한 문장 + 이유/효과 한 문장. 씬2(전제)는 45~70자까지 허용. 훅·CTA 씬은 1~2문장(20~40자). 총 낭독 시간 30~55초를 맞춘다.',
     'screenText 는 씬당 1줄 15자 이내 키워드 요약(비워도 됨).',
     '씬 kind(선택): 씬1="hook", 마지막 씬="cta". 본문 씬 중 어울리는 곳에만 "stat"(핵심 수치 1개: value 숫자·unit 단위·label 15자)·"list"(items 2~4개, 각 18자)·"quote"(text 40자, source 출처) — 억지 배정 금지, 애매하면 kind 생략.',
     '수치 규칙: stat.value 는 원문(블로그 초안)에 있는 수치 또는 대본 구조상 자명한 숫자(단계 수·항목 수)만. 불확실하면 stat 을 쓰지 마라. narration 은 수치를 한글로 낭독하되 stat.value 는 아라비아 숫자.',
     'JSON 형식: {"title":"대표 제목","titles":["정보형","후킹형","질문형"],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"}}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"]}',
   ].filter(Boolean).join('\n');
-  const j = await callRoleJSON<{ title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown }>; description?: unknown; hashtags?: unknown }>(
-    io, 'shorts_writer', '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.', user, 2200, true,
-  );
-  if (!j || !Array.isArray(j.scenes) || !j.scenes.length) return null;
-  const scenes = j.scenes.slice(0, 8).map((s) => ({
-    narration: cleanNarration(s?.narration),
-    screenText: stripEmoji(String(s?.screenText ?? '')).trim().slice(0, 20),
-    ...normalizeSceneKind(s), // 불량 페이로드는 {} 강등 — 기본 씬으로 렌더
-  })).filter((s) => s.narration);
-  if (scenes.length < 3) return null;
-  const titles = (Array.isArray(j.titles) ? j.titles : []).map((t) => stripEmoji(String(t ?? '')).trim()).filter(Boolean).slice(0, 3);
-  return {
-    title: stripEmoji(String(j.title ?? '')).trim().slice(0, 60) || titles[0] || topic,
-    titles: titles.length ? titles : [topic],
-    scenes,
-    description: String(j.description ?? '').trim().slice(0, 500),
-    hashtags: normalizeHashtags(j.hashtags),
+  type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown }>; description?: unknown; hashtags?: unknown };
+  const sys = '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.';
+  const parsePlan = (j: PlanRaw | null): Plan | null => {
+    if (!j || !Array.isArray(j.scenes) || !j.scenes.length) return null;
+    const scenes = j.scenes.slice(0, 8).map((s) => ({
+      narration: cleanNarration(s?.narration),
+      screenText: stripEmoji(String(s?.screenText ?? '')).trim().slice(0, 20),
+      ...normalizeSceneKind(s), // 불량 페이로드는 {} 강등 — 기본 씬으로 렌더
+    })).filter((s) => s.narration);
+    if (scenes.length < 3) return null;
+    const titles = (Array.isArray(j.titles) ? j.titles : []).map((t) => stripEmoji(String(t ?? '')).trim()).filter(Boolean).slice(0, 3);
+    return {
+      title: stripEmoji(String(j.title ?? '')).trim().slice(0, 60) || titles[0] || topic,
+      titles: titles.length ? titles : [topic],
+      scenes,
+      description: String(j.description ?? '').trim().slice(0, 500),
+      hashtags: normalizeHashtags(j.hashtags),
+    };
   };
+  let plan = parsePlan(await callRoleJSON<PlanRaw>(io, 'shorts_writer', sys, user, 2200, true));
+  if (!plan) return null;
+  // 단독 이해 검산 — 원문을 안 본 시청자 관점 텍스트 검사 후 1회 수정 라운드(fail-open, 실측 2026-07-29 결함 대응).
+  try {
+    const probs = await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)', plan.scenes.map((s) => s.narration), topic, keyword, io.signal);
+    if (probs.length) {
+      const m = `단독 이해 검산 — ${probs.length}건 → 수정 라운드 (${probs[0]?.slice(0, 50)})`;
+      console.log(`[숏폼] ${m}`); io.bus?.emit('log', { message: m });
+      const fixed = parsePlan(await callRoleJSON<PlanRaw>(io, 'shorts_writer', sys,
+        `${user}\n\n[단독 이해 검산 실패 — 아래 문제를 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지)]\n${probs.map((p) => `- ${p}`).join('\n')}`, 2600, false));
+      if (fixed) plan = fixed; // 수정본 파싱 실패 시 원본 유지(검산이 기획을 막지 않는다)
+    }
+  } catch { /* 무해 */ }
+  return plan;
 }
 
 async function designScenes(io: JobIO, topic: string, plan: Plan): Promise<{ preset: string; style: string; prompts: string[] }> {
@@ -263,6 +281,15 @@ export async function runShortsJob(
     if (clipCount) say(`씬 I2V — ${clipCount}/${plan.scenes.length}장 클립화${cv.issues.length ? ` (${cv.issues[0]})` : ''}`);
     else if (cv.issues.length) say(`씬 I2V — 클립 0장 (${cv.issues.slice(0, 2).join(' · ')})`);
     checkAbort();
+
+    // 3-c-ii) 클립 비전 QA — 중간 프레임 검수(형태 붕괴·물체 출현·유령 글자·내레이션 모순),
+    //         불량 클립만 QA 통과 스틸(켄번즈)로 강등. 재생성 없음 — 추가 과금 0, fail-open.
+    if (clipCount) {
+      const cq = await qaSceneClips({ dir, clips: cv.clips, narrations: plan.scenes.map((s) => s.narration), signal: opts.signal });
+      cv.clips = cq.clips;
+      if (cq.dropped) say(`클립 QA — ${cq.dropped}개 불량 → 스틸 폴백 (${cq.issues.slice(0, 2).join(' · ')})`);
+      checkAbort();
+    }
 
     // 4) 조립 — 기본 Remotion 모션그래픽, 실패 시 ffmpeg 슬라이드쇼로 폴백(무중단).
     say(CONFIG.shortsRenderer === 'ffmpeg' ? '영상 조립 시작 — ffmpeg 슬라이드쇼' : '영상 조립 시작 — Remotion 모션그래픽');

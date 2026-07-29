@@ -1,6 +1,6 @@
 import React from 'react';
 import { z } from 'zod';
-import { AbsoluteFill, Series, Audio, staticFile, Loop, OffthreadVideo, useCurrentFrame } from 'remotion';
+import { AbsoluteFill, Series, Audio, staticFile, OffthreadVideo, useCurrentFrame } from 'remotion';
 import { sceneEnterFade } from './anim';
 import { KenBurnsImage } from './KenBurnsImage';
 import { KineticCaption } from './KineticCaption';
@@ -16,7 +16,7 @@ export const autoShortsSchema = z.object({
     screenText: z.string(),
     durationInFrames: z.number(),
     videoSrc: z.string().nullable().optional(),
-    clipFrames: z.number().optional(), // 실제 클립 길이(30fps 기준 프레임) — 루프 경계 정합용. 없으면 CLIP_FRAMES 폴백.
+    clipFrames: z.number().optional(), // 실제 클립 길이(30fps 기준 프레임) — 감속 재생 배율 산정용. 없으면 CLIP_FRAMES 폴백.
     kind: z.enum(['hook', 'stat', 'list', 'quote', 'cta']).optional(),
     stat: z.object({ value: z.number(), unit: z.string().optional(), label: z.string().optional() }).optional(),
     items: z.array(z.string()).max(4).optional(),
@@ -30,7 +30,7 @@ export const defaultProps: AutoShortsProps = {
   totalFrames: 90,
 };
 
-const CLIP_FRAMES = 180; // 6초 클립 × 30fps 컴포지션 — 씬이 클립보다 길면 루프
+const CLIP_FRAMES = 180; // 6초 클립 × 30fps 컴포지션 — clipFrames 미지정 시 감속 배율 산정 폴백
 
 const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number }> = ({ s, index }) => {
   const f = useCurrentFrame();
@@ -39,9 +39,15 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number }> =
   return (
     <AbsoluteFill style={{ opacity: fade }}>
       {s.videoSrc ? (
-        <Loop durationInFrames={s.clipFrames ?? CLIP_FRAMES}>
-          <OffthreadVideo src={staticFile(s.videoSrc)} muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-        </Loop>
+        // 루프 금지 — 씬이 클립(≈6초)보다 길면 재생 속도를 낮춰 클립 한 번이 씬 전체를 덮는다.
+        // 종전 <Loop>는 씬 중간에 클립이 처음으로 되감겨 '튕김'이 보였고(실측: 씬 6.6~8.0s vs 클립 6.04s
+        // 로 거의 매 씬 발생), 감속 재생은 튕김 제거에 더해 I2V 잔결함(형태 흔들림)도 시각적으로 완화한다.
+        <OffthreadVideo
+          src={staticFile(s.videoSrc)}
+          muted
+          playbackRate={Math.min(1, (s.clipFrames ?? CLIP_FRAMES) / Math.max(1, s.durationInFrames))}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+        />
       ) : (
         <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} />
       )}

@@ -30,7 +30,11 @@ export function extractVideoUrl(json: unknown): string | null {
 export function buildI2vBody(model: string, prompt: string, imageUrl: string): Record<string, unknown> {
   if (model.includes('wan')) {
     // Wan 2.2: 145프레임@24fps ≈ 6초(Remotion CLIP_FRAMES=180 과 짝), 세로 9:16 명시(입력 2:3 이라 auto 대신 고정).
-    return { prompt, image_url: imageUrl, num_frames: 145, frames_per_second: 24, resolution: '720p', aspect_ratio: '9:16' };
+    // negative_prompt: 5B 급 대표 붕괴(형태 용융·손 기형·물체 출현/소실·유사 글자) 억제 — fal Wan 스키마 표준 필드.
+    return {
+      prompt, image_url: imageUrl, num_frames: 145, frames_per_second: 24, resolution: '720p', aspect_ratio: '9:16',
+      negative_prompt: 'distortion, morphing, warping, melting, deformed face, deformed hands, extra limbs, mutated fingers, objects appearing or disappearing, text, letters, watermark, flickering',
+    };
   }
   // LTX-2 계열 — 가로 전용(세로 불가 실측). env 로 명시 선택 시에만 사용.
   return { prompt, image_url: imageUrl, duration: 6, resolution: '1080p', fps: 25, generate_audio: false };
