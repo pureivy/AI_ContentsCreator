@@ -109,6 +109,18 @@ export async function recordFollowersSnapshot(signal?: AbortSignal): Promise<Fol
   } catch { return snap; } // 영속 실패 무해 — 다음 수집에서 재시도
 }
 
+/** 후속 카드 넛지 — 팔로워 데이터가 2주 쌓이면 브리핑으로 알림(사용자 요청 2026-07-29 "필요할 때 알려줘").
+ *  제목 유형 A/B·업로드 시각 분석은 표본 없이는 무의미해서 14일 축적을 트리거로 삼는다.
+ *  14~17일차에만 노출(무상태 — 플래그 파일 불필요) 후 자동 소멸. */
+export function followersFollowupNudge(): { heading: string; body: string } | null {
+  const n = readSnapshots(activeBrandSlug() || '').length;
+  if (n < 14 || n > 17) return null;
+  return {
+    heading: '🔔 후속 카드 제안',
+    body: `팔로워 데이터 ${n}일 축적 완료 — 제목 유형(정보/후킹/질문) A/B 분석·업로드 시각-성과 교차 분석을 붙일 때가 됐습니다. 클로드 세션에서 "후속 카드 진행"이라고 말씀하세요.`,
+  };
+}
+
 /** 브리핑 섹션(동기 — 파일만 읽음) — 최신 스냅샷과 직전 스냅샷의 차이. 기록 없으면 null(섹션 생략). */
 export function followersSection(): { heading: string; body: string } | null {
   const snaps = readSnapshots(activeBrandSlug() || '');

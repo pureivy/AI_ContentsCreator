@@ -11,7 +11,7 @@ import { markdownHeadings } from '../content/priorCoverage';
 import { readNaverIndexingReport, GRACE_DAYS } from '../analytics/naverIndexing';
 import { llmWiki } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
-import { followersSection } from '../analytics/followers';
+import { followersSection, followersFollowupNudge } from '../analytics/followers';
 import type { NotifyMessage } from './notify';
 import { kstDate } from '../util/time';
 
@@ -118,6 +118,7 @@ export function buildBriefing(): NotifyMessage {
     if (n > 0) sections.push({ heading: '🔔 대기 승인', body: `${n}건 — 결재 대기 중` });
   } catch { /* */ }
   try { const fw = followersSection(); if (fw) sections.push(fw); } catch { /* 팔로워 섹션 실패 무해 */ }
+  try { const nd = followersFollowupNudge(); if (nd) sections.push(nd); } catch { /* 넛지 실패 무해 */ }
   try { const dv = diversityWatchSection(); if (dv) sections.push(dv); } catch { /* 감시 실패 무해 */ }
   try { const ix = naverIndexingSection(); if (ix) sections.push(ix); } catch { /* 색인 섹션 실패 무해 */ }
   return composeBriefing(date, sections);
