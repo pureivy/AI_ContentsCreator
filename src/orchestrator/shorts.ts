@@ -135,7 +135,16 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       console.log(`[숏폼] ${m}`); io.bus?.emit('log', { message: m });
       const fixed = parsePlan(await callRoleJSON<PlanRaw>(io, 'shorts_writer', sys,
         `${user}\n\n[단독 이해 검산 실패 — 아래 문제를 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지)]\n${probs.map((p) => `- ${p}`).join('\n')}`, 2600, false));
-      if (fixed) plan = fixed; // 수정본 파싱 실패 시 원본 유지(검산이 기획을 막지 않는다)
+      // 수정본 파싱 실패 시 원본 유지. 수정 라운드가 대본만 고치고 메타(제목 후보·설명·해시태그)를
+      // 빠뜨려도 원본 것을 승계(무손실 병합 — parsePlan 의 [topic] 폴백 제목이 원본을 덮지 않게).
+      if (fixed) {
+        plan = {
+          ...fixed,
+          titles: fixed.titles.length > 1 ? fixed.titles : plan.titles,
+          description: fixed.description || plan.description,
+          hashtags: fixed.hashtags.length ? fixed.hashtags : plan.hashtags,
+        };
+      }(검산이 기획을 막지 않는다)
     }
   } catch { /* 무해 */ }
   return plan;

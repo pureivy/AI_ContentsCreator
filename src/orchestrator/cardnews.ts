@@ -135,7 +135,11 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
       console.log(`[카드뉴스] ${m}`); io.bus?.emit('log', { message: m });
       const j2 = await callRoleJSON<PlannerRaw>(io, 'cardnews_planner', sys,
         `${user}\n\n[단독 이해 검산 실패 — 아래 문제를 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지)]\n${probs.map((p) => `- ${p}`).join('\n')}`, 2600, false);
-      if (usable(j2)) { const fixed = toPlan(j2); if (fixed) plan = fixed; } // 수정본 불량 시 원본 유지
+      if (usable(j2)) {
+        const fixed = toPlan(j2); // 수정본 불량 시 원본 유지
+        // 수정 라운드가 슬라이드만 고치고 caption/hashtags 를 빠뜨려도 원본 것을 승계(무손실 병합).
+        if (fixed) plan = { ...fixed, caption: fixed.caption || plan.caption, hashtags: fixed.hashtags.length ? fixed.hashtags : plan.hashtags };
+      }
     }
   } catch { /* 무해 */ }
   return plan;
