@@ -152,8 +152,10 @@ export default function PerformanceView() {
             <div className="perf-card"><div className="perf-num">{(ch?.summary.reelsViews ?? 0).toLocaleString()}</div><div className="perf-lbl" title="인스타그램 릴스만의 조회 합계 — 페이스북은 합산하지 않고 릴스 표의 페이스북 그룹에서 따로 봅니다">인스타 릴스 조회</div></div>
             <div className="perf-card"><div className="perf-num">{(ch?.summary.cardnewsViews ?? 0).toLocaleString()}</div><div className="perf-lbl" title="인스타그램 카드뉴스만의 조회 합계 — 페이스북 사진 게시물은 조회·노출 지표를 제공하지 않아 합산할 값이 없습니다(반응만 수집)">인스타 카드뉴스 조회</div></div>
             <div className="perf-card"><div className="perf-num">{(ch?.summary.fbReelViews ?? 0).toLocaleString()}</div><div className="perf-lbl" title="페이스북 페이지 릴스 조회 합계. 페이스북은 영상만 조회 지표가 있어 카드뉴스는 여기 포함되지 않습니다">페이스북 릴스 조회</div></div>
-            {/* 좋아요는 조회와 단위가 달라 합계에 섞지 않는다 — 별도 카드로 두고 라벨에 단위를 밝힌다. */}
-            <div className="perf-card"><div className="perf-num">{(ch?.summary.fbLikes ?? 0).toLocaleString()}</div><div className="perf-lbl" title="페이스북 페이지의 릴스+카드뉴스 좋아요 합계 — 조회와 단위가 다르므로 아래 조회 합계에는 포함되지 않습니다">페이스북 좋아요</div></div>
+            {/* 좋아요는 조회와 단위가 달라 합계에 섞지 않는다 — 표 그룹과 1:1 로 분리(쇼츠 릴스/카드뉴스)해
+                각 카드가 해당 표의 합과 정확히 일치하게 한다(합산 카드는 어느 표와도 안 맞아 보임). */}
+            <div className="perf-card"><div className="perf-num">{(ch?.summary.fbReelLikes ?? 0).toLocaleString()}</div><div className="perf-lbl" title="페이스북 릴스 좋아요 합계 — 쇼츠 표의 페이스북 👍 열 합과 일치합니다">페북 릴스 좋아요</div></div>
+            <div className="perf-card"><div className="perf-num">{(ch?.summary.fbPostLikes ?? 0).toLocaleString()}</div><div className="perf-lbl" title="페이스북 카드뉴스 게시물 좋아요 합계 — 카드뉴스 표의 페이스북 좋아요 열 합과 일치합니다">페북 카드뉴스 좋아요</div></div>
             {/* 전체 합계 = 화면에 있는 조회 카드 5개의 합(사용자가 눈으로 검산할 수 있게 같은 값에서 계산). */}
             <div className="perf-card total">
               <div className="perf-num">{totalViews.toLocaleString()}</div>

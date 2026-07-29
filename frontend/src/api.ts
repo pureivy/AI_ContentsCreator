@@ -971,7 +971,7 @@ export interface PerfData {
   channels?: {
     shorts: ShortsPerfRow[];
     cardnews: CardnewsPerfRow[];
-    summary: { shortsYtViews: number; reelsViews: number; cardnewsViews: number; fbReelViews: number; fbLikes: number };
+    summary: { shortsYtViews: number; reelsViews: number; cardnewsViews: number; fbReelViews: number; fbReelLikes: number; fbPostLikes: number };
   };
 }
 export async function fetchPerformance(): Promise<PerfData | null> {

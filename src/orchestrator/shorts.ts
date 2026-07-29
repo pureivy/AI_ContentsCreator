@@ -21,6 +21,7 @@ import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
 import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues } from './standaloneQa';
+import { promiseStore } from '../content/promises';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion } from './shortsMotionDirector';
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame } from '../tools/shortsRender';
@@ -49,6 +50,8 @@ interface Plan {
   scenes: ShortsScene[];
   description: string;
   hashtags: string[];
+  /** 다음 편 예고 — CTA 에 예고를 넣었을 때만 작가가 선언(예고 대장 등록 → 자율 틱이 시기 도래 시 이행). */
+  next?: { topic: string; window?: string };
 }
 
 interface JobIO { bus?: EventBus; signal?: AbortSignal }
@@ -100,14 +103,15 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     `씬 ${n}개의 유튜브 숏폼 대본을 기획하라. 씬1=훅(3패턴 중 택1), 씬2=전제(이 영상이 무엇에 대한 이야기이고 왜 문제/중요한지를 못박는다 — 원문의 핵심 인과 한 줄), 마지막 씬=CTA.`,
     '시청자는 원문 블로그를 본 적이 없다 — 영상 단독으로 완결되게 써라: 핵심 주제어(식물명·행위명 등)를 훅 또는 씬2에서 반드시 명시하고, 지시어·축약어("짝"·"그 방법"·"두 그루" 류)는 앞 씬에서 뜻을 세운 뒤에만 사용하라.',
     'CTA 씬은 팔로우할 이유를 담아라 — 이 채널이 계속 주는 가치 한 구절(브랜드 맥락에 맞게) 또는 다음 편 예고 중 하나. "구독과 좋아요 부탁드려요" 같은 기계적 문구 금지.',
+    '다음 편 예고를 CTA 에 넣었으면 JSON 의 next 필드에 그 주제와 적절한 시기("N월")를 선언하라 — 예고는 시스템이 약속으로 기록해 그 시기에 실제로 제작한다. 지킬 수 있는 예고만 하고, 예고를 안 했으면 next 를 생략하라.',
     '내레이션은 TTS 낭독용: 구어체 존댓말, 숫자는 한글로("30%"→"삼십 퍼센트"), 이모지·괄호 지문 금지.',
     '본문 씬 내레이션은 반드시 2문장(합쳐서 40~65자, 낭독 6~9초) — 방법 한 문장 + 이유/효과 한 문장. 씬2(전제)는 45~70자까지 허용. 훅·CTA 씬은 1~2문장(20~40자). 총 낭독 시간 30~55초를 맞춘다.',
     'screenText 는 씬당 1줄 15자 이내 키워드 요약(비워도 됨).',
     '씬 kind(선택): 씬1="hook", 마지막 씬="cta". 본문 씬 중 어울리는 곳에만 "stat"(핵심 수치 1개: value 숫자·unit 단위·label 15자)·"list"(items 2~4개, 각 18자)·"quote"(text 40자, source 출처) — 억지 배정 금지, 애매하면 kind 생략.',
     '수치 규칙: stat.value 는 원문(블로그 초안)에 있는 수치 또는 대본 구조상 자명한 숫자(단계 수·항목 수)만. 불확실하면 stat 을 쓰지 마라. narration 은 수치를 한글로 낭독하되 stat.value 는 아라비아 숫자.',
-    'JSON 형식: {"title":"대표 제목","titles":["정보형","후킹형","질문형"],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"}}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"]}',
+    'JSON 형식: {"title":"대표 제목","titles":["정보형","후킹형","질문형"],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"}}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}',
   ].filter(Boolean).join('\n');
-  type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown }>; description?: unknown; hashtags?: unknown };
+  type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown }>; description?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
   const sys = '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.';
   const parsePlan = (j: PlanRaw | null): Plan | null => {
     if (!j || !Array.isArray(j.scenes) || !j.scenes.length) return null;
@@ -118,12 +122,16 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     })).filter((s) => s.narration);
     if (scenes.length < 3) return null;
     const titles = (Array.isArray(j.titles) ? j.titles : []).map((t) => stripEmoji(String(t ?? '')).trim()).filter(Boolean).slice(0, 3);
+    const next = j.next && typeof j.next.topic === 'string' && j.next.topic.trim()
+      ? { topic: j.next.topic.trim().slice(0, 120), window: typeof j.next.window === 'string' && j.next.window.trim() ? j.next.window.trim() : undefined }
+      : undefined;
     return {
       title: stripEmoji(String(j.title ?? '')).trim().slice(0, 60) || titles[0] || topic,
       titles: titles.length ? titles : [topic],
       scenes,
       description: String(j.description ?? '').trim().slice(0, 500),
       hashtags: normalizeHashtags(j.hashtags),
+      ...(next ? { next } : {}),
     };
   };
   let plan = parsePlan(await callRoleJSON<PlanRaw>(io, 'shorts_writer', sys, user, 2200, true));
@@ -332,6 +340,18 @@ export async function runShortsJob(
           id, topic: done.topic, brand: done.brand, durationSec: r.durationSec, scenes: r.sceneCount,
           sourcePieceId: done.sourcePieceId, writer: done.writer, director: done.director,
         }, r.videoPath);
+      }
+      // 예고 대장 등록 — CTA 에 다음 편 예고를 선언했으면 약속으로 기록(자율 틱이 시기 도래 시 이행). 실패 무해.
+      // brand 는 잡의 것을 명시(null=범용) — 라이브 activeBrand 로의 오귀속 방지.
+      if (plan.next?.topic) {
+        try {
+          const pr = promiseStore().create({
+            topic: plan.next.topic, window: plan.next.window,
+            sourceKind: 'shorts', sourceId: id, sourceTopic: plan.title, brand: done?.brand ?? null,
+          });
+          if (pr) say(`예고 등록 — "${pr.topic.slice(0, 30)}"${pr.window ? ` (${pr.window})` : ''}`);
+          else say('예고 등록 보류 — 미이행 약속이 가득(백로그 캡)');
+        } catch { /* 무해 */ }
       }
     }
 

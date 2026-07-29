@@ -20,6 +20,7 @@ import { stripEmoji } from '../output/render';
 import { cardNewsStore } from '../content/cardnews';
 import { notifyCardnewsReady } from '../autonomy/contentNotify';
 import { standaloneIssues } from './standaloneQa';
+import { promiseStore } from '../content/promises';
 import { brandContext } from '../content/brand';
 import { priorCoverageBrief } from '../content/priorCoverage';
 import { generateImagesForDraft, searchCardRefs } from '../tools/blog_skills';
@@ -42,7 +43,11 @@ export function resolveForcedPreset(forced: string | undefined): string | undefi
 }
 
 interface PlanSlide { headline: string; body: string }
-interface Plan { title: string; slides: PlanSlide[]; caption: string; hashtags: string[] }
+interface Plan {
+  title: string; slides: PlanSlide[]; caption: string; hashtags: string[];
+  /** 다음 편 예고 — 캡션에 예고를 넣었을 때만 기획자가 선언(예고 대장 등록 → 자율 틱이 시기 도래 시 이행). */
+  next?: { topic: string; window?: string };
+}
 
 /** 잡 입출력 컨텍스트 — 버스가 있으면 오피스 뷰/활동 피드/타임라인이 실시간 연동된다. */
 interface JobIO { bus?: EventBus; signal?: AbortSignal }
@@ -95,10 +100,11 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
       : '슬라이드 수는 스토리라인의 핵심 메시지 개수에 맞게 3~8장 사이에서 스스로 정하라(표지 1 + 본문 여러 장 + 마무리 1). 억지로 채우거나 줄이지 말고 내용 밀도에 맞춰라.',
     '표지와 마무리 장의 body 는 비우거나 한 줄로 짧게. 카드 텍스트에 이모지 금지(캡션에는 허용).',
     'caption 은 인스타그램 게시글 본문 — 한 덩어리 문장 금지. 슬라이드 body 처럼 줄바꿈 \\n 으로 문단을 나눠 읽기 쉽게: 첫 줄 훅 한 문장(핵심 주제어 포함) → 빈 줄 → 핵심 포인트 2~4줄(각 줄 짧게, 줄마다 \\n) → 빈 줄 → 마무리 행동유도 한 줄(저장·팔로우 유도 — 이 계정이 계속 주는 가치 한 구절과 함께, 기계적 "팔로우 부탁" 문구 금지). 이모지는 적당히.',
-    'JSON 형식: {"title":"...","slides":[{"headline":"...","body":"줄바꿈은 \\n"}],"caption":"훅 한 줄\\n\\n핵심 포인트 한 줄\\n다음 포인트 한 줄\\n\\n마무리 행동유도","hashtags":["#태그1","#태그2"]}',
+    '다음 편 예고를 캡션에 넣었으면 JSON 의 next 필드에 그 주제와 적절한 시기("N월")를 선언하라 — 예고는 시스템이 약속으로 기록해 그 시기에 실제로 제작한다. 지킬 수 있는 예고만 하고, 예고를 안 했으면 next 를 생략하라.',
+    'JSON 형식: {"title":"...","slides":[{"headline":"...","body":"줄바꿈은 \\n"}],"caption":"훅 한 줄\\n\\n핵심 포인트 한 줄\\n다음 포인트 한 줄\\n\\n마무리 행동유도","hashtags":["#태그1","#태그2"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}',
   ].filter(Boolean).join('\n');
   type PlannerSlide = { headline?: unknown; body?: unknown };
-  type PlannerRaw = { title?: unknown; slides?: PlannerSlide[]; caption?: unknown; hashtags?: unknown };
+  type PlannerRaw = { title?: unknown; slides?: PlannerSlide[]; caption?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
   const sys = '당신은 인스타그램 카드뉴스 기획자입니다. 요청된 JSON 스키마만 출력합니다.';
   const usable = (x: PlannerRaw | null): x is PlannerRaw & { slides: PlannerSlide[] } =>
     !!x && Array.isArray(x.slides) && x.slides.length > 0;
@@ -115,11 +121,15 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
       body: cleanLine(s?.body, 220),
     })).filter((s) => s.headline);
     if (slides.length < 2) return null;
+    const next = raw.next && typeof raw.next.topic === 'string' && raw.next.topic.trim()
+      ? { topic: raw.next.topic.trim().slice(0, 120), window: typeof raw.next.window === 'string' && raw.next.window.trim() ? raw.next.window.trim() : undefined }
+      : undefined;
     return {
       title: cleanLine(raw.title, 60) || topic,
       slides,
       caption: String(raw.caption ?? '').trim().slice(0, 1000),
       hashtags: normalizeHashtags(raw.hashtags),
+      ...(next ? { next } : {}),
     };
   };
   let plan = toPlan(j);
@@ -412,6 +422,18 @@ export async function runCardNewsJob(
           id, topic: done.topic, brand: done.brand, slides: ok,
           sourcePieceId: done.sourcePieceId, planner: done.planner, designer: done.designer,
         }, dir);
+      }
+      // 예고 대장 등록 — 캡션에 다음 편 예고를 선언했으면 약속으로 기록(자율 틱이 시기 도래 시 이행). 실패 무해.
+      // brand 는 잡의 것을 명시(null=범용) — 라이브 activeBrand 로의 오귀속 방지.
+      if (plan.next?.topic) {
+        try {
+          const pr = promiseStore().create({
+            topic: plan.next.topic, window: plan.next.window,
+            sourceKind: 'cardnews', sourceId: id, sourceTopic: plan.title, brand: done?.brand ?? null,
+          });
+          if (pr) say(`예고 등록 — "${pr.topic.slice(0, 30)}"${pr.window ? ` (${pr.window})` : ''}`);
+          else say('예고 등록 보류 — 미이행 약속이 가득(백로그 캡)');
+        } catch { /* 무해 */ }
       }
     }
   } catch (e) {

@@ -63,6 +63,7 @@ import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shor
 import { syncCardnewsPerformance, cardnewsPerfStale } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
+import { promiseStore } from '../content/promises';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
 import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor } from '../analytics/performance';
 import { readStrategy } from '../analytics/strategy';
@@ -2198,8 +2199,12 @@ function performanceHandler(c: Context): Response {
         // 페이스북 — 릴스만 조회 지표가 있다(사진 게시물은 조회·노출 미제공, 실측 확인).
         // 그래서 페북은 '조회'와 '좋아요'를 따로 보낸다: 좋아요를 조회 합계에 섞으면 단위가 다른 수를 더하게 된다.
         fbReelViews: shortsRows.reduce((n, r) => n + (r.fb?.views ?? 0), 0),
-        fbLikes: shortsRows.reduce((n, r) => n + (r.fb?.likes ?? 0), 0)
-          + cardRows.reduce((n, r) => n + (r.fb?.likes ?? 0), 0),
+        // 좋아요는 표 그룹과 1:1 로 분리(쇼츠 릴스 / 카드뉴스 게시물) — 합쳐 놓으면 어느 표와도
+        // 안 맞아 보인다(사용자 보고 2026-07-30: 카드 35 vs 카드뉴스 표 16).
+        fbReelLikes: shortsRows.reduce((n, r) => n + (r.fb?.likes ?? 0), 0),
+        fbPostLikes: cardRows.reduce((n, r) => n + (r.fb?.likes ?? 0), 0),
+        // @deprecated 합산 별칭 — 구 프론트 번들(브라우저 캐시)이 0 을 표시하지 않게 유지. 새 UI 는 위 두 필드 사용.
+        fbLikes: shortsRows.reduce((n, r) => n + (r.fb?.likes ?? 0), 0) + cardRows.reduce((n, r) => n + (r.fb?.likes ?? 0), 0),
       },
     },
   });
@@ -2321,6 +2326,38 @@ const followersHandler = async (c: Context): Promise<Response> => {
 };
 app.get('/followers', followersHandler);
 app.get('/api/followers', followersHandler);
+// 예고 대장 — 콘텐츠가 한 "다음 편" 약속 조회·수동 등록·폐기. 자율 틱이 시기 도래분을 신규 아이디어보다 먼저 이행.
+const promisesListHandler = (c: Context): Response => {
+  const brand = activeBrandSlug() || '';
+  const all = promiseStore().list().filter((p) => (p.brand ?? '') === brand);
+  return c.json({
+    pending: promiseStore().pending(brand),
+    fulfilled: all.filter((p) => p.status === 'fulfilled'),
+    droppedCount: all.filter((p) => p.status === 'dropped').length,
+  });
+};
+app.get('/promises', promisesListHandler);
+app.get('/api/promises', promisesListHandler);
+const promiseCreateHandler = async (c: Context): Promise<Response> => {
+  const b = await c.req.json<{ topic?: string; window?: string; sourceTopic?: string }>().catch(() => ({} as { topic?: string; window?: string; sourceTopic?: string }));
+  const topic = (b.topic ?? '').trim();
+  if (!topic) return c.json({ error: '주제(topic)가 비었습니다.' }, 400);
+  const p = promiseStore().create({ topic, window: b.window, sourceKind: 'manual', sourceTopic: b.sourceTopic });
+  if (!p) return c.json({ error: '등록 불가 — 미이행 약속 백로그가 가득이거나 주제가 비었습니다.' }, 409);
+  // 시기 해석 실패는 명시적으로 알린다 — dueMonth null 은 자동 이행 대상이 아니라 브리핑 노출·수동 처리 전용.
+  return c.json({ promise: p, note: p.dueMonth === null ? '시기(window)를 해석하지 못했습니다 — "N월" 형식이 아니면 자동 이행되지 않습니다(수동 처리 전용).' : undefined });
+};
+app.post('/promises', promiseCreateHandler);
+app.post('/api/promises', promiseCreateHandler);
+const promiseDropHandler = (c: Context): Response => {
+  const id = c.req.param('id') ?? '';
+  const cur = promiseStore().get(id);
+  // 브랜드 스코프 — 목록과 동일 기준(활성 브랜드의 약속만 폐기 가능).
+  if (!cur || (cur.brand ?? '') !== (activeBrandSlug() || '')) return c.json({ error: 'unknown promise' }, 404);
+  return c.json({ promise: promiseStore().update(id, { status: 'dropped' }) });
+};
+app.post('/promises/:id/drop', promiseDropHandler);
+app.post('/api/promises/:id/drop', promiseDropHandler);
 
 // ============================================================
 // 회사 — 프론트 계약(/company, teams 구조) + 자체 UI(/api/company)
@@ -3175,7 +3212,7 @@ function canGenerateNew(pieces: Piece[]): boolean {
 }
 
 // 자율 틱 작업 유형 — 콘텐츠 piece(재개/신규) 또는 지식 리서치 미션(조사→토론→두뇌 적재→학습).
-type AutoWork = { kind: 'piece'; piece: Piece } | { kind: 'research'; title: string; brand: string }
+type AutoWork = { kind: 'piece'; piece: Piece; promiseId?: string } | { kind: 'research'; title: string; brand: string }
   | { kind: 'shorts'; pieceId: string; title: string } | { kind: 'cardnews'; pieceId: string; title: string };
 
 async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
@@ -3191,6 +3228,26 @@ async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
     if (title) return { kind: 'research', title, brand: tickBrand };
   }
   if (canGenerateNew(pieces)) {  // 케이던스/백로그 초과면 신규 블로그 보류 → 아래 파생 케이던스로 폴백.
+    // 예고 이행 우선 — 콘텐츠가 시청자에게 한 "다음 편" 약속은 신규 아이디어보다 먼저 갚는다
+    // (사용자 지적 2026-07-30: 예고만 하고 안 지키면 신뢰 역효과). 시기 명시+시즌 창 안의 약속만
+    // 자동 대상(무기한 선점 방지 — 리뷰 반영). 이행 piece 가 ready 되면 기존 자동 파생이
+    // 카드뉴스·쇼츠까지 이어주고, priorCoverage 가 앞선 편의 앵글을 주입한다.
+    try {
+      // 정합 복원 — 이행 piece 가 삭제·종료실패(stage:'error')면 약속을 pending 으로 되살린다
+      // ("갚은 척 기록만 남는" 신뢰 역전 방지). 저비용이라 매 틱 수행.
+      const reverted = promiseStore().reconcile(tickBrand, (pid) => {
+        const p = pieceStore().get(pid);
+        return !p ? 'missing' : p.stage === 'error' ? 'error' : 'ok';
+      });
+      if (reverted) console.log(`[auto-cycle] 예고 정합 복원 — ${reverted}건 pending 복귀(이행 piece 유실/실패)`);
+      const due = promiseStore().nextDue(tickBrand);
+      if (due) {
+        const piece = pieceStore().create({ title: due.topic, brand: tickBrand || undefined, auto: true });
+        // fulfilled 마킹은 여기서 하지 않는다 — launch 가 런을 실제로 시작한 뒤에만(아래 launch 참조).
+        console.log(`[auto-cycle] 예고 이행 착수 — "${due.topic.slice(0, 40)}" (출처: ${due.sourceKind}${due.window ? ` · ${due.window}` : ''})`);
+        return { kind: 'piece', piece, promiseId: due.id };
+      }
+    } catch { /* 예고 대장 실패 무해 — 신규 아이디어로 폴백 */ }
     const idea = await proposeContentIdeas(signal);
     if (idea) return { kind: 'piece', piece: pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche, brand: activeBrandSlug() || undefined, auto: true }) };
   }
@@ -3243,6 +3300,9 @@ const stopAutoCycle = startAutoCycle<AutoWork>({
     }
     const id = launchRun(w.piece.title, { auto: true, pieceId: w.piece.id, keyword: w.piece.keyword });
     if (id) pieceStore().update(w.piece.id, { runId: id, stage: 'draft' }); // 시작 성공 → draft(진행중). ''(억제)면 유지, 다음 틱 재개.
+    // 예고 이행 마킹 — 런이 실제로 시작됐을 때만(억제('')면 piece 가 idea 로 남아 다음 틱 재개, 약속도 pending 유지).
+    // 이후 piece 가 종료 실패하면 위 reconcile 이 pending 으로 복원한다.
+    if (id && w.promiseId) { try { promiseStore().update(w.promiseId, { status: 'fulfilled', fulfilledPieceId: w.piece.id }); } catch { /* 무해 */ } }
   },
   describe: (w) => (w.kind === 'research' ? `리서치: ${w.title}`
     : w.kind === 'shorts' ? `쇼츠 파생: ${w.title}`

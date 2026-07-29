@@ -12,6 +12,7 @@ import { readNaverIndexingReport, GRACE_DAYS } from '../analytics/naverIndexing'
 import { llmWiki } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
 import { followersSection, followersFollowupNudge } from '../analytics/followers';
+import { promiseStore } from '../content/promises';
 import type { NotifyMessage } from './notify';
 import { kstDate } from '../util/time';
 
@@ -119,6 +120,17 @@ export function buildBriefing(): NotifyMessage {
   } catch { /* */ }
   try { const fw = followersSection(); if (fw) sections.push(fw); } catch { /* 팔로워 섹션 실패 무해 */ }
   try { const nd = followersFollowupNudge(); if (nd) sections.push(nd); } catch { /* 넛지 실패 무해 */ }
+  try {
+    // 예고 대장 — 콘텐츠가 시청자에게 한 "다음 편" 약속의 미이행 현황(자율 틱이 시기 도래 시 이행).
+    const pend = promiseStore().pending(activeBrandSlug() || '');
+    if (pend.length) {
+      const nxt = pend[0]!;
+      sections.push({
+        heading: '🤝 예고 대장',
+        body: `미이행 ${pend.length}건 — 다음: ${nxt.window ? `${nxt.window} ` : '다음 슬롯 '}"${nxt.topic.slice(0, 40)}"`,
+      });
+    }
+  } catch { /* 예고 섹션 실패 무해 */ }
   try { const dv = diversityWatchSection(); if (dv) sections.push(dv); } catch { /* 감시 실패 무해 */ }
   try { const ix = naverIndexingSection(); if (ix) sections.push(ix); } catch { /* 색인 섹션 실패 무해 */ }
   return composeBriefing(date, sections);
