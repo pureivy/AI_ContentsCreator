@@ -140,3 +140,31 @@ export function naverTrackingDue(p: {
   const kstDay = (d: Date): string => d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
   return kstDay(new Date(lastMeasuredAt)) !== kstDay(now);
 }
+
+/**
+ * 표본 전체의 유입 키워드 상위 집계(순수) — 최신 표본만 읽으면 유입이 빈 새 표본이 과거 유입을
+ * 가린다(실측 2026-07-30: 일일 추적 표본이 "습도 낮추는법" 유입을 '—' 로 덮음). 어드바이저 유입
+ * 수치는 누적일 수 있어 합산 대신 키워드별 최대값으로 병합(일일 표본 합산은 이중 계상 위험).
+ */
+export function topInflow(samples: MetricSample[], limit = 5): SearchInflow[] {
+  const best = new Map<string, number>();
+  for (const s of samples) {
+    for (const k of s.searchInflow ?? []) {
+      const key = (k.keyword ?? '').trim();
+      if (!key) continue;
+      const c = Number(k.count) || 0;
+      if (c >= (best.get(key) ?? -1)) best.set(key, c);
+    }
+  }
+  return [...best.entries()].map(([keyword, count]) => ({ keyword, count }))
+    .sort((a, b) => b.count - a.count).slice(0, limit);
+}
+
+/** 최근 표본부터 첫 유효 체류값(순수) — 최신 표본에 체류가 없어도 직전 측정값을 가리지 않게. */
+export function latestDwell(samples: MetricSample[]): number | null {
+  for (let i = samples.length - 1; i >= 0; i--) {
+    const d = samples[i]?.dwellSec;
+    if (typeof d === 'number' && d > 0) return d;
+  }
+  return null;
+}

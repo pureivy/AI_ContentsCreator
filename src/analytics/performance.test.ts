@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseManualMetrics, latestSampleBySource, viewsSeriesBySource, naverTrackingDue, type MetricSample } from './performance';
+import { parseManualMetrics, latestSampleBySource, viewsSeriesBySource, naverTrackingDue, topInflow, latestDwell, type MetricSample } from './performance';
 import { performanceSignal } from './reinforce';
 
 // 스파크라인용 시계열(2026-07-20) — 소스 접두로 거른 샘플을 '하루 1점(그날 마지막 값)'으로 압축해
@@ -97,5 +97,22 @@ describe('naverTrackingDue — 일일 연속 추적 게이트(수집은 매일, 
     expect(naverTrackingDue({ ...base, publishedTs: '2026-07-01T09:00:00+09:00' }, null, 14, now)).toBe(false);
     expect(naverTrackingDue({ ...base, publishedUrl: undefined }, null, 14, now)).toBe(false);
     expect(naverTrackingDue({ ...base, stage: 'ready' }, null, 14, now)).toBe(false);
+  });
+});
+
+describe('topInflow / latestDwell — 최신 빈 표본이 과거 값을 가리지 않게', () => {
+  const s = (over: Partial<MetricSample>): MetricSample => ({ measuredAt: '2026-07-30T00:00:00Z', views: 1, searchInflow: [], ...over });
+  it('유입: 전 이력에서 키워드별 최대값 병합·상위 정렬(합산 이중계상 방지)', () => {
+    const samples = [
+      s({ searchInflow: [{ keyword: '습도 낮추는법', count: 1 }] }),
+      s({ searchInflow: [] }),                                          // 일일 추적 빈 표본 — 가리면 안 됨
+      s({ searchInflow: [{ keyword: '습도 낮추는법', count: 3 }, { keyword: '장마 곰팡이', count: 2 }] }),
+    ];
+    expect(topInflow(samples)).toEqual([{ keyword: '습도 낮추는법', count: 3 }, { keyword: '장마 곰팡이', count: 2 }]);
+  });
+  it('체류: 최근 표본부터 첫 유효값(빈 최신 표본 스킵), 전부 없으면 null', () => {
+    expect(latestDwell([s({ dwellSec: 45 }), s({})])).toBe(45);
+    expect(latestDwell([s({ dwellSec: 45 }), s({ dwellSec: 60 }), s({})])).toBe(60);
+    expect(latestDwell([s({}), s({})])).toBeNull();
   });
 });

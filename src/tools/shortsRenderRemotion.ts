@@ -12,7 +12,11 @@ import type { ShortsScene, ShortsRenderResult } from './shortsCommon';
 
 export async function renderShortsVideoRemotion(
   dir: string, scenes: ShortsScene[], images: Array<string | null>,
-  opts: { voice?: string; instructions?: string; signal?: AbortSignal; clips?: Array<string | null> } = {},
+  opts: {
+    voice?: string; instructions?: string; signal?: AbortSignal; clips?: Array<string | null>;
+    /** 자막 옵션 — 위치(하단 여백 %)·키워드 강조색(AutoShorts caption prop 으로 전달). */
+    caption?: { bottomPct?: number; keyword?: string };
+  } = {},
 ): Promise<ShortsRenderResult> {
   const entry = path.resolve('remotion/index.ts');
   if (!fs.existsSync(entry)) return { ok: false, issues: ['remotion 엔트리 부재'] };
@@ -50,7 +54,7 @@ export async function renderShortsVideoRemotion(
     };
   }));
   const totalFrames = prepared.reduce((a, p) => a + p.durationInFrames, 0);
-  const inputProps = { scenes: propScenes, totalFrames };
+  const inputProps = { scenes: propScenes, totalFrames, ...(opts.caption ? { caption: opts.caption } : {}) };
 
   // 3) 번들 + 렌더
   const videoPath = path.join(dir, 'final.mp4');

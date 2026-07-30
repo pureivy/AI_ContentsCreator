@@ -313,7 +313,16 @@ export async function runShortsJob(
     say(CONFIG.shortsRenderer === 'ffmpeg' ? '영상 조립 시작 — ffmpeg 슬라이드쇼' : '영상 조립 시작 — Remotion 모션그래픽');
     let r = null as Awaited<ReturnType<typeof renderShortsVideo>> | null;
     if (CONFIG.shortsRenderer !== 'ffmpeg') {
-      try { r = await renderShortsVideoRemotion(dir, plan.scenes, images, { clips: cv.clips, signal: opts.signal }); }
+      try {
+        r = await renderShortsVideoRemotion(dir, plan.scenes, images, {
+          clips: cv.clips, signal: opts.signal,
+          // 자막 옵션 — 위치(플랫폼 UI 가림 회피)·키워드 강조색(설정 기반, A/B 선택 후 기본값 확정).
+          caption: {
+            bottomPct: CONFIG.shortsCaptionBottomPct,
+            ...(CONFIG.shortsCaptionKeyword && short.keyword ? { keyword: short.keyword } : {}),
+          },
+        });
+      }
       catch (e) { say(`모션 렌더 예외 → ffmpeg 폴백: ${e instanceof Error ? e.message.slice(0, 80) : e}`); r = null; }
     }
     if (!r || !r.ok) {

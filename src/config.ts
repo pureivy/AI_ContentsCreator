@@ -124,6 +124,10 @@ export interface Config {
   readonly autoYtUpload: boolean;
   /** 쇼츠 성과 측정창(일) — 업로드 후 이 기간 매일 수집, 경과 시 강화 1회. */
   readonly shortsPerfDays: number;
+  /** 쇼츠 자막 하단 여백(%) — 플랫폼 UI 가림 회피용 위치 조정(5~45 클램프). */
+  readonly shortsCaptionBottomPct: number;
+  /** 쇼츠 자막 키워드 강조색 사용 여부. */
+  readonly shortsCaptionKeyword: boolean;
 
   // --- 음성 입출력 ---
   /** TTS 제공자: 'elevenlabs'(ElevenLabs, 고품질) | 'openai'(gpt-4o-mini-tts) | 'say'(macOS 로컬, 폴백). 기본 elevenlabs. 폴백 체인: elevenlabs→openai→say(키/가용성에 따라 자동). */
@@ -262,6 +266,10 @@ export const CONFIG: Config = {
   shortsI2vModel: env('SHORTS_I2V_MODEL', 'fal-ai/wan/v2.2-5b/image-to-video'), // LTX-2 는 가로 전용(실측) — 세로 쇼츠 기본은 Wan 5B
   autoYtUpload: envBool('AUTO_YT_UPLOAD', false),
   shortsPerfDays: Math.max(1, envInt('SHORTS_PERF_DAYS', 7)),
+  // 자막 하단 여백(%) — 유튜브 쇼츠·릴스 하단 UI(~25%)에 안 가리는 안전 영역. 기본 32 + 키워드 강조색
+  // = 사용자 A/B/C/D 비교 후 C안 확정(2026-07-30). 종전(20·무강조)으로 되돌리려면 env 로 조정.
+  shortsCaptionBottomPct: Math.min(45, Math.max(5, envInt('SHORTS_CAPTION_BOTTOM_PCT', 32))),
+  shortsCaptionKeyword: envBool('SHORTS_CAPTION_KEYWORD', true),
 
   ttsProvider: env('TTS_PROVIDER', 'elevenlabs'),
   openaiTtsModel: env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),

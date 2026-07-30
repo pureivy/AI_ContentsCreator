@@ -65,7 +65,7 @@ import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
 import { promiseStore } from '../content/promises';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
-import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor, appendMetrics, naverTrackingDue } from '../analytics/performance';
+import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor, appendMetrics, naverTrackingDue, topInflow, latestDwell } from '../analytics/performance';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
@@ -2120,14 +2120,17 @@ function performanceHandler(c: Context): Response {
     .filter(brandMatch)
     .filter((p) => !!p.publishedUrl || ['published', 'measured', 'reflected'].includes(p.stage))
     .map((p) => {
-      const m = latestMetrics(p.id);
+      // 최신 표본만 읽으면 유입·체류가 빈 새 표본(일일 추적)이 과거 값을 '—' 로 가린다(실측 2026-07-30)
+      // — 유입은 전 이력 상위 집계, 체류는 최근 유효값, 조회는 누적치라 최신값 그대로.
+      const all = readMetrics(p.id);
+      const m = all.length ? all[all.length - 1]! : null;
       return {
         id: p.id, title: p.title, stage: p.stage, keyword: p.keyword, subNiche: p.subNiche,
         publishedUrl: p.publishedUrl, seoScore: p.seoScore,
         date: p.publishedTs ?? p.createdTs, // 발행일(없으면 작성일 폴백 — 레거시 piece)
-        views: m ? m.views : null, dwellSec: m?.dwellSec ?? null,
-        inflow: m?.searchInflow ?? [], measuredAt: m?.measuredAt ?? null,
-        source: m?.source, samples: readMetrics(p.id).length,
+        views: m ? m.views : null, dwellSec: latestDwell(all),
+        inflow: topInflow(all), measuredAt: m?.measuredAt ?? null,
+        source: m?.source, samples: all.length,
         derived: derivedSummary(p.id), // 콘텐츠 세트 완성 여부(카드뉴스·숏폼)
       };
     })

@@ -23,6 +23,8 @@ export const autoShortsSchema = z.object({
     quote: z.object({ text: z.string(), source: z.string().optional() }).optional(),
   })),
   totalFrames: z.number(),
+  /** 자막 옵션 — 위치(하단 여백 %)·키워드 강조색. 미지정=종전(하단 20%, 강조 없음). */
+  caption: z.object({ bottomPct: z.number().optional(), keyword: z.string().optional() }).optional(),
 });
 export type AutoShortsProps = z.infer<typeof autoShortsSchema>;
 export const defaultProps: AutoShortsProps = {
@@ -32,7 +34,7 @@ export const defaultProps: AutoShortsProps = {
 
 const CLIP_FRAMES = 180; // 6초 클립 × 30fps 컴포지션 — clipFrames 미지정 시 감속 배율 산정 폴백
 
-const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number }> = ({ s, index }) => {
+const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; caption?: AutoShortsProps['caption'] }> = ({ s, index, caption }) => {
   const f = useCurrentFrame();
   // 씬 시작 6프레임 페이드인(첫 씬 제외 — 훅은 즉시) — 하드컷 완화. 씬 길이 불변이라 TTS 싱크 무손상.
   const fade = index > 0 ? sceneEnterFade(f, 6) : 1;
@@ -54,18 +56,18 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number }> =
       {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} /> : null}
       {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}
       {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
-      <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} />
+      <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={caption?.bottomPct} keyword={caption?.keyword} />
       {s.audioSrc ? <Audio src={staticFile(s.audioSrc)} /> : null}
     </AbsoluteFill>
   );
 };
 
-export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes }) => (
+export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption }) => (
   <AbsoluteFill style={{ background: '#000', fontFamily: '"Noto Sans KR", sans-serif' }}>
     <Series>
       {scenes.map((s, i) => (
         <Series.Sequence key={i} durationInFrames={Math.max(1, s.durationInFrames)}>
-          <Scene s={s} index={i} />
+          <Scene s={s} index={i} caption={caption} />
         </Series.Sequence>
       ))}
     </Series>
