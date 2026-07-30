@@ -39,9 +39,11 @@ describe('buildCardImagePrompt — 공통 보존(두 프리셋 모두)', () => {
 });
 
 describe('buildCardImagePrompt — handwritten_poster 분기', () => {
-  it('손글씨 캘리·임베드·상호작용 지시를 담고, 인쇄 에디토리얼 문구는 안 씀', () => {
+  it('붓펜 캘리 고정·임베드·상호작용 지시를 담고, 인쇄 에디토리얼 문구는 안 씀', () => {
     const p = buildCardImagePrompt({ ...base, index: 1, preset: 'handwritten_poster' });
-    expect(p).toContain('손글씨 캘리그래피');
+    expect(p).toContain('붓펜 캘리그래피');              // 서체 고정(사용자 확정 2026-07-30)
+    expect(p).toContain('크레용체·색연필체·마커체·둥근 고딕풍 손글씨는 절대 금지');
+    expect(p).toContain('배경과 소품에만 적용');          // 톤 질감의 글씨 오염 격리
     expect(p).toContain('피사체-텍스트 상호작용');
     expect(p).toContain('평면 스티커처럼 얹지 않는다');
     expect(p).not.toContain('산세리프');                 // 에디토리얼 전용 문구 배제
