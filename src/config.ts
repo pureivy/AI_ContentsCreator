@@ -287,7 +287,7 @@ export const CONFIG: Config = {
   shortsCaptionOutline: envBool('SHORTS_CAPTION_OUTLINE', true),
   shortsTitleOverlay: envBool('SHORTS_TITLE_OVERLAY', true),
   shortsTitleTopPct: Math.min(20, Math.max(0, envInt('SHORTS_TITLE_TOP_PCT', 5))),
-  shortsTitleWidthPct: Math.min(100, Math.max(30, envInt('SHORTS_TITLE_WIDTH_PCT', 74))),
+  shortsTitleWidthPct: Math.min(100, Math.max(30, envInt('SHORTS_TITLE_WIDTH_PCT', 90))), // 90=한 줄 제목 기준 재보정(74는 2줄 시절 값)
 
   ttsProvider: env('TTS_PROVIDER', 'elevenlabs'),
   openaiTtsModel: env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),
