@@ -2192,6 +2192,7 @@ function performanceHandler(c: Context): Response {
     })
     .sort((a, b) => b.ts.localeCompare(a.ts));
   return c.json({
+    refreshBusy: perfRefreshBusy, // 새로고침 백그라운드 수집 진행 여부 — 프론트 폴링 종료 판정
     strategy: {
       winners: s.winners.slice(0, 20), subNiches: s.subNiches, measuredPieces: s.measuredPieces,
       // 채널 학습(쇼츠·릴스·카드뉴스) — 키워드 점수표가 아니라 직원 강화가 남긴 교훈 문장(위키 performance
@@ -2240,12 +2241,13 @@ app.get('/api/performance', performanceHandler);
 // (측정뿐 아니라 '시도'도 포함 — naverAttempts)·프로필 락이 같은 날 재기동을 막는다.
 // 동시 트리거는 중복 샘플 append 를 만들므로 in-flight 가드.
 let perfRefreshBusy = false;
-async function perfRefreshHandler(c: Context): Promise<Response> {
-  if (perfRefreshBusy) return c.json({ error: '이미 재수집이 진행 중입니다.' }, 409);
-  perfRefreshBusy = true;
+/** 재수집 본체(백그라운드) — 네이버 일일 추적은 조각 수만큼 순차 브라우저 런이라 수 분 걸릴 수 있다.
+ *  실측 2026-07-31: KST 날짜 전환 직후 새로고침 → 19조각 × ~14초 = 약 4분. 동기 응답이던 시절엔
+ *  브라우저 fetch 가 타임아웃해 수집은 성공했는데 UI 는 에러로 보였다 → 즉시 응답+폴링으로 전환. */
+async function runPerfRefresh(): Promise<void> {
   try {
     // 네이버 블로그: 발행 감지(공개 RSS — 프로필 락 무관) 후 성과 수집. syncPerformance 가 프로필 락·측정창·
-    // 미측정(stage=published) 게이트를 스스로 처리하므로, 수집 대상이 없거나 프로필 사용 중이면 조용히 건너뛴다
+    // 하루 1회(시도 포함) 게이트를 스스로 처리하므로, 수집 대상이 없거나 프로필 사용 중이면 조용히 건너뛴다
     // (일일 동기화와 동일 동작·안전). 쇼츠·릴스·카드뉴스는 순수 API 라 병행. allSettled — 한 채널 실패가 다른 채널을 막지 않음.
     await Promise.allSettled([
       discoverPublishedNaver().then(() => syncPerformance()),
@@ -2253,8 +2255,14 @@ async function perfRefreshHandler(c: Context): Promise<Response> {
       syncShortsMetaPerformance(),
       syncCardnewsPerformance(),
     ]);
-    return c.json({ ok: true });
   } finally { perfRefreshBusy = false; }
+}
+function perfRefreshHandler(c: Context): Response {
+  // 이미 진행 중이면 에러가 아니라 '진행 중' — 프론트는 같은 폴링 경로로 합류한다(종전 409 는 UI 에 에러로 떴음).
+  if (perfRefreshBusy) return c.json({ ok: true, started: false, busy: true });
+  perfRefreshBusy = true;
+  void runPerfRefresh();
+  return c.json({ ok: true, started: true });
 }
 app.post('/performance/refresh', perfRefreshHandler);
 app.post('/api/performance/refresh', perfRefreshHandler);

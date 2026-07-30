@@ -965,6 +965,8 @@ export interface CardnewsPerfRow {
   fb: { url: string; likes: number | null; shares: number | null; series: number[]; ts: string | null } | null; // series = 좋아요 추이(FB 게시물은 조회 미제공)
 }
 export interface PerfData {
+  /** 새로고침 백그라운드 재수집 진행 중 여부 — true 면 프론트가 폴링으로 완료를 기다린다. */
+  refreshBusy?: boolean;
   strategy: {
     winners: Array<{ keyword: string; score: number; samples: number }>; subNiches: Record<string, number>; measuredPieces: number;
     /** 채널 학습(쇼츠·릴스·카드뉴스) — 직원 강화가 남긴 교훈 문장(위키 performance 페이지 요약). */
@@ -985,8 +987,9 @@ export async function fetchPerformance(): Promise<PerfData | null> {
   try { const r = await fetch("/performance"); return r.ok ? await r.json() : null; }
   catch { return null; }
 }
-/** 채널 성과 즉시 재수집(쇼츠 유튜브·릴스·카드뉴스 — API 채널만; 블로그는 검토 탭 수집·일일 틱). */
-export async function refreshPerformance(): Promise<{ ok: boolean; error?: string }> {
+/** 채널 성과 즉시 재수집 시작(쇼츠 유튜브·릴스·카드뉴스 API + 네이버 일일 추적) — 서버는 백그라운드로
+ *  돌리고 즉시 응답한다(started=시작, busy=이미 진행 중). 완료는 fetchPerformance().refreshBusy 로 폴링. */
+export async function refreshPerformance(): Promise<{ ok: boolean; started?: boolean; busy?: boolean; error?: string }> {
   try {
     const r = await fetch("/performance/refresh", { method: "POST" });
     if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }

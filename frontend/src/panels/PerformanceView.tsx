@@ -50,12 +50,27 @@ export default function PerformanceView() {
   const [refreshMsg, setRefreshMsg] = useState("");
   const doRefresh = async () => {
     if (refreshing) return;
-    setRefreshing(true); setRefreshMsg("");
-    const r = await refreshPerformance();
-    await load(); // 재수집 실패해도 표시는 최신 저장값으로 갱신
+    setRefreshing(true);
+    setRefreshMsg("⏳ 재수집 중… (네이버 일일 수집이 있으면 브라우저 창이 여러 번 열렸다 닫힐 수 있어요)");
+    const r = await refreshPerformance(); // 서버는 즉시 응답(백그라운드 수집) — 진행 중이었으면 그 수집에 합류
+    if (!r.ok) {
+      await load(); // 시작 실패해도 표시는 최신 저장값으로 갱신
+      setRefreshing(false);
+      setRefreshMsg(`⚠ ${r.error || "재수집 실패"} — 표시만 갱신됨`);
+      return;
+    }
+    // 완료까지 폴링(최대 8분 — 네이버 순차 브라우저 런은 조각 수에 비례) — 도중에도 표를 계속 갱신.
+    const deadline = Date.now() + 8 * 60_000;
+    let d = await fetchPerformance();
+    while (d?.refreshBusy && Date.now() < deadline) {
+      setData(d);
+      await new Promise((res) => setTimeout(res, 5000));
+      d = await fetchPerformance();
+    }
+    if (d) setData(d);
     setRefreshing(false);
     const t = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
-    setRefreshMsg(r.ok ? `✓ ${t} 재수집됨` : `⚠ ${r.error || "재수집 실패"} — 표시만 갱신됨`);
+    setRefreshMsg(d?.refreshBusy ? "⏳ 수집이 아직 진행 중 — 잠시 후 새로고침으로 확인하세요" : `✓ ${t} 재수집됨`);
   };
 
   // 행 삭제(완전 삭제) — 대시보드 카드 + 연결 파일(산출물·초안 세션·성과 기록)을 휴지통(data/.trash)으로
