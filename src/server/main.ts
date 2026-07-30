@@ -2182,7 +2182,16 @@ function performanceHandler(c: Context): Response {
     })
     .sort((a, b) => b.ts.localeCompare(a.ts));
   return c.json({
-    strategy: { winners: s.winners.slice(0, 20), subNiches: s.subNiches, measuredPieces: s.measuredPieces },
+    strategy: {
+      winners: s.winners.slice(0, 20), subNiches: s.subNiches, measuredPieces: s.measuredPieces,
+      // 채널 학습(쇼츠·릴스·카드뉴스) — 키워드 점수표가 아니라 직원 강화가 남긴 교훈 문장(위키 performance
+      // 페이지). 블로그 EWMA 와 나란히 보이게 노출(사용자 요청 2026-07-30).
+      channelLessons: llmWiki().list('performance').slice(0, 8).map((p) => ({
+        channel: p.title.startsWith('쇼츠') ? '유튜브 쇼츠' : p.title.startsWith('릴스') ? '인스타 릴스' : p.title.startsWith('카드뉴스') ? '카드뉴스' : '채널',
+        summary: p.summary || p.title,
+        updated: p.updated,
+      })),
+    },
     pieces: rows,
     summary: {
       count: rows.length,

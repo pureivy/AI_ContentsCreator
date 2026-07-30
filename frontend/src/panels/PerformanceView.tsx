@@ -80,6 +80,7 @@ export default function PerformanceView() {
   const s = data?.summary;
   const winners = data?.strategy.winners ?? [];
   const subNiches = Object.entries(data?.strategy.subNiches ?? {}).sort((a, b) => b[1] - a[1]);
+  const channelLessons = data?.strategy.channelLessons ?? [];
   const ch = data?.channels;
   // null = 아직 수집 전(발행 후 첫 일일 틱 대기) — 0 과 구분해 "—" 로 표시.
   const fmt = (n: number | null | undefined) => (n == null ? "—" : n.toLocaleString());
@@ -488,6 +489,25 @@ export default function PerformanceView() {
               <div className="piece-card-meta" style={{ marginTop: 8 }}>
                 {subNiches.map(([k, v]) => (
                   <span key={k} className="chip muted">{k} · {(v * 100).toFixed(0)}</span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 채널 학습 — 쇼츠·릴스·카드는 키워드 점수표가 아니라 직원 강화 '교훈 문장'으로 학습된다(위키 performance).
+              블로그 EWMA 표와 나란히 노출해 "채널 학습이 안 보인다"는 오해를 없앤다(사용자 요청 2026-07-30). */}
+          <div className="review-section">
+            <h3>채널 학습 <span className="muted">(쇼츠·릴스·카드뉴스 — 담당 직원이 배운 것, 다음 기획 프롬프트에 주입)</span></h3>
+            {channelLessons.length === 0 ? (
+              <p className="muted">아직 채널 강화 교훈이 없습니다 — 발행 후 측정창(7일)이 지나면 쌓입니다.</p>
+            ) : (
+              <div>
+                {channelLessons.map((l, i) => (
+                  <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "4px 0", fontSize: 13 }}>
+                    <span className="chip" style={{ flexShrink: 0 }}>{l.channel}</span>
+                    <span>{l.summary}</span>
+                    <span className="muted" style={{ flexShrink: 0, fontSize: 11 }}>{(l.updated || "").slice(5, 10)}</span>
+                  </div>
                 ))}
               </div>
             )}

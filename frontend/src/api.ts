@@ -965,7 +965,11 @@ export interface CardnewsPerfRow {
   fb: { url: string; likes: number | null; shares: number | null; series: number[]; ts: string | null } | null; // series = 좋아요 추이(FB 게시물은 조회 미제공)
 }
 export interface PerfData {
-  strategy: { winners: Array<{ keyword: string; score: number; samples: number }>; subNiches: Record<string, number>; measuredPieces: number };
+  strategy: {
+    winners: Array<{ keyword: string; score: number; samples: number }>; subNiches: Record<string, number>; measuredPieces: number;
+    /** 채널 학습(쇼츠·릴스·카드뉴스) — 직원 강화가 남긴 교훈 문장(위키 performance 페이지 요약). */
+    channelLessons: Array<{ channel: string; summary: string; updated: string }>;
+  };
   pieces: PerfRow[];
   summary: { count: number; measured: number; totalViews: number };
   channels?: {
