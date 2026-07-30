@@ -166,12 +166,14 @@ function reinforceShorts(s: Shorts, m: MetricSample): number {
 }
 
 /** 일일 쇼츠 성과 동기화 — perf-sync 틱에서 piece 동기화와 나란히 호출(Task 3). */
-export async function syncShortsPerformance(): Promise<void> {
+export async function syncShortsPerformance(opts: { force?: boolean } = {}): Promise<void> {
   try {
     if (!getSecret('YOUTUBE_API_KEY')) return; // 커넥터 키 없음 — no-op
     const days = CONFIG.shortsPerfDays;
     const now = Date.now();
-    const due = shortsStore().list().filter((s) => shortsPerfDue(s, now, days));
+    // force(대시보드 새로고침) = 측정창·포기 지평 무시하고 업로드된 전부 재수집 — 사용자 제보 2026-07-31
+    // "새로고침해도 옛 콘텐츠 숫자가 안 변함"(창 경과+강화 후 동결이 원인). 강화는 기존 게이트 그대로 1회.
+    const due = shortsStore().list().filter((s) => opts.force ? (!!s.youtubeId && !!s.youtubeTs) : shortsPerfDue(s, now, days));
     if (!due.length) return;
     const stats = await fetchVideoStats(due.map((s) => s.youtubeId!));
     for (const s of due) {
@@ -227,11 +229,14 @@ function reinforceShortsMeta(s: Shorts, m: MetricSample): number {
 }
 
 /** 일일 릴스 성과 동기화 — perf-sync 틱에서 유튜브·카드뉴스 동기화와 나란히 호출. 전량 fail-open. */
-export async function syncShortsMetaPerformance(): Promise<void> {
+export async function syncShortsMetaPerformance(opts: { force?: boolean } = {}): Promise<void> {
   try {
     const days = CONFIG.shortsPerfDays;
     const now = Date.now();
-    const due = shortsStore().list().filter((s) => shortsMetaPerfDue(s, now, days));
+    // force = 새로고침 전체 재수집(창·지평 무시) — syncShortsPerformance 와 동일 규약.
+    const due = shortsStore().list().filter((s) => opts.force
+      ? ((!!s.igReelId || !!s.fbReelId) && !!s.metaPublishedTs)
+      : shortsMetaPerfDue(s, now, days));
     for (const s of due) {
       try {
         const acct = getMetaAccount(s.brand ?? '');

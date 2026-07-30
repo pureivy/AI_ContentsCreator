@@ -111,11 +111,14 @@ function reinforceCardnews(card: CardNews, m: MetricSample): number {
 }
 
 /** 일일 카드뉴스 성과 동기화 — perf-sync 틱에서 piece·쇼츠 동기화와 나란히 호출. */
-export async function syncCardnewsPerformance(): Promise<void> {
+export async function syncCardnewsPerformance(opts: { force?: boolean } = {}): Promise<void> {
   try {
     const days = CONFIG.shortsPerfDays; // 측정 창은 쇼츠와 동일 상수 재사용(스펙 §7)
     const now = Date.now();
-    const due = cardNewsStore().list().filter((x) => cardnewsPerfDue(x, now, days));
+    // force = 새로고침 전체 재수집(창·지평 무시) — syncShortsPerformance 와 동일 규약.
+    const due = cardNewsStore().list().filter((x) => opts.force
+      ? ((!!x.igMediaId || !!x.fbPostId) && !!x.publishedTs)
+      : cardnewsPerfDue(x, now, days));
     for (const card of due) {
       try {
         const acct = getMetaAccount(card.brand ?? '');

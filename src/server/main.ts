@@ -2249,11 +2249,14 @@ async function runPerfRefresh(): Promise<void> {
     // 네이버 블로그: 발행 감지(공개 RSS — 프로필 락 무관) 후 성과 수집. syncPerformance 가 프로필 락·측정창·
     // 하루 1회(시도 포함) 게이트를 스스로 처리하므로, 수집 대상이 없거나 프로필 사용 중이면 조용히 건너뛴다
     // (일일 동기화와 동일 동작·안전). 쇼츠·릴스·카드뉴스는 순수 API 라 병행. allSettled — 한 채널 실패가 다른 채널을 막지 않음.
+    // API 채널(유튜브·IG·FB)은 force — 새로고침은 측정창 지나 동결된 옛 콘텐츠 숫자도 갱신한다
+    // (사용자 기대 2026-07-31). 강화·일일 틱 게이트는 각 sync 내부에서 기존 그대로. 네이버만 브라우저
+    // 비용 때문에 하루 1회(시도 포함) 게이트 유지.
     await Promise.allSettled([
       discoverPublishedNaver().then(() => syncPerformance()),
-      syncShortsPerformance(),
-      syncShortsMetaPerformance(),
-      syncCardnewsPerformance(),
+      syncShortsPerformance({ force: true }),
+      syncShortsMetaPerformance({ force: true }),
+      syncCardnewsPerformance({ force: true }),
     ]);
   } finally { perfRefreshBusy = false; }
 }
