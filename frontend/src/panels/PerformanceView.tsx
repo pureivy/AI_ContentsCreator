@@ -137,7 +137,7 @@ export default function PerformanceView() {
         <p className="apikeys-sub">
           블로그·쇼츠·카드뉴스 채널별 성과와, 성과로 학습된 전략(키워드·서브니치 EWMA)을 모아 봅니다.
           <button className="btn ghost" style={{ marginLeft: 10 }} onClick={() => { void doRefresh(); }} disabled={refreshing}
-            title="블로그·쇼츠 유튜브·릴스·카드뉴스 성과를 즉시 재수집합니다 (블로그는 발행 감지 후 측정창 지난 미측정 글만 — 브라우저가 열릴 수 있고 네이버 로그인 세션이 필요)">
+            title="블로그·쇼츠 유튜브·릴스·카드뉴스 성과를 즉시 재수집합니다 (블로그는 발행 14일 안 글의 오늘분 일일 추적 + 측정창 지난 미측정 글 강화 — 하루 1회 멱등, 브라우저가 열릴 수 있고 네이버 로그인 세션이 필요)">
             {refreshing ? "재수집 중…" : "새로고침"}
           </button>
           {refreshMsg && <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>{refreshMsg}</span>}

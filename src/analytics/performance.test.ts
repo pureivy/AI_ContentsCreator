@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseManualMetrics, latestSampleBySource, viewsSeriesBySource, type MetricSample } from './performance';
+import { parseManualMetrics, latestSampleBySource, viewsSeriesBySource, naverTrackingDue, type MetricSample } from './performance';
 import { performanceSignal } from './reinforce';
 
 // 스파크라인용 시계열(2026-07-20) — 소스 접두로 거른 샘플을 '하루 1점(그날 마지막 값)'으로 압축해
@@ -80,5 +80,22 @@ describe('performanceSignal (성과 → 스칼라, 0~1)', () => {
     const few = performanceSignal({ measuredAt: '', views: 500, searchInflow: [{ keyword: 'a', count: 1 }] });
     const many = performanceSignal({ measuredAt: '', views: 500, searchInflow: Array.from({ length: 10 }, (_, i) => ({ keyword: `k${i}`, count: 1 })) });
     expect(many).toBeGreaterThan(few);
+  });
+});
+
+describe('naverTrackingDue — 일일 연속 추적 게이트(수집은 매일, 강화는 14일 후)', () => {
+  const base = { stage: 'published', publishedUrl: 'https://blog.naver.com/x/1', publishedTs: '2026-07-20T09:00:00+09:00', updatedTs: '2026-07-20T09:00:00+09:00' };
+  const now = new Date('2026-07-30T07:30:00+09:00');
+  it('발행 직후~측정창 안 + 오늘 미수집이면 true(measured/reflected 포함)', () => {
+    expect(naverTrackingDue(base, null, 14, now)).toBe(true);
+    expect(naverTrackingDue({ ...base, stage: 'reflected' }, '2026-07-29T07:30:00+09:00', 14, now)).toBe(true);
+  });
+  it('같은 KST 날짜에 이미 수집했으면 false(멱등 — 새로고침·크론 중복 방지)', () => {
+    expect(naverTrackingDue(base, '2026-07-30T01:00:00+09:00', 14, now)).toBe(false);
+  });
+  it('측정창 경과·발행 URL 없음·미발행 스테이지는 false', () => {
+    expect(naverTrackingDue({ ...base, publishedTs: '2026-07-01T09:00:00+09:00' }, null, 14, now)).toBe(false);
+    expect(naverTrackingDue({ ...base, publishedUrl: undefined }, null, 14, now)).toBe(false);
+    expect(naverTrackingDue({ ...base, stage: 'ready' }, null, 14, now)).toBe(false);
   });
 });

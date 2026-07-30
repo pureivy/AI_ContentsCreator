@@ -121,3 +121,22 @@ export function parseManualMetrics(input: unknown): MetricSample {
     source: 'manual',
   };
 }
+
+/**
+ * 일일 연속 추적 도래 판정(순수) — 발행 직후부터 측정창(windowDays) 안의 글을 하루 1회 수집한다
+ * (사용자 요청 2026-07-30: 수집은 매일, 강화는 14일 후 그대로). KST 날짜 기준 멱등 —
+ * 같은 날 재호출(새로고침 버튼·크론 중복)은 false. 발행 URL 없는 글·창 경과 글은 false.
+ */
+export function naverTrackingDue(p: {
+  stage: string; publishedUrl?: string; publishedTs?: string; updatedTs: string;
+}, lastMeasuredAt: string | null, windowDays: number, now: Date = new Date()): boolean {
+  if (!p.publishedUrl) return false;
+  if (!['published', 'measured', 'reflected'].includes(p.stage)) return false;
+  const published = new Date(p.publishedTs ?? p.updatedTs).getTime();
+  if (!Number.isFinite(published)) return false;
+  const age = now.getTime() - published;
+  if (age < 0 || age >= windowDays * 24 * 3600 * 1000) return false;
+  if (!lastMeasuredAt) return true;
+  const kstDay = (d: Date): string => d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+  return kstDay(new Date(lastMeasuredAt)) !== kstDay(now);
+}

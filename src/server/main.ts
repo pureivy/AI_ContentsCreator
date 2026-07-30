@@ -65,7 +65,7 @@ import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
 import { promiseStore } from '../content/promises';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
-import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor } from '../analytics/performance';
+import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor, appendMetrics, naverTrackingDue } from '../analytics/performance';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
@@ -3351,8 +3351,23 @@ async function syncPerformance(): Promise<void> {
   const collector = getCollector();
   const windowMs = CONFIG.performanceWindowDays * 24 * 60 * 60 * 1000;
   for (const p of pieceStore().list()) {
-    if (p.stage !== 'published') continue;                                  // 측정 대상 = 발행됐고 아직 측정 안 된 것
-    if (Date.now() - new Date(p.updatedTs).getTime() < windowMs) continue;  // 측정창 미도달(updatedTs≈발행시각) — 대기
+    // ① 일일 연속 추적 — 발행 직후~측정창(14일) 안의 글은 매일 1회 조회·체류·유입을 '기록만'
+    //    (appendMetrics — 강화 없음). 사용자 요청 2026-07-30: 수집은 매일, 강화는 14일 후 그대로.
+    //    KST 하루 1회 멱등이라 새로고침 버튼·크론이 겹쳐도 재스크레이프하지 않는다.
+    if (naverTrackingDue(p, latestMetrics(p.id)?.measuredAt ?? null, CONFIG.performanceWindowDays)) {
+      try {
+        const sample = await collector.measure(p);
+        if (sample) {
+          appendMetrics(p.id, sample);
+          const age = Date.now() - new Date(p.publishedTs ?? p.updatedTs).getTime();
+          console.log('[perf-sync]', `${p.title.slice(0, 24)} — 일일 추적 D+${Math.floor(age / 86_400_000)} 기록(조회 ${sample.views})`);
+        }
+      } catch (e) { console.log('[perf-sync]', `${p.id} 일일 추적 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+      continue; // 창 안은 추적만 — 강화는 창 경과 후 아래 ②에서
+    }
+    // ② 강화(기존) — 측정창 경과 + 미측정(published) 글 1회 측정→강화(measured→reflected).
+    if (p.stage !== 'published') continue;
+    if (Date.now() - new Date(p.publishedTs ?? p.updatedTs).getTime() < windowMs) continue; // 창 미도달 — 대기
     try {
       const sample = await collector.measure(p);
       if (sample) await ingestMetrics(p.id, sample);                        // 측정치 있으면 강화(measured→reflected)
