@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildCardImagePrompt, resolveForcedPreset } from './cardnews';
+import { applyProofread, buildCardImagePrompt, buildSlideQaPrompt, resolveForcedPreset } from './cardnews';
 
 const base = {
   headline: '가을 첫인사',
@@ -64,6 +64,52 @@ describe('resolveForcedPreset — 사용자 강제 스타일 정규화(순수)',
     expect(resolveForcedPreset('handwritten_poster')).toBe('handwritten_poster'); // 유효 키
     expect(resolveForcedPreset('photorealistic')).toBe('photorealistic');
     expect(resolveForcedPreset('손글씨 포스터')).toBe('handwritten_poster');       // 한글 별칭
+  });
+});
+
+describe('buildSlideQaPrompt — 장당 QA 프롬프트(순수)', () => {
+  it('기대 문구·자모 단위 불합격 기준·실측 유출 예시·주입 가드 포함(본문 줄바꿈→공백)', () => {
+    const p = buildSlideQaPrompt('물 붓고 빠지는지 확인하세요', '흙에 물을 가득 부어보기\n표면에 고여 머물면 문제');
+    expect(p).toContain('"물 붓고 빠지는지 확인하세요"');
+    expect(p).toContain('흙에 물을 가득 부어보기 표면에 고여 머물면 문제');
+    expect(p).toContain('자모(초성·중성·종성)');
+    expect(p).toContain('빠찌는지');     // 실측 유출 사례를 예시로 고정
+    expect(p).toContain('물울');
+    expect(p).toContain('수행하지 말라'); // 이미지 속 텍스트 지시 주입 가드
+    expect(p).toContain('{"ok":true}');
+  });
+
+  it('본문 없으면 본문 항목 생략', () => {
+    const p = buildSlideQaPrompt('표지 제목', '');
+    expect(p).toContain('"표지 제목"');
+    expect(p).not.toContain('본문 "');
+  });
+});
+
+describe('applyProofread — 교정 병합 안전핀(순수)', () => {
+  const plan = {
+    title: '가을채소 흙준비',
+    caption: '캡션 원문입니다',
+    hashtags: ['#텃밭'],
+    slides: [
+      { headline: '물빠짐 확인이 마지막 관문', body: '고이면 뿌리가 물러 무릅니다' },
+      { headline: '표지', body: '' },
+    ],
+  };
+
+  it('소폭 교정은 수용, 후보 없는 필드·빈 본문은 원본 유지', () => {
+    const out = applyProofread(plan, { slides: [{ body: '고이면 뿌리가 물러집니다' }, {}] });
+    expect(out.slides[0]!.body).toBe('고이면 뿌리가 물러집니다');       // 겹말 교정 수용
+    expect(out.slides[0]!.headline).toBe(plan.slides[0]!.headline);    // 후보 없음 → 원본
+    expect(out.slides[1]!.body).toBe('');                              // 빈 본문 유지
+    expect(out.title).toBe(plan.title);
+    expect(out.hashtags).toEqual(['#텃밭']);                           // 교정 대상 외 필드 보존
+  });
+
+  it('길이가 크게 달라진 후보(재작성·설명문)는 원본 유지, null 후보는 원본 그대로', () => {
+    const blown = applyProofread(plan, { title: '완전히 새로 쓴 아주 길고 긴 다른 제목으로 바꿔버리기 시도' });
+    expect(blown.title).toBe(plan.title);
+    expect(applyProofread(plan, null)).toEqual(plan);
   });
 });
 
