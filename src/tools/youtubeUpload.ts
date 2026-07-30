@@ -104,7 +104,8 @@ export async function uploadShortsToYoutube(opts: {
         }
       } catch (te) { thumbnailError = te instanceof Error ? te.message.slice(0, 80) : String(te); }
     }
-    return { ok: true, videoId: id, url: `https://youtube.com/watch?v=${id}`, thumbnailError };
+    // 쇼츠 분류는 파일(세로 1080×1920·3분 이하)로 자동 판정 — URL 은 표시용이지만 쇼츠 플레이어로 열리게 /shorts/ 형식.
+    return { ok: true, videoId: id, url: `https://youtube.com/shorts/${id}`, thumbnailError };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message.slice(0, 120) : String(e) };
   }
