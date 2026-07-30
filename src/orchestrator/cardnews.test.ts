@@ -77,8 +77,11 @@ describe('buildSlideQaPrompt — 장당 QA 프롬프트(순수)', () => {
     expect(p).toContain('자모(초성·중성·종성)');
     expect(p).toContain('빠찌는지');     // 실측 유출 사례를 예시로 고정
     expect(p).toContain('물울');
+    expect(p).toContain('툴립');         // 재검수 통과 유출 사례(ㅠ→ㅜ, 2026-07-30 실런)
+    expect(p).toContain('기대 문구를 보지 말고 보이는 그대로 전사'); // 전사 우선 — 인상 비교 차단
+    expect(p).toContain('ㅠ/ㅜ');
     expect(p).toContain('수행하지 말라'); // 이미지 속 텍스트 지시 주입 가드
-    expect(p).toContain('{"ok":true}');
+    expect(p).toContain('"transcribe"');
   });
 
   it('본문 없으면 본문 항목 생략', () => {
