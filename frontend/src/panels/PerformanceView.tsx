@@ -477,19 +477,22 @@ export default function PerformanceView() {
             {winners.length === 0 ? (
               <p className="muted">아직 학습된 키워드가 없습니다. 발행 글의 성과가 쌓이면 여기에 나타납니다.</p>
             ) : (
-              <div className="piece-card-meta">
-                {winners.map((w) => (
-                  <span key={w.keyword} className="chip" title={`샘플 ${w.samples}건`}>
-                    {w.keyword} · {(w.score * 100).toFixed(0)}
-                  </span>
-                ))}
-              </div>
-            )}
-            {subNiches.length > 0 && (
-              <div className="piece-card-meta" style={{ marginTop: 8 }}>
-                {subNiches.map(([k, v]) => (
-                  <span key={k} className="chip muted">{k} · {(v * 100).toFixed(0)}</span>
-                ))}
+              /* 자료가 늘어도 페이지가 무한히 길어지지 않게 높이 상한+내부 스크롤(사용자 요청 2026-07-30). */
+              <div style={{ maxHeight: 150, overflowY: "auto" }}>
+                <div className="piece-card-meta">
+                  {winners.map((w) => (
+                    <span key={w.keyword} className="chip" title={`샘플 ${w.samples}건`}>
+                      {w.keyword} · {(w.score * 100).toFixed(0)}
+                    </span>
+                  ))}
+                </div>
+                {subNiches.length > 0 && (
+                  <div className="piece-card-meta" style={{ marginTop: 8 }}>
+                    {subNiches.map(([k, v]) => (
+                      <span key={k} className="chip muted">{k} · {(v * 100).toFixed(0)}</span>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -501,7 +504,8 @@ export default function PerformanceView() {
             {channelLessons.length === 0 ? (
               <p className="muted">아직 채널 강화 교훈이 없습니다 — 발행 후 측정창(7일)이 지나면 쌓입니다.</p>
             ) : (
-              <div>
+              /* 최신 30건까지 — 높이 상한+내부 스크롤로 페이지 길이 고정(사용자 요청 2026-07-30). */
+              <div style={{ maxHeight: 220, overflowY: "auto" }}>
                 {channelLessons.map((l, i) => (
                   <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "4px 0", fontSize: 13 }}>
                     <span className="chip" style={{ flexShrink: 0 }}>{l.channel}</span>
