@@ -37,6 +37,8 @@ STYLE_PRESETS = {
     "flat_design":    "modern flat design vector illustration, minimalist Korean design aesthetic, 2D style",
     "retro_poster":   "vintage retro Korean poster-style illustration, strong composition, nostalgic atmosphere",
     "handwritten_poster": "realistic outdoor photograph fused with large hand-drawn calligraphic HANGUL lettering embedded in the scene via depth and occlusion, indie-festival key-visual mood, boosted-natural saturation, soft sunlight, subtle film grain",
+    # 쇼츠 상단 제목 오버레이 — 순수 검정 배경 위 붓펜 캘리(로컬 휘도 매트로 투명화 전제)
+    "calligraphy":    "bold Korean brush-pen calligraphy lettering on a pure solid black background, crisp clean flat strokes, no glow, no halo, no gradient, no shadow, graphic sticker style",
 }
 DEFAULT_STYLE = "photorealistic"
 

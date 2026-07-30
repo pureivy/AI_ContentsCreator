@@ -8,6 +8,7 @@ import { ProgressBar } from './ProgressBar';
 import { StatCountUp } from './StatCountUp';
 import { ListReveal } from './ListReveal';
 import { QuoteCard } from './QuoteCard';
+import { TitleOverlay } from './TitleOverlay';
 
 export const autoShortsSchema = z.object({
   scenes: z.array(z.object({
@@ -25,6 +26,8 @@ export const autoShortsSchema = z.object({
   totalFrames: z.number(),
   /** 자막 옵션 — 위치(하단 여백 %)·키워드 강조색·테두리·글자 크기. 미지정=컴포넌트 기본값. */
   caption: z.object({ bottomPct: z.number().optional(), keyword: z.string().optional(), outline: z.boolean().optional(), fontPx: z.number().optional(), hookFontPx: z.number().optional() }).optional(),
+  /** 상단 고정 제목(별도 생성한 투명 캘리 PNG) — 전 씬 지속 오버레이. 미지정=없음(종전). */
+  title: z.object({ imageSrc: z.string(), topPct: z.number().optional(), widthPct: z.number().optional() }).optional(),
 });
 export type AutoShortsProps = z.infer<typeof autoShortsSchema>;
 export const defaultProps: AutoShortsProps = {
@@ -62,7 +65,7 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
   );
 };
 
-export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption }) => (
+export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title }) => (
   <AbsoluteFill style={{ background: '#000', fontFamily: '"Noto Sans KR", sans-serif' }}>
     <Series>
       {scenes.map((s, i) => (
@@ -71,6 +74,7 @@ export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption }) => (
         </Series.Sequence>
       ))}
     </Series>
+    {title?.imageSrc ? <TitleOverlay imageSrc={title.imageSrc} topPct={title.topPct} widthPct={title.widthPct} /> : null}
     <ProgressBar />
   </AbsoluteFill>
 );

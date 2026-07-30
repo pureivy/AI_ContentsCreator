@@ -1769,7 +1769,11 @@ async function shortsThumbnailRegenHandler(c: Context): Promise<Response> {
   thumbGenInFlight.add(id);
   try {
     // 클라이언트 이탈해도 작업·락이 무한 점유되지 않게 상한(4분) — generateDesignedThumbnail 은 예외를 던지지 않음.
-    const ok = await generateDesignedThumbnail({ dir, title: s.title ?? s.topic, description: s.description ?? '', titles: s.titles, hookImage: hook, signal: AbortSignal.timeout(240_000) });
+    // 영상 상단 캘리와 같은 카피 재사용(title-copy.json) — 재생성 썸네일이 영상 속 제목과 문구가 어긋나지 않게.
+    const savedCopy = (() => {
+      try { return JSON.parse(fs.readFileSync(path.join(dir, 'title-copy.json'), 'utf-8')) as { line1: string; line2: string; points: string[] }; } catch { return undefined; }
+    })();
+    const ok = await generateDesignedThumbnail({ dir, title: s.title ?? s.topic, description: s.description ?? '', titles: s.titles, hookImage: hook, signal: AbortSignal.timeout(240_000), ...(savedCopy?.line1 ? { copy: savedCopy } : {}) });
     if (!ok) return c.json({ error: '썸네일 생성 실패(무해 — 기존 유지)' }, 502);
     shortsStore().update(id, {}); // updatedTs 갱신 → 포스터 캐시버스트
     return c.json({ ok: true });

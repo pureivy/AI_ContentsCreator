@@ -16,6 +16,7 @@ hyperframe==6.1.0
 idna==3.18
 jiter==0.16.0
 lxml==6.1.1
+numpy==2.5.1
 openai==2.44.0
 pillow==12.2.0
 playwright==1.61.0

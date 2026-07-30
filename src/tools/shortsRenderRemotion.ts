@@ -16,6 +16,8 @@ export async function renderShortsVideoRemotion(
     voice?: string; instructions?: string; signal?: AbortSignal; clips?: Array<string | null>;
     /** 자막 옵션 — 위치(하단 여백 %)·키워드 강조색·검은 테두리·글자 크기(AutoShorts caption prop 으로 전달). */
     caption?: { bottomPct?: number; keyword?: string; outline?: boolean; fontPx?: number; hookFontPx?: number };
+    /** 상단 제목 캘리(투명 PNG 절대경로) — public/ 로 스테이징해 전 씬 고정 오버레이. */
+    title?: { imagePath: string; topPct?: number; widthPct?: number };
   } = {},
 ): Promise<ShortsRenderResult> {
   const entry = path.resolve('remotion/index.ts');
@@ -54,7 +56,20 @@ export async function renderShortsVideoRemotion(
     };
   }));
   const totalFrames = prepared.reduce((a, p) => a + p.durationInFrames, 0);
-  const inputProps = { scenes: propScenes, totalFrames, ...(opts.caption ? { caption: opts.caption } : {}) };
+  // 상단 제목 캘리 스테이징 — 없거나 실패해도 렌더는 계속(오버레이만 생략)
+  let titleProp: { imageSrc: string; topPct?: number; widthPct?: number } | undefined;
+  if (opts.title?.imagePath && fs.existsSync(opts.title.imagePath)) {
+    try {
+      const dst = 'title.png';
+      fs.copyFileSync(opts.title.imagePath, path.join(publicDir, dst));
+      titleProp = {
+        imageSrc: dst,
+        ...(opts.title.topPct != null ? { topPct: opts.title.topPct } : {}),
+        ...(opts.title.widthPct != null ? { widthPct: opts.title.widthPct } : {}),
+      };
+    } catch { /* 스테이징 실패 — 오버레이 생략 */ }
+  }
+  const inputProps = { scenes: propScenes, totalFrames, ...(opts.caption ? { caption: opts.caption } : {}), ...(titleProp ? { title: titleProp } : {}) };
 
   // 3) 번들 + 렌더
   const videoPath = path.join(dir, 'final.mp4');

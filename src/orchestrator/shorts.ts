@@ -27,6 +27,7 @@ import { directSceneMotion } from './shortsMotionDirector';
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail } from './shortsThumbnail';
+import { generateTitleArt } from './shortsTitleArt';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
 import { brandContext } from '../content/brand';
 import { priorCoverageBrief } from '../content/priorCoverage';
@@ -312,7 +313,14 @@ export async function runShortsJob(
     // 4) 조립 — 기본 Remotion 모션그래픽, 실패 시 ffmpeg 슬라이드쇼로 폴백(무중단).
     say(CONFIG.shortsRenderer === 'ffmpeg' ? '영상 조립 시작 — ffmpeg 슬라이드쇼' : '영상 조립 시작 — Remotion 모션그래픽');
     let r = null as Awaited<ReturnType<typeof renderShortsVideo>> | null;
+    let titleArt: Awaited<ReturnType<typeof generateTitleArt>> = null;
     if (CONFIG.shortsRenderer !== 'ffmpeg') {
+      // 상단 제목 캘리(썸네일과 같은 카피, 투명 PNG) — 렌더 전에 생성해야 오버레이 가능. 실패해도 무해(오버레이 생략).
+      if (CONFIG.shortsTitleOverlay) {
+        titleArt = await generateTitleArt({ dir, title: plan.title, description: plan.description, titles: plan.titles, signal: opts.signal });
+        checkAbort(); // 취소가 '스킵' 메시지로 위장되지 않게 — abort 는 null 로 삼켜져 나온다
+        say(titleArt ? '상단 제목 캘리 생성 완료' : '상단 제목 캘리 스킵(오버레이 없이 진행)');
+      }
       try {
         r = await renderShortsVideoRemotion(dir, plan.scenes, images, {
           clips: cv.clips, signal: opts.signal,
@@ -324,6 +332,7 @@ export async function runShortsJob(
             ...(CONFIG.shortsCaptionKeyword && short.keyword ? { keyword: short.keyword } : {}),
             ...(CONFIG.shortsCaptionOutline ? { outline: true } : {}),
           },
+          ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
         });
       }
       catch (e) { say(`모션 렌더 예외 → ffmpeg 폴백: ${e instanceof Error ? e.message.slice(0, 80) : e}`); r = null; }
@@ -372,6 +381,7 @@ export async function runShortsJob(
       const hook = images.find((p): p is string => !!p && fs.existsSync(p)) ?? null;
       const ok = await generateDesignedThumbnail({
         dir, title: plan.title, description: plan.description, titles: plan.titles, hookImage: hook, signal: opts.signal,
+        ...(titleArt ? { copy: titleArt.copy } : {}), // 상단 제목 캘리와 같은 카피 재사용 — 영상·썸네일 문구 일치
       });
       if (ok) store.update(id, {}); // updatedTs 갱신 → 포스터 URL(?v=updatedTs) 캐시버스트, 프레임 폴백본 대신 디자인 썸네일 표시
       say(ok ? '썸네일 생성 완료' : '썸네일 생성 스킵(프레임 폴백)');

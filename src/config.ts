@@ -134,6 +134,12 @@ export interface Config {
   readonly shortsCaptionKeyword: boolean;
   /** 쇼츠 자막 글자 검은 테두리 — 밝은 배경 시인성(E안, 사용자 확정 2026-07-30). */
   readonly shortsCaptionOutline: boolean;
+  /** 쇼츠 상단 제목 캘리 오버레이 — 별도 생성 투명 PNG 를 전 씬 고정(사용자 확정 2026-07-30). */
+  readonly shortsTitleOverlay: boolean;
+  /** 쇼츠 상단 제목 오프셋(% of 높이, 0~20 클램프) — 5=플랫폼 상단 UI 회피 절충. */
+  readonly shortsTitleTopPct: number;
+  /** 쇼츠 상단 제목 폭(% of 화면 폭, 30~100 클램프) — 74=썸네일 제목의 80% 크기 상당. */
+  readonly shortsTitleWidthPct: number;
 
   // --- 음성 입출력 ---
   /** TTS 제공자: 'elevenlabs'(ElevenLabs, 고품질) | 'openai'(gpt-4o-mini-tts) | 'say'(macOS 로컬, 폴백). 기본 elevenlabs. 폴백 체인: elevenlabs→openai→say(키/가용성에 따라 자동). */
@@ -279,6 +285,9 @@ export const CONFIG: Config = {
   shortsCaptionHookFontPx: Math.min(140, Math.max(32, envInt('SHORTS_CAPTION_HOOK_FONT_PX', 84))),
   shortsCaptionKeyword: envBool('SHORTS_CAPTION_KEYWORD', true),
   shortsCaptionOutline: envBool('SHORTS_CAPTION_OUTLINE', true),
+  shortsTitleOverlay: envBool('SHORTS_TITLE_OVERLAY', true),
+  shortsTitleTopPct: Math.min(20, Math.max(0, envInt('SHORTS_TITLE_TOP_PCT', 5))),
+  shortsTitleWidthPct: Math.min(100, Math.max(30, envInt('SHORTS_TITLE_WIDTH_PCT', 74))),
 
   ttsProvider: env('TTS_PROVIDER', 'elevenlabs'),
   openaiTtsModel: env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),

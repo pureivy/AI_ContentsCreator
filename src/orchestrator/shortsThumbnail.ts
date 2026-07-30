@@ -15,7 +15,7 @@ import { generateImagesForDraft } from '../tools/blog_skills';
 
 const execFileP = promisify(execFile);
 
-interface ThumbCopy { line1: string; line2: string; points: string[] }
+export interface ThumbCopy { line1: string; line2: string; points: string[] }
 
 /** 제목을 두 줄로 — 단어(공백) 경계에서만 분할(단어를 중간에서 쪼개지 않음). 단어 하나면 한 줄. 순수. */
 export function splitTwoLines(t: string): { line1: string; line2: string } {
@@ -34,8 +34,9 @@ export function derivePoints(desc: string): string[] {
   return (desc || '').split(/[.。!?\n·]/).map((s) => s.trim()).filter((s) => s.length >= 4 && s.length <= 22).slice(0, 3);
 }
 
-/** 썸네일 카피 — 시선 끄는 2줄 제목(단어 온전) + 핵심 2~3줄. LLM 실패·누락 시 제목·설명에서 폴백. */
-async function planThumbnailCopy(input: { title: string; description: string; titles?: string[] }, signal?: AbortSignal): Promise<ThumbCopy> {
+/** 썸네일 카피 — 시선 끄는 2줄 제목(단어 온전) + 핵심 2~3줄. LLM 실패·누락 시 제목·설명에서 폴백.
+ *  상단 제목 캘리(shortsTitleArt)와 공유 — 같은 카피를 먼저 만들어 양쪽에 넘기면 문구가 일치한다. */
+export async function planThumbnailCopy(input: { title: string; description: string; titles?: string[] }, signal?: AbortSignal): Promise<ThumbCopy> {
   const fallback = (): ThumbCopy => {
     const t = (input.title || '').replace(/[,·].*$/, '').trim() || '숏폼';
     return { ...splitTwoLines(t), points: derivePoints(input.description) };
@@ -82,7 +83,7 @@ function buildThumbnailPrompt(copy: ThumbCopy): string {
 }
 
 /** 비전 QA — 이미지의 한글이 기대 문구대로 정확한지. 비전 불가/판정 실패면 통과(파이프라인 차단 방지). */
-async function qaKoreanText(imagePath: string, expected: string, signal?: AbortSignal): Promise<boolean> {
+export async function qaKoreanText(imagePath: string, expected: string, signal?: AbortSignal): Promise<boolean> {
   if (!visionCapable()) return true;
   const j = await microJSON<{ ok?: boolean }>(
     stdModel(),
@@ -100,8 +101,9 @@ async function toThumbnailJpg(pngPath: string, dir: string, signal?: AbortSignal
   fs.renameSync(tmp, path.join(dir, 'thumbnail.jpg')); // 같은 파일시스템 → 원자적 교체
 }
 
-/** 매니페스트 첫 이미지 — 슬롯 error(생성 실패)면 남아있는 stale 파일이라도 무시(형제 shorts.ts 가드와 동일). */
-function manifestFirstImage(manifestPath: string): string | null {
+/** 매니페스트 첫 이미지 — 슬롯 error(생성 실패)면 남아있는 stale 파일이라도 무시(형제 shorts.ts 가드와 동일).
+ *  shortsTitleArt 와 공유. */
+export function manifestFirstImage(manifestPath: string): string | null {
   try {
     const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: unknown }> };
     const im = m.images?.[0];
@@ -117,13 +119,15 @@ function manifestFirstImage(manifestPath: string): string | null {
  */
 export async function generateDesignedThumbnail(input: {
   dir: string; title: string; description: string; titles?: string[]; hookImage: string | null; signal?: AbortSignal;
+  /** 미리 만든 카피(상단 제목 캘리와 공유) — 주면 LLM 호출 생략, 영상 제목과 문구 일치 보장. */
+  copy?: ThumbCopy;
 }): Promise<boolean> {
   if (!CONFIG.openaiApiKey) return false;
   if (!input.hookImage || !fs.existsSync(input.hookImage)) return false;
   const work = path.join(input.dir, '.thumb', `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   try {
     fs.mkdirSync(work, { recursive: true });
-    const copy = await planThumbnailCopy(input, input.signal);
+    const copy = input.copy ?? await planThumbnailCopy(input, input.signal);
     const prompt = buildThumbnailPrompt(copy);
     const expected = [copy.line1, copy.line2, ...copy.points].filter(Boolean).join(' / ');
     const draftPath = path.join(work, 'draft.json');
