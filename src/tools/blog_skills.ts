@@ -474,7 +474,8 @@ export async function collectNaverMetrics(
   if (slug && !isSafeBrandSlug(slug)) return null; // 무효 슬러그 = 수집 생략(fail-open)
   const args = ['--url', publishedUrl, '--run-dir', runDir];
   const creds = naverPublishCreds(slug);
-  if (creds.headless) args.push('--headless');
+  // 통계 수집은 헤드리스 기본(CONFIG.naverStatsHeadless) — 발행용 플래그(creds.headless)와 독립.
+  if (CONFIG.naverStatsHeadless || creds.headless) args.push('--headless');
   if (opts.dryRun) args.push('--dry-run');
   // naver_stats.py 는 --session-file 을 받지 않는다(로그인 상태는 프로필로만) → NAVER_PROFILE_DIR 로 브랜드 분리.
   const profileDir = naverProfileDir(slug);

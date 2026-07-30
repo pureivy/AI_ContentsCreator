@@ -390,6 +390,15 @@ def main():
         time.sleep(1.5)
         # API 인증(authed) 우선 — 성공이면 DOM 체크 무시(헤드리스 오판 회피). 실패 시에만 DOM 폴백.
         logged_in = authed or page.locator("a[href*='nidlogin'], .link_login").count() == 0
+        if not logged_in and args.headless:
+            # 헤드리스에선 자동 로그인 시도 금지 — 캡차·기기확인이 뜨면 사람이 처리할 수 없어 멈춘다.
+            # 즉시 명확 실패(수집 게이트가 오늘 재시도를 막고, 다음 헤드풀 실행에서 세션이 복구되면 자동 정상화).
+            context.close()
+            emit({"views": 0, "dwellSec": None, "searchInflow": [],
+                  "source": "scrape:naver_advisor",
+                  "note": "로그인 세션 만료 — 헤드리스 수집 불가. 발행 등 헤드풀 실행에서 재로그인되면 자동 복구.",
+                  "captured": 0})
+            return
         if not logged_in:
             try:
                 from naver_publish import full_auto_login, save_cookies  # 같은 디렉토리 스크립트

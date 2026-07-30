@@ -135,6 +135,8 @@ export interface Config {
   /** 쇼츠 자막 글자 검은 테두리 — 밝은 배경 시인성(E안, 사용자 확정 2026-07-30). */
   readonly shortsCaptionOutline: boolean;
   /** 쇼츠 상단 제목 캘리 오버레이 — 별도 생성 투명 PNG 를 전 씬 고정(사용자 확정 2026-07-30). */
+  /** 네이버 통계 수집(naver_stats)을 헤드리스로 — 일일 추적이 조각 수만큼 크롬 창을 띄우는 것 방지. */
+  readonly naverStatsHeadless: boolean;
   readonly shortsTitleOverlay: boolean;
   /** 쇼츠 상단 제목 오프셋(% of 높이, 0~20 클램프) — 5=플랫폼 상단 UI 회피 절충. */
   readonly shortsTitleTopPct: number;
@@ -285,6 +287,9 @@ export const CONFIG: Config = {
   shortsCaptionHookFontPx: Math.min(140, Math.max(32, envInt('SHORTS_CAPTION_HOOK_FONT_PX', 84))),
   shortsCaptionKeyword: envBool('SHORTS_CAPTION_KEYWORD', true),
   shortsCaptionOutline: envBool('SHORTS_CAPTION_OUTLINE', true),
+  // 통계 수집은 세션 쿠키 재사용이라 헤드리스 기본(사용자 요청 2026-07-31 — 날짜 전환 후 첫 수집의 크롬 창 연발 제거).
+  // 인증 판정은 API 기반이라 헤드리스 안전(구 DOM 오판은 우회됨). 발행·임시저장은 별개(NAVER_PUBLISH_HEADLESS, 헤드풀 기본 유지).
+  naverStatsHeadless: envBool('NAVER_STATS_HEADLESS', true),
   shortsTitleOverlay: envBool('SHORTS_TITLE_OVERLAY', true),
   shortsTitleTopPct: Math.min(20, Math.max(0, envInt('SHORTS_TITLE_TOP_PCT', 5))),
   shortsTitleWidthPct: Math.min(100, Math.max(30, envInt('SHORTS_TITLE_WIDTH_PCT', 90))), // 90=한 줄 제목 기준 재보정(74는 2줄 시절 값)
