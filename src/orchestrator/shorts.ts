@@ -320,6 +320,7 @@ export async function runShortsJob(
           caption: {
             bottomPct: CONFIG.shortsCaptionBottomPct,
             ...(CONFIG.shortsCaptionKeyword && short.keyword ? { keyword: short.keyword } : {}),
+            ...(CONFIG.shortsCaptionOutline ? { outline: true } : {}),
           },
         });
       }

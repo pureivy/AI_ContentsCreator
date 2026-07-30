@@ -128,6 +128,8 @@ export interface Config {
   readonly shortsCaptionBottomPct: number;
   /** 쇼츠 자막 키워드 강조색 사용 여부. */
   readonly shortsCaptionKeyword: boolean;
+  /** 쇼츠 자막 글자 검은 테두리 — 밝은 배경 시인성(E안, 사용자 확정 2026-07-30). */
+  readonly shortsCaptionOutline: boolean;
 
   // --- 음성 입출력 ---
   /** TTS 제공자: 'elevenlabs'(ElevenLabs, 고품질) | 'openai'(gpt-4o-mini-tts) | 'say'(macOS 로컬, 폴백). 기본 elevenlabs. 폴백 체인: elevenlabs→openai→say(키/가용성에 따라 자동). */
@@ -270,6 +272,7 @@ export const CONFIG: Config = {
   // = 사용자 A/B/C/D 비교 후 C안 확정(2026-07-30). 종전(20·무강조)으로 되돌리려면 env 로 조정.
   shortsCaptionBottomPct: Math.min(45, Math.max(5, envInt('SHORTS_CAPTION_BOTTOM_PCT', 32))),
   shortsCaptionKeyword: envBool('SHORTS_CAPTION_KEYWORD', true),
+  shortsCaptionOutline: envBool('SHORTS_CAPTION_OUTLINE', true),
 
   ttsProvider: env('TTS_PROVIDER', 'elevenlabs'),
   openaiTtsModel: env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),

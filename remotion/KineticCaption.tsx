@@ -17,7 +17,9 @@ export const KineticCaption: React.FC<{
   bottomPct?: number;
   /** 핵심 키워드 — 자막 속 해당 단어를 강조색으로(훅 씬은 전체가 이미 강조색이라 미적용). */
   keyword?: string;
-}> = ({ text, variant, bottomPct = 20, keyword }) => {
+  /** 글자 검은 테두리 — 밝은 배경에서도 자막이 뜨게(paint-order 로 획이 글자 뒤에 깔림). */
+  outline?: boolean;
+}> = ({ text, variant, bottomPct = 20, keyword, outline }) => {
   const f = useCurrentFrame();
   const words = text.split(/\s+/).filter(Boolean);
   if (!words.length) return null; // 빈 자막 — 배경 박스(특히 cta 배지)도 그리지 않음
@@ -34,7 +36,13 @@ export const KineticCaption: React.FC<{
           // 단어별 부드러운 등장(ease-out rise) — 이산 점프 대신 5프레임 fade+slide-up.
           const p = captionWordProgress(f, i);
           return (
-            <span key={i} style={{ fontSize: isHook ? 78 : 64, fontWeight: 800, color: isHook || isKw(w) ? '#ffd54a' : '#fff', lineHeight: 1.25, textShadow: '0 3px 18px rgba(0,0,0,.75)', opacity: p, transform: `translateY(${(1 - p) * 16}px)` }}>{w}</span>
+            <span key={i} style={{
+              fontSize: isHook ? 78 : 64, fontWeight: 800,
+              color: isHook || isKw(w) ? '#ffd54a' : '#fff',
+              lineHeight: 1.25, textShadow: '0 3px 18px rgba(0,0,0,.75)',
+              ...(outline ? { WebkitTextStroke: '8px rgba(0,0,0,0.9)', paintOrder: 'stroke fill' } : {}),
+              opacity: p, transform: `translateY(${(1 - p) * 16}px)`,
+            }}>{w}</span>
           );
         })}
       </div>

@@ -24,7 +24,7 @@ export const autoShortsSchema = z.object({
   })),
   totalFrames: z.number(),
   /** 자막 옵션 — 위치(하단 여백 %)·키워드 강조색. 미지정=종전(하단 20%, 강조 없음). */
-  caption: z.object({ bottomPct: z.number().optional(), keyword: z.string().optional() }).optional(),
+  caption: z.object({ bottomPct: z.number().optional(), keyword: z.string().optional(), outline: z.boolean().optional() }).optional(),
 });
 export type AutoShortsProps = z.infer<typeof autoShortsSchema>;
 export const defaultProps: AutoShortsProps = {
@@ -56,7 +56,7 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
       {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} /> : null}
       {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}
       {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
-      <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={caption?.bottomPct} keyword={caption?.keyword} />
+      <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={caption?.bottomPct} keyword={caption?.keyword} outline={caption?.outline} />
       {s.audioSrc ? <Audio src={staticFile(s.audioSrc)} /> : null}
     </AbsoluteFill>
   );
