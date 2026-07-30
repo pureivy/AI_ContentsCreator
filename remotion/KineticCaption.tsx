@@ -19,7 +19,11 @@ export const KineticCaption: React.FC<{
   keyword?: string;
   /** 글자 검은 테두리 — 밝은 배경에서도 자막이 뜨게(paint-order 로 획이 글자 뒤에 깔림). */
   outline?: boolean;
-}> = ({ text, variant, bottomPct = 20, keyword, outline }) => {
+  /** 글자 크기(px) — 일반 씬. 기본 70(사용자 확정 2026-07-30, 종전 64). */
+  fontPx?: number;
+  /** 글자 크기(px) — 훅 씬. 기본 84(종전 78). */
+  hookFontPx?: number;
+}> = ({ text, variant, bottomPct = 20, keyword, outline, fontPx = 70, hookFontPx = 84 }) => {
   const f = useCurrentFrame();
   const words = text.split(/\s+/).filter(Boolean);
   if (!words.length) return null; // 빈 자막 — 배경 박스(특히 cta 배지)도 그리지 않음
@@ -37,7 +41,7 @@ export const KineticCaption: React.FC<{
           const p = captionWordProgress(f, i);
           return (
             <span key={i} style={{
-              fontSize: isHook ? 78 : 64, fontWeight: 800,
+              fontSize: isHook ? hookFontPx : fontPx, fontWeight: 800,
               color: isHook || isKw(w) ? '#ffd54a' : '#fff',
               lineHeight: 1.25, textShadow: '0 3px 18px rgba(0,0,0,.75)',
               ...(outline ? { WebkitTextStroke: '8px rgba(0,0,0,0.9)', paintOrder: 'stroke fill' } : {}),

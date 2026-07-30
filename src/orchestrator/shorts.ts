@@ -319,6 +319,8 @@ export async function runShortsJob(
           // 자막 옵션 — 위치(플랫폼 UI 가림 회피)·키워드 강조색(설정 기반, A/B 선택 후 기본값 확정).
           caption: {
             bottomPct: CONFIG.shortsCaptionBottomPct,
+            fontPx: CONFIG.shortsCaptionFontPx,
+            hookFontPx: CONFIG.shortsCaptionHookFontPx,
             ...(CONFIG.shortsCaptionKeyword && short.keyword ? { keyword: short.keyword } : {}),
             ...(CONFIG.shortsCaptionOutline ? { outline: true } : {}),
           },

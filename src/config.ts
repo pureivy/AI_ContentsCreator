@@ -124,8 +124,12 @@ export interface Config {
   readonly autoYtUpload: boolean;
   /** 쇼츠 성과 측정창(일) — 업로드 후 이 기간 매일 수집, 경과 시 강화 1회. */
   readonly shortsPerfDays: number;
-  /** 쇼츠 자막 하단 여백(%) — 플랫폼 UI 가림 회피용 위치 조정(5~45 클램프). */
+  /** 쇼츠 자막 하단 여백(%) — 플랫폼 UI 가림 회피용 위치 조정(5~60 클램프). */
   readonly shortsCaptionBottomPct: number;
+  /** 쇼츠 자막 글자 크기(px) — 일반 씬(훅 제외). */
+  readonly shortsCaptionFontPx: number;
+  /** 쇼츠 자막 글자 크기(px) — 훅(첫) 씬. */
+  readonly shortsCaptionHookFontPx: number;
   /** 쇼츠 자막 키워드 강조색 사용 여부. */
   readonly shortsCaptionKeyword: boolean;
   /** 쇼츠 자막 글자 검은 테두리 — 밝은 배경 시인성(E안, 사용자 확정 2026-07-30). */
@@ -270,7 +274,9 @@ export const CONFIG: Config = {
   shortsPerfDays: Math.max(1, envInt('SHORTS_PERF_DAYS', 7)),
   // 자막 하단 여백(%) — 유튜브 쇼츠·릴스 하단 UI(~25%)에 안 가리는 안전 영역. 기본 32 + 키워드 강조색
   // = 사용자 A/B/C/D 비교 후 C안 확정(2026-07-30). 종전(20·무강조)으로 되돌리려면 env 로 조정.
-  shortsCaptionBottomPct: Math.min(45, Math.max(5, envInt('SHORTS_CAPTION_BOTTOM_PCT', 32))),
+  shortsCaptionBottomPct: Math.min(60, Math.max(5, envInt('SHORTS_CAPTION_BOTTOM_PCT', 50))),
+  shortsCaptionFontPx: Math.min(120, Math.max(32, envInt('SHORTS_CAPTION_FONT_PX', 70))),
+  shortsCaptionHookFontPx: Math.min(140, Math.max(32, envInt('SHORTS_CAPTION_HOOK_FONT_PX', 84))),
   shortsCaptionKeyword: envBool('SHORTS_CAPTION_KEYWORD', true),
   shortsCaptionOutline: envBool('SHORTS_CAPTION_OUTLINE', true),
 
