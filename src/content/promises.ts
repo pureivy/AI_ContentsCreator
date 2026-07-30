@@ -169,6 +169,15 @@ export class PromiseStore {
     this.persist();
     return next;
   }
+  /** 소스 콘텐츠 폐기 시 예고 정리 — 그 소스가 만든 pending 약속을 dropped 로(발행 전 폐기 = 시청자 약속 없음).
+   *  실측 2026-07-30: 카드 폐기 후 예고가 대장에 남아 9월에 근거 없는 이행 제작이 돌 뻔함. 반환 = 정리 건수. */
+  dropBySource(sourceId: string): number {
+    let n = 0;
+    for (const p of this.list()) {
+      if (p.sourceId === sourceId && p.status === 'pending') { this.update(p.id, { status: 'dropped' }); n++; }
+    }
+    return n;
+  }
   /** 자동 이행 대상 — 시기 명시 + 시즌 창 안(브랜드 일치). 도래일 이른 순 → 등록 오래된 순. */
   nextDue(brand: string, now: Date = new Date()): ContentPromise | undefined {
     return this.list()

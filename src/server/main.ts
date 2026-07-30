@@ -1060,6 +1060,7 @@ function cardNewsDeleteHandler(c: Context): Response {
   if (!cardNewsStore().get(id)) return c.json({ error: 'unknown card' }, 404);
   if (isCardNewsRunning(id)) return c.json({ error: '생성이 진행 중입니다 — 완료 후 삭제하세요.' }, 409);
   cardNewsStore().remove(id); // 기본은 산출물 파일 남김(비파괴 — pieces 삭제와 동일 원칙)
+  try { promiseStore().dropBySource(id); } catch { /* 무해 — 예고 정리 실패가 삭제를 막지 않음 */ }
   if (c.req.query('purge') === '1') trashContentFiles('cardnews', id); // 완전 삭제 — 산출물·성과도 휴지통 이동
   return c.json({ ok: true });
 }
@@ -1251,6 +1252,7 @@ function shortsDeleteHandler(c: Context): Response {
   if (!shortsStore().get(id)) return c.json({ error: 'unknown short' }, 404);
   if (isShortsRunning(id)) return c.json({ error: '생성이 진행 중입니다 — 완료 후 삭제하세요.' }, 409);
   shortsStore().remove(id); // 기본은 산출물 파일 남김(비파괴)
+  try { promiseStore().dropBySource(id); } catch { /* 무해 — 예고 정리 실패가 삭제를 막지 않음 */ }
   if (c.req.query('purge') === '1') trashContentFiles('shorts', id); // 완전 삭제 — 산출물·성과도 휴지통 이동
   return c.json({ ok: true });
 }

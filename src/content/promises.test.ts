@@ -68,6 +68,15 @@ describe('PromiseStore', () => {
     for (let i = 0; i < MAX_PENDING; i++) s.create({ topic: `주제 ${i}`, sourceKind: 'manual', brand: 'b' });
     expect(s.create({ topic: '초과 등록', sourceKind: 'manual', brand: 'b' })).toBeNull(); // 남발 가드
   });
+  it('dropBySource — 소스 폐기 시 그 소스의 pending 만 dropped(다른 소스·비 pending 불변)', () => {
+    const s = new PromiseStore(tmp());
+    const a = s.create({ topic: '폐기될 카드의 예고', window: '9월', sourceKind: 'cardnews', sourceId: 'card_x', brand: 'b' })!;
+    const b = s.create({ topic: '살아있는 쇼츠의 예고', window: '10월', sourceKind: 'shorts', sourceId: 'short_y', brand: 'b' })!;
+    expect(s.dropBySource('card_x')).toBe(1);
+    expect(s.list().find((p) => p.id === a.id)?.status).toBe('dropped');
+    expect(s.list().find((p) => p.id === b.id)?.status).toBe('pending');
+    expect(s.dropBySource('card_x')).toBe(0); // 멱등 — 이미 dropped 는 재계수 안 함
+  });
   it('nextDue — 시기 명시+창 안만, 도래 이른 순; pending 정렬도 같은 기준(시기 미상은 뒤)', () => {
     const s = new PromiseStore(tmp());
     s.create({ topic: '시기 미상 건', sourceKind: 'manual', brand: 'b' });
