@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseManualMetrics, latestSampleBySource, viewsSeriesBySource, naverTrackingDue, topInflow, latestDwell, type MetricSample } from './performance';
+import { parseManualMetrics, latestSampleBySource, viewsSeriesBySource, naverTrackingDue, topInflow, latestDwell, sameKstDay, latestTouch, type MetricSample } from './performance';
 import { performanceSignal } from './reinforce';
 
 // 스파크라인용 시계열(2026-07-20) — 소스 접두로 거른 샘플을 '하루 1점(그날 마지막 값)'으로 압축해
@@ -97,6 +97,26 @@ describe('naverTrackingDue — 일일 연속 추적 게이트(수집은 매일, 
     expect(naverTrackingDue({ ...base, publishedTs: '2026-07-01T09:00:00+09:00' }, null, 14, now)).toBe(false);
     expect(naverTrackingDue({ ...base, publishedUrl: undefined }, null, 14, now)).toBe(false);
     expect(naverTrackingDue({ ...base, stage: 'ready' }, null, 14, now)).toBe(false);
+  });
+});
+
+describe('sameKstDay · latestTouch — 시도 포함 하루 1회 게이트 헬퍼(순수)', () => {
+  const now = new Date('2026-07-30T14:30:00+09:00');
+  it('sameKstDay — KST 자정 경계·널·불량 입력', () => {
+    expect(sameKstDay('2026-07-30T00:10:00+09:00', now)).toBe(true);
+    expect(sameKstDay('2026-07-29T23:50:00+09:00', now)).toBe(false);
+    expect(sameKstDay(null, now)).toBe(false);
+    expect(sameKstDay('bogus', now)).toBe(false);
+  });
+  it('latestTouch — 최신 ISO 선택, 널·불량 무시', () => {
+    expect(latestTouch(null, undefined)).toBeNull();
+    expect(latestTouch('2026-07-30T01:00:00Z', '2026-07-30T02:00:00Z')).toBe('2026-07-30T02:00:00Z');
+    expect(latestTouch('bogus', '2026-07-30T02:00:00Z')).toBe('2026-07-30T02:00:00Z');
+  });
+  it('표본을 못 얻어도(측정 null) 오늘 시도가 있으면 게이트가 닫힌다 — 새로고침마다 headful 크롬 재기동 방지(2026-07-30 실측)', () => {
+    const base = { stage: 'published', publishedUrl: 'https://blog.naver.com/x/1', publishedTs: '2026-07-30T13:39:00+09:00', updatedTs: '2026-07-30T13:39:00+09:00' };
+    expect(naverTrackingDue(base, latestTouch(null, '2026-07-30T14:12:00+09:00'), 14, now)).toBe(false); // 오늘 시도 → 닫힘
+    expect(naverTrackingDue(base, latestTouch(null, '2026-07-29T14:12:00+09:00'), 14, now)).toBe(true);  // 어제 시도 → 오늘 도래
   });
 });
 

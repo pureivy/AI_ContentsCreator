@@ -141,6 +141,24 @@ export function naverTrackingDue(p: {
   return kstDay(new Date(lastMeasuredAt)) !== kstDay(now);
 }
 
+/** KST 같은 날 판정(순수) — 측정·시도의 '하루 1회' 게이트 공용. null·파싱 불가는 false. */
+export function sameKstDay(iso: string | null | undefined, now: Date = new Date()): boolean {
+  if (!iso) return false;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return false;
+  const kstDay = (x: Date): string => x.toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+  return kstDay(d) === kstDay(now);
+}
+
+/** 마지막 '접촉'(측정 또는 시도) 시각(순수) — ISO 들 중 최신. 표본을 못 얻은 시도도 하루 1회 게이트에
+ *  포함시키기 위한 조합 헬퍼(2026-07-30 실측: D+0 집계 지연으로 표본이 없으면 measuredAt 이 계속 null
+ *  → 대시보드 새로고침마다 headful 크롬 재기동). null·파싱 불가 입력은 무시. */
+export function latestTouch(...isos: Array<string | null | undefined>): string | null {
+  const xs = isos.filter((s): s is string => !!s && !Number.isNaN(new Date(s).getTime()));
+  if (!xs.length) return null;
+  return xs.sort((a, b) => new Date(a).getTime() - new Date(b).getTime()).pop()!;
+}
+
 /**
  * 표본 전체의 유입 키워드 상위 집계(순수) — 최신 표본만 읽으면 유입이 빈 새 표본이 과거 유입을
  * 가린다(실측 2026-07-30: 일일 추적 표본이 "습도 낮추는법" 유입을 '—' 로 덮음). 어드바이저 유입

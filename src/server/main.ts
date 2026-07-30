@@ -65,7 +65,8 @@ import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
 import { promiseStore } from '../content/promises';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
-import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor, appendMetrics, naverTrackingDue, topInflow, latestDwell } from '../analytics/performance';
+import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor, appendMetrics, naverTrackingDue, topInflow, latestDwell, latestTouch, sameKstDay } from '../analytics/performance';
+import { naverAttemptAt, markNaverAttempt } from '../analytics/naverAttempts';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
@@ -2232,9 +2233,10 @@ function performanceHandler(c: Context): Response {
 }
 app.get('/performance', performanceHandler);
 app.get('/api/performance', performanceHandler);
-// 성과 즉시 재수집(대시보드 새로고침 버튼) — API 채널(쇼츠 유튜브·릴스·카드뉴스 메타)만. 순수 HTTP 라
-// 프로필 락 무관·측정창 게이트는 각 sync 가 판정. 네이버 블로그는 브라우저·프로필 뮤텍스 필요라 제외
-// (검토 탭 수동 수집·07:30 틱 유지). 동시 트리거는 중복 샘플 append 를 만들므로 in-flight 가드.
+// 성과 즉시 재수집(대시보드 새로고침 버튼) — 쇼츠 유튜브·릴스·카드뉴스 메타는 순수 API. 네이버 블로그도
+// 포함하되(RSS 발행 감지 → syncPerformance) headful 크롬을 쓰므로, syncPerformance 의 하루 1회 게이트
+// (측정뿐 아니라 '시도'도 포함 — naverAttempts)·프로필 락이 같은 날 재기동을 막는다.
+// 동시 트리거는 중복 샘플 append 를 만들므로 in-flight 가드.
 let perfRefreshBusy = false;
 async function perfRefreshHandler(c: Context): Promise<Response> {
   if (perfRefreshBusy) return c.json({ error: '이미 재수집이 진행 중입니다.' }, 409);
@@ -3370,24 +3372,31 @@ async function syncPerformance(): Promise<void> {
     // ① 일일 연속 추적 — 발행 직후~측정창(14일) 안의 글은 매일 1회 조회·체류·유입을 '기록만'
     //    (appendMetrics — 강화 없음). 사용자 요청 2026-07-30: 수집은 매일, 강화는 14일 후 그대로.
     //    KST 하루 1회 멱등이라 새로고침 버튼·크론이 겹쳐도 재스크레이프하지 않는다.
-    if (naverTrackingDue(p, latestMetrics(p.id)?.measuredAt ?? null, CONFIG.performanceWindowDays)) {
+    // 게이트 기준은 '접촉'(측정 성공 또는 시도) — 표본을 못 얻은 시도(D+0 집계 지연)도 하루 1회로 캡.
+    // 실측 2026-07-30: 발행 33분 글은 표본이 없어 measuredAt 이 null 로 남고, 새로고침마다 headful 크롬이 재기동됐다.
+    if (naverTrackingDue(p, latestTouch(latestMetrics(p.id)?.measuredAt, naverAttemptAt(p.id)), CONFIG.performanceWindowDays)) {
       try {
         const sample = await collector.measure(p);
         if (sample) {
           appendMetrics(p.id, sample);
           const age = Date.now() - new Date(p.publishedTs ?? p.updatedTs).getTime();
           console.log('[perf-sync]', `${p.title.slice(0, 24)} — 일일 추적 D+${Math.floor(age / 86_400_000)} 기록(조회 ${sample.views})`);
+        } else {
+          console.log('[perf-sync]', `${p.title.slice(0, 24)} — 일일 추적: 표본 없음(발행 초기 집계 지연 가능) — 오늘은 재시도 안 함`);
         }
       } catch (e) { console.log('[perf-sync]', `${p.id} 일일 추적 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+      finally { markNaverAttempt(p.id); }
       continue; // 창 안은 추적만 — 강화는 창 경과 후 아래 ②에서
     }
     // ② 강화(기존) — 측정창 경과 + 미측정(published) 글 1회 측정→강화(measured→reflected).
     if (p.stage !== 'published') continue;
     if (Date.now() - new Date(p.publishedTs ?? p.updatedTs).getTime() < windowMs) continue; // 창 미도달 — 대기
+    if (sameKstDay(naverAttemptAt(p.id))) continue; // 창 경과 글도 시도는 하루 1회 — 데이터 없는 글의 새로고침 반복 스크레이프 방지
     try {
       const sample = await collector.measure(p);
       if (sample) await ingestMetrics(p.id, sample);                        // 측정치 있으면 강화(measured→reflected)
     } catch (e) { console.log('[perf-sync]', `${p.id} 측정 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+    finally { markNaverAttempt(p.id); }
   }
   } finally { naverProfileBusy = null; }
 }
