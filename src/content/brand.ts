@@ -226,3 +226,35 @@ export function brandProductLines(b: BrandProfile | null = getBrand()): string[]
 export function brandSeedKeywords(b: BrandProfile | null = getBrand()): string[] {
   return b?.seedKeywords ?? [];
 }
+
+// ── 브랜드 소재 범위 게이트(2026-07-31, 사용자 "정체성 각인" 요청) ─────────────────
+// banned 는 종전 프롬프트 문자열 유도뿐이라 코드 게이트가 없었고, 실제로 나무·묘목 브랜드에서
+// 채소·화초 콘텐츠가 계속 생산됐다(실측). banned 프로즈에서 기계 대조용 토큰을 도출해
+// 주제 발굴·리서치 미션·예고 등록/이행에서 하드 차단한다.
+/** banned 프로즈 → 대조 토큰(순수). 브랜드의 정상 소재어와 겹칠 수 있는 범용어는 제외. */
+const SCOPE_STOPWORDS = new Set([
+  '주제', '콘텐츠', '브랜드', '무관', '금지', '등', '및', '아닌', '나무', '묘목',
+  '식물', '화분', '실내', '베란다', '작물', '꽃', '가을', '여름', '겨울',
+]);
+export function bannedTopicTerms(b: BrandProfile | null = getBrand()): string[] {
+  // 조사 붙은 형태("나무가"·"브랜드와")가 토큰으로 새면 정상 소재("배롱나무 가을…")를 오탐한다(실측) —
+  // 토큰 자체 또는 끝 한 글자(조사) 뗀 형태가 스톱워드면 제외.
+  const isStop = (t: string): boolean => SCOPE_STOPWORDS.has(t) || (t.length > 2 && SCOPE_STOPWORDS.has(t.slice(0, -1)));
+  const out = new Set<string>();
+  for (const s of b?.banned ?? []) {
+    for (const tok of s.split(/[^가-힣a-zA-Z0-9]+/)) {
+      const t = tok.trim();
+      if (t.length >= 2 && !isStop(t)) out.add(t);
+    }
+  }
+  return [...out];
+}
+/** 텍스트(제목·키워드)가 금지 소재를 담으면 걸린 토큰, 아니면 null(순수 — 공백 무시 부분일치). */
+export function offBrandTerm(text: string, b: BrandProfile | null = getBrand()): string | null {
+  const hay = (text || '').replace(/\s+/g, '');
+  if (!hay) return null;
+  for (const t of bannedTopicTerms(b)) {
+    if (hay.includes(t.replace(/\s+/g, ''))) return t;
+  }
+  return null;
+}

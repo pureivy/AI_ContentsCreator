@@ -15,7 +15,7 @@ import { resolveAssignment } from '../llm/setting';
 import { getCompany } from '../agents/company-loader';
 import { microJSON } from '../orchestrator/agent';
 import { asString } from '../util/str';
-import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix } from '../content/brand';
+import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix, offBrandTerm } from '../content/brand';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 
 export interface AutoCycleDeps<T = string> {
@@ -155,7 +155,8 @@ function readStrategyWinners(): string {
 }
 
 const IDEA_SYSTEM =
-  '너는 1인 AI 콘텐츠 회사의 자율 편집 기획자다. 아래 [팀·업무 범위]가 이 회사가 다루는 콘텐츠 영역이다. ' +
+  '너는 1인 AI 콘텐츠 회사의 자율 편집 기획자다. 소재 범위의 기준은 [브랜드 컨텍스트]다 — 소개가 말하는 영역 안에서만, ' +
+  '금지 목록의 소재는 절대 제안하지 마라. [팀·업무 범위]는 제작 공정 설명일 뿐 소재 범위가 아니다. ' +
   '다음에 제작하면 검색 노출·유입에 가치있는 네이버 블로그(정보/하우투·리뷰) 콘텐츠 아이디어 한 개를 제안하라.\n' +
   '- 검색 의도가 뚜렷하고 실용적인 주제(하우투/비교/리뷰/체크리스트 등). 시의성·계절성도 고려한다.\n' +
   '- [브랜드 컨텍스트]가 있으면 그 기업의 제품·타겟 고객의 관심사와 자연스럽게 연결되는 주제를 우선하라(노골적 광고성 주제 금지 — 독자에게 유용한 정보가 우선).\n' +
@@ -231,6 +232,13 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     const title = asString(o?.title).trim().replace(/^["'\-•\s]+/, '').slice(0, 120);
     if (!title || recentAuto.includes(title)) return null;
     const keyword = asString(o?.keyword).trim() || undefined;
+    // 브랜드 소재 게이트(하드) — 프롬프트 유도가 실패해도 금지 소재는 코드가 막는다(2026-07-31 정체성 각인).
+    const off = offBrandTerm(`${title} ${keyword ?? ''}`);
+    if (off) {
+      rejectNote = `[직전 제안 기각 — 브랜드가 다루지 않는 소재 "${off}" 포함] 브랜드 컨텍스트의 소개·금지를 다시 보고, 나무·묘목 범위 안의 완전히 다른 주제로 제안하라.`;
+      console.log(`[auto-cycle] 아이디어 기각(브랜드 범위 밖) — "${title}" (소재 "${off}")`);
+      continue;
+    }
     const sim = findSimilarContent({ title, ...(keyword ? { keyword } : {}) }, existing);
     if (sim.length) {
       const top = sim[0]!;
@@ -338,5 +346,8 @@ export async function proposeResearchMission(signal?: AbortSignal, slug?: string
   ).catch(() => null);
   const title = asString(o?.title).trim().replace(/^["'\-•\s]+/, '').slice(0, 120);
   if (!title || (st.recent ?? []).includes(title)) return null;
+  // 브랜드 소재 게이트(하드) — 리서치 미션도 금지 소재면 스킵(다음 주기 재시도, 2026-07-31 정체성 각인).
+  const off = offBrandTerm(title);
+  if (off) { console.log(`[auto-cycle] 리서치 미션 기각(브랜드 범위 밖) — "${title}" (소재 "${off}")`); return null; }
   return title;
 }

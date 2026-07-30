@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
-import { activeBrandSlug } from './brand';
+import { activeBrandSlug, offBrandTerm } from './brand';
 import { genId } from '../util/ids';
 
 export type PromiseStatus = 'pending' | 'fulfilled' | 'dropped';
@@ -138,6 +138,10 @@ export class PromiseStore {
   }): ContentPromise | null {
     const topic = sanitizeTopic(input.topic);
     if (!topic) return null;
+    // 브랜드 소재 게이트(2026-07-31 정체성 각인) — 오프브랜드 예고는 등록 자체를 거부(활성 브랜드 프로필 기준).
+    // 예고 이행 경로가 신규성·범위 검사를 다 우회하므로 입구에서 막는 게 가장 싸다. 수동 등록도 동일 적용.
+    const off = offBrandTerm(topic);
+    if (off) { console.log(`[promises] 예고 등록 거부(브랜드 범위 밖) — "${topic.slice(0, 40)}" (소재 "${off}")`); return null; }
     const brand = input.brand === undefined ? (activeBrandSlug() || undefined) : (input.brand || undefined);
     if (input.sourceId) {
       const bySource = this.list().find((p) => p.sourceId === input.sourceId);

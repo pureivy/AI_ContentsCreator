@@ -55,7 +55,7 @@ import { ensureShortsThumbnail, ensureShortsDownload, extractFirstFrame } from '
 import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece } from '../content/pieces';
 import { listPersonas } from '../content/personas';
-import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeBrandSlug, deleteBrand, isSafeBrandSlug } from '../content/brand';
+import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeBrandSlug, deleteBrand, isSafeBrandSlug, offBrandTerm } from '../content/brand';
 import type { BrandProfile } from '../content/brand';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
@@ -3278,14 +3278,25 @@ async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
       if (reverted) console.log(`[auto-cycle] 예고 정합 복원 — ${reverted}건 pending 복귀(이행 piece 유실/실패)`);
       const due = promiseStore().nextDue(tickBrand);
       if (due) {
-        const piece = pieceStore().create({ title: due.topic, brand: tickBrand || undefined, auto: true });
-        // fulfilled 마킹은 여기서 하지 않는다 — launch 가 런을 실제로 시작한 뒤에만(아래 launch 참조).
-        console.log(`[auto-cycle] 예고 이행 착수 — "${due.topic.slice(0, 40)}" (출처: ${due.sourceKind}${due.window ? ` · ${due.window}` : ''})`);
-        return { kind: 'piece', piece, promiseId: due.id };
+        // 브랜드 소재 게이트 — 예고 경로는 신규성·범위 검사를 다 우회하므로 여기서 막는다. 게이트 신설(2026-07-31)
+        // 이전에 등록된 오프브랜드 약속의 이행 방지. 걸리면 dropped 처리 후 신규 아이디어로 폴백.
+        const off = offBrandTerm(due.topic);
+        if (off) {
+          promiseStore().update(due.id, { status: 'dropped' });
+          console.log(`[auto-cycle] 예고 기각(브랜드 범위 밖) — "${due.topic.slice(0, 40)}" (소재 "${off}") → dropped`);
+        } else {
+          const piece = pieceStore().create({ title: due.topic, brand: tickBrand || undefined, auto: true });
+          // fulfilled 마킹은 여기서 하지 않는다 — launch 가 런을 실제로 시작한 뒤에만(아래 launch 참조).
+          console.log(`[auto-cycle] 예고 이행 착수 — "${due.topic.slice(0, 40)}" (출처: ${due.sourceKind}${due.window ? ` · ${due.window}` : ''})`);
+          return { kind: 'piece', piece, promiseId: due.id };
+        }
       }
     } catch { /* 예고 대장 실패 무해 — 신규 아이디어로 폴백 */ }
     const idea = await proposeContentIdeas(signal);
-    if (idea) return { kind: 'piece', piece: pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche, brand: activeBrandSlug() || undefined, auto: true }) };
+    // 브랜드 고정 — 제안 LLM 대기(수 초) 중 브랜드가 전환되면 A 컨텍스트로 만든 아이디어가 B 에 귀속될 수
+    // 있어 버린다(리서치 경로 main.ts 위 tickBrand 고정과 동일 원칙 — 종전엔 콘텐츠 경로만 빠져 있었음).
+    if ((activeBrandSlug() || '') !== tickBrand) return null;
+    if (idea) return { kind: 'piece', piece: pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche, brand: tickBrand || undefined, auto: true }) };
   }
   // 파생 콘텐츠 일일 케이던스(사용자 지시 2026-07-16: 쇼츠·카드뉴스 매일 1편) — 초안 있는 최신 블로그
   // 에서 파생(리서치된 내용 재사용 = 같은 주제 채널 전개라 신규성 가드 비대상). 케이던스는 자율 생산분만
