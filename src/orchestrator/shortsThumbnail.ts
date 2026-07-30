@@ -66,8 +66,8 @@ export async function planThumbnailCopy(input: { title: string; description: str
   } catch { return fallback(); }
 }
 
-/** 카피 → gpt-image 프롬프트(실측 검증본). 지정 한국어만, 오타 없이. */
-function buildThumbnailPrompt(copy: ThumbCopy): string {
+/** 카피 → gpt-image 프롬프트(실측 검증본). 지정 한국어만, 오타 없이. 순수 — export 는 테스트·샘플 렌더용. */
+export function buildThumbnailPrompt(copy: ThumbCopy): string {
   const pts = copy.points.length ? copy.points.map((p) => `'${p}'`).join(', ') : '';
   // 서체 고정(사용자 확정 2026-07-30): 붓펜 캘리 — 획 끝·흘림이 살아있는 붓글씨. 크레용·색연필체로 흘러가는 것 방지.
   const titleLine = copy.line2
