@@ -9,8 +9,14 @@
  * 채널 독립: FB 실패가 IG 성공을 취소하지 않는다(부분 성공 + fbError 로 사유 보고, 성공 위장 금지).
  */
 import fs from 'node:fs';
+import { CONFIG } from '../config';
 import { getMetaAccount } from '../secrets/store';
 import { uploadToFalStorage } from './falStorage';
+
+// 'AI 정보' 라벨 자기 공개(META_AI_LABEL, 기본 on) — IG 는 컨테이너 생성 파라미터 is_ai_generated(2026-06-22
+// 공식 도입, 캐러셀은 부모에만 — 자식에 넣으면 에러), FB 릴스는 video_reels 레퍼런스의 동명 파라미터.
+// FB 사진(/photos)에는 공식 플래그가 없어 provenance_info(is_gen_ai) 자기 공시로 대신한다 — 라벨 노출 실검증 대기.
+const aiLabelParam = (): Record<string, string> => (CONFIG.metaAiLabel ? { is_ai_generated: 'true' } : {});
 
 // 인스타그램 로그인 방식(2026-07-20) — 콘텐츠 발행은 graph.instagram.com. 페이지 없음.
 export const GRAPH = 'https://graph.instagram.com/v23.0';
@@ -143,6 +149,9 @@ async function uploadUnpublishedPhoto(pageId: string, token: string, filePath: s
   const form = new FormData();
   form.append('source', new Blob([fs.readFileSync(filePath)], { type: 'image/png' }), 'slide.png');
   form.append('published', 'false');
+  // /photos 엔 is_ai_generated 가 없어 provenance_info 자기 공시(EXPLICIT+is_gen_ai)로 대신 — 라벨 노출은
+  // 문서상 미보장(실검증 대기). 미수용이어도 무해한 선언 필드라 실패 시 파라미터 오류가 나면 킬스위치로 끈다.
+  if (CONFIG.metaAiLabel) form.append('provenance_info', JSON.stringify({ provenance_type: 'EXPLICIT', is_gen_ai: true }));
   form.append('access_token', token);
   const j = await graphJson(`${FB_GRAPH}/${pageId}/photos`, { method: 'POST', body: form, signal }, 'FB 사진 업로드');
   const id = extractId(j);
@@ -243,7 +252,7 @@ export async function publishCardNewsToMeta(opts: {
       if (imageUrls.length === 1) {
         const single = await graphJson(`${GRAPH}/me/media`, {
           method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ image_url: imageUrls[0]!, caption: message, access_token: token }),
+          body: new URLSearchParams({ image_url: imageUrls[0]!, caption: message, ...aiLabelParam(), access_token: token }),
         }, 'IG 이미지 컨테이너');
         const sid = extractId(single);
         if (!sid) throw new Error('IG 이미지 컨테이너 응답 이형');
@@ -261,7 +270,8 @@ export async function publishCardNewsToMeta(opts: {
         }
         const carousel = await graphJson(`${GRAPH}/me/media`, {
           method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ media_type: 'CAROUSEL', children: childIds.join(','), caption: message, access_token: token }),
+          // is_ai_generated 는 부모 컨테이너에만 — 자식 아이템(:256)에 지정하면 에러(Meta 콘텐츠 발행 가이드).
+          body: new URLSearchParams({ media_type: 'CAROUSEL', children: childIds.join(','), caption: message, ...aiLabelParam(), access_token: token }),
         }, 'IG 캐러셀 컨테이너');
         const cid = extractId(carousel);
         if (!cid) throw new Error('IG 캐러셀 컨테이너 응답 이형');
@@ -367,7 +377,7 @@ export async function publishFbReel(pageId: string, token: string, videoPath: st
   await uploadVideoBinary(start.upload_url, token, videoPath, 'FB 릴스 업로드', signal);
   const fin = await graphJson(`${FB_GRAPH}/${pageId}/video_reels`, {
     method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ upload_phase: 'finish', video_id: start.video_id, video_state: 'PUBLISHED', description, access_token: token }),
+    body: new URLSearchParams({ upload_phase: 'finish', video_id: start.video_id, video_state: 'PUBLISHED', description, ...aiLabelParam(), access_token: token }),
   }, 'FB 릴스 발행') as { success?: boolean };
   if (!fin.success) throw new Error('FB 릴스 발행 응답 이형(success 없음)');
   return start.video_id;
@@ -418,7 +428,7 @@ export async function publishShortsToMeta(opts: {
         try { coverUrl = await uploadToFalStorage(opts.thumbnailPath, 'image/jpeg', signal); }
         catch { coverUrl = null; }
       }
-      const body = new URLSearchParams({ media_type: 'REELS', video_url: videoUrl, caption: message, share_to_feed: 'true', access_token: token });
+      const body = new URLSearchParams({ media_type: 'REELS', video_url: videoUrl, caption: message, share_to_feed: 'true', ...aiLabelParam(), access_token: token });
       if (coverUrl) body.set('cover_url', coverUrl);
       const container = await graphJson(`${GRAPH}/me/media`, {
         method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

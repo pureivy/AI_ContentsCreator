@@ -137,6 +137,7 @@ export interface Config {
   /** 쇼츠 상단 제목 캘리 오버레이 — 별도 생성 투명 PNG 를 전 씬 고정(사용자 확정 2026-07-30). */
   /** 네이버 통계 수집(naver_stats)을 헤드리스로 — 일일 추적이 조각 수만큼 크롬 창을 띄우는 것 방지. */
   readonly naverStatsHeadless: boolean;
+  readonly metaAiLabel: boolean;
   readonly shortsTitleOverlay: boolean;
   /** 쇼츠 상단 제목 오프셋(% of 높이, 0~20 클램프) — 5=플랫폼 상단 UI 회피 절충. */
   readonly shortsTitleTopPct: number;
@@ -290,6 +291,9 @@ export const CONFIG: Config = {
   // 통계 수집은 세션 쿠키 재사용이라 헤드리스 기본(사용자 요청 2026-07-31 — 날짜 전환 후 첫 수집의 크롬 창 연발 제거).
   // 인증 판정은 API 기반이라 헤드리스 안전(구 DOM 오판은 우회됨). 발행·임시저장은 별개(NAVER_PUBLISH_HEADLESS, 헤드풀 기본 유지).
   naverStatsHeadless: envBool('NAVER_STATS_HEADLESS', true),
+  // 메타 발행 시 'AI 정보' 자기 공개 라벨 — IG 컨테이너·FB 릴스는 is_ai_generated(공식, 2026-06-22 도입),
+  // FB 사진은 provenance_info(효과 실검증 대기). AI 생성 콘텐츠 파이프라인이므로 기본 on.
+  metaAiLabel: envBool('META_AI_LABEL', true),
   shortsTitleOverlay: envBool('SHORTS_TITLE_OVERLAY', true),
   shortsTitleTopPct: Math.min(20, Math.max(0, envInt('SHORTS_TITLE_TOP_PCT', 5))),
   shortsTitleWidthPct: Math.min(100, Math.max(30, envInt('SHORTS_TITLE_WIDTH_PCT', 74))), // 74=2줄 위계(키워드 라벨+훅) 기준 재보정(2026-07-31) — 90은 1줄 시절 값
