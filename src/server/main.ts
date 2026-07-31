@@ -3397,7 +3397,13 @@ async function syncPerformance(opts?: { force?: boolean }): Promise<void> {
     //    KST 하루 1회 멱등이라 새로고침 버튼·크론이 겹쳐도 재스크레이프하지 않는다.
     // 게이트 기준은 '접촉'(측정 성공 또는 시도) — 표본을 못 얻은 시도(D+0 집계 지연)도 하루 1회로 캡.
     // 실측 2026-07-30: 발행 33분 글은 표본이 없어 measuredAt 이 null 로 남고, 새로고침마다 headful 크롬이 재기동됐다.
-    if (naverTrackingDue(p, latestTouch(latestMetrics(p.id)?.measuredAt, naverAttemptAt(p.id)), CONFIG.performanceWindowDays)) {
+    // 단 새로고침(force)은 활성 브랜드 글에 한해 '측정 성공'만 접촉으로 본다(빈손 시도는 재시도) — 이른 아침
+    // 데일리 런이 집계 지연으로 빈손이면 하루 종일 어제 값에 멈춰 보이던 문제(사용자 확정 2026-07-31, 조회 1↔4).
+    // 타 브랜드 글은 시도 게이트 유지 — 활성 프로필로는 항상 실패라 클릭마다 재스크레이프하는 낭비 방지.
+    const touch = (opts?.force && brandMatch(p))
+      ? (latestMetrics(p.id)?.measuredAt ?? null)
+      : latestTouch(latestMetrics(p.id)?.measuredAt, naverAttemptAt(p.id));
+    if (naverTrackingDue(p, touch, CONFIG.performanceWindowDays)) {
       try {
         const sample = await collector.measure(p);
         if (sample) {
@@ -3417,7 +3423,8 @@ async function syncPerformance(opts?: { force?: boolean }): Promise<void> {
     //    헤드리스 전환(45c69eb)으로 크롬 창 남발이 해소돼 편입하되, 시도 게이트(하루 1회)는 그대로 캡.
     if (opts?.force && p.publishedUrl && p.stage !== 'published'
       && Date.now() - new Date(p.publishedTs ?? p.updatedTs).getTime() >= windowMs
-      && !sameKstDay(naverAttemptAt(p.id))) {
+      // 활성 브랜드는 '측정 성공'만 스킵 사유(빈손 재시도 허용, ① 과 동일 원칙) — 타 브랜드는 시도 게이트.
+      && !sameKstDay(brandMatch(p) ? (latestMetrics(p.id)?.measuredAt ?? null) : naverAttemptAt(p.id))) {
       try {
         const sample = await collector.measure(p);
         if (sample) {
