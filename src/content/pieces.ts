@@ -39,6 +39,8 @@ export interface Piece {
   errors?: number;
   /** SEO 미달로 자동 리비전을 돌린 횟수 — 자동 임시저장 게이트의 무한 루프 방지(캡 1). */
   autoRevisions?: number;
+  /** 검토 대기(ready) 알림 발송 시각 — 미기록이면 부팅 복구 스윕이 재발송(재시작으로 fire-and-forget 유실 대비, 2026-07-31). */
+  notifiedTs?: string;
   /** 자율 사이클이 만든 것인지(수동 생성과 카덴스 쿼터 분리용). */
   auto?: boolean;
   createdTs: string;

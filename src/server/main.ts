@@ -314,10 +314,15 @@ function advancePieceReady(pieceId: string, runId: string, deliverable: string, 
   let revisionLaunched = false;
   try { revisionLaunched = maybeAutoNaverDraft(pieceId); } catch { /* 무해 — 수동(검토 탭 버튼) 경로는 그대로 살아있다 */ }
   // 검토 대기 알림(조각별) — 텔레그램이면 본문 발췌 동봉. 전송 실패 무해(fire-and-forget).
+  // 발송이 '정착'한 뒤 notifiedTs 기록 — 프로세스가 전송 도중 죽으면 미기록으로 남아 부팅 복구 스윕이
+  // 재발송한다(실측 2026-07-31: ready 승격 6초 뒤 tsx 재시작 → 알림·리비전 동반 유실).
   const owned = contentReadyNotifyEnabled();
   if (owned && !revisionLaunched) {
     const p = pieceStore().get(pieceId);
-    if (p) void notifyBlogReady({ id: p.id, title: p.title, keyword: p.keyword, seoScore: p.seoScore, brand: p.brand, revised }, runId);
+    if (p) {
+      void notifyBlogReady({ id: p.id, title: p.title, keyword: p.keyword, seoScore: p.seoScore, brand: p.brand, revised }, runId)
+        .finally(() => { try { pieceStore().update(pieceId, { notifiedTs: new Date().toISOString() }); } catch { /* 무해 */ } });
+    }
   }
   return owned;
 }
@@ -3476,6 +3481,21 @@ if (!process.env.VITEST) {
   if (orphanCards.length || orphanShorts.length) {
     // eslint-disable-next-line no-console
     console.log(`[부팅 복구] 중단된 생성 잡 정리 — 카드뉴스 ${orphanCards.length}건 · 숏폼 ${orphanShorts.length}건 → 실패 처리`);
+  }
+  // 검토 알림 유실 복구 — ready 승격·리비전 대기 중 재시작하면 fire-and-forget 알림이 프로세스와 함께
+  // 죽는다(실측 2026-07-31: ready 6초 뒤 tsx 재시작 → 알림·리비전 동반 유실, "사과나무" 건). 최근 24h 내
+  // 미발송(notifiedTs 없음)분만 재발송 — 옛 글 스팸 방지. 발송 '전에' 스탬프: 편집 세션의 연속 재시작에도
+  // 1회만 나간다(여기서 또 죽으면 그 1건은 유실이지만, 부팅 연발이 훨씬 흔한 시나리오라 선기록이 낫다).
+  // 리비전 유예로 알림을 생략한 글도 리비전이 재시작에 죽으면 여기서 원본 초안 알림이 나간다(리비전은 프로세스 생존 불가).
+  if (contentReadyNotifyEnabled()) {
+    for (const p of pieceStore().list()) {
+      if (p.stage !== 'ready' || p.notifiedTs || !p.runId) continue;
+      if (Date.now() - new Date(p.updatedTs).getTime() > 24 * 3600 * 1000) continue;
+      pieceStore().update(p.id, { notifiedTs: new Date().toISOString() });
+      // eslint-disable-next-line no-console
+      console.log(`[부팅 복구] 유실된 검토 알림 재발송 — ${p.title.slice(0, 30)}`);
+      void notifyBlogReady({ id: p.id, title: p.title, keyword: p.keyword, seoScore: p.seoScore, brand: p.brand }, p.runId);
+    }
   }
 }
 
