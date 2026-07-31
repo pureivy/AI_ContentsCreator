@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
-import { motionGuideFor, buildMotionDirectorTask, sanitizeMotionPrompt, parseMotionPrompts, directSceneMotion } from './shortsMotionDirector';
+import { motionGuideFor, buildMotionDirectorTask, sanitizeMotionPrompt, parseMotionPrompts, directSceneMotion, hasSubjectRisk, cameraOnlyMotionPrompt } from './shortsMotionDirector';
 
 // directSceneMotion 정렬 리맵 검증용 — 비전 호출·게이트만 목킹(순수 함수 테스트에는 영향 없음).
 vi.mock('./agent', () => ({ microJSON: vi.fn() }));
@@ -56,6 +56,43 @@ describe('sanitizeMotionPrompt — 결정적 가드(순수)', () => {
     const out = sanitizeMotionPrompt(long);
     expect(out).not.toBeNull();
     expect((out as string).length).toBeLessThanOrEqual(430); // 400 캡 + 접미
+  });
+});
+
+describe('hasSubjectRisk / cameraOnlyMotionPrompt — 사람·손·도구 카메라 전용 하드 게이트(2026-07-31)', () => {
+  it('사람·손·도구 씬 매칭', () => {
+    for (const p of ['정원사가 가지를 자르는 모습', '전정가위로 가지 정리 클로즈업', '손으로 흙을 만지는 장면', '모종삽으로 흙을 뜨는 베란다', '장갑을 낀 채 분갈이', 'a farmer pruning with shears']) {
+      expect(hasSubjectRisk(p)).toBe(true);
+    }
+  });
+  it('합성어 오탐 제외 — 손상·삽목·손실·괭이밥·톱니·칼륨은 비매칭', () => {
+    for (const p of ['잎이 손상된 배롱나무 가지', '제라늄 삽목 화분이 놓인 선반', '수확 손실을 줄이는 배수', '괭이밥이 자란 화단 구석', '톱니 모양 잎맥의 접사', '칼륨 비료 알갱이와 흙']) {
+      expect(hasSubjectRisk(p)).toBe(false);
+    }
+  });
+  it('템플릿 — 마커·정지 지시·no text 포함, kind 별 카메라 반영', () => {
+    const base = cameraOnlyMotionPrompt();
+    expect(base.startsWith('Camera work only:')).toBe(true);
+    expect(base).toContain('perfectly still');
+    expect(base.toLowerCase()).toContain('no text');
+    expect(cameraOnlyMotionPrompt('hook')).toContain('push-in');
+    expect(cameraOnlyMotionPrompt(undefined, true)).toContain('push-in'); // 첫 씬은 kind 없어도 훅 취급
+    expect(cameraOnlyMotionPrompt('cta')).toContain('pull-back');
+    expect(cameraOnlyMotionPrompt('stat')).toContain('drift');
+  });
+  it('parseMotionPrompts — subject 분류가 걸리면 LLM 창작 프롬프트를 버리고 템플릿 강제', () => {
+    const creative = 'A hand reaches in and prunes the branch with scissors, petals drifting down slowly.';
+    const calm = 'Very slow lateral drift across the terracotta pots on the sunlit shelf. no text, no captions.';
+    const out = parseMotionPrompts({ motions: [
+      { scene: 1, prompt: creative, subject: 'hands' },
+      { scene: 2, prompt: calm, subject: 'none' },
+      { scene: 3, prompt: calm, subject: 'Tool ' }, // 대소문자·공백 정규화
+    ] }, 3, ['hook', undefined, 'cta']);
+    expect(out[0]?.startsWith('Camera work only:')).toBe(true);
+    expect(out[0]).toContain('push-in');           // kinds[0]=hook 반영
+    expect(out[1]).toBe(calm);                     // none 은 종전대로 위생만
+    expect(out[2]?.startsWith('Camera work only:')).toBe(true);
+    expect(out[2]).toContain('pull-back');         // kinds[2]=cta 반영
   });
 });
 

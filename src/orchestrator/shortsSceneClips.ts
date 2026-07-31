@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { probeDuration } from '../tools/shortsCommon';
+import { cameraOnlyMotionPrompt, hasSubjectRisk } from './shortsMotionDirector';
 
 export interface SceneClipsResult { clips: Array<string | null>; issues: string[] }
 
@@ -27,16 +28,18 @@ export function extractVideoUrl(json: unknown): string | null {
  * 모델별 요청 body(순수) — LTX 계열과 Wan 계열은 파라미터 스키마가 달라 비호환 필드는 422 로
  * 무음 실패한다(실런 검증: LTX-2 는 aspect 파라미터가 없어 가로 전용 → 세로 쇼츠 기본은 Wan).
  */
-export function buildI2vBody(model: string, prompt: string, imageUrl: string): Record<string, unknown> {
+export function buildI2vBody(model: string, prompt: string, imageUrl: string, subjectHold = false): Record<string, unknown> {
   if (model.includes('wan')) {
     // Wan 2.2: 145프레임@24fps ≈ 6초(Remotion CLIP_FRAMES=180 과 짝), 세로 9:16 명시(입력 2:3 이라 auto 대신 고정).
     // negative_prompt: 5B 급 대표 붕괴(형태 용융·손 기형·물체 출현/소실·유사 글자) 억제 — fal Wan 스키마 표준 필드.
+    // subjectHold(사람·손·도구 씬 카메라 전용 강제)면 피사체 동작 자체를 negative 로 눌러 모델 단에서도 이중 방어.
     return {
       prompt, image_url: imageUrl, num_frames: 145, frames_per_second: 24, resolution: '720p', aspect_ratio: '9:16',
-      negative_prompt: 'distortion, morphing, warping, melting, deformed face, deformed hands, extra limbs, mutated fingers, objects appearing or disappearing, text, letters, watermark, flickering',
+      negative_prompt: 'distortion, morphing, warping, melting, deformed face, deformed hands, extra limbs, mutated fingers, objects appearing or disappearing, text, letters, watermark, flickering'
+        + (subjectHold ? ', hands moving, fingers moving, arms moving, people moving, person walking, gesturing, grabbing, cutting motion, tool moving, action progressing' : ''),
     };
   }
-  // LTX-2 계열 — 가로 전용(세로 불가 실측). env 로 명시 선택 시에만 사용.
+  // LTX-2 계열 — 가로 전용(세로 불가 실측). env 로 명시 선택 시에만 사용(negative_prompt 필드 없음).
   return { prompt, image_url: imageUrl, duration: 6, resolution: '1080p', fps: 25, generate_audio: false };
 }
 
@@ -95,10 +98,16 @@ export async function i2vSceneClips(opts: {
       try {
         const sceneSignal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(I2V_TIMEOUT_MS)]) : AbortSignal.timeout(I2V_TIMEOUT_MS);
         const b64 = fs.readFileSync(img).toString('base64');
-        // 씬별 모션: 디렉터(비전) 프롬프트 우선, 없으면 정적 접미 폴백.
-        const motion = opts.motionPrompts?.[i] ?? buildMotionPrompt(opts.scenePrompts[i] ?? '');
+        // 씬별 모션: 디렉터(비전) 프롬프트 우선, 없으면 정적 접미 폴백. 단 씬 묘사에 사람·손·도구가 있으면
+        // 어느 경로든 카메라 전용 템플릿으로 강제(사용자 확정 2026-07-31) — 비전이 이미 강제한 씬(kind 반영)은
+        // 그대로 두고, 비전이 놓친·폴백 씬만 키워드 층이 교체한다. negative 보강은 마커로 판정.
+        const scenePrompt = opts.scenePrompts[i] ?? '';
+        const directed = opts.motionPrompts?.[i];
+        const motion = (directed && directed.startsWith('Camera work only:')) ? directed
+          : hasSubjectRisk(scenePrompt) ? cameraOnlyMotionPrompt()
+            : (directed ?? buildMotionPrompt(scenePrompt));
         const json = await falQueueRun(CONFIG.shortsI2vModel,
-          buildI2vBody(CONFIG.shortsI2vModel, motion, `data:image/png;base64,${b64}`),
+          buildI2vBody(CONFIG.shortsI2vModel, motion, `data:image/png;base64,${b64}`, motion.startsWith('Camera work only:')),
           sceneSignal);
         const url = extractVideoUrl(json);
         if (!url) throw new Error('video.url 없음');

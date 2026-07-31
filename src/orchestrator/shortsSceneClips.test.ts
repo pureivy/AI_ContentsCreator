@@ -33,4 +33,15 @@ describe('buildI2vBody — 모델별 스키마 분기(순수)', () => {
     const b = buildI2vBody('fal-ai/ltx-2/image-to-video/fast', 'p', 'data:x');
     expect(b).toEqual({ prompt: 'p', image_url: 'data:x', duration: 6, resolution: '1080p', fps: 25, generate_audio: false });
   });
+  it('wan + subjectHold: 피사체 동작 금지 negative 보강(사람·손·도구 카메라 전용 강제, 2026-07-31)', () => {
+    const b = buildI2vBody('fal-ai/wan/v2.2-5b/image-to-video', 'p', 'data:x', true);
+    const neg = String(b.negative_prompt);
+    expect(neg).toContain('deformed hands');       // 기존 붕괴 억제 유지
+    expect(neg).toContain('hands moving');
+    expect(neg).toContain('cutting motion');
+    expect(neg).toContain('tool moving');
+    // subjectHold=false 는 기존과 바이트 동일(스키마 가드)
+    expect(buildI2vBody('fal-ai/wan/v2.2-5b/image-to-video', 'p', 'data:x', false))
+      .toEqual(buildI2vBody('fal-ai/wan/v2.2-5b/image-to-video', 'p', 'data:x'));
+  });
 });
