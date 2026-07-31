@@ -2249,11 +2249,10 @@ async function runPerfRefresh(): Promise<void> {
     // 네이버 블로그: 발행 감지(공개 RSS — 프로필 락 무관) 후 성과 수집. syncPerformance 가 프로필 락·측정창·
     // 하루 1회(시도 포함) 게이트를 스스로 처리하므로, 수집 대상이 없거나 프로필 사용 중이면 조용히 건너뛴다
     // (일일 동기화와 동일 동작·안전). 쇼츠·릴스·카드뉴스는 순수 API 라 병행. allSettled — 한 채널 실패가 다른 채널을 막지 않음.
-    // API 채널(유튜브·IG·FB)은 force — 새로고침은 측정창 지나 동결된 옛 콘텐츠 숫자도 갱신한다
-    // (사용자 기대 2026-07-31). 강화·일일 틱 게이트는 각 sync 내부에서 기존 그대로. 네이버만 브라우저
-    // 비용 때문에 하루 1회(시도 포함) 게이트 유지.
+    // 전 채널 force — 새로고침은 측정창 지나 동결된 옛 콘텐츠 숫자도 갱신한다(네이버 편입 사용자 확정
+    // 2026-07-31 — 헤드리스 전환으로 크롬 비용 해소). 네이버는 시도 게이트(하루 1회)가 그대로 상한.
     await Promise.allSettled([
-      discoverPublishedNaver().then(() => syncPerformance()),
+      discoverPublishedNaver().then(() => syncPerformance({ force: true })),
       syncShortsPerformance({ force: true }),
       syncShortsMetaPerformance({ force: true }),
       syncCardnewsPerformance({ force: true }),
@@ -3385,7 +3384,7 @@ void stopDaily;
 // 일일 성과 동기화(옵트인: PERFORMANCE_SYNC_TIME="HH:MM"). 발행 후 측정창 도달한 piece 를 등록 수집기로
 // 측정→강화(멱등). 기본 수집기(manual)는 measure 가 null 이라 no-op — 사람이 POST /pieces/:id/metrics 로
 // 수동 입력한다. 실제 브라우저 스크레이퍼를 setCollector 로 등록하면 자동화(스크레이퍼 마일스톤, 사용자 로그인 필요).
-async function syncPerformance(): Promise<void> {
+async function syncPerformance(opts?: { force?: boolean }): Promise<void> {
   // 사용자 트리거 브라우저 작업(임시저장·수집)이 프로필을 쓰는 중이면 이번 주기는 건너뛴다(프로필 락 충돌 방지).
   if (naverProfileBusy) { console.log('[perf-sync]', `프로필 사용 중(${naverProfileBusy}) — 이번 주기 건너뜀`); return; }
   naverProfileBusy = '일일동기화';
@@ -3411,6 +3410,23 @@ async function syncPerformance(): Promise<void> {
       } catch (e) { console.log('[perf-sync]', `${p.id} 일일 추적 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
       finally { markNaverAttempt(p.id); }
       continue; // 창 안은 추적만 — 강화는 창 경과 후 아래 ②에서
+    }
+    // ①b 새로고침(force) 동결 해제 — 측정창 경과+강화 완료(reflected/measured)로 ①·② 어디에도 안 걸려
+    //    동결되던 글을 재수집해 '기록만'(강화 재실행 없음). 사용자 확정 2026-07-31: 성과탭 새로고침이
+    //    옛 글 조회수도 갱신(실측: 페이지 67 vs 성과탭 53 동결) — 유튜브·IG·FB force 와 동작 통일.
+    //    헤드리스 전환(45c69eb)으로 크롬 창 남발이 해소돼 편입하되, 시도 게이트(하루 1회)는 그대로 캡.
+    if (opts?.force && p.publishedUrl && p.stage !== 'published'
+      && Date.now() - new Date(p.publishedTs ?? p.updatedTs).getTime() >= windowMs
+      && !sameKstDay(naverAttemptAt(p.id))) {
+      try {
+        const sample = await collector.measure(p);
+        if (sample) {
+          appendMetrics(p.id, sample);
+          console.log('[perf-sync]', `${p.title.slice(0, 24)} — 새로고침 갱신(창 경과, 조회 ${sample.views})`);
+        }
+      } catch (e) { console.log('[perf-sync]', `${p.id} 새로고침 갱신 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+      finally { markNaverAttempt(p.id); }
+      continue;
     }
     // ② 강화(기존) — 측정창 경과 + 미측정(published) 글 1회 측정→강화(measured→reflected).
     if (p.stage !== 'published') continue;
