@@ -9,12 +9,14 @@ import { getSecret, getYoutubeAccount } from '../secrets/store';
 
 export interface YtUploadResult { ok: boolean; videoId?: string; url?: string; error?: string; thumbnailError?: string }
 
-/** snippet/status 메타데이터(순수) — 제목 100자·꺾쇠 제거, 설명 5000자, tags ≤15개·30자, private 고정. */
-export function buildVideoMeta(title: string, description: string, hashtags: string[]): Record<string, unknown> {
+/** snippet/status 메타데이터(순수) — 제목 100자·꺾쇠 제거, 설명 5000자, tags ≤15개·30자, private 고정.
+ *  blogUrl(파생 쇼츠의 원본 네이버 글, 2026-07-31)은 설명 본문과 태그 사이 클릭 가능한 링크 줄. */
+export function buildVideoMeta(title: string, description: string, hashtags: string[], blogUrl?: string): Record<string, unknown> {
   const clean = (s: string): string => s.replace(/[<>]/g, ''); // 유튜브 API 는 제목·설명·태그에 <> 금지
   const t = clean(title).trim().slice(0, 100) || '쇼츠';
   const tagLine = hashtags.filter(Boolean).join(' ');
-  const desc = clean([description.trim(), tagLine].filter(Boolean).join('\n\n')).slice(0, 5000);
+  const linkLine = blogUrl ? `📖 전체 가이드(블로그): ${blogUrl}` : '';
+  const desc = clean([description.trim(), linkLine, tagLine].filter(Boolean).join('\n\n')).slice(0, 5000);
   const tags = hashtags.map((h) => clean(h.replace(/^#/, '')).trim().slice(0, 30)).filter(Boolean).slice(0, 15);
   return {
     snippet: { title: t, description: desc, tags, categoryId: '22' },
@@ -56,6 +58,8 @@ async function refreshAccessToken(clientId: string, clientSecret: string, refres
 export async function uploadShortsToYoutube(opts: {
   slug: string; videoPath: string;
   title: string; description: string; hashtags: string[];
+  /** 원본 네이버 블로그 URL(파생 쇼츠일 때) — 설명에 '전체 가이드' 링크 줄로 삽입. */
+  blogUrl?: string;
   thumbnailPath?: string; signal?: AbortSignal;
 }): Promise<YtUploadResult> {
   try {
@@ -72,7 +76,7 @@ export async function uploadShortsToYoutube(opts: {
 
     const boundary = `yt-${Date.now().toString(36)}-gepa`;
     const body = buildMultipartBody(
-      buildVideoMeta(opts.title, opts.description, opts.hashtags),
+      buildVideoMeta(opts.title, opts.description, opts.hashtags, opts.blogUrl),
       fs.readFileSync(opts.videoPath), boundary);
     const r = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status', {
       method: 'POST', signal,

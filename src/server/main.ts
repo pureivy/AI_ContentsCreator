@@ -53,7 +53,7 @@ import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning } from '../orchestrator/shorts';
 import { ensureShortsThumbnail, ensureShortsDownload, extractFirstFrame } from '../tools/shortsRender';
 import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
-import { pieceStore, selectResumablePiece } from '../content/pieces';
+import { pieceStore, selectResumablePiece, blogUrlForPiece } from '../content/pieces';
 import { listPersonas } from '../content/personas';
 import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeBrandSlug, deleteBrand, isSafeBrandSlug, offBrandTerm } from '../content/brand';
 import type { BrandProfile } from '../content/brand';
@@ -1344,6 +1344,7 @@ app.post('/shorts/:id/youtube', async (c) => {
     const r = await uploadShortsToYoutube({
       slug: s.brand ?? '', videoPath: ytVideo,
       title: s.title ?? s.topic, description: s.description ?? '', hashtags: s.hashtags ?? [],
+      blogUrl: blogUrlForPiece(s.sourcePieceId), // 원본 블로그 링크 — 발행 시점 조회(사용자 확정 2026-07-31)
       thumbnailPath: ytCover ?? undefined,
     });
     if (!r.ok) return c.json({ error: r.error }, 502);
@@ -1650,6 +1651,7 @@ app.post('/cardnews/:id/publish', async (c) => {
     const r = await publishCardNewsToMeta({
       slug: card.brand ?? '', slidePaths: slides,
       caption: card.caption ?? card.topic, hashtags: card.hashtags ?? [],
+      blogUrl: blogUrlForPiece(card.sourcePieceId), // 원본 블로그 링크 — 발행 시점 조회(사용자 확정 2026-07-31)
       existing: { igMediaId: card.igMediaId, igPermalink: card.igPermalink, fbPostId: card.fbPostId },
     });
     // 부분 성공도 저장 — 재시도 시 성공 채널은 existing 으로 스킵(멱등). 퍼머링크는 실제 링크 있을 때만 갱신(홈 URL 덮어쓰기 방지).
@@ -1696,6 +1698,7 @@ app.post('/shorts/:id/meta', async (c) => {
       slug: s.brand ?? '', videoPath,
       caption: [s.title ?? s.topic, s.description ?? ''].filter(Boolean).join('\n\n'),
       hashtags: s.hashtags ?? [],
+      blogUrl: blogUrlForPiece(s.sourcePieceId), // 원본 블로그 링크 — 발행 시점 조회(사용자 확정 2026-07-31)
       thumbnailPath: fs.existsSync(metaThumb) ? metaThumb : undefined,
       existing: { igReelId: s.igReelId, igPermalink: s.igPermalink, fbReelId: s.fbReelId, fbCoverTs: s.fbReelCoverTs },
     });

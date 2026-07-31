@@ -21,6 +21,16 @@ describe('metaPublish 순수 헬퍼', () => {
     expect(buildIgCaption('', ['#a'])).toBe('#a');
     expect(buildIgCaption('x'.repeat(3000), []).length).toBe(2200);
   });
+  it('buildIgCaption: 블로그 링크 줄 — 본문과 태그 사이, 캡 초과 시 본문을 잘라 링크·태그 보존(2026-07-31)', () => {
+    const url = 'https://blog.naver.com/biondi_tree/224345904342';
+    expect(buildIgCaption('본문', ['#a'], url)).toBe(`본문\n\n📖 전체 가이드(블로그): ${url}\n\n#a`);
+    expect(buildIgCaption('본문', [], url)).toBe(`본문\n\n📖 전체 가이드(블로그): ${url}`);
+    const long = buildIgCaption('x'.repeat(3000), ['#tag'], url);
+    expect(long.length).toBeLessThanOrEqual(2200);
+    expect(long).toContain(url);      // 링크는 잘리지 않음
+    expect(long.endsWith('#tag')).toBe(true);
+    expect(buildIgCaption('본문', ['#a'], undefined)).toBe('본문\n\n#a'); // 미지정 시 종전과 동일
+  });
   it('extractId: {id} 추출, 이형은 null', () => {
     expect(extractId({ id: '123' })).toBe('123');
     expect(extractId({})).toBeNull();

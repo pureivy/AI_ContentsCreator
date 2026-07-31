@@ -1,6 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { buildVideoMeta, buildMultipartBody, extractVideoId } from './youtubeUpload';
 
+describe('buildVideoMeta — 블로그 링크 줄(2026-07-31)', () => {
+  it('설명 본문과 태그 줄 사이에 링크, 미지정 시 종전과 동일', () => {
+    const url = 'https://blog.naver.com/biondi_tree/224345904342';
+    const m = buildVideoMeta('t', '설명', ['#shorts'], url) as { snippet: { description: string } };
+    expect(m.snippet.description).toBe(`설명\n\n📖 전체 가이드(블로그): ${url}\n\n#shorts`);
+    const none = buildVideoMeta('t', '설명', ['#shorts']) as { snippet: { description: string } };
+    expect(none.snippet.description).toBe('설명\n\n#shorts');
+  });
+});
+
 describe('buildVideoMeta — 캡·해시태그 합성·private·AI 공개 고정(순수)', () => {
   it('꺾쇠 제거·설명에 해시태그 줄·tags 변환(# 제거·빈 항목 제외)', () => {
     const m = buildVideoMeta('제목 <b>테스트</b>', '설명', ['#shorts', '#화분', '']) as {

@@ -131,3 +131,14 @@ export function selectResumablePiece(pieces: Piece[], isLive: (runId?: string) =
 let _store: PieceStore | null = null;
 /** 프로세스 공유 단일 스토어. */
 export function pieceStore(): PieceStore { return (_store ??= new PieceStore()); }
+
+/** 파생물(쇼츠·카드뉴스) 캡션용 원본 블로그 링크 — 소스 피스가 네이버 발행된 경우만 URL(아니면 undefined).
+ *  발행 '시점'에 조회해야 한다: 파생물 생성 시점엔 블로그가 발행 전이라 publishedUrl 이 비어 있다(2026-07-31). */
+export function blogUrlForPiece(pieceId?: string): string | undefined {
+  if (!pieceId) return undefined;
+  const u = pieceStore().get(pieceId)?.publishedUrl;
+  if (!u || !/^https?:\/\//.test(u)) return undefined;
+  // 정규형으로 — RSS 감지가 m.blog 를 저장하기도 하는데, blog.naver.com 은 모바일을 자동 리다이렉트하지만
+  // m.blog 는 데스크톱을 못 돌려보낸다(캡션 링크는 양쪽 시청자 모두 클릭).
+  return u.replace(/^https?:\/\/m\.blog\.naver\.com\//, 'https://blog.naver.com/');
+}

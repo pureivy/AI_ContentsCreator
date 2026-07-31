@@ -29,6 +29,7 @@ import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail } from './shortsThumbnail';
 import { generateTitleArt } from './shortsTitleArt';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
+import { blogUrlForPiece } from '../content/pieces';
 import { brandContext } from '../content/brand';
 import { priorCoverageBrief } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
@@ -406,6 +407,7 @@ export async function runShortsJob(
       const up = await uploadShortsToYoutube({
         slug: short.brand ?? '', videoPath: ytVideo,
         title: plan.title, description: plan.description, hashtags: plan.hashtags,
+        blogUrl: blogUrlForPiece(short.sourcePieceId), // 원본 블로그 링크 — 자동 업로드 시점 조회(대개 발행 전이라 생략됨)
         thumbnailPath: ytCover ?? undefined,
         signal: opts.signal,
       });

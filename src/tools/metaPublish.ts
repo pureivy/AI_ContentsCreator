@@ -32,10 +32,14 @@ export interface MetaPublishResult {
   recovered?: boolean;
 }
 
-/** IG 캡션(순수) — 본문+해시태그 줄바꿈 결합, IG 한도 2200자 캡. */
-export function buildIgCaption(caption: string, hashtags: string[]): string {
+/** IG 캡션(순수) — 본문+블로그 링크+해시태그 줄바꿈 결합, IG 한도 2200자 캡.
+ *  blogUrl(파생물의 원본 네이버 글, 2026-07-31)은 본문과 태그 사이 한 줄 — 캡 초과 시 본문을 잘라
+ *  링크·태그를 보존한다(IG 는 캡션 링크가 평문이지만 복사 유입·유튜브/FB 는 클릭 가능). */
+export function buildIgCaption(caption: string, hashtags: string[], blogUrl?: string): string {
   const tagLine = hashtags.filter(Boolean).join(' ');
-  return [caption.trim(), tagLine].filter(Boolean).join('\n\n').slice(0, 2200);
+  const tail = [blogUrl ? `📖 전체 가이드(블로그): ${blogUrl}` : '', tagLine].filter(Boolean).join('\n\n');
+  const budget = 2200 - (tail ? tail.length + 2 : 0);
+  return [caption.trim().slice(0, Math.max(0, budget)), tail].filter(Boolean).join('\n\n');
 }
 
 /** 그래프 응답 {id} 안전 추출(순수). */
@@ -219,6 +223,8 @@ export function fbFailHint(msg: string): string {
 
 export async function publishCardNewsToMeta(opts: {
   slug: string; slidePaths: string[]; caption: string; hashtags: string[];
+  /** 원본 네이버 블로그 URL(파생 카드일 때) — 캡션에 '전체 가이드' 링크 줄로 삽입. */
+  blogUrl?: string;
   existing?: { igMediaId?: string; igPermalink?: string; fbPostId?: string }; signal?: AbortSignal;
 }): Promise<MetaPublishResult> {
   const out: MetaPublishResult = { ok: false };
@@ -235,7 +241,7 @@ export async function publishCardNewsToMeta(opts: {
     }
     const timeout = AbortSignal.timeout(300_000);
     const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
-    const message = buildIgCaption(opts.caption, opts.hashtags);
+    const message = buildIgCaption(opts.caption, opts.hashtags, opts.blogUrl);
     const token = acct.pageAccessToken;
 
     // IG 발행 — 이미 발행된 미디어 id(existing.igMediaId) 있으면 스킵(중복 공개 발행 방지, 라우트가 영속).
@@ -400,6 +406,8 @@ export async function setFbReelCover(videoId: string, token: string, imagePath: 
 
 export async function publishShortsToMeta(opts: {
   slug: string; videoPath: string; caption: string; hashtags: string[]; thumbnailPath?: string;
+  /** 원본 네이버 블로그 URL(파생 쇼츠일 때) — 캡션에 '전체 가이드' 링크 줄로 삽입. */
+  blogUrl?: string;
   existing?: { igReelId?: string; igPermalink?: string; fbReelId?: string; fbCoverTs?: string }; signal?: AbortSignal;
 }): Promise<MetaReelsResult> {
   const out: MetaReelsResult = { ok: false };
@@ -413,7 +421,7 @@ export async function publishShortsToMeta(opts: {
     if (!fs.existsSync(opts.videoPath)) return { ok: false, error: '영상 파일 없음' };
     const timeout = AbortSignal.timeout(600_000); // 영상 업로드+인코딩 — 카드뉴스(5분)의 2배 여유
     const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
-    const message = buildIgCaption(opts.caption, opts.hashtags);
+    const message = buildIgCaption(opts.caption, opts.hashtags, opts.blogUrl);
     const token = acct.pageAccessToken;
 
     // ① IG 릴스 — 이미 발행된 릴스 id(existing.igReelId) 있으면 스킵(중복 공개 발행 방지, 라우트가 영속).
