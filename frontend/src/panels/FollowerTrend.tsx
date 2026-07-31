@@ -1,0 +1,95 @@
+import { FollowersData } from "../api";
+
+// 팔로워·이웃 일자별 추이 모달 — 채널 카드의 👥 클릭 시(2026-07-31 사용자 확정).
+// 단일 시리즈 라인(범례 불필요 — 제목이 시리즈명), 2px 선·8px+ 히트 타겟·은은한 그리드,
+// 텍스트는 잉크 토큰(시리즈 색 금지) — dataviz 규칙. 외부 의존성 없음(인라인 SVG, Sparkline 관례).
+
+export type FollowerField = "naver" | "youtube" | "instagram" | "facebook";
+export const FOLLOWER_LABEL: Record<FollowerField, string> = {
+  naver: "네이버 이웃", youtube: "유튜브 구독자", instagram: "인스타 팔로워", facebook: "페이스북 팔로워",
+};
+
+/** 스냅샷 배열에서 해당 채널의 (date, value) 시계열 — 수치 없는 날은 제외(수집 실패 날 0 오염 방지). */
+function seriesOf(data: FollowersData, field: FollowerField): Array<{ date: string; v: number }> {
+  return data.snapshots
+    .map((s) => ({ date: s.date, v: s[field] }))
+    .filter((p): p is { date: string; v: number } => typeof p.v === "number");
+}
+
+/** 마지막 유효값(카드 표기용) — 없으면 null. export: PerformanceView 카드가 공유. */
+export function latestFollower(data: FollowersData | null, field: FollowerField): number | null {
+  if (!data) return null;
+  const s = seriesOf(data, field);
+  return s.length ? s[s.length - 1]!.v : null;
+}
+/** 전일(직전 스냅샷) 대비 증감 — 표본 2개 미만이면 null. */
+export function followerDelta(data: FollowersData | null, field: FollowerField): number | null {
+  if (!data) return null;
+  const s = seriesOf(data, field);
+  return s.length >= 2 ? s[s.length - 1]!.v - s[s.length - 2]!.v : null;
+}
+
+function TrendChart({ points }: { points: Array<{ date: string; v: number }> }) {
+  const W = 560, H = 230, L = 48, R = 20, T = 18, B = 30;
+  if (!points.length) return <p className="muted" style={{ padding: 20 }}>아직 스냅샷이 없습니다 — 일일 브리핑이 매일 아침 기록합니다.</p>;
+  const xs = points.map((p) => Date.parse(p.date));
+  const vs = points.map((p) => p.v);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  let y0 = Math.min(...vs), y1 = Math.max(...vs);
+  if (y0 === y1) { y0 -= 1; y1 += 1; } // flat 시계열 — 중앙선 배치
+  const x = (t: number) => (x1 === x0 ? (L + (W - R)) / 2 : L + ((t - x0) / (x1 - x0)) * (W - L - R));
+  const y = (v: number) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
+  const path = points.map((p, i) => `${i ? "L" : "M"}${x(Date.parse(p.date)).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
+  const fmtD = (d: string) => d.slice(5).replace("-", "/"); // MM/DD
+  const last = points[points.length - 1]!;
+  const gridV = [y1, (y0 + y1) / 2, y0];
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="일자별 추이" style={{ display: "block" }}>
+      {/* 은은한 그리드 3선 + 좌측 값 라벨(잉크 토큰·저대비) */}
+      {gridV.map((v) => (
+        <g key={v}>
+          <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} stroke="currentColor" opacity="0.12" />
+          <text x={L - 7} y={y(v) + 3.5} textAnchor="end" fontSize="10.5" fill="currentColor" opacity="0.55">{Math.round(v).toLocaleString()}</text>
+        </g>
+      ))}
+      {/* X 축 날짜 — 처음·끝만(점 수가 적어 과밀 방지) */}
+      <text x={L} y={H - 9} fontSize="10.5" fill="currentColor" opacity="0.55">{fmtD(points[0]!.date)}</text>
+      {points.length > 1 && <text x={W - R} y={H - 9} textAnchor="end" fontSize="10.5" fill="currentColor" opacity="0.55">{fmtD(last.date)}</text>}
+      {points.length > 1 && <path d={path} fill="none" stroke="var(--accent, #5598f8)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />}
+      {/* 포인트 + 네이티브 툴팁(투명 확장 히트 타겟 r=10 ≥ 8px 규칙) */}
+      {points.map((p) => (
+        <g key={p.date}>
+          <circle cx={x(Date.parse(p.date))} cy={y(p.v)} r="3" fill="var(--accent, #5598f8)" />
+          <circle cx={x(Date.parse(p.date))} cy={y(p.v)} r="10" fill="transparent">
+            <title>{`${p.date} — ${p.v.toLocaleString()}`}</title>
+          </circle>
+        </g>
+      ))}
+      {/* 마지막 값 직접 라벨 — 잉크 토큰(시리즈 색 금지) */}
+      <text x={Math.min(x(Date.parse(last.date)) + 8, W - R)} y={y(last.v) - 8} fontSize="12" fontWeight="700" fill="currentColor"
+        textAnchor={x(Date.parse(last.date)) > W - 70 ? "end" : "start"}>{last.v.toLocaleString()}</text>
+    </svg>
+  );
+}
+
+export default function FollowerTrendModal({ data, field, onClose }: { data: FollowersData; field: FollowerField; onClose: () => void }) {
+  const points = seriesOf(data, field);
+  // 목표는 4채널 합계 기준(1,000명) — 채널 라인에 목표선을 긋지 않고 합계 문구로 안내.
+  const latest = data.latest;
+  const total = latest ? (["naver", "youtube", "instagram", "facebook"] as const).reduce((n, f) => n + (typeof latest[f] === "number" ? (latest[f] as number) : 0), 0) : 0;
+  return (
+    <div className="metric-overlay" onClick={onClose}>
+      <div className="fol-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="fol-modal-head">
+          <h3 style={{ margin: 0, fontSize: 15 }}>{FOLLOWER_LABEL[field]} 추이</h3>
+          <button className="btn ghost" onClick={onClose}>닫기</button>
+        </div>
+        <TrendChart points={points} />
+        <div className="muted" style={{ fontSize: 12, padding: "2px 6px 4px" }}>
+          4채널 합계 {total.toLocaleString()}명 · 목표 {data.goal.toLocaleString()}명 ({(total / data.goal * 100).toFixed(1)}%)
+          {points.length < 5 && " · 스냅샷이 매일 쌓이며 그래프가 길어집니다"}
+        </div>
+      </div>
+    </div>
+  );
+}

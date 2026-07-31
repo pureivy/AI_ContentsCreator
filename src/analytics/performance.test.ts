@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseManualMetrics, latestSampleBySource, viewsSeriesBySource, naverTrackingDue, topInflow, latestDwell, sameKstDay, latestTouch, type MetricSample } from './performance';
+import { parseManualMetrics, latestSampleBySource, viewsSeriesBySource, naverTrackingDue, topInflow, latestDwell, latestLikes, sameKstDay, latestTouch, type MetricSample } from './performance';
 import { performanceSignal } from './reinforce';
 
 // 스파크라인용 시계열(2026-07-20) — 소스 접두로 거른 샘플을 '하루 1점(그날 마지막 값)'으로 압축해
@@ -134,5 +134,10 @@ describe('topInflow / latestDwell — 최신 빈 표본이 과거 값을 가리�
     expect(latestDwell([s({ dwellSec: 45 }), s({})])).toBe(45);
     expect(latestDwell([s({ dwellSec: 45 }), s({ dwellSec: 60 }), s({})])).toBe(60);
     expect(latestDwell([s({}), s({})])).toBeNull();
+  });
+  it('공감: dwell 과 달리 0 도 실값 — 미기록(undefined)만 스킵, 전부 미기록이면 null', () => {
+    expect(latestLikes([s({ likes: 5 }), s({})])).toBe(5);       // 공감 조회 실패 표본이 과거 값 안 가림
+    expect(latestLikes([s({ likes: 5 }), s({ likes: 0 })])).toBe(0); // 0 은 유효(공감 없음)
+    expect(latestLikes([s({}), s({})])).toBeNull();
   });
 });

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { fetchPerformance, refreshPerformance, deletePiece, deleteShorts, deleteCardNews, PerfData } from "../api";
+import { fetchPerformance, fetchFollowers, refreshPerformance, deletePiece, deleteShorts, deleteCardNews, PerfData, FollowersData } from "../api";
 import Ico, { type IcoName } from "./Ico";
 import PlatformMark, { type Platform } from "./PlatformMark";
+import FollowerTrendModal, { type FollowerField, latestFollower, followerDelta } from "./FollowerTrend";
 
 // 성과 대시보드 — 채널 통합 요약(블로그·쇼츠·카드뉴스) → 블로그 글별 → 쇼츠·카드뉴스 → 강화 학습 순.
 // 스테이지 어휘는 캘린더·검토 탭과 동일(Ico).
@@ -39,9 +40,12 @@ export default function PerformanceView() {
   const [loading, setLoading] = useState(true);
   // 표별 '더 보기' 펼침 상태 — 기본은 최근 5개만, 펼치면 전체(각 표는 이미 최신순 정렬).
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // 팔로워·이웃 스냅샷(일일 브리핑 수집 공유) + 추이 모달로 연 채널(2026-07-31 사용자 확정).
+  const [followers, setFollowers] = useState<FollowersData | null>(null);
+  const [trend, setTrend] = useState<FollowerField | null>(null);
 
   const load = () => { setLoading(true); return fetchPerformance().then((d) => { setData(d); setLoading(false); }); };
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); void fetchFollowers().then(setFollowers); }, []);
 
   // 새로고침 = 채널 성과 즉시 재수집(쇼츠 유튜브·릴스·카드뉴스 API + 네이버 블로그 Playwright) 후 재조회 —
   // 종전엔 저장값 재조회뿐이라 숫자가 안 변해 '죽은 버튼'으로 보였다(2026-07-20 사용자 보고).
@@ -145,6 +149,19 @@ export default function PerformanceView() {
 
   // 카드 보조 지표(좋아요·안내 문구) — 조회수와 시각적 위계 분리(작고 옅게). 다크/라이트 모두 opacity 로 무난.
   const subStyle = { fontSize: 11, opacity: 0.65, marginTop: 3 } as const;
+  // 채널 카드의 팔로워 줄 — 현재값+전일 증감, 클릭 시 일자별 추이 모달. 스냅샷 없으면 표기 생략(빈 0 오해 방지).
+  const folStat = (field: FollowerField, label: string) => {
+    const cur = latestFollower(followers, field);
+    if (cur == null) return null;
+    const d = followerDelta(followers, field);
+    return (
+      <div style={subStyle}>
+        <button className="fol-link" onClick={() => setTrend(field)} title={`${label} — 클릭하면 일자별 추이 그래프`}>
+          👥 {label} {cur.toLocaleString()}{d != null && d !== 0 ? ` (${d > 0 ? "+" : ""}${d.toLocaleString()})` : ""} ▸
+        </button>
+      </div>
+    );
+  };
 
   return (
     <div className="apikeys perf-view">
@@ -166,16 +183,23 @@ export default function PerformanceView() {
         <>
           {/* 요약 카드 — 채널당 1장: 조회(크게)+좋아요(작게, 해당 표의 👍 열 합과 일치). 사용자 제안 2026-07-30. */}
           <div className="perf-summary">
-            <div className="perf-card"><div className="perf-num">{(s?.totalViews ?? 0).toLocaleString()}</div><div className="perf-lbl">블로그 조회</div></div>
+            <div className="perf-card">
+              <div className="perf-num">{(s?.totalViews ?? 0).toLocaleString()}</div>
+              <div className="perf-lbl">블로그 조회</div>
+              <div style={subStyle} title="네이버 공감(리액션 총합) 합계 — 블로그 표의 공감 열 합과 일치">💚 공감 {(s?.blogLikes ?? 0).toLocaleString()}</div>
+              {folStat("naver", "이웃")}
+            </div>
             <div className="perf-card">
               <div className="perf-num">{(ch?.summary.shortsYtViews ?? 0).toLocaleString()}</div>
               <div className="perf-lbl">쇼츠 유튜브 조회</div>
               <div style={subStyle} title="유튜브 좋아요 합계 — 쇼츠 표의 유튜브 👍 열 합과 일치">👍 {(ch?.summary.ytLikes ?? 0).toLocaleString()}</div>
+              {folStat("youtube", "구독")}
             </div>
             <div className="perf-card">
               <div className="perf-num">{(ch?.summary.reelsViews ?? 0).toLocaleString()}</div>
               <div className="perf-lbl" title="인스타그램 릴스만의 조회 합계 — 페이스북은 합산하지 않고 릴스 표의 페이스북 그룹에서 따로 봅니다">인스타 릴스 조회</div>
               <div style={subStyle} title="인스타 릴스 좋아요 합계 — 쇼츠 표의 인스타 👍 열 합과 일치">👍 {(ch?.summary.reelsLikes ?? 0).toLocaleString()}</div>
+              {folStat("instagram", "팔로워")}
             </div>
             <div className="perf-card">
               <div className="perf-num">{(ch?.summary.cardnewsViews ?? 0).toLocaleString()}</div>
@@ -186,6 +210,7 @@ export default function PerformanceView() {
               <div className="perf-num">{(ch?.summary.fbReelViews ?? 0).toLocaleString()}</div>
               <div className="perf-lbl" title="페이스북 페이지 릴스 조회 합계. 페이스북은 영상만 조회 지표가 있습니다">페이스북 릴스 조회</div>
               <div style={subStyle} title="페이스북 릴스 좋아요 합계 — 쇼츠 표의 페이스북 👍 열 합과 일치">👍 {(ch?.summary.fbReelLikes ?? 0).toLocaleString()}</div>
+              {folStat("facebook", "팔로워")}
             </div>
             <div className="perf-card">
               <div className="perf-num">{(ch?.summary.fbPostLikes ?? 0).toLocaleString()}</div>
@@ -200,6 +225,9 @@ export default function PerformanceView() {
             </div>
           </div>
 
+          {/* 팔로워 추이 모달 — 채널 카드의 👥 클릭으로 열림(고정 오버레이라 DOM 위치 무관). */}
+          {trend && followers && <FollowerTrendModal data={followers} field={trend} onClose={() => setTrend(null)} />}
+
           {/* 블로그 성과 — 글별 표. 발행/측정/반영 카운트는 제목 옆(요약 카드는 채널 통합으로 승격). */}
           <div className="review-section">
             <h3>블로그 성과 <span className="muted">발행 {s?.count ?? 0} · 측정 {s?.measured ?? 0} · 강화 반영 {data.strategy.measuredPieces}</span></h3>
@@ -211,14 +239,14 @@ export default function PerformanceView() {
                   <colgroup>
                     <col className="perf-col-title" /><col className="perf-col-link" />
                     <col className="perf-col-date perf-grp-start" /><col className="perf-col-state" />
-                    <col className="perf-col-num" /><col className="perf-col-num" /><col className="perf-col-inflow" /><col className="perf-col-num" />
+                    <col className="perf-col-num" /><col className="perf-col-num" /><col className="perf-col-num" /><col className="perf-col-inflow" /><col className="perf-col-num" />
                     <col className="perf-col-num perf-grp-start" /><col className="perf-col-num" />
                     <col className="perf-col-refl perf-grp-start" /><col className="perf-col-act" />
                   </colgroup>
                   <thead>
                     <tr className="perf-grouprow">
                       <th className="perf-grp-soft" colSpan={2}>콘텐츠</th>
-                      <th colSpan={6}><span className="perf-grp-in"><PlatformMark name="naver" size={13} /> 네이버 블로그</span></th>
+                      <th colSpan={7}><span className="perf-grp-in"><PlatformMark name="naver" size={13} /> 네이버 블로그</span></th>
                       <th className="perf-grp-soft perf-grp-edge" colSpan={2}>파생</th>
                       <th className="perf-grp-soft perf-grp-edge" colSpan={2}>학습</th>
                     </tr>
@@ -229,6 +257,7 @@ export default function PerformanceView() {
                       <th className="perf-c">상태</th>
                       <th className="perf-r">조회수</th>
                       <th className="perf-r">체류</th>
+                      <th className="perf-r" title="네이버 공감(리액션 총합) — 매일 성과 수집 때 함께 갱신">공감</th>
                       <th className="perf-c">유입 키워드(상위)</th>
                       <th className="perf-r">SEO</th>
                       <th className="perf-c perf-grp-edge" title="파생 카드뉴스 완성 여부"><Ico name="cards" size={13} /></th>
@@ -255,6 +284,7 @@ export default function PerformanceView() {
                         <td className="perf-c"><span className="badge">{STAGE_LABEL[p.stage] ? <><Ico name={STAGE_LABEL[p.stage].icon} size={10} /> {STAGE_LABEL[p.stage].label}</> : p.stage}</span></td>
                         <td className="perf-r">{p.views != null ? p.views.toLocaleString() : "—"}</td>
                         <td className="perf-r">{p.dwellSec != null ? `${p.dwellSec}s` : "—"}</td>
+                        <td className="perf-r">{p.likes != null ? p.likes.toLocaleString() : "—"}</td>
                         <td className="perf-inflow perf-c">
                           {p.inflow.length === 0 ? <span className="muted">—</span>
                             : p.inflow.slice(0, 4).map((k) => (

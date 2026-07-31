@@ -12,7 +12,7 @@ export interface MetricSample {
   measuredAt: string;
   views: number;
   dwellSec?: number;
-  /** 유튜브 쇼츠 수집(youtube:api) 전용 — 네이버 piece 샘플엔 없음(하위호환 optional). */
+  /** 좋아요·공감 — 유튜브 쇼츠(youtube:api)·메타 + 네이버 공감(2026-07-31, like API 동봉). 하위호환 optional. */
   likes?: number;
   comments?: number;
   /** 메타(인스타) 수집(meta:ig) 전용 — 도달·저장·공유(하위호환 optional). */
@@ -183,6 +183,16 @@ export function latestDwell(samples: MetricSample[]): number | null {
   for (let i = samples.length - 1; i >= 0; i--) {
     const d = samples[i]?.dwellSec;
     if (typeof d === 'number' && d > 0) return d;
+  }
+  return null;
+}
+
+/** 최근 유효 공감·좋아요 — dwell 과 달리 0 도 실값(공감 없음), 미기록(undefined)만 건너뛴다.
+ *  공감 조회가 일시 실패한 새 표본이 과거 값을 가리지 않게 역방향 탐색(2026-07-31). */
+export function latestLikes(samples: MetricSample[]): number | null {
+  for (let i = samples.length - 1; i >= 0; i--) {
+    const d = samples[i]?.likes;
+    if (typeof d === 'number') return d;
   }
   return null;
 }

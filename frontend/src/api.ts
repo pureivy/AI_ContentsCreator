@@ -946,6 +946,8 @@ export interface PerfRow {
   publishedUrl?: string; seoScore?: number;
   date: string; // 발행일(없으면 작성일 폴백) — 날짜 정렬·표시용
   views: number | null; dwellSec?: number | null;
+  /** 네이버 공감(리액션 총합, 2026-07-31) — 0 도 실값, 미수집이면 null. */
+  likes?: number | null;
   inflow: Array<{ keyword: string; count: number; rank?: number }>;
   measuredAt?: string | null; source?: string; samples: number;
   derived?: DerivedSummary;
@@ -973,7 +975,7 @@ export interface PerfData {
     channelLessons: Array<{ channel: string; summary: string; updated: string }>;
   };
   pieces: PerfRow[];
-  summary: { count: number; measured: number; totalViews: number };
+  summary: { count: number; measured: number; totalViews: number; blogLikes?: number };
   channels?: {
     shorts: ShortsPerfRow[];
     cardnews: CardnewsPerfRow[];
@@ -985,6 +987,14 @@ export interface PerfData {
 }
 export async function fetchPerformance(): Promise<PerfData | null> {
   try { const r = await fetch("/performance"); return r.ok ? await r.json() : null; }
+  catch { return null; }
+}
+
+// 팔로워·이웃 일일 스냅샷(브리핑 수집 공유) — 성과탭 채널 카드 표기+추이 그래프용(2026-07-31).
+export interface FollowerSnapshot { date: string; naver?: number | null; youtube?: number | null; instagram?: number | null; facebook?: number | null }
+export interface FollowersData { snapshots: FollowerSnapshot[]; latest: FollowerSnapshot | null; goal: number }
+export async function fetchFollowers(): Promise<FollowersData | null> {
+  try { const r = await fetch("/api/followers"); return r.ok ? await r.json() : null; }
   catch { return null; }
 }
 /** 채널 성과 즉시 재수집 시작(쇼츠 유튜브·릴스·카드뉴스 API + 네이버 일일 추적) — 서버는 백그라운드로

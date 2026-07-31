@@ -65,7 +65,8 @@ import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
 import { promiseStore } from '../content/promises';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
-import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor, appendMetrics, naverTrackingDue, topInflow, latestDwell, latestTouch, sameKstDay } from '../analytics/performance';
+import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor, appendMetrics, naverTrackingDue, topInflow, latestDwell, latestLikes, latestTouch, sameKstDay } from '../analytics/performance';
+import { fetchBlogSympathy } from '../analytics/naverSympathy';
 import { naverAttemptAt, markNaverAttempt } from '../analytics/naverAttempts';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
@@ -2063,10 +2064,13 @@ async function measurePiece(piece: Piece, dryRun: boolean, signal?: AbortSignal)
   const m = await collectNaverMetrics(piece.publishedUrl, runDir, { dryRun, brand: piece.brand ?? '' }, signal);
   if (!m) return { sample: null, note: '수집 결과 파싱 실패' };
   if (!m.views && m.searchInflow.length === 0) return { sample: null, note: m.note };
+  // 공감 — 공개 like API(브라우저·로그인 무관, 1콜) 동봉. 실패는 무해(likes 미기록 — latestLikes 가 과거 값 유지).
+  const likes = await fetchBlogSympathy(piece.publishedUrl, signal);
   const sample: MetricSample = {
     measuredAt: new Date().toISOString(),
     views: m.views,
     ...(m.dwellSec ? { dwellSec: m.dwellSec } : {}),
+    ...(typeof likes === 'number' ? { likes } : {}),
     searchInflow: m.searchInflow,
     source: m.source,
   };
@@ -2144,6 +2148,7 @@ function performanceHandler(c: Context): Response {
         publishedUrl: p.publishedUrl, seoScore: p.seoScore,
         date: p.publishedTs ?? p.createdTs, // 발행일(없으면 작성일 폴백 — 레거시 piece)
         views: m ? m.views : null, dwellSec: latestDwell(all),
+        likes: latestLikes(all), // 네이버 공감(2026-07-31) — 0 도 실값, 미기록만 null
         inflow: topInflow(all), measuredAt: m?.measuredAt ?? null,
         source: m?.source, samples: all.length,
         derived: derivedSummary(p.id), // 콘텐츠 세트 완성 여부(카드뉴스·숏폼)
@@ -2216,6 +2221,7 @@ function performanceHandler(c: Context): Response {
       count: rows.length,
       measured: measured.length,
       totalViews: measured.reduce((sum, r) => sum + (r.views ?? 0), 0),
+      blogLikes: rows.reduce((sum, r) => sum + (r.likes ?? 0), 0), // 공감 합계 — 요약 카드용(2026-07-31)
     },
     channels: {
       shorts: shortsRows,
