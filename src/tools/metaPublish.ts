@@ -149,9 +149,9 @@ async function uploadUnpublishedPhoto(pageId: string, token: string, filePath: s
   const form = new FormData();
   form.append('source', new Blob([fs.readFileSync(filePath)], { type: 'image/png' }), 'slide.png');
   form.append('published', 'false');
-  // /photos 엔 is_ai_generated 가 없어 provenance_info 자기 공시(EXPLICIT+is_gen_ai)로 대신 — 라벨 노출은
-  // 문서상 미보장(실검증 대기). 미수용이어도 무해한 선언 필드라 실패 시 파라미터 오류가 나면 킬스위치로 끈다.
-  if (CONFIG.metaAiLabel) form.append('provenance_info', JSON.stringify({ provenance_type: 'EXPLICIT', is_gen_ai: true }));
+  // FB 사진 AI 자기 공시: provenance_info 는 실측 (#100) Missing Permission(2026-07-31, 첫 실발행에서 즉시)
+  // — 서드파티 앱 사용 불가 판정, 제거. /photos 엔 is_ai_generated 도 없어 공식 자기 공개 수단 부재 확정.
+  // 남는 신호는 이미지에 임베드된 OpenAI C2PA(멀티파트 원본 바이트 업로드라 보존됨 — 메타 자동 감지 여지).
   form.append('access_token', token);
   const j = await graphJson(`${FB_GRAPH}/${pageId}/photos`, { method: 'POST', body: form, signal }, 'FB 사진 업로드');
   const id = extractId(j);
