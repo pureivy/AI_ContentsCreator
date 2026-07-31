@@ -9,6 +9,11 @@ import { LlmWiki, slugify, buildLinkResolver } from './llmwiki';
 vi.mock('../llm/client', () => ({
   llm: { chat: vi.fn(async () => ({ text: '합의: [[장마철 배수]]가 우선 대응이다. 반박·기각: 절대 검색량 단정. 열린 질문: 지역별 편차.' })) },
 }));
+// 브랜드 소재 게이트만 대체(나머지는 실제 구현 유지) — maintain 의 금지소재 차단 검증용.
+vi.mock('../content/brand', async (orig) => ({
+  ...(await orig<typeof import('../content/brand')>()),
+  offBrandTerm: (text: string) => (/다육|상추/.test(text) ? '다육' : null),
+}));
 
 const sha1 = (s: string) => createHash('sha1').update(s.trim()).digest('hex');
 
@@ -45,6 +50,19 @@ describe('buildLinkResolver — 슬러그·별칭 해석(순수)', () => {
   it('별칭이 실 페이지 슬러그와 충돌하면 실 페이지가 이긴다', () => {
     const r = buildLinkResolver([P('모종'), P('다른-페이지', ['모종'])]);
     expect(r.get('모종')).toBe('모종');
+  });
+  it('기록형(performance 등)은 별칭으로 개념 정체성을 주장 못 한다 — 성과 스냅샷이 키워드를 선점하던 사고', () => {
+    // analytics/*Perf 가 성과 페이지에 aliases:[타겟키워드] 를 심는다 — 개념 링크가 조회수 기록으로
+    // 해석되면 진짜 지식 갭이 은폐된다(2026-07-31 리뷰 실측: '여름 거름 주기').
+    const r = buildLinkResolver([
+      { slug: '성과-여름-거름-주기-abc', aliases: ['여름 거름 주기'], type: 'performance' },
+      { slug: '거름-과다증', aliases: [], type: 'concept' },
+    ]);
+    expect(r.has('여름-거름-주기')).toBe(false); // 갭은 갭으로 남아야 maintain 이 개념을 만든다
+    expect(r.get('거름-과다증')).toBe('거름-과다증');
+    // 지식 타입이면 정상 주장
+    const r2 = buildLinkResolver([{ slug: '고온-스트레스', aliases: ['고온스트레스'], type: 'concept' }]);
+    expect(r2.get('고온스트레스')).toBe('고온-스트레스');
   });
   it('문자·숫자 없는 별칭은 버린다 — slugify 의 page 폴백이 [[page]] 를 오해석하지 않게', () => {
     const r = buildLinkResolver([P('a', ['', '  ', '!!!'])]);
@@ -211,6 +229,29 @@ describe('LlmWiki', () => {
     const r = w.lint();
     expect(r.danglingLinks.some((d) => d.to === '고온스트레스')).toBe(false); // 종전엔 true(가짜 갭)
     expect(r.orphans).not.toContain('고온 스트레스');                          // 별칭 인바운드도 인정
+  });
+
+  it('지식 페이지가 성과(기록) 페이지로 흡수되지 않는다 — 성과 요약이 백과사전 정의로 덮이던 사고', () => {
+    const w = new LlmWiki(dir);
+    // 성과 스냅샷(측정 기록) — 타겟 키워드를 별칭으로 가진다(analytics/*Perf 실제 동작).
+    const perf = w.upsertPage({
+      title: '릴스 성과 · 블루베리', type: 'performance', body: '도달 135 · 조회 142 · 성과신호 0.21',
+      summary: '도달 135 · 조회 142', aliases: ['블루베리나무'],
+    });
+    // maintain 이 갭을 메우려 만든 지식 페이지 — 종전엔 compactKey 별칭 일치로 성과 페이지에 흡수됐다.
+    const made = w.upsertPage({ title: '블루베리나무', type: 'entity', body: '진달래과 낙엽관목', summary: '진달래과 낙엽관목' });
+    expect(made.slug).not.toBe(perf.slug);                       // 별도 페이지로 생성
+    expect(w.getPage(perf.slug)?.summary).toBe('도달 135 · 조회 142'); // 성과 요약 보존
+    expect(w.getPage(perf.slug)?.body).not.toContain('진달래과');      // 갱신 섹션 오염 없음
+  });
+
+  it('maintain — 브랜드 금지 소재 갭은 페이지를 만들지 않는다(두뇌 재파종 차단)', async () => {
+    const w = new LlmWiki(dir);
+    w.upsertPage({ title: '허용 개념', type: 'concept', body: '[[다육식물]] 과 [[장마철 배수]] 참조' });
+    const r = await w.maintain('m', { maxFill: 4 });
+    expect(r.filled).not.toContain('다육식물');   // 금지 소재 — 생성 차단
+    expect(r.filled).toContain('장마철 배수');     // 정상 갭은 그대로 보충
+    expect(w.lint().danglingLinks.some((d) => d.to === '다육식물')).toBe(true); // 보고는 유지
   });
 
   it('graph — 별칭 링크가 유령 stub 이 아니라 실 노드를 가리킨다', () => {

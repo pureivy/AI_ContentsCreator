@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { CONFIG } from '../config';
-import { brandFileSuffixFor, activeBrandSlug } from '../content/brand';
+import { brandFileSuffixFor, activeBrandSlug, offBrandTerm } from '../content/brand';
 import { llm } from '../llm/client';
 
 export type PageType = 'entity' | 'concept' | 'source' | 'overview' | 'answer' | 'lesson' | 'debate' | 'performance';
@@ -142,6 +142,10 @@ function outboundLinks(body: string): string[] {
   return [...out];
 }
 
+/** 지식 노드 타입 — 별칭으로 개념 정체성을 주장할 수 있고, 표기변형 흡수(upsert)의 대상이 되는 타입.
+ *  나머지(source·overview·lesson·debate·performance)는 '기록'이라 개념을 대표하지 않는다. */
+const KNOWLEDGE_TYPES = new Set<PageType>(['entity', 'concept', 'answer']);
+
 /**
  * 링크 대상 해석 인덱스(순수) — 슬러그·별칭(aliases)을 모두 canonical 슬러그로 매핑.
  * 규칙: (1) 실제 페이지 슬러그가 항상 우선 — 별칭이 실 페이지를 가리지 못한다.
@@ -152,10 +156,14 @@ function outboundLinks(body: string): string[] {
  * (별칭 '블루베리나무' 류 — 표기 변형이 아니라 별칭이라 upsert 의 compactKey 흡수도 못 잡는다).
  * lint 의 가짜 고아·가짜 끊긴 링크, graph 의 유령 stub 노드도 같은 뿌리.
  */
-export function buildLinkResolver(pages: Array<{ slug: string; aliases: string[] }>): Map<string, string> {
+export function buildLinkResolver(pages: Array<{ slug: string; aliases: string[]; type?: PageType }>): Map<string, string> {
   const realSlugs = new Set(pages.map((p) => p.slug));
   const claims = new Map<string, Set<string>>(); // 별칭키 → 주장한 페이지 슬러그들
   for (const p of pages) {
+    // 기록형 페이지는 별칭으로 '정체성'을 주장하지 못한다 — 성과(performance) 페이지가
+    // aliases:[타겟키워드] 를 달고 있어(analytics/*Perf·reinforce), 이를 허용하면 개념 링크가
+    // 조회수 스냅샷으로 해석되고 진짜 지식 갭이 은폐된다(2026-07-31 리뷰 실측).
+    if (p.type && !KNOWLEDGE_TYPES.has(p.type)) continue;
     for (const a of p.aliases) {
       // 문자·숫자가 없는 별칭(빈 값·공백·기호만)은 버린다 — slugify 가 'page' 로 폴백해
       // [[page]] 를 엉뚱한 페이지로 해석시킬 수 있다(테스트가 잡은 실제 구멍).
@@ -375,7 +383,13 @@ export class LlmWiki {
     // 있으면 새 페이지 대신 그쪽으로 머지한다. 결정적 계층 — 의미 중복 판정·병합은 mergePages 몫.
     if (!existing) {
       const key = compactKey(input.title);
-      existing = this.allPages().find((p) => compactKey(p.title) === key || p.aliases.some((al) => compactKey(al) === key));
+      // 흡수 대상은 '같은 타입' 또는 '지식 노드'만 — 기록형(성과·원문·교훈·토론·개요)은 제외.
+      // 실측 사고(2026-07-31): 성과 페이지가 aliases:[키워드] 를 달고 있어, maintain 이 만든 지식
+      // 페이지('블루베리나무')가 릴스 성과 스냅샷으로 흡수돼 summary 가 백과사전 정의로 덮이고
+      // 갱신 섹션이 6번 누적됐다(measurement 기록 오염).
+      const absorbable = (p: WikiPage): boolean => p.type === input.type || KNOWLEDGE_TYPES.has(p.type);
+      existing = this.allPages().find((p) => absorbable(p)
+        && (compactKey(p.title) === key || p.aliases.some((al) => compactKey(al) === key)));
     }
     const today = nowDate();
     if (existing) {
@@ -963,8 +977,13 @@ export class LlmWiki {
   async maintain(model: string, opts: { maxFill?: number; signal?: AbortSignal } = {}): Promise<{ filled: string[]; gaps: number }> {
    return this.serialize(async () => {
     const targets = this.danglingTargets();
+    // 브랜드 소재 하드 게이트 — 금지 소재(채소·화초·다육 등)는 페이지를 만들지 않는다. 만들면 query()
+    // 그라운딩을 통해 금지 소재가 두뇌에 재파종된다(리뷰 실측: dangling 324건 중 72건이 금지 토큰).
+    // 갭 '보고'(lint)는 그대로 두고 '생성'만 막는다. maintain 은 항상 활성 브랜드 위키에서 호출된다.
     // 가장 많이 참조되는 갭부터(가치 높은 빈틈 우선).
-    const sorted = [...targets.values()].sort((a, b) => b.refs.length - a.refs.length).slice(0, opts.maxFill ?? 4);
+    const sorted = [...targets.values()]
+      .filter((t) => !offBrandTerm(t.title))
+      .sort((a, b) => b.refs.length - a.refs.length).slice(0, opts.maxFill ?? 4);
     const filled: string[] = [];
     for (const t of sorted) {
       const body = await this.generateStub(model, t.title, t.refs, opts.signal);
