@@ -142,6 +142,37 @@ function outboundLinks(body: string): string[] {
   return [...out];
 }
 
+/**
+ * 링크 대상 해석 인덱스(순수) — 슬러그·별칭(aliases)을 모두 canonical 슬러그로 매핑.
+ * 규칙: (1) 실제 페이지 슬러그가 항상 우선 — 별칭이 실 페이지를 가리지 못한다.
+ *       (2) 두 페이지 이상이 주장하는 별칭은 모호 → 제외(예: 37개 토론 페이지의 'debate').
+ *           readdir 순서에 좌우되지 않게 '주장 수'로 판정 — 결정적.
+ * 배경(2026-07-31 실측): 링크 해석이 aliases 를 보지 않아 [[별칭]] 이 전부 끊긴 링크로 잡혔고,
+ * maintain 이 그 '빈틈'을 메우려 이미 존재하는 개념의 중복 페이지를 LLM 으로 새로 만들었다
+ * (별칭 '블루베리나무' 류 — 표기 변형이 아니라 별칭이라 upsert 의 compactKey 흡수도 못 잡는다).
+ * lint 의 가짜 고아·가짜 끊긴 링크, graph 의 유령 stub 노드도 같은 뿌리.
+ */
+export function buildLinkResolver(pages: Array<{ slug: string; aliases: string[] }>): Map<string, string> {
+  const realSlugs = new Set(pages.map((p) => p.slug));
+  const claims = new Map<string, Set<string>>(); // 별칭키 → 주장한 페이지 슬러그들
+  for (const p of pages) {
+    for (const a of p.aliases) {
+      // 문자·숫자가 없는 별칭(빈 값·공백·기호만)은 버린다 — slugify 가 'page' 로 폴백해
+      // [[page]] 를 엉뚱한 페이지로 해석시킬 수 있다(테스트가 잡은 실제 구멍).
+      if (!/[\p{L}\p{N}]/u.test(a || '')) continue;
+      const k = slugify(a);
+      if (!k || realSlugs.has(k)) continue; // 실 페이지 슬러그는 별칭이 못 덮는다
+      let owners = claims.get(k);
+      if (!owners) { owners = new Set(); claims.set(k, owners); }
+      owners.add(p.slug);
+    }
+  }
+  const out = new Map<string, string>();
+  for (const s of realSlugs) out.set(s, s);
+  for (const [k, owners] of claims) if (owners.size === 1) out.set(k, [...owners][0]!);
+  return out;
+}
+
 export class LlmWiki {
   readonly dir: string;
   readonly rawDir: string;
@@ -771,12 +802,13 @@ export class LlmWiki {
   linkOrphans(): number {
     const all = this.allPages();
     const bySlug = new Map(all.map((p) => [p.slug, p] as const));
+    const resolve = buildLinkResolver(all); // 별칭 링크도 실 대상으로 해석(고아가 선언한 관계 살리기)
     const inbound = new Set<string>();
-    for (const p of all) for (const l of p.links) inbound.add(l);
+    for (const p of all) for (const l of p.links) inbound.add(resolve.get(l) ?? l);
     const orphans = all.filter((p) => (p.type === 'entity' || p.type === 'concept') && !inbound.has(p.slug));
     let fixed = 0;
     for (const o of orphans) {
-      const targets = o.links.map((l) => bySlug.get(l)).filter((t): t is WikiPage => !!t && t.slug !== o.slug);
+      const targets = o.links.map((l) => bySlug.get(resolve.get(l) ?? l)).filter((t): t is WikiPage => !!t && t.slug !== o.slug);
       if (!targets.length) continue;
       // 비-고아(연결된) 대상 우선 → 고아가 본 그래프에 합류.
       const target = targets.find((t) => inbound.has(t.slug)) ?? targets[0]!;
@@ -877,8 +909,9 @@ export class LlmWiki {
   // ---- LINT: 고아·중복·교차참조 누락 점검 ----
   lint(): { orphans: string[]; danglingLinks: Array<{ from: string; to: string }>; total: number } {
     const ps = this.allPages();
+    const resolve = buildLinkResolver(ps); // 별칭 링크도 인바운드로 인정(가짜 고아 방지)
     const inbound = new Set<string>();
-    for (const p of ps) for (const l of p.links) inbound.add(l);
+    for (const p of ps) for (const l of p.links) inbound.add(resolve.get(l) ?? l);
     // 원문(source)·교훈(lesson)·개요(overview)는 인바운드 링크 대상이 아니므로 고아 점검에서 제외
     //   — 원문 데이터·교훈은 개념 노드가 아니다. 의미있는 고아 = 아무도 안 가리키는 concept/entity/answer.
     const ORPHAN_SKIP = new Set(['overview', 'source', 'lesson']);
@@ -893,7 +926,8 @@ export class LlmWiki {
   /** 페이지가 없는 [[링크]] 대상 → {원제목, 참조 페이지들}. (lint 의 dangling 을 보충 가능한 형태로) */
   private danglingTargets(): Map<string, { title: string; refs: string[] }> {
     const pages = this.allPages();
-    const slugs = new Set(pages.map((p) => p.slug));
+    // 별칭까지 해석 — 별칭으로 도달 가능한 대상은 '갭'이 아니다(maintain 이 중복 페이지를 만들던 구멍).
+    const resolve = buildLinkResolver(pages);
     const map = new Map<string, { title: string; refs: string[] }>();
     for (const p of pages) {
       const re = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
@@ -901,7 +935,7 @@ export class LlmWiki {
       while ((m = re.exec(p.body)) !== null) {
         const title = m[1]!.trim();
         const slug = slugify(title);
-        if (slugs.has(slug)) continue; // 이미 페이지 존재
+        if (resolve.has(slug)) continue; // 이미 페이지 존재(슬러그 또는 별칭으로 도달)
         const e = map.get(slug) ?? { title, refs: [] };
         if (!e.refs.includes(p.title)) e.refs.push(p.title);
         map.set(slug, e);
@@ -1078,16 +1112,20 @@ export class LlmWiki {
     const links: Array<Record<string, unknown>> = [];
     let pageLinks = 0;
     const stubs = new Set<string>();
+    // 별칭 링크는 실 노드로 해석 — 종전엔 별칭마다 유령 stub 노드가 생겨 그래프가 부풀었다.
+    const resolve = buildLinkResolver(ps);
     for (const p of ps) for (const l of p.links) {
       if (!l) continue;
-      if (!bySlug.has(l)) stubs.add(l); // dangling — 아직 생성 안 된 대상(미생성 페이지)
-      links.push({ source: p.slug, target: l, kind: 'relates' }); pageLinks++;
+      const t = resolve.get(l) ?? l;
+      if (!bySlug.has(t)) stubs.add(t); // dangling — 아직 생성 안 된 대상(미생성 페이지)
+      links.push({ source: p.slug, target: t, kind: 'relates' }); pageLinks++;
     }
     // 반박(rebuts) 타입드 엣지 — 토론 노드의 비평→입장 관계(프런트 빨강 시냅스). 페이지 링크로 카운트(pageLinks).
     for (const p of ps) for (const r of p.rebuts) {
       if (!r) continue;
-      if (!bySlug.has(r)) stubs.add(r);
-      links.push({ source: p.slug, target: r, kind: 'rebuts' }); pageLinks++;
+      const t = resolve.get(r) ?? r;
+      if (!bySlug.has(t)) stubs.add(t);
+      links.push({ source: p.slug, target: t, kind: 'rebuts' }); pageLinks++;
     }
     // 미생성 페이지(dangling)도 노드로 표시해 [[링크]] 연결을 보존(obsidian 회색 노드 식, category:stub).
     for (const s of stubs) nodes.push({ id: s, type: 'page', label: s, category: 'stub', stance: 'neutral', status: 'missing', degree: 0, source_count: 0 });

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { LlmWiki, slugify } from './llmwiki';
+import { LlmWiki, slugify, buildLinkResolver } from './llmwiki';
 
 // compileDebateOverview 테스트용 LLM 목킹 — 다른 테스트는 llm 을 호출하지 않아 무해.
 vi.mock('../llm/client', () => ({
@@ -25,6 +25,35 @@ describe('slugify', () => {
 });
 
 // macOS/iCloud 가 한글 장슬러그 파일명을 NFD ~255바이트에서 잘라 'x 2.md' 중복까지 만든 회귀(2026-07-13).
+describe('buildLinkResolver — 슬러그·별칭 해석(순수)', () => {
+  const P = (slug: string, aliases: string[] = []) => ({ slug, aliases });
+  it('실 슬러그는 자기 자신, 고유 별칭은 소유 페이지로', () => {
+    const r = buildLinkResolver([P('고온-스트레스', ['고온스트레스']), P('잎-손상-진단')]);
+    expect(r.get('고온-스트레스')).toBe('고온-스트레스');
+    expect(r.get('고온스트레스')).toBe('고온-스트레스');
+    expect(r.get('잎-손상-진단')).toBe('잎-손상-진단');
+  });
+  it('두 페이지 이상이 주장하는 별칭은 모호 → 제외(결정적, readdir 순서 무관)', () => {
+    // 실측: 'debate' 는 37개 토론 페이지가 공유 — 아무 데나 붙으면 안 된다.
+    const r = buildLinkResolver([P('a', ['debate']), P('b', ['debate']), P('c', ['고유'])]);
+    expect(r.has('debate')).toBe(false);
+    expect(r.get('고유')).toBe('c');
+    // 입력 순서를 뒤집어도 동일 결과
+    const r2 = buildLinkResolver([P('b', ['debate']), P('a', ['debate']), P('c', ['고유'])]);
+    expect(r2.has('debate')).toBe(false);
+  });
+  it('별칭이 실 페이지 슬러그와 충돌하면 실 페이지가 이긴다', () => {
+    const r = buildLinkResolver([P('모종'), P('다른-페이지', ['모종'])]);
+    expect(r.get('모종')).toBe('모종');
+  });
+  it('문자·숫자 없는 별칭은 버린다 — slugify 의 page 폴백이 [[page]] 를 오해석하지 않게', () => {
+    const r = buildLinkResolver([P('a', ['', '  ', '!!!'])]);
+    expect(r.size).toBe(1);        // 실 슬러그 a 만
+    expect(r.has('page')).toBe(false);
+    expect(r.has('없는것')).toBe(false);
+  });
+});
+
 describe('slugify — 장슬러그 NFD 바이트 캡(+해시)', () => {
   const longTitle = '8월 휴가철·하반기 성수기 대비 경북 숙박·관광·식음료 중소·소상공인의 자금 확보·마케팅 고민 분석 (요약)';
   const nfdBytes = (s: string) => Buffer.byteLength(s.normalize('NFD'), 'utf-8');
@@ -172,6 +201,27 @@ describe('LlmWiki', () => {
     w.upsertPage({ title: 'A', type: 'entity', body: '[[없는페이지]] 참조' });
     const r = w.lint();
     expect(r.danglingLinks.some((d) => d.to === '없는페이지')).toBe(true);
+  });
+
+  it('별칭 링크는 끊긴 링크·고아가 아니다 — maintain 중복 페이지 생성 차단(2026-07-31)', () => {
+    const w = new LlmWiki(dir);
+    // '고온 스트레스' 페이지가 '고온스트레스' 를 별칭으로 선언 → 다른 페이지가 별칭으로 링크.
+    w.upsertPage({ title: '고온 스트레스', type: 'concept', body: '정의', aliases: ['고온스트레스'] });
+    w.upsertPage({ title: '잎 손상 진단', type: 'concept', body: '[[고온스트레스]] 가 원인일 수 있다' });
+    const r = w.lint();
+    expect(r.danglingLinks.some((d) => d.to === '고온스트레스')).toBe(false); // 종전엔 true(가짜 갭)
+    expect(r.orphans).not.toContain('고온 스트레스');                          // 별칭 인바운드도 인정
+  });
+
+  it('graph — 별칭 링크가 유령 stub 이 아니라 실 노드를 가리킨다', () => {
+    const w = new LlmWiki(dir);
+    const target = w.upsertPage({ title: '고온 스트레스', type: 'concept', body: '정의', aliases: ['고온스트레스'] });
+    w.upsertPage({ title: '잎 손상 진단', type: 'concept', body: '[[고온스트레스]] 참조' });
+    const g = w.graph();
+    const nodes = g.nodes as Array<{ id: string; category?: string }>;
+    expect(nodes.some((n) => n.category === 'stub' && n.id === '고온스트레스')).toBe(false);
+    const links = g.links as Array<{ target: string; kind: string }>;
+    expect(links.some((l) => l.kind === 'relates' && l.target === target.slug)).toBe(true);
   });
 
   it('summary 가 대괄호로 시작/끝나도 배열로 오파싱 안 됨(라운드트립)', () => {
