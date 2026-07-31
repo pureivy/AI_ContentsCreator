@@ -149,17 +149,19 @@ export default function PerformanceView() {
 
   // 카드 보조 지표(좋아요·안내 문구) — 조회수와 시각적 위계 분리(작고 옅게). 다크/라이트 모두 opacity 로 무난.
   const subStyle = { fontSize: 11, opacity: 0.65, marginTop: 3 } as const;
-  // 채널 카드의 팔로워 줄 — 현재값+전일 증감, 클릭 시 일자별 추이 모달. 스냅샷 없으면 표기 생략(빈 0 오해 방지).
+  // 채널 카드의 팔로워 표기 — 좋아요 '옆'에 인라인(구분점 포함, 사용자 확정 2026-07-31). 현재값+전일 증감,
+  // 클릭 시 일자별 추이 모달. 스냅샷 없으면 표기 생략(빈 0 오해 방지).
   const folStat = (field: FollowerField, label: string) => {
     const cur = latestFollower(followers, field);
     if (cur == null) return null;
     const d = followerDelta(followers, field);
     return (
-      <div style={subStyle}>
+      <>
+        {" · "}
         <button className="fol-link" onClick={() => setTrend(field)} title={`${label} — 클릭하면 일자별 추이 그래프`}>
           👥 {label} {cur.toLocaleString()}{d != null && d !== 0 ? ` (${d > 0 ? "+" : ""}${d.toLocaleString()})` : ""} ▸
         </button>
-      </div>
+      </>
     );
   };
 
@@ -186,20 +188,17 @@ export default function PerformanceView() {
             <div className="perf-card">
               <div className="perf-num">{(s?.totalViews ?? 0).toLocaleString()}</div>
               <div className="perf-lbl">블로그 조회</div>
-              <div style={subStyle} title="네이버 공감(리액션 총합) 합계 — 블로그 표의 공감 열 합과 일치">💚 공감 {(s?.blogLikes ?? 0).toLocaleString()}</div>
-              {folStat("naver", "이웃")}
+              <div style={subStyle} title="네이버 공감(리액션 총합) 합계 — 블로그 표의 공감 열 합과 일치">💚 공감 {(s?.blogLikes ?? 0).toLocaleString()}{folStat("naver", "이웃")}</div>
             </div>
             <div className="perf-card">
               <div className="perf-num">{(ch?.summary.shortsYtViews ?? 0).toLocaleString()}</div>
               <div className="perf-lbl">쇼츠 유튜브 조회</div>
-              <div style={subStyle} title="유튜브 좋아요 합계 — 쇼츠 표의 유튜브 👍 열 합과 일치">👍 {(ch?.summary.ytLikes ?? 0).toLocaleString()}</div>
-              {folStat("youtube", "구독")}
+              <div style={subStyle} title="유튜브 좋아요 합계 — 쇼츠 표의 유튜브 👍 열 합과 일치">👍 {(ch?.summary.ytLikes ?? 0).toLocaleString()}{folStat("youtube", "구독")}</div>
             </div>
             <div className="perf-card">
               <div className="perf-num">{(ch?.summary.reelsViews ?? 0).toLocaleString()}</div>
               <div className="perf-lbl" title="인스타그램 릴스만의 조회 합계 — 페이스북은 합산하지 않고 릴스 표의 페이스북 그룹에서 따로 봅니다">인스타 릴스 조회</div>
-              <div style={subStyle} title="인스타 릴스 좋아요 합계 — 쇼츠 표의 인스타 👍 열 합과 일치">👍 {(ch?.summary.reelsLikes ?? 0).toLocaleString()}</div>
-              {folStat("instagram", "팔로워")}
+              <div style={subStyle} title="인스타 릴스 좋아요 합계 — 쇼츠 표의 인스타 👍 열 합과 일치">👍 {(ch?.summary.reelsLikes ?? 0).toLocaleString()}{folStat("instagram", "팔로워")}</div>
             </div>
             <div className="perf-card">
               <div className="perf-num">{(ch?.summary.cardnewsViews ?? 0).toLocaleString()}</div>
@@ -209,8 +208,7 @@ export default function PerformanceView() {
             <div className="perf-card">
               <div className="perf-num">{(ch?.summary.fbReelViews ?? 0).toLocaleString()}</div>
               <div className="perf-lbl" title="페이스북 페이지 릴스 조회 합계. 페이스북은 영상만 조회 지표가 있습니다">페이스북 릴스 조회</div>
-              <div style={subStyle} title="페이스북 릴스 좋아요 합계 — 쇼츠 표의 페이스북 👍 열 합과 일치">👍 {(ch?.summary.fbReelLikes ?? 0).toLocaleString()}</div>
-              {folStat("facebook", "팔로워")}
+              <div style={subStyle} title="페이스북 릴스 좋아요 합계 — 쇼츠 표의 페이스북 👍 열 합과 일치">👍 {(ch?.summary.fbReelLikes ?? 0).toLocaleString()}{folStat("facebook", "팔로워")}</div>
             </div>
             <div className="perf-card">
               <div className="perf-num">{(ch?.summary.fbPostLikes ?? 0).toLocaleString()}</div>
