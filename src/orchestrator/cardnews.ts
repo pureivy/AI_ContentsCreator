@@ -154,6 +154,16 @@ async function qaSlide(imagePath: string, s: PlanSlide, signal?: AbortSignal): P
   return j?.ok !== false;
 }
 
+/** 표지(1번 슬라이드)에 핵심 키워드 정확 표기가 있는지(공백 무시 — "가을채소 흙준비"≈"가을채소흙준비").
+ *  결정적 게이트·마지노선 공용(순수, export 는 테스트용). 키워드 없으면 항상 통과. */
+export function coverIncludesKeyword(slides: Array<{ headline: string; body: string }>, keyword?: string): boolean {
+  const kw = (keyword || '').trim();
+  const s0 = slides[0];
+  if (!kw || !s0) return true;
+  const strip = (s: string) => s.replace(/\s+/g, '');
+  return strip(`${s0.headline} ${s0.body}`).includes(strip(kw));
+}
+
 async function planCards(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number | null, priorCoverage = ''): Promise<Plan | null> {
   const user = [
     `[주제] ${topic}`,
@@ -162,7 +172,10 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     sourceBody ? `[블로그 초안 본문 — 핵심과 그것이 성립하는 이유(전제 인과)를 함께 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${sourceBody.slice(0, 4000)}` : '',
     sourceBody ? '[주제]는 블로그 SEO 제목이다 — 제목의 수사(앵글)를 표지에 그대로 옮기지 말고, 표지는 대상(무엇에 관한 카드인지)을 앞세워 재작성하라.' : '',
     '',
-    '독자는 원문 블로그를 본 적이 없다 — 카드 단독으로 완결되게 써라: 표지(headline 또는 body)에 핵심 주제어(식물명·행위명 등)를 반드시 명시하고(훅과 병행 — 훅을 위해 주제어를 빼지 말 것), 각 장은 앞 장과 표지만으로 무슨 대상 이야기인지 읽히게 하라.',
+    // 키워드가 있으면 '주제어' 수준이 아니라 정확 표기를 요구(2026-07-31 — 훅 자유는 유지: headline 또는 body 택일 허용).
+    keyword
+      ? `독자는 원문 블로그를 본 적이 없다 — 카드 단독으로 완결되게 써라: 표지(headline 또는 body)에 핵심 키워드 '${keyword}' 를 정확히 이 표기 그대로 반드시 포함하고(훅과 병행 — 훅을 위해 키워드를 빼지 말 것), 각 장은 앞 장과 표지만으로 무슨 대상 이야기인지 읽히게 하라.`
+      : '독자는 원문 블로그를 본 적이 없다 — 카드 단독으로 완결되게 써라: 표지(headline 또는 body)에 핵심 주제어(식물명·행위명 등)를 반드시 명시하고(훅과 병행 — 훅을 위해 주제어를 빼지 말 것), 각 장은 앞 장과 표지만으로 무슨 대상 이야기인지 읽히게 하라.',
     n
       ? `슬라이드 ${n}장(표지 1 + 본문 ${Math.max(1, n - 2)} + 마무리 1)의 카드뉴스를 기획하라.`
       : '슬라이드 수는 스토리라인의 핵심 메시지 개수에 맞게 3~8장 사이에서 스스로 정하라(표지 1 + 본문 여러 장 + 마무리 1). 억지로 채우거나 줄이지 말고 내용 밀도에 맞춰라.',
@@ -208,6 +221,11 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     // body 의 \n 은 한 줄로 접는다 — 검산 프롬프트가 번호 목록이라 줄바꿈이 항목 경계처럼 보이면 판정 정밀도가 떨어진다.
     const cardTexts = plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / '));
     const probs = await standaloneIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', cardTexts, topic, keyword, io.signal);
+    // 표지 키워드 정확 표기 게이트(결정적) — LLM '주제어' 판정과 별개로 [핵심 키워드] 그대로를 요구.
+    // 실측 2026-07-31: "블루베리나무화분"이 표지 히어로가 아닌 곳에서도 빠질 뻔한 소프트 유도 보강.
+    if (keyword && !coverIncludesKeyword(plan.slides, keyword)) {
+      probs.push(`표지(1번): 핵심 키워드 '${keyword}' 가 headline 또는 body 에 정확히 이 표기로 없음 — 훅은 유지하되 표지에 그대로 포함하라`);
+    }
     if (probs.length) {
       const m = `단독 이해 검산 — ${probs.length}건 → 수정 라운드 (${probs[0]?.slice(0, 50)})`;
       console.log(`[카드뉴스] ${m}`); io.bus?.emit('log', { message: m });
@@ -220,8 +238,16 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
       }
     }
   } catch { /* 무해 */ }
-  // 마지막에 오탈자 교정 — 수정 라운드가 바꾼 문구까지 포함해 최종 문구를 교열한다.
-  return proofreadPlan(plan, io.signal);
+  // 오탈자 교정 — 수정 라운드가 바꾼 문구까지 포함해 최종 문구를 교열한다.
+  const proofed = await proofreadPlan(plan, io.signal);
+  // 키워드 마지노선(결정적) — 반드시 교열 '뒤'에: 교열 LLM 이 합성 키워드를 띄어쓰기·어형 '교정'으로
+  // 변형해도 여기서 정확 표기를 복원한다(리뷰 지적 2026-07-31). 수정 라운드까지 놓친 경우도 동일하게
+  // 표지 보조 줄(body) 앞에 키워드를 그대로 붙인다 — 표지 body 는 이미지에 verbatim 으로 새겨지므로 노출 보장.
+  if (keyword && !coverIncludesKeyword(proofed.slides, keyword)) {
+    const s0 = proofed.slides[0];
+    if (s0) proofed.slides[0] = { ...s0, body: (s0.body ? `${keyword}, ${s0.body}` : keyword).slice(0, 220) };
+  }
+  return proofed;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitTwoLines, derivePoints } from './shortsThumbnail';
+import { splitTwoLines, derivePoints, ensureKeywordInCopy, buildThumbnailPrompt } from './shortsThumbnail';
 
 describe('splitTwoLines', () => {
   it('단어(공백) 경계에서만 분할 — 어떤 단어도 중간에서 쪼개지 않음', () => {
@@ -15,6 +15,38 @@ describe('splitTwoLines', () => {
   });
   it('단어 하나면 쪼개지 않고 한 줄(line2 빈값)', () => {
     expect(splitTwoLines('하스카프베리')).toEqual({ line1: '하스카프베리', line2: '' });
+  });
+});
+
+describe('ensureKeywordInCopy', () => {
+  it('키워드가 어느 줄에도 없으면 line1 을 키워드로 강제, 기존 훅은 line2 승계', () => {
+    // 실측 재현(2026-07-31): short_69d9fe4166 — "블루베리나무화분" 탈락 케이스
+    expect(ensureKeywordInCopy({ line1: '묘목 라벨', line2: '세 가지 확인', points: [] }, '블루베리나무화분'))
+      .toEqual({ line1: '블루베리나무화분', line2: '세 가지 확인', points: [] });
+  });
+  it('이미 포함(어느 줄이든)이면 무변경', () => {
+    const c1 = { line1: '블루베리나무화분', line2: '라벨 확인', points: ['a'] };
+    expect(ensureKeywordInCopy(c1, '블루베리나무화분')).toBe(c1);
+    const c2 = { line1: '라벨 확인', line2: '블루베리나무화분', points: [] };
+    expect(ensureKeywordInCopy(c2, '블루베리나무화분')).toBe(c2);
+  });
+  it('키워드 미지정이면 무변경, line2 빈 카피는 line1 을 훅으로 승계', () => {
+    const c = { line1: '묘목 라벨', line2: '', points: [] };
+    expect(ensureKeywordInCopy(c, undefined)).toBe(c);
+    expect(ensureKeywordInCopy(c, '배롱나무')).toEqual({ line1: '배롱나무', line2: '묘목 라벨', points: [] });
+  });
+  it('긴 키워드(16자 초과)도 자르지 않음 — 잘린 키워드가 그려지면 정확 표기 불변식 위반(실측 최장 14자, 상한 24)', () => {
+    const kw = '경상북도경제진흥원 지원사업 총정리'; // 18자
+    expect(ensureKeywordInCopy({ line1: '지원 안내', line2: '신청 방법', points: [] }, kw).line1).toBe(kw);
+  });
+});
+
+describe('buildThumbnailPrompt — 밑줄 위계', () => {
+  it('2줄 — 밑줄은 2줄(노랑) 아래에만, 1줄 라벨 줄에는 긋지 않음', () => {
+    const p = buildThumbnailPrompt({ line1: '블루베리나무화분', line2: '라벨 확인', points: ['계열 확인'] });
+    expect(p).toContain('2줄(노랑) 아래에만');
+    expect(p).toContain('1줄(크림 화이트 라벨 줄) 아래에는 긋지 않는다');
+    expect(p).toContain("'블루베리나무화분'");
   });
 });
 

@@ -1776,7 +1776,7 @@ async function shortsThumbnailRegenHandler(c: Context): Promise<Response> {
     const savedCopy = (() => {
       try { return JSON.parse(fs.readFileSync(path.join(dir, 'title-copy.json'), 'utf-8')) as { line1: string; line2: string; points: string[] }; } catch { return undefined; }
     })();
-    const ok = await generateDesignedThumbnail({ dir, title: s.title ?? s.topic, description: s.description ?? '', titles: s.titles, hookImage: hook, signal: AbortSignal.timeout(240_000), ...(savedCopy?.line1 ? { copy: savedCopy } : {}) });
+    const ok = await generateDesignedThumbnail({ dir, title: s.title ?? s.topic, description: s.description ?? '', titles: s.titles, keyword: s.keyword, hookImage: hook, signal: AbortSignal.timeout(240_000), ...(savedCopy?.line1 ? { copy: savedCopy } : {}) });
     if (!ok) return c.json({ error: '썸네일 생성 실패(무해 — 기존 유지)' }, 502);
     shortsStore().update(id, {}); // updatedTs 갱신 → 포스터 캐시버스트
     return c.json({ ok: true });

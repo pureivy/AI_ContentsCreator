@@ -292,7 +292,7 @@ export const CONFIG: Config = {
   naverStatsHeadless: envBool('NAVER_STATS_HEADLESS', true),
   shortsTitleOverlay: envBool('SHORTS_TITLE_OVERLAY', true),
   shortsTitleTopPct: Math.min(20, Math.max(0, envInt('SHORTS_TITLE_TOP_PCT', 5))),
-  shortsTitleWidthPct: Math.min(100, Math.max(30, envInt('SHORTS_TITLE_WIDTH_PCT', 90))), // 90=한 줄 제목 기준 재보정(74는 2줄 시절 값)
+  shortsTitleWidthPct: Math.min(100, Math.max(30, envInt('SHORTS_TITLE_WIDTH_PCT', 74))), // 74=2줄 위계(키워드 라벨+훅) 기준 재보정(2026-07-31) — 90은 1줄 시절 값
 
   ttsProvider: env('TTS_PROVIDER', 'elevenlabs'),
   openaiTtsModel: env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),

@@ -103,6 +103,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     '',
     `씬 ${n}개의 유튜브 숏폼 대본을 기획하라. 씬1=훅(3패턴 중 택1), 씬2=전제(이 영상이 무엇에 대한 이야기이고 왜 문제/중요한지를 못박는다 — 원문의 핵심 인과 한 줄), 마지막 씬=CTA.`,
     '시청자는 원문 블로그를 본 적이 없다 — 영상 단독으로 완결되게 써라: 핵심 주제어(식물명·행위명 등)를 훅 또는 씬2에서 반드시 명시하고, 지시어·축약어("짝"·"그 방법"·"두 그루" 류)는 앞 씬에서 뜻을 세운 뒤에만 사용하라.',
+    keyword ? `대표 제목(title)과 정보형 제목 후보에는 핵심 키워드 '${keyword}' 를 정확히 이 표기 그대로, 가급적 앞쪽에 포함하라(검색 노출용 — 제한된 글자수를 이유로 키워드를 빼지 마라).` : '',
     'CTA 씬은 팔로우할 이유를 담아라 — 이 채널이 계속 주는 가치 한 구절(브랜드 맥락에 맞게) 또는 다음 편 예고 중 하나. "구독과 좋아요 부탁드려요" 같은 기계적 문구 금지.',
     '다음 편 예고를 CTA 에 넣었으면 JSON 의 next 필드에 그 주제와 적절한 시기("N월")를 선언하라 — 예고는 시스템이 약속으로 기록해 그 시기에 실제로 제작한다. 지킬 수 있는 예고만 하고, 예고를 안 했으면 next 를 생략하라.',
     '내레이션은 TTS 낭독용: 구어체 존댓말, 숫자는 한글로("30%"→"삼십 퍼센트"), 이모지·괄호 지문 금지.',
@@ -126,8 +127,16 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     const next = j.next && typeof j.next.topic === 'string' && j.next.topic.trim()
       ? { topic: j.next.topic.trim().slice(0, 120), window: typeof j.next.window === 'string' && j.next.window.trim() ? j.next.window.trim() : undefined }
       : undefined;
+    // 대표 제목 키워드 보정(결정적) — 종전엔 topic(블로그 SEO 제목, 키워드 강제 산물)을 작가가 채택할 때만
+    // 우연히 포함됐다. 키워드 없는 창의 제목이 뽑히면 후보·topic 중 키워드 포함본으로 교체(없으면 원본 유지).
+    // includes 검사는 60자 슬라이스 '결과'에 — 자르기 전 검사는 키워드가 경계 밖이면 도로 잘린다(리뷰 지적).
+    let title = stripEmoji(String(j.title ?? '')).trim().slice(0, 60) || titles[0] || topic;
+    if (keyword && !title.includes(keyword)) {
+      const alt = [...titles, topic].map((t) => t.slice(0, 60)).find((t) => t.includes(keyword));
+      if (alt) title = alt;
+    }
     return {
-      title: stripEmoji(String(j.title ?? '')).trim().slice(0, 60) || titles[0] || topic,
+      title,
       titles: titles.length ? titles : [topic],
       scenes,
       description: String(j.description ?? '').trim().slice(0, 500),
@@ -317,7 +326,7 @@ export async function runShortsJob(
     if (CONFIG.shortsRenderer !== 'ffmpeg') {
       // 상단 제목 캘리(썸네일과 같은 카피, 투명 PNG) — 렌더 전에 생성해야 오버레이 가능. 실패해도 무해(오버레이 생략).
       if (CONFIG.shortsTitleOverlay) {
-        titleArt = await generateTitleArt({ dir, title: plan.title, description: plan.description, titles: plan.titles, signal: opts.signal });
+        titleArt = await generateTitleArt({ dir, title: plan.title, description: plan.description, titles: plan.titles, keyword: short.keyword, signal: opts.signal });
         checkAbort(); // 취소가 '스킵' 메시지로 위장되지 않게 — abort 는 null 로 삼켜져 나온다
         say(titleArt ? '상단 제목 캘리 생성 완료' : '상단 제목 캘리 스킵(오버레이 없이 진행)');
       }
@@ -380,7 +389,7 @@ export async function runShortsJob(
     try {
       const hook = images.find((p): p is string => !!p && fs.existsSync(p)) ?? null;
       const ok = await generateDesignedThumbnail({
-        dir, title: plan.title, description: plan.description, titles: plan.titles, hookImage: hook, signal: opts.signal,
+        dir, title: plan.title, description: plan.description, titles: plan.titles, keyword: short.keyword, hookImage: hook, signal: opts.signal,
         ...(titleArt ? { copy: titleArt.copy } : {}), // 상단 제목 캘리와 같은 카피 재사용 — 영상·썸네일 문구 일치
       });
       if (ok) store.update(id, {}); // updatedTs 갱신 → 포스터 URL(?v=updatedTs) 캐시버스트, 프레임 폴백본 대신 디자인 썸네일 표시

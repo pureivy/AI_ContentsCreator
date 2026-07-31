@@ -1,5 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { applyProofread, buildCardImagePrompt, buildSlideQaPrompt, resolveForcedPreset } from './cardnews';
+import { applyProofread, buildCardImagePrompt, buildSlideQaPrompt, coverIncludesKeyword, resolveForcedPreset } from './cardnews';
+
+describe('coverIncludesKeyword — 표지 키워드 정확 표기 게이트', () => {
+  it('headline 또는 body 어느 쪽이든 정확 표기가 있으면 통과(택일 허용 유지)', () => {
+    expect(coverIncludesKeyword([{ headline: '배롱나무 여름 관리 실수', body: '' }], '배롱나무')).toBe(true);
+    expect(coverIncludesKeyword([{ headline: '라벨 한 줄, 3년을 가른다', body: '블루베리나무화분 구매 전 체크리스트' }], '블루베리나무화분')).toBe(true);
+  });
+  it('공백 차이는 무시("가을채소 흙준비" ≈ "가을채소흙준비")', () => {
+    expect(coverIncludesKeyword([{ headline: '가을채소 흙준비 지금 시작', body: '' }], '가을채소흙준비')).toBe(true);
+  });
+  it('표지 어디에도 없으면 실패 — 수정 라운드·마지노선 트리거', () => {
+    expect(coverIncludesKeyword([{ headline: '라벨 한 줄, 3년을 가른다', body: '구매 전 체크리스트' }], '블루베리나무화분')).toBe(false);
+  });
+  it('키워드 미지정·슬라이드 없음은 항상 통과', () => {
+    expect(coverIncludesKeyword([{ headline: '아무 제목', body: '' }], undefined)).toBe(true);
+    expect(coverIncludesKeyword([], '배롱나무')).toBe(true);
+  });
+});
 
 const base = {
   headline: '가을 첫인사',

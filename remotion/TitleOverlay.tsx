@@ -8,9 +8,9 @@ export const TitleOverlay: React.FC<{
   imageSrc: string;
   /** 상단 오프셋(% of 높이) — 기본 5(플랫폼 상단 UI ~8% 회피와 낙서 잘림 방지의 절충). */
   topPct?: number;
-  /** 폭(% of 화면 폭) — 기본 90(1080px 중 ~970px). 한 줄 제목(최대 ~16자) 기준 재보정 — 74는 2줄 시절 값. */
+  /** 폭(% of 화면 폭) — 기본 74(1080px 중 ~800px). 2줄 위계(키워드 라벨+훅) 기준 재보정(2026-07-31) — 90은 1줄 시절 값. */
   widthPct?: number;
-}> = ({ imageSrc, topPct = 5, widthPct = 90 }) => (
+}> = ({ imageSrc, topPct = 5, widthPct = 74 }) => (
   <AbsoluteFill>
     {/* 높이 상한 박스(26%) — 크롭 종횡비가 예측 불가(낙서 위치 가변)라, 세로로 긴 크롭이
         화면 중앙의 stat/list/quote 카드까지 침범하지 않게 contain 으로 가둔다. */}
