@@ -70,7 +70,7 @@ import { naverAttemptAt, markNaverAttempt } from '../analytics/naverAttempts';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
-import { notifyBlogReady, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
+import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
 import { startTelegramBot } from '../autonomy/telegramBot';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
@@ -3495,6 +3495,34 @@ if (!process.env.VITEST) {
       // eslint-disable-next-line no-console
       console.log(`[부팅 복구] 유실된 검토 알림 재발송 — ${p.title.slice(0, 30)}`);
       void notifyBlogReady({ id: p.id, title: p.title, keyword: p.keyword, seoScore: p.seoScore, brand: p.brand }, p.runId);
+    }
+    // 쇼츠·카드뉴스도 동일 복구 — 단 이들은 발행 후에도 stage 가 'ready' 로 남으므로(발행은 별도 액션)
+    // 아직 어느 채널에도 발행 안 된 것(진짜 검토 대기)만 대상. 산출물 파일이 없으면(삭제 등) 건너뜀.
+    for (const s of shortsStore().list()) {
+      if (s.stage !== 'ready' || s.notifiedTs || s.youtubeId || s.igReelId || s.fbReelId) continue;
+      if (Date.now() - new Date(s.updatedTs).getTime() > 24 * 3600 * 1000) continue;
+      const vp = path.join(shortsStore().dirFor(s.id), 'final.mp4');
+      if (!fs.existsSync(vp)) continue;
+      shortsStore().update(s.id, { notifiedTs: new Date().toISOString() });
+      // eslint-disable-next-line no-console
+      console.log(`[부팅 복구] 유실된 쇼츠 검토 알림 재발송 — ${s.topic.slice(0, 30)}`);
+      void notifyShortsReady({
+        id: s.id, topic: s.topic, brand: s.brand, durationSec: s.durationSec, scenes: s.scenes,
+        sourcePieceId: s.sourcePieceId, writer: s.writer, director: s.director,
+      }, vp);
+    }
+    for (const cn of cardNewsStore().list()) {
+      if (cn.stage !== 'ready' || cn.notifiedTs || cn.igMediaId || cn.fbPostId) continue;
+      if (Date.now() - new Date(cn.updatedTs).getTime() > 24 * 3600 * 1000) continue;
+      const dir = cardNewsStore().dirFor(cn.id);
+      if (!fs.existsSync(dir)) continue;
+      cardNewsStore().update(cn.id, { notifiedTs: new Date().toISOString() });
+      // eslint-disable-next-line no-console
+      console.log(`[부팅 복구] 유실된 카드뉴스 검토 알림 재발송 — ${cn.topic.slice(0, 30)}`);
+      void notifyCardnewsReady({
+        id: cn.id, topic: cn.topic, brand: cn.brand, slides: cn.slides,
+        sourcePieceId: cn.sourcePieceId, planner: cn.planner, designer: cn.designer,
+      }, dir);
     }
   }
 }

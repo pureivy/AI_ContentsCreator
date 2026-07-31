@@ -366,10 +366,11 @@ export async function runShortsJob(
     {
       const done = store.get(id);
       if (done) {
+        // 발송 정착 후 notifiedTs 기록 — 도중에 프로세스가 죽으면 미기록으로 남아 부팅 복구 스윕이 재발송.
         void notifyShortsReady({
           id, topic: done.topic, brand: done.brand, durationSec: r.durationSec, scenes: r.sceneCount,
           sourcePieceId: done.sourcePieceId, writer: done.writer, director: done.director,
-        }, r.videoPath);
+        }, r.videoPath).finally(() => { try { store.update(id, { notifiedTs: new Date().toISOString() }); } catch { /* 무해 */ } });
       }
       // 예고 대장 등록 — CTA 에 다음 편 예고를 선언했으면 약속으로 기록(자율 틱이 시기 도래 시 이행). 실패 무해.
       // brand 는 잡의 것을 명시(null=범용) — 라이브 activeBrand 로의 오귀속 방지.

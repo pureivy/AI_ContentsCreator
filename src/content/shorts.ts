@@ -13,6 +13,8 @@ export type ShortsStage = 'planning' | 'designing' | 'rendering' | 'ready' | 'er
 
 export interface Shorts {
   id: string;
+  /** 검토 대기(ready) 알림 발송 시각 — 미기록+미발행이면 부팅 복구 스윕이 재발송(재시작 유실 대비, 2026-07-31). */
+  notifiedTs?: string;
   /** 브랜드(고객사) 슬러그 — 생성 시점의 활성 브랜드(범용이면 undefined). */
   brand?: string;
   /** 주제(독립 생성) 또는 원본 블로그 제목(파생). */
