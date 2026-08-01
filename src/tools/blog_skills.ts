@@ -24,8 +24,12 @@ export interface BlogSkillResult { ok: boolean; output: string }
 const OUTPUT_CAP = 12 * 1024;
 // 이미지 생성·Playwright 임시저장은 셸 분석 명령보다 오래 걸릴 수 있어 별도 타임아웃(3분).
 const BLOG_TIMEOUT_MS = Math.max(CONFIG.agentShellTimeoutMs, 180_000);
-// 검토 탭 트리거의 실제 네이버 임시저장 — 최초 로그인(수동·최대 10분 대기) + 글쓰기까지 여유(15분).
-const NAVER_PUBLISH_TIMEOUT_MS = 15 * 60_000;
+// 검토 탭 트리거의 실제 네이버 임시저장 — 최초 로그인(수동·최대 10분 대기) + 글쓰기까지 여유.
+// 30분: 15분은 사람처럼 타이핑(자당 0.02~0.06초 + 문장 중간 멈춤)에 표·코드 스플라이스가 겹치면
+// 부족했다(실측 2026-08-01: 본문 3,668자·표코드 5개 글이 두 번 연속 정확히 15:00 에 절단, 결과 파일
+// 미생성 → '발행 결과 파일 없음'). 상한이라 짧은 글의 소요 시간에는 영향 없음. env 로 조정 가능.
+const NAVER_PUBLISH_TIMEOUT_MS = Math.max(60_000,
+  Number.parseInt(process.env.NAVER_PUBLISH_TIMEOUT_MS ?? '', 10) || 30 * 60_000);
 // 성과 수집(어드바이저 캡처) — 로그인된 세션 전제, 네비게이션·캡처까지 여유(5분).
 const NAVER_STATS_TIMEOUT_MS = 5 * 60_000;
 

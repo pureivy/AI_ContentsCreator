@@ -1703,10 +1703,23 @@ def main():
                 except Exception as e:
                     log(f"[쿠키] 복원 실패(무해): {str(e)[:60]}")
 
-            # 로그인 확인
+            # 로그인 확인 — API 판정 우선(naver_stats.py 와 동일 패턴). DOM 셀렉터만으로 판정하면
+            # 유효 세션인데도 '미로그인'으로 오판해 불필요한 재로그인을 돌린다(실측 2026-08-01: 쿠키가
+            # 살아있음을 blog.stat user-info 200 으로 확인했는데도 재로그인 → 캡차/기기확인에 걸려 10분 초과 실패).
+            # 반복 자동 로그인은 네이버 봇 탐지를 악화시키므로 '재로그인 회피'가 안전 방향이다.
+            authed = False
+            try:
+                _ai = context.request.get("https://blog.stat.naver.com/api/blog/user-info",
+                                          headers={"referer": "https://m.blog.naver.com/", "accept": "application/json"},
+                                          timeout=15000)
+                authed = (_ai.status == 200 and "json" in _ai.headers.get("content-type", ""))
+            except Exception:
+                authed = False
             page.goto("https://blog.naver.com", wait_until="domcontentloaded", timeout=15000)
             time.sleep(1.5)
-            logged_in = page.locator("a[href*='nidlogin'], .link_login").count() == 0
+            logged_in = authed or page.locator("a[href*='nidlogin'], .link_login").count() == 0
+            if authed:
+                log("[로그인] API 인증 확인 — 재로그인 생략")
 
             if logged_in:
                 log("[로그인] 기존 세션으로 자동 로그인 완료(재로그인 없음)")
