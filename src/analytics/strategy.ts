@@ -8,7 +8,19 @@ import path from 'node:path';
 import { CONFIG } from '../config';
 import { isSafeBrandSlug } from '../content/brand';
 
-export interface KeywordScore { keyword: string; score: number; samples: number; updatedAt: string; }
+export interface KeywordScore {
+  keyword: string; score: number; samples: number;
+  /** 마지막 측정 시각 — 재측정마다 갱신된다(신선도). 시대 구분에 쓰면 안 된다. */
+  updatedAt: string;
+  /**
+   * 이 키워드가 winners 에 **처음 들어온** 시각 — 재측정에도 불변(시대 스탬프).
+   * 브랜드 정체성이 바뀌면 그 이전에 쌓인 성과는 지금 정체성의 근거가 아니다. 그걸 걸러내려면
+   * '언제 측정됐나'가 아니라 '어느 시대 콘텐츠인가'가 필요한데, updatedAt 은 측정창(14일) 안에서
+   * 매일 갱신돼 컷오프를 스스로 무너뜨린다(실측 2026-08-01: 화분곰팡이·반려동물 안전한 식물이
+   * 07-27 갱신 상태라 하루만 지나면 어떤 컷오프든 통과). 구파일은 읽기 시 updatedAt 으로 백필.
+   */
+  firstSeenAt?: string;
+}
 export interface Strategy {
   winners: KeywordScore[];
   subNiches: Record<string, number>;
@@ -31,7 +43,11 @@ export function readStrategy(brand = ''): Strategy {
   try {
     const s = JSON.parse(fs.readFileSync(strategyFile(brand), 'utf-8')) as Partial<Strategy>;
     return {
-      winners: Array.isArray(s.winners) ? s.winners : [],
+      // firstSeenAt 백필 — 이 필드 도입(2026-08-01) 전 항목은 updatedAt 이 유일한 시각 정보다.
+      // 지금 시점의 updatedAt 은 '측정창 안에서 마지막으로 갱신된 때'라 정확한 최초 등장은 아니지만,
+      // 한 번 굳으면 이후 재측정에 흔들리지 않으므로 컷오프가 안정된다.
+      winners: (Array.isArray(s.winners) ? s.winners : [])
+        .map((w) => ({ ...w, firstSeenAt: w.firstSeenAt || w.updatedAt })),
       subNiches: (s.subNiches && typeof s.subNiches === 'object') ? s.subNiches : {},
       measuredPieces: typeof s.measuredPieces === 'number' ? s.measuredPieces : 0,
       updatedAt: s.updatedAt ?? '',
@@ -60,7 +76,7 @@ export function updateStrategy(input: { keyword?: string; subNiche?: string; sig
   if (kw) {
     const w = s.winners.find((x) => x.keyword === kw);
     if (w) { w.score = EWMA_ALPHA * input.signal + (1 - EWMA_ALPHA) * w.score; w.samples += 1; w.updatedAt = now; }
-    else s.winners.push({ keyword: kw, score: input.signal, samples: 1, updatedAt: now });
+    else s.winners.push({ keyword: kw, score: input.signal, samples: 1, updatedAt: now, firstSeenAt: now });
     s.winners.sort((a, b) => b.score - a.score);
     if (s.winners.length > MAX_WINNERS) s.winners = s.winners.slice(0, MAX_WINNERS);
   }

@@ -43,6 +43,14 @@ export interface BrandProfile {
   /** 한국어 합성어 안에서 추가로 크레딧할 도메인 어간(예: '감나무묘목'→'묘목').
    *  포화 탐지가 합성어를 못 쪼개 수렴 축을 놓치는 문제 대응 — 업종어라 브랜드별로 둔다(미설정=확장 없음). */
   compoundStems?: string[];
+  /**
+   * 성과 학습의 시대 컷오프(YYYY-MM-DD) — 이 날짜 **이전에 처음 측정된** 성과 키워드는 주제 조향에서 뺀다.
+   * 브랜드 정체성을 재정립하면 그 이전 성과는 '지금의 우리'가 아니라 '이전의 우리'가 번 것이라,
+   * 그대로 두면 주제 두뇌를 옛 정체성으로 되끌어간다(실측 2026-08-01: bionditree 상위 8개 중 5개가
+   * 재정립 전 꽃·화분 키워드 — banned 게이트는 '꽃'이 스톱워드라 못 거른다).
+   * 미설정이면 필터 없음(종전 동작) — 정체성을 바꾼 적 없는 브랜드는 영향받지 않는다.
+   */
+  perfEraSince?: string;
   /** 채널 설명(예: 네이버 블로그 — 제품 활용 하우투·후기 중심). */
   channel?: string;
   /** 카드뉴스 기본 이미지 스타일 프리셋(브랜드 고정, 2026-07-22) — 수동·검토탭·자동 파생 전부 적용.
@@ -195,6 +203,9 @@ export function normalizeBrand(raw: Partial<BrandProfile> | null | undefined): B
     seedKeywords: arr(raw?.seedKeywords, 30),
     genreAxes: arr(raw?.genreAxes, 8),
     compoundStems: arr(raw?.compoundStems, 40),
+    // YYYY-MM-DD 만 받는다 — 형식이 틀리면 조용히 전체를 거르거나 전혀 안 거르는 사고가 나므로 무시한다.
+    perfEraSince: /^\d{4}-\d{2}-\d{2}$/.test(String(raw?.perfEraSince ?? '').trim())
+      ? String(raw?.perfEraSince).trim() : undefined,
     channel: s(raw?.channel, 200),
     cardStyle: s(raw?.cardStyle, 40),
   };

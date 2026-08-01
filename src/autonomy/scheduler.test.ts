@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners } from './scheduler';
 
 describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -166,5 +166,33 @@ describe('seedKeywordBlock — 성과 키워드가 있어도 시드가 사라지
   });
   it('시드가 없으면 빈 문자열 — 미설정 브랜드는 종전 동작 그대로', () => {
     expect(seedKeywordBlock('- 무언가', [])).toBe('');
+  });
+});
+
+// 시대 컷오프(2026-08-01) — 정체성 재정립 전 성과가 주제 두뇌를 옛 정체성으로 되끌던 문제.
+// updatedAt 은 측정창 안에서 매일 갱신돼 컷오프를 무너뜨리므로 firstSeenAt(불변)을 본다.
+describe('eligibleWinners — 소재 게이트 + 시대 컷오프', () => {
+  const W = [
+    { keyword: '여름꽃종류', firstSeenAt: '2026-07-15T00:00:00.000Z', updatedAt: '2026-07-15T00:00:00.000Z' },
+    { keyword: '화분곰팡이', firstSeenAt: '2026-07-27T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z' },
+    { keyword: '신비복숭아묘목', firstSeenAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z' },
+  ];
+  it('since 미설정이면 시대 필터 없음 — 정체성을 바꾼 적 없는 브랜드는 종전 동작', () => {
+    expect(eligibleWinners(W, undefined).map((w) => w.keyword)).toEqual(['여름꽃종류', '화분곰팡이', '신비복숭아묘목']);
+  });
+  it('컷오프 이전에 처음 측정된 것은 제외', () => {
+    expect(eligibleWinners(W, '2026-07-31').map((w) => w.keyword)).toEqual(['신비복숭아묘목']);
+  });
+  it('재측정으로 updatedAt 이 컷오프를 넘어도 되살아나지 않는다 — 이게 firstSeenAt 을 둔 이유', () => {
+    // 화분곰팡이: updatedAt 08-01(컷오프 이후)이지만 firstSeenAt 07-27 → 계속 제외
+    expect(eligibleWinners(W, '2026-07-31').some((w) => w.keyword === '화분곰팡이')).toBe(false);
+  });
+  it('firstSeenAt 이 없는 구파일 항목은 updatedAt 으로 판정', () => {
+    const old = [{ keyword: '모감주나무', updatedAt: '2026-07-20T00:00:00.000Z' }];
+    expect(eligibleWinners(old, '2026-07-31')).toHaveLength(0);
+    expect(eligibleWinners(old, '2026-07-01')).toHaveLength(1);
+  });
+  it('시각 정보가 전혀 없으면 옛 것으로 본다(보수적)', () => {
+    expect(eligibleWinners([{ keyword: '모감주나무' }], '2026-07-31')).toHaveLength(0);
   });
 });

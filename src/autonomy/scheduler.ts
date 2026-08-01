@@ -139,6 +139,32 @@ const recentAuto: string[] = [];
 /** 다음에 제작할 콘텐츠 아이디어(구조화). */
 export interface ContentIdea { title: string; keyword?: string; subNiche?: string; }
 
+/**
+ * 주제 조향에 쓸 성과 키워드 선별(순수) — 두 겹.
+ *
+ * 1. **소재 게이트**: banned 에 걸리는 키워드 제외(채소·다육 등).
+ * 2. **시대 컷오프**: 브랜드 정체성 재정립 이전에 **처음 측정된** 키워드 제외.
+ *    게이트만으로는 부족하다는 게 실측으로 드러났다(2026-08-01: bionditree 상위 8개 중 5개가
+ *    여름꽃종류·7월에 심는 꽃·화분곰팡이·여름화분물주기·반려동물 안전한 식물). 이들은 나무 브랜드의
+ *    소재가 아니지만 banned 토큰에 안 걸린다 — '꽃'은 꽃나무(배롱나무·벚나무)를 살려야 해서
+ *    스톱워드이기 때문이다. 즉 게이트를 조이면 정상 주제가 죽고, 안 조이면 옛 정체성이 살아남는다.
+ *    해법은 소재 판정이 아니라 시대 판정이다.
+ *
+ * 기준 시각은 firstSeenAt(불변) — updatedAt 은 측정창 안에서 매일 갱신돼 컷오프를 무너뜨린다.
+ * 구파일 호환: firstSeenAt 이 없으면 updatedAt 으로 대체(readStrategy 가 백필하지만 직접 파싱 경로도 있다).
+ * since 미설정이면 시대 필터 없음 — 정체성을 바꾼 적 없는 브랜드는 종전 동작 그대로.
+ */
+export function eligibleWinners<T extends { keyword?: string; firstSeenAt?: string; updatedAt?: string }>(
+  winners: T[], since?: string,
+): T[] {
+  return winners.filter((w) => {
+    if (!w || !w.keyword || offBrandTerm(w.keyword)) return false;
+    if (!since) return true;
+    const born = (w.firstSeenAt || w.updatedAt || '').slice(0, 10);
+    return born ? born >= since : false; // 시각을 모르면 옛 것으로 본다(보수적)
+  });
+}
+
 // 성과 전략(analytics/strategy.json, 6d 연동) 있으면 승자 키워드를 아이디어 재료로 — 없으면 콜드스타트(무시).
 function readStrategyWinners(): string {
   try {
@@ -146,11 +172,7 @@ function readStrategyWinners(): string {
     const raw = JSON.parse(readSafe(path.join(CONFIG.dataDir, 'analytics', slug ? `strategy-${slug}.json` : 'strategy.json'))) as {
       winners?: Array<{ keyword?: string; score?: number }>;
     };
-    // 정체성 재정립(2026-07-31) 전에 쌓인 성과는 지금 금지 소재가 대부분이다(실측 2026-08-01: 상위 8개 중
-    // 7개가 꽃·채소·다육). 프롬프트가 "성과 상위의 인접 영역에서 발굴하라"고 지시하는데 그 인접이 전부
-    // 차단돼 출력 공간이 한 축으로 몰렸다 — 오프브랜드 성과는 학습 근거에서 뺀다(시대 필터).
-    return (raw.winners ?? [])
-      .filter((w) => w && w.keyword && !offBrandTerm(w.keyword))
+    return eligibleWinners(raw.winners ?? [], getBrand()?.perfEraSince)
       .slice(0, 8)
       .map((w) => `- ${w.keyword}${typeof w.score === 'number' ? ` (점수 ${w.score.toFixed(2)})` : ''}`)
       .join('\n');
@@ -217,8 +239,10 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   const brand = brandContext();
   const seeds = brandSeedKeywords();
   const productLines = brandProductLines();
+  // "없음"이 아니라 "쓸 수 있는 게 없음" — 시대 컷오프(perfEraSince)로 옛 정체성 성과를 일부러 뺀
+  // 경우가 있어서, 데이터가 아예 없다고 말하면 두뇌가 '신생 브랜드'로 오해한다.
   const coldstart = seeds.length
-    ? `(성과 데이터 없음 — 아래 브랜드 시드 키워드에서 출발해 탐색)\n${seeds.map((k) => `- ${k}`).join('\n')}`
+    ? `(지금 정체성에 쓸 성과 키워드 없음 — 아래 브랜드 시드 키워드에서 출발해 탐색)\n${seeds.map((k) => `- ${k}`).join('\n')}`
     : '(없음 — 콜드스타트)';
   const seedBlock = seedKeywordBlock(winners, seeds);
   // 신규성 가드(사용자 원칙 2026-07-15) — 브랜드의 기존 글·쇼츠·카드뉴스 제목+키워드와 유사 금지.
