@@ -59,6 +59,7 @@ export default function PerformanceView() {
     const r = await refreshPerformance(); // 서버는 즉시 응답(백그라운드 수집) — 진행 중이었으면 그 수집에 합류
     if (!r.ok) {
       await load(); // 시작 실패해도 표시는 최신 저장값으로 갱신
+      void fetchFollowers().then(setFollowers);
       setRefreshing(false);
       setRefreshMsg(`⚠ ${r.error || "재수집 실패"} — 표시만 갱신됨`);
       return;
@@ -72,6 +73,9 @@ export default function PerformanceView() {
       d = await fetchPerformance();
     }
     if (d) setData(d);
+    // 이웃·구독자·팔로워는 별도 엔드포인트라 위 폴링에 안 실린다 — 서버가 재수집을 마쳤으니 여기서 다시 읽는다.
+    // 이게 빠져 있어서 서버가 갱신해도 카드 숫자가 그대로였다(사용자 신고 2026-08-02).
+    await fetchFollowers().then(setFollowers);
     setRefreshing(false);
     const t = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
     setRefreshMsg(d?.refreshBusy ? "⏳ 수집이 아직 진행 중 — 잠시 후 새로고침으로 확인하세요" : `✓ ${t} 재수집됨`);

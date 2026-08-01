@@ -2270,6 +2270,10 @@ async function runPerfRefresh(): Promise<void> {
       syncShortsPerformance({ force: true }),
       syncShortsMetaPerformance({ force: true }),
       syncCardnewsPerformance({ force: true }),
+      // 이웃·구독자·팔로워 — 종전엔 07:30 일일 브리핑에서만 갱신돼, 새로고침을 눌러도 카드 숫자가
+      // 그대로였다(실측 2026-08-02: 스냅샷이 07-31 에 멈춰 있었다). 순수 API 4콜·약 1초,
+      // 브라우저도 게이트도 없으므로 일일 경로에만 둘 이유가 없다.
+      recordFollowersSnapshot(),
     ]);
   } finally { perfRefreshBusy = false; }
 }
@@ -3391,6 +3395,8 @@ app.post('/api/autonomy/tick', (c) => c.redirect('/autonomy/tick', 307));
 // 일일 브리핑(옵트인: DAILY_BRIEFING_TIME="HH:MM"). 지정 시각에 다이제스트를 알림 채널로 발송. 빈값=off.
 const stopDaily = startDaily({
   time: CONFIG.dailyBriefingTime,
+  key: 'briefing', // 재기동에도 하루 1회 유지 + 예정 시각 지나 부팅해도 그날 몫 따라잡기
+
   // 팔로워 스냅샷 → 색인 캐시 갱신 → 브리핑(두 섹션 모두 최신값으로). 수집 실패는 무해(섹션 생략/이전 값).
   run: () => { void recordFollowersSnapshot().catch(() => {}).finally(() => { void refreshNaverIndexingCache().catch(() => {}).finally(() => { void notify(buildBriefing()); }); }); },
   log: (m) => console.log('[briefing]', m),
@@ -3469,8 +3475,13 @@ async function syncPerformance(opts?: { force?: boolean }): Promise<void> {
 }
 const stopPerfSync = startDaily({
   time: CONFIG.performanceSyncTime,
+  key: 'perf-sync',
+
   // 네이버 발행 감지(공개 RSS — 프로필 락 무관)가 publishedUrl 을 채운 뒤 piece 동기화. 쇼츠·카드뉴스는 순수 API 라 병행.
-  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); }, // 쇼츠·카드뉴스·릴스는 순수 API — 프로필 락 무관
+  // 팔로워 스냅샷을 여기에도 건다 — 종전엔 일일 브리핑 잡에만 달려 있었는데, DAILY_BRIEFING_TIME 이
+  // 비어 있으면 startDaily 가 no-op 이라 스냅샷이 **한 번도 정기 수집되지 않았다**(실측 2026-08-02:
+  // 설정 비어 있음 + 스냅샷 07-31 에서 정지). 브리핑 설정 여부와 팔로워 추적은 서로 묶일 이유가 없다.
+  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void recordFollowersSnapshot().catch(() => {}); }, // 쇼츠·카드뉴스·릴스는 순수 API — 프로필 락 무관
   log: (m) => console.log('[perf-sync]', m),
 });
 if (CONFIG.performanceSyncTime) {

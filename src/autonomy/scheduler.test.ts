@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue } from './scheduler';
 
 describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -194,5 +194,29 @@ describe('eligibleWinners — 소재 게이트 + 시대 컷오프', () => {
   });
   it('시각 정보가 전혀 없으면 옛 것으로 본다(보수적)', () => {
     expect(eligibleWinners([{ keyword: '모감주나무' }], '2026-07-31')).toHaveLength(0);
+  });
+});
+
+// 일일 작업 유실(2026-08-02 실측) — 종전 조건은 예정 시각이 든 '그 한 시간' 안에 프로세스가 살아
+// 있어야만 발동했다(07:30 이면 07:30~07:59). tsx watch 재기동이 그 창을 놓치면 그날 팔로워
+// 스냅샷·성과 동기화가 통째로 사라진다(followers 가 07-31 에서 멈춰 08-01 이 비었다).
+describe('dailyDue — 예정 시각 이후 부팅해도 그날 몫을 따라잡는다', () => {
+  const at = (h: number, m: number) => new Date(2026, 7, 2, h, m);
+  it('예정 시각 전에는 발동 안 함', () => {
+    expect(dailyDue(at(7, 29), 7, 30, 'D', '')).toBe(false);
+    expect(dailyDue(at(3, 0), 7, 30, 'D', '')).toBe(false);
+  });
+  it('예정 시각 정각에 발동', () => {
+    expect(dailyDue(at(7, 30), 7, 30, 'D', '')).toBe(true);
+  });
+  it('예정 시각이 든 시간대를 지나 부팅해도 발동 — 이게 종전에 유실되던 경우', () => {
+    expect(dailyDue(at(9, 0), 7, 30, 'D', '')).toBe(true);
+    expect(dailyDue(at(23, 59), 7, 30, 'D', '')).toBe(true);
+  });
+  it('오늘 이미 발동했으면 재발동 안 함 — 재기동 시 중복 방지(영속 lastFired)', () => {
+    expect(dailyDue(at(9, 0), 7, 30, 'D', 'D')).toBe(false);
+  });
+  it('날짜가 바뀌면 다시 발동', () => {
+    expect(dailyDue(at(9, 0), 7, 30, 'D2', 'D')).toBe(true);
   });
 });

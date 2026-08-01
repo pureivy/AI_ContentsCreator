@@ -105,6 +105,35 @@ export interface DailyDeps {
   time: string;
   run: () => void;
   log?: (msg: string) => void;
+  /** 발동 이력 영속 키(파일명). 주면 프로세스 재기동에도 '오늘 이미 돌았음'이 유지되고,
+   *  예정 시각을 지나 부팅해도 그날 몫을 따라잡는다. 미지정이면 종전(메모리 전용) 동작. */
+  key?: string;
+}
+
+/**
+ * 오늘 실행 도래 판정(순수) — 예정 시각 **이후 아무 때나** 참(따라잡기).
+ *
+ * 종전 조건은 `now.getHours() === hh && now.getMinutes() >= mm` 이라 예정 시각이 든 **그 한 시간 안에**
+ * 프로세스가 살아 있어야만 발동했다(07:30 이면 07:30~07:59 창). tsx watch 는 TS 를 고칠 때마다 자식을
+ * 재기동하므로 그 창을 놓치면 그날 팔로워 스냅샷·성과 동기화가 통째로 사라진다 — 실측 2026-08-02:
+ * followers 스냅샷이 07-31 에서 멈춰 08-01 하루가 비었다.
+ */
+export function dailyDue(now: Date, hh: number, mm: number, today: string, lastFired: string): boolean {
+  if (today === lastFired) return false; // 당일 1회만
+  return now.getHours() > hh || (now.getHours() === hh && now.getMinutes() >= mm);
+}
+
+const dailyStateFile = (key: string): string => path.join(CONFIG.dataDir, '_shared', `daily-${key}.json`);
+function readLastFired(key: string): string {
+  try { return String((JSON.parse(fs.readFileSync(dailyStateFile(key), 'utf-8')) as { lastFired?: unknown }).lastFired ?? ''); }
+  catch { return ''; }
+}
+function writeLastFired(key: string, day: string): void {
+  try {
+    const f = dailyStateFile(key);
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, JSON.stringify({ lastFired: day }), 'utf-8');
+  } catch { /* 영속 실패 무해 — 최악의 경우 재기동 시 한 번 더 돈다 */ }
 }
 
 /** 매일 지정 시각(로컬)에 1회 run() 호출 — 1분 간격 체크 + 당일 1회 가드. 정지 함수 반환. */
@@ -113,16 +142,15 @@ export function startDaily(deps: DailyDeps): () => void {
   if (!m) return () => {};
   const hh = Number(m[1]); const mm = Number(m[2]);
   if (hh > 23 || mm > 59) return () => {};
-  let lastFired = '';
+  let lastFired = deps.key ? readLastFired(deps.key) : '';
   const tick = (): void => {
     const now = new Date();
     const today = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
-    if (today === lastFired) return; // 당일 1회만
-    if (now.getHours() === hh && now.getMinutes() >= mm) {
-      lastFired = today;
-      try { deps.log?.(`일일 브리핑 발송(${deps.time})`); deps.run(); }
-      catch (e) { deps.log?.(`일일 브리핑 오류: ${e instanceof Error ? e.message : String(e)}`); }
-    }
+    if (!dailyDue(now, hh, mm, today, lastFired)) return;
+    lastFired = today;
+    if (deps.key) writeLastFired(deps.key, today); // 재기동해도 같은 날 다시 안 돌게
+    try { deps.log?.(`일일 브리핑 발송(${deps.time})`); deps.run(); }
+    catch (e) { deps.log?.(`일일 브리핑 오류: ${e instanceof Error ? e.message : String(e)}`); }
   };
   const timer = setInterval(tick, 60_000);
   if (typeof timer.unref === 'function') timer.unref();
