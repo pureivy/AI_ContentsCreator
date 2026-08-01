@@ -313,6 +313,20 @@ function naverProfileDir(slug: string): string {
   assertSafeSlug(slug);
   return slug ? path.join(os.homedir(), '.naver-blog-profiles', slug) : '';
 }
+
+/** 네이버 런 뒤 브라우저 캐시만 정리 — 로그인 세션(쿠키·로컬스토리지·Preferences)은 절대 건드리지 않는다.
+ *  배경(실측 2026-08-01): 조회수 수집이 매번 크롬을 띄우는데 프로필 캐시가 하루 ~87MB 씩 쌓여
+ *  bionditree 프로필이 927MB(99%가 캐시)까지 커졌고, 디스크 포화 사고의 한 축이었다.
+ *  프로세스 종료 뒤에 지우므로 파일 잠금·손상 위험이 없다. 캐시는 다음 실행 때 크롬이 재생성한다. */
+function pruneNaverProfileCache(profileDir: string): void {
+  if (!profileDir) profileDir = path.join(os.homedir(), '.naver-blog-profiles', 'cli'); // 범용 기본 프로필
+  const rm = (p: string): void => { try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* 무해 */ } };
+  const D = path.join(profileDir, 'Default');
+  for (const rel of ['Cache', 'Code Cache', 'GPUCache', 'DawnWebGPUCache', 'DawnGraphiteCache',
+    'ShaderCache', 'GrShaderCache', 'Service Worker/CacheStorage', 'Service Worker/ScriptCache']) rm(path.join(D, rel));
+  for (const rel of ['GraphiteDawnCache', 'ShaderCache', 'GrShaderCache', 'BrowserMetrics',
+    'component_crx_cache', 'BrowserMetrics-spare.pma']) rm(path.join(profileDir, rel));
+}
 /** 활성 브랜드 기준 세션 파일 — 범용은 기존 CONFIG.naverSessionFile, 브랜드는 형제 경로에 -<slug>. */
 function naverSessionFileFor(slug: string): string {
   assertSafeSlug(slug);
@@ -403,6 +417,7 @@ export async function publishDraftToNaver(
   if (profileDir) env.NAVER_PROFILE_DIR = profileDir; // 미설정(범용)이면 python 기본 프로필(cli) 유지
 
   const r = await runScript('naver_publish.py', args, sessionDir, signal, { timeoutMs: NAVER_PUBLISH_TIMEOUT_MS, env });
+  pruneNaverProfileCache(profileDir); // 캐시만 정리(세션 보존) — 프로필 무한 증식 차단
 
   // 스크립트가 남긴 구조화 결과(07_publish_result.json)가 stdout 보다 신뢰도 높다.
   try {
@@ -488,5 +503,6 @@ export async function collectNaverMetrics(
   if (creds.loginPw) env.NAVER_PW = creds.loginPw;
   if (profileDir) env.NAVER_PROFILE_DIR = profileDir;
   const r = await runScript('naver_stats.py', args, runDir, signal, { timeoutMs: NAVER_STATS_TIMEOUT_MS, env });
+  pruneNaverProfileCache(profileDir); // 캐시만 정리(세션 보존) — 일일 수집이 프로필을 키우던 주범
   return parseStatsOutput(r.output);
 }
