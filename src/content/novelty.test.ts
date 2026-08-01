@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bigramJaccard, keywordSimilar, titleSimilar, findSimilarContent, saturatedThemeMatches, saturatedThemes, type ExistingContent } from './novelty';
+import { bigramJaccard, keywordSimilar, titleSimilar, findSimilarContent, saturatedThemeMatches, saturatedThemes, expandTokens, type ExistingContent } from './novelty';
 
 // 콘텐츠 신규성 가드(2026-07-15 사용자 원칙) — 신규 블로그·쇼츠·카드뉴스는 기존 콘텐츠와
 // 주제·키워드가 유사하면 안 된다. 한글 복합어에 강하도록 문자 바이그램 자카드로 판정한다.
@@ -93,5 +93,27 @@ describe('saturatedThemes — 여러 편에 겹치는 포화 소재어(빈도순
     expect(toks).toContain('여름');    // 3편
     expect(toks).toContain('물주기');  // 2편
     expect(toks).not.toContain('과습'); // 1편만 → 미포화
+  });
+});
+
+describe('expandTokens / saturatedThemes — 한국어 합성어 축 탐지(2026-08-01)', () => {
+  it('합성어 안의 도메인 어간을 추가 크레딧 — 감나무묘목 → 묘목·나무', () => {
+    const t = expandTokens('감나무묘목 고르기');
+    expect(t.has('감나무묘목')).toBe(true);
+    expect(t.has('묘목')).toBe(true);
+    expect(t.has('나무')).toBe(true);
+  });
+  it('서로 다른 합성어들이 공통 축으로 포화 탐지된다 — 종전엔 각각 1회로 흩어져 안 보였다', () => {
+    const ex = [
+      { title: '감나무묘목 고르기', kind: '블로그' as const },
+      { title: '신비복숭아묘목 접목부 확인', kind: '블로그' as const },
+      { title: '정원수묘목 고르는 법', kind: '블로그' as const },
+    ];
+    const sat = saturatedThemes(ex, 3);
+    expect(sat.some((s) => s.token === '묘목' && s.count === 3)).toBe(true);
+  });
+  it('어간보다 짧거나 같은 토큰은 자기 자신만 — 과잉 확장 없음', () => {
+    const t = expandTokens('묘목');
+    expect([...t]).toEqual(['묘목']);
   });
 });

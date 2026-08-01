@@ -108,11 +108,27 @@ export function saturatedThemeMatches(
     .sort((x, y) => y.shared - x.shared)
     .map((x) => ({ title: x.e.title, kind: x.e.kind, score: x.shared, via: 'title' as const }));
 }
+/** 한국어 합성어 안의 도메인 핵심어 — tokens() 는 공백으로만 자르므로 '감나무묘목'·'신비복숭아묘목'·
+ *  '정원수묘목' 이 각각 1회로 세어져 정작 수렴한 축('묘목')이 포화 탐지에 안 보였다(실측 2026-08-01).
+ *  형태소 분석기 없이 결정적으로 보완하는 최소 장치 — 이 목록에 있는 어간만 추가로 크레딧한다. */
+const DOMAIN_STEMS = [
+  '묘목', '나무', '화분', '물주기', '전정', '가지치기', '삽목', '접목', '파종', '정식', '식재',
+  '수확', '품종', '열매', '개화', '시비', '거름', '병해충', '월동', '뿌리', '토양', '배수', '고르', '확인',
+];
+/** 토큰 + 그 안에 든 도메인 어간(순수). '감나무묘목' → {감나무묘목, 묘목, 나무}. */
+export function expandTokens(s: string): Set<string> {
+  const out = new Set(tokens(s));
+  for (const t of [...out]) {
+    for (const stem of DOMAIN_STEMS) if (t.length > stem.length && t.includes(stem)) out.add(stem);
+  }
+  return out;
+}
+
 /** 코퍼스에서 minPieces편 이상에 등장하는 핵심 내용어 = '이미 포화된 소재'. 아이디어 생성이 피하도록 프롬프트에 주입. */
 export function saturatedThemes(existing: ExistingContent[], minPieces = 3): Array<{ token: string; count: number }> {
   const freq = new Map<string, number>();
   for (const e of existing) {
-    for (const t of new Set(tokens(`${e.title} ${e.keyword ?? ''}`))) freq.set(t, (freq.get(t) ?? 0) + 1);
+    for (const t of expandTokens(`${e.title} ${e.keyword ?? ''}`)) freq.set(t, (freq.get(t) ?? 0) + 1);
   }
   return [...freq.entries()].filter(([, c]) => c >= minPieces).sort((x, y) => y[1] - x[1]).map(([token, count]) => ({ token, count }));
 }
@@ -124,16 +140,22 @@ export function saturatedThemes(existing: ExistingContent[], minPieces = 3): Arr
 export function collectExistingContent(brand: string | undefined, limit = 60): ExistingContent[] {
   const slug = brand ?? '';
   const match = (b: string | undefined): boolean => (b ?? '') === slug;
-  const rows: Array<ExistingContent & { ts: string }> = [];
+  // 파생물은 원본과 한 덩어리로 센다 — 블로그 1편이 쇼츠·카드뉴스로 파생되면 같은 주제가 3표가 되어
+  // 자기 혼자 '포화'(minPieces=3)를 만들고, 회피 목록이 1회성 주제어로 채워져 진짜 반복 축을 밀어냈다
+  // (실측 2026-08-01: 60건 중 18개 키워드가 3채널 중복). 그룹 대표는 최신 1건.
+  const rows: Array<ExistingContent & { ts: string; group: string }> = [];
   for (const p of pieceStore().list()) {
-    if (match(p.brand)) rows.push({ title: p.title, keyword: p.keyword, kind: '블로그', ts: p.updatedTs });
+    if (match(p.brand)) rows.push({ title: p.title, keyword: p.keyword, kind: '블로그', ts: p.updatedTs, group: p.id });
   }
   for (const s of shortsStore().list()) {
-    if (match(s.brand)) rows.push({ title: s.title || s.topic, keyword: s.keyword, kind: '쇼츠', ts: s.updatedTs });
+    if (match(s.brand)) rows.push({ title: s.title || s.topic, keyword: s.keyword, kind: '쇼츠', ts: s.updatedTs, group: s.sourcePieceId ?? s.id });
   }
   for (const x of cardNewsStore().list()) {
-    if (match(x.brand)) rows.push({ title: x.topic, keyword: x.keyword, kind: '카드뉴스', ts: x.updatedTs });
+    if (match(x.brand)) rows.push({ title: x.topic, keyword: x.keyword, kind: '카드뉴스', ts: x.updatedTs, group: x.sourcePieceId ?? x.id });
   }
-  return rows.sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, limit)
-    .map(({ ts: _ts, ...e }) => e);
+  const seen = new Set<string>();
+  return rows.sort((a, b) => b.ts.localeCompare(a.ts))
+    .filter((r) => !seen.has(r.group) && (seen.add(r.group), true))
+    .slice(0, limit)
+    .map(({ ts: _ts, group: _g, ...e }) => e);
 }

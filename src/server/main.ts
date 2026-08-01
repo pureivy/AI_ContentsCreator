@@ -31,7 +31,7 @@ import type { RoleDef } from '../agents/company';
 import type { RolePatch, MemberBody } from '../agents/company-loader';
 import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appendActivity, ensureScaffold, effectiveAutonomy, appendInjected, injectedLength, clearInjected, INJECTED_CAP } from '../agents/workspace';
 import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView, getYoutubeAccount, setYoutubeToken, getMetaAccount, setMetaToken, setMetaPage, purgeCustomKeysForBrand, purgeBrandAccounts } from '../secrets/store';
-import { collectExistingContent, findSimilarContent, type SimilarMatch } from '../content/novelty';
+import { collectExistingContent, findSimilarContent, saturatedThemeMatches, type SimilarMatch } from '../content/novelty';
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
@@ -3294,9 +3294,15 @@ async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
         // 브랜드 소재 게이트 — 예고 경로는 신규성·범위 검사를 다 우회하므로 여기서 막는다. 게이트 신설(2026-07-31)
         // 이전에 등록된 오프브랜드 약속의 이행 방지. 걸리면 dropped 처리 후 신규 아이디어로 폴백.
         const off = offBrandTerm(due.topic);
+        // 소재 포화 게이트 — 예고 이행은 신규성·포화 검사를 우회해 같은 축을 자기복제한다(실측 2026-08-01:
+        // 감나무묘목 글이 예고한 "상자 받으면 뿌리·접목부 확인"이 그대로 다음 글로 발주). 이행 시점에
+        // 코퍼스가 이미 그 소재로 포화면 미룬다 — dropped 가 아니라 pending 유지(시즌·맥락이 바뀌면 살아난다).
+        const satur = off ? [] : saturatedThemeMatches({ title: due.topic }, collectExistingContent(tickBrand || undefined), 3);
         if (off) {
           promiseStore().update(due.id, { status: 'dropped' });
           console.log(`[auto-cycle] 예고 기각(브랜드 범위 밖) — "${due.topic.slice(0, 40)}" (소재 "${off}") → dropped`);
+        } else if (satur.length) {
+          console.log(`[auto-cycle] 예고 보류(소재 포화) — "${due.topic.slice(0, 40)}" ≈ "${satur[0]!.title.slice(0, 30)}" → 신규 아이디어로 폴백`);
         } else {
           const piece = pieceStore().create({ title: due.topic, brand: tickBrand || undefined, auto: true });
           // fulfilled 마킹은 여기서 하지 않는다 — launch 가 런을 실제로 시작한 뒤에만(아래 launch 참조).
