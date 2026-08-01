@@ -108,27 +108,24 @@ export function saturatedThemeMatches(
     .sort((x, y) => y.shared - x.shared)
     .map((x) => ({ title: x.e.title, kind: x.e.kind, score: x.shared, via: 'title' as const }));
 }
-/** 한국어 합성어 안의 도메인 핵심어 — tokens() 는 공백으로만 자르므로 '감나무묘목'·'신비복숭아묘목'·
- *  '정원수묘목' 이 각각 1회로 세어져 정작 수렴한 축('묘목')이 포화 탐지에 안 보였다(실측 2026-08-01).
- *  형태소 분석기 없이 결정적으로 보완하는 최소 장치 — 이 목록에 있는 어간만 추가로 크레딧한다. */
-const DOMAIN_STEMS = [
-  '묘목', '나무', '화분', '물주기', '전정', '가지치기', '삽목', '접목', '파종', '정식', '식재',
-  '수확', '품종', '열매', '개화', '시비', '거름', '병해충', '월동', '뿌리', '토양', '배수', '고르', '확인',
-];
-/** 토큰 + 그 안에 든 도메인 어간(순수). '감나무묘목' → {감나무묘목, 묘목, 나무}. */
-export function expandTokens(s: string): Set<string> {
+/** 토큰 + 그 안에 든 도메인 어간(순수). stems=['묘목','나무'] 이면 '감나무묘목' → {감나무묘목, 묘목, 나무}.
+ *  tokens() 는 공백으로만 자르므로 '감나무묘목'·'신비복숭아묘목'·'정원수묘목' 이 각각 1회로 흩어져
+ *  정작 수렴한 축('묘목')이 포화 탐지에 안 보였다(실측 2026-08-01). 형태소 분석기 없이 보완하는 최소 장치.
+ *  **어간 목록은 업종어라 브랜드 설정(brand.compoundStems)에서 온다** — 미설정 브랜드는 확장 없음(종전 동작). */
+export function expandTokens(s: string, stems: string[] = []): Set<string> {
   const out = new Set(tokens(s));
+  if (!stems.length) return out;
   for (const t of [...out]) {
-    for (const stem of DOMAIN_STEMS) if (t.length > stem.length && t.includes(stem)) out.add(stem);
+    for (const stem of stems) if (stem && t.length > stem.length && t.includes(stem)) out.add(stem);
   }
   return out;
 }
 
 /** 코퍼스에서 minPieces편 이상에 등장하는 핵심 내용어 = '이미 포화된 소재'. 아이디어 생성이 피하도록 프롬프트에 주입. */
-export function saturatedThemes(existing: ExistingContent[], minPieces = 3): Array<{ token: string; count: number }> {
+export function saturatedThemes(existing: ExistingContent[], minPieces = 3, stems: string[] = []): Array<{ token: string; count: number }> {
   const freq = new Map<string, number>();
   for (const e of existing) {
-    for (const t of expandTokens(`${e.title} ${e.keyword ?? ''}`)) freq.set(t, (freq.get(t) ?? 0) + 1);
+    for (const t of expandTokens(`${e.title} ${e.keyword ?? ''}`, stems)) freq.set(t, (freq.get(t) ?? 0) + 1);
   }
   return [...freq.entries()].filter(([, c]) => c >= minPieces).sort((x, y) => y[1] - x[1]).map(([token, count]) => ({ token, count }));
 }

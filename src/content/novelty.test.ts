@@ -97,8 +97,9 @@ describe('saturatedThemes — 여러 편에 겹치는 포화 소재어(빈도순
 });
 
 describe('expandTokens / saturatedThemes — 한국어 합성어 축 탐지(2026-08-01)', () => {
+  const STEMS = ['묘목', '나무'];
   it('합성어 안의 도메인 어간을 추가 크레딧 — 감나무묘목 → 묘목·나무', () => {
-    const t = expandTokens('감나무묘목 고르기');
+    const t = expandTokens('감나무묘목 고르기', STEMS);
     expect(t.has('감나무묘목')).toBe(true);
     expect(t.has('묘목')).toBe(true);
     expect(t.has('나무')).toBe(true);
@@ -109,11 +110,18 @@ describe('expandTokens / saturatedThemes — 한국어 합성어 축 탐지(2026
       { title: '신비복숭아묘목 접목부 확인', kind: '블로그' as const },
       { title: '정원수묘목 고르는 법', kind: '블로그' as const },
     ];
-    const sat = saturatedThemes(ex, 3);
-    expect(sat.some((s) => s.token === '묘목' && s.count === 3)).toBe(true);
+    expect(saturatedThemes(ex, 3, STEMS).some((s) => s.token === '묘목' && s.count === 3)).toBe(true);
+  });
+  it('어간 미설정 브랜드는 확장 없음(종전 동작 보존) — 업종어를 전 브랜드에 강요하지 않는다', () => {
+    expect([...expandTokens('감나무묘목 고르기')]).toEqual(['감나무묘목', '고르기']);
+    const ex = [
+      { title: '감나무묘목 고르기', kind: '블로그' as const },
+      { title: '신비복숭아묘목 접목부 확인', kind: '블로그' as const },
+      { title: '정원수묘목 고르는 법', kind: '블로그' as const },
+    ];
+    expect(saturatedThemes(ex, 3).some((s) => s.token === '묘목')).toBe(false);
   });
   it('어간보다 짧거나 같은 토큰은 자기 자신만 — 과잉 확장 없음', () => {
-    const t = expandTokens('묘목');
-    expect([...t]).toEqual(['묘목']);
+    expect([...expandTokens('묘목', STEMS)]).toEqual(['묘목']);
   });
 });

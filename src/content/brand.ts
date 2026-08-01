@@ -37,6 +37,12 @@ export interface BrandProfile {
   banned?: string[];
   /** 시드 키워드 — 성과 데이터가 없는 콜드스타트 주제 탐색의 출발점. */
   seedKeywords?: string[];
+  /** 글의 장르 축 — 콘텐츠가 한 장르(예: 구매 체크리스트)로 수렴하는 것을 막으려고 작가에게 제시한다.
+   *  브랜드마다 다르므로 설정에 둔다(미설정이면 장르 지침 생략 — 종전 동작). 2026-08-01 신설. */
+  genreAxes?: string[];
+  /** 한국어 합성어 안에서 추가로 크레딧할 도메인 어간(예: '감나무묘목'→'묘목').
+   *  포화 탐지가 합성어를 못 쪼개 수렴 축을 놓치는 문제 대응 — 업종어라 브랜드별로 둔다(미설정=확장 없음). */
+  compoundStems?: string[];
   /** 채널 설명(예: 네이버 블로그 — 제품 활용 하우투·후기 중심). */
   channel?: string;
   /** 카드뉴스 기본 이미지 스타일 프리셋(브랜드 고정, 2026-07-22) — 수동·검토탭·자동 파생 전부 적용.
@@ -187,6 +193,8 @@ export function normalizeBrand(raw: Partial<BrandProfile> | null | undefined): B
     tone: s(raw?.tone, 200),
     banned: arr(raw?.banned, 20, 60),
     seedKeywords: arr(raw?.seedKeywords, 30),
+    genreAxes: arr(raw?.genreAxes, 8),
+    compoundStems: arr(raw?.compoundStems, 40),
     channel: s(raw?.channel, 200),
     cardStyle: s(raw?.cardStyle, 40),
   };
@@ -235,6 +243,9 @@ export function brandSeedKeywords(b: BrandProfile | null = getBrand()): string[]
 const SCOPE_STOPWORDS = new Set([
   '주제', '콘텐츠', '브랜드', '무관', '금지', '등', '및', '아닌', '나무', '묘목',
   '식물', '화분', '실내', '베란다', '작물', '꽃', '가을', '여름', '겨울',
+  // '모종' — banned 프로즈의 "꽃 모종"에서 토큰이 새어 정상 업종어까지 차단했다(실측 2026-08-01:
+  // 성과 최상위였던 "8월 과실나무 모종…" 류가 지금은 코드로 기각). 금지 의도는 '꽃'·구체 화종이 담당한다.
+  '모종',
 ]);
 export function bannedTopicTerms(b: BrandProfile | null = getBrand()): string[] {
   // 조사 붙은 형태("나무가"·"브랜드와")가 토큰으로 새면 정상 소재("배롱나무 가을…")를 오탐한다(실측) —

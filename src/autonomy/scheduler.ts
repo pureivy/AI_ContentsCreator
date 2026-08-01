@@ -15,7 +15,7 @@ import { resolveAssignment } from '../llm/setting';
 import { getCompany } from '../agents/company-loader';
 import { microJSON } from '../orchestrator/agent';
 import { asString } from '../util/str';
-import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix, offBrandTerm } from '../content/brand';
+import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix, offBrandTerm, getBrand } from '../content/brand';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 
 export interface AutoCycleDeps<T = string> {
@@ -146,8 +146,11 @@ function readStrategyWinners(): string {
     const raw = JSON.parse(readSafe(path.join(CONFIG.dataDir, 'analytics', slug ? `strategy-${slug}.json` : 'strategy.json'))) as {
       winners?: Array<{ keyword?: string; score?: number }>;
     };
+    // 정체성 재정립(2026-07-31) 전에 쌓인 성과는 지금 금지 소재가 대부분이다(실측 2026-08-01: 상위 8개 중
+    // 7개가 꽃·채소·다육). 프롬프트가 "성과 상위의 인접 영역에서 발굴하라"고 지시하는데 그 인접이 전부
+    // 차단돼 출력 공간이 한 축으로 몰렸다 — 오프브랜드 성과는 학습 근거에서 뺀다(시대 필터).
     return (raw.winners ?? [])
-      .filter((w) => w && w.keyword)
+      .filter((w) => w && w.keyword && !offBrandTerm(w.keyword))
       .slice(0, 8)
       .map((w) => `- ${w.keyword}${typeof w.score === 'number' ? ` (점수 ${w.score.toFixed(2)})` : ''}`)
       .join('\n');
@@ -161,6 +164,7 @@ const IDEA_SYSTEM =
   '- 검색 의도가 뚜렷하고 실용적인 주제(하우투/비교/리뷰/체크리스트 등). 시의성·계절성도 고려한다.\n' +
   '- [브랜드 컨텍스트]가 있으면 그 기업의 제품·타겟 고객의 관심사와 자연스럽게 연결되는 주제를 우선하라(노골적 광고성 주제 금지 — 독자에게 유용한 정보가 우선).\n' +
   '- [성과 상위 키워드]는 어떤 분야가 통했는지의 참고다 — 그 분야의 인접·연관 영역에서 새로운 키워드를 발굴하라(성과 키워드 자체나 그 변형의 재사용은 금지). 없으면(콜드스타트) 영역 안에서 다양하게 탐색한다.\n' +
+  '- 단, 성과 기록에는 브랜드 범위가 지금과 달랐던 시절의 주제가 남아 있을 수 있다. 그런 키워드는 "무엇이 통했나"의 신호(예: 계절 타이밍·비교·증상 진단 같은 접근 방식)로만 읽고, 그 소재 자체나 인접 소재로 확장하지 마라 — 소재 범위의 기준은 언제나 [브랜드 컨텍스트]다.\n' +
   '- [최근 제작]·[최근 자율주제]와 중복되지 않게 하라.\n' +
   '- [기존 콘텐츠] 목록과 주제·키워드가 유사하면 안 된다 — 같은 키워드나 그것을 포함·확장한 키워드 재사용 금지, 완전히 새로운 각도의 주제를 골라라(사용자 원칙).\n' +
   '- title 은 클릭·검색에 유리한 한국어 제목, keyword 는 검색량 있을 법한 핵심 타겟 키워드 1개, subNiche 는 세부 분야다.';
@@ -208,7 +212,8 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   // 다양성 강제(2026-07-23 감사) — 킬스위치 CONTENT_DIVERSITY=off 로 끔. 표면 novelty 가 못 잡는 '소재 쏠림'을
   // 포화 소재어 회피 + 각도 로테이션으로 완화(탐색 예산). 실효는 향후 몇 편의 실제 산출로만 판단 가능.
   const diversityOn = process.env.CONTENT_DIVERSITY !== 'off';
-  const satTokens = diversityOn ? saturatedThemes(existing, 3).slice(0, 15).map((t) => t.token) : []; // 상위 15개(빈도순)만 — 과도한 회피목록 방지
+  // 합성어 어간은 브랜드 설정에서(업종어) — 미설정 브랜드는 확장 없이 종전 동작.
+  const satTokens = diversityOn ? saturatedThemes(existing, 3, getBrand()?.compoundStems ?? []).slice(0, 15).map((t) => t.token) : []; // 상위 15개(빈도순)만 — 과도한 회피목록 방지
   const diversityBlock = diversityOn
     ? `[이미 포화된 소재 — 이번엔 이 소재어들을 피하라]\n${satTokens.length ? satTokens.join(', ') : '(아직 포화 없음 — 자유롭게)'}\n\n`
       + `[이번 글의 각도 — 아래 중 최근 자율주제와 다른 각도 하나를 골라 그 각도로 잡아라]\n${IDEA_ANGLES.join(' | ')}\n\n`
