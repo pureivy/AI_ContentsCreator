@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { probeDuration } from '../tools/shortsCommon';
-import { cameraOnlyMotionPrompt, hasSubjectRisk } from './shortsMotionDirector';
+import { hasSubjectRisk } from './shortsMotionDirector';
 
 export interface SceneClipsResult { clips: Array<string | null>; issues: string[] }
 
@@ -86,7 +86,10 @@ async function falQueueRun(model: string, body: Record<string, unknown>, signal?
 export async function i2vSceneClips(opts: {
   dir: string; images: Array<string | null>; scenePrompts: string[];
   /** 모션 디렉터(비전)가 쓴 씬별 프롬프트 — null/누락 씬은 buildMotionPrompt 정적 접미로 폴백. */
-  motionPrompts?: Array<string | null>; signal?: AbortSignal;
+  motionPrompts?: Array<string | null>;
+  /** 비전이 '사람·손·도구 있음'으로 판정한 씬 인덱스 — I2V 를 건너뛰고 스틸로 남긴다. */
+  subjectScenes?: Set<number>;
+  signal?: AbortSignal;
 }): Promise<SceneClipsResult> {
   const out: SceneClipsResult = { clips: opts.images.map(() => null), issues: [] };
   try {
@@ -97,17 +100,20 @@ export async function i2vSceneClips(opts: {
       if (!img || !fs.existsSync(img)) return;
       try {
         const sceneSignal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(I2V_TIMEOUT_MS)]) : AbortSignal.timeout(I2V_TIMEOUT_MS);
-        const b64 = fs.readFileSync(img).toString('base64');
-        // 씬별 모션: 디렉터(비전) 프롬프트 우선, 없으면 정적 접미 폴백. 단 씬 묘사에 사람·손·도구가 있으면
-        // 어느 경로든 카메라 전용 템플릿으로 강제(사용자 확정 2026-07-31) — 비전이 이미 강제한 씬(kind 반영)은
-        // 그대로 두고, 비전이 놓친·폴백 씬만 키워드 층이 교체한다. negative 보강은 마커로 판정.
         const scenePrompt = opts.scenePrompts[i] ?? '';
         const directed = opts.motionPrompts?.[i];
-        const motion = (directed && directed.startsWith('Camera work only:')) ? directed
-          : hasSubjectRisk(scenePrompt) ? cameraOnlyMotionPrompt()
-            : (directed ?? buildMotionPrompt(scenePrompt));
+        // 사람·손·도구 씬은 I2V 자체를 건너뛴다(사용자 확정 2026-08-01). 카메라 전용 프롬프트 + 동작 금지
+        // negative 를 모두 넣어도 5B 모델이 무시해 손가락·도구가 뒤틀린다(실측: 그렇게 보낸 씬에서 클립 QA 가
+        // '손가락이 비정상적으로 붙어 형태가 왜곡됨' 검출). 프롬프트로 '부탁'하는 대신 구조로 차단 —
+        // 이 씬은 클립 없이 스틸(켄번즈)로 렌더된다. 판별: 비전 분류(마커) 또는 장면 묘사 키워드.
+        if (opts.subjectScenes?.has(i) || (directed?.startsWith('Camera work only:') ?? false) || hasSubjectRisk(scenePrompt)) {
+          out.issues.push(`씬${i + 1} 사람·손·도구 — I2V 생략(스틸 유지)`);
+          return;
+        }
+        const b64 = fs.readFileSync(img).toString('base64');
+        const motion = directed ?? buildMotionPrompt(scenePrompt);
         const json = await falQueueRun(CONFIG.shortsI2vModel,
-          buildI2vBody(CONFIG.shortsI2vModel, motion, `data:image/png;base64,${b64}`, motion.startsWith('Camera work only:')),
+          buildI2vBody(CONFIG.shortsI2vModel, motion, `data:image/png;base64,${b64}`),
           sceneSignal);
         const url = extractVideoUrl(json);
         if (!url) throw new Error('video.url 없음');

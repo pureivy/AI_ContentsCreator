@@ -23,7 +23,7 @@ import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues } from './standaloneQa';
 import { promiseStore } from '../content/promises';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
-import { directSceneMotion } from './shortsMotionDirector';
+import { directSceneMotion, detectSubjectScenes } from './shortsMotionDirector';
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail } from './shortsThumbnail';
@@ -301,10 +301,16 @@ export async function runShortsJob(
       : images.map(() => null);
     const directed = motionPrompts.filter(Boolean).length;
     if (directed) say(`모션 디렉팅 — ${directed}/${plan.scenes.length}씬 맞춤 연출(나머지 정적 폴백)`);
+    // 사람·손·도구 씬 판별(비전이 이미지를 직접 봄) — 그 씬은 I2V 를 건너뛰고 스틸로 남긴다.
+    // 프롬프트로 '정지'를 요청하는 방식은 5B 모델이 무시해 실패했다(사용자 보고 2026-08-01).
+    const subjectScenes = i2vGate() ? await detectSubjectScenes(images, opts.signal) : new Set<number>();
+    if (subjectScenes.size) say(`사람·손·도구 씬 ${subjectScenes.size}개 — 모션 없이 스틸 유지(형태 왜곡 방지)`);
 
     // 3-c) 씬 배경 I2V — fal 클립화(키 없으면 no-op, 실패 씬은 스틸 폴백, fail-open).
     const cv = await i2vSceneClips({
-      dir, images, scenePrompts: bgDraft.imageSlots.map((s) => s.prompt), motionPrompts, signal: opts.signal,
+      // 원시 장면 묘사를 넘긴다(빌드된 이미지 프롬프트 X) — 후자에는 '손·손가락 왜곡을 피한다' 는
+      // 금지 문구가 항상 붙어 있어 손 판별(hasSubjectRisk)이 전 씬에 오탐했다(실측 2026-08-01).
+      dir, images, scenePrompts: plan.scenes.map((_, i) => design.prompts[i] ?? ''), motionPrompts, subjectScenes, signal: opts.signal,
     });
     const clipCount = cv.clips.filter(Boolean).length;
     if (clipCount) say(`씬 I2V — ${clipCount}/${plan.scenes.length}장 클립화${cv.issues.length ? ` (${cv.issues[0]})` : ''}`);
