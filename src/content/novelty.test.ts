@@ -125,3 +125,19 @@ describe('expandTokens / saturatedThemes — 한국어 합성어 축 탐지(2026
     expect([...expandTokens('묘목', STEMS)]).toEqual(['묘목']);
   });
 });
+
+describe('saturatedThemeMatches — 합성어 어간이 기각 검사에도 적용(2026-08-01 회귀)', () => {
+  const STEMS = ['묘목', '나무'];
+  const ex = [{ title: '신비복숭아묘목 접목부와 뿌리로 고르는 법', kind: '블로그' as const }];
+  it('어간 없이는 통과 — 감나무묘목/신비복숭아묘목이 서로 남남이라 예고가 같은 축을 복제했다', () => {
+    expect(saturatedThemeMatches({ title: '감나무묘목 상자 받으면 뿌리·접목부 확인법' }, ex, 3)).toHaveLength(0);
+  });
+  it('어간 적용 시 차단 — 공통 축(묘목)+접목부+뿌리로 3 이상', () => {
+    const m = saturatedThemeMatches({ title: '감나무묘목 상자 받으면 뿌리·접목부 확인법' }, ex, 3, STEMS);
+    expect(m.length).toBeGreaterThan(0);
+    expect(m[0]!.score).toBeGreaterThanOrEqual(3);
+  });
+  it('다른 축 주제는 어간을 써도 통과 — 과잉 차단 없음', () => {
+    expect(saturatedThemeMatches({ title: '배롱나무 가을 식재법' }, ex, 3, STEMS)).toHaveLength(0);
+  });
+});

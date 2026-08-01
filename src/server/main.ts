@@ -3297,7 +3297,7 @@ async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
         // 소재 포화 게이트 — 예고 이행은 신규성·포화 검사를 우회해 같은 축을 자기복제한다(실측 2026-08-01:
         // 감나무묘목 글이 예고한 "상자 받으면 뿌리·접목부 확인"이 그대로 다음 글로 발주). 이행 시점에
         // 코퍼스가 이미 그 소재로 포화면 미룬다 — dropped 가 아니라 pending 유지(시즌·맥락이 바뀌면 살아난다).
-        const satur = off ? [] : saturatedThemeMatches({ title: due.topic }, collectExistingContent(tickBrand || undefined), 3);
+        const satur = off ? [] : saturatedThemeMatches({ title: due.topic }, collectExistingContent(tickBrand || undefined), 3, getBrand()?.compoundStems ?? []);
         if (off) {
           promiseStore().update(due.id, { status: 'dropped' });
           console.log(`[auto-cycle] 예고 기각(브랜드 범위 밖) — "${due.topic.slice(0, 40)}" (소재 "${off}") → dropped`);

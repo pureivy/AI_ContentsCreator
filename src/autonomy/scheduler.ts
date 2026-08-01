@@ -254,7 +254,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // 개념 포화 기각 — 표면 유사(findSimilarContent)는 통과했지만 핵심 소재가 여러 편과 겹치면 1회만 다른 축 유도.
     // attempt 0 에서만(2번째 시도는 통과시켜 기아 방지 — 다양성은 강제하되 생산은 막지 않는다).
     if (diversityOn && attempt === 0) {
-      const sat = saturatedThemeMatches({ title, ...(keyword ? { keyword } : {}) }, existing, 3);
+      const sat = saturatedThemeMatches({ title, ...(keyword ? { keyword } : {}) }, existing, 3, getBrand()?.compoundStems ?? []);
       if (sat.length) {
         rejectNote = `[직전 제안 기각 — 이미 포화된 소재(기존 "${sat[0]!.title}"와 핵심 소재 다수 겹침)] 소재 자체를 바꿔라: 계절·대상·각도·포맷 중 최소 하나를 확 틀어라.`;
         console.log(`[auto-cycle] 아이디어 기각(소재 포화) — "${title}" ≈ "${sat[0]!.title}"`);

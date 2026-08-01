@@ -57,11 +57,13 @@ function tokens(s: string): string[] {
   return (s || '').normalize('NFC').toLowerCase().split(/[^\p{L}\p{N}]+/u)
     .filter((t) => t.length >= 2 && !STOP_TOKENS.has(t));
 }
-/** 두 제목의 핵심 토큰 겹침 수 — 동치 또는 포함('제습' ⊂ '제습기')을 1로 센다(후보 토큰당 최대 1). */
-function sharedTokenCount(a: string, b: string): number {
-  const bt = tokens(b);
+/** 두 제목의 핵심 토큰 겹침 수 — 동치 또는 포함('제습' ⊂ '제습기')을 1로 센다(후보 토큰당 최대 1).
+ *  stems 를 주면 합성어 어간까지 비교에 넣는다 — '감나무묘목'과 '신비복숭아묘목'은 서로를 포함하지 않아
+ *  종전엔 남남이었고, 그래서 예고 포화 게이트가 같은 축을 통과시켰다(실측 2026-08-01). */
+function sharedTokenCount(a: string, b: string, stems: string[] = []): number {
+  const bt = [...expandTokens(b, stems)];
   let n = 0;
-  for (const t of new Set(tokens(a))) {
+  for (const t of expandTokens(a, stems)) {
     if (bt.some((u) => t === u || t.includes(u) || u.includes(t))) n++;
   }
   return n;
@@ -100,10 +102,11 @@ export function saturatedThemeMatches(
   cand: { title: string; keyword?: string },
   existing: ExistingContent[],
   minShared = 2,
+  stems: string[] = [],
 ): SimilarMatch[] {
   const a = `${cand.title} ${cand.keyword ?? ''}`;
   return existing
-    .map((e) => ({ e, shared: sharedTokenCount(a, `${e.title} ${e.keyword ?? ''}`) }))
+    .map((e) => ({ e, shared: sharedTokenCount(a, `${e.title} ${e.keyword ?? ''}`, stems) }))
     .filter((x) => x.shared >= minShared)
     .sort((x, y) => y.shared - x.shared)
     .map((x) => ({ title: x.e.title, kind: x.e.kind, score: x.shared, via: 'title' as const }));
