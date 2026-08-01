@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock } from './scheduler';
 
 describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -150,5 +150,21 @@ describe('derivedContentDue — 일일 N편 케이던스(순수)', () => {
   it('매일 1편: 24h 경과 전 false, 이후 true', () => {
     expect(derivedContentDue(1, '2026-07-15T13:00:00Z', now)).toBe(false); // 23h
     expect(derivedContentDue(1, '2026-07-15T11:00:00Z', now)).toBe(true);  // 25h
+  });
+});
+
+// 시드 키워드 무음 유실(2026-08-01 실측) — 프롬프트가 `winners || coldstart` 라서 성과 키워드가
+// 한 줄만 있어도 브랜드 시드가 통째로 사라졌다. 새 축을 yaml 시드에 넣어도 주제 선정이 안 바뀌던 원인.
+describe('seedKeywordBlock — 성과 키워드가 있어도 시드가 사라지지 않는다', () => {
+  const seeds = ['도토리나무 구별', '겨울눈으로 나무 알아보기'];
+  it('winners 가 있으면 시드를 나란히 준다(종전엔 여기서 유실됐다)', () => {
+    const b = seedKeywordBlock('- 여름꽃종류 (점수 0.80)', seeds);
+    for (const k of seeds) expect(b).toContain(k);
+  });
+  it('winners 가 비면 빈 문자열 — coldstart 가 이미 같은 시드를 담아 중복 주입이 된다', () => {
+    expect(seedKeywordBlock('', seeds)).toBe('');
+  });
+  it('시드가 없으면 빈 문자열 — 미설정 브랜드는 종전 동작 그대로', () => {
+    expect(seedKeywordBlock('- 무언가', [])).toBe('');
   });
 });

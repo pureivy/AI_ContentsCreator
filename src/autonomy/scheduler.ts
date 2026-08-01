@@ -157,6 +157,22 @@ function readStrategyWinners(): string {
   } catch { return ''; }
 }
 
+/**
+ * 시드 키워드 블록(순수) — 성과 winners 와 **나란히** 주기 위한 것.
+ *
+ * 종전 프롬프트는 `winners || coldstart` 하나뿐이라, winners 가 한 줄이라도 있으면 시드가 통째로
+ * 사라졌다. 그래서 브랜드 yaml 의 seedKeywords 에 새 축을 넣어도 주제 선정에 아무 영향이 없었다
+ * (실측 2026-08-01: bionditree winners 19개 중 게이트 통과 8개 → 시드 16개 전부 미주입).
+ * 게다가 살아남은 winners 는 정체성 재정립(07-31) 전에 쌓인 것이라 '여름꽃종류'·'7월에 심는 꽃'처럼
+ * 지금 축과 무관한 소재가 섞여 있다 — '꽃'은 신규성 스톱워드라 소재 게이트가 걸러내지 못한다.
+ *
+ * winners 가 비었을 땐 coldstart 가 이미 같은 시드를 담으므로 빈 문자열(중복 주입 방지).
+ */
+export function seedKeywordBlock(winners: string, seeds: string[]): string {
+  if (!winners || !seeds.length) return '';
+  return `[브랜드 시드 키워드(성과가 아직 없는 축 — 위 성과 키워드 대신 여기서 골라도 된다)]\n${seeds.map((k) => `- ${k}`).join('\n')}\n\n`;
+}
+
 const IDEA_SYSTEM =
   '너는 1인 AI 콘텐츠 회사의 자율 편집 기획자다. 소재 범위의 기준은 [브랜드 컨텍스트]다 — 소개가 말하는 영역 안에서만, ' +
   '금지 목록의 소재는 절대 제안하지 마라. [팀·업무 범위]는 제작 공정 설명일 뿐 소재 범위가 아니다. ' +
@@ -204,6 +220,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   const coldstart = seeds.length
     ? `(성과 데이터 없음 — 아래 브랜드 시드 키워드에서 출발해 탐색)\n${seeds.map((k) => `- ${k}`).join('\n')}`
     : '(없음 — 콜드스타트)';
+  const seedBlock = seedKeywordBlock(winners, seeds);
   // 신규성 가드(사용자 원칙 2026-07-15) — 브랜드의 기존 글·쇼츠·카드뉴스 제목+키워드와 유사 금지.
   // 프롬프트 주입(사전)과 findSimilarContent 사후 검사 이중 방어 — 유사하면 기각 사유를 담아 1회 재시도.
   const existing = collectExistingContent(activeBrandSlug() || undefined);
@@ -222,6 +239,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +
     `[성과 상위 키워드(참고용 씨앗 — 이 테마만 반복하지 말 것)]\n${winners || coldstart}\n\n` +
+    seedBlock +
     `[기존 콘텐츠 — 주제·키워드 유사 금지]\n${existingLines || '(없음)'}\n\n` +
     `[최근 제작 — 중복 회피]\n${done || '(없음)'}\n\n` +
     `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}\n\n` +
