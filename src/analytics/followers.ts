@@ -17,6 +17,9 @@ import { GRAPH, FB_GRAPH } from '../tools/metaPublish';
 
 export interface FollowerSnapshot {
   date: string; // KST YYYY-MM-DD
+  /** 이 스냅샷을 마지막으로 수집한 시각(ISO) — 하루 안에 여러 번 갱신되므로 날짜만으론 신선도를 알 수 없다.
+   *  값이 안 변하면 사용자는 '수집이 안 된 것'과 '수집했는데 실제로 안 변한 것'을 구분할 수 없다(신고 2026-08-02). */
+  ts?: string;
   /** 네이버 블로그 이웃 수 — 공개 모바일 API(subscriberCount), 로그인·자동화 불요. */
   naver?: number | null;
   youtube: number | null;
@@ -109,7 +112,7 @@ export async function recordFollowersSnapshot(signal?: AbortSignal): Promise<Fol
     meta.pageAccessToken ? fetchIgFollowers(meta.pageAccessToken, signal) : Promise.resolve(null),
     meta.pageId && meta.pageToken ? fetchFbFollowers(meta.pageId, meta.pageToken, signal) : Promise.resolve(null),
   ]);
-  const snap: FollowerSnapshot = { date: kstDate(), naver, youtube, instagram, facebook };
+  const snap: FollowerSnapshot = { date: kstDate(), ts: new Date().toISOString(), naver, youtube, instagram, facebook };
   try {
     const file = fileFor(slug);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -119,6 +122,7 @@ export async function recordFollowersSnapshot(signal?: AbortSignal): Promise<Fol
     const merged: FollowerSnapshot = todayExisting
       ? {
           date: snap.date,
+          ts: snap.ts, // 병합해도 '방금 수집함'은 사실 — 값이 그대로여도 신선도는 갱신된다
           naver: snap.naver ?? todayExisting.naver ?? null,
           youtube: snap.youtube ?? todayExisting.youtube,
           instagram: snap.instagram ?? todayExisting.instagram,

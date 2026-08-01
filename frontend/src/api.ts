@@ -991,7 +991,8 @@ export async function fetchPerformance(): Promise<PerfData | null> {
 }
 
 // 팔로워·이웃 일일 스냅샷(브리핑 수집 공유) — 성과탭 채널 카드 표기+추이 그래프용(2026-07-31).
-export interface FollowerSnapshot { date: string; naver?: number | null; youtube?: number | null; instagram?: number | null; facebook?: number | null }
+/** ts = 마지막 수집 시각(ISO) — 하루에 여러 번 갱신되므로 date 만으론 신선도를 알 수 없다(2026-08-02). */
+export interface FollowerSnapshot { date: string; ts?: string | null; naver?: number | null; youtube?: number | null; instagram?: number | null; facebook?: number | null }
 export interface FollowersData { snapshots: FollowerSnapshot[]; latest: FollowerSnapshot | null; goal: number }
 export async function fetchFollowers(): Promise<FollowersData | null> {
   try { const r = await fetch("/api/followers"); return r.ok ? await r.json() : null; }

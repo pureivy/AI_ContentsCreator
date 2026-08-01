@@ -7,6 +7,17 @@ import FollowerTrendModal, { type FollowerField, latestFollower, followerDelta }
 // 성과 대시보드 — 채널 통합 요약(블로그·쇼츠·카드뉴스) → 블로그 글별 → 쇼츠·카드뉴스 → 강화 학습 순.
 // 스테이지 어휘는 캘린더·검토 탭과 동일(Ico).
 
+/** 측정 시각 표기 — 오늘이면 시:분만, 이전이면 월-일 시:분. 값 없으면 "기록 없음". */
+export function fmtWhen(iso: string | null | undefined): string {
+  if (!iso) return "기록 없음";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "기록 없음";
+  const hm = d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+  const today = new Date();
+  const sameDay = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+  return sameDay ? `오늘 ${hm}` : `${d.getMonth() + 1}-${d.getDate()} ${hm}`;
+}
+
 // 조회수 추이 스파크라인 — 인라인 SVG(의존성·외부요청 없음). 하루 1점 시계열(뒤가 최신).
 // 데이터 2점 미만이면 미표시(추세 없음), 마지막 점은 강조 dot. 값 범위 flat 이면 중앙선.
 function Sparkline({ data, title }: { data: number[]; title?: string }) {
@@ -66,15 +77,18 @@ export default function PerformanceView() {
     }
     // 완료까지 폴링(최대 8분 — 네이버 순차 브라우저 런은 조각 수에 비례) — 도중에도 표를 계속 갱신.
     const deadline = Date.now() + 8 * 60_000;
+    // 팔로워는 순수 API 라 서버에서 1~2초면 끝난다(실측 2026-08-02). 반면 네이버 조각 수집은 수 분 걸리고
+    // refreshBusy 는 그때까지 참이다. 폴링이 끝난 뒤에야 팔로워를 읽으면 이미 갱신된 값이 몇 분간 화면에
+    // 안 뜬다 — 사용자에겐 "새로고침해도 숫자가 그대로"로 보인다(신고 2026-08-02). 폴링 안에서 같이 읽는다.
+    void fetchFollowers().then(setFollowers);
     let d = await fetchPerformance();
     while (d?.refreshBusy && Date.now() < deadline) {
       setData(d);
       await new Promise((res) => setTimeout(res, 5000));
       d = await fetchPerformance();
+      void fetchFollowers().then(setFollowers);
     }
     if (d) setData(d);
-    // 이웃·구독자·팔로워는 별도 엔드포인트라 위 폴링에 안 실린다 — 서버가 재수집을 마쳤으니 여기서 다시 읽는다.
-    // 이게 빠져 있어서 서버가 갱신해도 카드 숫자가 그대로였다(사용자 신고 2026-08-02).
     await fetchFollowers().then(setFollowers);
     setRefreshing(false);
     const t = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
@@ -151,6 +165,13 @@ export default function PerformanceView() {
       </div>
     ) : null;
 
+  // 측정 신선도 — 블로그 조각들의 measuredAt 중 최신. 하나도 측정 안 됐으면 null.
+  const lastMeasuredAt = (data?.pieces ?? [])
+    .map((p) => p.measuredAt)
+    .filter((t): t is string => typeof t === "string" && !!t)
+    .sort()
+    .pop() ?? null;
+
   // 카드 보조 지표(좋아요·안내 문구) — 조회수와 시각적 위계 분리(작고 옅게). 다크/라이트 모두 opacity 로 무난.
   const subStyle = { fontSize: 11, opacity: 0.65, marginTop: 3 } as const;
   // 채널 카드의 팔로워 표기 — 좋아요 '옆'에 인라인(구분점 포함, 사용자 확정 2026-07-31). 현재값+전일 증감,
@@ -180,6 +201,13 @@ export default function PerformanceView() {
             {refreshing ? "재수집 중…" : "새로고침"}
           </button>
           {refreshMsg && <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>{refreshMsg}</span>}
+          {/* 신선도 표기 — 숫자가 그대로일 때 '수집이 안 됐다'와 '수집했는데 실제로 안 변했다'를 구분할
+              수단이 없었다(사용자 신고 2026-08-02). 블로그 조회는 네이버 하루 1회 게이트라 같은 날
+              새로고침해도 시각이 안 바뀌는 게 정상 — 그 사실이 화면에 보여야 한다. */}
+          <span className="muted" style={{ display: "block", marginTop: 6, fontSize: 11.5 }}>
+            블로그 조회 마지막 측정 {fmtWhen(lastMeasuredAt)}<span style={{ opacity: 0.7 }}> (네이버는 하루 1회 — 같은 날 새로고침해도 조회수는 안 바뀝니다)</span>
+            {" · "}팔로워 기준 {fmtWhen(followers?.latest?.ts ?? null)}
+          </span>
         </p>
       </div>
 
