@@ -10,6 +10,7 @@
  * UI 에서 프롬프트를 고치면 다음 생성부터 반영된다.
  */
 import fs from 'node:fs';
+import { SELLER_INQUIRY_BAN } from './org';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { microJSON, runAgent, extractFirstJson } from './agent';
@@ -64,13 +65,13 @@ async function callRoleJSON<T>(
   if (io.bus && role) {
     const out = await runAgent({
       bus: io.bus, role, model: stdModel(),
-      task: `${task}\n\n다른 텍스트 없이 JSON만 출력하라.`,
+      task: `${task}\n\n${SELLER_INQUIRY_BAN}\n\n다른 텍스트 없이 JSON만 출력하라.`,
       stage: 'work', emitSpawn, maxOutputTokens, signal: io.signal,
     });
     return extractFirstJson<T>(out.text);
   }
   // microJSON 폴백은 buildSystemPrompt 를 안 지나므로 브랜드 컨텍스트를 system 에 직접 합성.
-  const sys = [role?.systemPrompt || fallbackSystem, brandContext()].filter(Boolean).join('\n\n');
+  const sys = [role?.systemPrompt || fallbackSystem, brandContext(), SELLER_INQUIRY_BAN].filter(Boolean).join('\n\n');
   return microJSON<T>(stdModel(), sys, task, { maxOutputTokens, signal: io.signal });
 }
 
