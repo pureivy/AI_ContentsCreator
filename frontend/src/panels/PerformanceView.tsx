@@ -179,15 +179,14 @@ export default function PerformanceView() {
   const folStat = (field: FollowerField, label: string) => {
     const cur = latestFollower(followers, field);
     if (cur == null) return null;
+    // 전일 대비 증감(사용자 확정 2026-08-02) — 전일 스냅샷이 없으면 null 이라 증감을 생략한다.
     const d = followerDelta(followers, field);
-    // 증감 옆에 간격을 밝힌다 — 스냅샷이 빠진 날이 있으면 '전일'이 아니라서, 그냥 (+9) 로 두면
-    // 하루에 9명 늘어난 것으로 읽힌다(실측 2026-08-02: 08-01 결측이라 이틀치였다).
-    const deltaTxt = d && d.delta !== 0 ? ` (${d.delta > 0 ? "+" : ""}${d.delta.toLocaleString()}${d.days > 1 ? `/${d.days}일` : ""})` : "";
+    const deltaTxt = d != null && d !== 0 ? ` (${d > 0 ? "+" : ""}${d.toLocaleString()})` : "";
     return (
       <>
         {" · "}
         <button className="fol-link" onClick={() => setTrend(field)}
-          title={`${label} — ${d && d.days > 1 ? `직전 기록(${d.days}일 전) 대비 증감` : "전일 대비 증감"}. 클릭하면 일자별 추이 그래프`}>
+          title={`${label} — 전일 대비 증감${d == null ? "(전일 기록이 없어 생략)" : ""}. 클릭하면 일자별 추이 그래프`}>
           👥 {label} {cur.toLocaleString()}{deltaTxt} ▸
         </button>
       </>

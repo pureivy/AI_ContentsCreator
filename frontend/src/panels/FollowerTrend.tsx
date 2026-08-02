@@ -23,18 +23,24 @@ export function latestFollower(data: FollowersData | null, field: FollowerField)
   return s.length ? s[s.length - 1]!.v : null;
 }
 /**
- * 직전 기록 대비 증감 + 그 기록과의 실제 간격(일). 표본 2개 미만이면 null.
- * days 를 함께 주는 이유: 스냅샷이 빠진 날이 있으면 '전일 대비'가 아니다(실측 2026-08-02 — 08-01 결측이라
- * 08-02 증감이 이틀치였다). 하루가 아니면 화면이 그렇게 밝혀야 증가 속도를 과대평가하지 않는다.
+ * **전일 대비** 증감(사용자 확정 2026-08-02) — 최신 기록의 '하루 전 날짜' 스냅샷과 비교한다.
+ *
+ * 직전 기록과 비교하면 스냅샷이 빠진 날이 섞였을 때 이틀·사흘치가 하루치로 읽힌다(실측 2026-08-02:
+ * 08-01 결측이라 08-02 증감이 이틀치였다). 그래서 '바로 앞 표본'이 아니라 **날짜로** 전일을 찾고,
+ * 전일 기록이 없으면 전일 대비를 계산할 수 없으므로 null(화면에 증감 미표기)을 준다 —
+ * 없는 날을 있는 척 메우지 않는다.
  */
-export function followerDelta(data: FollowersData | null, field: FollowerField): { delta: number; days: number } | null {
+export function followerDelta(data: FollowersData | null, field: FollowerField): number | null {
   if (!data) return null;
   const s = seriesOf(data, field);
   if (s.length < 2) return null;
-  const cur = s[s.length - 1]!, prev = s[s.length - 2]!;
-  const ms = Date.parse(cur.date) - Date.parse(prev.date);
-  const days = Number.isFinite(ms) ? Math.max(1, Math.round(ms / 86_400_000)) : 1;
-  return { delta: cur.v - prev.v, days };
+  const cur = s[s.length - 1]!;
+  const t = Date.parse(cur.date);
+  if (!Number.isFinite(t)) return null;
+  // 날짜 문자열(KST YYYY-MM-DD)을 UTC 자정으로 파싱해 순수 날짜 산술 — 시간대 이동 없음.
+  const prevDate = new Date(t - 86_400_000).toISOString().slice(0, 10);
+  const prev = s.find((p) => p.date === prevDate);
+  return prev ? cur.v - prev.v : null;
 }
 
 /**

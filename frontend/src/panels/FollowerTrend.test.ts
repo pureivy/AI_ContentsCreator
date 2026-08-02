@@ -27,16 +27,26 @@ describe('axisTicks — 팔로워 수는 음수 없는 정수 카운트', () => 
   });
 });
 
-describe('followerDelta — 결측일이 있으면 "전일"이 아니다', () => {
+describe('followerDelta — 전일 대비(사용자 확정 2026-08-02)', () => {
   const mk = (snaps: Array<{ date: string; youtube: number }>): FollowersData =>
     ({ snapshots: snaps, latest: snaps[snaps.length - 1] ?? null, goal: 1000 } as unknown as FollowersData);
-  it('연속일이면 days=1', () => {
-    expect(followerDelta(mk([{ date: '2026-07-30', youtube: 38 }, { date: '2026-07-31', youtube: 44 }]), 'youtube'))
-      .toEqual({ delta: 6, days: 1 });
+  it('전일 스냅샷이 있으면 그것과 비교', () => {
+    expect(followerDelta(mk([{ date: '2026-07-30', youtube: 38 }, { date: '2026-07-31', youtube: 44 }]), 'youtube')).toBe(6);
   });
-  it('하루 건너뛰면 days=2 — 08-01 결측 실사례', () => {
-    expect(followerDelta(mk([{ date: '2026-07-31', youtube: 44 }, { date: '2026-08-02', youtube: 48 }]), 'youtube'))
-      .toEqual({ delta: 4, days: 2 });
+  it('전일이 결측이면 null — 이틀치를 하루치로 보여주지 않는다(08-01 결측 실사례)', () => {
+    expect(followerDelta(mk([{ date: '2026-07-31', youtube: 44 }, { date: '2026-08-02', youtube: 48 }]), 'youtube')).toBeNull();
+  });
+  it('앞선 기록이 여럿이어도 날짜로 전일을 찾는다(직전 표본이 아님)', () => {
+    const d = mk([
+      { date: '2026-07-30', youtube: 38 },
+      { date: '2026-07-31', youtube: 44 },
+      { date: '2026-08-01', youtube: 46 },
+      { date: '2026-08-02', youtube: 48 },
+    ]);
+    expect(followerDelta(d, 'youtube')).toBe(2); // 08-02(48) - 08-01(46)
+  });
+  it('월 경계를 넘어도 전일을 찾는다', () => {
+    expect(followerDelta(mk([{ date: '2026-07-31', youtube: 44 }, { date: '2026-08-01', youtube: 46 }]), 'youtube')).toBe(2);
   });
   it('표본 1개면 null', () => {
     expect(followerDelta(mk([{ date: '2026-08-02', youtube: 48 }]), 'youtube')).toBeNull();
