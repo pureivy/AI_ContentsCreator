@@ -22,11 +22,34 @@ export function latestFollower(data: FollowersData | null, field: FollowerField)
   const s = seriesOf(data, field);
   return s.length ? s[s.length - 1]!.v : null;
 }
-/** 전일(직전 스냅샷) 대비 증감 — 표본 2개 미만이면 null. */
-export function followerDelta(data: FollowersData | null, field: FollowerField): number | null {
+/**
+ * 직전 기록 대비 증감 + 그 기록과의 실제 간격(일). 표본 2개 미만이면 null.
+ * days 를 함께 주는 이유: 스냅샷이 빠진 날이 있으면 '전일 대비'가 아니다(실측 2026-08-02 — 08-01 결측이라
+ * 08-02 증감이 이틀치였다). 하루가 아니면 화면이 그렇게 밝혀야 증가 속도를 과대평가하지 않는다.
+ */
+export function followerDelta(data: FollowersData | null, field: FollowerField): { delta: number; days: number } | null {
   if (!data) return null;
   const s = seriesOf(data, field);
-  return s.length >= 2 ? s[s.length - 1]!.v - s[s.length - 2]!.v : null;
+  if (s.length < 2) return null;
+  const cur = s[s.length - 1]!, prev = s[s.length - 2]!;
+  const ms = Date.parse(cur.date) - Date.parse(prev.date);
+  const days = Number.isFinite(ms) ? Math.max(1, Math.round(ms / 86_400_000)) : 1;
+  return { delta: cur.v - prev.v, days };
+}
+
+/**
+ * Y축 눈금(순수) — 팔로워 수는 음수가 없는 정수 카운트다.
+ * 종전 [y1,(y0+y1)/2,y0] 를 그대로 반올림해 라벨을 만들면 두 가지가 깨졌다(실측 2026-08-02):
+ *  - 전부 0인 시리즈(페북) → y0 를 -1 로 내려 **"-1" 음수 라벨**이 떴다.
+ *  - [0,0,1] 시리즈(네이버 이웃) → 중간값 0.5 가 1 로 반올림돼 **"1"이 두 번** 찍혔다.
+ * 하한은 0 미만으로 내리지 않고, 눈금은 정수로 만든 뒤 중복을 제거한다.
+ */
+export function axisTicks(vs: number[]): { y0: number; y1: number; ticks: number[] } {
+  const lo = Math.max(0, Math.min(...vs));
+  let y0 = lo, y1 = Math.max(...vs);
+  if (y0 === y1) { y0 = Math.max(0, y0 - 1); y1 = y0 + (y1 === 0 ? 1 : 2); } // flat 시계열에 폭 부여(0 아래로 안 감)
+  const ticks = [...new Set([y1, Math.round((y0 + y1) / 2), y0])].sort((a, b) => b - a);
+  return { y0, y1, ticks };
 }
 
 function TrendChart({ points }: { points: Array<{ date: string; v: number }> }) {
@@ -35,14 +58,13 @@ function TrendChart({ points }: { points: Array<{ date: string; v: number }> }) 
   const xs = points.map((p) => Date.parse(p.date));
   const vs = points.map((p) => p.v);
   const x0 = Math.min(...xs), x1 = Math.max(...xs);
-  let y0 = Math.min(...vs), y1 = Math.max(...vs);
-  if (y0 === y1) { y0 -= 1; y1 += 1; } // flat 시계열 — 중앙선 배치
+  const { y0, y1, ticks } = axisTicks(vs);
   const x = (t: number) => (x1 === x0 ? (L + (W - R)) / 2 : L + ((t - x0) / (x1 - x0)) * (W - L - R));
   const y = (v: number) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
   const path = points.map((p, i) => `${i ? "L" : "M"}${x(Date.parse(p.date)).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
   const fmtD = (d: string) => d.slice(5).replace("-", "/"); // MM/DD
   const last = points[points.length - 1]!;
-  const gridV = [y1, (y0 + y1) / 2, y0];
+  const gridV = ticks;
   return (
     <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="일자별 추이" style={{ display: "block" }}>
       {/* 은은한 그리드 3선 + 좌측 값 라벨(잉크 토큰·저대비) */}
