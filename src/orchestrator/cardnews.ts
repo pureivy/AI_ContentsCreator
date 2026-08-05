@@ -22,8 +22,8 @@ import { cardNewsStore } from '../content/cardnews';
 import { notifyCardnewsReady } from '../autonomy/contentNotify';
 import { standaloneIssues } from './standaloneQa';
 import { promiseStore } from '../content/promises';
-import { brandContext } from '../content/brand';
-import { priorCoverageBrief } from '../content/priorCoverage';
+import { brandContext, getBrand } from '../content/brand';
+import { priorCoverageBrief, recentPhrasesToAvoid } from '../content/priorCoverage';
 import { generateImagesForDraft, searchCardRefs } from '../tools/blog_skills';
 import { stdModel, visionCapable } from './visionCommon';
 
@@ -383,7 +383,14 @@ export async function runCardNewsJob(
     opts.bus?.emit('phase', { team_id: 'cardnews', phase: 'work' });
     // 같은 주제 기존 카드뉴스가 있으면 '관점 다르게' 주입(자기 자신·같은 글 파생 형제 제외).
     const priorCoverage = priorCoverageBrief('카드뉴스', card.topic, card.keyword, { excludeId: card.id, excludeSourcePieceId: card.sourcePieceId, brandSlug: card.brand });
-    const plan = await planCards(io, card.topic, card.keyword, opts.sourceBody, n, priorCoverage);
+    // 반복 상투구 회피(2026-08-06) — 헤드라인 층위 반복(실측: "사진 …" 헤드라인 3건)은 주제 대조로 안
+    // 잡힌다. 최근 카드뉴스 헤드라인 코퍼스에서 문서빈도로 채굴해 금지 목록으로 주입(소재어는 stems 보호).
+    const ticPhrases = recentPhrasesToAvoid('카드뉴스', card.brand, { stems: getBrand()?.compoundStems ?? [] });
+    const phraseBlock = ticPhrases.length
+      ? `[반복 표현 금지] 최근 카드뉴스들에서 이미 여러 번 쓴 표현이다 — 헤드라인·본문에 쓰지 말고 다른 어휘·접근으로 풀어라: ${ticPhrases.map((p) => `'${p}'`).join(', ')}`
+      : '';
+    say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건`);
+    const plan = await planCards(io, card.topic, card.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock].filter(Boolean).join('\n\n'));
     if (!plan) throw new Error('기획 실패 — 기획자 JSON 응답을 해석할 수 없습니다');
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ title: plan.title, slides: plan.slides }, null, 2), 'utf-8');
     say(`기획 완료 — ${plan.title.slice(0, 30)} · 슬라이드 ${plan.slides.length}장`);

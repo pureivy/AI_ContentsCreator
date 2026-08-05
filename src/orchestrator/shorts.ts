@@ -31,8 +31,8 @@ import { generateDesignedThumbnail } from './shortsThumbnail';
 import { generateTitleArt } from './shortsTitleArt';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
 import { blogUrlForPiece } from '../content/pieces';
-import { brandContext } from '../content/brand';
-import { priorCoverageBrief } from '../content/priorCoverage';
+import { brandContext, getBrand } from '../content/brand';
+import { priorCoverageBrief, recentPhrasesToAvoid } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
 import { normalizeSceneKind } from '../tools/shortsCommon';
 import type { EventBus } from '../events/bus';
@@ -237,7 +237,14 @@ export async function runShortsJob(
     opts.bus?.emit('phase', { team_id: 'shorts', phase: 'work' });
     // 같은 주제 기존 숏폼이 있으면 '관점 다르게' 주입(자기 자신·같은 글 파생 형제 제외).
     const priorCoverage = priorCoverageBrief('숏폼', short.topic, short.keyword, { excludeId: short.id, excludeSourcePieceId: short.sourcePieceId, brandSlug: short.brand });
-    const plan = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, priorCoverage);
+    // 반복 상투구 회피(2026-08-06) — 화면텍스트·훅 층위 반복은 주제 대조로 안 잡힌다. 최근 숏폼
+    // 화면텍스트 코퍼스에서 문서빈도로 채굴해 금지 목록으로 주입(소재어는 stems 보호).
+    const ticPhrases = recentPhrasesToAvoid('숏폼', short.brand, { stems: getBrand()?.compoundStems ?? [] });
+    const phraseBlock = ticPhrases.length
+      ? `[반복 표현 금지] 최근 숏폼들에서 이미 여러 번 쓴 표현이다 — 내레이션·화면텍스트에 쓰지 말고 다른 어휘·접근으로 풀어라: ${ticPhrases.map((p) => `'${p}'`).join(', ')}`
+      : '';
+    say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건`);
+    const plan = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock].filter(Boolean).join('\n\n'));
     if (!plan) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
     say(`대본 완성 — ${plan.title.slice(0, 30)} · 씬 ${plan.scenes.length}개`);

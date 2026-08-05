@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
-import { keywordSimilar, titleSimilar } from './novelty';
+import { keywordSimilar, titleSimilar, STOP_TOKENS } from './novelty';
 import { pieceStore } from './pieces';
 import { cardNewsStore } from './cardnews';
 import { shortsStore } from './shorts';
@@ -178,4 +178,110 @@ export function recentStyleToAvoid(
         + '④"A가 아니라 B"·"X보다 Y가 먼저" 대비 훅. 같은 소재라도 진입 프레임·구성·마무리 방식을 반드시 바꿔라.',
     ].join('\n');
   } catch { return ''; }
+}
+
+/**
+ * 코퍼스 반복 상투구 채굴(순수, 2026-08-06) — 서로 다른 문서 minDocs편 이상에 등장하는 n그램(기본 2~3그램).
+ *
+ * 배경: phraseAvoid 는 하드코딩 예시('물주기 리듬' 등)뿐이라 새로 생기는 상투구를 못 막았다
+ * (실측: 소제목 "…갈리는 지점" 3편, 카드뉴스 헤드라인 "사진 …" 3건). 문서빈도(df)로 직접 잡는다.
+ *
+ * 오차단 방지 3중: ①같은 문서 내 반복은 1회(주제 내 정상 반복을 상투구로 오인 금지)
+ * ②exclude 어간(compoundStems 등 소재어)이 든 n그램 제외 — '묘목 고르기'는 도메인 용어지 상투구가 아니다
+ * ③전 토큰이 STOP_TOKENS(관리·방법…)뿐인 n그램 제외. 문장부호 경계 너머로는 잇지 않는다.
+ * includeUnigrams 는 헤드라인처럼 짧은 문서용(블로그 전문에 켜면 모든 빈출 명사가 잡힌다 — 켜지 말 것).
+ */
+// 단일어 채굴 전용 기능어 — 헤드라인류에 흔하지만 상투구 신호가 아닌 부사·지시어(실코퍼스 스모크에서
+// '다른'·'전에'·'계속'이 잡히던 오탐 대응). STOP_TOKENS(novelty)와 달리 유사도 판정에는 안 쓰는 로컬 목록.
+const UNIGRAM_FUNC = new Set(['다른', '전에', '계속', '오늘', '지금', '먼저', '바로', '함께', '이번', '아직']);
+
+export function recurringPhrases(
+  docs: string[],
+  opts: { minDocs?: number; cap?: number; includeUnigrams?: boolean; exclude?: string[] } = {},
+): string[] {
+  const minDocs = opts.minDocs ?? 3;
+  const cap = opts.cap ?? 8;
+  const exclude = (opts.exclude ?? []).filter(Boolean);
+  const df = new Map<string, number>();
+  for (const doc of docs) {
+    const seen = new Set<string>();
+    // 문장부호로 세그먼트를 끊고, 세그먼트 안에서만 인접 n그램 생성.
+    for (const seg of (doc || '').normalize('NFC').toLowerCase().split(/[^\p{L}\p{N}\s]+/u)) {
+      const toks = seg.split(/\s+/).filter((t) => t.length >= 2);
+      for (let n = opts.includeUnigrams ? 1 : 2; n <= 3; n++) {
+        for (let i = 0; i + n <= toks.length; i++) {
+          const gram = toks.slice(i, i + n);
+          if (gram.every((t) => STOP_TOKENS.has(t))) continue;             // 범용 꼬리말뿐
+          if (n === 1 && UNIGRAM_FUNC.has(gram[0]!)) continue;             // 단일어 기능어 오탐
+          // 소재어 보호 — 양방향 포함: 어간 '가지치기'가 토큰 '가지'도 보호해야 나무 브랜드에서
+          // '가지(枝)'를 상투구로 금지하는 사고가 없다(실코퍼스 스모크 실측).
+          if (exclude.some((s) => gram.some((t) => t.includes(s) || s.includes(t)))) continue;
+          seen.add(gram.join(' '));
+        }
+      }
+    }
+    for (const g of seen) df.set(g, (df.get(g) ?? 0) + 1);
+  }
+  const kept: string[] = [];
+  // df 내림차순 → 긴 것 우선. 이미 채택한 구에 포함되는 부분구는 중복이라 건너뛴다.
+  for (const [g] of [...df.entries()].filter(([, c]) => c >= minDocs)
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)) {
+    if (kept.some((k) => k.includes(g) || g.includes(k))) continue;
+    kept.push(g);
+    if (kept.length >= cap) break;
+  }
+  return kept;
+}
+
+/**
+ * 최근 콘텐츠의 반복 상투구 목록 — 생성기 프롬프트 '반복 표현 금지'에 주입할 재료. 전량 fail-open.
+ * 채굴 원천은 kind별 '스타일이 드러나는 표면'만: 블로그=소제목+도입 첫 문장(전문을 넣으면 정상 소재어까지
+ * 잡힌다), 카드뉴스=슬라이드 헤드라인, 숏폼=씬 화면텍스트. 헤드라인류는 짧아 unigram 도 포함.
+ */
+export function recentPhrasesToAvoid(
+  kind: ContentKind, brandSlug: string | undefined,
+  opts: { stems?: string[]; limit?: number; minDocs?: number } = {},
+): string[] {
+  try {
+    // 블로그는 창을 넓게(20) — 상투구는 오래돼도 상투구고, 좁은 창(12)에선 '갈리는 지점' 3편이 흩어져
+    // 문서빈도 미달로 놓쳤다(실코퍼스 스모크 실측). 파생은 총량이 적어 12로 충분.
+    const limit = opts.limit ?? (kind === '블로그' ? 20 : 12);
+    const brandOk = (b?: string): boolean => brandSlug === undefined || (b ?? undefined) === brandSlug;
+    const docs: string[] = [];
+    const titles: string[] = []; // 채굴 문서들의 제목·주제 — 주제어는 상투구가 아니다(아래 exclude 로 보호)
+    if (kind === '블로그') {
+      for (const e of [...pieceStore().list()].reverse()) {
+        if (!brandOk(e.brand)) continue;
+        const s = blogStyleSig(e.runId);
+        if (s) { docs.push(`${s.headings}. ${s.opening}`); titles.push(e.title); }
+        if (docs.length >= limit) break;
+      }
+    } else if (kind === '카드뉴스') {
+      for (const e of cardNewsStore().list()) {
+        if (!brandOk(e.brand)) continue;
+        const o = planOutline(cardNewsStore().dirFor(e.id), 'card');
+        // 마지막 장(마무리·CTA)은 제외 — 설계상 반복되는 행동유도('예고' 등)를 상투구로 오인 방지.
+        if (o) { docs.push(o.split(' · ').slice(0, -1).join(' · ')); titles.push(e.topic); }
+        if (docs.length >= limit) break;
+      }
+    } else {
+      for (const e of shortsStore().list()) {
+        if (!brandOk(e.brand)) continue;
+        const o = planOutline(shortsStore().dirFor(e.id), 'short');
+        if (o) { docs.push(o.split(' · ').slice(0, -1).join(' · ')); titles.push(e.topic) ; }
+        if (docs.length >= limit) break;
+      }
+    }
+    if (docs.length < (opts.minDocs ?? 3)) return []; // 코퍼스가 작으면 판단 보류(초기 브랜드 무해)
+    // 주제어 보호 — 채굴 문서들의 제목 토큰('배롱나무'·'심기'·'확인'…)이 든 n그램은 소재 반복이지
+    // 문체 상투구가 아니다. 이걸 금지하면 키워드 표기 강제(SEO)와 정면 충돌한다.
+    const titleTokens = [...new Set(titles.flatMap((t) =>
+      (t || '').normalize('NFC').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((x) => x.length >= 2)))];
+    return recurringPhrases(docs, {
+      minDocs: opts.minDocs ?? 3,
+      includeUnigrams: kind !== '블로그', // 헤드라인·화면텍스트는 짧아 단일어 반복('사진')도 상투구
+      exclude: [...(opts.stems ?? []), ...titleTokens],
+      cap: 6,
+    });
+  } catch { return []; }
 }

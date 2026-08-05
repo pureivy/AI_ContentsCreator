@@ -25,7 +25,7 @@ import { naverSerp } from '../grounding/naver_search';
 import { seedKeyword } from '../grounding/naver_common';
 import { getRunSettings } from '../runsettings';
 import { brandContext, activeBrandSlug, getBrand } from '../content/brand';
-import { priorCoverageBrief, recentStyleToAvoid } from '../content/priorCoverage';
+import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid } from '../content/priorCoverage';
 import type { RunOptions, RunOutcome } from './run';
 
 interface TeamResult {
@@ -139,24 +139,48 @@ export async function writeBlogBody(a: {
   personaGuide?: string;
   /** 핵심 키워드 — 같은 주제 재작성 시 '관점 다양성' 주입의 유사도 판정에 쓴다. */
   keyword?: string;
+  /** micro 티어 모델 — 시작 topic 무매치 시 브리프에서 실주제를 뽑아 재대조하는 1회 추출용(미지정 시 재대조 생략). */
+  microModel?: string;
   signal?: AbortSignal;
 }): Promise<string> {
-  const { bus, writer, model, topic, brief, critiqueText, serpText, revise, personaGuide, keyword, signal } = a;
+  const { bus, writer, model, topic, brief, critiqueText, serpText, revise, personaGuide, keyword, microModel, signal } = a;
   const reviseContext = revise
     ? `[기존 초안]\n${revise.baseBody}\n\n[검토자 수정 요청 — 반드시 반영]\n${revise.feedback}`
     : '';
+  const brandSlug = activeBrandSlug() || undefined;
   // 같은 주제 기존 글이 있으면 '관점을 완전히 다르게' 지시를 주입(revise 는 자기 초안 개정이라 제외).
-  const priorCoverage = revise ? '' : priorCoverageBrief('블로그', topic, keyword, { brandSlug: activeBrandSlug() || undefined });
+  let priorCoverage = revise ? '' : priorCoverageBrief('블로그', topic, keyword, { brandSlug });
+  // 실주제 재대조(2026-08-06) — 런 시작 topic 이 실제 글 주제가 아닐 수 있다. 실측: "자율런 실행"·"여름에 꽃
+  // 피는 나무"로 시작한 두 런이 모두 내부 리서치에서 '배롱나무 자리' 주제를 확정했고, 시작 topic 대조는
+  // 기존 글을 못 찾아 무주입 → 같은 각도(묘목 확인·이웃 나무 비교·봄 맨가지)가 그대로 반복됐다.
+  // 시작 topic 매치가 없을 때만 브리프에서 타겟 키워드·주제 한 줄을 뽑아 한 번 더 대조한다(micro 1회).
+  if (!revise && !priorCoverage && microModel && brief.trim()) {
+    const x = await microJSON<{ keyword?: unknown; topic?: unknown }>(
+      microModel,
+      '너는 콘텐츠 리서치 브리프에서 집필 타겟을 추출하는 도구다. 브리프가 겨냥하는 핵심 타겟 키워드 1개와 글 주제 한 줄을 뽑아라. 브리프에 없는 것을 지어내지 마라.',
+      `${brief.slice(0, 3000)}\n\n형식: {"keyword":"...","topic":"..."}`,
+      { maxOutputTokens: 120, signal },
+    ).catch(() => null);
+    const k = asString(x?.keyword).trim().slice(0, 40);
+    const t = asString(x?.topic).trim().slice(0, 80);
+    if (k || t) priorCoverage = priorCoverageBrief('블로그', t || topic, k || keyword, { brandSlug });
+    if (priorCoverage) bus.emit('log', { message: `유사 주제 재대조 적중 — 시작 주제가 아니라 브리프 타겟("${(k || t).slice(0, 30)}")으로 기존 글 발견` });
+  }
   // 교차-글 스타일 다양성(2026-07-23 감사) — 다른 주제인데도 도입 공식·"N단계 체크"·"오늘 바로 할 일" 마무리·
   // "A가 아니라 B" 훅으로 매번 수렴하는 것을 막는다. 킬스위치 WRITER_STYLE_DIVERGE=off. revise 는 본문 유지가
   // 목적이라 제외. (효과는 향후 몇 편의 실제 산출로만 검증 가능.)
-  const styleAvoid = (revise || process.env.WRITER_STYLE_DIVERGE === 'off') ? '' : recentStyleToAvoid(activeBrandSlug() || undefined, { limit: 4 });
+  const styleAvoid = (revise || process.env.WRITER_STYLE_DIVERGE === 'off') ? '' : recentStyleToAvoid(brandSlug, { limit: 4 });
   // 어휘 상투구 회피(2026-07-24) — recentStyleToAvoid(구조)를 넘어, 하우투 글마다 단골로 반복되는 정형 표현
   // ('물주기 리듬'·'손가락 넣어 습도 확인' 등)을 어휘 층위에서 막는다. 같은 킬스위치·revise 제외.
+  // 2026-08-06: 하드코딩 예시만으론 새로 생기는 상투구('갈리는 지점' 소제목 3편 실측)를 못 막아,
+  // 최근 글 코퍼스에서 문서빈도로 채굴한 반복 구절을 동적으로 덧붙인다(소재어는 compoundStems 로 보호).
+  const ticPhrases = (revise || process.env.WRITER_STYLE_DIVERGE === 'off') ? [] :
+    recentPhrasesToAvoid('블로그', brandSlug, { stems: getBrand()?.compoundStems ?? [] });
   const phraseAvoid = (revise || process.env.WRITER_STYLE_DIVERGE === 'off') ? '' :
     "[상투 표현 회피] 하우투 글마다 단골로 반복되는 정형 표현을 이번 글에선 쓰지 말고 다른 어휘·비유로 풀어써라. "
     + "예: '물주기 리듬', '손가락을 흙에 넣어/찔러 물기·습도 확인', '흙이 마를 시간을 주다' 같은 관용구. "
-    + "같은 정보라도 매번 신선한 문장·설명 방식으로 표현하라(형식적 상투구 반복 금지).";
+    + "같은 정보라도 매번 신선한 문장·설명 방식으로 표현하라(형식적 상투구 반복 금지)."
+    + (ticPhrases.length ? ` 최근 글들에서 이미 반복돼 상투구가 된 다음 구절도 이번 글에서 금지: ${ticPhrases.map((p) => `'${p}'`).join(', ')}.` : '');
   // 글의 '장르'가 한 축(예: 구매 전 체크리스트)으로 수렴한 실측(2026-08-01: 07-31 이후 5/5편) 대응.
   // 위 styleAvoid 는 최근 글의 도입·마무리를 피하게 하는데, 최근 글이 전부 같은 장르면 대조군이 사라져
   // 같은 장르를 어색하게 비트는 결과만 나온다 — 그래서 장르 자체를 명시적으로 요구한다.
@@ -191,6 +215,13 @@ export async function writeBlogBody(a: {
     + '(사용자 지시 2026-08-01 — 굳이 넣을 필요 없다). 그 내용이 맞다면 우리가 아는 사실로 담백하게 쓰면 된다. '
     + '기관명을 대는 것은 수치·규격처럼 출처가 정말 필요한 한두 곳으로 제한하라.'
     + '\n[운영 데이터 비공개] 검색량·문서수·자동완성·상위노출 건수 같은 SEO 조사 수치는 글의 방향을 잡는 데만 쓰고 본문에 쓰지 마라 — 독자가 읽을 글이지 운영 보고서가 아니다.';
+  // 가드 발화 가시화(2026-08-06) — 프롬프트 컨텍스트는 이벤트에 안 남아 "가드가 있는데 왜 뚫렸나"를
+  // 사후 판정할 수 없었다(배롱나무 중복 조사에서 실측). 발화 여부만 한 줄 남긴다.
+  if (!revise) {
+    bus.emit('log', {
+      message: `작가 다양성 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 스타일지문 ${styleAvoid ? '주입' : '없음'} · 반복상투구 ${ticPhrases.length}건${ticPhrases.length ? `(${ticPhrases.slice(0, 3).join(', ')}${ticPhrases.length > 3 ? ' 외' : ''})` : ''}`,
+    });
+  }
   const synth = await runAgent({
     bus, role: writer, model,
     task: revise
@@ -534,7 +565,7 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   // 인기 방향 조향 — 실제 네이버 블로그 상위 노출 글(실측 SERP)을 작가·제목 패키저에 주입(fail-open).
   const serpText = research ? '' : await serpPopularBrief(topic, signal);
   if (serpText) bus.emit('log', { message: `네이버 SERP 실측 — 상위 노출 ${serpText.split('\n').length - 1}건을 집필 방향에 반영` });
-  const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, signal });
+  const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, microModel: assign.micro, signal });
   const finalDeliverable = body || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
   return packageDesignFinalize({
