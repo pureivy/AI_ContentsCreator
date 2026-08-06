@@ -32,6 +32,8 @@ import type { RolePatch, MemberBody } from '../agents/company-loader';
 import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appendActivity, ensureScaffold, effectiveAutonomy, appendInjected, injectedLength, clearInjected, INJECTED_CAP } from '../agents/workspace';
 import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView, getYoutubeAccount, setYoutubeToken, getMetaAccount, setMetaToken, setMetaPage, purgeCustomKeysForBrand, purgeBrandAccounts } from '../secrets/store';
 import { collectExistingContent, findSimilarContent, saturatedThemeMatches, type SimilarMatch } from '../content/novelty';
+import { clusterStore, pickNextSibling } from '../content/topicCluster';
+import { mineClusterForPiece } from '../orchestrator/clusterMine';
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
@@ -324,6 +326,11 @@ function advancePieceReady(pieceId: string, runId: string, deliverable: string, 
       void notifyBlogReady({ id: p.id, title: p.title, keyword: p.keyword, seoScore: p.seoScore, brand: p.brand, revised }, runId)
         .finally(() => { try { pieceStore().update(pieceId, { notifiedTs: new Date().toISOString() }); } catch { /* 무해 */ } });
     }
+  }
+  // 클러스터 채굴(스펙 2026-08-06) — 대표 편 초안 확정 시 연관 검색어 형제를 백로그로. 수동·자율 런이
+  // 여기서 합류하므로 단일 훅으로 두 경로를 다 덮는다. 리비전은 같은 글 재확정이라 제외. fire-and-forget.
+  if (!revised && process.env.TOPIC_CLUSTER !== 'off') {
+    void mineClusterForPiece(pieceId).catch(() => { /* 무해 — mineClusterForPiece 내부도 fail-open */ });
   }
   return owned;
 }
@@ -3265,7 +3272,7 @@ function canGenerateNew(pieces: Piece[]): boolean {
 }
 
 // 자율 틱 작업 유형 — 콘텐츠 piece(재개/신규) 또는 지식 리서치 미션(조사→토론→두뇌 적재→학습).
-type AutoWork = { kind: 'piece'; piece: Piece; promiseId?: string } | { kind: 'research'; title: string; brand: string }
+type AutoWork = { kind: 'piece'; piece: Piece; promiseId?: string; clusterTopicId?: string } | { kind: 'research'; title: string; brand: string }
   | { kind: 'shorts'; pieceId: string; title: string } | { kind: 'cardnews'; pieceId: string; title: string };
 
 async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
@@ -3315,6 +3322,37 @@ async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
         }
       }
     } catch { /* 예고 대장 실패 무해 — 신규 아이디어로 폴백 */ }
+    // 클러스터 형제 소진(스펙 2026-08-06) — 예고(약속)보다 뒤, 신규 아이디어보다 앞(검색 수요가 자동완성으로
+    // 이미 검증된 주제). 케이던스(canGenerateNew) 안이므로 생산량은 불변, 다양성만 늘린다.
+    if (process.env.TOPIC_CLUSTER !== 'off') {
+      try {
+        const all = clusterStore().list().filter((t) => (t.brand ?? '') === tickBrand);
+        // 쿨다운 입력 — 최근 자율 blog piece 의 clusterSeedId(최신순).
+        const recentSeeds = pieces.filter((p) => p.auto && (p.brand ?? '') === tickBrand)
+          .sort((a, b) => b.createdTs.localeCompare(a.createdTs))
+          .map((p) => p.clusterSeedId);
+        const cand = pickNextSibling(all.filter((t) => t.status === 'pending'), all, recentSeeds);
+        if (cand) {
+          // 소진 시점 재검증 — 채굴과 소진 사이 코퍼스가 변했을 수 있다(스펙 ③). 시드 편은 대조에서 제외
+          // (형제는 정의상 시드와 유사 — 시드 제외 후에도 걸리면 진짜 중복).
+          const seedTitle = cand.seedPieceId ? pieceStore().get(cand.seedPieceId)?.title : undefined;
+          const off = offBrandTerm(`${cand.title} ${cand.keyword}`);
+          const existingNow = collectExistingContent(tickBrand || undefined).filter((e) => e.title !== seedTitle);
+          const dup = off ? [] : findSimilarContent({ title: cand.title, keyword: cand.keyword }, existingNow);
+          const sat = (off || dup.length) ? [] : saturatedThemeMatches({ title: cand.title, keyword: cand.keyword }, existingNow, 3, getBrand()?.compoundStems ?? []);
+          if (off || dup.length) {
+            clusterStore().update(cand.id, { status: 'dropped' });
+            console.log(`[auto-cycle] 클러스터 기각 — "${cand.keyword}" (${off ? `소재 "${off}"` : `기존과 중복 "${dup[0]!.title.slice(0, 24)}"`}) → dropped`);
+          } else if (sat.length) {
+            console.log(`[auto-cycle] 클러스터 보류(소재 포화) — "${cand.keyword}" ≈ "${sat[0]!.title.slice(0, 24)}" → 신규 아이디어로 폴백`);
+          } else {
+            const piece = pieceStore().create({ title: cand.title, keyword: cand.keyword, brand: tickBrand || undefined, auto: true, clusterSeedId: cand.id });
+            console.log(`[auto-cycle] 클러스터 형제 착수 — "${cand.keyword}" (시드 "${cand.seedKeyword}")`);
+            return { kind: 'piece', piece, clusterTopicId: cand.id };
+          }
+        }
+      } catch { /* 클러스터 실패 무해 — 신규 아이디어로 폴백 */ }
+    }
     const idea = await proposeContentIdeas(signal);
     // 브랜드 고정 — 제안 LLM 대기(수 초) 중 브랜드가 전환되면 A 컨텍스트로 만든 아이디어가 B 에 귀속될 수
     // 있어 버린다(리서치 경로 main.ts 위 tickBrand 고정과 동일 원칙 — 종전엔 콘텐츠 경로만 빠져 있었음).
@@ -3373,6 +3411,8 @@ const stopAutoCycle = startAutoCycle<AutoWork>({
     // 예고 이행 마킹 — 런이 실제로 시작됐을 때만(억제('')면 piece 가 idea 로 남아 다음 틱 재개, 약속도 pending 유지).
     // 이후 piece 가 종료 실패하면 위 reconcile 이 pending 으로 복원한다.
     if (id && w.promiseId) { try { promiseStore().update(w.promiseId, { status: 'fulfilled', fulfilledPieceId: w.piece.id }); } catch { /* 무해 */ } }
+    // 클러스터 소진 마킹 — 예고와 동일 원칙: 런이 실제 시작됐을 때만(억제('')면 pending 유지, 다음 틱 재시도).
+    if (id && w.clusterTopicId) { try { clusterStore().update(w.clusterTopicId, { status: 'consumed', consumedPieceId: w.piece.id }); } catch { /* 무해 */ } }
   },
   describe: (w) => (w.kind === 'research' ? `리서치: ${w.title}`
     : w.kind === 'shorts' ? `쇼츠 파생: ${w.title}`
