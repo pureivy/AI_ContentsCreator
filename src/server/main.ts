@@ -33,7 +33,7 @@ import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appen
 import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView, getYoutubeAccount, setYoutubeToken, getMetaAccount, setMetaToken, setMetaPage, purgeCustomKeysForBrand, purgeBrandAccounts } from '../secrets/store';
 import { collectExistingContent, findSimilarContent, saturatedThemeMatches, type SimilarMatch } from '../content/novelty';
 import { clusterStore, pickNextSibling } from '../content/topicCluster';
-import { mineClusterForPiece } from '../orchestrator/clusterMine';
+import { mineClusterForPiece, filterCandidates } from '../orchestrator/clusterMine';
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
@@ -3333,16 +3333,17 @@ async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
           .map((p) => p.clusterSeedId);
         const cand = pickNextSibling(all.filter((t) => t.status === 'pending'), all, recentSeeds);
         if (cand) {
-          // 소진 시점 재검증 — 채굴과 소진 사이 코퍼스가 변했을 수 있다(스펙 ③). 시드 편은 대조에서 제외
-          // (형제는 정의상 시드와 유사 — 시드 제외 후에도 걸리면 진짜 중복).
-          const seedTitle = cand.seedPieceId ? pieceStore().get(cand.seedPieceId)?.title : undefined;
+          // 소진 시점 재검증 — 채굴과 소진 사이 코퍼스가 변했을 수 있다(스펙 ③). 게이트는 채굴과 동일한
+          // filterCandidates 재사용 — 시드 가족(파생·동일 키워드)은 차별화 부분으로만 대조(전 후보 오기각 방지).
+          const seedTitle = (cand.seedPieceId ? pieceStore().get(cand.seedPieceId)?.title : undefined) ?? '';
           const off = offBrandTerm(`${cand.title} ${cand.keyword}`);
-          const existingNow = collectExistingContent(tickBrand || undefined).filter((e) => e.title !== seedTitle);
-          const dup = off ? [] : findSimilarContent({ title: cand.title, keyword: cand.keyword }, existingNow);
-          const sat = (off || dup.length) ? [] : saturatedThemeMatches({ title: cand.title, keyword: cand.keyword }, existingNow, 3, getBrand()?.compoundStems ?? []);
-          if (off || dup.length) {
+          const existingNow = collectExistingContent(tickBrand || undefined);
+          const gate = off ? null : filterCandidates([cand.keyword], cand.seedKeyword, seedTitle, existingNow);
+          const dupWhy = gate && !gate.pass.length ? (gate.rejected[0]?.why ?? '게이트 기각') : '';
+          const sat = (off || dupWhy) ? [] : saturatedThemeMatches({ title: cand.title, keyword: cand.keyword }, existingNow, 3, getBrand()?.compoundStems ?? []);
+          if (off || dupWhy) {
             clusterStore().update(cand.id, { status: 'dropped' });
-            console.log(`[auto-cycle] 클러스터 기각 — "${cand.keyword}" (${off ? `소재 "${off}"` : `기존과 중복 "${dup[0]!.title.slice(0, 24)}"`}) → dropped`);
+            console.log(`[auto-cycle] 클러스터 기각 — "${cand.keyword}" (${off ? `소재 "${off}"` : dupWhy}) → dropped`);
           } else if (sat.length) {
             console.log(`[auto-cycle] 클러스터 보류(소재 포화) — "${cand.keyword}" ≈ "${sat[0]!.title.slice(0, 24)}" → 신규 아이디어로 폴백`);
           } else {

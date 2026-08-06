@@ -20,19 +20,32 @@ import { asString } from '../util/str';
 
 const normKw = (s: string): string => (s || '').replace(/\s+/g, '').toLowerCase();
 
-/** 순수 코드 게이트 — LLM 이전에 확실히 걸러지는 것들: 브랜드 밖 / 시드 표기 동치 / 기존 글과 중복(시드 편 제외). */
+/**
+ * 순수 코드 게이트 — LLM 이전에 확실히 걸러지는 것들: 브랜드 밖 / 시드 표기 동치 / 기존 글과 중복.
+ *
+ * 대조 이원화(실측 2026-08-06 배롱나무 스모크): 시드 키워드를 keyword 로 쓰는 콘텐츠 가족(시드 편·파생
+ * 카드뉴스·동일 키워드 글)과는 단순 포함 규칙이 항상 참(배롱나무 ⊂ 배롱나무꽃)이라 전 후보가 기각됐다.
+ * 가족과는 후보의 '차별화 부분'(시드를 뺀 나머지, 2자 이상)이 제목에 들어 있을 때만 중복으로 보고,
+ * 가족 밖 콘텐츠와는 종전 findSimilarContent 전체 규칙으로 대조한다.
+ */
 export function filterCandidates(
   candidates: string[], seedKw: string, seedTitle: string,
   existing: ExistingContent[],
 ): { pass: string[]; rejected: Array<{ kw: string; why: string }> } {
   const pass: string[] = [];
   const rejected: Array<{ kw: string; why: string }> = [];
-  const withoutSeed = existing.filter((e) => e.title !== seedTitle); // 시드 편 자신과의 유사는 계획된 갈래
+  const seedNorm = normKw(seedKw);
+  const family = existing.filter((e) => e.title === seedTitle || normKw(e.keyword ?? '') === seedNorm);
+  const others = existing.filter((e) => !family.includes(e));
   for (const kw of candidates) {
     const off = offBrandTerm(kw);
     if (off) { rejected.push({ kw, why: `브랜드 밖 소재 "${off}"` }); continue; }
-    if (normKw(kw) === normKw(seedKw)) { rejected.push({ kw, why: '시드 표기 동치' }); continue; }
-    const sim = findSimilarContent({ title: kw, keyword: kw }, withoutSeed);
+    if (normKw(kw) === normKw(seedNorm)) { rejected.push({ kw, why: '시드 표기 동치' }); continue; }
+    // 가족 대조 — 차별화 부분("배롱나무 심기"→"심기")이 가족 글 제목에 이미 있으면 그 각도는 이미 다뤘다.
+    const diff = normKw(kw).replace(seedNorm, '');
+    const famHit = diff.length >= 2 ? family.find((e) => normKw(e.title).includes(diff)) : undefined;
+    if (famHit) { rejected.push({ kw, why: `기존과 중복: "${famHit.title.slice(0, 30)}"` }); continue; }
+    const sim = findSimilarContent({ title: kw, keyword: kw }, others);
     if (sim.length) { rejected.push({ kw, why: `기존과 중복: "${sim[0]!.title.slice(0, 30)}"` }); continue; }
     pass.push(kw);
   }
