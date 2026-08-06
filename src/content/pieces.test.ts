@@ -24,6 +24,13 @@ describe('PieceStore (라이프사이클 영속)', () => {
     expect(reloaded.list()).toHaveLength(1);
   });
 
+  it('clusterSeedId — 생성 시 기록되고 재로드에도 유지된다', () => {
+    const s = new PieceStore(dir);
+    const p = s.create({ title: '추희자두 후숙, 며칠이면 될까', keyword: '추희자두 후숙', clusterSeedId: 'cluster_abc' });
+    expect(s.get(p.id)?.clusterSeedId).toBe('cluster_abc');
+    expect(new PieceStore(dir).get(p.id)?.clusterSeedId).toBe('cluster_abc');
+  });
+
   it('setStage / setPublished — 발행 시 stage=published + url', () => {
     const s = new PieceStore(dir);
     const p = s.create({ title: 'x' });

@@ -43,11 +43,13 @@ export interface Piece {
   notifiedTs?: string;
   /** 자율 사이클이 만든 것인지(수동 생성과 카덴스 쿼터 분리용). */
   auto?: boolean;
+  /** 클러스터 형제 소진으로 생성된 piece 의 출처(ClusterTopic.id) — 같은 시드 쿨다운 판정·성과 귀속용. */
+  clusterSeedId?: string;
   createdTs: string;
   updatedTs: string;
 }
 
-export interface CreatePieceInput { title: string; keyword?: string; subNiche?: string; stage?: PieceStage; brand?: string; auto?: boolean; }
+export interface CreatePieceInput { title: string; keyword?: string; subNiche?: string; stage?: PieceStage; brand?: string; auto?: boolean; clusterSeedId?: string; }
 
 const MAX_ERRORS = 3;
 
@@ -78,6 +80,7 @@ export class PieceStore {
       id: genId('piece'), title: input.title.trim(),
       keyword: input.keyword?.trim() || undefined, subNiche: input.subNiche?.trim() || undefined,
       brand: input.brand?.trim() || undefined, auto: input.auto,
+      clusterSeedId: input.clusterSeedId || undefined,
       stage: input.stage ?? 'idea', errors: 0, createdTs: now, updatedTs: now,
     };
     this.items.set(p.id, p);
