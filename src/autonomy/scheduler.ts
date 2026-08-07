@@ -16,6 +16,7 @@ import { getCompany } from '../agents/company-loader';
 import { microJSON } from '../orchestrator/agent';
 import { asString } from '../util/str';
 import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix, offBrandTerm, getBrand } from '../content/brand';
+import { seasonalContext } from '../util/solarTerms';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 
 export interface AutoCycleDeps<T = string> {
@@ -288,6 +289,9 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       + `[이번 글의 각도 — 아래 중 최근 자율주제와 다른 각도 하나를 골라 그 각도로 잡아라]\n${IDEA_ANGLES.join(' | ')}\n\n`
     : '';
   const baseUser =
+    // 절기 시의성 신호(2026-08-07 사용자 제안) — 종전엔 "시의성·계절성 고려" 지시만 있고 오늘 날짜가
+    // 없어 공회전했다. 날짜+절기 한 줄이면 두뇌가 "처서 지나면 가을 식재 준비" 같은 타이밍을 스스로 잡는다.
+    `${seasonalContext()}\n\n` +
     (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +
     `[성과 상위 키워드(참고용 씨앗 — 이 테마만 반복하지 말 것)]\n${winners || coldstart}\n\n` +
@@ -411,6 +415,7 @@ export async function proposeResearchMission(signal?: AbortSignal, slug?: string
   const seeds = brandSeedKeywords();
   const st = readResearchState(slug);
   const user =
+    `${seasonalContext()}\n\n` + // 절기 시의성 신호 — 리서치 미션도 계절 타이밍에 맞게(아이디어 경로와 동일)
     (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +
     (seeds.length ? `[브랜드 시드 키워드]\n${seeds.map((k) => `- ${k}`).join('\n')}\n\n` : '') +
