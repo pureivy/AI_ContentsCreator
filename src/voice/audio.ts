@@ -46,6 +46,12 @@ export function sanitizeForTts(text: string, maxLen = 4000): string {
   t = t.replace(/https?:\/\/\S+/g, ' ');                     // 남은 URL
   t = t.replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/gu, ' '); // 이모지/기호
   t = t.replace(/\s+/g, ' ').trim();
+  // 발화 첫머리 "잎" 오독 보정(실측 2026-08-07) — ElevenLabs(multilingual v2)가 발화 시작의 "잎"을
+  // 로마자 ip 로 읽어 "아이피"가 됐다(쇼츠 보리수 편 씬3 "잎 뒷면"·씬6 "잎과" STT 재현. 문장 중간은
+  // 정상, previous_text·language_code 는 실측상 무효). 종성 중화로 발음이 동일한 "입"으로 치환하되,
+  // 모음 조사(잎이[이피]≠입이[이비])는 발음이 달라지므로 제외 — 실측상 그 경우는 오독도 없다.
+  // 자막·본문은 원문 유지(이 함수는 TTS 입력 전용).
+  t = t.replace(/^잎(?=$|\s|[과도만]|보다|처럼|부터|까지|조차|마저)/, '입');
   return t.slice(0, maxLen);
 }
 
