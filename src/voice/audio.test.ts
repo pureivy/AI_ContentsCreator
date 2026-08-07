@@ -35,6 +35,17 @@ describe('sanitizeForTts', () => {
       expect(sanitizeForTts('그래서 잎과 열매로 구분합니다')).toContain('그래서 잎과');
     });
   });
+
+  // "봉오리" 오독 보정(실측 2026-08-07) — ElevenLabs 가 위치 무관하게 [봉고리]로 읽음(배롱나무 개화시기
+  // 쇼츠 씬3·4 + 복합어 꽃봉오리까지 STT 재현). 하이픈 경계("봉-오리")가 발음 [봉오리]를 복원하며
+  // 재생 길이 원문 동일(실측: 띄어쓰기=어절 분리, 제로폭=된소리화, 아포스트로피=간헐 된소리).
+  describe('봉오리 → 봉-오리 (발음 경계 삽입, TTS 입력 전용)', () => {
+    it('단독·조사·복합어 전 위치 치환', () => {
+      expect(sanitizeForTts('초록 봉오리가 많으면')).toContain('봉-오리가');
+      expect(sanitizeForTts('꽃봉오리가 맺혔습니다')).toContain('꽃봉-오리가');
+      expect(sanitizeForTts('봉오리')).toBe('봉-오리');
+    });
+  });
 });
 
 describe('parseSayVoices', () => {
