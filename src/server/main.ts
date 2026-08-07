@@ -399,6 +399,7 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
       return startRun(bus, {
         topic: fullTopic, signal: abort.signal,
         agentId: opts.agent, path: opts.path, budgetUsd: opts.budgetUsd, revise: opts.revise, keyword: opts.keyword,
+        pieceId: opts.pieceId, // 제작 런 표식 — 단축경로(즉답) 분류 우회(질문형 가제 좌초 방지)
         mission: opts.mission, persona: opts.persona, personaText: opts.personaText,
       });
     })
