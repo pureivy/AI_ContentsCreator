@@ -10,6 +10,7 @@ import { scoreSeo } from './seo';
 import { renderMarkdown, renderHtml, stripEmoji } from './render';
 import { registerFormatter } from './formatter';
 import { brandContext } from '../content/brand';
+import { seasonalContext } from '../util/solarTerms';
 import type { AssetBundle, BlogDraft, FormatterInput } from './formatter';
 
 const PACK_SYSTEM =
@@ -17,6 +18,9 @@ const PACK_SYSTEM =
   '- primaryKeyword: 이 글의 핵심 타겟 키워드 1개(검색량 있을 법한 명사구).\n' +
   '- titles: 검색 노출에 유리한 제목 후보 5개. 핵심 키워드를 앞쪽에 자연스럽게, 15~40자, 클릭 유도. 과장·낚시 금지.\n' +
   '  [네이버 상위 노출 제목]이 주어지면 실제 상위 글들의 제목 패턴(구체 수치·대상·상황 명시)을 참고하되 그대로 베끼지 마라.\n' +
+  // 절기 병기(2026-08-07 사용자 승인) — 실측상 절기 합성 키워드는 월 10미만이라 SEO 타겟은 불가하지만,
+  // 제목 병기는 검색결과에서 "지금 안 하면 늦는다" 시의성 훅(CTR)이 된다. 키워드 대체 금지·선택 적용.
+  '  [오늘·절기]가 주어지고 주제가 현재·다가오는 절기와 시기적으로 맞물리면, 제목 후보 1~2개에 절기명을 자연스럽게 병기하라(예: "…, 처서 전에 끝내야 하는 이유"). 핵심 키워드 표기를 절기로 대체하지 말고, 시기가 안 맞으면 넣지 마라.\n' +
   '- meta: 100~200자 요약(검색 스니펫용). 핵심 키워드 포함, 글의 이득을 한 문장으로.\n' +
   '- tags: 5~10개(핵심·연관 키워드, # 없이). 띄어쓰기 없이 붙여쓴다("카페창업" O, "카페 창업" X). 본문과 무관한 태그 금지.\n' +
   '- images: 본문 흐름에 맞는 이미지 3개 슬롯. alt(대체텍스트)와 prompt(이미지 생성 프롬프트, 한국어).\n' +
@@ -37,7 +41,7 @@ export async function packageNaverBlog(input: FormatterInput): Promise<AssetBund
   try {
     meta = await microJSON(
       model, PACK_SYSTEM,
-      `[주제] ${topic}\n\n[본문]\n${body.slice(0, 6000)}\n` +
+      `[주제] ${topic}\n\n[오늘·절기] ${seasonalContext()}\n\n[본문]\n${body.slice(0, 6000)}\n` +
       // SEO 포장도 microJSON 직행 — 브랜드 설정 시 태그·메타에 브랜드 연관 키워드가 자연스럽게 실리게.
       (brandContext() ? `\n${brandContext()}\n` : '') +
       (pinnedKeyword ? `\n[핵심 키워드(고정)] ${pinnedKeyword} — primaryKeyword 는 정확히 이 값으로 쓰고, titles 5개 중 4개 이상과 meta 에 이 표기를 그대로 포함하라.\n` : '') +
