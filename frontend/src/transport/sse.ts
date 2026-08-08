@@ -89,7 +89,12 @@ export async function startRun(
     }),
   });
   if (!res.ok) throw new Error(`failed to create run: ${res.status}`);
-  const { run_id } = await res.json();
+  const j = await res.json();
+  // 서버가 런 대신 다른 동작으로 라우팅한 응답(예: "오토런 실행해줘" → 자율 틱, autorun_tick) —
+  // run_id 없이 watchRun 으로 들어가면 이벤트가 영영 오지 않아 "작업 준비중"에 갇힌다(실측 2026-08-09).
+  // note 를 담아 던지면 호출부의 기존 catch 가 안내를 띄우고 대기 상태를 풀어준다.
+  if (!j.run_id) throw new Error(j.note || j.error || "런이 시작되지 않았습니다");
+  const { run_id } = j;
   onRunId(run_id);
   return watchRun(run_id, onEvent, getLastSeq);
 }
