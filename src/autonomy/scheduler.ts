@@ -26,8 +26,10 @@ export interface AutoCycleDeps<T = string> {
   isBusy: () => boolean;
   /** 오토런 스위치(사용자 토글) — false 면 틱이 조용히 아무 일도 하지 않는다(타이머는 유지). 미지정 = 항상 온. */
   isEnabled?: () => boolean;
-  /** 이번 틱에 처리할 작업(재개 대상 piece 또는 새 아이디어). null 이면 띄우지 않음. */
-  pickWork: (signal?: AbortSignal) => Promise<T | null>;
+  /** 이번 틱에 처리할 작업(재개 대상 piece 또는 새 아이디어). null 이면 띄우지 않음.
+   *  force=true 는 사용자가 직접 실행한 틱(runNow) — 케이던스 간격을 기다리지 않고 즉시 생산한다
+   *  (사용자 결정 2026-08-09). 타이머 자동 틱은 force 없음(무인 도배 방지 유지). */
+  pickWork: (signal?: AbortSignal, force?: boolean) => Promise<T | null>;
   /** 선택된 작업으로 자율 런을 띄운다(main.ts 의 launchRun 으로 위임). */
   launch: (work: T) => void;
   /** 로그 표기용 — 작업을 한 줄로 요약. */
@@ -42,12 +44,12 @@ export type AutoCycleControl = (() => void) & { runNow: () => Promise<void> };
 export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): AutoCycleControl {
   let ticking = false; // 재진입 가드 — pickWork(LLM)이 주기보다 길어도 틱이 겹쳐 다중 자율런이 뜨지 않게.
   // 핵심 1틱 — isEnabled 게이트 제외(타이머 틱과 수동 실행이 공유). isBusy·재진입은 항상 적용.
-  const core = async (): Promise<void> => {
+  const core = async (force = false): Promise<void> => {
     if (ticking) return;
     ticking = true;
     try {
       if (deps.isBusy()) { deps.log?.('사용자 런 진행 중 — 자율 사이클 건너뜀'); return; }
-      const work = await deps.pickWork();
+      const work = await deps.pickWork(undefined, force);
       // 제안 도중 사용자 런이 도착했을 수 있으니 launch 직전 재확인(유휴 게이트 비원자성 완화).
       if (deps.isBusy()) { deps.log?.('제안 도중 사용자 런 도착 — 자율 사이클 보류'); return; }
       if (work != null) { deps.log?.(`자율 사이클 — "${deps.describe?.(work) ?? String(work)}"`); deps.launch(work); }
@@ -66,7 +68,9 @@ export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): AutoCycleCon
     : null;
   if (timer && typeof timer.unref === 'function') timer.unref(); // 프로세스 종료를 막지 않게
   const stop = (() => { if (timer) clearInterval(timer); }) as AutoCycleControl;
-  stop.runNow = core; // 수동 즉시 실행(사용자 '자율런 돌려줘') — 토글 무시, isBusy·재진입 가드 유지
+  // 수동 즉시 실행(사용자 '자율런 돌려줘') — 토글 무시, isBusy·재진입 가드 유지.
+  // force=true: 사용자 지시는 케이던스를 기다리지 않고 즉시 생산(사용자 결정 2026-08-09).
+  stop.runNow = () => core(true);
   return stop;
 }
 

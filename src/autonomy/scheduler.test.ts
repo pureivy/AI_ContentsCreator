@@ -253,3 +253,15 @@ describe('isAutorunDirective — 콘텐츠런 계열 확장', () => {
     }
   });
 });
+
+// 사용자 결정(2026-08-09): 사용자가 직접 실행한 오토런(runNow)은 케이던스를 기다리지 않고 즉시 생산한다.
+// 타이머 자동 틱은 종전대로(force 없음) — 무인 도배 방지 목적 유지.
+describe('runNow force — 수동 즉시 생산 플래그', () => {
+  it('runNow 는 pickWork 에 force=true 를 전달한다', async () => {
+    const pickWork = vi.fn(async () => null);
+    const stop = startAutoCycle({ intervalMs: 0, isBusy: () => false, pickWork, launch: vi.fn() });
+    await stop.runNow();
+    expect(pickWork).toHaveBeenCalledWith(undefined, true);
+    stop();
+  });
+});

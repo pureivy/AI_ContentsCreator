@@ -537,7 +537,7 @@ async function startHandler(c: Context): Promise<Response> {
   // 지시문 제목의 글이 검토함에 쌓이던 함정. 런 대신 자율 틱을 즉시 실행하고 안내를 반환한다(지명 런 제외).
   if (!body.agent && isAutorunDirective(topic)) {
     void stopAutoCycle.runNow();
-    return c.json({ ok: true, autorun_tick: true, note: '오토런 지시로 인식 — 콘텐츠 런 대신 자율 사이클 1틱을 실행했습니다(처리할 작업이 있으면 곧 런이 시작됩니다). 글을 쓰려던 것이면 구체적 주제를 입력해 주세요.' });
+    return c.json({ ok: true, autorun_tick: true, note: '오토런 지시로 인식 — 지금 만들 콘텐츠 1건을 자율 선정해 곧 시작합니다(사무실 탭에서 관전. 검토 대기가 가득이거나 다른 런이 진행 중이면 보류). 특정 주제로 쓰려던 것이면 그 주제를 입력해 주세요.' });
   }
 
   // 첨부(이미지·문서) — /runs/attachments 가 저장한 경로만 신뢰(디렉토리 밖 경로 거부: 경로 주입 방지).
@@ -3278,10 +3278,12 @@ const isRunLive = (runId?: string): boolean => !!runId && RUNS.get(runId)?.statu
 // 없으면 사용자가 앱을 쓸 때마다(유휴 게이트가 상시 양보) piece 가 idea 에서 고아가 되고 매 틱 새 piece 만 쌓인다.
 // 신규 아이디어 생성 케이던스/백로그 게이트(재개는 무관) — 사용자 결정(주 2~3개) 준수 + ready 홍수 방지.
 // 없으면 autoCycleMinutes 를 낮게 잡을 때 하루 수십 편이 생성돼 미발행 초안이 범람한다.
-function canGenerateNew(pieces: Piece[]): boolean {
+function canGenerateNew(pieces: Piece[], force = false): boolean {
   // 카덴스 쿼터는 자율 생산분만 계산 — 사용자 수동 생성은 오토런 쿼터에서 제외(사용자 지시).
   const autoPieces = pieces.filter((p) => p.auto);
   if (autoPieces.filter((p) => p.stage === 'ready').length >= CONFIG.contentReadyCap) return false; // 미발행 자율 초안 캡
+  // force(사용자 직접 실행 틱) — 간격을 기다리지 않고 즉시 생산(사용자 결정 2026-08-09). 캡은 유지(검토 홍수 방지).
+  if (force) return true;
   const minIntervalMs = (7 * 24 * 60 * 60 * 1000) / CONFIG.contentCadencePerWeek;                    // 주 N편 → 최소 간격
   const lastCreated = autoPieces.reduce((mx, p) => (p.createdTs > mx ? p.createdTs : mx), '');
   return !lastCreated || (Date.now() - new Date(lastCreated).getTime()) >= minIntervalMs;
@@ -3291,19 +3293,20 @@ function canGenerateNew(pieces: Piece[]): boolean {
 type AutoWork = { kind: 'piece'; piece: Piece; promiseId?: string; clusterTopicId?: string } | { kind: 'research'; title: string; brand: string }
   | { kind: 'shorts'; pieceId: string; title: string } | { kind: 'cardnews'; pieceId: string; title: string };
 
-async function pickAutoWork(signal?: AbortSignal): Promise<AutoWork | null> {
+async function pickAutoWork(signal?: AbortSignal, force = false): Promise<AutoWork | null> {
   const pieces = pieceStore().list();
   const resume = selectResumablePiece(pieces, isRunLive);
   if (resume) return { kind: 'piece', piece: resume }; // 재개는 케이던스와 무관 — 죽은 piece 회수 우선.
   // 지식 리서치 게이트 — 주기 도래 시 신규 콘텐츠보다 먼저 1건. 조사 결과(두뇌·교훈)가 이후 콘텐츠 품질을
   // 끌어올리는 컴파운딩 순서(지식 먼저, 제작 나중). 제안 실패 시 콘텐츠 흐름으로 자연 폴백.
   // 브랜드는 틱 시작 시점에 고정 — 제안 LLM 대기(수 초) 중 브랜드가 전환돼도 상태·기록이 갈리지 않게.
+  // force(사용자 직접 실행) 땐 리서치 분기 생략 — 사용자가 원한 건 '지금 콘텐츠 생산'(사용자 결정 2026-08-09).
   const tickBrand = activeBrandSlug() || '';
-  if (researchDue(CONFIG.researchCycleHours, tickBrand)) {
+  if (!force && researchDue(CONFIG.researchCycleHours, tickBrand)) {
     const title = await proposeResearchMission(signal, tickBrand);
     if (title) return { kind: 'research', title, brand: tickBrand };
   }
-  if (canGenerateNew(pieces)) {  // 케이던스/백로그 초과면 신규 블로그 보류 → 아래 파생 케이던스로 폴백.
+  if (canGenerateNew(pieces, force)) {  // 케이던스/백로그 초과면 신규 블로그 보류 → 아래 파생 케이던스로 폴백.
     // 예고 이행 우선 — 콘텐츠가 시청자에게 한 "다음 편" 약속은 신규 아이디어보다 먼저 갚는다
     // (사용자 지적 2026-07-30: 예고만 하고 안 지키면 신뢰 역효과). 시기 명시+시즌 창 안의 약속만
     // 자동 대상(무기한 선점 방지 — 리뷰 반영). 이행 piece 가 ready 되면 기존 자동 파생이
@@ -3405,7 +3408,7 @@ const stopAutoCycle = startAutoCycle<AutoWork>({
   intervalMs: CONFIG.autoCycleMinutes * 60_000,
   isEnabled: autoRunEnabled, // 사용자 토글(대시보드 '자율' 칩 클릭) — 꺼짐이면 틱이 조용히 통과
   isBusy: () => [...RUNS.values()].some((h) => h.status === 'running'), // 자율런 포함 — 동시 1런만(단일 KV 슬롯 불변식).
-  pickWork: (signal) => pickAutoWork(signal),
+  pickWork: (signal, force) => pickAutoWork(signal, force),
   launch: (w) => {
     if (w.kind === 'research') {
       // 제안 도중 브랜드가 전환됐으면 이번 틱은 건너뜀 — A 컨텍스트 조사가 B 두뇌·게이트에 섞이지 않게.
@@ -3445,7 +3448,7 @@ void stopAutoCycle; // 프로세스 생존 동안 유지(unref 타이머라 종�
 app.post('/autonomy/tick', async (c) => {
   if ([...RUNS.values()].some((h) => h.status === 'running')) return c.json({ error: '런이 진행 중입니다 — 완료 후 다시 시도하세요' }, 409);
   void stopAutoCycle.runNow(); // 비동기 기동(제안 LLM 수 초) — 즉시 응답, 진행은 사무실/기록 탭에서.
-  return c.json({ ok: true, note: '자율 사이클 1틱 실행 — 처리할 작업이 있으면 런이 시작됩니다(사무실 탭에서 관전).' });
+  return c.json({ ok: true, note: '자율 사이클 1틱 실행 — 지금 만들 콘텐츠 1건을 자율 선정해 곧 시작합니다(사무실 탭에서 관전).' });
 });
 app.post('/api/autonomy/tick', (c) => c.redirect('/autonomy/tick', 307));
 
