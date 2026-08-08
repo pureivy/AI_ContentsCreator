@@ -220,3 +220,20 @@ describe('dailyDue — 예정 시각 이후 부팅해도 그날 몫을 따라잡
     expect(dailyDue(at(9, 0), 7, 30, 'D2', 'D')).toBe(true);
   });
 });
+
+// 주제창 지시문 함정(실측 3회: "자율런 실행"·"오토런 실행해줘"×2) — 오토런 지시가 콘텐츠 런이 되어
+// 지시문 제목의 글이 검토함에 쌓였다. 지시문이면 런 대신 자율 틱으로 라우팅하기 위한 판별식.
+describe('isAutorunDirective — 오토런 지시문 판별(순수)', () => {
+  it('실측 지시문들을 잡는다', async () => {
+    const { isAutorunDirective } = await import('./scheduler');
+    for (const t of ['오토런 실행해줘', '자율런 실행', '오토런 돌려줘', '자율 사이클 시작', '오토런', '자율런 돌려']) {
+      expect(isAutorunDirective(t), t).toBe(true);
+    }
+  });
+  it('정상 주제·유사어는 통과시킨다', async () => {
+    const { isAutorunDirective } = await import('./scheduler');
+    for (const t of ['참나무 6형제 구별법, 잎 뒷면 하나로 끝내기', '자율주행 시대의 가로수', '오토런 기능을 소개하는 블로그 글 작성', '배롱나무 개화시기']) {
+      expect(isAutorunDirective(t), t).toBe(false);
+    }
+  });
+});

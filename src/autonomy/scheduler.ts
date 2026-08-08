@@ -101,6 +101,18 @@ export function setAutoRunEnabled(v: boolean): void {
   } catch { /* 영속 실패해도 런타임 토글은 유효(다음 재시작에 기본 온) */ }
 }
 
+/**
+ * 오토런 지시문 판별(순수) — 주제창에 "오토런 실행해줘" 같은 지시를 치면 콘텐츠 런이 돌아 지시문
+ * 제목의 글이 검토함에 쌓였다(실측 3회: "자율런 실행", "오토런 실행해줘"×2 — 2026-08-05·08-08).
+ * 짧고(≤15자) 오토런 지칭+실행 동사로만 이루어진 입력만 지시로 본다 — "오토런 기능을 소개하는 글"
+ * 같은 정상 주제는 길이·구성에서 걸리지 않는다. 호출부(startHandler)가 런 대신 자율 틱으로 라우팅.
+ */
+export function isAutorunDirective(topic: string): boolean {
+  const t = (topic || '').trim();
+  if (!t || t.length > 15) return false;
+  return /^(오토런|자율런|자율\s*사이클)(\s*(실행|시작|돌려|틱|가동)(해\s?줘|해라|해|줘|주세요)?)?\s*$/.test(t);
+}
+
 export interface DailyDeps {
   /** "HH:MM" 로컬 시각. 형식 불일치면 no-op. */
   time: string;

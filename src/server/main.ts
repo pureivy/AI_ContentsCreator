@@ -44,7 +44,7 @@ import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
-import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue } from '../autonomy/scheduler';
+import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore } from '../content/cardnews';
@@ -532,6 +532,13 @@ async function startHandler(c: Context): Promise<Response> {
   const body = await c.req.json<StartBody>().catch(() => ({}) as StartBody);
   const topic = (body.topic ?? '').trim();
   if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
+
+  // 오토런 지시문 라우팅(실측 3회: "자율런 실행"·"오토런 실행해줘"×2) — 지시문이 콘텐츠 런이 되어
+  // 지시문 제목의 글이 검토함에 쌓이던 함정. 런 대신 자율 틱을 즉시 실행하고 안내를 반환한다(지명 런 제외).
+  if (!body.agent && isAutorunDirective(topic)) {
+    void stopAutoCycle.runNow();
+    return c.json({ ok: true, autorun_tick: true, note: '오토런 지시로 인식 — 콘텐츠 런 대신 자율 사이클 1틱을 실행했습니다(처리할 작업이 있으면 곧 런이 시작됩니다). 글을 쓰려던 것이면 구체적 주제를 입력해 주세요.' });
+  }
 
   // 첨부(이미지·문서) — /runs/attachments 가 저장한 경로만 신뢰(디렉토리 밖 경로 거부: 경로 주입 방지).
   const safeAttachPaths = (v: unknown): string[] => (Array.isArray(v) ? v : [])
