@@ -16,9 +16,11 @@ describe('sanitizeForTts', () => {
     expect(sanitizeForTts('가'.repeat(5000), 100).length).toBeLessThanOrEqual(100);
   });
 
-  // 발화 첫머리 "잎" 오독 보정(실측 2026-08-07) — ElevenLabs 가 발화 시작의 "잎"을 로마자 ip 로
-  // 읽어 "아이피"가 됐다(쇼츠 보리수 편 씬3·씬6 STT 재현). 종성 중화로 발음이 같은 "입"으로 치환.
-  describe('발화 첫머리 잎 → 입 (발음 동일 치환, TTS 입력 전용)', () => {
+  // "잎" 오독 보정 — 1차(2026-08-07): 발화 첫머리만 좁게 치환했으나, 2차 실측(2026-08-08 참나무 쇼츠
+  // 씬1 "도토리 잎 사진"→"도토리 IP 사진")에서 **문중 단독 잎**도 확률적으로 오독됨이 드러나 전 위치로
+  // 확대. 규칙: 단어 시작(앞이 한글 아님) 잎 + {끝·비한글·자음 초성 음절} → "입"(종성 중화로 발음 동일).
+  // 연음으로 발음이 달라지는 모음 초성 결합(잎이[이피])과 복합어 속 잎(깻잎[깬닙])은 보존.
+  describe('잎 → 입 (발음 동일 치환, TTS 입력 전용)', () => {
     it('문두 "잎과"·"잎 "·단독 "잎"은 입으로', () => {
       expect(sanitizeForTts('잎과 뿌리만 보면 헷갈릴 일 없어요.')).toMatch(/^입과/);
       expect(sanitizeForTts('잎 뒷면에 은빛 비늘이 있으면')).toMatch(/^입 /);
@@ -26,13 +28,20 @@ describe('sanitizeForTts', () => {
       expect(sanitizeForTts('잎도 봅니다')).toMatch(/^입도/);
     });
 
-    it('모음 조사(잎이·잎을)는 발음이 달라지므로 치환하지 않는다 — 실측상 오독도 없음', () => {
-      expect(sanitizeForTts('잎이 나야 봄입니다.')).toMatch(/^잎이/);
-      expect(sanitizeForTts('잎을 먼저 보세요')).toMatch(/^잎을/);
+    it('문중 단독 잎도 치환한다 — 2차 실측("도토리 잎 사진"→IP) 재발 방지', () => {
+      expect(sanitizeForTts('도토리 잎 사진, 검색해도 참나무까지만 나오죠?')).toContain('도토리 입 사진');
+      expect(sanitizeForTts('그래서 잎과 열매로 구분합니다')).toContain('그래서 입과');
+      expect(sanitizeForTts('자루 있는 넷은 잎 모양으로 나뉩니다')).toContain('입 모양');
     });
 
-    it('문장 중간의 잎은 건드리지 않는다', () => {
-      expect(sanitizeForTts('그래서 잎과 열매로 구분합니다')).toContain('그래서 잎과');
+    it('모음 조사(잎이·잎을)는 발음이 달라지므로 치환하지 않는다 — 실측상 오독도 없음', () => {
+      expect(sanitizeForTts('잎이 나야 봄입니다.')).toMatch(/^잎이/);
+      expect(sanitizeForTts('도토리 잎이 넓습니다')).toContain('잎이');
+    });
+
+    it('복합어 속 잎(앞이 한글)은 보존한다 — 깻잎[깬닙] 발음 붕괴 방지', () => {
+      expect(sanitizeForTts('깻잎 요리와 갈잎 더미')).toContain('깻잎');
+      expect(sanitizeForTts('깻잎 요리와 갈잎 더미')).toContain('갈잎');
     });
   });
 
