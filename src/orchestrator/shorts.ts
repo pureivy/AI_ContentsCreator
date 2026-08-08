@@ -10,6 +10,7 @@
  */
 import fs from 'node:fs';
 import { SELLER_INQUIRY_BAN, NO_FABRICATED_EXPERIENCE } from './org';
+import { lexiconGuide } from '../content/brand';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { microJSON, runAgent, extractFirstJson } from './agent';
@@ -34,7 +35,7 @@ import { blogUrlForPiece } from '../content/pieces';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
-import { normalizeSceneKind } from '../tools/shortsCommon';
+import { normalizeSceneKind, fixMonthNames } from '../tools/shortsCommon';
 import type { EventBus } from '../events/bus';
 
 const RUNNING = new Set<string>();
@@ -68,22 +69,22 @@ async function callRoleJSON<T>(
   if (io.bus && role) {
     const out = await runAgent({
       bus: io.bus, role, model: stdModel(),
-      task: `${task}\n\n${NO_FABRICATED_EXPERIENCE}\n\n${SELLER_INQUIRY_BAN}\n\n다른 텍스트 없이 JSON만 출력하라.`,
+      task: `${task}\n\n${NO_FABRICATED_EXPERIENCE}\n\n${SELLER_INQUIRY_BAN}\n\n${lexiconGuide(getBrand()?.avoidJargon)}\n\n다른 텍스트 없이 JSON만 출력하라.`,
       stage: 'work', emitSpawn, maxOutputTokens, signal: io.signal,
     });
     return extractFirstJson<T>(out.text);
   }
   // microJSON 폴백은 buildSystemPrompt 를 안 지나므로 브랜드 컨텍스트를 system 에 직접 합성.
-  const sys = [role?.systemPrompt || fallbackSystem, brandContext(), NO_FABRICATED_EXPERIENCE, SELLER_INQUIRY_BAN].filter(Boolean).join('\n\n');
+  const sys = [role?.systemPrompt || fallbackSystem, brandContext(), NO_FABRICATED_EXPERIENCE, SELLER_INQUIRY_BAN, lexiconGuide(getBrand()?.avoidJargon)].filter(Boolean).join('\n\n');
   return microJSON<T>(stdModel(), sys, task, { maxOutputTokens, signal: io.signal });
 }
 
-/** 내레이션 위생 — 이모지·괄호 지문 제거(TTS 가 읽어버림), 길이 캡. */
+/** 내레이션 위생 — 이모지·괄호 지문 제거(TTS 가 읽어버림), 월 이름 고유어 교정(십월→시월), 길이 캡. */
 function cleanNarration(s: unknown, cap = 120): string {
-  return stripEmoji(String(s ?? ''))
+  return fixMonthNames(stripEmoji(String(s ?? ''))
     .replace(/[()（）[\]]/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim().slice(0, cap);
+    .trim()).slice(0, cap);
 }
 
 function normalizeHashtags(v: unknown): string[] {
@@ -105,10 +106,10 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     '',
     `씬 ${n}개의 유튜브 숏폼 대본을 기획하라. 씬1=훅(3패턴 중 택1), 씬2=전제(이 영상이 무엇에 대한 이야기이고 왜 문제/중요한지를 못박는다 — 원문의 핵심 인과 한 줄), 마지막 씬=CTA.`,
     '시청자는 원문 블로그를 본 적이 없다 — 영상 단독으로 완결되게 써라: 핵심 주제어(식물명·행위명 등)를 훅 또는 씬2에서 반드시 명시하고, 지시어·축약어("짝"·"그 방법"·"두 그루" 류)는 앞 씬에서 뜻을 세운 뒤에만 사용하라.',
-    keyword ? `대표 제목(title)과 정보형 제목 후보에는 핵심 키워드 '${keyword}' 를 정확히 이 표기 그대로, 가급적 앞쪽에 포함하라(검색 노출용 — 제한된 글자수를 이유로 키워드를 빼지 마라).` : '',
+    keyword ? `대표 제목(title)과 정보형 제목 후보에는 핵심 키워드 '${keyword}' 를 정확히 이 표기 그대로, 가급적 앞쪽에 포함하라(검색 노출용 — 제한된 글자수를 이유로 키워드를 빼지 마라). 키워드는 명사구 그대로 자연스럽게 결합하고 어미를 붙여 동사화하지 마라.` : '',
     'CTA 씬은 팔로우할 이유를 담아라 — 이 채널이 계속 주는 가치 한 구절(브랜드 맥락에 맞게) 또는 다음 편 예고 중 하나. "구독과 좋아요 부탁드려요" 같은 기계적 문구 금지.',
     '다음 편 예고를 CTA 에 넣었으면 JSON 의 next 필드에 그 주제와 적절한 시기("N월")를 선언하라 — 예고는 시스템이 약속으로 기록해 그 시기에 실제로 제작한다. 지킬 수 있는 예고만 하고, 예고를 안 했으면 next 를 생략하라.',
-    '내레이션은 TTS 낭독용: 구어체 존댓말, 숫자는 한글로("30%"→"삼십 퍼센트"), 이모지·괄호 지문 금지.',
+    '내레이션은 TTS 낭독용: 구어체 존댓말, 숫자는 한글로("30%"→"삼십 퍼센트") — 단 월 이름은 고유어로("10월"→"시월", "6월"→"유월"). 이모지·괄호 지문 금지.',
     '본문 씬 내레이션은 반드시 2문장(합쳐서 40~65자, 낭독 6~9초) — 방법 한 문장 + 이유/효과 한 문장. 씬2(전제)는 45~70자까지 허용. 훅·CTA 씬은 1~2문장(20~40자). 총 낭독 시간 30~55초를 맞춘다.',
     'screenText 는 씬당 1줄 15자 이내 키워드 요약(비워도 됨).',
     '씬 kind(선택): 씬1="hook", 마지막 씬="cta". 본문 씬 중 어울리는 곳에만 "stat"(핵심 수치 1개: value 숫자·unit 단위·label 15자)·"list"(items 2~4개, 각 18자)·"quote"(text 40자, source 출처) — 억지 배정 금지, 애매하면 kind 생략.',

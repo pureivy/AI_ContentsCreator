@@ -79,6 +79,12 @@ export function sceneDurationSec(audioDurSec: number): number {
 }
 export function sceneFrames(durSec: number): number { return Math.round(durSec * FPS); }
 
+/** 월 이름 고유어 교정(순수) — TTS 숫자 한글화 지시가 '10월'을 '십월'로 만들던 실측(2026-08-08 어휘 감사)
+ *  대응. 시월·유월은 불규칙이라 프롬프트에 안 맡기고 결정적으로 치환한다. 낭독·자막 공용. */
+export function fixMonthNames(s: string): string {
+  return (s ?? '').replace(/십월/g, '시월').replace(/육월/g, '유월');
+}
+
 export function fmtSrtTime(sec: number): string {
   const ms = Math.round(sec * 1000);
   const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);

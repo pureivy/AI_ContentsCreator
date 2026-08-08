@@ -51,6 +51,9 @@ export interface BrandProfile {
    * 미설정이면 필터 없음(종전 동작) — 정체성을 바꾼 적 없는 브랜드는 영향받지 않는다.
    */
   perfEraSince?: string;
+  /** 어휘 함정 목록(2026-08-08 어휘 감사) — 일반 독자가 다른 뜻으로 먼저 읽거나 모르는 업종 한자어와
+   *  그 대체 표현. 작가·기획자·패키저 지침(lexiconGuide)과 어휘 린트가 공용. 업종어라 브랜드별로 둔다. */
+  avoidJargon?: Array<{ term: string; use: string }>;
   /** 채널 설명(예: 네이버 블로그 — 제품 활용 하우투·후기 중심). */
   channel?: string;
   /** 카드뉴스 기본 이미지 스타일 프리셋(브랜드 고정, 2026-07-22) — 수동·검토탭·자동 파생 전부 적용.
@@ -206,9 +209,49 @@ export function normalizeBrand(raw: Partial<BrandProfile> | null | undefined): B
     // YYYY-MM-DD 만 받는다 — 형식이 틀리면 조용히 전체를 거르거나 전혀 안 거르는 사고가 나므로 무시한다.
     perfEraSince: /^\d{4}-\d{2}-\d{2}$/.test(String(raw?.perfEraSince ?? '').trim())
       ? String(raw?.perfEraSince).trim() : undefined,
+    avoidJargon: (Array.isArray(raw?.avoidJargon) ? raw.avoidJargon as unknown[] : [])
+      .map((x) => ({ term: s((x as { term?: unknown })?.term, 20) ?? '', use: s((x as { use?: unknown })?.use, 40) ?? '' }))
+      .filter((x) => x.term && x.use)
+      .slice(0, 30),
     channel: s(raw?.channel, 200),
     cardStyle: s(raw?.cardStyle, 40),
   };
+}
+
+/**
+ * 어휘 가드(2026-08-08 어휘 감사) — 코퍼스 34편 감사에서 확정된 29건의 원인 대응. 블로그 작가·
+ * 카드/쇼츠 기획자·제목 패키저 공용(org.ts 가드들과 달리 output 도 쓰므로 순환 없는 여기에 둔다).
+ * avoid(브랜드 avoidJargon)는 업종 함정어 목록 — 미설정이면 일반 원칙만.
+ */
+export function lexiconGuide(avoid?: Array<{ term: string; use: string }> | null): string {
+  return '[어휘 — 일반 독자 눈높이] '
+    + '① 일반 독자가 모르는 압축 한자어는 쉬운 말로 풀어 쓴다. 특히 다른 뜻으로 먼저 읽히는 말 금지'
+    + '(실측 유출: 방조→범죄로, 시비→싸움으로, 동해→바다로 먼저 읽힌다). '
+    + '② 사전에 없는 조어·억지 명사화 금지(실측: "무개화", "첫 식재자들", "네 가지 쉬움"). '
+    + '③ 핵심 키워드는 명사구 그대로 자연스럽게 넣는다 — 키워드에 어미를 붙여 동사화하지 마라("묘목선별하면" 식 금지). '
+    + '④ 요약·마무리에서 서로 무관한 두 내용을 "-고"로 잇지 마라(지시문+설명문 접합 비문 실측). '
+    + '조사 결합이 다른 말로 읽히면 어순을 바꿔라("뿌리혹은"→"혹은"으로 오독).'
+    + (avoid?.length ? `\n다음 말은 본문·제목·카피 어디에도 쓰지 말고 화살표 오른쪽처럼 풀어 쓴다: ${avoid.map((a) => `${a.term}→${a.use}`).join(', ')}` : '');
+}
+
+/**
+ * 어휘 린트(순수, 2차 방어) — 본문·제목에 남은 함정어(avoidJargon)를 찾는다. 프롬프트 예방(lexiconGuide)이
+ * 뚫렸을 때 SEO 리비전 피드백에 교정 항목을 동봉하는 용도(호출부 seoReviseFeedback).
+ * 매칭: 함정어 바로 앞이 한글이면 다른 단어의 일부로 본다(실측 함정: '감동해'의 '동해') — 뒤는 허용
+ * (조사 결합 '동해가'·복합어 '방조망'도 같은 함정어 계열이라 함께 잡는 게 맞다).
+ */
+export function lintLexicon(
+  text: string, avoid?: Array<{ term: string; use: string }> | null,
+): Array<{ term: string; use: string }> {
+  if (!avoid?.length || !text) return [];
+  return avoid.filter(({ term }) => {
+    if (!term) return false;
+    for (let i = text.indexOf(term); i !== -1; i = text.indexOf(term, i + 1)) {
+      const prev = i > 0 ? text[i - 1]! : '';
+      if (!/[가-힣]/.test(prev)) return true; // 단어 시작 위치의 등장만 함정어로 판정
+    }
+    return false;
+  });
 }
 
 /**

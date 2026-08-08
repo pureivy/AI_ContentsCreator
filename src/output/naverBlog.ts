@@ -9,14 +9,14 @@ import { seedKeyword } from '../grounding/naver_common';
 import { scoreSeo } from './seo';
 import { renderMarkdown, renderHtml, stripEmoji } from './render';
 import { registerFormatter } from './formatter';
-import { brandContext } from '../content/brand';
+import { brandContext, getBrand, lexiconGuide } from '../content/brand';
 import { seasonalContext } from '../util/solarTerms';
 import type { AssetBundle, BlogDraft, FormatterInput } from './formatter';
 
 const PACK_SYSTEM =
   '너는 네이버 블로그 SEO 편집자다. 주어진 블로그 본문을 바탕으로 발행용 메타데이터를 만든다.\n' +
   '- primaryKeyword: 이 글의 핵심 타겟 키워드 1개(검색량 있을 법한 명사구).\n' +
-  '- titles: 검색 노출에 유리한 제목 후보 5개. 핵심 키워드를 앞쪽에 자연스럽게, 15~40자, 클릭 유도. 과장·낚시 금지.\n' +
+  '- titles: 검색 노출에 유리한 제목 후보 5개. 핵심 키워드를 앞쪽에 자연스럽게, 15~40자, 클릭 유도. 과장·낚시 금지. 사전에 없는 조어를 만들지 마라(실측 유출: "첫 식재자들" — "처음 심는 분들"처럼 일상어로).\n' +
   '  [네이버 상위 노출 제목]이 주어지면 실제 상위 글들의 제목 패턴(구체 수치·대상·상황 명시)을 참고하되 그대로 베끼지 마라.\n' +
   // 절기 병기(2026-08-07 사용자 승인) — 실측상 절기 합성 키워드는 월 10미만이라 SEO 타겟은 불가하지만,
   // 제목 병기는 검색결과에서 "지금 안 하면 늦는다" 시의성 훅(CTR)이 된다. 키워드 대체 금지·선택 적용.
@@ -44,6 +44,7 @@ export async function packageNaverBlog(input: FormatterInput): Promise<AssetBund
       `[주제] ${topic}\n\n[오늘·절기] ${seasonalContext()}\n\n[본문]\n${body.slice(0, 6000)}\n` +
       // SEO 포장도 microJSON 직행 — 브랜드 설정 시 태그·메타에 브랜드 연관 키워드가 자연스럽게 실리게.
       (brandContext() ? `\n${brandContext()}\n` : '') +
+      `\n${lexiconGuide(getBrand()?.avoidJargon)}\n` + // 어휘 가드(2026-08-08) — 제목·메타·태그의 함정어·조어 방지
       (pinnedKeyword ? `\n[핵심 키워드(고정)] ${pinnedKeyword} — primaryKeyword 는 정확히 이 값으로 쓰고, titles 5개 중 4개 이상과 meta 에 이 표기를 그대로 포함하라.\n` : '') +
       (serpText ? `\n[네이버 상위 노출 제목(실측)]\n${serpText.slice(0, 800)}\n` : '') +
       `${researchBrief ? `\n[리서치·SEO 브리프]\n${researchBrief.slice(0, 1500)}` : ''}\n\n` +

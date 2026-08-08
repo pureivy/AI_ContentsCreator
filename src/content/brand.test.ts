@@ -120,3 +120,35 @@ describe('브랜드 소재 범위 게이트(2026-07-31 정체성 각인) — ban
     expect(offBrandTerm('배추 이야기', nb)).toBeNull();
   });
 });
+
+// 어휘 가드(2026-08-08 어휘 감사) — avoidJargon 파싱 + 린트(2차 방어).
+describe('avoidJargon 파싱 + lintLexicon', () => {
+  it('avoidJargon — {term,use} 배열 파싱, 불완전 항목 제외', async () => {
+    const { normalizeBrand } = await import('./brand');
+    const nb = normalizeBrand({ name: 'x', avoidJargon: [
+      { term: '방조', use: '새 그물 씌우기' },
+      { term: '', use: '무효' },
+      { term: '무효만' },
+    ] } as never)!;
+    expect(nb.avoidJargon).toEqual([{ term: '방조', use: '새 그물 씌우기' }]);
+  });
+
+  it('lintLexicon — 본문에 든 함정어를 찾는다(복합어 후행 결합 포함)', async () => {
+    const { lintLexicon } = await import('./brand');
+    const avoid = [{ term: '방조', use: '새 그물 씌우기' }, { term: '해토', use: '땅이 풀린 뒤' }];
+    const hits = lintLexicon('지지와 방조망이 필수입니다. 봄은 해토 직후가 좋습니다.', avoid);
+    expect(hits.map((h) => h.term)).toEqual(['방조', '해토']);
+  });
+
+  it('lintLexicon — 한글이 앞에 붙은 다른 단어는 오탐하지 않는다(감동해→동해 X)', async () => {
+    const { lintLexicon } = await import('./brand');
+    const avoid = [{ term: '동해', use: '겨울 추위 피해' }];
+    expect(lintLexicon('그 장면에 감동해서 오래 봤습니다', avoid)).toEqual([]);
+    expect(lintLexicon('겨울 동해 피해가 큽니다', avoid).map((h) => h.term)).toEqual(['동해']);
+  });
+
+  it('lintLexicon — 목록 없으면 빈 배열', async () => {
+    const { lintLexicon } = await import('./brand');
+    expect(lintLexicon('아무 본문', undefined)).toEqual([]);
+  });
+});

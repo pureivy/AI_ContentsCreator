@@ -57,7 +57,7 @@ import { ensureShortsThumbnail, ensureShortsDownload, extractFirstFrame } from '
 import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece, blogUrlForPiece } from '../content/pieces';
 import { listPersonas } from '../content/personas';
-import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeBrandSlug, deleteBrand, isSafeBrandSlug, offBrandTerm } from '../content/brand';
+import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeBrandSlug, deleteBrand, isSafeBrandSlug, offBrandTerm, lintLexicon } from '../content/brand';
 import type { BrandProfile } from '../content/brand';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
@@ -2003,13 +2003,21 @@ function seoReviseFeedback(runId: string, keyword?: string): string | null {
   try {
     const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, runId, 'draft.json'), 'utf-8')) as {
       seo?: { checklist?: Array<{ label: string; ok: boolean; note?: string }> };
+      bodyMarkdown?: string; titleCandidates?: string[];
     };
     const fails = (d.seo?.checklist ?? []).filter((c) => !c.ok);
-    if (!fails.length) return null;
+    // 어휘 린트(2026-08-08, 2차 방어) — 프롬프트 예방이 뚫린 함정어를 리비전에 동봉해 함께 교정.
+    // 새 리비전 트리거는 만들지 않는다(비용 불변): SEO 미달로 리비전이 돌 때만 얹고, 아니면 로그만.
+    const jargon = lintLexicon(`${d.bodyMarkdown ?? ''}\n${(d.titleCandidates ?? []).join('\n')}`, getBrand()?.avoidJargon);
+    if (!fails.length) {
+      if (jargon.length) console.log(`[어휘 린트] 함정어 잔존(리비전 미발동 — SEO 통과): ${jargon.map((j) => j.term).join(', ')} — ${runId}`);
+      return null;
+    }
     return [
       'SEO 점검에서 아래 항목이 미달했다. 본문의 구조·어조·분량은 유지하면서 미달 항목만 보완하라.',
       ...fails.map((c) => `- ${c.label}${c.note ? ` (현재: ${c.note})` : ''}`),
       ...(keyword ? [`핵심 키워드 "${keyword}" 를 첫 문단에 1회, 본문 전체에 2~4회 정확히 이 표기로 자연스럽게 포함하라.`] : []),
+      ...(jargon.length ? [`아울러 다음 말은 일반 독자가 다른 뜻으로 읽거나 모르는 표현이니 풀어 써라: ${jargon.map((j) => `${j.term}→${j.use}`).join(', ')}`] : []),
     ].join('\n');
   } catch { return null; }
 }

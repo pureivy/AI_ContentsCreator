@@ -11,6 +11,7 @@
  */
 import fs from 'node:fs';
 import { SELLER_INQUIRY_BAN, NO_FABRICATED_EXPERIENCE } from './org';
+import { lexiconGuide } from '../content/brand';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { microJSON, runAgent, extractFirstJson } from './agent';
@@ -65,13 +66,13 @@ async function callRoleJSON<T>(
   if (io.bus && role) {
     const out = await runAgent({
       bus: io.bus, role, model: stdModel(),
-      task: `${task}\n\n${NO_FABRICATED_EXPERIENCE}\n\n${SELLER_INQUIRY_BAN}\n\n다른 텍스트 없이 JSON만 출력하라.`,
+      task: `${task}\n\n${NO_FABRICATED_EXPERIENCE}\n\n${SELLER_INQUIRY_BAN}\n\n${lexiconGuide(getBrand()?.avoidJargon)}\n\n다른 텍스트 없이 JSON만 출력하라.`,
       stage: 'work', emitSpawn, maxOutputTokens, signal: io.signal,
     });
     return extractFirstJson<T>(out.text);
   }
   // microJSON 폴백은 buildSystemPrompt 를 안 지나므로 브랜드 컨텍스트를 system 에 직접 합성.
-  const sys = [role?.systemPrompt || fallbackSystem, brandContext(), NO_FABRICATED_EXPERIENCE, SELLER_INQUIRY_BAN].filter(Boolean).join('\n\n');
+  const sys = [role?.systemPrompt || fallbackSystem, brandContext(), NO_FABRICATED_EXPERIENCE, SELLER_INQUIRY_BAN, lexiconGuide(getBrand()?.avoidJargon)].filter(Boolean).join('\n\n');
   return microJSON<T>(stdModel(), sys, task, { maxOutputTokens, signal: io.signal });
 }
 
@@ -175,7 +176,7 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     '',
     // 키워드가 있으면 '주제어' 수준이 아니라 정확 표기를 요구(2026-07-31 — 훅 자유는 유지: headline 또는 body 택일 허용).
     keyword
-      ? `독자는 원문 블로그를 본 적이 없다 — 카드 단독으로 완결되게 써라: 표지(headline 또는 body)에 핵심 키워드 '${keyword}' 를 정확히 이 표기 그대로 반드시 포함하고(훅과 병행 — 훅을 위해 키워드를 빼지 말 것), 각 장은 앞 장과 표지만으로 무슨 대상 이야기인지 읽히게 하라.`
+      ? `독자는 원문 블로그를 본 적이 없다 — 카드 단독으로 완결되게 써라: 표지(headline 또는 body)에 핵심 키워드 '${keyword}' 를 정확히 이 표기 그대로 반드시 포함하고(훅과 병행 — 훅을 위해 키워드를 빼지 말 것), 각 장은 앞 장과 표지만으로 무슨 대상 이야기인지 읽히게 하라. 키워드는 명사구 그대로 문장과 자연스럽게 결합하라 — 키워드에 어미를 붙여 동사화하지 마라("묘목선별하면" 식 금지, 실측 유출).`
       : '독자는 원문 블로그를 본 적이 없다 — 카드 단독으로 완결되게 써라: 표지(headline 또는 body)에 핵심 주제어(식물명·행위명 등)를 반드시 명시하고(훅과 병행 — 훅을 위해 주제어를 빼지 말 것), 각 장은 앞 장과 표지만으로 무슨 대상 이야기인지 읽히게 하라.',
     n
       ? `슬라이드 ${n}장(표지 1 + 본문 ${Math.max(1, n - 2)} + 마무리 1)의 카드뉴스를 기획하라.`

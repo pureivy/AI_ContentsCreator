@@ -100,3 +100,16 @@ describe('normalizeSceneKind — stat 자릿수 상한', () => {
       .toEqual({ kind: 'stat', stat: { value: 999_999_999_999 } });
   });
 });
+
+// TTS 숫자 한글화 지시("숫자는 한글로")가 '10월'을 '십월'로 만들던 실측(2026-08-08 어휘 감사, 쇼츠 낭독 유출).
+// 월 이름은 고유어 불규칙(시월·유월)이라 결정적으로 교정한다 — 낭독·자막 공용.
+describe('fixMonthNames — 월 이름 고유어 교정', () => {
+  it('십월→시월, 육월→유월', async () => {
+    const { fixMonthNames } = await import('./shortsCommon');
+    expect(fixMonthNames('십월에 심고 육월에 확인합니다')).toBe('시월에 심고 유월에 확인합니다');
+  });
+  it('그 외 월 이름·본문은 불변', async () => {
+    const { fixMonthNames } = await import('./shortsCommon');
+    expect(fixMonthNames('칠월과 팔월, 구월까지')).toBe('칠월과 팔월, 구월까지');
+  });
+});
