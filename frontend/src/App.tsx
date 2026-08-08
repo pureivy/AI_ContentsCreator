@@ -802,7 +802,7 @@ export default function App() {
           clearTopicAttachments();
           setResearchMode(false); // 토글은 제출 1회성 — 지명 런으로 소진돼도 다음 일반 주제가 몰래 리서치가 되지 않게
         } catch (e) {
-          window.alert(`런 시작 실패: ${(e as Error).message}`);
+          window.alert((e as Error & { routed?: boolean }).routed ? (e as Error).message : `런 시작 실패: ${(e as Error).message}`);
           clearToIdle();
         }
       } else if (currentStatus === "running" && useStore.getState().runId) {
@@ -825,7 +825,7 @@ export default function App() {
           clearTopicAttachments();
           setResearchMode(false);
         } catch (e) {
-          window.alert(`런 시작 실패: ${(e as Error).message}`);
+          window.alert((e as Error & { routed?: boolean }).routed ? (e as Error).message : `런 시작 실패: ${(e as Error).message}`);
           clearToIdle();
         }
       }

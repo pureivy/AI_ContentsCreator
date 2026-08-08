@@ -93,7 +93,13 @@ export async function startRun(
   // 서버가 런 대신 다른 동작으로 라우팅한 응답(예: "오토런 실행해줘" → 자율 틱, autorun_tick) —
   // run_id 없이 watchRun 으로 들어가면 이벤트가 영영 오지 않아 "작업 준비중"에 갇힌다(실측 2026-08-09).
   // note 를 담아 던지면 호출부의 기존 catch 가 안내를 띄우고 대기 상태를 풀어준다.
-  if (!j.run_id) throw new Error(j.note || j.error || "런이 시작되지 않았습니다");
+  // routed 표식: 실패가 아닌 의도된 라우팅 — 호출부가 "런 시작 실패:" 접두어를 붙이지 않게(실측:
+  // "실패했다면서 실행했다"는 모순 문구가 사용자 혼란을 불렀다).
+  if (!j.run_id) {
+    const err = new Error(j.note || j.error || "런이 시작되지 않았습니다") as Error & { routed?: boolean };
+    if (j.autorun_tick) err.routed = true;
+    throw err;
+  }
   const { run_id } = j;
   onRunId(run_id);
   return watchRun(run_id, onEvent, getLastSeq);
