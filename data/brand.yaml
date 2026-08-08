@@ -10,8 +10,8 @@ description: >-
   충분히 자랍니다
 
 
-  사과나무 한 그루, 마당의 단풍 한 그루, 화분의 블루베리나무 한 그루까지. 묘목을 심고 키워 뿌리내리게 하는 법을, 좋은 묘목 고르는 요령까지 곁들여 차곡차곡
-  기록합니다.
+  사과나무 한 그루, 마당의 단풍 한 그루, 화분의 블루베리나무 한 그루까지. 묘목을 심고 키워 뿌리내리게 하는 법을, 좋은 묘목 고르는
+  요령까지 곁들여 차곡차곡 기록합니다.
 products: []
 region: 경북 경산
 banned:
@@ -35,8 +35,6 @@ seedKeywords:
   - 참나무 종류 구별
   - 겨울눈으로 나무 알아보기
   - 나무껍질로 나무 알아보기
-perfEraSince: '2026-07-31'
-cardStyle: handwritten_poster
 genreAxes:
   - 키우는 과정의 관찰·실패와 회복 기록
   - 계절별 실제 작업(심기·전정·물·거름·월동)
@@ -67,14 +65,30 @@ compoundStems:
   - 뿌리
   - 토양
   - 배수
-# 어휘 함정 목록(2026-08-08 어휘 감사 확정분) — 일반 독자가 다른 뜻으로 먼저 읽거나 모르는 한자어.
-# 작가·기획자·제목 패키저 지침과 어휘 린트가 공용. "term 대신 use 로 풀어 쓴다".
+perfEraSince: 2026-07-31
 avoidJargon:
-  - { term: 방조, use: 새 그물 씌우기 }
-  - { term: 시비, use: 비료 주기 }
-  - { term: 동해, use: 겨울 추위 피해 }
-  - { term: 가식, use: 임시로 묻어 두기 }
-  - { term: 해토, use: 땅이 풀린 뒤 }
-  - { term: 부후, use: 썩어 들어감 }
-  - { term: 결각, use: 잎 가장자리 갈라짐 }
-  - { term: 가부, use: 해도 되는지 }
+  - term: 방조
+    use: 새 그물 씌우기
+  - term: 시비
+    use: 비료 주기
+  - term: 동해
+    use: 겨울 추위 피해
+  - term: 가식
+    use: 임시로 묻어 두기
+  - term: 해토
+    use: 땅이 풀린 뒤
+  - term: 부후
+    use: 썩어 들어감
+  - term: 결각
+    use: 잎 가장자리 갈라짐
+  - term: 가부
+    use: 해도 되는지
+  - term: 갈리
+    use: 나뉘거나 달라진다
+  - term: 갈라내
+    use: 나눠 낸다
+  - term: 가른다
+    use: 나눈다
+  - term: 가릅니
+    use: 나눕니
+cardStyle: handwritten_poster
