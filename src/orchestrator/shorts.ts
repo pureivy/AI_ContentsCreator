@@ -363,8 +363,13 @@ export async function runShortsJob(
       catch (e) { say(`모션 렌더 예외 → ffmpeg 폴백: ${e instanceof Error ? e.message.slice(0, 80) : e}`); r = null; }
     }
     if (!r || !r.ok) {
-      if (r) say('모션 렌더 실패 → ffmpeg 슬라이드쇼로 폴백');
-      r = await renderShortsVideo(dir, plan.scenes, images, { signal: opts.signal });
+      // 실패 사유 동봉(2026-08-08) — 종전엔 r.issues 를 버려 "왜 폴백했나"를 사후 추적할 수 없었다(관측 공백).
+      if (r) say(`모션 렌더 실패 → ffmpeg 슬라이드쇼로 폴백${r.issues.length ? ` (${r.issues.join(' · ').slice(0, 140)})` : ''}`);
+      // 폴백에도 상단 제목 전달 — Remotion 실패 시 제목이 통째로 사라지던 실측(참나무 쇼츠) 봉합.
+      r = await renderShortsVideo(dir, plan.scenes, images, {
+        signal: opts.signal,
+        ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
+      });
     }
     if (!r.ok || !r.videoPath) throw new Error(`조립 실패 — ${r.issues.join(' · ').slice(0, 250)}`);
     const fallbacks = r.issues.filter((x) => x.includes('배경 폴백')).length;

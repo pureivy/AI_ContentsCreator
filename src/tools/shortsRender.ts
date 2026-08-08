@@ -103,9 +103,25 @@ export async function ensureShortsDownload(dir: string, signal?: AbortSignal): P
  * 개별 씬 실패는 이슈로 기록하고 해당 씬을 단색 배경·무음으로라도 완성(전체 실패 방지).
  */
 
+/**
+ * 폴백 제목 오버레이 필터(순수) — Remotion 실패 시 상단 제목이 통째로 사라지던 실측(2026-08-08 참나무
+ * 쇼츠) 대응. Remotion TitleOverlay 와 동일 기하: 폭 widthPct%·높이 상한 26%(contain)·상단 topPct%·
+ * 상단 중앙 정렬. drop-shadow 는 폴백에선 생략(비상 경로 절충 — 캘리 자체 윤곽으로 시인).
+ */
+export function titleOverlayFilter(widthPct: number, topPct: number): string {
+  const w = Math.floor(W * (widthPct / 100));
+  const h = Math.floor(H * 0.26);
+  const y = Math.floor(H * (topPct / 100));
+  return `[1:v]scale=w=${w}:h=${h}:force_original_aspect_ratio=decrease[t];[0:v][t]overlay=x=(W-w)/2:y=${y}`;
+}
+
 export async function renderShortsVideo(
   dir: string, scenes: ShortsScene[], images: Array<string | null>,
-  opts: { voice?: string; instructions?: string; signal?: AbortSignal } = {},
+  opts: {
+    voice?: string; instructions?: string; signal?: AbortSignal;
+    /** 상단 제목 캘리(투명 PNG) — Remotion 경로와 동일 형태. 폴백에서도 제목이 사라지지 않게(2026-08-08). */
+    title?: { imagePath: string; topPct?: number; widthPct?: number };
+  } = {},
 ): Promise<ShortsRenderResult> {
   const issues: string[] = [];
   if (!CONFIG.blogPython || !fs.existsSync(CONFIG.blogPython)) {
@@ -182,6 +198,24 @@ export async function renderShortsVideo(
   fs.writeFileSync(listPath, segFiles.map((f) => `file '${f}'`).join('\n'), 'utf-8');
   const videoPath = path.join(dir, 'final.mp4');
   await ff(['-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', videoPath], 60_000, opts.signal);
+
+  // 상단 제목 오버레이(1패스 재인코딩) — Remotion 실패 폴백에서도 제목이 사라지지 않게(실측 2026-08-08).
+  // 실패는 무해(이슈 기록 후 무제목 영상 유지 — 종전 동작).
+  if (opts.title?.imagePath && fs.existsSync(opts.title.imagePath)) {
+    try {
+      const titled = path.join(segDir, 'final-titled.mp4');
+      await ff([
+        '-i', videoPath, '-i', opts.title.imagePath,
+        '-filter_complex', titleOverlayFilter(opts.title.widthPct ?? 74, opts.title.topPct ?? 5),
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
+        '-c:a', 'copy',
+        titled,
+      ], 180_000, opts.signal);
+      fs.renameSync(titled, videoPath);
+    } catch (e) {
+      issues.push(`제목 오버레이 실패(무제목 유지): ${e instanceof Error ? e.message.slice(0, 80) : e}`);
+    }
+  }
   const srtPath = path.join(dir, 'subtitles.srt');
   fs.writeFileSync(srtPath, srtLines.join('\n'), 'utf-8');
 

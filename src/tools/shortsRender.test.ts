@@ -19,3 +19,16 @@ describe('ensureShortsThumbnail', () => {
     expect(await ensureShortsThumbnail('/d')).toBe('/d/thumbnail.jpg');
   });
 });
+
+// 폴백 렌더러 제목 합성(2026-08-08) — Remotion 실패 시 상단 제목이 통째로 사라지던 실측(참나무 쇼츠)
+// 대응. Remotion TitleOverlay 와 동일 기하(폭 %·높이 상한 26%·상단 %·상단 정렬)를 ffmpeg 필터로.
+describe('titleOverlayFilter — 폴백 제목 오버레이 필터(순수)', () => {
+  it('기본 기하(폭 74%·상단 5%)를 담은 filter_complex 문자열', async () => {
+    const { titleOverlayFilter } = await import('./shortsRender');
+    const f = titleOverlayFilter(74, 5);
+    expect(f).toContain('force_original_aspect_ratio=decrease'); // contain
+    expect(f).toContain('scale=w=799');   // 1080*0.74 내림
+    expect(f).toContain('h=499');         // 1920*0.26 내림
+    expect(f).toContain('overlay=x=(W-w)/2:y=96'); // 1920*0.05
+  });
+});
