@@ -26,6 +26,7 @@ import { seedKeyword } from '../grounding/naver_common';
 import { getRunSettings } from '../runsettings';
 import { brandContext, activeBrandSlug, getBrand, lexiconGuide } from '../content/brand';
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid } from '../content/priorCoverage';
+import { collectExistingContent } from '../content/novelty';
 import type { RunOptions, RunOutcome } from './run';
 
 interface TeamResult {
@@ -317,7 +318,16 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   bus.emit('phase', { team_id: '_ceo', phase: 'idle' });
   // 무거운 지침 대신 '수용 기준'만 컨텍스트로 — 작성 기준이자 마지막 CEO 검토의 준거(라우팅 실패 시 빈 값).
   const acceptance = asString(route?.acceptance).trim(); // LLM 라우팅 acceptance 가 비문자열이어도 안전(?? 만으론 throw)
-  const acceptanceBlock = acceptance ? `[최종 산출물 수용 기준]\n${acceptance}` : '';
+  // 두뇌 자기 강화 루프 차단(실측 2026-08-09): 지시문·뭉뚝한 topic 런은 리서치 팀이 두뇌(위키)·직원 기억에
+  // 그라운딩해 주제를 스스로 고르는데, 직전 런들이 적재한 소재가 다음 선택을 또 끌어당긴다(참나무 3연속 —
+  // 위키 참나무 16페이지). 진짜 자율 경로(proposeContentIdeas)의 신규성 게이트가 이 뒷문에는 없었다 —
+  // 기존 콘텐츠 목록을 전 팀 컨텍스트에 동봉해 같은 게이트를 단다. 구체 주제 런에는 '중복 확인 참고'로만 작동.
+  const existingList = opts.mission === 'research' ? [] : collectExistingContent(activeBrandSlug() || undefined).slice(0, 30);
+  const noveltyBlock = existingList.length
+    ? `[기존 콘텐츠 — 이미 만든 것들]\n${existingList.map((e) => `- (${e.kind}) ${e.title}`).join('\n')}\n`
+      + '주제가 구체적으로 주어졌다면 위 목록은 중복 확인 참고로만 써라. 주제·방향을 이 런에서 정해야 하는 상황이라면(목표가 지시어·포괄어일 때) 위와 주제·키워드가 겹치지 않는 새 영역을 골라라 — 최근 다룬 소재의 반복 금지.'
+    : '';
+  const acceptanceBlock = [acceptance ? `[최종 산출물 수용 기준]\n${acceptance}` : '', noveltyBlock].filter(Boolean).join('\n\n');
 
   // --- 팀별 실행(team_parallel 병렬) ---
   const teamResults = await mapLimit(

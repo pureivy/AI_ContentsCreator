@@ -237,3 +237,19 @@ describe('isAutorunDirective — 오토런 지시문 판별(순수)', () => {
     }
   });
 });
+
+// 5번째 변형 실측(2026-08-09 "콘텐츠 란 실행" → 참나무 자기강화 런) — 지시 명사부를 콘텐츠런 계열까지 확장.
+describe('isAutorunDirective — 콘텐츠런 계열 확장', () => {
+  it('콘텐츠 런/란 지시 변형을 잡는다', async () => {
+    const { isAutorunDirective } = await import('./scheduler');
+    for (const t of ['콘텐츠 란 실행', '콘텐츠런 실행해줘', '콘텐츠 런 돌려줘', '콘텐츠런 시작']) {
+      expect(isAutorunDirective(t), t).toBe(true);
+    }
+  });
+  it('콘텐츠 일반어·긴 주제는 통과', async () => {
+    const { isAutorunDirective } = await import('./scheduler');
+    for (const t of ['콘텐츠 전략', '콘텐츠 다양성 가드 소개', '콘텐츠 런 실행 절차를 설명하는 글', '가을 콘텐츠 준비']) {
+      expect(isAutorunDirective(t), t).toBe(false);
+    }
+  });
+});

@@ -106,11 +106,13 @@ export function setAutoRunEnabled(v: boolean): void {
  * 제목의 글이 검토함에 쌓였다(실측 3회: "자율런 실행", "오토런 실행해줘"×2 — 2026-08-05·08-08).
  * 짧고(≤15자) 오토런 지칭+실행 동사로만 이루어진 입력만 지시로 본다 — "오토런 기능을 소개하는 글"
  * 같은 정상 주제는 길이·구성에서 걸리지 않는다. 호출부(startHandler)가 런 대신 자율 틱으로 라우팅.
+ * 명사부에 콘텐츠런 계열 추가(실측 5번째 변형 2026-08-09: "콘텐츠 란 실행"이 새어 들어가 두뇌 그라운딩
+ * 주제 선정 → 참나무 자기 강화 런이 됐다). 단독 "콘텐츠"는 명사부가 아니다(런/란 접미 필수).
  */
 export function isAutorunDirective(topic: string): boolean {
   const t = (topic || '').trim();
   if (!t || t.length > 15) return false;
-  return /^(오토런|자율런|자율\s*사이클)(\s*(실행|시작|돌려|틱|가동)(해\s?줘|해라|해|줘|주세요)?)?\s*$/.test(t);
+  return /^(오토런|자율런|자율\s*사이클|콘텐츠\s*[런란])(\s*(실행|시작|돌려|틱|가동)(해\s?줘|해라|해|줘|주세요)?)?\s*$/.test(t);
 }
 
 export interface DailyDeps {
