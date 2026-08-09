@@ -15,7 +15,7 @@ import { resolveAssignment } from '../llm/setting';
 import { getCompany } from '../agents/company-loader';
 import { microJSON } from '../orchestrator/agent';
 import { asString } from '../util/str';
-import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix, offBrandTerm, getBrand } from '../content/brand';
+import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix, offBrandTerm, getBrand, lintLexicon } from '../content/brand';
 import { seasonalContext } from '../util/solarTerms';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 
@@ -306,10 +306,18 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     ? `[이미 포화된 소재 — 이번엔 이 소재어들을 피하라]\n${satTokens.length ? satTokens.join(', ') : '(아직 포화 없음 — 자유롭게)'}\n\n`
       + `[이번 글의 각도 — 아래 중 최근 자율주제와 다른 각도 하나를 골라 그 각도로 잡아라]\n${IDEA_ANGLES.join(' | ')}\n\n`
     : '';
+  // 어휘 함정어를 소스에서 차단(실측 2026-08-10: 아이디어가 keyword 를 "유실수 가을 시비"로 뽑자
+  // 하류의 키워드 정확 표기 강제가 어휘 가드를 이겨 제목·본문에 함정어가 살아남았다 — SEO 리비전조차
+  // 키워드 고정 때문에 못 뺀다. keyword 가 태어나는 여기가 유일하게 싼 차단 지점).
+  const jargonList = getBrand()?.avoidJargon ?? [];
+  const jargonLine = jargonList.length
+    ? `[제목·키워드 어휘] 다음 말은 일반 독자가 다른 뜻으로 읽거나 모른다 — title·keyword 에 쓰지 말고 화살표처럼 풀어 써라: ${jargonList.map((j) => `${j.term}→${j.use}`).join(', ')}\n\n`
+    : '';
   const baseUser =
     // 절기 시의성 신호(2026-08-07 사용자 제안) — 종전엔 "시의성·계절성 고려" 지시만 있고 오늘 날짜가
     // 없어 공회전했다. 날짜+절기 한 줄이면 두뇌가 "처서 지나면 가을 식재 준비" 같은 타이밍을 스스로 잡는다.
     `${seasonalContext()}\n\n` +
+    jargonLine +
     (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +
     `[성과 상위 키워드(참고용 씨앗 — 이 테마만 반복하지 말 것)]\n${winners || coldstart}\n\n` +
@@ -334,6 +342,14 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     if (off) {
       rejectNote = `[직전 제안 기각 — 브랜드가 다루지 않는 소재 "${off}" 포함] 브랜드 컨텍스트의 소개·금지를 다시 보고, 나무·묘목 범위 안의 완전히 다른 주제로 제안하라.`;
       console.log(`[auto-cycle] 아이디어 기각(브랜드 범위 밖) — "${title}" (소재 "${off}")`);
+      continue;
+    }
+    // 어휘 함정어 게이트(하드) — keyword 로 태어난 함정어는 하류 어디서도 못 뺀다(키워드 고정 강제가
+    // 어휘 가드·린트·리비전을 전부 이김, 실측 2026-08-10 "유실수 가을 시비"). 프롬프트 유도 실패 대비 코드 차단.
+    const jarg = lintLexicon(`${title} ${keyword ?? ''}`, jargonList);
+    if (jarg.length) {
+      rejectNote = `[직전 제안 기각 — 제목·키워드에 일반 독자가 다른 뜻으로 읽는 말 "${jarg[0]!.term}" 포함] "${jarg[0]!.use}"처럼 쉬운 표현을 쓰는 완전히 새로운 제목·키워드로 제안하라.`;
+      console.log(`[auto-cycle] 아이디어 기각(어휘 함정어) — "${title}" ("${jarg[0]!.term}")`);
       continue;
     }
     const sim = findSimilarContent({ title, ...(keyword ? { keyword } : {}) }, existing);
