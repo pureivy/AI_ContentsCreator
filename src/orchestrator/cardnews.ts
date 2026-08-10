@@ -145,15 +145,48 @@ export function buildSlideQaPrompt(headline: string, body: string): string {
 }
 
 /** 슬라이드 1장 비전 QA — 장당 개별 호출. 전 장 일괄 호출(비전 1회에 7장)은 주의력 분산으로 자모 오타를
- *  통과시켰다(2026-07-30 실측 유출 → 사용자가 카드 폐기). QA 인프라 실패는 통과(fail-open, 차단 방지). */
-async function qaSlide(imagePath: string, s: PlanSlide, signal?: AbortSignal): Promise<boolean> {
+ *  통과시켰다(2026-07-30 실측 유출 → 사용자가 카드 폐기). QA 인프라 실패는 통과(fail-open, 차단 방지).
+ *  판정 상세(problem·전사)를 함께 돌려준다 — 재생성의 표적 교정·문구 우회가 '무엇이 어떻게 틀렸는지'를
+ *  알아야 한다(2026-08-11 사용자 지적: 상세를 버리고 같은 프롬프트로만 재생성해 교정 실패가 반복됐다). */
+interface SlideVerdict { ok: boolean; problem: string }
+async function qaSlide(imagePath: string, s: PlanSlide, signal?: AbortSignal): Promise<SlideVerdict> {
   const j = await microJSON<{ transcribe?: unknown; ok?: boolean; problem?: unknown }>(
     stdModel(),
     '당신은 카드뉴스 품질 검증자입니다. 슬라이드 이미지를 직접 보고 요청된 JSON 스키마만 출력합니다.',
     buildSlideQaPrompt(s.headline, s.body),
     { maxOutputTokens: 400, visionPaths: [imagePath], signal }, // 전사 텍스트 포함 → 토큰 상향
   ).catch(() => null);
-  return j?.ok !== false;
+  if (j?.ok === false) {
+    const problem = [
+      typeof j.problem === 'string' ? j.problem : '',
+      typeof j.transcribe === 'string' && j.transcribe ? `전사: "${j.transcribe.slice(0, 100)}"` : '',
+    ].filter(Boolean).join(' · ');
+    return { ok: false, problem: problem.slice(0, 240) };
+  }
+  return { ok: true, problem: '' };
+}
+
+/** 오타 우회 리워딩 — 표적 교정 재생성(1~2차)으로도 못 고친 슬라이드는 그 글자 조합 자체가 생성 모델의
+ *  글리프 습관에 걸린 것. 실측(2026-08-11 card_862174045b): "흙째"·"묻어"가 자모 명시 교정 지시에도
+ *  5회 연속 오타 → "흙 그대로"·"덮어" 우회로 각 1발 성공. 같은 뜻·비슷한 길이의 다른 표기로 바꾼다. */
+async function rewordSlideCopy(s: PlanSlide, problem: string, signal?: AbortSignal): Promise<PlanSlide | null> {
+  const j = await microJSON<{ headline?: unknown; body?: unknown }>(
+    stdModel(),
+    '당신은 카드뉴스 카피 에디터입니다. 요청된 JSON 만 출력합니다.',
+    [
+      '아래 슬라이드 문구를 이미지 생성기가 반복적으로 잘못 그린다. 문제가 된 글자·단어를 피해, 같은 의미의 다른 표기로 바꿔라.',
+      `[검수 판정] ${problem || '특정 글자 반복 오타'}`,
+      `[헤드라인] ${s.headline}`,
+      `[본문] ${s.body}`,
+      '규칙: 의미·톤 유지, 각 줄 길이는 비슷하게(±30%), 문제로 지목된 단어는 반드시 다른 표기로 교체, 문제와 무관한 줄은 그대로 유지. 쉬운 일상어만. 이모지 금지.',
+      'JSON: {"headline":"...","body":"줄바꿈(\\n) 포함 본문"}',
+    ].join('\n'),
+    { maxOutputTokens: 400, signal },
+  ).catch(() => null);
+  const headline = typeof j?.headline === 'string' && j.headline.trim() ? stripEmoji(j.headline).trim() : '';
+  const body = typeof j?.body === 'string' && j.body.trim() ? stripEmoji(j.body).trim() : '';
+  if (!headline || !body) return null;
+  return { ...s, headline, body };
 }
 
 /** 표지(1번 슬라이드)에 핵심 키워드 정확 표기가 있는지(공백 무시 — "가을채소 흙준비"≈"가을채소흙준비").
@@ -468,13 +501,31 @@ export async function runCardNewsJob(
       if (visionCapable() && slidePaths.length) {
         const slideOf = (k: number): PlanSlide => plan.slides[slideMap[k - 1]! - 1]!; // k = slide_NN 순번(1-base)
         const verdicts = await Promise.all(slidePaths.map((p, i) => qaSlide(p, slideOf(i + 1), opts.signal)));
-        let bad = verdicts.flatMap((okV, i) => (okV ? [] : [i + 1]));
+        let bad = verdicts.flatMap((v, i) => (v.ok ? [] : [i + 1]));
+        const problems = new Map<number, string>(); // slide_NN 순번 → 최신 판정 상세(표적 교정·리워딩 재료)
+        for (const [i, v] of verdicts.entries()) if (!v.ok && v.problem) problems.set(i + 1, v.problem);
         // 전장 불량 판정은 재생성해도 같은 결과일 확률이 높아 스킵(과금 폭주 방지) — 일부 장만 교정.
         if (bad.length && bad.length < slideMap.length) {
-          for (let round = 1; round <= 2 && bad.length; round++) {
-            say(`QA — 슬라이드 ${bad.join(',')} 재생성(오타/품질, ${round}차)`);
+          // 1~2차: 판정 상세를 교정 지시로 주입한 재생성. 3차: 문구 우회(리워딩) — 교정 지시로도 반복되는
+          // 오타는 글자 조합이 모델 습관에 걸린 것이라 같은 뜻 다른 표기로 회피(기획·QA 대조 기준 동반 이동).
+          for (let round = 1; round <= 3 && bad.length; round++) {
+            if (round === 3) {
+              let reworded = 0;
+              for (const k of bad) {
+                const rw = await rewordSlideCopy(slideOf(k), problems.get(k) ?? '', opts.signal);
+                if (rw) { plan.slides[slideMap[k - 1]! - 1] = rw; reworded++; }
+              }
+              if (!reworded) break; // 리워딩 실패 — 남은 슬라이드는 게이트(발행 확인)로
+              fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ title: plan.title, slides: plan.slides }, null, 2), 'utf-8');
+              say(`QA — 슬라이드 ${bad.join(',')} 문구 우회(리워딩) 후 재생성(3차)`);
+            } else {
+              say(`QA — 슬라이드 ${bad.join(',')} 재생성(오타/품질, ${round}차)`);
+            }
+            const fixNote = (k: number): string => (round < 3 && problems.get(k)
+              ? `\n[직전 생성본 오타 교정 — 최우선] ${problems.get(k)} — 기대 문구를 자모(초성·중성·종성) 하나도 틀리지 않게 그려라. 별·해·서명·화살표 등 낙서 요소는 넣지 마라.`
+              : '\n[문구 정확도 — 최우선] 위 한국어 문구를 자모(초성·중성·종성) 하나도 틀리지 않게 그려라. 별·해·서명·화살표 등 낙서 요소는 넣지 마라.');
             const retryDraft = {
-              imageSlots: bad.map((k) => ({ alt: slideOf(k).headline, prompt: cardPrompt(slideMap[k - 1]! - 1) })),
+              imageSlots: bad.map((k) => ({ alt: slideOf(k).headline, prompt: cardPrompt(slideMap[k - 1]! - 1) + fixNote(k) })),
             };
             const retryDraftPath = path.join(dir, 'bg-retry-draft.json');
             const retryManifestPath = path.join(dir, 'bg-retry-manifest.json');
@@ -488,9 +539,13 @@ export async function runCardNewsJob(
               const fp = rem.images?.[idx]?.file_path;
               const okFile = fp && !rem.images?.[idx]?.error && fs.existsSync(String(fp));
               // 교체 전 재검수 — 재생성본도 같은 확률로 오타가 난다. 통과본만 교체, 실패본은 다음 라운드로.
-              if (okFile && (await qaSlide(String(fp), slideOf(k), opts.signal))) {
+              const v2 = okFile ? await qaSlide(String(fp), slideOf(k), opts.signal) : { ok: false, problem: '' };
+              if (okFile && v2.ok) {
                 fs.copyFileSync(String(fp), slidePaths[k - 1]!);
-              } else stillBad.push(k);
+              } else {
+                stillBad.push(k);
+                if (v2.problem) problems.set(k, v2.problem);
+              }
             }
             if (bad.length - stillBad.length) say(`QA — ${bad.length - stillBad.length}장 교정 완료`);
             bad = stillBad;
