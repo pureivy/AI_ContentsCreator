@@ -78,3 +78,28 @@ describe('staggerProgress — 슬롯 분배·순서·경계', () => {
     expect(A.staggerProgress(9999, 90, 0, 3)).toBe(1);
   });
 });
+
+describe('kenBurnsMove — 확장 무브(폴백=현행 index parity)', () => {
+  it('move 미지정 = 종전 kenBurnsScale/Pan 과 동일(폴백 불변)', () => {
+    const m0 = A.kenBurnsMove(50, 100, 0), m1 = A.kenBurnsMove(50, 100, 1);
+    expect(m0.scale).toBeCloseTo(A.kenBurnsScale(50, 100, 1.08, 0), 6);
+    expect(m1.scale).toBeCloseTo(A.kenBurnsScale(50, 100, 1.08, 1), 6);
+    expect(m0.x).toBeCloseTo(A.kenBurnsPan(50, 100, 0).x, 6);
+    expect(m0.rotate).toBe(0);
+  });
+  it('push = 강줌(1→1.15) + 미세 회전(≤1.2°) + 팬 절반', () => {
+    expect(A.kenBurnsMove(0, 100, 0, 'push').scale).toBeCloseTo(1, 3);
+    expect(A.kenBurnsMove(100, 100, 0, 'push').scale).toBeCloseTo(1.15, 3);
+    expect(A.kenBurnsMove(100, 100, 0, 'push').rotate).toBeCloseTo(1.2, 3);
+    expect(Math.abs(A.kenBurnsMove(100, 100, 0, 'push').x)).toBeLessThanOrEqual(6.01);
+  });
+  it('intensity 캡 — subtle 1.04 / strong 1.15, zoom-out 은 역방향', () => {
+    expect(A.kenBurnsMove(100, 100, 0, 'zoom-in', 'subtle').scale).toBeCloseTo(1.04, 3);
+    expect(A.kenBurnsMove(100, 100, 0, 'zoom-in', 'strong').scale).toBeCloseTo(1.15, 3);
+    expect(A.kenBurnsMove(0, 100, 0, 'zoom-out', 'strong').scale).toBeCloseTo(1.15, 3);
+    expect(A.kenBurnsMove(100, 100, 0, 'zoom-out', 'strong').scale).toBeCloseTo(1, 3);
+  });
+  it('none = 완전 정지(스케일 1·팬 0·회전 0)', () => {
+    expect(A.kenBurnsMove(70, 100, 3, 'none')).toEqual({ scale: 1, x: 0, y: 0, rotate: 0 });
+  });
+});

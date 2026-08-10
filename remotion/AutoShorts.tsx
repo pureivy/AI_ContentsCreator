@@ -22,6 +22,12 @@ export const autoShortsSchema = z.object({
     stat: z.object({ value: z.number(), unit: z.string().optional(), label: z.string().optional() }).optional(),
     items: z.array(z.string()).max(4).optional(),
     quote: z.object({ text: z.string(), source: z.string().optional() }).optional(),
+    /** 씬 연출(결정적 kind 기본값, 서버가 산정) — 미지정=종전 동작(fade 엔터 + index parity 켄번즈). */
+    fx: z.object({
+      enter: z.enum(['none', 'fade', 'slide-up', 'wipe', 'scale']).optional(),
+      move: z.enum(['zoom-in', 'zoom-out', 'push', 'none']).optional(),
+      intensity: z.enum(['subtle', 'normal', 'strong']).optional(),
+    }).optional(),
   })),
   totalFrames: z.number(),
   /** 자막 옵션 — 위치(하단 여백 %)·키워드 강조색·테두리·글자 크기. 미지정=컴포넌트 기본값. */
@@ -39,10 +45,16 @@ const CLIP_FRAMES = 180; // 6초 클립 × 30fps 컴포지션 — clipFrames 미
 
 const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; caption?: AutoShortsProps['caption'] }> = ({ s, index, caption }) => {
   const f = useCurrentFrame();
-  // 씬 시작 6프레임 페이드인(첫 씬 제외 — 훅은 즉시) — 하드컷 완화. 씬 길이 불변이라 TTS 싱크 무손상.
-  const fade = index > 0 ? sceneEnterFade(f, 6) : 1;
+  // 씬 엔터 이펙트 — 종전 '6프레임 페이드인(첫 씬 제외)'을 일반화. 씬 길이 불변이라 TTS 싱크 무손상.
+  // TransitionSeries(씬 오버랩=전체 길이 단축)는 '오디오가 길이를 지배' 불변식·SRT 누적 시계와 충돌해 채택하지 않는다.
+  const enter = s.fx?.enter ?? (index > 0 ? 'fade' : 'none');
+  const p = enter === 'none' ? 1 : sceneEnterFade(f, 6);
+  const wrap: React.CSSProperties = { opacity: p };
+  if (enter === 'slide-up') wrap.transform = `translateY(${(1 - p) * 24}px)`;
+  else if (enter === 'scale') wrap.transform = `scale(${0.96 + 0.04 * p})`;
+  else if (enter === 'wipe') { wrap.opacity = 1; wrap.clipPath = `inset(0 ${(1 - p) * 100}% 0 0)`; }
   return (
-    <AbsoluteFill style={{ opacity: fade }}>
+    <AbsoluteFill style={wrap}>
       {s.videoSrc ? (
         // 루프 금지 — 씬이 클립(≈6초)보다 길면 재생 속도를 낮춰 클립 한 번이 씬 전체를 덮는다.
         // 종전 <Loop>는 씬 중간에 클립이 처음으로 되감겨 '튕김'이 보였고(실측: 씬 6.6~8.0s vs 클립 6.04s
@@ -54,7 +66,7 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         />
       ) : (
-        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} />
+        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={s.fx?.move} intensity={s.fx?.intensity} />
       )}
       {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} /> : null}
       {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}

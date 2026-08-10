@@ -113,3 +113,28 @@ describe('fixMonthNames — 월 이름 고유어 교정', () => {
     expect(fixMonthNames('칠월과 팔월, 구월까지')).toBe('칠월과 팔월, 구월까지');
   });
 });
+
+describe('defaultSceneFx — 결정적 kind 연출(순수)', () => {
+  it('클립 씬은 undefined(클립이 곧 모션 — 종전 동작 유지)', async () => {
+    const { defaultSceneFx } = await import('./shortsCommon');
+    expect(defaultSceneFx('hook', 0, true)).toBeUndefined();
+    expect(defaultSceneFx(undefined, 2, true)).toBeUndefined();
+  });
+  it('훅(kind 또는 첫 씬)=push 강줌·엔터 없음, cta=줌아웃', async () => {
+    const { defaultSceneFx } = await import('./shortsCommon');
+    expect(defaultSceneFx('hook', 3, false)).toEqual({ enter: 'none', move: 'push', intensity: 'strong' });
+    expect(defaultSceneFx(undefined, 0, false)).toEqual({ enter: 'none', move: 'push', intensity: 'strong' });
+    expect(defaultSceneFx('cta', 5, false)).toEqual({ enter: 'fade', move: 'zoom-out', intensity: 'normal' });
+  });
+  it('오버레이 씬(stat/list/quote)=배경 subtle 캡 + kind별 엔터', async () => {
+    const { defaultSceneFx } = await import('./shortsCommon');
+    expect(defaultSceneFx('stat', 2, false)).toEqual({ enter: 'fade', intensity: 'subtle' });
+    expect(defaultSceneFx('list', 2, false)).toEqual({ enter: 'wipe', intensity: 'subtle' });
+    expect(defaultSceneFx('quote', 2, false)).toEqual({ enter: 'scale', intensity: 'subtle' });
+  });
+  it('본문 씬=strong 줌 + 엔터 변주(짝수 slide-up/홀수 fade)', async () => {
+    const { defaultSceneFx } = await import('./shortsCommon');
+    expect(defaultSceneFx(undefined, 2, false)).toEqual({ enter: 'slide-up', intensity: 'strong' });
+    expect(defaultSceneFx(undefined, 3, false)).toEqual({ enter: 'fade', intensity: 'strong' });
+  });
+});

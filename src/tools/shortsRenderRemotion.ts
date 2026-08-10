@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { selectComposition, renderMedia, makeCancelSignal } from '@remotion/renderer';
-import { prepareScenes, buildSrt, resolveClipSrc, FPS, probeDuration } from './shortsCommon';
+import { prepareScenes, buildSrt, resolveClipSrc, defaultSceneFx, FPS, probeDuration } from './shortsCommon';
 import type { ShortsScene, ShortsRenderResult } from './shortsCommon';
 
 export async function renderShortsVideoRemotion(
@@ -46,6 +46,8 @@ export async function renderShortsVideoRemotion(
       try { const d = await probeDuration(clipPath); if (d > 0) clipFrames = Math.max(1, Math.round(d * FPS)); } catch { /* 산정 실패 시 AutoShorts CLIP_FRAMES 상수 폴백 */ }
     }
     const sc = scenes[p.index];
+    // 씬 연출 — 결정적 kind 기본값(스틸 씬만). 클립 씬은 undefined(클립이 곧 모션, 종전 동작).
+    const fx = defaultSceneFx(sc?.kind, p.index, !!videoSrc);
     return {
       imageSrc, audioSrc, videoSrc, screenText: p.screenText, durationInFrames: p.durationInFrames,
       ...(clipFrames ? { clipFrames } : {}),
@@ -53,6 +55,7 @@ export async function renderShortsVideoRemotion(
       ...(sc?.stat ? { stat: sc.stat } : {}),
       ...(sc?.items ? { items: sc.items } : {}),
       ...(sc?.quote ? { quote: sc.quote } : {}),
+      ...(fx ? { fx } : {}),
     };
   }));
   const totalFrames = prepared.reduce((a, p) => a + p.durationInFrames, 0);

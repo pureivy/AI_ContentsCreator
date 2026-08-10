@@ -144,3 +144,24 @@ export async function prepareScenes(
 export function resolveClipSrc(clip: string | null | undefined, nn: string): string | null {
   return clip && fs.existsSync(clip) ? `clip_${nn}.mp4` : null;
 }
+
+// 씬 연출(fx) — AutoShorts zod 스키마와 동일 어휘. 결정적 kind 기본값(LLM 무관, 순수)이라 재현 가능.
+export interface SceneFx {
+  enter?: 'none' | 'fade' | 'slide-up' | 'wipe' | 'scale';
+  move?: 'zoom-in' | 'zoom-out' | 'push' | 'none';
+  intensity?: 'subtle' | 'normal' | 'strong';
+}
+/**
+ * kind 기반 결정적 씬 연출(순수) — I2V 상한제로 스틸이 된 씬의 움직임 공백을 Remotion 네이티브로 메운다.
+ * 클립 씬은 undefined(클립이 곧 모션 — 종전 fade 엔터 유지). 오버레이 씬(stat/list/quote)은 배경 subtle 캡
+ * (패널 모션이 주인공 — 배경이 시선을 뺏지 않게), 훅은 push 강줌, 본문은 strong 줌 + 엔터 변주.
+ */
+export function defaultSceneFx(kind: SceneKind | undefined, index: number, hasClip: boolean): SceneFx | undefined {
+  if (hasClip) return undefined;
+  if (kind === 'hook' || (index === 0 && !kind)) return { enter: 'none', move: 'push', intensity: 'strong' };
+  if (kind === 'stat') return { enter: 'fade', intensity: 'subtle' };
+  if (kind === 'list') return { enter: 'wipe', intensity: 'subtle' };
+  if (kind === 'quote') return { enter: 'scale', intensity: 'subtle' };
+  if (kind === 'cta') return { enter: 'fade', move: 'zoom-out', intensity: 'normal' };
+  return { enter: index % 2 === 0 ? 'slide-up' : 'fade', intensity: 'strong' };
+}

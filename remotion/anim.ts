@@ -23,6 +23,27 @@ export function kenBurnsPan(local: number, total: number, index = 0): { x: numbe
 export function sceneEnterFade(local: number, fade = 6): number {
   return smoothstep(fade > 0 ? local / fade : 1);
 }
+// 배경 모션 어휘 — I2V 상한제(핵심 컷만 클립화)에서 스틸 씬의 '움직임 공백'을 메우는 결정적 연출.
+export type KenMove = 'zoom-in' | 'zoom-out' | 'push' | 'none';
+export type KenIntensity = 'subtle' | 'normal' | 'strong';
+const INTENSITY_MAX: Record<KenIntensity, number> = { subtle: 1.04, normal: 1.08, strong: 1.15 };
+/**
+ * Ken Burns 확장 무브(순수) — move 미지정이면 현행 index parity(짝수 줌인/홀수 줌아웃 + 팬 순환)
+ * 그대로라 폴백=현행 동작. 'push'는 훅용 강줌+미세 회전(±1.2° 캡), 'none'은 완전 정지(클립 씬 등).
+ */
+export function kenBurnsMove(local: number, total: number, index = 0, move?: KenMove, intensity?: KenIntensity): { scale: number; x: number; y: number; rotate: number } {
+  const max = INTENSITY_MAX[intensity ?? 'normal'];
+  if (move === 'none') return { scale: 1, x: 0, y: 0, rotate: 0 };
+  const p = smoothstep(total > 0 ? local / total : 0);
+  const pan = kenBurnsPan(local, total, index);
+  if (move === 'push') {
+    const pushMax = intensity ? max : INTENSITY_MAX.strong; // push 는 강줌이 본질 — 미지정 시 strong
+    return { scale: 1 + (pushMax - 1) * p, x: pan.x * 0.5, y: pan.y * 0.5, rotate: 1.2 * p };
+  }
+  const zoomOut = move === 'zoom-out' || (move === undefined && index % 2 === 1);
+  const scale = zoomOut ? max - (max - 1) * p : 1 + (max - 1) * p;
+  return { scale, x: pan.x, y: pan.y, rotate: 0 };
+}
 /** 자막 단어 i 의 등장 진행도(0..1, ease-out) — 이산 점프 대신 rise 프레임 동안 부드럽게. */
 export function captionWordProgress(local: number, index: number, perWord = 6, rise = 5): number {
   const start = index * perWord;
