@@ -1154,8 +1154,15 @@ export async function fetchYoutubeStatus(): Promise<{ client: boolean; connected
   try { const r = await fetch("/youtube/status"); return await r.json() as { client: boolean; connected: boolean }; }
   catch { return { client: false, connected: false }; }
 }
-export async function publishCardNews(id: string): Promise<{ ok?: boolean; igPermalink?: string; fbPostId?: string; error?: string; fbError?: string }> {
-  try { const r = await fetch(`/cardnews/${id}/publish`, { method: "POST" }); return await r.json(); }
+/** force: QA 미해결(qa_unresolved 409) 카드를 사용자가 확인한 뒤 발행 확정할 때만 true. */
+export async function publishCardNews(id: string, force = false): Promise<{ ok?: boolean; igPermalink?: string; fbPostId?: string; error?: string; fbError?: string; qa_unresolved?: number[] }> {
+  try {
+    const r = await fetch(`/cardnews/${id}/publish`, {
+      method: "POST",
+      ...(force ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: true }) } : {}),
+    });
+    return await r.json();
+  }
   catch { return { error: "요청 실패" }; }
 }
 export interface MetaStatus {

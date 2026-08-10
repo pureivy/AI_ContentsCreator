@@ -462,6 +462,7 @@ export async function runCardNewsJob(
     //    대조 검수. 장당 개별 비전 호출(전 장 일괄 호출은 주의력 분산으로 자모 오타를 통과시킴 — 2026-07-30
     //    실측 유출) + 불량 장은 최대 2라운드 재생성하되 교체 전 재검수(불량 교체본 맹교체 방지).
     //    실패해도 무해(완성본 유지).
+    let qaUnresolvedSlides: number[] = []; // 미해결 슬라이드 — 레코드에 영속해 발행 게이트가 소비(로그만으론 게이트가 못 봄)
     try {
       const slidePaths = slideMap.map((_, k) => path.join(dir, `slide_${String(k + 1).padStart(2, '0')}.png`));
       if (visionCapable() && slidePaths.length) {
@@ -494,7 +495,7 @@ export async function runCardNewsJob(
             if (bad.length - stillBad.length) say(`QA — ${bad.length - stillBad.length}장 교정 완료`);
             bad = stillBad;
           }
-          if (bad.length) say(`QA — 슬라이드 ${bad.join(',')} 미해결(오타 가능성 — 발행 전 확인 권장)`);
+          if (bad.length) { qaUnresolvedSlides = bad; say(`QA — 슬라이드 ${bad.join(',')} 미해결(오타 가능성 — 발행 전 확인 권장)`); }
         }
       }
     } catch { /* QA 실패 무해 — 기존 완성본 유지 */ }
@@ -503,7 +504,8 @@ export async function runCardNewsJob(
     const captionText = [plan.caption, plan.hashtags.join(' ')].filter(Boolean).join('\n\n');
     if (captionText) fs.writeFileSync(path.join(dir, 'caption.txt'), captionText, 'utf-8');
 
-    store.update(id, { stage: 'ready', slides: ok, topic: plan.title || card.topic });
+    // qaUnresolved 는 빈값도 명시 기록(undefined) — 재실행에서 이전 미해결 잔재가 새 완성본을 계속 막지 않게.
+    store.update(id, { stage: 'ready', slides: ok, topic: plan.title || card.topic, qaUnresolved: qaUnresolvedSlides.length ? qaUnresolvedSlides : undefined });
     say(`${plan.title.slice(0, 30)} — ${ok}/${count}장 완성${ok < count ? ` (생성 실패 ${count - ok}장 건너뜀)` : ''}`);
     // 검토 대기 알림(슬라이드 앨범 동봉) — fire-and-forget, 실패 무해.
     {

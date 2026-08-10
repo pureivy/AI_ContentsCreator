@@ -47,7 +47,7 @@ import type { FinalPosition } from '../orchestrator/finalize';
 import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { cardNewsStore } from '../content/cardnews';
+import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset } from '../orchestrator/cardnews';
 import { shortsStore } from '../content/shorts';
@@ -1646,6 +1646,11 @@ app.post('/cardnews/:id/publish', async (c) => {
   const card = cardNewsStore().get(id);
   if (!card) return c.json({ error: 'unknown cardnews' }, 404);
   if (card.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
+  // QA 미해결 게이트(실사고 2026-08-10: 오타 슬라이드가 그대로 인스타 발행) — 사용자 확인(force) 없인 보류.
+  // 모든 발행 경로(UI 버튼·텔레그램 버튼)가 이 라우트를 지나므로 여기 한 곳이 관문이다.
+  const force = !!(await c.req.json<{ force?: boolean }>().catch(() => ({} as { force?: boolean }))).force;
+  const qaBlock = qaPublishBlockReason(card, force);
+  if (qaBlock) return c.json({ error: qaBlock, qa_unresolved: card.qaUnresolved }, 409);
   // 완료 판정 = 인스타(미디어 id + 실제 퍼머링크) + 페이스북 페이지 연결 시 FB 게시물 id.
   // 홈 URL 잔재만 있으면 완료 아님 → 재시도가 링크를 보강하게 통과시킨다.
   // FB 페이지를 나중에 연결한 경우 IG 완료만으로 막으면 페북에 영구히 못 올라간다 → FB 미게시면 통과.

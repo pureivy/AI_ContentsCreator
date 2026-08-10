@@ -38,7 +38,13 @@ function CardRow({ card, onDelete, metaReady, fbReady, onChanged }: {
   const [publishing, setPublishing] = useState(false);
   const doPublish = async () => {
     setPublishing(true);
-    const r = await publishCardNews(card.id);
+    let r = await publishCardNews(card.id);
+    // QA 미해결 게이트(409) — 사용자가 슬라이드를 확인했다고 답할 때만 force 재요청(오타 유출 실사고 방어).
+    if (r.error && r.qa_unresolved?.length) {
+      const go = confirm(`${r.error}\n\n해당 슬라이드를 확인했고 이대로 발행할까요?`);
+      if (go) r = await publishCardNews(card.id, true);
+      else { setPublishing(false); onChanged(); return; }
+    }
     setPublishing(false);
     if (r.error) alert(`발행 실패: ${r.error}`); // doDelete 의 기존 alert 관례
     else if (r.fbError) alert(`인스타는 발행됐지만 페이스북 페이지 게시는 실패했습니다:\n${r.fbError}`);

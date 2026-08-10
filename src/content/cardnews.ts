@@ -44,9 +44,20 @@ export interface CardNews {
   publishedTs?: string;
   /** 측정 창 경과 후 강화 1회 완료(멱등 플래그) — shorts.perfReflected 미러. */
   perfReflected?: boolean;
+  /** 비전 QA가 재생성 2라운드로도 못 고친 슬라이드 번호(slide_NN 순번) — 발행 게이트가 소비.
+   *  실사고(2026-08-10): 미해결이 로그로만 남아 오타 슬라이드가 인스타에 그대로 발행됐다. */
+  qaUnresolved?: number[];
   error?: string;
   createdTs: string;
   updatedTs: string;
+}
+
+/** QA 미해결 발행 차단 사유(순수) — 미해결 슬라이드가 있고 사용자 확인(force)이 없으면 차단 사유를,
+ *  아니면 null. 발행 라우트가 모든 경로(UI 버튼·텔레그램)의 관문이므로 여기 한 곳만 지키면 된다. */
+export function qaPublishBlockReason(card: Pick<CardNews, 'qaUnresolved'>, force = false): string | null {
+  const bad = card.qaUnresolved ?? [];
+  if (!bad.length || force) return null;
+  return `QA가 슬라이드 ${bad.join(',')}을(를) 오타 가능성 미해결로 남겼습니다 — 슬라이드를 확인한 뒤 발행을 확정하세요`;
 }
 
 export interface CreateCardNewsInput {
