@@ -471,8 +471,11 @@ def make_text_comp(paragraphs: list) -> dict:
 
 
 # ── 리치 컴포넌트 빌더 (SE ONE 실측 스키마 기반) ─────────────────────────────
-def make_quotation(paragraphs: list, layout: str = "line") -> dict:
-    """인용구 — layout: default|line|corner|postit|bubble. value=문단들, source=출처(선택)."""
+def make_quotation(paragraphs: list, layout: str = "quotation_line") -> dict:
+    """인용구 — layout(에디터 실측 2026-08-10): default=따옴표 · quotation_line=버티컬라인 ·
+    quotation_bubble=말풍선 · quotation_underline=라인&따옴표 · quotation_postit=포스트잇 ·
+    quotation_corner=프레임. 종전 'line'/'corner'는 무효값이라 무스타일(작은 회색 글씨)로 렌더됐다.
+    value=문단들, source=출처(선택)."""
     return {"@ctype": "quotation", "id": uid(), "layout": layout,
             "value": paragraphs or [make_body_para("")], "source": None}
 
@@ -522,13 +525,20 @@ def _has_rich_blocks(se_text: dict) -> bool:
     return False
 
 
+#   > 깊이 → SE 인용구 스타일(사용자 확정 2026-08-10): > 버티컬라인 · >> 따옴표 · >>> 프레임.
+QUOTE_LAYOUTS = {1: "quotation_line", 2: "default", 3: "quotation_corner"}
+#   줄 수 캡 — 버티컬라인·따옴표는 한 줄 강조용(종전 2줄 유지), 프레임은 마무리 요약 박스라 여유.
+QUOTE_LINE_CAP = {"quotation_line": 2, "default": 2, "quotation_corner": 8}
+
+
 def parse_body_to_comps(body: str) -> list:
-    """본문 마크다운을 SE 컴포넌트 목록으로 파싱 — 문단(굵게)·인용구(>)·구분선(---)·소스코드(```)·표(|).
-    글 성격에 맞게 작가가 넣은 마크업이 실제 SE 리치 컴포넌트가 된다."""
+    """본문 마크다운을 SE 컴포넌트 목록으로 파싱 — 문단(굵게)·인용구(>=버티컬라인·>>=따옴표·>>>=프레임)·
+    구분선(---)·소스코드(```)·표(|). 글 성격에 맞게 작가가 넣은 마크업이 실제 SE 리치 컴포넌트가 된다."""
     comps: list = []
     para_buf: list = []
     quote_buf: list = []
     table_buf: list = []
+    quote_layout = "quotation_line"  # 현재 인용구 버퍼의 스타일 — 깊이가 바뀌면 flush 후 새 인용구로
 
     def flush_paras():
         if para_buf:
@@ -537,9 +547,10 @@ def parse_body_to_comps(body: str) -> list:
 
     def flush_quote():
         if quote_buf:
-            comps.append(make_quotation(list(quote_buf[:2])))   # 인용구는 최대 2줄
-            if len(quote_buf) > 2:                               # 초과분은 본문 문단으로
-                comps.append(make_text_comp(list(quote_buf[2:])))
+            cap = QUOTE_LINE_CAP.get(quote_layout, 2)
+            comps.append(make_quotation(list(quote_buf[:cap]), layout=quote_layout))
+            if len(quote_buf) > cap:                             # 초과분은 본문 문단으로
+                comps.append(make_text_comp(list(quote_buf[cap:])))
             quote_buf.clear()
 
     def flush_table():
@@ -579,15 +590,23 @@ def parse_body_to_comps(body: str) -> list:
             comps.append(make_divider())
             i += 1
             continue
-        # 인용구
-        q = re.match(r"^>\s?(.*)$", s)
+        # 인용구 — > 깊이(1~3)가 스타일. 깊이가 바뀌면 이전 버퍼를 먼저 flush(스타일 혼합 방지).
+        q = re.match(r"^(>{1,3})\s?(.*)$", s)
         if q:
             flush_paras()
-            quote_buf.append(make_body_para(q.group(1)))
+            lay = QUOTE_LAYOUTS[len(q.group(1))]
+            if quote_buf and lay != quote_layout:
+                flush_quote()
+            quote_layout = lay
+            quote_buf.append(make_body_para(q.group(2)))
             i += 1
             continue
         flush_quote()
         if s:
+            # 목록 정돈 — SE 목록 컴포넌트 미지원이라 문단으로 들어간다. 원시 "- " 노출 대신 "• "로
+            # 통일(번호 목록 "1. "은 그대로). 중첩·여러 줄 항목은 작가 지침에서 금지.
+            if re.match(r"^-\s+", s):
+                s = "• " + re.sub(r"^-\s+", "", s, count=1)
             para_buf.append(make_body_para(s))
         i += 1
     flush_paras(); flush_quote(); flush_table()
@@ -746,41 +765,48 @@ def insert_divider_ui(page):
         log(f"  구분선 삽입 실패(무해): {str(e)[:50]}")
 
 
-def convert_quotes_and_ai(page, quote_texts: list) -> str:
-    """평문으로 타이핑된 '인용구 문단'을 네이티브 인용구(quotation) 컴포넌트로 변환하고, 이미지는
+def convert_quotes_and_ai(page, quote_groups: list) -> str:
+    """평문으로 타이핑된 '인용구 문단 그룹'을 네이티브 인용구(quotation) 컴포넌트로 변환하고, 이미지는
     'AI 활용(ai:true)' 표시를 켠다 — 단 한 번의 setDocumentData(순서·구조 보존). 스타일(굵게)은 이 호출
-    '이후' 명령으로 다시 입힌다(문서 API 가 spanStyle 을 제거하므로). 반환: 'ok:quotes=N' 등 상태."""
-    return page.evaluate("""(quoteTexts) => {
+    '이후' 명령으로 다시 입힌다(문서 API 가 spanStyle 을 제거하므로).
+    quote_groups: [{lines:[문단텍스트…], layout:'quotation_line|default|quotation_corner'}] — 타이핑 순서 그대로. 그룹의
+    연속 문단들이 인용구 하나가 된다(프레임 요약 박스는 여러 줄이 한 박스). 반환: 'ok:quotes=N' 등."""
+    return page.evaluate("""(groups) => {
         const ds = window.SE?.launcher?._editors?.blogpc001?._documentService;
         if (!ds) return 'no_ds';
         const rid = () => 'g'+Math.random().toString(36).slice(2,10);
         const norm = s => (s||'').replace(/\\s+/g,' ').trim();
-        const targets = quoteTexts.map(norm).filter(Boolean);
-        const used = new Set();
+        const ptext = p => norm((p.nodes||[]).map(n=>n.value||'').join(''));
         const doc = ds.getDocumentData();
         const out = [];
+        let gi = 0;  // 그룹 포인터 — 타이핑 순서 매칭(동일 문구 중복에도 안전)
         for (const c of doc.document.components) {
             const ct = c['@ctype'];
             if (ct === 'image') { c.ai = true; out.push(c); continue; }   // 이미지 AI 활용 표시 ON
             if (ct !== 'text') { out.push(c); continue; }                  // 구분선 등 구조 컴포넌트 보존
+            const ps = c.value || [];
             let run = [];
             const flush = () => { if (run.length) { out.push({...c, id: rid(), value: run}); run = []; } };
-            for (const p of (c.value||[])) {
-                const t = norm((p.nodes||[]).map(n=>n.value||'').join(''));
-                if (t && targets.includes(t) && !used.has(t)) {           // 인용구 대상 문단 → 인용구 컴포넌트
-                    used.add(t);
+            let j = 0;
+            while (j < ps.length) {
+                const g = gi < groups.length ? groups[gi] : null;
+                const L = g ? g.lines.map(norm).filter(Boolean) : [];
+                if (g && L.length && j + L.length <= ps.length
+                    && L.every((t, x) => ptext(ps[j + x]) === t)) {        // 연속 문단 일치 → 인용구 1개
                     flush();
-                    out.push({'@ctype':'quotation', id: rid(), layout:'line', value:[p], source:null});
-                } else {
-                    run.push(p);
+                    out.push({'@ctype':'quotation', id: rid(), layout: g.layout || 'quotation_line',
+                              value: ps.slice(j, j + L.length), source: null});
+                    j += L.length; gi++;
+                    continue;
                 }
+                run.push(ps[j]); j++;
             }
             flush();
         }
         doc.document.components = out;
         try { ds.setDocumentData(doc); } catch(e){ return 'error:'+e.message; }
-        return 'ok:quotes='+used.size+'/'+targets.length;
-    }""", quote_texts)
+        return 'ok:quotes='+gi+'/'+groups.length;
+    }""", quote_groups)
 
 
 def toggle_image_ai_ui(page):
@@ -808,7 +834,7 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
     인용구 박스는 타이핑 이후 write_post 에서 (변환 setDocumentData → 명령 굵게) 순으로 입힌다.
     표(|)·소스코드(```)는 키 입력 불가 → 위치에 플레이스홀더 문단을 타이핑하고 (마커, 컴포넌트)를
     모아 반환한다. write_post 가 타이핑 후 splice_rich_blocks 로 실제 표/코드 컴포넌트로 교체한다.
-    반환: (headings[{text,level}], quote_texts[str], rich_blocks[(marker,comp)], upload_count)
+    반환: (headings[{text,level}], quote_groups[{lines,layout}], rich_blocks[(marker,comp)], upload_count)
     """
     sections = se_text.get("sections", [])
     image_positions = se_text.get("image_positions", [])
@@ -821,7 +847,7 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
 
     img_btn = page.locator("button[data-name='image']").first
     headings = []
-    quote_texts = []   # 평문으로 타이핑한 인용구 문단 텍스트 — 타이핑 후 setDocumentData 로 인용구 변환.
+    quote_groups = []  # [{lines:[문단텍스트…], layout}] — 타이핑 후 setDocumentData 로 인용구 변환(깊이=스타일).
     rich_blocks = []   # (마커, 표/코드 컴포넌트) — 위치에 플레이스홀더 타이핑 후 splice_rich_blocks 로 교체.
     upload_count = [0]
 
@@ -923,28 +949,69 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
                 first_block = True
                 k += 1
                 continue
-            # 인용구(연속된 >) — '평문 문단'으로 순서대로 타이핑(캐럿 싸움 없음). 타이핑 후 그 문단을
-            # setDocumentData 로 인용구 컴포넌트로 변환한다. 최대 2줄(합쳐 한 문단), 초과분은 본문 문단으로.
-            mq = re.match(r"^>\s?(.*)$", line)
+            # 인용구(연속된 같은 깊이의 >) — '평문 문단'으로 순서대로 타이핑(캐럿 싸움 없음). 타이핑 후
+            # setDocumentData 로 인용구 컴포넌트로 변환. 깊이가 스타일(사용자 확정 2026-08-10):
+            # > 버티컬라인 · >> 따옴표(한 문단, 2줄 캡) · >>> 프레임(요약 박스 — 줄별 문단, 8줄 캡).
+            mq = re.match(r"^(>{1,3})\s?(.*)$", line)
             if mq:
-                qlines = [mq.group(1)]
+                depth = len(mq.group(1))
+                qlines = [mq.group(2)]
                 k += 1
                 while k < len(body_lines):
-                    m2 = re.match(r"^>\s?(.*)$", body_lines[k].strip())
-                    if not m2:
+                    m2 = re.match(r"^(>{1,3})\s?(.*)$", body_lines[k].strip())
+                    if not (m2 and len(m2.group(1)) == depth):
                         break
-                    qlines.append(m2.group(1))
+                    qlines.append(m2.group(2))
                     k += 1
-                qlines = [q.strip() for q in qlines if q.strip()]
-                qtext = " ".join(qlines[:2])            # 인용구는 2줄까지 — 한 문단으로 합쳐 타이핑
-                if qtext:
-                    qtext = linkify_for_typing(qtext)   # 인용구 속 주소도 링크로(자동링크는 인용구 변환을 통과해 유지)
+                # 인용구 안 목록 접두 무해화 — "1. "·"- " 문단이 SE 자동목록으로 바뀌면 변환 매칭이 깨진다.
+                qlines = [re.sub(r"^[-*]\s+", "• ", re.sub(r"^(\d+)\.\s+", r"\1) ", q.strip()))
+                          for q in qlines if q.strip()]
+                layout = QUOTE_LAYOUTS[depth]
+                cap = QUOTE_LINE_CAP.get(layout, 2)
+                if layout == "quotation_corner":
+                    kept = qlines[:cap]                          # 프레임: 줄별 문단(체크리스트)
+                else:
+                    kept = [" ".join(qlines[:cap])] if qlines else []   # 종전 동작: 2줄까지 한 문단
+                typed = []
+                for qt in kept:
+                    qt = linkify_for_typing(qt)   # 인용구 속 주소도 링크로(자동링크는 인용구 변환을 통과해 유지)
                     newline_before()
-                    human_type(page, qtext)             # 평문으로 타이핑(순서 보존) → 나중에 인용구로 변환
-                    quote_texts.append(qtext)
-                for extra in qlines[2:]:                # 초과분은 일반 본문 문단
+                    human_type(page, qt)          # 평문으로 타이핑(순서 보존) → 나중에 인용구로 변환
+                    typed.append(qt)
+                if typed:
+                    quote_groups.append({"lines": typed, "layout": layout})
+                for extra in qlines[cap:]:        # 초과분은 일반 본문 문단
                     newline_before()
                     human_type_rich(page, extra)
+                continue
+            # 목록(- · * · 1.) — SE 자동목록을 '의도적으로' 사용: 첫 항목만 마커를 타이핑해 목록 모드에
+            # 들어가고, 이후 항목은 마커 없이 Enter 로 잇고, 끝나면 빈 항목에서 Enter 로 빠져나온다.
+            # (실측 2026-08-10 비공개 발행: 마커를 줄줄이 타이핑하면 둘째 항목부터 '- '가 그대로 남고,
+            #  목록 모드가 뒤따르는 문단·소제목까지 전부 삼켰다.)
+            ml = re.match(r"^([-*]|\d+\.)\s+(.+)$", line)
+            if ml:
+                items = [ml.group(2)]
+                ordered = ml.group(1) not in ("-", "*")
+                k += 1
+                while k < len(body_lines):
+                    m2 = re.match(r"^([-*]|\d+\.)\s+(.+)$", body_lines[k].strip())
+                    if not m2:
+                        break
+                    items.append(m2.group(2))
+                    k += 1
+                newline_before()
+                human_type(page, "1. " if ordered else "- ")  # 자동목록 트리거(마커는 SE 가 소비)
+                time.sleep(0.35)                               # 자동변환 반영 대기
+                human_type_rich(page, items[0])
+                for itext in items[1:]:
+                    page.keyboard.press("Enter")               # 목록 모드에서 Enter = 다음 항목
+                    time.sleep(_rand(0.1, 0.25))
+                    human_type_rich(page, itext)
+                page.keyboard.press("Enter")                   # 빈 항목 생성
+                time.sleep(0.15)
+                page.keyboard.press("Enter")                   # 빈 항목에서 Enter = 목록 종료·새 문단
+                time.sleep(0.15)
+                first_block = True                             # 목록 종료가 새 문단을 이미 만듦
                 continue
             # 일반 문단
             newline_before()
@@ -955,7 +1022,7 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
             insert_image(slot)
             first_block = True  # 이미지 직후는 새 문단 — 다음 블록 앞 Enter 생략
 
-    return headings, quote_texts, rich_blocks, upload_count[0]
+    return headings, quote_groups, rich_blocks, upload_count[0]
 
 
 def splice_rich_blocks(page, rich_blocks: list) -> str:
@@ -1259,12 +1326,12 @@ def write_post(
             human = False
         else:
             try:
-                headings, quote_texts, rich_blocks, image_upload_count = type_body_human(page, se_text, images, issues)
-                log(f"  타이핑 완료 — 소제목 {len(headings)}개, 인용구 {len(quote_texts)}개, 표/코드 {len(rich_blocks)}개, 이미지 {image_upload_count}장")
+                headings, quote_groups, rich_blocks, image_upload_count = type_body_human(page, se_text, images, issues)
+                log(f"  타이핑 완료 — 소제목 {len(headings)}개, 인용구 {len(quote_groups)}개, 표/코드 {len(rich_blocks)}개, 이미지 {image_upload_count}장")
                 time.sleep(1.0)
                 # ① 인용구 변환 + 이미지 AI 표시 — 단 한 번의 setDocumentData(순서·구조 보존, 스타일 제거).
-                if quote_texts or image_upload_count:
-                    conv = convert_quotes_and_ai(page, quote_texts)
+                if quote_groups or image_upload_count:
+                    conv = convert_quotes_and_ai(page, quote_groups)
                     log(f"  [인용구 변환] {conv}")
                     if isinstance(conv, str) and conv.startswith("error"):
                         issues.append(f"인용구 변환 실패: {conv}")
