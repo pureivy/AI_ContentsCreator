@@ -31,11 +31,11 @@ export type KenIntensity = 'subtle' | 'normal' | 'strong';
 const INTENSITY: Record<KenIntensity, { zoom: number; pan: number; push: number }> = {
   subtle: { zoom: 1.05, pan: 14, push: 1.15 },
   normal: { zoom: 1.12, pan: 30, push: 1.22 },
-  strong: { zoom: 1.2, pan: 50, push: 1.3 },
+  strong: { zoom: 1.28, pan: 70, push: 1.35 }, // 2차 상향(2026-08-10 사용자 재보정 요청)
 };
 // 상시 오버스캔 — 큰 팬에도 프레임 가장자리(상하 여백·그라데이션 이음새) 노출 방지.
-// cover 세로 정합(1920) 기준 슬랙 = (1.06-1)*1920/2 ≈ 57px > 최대 시프트 50*1.06 ≈ 53px.
-const OVERSCAN = 1.06;
+// cover 세로 정합(1920) 기준 슬랙 = (1.08-1)*1920/2 ≈ 76.8px > 최대 시프트 70*1.08 = 75.6px.
+const OVERSCAN = 1.08;
 /**
  * Ken Burns 확장 무브(순수) — move·intensity 둘 다 미지정이면 종전 index parity(줌 1.08·팬 ±12,
  * 오버스캔 없음) 그대로라 구 props 폴백 불변. intensity 지정 시 신 진폭 + 앞쪽 몰림 타이밍:

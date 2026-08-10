@@ -87,23 +87,23 @@ describe('kenBurnsMove — 확장 무브(폴백=현행 index parity)', () => {
     expect(m0.x).toBeCloseTo(A.kenBurnsPan(50, 100, 0).x, 6);
     expect(m0.rotate).toBe(0);
   });
-  it('push = 오버스캔 1.06 시작 → 강줌 1.378(1.06×1.3), 70% 지점 조기 완료 + 회전 1.5° + 팬 40%', () => {
-    expect(A.kenBurnsMove(0, 100, 0, 'push').scale).toBeCloseTo(1.06, 3);
-    expect(A.kenBurnsMove(70, 100, 0, 'push').scale).toBeCloseTo(1.06 * 1.3, 3); // window 0.7 완료
+  it('push = 오버스캔 1.08 시작 → 강줌 1.458(1.08×1.35), 70% 지점 조기 완료 + 회전 1.5° + 팬 40%', () => {
+    expect(A.kenBurnsMove(0, 100, 0, 'push').scale).toBeCloseTo(1.08, 3);
+    expect(A.kenBurnsMove(70, 100, 0, 'push').scale).toBeCloseTo(1.08 * 1.35, 3); // window 0.7 완료
     expect(A.kenBurnsMove(100, 100, 0, 'push').rotate).toBeCloseTo(1.5, 3);
-    expect(Math.abs(A.kenBurnsMove(100, 100, 0, 'push').x)).toBeCloseTo(20, 3); // 50×0.4
+    expect(Math.abs(A.kenBurnsMove(100, 100, 0, 'push').x)).toBeCloseTo(28, 3); // 70×0.4
   });
-  it('intensity 진폭 — subtle 1.113 / strong 1.272(×1.06 오버스캔), 85% 조기 완료, zoom-out 역방향', () => {
-    expect(A.kenBurnsMove(100, 100, 0, 'zoom-in', 'subtle').scale).toBeCloseTo(1.06 * 1.05, 3);
-    expect(A.kenBurnsMove(85, 100, 0, 'zoom-in', 'strong').scale).toBeCloseTo(1.06 * 1.2, 3); // window 0.85 완료
-    expect(A.kenBurnsMove(0, 100, 0, 'zoom-out', 'strong').scale).toBeCloseTo(1.06 * 1.2, 3);
-    expect(A.kenBurnsMove(100, 100, 0, 'zoom-out', 'strong').scale).toBeCloseTo(1.06, 3);
+  it('intensity 진폭 — subtle 1.134 / strong 1.382(×1.08 오버스캔), 85% 조기 완료, zoom-out 역방향', () => {
+    expect(A.kenBurnsMove(100, 100, 0, 'zoom-in', 'subtle').scale).toBeCloseTo(1.08 * 1.05, 3);
+    expect(A.kenBurnsMove(85, 100, 0, 'zoom-in', 'strong').scale).toBeCloseTo(1.08 * 1.28, 3); // window 0.85 완료
+    expect(A.kenBurnsMove(0, 100, 0, 'zoom-out', 'strong').scale).toBeCloseTo(1.08 * 1.28, 3);
+    expect(A.kenBurnsMove(100, 100, 0, 'zoom-out', 'strong').scale).toBeCloseTo(1.08, 3);
   });
-  it('팬 진폭 — strong ±50px, 가장자리 노출 없음(최대 시프트 < 오버스캔 슬랙)', () => {
-    expect(A.kenBurnsMove(0, 100, 0, 'zoom-in', 'strong').x).toBeCloseTo(-50, 3);
-    expect(A.kenBurnsMove(100, 100, 0, 'zoom-in', 'strong').x).toBeCloseTo(50, 3);
-    // 세로 슬랙 = (1.06-1)*1920/2 ≈ 57.6px > |pan|*minScale = 50*1.06 = 53px
-    expect(50 * 1.06).toBeLessThan((1.06 - 1) * 1920 / 2);
+  it('팬 진폭 — strong ±70px, 가장자리 노출 없음(최대 시프트 < 오버스캔 슬랙)', () => {
+    expect(A.kenBurnsMove(0, 100, 0, 'zoom-in', 'strong').x).toBeCloseTo(-70, 3);
+    expect(A.kenBurnsMove(100, 100, 0, 'zoom-in', 'strong').x).toBeCloseTo(70, 3);
+    // 세로 슬랙 = (1.08-1)*1920/2 = 76.8px > |pan|*minScale = 70*1.08 = 75.6px
+    expect(70 * 1.08).toBeLessThan((1.08 - 1) * 1920 / 2);
   });
   it('none = 완전 정지(스케일 1·팬 0·회전 0)', () => {
     expect(A.kenBurnsMove(70, 100, 3, 'none')).toEqual({ scale: 1, x: 0, y: 0, rotate: 0 });
