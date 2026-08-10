@@ -26,14 +26,22 @@ const PACK_SYSTEM =
   '- images: 본문 흐름에 맞는 이미지 3개 슬롯. alt(대체텍스트)와 prompt(이미지 생성 프롬프트, 한국어).\n' +
   '이모지·이모티콘·장식 특수문자는 제목·메타·태그 어디에도 쓰지 마라. 본문에 없는 사실을 지어내지 마라.';
 
+/** 작가가 본문 끝에 남기는 태그류 제거(순수) — ① "태그: #…" 줄(종전) ② 맨 키워드 나열
+ *  (구두점 없는 4+ 토큰 한 줄, 실측 2026-08-10: "포도나무수확시기 … 비온디트리"가 본문으로 발행됨).
+ *  태그는 발행 시 별도 필드로 입력되므로 본문 노출은 순수 중복+키워드 덤프(스팸 신호)다.
+ *  정상 마무리 문단은 구두점(마침표·쉼표 등)을 포함하므로 걸리지 않는다. */
+export function stripTrailingTagDump(body: string): string {
+  return body
+    .replace(/\n+\s*(?:\*\*)?태그(?:\*\*)?\s*[:：][^\n]*$/u, '')
+    .replace(/\n+\s*(?:[가-힣A-Za-z0-9]{2,20}[ \t]+){3,}[가-힣A-Za-z0-9]{2,20}[ \t]*$/u, '')
+    .trimEnd();
+}
+
 export async function packageNaverBlog(input: FormatterInput): Promise<AssetBundle> {
   const { topic, researchBrief, serpText, model, signal } = input;
   const pinnedKeyword = stripEmoji(asString(input.keyword).trim());
   // 이모지 결정적 제거 — 지침(작가·편집자 프롬프트)이 1차 방어, 여기가 최종 보증(발행 초안엔 이모지 0).
-  // + 작가가 본문 끝에 남기는 "태그: #..." 줄 제거(태그는 별도 필드 — 렌더 태그 칩과 중복 방지).
-  const body = stripEmoji(input.body)
-    .replace(/\n+\s*(?:\*\*)?태그(?:\*\*)?\s*[:：][^\n]*$/u, '')
-    .trimEnd();
+  const body = stripTrailingTagDump(stripEmoji(input.body));
   let meta: {
     primaryKeyword?: string; titles?: unknown; meta?: string; tags?: unknown;
     images?: Array<{ alt?: string; prompt?: string }>;
