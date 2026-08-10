@@ -18,8 +18,8 @@ export async function renderShortsVideoRemotion(
     caption?: { bottomPct?: number; keyword?: string; outline?: boolean; fontPx?: number; hookFontPx?: number };
     /** 상단 제목 캘리(투명 PNG 절대경로) — public/ 로 스테이징해 전 씬 고정 오버레이. */
     title?: { imagePath: string; topPct?: number; widthPct?: number };
-    /** 2.5D 패럴랙스 전경 누끼(씬별 절대경로, null=없음) — 스틸 씬만 해당(클립 씬은 무시). */
-    depths?: Array<string | null>;
+    /** 2.5D 패럴랙스 레이어(씬별 fg=전경 누끼·bg=힐링 배경 절대경로, null=없음) — 스틸 씬만 해당. */
+    depths?: Array<{ fg: string; bg: string } | null>;
   } = {},
 ): Promise<ShortsRenderResult> {
   const entry = path.resolve('remotion/index.ts');
@@ -47,12 +47,13 @@ export async function renderShortsVideoRemotion(
       // 실제 클립 길이(ffprobe)로 Loop 프레임 산정 — '모든 클립 6초' 하드코딩 가정 제거(길이 가변 시 루프 경계 프리즈/점프 방지).
       try { const d = await probeDuration(clipPath); if (d > 0) clipFrames = Math.max(1, Math.round(d * FPS)); } catch { /* 산정 실패 시 AutoShorts CLIP_FRAMES 상수 폴백 */ }
     }
-    // 2.5D 패럴랙스 전경 스테이징 — 클립 씬 제외(클립이 배경), 파일 실존 검증 후 복사.
-    let fgSrc: string | null = null;
-    const depthPath = opts.depths?.[p.index];
-    if (!videoSrc && imageSrc && depthPath && fs.existsSync(depthPath)) {
-      fgSrc = `fg_${nn}.png`;
-      fs.copyFileSync(depthPath, path.join(publicDir, fgSrc));
+    // 2.5D 패럴랙스 레이어 스테이징 — 클립 씬 제외(클립이 배경), 파일 실존 검증 후 쌍으로 복사.
+    let fgSrc: string | null = null, bgSrc: string | null = null;
+    const depthLayer = opts.depths?.[p.index];
+    if (!videoSrc && imageSrc && depthLayer && fs.existsSync(depthLayer.fg) && fs.existsSync(depthLayer.bg)) {
+      fgSrc = `fg_${nn}.png`; bgSrc = `bg_${nn}.png`;
+      fs.copyFileSync(depthLayer.fg, path.join(publicDir, fgSrc));
+      fs.copyFileSync(depthLayer.bg, path.join(publicDir, bgSrc));
     }
     const sc = scenes[p.index];
     // 씬 연출 — 결정적 kind 기본값(스틸 씬만). 클립 씬은 undefined(클립이 곧 모션, 종전 동작).
@@ -60,7 +61,7 @@ export async function renderShortsVideoRemotion(
     const fx = defaultSceneFx(sc?.kind, p.index, !!videoSrc, new Date().getMonth() + 1);
     return {
       imageSrc, audioSrc, videoSrc, screenText: p.screenText, durationInFrames: p.durationInFrames,
-      ...(fgSrc ? { fgSrc } : {}),
+      ...(fgSrc && bgSrc ? { fgSrc, bgSrc } : {}),
       ...(clipFrames ? { clipFrames } : {}),
       ...(sc?.kind ? { kind: sc.kind } : {}),
       ...(sc?.stat ? { stat: sc.stat } : {}),

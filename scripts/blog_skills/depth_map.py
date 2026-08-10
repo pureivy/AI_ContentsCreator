@@ -98,11 +98,19 @@ def main() -> int:
             Image.fromarray((depth * 255).astype(np.uint8)).save(out_dir / f'depth_{nn}.png')
             m = Image.fromarray((mask * 255).astype(np.uint8)).resize(img.size, Image.BILINEAR)
             m = m.filter(ImageFilter.GaussianBlur(FEATHER_PX))
-            fg = img.convert('RGBA')
+            rgb = img.convert('RGB')
+            fg = rgb.convert('RGBA')
             fg.putalpha(m)
             buf = io.BytesIO()
             fg.save(buf, format='PNG')
             (out_dir / f'fg_{nn}.png').write_bytes(buf.getvalue())
+            # 힐링 배경 — 피사체 영역을 주변색 확산(다단 블러 합성)으로 메꾼다. 전경이 움직여 틈이
+            # 벌어져도 '선명한 피사체 사본'(이중상 실측 2026-08-10) 대신 자연스러운 배경 블러가 보인다.
+            heal_mask = m.filter(ImageFilter.MaxFilter(31)).filter(ImageFilter.GaussianBlur(12))  # 팽창+페더
+            healed = rgb
+            for r in (12, 24, 48):
+                healed = Image.composite(healed.filter(ImageFilter.GaussianBlur(r)), healed, heal_mask)
+            healed.save(out_dir / f'bg_{nn}.png')
             scenes.append({'index': i, 'ok': True, 'stats': stats})
         except Exception as e:  # 씬별 fail-open — 한 씬 실패가 전체를 막지 않게
             scenes.append({'index': i, 'ok': False, 'reason': f'error: {e}'[:120]})

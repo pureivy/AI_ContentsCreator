@@ -350,8 +350,8 @@ export async function runShortsJob(
     const stillImages = images.map((img, i) => (cv.clips[i] ? null : img));
     const dp = parallaxGate()
       ? await depthSceneLayers({ dir, images: stillImages, signal: opts.signal })
-      : { fgPaths: images.map(() => null), issues: [] };
-    const depthCount = dp.fgPaths.filter(Boolean).length;
+      : { layers: images.map(() => null), issues: [] };
+    const depthCount = dp.layers.filter(Boolean).length;
     if (depthCount) say(`씬 깊이맵 — ${depthCount}/${plan.scenes.length}씬 패럴랙스(나머지 켄번즈)`);
     else if (parallaxGate() && dp.issues.length) say(`씬 깊이맵 — 0씬 (${dp.issues[0]})`);
     checkAbort();
@@ -369,7 +369,7 @@ export async function runShortsJob(
       }
       try {
         r = await renderShortsVideoRemotion(dir, plan.scenes, images, {
-          clips: cv.clips, depths: dp.fgPaths, signal: opts.signal,
+          clips: cv.clips, depths: dp.layers, signal: opts.signal,
           // 자막 옵션 — 위치(플랫폼 UI 가림 회피)·키워드 강조색(설정 기반, A/B 선택 후 기본값 확정).
           caption: {
             bottomPct: CONFIG.shortsCaptionBottomPct,

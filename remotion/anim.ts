@@ -70,11 +70,12 @@ export function captionWordProgress(local: number, index: number, perWord = 6, r
   return 1 - Math.pow(1 - p, 3);
 }
 /**
- * 2.5D 패럴랙스 오프셋(순수) — 전경(fg)은 팬 전량, 배경(bg)은 역방향 35% 시차. 시작은 0(정렬 상태
- * — 전경·배경이 같은 사진이라 시작 어긋남은 이중상)이고 씬 85% 지점까지 벌어진 뒤 정지.
+ * 2.5D 패럴랙스 오프셋(순수) — 전경(fg)은 팬 전량, 배경(bg)은 역방향 35% 시차. 시작은 0(정렬)이고
+ * 씬 85% 지점까지 벌어진 뒤 정지. 주 입체감은 돌리줌(ParallaxImage 스케일 차등)이 담당하고 팬은
+ * 미세 보조(±14px) — 大진폭 평행이동은 배경 속 피사체 사본 노출(이중상)로 폐기(실측 2026-08-10).
  * 방향은 kenBurns 팬과 같은 4종 순환(index parity) — 시리즈 톤 일관.
  */
-export function parallaxOffset(local: number, total: number, layer: 'fg' | 'bg', index = 0, amp = 40): { x: number; y: number } {
+export function parallaxOffset(local: number, total: number, layer: 'fg' | 'bg', index = 0, amp = 14): { x: number; y: number } {
   const p = smoothstep(total > 0 ? Math.min(1, local / (total * 0.85)) : 0);
   const d = PAN_DIRS[index % PAN_DIRS.length]!;
   const k = layer === 'fg' ? 1 : -0.35;

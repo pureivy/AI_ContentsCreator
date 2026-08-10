@@ -136,13 +136,13 @@ describe('parallaxOffset — 2.5D 시차(순수)', () => {
       expect(o.x).toBeCloseTo(0, 6); expect(o.y).toBeCloseTo(0, 6); // -0 허용
     }
   });
-  it('전경 전량(+amp)·배경 역방향 35%, 85% 조기 완료', () => {
+  it('전경 전량(+amp 14)·배경 역방향 35%, 85% 조기 완료 — 大진폭은 이중상으로 폐기', () => {
     const fg = A.parallaxOffset(85, 100, 'fg', 0), bg = A.parallaxOffset(85, 100, 'bg', 0);
-    expect(fg.x).toBeCloseTo(40, 3);   // PAN_DIRS[0].x=1
-    expect(bg.x).toBeCloseTo(-14, 3);  // -0.35 배
-    expect(A.parallaxOffset(100, 100, 'fg', 0).x).toBeCloseTo(40, 3); // settle 유지
+    expect(fg.x).toBeCloseTo(14, 3);    // PAN_DIRS[0].x=1
+    expect(bg.x).toBeCloseTo(-4.9, 3);  // -0.35 배
+    expect(A.parallaxOffset(100, 100, 'fg', 0).x).toBeCloseTo(14, 3); // settle 유지
   });
   it('방향은 index 순환 — index 1 은 반대 대각', () => {
-    expect(A.parallaxOffset(85, 100, 'fg', 1).x).toBeCloseTo(-40, 3);
+    expect(A.parallaxOffset(85, 100, 'fg', 1).x).toBeCloseTo(-14, 3);
   });
 });
