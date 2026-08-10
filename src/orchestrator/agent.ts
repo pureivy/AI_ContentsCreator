@@ -213,10 +213,13 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
   let result = await llm.chat({ model, messages, maxOutputTokens: maxOut, signal: args.signal, onDelta });
   // 빈 출력 방어 — 1회 재시도. fallbackModel(상위 tier)이 있으면 그 모델로 승급(소형 모델
   // 무음 실패를 큰 모델로 구제), 없으면 온도↑로 재시도. 취소 중이면 생략.
+  // 재시도는 추론(think) 강제 OFF — 실측(2026-08-10 런 80f1e7ce1180): opus 가 1.6만 토큰을
+  // 추론만 하다 본문 없이 턴을 끝내는 플레이크가 있고, 같은 설정 재시도는 같은 모드를 다시 맞아
+  // 리드 실패 → 팀 빈 산출물 → 런 전체가 비었다. 추론 없는 재시도는 본문부터 쓴다.
   if (!result.text.trim() && !args.signal?.aborted) {
     const retryModel = args.fallbackModel && args.fallbackModel !== model ? args.fallbackModel : model;
-    if (retryModel !== model) bus.emit(EventType.log, { message: `빈 출력 — ${role.name} 모델 승급 재시도(${model}→${retryModel})` }, { agentId: role.id });
-    result = await llm.chat({ model: retryModel, messages, maxOutputTokens: maxOut, temperature: 0.9, signal: args.signal, onDelta });
+    bus.emit(EventType.log, { message: `빈 출력 — ${role.name} ${retryModel !== model ? `모델 승급 재시도(${model}→${retryModel})` : '추론 끄고 재시도'}` }, { agentId: role.id });
+    result = await llm.chat({ model: retryModel, messages, maxOutputTokens: maxOut, temperature: 0.9, think: false, signal: args.signal, onDelta });
   }
 
   // --- 능동 도구 루프(옵트인) — 모델이 <tool> 태그로 추가 자료를 요청하면 실행해 주입·재호출.
