@@ -25,7 +25,6 @@ import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues } from './standaloneQa';
 import { promiseStore } from '../content/promises';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
-import { depthSceneLayers, parallaxGate } from './shortsSceneDepth';
 import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
@@ -345,17 +344,6 @@ export async function runShortsJob(
       checkAbort();
     }
 
-    // 3-c-iii) 씬 깊이맵 — 스틸로 확정된 씬만 2.5D 패럴랙스 전경 레이어 생성(로컬 무과금, fail-open).
-    //          클립 QA 뒤에 두는 이유: 클립이 덮을 씬에 깊이 계산을 낭비하지 않기 위해.
-    const stillImages = images.map((img, i) => (cv.clips[i] ? null : img));
-    const dp = parallaxGate()
-      ? await depthSceneLayers({ dir, images: stillImages, signal: opts.signal })
-      : { layers: images.map(() => null), issues: [] };
-    const depthCount = dp.layers.filter(Boolean).length;
-    if (depthCount) say(`씬 깊이맵 — ${depthCount}/${plan.scenes.length}씬 패럴랙스(나머지 켄번즈)`);
-    else if (parallaxGate() && dp.issues.length) say(`씬 깊이맵 — 0씬 (${dp.issues[0]})`);
-    checkAbort();
-
     // 4) 조립 — 기본 Remotion 모션그래픽, 실패 시 ffmpeg 슬라이드쇼로 폴백(무중단).
     say(CONFIG.shortsRenderer === 'ffmpeg' ? '영상 조립 시작 — ffmpeg 슬라이드쇼' : '영상 조립 시작 — Remotion 모션그래픽');
     let r = null as Awaited<ReturnType<typeof renderShortsVideo>> | null;
@@ -369,7 +357,7 @@ export async function runShortsJob(
       }
       try {
         r = await renderShortsVideoRemotion(dir, plan.scenes, images, {
-          clips: cv.clips, depths: dp.layers, signal: opts.signal,
+          clips: cv.clips, signal: opts.signal,
           // 자막 옵션 — 위치(플랫폼 UI 가림 회피)·키워드 강조색(설정 기반, A/B 선택 후 기본값 확정).
           caption: {
             bottomPct: CONFIG.shortsCaptionBottomPct,

@@ -69,18 +69,6 @@ export function captionWordProgress(local: number, index: number, perWord = 6, r
   const p = clamp01((local - start) / Math.max(1, rise));
   return 1 - Math.pow(1 - p, 3);
 }
-/**
- * 2.5D 패럴랙스 오프셋(순수) — 전경(fg)은 팬 전량, 배경(bg)은 역방향 35% 시차. 시작은 0(정렬)이고
- * 씬 85% 지점까지 벌어진 뒤 정지. 주 입체감은 돌리줌(ParallaxImage 스케일 차등)이 담당하고 팬은
- * 미세 보조(±14px) — 大진폭 평행이동은 배경 속 피사체 사본 노출(이중상)로 폐기(실측 2026-08-10).
- * 방향은 kenBurns 팬과 같은 4종 순환(index parity) — 시리즈 톤 일관.
- */
-export function parallaxOffset(local: number, total: number, layer: 'fg' | 'bg', index = 0, amp = 14): { x: number; y: number } {
-  const p = smoothstep(total > 0 ? Math.min(1, local / (total * 0.85)) : 0);
-  const d = PAN_DIRS[index % PAN_DIRS.length]!;
-  const k = layer === 'fg' ? 1 : -0.35;
-  return { x: p * amp * k * d.x, y: p * amp * k * d.y };
-}
 /** 스포트라이트 개방 반경(%) — open 프레임 동안 30%→150%(전체 공개). 훅 첫 순간 시선 고정용. */
 export function spotlightRadius(local: number, open = 24): number {
   return 30 + 120 * smoothstep(open > 0 ? Math.min(1, local / open) : 1);

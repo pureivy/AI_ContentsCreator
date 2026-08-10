@@ -12,7 +12,6 @@ import { TitleOverlay } from './TitleOverlay';
 import { SpotlightMask } from './SpotlightMask';
 import { ParticleDrift } from './ParticleDrift';
 import { BarChartGrow } from './BarChartGrow';
-import { ParallaxImage } from './ParallaxImage';
 
 export const autoShortsSchema = z.object({
   scenes: z.array(z.object({
@@ -22,8 +21,6 @@ export const autoShortsSchema = z.object({
     durationInFrames: z.number(),
     videoSrc: z.string().nullable().optional(),
     clipFrames: z.number().optional(), // 실제 클립 길이(30fps 기준 프레임) — 감속 재생 배율 산정용. 없으면 CLIP_FRAMES 폴백.
-    fgSrc: z.string().nullable().optional(), // 2.5D 패럴랙스 전경 누끼(RGBA) — bgSrc 와 쌍으로 ParallaxImage 배경.
-    bgSrc: z.string().nullable().optional(), // 2.5D 패럴랙스 힐링 배경(피사체 제거) — 이중상 방지.
     kind: z.enum(['hook', 'stat', 'list', 'quote', 'chart', 'cta']).optional(),
     stat: z.object({ value: z.number(), unit: z.string().optional(), label: z.string().optional() }).optional(),
     items: z.array(z.string()).max(4).optional(),
@@ -76,9 +73,6 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
           playbackRate={Math.min(1, (s.clipFrames ?? CLIP_FRAMES) / Math.max(1, s.durationInFrames))}
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         />
-      ) : s.fgSrc && s.bgSrc ? (
-        // 배경 서열: I2V 클립 > 2.5D 패럴랙스(fx.move 는 무시 — 시차가 곧 모션) > 켄번즈.
-        <ParallaxImage bgSrc={s.bgSrc} fgSrc={s.fgSrc} total={s.durationInFrames} index={index} />
       ) : (
         <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={s.fx?.move} intensity={s.fx?.intensity} />
       )}
