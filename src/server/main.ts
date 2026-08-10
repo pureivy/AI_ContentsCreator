@@ -3452,6 +3452,22 @@ app.post('/autonomy/tick', async (c) => {
 });
 app.post('/api/autonomy/tick', (c) => c.redirect('/autonomy/tick', 307));
 
+// 정각 오토런(사용자 결정 2026-08-10: 매일 06:00·18:00 각 1편) — AUTORUN_TIMES="HH:MM,HH:MM".
+// startDaily 가 재기동 내구·당일 따라잡기를 보장하고, runNow(force)가 케이던스 간격을 우회해 그 자리에서
+// 1편을 선정·시작한다(사용자 오토런 토글은 존중 — off 면 그 슬롯 건너뜀). 빈값=off(종전 동작).
+// 30분 타이머 틱(24h 간격 케이던스)은 슬롯 유실 시(런 충돌 등) 따라잡기 폴백으로 남는다.
+for (const t of CONFIG.autorunTimes.split(',').map((s) => s.trim()).filter(Boolean)) {
+  startDaily({
+    time: t, key: `autorun-${t.replace(':', '')}`,
+    run: () => { if (autoRunEnabled()) void stopAutoCycle.runNow(); },
+    log: (m) => console.log('[정각 오토런]', m),
+  });
+}
+if (CONFIG.autorunTimes) {
+  // eslint-disable-next-line no-console
+  console.log(`[ai-contents-studio] 정각 오토런 — 매일 ${CONFIG.autorunTimes} 즉시 생산 1편씩`);
+}
+
 // 일일 브리핑(옵트인: DAILY_BRIEFING_TIME="HH:MM"). 지정 시각에 다이제스트를 알림 채널로 발송. 빈값=off.
 const stopDaily = startDaily({
   time: CONFIG.dailyBriefingTime,
