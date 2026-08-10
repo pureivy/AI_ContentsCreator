@@ -25,7 +25,7 @@ import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues } from './standaloneQa';
 import { promiseStore } from '../content/promises';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
-import { directSceneMotion, detectSubjectScenes } from './shortsMotionDirector';
+import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail } from './shortsThumbnail';
@@ -315,11 +315,20 @@ export async function runShortsJob(
     const subjectScenes = i2vGate() ? await detectSubjectScenes(images, opts.signal) : new Set<number>();
     if (subjectScenes.size) say(`사람·손·도구 씬 ${subjectScenes.size}개 — 모션 없이 스틸 유지(형태 왜곡 방지)`);
 
+    // I2V 컷 선정 — '정말 움직임이 필요한 핵심 컷'만 클립화(기본 1 = 훅, env SHORTS_I2V_MAX_CLIPS).
+    // 탈락 씬은 Remotion 네이티브 연출(fx: push·엔터 이펙트·강도 변주)이 움직임 공백을 채운다.
+    const scenePrompts = plan.scenes.map((_, i) => design.prompts[i] ?? '');
+    const i2vPlan = selectI2vScenes({
+      kinds: plan.scenes.map((s) => s.kind), motionPrompts, subjectScenes, scenePrompts, images,
+      max: CONFIG.shortsI2vMaxClips,
+    });
+    if (i2vGate()) say(`I2V 컷 선정 — ${i2vPlan.allowed.size}/${plan.scenes.length}씬 (상한 ${CONFIG.shortsI2vMaxClips}${i2vPlan.reasons.length ? ` · ${i2vPlan.reasons.join(' ')}` : ''})`);
+
     // 3-c) 씬 배경 I2V — fal 클립화(키 없으면 no-op, 실패 씬은 스틸 폴백, fail-open).
     const cv = await i2vSceneClips({
       // 원시 장면 묘사를 넘긴다(빌드된 이미지 프롬프트 X) — 후자에는 '손·손가락 왜곡을 피한다' 는
       // 금지 문구가 항상 붙어 있어 손 판별(hasSubjectRisk)이 전 씬에 오탐했다(실측 2026-08-01).
-      dir, images, scenePrompts: plan.scenes.map((_, i) => design.prompts[i] ?? ''), motionPrompts, subjectScenes, signal: opts.signal,
+      dir, images, scenePrompts, motionPrompts, subjectScenes, allowedScenes: i2vPlan.allowed, signal: opts.signal,
     });
     const clipCount = cv.clips.filter(Boolean).length;
     if (clipCount) say(`씬 I2V — ${clipCount}/${plan.scenes.length}장 클립화${cv.issues.length ? ` (${cv.issues[0]})` : ''}`);

@@ -120,6 +120,8 @@ export interface Config {
   readonly shortsI2v: 'fal' | 'off';
   /** fal I2V 모델 ID — env 한 줄로 Wan 등 교체. */
   readonly shortsI2vModel: string;
+  /** 런당 I2V 클립 상한 — '정말 움직임이 필요한 핵심 컷'만 클립화(과금 캡). 0=전 씬 스킵, 8=구 동작(씬 캡과 동일). */
+  readonly shortsI2vMaxClips: number;
   /** ready 쇼츠 자동 유튜브 비공개 업로드(옵트인). */
   readonly autoYtUpload: boolean;
   /** 쇼츠 성과 측정창(일) — 업로드 후 이 기간 매일 수집, 경과 시 강화 1회. */
@@ -188,6 +190,7 @@ export interface Config {
   readonly agentShellTimeoutMs: number;
   /** 일일 브리핑 시각 "HH:MM"(로컬 시간). 빈 문자열=off. 알림 채널 설정 시 그 시각에 다이제스트 전송. */
   readonly dailyBriefingTime: string;
+  readonly autorunTimes: string;
   /** 자율 사이클 런 완료 시 알림 전송(알림 채널 설정돼 있을 때만 실제 발송). */
   readonly notifyAutoCycle: boolean;
   /** 조각별 ready(검토 대기) 알림 — 블로그·카드뉴스·쇼츠가 완성되는 순간 push(텔레그램이면 미리보기 동봉). 킬스위치. */
@@ -279,6 +282,8 @@ export const CONFIG: Config = {
   falKey: env('FAL_KEY', ''),
   shortsI2v: env('SHORTS_I2V', 'fal') === 'off' ? 'off' : 'fal',
   shortsI2vModel: env('SHORTS_I2V_MODEL', 'fal-ai/wan/v2.2-5b/image-to-video'), // LTX-2 는 가로 전용(실측) — 세로 쇼츠 기본은 Wan 5B
+  // 기본 1 = 훅 컷만 클립화(사용자 확정 2026-08-10) — 나머지 씬은 Remotion 네이티브 모션(fx)이 채운다.
+  shortsI2vMaxClips: Math.min(8, Math.max(0, envInt('SHORTS_I2V_MAX_CLIPS', 1))),
   autoYtUpload: envBool('AUTO_YT_UPLOAD', false),
   shortsPerfDays: Math.max(1, envInt('SHORTS_PERF_DAYS', 7)),
   // 자막 하단 여백(%) — 유튜브 쇼츠·릴스 하단 UI(~25%)에 안 가리는 안전 영역. 기본 32 + 키워드 강조색
@@ -327,6 +332,8 @@ export const CONFIG: Config = {
   ).split(',').map((s) => s.trim()).filter(Boolean),
   agentShellTimeoutMs: Math.min(Math.max(1000, envInt('AGENT_SHELL_TIMEOUT_MS', 60_000)), 600_000),
   dailyBriefingTime: env('DAILY_BRIEFING_TIME', '').trim(),
+  // 정각 오토런(사용자 결정 2026-08-10) — "HH:MM,HH:MM" 목록. 각 시각에 즉시 생산 틱 1회(빈값=off).
+  autorunTimes: env('AUTORUN_TIMES', '').trim(),
   notifyAutoCycle: envBool('NOTIFY_AUTO_CYCLE', true),
   notifyContentReady: envBool('NOTIFY_CONTENT_READY', true),
   telegramBot: envBool('TELEGRAM_BOT', true),

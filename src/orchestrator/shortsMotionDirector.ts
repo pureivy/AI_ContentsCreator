@@ -67,6 +67,38 @@ export async function detectSubjectScenes(images: Array<string | null>, signal?:
   return out;
 }
 
+/**
+ * I2V 컷 선정(순수·결정적) — '정말 움직임이 필요한 핵심 컷'만 클립화(과금 캡, 사용자 확정 2026-08-10).
+ * 점수는 kind 가 이미 선언한 움직임의 가치를 따른다: 훅 100(첫 3초 이탈 방어) > 본문 60(배경 모션이
+ * 유일한 시각 축) > cta 30 > 오버레이(stat/list/quote) 5(패널 모션이 이미 있음). 동점은 앞 씬 우선.
+ * eligible 은 i2vSceneClips 의 3중 생략 규칙과 동일식 — 선정돼도 그쪽 방어 게이트가 최종 차단(이중 게이트).
+ * LLM 자기신고 점수는 쓰지 않는다(subject 필드 생략 무력화 실측 2026-08-01 — 결정적 점수가 주).
+ */
+export function selectI2vScenes(opts: {
+  kinds: Array<MotionSceneCtx['kind']>;
+  motionPrompts: Array<string | null>;
+  subjectScenes: Set<number>;
+  scenePrompts: string[];
+  images: Array<string | null>;
+  max: number;
+}): { allowed: Set<number>; reasons: string[] } {
+  const label = (k: MotionSceneCtx['kind'], i: number): string => (k === 'hook' || (i === 0 && !k)) ? '훅' : k ?? '본문';
+  const scored = opts.images.map((img, i) => {
+    const kind = opts.kinds[i];
+    const eligible = !!img
+      && !opts.subjectScenes.has(i)
+      && !(opts.motionPrompts[i]?.startsWith('Camera work only:') ?? false)
+      && !hasSubjectRisk(opts.scenePrompts[i] ?? '');
+    const score = ((kind === 'hook' || i === 0) ? 100 : kind === undefined ? 60 : kind === 'cta' ? 30 : 5) - i * 0.1;
+    return { i, kind, eligible, score };
+  });
+  const picked = scored.filter((s) => s.eligible).sort((a, b) => b.score - a.score).slice(0, Math.max(0, opts.max));
+  return {
+    allowed: new Set(picked.map((s) => s.i)),
+    reasons: picked.map((s) => `씬${s.i + 1}(${label(s.kind, s.i)})`),
+  };
+}
+
 /** 카메라 워크 전용 모션(순수·결정적) — 사람·손·도구 씬은 LLM 창작 프롬프트 대신 이 템플릿을 강제
  *  (사용자 확정 2026-07-31, 근거: 5B I2V 의 손·동작 형태 붕괴 실측). 접두 마커 'Camera work only:' 는
  *  클립 단(sceneClips)이 negative_prompt 보강 여부를 판정하는 데도 쓴다 — 문구 변경 시 함께 갱신. */

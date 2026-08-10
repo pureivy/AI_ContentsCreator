@@ -166,3 +166,41 @@ describe('directSceneMotion — null 구멍 images 의 origIndex 정렬 리맵(�
     expect(out).toEqual([null]);
   });
 });
+
+describe('selectI2vScenes — 결정적 I2V 컷 선정(상한제, 순수)', () => {
+  const base = (n: number) => ({
+    kinds: Array.from({ length: n }, () => undefined) as Array<'hook' | 'stat' | 'list' | 'quote' | 'cta' | undefined>,
+    motionPrompts: Array.from({ length: n }, () => null) as Array<string | null>,
+    subjectScenes: new Set<number>(),
+    scenePrompts: Array.from({ length: n }, () => '나무가 있는 풍경'),
+    images: Array.from({ length: n }, (_, i) => `/img/${i}.png`) as Array<string | null>,
+  });
+  it('훅(첫 씬)이 항상 1순위 — 상한 1이면 훅만', async () => {
+    const { selectI2vScenes } = await import('./shortsMotionDirector');
+    const r = selectI2vScenes({ ...base(6), max: 1 });
+    expect([...r.allowed]).toEqual([0]);
+    expect(r.reasons[0]).toContain('훅');
+  });
+  it('서열: 훅 > 본문 > cta > 오버레이, 동점은 앞 씬 우선', async () => {
+    const { selectI2vScenes } = await import('./shortsMotionDirector');
+    const o = base(6);
+    o.kinds = ['hook', 'stat', undefined, undefined, 'list', 'cta'];
+    const r = selectI2vScenes({ ...o, max: 3 });
+    expect([...r.allowed].sort()).toEqual([0, 2, 3]); // 훅 + 본문 2(앞 씬 우선)
+  });
+  it('eligible 필터 — 이미지 없음·subject 씬·Camera-only·묘사 위험은 제외', async () => {
+    const { selectI2vScenes } = await import('./shortsMotionDirector');
+    const o = base(5);
+    o.images[0] = null;                                  // 훅: 이미지 없음
+    o.subjectScenes = new Set([1]);                      // 씬2: 비전 판정
+    o.motionPrompts[2] = 'Camera work only: slow drift'; // 씬3: 카메라 전용 마커
+    o.scenePrompts[3] = '가위로 가지를 자르는 손';          // 씬4: 묘사 위험
+    const r = selectI2vScenes({ ...o, max: 3 });
+    expect([...r.allowed]).toEqual([4]); // 씬5만 생존
+  });
+  it('상한 0=빈 셋(전 씬 스킵), 상한이 eligible 수보다 크면 전원', async () => {
+    const { selectI2vScenes } = await import('./shortsMotionDirector');
+    expect(selectI2vScenes({ ...base(4), max: 0 }).allowed.size).toBe(0);
+    expect(selectI2vScenes({ ...base(4), max: 8 }).allowed.size).toBe(4);
+  });
+});

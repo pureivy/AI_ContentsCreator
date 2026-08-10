@@ -89,6 +89,8 @@ export async function i2vSceneClips(opts: {
   motionPrompts?: Array<string | null>;
   /** 비전이 '사람·손·도구 있음'으로 판정한 씬 인덱스 — I2V 를 건너뛰고 스틸로 남긴다. */
   subjectScenes?: Set<number>;
+  /** 상한 선정(selectI2vScenes) 통과 씬만 제출 — 미전달=전 씬 허용(하위호환). 제출 전 차단이라 과금 캡. */
+  allowedScenes?: Set<number>;
   signal?: AbortSignal;
 }): Promise<SceneClipsResult> {
   const out: SceneClipsResult = { clips: opts.images.map(() => null), issues: [] };
@@ -98,6 +100,8 @@ export async function i2vSceneClips(opts: {
     fs.mkdirSync(clipsDir, { recursive: true });
     await Promise.all(opts.images.map(async (img, i) => {
       if (!img || !fs.existsSync(img)) return;
+      // 상한 외 씬 — 제출 자체를 막는다(Promise.all 병렬 제출 전 결정, 과금 캡). 스틸(켄번즈+fx)로 렌더.
+      if (opts.allowedScenes && !opts.allowedScenes.has(i)) return;
       try {
         const sceneSignal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(I2V_TIMEOUT_MS)]) : AbortSignal.timeout(I2V_TIMEOUT_MS);
         const scenePrompt = opts.scenePrompts[i] ?? '';
