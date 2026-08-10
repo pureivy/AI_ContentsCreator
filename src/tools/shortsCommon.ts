@@ -146,22 +146,34 @@ export function resolveClipSrc(clip: string | null | undefined, nn: string): str
 }
 
 // 씬 연출(fx) — AutoShorts zod 스키마와 동일 어휘. 결정적 kind 기본값(LLM 무관, 순수)이라 재현 가능.
+export type SceneAccent = 'spotlight' | 'particles-leaves' | 'particles-petals' | 'particles-snow';
 export interface SceneFx {
   enter?: 'none' | 'fade' | 'slide-up' | 'wipe' | 'scale';
   move?: 'zoom-in' | 'zoom-out' | 'push' | 'none';
   intensity?: 'subtle' | 'normal' | 'strong';
+  accent?: SceneAccent;
+}
+/** 계절 파티클(순수) — 봄(3~5) 꽃잎, 가을(9~11) 낙엽, 겨울(12~2) 눈. 여름은 낙하 파티클이 부자연이라 없음. */
+export function seasonalParticles(month?: number): SceneAccent | undefined {
+  if (!month || month < 1 || month > 12) return undefined;
+  if (month >= 3 && month <= 5) return 'particles-petals';
+  if (month >= 9 && month <= 11) return 'particles-leaves';
+  if (month === 12 || month <= 2) return 'particles-snow';
+  return undefined;
 }
 /**
  * kind 기반 결정적 씬 연출(순수) — I2V 상한제로 스틸이 된 씬의 움직임 공백을 Remotion 네이티브로 메운다.
  * 클립 씬은 undefined(클립이 곧 모션 — 종전 fade 엔터 유지). 오버레이 씬(stat/list/quote)은 배경 subtle 캡
- * (패널 모션이 주인공 — 배경이 시선을 뺏지 않게), 훅은 push 강줌, 본문은 strong 줌 + 엔터 변주.
+ * (패널 모션이 주인공 — 배경이 시선을 뺏지 않게), 훅은 push 강줌+스포트라이트, 본문은 strong 줌 + 엔터 변주.
+ * 파티클은 런당 최대 2씬(본문 index 1 + cta) — 과장 방지 캡을 코드로 강제.
  */
-export function defaultSceneFx(kind: SceneKind | undefined, index: number, hasClip: boolean): SceneFx | undefined {
+export function defaultSceneFx(kind: SceneKind | undefined, index: number, hasClip: boolean, month?: number): SceneFx | undefined {
   if (hasClip) return undefined;
-  if (kind === 'hook' || (index === 0 && !kind)) return { enter: 'none', move: 'push', intensity: 'strong' };
+  if (kind === 'hook' || (index === 0 && !kind)) return { enter: 'none', move: 'push', intensity: 'strong', accent: 'spotlight' };
+  const seasonal = seasonalParticles(month);
   if (kind === 'stat') return { enter: 'fade', intensity: 'subtle' };
   if (kind === 'list') return { enter: 'wipe', intensity: 'subtle' };
   if (kind === 'quote') return { enter: 'scale', intensity: 'subtle' };
-  if (kind === 'cta') return { enter: 'fade', move: 'zoom-out', intensity: 'normal' };
-  return { enter: index % 2 === 0 ? 'slide-up' : 'fade', intensity: 'strong' };
+  if (kind === 'cta') return { enter: 'fade', move: 'zoom-out', intensity: 'normal', ...(seasonal ? { accent: seasonal } : {}) };
+  return { enter: index % 2 === 0 ? 'slide-up' : 'fade', intensity: 'strong', ...(seasonal && index === 1 ? { accent: seasonal } : {}) };
 }

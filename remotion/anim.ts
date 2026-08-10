@@ -69,6 +69,29 @@ export function captionWordProgress(local: number, index: number, perWord = 6, r
   const p = clamp01((local - start) / Math.max(1, rise));
   return 1 - Math.pow(1 - p, 3);
 }
+/** 스포트라이트 개방 반경(%) — open 프레임 동안 30%→150%(전체 공개). 훅 첫 순간 시선 고정용. */
+export function spotlightRadius(local: number, open = 24): number {
+  return 30 + 120 * smoothstep(open > 0 ? Math.min(1, local / open) : 1);
+}
+/** 결정적 의사난수 0..1 (mulberry32 계열, 순수) — 파티클에 Math.random 금지(프레임 간 불일치로 렌더 깨짐). */
+export function hash01(seed: number): number {
+  let t = (Math.floor(seed) + 0x6d2b79f5) | 0;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+/** 파티클 상태(순수·결정적) — seed 고정 궤적: 순환 낙하(y01 0..1.15), 사인 스웨이, 회전, 크기 변주. */
+export function particleState(seed: number, local: number): { x01: number; y01: number; sway: number; rot: number; size01: number } {
+  const r1 = hash01(seed), r2 = hash01(seed * 7 + 1), r3 = hash01(seed * 13 + 2), r4 = hash01(seed * 31 + 3);
+  const speed = 0.004 + r2 * 0.004; // 프레임당 낙하(화면비) ≈ 4~8초에 화면 한 바퀴
+  return {
+    x01: r1,
+    y01: (r3 * 1.15 + local * speed) % 1.15, // 위 여유 포함 순환 — 씬 내내 끊김 없이
+    sway: Math.sin(local * (0.03 + r4 * 0.03) + r1 * 6.28) * (0.02 + r2 * 0.02),
+    rot: (local * (1 + r4 * 2) + r1 * 360) % 360,
+    size01: r3,
+  };
+}
 export function sceneFadeOpacity(local: number, total: number, fade = 6): number {
   if (total <= 0) return 1;
   const fin = clamp01(local / fade);

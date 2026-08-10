@@ -47,7 +47,8 @@ export async function renderShortsVideoRemotion(
     }
     const sc = scenes[p.index];
     // 씬 연출 — 결정적 kind 기본값(스틸 씬만). 클립 씬은 undefined(클립이 곧 모션, 종전 동작).
-    const fx = defaultSceneFx(sc?.kind, p.index, !!videoSrc);
+    // month 는 렌더 시점 — 계절 파티클(봄 꽃잎/가을 낙엽/겨울 눈) 배정용.
+    const fx = defaultSceneFx(sc?.kind, p.index, !!videoSrc, new Date().getMonth() + 1);
     return {
       imageSrc, audioSrc, videoSrc, screenText: p.screenText, durationInFrames: p.durationInFrames,
       ...(clipFrames ? { clipFrames } : {}),

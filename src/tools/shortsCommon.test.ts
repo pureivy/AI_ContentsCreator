@@ -120,11 +120,23 @@ describe('defaultSceneFx — 결정적 kind 연출(순수)', () => {
     expect(defaultSceneFx('hook', 0, true)).toBeUndefined();
     expect(defaultSceneFx(undefined, 2, true)).toBeUndefined();
   });
-  it('훅(kind 또는 첫 씬)=push 강줌·엔터 없음, cta=줌아웃', async () => {
+  it('훅(kind 또는 첫 씬)=push 강줌·스포트라이트·엔터 없음, cta=줌아웃', async () => {
     const { defaultSceneFx } = await import('./shortsCommon');
-    expect(defaultSceneFx('hook', 3, false)).toEqual({ enter: 'none', move: 'push', intensity: 'strong' });
-    expect(defaultSceneFx(undefined, 0, false)).toEqual({ enter: 'none', move: 'push', intensity: 'strong' });
+    expect(defaultSceneFx('hook', 3, false)).toEqual({ enter: 'none', move: 'push', intensity: 'strong', accent: 'spotlight' });
+    expect(defaultSceneFx(undefined, 0, false)).toEqual({ enter: 'none', move: 'push', intensity: 'strong', accent: 'spotlight' });
     expect(defaultSceneFx('cta', 5, false)).toEqual({ enter: 'fade', move: 'zoom-out', intensity: 'normal' });
+  });
+  it('계절 파티클 — 봄 꽃잎/가을 낙엽/겨울 눈, 여름 없음; 본문 index1+cta 만(캡 2)', async () => {
+    const { defaultSceneFx, seasonalParticles } = await import('./shortsCommon');
+    expect(seasonalParticles(4)).toBe('particles-petals');
+    expect(seasonalParticles(10)).toBe('particles-leaves');
+    expect(seasonalParticles(1)).toBe('particles-snow');
+    expect(seasonalParticles(7)).toBeUndefined();
+    expect(defaultSceneFx(undefined, 1, false, 10)?.accent).toBe('particles-leaves'); // 본문 index 1
+    expect(defaultSceneFx(undefined, 2, false, 10)?.accent).toBeUndefined();          // 다른 본문은 제외
+    expect(defaultSceneFx('cta', 5, false, 10)?.accent).toBe('particles-leaves');
+    expect(defaultSceneFx('stat', 2, false, 10)?.accent).toBeUndefined();             // 오버레이 씬 제외
+    expect(defaultSceneFx(undefined, 1, false, 7)?.accent).toBeUndefined();           // 여름
   });
   it('오버레이 씬(stat/list/quote)=배경 subtle 캡 + kind별 엔터', async () => {
     const { defaultSceneFx } = await import('./shortsCommon');

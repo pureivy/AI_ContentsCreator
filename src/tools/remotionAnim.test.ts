@@ -109,3 +109,22 @@ describe('kenBurnsMove — 확장 무브(폴백=현행 index parity)', () => {
     expect(A.kenBurnsMove(70, 100, 3, 'none')).toEqual({ scale: 1, x: 0, y: 0, rotate: 0 });
   });
 });
+
+describe('spotlightRadius·particleState — 액센트 수학(순수·결정적)', () => {
+  it('스포트라이트 — 0에서 30%, open(24) 이후 150% 완전 개방', () => {
+    expect(A.spotlightRadius(0)).toBeCloseTo(30, 3);
+    expect(A.spotlightRadius(24)).toBeCloseTo(150, 3);
+    expect(A.spotlightRadius(999)).toBeCloseTo(150, 3);
+  });
+  it('hash01 — 결정적(같은 seed 같은 값), 0..1 범위', () => {
+    expect(A.hash01(42)).toBe(A.hash01(42));
+    expect(A.hash01(42)).not.toBe(A.hash01(43));
+    for (const s of [0, 1, 7, 999]) { const v = A.hash01(s); expect(v).toBeGreaterThanOrEqual(0); expect(v).toBeLessThan(1); }
+  });
+  it('particleState — 같은 (seed,frame) 동일 상태(프레임 간 결정성), y 순환 낙하', () => {
+    expect(A.particleState(5, 30)).toEqual(A.particleState(5, 30));
+    const a = A.particleState(5, 0).y01, b = A.particleState(5, 50).y01;
+    expect(a).not.toBeCloseTo(b, 5); // 낙하 진행
+    expect(A.particleState(5, 9999).y01).toBeLessThan(1.15); // 순환 유지
+  });
+});

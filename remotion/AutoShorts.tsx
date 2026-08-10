@@ -9,6 +9,8 @@ import { StatCountUp } from './StatCountUp';
 import { ListReveal } from './ListReveal';
 import { QuoteCard } from './QuoteCard';
 import { TitleOverlay } from './TitleOverlay';
+import { SpotlightMask } from './SpotlightMask';
+import { ParticleDrift } from './ParticleDrift';
 
 export const autoShortsSchema = z.object({
   scenes: z.array(z.object({
@@ -27,6 +29,7 @@ export const autoShortsSchema = z.object({
       enter: z.enum(['none', 'fade', 'slide-up', 'wipe', 'scale']).optional(),
       move: z.enum(['zoom-in', 'zoom-out', 'push', 'none']).optional(),
       intensity: z.enum(['subtle', 'normal', 'strong']).optional(),
+      accent: z.enum(['spotlight', 'particles-leaves', 'particles-petals', 'particles-snow']).optional(),
     }).optional(),
   })),
   totalFrames: z.number(),
@@ -68,6 +71,11 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
       ) : (
         <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={s.fx?.move} intensity={s.fx?.intensity} />
       )}
+      {/* 액센트 — 배경 위·자막/오버레이 아래(텍스트는 어두워지거나 가려지지 않게) */}
+      {s.fx?.accent === 'spotlight' ? <SpotlightMask /> : null}
+      {s.fx?.accent?.startsWith('particles-') ? (
+        <ParticleDrift kind={s.fx.accent.slice('particles-'.length) as 'leaves' | 'petals' | 'snow'} sceneIndex={index} />
+      ) : null}
       {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} /> : null}
       {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}
       {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
