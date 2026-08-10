@@ -258,6 +258,16 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
     // 누적 본문을 최종 산출물로, 메트릭은 루프 전체 합산(마지막 턴만 보고하던 과소집계 보정).
     result = { ...result, text: parts.join('\n\n').trim(), promptEvalCount: accPrompt, evalCount: accEval, totalDurationMs: accMs };
     if (calls > 0) bus.emit(EventType.log, { message: `${role.name} 도구 루프 — ${calls}회 호출` }, { agentId: role.id });
+    // 루프 소진 후에도 본문이 비면 — 전 턴을 도구 태그로만 채워 prose 0줄인 모드(실측 2026-08-11
+    // ce3d6a725506 리드: 4턴 전부 도구 호출, 종합 없이 종료 → 팀 빈 산출물 → 런 전체 공백. 시작 전
+    // 빈 출력 재시도는 루프 '앞'이라 이 모드를 못 잡는다). 도구 금지·추론 OFF 로 최종 종합을 강제한다.
+    if (!result.text.trim() && !args.signal?.aborted) {
+      bus.emit(EventType.log, { message: `빈 출력(도구 루프 소진) — ${role.name} 최종 종합 강제 1회` }, { agentId: role.id });
+      messages.push({ role: 'user', content: '도구 호출 없이, 지금까지 수집한 자료와 분석을 종합해 담당 산출물 본문을 즉시 완성하라. 출력은 본문만.' });
+      const fin = await llm.chat({ model, messages, maxOutputTokens: maxOut, think: false, signal: args.signal, onDelta });
+      const finText = stripToolTags(fin.text).trim() || fin.text.trim();
+      if (finText) result = { ...result, text: finText, evalCount: result.evalCount + fin.evalCount, totalDurationMs: result.totalDurationMs + fin.totalDurationMs };
+    }
   }
 
   bus.flushAll();

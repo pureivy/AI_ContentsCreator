@@ -471,14 +471,19 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
 
       // ④ 팀장이 팀원 산출물을 종합해 '부서 최종 산출물(문서)'을 작성(report phase). 검토·취합.
       bus.emit('phase', { team_id: team.id, phase: 'report' });
-      const combined = memberOutputs.map((o) => `## ${o.role.name}\n${o.text}`).join('\n\n');
+      // 빈 팀원 섹션 제외 — 리드 컨텍스트 오염 방지 + 아래 직결 폴백의 재료.
+      const combined = memberOutputs.filter((o) => o.text.trim()).map((o) => `## ${o.role.name}\n${o.text}`).join('\n\n');
       const led = await runAgent({
         bus, role: team.lead, model: modelForTier(assign, team.lead.tier),
         task: `[${team.name}] 팀원 산출물을 종합해, 수용 기준을 준수하는 우리 부서의 최종 산출물(완성된 문서)을 작성하라.`,
         context: [acceptanceBlock, teamRoleBlock, `[팀원 산출물]\n${combined}`].filter(Boolean).join('\n\n'),
         stage: 'work', fallbackModel: assign.heavy, signal,
       });
-      deliverable = led.text;
+      // 리드 종합이 비면 팀원 산출 직결 폴백 — 실측 2회(2026-08-10 입추·08-11 어린이 정원): 리드 1명의
+      // 빈 출력이 정상 팀원 산출까지 폐기해 런 전체가 비었다. 미다듬 문서가 빈 산출물보다 낫고,
+      // 하류(통합·집필)가 어차피 재구성한다.
+      deliverable = led.text.trim() ? led.text : combined;
+      if (!led.text.trim() && combined) bus.emit('log', { message: `[${team.name}] 리드 종합 빈 출력 — 팀원 산출 직결 폴백` });
       bus.emit('team_deliverable', { team_id: team.id, text: deliverable });
       bus.emit('phase', { team_id: team.id, phase: 'idle' }); // 팀 완료 → 팀장 '취합중' latch 해제(F3)
       // 자가학습(reflect) roster 는 개별 역할 id 로 매칭하므로, 팀 단위가 아니라 팀원 개별 산출물 + 팀장 종합을 전달한다.
@@ -493,9 +498,9 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   // 빈 팀 산출물 제외 — 통합·다이제스트 오염 방지.
   const usableTeams = teamResults.filter((t) => t.deliverable.trim());
   if (usableTeams.length === 0) {
-    bus.emit('error', { message: '모든 팀이 빈 산출물 — 통합할 내용이 없습니다.' });
-    bus.emit('run_done', { status: 'error' });
-    return { deliverable: '', modelAssignment: assign };
+    // throw — 종전엔 빈 deliverable 로 resolve 해 런이 'done'으로 기록됐다(실측 2026-08-11: 사용자가
+    // "완료인데 산출물이 없다"로 발견). launchRun 의 catch 가 error 기록·piece recordError 를 일관 처리한다.
+    throw new Error('모든 팀이 빈 산출물 — 통합할 내용이 없습니다.');
   }
 
   // --- 팀 토론(옵트인: ORG_DEBATE_ROUNDS>0) — 팀 위계를 유지한 채 산출물을 비평→반박으로 정련한다.
