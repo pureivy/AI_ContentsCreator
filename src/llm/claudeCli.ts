@@ -37,7 +37,13 @@ const SLOT = new Semaphore(CONFIG.anthropicConcurrency);
 
 // 중립 작업 디렉토리 — 스튜디오 프로젝트의 CLAUDE.md/설정이 생성 프롬프트에 새어들지 않게.
 const NEUTRAL_CWD = path.join(os.tmpdir(), 'ai-contents-claude-cli');
-fs.mkdirSync(NEUTRAL_CWD, { recursive: true });
+/** spawn 직전 매번 보장 — 부팅 1회 mkdir 는 상주 서버에서 부족하다(실사고 2026-08-10 13:21: macOS
+ *  임시폴더 청소가 이 디렉토리를 지워 이후 모든 호출이 "spawn claude ENOENT" — cwd 부재도 실행 파일
+ *  부재와 같은 코드로 보고돼 CLI 문제로 오독). mkdir 1회 비용은 CLI 부팅(~1.5s) 대비 무시 가능. */
+export function ensureNeutralCwd(): string {
+  fs.mkdirSync(NEUTRAL_CWD, { recursive: true });
+  return NEUTRAL_CWD;
+}
 
 /** ChatMessage[] → {system, prompt}. 멀티턴 이력은 단일 프롬프트로 직렬화(-p 는 1턴 입력). */
 function toPrompt(msgs: ChatMessage[]): { system?: string; prompt: string } {
@@ -121,7 +127,7 @@ export class ClaudeCliClient {
 
     const t0 = Date.now();
     return new Promise<ChatResult>((resolve, reject) => {
-      const child = spawn(CONFIG.claudeCliPath, args, { cwd: NEUTRAL_CWD, env, stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn(CONFIG.claudeCliPath, args, { cwd: ensureNeutralCwd(), env, stdio: ['pipe', 'pipe', 'pipe'] });
 
       let deltaText = '';
       let result: CliResult | undefined;
