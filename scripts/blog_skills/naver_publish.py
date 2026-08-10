@@ -528,7 +528,9 @@ def _has_rich_blocks(se_text: dict) -> bool:
 #   > 깊이 → SE 인용구 스타일(사용자 확정 2026-08-10): > 버티컬라인 · >> 따옴표 · >>> 프레임.
 QUOTE_LAYOUTS = {1: "quotation_line", 2: "default", 3: "quotation_corner"}
 #   줄 수 캡 — 버티컬라인·따옴표는 한 줄 강조용(종전 2줄 유지), 프레임은 마무리 요약 박스라 여유.
-QUOTE_LINE_CAP = {"quotation_line": 2, "default": 2, "quotation_corner": 8}
+#   프레임 캡 10: 지침은 8줄이지만 작가가 헤더 포함 9줄을 쓰는 이탈이 실측돼(ea0d88cfd728) 한두 줄
+#   여유를 둔다 — 캡 초과분은 박스 밖 일반 문단으로 밀려 어색해진다.
+QUOTE_LINE_CAP = {"quotation_line": 2, "default": 2, "quotation_corner": 10}
 
 
 def parse_body_to_comps(body: str) -> list:
