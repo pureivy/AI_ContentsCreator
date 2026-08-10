@@ -122,6 +122,8 @@ export interface Config {
   readonly shortsI2vModel: string;
   /** 런당 I2V 클립 상한 — '정말 움직임이 필요한 핵심 컷'만 클립화(과금 캡). 0=전 씬 스킵, 8=구 동작(씬 캡과 동일). */
   readonly shortsI2vMaxClips: number;
+  /** 쇼츠 스틸 씬 2.5D 패럴랙스 — 'layers'(기본, 로컬 깊이맵→전경 레이어 시차) | 'off'. */
+  readonly shortsParallax: 'layers' | 'off';
   /** ready 쇼츠 자동 유튜브 비공개 업로드(옵트인). */
   readonly autoYtUpload: boolean;
   /** 쇼츠 성과 측정창(일) — 업로드 후 이 기간 매일 수집, 경과 시 강화 1회. */
@@ -284,6 +286,8 @@ export const CONFIG: Config = {
   shortsI2vModel: env('SHORTS_I2V_MODEL', 'fal-ai/wan/v2.2-5b/image-to-video'), // LTX-2 는 가로 전용(실측) — 세로 쇼츠 기본은 Wan 5B
   // 기본 1 = 훅 컷만 클립화(사용자 확정 2026-08-10) — 나머지 씬은 Remotion 네이티브 모션(fx)이 채운다.
   shortsI2vMaxClips: Math.min(8, Math.max(0, envInt('SHORTS_I2V_MAX_CLIPS', 1))),
+  // 로컬 Depth Anything V2 Small(Core ML) — 무과금. off 한 줄로 전체 무효화(전 씬 켄번즈 복원).
+  shortsParallax: env('SHORTS_PARALLAX', 'layers') === 'off' ? 'off' : 'layers',
   autoYtUpload: envBool('AUTO_YT_UPLOAD', false),
   shortsPerfDays: Math.max(1, envInt('SHORTS_PERF_DAYS', 7)),
   // 자막 하단 여백(%) — 유튜브 쇼츠·릴스 하단 UI(~25%)에 안 가리는 안전 영역. 기본 32 + 키워드 강조색

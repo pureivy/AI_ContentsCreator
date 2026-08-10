@@ -171,6 +171,15 @@ export async function generateImagesForDraft(
 }
 
 /**
+ * 쇼츠 씬 깊이맵·전경 레이어(depth_map.py) — Depth Anything V2 Small(Core ML, 로컬 무과금).
+ * 배치 1회 호출(모델 로드 상각 — 씬별 스폰 금지). 실패는 호출부(shortsSceneDepth)가 fail-open.
+ */
+export async function generateDepthLayers(inputsPath: string, outDir: string, signal?: AbortSignal): Promise<BlogSkillResult> {
+  // 최초 1회 모델 다운로드(~50MB)를 포함할 수 있어 5분 — 캐시 후엔 씬 6장에 ~10초 실측.
+  return runScript('depth_map.py', [inputsPath, outDir], CONFIG.blogScriptsDir, signal, { timeoutMs: 5 * 60_000 });
+}
+
+/**
  * 카드뉴스 레퍼런스 검색 — cardnews_search.py(DuckDuckGo 이미지 검색·다운로드·Pillow 검증).
  * 검색 실패·0장은 무해(빈 매니페스트, exit 0) — 호출부는 레퍼런스 없이 기존 경로로 진행(fail-open).
  */
