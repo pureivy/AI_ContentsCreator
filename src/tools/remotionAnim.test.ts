@@ -99,11 +99,20 @@ describe('kenBurnsMove — 확장 무브(폴백=현행 index parity)', () => {
     expect(A.kenBurnsMove(0, 100, 0, 'zoom-out', 'strong').scale).toBeCloseTo(1.08 * 1.28, 3);
     expect(A.kenBurnsMove(100, 100, 0, 'zoom-out', 'strong').scale).toBeCloseTo(1.08, 3);
   });
-  it('팬 진폭 — strong ±70px, 가장자리 노출 없음(최대 시프트 < 오버스캔 슬랙)', () => {
-    expect(A.kenBurnsMove(0, 100, 0, 'zoom-in', 'strong').x).toBeCloseTo(-70, 3);
-    expect(A.kenBurnsMove(100, 100, 0, 'zoom-in', 'strong').x).toBeCloseTo(70, 3);
-    // 세로 슬랙 = (1.08-1)*1920/2 = 76.8px > |pan|*minScale = 70*1.08 = 75.6px
-    expect(70 * 1.08).toBeLessThan((1.08 - 1) * 1920 / 2);
+  it('팬 축별 캡 — 저스케일 구간은 클램프(±37.6), 고스케일 구간은 원진폭(±70)', () => {
+    // s=1.08 에서 가로 캡 = (0.08×540/1.08)×0.94 = 37.6 — 우측 검은 띠 실측(2026-08-10)의 수선
+    expect(A.kenBurnsMove(0, 100, 0, 'zoom-in', 'strong').x).toBeCloseTo(-37.6, 1);
+    expect(A.kenBurnsMove(100, 100, 0, 'zoom-in', 'strong').x).toBeCloseTo(70, 3); // s=1.38 — 여유 충분
+  });
+  it('가장자리 노출 불가능(속성) — 전 조합에서 scale·|팬| ≤ (scale-1)·half', () => {
+    for (const move of ['zoom-in', 'zoom-out', 'push', undefined] as const)
+      for (const intensity of ['subtle', 'normal', 'strong'] as const)
+        for (let index = 0; index < 4; index++)
+          for (let f = 0; f <= 100; f += 10) {
+            const m = A.kenBurnsMove(f, 100, index, move, intensity);
+            expect(m.scale * Math.abs(m.x)).toBeLessThanOrEqual((m.scale - 1) * 540 + 1e-6);
+            expect(m.scale * Math.abs(m.y)).toBeLessThanOrEqual((m.scale - 1) * 960 + 1e-6);
+          }
   });
   it('none = 완전 정지(스케일 1·팬 0·회전 0)', () => {
     expect(A.kenBurnsMove(70, 100, 3, 'none')).toEqual({ scale: 1, x: 0, y: 0, rotate: 0 });

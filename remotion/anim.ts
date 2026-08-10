@@ -33,9 +33,14 @@ const INTENSITY: Record<KenIntensity, { zoom: number; pan: number; push: number 
   normal: { zoom: 1.12, pan: 30, push: 1.22 },
   strong: { zoom: 1.28, pan: 70, push: 1.35 }, // 2차 상향(2026-08-10 사용자 재보정 요청)
 };
-// 상시 오버스캔 — 큰 팬에도 프레임 가장자리(상하 여백·그라데이션 이음새) 노출 방지.
-// cover 세로 정합(1920) 기준 슬랙 = (1.08-1)*1920/2 ≈ 76.8px > 최대 시프트 70*1.08 = 75.6px.
+// 상시 오버스캔 + 축별 팬 캡 — objectFit:cover 는 이미지를 요소 상자 '안에서' 크롭하므로
+// 커버 오버플로는 여유가 아니다(우측 검은 띠 실측 2026-08-10: 줌아웃 끝 s=1.08 에서 가로 여유
+// (s-1)*540=43px < 시프트 70*1.08=75.6px → 32px 노출). 여유는 스케일 몫뿐이라 팬 오프셋을
+// 축별 허용치(|t| ≤ (s-1)*half/s, 안전율 0.94)로 클램프한다 — 어떤 조합에도 노출 불가.
 const OVERSCAN = 1.08;
+const HALF_W = 540, HALF_H = 960; // 1080x1920 절반 — 축별 여유 산정 기준
+const axisCap = (scale: number, half: number): number => Math.max(0, ((scale - 1) * half) / scale) * 0.94;
+const clampAbs = (v: number, cap: number): number => Math.max(-cap, Math.min(cap, v));
 /**
  * Ken Burns 확장 무브(순수) — move·intensity 둘 다 미지정이면 종전 index parity(줌 1.08·팬 ±12,
  * 오버스캔 없음) 그대로라 구 props 폴백 불변. intensity 지정 시 신 진폭 + 앞쪽 몰림 타이밍:
@@ -53,15 +58,22 @@ export function kenBurnsMove(local: number, total: number, index = 0, move?: Ken
   const p = smoothstep(total > 0 ? Math.min(1, local / (total * window)) : 0);
   const d = PAN_DIRS[index % PAN_DIRS.length]!;
   if (move === 'push') {
+    const scale = OVERSCAN * (1 + (cfg.push - 1) * p);
     return {
-      scale: OVERSCAN * (1 + (cfg.push - 1) * p),
-      x: (p - 0.5) * 2 * cfg.pan * 0.4 * d.x, y: (p - 0.5) * 2 * cfg.pan * 0.4 * d.y,
+      scale,
+      x: clampAbs((p - 0.5) * 2 * cfg.pan * 0.4 * d.x, axisCap(scale, HALF_W)),
+      y: clampAbs((p - 0.5) * 2 * cfg.pan * 0.4 * d.y, axisCap(scale, HALF_H)),
       rotate: 1.5 * p,
     };
   }
   const zoomOut = move === 'zoom-out' || (move === undefined && index % 2 === 1);
   const scale = OVERSCAN * (zoomOut ? cfg.zoom - (cfg.zoom - 1) * p : 1 + (cfg.zoom - 1) * p);
-  return { scale, x: (p - 0.5) * 2 * cfg.pan * d.x, y: (p - 0.5) * 2 * cfg.pan * d.y, rotate: 0 };
+  return {
+    scale,
+    x: clampAbs((p - 0.5) * 2 * cfg.pan * d.x, axisCap(scale, HALF_W)),
+    y: clampAbs((p - 0.5) * 2 * cfg.pan * d.y, axisCap(scale, HALF_H)),
+    rotate: 0,
+  };
 }
 /** 자막 단어 i 의 등장 진행도(0..1, ease-out) — 이산 점프 대신 rise 프레임 동안 부드럽게. */
 export function captionWordProgress(local: number, index: number, perWord = 6, rise = 5): number {
