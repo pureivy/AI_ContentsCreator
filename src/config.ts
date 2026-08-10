@@ -282,8 +282,9 @@ export const CONFIG: Config = {
   falKey: env('FAL_KEY', ''),
   shortsI2v: env('SHORTS_I2V', 'fal') === 'off' ? 'off' : 'fal',
   shortsI2vModel: env('SHORTS_I2V_MODEL', 'fal-ai/wan/v2.2-5b/image-to-video'), // LTX-2 는 가로 전용(실측) — 세로 쇼츠 기본은 Wan 5B
-  // 기본 1 = 훅 컷만 클립화(사용자 확정 2026-08-10) — 나머지 씬은 Remotion 네이티브 모션(fx)이 채운다.
-  shortsI2vMaxClips: Math.min(8, Math.max(0, envInt('SHORTS_I2V_MAX_CLIPS', 1))),
+  // 기본 2 = 훅+본문 1컷(사용자 번복 2026-08-10 저녁: 상한 1 도입 당일 "움직임이 적다" 체감 지적 —
+  // 1로 줄인 날 fal 3연속 실패까지 겹쳐 클립 0장 편이 잇따랐다). 나머지 씬은 Remotion 네이티브 모션(fx).
+  shortsI2vMaxClips: Math.min(8, Math.max(0, envInt('SHORTS_I2V_MAX_CLIPS', 2))),
   autoYtUpload: envBool('AUTO_YT_UPLOAD', false),
   shortsPerfDays: Math.max(1, envInt('SHORTS_PERF_DAYS', 7)),
   // 자막 하단 여백(%) — 유튜브 쇼츠·릴스 하단 UI(~25%)에 안 가리는 안전 영역. 기본 32 + 키워드 강조색

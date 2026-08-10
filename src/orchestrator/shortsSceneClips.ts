@@ -48,8 +48,9 @@ export function buildI2vBody(model: string, prompt: string, imageUrl: string, su
 export const i2vGate = (): boolean => CONFIG.shortsI2v === 'fal' && !!CONFIG.falKey && CONFIG.shortsRenderer !== 'ffmpeg';
 
 // I2V 폴링 타임아웃 — 제출 후 결과 대기(폴링 연장은 재제출/재과금 아님, '과금 불변'). fal 큐 혼잡 시 120s는
-// 잦은 타임아웃→스틸 폴백(모션 상실)이라 180s 로 완화해 느린 생성을 회수. 재시도는 여전히 없음(과금 캡 유지).
-const I2V_TIMEOUT_MS = 180_000;
+// 잦은 타임아웃→스틸 폴백(모션 상실)이라 180s 로 완화했는데, 2026-08-10 낮 180s 로도 2편 연속 타임아웃
+// (이미 과금된 결과를 버림) → 300s 로 2차 완화. 재제출성 재시도는 별도 회수 예산(런당 1회)이 관리.
+const I2V_TIMEOUT_MS = 300_000;
 
 /** fal queue REST 1회 실행 — 제출→폴링(2초)→결과 JSON. 타임아웃·취소·비정상 응답은 throw.
  *  중단 시 서버측 잡도 취소(cancel_url PUT, fire-and-forget) — 과금 즉시 종료. */
@@ -98,12 +99,14 @@ export async function i2vSceneClips(opts: {
     if (!i2vGate()) return out;
     const clipsDir = path.join(opts.dir, 'clips');
     fs.mkdirSync(clipsDir, { recursive: true });
+    // 실패 회수 예산 — 런당 1회(사용자 승인 2026-08-10: 타임아웃·504 로 죽으면 그 씬만 한 번 재제출.
+    // 추가 과금은 실패했을 때만 발생, 최악에도 제출 수 = 상한+1). JS 단일 스레드라 카운터 경합 없음.
+    let recoveryLeft = 1;
     await Promise.all(opts.images.map(async (img, i) => {
       if (!img || !fs.existsSync(img)) return;
       // 상한 외 씬 — 제출 자체를 막는다(Promise.all 병렬 제출 전 결정, 과금 캡). 스틸(켄번즈+fx)로 렌더.
       if (opts.allowedScenes && !opts.allowedScenes.has(i)) return;
       try {
-        const sceneSignal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(I2V_TIMEOUT_MS)]) : AbortSignal.timeout(I2V_TIMEOUT_MS);
         const scenePrompt = opts.scenePrompts[i] ?? '';
         const directed = opts.motionPrompts?.[i];
         // 사람·손·도구 씬은 I2V 자체를 건너뛴다(사용자 확정 2026-08-01). 카메라 전용 프롬프트 + 동작 금지
@@ -116,20 +119,37 @@ export async function i2vSceneClips(opts: {
         }
         const b64 = fs.readFileSync(img).toString('base64');
         const motion = directed ?? buildMotionPrompt(scenePrompt);
-        const json = await falQueueRun(CONFIG.shortsI2vModel,
-          buildI2vBody(CONFIG.shortsI2vModel, motion, `data:image/png;base64,${b64}`),
-          sceneSignal);
-        const url = extractVideoUrl(json);
-        if (!url) throw new Error('video.url 없음');
-        let dl = await fetch(url, { signal: sceneSignal });
-        if (!dl.ok) dl = await fetch(url, { signal: sceneSignal }); // CDN 일시 오류 1회 재시도(생성 재과금 없음)
-        if (!dl.ok) throw new Error(`클립 다운로드 실패 HTTP ${dl.status}`);
-        const buf = Buffer.from(await dl.arrayBuffer());
-        if (buf.length < 10_000) throw new Error(`클립 데이터 이상(${buf.length}B)`);
-        const fp = path.join(clipsDir, `clip_${String(i + 1).padStart(2, '0')}.mp4`);
-        fs.writeFileSync(fp, buf);
-        await probeDuration(fp); // 손상 mp4 거부 — 그 씬만 스틸 폴백(전체 렌더 강등 방지)
-        out.clips[i] = fp;
+        // 1회 시도 전체(제출→폴링→다운로드→검증) — 타임아웃 signal 은 일회성이라 시도마다 새로 만든다.
+        const attempt = async (): Promise<string> => {
+          const sceneSignal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(I2V_TIMEOUT_MS)]) : AbortSignal.timeout(I2V_TIMEOUT_MS);
+          const json = await falQueueRun(CONFIG.shortsI2vModel,
+            buildI2vBody(CONFIG.shortsI2vModel, motion, `data:image/png;base64,${b64}`),
+            sceneSignal);
+          const url = extractVideoUrl(json);
+          if (!url) throw new Error('video.url 없음');
+          let dl = await fetch(url, { signal: sceneSignal });
+          if (!dl.ok) dl = await fetch(url, { signal: sceneSignal }); // CDN 일시 오류 1회 재시도(생성 재과금 없음)
+          if (!dl.ok) throw new Error(`클립 다운로드 실패 HTTP ${dl.status}`);
+          const buf = Buffer.from(await dl.arrayBuffer());
+          if (buf.length < 10_000) throw new Error(`클립 데이터 이상(${buf.length}B)`);
+          const fp = path.join(clipsDir, `clip_${String(i + 1).padStart(2, '0')}.mp4`);
+          fs.writeFileSync(fp, buf);
+          await probeDuration(fp); // 손상 mp4 거부 — 그 씬만 스틸 폴백(전체 렌더 강등 방지)
+          return fp;
+        };
+        try {
+          out.clips[i] = await attempt();
+        } catch (e) {
+          const msg = e instanceof Error ? e.message.slice(0, 60) : String(e);
+          // 회수 재제출 — 사용자 취소는 제외(중단 존중), 예산 소진 시 종전대로 스틸 폴백.
+          if (recoveryLeft > 0 && !opts.signal?.aborted) {
+            recoveryLeft--;
+            out.issues.push(`씬${i + 1} I2V 실패(${msg}) — 회수 재제출 1회`);
+            out.clips[i] = await attempt();
+          } else {
+            throw e;
+          }
+        }
       } catch (e) {
         out.issues.push(`씬${i + 1} I2V 실패(스틸 폴백): ${e instanceof Error ? e.message.slice(0, 60) : e}`);
       }
