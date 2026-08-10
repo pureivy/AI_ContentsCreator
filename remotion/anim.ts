@@ -26,23 +26,42 @@ export function sceneEnterFade(local: number, fade = 6): number {
 // 배경 모션 어휘 — I2V 상한제(핵심 컷만 클립화)에서 스틸 씬의 '움직임 공백'을 메우는 결정적 연출.
 export type KenMove = 'zoom-in' | 'zoom-out' | 'push' | 'none';
 export type KenIntensity = 'subtle' | 'normal' | 'strong';
-const INTENSITY_MAX: Record<KenIntensity, number> = { subtle: 1.04, normal: 1.08, strong: 1.15 };
+// 진폭 재보정(2026-08-10 실런 체감 부족 실측): 종전 줌 8%/팬 ±12px(화면 1%)는 6~7초 씬에서 정지로
+// 보였다. zoom=최대 배율, pan=최대 오프셋(px, ±), push=훅 강줌 배율.
+const INTENSITY: Record<KenIntensity, { zoom: number; pan: number; push: number }> = {
+  subtle: { zoom: 1.05, pan: 14, push: 1.15 },
+  normal: { zoom: 1.12, pan: 30, push: 1.22 },
+  strong: { zoom: 1.2, pan: 50, push: 1.3 },
+};
+// 상시 오버스캔 — 큰 팬에도 프레임 가장자리(상하 여백·그라데이션 이음새) 노출 방지.
+// cover 세로 정합(1920) 기준 슬랙 = (1.06-1)*1920/2 ≈ 57px > 최대 시프트 50*1.06 ≈ 53px.
+const OVERSCAN = 1.06;
 /**
- * Ken Burns 확장 무브(순수) — move 미지정이면 현행 index parity(짝수 줌인/홀수 줌아웃 + 팬 순환)
- * 그대로라 폴백=현행 동작. 'push'는 훅용 강줌+미세 회전(±1.2° 캡), 'none'은 완전 정지(클립 씬 등).
+ * Ken Burns 확장 무브(순수) — move·intensity 둘 다 미지정이면 종전 index parity(줌 1.08·팬 ±12,
+ * 오버스캔 없음) 그대로라 구 props 폴백 불변. intensity 지정 시 신 진폭 + 앞쪽 몰림 타이밍:
+ * 줌·팬은 씬의 85%, push 는 70% 지점에 완료돼 초반 체감 속도를 높인다(이후 정지=settle).
+ * 'push'는 훅용 강줌+미세 회전(1.5° 캡)+팬 40%, 'none'은 완전 정지.
  */
 export function kenBurnsMove(local: number, total: number, index = 0, move?: KenMove, intensity?: KenIntensity): { scale: number; x: number; y: number; rotate: number } {
-  const max = INTENSITY_MAX[intensity ?? 'normal'];
   if (move === 'none') return { scale: 1, x: 0, y: 0, rotate: 0 };
-  const p = smoothstep(total > 0 ? local / total : 0);
-  const pan = kenBurnsPan(local, total, index);
+  if (!move && !intensity) { // 구 동작 보존 — fx 없는 씬(옛 props·명시 폴백)
+    const pan = kenBurnsPan(local, total, index);
+    return { scale: kenBurnsScale(local, total, 1.08, index), x: pan.x, y: pan.y, rotate: 0 };
+  }
+  const cfg = INTENSITY[intensity ?? (move === 'push' ? 'strong' : 'normal')]; // push 는 강줌이 본질
+  const window = move === 'push' ? 0.7 : 0.85;
+  const p = smoothstep(total > 0 ? Math.min(1, local / (total * window)) : 0);
+  const d = PAN_DIRS[index % PAN_DIRS.length]!;
   if (move === 'push') {
-    const pushMax = intensity ? max : INTENSITY_MAX.strong; // push 는 강줌이 본질 — 미지정 시 strong
-    return { scale: 1 + (pushMax - 1) * p, x: pan.x * 0.5, y: pan.y * 0.5, rotate: 1.2 * p };
+    return {
+      scale: OVERSCAN * (1 + (cfg.push - 1) * p),
+      x: (p - 0.5) * 2 * cfg.pan * 0.4 * d.x, y: (p - 0.5) * 2 * cfg.pan * 0.4 * d.y,
+      rotate: 1.5 * p,
+    };
   }
   const zoomOut = move === 'zoom-out' || (move === undefined && index % 2 === 1);
-  const scale = zoomOut ? max - (max - 1) * p : 1 + (max - 1) * p;
-  return { scale, x: pan.x, y: pan.y, rotate: 0 };
+  const scale = OVERSCAN * (zoomOut ? cfg.zoom - (cfg.zoom - 1) * p : 1 + (cfg.zoom - 1) * p);
+  return { scale, x: (p - 0.5) * 2 * cfg.pan * d.x, y: (p - 0.5) * 2 * cfg.pan * d.y, rotate: 0 };
 }
 /** 자막 단어 i 의 등장 진행도(0..1, ease-out) — 이산 점프 대신 rise 프레임 동안 부드럽게. */
 export function captionWordProgress(local: number, index: number, perWord = 6, rise = 5): number {
