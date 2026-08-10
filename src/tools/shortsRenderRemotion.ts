@@ -56,6 +56,7 @@ export async function renderShortsVideoRemotion(
       ...(sc?.stat ? { stat: sc.stat } : {}),
       ...(sc?.items ? { items: sc.items } : {}),
       ...(sc?.quote ? { quote: sc.quote } : {}),
+      ...(sc?.chart ? { chart: sc.chart } : {}),
       ...(fx ? { fx } : {}),
     };
   }));

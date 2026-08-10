@@ -21,12 +21,13 @@ export const FRAME_H = 2880;
 export const SHORTS_TTS_TONE =
   '활기차고 대화하듯, 약간 빠른 템포로 친근하게 낭독한다. 첫 훅은 궁금증을 자아내게 힘주어, 핵심 수치와 결론은 또렷하고 자신감 있게. 광고 성우톤이 아니라 아는 사람이 알려주듯.';
 
-export type SceneKind = 'hook' | 'stat' | 'list' | 'quote' | 'cta';
+export type SceneKind = 'hook' | 'stat' | 'list' | 'quote' | 'chart' | 'cta';
 export interface SceneKindFields {
   kind?: SceneKind;
   stat?: { value: number; unit?: string; label?: string };
   items?: string[];
   quote?: { text: string; source?: string };
+  chart?: { series: Array<{ label: string; value: number }>; unit?: string; highlight?: number };
 }
 export interface ShortsScene extends SceneKindFields { narration: string; screenText?: string }
 
@@ -61,6 +62,27 @@ export function normalizeSceneKind(raw: unknown): SceneKindFields {
     if (!text) return {};
     const source = asText(q.source).slice(0, 15);
     return { kind: 'quote', quote: { text, ...(source ? { source } : {}) } };
+  }
+  if (kind === 'chart') {
+    const c = (r.chart && typeof r.chart === 'object' ? r.chart : {}) as Record<string, unknown>;
+    const series = (Array.isArray(c.series) ? c.series : [])
+      .map((x) => {
+        const o = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>;
+        const rawVal = asText(o.value).replace(/,/g, '').trim();
+        const value = rawVal ? Number(rawVal) : NaN;
+        const label = asText(o.label).slice(0, 8);
+        // 음수·비유한·12자리+ 거부(막대 좌표계·패널 넘침), 라벨 필수(축 없는 막대 무의미)
+        return Number.isFinite(value) && value >= 0 && value < 1e12 && label ? { label, value } : null;
+      })
+      .filter((x): x is { label: string; value: number } => !!x)
+      .slice(0, 5);
+    if (series.length < 2 || series.every((s) => s.value === 0)) return {}; // 비교가 성립해야 차트
+    const unit = asText(c.unit).slice(0, 6);
+    const hi = Math.floor(Number(asText(c.highlight)));
+    return {
+      kind: 'chart',
+      chart: { series, ...(unit ? { unit } : {}), ...(Number.isFinite(hi) && hi >= 0 && hi < series.length ? { highlight: hi } : {}) },
+    };
   }
   return {};
 }
@@ -174,6 +196,7 @@ export function defaultSceneFx(kind: SceneKind | undefined, index: number, hasCl
   if (kind === 'stat') return { enter: 'fade', intensity: 'subtle' };
   if (kind === 'list') return { enter: 'wipe', intensity: 'subtle' };
   if (kind === 'quote') return { enter: 'scale', intensity: 'subtle' };
+  if (kind === 'chart') return { enter: 'slide-up', intensity: 'subtle' };
   if (kind === 'cta') return { enter: 'fade', move: 'zoom-out', intensity: 'normal', ...(seasonal ? { accent: seasonal } : {}) };
   return { enter: index % 2 === 0 ? 'slide-up' : 'fade', intensity: 'strong', ...(seasonal && index === 1 ? { accent: seasonal } : {}) };
 }

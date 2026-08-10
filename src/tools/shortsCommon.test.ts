@@ -150,3 +150,30 @@ describe('defaultSceneFx — 결정적 kind 연출(순수)', () => {
     expect(defaultSceneFx(undefined, 3, false)).toEqual({ enter: 'fade', intensity: 'strong' });
   });
 });
+
+describe('normalizeSceneKind — chart 검증', () => {
+  it('정상 chart: series 2~5·label 8자 캡·highlight 범위 검증', () => {
+    const r = normalizeSceneKind({ kind: 'chart', chart: { series: [{ label: '봄철심기12345', value: 90 }, { label: '가을', value: '70' }], unit: '%', highlight: 0 } });
+    expect(r.kind).toBe('chart');
+    expect(r.chart?.series).toEqual([{ label: '봄철심기1234', value: 90 }, { label: '가을', value: 70 }]);
+    expect(r.chart?.unit).toBe('%');
+    expect(r.chart?.highlight).toBe(0);
+  });
+  it('불량 강등: series 1개·음수·전부 0·highlight 범위 밖', () => {
+    expect(normalizeSceneKind({ kind: 'chart', chart: { series: [{ label: '봄', value: 90 }] } })).toEqual({});
+    expect(normalizeSceneKind({ kind: 'chart', chart: { series: [{ label: '봄', value: -1 }, { label: '가을', value: 70 }] } }).chart?.series).toEqual([{ label: '가을', value: 70 }].length === 1 ? undefined : []);
+    expect(normalizeSceneKind({ kind: 'chart', chart: { series: [{ label: '봄', value: 0 }, { label: '가을', value: 0 }] } })).toEqual({});
+    const hi = normalizeSceneKind({ kind: 'chart', chart: { series: [{ label: '봄', value: 9 }, { label: '가을', value: 7 }], highlight: 9 } });
+    expect(hi.chart?.highlight).toBeUndefined();
+  });
+  it('라벨 없는 항목 제외, 6개 이상은 5개 캡', () => {
+    const r = normalizeSceneKind({ kind: 'chart', chart: { series: [1, 2, 3, 4, 5, 6].map((v) => ({ label: `항목${v}`, value: v })) } });
+    expect(r.chart?.series.length).toBe(5);
+    const r2 = normalizeSceneKind({ kind: 'chart', chart: { series: [{ label: '', value: 1 }, { label: 'ㄱ', value: 2 }, { label: 'ㄴ', value: 3 }] } });
+    expect(r2.chart?.series.length).toBe(2);
+  });
+  it('defaultSceneFx chart = slide-up + subtle', async () => {
+    const { defaultSceneFx } = await import('./shortsCommon');
+    expect(defaultSceneFx('chart', 2, false)).toEqual({ enter: 'slide-up', intensity: 'subtle' });
+  });
+});

@@ -11,6 +11,7 @@ import { QuoteCard } from './QuoteCard';
 import { TitleOverlay } from './TitleOverlay';
 import { SpotlightMask } from './SpotlightMask';
 import { ParticleDrift } from './ParticleDrift';
+import { BarChartGrow } from './BarChartGrow';
 
 export const autoShortsSchema = z.object({
   scenes: z.array(z.object({
@@ -20,10 +21,14 @@ export const autoShortsSchema = z.object({
     durationInFrames: z.number(),
     videoSrc: z.string().nullable().optional(),
     clipFrames: z.number().optional(), // 실제 클립 길이(30fps 기준 프레임) — 감속 재생 배율 산정용. 없으면 CLIP_FRAMES 폴백.
-    kind: z.enum(['hook', 'stat', 'list', 'quote', 'cta']).optional(),
+    kind: z.enum(['hook', 'stat', 'list', 'quote', 'chart', 'cta']).optional(),
     stat: z.object({ value: z.number(), unit: z.string().optional(), label: z.string().optional() }).optional(),
     items: z.array(z.string()).max(4).optional(),
     quote: z.object({ text: z.string(), source: z.string().optional() }).optional(),
+    chart: z.object({
+      series: z.array(z.object({ label: z.string(), value: z.number() })).max(5),
+      unit: z.string().optional(), highlight: z.number().optional(),
+    }).optional(),
     /** 씬 연출(결정적 kind 기본값, 서버가 산정) — 미지정=종전 동작(fade 엔터 + index parity 켄번즈). */
     fx: z.object({
       enter: z.enum(['none', 'fade', 'slide-up', 'wipe', 'scale']).optional(),
@@ -79,6 +84,7 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
       {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} /> : null}
       {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}
       {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
+      {s.kind === 'chart' && s.chart ? <BarChartGrow chart={s.chart} total={s.durationInFrames} /> : null}
       <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={caption?.bottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} hookFontPx={caption?.hookFontPx} />
       {s.audioSrc ? <Audio src={staticFile(s.audioSrc)} /> : null}
     </AbsoluteFill>

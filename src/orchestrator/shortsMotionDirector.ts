@@ -19,7 +19,7 @@ import { stdModel, visionCapable } from './visionCommon';
 export interface MotionSceneCtx {
   narration: string;
   screenText?: string;
-  kind?: 'hook' | 'stat' | 'list' | 'quote' | 'cta';
+  kind?: 'hook' | 'stat' | 'list' | 'quote' | 'chart' | 'cta';
 }
 
 /** 씬 묘사에 사람·손·도구가 등장할 위험 판정(순수·정밀도 우선) — 이미지 비전 판별(detectSubjectScenes)의
@@ -112,7 +112,7 @@ export function cameraOnlyMotionPrompt(kind?: MotionSceneCtx['kind'], isFirst = 
 /** kind별 모션 연출 가이드(순수) — 비전 프롬프트에 씬별로 붙는 의도 힌트. */
 export function motionGuideFor(kind: MotionSceneCtx['kind'], isFirst: boolean): string {
   if (kind === 'hook' || (isFirst && !kind)) return '훅 씬: 첫 3초에 스크롤을 멈출 또렷한 모션 — 주 피사체로 천천히 밀고 들어가는 push-in 중심의 카메라 워크';
-  if (kind === 'stat' || kind === 'list' || kind === 'quote') return '오버레이 씬: 텍스트 패널이 위에 얹히므로 절제된 미세 모션 — 아주 느린 드리프트, 배경이 시선을 뺏지 않게';
+  if (kind === 'stat' || kind === 'list' || kind === 'quote' || kind === 'chart') return '오버레이 씬: 텍스트 패널이 위에 얹히므로 절제된 미세 모션 — 아주 느린 드리프트, 배경이 시선을 뺏지 않게';
   if (kind === 'cta') return 'CTA 씬: 안정적이고 따뜻한 마무리 — 미세한 줌아웃 또는 정적에 가까운 드리프트';
   return '본문 씬: 자연스러운 시네마틱 모션 — 느린 카메라 이동과 장면 속 자연 요소의 미세한 움직임';
 }
