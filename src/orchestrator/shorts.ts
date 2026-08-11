@@ -179,7 +179,9 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       ...(next ? { next } : {}),
     };
   };
-  let plan = parsePlan(await callRoleJSON<PlanRaw>(io, 'shorts_writer', sys, user, 2200, true));
+  // 예산 3000(CLI 상한 ×3=9000) — 문체 제약 투입(2026-08-11) 후 사고량 증가로 종전 2200(6600)이
+  // 즉시 초과됐다(실측: 테스트 런 2건 연속 "exceeded 6600 output token maximum").
+  let plan = parsePlan(await callRoleJSON<PlanRaw>(io, 'shorts_writer', sys, user, 3000, true));
   if (!plan) return null;
   // 단독 이해 검산 — 원문을 안 본 시청자 관점 텍스트 검사 후 1회 수정 라운드(fail-open, 실측 2026-07-29 결함 대응).
   try {
@@ -192,7 +194,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       const m = `단독 이해·문체 검산 — ${probs.length}건 → 수정 라운드 (${probs[0]?.slice(0, 50)})`;
       console.log(`[숏폼] ${m}`); io.bus?.emit('log', { message: m });
       const fixed = parsePlan(await callRoleJSON<PlanRaw>(io, 'shorts_writer', sys,
-        `${user}\n\n[단독 이해·문체 검산 실패 — 아래 문제를 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지)]\n${probs.map((p) => `- ${p}`).join('\n')}`, 2600, false));
+        `${user}\n\n[단독 이해·문체 검산 실패 — 아래 문제를 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지)]\n${probs.map((p) => `- ${p}`).join('\n')}`, 3400, false));
       // 수정본 파싱 실패 시 원본 유지. 수정 라운드가 대본만 고치고 메타(제목 후보·설명·해시태그)를
       // 빠뜨려도 원본 것을 승계(무손실 병합 — parsePlan 의 [topic] 폴백 제목이 원본을 덮지 않게).
       if (fixed) {

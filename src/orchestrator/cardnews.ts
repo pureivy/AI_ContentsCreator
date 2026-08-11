@@ -233,9 +233,11 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     !!x && Array.isArray(x.slides) && x.slides.length > 0;
   // 기획자(opus)가 간헐적으로 파싱 불가·미완결 JSON을 반환 → 하드 실패 방지로 1회 재시도
   // (두번째는 스폰 애니 생략, 완결 JSON 강조, 토큰 여유 상향). 실측: 재시도하면 대개 성공.
-  let j = await callRoleJSON<PlannerRaw>(io, 'cardnews_planner', sys, user, 2000, true);
+  // 예산 3000(CLI 상한 ×3=9000) — 문체 블록 신설(2026-08-11) 후 사고량 증가로 종전 2000(6000)이
+  // 즉시 초과됐다(실측: 테스트 런 "exceeded 6000 output token maximum").
+  let j = await callRoleJSON<PlannerRaw>(io, 'cardnews_planner', sys, user, 3000, true);
   if (!usable(j)) {
-    j = await callRoleJSON<PlannerRaw>(io, 'cardnews_planner', sys, `${user}\n\n반드시 완결된 JSON 하나만 출력하라(설명·마크다운 코드펜스 금지).`, 2600, false);
+    j = await callRoleJSON<PlannerRaw>(io, 'cardnews_planner', sys, `${user}\n\n반드시 완결된 JSON 하나만 출력하라(설명·마크다운 코드펜스 금지).`, 3400, false);
   }
   if (!usable(j)) return null;
   const toPlan = (raw: PlannerRaw & { slides: PlannerSlide[] }): Plan | null => {
@@ -274,7 +276,7 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
       const m = `단독 이해 검산 — ${probs.length}건 → 수정 라운드 (${probs[0]?.slice(0, 50)})`;
       console.log(`[카드뉴스] ${m}`); io.bus?.emit('log', { message: m });
       const j2 = await callRoleJSON<PlannerRaw>(io, 'cardnews_planner', sys,
-        `${user}\n\n[단독 이해 검산 실패 — 아래 문제를 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지)]\n${probs.map((p) => `- ${p}`).join('\n')}`, 2600, false);
+        `${user}\n\n[단독 이해 검산 실패 — 아래 문제를 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지)]\n${probs.map((p) => `- ${p}`).join('\n')}`, 3400, false);
       if (usable(j2)) {
         const fixed = toPlan(j2); // 수정본 불량 시 원본 유지
         // 수정 라운드가 슬라이드만 고치고 caption/hashtags 를 빠뜨려도 원본 것을 승계(무손실 병합).
