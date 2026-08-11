@@ -71,7 +71,9 @@ async function callRoleJSON<T>(
     const out = await runAgent({
       bus: io.bus, role, model: stdModel(),
       task: `${task}\n\n${NO_FABRICATED_EXPERIENCE}\n\n${SELLER_INQUIRY_BAN}\n\n${lexiconGuide(getBrand()?.avoidJargon)}\n\n다른 텍스트 없이 JSON만 출력하라.`,
-      stage: 'work', emitSpawn, maxOutputTokens, signal: io.signal,
+      // 단발 JSON 기획은 추론 강제 OFF(→ sonnet --effort low) — 카드뉴스와 동일한 사고 폭주 상한
+      // 초과 계열(2026-08-11 실측) 예방.
+      stage: 'work', emitSpawn, maxOutputTokens, think: false, signal: io.signal,
     });
     return extractFirstJson<T>(out.text);
   }
@@ -185,6 +187,12 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   // 예산 3000(CLI 상한 ×3=9000) — 문체 제약 투입(2026-08-11) 후 사고량 증가로 종전 2200(6600)이
   // 즉시 초과됐다(실측: 테스트 런 2건 연속 "exceeded 6600 output token maximum").
   let plan = parsePlan(await callRoleJSON<PlanRaw>(io, 'shorts_writer', sys, user, 3000, true));
+  if (!plan) {
+    // 파싱 불가·미완결 JSON 1회 재시도(카드뉴스와 동일 패턴) — 실측 2026-08-11 "보리수나무묘목" 런이
+    // 단발 실패로 통째 죽었다. 재시도는 완결 JSON 강조 + 토큰 여유 상향.
+    plan = parsePlan(await callRoleJSON<PlanRaw>(io, 'shorts_writer', sys,
+      `${user}\n\n반드시 완결된 JSON 하나만 출력하라(설명·마크다운 코드펜스 금지).`, 3400, false));
+  }
   if (!plan) return null;
   // 단독 이해 검산 — 원문을 안 본 시청자 관점 텍스트 검사 후 1회 수정 라운드(fail-open, 실측 2026-07-29 결함 대응).
   try {

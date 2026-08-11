@@ -77,6 +77,10 @@ export interface AgentRunArgs {
   fallbackModel?: string;
   blockId?: string;
   maxOutputTokens?: number;
+  /** 추론(extended thinking) 강제 오버라이드 — 미지정 시 UI 토글을 따른다. 단발 JSON 기획 호출은
+   *  false 로 못박아라: sonnet-5 가 제약 많은 기획 프롬프트에서 사고를 폭주시켜 출력 상한(예산×3)을
+   *  6000→12000까지 전부 소진하며 연쇄 실패한 실측(2026-08-11 카드뉴스 파생 4연속) 대응. */
+  think?: boolean;
   /** agent_spawned 이벤트를 emit 할지(첫 등장 시 true). */
   emitSpawn?: boolean;
   subproblemId?: string;
@@ -210,7 +214,7 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
 
   const maxOut = args.maxOutputTokens ?? CONFIG.maxOutputTokens;
   const onDelta = (d: string) => bus.emitDelta(deltaType, blockId, d, { agentId: role.id });
-  let result = await llm.chat({ model, messages, maxOutputTokens: maxOut, signal: args.signal, onDelta });
+  let result = await llm.chat({ model, messages, maxOutputTokens: maxOut, think: args.think, signal: args.signal, onDelta });
   // 빈 출력 방어 — 1회 재시도. fallbackModel(상위 tier)이 있으면 그 모델로 승급(소형 모델
   // 무음 실패를 큰 모델로 구제), 없으면 온도↑로 재시도. 취소 중이면 생략.
   // 재시도는 추론(think) 강제 OFF — 실측(2026-08-10 런 80f1e7ce1180): opus 가 1.6만 토큰을

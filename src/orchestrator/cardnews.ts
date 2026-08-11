@@ -68,7 +68,9 @@ async function callRoleJSON<T>(
     const out = await runAgent({
       bus: io.bus, role, model: stdModel(),
       task: `${task}\n\n${NO_FABRICATED_EXPERIENCE}\n\n${SELLER_INQUIRY_BAN}\n\n${lexiconGuide(getBrand()?.avoidJargon)}\n\n다른 텍스트 없이 JSON만 출력하라.`,
-      stage: 'work', emitSpawn, maxOutputTokens, signal: io.signal,
+      // 단발 JSON 기획은 추론 강제 OFF(→ sonnet --effort low) — 문체 제약 투입 후 사고 폭주로
+      // 상한 6000→12000 전부 소진하며 파생 4연속 실패한 실측(2026-08-11) 대응.
+      stage: 'work', emitSpawn, maxOutputTokens, think: false, signal: io.signal,
     });
     return extractFirstJson<T>(out.text);
   }
