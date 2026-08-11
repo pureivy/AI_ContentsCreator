@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { fetchTitleTiming, TitleTimingReport, TitleTimingAggRow } from "../api";
 
 // 제목 유형·발행 시각 A/B(후속 카드 2026-08-12) — 서버 즉석 집계를 표로 노출. 통계 정직성 규약을
@@ -15,6 +15,11 @@ const TYPE_COLS = [
 const SLOT_COLS = ["새벽(0~6시)", "아침(6~10시)", "낮(10~14시)", "오후(14~18시)", "저녁(18~22시)", "밤(22~24시)"];
 /** 브리핑·기획 주입과 같은 눈금 — 이 미만 표본은 흐리게 표시(잡음이 우열로 읽히지 않게). */
 const MIN_N = 3;
+
+/** 표·칩 아래 읽는 법 설명 — 숫자만 있으면 처음 보는 사람이 해석을 못 한다(사용자 요청 2026-08-12). */
+function Note({ children }: { children: ReactNode }) {
+  return <p className="muted" style={{ margin: "6px 2px 0", fontSize: 11.5, lineHeight: 1.55 }}>{children}</p>;
+}
 
 /** 행에서 강조할 최고 칸의 키 — 견고 표본(MIN_N+) 중 최고 신호. 견고 칸이 2개 미만이면 강조 없음(비교 불가). */
 function bestKey(rows: TitleTimingAggRow[]): string | null {
@@ -72,9 +77,15 @@ export default function TitleTimingSection() {
             </tbody>
           </table>
         </div>
+        <Note>
+          어떤 <b>제목 유형</b>이 통했나 — 발행된 제목을 질문형(…할까/될까)·후킹형(N가지·이유·실수)·정보형(그 외)으로
+          자동 분류해 평균 성과를 비교합니다. 각 칸은 <b>평균 성과신호(0~1)</b>와 (편수) — 신호는 채널별 합성 지표라
+          <b> 초록(그 채널의 1위)은 같은 행 안에서만</b> 의미가 있습니다: 블로그=조회+검색 유입, 쇼츠=조회+좋아요율,
+          릴스·카드뉴스=도달+저장률+공유율. <i>흐린 기울임</i>은 표본 3편 미만이라 순위에서 뺀 참고값입니다.
+        </Note>
 
         {/* 표 2 — 채널별 발행 시각(KST) 슬롯 신호. 발행 버튼을 언제 누르는 게 유리한지의 실측. */}
-        <div className="perf-table-wrap" style={{ marginTop: 10 }}>
+        <div className="perf-table-wrap" style={{ marginTop: 14 }}>
           <table className="perf-table">
             <thead>
               <tr>
@@ -97,10 +108,15 @@ export default function TitleTimingSection() {
             </tbody>
           </table>
         </div>
+        <Note>
+          어떤 <b>발행 시각</b>이 통했나 — 실제로 발행·업로드된 시각(KST)을 여섯 시간대로 묶어 평균 성과를 비교합니다.
+          발행 버튼을 누르는 시각을 고를 때 참고하세요. 예컨대 초록 칸이 아침이면, 같은 콘텐츠라도 아침 발행분의
+          성과가 좋았다는 뜻입니다(단, 시간대별 편수가 고르지 않으면 우연일 수 있어 편수를 함께 보세요).
+        </Note>
 
         {/* 팔로워 교차 — 채널 안에서만 유형 비교(채널 성장률 차이가 유형 우열로 둔갑 방지). */}
         {rep.followerByChannel.length > 0 && (
-          <div style={{ marginTop: 10 }}>
+          <div style={{ marginTop: 14 }}>
             {rep.followerByChannel.map((g) => (
               <div key={g.channel} className="piece-card-meta" style={{ padding: "3px 0" }}>
                 <span className="chip" style={{ flexShrink: 0 }}>👥 {g.channelKo}</span>
@@ -112,13 +128,18 @@ export default function TitleTimingSection() {
                 ))}
               </div>
             ))}
+            <Note>
+              어떤 유형이 <b>팔로워를 만들었나</b> — 발행 다음 날(D→D+1)의 채널 팔로워 증감을 그날 발행된 콘텐츠에
+              고르게 나눠 얹은 추정입니다(같은 날 2편이면 반씩). 인과가 아니라 정황 신호라 편수가 쌓일수록
+              믿을 만해집니다. 채널마다 성장 속도가 달라 <b>같은 채널 줄 안에서만</b> 유형을 비교하세요.
+            </Note>
           </div>
         )}
 
-        <p className="muted" style={{ marginTop: 8, fontSize: 11.5 }}>
-          성숙·측정 {rep.itemsScorable.toLocaleString()}편 기준(발행 {rep.itemsTotal.toLocaleString()}편 중 측정창 경과분만) ·
-          신호는 채널별 눈금이라 <b>행(채널) 간 비교는 금물</b> — 같은 행 안에서만 우열을 읽으세요.
-          흐린 칸은 표본 3편 미만. 같은 실측이 다음 블로그 기획 프롬프트에도 참고로 주입됩니다.
+        <p className="muted" style={{ marginTop: 12, fontSize: 11.5 }}>
+          성숙·측정 {rep.itemsScorable.toLocaleString()}편 기준 — 발행 {rep.itemsTotal.toLocaleString()}편 중
+          측정창(블로그 14일·쇼츠/릴스/카드 7일)이 지난 것만 집계해, 갓 발행된 콘텐츠의 어린 수치가 평균을
+          왜곡하지 않게 합니다. 같은 실측이 다음 블로그 기획 프롬프트에도 참고로 주입됩니다.
         </p>
       </>
     );
