@@ -77,8 +77,11 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
     return () => { alive = false; };
   }, [view, data?.piece.id]);
 
+  // 정렬(사용자 요청 2026-08-12): 검토 대기(ready)가 항상 맨 위 그룹 — 종전 updatedTs 단일 정렬은
+  // 성과 측정·소급 리비전이 옛 글을 위로 끌어올려 검토할 것이 섞여 보였다. 그룹 안에서는 최신 갱신순.
   const reviewable = useMemo(
-    () => pieces.filter((p) => REVIEWABLE.has(p.stage) && p.runId).sort((a, b) => b.updatedTs.localeCompare(a.updatedTs)),
+    () => pieces.filter((p) => REVIEWABLE.has(p.stage) && p.runId).sort((a, b) =>
+      (a.stage === "ready" ? 0 : 1) - (b.stage === "ready" ? 0 : 1) || b.updatedTs.localeCompare(a.updatedTs)),
     [pieces],
   );
   // 목록 접기 — 발행 이력이 쌓일수록 카드가 늘어 스캔이 힘들다(사용자 요청 2026-07-29).
