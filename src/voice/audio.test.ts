@@ -77,6 +77,15 @@ describe('sanitizeForTts', () => {
       expect(sanitizeForTts('순치기')).toBe('순-치-기');
     });
   });
+
+  // "손끝"·"간격" 오독 보정(실측 2026-08-11) — ㄴ+연구개음 비음화·약화([송긋]·[강역], 블루베리 쇼츠
+  // 사용자 청취 제보). 하이픈 후보 각 3/3 정상, 표기 교체 "손끗"은 기각(1/3 재발+"송급" 악화).
+  describe('손끝·간격 → 손-끝·간-격 (발음 경계, TTS 입력 전용)', () => {
+    it('전 위치 치환', () => {
+      expect(sanitizeForTts('색 대신 손끝 저항감으로 판단하세요')).toContain('손-끝 저항감');
+      expect(sanitizeForTts('며칠 간격으로 나눠 따세요')).toContain('간-격으로');
+    });
+  });
 });
 
 describe('parseSayVoices', () => {
