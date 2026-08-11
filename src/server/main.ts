@@ -65,6 +65,7 @@ import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shor
 import { syncCardnewsPerformance, cardnewsPerfStale } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
+import { buildTitleTimingReport } from '../analytics/titleTiming';
 import { promiseStore } from '../content/promises';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
 import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor, appendMetrics, naverTrackingDue, topInflow, latestDwell, latestLikes, latestTouch, sameKstDay } from '../analytics/performance';
@@ -2415,6 +2416,10 @@ const followersHandler = async (c: Context): Promise<Response> => {
 };
 app.get('/followers', followersHandler);
 app.get('/api/followers', followersHandler);
+// 제목 유형·발행 시각 A/B 리포트(후속 카드 2026-08-12) — 읽기 전용 집계, 브리핑 섹션의 풀버전.
+const titleTimingHandler = (c: Context): Response => c.json(buildTitleTimingReport(activeBrandSlug() || ''));
+app.get('/analytics/title-timing', titleTimingHandler);
+app.get('/api/analytics/title-timing', titleTimingHandler);
 // 예고 대장 — 콘텐츠가 한 "다음 편" 약속 조회·수동 등록·폐기. 자율 틱이 시기 도래분을 신규 아이디어보다 먼저 이행.
 const promisesListHandler = (c: Context): Response => {
   const brand = activeBrandSlug() || '';

@@ -11,7 +11,8 @@ import { markdownHeadings } from '../content/priorCoverage';
 import { readNaverIndexingReport, GRACE_DAYS } from '../analytics/naverIndexing';
 import { llmWiki } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
-import { followersSection, followersFollowupNudge } from '../analytics/followers';
+import { followersSection } from '../analytics/followers';
+import { titleTimingSection } from '../analytics/titleTiming';
 import { promiseStore } from '../content/promises';
 import type { NotifyMessage } from './notify';
 import { kstDate } from '../util/time';
@@ -119,7 +120,8 @@ export function buildBriefing(): NotifyMessage {
     if (n > 0) sections.push({ heading: '🔔 대기 승인', body: `${n}건 — 결재 대기 중` });
   } catch { /* */ }
   try { const fw = followersSection(); if (fw) sections.push(fw); } catch { /* 팔로워 섹션 실패 무해 */ }
-  try { const nd = followersFollowupNudge(); if (nd) sections.push(nd); } catch { /* 넛지 실패 무해 */ }
+  // 후속 카드 이행(2026-08-12): 넛지(followersFollowupNudge) 자리를 실제 A/B 분석 섹션이 대체.
+  try { const ab = titleTimingSection(); if (ab) sections.push(ab); } catch { /* A/B 섹션 실패 무해 */ }
   try {
     // 예고 대장 — 콘텐츠가 시청자에게 한 "다음 편" 약속의 미이행 현황(자율 틱이 시기 도래 시 이행).
     const pend = promiseStore().pending(activeBrandSlug() || '');

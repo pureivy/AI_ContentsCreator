@@ -16,6 +16,7 @@ import { getCompany } from '../agents/company-loader';
 import { microJSON } from '../orchestrator/agent';
 import { asString } from '../util/str';
 import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix, offBrandTerm, getBrand, lintLexicon } from '../content/brand';
+import { titleTypeGuidanceBlock } from '../analytics/titleTiming';
 import { seasonalContext } from '../util/solarTerms';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 
@@ -322,6 +323,8 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     `[팀·업무 범위]\n${teamLines}\n\n` +
     `[성과 상위 키워드(참고용 씨앗 — 이 테마만 반복하지 말 것)]\n${winners || coldstart}\n\n` +
     seedBlock +
+    // 후속 카드(2026-08-12) — 제목 유형 A/B 실측을 기획에 연결. 표본 게이트 미달이면 빈 문자열(무주입).
+    titleTypeGuidanceBlock(activeBrandSlug() || '') +
     `[기존 콘텐츠 — 주제·키워드 유사 금지]\n${existingLines || '(없음)'}\n\n` +
     `[최근 제작 — 중복 회피]\n${done || '(없음)'}\n\n` +
     `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}\n\n` +
