@@ -1855,7 +1855,12 @@ async function pieceReviseHandler(c: Context): Promise<Response> {
   const b = await c.req.json<{ feedback?: string }>().catch(() => ({} as { feedback?: string }));
   const feedback = (b.feedback ?? '').trim();
   if (!feedback) return c.json({ error: '수정 요청 내용이 비었습니다.' }, 400);
-  if (piece.stage !== 'ready') return c.json({ error: '검토 대기(ready) 초안만 수정 요청할 수 있습니다.' }, 409);
+  // published 허용(2026-08-12): 발행 후 소급 수정 경로 — 지침 개정(결론 의무 등)을 기발행분에 적용할 때 쓴다.
+  // 리비전 완료 후 네이버 재발행은 자동이 아니라 수동 트리거(중복 초안 방지 가드가 그대로 살아 있음),
+  // 기존 네이버 글 삭제는 사람이 판단한다.
+  if (piece.stage !== 'ready' && piece.stage !== 'published') {
+    return c.json({ error: '검토 대기(ready) 또는 발행됨(published) 초안만 수정 요청할 수 있습니다.' }, 409);
+  }
   if ([...RUNS.values()].some((h) => h.status === 'running' && h.topic === piece.title)) {
     return c.json({ error: '이 초안의 런이 이미 실행 중입니다.' }, 409);
   }
