@@ -23,6 +23,7 @@ import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
 import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues } from './standaloneQa';
+import { narrationStyleIssues } from '../content/styleLint';
 import { promiseStore } from '../content/promises';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
@@ -97,6 +98,34 @@ function normalizeHashtags(v: unknown): string[] {
   return [...new Set(tags)].slice(0, 8);
 }
 
+/**
+ * 최근 숏폼 훅·CTA 원문 수집(같은 브랜드, 전량 fail-open) — 문형 로테이션 지시의 실물 근거.
+ * 배경(자연스러움 감사 2026-08-11): 훅 "질문+반전" 공식 7/15편, CTA "계속 기록/정리" 7/15편으로
+ * 채널 단위 지문화. recentStyleToAvoid(블로그)와 같은 원리 — 겹치면 안 되는 원문을 직접 보여준다.
+ */
+function recentHooksToAvoid(brand: string | undefined, excludeId: string, limit = 5): string {
+  try {
+    const store = shortsStore();
+    const rows: string[] = [];
+    for (const e of [...store.list()].reverse()) {   // 최신부터
+      if (e.id === excludeId || (e.brand ?? undefined) !== (brand ?? undefined)) continue;
+      try {
+        const p = JSON.parse(fs.readFileSync(path.join(store.dirFor(e.id), 'plan.json'), 'utf-8')) as
+          { scenes?: Array<{ narration?: string }> };
+        const hook = (p.scenes?.[0]?.narration ?? '').trim();
+        const cta = (p.scenes?.[p.scenes.length - 1]?.narration ?? '').trim();
+        if (hook || cta) rows.push(`- 훅: "${hook}" / CTA: "${cta}"`);
+      } catch { /* plan.json 없는 항목(구버전·실패 런) 무시 */ }
+      if (rows.length >= limit) break;
+    }
+    if (!rows.length) return '';
+    return [
+      '[최근 숏폼의 훅·CTA 원문 — 아래와 문형·첫 문장 구조가 겹치면 다시 써라]',
+      ...rows,
+    ].join('\n');
+  } catch { return ''; }
+}
+
 async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = ''): Promise<Plan | null> {
   const user = [
     `[주제] ${topic}`,
@@ -105,12 +134,15 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     sourceBody ? `[블로그 초안 본문 — 핵심 1~2개와 그것이 성립하는 이유(전제 인과 한 줄)를 함께 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${sourceBody.slice(0, 4000)}` : '',
     '',
     `씬 ${n}개의 유튜브 숏폼 대본을 기획하라. 씬1=훅(3패턴 중 택1), 씬2=전제(이 영상이 무엇에 대한 이야기이고 왜 문제/중요한지를 못박는다 — 원문의 핵심 인과 한 줄), 마지막 씬=CTA.`,
-    '시청자는 원문 블로그를 본 적이 없다 — 영상 단독으로 완결되게 써라: 핵심 주제어(식물명·행위명 등)를 훅 또는 씬2에서 반드시 명시하고, 지시어·축약어("짝"·"그 방법"·"두 그루" 류)는 앞 씬에서 뜻을 세운 뒤에만 사용하라.',
+    '시청자는 원문 블로그를 본 적이 없다 — 영상 단독으로 완결되게 써라: 핵심 주제어(식물명·행위명 등)를 훅 또는 씬2에서 반드시 명시하고, 지시어·축약어("짝"·"그 방법"·"두 그루" 류)는 앞 씬에서 뜻을 세운 뒤에만 사용하라. 단, 명시는 검색 표기 그대로일 필요 없다 — 키워드 명사구를 통째로 주어 자리에 세우지 말고("가을 묘목 심는 법은 ~로 정해집니다" 식 금지, 검색용 문장 티가 난다) 조사·어순을 바꿔 말이 되는 꼴로 녹여라("가을에 묘목을 심을 땐 날짜보다 뿌리부터 봐요"). 검색 표기 그대로의 노출은 title·titles·description·해시태그·screenText 가 담당한다.',
+    '훅 금지 문형: "~보셨나요?/~라고요? + 정작/사실은/그럼 이미 ~" 질문-반전 공식(최근 편들이 과다 사용). 단정 선언("까맣게 익어도 아직 이릅니다"), 구체 장면, 숫자 제시, 청자 상황 지목, 짧은 제동("잠깐,") 등에서 앞 편들과 다른 유형을 골라라.',
     keyword ? `대표 제목(title)과 정보형 제목 후보에는 핵심 키워드 '${keyword}' 를 정확히 이 표기 그대로, 가급적 앞쪽에 포함하라(검색 노출용 — 제한된 글자수를 이유로 키워드를 빼지 마라). 키워드는 명사구 그대로 자연스럽게 결합하고 어미를 붙여 동사화하지 마라.` : '',
-    'CTA 씬은 팔로우할 이유를 담아라 — 이 채널이 계속 주는 가치 한 구절(브랜드 맥락에 맞게) 또는 다음 편 예고 중 하나. "구독과 좋아요 부탁드려요" 같은 기계적 문구 금지.',
+    'CTA 씬은 팔로우할 이유를 담아라 — 이 채널이 계속 주는 가치 한 구절(브랜드 맥락에 맞게) 또는 다음 편 예고 중 하나. "구독과 좋아요 부탁드려요" 같은 기계적 문구 금지. "계속 기록/정리해 드립니다" 계열 문구 재사용 금지 — 기록하는 채널 컨셉은 유지하되 표현은 매편 새로 지어라.',
     '다음 편 예고를 CTA 에 넣었으면 JSON 의 next 필드에 그 주제와 적절한 시기("N월")를 선언하라 — 예고는 시스템이 약속으로 기록해 그 시기에 실제로 제작한다. 지킬 수 있는 예고만 하고, 예고를 안 했으면 next 를 생략하라.',
     '내레이션은 TTS 낭독용: 구어체 존댓말, 숫자는 한글로("30%"→"삼십 퍼센트") — 단 월 이름은 고유어로("10월"→"시월", "6월"→"유월"). 이모지·괄호 지문 금지. 발음이 헷갈려 뜻이 뒤집히는 표현은 풀어 써라 — "새 가지"는 숫자 "세 가지"로 들리니 "새로 난 가지"처럼, 희귀 활용형("아뭅니다" 류)은 평이한 꼴("잘 아물어요")로.',
-    '본문 씬 내레이션은 반드시 2문장(합쳐서 40~65자, 낭독 6~9초) — 방법 한 문장 + 이유/효과 한 문장. 씬2(전제)는 45~70자까지 허용. 훅·CTA 씬은 1~2문장(20~40자). 총 낭독 시간 30~55초를 맞춘다.',
+    '문장 종결을 섞어라: 한 씬의 두 문장을 같은 어미로 끝내지 마라("~ㅂ니다"+"~ㅂ니다" 금지). 대본 전체에서 "-ㅂ니다" 종결은 절반 이하로 하고 "~요/~죠/~거든요/~는데요/~하세요"를 섞어라. 습관적 설명 현재형("치웁니다", "심지 않습니다")은 청자에게 말 거는 꼴("치우세요", "지금은 심지 마세요")로. 아나운서 원고가 아니라 옆에서 알려주는 말로 들려야 한다.',
+    '대본 전체 1~2곳에 사람 말의 결을 넣어라 — 짧은 제동("잠깐,"), 정정·양보("아, 포트묘는 예외예요"), 1인칭 판단("저는 색보다 끝알부터 봅니다"). 겪지 않은 사건·일화를 지어내는 것은 금지(판단·관점의 1인칭만). 정보 밀도를 깎는 잡담도 금지. "X가 아니라 Y" 재정의 문형은 대본 전체 1회 이하 — 앞 편들이 이미 상투로 만든 틀이다.',
+    '본문 씬 내레이션은 1~3문장(합쳐서 30~70자, 낭독 5~10초) — "방법 한 문장+이유 한 문장"은 기본형일 뿐이니 씬마다 문장 수·리듬을 똑같이 맞추지 마라. 이유를 먼저 두는 씬, 질문으로 끝나 다음 씬이 답하는 씬을 최소 1개 섞어라(모든 씬이 결론으로 닫히면 짧은 설명서 여섯 장이 된다). "~기 때문입니다"는 대본 전체 1회 이하. 씬2(전제)는 45~70자까지 허용. 훅·CTA 씬은 1~2문장(20~40자). 총 낭독 시간 30~55초를 맞춘다.',
     'screenText 는 씬당 1줄 15자 이내 키워드 요약(비워도 됨).',
     '씬 kind(선택): 씬1="hook", 마지막 씬="cta". 본문 씬 중 어울리는 곳에만 "stat"(핵심 수치 1개: value 숫자·unit 단위·label 15자)·"list"(items 2~4개, 각 18자)·"quote"(text 40자, source 출처)·"chart"(비교 수치 2~5개가 막대그래프로 자라나는 연출: series 각 {label 8자, value 숫자≥0}, unit 단위, highlight 강조할 막대 인덱스) — 억지 배정 금지, 애매하면 kind 생략. chart 는 내레이션이 수치 비교를 말할 때만.',
     '수치 규칙: stat.value 와 chart.series 의 value 는 원문(블로그 초안)에 있는 수치 또는 대본 구조상 자명한 숫자(단계 수·항목 수)만. 불확실하면 그 kind 를 쓰지 마라. narration 은 수치를 한글로 낭독하되 JSON 값은 아라비아 숫자. chart 씬의 screenText 에는 핵심 수치 비교를 요약하라(렌더 실패 대비).',
@@ -151,12 +183,16 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   if (!plan) return null;
   // 단독 이해 검산 — 원문을 안 본 시청자 관점 텍스트 검사 후 1회 수정 라운드(fail-open, 실측 2026-07-29 결함 대응).
   try {
-    const probs = await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)', plan.scenes.map((s) => s.narration), topic, keyword, io.signal);
+    // 문체 결정적 린트(2026-08-11) — 프롬프트 지시만으로는 샌다는 실측("새 가지" 위반) 대응, 같은 수정 라운드에 얹는다.
+    const probs = [
+      ...await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)', plan.scenes.map((s) => s.narration), topic, keyword, io.signal),
+      ...narrationStyleIssues(plan.scenes.map((s) => s.narration)),
+    ].slice(0, 8);
     if (probs.length) {
-      const m = `단독 이해 검산 — ${probs.length}건 → 수정 라운드 (${probs[0]?.slice(0, 50)})`;
+      const m = `단독 이해·문체 검산 — ${probs.length}건 → 수정 라운드 (${probs[0]?.slice(0, 50)})`;
       console.log(`[숏폼] ${m}`); io.bus?.emit('log', { message: m });
       const fixed = parsePlan(await callRoleJSON<PlanRaw>(io, 'shorts_writer', sys,
-        `${user}\n\n[단독 이해 검산 실패 — 아래 문제를 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지)]\n${probs.map((p) => `- ${p}`).join('\n')}`, 2600, false));
+        `${user}\n\n[단독 이해·문체 검산 실패 — 아래 문제를 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지)]\n${probs.map((p) => `- ${p}`).join('\n')}`, 2600, false));
       // 수정본 파싱 실패 시 원본 유지. 수정 라운드가 대본만 고치고 메타(제목 후보·설명·해시태그)를
       // 빠뜨려도 원본 것을 승계(무손실 병합 — parsePlan 의 [topic] 폴백 제목이 원본을 덮지 않게).
       if (fixed) {
@@ -244,8 +280,11 @@ export async function runShortsJob(
     const phraseBlock = ticPhrases.length
       ? `[반복 표현 금지] 최근 숏폼들에서 이미 여러 번 쓴 표현이다 — 내레이션·화면텍스트에 쓰지 말고 다른 어휘·접근으로 풀어라: ${ticPhrases.map((p) => `'${p}'`).join(', ')}`
       : '';
-    say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건`);
-    const plan = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock].filter(Boolean).join('\n\n'));
+    // 훅·CTA 문형 로테이션(2026-08-11) — 훅 질문-반전 공식 7/15편·CTA "계속 기록" 7/15편 실측.
+    // 지시문 단독은 새므로 최근 편의 원문을 직접 보여주고 "겹치면 다시 써라"로 못박는다.
+    const hooksBlock = recentHooksToAvoid(short.brand, short.id);
+    say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'}`);
+    const plan = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, hooksBlock].filter(Boolean).join('\n\n'));
     if (!plan) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
     say(`대본 완성 — ${plan.title.slice(0, 30)} · 씬 ${plan.scenes.length}개`);
