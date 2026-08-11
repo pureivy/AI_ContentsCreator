@@ -161,6 +161,10 @@ export interface Config {
   readonly elevenLabsModel: string;
   /** ElevenLabs 낭독 속도(voice_settings.speed) — 1.0 기본(voice_settings 미전송 → 음성 기본값=playground와 동일). >1.0 빠르게, 안전범위 0.7~1.2. ELEVENLABS_SPEED 로 조절. */
   readonly elevenLabsSpeed: number;
+  /** 쇼츠 내레이션에 <break time> 태그 주입(ElevenLabs 전용) — 문장부호를 확률적으로 무시하고 몰아 읽는 실측(2026-08-11, 30클립 중 8클립 경계 0ms) 대응. SHORTS_TTS_BREAKS=false 킬스위치. */
+  readonly shortsTtsBreaks: boolean;
+  /** 쇼츠 씬별 합성에 previous_text/next_text 스티칭(ElevenLabs 전용) — 씬 경계 운율 연속성. SHORTS_TTS_STITCH=false 킬스위치. */
+  readonly shortsTtsStitch: boolean;
   /** macOS say 폴백 음색. */
   readonly voiceTtsVoice: string;
   readonly voiceSttModel: string;
@@ -311,6 +315,8 @@ export const CONFIG: Config = {
   elevenLabsVoiceId: env('ELEVENLABS_VOICE_ID', 'iWLjl1zCuqXRkW6494ve'),
   elevenLabsModel: env('ELEVENLABS_MODEL', 'eleven_multilingual_v2'),
   elevenLabsSpeed: Math.min(1.2, Math.max(0.7, envFloat('ELEVENLABS_SPEED', 1.0))),
+  shortsTtsBreaks: envBool('SHORTS_TTS_BREAKS', true),
+  shortsTtsStitch: envBool('SHORTS_TTS_STITCH', true),
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
   voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),
 

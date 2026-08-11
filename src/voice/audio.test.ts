@@ -55,6 +55,28 @@ describe('sanitizeForTts', () => {
       expect(sanitizeForTts('봉오리')).toBe('봉-오리');
     });
   });
+
+  // "놀이" 오독 보정(실측 2026-08-11) — "아이 놀이 공간"→[아이도리]("아이돌의"로 들림, 원문 3/3 재현).
+  // 표기 교체("노리")는 2/3 재발 — ㄴ 초성 자체가 흐려지는 문제라 하이픈 경계만 유효(3/3 정상).
+  describe('놀이 → 놀-이 (어절 시작, TTS 입력 전용)', () => {
+    it('단독·조사·후행 복합은 치환한다', () => {
+      expect(sanitizeForTts('아이 놀이 공간과 떼어 놓아야')).toContain('놀-이 공간');
+      expect(sanitizeForTts('놀이를 위한 자리')).toContain('놀-이를');
+      expect(sanitizeForTts('놀이터 옆이라면')).toContain('놀-이터');
+    });
+    it('선행 복합(앞이 한글)은 보존한다 — 미관측 선제 확장 금지', () => {
+      expect(sanitizeForTts('물놀이 자리는 피합니다')).toContain('물놀이');
+    });
+  });
+
+  // "순치기" 오독 보정(실측 2026-08-11) — 위치 무관 [순칙] 축약(3/3 재현). 후보 실측: 순-치기·순치-기
+  // 전패, 음절별 "순-치-기"만 3/3 정상.
+  describe('순치기 → 순-치-기 (음절별 경계, TTS 입력 전용)', () => {
+    it('전 위치 치환', () => {
+      expect(sanitizeForTts('다음은 포도나무 순치기입니다')).toContain('순-치-기입니다');
+      expect(sanitizeForTts('순치기')).toBe('순-치-기');
+    });
+  });
 });
 
 describe('parseSayVoices', () => {

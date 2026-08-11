@@ -7,6 +7,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { synthesize } from '../voice/tts';
+import { CONFIG } from '../config';
 
 const execFileP = promisify(execFile);
 
@@ -147,7 +148,15 @@ export async function prepareScenes(
     const nn = String(i + 1).padStart(2, '0');
     let audioPath: string | null = null, audioDur = 0;
     try {
-      const mp3 = await synthesize(sc.narration, { voice: opts.voice, instructions: opts.instructions ?? SHORTS_TTS_TONE, signal: opts.signal });
+      // 몰아 읽기 대응(실측 2026-08-11, 30클립 중 8클립 경계 0ms): 문장·쉼표 경계 break 태그 +
+      // 이웃 씬 스티칭(경계 운율 연속). 둘 다 ElevenLabs 경로 전용이라 폴백(openai/say)엔 무영향.
+      const mp3 = await synthesize(sc.narration, {
+        voice: opts.voice, instructions: opts.instructions ?? SHORTS_TTS_TONE,
+        pauseBreaks: CONFIG.shortsTtsBreaks,
+        previousText: CONFIG.shortsTtsStitch ? scenes[i - 1]?.narration : undefined,
+        nextText: CONFIG.shortsTtsStitch ? scenes[i + 1]?.narration : undefined,
+        signal: opts.signal,
+      });
       audioPath = path.join(workDir, `narr_${nn}.mp3`);
       fs.writeFileSync(audioPath, mp3);
       audioDur = await probeDuration(audioPath);
