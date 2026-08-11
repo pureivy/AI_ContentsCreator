@@ -299,8 +299,9 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
               </div>
             </button>
           ))}
+          {/* 펼친 상태에선 sticky 로 화면 하단 고정 — 카드가 늘어도 접기가 항상 한 클릭 거리(사용자 요청 2026-08-12). */}
           {reviewable.length > LIST_PREVIEW && (
-            <button className="btn ghost" style={{ width: "100%", marginTop: 4 }} onClick={() => setShowAll((v) => !v)}>
+            <button className={`btn ghost review-list-toggle ${showAll ? "sticky" : ""}`} onClick={() => setShowAll((v) => !v)}>
               {showAll ? "접기" : `더보기 (${reviewable.length - LIST_PREVIEW}개)`}
             </button>
           )}
