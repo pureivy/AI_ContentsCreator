@@ -998,6 +998,23 @@ export async function fetchFollowers(): Promise<FollowersData | null> {
   try { const r = await fetch("/api/followers"); return r.ok ? await r.json() : null; }
   catch { return null; }
 }
+
+// 제목 유형·발행 시각 A/B 리포트(후속 카드 2026-08-12) — 서버 analytics/titleTiming.ts 의 즉석 집계 미러.
+export interface TitleTimingAggRow { key: string; count: number; avgSignal: number; avgViews: number; typeKo?: string }
+export interface TitleTimingCrossRow { channel: string; type: string; items: number; totalDelta: number; perItem: number; typeKo: string }
+export interface TitleTimingReport {
+  brand: string;
+  itemsTotal: number;
+  itemsScorable: number;
+  note: string;
+  byType: Array<{ kind: string; kindKo: string; rows: TitleTimingAggRow[] }>;
+  bySlot: Array<{ kind: string; kindKo: string; rows: TitleTimingAggRow[] }>;
+  followerByChannel: Array<{ channel: string; channelKo: string; rows: TitleTimingCrossRow[] }>;
+}
+export async function fetchTitleTiming(): Promise<TitleTimingReport | null> {
+  try { const r = await fetch("/api/analytics/title-timing"); return r.ok ? await r.json() : null; }
+  catch { return null; }
+}
 /** 채널 성과 즉시 재수집 시작(쇼츠 유튜브·릴스·카드뉴스 API + 네이버 일일 추적) — 서버는 백그라운드로
  *  돌리고 즉시 응답한다(started=시작, busy=이미 진행 중). 완료는 fetchPerformance().refreshBusy 로 폴링. */
 export async function refreshPerformance(): Promise<{ ok: boolean; started?: boolean; busy?: boolean; error?: string }> {

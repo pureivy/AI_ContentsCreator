@@ -3,6 +3,7 @@ import { fetchPerformance, fetchFollowers, refreshPerformance, deletePiece, dele
 import Ico, { type IcoName } from "./Ico";
 import PlatformMark, { type Platform } from "./PlatformMark";
 import FollowerTrendModal, { type FollowerField, latestFollower, followerDelta } from "./FollowerTrend";
+import TitleTimingSection from "./TitleTiming";
 
 // 성과 대시보드 — 채널 통합 요약(블로그·쇼츠·카드뉴스) → 블로그 글별 → 쇼츠·카드뉴스 → 강화 학습 순.
 // 스테이지 어휘는 캘린더·검토 탭과 동일(Ico).
@@ -594,6 +595,9 @@ export default function PerformanceView() {
               </div>
             )}
           </div>
+
+          {/* 제목·발행시각 A/B(후속 카드 2026-08-12) — 강화 학습 블록과 같은 '전략 인사이트' 묶음의 마지막. */}
+          <TitleTimingSection />
 
         </>
       )}
