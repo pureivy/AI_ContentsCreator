@@ -86,6 +86,15 @@ describe('sanitizeForTts', () => {
       expect(sanitizeForTts('며칠 간격으로 나눠 따세요')).toContain('간-격으로');
     });
   });
+
+  // "잔가지" 오독 보정(실측 2026-08-13) — 손끝·간격과 같은 ㄴ+ㄱ 비음화([장가지/장아지], 원문 3/3
+  // 재현·STT 대조). 하이픈 "잔-가지" 3/3 정상 — 같은 부류 전례와 동일 처방.
+  describe('잔가지 → 잔-가지 (발음 경계, TTS 입력 전용)', () => {
+    it('전 위치 치환', () => {
+      expect(sanitizeForTts('경계가 잔가지 끝에 머물면 심는 쪽')).toContain('잔-가지 끝');
+      expect(sanitizeForTts('마른 잔가지를 정리하세요')).toContain('잔-가지를');
+    });
+  });
 });
 
 describe('parseSayVoices', () => {
