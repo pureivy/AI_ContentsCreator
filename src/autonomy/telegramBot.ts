@@ -11,25 +11,27 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { getSecret } from '../secrets/store';
-import { telegramCreds, tgApiUrl, sendTelegramHtml } from './notify';
+import { telegramCreds, tgApiUrl, sendTelegramHtml, sendTelegramPhotos } from './notify';
 import { studioBase, escapeHtml } from './contentNotify';
 
 export type BotAction =
   | { kind: 'naver_draft'; id: string }
   | { kind: 'revise'; id: string }
   | { kind: 'cardnews_publish'; id: string }
+  | { kind: 'cardnews_force'; id: string }
   | { kind: 'shorts_youtube'; id: string }
   | { kind: 'shorts_meta'; id: string };
 
 /** 콜백 데이터 파싱(≤64바이트 규격: "<op>:<id>"). 불명이면 null. 순수 — 테스트 대상. */
 export function parseCallback(data: string): BotAction | null {
-  const m = /^(bp|rv|cp|sy|sm):([A-Za-z0-9_]{1,48})$/.exec(data);
+  const m = /^(bp|rv|cp|cf|sy|sm):([A-Za-z0-9_]{1,48})$/.exec(data);
   if (!m) return null;
   const id = m[2]!;
   switch (m[1]) {
     case 'bp': return { kind: 'naver_draft', id };
     case 'rv': return { kind: 'revise', id };
     case 'cp': return { kind: 'cardnews_publish', id };
+    case 'cf': return { kind: 'cardnews_force', id };
     case 'sy': return { kind: 'shorts_youtube', id };
     case 'sm': return { kind: 'shorts_meta', id };
     default: return null;
@@ -65,10 +67,33 @@ async function runAction(a: Exclude<BotAction, { kind: 'revise' }>): Promise<str
     }
     case 'cardnews_publish': {
       const r = await api(`/cardnews/${a.id}/publish`);
-      if (!r.ok) return errText('카드뉴스 발행 실패', r);
+      if (!r.ok) {
+        // 오타 QA 미해결 게이트(409) — 실패로 끝내지 않고 '확인 후 강행' 2단계로 잇는다:
+        // 의심 슬라이드 이미지를 보내 사용자가 텔레그램에서 바로 검수하고, 이상 없으면 강행(cf) 버튼.
+        const qa = Array.isArray(r.json?.qa_unresolved) ? (r.json!.qa_unresolved as unknown[]).filter((n): n is number => typeof n === 'number') : [];
+        if (r.status === 409 && qa.length) {
+          const dir = path.join(CONFIG.dataDir, 'cardnews', a.id);
+          const flagged = qa.map((n) => path.join(dir, `slide_${String(n).padStart(2, '0')}.png`)).filter((p) => fs.existsSync(p));
+          if (flagged.length) await sendTelegramPhotos(flagged, `⚠️ 오타 의심 슬라이드 ${qa.join(', ')}`);
+          await sendTelegramHtml(
+            `⚠️ 오타 QA 미해결 — 슬라이드 ${qa.join(', ')} 확인 필요\n위 이미지 문구가 정상이면 아래 버튼으로 발행을 강행하세요. 오타가 보이면 스튜디오에서 수정 후 발행하세요.\n${studioBase()}/`,
+            [[{ text: `✅ 확인했어요 — 강행 발행`, callback_data: `cf:${a.id}` }]],
+          );
+          return ''; // 안내는 위에서 이미 전송 — 호출부가 빈 문자열은 재전송하지 않는다.
+        }
+        return errText('카드뉴스 발행 실패', r);
+      }
       const link = typeof r.json?.igPermalink === 'string' ? `\n${r.json.igPermalink}` : '';
       const fbErr = typeof r.json?.fbError === 'string' && r.json.fbError ? `\n(페북: ${r.json.fbError})` : '';
       return `📸 인스타 캐러셀 발행 완료${link}${fbErr}`;
+    }
+    case 'cardnews_force': {
+      // 사용자가 의심 슬라이드를 확인한 뒤의 강행 발행 — 라우트의 force 게이트(qaPublishBlockReason)를 통과.
+      const r = await api(`/cardnews/${a.id}/publish`, { force: true });
+      if (!r.ok) return errText('카드뉴스 강행 발행 실패', r);
+      const link = typeof r.json?.igPermalink === 'string' ? `\n${r.json.igPermalink}` : '';
+      const fbErr = typeof r.json?.fbError === 'string' && r.json.fbError ? `\n(페북: ${r.json.fbError})` : '';
+      return `📸 인스타 캐러셀 발행 완료(QA 확인 강행)${link}${fbErr}`;
     }
     case 'shorts_youtube': {
       const r = await api(`/shorts/${a.id}/youtube`);
@@ -152,7 +177,7 @@ async function handleUpdate(u: TgUpdate, chatId: string, bootTs: number): Promis
     // 발행류는 수 초~수 분 — 폴 루프를 막지 않게 비동기로 돌리고 끝나면 결과를 새 메시지로 push.
     // 실패(타임아웃·재시작 중 ECONNREFUSED 등)도 반드시 사용자에게 알린다 — '접수'만 보고 무소식이면 안 됨.
     void runAction(action)
-      .then((msg) => sendTelegramHtml(msg))
+      .then((msg) => { if (msg) void sendTelegramHtml(msg); }) // ''=QA 안내처럼 액션이 직접 전송한 경우
       .catch((e: unknown) => sendTelegramHtml(`⚠️ 처리 실패 — ${escapeHtml(e instanceof Error ? e.message : String(e))}`));
     return;
   }
