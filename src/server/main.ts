@@ -49,7 +49,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
-import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset } from '../orchestrator/cardnews';
+import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides } from '../orchestrator/cardnews';
 import { shortsStore } from '../content/shorts';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning } from '../orchestrator/shorts';
@@ -1691,6 +1691,22 @@ app.post('/cardnews/:id/publish', async (c) => {
   } finally {
     metaPublishInFlight.delete(id);
   }
+});
+/** 완성 카드의 특정 슬라이드만 표적 재생성(오타 수선) — body.slides 미지정이면 qaUnresolved 대상.
+ *  수 분 걸리는 동기 호출(gpt-image 재생성+QA 재검수). 성공 시 qaUnresolved 갱신 → 발행 게이트 해제. */
+app.post('/cardnews/:id/repair', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const body = await c.req.json<{ slides?: number[] }>().catch(() => ({} as { slides?: number[] }));
+  const r = await repairCardNewsSlides(id, Array.isArray(body.slides) ? body.slides : undefined);
+  if (!r.ok) return c.json({ error: r.error, fixed: r.fixed, stillBad: r.stillBad }, 409);
+  return c.json(r);
+});
+app.post('/api/cardnews/:id/repair', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const body = await c.req.json<{ slides?: number[] }>().catch(() => ({} as { slides?: number[] }));
+  const r = await repairCardNewsSlides(id, Array.isArray(body.slides) ? body.slides : undefined);
+  if (!r.ok) return c.json({ error: r.error, fixed: r.fixed, stillBad: r.stillBad }, 409);
+  return c.json(r);
 });
 app.post('/shorts/:id/meta', async (c) => {
   const id = c.req.param('id') ?? '';

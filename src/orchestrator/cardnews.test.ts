@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { applyProofread, buildCardImagePrompt, buildSlideQaPrompt, coverIncludesKeyword, resolveForcedPreset } from './cardnews';
+import {
+  applyProofread, buildCardImagePrompt, buildSlideQaPrompt, buildSlideTranscribePrompt,
+  coverIncludesKeyword, extractDesignFromDraftPrompt, resolveForcedPreset, stripForDiff,
+} from './cardnews';
 
 describe('coverIncludesKeyword — 표지 키워드 정확 표기 게이트', () => {
   it('headline 또는 body 어느 쪽이든 정확 표기가 있으면 통과(택일 허용 유지)', () => {
@@ -105,6 +108,62 @@ describe('buildSlideQaPrompt — 장당 QA 프롬프트(순수)', () => {
     const p = buildSlideQaPrompt('표지 제목', '');
     expect(p).toContain('"표지 제목"');
     expect(p).not.toContain('본문 "');
+  });
+
+  // 2026-08-13 전수 스캔 유출(발행본 2건 포함) — 자음 혼동쌍 체크리스트를 프롬프트에 고정.
+  it('자음 혼동쌍(ㅌ↔ㄹ 등) 실측 유출 예시 포함', () => {
+    const p = buildSlideQaPrompt('아무 제목', '');
+    for (const ex of ['밑→밀', '짙→질', '바깥→바깔', '걷어→걸어', '눕혀→늪혀', '자리→사리', '깎→짝']) {
+      expect(p).toContain(ex);
+    }
+  });
+
+  it('블라인드 전사본을 주면 재검 근거로 포함, 없으면 미포함', () => {
+    const p = buildSlideQaPrompt('제목', '본문', '보이는 대로 읽은\n텍스트');
+    expect(p).toContain('1차 블라인드 전사');
+    expect(p).toContain('보이는 대로 읽은 텍스트'); // 줄바꿈 접힘
+    expect(buildSlideQaPrompt('제목', '본문')).not.toContain('1차 블라인드 전사');
+  });
+});
+
+describe('buildSlideTranscribePrompt — 블라인드 전사(기대 편향 제거)', () => {
+  it('기대 문구를 포함하지 않고, 추측 교정 금지·자형 확인 지시를 포함', () => {
+    const p = buildSlideTranscribePrompt();
+    expect(p).not.toContain('기대 문구]');       // 기대 문구 섹션 자체가 없어야 블라인드
+    expect(p).toContain('고쳐 적지 말라');
+    expect(p).toContain('ㅌ인지 ㄹ인지');
+    expect(p).toContain('"transcribe"');
+  });
+});
+
+describe('stripForDiff — 공백만 허용 차이(줄바꿈·띄어쓰기)', () => {
+  it('공백·줄바꿈 제거 후 동일 판정', () => {
+    expect(stripForDiff('밑에서 걷어\n냅니다')).toBe('밑에서걷어냅니다');
+    expect(stripForDiff('밑에서걷어냅니다') === stripForDiff('밀에서 걷어냅니다')).toBe(false); // 자음 오염은 불일치
+  });
+});
+
+describe('extractDesignFromDraftPrompt — 구 카드 수선용 역파싱(순수)', () => {
+  it('실제 buildCardImagePrompt 출력에서 스타일·장면·프리셋을 복원한다', () => {
+    const prompt = buildCardImagePrompt({
+      headline: '제목', body: '본문', scene: '노을 지는 창가, 화분 하나',
+      style: '따뜻한 자연광, 파스텔 팔레트', title: '가을 인사',
+      index: 2, total: 4, hasRefs: false, preset: 'handwritten_poster',
+    });
+    const d = extractDesignFromDraftPrompt(prompt);
+    expect(d.style).toBe('따뜻한 자연광, 파스텔 팔레트');
+    expect(d.scene).toBe('노을 지는 창가, 화분 하나');
+    expect(d.preset).toBe('handwritten_poster');
+  });
+  it('에디토리얼(비손글씨) 분기도 복원 — 표지(index 0) 접미문 제거 포함', () => {
+    const prompt = buildCardImagePrompt({
+      headline: '제목', body: '', scene: '책상 위 스케치',
+      style: '단색 배경, 잉크 질감', title: '표지', index: 0, total: 3, hasRefs: true, preset: 'flat_design',
+    });
+    const d = extractDesignFromDraftPrompt(prompt);
+    expect(d.style).toBe('단색 배경, 잉크 질감');
+    expect(d.scene).toBe('책상 위 스케치');
+    expect(d.preset).toBe('photorealistic'); // 비손글씨는 프리셋 구분 불가 — 범용 폴백
   });
 });
 
