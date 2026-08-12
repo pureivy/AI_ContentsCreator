@@ -54,9 +54,11 @@ export function isWorkingNow(a: AgentNode, s: WorkingSlice): boolean {
     return a.status === "thinking" || LEAD_WORK_PHASES.has(teamPhase);
   }
   if (a.level === "member") {
-    // standby 콘텐츠 팀(카드뉴스/숏폼)의 렌더링(integrate) 구간 — 위임 웨이브가 없는 전용
-    // 잡이라 engaged 게이트를 우회한다. 팀 스코프 'integrate'는 이 두 잡만 emit 하고
+    // standby 콘텐츠 팀(카드뉴스/숏폼)의 렌더링(integrate) 구간 — 코드(이미지·영상 생성)가
+    // 일하는 구간이라 engaged 게이트를 우회한다. 팀 스코프 'integrate'는 이 두 잡만 emit 하고
     // (블로그 org 런의 통합은 '_ceo' 키), OfficeView의 '렌더링 중' 버블과 1:1.
+    // (디자인 단계의 LLM 스트리밍은 cardnews/shorts 잡이 delegation 을 emit 해 engaged 로 잡힌다
+    //  — 2026-08-12 배선 전엔 디자인 내내 칩 0·유휴 표시였다.)
     if (teamPhase === "integrate") return true;
     const engaged = (s.engaged[a.team ?? ""] ?? []).includes(a.agent_id);
     if (!engaged) return false;

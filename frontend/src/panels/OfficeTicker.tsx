@@ -57,7 +57,7 @@ export default function OfficeTicker({
     return (
       <div className="office-ticker live" title={`${actorName}${tail}`}>
         <span className="office-ticker-dot" />
-        <Avatar id={item.actorId} glyph={glyph} size={17} head />
+        <Avatar id={item.actorId} glyph={glyph} size={17} head level={a?.level} title={a?.persona?.role ?? ""} />
         <span className="office-ticker-text">
           <b className="office-ticker-actor" style={{ color }}>{actorName}</b>{tail} <Ico name={KIND_ICON[item.kind]} size={11} />
         </span>

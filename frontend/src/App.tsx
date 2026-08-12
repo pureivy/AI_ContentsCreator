@@ -1297,7 +1297,7 @@ export default function App() {
         return (
           <div key={id} className="output-card" style={{ borderLeftColor: color }}>
             <div className="output-head">
-              <Avatar id={id} glyph={agentGlyph(a?.level, id, a?.persona?.role ?? "")} size={22} head />
+              <Avatar id={id} glyph={agentGlyph(a?.level, id, a?.persona?.role ?? "")} size={22} head level={a?.level} title={a?.persona?.role ?? ""} />
               <b style={{ color }}>{empLabel(id, a?.persona)}</b>
               <span className="output-meta">R{m.round} · {m.move}</span>
             </div>
@@ -1320,7 +1320,7 @@ export default function App() {
           <div key={id} className="emp-card">
             <div className="emp-head">
               <span className="msg-who">
-                <Avatar id={id} glyph={agentGlyph(a.level, id, a.persona?.role ?? "")} size={20} head />
+                <Avatar id={id} glyph={agentGlyph(a.level, id, a.persona?.role ?? "")} size={20} head level={a.level} title={a.persona?.role ?? ""} />
                 <b>{empLabel(id, a.persona)}</b>
               </span>
               <span className="emp-meta">
@@ -1392,7 +1392,7 @@ export default function App() {
           <span className="approval-text">
             <Ico name="bell" size={14} />{" "}
             {ap.agent_id && (
-              <Avatar id={ap.agent_id} glyph={agentGlyph(aa?.level, ap.agent_id, aa?.persona?.role ?? "")} size={20} head />
+              <Avatar id={ap.agent_id} glyph={agentGlyph(aa?.level, ap.agent_id, aa?.persona?.role ?? "")} size={20} head level={aa?.level} title={aa?.persona?.role ?? ""} />
             )}{" "}
             <b>{empLabel(ap.agent_id, aa?.persona) || "시스템"}</b>
             {" "}승인 요청 · <span className="approval-act">{meta.label}</span>

@@ -452,6 +452,10 @@ export async function runCardNewsJob(
     store.update(id, { stage: 'designing', caption: plan.caption, hashtags: plan.hashtags });
     const refs = await analyzeReferences(dir, card.topic, opts.signal);
     if (refs.analysis) say(`레퍼런스 ${refs.refPaths.length}장 분석 반영 — ${refs.analysis.slice(0, 60)}…`);
+    // 디자이너를 engaged 웨이브에 배선 — standby 팀은 org 와 달리 delegation 이벤트가 없어,
+    // 디자인 단계 내내 오피스가 디자이너를 유휴·배회로 그리고 WORKING 칩도 0 이었다(수선 2026-08-12).
+    // emit 은 디자이너 LLM 호출 직전(레퍼런스 분석 뒤) — 스폰 전 '⏳ 대기' 창을 최소화한다.
+    opts.bus?.emit('delegation', { team_id: 'cardnews', from: 'cardnews_planner', to: 'cardnews_designer', summary: '배경 프롬프트 디자인' });
     const design = await designBackgrounds(io, card.topic, plan, refs.analysis, opts.stylePreset);
     say(`디자인 확정 — ${design.preset} · ${design.style.slice(0, 40)}`);
     checkAbort();

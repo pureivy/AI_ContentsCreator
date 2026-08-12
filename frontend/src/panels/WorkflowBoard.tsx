@@ -127,7 +127,7 @@ export default function WorkflowBoard({ names }: { names?: Record<string, string
     const ts = lastTs[a.agent_id];
     return (
       <div key={a.agent_id} className="wf-member">
-        <Avatar id={a.agent_id} glyph={agentGlyph(a.level, a.agent_id, a.persona?.role ?? "")} size={24} head />
+        <Avatar id={a.agent_id} glyph={agentGlyph(a.level, a.agent_id, a.persona?.role ?? "")} size={24} head level={a.level} title={a.persona?.role ?? ""} />
         <div className="wf-member-body">
           <div className="wf-member-top">
             <span className="wf-name" style={{ color: agentColor(a.agent_id) }}>{resolveName(a.agent_id, a.persona, names) || a.persona?.role || a.agent_id}</span>

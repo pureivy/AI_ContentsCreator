@@ -312,6 +312,9 @@ export async function runShortsJob(
       stage: 'designing', title: plan.title, titles: plan.titles,
       description: plan.description, hashtags: plan.hashtags,
     });
+    // 디렉터를 engaged 웨이브에 배선 — standby 팀은 org 와 달리 delegation 이벤트가 없어,
+    // 디자인 단계 내내 오피스가 디렉터를 유휴·배회로 그리고 WORKING 칩도 0 이었다(수선 2026-08-12).
+    opts.bus?.emit('delegation', { team_id: 'shorts', from: 'shorts_writer', to: 'shorts_director', summary: '씬 비주얼 연출' });
     const design = await designScenes(io, short.topic, plan);
     say(`디자인 확정 — ${design.preset} · ${design.style.slice(0, 40)}`);
     checkAbort();

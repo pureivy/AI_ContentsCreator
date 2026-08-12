@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   LOUNGE_SOFA_ZONE, PANTRY_ZONE, CONF_ZONE, READING_ZONE, BEANBAG_ZONE, WHITEBOARD_SPOT,
-  pointInZone, overlapFrac, placeInZone, MAX_OVERLAP,
-  AVATAR_W, AVATAR_H, Pt, Zone,
+  pointInZone, overlapFrac, placeInZone, MAX_OVERLAP, clusterBelow, meetingCircle,
+  AVATAR_W, AVATAR_H, VGAP, Pt, Zone,
 } from "./officeChoreography";
 
 // 결정적 난수(LCG) — placeInZone 의 산포가 재현 가능하도록.
@@ -93,6 +93,96 @@ describe("placeInZone — 영역 안 산포, 쌍별 겹침 < 1/3", () => {
   });
   it("MAX_OVERLAP 은 1/3", () => {
     expect(MAX_OVERLAP).toBeCloseTo(1 / 3, 10);
+  });
+});
+
+// ── 안무 기하(집합·토론 상석) — OfficeView 실좌표로 '방 밖 이탈'을 검증한다 ─────────
+// 기획팀(planning) 방: y13~30(h17) — 팀장(fy0.62) 아래 +11 은 방 밖(탕비실)이라 클램프 필수.
+// 경영관리팀(support) 방: y33.5~58.5(h25) — 깊어서 기존 '팀장 아래 집합'이 그대로 유효.
+const PLANNING = { left: 61.5, right: 98.5, top: 13, bottom: 30 };
+const SUPPORT = { left: 26, right: 61.5, top: 33.5, bottom: 58.5 };
+
+describe("clusterBelow — 집합 대열이 방 사각형을 벗어나지 않는다", () => {
+  it("깊은 방(경영관리팀): 기존 '팀장 아래 중앙 정렬' 유지", () => {
+    const anchor = { x: 43.75, y: 38 };
+    const pts = clusterBelow(4, anchor.x, anchor.y, SUPPORT.left, SUPPORT.right, SUPPORT.bottom);
+    expect(pts).toHaveLength(4);
+    for (const p of pts) {
+      expect(p.y).toBeGreaterThanOrEqual(anchor.y + AVATAR_H); // 팀장 아래(세로 비겹침)
+      expect(p.y).toBeLessThanOrEqual(SUPPORT.bottom - AVATAR_H / 2); // 방 하단 안
+      expect(p.x).toBeGreaterThanOrEqual(SUPPORT.left);
+      expect(p.x).toBeLessThanOrEqual(SUPPORT.right);
+    }
+  });
+  it("얕은 방(기획팀 콘텐츠): 아래로 못 내려가면 팀장 '옆' 한 줄 — 방 안 + 팀장 비겹침", () => {
+    const anchor = { x: 71.86, y: 23.54 }; // content 팀장(fx0.28, fy0.62)
+    const pts = clusterBelow(2, anchor.x, anchor.y, PLANNING.left, PLANNING.right, PLANNING.bottom);
+    expect(pts).toHaveLength(2);
+    for (const p of pts) {
+      expect(p.y).toBeLessThanOrEqual(PLANNING.bottom - AVATAR_H / 2); // 방 하단 안(탕비실 이탈 금지)
+      expect(p.y).toBeGreaterThanOrEqual(PLANNING.top);
+      expect(p.x).toBeGreaterThanOrEqual(PLANNING.left);
+      expect(p.x).toBeLessThanOrEqual(PLANNING.right);
+      expect(Math.abs(p.x - anchor.x)).toBeGreaterThanOrEqual(AVATAR_W); // 팀장 위에 안 올라섬(몸폭 이상)
+    }
+    // 대열끼리도 서로 안 겹친다(몸폭 이상 간격)
+    expect(Math.abs(pts[0].x - pts[1].x)).toBeGreaterThanOrEqual(AVATAR_W);
+  });
+  it("얕은 방 옆줄이 같은 방 타 팀 상주 좌석(avoid)을 1/3 이상 덮지 않는다", () => {
+    const anchor = { x: 71.86, y: 23.54 };
+    // 카드뉴스 팀장(90.36,23.54)·디자이너 좌석(94.8,24.56) — 실제 planning 방 공유 좌석.
+    const avoid: Pt[] = [{ x: 90.36, y: 23.54 }, { x: 94.8, y: 24.56 }];
+    const pts = clusterBelow(2, anchor.x, anchor.y, PLANNING.left, PLANNING.right, PLANNING.bottom, avoid);
+    for (const p of pts) for (const q of avoid)
+      expect(overlapFrac(p, q)).toBeLessThan(MAX_OVERLAP);
+  });
+  it("얕은 방(기획팀 카드뉴스, 우측 팀장): 1명이 방 안 왼쪽 옆자리로", () => {
+    const anchor = { x: 90.36, y: 23.54 }; // cardnews 팀장(fx0.78, fy0.62)
+    const pts = clusterBelow(1, anchor.x, anchor.y, PLANNING.left, PLANNING.right, PLANNING.bottom);
+    expect(pts).toHaveLength(1);
+    expect(pts[0].y).toBeLessThanOrEqual(PLANNING.bottom - AVATAR_H / 2);
+    expect(pts[0].x).toBeGreaterThanOrEqual(PLANNING.left);
+    expect(pts[0].x).toBeLessThanOrEqual(PLANNING.right);
+    expect(Math.abs(pts[0].x - anchor.x)).toBeGreaterThanOrEqual(AVATAR_W);
+  });
+  it("깊은 방 다열(8명): 옆줄로 오분류하지 않고 행만 하단 클램프 — 전원 방 안", () => {
+    const anchor = { x: 43.75, y: 38 };
+    const pts = clusterBelow(8, anchor.x, anchor.y, SUPPORT.left, SUPPORT.right, SUPPORT.bottom);
+    expect(pts).toHaveLength(8);
+    for (const p of pts) {
+      expect(p.y).toBeGreaterThanOrEqual(anchor.y + AVATAR_H);          // 여전히 '팀장 아래'
+      expect(p.y).toBeLessThanOrEqual(SUPPORT.bottom - AVATAR_H / 2);   // 2행도 방 하단 안
+      expect(p.x).toBeGreaterThanOrEqual(SUPPORT.left);
+      expect(p.x).toBeLessThanOrEqual(SUPPORT.right);                   // 캔버스 밖(x>100) 이탈 금지
+    }
+  });
+  it("zoneBottom 미지정 시 기존 동작(하위호환)", () => {
+    const pts = clusterBelow(2, 43.75, 38, SUPPORT.left, SUPPORT.right);
+    for (const p of pts) expect(p.y).toBeCloseTo(38 + 11, 5);
+  });
+});
+
+describe("meetingCircle — 토론 상석이 방 상단(스카이라인·옆방)으로 나가지 않는다", () => {
+  it("얕은 방(기획팀 콘텐츠, n=2): 상석이 방 안으로 클램프", () => {
+    const cy = PLANNING.top + 17 * 0.55; // 22.35
+    const { head, members } = meetingCircle(2, 80.25, cy, 37, 17, PLANNING.top);
+    expect(head.y).toBeGreaterThanOrEqual(PLANNING.top + AVATAR_H / 2); // 방 상단 안
+    expect(head.y).toBeLessThan(cy); // 여전히 '상석'(테이블 위쪽)
+    // 클램프로 상석이 12시 갭 안까지 내려와도 갭 가장자리(±60°) 팀원과 몸폭 이상 벌어진다
+    for (const m of members) expect(Math.abs(m.x - head.x)).toBeGreaterThanOrEqual(AVATAR_W);
+  });
+  it("경영관리팀(n=4): 상석이 자기 방 안(위층 회의실 침범 금지)", () => {
+    const cy = SUPPORT.top + 25 * 0.55; // 47.25
+    const { head } = meetingCircle(4, 43.75, cy, 35.5, 25, SUPPORT.top);
+    expect(head.y).toBeGreaterThanOrEqual(SUPPORT.top + AVATAR_H / 2);
+    expect(head.y).toBeLessThan(cy);
+  });
+  it("zoneTop 미지정 시 기존 동작(하위호환)", () => {
+    const { head } = meetingCircle(3, 50, 50);
+    expect(head.y).toBeCloseTo(50 - (6.5 + 3 * 0.5) - 10, 5);
+  });
+  it("VGAP 는 아바타 높이보다 크다(행간 비겹침 전제)", () => {
+    expect(VGAP).toBeGreaterThan(AVATAR_H);
   });
 });
 

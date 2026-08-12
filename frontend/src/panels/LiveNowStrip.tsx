@@ -158,7 +158,7 @@ export default function LiveNowStrip({ names }: { names: Record<string, string> 
               }
               return (
                 <div key={a.agent_id} className="livenow-card" style={{ borderLeftColor: agentColor(a.agent_id) }}>
-                  <Avatar id={a.agent_id} glyph={agentGlyph(a.level, a.agent_id, a.persona?.role ?? "")} size={18} head />
+                  <Avatar id={a.agent_id} glyph={agentGlyph(a.level, a.agent_id, a.persona?.role ?? "")} size={18} head level={a.level} title={a.persona?.role ?? ""} />
                   <div className="livenow-meta">
                     <b className="livenow-name">{label}</b>
                     <span className="livenow-doing">{l1}</span>

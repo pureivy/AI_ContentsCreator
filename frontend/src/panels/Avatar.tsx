@@ -16,15 +16,21 @@ export default function Avatar({
   size = 26,
   className = "",
   head = false,
+  level,
+  title,
 }: {
   id?: string | null;
   glyph: string;
   size?: number;
   className?: string;
   head?: boolean;
+  level?: string;   // ceo/lead/member — spriteFor 휴리스틱 보강
+  // 직책(persona.role) — id 만으론 발행 담당(content_m1)이 /content/ 규칙에 걸려 작가(blogger)와
+  // 같은 얼굴이 되던 실사고(officeSprites.ts:35 주석)의 잔존 경로. 호출부가 아는 직책을 넘겨 해소.
+  title?: string;
 }) {
   const [err, setErr] = useState(false);
-  const char = spriteFor(id ?? "");
+  const char = spriteFor(id ?? "", level ?? "", title ?? "");
 
   if (err || !char) {
     // 스프라이트 캐릭터 매칭 없음(또는 이미지 로드 실패) → 역할 이모지 폴백.

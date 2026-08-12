@@ -19,8 +19,8 @@ const ROLE_SPRITE: Record<string, string> = {
   cardnews_designer: "carddesigner", // 민준호 (남, 카드 디자이너 — gpt-image 생성 2포즈 세트)
   shorts_writer: "shortswriter",     // 유하린 (여, 숏폼 작가 — gpt-image 생성 2포즈 세트)
   shorts_director: "shortsdirector", // 서준영 (남, 숏폼 영상 디렉터 — gpt-image 생성 2포즈 세트)
-  jarvis: "jarvis",             // 자비스 — 멀티포즈 세트 없이 '원래 이미지'(채팅 아바타 jarvis_face) 단일 사용.
-                                //   OfficeView Sprite 가 특수 처리(포즈 무관 동일 이미지 → 복장 일관성, 사용자 요청)
+  jarvis: "jarvis",             // 자비스 — 2포즈 스프라이트(jarvis_stand/jarvis_sit_front) 사용(TWO_POSE_CHARS).
+                                //   두 파일이 모두 없을 때만 '얼굴+SVG 정장' 폴백(OfficeView TwoPoseFigure).
   secretary: "jarvis",          // 자비스 로스터 정식 id — Avatar(직원 탭·타임라인)는 id 만으로 해석하므로 id 매핑 필수
 };
 

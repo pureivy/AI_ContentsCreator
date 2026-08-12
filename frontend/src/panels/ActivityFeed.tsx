@@ -81,7 +81,7 @@ export default function ActivityFeed({
             <div className="act-main">
               <div className="act-line">
                 {isPerson ? (
-                  <Avatar id={actor!} glyph={glyphFallback} size={18} head />
+                  <Avatar id={actor!} glyph={glyphFallback} size={18} head level={a?.level} title={a?.persona?.role ?? ""} />
                 ) : (
                   <span className="act-glyph"><Ico name={KIND_ICON[it.kind]} size={13} /></span>
                 )}

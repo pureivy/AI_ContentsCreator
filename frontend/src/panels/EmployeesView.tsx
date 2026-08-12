@@ -162,7 +162,7 @@ export default function EmployeesView() {
     <div key={r.id} className={`emp-dir-card${sel === r.id ? " sel" : ""}${r.is_critic ? " critic" : ""}`}>
       <button className="emp-dir-cardbtn" onClick={() => setSel(r.id)}>
         <span className="emp-dir-glyph">
-          <Avatar id={r.id} glyph={glyph(r.level, r.id, r.title)} size={18} />
+          <Avatar id={r.id} glyph={glyph(r.level, r.id, r.title)} size={18} level={r.level} title={r.title} />
         </span>
         <span className="emp-dir-info">
           <span className="emp-dir-name">{r.title}{r.name ? <span className="emp-person"> · {r.name}</span> : null}</span>
@@ -233,7 +233,7 @@ export default function EmployeesView() {
           <>
             <h2 className="emp-detail-title">
               <span className="emp-detail-ava">
-                <Avatar id={profile.id} glyph={glyph(profile.level, profile.id, profile.title)} size={24} />
+                <Avatar id={profile.id} glyph={glyph(profile.level, profile.id, profile.title)} size={24} level={profile.level} title={profile.title} />
               </span>
               {profile.title}
               {profile.name && <span className="emp-person"> · {profile.name}</span>}
