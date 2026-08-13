@@ -76,8 +76,6 @@ perfEraSince: 2026-07-31
 avoidJargon:
   - term: 방조
     use: 새 그물 씌우기
-  - term: 시비
-    use: 비료 주기
   - term: 동해
     use: 겨울 추위 피해
   - term: 가식

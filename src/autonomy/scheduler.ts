@@ -252,7 +252,7 @@ const IDEA_SYSTEM =
   '- [성과 상위 키워드]는 어떤 분야가 통했는지의 참고다 — 그 분야의 인접·연관 영역에서 새로운 키워드를 발굴하라(성과 키워드 자체나 그 변형의 재사용은 금지). 없으면(콜드스타트) 영역 안에서 다양하게 탐색한다.\n' +
   '- 단, 성과 기록에는 브랜드 범위가 지금과 달랐던 시절의 주제가 남아 있을 수 있다. 그런 키워드는 "무엇이 통했나"의 신호(예: 계절 타이밍·비교·증상 진단 같은 접근 방식)로만 읽고, 그 소재 자체나 인접 소재로 확장하지 마라 — 소재 범위의 기준은 언제나 [브랜드 컨텍스트]다.\n' +
   '- [최근 제작]·[최근 자율주제]와 중복되지 않게 하라.\n' +
-  '- [기존 콘텐츠] 목록과 주제·키워드가 유사하면 안 된다 — 같은 키워드나 그것을 포함·확장한 키워드 재사용 금지, 완전히 새로운 각도의 주제를 골라라(사용자 원칙).\n' +
+  '- [기존 콘텐츠]와 겹치지 않는 새 소재를 우선하라. 좋은 주제가 기존과 겹치면 버리지 말고, 기존 글과 뚜렷이 다른 시각(대상·상황·계절·관점)을 잡아 제안하라(사용자 원칙 2026-08-14 — 종전 "완전히 새로운 각도만"에서 개정).\n' +
   '- title 은 클릭·검색에 유리한 한국어 제목, keyword 는 검색량 있을 법한 핵심 타겟 키워드 1개, subNiche 는 세부 분야다.';
 
 /**
@@ -371,6 +371,10 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     const cands = normalizeIdeaCandidates(o);
     if (!cands.length) return null; // 응답 자체가 무효 — 이번 주기 스킵
     const rejects: string[] = [];
+    // 유사 폴백(사용자 원칙 개정 2026-08-14) — 기존과 유사한 후보는 기각이 아니라 '다른 시각 생성'
+    // 대상. 새 소재 후보를 우선하되, 이번 라운드에 새 소재가 없으면 유사 후보를 채택한다 — 집필 시점에
+    // priorCoverageBrief 가 이전 글 앵글을 주입해 프레이밍을 바꾼다(same-topic different content 배선).
+    let similarFallback: ContentIdea | null = null;
     for (const cand of cands) {
       const { title, keyword } = cand;
       if (recentAuto.includes(title)) {
@@ -405,9 +409,9 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       const sim = findSimilarContent({ title, ...(keyword ? { keyword } : {}) }, existing);
       if (sim.length) {
         const top = sim[0]!;
-        console.log(`[auto-cycle] 아이디어 기각(기존과 유사) — "${title}" ≈ (${top.kind}) "${top.title}"`);
-        rejects.push(`"${title}"=기존 "${top.title}"와 유사`);
-        continue;
+        console.log(`[auto-cycle] 아이디어 유사 감지 — "${title}" ≈ (${top.kind}) "${top.title}" → 새 소재 우선, 없으면 다른 시각으로 채택`);
+        if (!similarFallback) similarFallback = { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
+        continue; // 이번 라운드의 새 소재 후보를 먼저 소진한다
       }
       // 개념 포화 기각 — 표면 유사(findSimilarContent)는 통과했지만 핵심 소재가 여러 편과 겹치면 1회만 다른 축 유도.
       // attempt 0 에서만(2번째 시도는 통과시켜 기아 방지 — 다양성은 강제하되 생산은 막지 않는다).
@@ -422,6 +426,13 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       recentAuto.push(title);
       if (recentAuto.length > 20) recentAuto.shift();
       return { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
+    }
+    // 새 소재 후보가 전멸했지만 유사 후보가 있으면 채택 — 좌초 대신 '같은 소재, 다른 시각' 글로 간다.
+    if (similarFallback) {
+      console.log(`[auto-cycle] 유사 주제 채택(다른 시각 생성) — "${similarFallback.title}"`);
+      recentAuto.push(similarFallback.title);
+      if (recentAuto.length > 20) recentAuto.shift();
+      return similarFallback;
     }
     rejectNote = `[직전 제안 ${cands.length}건 전부 기각 — 사유: ${rejects.slice(0, 4).join(' · ') || '전부 무효'}] 이 사유들과 소재를 전부 피해, 완전히 다른 소재·키워드로 5건을 다시 제안하라.`;
   }
