@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
-  applyProofread, buildCardImagePrompt, buildSlideQaPrompt, buildSlideTranscribePrompt,
+  applyCardRevision, applyProofread, buildCardImagePrompt, buildSlideQaPrompt, buildSlideTranscribePrompt,
   coverIncludesKeyword, extractDesignFromDraftPrompt, resolveForcedPreset, stripForDiff,
 } from './cardnews';
+
+type CardPlan = Parameters<typeof applyCardRevision>[0];
 
 describe('coverIncludesKeyword — 표지 키워드 정확 표기 게이트', () => {
   it('headline 또는 body 어느 쪽이든 정확 표기가 있으면 통과(택일 허용 유지)', () => {
@@ -200,5 +202,36 @@ describe('buildCardImagePrompt — 기존 에디토리얼 분기 보존', () => 
     expect(p).toContain('전시 포스터처럼');
     expect(p).toContain('산세리프');
     expect(p).not.toContain('손글씨 캘리그래피');
+  });
+});
+
+describe('applyCardRevision — 수정 요청 개정안 적용(순수)', () => {
+  const base: CardPlan = {
+    title: '올리브 제목', caption: '캡션', hashtags: ['#a'],
+    slides: [
+      { headline: 'h1', body: 'b1' },
+      { headline: 'h2', body: 'b2\n둘째 줄' },
+    ],
+  };
+  it('바뀐 슬라이드만 반영하고 번호를 돌려준다(1-base)', () => {
+    const r = applyCardRevision(base, { slides: [{ index: 2, headline: '새 헤드라인' }] });
+    expect(r).not.toBeNull();
+    expect(r!.changedSlides).toEqual([2]);
+    expect(r!.plan.slides[1]!.headline).toBe('새 헤드라인');
+    expect(r!.plan.slides[1]!.body).toBe('b2\n둘째 줄'); // 미지정 필드 보존
+    expect(r!.plan.slides[0]!.headline).toBe('h1');
+  });
+  it('범위 밖 번호·빈 문자열·동일 문구는 무시, 유효 변경 없으면 null', () => {
+    expect(applyCardRevision(base, { slides: [{ index: 9, headline: 'x' }] })).toBeNull();
+    expect(applyCardRevision(base, { slides: [{ index: 1, headline: '  ' }] })).toBeNull();
+    expect(applyCardRevision(base, { slides: [{ index: 1, headline: 'h1' }] })).toBeNull();
+    expect(applyCardRevision(base, null)).toBeNull();
+  });
+  it('캡션·해시태그(# 접두 보정)는 metaChanged 로 표시', () => {
+    const r = applyCardRevision(base, { caption: '새 캡션', hashtags: ['나무', '#정원'] });
+    expect(r!.metaChanged).toBe(true);
+    expect(r!.changedSlides).toEqual([]);
+    expect(r!.plan.caption).toBe('새 캡션');
+    expect(r!.plan.hashtags).toEqual(['#나무', '#정원']);
   });
 });

@@ -49,10 +49,10 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
-import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides } from '../orchestrator/cardnews';
+import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
 import { shortsStore } from '../content/shorts';
 import type { Shorts } from '../content/shorts';
-import { runShortsJob, isShortsRunning } from '../orchestrator/shorts';
+import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame } from '../tools/shortsRender';
 import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece, blogUrlForPiece } from '../content/pieces';
@@ -1344,6 +1344,21 @@ app.get('/youtube/oauth/callback', async (c) => {
 // 유튜브 업로드 in-flight 락 — youtubeUrl 은 업로드 '완료 후'에야 기록되므로 그 가드만으로는
 // 동시/이중 제출(특히 텔레그램 버튼 이중 탭)이 같은 영상을 두 번 올린다(중복 영상+쿼터 낭비).
 const ytPublishInFlight = new Set<string>();
+/** 숏폼 수정 요청(검토 탭) — 자유 피드백 → 대본·제목·설명 개정 → 필요 씬만 배경 재생성 → 재조립.
+ *  발행(유튜브·릴스) 후엔 파일 교체 불가라 거절. 재조립 포함 수 분 동기 호출. */
+async function shortsReviseHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  const b = await c.req.json<{ feedback?: string }>().catch(() => ({} as { feedback?: string }));
+  const feedback = (b.feedback ?? '').trim();
+  if (!feedback) return c.json({ error: '수정 요청 내용이 비었습니다.' }, 400);
+  const r = await reviseShorts(id, feedback);
+  if (!r.ok) return c.json({ error: r.error, ...r }, 409);
+  console.log(`[발행담당] 숏폼 수정 요청 반영 — ${id} 씬 ${r.changedScenes.join(',') || '문구없음'}${r.regenScenes.length ? ` · 배경 ${r.regenScenes.join(',')}` : ''}`);
+  return c.json(r);
+}
+app.post('/shorts/:id/revise', shortsReviseHandler);
+app.post('/api/shorts/:id/revise', shortsReviseHandler);
+
 /** 쇼츠 제목 교체(업로드 전 한정) — 제목 후보(plan.titles) 선택 또는 직접 지정. 영상 캘리 오버레이는
  *  제목 원문이 아니라 키워드+카피(title-copy.json)를 굽으므로 재렌더 없이 안전. 업로드 후엔 스튜디오에서. */
 async function shortsTitleHandler(c: Context): Promise<Response> {
@@ -1708,6 +1723,21 @@ app.post('/cardnews/:id/publish', async (c) => {
     metaPublishInFlight.delete(id);
   }
 });
+/** 카드뉴스 수정 요청(검토 탭) — 블로그 revise 동형: 자유 피드백 → 카피 개정 → 바뀐 슬라이드만
+ *  표적 재생성+블라인드 QA 재검수. 발행(인스타) 후엔 이미지 교체 불가라 거절. 수 분 동기 호출. */
+async function cardnewsReviseHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  const b = await c.req.json<{ feedback?: string }>().catch(() => ({} as { feedback?: string }));
+  const feedback = (b.feedback ?? '').trim();
+  if (!feedback) return c.json({ error: '수정 요청 내용이 비었습니다.' }, 400);
+  const r = await reviseCardNews(id, feedback);
+  if (!r.ok) return c.json({ error: r.error, ...r }, 409);
+  console.log(`[발행담당] 카드뉴스 수정 요청 반영 — ${id} 슬라이드 ${r.changedSlides.join(',') || '문구없음'}${r.stillBad.length ? ` · 미해결 ${r.stillBad.join(',')}` : ''}`);
+  return c.json(r);
+}
+app.post('/cardnews/:id/revise', cardnewsReviseHandler);
+app.post('/api/cardnews/:id/revise', cardnewsReviseHandler);
+
 /** 완성 카드의 특정 슬라이드만 표적 재생성(오타 수선) — body.slides 미지정이면 qaUnresolved 대상.
  *  수 분 걸리는 동기 호출(gpt-image 재생성+QA 재검수). 성공 시 qaUnresolved 갱신 → 발행 게이트 해제. */
 app.post('/cardnews/:id/repair', async (c) => {

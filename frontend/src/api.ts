@@ -1172,6 +1172,16 @@ export async function fetchYoutubeStatus(): Promise<{ client: boolean; connected
   try { const r = await fetch("/youtube/status"); return await r.json() as { client: boolean; connected: boolean }; }
   catch { return { client: false, connected: false }; }
 }
+/** 파생 수정 요청(검토 탭) — 자유 피드백을 LLM 이 해석해 카드=문구 개정+바뀐 슬라이드만 재생성,
+ *  숏폼=대본 개정+필요 씬 재생성+재조립. 발행 전 한정, 수 분 걸리는 동기 호출. */
+export async function reviseDerived(kind: "cardnews" | "shorts", id: string, feedback: string): Promise<{ ok?: boolean; error?: string }> {
+  try {
+    const r = await fetch(`/${kind}/${id}/revise`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ feedback }),
+    });
+    return await r.json();
+  } catch { return { error: "요청 실패" }; }
+}
 /** force: QA 미해결(qa_unresolved 409) 카드를 사용자가 확인한 뒤 발행 확정할 때만 true. */
 export async function publishCardNews(id: string, force = false): Promise<{ ok?: boolean; igPermalink?: string; fbPostId?: string; error?: string; fbError?: string; qa_unresolved?: number[] }> {
   try {

@@ -447,6 +447,118 @@ export function buildCardImagePrompt(a: {
   return p.join('\n');
 }
 
+/** 수정 요청(자유 피드백) 개정안 — LLM 이 '바뀐 것만' 돌려준다. 적용은 applyCardRevision(순수)이 검증. */
+export interface CardRevision {
+  title?: unknown; caption?: unknown; hashtags?: unknown;
+  slides?: Array<{ index?: unknown; headline?: unknown; body?: unknown } | null>;
+}
+
+/** 개정안 적용(순수, 테스트 대상) — 안전핀: 번호 범위·빈 문자열·길이 상한 검증, 유효 변경이 없으면 null.
+ *  블로그 revise 와 같은 철학: 요청된 변경만 반영하고 나머지는 그대로. */
+export function applyCardRevision(
+  plan: Plan, cand: CardRevision | null,
+): { plan: Plan; changedSlides: number[]; metaChanged: boolean } | null {
+  if (!cand) return null;
+  const out: Plan = { ...plan, slides: plan.slides.map((s) => ({ ...s })) };
+  const changed: number[] = [];
+  let metaChanged = false;
+  const str = (v: unknown, max: number): string => {
+    const s = typeof v === 'string' ? stripEmoji(v).trim() : '';
+    return s && s.length <= max ? s : '';
+  };
+  for (const s of cand.slides ?? []) {
+    const idx = typeof s?.index === 'number' && Number.isInteger(s.index) ? s.index : 0; // 1-base
+    if (idx < 1 || idx > plan.slides.length) continue;
+    const headline = str(s?.headline, 60);
+    const body = str(s?.body, 260);
+    if (!headline && !body) continue;
+    const cur = out.slides[idx - 1]!;
+    const next = { ...cur, ...(headline ? { headline } : {}), ...(body ? { body } : {}) };
+    if (next.headline === cur.headline && next.body === cur.body) continue;
+    out.slides[idx - 1] = next;
+    changed.push(idx);
+  }
+  const title = str(cand.title, 60);
+  if (title && title !== plan.title) { out.title = title; metaChanged = true; }
+  const caption = str(cand.caption, 1000);
+  if (caption && caption !== (plan.caption ?? '')) { out.caption = caption; metaChanged = true; }
+  if (Array.isArray(cand.hashtags)) {
+    const tags = cand.hashtags.filter((t): t is string => typeof t === 'string' && !!t.trim())
+      .map((t) => (t.trim().startsWith('#') ? t.trim() : `#${t.trim()}`)).slice(0, 15);
+    if (tags.length && JSON.stringify(tags) !== JSON.stringify(plan.hashtags ?? [])) { out.hashtags = tags; metaChanged = true; }
+  }
+  if (!changed.length && !metaChanged) return null;
+  return { plan: out, changedSlides: [...new Set(changed)].sort((a, b) => a - b), metaChanged };
+}
+
+/**
+ * 카드뉴스 수정 요청(검토 탭) — 블로그 revise 와 같은 UX. 피드백을 카피 에디터 LLM 이 해석해
+ * '바뀐 슬라이드 문구/캡션'만 개정하고, 바뀐 슬라이드는 표적 재생성(repairCardNewsSlides — 블라인드
+ * 전사 QA 재검수 포함)으로 이미지까지 반영한다. 전체 재생성 대비 gpt-image 비용이 슬라이드 단위.
+ */
+export async function reviseCardNews(
+  id: string, feedback: string,
+  opts: { bus?: EventBus; signal?: AbortSignal } = {},
+): Promise<{ ok: boolean; error?: string; changedSlides: number[]; fixed: number[]; stillBad: number[]; metaChanged: boolean }> {
+  const store = cardNewsStore();
+  const card = store.get(id);
+  const fail = (error: string) => ({ ok: false as const, error, changedSlides: [], fixed: [], stillBad: [], metaChanged: false });
+  if (!card) return fail('unknown cardnews');
+  if (card.stage !== 'ready') return fail('완성(ready) 상태가 아닙니다');
+  if (card.igMediaId) return fail('이미 인스타에 발행됨 — 발행물 이미지는 교체할 수 없습니다');
+  if (RUNNING.has(id)) return fail('생성/수선 작업이 이미 진행 중입니다');
+  const say = (m: string): void => { console.log(`[카드뉴스] ${m}`); opts.bus?.emit('log', { message: m }); };
+  const dir = store.dirFor(id);
+  let plan: Plan;
+  try { plan = JSON.parse(fs.readFileSync(path.join(dir, 'plan.json'), 'utf-8')) as Plan; }
+  catch { return fail('plan.json 없음 — 수정 불가'); }
+  const cur = plan.slides.map((s, i) => `${i + 1}. [헤드라인] ${s.headline}${s.body ? ` [본문] ${s.body.replace(/\n/g, ' / ')}` : ''}`).join('\n');
+  const j = await microJSON<CardRevision>(
+    stdModel(),
+    '당신은 카드뉴스 카피 에디터입니다. 요청된 JSON 스키마만 출력합니다.',
+    [
+      '아래 카드뉴스에 대한 검토자의 수정 요청을 반영해, "바뀌는 항목만" 돌려줘라. 요청과 무관한 슬라이드·필드는 출력하지 마라.',
+      `[제목] ${plan.title}`,
+      `[슬라이드]\n${cur}`,
+      plan.caption ? `[캡션] ${plan.caption}` : '',
+      (plan.hashtags ?? []).length ? `[해시태그] ${(plan.hashtags ?? []).join(' ')}` : '',
+      `[수정 요청] ${feedback}`,
+      '규칙: 의미·톤 유지 범위에서 요청을 빠짐없이 반영, 각 줄 길이는 원문과 비슷하게, 이모지 금지, 본문 줄바꿈은 \\n.',
+      'JSON 형식: {"slides":[{"index":슬라이드번호,"headline":"...","body":"..."}],"title":"...","caption":"...","hashtags":["#..."]} — 바뀌는 필드만 포함.',
+    ].filter(Boolean).join('\n'),
+    { maxOutputTokens: 1600, signal: opts.signal },
+  ).catch(() => null);
+  const applied = applyCardRevision(plan, j);
+  if (!applied) return fail('수정 요청에서 반영할 변경을 찾지 못했습니다 — 요청을 더 구체적으로 써 주세요');
+  plan = applied.plan;
+  fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ title: plan.title, slides: plan.slides }, null, 2), 'utf-8');
+  if (applied.metaChanged || plan.title !== card.topic) {
+    store.update(id, { topic: plan.title, ...(plan.caption ? { caption: plan.caption } : {}), ...(plan.hashtags?.length ? { hashtags: plan.hashtags } : {}) });
+    const captionText = [plan.caption, (plan.hashtags ?? []).join(' ')].filter(Boolean).join('\n\n');
+    if (captionText) { try { fs.writeFileSync(path.join(dir, 'caption.txt'), captionText, 'utf-8'); } catch { /* 무해 */ } }
+  }
+  say(`수정 요청 반영 — 슬라이드 ${applied.changedSlides.join(',') || '없음'}${applied.metaChanged ? ' · 캡션/메타' : ''}`);
+  // 바뀐 기획 슬라이드 → slide_NN 번호(생성 실패 장이 있으면 slideMap 역참조)로 표적 재생성.
+  let fixed: number[] = []; let stillBad: number[] = [];
+  if (applied.changedSlides.length) {
+    let slideMap: number[] | null = null;
+    try { slideMap = (JSON.parse(fs.readFileSync(path.join(dir, 'design.json'), 'utf-8')) as { slideMap?: number[] }).slideMap ?? null; } catch { /* 구 카드 */ }
+    if (!slideMap && (card.slides ?? 0) === plan.slides.length) slideMap = Array.from({ length: plan.slides.length }, (_, i) => i + 1);
+    if (!slideMap) return { ok: false, error: '슬라이드 매핑 불명 — 문구는 반영됐으나 이미지 재생성 불가', changedSlides: applied.changedSlides, fixed: [], stillBad: [], metaChanged: applied.metaChanged };
+    const slideNos = applied.changedSlides
+      .map((planIdx) => slideMap!.findIndex((v) => v === planIdx) + 1).filter((k) => k >= 1);
+    const r = await repairCardNewsSlides(id, slideNos, opts);
+    if (!r.ok) return { ok: false, error: r.error, changedSlides: applied.changedSlides, fixed: r.fixed, stillBad: r.stillBad, metaChanged: applied.metaChanged };
+    fixed = r.fixed; stillBad = r.stillBad;
+  }
+  // 갱신 알림(슬라이드 앨범 재발송) — 사용자가 수정 결과를 바로 검수하도록. 실패 무해.
+  const done = store.get(id);
+  if (done) {
+    void notifyCardnewsReady({ id, topic: done.topic, brand: done.brand, slides: done.slides ?? plan.slides.length, sourcePieceId: done.sourcePieceId, planner: done.planner, designer: done.designer }, dir).catch(() => { /* 무해 */ });
+  }
+  return { ok: true, changedSlides: applied.changedSlides, fixed, stillBad, metaChanged: applied.metaChanged };
+}
+
 /** bg-draft 슬롯 프롬프트에서 스타일·장면·프리셋 복원(순수) — design.json 이 없는 구 카드의 수선용.
  *  buildCardImagePrompt 가 쓰는 고정 라벨('[전체 톤·스타일…]', '장면 설명: ')을 역파싱한다. */
 export function extractDesignFromDraftPrompt(prompt: string): { style: string; scene: string; preset: string } {

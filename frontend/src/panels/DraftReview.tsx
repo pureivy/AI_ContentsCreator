@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchPieces, fetchPieceDraft, fetchPiecePreview, publishPiece, postPieceMetrics, revisePiece, deletePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, createCardNewsFromPiece, createShortsFromPiece, fetchBrand, saveBrandCardStyle, PieceInfo, PieceDraftResp } from "../api";
+import { fetchPieces, fetchPieceDraft, fetchPiecePreview, publishPiece, postPieceMetrics, revisePiece, reviseDerived, deletePiece, startNaverDraft, fetchNaverDraftStatus, startCollectMetrics, fetchCollectStatus, createCardNewsFromPiece, createShortsFromPiece, fetchBrand, saveBrandCardStyle, PieceInfo, PieceDraftResp } from "../api";
 import { CARD_STYLE_OPTIONS, loadCardStyle, saveCardStyle } from "../cardStyles";
 import Ico, { type IcoName } from "./Ico";
 import SlideStrip from "./SlideStrip";
@@ -102,6 +102,10 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
   // 파생 콘텐츠(카드뉴스·숏폼) — 선택 초안의 최신 파생 상태(pieces 목록의 derived, 8초 폴링으로 갱신).
   const derived = pieces.find((p) => p.id === sel)?.derived;
   const [deriveBusy, setDeriveBusy] = useState("");
+  // 파생 수정 요청(카드뉴스·숏폼) — 블로그 수정 요청과 같은 UX. 발행 전 한정, 서버가 문구 개정+부분 재생성.
+  const [dRev, setDRev] = useState<null | { kind: "cardnews" | "shorts"; id: string }>(null);
+  const [dRevText, setDRevText] = useState("");
+  const [dRevBusy, setDRevBusy] = useState(false);
   // 카드뉴스 스타일 — 브랜드 고정(서버 cardStyle, 자동 파생 포함 전 경로 적용, 2026-07-22).
   // localStorage 는 fetch 전 초기 렌더 캐시. 변경 즉시 서버 저장 → 이후 자동 파생도 이 스타일로.
   const [cardStyle, setCardStyleRaw] = useState(loadCardStyle);
@@ -413,6 +417,13 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
                       {derived?.cardnews?.stage === "ready" && (
                         <a className="btn ghost" href={`/cardnews/${derived.cardnews.id}/zip`} download>zip</a>
                       )}
+                      {derived?.cardnews?.stage === "ready" && !derived.cardnews.running && (
+                        <button className="btn ghost" disabled={dRevBusy}
+                          title="자유 피드백으로 문구 개정 — 바뀐 슬라이드만 다시 그립니다(발행 전 한정)"
+                          onClick={() => { const cid = derived.cardnews!.id; setDRev(dRev?.kind === "cardnews" ? null : { kind: "cardnews", id: cid }); setDRevText(""); }}>
+                          <Ico name="pencil" size={11} /> 수정
+                        </button>
+                      )}
                     </div>
                     {derived?.cardnews?.stage === "ready" && (derived.cardnews.slides ?? 0) > 0 && (
                       <SlideStrip cardId={derived.cardnews.id} slides={derived.cardnews.slides ?? 0}
@@ -429,6 +440,13 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
                       {derived?.shorts?.stage === "ready" && (
                         <a className="btn ghost" href={`/shorts/${derived.shorts.id}/video`} download={`shorts-${derived.shorts.id}.mp4`}>MP4</a>
                       )}
+                      {derived?.shorts?.stage === "ready" && !derived.shorts.running && (
+                        <button className="btn ghost" disabled={dRevBusy}
+                          title="자유 피드백으로 대본·제목 개정 — 필요 씬만 다시 그리고 재조립합니다(발행 전 한정)"
+                          onClick={() => { const sid = derived.shorts!.id; setDRev(dRev?.kind === "shorts" ? null : { kind: "shorts", id: sid }); setDRevText(""); }}>
+                          <Ico name="pencil" size={11} /> 수정
+                        </button>
+                      )}
                     </div>
                     {derived?.shorts?.stage === "ready" && (
                       <video controls preload="metadata" src={`/shorts/${derived.shorts.id}/video`}
@@ -436,6 +454,30 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
                     )}
                   </div>
                 </div>
+                {/* 파생 수정 요청 폼 — ✍ 수정 버튼 토글. 서버가 문구 개정→부분 재생성→재조립(수 분). */}
+                {dRev && (
+                  <div style={{ marginTop: 10 }}>
+                    <textarea value={dRevText} onChange={(e) => setDRevText(e.target.value)} rows={2}
+                      style={{ width: "100%", boxSizing: "border-box" }}
+                      placeholder={dRev.kind === "cardnews"
+                        ? "예: 3번 슬라이드 헤드라인을 ~로 바꾸고, 캡션에 물주기 주기를 추가"
+                        : "예: 2번 씬 내레이션을 ~로 바꾸고, 제목에서 '갈려요'를 빼줘"} />
+                    <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                      <button className="btn" disabled={dRevBusy || !dRevText.trim()} onClick={() => { void (async () => {
+                        if (!dRev) return;
+                        setDRevBusy(true);
+                        setMsg(`${dRev.kind === "cardnews" ? "카드뉴스" : "숏폼"} 수정 반영 중… (부분 재생성 — 수 분 소요)`);
+                        const r = await reviseDerived(dRev.kind, dRev.id, dRevText.trim());
+                        setDRevBusy(false);
+                        if (r.ok) { setMsg("파생 수정 반영 완료 — 갱신본이 알림으로도 전송됐습니다."); setDRev(null); setDRevText(""); }
+                        else setMsg(`파생 수정 실패: ${r.error || ""}`);
+                      })(); }}>
+                        {dRevBusy ? "반영 중…" : `${dRev.kind === "cardnews" ? "카드뉴스" : "숏폼"} 수정 요청`}
+                      </button>
+                      <button className="btn ghost" disabled={dRevBusy} onClick={() => { setDRev(null); setDRevText(""); }}>닫기</button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* 수정 요청 — 검토 결과를 피드백으로 걸면 작가가 초안을 개정(리비전 런) */}

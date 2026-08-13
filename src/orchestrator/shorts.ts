@@ -29,7 +29,7 @@ import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
-import { generateDesignedThumbnail } from './shortsThumbnail';
+import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { generateTitleArt } from './shortsTitleArt';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
 import { blogUrlForPiece } from '../content/pieces';
@@ -60,6 +60,213 @@ interface Plan {
 }
 
 interface JobIO { bus?: EventBus; signal?: AbortSignal }
+
+/** 수정 요청(자유 피드백) 개정안 — LLM 이 '바뀐 것만' 돌려준다. 적용은 applyShortsRevision(순수)이 검증. */
+export interface ShortsRevision {
+  title?: unknown; description?: unknown; hashtags?: unknown;
+  scenes?: Array<{ index?: unknown; narration?: unknown; screenText?: unknown; regen_image?: unknown; image_note?: unknown } | null>;
+}
+
+/** 개정안 적용(순수, 테스트 대상) — 번호 범위·빈 문자열·길이 상한 검증, 유효 변경 없으면 null.
+ *  regen_image 로 표시된 씬만 배경 이미지를 다시 그린다(내레이션·자막만 바뀌면 재조립만으로 충분). */
+export function applyShortsRevision(
+  plan: Plan, cand: ShortsRevision | null,
+): { plan: Plan; changedScenes: number[]; regenScenes: number[]; imageNotes: Map<number, string>; titleChanged: boolean; metaChanged: boolean } | null {
+  if (!cand) return null;
+  const out: Plan = { ...plan, scenes: plan.scenes.map((s) => ({ ...s })) };
+  const changed: number[] = []; const regen: number[] = [];
+  const imageNotes = new Map<number, string>();
+  let titleChanged = false; let metaChanged = false;
+  const str = (v: unknown, max: number): string => {
+    const s = typeof v === 'string' ? stripEmoji(v).trim() : '';
+    return s && s.length <= max ? s : '';
+  };
+  for (const s of cand.scenes ?? []) {
+    const idx = typeof s?.index === 'number' && Number.isInteger(s.index) ? s.index : 0; // 1-base
+    if (idx < 1 || idx > plan.scenes.length) continue;
+    const narration = str(s?.narration, 240);
+    const screenText = str(s?.screenText, 60);
+    const wantRegen = s?.regen_image === true;
+    if (!narration && !screenText && !wantRegen) continue;
+    const cur = out.scenes[idx - 1]!;
+    const next = { ...cur, ...(narration ? { narration } : {}), ...(screenText ? { screenText } : {}) };
+    const textChanged = next.narration !== cur.narration || next.screenText !== cur.screenText;
+    if (textChanged) { out.scenes[idx - 1] = next; changed.push(idx); }
+    if (wantRegen) {
+      regen.push(idx);
+      if (!textChanged) changed.push(idx);
+      const note = str(s?.image_note, 200);
+      if (note) imageNotes.set(idx, note);
+    }
+  }
+  const title = str(cand.title, 60);
+  if (title && title !== plan.title) { out.title = title; titleChanged = true; }
+  const description = str(cand.description, 600);
+  if (description && description !== plan.description) { out.description = description; metaChanged = true; }
+  if (Array.isArray(cand.hashtags)) {
+    const tags = cand.hashtags.filter((t): t is string => typeof t === 'string' && !!t.trim())
+      .map((t) => (t.trim().startsWith('#') ? t.trim() : `#${t.trim()}`)).slice(0, 15);
+    if (tags.length && JSON.stringify(tags) !== JSON.stringify(plan.hashtags ?? [])) { out.hashtags = tags; metaChanged = true; }
+  }
+  if (!changed.length && !regen.length && !titleChanged && !metaChanged) return null;
+  return {
+    plan: out, changedScenes: [...new Set(changed)].sort((a, b) => a - b),
+    regenScenes: [...new Set(regen)].sort((a, b) => a - b), imageNotes, titleChanged, metaChanged,
+  };
+}
+
+/**
+ * 숏폼 수정 요청(검토 탭) — 피드백을 LLM 이 해석해 대본(내레이션·화면텍스트)·제목·설명을 개정하고,
+ * 이미지 재생성이 필요한 씬만 다시 그린 뒤 재조립한다. 재사용: 무변경 씬 배경·I2V 클립·제목 캘리
+ * (제목이 안 바뀐 경우). 내레이션 TTS 는 조립 과정에서 전 씬 재합성된다(오독 교정 사전 적용).
+ * 발행(유튜브 업로드·릴스) 이후엔 파일 교체가 불가하므로 거절한다.
+ */
+export async function reviseShorts(
+  id: string, feedback: string,
+  opts: { bus?: EventBus; signal?: AbortSignal } = {},
+): Promise<{ ok: boolean; error?: string; changedScenes: number[]; regenScenes: number[]; titleChanged: boolean }> {
+  const store = shortsStore();
+  const short = store.get(id);
+  const fail = (error: string) => ({ ok: false as const, error, changedScenes: [], regenScenes: [], titleChanged: false });
+  if (!short) return fail('unknown shorts');
+  if (short.stage !== 'ready') return fail('완성(ready) 상태가 아닙니다');
+  if (short.youtubeUrl || short.igReelId) return fail('이미 업로드/발행됨 — 발행물 영상은 교체할 수 없습니다(새 파생 생성 필요)');
+  if (RUNNING.has(id)) return fail('생성/수정 작업이 이미 진행 중입니다');
+  RUNNING.add(id);
+  const say = (m: string): void => { console.log(`[숏폼] ${m}`); opts.bus?.emit('log', { message: m }); };
+  try {
+    const dir = store.dirFor(id);
+    let plan: Plan;
+    try { plan = JSON.parse(fs.readFileSync(path.join(dir, 'plan.json'), 'utf-8')) as Plan; }
+    catch { return fail('plan.json 없음 — 수정 불가'); }
+    const cur = plan.scenes.map((s, i) => `${i + 1}. [내레이션] ${s.narration}${s.screenText ? ` [화면텍스트] ${s.screenText}` : ''}`).join('\n');
+    const j = await microJSON<ShortsRevision>(
+      stdModel(),
+      '당신은 숏폼 대본 에디터입니다. 요청된 JSON 스키마만 출력합니다.',
+      [
+        '아래 숏폼에 대한 검토자의 수정 요청을 반영해, "바뀌는 항목만" 돌려줘라. 요청과 무관한 씬·필드는 출력하지 마라.',
+        `[제목] ${plan.title}`,
+        `[씬]\n${cur}`,
+        `[설명] ${plan.description}`,
+        `[수정 요청] ${feedback}`,
+        '규칙: 의미·톤 유지 범위에서 요청을 빠짐없이 반영, 내레이션 길이는 원문과 비슷하게(재생 시간 유지), 이모지 금지.',
+        '배경 그림 자체를 바꿔야 하는 요청(장면·소품·구도)이면 그 씬에 "regen_image":true 와 "image_note":"무엇을 어떻게"를 넣어라. 문구만 바뀌면 넣지 마라(배경은 무텍스트).',
+        'JSON 형식: {"scenes":[{"index":씬번호,"narration":"...","screenText":"...","regen_image":false,"image_note":"..."}],"title":"...","description":"...","hashtags":["#..."]} — 바뀌는 필드만 포함.',
+      ].join('\n'),
+      { maxOutputTokens: 1600, signal: opts.signal },
+    ).catch(() => null);
+    const applied = applyShortsRevision(plan, j);
+    if (!applied) return fail('수정 요청에서 반영할 변경을 찾지 못했습니다 — 요청을 더 구체적으로 써 주세요');
+    plan = applied.plan;
+    fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
+    store.update(id, { title: plan.title, topic: plan.title, description: plan.description, hashtags: plan.hashtags });
+    say(`수정 요청 반영 — 씬 ${applied.changedScenes.join(',') || '없음'}${applied.regenScenes.length ? ` · 배경 재생성 ${applied.regenScenes.join(',')}` : ''}${applied.titleChanged ? ' · 제목' : ''}`);
+
+    // 씬 배경 재구성 — 기존 매니페스트 슬롯 정렬 + regen 씬만 새로 그림(bg-draft 프롬프트 재사용).
+    let images: Array<string | null> = plan.scenes.map(() => null);
+    try {
+      const m = JSON.parse(fs.readFileSync(path.join(dir, 'bg-manifest.json'), 'utf-8')) as { images?: Array<{ file_path?: string; error?: string } | null> };
+      images = plan.scenes.map((_, i) => {
+        const im = m.images?.[i];
+        const fp = im?.file_path ? String(im.file_path) : '';
+        return fp && !im?.error && fs.existsSync(fp) ? fp : null;
+      });
+    } catch { /* 전 씬 폴백 */ }
+    if (applied.regenScenes.length) {
+      let slots: Array<{ prompt?: string }> = [];
+      try { slots = (JSON.parse(fs.readFileSync(path.join(dir, 'bg-draft.json'), 'utf-8')) as { imageSlots?: Array<{ prompt?: string }> }).imageSlots ?? []; } catch { /* 프롬프트 없음 */ }
+      const rd = {
+        imageSlots: applied.regenScenes.map((k) => ({
+          alt: plan.scenes[k - 1]!.screenText || plan.scenes[k - 1]!.narration.slice(0, 30),
+          prompt: (slots[k - 1]?.prompt ?? '') + (applied.imageNotes.get(k) ? `\n[장면 수정 — 최우선] ${applied.imageNotes.get(k)}` : ''),
+        })),
+      };
+      if (rd.imageSlots.every((s) => s.prompt.trim())) {
+        const rdPath = path.join(dir, 'revise-draft.json');
+        const rmPath = path.join(dir, 'revise-manifest.json');
+        fs.writeFileSync(rdPath, JSON.stringify(rd, null, 2), 'utf-8');
+        say(`씬 배경 재생성 — ${applied.regenScenes.join(',')}`);
+        const rr = await generateImagesForDraft(rdPath, path.join(dir, 'revise-imgs'), rmPath,
+          { limit: rd.imageSlots.length, size: '1024x1536', timeoutMs: 150_000 * rd.imageSlots.length }, opts.signal);
+        if (rr.ok) {
+          try {
+            const rm = JSON.parse(fs.readFileSync(rmPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string } | null> };
+            applied.regenScenes.forEach((k, i) => {
+              const fp = rm.images?.[i]?.file_path ? String(rm.images[i]!.file_path) : '';
+              if (fp && !rm.images?.[i]?.error && fs.existsSync(fp)) images[k - 1] = fp;
+            });
+          } catch { /* 기존 배경 유지 */ }
+        } else say('씬 배경 재생성 실패 — 기존 배경 유지');
+      } else say('씬 프롬프트 원본 없음(bg-draft) — 배경 재생성 생략');
+    }
+    // I2V 클립 재사용 — 배경이 바뀐 씬은 클립 폐기(스틸+fx 폴백), 나머지는 기존 클립 유지.
+    const clips: Array<string | null> = plan.scenes.map((_, i) => {
+      if (applied.regenScenes.includes(i + 1)) return null;
+      const p = path.join(dir, 'clips', `clip_${String(i + 1).padStart(2, '0')}.mp4`);
+      return fs.existsSync(p) ? p : null;
+    });
+    // 제목 캘리 — 제목이 바뀌면 재생성, 아니면 기존 에셋 재사용(카피는 title-copy.json).
+    let titleArt: { imagePath: string; copy: ThumbCopy } | null = null;
+    if (CONFIG.shortsTitleOverlay) {
+      const artPath = path.join(dir, 'title-art.png');
+      if (applied.titleChanged || !fs.existsSync(artPath)) {
+        titleArt = await generateTitleArt({ dir, title: plan.title, description: plan.description, titles: plan.titles, keyword: short.keyword, signal: opts.signal });
+        say(titleArt ? '상단 제목 캘리 재생성' : '상단 제목 캘리 스킵');
+      } else {
+        try { titleArt = { imagePath: artPath, copy: JSON.parse(fs.readFileSync(path.join(dir, 'title-copy.json'), 'utf-8')) as ThumbCopy }; } catch { titleArt = null; }
+      }
+    }
+    // 재조립 — 잡과 동일한 폴백 체인(Remotion → ffmpeg). 내레이션 TTS 는 전 씬 재합성(교정 사전 적용).
+    say(CONFIG.shortsRenderer === 'ffmpeg' ? '재조립 시작 — ffmpeg 슬라이드쇼' : '재조립 시작 — Remotion 모션그래픽');
+    let r = null as Awaited<ReturnType<typeof renderShortsVideo>> | null;
+    if (CONFIG.shortsRenderer !== 'ffmpeg') {
+      try {
+        r = await renderShortsVideoRemotion(dir, plan.scenes, images, {
+          clips, signal: opts.signal,
+          caption: {
+            bottomPct: CONFIG.shortsCaptionBottomPct, fontPx: CONFIG.shortsCaptionFontPx, hookFontPx: CONFIG.shortsCaptionHookFontPx,
+            ...(CONFIG.shortsCaptionKeyword && short.keyword ? { keyword: short.keyword } : {}),
+            ...(CONFIG.shortsCaptionOutline ? { outline: true } : {}),
+          },
+          ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
+        });
+      } catch (e) { say(`모션 렌더 예외 → ffmpeg 폴백: ${e instanceof Error ? e.message.slice(0, 80) : e}`); r = null; }
+    }
+    if (!r || !r.ok) {
+      if (r) say(`모션 렌더 실패 → ffmpeg 폴백${r.issues.length ? ` (${r.issues.join(' · ').slice(0, 120)})` : ''}`);
+      r = await renderShortsVideo(dir, plan.scenes, images, {
+        signal: opts.signal,
+        ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
+      });
+    }
+    if (!r.ok || !r.videoPath) return fail(`재조립 실패 — ${r.issues.join(' · ').slice(0, 200)}`);
+    const caption = [plan.title, '', plan.description, '', plan.hashtags.join(' ')].filter((x, i) => x || i === 1 || i === 3).join('\n');
+    fs.writeFileSync(path.join(dir, 'caption.txt'), caption, 'utf-8');
+    store.update(id, { stage: 'ready', scenes: r.sceneCount, durationSec: r.durationSec, topic: plan.title });
+    say(`수정 완료 — ${plan.title.slice(0, 30)} · ${r.durationSec}초`);
+    // 썸네일 — 제목/배경이 바뀐 경우만 재생성(문구 일치 유지). 실패 무해.
+    if (applied.titleChanged || applied.regenScenes.length) {
+      try {
+        const hook = images.find((p): p is string => !!p && fs.existsSync(p)) ?? null;
+        const ok = await generateDesignedThumbnail({
+          dir, title: plan.title, description: plan.description, titles: plan.titles, keyword: short.keyword, hookImage: hook, signal: opts.signal,
+          ...(titleArt ? { copy: titleArt.copy } : {}),
+        });
+        say(ok ? '썸네일 재생성 완료' : '썸네일 재생성 스킵');
+      } catch { /* 무해 */ }
+    }
+    // 갱신 알림(완성 영상 재발송) — 사용자가 수정 결과를 바로 검수. 실패 무해.
+    const done = store.get(id);
+    if (done) {
+      void notifyShortsReady({ id, topic: done.topic, brand: done.brand, durationSec: r.durationSec, scenes: r.sceneCount, sourcePieceId: done.sourcePieceId, writer: done.writer, director: done.director }, r.videoPath).catch(() => { /* 무해 */ });
+    }
+    return { ok: true, changedScenes: applied.changedScenes, regenScenes: applied.regenScenes, titleChanged: applied.titleChanged };
+  } catch (e) {
+    return fail(e instanceof Error ? e.message.slice(0, 200) : String(e));
+  } finally {
+    RUNNING.delete(id);
+  }
+}
 
 /** 역할 LLM 호출(JSON) — 버스가 있으면 runAgent(오피스 뷰 스폰·스트림·지표), 없으면 무음 microJSON. */
 async function callRoleJSON<T>(
