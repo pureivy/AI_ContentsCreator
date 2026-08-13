@@ -78,10 +78,14 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
   }, [view, data?.piece.id]);
 
   // 정렬(사용자 요청 2026-08-12): 검토 대기(ready)가 항상 맨 위 그룹 — 종전 updatedTs 단일 정렬은
-  // 성과 측정·소급 리비전이 옛 글을 위로 끌어올려 검토할 것이 섞여 보였다. 그룹 안에서는 최신 갱신순.
+  // 성과 측정·소급 리비전이 옛 글을 위로 끌어올려 검토할 것이 섞여 보였다.
+  // 그룹 내 축(재수정 2026-08-13): ready=최신 갱신순(작업 큐 — 미발행이라 지표 노이즈 없음),
+  // 발행 이후 그룹=발행 시각(없으면 생성 시각) 고정 — updatedTs 는 성과 동기화·강화·색인 점검 같은
+  // 백그라운드 기록에도 갱신돼 7월 옛 글이 최신 발행물 위로 튀어오르는 재발이 있었다(2026-08-13 실측).
+  const contentTs = (p: PieceInfo): string => (p.stage === "ready" ? p.updatedTs : (p.publishedTs || p.createdTs));
   const reviewable = useMemo(
     () => pieces.filter((p) => REVIEWABLE.has(p.stage) && p.runId).sort((a, b) =>
-      (a.stage === "ready" ? 0 : 1) - (b.stage === "ready" ? 0 : 1) || b.updatedTs.localeCompare(a.updatedTs)),
+      (a.stage === "ready" ? 0 : 1) - (b.stage === "ready" ? 0 : 1) || contentTs(b).localeCompare(contentTs(a))),
     [pieces],
   );
   // 목록 접기 — 발행 이력이 쌓일수록 카드가 늘어 스캔이 힘들다(사용자 요청 2026-07-29).

@@ -821,6 +821,7 @@ export interface PieceInfo {
   subNiche?: string;
   stage: PieceStage;
   publishedUrl?: string;
+  publishedTs?: string; // 발행 시각 — 검토 탭 발행 이후 그룹의 안정 정렬 축(서버는 늘 내려주고 있었음)
   naverDraftUrl?: string;
   naverDraftTs?: string;
   seoScore?: number;
