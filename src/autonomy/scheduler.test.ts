@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates } from './scheduler';
 
 describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -280,5 +280,28 @@ describe('lacksSpeciesAnchor — 이름·꽃말·유래 축 수종 앵커 게이
   it('유래·꽃말 주제가 아니면 무관(수사적 상징 포함)', () => {
     expect(lacksSpeciesAnchor('가을 정원의 상징, 단풍 감상법')).toBe(false);
     expect(lacksSpeciesAnchor('묘목 고르는 법')).toBe(false);
+  });
+});
+
+describe('normalizeIdeaCandidates — 5후보 응답 파서(순수)', () => {
+  it('ideas 배열을 정리해 돌려준다(제목 정리·상한 5)', () => {
+    const out = normalizeIdeaCandidates({ ideas: [
+      { title: '  - "은행나무 이름 유래"', keyword: '은행나무 유래', subNiche: '수종 이야기' },
+      { title: '단풍 드는 순서', keyword: '' },
+      { title: 'a' }, { title: 'b' }, { title: 'c' }, { title: 'd' },
+    ] });
+    expect(out).toHaveLength(5);
+    expect(out[0]!.title.startsWith('은행나무')).toBe(true); // 선행 기호·따옴표 정리
+    expect(out[0]!.keyword).toBe('은행나무 유래');
+    expect(out[0]!.subNiche).toBe('수종 이야기');
+    expect(out[1]).toEqual({ title: '단풍 드는 순서' }); // 빈 keyword 생략
+  });
+  it('중복 제목 제거·무효 항목 건너뜀', () => {
+    const out = normalizeIdeaCandidates({ ideas: [{ title: '같은 제목' }, { title: '같은 제목' }, { title: '' }, null, { title: '다른 제목' }] });
+    expect(out.map((x) => x.title)).toEqual(['같은 제목', '다른 제목']);
+  });
+  it('구형 단일 오브젝트 응답도 1건으로 수용(하위호환)', () => {
+    expect(normalizeIdeaCandidates({ title: '단일 제안', keyword: 'k' })).toEqual([{ title: '단일 제안', keyword: 'k' }]);
+    expect(normalizeIdeaCandidates(null)).toEqual([]);
   });
 });

@@ -246,7 +246,7 @@ export function seedKeywordBlock(winners: string, seeds: string[]): string {
 const IDEA_SYSTEM =
   '너는 1인 AI 콘텐츠 회사의 자율 편집 기획자다. 소재 범위의 기준은 [브랜드 컨텍스트]다 — 소개가 말하는 영역 안에서만, ' +
   '금지 목록의 소재는 절대 제안하지 마라. [팀·업무 범위]는 제작 공정 설명일 뿐 소재 범위가 아니다. ' +
-  '다음에 제작하면 검색 노출·유입에 가치있는 네이버 블로그(정보/하우투·리뷰) 콘텐츠 아이디어 한 개를 제안하라.\n' +
+  '다음에 제작하면 검색 노출·유입에 가치있는 네이버 블로그(정보/하우투·리뷰) 콘텐츠 아이디어를 서로 소재가 다른 5개, 가장 자신 있는 것부터 순서대로 제안하라.\n' +
   '- 검색 의도가 뚜렷하고 실용적인 주제(하우투/비교/리뷰/체크리스트 등). 시의성·계절성도 고려한다.\n' +
   '- [브랜드 컨텍스트]가 있으면 그 기업의 제품·타겟 고객의 관심사와 자연스럽게 연결되는 주제를 우선하라(노골적 광고성 주제 금지 — 독자에게 유용한 정보가 우선).\n' +
   '- [성과 상위 키워드]는 어떤 분야가 통했는지의 참고다 — 그 분야의 인접·연관 영역에서 새로운 키워드를 발굴하라(성과 키워드 자체나 그 변형의 재사용은 금지). 없으면(콜드스타트) 영역 안에서 다양하게 탐색한다.\n' +
@@ -266,6 +266,25 @@ const IDEA_ANGLES = [
   '초보 입문(처음 시작하는 사람 기준)', '다음 시즌·시기 대비(지금 준비할 것)', '증상·상황별 진단',
   '실제 사례·후기 관점', '한 가지 쟁점 깊이 파기',
 ];
+/** 후보 파서(순수, 테스트 대상) — {ideas:[...]} 5후보 응답을 방어적으로 정규화. 구형 단일 오브젝트
+ *  응답({title,...})도 1건 목록으로 수용(하위호환). 제목 정리·중복 제거·상한. */
+export function normalizeIdeaCandidates(raw: unknown, max = 5): Array<{ title: string; keyword?: string; subNiche?: string }> {
+  const src = (raw as { ideas?: unknown } | null)?.ideas;
+  const list = Array.isArray(src) ? src : [raw];
+  const out: Array<{ title: string; keyword?: string; subNiche?: string }> = [];
+  const seen = new Set<string>();
+  for (const o of list) {
+    const title = asString((o as { title?: unknown } | null)?.title).trim().replace(/^["'\-•\s]+/, '').slice(0, 120);
+    if (!title || seen.has(title)) continue;
+    seen.add(title);
+    const keyword = asString((o as { keyword?: unknown } | null)?.keyword).trim();
+    const subNiche = asString((o as { subNiche?: unknown } | null)?.subNiche).trim();
+    out.push({ title, ...(keyword ? { keyword } : {}), ...(subNiche ? { subNiche } : {}) });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 /** 이름·꽃말·상징 유래 주제의 수종 앵커 부재 판정(순수, 테스트 대상) — '회화나무 꽃말'은 통과,
  *  '튤립 꽃말'·'나무 이름 유래'(총칭)는 기각. '~나무' 표기가 한국어 수종명 대부분을 커버한다. */
 export function lacksSpeciesAnchor(text: string): boolean {
@@ -339,61 +358,74 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}\n\n` +
     diversityBlock +
     (productLines.length ? `subNiche 는 반드시 다음 제품 라인 중 가장 관련 있는 하나로: ${productLines.join(' | ')}\n\n` : '') +
-    `형식: {"title":"...","keyword":"...","subNiche":"..."}`;
+    `형식: {"ideas":[{"title":"...","keyword":"...","subNiche":"..."} — 서로 소재가 다른 5개]}`;
 
+  // 후보 수 확장(2026-08-14, 사용자 승인) — 사이클당 1건×2시도는 포화 시즌에 슬롯 좌초를 만들었다
+  // (08-12~14 3슬롯 연속: 틱당 보류 2+기각 2~4, 지연 38분+). 한 호출로 5후보를 받아 게이트를 통과하는
+  // 첫 후보를 채택 — 개당 통과율 p 일 때 시도당 통과율이 1-(1-p)^5 로 뛴다. 비용은 haiku 소형 호출 1회분.
   let rejectNote = '';
   for (let attempt = 0; attempt < 2; attempt++) {
-    const o = await microJSON<{ title?: unknown; keyword?: unknown; subNiche?: unknown }>(
-      micro, IDEA_SYSTEM, rejectNote ? `${baseUser}\n\n${rejectNote}` : baseUser, { maxOutputTokens: 200, signal },
+    const o = await microJSON<{ ideas?: unknown }>(
+      micro, IDEA_SYSTEM, rejectNote ? `${baseUser}\n\n${rejectNote}` : baseUser, { maxOutputTokens: 900, signal },
     ).catch(() => null);
-    const title = asString(o?.title).trim().replace(/^["'\-•\s]+/, '').slice(0, 120);
-    if (!title || recentAuto.includes(title)) return null;
-    const keyword = asString(o?.keyword).trim() || undefined;
-    // 브랜드 소재 게이트(하드) — 프롬프트 유도가 실패해도 금지 소재는 코드가 막는다(2026-07-31 정체성 각인).
-    const off = offBrandTerm(`${title} ${keyword ?? ''}`);
-    if (off) {
-      rejectNote = `[직전 제안 기각 — 브랜드가 다루지 않는 소재 "${off}" 포함] 브랜드 컨텍스트의 소개·금지를 다시 보고, 나무·묘목 범위 안의 완전히 다른 주제로 제안하라.`;
-      console.log(`[auto-cycle] 아이디어 기각(브랜드 범위 밖) — "${title}" (소재 "${off}")`);
-      continue;
-    }
-    // 어휘 함정어 게이트(하드) — keyword 로 태어난 함정어는 하류 어디서도 못 뺀다(키워드 고정 강제가
-    // 어휘 가드·린트·리비전을 전부 이김, 실측 2026-08-10 "유실수 가을 시비"). 프롬프트 유도 실패 대비 코드 차단.
-    const jarg = lintLexicon(`${title} ${keyword ?? ''}`, jargonList);
-    if (jarg.length) {
-      rejectNote = `[직전 제안 기각 — 제목·키워드에 일반 독자가 다른 뜻으로 읽는 말 "${jarg[0]!.term}" 포함] "${jarg[0]!.use}"처럼 쉬운 표현을 쓰는 완전히 새로운 제목·키워드로 제안하라.`;
-      console.log(`[auto-cycle] 아이디어 기각(어휘 함정어) — "${title}" ("${jarg[0]!.term}")`);
-      continue;
-    }
-    // 수종 앵커 게이트(하드) — 이름·상징 유래 축(4순위, 2026-08-13 투입) 전용 함정 차단. 실측(08-01):
-    // '나무 이름 유래' 총칭은 검색 0이고, 앵커 없는 꽃말·유래 주제는 화초 꽃말로 미끄러지는데 브랜드
-    // 소재 게이트가 못 막는다(장미·국화류는 금지 목록에 없음). '~나무' 수종 앵커를 코드로 강제한다.
-    if (lacksSpeciesAnchor(`${title} ${keyword ?? ''}`)) {
-      rejectNote = '[직전 제안 기각 — 이름·꽃말·상징 유래 주제인데 수종 앵커 없음] 이런 주제는 반드시 구체적 수종명(회화나무·은행나무처럼 "~나무" 이름)을 제목과 키워드에 앵커로 박아라. 총칭("나무 이름 유래")이나 수종 없는 꽃말 주제는 금지.';
-      console.log(`[auto-cycle] 아이디어 기각(수종 앵커 없음) — "${title}"`);
-      continue;
-    }
-    const sim = findSimilarContent({ title, ...(keyword ? { keyword } : {}) }, existing);
-    if (sim.length) {
-      const top = sim[0]!;
-      rejectNote = `[직전 제안 기각 — 기존 ${top.kind} "${top.title}"와(과) ${top.via === 'keyword' ? '키워드' : '주제'} 유사] 완전히 다른 주제·키워드로 다시 제안하라.`;
-      console.log(`[auto-cycle] 아이디어 기각(기존과 유사) — "${title}" ≈ (${top.kind}) "${top.title}"`);
-      continue;
-    }
-    // 개념 포화 기각 — 표면 유사(findSimilarContent)는 통과했지만 핵심 소재가 여러 편과 겹치면 1회만 다른 축 유도.
-    // attempt 0 에서만(2번째 시도는 통과시켜 기아 방지 — 다양성은 강제하되 생산은 막지 않는다).
-    if (diversityOn && attempt === 0) {
-      const sat = saturatedThemeMatches({ title, ...(keyword ? { keyword } : {}) }, existing, 3, getBrand()?.compoundStems ?? []);
-      if (sat.length) {
-        rejectNote = `[직전 제안 기각 — 이미 포화된 소재(기존 "${sat[0]!.title}"와 핵심 소재 다수 겹침)] 소재 자체를 바꿔라: 계절·대상·각도·포맷 중 최소 하나를 확 틀어라.`;
-        console.log(`[auto-cycle] 아이디어 기각(소재 포화) — "${title}" ≈ "${sat[0]!.title}"`);
+    const cands = normalizeIdeaCandidates(o);
+    if (!cands.length) return null; // 응답 자체가 무효 — 이번 주기 스킵
+    const rejects: string[] = [];
+    for (const cand of cands) {
+      const { title, keyword } = cand;
+      if (recentAuto.includes(title)) {
+        // 종전엔 여기서 로그 없이 전체 return null — 재탕 제목 하나가 슬롯을 '침묵 좌초'시켰다(08-14 관측).
+        console.log(`[auto-cycle] 아이디어 스킵(최근 제안 재탕) — "${title}"`);
+        rejects.push(`"${title}"=최근 제안 재탕`);
         continue;
       }
+      // 브랜드 소재 게이트(하드) — 프롬프트 유도가 실패해도 금지 소재는 코드가 막는다(2026-07-31 정체성 각인).
+      const off = offBrandTerm(`${title} ${keyword ?? ''}`);
+      if (off) {
+        console.log(`[auto-cycle] 아이디어 기각(브랜드 범위 밖) — "${title}" (소재 "${off}")`);
+        rejects.push(`"${title}"=브랜드가 안 다루는 소재(${off})`);
+        continue;
+      }
+      // 어휘 함정어 게이트(하드) — keyword 로 태어난 함정어는 하류 어디서도 못 뺀다(키워드 고정 강제가
+      // 어휘 가드·린트·리비전을 전부 이김, 실측 2026-08-10 "유실수 가을 시비"). 프롬프트 유도 실패 대비 코드 차단.
+      const jarg = lintLexicon(`${title} ${keyword ?? ''}`, jargonList);
+      if (jarg.length) {
+        console.log(`[auto-cycle] 아이디어 기각(어휘 함정어) — "${title}" ("${jarg[0]!.term}")`);
+        rejects.push(`"${title}"=함정어(${jarg[0]!.term} — ${jarg[0]!.use}로)`);
+        continue;
+      }
+      // 수종 앵커 게이트(하드) — 이름·상징 유래 축(4순위, 2026-08-13 투입) 전용 함정 차단. 실측(08-01):
+      // '나무 이름 유래' 총칭은 검색 0이고, 앵커 없는 꽃말·유래 주제는 화초 꽃말로 미끄러지는데 브랜드
+      // 소재 게이트가 못 막는다(장미·국화류는 금지 목록에 없음). '~나무' 수종 앵커를 코드로 강제한다.
+      if (lacksSpeciesAnchor(`${title} ${keyword ?? ''}`)) {
+        console.log(`[auto-cycle] 아이디어 기각(수종 앵커 없음) — "${title}"`);
+        rejects.push(`"${title}"=꽃말·유래 주제인데 수종명(○○나무) 앵커 없음`);
+        continue;
+      }
+      const sim = findSimilarContent({ title, ...(keyword ? { keyword } : {}) }, existing);
+      if (sim.length) {
+        const top = sim[0]!;
+        console.log(`[auto-cycle] 아이디어 기각(기존과 유사) — "${title}" ≈ (${top.kind}) "${top.title}"`);
+        rejects.push(`"${title}"=기존 "${top.title}"와 유사`);
+        continue;
+      }
+      // 개념 포화 기각 — 표면 유사(findSimilarContent)는 통과했지만 핵심 소재가 여러 편과 겹치면 1회만 다른 축 유도.
+      // attempt 0 에서만(2번째 시도는 통과시켜 기아 방지 — 다양성은 강제하되 생산은 막지 않는다).
+      if (diversityOn && attempt === 0) {
+        const sat = saturatedThemeMatches({ title, ...(keyword ? { keyword } : {}) }, existing, 3, getBrand()?.compoundStems ?? []);
+        if (sat.length) {
+          console.log(`[auto-cycle] 아이디어 기각(소재 포화) — "${title}" ≈ "${sat[0]!.title}"`);
+          rejects.push(`"${title}"=포화 소재(기존 "${sat[0]!.title}"와 겹침)`);
+          continue;
+        }
+      }
+      recentAuto.push(title);
+      if (recentAuto.length > 20) recentAuto.shift();
+      return { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
     }
-    recentAuto.push(title);
-    if (recentAuto.length > 20) recentAuto.shift();
-    return { title, keyword, subNiche: asString(o?.subNiche).trim() || undefined };
+    rejectNote = `[직전 제안 ${cands.length}건 전부 기각 — 사유: ${rejects.slice(0, 4).join(' · ') || '전부 무효'}] 이 사유들과 소재를 전부 피해, 완전히 다른 소재·키워드로 5건을 다시 제안하라.`;
   }
-  return null; // 2회 모두 유사 — 이번 주기 스킵(다음 주기에 새 각도로 재시도)
+  return null; // 두 라운드(최대 10후보) 전부 기각 — 이번 주기 스킵(다음 주기에 새 각도로 재시도)
 }
 
 // ============================================================
