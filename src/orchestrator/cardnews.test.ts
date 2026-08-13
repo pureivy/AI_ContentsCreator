@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyCardRevision, applyProofread, buildCardImagePrompt, buildSlideQaPrompt, buildSlideTranscribePrompt,
-  coverIncludesKeyword, extractDesignFromDraftPrompt, resolveForcedPreset, stripForDiff,
+  coverIncludesKeyword, extractDesignFromDraftPrompt, findSlidesWithChars, resolveForcedPreset, stripForDiff,
 } from './cardnews';
 
 type CardPlan = Parameters<typeof applyCardRevision>[0];
@@ -115,7 +115,7 @@ describe('buildSlideQaPrompt — 장당 QA 프롬프트(순수)', () => {
   // 2026-08-13 전수 스캔 유출(발행본 2건 포함) — 자음 혼동쌍 체크리스트를 프롬프트에 고정.
   it('자음 혼동쌍(ㅌ↔ㄹ 등) 실측 유출 예시 포함', () => {
     const p = buildSlideQaPrompt('아무 제목', '');
-    for (const ex of ['밑→밀', '짙→질', '바깥→바깔', '걷어→걸어', '눕혀→늪혀', '자리→사리', '깎→짝']) {
+    for (const ex of ['밑→밀', '짙→질', '바깥→바깔', '걷어→걸어', '눕혀→늪혀', '자리→사리', '깎→짝', '흰→휜', '헝겊→헝겁']) {
       expect(p).toContain(ex);
     }
   });
@@ -233,5 +233,23 @@ describe('applyCardRevision — 수정 요청 개정안 적용(순수)', () => {
     expect(r!.changedSlides).toEqual([]);
     expect(r!.plan.caption).toBe('새 캡션');
     expect(r!.plan.hashtags).toEqual(['#나무', '#정원']);
+  });
+});
+
+describe('findSlidesWithChars — 렌더 오타 신고 라우팅(순수)', () => {
+  const slides = [
+    { headline: '가지에 붙은 흰 것', body: '배롱나무' },
+    { headline: '손톱으로 밀기', body: '흰가루병은 가루' },
+    { headline: '물로 씻기', body: '헝겊으로 훑는다' },
+  ];
+  it('지목 글자가 든 슬라이드 번호(1-base)를 돌려준다', () => {
+    expect(findSlidesWithChars(slides, ['흰'])).toEqual([1, 2]);
+    expect(findSlidesWithChars(slides, ['훑'])).toEqual([3]);
+    expect(findSlidesWithChars(slides, ['흰', '훑'])).toEqual([1, 2, 3]);
+  });
+  it('빈·과대 입력은 무시', () => {
+    expect(findSlidesWithChars(slides, [])).toEqual([]);
+    expect(findSlidesWithChars(slides, ['', '  '])).toEqual([]);
+    expect(findSlidesWithChars(slides, ['일곱글자를넘는긴문자열'])).toEqual([]);
   });
 });
