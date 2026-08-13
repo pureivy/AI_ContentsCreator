@@ -98,6 +98,27 @@ export async function ensureShortsDownload(dir: string, signal?: AbortSignal): P
   } catch { try { fs.rmSync(tmp, { force: true }); } catch { /* 무해 */ } return video; } // 실패 시 원본(인트로 없이)
 }
 
+/** 릴스(메타) 업로드용 영상 — fal 스토리지 단건 한도 초과 시(실측 2026-08-13: 93초 I2V 다수 편성
+ *  final.mp4 102MB → HTTP 413) CRF 재인코딩 사본(meta.mp4)을 만들어 돌려준다. 인트로는 붙이지
+ *  않는다(인트로는 유튜브 커버용 — 릴스는 원본 그대로). 캐시 신선도는 원본 mtime 기준. */
+export const META_UPLOAD_LIMIT_BYTES = 95 * 1024 * 1024; // fal 한도(~100MB 추정) 아래 여유
+export async function ensureMetaVideo(dir: string, signal?: AbortSignal): Promise<string | null> {
+  const video = path.join(dir, 'final.mp4');
+  if (!fs.existsSync(video)) return null;
+  if (fs.statSync(video).size <= META_UPLOAD_LIMIT_BYTES) return video;
+  const out = path.join(dir, 'meta.mp4');
+  if (fs.existsSync(out)) {
+    try { if (fs.statSync(out).mtimeMs >= fs.statSync(video).mtimeMs) return out; } catch { /* 재생성 */ }
+  }
+  const tmp = path.join(dir, `.meta-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`);
+  try {
+    await ff(['-i', video, '-c:v', 'libx264', '-crf', '23', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', tmp], 600_000, signal);
+    fs.renameSync(tmp, out);
+    return out;
+  } catch { try { fs.rmSync(tmp, { force: true }); } catch { /* 무해 */ } return video; } // 재인코딩 실패 시 원본으로 시도
+}
+
 /**
  * 씬 배열 → dir/final.mp4 + subtitles.srt. images[i] 는 씬 i 의 배경(없으면 null → 단색 폴백).
  * 개별 씬 실패는 이슈로 기록하고 해당 씬을 단색 배경·무음으로라도 완성(전체 실패 방지).

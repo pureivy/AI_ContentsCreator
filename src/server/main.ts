@@ -53,7 +53,7 @@ import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsS
 import { shortsStore } from '../content/shorts';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning } from '../orchestrator/shorts';
-import { ensureShortsThumbnail, ensureShortsDownload, extractFirstFrame } from '../tools/shortsRender';
+import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame } from '../tools/shortsRender';
 import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece, blogUrlForPiece } from '../content/pieces';
 import { listPersonas } from '../content/personas';
@@ -1743,8 +1743,10 @@ app.post('/shorts/:id/meta', async (c) => {
     return c.json({ error: '이미 발행됨', igPermalink: s.igPermalink }, 409);
   }
   if (metaPublishInFlight.has(id)) return c.json({ error: '이미 발행 처리 중입니다' }, 409); // 동시/이중 제출 → 중복 공개 발행 차단
-  const videoPath = path.join(metaDir, 'final.mp4');
-  if (!fs.existsSync(videoPath)) return c.json({ error: '영상 파일 없음' }, 409);
+  // fal 스토리지 단건 한도 초과분(실측 2026-08-13: 93초 I2V 편성 102MB → HTTP 413)은
+  // CRF 재인코딩 사본으로 업로드 — 인트로 없는 릴스 원본 유지, 한도 이하면 원본 그대로.
+  const videoPath = await ensureMetaVideo(metaDir);
+  if (!videoPath) return c.json({ error: '영상 파일 없음' }, 409);
   const wasPublished = !!s.igReelId;
   metaPublishInFlight.add(id);
   try {
