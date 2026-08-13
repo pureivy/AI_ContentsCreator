@@ -404,7 +404,9 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
                 <h3>파생 콘텐츠 <span className="muted">(카드뉴스·숏폼 — 발행 전 세트로 검토)</span></h3>
                 <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "flex-start" }}>
                   {/* 카드뉴스 */}
-                  <div style={{ flex: "1 1 320px", minWidth: 260 }}>
+                  {/* 카드뉴스 칼럼 — 라벨+스타일 드롭다운+배지+zip+수정 5항목의 실측 내용폭(~490px)을
+                      기준폭으로 — 패널이 좁으면 숏폼 칼럼이 아래로 내려가 양쪽 다 한 줄 유지(사용자 요청). */}
+                  <div style={{ flex: "1 1 500px", minWidth: 480 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
                       <b><Ico name="cards" size={12} /> 카드뉴스</b>
                       {/* 스타일 드롭다운 — 만들기 전·후 항상 표시. 브랜드 고정값(서버 저장, 자동 파생 포함 전 경로 적용). */}
@@ -431,8 +433,11 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
                     )}
                   </div>
                   {/* 숏폼 */}
-                  <div style={{ flex: "0 1 260px", minWidth: 200 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  {/* 숏폼 칼럼 — 배지·MP4·수정 버튼까지 4항목이 한 줄에 들어가게 기준폭 확대+줄바꿈 금지
+                      (사용자 요청 2026-08-13: 좁은 basis 260 에서 글자가 두 줄로 꺾였다). 패널이 좁으면
+                      칼럼 자체가 아래로 내려가(컨테이너 flexWrap) 전폭을 쓴다. */}
+                  <div style={{ flex: "1 1 320px", minWidth: 280 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, whiteSpace: "nowrap" }}>
                       <b><Ico name="play" size={12} /> 숏폼</b>
                       {derived?.shorts
                         ? <span className="badge">{derived.shorts.running || ["planning", "designing", "rendering"].includes(derived.shorts.stage) ? "생성 중…" : derived.shorts.stage === "ready" ? `완성 · ${derived.shorts.durationSec ?? 0}초` : "실패"}</span>
