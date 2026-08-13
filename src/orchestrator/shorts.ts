@@ -34,7 +34,7 @@ import { generateTitleArt } from './shortsTitleArt';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
 import { blogUrlForPiece } from '../content/pieces';
 import { brandContext, getBrand } from '../content/brand';
-import { priorCoverageBrief, recentPhrasesToAvoid } from '../content/priorCoverage';
+import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
 import { normalizeSceneKind, fixMonthNames } from '../tools/shortsCommon';
 import type { EventBus } from '../events/bus';
@@ -301,7 +301,7 @@ export async function runShortsJob(
     // 지시문 단독은 새므로 최근 편의 원문을 직접 보여주고 "겹치면 다시 써라"로 못박는다.
     const hooksBlock = recentHooksToAvoid(short.brand, short.id);
     say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'}`);
-    const plan = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, hooksBlock].filter(Boolean).join('\n\n'));
+    const plan = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'));
     if (!plan) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
     say(`대본 완성 — ${plan.title.slice(0, 30)} · 씬 ${plan.scenes.length}개`);

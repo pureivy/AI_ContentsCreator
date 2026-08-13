@@ -1344,6 +1344,22 @@ app.get('/youtube/oauth/callback', async (c) => {
 // 유튜브 업로드 in-flight 락 — youtubeUrl 은 업로드 '완료 후'에야 기록되므로 그 가드만으로는
 // 동시/이중 제출(특히 텔레그램 버튼 이중 탭)이 같은 영상을 두 번 올린다(중복 영상+쿼터 낭비).
 const ytPublishInFlight = new Set<string>();
+/** 쇼츠 제목 교체(업로드 전 한정) — 제목 후보(plan.titles) 선택 또는 직접 지정. 영상 캘리 오버레이는
+ *  제목 원문이 아니라 키워드+카피(title-copy.json)를 굽으므로 재렌더 없이 안전. 업로드 후엔 스튜디오에서. */
+async function shortsTitleHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  const s = shortsStore().get(id);
+  if (!s) return c.json({ error: 'unknown shorts' }, 404);
+  if (s.youtubeUrl) return c.json({ error: '이미 업로드됨 — 제목은 유튜브 스튜디오에서 수정하세요' }, 409);
+  const b = await c.req.json<{ title?: string }>().catch(() => ({} as { title?: string }));
+  const title = (b.title ?? '').trim();
+  if (!title || title.length > 100) return c.json({ error: '제목이 비었거나 100자 초과입니다' }, 400);
+  shortsStore().update(id, { title });
+  console.log(`[발행담당] 쇼츠 제목 교체 — ${(s.title ?? '').slice(0, 24)} → ${title.slice(0, 40)}`);
+  return c.json({ ok: true, title });
+}
+app.post('/shorts/:id/title', shortsTitleHandler);
+app.post('/api/shorts/:id/title', shortsTitleHandler);
 app.post('/shorts/:id/youtube', async (c) => {
   const id = c.req.param('id');
   const s = shortsStore().get(id);

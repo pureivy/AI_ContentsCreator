@@ -25,7 +25,7 @@ import { standaloneIssues } from './standaloneQa';
 import { cardStyleIssues } from '../content/styleLint';
 import { promiseStore } from '../content/promises';
 import { brandContext, getBrand } from '../content/brand';
-import { priorCoverageBrief, recentPhrasesToAvoid } from '../content/priorCoverage';
+import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import { generateImagesForDraft, searchCardRefs } from '../tools/blog_skills';
 import { stdModel, visionCapable } from './visionCommon';
 
@@ -587,7 +587,7 @@ export async function runCardNewsJob(
       ? `[반복 표현 금지] 최근 카드뉴스들에서 이미 여러 번 쓴 표현이다 — 헤드라인·본문에 쓰지 말고 다른 어휘·접근으로 풀어라: ${ticPhrases.map((p) => `'${p}'`).join(', ')}`
       : '';
     say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건`);
-    const plan = await planCards(io, card.topic, card.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock].filter(Boolean).join('\n\n'));
+    const plan = await planCards(io, card.topic, card.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'));
     if (!plan) throw new Error('기획 실패 — 기획자 JSON 응답을 해석할 수 없습니다');
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ title: plan.title, slides: plan.slides }, null, 2), 'utf-8');
     say(`기획 완료 — ${plan.title.slice(0, 30)} · 슬라이드 ${plan.slides.length}장`);
