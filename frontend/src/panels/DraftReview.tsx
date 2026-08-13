@@ -406,7 +406,8 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
                   {/* 카드뉴스 */}
                   {/* 카드뉴스 칼럼 — 라벨+스타일 드롭다운+배지+zip+수정 5항목의 실측 내용폭(~490px)을
                       기준폭으로 — 패널이 좁으면 숏폼 칼럼이 아래로 내려가 양쪽 다 한 줄 유지(사용자 요청). */}
-                  <div style={{ flex: "1 1 500px", minWidth: 480 }}>
+                  {/* minWidth 는 min(...) — 고정 480 은 폰(≈390px)에서 상세 화면 전체를 가로로 밀었다(실사고 2026-08-13). */}
+                  <div style={{ flex: "1 1 500px", minWidth: "min(480px, 100%)" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
                       <b><Ico name="cards" size={12} /> 카드뉴스</b>
                       {/* 스타일 드롭다운 — 만들기 전·후 항상 표시. 브랜드 고정값(서버 저장, 자동 파생 포함 전 경로 적용). */}
@@ -436,7 +437,7 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
                   {/* 숏폼 칼럼 — 배지·MP4·수정 버튼까지 4항목이 한 줄에 들어가게 기준폭 확대+줄바꿈 금지
                       (사용자 요청 2026-08-13: 좁은 basis 260 에서 글자가 두 줄로 꺾였다). 패널이 좁으면
                       칼럼 자체가 아래로 내려가(컨테이너 flexWrap) 전폭을 쓴다. */}
-                  <div style={{ flex: "1 1 320px", minWidth: 280 }}>
+                  <div style={{ flex: "1 1 320px", minWidth: "min(280px, 100%)" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, whiteSpace: "nowrap" }}>
                       <b><Ico name="play" size={12} /> 숏폼</b>
                       {derived?.shorts
