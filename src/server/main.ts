@@ -1358,6 +1358,7 @@ async function shortsReviseHandler(c: Context): Promise<Response> {
   const b = await c.req.json<{ feedback?: string }>().catch(() => ({} as { feedback?: string }));
   const feedback = (b.feedback ?? '').trim();
   if (!feedback) return c.json({ error: '수정 요청 내용이 비었습니다.' }, 400);
+  console.log(`[발행담당] 숏폼 수정 요청 접수 — ${id}: ${feedback.slice(0, 80)}`); // 유실 추적용(카드와 동일)
   const r = await reviseShorts(id, feedback);
   if (!r.ok) return c.json({ error: r.error, ...r }, 409);
   console.log(`[발행담당] 숏폼 수정 요청 반영 — ${id} 씬 ${r.changedScenes.join(',') || '문구없음'}${r.regenScenes.length ? ` · 배경 ${r.regenScenes.join(',')}` : ''}`);
@@ -1737,6 +1738,9 @@ async function cardnewsReviseHandler(c: Context): Promise<Response> {
   const b = await c.req.json<{ feedback?: string }>().catch(() => ({} as { feedback?: string }));
   const feedback = (b.feedback ?? '').trim();
   if (!feedback) return c.json({ error: '수정 요청 내용이 비었습니다.' }, 400);
+  // 접수 즉시 로그 — 수 분짜리 동기 처리라 서버 재시작에 요청이 통째로 죽으면 흔적이 없었다
+  // (실사고 2026-08-14: 배포 재시작에 사용자 수정 요청 유실, 피드백 내용도 복구 불가).
+  console.log(`[발행담당] 카드뉴스 수정 요청 접수 — ${id}: ${feedback.slice(0, 80)}`);
   const r = await reviseCardNews(id, feedback);
   if (!r.ok) return c.json({ error: r.error, ...r }, 409);
   console.log(`[발행담당] 카드뉴스 수정 요청 반영 — ${id} 슬라이드 ${r.changedSlides.join(',') || '문구없음'}${r.stillBad.length ? ` · 미해결 ${r.stillBad.join(',')}` : ''}`);
