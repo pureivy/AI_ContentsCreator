@@ -25,7 +25,7 @@ import { naverSerp } from '../grounding/naver_search';
 import { seedKeyword } from '../grounding/naver_common';
 import { getRunSettings } from '../runsettings';
 import { brandContext, activeBrandSlug, getBrand, lexiconGuide } from '../content/brand';
-import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid } from '../content/priorCoverage';
+import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid } from '../content/priorCoverage';
 import { collectExistingContent } from '../content/novelty';
 import type { RunOptions, RunOutcome } from './run';
 
@@ -198,6 +198,35 @@ export async function writeBlogBody(a: {
     + "예: '물주기 리듬', '손가락을 흙에 넣어/찔러 물기·습도 확인', '흙이 마를 시간을 주다' 같은 관용구. "
     + "같은 정보라도 매번 신선한 문장·설명 방식으로 표현하라(형식적 상투구 반복 금지)."
     + (ticPhrases.length ? ` 최근 글들에서 이미 반복돼 상투구가 된 다음 구절도 이번 글에서 금지: ${ticPhrases.map((p) => `'${p}'`).join(', ')}.` : '');
+  // 과사용 어간 회피(2026-08-13 사용자 지적) — 상투구 채굴은 소제목·도입 표면 n그램만 봐서, 본문 중간에
+  // 활용형으로 분산되는 어휘 지문('갈린다/갈립니다/갈리는' 15편 47회 실측)을 못 잡았다. 본문 전체를
+  // 자모 접두로 묶어 채굴한 어간 목록을 '같은 뜻 일상어로 교체' 지시와 함께 주입한다.
+  const ticLexemes = (revise || process.env.WRITER_STYLE_DIVERGE === 'off') ? [] :
+    recentLexemesToAvoid(brandSlug, { stems: getBrand()?.compoundStems ?? [] });
+  // 고정 목록 = 2026-08-13 15편 전수 감사로 확정된 지문(갈리- 47회 등) — 채굴은 빈도 기반이라 소재
+  // 동사와 지문을 구분 못 해(cap 밀림) 확정분은 정적으로 박고, 채굴분은 '새로 생기는 지문' 감지용.
+  const lexemeAvoid = (revise || process.env.WRITER_STYLE_DIVERGE === 'off') ? '' :
+    '[과사용 어휘 교체] 아래 어휘·문형은 최근 글들에 글마다 반복돼 문체 지문이 됐다 — 활용형까지 포함해 이번 글에서 피하고, '
+    + '같은 뜻의 자연스러운 일상어로 바꿔 써라(꼭 필요하면 글당 1회 이하). 일상 대화에서 잘 쓰지 않는 어휘를 멋으로 쓰지 마라 — 어색함의 주범이다. '
+    + "'갈린다·갈래·갈라진다'(→달라진다·차이가 난다·나뉜다·경우), '대개'(→보통·대체로·흔히, 표 머리글에선 빼도 뜻이 같다), "
+    + "판정을 '~쪽입니다·~쪽이고요'로 맺는 버릇(→~일 가능성이 큽니다, 또는 직접 서술), '판단·판정' 명사 남용(→기준·가늠·보는 법), "
+    + "단락 꼬리 '-고요' 연발(글당 1~2회만), '걷어내다'(→잘라내다·솎다·치우다), '~하는 셈'(→~나 마찬가지, 또는 비유 없이), "
+    + "증상 은유 '그림'(→모습·증상), '어긋난다'(→맞지 않다·틀어진다), '훑다'(→살펴보다·둘러보다), 추상 '지점'(→대목·부분·데), "
+    + "'이건 ~해 봐야 아는 부분' 문형, '제 기준으로는'(→저는 ~부터 봅니다)."
+    + (ticLexemes.length
+      ? ` 최근 본문에서 반복 조짐이 보이는 어휘(기계 채굴 — 소재 어휘가 섞일 수 있다): ${ticLexemes.map((w) => `'${w}'`).join(', ')}. `
+        + '이 중 소재상 꼭 필요한 단어는 그대로 쓰되, 습관성 반복이면 다른 표현으로 분산하라.'
+      : '');
+  // 구성(방법 프레임) 반복 회피(2026-08-13 감사) — 문구가 달라도 같은 '틀'이 12편 안팎에 반복됨을 실측.
+  // 어간 채굴로는 못 잡는 의미 단위 수렴이라 대표 프레임을 명시하고 대체 방식을 제시한다.
+  const frameAvoid = (revise || process.env.WRITER_STYLE_DIVERGE === 'off') ? '' :
+    '[구성 반복 회피] 최근 글들이 같은 틀로 수렴했다 — 이번 글에서는 아래 중 최소 두 가지를 다른 방식으로 풀어라: '
+    + "① '관찰→대개 이런 뜻→할 일' 3열 판정표 골격(예/아니오 흐름, 실패 사례 복기, 관찰 일지 서사 등으로) "
+    + "② 말미 번호 체크리스트+'오늘 하나만 해보세요' 클로징(행동 하나만 남기기, 실패 신호 안내, 다음 계절 장면으로) "
+    + '③ 정해진 시각 스마트폰 사진 여러 장 판정법(아침·정오·오후 3장 등) — 그림자 길이 재기, 화분 들어 무게 느끼기, '
+    + '가지에 표식 달고 1주 뒤 대조, 잎 만져 보기, 물 준 날 달력 표시 같은 다른 판정·기록법이 많다 '
+    + "④ '세 갈래·네 갈래·N가지' 숫자 쪼개기 남용(이분법 대비, 원칙 하나+예외, 먼저-그다음-마지막 서사로) "
+    + "⑤ '검색해서 들어오셨을 겁니다' 류 도입 단정(현장 장면 묘사, 절기·날씨 신호, 통념 반박, 실제 질문 인용으로).";
   // 글의 '장르'가 한 축(예: 구매 전 체크리스트)으로 수렴한 실측(2026-08-01: 07-31 이후 5/5편) 대응.
   // 위 styleAvoid 는 최근 글의 도입·마무리를 피하게 하는데, 최근 글이 전부 같은 장르면 대조군이 사라져
   // 같은 장르를 어색하게 비트는 결과만 나온다 — 그래서 장르 자체를 명시적으로 요구한다.
@@ -236,7 +265,7 @@ export async function writeBlogBody(a: {
   // 사후 판정할 수 없었다(배롱나무 중복 조사에서 실측). 발화 여부만 한 줄 남긴다.
   if (!revise) {
     bus.emit('log', {
-      message: `작가 다양성 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 스타일지문 ${styleAvoid ? '주입' : '없음'} · 반복상투구 ${ticPhrases.length}건${ticPhrases.length ? `(${ticPhrases.slice(0, 3).join(', ')}${ticPhrases.length > 3 ? ' 외' : ''})` : ''}`,
+      message: `작가 다양성 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 스타일지문 ${styleAvoid ? '주입' : '없음'} · 반복상투구 ${ticPhrases.length}건${ticPhrases.length ? `(${ticPhrases.slice(0, 3).join(', ')}${ticPhrases.length > 3 ? ' 외' : ''})` : ''} · 과사용어간 ${ticLexemes.length}건${ticLexemes.length ? `(${ticLexemes.slice(0, 3).join(', ')}${ticLexemes.length > 3 ? ' 외' : ''})` : ''}`,
     });
   }
   const synth = await runAgent({
@@ -248,6 +277,8 @@ export async function writeBlogBody(a: {
       priorCoverage,
       styleAvoid,
       phraseAvoid,
+      lexemeAvoid,
+      frameAvoid,
       genreGuide,
       voiceGuide,
       lexiconGuide(getBrand()?.avoidJargon), // 어휘 가드(2026-08-08) — 동음이의 한자어·조어·키워드 동사화 방지
@@ -266,7 +297,7 @@ export async function writeBlogBody(a: {
     const retry = await runAgent({
       bus, role: writer, model,
       task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 질문·보류·메타 설명 없이 곧바로 본문(## 소제목 포함)만 출력한다.\n${BLOG_BODY_GUIDE}`,
-      context: revise ? reviseContext : [priorCoverage, styleAvoid, phraseAvoid, lexiconGuide(getBrand()?.avoidJargon), brief ? `[리서치·SEO 브리프]\n${brief}` : ''].filter(Boolean).join('\n\n'),
+      context: revise ? reviseContext : [priorCoverage, styleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon), brief ? `[리서치·SEO 브리프]\n${brief}` : ''].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, maxOutputTokens: 5000, signal,
     });

@@ -233,6 +233,100 @@ export function recurringPhrases(
   return kept;
 }
 
+/** 블로그 초안 전문 본문 — piece.runId → data/sessions/<runId>/draft.json 의 bodyMarkdown. */
+function blogBody(runId: string | undefined): string {
+  if (!runId) return '';
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
+    return d.bodyMarkdown ?? '';
+  } catch { return ''; }
+}
+
+/** 자모 접두(NFD) — 활용형(갈린다/갈리는/갈립니다)을 같은 어간 그룹으로 접는 값싼 트릭.
+ *  NFD 는 초·중·종성을 별개 코드포인트로 풀어 접두 5자모 ≈ 어간 2.5음절(형태소 분석기 없이 충분). */
+export function jamoPrefix(w: string, n = 5): string {
+  return [...w.normalize('NFD')].slice(0, n).join('');
+}
+
+// 과사용 어간 채굴 제외 상용 기능형(어절 접두 매치) — 이걸 금지하면 문장 자체가 안 써진다.
+// 85% 상한(거의 전 편 등장=언어)이 1차 방어고 이 목록은 중간 빈도로 걸리는 것들의 2차 안전핀.
+const LEXEME_STOP_PREFIXES = [
+  '합니다', '입니다', '됩니다', '있습', '없습', '했습', '봅니다', '줍니다', '옵니다', '갑니다',
+  '있는', '없는', '있어', '없어', '있으', '없으', '하는', '되는', '하면', '되면', '해서', '해도', '해요', '했다', '한다',
+  '그리고', '그래서', '하지만', '그런데', '그러면', '그렇', '이렇', '저렇', '이런', '그런', '저런',
+  '때문', '경우', '정도', '가장', '조금', '지금', '이제', '다시', '바로', '함께', '모두', '먼저', '같은', '같이', '다른', '많이',
+  '여기', '거기', '저기', '우리', '제가', '저는', '보면', '보고', '보이', '싶은', '싶다', '주세', '보세', '드세', '말고', '아니',
+];
+
+/**
+ * 최근 블로그 '본문 전체'에서 글마다 반복되는 어간(활용형 무관) 채굴 — 작가 어휘 지문 완화 재료.
+ * recentPhrasesToAvoid(표면 n그램·소제목/도입 한정)가 못 잡던 두 구멍을 메운다(2026-08-13 사용자 지적,
+ * 15편 감사 실측: '갈리-/갈래' 47회 등 지문 12종이 전부 본문 중간 + 활용형 분산이라 미검출):
+ *  ① 본문 중간의 반복 ② 갈린다/갈리는/갈립니다 활용형 분산(자모 접두 5로 그룹).
+ * 안전핀: 소재어(stems)·제목 토큰 보호, 기능형 STOP, 85%+ 편재는 언어 자체라 제외, cap 6, 전량 fail-open.
+ */
+export function recentLexemesToAvoid(
+  brandSlug: string | undefined,
+  opts: { stems?: string[]; limit?: number; minDocs?: number; docs?: string[]; titles?: string[] } = {},
+): string[] {
+  try {
+    let docs = opts.docs;
+    let titles = opts.titles ?? [];
+    if (!docs) {
+      docs = [];
+      titles = [];
+      const limit = opts.limit ?? 15;
+      const brandOk = (b?: string): boolean => brandSlug === undefined || (b ?? undefined) === brandSlug;
+      for (const e of [...pieceStore().list()].reverse()) {
+        if (!brandOk(e.brand)) continue;
+        const body = blogBody(e.runId);
+        if (body) { docs.push(body); titles.push(e.title); }
+        if (docs.length >= limit) break;
+      }
+    }
+    const minDocs = opts.minDocs ?? 5;
+    if (docs.length < Math.max(minDocs, 8)) return []; // 코퍼스 작으면 판단 보류(초기 브랜드 무해)
+    const ceiling = Math.ceil(docs.length * 0.85);
+    const titleTokens = new Set(titles.flatMap((t) =>
+      (t || '').normalize('NFC').split(/[^\p{L}\p{N}]+/u).filter((x) => x.length >= 2)));
+    // 소재 동사 보호(실코퍼스 스모크 2026-08-13): 제목에 '떨어지는'이 있으면 본문의 떨어짐·떨어진 등
+    // 활용형 전체를 보호해야 한다 — 정확 일치만으론 '잎이 떨어지는 이유' 글 무리에서 '떨어지-'를
+    // 문체 지문으로 오인했다. 제목 토큰의 자모 접두 3(≈1.5음절)까지 보호(과보호가 과차단보다 낫다).
+    const titleJamo = new Set([...titleTokens].map((t) => jamoPrefix(t, 3)));
+    const stems = (opts.stems ?? []).filter(Boolean);
+    const df = new Map<string, number>();                       // 자모접두 → 문서빈도
+    const surf = new Map<string, Map<string, number>>();        // 자모접두 → 표면형 빈도(대표형 선정)
+    for (const doc of docs) {
+      const seen = new Set<string>();
+      for (const raw of (doc || '').normalize('NFC').split(/[^가-힣]+/u)) {
+        if (raw.length < 2 || raw.length > 6) continue;
+        if (titleTokens.has(raw) || titleJamo.has(jamoPrefix(raw, 3))) continue;
+        if (stems.some((s) => raw.includes(s) || s.includes(raw))) continue;
+        if (LEXEME_STOP_PREFIXES.some((p) => raw.startsWith(p) || p.startsWith(raw))) continue;
+        const key = jamoPrefix(raw, 5);
+        if ([...key].length < 5) continue;                      // 짧은 어절(1음절대)은 잡음
+        seen.add(key);
+        const m = surf.get(key) ?? new Map<string, number>();
+        m.set(raw, (m.get(raw) ?? 0) + 1);
+        surf.set(key, m);
+      }
+      for (const k of seen) df.set(k, (df.get(k) ?? 0) + 1);
+    }
+    const out: string[] = [];
+    for (const [k, c] of [...df.entries()].sort((a, b) => b[1] - a[1])) {
+      if (c < minDocs || c > ceiling) continue;
+      const forms = [...(surf.get(k) ?? new Map<string, number>()).entries()].sort((a, b) => b[1] - a[1]);
+      if (!forms.length) continue;
+      // 대표형 + 다른 활용형 힌트(작가가 '활용형 포함'임을 알게)
+      const rep = forms[0]![0];
+      const alt = forms.slice(1, 3).map(([w]) => w).filter((w) => w !== rep);
+      out.push(alt.length ? `${rep}(${alt.join('·')} 등 활용형 포함)` : rep);
+      if (out.length >= 6) break;
+    }
+    return out;
+  } catch { return []; }
+}
+
 /**
  * 최근 콘텐츠의 반복 상투구 목록 — 생성기 프롬프트 '반복 표현 금지'에 주입할 재료. 전량 fail-open.
  * 채굴 원천은 kind별 '스타일이 드러나는 표면'만: 블로그=소제목+도입 첫 문장(전문을 넣으면 정상 소재어까지

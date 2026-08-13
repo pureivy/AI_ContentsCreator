@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { markdownHeadings, styleSignatureOf, recurringPhrases } from './priorCoverage';
+import { markdownHeadings, styleSignatureOf, recurringPhrases, recentLexemesToAvoid } from './priorCoverage';
 
 describe('markdownHeadings — 소제목 추출(관점 다양성 주입 소스)', () => {
   it('##/### 소제목만 뽑고, 해시태그 줄(# 2개+)은 배제·cap 적용', () => {
@@ -126,5 +126,42 @@ describe('recurringPhrases — 코퍼스 반복 상투구 채굴', () => {
     const out = recurringPhrases(docs, { minDocs: 3, cap: 1 });
     expect(out).toHaveLength(1);
     expect(out[0]).toBe('알파 베타'); // df 4 — 최다
+  });
+});
+
+describe('recentLexemesToAvoid — 본문 과사용 어간 채굴(자모 접두 그룹, docs 주입 순수 경로)', () => {
+  // 15편 감사 실측 재현: '갈린다/갈립니다/갈리는'이 활용형으로 분산돼도 한 어간으로 잡힌다.
+  const mk = (n: number, line: string): string[] => Array.from({ length: n }, () => `서두 문장. ${line} 마무리 문장.`);
+  it('활용형 분산을 자모 접두로 묶어 잡는다', () => {
+    // 85% 상한(기능어 방어)에 안 걸리게 일부 문서엔 미등장 — 실코퍼스 분포(15편 중 8편꼴) 재현.
+    const docs = [
+      ...mk(3, '여기서 결과가 갈린다'), ...mk(3, '판단이 갈립니다'), ...mk(3, '갈리는 지점이 있다'),
+      ...mk(3, '전혀 무관한 내용의 글'),
+    ];
+    const out = recentLexemesToAvoid(undefined, { docs, titles: [], minDocs: 5 });
+    expect(out.join(' ')).toMatch(/갈리|갈린|갈립/); // 대표형 하나로 보고(활용형 힌트 포함 가능)
+  });
+  it('기능형(합니다·때문 등)과 85%+ 편재어는 제외한다', () => {
+    const docs = mk(9, '나무는 물을 좋아합니다 때문에 흙이 마릅니다');
+    const out = recentLexemesToAvoid(undefined, { docs, titles: [], minDocs: 5 });
+    expect(out.join(' ')).not.toContain('합니다');
+    expect(out.join(' ')).not.toContain('때문');
+    // '마릅니다'는 9/9 편재(=상한 초과) — 언어가 아니라 지문일 수 있으나 상한이 우선(과차단 방지)
+    expect(out.join(' ')).not.toContain('마릅');
+  });
+  it('소재어(stems)와 제목 토큰은 보호한다', () => {
+    const docs = [
+      ...mk(5, '배롱나무 가지치기 방법이 갈린다'), ...mk(4, '배롱나무 가지치기 시기가 갈립니다'),
+      ...mk(3, '전혀 무관한 내용의 글'),
+    ];
+    const out = recentLexemesToAvoid(undefined, {
+      docs, titles: ['배롱나무 가지치기'], stems: ['배롱나무', '가지치기'], minDocs: 5,
+    });
+    expect(out.join(' ')).not.toContain('배롱');
+    expect(out.join(' ')).not.toContain('가지치기');
+    expect(out.join(' ')).toMatch(/갈리|갈린|갈립/);
+  });
+  it('코퍼스가 작으면(8편 미만) 판단 보류', () => {
+    expect(recentLexemesToAvoid(undefined, { docs: mk(5, '결과가 갈린다'), titles: [], minDocs: 3 })).toEqual([]);
   });
 });
