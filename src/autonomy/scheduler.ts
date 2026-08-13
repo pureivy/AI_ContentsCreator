@@ -266,6 +266,15 @@ const IDEA_ANGLES = [
   '초보 입문(처음 시작하는 사람 기준)', '다음 시즌·시기 대비(지금 준비할 것)', '증상·상황별 진단',
   '실제 사례·후기 관점', '한 가지 쟁점 깊이 파기',
 ];
+/** 이름·꽃말·상징 유래 주제의 수종 앵커 부재 판정(순수, 테스트 대상) — '회화나무 꽃말'은 통과,
+ *  '튤립 꽃말'·'나무 이름 유래'(총칭)는 기각. '~나무' 표기가 한국어 수종명 대부분을 커버한다. */
+export function lacksSpeciesAnchor(text: string): boolean {
+  const t = (text || '').normalize('NFC');
+  // '상징'은 수사적 사용("가을의 상징")이 흔해 트리거에서 제외 — 축의 핵심 표지인 꽃말·유래만 본다.
+  if (!/꽃말|유래/.test(t)) return false;
+  return !/[가-힣]{1,6}나무/.test(t);                        // 수종 앵커(○○나무) 존재 여부
+}
+
 export async function proposeContentIdeas(signal?: AbortSignal): Promise<ContentIdea | null> {
   const c = getCompany();
   // 팀·업무 범위(헌장) — 아이디어 생성의 재료(회사 정체성·콘텐츠 영역이 specialty 에 담겨 있음).
@@ -353,6 +362,14 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     if (jarg.length) {
       rejectNote = `[직전 제안 기각 — 제목·키워드에 일반 독자가 다른 뜻으로 읽는 말 "${jarg[0]!.term}" 포함] "${jarg[0]!.use}"처럼 쉬운 표현을 쓰는 완전히 새로운 제목·키워드로 제안하라.`;
       console.log(`[auto-cycle] 아이디어 기각(어휘 함정어) — "${title}" ("${jarg[0]!.term}")`);
+      continue;
+    }
+    // 수종 앵커 게이트(하드) — 이름·상징 유래 축(4순위, 2026-08-13 투입) 전용 함정 차단. 실측(08-01):
+    // '나무 이름 유래' 총칭은 검색 0이고, 앵커 없는 꽃말·유래 주제는 화초 꽃말로 미끄러지는데 브랜드
+    // 소재 게이트가 못 막는다(장미·국화류는 금지 목록에 없음). '~나무' 수종 앵커를 코드로 강제한다.
+    if (lacksSpeciesAnchor(`${title} ${keyword ?? ''}`)) {
+      rejectNote = '[직전 제안 기각 — 이름·꽃말·상징 유래 주제인데 수종 앵커 없음] 이런 주제는 반드시 구체적 수종명(회화나무·은행나무처럼 "~나무" 이름)을 제목과 키워드에 앵커로 박아라. 총칭("나무 이름 유래")이나 수종 없는 꽃말 주제는 금지.';
+      console.log(`[auto-cycle] 아이디어 기각(수종 앵커 없음) — "${title}"`);
       continue;
     }
     const sim = findSimilarContent({ title, ...(keyword ? { keyword } : {}) }, existing);

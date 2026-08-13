@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor } from './scheduler';
 
 describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -263,5 +263,22 @@ describe('runNow force — 수동 즉시 생산 플래그', () => {
     await stop.runNow();
     expect(pickWork).toHaveBeenCalledWith(undefined, true);
     stop();
+  });
+});
+
+describe('lacksSpeciesAnchor — 이름·꽃말·유래 축 수종 앵커 게이트(순수)', () => {
+  it('수종 앵커(○○나무)가 있으면 통과', () => {
+    expect(lacksSpeciesAnchor('회화나무 꽃말과 선비 이야기')).toBe(false);
+    expect(lacksSpeciesAnchor('은행나무 이름 유래')).toBe(false);
+    expect(lacksSpeciesAnchor('단풍나무 꽃말')).toBe(false);
+  });
+  it('총칭·화초 꽃말은 기각(실측: 나무 이름 유래 총칭 검색 0, 화초 미끄러짐은 소재 게이트가 못 막음)', () => {
+    expect(lacksSpeciesAnchor('나무 이름 유래 모음')).toBe(true);   // 총칭 — '나무' 단독은 앵커 아님
+    expect(lacksSpeciesAnchor('장미 꽃말과 전설')).toBe(true);       // 화초 미끄러짐
+    expect(lacksSpeciesAnchor('가을꽃 꽃말 알아보기')).toBe(true);
+  });
+  it('유래·꽃말 주제가 아니면 무관(수사적 상징 포함)', () => {
+    expect(lacksSpeciesAnchor('가을 정원의 상징, 단풍 감상법')).toBe(false);
+    expect(lacksSpeciesAnchor('묘목 고르는 법')).toBe(false);
   });
 });
