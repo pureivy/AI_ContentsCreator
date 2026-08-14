@@ -279,6 +279,7 @@ export async function reviseShorts(
     fs.writeFileSync(path.join(dir, 'caption.txt'), caption, 'utf-8');
     store.update(id, { stage: 'ready', scenes: r.sceneCount, durationSec: r.durationSec, topic: plan.title });
     say(`수정 완료 — ${plan.title.slice(0, 30)} · ${r.durationSec}초`);
+    if ((r.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) say(`⚠ 길이 상한 초과 — ${r.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초(대본 감량 필요, 검토 시 참고)`);
     // 썸네일 — 제목/캘리 문구/배경이 바뀐 경우만 재생성(문구 일치 유지). 실패 무해.
     if (applied.titleChanged || applied.titleArtCopy || applied.regenScenes.length) {
       try {
@@ -370,7 +371,47 @@ function recentHooksToAvoid(brand: string | undefined, excludeId: string, limit 
   } catch { return ''; }
 }
 
+/** TTS 실측 속도(자/초) — 2026-08-14 실측: 대본 460자 → 낭독 77.3초(포즈 포함) ≈ 5.9자/초.
+ *  종전 프롬프트 가정(7자/초, "30~70자=5~10초")이 이걸 몰라서 55초 지시가 77초 영상이 됐다. */
+const SHORTS_TTS_CPS = 5.9;
+
+function shortsNarrationChars(p: Plan): number { return p.scenes.reduce((s, x) => s + x.narration.length, 0); }
+
+/** 길이 상한 초과 대본 1회 압축(사실·수치·결론 유지, 내레이션만 감량) — 실패해도 원본 유지(렌더 후 경고가 잡는다). */
+async function fitShortsPlanToDuration(io: JobIO, plan: Plan): Promise<{ plan: Plan; compressed: boolean; beforeChars: number; afterChars: number }> {
+  const cap = CONFIG.shortsMaxDurationSec;
+  const budget = Math.floor((cap - 5) * SHORTS_TTS_CPS); // 5초 여유 — TTS 속도 편차·업로드 인트로(1.6초)
+  const before = shortsNarrationChars(plan);
+  const keep = { plan, compressed: false, beforeChars: before, afterChars: before };
+  if (before <= Math.floor(cap * SHORTS_TTS_CPS)) return keep;
+  const cur = plan.scenes.map((s, i) => `${i + 1}. ${s.narration}`).join('\n');
+  const j = await microJSON<{ scenes?: Array<{ index?: unknown; narration?: unknown } | null> }>(
+    stdModel(),
+    '당신은 숏폼 대본 에디터입니다. 요청된 JSON 스키마만 출력합니다.',
+    [
+      `아래 숏폼 내레이션 합계가 ${before}자로 낭독 상한(${cap}초 ≈ ${budget}자)을 넘는다. 씬 구성은 유지하고 내레이션만 감량해 합계 ${budget}자 이내로 만들어라.`,
+      cur,
+      '규칙: 사실·수치·결론과 씬별 "무엇을+왜"는 유지하고 군더더기·중복 표현만 깎아라. 구어체 존댓말·숫자 한글 낭독 등 원문 문체 유지, 이모지 금지.',
+      'JSON 형식: {"scenes":[{"index":씬번호,"narration":"..."}]} — 전 씬 포함.',
+    ].join('\n'),
+    { maxOutputTokens: 1200, signal: io.signal },
+  ).catch(() => null);
+  if (!j?.scenes) return keep;
+  const out: Plan = { ...plan, scenes: plan.scenes.map((s) => ({ ...s })) };
+  for (const s of j.scenes) {
+    const idx = typeof s?.index === 'number' && Number.isInteger(s.index) ? s.index : 0; // 1-base
+    if (idx < 1 || idx > out.scenes.length) continue;
+    const narration = cleanNarration(s?.narration);
+    if (narration && narration.length < out.scenes[idx - 1]!.narration.length) out.scenes[idx - 1]!.narration = narration;
+  }
+  const after = shortsNarrationChars(out);
+  return after < before ? { plan: out, compressed: true, beforeChars: before, afterChars: after } : keep;
+}
+
 async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = ''): Promise<Plan | null> {
+  const capSec = CONFIG.shortsMaxDurationSec;
+  const budgetChars = Math.floor((capSec - 5) * SHORTS_TTS_CPS);
+  const maxScenes = Math.min(8, Math.max(3, Math.floor(capSec / 8)));
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 키워드] ${keyword}` : '',
@@ -393,7 +434,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     '낭독 명료성: 소리로만 듣고 되돌릴 수 없는 매체다 — 동음이의 전문어는 풀어 말하고("수분 나무"→"꽃가루받이 나무", "눈"→"꽃이 될 눈", "뿌리분"→"뿌리와 흙이 뭉친 덩어리"), 주어·비교 대상을 떨어낸 조각문 금지("밀리미터보다 옆 가지와 비교해요" 식 초압축 — 실측). 내레이션에서 언급하는 개수("다섯 곳")는 실제로 그 수만큼 세어 줘야 한다.',
     '문장 종결을 섞어라: 한 씬의 두 문장을 같은 어미로 끝내지 마라("~ㅂ니다"+"~ㅂ니다" 금지). 대본 전체에서 "-ㅂ니다" 종결은 절반 이하로 하고 "~요/~죠/~거든요/~는데요/~하세요"를 섞어라. 습관적 설명 현재형("치웁니다", "심지 않습니다")은 청자에게 말 거는 꼴("치우세요", "지금은 심지 마세요")로. 아나운서 원고가 아니라 옆에서 알려주는 말로 들려야 한다.',
     '대본 전체 1~2곳에 사람 말의 결을 넣어라 — 짧은 제동("잠깐,"), 정정·양보("아, 포트묘는 예외예요"), 판단의 표명("색보다 끝알부터 봐요" — "나는/저는" 같은 1인칭 주어는 쓰지 마라, 주어 없이도 시점이 전달된다. 사용자 확정 2026-08-12). 겪지 않은 사건·일화를 지어내는 것은 금지(판단·관점만). 정보 밀도를 깎는 잡담도 금지. 판단 문장은 근거·이유 문장을 밀어내고 그 자리를 차지하게 하지 마라 — 근거에 덧붙이는 한 줄이다. "X가 아니라 Y" 재정의 문형은 대본 전체 1회 이하 — 앞 편들이 이미 상투로 만든 틀이다.',
-    '본문 씬 내레이션은 1~3문장(합쳐서 30~70자, 낭독 5~10초) — "방법 한 문장+이유 한 문장"이 기본형이다. 리듬만 변주하라: 이유를 먼저 두는 씬, 질문으로 끝나는 씬을 최소 1개 섞되(단, 씬당 "무엇을+왜"는 유지 — 리듬을 바꾸라는 것이지 정보를 빼라는 것이 아니다), 질문으로 끝냈으면 그 답을 반드시 바로 다음 씬 첫 문장에서 준다. "~기 때문입니다"는 대본 전체 1회 이하. 씬2(전제)는 45~70자까지 허용. 훅·CTA 씬은 1~2문장(20~40자). 총 낭독 시간 30~55초를 맞춘다.',
+    `본문 씬 내레이션은 1~3문장(합쳐서 30~70자, 낭독 5~12초) — "방법 한 문장+이유 한 문장"이 기본형이다. 리듬만 변주하라: 이유를 먼저 두는 씬, 질문으로 끝나는 씬을 최소 1개 섞되(단, 씬당 "무엇을+왜"는 유지 — 리듬을 바꾸라는 것이지 정보를 빼라는 것이 아니다), 질문으로 끝냈으면 그 답을 반드시 바로 다음 씬 첫 문장에서 준다. "~기 때문입니다"는 대본 전체 1회 이하. 씬2(전제)는 45~70자까지 허용. 훅·CTA 씬은 1~2문장(20~40자). 총 낭독 시간 ${Math.max(20, capSec - 25)}~${capSec - 10}초, 대본 전체(모든 씬 내레이션 합) ${budgetChars}자 이내를 반드시 맞춘다 — TTS 실측 속도는 초당 약 6자다. 이 총량이 씬 수보다 우선한다(넘칠 것 같으면 씬 수를 줄여서라도 지켜라).`,
     'screenText 는 씬당 1줄 15자 이내 키워드 요약(비워도 됨).',
     '씬 kind(선택): 씬1="hook", 마지막 씬="cta". 본문 씬 중 어울리는 곳에만 "stat"(핵심 수치 1개: value 숫자·unit 단위·label 15자)·"list"(items 2~4개, 각 18자)·"quote"(text 40자, source 출처)·"chart"(비교 수치 2~5개가 막대그래프로 자라나는 연출: series 각 {label 8자, value 숫자≥0}, unit 단위, highlight 강조할 막대 인덱스) — 억지 배정 금지, 애매하면 kind 생략. chart 는 내레이션이 수치 비교를 말할 때만.',
     '수치 규칙: stat.value 와 chart.series 의 value 는 원문(블로그 초안)에 있는 수치 또는 대본 구조상 자명한 숫자(단계 수·항목 수)만. 불확실하면 그 kind 를 쓰지 마라. narration 은 수치를 한글로 낭독하되 JSON 값은 아라비아 숫자. chart 씬의 screenText 에는 핵심 수치 비교를 요약하라(렌더 실패 대비).',
@@ -403,7 +444,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   const sys = '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.';
   const parsePlan = (j: PlanRaw | null): Plan | null => {
     if (!j || !Array.isArray(j.scenes) || !j.scenes.length) return null;
-    const scenes = j.scenes.slice(0, 8).map((s) => ({
+    const scenes = j.scenes.slice(0, maxScenes).map((s) => ({
       narration: cleanNarration(s?.narration),
       screenText: stripEmoji(String(s?.screenText ?? '')).trim().slice(0, 20),
       ...normalizeSceneKind(s), // 불량 페이로드는 {} 강등 — 기본 씬으로 렌더
@@ -526,7 +567,8 @@ export async function runShortsJob(
   const checkAbort = (): void => { if (opts.signal?.aborted) throw new Error('취소됨'); };
   try {
     fs.mkdirSync(path.join(dir, 'scenes'), { recursive: true });
-    const n = Math.min(Math.max(4, opts.sceneCount ?? 6), 8);
+    // 씬 수 상한을 길이 상한에서도 역산 — 씬당 최소 ~8초(낭독+연출)로 잡는다.
+    const n = Math.min(Math.max(4, opts.sceneCount ?? 6), 8, Math.max(4, Math.floor(CONFIG.shortsMaxDurationSec / 8)));
 
     // 1) 기획 — 대본(훅·씬·내레이션·자막)·제목 3후보·설명·해시태그
     store.update(id, { stage: 'planning' });
@@ -543,10 +585,14 @@ export async function runShortsJob(
     // 지시문 단독은 새므로 최근 편의 원문을 직접 보여주고 "겹치면 다시 써라"로 못박는다.
     const hooksBlock = recentHooksToAvoid(short.brand, short.id);
     say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'}`);
-    const plan = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'));
+    let plan = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'));
     if (!plan) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
+    // 길이 상한 집행(사용자 확정 2026-08-14: 총 60초 이내) — 예산 초과 대본은 1회 압축.
+    const fit = await fitShortsPlanToDuration(io, plan);
+    if (fit.compressed) say(`대본 감량 — ${fit.beforeChars}→${fit.afterChars}자(길이 상한 ${CONFIG.shortsMaxDurationSec}초 예산)`);
+    plan = fit.plan;
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
-    say(`대본 완성 — ${plan.title.slice(0, 30)} · 씬 ${plan.scenes.length}개`);
+    say(`대본 완성 — ${plan.title.slice(0, 30)} · 씬 ${plan.scenes.length}개 · 낭독 ~${Math.round(shortsNarrationChars(plan) / SHORTS_TTS_CPS)}초 추정`);
     checkAbort();
 
     // 2) 디자인 — 씬별 세로 비주얼 프롬프트(전 씬 일관 스타일 + 장면 변주)
@@ -693,6 +739,7 @@ export async function runShortsJob(
       topic: plan.title || short.topic,
     });
     say(`${plan.title.slice(0, 30)} — ${r.durationSec}초 · 씬 ${r.sceneCount}개 완성${fallbacks ? ` (배경 폴백 ${fallbacks}씬)` : ''}`);
+    if ((r.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) say(`⚠ 길이 상한 초과 — ${r.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초(대본 감량 필요, 검토 시 참고)`);
     // 검토 대기 알림(완성 영상 동봉, 50MB 초과 시 텍스트 폴백) — fire-and-forget, 실패 무해.
     {
       const done = store.get(id);
