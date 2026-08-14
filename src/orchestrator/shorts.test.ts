@@ -31,4 +31,16 @@ describe('applyShortsRevision — 수정 요청 개정안 적용(순수)', () =>
     expect(applyShortsRevision(base, { scenes: [{ index: 5, narration: 'x' }] })).toBeNull();
     expect(applyShortsRevision(base, null)).toBeNull();
   });
+  it('titleArt 캘리 문구 변경 — 실변경만 인정, 미지정 필드는 현행 유지', () => {
+    const cur = { line1: '묘목 식재 준비', line2: '손끝으로 답 찾기', points: ['활착 가르는 손끝 감각'] };
+    const r = applyShortsRevision(base, { titleArt: { line2: '흙덩이가 알려주는 답' } }, cur);
+    expect(r!.titleArtCopy).toEqual({ line1: '묘목 식재 준비', line2: '흙덩이가 알려주는 답', points: ['활착 가르는 손끝 감각'] });
+    expect(r!.titleChanged).toBe(false); // plan.title 은 무변경
+  });
+  it('titleArt — 동일 문구·현 카피 부재는 무변경(null)', () => {
+    const cur = { line1: '묘목 식재 준비', line2: '손끝으로 답 찾기', points: ['p'] };
+    expect(applyShortsRevision(base, { titleArt: { line2: '손끝으로 답 찾기' } }, cur)).toBeNull();
+    expect(applyShortsRevision(base, { titleArt: { line2: '새 훅' } })).toBeNull(); // 현 카피 없음 → 무시
+    expect(applyShortsRevision(base, { titleArt: { line2: '새 훅' } }, null)).toBeNull();
+  });
 });

@@ -62,6 +62,8 @@ export async function generateTitleArt(input: {
   dir: string; title: string; description: string; titles?: string[];
   /** 핵심 키워드(정확 표기) — 카피 line1 라벨로 강제(planThumbnailCopy 가 보장). */
   keyword?: string; signal?: AbortSignal;
+  /** 카피 지정(수정 요청의 캘리 문구 교체 등) — 제공 시 planThumbnailCopy 를 건너뛰고 이 문구 그대로 굽는다. */
+  copy?: ThumbCopy;
 }): Promise<{ imagePath: string; copy: ThumbCopy } | null> {
   if (!CONFIG.openaiApiKey) return null;
   // 매트 전제조건을 생성 전에 검사 — 파이썬/스크립트가 없으면 이미지 생성비(최대 2회)만 태우고 버리게 된다.
@@ -69,7 +71,7 @@ export async function generateTitleArt(input: {
   const work = path.join(input.dir, '.title', `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   try {
     fs.mkdirSync(work, { recursive: true });
-    const copy = await planThumbnailCopy(input, input.signal);
+    const copy = input.copy ?? await planThumbnailCopy(input, input.signal);
     const prompt = buildTitleArtPrompt(copy);
     const expected = [copy.line1, copy.line2].filter(Boolean).join(' / ');
     const draftPath = path.join(work, 'draft.json');

@@ -65,13 +65,17 @@ interface JobIO { bus?: EventBus; signal?: AbortSignal }
 export interface ShortsRevision {
   title?: unknown; description?: unknown; hashtags?: unknown;
   scenes?: Array<{ index?: unknown; narration?: unknown; screenText?: unknown; regen_image?: unknown; image_note?: unknown } | null>;
+  /** 상단 캘리 문구(영상 오버레이·썸네일 공용 카피, title-copy.json) — 바뀔 때만. */
+  titleArt?: { line1?: unknown; line2?: unknown; points?: unknown } | null;
 }
 
 /** 개정안 적용(순수, 테스트 대상) — 번호 범위·빈 문자열·길이 상한 검증, 유효 변경 없으면 null.
- *  regen_image 로 표시된 씬만 배경 이미지를 다시 그린다(내레이션·자막만 바뀌면 재조립만으로 충분). */
+ *  regen_image 로 표시된 씬만 배경 이미지를 다시 그린다(내레이션·자막만 바뀌면 재조립만으로 충분).
+ *  titleCopy(현 캘리 카피)가 주어지면 titleArt 문구 변경도 검증한다 — 없으면 titleArt 는 무시. */
 export function applyShortsRevision(
   plan: Plan, cand: ShortsRevision | null,
-): { plan: Plan; changedScenes: number[]; regenScenes: number[]; imageNotes: Map<number, string>; titleChanged: boolean; metaChanged: boolean } | null {
+  titleCopy?: { line1: string; line2: string; points?: string[] } | null,
+): { plan: Plan; changedScenes: number[]; regenScenes: number[]; imageNotes: Map<number, string>; titleChanged: boolean; metaChanged: boolean; titleArtCopy: { line1: string; line2: string; points: string[] } | null } | null {
   if (!cand) return null;
   const out: Plan = { ...plan, scenes: plan.scenes.map((s) => ({ ...s })) };
   const changed: number[] = []; const regen: number[] = [];
@@ -108,26 +112,38 @@ export function applyShortsRevision(
       .map((t) => (t.trim().startsWith('#') ? t.trim() : `#${t.trim()}`)).slice(0, 15);
     if (tags.length && JSON.stringify(tags) !== JSON.stringify(plan.hashtags ?? [])) { out.hashtags = tags; metaChanged = true; }
   }
-  if (!changed.length && !regen.length && !titleChanged && !metaChanged) return null;
+  // 상단 캘리 문구 — 현 카피 대비 실변경만 인정(1줄=키워드 라벨 위계 유지, 미지정 필드는 현행 유지).
+  let titleArtCopy: { line1: string; line2: string; points: string[] } | null = null;
+  if (cand.titleArt && titleCopy) {
+    const line1 = str(cand.titleArt.line1, 30) || titleCopy.line1;
+    const line2 = str(cand.titleArt.line2, 30) || titleCopy.line2;
+    const reqPoints = Array.isArray(cand.titleArt.points)
+      ? cand.titleArt.points.map((p) => str(p, 40)).filter(Boolean).slice(0, 5) : [];
+    const points = reqPoints.length ? reqPoints : (titleCopy.points ?? []);
+    if (line1 !== titleCopy.line1 || line2 !== titleCopy.line2 || JSON.stringify(points) !== JSON.stringify(titleCopy.points ?? [])) {
+      titleArtCopy = { line1, line2, points };
+    }
+  }
+  if (!changed.length && !regen.length && !titleChanged && !metaChanged && !titleArtCopy) return null;
   return {
     plan: out, changedScenes: [...new Set(changed)].sort((a, b) => a - b),
-    regenScenes: [...new Set(regen)].sort((a, b) => a - b), imageNotes, titleChanged, metaChanged,
+    regenScenes: [...new Set(regen)].sort((a, b) => a - b), imageNotes, titleChanged, metaChanged, titleArtCopy,
   };
 }
 
 /**
- * 숏폼 수정 요청(검토 탭) — 피드백을 LLM 이 해석해 대본(내레이션·화면텍스트)·제목·설명을 개정하고,
- * 이미지 재생성이 필요한 씬만 다시 그린 뒤 재조립한다. 재사용: 무변경 씬 배경·I2V 클립·제목 캘리
- * (제목이 안 바뀐 경우). 내레이션 TTS 는 조립 과정에서 전 씬 재합성된다(오독 교정 사전 적용).
+ * 숏폼 수정 요청(검토 탭) — 피드백을 LLM 이 해석해 대본(내레이션·화면텍스트)·제목·설명·상단 캘리 문구를
+ * 개정하고, 이미지 재생성이 필요한 씬만 다시 그린 뒤 재조립한다. 재사용: 무변경 씬 배경·I2V 클립·제목 캘리
+ * (제목·캘리 문구가 안 바뀐 경우). 내레이션 TTS 는 조립 과정에서 전 씬 재합성된다(오독 교정 사전 적용).
  * 발행(유튜브 업로드·릴스) 이후엔 파일 교체가 불가하므로 거절한다.
  */
 export async function reviseShorts(
   id: string, feedback: string,
   opts: { bus?: EventBus; signal?: AbortSignal } = {},
-): Promise<{ ok: boolean; error?: string; changedScenes: number[]; regenScenes: number[]; titleChanged: boolean }> {
+): Promise<{ ok: boolean; error?: string; changedScenes: number[]; regenScenes: number[]; titleChanged: boolean; titleArtChanged: boolean }> {
   const store = shortsStore();
   const short = store.get(id);
-  const fail = (error: string) => ({ ok: false as const, error, changedScenes: [], regenScenes: [], titleChanged: false });
+  const fail = (error: string) => ({ ok: false as const, error, changedScenes: [], regenScenes: [], titleChanged: false, titleArtChanged: false });
   if (!short) return fail('unknown shorts');
   if (short.stage !== 'ready') return fail('완성(ready) 상태가 아닙니다');
   if (short.youtubeUrl || short.igReelId) return fail('이미 업로드/발행됨 — 발행물 영상은 교체할 수 없습니다(새 파생 생성 필요)');
@@ -140,6 +156,18 @@ export async function reviseShorts(
     try { plan = JSON.parse(fs.readFileSync(path.join(dir, 'plan.json'), 'utf-8')) as Plan; }
     catch { return fail('plan.json 없음 — 수정 불가'); }
     const cur = plan.scenes.map((s, i) => `${i + 1}. [내레이션] ${s.narration}${s.screenText ? ` [화면텍스트] ${s.screenText}` : ''}`).join('\n');
+    // 상단 캘리 카피 — 수정 LLM 입력에 포함해야 '캘리 문구만 있는 단어'(예: 훅 줄의 표현)를 겨냥한
+    // 요청이 좌초하지 않는다(대본에 없는 단어라 씬 매칭 0 → 무변경 재조립 '수정 완료' 오보고 사고).
+    let artCopy: ThumbCopy | null = null;
+    try {
+      const c = JSON.parse(fs.readFileSync(path.join(dir, 'title-copy.json'), 'utf-8')) as Partial<ThumbCopy>;
+      if (typeof c?.line1 === 'string' && c.line1.trim()) {
+        artCopy = {
+          line1: c.line1, line2: typeof c.line2 === 'string' ? c.line2 : '',
+          points: Array.isArray(c.points) ? c.points.filter((p): p is string => typeof p === 'string') : [],
+        };
+      }
+    } catch { /* 캘리 카피 없음 — titleArt 경로 비활성 */ }
     const j = await microJSON<ShortsRevision>(
       stdModel(),
       '당신은 숏폼 대본 에디터입니다. 요청된 JSON 스키마만 출력합니다.',
@@ -148,19 +176,21 @@ export async function reviseShorts(
         `[제목] ${plan.title}`,
         `[씬]\n${cur}`,
         `[설명] ${plan.description}`,
+        ...(artCopy ? [`[상단 캘리 문구(영상 오버레이·썸네일 공용)] 1줄(키워드 라벨): ${artCopy.line1}${artCopy.line2 ? ` / 2줄(훅): ${artCopy.line2}` : ''}${artCopy.points.length ? ` / 포인트: ${artCopy.points.join(' · ')}` : ''}`] : []),
         `[수정 요청] ${feedback}`,
         '규칙: 의미·톤 유지 범위에서 요청을 빠짐없이 반영, 내레이션 길이는 원문과 비슷하게(재생 시간 유지), 이모지 금지.',
         '배경 그림 자체를 바꿔야 하는 요청(장면·소품·구도)이면 그 씬에 "regen_image":true 와 "image_note":"무엇을 어떻게"를 넣어라. 문구만 바뀌면 넣지 마라(배경은 무텍스트).',
-        'JSON 형식: {"scenes":[{"index":씬번호,"narration":"...","screenText":"...","regen_image":false,"image_note":"..."}],"title":"...","description":"...","hashtags":["#..."]} — 바뀌는 필드만 포함.',
+        ...(artCopy ? ['상단 캘리 문구를 바꿔야 하는 요청이면 "titleArt" 에 바뀐 필드만 넣어라 — 1줄은 핵심 키워드 라벨(정확 표기 유지), 2줄은 짧은 훅. 캘리 문구와 무관한 요청이면 titleArt 를 넣지 마라.'] : []),
+        `JSON 형식: {"scenes":[{"index":씬번호,"narration":"...","screenText":"...","regen_image":false,"image_note":"..."}],"title":"...","description":"...","hashtags":["#..."]${artCopy ? ',"titleArt":{"line1":"...","line2":"...","points":["..."]}' : ''}} — 바뀌는 필드만 포함.`,
       ].join('\n'),
       { maxOutputTokens: 1600, signal: opts.signal },
     ).catch(() => null);
-    const applied = applyShortsRevision(plan, j);
+    const applied = applyShortsRevision(plan, j, artCopy);
     if (!applied) return fail('수정 요청에서 반영할 변경을 찾지 못했습니다 — 요청을 더 구체적으로 써 주세요');
     plan = applied.plan;
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
     store.update(id, { title: plan.title, topic: plan.title, description: plan.description, hashtags: plan.hashtags });
-    say(`수정 요청 반영 — 씬 ${applied.changedScenes.join(',') || '없음'}${applied.regenScenes.length ? ` · 배경 재생성 ${applied.regenScenes.join(',')}` : ''}${applied.titleChanged ? ' · 제목' : ''}`);
+    say(`수정 요청 반영 — 씬 ${applied.changedScenes.join(',') || '없음'}${applied.regenScenes.length ? ` · 배경 재생성 ${applied.regenScenes.join(',')}` : ''}${applied.titleChanged ? ' · 제목' : ''}${applied.titleArtCopy ? ' · 캘리 문구' : ''}`);
 
     // 씬 배경 재구성 — 기존 매니페스트 슬롯 정렬 + regen 씬만 새로 그림(bg-draft 프롬프트 재사용).
     let images: Array<string | null> = plan.scenes.map(() => null);
@@ -205,13 +235,18 @@ export async function reviseShorts(
       const p = path.join(dir, 'clips', `clip_${String(i + 1).padStart(2, '0')}.mp4`);
       return fs.existsSync(p) ? p : null;
     });
-    // 제목 캘리 — 제목이 바뀌면 재생성, 아니면 기존 에셋 재사용(카피는 title-copy.json).
+    // 제목 캘리 — 제목/캘리 문구가 바뀌면 재생성, 아니면 기존 에셋 재사용(카피는 title-copy.json).
     let titleArt: { imagePath: string; copy: ThumbCopy } | null = null;
     if (CONFIG.shortsTitleOverlay) {
       const artPath = path.join(dir, 'title-art.png');
-      if (applied.titleChanged || !fs.existsSync(artPath)) {
-        titleArt = await generateTitleArt({ dir, title: plan.title, description: plan.description, titles: plan.titles, keyword: short.keyword, signal: opts.signal });
-        say(titleArt ? '상단 제목 캘리 재생성' : '상단 제목 캘리 스킵');
+      if (applied.titleArtCopy || applied.titleChanged || !fs.existsSync(artPath)) {
+        titleArt = await generateTitleArt({
+          dir, title: plan.title, description: plan.description, titles: plan.titles, keyword: short.keyword, signal: opts.signal,
+          ...(applied.titleArtCopy ? { copy: applied.titleArtCopy } : {}),
+        });
+        // 캘리 문구 교체가 핵심 요청인데 재생성이 실패하면 구 문구 그대로 '수정 완료'가 나간다 — 정직하게 실패.
+        if (!titleArt && applied.titleArtCopy) return fail('상단 캘리 재생성 실패(생성/QA) — 잠시 후 다시 시도해 주세요');
+        say(titleArt ? `상단 제목 캘리 재생성${applied.titleArtCopy ? ' — 문구 교체' : ''}` : '상단 제목 캘리 스킵');
       } else {
         try { titleArt = { imagePath: artPath, copy: JSON.parse(fs.readFileSync(path.join(dir, 'title-copy.json'), 'utf-8')) as ThumbCopy }; } catch { titleArt = null; }
       }
@@ -244,8 +279,8 @@ export async function reviseShorts(
     fs.writeFileSync(path.join(dir, 'caption.txt'), caption, 'utf-8');
     store.update(id, { stage: 'ready', scenes: r.sceneCount, durationSec: r.durationSec, topic: plan.title });
     say(`수정 완료 — ${plan.title.slice(0, 30)} · ${r.durationSec}초`);
-    // 썸네일 — 제목/배경이 바뀐 경우만 재생성(문구 일치 유지). 실패 무해.
-    if (applied.titleChanged || applied.regenScenes.length) {
+    // 썸네일 — 제목/캘리 문구/배경이 바뀐 경우만 재생성(문구 일치 유지). 실패 무해.
+    if (applied.titleChanged || applied.titleArtCopy || applied.regenScenes.length) {
       try {
         const hook = images.find((p): p is string => !!p && fs.existsSync(p)) ?? null;
         const ok = await generateDesignedThumbnail({
@@ -260,7 +295,7 @@ export async function reviseShorts(
     if (done) {
       void notifyShortsReady({ id, topic: done.topic, brand: done.brand, durationSec: r.durationSec, scenes: r.sceneCount, sourcePieceId: done.sourcePieceId, writer: done.writer, director: done.director }, r.videoPath).catch(() => { /* 무해 */ });
     }
-    return { ok: true, changedScenes: applied.changedScenes, regenScenes: applied.regenScenes, titleChanged: applied.titleChanged };
+    return { ok: true, changedScenes: applied.changedScenes, regenScenes: applied.regenScenes, titleChanged: applied.titleChanged, titleArtChanged: !!applied.titleArtCopy };
   } catch (e) {
     return fail(e instanceof Error ? e.message.slice(0, 200) : String(e));
   } finally {

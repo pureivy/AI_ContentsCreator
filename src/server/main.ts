@@ -1361,7 +1361,7 @@ async function shortsReviseHandler(c: Context): Promise<Response> {
   console.log(`[발행담당] 숏폼 수정 요청 접수 — ${id}: ${feedback.slice(0, 80)}`); // 유실 추적용(카드와 동일)
   const r = await reviseShorts(id, feedback);
   if (!r.ok) return c.json({ error: r.error, ...r }, 409);
-  console.log(`[발행담당] 숏폼 수정 요청 반영 — ${id} 씬 ${r.changedScenes.join(',') || '문구없음'}${r.regenScenes.length ? ` · 배경 ${r.regenScenes.join(',')}` : ''}`);
+  console.log(`[발행담당] 숏폼 수정 요청 반영 — ${id} 씬 ${r.changedScenes.join(',') || '문구없음'}${r.regenScenes.length ? ` · 배경 ${r.regenScenes.join(',')}` : ''}${r.titleChanged ? ' · 제목' : ''}${r.titleArtChanged ? ' · 캘리' : ''}`);
   return c.json(r);
 }
 app.post('/shorts/:id/revise', shortsReviseHandler);
