@@ -146,6 +146,22 @@ function outboundLinks(body: string): string[] {
  *  나머지(source·overview·lesson·debate·performance)는 '기록'이라 개념을 대표하지 않는다. */
 const KNOWLEDGE_TYPES = new Set<PageType>(['entity', 'concept', 'answer']);
 
+/** 지표성(측정 스냅샷) 요약 판별 — 검색량·검색수·조회수·월간 검색·노출·클릭·CTR·"N회" 등 성과 수치 패턴.
+ *  지식 노드의 개념 요약이 이런 스냅샷으로 덮이면 index.md 미러를 타고 검색 최전선이 오염된다
+ *  (2026-07-31 타입 게이트와 같은 뿌리 — 성과 기록이 개념 정체성을 선점하는 문제의 summary 판). */
+function isMetricSummary(s: string): boolean {
+  if (!s) return false;
+  return /검색량|검색수|조회수|월간\s*검색|노출|클릭|CTR|\d[\d,.]*\s*회/i.test(s);
+}
+
+/** LLM 거절·되물음 텍스트 판별 — stub 생성 LLM 이 본문 대신 "항목을 알려주시면…" 류 안내문을 반환한 경우.
+ *  실측 사고(2026-08-14): '데이터 없음' 페이지가 "항목이 지정되지 않았습니다. 위키 본문을 작성할
+ *  구체적인 개념/엔티티를 알려주시면…" 요약으로 생성돼 두뇌에 무의미 노드가 영속됐다. */
+function isLlmRefusalText(s: string): boolean {
+  if (!s) return false;
+  return /항목이\s*지정되지|지정되지\s*않았습니다|알려\s*주시(면|겠)|작성할\s*수\s*없|구체적인\s*(개념|엔티티|항목|주제)|무엇을\s*작성|어떤\s*(개념|항목|주제)[을를]?\s*(원하|작성)/.test(s);
+}
+
 /**
  * 링크 대상 해석 인덱스(순수) — 슬러그·별칭(aliases)을 모두 canonical 슬러그로 매핑.
  * 규칙: (1) 실제 페이지 슬러그가 항상 우선 — 별칭이 실 페이지를 가리지 못한다.
@@ -393,11 +409,17 @@ export class LlmWiki {
     }
     const today = nowDate();
     if (existing) {
+      // 지표 요약이 지식 요약을 덮지 못한다 — 성과 경로(reinforce 등)가 지식 노드(entity/concept/answer)에
+      // 검색량·조회수 스냅샷 요약을 upsert 하면 개념 요약이 측정치로 덮이고 index.md 미러로 전파된다
+      // (2026-07-31 타입 게이트의 summary 판). 기존 요약도 지표성이면 종전대로 갱신 허용(성과 페이지 무해).
+      const keepKnowledgeSummary = KNOWLEDGE_TYPES.has(existing.type) && !!existing.summary
+        && !!input.summary && isMetricSummary(input.summary) && !isMetricSummary(existing.summary);
+      if (keepKnowledgeSummary) this.appendLog('upsert', `지표 요약 차단 — "${existing.title}" 지식 요약 유지`);
       const merged: WikiPage = {
         ...existing,
         // source → entity/concept 승격은 허용(반대 강등은 막음).
         type: existing.type === 'source' && input.type !== 'source' ? input.type : existing.type,
-        summary: input.summary || existing.summary,
+        summary: keepKnowledgeSummary ? existing.summary : (input.summary || existing.summary),
         sources: [...new Set([...existing.sources, ...(input.sources ?? [])])],
         contributors: [...new Set([...existing.contributors, ...(input.contributors ?? [])])],
         aliases: [...new Set([...existing.aliases, ...(input.aliases ?? []),
@@ -988,6 +1010,12 @@ export class LlmWiki {
     for (const t of sorted) {
       const body = await this.generateStub(model, t.title, t.refs, opts.signal);
       if (body) {
+        // LLM 이 본문 대신 거절·되물음 안내문을 반환하면 페이지를 만들지 않는다 — 만들면 "항목이
+        // 지정되지 않았습니다…" 요약의 무의미 노드가 두뇌에 영속된다(실측: '데이터 없음' 페이지).
+        if (isLlmRefusalText(body)) {
+          this.appendLog('maintain', `stub 생성 거부 — "${t.title}" LLM 거절·되물음 응답(페이지 미생성)`);
+          continue;
+        }
         this.upsertPage({ title: t.title, type: 'entity', body, sources: ['maintain:auto'], summary: esc(body).slice(0, 120) });
         filled.push(t.title);
       }

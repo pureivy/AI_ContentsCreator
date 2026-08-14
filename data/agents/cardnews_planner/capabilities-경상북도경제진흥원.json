@@ -1,7 +1,0 @@
-{
-  "tools": [
-    "wiki_query",
-    "wiki_ingest"
-  ],
-  "autonomy": 3
-}

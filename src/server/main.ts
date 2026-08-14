@@ -2557,7 +2557,7 @@ app.post('/brands/activate', async (c) => {
  * 브랜드 자료 일괄 정리 — 영구 삭제가 아니라 data/.trash/brand-<slug>-<ts>/ 로 이동(복구 가능).
  * 대상: 글(piece)+런 세션+성과 측정 이력, 카드뉴스·숏폼 산출물, 브랜드 태그 런, 위키·전략·제작 이력.
  */
-function purgeBrandData(slug: string): { pieces: number; cards: number; shorts: number; runs: number; keys: number; accounts: number } {
+function purgeBrandData(slug: string): { pieces: number; cards: number; shorts: number; runs: number; keys: number; accounts: number; agents: number } {
   const trash = path.join(CONFIG.dataDir, '.trash', `brand-${slug}-${Date.now()}`);
   const move = (src: string, sub: string): void => {
     try {
@@ -2600,7 +2600,21 @@ function purgeBrandData(slug: string): { pieces: number; cards: number; shorts: 
   const keys = purgeCustomKeysForBrand(slug);
   // 채널 계정 blob(네이버 로그인·유튜브 토큰·메타 토큰)도 동반 제거 — 잔존 시 기밀 잔존+동명 재생성 브랜드가 옛 계정 승계.
   const accounts = purgeBrandAccounts(slug);
-  return { pieces: pieces.length, cards: cards.length, shorts: sh.length, runs: runs.length, keys, accounts };
+  // 직원 워크스페이스의 브랜드 스코프 파일도 동반 정리 — data/agents/*/ 의 `-<slug>.md`(goal·verified·
+  // memory·injected 등)와 skills-<slug>/ 디렉토리. 잔존 시 동명 재생성 브랜드가 옛 직원 지식·패턴을 승계.
+  let agents = 0;
+  try {
+    for (const e of fs.readdirSync(CONFIG.agentsDir, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const adir = path.join(CONFIG.agentsDir, e.name);
+      for (const f of fs.readdirSync(adir)) {
+        if (!f.endsWith(`-${slug}.md`) && f !== `skills-${slug}`) continue;
+        move(path.join(adir, f), path.join('agents', e.name, f));
+        agents++;
+      }
+    }
+  } catch { /* agents 디렉토리 없음 무해 */ }
+  return { pieces: pieces.length, cards: cards.length, shorts: sh.length, runs: runs.length, keys, accounts, agents };
 }
 
 app.delete('/brands/:slug', (c) => {
@@ -2614,7 +2628,7 @@ app.delete('/brands/:slug', (c) => {
   try {
     if (!deleteBrand(slug)) return c.json({ error: '해당 브랜드가 없습니다' }, 404);
     const purged = purgeBrandData(slug);
-    console.log(`[브랜드] 삭제 — ${slug}: 글 ${purged.pieces}·카드뉴스 ${purged.cards}·숏폼 ${purged.shorts}·런 ${purged.runs}·키 ${purged.keys}·계정 ${purged.accounts} → data/.trash 이동 (활성: ${activeBrandSlug() || '범용 모드'})`);
+    console.log(`[브랜드] 삭제 — ${slug}: 글 ${purged.pieces}·카드뉴스 ${purged.cards}·숏폼 ${purged.shorts}·런 ${purged.runs}·키 ${purged.keys}·계정 ${purged.accounts}·직원파일 ${purged.agents} → data/.trash 이동 (활성: ${activeBrandSlug() || '범용 모드'})`);
     return c.json({ ok: true, active: activeBrandSlug() || null, purged });
   } catch { return c.json({ error: '무효한 슬러그' }, 400); }
 });
