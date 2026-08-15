@@ -5,14 +5,6 @@
  * 프론트 계약: /runs, /runs/:id/{events,log,cancel}, /llm, /company, /wiki/*, /approvals, 스텁들.
  */
 import dns from 'node:dns';
-import netBoot from 'node:net';
-// 원거리 API 'fetch failed' 근본 수선(실측 2026-08-15) — Node happy-eyeballs 의 주소별 연결 시도 타임아웃
-// 기본 250ms 가 api.telegram.org RTT(평균 324ms, 282~353 실측)보다 짧아 v4 연결이 매번 중도 포기됐다
-// (구글·그래프처럼 국내 엣지가 있는 API 는 멀쩡 — 텔레그램만 간헐 단절·발행 실패로 보인 이유).
-// 1500ms 로 올리면 같은 시점 fetch 가 즉시 성공(200, 실측). 이 네트워크의 IPv6 는 EHOSTUNREACH 라
-// v4 우선 조회도 함께 — 'ipv4first' 는 v6 폴백을 막지 않는다.
-netBoot.setDefaultAutoSelectFamilyAttemptTimeout(1500);
-dns.setDefaultResultOrder('ipv4first');
 import { readFile } from 'node:fs/promises';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -102,8 +94,11 @@ process.env.TZ ??= 'Asia/Seoul';
 
 // 듀얼스택(IPv4+IPv6) API 의 아웃바운드 안정화 — IPv6 광고는 되는데 라우팅이 죽은 망(실측: api.telegram.org,
 // 2026-07-29)에서 Node Happy Eyeballs 기본 폴백 대기(250ms)로는 fetch 가 ETIMEDOUT 으로 굳는다.
-// 폴백 대기를 1초로 늘리면 IPv6 시도 실패 후 IPv4 로 정상 전환(실측 200). 건강한 망에는 영향 없음(폴백 페이싱만).
-net.setDefaultAutoSelectFamilyAttemptTimeout(1000);
+// 재실측(2026-08-15): api.telegram.org 는 v4 RTT 자체가 평균 324ms(282~353)라 시도 대기가 RTT 보다 짧으면
+// v4 '연결 자체'도 중도 포기된다(국내 엣지 있는 구글·그래프는 멀쩡 — 텔레그램만 간헐 단절·발행 실패로 보인 이유).
+// 1500ms + IPv4 우선 조회(v6 는 EHOSTUNREACH, 'ipv4first' 는 v6 폴백을 막지 않음)로 여유를 확보한다.
+net.setDefaultAutoSelectFamilyAttemptTimeout(1500);
+dns.setDefaultResultOrder('ipv4first');
 
 interface RunHandle {
   status: 'running' | 'done' | 'error' | 'cancelled';
