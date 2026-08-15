@@ -130,10 +130,14 @@ const blogButtons = (id: string): TgButton[][] => [[
   { text: '📗 네이버 임시저장', callback_data: `bp:${id}` },
   { text: '✍ 수정요청', callback_data: `rv:${id}` },
 ]];
-const cardnewsButtons = (id: string): TgButton[][] => [[{ text: '📸 인스타 발행', callback_data: `cp:${id}` }]];
+const cardnewsButtons = (id: string): TgButton[][] => [[
+  { text: '📸 인스타 발행', callback_data: `cp:${id}` },
+  { text: '✍ 수정요청', callback_data: `rv:${id}` },
+]];
 const shortsButtons = (id: string): TgButton[][] => [[
   { text: '▶️ 유튜브 업로드', callback_data: `sy:${id}` },
   { text: '🎬 릴스 발행', callback_data: `sm:${id}` },
+  { text: '✍ 수정요청', callback_data: `rv:${id}` },
 ]];
 
 /** 블로그 초안 ready → 발췌 미리보기 알림. fire-and-forget(void 호출) 전제, 절대 throw 하지 않는다. */

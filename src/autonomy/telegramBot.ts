@@ -38,6 +38,14 @@ export function parseCallback(data: string): BotAction | null {
   }
 }
 
+/** 수정요청 답장의 대상 라우트(순수, 테스트 대상) — 파생(card_/short_)은 자기 revise 라우트(수 분 동기),
+ *  그 외는 블로그 piece revise(리비전 런 발사). rv 버튼이 세 종류 알림에 다 달리면서 필요해졌다. */
+export function reviseEndpointFor(id: string): { path: string; label: string; derived: boolean } {
+  if (id.startsWith('card_')) return { path: `/cardnews/${id}/revise`, label: '카드뉴스', derived: true };
+  if (id.startsWith('short_')) return { path: `/shorts/${id}/revise`, label: '숏폼', derived: true };
+  return { path: `/pieces/${id}/revise`, label: '블로그', derived: false };
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** 자기 서버 호출 — 라우트 가드·멱등을 재사용. AUTH_TOKEN 설정 시 Bearer 동봉. */
@@ -123,8 +131,9 @@ async function tgCall(method: string, body: Record<string, unknown>): Promise<Re
   } catch { return null; }
 }
 
-// 수정요청 대기 — force_reply 로 보낸 안내 message_id → 대상 piece. 재시작하면 소실(버튼 다시 누르면 됨).
-const pendingRevise = new Map<number, { pieceId: string; ts: number }>();
+// 수정요청 대기 — force_reply 로 보낸 안내 message_id → 대상(블로그 piece·카드뉴스·숏폼 id).
+// 재시작하면 소실(버튼 다시 누르면 됨).
+const pendingRevise = new Map<number, { targetId: string; ts: number }>();
 function prunePendingRevise(): void {
   const cutoff = Date.now() - 60 * 60 * 1000; // 1시간 경과 폐기
   for (const [k, v] of pendingRevise) if (v.ts < cutoff) pendingRevise.delete(k);
@@ -171,7 +180,7 @@ async function handleUpdate(u: TgUpdate, chatId: string, bootTs: number): Promis
         reply_markup: { force_reply: true },
       });
       const mid = (res?.result as { message_id?: number } | undefined)?.message_id;
-      if (typeof mid === 'number') { pendingRevise.set(mid, { pieceId: action.id, ts: Date.now() }); prunePendingRevise(); }
+      if (typeof mid === 'number') { pendingRevise.set(mid, { targetId: action.id, ts: Date.now() }); prunePendingRevise(); }
       return;
     }
     // 발행류는 수 초~수 분 — 폴 루프를 막지 않게 비동기로 돌리고 끝나면 결과를 새 메시지로 push.
@@ -192,8 +201,17 @@ async function handleUpdate(u: TgUpdate, chatId: string, bootTs: number): Promis
     const pending = pendingRevise.get(replyTo);
     if (pending) {
       pendingRevise.delete(replyTo);
-      const r = await api(`/pieces/${pending.pieceId}/revise`, { feedback: text }, 30_000);
-      void sendTelegramHtml(r.ok ? '✍ 수정 런 시작 — 완료되면 ↻ 개정본 알림이 옵니다.' : errText('수정 요청 실패', r));
+      const ep = reviseEndpointFor(pending.targetId);
+      if (ep.derived) {
+        // 카드뉴스·숏폼 revise 는 수 분짜리 동기 라우트 — 폴 루프를 막지 않게 비동기 실행 후 결과 push.
+        void sendTelegramHtml(`✍ ${ep.label} 수정 반영 중… (부분 재생성 — 수 분 소요)`);
+        void api(ep.path, { feedback: text })
+          .then((r) => sendTelegramHtml(r.ok ? `✍ ${ep.label} 수정 반영 완료 — 갱신본 알림을 확인하세요.` : errText(`${ep.label} 수정 요청 실패`, r)))
+          .catch((e: unknown) => sendTelegramHtml(`⚠️ ${ep.label} 수정 요청 실패 — ${escapeHtml(e instanceof Error ? e.message : String(e))}`));
+      } else {
+        const r = await api(ep.path, { feedback: text }, 30_000);
+        void sendTelegramHtml(r.ok ? '✍ 수정 런 시작 — 완료되면 ↻ 개정본 알림이 옵니다.' : errText('수정 요청 실패', r));
+      }
     } else {
       // 재시작으로 대기 맵이 소실된 답장 — 지시 텍스트가 버려졌음을 명확히 알린다(조용한 폐기 금지).
       void sendTelegramHtml('⏳ 수정 요청 세션이 만료됐습니다 — 알림 메시지의 ✍ 수정요청 버튼을 다시 눌러주세요.');
