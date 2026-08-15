@@ -4,6 +4,15 @@
  * 런/이벤트/취소는 무접두(/runs…)와 /api/* 둘 다 등록(프론트는 무접두, 자체 UI는 /api).
  * 프론트 계약: /runs, /runs/:id/{events,log,cancel}, /llm, /company, /wiki/*, /approvals, 스텁들.
  */
+import dns from 'node:dns';
+import netBoot from 'node:net';
+// 원거리 API 'fetch failed' 근본 수선(실측 2026-08-15) — Node happy-eyeballs 의 주소별 연결 시도 타임아웃
+// 기본 250ms 가 api.telegram.org RTT(평균 324ms, 282~353 실측)보다 짧아 v4 연결이 매번 중도 포기됐다
+// (구글·그래프처럼 국내 엣지가 있는 API 는 멀쩡 — 텔레그램만 간헐 단절·발행 실패로 보인 이유).
+// 1500ms 로 올리면 같은 시점 fetch 가 즉시 성공(200, 실측). 이 네트워크의 IPv6 는 EHOSTUNREACH 라
+// v4 우선 조회도 함께 — 'ipv4first' 는 v6 폴백을 막지 않는다.
+netBoot.setDefaultAutoSelectFamilyAttemptTimeout(1500);
+dns.setDefaultResultOrder('ipv4first');
 import { readFile } from 'node:fs/promises';
 import fs from 'node:fs';
 import path from 'node:path';
