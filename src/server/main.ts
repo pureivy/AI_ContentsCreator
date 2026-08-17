@@ -1364,7 +1364,7 @@ async function shortsReviseHandler(c: Context): Promise<Response> {
   if (!feedback) return c.json({ error: '수정 요청 내용이 비었습니다.' }, 400);
   console.log(`[발행담당] 숏폼 수정 요청 접수 — ${id}: ${feedback.slice(0, 80)}`); // 유실 추적용(카드와 동일)
   const r = await reviseShorts(id, feedback);
-  if (!r.ok) return c.json({ error: r.error, ...r }, 409);
+  if (!r.ok) { console.log(`[발행담당] 숏폼 수정 요청 기각 — ${id}: ${r.error ?? ''}`); return c.json({ error: r.error, ...r }, 409); }
   console.log(`[발행담당] 숏폼 수정 요청 반영 — ${id} 씬 ${r.changedScenes.join(',') || '문구없음'}${r.regenScenes.length ? ` · 배경 ${r.regenScenes.join(',')}` : ''}${r.titleChanged ? ' · 제목' : ''}${r.titleArtChanged ? ' · 캘리' : ''}`);
   return c.json(r);
 }
@@ -1746,7 +1746,9 @@ async function cardnewsReviseHandler(c: Context): Promise<Response> {
   // (실사고 2026-08-14: 배포 재시작에 사용자 수정 요청 유실, 피드백 내용도 복구 불가).
   console.log(`[발행담당] 카드뉴스 수정 요청 접수 — ${id}: ${feedback.slice(0, 80)}`);
   const r = await reviseCardNews(id, feedback);
-  if (!r.ok) return c.json({ error: r.error, ...r }, 409);
+  // 기각도 접수처럼 로그 — 조용한 409 는 사용자에겐 '반영 안 됨'으로만 보이고 서버엔 흔적이 없었다
+  // (실사고 2026-08-18: 같은 카드 수정 요청 4회 연속 침묵 기각, 원인 추적에 로그 부재).
+  if (!r.ok) { console.log(`[발행담당] 카드뉴스 수정 요청 기각 — ${id}: ${r.error ?? ''}`); return c.json({ error: r.error, ...r }, 409); }
   console.log(`[발행담당] 카드뉴스 수정 요청 반영 — ${id} 슬라이드 ${r.changedSlides.join(',') || '문구없음'}${r.stillBad.length ? ` · 미해결 ${r.stillBad.join(',')}` : ''}`);
   return c.json(r);
 }

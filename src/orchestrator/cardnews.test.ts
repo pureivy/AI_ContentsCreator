@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyCardRevision, applyProofread, buildCardImagePrompt, buildSlideQaPrompt, buildSlideTranscribePrompt,
-  coverIncludesKeyword, extractDesignFromDraftPrompt, findSlidesWithChars, resolveForcedPreset, stripForDiff,
+  coverIncludesKeyword, extractDesignFromDraftPrompt, findSlidesWithChars, parseSlideNosFromFeedback,
+  resolveForcedPreset, stripForDiff,
 } from './cardnews';
 
 type CardPlan = Parameters<typeof applyCardRevision>[0];
@@ -251,5 +252,19 @@ describe('findSlidesWithChars — 렌더 오타 신고 라우팅(순수)', () =>
     expect(findSlidesWithChars(slides, [])).toEqual([]);
     expect(findSlidesWithChars(slides, ['', '  '])).toEqual([]);
     expect(findSlidesWithChars(slides, ['일곱글자를넘는긴문자열'])).toEqual([]);
+  });
+});
+
+describe('parseSlideNosFromFeedback — 명시 지목 슬라이드 파싱(순수)', () => {
+  it("'N번 슬라이드'·'슬라이드 N'·'N번째 장' 꼴을 번호로 파싱한다", () => {
+    expect(parseSlideNosFromFeedback('3번 슬라이드 오타 수정', 7)).toEqual([3]);
+    expect(parseSlideNosFromFeedback('슬라이드 5 글자가 깨졌어요', 7)).toEqual([5]);
+    expect(parseSlideNosFromFeedback('2번째 장이랑 6번 카드 오타', 7)).toEqual([2, 6]);
+    expect(parseSlideNosFromFeedback('3번 슬라이드 오타 수정, 누렇거나, 뒷면, 옮겨', 7)).toEqual([3]); // 실사고 원문
+  });
+  it('범위 밖·매수 표현·번호 없음은 무시', () => {
+    expect(parseSlideNosFromFeedback('9번 슬라이드', 7)).toEqual([]); // maxSlides 초과
+    expect(parseSlideNosFromFeedback('전체적으로 8장 전부 좋아요', 7)).toEqual([]); // 'N장' 단독=매수
+    expect(parseSlideNosFromFeedback('오탈자를 확인해서 수정해줘', 7)).toEqual([]);
   });
 });

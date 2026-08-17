@@ -447,6 +447,18 @@ export function buildCardImagePrompt(a: {
   return p.join('\n');
 }
 
+/** 피드백에 명시 지목된 슬라이드 번호 파싱(순수, 테스트 대상) — '3번 슬라이드'·'슬라이드 3'·'3번째 장' 꼴.
+ *  분류기가 문제 글자를 못 뽑아도(실사고 2026-08-18: '3번 슬라이드 오타 수정' 4회 침묵 기각) 지목 장을
+ *  표적 재생성으로 이을 수 있게 한다. 'N장' 단독은 매수 표현('슬라이드 8장')과 겹쳐 세지 않는다. */
+export function parseSlideNosFromFeedback(feedback: string, maxSlides: number): number[] {
+  const out = new Set<number>();
+  for (const m of (feedback ?? '').matchAll(/(\d{1,2})\s*번(?:째)?(?:\s*(?:슬라이드|카드|장))?|(?:슬라이드|카드)\s*(\d{1,2})/g)) {
+    const n = Number(m[1] ?? m[2]);
+    if (Number.isInteger(n) && n >= 1 && n <= maxSlides) out.add(n);
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
 /** 피드백에 지목된 문제 글자가 든 기획 슬라이드 찾기(순수, 테스트 대상) — 렌더 오타 신고 라우팅용. */
 export function findSlidesWithChars(slides: PlanSlide[], chars: string[]): number[] {
   const cs = chars.map((c) => (c ?? '').trim()).filter((c) => c.length >= 1 && c.length <= 6);
@@ -556,16 +568,20 @@ export async function reviseCardNews(
       { maxOutputTokens: 200, signal: opts.signal },
     ).catch(() => null);
     const chars = Array.isArray(t?.chars) ? t.chars.filter((c): c is string => typeof c === 'string') : [];
-    if (t?.render_typo && chars.length) {
-      const planIdxs = findSlidesWithChars(plan.slides, chars);
+    // 명시 지목 슬라이드 — 분류기 판정·글자 추출과 무관하게, 오타류 의도('오타·글자·깨짐')가 읽히고
+    // 번호가 지목됐으면 그 장을 표적 재생성한다(카피 개정이 무변경으로 끝난 시점 = 문구는 옳다는 뜻).
+    const named = /오타|오탈자|글자|깨[진져짐]/.test(feedback) ? parseSlideNosFromFeedback(feedback, card.slides ?? plan.slides.length) : [];
+    if ((t?.render_typo && chars.length) || named.length) {
+      const planIdxs = chars.length ? findSlidesWithChars(plan.slides, chars) : [];
       let slideMap: number[] | null = null;
       try { slideMap = (JSON.parse(fs.readFileSync(path.join(dir, 'design.json'), 'utf-8')) as { slideMap?: number[] }).slideMap ?? null; } catch { /* 구 카드 */ }
       if (!slideMap && (card.slides ?? 0) === plan.slides.length) slideMap = Array.from({ length: plan.slides.length }, (_, i) => i + 1);
-      const slideNos = slideMap
+      const mapped = slideMap
         ? planIdxs.map((pi) => slideMap.findIndex((v) => v === pi) + 1).filter((k) => k >= 1)
         : [];
+      const slideNos = [...new Set([...mapped, ...named])].sort((a, b) => a - b);
       if (slideNos.length) {
-        say(`수정 요청 → 렌더 오타 신고로 판정 — '${chars.join('·')}' 포함 슬라이드 ${slideNos.join(',')} 표적 재생성`);
+        say(`수정 요청 → 렌더 오타 신고로 판정 — ${chars.length ? `'${chars.join('·')}' 포함 ` : ''}${named.length ? `지목 ${named.join(',')}번 ` : ''}슬라이드 ${slideNos.join(',')} 표적 재생성`);
         const r = await repairCardNewsSlides(id, slideNos, opts);
         const done2 = store.get(id);
         if (r.ok && done2) {
