@@ -308,6 +308,17 @@ function readDraftMeta(runId: string): { title?: string; seoScore?: number; keyw
   } catch { return null; }
 }
 
+/** 리비전 런이 완주 못 하면(실패·취소) 유예했던 원본 초안의 검토 대기 알림을 복원한다(멱등 — notifiedTs 가드). */
+function restoreDeferredReadyNotify(pieceId: string): void {
+  try {
+    const p = pieceStore().get(pieceId);
+    if (!p || p.stage !== 'ready' || p.notifiedTs || !contentReadyNotifyEnabled()) return;
+    console.log(`[발행담당] 리비전 미완주 — 원본 초안 검토 대기 알림 복원(${p.id})`);
+    void notifyBlogReady({ id: p.id, title: p.title, keyword: p.keyword, seoScore: p.seoScore, brand: p.brand }, p.runId ?? '')
+      .finally(() => { try { pieceStore().update(p.id, { notifiedTs: new Date().toISOString() }); } catch { /* 무해 */ } });
+  } catch { /* 무해 — 부팅 복구 스윕이 최후 방어선 */ }
+}
+
 // 런 완료 → piece 를 'ready'(검토 대기)로 승격. draft.json 우선, 없으면(포장 실패) 본문(deliverable)으로 폴백.
 // 초안·본문 모두 비면 산출 실패로 간주해 에러 카운트(다음 틱 재개 대상). '완전 자율'의 라이프사이클 전진 지점.
 // 반환: 조각별 알림 채널이 이 piece 의 메시징을 소유하는지(리비전 유예 포함) — 자율 사이클이 산출물 덤프 알림을 억제하는 데 쓴다.
@@ -454,6 +465,10 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
         bus.emit(EventType.error, { message: e instanceof Error ? e.message : String(e) });
         bus.emit(EventType.run_done, { status: 'error' });
       }
+      // 리비전 미완주(실패·취소) → 유예했던 원본 초안의 검토 대기 알림 복원 — advancePieceReady 가
+      // 리비전 발사 시 알림을 미루는데, 리비전이 죽으면 아무도 안 보내 조각이 침묵 속에 ready 로 남았다
+      // (실사고 2026-08-18: SEO 미달 자동 리비전이 CLI 세션 한도로 실패 → "텔레그램 왜 안 와" 신고).
+      if (opts.pieceId && opts.revise) restoreDeferredReadyNotify(opts.pieceId);
     })
     .finally(() => { persistEvents(id, bus); persistRunMeta(id, handle); });
 
