@@ -545,8 +545,13 @@ async function startHandler(c: Context): Promise<Response> {
   // 오토런 지시문 라우팅(실측 3회: "자율런 실행"·"오토런 실행해줘"×2) — 지시문이 콘텐츠 런이 되어
   // 지시문 제목의 글이 검토함에 쌓이던 함정. 런 대신 자율 틱을 즉시 실행하고 안내를 반환한다(지명 런 제외).
   if (!body.agent && isAutorunDirective(topic)) {
-    void stopAutoCycle.runNow();
-    return c.json({ ok: true, autorun_tick: true, note: '오토런 지시로 인식 — 지금 만들 콘텐츠 1건을 자율 선정해 곧 시작합니다(사무실 탭에서 관전. 검토 대기가 가득이거나 다른 런이 진행 중이면 보류). 특정 주제로 쓰려던 것이면 그 주제를 입력해 주세요.' });
+    // busy 시 조용히 소멸하던 함정(실사고 2026-08-18) — 지속 실행으로 런 종료를 기다렸다 시작하고,
+    // 응답 문구도 현재 상태에 맞게(막연한 '곧 시작' 약속이 무산되면 "작동 안함"으로 체감된다).
+    const busyNow = [...RUNS.values()].some((h) => h.status === 'running');
+    void stopAutoCycle.runNowPersistent({ label: '오토런 지시' });
+    return c.json({ ok: true, autorun_tick: true, note: busyNow
+      ? '오토런 지시로 인식 — 지금은 다른 런이 진행 중이라, 종료되는 대로 콘텐츠 1건을 자율 선정해 시작합니다(자동 재시도, 사무실 탭에서 관전).'
+      : '오토런 지시로 인식 — 지금 만들 콘텐츠 1건을 자율 선정해 곧 시작합니다(사무실 탭에서 관전. 검토 대기가 가득이면 보류). 특정 주제로 쓰려던 것이면 그 주제를 입력해 주세요.' });
   }
 
   // 첨부(이미지·문서) — /runs/attachments 가 저장한 경로만 신뢰(디렉토리 밖 경로 거부: 경로 주입 방지).
@@ -3559,9 +3564,12 @@ if (CONFIG.autoCycleMinutes > 0) {
 void stopAutoCycle; // 프로세스 생존 동안 유지(unref 타이머라 종료는 막지 않음)
 // 수동 즉시 실행 — 30분 타이머를 기다리지 않고 지금 한 틱(pickAutoWork→launch). 토글 무시, isBusy·재진입 가드는 유지.
 app.post('/autonomy/tick', async (c) => {
-  if ([...RUNS.values()].some((h) => h.status === 'running')) return c.json({ error: '런이 진행 중입니다 — 완료 후 다시 시도하세요' }, 409);
-  void stopAutoCycle.runNow(); // 비동기 기동(제안 LLM 수 초) — 즉시 응답, 진행은 사무실/기록 탭에서.
-  return c.json({ ok: true, note: '자율 사이클 1틱 실행 — 지금 만들 콘텐츠 1건을 자율 선정해 곧 시작합니다(사무실 탭에서 관전).' });
+  // 진행 중 런이 있어도 409 로 끝내지 않는다 — 지속 실행이 종료를 기다렸다 시작(오토런 지시 게이트와 동일 UX).
+  const busyNow = [...RUNS.values()].some((h) => h.status === 'running');
+  void stopAutoCycle.runNowPersistent({ label: '수동 틱' }); // 비동기 기동 — 즉시 응답, 진행은 사무실/기록 탭에서.
+  return c.json({ ok: true, note: busyNow
+    ? '자율 사이클 예약 — 진행 중 런이 끝나는 대로 콘텐츠 1건을 자율 선정해 시작합니다(자동 재시도).'
+    : '자율 사이클 1틱 실행 — 지금 만들 콘텐츠 1건을 자율 선정해 곧 시작합니다(사무실 탭에서 관전).' });
 });
 app.post('/api/autonomy/tick', (c) => c.redirect('/autonomy/tick', 307));
 
@@ -3572,7 +3580,9 @@ app.post('/api/autonomy/tick', (c) => c.redirect('/autonomy/tick', 307));
 for (const t of CONFIG.autorunTimes.split(',').map((s) => s.trim()).filter(Boolean)) {
   startDaily({
     time: t, key: `autorun-${t.replace(':', '')}`,
-    run: () => { if (autoRunEnabled()) void stopAutoCycle.runNow(); },
+    // 지속 실행 — 슬롯 발화 순간 다른 런(유휴 틱 리서치 등)이 돌고 있으면 종료를 기다렸다 생산
+    // (실사고 2026-08-18: 18:00 슬롯이 리서치 런에 밀려 소멸, 30분 폴백 틱은 케이던스 게이트에 막힘).
+    run: () => { if (autoRunEnabled()) void stopAutoCycle.runNowPersistent({ label: `정각 슬롯(${t})`, respectToggle: true }); },
     log: (m) => console.log('[정각 오토런]', m),
   });
 }

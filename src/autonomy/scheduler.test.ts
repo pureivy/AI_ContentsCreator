@@ -117,6 +117,57 @@ describe('startAutoCycle — isEnabled 게이트(오토런 토글)', () => {
   });
 });
 
+describe('startAutoCycle — runNow 결과값·runNowPersistent 재시도(슬롯 침묵 소멸 방지)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it('runNow 는 결과를 돌려준다 — launched/idle/busy', async () => {
+    const launch = vi.fn();
+    let busy = false; let work: string | null = 'w';
+    const stop = startAutoCycle({ intervalMs: 0, isBusy: () => busy, pickWork: async () => work, launch });
+    expect(await stop.runNow()).toBe('launched');
+    work = null;
+    expect(await stop.runNow()).toBe('idle');
+    busy = true;
+    expect(await stop.runNow()).toBe('busy');
+    stop();
+  });
+  it('runNowPersistent — busy 면 재시도해 런 종료 후 launch(정각 슬롯·오토런 지시 유실 봉합)', async () => {
+    const launch = vi.fn();
+    let busy = true;
+    const stop = startAutoCycle({ intervalMs: 0, isBusy: () => busy, pickWork: async () => 'w', launch });
+    const p = stop.runNowPersistent({ retryMs: 1000, maxAttempts: 5 });
+    await vi.advanceTimersByTimeAsync(1000); // 1차 busy → 대기
+    busy = false;
+    await vi.advanceTimersByTimeAsync(1000); // 재시도 → launch
+    expect(await p).toBe('launched');
+    expect(launch).toHaveBeenCalledWith('w');
+    stop();
+  });
+  it('runNowPersistent — 상시 busy 면 maxAttempts 소진 후 포기, 중복 대기는 1건만', async () => {
+    const launch = vi.fn();
+    const stop = startAutoCycle({ intervalMs: 0, isBusy: () => true, pickWork: async () => 'w', launch });
+    const p = stop.runNowPersistent({ retryMs: 1000, maxAttempts: 2 });
+    const dup = stop.runNowPersistent({ retryMs: 1000, maxAttempts: 2 }); // 대기 중 중복 요청
+    expect(await dup).toBe('busy');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await p).toBe('busy');
+    expect(launch).not.toHaveBeenCalled();
+    stop();
+  });
+  it('runNowPersistent — respectToggle 은 대기 중 토글 오프를 존중한다', async () => {
+    const launch = vi.fn();
+    let enabled = true;
+    const stop = startAutoCycle({ intervalMs: 0, isBusy: () => true, isEnabled: () => enabled, pickWork: async () => 'w', launch });
+    const p = stop.runNowPersistent({ retryMs: 1000, maxAttempts: 5, respectToggle: true });
+    await vi.advanceTimersByTimeAsync(500);
+    enabled = false;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await p).toBe('idle');
+    expect(launch).not.toHaveBeenCalled();
+    stop();
+  });
+});
+
 // 토글 영속 — 재시작에도 유지(data/_shared/autorun.json), 기본값은 온(기존 동작 불변).
 describe('autoRunEnabled/setAutoRunEnabled — 영속 라운드트립', () => {
   it('기본 온 → 끄면 파일 영속 → 모듈 재로드에도 꺼짐 유지', async () => {
