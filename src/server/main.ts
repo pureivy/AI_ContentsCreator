@@ -3739,11 +3739,44 @@ if (!process.env.VITEST) {
   const orphanErr = '서버 재시작으로 생성이 중단되었습니다 — 삭제 후 다시 만들어 주세요';
   const orphanCards = cardNewsStore().list().filter((x) => x.stage !== 'ready' && x.stage !== 'error');
   for (const x of orphanCards) cardNewsStore().update(x.id, { stage: 'error', error: orphanErr });
+  // 숏폼은 실패 처리 대신 자동 재개(2026-08-20 사용자 확정: "쇼츠는 반드시 생성되어야 함") — 실사고:
+  // tsx 지연 중복 재시작(23:23, mtime 변화 없이 발화)이 렌더 중 잡을 죽여 error 로 좌초. 재개 캡 2회
+  // (크래시 루프 방지), 15초 정착 지연(tsx 는 1변경에 수 초 간격 연쇄 재시작하는 습성이 실측됨 — 즉시
+  // 재개하면 그 버스트에 복구 횟수가 다 탄다. 지연 중 또 재시작하면 카운터 소모 없이 다음 부팅이 이어받는다).
   const orphanShorts = shortsStore().list().filter((x) => x.stage !== 'ready' && x.stage !== 'error');
-  for (const x of orphanShorts) shortsStore().update(x.id, { stage: 'error', error: orphanErr });
+  const recoverIds = orphanShorts.filter((x) => (x.recoveries ?? 0) < 2).map((x) => x.id);
+  for (const x of orphanShorts) {
+    if (!recoverIds.includes(x.id)) shortsStore().update(x.id, { stage: 'error', error: `${orphanErr} (자동 재개 2회 소진)` });
+  }
+  if (recoverIds.length) {
+    const timer = setTimeout(() => {
+      for (const sid of recoverIds) {
+        try {
+          const s = shortsStore().get(sid);
+          if (!s || s.stage === 'ready' || s.stage === 'error' || isShortsRunning(sid)) continue; // 그 사이 종결·재개됨
+          // 파생 쇼츠는 원본 초안 본문을 다시 읽어 동일 조건으로 재실행(deriveShortsFromPiece 와 같은 소스).
+          let sourceBody: string | undefined;
+          if (s.sourcePieceId) {
+            try {
+              const piece = pieceStore().get(s.sourcePieceId);
+              if (piece?.runId) {
+                const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, piece.runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
+                sourceBody = (d.bodyMarkdown ?? '').trim() || undefined;
+              }
+            } catch { /* 본문 없이도 재개 — planShorts 는 sourceBody 없이 동작 */ }
+          }
+          shortsStore().update(sid, { recoveries: (s.recoveries ?? 0) + 1 });
+          launchShortsRun(sid, s.topic, sourceBody ? { sourceBody } : {});
+          // eslint-disable-next-line no-console
+          console.log(`[부팅 복구] 중단된 숏폼 자동 재개 — ${s.topic.slice(0, 30)} (${(s.recoveries ?? 0) + 1}/2회차)`);
+        } catch (e) { console.log(`[부팅 복구] 숏폼 ${sid} 재개 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+      }
+    }, 15_000);
+    if (typeof timer.unref === 'function') timer.unref();
+  }
   if (orphanCards.length || orphanShorts.length) {
     // eslint-disable-next-line no-console
-    console.log(`[부팅 복구] 중단된 생성 잡 정리 — 카드뉴스 ${orphanCards.length}건 · 숏폼 ${orphanShorts.length}건 → 실패 처리`);
+    console.log(`[부팅 복구] 중단된 생성 잡 — 카드뉴스 ${orphanCards.length}건 실패 처리 · 숏폼 ${recoverIds.length}건 15초 후 자동 재개${orphanShorts.length - recoverIds.length ? ` · ${orphanShorts.length - recoverIds.length}건 재개 소진→실패` : ''}`);
   }
   // 검토 알림 유실 복구 — ready 승격·리비전 대기 중 재시작하면 fire-and-forget 알림이 프로세스와 함께
   // 죽는다(실측 2026-07-31: ready 6초 뒤 tsx 재시작 → 알림·리비전 동반 유실, "사과나무" 건). 최근 24h 내

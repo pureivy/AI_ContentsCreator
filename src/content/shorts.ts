@@ -24,6 +24,9 @@ export interface Shorts {
   sourcePieceId?: string;
   /** 자율 사이클이 만든 것인지(수동 생성과 카덴스 쿼터 분리용). */
   auto?: boolean;
+  /** 부팅 복구 자동 재개 횟수(2026-08-20) — 서버 재시작으로 중단된 잡을 error 대신 재실행하되
+   *  크래시 루프 방지 캡(2회). 생성 실패 금지(사용자 확정) 원칙의 재시작 축 방어. */
+  recoveries?: number;
   stage: ShortsStage;
   /** 대표 제목(ready 시 — 기획 확정 제목). */
   title?: string;
