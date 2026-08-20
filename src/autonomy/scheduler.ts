@@ -17,6 +17,9 @@ import { microJSON } from '../orchestrator/agent';
 import { asString } from '../util/str';
 import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix, offBrandTerm, getBrand, lintLexicon } from '../content/brand';
 import { titleTypeGuidanceBlock } from '../analytics/titleTiming';
+import { shortsTopicSignalBlock } from '../analytics/shortsPerf';
+import { topicVerdictBlock, avoidVerdictFor } from '../analytics/topicVerdicts';
+import { trendSignalBlock } from '../analytics/trendSignal';
 import { seasonalContext } from '../util/solarTerms';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 
@@ -385,6 +388,15 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     seedBlock +
     // 후속 카드(2026-08-12) — 제목 유형 A/B 실측을 기획에 연결. 표본 게이트 미달이면 빈 문자열(무주입).
     titleTypeGuidanceBlock(activeBrandSlug() || '') +
+    // 조회수 감사(2026-08-20) 3종 배선 — 전부 데이터 부족·실패 시 빈 문자열(무주입, fail-open).
+    // ① 쇼츠 채널 실측: 파생 숏폼 YT/IG 조회수가 주제 선정에 처음으로 되먹임된다(종전 winners=블로그 전용).
+    shortsTopicSignalBlock(activeBrandSlug() || '') +
+    // ② 리서치 실측 판정 역류: 폐기(avoid)·기회(opportunity) 키워드 — 아래 후보 게이트와 이중 방어.
+    topicVerdictBlock() +
+    // ③ 실검색 연관어(자동완성 일일 스냅샷 diff): 주제 두뇌에 닿는 첫 실시간 검색 수요 신호.
+    trendSignalBlock() +
+    // 신호 서열 선언(리뷰 지적) — 명령형 블록 6종이 서열 없이 나열되면 micro 가 어느 지시에 최적화할지 비결정적.
+    `[신호 우선순위 — 위 신호들이 충돌할 때] 1) 실측 폐기·기존 콘텐츠 유사 회피(금지) > 2) 리서치 기회·실검색 연관어(우선 검토) > 3) 성과 계열 확장(참고). 금지가 항상 이긴다.\n\n` +
     `[기존 콘텐츠 — 주제·키워드 유사 금지]\n${existingLines || '(없음)'}\n\n` +
     `[최근 제작 — 중복 회피]\n${done || '(없음)'}\n\n` +
     `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}\n\n` +
@@ -428,6 +440,15 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       if (jarg.length) {
         console.log(`[auto-cycle] 아이디어 기각(어휘 함정어) — "${title}" ("${jarg[0]!.term}")`);
         rejects.push(`"${title}"=함정어(${jarg[0]!.term} — ${jarg[0]!.use}로)`);
+        continue;
+      }
+      // 리서치 폐기 판정 게이트(하드, 2026-08-20) — 실측으로 폐기된 키워드가 프롬프트 지시를 뚫고
+      // 재제안되던 실사고(처서: 08-16 폐기 판정 후 08-18~20 3건 재배정) 봉합. 정규화 완전 일치만
+      // 기각해 과차단을 막는다(파생 주제 판단은 프롬프트의 topicVerdictBlock 이 담당).
+      const avoided = keyword ? avoidVerdictFor(keyword) : null;
+      if (avoided) {
+        console.log(`[auto-cycle] 아이디어 기각(리서치 폐기 판정) — "${title}" (키워드 "${keyword}": ${avoided.reason.slice(0, 50)})`);
+        rejects.push(`"${title}"=리서치 실측 폐기 키워드(${keyword} — ${avoided.reason.slice(0, 40)})`);
         continue;
       }
       // 수종 앵커 게이트(하드) — 이름·상징 유래 축(4순위, 2026-08-13 투입) 전용 함정 차단. 실측(08-01):

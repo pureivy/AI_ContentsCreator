@@ -23,7 +23,7 @@ import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
 import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues } from './standaloneQa';
-import { narrationStyleIssues } from '../content/styleLint';
+import { narrationStyleIssues, hookKeywordLeadIssues } from '../content/styleLint';
 import { promiseStore } from '../content/promises';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
@@ -253,33 +253,62 @@ export async function reviseShorts(
     }
     // 재조립 — 잡과 동일한 폴백 체인(Remotion → ffmpeg). 내레이션 TTS 는 전 씬 재합성(교정 사전 적용).
     say(CONFIG.shortsRenderer === 'ffmpeg' ? '재조립 시작 — ffmpeg 슬라이드쇼' : '재조립 시작 — Remotion 모션그래픽');
-    let r = null as Awaited<ReturnType<typeof renderShortsVideo>> | null;
-    if (CONFIG.shortsRenderer !== 'ffmpeg') {
-      try {
-        r = await renderShortsVideoRemotion(dir, plan.scenes, images, {
-          clips, signal: opts.signal,
-          caption: {
-            bottomPct: CONFIG.shortsCaptionBottomPct, fontPx: CONFIG.shortsCaptionFontPx, hookFontPx: CONFIG.shortsCaptionHookFontPx,
-            ...(CONFIG.shortsCaptionKeyword && short.keyword ? { keyword: short.keyword } : {}),
-            ...(CONFIG.shortsCaptionOutline ? { outline: true } : {}),
-          },
+    const reassemble = async (p: Plan): Promise<Awaited<ReturnType<typeof renderShortsVideo>>> => {
+      let rr = null as Awaited<ReturnType<typeof renderShortsVideo>> | null;
+      if (CONFIG.shortsRenderer !== 'ffmpeg') {
+        try {
+          rr = await renderShortsVideoRemotion(dir, p.scenes, images, {
+            clips, signal: opts.signal,
+            caption: {
+              bottomPct: CONFIG.shortsCaptionBottomPct, fontPx: CONFIG.shortsCaptionFontPx, hookFontPx: CONFIG.shortsCaptionHookFontPx,
+              ...(CONFIG.shortsCaptionKeyword && short.keyword ? { keyword: short.keyword } : {}),
+              ...(CONFIG.shortsCaptionOutline ? { outline: true } : {}),
+            },
+            ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
+          });
+        } catch (e) { say(`모션 렌더 예외 → ffmpeg 폴백: ${e instanceof Error ? e.message.slice(0, 80) : e}`); rr = null; }
+      }
+      if (!rr || !rr.ok) {
+        if (rr) say(`모션 렌더 실패 → ffmpeg 폴백${rr.issues.length ? ` (${rr.issues.join(' · ').slice(0, 120)})` : ''}`);
+        rr = await renderShortsVideo(dir, p.scenes, images, {
+          signal: opts.signal,
           ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
         });
-      } catch (e) { say(`모션 렌더 예외 → ffmpeg 폴백: ${e instanceof Error ? e.message.slice(0, 80) : e}`); r = null; }
-    }
-    if (!r || !r.ok) {
-      if (r) say(`모션 렌더 실패 → ffmpeg 폴백${r.issues.length ? ` (${r.issues.join(' · ').slice(0, 120)})` : ''}`);
-      r = await renderShortsVideo(dir, plan.scenes, images, {
-        signal: opts.signal,
-        ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
-      });
-    }
+      }
+      return rr;
+    };
+    let r = await reassemble(plan);
     if (!r.ok || !r.videoPath) return fail(`재조립 실패 — ${r.issues.join(' · ').slice(0, 200)}`);
+    // 길이 상한 하드 집행(2026-08-20) — 잡 경로와 패리티. 수정요청이 내레이션을 늘려 상한을 넘겨도
+    // 초과본이 ready 로 나가지 않게 실측 속도 재감량→재조립(최대 2회).
+    for (let round = 1; (r.durationSec ?? 0) > CONFIG.shortsMaxDurationSec && round <= 2; round++) {
+      const io2: JobIO = { signal: opts.signal };
+      const chars = shortsNarrationChars(plan);
+      const cps = chars / Math.max(1, (r.durationSec ?? 1) - 2);
+      const fit2 = await fitShortsPlanToDuration(io2, plan, Math.floor((CONFIG.shortsMaxDurationSec - 5) * cps));
+      if (!fit2.compressed) { say(`길이 상한 재감량 실패(${round}/2) — 압축 응답 없음`); break; }
+      plan = fit2.plan;
+      fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
+      try {
+        const rdir = path.join(dir, 'remotion');
+        for (const f of fs.readdirSync(rdir)) if (/^narr_\d+\.mp3$/.test(f)) fs.unlinkSync(path.join(rdir, f)); // 구 대본 TTS 소거
+      } catch { /* 무해 */ }
+      say(`길이 상한 초과 ${r.durationSec}초 — 재감량 ${fit2.beforeChars}→${fit2.afterChars}자, 재조립(${round}/2)`);
+      const r2 = await reassemble(plan);
+      if (!r2.ok || !r2.videoPath) break;
+      r = r2;
+    }
+    if ((r.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) {
+      // 초과 확정 — ready 갱신은 막되 durationSec 은 실측값으로 기록(발행 게이트가 파일 실체와 같은 값을 보게).
+      store.update(id, { scenes: r.sceneCount, durationSec: r.durationSec });
+      return fail(`재조립 결과 ${r.durationSec}초 — 길이 상한(${CONFIG.shortsMaxDurationSec}초) 초과로 수정 반려. 대본을 줄이는 수정을 함께 요청해 주세요(영상 파일은 초과본으로 갱신된 상태)`);
+    }
+    const revisedVideoPath = r.videoPath; // 루프 재대입으로 풀린 내로잉 재확립
+    if (!revisedVideoPath) return fail('재조립 실패 — 결과 영상 경로 없음');
     const caption = [plan.title, '', plan.description, '', plan.hashtags.join(' ')].filter((x, i) => x || i === 1 || i === 3).join('\n');
     fs.writeFileSync(path.join(dir, 'caption.txt'), caption, 'utf-8');
     store.update(id, { stage: 'ready', scenes: r.sceneCount, durationSec: r.durationSec, topic: plan.title });
     say(`수정 완료 — ${plan.title.slice(0, 30)} · ${r.durationSec}초`);
-    if ((r.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) say(`⚠ 길이 상한 초과 — ${r.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초(대본 감량 필요, 검토 시 참고)`);
     // 썸네일 — 제목/캘리 문구/배경이 바뀐 경우만 재생성(문구 일치 유지). 실패 무해.
     if (applied.titleChanged || applied.titleArtCopy || applied.regenScenes.length) {
       try {
@@ -294,7 +323,7 @@ export async function reviseShorts(
     // 갱신 알림(완성 영상 재발송) — 사용자가 수정 결과를 바로 검수. 실패 무해.
     const done = store.get(id);
     if (done) {
-      void notifyShortsReady({ id, topic: done.topic, brand: done.brand, durationSec: r.durationSec, scenes: r.sceneCount, sourcePieceId: done.sourcePieceId, writer: done.writer, director: done.director }, r.videoPath).catch(() => { /* 무해 */ });
+      void notifyShortsReady({ id, topic: done.topic, brand: done.brand, durationSec: r.durationSec, scenes: r.sceneCount, sourcePieceId: done.sourcePieceId, writer: done.writer, director: done.director }, revisedVideoPath).catch(() => { /* 무해 */ });
     }
     return { ok: true, changedScenes: applied.changedScenes, regenScenes: applied.regenScenes, titleChanged: applied.titleChanged, titleArtChanged: !!applied.titleArtCopy };
   } catch (e) {
@@ -377,13 +406,15 @@ const SHORTS_TTS_CPS = 5.9;
 
 function shortsNarrationChars(p: Plan): number { return p.scenes.reduce((s, x) => s + x.narration.length, 0); }
 
-/** 길이 상한 초과 대본 1회 압축(사실·수치·결론 유지, 내레이션만 감량) — 실패해도 원본 유지(렌더 후 경고가 잡는다). */
-async function fitShortsPlanToDuration(io: JobIO, plan: Plan): Promise<{ plan: Plan; compressed: boolean; beforeChars: number; afterChars: number }> {
+/** 길이 상한 초과 대본 1회 압축(사실·수치·결론 유지, 내레이션만 감량) — 실패해도 원본 유지(호출부 하드 캡이 잡는다).
+ *  budgetCharsOverride: 렌더 후 실측 낭독 속도로 역산한 예산(하드 캡 재감량 경로) — 미지정 시 종전 정적 예산. */
+async function fitShortsPlanToDuration(io: JobIO, plan: Plan, budgetCharsOverride?: number): Promise<{ plan: Plan; compressed: boolean; beforeChars: number; afterChars: number }> {
   const cap = CONFIG.shortsMaxDurationSec;
-  const budget = Math.floor((cap - 5) * SHORTS_TTS_CPS); // 5초 여유 — TTS 속도 편차·업로드 인트로(1.6초)
+  const budget = budgetCharsOverride ?? Math.floor((cap - 5) * SHORTS_TTS_CPS); // 5초 여유 — TTS 속도 편차·업로드 인트로(1.6초)
   const before = shortsNarrationChars(plan);
   const keep = { plan, compressed: false, beforeChars: before, afterChars: before };
-  if (before <= Math.floor(cap * SHORTS_TTS_CPS)) return keep;
+  // 트리거: 정적 경로는 상한 예산(cap×CPS) 초과 시, 실측 예산 경로는 그 예산 초과 시.
+  if (before <= (budgetCharsOverride ?? Math.floor(cap * SHORTS_TTS_CPS))) return keep;
   const cur = plan.scenes.map((s, i) => `${i + 1}. ${s.narration}`).join('\n');
   const j = await microJSON<{ scenes?: Array<{ index?: unknown; narration?: unknown } | null> }>(
     stdModel(),
@@ -421,6 +452,9 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     `씬 ${n}개의 유튜브 숏폼 대본을 기획하라. 씬1=훅(3패턴 중 택1), 씬2=전제(이 영상이 무엇에 대한 이야기이고 왜 문제/중요한지를 못박는다 — 원문의 핵심 인과 한 줄), 마지막 씬=CTA.`,
     '시청자는 원문 블로그를 본 적이 없다 — 영상 단독으로 완결되게 써라: 핵심 주제어(식물명·행위명 등)를 훅 또는 씬2에서 반드시 명시하고, 지시어·축약어("짝"·"그 방법"·"두 그루" 류)는 앞 씬에서 뜻을 세운 뒤에만 사용하라. 단, 명시는 검색 표기 그대로일 필요 없다 — 키워드 명사구를 통째로 주어 자리에 세우지 말고("가을 묘목 심는 법은 ~로 정해집니다" 식 금지, 검색용 문장 티가 난다) 조사·어순을 바꿔 말이 되는 꼴로 녹여라("가을에 묘목을 심을 땐 날짜보다 뿌리부터 봐요"). 검색 표기 그대로의 노출은 title·titles·description·해시태그·screenText 가 담당한다. 단 씬2(전제)의 정의 한 문장은 예외 — 뒤 씬에서 쓸 기준·개념(예: "두 선")은 씬2에서 이름 붙여 뜻을 세워라. 어순·조사는 바꿔도 되지만 정의 자체를 얼버무리지 마라. 훅에서 감춘 대상도 씬2에서 반드시 밝힌다.',
     '훅 금지 문형: "~보셨나요?/~라고요? + 정작/사실은/그럼 이미 ~" 질문-반전 공식(최근 편들이 과다 사용). 단정 선언("까맣게 익어도 아직 이릅니다"), 구체 장면, 숫자 제시, 청자 상황 지목, 짧은 제동("잠깐,") 등에서 앞 편들과 다른 유형을 골라라.',
+    // 첫 2초 훅 분리(2026-08-20 조회수 감사) — 최근 47편 중 17편이 첫 2초를 키워드·상품명 낭독에 써서
+    // 추천 피드 이탈 요인이 됐다. 검색 표기는 제목·캘리·화면텍스트가 담당(사용자 확정 원칙 유지).
+    '훅 첫 문장을 키워드·수종명·상품명 낭독으로 열지 마라 — 첫 2초(약 12자)가 스와이프 이탈을 결정한다. 긴장·장면·숫자·상황 지목으로 열고, 키워드 명시는 훅의 뒷문장 또는 씬2에서 하라.',
     keyword ? `대표 제목(title)과 정보형 제목 후보에는 핵심 키워드 '${keyword}' 를 정확히 이 표기 그대로, 가급적 앞쪽에 포함하라(검색 노출용 — 제한된 글자수를 이유로 키워드를 빼지 마라). 키워드는 명사구 그대로 자연스럽게 결합하고 어미를 붙여 동사화하지 마라.` : '',
     'CTA 씬은 팔로우할 이유를 담아라 — 이 채널이 계속 주는 가치 한 구절(브랜드 맥락에 맞게) 또는 다음 편 예고 중 하나. "구독과 좋아요 부탁드려요" 같은 기계적 문구 금지. "계속 기록/정리해 드립니다" 계열 문구 재사용 금지 — 기록하는 채널 컨셉은 유지하되 표현은 매편 새로 지어라.',
     '다음 편 예고를 CTA 에 넣었으면 JSON 의 next 필드에 그 주제와 적절한 시기("N월")를 선언하라 — 예고는 시스템이 약속으로 기록해 그 시기에 실제로 제작한다. 지킬 수 있는 예고만 하고, 예고를 안 했으면 next 를 생략하라.',
@@ -487,6 +521,8 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     const probs = [
       ...await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)', plan.scenes.map((s) => s.narration), topic, keyword, io.signal),
       ...narrationStyleIssues(plan.scenes.map((s) => s.narration)),
+      // 훅 키워드 낭독 결정적 린트(2026-08-20) — 프롬프트 지시 단독은 샌다는 실측 전례(문체 린트와 동일 사상).
+      ...hookKeywordLeadIssues(plan.scenes.map((s) => s.narration), keyword),
     ].slice(0, 8);
     if (probs.length) {
       const m = `단독 이해·문체 검산 — ${probs.length}건 → 수정 라운드 (${probs[0]?.slice(0, 50)})`;
@@ -585,8 +621,10 @@ export async function runShortsJob(
     // 지시문 단독은 새므로 최근 편의 원문을 직접 보여주고 "겹치면 다시 써라"로 못박는다.
     const hooksBlock = recentHooksToAvoid(short.brand, short.id);
     say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'}`);
-    let plan = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'));
-    if (!plan) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
+    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'));
+    if (!planned) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
+    // Plan 타입 재선언 — 길이 상한 루프의 재대입이 클로저(씬 map 등) 내로잉을 풀지 않게 non-null 로 고정.
+    let plan: Plan = planned;
     // 길이 상한 집행(사용자 확정 2026-08-14: 총 60초 이내) — 예산 초과 대본은 1회 압축.
     const fit = await fitShortsPlanToDuration(io, plan);
     if (fit.compressed) say(`대본 감량 — ${fit.beforeChars}→${fit.afterChars}자(길이 상한 ${CONFIG.shortsMaxDurationSec}초 예산)`);
@@ -693,41 +731,75 @@ export async function runShortsJob(
 
     // 4) 조립 — 기본 Remotion 모션그래픽, 실패 시 ffmpeg 슬라이드쇼로 폴백(무중단).
     say(CONFIG.shortsRenderer === 'ffmpeg' ? '영상 조립 시작 — ffmpeg 슬라이드쇼' : '영상 조립 시작 — Remotion 모션그래픽');
-    let r = null as Awaited<ReturnType<typeof renderShortsVideo>> | null;
     let titleArt: Awaited<ReturnType<typeof generateTitleArt>> = null;
-    if (CONFIG.shortsRenderer !== 'ffmpeg') {
+    if (CONFIG.shortsRenderer !== 'ffmpeg' && CONFIG.shortsTitleOverlay) {
       // 상단 제목 캘리(썸네일과 같은 카피, 투명 PNG) — 렌더 전에 생성해야 오버레이 가능. 실패해도 무해(오버레이 생략).
-      if (CONFIG.shortsTitleOverlay) {
-        titleArt = await generateTitleArt({ dir, title: plan.title, description: plan.description, titles: plan.titles, keyword: short.keyword, signal: opts.signal });
-        checkAbort(); // 취소가 '스킵' 메시지로 위장되지 않게 — abort 는 null 로 삼켜져 나온다
-        say(titleArt ? '상단 제목 캘리 생성 완료' : '상단 제목 캘리 스킵(오버레이 없이 진행)');
+      titleArt = await generateTitleArt({ dir, title: plan.title, description: plan.description, titles: plan.titles, keyword: short.keyword, signal: opts.signal });
+      checkAbort(); // 취소가 '스킵' 메시지로 위장되지 않게 — abort 는 null 로 삼켜져 나온다
+      say(titleArt ? '상단 제목 캘리 생성 완료' : '상단 제목 캘리 스킵(오버레이 없이 진행)');
+    }
+    // 조립 1회(Remotion → ffmpeg 폴백 체인) — 길이 상한 재조립(아래 하드 캡)이 재사용하므로 클로저로 묶는다.
+    const assemble = async (p: Plan): Promise<Awaited<ReturnType<typeof renderShortsVideo>>> => {
+      let rr = null as Awaited<ReturnType<typeof renderShortsVideo>> | null;
+      if (CONFIG.shortsRenderer !== 'ffmpeg') {
+        try {
+          rr = await renderShortsVideoRemotion(dir, p.scenes, images, {
+            clips: cv.clips, signal: opts.signal,
+            // 자막 옵션 — 위치(플랫폼 UI 가림 회피)·키워드 강조색(설정 기반, A/B 선택 후 기본값 확정).
+            caption: {
+              bottomPct: CONFIG.shortsCaptionBottomPct,
+              fontPx: CONFIG.shortsCaptionFontPx,
+              hookFontPx: CONFIG.shortsCaptionHookFontPx,
+              ...(CONFIG.shortsCaptionKeyword && short.keyword ? { keyword: short.keyword } : {}),
+              ...(CONFIG.shortsCaptionOutline ? { outline: true } : {}),
+            },
+            ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
+          });
+        }
+        catch (e) { say(`모션 렌더 예외 → ffmpeg 폴백: ${e instanceof Error ? e.message.slice(0, 80) : e}`); rr = null; }
       }
-      try {
-        r = await renderShortsVideoRemotion(dir, plan.scenes, images, {
-          clips: cv.clips, signal: opts.signal,
-          // 자막 옵션 — 위치(플랫폼 UI 가림 회피)·키워드 강조색(설정 기반, A/B 선택 후 기본값 확정).
-          caption: {
-            bottomPct: CONFIG.shortsCaptionBottomPct,
-            fontPx: CONFIG.shortsCaptionFontPx,
-            hookFontPx: CONFIG.shortsCaptionHookFontPx,
-            ...(CONFIG.shortsCaptionKeyword && short.keyword ? { keyword: short.keyword } : {}),
-            ...(CONFIG.shortsCaptionOutline ? { outline: true } : {}),
-          },
+      if (!rr || !rr.ok) {
+        // 실패 사유 동봉(2026-08-08) — 종전엔 r.issues 를 버려 "왜 폴백했나"를 사후 추적할 수 없었다(관측 공백).
+        if (rr) say(`모션 렌더 실패 → ffmpeg 슬라이드쇼로 폴백${rr.issues.length ? ` (${rr.issues.join(' · ').slice(0, 140)})` : ''}`);
+        // 폴백에도 상단 제목 전달 — Remotion 실패 시 제목이 통째로 사라지던 실측(참나무 쇼츠) 봉합.
+        rr = await renderShortsVideo(dir, p.scenes, images, {
+          signal: opts.signal,
           ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
         });
       }
-      catch (e) { say(`모션 렌더 예외 → ffmpeg 폴백: ${e instanceof Error ? e.message.slice(0, 80) : e}`); r = null; }
-    }
-    if (!r || !r.ok) {
-      // 실패 사유 동봉(2026-08-08) — 종전엔 r.issues 를 버려 "왜 폴백했나"를 사후 추적할 수 없었다(관측 공백).
-      if (r) say(`모션 렌더 실패 → ffmpeg 슬라이드쇼로 폴백${r.issues.length ? ` (${r.issues.join(' · ').slice(0, 140)})` : ''}`);
-      // 폴백에도 상단 제목 전달 — Remotion 실패 시 제목이 통째로 사라지던 실측(참나무 쇼츠) 봉합.
-      r = await renderShortsVideo(dir, plan.scenes, images, {
-        signal: opts.signal,
-        ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
-      });
-    }
+      return rr;
+    };
+    let r = await assemble(plan);
     if (!r.ok || !r.videoPath) throw new Error(`조립 실패 — ${r.issues.join(' · ').slice(0, 250)}`);
+    // 길이 상한 하드 집행(2026-08-20 사용자 지시) — 소프트 경고(08-14)로는 61~77초 발행이 계속됐고,
+    // 조회수 감사에서 08-11 길이 폭증(평균 47→62.9초)이 유튜브 하락 변곡점과 겹치는 최대 요인으로 실측됐다.
+    // 초과 시 '이 영상의 실측 낭독 속도'로 예산을 역산해 재감량→재조립(최대 2회). 그래도 초과면 ready 로
+    // 내보내지 않고 실패 처리한다(error 는 파생 게이트를 점유하지 않아 다음 자율 틱이 같은 글에서 새 대본으로
+    // 재파생한다 — 같은 글 실패 2회부터 중단. main.ts 파생 게이트와 한 몸).
+    for (let round = 1; (r.durationSec ?? 0) > CONFIG.shortsMaxDurationSec && round <= 2; round++) {
+      checkAbort();
+      const chars = shortsNarrationChars(plan);
+      const cps = chars / Math.max(1, (r.durationSec ?? 1) - 2); // 인트로(1.6초)·여백 보정한 실측 자/초
+      const fit2 = await fitShortsPlanToDuration(io, plan, Math.floor((CONFIG.shortsMaxDurationSec - 5) * cps));
+      if (!fit2.compressed) { say(`길이 상한 재감량 실패(${round}/2) — 압축 응답 없음`); break; }
+      plan = fit2.plan;
+      fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8'); // 수정요청 재조립이 같은 대본을 보게
+      // 구 대본 TTS 잔존 소거 — 재조립 라운드에서 씬 TTS 가 실패하면 ffmpeg 폴백이 감량 전 mp3 를
+      // 재사용해 자막(신 대본)·오디오(구 대본) 불일치 영상이 될 수 있다(리뷰 지적). 대본이 바뀌었으니 캐시 무효.
+      try {
+        const rdir = path.join(dir, 'remotion');
+        for (const f of fs.readdirSync(rdir)) if (/^narr_\d+\.mp3$/.test(f)) fs.unlinkSync(path.join(rdir, f));
+      } catch { /* 디렉토리 없음 등 — 무해 */ }
+      say(`길이 상한 초과 ${r.durationSec}초 — 실측 ${cps.toFixed(1)}자/초 기준 재감량 ${fit2.beforeChars}→${fit2.afterChars}자, 재조립(${round}/2)`);
+      const r2 = await assemble(plan);
+      if (!r2.ok || !r2.videoPath) break; // 재조립 실패 — 직전 완성본 유지, 아래 게이트가 판정
+      r = r2;
+    }
+    if ((r.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) {
+      throw new Error(`길이 상한 초과 — ${r.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초(재감량 후에도 초과, 하드 캡으로 발행 보류)`);
+    }
+    const finalVideoPath = r.videoPath; // 루프 재대입으로 풀린 내로잉 재확립(r2 는 ok+videoPath 확인분만 채택됨)
+    if (!finalVideoPath) throw new Error('조립 실패 — 결과 영상 경로 없음');
     const fallbacks = r.issues.filter((x) => x.includes('배경 폴백')).length;
 
     // 캡션 파일(업로드 편의) — 제목·설명·해시태그.
@@ -739,7 +811,6 @@ export async function runShortsJob(
       topic: plan.title || short.topic,
     });
     say(`${plan.title.slice(0, 30)} — ${r.durationSec}초 · 씬 ${r.sceneCount}개 완성${fallbacks ? ` (배경 폴백 ${fallbacks}씬)` : ''}`);
-    if ((r.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) say(`⚠ 길이 상한 초과 — ${r.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초(대본 감량 필요, 검토 시 참고)`);
     // 검토 대기 알림(완성 영상 동봉, 50MB 초과 시 텍스트 폴백) — fire-and-forget, 실패 무해.
     {
       const done = store.get(id);
@@ -748,7 +819,7 @@ export async function runShortsJob(
         void notifyShortsReady({
           id, topic: done.topic, brand: done.brand, durationSec: r.durationSec, scenes: r.sceneCount,
           sourcePieceId: done.sourcePieceId, writer: done.writer, director: done.director,
-        }, r.videoPath).finally(() => { try { store.update(id, { notifiedTs: new Date().toISOString() }); } catch { /* 무해 */ } });
+        }, finalVideoPath).finally(() => { try { store.update(id, { notifiedTs: new Date().toISOString() }); } catch { /* 무해 */ } });
       }
       // 예고 대장 등록 — CTA 에 다음 편 예고를 선언했으면 약속으로 기록(자율 틱이 시기 도래 시 이행). 실패 무해.
       // brand 는 잡의 것을 명시(null=범용) — 라이브 activeBrand 로의 오귀속 방지.
@@ -779,7 +850,7 @@ export async function runShortsJob(
     if (CONFIG.autoYtUpload) {
       // 인트로(1.6초=디자인 썸네일) 붙은 영상 업로드 + 썸네일=그 영상 첫 프레임 — 미지정 시 유튜브가
       // 중간 프레임을 자동 선택해 커버가 엉뚱해짐(실측 2026-07-22, 사용자 방침: 맨 처음이 보이게).
-      const ytVideo = (await ensureShortsDownload(dir).catch(() => null)) ?? r.videoPath;
+      const ytVideo = (await ensureShortsDownload(dir).catch(() => null)) ?? finalVideoPath;
       const ytCover = await extractFirstFrame(ytVideo, path.join(dir, 'yt-cover.jpg'), opts.signal).catch(() => null);
       const up = await uploadShortsToYoutube({
         slug: short.brand ?? '', videoPath: ytVideo,

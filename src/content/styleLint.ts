@@ -49,6 +49,24 @@ export function narrationStyleIssues(narrations: string[]): string[] {
 }
 
 /**
+ * 훅 첫 2초 키워드 낭독 린트(순수) — 쇼츠 조회수 감사(2026-08-20) 실측: 최근 47편 중 17편이
+ * 훅 첫 2초(TTS ≈12자)를 검색 키워드·상품명 낭독에 써서 추천 피드 이탈 요인이 됐다.
+ * 검색 표기 노출은 제목·화면텍스트·캘리가 담당한다(사용자 확정 e72c6c0) — 낭독 훅만 검사한다.
+ * 판정: 훅 '첫 문장'이 공백 제거 후 키워드로 '시작'할 때만 위반(startsWith). 부분 문자열 포함 검사는
+ * "곶감나무"⊃"감나무" 오탐과, 지시 준수 대본('잠깐,'+뒷문장 키워드)을 벌주는 이중구속을 만든다(리뷰 실측).
+ * 2자 미만 키워드는 통과. 회피 변형("자, 배롱나무…")은 프롬프트 지시가 담당한다 — 린트는 2차 방어일 뿐.
+ */
+export function hookKeywordLeadIssues(narrations: string[], keyword?: string): string[] {
+  const hook = (narrations[0] ?? '').trim();
+  const kw = (keyword ?? '').replace(/\s+/g, '');
+  if (!hook || kw.length < 2) return [];
+  const firstSentence = splitSentences(hook)[0] ?? hook;
+  return firstSentence.replace(/\s+/g, '').startsWith(kw)
+    ? [`항목1: 훅이 키워드 "${keyword}" 낭독으로 시작한다 — 첫 2초는 긴장·장면·숫자·상황 지목으로 열고, 키워드 명시는 훅 뒷문장 또는 씬2로 미뤄라`]
+    : [];
+}
+
+/**
  * 카드뉴스 슬라이드 문체 린트 — 실측 지문 2종.
  * ① 같은 종결어미('-ㅂ니다')로 끝나는 장이 3장 연속(40장 중 36장 실측)
  * ② 'X가 아니라 Y' 재정의 문형 2회 이상

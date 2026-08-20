@@ -10,7 +10,7 @@ import { getSecret, getMetaAccount } from '../secrets/store';
 import { fetchTimeout } from '../util/fetch';
 import { appendMetrics, readMetrics, type MetricSample } from './performance';
 import { shortsStore, type Shorts } from '../content/shorts';
-import { isSafeBrandSlug } from '../content/brand';
+import { isSafeBrandSlug, activeBrandSlug, getBrand } from '../content/brand';
 import { llmWikiFor } from '../wiki/llmwiki';
 import { appendMemory, appendActivity } from '../agents/workspace';
 import { pieceStore } from '../content/pieces';
@@ -278,4 +278,75 @@ export async function syncShortsMetaPerformance(opts: { force?: boolean } = {}):
       } catch (e) { console.log('[perf-sync]', `릴스 ${s.id} 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
     }
   } catch (e) { console.log('[perf-sync]', `릴스 동기화 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+}
+
+/** 키워드 계열별 실측 요약(순수, 테스트 대상) — shortsTopicSignalBlock 의 집계 코어.
+ *  rows: 쇼츠 1편 = 1행(발행 72h+ 경과분의 최신 YT·IG 조회수, 미측정 채널은 음수).
+ *  미측정(-1)은 0 이 아니라 '없음'으로 다룬다 — 단일 채널만 발행된 계열이 합산 랭킹에서 '부진'으로
+ *  오귀속되던 리뷰 지적 대응. 랭킹 키는 측정된 채널 중앙값의 최대값(채널 커버리지 차이에 강건). */
+export function aggregateShortsTopicRows(
+  rows: Array<{ label: string; yt: number; ig: number }>,
+): Array<{ label: string; n: number; ytMed: number | null; igMed: number | null }> {
+  const median = (xs: number[]): number | null => {
+    const s = xs.filter((x) => x >= 0).sort((a, b) => a - b);
+    return s.length ? (s.length % 2 ? s[(s.length - 1) / 2]! : Math.round((s[s.length / 2 - 1]! + s[s.length / 2]!) / 2)) : null;
+  };
+  const byLabel = new Map<string, { yts: number[]; igs: number[] }>();
+  for (const r of rows) {
+    const g = byLabel.get(r.label) ?? { yts: [], igs: [] };
+    g.yts.push(r.yt); g.igs.push(r.ig);
+    byLabel.set(r.label, g);
+  }
+  return [...byLabel.entries()]
+    .map(([label, g]) => ({ label, n: g.yts.length, ytMed: median(g.yts), igMed: median(g.igs) }))
+    .sort((a, b) => Math.max(b.ytMed ?? 0, b.igMed ?? 0) - Math.max(a.ytMed ?? 0, a.igMed ?? 0));
+}
+
+/**
+ * 주제 두뇌 주입용 쇼츠 채널 실측 블록 — 조회수 감사(2026-08-20)의 배선 공백 봉합: 쇼츠 YT/IG 성과는
+ * 직원 메모리·위키에만 쌓이고 주제 선정(winners=블로그 지표 전용)에는 한 번도 닿지 않았다.
+ * 소재를 코드에 박지 않는다(브랜드 오염 금지 원칙) — 실데이터에서 상·하위 계열을 뽑아 보여줄 뿐,
+ * 판단은 두뇌(LLM)가 브랜드 컨텍스트 안에서 한다. 발행 72h 미만은 제외(YT 조회수는 72h 내 완결 실측
+ * — 신작의 낮은 수치가 '부진'으로 오귀속되는 연령 편향 차단). 표본 부족·실패는 빈 문자열(무주입).
+ */
+export function shortsTopicSignalBlock(slug?: string): string {
+  try {
+    const brand = slug ?? activeBrandSlug();
+    const now = Date.now();
+    const rows: Array<{ label: string; yt: number; ig: number }> = [];
+    for (const s of shortsStore().list()) {
+      if ((s.brand ?? '') !== (brand || '')) continue;
+      const pubTs = s.youtubeTs ?? s.metaPublishedTs;
+      if (!pubTs) continue; // 미발행 — 실측 없음
+      const age = now - new Date(pubTs).getTime();
+      if (!Number.isFinite(age) || age < 3 * 86_400_000) continue;
+      const samples = readMetrics(s.id);
+      const latest = (source: string): number => {
+        for (let i = samples.length - 1; i >= 0; i--) { const x = samples[i]!; if (x.source === source) return x.views; }
+        return -1;
+      };
+      const yt = latest('youtube:api'); const ig = latest('meta:ig');
+      if (yt < 0 && ig < 0) continue; // 측정 자체가 없음(비공개 등)
+      let keyword = (s.sourcePieceId
+        ? (() => { try { return pieceStore().get(s.sourcePieceId!)?.keyword; } catch { return undefined; } })() ?? s.keyword
+        : s.keyword)?.trim();
+      // 함정어 세탁(리뷰 지적) — 라벨에 avoidJargon 함정어가 그대로 실리면 같은 프롬프트의 어휘 지침
+      // ("시비→…로 풀어 써라")과 충돌해 두뇌가 함정어 변형 후보를 내고 하드 게이트에 기각당한다.
+      for (const j of getBrand()?.avoidJargon ?? []) {
+        if (keyword?.includes(j.term)) keyword = keyword.split(j.term).join(j.use);
+      }
+      rows.push({ label: keyword || (s.title ?? s.topic).slice(0, 24), yt, ig });
+    }
+    const agg = aggregateShortsTopicRows(rows);
+    if (agg.length < 6) return ''; // 표본 게이트 — 계열이 적으면 무주입(titleTypeGuidance 와 동일 사상)
+    const num = (v: number | null): string => v == null ? '측정 없음' : v.toLocaleString();
+    const fmt = (r: { label: string; n: number; ytMed: number | null; igMed: number | null }): string =>
+      `- ${r.label}${r.n > 1 ? ` ×${r.n}편` : ''} (유튜브 ${num(r.ytMed)} · 인스타 ${num(r.igMed)})`;
+    // 하위 슬라이스는 상위(0~4)와 겹치지 않게 — 계열 6~9개 구간에서 같은 계열이 상·하위 동시 등재되던 리뷰 지적.
+    const bottom = agg.slice(Math.max(5, agg.length - 5));
+    return `[쇼츠 채널 실측 — 이 주제들에서 파생된 숏폼의 조회수(발행 72시간 경과분, 계열 중앙값)]\n` +
+      `잘 된 계열(상위):\n${agg.slice(0, 5).map(fmt).join('\n')}\n` +
+      `부진 계열(하위):\n${bottom.reverse().map(fmt).join('\n')}\n` +
+      `반영 지침: 파생 숏폼까지 잘 되는 글이 좋은 글이다 — 상위 계열의 소재·접근 방식(예: 구별법·원인 진단처럼 결과가 보이는 틀)은 인접 영역으로 확장하고, 하위 계열과 같은 틀의 반복은 줄여라. 소재 범위의 기준은 언제나 [브랜드 컨텍스트]다.\n\n`;
+  } catch { return ''; }
 }

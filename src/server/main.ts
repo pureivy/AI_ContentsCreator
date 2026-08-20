@@ -63,6 +63,8 @@ import type { BrandProfile } from '../content/brand';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
 import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shortsMetaPerfStale } from '../analytics/shortsPerf';
+import { harvestTopicVerdicts, avoidVerdictFor } from '../analytics/topicVerdicts';
+import { refreshTrendSnapshot } from '../analytics/trendSignal';
 import { syncCardnewsPerformance, cardnewsPerfStale } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
@@ -1412,6 +1414,8 @@ app.post('/shorts/:id/youtube', async (c) => {
   const s = shortsStore().get(id);
   if (!s) return c.json({ error: 'unknown shorts' }, 404);
   if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
+  // 길이 상한 발행 게이트(2026-08-20 하드 캡) — 어떤 경로(수정요청 재조립·구버전 잔존분)로 ready 가 됐든 초과본 발행 차단.
+  if ((s.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) return c.json({ error: `길이 상한 초과(${s.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초) — ✍수정요청으로 대본을 줄인 뒤 발행하세요` }, 409);
   if (s.youtubeUrl) return c.json({ error: '이미 업로드됨', url: s.youtubeUrl }, 409); // 중복 영상·쿼터 낭비 방지
   if (ytPublishInFlight.has(id)) return c.json({ error: '이미 업로드 처리 중입니다' }, 409);
   ytPublishInFlight.add(id);
@@ -1796,6 +1800,8 @@ app.post('/shorts/:id/meta', async (c) => {
   const s = shortsStore().get(id);
   if (!s) return c.json({ error: 'unknown shorts' }, 404);
   if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
+  // 길이 상한 발행 게이트(2026-08-20 하드 캡) — 유튜브 핸들러와 동일. 초과본은 어떤 경로로도 발행 불가.
+  if ((s.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) return c.json({ error: `길이 상한 초과(${s.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초) — ✍수정요청으로 대본을 줄인 뒤 발행하세요` }, 409);
   // 완료 판정 = 릴스 id + 실제 퍼머링크 + (페이지 연결 시) FB 릴스 id. 홈 URL 잔재만 있으면 재시도가 링크를 보강하게 통과.
   // FB 페이지를 나중에 연결한 경우 IG 완료만으로 막으면 페북 릴스는 영구히 못 올라간다 → FB 미게시면 통과.
   const shortsAcct = getMetaAccount(s.brand ?? '');
@@ -2050,7 +2056,12 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
             ? `[카드뉴스] 자동 파생 실패 — ${piece.title.slice(0, 25)}: ${dc.error}`
             : `[카드뉴스] 자동 파생 시작 — ${piece.title.slice(0, 30)} (${dc.card.id})`);
         }
-        if (CONFIG.autoShorts && !shortsStore().list().some((x) => x.sourcePieceId === id)) {
+        // error 레코드는 점유로 안 본다(2026-08-20 하드 캡 리뷰) — 길이 상한 등으로 실패한 파생이 그 글의
+        // 쇼츠를 영구 결손시키지 않게. 단 같은 글 실패 2회부터는 재파생 중단(계속 실패하는 소재 폭주 방지).
+        if (CONFIG.autoShorts && (() => {
+          const mine = shortsStore().list().filter((x) => x.sourcePieceId === id);
+          return !mine.some((x) => x.stage !== 'error') && mine.filter((x) => x.stage === 'error').length < 2;
+        })()) {
           const ds = deriveShortsFromPiece(id);
           console.log('error' in ds
             ? `[숏폼] 자동 파생 실패 — ${piece.title.slice(0, 25)}: ${ds.error}`
@@ -2622,6 +2633,9 @@ function purgeBrandData(slug: string): { pieces: number; cards: number; shorts: 
   move(path.join(CONFIG.dataDir, '_shared', `research-state-${slug}.json`), `research-state-${slug}.json`);
   move(path.join(CONFIG.dataDir, 'analytics', `strategy-${slug}.json`), `strategy-${slug}.json`);
   move(path.join(CONFIG.dataDir, '_shared', `decisions-${slug}.md`), `decisions-${slug}.md`);
+  // 리서치 판정·트렌드 스냅샷(2026-08-20 신설)도 동반 정리 — 잔존 시 새 브랜드가 죽은 브랜드의 폐기 게이트·연관어를 승계.
+  move(path.join(CONFIG.dataDir, 'topics', `verdicts-${slug}.json`), `verdicts-${slug}.json`);
+  move(path.join(CONFIG.dataDir, 'topics', `trend-snap-${slug}.json`), `trend-snap-${slug}.json`);
   // 브랜드 스코프 커스텀 API 키도 동반 제거 — 잔존 시 카드 도달 불가·동명 재추가 영구 거부·값 전역 주입.
   const keys = purgeCustomKeysForBrand(slug);
   // 채널 계정 blob(네이버 로그인·유튜브 토큰·메타 토큰)도 동반 제거 — 잔존 시 기밀 잔존+동명 재생성 브랜드가 옛 계정 승계.
@@ -3489,13 +3503,16 @@ async function pickAutoWork(signal?: AbortSignal, force = false): Promise<AutoWo
           // filterCandidates 재사용 — 시드 가족(파생·동일 키워드)은 차별화 부분으로만 대조(전 후보 오기각 방지).
           const seedTitle = (cand.seedPieceId ? pieceStore().get(cand.seedPieceId)?.title : undefined) ?? '';
           const off = offBrandTerm(`${cand.title} ${cand.keyword}`);
+          // 리서치 폐기 판정 게이트(2026-08-20 리뷰) — proposeContentIdeas 만 막으면 클러스터 소진 경로로
+          // 폐기 키워드가 그대로 재배정된다(처서 실사고의 두 번째 공급로). 정규화 완전 일치만 기각.
+          const avoided = off ? null : avoidVerdictFor(cand.keyword, tickBrand || undefined);
           const existingNow = collectExistingContent(tickBrand || undefined);
-          const gate = off ? null : filterCandidates([cand.keyword], cand.seedKeyword, seedTitle, existingNow);
+          const gate = (off || avoided) ? null : filterCandidates([cand.keyword], cand.seedKeyword, seedTitle, existingNow);
           const dupWhy = gate && !gate.pass.length ? (gate.rejected[0]?.why ?? '게이트 기각') : '';
-          const sat = (off || dupWhy) ? [] : saturatedThemeMatches({ title: cand.title, keyword: cand.keyword }, existingNow, 3, getBrand()?.compoundStems ?? []);
-          if (off || dupWhy) {
+          const sat = (off || avoided || dupWhy) ? [] : saturatedThemeMatches({ title: cand.title, keyword: cand.keyword }, existingNow, 3, getBrand()?.compoundStems ?? []);
+          if (off || avoided || dupWhy) {
             clusterStore().update(cand.id, { status: 'dropped' });
-            console.log(`[auto-cycle] 클러스터 기각 — "${cand.keyword}" (${off ? `소재 "${off}"` : dupWhy}) → dropped`);
+            console.log(`[auto-cycle] 클러스터 기각 — "${cand.keyword}" (${off ? `소재 "${off}"` : avoided ? `리서치 폐기 판정(${avoided.reason.slice(0, 40)})` : dupWhy}) → dropped`);
           } else if (sat.length) {
             console.log(`[auto-cycle] 클러스터 보류(소재 포화) — "${cand.keyword}" ≈ "${sat[0]!.title.slice(0, 24)}" → 신규 아이디어로 폴백`);
           } else {
@@ -3520,9 +3537,14 @@ async function pickAutoWork(signal?: AbortSignal, force = false): Promise<AutoWo
     .sort((a, b) => b.updatedTs.localeCompare(a.updatedTs));
   if (CONFIG.autoShortsPerDay > 0) {
     const all = shortsStore().list().filter((s) => (s.brand ?? '') === tickBrand);
-    const last = all.filter((s) => s.auto).reduce((mx, s) => (s.createdTs > mx ? s.createdTs : mx), ''); // 자율 생산분만(수동 제외)
+    // error 제외(2026-08-20 하드 캡 리뷰) — 실패 건이 케이던스 슬롯을 소진하거나 소스 글을 영구 점유하지 않게.
+    // 같은 글 실패 2회부터는 재파생 중단(폭주 방지) — 네이버 저장 훅의 파생 게이트와 동일 규약.
+    const last = all.filter((s) => s.auto && s.stage !== 'error').reduce((mx, s) => (s.createdTs > mx ? s.createdTs : mx), ''); // 자율 생산분만(수동 제외)
     if (derivedContentDue(CONFIG.autoShortsPerDay, last || undefined) && !all.some((s) => isShortsRunning(s.id))) {
-      const src = derivable.find((p) => !all.some((s) => s.sourcePieceId === p.id));
+      const src = derivable.find((p) => {
+        const mine = all.filter((s) => s.sourcePieceId === p.id);
+        return !mine.some((s) => s.stage !== 'error') && mine.filter((s) => s.stage === 'error').length < 2;
+      });
       if (src) return { kind: 'shorts', pieceId: src.id, title: src.title };
     }
   }
@@ -3695,7 +3717,8 @@ const stopPerfSync = startDaily({
   // 팔로워 스냅샷을 여기에도 건다 — 종전엔 일일 브리핑 잡에만 달려 있었는데, DAILY_BRIEFING_TIME 이
   // 비어 있으면 startDaily 가 no-op 이라 스냅샷이 **한 번도 정기 수집되지 않았다**(실측 2026-08-02:
   // 설정 비어 있음 + 스냅샷 07-31 에서 정지). 브리핑 설정 여부와 팔로워 추적은 서로 묶일 이유가 없다.
-  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void recordFollowersSnapshot().catch(() => {}); }, // 쇼츠·카드뉴스·릴스는 순수 API — 프로필 락 무관
+  // 조회수 감사(2026-08-20) 일일 배선 — 리서치 판정 수확 + 자동완성 트렌드 스냅샷(둘 다 fail-open, 주제 두뇌가 소비).
+  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void recordFollowersSnapshot().catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); }, // 쇼츠·카드뉴스·릴스는 순수 API — 프로필 락 무관
   log: (m) => console.log('[perf-sync]', m),
 });
 if (CONFIG.performanceSyncTime) {

@@ -1,5 +1,27 @@
 import { describe, it, expect } from 'vitest';
-import { shortsSignal, parseStatsResponse, shortsPerfDue, shouldRecordMemory, countSamples, shortsMetaPerfDue, parseFbVideoStats } from './shortsPerf';
+import { shortsSignal, parseStatsResponse, shortsPerfDue, shouldRecordMemory, countSamples, shortsMetaPerfDue, parseFbVideoStats, aggregateShortsTopicRows } from './shortsPerf';
+
+describe('aggregateShortsTopicRows — 키워드 계열 중앙값 랭킹(순수, 2026-08-20 주제 되먹임)', () => {
+  it('같은 계열 여러 편은 중앙값으로 묶고, 합산 중앙값 내림차순 정렬한다', () => {
+    const out = aggregateShortsTopicRows([
+      { label: '배롱나무', yt: 800, ig: 2500 },
+      { label: '배롱나무', yt: 900, ig: 5200 },
+      { label: '묘목 고르는 법', yt: 400, ig: 300 },
+    ]);
+    expect(out[0]).toEqual({ label: '배롱나무', n: 2, ytMed: 850, igMed: 3850 });
+    expect(out[1]).toEqual({ label: '묘목 고르는 법', n: 1, ytMed: 400, igMed: 300 });
+  });
+  it('측정 없음(-1)은 0 이 아니라 null(측정 없음)로 다룬다 — 단일 채널 계열 오귀속 방지', () => {
+    expect(aggregateShortsTopicRows([{ label: 'a', yt: -1, ig: 100 }])[0]).toEqual({ label: 'a', n: 1, ytMed: null, igMed: 100 });
+  });
+  it('랭킹 키는 측정 채널 중앙값의 최대값 — 유튜브 단독 900 계열이 양채널(300·2000) 계열보다 아래', () => {
+    const out = aggregateShortsTopicRows([
+      { label: 'yt단독', yt: 900, ig: -1 },
+      { label: '양채널', yt: 300, ig: 2000 },
+    ]);
+    expect(out.map((r) => r.label)).toEqual(['양채널', 'yt단독']);
+  });
+});
 
 describe('shortsSignal — 로그 스케일 + 좋아요율(순수)', () => {
   it('0뷰=0, 1만뷰≈0.8(뷰만), 좋아요율 1% 이상이면 +0.2 만점', () => {
