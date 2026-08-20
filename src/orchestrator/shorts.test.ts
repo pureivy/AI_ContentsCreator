@@ -1,7 +1,43 @@
 import { describe, it, expect } from 'vitest';
-import { applyShortsRevision } from './shorts';
+import { applyShortsRevision, trimPlanToBudget } from './shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
+
+describe('trimPlanToBudget — 결정적 트리밍(생성 실패 금지의 예산 보장, 2026-08-20)', () => {
+  const mk = (narrs: string[]): ShortsPlan => ({
+    title: '제목', titles: ['제목'], description: '설명', hashtags: ['#a'],
+    scenes: narrs.map((n, i) => ({ narration: n, screenText: `t${i}` })),
+  });
+  it('예산 이내면 무변화(trimmed=false, 전 씬 유지)', () => {
+    const p = mk(['훅.', '전제.', '본문.', '마무리.']);
+    const r = trimPlanToBudget(p, 999);
+    expect(r.trimmed).toBe(false);
+    expect(r.keptScenes).toEqual([0, 1, 2, 3]);
+  });
+  it('1단계: 본문 씬의 마지막 문장부터 깎아 예산을 맞춘다(훅·CTA 문장 보존)', () => {
+    const p = mk(['훅 문장입니다.', '전제 문장입니다.', '방법 문장입니다. 이유 문장입니다.', 'CTA 문장입니다.']);
+    const before = p.scenes.reduce((s, x) => s + x.narration.length, 0);
+    const r = trimPlanToBudget(p, before - 5);
+    expect(r.trimmed).toBe(true);
+    expect(r.plan.scenes[2]!.narration).toBe('방법 문장입니다.'); // 뒤 문장 제거
+    expect(r.plan.scenes[0]!.narration).toBe('훅 문장입니다.');
+    expect(r.keptScenes).toEqual([0, 1, 2, 3]); // 씬 수 유지
+  });
+  it('2단계: 문장으로 모자라면 뒤쪽 본문 씬을 통째 제거 — keptScenes 가 원본 인덱스를 준다', () => {
+    const p = mk(['훅번째문장입니다.', '전제번째문장입니다.', '본문하나입니다.', '본문둘입니다.', '본문셋입니다.', 'CTA입니다.']);
+    const r = trimPlanToBudget(p, 45); // 전체 ~50자 → 씬 제거 필요
+    expect(r.trimmed).toBe(true);
+    expect(r.plan.scenes.length).toBeLessThan(6);
+    expect(r.keptScenes[0]).toBe(0); // 훅 보존
+    expect(r.keptScenes[r.keptScenes.length - 1]).toBe(5); // CTA 보존
+    expect(r.plan.scenes.length).toBeGreaterThanOrEqual(4); // 최소 4씬
+  });
+  it('최소 구성(4씬·전 씬 1문장)에서는 더 깎지 않고 멈춘다(생성 우선 — 무한루프 없음)', () => {
+    const p = mk(['훅.', '전제.', '본문.', 'CTA.']);
+    const r = trimPlanToBudget(p, 3);
+    expect(r.plan.scenes.length).toBe(4);
+  });
+});
 
 describe('applyShortsRevision — 수정 요청 개정안 적용(순수)', () => {
   const base: ShortsPlan = {

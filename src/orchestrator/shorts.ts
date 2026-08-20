@@ -253,12 +253,12 @@ export async function reviseShorts(
     }
     // 재조립 — 잡과 동일한 폴백 체인(Remotion → ffmpeg). 내레이션 TTS 는 전 씬 재합성(교정 사전 적용).
     say(CONFIG.shortsRenderer === 'ffmpeg' ? '재조립 시작 — ffmpeg 슬라이드쇼' : '재조립 시작 — Remotion 모션그래픽');
-    const reassemble = async (p: Plan): Promise<Awaited<ReturnType<typeof renderShortsVideo>>> => {
+    const reassemble = async (p: Plan, imgs: Array<string | null>, clps: typeof clips): Promise<Awaited<ReturnType<typeof renderShortsVideo>>> => {
       let rr = null as Awaited<ReturnType<typeof renderShortsVideo>> | null;
       if (CONFIG.shortsRenderer !== 'ffmpeg') {
         try {
-          rr = await renderShortsVideoRemotion(dir, p.scenes, images, {
-            clips, signal: opts.signal,
+          rr = await renderShortsVideoRemotion(dir, p.scenes, imgs, {
+            clips: clps, signal: opts.signal,
             caption: {
               bottomPct: CONFIG.shortsCaptionBottomPct, fontPx: CONFIG.shortsCaptionFontPx, hookFontPx: CONFIG.shortsCaptionHookFontPx,
               ...(CONFIG.shortsCaptionKeyword && short.keyword ? { keyword: short.keyword } : {}),
@@ -270,38 +270,39 @@ export async function reviseShorts(
       }
       if (!rr || !rr.ok) {
         if (rr) say(`모션 렌더 실패 → ffmpeg 폴백${rr.issues.length ? ` (${rr.issues.join(' · ').slice(0, 120)})` : ''}`);
-        rr = await renderShortsVideo(dir, p.scenes, images, {
+        rr = await renderShortsVideo(dir, p.scenes, imgs, {
           signal: opts.signal,
           ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
         });
       }
       return rr;
     };
-    let r = await reassemble(plan);
+    let r = await reassemble(plan, images, clips);
     if (!r.ok || !r.videoPath) return fail(`재조립 실패 — ${r.issues.join(' · ').slice(0, 200)}`);
-    // 길이 상한 하드 집행(2026-08-20) — 잡 경로와 패리티. 수정요청이 내레이션을 늘려 상한을 넘겨도
-    // 초과본이 ready 로 나가지 않게 실측 속도 재감량→재조립(최대 2회).
+    // 길이 상한 집행(2026-08-20) — 잡 경로와 패리티. 수정요청이 내레이션을 늘려 상한을 넘기면 실측 속도
+    // 재감량(LLM+결정적 트리밍)→재조립. 잔여 초과여도 수정 자체는 완료로 낸다(생성·완료 우선) —
+    // 초과본 발행은 발행 핸들러 409 게이트가 막고, 아래 store 갱신이 실측 durationSec 을 기록해 게이트가 진실을 본다.
+    let liveIdx = plan.scenes.map((_, i) => i);
     for (let round = 1; (r.durationSec ?? 0) > CONFIG.shortsMaxDurationSec && round <= 2; round++) {
       const io2: JobIO = { signal: opts.signal };
       const chars = shortsNarrationChars(plan);
       const cps = chars / Math.max(1, (r.durationSec ?? 1) - 2);
       const fit2 = await fitShortsPlanToDuration(io2, plan, Math.floor((CONFIG.shortsMaxDurationSec - 5) * cps));
-      if (!fit2.compressed) { say(`길이 상한 재감량 실패(${round}/2) — 압축 응답 없음`); break; }
+      if (!fit2.compressed) { say(`길이 상한 재감량 무변화(${round}/2) — 이미 최소 구성`); break; }
+      liveIdx = fit2.keptScenes.map((k) => liveIdx[k]!);
       plan = fit2.plan;
       fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
       try {
         const rdir = path.join(dir, 'remotion');
         for (const f of fs.readdirSync(rdir)) if (/^narr_\d+\.mp3$/.test(f)) fs.unlinkSync(path.join(rdir, f)); // 구 대본 TTS 소거
       } catch { /* 무해 */ }
-      say(`길이 상한 초과 ${r.durationSec}초 — 재감량 ${fit2.beforeChars}→${fit2.afterChars}자, 재조립(${round}/2)`);
-      const r2 = await reassemble(plan);
+      say(`길이 상한 초과 ${r.durationSec}초 — 재감량 ${fit2.beforeChars}→${fit2.afterChars}자${liveIdx.length < images.length ? ` · 씬 ${liveIdx.length}개로 축소` : ''}, 재조립(${round}/2)`);
+      const r2 = await reassemble(plan, liveIdx.map((i) => images[i] ?? null), liveIdx.map((i) => clips[i] ?? null));
       if (!r2.ok || !r2.videoPath) break;
       r = r2;
     }
     if ((r.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) {
-      // 초과 확정 — ready 갱신은 막되 durationSec 은 실측값으로 기록(발행 게이트가 파일 실체와 같은 값을 보게).
-      store.update(id, { scenes: r.sceneCount, durationSec: r.durationSec });
-      return fail(`재조립 결과 ${r.durationSec}초 — 길이 상한(${CONFIG.shortsMaxDurationSec}초) 초과로 수정 반려. 대본을 줄이는 수정을 함께 요청해 주세요(영상 파일은 초과본으로 갱신된 상태)`);
+      say(`⚠ 길이 상한 잔여 초과 — ${r.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초. 수정은 완료로 처리 — 발행 게이트가 초과본을 막으니 대본 감량 수정을 한 번 더 요청해 주세요`);
     }
     const revisedVideoPath = r.videoPath; // 루프 재대입으로 풀린 내로잉 재확립
     if (!revisedVideoPath) return fail('재조립 실패 — 결과 영상 경로 없음');
@@ -406,13 +407,50 @@ const SHORTS_TTS_CPS = 5.9;
 
 function shortsNarrationChars(p: Plan): number { return p.scenes.reduce((s, x) => s + x.narration.length, 0); }
 
-/** 길이 상한 초과 대본 1회 압축(사실·수치·결론 유지, 내레이션만 감량) — 실패해도 원본 유지(호출부 하드 캡이 잡는다).
- *  budgetCharsOverride: 렌더 후 실측 낭독 속도로 역산한 예산(하드 캡 재감량 경로) — 미지정 시 종전 정적 예산. */
-async function fitShortsPlanToDuration(io: JobIO, plan: Plan, budgetCharsOverride?: number): Promise<{ plan: Plan; compressed: boolean; beforeChars: number; afterChars: number }> {
+/** 문장 분리(트리밍용) — styleLint 와 같은 대략 규칙(종결부호 기준). */
+const splitNarrSentences = (t: string): string[] => t.split(/(?<=[.!?…])\s+/).map((s) => s.trim()).filter(Boolean);
+
+/**
+ * 결정적 트리밍(순수, 테스트 대상) — LLM 감량이 예산에 못 미쳐도(실측 2026-08-20: 목표 341자에 364자
+ * 응답, 3라운드 전부 미달 → 60.7초 실패) 코드가 예산을 보장한다. 생성 실패 금지(사용자 확정 2026-08-20:
+ * "쇼츠는 반드시 생성되어야 함")의 핵심 장치.
+ * 1단계 — 문장 단위: 본문 씬(훅·CTA 제외, 씬2 전제는 후순위)에서 긴 씬부터 마지막 문장을 제거(전 씬
+ * 최소 1문장 유지). 2단계 — 씬 단위: 뒤쪽 본문 씬을 통째로 제거(훅·씬2·CTA 보존, 최소 4씬).
+ * keptScenes 는 원본 씬 인덱스 — 렌더 시 씬별 이미지·클립 배열을 함께 줄이는 매핑에 쓴다.
+ */
+export function trimPlanToBudget(plan: Plan, budgetChars: number): { plan: Plan; keptScenes: number[]; trimmed: boolean } {
+  const total = (scs: Array<{ narration: string }>): number => scs.reduce((s, x) => s + x.narration.length, 0);
+  const scenes = plan.scenes.map((s) => ({ ...s }));
+  const kept = scenes.map((_, i) => i);
+  let changed = false;
+  let guard = 40; // 폭주 방지 — 씬×문장 수보다 넉넉한 상한
+  while (total(scenes) > budgetChars && guard-- > 0) {
+    const order = [...scenes.keys()]
+      .filter((i) => i > 0 && i < scenes.length - 1) // 훅·CTA 는 문장 트리밍 제외(각 1~2문장 핵심)
+      .sort((a, b) => (a === 1 ? 1 : 0) - (b === 1 ? 1 : 0) || scenes[b]!.narration.length - scenes[a]!.narration.length);
+    const cand = order.find((i) => splitNarrSentences(scenes[i]!.narration).length >= 2);
+    if (cand === undefined) break; // 더 뺄 문장 없음 — 씬 단위로
+    scenes[cand]!.narration = splitNarrSentences(scenes[cand]!.narration).slice(0, -1).join(' ').trim();
+    changed = true;
+  }
+  while (total(scenes) > budgetChars && scenes.length > 4) {
+    const drop = scenes.length - 2; // CTA 앞 본문 씬부터 뒤에서 제거
+    scenes.splice(drop, 1);
+    kept.splice(drop, 1);
+    changed = true;
+  }
+  return { plan: { ...plan, scenes }, keptScenes: kept, trimmed: changed };
+}
+
+/** 길이 상한 초과 대본 압축 — LLM 감량(품질 우선) 후 예산 미달분은 결정적 트리밍이 마감(예산 보장).
+ *  budgetCharsOverride: 렌더 후 실측 낭독 속도로 역산한 예산(재감량 경로) — 미지정 시 정적 예산.
+ *  keptScenes: 살아남은 씬의 '입력 plan 기준' 인덱스(씬 제거 시 이미지·클립 매핑용). */
+async function fitShortsPlanToDuration(io: JobIO, plan: Plan, budgetCharsOverride?: number): Promise<{ plan: Plan; compressed: boolean; beforeChars: number; afterChars: number; keptScenes: number[] }> {
   const cap = CONFIG.shortsMaxDurationSec;
   const budget = budgetCharsOverride ?? Math.floor((cap - 5) * SHORTS_TTS_CPS); // 5초 여유 — TTS 속도 편차·업로드 인트로(1.6초)
   const before = shortsNarrationChars(plan);
-  const keep = { plan, compressed: false, beforeChars: before, afterChars: before };
+  const allIdx = plan.scenes.map((_, i) => i);
+  const keep = { plan, compressed: false, beforeChars: before, afterChars: before, keptScenes: allIdx };
   // 트리거: 정적 경로는 상한 예산(cap×CPS) 초과 시, 실측 예산 경로는 그 예산 초과 시.
   if (before <= (budgetCharsOverride ?? Math.floor(cap * SHORTS_TTS_CPS))) return keep;
   const cur = plan.scenes.map((s, i) => `${i + 1}. ${s.narration}`).join('\n');
@@ -422,21 +460,32 @@ async function fitShortsPlanToDuration(io: JobIO, plan: Plan, budgetCharsOverrid
     [
       `아래 숏폼 내레이션 합계가 ${before}자로 낭독 상한(${cap}초 ≈ ${budget}자)을 넘는다. 씬 구성은 유지하고 내레이션만 감량해 합계 ${budget}자 이내로 만들어라.`,
       cur,
+      `합계 ${budget}자 이내는 반드시 지켜라 — 표현 다듬기로 모자라면 덜 중요한 문장을 통째로 빼라. 찔끔 깎은 초과 응답은 무효다(실측: 목표 341자에 364자 응답이 반복돼 코드가 강제 트리밍하게 된다 — 그러면 네가 고른 문장이 아니라 뒤 문장이 잘린다).`,
       '규칙: 사실·수치·결론과 씬별 "무엇을+왜"는 유지하고 군더더기·중복 표현만 깎아라. 구어체 존댓말·숫자 한글 낭독 등 원문 문체 유지, 이모지 금지.',
       'JSON 형식: {"scenes":[{"index":씬번호,"narration":"..."}]} — 전 씬 포함.',
     ].join('\n'),
     { maxOutputTokens: 1200, signal: io.signal },
   ).catch(() => null);
-  if (!j?.scenes) return keep;
-  const out: Plan = { ...plan, scenes: plan.scenes.map((s) => ({ ...s })) };
-  for (const s of j.scenes) {
-    const idx = typeof s?.index === 'number' && Number.isInteger(s.index) ? s.index : 0; // 1-base
-    if (idx < 1 || idx > out.scenes.length) continue;
-    const narration = cleanNarration(s?.narration);
-    if (narration && narration.length < out.scenes[idx - 1]!.narration.length) out.scenes[idx - 1]!.narration = narration;
+  let out: Plan = { ...plan, scenes: plan.scenes.map((s) => ({ ...s })) };
+  if (j?.scenes) {
+    for (const s of j.scenes) {
+      const idx = typeof s?.index === 'number' && Number.isInteger(s.index) ? s.index : 0; // 1-base
+      if (idx < 1 || idx > out.scenes.length) continue;
+      const narration = cleanNarration(s?.narration);
+      if (narration && narration.length < out.scenes[idx - 1]!.narration.length) out.scenes[idx - 1]!.narration = narration;
+    }
+  }
+  // 결정적 마감 — LLM 무응답·부분 이행 모두 여기서 예산을 보장한다(생성 실패 금지의 전제).
+  let keptScenes = allIdx;
+  if (shortsNarrationChars(out) > budget) {
+    const t = trimPlanToBudget(out, budget);
+    out = t.plan;
+    keptScenes = t.keptScenes;
   }
   const after = shortsNarrationChars(out);
-  return after < before ? { plan: out, compressed: true, beforeChars: before, afterChars: after } : keep;
+  return after < before
+    ? { plan: out, compressed: true, beforeChars: before, afterChars: after, keptScenes }
+    : keep;
 }
 
 async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = ''): Promise<Plan | null> {
@@ -739,12 +788,13 @@ export async function runShortsJob(
       say(titleArt ? '상단 제목 캘리 생성 완료' : '상단 제목 캘리 스킵(오버레이 없이 진행)');
     }
     // 조립 1회(Remotion → ffmpeg 폴백 체인) — 길이 상한 재조립(아래 하드 캡)이 재사용하므로 클로저로 묶는다.
-    const assemble = async (p: Plan): Promise<Awaited<ReturnType<typeof renderShortsVideo>>> => {
+    // imgs·clps 를 인자로 받는 이유: 결정적 트리밍이 씬을 제거하면 씬별 이미지·클립 배열도 같이 줄어야 한다.
+    const assemble = async (p: Plan, imgs: Array<string | null>, clps: typeof cv.clips): Promise<Awaited<ReturnType<typeof renderShortsVideo>>> => {
       let rr = null as Awaited<ReturnType<typeof renderShortsVideo>> | null;
       if (CONFIG.shortsRenderer !== 'ffmpeg') {
         try {
-          rr = await renderShortsVideoRemotion(dir, p.scenes, images, {
-            clips: cv.clips, signal: opts.signal,
+          rr = await renderShortsVideoRemotion(dir, p.scenes, imgs, {
+            clips: clps, signal: opts.signal,
             // 자막 옵션 — 위치(플랫폼 UI 가림 회피)·키워드 강조색(설정 기반, A/B 선택 후 기본값 확정).
             caption: {
               bottomPct: CONFIG.shortsCaptionBottomPct,
@@ -762,26 +812,28 @@ export async function runShortsJob(
         // 실패 사유 동봉(2026-08-08) — 종전엔 r.issues 를 버려 "왜 폴백했나"를 사후 추적할 수 없었다(관측 공백).
         if (rr) say(`모션 렌더 실패 → ffmpeg 슬라이드쇼로 폴백${rr.issues.length ? ` (${rr.issues.join(' · ').slice(0, 140)})` : ''}`);
         // 폴백에도 상단 제목 전달 — Remotion 실패 시 제목이 통째로 사라지던 실측(참나무 쇼츠) 봉합.
-        rr = await renderShortsVideo(dir, p.scenes, images, {
+        rr = await renderShortsVideo(dir, p.scenes, imgs, {
           signal: opts.signal,
           ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
         });
       }
       return rr;
     };
-    let r = await assemble(plan);
+    let r = await assemble(plan, images, cv.clips);
     if (!r.ok || !r.videoPath) throw new Error(`조립 실패 — ${r.issues.join(' · ').slice(0, 250)}`);
-    // 길이 상한 하드 집행(2026-08-20 사용자 지시) — 소프트 경고(08-14)로는 61~77초 발행이 계속됐고,
-    // 조회수 감사에서 08-11 길이 폭증(평균 47→62.9초)이 유튜브 하락 변곡점과 겹치는 최대 요인으로 실측됐다.
-    // 초과 시 '이 영상의 실측 낭독 속도'로 예산을 역산해 재감량→재조립(최대 2회). 그래도 초과면 ready 로
-    // 내보내지 않고 실패 처리한다(error 는 파생 게이트를 점유하지 않아 다음 자율 틱이 같은 글에서 새 대본으로
-    // 재파생한다 — 같은 글 실패 2회부터 중단. main.ts 파생 게이트와 한 몸).
+    // 길이 상한 집행(2026-08-20) — 소프트 경고(08-14)로는 61~77초 발행이 계속됐고, 08-11 길이 폭증이
+    // 유튜브 하락 변곡점과 겹치는 최대 요인으로 실측됐다. 초과 시 '실측 낭독 속도'로 예산을 역산해
+    // 재감량(LLM+결정적 트리밍 마감)→재조립(최대 2회). 그래도 초과면 error 가 아니라 ⚠ ready —
+    // 생성이 항상 이긴다(사용자 확정 2026-08-20: "쇼츠는 반드시 생성되어야 함", 첫 하드 캡이 60.7초
+    // 를 error 로 죽인 실사고 직후 지시). 초과본 발행은 발행 핸들러 409 게이트가 따로 막는다.
+    let liveIdx = plan.scenes.map((_, i) => i); // 원본 씬 인덱스 추적 — 트리밍이 씬을 제거하면 이미지·클립 매핑에 사용
     for (let round = 1; (r.durationSec ?? 0) > CONFIG.shortsMaxDurationSec && round <= 2; round++) {
       checkAbort();
       const chars = shortsNarrationChars(plan);
       const cps = chars / Math.max(1, (r.durationSec ?? 1) - 2); // 인트로(1.6초)·여백 보정한 실측 자/초
       const fit2 = await fitShortsPlanToDuration(io, plan, Math.floor((CONFIG.shortsMaxDurationSec - 5) * cps));
-      if (!fit2.compressed) { say(`길이 상한 재감량 실패(${round}/2) — 압축 응답 없음`); break; }
+      if (!fit2.compressed) { say(`길이 상한 재감량 무변화(${round}/2) — 이미 최소 구성`); break; }
+      liveIdx = fit2.keptScenes.map((k) => liveIdx[k]!);
       plan = fit2.plan;
       fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8'); // 수정요청 재조립이 같은 대본을 보게
       // 구 대본 TTS 잔존 소거 — 재조립 라운드에서 씬 TTS 가 실패하면 ffmpeg 폴백이 감량 전 mp3 를
@@ -790,13 +842,13 @@ export async function runShortsJob(
         const rdir = path.join(dir, 'remotion');
         for (const f of fs.readdirSync(rdir)) if (/^narr_\d+\.mp3$/.test(f)) fs.unlinkSync(path.join(rdir, f));
       } catch { /* 디렉토리 없음 등 — 무해 */ }
-      say(`길이 상한 초과 ${r.durationSec}초 — 실측 ${cps.toFixed(1)}자/초 기준 재감량 ${fit2.beforeChars}→${fit2.afterChars}자, 재조립(${round}/2)`);
-      const r2 = await assemble(plan);
-      if (!r2.ok || !r2.videoPath) break; // 재조립 실패 — 직전 완성본 유지, 아래 게이트가 판정
+      say(`길이 상한 초과 ${r.durationSec}초 — 실측 ${cps.toFixed(1)}자/초 기준 재감량 ${fit2.beforeChars}→${fit2.afterChars}자${liveIdx.length < images.length ? ` · 씬 ${liveIdx.length}개로 축소` : ''}, 재조립(${round}/2)`);
+      const r2 = await assemble(plan, liveIdx.map((i) => images[i] ?? null), liveIdx.map((i) => cv.clips[i] ?? null));
+      if (!r2.ok || !r2.videoPath) break; // 재조립 실패 — 직전 완성본 유지(생성 우선)
       r = r2;
     }
     if ((r.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) {
-      throw new Error(`길이 상한 초과 — ${r.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초(재감량 후에도 초과, 하드 캡으로 발행 보류)`);
+      say(`⚠ 길이 상한 잔여 초과 — ${r.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초. 생성은 완료(생성 우선 원칙) — 발행 게이트가 초과본을 막으니 ✍수정요청으로 감량 후 발행`);
     }
     const finalVideoPath = r.videoPath; // 루프 재대입으로 풀린 내로잉 재확립(r2 는 ok+videoPath 확인분만 채택됨)
     if (!finalVideoPath) throw new Error('조립 실패 — 결과 영상 경로 없음');
