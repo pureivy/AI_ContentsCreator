@@ -24,6 +24,9 @@ export interface TopicVerdict {
   reason: string;
   ts: string;
   source?: string;
+  /** 기회 소진 시각(2026-08-24) — 이 기회로 실제 글이 채택된 순간 기록. 소진된 기회는 프롬프트에
+   *  다시 주입되지 않는다(실사고: '포도나무 가지치기' 기회가 채택 다음 날에도 우선 검토로 남아 반복 유발). */
+  consumedTs?: string;
 }
 
 const TTL_DAYS = 45;        // 실측도 낡는다 — 계절·경쟁이 바뀌면 판정 무효(시즌 한 바퀴 조금 넘게 유지)
@@ -88,7 +91,7 @@ export function buildVerdictBlock(verdicts: TopicVerdict[]): string {
   if (!verdicts.length) return '';
   const line = (v: TopicVerdict): string => `- ${v.keyword} — ${v.reason.slice(0, 80)} (${v.ts.slice(0, 10)})`;
   const avoid = verdicts.filter((v) => v.verdict === 'avoid').slice(0, 8);
-  const opp = verdicts.filter((v) => v.verdict === 'opportunity').slice(0, 8);
+  const opp = verdicts.filter((v) => v.verdict === 'opportunity' && !v.consumedTs).slice(0, 8); // 소진된 기회 제외
   if (!avoid.length && !opp.length) return '';
   return `[리서치 실측 판정 — 반드시 반영하라]\n` +
     (opp.length ? `검증된 기회(검색 수요·경쟁 공백이 실측된 키워드 — 우선 검토):\n${opp.map(line).join('\n')}\n` : '') +
@@ -99,6 +102,26 @@ export function buildVerdictBlock(verdicts: TopicVerdict[]): string {
 /** 주제 두뇌 주입용 블록 — 판정 없으면 빈 문자열(무주입). */
 export function topicVerdictBlock(slug?: string): string {
   try { return buildVerdictBlock(readTopicVerdicts(slug)); } catch { return ''; }
+}
+
+/** 기회 소진 — 이 키워드(정규화 완전 일치)로 글이 실제 채택된 순간 호출. 이후 프롬프트 주입에서 빠진다.
+ *  일일 수확이 같은 문구를 재추출해도 mergeVerdicts 가 동일 판정·근거면 기존 항목(소진 상태)을 보존한다. */
+export function consumeOpportunityVerdict(keyword: string, slug?: string): void {
+  try {
+    const list = readTopicVerdicts(slug);
+    const k = normKw(keyword);
+    let hit = false;
+    for (const v of list) {
+      if (v.verdict === 'opportunity' && !v.consumedTs && normKw(v.keyword) === k) {
+        v.consumedTs = new Date().toISOString();
+        hit = true;
+      }
+    }
+    if (hit) {
+      writeTopicVerdicts(list, slug);
+      console.log(`[verdicts] 기회 소진 — "${keyword}" (채택됨, 이후 주입 제외)`);
+    }
+  } catch { /* 무해 */ }
 }
 
 function readTail(p: string, chars: number): string {

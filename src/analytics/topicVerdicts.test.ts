@@ -35,4 +35,14 @@ describe('buildVerdictBlock — 주제 두뇌 주입 블록(순수)', () => {
   it('판정이 없으면 빈 문자열(무주입)', () => {
     expect(buildVerdictBlock([])).toBe('');
   });
+  it('소진된 기회(consumedTs)는 블록에서 빠진다 — 채택 다음 날 반복 주입 방지(2026-08-24 포도 실사고)', () => {
+    const consumed = { ...v('포도나무 가지치기', 'opportunity', '월 210회'), consumedTs: '2026-08-24T00:00:00.000Z' };
+    expect(buildVerdictBlock([consumed])).toBe('');
+    expect(buildVerdictBlock([consumed, v('조경수', 'opportunity', '월 8,630회')])).not.toContain('포도나무 가지치기');
+  });
+  it('동일 판정·근거 재추출 병합은 소진 상태도 보존한다', () => {
+    const consumed = { ...v('포도나무 가지치기', 'opportunity', '월 210회', '2026-08-23T00:00:00.000Z'), consumedTs: '2026-08-24T00:00:00.000Z' };
+    const re = v('포도나무 가지치기', 'opportunity', '월 210회', '2026-08-25T00:00:00.000Z');
+    expect(mergeVerdicts([consumed], [re])[0]!.consumedTs).toBe('2026-08-24T00:00:00.000Z');
+  });
 });

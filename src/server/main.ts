@@ -63,7 +63,8 @@ import type { BrandProfile } from '../content/brand';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
 import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shortsMetaPerfStale } from '../analytics/shortsPerf';
-import { harvestTopicVerdicts, avoidVerdictFor } from '../analytics/topicVerdicts';
+import { harvestTopicVerdicts, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
+import { seriesCooldownFor } from '../content/seriesCooldown';
 import { refreshTrendSnapshot } from '../analytics/trendSignal';
 import { syncCardnewsPerformance, cardnewsPerfStale } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
@@ -3510,14 +3511,20 @@ async function pickAutoWork(signal?: AbortSignal, force = false): Promise<AutoWo
           const gate = (off || avoided) ? null : filterCandidates([cand.keyword], cand.seedKeyword, seedTitle, existingNow);
           const dupWhy = gate && !gate.pass.length ? (gate.rejected[0]?.why ?? '게이트 기각') : '';
           const sat = (off || avoided || dupWhy) ? [] : saturatedThemeMatches({ title: cand.title, keyword: cand.keyword }, existingNow, 3, getBrand()?.compoundStems ?? []);
+          // 계열 쿨다운(2026-08-24 포도 실사고) — 백로그의 같은 계열 형제도 창 안엔 소진하지 않는다.
+          // dropped 가 아니라 보류(pending 유지) — 창이 지나면 자연 해제되고, 소진 시점 재검증이 중복은 따로 거른다.
+          const cooledCl = (off || avoided || dupWhy || sat.length) ? null : seriesCooldownFor(`${cand.title} ${cand.keyword}`, tickBrand || undefined);
           if (off || avoided || dupWhy) {
             clusterStore().update(cand.id, { status: 'dropped' });
             console.log(`[auto-cycle] 클러스터 기각 — "${cand.keyword}" (${off ? `소재 "${off}"` : avoided ? `리서치 폐기 판정(${avoided.reason.slice(0, 40)})` : dupWhy}) → dropped`);
           } else if (sat.length) {
             console.log(`[auto-cycle] 클러스터 보류(소재 포화) — "${cand.keyword}" ≈ "${sat[0]!.title.slice(0, 24)}" → 신규 아이디어로 폴백`);
+          } else if (cooledCl) {
+            console.log(`[auto-cycle] 클러스터 보류(계열 쿨다운 "${cooledCl}") — "${cand.keyword}" → 신규 아이디어로 폴백`);
           } else {
             const piece = pieceStore().create({ title: cand.title, keyword: cand.keyword, brand: tickBrand || undefined, auto: true, clusterSeedId: cand.id });
             console.log(`[auto-cycle] 클러스터 형제 착수 — "${cand.keyword}" (시드 "${cand.seedKeyword}")`);
+            consumeOpportunityVerdict(cand.keyword, tickBrand || undefined); // 채택된 기회 소진(2026-08-24)
             return { kind: 'piece', piece, clusterTopicId: cand.id };
           }
         }

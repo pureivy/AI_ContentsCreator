@@ -26,4 +26,12 @@ describe('buildTrendBlock — 자동완성 스냅샷 diff 블록(순수)', () =>
     expect(buildTrendBlock({ date: '2026-08-01', entries: { a: ['b'] } }, NOW)).toBe('');
     expect(buildTrendBlock(null, NOW)).toBe('');
   });
+  it('계열 쿨다운 어간의 시드는 목록에서 제외하고 제외 사실을 명시한다(2026-08-24 포도 편중)', () => {
+    const snap = { date: '2026-08-20', entries: { '포도나무 재배': ['포도나무 재배법'], 조경수: ['조경수 추천'] } };
+    const block = buildTrendBlock(snap, NOW, ['포도']);
+    expect(block).not.toContain('포도나무 재배법');
+    expect(block).toContain('제외: 포도나무 재배');
+    expect(block).toContain('조경수 추천');
+    expect(buildTrendBlock({ date: '2026-08-20', entries: { '포도나무 재배': ['포도나무 재배법'] } }, NOW, ['포도'])).toBe(''); // 전 시드 제외 시 무주입
+  });
 });

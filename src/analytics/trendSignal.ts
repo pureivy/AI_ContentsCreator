@@ -80,22 +80,28 @@ export async function refreshTrendSnapshot(signal?: AbortSignal): Promise<void> 
   }
 }
 
-/** 블록 조립(순수, 테스트 대상) — trendSignalBlock 의 코어. now 주입은 테스트용. */
-export function buildTrendBlock(snap: TrendSnap | null, now = Date.now()): string {
+/** 블록 조립(순수, 테스트 대상) — trendSignalBlock 의 코어. now 주입은 테스트용.
+ *  excludeStems: 계열 쿨다운 어간(2026-08-24) — 시드가 그 계열이면 목록에서 제외해, 트렌드 신호가
+ *  최근 집중 계열(포도나무 4편/6일 실사고)을 매일 다시 밀지 않게 한다. */
+export function buildTrendBlock(snap: TrendSnap | null, now = Date.now(), excludeStems: string[] = []): string {
   if (!snap) return '';
   const age = now - new Date(`${snap.date}T00:00:00`).getTime();
   if (!Number.isFinite(age) || age > STALE_DAYS * 86_400_000) return '';
   const prevAll = new Set(Object.values(snap.prevEntries ?? {}).flat().map(normKw));
-  const lines = Object.entries(snap.entries)
-    .filter(([, sug]) => sug.length)
+  const isCooled = (kw: string): boolean => excludeStems.some((s) => kw.replace(/\s+/g, '').includes(s));
+  const entries = Object.entries(snap.entries).filter(([, sug]) => sug.length);
+  const skipped = entries.filter(([kw]) => isCooled(kw)).map(([kw]) => kw);
+  const lines = entries
+    .filter(([kw]) => !isCooled(kw))
     .map(([kw, sug]) => `- ${kw}: ${sug.map((x) => prevAll.size && !prevAll.has(normKw(x)) ? `★${x}` : x).join(', ')}`);
   if (!lines.length) return '';
   return `[실검색 연관어 — 네이버 자동완성 ${snap.date} 수집${snap.prevDate ? `, ★=직전(${snap.prevDate}) 스냅샷에 없던 새 등장어(최근 검색 수요 변화 신호)` : ''}]\n` +
     `${lines.join('\n')}\n` +
+    (skipped.length ? `(제외: ${skipped.join(', ')} — 최근 집중 다룬 계열이라 이번 목록에서 뺐다)\n` : '') +
     `반영 지침: 실제 사용자들이 지금 치는 검색어다 — 주제·keyword 는 가능하면 이 목록(또는 그 구체 변형)에서 골라라${snap.prevDate ? '. ★ 새 등장어는 시의성 신호로 우선 검토하라' : ''}.\n\n`;
 }
 
 /** 주제 두뇌 주입용 블록 — 스냅샷 없음·낡음은 빈 문자열(무주입). */
-export function trendSignalBlock(slug?: string): string {
-  try { return buildTrendBlock(readTrendSnap(slug)); } catch { return ''; }
+export function trendSignalBlock(slug?: string, excludeStems: string[] = []): string {
+  try { return buildTrendBlock(readTrendSnap(slug), Date.now(), excludeStems); } catch { return ''; }
 }

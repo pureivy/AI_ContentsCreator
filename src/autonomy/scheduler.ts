@@ -18,8 +18,9 @@ import { asString } from '../util/str';
 import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix, offBrandTerm, getBrand, lintLexicon } from '../content/brand';
 import { titleTypeGuidanceBlock } from '../analytics/titleTiming';
 import { shortsTopicSignalBlock } from '../analytics/shortsPerf';
-import { topicVerdictBlock, avoidVerdictFor } from '../analytics/topicVerdicts';
+import { topicVerdictBlock, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { trendSignalBlock } from '../analytics/trendSignal';
+import { seriesCooldownFor, cooledSeries } from '../content/seriesCooldown';
 import { seasonalContext } from '../util/solarTerms';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 
@@ -374,6 +375,8 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   // 하류의 키워드 정확 표기 강제가 어휘 가드를 이겨 제목·본문에 함정어가 살아남았다 — SEO 리비전조차
   // 키워드 고정 때문에 못 뺀다. keyword 가 태어나는 여기가 유일하게 싼 차단 지점).
   const jargonList = getBrand()?.avoidJargon ?? [];
+  // 계열 쿨다운 어간(2026-08-24 포도 편중 실사고) — 프롬프트 회피·트렌드 목록 제외·후보 하드 게이트가 공유.
+  const cooldownStems = cooledSeries(activeBrandSlug() || undefined);
   const jargonLine = jargonList.length
     ? `[제목·키워드 어휘] 다음 말은 일반 독자가 다른 뜻으로 읽거나 모른다 — title·keyword 에 쓰지 말고 화살표처럼 풀어 써라: ${jargonList.map((j) => `${j.term}→${j.use}`).join(', ')}\n\n`
     : '';
@@ -394,7 +397,10 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // ② 리서치 실측 판정 역류: 폐기(avoid)·기회(opportunity) 키워드 — 아래 후보 게이트와 이중 방어.
     topicVerdictBlock() +
     // ③ 실검색 연관어(자동완성 일일 스냅샷 diff): 주제 두뇌에 닿는 첫 실시간 검색 수요 신호.
-    trendSignalBlock() +
+    //    계열 쿨다운 어간은 목록에서 제외(2026-08-24 포도 편중 실사고) — 신호가 같은 계열을 매일 밀지 않게.
+    trendSignalBlock(undefined, cooldownStems) +
+    // ④ 계열 쿨다운(2026-08-24): 최근 7일 집중 계열은 이번 제안에서 제외 — 아래 후보 하드 게이트와 이중 방어.
+    (cooldownStems.length ? `[계열 쿨다운 — 최근 7일에 집중해서 다룬 수종 계열이다. 이번엔 이 계열을 피하고 다른 수종·소재로 제안하라]\n${cooldownStems.map((s) => `${s}(${s}나무 계열)`).join(', ')}\n\n` : '') +
     // 신호 서열 선언(리뷰 지적) — 명령형 블록 6종이 서열 없이 나열되면 micro 가 어느 지시에 최적화할지 비결정적.
     `[신호 우선순위 — 위 신호들이 충돌할 때] 1) 실측 폐기·기존 콘텐츠 유사 회피(금지) > 2) 리서치 기회·실검색 연관어(우선 검토) > 3) 성과 계열 확장(참고). 금지가 항상 이긴다.\n\n` +
     `[기존 콘텐츠 — 주제·키워드 유사 금지]\n${existingLines || '(없음)'}\n\n` +
@@ -451,6 +457,14 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         rejects.push(`"${title}"=리서치 실측 폐기 키워드(${keyword} — ${avoided.reason.slice(0, 40)})`);
         continue;
       }
+      // 계열 쿨다운 게이트(하드, 2026-08-24) — 포도나무 4편/6일 실사고: 시드·트렌드·기회 신호가 같은
+      // 계열을 동시에 밀 때 연속 채택을 코드가 끊는다(최근 7일 같은 계열 2편 이상이면 기각, 창 지나면 자연 해제).
+      const cooled = seriesCooldownFor(`${title} ${keyword ?? ''}`, activeBrandSlug() || undefined);
+      if (cooled) {
+        console.log(`[auto-cycle] 아이디어 기각(계열 쿨다운) — "${title}" (계열 "${cooled}" 최근 7일 2편+)`);
+        rejects.push(`"${title}"=계열 쿨다운(${cooled} 계열 — 최근 7일에 이미 2편 이상, 다른 수종으로)`);
+        continue;
+      }
       // 수종 앵커 게이트(하드) — 이름·상징 유래 축(4순위, 2026-08-13 투입) 전용 함정 차단. 실측(08-01):
       // '나무 이름 유래' 총칭은 검색 0이고, 앵커 없는 꽃말·유래 주제는 화초 꽃말로 미끄러지는데 브랜드
       // 소재 게이트가 못 막는다(장미·국화류는 금지 목록에 없음). '~나무' 수종 앵커를 코드로 강제한다.
@@ -478,14 +492,22 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       }
       recentAuto.push(title);
       if (recentAuto.length > 20) recentAuto.shift();
+      if (keyword) consumeOpportunityVerdict(keyword); // 채택된 리서치 기회는 소진 — 다음 기획에 반복 주입 방지(2026-08-24)
       return { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
     }
     // 새 소재 후보가 전멸했지만 유사 후보가 있으면 채택 — 좌초 대신 '같은 소재, 다른 시각' 글로 간다.
+    // 단 계열 쿨다운은 유사 폴백도 뚫지 못한다(2026-08-24 실사고: 포도 4편째가 정확히 이 폴백으로 채택됐다).
     if (similarFallback) {
-      console.log(`[auto-cycle] 유사 주제 채택(다른 시각 생성) — "${similarFallback.title}"`);
-      recentAuto.push(similarFallback.title);
-      if (recentAuto.length > 20) recentAuto.shift();
-      return similarFallback;
+      const cooledFb = seriesCooldownFor(`${similarFallback.title} ${similarFallback.keyword ?? ''}`, activeBrandSlug() || undefined);
+      if (cooledFb) {
+        console.log(`[auto-cycle] 유사 폴백 기각(계열 쿨다운 "${cooledFb}") — "${similarFallback.title}"`);
+      } else {
+        console.log(`[auto-cycle] 유사 주제 채택(다른 시각 생성) — "${similarFallback.title}"`);
+        recentAuto.push(similarFallback.title);
+        if (recentAuto.length > 20) recentAuto.shift();
+        if (similarFallback.keyword) consumeOpportunityVerdict(similarFallback.keyword);
+        return similarFallback;
+      }
     }
     rejectNote = `[직전 제안 ${cands.length}건 전부 기각 — 사유: ${rejects.slice(0, 4).join(' · ') || '전부 무효'}] 이 사유들과 소재를 전부 피해, 완전히 다른 소재·키워드로 5건을 다시 제안하라.`;
   }
