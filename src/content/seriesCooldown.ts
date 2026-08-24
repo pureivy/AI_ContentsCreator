@@ -13,7 +13,9 @@ import { pieceStore } from './pieces';
 /** 계열이 아닌 총칭·범주 어간 — 'XX나무' 꼴이지만 특정 수종을 지칭하지 않는 한국어 일반 어휘. */
 const GENERIC_STEMS = new Set(['과실', '유실', '조경', '정원', '낙엽', '상록', '침엽', '활엽', '어린', '가로수']);
 
-/** 계열 어간 추출(순수, 테스트 대상) — 공백 무시 'XX나무' 패턴의 어간(2~8자), 총칭 제외. */
+/** 계열 어간 추출(순수, 테스트 대상) — 공백 무시 'XX나무' 어간(2~8자, 총칭 제외) + 'XX베리' 전체어.
+ *  베리 패턴(2026-08-24 보강): 블루베리·하스카프베리류는 '나무' 없이 쓰이는 게 보통이라
+ *  나무 패턴만으로는 계열이 안 잡혔다(블루베리 3편/3일 미검출 실사고). */
 export function seriesStems(text: string): string[] {
   const t = (text || '').normalize('NFC').replace(/\s+/g, '');
   const out = new Set<string>();
@@ -21,6 +23,7 @@ export function seriesStems(text: string): string[] {
     const stem = m[1]!;
     if (!GENERIC_STEMS.has(stem)) out.add(stem);
   }
+  for (const m of t.matchAll(/[가-힣]{2,6}베리/g)) out.add(m[0]!);
   return [...out];
 }
 
@@ -29,21 +32,29 @@ export function seriesStems(text: string): string[] {
  * 들어 있으며 편수가 cap 이상인 계열 어간을 반환(없으면 null). 후보에 '나무' 접미가 없어도
  * ("포도 수확 후 관리") 최근 편의 어간('포도')과 포함 대조로 걸린다.
  */
+/** 계열별 편수 집계(2단계, 2026-08-24 보강) — 1) 창 내 전 편에서 어간을 발견하고, 2) 그 어간을
+ *  '포함'하는 편 수를 센다(편당 1회). 종전 1단계 집계는 어간 표기('XX나무')가 있는 편만 세서
+ *  "블루베리 꽃눈 확인법"류(나무 미표기)가 빠졌다 — 블루베리 3편/3일 미검출 실사고. */
+function countSeries(recent: Array<{ text: string; createdTs: string }>, cutoff: number): Map<string, number> {
+  const inWindow = recent
+    .filter((r) => { const t = new Date(r.createdTs).getTime(); return Number.isFinite(t) && t >= cutoff; })
+    .map((r) => (r.text || '').normalize('NFC').replace(/\s+/g, ''));
+  const stems = new Set<string>();
+  for (const t of inWindow) for (const s of seriesStems(t)) stems.add(s);
+  const counts = new Map<string, number>();
+  for (const s of stems) counts.set(s, inWindow.filter((t) => t.includes(s)).length);
+  return counts;
+}
+
 export function seriesCooldownHit(
   candidateText: string,
   recent: Array<{ text: string; createdTs: string }>,
   opts: { days?: number; cap?: number; now?: number } = {},
 ): string | null {
   const { days = 7, cap = 2, now = Date.now() } = opts;
-  const cutoff = now - days * 86_400_000;
   const cand = (candidateText || '').normalize('NFC').replace(/\s+/g, '');
   if (!cand) return null;
-  const counts = new Map<string, number>();
-  for (const r of recent) {
-    const t = new Date(r.createdTs).getTime();
-    if (!Number.isFinite(t) || t < cutoff) continue;
-    for (const stem of seriesStems(r.text)) counts.set(stem, (counts.get(stem) ?? 0) + 1);
-  }
+  const counts = countSeries(recent, now - days * 86_400_000);
   let best: string | null = null;
   for (const [stem, n] of counts) {
     if (n >= cap && cand.includes(stem) && (best === null || n > (counts.get(best) ?? 0))) best = stem;
@@ -65,14 +76,9 @@ export function seriesCooldownFor(candidateText: string, brandSlug?: string): st
 export function cooledSeries(brandSlug?: string, opts: { days?: number; cap?: number; now?: number } = {}): string[] {
   try {
     const { days = 7, cap = 2, now = Date.now() } = opts;
-    const cutoff = now - days * 86_400_000;
-    const counts = new Map<string, number>();
-    for (const p of pieceStore().list()) {
-      if ((p.brand ?? '') !== (brandSlug ?? '')) continue;
-      const t = new Date(p.createdTs).getTime();
-      if (!Number.isFinite(t) || t < cutoff) continue;
-      for (const stem of seriesStems(`${p.title} ${p.keyword ?? ''}`)) counts.set(stem, (counts.get(stem) ?? 0) + 1);
-    }
-    return [...counts.entries()].filter(([, n]) => n >= cap).map(([s]) => s);
+    const recent = pieceStore().list()
+      .filter((p) => (p.brand ?? '') === (brandSlug ?? ''))
+      .map((p) => ({ text: `${p.title} ${p.keyword ?? ''}`, createdTs: p.createdTs }));
+    return [...countSeries(recent, now - days * 86_400_000).entries()].filter(([, n]) => n >= cap).map(([s]) => s);
   } catch { return []; }
 }

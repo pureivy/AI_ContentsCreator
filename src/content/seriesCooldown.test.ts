@@ -13,6 +13,10 @@ describe('seriesStems — 계열 어간 추출(순수)', () => {
     expect(seriesStems('과실나무 전정, 어린 나무 주지')).toEqual([]);
     expect(seriesStems('나무 물주기')).toEqual([]);
   });
+  it("'XX베리' 전체어도 계열이다 — 나무 미표기 관용(2026-08-24 블루베리 미검출 보강)", () => {
+    expect(seriesStems('블루베리 꽃눈 확인법')).toEqual(['블루베리']);
+    expect(seriesStems('하스카프베리 재배, 두 품종')).toEqual(['하스카프베리']);
+  });
 });
 
 describe('seriesCooldownHit — 7일 내 같은 계열 2편+ 기각(2026-08-24 포도 실사고)', () => {
@@ -32,5 +36,13 @@ describe('seriesCooldownHit — 7일 내 같은 계열 2편+ 기각(2026-08-24 �
   it('창(7일)을 벗어난 편은 세지 않는다 — 시간이 지나면 자연 해제', () => {
     const old = recent.map((r) => ({ ...r, createdTs: d('2026-08-10T00:00:00Z') }));
     expect(seriesCooldownHit('포도나무 가지치기', old, { now: NOW })).toBeNull();
+  });
+  it('어간 표기 없는 편도 포함 대조로 산입된다 — 블루베리 3편/3일 미검출 실사고(2026-08-24)', () => {
+    const bb = [
+      { text: '블루베리꽃눈형성은 처서 이후 집중', createdTs: d('2026-08-22T00:00:00Z') }, // 나무 미표기
+      { text: '블루베리 나무 키우기 베란다, 심기 전 세 가지', createdTs: d('2026-08-23T00:00:00Z') },
+      { text: '무화과나무 월동 준비', createdTs: d('2026-08-22T00:00:00Z') },
+    ];
+    expect(seriesCooldownHit('블루베리 꽃눈 확인법, 9월 전', bb, { now: NOW })).toBe('블루베리');
   });
 });
