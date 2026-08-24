@@ -20,7 +20,7 @@ import { titleTypeGuidanceBlock } from '../analytics/titleTiming';
 import { shortsTopicSignalBlock } from '../analytics/shortsPerf';
 import { topicVerdictBlock, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { trendSignalBlock } from '../analytics/trendSignal';
-import { seriesCooldownFor, cooledSeries } from '../content/seriesCooldown';
+import { seriesCooldownFor, cooledSeries, cooledSeriesTokens } from '../content/seriesCooldown';
 import { seasonalContext } from '../util/solarTerms';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 
@@ -375,8 +375,10 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   // 하류의 키워드 정확 표기 강제가 어휘 가드를 이겨 제목·본문에 함정어가 살아남았다 — SEO 리비전조차
   // 키워드 고정 때문에 못 뺀다. keyword 가 태어나는 여기가 유일하게 싼 차단 지점).
   const jargonList = getBrand()?.avoidJargon ?? [];
-  // 계열 쿨다운 어간(2026-08-24 포도 편중 실사고) — 프롬프트 회피·트렌드 목록 제외·후보 하드 게이트가 공유.
-  const cooldownStems = cooledSeries(activeBrandSlug() || undefined);
+  // 계열 쿨다운(2026-08-24 포도 편중 실사고) — 표시명(프롬프트)과 매칭 토큰(트렌드 제외)을 분리
+  // (행위 축 추가로 표시명 '전정·가지치기(행위 축)'과 매칭어 '전정/가지치기/…'가 달라졌다).
+  const cooldownLabels = cooledSeries(activeBrandSlug() || undefined);
+  const cooldownTokens = cooledSeriesTokens(activeBrandSlug() || undefined);
   const jargonLine = jargonList.length
     ? `[제목·키워드 어휘] 다음 말은 일반 독자가 다른 뜻으로 읽거나 모른다 — title·keyword 에 쓰지 말고 화살표처럼 풀어 써라: ${jargonList.map((j) => `${j.term}→${j.use}`).join(', ')}\n\n`
     : '';
@@ -398,9 +400,9 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     topicVerdictBlock() +
     // ③ 실검색 연관어(자동완성 일일 스냅샷 diff): 주제 두뇌에 닿는 첫 실시간 검색 수요 신호.
     //    계열 쿨다운 어간은 목록에서 제외(2026-08-24 포도 편중 실사고) — 신호가 같은 계열을 매일 밀지 않게.
-    trendSignalBlock(undefined, cooldownStems) +
-    // ④ 계열 쿨다운(2026-08-24): 최근 7일 집중 계열은 이번 제안에서 제외 — 아래 후보 하드 게이트와 이중 방어.
-    (cooldownStems.length ? `[계열 쿨다운 — 최근 7일에 집중해서 다룬 수종 계열이다. 이번엔 이 계열을 피하고 다른 수종·소재로 제안하라]\n${cooldownStems.map((s) => `${s}(${s}나무 계열)`).join(', ')}\n\n` : '') +
+    trendSignalBlock(undefined, cooldownTokens) +
+    // ④ 계열 쿨다운(2026-08-24): 최근 7일 집중 계열(수종·행위 축)은 이번 제안에서 제외 — 아래 후보 하드 게이트와 이중 방어.
+    (cooldownLabels.length ? `[계열 쿨다운 — 최근 7일에 집중해서 다룬 계열이다. 이번엔 이 계열(수종·행위)을 피하고 다른 소재로 제안하라]\n${cooldownLabels.join(', ')}\n\n` : '') +
     // 신호 서열 선언(리뷰 지적) — 명령형 블록 6종이 서열 없이 나열되면 micro 가 어느 지시에 최적화할지 비결정적.
     `[신호 우선순위 — 위 신호들이 충돌할 때] 1) 실측 폐기·기존 콘텐츠 유사 회피(금지) > 2) 리서치 기회·실검색 연관어(우선 검토) > 3) 성과 계열 확장(참고). 금지가 항상 이긴다.\n\n` +
     `[기존 콘텐츠 — 주제·키워드 유사 금지]\n${existingLines || '(없음)'}\n\n` +

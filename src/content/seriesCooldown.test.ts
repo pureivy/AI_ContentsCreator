@@ -46,3 +46,19 @@ describe('seriesCooldownHit — 7일 내 같은 계열 2편+ 기각(2026-08-24 �
     expect(seriesCooldownHit('블루베리 꽃눈 확인법, 9월 전', bb, { now: NOW })).toBe('블루베리');
   });
 });
+
+describe('행위 축 쿨다운 — 수종을 바꿔도 같은 행위 반복이면 편중(2026-08-24: 전정 6편/7일)', () => {
+  const pruning = [
+    { text: '나무전정방법, 첫해는 손 놓고', createdTs: d('2026-08-20T00:00:00Z') },
+    { text: '배롱나무 관리, 처서 즈음 올바른 가지 정리법', createdTs: d('2026-08-22T00:00:00Z') },
+    { text: '단풍나무 물주기 요령', createdTs: d('2026-08-21T00:00:00Z') },
+  ];
+  it('수종이 달라도 전정·가지치기 동의어(전정/가지 정리/도장지 등)면 같은 축으로 세고 기각한다', () => {
+    expect(seriesCooldownHit('과실나무 전정, 자르면 안 되는 패턴', pruning, { now: NOW })).toBe('전정·가지치기');
+    expect(seriesCooldownHit('사과나무 도장지 정리 요령', pruning, { now: NOW })).toBe('전정·가지치기');
+  });
+  it("'세 가지' 같은 일반어는 오탐하지 않고, 다른 행위(물주기)는 통과한다", () => {
+    expect(seriesCooldownHit('묘목 고르는 세 가지 기준', pruning, { now: NOW })).toBeNull();
+    expect(seriesCooldownHit('은행나무 물주기 간격', pruning, { now: NOW })).toBeNull();
+  });
+});
