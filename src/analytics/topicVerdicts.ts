@@ -99,9 +99,15 @@ export function buildVerdictBlock(verdicts: TopicVerdict[]): string {
     '\n';
 }
 
-/** 주제 두뇌 주입용 블록 — 판정 없으면 빈 문자열(무주입). */
-export function topicVerdictBlock(slug?: string): string {
-  try { return buildVerdictBlock(readTopicVerdicts(slug)); } catch { return ''; }
+/** 주제 두뇌 주입용 블록 — 판정 없으면 빈 문자열(무주입).
+ *  excludeTokens(2026-08-25): 계열 쿨다운 토큰 — 그 계열의 opportunity 는 '우선 검토' 주입에서 제외
+ *  (avoid 는 유지 — 금지는 쿨다운과 무관하게 항상 유효). */
+export function topicVerdictBlock(slug?: string, excludeTokens: string[] = []): string {
+  try {
+    const list = readTopicVerdicts(slug).filter((v) =>
+      !(v.verdict === 'opportunity' && excludeTokens.some((t) => v.keyword.replace(/\s+/g, '').includes(t))));
+    return buildVerdictBlock(list);
+  } catch { return ''; }
 }
 
 /** 기회 소진 — 이 키워드(정규화 완전 일치)로 글이 실제 채택된 순간 호출. 이후 프롬프트 주입에서 빠진다.

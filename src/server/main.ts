@@ -64,7 +64,7 @@ import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
 import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shortsMetaPerfStale } from '../analytics/shortsPerf';
 import { harvestTopicVerdicts, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
-import { seriesCooldownFor } from '../content/seriesCooldown';
+import { seriesGateForText, ensureSeriesLabels } from '../analytics/seriesLedger';
 import { refreshTrendSnapshot } from '../analytics/trendSignal';
 import { syncCardnewsPerformance, cardnewsPerfStale } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
@@ -3511,9 +3511,10 @@ async function pickAutoWork(signal?: AbortSignal, force = false): Promise<AutoWo
           const gate = (off || avoided) ? null : filterCandidates([cand.keyword], cand.seedKeyword, seedTitle, existingNow);
           const dupWhy = gate && !gate.pass.length ? (gate.rejected[0]?.why ?? '게이트 기각') : '';
           const sat = (off || avoided || dupWhy) ? [] : saturatedThemeMatches({ title: cand.title, keyword: cand.keyword }, existingNow, 3, getBrand()?.compoundStems ?? []);
-          // 계열 쿨다운(2026-08-24 포도 실사고) — 백로그의 같은 계열 형제도 창 안엔 소진하지 않는다.
-          // dropped 가 아니라 보류(pending 유지) — 창이 지나면 자연 해제되고, 소진 시점 재검증이 중복은 따로 거른다.
-          const cooledCl = (off || avoided || dupWhy || sat.length) ? null : seriesCooldownFor(`${cand.title} ${cand.keyword}`, tickBrand || undefined);
+          // 계열 쿨다운 v2(2026-08-25) — 백로그의 같은 계열 형제도 하드 구간엔 소진하지 않는다(폴백 라벨 경로).
+          // dropped 가 아니라 보류(pending 유지) — 점수가 식으면 자연 해제되고, 소진 시점 재검증이 중복은 따로 거른다.
+          const clGate = (off || avoided || dupWhy || sat.length) ? null : seriesGateForText(`${cand.title} ${cand.keyword}`, tickBrand || undefined);
+          const cooledCl = clGate && clGate.level === 'hard' ? clGate.key ?? '계열' : null;
           if (off || avoided || dupWhy) {
             clusterStore().update(cand.id, { status: 'dropped' });
             console.log(`[auto-cycle] 클러스터 기각 — "${cand.keyword}" (${off ? `소재 "${off}"` : avoided ? `리서치 폐기 판정(${avoided.reason.slice(0, 40)})` : dupWhy}) → dropped`);
@@ -3725,7 +3726,7 @@ const stopPerfSync = startDaily({
   // 비어 있으면 startDaily 가 no-op 이라 스냅샷이 **한 번도 정기 수집되지 않았다**(실측 2026-08-02:
   // 설정 비어 있음 + 스냅샷 07-31 에서 정지). 브리핑 설정 여부와 팔로워 추적은 서로 묶일 이유가 없다.
   // 조회수 감사(2026-08-20) 일일 배선 — 리서치 판정 수확 + 자동완성 트렌드 스냅샷(둘 다 fail-open, 주제 두뇌가 소비).
-  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void recordFollowersSnapshot().catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); }, // 쇼츠·카드뉴스·릴스는 순수 API — 프로필 락 무관
+  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void recordFollowersSnapshot().catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); }, // 쇼츠·카드뉴스·릴스는 순수 API — 프로필 락 무관
   log: (m) => console.log('[perf-sync]', m),
 });
 if (CONFIG.performanceSyncTime) {

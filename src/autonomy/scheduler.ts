@@ -20,7 +20,8 @@ import { titleTypeGuidanceBlock } from '../analytics/titleTiming';
 import { shortsTopicSignalBlock } from '../analytics/shortsPerf';
 import { topicVerdictBlock, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { trendSignalBlock } from '../analytics/trendSignal';
-import { seriesCooldownFor, cooledSeries, cooledSeriesTokens } from '../content/seriesCooldown';
+import { ensureSeriesLabels, classifyCandidates, seriesScoresFor, gateForLabels, fillLabelsFromKnown, cooldownSummary } from '../analytics/seriesLedger';
+import { fallbackSeriesLabels } from '../content/seriesCooldown';
 import { seasonalContext } from '../util/solarTerms';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 
@@ -375,10 +376,14 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   // 하류의 키워드 정확 표기 강제가 어휘 가드를 이겨 제목·본문에 함정어가 살아남았다 — SEO 리비전조차
   // 키워드 고정 때문에 못 뺀다. keyword 가 태어나는 여기가 유일하게 싼 차단 지점).
   const jargonList = getBrand()?.avoidJargon ?? [];
-  // 계열 쿨다운(2026-08-24 포도 편중 실사고) — 표시명(프롬프트)과 매칭 토큰(트렌드 제외)을 분리
-  // (행위 축 추가로 표시명 '전정·가지치기(행위 축)'과 매칭어 '전정/가지치기/…'가 달라졌다).
-  const cooldownLabels = cooledSeries(activeBrandSlug() || undefined);
-  const cooldownTokens = cooledSeriesTokens(activeBrandSlug() || undefined);
+  // 계열 원장 v2(2026-08-25) — 미분류 편 배치 분류(대개 no-op) 후 감쇠 점수 요약.
+  // hard=기각 대상, soft=회피 권고+신호(트렌드·기회) 제외만. 실패는 전부 fail-open(빈 요약).
+  await ensureSeriesLabels(activeBrandSlug() || undefined, signal).catch(() => {});
+  const cdown = cooldownSummary(activeBrandSlug() || undefined);
+  const seriesScores = seriesScoresFor(activeBrandSlug() || undefined);
+  // 여유 시드는 라벨 게이트로 판정(리뷰 지적: 부분문자열 대조는 '심는'≠'심기' 활용형을 놓쳐
+  // 쿨다운 계열 시드를 '여유 있는 방향'으로 추천하는 자기모순을 만들었다).
+  const freeSeeds = seeds.filter((k) => gateForLabels(fillLabelsFromKnown(k, fallbackSeriesLabels(k), seriesScores), seriesScores).level === 'none');
   const jargonLine = jargonList.length
     ? `[제목·키워드 어휘] 다음 말은 일반 독자가 다른 뜻으로 읽거나 모른다 — title·keyword 에 쓰지 말고 화살표처럼 풀어 써라: ${jargonList.map((j) => `${j.term}→${j.use}`).join(', ')}\n\n`
     : '';
@@ -396,15 +401,21 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // 조회수 감사(2026-08-20) 3종 배선 — 전부 데이터 부족·실패 시 빈 문자열(무주입, fail-open).
     // ① 쇼츠 채널 실측: 파생 숏폼 YT/IG 조회수가 주제 선정에 처음으로 되먹임된다(종전 winners=블로그 전용).
     shortsTopicSignalBlock(activeBrandSlug() || '') +
-    // ② 리서치 실측 판정 역류: 폐기(avoid)·기회(opportunity) 키워드 — 아래 후보 게이트와 이중 방어.
-    topicVerdictBlock() +
-    // ③ 실검색 연관어(자동완성 일일 스냅샷 diff): 주제 두뇌에 닿는 첫 실시간 검색 수요 신호.
-    //    계열 쿨다운 어간은 목록에서 제외(2026-08-24 포도 편중 실사고) — 신호가 같은 계열을 매일 밀지 않게.
-    trendSignalBlock(undefined, cooldownTokens) +
-    // ④ 계열 쿨다운(2026-08-24): 최근 7일 집중 계열(수종·행위 축)은 이번 제안에서 제외 — 아래 후보 하드 게이트와 이중 방어.
-    (cooldownLabels.length ? `[계열 쿨다운 — 최근 7일에 집중해서 다룬 계열이다. 이번엔 이 계열(수종·행위)을 피하고 다른 소재로 제안하라]\n${cooldownLabels.join(', ')}\n\n` : '') +
+    // ② 리서치 실측 판정 역류: 폐기(avoid)·기회(opportunity) 키워드 — 하드 계열의 기회만 주입 제외
+    //    (소프트 계열의 검증된 기회는 살린다 — 리뷰 지적: 소프트 제외+정렬 중첩이 준하드로 작동하던 문제).
+    topicVerdictBlock(undefined, cdown.excludeTokensHard) +
+    // ③ 실검색 연관어(자동완성 일일 스냅샷 diff): 쿨다운 계열 시드는 목록에서 제외 — 신호가 같은 계열을 매일 밀지 않게.
+    trendSignalBlock(undefined, cdown.excludeTokens) +
+    // ④ 계열 쿨다운 v2(감쇠 점수): 하드=금지(아래 후보 게이트가 코드로도 기각), 소프트=회피 권고 + 빈 방향 유도.
+    ((cdown.hard.length || cdown.soft.length)
+      ? `[계열 쿨다운 — 최근 집중해서 다룬 계열(괄호는 감쇠 점수)]\n`
+        + (cdown.hard.length ? `금지: ${cdown.hard.join(', ')} — 이 계열·조합은 제안 불가.\n` : '')
+        + (cdown.soft.length ? `가급적 회피: ${cdown.soft.join(', ')} — 꼭 쓰려면 안 다룬 새 조합(다른 행위·상황)으로만.\n` : '')
+        + (freeSeeds.length ? `여유 있는 방향(쿨다운 아닌 시드 예): ${freeSeeds.slice(0, 6).join(', ')}\n` : '')
+        + '\n'
+      : '') +
     // 신호 서열 선언(리뷰 지적) — 명령형 블록 6종이 서열 없이 나열되면 micro 가 어느 지시에 최적화할지 비결정적.
-    `[신호 우선순위 — 위 신호들이 충돌할 때] 1) 실측 폐기·기존 콘텐츠 유사 회피(금지) > 2) 리서치 기회·실검색 연관어(우선 검토) > 3) 성과 계열 확장(참고). 금지가 항상 이긴다.\n\n` +
+    `[신호 우선순위 — 위 신호들이 충돌할 때] 1) 계열 쿨다운 금지·실측 폐기·기존 콘텐츠 유사 회피(금지) > 2) 리서치 기회·실검색 연관어(우선 검토) > 3) 성과 계열 확장(참고). 금지가 항상 이긴다.\n\n` +
     `[기존 콘텐츠 — 주제·키워드 유사 금지]\n${existingLines || '(없음)'}\n\n` +
     `[최근 제작 — 중복 회피]\n${done || '(없음)'}\n\n` +
     `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}\n\n` +
@@ -422,12 +433,19 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     ).catch(() => null);
     const cands = normalizeIdeaCandidates(o);
     if (!cands.length) return null; // 응답 자체가 무효 — 이번 주기 스킵
+    // 후보 계열 분류(라운드당 micro 1콜, 실패 시 결정적 폴백 + 원장 키 포함 대조 보강) + 게이트 선계산.
+    // 소프트 후보는 뒤로 미룬다(안정 정렬) — none 후보가 있으면 그쪽을 먼저 채택.
+    const candLabels = await classifyCandidates(cands, signal);
+    const gated = cands.map((cand, i) => ({
+      cand,
+      gate: gateForLabels(fillLabelsFromKnown(`${cand.title} ${cand.keyword ?? ''}`, candLabels[i]!, seriesScores), seriesScores),
+    })).sort((a, b) => (a.gate.level === 'soft' ? 1 : 0) - (b.gate.level === 'soft' ? 1 : 0));
     const rejects: string[] = [];
     // 유사 폴백(사용자 원칙 개정 2026-08-14) — 기존과 유사한 후보는 기각이 아니라 '다른 시각 생성'
     // 대상. 새 소재 후보를 우선하되, 이번 라운드에 새 소재가 없으면 유사 후보를 채택한다 — 집필 시점에
     // priorCoverageBrief 가 이전 글 앵글을 주입해 프레이밍을 바꾼다(same-topic different content 배선).
     let similarFallback: ContentIdea | null = null;
-    for (const cand of cands) {
+    for (const { cand, gate } of gated) {
       const { title, keyword } = cand;
       if (recentAuto.includes(title)) {
         // 종전엔 여기서 로그 없이 전체 return null — 재탕 제목 하나가 슬롯을 '침묵 좌초'시켰다(08-14 관측).
@@ -459,12 +477,11 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         rejects.push(`"${title}"=리서치 실측 폐기 키워드(${keyword} — ${avoided.reason.slice(0, 40)})`);
         continue;
       }
-      // 계열 쿨다운 게이트(하드, 2026-08-24) — 포도나무 4편/6일 실사고: 시드·트렌드·기회 신호가 같은
-      // 계열을 동시에 밀 때 연속 채택을 코드가 끊는다(최근 7일 같은 계열 2편 이상이면 기각, 창 지나면 자연 해제).
-      const cooled = seriesCooldownFor(`${title} ${keyword ?? ''}`, activeBrandSlug() || undefined);
-      if (cooled) {
-        console.log(`[auto-cycle] 아이디어 기각(계열 쿨다운) — "${title}" (계열 "${cooled}" 최근 7일 2편+)`);
-        rejects.push(`"${title}"=계열 쿨다운(${cooled} 계열 — 최근 7일에 이미 2편 이상, 다른 수종으로)`);
+      // 계열 쿨다운 v2 게이트(하드만 기각, 2026-08-25) — 감쇠 점수 기반. 조합(수종×행위)은 엄격,
+      // 단독은 느슨, 소프트는 기각 없이 순서만 뒤로(위 정렬) — 포도 4편/6일·전정 6편/7일 실사고 계보.
+      if (gate.level === 'hard') {
+        console.log(`[auto-cycle] 아이디어 기각(계열 쿨다운 하드) — "${title}" (${gate.key}: ${gate.why})`);
+        rejects.push(`"${title}"=계열 쿨다운(${gate.key} — 최근 집중, 다른 계열·조합으로)`);
         continue;
       }
       // 수종 앵커 게이트(하드) — 이름·상징 유래 축(4순위, 2026-08-13 투입) 전용 함정 차단. 실측(08-01):
@@ -479,7 +496,9 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       if (sim.length) {
         const top = sim[0]!;
         console.log(`[auto-cycle] 아이디어 유사 감지 — "${title}" ≈ (${top.kind}) "${top.title}" → 새 소재 우선, 없으면 다른 시각으로 채택`);
-        if (!similarFallback) similarFallback = { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
+        // 폴백 자격은 계열 게이트 none 후보만(리뷰 확정: 소프트 후보가 폴백으로 채택되면 창설 사고
+        // 경로 — 포도 4편째 유사 폴백 채택 — 가 감쇠 완화 뒤로 다시 열린다).
+        if (!similarFallback && gate.level === 'none') similarFallback = { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
         continue; // 이번 라운드의 새 소재 후보를 먼저 소진한다
       }
       // 개념 포화 기각 — 표면 유사(findSimilarContent)는 통과했지만 핵심 소재가 여러 편과 겹치면 1회만 다른 축 유도.
@@ -498,18 +517,14 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       return { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
     }
     // 새 소재 후보가 전멸했지만 유사 후보가 있으면 채택 — 좌초 대신 '같은 소재, 다른 시각' 글로 간다.
-    // 단 계열 쿨다운은 유사 폴백도 뚫지 못한다(2026-08-24 실사고: 포도 4편째가 정확히 이 폴백으로 채택됐다).
+    // 폴백은 계열 게이트 none 후보만 대입되므로(위 자격 조건) 재검사 불필요 — v1의 폴백 뚫림
+    // 실사고(포도 4편째)는 자격+N7 바닥선 이중으로 봉쇄돼 있다.
     if (similarFallback) {
-      const cooledFb = seriesCooldownFor(`${similarFallback.title} ${similarFallback.keyword ?? ''}`, activeBrandSlug() || undefined);
-      if (cooledFb) {
-        console.log(`[auto-cycle] 유사 폴백 기각(계열 쿨다운 "${cooledFb}") — "${similarFallback.title}"`);
-      } else {
-        console.log(`[auto-cycle] 유사 주제 채택(다른 시각 생성) — "${similarFallback.title}"`);
-        recentAuto.push(similarFallback.title);
-        if (recentAuto.length > 20) recentAuto.shift();
-        if (similarFallback.keyword) consumeOpportunityVerdict(similarFallback.keyword);
-        return similarFallback;
-      }
+      console.log(`[auto-cycle] 유사 주제 채택(다른 시각 생성) — "${similarFallback.title}"`);
+      recentAuto.push(similarFallback.title);
+      if (recentAuto.length > 20) recentAuto.shift();
+      if (similarFallback.keyword) consumeOpportunityVerdict(similarFallback.keyword);
+      return similarFallback;
     }
     rejectNote = `[직전 제안 ${cands.length}건 전부 기각 — 사유: ${rejects.slice(0, 4).join(' · ') || '전부 무효'}] 이 사유들과 소재를 전부 피해, 완전히 다른 소재·키워드로 5건을 다시 제안하라.`;
   }
