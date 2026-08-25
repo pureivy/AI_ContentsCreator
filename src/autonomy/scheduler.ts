@@ -20,6 +20,7 @@ import { titleTypeGuidanceBlock } from '../analytics/titleTiming';
 import { shortsTopicSignalBlock } from '../analytics/shortsPerf';
 import { topicVerdictBlock, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { trendSignalBlock } from '../analytics/trendSignal';
+import { ytNicheBlock } from '../analytics/ytNiche';
 import { ensureSeriesLabels, classifyCandidates, seriesScoresFor, gateForLabels, fillLabelsFromKnown, cooldownSummary } from '../analytics/seriesLedger';
 import { fallbackSeriesLabels } from '../content/seriesCooldown';
 import { seasonalContext } from '../util/solarTerms';
@@ -404,8 +405,10 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // ② 리서치 실측 판정 역류: 폐기(avoid)·기회(opportunity) 키워드 — 하드 계열의 기회만 주입 제외
     //    (소프트 계열의 검증된 기회는 살린다 — 리뷰 지적: 소프트 제외+정렬 중첩이 준하드로 작동하던 문제).
     topicVerdictBlock(undefined, cdown.excludeTokensHard) +
-    // ③ 실검색 연관어(자동완성 일일 스냅샷 diff): 쿨다운 계열 시드는 목록에서 제외 — 신호가 같은 계열을 매일 밀지 않게.
+    // ③ 실검색 연관어(네이버+유튜브 자동완성 일일 스냅샷 diff): 쿨다운 계열 시드는 목록에서 제외.
     trendSignalBlock(undefined, cdown.excludeTokens) +
+    // ③-b 유튜브 니치 동향(2026-08-25): 최근 7일 조회 상위 영상 — 소재·프레이밍의 실반응 신호.
+    ytNicheBlock(undefined, cdown.excludeTokens) +
     // ④ 계열 쿨다운 v2(감쇠 점수): 하드=금지(아래 후보 게이트가 코드로도 기각), 소프트=회피 권고 + 빈 방향 유도.
     ((cdown.hard.length || cdown.soft.length)
       ? `[계열 쿨다운 — 최근 집중해서 다룬 계열(괄호는 감쇠 점수)]\n`

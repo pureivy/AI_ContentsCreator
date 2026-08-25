@@ -66,6 +66,7 @@ import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shor
 import { harvestTopicVerdicts, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { seriesGateForText, ensureSeriesLabels } from '../analytics/seriesLedger';
 import { refreshTrendSnapshot } from '../analytics/trendSignal';
+import { refreshYtNicheSnapshot } from '../analytics/ytNiche';
 import { syncCardnewsPerformance, cardnewsPerfStale } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
@@ -3726,7 +3727,7 @@ const stopPerfSync = startDaily({
   // 비어 있으면 startDaily 가 no-op 이라 스냅샷이 **한 번도 정기 수집되지 않았다**(실측 2026-08-02:
   // 설정 비어 있음 + 스냅샷 07-31 에서 정지). 브리핑 설정 여부와 팔로워 추적은 서로 묶일 이유가 없다.
   // 조회수 감사(2026-08-20) 일일 배선 — 리서치 판정 수확 + 자동완성 트렌드 스냅샷(둘 다 fail-open, 주제 두뇌가 소비).
-  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void recordFollowersSnapshot().catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); }, // 쇼츠·카드뉴스·릴스는 순수 API — 프로필 락 무관
+  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void recordFollowersSnapshot().catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void refreshYtNicheSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); }, // 쇼츠·카드뉴스·릴스는 순수 API — 프로필 락 무관
   log: (m) => console.log('[perf-sync]', m),
 });
 if (CONFIG.performanceSyncTime) {

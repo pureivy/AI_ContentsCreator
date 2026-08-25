@@ -1,5 +1,35 @@
 import { describe, it, expect } from 'vitest';
-import { buildTrendBlock, type TrendSnap } from './trendSignal';
+import { buildTrendBlock, parseYtSuggest, type TrendSnap } from './trendSignal';
+
+describe('parseYtSuggest — 유튜브 자동완성 파서(순수)', () => {
+  it('["질의",["제안",...]] 꼴에서 제안 목록을 뽑는다', () => {
+    expect(parseYtSuggest(['배롱나무', ['배롱나무 가지치기', '배롱나무 병충해']])).toEqual(['배롱나무 가지치기', '배롱나무 병충해']);
+    expect(parseYtSuggest(['q', []])).toEqual([]);
+    expect(parseYtSuggest({})).toEqual([]);
+  });
+});
+
+describe('buildTrendBlock — 유튜브 축(2026-08-25)', () => {
+  it('네이버·유튜브 섹션을 나눠 담고 유튜브 diff 도 ★를 붙인다', () => {
+    const snap: TrendSnap = {
+      date: '2026-08-25',
+      entries: { 조경수: ['조경수 추천'] },
+      ytEntries: { 조경수: ['조경수 가격', '조경수 심기'] },
+      prevDate: '2026-08-24',
+      prevEntries: { 조경수: ['조경수 추천'] },
+      prevYtEntries: { 조경수: ['조경수 가격'] },
+    };
+    const b = buildTrendBlock(snap, new Date('2026-08-25T12:00:00').getTime());
+    expect(b).toContain('네이버 자동완성');
+    expect(b).toContain('유튜브 자동완성');
+    expect(b).toContain('★조경수 심기');
+    expect(b).not.toContain('★조경수 가격');
+  });
+  it('유튜브 축만 있어도(네이버 전 시드 실패) 블록이 나온다', () => {
+    const b = buildTrendBlock({ date: '2026-08-25', entries: {}, ytEntries: { 단풍나무: ['단풍나무 분갈이'] } }, new Date('2026-08-25T12:00:00').getTime());
+    expect(b).toContain('단풍나무 분갈이');
+  });
+});
 
 const NOW = new Date('2026-08-20T12:00:00').getTime();
 

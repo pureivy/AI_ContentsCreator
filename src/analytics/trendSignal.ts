@@ -13,12 +13,30 @@ import path from 'node:path';
 import { CONFIG } from '../config';
 import { activeBrandSlug, brandFileSuffixFor, brandSeedKeywords } from '../content/brand';
 import { naverAutocomplete } from '../grounding/naver_autocomplete';
+import { fetchTimeout } from '../util/fetch';
 
 export interface TrendSnap {
   date: string;                        // YYYY-MM-DD(수집일)
-  entries: Record<string, string[]>;   // 시드 → 자동완성 상위
+  entries: Record<string, string[]>;   // 시드 → 네이버 자동완성 상위
+  /** 시드 → 유튜브 자동완성 상위(2026-08-25 유튜브 축) — 쇼츠·영상 검색 수요. 구 스냅샷엔 없음. */
+  ytEntries?: Record<string, string[]>;
   prevDate?: string;
   prevEntries?: Record<string, string[]>;
+  prevYtEntries?: Record<string, string[]>;
+}
+
+/** 유튜브 자동완성 응답 파서(순수, 테스트 대상) — client=firefox&ds=yt 는 ["질의",["제안",...]] JSON. */
+export function parseYtSuggest(json: unknown): string[] {
+  if (!Array.isArray(json) || !Array.isArray(json[1])) return [];
+  return (json[1] as unknown[]).map((x) => String(x ?? '').trim()).filter(Boolean);
+}
+
+/** 유튜브 자동완성 조회 — 키 불필요 공개 엔드포인트(oe=utf8 필수 — 미지정 시 EUC-KR 모지바케 실측). */
+async function ytAutocomplete(seed: string, signal?: AbortSignal): Promise<string[]> {
+  const u = `https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&hl=ko&gl=kr&oe=utf8&q=${encodeURIComponent(seed)}`;
+  const r = await fetchTimeout(u, {}, signal);
+  if (!r.ok) throw new Error(`yt suggest HTTP ${r.status}`);
+  return parseYtSuggest(await r.json());
 }
 
 const MAX_SEEDS = 8;
@@ -58,16 +76,21 @@ export async function refreshTrendSnapshot(signal?: AbortSignal): Promise<void> 
     const cur = readTrendSnap(slug);
     if (cur?.date === today) return;
     const entries: Record<string, string[]> = {};
+    const ytEntries: Record<string, string[]> = {};
     for (const kw of seeds) {
       try {
         const rel = await naverAutocomplete(kw, signal);
         if (rel.length) entries[kw] = rel.slice(0, MAX_SUGGESTIONS);
       } catch { /* 키워드별 fail-open */ }
+      try {
+        const yt = await ytAutocomplete(kw, signal);
+        if (yt.length) ytEntries[kw] = yt.slice(0, MAX_SUGGESTIONS);
+      } catch { /* 유튜브 축 fail-open — 네이버 축과 독립 */ }
     }
-    if (!Object.keys(entries).length) return; // 전 시드 실패 — 기존 스냅샷 보존
+    if (!Object.keys(entries).length && !Object.keys(ytEntries).length) return; // 전 시드 실패 — 기존 스냅샷 보존
     const next: TrendSnap = {
-      date: today, entries,
-      ...(cur ? { prevDate: cur.date, prevEntries: cur.entries } : {}),
+      date: today, entries, ytEntries,
+      ...(cur ? { prevDate: cur.date, prevEntries: cur.entries, ...(cur.ytEntries ? { prevYtEntries: cur.ytEntries } : {}) } : {}),
     };
     const f = snapPath(slug);
     fs.mkdirSync(path.dirname(f), { recursive: true });
@@ -87,18 +110,26 @@ export function buildTrendBlock(snap: TrendSnap | null, now = Date.now(), exclud
   if (!snap) return '';
   const age = now - new Date(`${snap.date}T00:00:00`).getTime();
   if (!Number.isFinite(age) || age > STALE_DAYS * 86_400_000) return '';
-  const prevAll = new Set(Object.values(snap.prevEntries ?? {}).flat().map(normKw));
   const isCooled = (kw: string): boolean => excludeStems.some((s) => kw.replace(/\s+/g, '').includes(s));
-  const entries = Object.entries(snap.entries).filter(([, sug]) => sug.length);
-  const skipped = entries.filter(([kw]) => isCooled(kw)).map(([kw]) => kw);
-  const lines = entries
-    .filter(([kw]) => !isCooled(kw))
-    .map(([kw, sug]) => `- ${kw}: ${sug.map((x) => prevAll.size && !prevAll.has(normKw(x)) ? `★${x}` : x).join(', ')}`);
-  if (!lines.length) return '';
-  return `[실검색 연관어 — 네이버 자동완성 ${snap.date} 수집${snap.prevDate ? `, ★=직전(${snap.prevDate}) 스냅샷에 없던 새 등장어(최근 검색 수요 변화 신호)` : ''}]\n` +
-    `${lines.join('\n')}\n` +
+  const section = (src: Record<string, string[]> | undefined, prev: Record<string, string[]> | undefined): { lines: string[]; skipped: string[] } => {
+    const prevAll = new Set(Object.values(prev ?? {}).flat().map(normKw));
+    const entries = Object.entries(src ?? {}).filter(([, sug]) => sug.length);
+    return {
+      skipped: entries.filter(([kw]) => isCooled(kw)).map(([kw]) => kw),
+      lines: entries.filter(([kw]) => !isCooled(kw))
+        .map(([kw, sug]) => `- ${kw}: ${sug.map((x) => prevAll.size && !prevAll.has(normKw(x)) ? `★${x}` : x).join(', ')}`),
+    };
+  };
+  const naver = section(snap.entries, snap.prevEntries);
+  const yt = section(snap.ytEntries, snap.prevYtEntries);
+  if (!naver.lines.length && !yt.lines.length) return '';
+  const skipped = [...new Set([...naver.skipped, ...yt.skipped])];
+  return `[실검색 연관어 — ${snap.date} 수집${snap.prevDate ? `, ★=직전(${snap.prevDate}) 스냅샷에 없던 새 등장어(최근 검색 수요 변화 신호)` : ''}]\n` +
+    (naver.lines.length ? `네이버 자동완성(블로그 검색 수요):\n${naver.lines.join('\n')}\n` : '') +
+    // 유튜브 축(2026-08-25) — 쇼츠·영상은 유튜브 검색창 수요가 별도 축이다(네이버와 겹치지 않는 소재가 뜬다).
+    (yt.lines.length ? `유튜브 자동완성(쇼츠·영상 검색 수요):\n${yt.lines.join('\n')}\n` : '') +
     (skipped.length ? `(제외: ${skipped.join(', ')} — 최근 집중 다룬 계열이라 이번 목록에서 뺐다)\n` : '') +
-    `반영 지침: 실제 사용자들이 지금 치는 검색어다 — 주제·keyword 는 가능하면 이 목록(또는 그 구체 변형)에서 골라라${snap.prevDate ? '. ★ 새 등장어는 시의성 신호로 우선 검토하라' : ''}.\n\n`;
+    `반영 지침: 실제 사용자들이 지금 치는 검색어다 — 주제·keyword 는 가능하면 이 목록(또는 그 구체 변형)에서 골라라${snap.prevDate ? '. ★ 새 등장어는 시의성 신호로 우선 검토하라' : ''}. 유튜브 목록의 수요는 파생 쇼츠의 소재·훅에도 반영하라.\n\n`;
 }
 
 /** 주제 두뇌 주입용 블록 — 스냅샷 없음·낡음은 빈 문자열(무주입). */
