@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources } from './shorts';
+import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges } from './shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
 
@@ -103,5 +103,20 @@ describe('applyShortsRevision — quote 편집', () => {
     expect(r?.plan.scenes[0]!.quote).toEqual({ text: 'new', source: '농사로' });
     expect(r?.plan.scenes[1]!.quote).toBeUndefined();
     expect(r?.changedScenes).toEqual([1]);
+  });
+});
+describe('restoreLostHedges — 압축이 유보어를 지우면 원문장 유지(스펙 §6b, 결론 반전 실측 2건)', () => {
+  it('유보 토큰이 있던 씬이 압축본에서 사라지면 원 내레이션으로 되돌린다', () => {
+    const before = P([{ narration: '잎이 대체로 멀쩡하면 거름은 잎이 진 뒤로 미루고 봐요.' }, { narration: '물은 아침에 주세요.' }]);
+    const after = P([{ narration: '잎이 멀쩡할 때만 거름을 주세요.' }, { narration: '물은 아침에.' }]);
+    const r = restoreLostHedges(before, after);
+    expect(r.restored).toEqual([1]);
+    expect(r.plan.scenes[0]!.narration).toBe('잎이 대체로 멀쩡하면 거름은 잎이 진 뒤로 미루고 봐요.');
+    expect(r.plan.scenes[1]!.narration).toBe('물은 아침에.');
+  });
+  it('압축본이 유보어를 지켰거나 원문에 유보어가 없으면 그대로', () => {
+    const before = P([{ narration: '대개 물 쪽 문제예요.' }]);
+    const after = P([{ narration: '대개 물 문제예요.' }]);
+    expect(restoreLostHedges(before, after).restored).toEqual([]);
   });
 });

@@ -458,6 +458,20 @@ export function trimPlanToBudget(plan: Plan, budgetChars: number): { plan: Plan;
   return { plan: { ...plan, scenes }, keptScenes: kept, trimmed: changed };
 }
 
+/** 유보 표현 — 압축 LLM 이 "군더더기"로 지워 단정문(결론 반전)을 만든 실측 대응. */
+export const HEDGE_RE = /대개|흔히|보통|대체로|경우가 많|수 있|봐요|가능성|편이에요|편입니다|미루/;
+/** 원문에 유보 토큰이 있던 씬이 압축본에서 사라지면 원 내레이션으로 되돌린다(스펙 §6b) — 순수 함수, 입력 불변. */
+export function restoreLostHedges(before: Plan, after: Plan): { plan: Plan; restored: number[] } {
+  const restored: number[] = [];
+  const scenes = after.scenes.map((s, i) => {
+    const orig = before.scenes[i];
+    if (!orig || !HEDGE_RE.test(orig.narration) || HEDGE_RE.test(s.narration)) return s;
+    restored.push(i + 1);
+    return { ...s, narration: orig.narration };
+  });
+  return { plan: { ...after, scenes }, restored };
+}
+
 /** 길이 상한 초과 대본 압축 — LLM 감량(품질 우선) 후 예산 미달분은 결정적 트리밍이 마감(예산 보장).
  *  budgetCharsOverride: 렌더 후 실측 낭독 속도로 역산한 예산(재감량 경로) — 미지정 시 정적 예산.
  *  keptScenes: 살아남은 씬의 '입력 plan 기준' 인덱스(씬 제거 시 이미지·클립 매핑용). */
@@ -477,7 +491,7 @@ async function fitShortsPlanToDuration(io: JobIO, plan: Plan, budgetCharsOverrid
       `아래 숏폼 내레이션 합계가 ${before}자로 낭독 상한(${cap}초 ≈ ${budget}자)을 넘는다. 씬 구성은 유지하고 내레이션만 감량해 합계 ${budget}자 이내로 만들어라.`,
       cur,
       `합계 ${budget}자 이내는 반드시 지켜라 — 표현 다듬기로 모자라면 덜 중요한 문장을 통째로 빼라. 찔끔 깎은 초과 응답은 무효다(실측: 목표 341자에 364자 응답이 반복돼 코드가 강제 트리밍하게 된다 — 그러면 네가 고른 문장이 아니라 뒤 문장이 잘린다).`,
-      '규칙: 사실·수치·결론과 씬별 "무엇을+왜"는 유지하고 군더더기·중복 표현만 깎아라. 구어체 존댓말·숫자 한글 낭독 등 원문 문체 유지, 이모지 금지.',
+      '규칙: 사실·수치·결론과 씬별 "무엇을+왜"는 유지하고 군더더기·중복 표현만 깎아라. 구어체 존댓말·숫자 한글 낭독 등 원문 문체 유지, 이모지 금지. 유보어("대개/흔히/보통/~일 수 있다/~봐요/가능성")는 군더더기가 아니다 — 남겨라. 원문 결론의 방향("미루라/하지 마라")을 뒤집지 마라.',
       'JSON 형식: {"scenes":[{"index":씬번호,"narration":"..."}]} — 전 씬 포함.',
     ].join('\n'),
     { maxOutputTokens: 1200, signal: io.signal },
@@ -491,6 +505,11 @@ async function fitShortsPlanToDuration(io: JobIO, plan: Plan, budgetCharsOverrid
       if (narration && narration.length < out.scenes[idx - 1]!.narration.length) out.scenes[idx - 1]!.narration = narration;
     }
   }
+  // 압축이 유보어를 지워 결론을 반전시킨 실측 대응 — 결정적 트리밍(예산 보장) 전에 원문장으로 복원.
+  try {
+    const hedged = restoreLostHedges(plan, out);
+    if (hedged.restored.length) { out = hedged.plan; io.bus?.emit('log', { message: `압축 — 유보어 소실 씬 ${hedged.restored.join(',')} 원문장 복원` }); }
+  } catch { /* fail-open — 복원 실패로 압축 자체를 막지 않는다 */ }
   // 결정적 마감 — LLM 무응답·부분 이행 모두 여기서 예산을 보장한다(생성 실패 금지의 전제).
   let keptScenes = allIdx;
   if (shortsNarrationChars(out) > budget) {
