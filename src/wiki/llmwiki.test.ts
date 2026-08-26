@@ -520,3 +520,45 @@ describe('mergePages — 의미 중복 병합(메타 합집합·참조 재지정
     expect(await w.mergePages(slugify('x'), '없는것')).toBe(false);
   });
 });
+
+import { provenanceLabel } from './llmwiki';
+
+describe('provenanceLabel — 그라운딩 출처 라벨(스펙 §4)', () => {
+  const P = (type: string, sources: string[]) => ({ type: type as never, sources });
+  it('raw > performance > maintain:auto > stub:source > 토론·종합 > run: > 미상', () => {
+    expect(provenanceLabel(P('concept', ['raw/a.md']))).toBe('원문(raw)');
+    expect(provenanceLabel(P('performance', ['perf:url']))).toBe('실측 성과');
+    expect(provenanceLabel(P('entity', ['maintain:auto']))).toBe('LLM 생성 스텁');
+    expect(provenanceLabel(P('entity', ['stub:source']))).toBe('원문 발췌 스텁');
+    expect(provenanceLabel(P('overview', []))).toBe('토론·종합(출처 없음)');
+    expect(provenanceLabel(P('concept', ['run:abc']))).toBe('런 산출 요약');
+    expect(provenanceLabel(P('concept', []))).toBe('출처 미상');
+  });
+});
+
+describe('query — forFacts 필터·스텁 감가·라벨 머리말', () => {
+  it('forFacts 면 performance·debate·overview·lesson 을 제외하고 maintain:auto 는 감가한다', () => {
+    const w = new LlmWiki(dir);
+    w.upsertPage({ title: '감나무 깍지벌레', type: 'entity', body: '감나무 깍지벌레 방제 요약', sources: ['maintain:auto'] });
+    w.upsertPage({ title: '감나무 깍지벌레 방제', type: 'concept', body: '감나무 깍지벌레 방제는 4월 하순 약충기', sources: ['run:r1'] });
+    w.upsertPage({ title: '감나무 깍지벌레 성과', type: 'performance', body: '감나무 깍지벌레 조회 120', sources: ['perf:u'] });
+    const all = w.query('감나무 깍지벌레', 5);
+    expect(all.hits.some((p) => p.type === 'performance')).toBe(true);
+    const facts = w.query('감나무 깍지벌레', 5, { forFacts: true });
+    expect(facts.hits.some((p) => p.type === 'performance')).toBe(false);
+    expect(facts.hits.map((p) => p.title).sort()).toEqual(['감나무 깍지벌레', '감나무 깍지벌레 방제']);
+    expect(facts.context).toContain('### 감나무 깍지벌레 방제 [런 산출 요약]');
+    expect(facts.context).toContain('### 감나무 깍지벌레 [LLM 생성 스텁]');
+  });
+  it('maintain:auto 는 같은 점수의 run: 페이지보다 낮게 감가된다', () => {
+    const w = new LlmWiki(dir);
+    w.upsertPage({ title: '배롱나무 전정', type: 'entity', body: '배롱나무 전정 개요', sources: ['maintain:auto'] });
+    w.upsertPage({ title: '배롱나무 전정 시기', type: 'concept', body: '배롱나무 전정 개요', sources: ['run:r1'] });
+    // 제목 토큰 2개 일치(+16)·본문 존재(+2) 동일 → run: ×0.5 = 9 vs maintain:auto ×0.5 = 9 (동점) — 감가 자체를 확인하려면 스텁만 있는 경우와 비교
+    const only = new LlmWiki(path.join(dir, '..', 'w2'));
+    only.upsertPage({ title: '배롱나무 전정', type: 'entity', body: '배롱나무 전정 개요', sources: ['maintain:auto'] });
+    only.upsertPage({ title: '배롱나무 전정 참고', type: 'entity', body: '배롱나무 전정 개요', sources: [] });
+    const hits = only.query('배롱나무 전정', 2).hits.map((p) => p.title);
+    expect(hits[0]).toBe('배롱나무 전정 참고'); // 출처 미상(감가 없음)이 스텁(×0.5)보다 앞
+  });
+});

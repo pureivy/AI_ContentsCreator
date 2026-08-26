@@ -309,7 +309,7 @@ export async function writeBlogBody(a: {
     ].filter(Boolean).join('\n\n'),
     // synthesis 단계라 brevity 는 해제되지만 BLOG_BODY_GUIDE 가 블로그 길이(1.5~4k자)를 고정한다. blockId 'ceo-synth' = 오피스 통합 안무 유지.
     stage: 'synthesis', emitSpawn: true, blockId: 'ceo-synth', systemExtra: personaGuide,
-    groundQuery: topic, groundWikiOnly: true, groundLimit: 3, maxOutputTokens: 5000, signal,
+    groundQuery: topic, groundWikiOnly: true, groundLimit: 3, groundForFacts: true, maxOutputTokens: 5000, signal,
   });
   let body = synth.text.trim();
   // 강건성 가드 — 소제목(H2/H3) 없는 퇴화 출력(메타 코멘터리·질문·보류)이면 브리프 단독으로 1회 재집필.
@@ -320,7 +320,7 @@ export async function writeBlogBody(a: {
       task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 질문·보류·메타 설명 없이 곧바로 본문(## 소제목 포함)만 출력한다.\n${BLOG_BODY_GUIDE}`,
       context: revise ? reviseContext : [priorCoverage, styleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon), brief ? `[리서치·SEO 브리프]\n${brief}` : ''].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
-      groundQuery: topic, groundWikiOnly: true, groundLimit: 3, maxOutputTokens: 5000, signal,
+      groundQuery: topic, groundWikiOnly: true, groundLimit: 3, groundForFacts: true, maxOutputTokens: 5000, signal,
     });
     const rt = retry.text.trim();
     if (/^#{2,}\s/m.test(rt) || rt.length > body.length) body = rt;
@@ -714,7 +714,7 @@ async function packageDesignFinalize(a: {
       gateResult = { status: 'error', claims: [], unsupported: [], contradicted: [], repaired: false, error: '본문 없음 — 브리프 폴백 산출물(게이트 생략)', checkedTs: new Date().toISOString() };
     } else {
       try {
-        const wiki = await llmWiki().semanticQuery(topic, 3, signal).catch(() => ({ hits: [], context: '' }));
+        const wiki = await llmWiki().semanticQuery(topic, 3, signal, { forFacts: true }).catch(() => ({ hits: [], context: '' }));
         const evidence = buildEvidence({
           brief, critiqueText, wikiGrounding: wiki.context,
           injected: readInjected(writer.id, 4000), verified: readVerified(writer.id, 3000),

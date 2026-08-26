@@ -94,6 +94,8 @@ export interface AgentRunArgs {
   /** true 면 웹·외부 커넥터(법령·KOSIS 등) 그라운딩을 건너뛰고 위키만 사용. 합성 단계는 팀이 이미 외부
    *  데이터를 모았으므로 섹션마다 느린 외부 API 를 재호출하지 않게 한다(통합 속도 — 사용자 요청). */
   groundWikiOnly?: boolean;
+  /** 집필용 사실 조회 — performance·debate·overview·lesson 제외, LLM 스텁 감가(스펙 §4). */
+  groundForFacts?: boolean;
   signal?: AbortSignal;
 }
 
@@ -145,7 +147,7 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
   if (args.groundQuery && tools.includes('wiki_query')) {
     // 데이터 그라운딩 폭 — 결산보고서처럼 여러 자료의 실수치를 종합해야 하므로 6건(이슈12). source 우대+넉넉한 본문은 query() 에서.
     // 임베딩 모델 설치 시 의미검색(retrieve→rerank), 없으면 휴리스틱 query() 로 자동 폴백.
-    const { hits, context } = await llmWiki().semanticQuery(args.groundQuery, args.groundLimit ?? 6, args.signal);
+    const { hits, context } = await llmWiki().semanticQuery(args.groundQuery, args.groundLimit ?? 6, args.signal, { forFacts: !!args.groundForFacts });
     if (context) {
       grounding = context;
       bus.emit(
@@ -192,7 +194,7 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
   const hasGround = !!(grounding || connectorBlocks.length || webContext);
   const groundDirective = (hasGround && (stage === 'work' || stage === 'synthesis'))
     ? '\n\n[작성 규칙 — 반드시 준수]\n' +
-      '1) 아래 제공된 자료(위키/검색/참고)에 있는 실제 수치·금액·명칭·항목을 그대로 인용해 작성하라.\n' +
+      '1) 아래 제공 자료 중 [원문(raw)]·[실측 성과] 라벨이 붙은 위키 발췌와 커넥터 블록의 실제 수치·명칭은 그대로 인용하라. [LLM 생성 스텁]·[토론·종합(출처 없음)]·[런 산출 요약]·[출처 미상] 라벨 자료는 방향 참고용이다 — 그 수치·주장을 사실로 인용하지 마라.\n' +
       '2) 플레이스홀더·더미값을 절대 쓰지 마라: "[OO]", "202X", "[항목]", "000,000", "00.0%", "00%", "X,XXX" 같은 빈칸·0·임의 숫자로 표나 수치를 채우지 마라.\n' +
       '3) 제공 자료에 없는 값은 지어내지(0·임의값 포함) 말고 "⚠️ 데이터 없음: <항목> (필요 자료: <무엇>)" 으로 정직하게 명시하라.\n' +
       '4) 인용한 실제 수치에는 [근거: <제공 자료 제목>] 을 붙여라(존재하지 않는 자료를 지어내 인용하지 마라).'

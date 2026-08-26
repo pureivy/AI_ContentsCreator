@@ -197,6 +197,19 @@ export function buildLinkResolver(pages: Array<{ slug: string; aliases: string[]
   return out;
 }
 
+/** 그라운딩 컨텍스트 머리말용 출처 라벨(순수, 스펙 §4) — 작가·판정기가 "LLM 이 만든 것"과 "실측·원문"을 구분하게. */
+export function provenanceLabel(p: Pick<WikiPage, 'type' | 'sources'>): string {
+  if (p.sources.some((s) => s.startsWith('raw/'))) return '원문(raw)';
+  if (p.type === 'performance') return '실측 성과';
+  if (p.sources.includes('maintain:auto')) return 'LLM 생성 스텁';
+  if (p.sources.includes('stub:source')) return '원문 발췌 스텁';
+  if (p.type === 'debate' || p.type === 'overview' || p.type === 'lesson') return '토론·종합(출처 없음)';
+  if (p.sources.some((s) => s.startsWith('run:'))) return '런 산출 요약';
+  return '출처 미상';
+}
+// 집필용 forFacts 질의에서 제외할 타입 — 성과 수치·토론 종합·개요·교훈은 방향 참고일 뿐 인용 가능한 사실이 아니다.
+const FACT_EXCLUDED_TYPES: ReadonlySet<PageType> = new Set(['performance', 'debate', 'overview', 'lesson']);
+
 export class LlmWiki {
   readonly dir: string;
   readonly rawDir: string;
@@ -863,10 +876,12 @@ export class LlmWiki {
   }
 
   // ---- QUERY (인덱스 우선): 질의 관련 페이지 본문을 그라운딩 컨텍스트로 반환 ----
-  query(question: string, limit = 4): { hits: WikiPage[]; context: string } {
+  query(question: string, limit = 4, opts: { forFacts?: boolean } = {}): { hits: WikiPage[]; context: string } {
     const qt = tokenize(question);
     if (!qt.length) return { hits: [], context: '' };
-    const scored = this.allPages().map((p) => {
+    const scored = this.allPages()
+      .filter((p) => !opts.forFacts || !FACT_EXCLUDED_TYPES.has(p.type)) // 집필용 사실 조회 — 성과·토론·개요·교훈 제외(스펙 §4)
+      .map((p) => {
       const title = p.title; const a = tokenize(p.aliases.join(' ')); const b = new Set(tokenize(p.body));
       let s = 0;
       for (const tok of qt) {
@@ -885,13 +900,15 @@ export class LlmWiki {
       if (p.sources.some((src) => src.startsWith('raw/'))) s *= 2;
       // 런 파생 요약(sources=run:...)은 역가중 — 이전 런 보고서의 순환 요약이 1차 원문을 밀어내지 않게.
       if (p.sources.some((src) => src.startsWith('run:'))) s *= 0.5;
+      if (p.sources.includes('maintain:auto')) s *= 0.5; // LLM 기억 스텁 — 순수 스텁이 상위 랭크되던 감사 실측
       return { p, s };
     }).filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s || b.p.updated.localeCompare(a.p.updated) || a.p.title.localeCompare(b.p.title))
       .slice(0, limit);
     const hits = scored.map((x) => x.p);
     // 관련 구간 발췌 — 헤더만 잘려 실수치가 안 닿던 문제(이슈12) 해소: source 는 헤더+데이터행 발췌(3500자), 그 외 800자.
-    const context = hits.map((p) => `### ${p.title}\n${excerpt(p.body, qt, p.type === 'source' ? 3500 : 800)}`).join('\n\n');
+    // 머리말에 출처 라벨을 달아 작가·판정기가 "실측·원문"과 "LLM 이 만든 것"을 구분하게(스펙 §4).
+    const context = hits.map((p) => `### ${p.title} [${provenanceLabel(p)}]\n${excerpt(p.body, qt, p.type === 'source' ? 3500 : 800)}`).join('\n\n');
     return { hits, context };
   }
 
@@ -922,16 +939,16 @@ export class LlmWiki {
     return extra.length ? [...hits, ...extra] : hits;
   }
 
-  async semanticQuery(question: string, limit = 4, _signal?: AbortSignal): Promise<{ hits: WikiPage[]; context: string }> {
+  async semanticQuery(question: string, limit = 4, _signal?: AbortSignal, opts: { forFacts?: boolean } = {}): Promise<{ hits: WikiPage[]; context: string }> {
     // 인사·직무 의도면 표 자료(업무분장표 등) 앵커로 질의 확장 — recall·발췌 모두 확장질의 기준.
     // Ollama 임베딩 rerank 는 백엔드 제거(2026-07-06)와 함께 삭제 — 휴리스틱 랭킹 단일 경로.
     // (query() 휴리스틱이 이미 출처 가중 raw/×2·run:×0.5 로 1차 원문을 우대한다.)
     const { q, intent } = this.expandIntent(question);
     const qt = tokenize(q);
     const buildCtx = (hh: WikiPage[]): string =>
-      hh.map((p) => `### ${p.title}\n${excerpt(p.body, qt, p.type === 'source' ? 3500 : 800)}`).join('\n\n');
-    const base = this.query(q, limit).hits;
-    const pool = intent ? this.query(q, Math.max(limit * 8, 48)).hits : base;
+      hh.map((p) => `### ${p.title} [${provenanceLabel(p)}]\n${excerpt(p.body, qt, p.type === 'source' ? 3500 : 800)}`).join('\n\n');
+    const base = this.query(q, limit, opts).hits;
+    const pool = intent ? this.query(q, Math.max(limit * 8, 48), opts).hits : base;
     const hits = this.pullAnchorSet(base, pool, intent);
     return { hits, context: buildCtx(hits) };
   }
