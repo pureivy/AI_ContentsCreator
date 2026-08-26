@@ -220,7 +220,8 @@ export function splitBodySentences(md: string): string[] {
   return out;
 }
 
-const UNIT_RE = /\d+(?:[.,]\d+)?\s*(?:cm|mm|m|kg|g|ml|l|리터|℃|도|%|퍼센트|호|년생|년|주|일|개|회|시간|분|배|그루|장|알)(?![가-힣A-Za-z])/i;
+// 단위 뒤에 한글 조사가 바로 붙는다("3cm가", "10호를") — 조사를 막으면 안 된다. 영문자만 막아 '3ml' 이 'm' 으로 잘리지 않게 한다.
+const UNIT_RE = /\d+(?:[.,]\d+)?\s*(?:cm|mm|ml|kg|m|g|l|리터|℃|도|%|퍼센트|호|년생|년|주|일|개|회|시간|분|배|그루|장|알)(?![A-Za-z])/i;
 const MONTH_RE = /(?:^|[^\d])(?:1[0-2]|[1-9])\s*월|정월|이월|삼월|사월|오월|유월|칠월|팔월|구월|시월|십일월|십이월/;
 const YEAR_RE = /(?:19|20)\d{2}\s*년/;
 const SOLAR_TERMS = ['입춘', '우수', '경칩', '춘분', '청명', '곡우', '입하', '소만', '망종', '하지', '소서', '대서', '입추', '처서', '백로', '추분', '한로', '상강', '입동', '소설', '대설', '동지', '소한', '대한'];
@@ -851,7 +852,8 @@ describe('factGateLines — 텔레그램 보류 표시(스펙 §2-3)', () => {
     const s = factGateLines({ status: 'hold', unsupported: ['a'.repeat(100), 'b'], contradicted: ['c ← 근거: d'], checkedTs: 't' }, 2);
     expect(s.split('\n')[0]).toBe('⚠ 사실 게이트 보류 3건 — 근거 없음 2 · 모순 1');
     expect(s).toContain('• ' + 'a'.repeat(80) + '…');
-    expect(s).not.toContain('• b');
+    expect(s).toContain('• b');
+    expect(s).not.toContain('• c ←'); // maxItems 2 — 세 번째 항목은 잘린다
   });
   it('error 는 판정 실패로, pass·미실행은 빈 문자열', () => {
     expect(factGateLines({ status: 'error', unsupported: [], contradicted: [], checkedTs: 't' }, 3)).toBe('⚠ 사실 게이트 판정 실패 — 수동 검토 필요');
@@ -1148,14 +1150,23 @@ describe('query — forFacts 필터·스텁 감가·라벨 머리말', () => {
     expect(all.hits.some((p) => p.type === 'performance')).toBe(true);
     const facts = w.query('감나무 깍지벌레', 5, { forFacts: true });
     expect(facts.hits.some((p) => p.type === 'performance')).toBe(false);
-    expect(facts.hits[0]!.title).toBe('감나무 깍지벌레 방제'); // run:(×0.5) 가 maintain:auto(×0.5×제목가중) 보다 앞: 본문 토큰 수가 많음
+    expect(facts.hits.map((p) => p.title).sort()).toEqual(['감나무 깍지벌레', '감나무 깍지벌레 방제']);
     expect(facts.context).toContain('### 감나무 깍지벌레 방제 [런 산출 요약]');
-    expect(facts.context).toContain('[LLM 생성 스텁]');
+    expect(facts.context).toContain('### 감나무 깍지벌레 [LLM 생성 스텁]');
+  });
+  it('maintain:auto 는 같은 점수의 run: 페이지보다 낮게 감가된다', () => {
+    const w = new LlmWiki(dir);
+    w.upsertPage({ title: '배롱나무 전정', type: 'entity', body: '배롱나무 전정 개요', sources: ['maintain:auto'] });
+    w.upsertPage({ title: '배롱나무 전정 시기', type: 'concept', body: '배롱나무 전정 개요', sources: ['run:r1'] });
+    // 제목 토큰 2개 일치(+16)·본문 존재(+2) 동일 → run: ×0.5 = 9 vs maintain:auto ×0.5 = 9 (동점) — 감가 자체를 확인하려면 스텁만 있는 경우와 비교
+    const only = new LlmWiki(path.join(dir, '..', 'w2'));
+    only.upsertPage({ title: '배롱나무 전정', type: 'entity', body: '배롱나무 전정 개요', sources: ['maintain:auto'] });
+    only.upsertPage({ title: '배롱나무 전정 참고', type: 'entity', body: '배롱나무 전정 개요', sources: [] });
+    const hits = only.query('배롱나무 전정', 2).hits.map((p) => p.title);
+    expect(hits[0]).toBe('배롱나무 전정 참고'); // 출처 미상(감가 없음)이 스텁(×0.5)보다 앞
   });
 });
 ```
-
-> 첫 번째 히트 순서 단정이 스코어 세부에 흔들리면 `facts.hits.map(p=>p.title)` 가 두 지식 페이지만 포함하는지로 완화한다 — 목적은 필터·라벨 검증.
 
 - [ ] **Step 2: 실패 확인** — `pnpm vitest run src/wiki/llmwiki.test.ts` → FAIL
 
@@ -1769,8 +1780,9 @@ describe('stripInternalMarkers — URL 없는 [근거:]·데이터 없음 표식
 /** 발행 초안에서 내부 표식 제거(순수, 스펙 §6c) — 감사 실측: "[근거: 확립된 원예학 지식]"·"⚠️ 데이터 없음:" 이 그대로 발행됐다. */
 export function stripInternalMarkers(md: string): string {
   return md
-    .replace(/^[ \t]*(?:[-*]\s*)?⚠️?\s*데이터 없음\s*[:：][^\n]*\n?/gmu, '')
-    .replace(/\s*⚠️?\s*데이터 없음\s*[:：][^\n()]*(?:\([^)]*\))?/gu, '')
+    // stripEmoji 가 먼저 돌아 ⚠️ 가 이미 지워졌을 수 있다 — 이모지는 통째로 선택(optional group).
+    .replace(/^[ \t]*(?:[-*]\s*)?(?:⚠️?)?\s*데이터 없음\s*[:：][^\n]*\n?/gmu, '')
+    .replace(/\s*(?:⚠️?)?\s*데이터 없음\s*[:：][^\n()]*(?:\([^)]*\))?/gu, '')
     .replace(/\s*\[\s*근거\s*[:：]\s*([^\]]*)\]/gu, (_m, inner: string) => {
       const url = /https?:\/\/[^\s\]]+/.exec(inner)?.[0];
       return url ? ` (출처: ${url})` : '';
