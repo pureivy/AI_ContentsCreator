@@ -65,6 +65,23 @@ export function writeResearchBrief(runId: string, brief: string): void { writeSe
 export function readResearchBrief(runId: string): string {
   try { return fs.readFileSync(sessionFile(runId, 'research_brief.md'), 'utf-8'); } catch { return ''; }
 }
+/** 리비전용 브리프 — research_brief.md 가 없으면(이 기능 이전 런) 같은 세션의 work 단계 에이전트 산출물(<id>.md, 첫 줄 "# 이름 (work)")을 이어 붙여 브리프로 쓴다. */
+export function readResearchBriefWithFallback(runId: string): string {
+  const direct = readResearchBrief(runId);
+  if (direct.trim()) return direct;
+  try {
+    const dir = path.join(CONFIG.sessionsDir, runId);
+    const parts: string[] = [];
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith('.md') || f.startsWith('_') || f.startsWith('draft')) continue;
+      const text = fs.readFileSync(path.join(dir, f), 'utf-8');
+      const first = text.split('\n')[0] ?? '';
+      if (!/\(work\)\s*$/.test(first)) continue;
+      parts.push(text.replace(/^# /, '## '));
+    }
+    return parts.join('\n\n');
+  } catch { return ''; }
+}
 /** 사실 게이트 결과(스펙 §2-2) — advancePieceReady 가 piece 로 옮긴다. */
 export function writeFactGate(runId: string, r: FactGateResult): void { writeSessionFile(runId, 'fact_gate.json', JSON.stringify(r, null, 2)); }
 export function readFactGate(runId: string): FactGateResult | null {

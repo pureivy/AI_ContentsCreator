@@ -27,7 +27,7 @@ import { getRunSettings } from '../runsettings';
 import { brandContext, activeBrandSlug, getBrand, lexiconGuide } from '../content/brand';
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid } from '../content/priorCoverage';
 import { collectExistingContent } from '../content/novelty';
-import { writeResearchBrief, readResearchBrief, writeFactGate } from '../sessions/digest';
+import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate } from '../sessions/digest';
 import { factGateBlog, buildEvidence, runFactGateWithRepair } from '../content/factGate';
 import type { FactGateResult } from '../content/factGate';
 import { readInjected, readVerified } from '../agents/workspace';
@@ -705,21 +705,30 @@ async function packageDesignFinalize(a: {
   //     결과는 fact_gate.json → piece.factGate → 자동 임시저장 차단(사람 버튼은 유지). 자동 경로는 fail-closed. ---
   let gateResult: FactGateResult | null = null;
   if (CONFIG.factGate && mission !== 'research' && finalDeliverable.trim() && !signal?.aborted) {
-    try {
-      const wiki = await llmWiki().semanticQuery(topic, 3, signal).catch(() => ({ hits: [], context: '' }));
-      const evidence = buildEvidence({
-        brief, critiqueText, wikiGrounding: wiki.context,
-        injected: readInjected(writer.id, 4000), verified: readVerified(writer.id, 3000),
-      });
-      const gate = (body: string) => factGateBlog({ model: assign.micro, body, evidence, signal, maxClaims: CONFIG.factGateMaxClaims });
-      const repair = (body: string, feedback: string) => writeBlogBody({
-        bus, writer, model: modelForTier(assign, writer.tier), topic, brief, personaGuide, keyword,
-        revise: { baseBody: body, feedback }, signal,
-      });
-      const r = await runFactGateWithRepair({ gate, repair }, finalDeliverable);
-      finalDeliverable = r.body; gateResult = r.result;
-    } catch (e) {
-      gateResult = { status: 'error', claims: [], unsupported: [], contradicted: [], repaired: false, error: e instanceof Error ? e.message : String(e), checkedTs: new Date().toISOString() };
+    // 브리프 폴백 산출물(2026-08-26 수선) — 작가 무응답이 겹치면 finalDeliverable = brief 그대로가 된다
+    // (runOrg: `body || brief || …`). 그 상태로 게이트를 돌리면 브리프를 브리프 자신과 대조해 전부
+    // supported 로 통과한다(가짜 pass) — 작가가 쓰지 않은 산출물에 '검증됨' 딱지가 붙어 자동 임시저장이
+    // 풀린다. 이런 산출물은 판정 자체가 무의미하므로 LLM 호출 없이 곧장 error(자동 경로 차단)로 기록한다.
+    const briefFallback = finalDeliverable.trim() === brief.trim();
+    if (briefFallback) {
+      gateResult = { status: 'error', claims: [], unsupported: [], contradicted: [], repaired: false, error: '본문 없음 — 브리프 폴백 산출물(게이트 생략)', checkedTs: new Date().toISOString() };
+    } else {
+      try {
+        const wiki = await llmWiki().semanticQuery(topic, 3, signal).catch(() => ({ hits: [], context: '' }));
+        const evidence = buildEvidence({
+          brief, critiqueText, wikiGrounding: wiki.context,
+          injected: readInjected(writer.id, 4000), verified: readVerified(writer.id, 3000),
+        });
+        const gate = (body: string) => factGateBlog({ model: assign.micro, body, evidence, signal, maxClaims: CONFIG.factGateMaxClaims });
+        const repair = (body: string, feedback: string) => writeBlogBody({
+          bus, writer, model: modelForTier(assign, writer.tier), topic, brief, personaGuide, keyword,
+          revise: { baseBody: body, feedback }, signal,
+        });
+        const r = await runFactGateWithRepair({ gate, repair }, finalDeliverable);
+        finalDeliverable = r.body; gateResult = r.result;
+      } catch (e) {
+        gateResult = { status: 'error', claims: [], unsupported: [], contradicted: [], repaired: false, error: e instanceof Error ? e.message : String(e), checkedTs: new Date().toISOString() };
+      }
     }
     try { writeFactGate(bus.runId, gateResult); }
     catch (e) { bus.emit('log', { message: `사실 게이트 기록 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
@@ -810,11 +819,18 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
   const writer = writerTeam?.lead ?? company.ceo;
   bus.emit('log', { message: `리비전 런 — 검토자 수정 요청 반영 개정(리서치·검수 생략): "${revise.feedback.slice(0, 120)}"` });
   bus.emit('phase', { team_id: '_ceo', phase: 'integrate' });
-  const brief = revise.baseRunId ? readResearchBrief(revise.baseRunId) : '';
+  // 브리프 폴백(2026-08-26) — research_brief.md 는 이 기능 이전 런엔 없다. 원 런의 work 단계 산출물
+  // (<id>.md)로 대체해, 오래된 조각의 리비전도 무근거 hold 반복 없이 실제 근거로 개정되게 한다.
+  const directBrief = revise.baseRunId ? readResearchBrief(revise.baseRunId) : '';
+  const brief = revise.baseRunId ? readResearchBriefWithFallback(revise.baseRunId) : '';
   // fail-open(스펙 §8) — 부가 기록 실패로 리비전 런이 죽으면 안 된다(다이제스트 저장과 동일 패턴, finalize.ts).
   if (brief.trim()) {
     try { writeResearchBrief(bus.runId, brief); } // 연쇄 리비전 대응 — 이 런에서 개정한 결과도 브리프를 물려받는다
     catch (e) { bus.emit('log', { message: `브리프 영속화 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
+    if (!directBrief.trim()) {
+      const n = (brief.match(/^## .+\(work\)\s*$/gm) || []).length;
+      bus.emit('log', { message: `리비전 런 — 원 런 브리프 파일 없음 → work 단계 산출물 ${n}건으로 대체` });
+    }
   } else {
     bus.emit('log', { message: '리비전 런 — 원 런 브리프 없음(research_brief.md 부재) · 초안+피드백만으로 개정' });
   }

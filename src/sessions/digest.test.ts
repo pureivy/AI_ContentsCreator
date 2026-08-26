@@ -23,3 +23,28 @@ describe('세션 파일 IO — research_brief.md / fact_gate.json', () => {
     expect(readFactGate('r2')).toEqual(r);
   });
 });
+
+describe('readResearchBriefWithFallback — research_brief.md 없을 때 work 산출물로 대체', () => {
+  it('research_brief.md 가 있으면 그것을 그대로 쓴다(폴백 무시)', async () => {
+    const { writeResearchBrief, readResearchBriefWithFallback } = await import('./digest');
+    writeResearchBrief('r3', '## 리서치팀\n브리프 본문');
+    fs.mkdirSync(path.join(tmp, 'r3'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'r3', 'research.md'), '# 리서치팀 (work)\n\n무시돼야 할 산출물', 'utf-8');
+    expect(readResearchBriefWithFallback('r3')).toBe('## 리서치팀\n브리프 본문');
+  });
+  it('research_brief.md 가 없으면 work 단계 산출물만 이어붙이고, work 아닌 파일·_ 접두·draft 는 뺀다', async () => {
+    const dir = path.join(tmp, 'r4');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'research.md'), '# 리서치팀 (work)\n\n연구 산출물 본문', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'reviewer.md'), '# 검수 (critique)\n\n검수 의견', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'ceo.md'), '# CEO (synthesis)\n\n종합 산출물', 'utf-8');
+    fs.writeFileSync(path.join(dir, '_report.md'), '# 최종 종합\n\n보고서', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'draft.md'), '# 초안\n\n초안 내용', 'utf-8');
+    const { readResearchBriefWithFallback } = await import('./digest');
+    expect(readResearchBriefWithFallback('r4')).toBe('## 리서치팀 (work)\n\n연구 산출물 본문');
+  });
+  it('아무 것도 없으면 빈 문자열', async () => {
+    const { readResearchBriefWithFallback } = await import('./digest');
+    expect(readResearchBriefWithFallback('r5-없음')).toBe('');
+  });
+});
