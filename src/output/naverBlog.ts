@@ -37,11 +37,25 @@ export function stripTrailingTagDump(body: string): string {
     .trimEnd();
 }
 
+/** 발행 초안에서 내부 표식 제거(순수, 스펙 §6c) — 감사 실측: "[근거: 확립된 원예학 지식]"·"⚠️ 데이터 없음:" 이 그대로 발행됐다. */
+export function stripInternalMarkers(md: string): string {
+  return md
+    // stripEmoji 가 먼저 돌아 ⚠️ 가 이미 지워졌을 수 있다 — 이모지는 통째로 선택(optional group).
+    .replace(/^[ \t]*(?:[-*]\s*)?(?:⚠️?)?\s*데이터 없음\s*[:：][^\n]*\n?/gmu, '')
+    .replace(/\s*(?:⚠️?)?\s*데이터 없음\s*[:：][^\n()]*(?:\([^)]*\))?/gu, '')
+    .replace(/\s*\[\s*근거\s*[:：]\s*([^\]]*)\]/gu, (_m, inner: string) => {
+      const url = /https?:\/\/[^\s\]]+/.exec(inner)?.[0];
+      return url ? ` (출처: ${url})` : '';
+    })
+    .replace(/[ \t]+([.,!?])/g, '$1')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
 export async function packageNaverBlog(input: FormatterInput): Promise<AssetBundle> {
   const { topic, researchBrief, serpText, model, signal } = input;
   const pinnedKeyword = stripEmoji(asString(input.keyword).trim());
   // 이모지 결정적 제거 — 지침(작가·편집자 프롬프트)이 1차 방어, 여기가 최종 보증(발행 초안엔 이모지 0).
-  const body = stripTrailingTagDump(stripEmoji(input.body));
+  const body = stripInternalMarkers(stripTrailingTagDump(stripEmoji(input.body)));
   let meta: {
     primaryKeyword?: string; titles?: unknown; meta?: string; tags?: unknown;
     images?: Array<{ alt?: string; prompt?: string }>;

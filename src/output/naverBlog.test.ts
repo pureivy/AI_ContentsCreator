@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stripTrailingTagDump } from './naverBlog';
+import { stripTrailingTagDump, stripInternalMarkers } from './naverBlog';
 
 // 실측(2026-08-10 사용자 지적): 작가 모델이 가끔 본문 끝에 맨 키워드를 나열한다("포도나무수확시기
 // 포도수확시기 … 비온디트리" — 태그 접두 없음). 발행 레이어의 #태그 칩과 중복이고 본문 키워드
@@ -24,5 +24,17 @@ describe('stripTrailingTagDump — 본문 끝 태그·키워드 나열 제거(�
   it('토큰 3개 이하 짧은 줄은 남긴다(과제거 방지)', () => {
     const body = '본문.\n\n감사합니다 여러분 안녕히';
     expect(stripTrailingTagDump(body)).toBe(body);
+  });
+});
+
+describe('stripInternalMarkers — URL 없는 [근거:]·데이터 없음 표식 제거(스펙 §6c)', () => {
+  it('URL 없는 [근거:] 는 지우고, URL 있는 것은 (출처: URL) 로 바꾼다', () => {
+    expect(stripInternalMarkers('4월 하순에 깨어납니다 [근거: 농사로].')).toBe('4월 하순에 깨어납니다.');
+    expect(stripInternalMarkers('기준입니다 [근거: 확립된 원예학 지식] 그래서')).toBe('기준입니다 그래서');
+    expect(stripInternalMarkers('심습니다 [근거: 산림청 https://www.forest.go.kr/x]')).toBe('심습니다 (출처: https://www.forest.go.kr/x)');
+  });
+  it('"⚠️ 데이터 없음:" 줄과 인라인 표식을 제거한다', () => {
+    expect(stripInternalMarkers('앞\n- ⚠️ 데이터 없음: 발아율 (필요 자료: 실측)\n뒤')).toBe('앞\n뒤');
+    expect(stripInternalMarkers('발아율은 ⚠️ 데이터 없음: 발아율 (필요 자료: 실측) 수준입니다.')).toBe('발아율은 수준입니다.');
   });
 });
