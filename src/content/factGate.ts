@@ -292,7 +292,10 @@ export async function repairSentences(
  * 첫 글자가 숫자가 아니면 버리고(UNIT_RE·YEAR_RE 는 항상 숫자로 시작해 no-op), 공백을 접고, 대소문자를 통일한다
  * ("3cm"↔"3 cm", "3ML"↔"3ml"). */
 function normalizeNumericToken(tok: string): string {
-  const t = tok.length && !/\d/.test(tok[0]!) ? tok.slice(1) : tok;
+  // Fix round 3: 앞 글자는 "그 뒤가 바로 숫자로 이어질 때"만(MONTH_RE 의 (?:^|[^\d]) 캡처) 잘라낸다.
+  // 무조건 첫 글자를 자르면 "삼월"처럼 숫자가 없는 고유어 월 이름(정월·이월·…)의 첫 음절까지 날아가
+  // 정월~십이월 열 개가 전부 "월"로 뭉개지며 월 스왑이 새 사실 가드를 통과했다(리뷰어 재현).
+  const t = /^\D\d/.test(tok) ? tok.slice(1) : tok;
   return t.replace(/\s+/g, '').toLowerCase();
 }
 

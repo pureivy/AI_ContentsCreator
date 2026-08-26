@@ -491,6 +491,39 @@ describe('introducesNewFacts — 수치 토큰 정규화(Fix round 2b)', () => {
   });
 });
 
+describe('introducesNewFacts — 고유어 월 이름 첫 음절 소실 회귀(Fix round 3)', () => {
+  it('고유어 월이 바뀌면(삼월→구월) 새 사실로 걸러낸다(정월~십이월 전부가 "월"로 뭉개지던 회귀)', () => {
+    const r = applySentenceRepairs('삼월에 심습니다.', ['삼월에 심습니다.'],
+      [{ index: 1, action: 'hedge', replacement: '구월에 대개 심습니다.' }]);
+    expect(r.applied).toBe(0);
+    expect(r.missed).toEqual(['삼월에 심습니다.']);
+  });
+  it('같은 고유어 월이면(삼월→삼월) 적용한다', () => {
+    const r = applySentenceRepairs('삼월에 심습니다.', ['삼월에 심습니다.'],
+      [{ index: 1, action: 'hedge', replacement: '삼월에는 대개 심습니다.' }]);
+    expect(r.applied).toBe(1);
+    expect(r.missed).toEqual([]);
+  });
+  it('정월→유월도 새 사실로 걸러낸다', () => {
+    const r = applySentenceRepairs('정월에 가지치기합니다.', ['정월에 가지치기합니다.'],
+      [{ index: 1, action: 'hedge', replacement: '유월에 대개 가지치기합니다.' }]);
+    expect(r.applied).toBe(0);
+    expect(r.missed).toEqual(['정월에 가지치기합니다.']);
+  });
+  it('숫자 월(" 9월" vs "9월")은 여전히 새 사실이 아니다(Fix round 2 회귀 방지)', () => {
+    const r = applySentenceRepairs('거름은 9월에 줍니다.', ['거름은 9월에 줍니다.'],
+      [{ index: 1, action: 'hedge', replacement: '9월에는 대개 거름을 줍니다.' }]);
+    expect(r.applied).toBe(1);
+    expect(r.missed).toEqual([]);
+  });
+  it('공백 유무 차이("3cm" vs "3 cm")도 여전히 새 사실이 아니다(Fix round 2 회귀 방지)', () => {
+    const r = applySentenceRepairs('겉흙 3cm가 마르면 줍니다.', ['겉흙 3cm가 마르면 줍니다.'],
+      [{ index: 1, action: 'hedge', replacement: '겉흙 3 cm가 마르면 대개 줍니다.' }]);
+    expect(r.applied).toBe(1);
+    expect(r.missed).toEqual([]);
+  });
+});
+
 describe('applySentenceRepairs — 소제목 delete 금지(Fix round 2c)', () => {
   it('소제목 delete 는 missed 로 남고, 형제 문장은 정상 적용되며 H2 개수는 그대로다', () => {
     const body = '## 9월 초 사과나무비료, 미룰 나무와 줘도 되는 나무\n질소 성분이 앞선 화학비료는 가을에 양을 줄입니다.';
