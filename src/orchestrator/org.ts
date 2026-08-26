@@ -27,7 +27,11 @@ import { getRunSettings } from '../runsettings';
 import { brandContext, activeBrandSlug, getBrand, lexiconGuide } from '../content/brand';
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid } from '../content/priorCoverage';
 import { collectExistingContent } from '../content/novelty';
-import { writeResearchBrief, readResearchBrief } from '../sessions/digest';
+import { writeResearchBrief, readResearchBrief, writeFactGate } from '../sessions/digest';
+import { factGateBlog, buildEvidence, runFactGateWithRepair } from '../content/factGate';
+import type { FactGateResult } from '../content/factGate';
+import { readInjected, readVerified } from '../agents/workspace';
+import { llmWiki } from '../wiki/llmwiki';
 import type { RunOptions, RunOutcome } from './run';
 
 interface TeamResult {
@@ -656,7 +660,7 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   return packageDesignFinalize({
     bus, topic, company, assign, subproblems, teams: usableTeams,
     critic: critic ?? null, critiqueText, writerTeam, finalDeliverable, brief, serpText, keyword: opts.keyword,
-    mission: opts.mission, signal,
+    mission: opts.mission, writer, personaGuide: personaPrompt(opts.persona, opts.personaText), signal,
   });
 }
 
@@ -682,14 +686,44 @@ async function packageDesignFinalize(a: {
   keyword?: string;
   /** 지식 리서치 런 — 발행 포장(draft.json) 생략(캘린더 비오염). 위키 적재·자가학습은 그대로. */
   mission?: 'research';
+  /** 본문을 쓴 작가 역할 — 사실 게이트 수정 라운드(writeBlogBody revise)와 injected/verified 조회에 쓴다. */
+  writer: Parameters<typeof runAgent>[0]['role'];
+  /** 작가 말투(페르소나) 지침 — 게이트 수정 라운드도 같은 목소리를 유지하도록 전달(없으면 현행 목소리). */
+  personaGuide?: string;
   signal?: AbortSignal;
 }): Promise<RunOutcome> {
-  const { bus, topic, company, assign, subproblems, teams, critic, critiqueText, writerTeam, finalDeliverable, brief, serpText, keyword, mission, signal } = a;
+  const { bus, topic, company, assign, subproblems, teams, critic, critiqueText, writerTeam, brief, serpText, keyword, mission, writer, personaGuide, signal } = a;
+  let finalDeliverable = a.finalDeliverable;
 
   // 잔여 플레이스홀더/가짜수치 경고(생성 지침이 이미 금지 — 보통 0건).
   const placeholders = findTemplateNumbers(finalDeliverable);
   if (placeholders.length) {
     bus.emit('log', { message: `검증 — 잔여 플레이스홀더/가짜수치 ${placeholders.length}건: ${placeholders.slice(0, 6).join(', ')}` });
+  }
+
+  // --- 사실 게이트(2026-08-26, 스펙 §2) — 본문 주장을 브리프·주입 근거와 대조. hold 면 작가 수정 1회 후 재판정.
+  //     결과는 fact_gate.json → piece.factGate → 자동 임시저장 차단(사람 버튼은 유지). 자동 경로는 fail-closed. ---
+  let gateResult: FactGateResult | null = null;
+  if (CONFIG.factGate && mission !== 'research' && finalDeliverable.trim() && !signal?.aborted) {
+    try {
+      const wiki = await llmWiki().semanticQuery(topic, 3, signal).catch(() => ({ hits: [], context: '' }));
+      const evidence = buildEvidence({
+        brief, critiqueText, wikiGrounding: wiki.context,
+        injected: readInjected(writer.id, 4000), verified: readVerified(writer.id, 3000),
+      });
+      const gate = (body: string) => factGateBlog({ model: assign.micro, body, evidence, signal, maxClaims: CONFIG.factGateMaxClaims });
+      const repair = (body: string, feedback: string) => writeBlogBody({
+        bus, writer, model: modelForTier(assign, writer.tier), topic, brief, personaGuide, keyword,
+        revise: { baseBody: body, feedback }, signal,
+      });
+      const r = await runFactGateWithRepair({ gate, repair }, finalDeliverable);
+      finalDeliverable = r.body; gateResult = r.result;
+    } catch (e) {
+      gateResult = { status: 'error', claims: [], unsupported: [], contradicted: [], repaired: false, error: e instanceof Error ? e.message : String(e), checkedTs: new Date().toISOString() };
+    }
+    try { writeFactGate(bus.runId, gateResult); }
+    catch (e) { bus.emit('log', { message: `사실 게이트 기록 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
+    bus.emit('log', { message: `사실 게이트 — 주장 ${gateResult.claims.length}건 · 무근거 ${gateResult.unsupported.length} · 모순 ${gateResult.contradicted.length} · 수정 라운드 ${gateResult.repaired ? '예' : '아니오'} · 판정 ${gateResult.status}${gateResult.error ? ` (${gateResult.error})` : ''}` });
   }
 
   // --- 발행용 초안 포장 — org 본문을 제목·메타·태그·이미지 슬롯·SEO 점수로 포장(재생성 아님). 실패해도 본문은 유지.
@@ -793,6 +827,6 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
     bus, topic, company, assign, subproblems: [], teams: [],
     critic: null, critiqueText: '', writerTeam, finalDeliverable, brief,
     serpText: await serpPopularBrief(topic, signal), // 제목 재패키징도 인기 패턴 참고(fail-open)
-    keyword: opts.keyword, signal,
+    keyword: opts.keyword, writer, signal,
   });
 }

@@ -169,3 +169,16 @@ export async function factGateBlog(a: { model: string; body: string; evidence: s
   const v = gateVerdict(judged);
   return { ...base, claims: judged, ...v };
 }
+
+/** 게이트 흐름(의존성 주입, 순수) — 1차 hold 면 작가 수정 1회 후 재판정. error 는 수정하지 않는다(판정 불가 상태에서 재작성은 무의미). */
+export async function runFactGateWithRepair(
+  a: { gate: (body: string) => Promise<FactGateResult>; repair: (body: string, feedback: string) => Promise<string> },
+  body: string,
+): Promise<{ body: string; result: FactGateResult }> {
+  const first = await a.gate(body);
+  if (first.status !== 'hold') return { body, result: first };
+  const repaired = (await a.repair(body, formatGateFeedback(first))).trim();
+  if (!repaired || !/^#{2,}\s/m.test(repaired)) return { body, result: first };
+  const second = await a.gate(repaired);
+  return { body: repaired, result: { ...second, repaired: true } };
+}

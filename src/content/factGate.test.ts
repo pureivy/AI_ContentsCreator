@@ -4,7 +4,7 @@ vi.mock('../orchestrator/agent', () => ({ microJSON: vi.fn() }));
 import { microJSON } from '../orchestrator/agent';
 import {
   splitBodySentences, numericClaimSentences, buildEvidence, gateVerdict, formatGateFeedback, toFactGateInfo,
-  extractFactClaims, judgeClaims, factGateBlog,
+  extractFactClaims, judgeClaims, factGateBlog, runFactGateWithRepair,
 } from './factGate';
 import type { FactClaim, FactGateResult } from './factGate';
 
@@ -156,5 +156,31 @@ describe('factGateBlog — 종단', () => {
     const r = await factGateBlog({ model: 'm', body: '3cm', evidence: '' });
     expect(r.status).toBe('error');
     expect(r.error).toContain('추출');
+  });
+});
+
+describe('runFactGateWithRepair — 1차 판정 → 수정 1회 → 2차 판정', () => {
+  const R = (status: 'pass' | 'hold' | 'error', unsupported: string[] = []): FactGateResult =>
+    ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+  it('1차 pass 면 수정 없이 끝', async () => {
+    const repair = vi.fn();
+    const r = await runFactGateWithRepair({ gate: async () => R('pass'), repair }, '본문');
+    expect(r.body).toBe('본문'); expect(r.result.status).toBe('pass'); expect(repair).not.toHaveBeenCalled();
+  });
+  it('1차 hold 면 피드백으로 수정 후 2차 판정, repaired=true', async () => {
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['5cm'])).mockResolvedValueOnce(R('pass'));
+    const repair = vi.fn(async (_b: string, f: string) => `## 고침\n${f.includes('5cm') ? 'ok' : 'no'}`);
+    const r = await runFactGateWithRepair({ gate, repair }, '## 원본\n5cm');
+    expect(r.body).toBe('## 고침\nok'); expect(r.result.status).toBe('pass'); expect(r.result.repaired).toBe(true);
+  });
+  it('수정본이 비거나 소제목이 없으면 원본 유지 + 1차 결과 유지', async () => {
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['5cm']));
+    const r = await runFactGateWithRepair({ gate, repair: async () => '질문이 있습니다' }, '## 원본');
+    expect(r.body).toBe('## 원본'); expect(r.result.status).toBe('hold'); expect(gate).toHaveBeenCalledTimes(1);
+  });
+  it('1차 error 면 수정하지 않고 error 유지(fail-closed)', async () => {
+    const repair = vi.fn();
+    const r = await runFactGateWithRepair({ gate: async () => R('error'), repair }, '## 원본');
+    expect(r.result.status).toBe('error'); expect(repair).not.toHaveBeenCalled();
   });
 });
