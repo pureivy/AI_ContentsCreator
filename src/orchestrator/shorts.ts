@@ -581,16 +581,19 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 원문 정합(스펙 §2-4) — 파생물이 원문에 없는 사실을 새로 지어내거나 원문 결론을 뒤집는지 대조(fail-open).
     const sceneTexts = (p: Plan): string[] => p.scenes.map((s) => `${s.narration}${s.screenText ? ` (자막: ${s.screenText})` : ''}`);
     const parity = sourceBody ? await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceBody, io.signal) : [];
+    // 단독 이해 검산(LLM, 최대 5건) — 소스별 예약 캡의 몫 계산을 위해 먼저 변수로 받는다.
+    const standalone = await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)', plan.scenes.map((s) => s.narration), topic, keyword, io.signal, sourceCore);
     // 문체 결정적 린트(2026-08-11) — 프롬프트 지시만으로는 샌다는 실측("새 가지" 위반) 대응, 같은 수정 라운드에 얹는다.
+    // 소스별 예약(2026-08-26 리뷰 수선) — 결정적 린트(문체·훅)를 앞에 둬 프롬프트-only 실측 누출 방지를
+    // 우선 보장하고, LLM 판정(단독 이해·정합)은 각 소스당 상한을 둬 한쪽이 다른 쪽을 밀어내지 못하게 한다.
     const probs = [
-      ...await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)', plan.scenes.map((s) => s.narration), topic, keyword, io.signal, sourceCore),
-      // 사실 정합은 맨 뒤에서 잘리면 잔존 재판정 트리거(parity.length)와 실제 수정 라운드 투입이 어긋난다 —
-      // 문체 린트보다 앞에 둬 .slice(0, 8) 절단에서 우선 보존한다.
-      ...parity,
       ...narrationStyleIssues(plan.scenes.map((s) => s.narration)),
       // 훅 키워드 낭독 결정적 린트(2026-08-20) — 프롬프트 지시 단독은 샌다는 실측 전례(문체 린트와 동일 사상).
       ...hookKeywordLeadIssues(plan.scenes.map((s) => s.narration), keyword),
-    ].slice(0, 8);
+      ...standalone.slice(0, 4),
+      ...parity.slice(0, 2),
+    ].slice(0, 10);
+    let planChanged = false;
     if (probs.length) {
       const m = `단독 이해·문체 검산 — ${probs.length}건 → 수정 라운드 (${probs[0]?.slice(0, 50)})`;
       console.log(`[숏폼] ${m}`); io.bus?.emit('log', { message: m });
@@ -605,11 +608,15 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
           description: fixed.description || plan.description,
           hashtags: fixed.hashtags.length ? fixed.hashtags : plan.hashtags,
         };
+        planChanged = true;
       }
     }
     // 원문 정합 잔존(스펙 §2-4) — 정합 문제로 수정 라운드가 돌았을 때만 1회 재판정(비용). 표시 전용.
+    // 수정본 파싱 실패(planChanged=false) 는 대본이 1차 판정 때와 바이트 동일 — LLM 재호출 없이 1차 parity 를 그대로 잔존으로 재사용한다.
     if (parity.length && sourceBody) {
-      const factGate = parityToInfo(await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceBody, io.signal));
+      const factGate = planChanged
+        ? parityToInfo(await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceBody, io.signal))
+        : parityToInfo(parity);
       plan = { ...plan, factGate };
       if (factGate.status === 'hold') { const m2 = `원문 정합 잔존 ${factGate.unsupported.length}건 — 검토 메시지에 표시`; console.log(`[숏폼] ${m2}`); io.bus?.emit('log', { message: m2 }); }
     }

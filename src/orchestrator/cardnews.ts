@@ -320,6 +320,7 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     if (keyword && !coverIncludesKeyword(plan.slides, keyword)) {
       probs.push(`표지(1번): 핵심 키워드 '${keyword}' 가 headline 또는 body 에 정확히 이 표기로 없음 — 훅은 유지하되 표지에 그대로 포함하라`);
     }
+    let planChanged = false;
     if (probs.length) {
       const m = `단독 이해 검산 — ${probs.length}건 → 수정 라운드 (${probs[0]?.slice(0, 50)})`;
       console.log(`[카드뉴스] ${m}`); io.bus?.emit('log', { message: m });
@@ -328,13 +329,15 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
       if (usable(j2)) {
         const fixed = toPlan(j2); // 수정본 불량 시 원본 유지
         // 수정 라운드가 슬라이드만 고치고 caption/hashtags 를 빠뜨려도 원본 것을 승계(무손실 병합).
-        if (fixed) plan = { ...fixed, caption: fixed.caption || plan.caption, hashtags: fixed.hashtags.length ? fixed.hashtags : plan.hashtags };
+        if (fixed) { plan = { ...fixed, caption: fixed.caption || plan.caption, hashtags: fixed.hashtags.length ? fixed.hashtags : plan.hashtags }; planChanged = true; }
       }
     }
     // 원문 정합 잔존(스펙 §2-4) — 정합 문제로 수정 라운드가 돌았을 때만 1회 재판정(비용). 표시 전용.
+    // 수정본 불량(planChanged=false) 은 카드 문구가 1차 판정 때와 바이트 동일 — LLM 재호출 없이 1차 parity 를 그대로 잔존으로 재사용한다.
     if (parity.length && sourceBody) {
-      const after = plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / '));
-      const factGate = parityToInfo(await parityIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', after, sourceBody, io.signal));
+      const factGate = planChanged
+        ? parityToInfo(await parityIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / ')), sourceBody, io.signal))
+        : parityToInfo(parity);
       plan = { ...plan, factGate };
       if (factGate.status === 'hold') { const m2 = `원문 정합 잔존 ${factGate.unsupported.length}건 — 검토 메시지에 표시`; console.log(`[카드뉴스] ${m2}`); io.bus?.emit('log', { message: m2 }); }
     }
