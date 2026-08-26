@@ -590,6 +590,14 @@ describe('extractFactCard', () => {
     mocked.mockResolvedValueOnce({ facts: [] });
     expect(await extractFactCard('m', '브리프')).toBeNull();
   });
+  it('이중 불릿 접두(-,•)는 벗기고 "- " 하나로 통일한다(Fix round 1)', async () => {
+    mocked.mockResolvedValueOnce({ facts: ['- a (근거: x)', '• b (근거: y)'] });
+    expect(await extractFactCard('m', '브리프')).toBe('- a (근거: x)\n- b (근거: y)');
+  });
+  it('microJSON 이 null(무응답)이면 null(Fix round 1)', async () => {
+    mocked.mockResolvedValueOnce(null);
+    expect(await extractFactCard('m', '브리프')).toBeNull();
+  });
   it('buildEvidence 는 사실 카드를 첫 블록으로', () => {
     const e = buildEvidence({ factCard: '- a', brief: 'b' });
     expect(e.startsWith('[사실 카드(브리프 근거 확정)]\n- a')).toBe(true);

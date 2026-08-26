@@ -203,7 +203,11 @@ export async function extractFactCard(
   if (!j || !Array.isArray(j.facts)) return null;
   const lines: string[] = [];
   for (const f of j.facts) {
-    const text = typeof f === 'string' ? f.trim() : '';
+    const raw = typeof f === 'string' ? f.trim() : '';
+    if (!raw) continue;
+    // 이중 불릿 접두 정리(Fix round 1) — LLM 이 이미 "- "/"• "/"* " 를 붙여 내보내면 여기서 또 "- " 를
+    // 붙여 "- - a" 꼴로 겹친다. 원문 접두를 벗기고 우리가 붙이는 "- " 하나로 통일한다.
+    const text = raw.replace(/^[-•*]\s*/, '').trim();
     if (!text) continue;
     lines.push(`- ${text}`);
     if (lines.length >= max) break;

@@ -332,6 +332,21 @@ export async function writeBlogBody(a: {
   return body;
 }
 
+/**
+ * extractFactCard 안전 래퍼(Fix round 1) — LLM 이 정상 응답했지만 근거 표기 문장이 0건인 "빈 결과"와
+ * 호출 자체가 실패한 "추출 실패"를 구분한다. 둘 다 factCard 는 null 로 fail-open 이지만, 로그 문구가
+ * 달라야 원인 진단이 된다("근거가 없어서" vs "LLM 무응답이라 모름").
+ */
+async function extractFactCardSafe(
+  model: string, brief: string, opts: { signal?: AbortSignal } = {},
+): Promise<{ card: string | null; failed: boolean }> {
+  try {
+    return { card: await extractFactCard(model, brief, opts), failed: false };
+  } catch {
+    return { card: null, failed: true };
+  }
+}
+
 export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcome> {
   const company = opts.company ?? DEFAULT_COMPANY;
   // 리비전 런(검토 탭 '수정 요청') — 분해·라우팅·팀 병렬·검수 생략 fast-path 로 분기.
@@ -654,18 +669,24 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   const serpText = research ? '' : await serpPopularBrief(topic, signal);
   if (serpText) bus.emit('log', { message: `네이버 SERP 실측 — 상위 노출 ${serpText.split('\n').length - 1}건을 집필 방향에 반영` });
   // fail-open(스펙 §8) — 부가 기록 실패로 런 전체가 죽으면 안 된다(다이제스트 저장과 동일 패턴, finalize.ts).
-  // 사실 카드(2026-08-26) — 브리프 직후 1콜로 근거 표기 문장만 압축, 작가 첫 블록·게이트 근거 첫 블록에 재사용.
-  // 리서치 런은 집필·게이트 자체가 생략되므로 카드도 생략한다.
-  let factCard: string | null = null;
   if (!research && brief.trim()) {
     try { writeResearchBrief(bus.runId, brief); }
     catch (e) { bus.emit('log', { message: `브리프 영속화 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
-    factCard = await extractFactCard(assign.micro, brief, { signal }).catch(() => null);
+  }
+  // 사실 카드(2026-08-26) — 브리프에서 근거 표기 문장만 압축, 작가 첫 블록·게이트 근거 첫 블록에 재사용.
+  // 리서치 런은 집필·게이트 자체가 생략되므로 카드도 생략하고, 사실 게이트 킬스위치(CONFIG.factGate)가
+  // 꺼져 있으면 카드 기능 자체를 끈다(Fix round 1 — 리뷰 확정: 브리프 영속화는 게이트와 무관해 위 블록은 그대로 둔다).
+  let factCard: string | null = null;
+  if (CONFIG.factGate && !research && brief.trim()) {
+    const extracted = await extractFactCardSafe(assign.micro, brief, { signal });
+    factCard = extracted.card;
     if (factCard) {
       try { writeFactCard(bus.runId, factCard); }
       catch (e) { bus.emit('log', { message: `사실 카드 영속화 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
     }
-    const factCardMsg = factCard ? `사실 카드 — ${factCard.split('\n').filter(Boolean).length}건` : '사실 카드 — 없음(근거 표기 문장 0)';
+    const factCardMsg = factCard
+      ? `사실 카드 — ${factCard.split('\n').filter(Boolean).length}건`
+      : extracted.failed ? '사실 카드 — 추출 실패(무해)' : '사실 카드 — 없음(근거 표기 문장 0)';
     console.log(`[사실게이트] ${factCardMsg}`);
     bus.emit('log', { message: factCardMsg });
   }
@@ -873,18 +894,27 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
     bus.emit('log', { message: '리비전 런 — 원 런 브리프 없음(research_brief.md 부재) · 초안+피드백만으로 개정' });
   }
   // 사실 카드(2026-08-26) — 원 런에 이미 있으면 그대로 재사용(연쇄 리비전이면 그 원 런도 이 카드를 물려받은 것),
-  // 없고 브리프가 있으면 1회 재추출(이 기능 이전 런의 리비전 대응).
-  let factCard = revise.baseRunId ? readFactCard(revise.baseRunId) : '';
-  if (!factCard.trim() && brief.trim()) {
-    factCard = (await extractFactCard(assign.micro, brief, { signal }).catch(() => null)) ?? '';
+  // 없고 브리프가 있으면 1회 재추출(이 기능 이전 런의 리비전 대응). 사실 게이트 킬스위치가 꺼져 있으면 재사용·
+  // 재추출·영속화·로그 전부 건너뛴다(Fix round 1 — 리뷰 확정: 게이트 브랜드 기능은 스위치 하나로 통째로 꺼져야 한다).
+  let factCard = '';
+  if (CONFIG.factGate) {
+    factCard = revise.baseRunId ? readFactCard(revise.baseRunId) : '';
+    let failed = false;
+    if (!factCard.trim() && brief.trim()) {
+      const extracted = await extractFactCardSafe(assign.micro, brief, { signal });
+      factCard = extracted.card ?? '';
+      failed = extracted.failed;
+    }
+    if (factCard.trim()) {
+      try { writeFactCard(bus.runId, factCard); } // 연쇄 리비전 대응 — 이 런에서도 카드를 물려받게 남긴다
+      catch (e) { bus.emit('log', { message: `사실 카드 영속화 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
+    }
+    const factCardMsg = factCard.trim()
+      ? `사실 카드 — ${factCard.split('\n').filter(Boolean).length}건`
+      : failed ? '사실 카드 — 추출 실패(무해)' : '사실 카드 — 없음(근거 표기 문장 0)';
+    console.log(`[사실게이트] ${factCardMsg}`);
+    bus.emit('log', { message: factCardMsg });
   }
-  if (factCard.trim()) {
-    try { writeFactCard(bus.runId, factCard); } // 연쇄 리비전 대응 — 이 런에서도 카드를 물려받게 남긴다
-    catch (e) { bus.emit('log', { message: `사실 카드 영속화 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
-  }
-  const factCardMsg = factCard.trim() ? `사실 카드 — ${factCard.split('\n').filter(Boolean).length}건` : '사실 카드 — 없음(근거 표기 문장 0)';
-  console.log(`[사실게이트] ${factCardMsg}`);
-  bus.emit('log', { message: factCardMsg });
   const body = await writeBlogBody({
     bus, writer, model: modelForTier(assign, writer.tier), topic, brief, revise, factCard: factCard || undefined, signal,
   });
