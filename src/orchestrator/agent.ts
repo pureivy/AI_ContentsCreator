@@ -21,6 +21,7 @@ import { webSearch } from '../tools/web_search';
 import { personaExtra, effectiveTools, effectiveAutonomy, appendActivity, appendKnowledge } from '../agents/workspace';
 import { brandContext } from '../content/brand';
 import { connectors } from '../grounding';
+import { noteGrounding } from './groundingLedger';
 import { approvalStore } from '../approvals/store';
 import { parseToolCalls, toolsForAutonomy, toolInstructions, stripToolTags, WRITE_TOOLS, type ToolCall } from './tools';
 import { runCommand } from './shell';
@@ -155,6 +156,9 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
         { q: args.groundQuery, hits: hits.map((p) => ({ page_id: p.slug, score: 1 })) },
         { agentId: role.id },
       );
+      try {
+        noteGrounding(bus.runId, hits.map((p) => ({ label: p.title, kind: p.sources.some((s) => s.startsWith('raw/')) ? 'wiki-raw' as const : 'wiki-derived' as const })));
+      } catch { /* 무해 — 원장 기록 실패가 런을 깨면 안 됨 */ }
     }
   }
 
@@ -169,6 +173,9 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
         .map((rs, i) => `${i + 1}. ${rs.title}\n   ${rs.snippet}\n   ${rs.url}`)
         .join('\n');
       bus.emit(EventType.tool_used, { agent_id: role.id, tool: 'web_search' }, { agentId: role.id });
+      try {
+        noteGrounding(bus.runId, results.map((rs) => ({ label: rs.url, kind: 'web' as const })));
+      } catch { /* 무해 — 원장 기록 실패가 런을 깨면 안 됨 */ }
     }
   }
 
@@ -184,6 +191,9 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
         if (ctx) {
           connectorBlocks.push(`${conn.blockLabel}\n${ctx}`);
           bus.emit(EventType.tool_used, { agent_id: role.id, tool: `${conn.id}_search` }, { agentId: role.id });
+          try {
+            noteGrounding(bus.runId, [{ label: conn.blockLabel.replace(/^\[|\]$/g, ''), kind: 'connector' }]);
+          } catch { /* 무해 — 원장 기록 실패가 런을 깨면 안 됨 */ }
         }
       } catch { /* 커넥터 실패는 무시(런 무중단) */ }
     }
