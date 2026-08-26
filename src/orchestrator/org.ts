@@ -27,6 +27,7 @@ import { getRunSettings } from '../runsettings';
 import { brandContext, activeBrandSlug, getBrand, lexiconGuide } from '../content/brand';
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid } from '../content/priorCoverage';
 import { collectExistingContent } from '../content/novelty';
+import { writeResearchBrief, readResearchBrief } from '../sessions/digest';
 import type { RunOptions, RunOutcome } from './run';
 
 interface TeamResult {
@@ -77,6 +78,19 @@ export const NO_FABRICATED_EXPERIENCE =
   + '"이 경우는 이렇게 봅니다"처럼 우리가 무엇을 어떻게 판단하는지는 단정해서 써라. '
   + '판단을 판매처·기관·독자에게 떠넘기지 말고, 일반적으로 성립하는 사실과 관찰 방법으로 직접 답하라. '
   + '요컨대 **목소리는 우리 것으로, 사건은 지어내지 않는다.**';
+
+/** 리비전 개정 시 새 사실 유입 금지(스펙 §3) — 리비전 fast-path 가 발행글 73% 를 통과하는데 브리프 없이 재작성해 수치가 끼어들던 실측 대응. */
+export const REVISE_NO_NEW_FACTS = '기존 초안과 [리서치·SEO 브리프]에 없는 새 사실·수치·시기를 추가하지 마라. 요청된 변경은 빠짐없이 반영하되, 근거 없는 구체화로 채우지 않는다.';
+
+/** 리비전 컨텍스트 조립(순수) — 브리프·목소리 지침을 개정에도 넣는다(종전엔 초안+피드백뿐). */
+export function buildReviseContext(a: { brief: string; voiceGuide: string; baseBody: string; feedback: string }): string {
+  return [
+    a.voiceGuide,
+    a.brief.trim() ? `[리서치·SEO 브리프]\n${a.brief}` : '',
+    `[기존 초안]\n${a.baseBody}`,
+    `[검토자 수정 요청 — 반드시 반영]\n${a.feedback}`,
+  ].filter(Boolean).join('\n\n');
+}
 
 // 네이버 블로그(정보/하우투·리뷰) 본문 작성 지침 — 합성(작가 단독 집필) 단계 task 에 덧붙인다.
 // 작가(content_lead)는 자신의 페르소나(systemPrompt)로 글을 쓰고, 이 지침이 구조·SEO·분량을 고정한다.
@@ -161,9 +175,6 @@ export async function writeBlogBody(a: {
   signal?: AbortSignal;
 }): Promise<string> {
   const { bus, writer, model, topic, brief, critiqueText, serpText, revise, personaGuide, keyword, microModel, signal } = a;
-  const reviseContext = revise
-    ? `[기존 초안]\n${revise.baseBody}\n\n[검토자 수정 요청 — 반드시 반영]\n${revise.feedback}`
-    : '';
   const brandSlug = activeBrandSlug() || undefined;
   // 같은 주제 기존 글이 있으면 '관점을 완전히 다르게' 지시를 주입(revise 는 자기 초안 개정이라 제외).
   let priorCoverage = revise ? '' : priorCoverageBrief('블로그', topic, keyword, { brandSlug });
@@ -252,7 +263,7 @@ export async function writeBlogBody(a: {
   // 걸려 있던 탓에, 원문에서 걸러도 카드뉴스 기획자가 같은 프레임을 독립적으로 다시 세울 수 있었다
   // (실측 2026-08-02 신비복숭아 카드뉴스: 2장 "판매처에 품종명을 물어보세요", 마지막 8장이 통째로
   // "네 가지를 먼저 물어보세요" 체크리스트).
-  const voiceGuide = revise ? '' :
+  const voiceGuide =
     // 종전 첫 줄은 "직접 겪고 확인한 것을 언제 무엇이 어떻게 됐는지 구체적으로" 였다 — 실경험 기록이
     // 없는 상태에서 이 요구는 날조로만 충족된다(2026-08-02 실측). 목표(판단을 우리가 직접 내린다)는
     // 남기고, 구체성의 대상을 '겪은 사건'에서 '판단 기준·관찰 방법'으로 옮긴다.
@@ -265,6 +276,8 @@ export async function writeBlogBody(a: {
     + '(사용자 지시 2026-08-01 — 굳이 넣을 필요 없다). 그 내용이 맞다면 우리가 아는 사실로 담백하게 쓰면 된다. '
     + '기관명을 대는 것은 수치·규격처럼 출처가 정말 필요한 한두 곳으로 제한하라.'
     + '\n[운영 데이터 비공개] 검색량·문서수·자동완성·상위노출 건수 같은 SEO 조사 수치는 글의 방향을 잡는 데만 쓰고 본문에 쓰지 마라 — 독자가 읽을 글이지 운영 보고서가 아니다.';
+  // 리비전 컨텍스트(스펙 §3) — voiceGuide 를 리비전에도 넣는다(종전엔 초안+피드백뿐이라 목소리·브리프가 빠졌다).
+  const reviseContext = revise ? buildReviseContext({ brief, voiceGuide, baseBody: revise.baseBody, feedback: revise.feedback }) : '';
   // 가드 발화 가시화(2026-08-06) — 프롬프트 컨텍스트는 이벤트에 안 남아 "가드가 있는데 왜 뚫렸나"를
   // 사후 판정할 수 없었다(배롱나무 중복 조사에서 실측). 발화 여부만 한 줄 남긴다.
   if (!revise) {
@@ -275,7 +288,7 @@ export async function writeBlogBody(a: {
   const synth = await runAgent({
     bus, role: writer, model,
     task: revise
-      ? `「${topic}」 아래 [기존 초안]을 [검토자 수정 요청]에 따라 개정하라. 요청된 변경은 빠짐없이 반영하고, 잘 쓰인 나머지 구조·내용은 유지한다. 이 응답의 출력은 오직 개정 완료된 마크다운 본문 하나뿐이다.\n${BLOG_BODY_GUIDE}`
+      ? `「${topic}」 아래 [기존 초안]을 [검토자 수정 요청]에 따라 개정하라. 요청된 변경은 빠짐없이 반영하고, 잘 쓰인 나머지 구조·내용은 유지한다. ${REVISE_NO_NEW_FACTS} 이 응답의 출력은 오직 개정 완료된 마크다운 본문 하나뿐이다.\n${BLOG_BODY_GUIDE}`
       : `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 검색 의도를 충족하는 완결된 글을 쓴다.\n${BLOG_BODY_GUIDE}`,
     context: revise ? reviseContext : [
       priorCoverage,
@@ -632,6 +645,7 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   // 인기 방향 조향 — 실제 네이버 블로그 상위 노출 글(실측 SERP)을 작가·제목 패키저에 주입(fail-open).
   const serpText = research ? '' : await serpPopularBrief(topic, signal);
   if (serpText) bus.emit('log', { message: `네이버 SERP 실측 — 상위 노출 ${serpText.split('\n').length - 1}건을 집필 방향에 반영` });
+  if (!research && brief.trim()) writeResearchBrief(bus.runId, brief); // 리비전 재주입용 영속화(스펙 §3)
   const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, microModel: assign.micro, signal });
   const finalDeliverable = body || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
@@ -758,14 +772,17 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
   const writer = writerTeam?.lead ?? company.ceo;
   bus.emit('log', { message: `리비전 런 — 검토자 수정 요청 반영 개정(리서치·검수 생략): "${revise.feedback.slice(0, 120)}"` });
   bus.emit('phase', { team_id: '_ceo', phase: 'integrate' });
+  const brief = revise.baseRunId ? readResearchBrief(revise.baseRunId) : '';
+  if (brief) writeResearchBrief(bus.runId, brief); // 연쇄 리비전 대응 — 이 런에서 개정한 결과도 브리프를 물려받는다
+  else bus.emit('log', { message: '리비전 런 — 원 런 브리프 없음(research_brief.md 부재) · 초안+피드백만으로 개정' });
   const body = await writeBlogBody({
-    bus, writer, model: modelForTier(assign, writer.tier), topic, brief: '', revise, signal,
+    bus, writer, model: modelForTier(assign, writer.tier), topic, brief, revise, signal,
   });
   const finalDeliverable = body || revise.baseBody;
 
   return packageDesignFinalize({
     bus, topic, company, assign, subproblems: [], teams: [],
-    critic: null, critiqueText: '', writerTeam, finalDeliverable, brief: '',
+    critic: null, critiqueText: '', writerTeam, finalDeliverable, brief,
     serpText: await serpPopularBrief(topic, signal), // 제목 재패키징도 인기 패턴 참고(fail-open)
     keyword: opts.keyword, signal,
   });

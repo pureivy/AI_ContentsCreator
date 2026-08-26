@@ -288,7 +288,7 @@ function legacyMetaFromFiles(id: string): PersistedMeta | null {
 interface LaunchOpts {
   agent?: string; path?: string; budgetUsd?: number; auto?: boolean; pieceId?: string;
   /** 리비전 런(검토 탭 '수정 요청') — 기존 초안+피드백으로 개정. 실패해도 ready 초안은 보존(에러 카운트 X). */
-  revise?: { baseBody: string; feedback: string };
+  revise?: { baseBody: string; feedback: string; /** 개정 대상 초안을 만든 런 — research_brief.md 재주입용(스펙 §3). */ baseRunId?: string };
   /** 핵심 타겟 키워드(piece.keyword) — 포장 primaryKeyword 고정(SEO 게이트·리비전 과녁 고정). */
   keyword?: string;
   /** 첨부 이미지 경로(/runs/attachments 저장분) — 런 시작 전 vision 분석 결과를 주제에 병합. */
@@ -1984,7 +1984,7 @@ async function pieceReviseHandler(c: Context): Promise<Response> {
     baseBody = (d.bodyMarkdown ?? '').trim();
   } catch { /* 아래에서 거절 */ }
   if (!baseBody) return c.json({ error: '기존 초안 본문을 찾을 수 없습니다.' }, 404);
-  const runId = launchRun(piece.title, { pieceId: piece.id, keyword: piece.keyword, revise: { baseBody, feedback: feedback.slice(0, 4000) } });
+  const runId = launchRun(piece.title, { pieceId: piece.id, keyword: piece.keyword, revise: { baseBody, feedback: feedback.slice(0, 4000), baseRunId: piece.runId } });
   if (!runId) return c.json({ error: '실행 시작 실패' }, 500);
   return c.json({ ok: true, run_id: runId });
 }
@@ -2186,7 +2186,7 @@ function maybeAutoNaverDraft(pieceId: string): boolean {
   const feedback = seoReviseFeedback(piece.runId, piece.keyword);
   if (!baseBody || !feedback) return false; // 본문·체크리스트 없이는 리비전 품질을 보장할 수 없다 — 수동으로
   pieceStore().update(pieceId, { autoRevisions: (piece.autoRevisions ?? 0) + 1 });
-  const rid = launchRun(piece.title, { pieceId, keyword: piece.keyword, revise: { baseBody, feedback: feedback.slice(0, 4000) } });
+  const rid = launchRun(piece.title, { pieceId, keyword: piece.keyword, revise: { baseBody, feedback: feedback.slice(0, 4000), baseRunId: piece.runId } });
   console.log(rid
     ? `[발행담당] ${piece.title.slice(0, 30)} — SEO ${seo}점 미달 → 자동 리비전 런 ${rid}`
     : `[발행담당] ${piece.title.slice(0, 30)} — 리비전 런 기동 실패(다른 런 진행 중일 수 있음)`);

@@ -30,7 +30,7 @@ export interface RunOptions {
   /** 런 예산 캡(USD). 로컬은 무료라 정보용. */
   budgetUsd?: number;
   /** 리비전 런(검토 탭 '수정 요청') — 기존 초안을 사용자 피드백에 따라 개정. 리서치·검수 생략 fast-path. */
-  revise?: { baseBody: string; feedback: string };
+  revise?: { baseBody: string; feedback: string; /** 개정 대상 초안을 만든 런 — research_brief.md 재주입용(스펙 §3). */ baseRunId?: string };
   /** 핵심 타겟 키워드(piece.keyword) — 포장 단계 primaryKeyword 고정(SEO 게이트·리비전 과녁 고정). */
   keyword?: string;
   /** 연결된 piece id — 있으면 콘텐츠 '제작' 런이라는 표식. 단축경로(즉답) 분류를 우회한다(실측 2026-08-07:
