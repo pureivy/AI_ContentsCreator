@@ -7,14 +7,16 @@ import { EventType } from '../events/types';
 import type { EventBus } from '../events/bus';
 import { microJSON } from './agent';
 import { asString } from '../util/str';
-import { appendMemory, appendDecision, appendActivity, readGoal, writeGoal, archiveMemory, extractVerifiedClaims, appendVerified } from '../agents/workspace';
+import { appendMemory, appendDecision, appendActivity, readGoal, writeGoal, archiveMemory, extractVerifiedClaims, appendVerified, acceptVerifiedSource } from '../agents/workspace';
 import { getCompany } from '../agents/company-loader';
 import { llmWiki } from '../wiki/llmwiki';
+import { groundingEntries } from './groundingLedger';
 
 export interface Participant { id: string; name: string; text: string }
 
 export async function reflectAndLearn(
   bus: EventBus, model: string, topic: string, participants: Participant[], deliverable: string, signal?: AbortSignal,
+  verifiedInputs?: Array<{ id: string; text: string }>,
 ): Promise<number> {
   const c = getCompany();
   const roleById = new Map([c.ceo, ...c.specialists].map((r) => [r.id, r] as const));
@@ -69,15 +71,19 @@ export async function reflectAndLearn(
       });
     } catch { /* 위키 적재 실패는 학습을 막지 않음 */ }
   }
-  // 검증 지식 승격(Self-RAG) — 각 참여자 출력에서 [근거: 출처] 태그가 붙은 주장만 verified.md 로
-  // 승격(근거 확인된 사실). 다음 런에 memory 보다 우선 주입 → 환각 억제·근거 기반 compounding.
-  let promoted = 0;
-  for (const p of roster) {
+  // 검증 지식 승격(Self-RAG, 스펙 §5) — [근거: 출처] 태그만으로는 부족하다(자기 인용·토론·성과 페이지·
+  // 미실측 표시까지 통과했던 감사 실측). 거절 규칙 통과 + 이 런의 실제 조회 원장(groundingLedger)과
+  // 근거 문자열이 일치할 때만 승격. 입력도 토론 전 R0(participants) 대신 **토론 후** 팀 산출물(verifiedInputs).
+  let promoted = 0; let rejected = 0;
+  const entries = groundingEntries(bus.runId);
+  for (const p of (verifiedInputs ?? roster)) {
+    if (!valid.has(p.id)) continue;
     for (const v of extractVerifiedClaims(p.text)) {
+      if (!acceptVerifiedSource(v.claim, v.source, entries)) { rejected++; continue; }
       if (appendVerified(p.id, v.claim, v.source)) promoted++;
     }
   }
-  if (promoted) bus.emit(EventType.log, { message: `검증 지식 — 근거 있는 주장 ${promoted}건 승격(verified.md)` });
+  if (promoted || rejected) bus.emit(EventType.log, { message: `검증 지식 — 승격 ${promoted}건 · 거절 ${rejected}건(자기 인용·보류 표시·원장 불일치)` });
 
   // 학습 누적분이 임계를 넘으면 오래된 교훈을 micro 로 요약·아카이브(폐기 대신 압축 — compounding 보존).
   for (const id of learned) {

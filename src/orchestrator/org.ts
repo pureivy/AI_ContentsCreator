@@ -791,6 +791,9 @@ async function packageDesignFinalize(a: {
     assignReason: assign.reason, subproblems,
     positions: teams.map((t) => ({ id: t.team.id, name: t.team.name, stance: 'neutral', text: t.deliverable })),
     participants: teams.flatMap((t) => t.participants), // 자가학습 roster — 팀원 개별 역할(F1)
+    // verified 승격(스펙 §5) 입력은 팀원 개별 R0 이 아니라 **토론 후** 팀장 산출물(팀 합의 결과) — 자기 인용·
+    // 토론 전 초안이 그대로 verified.md 로 새지 않게.
+    verifiedInputs: teams.map((t) => ({ id: t.team.lead.id, text: t.deliverable })),
     critique: critic && critiqueText ? { id: critic.id, name: critic.name, text: critiqueText } : undefined,
     deliverable: finalDeliverable, converged: false, ingestModel: assign.micro, reflectModel: assign.standard, assets, autoImages, signal,
   });

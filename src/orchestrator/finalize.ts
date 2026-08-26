@@ -11,6 +11,7 @@ import type { AgentOutput } from '../sessions/digest';
 import { llmWiki, slugify } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
 import { reflectAndLearn } from './reflect';
+import { clearGrounding } from './groundingLedger';
 import { genId } from '../util/ids';
 import type { AssetBundle } from '../output';
 import { generateImagesForDraft } from '../tools/blog_skills';
@@ -53,6 +54,8 @@ export interface FinalizeArgs {
   positions: FinalPosition[];
   /** 자가학습(reflect)용 개별 참여자 — org 모드는 팀이 아니라 팀원 단위로 전달. 미지정 시 positions 사용. */
   participants?: Array<{ id: string; name: string; text: string }>;
+  /** verified 승격(reflect) 입력 — **토론 후** 팀 산출물(스펙 §5). 미지정 시 participants(토론 전 R0)로 폴백. */
+  verifiedInputs?: Array<{ id: string; text: string }>;
   critique?: { id: string; name: string; text: string };
   deliverable: string;
   converged: boolean;
@@ -235,7 +238,7 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
       const n = await reflectAndLearn(
         a.bus, a.reflectModel ?? a.ingestModel, a.topic,
         (a.participants ?? a.positions).map((p) => ({ id: p.id, name: p.name, text: p.text })),
-        a.deliverable, a.signal,
+        a.deliverable, a.signal, a.verifiedInputs,
       );
       if (n) a.bus.emit(EventType.log, { message: `자가학습 — ${n}명 교훈 누적(memory.md)` });
     } catch { /* 무해 — 학습 실패가 발행을 막지 않음 */ }
@@ -251,4 +254,6 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
       .catch(() => { /* 백그라운드 — 무해 */ });
   }
 
+  // 이 런의 그라운딩 원장은 verified 승격(reflect)이 끝났으니 정리 — 다음 런과 섞이지 않게(런별 격리).
+  clearGrounding(a.bus.runId);
 }

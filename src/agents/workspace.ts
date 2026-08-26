@@ -14,6 +14,7 @@ import { brandFileSuffix, brandFileSuffixFor } from '../content/brand';
 import { llm } from '../llm/client';
 import type { RoleDef } from './company';
 import { kstDate } from '../util/time';
+import type { GroundingEntry } from '../orchestrator/groundingLedger';
 
 const ALLOWED_TOOLS = new Set(['wiki_query', 'wiki_ingest', 'web_search']);
 
@@ -154,6 +155,28 @@ export function extractVerifiedClaims(text: string): Array<{ claim: string; sour
   return out;
 }
 
+const VERIFIED_REJECT_SOURCE = /동일|종합|비평|성과|검증된 지식|사내|확립된|일반|상식|추정|추론/;
+const VERIFIED_REJECT_CLAIM = /⚠️|미실측|미확인|데이터 없음|가정/;
+const norm = (s: string): string => s.replace(/\s+/g, '').toLowerCase();
+
+/** verified 승격 거절 사유(순수) — 근거가 근거가 아닌 것(자기 인용·토론·성과·보류 표시·표 조각). null 이면 통과. */
+export function rejectVerifiedLine(claim: string, source: string): string | null {
+  const c = claim.trim();
+  if (VERIFIED_REJECT_CLAIM.test(c)) return '보류·미실측 표시';
+  if (c.startsWith('|') || (c.match(/\|/g)?.length ?? 0) >= 2) return '표 조각';
+  if (VERIFIED_REJECT_SOURCE.test(source)) return '근거가 자기 인용·토론·성과';
+  return null;
+}
+/** 승격 수락(순수) — 거절 규칙 통과 + 근거 문자열이 이 런의 실제 조회(커넥터·웹 URL·raw 위키)와 일치할 때만. */
+export function acceptVerifiedSource(claim: string, source: string, entries: GroundingEntry[]): boolean {
+  if (rejectVerifiedLine(claim, source)) return false;
+  const ns = norm(source);
+  return entries.some((e) =>
+    (e.kind === 'web' && source.includes(e.label)) ||
+    (e.kind === 'connector' && ns.includes(norm(e.label))) ||
+    (e.kind === 'wiki-raw' && ns.includes(norm(e.label))));
+}
+
 /** 검증 주장 1건을 직원 verified.md 에 누적(중복은 스킵). 승격되면 true. */
 export function appendVerified(id: string, claim: string, source: string): boolean {
   if (!safeId(id)) return false;
@@ -275,7 +298,7 @@ export function personaExtra(id: string): string {
   // 사람이 주입한 외부 지식 — 최우선 신뢰. 단 '관련될 때 우선 활용'으로, 무관한 출력에 억지로 끼워넣지 않게.
   if (injected) parts.push(`[주입된 외부 지식(우선 신뢰 — 관련될 때 우선 활용, 무관하면 무시)]\n${injected}`);
   // 검증 지식(근거 확인됨)을 교훈보다 먼저·우선 신뢰하도록 배치.
-  if (verified) parts.push(`[검증된 지식(근거 확인됨 — 우선 신뢰)]\n${verified}`);
+  if (verified) parts.push(`[근거 표기된 지식(출처 표기됨 — 실측·원문 출처만 사실로 인용, 나머지는 방향 참고)]\n${verified}`);
   if (skills) parts.push(`[검증된 작업 패턴(스킬)]\n${skills}`);
   if (memory) parts.push(`[과거 학습·교훈(자가학습)]\n${memory}`);
   return parts.join('\n\n');
