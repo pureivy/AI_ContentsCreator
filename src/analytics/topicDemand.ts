@@ -53,6 +53,7 @@ export const DEMAND_STOPWORDS: ReadonlySet<string> = new Set([
 const MAX_ASSESS = 10;    // 검색광고 힌트 5개/콜 × 2콜 — 한 라운드 후보 수 상한
 const MAX_TREND = 5;      // 데이터랩 1콜 상한(그리고 스냅샷 묶음 크기)
 const SNAP_MAX_SEEDS = 15;
+const MAX_WINNER_SEEDS = 5;   // 스냅샷 15칸 중 winners 몫(나머지는 브랜드 시드 회전 창)
 const STALE_DAYS = 3;     // 수요는 주 단위로 움직인다 — 이보다 낡은 스냅샷은 '실측'이라 부르지 않는다
 const BLOCK_ROWS = 12;
 
@@ -61,6 +62,11 @@ const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(
 
 function localDateStr(d = new Date()): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** 연중 일수(1~366) — 시드 회전 창의 기준. Date.UTC 로 계산해 서머타임에 하루가 밀리지 않게 한다. */
+function dayOfYear(d: Date): number {
+  return Math.round((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - Date.UTC(d.getFullYear(), 0, 0)) / 86_400_000);
 }
 
 /** 후보 키워드 → 계열 대조용 내용 토큰(순수). 2자 미만·불용어 제거. */
@@ -157,27 +163,35 @@ export async function assessCandidatesDemand(keywords: string[], signal?: AbortS
     if (targets.length >= MAX_ASSESS) break;
   }
   if (!targets.length || !searchAdEnabled()) return out;
-  let rows: Array<{ keyword: string; total: number; pcApprox: boolean; mobileApprox: boolean }> = [];
+  type Row = { keyword: string; total: number; pcApprox: boolean; mobileApprox: boolean };
+  const chunks: Array<{ targets: string[]; rows: Row[] }> = [];
   try {
     for (let i = 0; i < targets.length; i += 5) {
-      rows = rows.concat(await searchAdVolumes(targets.slice(i, i + 5), signal));
+      const slice = targets.slice(i, i + 5);
+      chunks.push({ targets: slice, rows: await searchAdVolumes(slice, signal) });
     }
   } catch (e) {
     console.log(`[demand] 조회 실패 — 수요 게이트 생략(${errMsg(e)})`);
     return new Map();
   }
+  const pooled = chunks.flatMap((c) => c.rows);
   // 빈 응답(HTTP 오류를 커넥터가 [] 로 삼킨 경우 포함)은 '검색량 0'이 아니라 '모름'이다.
-  if (!rows.length) return out;
-  for (const kw of targets) {
-    const exact = rows.find((r) => normKw(r.keyword) === normKw(kw));
-    const fam = familyVolume(rows, kw);
-    out.set(kw, {
-      keyword: kw,
-      volume: exact?.total ?? 0,
-      approx: !!exact && (exact.pcApprox || exact.mobileApprox),
-      familyMax: fam.max,
-      ...(fam.top ? { familyTop: fam.top } : {}),
-    });
+  if (!pooled.length) return out;
+  for (const c of chunks) {
+    // 청크 단위로 본다 — 1번 묶음만 응답하고 2번이 실패하면, 2번 후보들은 '검색량 0'이 아니라 미조회다
+    // (전체 합계만 보면 살아남은 묶음 덕에 가드를 통과해 나머지가 통째로 기각된다).
+    if (!c.rows.length) continue;
+    for (const kw of c.targets) {
+      const exact = pooled.find((r) => normKw(r.keyword) === normKw(kw));
+      const fam = familyVolume(pooled, kw);   // 계열 대조는 살아있는 응답 전체를 쓴다
+      out.set(kw, {
+        keyword: kw,
+        volume: exact?.total ?? 0,
+        approx: !!exact && (exact.pcApprox || exact.mobileApprox),
+        familyMax: fam.max,
+        ...(fam.top ? { familyTop: fam.top } : {}),
+      });
+    }
   }
   // 데이터랩 실패는 따로 삼킨다 — 시즌만 잃고 검색량 판정은 살린다(시즌 미상이면 demote 자체가 불가).
   if (datalabEnabled()) {
@@ -214,31 +228,42 @@ export function readDemandSnap(slug?: string): DemandSnap | null {
  * (scheduler.ts 의 eligibleWinners 와 같은 이유) 조회 콜을 거기에 태우면 프롬프트 표까지 오염된다.
  * (analytics → autonomy 순환 import 를 피하려 전략 파일을 여기서 직접 읽는다 — 경로 규칙 동일.)
  */
-export function demandSeeds(slug?: string): string[] {
+export function demandSeeds(slug?: string, now = new Date()): string[] {
   const s = slug ?? activeBrandSlug();
   const era = getBrand()?.perfEraSince;
-  const seeds: Array<{ kw: string; fromWinners: boolean }> = brandSeedKeywords().map((kw) => ({ kw, fromWinners: false }));
+  const winners: Array<{ kw: string; score: number }> = [];
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(CONFIG.dataDir, 'analytics', s ? `strategy-${s}.json` : 'strategy.json'), 'utf-8')) as {
-      winners?: Array<{ keyword?: string; firstSeenAt?: string; updatedAt?: string }>;
+      winners?: Array<{ keyword?: string; score?: number; firstSeenAt?: string; updatedAt?: string }>;
     };
     for (const w of raw.winners ?? []) {
-      if (!w?.keyword) continue;
+      const kw = (w?.keyword || '').trim();
+      if (!kw) continue;
       if (era) {
         const born = (w.firstSeenAt || w.updatedAt || '').slice(0, 10);
         if (!born || born < era) continue;   // 시각을 모르면 옛 것으로 본다(보수적 — scheduler 와 동일)
       }
-      seeds.push({ kw: w.keyword, fromWinners: true });
+      // 소재 범위 게이트는 winners(자동 축적물)에만 건다 — 브랜드 시드는 사용자가 직접 적은 설정이라
+      // 자기 banned 프로즈에서 샌 토큰으로 조용히 지워지면 안 된다(모종 오탐 전례, brand.ts 참조).
+      if (offBrandTerm(kw)) continue;
+      winners.push({ kw, score: typeof w.score === 'number' ? w.score : 0 });
     }
   } catch { /* 전략 파일 없음(콜드스타트) — 브랜드 시드만 */ }
+  const winTop = winners.sort((a, b) => b.score - a.score).slice(0, MAX_WINNER_SEEDS).map((w) => w.kw);
+
+  // 슬롯 예약 — 브랜드 시드가 상한을 통째로 먹으면 winners 축이 영영 측정되지 않는다
+  // (실측 2026-08-26: data/brand.yaml 시드 21개 > 상한 15 → winners 0개 도달).
+  const brand = brandSeedKeywords().map((k) => (k || '').trim()).filter(Boolean);
+  const take = Math.min(brand.length, SNAP_MAX_SEEDS - winTop.length);
+  // 전부 못 담을 때만 날짜로 창을 돌린다 — 21개 시드가 ~3일이면 한 바퀴(수요는 그 사이 안 뒤집힌다).
+  // 다 담기는 경우엔 회전이 순서만 흔들어 스냅샷 diff 를 무의미하게 만드므로 고정.
+  const offset = brand.length > take ? dayOfYear(now) % brand.length : 0;
+  const window = Array.from({ length: take }, (_, i) => brand[(offset + i) % brand.length]!);
+
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const { kw, fromWinners } of seeds) {
-    const t = (kw || '').trim();
+  for (const t of [...window, ...winTop]) {
     if (!t || seen.has(normKw(t))) continue;
-    // 소재 범위 게이트는 winners(자동 축적물)에만 건다 — 브랜드 시드는 사용자가 직접 적은 설정이라
-    // 자기 banned 프로즈에서 샌 토큰으로 조용히 지워지면 안 된다(모종 오탐 전례, brand.ts 참조).
-    if (fromWinners && offBrandTerm(t)) continue;
     seen.add(normKw(t));
     out.push(t);
     if (out.length >= SNAP_MAX_SEEDS) break;
@@ -253,7 +278,8 @@ export function demandSeeds(slug?: string): string[] {
  */
 export async function refreshDemandSnapshot(signal?: AbortSignal): Promise<void> {
   try {
-    if (!searchAdEnabled()) return;
+    // 킬스위치는 조회 전에 본다 — off 면 외부 API 콜도 파일 쓰기도 0(비용 0으로 완전히 잠든다).
+    if (!CONFIG.topicDemandGate || !searchAdEnabled()) return;
     const slug = activeBrandSlug();
     const seeds = demandSeeds(slug);
     if (!seeds.length) return;
@@ -286,12 +312,15 @@ export function buildDemandBlock(snap: DemandSnap | null, now = Date.now()): str
     .slice(0, BLOCK_ROWS)
     .map((r) => `- ${formatDemandLine(r)}`);
   if (!lines.length) return '';
+  // 하한은 설정값을 그대로 읽어 넣는다 — 프롬프트의 숫자와 실제 게이트가 어긋나면 두뇌가 통과할 리 없는
+  // 키워드를 계속 제안하거나(하한 상향 시) 멀쩡한 후보를 스스로 버린다(하향 시).
   return `[검색 수요 실측 — ${snap.date}]\n${lines.join('\n')}\n` +
-    '반영 지침: 검색량 10 미만·시즌 지수 0.25 미만 키워드로 주제를 세우지 마라. ' +
+    `반영 지침: 검색량 ${CONFIG.topicDemandMinVolume}/월 미만·시즌 지수 ${CONFIG.topicDemandMinSeason} 미만 키워드로 주제를 세우지 마라. ` +
     '수요가 있는 키워드는 그대로 keyword 로 쓰고, 계열 최대 연관어가 더 크면 그 표기를 우선하라.\n\n';
 }
 
-/** 주제 두뇌 주입용 블록 — 스냅샷 없음·낡음은 빈 문자열(무주입). */
+/** 주제 두뇌 주입용 블록 — 킬스위치 off·스냅샷 없음·낡음은 빈 문자열(무주입). */
 export function demandSignalBlock(slug?: string): string {
+  if (!CONFIG.topicDemandGate) return '';
   try { return buildDemandBlock(readDemandSnap(slug), Date.now()); } catch { return ''; }
 }

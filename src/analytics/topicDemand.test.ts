@@ -12,15 +12,18 @@ const H = vi.hoisted(() => ({
   adOn: true, dlOn: true,
   calls: [] as string[][], dlCalls: [] as Array<{ kws: string[]; months: number }>,
   vols: [] as Array<{ keyword: string; pc: number; mobile: number; total: number; comp: string; pcApprox: boolean; mobileApprox: boolean }>,
+  /** 설정 시 콜 순서대로 응답을 돌려준다(청크별 실패 재현용). */
+  volsSeq: null as Array<Array<{ keyword: string; pc: number; mobile: number; total: number; comp: string; pcApprox: boolean; mobileApprox: boolean }>> | null,
   trends: [] as Array<{ keyword: string; points: Array<{ period: string; ratio: number }>; direction: '상승' | '하락' | '보합' }>,
   volsErr: null as Error | null, trendErr: null as Error | null,
 }));
 vi.mock('../grounding/naver_searchad', () => ({
   searchAdEnabled: () => H.adOn,
   searchAdVolumes: async (hints: string[]) => {
+    const nth = H.calls.length;
     H.calls.push(hints);
     if (H.volsErr) throw H.volsErr;
-    return H.vols;
+    return H.volsSeq ? (H.volsSeq[nth] ?? []) : H.vols;
   },
 }));
 vi.mock('../grounding/naver_datalab', () => ({
@@ -159,7 +162,8 @@ describe('buildDemandBlock — 두뇌 주입 블록(순수)', () => {
     expect(b).toContain('[검색 수요 실측 — 2026-08-26]');
     expect(b.indexOf('블루베리 묘목')).toBeLessThan(b.indexOf('사과나무 비료'));
     expect(b.indexOf('사과나무 비료')).toBeLessThan(b.indexOf('가을 거름'));
-    expect(b).toContain('검색량 10 미만·시즌 지수 0.25 미만 키워드로 주제를 세우지 마라. 수요가 있는 키워드는 그대로 keyword 로 쓰고, 계열 최대 연관어가 더 크면 그 표기를 우선하라.');
+    // 하한 숫자는 CONFIG 보간이라 여기선 문장만 확인한다(보간 검증은 아래 스냅샷 describe 에서 임계값을 바꿔 한다).
+    expect(b).toContain('미만 키워드로 주제를 세우지 마라. 수요가 있는 키워드는 그대로 keyword 로 쓰고, 계열 최대 연관어가 더 크면 그 표기를 우선하라.');
   });
   it('상위 12줄까지만 담는다', () => {
     const many: DemandSnap = { date: '2026-08-26', rows: Array.from({ length: 20 }, (_, i) => row({ keyword: `k${i}`, volume: i * 100 })) };
@@ -175,7 +179,7 @@ describe('buildDemandBlock — 두뇌 주입 블록(순수)', () => {
 
 describe('assessCandidatesDemand — 커넥터 묶음 호출', () => {
   beforeEach(() => {
-    H.adOn = true; H.dlOn = true; H.calls = []; H.dlCalls = []; H.volsErr = null; H.trendErr = null;
+    H.adOn = true; H.dlOn = true; H.calls = []; H.dlCalls = []; H.volsErr = null; H.trendErr = null; H.volsSeq = null;
     H.vols = [vol('블루베리', 5400), vol('블루베리전용비료', 360), vol('사과나무비료', 30), vol('가을거름', 0, true), vol('밑거름', 1220)];
     H.trends = [{ keyword: '사과나무 비료', points: [{ period: '2026-03-01', ratio: 100 }, { period: '2026-08-01', ratio: 13 }], direction: '하락' }];
   });
@@ -198,6 +202,17 @@ describe('assessCandidatesDemand — 커넥터 묶음 호출', () => {
     expect(m.has('키워드10')).toBe(false);
     expect(demandVerdict(m.get('키워드10'), { minVolume: 30, minSeason: 0.25 })).toBe('unknown');
   });
+  it('한 청크만 빈 응답이면 그 청크 후보만 미조회로 남긴다(살아남은 청크 덕에 통째로 기각되면 안 된다)', async () => {
+    H.volsSeq = [[vol('사과나무비료', 30)], []];   // 1번 묶음 성공, 2번 묶음 실패([] 반환)
+    const m = await assessCandidatesDemand(['사과나무 비료', '블루베리 비료', '가을 거름', '감나무 전정', '배롱나무 개화', '포도나무 접목']);
+    expect(H.calls.length).toBe(2);
+    expect(m.size).toBe(5);
+    expect(m.has('포도나무 접목')).toBe(false);                                   // 2번 묶음 → unknown
+    expect(demandVerdict(m.get('포도나무 접목'), { minVolume: 30, minSeason: 0.25 })).toBe('unknown');
+    expect(m.get('사과나무 비료')).toMatchObject({ volume: 30 });
+    expect(demandVerdict(m.get('가을 거름'), { minVolume: 30, minSeason: 0.25 })).toBe('reject'); // 응답 받은 묶음은 판정
+    H.volsSeq = null;
+  });
   it('커넥터 비활성·빈 응답·예외는 빈 Map(게이트 생략)', async () => {
     H.adOn = false;
     expect((await assessCandidatesDemand(['사과나무 비료'])).size).toBe(0);
@@ -215,18 +230,24 @@ describe('assessCandidatesDemand — 커넥터 묶음 호출', () => {
   });
 });
 
-describe('스냅샷 IO — 브랜드별 파일·하루 1회·실패 시 보존', () => {
+describe('스냅샷 IO — 킬스위치·시드 슬롯·하루 1회·실패 시 보존', () => {
   let tmp: string;
   const snapDir = (): string => path.join(tmp, 'analytics');
   const snapFile = (): string => path.join(snapDir(), fs.readdirSync(snapDir()).find((f) => f.startsWith('demand') && f.endsWith('.json'))!);
+  const mockCfg = (over: Record<string, unknown> = {}): void => {
+    vi.doMock('../config', () => ({
+      CONFIG: { dataDir: tmp, topicDemandGate: true, topicDemandMinVolume: 30, topicDemandMinSeason: 0.25, ...over },
+    }));
+    vi.resetModules();
+  };
+  const writeBrand = (yaml: string): void => fs.writeFileSync(path.join(tmp, 'brand.yaml'), yaml, 'utf-8');
   beforeEach(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'demand-'));
-    fs.writeFileSync(path.join(tmp, 'brand.yaml'), 'name: 테스트나무\nseedKeywords:\n  - 사과나무 비료\n  - 블루베리 비료\n', 'utf-8');
-    H.adOn = true; H.dlOn = true; H.calls = []; H.dlCalls = []; H.volsErr = null; H.trendErr = null;
+    writeBrand('name: 테스트나무\nseedKeywords:\n  - 사과나무 비료\n  - 블루베리 비료\n');
+    H.adOn = true; H.dlOn = true; H.calls = []; H.dlCalls = []; H.volsErr = null; H.trendErr = null; H.volsSeq = null;
     H.vols = [vol('사과나무비료', 30), vol('블루베리전용비료', 360)];
     H.trends = [];
-    vi.doMock('../config', () => ({ CONFIG: { dataDir: tmp } }));
-    vi.resetModules();
+    mockCfg();
   });
   afterEach(() => { vi.doUnmock('../config'); vi.resetModules(); });
 
@@ -267,7 +288,62 @@ describe('스냅샷 IO — 브랜드별 파일·하루 1회·실패 시 보존',
     }), 'utf-8');
     const { demandSeeds } = await import('./topicDemand');
     // '다육이 화분'은 브랜드 banned 토큰('다육')에 걸리지만 사용자가 직접 적은 시드라 살아남는다.
-    expect(demandSeeds()).toEqual(['다육이 화분', '사과나무 비료', '블루베리 묘목']);
+    expect(demandSeeds(undefined, new Date('2026-08-26T12:00:00'))).toEqual(['다육이 화분', '사과나무 비료', '블루베리 묘목']);
+  });
+  it('킬스위치 off 면 커넥터 콜도 프롬프트 주입도 0(신선한 스냅샷이 있어도)', async () => {
+    const today = new Date();
+    const ymd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    fs.mkdirSync(snapDir(), { recursive: true });
+    fs.writeFileSync(path.join(snapDir(), 'demand-테스트나무.json'),
+      JSON.stringify({ date: ymd, rows: [row({ keyword: '사과나무 비료', volume: 900 })] }), 'utf-8');
+    mockCfg({ topicDemandGate: false });
+    const { refreshDemandSnapshot, demandSignalBlock } = await import('./topicDemand');
+    await refreshDemandSnapshot();
+    expect(H.calls.length).toBe(0);
+    expect(demandSignalBlock()).toBe('');
+  });
+  it('지시문의 하한은 설정값을 그대로 보간한다(프롬프트와 실제 게이트가 어긋나지 않게)', async () => {
+    const today = new Date();
+    const ymd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    fs.mkdirSync(snapDir(), { recursive: true });
+    fs.writeFileSync(path.join(snapDir(), 'demand-테스트나무.json'),
+      JSON.stringify({ date: ymd, rows: [row({ keyword: '사과나무 비료', volume: 900 })] }), 'utf-8');
+    mockCfg({ topicDemandMinVolume: 50, topicDemandMinSeason: 0.4 });
+    const { demandSignalBlock } = await import('./topicDemand');
+    expect(demandSignalBlock()).toContain('검색량 50/월 미만·시즌 지수 0.4 미만 키워드로 주제를 세우지 마라.');
+  });
+  it('시드 상한 15칸을 브랜드 회전 창 10 + winners 5 로 나눈다(브랜드 시드 21개가 winners 를 굶기던 결함)', async () => {
+    writeBrand(`name: 테스트나무\nseedKeywords:\n${Array.from({ length: 21 }, (_, i) => `  - 시드${i}`).join('\n')}\n`);
+    fs.mkdirSync(snapDir(), { recursive: true });
+    fs.writeFileSync(path.join(snapDir(), 'strategy-테스트나무.json'), JSON.stringify({
+      winners: Array.from({ length: 8 }, (_, i) => ({ keyword: `승자${i}`, score: i, firstSeenAt: '2026-08-18T00:00:00.000Z' })),
+    }), 'utf-8');
+    mockCfg();
+    const { demandSeeds } = await import('./topicDemand');
+    // 2026-08-26 = 연중 238일 → 238 % 21 = 7 → 시드7 부터 10개.
+    const seeds = demandSeeds(undefined, new Date('2026-08-26T12:00:00'));
+    expect(seeds.length).toBe(15);
+    expect(seeds.slice(0, 10)).toEqual(Array.from({ length: 10 }, (_, i) => `시드${7 + i}`));
+    expect(seeds.slice(10)).toEqual(['승자7', '승자6', '승자5', '승자4', '승자3']); // 점수 높은 순 5개
+  });
+  it('회전 창은 날짜마다 밀리고 끝에서 앞으로 감긴다(21개 시드가 ~3일이면 한 바퀴)', async () => {
+    writeBrand(`name: 테스트나무\nseedKeywords:\n${Array.from({ length: 21 }, (_, i) => `  - 시드${i}`).join('\n')}\n`);
+    fs.mkdirSync(snapDir(), { recursive: true });
+    fs.writeFileSync(path.join(snapDir(), 'strategy-테스트나무.json'),
+      JSON.stringify({ winners: [{ keyword: '승자0', score: 1, firstSeenAt: '2026-08-18T00:00:00.000Z' }] }), 'utf-8');
+    mockCfg();
+    const { demandSeeds } = await import('./topicDemand');
+    expect(demandSeeds(undefined, new Date('2026-08-27T12:00:00'))[0]).toBe('시드8');
+    const wrapped = demandSeeds(undefined, new Date('2026-09-03T12:00:00')); // 연중 246일 → 246 % 21 = 15
+    expect(wrapped[0]).toBe('시드15');
+    expect(wrapped.slice(0, 14)).toContain('시드0');                          // 끝(시드20) 다음은 앞으로 감긴다
+    expect(new Set(wrapped.slice(0, 14)).size).toBe(14);                      // 감기면서 중복되지 않는다
+  });
+  it('winners 가 없으면 브랜드 시드가 15칸을 다 쓴다(빈 슬롯을 놀리지 않는다)', async () => {
+    writeBrand(`name: 테스트나무\nseedKeywords:\n${Array.from({ length: 21 }, (_, i) => `  - 시드${i}`).join('\n')}\n`);
+    mockCfg();
+    const { demandSeeds } = await import('./topicDemand');
+    expect(demandSeeds(undefined, new Date('2026-08-26T12:00:00')).length).toBe(15);
   });
   it('스냅샷이 3일 넘게 낡으면 블록은 빈 문자열(무주입)', async () => {
     fs.mkdirSync(snapDir(), { recursive: true });
