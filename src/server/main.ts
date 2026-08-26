@@ -3822,7 +3822,7 @@ if (!process.env.VITEST) {
       console.log(`[부팅 복구] 유실된 쇼츠 검토 알림 재발송 — ${s.topic.slice(0, 30)}`);
       void notifyShortsReady({
         id: s.id, topic: s.topic, brand: s.brand, durationSec: s.durationSec, scenes: s.scenes,
-        sourcePieceId: s.sourcePieceId, writer: s.writer, director: s.director,
+        sourcePieceId: s.sourcePieceId, writer: s.writer, director: s.director, factGate: s.factGate,
       }, vp);
     }
     for (const cn of cardNewsStore().list()) {
@@ -3835,7 +3835,7 @@ if (!process.env.VITEST) {
       console.log(`[부팅 복구] 유실된 카드뉴스 검토 알림 재발송 — ${cn.topic.slice(0, 30)}`);
       void notifyCardnewsReady({
         id: cn.id, topic: cn.topic, brand: cn.brand, slides: cn.slides,
-        sourcePieceId: cn.sourcePieceId, planner: cn.planner, designer: cn.designer,
+        sourcePieceId: cn.sourcePieceId, planner: cn.planner, designer: cn.designer, factGate: cn.factGate,
       }, dir);
     }
   }
