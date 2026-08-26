@@ -350,13 +350,13 @@ describe('applySentenceRepairs — 마크다운 마커 보존(Fix round 1)', () 
     expect(r.applied).toBe(1);
     expect(r.body).toMatch(/^- /m);
   });
-  it('제목 문장 전체를 delete 하면 마커만 남기지 않고 줄 자체를 비운다', () => {
+  it('제목 문장 전체를 delete 요청해도 소제목은 지워지지 않고 missed 로 남는다(Fix round 2c — 정책 변경: 소제목은 구조라 삭제 대상이 아니다)', () => {
     const body = '## 9월 초 사과나무비료, 미룰 나무와 줘도 되는 나무\n본문입니다.';
     const r = applySentenceRepairs(body, ['9월 초 사과나무비료, 미룰 나무와 줘도 되는 나무'],
       [{ index: 1, action: 'delete', replacement: '' }]);
-    expect(r.applied).toBe(1);
-    expect(r.body).not.toMatch(/^#+\s*$/m);
-    expect(r.body).not.toContain('##');
+    expect(r.applied).toBe(0);
+    expect(r.missed).toEqual(['9월 초 사과나무비료, 미룰 나무와 줘도 되는 나무']);
+    expect(r.body).toBe(body);
   });
   it('repairs 가 배열이 아니면 아무것도 적용하지 않고 전량 missed 로 돌린다', () => {
     const r = applySentenceRepairs('본문', ['a', 'b'], null as unknown as never);
@@ -438,5 +438,106 @@ describe('runFactGateWithRepair — 부분 적용(Fix round 1)', () => {
     const r = await runFactGateWithRepair({ gate, repair, targeted }, '## 원본');
     expect(repair).not.toHaveBeenCalled();
     expect(r.body).toBe('## 대부분적용됨');
+  });
+});
+
+// ─────────────────────────── Fix round 2(리뷰어 재검토 지적 4건) ───────────────────────────
+
+describe('splitBodySentences — 인용 마커(Fix round 2a)', () => {
+  it('인용(>·>>·>>>)·조합 마커(> - )를 벗기고 문장을 살린다', () => {
+    const md = ['> 인용 한 줄입니다.', '>> 이중 인용입니다.', '> - 인용 속 목록입니다.'].join('\n');
+    const s = splitBodySentences(md);
+    expect(s).toContain('인용 한 줄입니다.');
+    expect(s).toContain('이중 인용입니다.');
+    expect(s).toContain('인용 속 목록입니다.');
+  });
+});
+
+describe('applySentenceRepairs — 인용 마커 보존(Fix round 2a)', () => {
+  it('">> " 인용 마커는 치환 범위에서 제외되어 살아남는다(83건 실측된 인용 수치 문장 사고)', () => {
+    const body = '>> 어린 나무는 3년 뒤 골격이 먼저입니다.\n본문입니다.';
+    const r = applySentenceRepairs(body, ['어린 나무는 3년 뒤 골격이 먼저입니다.'],
+      [{ index: 1, action: 'hedge', replacement: '어린 나무는 대개 3년 뒤 골격이 먼저입니다.' }]);
+    expect(r.applied).toBe(1);
+    expect(r.body).toMatch(/^>> /m);
+  });
+  it('"> - " 처럼 겹친 마커도 반복 매칭으로 전부 보존한다', () => {
+    const body = '> - 어린 나무는 3년 뒤 골격이 먼저입니다.\n본문입니다.';
+    const r = applySentenceRepairs(body, ['어린 나무는 3년 뒤 골격이 먼저입니다.'],
+      [{ index: 1, action: 'hedge', replacement: '어린 나무는 대개 3년 뒤 골격이 먼저입니다.' }]);
+    expect(r.applied).toBe(1);
+    expect(r.body).toMatch(/^> - /m);
+  });
+});
+
+describe('introducesNewFacts — 수치 토큰 정규화(Fix round 2b)', () => {
+  it('MONTH_RE 가 캡처한 앞 글자 차이(" 9월" vs "9월")는 새 사실이 아니다', () => {
+    const r = applySentenceRepairs('거름은 9월에 줍니다.', ['거름은 9월에 줍니다.'],
+      [{ index: 1, action: 'hedge', replacement: '9월에는 대개 거름을 줍니다.' }]);
+    expect(r.applied).toBe(1);
+    expect(r.missed).toEqual([]);
+  });
+  it('공백 유무 차이("3cm" vs "3 cm")는 새 사실이 아니다', () => {
+    const r = applySentenceRepairs('겉흙 3cm가 마르면 줍니다.', ['겉흙 3cm가 마르면 줍니다.'],
+      [{ index: 1, action: 'hedge', replacement: '겉흙 3 cm가 마르면 대개 줍니다.' }]);
+    expect(r.applied).toBe(1);
+    expect(r.missed).toEqual([]);
+  });
+  it('값 자체가 바뀌면(3cm→5cm) 여전히 새 사실로 걸러낸다(회귀 방지)', () => {
+    const r = applySentenceRepairs('겉흙 3cm가 마르면 줍니다.', ['겉흙 3cm가 마르면 줍니다.'],
+      [{ index: 1, action: 'hedge', replacement: '겉흙 5cm가 마르면 대개 줍니다.' }]);
+    expect(r.applied).toBe(0);
+    expect(r.missed).toEqual(['겉흙 3cm가 마르면 줍니다.']);
+  });
+});
+
+describe('applySentenceRepairs — 소제목 delete 금지(Fix round 2c)', () => {
+  it('소제목 delete 는 missed 로 남고, 형제 문장은 정상 적용되며 H2 개수는 그대로다', () => {
+    const body = '## 9월 초 사과나무비료, 미룰 나무와 줘도 되는 나무\n질소 성분이 앞선 화학비료는 가을에 양을 줄입니다.';
+    const r = applySentenceRepairs(body,
+      ['9월 초 사과나무비료, 미룰 나무와 줘도 되는 나무', '질소 성분이 앞선 화학비료는 가을에 양을 줄입니다.'],
+      [
+        { index: 1, action: 'delete', replacement: '' },
+        { index: 2, action: 'hedge', replacement: '질소 성분이 앞선 화학비료는 가을에는 대개 양을 줄입니다.' },
+      ]);
+    expect(r.applied).toBe(1);
+    expect(r.missed).toEqual(['9월 초 사과나무비료, 미룰 나무와 줘도 되는 나무']);
+    expect(r.body).toMatch(/^## /m);
+    expect((r.body.match(/^#{2,}\s/gm) ?? []).length).toBe(1);
+  });
+});
+
+describe('runFactGateWithRepair — targeted 메타 정보(Fix round 2d)', () => {
+  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+  it('전량 적용 — used:true, missed:0', async () => {
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
+    const targeted = vi.fn(async () => ({ body: '## 표적', applied: 1, missed: [] }));
+    const r = await runFactGateWithRepair({ gate, repair: vi.fn(), targeted }, '## 원본');
+    expect(r.targeted).toEqual({ applied: 1, missed: 0, used: true });
+  });
+  it('targeted 예외 — used:false, applied:0, missed 는 무근거 문장 전체 개수', async () => {
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a', 'b'])).mockResolvedValueOnce(R('pass'));
+    const targeted = vi.fn(async () => { throw new Error('llm down'); });
+    const r = await runFactGateWithRepair({ gate, repair: async () => '## 재작성', targeted }, '## 원본');
+    expect(r.targeted).toEqual({ applied: 0, missed: 2, used: false });
+  });
+  it('구조 손상으로 폐기 — used:false 지만 applied/missed 는 표적 결과 값 그대로 보고한다', async () => {
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
+    const repair = vi.fn(async () => '## 재작성');
+    const targeted = vi.fn(async () => ({ body: '본문만 남음', applied: 1, missed: [] }));
+    const r = await runFactGateWithRepair({ gate, repair, targeted }, '## 원본\n## 소제목2');
+    expect(r.targeted).toEqual({ applied: 1, missed: 0, used: false });
+  });
+  it('부분 적용 후 작가 폴백 — 표적 결과가 출발점으로 쓰였으니 used:true', async () => {
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a', 'b', 'c'])).mockResolvedValueOnce(R('pass'));
+    const repair = vi.fn(async () => '## 재작성');
+    const targeted = vi.fn(async () => ({ body: '## 부분적용됨', applied: 1, missed: ['b', 'c'] }));
+    const r = await runFactGateWithRepair({ gate, repair, targeted }, '## 원본');
+    expect(r.targeted).toEqual({ applied: 1, missed: 2, used: true });
+  });
+  it('targeted 콜백 자체가 없으면 targeted 필드도 없다', async () => {
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
+    const r = await runFactGateWithRepair({ gate, repair: async () => '## 재작성' }, '## 원본');
+    expect(r.targeted).toBeUndefined();
   });
 });

@@ -63,7 +63,19 @@ export function classifyClaim(c: { text: string; kind: ClaimKind }): 'judgment' 
   return 'claim';
 }
 
-/** 마크다운 본문 → 판정 단위 문장. 소제목·목록·표 행은 살리고 [IMAGE:]·코드펜스·표 구분선은 버린다. */
+/** 줄 머리 구조 마커(H1~H6·글머리 기호·번호 매기기·인용 `>`+) 하나. `> - ` 처럼 겹친 마커(인용 속 목록)에
+ * 대응하려면 이 정규식을 반복 매칭해야 한다(Fix round 2) — stripLeadingMarkers/lineMarkerLen 이 그렇게 한다. */
+const LEADING_MARKER_RE = /^(?:#{1,6}\s*|[-*]\s+|\d+\.\s+|>+\s*)/;
+
+/** 줄 머리 구조 마커를 남은 게 없을 때까지 반복해서 벗긴 나머지 텍스트. */
+function stripLeadingMarkers(line: string): string {
+  let s = line;
+  let m: RegExpExecArray | null;
+  while ((m = LEADING_MARKER_RE.exec(s)) && m[0].length > 0) s = s.slice(m[0].length);
+  return s;
+}
+
+/** 마크다운 본문 → 판정 단위 문장. 소제목·목록·인용·표 행은 살리고 [IMAGE:]·코드펜스·표 구분선은 버린다. */
 export function splitBodySentences(md: string): string[] {
   const out: string[] = [];
   let inFence = false;
@@ -73,7 +85,7 @@ export function splitBodySentences(md: string): string[] {
     if (inFence || !line) continue;
     if (/^\[IMAGE:/i.test(line)) continue;
     if (/^\|?\s*:?-{3,}/.test(line)) continue; // 표 구분선
-    let text = line.replace(/^#{1,6}\s*/, '').replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, '').replace(/\*\*/g, '');
+    let text = stripLeadingMarkers(line).replace(/\*\*/g, '');
     if (text.startsWith('|')) text = text.split('|').map((c) => c.trim()).filter(Boolean).join(' · ');
     for (const s of text.split(/(?<=[.!?…])\s+/)) { const t = s.trim(); if (t) out.push(t); }
   }
@@ -275,6 +287,15 @@ export async function repairSentences(
   return out;
 }
 
+/** 수치 토큰 정규화(Fix round 2) — MONTH_RE 는 앞 글자(공백 등, `(?:^|[^\d])`)를 매치에 함께 캡처해
+ * "거름은 9월에"(" 9월")와 "9월에는"("9월")처럼 같은 값인데 원문 문자열이 달라지는 오탐을 냈다.
+ * 첫 글자가 숫자가 아니면 버리고(UNIT_RE·YEAR_RE 는 항상 숫자로 시작해 no-op), 공백을 접고, 대소문자를 통일한다
+ * ("3cm"↔"3 cm", "3ML"↔"3ml"). */
+function normalizeNumericToken(tok: string): string {
+  const t = tok.length && !/\d/.test(tok[0]!) ? tok.slice(1) : tok;
+  return t.replace(/\s+/g, '').toLowerCase();
+}
+
 /** replacement 가 원문에 없던 수치·월·연도 "값"을 새로 들이면 true(새 사실 가드).
  * Fix round 1: 패턴 존재 여부가 아니라 토큰 집합으로 비교한다 — "3cm"→"5cm" 처럼 같은 종류라도
  * 값이 바뀌는 수치 스왑을 잡아낸다(존재 여부만 보면 원문에 이미 단위가 있으면 값이 바뀌어도 통과했다). */
@@ -282,19 +303,19 @@ function introducesNewFacts(original: string, replacement: string): boolean {
   for (const re of [UNIT_RE, MONTH_RE, YEAR_RE]) {
     const flags = re.flags.includes('g') ? re.flags : `${re.flags}g`;
     const reG = new RegExp(re.source, flags);
-    const origTokens = new Set(Array.from(original.matchAll(reG), (m) => m[0]));
+    const origTokens = new Set(Array.from(original.matchAll(reG), (m) => normalizeNumericToken(m[0])));
     for (const m of replacement.matchAll(reG)) {
-      if (!origTokens.has(m[0])) return true;
+      if (!origTokens.has(normalizeNumericToken(m[0]))) return true;
     }
   }
   return false;
 }
 
-/** 줄 머리 마커(H1~H6·글머리 기호·번호 매기기) 길이. `**` 제거는 포함하지 않는다 — 문장 내부에 있으면
- * 오프셋을 밀어내 치환 위치가 어긋난다(Fix round 1). */
+/** 줄 머리 구조 마커(H1~H6·글머리 기호·번호 매기기·인용 `>`+, 조합 포함) 길이. `**` 제거는 포함하지 않는다 —
+ * 문장 내부에 있으면 오프셋을 밀어내 치환 위치가 어긋난다(Fix round 1). Fix round 2: `>`+ 인용 마커를
+ * LEADING_MARKER_RE 에 추가 — 인용문 안 무근거 문장을 고치면 인용 표시(`>>`)까지 지워지던 사고를 막는다. */
 function lineMarkerLen(line: string): number {
-  const m = /^(?:#{1,6}\s*|[-*]\s+|\d+\.\s+)/.exec(line);
-  return m ? m[0].length : 0;
+  return line.length - stripLeadingMarkers(line).length;
 }
 
 /** 줄 안의 문장 경계(splitBodySentences 와 같은 분리 규칙)를 원문 위치(줄 인덱스·시작·끝)로 보존한다. */
@@ -328,7 +349,7 @@ function locateSentence(lines: string[], original: string): { lineIdx: number; s
   // Fix round 1: original 이 지나치게 짧으면(예: '겉흙 3cm') 우연한 접두 일치로 엉뚱한 문장을 통째로 먹어치울
   // 수 있다 — original 길이가 stripped 길이의 60%(최대 40자) 이상일 때만 접두 일치를 인정한다.
   const prefixed = spans.find((s) => {
-    const stripped = s.raw.replace(/^#{1,6}\s*/, '').replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, '').replace(/\*\*/g, '');
+    const stripped = stripLeadingMarkers(s.raw).replace(/\*\*/g, '');
     if (!stripped.startsWith(original)) return false;
     return original.length >= Math.min(40, stripped.length * 0.6);
   });
@@ -377,6 +398,9 @@ export function applySentenceRepairs(
     if (!loc) { missed.push(original); continue; }
 
     const line = lines[loc.lineIdx]!;
+    // Fix round 2(c) — 소제목(H1~H6) 줄을 delete 하는 건 받아들이지 않는다. 소제목은 지울 '주장'이 아니라
+    // 문서 구조라서, 지우면 형제 문장들이 정상 적용됐어도 h2Count 구조 가드에 걸려 전부 작가 폴백으로 튕긴다.
+    if (r.action === 'delete' && /^#{1,6}\s*/.test(line)) { missed.push(original); continue; }
     const markerLen = lineMarkerLen(line);
     const start = Math.max(loc.start, markerLen); // 마커 구간은 치환 범위에서 제외
     const replacement = r.action === 'delete' ? '' : r.replacement;
@@ -401,6 +425,10 @@ function h2Count(body: string): number {
   return (body.match(/^#{2,}\s/gm) ?? []).length;
 }
 
+/** runFactGateWithRepair 가 돌려주는 표적 수정 메타 정보(Fix round 2d) — 호출부(org.ts)가 로그를
+ * "결정 뒤"에 찍을 수 있게 applied/missed 개수와 실제 채택 여부(used)를 함께 넘긴다. */
+export interface TargetedRepairInfo { applied: number; missed: number; used: boolean }
+
 /**
  * 게이트 흐름(의존성 주입, 순수) — 1차 hold 면 표적 수정을 먼저 시도한다.
  * Fix round 1: ① 표적 수정이 H2+ 소제목 개수를 줄였으면(마커 파손 의심) 적용 0건과 동일하게 버린다.
@@ -408,6 +436,9 @@ function h2Count(body: string): number {
  * 전부 적용됐으면(missed 없음) 곧장 2차 판정, 그보다 적으면 부분 적용된 본문을 기준으로 작가가 나머지만
  * 마저 고치게 한다(전면 재작성이되 이미 고친 부분은 유지). 아무것도 못 건졌으면 원본 기준 전면 재작성.
  * error 는 수정하지 않는다(판정 불가 상태에서 재작성은 무의미).
+ * Fix round 2d: 결과에 targeted 메타(TargetedRepairInfo)를 함께 돌려준다 — 호출부는 이 함수가 표적 수정을
+ * "채택"했는지 "폐기"했는지 결정한 뒤에야 로그를 찍을 수 있다(콜백 안에서 로그를 찍으면 구조 가드로
+ * 폐기되고도 마치 적용된 것처럼 보이는 로그가 남는다).
  */
 export async function runFactGateWithRepair(
   a: {
@@ -417,37 +448,45 @@ export async function runFactGateWithRepair(
     targeted?: (body: string, unsupported: string[]) => Promise<{ body: string; applied: number; missed: string[] }>;
   },
   body: string,
-): Promise<{ body: string; result: FactGateResult }> {
+): Promise<{ body: string; result: FactGateResult; targeted?: TargetedRepairInfo }> {
   const first = await a.gate(body);
   if (first.status !== 'hold') return { body, result: first };
 
   // 작가 전면 재작성에 넘길 기준 본문·피드백 — 표적 수정이 부분 적용되면 그 결과로 갱신한다.
   let baseBody = body;
   let feedback = formatGateFeedback(first);
+  let targetedInfo: TargetedRepairInfo | undefined;
 
   if (a.targeted) {
     let t: { body: string; applied: number; missed: string[] } | null = null;
     try { t = await a.targeted(body, first.unsupported); }
     catch { t = null; } // 표적 수정이 예외를 던지면 적용 0건과 동일하게 취급 — 작가 폴백
 
+    targetedInfo = t
+      ? { applied: t.applied, missed: t.missed.length, used: false }
+      : { applied: 0, missed: first.unsupported.length, used: false };
+
     if (t && t.applied > 0) {
       const structOk = h2Count(t.body) >= h2Count(body); // 구조 가드 — 소제목이 줄었으면 마커가 깨졌다고 본다
       if (structOk) {
         if (t.missed.length === 0 || t.applied >= Math.ceil(first.unsupported.length / 2)) {
+          targetedInfo.used = true;
           const second = await a.gate(t.body);
-          return { body: t.body, result: { ...second, repaired: true, firstPass: toFactGateInfo(first) } };
+          return { body: t.body, result: { ...second, repaired: true, firstPass: toFactGateInfo(first) }, targeted: targetedInfo };
         }
         // 절반 미만만 적용됐다 — 부분 적용된 본문을 기준으로 남은 문장만 작가가 마저 고치게 한다.
         // 예산 참고: 이 경로는 gate(2) + targeted(1) + writer(1) + re-gate(2) = 최대 6콜(전부/폴백 경로의 5콜보다 +1).
+        targetedInfo.used = true; // 표적 결과가 작가의 출발점으로 쓰였다 — 폐기가 아니라 기여했다
         baseBody = t.body;
         feedback = formatGateFeedback({ ...first, unsupported: t.missed });
       }
-      // structOk 가 false 면 표적 결과를 통째로 버리고 baseBody/feedback 은 원본 그대로 둔다(위에서 초기화한 값).
+      // structOk 가 false 면 표적 결과를 통째로 버리고 baseBody/feedback 은 원본 그대로 둔다(위에서 초기화한 값,
+      // targetedInfo.used 는 false 로 남는다).
     }
   }
 
   const repaired = (await a.repair(baseBody, feedback)).trim();
-  if (!repaired || !/^#{2,}\s/m.test(repaired)) return { body, result: first };
+  if (!repaired || !/^#{2,}\s/m.test(repaired)) return { body, result: first, targeted: targetedInfo };
   const second = await a.gate(repaired);
-  return { body: repaired, result: { ...second, repaired: true, firstPass: toFactGateInfo(first) } };
+  return { body: repaired, result: { ...second, repaired: true, firstPass: toFactGateInfo(first) }, targeted: targetedInfo };
 }

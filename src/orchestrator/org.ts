@@ -729,13 +729,16 @@ async function packageDesignFinalize(a: {
         // 정밀 교정해, 작가가 엉뚱한 문장을 고치며 지적된 문장을 그대로 남기는 사례(실측 hold 7→7)를 없앤다.
         const targeted = async (body: string, unsupported: string[]) => {
           const reps = await repairSentences(assign.standard, body, unsupported, { signal });
-          const result = reps ? applySentenceRepairs(body, unsupported, reps) : { body, applied: 0, missed: unsupported };
-          const tm = `사실 게이트 — 표적 수정 ${result.applied}문장(누락 ${result.missed.length})`;
-          console.log(`[사실게이트] ${tm}`);
-          bus.emit('log', { message: tm });
-          return result;
+          return reps ? applySentenceRepairs(body, unsupported, reps) : { body, applied: 0, missed: unsupported };
         };
         const r = await runFactGateWithRepair({ gate, repair, targeted }, finalDeliverable);
+        // Fix round 2(d) — 표적 수정 로그는 runFactGateWithRepair 가 채택/폐기를 결정한 "뒤"에 찍는다.
+        // 콜백 안(위 targeted)에서 찍으면 구조 가드(H2 손실)로 폐기되고도 마치 적용된 것처럼 보이는 로그가 남는다.
+        if (r.targeted) {
+          const tm = `사실 게이트 — 표적 수정 ${r.targeted.applied}문장(누락 ${r.targeted.missed}) · ${r.targeted.used ? '채택' : '폐기→작가 재작성'}`;
+          console.log(`[사실게이트] ${tm}`);
+          bus.emit('log', { message: tm });
+        }
         finalDeliverable = r.body; gateResult = r.result;
       } catch (e) {
         gateResult = { status: 'error', claims: [], unsupported: [], contradicted: [], repaired: false, error: e instanceof Error ? e.message : String(e), checkedTs: new Date().toISOString() };
