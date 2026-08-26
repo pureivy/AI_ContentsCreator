@@ -20,6 +20,7 @@ import { titleTypeGuidanceBlock } from '../analytics/titleTiming';
 import { shortsTopicSignalBlock } from '../analytics/shortsPerf';
 import { topicVerdictBlock, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { trendSignalBlock } from '../analytics/trendSignal';
+import { assessCandidatesDemand, demandSignalBlock, demandVerdict, formatDemandLine, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
 import { ytNicheBlock } from '../analytics/ytNiche';
 import { ensureSeriesLabels, classifyCandidates, seriesScoresFor, gateForLabels, fillLabelsFromKnown, cooldownSummary } from '../analytics/seriesLedger';
 import { fallbackSeriesLabels } from '../content/seriesCooldown';
@@ -332,6 +333,26 @@ export function lacksSpeciesAnchor(text: string): boolean {
   return !/[가-힣]{1,6}나무/.test(t);                        // 수종 앵커(○○나무) 존재 여부
 }
 
+/**
+ * 후보 1건의 검색 수요 판정 + 로그·기각사유 문구(순수, 테스트 대상).
+ *
+ * 종전 주제 선정은 절대 검색량을 한 번도 보지 않았다 — 실측(2026-08-26)으로 우리가 쓰던 롱테일이
+ * 0~30/월이었고('가을 거름' 0·'유실수 가을 시비' 0·'사과나무 비료' 30), '비료' 계열은 데이터랩
+ * 8월 지수가 3월의 13% 였다. 소재가 아니라 **표기와 시기**가 문제였다는 뜻이라, 후보 단계에서
+ * 이 둘을 갈라 본다: 검색량 하한 미달만 하드 기각, 비수기는 후순위(demote)다.
+ *
+ * rows 에 없는 키워드(미조회·조회 실패·keyword 없음)는 unknown — 게이트를 통째로 생략한다(fail-open).
+ * '수요가 없다'는 단정은 실제 응답을 받았을 때만 한다.
+ */
+export function demandGateDecision(
+  rows: Map<string, DemandRow>,
+  keyword: string | undefined,
+  cfg: { minVolume: number; minSeason: number },
+): { verdict: DemandVerdict; line: string } {
+  const row = keyword ? rows.get(keyword) : undefined;
+  return { verdict: demandVerdict(row, cfg), line: row ? formatDemandLine(row) : '' };
+}
+
 export async function proposeContentIdeas(signal?: AbortSignal): Promise<ContentIdea | null> {
   const c = getCompany();
   // 팀·업무 범위(헌장) — 아이디어 생성의 재료(회사 정체성·콘텐츠 영역이 specialty 에 담겨 있음).
@@ -407,6 +428,9 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     topicVerdictBlock(undefined, cdown.excludeTokensHard) +
     // ③ 실검색 연관어(네이버+유튜브 자동완성 일일 스냅샷 diff): 쿨다운 계열 시드는 목록에서 제외.
     trendSignalBlock(undefined, cdown.excludeTokens) +
+    // ③-a 검색 수요 실측(2026-08-26): 시드 키워드의 절대 검색량·시즌 지수 표. 연관어(무엇을 검색하나)
+    //     옆에 붙여야 두뇌가 '이 표기로 몇 명이 찾는가'까지 함께 본다. 스냅샷 없음·킬스위치 off 면 빈 문자열.
+    demandSignalBlock(activeBrandSlug() || '') +
     // ③-b 유튜브 니치 동향(2026-08-25): 최근 7일 조회 상위 영상 — 소재·프레이밍의 실반응 신호.
     ytNicheBlock(undefined, cdown.excludeTokens) +
     // ④ 계열 쿨다운 v2(감쇠 점수): 하드=금지(아래 후보 게이트가 코드로도 기각), 소프트=회피 권고 + 빈 방향 유도.
@@ -418,7 +442,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         + '\n'
       : '') +
     // 신호 서열 선언(리뷰 지적) — 명령형 블록 6종이 서열 없이 나열되면 micro 가 어느 지시에 최적화할지 비결정적.
-    `[신호 우선순위 — 위 신호들이 충돌할 때] 1) 계열 쿨다운 금지·실측 폐기·기존 콘텐츠 유사 회피(금지) > 2) 리서치 기회·실검색 연관어(우선 검토) > 3) 성과 계열 확장(참고). 금지가 항상 이긴다.\n\n` +
+    `[신호 우선순위 — 위 신호들이 충돌할 때] 1) 계열 쿨다운 금지·실측 폐기·기존 콘텐츠 유사 회피(금지) > 2) 리서치 기회·실검색 연관어·검색 수요 실측(우선 검토) > 3) 성과 계열 확장(참고). 금지가 항상 이긴다.\n\n` +
     `[기존 콘텐츠 — 주제·키워드 유사 금지]\n${existingLines || '(없음)'}\n\n` +
     `[최근 제작 — 중복 회피]\n${done || '(없음)'}\n\n` +
     `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}\n\n` +
@@ -436,9 +460,26 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     ).catch(() => null);
     const cands = normalizeIdeaCandidates(o);
     if (!cands.length) return null; // 응답 자체가 무효 — 이번 주기 스킵
+    // 검색 수요 묶음 조회(2026-08-26) — 라운드당 딱 1회(검색광고 ≤2콜 + 데이터랩 1콜). 후보당 개별
+    // 조회는 라운드당 수십 콜이 된다. 킬스위치 off 면 호출 자체를 생략해 비용이 0이다.
+    const demandCfg = { minVolume: CONFIG.topicDemandMinVolume, minSeason: CONFIG.topicDemandMinSeason };
+    const demandTargets = CONFIG.topicDemandGate ? cands.map((c) => c.keyword).filter((k): k is string => !!k) : [];
     // 후보 계열 분류(라운드당 micro 1콜, 실패 시 결정적 폴백 + 원장 키 포함 대조 보강) + 게이트 선계산.
     // 소프트 후보는 뒤로 미룬다(안정 정렬) — none 후보가 있으면 그쪽을 먼저 채택.
-    const candLabels = await classifyCandidates(cands, signal);
+    // 계열 분류와 수요 조회는 서로 무관한 외부 왕복이라 같이 기다린다(틱 지연을 직렬로 늘리지 않게).
+    const [candLabels, demandRows] = await Promise.all([
+      classifyCandidates(cands, signal),
+      demandTargets.length ? assessCandidatesDemand(demandTargets, signal) : Promise.resolve(new Map<string, DemandRow>()),
+    ]);
+    // fail-open — 요청은 했는데 응답이 통째로 비면 '검색량 0'이 아니라 '모름'이다(키 없음·HTTP 오류 포함).
+    if (demandTargets.length && !demandRows.size) console.log('[auto-cycle] 수요 조회 실패 — 게이트 생략');
+    // 채택 시 수요 실측을 한 줄 남긴다(세 채택 경로 공용) — 나중에 '왜 이 주제였나'를 로그만으로 재구성하려면
+    // 기각뿐 아니라 통과한 후보의 숫자도 있어야 한다. 게이트 off 면 아무 말도 하지 않는다(무주입 원칙).
+    const logDemandAdopt = (title: string, keyword?: string): void => {
+      if (!CONFIG.topicDemandGate) return;
+      const { line } = demandGateDecision(demandRows, keyword, demandCfg);
+      console.log(`[auto-cycle] 수요 게이트 — "${title}" ${line || '조회 없음'} 채택`);
+    };
     const gated = cands.map((cand, i) => ({
       cand,
       gate: gateForLabels(fillLabelsFromKnown(`${cand.title} ${cand.keyword ?? ''}`, candLabels[i]!, seriesScores), seriesScores),
@@ -448,6 +489,9 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // 대상. 새 소재 후보를 우선하되, 이번 라운드에 새 소재가 없으면 유사 후보를 채택한다 — 집필 시점에
     // priorCoverageBrief 가 이전 글 앵글을 주입해 프레이밍을 바꾼다(same-topic different content 배선).
     let similarFallback: ContentIdea | null = null;
+    // 비수기 후순위 보관함 — 라운드 안에서만 산다(라운드 밖에 두면 1라운드 기각 사유를 되먹인 뒤에도
+    // 그 라운드의 후보가 2라운드 끝에 되살아난다).
+    const demoted: ContentIdea[] = [];
     for (const { cand, gate } of gated) {
       const { title, keyword } = cand;
       if (recentAuto.includes(title)) {
@@ -478,6 +522,15 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       if (avoided) {
         console.log(`[auto-cycle] 아이디어 기각(리서치 폐기 판정) — "${title}" (키워드 "${keyword}": ${avoided.reason.slice(0, 50)})`);
         rejects.push(`"${title}"=리서치 실측 폐기 키워드(${keyword} — ${avoided.reason.slice(0, 40)})`);
+        continue;
+      }
+      // 검색 수요 게이트(하드 기각 1종, 2026-08-26) — 절대 검색량(검색광고)이 하한 미달이면 기각한다.
+      // 계열 최대(표기만 다른 연관어)까지 봐도 미달일 때만이라, '표기가 나쁜 좋은 소재'는 살아남는다.
+      // 비수기(시즌 지수 미달)는 여기서 판정만 하고 기각하지 않는다 — 처리는 아래 채택 직전(후순위).
+      const demand = demandGateDecision(demandRows, keyword, demandCfg);
+      if (demand.verdict === 'reject') {
+        console.log(`[auto-cycle] 아이디어 기각(검색 수요 미달) — "${title}" (${demand.line})`);
+        rejects.push(`"${title}"=검색 수요 미달(${demand.line})`);
         continue;
       }
       // 계열 쿨다운 v2 게이트(하드만 기각, 2026-08-25) — 감쇠 점수 기반. 조합(수종×행위)은 엄격,
@@ -514,16 +567,39 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
           continue;
         }
       }
+      // 비수기 후순위 — 판정은 위(리서치 폐기 다음)에서 났지만 **보관은 여기서** 한다. 위에서 바로
+      // 보관하면 수종 앵커·유사·소재 포화 게이트를 건너뛴 후보가 라운드 끝에 채택돼, 유사 폴백 자격을
+      // 계열 게이트 none 으로 좁혀 막았던 구멍이 두 번째 폴백 경로로 다시 열린다(위 유사 폴백 자격
+      // 주석의 포도 4편 사고 계보). 로그는 항상, 보관은 자격(계열 none)일 때만 — 유사 폴백과 같은 규칙.
+      if (demand.verdict === 'demote') {
+        console.log(`[auto-cycle] 아이디어 후순위(검색 비수기) — "${title}" (${demand.line})`);
+        if (gate.level === 'none') demoted.push({ title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) });
+        continue;
+      }
+      logDemandAdopt(title, keyword);
       recentAuto.push(title);
       if (recentAuto.length > 20) recentAuto.shift();
       if (keyword) consumeOpportunityVerdict(keyword); // 채택된 리서치 기회는 소진 — 다음 기획에 반복 주입 방지(2026-08-24)
       return { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
+    }
+    // 제철 후보가 전멸했으면 비수기 후순위 후보를 쓴다 — 비수기는 '지금 덜 찾는다'일 뿐 수요가 없는
+    // 게 아니라서(하한 미달은 이미 위에서 기각됐다), 슬롯을 좌초시키는 것보다 낫다. 유사 폴백보다
+    // 먼저인 이유: 이쪽은 아직 안 다룬 새 소재이고, 유사 폴백은 소재 자체가 이미 다뤄진 것이다.
+    const offSeason = demoted[0];
+    if (offSeason) {
+      console.log(`[auto-cycle] 수요 비수기 후보 채택(대안 없음) — "${offSeason.title}"`);
+      logDemandAdopt(offSeason.title, offSeason.keyword);
+      recentAuto.push(offSeason.title);
+      if (recentAuto.length > 20) recentAuto.shift();
+      if (offSeason.keyword) consumeOpportunityVerdict(offSeason.keyword);
+      return offSeason;
     }
     // 새 소재 후보가 전멸했지만 유사 후보가 있으면 채택 — 좌초 대신 '같은 소재, 다른 시각' 글로 간다.
     // 폴백은 계열 게이트 none 후보만 대입되므로(위 자격 조건) 재검사 불필요 — v1의 폴백 뚫림
     // 실사고(포도 4편째)는 자격+N7 바닥선 이중으로 봉쇄돼 있다.
     if (similarFallback) {
       console.log(`[auto-cycle] 유사 주제 채택(다른 시각 생성) — "${similarFallback.title}"`);
+      logDemandAdopt(similarFallback.title, similarFallback.keyword);
       recentAuto.push(similarFallback.title);
       if (recentAuto.length > 20) recentAuto.shift();
       if (similarFallback.keyword) consumeOpportunityVerdict(similarFallback.keyword);

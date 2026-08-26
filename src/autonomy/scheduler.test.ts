@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision } from './scheduler';
+import type { DemandRow } from '../analytics/topicDemand';
 
 describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -354,5 +355,47 @@ describe('normalizeIdeaCandidates — 5후보 응답 파서(순수)', () => {
   it('구형 단일 오브젝트 응답도 1건으로 수용(하위호환)', () => {
     expect(normalizeIdeaCandidates({ title: '단일 제안', keyword: 'k' })).toEqual([{ title: '단일 제안', keyword: 'k' }]);
     expect(normalizeIdeaCandidates(null)).toEqual([]);
+  });
+});
+
+// 후보 수요 판정(2026-08-26) — 실측: 우리 문구의 월 검색량이 0~30 이었고('가을 거름' 0·'사과나무 비료' 30),
+// '비료' 계열 데이터랩은 8월이 3월의 13% 였다. 그 두 축을 후보 단계에서 코드로 보게 하는 판정부.
+describe('demandGateDecision — 후보 검색 수요 판정(순수)', () => {
+  const cfg = { minVolume: 30, minSeason: 0.25 };
+  const mk = (over: Partial<DemandRow> & { keyword: string }): DemandRow => ({ volume: 0, approx: false, familyMax: 0, ...over });
+
+  it('검색량 하한 미달은 reject — 문구에 실측 검색량과 계열 최대가 남는다', () => {
+    const rows = new Map<string, DemandRow>([['가을 거름', mk({ keyword: '가을 거름', volume: 12, familyMax: 12 })]]);
+    const d = demandGateDecision(rows, '가을 거름', cfg);
+    expect(d.verdict).toBe('reject');
+    expect(d.line).toContain('12/월');       // 기각 사유가 숫자로 남아야 재제안 억제에 쓰인다
+    expect(d.line).toContain('계열 최대');    // 표기 교체 후보(연관어)까지 봐도 미달이었음을 남긴다
+  });
+
+  it('계열 최대가 하한을 넘으면 기각하지 않는다(표기만 다른 수요는 살린다)', () => {
+    const rows = new Map<string, DemandRow>([['가을 거름', mk({ keyword: '가을 거름', volume: 0, familyMax: 1220, familyTop: '밑거름' })]]);
+    expect(demandGateDecision(rows, '가을 거름', cfg).verdict).toBe('pass');
+  });
+
+  it('비수기(시즌 지수 하한 미달)는 기각이 아니라 demote', () => {
+    const rows = new Map<string, DemandRow>([['사과나무 비료', mk({ keyword: '사과나무 비료', volume: 300, familyMax: 300, seasonIdx: 0.13, direction: '하락' })]]);
+    const d = demandGateDecision(rows, '사과나무 비료', cfg);
+    expect(d.verdict).toBe('demote');
+    expect(d.line).toContain('시즌 0.13');
+  });
+
+  it('검색량·시즌 둘 다 충분하면 pass', () => {
+    const rows = new Map<string, DemandRow>([['배롱나무 가을 식재', mk({ keyword: '배롱나무 가을 식재', volume: 480, familyMax: 480, seasonIdx: 0.62, direction: '상승' })]]);
+    expect(demandGateDecision(rows, '배롱나무 가을 식재', cfg).verdict).toBe('pass');
+  });
+
+  it('rows 에 없는 키워드는 unknown + 빈 문구(미조회는 수요 0 이 아니다 — fail-open)', () => {
+    const rows = new Map<string, DemandRow>([['다른 키워드', mk({ keyword: '다른 키워드', volume: 900, familyMax: 900 })]]);
+    expect(demandGateDecision(rows, '조회 안 한 키워드', cfg)).toEqual({ verdict: 'unknown', line: '' });
+    expect(demandGateDecision(new Map(), '아무거나', cfg)).toEqual({ verdict: 'unknown', line: '' });
+  });
+
+  it('keyword 자체가 없는 후보도 unknown(게이트 생략)', () => {
+    expect(demandGateDecision(new Map(), undefined, cfg)).toEqual({ verdict: 'unknown', line: '' });
   });
 });
