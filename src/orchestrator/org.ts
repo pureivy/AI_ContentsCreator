@@ -645,7 +645,11 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   // 인기 방향 조향 — 실제 네이버 블로그 상위 노출 글(실측 SERP)을 작가·제목 패키저에 주입(fail-open).
   const serpText = research ? '' : await serpPopularBrief(topic, signal);
   if (serpText) bus.emit('log', { message: `네이버 SERP 실측 — 상위 노출 ${serpText.split('\n').length - 1}건을 집필 방향에 반영` });
-  if (!research && brief.trim()) writeResearchBrief(bus.runId, brief); // 리비전 재주입용 영속화(스펙 §3)
+  // fail-open(스펙 §8) — 부가 기록 실패로 런 전체가 죽으면 안 된다(다이제스트 저장과 동일 패턴, finalize.ts).
+  if (!research && brief.trim()) {
+    try { writeResearchBrief(bus.runId, brief); }
+    catch (e) { bus.emit('log', { message: `브리프 영속화 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
+  }
   const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, microModel: assign.micro, signal });
   const finalDeliverable = body || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
@@ -773,8 +777,13 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
   bus.emit('log', { message: `리비전 런 — 검토자 수정 요청 반영 개정(리서치·검수 생략): "${revise.feedback.slice(0, 120)}"` });
   bus.emit('phase', { team_id: '_ceo', phase: 'integrate' });
   const brief = revise.baseRunId ? readResearchBrief(revise.baseRunId) : '';
-  if (brief) writeResearchBrief(bus.runId, brief); // 연쇄 리비전 대응 — 이 런에서 개정한 결과도 브리프를 물려받는다
-  else bus.emit('log', { message: '리비전 런 — 원 런 브리프 없음(research_brief.md 부재) · 초안+피드백만으로 개정' });
+  // fail-open(스펙 §8) — 부가 기록 실패로 리비전 런이 죽으면 안 된다(다이제스트 저장과 동일 패턴, finalize.ts).
+  if (brief.trim()) {
+    try { writeResearchBrief(bus.runId, brief); } // 연쇄 리비전 대응 — 이 런에서 개정한 결과도 브리프를 물려받는다
+    catch (e) { bus.emit('log', { message: `브리프 영속화 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
+  } else {
+    bus.emit('log', { message: '리비전 런 — 원 런 브리프 없음(research_brief.md 부재) · 초안+피드백만으로 개정' });
+  }
   const body = await writeBlogBody({
     bus, writer, model: modelForTier(assign, writer.tier), topic, brief, revise, signal,
   });
