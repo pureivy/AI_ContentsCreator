@@ -81,17 +81,46 @@ describe('seasonIndex — 13개월 데이터랩의 시즌 지수(순수)', () =>
     { period: '2026-05-01', ratio: 40 }, { period: '2026-06-01', ratio: 22 }, { period: '2026-07-01', ratio: 15 },
     { period: '2026-08-01', ratio: 13.3 },
   ];
-  it('max(현재, 작년 다음달)/정점 — 다음달 수요가 살아나면 지수도 그만큼 올라간다', () => {
-    expect(seasonIndex(pts13, new Date('2026-08-26T12:00:00'))).toBeCloseTo(0.2, 5);
+  it('max(현재, 작년 이번달~+2개월)/정점 — 전방 2개월 창의 수요까지 본다', () => {
+    // 창 = 작년 이번달(2025-08=12) · 작년 +1개월(2025-09=20) · 작년 +2개월(2025-10=30) + 현재(13.3) → 30/100.
+    expect(seasonIndex(pts13, new Date('2026-08-26T12:00:00'))).toBeCloseTo(0.3, 5);
+  });
+  it("'다음 시즌 대비' 후보가 살아난다 — 2개월 뒤 피크 시리즈는 통과선(0.25)을 넘는다", () => {
+    // 실측 계보(2026-08-26): '단풍 드는 시기' 40/월인데 1개월 창만 보던 지수가 0.03 → demote 였다.
+    // 전방 창을 2개월로 넓히면 10월(40)이 잡혀 0.4 — 프롬프트의 '다음 시즌 대비' 지시와 어긋나지 않는다.
+    const autumn = [
+      { period: '2025-08-01', ratio: 2 }, { period: '2025-09-01', ratio: 12 }, { period: '2025-10-01', ratio: 40 },
+      { period: '2025-11-01', ratio: 100 }, { period: '2025-12-01', ratio: 25 }, { period: '2026-01-01', ratio: 8 },
+      { period: '2026-02-01', ratio: 6 }, { period: '2026-03-01', ratio: 5 }, { period: '2026-04-01', ratio: 5 },
+      { period: '2026-05-01', ratio: 4 }, { period: '2026-06-01', ratio: 3 }, { period: '2026-07-01', ratio: 3 },
+      { period: '2026-08-01', ratio: 3 },
+    ];
+    const idx = seasonIndex(autumn, new Date('2026-08-26T12:00:00'));
+    expect(idx).toBeCloseTo(0.4, 5);            // 종전(1개월 창)이면 max(3, 12)/100 = 0.12 로 후순위였다
+    expect(idx!).toBeGreaterThanOrEqual(0.25);
+    expect(demandVerdict(row({ keyword: '단풍 드는 시기', volume: 40, familyMax: 40, seasonIdx: idx! }), { minVolume: 30, minSeason: 0.25 })).toBe('pass');
   });
   it('13점 미만이면 다음달을 모르니 현재/정점만 본다', () => {
     const pts6 = pts13.slice(-6); // 2026-03(정점 100) ~ 2026-08(13.3)
     expect(seasonIndex(pts6, new Date('2026-08-26T12:00:00'))).toBeCloseTo(13.3 / 100, 5);
   });
-  it('데이터랩이 당월을 아직 안 주면(마지막 점이 지난달) 인덱스 대신 period 로 다음달을 찾는다', () => {
-    // 2025-07 ~ 2026-07(13점) — 인덱스(len-12=1)는 2025-08(12)을 가리키지만 실제 다음달 근사는 2025-09(20).
+  it('데이터랩이 당월을 아직 안 주면(마지막 점이 지난달) 인덱스 대신 period 로 창을 잡는다', () => {
+    // 2025-07 ~ 2026-07(13점) — 인덱스(len-12=1)는 2025-08 을 기준점으로 잡지만 실제 다음달은 2025-09.
+    // 기준점이 한 칸 밀리면 창 전체가 밀린다(2025-08·09·10=12·20·30 → 30, 밀리면 8·12·20 → 20).
     const lagged = [{ period: '2025-07-01', ratio: 8 }, ...pts13.slice(0, 12)];
-    expect(seasonIndex(lagged, new Date('2026-08-26T12:00:00'))).toBeCloseTo(20 / 100, 5);
+    expect(seasonIndex(lagged, new Date('2026-08-26T12:00:00'))).toBeCloseTo(30 / 100, 5);
+  });
+  it('12월에도 롤오버한다 — 작년 +1개월은 이듬해 1월(지연 발행 폴백 경로)', () => {
+    // 2025-11 ~ 2026-11(13점), now=2026-12(데이터랩 미제공 → 지연 경로). 기준점은 2026-01 이어야 하고
+    // 창은 2025-12(20)·2026-01(15)·2026-02(10) → 0.2. 롤오버가 깨지면 창이 2025-11(90)까지 당겨져 0.9 가 된다.
+    const dec = [
+      { period: '2025-11-01', ratio: 90 }, { period: '2025-12-01', ratio: 20 }, { period: '2026-01-01', ratio: 15 },
+      { period: '2026-02-01', ratio: 10 }, { period: '2026-03-01', ratio: 30 }, { period: '2026-04-01', ratio: 40 },
+      { period: '2026-05-01', ratio: 60 }, { period: '2026-06-01', ratio: 100 }, { period: '2026-07-01', ratio: 80 },
+      { period: '2026-08-01', ratio: 50 }, { period: '2026-09-01', ratio: 30 }, { period: '2026-10-01', ratio: 10 },
+      { period: '2026-11-01', ratio: 4 },
+    ];
+    expect(seasonIndex(dec, new Date('2026-12-15T12:00:00'))).toBeCloseTo(0.2, 5);
   });
   it('데이터 없음·정점 0 이면 undefined(판정 불가 → 게이트 생략)', () => {
     expect(seasonIndex([], new Date())).toBeUndefined();
@@ -163,7 +192,10 @@ describe('buildDemandBlock — 두뇌 주입 블록(순수)', () => {
     expect(b.indexOf('블루베리 묘목')).toBeLessThan(b.indexOf('사과나무 비료'));
     expect(b.indexOf('사과나무 비료')).toBeLessThan(b.indexOf('가을 거름'));
     // 하한 숫자는 CONFIG 보간이라 여기선 문장만 확인한다(보간 검증은 아래 스냅샷 describe 에서 임계값을 바꿔 한다).
-    expect(b).toContain('미만 키워드로 주제를 세우지 마라. 수요가 있는 키워드는 그대로 keyword 로 쓰고, 계열 최대 연관어가 더 크면 그 표기를 우선하라.');
+    // M4 — 연관어는 붙여쓰기 형태라 "그 표기를 우선하라"가 제목·태그에 '블루베리전용비료' 같은 표기를
+    // 밀어넣었다. 관측(수요가 그쪽에 있다)만 전하고 표기는 자연스러운 띄어쓰기로 쓰게 한다.
+    expect(b).toContain('미만 키워드로 주제를 세우지 마라. 수요가 있는 키워드는 그대로 keyword 로 쓰고, 계열 최대 연관어의 검색량이 더 크면 주제는 그 수요를 겨냥하되 표기는 자연스러운 띄어쓰기로 써라.');
+    expect(b).not.toContain('그 표기를 우선하라');
   });
   it('상위 12줄까지만 담는다', () => {
     const many: DemandSnap = { date: '2026-08-26', rows: Array.from({ length: 20 }, (_, i) => row({ keyword: `k${i}`, volume: i * 100 })) };
@@ -202,6 +234,7 @@ describe('assessCandidatesDemand — 커넥터 묶음 호출', () => {
   });
   it('중복은 합치고 11번째부터는 조회하지 않는다(미조회 후보는 unknown 으로 통과)', async () => {
     const kws = Array.from({ length: 12 }, (_, i) => `키워드${i}`);
+    H.vols = kws.slice(0, 10).map((k) => vol(k, 100));   // 조회한 10개는 실제로 행이 온 상태(미측정과 구분)
     const m = await assessCandidatesDemand([...kws, '키워드0']);
     expect(H.calls.length).toBe(2);
     expect(H.calls.flat()).toEqual(kws.slice(0, 10));
@@ -210,7 +243,8 @@ describe('assessCandidatesDemand — 커넥터 묶음 호출', () => {
     expect(demandVerdict(m.get('키워드10'), { minVolume: 30, minSeason: 0.25 })).toBe('unknown');
   });
   it('한 청크만 빈 응답이면 그 청크 후보만 미조회로 남긴다(살아남은 청크 덕에 통째로 기각되면 안 된다)', async () => {
-    H.volsSeq = [[vol('사과나무비료', 30)], []];   // 1번 묶음 성공, 2번 묶음 실패([] 반환)
+    // 1번 묶음 성공(그 5개 후보 전부 행이 옴), 2번 묶음 실패([] 반환).
+    H.volsSeq = [[vol('사과나무비료', 30), vol('블루베리전용비료', 360), vol('가을거름', 0, true), vol('감나무전정', 50), vol('배롱나무개화', 20)], []];
     const m = await assessCandidatesDemand(['사과나무 비료', '블루베리 비료', '가을 거름', '감나무 전정', '배롱나무 개화', '포도나무 접목']);
     expect(H.calls.length).toBe(2);
     expect(m.size).toBe(5);
@@ -220,6 +254,44 @@ describe('assessCandidatesDemand — 커넥터 묶음 호출', () => {
     expect(demandVerdict(m.get('가을 거름'), { minVolume: 30, minSeason: 0.25 })).toBe('reject'); // 응답 받은 묶음은 판정
     H.volsSeq = null;
   });
+  // C2(2026-08-26 최종 리뷰) — 청크 응답은 왔지만 그 키워드 행이 없을 때 0/월을 지어내던 결함.
+  // 모듈 헤더 불변식: '수요가 없다'는 단정은 실제로 그 키워드 행을 받았을 때만 한다.
+  it('응답에 그 키워드 행이 없으면 Map 에서 아예 뺀다(0/월 날조 금지 — 미측정은 unknown)', async () => {
+    H.vols = [vol('사과나무비료', 30)];
+    const m = await assessCandidatesDemand(['사과나무 비료', '행이 없는 키워드']);
+    expect(H.calls.length).toBe(1);                                   // 조회는 했고 응답도 왔다
+    expect(m.has('행이 없는 키워드')).toBe(false);                      // 그래도 '검색량 0'이라 단정하지 않는다
+    expect(demandVerdict(m.get('행이 없는 키워드'), { minVolume: 30, minSeason: 0.25 })).toBe('unknown');
+    expect(m.get('사과나무 비료')).toMatchObject({ volume: 30 });        // 행이 온 후보는 종전대로 판정
+  });
+  it('정확 일치가 없어도 계열 최대가 있으면 남긴다(표기만 틀린 좋은 소재)', async () => {
+    H.vols = [vol('블루베리전용비료', 360)];
+    const m = await assessCandidatesDemand(['블루베리 비료']);
+    expect(m.get('블루베리 비료')).toMatchObject({ volume: 0, familyMax: 360, familyTop: '블루베리전용비료' });
+  });
+
+  // I5(2026-08-26 최종 리뷰) — LLM 후보의 쉼표·개행이 hintKeywords 를 부풀려(1후보=여러 힌트) 400 을
+  // 만들고, 그 라운드 게이트가 통째로 무력화되던 결함. 정제는 힌트에만, Map 키는 원문 그대로.
+  it('쉼표·개행이 든 후보는 정제해서 힌트로 보낸다(1후보=1힌트) — Map 키는 원문 유지', async () => {
+    H.vols = [vol('사과나무비료', 30)];
+    const multi = '사과나무 비료,\n가을 시비, 밑거름';
+    const trailing = '사과나무 비료,';
+    const long = `${'가'.repeat(40)}, 뒤엣말`;
+    const m = await assessCandidatesDemand([multi, trailing, long, '  , \n\r ']);
+    expect(H.calls.length).toBe(1);
+    expect(H.calls[0]!.length).toBe(3);                                  // 후보 3개 → 힌트 3개(빈 후보는 제외)
+    expect(H.calls[0]![0]).toBe('사과나무 비료 가을 시비 밑거름');           // 쉼표·개행 → 공백, 중복 공백 압축
+    expect(H.calls[0]![2]!.length).toBe(30);                             // 30자 상한
+    expect(H.calls[0]!.some((h) => /[,\n\r]/.test(h))).toBe(false);
+    expect(m.get(trailing)).toMatchObject({ keyword: trailing, volume: 30 }); // 키·표기는 원문(정제본 아님)
+  });
+  it('정제 후 같아지는 후보는 한 번만 조회한다(힌트 낭비 방지)', async () => {
+    H.vols = [vol('가을거름', 0, true)];
+    const m = await assessCandidatesDemand(['가을 거름,', '가을 거름']);
+    expect(H.calls[0]).toEqual(['가을 거름']);
+    expect(m.size).toBe(1);
+  });
+
   it('커넥터 비활성·빈 응답·예외는 빈 Map(게이트 생략)', async () => {
     H.adOn = false;
     expect((await assessCandidatesDemand(['사과나무 비료'])).size).toBe(0);
@@ -252,7 +324,9 @@ describe('스냅샷 IO — 킬스위치·시드 슬롯·하루 1회·실패 시 
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'demand-'));
     writeBrand('name: 테스트나무\nseedKeywords:\n  - 사과나무 비료\n  - 블루베리 비료\n');
     H.adOn = true; H.dlOn = true; H.calls = []; H.dlCalls = []; H.volsErr = null; H.trendErr = null; H.volsSeq = null;
-    H.vols = [vol('사과나무비료', 30), vol('블루베리전용비료', 360)];
+    // 시드 3종 전부 행이 오는 픽스처 — 행이 없는 키워드는 Map 에서 빠지므로(C2) 스냅샷 구성 검증이
+    // '측정 안 됨'과 뒤섞이지 않게 한다.
+    H.vols = [vol('사과나무비료', 30), vol('블루베리전용비료', 360), vol('블루베리묘목', 900)];
     H.trends = [];
     mockCfg();
   });

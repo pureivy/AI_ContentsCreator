@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption } from './scheduler';
 import type { DemandRow } from '../analytics/topicDemand';
 
 describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
@@ -440,5 +440,30 @@ describe('pickDemoted — 후순위 후보 선택(순수)', () => {
   it('비어 있으면 undefined(폴백 없음)', () => {
     expect(pickDemoted([])).toBeUndefined();
     expect(pickDemoted([e('유일', 1)])?.idea.title).toBe('유일');
+  });
+});
+
+// 라운드 끝 채택 경합(2026-08-26 최종 리뷰 I3) — 후순위 보관함 vs 유사 폴백. rank 1(기아 방지 밸브)은
+// '이 표기로는 아무도 안 찾는다'가 실측된 후보라, 검색량이 있을 수 있는 유사 폴백보다 약하다.
+describe('pickRoundAdoption — 후순위 vs 유사 폴백(순수)', () => {
+  const e = (title: string, rank: number) => ({ idea: { title }, rank });
+
+  it('rank 1(수요 하한 미달)은 유사 폴백에 진다 — 0/월 신규가 검색량 있는 소재를 이기면 안 된다', () => {
+    expect(pickRoundAdoption([e('수요미달', 1)], true)).toEqual({ source: 'fallback' });
+  });
+  it('rank 0(비수기)은 유사 폴백을 이긴다 — 소재 자체엔 수요가 있고 아직 안 다룬 새 소재다', () => {
+    expect(pickRoundAdoption([e('비수기', 0)], true)).toEqual({ source: 'demoted', pick: e('비수기', 0) });
+  });
+  it('폴백이 없으면 rank 1 도 채택된다(좌초 대신 생산)', () => {
+    expect(pickRoundAdoption([e('수요미달', 1)], false)).toEqual({ source: 'demoted', pick: e('수요미달', 1) });
+  });
+  it('후순위가 비고 폴백만 있으면 폴백', () => {
+    expect(pickRoundAdoption([], true)).toEqual({ source: 'fallback' });
+  });
+  it('둘 다 없으면 undefined(이번 라운드 채택 없음)', () => {
+    expect(pickRoundAdoption([], false)).toBeUndefined();
+  });
+  it('rank 0 이 섞여 있으면 폴백이 있어도 rank 0 을 고른다(pickDemoted 순서 그대로)', () => {
+    expect(pickRoundAdoption([e('수요미달', 1), e('비수기', 0)], true)).toEqual({ source: 'demoted', pick: e('비수기', 0) });
   });
 });

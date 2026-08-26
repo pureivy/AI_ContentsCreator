@@ -376,6 +376,25 @@ export function pickDemoted<T extends { rank: number }>(list: readonly T[]): T |
   return best;
 }
 
+/**
+ * 라운드 끝 채택 경합(순수) — 후순위 보관함 vs 유사 폴백. 어느 쪽이 이기는지만 돌려주고 로그·조립은
+ * 호출부가 한다(경로별 로그 문구를 그대로 유지하기 위해).
+ *
+ * rank 0(비수기)은 폴백을 이긴다 — 아직 안 다룬 새 소재이고 소재 자체엔 수요가 있다(지금 덜 찾을 뿐).
+ * rank 1(기아 방지 밸브 = 검색량 하한 미달)은 폴백에 진다(2026-08-26 최종 리뷰 I3) — '이 표기로는
+ * 아무도 안 찾는다'가 실측된 후보라, 이미 다룬 소재라도 검색량이 확인된 유사 폴백이 낫다. 폴백이
+ * 없으면 rank 1 도 채택한다(좌초보다는 생산).
+ */
+export function pickRoundAdoption<T extends { rank: number }>(
+  demoted: readonly T[],
+  hasFallback: boolean,
+): { source: 'demoted'; pick: T } | { source: 'fallback' } | undefined {
+  const best = pickDemoted(demoted);
+  if (best && (best.rank !== 1 || !hasFallback)) return { source: 'demoted', pick: best };
+  if (hasFallback) return { source: 'fallback' };
+  return undefined;
+}
+
 export async function proposeContentIdeas(signal?: AbortSignal): Promise<ContentIdea | null> {
   const c = getCompany();
   // 팀·업무 범위(헌장) — 아이디어 생성의 재료(회사 정체성·콘텐츠 영역이 specialty 에 담겨 있음).
@@ -611,6 +630,10 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         console.log(demand.relaxed
           ? `[auto-cycle] 아이디어 후순위(검색 수요 미달·기아 방지) — "${title}" (${demand.line})`
           : `[auto-cycle] 아이디어 후순위(검색 비수기) — "${title}" (${demand.line})`);
+        // 후순위 사유도 노트에 남긴다(2026-08-26 최종 리뷰 M3) — 종전엔 rejects 가 비어 2라운드 노트가
+        // "전부 무효"로 나가, 두뇌는 뭐가 문제였는지(비수기냐 수요 미달이냐) 모른 채 다시 제안했다.
+        // 보관 자격(계열 none)과 무관하게 기록한다 — 노트는 두뇌에게 주는 정보고, 보관은 별개 판단이다.
+        rejects.push(`"${title}"=후순위(${demand.relaxed ? '검색 수요 미달' : '검색 비수기'}${demand.line ? ` — ${demand.line}` : ''})`);
         if (gate.level === 'none') {
           demoted.push({
             idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) },
@@ -625,13 +648,13 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       if (keyword) consumeOpportunityVerdict(keyword); // 채택된 리서치 기회는 소진 — 다음 기획에 반복 주입 방지(2026-08-24)
       return { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
     }
-    // 제철 후보가 전멸했으면 후순위 보관함을 쓴다(비수기 0 → 기아 방지 1 순). 비수기는 '지금 덜 찾는다'일
-    // 뿐 수요가 없는 게 아니고, 기아 방지분은 마지막 라운드에서만 담기므로 '더 나은 대안이 없음'이 확정된
-    // 상태다. 유사 폴백보다 먼저인 이유: 이쪽은 아직 안 다룬 새 소재이고, 유사 폴백은 이미 다룬 소재다.
-    const best = pickDemoted(demoted);
-    if (best) {
-      const { idea } = best;
-      console.log(best.rank === 1
+    // 제철 후보가 전멸했으면 후순위 보관함과 유사 폴백 중에서 고른다(pickRoundAdoption). 비수기(rank 0)는
+    // '지금 덜 찾는다'일 뿐 수요가 없는 게 아니고 아직 안 다룬 새 소재라 폴백을 이긴다. 반대로 하한 미달
+    // (rank 1)은 검색량이 실측으로 0 에 가까운 후보라, 검색량이 있을 수 있는 유사 폴백에 진다(리뷰 I3).
+    const adoption = pickRoundAdoption(demoted, !!similarFallback);
+    if (adoption?.source === 'demoted') {
+      const { idea, rank } = adoption.pick;
+      console.log(rank === 1
         ? `[auto-cycle] 수요 미달 후보 채택(기아 방지) — "${idea.title}"`
         : `[auto-cycle] 수요 비수기 후보 채택(대안 없음) — "${idea.title}"`);
       logDemandAdopt(idea.title, idea.keyword);
@@ -651,7 +674,8 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       if (similarFallback.keyword) consumeOpportunityVerdict(similarFallback.keyword);
       return similarFallback;
     }
-    rejectNote = `[직전 제안 ${cands.length}건 전부 기각 — 사유: ${rejects.slice(0, 4).join(' · ') || '전부 무효'}] 이 사유들과 소재를 전부 피해, 완전히 다른 소재·키워드로 5건을 다시 제안하라.`;
+    // 문구가 '전부 기각'이면 후순위 항목이 섞였을 때 노트가 사실과 어긋난다(후순위는 기각이 아니다).
+    rejectNote = `[직전 제안 ${cands.length}건 전부 채택 불가(기각 또는 후순위) — 사유: ${rejects.slice(0, 4).join(' · ') || '전부 무효'}] 이 사유들과 소재를 전부 피해, 완전히 다른 소재·키워드로 5건을 다시 제안하라.`;
   }
   return null; // 두 라운드(최대 10후보) 전부 기각 — 이번 주기 스킵(다음 주기에 새 각도로 재시도)
 }

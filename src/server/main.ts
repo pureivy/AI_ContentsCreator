@@ -45,7 +45,7 @@ import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
-import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective } from '../autonomy/scheduler';
+import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
@@ -68,7 +68,8 @@ import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shor
 import { harvestTopicVerdicts, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { seriesGateForText, ensureSeriesLabels } from '../analytics/seriesLedger';
 import { refreshTrendSnapshot } from '../analytics/trendSignal';
-import { refreshDemandSnapshot } from '../analytics/topicDemand';
+import { refreshDemandSnapshot, assessCandidatesDemand, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
+import { searchAdEnabled } from '../grounding/naver_searchad';
 import { refreshYtNicheSnapshot } from '../analytics/ytNiche';
 import { syncCardnewsPerformance, cardnewsPerfStale } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
@@ -3451,6 +3452,31 @@ function canGenerateNew(pieces: Piece[], force = false): boolean {
   return !lastCreated || (Date.now() - new Date(lastCreated).getTime()) >= minIntervalMs;
 }
 
+/**
+ * 채택 직전 단일 키워드 수요 판정(2026-08-26 최종 리뷰 C1) — 예고·클러스터 형제 경로용.
+ *
+ * 수요 게이트는 proposeContentIdeas(세 번째 공급 경로) 안에만 있었다. 그 앞에서 return 하는 두 경로
+ * (예고 이행·클러스터 형제 소진)는 게이트를 통째로 우회해, LLM 이 쓴 "다음 편" 문구나 자동완성 형제가
+ * 검색량 검증 없이 그대로 발주됐다(리서치 폐기 게이트를 두 경로에 소급했던 처서 실사고와 같은 형태).
+ *
+ * 호출은 그 경로가 실제로 후보를 낸 틱에서만 — 조용한 틱의 비용은 0이다. 게이트 off·검색광고 키 없음은
+ * 조회도 로그도 하지 않는다('측정 안 함'을 측정한 것처럼 로그가 주장하면 안 된다). 예외·빈 Map 은
+ * fail-open(unknown) — 판정은 실제 응답을 받았을 때만 한다.
+ */
+async function demandCheckFor(
+  keyword: string,
+  where: '예고' | '클러스터',
+  signal?: AbortSignal,
+): Promise<{ verdict: DemandVerdict; line: string }> {
+  if (!CONFIG.topicDemandGate || !searchAdEnabled()) return { verdict: 'unknown', line: '' };
+  // 레그 단위로 삼킨다 — 커넥터 예외가 틱 전체(예고 이행·형제 소진)를 날리면 안 된다(scheduler 와 동일 규약).
+  const rows = await assessCandidatesDemand([keyword], signal).catch(() => new Map<string, DemandRow>());
+  const d = demandGateDecision(rows, keyword, { minVolume: CONFIG.topicDemandMinVolume, minSeason: CONFIG.topicDemandMinSeason });
+  // 기각은 각 경로가 자기 문구로 남긴다(폐기·제외 처리와 한 줄로 붙어야 읽힌다). 나머지는 여기서 1줄.
+  if (d.verdict !== 'reject') console.log(`[auto-cycle] 수요 게이트(${where}) — "${keyword.slice(0, 40)}" ${d.line || '조회 없음'}`);
+  return { verdict: d.verdict, line: d.line };
+}
+
 // 자율 틱 작업 유형 — 콘텐츠 piece(재개/신규) 또는 지식 리서치 미션(조사→토론→두뇌 적재→학습).
 type AutoWork = { kind: 'piece'; piece: Piece; promiseId?: string; clusterTopicId?: string } | { kind: 'research'; title: string; brand: string }
   | { kind: 'shorts'; pieceId: string; title: string } | { kind: 'cardnews'; pieceId: string; title: string };
@@ -3496,10 +3522,19 @@ async function pickAutoWork(signal?: AbortSignal, force = false): Promise<AutoWo
         } else if (satur.length) {
           console.log(`[auto-cycle] 예고 보류(소재 포화) — "${due.topic.slice(0, 40)}" ≈ "${satur[0]!.title.slice(0, 30)}" → 신규 아이디어로 폴백`);
         } else {
-          const piece = pieceStore().create({ title: due.topic, brand: tickBrand || undefined, auto: true });
-          // fulfilled 마킹은 여기서 하지 않는다 — launch 가 런을 실제로 시작한 뒤에만(아래 launch 참조).
-          console.log(`[auto-cycle] 예고 이행 착수 — "${due.topic.slice(0, 40)}" (출처: ${due.sourceKind}${due.window ? ` · ${due.window}` : ''})`);
-          return { kind: 'piece', piece, promiseId: due.id };
+          // 검색 수요 게이트(2026-08-26 리뷰 C1) — 기존 검사(범위·포화) 뒤, 채택 직전.
+          // 미달은 pending 유지가 아니라 dropped 다: 월 검색량은 기다린다고 바뀌지 않아(포화처럼 시간이
+          // 풀어 주는 조건이 아니다) pending 으로 두면 틱마다 재조회하며 영원히 미이행으로 남는다.
+          const dem = await demandCheckFor(due.topic, '예고', signal);
+          if (dem.verdict === 'reject') {
+            promiseStore().update(due.id, { status: 'dropped' });
+            console.log(`[auto-cycle] 예고 폐기(검색 수요 미달) — "${due.topic.slice(0, 40)}" (${dem.line})`);
+          } else {
+            const piece = pieceStore().create({ title: due.topic, brand: tickBrand || undefined, auto: true });
+            // fulfilled 마킹은 여기서 하지 않는다 — launch 가 런을 실제로 시작한 뒤에만(아래 launch 참조).
+            console.log(`[auto-cycle] 예고 이행 착수 — "${due.topic.slice(0, 40)}" (출처: ${due.sourceKind}${due.window ? ` · ${due.window}` : ''})`);
+            return { kind: 'piece', piece, promiseId: due.id };
+          }
         }
       }
     } catch { /* 예고 대장 실패 무해 — 신규 아이디어로 폴백 */ }
@@ -3537,10 +3572,19 @@ async function pickAutoWork(signal?: AbortSignal, force = false): Promise<AutoWo
           } else if (cooledCl) {
             console.log(`[auto-cycle] 클러스터 보류(계열 쿨다운 "${cooledCl}") — "${cand.keyword}" → 신규 아이디어로 폴백`);
           } else {
-            const piece = pieceStore().create({ title: cand.title, keyword: cand.keyword, brand: tickBrand || undefined, auto: true, clusterSeedId: cand.id });
-            console.log(`[auto-cycle] 클러스터 형제 착수 — "${cand.keyword}" (시드 "${cand.seedKeyword}")`);
-            consumeOpportunityVerdict(cand.keyword, tickBrand || undefined); // 채택된 기회 소진(2026-08-24)
-            return { kind: 'piece', piece, clusterTopicId: cand.id };
+            // 검색 수요 게이트(2026-08-26 리뷰 C1) — 형제는 자동완성 유래라 약한 자연 방어가 있지만
+            // 검색량 자체는 검증된 적이 없다. 미달이면 리서치 폐기 소급과 같은 메커니즘(dropped)으로
+            // 백로그에서 빼고(사유는 로그) 다음 경로(신규 아이디어)로 진행한다.
+            const dem = await demandCheckFor(cand.keyword, '클러스터', signal);
+            if (dem.verdict === 'reject') {
+              clusterStore().update(cand.id, { status: 'dropped' });
+              console.log(`[auto-cycle] 클러스터 기각(검색 수요 미달) — "${cand.keyword}" (${dem.line}) → dropped`);
+            } else {
+              const piece = pieceStore().create({ title: cand.title, keyword: cand.keyword, brand: tickBrand || undefined, auto: true, clusterSeedId: cand.id });
+              console.log(`[auto-cycle] 클러스터 형제 착수 — "${cand.keyword}" (시드 "${cand.seedKeyword}")`);
+              consumeOpportunityVerdict(cand.keyword, tickBrand || undefined); // 채택된 기회 소진(2026-08-24)
+              return { kind: 'piece', piece, clusterTopicId: cand.id };
+            }
           }
         }
       } catch { /* 클러스터 실패 무해 — 신규 아이디어로 폴백 */ }
@@ -3748,6 +3792,10 @@ if (CONFIG.performanceSyncTime) {
   // eslint-disable-next-line no-console
   console.log(`[ai-contents-studio] 성과 동기화 활성 — ${CONFIG.performanceSyncTime} · 수집기 "${getCollector().name}"(측정창 ${CONFIG.performanceWindowDays}일)`);
 }
+// 수요 게이트 상태 1줄(2026-08-26 리뷰 M2) — 켜져 있어도 검색광고 키가 없으면 전량 fail-open 이라
+// 아무 판정도 일어나지 않는다. 그 '조용한 무동작'이 부팅 로그에서 바로 보이게 한다.
+// eslint-disable-next-line no-console
+console.log(`[ai-contents-studio] 수요 게이트 ${CONFIG.topicDemandGate ? 'on' : 'off'} (검색광고 키 ${searchAdEnabled() ? '있음' : '없음'}, 하한 ${CONFIG.topicDemandMinVolume}/월·시즌 ${CONFIG.topicDemandMinSeason})`);
 void stopPerfSync;
 
 // 텔레그램 봇 수신 폴러 — 검토 대기 알림의 발행 버튼(callback)·수정요청 답장 처리.

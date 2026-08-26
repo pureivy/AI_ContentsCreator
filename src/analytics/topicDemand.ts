@@ -100,7 +100,14 @@ export function familyVolume(
 
 /**
  * 시즌 지수(순수) — 정점 대비 '지금 그리고 곧'의 수요. points 는 오래된→최신.
- * 현재 월만 보면 발행 시점(며칠 뒤)의 수요를 놓치므로 작년 같은 달로 다음 달을 근사해 둘 중 큰 값을 쓴다.
+ * 현재 월만 보면 발행 시점(며칠 뒤)의 수요를 놓치므로 작년 같은 달들로 전방 창을 근사해 최대치를 쓴다.
+ *
+ * 전방 창 = 작년 이번 달 · 작년 +1개월 · 작년 +2개월(2026-08-26 최종 리뷰 I4). 종전엔 딱 다음 달 하나만
+ * 봤는데, 프롬프트가 요구하는 장르 축은 '다음 시즌·시기 대비(지금 준비할 것)'이라 1개월 창과 어긋났다
+ * (실측: '단풍 드는 시기' 40/월인데 지수 0.03 → 후순위). 창을 2개월 앞까지 넓혀 지시와 판정을 맞춘다.
+ * 작년 이번 달을 함께 보는 이유: 데이터랩의 당월 점은 달이 끝나지 않아 과소 표기라 그 보정 축이 된다.
+ * 현재 월(cur)은 그대로 최대치 후보로 남긴다 — 창을 '넓히는' 수선이지 현재 실측을 버리는 수선이 아니다
+ * (올해 갑자기 뜬 키워드는 작년 어느 달로도 설명되지 않는다).
  */
 export function seasonIndex(points: Array<{ period: string; ratio: number }>, now = new Date()): number | undefined {
   const pts = (points ?? []).filter((p) => p && Number.isFinite(p.ratio));
@@ -108,20 +115,25 @@ export function seasonIndex(points: Array<{ period: string; ratio: number }>, no
   const peak = Math.max(...pts.map((p) => p.ratio));
   if (!(peak > 0)) return undefined;                      // 전 구간 0 = 데이터랩에 사실상 없는 키워드
   const cur = pts[pts.length - 1]!.ratio;
-  let next = 0;
+  let fwd = 0;
   if (pts.length >= 13) {
-    let idx = pts.length - 12;                            // 13점 이상이면 '한 해 전 다음 달'
+    let base = pts.length - 12;                           // 13점 이상이면 '한 해 전 다음 달'이 창의 기준점
     const ym = (d: Date): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     // 데이터랩이 당월을 아직 안 내주면 창 전체가 한 칸 밀려 인덱스가 '작년 이번 달'을 가리킨다 —
     // 마지막 점이 이번 달이 아닐 때만 period 로 직접 찾는다(찾으면 그 값, 없으면 인덱스 그대로).
+    // Date 생성자가 month=12 를 이듬해 1월로 굴려 주므로 12월 롤오버도 이 한 줄이 처리한다.
     if (pts[pts.length - 1]!.period.slice(0, 7) !== ym(now)) {
       const want = ym(new Date(now.getFullYear() - 1, now.getMonth() + 1, 1));
       const found = pts.findIndex((p) => (p.period || '').slice(0, 7) === want);
-      if (found >= 0) idx = found;
+      if (found >= 0) base = found;
     }
-    next = pts[idx]?.ratio ?? 0;
+    // 창 = 기준점 앞뒤 한 칸씩(작년 이번 달 · 작년 +1개월 · 작년 +2개월). 구간을 벗어난 인덱스는 무시.
+    for (const i of [base - 1, base, base + 1]) {
+      const r = pts[i]?.ratio;
+      if (typeof r === 'number' && r > fwd) fwd = r;
+    }
   }
-  return Math.min(1, Math.max(cur, next) / peak);
+  return Math.min(1, Math.max(cur, fwd) / peak);
 }
 
 /** 정렬용 점수(순수) — 검색량은 로그(자릿수 차이만 보고), 비수기는 최대 절반까지 깎는다. */
@@ -156,21 +168,25 @@ export function formatDemandLine(row: DemandRow): string {
 export async function assessCandidatesDemand(keywords: string[], signal?: AbortSignal): Promise<Map<string, DemandRow>> {
   const out = new Map<string, DemandRow>();
   const seen = new Set<string>();
-  const targets: string[] = [];
+  // raw=후보 원문(Map 키·표기), hint=커넥터에 보낼 정제본. 둘을 갈라 두는 이유: LLM 이 keyword 에
+  // 쉼표·개행을 섞어 오면 hintKeywords 가 join(',') 이라 후보 1개가 힌트 여러 개로 불어나 5개 상한을
+  // 넘겨 400 이 나고, 그 라운드 게이트가 통째로 무력화됐다(2026-08-26 최종 리뷰 I5).
+  const targets: Array<{ raw: string; hint: string }> = [];
   for (const k of keywords ?? []) {
-    const t = (k || '').trim();
-    if (!t || seen.has(normKw(t))) continue;
-    seen.add(normKw(t));
-    targets.push(t);
+    const raw = (k || '').trim();
+    const hint = raw.replace(/[,\n\r]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 30);
+    if (!raw || !hint || seen.has(normKw(hint))) continue;   // 정제 후 같아지는 후보는 한 번만 조회
+    seen.add(normKw(hint));
+    targets.push({ raw, hint });
     if (targets.length >= MAX_ASSESS) break;
   }
   if (!targets.length || !searchAdEnabled()) return out;
   type Row = { keyword: string; total: number; pcApprox: boolean; mobileApprox: boolean };
-  const chunks: Array<{ targets: string[]; rows: Row[] }> = [];
+  const chunks: Array<{ targets: Array<{ raw: string; hint: string }>; rows: Row[] }> = [];
   try {
     for (let i = 0; i < targets.length; i += 5) {
       const slice = targets.slice(i, i + 5);
-      chunks.push({ targets: slice, rows: await searchAdVolumes(slice, signal) });
+      chunks.push({ targets: slice, rows: await searchAdVolumes(slice.map((t) => t.hint), signal) });
     }
   } catch (e) {
     console.log(`[demand] 조회 실패 — 수요 게이트 생략(${errMsg(e)})`);
@@ -183,11 +199,15 @@ export async function assessCandidatesDemand(keywords: string[], signal?: AbortS
     // 청크 단위로 본다 — 1번 묶음만 응답하고 2번이 실패하면, 2번 후보들은 '검색량 0'이 아니라 미조회다
     // (전체 합계만 보면 살아남은 묶음 덕에 가드를 통과해 나머지가 통째로 기각된다).
     if (!c.rows.length) continue;
-    for (const kw of c.targets) {
-      const exact = pooled.find((r) => normKw(r.keyword) === normKw(kw));
-      const fam = familyVolume(pooled, kw);   // 계열 대조는 살아있는 응답 전체를 쓴다
-      out.set(kw, {
-        keyword: kw,
+    for (const { raw, hint } of c.targets) {
+      const exact = pooled.find((r) => normKw(r.keyword) === normKw(hint));
+      const fam = familyVolume(pooled, hint);   // 계열 대조는 살아있는 응답 전체를 쓴다
+      // 청크 응답은 왔지만 이 키워드 행이 없으면 '검색량 0'이 아니라 **미측정**이다 — 담지 않는다
+      // (2026-08-26 최종 리뷰 C2). 종전엔 0/월·계열 0 으로 담겨 하드 기각을 부르고 프롬프트에도
+      // "0/월"이 사실처럼 실렸다. 모듈 헤더 불변식: 기각은 실제 응답을 받았을 때만.
+      if (!exact && !fam.max) continue;
+      out.set(raw, {
+        keyword: raw,
         volume: exact?.total ?? 0,
         approx: !!exact && (exact.pcApprox || exact.mobileApprox),
         familyMax: fam.max,
@@ -198,8 +218,13 @@ export async function assessCandidatesDemand(keywords: string[], signal?: AbortS
   // 데이터랩 실패는 따로 삼킨다 — 시즌만 잃고 검색량 판정은 살린다(시즌 미상이면 demote 자체가 불가).
   if (datalabEnabled()) {
     try {
-      for (const t of await datalabTrend(targets.slice(0, MAX_TREND), 13, signal)) {
-        const row = out.get(t.keyword) ?? [...out.values()].find((r) => normKw(r.keyword) === normKw(t.keyword));
+      // 데이터랩에도 정제본을 보낸다(같은 이유) — 응답 키워드는 힌트 표기라 원문 행으로 되짚어 붙인다.
+      const byHint = new Map(targets.map((t) => [normKw(t.hint), t.raw]));
+      for (const t of await datalabTrend(targets.slice(0, MAX_TREND).map((x) => x.hint), 13, signal)) {
+        const raw = byHint.get(normKw(t.keyword));
+        const row = (raw !== undefined ? out.get(raw) : undefined)
+          ?? out.get(t.keyword)
+          ?? [...out.values()].find((r) => normKw(r.keyword) === normKw(t.keyword));
         if (!row) continue;
         const s = seasonIndex(t.points);
         if (s !== undefined) row.seasonIdx = s;
@@ -295,9 +320,12 @@ export async function refreshDemandSnapshot(signal?: AbortSignal): Promise<void>
     if (!rows.length) return;   // 전 묶음 실패 — 어제 스냅샷을 빈 표로 덮지 않는다
     const f = snapPath(slug);
     fs.mkdirSync(path.dirname(f), { recursive: true });
-    // 원자적 쓰기(tmp+rename) — 자율 틱의 읽기가 찢어진 JSON 을 만나지 않게.
-    fs.writeFileSync(`${f}.tmp`, JSON.stringify({ date: today, rows } satisfies DemandSnap, null, 2), 'utf-8');
-    fs.renameSync(`${f}.tmp`, f);
+    // 원자적 쓰기(tmp+rename) — 자율 틱의 읽기가 찢어진 JSON 을 만나지 않게. tmp 이름에 pid 를 넣는 이유:
+    // 부팅 예열(+20s)과 perf-sync 틱이 겹쳐 두 쓰기가 같은 tmp 를 잡으면 서로의 파일을 rename 해 간다
+    // (2026-08-26 최종 리뷰 M1). 같은 프로세스 안 동시 실행은 하루 1회 가드가 이미 막는다.
+    const tmp = `${f}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ date: today, rows } satisfies DemandSnap, null, 2), 'utf-8');
+    fs.renameSync(tmp, f);
     console.log(`[demand] 수요 스냅샷 갱신 — ${rows.length} 키워드(${today})`);
   } catch (e) {
     console.log(`[demand] 스냅샷 갱신 실패(무해): ${errMsg(e)}`);
@@ -321,9 +349,12 @@ export function buildDemandBlock(snap: DemandSnap | null, now = Date.now(), excl
   if (!lines.length) return '';
   // 하한은 설정값을 그대로 읽어 넣는다 — 프롬프트의 숫자와 실제 게이트가 어긋나면 두뇌가 통과할 리 없는
   // 키워드를 계속 제안하거나(하한 상향 시) 멀쩡한 후보를 스스로 버린다(하향 시).
+  // 연관어 표기는 관측으로만 전한다(2026-08-26 최종 리뷰 M4) — 검색광고 연관어는 띄어쓰기가 없는
+  // 형태('블루베리전용비료')라 "그 표기를 우선하라"고 시키면 그대로 제목·태그에 붙는다. 겨냥할 것은
+  // 그 표기가 아니라 그 표기가 대변하는 수요다.
   return `[검색 수요 실측 — ${snap.date}]\n${lines.join('\n')}\n` +
     `반영 지침: 검색량 ${CONFIG.topicDemandMinVolume}/월 미만·시즌 지수 ${CONFIG.topicDemandMinSeason} 미만 키워드로 주제를 세우지 마라. ` +
-    '수요가 있는 키워드는 그대로 keyword 로 쓰고, 계열 최대 연관어가 더 크면 그 표기를 우선하라.\n\n';
+    '수요가 있는 키워드는 그대로 keyword 로 쓰고, 계열 최대 연관어의 검색량이 더 크면 주제는 그 수요를 겨냥하되 표기는 자연스러운 띄어쓰기로 써라.\n\n';
 }
 
 /** 주제 두뇌 주입용 블록 — 킬스위치 off·스냅샷 없음·낡음은 빈 문자열(무주입).
