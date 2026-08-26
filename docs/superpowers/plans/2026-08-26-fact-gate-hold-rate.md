@@ -20,7 +20,7 @@
 
 ---
 
-### Task A: 게이트 정확도 — 판단문 제외·유보어 선분류·사건 표지·firstPass
+### Task 1: 게이트 정확도 — 판단문 제외·유보어 선분류·사건 표지·firstPass
 
 **Files:**
 - Modify: `src/content/factGate.ts`, `src/content/factGate.test.ts`
@@ -174,7 +174,7 @@ export function classifyClaim(c: { text: string; kind: ClaimKind }): 'judgment' 
 
 ---
 
-### Task B: 문장 단위 표적 수정 — 전면 재작성 대신 유보어·판단문 전환
+### Task 2: 문장 단위 표적 수정 — 전면 재작성 대신 유보어·판단문 전환
 
 **Files:**
 - Modify: `src/content/factGate.ts`, `src/content/factGate.test.ts`, `src/orchestrator/org.ts`
@@ -248,7 +248,7 @@ describe('runFactGateWithRepair — 표적 수정 우선', () => {
 
 ---
 
-### Task C: 사실 카드 — 브리프의 근거 있는 사실을 작가와 판정기에 선명하게
+### Task 3: 사실 카드 — 브리프의 근거 있는 사실을 작가와 판정기에 선명하게
 
 **Files:**
 - Modify: `src/content/factGate.ts`, `src/content/factGate.test.ts`, `src/sessions/digest.ts`, `src/sessions/digest.test.ts`, `src/orchestrator/org.ts`
@@ -291,5 +291,5 @@ describe('extractFactCard', () => {
 
 ---
 
-### Task D: 실런 실측·메모리·푸시 (컨트롤러 수행)
+### Task 4: 실런 실측·메모리·푸시 (컨트롤러 수행)
 - 자율 사이클 재개 후 다음 자율 런 1편의 `fact_gate.json`(filtered·firstPass·표적 수정 로그) 확인, `fact-gate.md` 메모리 갱신, main 푸시.
