@@ -5,6 +5,7 @@ import { microJSON } from '../orchestrator/agent';
 import {
   splitBodySentences, numericClaimSentences, buildEvidence, gateVerdict, formatGateFeedback, toFactGateInfo,
   extractFactClaims, judgeClaims, factGateBlog, runFactGateWithRepair,
+  isJudgmentSentence, hasHedge, hasEventMarkers, classifyClaim,
 } from './factGate';
 import type { FactClaim, FactGateResult } from './factGate';
 
@@ -138,6 +139,76 @@ describe('judgeClaims — 판정 규칙', () => {
   });
 });
 
+describe('선분류(2026-08-26 hold 율 저감) — 3런 실측 문장', () => {
+  it('판단·관점·권유·채널 자기서술은 주장이 아니다', () => {
+    for (const s of [
+      '감나무 가을 거름은 모자란 쪽이 안전하다고 봅니다.',
+      '같은 무늬가 열매에도 보이면 거름과는 무관하다고 봅니다.',
+      '가지 갈라진 곳에 흰 덩어리가 붙어 있거나 잎이 끈적하다면 벌레 쪽부터 보는 편입니다.',
+      '화분에 담긴 흙 부피가 정해져 있으니 마당에 선 나무와 같은 기준으로 넣지 않는 게 안전합니다.',
+      '병이나 벌레로 보이는 나무에 거름부터 넣는 건 순서가 틀렸습니다.',
+      '병든 잎과 떨어진 열매를 치우는 일이 먼저예요.',
+      '자동으로 물이 나오는 장치를 쓰고 있다면 이 시기에 타이머부터 손봐야 합니다',
+      '묘목 한 그루가 뿌리내리는 과정을 계절 단위로 이어서 기록하고 있어요',
+    ]) expect(isJudgmentSentence(s), s).toBe(true);
+    for (const s of ['질소 성분이 앞선 화학비료는 가을에 양을 줄입니다.', '퇴비는 흙에서 천천히 분해되는 자재라 효과가 더디게 나옵니다.', '겉흙 3cm가 말랐을 때 줍니다.'])
+      expect(isJudgmentSentence(s), s).toBe(false);
+  });
+  it('유보어 — 대부분·흔히·경우가 많 포함', () => {
+    expect(hasHedge('심은 지 1~2년 된 어린나무는 뿌리가 아직 넓게 뻗지 못한 경우가 대부분입니다.')).toBe(true);
+    expect(hasHedge('잎맥은 초록으로 남고 그 사이만 흐려지는 모습이면 흔히 양분 쪽입니다.')).toBe(true);
+    expect(hasHedge('질소 성분이 앞선 화학비료는 가을에 양을 줄입니다.')).toBe(false);
+  });
+  it('사건 표지 — 연도·기간·우리 밭·문의 실태만', () => {
+    expect(hasEventMarkers('지난해 우리 밭 어린 단감나무도 사흘 사이 스무 개 넘게 떨궜습니다')).toBe(true);
+    expect(hasEventMarkers('저희 밭에서도 문의가 오면 이렇게 답합니다')).toBe(true);
+    expect(hasEventMarkers("화분을 들었을 때 '아직 무겁네' 하는 날이 이어지면 그게 신호예요")).toBe(false);
+    expect(hasEventMarkers('우리 나무 잎을 사흘 간격으로 두어 번 만져 보는 편이 정확합니다.')).toBe(false); // 관찰법 권유(사흘 간격 ≠ 사흘 만에)
+  });
+  it('classifyClaim 우선순위: event > judgment > hedged > claim', () => {
+    expect(classifyClaim({ text: '지난해 우리 밭에서는 그렇게 봤습니다.', kind: 'experience' })).toBe('event');
+    expect(classifyClaim({ text: '모자란 쪽이 안전하다고 봅니다.', kind: 'general' })).toBe('judgment');
+    expect(classifyClaim({ text: '흔히 양분 쪽입니다.', kind: 'pest' })).toBe('hedged');
+    expect(classifyClaim({ text: '가을에 양을 줄입니다.', kind: 'treatment' })).toBe('claim');
+    expect(classifyClaim({ text: '무거우면 그게 신호예요', kind: 'experience' })).toBe('claim'); // 표지 없는 experience 는 일반 주장
+  });
+});
+
+describe('factGateBlog — 선분류 반영', () => {
+  it('판단문은 판정에 보내지 않고 filtered 에 세며, 유보문은 판정이 unsupported 여도 hedged_general, 표지 없는 experience 는 일반 판정', async () => {
+    mocked
+      .mockResolvedValueOnce({ claims: [
+        { text: '모자란 쪽이 안전하다고 봅니다.', kind: 'general' },
+        { text: '흔히 양분 쪽입니다.', kind: 'pest' },
+        { text: '무거우면 그게 신호예요', kind: 'experience' },
+        { text: '가을에 양을 줄입니다.', kind: 'treatment' },
+      ] })
+      .mockResolvedValueOnce({ verdicts: [{ index: 1, status: 'unsupported' }, { index: 2, status: 'supported', evidence: '브리프' }, { index: 3, status: 'unsupported' }] });
+    const r = await factGateBlog({ model: 'm', body: 'x', evidence: 'e' });
+    const judgeUser = String(mocked.mock.calls[1]![2]);
+    expect(judgeUser).not.toContain('안전하다고 봅니다');           // 판단문 제외
+    expect(judgeUser).toContain('(유보)');                          // 유보문은 모순 여부만
+    expect(r.filtered).toEqual({ judgment: 1, hedged: 1 });
+    expect(r.claims.find((c) => c.text.includes('흔히'))!.status).toBe('hedged_general');
+    expect(r.claims.find((c) => c.text.includes('무거우면'))!.status).toBe('supported');
+    expect(r.claims.find((c) => c.text.includes('무거우면'))!.kind).toBe('general');
+    expect(r.unsupported).toEqual(['가을에 양을 줄입니다.']);
+    expect(r.status).toBe('hold');
+  });
+  it('유보문이라도 판정이 contradicted 면 유지한다', async () => {
+    mocked
+      .mockResolvedValueOnce({ claims: [{ text: '대개 9월에 줍니다.', kind: 'time' }] })
+      .mockResolvedValueOnce({ verdicts: [{ index: 1, status: 'contradicted', evidence: '자사 글: 추분 후' }] });
+    const r = await factGateBlog({ model: 'm', body: 'x', evidence: 'e' });
+    expect(r.contradicted).toHaveLength(1);
+  });
+  it('전부 판단문이면 판정 콜 없이 pass', async () => {
+    mocked.mockResolvedValueOnce({ claims: [{ text: '자리부터 정한다고 봅니다.', kind: 'general' }] });
+    const r = await factGateBlog({ model: 'm', body: 'x', evidence: 'e' });
+    expect(r.status).toBe('pass'); expect(mocked).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('factGateBlog — 종단', () => {
   it('추출→판정→집계, 무근거 있으면 hold', async () => {
     mocked
@@ -186,5 +257,14 @@ describe('runFactGateWithRepair — 1차 판정 → 수정 1회 → 2차 판정'
     const repair = vi.fn();
     const r = await runFactGateWithRepair({ gate: async () => R('error'), repair }, '## 원본');
     expect(r.result.status).toBe('error'); expect(repair).not.toHaveBeenCalled();
+  });
+});
+
+describe('runFactGateWithRepair — firstPass 보존', () => {
+  it('2차 결과에 1차 요약이 붙는다', async () => {
+    const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
+    const r = await runFactGateWithRepair({ gate, repair: async () => '## 고침' }, '## 원본');
+    expect(r.result.firstPass).toEqual({ status: 'hold', unsupported: ['a'], contradicted: [], checkedTs: 't' });
   });
 });
