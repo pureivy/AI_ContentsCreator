@@ -169,6 +169,13 @@ describe('buildDemandBlock — 두뇌 주입 블록(순수)', () => {
     const many: DemandSnap = { date: '2026-08-26', rows: Array.from({ length: 20 }, (_, i) => row({ keyword: `k${i}`, volume: i * 100 })) };
     expect(buildDemandBlock(many, NOW).split('\n').filter((l) => l.startsWith('- ')).length).toBe(12);
   });
+  it('계열 쿨다운 토큰이 든 행은 표에서 뺀다(트렌드 블록과 같은 필터)', () => {
+    // 쿨다운으로 '제안 불가'인 계열을 수요 표에 남기면, 두뇌에 "수요 있는 소재"로 보여 금지와 정면 충돌한다.
+    const b = buildDemandBlock(snap, NOW, ['비료']);
+    expect(b).not.toContain('사과나무 비료');
+    expect(b).toContain('블루베리 묘목');   // 쿨다운 아닌 행은 그대로
+    expect(buildDemandBlock(snap, NOW, ['비료', '묘목', '거름'])).toBe('');  // 전부 빠지면 무주입
+  });
   it('스냅샷 없음·빈 행·3일 초과는 무주입', () => {
     expect(buildDemandBlock(null, NOW)).toBe('');
     expect(buildDemandBlock({ date: '2026-08-26', rows: [] }, NOW)).toBe('');

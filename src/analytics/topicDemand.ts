@@ -57,7 +57,9 @@ const MAX_WINNER_SEEDS = 5;   // 스냅샷 15칸 중 winners 몫(나머지는 �
 const STALE_DAYS = 3;     // 수요는 주 단위로 움직인다 — 이보다 낡은 스냅샷은 '실측'이라 부르지 않는다
 const BLOCK_ROWS = 12;
 
-const normKw = (s: string): string => (s || '').replace(/\s+/g, '').toLowerCase();
+/** 표기 정규화(공백 제거·소문자) — 스케줄러의 행 조회 폴백도 같은 규칙을 써야 '가을 거름'과 '가을거름'이
+ *  서로 다른 키워드로 갈리지 않는다(그래서 모듈 밖으로 연다). */
+export const normKw = (s: string): string => (s || '').replace(/\s+/g, '').toLowerCase();
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 function localDateStr(d = new Date()): string {
@@ -302,12 +304,17 @@ export async function refreshDemandSnapshot(signal?: AbortSignal): Promise<void>
   }
 }
 
-/** 블록 조립(순수, 테스트 대상) — demandSignalBlock 의 코어. */
-export function buildDemandBlock(snap: DemandSnap | null, now = Date.now()): string {
+/** 블록 조립(순수, 테스트 대상) — demandSignalBlock 의 코어.
+ *  excludeTokens: 계열 쿨다운 토큰. 쿨다운으로 '제안 불가'인 계열이 수요 표에 남으면 두뇌 눈에는
+ *  "수요 있는 소재"로 보여 금지 지시와 정면 충돌한다(트렌드 블록이 같은 이유로 같은 필터를 쓴다). */
+export function buildDemandBlock(snap: DemandSnap | null, now = Date.now(), excludeTokens: string[] = []): string {
   if (!snap || !Array.isArray(snap.rows) || !snap.rows.length) return '';
   const age = now - new Date(`${snap.date}T00:00:00`).getTime();
   if (!Number.isFinite(age) || age > STALE_DAYS * 86_400_000) return '';
+  // 빈 토큰은 버린다 — normKw('') 은 ''이고 includes('') 는 항상 참이라 표가 통째로 비는 함정.
+  const cooled = excludeTokens.map(normKw).filter(Boolean);
   const lines = [...snap.rows]
+    .filter((r) => !cooled.some((t) => normKw(r.keyword).includes(t)))
     .sort((a, b) => demandScore(b) - demandScore(a))
     .slice(0, BLOCK_ROWS)
     .map((r) => `- ${formatDemandLine(r)}`);
@@ -319,8 +326,9 @@ export function buildDemandBlock(snap: DemandSnap | null, now = Date.now()): str
     '수요가 있는 키워드는 그대로 keyword 로 쓰고, 계열 최대 연관어가 더 크면 그 표기를 우선하라.\n\n';
 }
 
-/** 주제 두뇌 주입용 블록 — 킬스위치 off·스냅샷 없음·낡음은 빈 문자열(무주입). */
-export function demandSignalBlock(slug?: string): string {
+/** 주제 두뇌 주입용 블록 — 킬스위치 off·스냅샷 없음·낡음은 빈 문자열(무주입).
+ *  excludeTokens 는 계열 쿨다운 토큰(호출부가 cooldownSummary 에서 넘긴다). */
+export function demandSignalBlock(slug?: string, excludeTokens: string[] = []): string {
   if (!CONFIG.topicDemandGate) return '';
-  try { return buildDemandBlock(readDemandSnap(slug), Date.now()); } catch { return ''; }
+  try { return buildDemandBlock(readDemandSnap(slug), Date.now(), excludeTokens); } catch { return ''; }
 }

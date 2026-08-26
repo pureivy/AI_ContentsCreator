@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted } from './scheduler';
 import type { DemandRow } from '../analytics/topicDemand';
 
 describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
@@ -373,8 +373,35 @@ describe('demandGateDecision — 후보 검색 수요 판정(순수)', () => {
   });
 
   it('계열 최대가 하한을 넘으면 기각하지 않는다(표기만 다른 수요는 살린다)', () => {
-    const rows = new Map<string, DemandRow>([['가을 거름', mk({ keyword: '가을 거름', volume: 0, familyMax: 1220, familyTop: '밑거름' })]]);
+    // familyTop 은 내용 토큰(가을·거름)을 전부 포함하는 표기여야 실제 familyVolume 산출물과 일치한다
+    // ('밑거름'은 '가을'을 포함하지 않아 애초에 계열로 잡히지 않는 값이었다 — 픽스처 교정).
+    const rows = new Map<string, DemandRow>([['가을 거름', mk({ keyword: '가을 거름', volume: 0, familyMax: 1220, familyTop: '가을 밑거름 주는 시기' })]]);
     expect(demandGateDecision(rows, '가을 거름', cfg).verdict).toBe('pass');
+  });
+
+  it('공백만 다른 표기로 조회해도 같은 행을 찾는다(정규화 폴백)', () => {
+    const rows = new Map<string, DemandRow>([['가을 거름', mk({ keyword: '가을 거름', volume: 12, familyMax: 12 })]]);
+    const d = demandGateDecision(rows, '가을거름', cfg);
+    expect(d.verdict).toBe('reject');
+    expect(d.line).toContain('"가을 거름"');   // 문구는 조회한 표기가 아니라 실측 행의 표기를 쓴다
+  });
+
+  it('relax 면 하한 미달 기각이 후순위로 바뀐다(마지막 라운드 기아 방지 밸브)', () => {
+    const rows = new Map<string, DemandRow>([['가을 거름', mk({ keyword: '가을 거름', volume: 12, familyMax: 12 })]]);
+    expect(demandGateDecision(rows, '가을 거름', cfg, { relax: true })).toMatchObject({ verdict: 'demote', relaxed: true });
+    expect(demandGateDecision(rows, '가을 거름', cfg).verdict).toBe('reject'); // 기본값은 종전대로 하드 기각
+  });
+
+  it('relax 는 통과·비수기 판정을 바꾸지 않는다(밸브는 기각에만 작용)', () => {
+    const rows = new Map<string, DemandRow>([
+      ['배롱나무 가을 식재', mk({ keyword: '배롱나무 가을 식재', volume: 480, familyMax: 480, seasonIdx: 0.62 })],
+      ['사과나무 비료', mk({ keyword: '사과나무 비료', volume: 300, familyMax: 300, seasonIdx: 0.13 })],
+    ]);
+    expect(demandGateDecision(rows, '배롱나무 가을 식재', cfg, { relax: true })).toMatchObject({ verdict: 'pass' });
+    expect(demandGateDecision(rows, '배롱나무 가을 식재', cfg, { relax: true }).relaxed).toBeUndefined();
+    const off = demandGateDecision(rows, '사과나무 비료', cfg, { relax: true });
+    expect(off.verdict).toBe('demote');
+    expect(off.relaxed).toBeUndefined();   // 비수기는 원래 후순위 — 밸브가 만든 게 아니다(채택 로그가 갈린다)
   });
 
   it('비수기(시즌 지수 하한 미달)는 기각이 아니라 demote', () => {
@@ -397,5 +424,21 @@ describe('demandGateDecision — 후보 검색 수요 판정(순수)', () => {
 
   it('keyword 자체가 없는 후보도 unknown(게이트 생략)', () => {
     expect(demandGateDecision(new Map(), undefined, cfg)).toEqual({ verdict: 'unknown', line: '' });
+  });
+});
+
+// 후순위 보관함의 채택 순서(순수) — 비수기(rank 0)가 기아 방지(rank 1)를 항상 이기고, 같은 rank 는 후보 순서.
+describe('pickDemoted — 후순위 후보 선택(순수)', () => {
+  const e = (title: string, rank: number) => ({ idea: { title }, rank });
+
+  it('rank 오름차순 — 기아 방지(1)가 먼저 담겨도 비수기(0)가 이긴다', () => {
+    expect(pickDemoted([e('기아', 1), e('비수기', 0)])?.idea.title).toBe('비수기');
+  });
+  it('같은 rank 면 먼저 담긴 후보(두뇌 제안 순서)를 유지한다', () => {
+    expect(pickDemoted([e('첫째', 0), e('둘째', 0)])?.idea.title).toBe('첫째');
+  });
+  it('비어 있으면 undefined(폴백 없음)', () => {
+    expect(pickDemoted([])).toBeUndefined();
+    expect(pickDemoted([e('유일', 1)])?.idea.title).toBe('유일');
   });
 });

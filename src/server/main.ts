@@ -3846,6 +3846,17 @@ if (!process.env.VITEST) {
   }
 }
 
+// 수요 스냅샷 부팅 예열 — 하드 기각(검색량 하한)은 배포 즉시 켜지는데 두뇌에 넣는 수요 표는
+// demand-<brand>.json 이 생겨야(일일 perf-sync 틱) 나온다. 그 사이엔 '기각은 하는데 왜 기각인지는
+// 안 알려주는' 상태라 첫 틱부터 표를 채워 둔다. 같은 날 재호출은 함수 내부에서 no-op, 게이트 off 면 0콜.
+// 20초 지연+unref: tsx watch 는 1회 편집에 수 초 간격으로 연쇄 재시작하는 습성이 실측돼 있어(위 숏폼
+// 복구의 15초 정착 지연과 같은 이유), 즉시 호출하면 편집 버스트마다 조회가 새로 나간다. 재시작이
+// 창 안에 들어오면 타이머가 프로세스와 함께 사라져 버스트가 1회로 접힌다.
+if (!process.env.VITEST) {
+  const warm = setTimeout(() => { void refreshDemandSnapshot().catch(() => {}); }, 20_000);
+  if (typeof warm.unref === 'function') warm.unref();
+}
+
 const port = CONFIG.port;
 if (!process.env.VITEST) serve({ fetch: app.fetch, hostname: CONFIG.host, port }, (info) => {
   // eslint-disable-next-line no-console
