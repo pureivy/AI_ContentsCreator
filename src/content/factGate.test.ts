@@ -160,14 +160,45 @@ describe('선분류(2026-08-26 hold 율 저감) — 3런 실측 문장', () => {
     for (const s of ['질소 성분이 앞선 화학비료는 가을에 양을 줄입니다.', '퇴비는 흙에서 천천히 분해되는 자재라 효과가 더디게 나옵니다.', '겉흙 3cm가 말랐을 때 줍니다.'])
       expect(isJudgmentSentence(s), s).toBe(false);
   });
+  it('fix round 4(C1) — 사실 주장을 삼키던 대안 제거: 낫습니다·권합니다·부터 봅니다·낱개 먼저입니다·나아요는 판단문이 아니다', () => {
+    for (const s of [
+      '탄저병은 6월에 약제를 뿌리면 낫습니다.',
+      '농약안전사용기준은 수확 14일 전까지 살포를 권합니다.',
+      '깍지벌레 약충은 4월 하순부터 봅니다.',
+      '산수유는 잎보다 꽃이 먼저입니다.',
+      '배수가 좋은 흙에서 뿌리가 더 나아요.',
+    ]) expect(isJudgmentSentence(s), s).toBe(false);
+    // 조언 꼴로 좁힌 먼저/그다음은 여전히 판단문이다.
+    expect(isJudgmentSentence('병든 잎과 떨어진 열매를 치우는 일이 먼저예요.')).toBe(true);
+    expect(isJudgmentSentence('흙에 무엇을 넣는 건 그다음입니다.')).toBe(true);
+    // "낫다고 봅니다" 류는 `다고 봅니다` 로 여전히 잡힌다(제거된 낱개 '낫다고' 의 실효 손실 없음).
+    expect(isJudgmentSentence('약을 치는 쪽이 낫다고 봅니다.')).toBe(true);
+  });
+  it('fix round 4(C2) — 경성 수치(희석배수·횟수·온도·ppm·수확 전 일수·용량)는 유보어가 붙어도 판정 대상', () => {
+    for (const s of [
+      '이 약제는 1000배로 희석해 쓸 수 있습니다.',
+      '살충제는 연 2회까지 쓸 수 있습니다.',
+      '감나무는 영하 15도까지 견딜 수 있습니다.',
+      '농약안전사용기준은 수확 14일 전까지 살포를 권합니다.',
+    ]) expect(classifyClaim({ text: s, kind: 'treatment' }), s).toBe('claim');
+    for (const s of [
+      '넣지 않고 넘어간 해는 되돌릴 수 있지만 서두를 일은 아닙니다.',
+      '심은 지 1~2년 된 어린나무는 뿌리가 아직 넓게 뻗지 못한 경우가 대부분입니다.',
+      '흔히 양분 쪽입니다.',
+    ]) expect(classifyClaim({ text: s, kind: 'general' }), s).toBe('hedged');
+  });
   it('유보어 — 대부분·흔히·경우가 많 포함', () => {
     expect(hasHedge('심은 지 1~2년 된 어린나무는 뿌리가 아직 넓게 뻗지 못한 경우가 대부분입니다.')).toBe(true);
     expect(hasHedge('잎맥은 초록으로 남고 그 사이만 흐려지는 모습이면 흔히 양분 쪽입니다.')).toBe(true);
     expect(hasHedge('질소 성분이 앞선 화학비료는 가을에 양을 줄입니다.')).toBe(false);
   });
   it('fix round 1 — 낱개 "편입니다" 는 판단문이 아니라 유보문(반증 가능한 수종 주장까지 무조건 제외되던 오탐 수선)', () => {
-    for (const s of ['단감나무는 영하 10도까지 견디는 편입니다.', '래빗아이는 더위·건조에 강하고 나무가 크게 자라는 편입니다'])
-      expect(classifyClaim({ text: s, kind: 'species' }), s).toBe('hedged');
+    // 수치 없는 유보 수종 주장은 그대로 유보문(판정기가 모순만 본다).
+    expect(classifyClaim({ text: '래빗아이는 더위·건조에 강하고 나무가 크게 자라는 편입니다', kind: 'species' })).toBe('hedged');
+    // fix round 4(C2)가 이 기대를 갱신한다 — '영하 10도'는 경성 수치라 유보문 자동 통과가 아니라 판정 대상('claim')이 됐다
+    // (round 1 기대값은 'hedged' 였다). round 1 의 본래 취지(낱개 "편입니다" ≠ 판단문)는 아래 isJudgmentSentence 로 계속 지킨다.
+    expect(classifyClaim({ text: '단감나무는 영하 10도까지 견디는 편입니다.', kind: 'species' })).toBe('claim');
+    expect(isJudgmentSentence('단감나무는 영하 10도까지 견디는 편입니다.')).toBe(false);
     expect(classifyClaim({ text: '벌레 쪽부터 보는 편입니다.', kind: 'general' })).toBe('judgment'); // 권유 고정구는 여전히 판단문
     expect(isJudgmentSentence('그 안이 본편입니다')).toBe(false); // 낱개 "편입니다" 오탐(본편=main episode) 재발 방지
   });
@@ -206,7 +237,8 @@ describe('factGateBlog — 선분류 반영', () => {
     const judgeUser = String(mocked.mock.calls[1]![2]);
     expect(judgeUser).not.toContain('안전하다고 봅니다');           // 판단문 제외
     expect(judgeUser).toContain('(유보)');                          // 유보문은 모순 여부만
-    expect(r.filtered).toEqual({ judgment: 1, hedged: 1 });
+    // Fix round 4(C3) — filtered 는 개수가 아니라 걸러낸 문장 텍스트(개수 = 배열 길이)
+    expect(r.filtered).toEqual({ judgment: ['모자란 쪽이 안전하다고 봅니다.'], hedged: ['흔히 양분 쪽입니다.'] });
     expect(r.claims.find((c) => c.text.includes('흔히'))!.status).toBe('hedged_general');
     expect(r.claims.find((c) => c.text.includes('무거우면'))!.status).toBe('supported');
     expect(r.claims.find((c) => c.text.includes('무거우면'))!.kind).toBe('general');
@@ -280,11 +312,27 @@ describe('runFactGateWithRepair — 1차 판정 → 수정 1회 → 2차 판정'
 });
 
 describe('runFactGateWithRepair — firstPass 보존', () => {
+  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
   it('2차 결과에 1차 요약이 붙는다', async () => {
-    const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
     const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
     const r = await runFactGateWithRepair({ gate, repair: async () => '## 고침' }, '## 원본');
     expect(r.result.firstPass).toEqual({ status: 'hold', unsupported: ['a'], contradicted: [], checkedTs: 't' });
+  });
+  it('1차의 선분류 텍스트(filtered)도 함께 살아남는다(Fix round 4, C3)', async () => {
+    const first: FactGateResult = {
+      status: 'hold', claims: [], unsupported: ['a'], contradicted: [], repaired: false, checkedTs: 't',
+      filtered: { judgment: ['모자란 쪽이 안전하다고 봅니다.'], hedged: ['흔히 양분 쪽입니다.'] },
+    };
+    const second: FactGateResult = { status: 'pass', claims: [], unsupported: [], contradicted: [], repaired: false, checkedTs: 't2', filtered: { judgment: [], hedged: [] } };
+    const gate = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    const r = await runFactGateWithRepair({ gate, repair: async () => '## 고침' }, '## 원본');
+    expect(r.result.firstPass?.filtered).toEqual({ judgment: ['모자란 쪽이 안전하다고 봅니다.'], hedged: ['흔히 양분 쪽입니다.'] });
+    expect(r.result.filtered).toEqual({ judgment: [], hedged: [] }); // 2차 결과의 filtered 는 수정된 본문 기준
+  });
+  it('1차에 filtered 가 없으면 firstPass 에도 붙이지 않는다', async () => {
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
+    const r = await runFactGateWithRepair({ gate, repair: async () => '## 고침' }, '## 원본');
+    expect(r.result.firstPass && 'filtered' in r.result.firstPass).toBe(false);
   });
 });
 

@@ -785,8 +785,12 @@ async function packageDesignFinalize(a: {
     try { writeFactGate(bus.runId, gateResult); }
     catch (e) { bus.emit('log', { message: `사실 게이트 기록 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
     // 프로세스 로그에도 미러 — 버스 전용이면 런 종료 후 launchd 로그로 게이트 판정을 되짚을 수 없다.
-    const filteredNote = gateResult.filtered ? ` · 제외 판단 ${gateResult.filtered.judgment} · 유보 ${gateResult.filtered.hedged}` : '';
-    const gm = `사실 게이트 — 주장 ${gateResult.claims.length}건 · 무근거 ${gateResult.unsupported.length} · 모순 ${gateResult.contradicted.length} · 수정 라운드 ${gateResult.repaired ? '예' : '아니오'} · 판정 ${gateResult.status}${filteredNote}${gateResult.error ? ` (${gateResult.error})` : ''}`;
+    // Fix round 4(C3) — 선분류는 개수가 아니라 문장을 남긴다. 로그에는 판단문 제외 예시 2건(각 40자)까지 붙여
+    // 정규식 과차단을 launchd 로그만으로 알아챌 수 있게 한다(개수만 보고는 과차단인지 정상인지 구분이 안 됐다).
+    const f = gateResult.filtered;
+    const filteredNote = f ? ` · 제외 판단 ${f.judgment.length} · 유보 ${f.hedged.length}` : '';
+    const judgmentEg = f && f.judgment.length ? ` · 판단 예: ${f.judgment.slice(0, 2).map((s) => `"${s.slice(0, 40)}"`).join(', ')}` : '';
+    const gm = `사실 게이트 — 주장 ${gateResult.claims.length}건 · 무근거 ${gateResult.unsupported.length} · 모순 ${gateResult.contradicted.length} · 수정 라운드 ${gateResult.repaired ? '예' : '아니오'} · 판정 ${gateResult.status}${filteredNote}${judgmentEg}${gateResult.error ? ` (${gateResult.error})` : ''}`;
     console.log(`[사실게이트] ${gm}`);
     bus.emit('log', { message: gm });
   }

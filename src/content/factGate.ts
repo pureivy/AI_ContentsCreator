@@ -16,11 +16,15 @@ export interface FactGateResult {
   repaired: boolean;
   error?: string;
   checkedTs: string;
-  /** 1차(repair 전) 판정 요약 — runFactGateWithRepair 가 2차 결과에 붙인다. */
-  firstPass?: FactGateInfo;
-  /** 판정기에 보내지 않고 코드가 선분류로 걸러낸 개수(판단문 제외·유보문 통과). */
-  filtered?: { judgment: number; hedged: number };
+  /** 1차(repair 전) 판정 요약 — runFactGateWithRepair 가 2차 결과에 붙인다.
+   * Fix round 4: 선분류 텍스트도 함께 보존한다 — 2차 판정은 표적 수정된 본문 기준이라 1차에서 무엇을 걸러냈는지 사라졌다. */
+  firstPass?: FactGateInfo & { filtered?: FactGateFiltered };
+  /** 판정기에 보내지 않고 코드가 선분류로 걸러낸 문장(판단문 제외·유보문 통과). */
+  filtered?: FactGateFiltered;
 }
+/** 선분류로 걸러낸 문장 텍스트(개수 = 배열 길이). Fix round 4: 개수만 남기면 게이트가 무엇을 왜 뺐는지
+ * 사후에 되짚을 수 없어 과차단(C1 같은 정규식 과잉)을 실측으로 잡아낼 방법이 없었다. */
+export interface FactGateFiltered { judgment: string[]; hedged: string[] }
 /** piece·카드·쇼츠 레코드에 남기는 요약(claims 제외). */
 export interface FactGateInfo { status: 'pass' | 'hold' | 'error'; unsupported: string[]; contradicted: string[]; checkedTs: string }
 
@@ -31,13 +35,29 @@ export function toFactGateInfo(r: FactGateResult): FactGateInfo {
   return { status: r.status, unsupported: r.unsupported, contradicted: r.contradicted, checkedTs: r.checkedTs };
 }
 
+/** 1차 판정 보존용 요약 — 선분류 텍스트(filtered)까지 함께 남긴다(Fix round 4, C3). 2차 결과의 filtered 는
+ * 표적 수정된 본문 기준이라, 이걸 안 남기면 1차에서 무엇을 걸러냈는지가 기록에서 사라진다. */
+function toFirstPass(r: FactGateResult): FactGateInfo & { filtered?: FactGateFiltered } {
+  return { ...toFactGateInfo(r), ...(r.filtered ? { filtered: r.filtered } : {}) };
+}
+
 /** 판단·관점·권유·채널 자기서술 종결 — 사실 주장이 아니다(사용자 08-12: 1인칭 판단 유지). 3런 실측 7건이 이 꼴로 무근거 판정됐다.
  * 08-26 fix round 1: 낱개 "편입니다"/"편이에요" 는 뺐다 — "영하 10도까지 견디는 편입니다" 같은 반증 가능한 수종 주장까지
- * 판정 없이 통과시켰다("본편입니다" 오탐 포함). "보는 편입니다"(권유 고정구)만 남기고 나머지는 HEDGE_RE 로 옮겨 판정기가 본다. */
-export const JUDGMENT_RE = /(?:고|다고|라고)\s*(?:봅니다|봐요|보고 있어요|보는 편)|보는 편입니다|편이 (?:정확|안전|낫)|게 안전(?:합니다|해요)|권(?:합니다|해요|하지 않)|먼저(?:예요|입니다)|그다음(?:입니다|이에요)|순서가 틀렸|낫습니다|나아요|낫다고|봐야 (?:합니다|해요)|손봐야|부터 (?:봅니다|보세요|봐요|확인합니다|확인해요|손봅니다)|기록하고 있어요|이어서 기록/;
+ * 판정 없이 통과시켰다("본편입니다" 오탐 포함). "보는 편입니다"(권유 고정구)만 남기고 나머지는 HEDGE_RE 로 옮겨 판정기가 본다.
+ * 08-26 fix round 4(C1, 과차단 수선): 사실 주장까지 통째로 삼키던 대안을 뺐다 — 실데이터 재현 결과
+ *   "…뿌리면 낫습니다"(낫습니다)·"살포를 권합니다"(권합니다)·"4월 하순부터 봅니다"(부터 봅니다)·
+ *   "꽃이 먼저입니다"(낱개 먼저입니다)·"뿌리가 더 나아요"(나아요) 가 전부 판정 없이 제외됐다.
+ *   낱개 먼저/그다음은 조언 꼴("~하는 일이 먼저예요", "~하는 건 그다음입니다")로만 좁힌다.
+ *   "낫다고 봅니다" 류는 `다고\s*봅니다` 로 여전히 잡힌다. */
+export const JUDGMENT_RE = /(?:고|다고|라고)\s*(?:봅니다|봐요|보고 있어요|보는 편)|보는 편입니다|편이 (?:정확|안전|낫)|게 안전(?:합니다|해요)|순서가 틀렸|봐야 (?:합니다|해요)|손봐야|(?:일|것|게|쪽)이 먼저(?:예요|입니다)|(?:건|것은|일은) 그다음(?:입니다|이에요)|기록하고 있어요|이어서 기록/;
 /** 유보어 — '대부분' 포함(실측: "경우가 대부분입니다" 가 무근거 판정됨). shorts.ts 의 HEDGE_RE(낭독용)와 별개.
  * 08-26 fix round 1: JUDGMENT_RE 에서 뺀 낱개 "편입니다" 를 여기로 옮겼다(대개 유보성 일반론 — 판정기가 모순만 걸러낸다). */
 export const HEDGE_RE = /대개|흔히|보통|대체로|대부분|경우가 많|경우가 대부분|수 있|수도 있|가능성|편이|편입니다/;
+/** 반증 가능한 경성 수치 — 유보어가 붙어도 판정기가 봐야 한다(Fix round 4, C2). 실측: "1000배로 희석해 쓸 수
+ * 있습니다"·"연 2회까지 쓸 수 있습니다"·"영하 15도까지 견딜 수 있습니다" 가 "수 있"(HEDGE_RE) 하나로 무판정
+ * 통과했다 — 희석배수·살포횟수·내한온도는 틀리면 나무가 죽는 값이라 유보어로 가릴 수 있는 일반론이 아니다.
+ * cm·년생 같은 서술 수치는 일부러 넣지 않았다(유보 일반론에 흔해 과판정이 된다). */
+export const HARD_FACT_RE = /\d+\s*배|\d+\s*회|\d+\s*(?:℃|도)|\d+\s*ppm|수확\s*\d+\s*일|\d+(?:[.,]\d+)?\s*(?:ml|g|kg|l|리터)\b/i;
 /** 08-26 fix round 1: 1인칭 없는 사건 표지(연도·지난 계절·우리 밭 등) — 이것만으로 사건 확정. */
 const PERSON_EVENT_RE = /지난해|작년|재작년|올해 초|지난\s*(?:봄|여름|가을|겨울)|(?:우리|저희)\s*(?:밭|농장|포장|하우스|묘목장)|문의가 오면|주문이 들어오면|기록에 따르면|기록을 보면/;
 /** 08-26 fix round 1: 기간 표지 — '동안'(관찰법에도 흔함) 제거, 숫자는 반드시 '일' 단위여야 한다(cm·도 등 다른 수치 오탐 방지).
@@ -55,11 +75,13 @@ export function hasEventMarkers(s: string): boolean {
   return PERSON_EVENT_RE.test(s) || (DURATION_RE.test(s) && /우리|저희|제가|우린|우리가/.test(s));
 }
 
-/** 선분류 우선순위: 사건 서술(금지) > 판단문(제외) > 유보문(통과) > 일반 주장(판정). */
+/** 선분류 우선순위: 사건 서술(금지) > 판단문(제외) > 유보문(통과) > 일반 주장(판정).
+ * Fix round 4(C2): 유보어가 붙어도 경성 수치(HARD_FACT_RE)가 있으면 판정 대상으로 되돌린다 —
+ * 사건·판단 우선순위는 그대로다(사건 서술과 1인칭 판단은 수치가 있어도 판정 대상이 아니다). */
 export function classifyClaim(c: { text: string; kind: ClaimKind }): 'judgment' | 'hedged' | 'event' | 'claim' {
   if (hasEventMarkers(c.text)) return 'event';
   if (isJudgmentSentence(c.text)) return 'judgment';
-  if (hasHedge(c.text)) return 'hedged';
+  if (hasHedge(c.text)) return HARD_FACT_RE.test(c.text) ? 'claim' : 'hedged';
   return 'claim';
 }
 
@@ -258,16 +280,17 @@ export async function factGateBlog(a: { model: string; body: string; evidence: s
   if (!extracted) return { ...base, status: 'error', error: '주장 추출 실패(LLM 무응답)' };
   // 선분류: 판단문은 판정에서 제외(사실 주장이 아님), 유보문은 모순 여부만 묻고 코드가 hedged_general 로 확정,
   // experience 는 사건 표지(연도·기간·우리 밭 등)가 있을 때만 강제 unsupported — 없으면 general 로 낮춰 정상 판정.
-  let judgment = 0, hedged = 0;
+  // Fix round 4(C3): 개수가 아니라 문장 텍스트를 남긴다 — 어떤 문장이 판정 없이 빠졌는지 로그·기록으로 되짚어야
+  // 정규식 과차단을 실측으로 잡을 수 있다(C1 이 그렇게 발견됐다).
+  const filtered: FactGateFiltered = { judgment: [], hedged: [] };
   const toJudge: Array<{ text: string; kind: ClaimKind; hedged?: boolean }> = [];
   for (const c of extracted) {
     const cls = classifyClaim(c);
-    if (cls === 'judgment') { judgment++; continue; }
+    if (cls === 'judgment') { filtered.judgment.push(c.text); continue; }
     if (cls === 'event') { toJudge.push({ ...c, kind: 'experience' }); continue; }
-    if (cls === 'hedged') { hedged++; toJudge.push({ ...c, kind: c.kind === 'experience' ? 'general' : c.kind, hedged: true }); continue; }
+    if (cls === 'hedged') { filtered.hedged.push(c.text); toJudge.push({ ...c, kind: c.kind === 'experience' ? 'general' : c.kind, hedged: true }); continue; }
     toJudge.push({ ...c, kind: c.kind === 'experience' ? 'general' : c.kind });
   }
-  const filtered = { judgment, hedged };
   if (!toJudge.length) return { ...base, status: 'pass', filtered };
   const judged = await judgeClaims(a.model, toJudge, a.evidence, { signal: a.signal });
   if (!judged) return {
@@ -514,7 +537,7 @@ export async function runFactGateWithRepair(
         if (t.missed.length === 0 || t.applied >= Math.ceil(first.unsupported.length / 2)) {
           targetedInfo.used = true;
           const second = await a.gate(t.body);
-          return { body: t.body, result: { ...second, repaired: true, firstPass: toFactGateInfo(first) }, targeted: targetedInfo };
+          return { body: t.body, result: { ...second, repaired: true, firstPass: toFirstPass(first) }, targeted: targetedInfo };
         }
         // 절반 미만만 적용됐다 — 부분 적용된 본문을 기준으로 남은 문장만 작가가 마저 고치게 한다.
         // 예산 참고: 이 경로는 gate(2) + targeted(1) + writer(1) + re-gate(2) = 최대 6콜(전부/폴백 경로의 5콜보다 +1).
@@ -530,5 +553,5 @@ export async function runFactGateWithRepair(
   const repaired = (await a.repair(baseBody, feedback)).trim();
   if (!repaired || !/^#{2,}\s/m.test(repaired)) return { body, result: first, targeted: targetedInfo };
   const second = await a.gate(repaired);
-  return { body: repaired, result: { ...second, repaired: true, firstPass: toFactGateInfo(first) }, targeted: targetedInfo };
+  return { body: repaired, result: { ...second, repaired: true, firstPass: toFirstPass(first) }, targeted: targetedInfo };
 }
