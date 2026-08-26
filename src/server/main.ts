@@ -337,7 +337,10 @@ function advancePieceReady(pieceId: string, runId: string, deliverable: string, 
     ...(draft?.title ? { title: draft.title } : {}),
     ...(typeof draft?.seoScore === 'number' ? { seoScore: draft.seoScore } : {}),
     ...(draft?.keyword ? { keyword: draft.keyword } : {}),
-    ...(gate ? { factGate: toFactGateInfo(gate) } : {}),
+    // 게이트 결과 없음(FACT_GATE=off·리서치 런·기록 실패)이면 명시적으로 지운다 — 조건부 스프레드로
+    // 키를 빼면 직전 런의 hold 가 그대로 남아 자동 임시저장이 계속 막힌다(2026-08-26 최종 리뷰 F1).
+    // update 는 { ...p, ...patch } 라 undefined 도 키로 실려 실제로 덮어쓰고, 영속 시 JSON 이 떨군다.
+    factGate: gate ? toFactGateInfo(gate) : undefined,
   });
   // ready 도달 → 자동 네이버 임시저장 게이트(SEO 기준 통과 시 발행 담당이 저장, 미달 시 자동 리비전 1회).
   // 알림보다 먼저 실행 — 리비전이 뜨면 이 초안은 곧 대체되므로 낡은 '검토 대기' 푸시를 만들지 않는다(리비전 완료가 다시 여기로 와 알림).

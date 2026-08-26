@@ -104,3 +104,21 @@ describe('autoDraftBlockedByFactGate — 자동 임시저장 차단 판정(사�
     expect(autoDraftBlockedByFactGate({})).toBe(false);
   });
 });
+
+// 킬스위치 회귀 가드(2026-08-26 최종 리뷰 F1) — FACT_GATE=off 로 돌린 런은 fact_gate.json 을 남기지
+// 않는다. advancePieceReady 가 그때 키를 아예 안 실으면 직전 런의 hold 가 그대로 남아 자동 임시저장이
+// 계속 막힌다("off 인데 안 꺼짐"). update 는 스프레드라 undefined 도 키로 실려 실제로 지워진다.
+describe('PieceStore.update — factGate: undefined 로 이전 보류 해제', () => {
+  it('hold 였던 piece 에 undefined 패치를 주면 자동 임시저장 차단이 풀린다(디스크에도 미영속)', () => {
+    const s = new PieceStore(dir);
+    const p = s.create({ title: '감나무 가을 전정' });
+    s.update(p.id, { factGate: { status: 'hold', unsupported: ['근거 없는 문장'], contradicted: [], checkedTs: 't' } });
+    expect(autoDraftBlockedByFactGate(s.get(p.id)!)).toBe(true);
+
+    s.update(p.id, { factGate: undefined });
+    expect(s.get(p.id)!.factGate).toBeUndefined();
+    expect(autoDraftBlockedByFactGate(s.get(p.id)!)).toBe(false);
+    // 재시작 후에도 풀린 상태여야 한다(JSON.stringify 가 undefined 키를 떨군다).
+    expect(autoDraftBlockedByFactGate(new PieceStore(dir).get(p.id)!)).toBe(false);
+  });
+});

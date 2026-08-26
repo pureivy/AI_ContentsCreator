@@ -627,7 +627,10 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       : undefined;
     // 원문 정합(스펙 §2-4) — 파생물이 원문에 없는 사실을 새로 지어내거나 원문 결론을 뒤집는지 대조(fail-open).
     const sceneTexts = (p: Plan): string[] => p.scenes.map((s) => `${s.narration}${s.screenText ? ` (자막: ${s.screenText})` : ''}`);
-    const parity = sourceBody ? await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceBody, io.signal) : [];
+    // FACT_GATE=off 면 1차·잔존 판정을 통째로 건너뛴다(킬스위치가 실제로 꺼져야 한다 — 2026-08-26 최종 리뷰 F1):
+    // parity 가 빈 배열이면 아래 잔존 블록(if (parity.length …))도 죽어 plan.factGate 가 아예 안 붙고,
+    // 아래 소스별 캡 주석의 'parity ≤2' 몫도 그만큼 비어 상한이 10 이 된다(다른 소스는 그대로).
+    const parity = CONFIG.factGate && sourceBody ? await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceBody, io.signal) : [];
     // 단독 이해 검산(LLM, 최대 5건) — 소스별 예약 캡의 몫 계산을 위해 먼저 변수로 받는다.
     const standalone = await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)', plan.scenes.map((s) => s.narration), topic, keyword, io.signal, sourceCore);
     // 문체 결정적 린트(2026-08-11) — 프롬프트 지시만으로는 샌다는 실측("새 가지" 위반) 대응, 같은 수정 라운드에 얹는다.

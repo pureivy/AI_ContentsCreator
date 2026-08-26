@@ -311,7 +311,10 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     const cardTexts = plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / '));
     const probs = await standaloneIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', cardTexts, topic, keyword, io.signal);
     // 원문 정합(스펙 §2-4) — 파생물이 원문에 없는 사실을 새로 지어내거나 원문 결론을 뒤집는지 대조(fail-open).
-    const parity = sourceBody ? await parityIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', cardTexts, sourceBody, io.signal) : [];
+    // FACT_GATE=off 면 1차·잔존 판정을 통째로 건너뛴다(킬스위치가 실제로 꺼져야 한다 — 2026-08-26 최종 리뷰 F1):
+    // parity 가 빈 배열이면 아래 잔존 블록(if (parity.length …))도 죽어 plan.factGate 가 아예 안 붙는다.
+    // 대신 정합 지적이 수정 라운드 입력(probs)에서도 빠진다 — off 의 정의 그대로.
+    const parity = CONFIG.factGate && sourceBody ? await parityIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', cardTexts, sourceBody, io.signal) : [];
     probs.push(...parity);
     // 문체 결정적 린트(2026-08-11) — 종결어미 3장 연속 등 "AI 티" 지문을 같은 수정 라운드에 얹는다.
     probs.push(...cardStyleIssues(plan.slides));

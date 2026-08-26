@@ -106,6 +106,30 @@ export interface AgentRunResult {
   result: ChatResult;
 }
 
+/**
+ * 실데이터 그라운딩 강제(이슈12) — 위키/커넥터 근거가 주입된 작업·종합 단계에서는 실제 수치·명칭을
+ * 인용하게 하고 플레이스홀더·가정값을 금지한다. 자료에 없으면 지어내지 말고 누락을 명시(요청 자료까지).
+ *
+ * forFacts(=groundForFacts, 블로그 본문 작가) 경로에서는 3)·4) 를 뺀다(2026-08-26 최종 리뷰 F2):
+ * 사실 게이트의 extractFactClaims 가 주장 텍스트를 그대로 뜨므로, 본문 문장에 박힌
+ * "[근거: 확립된 원예학 지식]" 이 판정기를 어휘적으로 supported 쪽으로 밀어 무근거 주장이 게이트를
+ * 통과한다 — 표식으로 표식을 세탁하는 고리가 다시 열린다. 사람이 읽는 리서치 work 산출물은 4규칙 유지.
+ */
+export function buildGroundDirective(hasGround: boolean, stage: string, forFacts: boolean): string {
+  if (!hasGround || (stage !== 'work' && stage !== 'synthesis')) return '';
+  const rules = [
+    '1) 아래 제공 자료 중 [원문(raw)]·[실측 성과] 라벨이 붙은 위키 발췌와 커넥터 블록의 실제 수치·명칭은 그대로 인용하라. [LLM 생성 스텁]·[원문 발췌 스텁]·[토론·종합(출처 없음)]·[런 산출 요약]·[출처 미상] 라벨 자료는 방향 참고용이다 — 그 수치·주장을 사실로 인용하지 마라.',
+    '2) 플레이스홀더·더미값을 절대 쓰지 마라: "[OO]", "202X", "[항목]", "000,000", "00.0%", "00%", "X,XXX" 같은 빈칸·0·임의 숫자로 표나 수치를 채우지 마라.',
+  ];
+  if (!forFacts) {
+    rules.push(
+      '3) 제공 자료에 없는 값은 지어내지(0·임의값 포함) 말고 "⚠️ 데이터 없음: <항목> (필요 자료: <무엇>)" 으로 정직하게 명시하라.',
+      '4) 인용한 실제 수치에는 [근거: <제공 자료 제목>] 을 붙여라(존재하지 않는 자료를 지어내 인용하지 마라).',
+    );
+  }
+  return `\n\n[작성 규칙 — 반드시 준수]\n${rules.join('\n')}`;
+}
+
 /** 한 에이전트의 한 턴을 실행하고 결과 텍스트를 반환. 스트리밍 + 이벤트 emit 포함. */
 export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
   const { bus, role, model, stage } = args;
@@ -199,16 +223,9 @@ export async function runAgent(args: AgentRunArgs): Promise<AgentRunResult> {
     }
   }
 
-  // 실데이터 그라운딩 강제(이슈12) — 위키/커넥터 근거가 주입된 작업·종합 단계에서는 실제 수치·명칭을
-  // 인용하게 하고 플레이스홀더·가정값을 금지한다. 자료에 없으면 지어내지 말고 누락을 명시(요청 자료까지).
+  // 실데이터 그라운딩 강제(이슈12) — 규칙 본문·forFacts 예외는 buildGroundDirective 참고.
   const hasGround = !!(grounding || connectorBlocks.length || webContext);
-  const groundDirective = (hasGround && (stage === 'work' || stage === 'synthesis'))
-    ? '\n\n[작성 규칙 — 반드시 준수]\n' +
-      '1) 아래 제공 자료 중 [원문(raw)]·[실측 성과] 라벨이 붙은 위키 발췌와 커넥터 블록의 실제 수치·명칭은 그대로 인용하라. [LLM 생성 스텁]·[원문 발췌 스텁]·[토론·종합(출처 없음)]·[런 산출 요약]·[출처 미상] 라벨 자료는 방향 참고용이다 — 그 수치·주장을 사실로 인용하지 마라.\n' +
-      '2) 플레이스홀더·더미값을 절대 쓰지 마라: "[OO]", "202X", "[항목]", "000,000", "00.0%", "00%", "X,XXX" 같은 빈칸·0·임의 숫자로 표나 수치를 채우지 마라.\n' +
-      '3) 제공 자료에 없는 값은 지어내지(0·임의값 포함) 말고 "⚠️ 데이터 없음: <항목> (필요 자료: <무엇>)" 으로 정직하게 명시하라.\n' +
-      '4) 인용한 실제 수치에는 [근거: <제공 자료 제목>] 을 붙여라(존재하지 않는 자료를 지어내 인용하지 마라).'
-    : '';
+  const groundDirective = buildGroundDirective(hasGround, stage, !!args.groundForFacts);
   const userContent = [
     args.task + groundDirective,
     grounding ? `[관련 지식(위키)]\n${grounding}` : '',
