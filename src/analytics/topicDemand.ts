@@ -31,7 +31,7 @@ export interface DemandRow {
   familyMax: number;
   /** 그 최대치를 만든 연관어(표기 교체 후보). */
   familyTop?: string;
-  /** 시즌 지수(0~1) — max(현재 월, 작년 다음달)/정점. 데이터 없으면 undefined(판정 생략). */
+  /** 시즌 지수(0~1) — max(현재 월, 작년 이번달~+2개월)/정점. 데이터 없으면 undefined(판정 생략). */
   seasonIdx?: number;
   direction?: '상승' | '하락' | '보합';
 }
