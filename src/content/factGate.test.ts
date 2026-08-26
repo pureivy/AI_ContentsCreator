@@ -159,11 +159,23 @@ describe('선분류(2026-08-26 hold 율 저감) — 3런 실측 문장', () => {
     expect(hasHedge('잎맥은 초록으로 남고 그 사이만 흐려지는 모습이면 흔히 양분 쪽입니다.')).toBe(true);
     expect(hasHedge('질소 성분이 앞선 화학비료는 가을에 양을 줄입니다.')).toBe(false);
   });
+  it('fix round 1 — 낱개 "편입니다" 는 판단문이 아니라 유보문(반증 가능한 수종 주장까지 무조건 제외되던 오탐 수선)', () => {
+    for (const s of ['단감나무는 영하 10도까지 견디는 편입니다.', '래빗아이는 더위·건조에 강하고 나무가 크게 자라는 편입니다'])
+      expect(classifyClaim({ text: s, kind: 'species' }), s).toBe('hedged');
+    expect(classifyClaim({ text: '벌레 쪽부터 보는 편입니다.', kind: 'general' })).toBe('judgment'); // 권유 고정구는 여전히 판단문
+    expect(isJudgmentSentence('그 안이 본편입니다')).toBe(false); // 낱개 "편입니다" 오탐(본편=main episode) 재발 방지
+  });
   it('사건 표지 — 연도·기간·우리 밭·문의 실태만', () => {
     expect(hasEventMarkers('지난해 우리 밭 어린 단감나무도 사흘 사이 스무 개 넘게 떨궜습니다')).toBe(true);
     expect(hasEventMarkers('저희 밭에서도 문의가 오면 이렇게 답합니다')).toBe(true);
     expect(hasEventMarkers("화분을 들었을 때 '아직 무겁네' 하는 날이 이어지면 그게 신호예요")).toBe(false);
     expect(hasEventMarkers('우리 나무 잎을 사흘 간격으로 두어 번 만져 보는 편이 정확합니다.')).toBe(false); // 관찰법 권유(사흘 간격 ≠ 사흘 만에)
+  });
+  it('fix round 1 — 기간 표지는 1인칭 주어와 함께일 때만 사건(동안 제거, 숫자는 일 단위 한정)', () => {
+    expect(hasEventMarkers('맨뿌리 묘목은 심기 전 이틀 동안 물에 담가 둡니다.')).toBe(false); // '동안' 은 관찰법에도 흔함
+    expect(hasEventMarkers('흙 산도는 pH 5.5~6.5 사이가 알맞습니다.')).toBe(false); // 숫자+'사이'는 일 단위가 아니면 표지 아님
+    expect(hasEventMarkers('하루 이틀 만에 물러집니다')).toBe(false); // 기간 표지는 있으나 1인칭 주어가 없다
+    expect(hasEventMarkers('우리 밭에서는 사흘 만에 떨어졌습니다')).toBe(true); // 1인칭 + 기간 = 사건
   });
   it('classifyClaim 우선순위: event > judgment > hedged > claim', () => {
     expect(classifyClaim({ text: '지난해 우리 밭에서는 그렇게 봤습니다.', kind: 'experience' })).toBe('event');
@@ -194,6 +206,7 @@ describe('factGateBlog — 선분류 반영', () => {
     expect(r.claims.find((c) => c.text.includes('무거우면'))!.kind).toBe('general');
     expect(r.unsupported).toEqual(['가을에 양을 줄입니다.']);
     expect(r.status).toBe('hold');
+    expect(r.claims.every((c) => !('hedged' in c))).toBe(true); // 내부 플래그가 fact_gate.json 으로 새지 않는다
   });
   it('유보문이라도 판정이 contradicted 면 유지한다', async () => {
     mocked

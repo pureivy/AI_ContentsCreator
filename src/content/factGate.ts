@@ -31,16 +31,29 @@ export function toFactGateInfo(r: FactGateResult): FactGateInfo {
   return { status: r.status, unsupported: r.unsupported, contradicted: r.contradicted, checkedTs: r.checkedTs };
 }
 
-/** 판단·관점·권유·채널 자기서술 종결 — 사실 주장이 아니다(사용자 08-12: 1인칭 판단 유지). 3런 실측 7건이 이 꼴로 무근거 판정됐다. */
-export const JUDGMENT_RE = /(?:고|다고|라고)\s*(?:봅니다|봐요|보고 있어요|보는 편)|보는 편입니다|편입니다|편이에요|편이 (?:정확|안전|낫)|게 안전(?:합니다|해요)|권(?:합니다|해요|하지 않)|먼저(?:예요|입니다)|그다음(?:입니다|이에요)|순서가 틀렸|낫습니다|나아요|낫다고|봐야 (?:합니다|해요)|손봐야|부터 (?:봅니다|보세요|봐요|확인합니다|확인해요|손봅니다)|기록하고 있어요|이어서 기록/;
-/** 유보어 — '대부분' 포함(실측: "경우가 대부분입니다" 가 무근거 판정됨). shorts.ts 의 HEDGE_RE(낭독용)와 별개. */
-export const HEDGE_RE = /대개|흔히|보통|대체로|대부분|경우가 많|경우가 대부분|수 있|수도 있|가능성|편이/;
-/** 겪은 사건 표지 — NO_FABRICATED_EXPERIENCE 정의(연도·기간·수량·우리 밭 관찰·영업 실태) 그대로. '사흘 간격'(관찰법)은 표지가 아니다. */
-export const EVENT_MARKER_RE = /지난해|작년|재작년|올해 초|지난\s*(?:봄|여름|가을|겨울)|(?:\d+|하루|이틀|사흘|나흘|닷새|열흘|보름)\s*(?:만에|사이에?|동안|째)|(?:우리|저희)\s*(?:밭|농장|포장|하우스|묘목장)|문의가 오면|주문이 들어오면|기록에 따르면|기록을 보면/;
+/** 판단·관점·권유·채널 자기서술 종결 — 사실 주장이 아니다(사용자 08-12: 1인칭 판단 유지). 3런 실측 7건이 이 꼴로 무근거 판정됐다.
+ * 08-26 fix round 1: 낱개 "편입니다"/"편이에요" 는 뺐다 — "영하 10도까지 견디는 편입니다" 같은 반증 가능한 수종 주장까지
+ * 판정 없이 통과시켰다("본편입니다" 오탐 포함). "보는 편입니다"(권유 고정구)만 남기고 나머지는 HEDGE_RE 로 옮겨 판정기가 본다. */
+export const JUDGMENT_RE = /(?:고|다고|라고)\s*(?:봅니다|봐요|보고 있어요|보는 편)|보는 편입니다|편이 (?:정확|안전|낫)|게 안전(?:합니다|해요)|권(?:합니다|해요|하지 않)|먼저(?:예요|입니다)|그다음(?:입니다|이에요)|순서가 틀렸|낫습니다|나아요|낫다고|봐야 (?:합니다|해요)|손봐야|부터 (?:봅니다|보세요|봐요|확인합니다|확인해요|손봅니다)|기록하고 있어요|이어서 기록/;
+/** 유보어 — '대부분' 포함(실측: "경우가 대부분입니다" 가 무근거 판정됨). shorts.ts 의 HEDGE_RE(낭독용)와 별개.
+ * 08-26 fix round 1: JUDGMENT_RE 에서 뺀 낱개 "편입니다" 를 여기로 옮겼다(대개 유보성 일반론 — 판정기가 모순만 걸러낸다). */
+export const HEDGE_RE = /대개|흔히|보통|대체로|대부분|경우가 많|경우가 대부분|수 있|수도 있|가능성|편이|편입니다/;
+/** 08-26 fix round 1: 1인칭 없는 사건 표지(연도·지난 계절·우리 밭 등) — 이것만으로 사건 확정. */
+const PERSON_EVENT_RE = /지난해|작년|재작년|올해 초|지난\s*(?:봄|여름|가을|겨울)|(?:우리|저희)\s*(?:밭|농장|포장|하우스|묘목장)|문의가 오면|주문이 들어오면|기록에 따르면|기록을 보면/;
+/** 08-26 fix round 1: 기간 표지 — '동안'(관찰법에도 흔함) 제거, 숫자는 반드시 '일' 단위여야 한다(cm·도 등 다른 수치 오탐 방지).
+ * PERSON_EVENT_RE 없이 이것만으로는 사건이 아니다("하루 이틀 만에 물러집니다" 처럼 1인칭이 없으면 일반 관찰). */
+const DURATION_RE = /(?:하루|이틀|사흘|나흘|닷새|열흘|보름|\d+\s*일)\s*(?:만에|사이에?|째)/;
+/** 겪은 사건 표지 — NO_FABRICATED_EXPERIENCE 정의(연도·기간·수량·우리 밭 관찰·영업 실태) 그대로. '사흘 간격'(관찰법)은 표지가 아니다.
+ * 문서화용 결합 정규식 — hasEventMarkers 는 PERSON_EVENT_RE·DURATION_RE 조합 규칙을 직접 구현한다(아래). */
+export const EVENT_MARKER_RE = /지난해|작년|재작년|올해 초|지난\s*(?:봄|여름|가을|겨울)|(?:하루|이틀|사흘|나흘|닷새|열흘|보름|\d+\s*일)\s*(?:만에|사이에?|째)|(?:우리|저희)\s*(?:밭|농장|포장|하우스|묘목장)|문의가 오면|주문이 들어오면|기록에 따르면|기록을 보면/;
 
 export function isJudgmentSentence(s: string): boolean { return JUDGMENT_RE.test(s); }
 export function hasHedge(s: string): boolean { return HEDGE_RE.test(s); }
-export function hasEventMarkers(s: string): boolean { return EVENT_MARKER_RE.test(s); }
+/** 1인칭 사건 표지가 있으면 사건, 없으면 기간 표지가 있어도 1인칭 주어("우리/저희/제가/우린")가 함께일 때만 사건으로 본다
+ * (08-26 fix round 1: "하루 이틀 만에 물러집니다" 처럼 주어 없는 기간 서술은 관찰 일반론이지 겪은 사건이 아니다). */
+export function hasEventMarkers(s: string): boolean {
+  return PERSON_EVENT_RE.test(s) || (DURATION_RE.test(s) && /우리|저희|제가|우린|우리가/.test(s));
+}
 
 /** 선분류 우선순위: 사건 서술(금지) > 판단문(제외) > 유보문(통과) > 일반 주장(판정). */
 export function classifyClaim(c: { text: string; kind: ClaimKind }): 'judgment' | 'hedged' | 'event' | 'claim' {
@@ -177,9 +190,11 @@ export async function judgeClaims(
     byIdx.set(idx, { status, ...(evidence ? { evidence } : {}) });
   }
   return claims.map((c, i) => {
-    if (c.kind === 'experience') return { ...c, status: 'unsupported' as const };
+    // hedged 는 판정 프롬프트 표기용 내부 플래그 — 저장되는 FactClaim 에는 남기지 않는다(fact_gate.json 유출 방지).
+    const { hedged: _hedged, ...rest } = c;
+    if (rest.kind === 'experience') return { ...rest, status: 'unsupported' as const };
     const v = byIdx.get(i + 1);
-    return v ? { ...c, status: v.status, ...(v.evidence ? { evidence: v.evidence } : {}) } : { ...c, status: 'unsupported' as const };
+    return v ? { ...rest, status: v.status, ...(v.evidence ? { evidence: v.evidence } : {}) } : { ...rest, status: 'unsupported' as const };
   });
 }
 
@@ -204,7 +219,11 @@ export async function factGateBlog(a: { model: string; body: string; evidence: s
   const filtered = { judgment, hedged };
   if (!toJudge.length) return { ...base, status: 'pass', filtered };
   const judged = await judgeClaims(a.model, toJudge, a.evidence, { signal: a.signal });
-  if (!judged) return { ...base, status: 'error', error: '주장 판정 실패(LLM 무응답)', claims: toJudge.map((c) => ({ ...c, status: 'unsupported' as const })), filtered };
+  if (!judged) return {
+    ...base, status: 'error', error: '주장 판정 실패(LLM 무응답)',
+    claims: toJudge.map((c) => { const { hedged: _hedged, ...rest } = c; return { ...rest, status: 'unsupported' as const }; }),
+    filtered,
+  };
   // 유보문(hedged)은 판정기가 contradicted 로 판정했을 때만 유지하고, 그 외엔 hedged_general 로 코드가 확정한다.
   const fixed = judged.map((c, i) => (toJudge[i]!.hedged && c.status !== 'contradicted') ? { ...c, status: 'hedged_general' as const } : c);
   const v = gateVerdict(fixed);
