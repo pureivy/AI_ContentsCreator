@@ -6,6 +6,7 @@ import {
   splitBodySentences, numericClaimSentences, buildEvidence, gateVerdict, formatGateFeedback, toFactGateInfo,
   extractFactClaims, judgeClaims, factGateBlog, runFactGateWithRepair,
   isJudgmentSentence, hasHedge, hasEventMarkers, classifyClaim,
+  applySentenceRepairs, repairSentences,
 } from './factGate';
 import type { FactClaim, FactGateResult } from './factGate';
 
@@ -279,5 +280,54 @@ describe('runFactGateWithRepair — firstPass 보존', () => {
     const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
     const r = await runFactGateWithRepair({ gate, repair: async () => '## 고침' }, '## 원본');
     expect(r.result.firstPass).toEqual({ status: 'hold', unsupported: ['a'], contradicted: [], checkedTs: 't' });
+  });
+});
+
+describe('applySentenceRepairs — 문장 단위 치환(순수)', () => {
+  const body = '## 거름\n질소 성분이 앞선 화학비료는 가을에 양을 줄입니다. 퇴비는 흙에서 천천히 분해되는 자재라 효과가 더디게 나옵니다.\n\n잎에 뿌리는 영양제로 대신할 수 없습니다.';
+  it('정확 일치·공백 정규화·앞 40자 접두 일치로 치환하고 delete 는 제거한다', () => {
+    const r = applySentenceRepairs(body,
+      ['질소 성분이 앞선 화학비료는 가을에 양을 줄입니다.', '퇴비는  흙에서 천천히 분해되는 자재라 효과가 더디게 나옵니다.', '잎에 뿌리는 영양제로 대신할 수 없습니'],
+      [{ index: 1, action: 'hedge', replacement: '질소 성분이 앞선 화학비료는 가을에는 대개 양을 줄입니다.' }, { index: 2, action: 'judgment', replacement: '퇴비는 효과가 더디게 나오는 쪽이라고 봅니다.' }, { index: 3, action: 'delete', replacement: '' }]);
+    expect(r.applied).toBe(3); expect(r.missed).toEqual([]);
+    expect(r.body).toContain('가을에는 대개 양을 줄입니다.');
+    expect(r.body).toContain('더디게 나오는 쪽이라고 봅니다.');
+    expect(r.body).not.toContain('영양제로 대신할 수 없습니다');
+    expect(r.body).not.toMatch(/\n{3,}/);
+  });
+  it('못 찾는 문장은 missed 로 남기고 나머지는 적용한다', () => {
+    const r = applySentenceRepairs(body, ['없는 문장입니다.', '잎에 뿌리는 영양제로 대신할 수 없습니다.'],
+      [{ index: 1, action: 'hedge', replacement: 'x' }, { index: 2, action: 'hedge', replacement: '잎에 뿌리는 영양제로는 대개 대신하기 어렵습니다.' }]);
+    expect(r.applied).toBe(1); expect(r.missed).toEqual(['없는 문장입니다.']);
+  });
+  it('replacement 가 새 수치를 들이면 그 항목은 건너뛴다', () => {
+    const r = applySentenceRepairs(body, ['잎에 뿌리는 영양제로 대신할 수 없습니다.'], [{ index: 1, action: 'hedge', replacement: '잎에 뿌리는 영양제는 3회까지는 대개 괜찮습니다.' }]);
+    expect(r.applied).toBe(0); expect(r.missed).toEqual(['잎에 뿌리는 영양제로 대신할 수 없습니다.']);
+  });
+});
+
+describe('repairSentences — 프롬프트·검증', () => {
+  it('규칙(새 사실 금지·hedge/judgment/delete)이 프롬프트에 있고 잘못된 index/action 은 버린다', async () => {
+    mocked.mockResolvedValueOnce({ repairs: [{ index: 1, action: 'hedge', replacement: 'a.' }, { index: 9, action: 'hedge', replacement: 'b.' }, { index: 2, action: 'rewrite', replacement: 'c.' }] });
+    const r = await repairSentences('m', 'body', ['s1', 's2']);
+    expect(r).toEqual([{ index: 1, action: 'hedge', replacement: 'a.' }]);
+    const user = String(mocked.mock.calls[0]![2]);
+    expect(user).toContain('새 사실·수치'); expect(user).toContain('hedge'); expect(user).toContain('judgment'); expect(user).toContain('delete');
+  });
+});
+
+describe('runFactGateWithRepair — 표적 수정 우선', () => {
+  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+  it('표적 수정이 적용되면 작가 재작성 없이 2차 판정', async () => {
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
+    const repair = vi.fn(); const targeted = vi.fn(async () => ({ body: '## 표적', applied: 1, missed: [] }));
+    const r = await runFactGateWithRepair({ gate, repair, targeted }, '## 원본');
+    expect(repair).not.toHaveBeenCalled(); expect(r.body).toBe('## 표적'); expect(r.result.repaired).toBe(true);
+  });
+  it('표적 수정이 하나도 안 붙으면 작가 재작성으로 폴백', async () => {
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
+    const repair = vi.fn(async () => '## 재작성'); const targeted = vi.fn(async () => ({ body: '## 원본', applied: 0, missed: ['a'] }));
+    const r = await runFactGateWithRepair({ gate, repair, targeted }, '## 원본');
+    expect(repair).toHaveBeenCalledTimes(1); expect(r.body).toBe('## 재작성');
   });
 });

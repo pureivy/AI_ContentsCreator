@@ -28,7 +28,7 @@ import { brandContext, activeBrandSlug, getBrand, lexiconGuide } from '../conten
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid } from '../content/priorCoverage';
 import { collectExistingContent } from '../content/novelty';
 import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate } from '../sessions/digest';
-import { factGateBlog, buildEvidence, runFactGateWithRepair } from '../content/factGate';
+import { factGateBlog, buildEvidence, runFactGateWithRepair, repairSentences, applySentenceRepairs } from '../content/factGate';
 import type { FactGateResult } from '../content/factGate';
 import { readInjected, readVerified } from '../agents/workspace';
 import { llmWiki } from '../wiki/llmwiki';
@@ -725,7 +725,17 @@ async function packageDesignFinalize(a: {
           bus, writer, model: modelForTier(assign, writer.tier), topic, brief, personaGuide, keyword,
           revise: { baseBody: body, feedback }, signal,
         });
-        const r = await runFactGateWithRepair({ gate, repair }, finalDeliverable);
+        // 문장 단위 표적 수정(2026-08-26) — 전면 재작성 전에 먼저 시도. 무근거 문장만 유보어·판단문·삭제로
+        // 정밀 교정해, 작가가 엉뚱한 문장을 고치며 지적된 문장을 그대로 남기는 사례(실측 hold 7→7)를 없앤다.
+        const targeted = async (body: string, unsupported: string[]) => {
+          const reps = await repairSentences(assign.standard, body, unsupported, { signal });
+          const result = reps ? applySentenceRepairs(body, unsupported, reps) : { body, applied: 0, missed: unsupported };
+          const tm = `사실 게이트 — 표적 수정 ${result.applied}문장(누락 ${result.missed.length})`;
+          console.log(`[사실게이트] ${tm}`);
+          bus.emit('log', { message: tm });
+          return result;
+        };
+        const r = await runFactGateWithRepair({ gate, repair, targeted }, finalDeliverable);
         finalDeliverable = r.body; gateResult = r.result;
       } catch (e) {
         gateResult = { status: 'error', claims: [], unsupported: [], contradicted: [], repaired: false, error: e instanceof Error ? e.message : String(e), checkedTs: new Date().toISOString() };

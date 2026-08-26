@@ -230,13 +230,157 @@ export async function factGateBlog(a: { model: string; body: string; evidence: s
   return { ...base, claims: fixed, ...v, filtered };
 }
 
-/** 게이트 흐름(의존성 주입, 순수) — 1차 hold 면 작가 수정 1회 후 재판정. error 는 수정하지 않는다(판정 불가 상태에서 재작성은 무의미). */
+/**
+ * 문장 단위 표적 수정(2026-08-26) — 무근거 문장을 통째로 다시 쓰는 대신 유보어·판단문·삭제로 바꾼다.
+ * 실측: 전면 재작성(repair) 1회로는 hold 를 못 걷어내는 사례(7→7)가 있었다 — 작가가 다른 문장을 손대며
+ * 정작 지적된 문장은 그대로 두는 탓. 표적 수정은 지적된 문장만 정밀하게 건드려 그 위험을 없앤다.
+ */
+
+/** repairSentences 가 돌려주는 항목 하나. */
+export interface SentenceRepair { index: number; action: 'hedge' | 'judgment' | 'delete'; replacement: string }
+
+const REPAIR_ACTIONS: ReadonlySet<string> = new Set(['hedge', 'judgment', 'delete']);
+
+/** 무근거 문장 목록을 LLM 에 보내 유보어/판단문 전환 또는 삭제를 제안받는다(micro 1콜). */
+export async function repairSentences(
+  model: string, body: string, unsupported: string[], opts: { signal?: AbortSignal } = {},
+): Promise<SentenceRepair[] | null> {
+  const user = [
+    '아래 [본문]에서 [고칠 문장] 각각을 다음 규칙에 따라 고쳐라.',
+    '규칙: 새 사실·수치 추가 금지 — 본문에 없던 수치·시기·약제·품종 특성을 넣지 마라. 문장 길이는 원문과 비슷하게 유지한다.',
+    'hedge: "대개/흔히/보통" 같은 유보어를 자연스럽게 넣어 단정을 일반론으로 낮춘다.',
+    'judgment: "~라고 봅니다/~부터 봅니다/~게 안전합니다" 꼴의 1인칭 판단문으로 바꾼다.',
+    'delete: 그 문장이 빠져도 문단이 자연스럽게 이어질 때만 고른다.',
+    'replacement 은 완결된 문장(마침표 포함)으로 쓴다 — delete 면 빈 문자열("")로 둔다.',
+    `[본문]\n${body.slice(0, 8000)}`,
+    `[고칠 문장]\n${unsupported.map((s, i) => `${i + 1}. ${s}`).join('\n')}`,
+    'JSON 형식: {"repairs":[{"index":1,"action":"hedge|judgment|delete","replacement":"..."}]}',
+  ].join('\n\n');
+  const j = await microJSON<{ repairs?: Array<{ index?: unknown; action?: unknown; replacement?: unknown } | null> }>(
+    model, SYS, user, { maxOutputTokens: Math.min(3000, 300 + unsupported.length * 160), signal: opts.signal },
+  );
+  if (!j || !Array.isArray(j.repairs)) return null;
+  const seen = new Set<number>();
+  const out: SentenceRepair[] = [];
+  for (const r of j.repairs) {
+    const index = typeof r?.index === 'number' ? r.index : Number(r?.index);
+    if (!Number.isInteger(index) || index < 1 || index > unsupported.length || seen.has(index)) continue;
+    const action = typeof r?.action === 'string' && REPAIR_ACTIONS.has(r.action) ? (r.action as SentenceRepair['action']) : null;
+    if (!action) continue;
+    const replacement = typeof r?.replacement === 'string' ? r.replacement.trim() : null;
+    if (replacement === null || (action !== 'delete' && !replacement)) continue;
+    seen.add(index);
+    out.push({ index, action, replacement });
+  }
+  return out;
+}
+
+/** replacement 가 원문에 없던 수치·월·연도 패턴을 새로 들이면 true(새 사실 가드). */
+function introducesNewFacts(original: string, replacement: string): boolean {
+  return [UNIT_RE, MONTH_RE, YEAR_RE].some((re) => re.test(replacement) && !re.test(original));
+}
+
+/** 줄 안의 문장 경계(splitBodySentences 와 같은 분리 규칙)를 원문 위치(줄 인덱스·시작·끝)로 보존한다. */
+function findSentenceSpans(lines: string[]): Array<{ lineIdx: number; start: number; end: number; raw: string }> {
+  const spans: Array<{ lineIdx: number; start: number; end: number; raw: string }> = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    let cursor = 0;
+    for (const p of line.split(/(?<=[.!?…])\s+/)) {
+      if (!p.trim()) continue;
+      const idx = line.indexOf(p, cursor);
+      if (idx === -1) continue;
+      cursor = idx + p.length;
+      spans.push({ lineIdx: i, start: idx, end: idx + p.length, raw: p });
+    }
+  }
+  return spans;
+}
+
+/** unsupported 원문을 본문 문장 중에서 찾는다. ① 정확 일치 ② 공백 정규화 일치 ③ (160자 절단 대비) 접두 일치 — 매칭된 문장 전체를 치환 대상으로 돌려준다. */
+function locateSentence(lines: string[], original: string): { lineIdx: number; start: number; end: number } | null {
+  if (!original) return null;
+  const spans = findSentenceSpans(lines);
+  const exact = spans.find((s) => s.raw === original);
+  if (exact) return exact;
+  const normalize = (s: string) => s.replace(/\s+/g, ' ').trim();
+  const normOriginal = normalize(original);
+  const normed = spans.find((s) => normalize(s.raw) === normOriginal);
+  if (normed) return normed;
+  // 추출 시 120~160자 절단으로 original 이 실제 문장의 앞부분만 담고 있을 수 있다 — 접두 일치한 문장 전체를 치환한다.
+  const prefixed = spans.find((s) => {
+    const stripped = s.raw.replace(/^#{1,6}\s*/, '').replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, '').replace(/\*\*/g, '');
+    return stripped.startsWith(original);
+  });
+  return prefixed ?? null;
+}
+
+/** line 안의 [start,end) 구간을 replacement 로 바꾼다. delete(빈 문자열)면 앞뒤 공백 하나를 함께 지워 이중 공백을 막는다. */
+function spliceReplace(line: string, start: number, end: number, replacement: string): string {
+  if (replacement === '') {
+    let s = start, e = end;
+    if (line[e] === ' ') e++;
+    else if (s > 0 && line[s - 1] === ' ') s--;
+    return (line.slice(0, s) + line.slice(e)).trim();
+  }
+  return line.slice(0, start) + replacement + line.slice(end);
+}
+
+/**
+ * repairSentences 의 제안을 본문에 순수하게 반영한다(LLM 없음). unsupported[index-1] 문장을 찾아 치환하고,
+ * 못 찾거나 새 사실 가드에 걸리면 missed 에 원문을 남긴다. delete 로 생긴 이중 공백·빈 줄은 정리한다.
+ */
+export function applySentenceRepairs(
+  body: string, unsupported: string[], repairs: SentenceRepair[],
+): { body: string; applied: number; missed: string[] } {
+  const byIndex = new Map<number, SentenceRepair>();
+  for (const r of repairs) if (!byIndex.has(r.index)) byIndex.set(r.index, r);
+
+  const lines = body.split('\n');
+  let applied = 0;
+  const missed: string[] = [];
+
+  for (let i = 0; i < unsupported.length; i++) {
+    const original = unsupported[i]!;
+    const r = byIndex.get(i + 1);
+    if (!r) { missed.push(original); continue; }
+    if (introducesNewFacts(original, r.replacement)) { missed.push(original); continue; }
+    const loc = locateSentence(lines, original);
+    if (!loc) { missed.push(original); continue; }
+    const replacement = r.action === 'delete' ? '' : r.replacement;
+    lines[loc.lineIdx] = spliceReplace(lines[loc.lineIdx]!, loc.start, loc.end, replacement);
+    applied++;
+  }
+
+  const out = lines.join('\n').replace(/\n{3,}/g, '\n\n');
+  return { body: out, applied, missed };
+}
+
+/**
+ * 게이트 흐름(의존성 주입, 순수) — 1차 hold 면 표적 수정을 먼저 시도하고(문장이 하나라도 적용됐으면 그 본문으로
+ * 곧장 2차 판정), 아무것도 적용되지 않았을 때만 작가 전면 재작성으로 폴백한다. error 는 수정하지 않는다
+ * (판정 불가 상태에서 재작성은 무의미).
+ */
 export async function runFactGateWithRepair(
-  a: { gate: (body: string) => Promise<FactGateResult>; repair: (body: string, feedback: string) => Promise<string> },
+  a: {
+    gate: (body: string) => Promise<FactGateResult>;
+    repair: (body: string, feedback: string) => Promise<string>;
+    /** 문장 단위 표적 수정 — 있으면 전면 재작성보다 먼저 시도한다. */
+    targeted?: (body: string, unsupported: string[]) => Promise<{ body: string; applied: number; missed: string[] }>;
+  },
   body: string,
 ): Promise<{ body: string; result: FactGateResult }> {
   const first = await a.gate(body);
   if (first.status !== 'hold') return { body, result: first };
+
+  if (a.targeted) {
+    const t = await a.targeted(body, first.unsupported);
+    if (t.applied > 0) {
+      const second = await a.gate(t.body);
+      return { body: t.body, result: { ...second, repaired: true, firstPass: toFactGateInfo(first) } };
+    }
+  }
+
   const repaired = (await a.repair(body, formatGateFeedback(first))).trim();
   if (!repaired || !/^#{2,}\s/m.test(repaired)) return { body, result: first };
   const second = await a.gate(repaired);
