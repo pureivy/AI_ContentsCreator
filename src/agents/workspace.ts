@@ -155,8 +155,8 @@ export function extractVerifiedClaims(text: string): Array<{ claim: string; sour
   return out;
 }
 
-const VERIFIED_REJECT_SOURCE = /동일|종합|비평|성과|검증된 지식|사내|확립된|일반|상식|추정|추론/;
-const VERIFIED_REJECT_CLAIM = /⚠️|미실측|미확인|데이터 없음|가정/;
+const VERIFIED_REJECT_SOURCE = /동일|종합|비평|성과|검증된 지식|표기된 지식|사내|확립된|일반|상식|추정|추론/;
+const VERIFIED_REJECT_CLAIM = /⚠|미실측|미확인|데이터 없음|가정/;
 const norm = (s: string): string => s.replace(/\s+/g, '').toLowerCase();
 
 /** verified 승격 거절 사유(순수) — 근거가 근거가 아닌 것(자기 인용·토론·성과·보류 표시·표 조각). null 이면 통과. */

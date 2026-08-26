@@ -68,6 +68,8 @@ describe('verified 승격 정직화(스펙 §5)', () => {
     expect(rejectVerifiedLine('⚠️ 미실측 — 데이터랩 지수 100', '검색어트렌드(데이터랩)')).toBeTruthy();
     expect(rejectVerifiedLine('| 보조3 | 올리브나무 키우기 |', '검색광고 실검색량')).toBeTruthy();
     expect(rejectVerifiedLine('4월 하순부터 약충이 깨어난다', '농사로 https://www.nongsaro.go.kr/x')).toBeNull();
+    expect(rejectVerifiedLine('9월 시비', '근거 표기된 지식(verified)')).toBeTruthy();
+    expect(rejectVerifiedLine('⚠ 미확인 — 데이터랩 지수', '검색어트렌드(데이터랩)')).toBeTruthy();
   });
   it('수락 — 커넥터 라벨 포함·웹 URL 일치·raw 위키 제목; 파생 위키·원장 불일치는 거절', () => {
     const entries = [E('검색광고 실검색량', 'connector'), E('https://www.nongsaro.go.kr/x', 'web'), E('블루베리 재배 원문', 'wiki-raw'), E('블루베리나무', 'wiki-derived')];
