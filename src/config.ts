@@ -219,6 +219,12 @@ export interface Config {
   readonly performanceWindowDays: number;
   /** 주입 지식(injected.md) 반영 한도(자 수) — 에이전트 매 런 시스템프롬프트에 들어가는 양. 초과분은 최신 우선(tail)로 잘림. */
   readonly injectedKnowledgeCap: number;
+  /** 주제 선정 검색 수요 게이트(2026-08-26) — 후보 keyword 의 절대 검색량·시즌 지수로 기각·후순위. off 면 조회 자체를 생략(비용 0). */
+  readonly topicDemandGate: boolean;
+  /** 월 검색량 하한 — 후보(또는 계열 최대 연관어)가 이 미만이면 기각. 실측 근거: 우리 롱테일이 0~30/월이었다. */
+  readonly topicDemandMinVolume: number;
+  /** 시즌 지수(0~1) 하한 — 이 미만이면 비수기로 후순위(기각 아님). 0~1 로 클램프. */
+  readonly topicDemandMinSeason: number;
 }
 
 export const CONFIG: Config = {
@@ -360,6 +366,10 @@ export const CONFIG: Config = {
   performanceSyncTime: env('PERFORMANCE_SYNC_TIME', '').trim(),
   performanceWindowDays: Math.max(0, envInt('PERFORMANCE_WINDOW_DAYS', 14)),
   injectedKnowledgeCap: Math.max(500, envInt('INJECTED_KNOWLEDGE_CAP', 10000)),
+  topicDemandGate: envBool('TOPIC_DEMAND_GATE', true),
+  topicDemandMinVolume: Math.max(0, envInt('TOPIC_DEMAND_MIN_VOLUME', 30)),
+  // 1 초과 값은 모든 후보를 비수기로 만든다(0 미만은 게이트 무효) — 오설정이 사이클을 굶기지 않게 클램프.
+  topicDemandMinSeason: Math.min(Math.max(0, envFloat('TOPIC_DEMAND_MIN_SEASON', 0.25)), 1),
 };
 
 export function systemRamGB(): number {
