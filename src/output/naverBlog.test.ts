@@ -37,4 +37,9 @@ describe('stripInternalMarkers — URL 없는 [근거:]·데이터 없음 표식
     expect(stripInternalMarkers('앞\n- ⚠️ 데이터 없음: 발아율 (필요 자료: 실측)\n뒤')).toBe('앞\n뒤');
     expect(stripInternalMarkers('발아율은 ⚠️ 데이터 없음: 발아율 (필요 자료: 실측) 수준입니다.')).toBe('발아율은 수준입니다.');
   });
+  it('괄호 없는 인라인 표식은 문장 경계에서 멈춰 뒤 문장을 보존한다', () => {
+    const out = stripInternalMarkers('발아율은 ⚠️ 데이터 없음: 매우 낮은 수준입니다. 다음 문단도 있습니다.');
+    expect(out).toContain('다음 문단도 있습니다.');
+    expect(out).not.toContain('데이터 없음');
+  });
 });
