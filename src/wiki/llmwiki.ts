@@ -882,27 +882,28 @@ export class LlmWiki {
     const scored = this.allPages()
       .filter((p) => !opts.forFacts || !FACT_EXCLUDED_TYPES.has(p.type)) // 집필용 사실 조회 — 성과·토론·개요·교훈 제외(스펙 §4)
       .map((p) => {
-      const title = p.title; const a = tokenize(p.aliases.join(' ')); const b = new Set(tokenize(p.body));
-      let s = 0;
-      for (const tok of qt) {
-        // 제목은 '부분일치' — 업로드 원문 제목이 '2026년도세출예산집행현황...'처럼 공백 없이 붙어 있어
-        // 토큰 일치로는 '세출'/'집행'이 안 걸린다. substring 으로 타깃 원문이 상위로 오게 한다.
-        if (tok.length >= 2 && title.includes(tok)) s += 8;
-        if (a.includes(tok)) s += 4;
-        if (b.has(tok)) s += 1;        // 본문은 '빈도'가 아니라 '존재' 1점 — 거대 문서(회의록 등)가 토큰 빈도로 랭킹 지배 방지.
-      }
-      // 업로드된 원문(source) 우대 — 실제 수치·표는 source 본문에 있고, 파생 요약(concept/entity)에는 없다(이슈12).
-      if (p.type === 'source') s *= 1.4;
-      // 실측 성과(performance) 근거 우대 — 다음 콘텐츠 기획이 '무엇이 실제로 노출됐는지'를 참조하게(compounding).
-      if (p.type === 'performance') s *= 1.3;
-      // 업로드 1차 원문(sources=raw/...) 을 런 파생 요약(sources=run:...)·생성 concept 보다 강하게 우대 —
-      // 실제 결산 수치(세출예산집행현황 등)가 런이 만든 요약 페이지에 밀려 검색에서 빠지던 문제(이슈12) 해결.
-      if (p.sources.some((src) => src.startsWith('raw/'))) s *= 2;
-      // 런 파생 요약(sources=run:...)은 역가중 — 이전 런 보고서의 순환 요약이 1차 원문을 밀어내지 않게.
-      if (p.sources.some((src) => src.startsWith('run:'))) s *= 0.5;
-      if (p.sources.includes('maintain:auto')) s *= 0.5; // LLM 기억 스텁 — 순수 스텁이 상위 랭크되던 감사 실측
-      return { p, s };
-    }).filter((x) => x.s > 0)
+        const title = p.title; const a = tokenize(p.aliases.join(' ')); const b = new Set(tokenize(p.body));
+        let s = 0;
+        for (const tok of qt) {
+          // 제목은 '부분일치' — 업로드 원문 제목이 '2026년도세출예산집행현황...'처럼 공백 없이 붙어 있어
+          // 토큰 일치로는 '세출'/'집행'이 안 걸린다. substring 으로 타깃 원문이 상위로 오게 한다.
+          if (tok.length >= 2 && title.includes(tok)) s += 8;
+          if (a.includes(tok)) s += 4;
+          if (b.has(tok)) s += 1;        // 본문은 '빈도'가 아니라 '존재' 1점 — 거대 문서(회의록 등)가 토큰 빈도로 랭킹 지배 방지.
+        }
+        // 업로드된 원문(source) 우대 — 실제 수치·표는 source 본문에 있고, 파생 요약(concept/entity)에는 없다(이슈12).
+        if (p.type === 'source') s *= 1.4;
+        // 실측 성과(performance) 근거 우대 — 다음 콘텐츠 기획이 '무엇이 실제로 노출됐는지'를 참조하게(compounding).
+        if (p.type === 'performance') s *= 1.3;
+        // 업로드 1차 원문(sources=raw/...) 을 런 파생 요약(sources=run:...)·생성 concept 보다 강하게 우대 —
+        // 실제 결산 수치(세출예산집행현황 등)가 런이 만든 요약 페이지에 밀려 검색에서 빠지던 문제(이슈12) 해결.
+        if (p.sources.some((src) => src.startsWith('raw/'))) s *= 2;
+        // 런 파생 요약(sources=run:...)은 역가중 — 이전 런 보고서의 순환 요약이 1차 원문을 밀어내지 않게.
+        if (p.sources.some((src) => src.startsWith('run:'))) s *= 0.5;
+        if (p.sources.includes('maintain:auto')) s *= 0.5; // LLM 기억 스텁 — 순수 스텁이 상위 랭크되던 감사 실측
+        if (p.sources.includes('stub:source')) s *= 0.5; // 원문 발췌 스텁 — LLM 이 만든 것이므로 maintain:auto 와 동일 감가
+        return { p, s };
+      }).filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s || b.p.updated.localeCompare(a.p.updated) || a.p.title.localeCompare(b.p.title))
       .slice(0, limit);
     const hits = scored.map((x) => x.p);

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { LlmWiki, slugify, buildLinkResolver } from './llmwiki';
+import { LlmWiki, slugify, buildLinkResolver, provenanceLabel } from './llmwiki';
 
 // compileDebateOverview 테스트용 LLM 목킹 — 다른 테스트는 llm 을 호출하지 않아 무해.
 vi.mock('../llm/client', () => ({
@@ -521,8 +521,6 @@ describe('mergePages — 의미 중복 병합(메타 합집합·참조 재지정
   });
 });
 
-import { provenanceLabel } from './llmwiki';
-
 describe('provenanceLabel — 그라운딩 출처 라벨(스펙 §4)', () => {
   const P = (type: string, sources: string[]) => ({ type: type as never, sources });
   it('raw > performance > maintain:auto > stub:source > 토론·종합 > run: > 미상', () => {
@@ -550,15 +548,18 @@ describe('query — forFacts 필터·스텁 감가·라벨 머리말', () => {
     expect(facts.context).toContain('### 감나무 깍지벌레 방제 [런 산출 요약]');
     expect(facts.context).toContain('### 감나무 깍지벌레 [LLM 생성 스텁]');
   });
-  it('maintain:auto 는 같은 점수의 run: 페이지보다 낮게 감가된다', () => {
-    const w = new LlmWiki(dir);
-    w.upsertPage({ title: '배롱나무 전정', type: 'entity', body: '배롱나무 전정 개요', sources: ['maintain:auto'] });
-    w.upsertPage({ title: '배롱나무 전정 시기', type: 'concept', body: '배롱나무 전정 개요', sources: ['run:r1'] });
+  it('maintain:auto·stub:source 는 같은 점수의 sources:[] 페이지보다 낮게 감가된다', () => {
     // 제목 토큰 2개 일치(+16)·본문 존재(+2) 동일 → run: ×0.5 = 9 vs maintain:auto ×0.5 = 9 (동점) — 감가 자체를 확인하려면 스텁만 있는 경우와 비교
     const only = new LlmWiki(path.join(dir, '..', 'w2'));
     only.upsertPage({ title: '배롱나무 전정', type: 'entity', body: '배롱나무 전정 개요', sources: ['maintain:auto'] });
     only.upsertPage({ title: '배롱나무 전정 참고', type: 'entity', body: '배롱나무 전정 개요', sources: [] });
     const hits = only.query('배롱나무 전정', 2).hits.map((p) => p.title);
     expect(hits[0]).toBe('배롱나무 전정 참고'); // 출처 미상(감가 없음)이 스텁(×0.5)보다 앞
+
+    const stubOnly = new LlmWiki(path.join(dir, '..', 'w3'));
+    stubOnly.upsertPage({ title: '배롱나무 전정', type: 'entity', body: '배롱나무 전정 개요', sources: ['stub:source'] });
+    stubOnly.upsertPage({ title: '배롱나무 전정 참고', type: 'entity', body: '배롱나무 전정 개요', sources: [] });
+    const stubHits = stubOnly.query('배롱나무 전정', 2).hits.map((p) => p.title);
+    expect(stubHits[0]).toBe('배롱나무 전정 참고'); // 원문 발췌 스텁(×0.5)도 출처 미상(감가 없음)보다 뒤
   });
 });
