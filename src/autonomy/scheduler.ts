@@ -20,7 +20,7 @@ import { titleTypeGuidanceBlock } from '../analytics/titleTiming';
 import { shortsTopicSignalBlock } from '../analytics/shortsPerf';
 import { topicVerdictBlock, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { trendSignalBlock } from '../analytics/trendSignal';
-import { assessCandidatesDemand, demandSignalBlock, demandVerdict, formatDemandLine, normKw, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
+import { assessCandidatesDemand, demandSignalBlock, demandRejectBlock, demandRejectFor, rememberDemandReject, demandVerdict, formatDemandLine, normKw, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
 import { searchAdEnabled } from '../grounding/naver_searchad';
 import { ytNicheBlock } from '../analytics/ytNiche';
 import { ensureSeriesLabels, classifyCandidates, seriesScoresFor, gateForLabels, fillLabelsFromKnown, cooldownSummary } from '../analytics/seriesLedger';
@@ -347,13 +347,24 @@ export function lacksSpeciesAnchor(text: string): boolean {
  *
  * opts.relax: 마지막 라운드의 기아 방지 밸브 — 하한 미달을 기각 대신 후순위로 낮춘다(`relaxed: true`).
  * 통과·비수기 판정은 건드리지 않는다(밸브가 만든 후순위인지 원래 비수기인지 채택 로그가 갈려야 하므로).
+ *
+ * opts.remembered: 지난 틱에 실측으로 하한 미달을 받아 기억된 키워드(2026-08-27) — rows 를 아예 보지 않고
+ * 그때의 실측 줄로 판정한다(그래서 호출부는 이 후보를 API 조회 대상에서도 뺀다 — 조회 비용 0).
  */
 export function demandGateDecision(
   rows: Map<string, DemandRow>,
   keyword: string | undefined,
   cfg: { minVolume: number; minSeason: number },
-  opts: { relax?: boolean } = {},
+  opts: { relax?: boolean; remembered?: { line: string } } = {},
 ): { verdict: DemandVerdict; line: string; relaxed?: boolean } {
+  // 기억된 기각은 rows 보다 먼저 본다 — 이 후보는 조회하지 않았으니 rows 에 없고(unknown = fail-open),
+  // 순서를 뒤집으면 기억이 통째로 무력화된다. 기아 방지 밸브는 기억에도 똑같이 적용한다: 규칙을 갈라 두면
+  // '기억됐다는 이유로' 마지막 라운드 밸브가 안 먹혀 후보 전멸 시 슬롯이 선다.
+  if (opts.remembered) {
+    return opts.relax
+      ? { verdict: 'demote', line: opts.remembered.line, relaxed: true }
+      : { verdict: 'reject', line: opts.remembered.line };
+  }
   // 정확 일치 우선, 실패하면 정규화 대조 — assessCandidatesDemand 가 정규화 키로 중복을 걸러 담기 때문에
   // '가을 거름'과 '가을거름'이 한 라운드에 같이 오면 뒤엣것이 미조회로 빠져 게이트를 그냥 통과했다.
   const row = keyword
@@ -410,6 +421,9 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   const winners = readStrategyWinners();
 
   const micro = resolveAssignment().micro;
+  // 브랜드 슬러그는 여기서 한 번 고정한다 — 프롬프트 조립과 후보 루프가 LLM 왕복(수 초)을 여러 번 건너므로
+  // 그 사이 브랜드가 전환되면 기각 기억을 A 로 읽고 B 에 쓰게 된다(아래 ResearchState 의 slug 고정과 같은 버그).
+  const slug = activeBrandSlug() || '';
 
   // 브랜드 설정 시: 주제를 브랜드 제품·타겟에 조향 + 콜드스타트는 시드 키워드에서 출발 +
   // subNiche 를 제품 라인으로 제약(기존 서브니치 EWMA 가 그대로 '제품 라인별 성과 학습'이 된다).
@@ -474,6 +488,10 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     //     옆에 붙여야 두뇌가 '이 표기로 몇 명이 찾는가'까지 함께 본다. 스냅샷 없음·킬스위치 off 면 빈 문자열.
     //     쿨다운 계열 행은 뺀다 — 금지된 계열이 '수요 있는 소재'로 표에 남으면 지시끼리 충돌한다.
     demandSignalBlock(activeBrandSlug() || '', cdown.excludeTokens) +
+    // ③-a' 수요 미달로 이미 기각된 키워드(2026-08-27): 재제안 금지 목록. 수요 표 바로 뒤에 붙여야
+    //      '수요가 있는 것'과 '이미 없다고 실측된 것'을 두뇌가 한 자리에서 본다. 항목 없으면 빈 문자열.
+    //      아래 [신호 우선순위]의 "금지가 항상 이긴다"가 이 블록에도 그대로 적용된다(줄 변경 불필요).
+    demandRejectBlock(slug) +
     // ③-b 유튜브 니치 동향(2026-08-25): 최근 7일 조회 상위 영상 — 소재·프레이밍의 실반응 신호.
     ytNicheBlock(undefined, cdown.excludeTokens) +
     // ④ 계열 쿨다운 v2(감쇠 점수): 하드=금지(아래 후보 게이트가 코드로도 기각), 소프트=회피 권고 + 빈 방향 유도.
@@ -510,7 +528,10 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // 그 상태에서 "조회 없음 채택" 같은 줄을 남기면 하지도 않은 측정을 했다고 로그가 주장하게 된다.
     const demandOn = CONFIG.topicDemandGate && searchAdEnabled();
     const demandCfg = { minVolume: CONFIG.topicDemandMinVolume, minSeason: CONFIG.topicDemandMinSeason };
-    const demandTargets = demandOn ? cands.map((c) => c.keyword).filter((k): k is string => !!k) : [];
+    // 기억된 기각 키워드는 조회 대상에서 뺀다(2026-08-27) — 판정은 기억으로 이미 나 있으므로 조회 비용 0.
+    const demandTargets = demandOn
+      ? cands.map((c) => c.keyword).filter((k): k is string => !!k && !demandRejectFor(slug, k))
+      : [];
     // 후보 계열 분류(라운드당 micro 1콜, 실패 시 결정적 폴백 + 원장 키 포함 대조 보강) + 게이트 선계산.
     // 소프트 후보는 뒤로 미룬다(안정 정렬) — none 후보가 있으면 그쪽을 먼저 채택.
     // 계열 분류와 수요 조회는 서로 무관한 외부 왕복이라 같이 기다린다(틱 지연을 직렬로 늘리지 않게).
@@ -582,9 +603,23 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       // 2라운드까지 전멸하면 null 을 반환해 슬롯이 선다. 그래서 마지막 라운드에서는 하한 미달을 기각이
       // 아니라 후순위로 낮춘다(아래 소재 포화 게이트의 'attempt 0 에서만 … 기아 방지' 선례와 같은 형태).
       // 첫 라운드는 종전대로 하드 기각이라 사유가 rejectNote 로 두뇌에 전달돼 2라운드 제안이 실제로 바뀐다.
-      const demand = demandGateDecision(demandRows, keyword, demandCfg, { relax: attempt === IDEA_ROUNDS - 1 });
+      //
+      // 기각 기억(2026-08-27) — 지난 틱에 실측으로 하한 미달을 받은 키워드는 조회 없이 그때의 줄로 기각하고,
+      // 이번 틱에 새로 난 API 기각은 기억에 남긴다. 이미 기억된 건은 다시 쓰지 않는다(쓰면 읽을 때마다
+      // ts 가 갱신돼 TTL 30일이 영영 끝나지 않는다).
+      // 기억 조회에는 `demandOn`(검색광고 키 여부)을 걸지 않는다 — 기억은 이미 받아 둔 실측이라 키가
+      // 필요 없고(그게 '재조회 0'의 요점), 프롬프트의 금지 블록은 CONFIG.topicDemandGate 만 보므로
+      // 여기에 키 조건을 더하면 "제안 금지"라고 시켜 놓고 게이트는 통과시키는 지시 충돌이 난다.
+      const remembered = demandRejectFor(slug, keyword);
+      const demand = demandGateDecision(demandRows, keyword, demandCfg, {
+        relax: attempt === IDEA_ROUNDS - 1,
+        ...(remembered ? { remembered: { line: remembered.line } } : {}),
+      });
       if (demand.verdict === 'reject') {
-        console.log(`[auto-cycle] 아이디어 기각(검색 수요 미달) — "${title}" (${demand.line})`);
+        console.log(remembered
+          ? `[auto-cycle] 아이디어 기각(검색 수요 미달·기억) — "${title}" (${demand.line})`
+          : `[auto-cycle] 아이디어 기각(검색 수요 미달) — "${title}" (${demand.line})`);
+        if (!remembered && keyword) rememberDemandReject(slug, keyword, demand.line);
         rejects.push(`"${title}"=검색 수요 미달(${demand.line})`);
         continue;
       }
@@ -630,6 +665,9 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         console.log(demand.relaxed
           ? `[auto-cycle] 아이디어 후순위(검색 수요 미달·기아 방지) — "${title}" (${demand.line})`
           : `[auto-cycle] 아이디어 후순위(검색 비수기) — "${title}" (${demand.line})`);
+        // relaxed=true 는 'API 판정이 reject 였는데 밸브가 후순위로 낮췄다'는 뜻이라 기억 대상이다
+        // (비수기 demote 는 아니다 — 그건 수요가 있는데 지금이 아닐 뿐이라 다음 시즌에 다시 제안돼야 한다).
+        if (demand.relaxed && !remembered && keyword) rememberDemandReject(slug, keyword, demand.line);
         // 후순위 사유도 노트에 남긴다(2026-08-26 최종 리뷰 M3) — 종전엔 rejects 가 비어 2라운드 노트가
         // "전부 무효"로 나가, 두뇌는 뭐가 문제였는지(비수기냐 수요 미달이냐) 모른 채 다시 제안했다.
         // 보관 자격(계열 none)과 무관하게 기록한다 — 노트는 두뇌에게 주는 정보고, 보관은 별개 판단이다.

@@ -467,3 +467,24 @@ describe('pickRoundAdoption — 후순위 vs 유사 폴백(순수)', () => {
     expect(pickRoundAdoption([e('수요미달', 1), e('비수기', 0)], true)).toEqual({ source: 'demoted', pick: e('비수기', 0) });
   });
 });
+
+describe('demandGateDecision — 기억된 수요 미달(opts.remembered)', () => {
+  const cfg = { minVolume: 30, minSeason: 0.25 };
+  const rich = new Map<string, DemandRow>([
+    ['가을 거름', { keyword: '가을 거름', volume: 5400, approx: false, familyMax: 5400 }],
+  ]);
+
+  it('remembered 가 있으면 rows 를 무시하고 그때의 실측 줄로 기각한다(재조회 0)', () => {
+    expect(demandGateDecision(rich, '가을 거름', cfg, { remembered: { line: '"가을 거름" 0/월(계열 최대 0)' } }))
+      .toEqual({ verdict: 'reject', line: '"가을 거름" 0/월(계열 최대 0)' });
+  });
+
+  it('마지막 라운드 완화(relax)는 기억에도 그대로 적용된다 — 후순위(relaxed)', () => {
+    expect(demandGateDecision(new Map(), '가을 거름', cfg, { relax: true, remembered: { line: 'L' } }))
+      .toEqual({ verdict: 'demote', line: 'L', relaxed: true });
+  });
+
+  it('remembered 가 없으면 종전 동작 그대로', () => {
+    expect(demandGateDecision(rich, '가을 거름', cfg).verdict).toBe('pass');
+  });
+});

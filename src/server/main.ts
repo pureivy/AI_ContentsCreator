@@ -68,7 +68,7 @@ import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shor
 import { harvestTopicVerdicts, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { seriesGateForText, ensureSeriesLabels } from '../analytics/seriesLedger';
 import { refreshTrendSnapshot } from '../analytics/trendSignal';
-import { refreshDemandSnapshot, assessCandidatesDemand, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
+import { refreshDemandSnapshot, assessCandidatesDemand, demandRejectFor, rememberDemandReject, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
 import { searchAdEnabled } from '../grounding/naver_searchad';
 import { refreshYtNicheSnapshot } from '../analytics/ytNiche';
 import { syncCardnewsPerformance, cardnewsPerfStale } from '../analytics/cardnewsPerf';
@@ -3467,13 +3467,21 @@ async function demandCheckFor(
   keyword: string,
   where: '예고' | '클러스터',
   signal?: AbortSignal,
+  slug: string = activeBrandSlug() || '',
 ): Promise<{ verdict: DemandVerdict; line: string }> {
   if (!CONFIG.topicDemandGate || !searchAdEnabled()) return { verdict: 'unknown', line: '' };
+  const cfg = { minVolume: CONFIG.topicDemandMinVolume, minSeason: CONFIG.topicDemandMinSeason };
+  // 기각 기억(2026-08-27) — 지난 틱에 실측으로 하한 미달이 확정된 키워드는 API 를 부르지 않는다(조회 비용 0).
+  // 세 경로(후보 루프·예고·클러스터)가 같은 원장을 공유해야, 어느 경로에서 떨어진 키워드든 다른 경로로
+  // 되돌아오지 않는다. 여기엔 기아 방지 밸브가 없다(단건 판정이라 '후보 전멸' 개념 자체가 없음).
+  const remembered = demandRejectFor(slug, keyword);
+  if (remembered) return demandGateDecision(new Map(), keyword, cfg, { remembered: { line: remembered.line } });
   // 레그 단위로 삼킨다 — 커넥터 예외가 틱 전체(예고 이행·형제 소진)를 날리면 안 된다(scheduler 와 동일 규약).
   const rows = await assessCandidatesDemand([keyword], signal).catch(() => new Map<string, DemandRow>());
-  const d = demandGateDecision(rows, keyword, { minVolume: CONFIG.topicDemandMinVolume, minSeason: CONFIG.topicDemandMinSeason });
+  const d = demandGateDecision(rows, keyword, cfg);
   // 기각은 각 경로가 자기 문구로 남긴다(폐기·제외 처리와 한 줄로 붙어야 읽힌다). 나머지는 여기서 1줄.
   if (d.verdict !== 'reject') console.log(`[auto-cycle] 수요 게이트(${where}) — "${keyword.slice(0, 40)}" ${d.line || '조회 없음'}`);
+  else rememberDemandReject(slug, keyword, d.line);
   return { verdict: d.verdict, line: d.line };
 }
 
@@ -3525,7 +3533,7 @@ async function pickAutoWork(signal?: AbortSignal, force = false): Promise<AutoWo
           // 검색 수요 게이트(2026-08-26 리뷰 C1) — 기존 검사(범위·포화) 뒤, 채택 직전.
           // 미달은 pending 유지가 아니라 dropped 다: 월 검색량은 기다린다고 바뀌지 않아(포화처럼 시간이
           // 풀어 주는 조건이 아니다) pending 으로 두면 틱마다 재조회하며 영원히 미이행으로 남는다.
-          const dem = await demandCheckFor(due.topic, '예고', signal);
+          const dem = await demandCheckFor(due.topic, '예고', signal, tickBrand);
           if (dem.verdict === 'reject') {
             promiseStore().update(due.id, { status: 'dropped' });
             console.log(`[auto-cycle] 예고 폐기(검색 수요 미달) — "${due.topic.slice(0, 40)}" (${dem.line})`);
@@ -3575,7 +3583,7 @@ async function pickAutoWork(signal?: AbortSignal, force = false): Promise<AutoWo
             // 검색 수요 게이트(2026-08-26 리뷰 C1) — 형제는 자동완성 유래라 약한 자연 방어가 있지만
             // 검색량 자체는 검증된 적이 없다. 미달이면 리서치 폐기 소급과 같은 메커니즘(dropped)으로
             // 백로그에서 빼고(사유는 로그) 다음 경로(신규 아이디어)로 진행한다.
-            const dem = await demandCheckFor(cand.keyword, '클러스터', signal);
+            const dem = await demandCheckFor(cand.keyword, '클러스터', signal, tickBrand);
             if (dem.verdict === 'reject') {
               clusterStore().update(cand.id, { status: 'dropped' });
               console.log(`[auto-cycle] 클러스터 기각(검색 수요 미달) — "${cand.keyword}" (${dem.line}) → dropped`);

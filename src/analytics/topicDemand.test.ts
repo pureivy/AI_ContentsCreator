@@ -434,3 +434,107 @@ describe('스냅샷 IO — 킬스위치·시드 슬롯·하루 1회·실패 시 
     expect(demandSignalBlock()).toBe('');
   });
 });
+
+describe('수요 미달 기각 기억 — TTL·정규화 대조·킬스위치·제안 금지 블록', () => {
+  let tmp: string;
+  const rejFile = (slug = '테스트나무'): string => path.join(tmp, 'analytics', `demand-rejects-${slug}.json`);
+  const mockCfg = (over: Record<string, unknown> = {}): void => {
+    vi.doMock('../config', () => ({
+      CONFIG: { dataDir: tmp, topicDemandGate: true, topicDemandMinVolume: 30, topicDemandMinSeason: 0.25, ...over },
+    }));
+    vi.resetModules();
+  };
+  const seedFile = (map: Record<string, { keyword: string; line: string; ts: string }>): void => {
+    fs.mkdirSync(path.dirname(rejFile()), { recursive: true });
+    fs.writeFileSync(rejFile(), JSON.stringify(map), 'utf-8');
+  };
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'demand-rej-'));
+    fs.writeFileSync(path.join(tmp, 'brand.yaml'), 'name: 테스트나무\n', 'utf-8');
+    mockCfg();
+  });
+  afterEach(() => { vi.doUnmock('../config'); vi.resetModules(); });
+
+  it('TTL 은 30일이고, 기록한 키워드를 그 실측 줄과 함께 되읽는다', async () => {
+    const m = await import('./topicDemand');
+    expect(m.DEMAND_REJECT_TTL_DAYS).toBe(30);
+    m.rememberDemandReject('테스트나무', '가을 거름', '"가을 거름" 0/월(계열 최대 0)');
+    expect(m.demandRejectFor('테스트나무', '가을 거름')).toMatchObject({
+      keyword: '가을 거름', line: '"가을 거름" 0/월(계열 최대 0)',
+    });
+    expect(m.demandRejectFor('테스트나무', '봄 거름')).toBeNull();
+  });
+
+  it('정규화 대조 — "가을거름"과 "가을 거름"은 같은 키워드다', async () => {
+    const m = await import('./topicDemand');
+    m.rememberDemandReject('테스트나무', '가을 거름', 'L');
+    expect(m.demandRejectFor('테스트나무', '가을거름')?.keyword).toBe('가을 거름');
+    expect(m.demandRejectFor('테스트나무', '  가을   거름  ')?.keyword).toBe('가을 거름');
+    expect(m.demandRejectFor('테스트나무', undefined)).toBeNull();
+  });
+
+  it('30일이 지나면 무시(null)하고 다음 쓰기에서 파일에서도 정리된다', async () => {
+    const m = await import('./topicDemand');
+    const t0 = new Date('2026-07-01T00:00:00.000Z');
+    m.rememberDemandReject('테스트나무', '묵은 키워드', 'L', t0);
+    expect(m.demandRejectFor('테스트나무', '묵은 키워드', new Date('2026-07-30T00:00:00.000Z'))).not.toBeNull();
+    expect(m.demandRejectFor('테스트나무', '묵은 키워드', new Date('2026-08-05T00:00:00.000Z'))).toBeNull();
+    m.rememberDemandReject('테스트나무', '새 키워드', 'L2', new Date('2026-08-05T00:00:00.000Z'));
+    expect(Object.keys(JSON.parse(fs.readFileSync(rejFile(), 'utf-8')))).toEqual([m.normKw('새 키워드')]);
+  });
+
+  it('킬스위치 off 면 no-op — 파일을 만들지 않고 조회·블록도 침묵한다', async () => {
+    mockCfg({ topicDemandGate: false });
+    const m = await import('./topicDemand');
+    m.rememberDemandReject('테스트나무', '가을 거름', 'L');
+    expect(fs.existsSync(rejFile())).toBe(false);
+    expect(m.demandRejectFor('테스트나무', '가을 거름')).toBeNull();
+    expect(m.demandRejectBlock('테스트나무')).toBe('');
+  });
+
+  it('킬스위치 off 는 이미 쌓인 파일이 있어도 조회·블록을 침묵시킨다', async () => {
+    seedFile({ 가을거름: { keyword: '가을 거름', line: 'L', ts: new Date().toISOString() } });
+    mockCfg({ topicDemandGate: false });
+    const m = await import('./topicDemand');
+    expect(m.demandRejectFor('테스트나무', '가을 거름')).toBeNull();
+    expect(m.demandRejectBlock('테스트나무')).toBe('');
+  });
+
+  it('항목이 없으면 블록은 빈 문자열(무주입)', async () => {
+    const m = await import('./topicDemand');
+    expect(m.demandRejectBlock('테스트나무')).toBe('');
+  });
+
+  it('블록은 헤더 + 최근순 15줄 상한 + 지침 1줄', async () => {
+    const m = await import('./topicDemand');
+    for (let i = 0; i < 20; i++) {
+      m.rememberDemandReject('테스트나무', `키워드${i}`, `"키워드${i}" 0/월`, new Date(Date.UTC(2026, 7, 20, i)));
+    }
+    const b = m.demandRejectBlock('테스트나무', new Date(Date.UTC(2026, 7, 21)));
+    expect(b).toContain('[검색 수요 미달로 기각된 키워드 — 30일간 제안 금지]');
+    const items = b.split('\n').filter((l) => l.startsWith('- '));
+    expect(items.length).toBe(15);
+    expect(items[0]).toBe('- "키워드19" ("키워드19" 0/월)');   // 최근순
+    expect(b).not.toContain('키워드0');                        // 가장 오래된 5개는 잘린다
+    expect(b).toContain('이 키워드와 띄어쓰기만 다른 변형도 같은 키워드다. 대신 검색량이 있는 상위 카테고리어로 주제를 세워라.');
+  });
+
+  it('만료 항목은 블록에도 싣지 않는다(금지 지시와 실제 게이트가 어긋나면 안 된다)', async () => {
+    seedFile({
+      묵은키워드: { keyword: '묵은 키워드', line: 'L1', ts: '2026-07-01T00:00:00.000Z' },
+      새키워드: { keyword: '새 키워드', line: 'L2', ts: '2026-08-20T00:00:00.000Z' },
+    });
+    const m = await import('./topicDemand');
+    const b = m.demandRejectBlock('테스트나무', new Date('2026-08-21T00:00:00.000Z'));
+    expect(b).toContain('새 키워드');
+    expect(b).not.toContain('묵은');
+  });
+
+  it('브랜드별로 격리된다 — 다른 슬러그의 기억은 보이지 않는다', async () => {
+    const m = await import('./topicDemand');
+    m.rememberDemandReject('테스트나무', '가을 거름', 'L');
+    expect(m.demandRejectFor('다른브랜드', '가을 거름')).toBeNull();
+    expect(m.demandRejectBlock('다른브랜드')).toBe('');
+    expect(fs.existsSync(rejFile('다른브랜드'))).toBe(false);
+  });
+});

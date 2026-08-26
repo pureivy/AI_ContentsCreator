@@ -363,3 +363,88 @@ export function demandSignalBlock(slug?: string, excludeTokens: string[] = []): 
   if (!CONFIG.topicDemandGate) return '';
   try { return buildDemandBlock(readDemandSnap(slug), Date.now(), excludeTokens); } catch { return ''; }
 }
+
+// ============================================================
+// 수요 미달 기각 기억(2026-08-27, 사용자 지시) — 틱 간에 남는 '이미 실측으로 떨어진 키워드' 원장.
+//
+// 종전 게이트는 틱 안에서만 기억했다. 그래서 두뇌가 같은 롱테일("가을 거름")을 다음 틱에 또 제안하면
+// 검색광고를 또 부르고 또 기각했다 — 조회 비용은 매번 새로 들고, 두뇌는 자기가 이미 기각당한 표기를
+// 모르니 같은 자리를 계속 맴돌았다. 기각을 30일 기억해 (a) 조회 자체를 건너뛰고 (b) 프롬프트에
+// '제안 금지' 블록으로 되먹여 두뇌가 상위 카테고리어로 올라가게 만든다.
+//
+// TTL 이 있는 이유: 수요는 계절을 탄다. 8월에 0/월이던 표기가 11월엔 살아날 수 있으므로 영구 금지는
+// 과차단이다. 만료 판정은 읽기·블록 양쪽에서 함께 본다 — 블록만 낡은 항목을 실으면 "제안 금지"라고
+// 시켜 놓고 게이트는 통과시키는 지시 충돌이 난다(buildDemandBlock 의 쿨다운 필터와 같은 이유).
+// 킬스위치(topicDemandGate) off 면 읽기·쓰기·블록 전부 0 — 파일조차 만들지 않는다.
+// ============================================================
+
+export const DEMAND_REJECT_TTL_DAYS = 30;
+
+export interface DemandRejectEntry { keyword: string; line: string; ts: string }
+type DemandRejectMap = Record<string, DemandRejectEntry>;
+
+const REJECT_BLOCK_ROWS = 15;
+
+function rejectPath(slug: string): string {
+  return path.join(CONFIG.dataDir, 'analytics', slug ? `demand-rejects-${slug}.json` : 'demand-rejects.json');
+}
+
+function readRejects(slug: string): DemandRejectMap {
+  try {
+    const raw = JSON.parse(fs.readFileSync(rejectPath(slug), 'utf-8')) as unknown;
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as DemandRejectMap : {};
+  } catch { return {}; }
+}
+
+/** 만료 전인가(순수) — ts 가 없거나 파싱 불가면 '못 믿는 항목'이라 만료로 본다(보수적). */
+function rejectFresh(e: DemandRejectEntry | undefined, now: Date): boolean {
+  const t = e && typeof e.ts === 'string' ? new Date(e.ts).getTime() : NaN;
+  if (!Number.isFinite(t)) return false;
+  return now.getTime() - t < DEMAND_REJECT_TTL_DAYS * 86_400_000;
+}
+
+/**
+ * 기각 기록(upsert) — 쓰기 때마다 만료 항목을 함께 걷어낸다(원장이 무한히 자라지 않게).
+ * 실패는 전부 삼킨다: 후보 루프 한가운데서 호출되므로 여기서 throw 하면 틱 전체가 날아간다.
+ */
+export function rememberDemandReject(slug: string, keyword: string, line: string, now = new Date()): void {
+  if (!CONFIG.topicDemandGate) return;
+  const k = normKw(keyword);
+  if (!k) return;
+  try {
+    const next: DemandRejectMap = {};
+    for (const [key, e] of Object.entries(readRejects(slug))) if (rejectFresh(e, now)) next[key] = e;
+    next[k] = { keyword: (keyword || '').trim(), line, ts: now.toISOString() };
+    const f = rejectPath(slug);
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    // 스냅샷과 같은 원자적 쓰기 규약(tmp+rename, tmp 이름에 pid) — 자율 틱의 읽기가 찢어진 JSON 을 안 만나게.
+    const tmp = `${f}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(next, null, 2), 'utf-8');
+    fs.renameSync(tmp, f);
+  } catch (e) {
+    console.log(`[demand] 기각 기억 실패(무해): ${errMsg(e)}`);
+  }
+}
+
+/** 기억 조회 — 정규화 대조라 '가을거름'과 '가을 거름'이 갈리지 않는다. 만료·킬스위치 off 는 null.
+ *  읽기 경로는 절대 쓰지 않는다(후보마다 호출된다 — 여기서 정리·저장하면 TTL 이 읽을 때마다 갱신된다). */
+export function demandRejectFor(slug: string, keyword: string | undefined, now = new Date()): DemandRejectEntry | null {
+  if (!CONFIG.topicDemandGate || !keyword) return null;
+  const k = normKw(keyword);
+  if (!k) return null;
+  const e = readRejects(slug)[k];
+  return rejectFresh(e, now) ? e! : null;
+}
+
+/** 주제 두뇌 주입용 '제안 금지' 블록 — 항목 없음·전부 만료·킬스위치 off 면 빈 문자열(무주입). */
+export function demandRejectBlock(slug: string, now = new Date()): string {
+  if (!CONFIG.topicDemandGate) return '';
+  const items = Object.values(readRejects(slug))
+    .filter((e) => rejectFresh(e, now))
+    .sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0))   // 최근순 — 오래된 것부터 목록에서 밀린다
+    .slice(0, REJECT_BLOCK_ROWS);
+  if (!items.length) return '';
+  return `[검색 수요 미달로 기각된 키워드 — ${DEMAND_REJECT_TTL_DAYS}일간 제안 금지]\n`
+    + items.map((e) => `- "${e.keyword}" (${e.line})`).join('\n') + '\n'
+    + '이 키워드와 띄어쓰기만 다른 변형도 같은 키워드다. 대신 검색량이 있는 상위 카테고리어로 주제를 세워라.\n\n';
+}
