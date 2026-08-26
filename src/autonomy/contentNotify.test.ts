@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   escapeHtml, stripMarkdown, reviewLink, studioBase,
-  blogReadyHtml, cardnewsCaptionHtml, shortsCaptionHtml,
+  blogReadyHtml, cardnewsCaptionHtml, shortsCaptionHtml, factGateLines,
 } from './contentNotify';
 
 describe('escapeHtml', () => {
@@ -87,5 +87,25 @@ describe('shortsCaptionHtml', () => {
     expect(cap).toContain('쇼츠 검토 대기 · bionditree');
     expect(cap).toContain('42초 · 씬 6개 · 서다인');
     expect(cap).toContain('?piece=piece_src');
+  });
+});
+
+describe('factGateLines — 텔레그램 보류 표시(스펙 §2-3)', () => {
+  it('hold 면 건수와 문장(80자 절단)을 최대 N개', () => {
+    const s = factGateLines({ status: 'hold', unsupported: ['a'.repeat(100), 'b'], contradicted: ['c ← 근거: d'], checkedTs: 't' }, 2);
+    expect(s.split('\n')[0]).toBe('⚠ 사실 게이트 보류 3건 — 근거 없음 2 · 모순 1');
+    expect(s).toContain('• ' + 'a'.repeat(80) + '…');
+    expect(s).toContain('• b');
+    expect(s).not.toContain('• c ←'); // maxItems 2 — 세 번째 항목은 잘린다
+  });
+  it('error 는 판정 실패로, pass·미실행은 빈 문자열', () => {
+    expect(factGateLines({ status: 'error', unsupported: [], contradicted: [], checkedTs: 't' }, 3)).toBe('⚠ 사실 게이트 판정 실패 — 수동 검토 필요');
+    expect(factGateLines({ status: 'pass', unsupported: [], contradicted: [], checkedTs: 't' }, 3)).toBe('');
+    expect(factGateLines(undefined, 3)).toBe('');
+  });
+  it('블로그 메시지·카드 캡션에 들어간다(HTML 이스케이프)', () => {
+    const fg = { status: 'hold' as const, unsupported: ['5cm <두께>'], contradicted: [], checkedTs: 't' };
+    expect(blogReadyHtml({ id: 'p1', title: 'T', factGate: fg }, '')).toContain('5cm &lt;두께&gt;');
+    expect(cardnewsCaptionHtml({ id: 'c1', topic: 'T', factGate: fg })).toContain('⚠ 원문 정합 보류 1건');
   });
 });

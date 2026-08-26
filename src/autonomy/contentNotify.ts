@@ -14,19 +14,24 @@ import {
   sendTelegramHtml, sendTelegramPhotos, sendTelegramVideo,
 } from './notify';
 import type { TgButton } from './notify';
+import type { FactGateInfo } from '../content/factGate';
 
 export interface BlogReadyInfo {
   id: string; title?: string; keyword?: string; seoScore?: number; brand?: string;
   /** 개정 런(자동 SEO 리비전·수동 수정요청) 산출물 — '↻ 개정본' 라벨로 원본 알림과 구분(중복 오해 방지). */
   revised?: boolean;
+  /** 사실 게이트 판정 요약(스펙 §2-3) — hold·error 면 검토 알림에 보류 사유를 동봉. */
+  factGate?: FactGateInfo;
 }
 export interface CardReadyInfo {
   id: string; topic: string; brand?: string; slides?: number; sourcePieceId?: string;
   planner?: string; designer?: string;
+  factGate?: FactGateInfo;
 }
 export interface ShortsReadyInfo {
   id: string; topic: string; brand?: string; durationSec?: number; scenes?: number;
   sourcePieceId?: string; writer?: string; director?: string;
+  factGate?: FactGateInfo;
 }
 
 /** 알림 발송 조건(킬스위치 + 채널 설정) — advancePieceReady 가 사이클 완료 알림 중복 억제 판정에도 쓴다. */
@@ -85,6 +90,16 @@ const clip = (s: string, cap: number): string => (s.length > cap ? `${s.slice(0,
 
 const blogReadyLabel = (revised?: boolean): string => (revised ? '↻ 블로그 개정본 검토 대기' : '📝 블로그 초안 검토 대기');
 
+/** 보류 표시 줄(평문, 순수) — 호출측이 escapeHtml 로 감싼다. 파생은 라벨만 '원문 정합'. */
+export function factGateLines(info: FactGateInfo | undefined, maxItems: number, label = '사실 게이트'): string {
+  if (!info) return '';
+  if (info.status === 'error') return `⚠ ${label} 판정 실패 — 수동 검토 필요`;
+  if (info.status !== 'hold') return '';
+  const items = [...info.unsupported, ...info.contradicted].slice(0, maxItems)
+    .map((s) => `• ${s.length > 80 ? `${s.slice(0, 80)}…` : s}`);
+  return [`⚠ ${label} 보류 ${info.unsupported.length + info.contradicted.length}건 — 근거 없음 ${info.unsupported.length} · 모순 ${info.contradicted.length}`, ...items].join('\n');
+}
+
 /** 블로그 ready 텔레그램 메시지(HTML). 순수 — 테스트 대상. */
 export function blogReadyHtml(p: BlogReadyInfo, excerpt: string): string {
   const meta = [p.keyword, typeof p.seoScore === 'number' ? `SEO ${p.seoScore}점` : '']
@@ -93,6 +108,7 @@ export function blogReadyHtml(p: BlogReadyInfo, excerpt: string): string {
     escapeHtml(`${blogReadyLabel(p.revised)}${brandTag(p.brand)}`),
     `<b>${escapeHtml(clip(p.title ?? '(제목 미정)', 200))}</b>`,
     meta ? escapeHtml(meta) : '',
+    factGateLines(p.factGate, 3) ? escapeHtml(factGateLines(p.factGate, 3)) : '',
     excerpt ? `\n${escapeHtml(excerpt)}` : '',
     `\n검토: ${reviewLink(p.id)}`,
   ].filter(Boolean).join('\n');
@@ -105,6 +121,7 @@ export function cardnewsCaptionHtml(c: CardReadyInfo): string {
     escapeHtml(`🖼 카드뉴스 검토 대기${brandTag(c.brand)}`),
     `<b>${escapeHtml(clip(c.topic, 200))}</b>`,
     escapeHtml([typeof c.slides === 'number' ? `${c.slides}장` : '', staff].filter(Boolean).join(' · ')),
+    factGateLines(c.factGate, 2, '원문 정합') ? escapeHtml(factGateLines(c.factGate, 2, '원문 정합')) : '',
     `검토: ${reviewLink(c.sourcePieceId)}`,
   ].filter(Boolean).join('\n');
 }
@@ -121,6 +138,7 @@ export function shortsCaptionHtml(s: ShortsReadyInfo): string {
     escapeHtml(`🎬 쇼츠 검토 대기${brandTag(s.brand)}`),
     `<b>${escapeHtml(clip(s.topic, 200))}</b>`,
     specs ? escapeHtml(specs) : '',
+    factGateLines(s.factGate, 2, '원문 정합') ? escapeHtml(factGateLines(s.factGate, 2, '원문 정합')) : '',
     `검토: ${reviewLink(s.sourcePieceId)}`,
   ].filter(Boolean).join('\n');
 }

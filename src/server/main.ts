@@ -56,7 +56,9 @@ import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame } from '../tools/shortsRender';
 import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
-import { pieceStore, selectResumablePiece, blogUrlForPiece } from '../content/pieces';
+import { pieceStore, selectResumablePiece, blogUrlForPiece, autoDraftBlockedByFactGate } from '../content/pieces';
+import { toFactGateInfo } from '../content/factGate';
+import { readFactGate } from '../sessions/digest';
 import { listPersonas } from '../content/personas';
 import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeBrandSlug, deleteBrand, isSafeBrandSlug, offBrandTerm, lintLexicon } from '../content/brand';
 import type { BrandProfile } from '../content/brand';
@@ -318,7 +320,7 @@ function restoreDeferredReadyNotify(pieceId: string): void {
     const p = pieceStore().get(pieceId);
     if (!p || p.stage !== 'ready' || p.notifiedTs || !contentReadyNotifyEnabled()) return;
     console.log(`[발행담당] 리비전 미완주 — 원본 초안 검토 대기 알림 복원(${p.id})`);
-    void notifyBlogReady({ id: p.id, title: p.title, keyword: p.keyword, seoScore: p.seoScore, brand: p.brand }, p.runId ?? '')
+    void notifyBlogReady({ id: p.id, title: p.title, keyword: p.keyword, seoScore: p.seoScore, brand: p.brand, factGate: p.factGate }, p.runId ?? '')
       .finally(() => { try { pieceStore().update(p.id, { notifiedTs: new Date().toISOString() }); } catch { /* 무해 */ } });
   } catch { /* 무해 — 부팅 복구 스윕이 최후 방어선 */ }
 }
@@ -329,11 +331,13 @@ function restoreDeferredReadyNotify(pieceId: string): void {
 function advancePieceReady(pieceId: string, runId: string, deliverable: string, revised = false): boolean {
   const draft = readDraftMeta(runId);
   if (!draft && !deliverable.trim()) { pieceStore().recordError(pieceId); return false; }
+  const gate = readFactGate(runId);
   pieceStore().update(pieceId, {
     runId, stage: 'ready',
     ...(draft?.title ? { title: draft.title } : {}),
     ...(typeof draft?.seoScore === 'number' ? { seoScore: draft.seoScore } : {}),
     ...(draft?.keyword ? { keyword: draft.keyword } : {}),
+    ...(gate ? { factGate: toFactGateInfo(gate) } : {}),
   });
   // ready 도달 → 자동 네이버 임시저장 게이트(SEO 기준 통과 시 발행 담당이 저장, 미달 시 자동 리비전 1회).
   // 알림보다 먼저 실행 — 리비전이 뜨면 이 초안은 곧 대체되므로 낡은 '검토 대기' 푸시를 만들지 않는다(리비전 완료가 다시 여기로 와 알림).
@@ -346,7 +350,7 @@ function advancePieceReady(pieceId: string, runId: string, deliverable: string, 
   if (owned && !revisionLaunched) {
     const p = pieceStore().get(pieceId);
     if (p) {
-      void notifyBlogReady({ id: p.id, title: p.title, keyword: p.keyword, seoScore: p.seoScore, brand: p.brand, revised }, runId)
+      void notifyBlogReady({ id: p.id, title: p.title, keyword: p.keyword, seoScore: p.seoScore, brand: p.brand, revised, factGate: p.factGate }, runId)
         .finally(() => { try { pieceStore().update(pieceId, { notifiedTs: new Date().toISOString() }); } catch { /* 무해 */ } });
     }
   }
@@ -2165,6 +2169,11 @@ function maybeAutoNaverDraft(pieceId: string): boolean {
   if (piece.naverDraftUrl) return false; // 이미 네이버에 초안 있음 — 재저장은 사람이 판단(중복 초안 방지)
   const seo = piece.seoScore;
   if (typeof seo === 'number' && seo >= CONFIG.naverDraftSeoMin) {
+    if (autoDraftBlockedByFactGate(piece)) {
+      const n = (piece.factGate?.unsupported.length ?? 0) + (piece.factGate?.contradicted.length ?? 0);
+      console.log(`[발행담당] ${piece.title.slice(0, 30)} — 사실 게이트 ${piece.factGate?.status === 'error' ? '판정 실패' : `보류 ${n}건`} → 자동 임시저장 건너뜀(수동 검토)`);
+      return false;
+    }
     const r = startNaverDraftJob(pieceId, { actor: publisherName() });
     console.log('error' in r
       ? `[발행담당] ${piece.title.slice(0, 30)} — 임시저장 기동 실패: ${r.error}`
@@ -3799,7 +3808,7 @@ if (!process.env.VITEST) {
       pieceStore().update(p.id, { notifiedTs: new Date().toISOString() });
       // eslint-disable-next-line no-console
       console.log(`[부팅 복구] 유실된 검토 알림 재발송 — ${p.title.slice(0, 30)}`);
-      void notifyBlogReady({ id: p.id, title: p.title, keyword: p.keyword, seoScore: p.seoScore, brand: p.brand }, p.runId);
+      void notifyBlogReady({ id: p.id, title: p.title, keyword: p.keyword, seoScore: p.seoScore, brand: p.brand, factGate: p.factGate }, p.runId);
     }
     // 쇼츠·카드뉴스도 동일 복구 — 단 이들은 발행 후에도 stage 가 'ready' 로 남으므로(발행은 별도 액션)
     // 아직 어느 채널에도 발행 안 된 것(진짜 검토 대기)만 대상. 산출물 파일이 없으면(삭제 등) 건너뜀.

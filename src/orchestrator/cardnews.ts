@@ -585,7 +585,7 @@ export async function reviseCardNews(
         const r = await repairCardNewsSlides(id, slideNos, opts);
         const done2 = store.get(id);
         if (r.ok && done2) {
-          void notifyCardnewsReady({ id, topic: done2.topic, brand: done2.brand, slides: done2.slides ?? plan.slides.length, sourcePieceId: done2.sourcePieceId, planner: done2.planner, designer: done2.designer }, dir).catch(() => { /* 무해 */ });
+          void notifyCardnewsReady({ id, topic: done2.topic, brand: done2.brand, slides: done2.slides ?? plan.slides.length, sourcePieceId: done2.sourcePieceId, planner: done2.planner, designer: done2.designer, factGate: done2.factGate }, dir).catch(() => { /* 무해 */ });
         }
         return { ok: r.ok, ...(r.error ? { error: r.error } : {}), changedSlides: [], fixed: r.fixed, stillBad: r.stillBad, metaChanged: false };
       }
@@ -616,7 +616,7 @@ export async function reviseCardNews(
   // 갱신 알림(슬라이드 앨범 재발송) — 사용자가 수정 결과를 바로 검수하도록. 실패 무해.
   const done = store.get(id);
   if (done) {
-    void notifyCardnewsReady({ id, topic: done.topic, brand: done.brand, slides: done.slides ?? plan.slides.length, sourcePieceId: done.sourcePieceId, planner: done.planner, designer: done.designer }, dir).catch(() => { /* 무해 */ });
+    void notifyCardnewsReady({ id, topic: done.topic, brand: done.brand, slides: done.slides ?? plan.slides.length, sourcePieceId: done.sourcePieceId, planner: done.planner, designer: done.designer, factGate: done.factGate }, dir).catch(() => { /* 무해 */ });
   }
   return { ok: true, changedSlides: applied.changedSlides, fixed, stillBad, metaChanged: applied.metaChanged };
 }
@@ -916,7 +916,7 @@ export async function runCardNewsJob(
         // 발송 정착 후 notifiedTs 기록 — 도중에 프로세스가 죽으면 미기록으로 남아 부팅 복구 스윕이 재발송.
         void notifyCardnewsReady({
           id, topic: done.topic, brand: done.brand, slides: ok,
-          sourcePieceId: done.sourcePieceId, planner: done.planner, designer: done.designer,
+          sourcePieceId: done.sourcePieceId, planner: done.planner, designer: done.designer, factGate: done.factGate,
         }, dir).finally(() => { try { store.update(id, { notifiedTs: new Date().toISOString() }); } catch { /* 무해 */ } });
       }
       // 예고 대장 등록 — 캡션에 다음 편 예고를 선언했으면 약속으로 기록(자율 틱이 시기 도래 시 이행). 실패 무해.
