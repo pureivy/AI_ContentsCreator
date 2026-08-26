@@ -37,7 +37,7 @@ import { blogUrlForPiece } from '../content/pieces';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
-import { normalizeSceneKind, fixMonthNames } from '../tools/shortsCommon';
+import { normalizeSceneKind, fixMonthNames, cutAtWordBoundary } from '../tools/shortsCommon';
 import type { EventBus } from '../events/bus';
 
 const RUNNING = new Set<string>();
@@ -67,7 +67,7 @@ interface JobIO { bus?: EventBus; signal?: AbortSignal }
 /** 수정 요청(자유 피드백) 개정안 — LLM 이 '바뀐 것만' 돌려준다. 적용은 applyShortsRevision(순수)이 검증. */
 export interface ShortsRevision {
   title?: unknown; description?: unknown; hashtags?: unknown;
-  scenes?: Array<{ index?: unknown; narration?: unknown; screenText?: unknown; regen_image?: unknown; image_note?: unknown } | null>;
+  scenes?: Array<{ index?: unknown; narration?: unknown; screenText?: unknown; regen_image?: unknown; image_note?: unknown; quote?: { text?: unknown; source?: unknown } | null } | null>;
   /** 상단 캘리 문구(영상 오버레이·썸네일 공용 카피, title-copy.json) — 바뀔 때만. */
   titleArt?: { line1?: unknown; line2?: unknown; points?: unknown } | null;
 }
@@ -94,10 +94,22 @@ export function applyShortsRevision(
     const narration = str(s?.narration, 240);
     const screenText = str(s?.screenText, 60);
     const wantRegen = s?.regen_image === true;
-    if (!narration && !screenText && !wantRegen) continue;
-    const cur = out.scenes[idx - 1]!;
-    const next = { ...cur, ...(narration ? { narration } : {}), ...(screenText ? { screenText } : {}) };
-    const textChanged = next.narration !== cur.narration || next.screenText !== cur.screenText;
+    // quote 편집은 kind='quote' 씬에만 허용 — 다른 씬에 quote 를 보내도 무시(§6a).
+    const q = s?.quote && typeof s.quote === 'object' ? s.quote as { text?: unknown; source?: unknown } : null;
+    const curScene = out.scenes[idx - 1]!;
+    const quoteText = curScene.kind === 'quote' && q ? str(q.text, 40) : '';
+    const quoteSource = curScene.kind === 'quote' && q ? cutAtWordBoundary(str(q.source, 60), 15) : '';
+    if (!narration && !screenText && !wantRegen && !quoteText && !quoteSource) continue;
+    const cur = curScene;
+    const next = {
+      ...cur,
+      ...(narration ? { narration } : {}),
+      ...(screenText ? { screenText } : {}),
+      ...(quoteText || quoteSource
+        ? { quote: { text: quoteText || cur.quote?.text || '', ...(quoteSource ? { source: quoteSource } : (cur.quote?.source ? { source: cur.quote.source } : {})) } }
+        : {}),
+    };
+    const textChanged = next.narration !== cur.narration || next.screenText !== cur.screenText || JSON.stringify(next.quote) !== JSON.stringify(cur.quote);
     if (textChanged) { out.scenes[idx - 1] = next; changed.push(idx); }
     if (wantRegen) {
       regen.push(idx);
@@ -184,7 +196,8 @@ export async function reviseShorts(
         '규칙: 의미·톤 유지 범위에서 요청을 빠짐없이 반영, 내레이션 길이는 원문과 비슷하게(재생 시간 유지), 이모지 금지.',
         '배경 그림 자체를 바꿔야 하는 요청(장면·소품·구도)이면 그 씬에 "regen_image":true 와 "image_note":"무엇을 어떻게"를 넣어라. 문구만 바뀌면 넣지 마라(배경은 무텍스트).',
         ...(artCopy ? ['상단 캘리 문구를 바꿔야 하는 요청이면 "titleArt" 에 바뀐 필드만 넣어라 — 1줄은 핵심 키워드 라벨(정확 표기 유지), 2줄은 짧은 훅. 캘리 문구와 무관한 요청이면 titleArt 를 넣지 마라.'] : []),
-        `JSON 형식: {"scenes":[{"index":씬번호,"narration":"...","screenText":"...","regen_image":false,"image_note":"..."}],"title":"...","description":"...","hashtags":["#..."]${artCopy ? ',"titleArt":{"line1":"...","line2":"...","points":["..."]}' : ''}} — 바뀌는 필드만 포함.`,
+        '인용구(quote) 씬의 문구·출처를 바꾸는 요청이면 해당 씬에 "quote":{"text":"...","source":"..."}(바뀐 필드만)를 넣어라 — quote 씬이 아니면 넣지 마라. source 는 실제 원문에 있는 출처만 적어라(지어내지 마라).',
+        `JSON 형식: {"scenes":[{"index":씬번호,"narration":"...","screenText":"...","regen_image":false,"image_note":"...","quote":{"text":"...","source":"..."}}],"title":"...","description":"...","hashtags":["#..."]${artCopy ? ',"titleArt":{"line1":"...","line2":"...","points":["..."]}' : ''}} — 바뀌는 필드만 포함.`,
       ].join('\n'),
       { maxOutputTokens: 1600, signal: opts.signal },
     ).catch(() => null);
@@ -491,6 +504,21 @@ async function fitShortsPlanToDuration(io: JobIO, plan: Plan, budgetCharsOverrid
     : keep;
 }
 
+/** quote 출처 라벨은 원문(블로그 본문)에 그 문자열이 있을 때만 유지 — 패러프레이즈에 가짜 출처("— 재배 기록")가 붙어 발행된 실측 6건 대응(스펙 §6a). */
+export function pruneQuoteSources(plan: Plan, sourceBody: string | undefined): { plan: Plan; pruned: number } {
+  const norm = (s: string) => s.replace(/\s+/g, '').toLowerCase();
+  const body = sourceBody ? norm(sourceBody) : '';
+  let pruned = 0;
+  const scenes = plan.scenes.map((s) => {
+    if (s.kind !== 'quote' || !s.quote?.source) return s;
+    if (body && body.includes(norm(s.quote.source))) return s;
+    pruned++;
+    const { source: _drop, ...rest } = s.quote;
+    return { ...s, quote: rest };
+  });
+  return { plan: { ...plan, scenes }, pruned };
+}
+
 async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = ''): Promise<Plan | null> {
   const capSec = CONFIG.shortsMaxDurationSec;
   const budgetChars = Math.floor((capSec - 5) * SHORTS_TTS_CPS);
@@ -623,7 +651,15 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       if (factGate.status === 'hold') { const m2 = `원문 정합 잔존 ${factGate.unsupported.length}건 — 검토 메시지에 표시`; console.log(`[숏폼] ${m2}`); io.bus?.emit('log', { message: m2 }); }
     }
   } catch { /* 무해 */ }
-  return plan;
+  // quote 출처 가드 — factGate 등 위에서 채운 필드는 pruneQuoteSources 가 그대로 스프레드 보존한다(fail-open).
+  try {
+    const pq = pruneQuoteSources(plan, sourceBody);
+    if (pq.pruned) {
+      const m = `quote 출처 ${pq.pruned}건 제거 — 원문에 없는 출처 라벨`;
+      console.log(`[숏폼] ${m}`); io.bus?.emit('log', { message: m });
+    }
+    return pq.plan;
+  } catch { return plan; }
 }
 
 async function designScenes(io: JobIO, topic: string, plan: Plan): Promise<{ preset: string; style: string; prompts: string[] }> {

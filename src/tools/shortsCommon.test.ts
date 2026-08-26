@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc } from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary } from './shortsCommon';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
   it('오디오 + 꼬리여백(0.6), 하한 2.8', () => {
@@ -175,5 +175,17 @@ describe('normalizeSceneKind — chart 검증', () => {
   it('defaultSceneFx chart = slide-up + subtle', async () => {
     const { defaultSceneFx } = await import('./shortsCommon');
     expect(defaultSceneFx('chart', 2, false)).toEqual({ enter: 'slide-up', intensity: 'subtle' });
+  });
+});
+
+describe('quote.source 절단 — 단어 경계(스펙 §6a, 실측 "biondi tree 재배노")', () => {
+  it('상한 안의 마지막 공백에서 자르고, 공백이 없으면 그대로 자른다', () => {
+    expect(cutAtWordBoundary('biondi tree 재배노트 2026', 15)).toBe('biondi tree');
+    expect(cutAtWordBoundary('재배기록', 15)).toBe('재배기록');
+    expect(cutAtWordBoundary('가나다라마바사아자차카타파하거너더', 15)).toBe('가나다라마바사아자차카타파하거');
+  });
+  it('normalizeSceneKind 가 quote.source 에 적용한다', () => {
+    const k = normalizeSceneKind({ kind: 'quote', quote: { text: 't', source: 'biondi tree 재배노트 2026' } });
+    expect(k.quote?.source).toBe('biondi tree');
   });
 });

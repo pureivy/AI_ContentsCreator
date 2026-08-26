@@ -38,6 +38,15 @@ export interface ShortsScene extends SceneKindFields { narration: string; screen
  */
 const asText = (v: unknown): string => (typeof v === 'string' || typeof v === 'number') ? String(v).trim() : ''; // 오브젝트 등은 '' — '[object Object]' 렌더 유출 방지
 
+/** 상한 안 마지막 공백에서 자른다(단어 경계) — 15자 하드 절단이 "재배노트"를 "재배노"로 깨던 실측 대응. */
+export function cutAtWordBoundary(s: string, max: number): string {
+  const t = s.trim();
+  if (t.length <= max) return t;
+  const head = t.slice(0, max);
+  const sp = head.lastIndexOf(' ');
+  return (sp > 0 ? head.slice(0, sp) : head).trim();
+}
+
 export function normalizeSceneKind(raw: unknown): SceneKindFields {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const kind = String(r.kind ?? '').trim().toLowerCase();
@@ -61,7 +70,7 @@ export function normalizeSceneKind(raw: unknown): SceneKindFields {
     const q = (r.quote && typeof r.quote === 'object' ? r.quote : {}) as Record<string, unknown>;
     const text = asText(q.text).slice(0, 40);
     if (!text) return {};
-    const source = asText(q.source).slice(0, 15);
+    const source = cutAtWordBoundary(asText(q.source), 15);
     return { kind: 'quote', quote: { text, ...(source ? { source } : {}) } };
   }
   if (kind === 'chart') {

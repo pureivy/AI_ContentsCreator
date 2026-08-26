@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyShortsRevision, trimPlanToBudget } from './shorts';
+import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources } from './shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
 
@@ -78,5 +78,30 @@ describe('applyShortsRevision — 수정 요청 개정안 적용(순수)', () =>
     expect(applyShortsRevision(base, { titleArt: { line2: '손끝으로 답 찾기' } }, cur)).toBeNull();
     expect(applyShortsRevision(base, { titleArt: { line2: '새 훅' } })).toBeNull(); // 현 카피 없음 → 무시
     expect(applyShortsRevision(base, { titleArt: { line2: '새 훅' } }, null)).toBeNull();
+  });
+});
+
+const P = (scenes: Array<Record<string, unknown>>) => ({ title: 't', titles: ['t'], scenes, description: '', hashtags: [] }) as never;
+describe('pruneQuoteSources — 원문에 없는 출처 라벨 제거(스펙 §6a)', () => {
+  it('원문에 문자열이 있으면 유지, 없으면 source 만 삭제, 원문 없으면 전부 삭제', () => {
+    const plan = P([
+      { narration: 'a', kind: 'quote', quote: { text: 'q1', source: '농사로' } },
+      { narration: 'b', kind: 'quote', quote: { text: 'q2', source: '재배 기록' } },
+      { narration: 'c' },
+    ]);
+    const r = pruneQuoteSources(plan, '농사로 자료에 따르면 …');
+    expect(r.pruned).toBe(1);
+    expect(r.plan.scenes[0]!.quote).toEqual({ text: 'q1', source: '농사로' });
+    expect(r.plan.scenes[1]!.quote).toEqual({ text: 'q2' });
+    expect(pruneQuoteSources(plan, undefined).pruned).toBe(2);
+  });
+});
+describe('applyShortsRevision — quote 편집', () => {
+  it('kind=quote 씬만 text·source 를 바꾼다', () => {
+    const plan = P([{ narration: 'a', kind: 'quote', quote: { text: 'old', source: 's' } }, { narration: 'b' }]);
+    const r = applyShortsRevision(plan, { scenes: [{ index: 1, quote: { text: 'new', source: '농사로' } }, { index: 2, quote: { text: 'x' } }] });
+    expect(r?.plan.scenes[0]!.quote).toEqual({ text: 'new', source: '농사로' });
+    expect(r?.plan.scenes[1]!.quote).toBeUndefined();
+    expect(r?.changedScenes).toEqual([1]);
   });
 });
