@@ -22,7 +22,8 @@ import { notifyShortsReady } from '../autonomy/contentNotify';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
 import { qaSceneClips } from './shortsClipQa';
-import { standaloneIssues } from './standaloneQa';
+import { standaloneIssues, parityIssues, parityToInfo } from './standaloneQa';
+import type { FactGateInfo } from '../content/factGate';
 import { narrationStyleIssues, hookKeywordLeadIssues } from '../content/styleLint';
 import { promiseStore } from '../content/promises';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
@@ -57,6 +58,8 @@ interface Plan {
   hashtags: string[];
   /** 다음 편 예고 — CTA 에 예고를 넣었을 때만 작가가 선언(예고 대장 등록 → 자율 틱이 시기 도래 시 이행). */
   next?: { topic: string; window?: string };
+  /** 원문 정합 잔존(스펙 §2-4) — 정합 문제로 수정 라운드를 돌았을 때만 재판정해 채운다. 표시 전용. */
+  factGate?: FactGateInfo;
 }
 
 interface JobIO { bus?: EventBus; signal?: AbortSignal }
@@ -575,9 +578,15 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       ? [topic, ...sourceBody.split('\n').filter((l) => /^##\s/.test(l)).map((l) => l.replace(/^#+\s*/, '').trim())]
           .filter(Boolean).slice(0, 8).join(' · ')
       : undefined;
+    // 원문 정합(스펙 §2-4) — 파생물이 원문에 없는 사실을 새로 지어내거나 원문 결론을 뒤집는지 대조(fail-open).
+    const sceneTexts = (p: Plan): string[] => p.scenes.map((s) => `${s.narration}${s.screenText ? ` (자막: ${s.screenText})` : ''}`);
+    const parity = sourceBody ? await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceBody, io.signal) : [];
     // 문체 결정적 린트(2026-08-11) — 프롬프트 지시만으로는 샌다는 실측("새 가지" 위반) 대응, 같은 수정 라운드에 얹는다.
     const probs = [
       ...await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)', plan.scenes.map((s) => s.narration), topic, keyword, io.signal, sourceCore),
+      // 사실 정합은 맨 뒤에서 잘리면 잔존 재판정 트리거(parity.length)와 실제 수정 라운드 투입이 어긋난다 —
+      // 문체 린트보다 앞에 둬 .slice(0, 8) 절단에서 우선 보존한다.
+      ...parity,
       ...narrationStyleIssues(plan.scenes.map((s) => s.narration)),
       // 훅 키워드 낭독 결정적 린트(2026-08-20) — 프롬프트 지시 단독은 샌다는 실측 전례(문체 린트와 동일 사상).
       ...hookKeywordLeadIssues(plan.scenes.map((s) => s.narration), keyword),
@@ -597,6 +606,12 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
           hashtags: fixed.hashtags.length ? fixed.hashtags : plan.hashtags,
         };
       }
+    }
+    // 원문 정합 잔존(스펙 §2-4) — 정합 문제로 수정 라운드가 돌았을 때만 1회 재판정(비용). 표시 전용.
+    if (parity.length && sourceBody) {
+      const factGate = parityToInfo(await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceBody, io.signal));
+      plan = { ...plan, factGate };
+      if (factGate.status === 'hold') { const m2 = `원문 정합 잔존 ${factGate.unsupported.length}건 — 검토 메시지에 표시`; console.log(`[숏폼] ${m2}`); io.bus?.emit('log', { message: m2 }); }
     }
   } catch { /* 무해 */ }
   return plan;
@@ -695,6 +710,7 @@ export async function runShortsJob(
     store.update(id, {
       stage: 'designing', title: plan.title, titles: plan.titles,
       description: plan.description, hashtags: plan.hashtags,
+      ...(plan.factGate ? { factGate: plan.factGate } : {}),
     });
     // 디렉터를 engaged 웨이브에 배선 — standby 팀은 org 와 달리 delegation 이벤트가 없어,
     // 디자인 단계 내내 오피스가 디렉터를 유휴·배회로 그리고 WORKING 칩도 0 이었다(수선 2026-08-12).

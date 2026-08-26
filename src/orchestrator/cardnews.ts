@@ -21,7 +21,8 @@ import type { EventBus } from '../events/bus';
 import { stripEmoji } from '../output/render';
 import { cardNewsStore } from '../content/cardnews';
 import { notifyCardnewsReady } from '../autonomy/contentNotify';
-import { standaloneIssues } from './standaloneQa';
+import { standaloneIssues, parityIssues, parityToInfo } from './standaloneQa';
+import type { FactGateInfo } from '../content/factGate';
 import { cardStyleIssues } from '../content/styleLint';
 import { promiseStore } from '../content/promises';
 import { brandContext, getBrand } from '../content/brand';
@@ -50,6 +51,8 @@ interface Plan {
   title: string; slides: PlanSlide[]; caption: string; hashtags: string[];
   /** 다음 편 예고 — 캡션에 예고를 넣었을 때만 기획자가 선언(예고 대장 등록 → 자율 틱이 시기 도래 시 이행). */
   next?: { topic: string; window?: string };
+  /** 원문 정합 잔존(스펙 §2-4) — 정합 문제로 수정 라운드를 돌았을 때만 재판정해 채운다. 표시 전용. */
+  factGate?: FactGateInfo;
 }
 
 /** 잡 입출력 컨텍스트 — 버스가 있으면 오피스 뷰/활동 피드/타임라인이 실시간 연동된다. */
@@ -307,6 +310,9 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     // body 의 \n 은 한 줄로 접는다 — 검산 프롬프트가 번호 목록이라 줄바꿈이 항목 경계처럼 보이면 판정 정밀도가 떨어진다.
     const cardTexts = plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / '));
     const probs = await standaloneIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', cardTexts, topic, keyword, io.signal);
+    // 원문 정합(스펙 §2-4) — 파생물이 원문에 없는 사실을 새로 지어내거나 원문 결론을 뒤집는지 대조(fail-open).
+    const parity = sourceBody ? await parityIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', cardTexts, sourceBody, io.signal) : [];
+    probs.push(...parity);
     // 문체 결정적 린트(2026-08-11) — 종결어미 3장 연속 등 "AI 티" 지문을 같은 수정 라운드에 얹는다.
     probs.push(...cardStyleIssues(plan.slides));
     // 표지 키워드 정확 표기 게이트(결정적) — LLM '주제어' 판정과 별개로 [핵심 키워드] 그대로를 요구.
@@ -325,6 +331,13 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
         if (fixed) plan = { ...fixed, caption: fixed.caption || plan.caption, hashtags: fixed.hashtags.length ? fixed.hashtags : plan.hashtags };
       }
     }
+    // 원문 정합 잔존(스펙 §2-4) — 정합 문제로 수정 라운드가 돌았을 때만 1회 재판정(비용). 표시 전용.
+    if (parity.length && sourceBody) {
+      const after = plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / '));
+      const factGate = parityToInfo(await parityIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', after, sourceBody, io.signal));
+      plan = { ...plan, factGate };
+      if (factGate.status === 'hold') { const m2 = `원문 정합 잔존 ${factGate.unsupported.length}건 — 검토 메시지에 표시`; console.log(`[카드뉴스] ${m2}`); io.bus?.emit('log', { message: m2 }); }
+    }
   } catch { /* 무해 */ }
   // 오탈자 교정 — 수정 라운드가 바꾼 문구까지 포함해 최종 문구를 교열한다.
   const proofed = await proofreadPlan(plan, io.signal);
@@ -335,6 +348,8 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     const s0 = proofed.slides[0];
     if (s0) proofed.slides[0] = { ...s0, body: (s0.body ? `${keyword}, ${s0.body}` : keyword).slice(0, 220) };
   }
+  // proofreadPlan 이 factGate 를 잃을 수 있어 원본에서 복원(표시 전용 필드 유실 방지).
+  if (plan.factGate) proofed.factGate = plan.factGate;
   return proofed;
 }
 
@@ -768,7 +783,7 @@ export async function runCardNewsJob(
     checkAbort();
 
     // 2) 디자인 — 레퍼런스 트렌드 분석(fail-open) 후 배경 프롬프트(전 장 일관 스타일 + 장면 변주)
-    store.update(id, { stage: 'designing', caption: plan.caption, hashtags: plan.hashtags });
+    store.update(id, { stage: 'designing', caption: plan.caption, hashtags: plan.hashtags, ...(plan.factGate ? { factGate: plan.factGate } : {}) });
     const refs = await analyzeReferences(dir, card.topic, opts.signal);
     if (refs.analysis) say(`레퍼런스 ${refs.refPaths.length}장 분석 반영 — ${refs.analysis.slice(0, 60)}…`);
     // 디자이너를 engaged 웨이브에 배선 — standby 팀은 org 와 달리 delegation 이벤트가 없어,
