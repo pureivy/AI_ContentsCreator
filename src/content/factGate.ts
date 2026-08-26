@@ -275,9 +275,26 @@ export async function repairSentences(
   return out;
 }
 
-/** replacement 가 원문에 없던 수치·월·연도 패턴을 새로 들이면 true(새 사실 가드). */
+/** replacement 가 원문에 없던 수치·월·연도 "값"을 새로 들이면 true(새 사실 가드).
+ * Fix round 1: 패턴 존재 여부가 아니라 토큰 집합으로 비교한다 — "3cm"→"5cm" 처럼 같은 종류라도
+ * 값이 바뀌는 수치 스왑을 잡아낸다(존재 여부만 보면 원문에 이미 단위가 있으면 값이 바뀌어도 통과했다). */
 function introducesNewFacts(original: string, replacement: string): boolean {
-  return [UNIT_RE, MONTH_RE, YEAR_RE].some((re) => re.test(replacement) && !re.test(original));
+  for (const re of [UNIT_RE, MONTH_RE, YEAR_RE]) {
+    const flags = re.flags.includes('g') ? re.flags : `${re.flags}g`;
+    const reG = new RegExp(re.source, flags);
+    const origTokens = new Set(Array.from(original.matchAll(reG), (m) => m[0]));
+    for (const m of replacement.matchAll(reG)) {
+      if (!origTokens.has(m[0])) return true;
+    }
+  }
+  return false;
+}
+
+/** 줄 머리 마커(H1~H6·글머리 기호·번호 매기기) 길이. `**` 제거는 포함하지 않는다 — 문장 내부에 있으면
+ * 오프셋을 밀어내 치환 위치가 어긋난다(Fix round 1). */
+function lineMarkerLen(line: string): number {
+  const m = /^(?:#{1,6}\s*|[-*]\s+|\d+\.\s+)/.exec(line);
+  return m ? m[0].length : 0;
 }
 
 /** 줄 안의 문장 경계(splitBodySentences 와 같은 분리 규칙)를 원문 위치(줄 인덱스·시작·끝)로 보존한다. */
@@ -308,20 +325,25 @@ function locateSentence(lines: string[], original: string): { lineIdx: number; s
   const normed = spans.find((s) => normalize(s.raw) === normOriginal);
   if (normed) return normed;
   // 추출 시 120~160자 절단으로 original 이 실제 문장의 앞부분만 담고 있을 수 있다 — 접두 일치한 문장 전체를 치환한다.
+  // Fix round 1: original 이 지나치게 짧으면(예: '겉흙 3cm') 우연한 접두 일치로 엉뚱한 문장을 통째로 먹어치울
+  // 수 있다 — original 길이가 stripped 길이의 60%(최대 40자) 이상일 때만 접두 일치를 인정한다.
   const prefixed = spans.find((s) => {
     const stripped = s.raw.replace(/^#{1,6}\s*/, '').replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, '').replace(/\*\*/g, '');
-    return stripped.startsWith(original);
+    if (!stripped.startsWith(original)) return false;
+    return original.length >= Math.min(40, stripped.length * 0.6);
   });
   return prefixed ?? null;
 }
 
-/** line 안의 [start,end) 구간을 replacement 로 바꾼다. delete(빈 문자열)면 앞뒤 공백 하나를 함께 지워 이중 공백을 막는다. */
+/** line 안의 [start,end) 구간을 replacement 로 바꾼다. delete(빈 문자열)면 앞뒤 공백 하나를 함께 지워 이중 공백을 막는다.
+ * Fix round 1: 더 이상 줄 전체를 trim() 하지 않는다 — 부분 삭제에서 들여쓰기·마커까지 날아가는 사고를 막는다
+ * (줄 전체를 비우는 경우는 호출부가 별도로 처리한다). */
 function spliceReplace(line: string, start: number, end: number, replacement: string): string {
   if (replacement === '') {
     let s = start, e = end;
     if (line[e] === ' ') e++;
     else if (s > 0 && line[s - 1] === ' ') s--;
-    return (line.slice(0, s) + line.slice(e)).trim();
+    return line.slice(0, s) + line.slice(e);
   }
   return line.slice(0, start) + replacement + line.slice(end);
 }
@@ -329,10 +351,16 @@ function spliceReplace(line: string, start: number, end: number, replacement: st
 /**
  * repairSentences 의 제안을 본문에 순수하게 반영한다(LLM 없음). unsupported[index-1] 문장을 찾아 치환하고,
  * 못 찾거나 새 사실 가드에 걸리면 missed 에 원문을 남긴다. delete 로 생긴 이중 공백·빈 줄은 정리한다.
+ * Fix round 1: 소제목(## )·글머리 기호(- )·번호(1. ) 마커는 치환 대상에서 제외해 살려둔다 — rule③(접두 일치)이
+ * 마커 포함 원본 줄 전체를 매칭 스팬으로 돌려주는 탓에, 마커까지 통째로 지워지며 H2 개수가 줄어드는 사고가
+ * 실제 발행 초안(draft.json)에서 재현됐다(리뷰어 보고). repairs 가 배열이 아니면(방어적 가드) 아무것도
+ * 적용하지 않고 전량 missed 로 돌린다.
  */
 export function applySentenceRepairs(
   body: string, unsupported: string[], repairs: SentenceRepair[],
 ): { body: string; applied: number; missed: string[] } {
+  if (!Array.isArray(repairs)) return { body, applied: 0, missed: [...unsupported] };
+
   const byIndex = new Map<number, SentenceRepair>();
   for (const r of repairs) if (!byIndex.has(r.index)) byIndex.set(r.index, r);
 
@@ -347,8 +375,20 @@ export function applySentenceRepairs(
     if (introducesNewFacts(original, r.replacement)) { missed.push(original); continue; }
     const loc = locateSentence(lines, original);
     if (!loc) { missed.push(original); continue; }
+
+    const line = lines[loc.lineIdx]!;
+    const markerLen = lineMarkerLen(line);
+    const start = Math.max(loc.start, markerLen); // 마커 구간은 치환 범위에서 제외
     const replacement = r.action === 'delete' ? '' : r.replacement;
-    lines[loc.lineIdx] = spliceReplace(lines[loc.lineIdx]!, loc.start, loc.end, replacement);
+
+    let next: string;
+    if (r.action === 'delete' && start <= markerLen && loc.end >= line.length) {
+      // 마커 뒤 내용 전체를 지우는 삭제 — 마커만 남기면("## ", "- ") 빈 제목·빈 목록이 되므로 줄 자체를 비운다.
+      next = '';
+    } else {
+      next = spliceReplace(line, start, loc.end, replacement);
+    }
+    lines[loc.lineIdx] = next;
     applied++;
   }
 
@@ -356,10 +396,18 @@ export function applySentenceRepairs(
   return { body: out, applied, missed };
 }
 
+/** 마크다운 H2+ 소제목 개수 — 표적 수정이 헤더 마커를 깨뜨렸는지 판별하는 구조 가드(Fix round 1)에 쓴다. */
+function h2Count(body: string): number {
+  return (body.match(/^#{2,}\s/gm) ?? []).length;
+}
+
 /**
- * 게이트 흐름(의존성 주입, 순수) — 1차 hold 면 표적 수정을 먼저 시도하고(문장이 하나라도 적용됐으면 그 본문으로
- * 곧장 2차 판정), 아무것도 적용되지 않았을 때만 작가 전면 재작성으로 폴백한다. error 는 수정하지 않는다
- * (판정 불가 상태에서 재작성은 무의미).
+ * 게이트 흐름(의존성 주입, 순수) — 1차 hold 면 표적 수정을 먼저 시도한다.
+ * Fix round 1: ① 표적 수정이 H2+ 소제목 개수를 줄였으면(마커 파손 의심) 적용 0건과 동일하게 버린다.
+ * ② 표적 수정이 예외를 던져도 적용 0건과 동일하게 처리한다. ③ 무근거 문장의 절반 이상이 적용됐거나
+ * 전부 적용됐으면(missed 없음) 곧장 2차 판정, 그보다 적으면 부분 적용된 본문을 기준으로 작가가 나머지만
+ * 마저 고치게 한다(전면 재작성이되 이미 고친 부분은 유지). 아무것도 못 건졌으면 원본 기준 전면 재작성.
+ * error 는 수정하지 않는다(판정 불가 상태에서 재작성은 무의미).
  */
 export async function runFactGateWithRepair(
   a: {
@@ -373,15 +421,32 @@ export async function runFactGateWithRepair(
   const first = await a.gate(body);
   if (first.status !== 'hold') return { body, result: first };
 
+  // 작가 전면 재작성에 넘길 기준 본문·피드백 — 표적 수정이 부분 적용되면 그 결과로 갱신한다.
+  let baseBody = body;
+  let feedback = formatGateFeedback(first);
+
   if (a.targeted) {
-    const t = await a.targeted(body, first.unsupported);
-    if (t.applied > 0) {
-      const second = await a.gate(t.body);
-      return { body: t.body, result: { ...second, repaired: true, firstPass: toFactGateInfo(first) } };
+    let t: { body: string; applied: number; missed: string[] } | null = null;
+    try { t = await a.targeted(body, first.unsupported); }
+    catch { t = null; } // 표적 수정이 예외를 던지면 적용 0건과 동일하게 취급 — 작가 폴백
+
+    if (t && t.applied > 0) {
+      const structOk = h2Count(t.body) >= h2Count(body); // 구조 가드 — 소제목이 줄었으면 마커가 깨졌다고 본다
+      if (structOk) {
+        if (t.missed.length === 0 || t.applied >= Math.ceil(first.unsupported.length / 2)) {
+          const second = await a.gate(t.body);
+          return { body: t.body, result: { ...second, repaired: true, firstPass: toFactGateInfo(first) } };
+        }
+        // 절반 미만만 적용됐다 — 부분 적용된 본문을 기준으로 남은 문장만 작가가 마저 고치게 한다.
+        // 예산 참고: 이 경로는 gate(2) + targeted(1) + writer(1) + re-gate(2) = 최대 6콜(전부/폴백 경로의 5콜보다 +1).
+        baseBody = t.body;
+        feedback = formatGateFeedback({ ...first, unsupported: t.missed });
+      }
+      // structOk 가 false 면 표적 결과를 통째로 버리고 baseBody/feedback 은 원본 그대로 둔다(위에서 초기화한 값).
     }
   }
 
-  const repaired = (await a.repair(body, formatGateFeedback(first))).trim();
+  const repaired = (await a.repair(baseBody, feedback)).trim();
   if (!repaired || !/^#{2,}\s/m.test(repaired)) return { body, result: first };
   const second = await a.gate(repaired);
   return { body: repaired, result: { ...second, repaired: true, firstPass: toFactGateInfo(first) } };

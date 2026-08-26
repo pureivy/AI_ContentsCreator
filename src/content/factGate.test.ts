@@ -331,3 +331,112 @@ describe('runFactGateWithRepair — 표적 수정 우선', () => {
     expect(repair).toHaveBeenCalledTimes(1); expect(r.body).toBe('## 재작성');
   });
 });
+
+// ─────────────────────────── Fix round 1(리뷰어 지적 6건) ───────────────────────────
+
+describe('applySentenceRepairs — 마크다운 마커 보존(Fix round 1)', () => {
+  it('H2 제목 문장을 hedge 로 바꿔도 "## " 마커와 H2 개수가 유지된다(실제 발행 draft.json 에서 재현된 사고)', () => {
+    const body = '## 9월 초 사과나무비료, 미룰 나무와 줘도 되는 나무\n본문입니다.';
+    const r = applySentenceRepairs(body, ['9월 초 사과나무비료, 미룰 나무와 줘도 되는 나무'],
+      [{ index: 1, action: 'hedge', replacement: '9월 초 사과나무비료는 대개 미룰 나무와 줘도 되는 나무로 나뉩니다.' }]);
+    expect(r.applied).toBe(1);
+    expect(r.body).toMatch(/^## /m);
+    expect((r.body.match(/^#{2,}\s/gm) ?? []).length).toBe((body.match(/^#{2,}\s/gm) ?? []).length);
+  });
+  it('목록 항목 문장을 치환해도 "- " 마커가 유지된다', () => {
+    const body = '- 심은 지 1~2년 된 어린나무는 뿌리가 얕습니다.\n다음 줄입니다.';
+    const r = applySentenceRepairs(body, ['심은 지 1~2년 된 어린나무는 뿌리가 얕습니다.'],
+      [{ index: 1, action: 'hedge', replacement: '심은 지 1~2년 된 어린나무는 대개 뿌리가 얕습니다.' }]);
+    expect(r.applied).toBe(1);
+    expect(r.body).toMatch(/^- /m);
+  });
+  it('제목 문장 전체를 delete 하면 마커만 남기지 않고 줄 자체를 비운다', () => {
+    const body = '## 9월 초 사과나무비료, 미룰 나무와 줘도 되는 나무\n본문입니다.';
+    const r = applySentenceRepairs(body, ['9월 초 사과나무비료, 미룰 나무와 줘도 되는 나무'],
+      [{ index: 1, action: 'delete', replacement: '' }]);
+    expect(r.applied).toBe(1);
+    expect(r.body).not.toMatch(/^#+\s*$/m);
+    expect(r.body).not.toContain('##');
+  });
+  it('repairs 가 배열이 아니면 아무것도 적용하지 않고 전량 missed 로 돌린다', () => {
+    const r = applySentenceRepairs('본문', ['a', 'b'], null as unknown as never);
+    expect(r).toEqual({ body: '본문', applied: 0, missed: ['a', 'b'] });
+  });
+});
+
+describe('applySentenceRepairs — 접두 일치 하한(Fix round 1)', () => {
+  it('원문이 지나치게 짧으면(짧은 접두) 우연한 접두 일치를 인정하지 않는다', () => {
+    const r = applySentenceRepairs('겉흙 3cm가 마르면 그때 흠뻑 줍니다.', ['겉흙 3cm'],
+      [{ index: 1, action: 'hedge', replacement: '겉흙 3cm 안팎이면 대개 줍니다.' }]);
+    expect(r.applied).toBe(0);
+    expect(r.missed).toEqual(['겉흙 3cm']);
+  });
+  it('브리프의 21자 안팎 절단 접두는 여전히 매치된다(회귀 방지)', () => {
+    const body = '## 거름\n잎에 뿌리는 영양제로 대신할 수 없습니다.';
+    const r = applySentenceRepairs(body, ['잎에 뿌리는 영양제로 대신할 수 없습니'],
+      [{ index: 1, action: 'delete', replacement: '' }]);
+    expect(r.applied).toBe(1);
+    expect(r.body).not.toContain('영양제로 대신할 수 없습니다');
+  });
+});
+
+describe('applySentenceRepairs — 새 수치 가드는 값 집합으로 비교한다(Fix round 1)', () => {
+  it('같은 종류라도 값이 바뀌면(3cm→5cm) 건너뛴다', () => {
+    const r = applySentenceRepairs('겉흙 3cm가 마르면 줍니다.', ['겉흙 3cm가 마르면 줍니다.'],
+      [{ index: 1, action: 'hedge', replacement: '겉흙 5cm가 마르면 대개 줍니다.' }]);
+    expect(r.applied).toBe(0);
+    expect(r.missed).toEqual(['겉흙 3cm가 마르면 줍니다.']);
+  });
+  it('원문에 있던 값 그대로면 적용한다', () => {
+    const r = applySentenceRepairs('겉흙 3cm가 마르면 줍니다.', ['겉흙 3cm가 마르면 줍니다.'],
+      [{ index: 1, action: 'hedge', replacement: '겉흙 3cm가 마르면 대개 줍니다.' }]);
+    expect(r.applied).toBe(1);
+    expect(r.missed).toEqual([]);
+  });
+});
+
+describe('runFactGateWithRepair — 구조 가드(Fix round 1)', () => {
+  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+  it('표적 수정 본문의 H2 개수가 줄면 적용됐어도 작가 재작성으로 폴백한다', async () => {
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
+    const repair = vi.fn(async () => '## 재작성');
+    // 마커가 깨져 H2 가 2 → 0 으로 줄어든 표적 수정 결과를 흉내낸다.
+    const targeted = vi.fn(async () => ({ body: '본문만 남음', applied: 1, missed: [] }));
+    const r = await runFactGateWithRepair({ gate, repair, targeted }, '## 원본\n## 소제목2');
+    expect(repair).toHaveBeenCalledTimes(1);
+    expect(r.body).toBe('## 재작성');
+  });
+});
+
+describe('runFactGateWithRepair — 표적 수정 예외(Fix round 1)', () => {
+  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+  it('targeted 가 예외를 던지면 작가 재작성으로 폴백한다', async () => {
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
+    const repair = vi.fn(async () => '## 재작성');
+    const targeted = vi.fn(async () => { throw new Error('llm down'); });
+    const r = await runFactGateWithRepair({ gate, repair, targeted }, '## 원본');
+    expect(repair).toHaveBeenCalledTimes(1);
+    expect(r.body).toBe('## 재작성');
+  });
+});
+
+describe('runFactGateWithRepair — 부분 적용(Fix round 1)', () => {
+  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+  it('3건 중 1건만 적용되면(절반 미만) 부분 적용된 본문을 기준으로 작가가 나머지를 마저 고친다', async () => {
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a', 'b', 'c'])).mockResolvedValueOnce(R('pass'));
+    const repair = vi.fn(async (baseBody: string) => `## 재작성\n${baseBody.includes('부분적용됨') ? 'ok' : 'no'}`);
+    const targeted = vi.fn(async () => ({ body: '## 부분적용됨', applied: 1, missed: ['b', 'c'] }));
+    const r = await runFactGateWithRepair({ gate, repair, targeted }, '## 원본');
+    expect(repair).toHaveBeenCalledTimes(1);
+    expect(repair.mock.calls[0]![0]).toContain('부분적용됨');
+    expect(r.body).toBe('## 재작성\nok');
+  });
+  it('3건 중 2건 적용되면(절반 이상) 작가 재작성 없이 곧장 2차 판정한다', async () => {
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a', 'b', 'c'])).mockResolvedValueOnce(R('pass'));
+    const repair = vi.fn();
+    const targeted = vi.fn(async () => ({ body: '## 대부분적용됨', applied: 2, missed: ['c'] }));
+    const r = await runFactGateWithRepair({ gate, repair, targeted }, '## 원본');
+    expect(repair).not.toHaveBeenCalled();
+    expect(r.body).toBe('## 대부분적용됨');
+  });
+});
