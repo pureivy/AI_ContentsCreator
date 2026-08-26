@@ -250,7 +250,13 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
   // entity 593장 중 453장이 maintain:auto 였고 오류 스텁(주머니깍지벌레 "반날개목" 등)이 작가 그라운딩에 닿았다.
   if (a.ingestModel && !a.signal?.aborted) {
     void llmWiki().fillDanglingFromSource(a.ingestModel, { maxFill: 2, signal: a.signal })
-      .then((m) => { if (m.filled) a.bus.emit(EventType.log, { message: `위키 자가수선 — 원문 근거 스텁 ${m.filled}건(근거 없는 갭 ${m.noSource}건은 미생성)` }); })
+      // 프로세스 로그에도 미러 — 위키 스텁 생성은 다음 런 그라운딩에 직접 실린다(사후 추적 필요).
+      .then((m) => {
+        if (!m.filled) return;
+        const msg = `위키 자가수선 — 원문 근거 스텁 ${m.filled}건(근거 없는 갭 ${m.noSource}건은 미생성)`;
+        console.log(`[위키] ${msg}`);
+        a.bus.emit(EventType.log, { message: msg });
+      })
       .catch(() => { /* 백그라운드 — 무해 */ });
   }
 

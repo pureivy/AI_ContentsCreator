@@ -458,8 +458,9 @@ export function trimPlanToBudget(plan: Plan, budgetChars: number): { plan: Plan;
   return { plan: { ...plan, scenes }, keptScenes: kept, trimmed: changed };
 }
 
-/** 유보 표현 — 압축 LLM 이 "군더더기"로 지워 단정문(결론 반전)을 만든 실측 대응. */
-export const HEDGE_RE = /대개|흔히|보통|대체로|경우가 많|수 있|봐요|가능성|편이에요|편입니다|미루/;
+/** 유보 표현 — 압축 LLM 이 "군더더기"로 지워 단정문(결론 반전)을 만든 실측 대응.
+ *  '미루'는 "미루고/미룹니다"(유보)만 노린다 — 미루나무는 수종명이라 제외(2026-08-26 최종 리뷰 F5d). */
+export const HEDGE_RE = /대개|흔히|보통|대체로|경우가 많|수 있|봐요|가능성|편이에요|편입니다|미루(?!나무)/;
 /** 원문에 유보 토큰이 있던 씬이 압축본에서 사라지면 원 내레이션으로 되돌린다(스펙 §6b) — 순수 함수, 입력 불변. */
 export function restoreLostHedges(before: Plan, after: Plan): { plan: Plan; restored: number[] } {
   const restored: number[] = [];

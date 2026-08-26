@@ -733,7 +733,10 @@ async function packageDesignFinalize(a: {
     }
     try { writeFactGate(bus.runId, gateResult); }
     catch (e) { bus.emit('log', { message: `사실 게이트 기록 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
-    bus.emit('log', { message: `사실 게이트 — 주장 ${gateResult.claims.length}건 · 무근거 ${gateResult.unsupported.length} · 모순 ${gateResult.contradicted.length} · 수정 라운드 ${gateResult.repaired ? '예' : '아니오'} · 판정 ${gateResult.status}${gateResult.error ? ` (${gateResult.error})` : ''}` });
+    // 프로세스 로그에도 미러 — 버스 전용이면 런 종료 후 launchd 로그로 게이트 판정을 되짚을 수 없다.
+    const gm = `사실 게이트 — 주장 ${gateResult.claims.length}건 · 무근거 ${gateResult.unsupported.length} · 모순 ${gateResult.contradicted.length} · 수정 라운드 ${gateResult.repaired ? '예' : '아니오'} · 판정 ${gateResult.status}${gateResult.error ? ` (${gateResult.error})` : ''}`;
+    console.log(`[사실게이트] ${gm}`);
+    bus.emit('log', { message: gm });
   }
 
   // --- 발행용 초안 포장 — org 본문을 제목·메타·태그·이미지 슬롯·SEO 점수로 포장(재생성 아님). 실패해도 본문은 유지.

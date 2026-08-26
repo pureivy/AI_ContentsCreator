@@ -37,6 +37,15 @@ describe('stripInternalMarkers — URL 없는 [근거:]·데이터 없음 표식
     expect(stripInternalMarkers('앞\n- ⚠️ 데이터 없음: 발아율 (필요 자료: 실측)\n뒤')).toBe('앞\n뒤');
     expect(stripInternalMarkers('발아율은 ⚠️ 데이터 없음: 발아율 (필요 자료: 실측) 수준입니다.')).toBe('발아율은 수준입니다.');
   });
+  // 백트래킹 폭발 가드(2026-08-26 최종 리뷰 F5a) — 종전 `(?:⚠️?)?\s*` 는 앞뒤 `\s*` 사이에 선택 그룹이
+  // 끼어 "긴 공백 + 매칭 실패"에서 지수 백트래킹을 일으켰다. `(?:⚠️\s*)?` 로 공백을 그룹 안에 넣어 봉합.
+  // stripEmoji 는 ⚠(Extended_Pictographic)와 VS16 을 함께 지우므로 맨 ⚠ 만 남는 경우는 없다(실측 확인).
+  it('긴 공백 뒤 비매칭 텍스트에서 즉시 반환한다(백트래킹 폭발 없음)', () => {
+    const input = `${' '.repeat(3000)}데이터`;
+    const t0 = Date.now();
+    expect(stripInternalMarkers(input)).toBe(input);
+    expect(Date.now() - t0).toBeLessThan(200);
+  });
   it('괄호 없는 인라인 표식은 문장 경계에서 멈춰 뒤 문장을 보존한다', () => {
     const out = stripInternalMarkers('발아율은 ⚠️ 데이터 없음: 매우 낮은 수준입니다. 다음 문단도 있습니다.');
     expect(out).toContain('다음 문단도 있습니다.');

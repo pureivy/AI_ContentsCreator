@@ -42,8 +42,11 @@ export function stripTrailingTagDump(body: string): string {
 export function stripInternalMarkers(md: string): string {
   return md
     // stripEmoji 가 먼저 돌아 ⚠️ 가 이미 지워졌을 수 있다 — 이모지는 통째로 선택(optional group).
-    .replace(/^[ \t]*(?:[-*]\s*)?(?:⚠️?)?\s*데이터 없음\s*[:：][^\n]*\n?/gmu, '')
-    .replace(/\s*(?:⚠️?)?\s*데이터 없음\s*[:：][^\n().!?]*(?:\([^)]*\))?/gu, '')
+    // 공백은 그룹 '안'에 둔다: 종전 `(?:⚠️?)?\s*` 는 앞뒤 \s* 사이에 선택 그룹이 끼어 "긴 공백 +
+    // 비매칭"에서 지수 백트래킹을 일으켰다(실측: 공백 3000자 → 6.0초). stripEmoji 가 ⚠ 자체를
+    // Extended_Pictographic 로 지우므로 VS16 없는 맨 ⚠ 는 여기 도달하지 않는다(실측 확인).
+    .replace(/^[ \t]*(?:[-*]\s*)?(?:⚠️\s*)?데이터 없음\s*[:：][^\n]*\n?/gmu, '')
+    .replace(/\s*(?:⚠️\s*)?데이터 없음\s*[:：][^\n().!?]*(?:\([^)]*\))?/gu, '')
     .replace(/\s*\[\s*근거\s*[:：]\s*([^\]]*)\]/gu, (_m, inner: string) => {
       const url = /https?:\/\/[^\s\]]+/.exec(inner)?.[0];
       return url ? ` (출처: ${url})` : '';

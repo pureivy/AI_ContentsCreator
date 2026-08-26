@@ -90,14 +90,24 @@ const clip = (s: string, cap: number): string => (s.length > cap ? `${s.slice(0,
 
 const blogReadyLabel = (revised?: boolean): string => (revised ? '↻ 블로그 개정본 검토 대기' : '📝 블로그 초안 검토 대기');
 
-/** 보류 표시 줄(평문, 순수) — 호출측이 escapeHtml 로 감싼다. 파생은 라벨만 '원문 정합'. */
-export function factGateLines(info: FactGateInfo | undefined, maxItems: number, label = '사실 게이트'): string {
+/**
+ * 보류 표시 줄(평문, 순수) — 호출측이 escapeHtml 로 감싼다. 파생은 라벨만 '원문 정합'.
+ *
+ * breakdown=false 면 '근거 없음 U · 모순 C' 내역을 뺀 건수만 낸다(2026-08-26 최종 리뷰 F5b) —
+ * 카드·쇼츠의 보류는 parityIssues(원문 정합) 지적을 unsupported 칸에 담아 나른 것이라 '근거 없음'이
+ * 아니고 contradicted 는 구조상 항상 0 이다. 블로그(사실 게이트)만 실제 판정이라 내역을 유지한다.
+ */
+export function factGateLines(info: FactGateInfo | undefined, maxItems: number, label = '사실 게이트', breakdown = true): string {
   if (!info) return '';
   if (info.status === 'error') return `⚠ ${label} 판정 실패 — 수동 검토 필요`;
   if (info.status !== 'hold') return '';
   const items = [...info.unsupported, ...info.contradicted].slice(0, maxItems)
     .map((s) => `• ${s.length > 80 ? `${s.slice(0, 80)}…` : s}`);
-  return [`⚠ ${label} 보류 ${info.unsupported.length + info.contradicted.length}건 — 근거 없음 ${info.unsupported.length} · 모순 ${info.contradicted.length}`, ...items].join('\n');
+  const total = info.unsupported.length + info.contradicted.length;
+  const head = breakdown
+    ? `⚠ ${label} 보류 ${total}건 — 근거 없음 ${info.unsupported.length} · 모순 ${info.contradicted.length}`
+    : `⚠ ${label} 보류 ${total}건`;
+  return [head, ...items].join('\n');
 }
 
 /** 블로그 ready 텔레그램 메시지(HTML). 순수 — 테스트 대상. */
@@ -121,7 +131,7 @@ export function cardnewsCaptionHtml(c: CardReadyInfo): string {
     escapeHtml(`🖼 카드뉴스 검토 대기${brandTag(c.brand)}`),
     `<b>${escapeHtml(clip(c.topic, 200))}</b>`,
     escapeHtml([typeof c.slides === 'number' ? `${c.slides}장` : '', staff].filter(Boolean).join(' · ')),
-    factGateLines(c.factGate, 2, '원문 정합') ? escapeHtml(factGateLines(c.factGate, 2, '원문 정합')) : '',
+    factGateLines(c.factGate, 2, '원문 정합', false) ? escapeHtml(factGateLines(c.factGate, 2, '원문 정합', false)) : '',
     `검토: ${reviewLink(c.sourcePieceId)}`,
   ].filter(Boolean).join('\n');
 }
@@ -138,7 +148,7 @@ export function shortsCaptionHtml(s: ShortsReadyInfo): string {
     escapeHtml(`🎬 쇼츠 검토 대기${brandTag(s.brand)}`),
     `<b>${escapeHtml(clip(s.topic, 200))}</b>`,
     specs ? escapeHtml(specs) : '',
-    factGateLines(s.factGate, 2, '원문 정합') ? escapeHtml(factGateLines(s.factGate, 2, '원문 정합')) : '',
+    factGateLines(s.factGate, 2, '원문 정합', false) ? escapeHtml(factGateLines(s.factGate, 2, '원문 정합', false)) : '',
     `검토: ${reviewLink(s.sourcePieceId)}`,
   ].filter(Boolean).join('\n');
 }

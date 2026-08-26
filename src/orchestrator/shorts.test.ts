@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges } from './shorts';
+import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE } from './shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
 
@@ -117,6 +117,15 @@ describe('restoreLostHedges — 압축이 유보어를 지우면 원문장 유�
   it('압축본이 유보어를 지켰거나 원문에 유보어가 없으면 그대로', () => {
     const before = P([{ narration: '대개 물 쪽 문제예요.' }]);
     const after = P([{ narration: '대개 물 문제예요.' }]);
+    expect(restoreLostHedges(before, after).restored).toEqual([]);
+  });
+  // 수종명 오탐(2026-08-26 최종 리뷰 F5d) — '미루나무'는 유보어가 아니다. 오탐이면 압축된 씬이
+  // 통째로 원문장으로 되돌아가 길이 예산(40초)을 깨뜨린다.
+  it("'미루나무'만 든 내레이션은 유보 문장으로 보지 않는다", () => {
+    expect(HEDGE_RE.test('미루나무는 물가에서 빨리 자랍니다.')).toBe(false);
+    expect(HEDGE_RE.test('전정은 잎이 진 뒤로 미루고 봅니다.')).toBe(true); // 진짜 유보는 유지
+    const before = P([{ narration: '미루나무는 물가에서 빨리 자랍니다.' }]);
+    const after = P([{ narration: '미루나무는 빨리 자랍니다.' }]);
     expect(restoreLostHedges(before, after).restored).toEqual([]);
   });
 });

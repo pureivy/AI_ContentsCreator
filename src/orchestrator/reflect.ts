@@ -83,7 +83,12 @@ export async function reflectAndLearn(
       if (appendVerified(p.id, v.claim, v.source)) promoted++;
     }
   }
-  if (promoted || rejected) bus.emit(EventType.log, { message: `검증 지식 — 승격 ${promoted}건 · 거절 ${rejected}건(자기 인용·보류 표시·원장 불일치)` });
+  if (promoted || rejected) {
+    // 프로세스 로그에도 미러 — 원장 승격은 다음 런의 근거 자료를 바꾸므로 사후 추적이 필요하다.
+    const m = `검증 지식 — 승격 ${promoted}건 · 거절 ${rejected}건(자기 인용·보류 표시·원장 불일치)`;
+    console.log(`[검증지식] ${m}`);
+    bus.emit(EventType.log, { message: m });
+  }
 
   // 학습 누적분이 임계를 넘으면 오래된 교훈을 micro 로 요약·아카이브(폐기 대신 압축 — compounding 보존).
   for (const id of learned) {

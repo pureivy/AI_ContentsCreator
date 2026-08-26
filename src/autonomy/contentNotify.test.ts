@@ -103,9 +103,23 @@ describe('factGateLines — 텔레그램 보류 표시(스펙 §2-3)', () => {
     expect(factGateLines({ status: 'pass', unsupported: [], contradicted: [], checkedTs: 't' }, 3)).toBe('');
     expect(factGateLines(undefined, 3)).toBe('');
   });
+  // 파생물(카드·쇼츠)의 보류는 '원문 정합' 지적이지 근거 없음/모순이 아니다(2026-08-26 최종 리뷰 F5b).
+  it('breakdown=false 면 내역(근거 없음·모순)을 빼고 건수만', () => {
+    const info = { status: 'hold' as const, unsupported: ['원문에 없는 수치'], contradicted: [], checkedTs: 't' };
+    expect(factGateLines(info, 2, '원문 정합', false).split('\n')[0]).toBe('⚠ 원문 정합 보류 1건');
+    expect(factGateLines(info, 2, '원문 정합', false)).not.toContain('근거 없음');
+  });
   it('블로그 메시지·카드 캡션에 들어간다(HTML 이스케이프)', () => {
     const fg = { status: 'hold' as const, unsupported: ['5cm <두께>'], contradicted: [], checkedTs: 't' };
     expect(blogReadyHtml({ id: 'p1', title: 'T', factGate: fg }, '')).toContain('5cm &lt;두께&gt;');
-    expect(cardnewsCaptionHtml({ id: 'c1', topic: 'T', factGate: fg })).toContain('⚠ 원문 정합 보류 1건');
+    // 블로그는 내역 유지 — 사실 게이트가 실제로 근거 없음/모순을 판정한 결과라서.
+    expect(blogReadyHtml({ id: 'p1', title: 'T', factGate: fg }, '')).toContain('근거 없음 1 · 모순 0');
+    // 카드·쇼츠는 건수만(내역 없음) — 정합 지적을 '근거 없음'으로 잘못 읽히지 않게.
+    const card = cardnewsCaptionHtml({ id: 'c1', topic: 'T', factGate: fg });
+    expect(card).toContain('⚠ 원문 정합 보류 1건');
+    expect(card).not.toContain('근거 없음');
+    const short = shortsCaptionHtml({ id: 's1', topic: 'T', factGate: fg });
+    expect(short).toContain('⚠ 원문 정합 보류 1건');
+    expect(short).not.toContain('근거 없음');
   });
 });
