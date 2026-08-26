@@ -586,13 +586,15 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 문체 결정적 린트(2026-08-11) — 프롬프트 지시만으로는 샌다는 실측("새 가지" 위반) 대응, 같은 수정 라운드에 얹는다.
     // 소스별 예약(2026-08-26 리뷰 수선) — 결정적 린트(문체·훅)를 앞에 둬 프롬프트-only 실측 누출 방지를
     // 우선 보장하고, LLM 판정(단독 이해·정합)은 각 소스당 상한을 둬 한쪽이 다른 쪽을 밀어내지 못하게 한다.
+    // 소스별 캡 합 최대 12(narrationStyleIssues ≤5 + hookKeywordLeadIssues ≤1 + standalone ≤4 + parity ≤2) —
+    // 이미 소스별로 상한을 뒀으므로 최종 캡을 또 씌우면 뒤 소스(정합)만 밀려나는 desync 가 재발한다. 최종 캡 없음.
     const probs = [
       ...narrationStyleIssues(plan.scenes.map((s) => s.narration)),
       // 훅 키워드 낭독 결정적 린트(2026-08-20) — 프롬프트 지시 단독은 샌다는 실측 전례(문체 린트와 동일 사상).
       ...hookKeywordLeadIssues(plan.scenes.map((s) => s.narration), keyword),
       ...standalone.slice(0, 4),
       ...parity.slice(0, 2),
-    ].slice(0, 10);
+    ];
     let planChanged = false;
     if (probs.length) {
       const m = `단독 이해·문체 검산 — ${probs.length}건 → 수정 라운드 (${probs[0]?.slice(0, 50)})`;
