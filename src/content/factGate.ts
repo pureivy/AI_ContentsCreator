@@ -142,7 +142,11 @@ const cut = (s: string | undefined, n: number): string => (s ?? '').trim().slice
 export function buildEvidence(parts: { factCard?: string; brief?: string; critiqueText?: string; wikiGrounding?: string; injected?: string; verified?: string }): string {
   const blocks: string[] = [];
   const fc = cut(parts.factCard, CAP.factCard); if (fc) blocks.push(`[사실 카드(브리프 근거 확정)]\n${fc}`);
-  const b = cut(parts.brief, CAP.brief); if (b) blocks.push(`[리서치·SEO 브리프]\n${b}`);
+  // Fix round 4(I3) — 카드는 브리프 예산에서 뺀다. 카드는 브리프에서 뽑은 압축본이라 둘을 합치면 같은 내용이
+  // 두 번 들어가면서 근거 말뭉치 총량만 최대 6000자 늘고, judgeClaims 의 24000자 절단선에 밀려 뒤쪽 블록
+  // (주입 지식·verified)이 통째로 잘려 나갔다. 브리프 하한 2000자는 카드가 상한까지 찼을 때도 원문 맥락이
+  // 남게 하는 최소치다(총량은 종전 이하로 유지된다).
+  const b = cut(parts.brief, Math.max(2000, CAP.brief - fc.length)); if (b) blocks.push(`[리서치·SEO 브리프]\n${b}`);
   const c = cut(parts.critiqueText, CAP.critique); if (c) blocks.push(`[검수 의견]\n${c}`);
   const w = cut(parts.wikiGrounding, CAP.wiki); if (w) blocks.push(`[작가에게 주입된 위키 발췌]\n${w}`);
   const i = cut(parts.injected, CAP.injected); if (i) blocks.push(`[주입된 외부 지식(사람이 넣음)]\n${i}`);

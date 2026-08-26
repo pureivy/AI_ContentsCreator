@@ -787,8 +787,12 @@ async function packageDesignFinalize(a: {
     // 프로세스 로그에도 미러 — 버스 전용이면 런 종료 후 launchd 로그로 게이트 판정을 되짚을 수 없다.
     // Fix round 4(C3) — 선분류는 개수가 아니라 문장을 남긴다. 로그에는 판단문 제외 예시 2건(각 40자)까지 붙여
     // 정규식 과차단을 launchd 로그만으로 알아챌 수 있게 한다(개수만 보고는 과차단인지 정상인지 구분이 안 됐다).
-    const f = gateResult.filtered;
-    const filteredNote = f ? ` · 제외 판단 ${f.judgment.length} · 유보 ${f.hedged.length}` : '';
+    // 수정 라운드가 돌았으면 1차 선분류를 보여준다(firstPass 는 수정이 실제로 돈 경우에만 붙는다). 2차 filtered 는
+    // 표적·작가 수정이 일부러 넣은 유보·판단 꼴을 그대로 다시 분류한 결과라, 과차단 표본으로 쓰면 "제대로 걸러진
+    // 문장"만 보이고 정작 작가 원문이 삼켜진 자리는 사라진다 — hold 런이야말로 이 진단이 필요한 런이다.
+    const fp = gateResult.firstPass?.filtered;
+    const f = fp ?? gateResult.filtered;
+    const filteredNote = f ? ` · ${fp ? '1차 ' : ''}제외 판단 ${f.judgment.length} · 유보 ${f.hedged.length}` : '';
     const judgmentEg = f && f.judgment.length ? ` · 판단 예: ${f.judgment.slice(0, 2).map((s) => `"${s.slice(0, 40)}"`).join(', ')}` : '';
     const gm = `사실 게이트 — 주장 ${gateResult.claims.length}건 · 무근거 ${gateResult.unsupported.length} · 모순 ${gateResult.contradicted.length} · 수정 라운드 ${gateResult.repaired ? '예' : '아니오'} · 판정 ${gateResult.status}${filteredNote}${judgmentEg}${gateResult.error ? ` (${gateResult.error})` : ''}`;
     console.log(`[사실게이트] ${gm}`);
@@ -904,7 +908,12 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
   if (CONFIG.factGate) {
     factCard = revise.baseRunId ? readFactCard(revise.baseRunId) : '';
     let failed = false;
+    // Fix round 4(M3) — 추출을 실제로 시도했는지 구분한다. 물려받은 카드도 없고 브리프도 없으면 추출 자체를
+    // 건너뛰는데, 그 경우까지 "근거 표기 문장 0" 으로 찍으면 브리프가 있었는데 근거 문장이 없었다는 뜻으로
+    // 읽혀 브리프 품질 문제로 오진하게 된다(원인은 브리프 부재).
+    let attempted = false;
     if (!factCard.trim() && brief.trim()) {
+      attempted = true;
       const extracted = await extractFactCardSafe(assign.micro, brief, { signal });
       factCard = extracted.card ?? '';
       failed = extracted.failed;
@@ -915,7 +924,8 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
     }
     const factCardMsg = factCard.trim()
       ? `사실 카드 — ${factCard.split('\n').filter(Boolean).length}건`
-      : failed ? '사실 카드 — 추출 실패(무해)' : '사실 카드 — 없음(근거 표기 문장 0)';
+      : failed ? '사실 카드 — 추출 실패(무해)'
+      : attempted ? '사실 카드 — 없음(근거 표기 문장 0)' : '사실 카드 — 생략(브리프 없음)';
     console.log(`[사실게이트] ${factCardMsg}`);
     bus.emit('log', { message: factCardMsg });
   }

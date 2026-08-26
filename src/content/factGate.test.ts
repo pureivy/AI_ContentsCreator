@@ -70,6 +70,24 @@ describe('buildEvidence — 근거 말뭉치 조립', () => {
     const e = buildEvidence({ factCard: '- a', brief: 'b' });
     expect(e.startsWith('[사실 카드(브리프 근거 확정)]\n- a')).toBe(true);
   });
+  it('사실 카드는 브리프 예산에서 차감한다 — 총량이 카드만큼 늘지 않는다(Fix round 4, I3)', () => {
+    const card = 'c'.repeat(6000);
+    const e = buildEvidence({ factCard: card, brief: 'x'.repeat(20000), injected: '주입 지식', verified: '- 근거 표기 지식' });
+    const briefBlock = e.split('[리서치·SEO 브리프]\n')[1]!.split('\n\n')[0]!;
+    expect(briefBlock.length).toBeLessThanOrEqual(6000);   // 12000 - 6000(카드)
+    expect(e).toContain('[주입된 외부 지식(사람이 넣음)]\n주입 지식');   // 뒤쪽 블록이 살아 있다
+    expect(e).toContain('[근거 표기된 지식(verified)]\n- 근거 표기 지식');
+    // 카드+브리프 본문 총량이 종전 브리프 상한(12000)을 넘지 않는다 — 카드가 근거 말뭉치를 부풀리지 않는다
+    const cardBlock = e.split('[사실 카드(브리프 근거 확정)]\n')[1]!.split('\n\n')[0]!;
+    expect(cardBlock.length + briefBlock.length).toBeLessThanOrEqual(12000);
+  });
+  it('카드가 상한을 넘겨도 카드는 6000자로 잘리고 브리프는 남은 예산만 받는다', () => {
+    const e = buildEvidence({ factCard: 'c'.repeat(99999), brief: 'x'.repeat(20000) });
+    const cardBlock = e.split('[사실 카드(브리프 근거 확정)]\n')[1]!.split('\n\n')[0]!;
+    const briefBlock = e.split('[리서치·SEO 브리프]\n')[1]!;
+    expect(cardBlock.length).toBe(6000);   // CAP.factCard
+    expect(briefBlock.length).toBe(6000);  // CAP.brief(12000) - 6000. 하한 2000 은 현 상한 조합에선 닿지 않는 방어선이다
+  });
 });
 
 describe('gateVerdict — 판정 집계', () => {
