@@ -25,3 +25,15 @@ export function partitionVerified(text: string): { keep: string[]; archive: stri
   }
   return { keep, archive };
 }
+
+/** 아카이브 재평가 — 규칙이 좁혀진 뒤 지금은 통과하는 줄만 restore 로 뽑아낸다. 여전히 거절되는 줄·헤더·빈 줄 등 형식 밖 줄은 stay(아카이브 잔류). */
+export function restoreVerified(text: string): { stay: string[]; restore: string[] } {
+  const stay: string[] = [];
+  const restore: string[] = [];
+  for (const line of text.split('\n')) {
+    const m = LINE_RE.exec(line);
+    if (!m) { stay.push(line); continue; }
+    (rejectVerifiedLine(m[2] ?? '', m[3] ?? '') ? stay : restore).push(line);
+  }
+  return { stay, restore };
+}

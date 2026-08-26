@@ -156,7 +156,8 @@ export function extractVerifiedClaims(text: string): Array<{ claim: string; sour
 }
 
 const VERIFIED_REJECT_SOURCE = /동일|종합|비평|성과|검증된 지식|표기된 지식|사내|확립된|일반|상식|추정|추론/;
-const VERIFIED_REJECT_CLAIM = /⚠|미실측|미확인|데이터 없음|가정/;
+// '가정' 은 가정(假定)의미만(가정용·가정정원 등 생활어 오탈락 방지), '미확인' 은 보류 표시 문맥만(김도현 미확인 항목 같은 역참조 오탈락 방지) — 표 조각 「| 미확인 |」은 아래 표 규칙이 별도로 잡는다.
+const VERIFIED_REJECT_CLAIM = /⚠|미실측|미확인 상태|미확인\s*[—–-]|데이터 없음|가정한다|가정하면|가정할 때|가정치|가정 하에|\(가정\)|가정:/;
 const norm = (s: string): string => s.replace(/\s+/g, '').toLowerCase();
 
 /** verified 승격 거절 사유(순수) — 근거가 근거가 아닌 것(자기 인용·토론·성과·보류 표시·표 조각). null 이면 통과. */

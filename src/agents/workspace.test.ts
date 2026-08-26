@@ -71,6 +71,13 @@ describe('verified 승격 정직화(스펙 §5)', () => {
     expect(rejectVerifiedLine('9월 시비', '근거 표기된 지식(verified)')).toBeTruthy();
     expect(rejectVerifiedLine('⚠ 미확인 — 데이터랩 지수', '검색어트렌드(데이터랩)')).toBeTruthy();
   });
+  it('가정·미확인 토큰 좁힘 — 가정용/가정정원 등 생활어와 역참조 미확인을 정상 근거로 오탈락시키지 않는다', () => {
+    expect(rejectVerifiedLine('실내·가정 맥락을 제목에 명시', '네이버 블로그 SERP "올리브나무 물주기"')).toBeNull();
+    expect(rejectVerifiedLine('김도현 미확인 항목 ①의 실측 결과: 3건', '네이버 블로그 SERP "무화과나무 가지치기"')).toBeNull();
+    expect(rejectVerifiedLine('수확량 20% 증가를 가정하면', '네이버 블로그 SERP')).toBeTruthy();
+    expect(rejectVerifiedLine('⚠ 미확인 — 데이터랩', '검색어트렌드(데이터랩)')).toBeTruthy();
+    expect(rejectVerifiedLine('| 미확인 |', '검색광고 실검색량')).toBeTruthy();
+  });
   it('수락 — 커넥터 라벨 포함·웹 URL 일치·raw 위키 제목; 파생 위키·원장 불일치는 거절', () => {
     const entries = [E('검색광고 실검색량', 'connector'), E('https://www.nongsaro.go.kr/x', 'web'), E('블루베리 재배 원문', 'wiki-raw'), E('블루베리나무', 'wiki-derived')];
     expect(acceptVerifiedSource('실볼륨 680회', '검색광고 실검색량 — 시드 "올리브나무 물주기"', entries)).toBe(true);
