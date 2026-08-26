@@ -103,6 +103,20 @@ describe('factGateLines — 텔레그램 보류 표시(스펙 §2-3)', () => {
     expect(factGateLines({ status: 'pass', unsupported: [], contradicted: [], checkedTs: 't' }, 3)).toBe('');
     expect(factGateLines(undefined, 3)).toBe('');
   });
+  // 2026-08-27 지시 ① — 일반 상식 무근거는 보류가 아니라 참고(unverified)로 통과시킨다.
+  it('pass 여도 unverified 가 있으면 참고 줄을 낸다(최대 maxItems · 80자 절단)', () => {
+    const s = factGateLines({ status: 'pass', unsupported: [], contradicted: [], unverified: ['a'.repeat(100), 'b', 'c'], checkedTs: 't' }, 2);
+    expect(s.split('\n')[0]).toBe('✅ 사실 게이트 통과 · 근거 미확인(참고) 3건');
+    expect(s).toContain('• 참고: ' + 'a'.repeat(80) + '…');
+    expect(s).toContain('• 참고: b');
+    expect(s).not.toContain('• 참고: c'); // maxItems 2
+  });
+  it('hold 는 기존 형식 유지 + 끝에 (참고 M건) — M>0 일 때만', () => {
+    const withSoft = factGateLines({ status: 'hold', unsupported: ['x'], contradicted: [], unverified: ['s1', 's2'], checkedTs: 't' }, 2);
+    expect(withSoft.split('\n')[0]).toBe('⚠ 사실 게이트 보류 1건 — 근거 없음 1 · 모순 0 (참고 2건)');
+    const noSoft = factGateLines({ status: 'hold', unsupported: ['x'], contradicted: [], unverified: [], checkedTs: 't' }, 2);
+    expect(noSoft.split('\n')[0]).toBe('⚠ 사실 게이트 보류 1건 — 근거 없음 1 · 모순 0');
+  });
   // 파생물(카드·쇼츠)의 보류는 '원문 정합' 지적이지 근거 없음/모순이 아니다(2026-08-26 최종 리뷰 F5b).
   it('breakdown=false 면 내역(근거 없음·모순)을 빼고 건수만', () => {
     const info = { status: 'hold' as const, unsupported: ['원문에 없는 수치'], contradicted: [], checkedTs: 't' };

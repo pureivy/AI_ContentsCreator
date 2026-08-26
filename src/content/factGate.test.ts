@@ -6,6 +6,7 @@ import {
   splitBodySentences, numericClaimSentences, buildEvidence, gateVerdict, formatGateFeedback, toFactGateInfo,
   extractFactClaims, judgeClaims, factGateBlog, runFactGateWithRepair,
   isJudgmentSentence, hasHedge, hasEventMarkers, classifyClaim,
+  isHardClaim, HARD_CLAIM_KINDS,
   applySentenceRepairs, repairSentences,
   extractFactCard, FACT_CARD_HEADER,
 } from './factGate';
@@ -108,10 +109,117 @@ describe('gateVerdict — 판정 집계', () => {
   });
 });
 
+/**
+ * 2026-08-27 사용자 지시 ① — 사실 게이트는 수치·시기·약제·법령·가격·경험 주장(hard)만 보류하고,
+ * 일반 상식 문장의 무근거(soft)는 참고(unverified)로 통과시킨다. FACT_GATE_STRICT=1 이면 예전 동작으로 복귀.
+ */
+describe('isHardClaim / gateVerdict — hard(보류) · soft(참고) 분리', () => {
+  const u = (text: string, kind: FactClaim['kind']): FactClaim => ({ text, kind, status: 'unsupported' });
+
+  it('hard kind 집합 — 수치·시기·약제·법령·가격·통계·경험(수종·병해충·일반은 soft)', () => {
+    expect([...HARD_CLAIM_KINDS].sort()).toEqual(['experience', 'law', 'number', 'price', 'stat', 'time', 'treatment']);
+    for (const k of ['species', 'pest', 'general'] as const) expect(HARD_CLAIM_KINDS.has(k)).toBe(false);
+  });
+
+  it('(a) kind general + 수치 없음 → 참고(unverified)로 통과', () => {
+    const v = gateVerdict([u('낙엽이 지고 나면 나무는 쉬는 철로 들어갑니다.', 'general')], false);
+    expect(v.status).toBe('pass');
+    expect(v.unsupported).toEqual([]);
+    expect(v.unverified).toEqual(['낙엽이 지고 나면 나무는 쉬는 철로 들어갑니다.']);
+  });
+
+  it('(b) kind general 이라도 수치("3배")가 있으면 보류', () => {
+    const v = gateVerdict([u('뿌리가 3배 넘게 뻗습니다.', 'general')], false);
+    expect(v.status).toBe('hold');
+    expect(v.unsupported).toEqual(['뿌리가 3배 넘게 뻗습니다.']);
+    expect(v.unverified).toEqual([]);
+  });
+
+  it('(b2) 한글 수사 + 단위("십 년")도 hard', () => {
+    expect(isHardClaim({ text: '심고 십 년쯤 지나면 열매가 굵어집니다.', kind: 'general' })).toBe(true);
+    expect(isHardClaim({ text: '낙엽이 지고 나면 나무는 쉬는 철로 들어갑니다.', kind: 'general' })).toBe(false);
+  });
+
+  it('(c) kind time 은 수치가 없어도 보류', () => {
+    const v = gateVerdict([u('잎이 다 진 뒤에 거름을 줍니다.', 'time')], false);
+    expect(v.status).toBe('hold');
+    expect(v.unsupported).toEqual(['잎이 다 진 뒤에 거름을 줍니다.']);
+    expect(v.unverified).toEqual([]);
+  });
+
+  it('(d) kind experience 는 수치가 없어도 보류', () => {
+    const v = gateVerdict([u('우리 밭에서도 같은 일이 있었습니다.', 'experience')], false);
+    expect(v.status).toBe('hold');
+    expect(v.unsupported).toEqual(['우리 밭에서도 같은 일이 있었습니다.']);
+  });
+
+  it('soft 만 있으면 pass, hard 가 하나라도 섞이면 hold(soft 는 참고로 남는다)', () => {
+    const v = gateVerdict([
+      u('낙엽이 지고 나면 나무는 쉬는 철로 들어갑니다.', 'general'),
+      u('잎이 다 진 뒤에 거름을 줍니다.', 'time'),
+    ], false);
+    expect(v.status).toBe('hold');
+    expect(v.unsupported).toEqual(['잎이 다 진 뒤에 거름을 줍니다.']);
+    expect(v.unverified).toEqual(['낙엽이 지고 나면 나무는 쉬는 철로 들어갑니다.']);
+  });
+
+  it('모순(contradicted)은 soft kind 여도 항상 보류', () => {
+    const v = gateVerdict([{ text: '겨울에도 잎이 답니다', kind: 'general', status: 'contradicted', evidence: '브리프: 낙엽수' }], false);
+    expect(v.status).toBe('hold');
+    expect(v.unverified).toEqual([]);
+  });
+
+  it('(e) strict 면 예전 동작 — 무근거는 전부 unsupported, unverified 는 빈 배열', () => {
+    const v = gateVerdict([u('낙엽이 지고 나면 나무는 쉬는 철로 들어갑니다.', 'general')], true);
+    expect(v.status).toBe('hold');
+    expect(v.unsupported).toEqual(['낙엽이 지고 나면 나무는 쉬는 철로 들어갑니다.']);
+    expect(v.unverified).toEqual([]);
+  });
+
+  it('toFactGateInfo 가 unverified 를 요약에 싣는다(구 데이터는 [])', () => {
+    const r: FactGateResult = {
+      status: 'pass', claims: [], unsupported: [], contradicted: [], unverified: ['일반 상식 문장'], repaired: false, checkedTs: 't',
+    };
+    expect(toFactGateInfo(r).unverified).toEqual(['일반 상식 문장']);
+    const legacy = { status: 'hold', claims: [], unsupported: ['a'], contradicted: [], repaired: false, checkedTs: 't' } as unknown as FactGateResult;
+    expect(toFactGateInfo(legacy).unverified).toEqual([]);
+  });
+});
+
+describe('factGateBlog — hard/soft 결과 조립', () => {
+  it('무근거 일반 문장은 unverified 로, 수치 문장은 unsupported 로 갈린다', async () => {
+    mocked
+      .mockResolvedValueOnce({ claims: [
+        { text: '낙엽이 지고 나면 나무는 쉬는 철로 들어갑니다.', kind: 'general' },
+        { text: '뿌리가 3배 넘게 뻗습니다.', kind: 'general' },
+      ] })
+      .mockResolvedValueOnce({ verdicts: [{ index: 1, status: 'unsupported' }, { index: 2, status: 'unsupported' }] });
+    const r = await factGateBlog({ model: 'm', body: 'x', evidence: 'e' });
+    expect(r.status).toBe('hold');
+    expect(r.unsupported).toEqual(['뿌리가 3배 넘게 뻗습니다.']);
+    expect(r.unverified).toEqual(['낙엽이 지고 나면 나무는 쉬는 철로 들어갑니다.']);
+  });
+
+  it('무근거가 일반 문장뿐이면 pass — 표적 수정·작가 재작성 라운드가 0 이 된다', async () => {
+    mocked
+      .mockResolvedValueOnce({ claims: [{ text: '낙엽이 지고 나면 나무는 쉬는 철로 들어갑니다.', kind: 'general' }] })
+      .mockResolvedValueOnce({ verdicts: [{ index: 1, status: 'unsupported' }] });
+    const gate = vi.fn(async () => factGateBlog({ model: 'm', body: 'x', evidence: 'e' }));
+    const targeted = vi.fn();
+    const repair = vi.fn();
+    const r = await runFactGateWithRepair({ gate, repair, targeted }, '## 소제목\n본문');
+    expect(r.result.status).toBe('pass');
+    expect(r.result.unverified).toEqual(['낙엽이 지고 나면 나무는 쉬는 철로 들어갑니다.']);
+    expect(gate).toHaveBeenCalledTimes(1);
+    expect(targeted).not.toHaveBeenCalled();
+    expect(repair).not.toHaveBeenCalled();
+  });
+});
+
 describe('formatGateFeedback / toFactGateInfo', () => {
   const r: FactGateResult = {
     status: 'hold', claims: [], unsupported: ['5cm 두께로 덮습니다'], contradicted: ['잎이 진 뒤 거름 ← 근거: 추분 후'],
-    repaired: false, checkedTs: '2026-08-26T00:00:00.000Z',
+    unverified: [], repaired: false, checkedTs: '2026-08-26T00:00:00.000Z',
   };
   it('작가 수정 요청문에 문장 목록과 새 사실 금지 규칙이 들어간다', () => {
     const f = formatGateFeedback(r);
@@ -120,7 +228,7 @@ describe('formatGateFeedback / toFactGateInfo', () => {
     expect(f).toContain('새 사실·수치를 추가하지 마라');
   });
   it('info 는 claims 를 뺀 요약만 담는다', () => {
-    expect(toFactGateInfo(r)).toEqual({ status: 'hold', unsupported: r.unsupported, contradicted: r.contradicted, checkedTs: r.checkedTs });
+    expect(toFactGateInfo(r)).toEqual({ status: 'hold', unsupported: r.unsupported, contradicted: r.contradicted, unverified: [], checkedTs: r.checkedTs });
   });
 });
 
@@ -305,7 +413,7 @@ describe('factGateBlog — 종단', () => {
 
 describe('runFactGateWithRepair — 1차 판정 → 수정 1회 → 2차 판정', () => {
   const R = (status: 'pass' | 'hold' | 'error', unsupported: string[] = []): FactGateResult =>
-    ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+    ({ status, claims: [], unsupported, contradicted: [], unverified: [], repaired: false, checkedTs: 't' });
   it('1차 pass 면 수정 없이 끝', async () => {
     const repair = vi.fn();
     const r = await runFactGateWithRepair({ gate: async () => R('pass'), repair }, '본문');
@@ -330,18 +438,18 @@ describe('runFactGateWithRepair — 1차 판정 → 수정 1회 → 2차 판정'
 });
 
 describe('runFactGateWithRepair — firstPass 보존', () => {
-  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], unverified: [], repaired: false, checkedTs: 't' });
   it('2차 결과에 1차 요약이 붙는다', async () => {
     const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
     const r = await runFactGateWithRepair({ gate, repair: async () => '## 고침' }, '## 원본');
-    expect(r.result.firstPass).toEqual({ status: 'hold', unsupported: ['a'], contradicted: [], checkedTs: 't' });
+    expect(r.result.firstPass).toEqual({ status: 'hold', unsupported: ['a'], contradicted: [], unverified: [], checkedTs: 't' });
   });
   it('1차의 선분류 텍스트(filtered)도 함께 살아남는다(Fix round 4, C3)', async () => {
     const first: FactGateResult = {
-      status: 'hold', claims: [], unsupported: ['a'], contradicted: [], repaired: false, checkedTs: 't',
+      status: 'hold', claims: [], unsupported: ['a'], contradicted: [], unverified: [], repaired: false, checkedTs: 't',
       filtered: { judgment: ['모자란 쪽이 안전하다고 봅니다.'], hedged: ['흔히 양분 쪽입니다.'] },
     };
-    const second: FactGateResult = { status: 'pass', claims: [], unsupported: [], contradicted: [], repaired: false, checkedTs: 't2', filtered: { judgment: [], hedged: [] } };
+    const second: FactGateResult = { status: 'pass', claims: [], unsupported: [], contradicted: [], unverified: [], repaired: false, checkedTs: 't2', filtered: { judgment: [], hedged: [] } };
     const gate = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
     const r = await runFactGateWithRepair({ gate, repair: async () => '## 고침' }, '## 원본');
     expect(r.result.firstPass?.filtered).toEqual({ judgment: ['모자란 쪽이 안전하다고 봅니다.'], hedged: ['흔히 양분 쪽입니다.'] });
@@ -388,7 +496,7 @@ describe('repairSentences — 프롬프트·검증', () => {
 });
 
 describe('runFactGateWithRepair — 표적 수정 우선', () => {
-  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], unverified: [], repaired: false, checkedTs: 't' });
   it('표적 수정이 적용되면 작가 재작성 없이 2차 판정', async () => {
     const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
     const repair = vi.fn(); const targeted = vi.fn(async () => ({ body: '## 표적', applied: 1, missed: [] }));
@@ -467,7 +575,7 @@ describe('applySentenceRepairs — 새 수치 가드는 값 집합으로 비교�
 });
 
 describe('runFactGateWithRepair — 구조 가드(Fix round 1)', () => {
-  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], unverified: [], repaired: false, checkedTs: 't' });
   it('표적 수정 본문의 H2 개수가 줄면 적용됐어도 작가 재작성으로 폴백한다', async () => {
     const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
     const repair = vi.fn(async () => '## 재작성');
@@ -480,7 +588,7 @@ describe('runFactGateWithRepair — 구조 가드(Fix round 1)', () => {
 });
 
 describe('runFactGateWithRepair — 표적 수정 예외(Fix round 1)', () => {
-  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], unverified: [], repaired: false, checkedTs: 't' });
   it('targeted 가 예외를 던지면 작가 재작성으로 폴백한다', async () => {
     const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
     const repair = vi.fn(async () => '## 재작성');
@@ -492,7 +600,7 @@ describe('runFactGateWithRepair — 표적 수정 예외(Fix round 1)', () => {
 });
 
 describe('runFactGateWithRepair — 부분 적용(Fix round 1)', () => {
-  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], unverified: [], repaired: false, checkedTs: 't' });
   it('3건 중 1건만 적용되면(절반 미만) 부분 적용된 본문을 기준으로 작가가 나머지를 마저 고친다', async () => {
     const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a', 'b', 'c'])).mockResolvedValueOnce(R('pass'));
     const repair = vi.fn(async (baseBody: string) => `## 재작성\n${baseBody.includes('부분적용됨') ? 'ok' : 'no'}`);
@@ -612,7 +720,7 @@ describe('applySentenceRepairs — 소제목 delete 금지(Fix round 2c)', () =>
 });
 
 describe('runFactGateWithRepair — targeted 메타 정보(Fix round 2d)', () => {
-  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+  const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], unverified: [], repaired: false, checkedTs: 't' });
   it('전량 적용 — used:true, missed:0', async () => {
     const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
     const targeted = vi.fn(async () => ({ body: '## 표적', applied: 1, missed: [] }));
@@ -689,9 +797,9 @@ describe('runFactGateWithRepair — 모순 hold 는 작가까지 간다(Fix roun
   it('I1 — 모순 1 + 무근거 1 에서 표적이 1건 적용돼도 작가 재작성을 부른다(표적 본문 기준)', async () => {
     const first: FactGateResult = {
       status: 'hold', claims: [], unsupported: ['무근거 문장'], contradicted: ['모순 문장 ← 근거: 자사 글'],
-      repaired: false, checkedTs: 't',
+      unverified: [], repaired: false, checkedTs: 't',
     };
-    const pass: FactGateResult = { status: 'pass', claims: [], unsupported: [], contradicted: [], repaired: false, checkedTs: 't2' };
+    const pass: FactGateResult = { status: 'pass', claims: [], unsupported: [], contradicted: [], unverified: [], repaired: false, checkedTs: 't2' };
     const gate = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(pass);
     const repair = vi.fn(async (_b: string, _f: string) => '## 재작성');
     const targeted = vi.fn(async () => ({ body: '## 표적적용됨', applied: 1, missed: [] }));
@@ -705,9 +813,9 @@ describe('runFactGateWithRepair — 모순 hold 는 작가까지 간다(Fix roun
   it('I2 — 무근거가 0건인 hold(모순만)에서는 표적 수정을 아예 부르지 않는다', async () => {
     const first: FactGateResult = {
       status: 'hold', claims: [], unsupported: [], contradicted: ['모순 문장 ← 근거: 자사 글'],
-      repaired: false, checkedTs: 't',
+      unverified: [], repaired: false, checkedTs: 't',
     };
-    const pass: FactGateResult = { status: 'pass', claims: [], unsupported: [], contradicted: [], repaired: false, checkedTs: 't2' };
+    const pass: FactGateResult = { status: 'pass', claims: [], unsupported: [], contradicted: [], unverified: [], repaired: false, checkedTs: 't2' };
     const gate = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(pass);
     const repair = vi.fn(async () => '## 재작성');
     const targeted = vi.fn(async () => ({ body: '## 표적', applied: 0, missed: [] }));
@@ -718,7 +826,7 @@ describe('runFactGateWithRepair — 모순 hold 는 작가까지 간다(Fix roun
     expect(r.body).toBe('## 재작성');
   });
   it('모순이 없으면 지름길(작가 재작성 없이 2차 판정)은 그대로다(회귀 방지)', async () => {
-    const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+    const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], unverified: [], repaired: false, checkedTs: 't' });
     const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
     const repair = vi.fn();
     const targeted = vi.fn(async () => ({ body: '## 표적', applied: 1, missed: [] }));

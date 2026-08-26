@@ -5,6 +5,8 @@
  * 순수 함수(추출·조립·집계)와 LLM 호출(추출·판정)을 분리한다 — 순수부만 단위 테스트.
  */
 
+import { CONFIG } from '../config';
+
 export type ClaimKind = 'number' | 'time' | 'species' | 'pest' | 'treatment' | 'law' | 'price' | 'experience' | 'stat' | 'general';
 export type ClaimStatus = 'supported' | 'hedged_general' | 'unsupported' | 'contradicted';
 export interface FactClaim { text: string; kind: ClaimKind; status: ClaimStatus; evidence?: string }
@@ -13,6 +15,9 @@ export interface FactGateResult {
   claims: FactClaim[];
   unsupported: string[];
   contradicted: string[];
+  /** 근거는 없지만 보류시키지 않는 주장(2026-08-27 사용자 지시 ①) — 수치·시기·약제·법령·가격·경험이 아닌
+   * 일반 상식 문장. 통과시키되 사람이 볼 수 있게 '참고'로 남긴다(FACT_GATE_STRICT=1 이면 항상 빈 배열). */
+  unverified: string[];
   repaired: boolean;
   error?: string;
   checkedTs: string;
@@ -25,14 +30,15 @@ export interface FactGateResult {
 /** 선분류로 걸러낸 문장 텍스트(개수 = 배열 길이). Fix round 4: 개수만 남기면 게이트가 무엇을 왜 뺐는지
  * 사후에 되짚을 수 없어 과차단(C1 같은 정규식 과잉)을 실측으로 잡아낼 방법이 없었다. */
 export interface FactGateFiltered { judgment: string[]; hedged: string[] }
-/** piece·카드·쇼츠 레코드에 남기는 요약(claims 제외). */
-export interface FactGateInfo { status: 'pass' | 'hold' | 'error'; unsupported: string[]; contradicted: string[]; checkedTs: string }
+/** piece·카드·쇼츠 레코드에 남기는 요약(claims 제외). unverified 는 구 데이터 호환으로 선택 — 없으면 [] 로 읽는다. */
+export interface FactGateInfo { status: 'pass' | 'hold' | 'error'; unsupported: string[]; contradicted: string[]; unverified?: string[]; checkedTs: string }
 
 const KINDS: ReadonlySet<string> = new Set(['number', 'time', 'species', 'pest', 'treatment', 'law', 'price', 'experience', 'stat', 'general']);
 const STATUSES: ReadonlySet<string> = new Set(['supported', 'hedged_general', 'unsupported', 'contradicted']);
 
 export function toFactGateInfo(r: FactGateResult): FactGateInfo {
-  return { status: r.status, unsupported: r.unsupported, contradicted: r.contradicted, checkedTs: r.checkedTs };
+  // unverified 는 ?? [] — 이 커밋 이전에 기록된 fact_gate.json 을 readFactGate 로 되읽어 오면 필드가 없다.
+  return { status: r.status, unsupported: r.unsupported, contradicted: r.contradicted, unverified: r.unverified ?? [], checkedTs: r.checkedTs };
 }
 
 /** 1차 판정 보존용 요약 — 선분류 텍스트(filtered)까지 함께 남긴다(Fix round 4, C3). 2차 결과의 filtered 는
@@ -154,10 +160,31 @@ export function buildEvidence(parts: { factCard?: string; brief?: string; critiq
   return blocks.join('\n\n');
 }
 
-export function gateVerdict(claims: FactClaim[]): Pick<FactGateResult, 'status' | 'unsupported' | 'contradicted'> {
-  const unsupported = claims.filter((c) => c.status === 'unsupported').map((c) => c.text);
+/** 보류(hold)를 부르는 주장 종류 — 틀리면 나무가 죽거나 돈·법이 걸리는 값들(2026-08-27 사용자 지시 ①).
+ * species·pest·general 은 빠져 있다: 근거가 없어도 일반 상식 서술이면 참고(unverified)로 통과시킨다. */
+export const HARD_CLAIM_KINDS: ReadonlySet<ClaimKind> = new Set(['number', 'time', 'treatment', 'law', 'price', 'stat', 'experience']);
+
+/** kind 가 soft(species·pest·general)여도 문장에 수치가 있으면 hard 로 되돌린다 — 추출기가 수치 문장을
+ * general 로 라벨링하는 일이 잦아, kind 만 믿으면 "3배/2회" 같은 반증 가능한 값이 참고로 새어 나간다.
+ * 한글 수사(십 년·삼 회)까지 보는 이유도 같다. */
+export function isHardClaim(c: { text: string; kind: ClaimKind }): boolean {
+  return HARD_CLAIM_KINDS.has(c.kind)
+    || HARD_FACT_RE.test(c.text)
+    || /\d/.test(c.text)
+    || /(?:[일이삼사오육칠팔구십백천]+\s*(?:배|회|번|일|주|개월|년|도|cm|m|kg|g|ml|리터|원|%))/.test(c.text);
+}
+
+/**
+ * 판정 집계 — 무근거(unsupported) 주장을 hard(보류)와 soft(참고)로 가른다(2026-08-27 사용자 지시 ①).
+ * 모순(contradicted)은 종류와 무관하게 항상 보류다(근거와 어긋난 서술이라 참고로 흘릴 수 없다).
+ * strict(=CONFIG.factGateStrict, FACT_GATE_STRICT=1)면 예전 동작 — 무근거는 전부 unsupported, unverified 는 빈 배열.
+ */
+export function gateVerdict(claims: FactClaim[], strict = CONFIG.factGateStrict): Pick<FactGateResult, 'status' | 'unsupported' | 'contradicted' | 'unverified'> {
+  const raw = claims.filter((c) => c.status === 'unsupported');
+  const unsupported = (strict ? raw : raw.filter((c) => isHardClaim(c))).map((c) => c.text);
+  const unverified = strict ? [] : raw.filter((c) => !isHardClaim(c)).map((c) => c.text);
   const contradicted = claims.filter((c) => c.status === 'contradicted').map((c) => (c.evidence ? `${c.text} ← 근거: ${c.evidence}` : c.text));
-  return { status: unsupported.length + contradicted.length > 0 ? 'hold' : 'pass', unsupported, contradicted };
+  return { status: unsupported.length + contradicted.length > 0 ? 'hold' : 'pass', unsupported, contradicted, unverified };
 }
 
 /** 작가 수정 라운드 피드백(리비전 task 의 [검토자 수정 요청] 블록). */
@@ -278,7 +305,7 @@ export async function judgeClaims(
 /** 블로그 본문 사실 게이트 종단 — 추출→판정→집계. LLM 무응답이면 fail-closed(error)로 자동 경로를 막는다. */
 export async function factGateBlog(a: { model: string; body: string; evidence: string; signal?: AbortSignal; maxClaims?: number }): Promise<FactGateResult> {
   const checkedTs = new Date().toISOString();
-  const base = { claims: [] as FactClaim[], unsupported: [] as string[], contradicted: [] as string[], repaired: false, checkedTs };
+  const base = { claims: [] as FactClaim[], unsupported: [] as string[], contradicted: [] as string[], unverified: [] as string[], repaired: false, checkedTs };
   const must = numericClaimSentences(a.body, Math.min(15, a.maxClaims ?? 20));
   const extracted = await extractFactClaims(a.model, a.body, must, { max: a.maxClaims ?? 20, signal: a.signal });
   if (!extracted) return { ...base, status: 'error', error: '주장 추출 실패(LLM 무응답)' };

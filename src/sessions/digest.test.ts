@@ -18,7 +18,7 @@ describe('세션 파일 IO — research_brief.md / fact_gate.json', () => {
   it('게이트 결과를 JSON 으로 쓰고 읽는다(없으면 null)', async () => {
     const { writeFactGate, readFactGate } = await import('./digest');
     expect(readFactGate('r2')).toBeNull();
-    const r = { status: 'hold' as const, claims: [], unsupported: ['5cm'], contradicted: [], repaired: false, checkedTs: 't' };
+    const r = { status: 'hold' as const, claims: [], unsupported: ['5cm'], contradicted: [], unverified: [], repaired: false, checkedTs: 't' };
     writeFactGate('r2', r);
     expect(readFactGate('r2')).toEqual(r);
   });

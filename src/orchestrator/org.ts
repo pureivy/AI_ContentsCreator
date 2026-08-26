@@ -749,7 +749,7 @@ async function packageDesignFinalize(a: {
     // 풀린다. 이런 산출물은 판정 자체가 무의미하므로 LLM 호출 없이 곧장 error(자동 경로 차단)로 기록한다.
     const briefFallback = finalDeliverable.trim() === brief.trim();
     if (briefFallback) {
-      gateResult = { status: 'error', claims: [], unsupported: [], contradicted: [], repaired: false, error: '본문 없음 — 브리프 폴백 산출물(게이트 생략)', checkedTs: new Date().toISOString() };
+      gateResult = { status: 'error', claims: [], unsupported: [], contradicted: [], unverified: [], repaired: false, error: '본문 없음 — 브리프 폴백 산출물(게이트 생략)', checkedTs: new Date().toISOString() };
     } else {
       try {
         const wiki = await llmWiki().semanticQuery(topic, 3, signal, { forFacts: true }).catch(() => ({ hits: [], context: '' }));
@@ -779,7 +779,7 @@ async function packageDesignFinalize(a: {
         }
         finalDeliverable = r.body; gateResult = r.result;
       } catch (e) {
-        gateResult = { status: 'error', claims: [], unsupported: [], contradicted: [], repaired: false, error: e instanceof Error ? e.message : String(e), checkedTs: new Date().toISOString() };
+        gateResult = { status: 'error', claims: [], unsupported: [], contradicted: [], unverified: [], repaired: false, error: e instanceof Error ? e.message : String(e), checkedTs: new Date().toISOString() };
       }
     }
     try { writeFactGate(bus.runId, gateResult); }
@@ -794,7 +794,9 @@ async function packageDesignFinalize(a: {
     const f = fp ?? gateResult.filtered;
     const filteredNote = f ? ` · ${fp ? '1차 ' : ''}제외 판단 ${f.judgment.length} · 유보 ${f.hedged.length}` : '';
     const judgmentEg = f && f.judgment.length ? ` · 판단 예: ${f.judgment.slice(0, 2).map((s) => `"${s.slice(0, 40)}"`).join(', ')}` : '';
-    const gm = `사실 게이트 — 주장 ${gateResult.claims.length}건 · 무근거 ${gateResult.unsupported.length} · 모순 ${gateResult.contradicted.length} · 수정 라운드 ${gateResult.repaired ? '예' : '아니오'} · 판정 ${gateResult.status}${filteredNote}${judgmentEg}${gateResult.error ? ` (${gateResult.error})` : ''}`;
+    // 참고(unverified) — 근거는 없지만 보류시키지 않은 일반 상식 문장(2026-08-27 지시 ①). 무근거 H 가 줄고
+    // 참고 S 가 늘어난 만큼이 완화 효과라, 두 수를 같은 줄에 나란히 남겨야 로그만으로 되짚을 수 있다.
+    const gm = `사실 게이트 — 주장 ${gateResult.claims.length}건 · 무근거 ${gateResult.unsupported.length} · 참고 ${gateResult.unverified?.length ?? 0} · 모순 ${gateResult.contradicted.length} · 수정 라운드 ${gateResult.repaired ? '예' : '아니오'} · 판정 ${gateResult.status}${filteredNote}${judgmentEg}${gateResult.error ? ` (${gateResult.error})` : ''}`;
     console.log(`[사실게이트] ${gm}`);
     bus.emit('log', { message: gm });
   }

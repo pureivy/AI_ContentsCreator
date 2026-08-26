@@ -100,13 +100,19 @@ const blogReadyLabel = (revised?: boolean): string => (revised ? '↻ 블로그 
 export function factGateLines(info: FactGateInfo | undefined, maxItems: number, label = '사실 게이트', breakdown = true): string {
   if (!info) return '';
   if (info.status === 'error') return `⚠ ${label} 판정 실패 — 수동 검토 필요`;
-  if (info.status !== 'hold') return '';
-  const items = [...info.unsupported, ...info.contradicted].slice(0, maxItems)
-    .map((s) => `• ${s.length > 80 ? `${s.slice(0, 80)}…` : s}`);
+  const clip = (s: string): string => (s.length > 80 ? `${s.slice(0, 80)}…` : s);
+  // 참고(unverified) — 근거는 없지만 보류시키지 않은 일반 상식 문장(2026-08-27 지시 ①). 구 데이터는 필드가 없다.
+  const soft = info.unverified ?? [];
+  if (info.status !== 'hold') {
+    if (!soft.length) return '';
+    return [`✅ ${label} 통과 · 근거 미확인(참고) ${soft.length}건`, ...soft.slice(0, maxItems).map((s) => `• 참고: ${clip(s)}`)].join('\n');
+  }
+  const items = [...info.unsupported, ...info.contradicted].slice(0, maxItems).map((s) => `• ${clip(s)}`);
   const total = info.unsupported.length + info.contradicted.length;
+  const softTail = soft.length ? ` (참고 ${soft.length}건)` : '';
   const head = breakdown
-    ? `⚠ ${label} 보류 ${total}건 — 근거 없음 ${info.unsupported.length} · 모순 ${info.contradicted.length}`
-    : `⚠ ${label} 보류 ${total}건`;
+    ? `⚠ ${label} 보류 ${total}건 — 근거 없음 ${info.unsupported.length} · 모순 ${info.contradicted.length}${softTail}`
+    : `⚠ ${label} 보류 ${total}건${softTail}`;
   return [head, ...items].join('\n');
 }
 
