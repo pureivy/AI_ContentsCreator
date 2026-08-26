@@ -1,9 +1,15 @@
 // src/content/factGate.test.ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('../orchestrator/agent', () => ({ microJSON: vi.fn() }));
+import { microJSON } from '../orchestrator/agent';
 import {
   splitBodySentences, numericClaimSentences, buildEvidence, gateVerdict, formatGateFeedback, toFactGateInfo,
+  extractFactClaims, judgeClaims, factGateBlog,
 } from './factGate';
 import type { FactClaim, FactGateResult } from './factGate';
+
+const mocked = microJSON as unknown as ReturnType<typeof vi.fn>;
+beforeEach(() => mocked.mockReset());
 
 describe('splitBodySentences — 마크다운 본문을 판정 단위 문장으로', () => {
   it('소제목·표 행·목록을 문장으로 살리고 [IMAGE:]·코드펜스는 버린다', () => {
@@ -90,5 +96,65 @@ describe('formatGateFeedback / toFactGateInfo', () => {
   });
   it('info 는 claims 를 뺀 요약만 담는다', () => {
     expect(toFactGateInfo(r)).toEqual({ status: 'hold', unsupported: r.unsupported, contradicted: r.contradicted, checkedTs: r.checkedTs });
+  });
+});
+
+describe('extractFactClaims — 추출 프롬프트·검증', () => {
+  it('mustInclude 문장을 프롬프트에 넣고, 알 수 없는 kind 는 general 로 정규화한다', async () => {
+    mocked.mockResolvedValueOnce({ claims: [{ text: '겉흙 3cm', kind: 'number' }, { text: '잎맥 사이 노랑', kind: 'weird' }, { text: '', kind: 'number' }] });
+    const r = await extractFactClaims('m', '본문', ['겉흙 3cm'], { max: 5 });
+    expect(r).toEqual([{ text: '겉흙 3cm', kind: 'number' }, { text: '잎맥 사이 노랑', kind: 'general' }]);
+    const user = String(mocked.mock.calls[0]![2]);
+    expect(user).toContain('반드시 포함');
+    expect(user).toContain('겉흙 3cm');
+    expect(user).toContain('최대 5개');
+  });
+  it('LLM 실패(null)면 null', async () => {
+    mocked.mockResolvedValueOnce(null);
+    expect(await extractFactClaims('m', '본문', [])).toBeNull();
+  });
+});
+
+describe('judgeClaims — 판정 규칙', () => {
+  it('index 로 매핑하고, experience 는 근거와 무관하게 unsupported, 미판정은 unsupported', async () => {
+    mocked.mockResolvedValueOnce({ verdicts: [{ index: 1, status: 'supported', evidence: '브리프: 3cm' }, { index: 2, status: 'supported' }] });
+    const r = await judgeClaims('m', [
+      { text: '겉흙 3cm', kind: 'number' }, { text: '지난해 우리 밭', kind: 'experience' }, { text: '9월 시비', kind: 'time' },
+    ], '[리서치·SEO 브리프]\n3cm');
+    expect(r).toEqual([
+      { text: '겉흙 3cm', kind: 'number', status: 'supported', evidence: '브리프: 3cm' },
+      { text: '지난해 우리 밭', kind: 'experience', status: 'unsupported' },
+      { text: '9월 시비', kind: 'time', status: 'unsupported' },
+    ]);
+    const user = String(mocked.mock.calls[0]![2]);
+    expect(user).toContain('18~24cm');           // 반올림 오탐 예시
+    expect(user).toContain('6호=18cm');           // 호↔cm 환산표
+    expect(user).toContain('hedged_general');
+    expect(user).toContain('검색량');             // 운영 수치 제외 규칙
+  });
+});
+
+describe('factGateBlog — 종단', () => {
+  it('추출→판정→집계, 무근거 있으면 hold', async () => {
+    mocked
+      .mockResolvedValueOnce({ claims: [{ text: '5cm 두께로 덮습니다', kind: 'number' }] })
+      .mockResolvedValueOnce({ verdicts: [{ index: 1, status: 'unsupported' }] });
+    const r = await factGateBlog({ model: 'm', body: '짚을 5cm 두께로 덮습니다.', evidence: '브리프' });
+    expect(r.status).toBe('hold');
+    expect(r.unsupported).toEqual(['5cm 두께로 덮습니다']);
+    expect(r.repaired).toBe(false);
+    expect(r.checkedTs).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+  it('주장이 0건이면 pass', async () => {
+    mocked.mockResolvedValueOnce({ claims: [] });
+    const r = await factGateBlog({ model: 'm', body: '잔뿌리를 봅니다.', evidence: '' });
+    expect(r.status).toBe('pass');
+    expect(mocked).toHaveBeenCalledTimes(1); // 판정 콜 생략
+  });
+  it('LLM 실패면 error(자동 경로 fail-closed)', async () => {
+    mocked.mockResolvedValueOnce(null);
+    const r = await factGateBlog({ model: 'm', body: '3cm', evidence: '' });
+    expect(r.status).toBe('error');
+    expect(r.error).toContain('추출');
   });
 });
