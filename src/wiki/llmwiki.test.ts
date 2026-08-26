@@ -254,6 +254,20 @@ describe('LlmWiki', () => {
     expect(w.lint().danglingLinks.some((d) => d.to === '다육식물')).toBe(true); // 보고는 유지
   });
 
+  describe('fillDanglingFromSource — maxFill·금지소재 게이트(스펙 §4)', () => {
+    it('원문 언급이 있는 대상만, 상한만큼, 금지소재 제외', async () => {
+      const w = new LlmWiki(dir);
+      w.upsertPage({ title: '원문A', type: 'source', body: '사과나무 전정과 배롱나무 전정과 다육 관리와 블루베리 시비를 다룬다', sources: ['run:r'] });
+      w.upsertPage({ title: '허브', type: 'concept', body: '[[사과나무 전정]] [[배롱나무 전정]] [[다육 관리]] [[블루베리 시비]] [[없는 개념]]', sources: ['run:r'] });
+      const r = await w.fillDanglingFromSource('m', { maxFill: 2 });
+      expect(r.filled).toBe(2);
+      const made = w.allPages().filter((p) => p.sources.includes('stub:source')).map((p) => p.title);
+      expect(made).toHaveLength(2);
+      expect(made).not.toContain('다육 관리');
+      expect(w.allPages().some((p) => p.title === '없는 개념')).toBe(false);
+    });
+  });
+
   it('graph — 별칭 링크가 유령 stub 이 아니라 실 노드를 가리킨다', () => {
     const w = new LlmWiki(dir);
     const target = w.upsertPage({ title: '고온 스트레스', type: 'concept', body: '정의', aliases: ['고온스트레스'] });

@@ -803,11 +803,11 @@ export class LlmWiki {
 
   private async extract(model: string, title: string, content: string, signal?: AbortSignal): Promise<ExtractResult | null> {
     const sys = '너는 LLM Wiki 관리자다. 주어진 내용에서 위키 페이지로 만들 핵심 엔티티(사람/조직/도구/개념)와 개념을 뽑는다. 각 페이지는 사실 위주 2~4문장 본문과, 관련된 다른 엔티티명(links)을 포함한다. ' +
-      '각 페이지의 links 는 비우지 마라 — 같은 묶음의 다른 페이지명이나 본문에서 언급/관련된 개념을 1개 이상 넣어 고립 페이지를 만들지 않는다.';
+      '각 페이지의 links 에는 본문에 실제로 언급된 개념·같은 묶음의 다른 title 만 넣는다. 관련 개념이 본문에 없으면 빈 배열을 허용한다(없는 개념을 만들어 링크하지 마라).';
     const user =
       `제목: ${title}\n\n내용:\n${content.slice(0, 6000)}\n\n` +
       'JSON만 출력: {"summary":"한 줄 요약","pages":[{"title":"엔티티명","type":"entity|concept","body":"2~4문장","links":["다른엔티티명"]}]}. 페이지는 3~6개. ' +
-      '각 page 의 links 에는 이 묶음의 다른 title 이나 본문에서 관련된 개념을 반드시 1개 이상 포함하라(빈 배열 금지).';
+      '각 page 의 links 에는 본문에 실제 언급된 것만 넣고, 없으면 빈 배열.';
     try {
       const res = await llm.chat({
         model,
@@ -1079,12 +1079,15 @@ export class LlmWiki {
 
   /** 끊긴 링크를 원문 근거로 채운다 — 원문 언급이 있는 대상만 그 맥락으로 stub 생성(조작 금지).
    *  원문 맥락이 없는 대상은 건드리지 않고 dangling 으로 둔다(정직한 '미정의' 회색 노드). */
-  async fillDanglingFromSource(model: string, opts: { signal?: AbortSignal } = {}): Promise<{ filled: number; noSource: number }> {
+  async fillDanglingFromSource(model: string, opts: { maxFill?: number; signal?: AbortSignal } = {}): Promise<{ filled: number; noSource: number }> {
    return this.serialize(async () => {
-    const targets = [...this.danglingTargets().values()].sort((a, b) => b.refs.length - a.refs.length);
+    const targets = [...this.danglingTargets().values()]
+      .filter((t) => !offBrandTerm(t.title)) // 브랜드 소재 하드 게이트(maintain 과 동일 — 금지 소재 재파종 방지)
+      .sort((a, b) => b.refs.length - a.refs.length);
+    const max = opts.maxFill ?? Number.POSITIVE_INFINITY;
     let filled = 0; let noSource = 0;
     for (const t of targets) {
-      if (opts.signal?.aborted) break;
+      if (opts.signal?.aborted || filled >= max) break;
       const excerpts = this.sourceMentions(t.title);
       if (!excerpts.length) { noSource++; continue; } // 원문 근거 없음 → 조작 금지, dangling 유지
       const body = await this.stubFromSource(model, t.title, excerpts, t.refs, opts.signal);

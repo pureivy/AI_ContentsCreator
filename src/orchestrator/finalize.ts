@@ -243,11 +243,11 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
 
   a.bus.emit(EventType.run_done, { status: 'ok', deliverable_ref: deliverableRef, ...(a.assets ? { draft_meta: a.assets.meta } : {}) });
 
-  // 자가수선(lint→maintain)은 run_done 이후 **백그라운드**(파이어앤포겟) — 사용자 체감 지연 0,
-  // 실패는 무해, 취소 신호는 전파. 끊긴 링크(지식 갭)를 소량 보충해 그래프 연결·compounding.
+  // 자가수선 — 끊긴 링크를 **원문 발췌가 있는 대상만** 채운다(스펙 §4). 종전 maintain 은 LLM 기억으로 스텁을 만들어
+  // entity 593장 중 453장이 maintain:auto 였고 오류 스텁(주머니깍지벌레 "반날개목" 등)이 작가 그라운딩에 닿았다.
   if (a.ingestModel && !a.signal?.aborted) {
-    void llmWiki().maintain(a.ingestModel, { maxFill: 2, signal: a.signal })
-      .then((m) => { if (m.filled.length) a.bus.emit(EventType.log, { message: `위키 자가수선 — 갭 ${m.filled.length}건 보충(${m.filled.join(', ')})` }); })
+    void llmWiki().fillDanglingFromSource(a.ingestModel, { maxFill: 2, signal: a.signal })
+      .then((m) => { if (m.filled) a.bus.emit(EventType.log, { message: `위키 자가수선 — 원문 근거 스텁 ${m.filled}건(근거 없는 갭 ${m.noSource}건은 미생성)` }); })
       .catch(() => { /* 백그라운드 — 무해 */ });
   }
 
