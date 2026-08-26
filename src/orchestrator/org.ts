@@ -27,8 +27,8 @@ import { getRunSettings } from '../runsettings';
 import { brandContext, activeBrandSlug, getBrand, lexiconGuide } from '../content/brand';
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid } from '../content/priorCoverage';
 import { collectExistingContent } from '../content/novelty';
-import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate } from '../sessions/digest';
-import { factGateBlog, buildEvidence, runFactGateWithRepair, repairSentences, applySentenceRepairs } from '../content/factGate';
+import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeFactCard, readFactCard } from '../sessions/digest';
+import { factGateBlog, buildEvidence, runFactGateWithRepair, repairSentences, applySentenceRepairs, extractFactCard, FACT_CARD_HEADER } from '../content/factGate';
 import type { FactGateResult } from '../content/factGate';
 import { readInjected, readVerified } from '../agents/workspace';
 import { llmWiki } from '../wiki/llmwiki';
@@ -86,9 +86,10 @@ export const NO_FABRICATED_EXPERIENCE =
 /** 리비전 개정 시 새 사실 유입 금지(스펙 §3) — 리비전 fast-path 가 발행글 73% 를 통과하는데 브리프 없이 재작성해 수치가 끼어들던 실측 대응. */
 export const REVISE_NO_NEW_FACTS = '기존 초안과 [리서치·SEO 브리프]에 없는 새 사실·수치·시기를 추가하지 마라. 요청된 변경은 빠짐없이 반영하되, 근거 없는 구체화로 채우지 않는다.';
 
-/** 리비전 컨텍스트 조립(순수) — 브리프·목소리 지침을 개정에도 넣는다(종전엔 초안+피드백뿐). */
-export function buildReviseContext(a: { brief: string; voiceGuide: string; baseBody: string; feedback: string }): string {
+/** 리비전 컨텍스트 조립(순수) — 브리프·목소리 지침을 개정에도 넣는다(종전엔 초안+피드백뿐). factCard(있으면) 는 첫 블록(2026-08-26). */
+export function buildReviseContext(a: { factCard?: string; brief: string; voiceGuide: string; baseBody: string; feedback: string }): string {
   return [
+    a.factCard ? `${FACT_CARD_HEADER}\n${a.factCard}` : '',
     a.voiceGuide,
     a.brief.trim() ? `[리서치·SEO 브리프]\n${a.brief}` : '',
     `[기존 초안]\n${a.baseBody}`,
@@ -176,9 +177,11 @@ export async function writeBlogBody(a: {
   keyword?: string;
   /** micro 티어 모델 — 시작 topic 무매치 시 브리프에서 실주제를 뽑아 재대조하는 1회 추출용(미지정 시 재대조 생략). */
   microModel?: string;
+  /** 사실 카드(브리프에서 근거 확인된 사실만 압축) — 있으면 작가 컨텍스트 첫 블록으로(2026-08-26). */
+  factCard?: string;
   signal?: AbortSignal;
 }): Promise<string> {
-  const { bus, writer, model, topic, brief, critiqueText, serpText, revise, personaGuide, keyword, microModel, signal } = a;
+  const { bus, writer, model, topic, brief, critiqueText, serpText, revise, personaGuide, keyword, microModel, factCard, signal } = a;
   const brandSlug = activeBrandSlug() || undefined;
   // 같은 주제 기존 글이 있으면 '관점을 완전히 다르게' 지시를 주입(revise 는 자기 초안 개정이라 제외).
   let priorCoverage = revise ? '' : priorCoverageBrief('블로그', topic, keyword, { brandSlug });
@@ -281,7 +284,7 @@ export async function writeBlogBody(a: {
     + '기관명을 대는 것은 수치·규격처럼 출처가 정말 필요한 한두 곳으로 제한하라.'
     + '\n[운영 데이터 비공개] 검색량·문서수·자동완성·상위노출 건수 같은 SEO 조사 수치는 글의 방향을 잡는 데만 쓰고 본문에 쓰지 마라 — 독자가 읽을 글이지 운영 보고서가 아니다.';
   // 리비전 컨텍스트(스펙 §3) — voiceGuide 를 리비전에도 넣는다(종전엔 초안+피드백뿐이라 목소리·브리프가 빠졌다).
-  const reviseContext = revise ? buildReviseContext({ brief, voiceGuide, baseBody: revise.baseBody, feedback: revise.feedback }) : '';
+  const reviseContext = revise ? buildReviseContext({ factCard, brief, voiceGuide, baseBody: revise.baseBody, feedback: revise.feedback }) : '';
   // 가드 발화 가시화(2026-08-06) — 프롬프트 컨텍스트는 이벤트에 안 남아 "가드가 있는데 왜 뚫렸나"를
   // 사후 판정할 수 없었다(배롱나무 중복 조사에서 실측). 발화 여부만 한 줄 남긴다.
   if (!revise) {
@@ -295,6 +298,7 @@ export async function writeBlogBody(a: {
       ? `「${topic}」 아래 [기존 초안]을 [검토자 수정 요청]에 따라 개정하라. 요청된 변경은 빠짐없이 반영하고, 잘 쓰인 나머지 구조·내용은 유지한다. ${REVISE_NO_NEW_FACTS} 이 응답의 출력은 오직 개정 완료된 마크다운 본문 하나뿐이다.\n${BLOG_BODY_GUIDE}`
       : `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 검색 의도를 충족하는 완결된 글을 쓴다.\n${BLOG_BODY_GUIDE}`,
     context: revise ? reviseContext : [
+      factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '',
       priorCoverage,
       styleAvoid,
       phraseAvoid,
@@ -318,7 +322,7 @@ export async function writeBlogBody(a: {
     const retry = await runAgent({
       bus, role: writer, model,
       task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 질문·보류·메타 설명 없이 곧바로 본문(## 소제목 포함)만 출력한다.\n${BLOG_BODY_GUIDE}`,
-      context: revise ? reviseContext : [priorCoverage, styleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon), brief ? `[리서치·SEO 브리프]\n${brief}` : ''].filter(Boolean).join('\n\n'),
+      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', priorCoverage, styleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon), brief ? `[리서치·SEO 브리프]\n${brief}` : ''].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, groundForFacts: true, maxOutputTokens: 5000, signal,
     });
@@ -650,17 +654,28 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   const serpText = research ? '' : await serpPopularBrief(topic, signal);
   if (serpText) bus.emit('log', { message: `네이버 SERP 실측 — 상위 노출 ${serpText.split('\n').length - 1}건을 집필 방향에 반영` });
   // fail-open(스펙 §8) — 부가 기록 실패로 런 전체가 죽으면 안 된다(다이제스트 저장과 동일 패턴, finalize.ts).
+  // 사실 카드(2026-08-26) — 브리프 직후 1콜로 근거 표기 문장만 압축, 작가 첫 블록·게이트 근거 첫 블록에 재사용.
+  // 리서치 런은 집필·게이트 자체가 생략되므로 카드도 생략한다.
+  let factCard: string | null = null;
   if (!research && brief.trim()) {
     try { writeResearchBrief(bus.runId, brief); }
     catch (e) { bus.emit('log', { message: `브리프 영속화 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
+    factCard = await extractFactCard(assign.micro, brief, { signal }).catch(() => null);
+    if (factCard) {
+      try { writeFactCard(bus.runId, factCard); }
+      catch (e) { bus.emit('log', { message: `사실 카드 영속화 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
+    }
+    const factCardMsg = factCard ? `사실 카드 — ${factCard.split('\n').filter(Boolean).length}건` : '사실 카드 — 없음(근거 표기 문장 0)';
+    console.log(`[사실게이트] ${factCardMsg}`);
+    bus.emit('log', { message: factCardMsg });
   }
-  const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, microModel: assign.micro, signal });
+  const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, microModel: assign.micro, factCard: factCard || undefined, signal });
   const finalDeliverable = body || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
   return packageDesignFinalize({
     bus, topic, company, assign, subproblems, teams: usableTeams,
     critic: critic ?? null, critiqueText, writerTeam, finalDeliverable, brief, serpText, keyword: opts.keyword,
-    mission: opts.mission, writer, personaGuide: personaPrompt(opts.persona, opts.personaText), signal,
+    mission: opts.mission, writer, personaGuide: personaPrompt(opts.persona, opts.personaText), factCard: factCard || undefined, signal,
   });
 }
 
@@ -690,9 +705,11 @@ async function packageDesignFinalize(a: {
   writer: Parameters<typeof runAgent>[0]['role'];
   /** 작가 말투(페르소나) 지침 — 게이트 수정 라운드도 같은 목소리를 유지하도록 전달(없으면 현행 목소리). */
   personaGuide?: string;
+  /** 사실 카드(브리프에서 근거 확인된 사실) — 게이트 수정 라운드(writeBlogBody revise)와 게이트 근거 첫 블록에 전달. */
+  factCard?: string;
   signal?: AbortSignal;
 }): Promise<RunOutcome> {
-  const { bus, topic, company, assign, subproblems, teams, critic, critiqueText, writerTeam, brief, serpText, keyword, mission, writer, personaGuide, signal } = a;
+  const { bus, topic, company, assign, subproblems, teams, critic, critiqueText, writerTeam, brief, serpText, keyword, mission, writer, personaGuide, factCard, signal } = a;
   let finalDeliverable = a.finalDeliverable;
 
   // 잔여 플레이스홀더/가짜수치 경고(생성 지침이 이미 금지 — 보통 0건).
@@ -716,13 +733,13 @@ async function packageDesignFinalize(a: {
       try {
         const wiki = await llmWiki().semanticQuery(topic, 3, signal, { forFacts: true }).catch(() => ({ hits: [], context: '' }));
         const evidence = buildEvidence({
-          brief, critiqueText, wikiGrounding: wiki.context,
+          factCard, brief, critiqueText, wikiGrounding: wiki.context,
           injected: readInjected(writer.id, 4000), verified: readVerified(writer.id, 3000),
         });
         // 게이트는 자동 발행을 가르는 판정 — 표본 2런에서 haiku 판정이 같은 브리프에 지지 10↔2 로 흔들려 standard 로 상향(2026-08-26 실측)
         const gate = (body: string) => factGateBlog({ model: assign.standard, body, evidence, signal, maxClaims: CONFIG.factGateMaxClaims });
         const repair = (body: string, feedback: string) => writeBlogBody({
-          bus, writer, model: modelForTier(assign, writer.tier), topic, brief, personaGuide, keyword,
+          bus, writer, model: modelForTier(assign, writer.tier), topic, brief, personaGuide, keyword, factCard,
           revise: { baseBody: body, feedback }, signal,
         });
         // 문장 단위 표적 수정(2026-08-26) — 전면 재작성 전에 먼저 시도. 무근거 문장만 유보어·판단문·삭제로
@@ -855,14 +872,27 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
   } else {
     bus.emit('log', { message: '리비전 런 — 원 런 브리프 없음(research_brief.md 부재) · 초안+피드백만으로 개정' });
   }
+  // 사실 카드(2026-08-26) — 원 런에 이미 있으면 그대로 재사용(연쇄 리비전이면 그 원 런도 이 카드를 물려받은 것),
+  // 없고 브리프가 있으면 1회 재추출(이 기능 이전 런의 리비전 대응).
+  let factCard = revise.baseRunId ? readFactCard(revise.baseRunId) : '';
+  if (!factCard.trim() && brief.trim()) {
+    factCard = (await extractFactCard(assign.micro, brief, { signal }).catch(() => null)) ?? '';
+  }
+  if (factCard.trim()) {
+    try { writeFactCard(bus.runId, factCard); } // 연쇄 리비전 대응 — 이 런에서도 카드를 물려받게 남긴다
+    catch (e) { bus.emit('log', { message: `사실 카드 영속화 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
+  }
+  const factCardMsg = factCard.trim() ? `사실 카드 — ${factCard.split('\n').filter(Boolean).length}건` : '사실 카드 — 없음(근거 표기 문장 0)';
+  console.log(`[사실게이트] ${factCardMsg}`);
+  bus.emit('log', { message: factCardMsg });
   const body = await writeBlogBody({
-    bus, writer, model: modelForTier(assign, writer.tier), topic, brief, revise, signal,
+    bus, writer, model: modelForTier(assign, writer.tier), topic, brief, revise, factCard: factCard || undefined, signal,
   });
   const finalDeliverable = body || revise.baseBody;
 
   return packageDesignFinalize({
     bus, topic, company, assign, subproblems: [], teams: [],
-    critic: null, critiqueText: '', writerTeam, finalDeliverable, brief,
+    critic: null, critiqueText: '', writerTeam, finalDeliverable, brief, factCard: factCard || undefined,
     serpText: await serpPopularBrief(topic, signal), // 제목 재패키징도 인기 패턴 참고(fail-open)
     keyword: opts.keyword, writer, signal,
   });

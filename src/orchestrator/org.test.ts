@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { REVISE_NO_NEW_FACTS, buildReviseContext, BLOG_BODY_GUIDE } from './org';
+import { FACT_CARD_HEADER } from '../content/factGate';
 
 describe('리비전 컨텍스트(스펙 §3) — 브리프·목소리 지침이 개정에도 들어간다', () => {
   it('브리프·voiceGuide·기존 초안·수정 요청 순으로 조립한다', () => {
@@ -14,6 +15,14 @@ describe('리비전 컨텍스트(스펙 §3) — 브리프·목소리 지침이 
   });
   it('새 사실 금지 문구 상수', () => {
     expect(REVISE_NO_NEW_FACTS).toContain('새 사실·수치·시기를 추가하지 마라');
+  });
+  it('사실 카드(2026-08-26)가 있으면 맨 앞 블록으로 들어간다', () => {
+    const ctx = buildReviseContext({ factCard: '- 사실', brief: '브리프B', voiceGuide: 'V', baseBody: '## 초안', feedback: '고쳐라' });
+    expect(ctx.startsWith(`${FACT_CARD_HEADER}\n- 사실`)).toBe(true);
+  });
+  it('사실 카드가 없으면 그 블록만 빠진다(기존 순서 불변)', () => {
+    const ctx = buildReviseContext({ brief: '브리프B', voiceGuide: 'V', baseBody: 'B', feedback: 'F' });
+    expect(ctx).not.toContain('[사실 카드');
   });
 });
 

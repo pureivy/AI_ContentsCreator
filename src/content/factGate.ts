@@ -112,12 +112,14 @@ export function numericClaimSentences(md: string, max = 30): string[] {
   return out;
 }
 
-const CAP = { brief: 12000, critique: 3000, wiki: 6000, injected: 4000, verified: 3000 } as const;
+const CAP = { factCard: 6000, brief: 12000, critique: 3000, wiki: 6000, injected: 4000, verified: 3000 } as const;
 const cut = (s: string | undefined, n: number): string => (s ?? '').trim().slice(0, n);
 
-/** 근거 말뭉치 — 판정기가 출처 종류를 알도록 블록마다 머리말. SERP 제목은 경쟁 블로그 주장이라 넣지 않는다. */
-export function buildEvidence(parts: { brief?: string; critiqueText?: string; wikiGrounding?: string; injected?: string; verified?: string }): string {
+/** 근거 말뭉치 — 판정기가 출처 종류를 알도록 블록마다 머리말. SERP 제목은 경쟁 블로그 주장이라 넣지 않는다.
+ * factCard(있으면) 는 첫 블록 — 브리프에서 근거가 확인된 사실만 압축한 카드라 판정기가 가장 먼저 본다(2026-08-26). */
+export function buildEvidence(parts: { factCard?: string; brief?: string; critiqueText?: string; wikiGrounding?: string; injected?: string; verified?: string }): string {
   const blocks: string[] = [];
+  const fc = cut(parts.factCard, CAP.factCard); if (fc) blocks.push(`[사실 카드(브리프 근거 확정)]\n${fc}`);
   const b = cut(parts.brief, CAP.brief); if (b) blocks.push(`[리서치·SEO 브리프]\n${b}`);
   const c = cut(parts.critiqueText, CAP.critique); if (c) blocks.push(`[검수 의견]\n${c}`);
   const w = cut(parts.wikiGrounding, CAP.wiki); if (w) blocks.push(`[작가에게 주입된 위키 발췌]\n${w}`);
@@ -176,6 +178,37 @@ export async function extractFactClaims(
     if (out.length >= max) break;
   }
   return out;
+}
+
+/**
+ * 사실 카드(2026-08-26) — 브리프가 24K자 안팎이라 근거 있는 사실이 작가·판정기 양쪽에서 파묻힌다.
+ * 근거 표기가 있는 문장만 뽑은 압축 카드를 만들어 작가 컨텍스트 첫 블록·게이트 근거 첫 블록에 둔다.
+ */
+export const FACT_CARD_HEADER =
+  '[사실 카드 — 브리프에서 근거가 확인된 사실. 이 목록 밖의 사실·수치·시기·약제는 쓰지 말고, '
+  + '꼭 필요하면 유보어("대개/흔히")를 붙인 일반론이나 판단문("~라고 봅니다")으로만 말하라]';
+
+/** 브리프에서 근거 표기가 있는 사실 문장만 뽑아 불릿 카드로 만든다(LLM, micro 1콜). 결과가 비면 null. */
+export async function extractFactCard(
+  model: string, brief: string, opts: { max?: number; signal?: AbortSignal } = {},
+): Promise<string | null> {
+  const max = opts.max ?? 25;
+  const user = [
+    `아래 브리프에서 근거 표기가 있는 사실 문장만 뽑아라 — "[근거: …]", "_(근거: …)_", URL, 실측 커넥터 라벨(검색광고 실검색량·연관 검색어(자동완성)·검색어트렌드(데이터랩)·네이버 블로그 SERP·유튜브 리서치)·기관명(농사로·산림청 등)이 붙은 것. 검색량·문서수·조회수 같은 운영 수치는 제외. 각 항목은 "사실 (근거: 출처)" 한 줄, 최대 ${max}개. 근거 없는 문장은 넣지 마라.`,
+    `[브리프]\n${brief.slice(0, 20000)}`,
+    'JSON 형식: {"facts":["..."]}',
+  ].join('\n\n');
+  // 출력 예산은 extractFactClaims 와 같은 원리로 max 에 비례(잘린 JSON = 파싱 실패 방지).
+  const j = await microJSON<{ facts?: unknown[] }>(model, SYS, user, { maxOutputTokens: Math.min(3000, 400 + max * 90), signal: opts.signal });
+  if (!j || !Array.isArray(j.facts)) return null;
+  const lines: string[] = [];
+  for (const f of j.facts) {
+    const text = typeof f === 'string' ? f.trim() : '';
+    if (!text) continue;
+    lines.push(`- ${text}`);
+    if (lines.length >= max) break;
+  }
+  return lines.length ? lines.join('\n') : null;
 }
 
 /** 추출된 주장을 근거 자료와 대조해 판정한다(LLM). */

@@ -22,6 +22,13 @@ describe('세션 파일 IO — research_brief.md / fact_gate.json', () => {
     writeFactGate('r2', r);
     expect(readFactGate('r2')).toEqual(r);
   });
+  it('사실 카드를 쓰고 읽는다(없으면 빈 문자열)', async () => {
+    const { writeFactCard, readFactCard } = await import('./digest');
+    expect(readFactCard('r6')).toBe('');
+    writeFactCard('r6', '- 감나무 주머니깍지벌레는 4월 하순부터 약충으로 깨어난다 (근거: 농사로)');
+    expect(readFactCard('r6')).toBe('- 감나무 주머니깍지벌레는 4월 하순부터 약충으로 깨어난다 (근거: 농사로)');
+    expect(fs.existsSync(path.join(tmp, 'r6', 'fact_card.md'))).toBe(true);
+  });
 });
 
 describe('readResearchBriefWithFallback — research_brief.md 없을 때 work 산출물로 대체', () => {

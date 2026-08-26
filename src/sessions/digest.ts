@@ -82,6 +82,11 @@ export function readResearchBriefWithFallback(runId: string): string {
     return parts.join('\n\n');
   } catch { return ''; }
 }
+/** 사실 카드(2026-08-26) — 브리프에서 근거 확인된 사실만 압축한 카드. 리비전 런이 같은 카드를 재사용하게 영속화. */
+export function writeFactCard(runId: string, card: string): void { writeSessionFile(runId, 'fact_card.md', card); }
+export function readFactCard(runId: string): string {
+  try { return fs.readFileSync(sessionFile(runId, 'fact_card.md'), 'utf-8'); } catch { return ''; }
+}
 /** 사실 게이트 결과(스펙 §2-2) — advancePieceReady 가 piece 로 옮긴다. */
 export function writeFactGate(runId: string, r: FactGateResult): void { writeSessionFile(runId, 'fact_gate.json', JSON.stringify(r, null, 2)); }
 export function readFactGate(runId: string): FactGateResult | null {

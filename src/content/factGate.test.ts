@@ -7,6 +7,7 @@ import {
   extractFactClaims, judgeClaims, factGateBlog, runFactGateWithRepair,
   isJudgmentSentence, hasHedge, hasEventMarkers, classifyClaim,
   applySentenceRepairs, repairSentences,
+  extractFactCard, FACT_CARD_HEADER,
 } from './factGate';
 import type { FactClaim, FactGateResult } from './factGate';
 
@@ -64,6 +65,10 @@ describe('buildEvidence — 근거 말뭉치 조립', () => {
   it('블록별 상한으로 자른다(브리프 12000자)', () => {
     const e = buildEvidence({ brief: 'x'.repeat(20000) });
     expect(e.length).toBeLessThan(12500);
+  });
+  it('사실 카드는 첫 블록으로 들어간다', () => {
+    const e = buildEvidence({ factCard: '- a', brief: 'b' });
+    expect(e.startsWith('[사실 카드(브리프 근거 확정)]\n- a')).toBe(true);
   });
 });
 
@@ -572,5 +577,25 @@ describe('runFactGateWithRepair — targeted 메타 정보(Fix round 2d)', () =>
     const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
     const r = await runFactGateWithRepair({ gate, repair: async () => '## 재작성' }, '## 원본');
     expect(r.targeted).toBeUndefined();
+  });
+});
+
+describe('extractFactCard', () => {
+  it('근거 표기 문장만 불릿으로, 운영 수치 제외 규칙이 프롬프트에 있고, 비면 null', async () => {
+    mocked.mockResolvedValueOnce({ facts: ['감나무 주머니깍지벌레는 4월 하순부터 약충으로 깨어난다 (근거: 농사로 curationNo=1964)', ''] });
+    const c = await extractFactCard('m', '브리프', { max: 10 });
+    expect(c).toBe('- 감나무 주머니깍지벌레는 4월 하순부터 약충으로 깨어난다 (근거: 농사로 curationNo=1964)');
+    const user = String(mocked.mock.calls[0]![2]);
+    expect(user).toContain('검색량'); expect(user).toContain('최대 10');
+    mocked.mockResolvedValueOnce({ facts: [] });
+    expect(await extractFactCard('m', '브리프')).toBeNull();
+  });
+  it('buildEvidence 는 사실 카드를 첫 블록으로', () => {
+    const e = buildEvidence({ factCard: '- a', brief: 'b' });
+    expect(e.startsWith('[사실 카드(브리프 근거 확정)]\n- a')).toBe(true);
+  });
+  it('헤더 문구', () => {
+    expect(FACT_CARD_HEADER).toContain('이 목록 밖의 사실');
+    expect(FACT_CARD_HEADER).toBe('[사실 카드 — 브리프에서 근거가 확인된 사실. 이 목록 밖의 사실·수치·시기·약제는 쓰지 말고, 꼭 필요하면 유보어("대개/흔히")를 붙인 일반론이나 판단문("~라고 봅니다")으로만 말하라]');
   });
 });
