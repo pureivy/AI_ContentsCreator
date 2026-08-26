@@ -106,6 +106,10 @@ export interface Config {
   readonly blogAutoImage: boolean;
   /** ready 도달 시 자동 네이버 임시저장 — SEO 점수가 기준(naverDraftSeoMin) 이상일 때만. 발행은 여전히 사람 수동. */
   readonly autoNaverDraft: boolean;
+  /** 사실 게이트(2026-08-26, 사용자 절대 규칙) — 본문 주장을 브리프·근거와 대조해 무근거·모순이면 자동 임시저장 보류. */
+  readonly factGate: boolean;
+  /** 사실 게이트가 판정할 주장 수 상한(5~40 클램프). */
+  readonly factGateMaxClaims: number;
   /** 자동 임시저장 SEO 최소 점수 — 미달이면 자동 리비전 1회 후 재평가, 그래도 미달이면 수동 검토로 남긴다. */
   readonly naverDraftSeoMin: number;
   /** 네이버 임시저장 성공(본문 확정) 시 카드뉴스 자동 파생 — piece당 1회. 글마다 이미지 5장 내외 생성 비용. */
@@ -281,6 +285,9 @@ export const CONFIG: Config = {
   naverSessionFile: env('NAVER_SESSION_FILE', path.join(ROOT, '.naver_session.json')),
   blogAutoImage: envBool('BLOG_AUTO_IMAGE', false),
   autoNaverDraft: envBool('AUTO_NAVER_DRAFT', true),
+  // 사실 게이트(2026-08-26, 사용자 절대 규칙) — 본문 주장을 브리프·근거와 대조해 무근거·모순이면 자동 임시저장 보류.
+  factGate: envBool('FACT_GATE', true),
+  factGateMaxClaims: Math.min(Math.max(5, envInt('FACT_GATE_MAX_CLAIMS', 20)), 40),
   naverDraftSeoMin: Math.min(Math.max(0, envInt('NAVER_DRAFT_SEO_MIN', 80)), 100),
   autoCardNews: envBool('AUTO_CARDNEWS', true),
   autoShorts: envBool('AUTO_SHORTS', true),

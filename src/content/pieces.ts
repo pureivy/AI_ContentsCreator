@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { genId } from '../util/ids';
+import type { FactGateInfo } from './factGate';
 
 export type PieceStage =
   | 'idea' | 'research' | 'draft' | 'ready' | 'published' | 'measured' | 'reflected' | 'error';
@@ -45,6 +46,8 @@ export interface Piece {
   auto?: boolean;
   /** 클러스터 형제 소진으로 생성된 piece 의 출처(ClusterTopic.id) — 같은 시드 쿨다운 판정·성과 귀속용. */
   clusterSeedId?: string;
+  /** 사실 게이트 결과(2026-08-26) — hold/error 면 자동 네이버 임시저장을 건너뛴다(수동 버튼은 유지). */
+  factGate?: FactGateInfo;
   createdTs: string;
   updatedTs: string;
 }
@@ -144,4 +147,9 @@ export function blogUrlForPiece(pieceId?: string): string | undefined {
   // 정규형으로 — RSS 감지가 m.blog 를 저장하기도 하는데, blog.naver.com 은 모바일을 자동 리다이렉트하지만
   // m.blog 는 데스크톱을 못 돌려보낸다(캡션 링크는 양쪽 시청자 모두 클릭).
   return u.replace(/^https?:\/\/m\.blog\.naver\.com\//, 'https://blog.naver.com/');
+}
+
+/** 자동 임시저장 차단 판정 — hold(무근거·모순 잔존)·error(판정 실패, fail-closed). 사용자 확정: 자동 경로만 차단. */
+export function autoDraftBlockedByFactGate(p: { factGate?: FactGateInfo }): boolean {
+  return p.factGate?.status === 'hold' || p.factGate?.status === 'error';
 }

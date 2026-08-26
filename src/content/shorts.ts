@@ -8,6 +8,7 @@ import path from 'node:path';
 import { CONFIG } from '../config';
 import { activeBrandSlug } from './brand';
 import { genId } from '../util/ids';
+import type { FactGateInfo } from './factGate';
 
 export type ShortsStage = 'planning' | 'designing' | 'rendering' | 'ready' | 'error';
 
@@ -42,6 +43,8 @@ export interface Shorts {
   /** 담당자 실명(작가·디렉터) — UI 표기. */
   writer?: string;
   director?: string;
+  /** 원문 정합 판정(2026-08-26) — 수정 라운드 뒤 잔존한 원문 밖 사실·결론 반전. 표시 전용(파생은 자동 발행 없음). */
+  factGate?: FactGateInfo;
   error?: string;
   /** 유튜브 비공개 업로드 결과(발행은 사람이 유튜브 스튜디오에서 공개 전환). */
   youtubeId?: string;

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { PieceStore, selectResumablePiece } from './pieces';
+import { PieceStore, selectResumablePiece, autoDraftBlockedByFactGate } from './pieces';
 import type { Piece } from './pieces';
 
 let dir = '';
@@ -92,5 +92,15 @@ describe('selectResumablePiece (재개 우선 — 완전 자율 내구성)', () 
     const older = mk({ id: 'old', stage: 'idea', createdTs: '2026-01-01T00:00:00.000Z' });
     const newer = mk({ id: 'new', stage: 'draft', createdTs: '2026-02-01T00:00:00.000Z' });
     expect(selectResumablePiece([newer, older], () => false)?.id).toBe('old');
+  });
+});
+
+describe('autoDraftBlockedByFactGate — 자동 임시저장 차단 판정(사용자 확정: 자동 경로만 차단)', () => {
+  const info = (status: 'pass' | 'hold' | 'error') => ({ status, unsupported: [], contradicted: [], checkedTs: 't' });
+  it('hold·error 는 차단, pass·미실행은 통과', () => {
+    expect(autoDraftBlockedByFactGate({ factGate: info('hold') })).toBe(true);
+    expect(autoDraftBlockedByFactGate({ factGate: info('error') })).toBe(true);
+    expect(autoDraftBlockedByFactGate({ factGate: info('pass') })).toBe(false);
+    expect(autoDraftBlockedByFactGate({})).toBe(false);
   });
 });

@@ -8,6 +8,7 @@ import path from 'node:path';
 import { CONFIG } from '../config';
 import { activeBrandSlug } from './brand';
 import { genId } from '../util/ids';
+import type { FactGateInfo } from './factGate';
 
 export type CardNewsStage = 'planning' | 'designing' | 'rendering' | 'ready' | 'error';
 
@@ -34,6 +35,8 @@ export interface CardNews {
   /** 담당자 실명(기획·디자인) — UI 표기. */
   planner?: string;
   designer?: string;
+  /** 원문 정합 판정(2026-08-26) — 수정 라운드 뒤 잔존한 원문 밖 사실·결론 반전. 표시 전용(파생은 자동 발행 없음). */
+  factGate?: FactGateInfo;
   /** 메타 발행 결과(인스타 캐러셀 미디어 id·퍼머링크, 페북 게시물 id). 부분 성공 시 채널별 개별 기록. */
   igMediaId?: string;
   igPermalink?: string;
