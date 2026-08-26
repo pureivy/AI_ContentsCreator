@@ -114,7 +114,9 @@ export async function extractFactClaims(
     `[본문]\n${body.slice(0, 8000)}`,
     'JSON 형식: {"claims":[{"text":"...","kind":"number"}]}',
   ].filter(Boolean).join('\n\n');
-  const j = await microJSON<{ claims?: Array<{ text?: unknown; kind?: unknown } | null> }>(model, SYS, user, { maxOutputTokens: 1800, signal: opts.signal });
+  // 출력 예산은 요청 주장 수에 비례(2026-08-26 최종 리뷰 F3) — 고정값이면 max 가 커질수록 JSON 이
+  // 중간에서 잘리고, 잘린 JSON 은 파싱 실패(null) = 추출 실패 = fail-closed error 로 자동 경로를 막는다.
+  const j = await microJSON<{ claims?: Array<{ text?: unknown; kind?: unknown } | null> }>(model, SYS, user, { maxOutputTokens: Math.min(4000, 600 + max * 180), signal: opts.signal });
   if (!j || !Array.isArray(j.claims)) return null;
   const out: Array<{ text: string; kind: ClaimKind }> = [];
   for (const c of j.claims) {
@@ -139,7 +141,8 @@ export async function judgeClaims(
     `[주장]\n${claims.map((c, i) => `${i + 1}. (${c.kind}) ${c.text}`).join('\n')}`,
     'JSON 형식: {"verdicts":[{"index":1,"status":"supported","evidence":"..."}]} — 모든 index 포함.',
   ].join('\n\n');
-  const j = await microJSON<{ verdicts?: Array<{ index?: unknown; status?: unknown; evidence?: unknown } | null> }>(model, SYS, user, { maxOutputTokens: 1600, signal: opts.signal });
+  // 판정 예산도 주장 수 비례 — 잘린 verdicts 는 미판정으로 남아 전부 unsupported 가 된다(가짜 hold).
+  const j = await microJSON<{ verdicts?: Array<{ index?: unknown; status?: unknown; evidence?: unknown } | null> }>(model, SYS, user, { maxOutputTokens: Math.min(4000, 400 + claims.length * 120), signal: opts.signal });
   if (!j || !Array.isArray(j.verdicts)) return null;
   const byIdx = new Map<number, { status: ClaimStatus; evidence?: string }>();
   for (const v of j.verdicts) {

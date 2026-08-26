@@ -719,7 +719,8 @@ async function packageDesignFinalize(a: {
           brief, critiqueText, wikiGrounding: wiki.context,
           injected: readInjected(writer.id, 4000), verified: readVerified(writer.id, 3000),
         });
-        const gate = (body: string) => factGateBlog({ model: assign.micro, body, evidence, signal, maxClaims: CONFIG.factGateMaxClaims });
+        // 게이트는 자동 발행을 가르는 판정 — 표본 2런에서 haiku 판정이 같은 브리프에 지지 10↔2 로 흔들려 standard 로 상향(2026-08-26 실측)
+        const gate = (body: string) => factGateBlog({ model: assign.standard, body, evidence, signal, maxClaims: CONFIG.factGateMaxClaims });
         const repair = (body: string, feedback: string) => writeBlogBody({
           bus, writer, model: modelForTier(assign, writer.tier), topic, brief, personaGuide, keyword,
           revise: { baseBody: body, feedback }, signal,

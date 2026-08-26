@@ -108,6 +108,9 @@ describe('extractFactClaims — 추출 프롬프트·검증', () => {
     expect(user).toContain('반드시 포함');
     expect(user).toContain('겉흙 3cm');
     expect(user).toContain('최대 5개');
+    // 출력 예산은 요청 주장 수에 비례(2026-08-26 최종 리뷰 F3) — 고정 1800 은 max 20 에서 잘려
+    // 뒤쪽 주장이 통째로 유실됐다(잘린 JSON = 추출 실패 = fail-closed error).
+    expect((mocked.mock.calls[0]![3] as { maxOutputTokens?: number }).maxOutputTokens).toBe(1500); // 600 + 5*180
   });
   it('LLM 실패(null)면 null', async () => {
     mocked.mockResolvedValueOnce(null);
@@ -131,6 +134,7 @@ describe('judgeClaims — 판정 규칙', () => {
     expect(user).toContain('6호=18cm');           // 호↔cm 환산표
     expect(user).toContain('hedged_general');
     expect(user).toContain('검색량');             // 운영 수치 제외 규칙
+    expect((mocked.mock.calls[0]![3] as { maxOutputTokens?: number }).maxOutputTokens).toBe(760); // 400 + 3*120
   });
 });
 
