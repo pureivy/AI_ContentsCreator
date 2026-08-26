@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { REVISE_NO_NEW_FACTS, buildReviseContext } from './org';
+import { REVISE_NO_NEW_FACTS, buildReviseContext, BLOG_BODY_GUIDE } from './org';
 
 describe('리비전 컨텍스트(스펙 §3) — 브리프·목소리 지침이 개정에도 들어간다', () => {
   it('브리프·voiceGuide·기존 초안·수정 요청 순으로 조립한다', () => {
@@ -15,4 +15,10 @@ describe('리비전 컨텍스트(스펙 §3) — 브리프·목소리 지침이 
   it('새 사실 금지 문구 상수', () => {
     expect(REVISE_NO_NEW_FACTS).toContain('새 사실·수치·시기를 추가하지 마라');
   });
+});
+
+it('BLOG_BODY_GUIDE — 사실 범위 한정·[근거:] 표기 금지 문구', () => {
+  expect(BLOG_BODY_GUIDE).toContain('브리프·제공 자료에 있는 것만 쓴다');
+  expect(BLOG_BODY_GUIDE).toContain('[근거: …] 표기는 남기지 않는다');
+  expect(BLOG_BODY_GUIDE).not.toContain('사실·수치는 근거로 뒷받침([근거: 출처])');
 });
