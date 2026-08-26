@@ -628,6 +628,88 @@ describe('runFactGateWithRepair — targeted 메타 정보(Fix round 2d)', () =>
   });
 });
 
+// ─────────────────────────── Fix round 4(최종 리뷰 지적) ───────────────────────────
+
+describe('applySentenceRepairs — 치환문 유사도 하한(Fix round 4, I4)', () => {
+  const body = '## 거름\n가을에 양을 줄입니다.';
+  it('원문을 낮춰 말한 치환은 적용한다(유사도 0.76)', () => {
+    const r = applySentenceRepairs(body, ['가을에 양을 줄입니다.'],
+      [{ index: 1, action: 'hedge', replacement: '가을에는 대개 양을 줄입니다.' }]);
+    expect(r.applied).toBe(1);
+    expect(r.missed).toEqual([]);
+    expect(r.body).toContain('가을에는 대개 양을 줄입니다.');
+  });
+  it('원문과 무관한 문장으로 통째 교체하면(유사도 0) 적용하지 않고 missed 로 돌린다', () => {
+    const r = applySentenceRepairs(body, ['가을에 양을 줄입니다.'],
+      [{ index: 1, action: 'hedge', replacement: '물은 아침에 주세요.' }]);
+    expect(r.applied).toBe(0);
+    expect(r.missed).toEqual(['가을에 양을 줄입니다.']);
+    expect(r.body).toBe(body); // 본문은 손대지 않는다
+  });
+  it('judgment 액션도 같은 하한을 쓴다', () => {
+    const r = applySentenceRepairs(body, ['가을에 양을 줄입니다.'],
+      [{ index: 1, action: 'judgment', replacement: '병해충 방제가 먼저라고 봅니다.' }]);
+    expect(r.applied).toBe(0);
+    expect(r.missed).toEqual(['가을에 양을 줄입니다.']);
+  });
+  it('delete 는 하한 대상이 아니다(빈 문자열이라 유사도가 늘 0)', () => {
+    const r = applySentenceRepairs(body, ['가을에 양을 줄입니다.'], [{ index: 1, action: 'delete', replacement: '' }]);
+    expect(r.applied).toBe(1);
+    expect(r.body).not.toContain('가을에 양을 줄입니다.');
+  });
+  it('하한 바로 위 경계(퇴비 문장 0.4444)는 계속 적용된다 — 하한·계산식을 건드리면 여기서 먼저 깨진다', () => {
+    // 유사도 지표를 바꾸면(문장부호 제거·패딩·멀티셋 등) 이 쌍이 0.4 아래로 내려가 실제 교정 1건이 조용히 사라진다.
+    const b = '## 거름\n퇴비는 흙에서 천천히 분해되는 자재라 효과가 더디게 나옵니다.';
+    const r = applySentenceRepairs(b, ['퇴비는  흙에서 천천히 분해되는 자재라 효과가 더디게 나옵니다.'],
+      [{ index: 1, action: 'judgment', replacement: '퇴비는 효과가 더디게 나오는 쪽이라고 봅니다.' }]);
+    expect(r.applied).toBe(1);
+    expect(r.missed).toEqual([]);
+  });
+});
+
+describe('runFactGateWithRepair — 모순 hold 는 작가까지 간다(Fix round 4, I1·I2)', () => {
+  it('I1 — 모순 1 + 무근거 1 에서 표적이 1건 적용돼도 작가 재작성을 부른다(표적 본문 기준)', async () => {
+    const first: FactGateResult = {
+      status: 'hold', claims: [], unsupported: ['무근거 문장'], contradicted: ['모순 문장 ← 근거: 자사 글'],
+      repaired: false, checkedTs: 't',
+    };
+    const pass: FactGateResult = { status: 'pass', claims: [], unsupported: [], contradicted: [], repaired: false, checkedTs: 't2' };
+    const gate = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(pass);
+    const repair = vi.fn(async (_b: string, _f: string) => '## 재작성');
+    const targeted = vi.fn(async () => ({ body: '## 표적적용됨', applied: 1, missed: [] }));
+    const r = await runFactGateWithRepair({ gate, repair, targeted }, '## 원본');
+    expect(repair).toHaveBeenCalledTimes(1);
+    expect(repair.mock.calls[0]![0]).toBe('## 표적적용됨');           // 표적 결과가 작가의 출발점
+    expect(repair.mock.calls[0]![1]).toContain('모순 문장');           // 모순 목록은 피드백에 그대로 남는다
+    expect(r.body).toBe('## 재작성');
+    expect(r.targeted).toEqual({ applied: 1, missed: 0, used: true });
+  });
+  it('I2 — 무근거가 0건인 hold(모순만)에서는 표적 수정을 아예 부르지 않는다', async () => {
+    const first: FactGateResult = {
+      status: 'hold', claims: [], unsupported: [], contradicted: ['모순 문장 ← 근거: 자사 글'],
+      repaired: false, checkedTs: 't',
+    };
+    const pass: FactGateResult = { status: 'pass', claims: [], unsupported: [], contradicted: [], repaired: false, checkedTs: 't2' };
+    const gate = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(pass);
+    const repair = vi.fn(async () => '## 재작성');
+    const targeted = vi.fn(async () => ({ body: '## 표적', applied: 0, missed: [] }));
+    const r = await runFactGateWithRepair({ gate, repair, targeted }, '## 원본');
+    expect(targeted).not.toHaveBeenCalled();
+    expect(r.targeted).toBeUndefined();
+    expect(repair).toHaveBeenCalledTimes(1);
+    expect(r.body).toBe('## 재작성');
+  });
+  it('모순이 없으면 지름길(작가 재작성 없이 2차 판정)은 그대로다(회귀 방지)', async () => {
+    const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], repaired: false, checkedTs: 't' });
+    const gate = vi.fn().mockResolvedValueOnce(R('hold', ['a'])).mockResolvedValueOnce(R('pass'));
+    const repair = vi.fn();
+    const targeted = vi.fn(async () => ({ body: '## 표적', applied: 1, missed: [] }));
+    const r = await runFactGateWithRepair({ gate, repair, targeted }, '## 원본');
+    expect(repair).not.toHaveBeenCalled();
+    expect(r.body).toBe('## 표적');
+  });
+});
+
 describe('extractFactCard', () => {
   it('근거 표기 문장만 불릿으로, 운영 수치 제외 규칙이 프롬프트에 있고, 비면 null', async () => {
     mocked.mockResolvedValueOnce({ facts: ['감나무 주머니깍지벌레는 4월 하순부터 약충으로 깨어난다 (근거: 농사로 curationNo=1964)', ''] });

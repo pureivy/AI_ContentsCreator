@@ -376,6 +376,29 @@ function introducesNewFacts(original: string, replacement: string): boolean {
   return false;
 }
 
+/** 공백을 뺀 문자 바이그램 집합 — 치환문 유사도 계산용(Fix round 4, I4). */
+function charBigrams(s: string): Set<string> {
+  const t = s.replace(/\s+/g, '');
+  const out = new Set<string>();
+  for (let i = 0; i + 1 < t.length; i++) out.add(t.slice(i, i + 2));
+  return out;
+}
+
+/** 문자 바이그램 Dice 유사도(0~1). 양쪽 다 바이그램이 없으면 1(빈 문자열끼리는 같다고 본다). */
+function diceSimilarity(a: string, b: string): number {
+  const A = charBigrams(a), B = charBigrams(b);
+  if (!A.size && !B.size) return 1;
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const g of A) if (B.has(g)) inter++;
+  return (2 * inter) / (A.size + B.size);
+}
+
+/** 치환문 유사도 하한(Fix round 4, I4) — hedge/judgment 는 "같은 문장을 낮춰 말하기"라 원문과 크게 닮아야 한다.
+ * 이 아래로 떨어지면 LLM 이 지적된 문장 대신 엉뚱한 문장을 지어낸 것이므로 적용하지 않고 missed 로 돌린다
+ * (새 사실 가드는 수치만 보므로, 수치 없는 통째 교체는 그동안 무사 통과했다). delete 는 대상이 아니다. */
+const REPLACEMENT_SIM_FLOOR = 0.4;
+
 /** 줄 머리 구조 마커(H1~H6·글머리 기호·번호 매기기·인용 `>`+, 조합 포함) 길이. `**` 제거는 포함하지 않는다 —
  * 문장 내부에 있으면 오프셋을 밀어내 치환 위치가 어긋난다(Fix round 1). Fix round 2: `>`+ 인용 마커를
  * LEADING_MARKER_RE 에 추가 — 인용문 안 무근거 문장을 고치면 인용 표시(`>>`)까지 지워지던 사고를 막는다. */
@@ -459,6 +482,8 @@ export function applySentenceRepairs(
     const r = byIndex.get(i + 1);
     if (!r) { missed.push(original); continue; }
     if (introducesNewFacts(original, r.replacement)) { missed.push(original); continue; }
+    // Fix round 4(I4) — 원문과 너무 안 닮은 치환은 교정이 아니라 다른 문장이다(하한 미만이면 미적용).
+    if (r.action !== 'delete' && diceSimilarity(original, r.replacement) < REPLACEMENT_SIM_FLOOR) { missed.push(original); continue; }
     const loc = locateSentence(lines, original);
     if (!loc) { missed.push(original); continue; }
 
@@ -522,7 +547,10 @@ export async function runFactGateWithRepair(
   let feedback = formatGateFeedback(first);
   let targetedInfo: TargetedRepairInfo | undefined;
 
-  if (a.targeted) {
+  // Fix round 4(I2) — 무근거 문장이 하나도 없는 hold(= 모순만으로 잡힌 hold)는 표적 수정이 할 일이 없다.
+  // 표적 수정은 unsupported 목록만 고치는 장치라, 빈 목록으로 호출하면 LLM 콜 하나를 버리고 반드시 0건 적용으로
+  // 돌아온다. 곧장 작가 재작성(모순 문장을 근거에 맞춰 고치는 유일한 경로)으로 보낸다.
+  if (a.targeted && first.unsupported.length > 0) {
     let t: { body: string; applied: number; missed: string[] } | null = null;
     try { t = await a.targeted(body, first.unsupported); }
     catch { t = null; } // 표적 수정이 예외를 던지면 적용 0건과 동일하게 취급 — 작가 폴백
@@ -534,13 +562,19 @@ export async function runFactGateWithRepair(
     if (t && t.applied > 0) {
       const structOk = h2Count(t.body) >= h2Count(body); // 구조 가드 — 소제목이 줄었으면 마커가 깨졌다고 본다
       if (structOk) {
-        if (t.missed.length === 0 || t.applied >= Math.ceil(first.unsupported.length / 2)) {
+        // Fix round 4(I1) — 표적 수정 지름길은 "무근거만 있는 hold" 에서만 탄다. 모순(contradicted)이 하나라도
+        // 있으면 표적 수정으로는 못 고친다(표적은 unsupported 만 손대므로 모순 문장은 그대로 남고, 2차 판정에서
+        // 같은 모순으로 다시 hold 가 난다 — 그 사이 gate 콜 하나만 버린다). 모순은 근거와 어긋난 서술이라
+        // 작가가 근거에 맞춰 다시 쓰는 수밖에 없다.
+        if ((t.missed.length === 0 || t.applied >= Math.ceil(first.unsupported.length / 2)) && first.contradicted.length === 0) {
           targetedInfo.used = true;
           const second = await a.gate(t.body);
           return { body: t.body, result: { ...second, repaired: true, firstPass: toFirstPass(first) }, targeted: targetedInfo };
         }
-        // 절반 미만만 적용됐다 — 부분 적용된 본문을 기준으로 남은 문장만 작가가 마저 고치게 한다.
+        // 절반 미만만 적용됐거나(부분 적용) 모순이 남아 있다(I1) — 표적 수정된 본문을 기준으로 남은 문장·모순을
+        // 작가가 마저 고치게 한다. 피드백의 contradicted 목록은 1차 것을 그대로 넘긴다(표적이 손대지 않은 문장들).
         // 예산 참고: 이 경로는 gate(2) + targeted(1) + writer(1) + re-gate(2) = 최대 6콜(전부/폴백 경로의 5콜보다 +1).
+        // Fix round 4(I1) 이후엔 부분 적용뿐 아니라 "모순이 있는 hold" 도 이 경로로 온다.
         targetedInfo.used = true; // 표적 결과가 작가의 출발점으로 쓰였다 — 폐기가 아니라 기여했다
         baseBody = t.body;
         feedback = formatGateFeedback({ ...first, unsupported: t.missed });
