@@ -207,7 +207,9 @@ export async function extractFactCard(
     if (!raw) continue;
     // 이중 불릿 접두 정리(Fix round 1) — LLM 이 이미 "- "/"• "/"* " 를 붙여 내보내면 여기서 또 "- " 를
     // 붙여 "- - a" 꼴로 겹친다. 원문 접두를 벗기고 우리가 붙이는 "- " 하나로 통일한다.
-    const text = raw.replace(/^[-•*]\s*/, '').trim();
+    // Fix round 2: 접두 뒤에 공백이 있을 때만 벗긴다(\s+ — \s* 였을 때 "-5℃…" 같은 음수 부호를 불릿으로
+    // 오인해 부호째 삼켜 "5℃…"로 값이 뒤집혔다). 공백 없는 "-5"는 불릿이 아니라 수치의 일부다.
+    const text = raw.replace(/^[-•*]\s+/, '').trim();
     if (!text) continue;
     lines.push(`- ${text}`);
     if (lines.length >= max) break;

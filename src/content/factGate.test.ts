@@ -594,6 +594,10 @@ describe('extractFactCard', () => {
     mocked.mockResolvedValueOnce({ facts: ['- a (근거: x)', '• b (근거: y)'] });
     expect(await extractFactCard('m', '브리프')).toBe('- a (근거: x)\n- b (근거: y)');
   });
+  it('공백 없는 선행 "-"는 음수 부호로 보존한다(Fix round 2 — 불릿 오인 방지)', async () => {
+    mocked.mockResolvedValueOnce({ facts: ['-5℃ 이하에서는 동해를 입는다 (근거: 산림청)'] });
+    expect(await extractFactCard('m', '브리프')).toBe('- -5℃ 이하에서는 동해를 입는다 (근거: 산림청)');
+  });
   it('microJSON 이 null(무응답)이면 null(Fix round 1)', async () => {
     mocked.mockResolvedValueOnce(null);
     expect(await extractFactCard('m', '브리프')).toBeNull();
