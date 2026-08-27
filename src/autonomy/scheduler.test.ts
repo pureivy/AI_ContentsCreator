@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, shouldRememberDemandReject } from './scheduler';
 import type { DemandRow } from '../analytics/topicDemand';
 
 describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
@@ -486,5 +486,39 @@ describe('demandGateDecision — 기억된 수요 미달(opts.remembered)', () =
 
   it('remembered 가 없으면 종전 동작 그대로', () => {
     expect(demandGateDecision(rich, '가을 거름', cfg).verdict).toBe('pass');
+  });
+});
+
+// 기억 기록 자격(순수) — 호출부의 `!remembered` 가드를 테스트로 고정한다. 이 가드가 지워지면 후보 루프가
+// 매 틱 ts 를 갱신해 TTL 30일이 영영 만료되지 않는 '조용한 영구 금지'가 된다(읽기가 쓰기를 부르는 사고).
+describe('shouldRememberDemandReject — 기각 기억 기록 자격(순수)', () => {
+  it('이미 기억된 건은 다시 쓰지 않는다 — 읽기가 쓰기를 부르면 TTL 이 영영 갱신된다', () => {
+    expect(shouldRememberDemandReject({ verdict: 'reject' }, { keyword: '가을 거름', line: 'L', ts: '2026-08-01T00:00:00.000Z' }, '가을 거름')).toBe(false);
+    // 마지막 라운드 밸브가 기억을 후순위로 낮춘 경우도 마찬가지(relaxed 만 보고 쓰면 같은 사고가 난다).
+    expect(shouldRememberDemandReject({ verdict: 'demote', relaxed: true }, { keyword: '가을 거름', line: 'L', ts: '2026-08-01T00:00:00.000Z' }, '가을 거름')).toBe(false);
+  });
+
+  it('이번 틱의 API 하드 기각은 기억한다', () => {
+    expect(shouldRememberDemandReject({ verdict: 'reject' }, null, '가을 거름')).toBe(true);
+  });
+
+  it('마지막 라운드 밸브가 낮춘 후순위(relaxed)도 기억한다 — 원 판정이 reject 였다', () => {
+    expect(shouldRememberDemandReject({ verdict: 'demote', relaxed: true }, null, '가을 거름')).toBe(true);
+  });
+
+  it('순수 비수기 demote 는 기억하지 않는다 — 수요는 있고 지금이 아닐 뿐, 다음 시즌에 다시 제안돼야 한다', () => {
+    expect(shouldRememberDemandReject({ verdict: 'demote' }, null, '사과나무 비료')).toBe(false);
+  });
+
+  it('통과는 기억하지 않는다', () => {
+    expect(shouldRememberDemandReject({ verdict: 'pass' }, null, '배롱나무 가을 식재')).toBe(false);
+  });
+
+  it('unknown(미조회·조회 실패)은 기억하지 않는다 — 측정 안 한 것을 30일 금지로 굳히면 안 된다(fail-open)', () => {
+    expect(shouldRememberDemandReject({ verdict: 'unknown' }, null, '조회 안 한 키워드')).toBe(false);
+  });
+
+  it('keyword 가 없으면 기록 대상이 아니다(기억 키가 없다)', () => {
+    expect(shouldRememberDemandReject({ verdict: 'reject' }, null, undefined)).toBe(false);
   });
 });

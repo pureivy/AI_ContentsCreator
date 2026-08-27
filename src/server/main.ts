@@ -2648,6 +2648,11 @@ function purgeBrandData(slug: string): { pieces: number; cards: number; shorts: 
   move(path.join(path.dirname(CONFIG.wikiDir), `raw-${slug}`), 'raw');
   move(path.join(CONFIG.dataDir, '_shared', `research-state-${slug}.json`), `research-state-${slug}.json`);
   move(path.join(CONFIG.dataDir, 'analytics', `strategy-${slug}.json`), `strategy-${slug}.json`);
+  // 수요 기각 원장(2026-08-27 신설)도 동반 정리 — 후보를 실제로 '기각'까지 시키는 브랜드 스코프 게이트라
+  // 잔존 시 죽은 브랜드의 실측 기각이 동명 재생성 브랜드의 하드 게이트로 30일 작동하고, 제안 금지 블록으로
+  // 두뇌 프롬프트에도 주입된다. 옆의 수요 스냅샷(demand-)은 정보 표일 뿐이지만 같은 브랜드 자료라 함께 옮긴다.
+  move(path.join(CONFIG.dataDir, 'analytics', `demand-rejects-${slug}.json`), `demand-rejects-${slug}.json`);
+  move(path.join(CONFIG.dataDir, 'analytics', `demand-${slug}.json`), `demand-${slug}.json`);
   move(path.join(CONFIG.dataDir, '_shared', `decisions-${slug}.md`), `decisions-${slug}.md`);
   // 리서치 판정·트렌드 스냅샷(2026-08-20 신설)도 동반 정리 — 잔존 시 새 브랜드가 죽은 브랜드의 폐기 게이트·연관어를 승계.
   move(path.join(CONFIG.dataDir, 'topics', `verdicts-${slug}.json`), `verdicts-${slug}.json`);
@@ -3459,9 +3464,11 @@ function canGenerateNew(pieces: Piece[], force = false): boolean {
  * (예고 이행·클러스터 형제 소진)는 게이트를 통째로 우회해, LLM 이 쓴 "다음 편" 문구나 자동완성 형제가
  * 검색량 검증 없이 그대로 발주됐다(리서치 폐기 게이트를 두 경로에 소급했던 처서 실사고와 같은 형태).
  *
- * 호출은 그 경로가 실제로 후보를 낸 틱에서만 — 조용한 틱의 비용은 0이다. 게이트 off·검색광고 키 없음은
- * 조회도 로그도 하지 않는다('측정 안 함'을 측정한 것처럼 로그가 주장하면 안 된다). 예외·빈 Map 은
- * fail-open(unknown) — 판정은 실제 응답을 받았을 때만 한다.
+ * 호출은 그 경로가 실제로 후보를 낸 틱에서만 — 조용한 틱의 비용은 0이다. 게이트 off 는 아무것도 하지 않고,
+ * 검색광고 키가 없으면 API 조회도 로그도 하지 않는다('측정 안 함'을 측정한 것처럼 로그가 주장하면 안 된다).
+ * 단 기억 조회는 키와 무관하게 한다 — 기억은 이미 받아 둔 실측이라 키가 필요 없고(그게 '재조회 0'의 요점),
+ * 키 유무로 갈리면 같은 키워드가 아이디어 경로에서는 기각·예고 경로에서는 통과하는 비대칭이 생긴다.
+ * 예외·빈 Map 은 fail-open(unknown) — 판정은 실제 응답을 받았을 때만 한다.
  */
 async function demandCheckFor(
   keyword: string,
@@ -3469,13 +3476,16 @@ async function demandCheckFor(
   signal?: AbortSignal,
   slug: string = activeBrandSlug() || '',
 ): Promise<{ verdict: DemandVerdict; line: string }> {
-  if (!CONFIG.topicDemandGate || !searchAdEnabled()) return { verdict: 'unknown', line: '' };
+  if (!CONFIG.topicDemandGate) return { verdict: 'unknown', line: '' };
   const cfg = { minVolume: CONFIG.topicDemandMinVolume, minSeason: CONFIG.topicDemandMinSeason };
   // 기각 기억(2026-08-27) — 지난 틱에 실측으로 하한 미달이 확정된 키워드는 API 를 부르지 않는다(조회 비용 0).
   // 세 경로(후보 루프·예고·클러스터)가 같은 원장을 공유해야, 어느 경로에서 떨어진 키워드든 다른 경로로
   // 되돌아오지 않는다. 여기엔 기아 방지 밸브가 없다(단건 판정이라 '후보 전멸' 개념 자체가 없음).
   const remembered = demandRejectFor(slug, keyword);
   if (remembered) return demandGateDecision(new Map(), keyword, cfg, { remembered: { line: remembered.line } });
+  // 검색광고 키는 여기서부터(API 경로)만 요구한다 — 위 기억 조회보다 앞에 두면 키 없는 설정에서 이 두 경로만
+  // 원장을 못 보게 되고, 스케줄러(키와 무관하게 기억을 본다)와 갈려 '세 경로가 같은 원장을 공유'가 깨진다.
+  if (!searchAdEnabled()) return { verdict: 'unknown', line: '' };
   // 레그 단위로 삼킨다 — 커넥터 예외가 틱 전체(예고 이행·형제 소진)를 날리면 안 된다(scheduler 와 동일 규약).
   const rows = await assessCandidatesDemand([keyword], signal).catch(() => new Map<string, DemandRow>());
   const d = demandGateDecision(rows, keyword, cfg);

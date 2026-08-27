@@ -377,6 +377,26 @@ export function demandGateDecision(
 }
 
 /**
+ * 이번 판정을 기각 기억(원장)에 남길 것인가(순수, 테스트 대상).
+ *
+ * `remembered` 가 있으면 항상 false — 이 가드가 이 함수의 존재 이유다. 지워지면 후보 루프가 기억을 읽을
+ * 때마다 다시 써서 `ts` 가 매 틱 갱신되고, TTL 30일이 영영 만료되지 않는 '조용한 영구 금지'가 된다.
+ * `relaxed: true` 는 'API 원 판정이 reject 였는데 마지막 라운드 밸브가 후순위로 낮췄다'는 뜻이라 기억
+ * 대상이고, 순수 비수기 demote 는 아니다(수요는 있고 지금이 아닐 뿐 — 다음 시즌에 다시 제안돼야 한다).
+ * `unknown` 도 아니다(미조회·조회 실패 = '측정 안 함'이라, 기억하면 미측정이 30일 금지로 굳는다 — fail-open).
+ *
+ * 반환 타입이 술어(`keyword is string`)인 것은 호출부에서 `keyword` 를 좁혀 중복 `&& keyword` 를 없애기 위함.
+ */
+export function shouldRememberDemandReject(
+  demand: { verdict: DemandVerdict; relaxed?: boolean },
+  remembered: unknown,
+  keyword: string | undefined,
+): keyword is string {
+  if (remembered || !keyword) return false;
+  return demand.verdict === 'reject' || demand.relaxed === true;
+}
+
+/**
  * 후순위 보관함에서 채택할 후보 하나(순수) — rank 오름차순, 같은 rank 는 먼저 담긴 순서를 유지한다
  * (rank 0=비수기, 1=기아 방지 밸브. '지금 덜 찾는 소재'가 '아예 검색량이 없는 소재'보다 항상 낫다).
  * 엄격 부등호 비교라서 안정성이 구현에 박혀 있다 — sort 로 바꾸면 동률 순서 보장을 잃는다.
@@ -546,9 +566,12 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     if (demandTargets.length && !demandRows.size) console.log('[auto-cycle] 수요 조회 실패 — 게이트 생략');
     // 채택 시 수요 실측을 한 줄 남긴다(세 채택 경로 공용) — 나중에 '왜 이 주제였나'를 로그만으로 재구성하려면
     // 기각뿐 아니라 통과한 후보의 숫자도 있어야 한다. 게이트 off 면 아무 말도 하지 않는다(무주입 원칙).
-    const logDemandAdopt = (title: string, keyword?: string): void => {
+    // 판정 line 을 아는 호출부는 그대로 넘긴다 — 기억으로 기각됐다가 밸브·폴백으로 되살아난 후보는
+    // 애초에 조회 대상에서 빠져(demandTargets) demandRows 에 없으므로, 여기서 다시 계산하면 실측이
+    // 엄연히 있는데도 '조회 없음 채택'이라고 로그가 주장하게 된다(위 무주입 원칙의 대칭 사고).
+    const logDemandAdopt = (title: string, keyword?: string, known?: string): void => {
       if (!demandOn) return;
-      const { line } = demandGateDecision(demandRows, keyword, demandCfg);
+      const line = known || demandGateDecision(demandRows, keyword, demandCfg).line;
       console.log(`[auto-cycle] 수요 게이트 — "${title}" ${line || '조회 없음'} 채택`);
     };
     const gated = cands.map((cand, i) => ({
@@ -560,9 +583,12 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // 대상. 새 소재 후보를 우선하되, 이번 라운드에 새 소재가 없으면 유사 후보를 채택한다 — 집필 시점에
     // priorCoverageBrief 가 이전 글 앵글을 주입해 프레이밍을 바꾼다(same-topic different content 배선).
     let similarFallback: ContentIdea | null = null;
+    let similarFallbackLine = '';   // 그 후보의 수요 판정 문구(기억 경로는 demandRows 에 없다 — 채택 로그용)
     // 후순위 보관함 — 라운드 안에서만 산다(라운드 밖에 두면 1라운드 기각 사유를 되먹인 뒤에도
     // 그 라운드의 후보가 2라운드 끝에 되살아난다). rank 0=비수기, 1=기아 방지 밸브(아래).
-    const demoted: Array<{ idea: ContentIdea; rank: 0 | 1 }> = [];
+    // line 은 그 후보의 판정 문구 — 채택 로그가 '조회 없음'으로 새지 않게 함께 들고 간다(기억 경로는
+    // 조회 대상에서 빠져 demandRows 에 없다).
+    const demoted: Array<{ idea: ContentIdea; rank: 0 | 1; line: string }> = [];
     for (const { cand, gate } of gated) {
       const { title, keyword } = cand;
       if (recentAuto.includes(title)) {
@@ -615,11 +641,15 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         relax: attempt === IDEA_ROUNDS - 1,
         ...(remembered ? { remembered: { line: remembered.line } } : {}),
       });
+      // 기억은 '실측 결과'이지 '채택 자격'이 아니다 — 판정이 난 자리에서 바로 기록한다. 아래 게이트
+      // (계열 하드·수종 앵커·유사·소재 포화)에 먼저 걸려 continue 되는 후보도 실측은 이미 받았으므로,
+      // 여기서 기록하지 않으면 다음 틱에 같은 키워드가 또 검색광고 조회를 태운다(이 태스크가 없애려던
+      // 재조회 낭비가 마지막 라운드 경로에만 남던 비대칭). 실패는 함수 안에서 삼켜지는 fire-and-forget.
+      if (shouldRememberDemandReject(demand, remembered, keyword)) rememberDemandReject(slug, keyword, demand.line);
       if (demand.verdict === 'reject') {
         console.log(remembered
           ? `[auto-cycle] 아이디어 기각(검색 수요 미달·기억) — "${title}" (${demand.line})`
           : `[auto-cycle] 아이디어 기각(검색 수요 미달) — "${title}" (${demand.line})`);
-        if (!remembered && keyword) rememberDemandReject(slug, keyword, demand.line);
         rejects.push(`"${title}"=검색 수요 미달(${demand.line})`);
         continue;
       }
@@ -644,7 +674,10 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         console.log(`[auto-cycle] 아이디어 유사 감지 — "${title}" ≈ (${top.kind}) "${top.title}" → 새 소재 우선, 없으면 다른 시각으로 채택`);
         // 폴백 자격은 계열 게이트 none 후보만(리뷰 확정: 소프트 후보가 폴백으로 채택되면 창설 사고
         // 경로 — 포도 4편째 유사 폴백 채택 — 가 감쇠 완화 뒤로 다시 열린다).
-        if (!similarFallback && gate.level === 'none') similarFallback = { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
+        if (!similarFallback && gate.level === 'none') {
+          similarFallback = { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
+          similarFallbackLine = demand.line;   // 마지막 라운드에 기억으로 후순위가 된 후보가 여기로 온다(로그가 '조회 없음'으로 새지 않게)
+        }
         continue; // 이번 라운드의 새 소재 후보를 먼저 소진한다
       }
       // 개념 포화 기각 — 표면 유사(findSimilarContent)는 통과했지만 핵심 소재가 여러 편과 겹치면 1회만 다른 축 유도.
@@ -665,9 +698,8 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         console.log(demand.relaxed
           ? `[auto-cycle] 아이디어 후순위(검색 수요 미달·기아 방지) — "${title}" (${demand.line})`
           : `[auto-cycle] 아이디어 후순위(검색 비수기) — "${title}" (${demand.line})`);
-        // relaxed=true 는 'API 판정이 reject 였는데 밸브가 후순위로 낮췄다'는 뜻이라 기억 대상이다
-        // (비수기 demote 는 아니다 — 그건 수요가 있는데 지금이 아닐 뿐이라 다음 시즌에 다시 제안돼야 한다).
-        if (demand.relaxed && !remembered && keyword) rememberDemandReject(slug, keyword, demand.line);
+        // (기억 기록은 위 판정 지점에서 이미 끝났다 — 이 블록보다 위의 게이트에 걸려 여기 못 오는
+        //  후보도 실측은 받았으므로, 기록을 채택 자격 판단 뒤로 미루면 그 후보만 매 틱 재조회된다.)
         // 후순위 사유도 노트에 남긴다(2026-08-26 최종 리뷰 M3) — 종전엔 rejects 가 비어 2라운드 노트가
         // "전부 무효"로 나가, 두뇌는 뭐가 문제였는지(비수기냐 수요 미달이냐) 모른 채 다시 제안했다.
         // 보관 자격(계열 none)과 무관하게 기록한다 — 노트는 두뇌에게 주는 정보고, 보관은 별개 판단이다.
@@ -676,6 +708,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
           demoted.push({
             idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) },
             rank: demand.relaxed ? 1 : 0,   // 비수기(0)가 하한 미달(1)보다 항상 낫다 — 소재 자체엔 수요가 있다
+            line: demand.line,              // 채택되면 이 실측 줄이 로그에 그대로 간다(기억 경로는 demandRows 에 없다)
           });
         }
         continue;
@@ -691,11 +724,11 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // (rank 1)은 검색량이 실측으로 0 에 가까운 후보라, 검색량이 있을 수 있는 유사 폴백에 진다(리뷰 I3).
     const adoption = pickRoundAdoption(demoted, !!similarFallback);
     if (adoption?.source === 'demoted') {
-      const { idea, rank } = adoption.pick;
+      const { idea, rank, line } = adoption.pick;
       console.log(rank === 1
         ? `[auto-cycle] 수요 미달 후보 채택(기아 방지) — "${idea.title}"`
         : `[auto-cycle] 수요 비수기 후보 채택(대안 없음) — "${idea.title}"`);
-      logDemandAdopt(idea.title, idea.keyword);
+      logDemandAdopt(idea.title, idea.keyword, line);
       recentAuto.push(idea.title);
       if (recentAuto.length > 20) recentAuto.shift();
       if (idea.keyword) consumeOpportunityVerdict(idea.keyword);
@@ -706,7 +739,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // 실사고(포도 4편째)는 자격+N7 바닥선 이중으로 봉쇄돼 있다.
     if (similarFallback) {
       console.log(`[auto-cycle] 유사 주제 채택(다른 시각 생성) — "${similarFallback.title}"`);
-      logDemandAdopt(similarFallback.title, similarFallback.keyword);
+      logDemandAdopt(similarFallback.title, similarFallback.keyword, similarFallbackLine);
       recentAuto.push(similarFallback.title);
       if (recentAuto.length > 20) recentAuto.shift();
       if (similarFallback.keyword) consumeOpportunityVerdict(similarFallback.keyword);
