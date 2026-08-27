@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import YAML from 'yaml';
 import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug, brandFileSuffixFor, bannedTopicTerms, offBrandTerm } from './brand';
 
 // 브랜드 프로필 — 정규화·주입 블록(순수 함수) 회귀 방지.
@@ -150,5 +153,52 @@ describe('avoidJargon 파싱 + lintLexicon', () => {
   it('lintLexicon — 목록 없으면 빈 배열', async () => {
     const { lintLexicon } = await import('./brand');
     expect(lintLexicon('아무 본문', undefined)).toEqual([]);
+  });
+});
+
+// 한자어 치환(2026-08-27 말투 감사 권고 8) — 데이터 픽스처 대조.
+// 활성(data/brand.yaml)과 레지스트리(data/brands/bionditree.yaml) 양쪽에 같은 목록이 있어야 한다
+// (08-14 어휘 가드 전례: 한쪽만 고치면 무반영 — 주입은 활성만 읽고, 브랜드 재전환은 레지스트리로 덮어쓴다).
+describe('avoidJargon 데이터 — 톤에서 튀는 한자어 치환(활성+레지스트리)', () => {
+  const readAvoid = (rel: string): Array<{ term: string; use: string }> => {
+    const raw = YAML.parse(fs.readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf-8')) as
+      { avoidJargon?: Array<{ term: string; use: string }> } | null;
+    return raw?.avoidJargon ?? [];
+  };
+  const ACTIVE = '../../data/brand.yaml';
+  const REGISTRY = '../../data/brands/bionditree.yaml';
+  // 2026-08-27 권고 8이 지정한 정확한 10쌍.
+  const ADDED: Array<{ term: string; use: string }> = [
+    { term: '흡즙', use: '즙을 빨아' },
+    { term: '고착', use: '한자리에 붙어' },
+    { term: '회차', use: '이번 차례' },
+    { term: '미착근', use: '뿌리를 아직 못 내림' },
+    { term: '부적합', use: '쓰기 어렵다' },
+    { term: '완만히', use: '느슨하게 옆으로' },
+    { term: '급수', use: '물 주기' },
+    { term: '증발량', use: '마르는 양' },
+    { term: '정지기', use: '쉬는 철' },
+    { term: '확연히', use: '눈에 띄게' },
+  ];
+
+  it('활성 brand.yaml — 10쌍이 정확한 표기로 들어 있다', () => {
+    const avoid = readAvoid(ACTIVE);
+    for (const pair of ADDED) expect(avoid).toContainEqual(pair);
+  });
+
+  it('레지스트리 bionditree.yaml — 10쌍이 정확한 표기로 들어 있다', () => {
+    const avoid = readAvoid(REGISTRY);
+    for (const pair of ADDED) expect(avoid).toContainEqual(pair);
+  });
+
+  it('활성과 레지스트리의 avoidJargon 이 동일(한쪽만 수정 방지)', () => {
+    expect(readAvoid(ACTIVE)).toEqual(readAvoid(REGISTRY));
+  });
+
+  it('normalizeBrand 캡(30) 안에 들어 정규화에서 잘리지 않는다', () => {
+    const avoid = readAvoid(ACTIVE);
+    expect(avoid.length).toBeLessThanOrEqual(30);
+    expect(normalizeBrand({ name: '비온디트리', avoidJargon: avoid } as never)!.avoidJargon)
+      .toEqual(avoid);
   });
 });

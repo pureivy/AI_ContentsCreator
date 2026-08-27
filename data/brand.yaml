@@ -96,4 +96,24 @@ avoidJargon:
     use: 나눈다
   - term: 가릅니
     use: 나눕니
+  - term: 흡즙
+    use: 즙을 빨아
+  - term: 고착
+    use: 한자리에 붙어
+  - term: 회차
+    use: 이번 차례
+  - term: 미착근
+    use: 뿌리를 아직 못 내림
+  - term: 부적합
+    use: 쓰기 어렵다
+  - term: 완만히
+    use: 느슨하게 옆으로
+  - term: 급수
+    use: 물 주기
+  - term: 증발량
+    use: 마르는 양
+  - term: 정지기
+    use: 쉬는 철
+  - term: 확연히
+    use: 눈에 띄게
 cardStyle: handwritten_poster
