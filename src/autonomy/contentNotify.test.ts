@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   escapeHtml, stripMarkdown, reviewLink, studioBase,
-  blogReadyHtml, cardnewsCaptionHtml, shortsCaptionHtml, factGateLines,
+  blogReadyHtml, cardnewsCaptionHtml, shortsCaptionHtml, factGateLines, briefGateLines,
 } from './contentNotify';
 
 describe('escapeHtml', () => {
@@ -203,5 +203,60 @@ describe('blogReadyHtml — 문체 린트 잔존 줄(2026-08-27 권고 3)', () =
     const html = blogReadyHtml({ id: 'p1', title: 'T', factGate: fg }, '본문 발췌', false, 1);
     expect(html.indexOf('✍ 문체 1건 잔존')).toBeGreaterThan(html.indexOf('사실 게이트'));
     expect(html.indexOf('✍ 문체 1건 잔존')).toBeLessThan(html.indexOf('✋'));
+  });
+});
+
+describe('briefGateLines — 브리프 게이트 표시(2026-08-28)', () => {
+  const rec = (over = {}) => ({
+    verdict: 'revision_needed', score: 43, maxScore: 70, rounds: 1,
+    unresolved: ['"손질강도" 수치는 브리프 어디에도 근거가 없다', '향나무 중간기주 관계를 공식 자료로 확인'],
+    checkedTs: 't', ...over,
+  });
+
+  it('반려면 점수·미해소 건수를 낸다', () => {
+    const s = briefGateLines(rec());
+    expect(s).toContain('⚖ 브리프 반려 43/70 · 미해소 2건');
+    expect(s).toContain('• "손질강도" 수치는 브리프 어디에도 근거가 없다');
+  });
+
+  it('통과·미기록이면 줄이 없다 — 정상은 알리지 않는다', () => {
+    expect(briefGateLines(rec({ verdict: 'approved', unresolved: [] }))).toBe('');
+    expect(briefGateLines(null)).toBe('');
+    expect(briefGateLines(undefined)).toBe('');
+  });
+
+  it('미파싱은 "검증 미작동"으로 알린다 — 조용히 넘기면 검증됐다고 오해한다', () => {
+    expect(briefGateLines(rec({ verdict: 'unparsed', score: null, maxScore: null, unresolved: [] })))
+      .toContain('⚖ 브리프 판정 미파싱 — 검증 미작동');
+  });
+
+  it('점수를 못 읽었으면 점수 없이 낸다', () => {
+    expect(briefGateLines(rec({ score: null, maxScore: null }))).toContain('⚖ 브리프 반려 · 미해소 2건');
+  });
+
+  it('지적은 최대 2건까지·80자에서 자른다', () => {
+    const many = briefGateLines(rec({ unresolved: ['a', 'b', 'c', 'd'] }));
+    expect(many.split('\n').filter((l) => l.startsWith('•'))).toHaveLength(2);
+    expect(briefGateLines(rec({ unresolved: ['가'.repeat(200)] }))).toContain('…');
+  });
+});
+
+describe('blogReadyHtml — 브리프 게이트 줄 배치(2026-08-28)', () => {
+  const gate = {
+    verdict: 'revision_needed', score: 43, maxScore: 70, rounds: 1,
+    unresolved: ['무근거 수치'], checkedTs: 't',
+  };
+
+  it('사실 게이트 아래·문체 위에 온다(심각도 순)', () => {
+    const fg = { status: 'hold' as const, unsupported: ['근거 없는 문장'], contradicted: [], checkedTs: 't' };
+    const html = blogReadyHtml({ id: 'p1', title: 'T', factGate: fg }, '발췌', false, 2, gate);
+    expect(html.indexOf('브리프 반려')).toBeGreaterThan(html.indexOf('사실 게이트'));
+    expect(html.indexOf('브리프 반려')).toBeLessThan(html.indexOf('✍ 문체'));
+    expect(html.indexOf('브리프 반려')).toBeLessThan(html.indexOf('✋'));
+  });
+
+  it('기록이 없으면 기존 메시지 그대로다(회귀 0)', () => {
+    expect(blogReadyHtml({ id: 'p1', title: 'T' }, '', false, 0)).not.toContain('브리프');
+    expect(blogReadyHtml({ id: 'p1', title: 'T' }, '', false, 0, null)).not.toContain('브리프');
   });
 });

@@ -113,6 +113,11 @@ export interface Config {
   /** 엄격 모드(2026-08-27 복귀 스위치) — on 이면 무근거 주장을 종류와 무관하게 전부 보류(구 동작).
    * 기본 off: 수치·시기·약제·법령·가격·통계·경험 주장만 보류하고, 일반 상식 문장은 참고(unverified)로 통과. */
   readonly factGateStrict: boolean;
+  /** 브리프 게이트(2026-08-28) — 팩트체커 판정(REVISION_NEEDED)을 기계 판독해 재작업 1라운드를 돌리고
+   * 미해소 지적을 작가에게 '필수 반영'으로 주입한다. off 면 판독·재작업·주입 모두 중단(구 동작). */
+  readonly briefGate: boolean;
+  /** 브리프 게이트 재작업 라운드 상한(0~3 클램프). 0 이면 판독·표시만 하고 재작업은 돌리지 않는다. */
+  readonly briefGateRounds: number;
   /** 파생 콘텐츠 시기·수치 원문 대조(2026-08-27 권고 1) — 결정적 검사. off 면 검출·오버레이 제거 모두 중단. */
   readonly timingParity: boolean;
   /** 블로그 본문 문체 린트(2026-08-27 권고 3) — 결정적 4종 검사 후 작가 수정 1회. off 면 검사·수정 모두 중단. */
@@ -314,6 +319,10 @@ export const CONFIG: Config = {
   factGate: envBool('FACT_GATE', true),
   factGateMaxClaims: Math.min(Math.max(5, envInt('FACT_GATE_MAX_CLAIMS', 20)), 40),
   factGateStrict: envBool('FACT_GATE_STRICT', false),
+  // 브리프 게이트(2026-08-28) — 팩트체커 반려가 아무것도 막지 못하던 실측(런 ba522a39fa7d: REVISION_NEEDED
+  // 43/70 판정 62초 뒤 집필 착수) 대응. 판정을 읽어 재작업을 돌리고, 남은 지적은 작가에게 필수 반영으로 넘긴다.
+  briefGate: envBool('BRIEF_GATE', true),
+  briefGateRounds: Math.min(Math.max(0, envInt('BRIEF_GATE_ROUNDS', 1)), 3),
   // 시기·수치 원문 대조(2026-08-27 권고 1) — 활엽수 실사고: 블로그 "근거 확실치 않다" ↔ 쇼츠 "지금이 적기" + 오버레이 "8월".
   timingParity: envBool('TIMING_PARITY', true),
   blogStyleLint: envBool('BLOG_STYLE_LINT', true),

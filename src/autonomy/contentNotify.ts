@@ -15,7 +15,8 @@ import {
 } from './notify';
 import type { TgButton } from './notify';
 import type { FactGateInfo } from '../content/factGate';
-import { readStyleLint } from '../sessions/digest';
+import { readStyleLint, readBriefGate } from '../sessions/digest';
+import type { BriefGateRecord } from '../sessions/digest';
 
 export interface BlogReadyInfo {
   id: string; title?: string; keyword?: string; seoScore?: number; brand?: string;
@@ -126,11 +127,26 @@ export function factGateLines(info: FactGateInfo | undefined, maxItems: number, 
 /** 자동 임시저장이 꺼진 동안의 안내 1줄(2026-08-27 사용자 확정) — 사람이 버튼을 눌러야 저장된다는 사실을 못 박는다. */
 const MANUAL_REVIEW_LINE = '✋ 수동 검토 대기 — 아래 "네이버 임시저장" 버튼으로 저장';
 
+/** 브리프 게이트 줄(2026-08-28) — `⚖ 브리프 반려 43/70 · 미해소 3건` + 지적 최대 2건. 순수 — 테스트 대상.
+ * 통과(approved)면 빈 문자열: 정상은 알리지 않는다(줄이 늘면 반려 줄이 묻힌다).
+ * 미파싱(unparsed)도 알린다 — 판정을 못 읽었다는 건 게이트가 이번 런에 작동하지 않았다는 뜻이라, 조용히
+ * 넘기면 사람이 '검증됐다'고 오해한다. */
+export function briefGateLines(g: BriefGateRecord | null | undefined, maxItems = 2): string {
+  if (!g || g.verdict === 'approved') return '';
+  const clip = (s: string): string => (s.length > 80 ? `${s.slice(0, 80)}…` : s);
+  const score = g.score !== null && g.maxScore !== null ? ` ${g.score}/${g.maxScore}` : '';
+  const head = g.verdict === 'unparsed'
+    ? '⚖ 브리프 판정 미파싱 — 검증 미작동, 수동 검토 필요'
+    : `⚖ 브리프 반려${score} · 미해소 ${g.unresolved.length}건`;
+  return [head, ...g.unresolved.slice(0, maxItems).map((s) => `• ${clip(s)}`)].join('\n');
+}
+
 /**
  * 블로그 ready 텔레그램 메시지(HTML). 순수 — 테스트 대상(autoDraft 는 기본값만 CONFIG 에서 읽는다).
  * styleResidual = 문체 린트 수정 1회 뒤에도 남은 지적 수(2026-08-27 권고 3) — 0 이면 줄 자체가 없다.
+ * briefGate = 브리프 게이트 기록(2026-08-28) — 통과·미기록이면 줄 자체가 없다.
  */
-export function blogReadyHtml(p: BlogReadyInfo, excerpt: string, autoDraft = CONFIG.autoNaverDraft, styleResidual = 0): string {
+export function blogReadyHtml(p: BlogReadyInfo, excerpt: string, autoDraft = CONFIG.autoNaverDraft, styleResidual = 0, briefGate: BriefGateRecord | null = null): string {
   const meta = [p.keyword, typeof p.seoScore === 'number' ? `SEO ${p.seoScore}점` : '']
     .filter(Boolean).join(' · ');
   return [
@@ -138,6 +154,9 @@ export function blogReadyHtml(p: BlogReadyInfo, excerpt: string, autoDraft = CON
     `<b>${escapeHtml(clip(p.title ?? '(제목 미정)', 200))}</b>`,
     meta ? escapeHtml(meta) : '',
     factGateLines(p.factGate, 3) ? escapeHtml(factGateLines(p.factGate, 3)) : '',
+    // 브리프 게이트(2026-08-28) — 사실 게이트 '아래', 문체 '위'. 심각도 순서다: 본문 근거(사실) → 집필 재료의
+    // 근거(브리프) → 말투(문체). 셋 다 발행을 막지 않는 표시 전용이고, 판단은 사람이 한다.
+    briefGateLines(briefGate) ? escapeHtml(briefGateLines(briefGate)) : '',
     // 문체 린트 잔존(2026-08-27 권고 3) — 사실 게이트 줄 옆. 발행을 막지 않는 표시 전용이라 건수만 낸다.
     styleResidual > 0 ? escapeHtml(`✍ 문체 ${styleResidual}건 잔존`) : '',
     // 사실 게이트 줄 '아래' — 보류 사유를 먼저 읽고 버튼을 누르는 순서.
@@ -200,10 +219,14 @@ export async function notifyBlogReady(p: BlogReadyInfo, runId: string): Promise<
     // Fix round 1 — `?.issues?.length` 로 한 단계 더 방어한다(readStyleLint 의 Array 검증과 이중). 여기서 던지면
     // 바깥 try 가 삼켜 텔레그램은 물론 notifyWebhookOnly 알림까지 함께 유실된다.
     const styleResidual = (runId ? readStyleLint(runId)?.issues?.length : 0) ?? 0;
-    if (telegramCreds()) await sendTelegramHtml(blogReadyHtml(p, excerpt, undefined, styleResidual), blogButtons(p.id));
+    // 브리프 게이트 기록(2026-08-28) — style_lint 와 같은 경로. readBriefGate 가 손상 기록을 null 로
+    // 떨어뜨리므로 여기서 던지지 않는다(던지면 바깥 try 가 삼켜 알림이 통째로 사라진다).
+    const briefGate = runId ? readBriefGate(runId) : null;
+    if (telegramCreds()) await sendTelegramHtml(blogReadyHtml(p, excerpt, undefined, styleResidual, briefGate), blogButtons(p.id));
     await notifyWebhookOnly({
       title: `${blogReadyLabel(p.revised)}${brandTag(p.brand)} · ${p.title ?? '(제목 미정)'}`,
-      body: [excerpt, `검토: ${reviewLink(p.id)}`].filter(Boolean).join('\n'),
+      // 웹훅에도 반려를 싣는다 — 텔레그램만 보는 게 아니다(둘 중 하나만 보는 사람이 게이트를 못 보면 안 된다).
+      body: [briefGateLines(briefGate), excerpt, `검토: ${reviewLink(p.id)}`].filter(Boolean).join('\n'),
     });
   } catch { /* 무해 */ }
 }

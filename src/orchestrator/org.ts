@@ -27,7 +27,8 @@ import { getRunSettings } from '../runsettings';
 import { brandContext, activeBrandSlug, getBrand, lexiconGuide } from '../content/brand';
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid, recentBlogEndings } from '../content/priorCoverage';
 import { collectExistingContent } from '../content/novelty';
-import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard } from '../sessions/digest';
+import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard, writeBriefGate } from '../sessions/digest';
+import { parseBriefVerdict, parseUnresolved, isBlocking, describeVerdict, VERDICT_FORMAT } from './briefVerdict';
 import { blogStyleIssues, styleRevisionReject } from '../content/styleLint';
 import { resolveStructureSeed, inheritStructureSeed, structureBlock, STRUCTURE_KEEP_BLOCK } from '../content/structureSeed';
 import { factGateBlog, buildEvidence, runFactGateWithRepair, repairSentences, applySentenceRepairs, extractFactCard, FACT_CARD_HEADER } from '../content/factGate';
@@ -223,6 +224,9 @@ export async function writeBlogBody(a: {
   topic: string;
   brief: string;
   critiqueText?: string;
+  /** 브리프 게이트 미해소 지적(2026-08-28) — 재작업 뒤에도 남은 반려 사유. critiqueText 가 '참고'인 것과 달리
+   *  이건 **필수 반영**이다(무근거 기입은 본문에서 빼라는 지시). 통과했거나 게이트 off 면 비어 있다. */
+  mustFix?: string[];
   /** 네이버 블로그 SERP 실측(상위 노출 제목) — 인기가 검증된 방향으로 집필을 조향. */
   serpText?: string;
   /** 리비전 모드(검토 탭 '수정 요청') — 새 집필이 아니라 기존 초안을 피드백에 따라 개정. */
@@ -243,7 +247,7 @@ export async function writeBlogBody(a: {
   teaser?: boolean;
   signal?: AbortSignal;
 }): Promise<string> {
-  const { bus, writer, model, topic, brief, critiqueText, serpText, revise, personaGuide, keyword, microModel, factCard, structure = '', teaser, signal } = a;
+  const { bus, writer, model, topic, brief, critiqueText, mustFix, serpText, revise, personaGuide, keyword, microModel, factCard, structure = '', teaser, signal } = a;
   const brandSlug = activeBrandSlug() || undefined;
   // 같은 주제 기존 글이 있으면 '관점을 완전히 다르게' 지시를 주입(revise 는 자기 초안 개정이라 제외).
   let priorCoverage = revise ? '' : priorCoverageBrief('블로그', topic, keyword, { brandSlug });
@@ -348,6 +352,17 @@ export async function writeBlogBody(a: {
   }
   // 지침 선택은 '이 콜에 [이번 글 구조] 블록이 실리는가'로 정한다 — 위임 문구와 블록이 항상 짝으로 나간다.
   const guide = blogBodyGuide(!!structure);
+  // 브리프 게이트 미해소(2026-08-28) — 검수 의견이 '참고'인 것과 달리 이건 필수다. 브리프에 남아 있는
+  // 무근거 기입을 작가가 그대로 옮겨 적는 경로를 막는다(반려가 집필을 못 막는다면, 최소한 반려 사유가
+  // 본문에 실리는 것은 막아야 한다). 마지막 블록에 두는 이유 — 앞선 [리서치·SEO 브리프]가 실어 온
+  // 주장을 뒤에서 무효화해야 하고, 프롬프트 말미가 가장 강하게 지켜지기 때문이다.
+  const mustFixBlock = mustFix?.length
+    ? `[필수 반영 — 브리프 검증 반려 사유(미해소). 이 목록은 참고가 아니라 지시다]\n`
+      + `${mustFix.map((f, i) => `${i + 1}. ${f}`).join('\n')}\n`
+      + `- 위 항목이 가리키는 주장·수치는 브리프에 적혀 있어도 **본문에 쓰지 마라**. 근거가 확인되지 않은 것들이다.\n`
+      + `- 빼서 생긴 자리는 근거가 확인된 다른 내용으로 채워라. 추정으로 메우지 마라.\n`
+      + `- 해당 소재를 꼭 다뤄야 하면 단정 대신 조건·한계를 밝혀 쓰고, 숫자는 적지 마라.`
+    : '';
   const synth = await runAgent({
     bus, role: writer, model,
     task: revise
@@ -368,6 +383,7 @@ export async function writeBlogBody(a: {
       serpText ? `[네이버 상위 노출 블로그(실측) — 검색 수요가 검증된 방향·눈높이 참고. 제목·구성 그대로 베끼기 금지]\n${serpText}` : '',
       brief ? `[리서치·SEO 브리프]\n${brief}` : '',
       critiqueText ? `[검수 의견 — 아래는 약점·주의점 목록이다. 발행 판정이 아니다. 지적된 미검증·논쟁 주장은 본문에서 빼고, 나머지는 참고해 품질을 높여라]\n${critiqueText}` : '',
+      mustFixBlock,
     ].filter(Boolean).join('\n\n'),
     // synthesis 단계라 brevity 는 해제되지만 BLOG_BODY_GUIDE 가 블로그 길이(1.5~4k자)를 고정한다. blockId 'ceo-synth' = 오피스 통합 안무 유지.
     stage: 'synthesis', emitSpawn: true, blockId: 'ceo-synth', systemExtra: personaGuide,
@@ -380,7 +396,10 @@ export async function writeBlogBody(a: {
     const retry = await runAgent({
       bus, role: writer, model,
       task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 질문·보류·메타 설명 없이 곧바로 본문(## 소제목 포함)만 출력한다.\n${guide}`,
-      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon), brief ? `[리서치·SEO 브리프]\n${brief}` : ''].filter(Boolean).join('\n\n'),
+      // 재집필은 검수 의견을 뺀다(같은 벽에 다시 부딪히지 않게) — 그러나 mustFixBlock 은 **남긴다**.
+      // 이건 품질 조언이 아니라 '무근거 기입을 쓰지 마라'는 금지라, 여기서 빠지면 퇴화 재집필 경로가
+      // 게이트의 구멍이 된다(브리프에 남은 무근거 주장이 그대로 본문에 실린다).
+      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon), brief ? `[리서치·SEO 브리프]\n${brief}` : '', mustFixBlock].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, groundForFacts: true, maxOutputTokens: 5000, signal,
     });
@@ -702,15 +721,97 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   //     (라운드 critic 은 반박을 구동하고, 이 회사급 critic 은 합성용 최종 비평 — 역할이 다르다.) ---
   const critic = company.specialists.find((s) => s.isCritic);
   let critiqueText = '';
+  // 브리프 게이트(2026-08-28) — 판정을 읽고 재작업을 돌린 뒤, 끝까지 남은 지적을 작가에게 '필수 반영'으로 넘긴다.
+  let mustFix: string[] = [];
   if (critic) {
-    const combined = usableTeams.map((t) => `## ${t.team.name}\n${t.deliverable}`).join('\n\n');
+    const criticModel = modelForTier(assign, critic.tier);
+    // 리서치 런은 집필 자체가 없다(브리프가 곧 산출물) — 게이트가 막을 하류가 없어 건너뛴다.
+    const gate = CONFIG.briefGate && opts.mission !== 'research';
+    // 게이트 on 이면 판정 표기를 강제한다(파서 앵커와 맞물림). off 면 종전 문구 그대로 — 회귀 0.
+    const criticTask = '각 팀 산출물을 비판적으로 검토하라. 약점·모순·누락을 지적하라.'
+      + (gate ? `\n\n${VERDICT_FORMAT}` : '');
+    const combinedOf = (): string => usableTeams.map((t) => `## ${t.team.name}\n${t.deliverable}`).join('\n\n');
     const c = await runAgent({
-      bus, role: critic, model: modelForTier(assign, critic.tier),
-      task: '각 팀 산출물을 비판적으로 검토하라. 약점·모순·누락을 지적하라.',
-      context: combined, stage: 'critique', emitSpawn: true, signal,
+      bus, role: critic, model: criticModel,
+      task: criticTask, context: combinedOf(), stage: 'critique', emitSpawn: true, signal,
     });
     critiqueText = c.text;
     bus.emit('critique', { round: 1, text: critiqueText }, { agentId: critic.id });
+
+    if (gate) {
+      // 이 루프가 이 파일의 요점이다. 종전엔 판정을 읽는 곳이 없어 REVISION_NEEDED 가 나와도 그대로
+      // 집필로 갔다(실측 런 ba522a39fa7d: 반려 62초 뒤 작가 스폰). 이제 반려면 팀장이 고치고 다시 받는다.
+      let parsed = parseBriefVerdict(critiqueText);
+      let rounds = 0;
+      bus.emit('log', { message: `브리프 게이트 — ${describeVerdict(parsed)}` });
+      for (let r = 1; r <= CONFIG.briefGateRounds && isBlocking(parsed) && !signal?.aborted; r++) {
+        const fixes = parseUnresolved(critiqueText);
+        // 판정 미파싱(unparsed)은 재작업 지시를 만들 근거가 없다 — 여기서 라운드를 돌리면 팀장이 무엇을
+        // 고칠지 모른 채 산출물만 흔든다. 표시·주입은 그대로 두고 루프만 끊는다.
+        if (parsed.verdict === 'unparsed' && !fixes.length) {
+          bus.emit('log', { message: '브리프 게이트 — 판정을 읽지 못해 재작업 생략(지적 목록 없음)' });
+          break;
+        }
+        rounds = r;
+        bus.emit('log', { message: `브리프 게이트 재작업 ${r}라운드 — 미해소 ${fixes.length}건` });
+        // 팀 단위 병렬 — 토론 라운드와 같은 형태(phase 'debate' → 'idle')라 오피스 연출도 그대로 재사용된다.
+        const fixed = await mapLimit(
+          CONFIG.teamParallel,
+          usableTeams.map((t) => async (): Promise<TeamResult> => {
+            try {
+              bus.emit('phase', { team_id: t.team.id, phase: 'debate' });
+              const out = await runAgent({
+                bus, role: t.team.lead, model: modelForTier(assign, t.team.lead.tier),
+                task: `검증 반려(${describeVerdict(parsed)}) — '${t.team.name}'의 산출물에서 아래 지적을 해소하라.\n`
+                  + `- 지적된 무근거 기입은 근거를 찾아 [근거: ...] 로 병기하거나, 못 찾으면 **문장 자체를 삭제**하라. 추정으로 채우지 마라.\n`
+                  + `- 산술·라벨 오류는 검산해 고치고, 내부 모순은 어느 쪽이 맞는지 정하고 나머지를 지워라.\n`
+                  + `- 우리 팀 소관이 아닌 지적은 건드리지 말고 그대로 두라.\n`
+                  + `- 차이만 쓰지 말고 갱신된 완성 산출물 전체를 출력하라.`,
+                context: [
+                  fixes.length ? `[해소할 지적]\n${fixes.map((f, i) => `${i + 1}. ${f}`).join('\n')}` : `[검증 의견]\n${critiqueText}`,
+                  `[현재 ${t.team.name} 산출물]\n${t.deliverable}`,
+                ].join('\n\n'),
+                stage: 'rebuttal', signal,
+              });
+              const next = out.text.trim() || t.deliverable;
+              if (next !== t.deliverable) bus.emit('team_deliverable', { team_id: t.team.id, text: next });
+              bus.emit('phase', { team_id: t.team.id, phase: 'idle' });
+              return { ...t, deliverable: next };
+            } catch (e) {
+              if (isAbort(e, signal)) throw e;
+              return t; // 재작업 실패 팀은 기존 산출물 유지(fail-open — 런을 죽이지 않는다)
+            }
+          }),
+        );
+        for (let i = 0; i < usableTeams.length; i++) if (fixed[i]) usableTeams[i] = fixed[i]!;
+        if (signal?.aborted) break;
+        // 재검증 — 고친 산출물을 같은 비평가가 다시 판정한다. 이 재판정이 없으면 '고쳤다는 주장'만 믿는 꼴이다.
+        const re = await runAgent({
+          bus, role: critic, model: criticModel,
+          task: `재검증 라운드 ${r} — 아래 산출물이 직전 반려 지적을 실제로 해소했는지 판정하라. 해소되지 않았거나 정정 과정에서 새로 생긴 오류가 있으면 그대로 반려하라.\n\n${VERDICT_FORMAT}`,
+          context: [`[직전 반려 지적]\n${fixes.map((f, i) => `${i + 1}. ${f}`).join('\n') || critiqueText}`, combinedOf()].join('\n\n'),
+          stage: 'critique', signal,
+        });
+        critiqueText = re.text;
+        parsed = parseBriefVerdict(critiqueText);
+        bus.emit('critique', { round: r + 1, text: critiqueText }, { agentId: critic.id });
+        bus.emit('log', { message: `브리프 게이트 재검증 ${r}라운드 — ${describeVerdict(parsed)}` });
+      }
+      // 사용자 확정(2026-08-28): 끝까지 반려여도 집필은 진행한다(슬롯 유실 방지). 대신 미해소 지적을
+      // 작가에게 '필수 반영'으로 넘기고, 검토 알림에 반려를 띄워 사람이 반드시 보게 한다.
+      mustFix = isBlocking(parsed) ? parseUnresolved(critiqueText) : [];
+      // fail-open(스펙 §8) — 기록 실패로 런이 죽으면 안 된다(브리프 영속화와 같은 패턴).
+      try {
+        writeBriefGate(bus.runId, {
+          verdict: parsed.verdict, score: parsed.score, maxScore: parsed.maxScore,
+          rounds, unresolved: mustFix, checkedTs: new Date().toISOString(),
+        });
+      } catch (e) { bus.emit('log', { message: `브리프 게이트 기록 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
+      if (isBlocking(parsed)) {
+        console.log(`[브리프게이트] ${topic.slice(0, 30)} — ${describeVerdict(parsed)} · 미해소 ${mustFix.length}건 → 집필 진행(검토 알림에 표시)`);
+        bus.emit('log', { message: `브리프 게이트 — 재작업 후에도 ${describeVerdict(parsed)}. 미해소 ${mustFix.length}건을 작가 필수 반영으로 넘기고 검토 알림에 표시한다` });
+      }
+    }
   }
 
   // --- 최종 블로그 본문 — 작가(content_lead)가 리서치 브리프[+검수 의견]를 통합해 단일 글 1편을 집필.
@@ -758,7 +859,7 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   // 킬스위치는 '뽑기'만이 아니라 '주입'까지 지배한다(Fix wave 소견 2) — off 면 블록을 아예 넣지 않고
   // 작가 지침도 base 문구로 돌아간다(blogBodyGuide). 시드 영속화는 그대로 둔다(리비전 승계 계약 불변).
   const structure = structureSeed && CONFIG.structureVariety ? structureBlock(structureSeed) : '';
-  const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, microModel: assign.micro, factCard: factCard || undefined, structure, teaser: structureSeed?.teaser, signal });
+  const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, mustFix, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, microModel: assign.micro, factCard: factCard || undefined, structure, teaser: structureSeed?.teaser, signal });
   const finalDeliverable = body || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
   return packageDesignFinalize({

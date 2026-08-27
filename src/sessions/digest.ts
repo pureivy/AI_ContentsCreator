@@ -101,6 +101,30 @@ export function readStyleLint(runId: string): StyleLintRecord | null {
     return r && Array.isArray(r.issues) ? r : null;
   } catch { return null; }
 }
+/** 브리프 게이트 기록(2026-08-28) — 팩트체커 판정과 재작업 결과. 검토 알림(contentNotify)이 읽어
+ * '⚖ 브리프 반려 43/70 · 미해소 3건' 한 줄로 보여 준다. 사실 게이트·문체 린트와 별개 파일이라
+ * FACT_GATE=off 여도 표시가 살아 있다(같은 이유로 style_lint.json 도 분리돼 있다). */
+export interface BriefGateRecord {
+  /** 최종 라운드 판정 — 'approved' | 'revision_needed' | 'unparsed'. */
+  verdict: string;
+  score: number | null;
+  maxScore: number | null;
+  /** 실제로 돈 재작업 라운드 수(0 = 첫 판정에 통과했거나 라운드 상한이 0). */
+  rounds: number;
+  /** 미해소 지적 요약 — 작가에게 '필수 반영'으로 주입한 것과 같은 목록. */
+  unresolved: string[];
+  checkedTs: string;
+}
+export function writeBriefGate(runId: string, r: BriefGateRecord): void { writeSessionFile(runId, 'brief_gate.json', JSON.stringify(r, null, 2)); }
+export function readBriefGate(runId: string): BriefGateRecord | null {
+  // style_lint 와 같은 방어 — 파싱은 되는데 필드가 빠진 구·손상 기록을 그대로 돌려주면 호출부의
+  // `.unresolved.length` 가 TypeError 를 내고, notifyBlogReady 의 바깥 try 가 그 예외를 삼켜
+  // 텔레그램·웹훅 알림이 통째로 사라진다(검토 대기 자체를 모르게 된다).
+  try {
+    const r = JSON.parse(fs.readFileSync(sessionFile(runId, 'brief_gate.json'), 'utf-8')) as BriefGateRecord;
+    return r && typeof r.verdict === 'string' && Array.isArray(r.unresolved) ? r : null;
+  } catch { return null; }
+}
 /** 런별 구조 시드(2026-08-27 권고 4) — 리비전 런이 baseRunId 로 같은 골격을 승계하게 영속화.
  * 파싱은 되는데 필드가 빠진 구·손상 기록은 null 로 떨어뜨린다(호출부가 유지 블록으로 가게 — style_lint 와 같은 방어). */
 export function writeStructureSeed(runId: string, seed: StructureSeed): void { writeSessionFile(runId, 'structure.json', JSON.stringify(seed, null, 2)); }
