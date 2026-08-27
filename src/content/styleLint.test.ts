@@ -181,12 +181,38 @@ describe('blogStyleIssues — 블로그 본문 문체 4종(2026-08-27 권고 3)'
     expect(blogStyleIssues(md)).toEqual([]);
   });
 
-  it('ⓓ 인용 체크박스(>>>)는 항목만 보고 첫 줄(상자 제목)은 제외한다', () => {
+  // Fix wave(2026-08-27, 소견 1) — ⓓ 에서 '>>>' 프레임 가지를 뺐다. 프레임 각 줄 '공백 포함 20자 이내'는
+  // 사용자 확정 규칙(2026-08-10, org.ts 리치 서식)이라 '줄마다 서술어를 붙여라'와 정면 충돌했고, 실코퍼스
+  // 60편에서 ⓓ 적중 142건이 **전부** '>>>' 줄이었다(불릿·번호 목록 적중 0). 규칙 우선순위를 프레임 폭
+  // 쪽으로 확정한 결과 ⓓ 는 불릿·번호 목록만 본다 = 실코퍼스 기준 사실상 무발동(감수한 비용).
+  it("ⓓ 인용 체크박스(>>>) 프레임 줄은 검사하지 않는다(프레임 '20자 이내' 규칙 우선)", () => {
     const md = '>>> 올리브 체크\n>>> 1) 접목 자리 확인\n>>> 2) 품종 라벨 확인';
-    const issues = blogStyleIssues(md);
-    expect(issues).toHaveLength(2);
-    expect(issues.some((i) => i.includes('올리브 체크'))).toBe(false);
-    expect(issues.some((i) => i.includes('접목 자리 확인'))).toBe(true);
+    expect(blogStyleIssues(md)).toEqual([]);
+  });
+
+  // ⓓ 를 좁히면서 ⓑ 분모까지 같이 좁아지면(프레임 줄이 산문에 섞이면) 합쇼체 비율이 구조적으로 희석돼
+  // 아무도 요청하지 않은 검사 약화가 된다 — 분모 제외 목록은 ⓓ 대상과 별개 상수로 남겨야 한다.
+  it('ⓑ 분모는 프레임(>>>) 줄을 계속 제외한다 — ⓓ 축소가 합쇼체 비율을 희석하지 않는다', () => {
+    const prose = [
+      ...Array.from({ length: 15 }, (_, i) => `${i + 1}번 자리는 볕이 좋습니다.`),
+      ...Array.from({ length: 6 }, () => '물은 아침에 주세요.'),
+    ];
+    const frame = Array.from({ length: 8 }, (_, i) => `>>> ${i + 1}) 접목 자리 확인`);
+    expect(blogStyleIssues(prose.join('\n')).some((i) => i.includes('합쇼체 비율 71%'))).toBe(true);
+    expect(blogStyleIssues([...prose, ...frame].join('\n')).some((i) => i.includes('합쇼체 비율 71%'))).toBe(true);
+  });
+
+  // plain() 의 인용 마커 제거는 그대로다 — ⓒ 는 프레임 줄도 계속 본다(ⓓ 만 좁혔다는 증거).
+  it('ⓒ 는 프레임(>>>) 줄의 유보 중첩을 계속 잡는다', () => {
+    const md = '>>> 대개 이런 경우가 많습니다';
+    expect(blogStyleIssues(md).some((i) => i.startsWith('유보 중첩'))).toBe(true);
+  });
+
+  // 수정 라운드가 상충 지시를 받지 않도록 ⓓ 지적에 길이 상한을 함께 싣는다(목록 규칙: '항목 3~5개, 각 1줄로 짧게').
+  it('ⓓ 지적 문구는 줄을 늘리지 말라는 길이 상한을 함께 싣는다', () => {
+    const issues = blogStyleIssues('- 나무의 나이와 키');
+    expect(issues[0]).toContain('명사형 종결 목록');
+    expect(issues[0]).toContain('한 줄로 짧게');
   });
 
   it('원예 상용어(전정·관수·도장지·시비)는 차단하지 않는다', () => {

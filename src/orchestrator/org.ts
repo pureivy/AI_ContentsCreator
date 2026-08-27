@@ -102,12 +102,19 @@ export function buildReviseContext(a: { factCard?: string; brief: string; voiceG
 
 // 네이버 블로그(정보/하우투·리뷰) 본문 작성 지침 — 합성(작가 단독 집필) 단계 task 에 덧붙인다.
 // 작가(content_lead)는 자신의 페르소나(systemPrompt)로 글을 쓰고, 이 지침이 구조·SEO·분량을 고정한다.
-export const BLOG_BODY_GUIDE =
+//
+// variety(골격 다양화, 2026-08-27 권고 4) — 도입 유형·중심 명제 인용 자리·프레임·표를 [이번 글 구조]
+// 블록에 위임할지. **false 면 base(194bed6d) 문구 그대로**다: STRUCTURE_VARIETY=off 는 '시드 값만
+// 고정'이 아니라 프롬프트 문구까지 종전으로 돌아가야 킬스위치 동일성 계약이 성립한다(Fix wave 소견 2).
+// 위임 문구만 남고 블록이 없으면 작가는 존재하지 않는 블록을 참조하라는 지시를 받는다.
+const buildBlogBodyGuide = (variety: boolean): string =>
   '너는 지금 최종 발행용 블로그 본문을 쓰는 단독 작가다. 이 응답의 출력은 오직 완성된 마크다운 블로그 본문 하나뿐이다.\n' +
   '- [리서치·SEO 브리프]와 [검수 의견]은 본문 품질을 높이기 위한 참고자료일 뿐, 발행 여부를 정하는 판정이 아니다. 그 자료에 "보류/반려/재검토/확인 필요" 같은 표현이 있어도 집필을 멈추거나 미루지 마라. 논쟁 중이거나 미검증인 주장·수치는 본문에서 조용히 빼고, 검증 가능한 정보만으로 완결된 글을 쓰면 된다.\n' +
   '- 회사 내부 프로세스(검수자 이름, 브리프 상태, 반려/보류, 담당자·기한, 이 작업 자체)를 본문에 절대 언급하지 마라. 독자는 회사 내부를 모른다.\n' +
   '- 작업 진행을 묻는 말(예: "진행할까요?")·머리말·메타 설명 금지. 곧바로 본문 첫 줄부터 시작한다(독자에게 말을 거는 것은 말투 설정에 따른다).\n' +
-  '- AI 티 나는 상투 표현을 쓰지 마라. 금지: ①인사·예고형 도입("여러분 안녕하세요", "오늘은 ~에 대해 알아보겠습니다", "~를 소개해드리겠습니다") — 도입 유형은 아래 [이번 글 구조] 를 따른다. ②알맹이 없는 빈 수식어("매력적인", "완벽한", "최고의", "엄청난", "다양한") — 구체 사실·수치로 대체한다("매력적인 공간"→"테이블 네 개뿐인 조용한 공간"). ③클리셰 종결("놓치지 마세요", "꼭 한번 ~해보세요", "~하시는 것을 추천드립니다", "기대됩니다") — 구체적 실천 제안으로 맺는다. ④과공손·수동태("~라고 할 수 있습니다", "~되어집니다") — 능동·단정으로. ⑤진부한 연결어("바로 그것은", "함께 살펴보겠습니다"). 문장 길이를 전부 균일하게 맞추지 말고 짧은 문장과 중간 문장을 섞어 리듬을 준다. "3가지/5가지" 식 완벽 대칭 리스트와 단락마다 "핵심→설명→정리"를 기계적으로 반복하는 구조를 피한다.\n' +
+  '- AI 티 나는 상투 표현을 쓰지 마라. 금지: ①인사·예고형 도입("여러분 안녕하세요", "오늘은 ~에 대해 알아보겠습니다", "~를 소개해드리겠습니다") — '
+  + (variety ? '도입 유형은 아래 [이번 글 구조] 를 따른다' : '독자의 상황·질문으로 바로 시작한다')
+  + '. ②알맹이 없는 빈 수식어("매력적인", "완벽한", "최고의", "엄청난", "다양한") — 구체 사실·수치로 대체한다("매력적인 공간"→"테이블 네 개뿐인 조용한 공간"). ③클리셰 종결("놓치지 마세요", "꼭 한번 ~해보세요", "~하시는 것을 추천드립니다", "기대됩니다") — 구체적 실천 제안으로 맺는다. ④과공손·수동태("~라고 할 수 있습니다", "~되어집니다") — 능동·단정으로. ⑤진부한 연결어("바로 그것은", "함께 살펴보겠습니다"). 문장 길이를 전부 균일하게 맞추지 말고 짧은 문장과 중간 문장을 섞어 리듬을 준다. "3가지/5가지" 식 완벽 대칭 리스트와 단락마다 "핵심→설명→정리"를 기계적으로 반복하는 구조를 피한다.\n' +
   // ── 자연스러움 감사(2026-08-11) 투입분: 고수준 수사·리듬의 반복이 "AI 티"의 본체였다(저수준 상투구는 위에서 이미 차단).
   '- 재정의 수사 쿼터: "X가 아니라 Y", "X보다 Y가 먼저" 문형은 글 전체(제목·요약 포함) 최대 2회 — 이 브랜드 글의 최대 지문이다(실측 한 편 7회). 세 번째부터는 재정의 없이 바로 본론을 단언하거나 다른 진입로("사실은", "다들 X부터 보는데")를 써라.\n' +
   // 어미 규칙 3차 교정(2026-08-11): 전역 비율(60%)은 추적 불가로 2연속 미달(75%·65%) → 문단 규칙으로
@@ -130,11 +137,16 @@ export const BLOG_BODY_GUIDE =
   '- 이모지·이모티콘·장식 특수문자(★✔♥ 등)를 소제목·본문 어디에도 쓰지 마라. 강조는 서식으로만 한다: 핵심 문장·수치는 **굵게**, 용어·미묘한 강조나 인용 뉘앙스는 *이탤릭*(둘 다 남발하지 말고 구조상 중요한 곳에만). 글자 크기·글꼴은 발행기가 가독성에 맞게 자동 처리하니 지정하지 마라.\n' +
   '- 가독성: 한 문단은 2~4문장으로 짧게 끊고, 문단과 문단 사이에는 빈 줄을 넣어 간격을 둔다(빽빽하게 붙이지 마라).\n' +
   '- 리치 서식을 글의 성격에 맞게 "필요할 때만" 적절히 활용한다(억지로 넣지 말 것). 발행 시 실제 네이버 서식으로 렌더된다:\n' +
-  '  · 인용구 3종 — ">" 깊이가 스타일이다(사용자 확정 2026-08-10). "> "=버티컬라인: 섹션 중간의 핵심 규칙·주의 한 줄(글당 2~3곳). ">> "=따옴표: 글의 중심 명제 한 문장(글당 0~1곳 — 아래 [이번 글 구조] 지시를 따른다). ">>> "=프레임: 마무리 요약·행동 체크리스트 박스(아래 [이번 글 구조] 에서 켜졌을 때만, 연속 줄로 작성·최대 8줄, 각 줄은 공백 포함 20자 이내로 짧게 — 프레임은 가운데 정렬·폭이 좁아 긴 줄이 어색하게 접힌다. 박스 안 번호는 "1) 2) 3)" 표기). 버티컬라인·따옴표는 최대 2줄(2문장) — 길면 인용구 대신 본문 문단으로 풀어라.\n' +
+  '  · 인용구 3종 — ">" 깊이가 스타일이다(사용자 확정 2026-08-10). "> "=버티컬라인: 섹션 중간의 핵심 규칙·주의 한 줄(글당 2~3곳). ">> "=따옴표: 글의 중심 명제 한 문장('
+  + (variety ? '글당 0~1곳 — 아래 [이번 글 구조] 지시를 따른다' : '글당 1곳, 도입 훅 직후가 최적')
+  + '). ">>> "=프레임: 마무리 요약·행동 체크리스트 박스('
+  + (variety ? '아래 [이번 글 구조] 에서 켜졌을 때만, ' : '글당 1곳, ')
+  + '연속 줄로 작성·최대 8줄, 각 줄은 공백 포함 20자 이내로 짧게 — 프레임은 가운데 정렬·폭이 좁아 긴 줄이 어색하게 접힌다. 박스 안 번호는 "1) 2) 3)" 표기). 버티컬라인·따옴표는 최대 2줄(2문장) — 길면 인용구 대신 본문 문단으로 풀어라.\n' +
   '  · 목록: 항목 3~5개, 각 1줄로 짧게. 중첩 금지, 굵게는 항목 리드 단어까지만. 목록 앞엔 도입 문장 1개, 뒤엔 해설 문단을 둔다(목록만 연달아 금지). 표로 이미 보여준 정보를 목록으로 반복하지 않는다.\n' +
   '- 본문 끝에 키워드·태그를 나열하지 마라(태그는 발행 시 별도 필드로 입력된다 — 본문 나열은 중복이자 검색 스팸 신호).\n' +
   '  · 구분선: 큰 주제가 전환되는 곳에 "---" 한 줄로 구분선을 넣는다(남발 금지 — 2~3개 이내).\n' +
-  '  · 표: 비교·정리·수치는 마크다운 표(| 헤더 | ... |)로 제시하면 가독성이 높다(하우투·리뷰의 비교표에 특히 유용) — 이번 글에 넣을지는 아래 [이번 글 구조] 를 따른다.\n' +
+  '  · 표: 비교·정리·수치는 마크다운 표(| 헤더 | ... |)로 제시하면 가독성이 높다(하우투·리뷰의 비교표에 특히 유용)'
+  + (variety ? ' — 이번 글에 넣을지는 아래 [이번 글 구조] 를 따른다.\n' : '.\n') +
   '  · 소스코드: 코드·설정값·명령어는 ```로 감싼 코드블록으로 넣는다(기술 주제에 한함, 아니면 쓰지 마라).\n' +
   '  · 링크: 실제 출처 URL 이 있을 때만 [표시문구](URL) 형식으로 넣는다(없는 링크를 지어내지 마라).\n' +
   '  · 스티커·일정·수식·장소 같은 특수 요소는 사용하지 않는다(정보/하우투·리뷰 본문엔 부적합).\n' +
@@ -142,6 +154,23 @@ export const BLOG_BODY_GUIDE =
   '- [네이버 상위 노출 블로그(실측)]이 주어지면, 상위 글들이 답하는 질문·관심사·눈높이에 맞춰 검색 수요가 검증된 방향으로 쓰되 내용은 더 구체적·실용적으로 차별화한다(제목·구성 그대로 베끼기 금지).\n' +
   '- 마크다운으로 작성(## 소제목 2개 이상 필수). 글 제목(# 한 줄)은 포매터가 별도 생성하니 본문만 작성.\n' +
   '- [리서치·SEO 브리프]의 타겟 키워드·검색의도·경쟁 빈틈·소주제를 활용해 차별화된 글을 쓴다.';
+
+/** 골격 다양화 on 버전(종전 상수 — 테스트·외부 참조가 이 이름을 쓴다). */
+export const BLOG_BODY_GUIDE = buildBlogBodyGuide(true);
+/** 골격 다양화 off 버전 = base(194bed6d) 문구. 모듈 로드 시 1회 조립(문자열 상수 2개, 비용 무시 가능). */
+const BLOG_BODY_GUIDE_FIXED = buildBlogBodyGuide(false);
+
+/**
+ * 작가 지침 선택 — [이번 글 구조] 블록이 실제로 함께 실릴 때만 위임 문구를 쓴다(Fix wave 소견 2).
+ * 호출부는 자기가 넘길 structure 블록의 유무를 그대로 넘긴다: 블록 없이 위임 문구만 나가는 조합
+ * (STRUCTURE_VARIETY=off)과, 블록만 있고 위임 문구가 없는 조합 둘 다 만들지 않기 위해서다.
+ * **기본값을 두지 않는다** — CONFIG.structureVariety 를 기본값으로 깔면 '블록 유무'와 '킬스위치'라는
+ * 두 규칙이 한 함수에 공존하게 되고(대부분의 경로에서 값이 같아 차이가 드러나지도 않는다), 다음 읽는
+ * 사람이 어느 쪽이 진짜 기준인지 알 수 없다. 기준은 하나 — 이 콜에 블록이 실리는가.
+ */
+export function blogBodyGuide(withStructureBlock: boolean): string {
+  return withStructureBlock ? BLOG_BODY_GUIDE : BLOG_BODY_GUIDE_FIXED;
+}
 
 /**
  * 네이버 블로그 SERP 실측 — 주제의 상위 노출 글 제목을 집필·제목 패키징의 '인기 방향' 근거로 쓴다.
@@ -317,11 +346,13 @@ export async function writeBlogBody(a: {
       message: `작가 다양성 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 스타일지문 ${styleAvoid ? '주입' : '없음'} · 마무리회피 ${endingAvoid ? '주입' : '없음'} · 반복상투구 ${ticPhrases.length}건${ticPhrases.length ? `(${ticPhrases.slice(0, 3).join(', ')}${ticPhrases.length > 3 ? ' 외' : ''})` : ''} · 과사용어간 ${ticLexemes.length}건${ticLexemes.length ? `(${ticLexemes.slice(0, 3).join(', ')}${ticLexemes.length > 3 ? ' 외' : ''})` : ''}`,
     });
   }
+  // 지침 선택은 '이 콜에 [이번 글 구조] 블록이 실리는가'로 정한다 — 위임 문구와 블록이 항상 짝으로 나간다.
+  const guide = blogBodyGuide(!!structure);
   const synth = await runAgent({
     bus, role: writer, model,
     task: revise
-      ? `「${topic}」 아래 [기존 초안]을 [검토자 수정 요청]에 따라 개정하라. 요청된 변경은 빠짐없이 반영하고, 잘 쓰인 나머지 구조·내용은 유지한다. ${REVISE_NO_NEW_FACTS} 이 응답의 출력은 오직 개정 완료된 마크다운 본문 하나뿐이다.\n${BLOG_BODY_GUIDE}`
-      : `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 검색 의도를 충족하는 완결된 글을 쓴다.\n${BLOG_BODY_GUIDE}`,
+      ? `「${topic}」 아래 [기존 초안]을 [검토자 수정 요청]에 따라 개정하라. 요청된 변경은 빠짐없이 반영하고, 잘 쓰인 나머지 구조·내용은 유지한다. ${REVISE_NO_NEW_FACTS} 이 응답의 출력은 오직 개정 완료된 마크다운 본문 하나뿐이다.\n${guide}`
+      : `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 검색 의도를 충족하는 완결된 글을 쓴다.\n${guide}`,
     context: revise ? reviseContext : [
       factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '',
       structure,
@@ -348,7 +379,7 @@ export async function writeBlogBody(a: {
     bus.emit('log', { message: '작가 출력에 소제목이 없어 재집필(브리프 단독) — 퇴화 방지' });
     const retry = await runAgent({
       bus, role: writer, model,
-      task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 질문·보류·메타 설명 없이 곧바로 본문(## 소제목 포함)만 출력한다.\n${BLOG_BODY_GUIDE}`,
+      task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 질문·보류·메타 설명 없이 곧바로 본문(## 소제목 포함)만 출력한다.\n${guide}`,
       context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon), brief ? `[리서치·SEO 브리프]\n${brief}` : ''].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, groundForFacts: true, maxOutputTokens: 5000, signal,
@@ -724,7 +755,9 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
     // 여기 값은 저장만 되고 아무 데서도 읽히지 않는다(알리면 세트가 공유하는 것으로 오해된다).
     bus.emit('log', { message: `구조 시드 — 도입 ${structureSeed.openers} · 중심명제 ${structureSeed.thesisQuote} · 표 ${structureSeed.table ? 'O' : 'X'}/체크리스트 ${structureSeed.checklist ? 'O' : 'X'}/예고 ${structureSeed.teaser ? 'O' : 'X'}` });
   }
-  const structure = structureSeed ? structureBlock(structureSeed) : '';
+  // 킬스위치는 '뽑기'만이 아니라 '주입'까지 지배한다(Fix wave 소견 2) — off 면 블록을 아예 넣지 않고
+  // 작가 지침도 base 문구로 돌아간다(blogBodyGuide). 시드 영속화는 그대로 둔다(리비전 승계 계약 불변).
+  const structure = structureSeed && CONFIG.structureVariety ? structureBlock(structureSeed) : '';
   const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, microModel: assign.micro, factCard: factCard || undefined, structure, teaser: structureSeed?.teaser, signal });
   const finalDeliverable = body || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
@@ -792,7 +825,8 @@ async function packageDesignFinalize(a: {
         const revised = await writeBlogBody({
           bus, writer, model: modelForTier(assign, writer.tier), topic, brief, personaGuide, keyword, factCard,
           // 지적만 고치는 라운드다 — 골격은 초안 그대로(권고 4). 블록을 비우면 작가가 프레임·표를 걷어낸다.
-          structure: STRUCTURE_KEEP_BLOCK,
+          // 킬스위치 off 면 블록도 지침도 base 로 간다 — base 지침은 프레임·표를 스스로 처방하므로 공백이 안 생긴다.
+          structure: CONFIG.structureVariety ? STRUCTURE_KEEP_BLOCK : '',
           revise: {
             baseBody: finalDeliverable,
             feedback: `[문체 린트] 아래 지적만 고치고 사실·수치·구조는 그대로\n${before.map((i) => `- ${i}`).join('\n')}`,
@@ -848,7 +882,7 @@ async function packageDesignFinalize(a: {
         const gate = (body: string) => factGateBlog({ model: assign.standard, body, evidence, signal, maxClaims: CONFIG.factGateMaxClaims });
         const repair = (body: string, feedback: string) => writeBlogBody({
           bus, writer, model: modelForTier(assign, writer.tier), topic, brief, personaGuide, keyword, factCard,
-          structure: STRUCTURE_KEEP_BLOCK, // 사실 지적만 고치는 라운드 — 골격은 초안 그대로(권고 4)
+          structure: CONFIG.structureVariety ? STRUCTURE_KEEP_BLOCK : '', // 사실 지적만 고치는 라운드 — 골격은 초안 그대로(권고 4)
           revise: { baseBody: body, feedback }, signal,
         });
         // 문장 단위 표적 수정(2026-08-26) — 전면 재작성 전에 먼저 시도. 무근거 문장만 유보어·판단문·삭제로
@@ -893,6 +927,10 @@ async function packageDesignFinalize(a: {
     // 중첩이 세는 바로 그 표현이다 — 재계산이 없으면 텔레그램의 '✍ 문체 N건 잔존'이 게이트 이전 본문 기준이라
     // 실제 발행 본문과 어긋난다(대개 과소 보고). 린트가 실제로 돈 런에서만 덮어쓴다(리서치·킬스위치 off·
     // 브리프 폴백 런에 style_lint.json 이 새로 생기지 않게).
+    // 알려진 한계(Fix wave 2026-08-27 소견 8, 설계상 감수) — 재계산은 **보고 전용**이라 게이트가 넣은
+    // 유보어로 생긴 ⓒ 유보 중첩은 그대로 발행된다. 유보어 규칙·결론 의무·무근거 값 유보 처리(보호 자산)가
+    // 유보 사용을 명시적으로 요구하므로 이 긴장은 제거 대상이 아니다. 다음 5~10편 실측에서 '✍ 문체 N건
+    // 잔존'이 ⓒ 로 몰리면, 게이트가 바꾼 문장(bodyBeforeGate 비교로 이미 판별 가능)에 한해 ⓒ 면제를 검토한다.
     if (styleLinted && finalDeliverable !== bodyBeforeGate) {
       styleResidual = blogStyleIssues(finalDeliverable);
       const rm = `[문체린트] 게이트 후 재계산 — 잔존 ${styleResidual.length}(최종 본문 기준)`;
@@ -1036,7 +1074,10 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
   // 이 런에도 남겨 연쇄 리비전이 같은 골격을 물려받는다(브리프·사실 카드와 같은 패턴).
   // 승계 전용 — 물려받을 시드가 없으면(이 기능 이전 조각) 골격을 새로 뽑지 않고 '있는 그대로 유지' 블록을 쓴다.
   const structureSeed = inheritStructureSeed(bus.runId, revise.baseRunId);
-  const structure = structureSeed ? structureBlock(structureSeed, { revise: true }) : STRUCTURE_KEEP_BLOCK;
+  // 킬스위치 off 면 블록을 넣지 않는다(Fix wave 소견 2) — 지침도 base 로 가므로 짝이 맞는다.
+  // 승계 자체(inheritStructureSeed)는 킬스위치와 무관하게 그대로 둔다: 다시 켰을 때 골격이 이어져야 한다.
+  const structure = !CONFIG.structureVariety ? ''
+    : structureSeed ? structureBlock(structureSeed, { revise: true }) : STRUCTURE_KEEP_BLOCK;
   const body = await writeBlogBody({
     bus, writer, model: modelForTier(assign, writer.tier), topic, brief, revise, factCard: factCard || undefined, structure, signal,
   });

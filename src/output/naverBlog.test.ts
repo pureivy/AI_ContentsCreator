@@ -6,6 +6,7 @@ vi.mock('../orchestrator/agent', async (importOriginal) => ({
 }));
 import { microJSON } from '../orchestrator/agent';
 import { stripTrailingTagDump, stripInternalMarkers, packageNaverBlog } from './naverBlog';
+import { CONFIG } from '../config';
 
 const mocked = microJSON as unknown as ReturnType<typeof vi.fn>;
 beforeEach(() => mocked.mockReset());
@@ -109,5 +110,19 @@ describe('packageNaverBlog — meta 요약투 린트 + 1회 재시도(권고 2)'
     const b = await packageNaverBlog(input);
     expect(mocked).toHaveBeenCalledTimes(2);
     expect(b.draft.metaDescription).toBe('핵심만 담았어요.');
+  });
+
+  // Fix wave(2026-08-27, 소견 4) — 권고 2 가 만든 이 두 번째 콜만 킬스위치가 없었다(계획서 Global
+  // Constraints: 모든 새 동작에 킬스위치). off 면 검사 자체를 건너뛰어 콜이 1회로 돌아간다.
+  it('META_SUMMARY_LINT=off 면 검사·재시도를 건너뛴다(콜 1회, 1차 meta 유지)', async () => {
+    const cfg = CONFIG as unknown as { metaSummaryLint: boolean };
+    const orig = cfg.metaSummaryLint;
+    cfg.metaSummaryLint = false;
+    try {
+      mocked.mockResolvedValueOnce(pack('가을 묘목 심는 법을 정리했습니다.', ['1차 제목 후보입니다']));
+      const b = await packageNaverBlog(input);
+      expect(mocked).toHaveBeenCalledTimes(1);
+      expect(b.draft.metaDescription).toBe('가을 묘목 심는 법을 정리했습니다.');
+    } finally { cfg.metaSummaryLint = orig; }
   });
 });

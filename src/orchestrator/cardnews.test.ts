@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   applyCardRevision, applyProofread, buildCardImagePrompt, buildSlideQaPrompt, buildSlideTranscribePrompt,
   coverIncludesKeyword, extractDesignFromDraftPrompt, findSlidesWithChars, parseSlideNosFromFeedback,
-  resolveForcedPreset, stripForDiff, formatRecentEndings,
+  resolveForcedPreset, stripForDiff, formatRecentEndings, cardVoiceGuide, cardStructureLines,
 } from './cardnews';
+import { FIXED_STRUCTURE_SEED } from '../content/structureSeed';
 
 type CardPlan = Parameters<typeof applyCardRevision>[0];
 
@@ -286,5 +287,52 @@ describe('formatRecentEndings — 최근 마무리 원문 회피 블록(순수)'
   it('마무리 원문이 없으면 빈 문자열(무주입)', () => {
     expect(formatRecentEndings([])).toBe('');
     expect(formatRecentEndings([{ headline: '', body: '', captionTail: '' }])).toBe('');
+  });
+});
+
+// Fix wave(2026-08-27, 소견 3) — [말맛] 지시가 킬스위치를 보지 않아 두 구멍이 있었다:
+//  ① VOICE_ROTATION=off 여도 로테이션 문구가 남아 base 로 안 돌아갔다.
+//  ② off·신규 브랜드·읽기 실패로 endingsAvoid 가 비면 '아래 [최근 마무리]' 가 없는 블록을 가리켰다.
+// 두 조건(스위치·원문 유무)에서 세 상태를 만든다.
+describe('cardVoiceGuide — [말맛] 마무리 지시(VOICE_ROTATION × 최근 마무리 유무)', () => {
+  it('off 면 base 문구(마무리 장은 권유형 고정)로 돌아간다', () => {
+    const g = cardVoiceGuide(false, false);
+    expect(g).toContain('마무리 장은 권유형("-해 보세요")으로');
+    expect(g).not.toContain('[최근 마무리]');
+    expect(g).not.toContain('관찰 장면');
+  });
+
+  it('on + 최근 마무리 없음 → 유형 로테이션만, 없는 블록을 참조하지 않는다', () => {
+    const g = cardVoiceGuide(true, false);
+    expect(g).toContain('관찰 장면');
+    expect(g).toContain('조건문');
+    expect(g).not.toContain('[최근 마무리]');
+  });
+
+  it('on + 최근 마무리 있음 → 참조 문구가 붙는다', () => {
+    const g = cardVoiceGuide(true, true);
+    expect(g).toContain('아래 [최근 마무리] 와 같은 문형·같은 첫 어절 금지');
+    expect(g).toContain('관찰 장면');
+  });
+
+  it('세 상태 모두 보호 자산(어미 배합·행동 지시 목적어·안전 이유)을 유지한다', () => {
+    for (const g of [cardVoiceGuide(false, false), cardVoiceGuide(true, false), cardVoiceGuide(true, true)]) {
+      expect(g).toContain('전 장을 "-습니다"로 끝내지 마라');
+      expect(g).toContain('손 높이 아래로');
+      expect(g).toContain('위험·안전의 이유');
+    }
+  });
+});
+
+// Fix wave(2026-08-27, 소견 2) — 줄 수·해시태그 지시는 base(194bed6d) 프롬프트에 아예 없던 두 줄이다.
+// STRUCTURE_VARIETY=off 면 시드 값만 고정되는 게 아니라 그 두 줄이 통째로 빠져야 base 와 같아진다.
+describe('cardStructureLines — 카드 골격 지시(STRUCTURE_VARIETY)', () => {
+  it('off 면 줄 수·해시태그 지시가 아예 빠진다(base 프롬프트)', () => {
+    expect(cardStructureLines(FIXED_STRUCTURE_SEED, false)).toEqual([]);
+  });
+  it('on 이면 시드 값이 그대로 실린다', () => {
+    const lines = cardStructureLines({ ...FIXED_STRUCTURE_SEED, cardLines: 3, hashtags: 11 }, true).join('\n');
+    expect(lines).toContain('3줄');
+    expect(lines).toContain('11개');
   });
 });

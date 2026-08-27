@@ -114,7 +114,8 @@ export function metaSummaryIssues(text: string): string[] {
  *   ⓐ 대비문("A가 아니라 B"/"A보다는 B") 3회 이상 — 한 편에서 세 번 넘게 쓰면 하우스 상투로 읽힌다.
  *   ⓑ 합쇼체(습니다/입니다) 종결 비율 60% 초과(산문 20문장 이상일 때만) — 어미 메트로놈.
  *   ⓒ 한 문장에 유보 표현 2개 이상 — "대개 …경우가 많습니다" 꼴로 단정을 두 겹 피하는 문장.
- *   ⓓ 목록·체크리스트 줄이 서술어 없이 명사로 끝남 — 사람 글은 목록도 말로 끝난다.
+ *   ⓓ 불릿·번호 목록 줄이 서술어 없이 명사로 끝남 — 사람 글은 목록도 말로 끝난다.
+ *      (Fix wave 2026-08-27: '>>>' 프레임 줄은 제외 — 프레임 20자 규칙과 충돌. BLOG_LIST_RE 주석 참조.)
  * 검사 전 마크다운 껍데기(표·코드펜스·인용/목록 마커·헤더·강조)를 벗긴다.
  * 비차단 — 결과는 작가 수정 1회(org.ts packageDesignFinalize)의 피드백일 뿐 발행을 막지 않는다.
  * 킬스위치(BLOG_STYLE_LINT)는 호출부가 본다 — 이 모듈은 CONFIG 를 읽지 않는 순수 함수로 남긴다.
@@ -125,8 +126,21 @@ export function metaSummaryIssues(text: string): string[] {
 const CONTRAST_RE = /(?:가|이|은|는|도)\s*아니라|보다\s*(?:는|도)\s*/g;
 /** ⓒ 유보 표현 — 계획서 지정 목록 그대로. factGate.HEDGE_RE(판정 선분류)와는 목적이 달라 별개로 둔다. */
 const BLOG_HEDGE_RE = /대개|보통|흔히|대체로|대부분|경우가 많|수 있|로 봅니다|으로 봅니다|편입니다/g;
-/** ⓓ 목록 줄 — 불릿·번호·네이버 인용 체크박스(>>>). */
-const BLOG_LIST_RE = /^\s*(?:[-*]\s+|\d+\.\s+|>{3}\s*)/;
+/**
+ * ⓓ 검사 대상 목록 줄 — 불릿·번호만. **네이버 인용 체크박스('>>>' 프레임)는 일부러 뺐다**(Fix wave 2026-08-27).
+ * 프레임은 '각 줄 공백 포함 20자 이내'가 사용자 확정 규칙(2026-08-10, BLOG_BODY_GUIDE 리치 서식)이라
+ * '줄마다 서술어를 붙여라'와 양립하지 않는다 — 실코퍼스 60편에서 ⓓ 적중 142건이 전부 '>>>' 줄이었고
+ * (불릿·번호 적중 0), 수정 라운드는 STRUCTURE_KEEP_BLOCK('프레임은 초안에 있는 대로 두라') 때문에
+ * 프레임을 유지한 채 줄만 늘려 렌더가 어색해졌다(발행 시 잘림은 없다 — QUOTE_LINE_CAP 은 줄 수 캡).
+ * 규칙 우선순위를 프레임 폭 쪽으로 확정한 대가로 ⓓ 는 실코퍼스 기준 사실상 무발동이다(감수한 비용).
+ * 뒤집으려면(프레임 20자 완화) 실제 발행 1편으로 종결형이 폭 안에 드는지 먼저 확인해야 한다.
+ */
+const BLOG_LIST_RE = /^\s*(?:[-*]\s+|\d+\.\s+)/;
+/**
+ * ⓑ 분모에서 뺄 비산문 줄 — 목록 + 프레임('>>>'). ⓓ 대상과 **별개 상수여야 한다**: 프레임 줄(20자 명사구)이
+ * 산문 분모에 섞이면 합쇼체 비율이 구조적으로 희석돼, 아무도 요청하지 않은 ⓑ 약화가 된다.
+ */
+const BLOG_NONPROSE_RE = /^\s*(?:[-*]\s+|\d+\.\s+|>{3}\s*)/;
 /** ⓓ 서술어 종결 — 끝 글자가 서술어 어미면 통과(세요·니다는 요·다에 포함되지만 계획서 표기를 그대로 둔다). */
 const PREDICATE_END_RE = /(?:다|요|죠|까|세요|니다)$/;
 
@@ -137,6 +151,8 @@ export function blogStyleIssues(bodyMarkdown: string): string[] {
   // 표·코드펜스는 문체가 아니다(수치 표·명령어) — 벗기되 줄 구조는 유지한다(ⓓ가 줄 단위 검사).
   const lines = src.replace(/```[\s\S]*?```/g, '\n').split('\n').filter((l) => !/^\s*\|/.test(l));
   const isList = (l: string): boolean => BLOG_LIST_RE.test(l);
+  const isProse = (l: string): boolean => !BLOG_NONPROSE_RE.test(l);
+  // 인용 마커 제거는 '>' 깊이 전부(> · >> · >>>) — ⓐ·ⓒ 는 프레임 줄도 계속 본다(ⓓ 만 좁혔다).
   const plain = (l: string): string =>
     l.replace(BLOG_LIST_RE, '').replace(/^\s*>+\s*/, '').replace(/[*_`]/g, '').trim();
   // 헤더는 문장이 아니다(제목은 원래 명사형) — 4종 검사 모두에서 뺀다.
@@ -147,8 +163,8 @@ export function blogStyleIssues(bodyMarkdown: string): string[] {
     .flatMap((l) => l.split(/(?<=[.!?…])\s+/))
     .map((s) => s.trim()).filter(Boolean);
   const allSentences = sentencesOf(bodyLines);
-  // ⓑ의 분모는 산문 문장만 — 명사로 끝나는 목록 줄을 분모에 넣으면 비율이 구조적으로 낮아져 검사가 죽는다.
-  const proseSentences = sentencesOf(bodyLines.filter((l) => !isList(l)));
+  // ⓑ의 분모는 산문 문장만 — 명사로 끝나는 목록·프레임 줄을 분모에 넣으면 비율이 구조적으로 낮아져 검사가 죽는다.
+  const proseSentences = sentencesOf(bodyLines.filter(isProse));
 
   const issues: string[] = [];
   const contrast = (bodyLines.map(plain).join('\n').match(CONTRAST_RE) ?? []).length;
@@ -161,16 +177,15 @@ export function blogStyleIssues(bodyMarkdown: string): string[] {
   const hedgeStacked = allSentences.filter((s) => (s.match(BLOG_HEDGE_RE) ?? []).length >= 2);
   issues.push(...hedgeStacked.slice(0, 3).map((s) => `유보 중첩 — "${clipLine(s)}"`));
   const listItems: string[] = [];
-  lines.forEach((l, i) => {
+  lines.forEach((l) => {
     if (!isList(l)) return;
-    // 인용 체크박스(>>>)의 첫 줄은 상자 '제목'이라 명사형이 정상이다(실코퍼스: "올리브 체크"·
-    // "9월 정원 준비 점검"·"물 줄 때 확인 순서"). 항목 줄만 본다.
-    if (/^\s*>{3}/.test(l) && !/^\s*>{3}/.test(lines[i - 1] ?? '')) return;
     const t = plain(l);
     if (t) listItems.push(t);
   });
   const nounEnded = listItems.filter((t) => !PREDICATE_END_RE.test(t.replace(/[.!?…·,:;)"'\]]+$/, '')));
-  issues.push(...nounEnded.slice(0, 3).map((t) => `명사형 종결 목록 — "${clipLine(t)}"`));
+  // 길이 상한을 지적에 함께 싣는다 — 안 그러면 수정 라운드가 '서술어를 붙여라'만 읽고 줄을 길게 늘려
+  // 목록 규칙('항목 3~5개, 각 1줄로 짧게', BLOG_BODY_GUIDE)과 충돌한다.
+  issues.push(...nounEnded.slice(0, 3).map((t) => `명사형 종결 목록 — "${clipLine(t)}"(줄은 한 줄로 짧게 둔 채 서술어로만 맺어라)`));
   return issues;
 }
 

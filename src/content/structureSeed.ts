@@ -72,6 +72,16 @@ const pick = <T>(arr: readonly T[], r: number): T => arr[Math.min(arr.length - 1
 const int = (lo: number, hi: number, r: number): number => Math.min(hi, lo + Math.floor(r * (hi - lo + 1)));
 
 /** 시드 한 벌을 뽑는다(순수 — rand 주입으로 테스트 가능). */
+/**
+ * 전방 갭(Fix wave 2026-08-27 소견 7, 기록용) — teaser 가 켜지는 런은 2/3(off 가 균등 3택이라)인데,
+ * **블로그 예고는 예고 이행 루프가 잡지 않는다**: promiseStore().create 호출부는 cardnews·shorts(그리고
+ * 수동 등록)뿐이고 블로그 경로에는 next 수집이 없다. 즉 그 한 줄은 약속으로 기록되지도, 시즌 창에
+ * 이행되지도 않는다. 회귀는 아니다 — 금지 지시가 있던 때에도 실측 10/10편이 예고로 닫혔고, 이번 시드는
+ * 그 비율을 2/3 로 낮추면서 '결론을 예고로 미루지 마라' 제약을 새로 붙였다.
+ * 닫으려면 (a) 블로그 포장 단계에서 마무리 예고 문장을 뽑아 promiseStore().create({sourceKind:'blog'}) 로
+ * 등록하거나 (b) 이행 배선이 생길 때까지 teaser 를 상수 false 로 고정한다(선택 블록은 표·체크리스트 2택).
+ * (b)는 '선택 블록 중 정확히 2개만 true' 불변식을 다시 써야 하므로 배선(a) 쪽이 자연스럽다.
+ */
 export function pickStructureSeed(rand: () => number): StructureSeed {
   const thesisQuote = pick(THESIS, rand());
   const openers = pick(OPENERS, rand());

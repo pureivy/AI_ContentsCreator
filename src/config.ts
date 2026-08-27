@@ -117,6 +117,9 @@ export interface Config {
   readonly timingParity: boolean;
   /** 블로그 본문 문체 린트(2026-08-27 권고 3) — 결정적 4종 검사 후 작가 수정 1회. off 면 검사·수정 모두 중단. */
   readonly blogStyleLint: boolean;
+  /** 요약·설명 메타투 린트(2026-08-27 권고 2) — 블로그 meta 재생성 1회 + 쇼츠 description 수정 라운드 합류.
+   *  off 면 검사와 그 재시도가 함께 멈춘다(블로그 포장 LLM 콜이 최대 1회로 돌아간다). */
+  readonly metaSummaryLint: boolean;
   /** 마무리·제목 문형 로테이션(2026-08-27 권고 5) — 카드 마무리·블로그 마무리 회피 블록 주입과 쇼츠 제목
    *  유형 풀. off 면 세 주입이 모두 빠지고 쇼츠 제목 후보는 종전 고정 3종(정보형·후킹형·질문형)으로 돌아간다. */
   readonly voiceRotation: boolean;
@@ -314,6 +317,8 @@ export const CONFIG: Config = {
   // 시기·수치 원문 대조(2026-08-27 권고 1) — 활엽수 실사고: 블로그 "근거 확실치 않다" ↔ 쇼츠 "지금이 적기" + 오버레이 "8월".
   timingParity: envBool('TIMING_PARITY', true),
   blogStyleLint: envBool('BLOG_STYLE_LINT', true),
+  // 요약·설명 메타투 린트(2026-08-27 권고 2) — meta·쇼츠 설명이 "…정리했습니다"로 끝나 채널 전체가 한 템플릿으로 읽힌 실측 대응.
+  metaSummaryLint: envBool('META_SUMMARY_LINT', true),
   // 마무리·제목 로테이션(2026-08-27 권고 5) — 카드 마무리 장·블로그 마무리 문단·쇼츠 제목 유형이 고정 틀로 수렴한 실측 대응.
   voiceRotation: envBool('VOICE_ROTATION', true),
   // 골격 다양화(2026-08-27 권고 4) — 문구를 다양화해도 뼈대가 매편 같은 자리에 서서 "찍어낸 글" 인상이 남던 실측 대응.

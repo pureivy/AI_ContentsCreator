@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { REVISE_NO_NEW_FACTS, buildReviseContext, BLOG_BODY_GUIDE, buildGenreGuide } from './org';
+import { REVISE_NO_NEW_FACTS, buildReviseContext, BLOG_BODY_GUIDE, blogBodyGuide, buildGenreGuide } from './org';
 import { FACT_CARD_HEADER } from '../content/factGate';
 
 describe('리비전 컨텍스트(스펙 §3) — 브리프·목소리 지침이 개정에도 들어간다', () => {
@@ -38,6 +38,31 @@ it('BLOG_BODY_GUIDE — 인용구·프레임·표의 자리 고정 문구가 [�
   expect(BLOG_BODY_GUIDE).not.toContain('글의 중심 명제 한 문장(글당 1곳, 도입 훅 직후가 최적)');
   expect(BLOG_BODY_GUIDE).toContain('아래 [이번 글 구조] 에서 켜졌을 때만');
   expect(BLOG_BODY_GUIDE).toContain('이번 글에 넣을지는 아래 [이번 글 구조] 를 따른다');
+});
+
+// Fix wave(2026-08-27, 소견 2) — 킬스위치 동일성 계약: STRUCTURE_VARIETY=off 는 '시드만 고정'이 아니라
+// **프롬프트 문구까지 base 로** 돌아가야 한다. off 인데 위임 문구가 남으면 작가는 존재하지 않는
+// [이번 글 구조] 블록을 참조하라는 지시를 받는다(소견 3 과 같은 성격의 매달린 참조).
+describe('blogBodyGuide — STRUCTURE_VARIETY 킬스위치가 프롬프트 문구까지 되돌린다', () => {
+  it('on 이면 종전 상수와 동일하다(위임 문구 유지)', () => {
+    expect(blogBodyGuide(true)).toBe(BLOG_BODY_GUIDE);
+  });
+  it('off 면 [이번 글 구조] 참조가 하나도 남지 않는다', () => {
+    expect(blogBodyGuide(false)).not.toContain('[이번 글 구조]');
+  });
+  it('off 면 base(194bed6d) 문구로 정확히 되돌아간다 — 도입·인용구·프레임·표', () => {
+    const off = blogBodyGuide(false);
+    expect(off).toContain('독자의 상황·질문으로 바로 시작한다');
+    expect(off).toContain('글의 중심 명제 한 문장(글당 1곳, 도입 훅 직후가 최적)');
+    expect(off).toContain('마무리 요약·행동 체크리스트 박스(글당 1곳, 연속 줄로 작성·최대 8줄');
+    expect(off).toContain('마크다운 표(| 헤더 | ... |)로 제시하면 가독성이 높다(하우투·리뷰의 비교표에 특히 유용).');
+  });
+  it('off 여도 보호 자산(사실 범위 한정·프레임 20자 규칙·AI 티 금지)은 그대로다', () => {
+    const off = blogBodyGuide(false);
+    expect(off).toContain('브리프·제공 자료에 있는 것만 쓴다');
+    expect(off).toContain('각 줄은 공백 포함 20자 이내로 짧게');
+    expect(off).toContain('①인사·예고형 도입');
+  });
 });
 
 it('리비전 컨텍스트에 [이번 글 구조] 블록이 들어간다(같은 시드 승계)', () => {

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL } from './shorts';
+import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues } from './shorts';
 import { ShortsStore } from '../content/shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
@@ -188,6 +188,35 @@ describe('pickTitleTypes — 런별 제목 유형 선택·질문형 상한', () 
 
   it('키워드가 있는 런은 정보형을 반드시 포함한다(키워드 정확 표기 규칙 유지)', () => {
     for (let i = 0; i < 100; i++) expect(pickTitleTypes([], { keywordFirst: true })).toContain('정보형');
+  });
+});
+
+// Fix wave(2026-08-27, 소견 3) — 5종 유형 정의 줄은 base(194bed6d) 프롬프트에 없던 줄이다(약 150자).
+// VOICE_ROTATION=off 면 제목 유형은 종전 고정 3종으로 돌아가는데 정의 줄만 남아 base 와 달랐다.
+describe('shortsTitleTypeGuide — 제목 유형 정의 줄(VOICE_ROTATION)', () => {
+  it('off 면 줄 자체가 빠진다(base 프롬프트엔 없던 줄)', () => {
+    expect(shortsTitleTypeGuide(['정보형', '후킹형', '질문형'], false)).toBe('');
+  });
+  it('on 이면 이번 런이 고른 3유형 순서와 5종 정의가 실린다', () => {
+    const s = shortsTitleTypeGuide(['정보형', '결론형', '장면형'], true);
+    expect(s).toContain('정보형 / 결론형 / 장면형');
+    expect(s).toContain('장면형=');
+    expect(s).toContain('결론형=');
+  });
+});
+
+// Fix wave(2026-08-27, 소견 4) — 권고 2 가 새로 만든 검사에 되돌릴 레버가 없었다(다른 넷은 전부 게이트를 가진다).
+describe('descriptionLintIssues — 설명 요약투 검사(META_SUMMARY_LINT)', () => {
+  const bad = '가을 묘목 심는 법을 정리했습니다.';
+  it('on 이면 요약투를 잡아 수정 라운드로 넘긴다(최대 1건)', () => {
+    expect(descriptionLintIssues(bad, true)).toHaveLength(1);
+  });
+  it('off 면 빈 배열 — 검사와 재생성 합류가 함께 멈춘다', () => {
+    expect(descriptionLintIssues(bad, false)).toEqual([]);
+  });
+  it('깨끗한 설명은 어느 쪽이든 통과', () => {
+    const ok = '잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요.';
+    expect(descriptionLintIssues(ok, true)).toEqual([]);
   });
 });
 

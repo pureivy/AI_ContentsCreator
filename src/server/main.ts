@@ -2153,7 +2153,12 @@ function seoReviseFeedback(runId: string, keyword?: string): string | null {
       seo?: { checklist?: Array<{ label: string; ok: boolean; note?: string }> };
       bodyMarkdown?: string; titleCandidates?: string[];
     };
-    const fails = (d.seo?.checklist ?? []).filter((c) => !c.ok);
+    // 키워드 밀도 항목 제외(Fix wave 2026-08-27 소견 6) — 권고 7 로 본문·리비전이 '정확 표기 최대 2회'로
+    // 통일된 뒤로 이 항목은 리비전이 고칠 수 없는 산술이 됐다(kw 6자·본문 3,000자면 하한 0.5% 에 3회가
+    // 필요). 고칠 수 없는 항목을 피드백에 실으면 리비전이 키워드를 다시 심어 정확 표기 규칙(사용자 확정
+    // 자산)과 싸운다. 점수·체크리스트 자체(seo.ts)는 건드리지 않는다 — 화면 표시와 점수는 그대로다.
+    const DENSITY_LABEL = '키워드 밀도 0.5~2.5%(과최적화 경계)';
+    const fails = (d.seo?.checklist ?? []).filter((c) => !c.ok && c.label !== DENSITY_LABEL);
     // 어휘 린트(2026-08-08, 2차 방어) — 프롬프트 예방이 뚫린 함정어를 리비전에 동봉해 함께 교정.
     // 새 리비전 트리거는 만들지 않는다(비용 불변): SEO 미달로 리비전이 돌 때만 얹고, 아니면 로그만.
     const jargon = lintLexicon(`${d.bodyMarkdown ?? ''}\n${(d.titleCandidates ?? []).join('\n')}`, getBrand()?.avoidJargon);

@@ -473,6 +473,25 @@ export const TITLE_TYPE_POOL = ['정보형', '후킹형', '질문형', '결론�
  *    후보에는 키워드를 정확히 이 표기 그대로"(사용자 확정 자산)가 후보에서 통째로 사라지면 안 되기 때문.
  * recentTitles 는 최근 편들의 plan.json titles(최신 순).
  */
+/**
+ * 제목 유형 정의 줄(순수, Fix wave 2026-08-27 소견 3) — base(194bed6d) 프롬프트에는 이 줄이 아예 없었고
+ * titles 는 JSON 형식 줄의 ["정보형","후킹형","질문형"] 로만 지시됐다. VOICE_ROTATION=off 면 제목 유형은
+ * 종전 고정 3종으로 돌아가는데 5종 정의 줄만 남으면 base 와 달라진다(킬스위치 동일성 계약) — off 면 뺀다.
+ */
+export function shortsTitleTypeGuide(titleTypes: string[], rotation: boolean): string {
+  if (!rotation) return '';
+  return `제목 후보(titles) 3개는 서로 다른 유형으로 쓴다 — 순서대로 [${titleTypes.join(' / ')}]. 유형 정의: 정보형=무엇을 다루는 영상인지 그대로 알린다 / 후킹형=손해·실수·반전으로 클릭을 부른다 / 질문형=독자의 질문을 그대로 던진다 / 결론형="~은 ~입니다" 꼴로 답을 먼저 준다 / 장면형=손에 잡히는 한 장면을 그린다.`;
+}
+
+/**
+ * 설명(description) 요약투 검사(순수, Fix wave 2026-08-27 소견 4) — 권고 2 가 새로 만든 이 검사만
+ * 킬스위치가 없었다(timingParity·blogStyleLint·voiceRotation·structureVariety 는 전부 게이트를 가진다).
+ * META_SUMMARY_LINT=off 면 블로그 meta 재시도(naverBlog)와 이 합류가 함께 멈춘다.
+ */
+export function descriptionLintIssues(description: string, on: boolean = CONFIG.metaSummaryLint): string[] {
+  return on ? metaSummaryIssues(description).slice(0, 1) : [];
+}
+
 export function pickTitleTypes(
   recentTitles: string[][], opts: { keywordFirst?: boolean; rand?: () => number } = {},
 ): string[] {
@@ -651,7 +670,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     '씬 kind(선택): 씬1="hook", 마지막 씬="cta". 본문 씬 중 어울리는 곳에만 "stat"(핵심 수치 1개: value 숫자·unit 단위·label 15자)·"list"(items 2~4개, 각 18자)·"quote"(text 40자, source 출처)·"chart"(비교 수치 2~5개가 막대그래프로 자라나는 연출: series 각 {label 8자, value 숫자≥0}, unit 단위, highlight 강조할 막대 인덱스) — 억지 배정 금지, 애매하면 kind 생략. chart 는 내레이션이 수치 비교를 말할 때만.',
     '수치 규칙: stat.value 와 chart.series 의 value 는 원문(블로그 초안)에 있는 수치 또는 대본 구조상 자명한 숫자(단계 수·항목 수)만. 불확실하면 그 kind 를 쓰지 마라. narration 은 수치를 한글로 낭독하되 JSON 값은 아라비아 숫자. chart 씬의 screenText 에는 핵심 수치 비교를 요약하라(렌더 실패 대비).',
     'description(유튜브 설명 — 인스타 캡션에도 그대로 복제된다)은 요약투로 끝내지 마라 — "정리했습니다/담았어요/알아봅니다/알아보세요/살펴봅니다/소개합니다" 금지. "결론 한 줄 + 조건 한 줄" 꼴로 써라(예: "잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요.").',
-    `제목 후보(titles) 3개는 서로 다른 유형으로 쓴다 — 순서대로 [${titleTypes.join(' / ')}]. 유형 정의: 정보형=무엇을 다루는 영상인지 그대로 알린다 / 후킹형=손해·실수·반전으로 클릭을 부른다 / 질문형=독자의 질문을 그대로 던진다 / 결론형="~은 ~입니다" 꼴로 답을 먼저 준다 / 장면형=손에 잡히는 한 장면을 그린다.`,
+    shortsTitleTypeGuide(titleTypes, CONFIG.voiceRotation),
     `JSON 형식: {"title":"대표 제목","titles":[${titlesJson}],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|chart|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0}}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}`,
   ].filter(Boolean).join('\n');
   type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown }>; description?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
@@ -738,7 +757,8 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       ...timing.slice(0, 3),
       // 설명 요약투(2026-08-27 권고 2, 결정적) — description 은 유튜브 설명이자 인스타 캡션이다.
       // 새 콜을 만들지 않고 기존 수정 라운드에 얹는다(= 플랜이 말하는 "1회 재생성").
-      ...metaSummaryIssues(plan.description).slice(0, 1),
+      // META_SUMMARY_LINT 게이트(Fix wave 소견 4) — 블로그 meta 재시도와 같은 레버로 함께 꺼진다.
+      ...descriptionLintIssues(plan.description),
       // 자막 대본 딱지(2026-08-27 권고 5, 결정적) — screenText 가 "정의/구분법/요약" 같은 목차 라벨로 끝나면
       // 화면이 강의 슬라이드처럼 읽힌다. 프롬프트 지시(압축 안전선)의 2차 방어, 비차단.
       // VOICE_ROTATION 게이트 — 이 태스크가 넣은 동작은 스위치 하나로 전부 되돌아간다.

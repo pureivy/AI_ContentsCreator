@@ -11,6 +11,7 @@ import { renderMarkdown, renderHtml, stripEmoji } from './render';
 import { registerFormatter } from './formatter';
 import { brandContext, getBrand, lexiconGuide } from '../content/brand';
 import { metaSummaryIssues } from '../content/styleLint';
+import { CONFIG } from '../config';
 import { seasonalContext } from '../util/solarTerms';
 import type { AssetBundle, BlogDraft, FormatterInput } from './formatter';
 
@@ -86,9 +87,11 @@ export async function packageNaverBlog(input: FormatterInput): Promise<AssetBund
   // 뒤)에 건다 — 원본 필드를 보면 린트와 발행물이 갈라지고 잔존 로그가 다른 문장을 인용하게 된다.
   // 재시도가 깨끗할 때 갈아끼우는 것은 meta 뿐이다: 제목 후보·태그는 자기 제약(15~40자·키워드 4/5 포함·
   // 조어 금지)이 따로 있어 meta 표적 재생성이 통째로 덮으면 통제 못 하는 드리프트가 된다.
+  // META_SUMMARY_LINT 게이트(Fix wave 2026-08-27 소견 4) — 이 검사가 만드는 2번째 askPack 콜만
+  // 되돌릴 레버가 없었다(계획서 Global Constraints: 모든 새 동작에 킬스위치). off 면 검사 자체를 건너뛴다.
   const metaText = (m: PackMeta | null): string => stripEmoji(asString(m?.meta)).trim().slice(0, 200);
   let metaDescription = metaText(meta);
-  const metaIssues = metaSummaryIssues(metaDescription);
+  const metaIssues = CONFIG.metaSummaryLint ? metaSummaryIssues(metaDescription) : [];
   if (metaIssues.length) {
     try {
       const retry = await askPack(
