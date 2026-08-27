@@ -293,7 +293,9 @@ export const CONFIG: Config = {
   openaiImageModel: env('OPENAI_IMAGE_MODEL', 'gpt-image-2'),
   naverSessionFile: env('NAVER_SESSION_FILE', path.join(ROOT, '.naver_session.json')),
   blogAutoImage: envBool('BLOG_AUTO_IMAGE', false),
-  autoNaverDraft: envBool('AUTO_NAVER_DRAFT', true),
+  // 2026-08-27 사용자 확정 — 기본 off. 근거 유무와 무관하게 모든 블로그 글은 수동 검토 후 버튼으로 임시저장한다
+  // (SEO 자동 리비전은 그대로 유지 — 꺼지는 건 임시저장 '호출'뿐).
+  autoNaverDraft: envBool('AUTO_NAVER_DRAFT', false),
   // 사실 게이트(2026-08-26, 사용자 절대 규칙) — 본문 주장을 브리프·근거와 대조해 무근거·모순이면 자동 임시저장 보류.
   factGate: envBool('FACT_GATE', true),
   factGateMaxClaims: Math.min(Math.max(5, envInt('FACT_GATE_MAX_CLAIMS', 20)), 40),

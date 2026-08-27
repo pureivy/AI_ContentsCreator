@@ -137,3 +137,28 @@ describe('factGateLines — 텔레그램 보류 표시(스펙 §2-3)', () => {
     expect(short).not.toContain('근거 없음');
   });
 });
+
+// 2026-08-27 사용자 확정 — 자동 임시저장이 꺼진 동안엔 알림이 "버튼을 눌러야 저장된다"를 말해야 한다.
+// 안 그러면 사람은 예전처럼 '알아서 임시저장됐겠지'로 읽고 글이 영원히 대기만 한다.
+describe('blogReadyHtml — 자동 임시저장 off 안내(전면 수동 검토)', () => {
+  const MANUAL = '✋ 수동 검토 대기 — 아래 "네이버 임시저장" 버튼으로 저장';
+
+  it('off 면 수동 검토 줄을 넣고, on 이면 기존 문구 그대로', () => {
+    expect(blogReadyHtml({ id: 'p1', title: 'T' }, '', false)).toContain(MANUAL);
+    expect(blogReadyHtml({ id: 'p1', title: 'T' }, '', true)).not.toContain('✋');
+  });
+
+  it('사실 게이트 줄 아래·발췌 위에 온다(보류 사유를 먼저 읽고 버튼을 누르게)', () => {
+    const fg = { status: 'hold' as const, unsupported: ['근거 없는 문장'], contradicted: [], checkedTs: 't' };
+    const html = blogReadyHtml({ id: 'p1', title: 'T', factGate: fg }, '본문 발췌', false);
+    expect(html.indexOf(MANUAL)).toBeGreaterThan(html.indexOf('사실 게이트'));
+    expect(html.indexOf(MANUAL)).toBeLessThan(html.indexOf('본문 발췌'));
+  });
+
+  it('사실 게이트 줄이 없어도(통과·미실행) 제목 아래·발췌 위에 놓인다', () => {
+    const html = blogReadyHtml({ id: 'p1', title: 'T' }, '본문 발췌', false);
+    expect(html).not.toContain('사실 게이트');
+    expect(html.indexOf(MANUAL)).toBeGreaterThan(html.indexOf('<b>T</b>'));
+    expect(html.indexOf(MANUAL)).toBeLessThan(html.indexOf('본문 발췌'));
+  });
+});

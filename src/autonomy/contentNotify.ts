@@ -116,8 +116,11 @@ export function factGateLines(info: FactGateInfo | undefined, maxItems: number, 
   return [head, ...items].join('\n');
 }
 
-/** 블로그 ready 텔레그램 메시지(HTML). 순수 — 테스트 대상. */
-export function blogReadyHtml(p: BlogReadyInfo, excerpt: string): string {
+/** 자동 임시저장이 꺼진 동안의 안내 1줄(2026-08-27 사용자 확정) — 사람이 버튼을 눌러야 저장된다는 사실을 못 박는다. */
+const MANUAL_REVIEW_LINE = '✋ 수동 검토 대기 — 아래 "네이버 임시저장" 버튼으로 저장';
+
+/** 블로그 ready 텔레그램 메시지(HTML). 순수 — 테스트 대상(autoDraft 는 기본값만 CONFIG 에서 읽는다). */
+export function blogReadyHtml(p: BlogReadyInfo, excerpt: string, autoDraft = CONFIG.autoNaverDraft): string {
   const meta = [p.keyword, typeof p.seoScore === 'number' ? `SEO ${p.seoScore}점` : '']
     .filter(Boolean).join(' · ');
   return [
@@ -125,6 +128,8 @@ export function blogReadyHtml(p: BlogReadyInfo, excerpt: string): string {
     `<b>${escapeHtml(clip(p.title ?? '(제목 미정)', 200))}</b>`,
     meta ? escapeHtml(meta) : '',
     factGateLines(p.factGate, 3) ? escapeHtml(factGateLines(p.factGate, 3)) : '',
+    // 사실 게이트 줄 '아래' — 보류 사유를 먼저 읽고 버튼을 누르는 순서.
+    autoDraft ? '' : escapeHtml(MANUAL_REVIEW_LINE),
     excerpt ? `\n${escapeHtml(excerpt)}` : '',
     `\n검토: ${reviewLink(p.id)}`,
   ].filter(Boolean).join('\n');

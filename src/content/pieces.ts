@@ -153,3 +153,41 @@ export function blogUrlForPiece(pieceId?: string): string | undefined {
 export function autoDraftBlockedByFactGate(p: { factGate?: FactGateInfo }): boolean {
   return p.factGate?.status === 'hold' || p.factGate?.status === 'error';
 }
+
+/**
+ * ready 조각에 대한 자동 임시저장·자동 리비전 결정(순수, 2026-08-27 사용자 확정).
+ *
+ * 결정은 여기 한 곳에만 둔다 — 호출측(main.ts `maybeAutoNaverDraft`)은 이 태그에 따라 효과(로그·잡 기동·
+ * 리비전 런)만 수행한다. 핵심 갈래: 자동 임시저장이 꺼져 있어도 SEO 판단과 자동 리비전은 예전 그대로 돈다.
+ * 임시저장 '호출'만 막혀 사람이 텔레그램·검토 탭 버튼으로 저장한다.
+ */
+export type AutoDraftDecision =
+  /** 대상 아님 — 런 없음·ready 아님·이미 네이버 초안 있음(재저장은 사람이 판단). */
+  | 'skip'
+  /** SEO 통과 + 자동 임시저장 on + 사실 게이트 통과 → 임시저장 기동. */
+  | 'draft'
+  /** SEO 통과했지만 자동 임시저장 off → 수동 검토 대기(조각당 1회 안내). */
+  | 'draft-off'
+  /** SEO 통과 + on 이지만 사실 게이트 보류·판정 실패 → 자동 저장만 건너뜀. */
+  | 'fact-hold'
+  /** SEO 미측정이거나 자동 리비전 소진 → 수동 검토 대기. */
+  | 'revise-exhausted'
+  /** SEO 미달 + 리비전 여유 있음 → 자동 리비전 런 후보(효과측 게이트는 호출측에서). */
+  | 'revise';
+
+export function planAutoNaverDraft(
+  p: Pick<Piece, 'factGate'> & Partial<Pick<Piece, 'runId' | 'stage' | 'naverDraftUrl' | 'seoScore' | 'autoRevisions'>>,
+  opts: { autoNaverDraft: boolean; seoMin: number },
+): AutoDraftDecision {
+  if (!p.runId || p.stage !== 'ready') return 'skip';
+  if (p.naverDraftUrl) return 'skip'; // 이미 네이버에 초안 있음 — 재저장은 사람이 판단(중복 초안 방지)
+  const seo = p.seoScore;
+  if (typeof seo === 'number' && seo >= opts.seoMin) {
+    // off 가 사실 게이트보다 먼저 — 꺼진 상태에서는 보류 여부를 따질 이유가 없다(어차피 사람이 본다).
+    if (!opts.autoNaverDraft) return 'draft-off';
+    if (autoDraftBlockedByFactGate(p)) return 'fact-hold';
+    return 'draft';
+  }
+  if (typeof seo !== 'number' || (p.autoRevisions ?? 0) >= 1) return 'revise-exhausted';
+  return 'revise';
+}

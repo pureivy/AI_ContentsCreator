@@ -56,7 +56,7 @@ import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame } from '../tools/shortsRender';
 import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
-import { pieceStore, selectResumablePiece, blogUrlForPiece, autoDraftBlockedByFactGate } from '../content/pieces';
+import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft } from '../content/pieces';
 import { toFactGateInfo } from '../content/factGate';
 import { readFactGate } from '../sessions/digest';
 import { listPersonas } from '../content/personas';
@@ -2166,41 +2166,57 @@ function seoReviseFeedback(runId: string, keyword?: string): string | null {
   } catch { return null; }
 }
 
+// 자동 임시저장 꺼짐 안내를 조각당 1회로 접는다 — maybeAutoNaverDraft 는 ready 전이·재개 스윕마다 불려서
+// 그냥 두면 같은 조각의 같은 문장이 로그를 채운다(재시작하면 초기화 = 다시 1회, 무해).
+const AUTO_DRAFT_OFF_LOGGED = new Set<string>();
+
 // 반환: 자동 리비전 런을 띄웠는지 — 호출측(advancePieceReady)이 곧 대체될 초안의 '검토 대기' 알림을 유예하는 데 쓴다.
 function maybeAutoNaverDraft(pieceId: string): boolean {
-  if (!CONFIG.autoNaverDraft) return false;
   const piece = pieceStore().get(pieceId);
-  if (!piece?.runId || piece.stage !== 'ready') return false;
-  if (piece.naverDraftUrl) return false; // 이미 네이버에 초안 있음 — 재저장은 사람이 판단(중복 초안 방지)
+  if (!piece) return false;
   const seo = piece.seoScore;
-  if (typeof seo === 'number' && seo >= CONFIG.naverDraftSeoMin) {
-    if (autoDraftBlockedByFactGate(piece)) {
-      const n = (piece.factGate?.unsupported.length ?? 0) + (piece.factGate?.contradicted.length ?? 0);
-      console.log(`[발행담당] ${piece.title.slice(0, 30)} — 사실 게이트 ${piece.factGate?.status === 'error' ? '판정 실패' : `보류 ${n}건`} → 자동 임시저장 건너뜀(수동 검토)`);
-      return false;
+  // 결정은 순수 함수(planAutoNaverDraft)에만 — 여기는 효과만. 자동 임시저장이 꺼져 있어도
+  // SEO 판단·자동 리비전은 예전 그대로 돌고, 임시저장 '호출'만 막힌다(2026-08-27 사용자 확정).
+  const decision = planAutoNaverDraft(piece, { autoNaverDraft: CONFIG.autoNaverDraft, seoMin: CONFIG.naverDraftSeoMin });
+  if (decision === 'skip') return false;
+  if (decision === 'draft-off') {
+    if (!AUTO_DRAFT_OFF_LOGGED.has(pieceId)) {
+      AUTO_DRAFT_OFF_LOGGED.add(pieceId);
+      console.log(`[발행담당] ${piece.title.slice(0, 30)} — 자동 임시저장 꺼짐 → 수동 검토 대기(텔레그램·검토 탭 버튼)`);
     }
+    return false;
+  }
+  if (decision === 'fact-hold') {
+    const n = (piece.factGate?.unsupported.length ?? 0) + (piece.factGate?.contradicted.length ?? 0);
+    console.log(`[발행담당] ${piece.title.slice(0, 30)} — 사실 게이트 ${piece.factGate?.status === 'error' ? '판정 실패' : `보류 ${n}건`} → 자동 임시저장 건너뜀(수동 검토)`);
+    return false;
+  }
+  if (decision === 'draft') {
     const r = startNaverDraftJob(pieceId, { actor: publisherName() });
     console.log('error' in r
       ? `[발행담당] ${piece.title.slice(0, 30)} — 임시저장 기동 실패: ${r.error}`
       : `[발행담당] ${piece.title.slice(0, 30)} — SEO ${seo}점(기준 ${CONFIG.naverDraftSeoMin}) 통과 → 네이버 임시저장 시작`);
     return false;
   }
-  if (typeof seo !== 'number' || (piece.autoRevisions ?? 0) >= 1) {
+  if (decision === 'revise-exhausted') {
     console.log(`[발행담당] ${piece.title.slice(0, 30)} — SEO ${seo ?? '미측정'}점 < ${CONFIG.naverDraftSeoMin} · 자동 리비전 소진 → 수동 검토 대기`);
     return false;
   }
+  // decision === 'revise' — 여기부터는 효과 있는 게이트(진행 중 런·잡, 본문·체크리스트 유무)만 남는다.
+  const runId = piece.runId;
+  if (!runId) return false; // planAutoNaverDraft 가 보장하지만(runId 없으면 skip) 타입 좁히기용
   // 다른 런/잡이 도는 중이면 이번 틱은 건너뛴다(다음 ready 전이 때 재평가).
   if ([...RUNS.values()].some((h) => h.status === 'running' && h.topic === piece.title)) return false;
   if (NAVER_DRAFT_JOBS.get(pieceId)?.status === 'running') return false;
   let baseBody = '';
   try {
-    const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, piece.runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
+    const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
     baseBody = (d.bodyMarkdown ?? '').trim();
   } catch { /* 아래에서 중단 */ }
-  const feedback = seoReviseFeedback(piece.runId, piece.keyword);
+  const feedback = seoReviseFeedback(runId, piece.keyword);
   if (!baseBody || !feedback) return false; // 본문·체크리스트 없이는 리비전 품질을 보장할 수 없다 — 수동으로
   pieceStore().update(pieceId, { autoRevisions: (piece.autoRevisions ?? 0) + 1 });
-  const rid = launchRun(piece.title, { pieceId, keyword: piece.keyword, revise: { baseBody, feedback: feedback.slice(0, 4000), baseRunId: piece.runId } });
+  const rid = launchRun(piece.title, { pieceId, keyword: piece.keyword, revise: { baseBody, feedback: feedback.slice(0, 4000), baseRunId: runId } });
   console.log(rid
     ? `[발행담당] ${piece.title.slice(0, 30)} — SEO ${seo}점 미달 → 자동 리비전 런 ${rid}`
     : `[발행담당] ${piece.title.slice(0, 30)} — 리비전 런 기동 실패(다른 런 진행 중일 수 있음)`);

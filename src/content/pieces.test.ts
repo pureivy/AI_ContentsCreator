@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { PieceStore, selectResumablePiece, autoDraftBlockedByFactGate } from './pieces';
+import { PieceStore, selectResumablePiece, autoDraftBlockedByFactGate, planAutoNaverDraft } from './pieces';
 import type { Piece } from './pieces';
 
 let dir = '';
@@ -102,6 +102,38 @@ describe('autoDraftBlockedByFactGate — 자동 임시저장 차단 판정(사�
     expect(autoDraftBlockedByFactGate({ factGate: info('error') })).toBe(true);
     expect(autoDraftBlockedByFactGate({ factGate: info('pass') })).toBe(false);
     expect(autoDraftBlockedByFactGate({})).toBe(false);
+  });
+});
+
+// 2026-08-27 사용자 확정 — 블로그는 근거 유무와 무관하게 전부 수동 검토 대기(자동 임시저장 기본 off).
+// 결정 로직은 순수 함수 하나에만 있어야 한다(main.ts 는 이 결정에 따라 효과만 수행) — 여기서 네 갈래를 고정한다.
+describe('planAutoNaverDraft — 자동 임시저장·리비전 결정(전면 수동 검토)', () => {
+  const base = { runId: 'r1', stage: 'ready' as const };
+  const on = { autoNaverDraft: true, seoMin: 80 };
+  const off = { autoNaverDraft: false, seoMin: 80 };
+  const hold = { status: 'hold' as const, unsupported: ['근거 없는 문장'], contradicted: [], checkedTs: 't' };
+
+  it('off + SEO 통과 → 임시저장 호출 대신 draft-off(수동 검토 대기), on 이면 기존대로 draft', () => {
+    expect(planAutoNaverDraft({ ...base, seoScore: 90 }, off)).toBe('draft-off');
+    expect(planAutoNaverDraft({ ...base, seoScore: 90 }, on)).toBe('draft');
+  });
+
+  it('off 여도 SEO 판단·자동 리비전 결정은 그대로 수행한다(리비전은 유지)', () => {
+    expect(planAutoNaverDraft({ ...base, seoScore: 70 }, off)).toBe('revise');
+    expect(planAutoNaverDraft({ ...base, seoScore: 70 }, on)).toBe('revise');
+    expect(planAutoNaverDraft({ ...base, seoScore: 70, autoRevisions: 1 }, off)).toBe('revise-exhausted');
+    expect(planAutoNaverDraft({ ...base }, off)).toBe('revise-exhausted'); // SEO 미측정
+  });
+
+  it('off 면 사실 게이트 보류보다 먼저 걸러진다 — hold 로그는 on 일 때만 의미', () => {
+    expect(planAutoNaverDraft({ ...base, seoScore: 90, factGate: hold }, off)).toBe('draft-off');
+    expect(planAutoNaverDraft({ ...base, seoScore: 90, factGate: hold }, on)).toBe('fact-hold');
+  });
+
+  it('런 없음·ready 아님·이미 네이버 초안 있음은 skip(꺼짐 로그도 내지 않는다)', () => {
+    expect(planAutoNaverDraft({ stage: 'ready', seoScore: 90 }, off)).toBe('skip');
+    expect(planAutoNaverDraft({ ...base, stage: 'draft', seoScore: 90 }, off)).toBe('skip');
+    expect(planAutoNaverDraft({ ...base, seoScore: 90, naverDraftUrl: 'https://blog.naver.com/x/1' }, off)).toBe('skip');
   });
 });
 
