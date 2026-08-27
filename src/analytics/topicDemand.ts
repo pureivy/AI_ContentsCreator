@@ -17,7 +17,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { activeBrandSlug, brandSeedKeywords, getBrand, offBrandTerm } from '../content/brand';
-import { discoverySeeds, looksLikeGardenQuery, brandSpeciesCoverage } from './discoverySeeds';
+import { discoverySeeds, looksLikeGardenQuery, brandSpeciesCoverage, brandThemeCoverage } from './discoverySeeds';
+import { overThemeCap } from '../content/topicThemes';
 import { overSpeciesCap } from '../content/speciesRotation';
 import { readTrendSnap } from './trendSignal';
 import { datalabEnabled, datalabTrend } from '../grounding/naver_datalab';
@@ -283,8 +284,10 @@ export function demandSeeds(slug?: string, now = new Date()): string[] {
   } catch { /* 전략 파일 없음(콜드스타트) — 브랜드 시드만 */ }
   // 월 상한에 닿은 수종의 winners 는 측정에서도 뺀다(2026-08-27) — 표에 '배롱나무 …' 행이 남으면 두뇌가 또 그쪽으로 끌린다.
   const capCov = getBrand()?.speciesCatalog?.length ? brandSpeciesCoverage(now, s || undefined) : new Map<string, number>();
+  const themeCapCov = getBrand()?.topicThemes?.length ? brandThemeCoverage(now, s || undefined) : new Map<string, number>();
   const winTop = winners.sort((a, b) => b.score - a.score)
     .filter((w) => !overSpeciesCap(w.kw, capCov, getBrand()?.speciesCatalog))
+    .filter((w) => !overThemeCap(w.kw, themeCapCov, getBrand()?.topicThemes))
     .slice(0, MAX_WINNER_SEEDS).map((w) => w.kw);
 
   // 슬롯 예약 — 브랜드 시드가 상한을 통째로 먹으면 winners 축이 영영 측정되지 않는다

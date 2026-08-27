@@ -29,6 +29,8 @@ import { seasonalContext } from '../util/solarTerms';
 import { offSeasonSubject, seasonalSubjectBlock, formatMonths } from '../content/seasonalSubjects';
 import { speciesCoverage, overSpeciesCap, speciesRotationBlock, speciesInText, SPECIES_MONTHLY_CAP } from '../content/speciesRotation';
 import { pieceStore } from '../content/pieces';
+import { overThemeCap, themeRotationBlock, THEME_MONTHLY_CAP } from '../content/topicThemes';
+import { brandThemeCoverage } from '../analytics/discoverySeeds';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 
 export interface AutoCycleDeps<T = string> {
@@ -274,9 +276,11 @@ function readStrategyWinners(): string {
       winners?: Array<{ keyword?: string; score?: number }>;
     };
     const cov = speciesCoverageFor(slug || undefined);
+    const themeCovW = brandThemeCoverage(new Date(), slug || '');
     return eligibleWinners(raw.winners ?? [], getBrand()?.perfEraSince)
       // 월 상한에 닿은 수종의 성과 키워드는 빼서 '통했던 배롱'이 매 틱 되주입되는 고리를 끊는다(2026-08-27).
       .filter((w) => !overSpeciesCap(w.keyword ?? '', cov, getBrand()?.speciesCatalog))
+      .filter((w) => !overThemeCap(w.keyword ?? '', themeCovW, getBrand()?.topicThemes))   // 축 상한도 같은 이유(수렴 고리 차단)
       .slice(0, 8)
       .map((w) => `- ${w.keyword}${typeof w.score === 'number' ? ` (점수 ${w.score.toFixed(2)})` : ''}`)
       .join('\n');
@@ -465,6 +469,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   // 그 사이 브랜드가 전환되면 기각 기억을 A 로 읽고 B 에 쓰게 된다(아래 ResearchState 의 slug 고정과 같은 버그).
   const slug = activeBrandSlug() || '';
   const speciesCov = speciesCoverageFor(slug);   // 수종 로테이션(2026-08-27) — 프롬프트 블록·후보 게이트·winners 필터 공용
+  const themeCov = brandThemeCoverage(new Date(), slug);   // 주제 축 로테이션(2026-08-27) — 수종과 직교
 
   // 브랜드 설정 시: 주제를 브랜드 제품·타겟에 조향 + 콜드스타트는 시드 키워드에서 출발 +
   // subNiche 를 제품 라인으로 제약(기존 서브니치 EWMA 가 그대로 '제품 라인별 성과 학습'이 된다).
@@ -512,6 +517,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     `${seasonalContext()}\n\n` +
     (() => { const b = seasonalSubjectBlock(getBrand()?.seasonalSubjects); return b ? `${b}\n\n` : ''; })() +
     (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov); return b ? `${b}\n\n` : ''; })() +
+    (() => { const b = themeRotationBlock(getBrand()?.topicThemes, themeCov); return b ? `${b}\n\n` : ''; })() +
     jargonLine +
     (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +
@@ -641,6 +647,13 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       if (capped) {
         console.log(`[auto-cycle] 아이디어 기각(수종 월 상한) — "${title}" (${capped.name}: 30일 ${capped.count}편 ≥ ${SPECIES_MONTHLY_CAP})`);
         rejects.push(`"${title}"=수종 월 상한(${capped.name} 최근 30일 ${capped.count}편 — 아직 안 다룬 수종으로)`);
+        continue;
+      }
+      // 주제 축 월 상한 게이트(하드, 비용 0, 2026-08-27) — 같은 축(심기·구매·거름·전정…)이 30일 상한이면 기각.
+      const cappedTheme = overThemeCap(`${title} ${keyword ?? ''}`, themeCov, getBrand()?.topicThemes);
+      if (cappedTheme) {
+        console.log(`[auto-cycle] 아이디어 기각(주제 축 월 상한) — "${title}" (${cappedTheme.theme}: 30일 ${cappedTheme.count}편 ≥ ${THEME_MONTHLY_CAP})`);
+        rejects.push(`"${title}"=주제 축 월 상한(${cappedTheme.theme} 최근 30일 ${cappedTheme.count}편 — 아직 안 다룬 축으로)`);
         continue;
       }
       // 어휘 함정어 게이트(하드) — keyword 로 태어난 함정어는 하류 어디서도 못 뺀다(키워드 고정 강제가

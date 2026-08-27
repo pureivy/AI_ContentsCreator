@@ -7,6 +7,7 @@
 import { activeBrandSlug, brandSeedKeywords, getBrand } from '../content/brand';
 import { pieceStore } from '../content/pieces';
 import { speciesCoverage, SPECIES_MONTHLY_CAP, type SpeciesGroup } from '../content/speciesRotation';
+import { themeCoverage, THEME_MONTHLY_CAP, type TopicTheme } from '../content/topicThemes';
 
 function dayOfYear(d: Date): number {
   return Math.floor((d.getTime() - new Date(d.getFullYear(), 0, 1).getTime()) / 86_400_000);
@@ -59,8 +60,42 @@ export function brandSpeciesCoverage(now = new Date(), slug = activeBrandSlug() 
   } catch { return new Map(); }
 }
 
-/** 활성 브랜드 기준 시드(부작용: pieces 읽기). */
+/** 순수 — 주제 축 시드: 안 다룬 축부터(편수 오름차순), 날짜로 축·구절을 회전. 상한 축 제외. */
+export function pickThemeSeeds(a: { themes: TopicTheme[] | undefined; coverage: Map<string, number>; max: number; now?: Date; cap?: number }): string[] {
+  const max = Math.max(0, a.max);
+  const ths = (a.themes ?? []).filter((t) => t.seeds?.length && (a.coverage.get(t.theme) ?? 0) < (a.cap ?? THEME_MONTHLY_CAP));
+  if (!max || !ths.length) return [];
+  const doy = dayOfYear(a.now ?? new Date());
+  const ordered = [...ths].sort((x, y) => (a.coverage.get(x.theme) ?? 0) - (a.coverage.get(y.theme) ?? 0));
+  const out: string[] = [];
+  const off = doy % ordered.length;
+  for (let i = 0; i < Math.min(max, ordered.length); i++) {
+    const th = ordered[(off + i) % ordered.length]!;
+    out.push(th.seeds[doy % th.seeds.length]!);   // 같은 축 안에서도 날짜마다 다른 구절
+  }
+  return out;
+}
+
+/** 브랜드의 30일 주제 축별 편수(부작용: pieces 읽기). */
+export function brandThemeCoverage(now = new Date(), slug = activeBrandSlug() || ''): Map<string, number> {
+  try {
+    const items = pieceStore().list()
+      .filter((p) => (p.brand ?? '') === slug && p.stage !== 'idea' && p.stage !== 'error')
+      .map((p) => ({ title: p.title, keyword: p.keyword, ts: p.createdTs }));
+    return themeCoverage(items, getBrand()?.topicThemes, now);
+  } catch { return new Map(); }
+}
+
+/** 활성 브랜드 기준 시드(부작용: pieces 읽기) — 수종 시드와 주제 축 시드를 반반 섞는다(2026-08-27). */
 export function discoverySeeds(max: number, now = new Date(), slug = activeBrandSlug() || ''): string[] {
   const b = getBrand();
-  return pickDiscoverySeeds({ catalog: b?.speciesCatalog, coverage: brandSpeciesCoverage(now, slug), brandSeeds: brandSeedKeywords(b), max, now });
+  const nTheme = b?.topicThemes?.length ? Math.floor(max / 2) : 0;
+  const themeSeeds = pickThemeSeeds({ themes: b?.topicThemes, coverage: brandThemeCoverage(now, slug), max: nTheme, now });
+  const species = pickDiscoverySeeds({ catalog: b?.speciesCatalog, coverage: brandSpeciesCoverage(now, slug), brandSeeds: brandSeedKeywords(b), max: max - themeSeeds.length, now });
+  const out: string[] = [];
+  for (let i = 0; i < Math.max(species.length, themeSeeds.length); i++) {   // 교대로 — 상한 자르기에 한 축만 남지 않게
+    if (species[i]) out.push(species[i]!);
+    if (themeSeeds[i]) out.push(themeSeeds[i]!);
+  }
+  return out.slice(0, max);
 }

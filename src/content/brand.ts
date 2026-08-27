@@ -61,6 +61,9 @@ export interface BrandProfile {
   /** 취급 수종 카탈로그(2026-08-27) — 주제 두뇌의 수종 로테이션·월 상한 게이트 기준. 분류별 정식명+별칭.
    *  업종 목록이라 브랜드별로 둔다(미설정=로테이션 없음, 종전 동작). */
   speciesCatalog?: Array<{ group: string; species: Array<{ name: string; aliases?: string[] }> }>;
+  /** 주제 축 카탈로그(2026-08-27) — 수종과 별개 축(심기·구매·거름·전정·병충해·번식·정원 조성…). seeds 는 발굴 검색어,
+   *  match 는 제목 대조 토큰. 로테이션·월 상한 게이트 기준. 업종 목록이라 브랜드별(미설정=축 로테이션 없음). */
+  topicThemes?: Array<{ theme: string; seeds: string[]; match: string[] }>;
   /** 채널 설명(예: 네이버 블로그 — 제품 활용 하우투·후기 중심). */
   channel?: string;
   /** 카드뉴스 기본 이미지 스타일 프리셋(브랜드 고정, 2026-07-22) — 수동·검토탭·자동 파생 전부 적용.
@@ -240,6 +243,14 @@ export function normalizeBrand(raw: Partial<BrandProfile> | null | undefined): B
       }))
       .filter((g) => g.group && g.species.length)
       .slice(0, 12),
+    topicThemes: (Array.isArray(raw?.topicThemes) ? raw.topicThemes as unknown[] : [])
+      .map((t) => ({
+        theme: s((t as { theme?: unknown })?.theme, 30) ?? '',
+        seeds: arr((t as { seeds?: unknown })?.seeds, 20, 40),
+        match: arr((t as { match?: unknown })?.match, 30, 20),
+      }))
+      .filter((t) => t.theme && (t.seeds.length || t.match.length))
+      .slice(0, 24),
     channel: s(raw?.channel, 200),
     cardStyle: s(raw?.cardStyle, 40),
   };

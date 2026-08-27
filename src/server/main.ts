@@ -64,6 +64,8 @@ import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeB
 import type { BrandProfile } from '../content/brand';
 import { offSeasonSubject, formatMonths } from '../content/seasonalSubjects';
 import { overSpeciesCap, SPECIES_MONTHLY_CAP } from '../content/speciesRotation';
+import { overThemeCap, THEME_MONTHLY_CAP } from '../content/topicThemes';
+import { brandThemeCoverage } from '../analytics/discoverySeeds';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
 import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shortsMetaPerfStale } from '../analytics/shortsPerf';
@@ -3520,6 +3522,8 @@ async function demandCheckFor(
   // 수종 월 상한(2026-08-27) — 예고·클러스터 주제도 최근 30일 같은 수종 블로그가 상한이면 기각.
   const capped = overSpeciesCap(keyword, speciesCoverageFor(slug), getBrand()?.speciesCatalog);
   if (capped) return { verdict: 'reject', line: `수종 월 상한(${capped.name}: 30일 ${capped.count}편 ≥ ${SPECIES_MONTHLY_CAP})` };
+  const cappedTheme = overThemeCap(keyword, brandThemeCoverage(new Date(), slug), getBrand()?.topicThemes);
+  if (cappedTheme) return { verdict: 'reject', line: `주제 축 월 상한(${cappedTheme.theme}: 30일 ${cappedTheme.count}편 ≥ ${THEME_MONTHLY_CAP})` };
   const cfg = { minVolume: CONFIG.topicDemandMinVolume, minSeason: CONFIG.topicDemandMinSeason };
   // 기각 기억(2026-08-27) — 지난 틱에 실측으로 하한 미달이 확정된 키워드는 API 를 부르지 않는다(조회 비용 0).
   // 세 경로(후보 루프·예고·클러스터)가 같은 원장을 공유해야, 어느 경로에서 떨어진 키워드든 다른 경로로
