@@ -63,6 +63,15 @@ function blogStyleSig(runId: string | undefined): { opening: string; closing: st
     return (s.opening || s.headings) ? s : null;
   } catch { return null; }
 }
+/** 블로그 초안 본문 원문 — piece.runId → data/sessions/<runId>/draft.json 의 bodyMarkdown(없으면 ''). */
+function blogBodyOf(runId: string | undefined): string {
+  if (!runId) return '';
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
+    return d.bodyMarkdown ?? '';
+  } catch { return ''; }
+}
+
 /** 블로그 초안 소제목 — piece.runId → data/sessions/<runId>/draft.json 의 bodyMarkdown. */
 function blogOutline(runId: string | undefined): string {
   if (!runId) return '';
@@ -391,4 +400,52 @@ export function recentPhrasesToAvoid(
       cap: 6,
     });
   } catch { return []; }
+}
+
+/**
+ * 마무리 문단 첫 문장 추출(순수, 2026-08-27 말투 감사 권고 5) — 최근 글의 '닫는 문형'을 작가에게 보여 주는
+ * 로테이션 지시의 원자료. 마크다운 껍데기(소제목·표·코드·인용/목록 마커·구분선·이미지 마커)를 벗기고
+ * 남은 **마지막 문단**의 첫 문장을 뽑는다. styleSignatureOf 의 closing 은 '마무리 소제목'이라 다른 축이다
+ * (소제목만 바꾸고 같은 문형으로 닫는 글을 못 잡았다 — 그래서 문장 층위를 따로 본다).
+ */
+export function endingSentenceOf(body: string): string {
+  const cleaned = String(body ?? '')
+    .replace(/```[\s\S]*?```/g, '\n\n')      // 코드블록
+    .replace(/^#{1,6}\s.*$/gm, '\n')         // 소제목
+    .replace(/\[IMAGE:[^\]]*\]/g, ' ')       // 이미지 마커
+    .replace(/^\s*\|.*$/gm, '\n')            // 표
+    .replace(/^\s*-{3,}\s*$/gm, '\n')        // 구분선
+    .replace(/^\s*>+\s*/gm, '')              // 인용 마커
+    .replace(/^\s*(?:[-*]\s+|\d+\.\s+)/gm, '') // 목록 마커
+    .replace(/[*_`]/g, '');
+  const paras = cleaned.split(/\n\s*\n/).map((p) => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const last = paras[paras.length - 1] ?? '';
+  return (last.split(/(?<=[.!?…])\s/)[0] ?? last).slice(0, 60);
+}
+
+/**
+ * 최근 블로그 마무리 문형 회피 블록(2026-08-27 권고 5) — 카드·쇼츠의 마무리 로테이션과 같은 원리로,
+ * 최근 limit 편의 마무리 문단 첫 문장을 원문 그대로 보여 주고 "같은 문형으로 닫지 마라"고 못박는다.
+ * 지시문만으로는 '오늘 바로 할 일' 계열 클로징이 계속 새는 것이 실측됐다(recentStyleToAvoid 는 소제목 층위).
+ * 원문은 draft.json 의 bodyMarkdown 을 쓴다 — 같은 런의 draft.md 는 꼬리에 해시태그·제목 후보 주석이
+ * 붙어 있어 '마지막 문단'이 태그 줄이 된다(실측). 전량 fail-open: 실패하면 빈 문자열(무주입).
+ */
+export function recentBlogEndings(brandSlug: string | undefined, limit = 5): string {
+  try {
+    const brandOk = (b?: string): boolean => brandSlug === undefined || (b ?? undefined) === brandSlug;
+    const endings: string[] = [];
+    for (const e of [...pieceStore().list()].reverse()) {   // pieceStore.list() 는 오래된 순 — 뒤집어 최신부터
+      if (!brandOk(e.brand)) continue;
+      const body = blogBodyOf(e.runId);
+      const s = body ? endingSentenceOf(body) : '';
+      if (s) endings.push(s);
+      if (endings.length >= limit) break;
+    }
+    if (!endings.length) return '';
+    return [
+      '[최근 마무리 문단 첫 문장 — 같은 문형 금지]',
+      ...endings.map((s, i) => `${i + 1}. "${s}"`),
+      '위 문장들과 같은 문형·같은 첫 어절로 글을 닫지 마라 — 이번 글은 다른 방식으로 맺어라(장면으로 끝내기 / 조건문 / 판단 단정 / 독자가 오늘 볼 것 한 가지 중 위와 겹치지 않는 것).',
+    ].join('\n');
+  } catch { return ''; }
 }

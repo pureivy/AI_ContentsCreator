@@ -241,7 +241,62 @@ export function coverIncludesKeyword(slides: Array<{ headline: string; body: str
   return strip(`${s0.headline} ${s0.body}`).includes(strip(kw));
 }
 
-async function planCards(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number | null, priorCoverage = ''): Promise<Plan | null> {
+/** 최근 세트의 마무리 원문 한 벌 — 마무리 장 headline/body + 캡션 마지막 줄(해시태그 줄 제외). */
+export interface RecentEnding { headline: string; body: string; captionTail: string }
+
+/**
+ * 마무리 문형 로테이션 회피 블록(순수, 2026-08-27 말투 감사 권고 5) — 종전 지시는 "마무리 장은 권유형으로"
+ * 고정이라 세트마다 같은 꼴("~해 보세요")로 닫혔다(실측). 유형을 열되, 지시문만으로는 새므로
+ * **최근 세트가 실제로 쓴 마무리 원문**을 그대로 보여 주고 겹치면 다시 쓰게 한다
+ * (쇼츠 recentHooksToAvoid·블로그 recentStyleToAvoid 와 같은 원리). 원문이 없으면 빈 문자열(무주입).
+ */
+export function formatRecentEndings(rows: RecentEnding[]): string {
+  const clean = (v: string, cap: number): string => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, cap);
+  const lines = rows.map((r) => {
+    const card = [clean(r.headline, 40), clean(r.body, 60)].filter(Boolean).join(' / ');
+    const tail = clean(r.captionTail, 60);
+    return [card ? `마무리 장 "${card}"` : '', tail ? `캡션 끝줄 "${tail}"` : ''].filter(Boolean).join(' · ');
+  }).filter(Boolean);
+  if (!lines.length) return '';
+  return [
+    '[최근 마무리 — 아래와 같은 문형·같은 첫 어절로 닫지 마라]',
+    ...lines.map((l, i) => `${i + 1}. ${l}`),
+  ].join('\n');
+}
+
+/**
+ * 최근 카드뉴스 세트의 마무리 원문 수집(같은 브랜드, 전량 fail-open). 마무리 장은 plan.json 의 마지막
+ * 슬라이드, 캡션 끝줄은 caption.txt 의 마지막 비-해시태그 줄이다(캡션 꼬리는 태그 나열이라 건너뛴다).
+ * cardNewsStore.list() 는 createdTs 내림차순(최신 순)이라 뒤집지 않는다.
+ */
+function recentEndingsToAvoid(brand: string | undefined, excludeId: string, limit = 5): string {
+  try {
+    const store = cardNewsStore();
+    const rows: RecentEnding[] = [];
+    for (const e of store.list()) {
+      if (e.id === excludeId || (e.brand ?? undefined) !== (brand ?? undefined)) continue;
+      const dir = store.dirFor(e.id);
+      let headline = ''; let body = '';
+      try {
+        const p = JSON.parse(fs.readFileSync(path.join(dir, 'plan.json'), 'utf-8')) as { slides?: Array<{ headline?: string; body?: string }> };
+        const last = p.slides?.[p.slides.length - 1];
+        headline = String(last?.headline ?? '').trim();
+        body = String(last?.body ?? '').trim();
+      } catch { /* plan.json 없는 항목(구버전·실패 런) 무시 */ }
+      let captionTail = '';
+      try {
+        const ls = fs.readFileSync(path.join(dir, 'caption.txt'), 'utf-8')
+          .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+        captionTail = ls[ls.length - 1] ?? '';
+      } catch { /* caption.txt 없는 항목 무시 */ }
+      if (headline || body || captionTail) rows.push({ headline, body, captionTail });
+      if (rows.length >= limit) break;
+    }
+    return formatRecentEndings(rows);
+  } catch { return ''; }
+}
+
+async function planCards(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number | null, priorCoverage = '', endingsAvoid = ''): Promise<Plan | null> {
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 키워드] ${keyword}` : '',
@@ -262,7 +317,8 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     // 결론 의무+용어 문턱(사용자 확정 2026-08-12): 실측 — "도장지"를 표지부터 캡션까지 한 번도 안 풀었고,
     // 헤드라인 "다섯 곳"에 본문은 "세 가지"만 제시하는 수치 불일치까지 나왔다.
     '[결론·용어] 구별·진단 소재면 각 장의 관찰에 그것이 대개 무엇을 뜻하는지(통설 수준 — "대개" 유보로 단정 가능) 또는 무엇을 하라는지를 붙여라 — 보는 법만 나열하고 끝나면 실패. 표지·헤드라인의 핵심어가 전문용어면 반 문장으로 풀어라("도장지(웃자란 가지)"). 헤드라인의 수치·개수는 본문이 실제로 그만큼 채워야 한다.',
-    '[말맛] 전 장을 "-습니다"로 끝내지 마라 — 본문 중 질문 1장·명사구 종결 1장을 섞고, 마무리 장은 권유형("-해 보세요")으로. 항목 나열은 같은 문형·같은 길이로 균등 배분하지 말고 중요한 하나만 길게, 나머지는 짧게 묶어라. 단 행동 지시는 목적어·방향까지 남겨라("손 높이 아래로" 같은 잘린 구 금지 — 뜻이 뒤집히면 실패). 위험·안전의 이유("~해야 안전합니다" 류)는 세트 전체에서 최소 1회 온전한 문장으로 남겨라.',
+    '[말맛] 전 장을 "-습니다"로 끝내지 마라 — 본문 중 질문 1장·명사구 종결 1장을 섞고, 마무리 장 유형은 [권유형 "-해 보세요" / 관찰 장면(손에 잡히는 한 장면) / 결론 단정 / 조건문 "~이면 ~합니다"] 중 최근 5세트에서 쓰지 않은 유형으로 — 아래 [최근 마무리] 와 같은 문형·같은 첫 어절 금지. 항목 나열은 같은 문형·같은 길이로 균등 배분하지 말고 중요한 하나만 길게, 나머지는 짧게 묶어라. 단 행동 지시는 목적어·방향까지 남겨라("손 높이 아래로" 같은 잘린 구 금지 — 뜻이 뒤집히면 실패). 위험·안전의 이유("~해야 안전합니다" 류)는 세트 전체에서 최소 1회 온전한 문장으로 남겨라.',
+    endingsAvoid,
     '[여운·관점] 본문 1장은 결론 없이 다음 장으로 궁금증을 넘기되, 그 답을 반드시 바로 다음 장 첫 줄에서 준다. 본문 1장에는 판단의 표명 한 줄("이럴 땐 이 순서부터 봅니다" — "나는/저는/저라면" 같은 1인칭 주어는 쓰지 마라, 주어 없이도 시점이 전달된다. 사용자 확정 2026-08-12. 겪지 않은 사건·일화 날조는 금지) — 근거·이유 줄을 밀어내고 그 자리를 차지하게 하지 마라, 판단은 근거에 덧붙이는 한 줄이다. "X가 아니라 Y" 대조 훅·"오늘 ~" 헤드라인·"N가지" 골격은 과용된 지문이니 다른 각도로 열고, "가 아니라"는 세트 전체 1회 이하.',
     n
       ? `슬라이드 ${n}장(표지 1 + 본문 ${Math.max(1, n - 2)} + 마무리 1)의 카드뉴스를 기획하라.`
@@ -803,8 +859,10 @@ export async function runCardNewsJob(
     const phraseBlock = ticPhrases.length
       ? `[반복 표현 금지] 최근 카드뉴스들에서 이미 여러 번 쓴 표현이다 — 헤드라인·본문에 쓰지 말고 다른 어휘·접근으로 풀어라: ${ticPhrases.map((p) => `'${p}'`).join(', ')}`
       : '';
-    say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건`);
-    const plan = await planCards(io, card.topic, card.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'));
+    // 마무리 문형 로테이션(2026-08-27 권고 5) — 최근 5세트의 마무리 장·캡션 끝줄 원문을 보여 주고 겹치면 다시 쓰게 한다.
+    const endingsAvoid = CONFIG.voiceRotation ? recentEndingsToAvoid(card.brand, card.id) : '';
+    say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 마무리 로테이션 ${endingsAvoid ? '주입' : '해당없음'}`);
+    const plan = await planCards(io, card.topic, card.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), endingsAvoid);
     if (!plan) throw new Error('기획 실패 — 기획자 JSON 응답을 해석할 수 없습니다');
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ title: plan.title, slides: plan.slides }, null, 2), 'utf-8');
     say(`기획 완료 — ${plan.title.slice(0, 30)} · 슬라이드 ${plan.slides.length}장`);

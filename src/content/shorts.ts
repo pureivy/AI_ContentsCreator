@@ -31,7 +31,8 @@ export interface Shorts {
   stage: ShortsStage;
   /** 대표 제목(ready 시 — 기획 확정 제목). */
   title?: string;
-  /** 제목 후보 3종(정보형/후킹형/질문형). */
+  /** 제목 후보 3종 — 유형은 런마다 유형 풀에서 고른다(정보형·후킹형·질문형·결론형·장면형 중 3개,
+   *  질문형은 최근 3편 중 1편 이하. 2026-08-27 권고 5 — 종전 고정 3종은 채널 지문이 됐다). */
   titles?: string[];
   description?: string;
   hashtags?: string[];

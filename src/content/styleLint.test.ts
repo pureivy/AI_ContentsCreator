@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { narrationStyleIssues, cardStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, blogStyleIssues, styleRevisionReject } from './styleLint';
+import { narrationStyleIssues, cardStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, blogStyleIssues, styleRevisionReject, screenTextLabelIssues, monthWordOutsideNarration } from './styleLint';
 
 describe('hookKeywordLeadIssues — 훅 첫 2초 키워드 낭독(2026-08-20 조회수 감사)', () => {
   it('훅 앞 12자 안에 키워드 전체가 있으면 검출한다(공백 무시)', () => {
@@ -250,5 +250,49 @@ describe('styleRevisionReject — 문체 수정본 채택 가드(Fix round 1)', 
   it('소제목이 없던 본문에 소제목을 붙여 오는 것은 막지 않는다(구조 개선)', () => {
     const flat = '뿌리가 앉을 자리를 먼저 봅니다. 물이 고이는 곳은 피합니다. 겉흙이 마르면 한 번에 충분히 줍니다.';
     expect(styleRevisionReject(flat, `## 심는 자리\n${flat}`)).toBeNull();
+  });
+});
+
+// ── 2026-08-27 말투 감사 권고 5(마무리·제목 로테이션 + 쇼츠 압축 안전선) ──────────────────────
+describe('screenTextLabelIssues — 자막에 붙은 대본용 딱지', () => {
+  it('"정의·구분법·요약·정리·핵심"으로 끝나는 명사구 자막을 검출한다', () => {
+    const issues = screenTextLabelIssues(['도장지 정의', '가지 구분법', '겨울눈 핵심']);
+    expect(issues).toHaveLength(3);
+    expect(issues[0]).toContain('도장지 정의');
+  });
+
+  it('독자에게 하는 말은 통과한다(원예 상용어 과차단 금지)', () => {
+    expect(screenTextLabelIssues(['잎 끝부터 보세요', '물은 한 번에 충분히', '전정은 잎 진 뒤에'])).toEqual([]);
+  });
+
+  it('빈 자막은 무시한다', () => {
+    expect(screenTextLabelIssues(['', '   '])).toEqual([]);
+  });
+});
+
+describe('monthWordOutsideNarration — 고유어 월은 내레이션에만', () => {
+  it('조사·문말 경계의 고유어 월을 숫자 월로 바꾼다', () => {
+    expect(monthWordOutsideNarration('시월에 심는 묘목')).toBe('10월에 심는 묘목');
+    expect(monthWordOutsideNarration('유월부터 칠월까지')).toBe('6월부터 7월까지');
+    expect(monthWordOutsideNarration('심는 시기는 구월')).toBe('심는 시기는 9월');
+  });
+
+  it('동음이의 일반어는 건드리지 않는다(이월된 vs 이월에)', () => {
+    expect(monthWordOutsideNarration('이월된 재고')).toBe('이월된 재고');
+    expect(monthWordOutsideNarration('이월에 가지치기')).toBe('2월에 가지치기');
+  });
+
+  it('두 자리 월은 통째로 바꾼다(십이월·십일월)', () => {
+    expect(monthWordOutsideNarration('십이월 중')).toBe('12월 중');
+    expect(monthWordOutsideNarration('십일월 말')).toBe('11월 말');
+  });
+
+  it('해시태그는 경계가 맞을 때만 바꾼다', () => {
+    expect(monthWordOutsideNarration('#시월')).toBe('#10월');
+    expect(monthWordOutsideNarration('#시월전정')).toBe('#시월전정');
+  });
+
+  it("'정월'은 월 이름으로 취급하지 않는다", () => {
+    expect(monthWordOutsideNarration('정월 대보름')).toBe('정월 대보름');
   });
 });

@@ -25,7 +25,7 @@ import { naverSerp } from '../grounding/naver_search';
 import { seedKeyword } from '../grounding/naver_common';
 import { getRunSettings } from '../runsettings';
 import { brandContext, activeBrandSlug, getBrand, lexiconGuide } from '../content/brand';
-import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid } from '../content/priorCoverage';
+import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid, recentBlogEndings } from '../content/priorCoverage';
 import { collectExistingContent } from '../content/novelty';
 import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard } from '../sessions/digest';
 import { blogStyleIssues, styleRevisionReject } from '../content/styleLint';
@@ -206,6 +206,10 @@ export async function writeBlogBody(a: {
   // "A가 아니라 B" 훅으로 매번 수렴하는 것을 막는다. 킬스위치 WRITER_STYLE_DIVERGE=off. revise 는 본문 유지가
   // 목적이라 제외. (효과는 향후 몇 편의 실제 산출로만 검증 가능.)
   const styleAvoid = (revise || process.env.WRITER_STYLE_DIVERGE === 'off') ? '' : recentStyleToAvoid(brandSlug, { limit: 4 });
+  // 마무리 문형 로테이션(2026-08-27 권고 5) — styleAvoid 는 '마무리 소제목'까지만 봐서, 소제목만 바꾸고
+  // 같은 문형("오늘 하나만 해보세요")으로 닫는 수렴을 못 잡았다. 최근 5편의 마무리 문단 첫 문장 원문을
+  // 직접 보여 준다(카드·쇼츠의 마무리·훅 로테이션과 같은 원리). revise 는 본문 유지가 목적이라 제외.
+  const endingAvoid = (revise || !CONFIG.voiceRotation || process.env.WRITER_STYLE_DIVERGE === 'off') ? '' : recentBlogEndings(brandSlug, 5);
   // 어휘 상투구 회피(2026-07-24) — recentStyleToAvoid(구조)를 넘어, 하우투 글마다 단골로 반복되는 정형 표현
   // ('물주기 리듬'·'손가락 넣어 습도 확인' 등)을 어휘 층위에서 막는다. 같은 킬스위치·revise 제외.
   // 2026-08-06: 하드코딩 예시만으론 새로 생기는 상투구('갈리는 지점' 소제목 3편 실측)를 못 막아,
@@ -290,7 +294,7 @@ export async function writeBlogBody(a: {
   // 사후 판정할 수 없었다(배롱나무 중복 조사에서 실측). 발화 여부만 한 줄 남긴다.
   if (!revise) {
     bus.emit('log', {
-      message: `작가 다양성 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 스타일지문 ${styleAvoid ? '주입' : '없음'} · 반복상투구 ${ticPhrases.length}건${ticPhrases.length ? `(${ticPhrases.slice(0, 3).join(', ')}${ticPhrases.length > 3 ? ' 외' : ''})` : ''} · 과사용어간 ${ticLexemes.length}건${ticLexemes.length ? `(${ticLexemes.slice(0, 3).join(', ')}${ticLexemes.length > 3 ? ' 외' : ''})` : ''}`,
+      message: `작가 다양성 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 스타일지문 ${styleAvoid ? '주입' : '없음'} · 마무리회피 ${endingAvoid ? '주입' : '없음'} · 반복상투구 ${ticPhrases.length}건${ticPhrases.length ? `(${ticPhrases.slice(0, 3).join(', ')}${ticPhrases.length > 3 ? ' 외' : ''})` : ''} · 과사용어간 ${ticLexemes.length}건${ticLexemes.length ? `(${ticLexemes.slice(0, 3).join(', ')}${ticLexemes.length > 3 ? ' 외' : ''})` : ''}`,
     });
   }
   const synth = await runAgent({
@@ -302,6 +306,7 @@ export async function writeBlogBody(a: {
       factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '',
       priorCoverage,
       styleAvoid,
+      endingAvoid,
       phraseAvoid,
       lexemeAvoid,
       frameAvoid,

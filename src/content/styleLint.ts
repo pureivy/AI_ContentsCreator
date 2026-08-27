@@ -198,3 +198,41 @@ export function styleRevisionReject(original: string, revised: string): '빈 응
   if (rev.length < orig.length * STYLE_REVISION_MIN_RATIO) return '분량 급감';
   return null;
 }
+
+/**
+ * 자막 대본 딱지 린트(순수, 2026-08-27 말투 감사 권고 5) — screenText 는 시청자에게 보여 주는 '말'인데,
+ * 대본 구조 라벨("정의"·"구분법"·"요약"·"정리"·"핵심")이 그대로 화면에 올라간 실측이 있었다. 목차 딱지가
+ * 붙으면 영상이 강의 슬라이드처럼 읽힌다. 그 라벨로 **끝나는** 명사구만 잡는다 — "정리한 뒤 심으세요"
+ * 처럼 서술어로 이어지는 자막은 정상이라 통과한다(원예 상용어 과차단 금지 원칙).
+ * 비차단: 결과는 쇼츠 수정 라운드(probs)의 입력일 뿐 발행을 막지 않는다.
+ */
+const SCREEN_LABEL_RE = /(정의|구분법|구별법|요약|정리|핵심)$/;
+
+export function screenTextLabelIssues(screenTexts: string[]): string[] {
+  const issues: string[] = [];
+  screenTexts.forEach((t, i) => {
+    const s = String(t ?? '').trim().replace(/[.!?…:·,]+$/, '');
+    if (!s || !SCREEN_LABEL_RE.test(s)) return;
+    issues.push(`항목${i + 1}: 자막 "${s}" 는 대본용 딱지다 — 화면에는 독자에게 하는 말만 써라(예: "잎 끝부터 봅니다")`);
+  });
+  return issues.slice(0, 3);
+}
+
+/**
+ * 고유어 월 → 숫자 월(순수·결정적, 2026-08-27 권고 5) — 고유어 월("시월")은 TTS 낭독 교정(fixMonthNames)
+ * 이라 **내레이션에만** 유효하다. title·titles·description·screenText·hashtags 에 새면 검색 표기가 깨지고
+ * (유튜브 제목·해시태그는 검색 노출 자산) 화면 글자가 낯설게 읽힌다. 프롬프트 지시는 새므로 여기서 결정적으로 되돌린다.
+ * 경계 두 겹 — 앞 글자가 한글이면 치환하지 않고(다른 낱말의 꼬리를 자르지 않는다), 뒤는 조사·구분자·문말만 허용한다:
+ *   "이월된 재고"(그대로) vs "이월에 심는다"(→2월). 목록은 긴 것부터 둬 "십이월"이 "이월"로 쪼개지지 않게 한다.
+ * '정월'은 뜻이 1월과 어긋나는 관용어(정월 대보름)라 목록에서 뺀다.
+ */
+const MONTH_WORD_RE =
+  /(?<![가-힣])(십이월|십일월|시월|구월|팔월|칠월|유월|오월|사월|삼월|이월)(?=에|부터|까지|중|말|초|은|는|이|의|,|\s|$)/g;
+const MONTH_NUM: Record<string, string> = {
+  이월: '2월', 삼월: '3월', 사월: '4월', 오월: '5월', 유월: '6월', 칠월: '7월',
+  팔월: '8월', 구월: '9월', 시월: '10월', 십일월: '11월', 십이월: '12월',
+};
+
+export function monthWordOutsideNarration(field: string): string {
+  return String(field ?? '').replace(MONTH_WORD_RE, (m) => MONTH_NUM[m] ?? m);
+}

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   applyCardRevision, applyProofread, buildCardImagePrompt, buildSlideQaPrompt, buildSlideTranscribePrompt,
   coverIncludesKeyword, extractDesignFromDraftPrompt, findSlidesWithChars, parseSlideNosFromFeedback,
-  resolveForcedPreset, stripForDiff,
+  resolveForcedPreset, stripForDiff, formatRecentEndings,
 } from './cardnews';
 
 type CardPlan = Parameters<typeof applyCardRevision>[0];
@@ -266,5 +266,25 @@ describe('parseSlideNosFromFeedback — 명시 지목 슬라이드 파싱(순수
     expect(parseSlideNosFromFeedback('9번 슬라이드', 7)).toEqual([]); // maxSlides 초과
     expect(parseSlideNosFromFeedback('전체적으로 8장 전부 좋아요', 7)).toEqual([]); // 'N장' 단독=매수
     expect(parseSlideNosFromFeedback('오탈자를 확인해서 수정해줘', 7)).toEqual([]);
+  });
+});
+
+// ── 2026-08-27 말투 감사 권고 5 — 카드 마무리 로테이션(최근 5세트 회피 블록) ────────────────
+describe('formatRecentEndings — 최근 마무리 원문 회피 블록(순수)', () => {
+  it('마무리 장 headline/body 와 캡션 끝줄을 블록으로 만든다', () => {
+    const block = formatRecentEndings([
+      { headline: '오늘 할 일 세 가지', body: '물 아끼고 바람 통하게', captionTail: '저장해두고 비 오는 날마다 꺼내보세요.' },
+      { headline: '내일 확인할 것', body: '', captionTail: '' },
+    ]);
+    expect(block).toContain('[최근 마무리');
+    expect(block).toContain('오늘 할 일 세 가지');
+    expect(block).toContain('물 아끼고 바람 통하게');
+    expect(block).toContain('저장해두고 비 오는 날마다 꺼내보세요.');
+    expect(block).toContain('내일 확인할 것');
+  });
+
+  it('마무리 원문이 없으면 빈 문자열(무주입)', () => {
+    expect(formatRecentEndings([])).toBe('');
+    expect(formatRecentEndings([{ headline: '', body: '', captionTail: '' }])).toBe('');
   });
 });

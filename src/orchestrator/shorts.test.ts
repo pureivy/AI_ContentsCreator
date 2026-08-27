@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields } from './shorts';
+import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL } from './shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
 
@@ -148,5 +148,41 @@ describe('restoreLostHedges — 압축이 유보어를 지우면 원문장 유�
     const before = P([{ narration: '미루나무는 물가에서 빨리 자랍니다.' }]);
     const after = P([{ narration: '미루나무는 빨리 자랍니다.' }]);
     expect(restoreLostHedges(before, after).restored).toEqual([]);
+  });
+});
+
+// ── 2026-08-27 말투 감사 권고 5 — 제목 후보 유형 로테이션(고정 3종 → 5종 풀, 질문형 상한) ────
+describe('pickTitleTypes — 런별 제목 유형 선택·질문형 상한', () => {
+  /** 결정적 난수 — 같은 값을 되풀이해 선택 경로를 고정한다. */
+  const fixed = (v: number) => () => v;
+
+  it('항상 3개를 중복 없이 유형 풀에서 고른다', () => {
+    const t = pickTitleTypes([], { rand: fixed(0) });
+    expect(t).toHaveLength(3);
+    expect(new Set(t).size).toBe(3);
+    t.forEach((x) => expect(TITLE_TYPE_POOL as readonly string[]).toContain(x));
+  });
+
+  it('최근 3편 중 1편이라도 질문형을 썼으면 이번 런에서 질문형을 뺀다', () => {
+    const recent = [['가을에 묘목 심어도 될까요?'], ['묘목 고르는 법'], ['겨울 전정 순서']];
+    for (let i = 0; i < 50; i++) expect(pickTitleTypes(recent)).not.toContain('질문형');
+  });
+
+  it('최근 3편에 질문형이 없으면 질문형도 후보로 남는다', () => {
+    const recent = [['묘목 고르는 법'], ['겨울 전정 순서']];
+    const seen = new Set<string>();
+    for (let i = 0; i < 300; i++) pickTitleTypes(recent).forEach((x) => seen.add(x));
+    expect(seen.has('질문형')).toBe(true);
+  });
+
+  it('상한 판정 창은 최근 3편까지 — 4편째의 질문형은 세지 않는다', () => {
+    const recent = [['묘목 고르는 법'], ['겨울 전정 순서'], ['잎이 노랗게 변한 이유'], ['지금 심어도 될까요?']];
+    const seen = new Set<string>();
+    for (let i = 0; i < 300; i++) pickTitleTypes(recent).forEach((x) => seen.add(x));
+    expect(seen.has('질문형')).toBe(true);
+  });
+
+  it('키워드가 있는 런은 정보형을 반드시 포함한다(키워드 정확 표기 규칙 유지)', () => {
+    for (let i = 0; i < 100; i++) expect(pickTitleTypes([], { keywordFirst: true })).toContain('정보형');
   });
 });

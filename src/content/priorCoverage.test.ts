@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { markdownHeadings, styleSignatureOf, recurringPhrases, recentLexemesToAvoid } from './priorCoverage';
+import { markdownHeadings, styleSignatureOf, recurringPhrases, recentLexemesToAvoid, endingSentenceOf } from './priorCoverage';
 
 describe('markdownHeadings — 소제목 추출(관점 다양성 주입 소스)', () => {
   it('##/### 소제목만 뽑고, 해시태그 줄(# 2개+)은 배제·cap 적용', () => {
@@ -163,5 +163,27 @@ describe('recentLexemesToAvoid — 본문 과사용 어간 채굴(자모 접두 
   });
   it('코퍼스가 작으면(8편 미만) 판단 보류', () => {
     expect(recentLexemesToAvoid(undefined, { docs: mk(5, '결과가 갈린다'), titles: [], minDocs: 3 })).toEqual([]);
+  });
+});
+
+// ── 2026-08-27 말투 감사 권고 5 — 블로그 마무리 로테이션(최근 5편 마무리 문단 첫 문장) ────────
+describe('endingSentenceOf — 마무리 문단 첫 문장 추출', () => {
+  it('마지막 문단의 첫 문장만 뽑는다', () => {
+    const body = [
+      '## 심는 자리',
+      '물이 고이는 곳은 피합니다.',
+      '',
+      '가을이 깊어지면 다시 나무 앞에 서 보세요. 그때 보이는 것이 다릅니다.',
+    ].join('\n');
+    expect(endingSentenceOf(body)).toBe('가을이 깊어지면 다시 나무 앞에 서 보세요.');
+  });
+
+  it('마지막이 소제목·구분선이어도 본문 문단을 찾는다', () => {
+    const body = ['첫 문단입니다.', '', '마지막 문단의 첫 문장입니다. 두 번째 문장.', '', '---', '## 참고'].join('\n');
+    expect(endingSentenceOf(body)).toBe('마지막 문단의 첫 문장입니다.');
+  });
+
+  it('빈 본문은 빈 문자열', () => {
+    expect(endingSentenceOf('')).toBe('');
   });
 });

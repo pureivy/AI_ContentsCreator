@@ -25,7 +25,7 @@ import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues, parityIssues, parityToInfo } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue, stripUnsourcedStatOverlays } from '../content/timingParity';
 import type { FactGateInfo } from '../content/factGate';
-import { narrationStyleIssues, hookKeywordLeadIssues, metaSummaryIssues } from '../content/styleLint';
+import { narrationStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, screenTextLabelIssues, monthWordOutsideNarration } from '../content/styleLint';
 import { promiseStore } from '../content/promises';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
@@ -39,6 +39,7 @@ import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
 import { normalizeSceneKind, fixMonthNames, cutAtWordBoundary } from '../tools/shortsCommon';
+import { classifyTitleType } from '../analytics/titleTiming';
 import type { EventBus } from '../events/bus';
 
 const RUNNING = new Set<string>();
@@ -459,6 +460,55 @@ export function trimPlanToBudget(plan: Plan, budgetChars: number): { plan: Plan;
   return { plan: { ...plan, scenes }, keptScenes: kept, trimmed: changed };
 }
 
+/** 제목 후보 유형 풀(2026-08-27 말투 감사 권고 5) — 종전 고정 3종(정보형·후킹형·질문형)이 채널 지문이 됐다. */
+export const TITLE_TYPE_POOL = ['정보형', '후킹형', '질문형', '결론형', '장면형'] as const;
+
+/**
+ * 런별 제목 후보 유형 3종 선택(순수·주입 난수) — 유형 풀에서 매 런 다르게 고른다.
+ *  · 질문형 상한: 최근 3편 중 1편이라도 질문형 후보를 냈으면 이번 런 풀에서 뺀다. 이렇게 하면 연속한
+ *    어느 3편 창에서도 질문형이 1편을 넘지 않는다(편1이 썼으면 편2·3·4가 막히고 편5에서 다시 열린다).
+ *    판정은 classifyTitleType(analytics/titleTiming) — 제목 유형 A/B 집계와 같은 분류기를 쓴다.
+ *  · keywordFirst: 핵심 키워드가 있는 런은 '정보형'을 반드시 포함한다. 프롬프트의 "대표 제목과 정보형
+ *    후보에는 키워드를 정확히 이 표기 그대로"(사용자 확정 자산)가 후보에서 통째로 사라지면 안 되기 때문.
+ * recentTitles 는 최근 편들의 plan.json titles(최신 순).
+ */
+export function pickTitleTypes(
+  recentTitles: string[][], opts: { keywordFirst?: boolean; rand?: () => number } = {},
+): string[] {
+  const rand = opts.rand ?? Math.random;
+  const questionEpisodes = recentTitles.slice(0, 3)
+    .filter((ts) => ts.some((t) => classifyTitleType(String(t ?? '')) === 'question')).length;
+  const rest: string[] = TITLE_TYPE_POOL.filter((t) => t !== '질문형' || questionEpisodes < 1);
+  const picked: string[] = [];
+  if (opts.keywordFirst) picked.push(...rest.splice(rest.indexOf('정보형'), 1));
+  while (picked.length < 3 && rest.length) {
+    const i = Math.min(rest.length - 1, Math.floor(rand() * rest.length));
+    picked.push(...rest.splice(i, 1));
+  }
+  return picked;
+}
+
+/**
+ * 최근 숏폼의 제목 후보 원문(같은 브랜드, 최신 순, 전량 fail-open) — 질문형 상한 판정 입력.
+ * shortsStore.list() 는 createdTs 내림차순(최신 순)이라 뒤집지 않는다.
+ */
+function recentShortsTitles(brand: string | undefined, excludeId: string, limit = 3): string[][] {
+  try {
+    const store = shortsStore();
+    const rows: string[][] = [];
+    for (const e of store.list()) {
+      if (e.id === excludeId || (e.brand ?? undefined) !== (brand ?? undefined)) continue;
+      try {
+        const p = JSON.parse(fs.readFileSync(path.join(store.dirFor(e.id), 'plan.json'), 'utf-8')) as { titles?: unknown };
+        const ts = (Array.isArray(p.titles) ? p.titles : []).map((t) => String(t ?? '').trim()).filter(Boolean);
+        if (ts.length) rows.push(ts);
+      } catch { /* plan.json 없는 항목(구버전·실패 런) 무시 */ }
+      if (rows.length >= limit) break;
+    }
+    return rows;
+  } catch { return []; }
+}
+
 /** 유보 표현 — 압축 LLM 이 "군더더기"로 지워 단정문(결론 반전)을 만든 실측 대응.
  *  '미루'는 "미루고/미룹니다"(유보)만 노린다 — 미루나무는 수종명이라 제외(2026-08-26 최종 리뷰 F5d). */
 export const HEDGE_RE = /대개|흔히|보통|대체로|경우가 많|수 있|봐요|가능성|편이에요|편입니다|미루(?!나무)/;
@@ -493,7 +543,7 @@ async function fitShortsPlanToDuration(io: JobIO, plan: Plan, budgetCharsOverrid
       `아래 숏폼 내레이션 합계가 ${before}자로 낭독 상한(${cap}초 ≈ ${budget}자)을 넘는다. 씬 구성은 유지하고 내레이션만 감량해 합계 ${budget}자 이내로 만들어라.`,
       cur,
       `합계 ${budget}자 이내는 반드시 지켜라 — 표현 다듬기로 모자라면 덜 중요한 문장을 통째로 빼라. 찔끔 깎은 초과 응답은 무효다(실측: 목표 341자에 364자 응답이 반복돼 코드가 강제 트리밍하게 된다 — 그러면 네가 고른 문장이 아니라 뒤 문장이 잘린다).`,
-      '규칙: 사실·수치·결론과 씬별 "무엇을+왜"는 유지하고 군더더기·중복 표현만 깎아라. 구어체 존댓말·숫자 한글 낭독 등 원문 문체 유지, 이모지 금지. 유보어("대개/흔히/보통/~일 수 있다/~봐요/가능성")는 군더더기가 아니다 — 남겨라. 원문 결론의 방향("미루라/하지 마라")을 뒤집지 마라.',
+      '규칙: 사실·수치·결론과 씬별 "무엇을+왜"는 유지하고 군더더기·중복 표현만 깎아라. 조사·주어를 떨어낸 초압축은 감량이 아니라 훼손이다("이 시기 질소 거름 주면" 금지 → "이 시기엔 질소 거름을 주면"). 구어체 존댓말·숫자 한글 낭독 등 원문 문체 유지, 이모지 금지. 유보어("대개/흔히/보통/~일 수 있다/~봐요/가능성")는 군더더기가 아니다 — 남겨라. 원문 결론의 방향("미루라/하지 마라")을 뒤집지 마라.',
       'JSON 형식: {"scenes":[{"index":씬번호,"narration":"..."}]} — 전 씬 포함.',
     ].join('\n'),
     { maxOutputTokens: 1200, signal: io.signal },
@@ -559,8 +609,10 @@ export function pruneQuoteSources(plan: Plan, sourceBody: string | undefined): {
   return { plan: { ...plan, scenes }, pruned };
 }
 
-async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = ''): Promise<Plan | null> {
+async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형']): Promise<Plan | null> {
   const capSec = CONFIG.shortsMaxDurationSec;
+  // 제목 후보 유형(권고 5) — 스키마 예시와 유형 설명이 같은 목록을 가리켜야 작가가 순서대로 채운다.
+  const titlesJson = titleTypes.map((t) => `"${t}"`).join(',');
   const budgetChars = Math.floor((capSec - 5) * SHORTS_TTS_CPS);
   const maxScenes = Math.min(8, Math.max(3, Math.floor(capSec / 8)));
   const user = [
@@ -582,7 +634,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     keyword ? `대표 제목(title)과 정보형 제목 후보에는 핵심 키워드 '${keyword}' 를 정확히 이 표기 그대로, 가급적 앞쪽에 포함하라(검색 노출용 — 제한된 글자수를 이유로 키워드를 빼지 마라). 키워드는 명사구 그대로 자연스럽게 결합하고 어미를 붙여 동사화하지 마라.` : '',
     'CTA 씬은 팔로우할 이유를 담아라 — 이 채널이 계속 주는 가치 한 구절(브랜드 맥락에 맞게) 또는 다음 편 예고 중 하나. "구독과 좋아요 부탁드려요" 같은 기계적 문구 금지. "계속 기록/정리해 드립니다" 계열 문구 재사용 금지 — 기록하는 채널 컨셉은 유지하되 표현은 매편 새로 지어라.',
     '다음 편 예고를 CTA 에 넣었으면 JSON 의 next 필드에 그 주제와 적절한 시기("N월")를 선언하라 — 예고는 시스템이 약속으로 기록해 그 시기에 실제로 제작한다. 지킬 수 있는 예고만 하고, 예고를 안 했으면 next 를 생략하라.',
-    '내레이션은 TTS 낭독용: 구어체 존댓말, 숫자는 한글로("30%"→"삼십 퍼센트") — 단 월 이름은 고유어로("10월"→"시월", "6월"→"유월"). 이모지·괄호 지문 금지. 발음이 헷갈려 뜻이 뒤집히는 표현은 풀어 써라 — "새 가지"는 숫자 "세 가지"로 들리니 "새로 난 가지"처럼, 희귀 활용형("아뭅니다" 류)은 평이한 꼴("잘 아물어요")로.',
+    '내레이션은 TTS 낭독용: 구어체 존댓말, 숫자는 한글로("30%"→"삼십 퍼센트") — 단 월 이름은 고유어로("10월"→"시월", "6월"→"유월") — 고유어 월은 내레이션에만 쓰고 title·titles·description·screenText·hashtags 에는 숫자 월("9월")을 쓴다. 이모지·괄호 지문 금지. 발음이 헷갈려 뜻이 뒤집히는 표현은 풀어 써라 — "새 가지"는 숫자 "세 가지"로 들리니 "새로 난 가지"처럼, 희귀 활용형("아뭅니다" 류)은 평이한 꼴("잘 아물어요")로.',
     // 이해도 감사(2026-08-11 블라인드 실측) 교훈: 문체 지침이 정의·이유 문장을 밀어내면 파생물이 원문 없이
     // 이해 불가가 된다 — 아래 우선순위 선언이 문체 블록 전체를 지배한다.
     '[우선순위] 아래 문체 지침은 표현 방식 지침이다 — 원문에서 추린 방법·이유·위험 근거 문장을 삭제하는 방식으로 이행하지 마라. 문체와 정보가 충돌하면 정보를 남기고 문체를 양보하라.',
@@ -593,30 +645,38 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     '문장 종결을 섞어라: 한 씬의 두 문장을 같은 어미로 끝내지 마라("~ㅂ니다"+"~ㅂ니다" 금지). 대본 전체에서 "-ㅂ니다" 종결은 절반 이하로 하고 "~요/~죠/~거든요/~는데요/~하세요"를 섞어라. 습관적 설명 현재형("치웁니다", "심지 않습니다")은 청자에게 말 거는 꼴("치우세요", "지금은 심지 마세요")로. 아나운서 원고가 아니라 옆에서 알려주는 말로 들려야 한다.',
     '대본 전체 1~2곳에 사람 말의 결을 넣어라 — 짧은 제동("잠깐,"), 정정·양보("아, 포트묘는 예외예요"), 판단의 표명("색보다 끝알부터 봐요" — "나는/저는" 같은 1인칭 주어는 쓰지 마라, 주어 없이도 시점이 전달된다. 사용자 확정 2026-08-12). 겪지 않은 사건·일화를 지어내는 것은 금지(판단·관점만). 정보 밀도를 깎는 잡담도 금지. 판단 문장은 근거·이유 문장을 밀어내고 그 자리를 차지하게 하지 마라 — 근거에 덧붙이는 한 줄이다. "X가 아니라 Y" 재정의 문형은 대본 전체 1회 이하 — 앞 편들이 이미 상투로 만든 틀이다.',
     `본문 씬 내레이션은 1~3문장(합쳐서 30~70자, 낭독 5~12초) — "방법 한 문장+이유 한 문장"이 기본형이다. 리듬만 변주하라: 이유를 먼저 두는 씬, 질문으로 끝나는 씬을 최소 1개 섞되(단, 씬당 "무엇을+왜"는 유지 — 리듬을 바꾸라는 것이지 정보를 빼라는 것이 아니다), 질문으로 끝냈으면 그 답을 반드시 바로 다음 씬 첫 문장에서 준다. "~기 때문입니다"는 대본 전체 1회 이하. 씬2(전제)는 45~70자까지 허용. 훅·CTA 씬은 1~2문장(20~40자). 총 낭독 시간 ${Math.max(20, capSec - 25)}~${capSec - 10}초, 대본 전체(모든 씬 내레이션 합) ${budgetChars}자 이내를 반드시 맞춘다 — TTS 실측 속도는 초당 약 6자다. 이 총량이 씬 수보다 우선한다(넘칠 것 같으면 씬 수를 줄여서라도 지켜라).`,
+    `압축 안전선: ${capSec}초에 맞추더라도 조사·주어는 남겨라("이 시기 질소 거름 주면" 금지 → "이 시기엔 질소 거름을 주면"). 앞 문장의 주어가 바뀌면 새 주어를 밝혀라. screenText 에 "정의·구분법·요약·정리" 같은 대본용 딱지를 쓰지 마라 — 화면에는 독자에게 하는 말만.`,
     'screenText 는 씬당 1줄 15자 이내 키워드 요약(비워도 됨).',
     '씬 kind(선택): 씬1="hook", 마지막 씬="cta". 본문 씬 중 어울리는 곳에만 "stat"(핵심 수치 1개: value 숫자·unit 단위·label 15자)·"list"(items 2~4개, 각 18자)·"quote"(text 40자, source 출처)·"chart"(비교 수치 2~5개가 막대그래프로 자라나는 연출: series 각 {label 8자, value 숫자≥0}, unit 단위, highlight 강조할 막대 인덱스) — 억지 배정 금지, 애매하면 kind 생략. chart 는 내레이션이 수치 비교를 말할 때만.',
     '수치 규칙: stat.value 와 chart.series 의 value 는 원문(블로그 초안)에 있는 수치 또는 대본 구조상 자명한 숫자(단계 수·항목 수)만. 불확실하면 그 kind 를 쓰지 마라. narration 은 수치를 한글로 낭독하되 JSON 값은 아라비아 숫자. chart 씬의 screenText 에는 핵심 수치 비교를 요약하라(렌더 실패 대비).',
     'description(유튜브 설명 — 인스타 캡션에도 그대로 복제된다)은 요약투로 끝내지 마라 — "정리했습니다/담았어요/알아봅니다/알아보세요/살펴봅니다/소개합니다" 금지. "결론 한 줄 + 조건 한 줄" 꼴로 써라(예: "잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요.").',
-    'JSON 형식: {"title":"대표 제목","titles":["정보형","후킹형","질문형"],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|chart|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0}}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}',
+    `제목 후보(titles) 3개는 서로 다른 유형으로 쓴다 — 순서대로 [${titleTypes.join(' / ')}]. 유형 정의: 정보형=무엇을 다루는 영상인지 그대로 알린다 / 후킹형=손해·실수·반전으로 클릭을 부른다 / 질문형=독자의 질문을 그대로 던진다 / 결론형="~은 ~입니다" 꼴로 답을 먼저 준다 / 장면형=손에 잡히는 한 장면을 그린다.`,
+    `JSON 형식: {"title":"대표 제목","titles":[${titlesJson}],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|chart|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0}}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}`,
   ].filter(Boolean).join('\n');
   type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown }>; description?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
   const sys = '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.';
+  // 고유어 월은 내레이션(TTS) 전용 — 화면·검색 필드는 숫자 월로 되돌린다(권고 5, 결정적).
+  // 단 키워드 정확 표기가 깨지는 경우는 원문을 유지한다: 키워드 규칙(사용자 확정 자산)이 우선이다.
+  const numMonth = (t: string): string => {
+    const out = monthWordOutsideNarration(t);
+    return keyword && t.includes(keyword) && !out.includes(keyword) ? t : out;
+  };
   const parsePlan = (j: PlanRaw | null): Plan | null => {
     if (!j || !Array.isArray(j.scenes) || !j.scenes.length) return null;
     const scenes = j.scenes.slice(0, maxScenes).map((s) => ({
       narration: cleanNarration(s?.narration),
-      screenText: stripEmoji(String(s?.screenText ?? '')).trim().slice(0, 20),
+      screenText: numMonth(stripEmoji(String(s?.screenText ?? '')).trim()).slice(0, 20),
       ...normalizeSceneKind(s), // 불량 페이로드는 {} 강등 — 기본 씬으로 렌더
     })).filter((s) => s.narration);
     if (scenes.length < 3) return null;
-    const titles = (Array.isArray(j.titles) ? j.titles : []).map((t) => stripEmoji(String(t ?? '')).trim()).filter(Boolean).slice(0, 3);
+    const titles = (Array.isArray(j.titles) ? j.titles : []).map((t) => numMonth(stripEmoji(String(t ?? '')).trim())).filter(Boolean).slice(0, 3);
     const next = j.next && typeof j.next.topic === 'string' && j.next.topic.trim()
       ? { topic: j.next.topic.trim().slice(0, 120), window: typeof j.next.window === 'string' && j.next.window.trim() ? j.next.window.trim() : undefined }
       : undefined;
     // 대표 제목 키워드 보정(결정적) — 종전엔 topic(블로그 SEO 제목, 키워드 강제 산물)을 작가가 채택할 때만
     // 우연히 포함됐다. 키워드 없는 창의 제목이 뽑히면 후보·topic 중 키워드 포함본으로 교체(없으면 원본 유지).
     // includes 검사는 60자 슬라이스 '결과'에 — 자르기 전 검사는 키워드가 경계 밖이면 도로 잘린다(리뷰 지적).
-    let title = stripEmoji(String(j.title ?? '')).trim().slice(0, 60) || titles[0] || topic;
+    let title = numMonth(stripEmoji(String(j.title ?? '')).trim()).slice(0, 60) || titles[0] || topic;
     if (keyword && !title.includes(keyword)) {
       const alt = [...titles, topic].map((t) => t.slice(0, 60)).find((t) => t.includes(keyword));
       if (alt) title = alt;
@@ -625,8 +685,8 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       title,
       titles: titles.length ? titles : [topic],
       scenes,
-      description: String(j.description ?? '').trim().slice(0, 500),
-      hashtags: normalizeHashtags(j.hashtags),
+      description: numMonth(String(j.description ?? '').trim()).slice(0, 500),
+      hashtags: normalizeHashtags((Array.isArray(j.hashtags) ? j.hashtags : []).map((t) => numMonth(String(t ?? '')))),
       ...(next ? { next } : {}),
     };
   };
@@ -665,7 +725,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 시기·수치 원문 대조(2026-08-27 권고 1, 결정적) — 활엽수 실사고: 블로그가 "근거 확실치 않다"고 한 시기를
     // 파생 쇼츠가 내레이션·자막·오버레이 세 군데에서 단정했다. TIMING_PARITY=off 면 함수가 빈 배열을 낸다.
     const timing = sourceBody ? timingParityIssues(sourceBody, timingFields(plan)).map(formatTimingIssue) : [];
-    // 소스별 캡 합 최대 16(narrationStyleIssues ≤5 + hookKeywordLeadIssues ≤1 + standalone ≤4 + parity ≤2 + 시기·수치 ≤3 + 설명 요약투 ≤1) —
+    // 소스별 캡 합 최대 18(narrationStyleIssues ≤5 + hookKeywordLeadIssues ≤1 + standalone ≤4 + parity ≤2 + 시기·수치 ≤3 + 설명 요약투 ≤1 + 자막 딱지 ≤2) —
     // 이미 소스별로 상한을 뒀으므로 최종 캡을 또 씌우면 뒤 소스(정합)만 밀려나는 desync 가 재발한다. 최종 캡 없음.
     const probs = [
       ...narrationStyleIssues(plan.scenes.map((s) => s.narration)),
@@ -677,6 +737,9 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       // 설명 요약투(2026-08-27 권고 2, 결정적) — description 은 유튜브 설명이자 인스타 캡션이다.
       // 새 콜을 만들지 않고 기존 수정 라운드에 얹는다(= 플랜이 말하는 "1회 재생성").
       ...metaSummaryIssues(plan.description).slice(0, 1),
+      // 자막 대본 딱지(2026-08-27 권고 5, 결정적) — screenText 가 "정의/구분법/요약" 같은 목차 라벨로 끝나면
+      // 화면이 강의 슬라이드처럼 읽힌다. 프롬프트 지시(압축 안전선)의 2차 방어, 비차단.
+      ...screenTextLabelIssues(plan.scenes.map((s) => s.screenText ?? '')).slice(0, 2),
     ];
     let planChanged = false;
     if (probs.length) {
@@ -817,8 +880,13 @@ export async function runShortsJob(
     // 훅·CTA 문형 로테이션(2026-08-11) — 훅 질문-반전 공식 7/15편·CTA "계속 기록" 7/15편 실측.
     // 지시문 단독은 새므로 최근 편의 원문을 직접 보여주고 "겹치면 다시 써라"로 못박는다.
     const hooksBlock = recentHooksToAvoid(short.brand, short.id);
-    say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'}`);
-    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'));
+    // 제목 유형 로테이션(2026-08-27 권고 5) — 고정 3종(정보형·후킹형·질문형)이 채널 지문이 됐다.
+    // 유형 풀 5종에서 런마다 3개, 질문형은 최근 3편 중 1편 이하. off 면 종전 고정 3종.
+    const titleTypes = CONFIG.voiceRotation
+      ? pickTitleTypes(recentShortsTitles(short.brand, short.id), { keywordFirst: !!short.keyword })
+      : ['정보형', '후킹형', '질문형'];
+    say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 제목 유형 ${titleTypes.join('·')}`);
+    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes);
     if (!planned) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     // Plan 타입 재선언 — 길이 상한 루프의 재대입이 클로저(씬 map 등) 내로잉을 풀지 않게 non-null 로 고정.
     let plan: Plan = planned;
