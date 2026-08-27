@@ -54,6 +54,10 @@ export interface BrandProfile {
   /** 어휘 함정 목록(2026-08-08 어휘 감사) — 일반 독자가 다른 뜻으로 먼저 읽거나 모르는 업종 한자어와
    *  그 대체 표현. 작가·기획자·패키저 지침(lexiconGuide)과 어휘 린트가 공용. 업종어라 브랜드별로 둔다. */
   avoidJargon?: Array<{ term: string; use: string }>;
+  /** 시기 소재 달력(2026-08-27 단풍 실사고) — 제목에 이 말이 들어간 주제는 months(1~12) 가 '이번 달 또는
+   *  다음 달'일 때만 채택한다. 검색량 게이트는 keyword 만 재서 "활엽수" 키워드에 단풍 글이 묻어 나갔다.
+   *  업종 달력이라 브랜드별로 둔다(미설정=게이트 없음). */
+  seasonalSubjects?: Array<{ term: string; months: number[] }>;
   /** 채널 설명(예: 네이버 블로그 — 제품 활용 하우투·후기 중심). */
   channel?: string;
   /** 카드뉴스 기본 이미지 스타일 프리셋(브랜드 고정, 2026-07-22) — 수동·검토탭·자동 파생 전부 적용.
@@ -213,6 +217,14 @@ export function normalizeBrand(raw: Partial<BrandProfile> | null | undefined): B
       .map((x) => ({ term: s((x as { term?: unknown })?.term, 20) ?? '', use: s((x as { use?: unknown })?.use, 40) ?? '' }))
       .filter((x) => x.term && x.use)
       .slice(0, 30),
+    seasonalSubjects: (Array.isArray(raw?.seasonalSubjects) ? raw.seasonalSubjects as unknown[] : [])
+      .map((x) => ({
+        term: s((x as { term?: unknown })?.term, 20) ?? '',
+        months: (Array.isArray((x as { months?: unknown })?.months) ? (x as { months: unknown[] }).months : [])
+          .map((m) => Number(m)).filter((m) => Number.isInteger(m) && m >= 1 && m <= 12),
+      }))
+      .filter((x) => x.term && x.months.length)
+      .slice(0, 40),
     channel: s(raw?.channel, 200),
     cardStyle: s(raw?.cardStyle, 40),
   };

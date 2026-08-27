@@ -209,6 +209,9 @@ export class ClaudeCliClient {
         });
       });
 
+      // 런 취소(abort→SIGKILL) 직후 stdin 에 쓰면 EPIPE 가 'error' 이벤트로 올라오는데, 핸들러가 없으면
+      // 프로세스 전체가 죽는다(2026-08-27 실사고 — 취소 한 번에 서버 다운). 삼키고 fail 로만 정리한다.
+      child.stdin.on('error', (e: NodeJS.ErrnoException) => { if (e?.code !== 'EPIPE') fail(`stdin ${e?.code ?? e?.message ?? 'error'}`); });
       child.stdin.write(prompt);
       child.stdin.end();
     });

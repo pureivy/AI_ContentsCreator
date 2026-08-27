@@ -31,7 +31,7 @@ export interface DemandRow {
   familyMax: number;
   /** 그 최대치를 만든 연관어(표기 교체 후보). */
   familyTop?: string;
-  /** 시즌 지수(0~1) — max(현재 월, 작년 이번달~+2개월)/정점. 데이터 없으면 undefined(판정 생략). */
+  /** 시즌 지수(0~1) — max(현재 월, 작년 다음달)/정점. 데이터 없으면 undefined(판정 생략). */
   seasonIdx?: number;
   direction?: '상승' | '하락' | '보합';
 }
@@ -102,12 +102,10 @@ export function familyVolume(
  * 시즌 지수(순수) — 정점 대비 '지금 그리고 곧'의 수요. points 는 오래된→최신.
  * 현재 월만 보면 발행 시점(며칠 뒤)의 수요를 놓치므로 작년 같은 달들로 전방 창을 근사해 최대치를 쓴다.
  *
- * 전방 창 = 작년 이번 달 · 작년 +1개월 · 작년 +2개월(2026-08-26 최종 리뷰 I4). 종전엔 딱 다음 달 하나만
- * 봤는데, 프롬프트가 요구하는 장르 축은 '다음 시즌·시기 대비(지금 준비할 것)'이라 1개월 창과 어긋났다
- * (실측: '단풍 드는 시기' 40/월인데 지수 0.03 → 후순위). 창을 2개월 앞까지 넓혀 지시와 판정을 맞춘다.
- * 작년 이번 달을 함께 보는 이유: 데이터랩의 당월 점은 달이 끝나지 않아 과소 표기라 그 보정 축이 된다.
- * 현재 월(cur)은 그대로 최대치 후보로 남긴다 — 창을 '넓히는' 수선이지 현재 실측을 버리는 수선이 아니다
- * (올해 갑자기 뜬 키워드는 작년 어느 달로도 설명되지 않는다).
+ * 전방 창 = 작년 +1개월 한 칸(사용자 확정 2026-08-27 "지금~다음 달만"). 08-26 저녁에 '다음 시즌 대비'
+ * 장르 축과 맞추려 창을 +2개월까지 넓혔다가, 다음 날 8월 말에 단풍(10~11월 피크) 글이 통과돼 사용자가
+ * 되돌렸다 — 사람들이 지금 또는 4주 안에 검색할 소재만 쓴다. 장르 축 쪽도 같이 제거(scheduler IDEA_ANGLES).
+ * 현재 월(cur)은 그대로 최대치 후보로 남긴다(올해 갑자기 뜬 키워드는 작년 어느 달로도 설명되지 않는다).
  */
 export function seasonIndex(points: Array<{ period: string; ratio: number }>, now = new Date()): number | undefined {
   const pts = (points ?? []).filter((p) => p && Number.isFinite(p.ratio));
@@ -127,11 +125,10 @@ export function seasonIndex(points: Array<{ period: string; ratio: number }>, no
       const found = pts.findIndex((p) => (p.period || '').slice(0, 7) === want);
       if (found >= 0) base = found;
     }
-    // 창 = 기준점 앞뒤 한 칸씩(작년 이번 달 · 작년 +1개월 · 작년 +2개월). 구간을 벗어난 인덱스는 무시.
-    for (const i of [base - 1, base, base + 1]) {
-      const r = pts[i]?.ratio;
-      if (typeof r === 'number' && r > fwd) fwd = r;
-    }
+    // 창 = 작년 +1개월 한 칸(사용자 확정 2026-08-27 "지금~다음 달만" — 2개월 창은 8월 말에 단풍을
+    // 통과시켰다). 구간을 벗어난 인덱스는 무시.
+    const r = pts[base]?.ratio;
+    if (typeof r === 'number' && r > fwd) fwd = r;
   }
   return Math.min(1, Math.max(cur, fwd) / peak);
 }

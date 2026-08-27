@@ -81,13 +81,12 @@ describe('seasonIndex — 13개월 데이터랩의 시즌 지수(순수)', () =>
     { period: '2026-05-01', ratio: 40 }, { period: '2026-06-01', ratio: 22 }, { period: '2026-07-01', ratio: 15 },
     { period: '2026-08-01', ratio: 13.3 },
   ];
-  it('max(현재, 작년 이번달~+2개월)/정점 — 전방 2개월 창의 수요까지 본다', () => {
-    // 창 = 작년 이번달(2025-08=12) · 작년 +1개월(2025-09=20) · 작년 +2개월(2025-10=30) + 현재(13.3) → 30/100.
-    expect(seasonIndex(pts13, new Date('2026-08-26T12:00:00'))).toBeCloseTo(0.3, 5);
+  it('max(현재, 작년 다음달)/정점 — 지금~다음 달만 본다(2026-08-27 사용자 확정)', () => {
+    // 창 = 작년 +1개월(2025-09=20) + 현재(13.3) → 20/100. 작년 +2개월(30)은 보지 않는다.
+    expect(seasonIndex(pts13, new Date('2026-08-26T12:00:00'))).toBeCloseTo(0.2, 5);
   });
-  it("'다음 시즌 대비' 후보가 살아난다 — 2개월 뒤 피크 시리즈는 통과선(0.25)을 넘는다", () => {
-    // 실측 계보(2026-08-26): '단풍 드는 시기' 40/월인데 1개월 창만 보던 지수가 0.03 → demote 였다.
-    // 전방 창을 2개월로 넓히면 10월(40)이 잡혀 0.4 — 프롬프트의 '다음 시즌 대비' 지시와 어긋나지 않는다.
+  it('2개월 뒤 피크(단풍)는 8월 말에 후순위 — 전방 창은 다음 달까지만', () => {
+    // 실사고(2026-08-27): 2개월 창이 8월 말에 단풍(10~11월 피크)을 통과시켜 시기 밖 글이 나갔다.
     const autumn = [
       { period: '2025-08-01', ratio: 2 }, { period: '2025-09-01', ratio: 12 }, { period: '2025-10-01', ratio: 40 },
       { period: '2025-11-01', ratio: 100 }, { period: '2025-12-01', ratio: 25 }, { period: '2026-01-01', ratio: 8 },
@@ -96,9 +95,8 @@ describe('seasonIndex — 13개월 데이터랩의 시즌 지수(순수)', () =>
       { period: '2026-08-01', ratio: 3 },
     ];
     const idx = seasonIndex(autumn, new Date('2026-08-26T12:00:00'));
-    expect(idx).toBeCloseTo(0.4, 5);            // 종전(1개월 창)이면 max(3, 12)/100 = 0.12 로 후순위였다
-    expect(idx!).toBeGreaterThanOrEqual(0.25);
-    expect(demandVerdict(row({ keyword: '단풍 드는 시기', volume: 40, familyMax: 40, seasonIdx: idx! }), { minVolume: 30, minSeason: 0.25 })).toBe('pass');
+    expect(idx).toBeCloseTo(0.12, 5);           // max(3, 12)/100
+    expect(demandVerdict(row({ keyword: '단풍 드는 시기', volume: 40, familyMax: 40, seasonIdx: idx! }), { minVolume: 30, minSeason: 0.25 })).toBe('demote');
   });
   it('13점 미만이면 다음달을 모르니 현재/정점만 본다', () => {
     const pts6 = pts13.slice(-6); // 2026-03(정점 100) ~ 2026-08(13.3)
@@ -106,13 +104,13 @@ describe('seasonIndex — 13개월 데이터랩의 시즌 지수(순수)', () =>
   });
   it('데이터랩이 당월을 아직 안 주면(마지막 점이 지난달) 인덱스 대신 period 로 창을 잡는다', () => {
     // 2025-07 ~ 2026-07(13점) — 인덱스(len-12=1)는 2025-08 을 기준점으로 잡지만 실제 다음달은 2025-09.
-    // 기준점이 한 칸 밀리면 창 전체가 밀린다(2025-08·09·10=12·20·30 → 30, 밀리면 8·12·20 → 20).
+    // 기준점이 한 칸 밀리면 다음달 값이 밀린다(2025-09=20 → 밀리면 2025-08=12).
     const lagged = [{ period: '2025-07-01', ratio: 8 }, ...pts13.slice(0, 12)];
-    expect(seasonIndex(lagged, new Date('2026-08-26T12:00:00'))).toBeCloseTo(30 / 100, 5);
+    expect(seasonIndex(lagged, new Date('2026-08-26T12:00:00'))).toBeCloseTo(20 / 100, 5);
   });
   it('12월에도 롤오버한다 — 작년 +1개월은 이듬해 1월(지연 발행 폴백 경로)', () => {
-    // 2025-11 ~ 2026-11(13점), now=2026-12(데이터랩 미제공 → 지연 경로). 기준점은 2026-01 이어야 하고
-    // 창은 2025-12(20)·2026-01(15)·2026-02(10) → 0.2. 롤오버가 깨지면 창이 2025-11(90)까지 당겨져 0.9 가 된다.
+    // 2025-11 ~ 2026-11(13점), now=2026-12(데이터랩 미제공 → 지연 경로). 기준점은 2026-01(15)이어야 하고
+    // 현재(4)와 비교해 0.15. 롤오버가 깨져 2025-12(20)나 2025-11(90)을 잡으면 0.2/0.9 가 된다.
     const dec = [
       { period: '2025-11-01', ratio: 90 }, { period: '2025-12-01', ratio: 20 }, { period: '2026-01-01', ratio: 15 },
       { period: '2026-02-01', ratio: 10 }, { period: '2026-03-01', ratio: 30 }, { period: '2026-04-01', ratio: 40 },
@@ -120,7 +118,7 @@ describe('seasonIndex — 13개월 데이터랩의 시즌 지수(순수)', () =>
       { period: '2026-08-01', ratio: 50 }, { period: '2026-09-01', ratio: 30 }, { period: '2026-10-01', ratio: 10 },
       { period: '2026-11-01', ratio: 4 },
     ];
-    expect(seasonIndex(dec, new Date('2026-12-15T12:00:00'))).toBeCloseTo(0.2, 5);
+    expect(seasonIndex(dec, new Date('2026-12-15T12:00:00'))).toBeCloseTo(0.15, 5);
   });
   it('데이터 없음·정점 0 이면 undefined(판정 불가 → 게이트 생략)', () => {
     expect(seasonIndex([], new Date())).toBeUndefined();

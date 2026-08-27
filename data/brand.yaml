@@ -116,4 +116,18 @@ avoidJargon:
     use: 쉬는 철
   - term: 확연히
     use: 눈에 띄게
+seasonalSubjects:   # 시기 소재 달력(2026-08-27) — 제목에 든 소재가 '이번 달·다음 달' 밖이면 주제 기각. 수종별로 갈리는 개화·수확은 넣지 않는다.
+  - { term: 단풍, months: [10, 11] }
+  - { term: 낙엽, months: [10, 11, 12] }
+  - { term: 월동, months: [10, 11, 12, 1, 2] }
+  - { term: 한파, months: [12, 1, 2] }
+  - { term: 동해, months: [12, 1, 2, 3] }
+  - { term: 서리, months: [10, 11, 3, 4] }
+  - { term: 새순, months: [3, 4, 5] }
+  - { term: 새잎, months: [3, 4, 5] }
+  - { term: 꽃눈, months: [7, 8, 9] }
+  - { term: 장마, months: [6, 7] }
+  - { term: 폭염, months: [7, 8] }
+  - { term: 봄 식재, months: [2, 3, 4] }
+  - { term: 가을 식재, months: [9, 10, 11] }
 cardStyle: handwritten_poster

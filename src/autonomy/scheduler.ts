@@ -26,6 +26,7 @@ import { ytNicheBlock } from '../analytics/ytNiche';
 import { ensureSeriesLabels, classifyCandidates, seriesScoresFor, gateForLabels, fillLabelsFromKnown, cooldownSummary } from '../analytics/seriesLedger';
 import { fallbackSeriesLabels } from '../content/seriesCooldown';
 import { seasonalContext } from '../util/solarTerms';
+import { offSeasonSubject, seasonalSubjectBlock, formatMonths } from '../content/seasonalSubjects';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 
 export interface AutoCycleDeps<T = string> {
@@ -301,9 +302,11 @@ const IDEA_SYSTEM =
  * 모델 — 클라우드 micro(haiku). (Ollama 로컬 분기는 백엔드 제거와 함께 삭제 — 2026-07-06)
  */
 // 콘텐츠 각도 메뉴(브랜드 무관) — 아이디어가 매번 '계절 케어 하우투'로 수렴하지 않게 각도를 로테이션한다.
+// '다음 시즌·시기 대비' 축은 제거(2026-08-27 사용자 확정 "지금~다음 달만" — 8월 말 단풍 실사고). 시의성은
+// seasonalContext(절기)와 [시기 밖 소재] 블록이 담당한다.
 const IDEA_ANGLES = [
   '하우투(단계별 실행 절차)', '구매·선택 가이드(옵션 비교·고르는 기준)', '흔한 실패·오해 바로잡기',
-  '초보 입문(처음 시작하는 사람 기준)', '다음 시즌·시기 대비(지금 준비할 것)', '증상·상황별 진단',
+  '초보 입문(처음 시작하는 사람 기준)', '증상·상황별 진단',
   '실제 사례·후기 관점', '한 가지 쟁점 깊이 파기',
 ];
 /** 후보 파서(순수, 테스트 대상) — {ideas:[...]} 5후보 응답을 방어적으로 정규화. 구형 단일 오브젝트
@@ -489,6 +492,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // 절기 시의성 신호(2026-08-07 사용자 제안) — 종전엔 "시의성·계절성 고려" 지시만 있고 오늘 날짜가
     // 없어 공회전했다. 날짜+절기 한 줄이면 두뇌가 "처서 지나면 가을 식재 준비" 같은 타이밍을 스스로 잡는다.
     `${seasonalContext()}\n\n` +
+    (() => { const b = seasonalSubjectBlock(getBrand()?.seasonalSubjects); return b ? `${b}\n\n` : ''; })() +
     jargonLine +
     (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +
@@ -602,6 +606,14 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       if (off) {
         console.log(`[auto-cycle] 아이디어 기각(브랜드 범위 밖) — "${title}" (소재 "${off}")`);
         rejects.push(`"${title}"=브랜드가 안 다루는 소재(${off})`);
+        continue;
+      }
+      // 시기 소재 게이트(하드, 비용 0) — 검색량 게이트는 keyword 만 재므로 제목의 달력 소재를 따로 본다
+      // (2026-08-27: "활엽수" 키워드(시즌 0.81)에 단풍 글이 묻어 나감). 이번 달·다음 달 밖이면 기각.
+      const offSeason = offSeasonSubject(`${title} ${keyword ?? ''}`, getBrand()?.seasonalSubjects);
+      if (offSeason) {
+        console.log(`[auto-cycle] 아이디어 기각(시기 밖 소재) — "${title}" (${offSeason.term}: ${formatMonths(offSeason.months)}, 지금 ${new Date().getMonth() + 1}월)`);
+        rejects.push(`"${title}"=시기 밖 소재(${offSeason.term}은 ${formatMonths(offSeason.months)} — 지금~다음 달 검색 소재만)`);
         continue;
       }
       // 어휘 함정어 게이트(하드) — keyword 로 태어난 함정어는 하류 어디서도 못 뺀다(키워드 고정 강제가

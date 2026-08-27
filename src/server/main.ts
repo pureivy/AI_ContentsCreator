@@ -62,6 +62,7 @@ import { readFactGate } from '../sessions/digest';
 import { listPersonas } from '../content/personas';
 import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeBrandSlug, deleteBrand, isSafeBrandSlug, offBrandTerm, lintLexicon } from '../content/brand';
 import type { BrandProfile } from '../content/brand';
+import { offSeasonSubject, formatMonths } from '../content/seasonalSubjects';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
 import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shortsMetaPerfStale } from '../analytics/shortsPerf';
@@ -3511,6 +3512,10 @@ async function demandCheckFor(
   slug: string = activeBrandSlug() || '',
 ): Promise<{ verdict: DemandVerdict; line: string }> {
   if (!CONFIG.topicDemandGate) return { verdict: 'unknown', line: '' };
+  // 시기 소재 게이트(2026-08-27) — 예고·클러스터 주제도 이번 달·다음 달 밖 달력 소재(단풍·월동…)면 기각.
+  // 검색광고 키·기억 원장과 무관하게 먼저 본다(비용 0, 스케줄러 후보 루프와 같은 규칙).
+  const offSeason = offSeasonSubject(keyword, getBrand()?.seasonalSubjects);
+  if (offSeason) return { verdict: 'reject', line: `시기 밖 소재(${offSeason.term}: ${formatMonths(offSeason.months)}, 지금 ${new Date().getMonth() + 1}월)` };
   const cfg = { minVolume: CONFIG.topicDemandMinVolume, minSeason: CONFIG.topicDemandMinSeason };
   // 기각 기억(2026-08-27) — 지난 틱에 실측으로 하한 미달이 확정된 키워드는 API 를 부르지 않는다(조회 비용 0).
   // 세 경로(후보 루프·예고·클러스터)가 같은 원장을 공유해야, 어느 경로에서 떨어진 키워드든 다른 경로로
