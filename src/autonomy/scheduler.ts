@@ -27,6 +27,8 @@ import { ensureSeriesLabels, classifyCandidates, seriesScoresFor, gateForLabels,
 import { fallbackSeriesLabels } from '../content/seriesCooldown';
 import { seasonalContext } from '../util/solarTerms';
 import { offSeasonSubject, seasonalSubjectBlock, formatMonths } from '../content/seasonalSubjects';
+import { speciesCoverage, overSpeciesCap, speciesRotationBlock, speciesInText, SPECIES_MONTHLY_CAP } from '../content/speciesRotation';
+import { pieceStore } from '../content/pieces';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 
 export interface AutoCycleDeps<T = string> {
@@ -255,13 +257,26 @@ export function eligibleWinners<T extends { keyword?: string; firstSeenAt?: stri
 }
 
 // 성과 전략(analytics/strategy.json, 6d 연동) 있으면 승자 키워드를 아이디어 재료로 — 없으면 콜드스타트(무시).
+/** 최근 30일 블로그의 수종별 편수(브랜드 카탈로그 기준) — 후보 루프·예고·클러스터 게이트가 공유. */
+export function speciesCoverageFor(slug: string | undefined, now = new Date()): Map<string, number> {
+  try {
+    const items = pieceStore().list()
+      .filter((p) => (p.brand ?? '') === (slug ?? '') && p.stage !== 'idea' && p.stage !== 'error')
+      .map((p) => ({ title: p.title, keyword: p.keyword, ts: p.createdTs }));
+    return speciesCoverage(items, getBrand()?.speciesCatalog, now);
+  } catch { return new Map(); }
+}
+
 function readStrategyWinners(): string {
   try {
     const slug = activeBrandSlug();
     const raw = JSON.parse(readSafe(path.join(CONFIG.dataDir, 'analytics', slug ? `strategy-${slug}.json` : 'strategy.json'))) as {
       winners?: Array<{ keyword?: string; score?: number }>;
     };
+    const cov = speciesCoverageFor(slug || undefined);
     return eligibleWinners(raw.winners ?? [], getBrand()?.perfEraSince)
+      // 월 상한에 닿은 수종의 성과 키워드는 빼서 '통했던 배롱'이 매 틱 되주입되는 고리를 끊는다(2026-08-27).
+      .filter((w) => !overSpeciesCap(w.keyword ?? '', cov, getBrand()?.speciesCatalog))
       .slice(0, 8)
       .map((w) => `- ${w.keyword}${typeof w.score === 'number' ? ` (점수 ${w.score.toFixed(2)})` : ''}`)
       .join('\n');
@@ -294,7 +309,8 @@ const IDEA_SYSTEM =
   '- 단, 성과 기록에는 브랜드 범위가 지금과 달랐던 시절의 주제가 남아 있을 수 있다. 그런 키워드는 "무엇이 통했나"의 신호(예: 계절 타이밍·비교·증상 진단 같은 접근 방식)로만 읽고, 그 소재 자체나 인접 소재로 확장하지 마라 — 소재 범위의 기준은 언제나 [브랜드 컨텍스트]다.\n' +
   '- [최근 제작]·[최근 자율주제]와 중복되지 않게 하라.\n' +
   '- [기존 콘텐츠]와 겹치지 않는 새 소재를 우선하라. 좋은 주제가 기존과 겹치면 버리지 말고, 기존 글과 뚜렷이 다른 시각(대상·상황·계절·관점)을 잡아 제안하라(사용자 원칙 2026-08-14 — 종전 "완전히 새로운 각도만"에서 개정).\n' +
-  '- title 은 클릭·검색에 유리한 한국어 제목, keyword 는 검색량 있을 법한 핵심 타겟 키워드 1개, subNiche 는 세부 분야다.';
+  '- title 은 클릭·검색에 유리한 한국어 제목, keyword 는 검색량 있을 법한 핵심 타겟 키워드 1개, subNiche 는 세부 분야다.\n' +
+  '- keyword 는 사람이 실제로 검색창에 치는 2~3어절(수종명+행위·대상: "매실나무 가지치기", "사과나무 묘목", "느티나무 심는 시기")로 써라. 설명형 구절("묘목 식재 흙 준비", "정원 과실나무 크기" 식)은 검색량이 0이라 코드가 기각한다 — [검색 수요 실측] 표에 있는 표기를 우선 재사용하라.';
 
 /**
  * 다음에 제작할 콘텐츠 아이디어 1건 제안 — 조직 헌장(팀·업무 범위) + 성과 전략(strategy.json)에 그라운딩.
@@ -448,6 +464,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   // 브랜드 슬러그는 여기서 한 번 고정한다 — 프롬프트 조립과 후보 루프가 LLM 왕복(수 초)을 여러 번 건너므로
   // 그 사이 브랜드가 전환되면 기각 기억을 A 로 읽고 B 에 쓰게 된다(아래 ResearchState 의 slug 고정과 같은 버그).
   const slug = activeBrandSlug() || '';
+  const speciesCov = speciesCoverageFor(slug);   // 수종 로테이션(2026-08-27) — 프롬프트 블록·후보 게이트·winners 필터 공용
 
   // 브랜드 설정 시: 주제를 브랜드 제품·타겟에 조향 + 콜드스타트는 시드 키워드에서 출발 +
   // subNiche 를 제품 라인으로 제약(기존 서브니치 EWMA 가 그대로 '제품 라인별 성과 학습'이 된다).
@@ -494,6 +511,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // 없어 공회전했다. 날짜+절기 한 줄이면 두뇌가 "처서 지나면 가을 식재 준비" 같은 타이밍을 스스로 잡는다.
     `${seasonalContext()}\n\n` +
     (() => { const b = seasonalSubjectBlock(getBrand()?.seasonalSubjects); return b ? `${b}\n\n` : ''; })() +
+    (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov); return b ? `${b}\n\n` : ''; })() +
     jargonLine +
     (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +
@@ -615,6 +633,14 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       if (offSeason) {
         console.log(`[auto-cycle] 아이디어 기각(시기 밖 소재) — "${title}" (${offSeason.term}: ${formatMonths(offSeason.months)}, 지금 ${new Date().getMonth() + 1}월)`);
         rejects.push(`"${title}"=시기 밖 소재(${offSeason.term}은 ${formatMonths(offSeason.months)} — 지금~다음 달 검색 소재만)`);
+        continue;
+      }
+      // 수종 월 상한 게이트(하드, 비용 0, 2026-08-27) — 최근 30일 같은 수종 블로그가 상한이면 어떤 각도든 기각.
+      // 유사 폴백보다 앞이라 '다른 시각' 우회도 막힌다(배롱 8편/월 실사고).
+      const capped = overSpeciesCap(`${title} ${keyword ?? ''}`, speciesCov, getBrand()?.speciesCatalog);
+      if (capped) {
+        console.log(`[auto-cycle] 아이디어 기각(수종 월 상한) — "${title}" (${capped.name}: 30일 ${capped.count}편 ≥ ${SPECIES_MONTHLY_CAP})`);
+        rejects.push(`"${title}"=수종 월 상한(${capped.name} 최근 30일 ${capped.count}편 — 아직 안 다룬 수종으로)`);
         continue;
       }
       // 어휘 함정어 게이트(하드) — keyword 로 태어난 함정어는 하류 어디서도 못 뺀다(키워드 고정 강제가

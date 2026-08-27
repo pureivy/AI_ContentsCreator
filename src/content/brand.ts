@@ -58,6 +58,9 @@ export interface BrandProfile {
    *  다음 달'일 때만 채택한다. 검색량 게이트는 keyword 만 재서 "활엽수" 키워드에 단풍 글이 묻어 나갔다.
    *  업종 달력이라 브랜드별로 둔다(미설정=게이트 없음). */
   seasonalSubjects?: Array<{ term: string; months: number[] }>;
+  /** 취급 수종 카탈로그(2026-08-27) — 주제 두뇌의 수종 로테이션·월 상한 게이트 기준. 분류별 정식명+별칭.
+   *  업종 목록이라 브랜드별로 둔다(미설정=로테이션 없음, 종전 동작). */
+  speciesCatalog?: Array<{ group: string; species: Array<{ name: string; aliases?: string[] }> }>;
   /** 채널 설명(예: 네이버 블로그 — 제품 활용 하우투·후기 중심). */
   channel?: string;
   /** 카드뉴스 기본 이미지 스타일 프리셋(브랜드 고정, 2026-07-22) — 수동·검토탭·자동 파생 전부 적용.
@@ -225,6 +228,18 @@ export function normalizeBrand(raw: Partial<BrandProfile> | null | undefined): B
       }))
       .filter((x) => x.term && x.months.length)
       .slice(0, 40),
+    speciesCatalog: (Array.isArray(raw?.speciesCatalog) ? raw.speciesCatalog as unknown[] : [])
+      .map((g) => ({
+        group: s((g as { group?: unknown })?.group, 30) ?? '',
+        species: (Array.isArray((g as { species?: unknown })?.species) ? (g as { species: unknown[] }).species : [])
+          .map((x) => typeof x === 'string'
+            ? { name: x.trim().slice(0, 20) }
+            : { name: s((x as { name?: unknown })?.name, 20) ?? '', aliases: arr((x as { aliases?: unknown })?.aliases, 6, 20) })
+          .filter((x) => x.name)
+          .slice(0, 60),
+      }))
+      .filter((g) => g.group && g.species.length)
+      .slice(0, 12),
     channel: s(raw?.channel, 200),
     cardStyle: s(raw?.cardStyle, 40),
   };

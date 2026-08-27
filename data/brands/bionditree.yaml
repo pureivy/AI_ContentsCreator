@@ -130,4 +130,78 @@ seasonalSubjects:   # 시기 소재 달력(2026-08-27) — 제목에 든 소재�
   - { term: 폭염, months: [7, 8] }
   - { term: 봄 식재, months: [2, 3, 4] }
   - { term: 가을 식재, months: [9, 10, 11] }
+speciesCatalog:   # 취급 수종 카탈로그(2026-08-27 초안, 편집 가능) — 주제 두뇌 수종 로테이션·월 상한(수종당 30일 2편) 기준. 안 파는 수종은 지우세요.
+  - group: 유실수(과일나무)
+    species:
+      - { name: 사과나무, aliases: [사과] }
+      - { name: 배나무 }
+      - { name: 복숭아나무, aliases: [복숭아] }
+      - { name: 자두나무, aliases: [자두] }
+      - { name: 살구나무, aliases: [살구] }
+      - { name: 매실나무, aliases: [매실, 매화나무] }
+      - { name: 감나무, aliases: [단감, 대봉] }
+      - { name: 대추나무, aliases: [대추] }
+      - { name: 포도나무, aliases: [포도] }
+      - { name: 블루베리, aliases: [블루베리나무] }
+      - { name: 무화과나무, aliases: [무화과] }
+      - { name: 석류나무, aliases: [석류] }
+      - { name: 체리나무, aliases: [체리, 앵두나무, 앵두] }
+      - { name: 호두나무, aliases: [호두] }
+      - { name: 밤나무 }
+      - { name: 모과나무, aliases: [모과] }
+      - { name: 오디나무, aliases: [뽕나무, 오디] }
+      - { name: 아로니아 }
+      - { name: 키위나무, aliases: [참다래, 키위] }
+      - { name: 올리브나무, aliases: [올리브] }
+      - { name: 레몬나무, aliases: [레몬, 유자나무, 유자] }
+      - { name: 보리수나무, aliases: [보리수] }
+      - { name: 산딸기, aliases: [라즈베리, 복분자] }
+      - { name: 오미자 }
+      - { name: 구기자 }
+  - group: 조경수(큰나무·가로수)
+    species:
+      - { name: 배롱나무, aliases: [배롱, 백일홍나무] }
+      - { name: 단풍나무, aliases: [단풍, 홍단풍, 청단풍, 공작단풍] }
+      - { name: 소나무, aliases: [반송, 조형소나무] }
+      - { name: 주목나무, aliases: [주목 묘목, 주목 심기, 주목 전정] }   # '주목'(注目) 일반어 오탐 방지
+      - { name: 느티나무, aliases: [느티] }
+      - { name: 팽나무 }
+      - { name: 이팝나무, aliases: [이팝] }
+      - { name: 산딸나무, aliases: [산딸] }
+      - { name: 마가목 }
+      - { name: 모감주나무, aliases: [모감주] }
+      - { name: 자귀나무, aliases: [자귀] }
+      - { name: 벚나무, aliases: [왕벚나무, 벚꽃나무, 수양벚나무] }
+      - { name: 은행나무, aliases: [은행] }
+      - { name: 회화나무, aliases: [회화] }
+      - { name: 참나무, aliases: [상수리나무, 굴참나무, 도토리나무] }
+      - { name: 메타세쿼이아, aliases: [메타세콰이어] }
+      - { name: 계수나무 }
+      - { name: 층층나무 }
+      - { name: 산수유, aliases: [산수유나무] }
+      - { name: 목련, aliases: [백목련, 자목련] }
+      - { name: 꽃사과, aliases: [꽃사과나무] }
+      - { name: 홍매화, aliases: [홍매] }
+  - group: 정원수·생울타리·관목
+    species:
+      - { name: 측백나무, aliases: [측백, 에메랄드그린, 블루엔젤, 스카이로켓] }
+      - { name: 회양목 }
+      - { name: 사철나무, aliases: [사철, 황금사철] }
+      - { name: 남천 }
+      - { name: 수국 }
+      - { name: 라일락 }
+      - { name: 철쭉, aliases: [영산홍, 산철쭉] }
+      - { name: 동백나무, aliases: [동백] }
+      - { name: 명자나무, aliases: [명자] }
+      - { name: 조팝나무, aliases: [조팝] }
+      - { name: 화살나무 }
+      - { name: 쥐똥나무 }
+      - { name: 개나리 }
+      - { name: 무궁화 }
+      - { name: 장미, aliases: [넝쿨장미] }
+      - { name: 등나무 }
+      - { name: 능소화 }
+      - { name: 치자나무, aliases: [치자] }
+      - { name: 금목서, aliases: [은목서, 목서] }
+      - { name: 피라칸타 }
 cardStyle: handwritten_poster
