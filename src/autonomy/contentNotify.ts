@@ -99,13 +99,19 @@ const blogReadyLabel = (revised?: boolean): string => (revised ? '↻ 블로그 
  */
 export function factGateLines(info: FactGateInfo | undefined, maxItems: number, label = '사실 게이트', breakdown = true): string {
   if (!info) return '';
-  if (info.status === 'error') return `⚠ ${label} 판정 실패 — 수동 검토 필요`;
   const clip = (s: string): string => (s.length > 80 ? `${s.slice(0, 80)}…` : s);
+  // 시기·수치 잔존(2026-08-27 권고 1) — 결정적 검사라 LLM 정합이 pass 여도 남을 수 있다. 어느 상태에서든 붙인다.
+  const timing = info.timing ?? [];
+  const timingBlock = timing.length
+    ? [`⚠ 원문과 다른 시기·수치 ${timing.length}건`, ...timing.slice(0, 2).map((s) => `• ${clip(s)}`)].join('\n')
+    : '';
+  const withTiming = (s: string): string => [s, timingBlock].filter(Boolean).join('\n');
+  if (info.status === 'error') return withTiming(`⚠ ${label} 판정 실패 — 수동 검토 필요`);
   // 참고(unverified) — 근거는 없지만 보류시키지 않은 일반 상식 문장(2026-08-27 지시 ①). 구 데이터는 필드가 없다.
   const soft = info.unverified ?? [];
   if (info.status !== 'hold') {
-    if (!soft.length) return '';
-    return [`✅ ${label} 통과 · 근거 미확인(참고) ${soft.length}건`, ...soft.slice(0, maxItems).map((s) => `• 참고: ${clip(s)}`)].join('\n');
+    if (!soft.length) return timingBlock;
+    return withTiming([`✅ ${label} 통과 · 근거 미확인(참고) ${soft.length}건`, ...soft.slice(0, maxItems).map((s) => `• 참고: ${clip(s)}`)].join('\n'));
   }
   const items = [...info.unsupported, ...info.contradicted].slice(0, maxItems).map((s) => `• ${clip(s)}`);
   const total = info.unsupported.length + info.contradicted.length;
@@ -113,7 +119,7 @@ export function factGateLines(info: FactGateInfo | undefined, maxItems: number, 
   const head = breakdown
     ? `⚠ ${label} 보류 ${total}건 — 근거 없음 ${info.unsupported.length} · 모순 ${info.contradicted.length}${softTail}`
     : `⚠ ${label} 보류 ${total}건${softTail}`;
-  return [head, ...items].join('\n');
+  return withTiming([head, ...items].join('\n'));
 }
 
 /** 자동 임시저장이 꺼진 동안의 안내 1줄(2026-08-27 사용자 확정) — 사람이 버튼을 눌러야 저장된다는 사실을 못 박는다. */

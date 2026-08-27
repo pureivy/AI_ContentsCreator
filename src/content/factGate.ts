@@ -31,7 +31,9 @@ export interface FactGateResult {
  * 사후에 되짚을 수 없어 과차단(C1 같은 정규식 과잉)을 실측으로 잡아낼 방법이 없었다. */
 export interface FactGateFiltered { judgment: string[]; hedged: string[] }
 /** piece·카드·쇼츠 레코드에 남기는 요약(claims 제외). unverified 는 구 데이터 호환으로 선택 — 없으면 [] 로 읽는다. */
-export interface FactGateInfo { status: 'pass' | 'hold' | 'error'; unsupported: string[]; contradicted: string[]; unverified?: string[]; checkedTs: string }
+/** timing 은 파생물(카드·쇼츠) 전용 — 결정적 시기·수치 대조(timingParity.ts)의 잔존 지적. 비차단 표시용이라
+ *  status 에 영향을 주지 않는다(status 는 LLM 정합 판정이 정한다). 구 데이터는 필드가 없다. */
+export interface FactGateInfo { status: 'pass' | 'hold' | 'error'; unsupported: string[]; contradicted: string[]; unverified?: string[]; timing?: string[]; checkedTs: string }
 
 const KINDS: ReadonlySet<string> = new Set(['number', 'time', 'species', 'pest', 'treatment', 'law', 'price', 'experience', 'stat', 'general']);
 const STATUSES: ReadonlySet<string> = new Set(['supported', 'hedged_general', 'unsupported', 'contradicted']);

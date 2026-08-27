@@ -23,6 +23,7 @@ import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
 import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues, parityIssues, parityToInfo } from './standaloneQa';
+import { timingParityIssues, formatTimingIssue, stripUnsourcedStatOverlays } from '../content/timingParity';
 import type { FactGateInfo } from '../content/factGate';
 import { narrationStyleIssues, hookKeywordLeadIssues } from '../content/styleLint';
 import { promiseStore } from '../content/promises';
@@ -524,6 +525,25 @@ async function fitShortsPlanToDuration(io: JobIO, plan: Plan, budgetCharsOverrid
     : keep;
 }
 
+/**
+ * 시기·수치 대조 입력(순수) — 시청자가 실제로 보고 듣는 파생 텍스트 전부: 내레이션·자막 + dataviz 오버레이
+ * 값(stat·chart·list·quote) + 설명(유튜브 설명 = 인스타 캡션에 복제된다).
+ */
+export function timingFields(plan: Plan): Array<{ field: string; text: string }> {
+  const out: Array<{ field: string; text: string }> = [];
+  plan.scenes.forEach((s, i) => {
+    const n = i + 1;
+    if (s.narration) out.push({ field: `씬${n} 내레이션`, text: s.narration });
+    if (s.screenText) out.push({ field: `씬${n} 자막`, text: s.screenText });
+    if (s.kind === 'stat' && s.stat) out.push({ field: `씬${n} 오버레이`, text: `${s.stat.value}${s.stat.unit ?? ''} ${s.stat.label ?? ''}`.trim() });
+    if (s.kind === 'chart' && s.chart) out.push({ field: `씬${n} 차트`, text: s.chart.series.map((x) => `${x.label} ${x.value}${s.chart?.unit ?? ''}`).join(', ') });
+    if (s.kind === 'list' && s.items?.length) out.push({ field: `씬${n} 목록`, text: s.items.join(' / ') });
+    if (s.kind === 'quote' && s.quote?.text) out.push({ field: `씬${n} 인용`, text: s.quote.text });
+  });
+  if (plan.description) out.push({ field: '설명', text: plan.description });
+  return out;
+}
+
 /** quote 출처 라벨은 원문(블로그 본문)에 그 문자열이 있을 때만 유지 — 패러프레이즈에 가짜 출처("— 재배 기록")가 붙어 발행된 실측 6건 대응(스펙 §6a). */
 export function pruneQuoteSources(plan: Plan, sourceBody: string | undefined): { plan: Plan; pruned: number } {
   const norm = (s: string) => s.replace(/\s+/g, '').toLowerCase();
@@ -637,7 +657,10 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 문체 결정적 린트(2026-08-11) — 프롬프트 지시만으로는 샌다는 실측("새 가지" 위반) 대응, 같은 수정 라운드에 얹는다.
     // 소스별 예약(2026-08-26 리뷰 수선) — 결정적 린트(문체·훅)를 앞에 둬 프롬프트-only 실측 누출 방지를
     // 우선 보장하고, LLM 판정(단독 이해·정합)은 각 소스당 상한을 둬 한쪽이 다른 쪽을 밀어내지 못하게 한다.
-    // 소스별 캡 합 최대 12(narrationStyleIssues ≤5 + hookKeywordLeadIssues ≤1 + standalone ≤4 + parity ≤2) —
+    // 시기·수치 원문 대조(2026-08-27 권고 1, 결정적) — 활엽수 실사고: 블로그가 "근거 확실치 않다"고 한 시기를
+    // 파생 쇼츠가 내레이션·자막·오버레이 세 군데에서 단정했다. TIMING_PARITY=off 면 함수가 빈 배열을 낸다.
+    const timing = sourceBody ? timingParityIssues(sourceBody, timingFields(plan)).map(formatTimingIssue) : [];
+    // 소스별 캡 합 최대 15(narrationStyleIssues ≤5 + hookKeywordLeadIssues ≤1 + standalone ≤4 + parity ≤2 + 시기·수치 ≤3) —
     // 이미 소스별로 상한을 뒀으므로 최종 캡을 또 씌우면 뒤 소스(정합)만 밀려나는 desync 가 재발한다. 최종 캡 없음.
     const probs = [
       ...narrationStyleIssues(plan.scenes.map((s) => s.narration)),
@@ -645,6 +668,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       ...hookKeywordLeadIssues(plan.scenes.map((s) => s.narration), keyword),
       ...standalone.slice(0, 4),
       ...parity.slice(0, 2),
+      ...timing.slice(0, 3),
     ];
     let planChanged = false;
     if (probs.length) {
@@ -664,14 +688,34 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
         planChanged = true;
       }
     }
+    // dataviz 오버레이 결정적 제거(권고 1) — 반드시 수정 라운드 '뒤'에: 앞에서 떼면 작가가 같은 값을
+    // 그대로 다시 실어 보내고(수정본은 parsePlan→normalizeSceneKind 를 새로 통과한다) 제거가 무효가 된다.
+    if (sourceBody) {
+      const st = stripUnsourcedStatOverlays(plan.scenes, sourceBody);
+      if (st.removed.length) {
+        plan = { ...plan, scenes: st.scenes };
+        for (const v of st.removed) {
+          const m3 = `오버레이 수치 원문 부재 → 제거 — "${v}"`;
+          console.log(`[숏폼] ${m3}`); io.bus?.emit('log', { message: m3 });
+        }
+      }
+    }
+    // 시기·수치 잔존(권고 1) — 오버레이 제거까지 끝난 최종 대본 기준. LLM 재호출 없음(결정적).
+    const timingResidual = sourceBody ? timingParityIssues(sourceBody, timingFields(plan)).map(formatTimingIssue) : [];
     // 원문 정합 잔존(스펙 §2-4) — 정합 문제로 수정 라운드가 돌았을 때만 1회 재판정(비용). 표시 전용.
     // 수정본 파싱 실패(planChanged=false) 는 대본이 1차 판정 때와 바이트 동일 — LLM 재호출 없이 1차 parity 를 그대로 잔존으로 재사용한다.
-    if (parity.length && sourceBody) {
-      const factGate = planChanged
-        ? parityToInfo(await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceBody, io.signal))
-        : parityToInfo(parity);
+    // 시기·수치만 잔존해도 factGate 를 붙인다(그래야 텔레그램 줄이 나간다) — 단 status 는 정합 판정이 정한다:
+    // 결정적 비차단 린트가 보류(hold)를 만들어 자동 임시저장까지 막아서는 안 된다.
+    if ((parity.length || timingResidual.length) && sourceBody) {
+      const base = parity.length
+        ? (planChanged
+          ? parityToInfo(await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceBody, io.signal))
+          : parityToInfo(parity))
+        : parityToInfo([]);
+      const factGate = timingResidual.length ? { ...base, timing: timingResidual.slice(0, 5) } : base;
       plan = { ...plan, factGate };
       if (factGate.status === 'hold') { const m2 = `원문 정합 잔존 ${factGate.unsupported.length}건 — 검토 메시지에 표시`; console.log(`[숏폼] ${m2}`); io.bus?.emit('log', { message: m2 }); }
+      if (timingResidual.length) { const m4 = `시기·수치 원문 불일치 잔존 ${timingResidual.length}건 — 검토 메시지에 표시`; console.log(`[숏폼] ${m4}`); io.bus?.emit('log', { message: m4 }); }
     }
   } catch { /* 무해 */ }
   // quote 출처 가드 — factGate 등 위에서 채운 필드는 pruneQuoteSources 가 그대로 스프레드 보존한다(fail-open).

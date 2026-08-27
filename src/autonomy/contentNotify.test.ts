@@ -123,6 +123,26 @@ describe('factGateLines — 텔레그램 보류 표시(스펙 §2-3)', () => {
     expect(factGateLines(info, 2, '원문 정합', false).split('\n')[0]).toBe('⚠ 원문 정합 보류 1건');
     expect(factGateLines(info, 2, '원문 정합', false)).not.toContain('근거 없음');
   });
+  // 시기·수치 원문 대조(2026-08-27 권고 1) — 결정적 검사라 LLM 정합 판정이 pass 여도 잔존할 수 있다.
+  it('timing 잔존은 pass·hold·error 어디서든 별도 줄로 나온다(최대 2줄 예시)', () => {
+    const pass = factGateLines({ status: 'pass', unsupported: [], contradicted: [], timing: ['t1', 't2', 't3'], checkedTs: 't' }, 2, '원문 정합', false);
+    expect(pass.split('\n')[0]).toBe('⚠ 원문과 다른 시기·수치 3건');
+    expect(pass).toContain('• t1');
+    expect(pass).toContain('• t2');
+    expect(pass).not.toContain('• t3'); // 예시는 최대 2줄
+    const hold = factGateLines({ status: 'hold', unsupported: ['x'], contradicted: [], timing: ['a'.repeat(100)], checkedTs: 't' }, 2, '원문 정합', false);
+    expect(hold.split('\n')[0]).toBe('⚠ 원문 정합 보류 1건');
+    expect(hold).toContain('⚠ 원문과 다른 시기·수치 1건');
+    expect(hold).toContain('• ' + 'a'.repeat(80) + '…');
+    const err = factGateLines({ status: 'error', unsupported: [], contradicted: [], timing: ['t1'], checkedTs: 't' }, 2, '원문 정합', false);
+    expect(err).toContain('⚠ 원문과 다른 시기·수치 1건');
+    // timing 이 없으면 기존 동작 그대로(빈 문자열).
+    expect(factGateLines({ status: 'pass', unsupported: [], contradicted: [], timing: [], checkedTs: 't' }, 2)).toBe('');
+  });
+  it('쇼츠 캡션에 시기·수치 줄이 실린다', () => {
+    const s = shortsCaptionHtml({ id: 's1', topic: 'T', factGate: { status: 'pass', unsupported: [], contradicted: [], timing: ['씬2: "8월"'], checkedTs: 't' } });
+    expect(s).toContain('⚠ 원문과 다른 시기·수치 1건');
+  });
   it('블로그 메시지·카드 캡션에 들어간다(HTML 이스케이프)', () => {
     const fg = { status: 'hold' as const, unsupported: ['5cm <두께>'], contradicted: [], checkedTs: 't' };
     expect(blogReadyHtml({ id: 'p1', title: 'T', factGate: fg }, '')).toContain('5cm &lt;두께&gt;');

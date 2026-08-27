@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE } from './shorts';
+import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields } from './shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
 
@@ -94,6 +94,27 @@ describe('pruneQuoteSources — 원문에 없는 출처 라벨 제거(스펙 §6
     expect(r.plan.scenes[0]!.quote).toEqual({ text: 'q1', source: '농사로' });
     expect(r.plan.scenes[1]!.quote).toEqual({ text: 'q2' });
     expect(pruneQuoteSources(plan, undefined).pruned).toBe(2);
+  });
+});
+describe('timingFields — 시기·수치 대조 입력(권고 1)', () => {
+  it('내레이션·자막·dataviz 오버레이 값·설명을 전부 필드로 낸다', () => {
+    const plan = {
+      title: 'T', titles: ['T'], description: '9월 기준 설명', hashtags: ['#a'],
+      scenes: [
+        { narration: '훅입니다', screenText: '훅' },
+        { narration: '수치 씬', kind: 'stat' as const, stat: { value: 8, unit: '월', label: '식재 시작' } },
+        { narration: '차트 씬', kind: 'chart' as const, chart: { series: [{ label: '봄', value: 90 }, { label: '가을', value: 70 }], unit: '%' } },
+      ],
+    } as unknown as ShortsPlan;
+    expect(timingFields(plan)).toEqual([
+      { field: '씬1 내레이션', text: '훅입니다' },
+      { field: '씬1 자막', text: '훅' },
+      { field: '씬2 내레이션', text: '수치 씬' },
+      { field: '씬2 오버레이', text: '8월 식재 시작' },
+      { field: '씬3 내레이션', text: '차트 씬' },
+      { field: '씬3 차트', text: '봄 90%, 가을 70%' },
+      { field: '설명', text: '9월 기준 설명' },
+    ]);
   });
 });
 describe('applyShortsRevision — quote 편집', () => {

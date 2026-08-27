@@ -22,6 +22,7 @@ import { stripEmoji } from '../output/render';
 import { cardNewsStore } from '../content/cardnews';
 import { notifyCardnewsReady } from '../autonomy/contentNotify';
 import { standaloneIssues, parityIssues, parityToInfo } from './standaloneQa';
+import { timingParityIssues, formatTimingIssue } from '../content/timingParity';
 import type { FactGateInfo } from '../content/factGate';
 import { cardStyleIssues } from '../content/styleLint';
 import { promiseStore } from '../content/promises';
@@ -316,6 +317,14 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     // 대신 정합 지적이 수정 라운드 입력(probs)에서도 빠진다 — off 의 정의 그대로.
     const parity = CONFIG.factGate && sourceBody ? await parityIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', cardTexts, sourceBody, io.signal) : [];
     probs.push(...parity);
+    // 시기·수치 원문 대조(2026-08-27 권고 1, 결정적·비차단) — 같은 소재를 3채널이 서로 다른 시기로 말하던
+    // 실사고 대응. LLM 정합과 별개 축이라 수정 라운드에만 ≤3건 얹는다. TIMING_PARITY=off 면 빈 배열.
+    const timingFields = (p: Plan): Array<{ field: string; text: string }> => [
+      ...p.slides.map((s, i) => ({ field: `${i + 1}번 카드`, text: s.body ? `${s.headline} ${s.body}` : s.headline })),
+      ...(p.caption ? [{ field: '캡션', text: p.caption }] : []),
+    ];
+    const timing = sourceBody ? timingParityIssues(sourceBody, timingFields(plan)).map(formatTimingIssue) : [];
+    probs.push(...timing.slice(0, 3));
     // 문체 결정적 린트(2026-08-11) — 종결어미 3장 연속 등 "AI 티" 지문을 같은 수정 라운드에 얹는다.
     probs.push(...cardStyleIssues(plan.slides));
     // 표지 키워드 정확 표기 게이트(결정적) — LLM '주제어' 판정과 별개로 [핵심 키워드] 그대로를 요구.
@@ -335,14 +344,22 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
         if (fixed) { plan = { ...fixed, caption: fixed.caption || plan.caption, hashtags: fixed.hashtags.length ? fixed.hashtags : plan.hashtags }; planChanged = true; }
       }
     }
+    // 시기·수치 잔존(권고 1) — 수정 라운드가 끝난 최종 카피 기준. 결정적이라 LLM 재호출 없음.
+    const timingResidual = sourceBody ? timingParityIssues(sourceBody, timingFields(plan)).map(formatTimingIssue) : [];
     // 원문 정합 잔존(스펙 §2-4) — 정합 문제로 수정 라운드가 돌았을 때만 1회 재판정(비용). 표시 전용.
     // 수정본 불량(planChanged=false) 은 카드 문구가 1차 판정 때와 바이트 동일 — LLM 재호출 없이 1차 parity 를 그대로 잔존으로 재사용한다.
-    if (parity.length && sourceBody) {
-      const factGate = planChanged
-        ? parityToInfo(await parityIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / ')), sourceBody, io.signal))
-        : parityToInfo(parity);
+    // 시기·수치만 잔존해도 factGate 를 붙인다(텔레그램 줄이 나가야 하므로) — status 는 정합 판정이 정한다:
+    // 결정적 비차단 린트가 보류(hold)를 만들어서는 안 된다.
+    if ((parity.length || timingResidual.length) && sourceBody) {
+      const base = parity.length
+        ? (planChanged
+          ? parityToInfo(await parityIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / ')), sourceBody, io.signal))
+          : parityToInfo(parity))
+        : parityToInfo([]);
+      const factGate = timingResidual.length ? { ...base, timing: timingResidual.slice(0, 5) } : base;
       plan = { ...plan, factGate };
       if (factGate.status === 'hold') { const m2 = `원문 정합 잔존 ${factGate.unsupported.length}건 — 검토 메시지에 표시`; console.log(`[카드뉴스] ${m2}`); io.bus?.emit('log', { message: m2 }); }
+      if (timingResidual.length) { const m4 = `시기·수치 원문 불일치 잔존 ${timingResidual.length}건 — 검토 메시지에 표시`; console.log(`[카드뉴스] ${m4}`); io.bus?.emit('log', { message: m4 }); }
     }
   } catch { /* 무해 */ }
   // 오탈자 교정 — 수정 라운드가 바꾼 문구까지 포함해 최종 문구를 교열한다.

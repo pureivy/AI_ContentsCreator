@@ -113,6 +113,8 @@ export interface Config {
   /** 엄격 모드(2026-08-27 복귀 스위치) — on 이면 무근거 주장을 종류와 무관하게 전부 보류(구 동작).
    * 기본 off: 수치·시기·약제·법령·가격·통계·경험 주장만 보류하고, 일반 상식 문장은 참고(unverified)로 통과. */
   readonly factGateStrict: boolean;
+  /** 파생 콘텐츠 시기·수치 원문 대조(2026-08-27 권고 1) — 결정적 검사. off 면 검출·오버레이 제거 모두 중단. */
+  readonly timingParity: boolean;
   /** 자동 임시저장 SEO 최소 점수 — 미달이면 자동 리비전 1회 후 재평가, 그래도 미달이면 수동 검토로 남긴다. */
   readonly naverDraftSeoMin: number;
   /** 네이버 임시저장 성공(본문 확정) 시 카드뉴스 자동 파생 — piece당 1회. 글마다 이미지 5장 내외 생성 비용. */
@@ -300,6 +302,8 @@ export const CONFIG: Config = {
   factGate: envBool('FACT_GATE', true),
   factGateMaxClaims: Math.min(Math.max(5, envInt('FACT_GATE_MAX_CLAIMS', 20)), 40),
   factGateStrict: envBool('FACT_GATE_STRICT', false),
+  // 시기·수치 원문 대조(2026-08-27 권고 1) — 활엽수 실사고: 블로그 "근거 확실치 않다" ↔ 쇼츠 "지금이 적기" + 오버레이 "8월".
+  timingParity: envBool('TIMING_PARITY', true),
   naverDraftSeoMin: Math.min(Math.max(0, envInt('NAVER_DRAFT_SEO_MIN', 80)), 100),
   autoCardNews: envBool('AUTO_CARDNEWS', true),
   autoShorts: envBool('AUTO_SHORTS', true),
