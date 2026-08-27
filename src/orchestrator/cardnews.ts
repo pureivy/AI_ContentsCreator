@@ -25,6 +25,7 @@ import { standaloneIssues, parityIssues, parityToInfo } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue } from '../content/timingParity';
 import type { FactGateInfo } from '../content/factGate';
 import { cardStyleIssues } from '../content/styleLint';
+import { currentStructureSeed, type StructureSeed } from '../content/structureSeed';
 import { promiseStore } from '../content/promises';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
@@ -296,7 +297,7 @@ function recentEndingsToAvoid(brand: string | undefined, excludeId: string, limi
   } catch { return ''; }
 }
 
-async function planCards(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number | null, priorCoverage = '', endingsAvoid = ''): Promise<Plan | null> {
+async function planCards(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number | null, priorCoverage = '', endingsAvoid = '', seed: StructureSeed = currentStructureSeed()): Promise<Plan | null> {
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 키워드] ${keyword}` : '',
@@ -324,6 +325,10 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
       ? `슬라이드 ${n}장(표지 1 + 본문 ${Math.max(1, n - 2)} + 마무리 1)의 카드뉴스를 기획하라.`
       : '슬라이드 수는 스토리라인의 핵심 메시지 개수에 맞게 3~8장 사이에서 스스로 정하라(표지 1 + 본문 여러 장 + 마무리 1). 억지로 채우거나 줄이지 말고 내용 밀도에 맞춰라. 문체 쿼터(질문·명사구·1인칭) 때문에 정보 장이 부족하면 장 수를 늘려서 해결하라 — 정보 장을 빼서 해결하지 마라.',
     '표지와 마무리 장의 body 는 비우거나 한 줄로 짧게. 카드 텍스트에 이모지 금지(캡션에는 허용).',
+    // 골격 다양화(2026-08-27 권고 4) — 세트마다 카드 밀도가 같으면 피드에서 같은 판형으로 읽힌다.
+    // 줄 수·해시태그 수는 런별 구조 시드가 정한다(STRUCTURE_VARIETY=off 면 4줄·12개 고정).
+    `본문 장의 body 는 ${seed.cardLines}줄로 쓴다(줄바꿈 \\n 으로 구분, 각 줄은 짧게) — 이번 세트의 카드 밀도다. 정보가 넘치면 줄을 늘리지 말고 장을 늘려라.`,
+    `해시태그(hashtags)는 ${seed.hashtags}개로 담아라.`,
     'caption 은 인스타그램 게시글 본문 — 한 덩어리 문장 금지. 슬라이드 body 처럼 줄바꿈 \\n 으로 문단을 나눠 읽기 쉽게: 첫 줄 훅 한 문장(핵심 주제어 포함 — 단 키워드 명사구를 통째로 주어 자리에 넣지 말고("~법의 기준은" 식 금지) 조사를 섞어 말로 풀어라) → 빈 줄 → 핵심 포인트 2~4줄(각 줄 짧게, 줄마다 \\n) → 빈 줄 → 마무리 한 줄. 마무리는 매번 다르게 — 저장 유도·다음 편 예고·독자에게 되묻기·계절 인사 중 이번 주제에 맞는 것 하나만. "기록합니다/남겨둘게요" 같은 계정 자기서술 반복과 기계적 "팔로우 부탁" 문구 금지. 이모지는 적당히.',
     '다음 편 예고를 캡션에 넣었으면 JSON 의 next 필드에 그 주제와 적절한 시기("N월")를 선언하라 — 예고는 시스템이 약속으로 기록해 그 시기에 실제로 제작한다. 지킬 수 있는 예고만 하고, 예고를 안 했으면 next 를 생략하라.',
     'JSON 형식: {"title":"...","slides":[{"headline":"...","body":"줄바꿈은 \\n"}],"caption":"훅 한 줄\\n\\n핵심 포인트 한 줄\\n다음 포인트 한 줄\\n\\n마무리 행동유도","hashtags":["#태그1","#태그2"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}',
@@ -861,8 +866,10 @@ export async function runCardNewsJob(
       : '';
     // 마무리 문형 로테이션(2026-08-27 권고 5) — 최근 5세트의 마무리 장·캡션 끝줄 원문을 보여 주고 겹치면 다시 쓰게 한다.
     const endingsAvoid = CONFIG.voiceRotation ? recentEndingsToAvoid(card.brand, card.id) : '';
-    say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 마무리 로테이션 ${endingsAvoid ? '주입' : '해당없음'}`);
-    const plan = await planCards(io, card.topic, card.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), endingsAvoid);
+    // 골격 다양화(2026-08-27 권고 4) — 본문 줄 수·해시태그 수를 런별 시드에서 받는다(off 면 4줄·12개 고정).
+    const seed = currentStructureSeed();
+    say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 마무리 로테이션 ${endingsAvoid ? '주입' : '해당없음'} · 골격 ${seed.cardLines}줄·태그 ${seed.hashtags}개`);
+    const plan = await planCards(io, card.topic, card.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), endingsAvoid, seed);
     if (!plan) throw new Error('기획 실패 — 기획자 JSON 응답을 해석할 수 없습니다');
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ title: plan.title, slides: plan.slides }, null, 2), 'utf-8');
     say(`기획 완료 — ${plan.title.slice(0, 30)} · 슬라이드 ${plan.slides.length}장`);

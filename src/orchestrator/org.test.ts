@@ -31,3 +31,17 @@ it('BLOG_BODY_GUIDE — 사실 범위 한정·[근거:] 표기 금지 문구', (
   expect(BLOG_BODY_GUIDE).toContain('[근거: …] 표기는 남기지 않는다');
   expect(BLOG_BODY_GUIDE).not.toContain('사실·수치는 근거로 뒷받침([근거: 출처])');
 });
+
+// 골격 다양화(2026-08-27 권고 4) — 자리 고정 문구가 매 글 같은 배치를 만들던 것을 시드에 위임한다.
+it('BLOG_BODY_GUIDE — 인용구·프레임·표의 자리 고정 문구가 [이번 글 구조] 위임으로 바뀌었다', () => {
+  expect(BLOG_BODY_GUIDE).toContain('글당 0~1곳 — 아래 [이번 글 구조] 지시를 따른다');
+  expect(BLOG_BODY_GUIDE).not.toContain('글의 중심 명제 한 문장(글당 1곳, 도입 훅 직후가 최적)');
+  expect(BLOG_BODY_GUIDE).toContain('아래 [이번 글 구조] 에서 켜졌을 때만');
+  expect(BLOG_BODY_GUIDE).toContain('이번 글에 넣을지는 아래 [이번 글 구조] 를 따른다');
+});
+
+it('리비전 컨텍스트에 [이번 글 구조] 블록이 들어간다(같은 시드 승계)', () => {
+  const ctx = buildReviseContext({ brief: 'B', voiceGuide: 'V', baseBody: '초안', feedback: 'F', structure: '[이번 글 구조] 골격' });
+  expect(ctx).toContain('[이번 글 구조] 골격');
+  expect(ctx.indexOf('[이번 글 구조] 골격')).toBeLessThan(ctx.indexOf('[기존 초안]'));
+});

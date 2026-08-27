@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import type { FactGateResult } from '../content/factGate';
+import type { StructureSeed } from '../content/structureSeed';
 
 export interface AgentOutput {
   id: string;
@@ -98,6 +99,18 @@ export function readStyleLint(runId: string): StyleLintRecord | null {
   try {
     const r = JSON.parse(fs.readFileSync(sessionFile(runId, 'style_lint.json'), 'utf-8')) as StyleLintRecord;
     return r && Array.isArray(r.issues) ? r : null;
+  } catch { return null; }
+}
+/** 런별 구조 시드(2026-08-27 권고 4) — 리비전 런이 baseRunId 로 같은 골격을 승계하게 영속화.
+ * 파싱은 되는데 필드가 빠진 구·손상 기록은 null 로 떨어뜨린다(호출부가 새 시드를 뽑게 — style_lint 와 같은 방어). */
+export function writeStructureSeed(runId: string, seed: StructureSeed): void { writeSessionFile(runId, 'structure.json', JSON.stringify(seed, null, 2)); }
+export function readStructureSeed(runId: string): StructureSeed | null {
+  try {
+    const r = JSON.parse(fs.readFileSync(sessionFile(runId, 'structure.json'), 'utf-8')) as StructureSeed;
+    return r && typeof r.thesisQuote === 'string' && typeof r.openers === 'string'
+      && typeof r.cardLines === 'number' && typeof r.hashtags === 'number' && typeof r.shortsScenes === 'number'
+      && typeof r.table === 'boolean' && typeof r.checklist === 'boolean' && typeof r.teaser === 'boolean'
+      ? r : null;
   } catch { return null; }
 }
 /** 사실 게이트 결과(스펙 §2-2) — advancePieceReady 가 piece 로 옮긴다. */

@@ -120,6 +120,10 @@ export interface Config {
   /** 마무리·제목 문형 로테이션(2026-08-27 권고 5) — 카드 마무리·블로그 마무리 회피 블록 주입과 쇼츠 제목
    *  유형 풀. off 면 세 주입이 모두 빠지고 쇼츠 제목 후보는 종전 고정 3종(정보형·후킹형·질문형)으로 돌아간다. */
   readonly voiceRotation: boolean;
+  /** 런별 구조 시드(2026-08-27 권고 4) — 블로그 골격(도입 유형·중심 명제 인용 자리·표/체크리스트/예고)과
+   *  파생물 골격(카드 본문 줄 수·해시태그 수·쇼츠 씬 수)을 런마다 다르게 뽑는다.
+   *  off 면 고정 시드(after-hook·표+체크리스트·4줄·12개·5씬)로 종전 동작. */
+  readonly structureVariety: boolean;
   /** 자동 임시저장 SEO 최소 점수 — 미달이면 자동 리비전 1회 후 재평가, 그래도 미달이면 수동 검토로 남긴다. */
   readonly naverDraftSeoMin: number;
   /** 네이버 임시저장 성공(본문 확정) 시 카드뉴스 자동 파생 — piece당 1회. 글마다 이미지 5장 내외 생성 비용. */
@@ -312,6 +316,8 @@ export const CONFIG: Config = {
   blogStyleLint: envBool('BLOG_STYLE_LINT', true),
   // 마무리·제목 로테이션(2026-08-27 권고 5) — 카드 마무리 장·블로그 마무리 문단·쇼츠 제목 유형이 고정 틀로 수렴한 실측 대응.
   voiceRotation: envBool('VOICE_ROTATION', true),
+  // 골격 다양화(2026-08-27 권고 4) — 문구를 다양화해도 뼈대가 매편 같은 자리에 서서 "찍어낸 글" 인상이 남던 실측 대응.
+  structureVariety: envBool('STRUCTURE_VARIETY', true),
   naverDraftSeoMin: Math.min(Math.max(0, envInt('NAVER_DRAFT_SEO_MIN', 80)), 100),
   autoCardNews: envBool('AUTO_CARDNEWS', true),
   autoShorts: envBool('AUTO_SHORTS', true),

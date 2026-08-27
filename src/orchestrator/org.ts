@@ -29,6 +29,7 @@ import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLex
 import { collectExistingContent } from '../content/novelty';
 import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard } from '../sessions/digest';
 import { blogStyleIssues, styleRevisionReject } from '../content/styleLint';
+import { resolveStructureSeed, inheritStructureSeed, structureBlock, STRUCTURE_KEEP_BLOCK } from '../content/structureSeed';
 import { factGateBlog, buildEvidence, runFactGateWithRepair, repairSentences, applySentenceRepairs, extractFactCard, FACT_CARD_HEADER } from '../content/factGate';
 import type { FactGateResult } from '../content/factGate';
 import { readInjected, readVerified } from '../agents/workspace';
@@ -88,9 +89,10 @@ export const NO_FABRICATED_EXPERIENCE =
 export const REVISE_NO_NEW_FACTS = '기존 초안과 [리서치·SEO 브리프]에 없는 새 사실·수치·시기를 추가하지 마라. 요청된 변경은 빠짐없이 반영하되, 근거 없는 구체화로 채우지 않는다.';
 
 /** 리비전 컨텍스트 조립(순수) — 브리프·목소리 지침을 개정에도 넣는다(종전엔 초안+피드백뿐). factCard(있으면) 는 첫 블록(2026-08-26). */
-export function buildReviseContext(a: { factCard?: string; brief: string; voiceGuide: string; baseBody: string; feedback: string }): string {
+export function buildReviseContext(a: { factCard?: string; brief: string; voiceGuide: string; baseBody: string; feedback: string; structure?: string }): string {
   return [
     a.factCard ? `${FACT_CARD_HEADER}\n${a.factCard}` : '',
+    a.structure ?? '', // [이번 글 구조] — 원 런 시드 승계(권고 4). 개정이 골격을 바꾸지 않게 '유지' 어조로 온다.
     a.voiceGuide,
     a.brief.trim() ? `[리서치·SEO 브리프]\n${a.brief}` : '',
     `[기존 초안]\n${a.baseBody}`,
@@ -128,11 +130,11 @@ export const BLOG_BODY_GUIDE =
   '- 이모지·이모티콘·장식 특수문자(★✔♥ 등)를 소제목·본문 어디에도 쓰지 마라. 강조는 서식으로만 한다: 핵심 문장·수치는 **굵게**, 용어·미묘한 강조나 인용 뉘앙스는 *이탤릭*(둘 다 남발하지 말고 구조상 중요한 곳에만). 글자 크기·글꼴은 발행기가 가독성에 맞게 자동 처리하니 지정하지 마라.\n' +
   '- 가독성: 한 문단은 2~4문장으로 짧게 끊고, 문단과 문단 사이에는 빈 줄을 넣어 간격을 둔다(빽빽하게 붙이지 마라).\n' +
   '- 리치 서식을 글의 성격에 맞게 "필요할 때만" 적절히 활용한다(억지로 넣지 말 것). 발행 시 실제 네이버 서식으로 렌더된다:\n' +
-  '  · 인용구 3종 — ">" 깊이가 스타일이다(사용자 확정 2026-08-10). "> "=버티컬라인: 섹션 중간의 핵심 규칙·주의 한 줄(글당 2~3곳). ">> "=따옴표: 글의 중심 명제 한 문장(글당 1곳, 도입 훅 직후가 최적). ">>> "=프레임: 마무리 요약·행동 체크리스트 박스(글당 1곳, 연속 줄로 작성·최대 8줄, 각 줄은 공백 포함 20자 이내로 짧게 — 프레임은 가운데 정렬·폭이 좁아 긴 줄이 어색하게 접힌다. 박스 안 번호는 "1) 2) 3)" 표기). 버티컬라인·따옴표는 최대 2줄(2문장) — 길면 인용구 대신 본문 문단으로 풀어라.\n' +
+  '  · 인용구 3종 — ">" 깊이가 스타일이다(사용자 확정 2026-08-10). "> "=버티컬라인: 섹션 중간의 핵심 규칙·주의 한 줄(글당 2~3곳). ">> "=따옴표: 글의 중심 명제 한 문장(글당 0~1곳 — 아래 [이번 글 구조] 지시를 따른다). ">>> "=프레임: 마무리 요약·행동 체크리스트 박스(아래 [이번 글 구조] 에서 켜졌을 때만, 연속 줄로 작성·최대 8줄, 각 줄은 공백 포함 20자 이내로 짧게 — 프레임은 가운데 정렬·폭이 좁아 긴 줄이 어색하게 접힌다. 박스 안 번호는 "1) 2) 3)" 표기). 버티컬라인·따옴표는 최대 2줄(2문장) — 길면 인용구 대신 본문 문단으로 풀어라.\n' +
   '  · 목록: 항목 3~5개, 각 1줄로 짧게. 중첩 금지, 굵게는 항목 리드 단어까지만. 목록 앞엔 도입 문장 1개, 뒤엔 해설 문단을 둔다(목록만 연달아 금지). 표로 이미 보여준 정보를 목록으로 반복하지 않는다.\n' +
   '- 본문 끝에 키워드·태그를 나열하지 마라(태그는 발행 시 별도 필드로 입력된다 — 본문 나열은 중복이자 검색 스팸 신호).\n' +
   '  · 구분선: 큰 주제가 전환되는 곳에 "---" 한 줄로 구분선을 넣는다(남발 금지 — 2~3개 이내).\n' +
-  '  · 표: 비교·정리·수치는 마크다운 표(| 헤더 | ... |)로 제시하면 가독성이 높다(하우투·리뷰의 비교표에 특히 유용).\n' +
+  '  · 표: 비교·정리·수치는 마크다운 표(| 헤더 | ... |)로 제시하면 가독성이 높다(하우투·리뷰의 비교표에 특히 유용) — 이번 글에 넣을지는 아래 [이번 글 구조] 를 따른다.\n' +
   '  · 소스코드: 코드·설정값·명령어는 ```로 감싼 코드블록으로 넣는다(기술 주제에 한함, 아니면 쓰지 마라).\n' +
   '  · 링크: 실제 출처 URL 이 있을 때만 [표시문구](URL) 형식으로 넣는다(없는 링크를 지어내지 마라).\n' +
   '  · 스티커·일정·수식·장소 같은 특수 요소는 사용하지 않는다(정보/하우투·리뷰 본문엔 부적합).\n' +
@@ -180,9 +182,12 @@ export async function writeBlogBody(a: {
   microModel?: string;
   /** 사실 카드(브리프에서 근거 확인된 사실만 압축) — 있으면 작가 컨텍스트 첫 블록으로(2026-08-26). */
   factCard?: string;
+  /** [이번 글 구조] 블록(2026-08-27 권고 4) — 호출부가 시드로 조립해 넘긴다(structureBlock / STRUCTURE_KEEP_BLOCK).
+   *  BLOG_BODY_GUIDE 가 인용구·프레임·표를 이 블록에 위임하므로 집필·개정 어느 호출에도 비워 두지 마라. */
+  structure?: string;
   signal?: AbortSignal;
 }): Promise<string> {
-  const { bus, writer, model, topic, brief, critiqueText, serpText, revise, personaGuide, keyword, microModel, factCard, signal } = a;
+  const { bus, writer, model, topic, brief, critiqueText, serpText, revise, personaGuide, keyword, microModel, factCard, structure = '', signal } = a;
   const brandSlug = activeBrandSlug() || undefined;
   // 같은 주제 기존 글이 있으면 '관점을 완전히 다르게' 지시를 주입(revise 는 자기 초안 개정이라 제외).
   let priorCoverage = revise ? '' : priorCoverageBrief('블로그', topic, keyword, { brandSlug });
@@ -289,7 +294,7 @@ export async function writeBlogBody(a: {
     + '기관명을 대는 것은 수치·규격처럼 출처가 정말 필요한 한두 곳으로 제한하라.'
     + '\n[운영 데이터 비공개] 검색량·문서수·자동완성·상위노출 건수 같은 SEO 조사 수치는 글의 방향을 잡는 데만 쓰고 본문에 쓰지 마라 — 독자가 읽을 글이지 운영 보고서가 아니다.';
   // 리비전 컨텍스트(스펙 §3) — voiceGuide 를 리비전에도 넣는다(종전엔 초안+피드백뿐이라 목소리·브리프가 빠졌다).
-  const reviseContext = revise ? buildReviseContext({ factCard, brief, voiceGuide, baseBody: revise.baseBody, feedback: revise.feedback }) : '';
+  const reviseContext = revise ? buildReviseContext({ factCard, brief, voiceGuide, baseBody: revise.baseBody, feedback: revise.feedback, structure }) : '';
   // 가드 발화 가시화(2026-08-06) — 프롬프트 컨텍스트는 이벤트에 안 남아 "가드가 있는데 왜 뚫렸나"를
   // 사후 판정할 수 없었다(배롱나무 중복 조사에서 실측). 발화 여부만 한 줄 남긴다.
   if (!revise) {
@@ -304,6 +309,7 @@ export async function writeBlogBody(a: {
       : `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 검색 의도를 충족하는 완결된 글을 쓴다.\n${BLOG_BODY_GUIDE}`,
     context: revise ? reviseContext : [
       factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '',
+      structure,
       priorCoverage,
       styleAvoid,
       endingAvoid,
@@ -328,7 +334,7 @@ export async function writeBlogBody(a: {
     const retry = await runAgent({
       bus, role: writer, model,
       task: `「${topic}」 네이버 블로그(정보/하우투·리뷰) 본문 1편을 지금 끝까지 완성하라. 질문·보류·메타 설명 없이 곧바로 본문(## 소제목 포함)만 출력한다.\n${BLOG_BODY_GUIDE}`,
-      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', priorCoverage, styleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon), brief ? `[리서치·SEO 브리프]\n${brief}` : ''].filter(Boolean).join('\n\n'),
+      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon), brief ? `[리서치·SEO 브리프]\n${brief}` : ''].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, groundForFacts: true, maxOutputTokens: 5000, signal,
     });
@@ -696,7 +702,13 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
     console.log(`[사실게이트] ${factCardMsg}`);
     bus.emit('log', { message: factCardMsg });
   }
-  const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, microModel: assign.micro, factCard: factCard || undefined, signal });
+  // 구조 시드(2026-08-27 권고 4) — 이 런의 골격을 뽑아 sessions/<runId>/structure.json 에 남긴다(리비전이 승계).
+  const structureSeed = research ? null : resolveStructureSeed(bus.runId);
+  if (structureSeed) {
+    bus.emit('log', { message: `구조 시드 — 도입 ${structureSeed.openers} · 중심명제 ${structureSeed.thesisQuote} · 표 ${structureSeed.table ? 'O' : 'X'}/체크리스트 ${structureSeed.checklist ? 'O' : 'X'}/예고 ${structureSeed.teaser ? 'O' : 'X'} · 카드 ${structureSeed.cardLines}줄·태그 ${structureSeed.hashtags}개 · 쇼츠 ${structureSeed.shortsScenes}씬` });
+  }
+  const structure = structureSeed ? structureBlock(structureSeed) : '';
+  const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, microModel: assign.micro, factCard: factCard || undefined, structure, signal });
   const finalDeliverable = body || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
   return packageDesignFinalize({
@@ -762,6 +774,8 @@ async function packageDesignFinalize(a: {
       try {
         const revised = await writeBlogBody({
           bus, writer, model: modelForTier(assign, writer.tier), topic, brief, personaGuide, keyword, factCard,
+          // 지적만 고치는 라운드다 — 골격은 초안 그대로(권고 4). 블록을 비우면 작가가 프레임·표를 걷어낸다.
+          structure: STRUCTURE_KEEP_BLOCK,
           revise: {
             baseBody: finalDeliverable,
             feedback: `[문체 린트] 아래 지적만 고치고 사실·수치·구조는 그대로\n${before.map((i) => `- ${i}`).join('\n')}`,
@@ -817,6 +831,7 @@ async function packageDesignFinalize(a: {
         const gate = (body: string) => factGateBlog({ model: assign.standard, body, evidence, signal, maxClaims: CONFIG.factGateMaxClaims });
         const repair = (body: string, feedback: string) => writeBlogBody({
           bus, writer, model: modelForTier(assign, writer.tier), topic, brief, personaGuide, keyword, factCard,
+          structure: STRUCTURE_KEEP_BLOCK, // 사실 지적만 고치는 라운드 — 골격은 초안 그대로(권고 4)
           revise: { baseBody: body, feedback }, signal,
         });
         // 문장 단위 표적 수정(2026-08-26) — 전면 재작성 전에 먼저 시도. 무근거 문장만 유보어·판단문·삭제로
@@ -1000,8 +1015,13 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
     console.log(`[사실게이트] ${factCardMsg}`);
     bus.emit('log', { message: factCardMsg });
   }
+  // 구조 시드(2026-08-27 권고 4) — 원 런 시드를 승계해 개정이 골격을 바꾸지 않게 한다(없으면 새로 뽑는다).
+  // 이 런에도 남겨 연쇄 리비전이 같은 골격을 물려받는다(브리프·사실 카드와 같은 패턴).
+  // 승계 전용 — 물려받을 시드가 없으면(이 기능 이전 조각) 골격을 새로 뽑지 않고 '있는 그대로 유지' 블록을 쓴다.
+  const structureSeed = inheritStructureSeed(bus.runId, revise.baseRunId);
+  const structure = structureSeed ? structureBlock(structureSeed, { revise: true }) : STRUCTURE_KEEP_BLOCK;
   const body = await writeBlogBody({
-    bus, writer, model: modelForTier(assign, writer.tier), topic, brief, revise, factCard: factCard || undefined, signal,
+    bus, writer, model: modelForTier(assign, writer.tier), topic, brief, revise, factCard: factCard || undefined, structure, signal,
   });
   const finalDeliverable = body || revise.baseBody;
 

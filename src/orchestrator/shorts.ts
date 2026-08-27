@@ -27,6 +27,7 @@ import { timingParityIssues, formatTimingIssue, stripUnsourcedStatOverlays } fro
 import type { FactGateInfo } from '../content/factGate';
 import { narrationStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, screenTextLabelIssues, monthWordOutsideNarration } from '../content/styleLint';
 import { promiseStore } from '../content/promises';
+import { currentStructureSeed } from '../content/structureSeed';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame } from '../tools/shortsRender';
@@ -865,8 +866,11 @@ export async function runShortsJob(
   const checkAbort = (): void => { if (opts.signal?.aborted) throw new Error('취소됨'); };
   try {
     fs.mkdirSync(path.join(dir, 'scenes'), { recursive: true });
-    // 씬 수 상한을 길이 상한에서도 역산 — 씬당 최소 ~8초(낭독+연출)로 잡는다.
-    const n = Math.min(Math.max(4, opts.sceneCount ?? 6), 8, Math.max(4, Math.floor(CONFIG.shortsMaxDurationSec / 8)));
+    // 씬 수 — 명시 요청(opts.sceneCount)이 없으면 런별 구조 시드가 정한다(4~6, 2026-08-27 권고 4).
+    // 상한 역산(씬당 최소 ~8초 = 낭독+연출)은 그대로 씌운다: 40초 상한에서는 실질 4~5씬이고 6씬은
+    // 상한 48초부터 열린다. 시드 off 는 종전 기본값 5씬(= min(6, 8, floor(40/8)))과 같은 값이다.
+    const seed = currentStructureSeed();
+    const n = Math.min(Math.max(4, opts.sceneCount ?? seed.shortsScenes), 8, Math.max(4, Math.floor(CONFIG.shortsMaxDurationSec / 8)));
 
     // 1) 기획 — 대본(훅·씬·내레이션·자막)·제목 3후보·설명·해시태그
     store.update(id, { stage: 'planning' });
