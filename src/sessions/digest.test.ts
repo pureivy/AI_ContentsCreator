@@ -31,6 +31,25 @@ describe('세션 파일 IO — research_brief.md / fact_gate.json', () => {
   });
 });
 
+describe('readStyleLint — 손상·구 기록 방어(Fix round 1)', () => {
+  it('문체 린트 결과를 쓰고 읽는다(없으면 null)', async () => {
+    const { writeStyleLint, readStyleLint } = await import('./digest');
+    expect(readStyleLint('s1')).toBeNull();
+    const r = { issues: ['유보 중첩 — "대개 …경우가 많습니다"'], before: 3, checkedTs: 't' };
+    writeStyleLint('s1', r);
+    expect(readStyleLint('s1')).toEqual(r);
+  });
+  it('issues 필드가 없거나 배열이 아니면 null 을 준다(검토 알림이 통째로 유실되던 TypeError 봉합)', async () => {
+    const { readStyleLint } = await import('./digest');
+    fs.mkdirSync(path.join(tmp, 's2'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 's2', 'style_lint.json'), JSON.stringify({ before: 2, checkedTs: 't' }), 'utf-8');
+    expect(readStyleLint('s2')).toBeNull();
+    fs.mkdirSync(path.join(tmp, 's3'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 's3', 'style_lint.json'), JSON.stringify({ issues: 3, before: 2, checkedTs: 't' }), 'utf-8');
+    expect(readStyleLint('s3')).toBeNull();
+  });
+});
+
 describe('readResearchBriefWithFallback — research_brief.md 없을 때 work 산출물로 대체', () => {
   it('research_brief.md 가 있으면 그것을 그대로 쓴다(폴백 무시)', async () => {
     const { writeResearchBrief, readResearchBriefWithFallback } = await import('./digest');

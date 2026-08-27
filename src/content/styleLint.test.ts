@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { narrationStyleIssues, cardStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, blogStyleIssues } from './styleLint';
+import { narrationStyleIssues, cardStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, blogStyleIssues, styleRevisionReject } from './styleLint';
 
 describe('hookKeywordLeadIssues — 훅 첫 2초 키워드 낭독(2026-08-20 조회수 감사)', () => {
   it('훅 앞 12자 안에 키워드 전체가 있으면 검출한다(공백 무시)', () => {
@@ -210,5 +210,45 @@ describe('blogStyleIssues — 블로그 본문 문체 4종(2026-08-27 권고 3)'
 
   it('빈 본문은 통과한다', () => {
     expect(blogStyleIssues('')).toEqual([]);
+  });
+});
+
+// 문체 린트 수정본 채택 가드(Fix round 1) — 작가가 퇴화 응답(짧은 메타 답변)을 내면 완성된 본문이 통째로
+// 그 답변으로 대체되던 결함을 막는다. 사실 게이트 재작성(factGate.ts)과 같은 성격의 구조 가드다.
+describe('styleRevisionReject — 문체 수정본 채택 가드(Fix round 1)', () => {
+  const original = [
+    '## 심는 자리',
+    '뿌리가 앉을 자리를 먼저 봅니다. 물이 고이는 곳은 피합니다.',
+    '',
+    '## 물 주기',
+    '겉흙이 마르면 한 번에 충분히 줍니다. 잦은 물은 뿌리를 약하게 합니다.',
+  ].join('\n');
+
+  it('소제목이 있던 본문인데 수정본에 소제목이 없으면 폐기한다(구조 손실)', () => {
+    expect(styleRevisionReject(original, '네, 지적하신 대비문을 줄여 다시 썼습니다.')).toBe('구조 손실');
+  });
+
+  it('소제목이 없던 본문이어도 분량이 급감하면 폐기한다(퇴화 메타 답변)', () => {
+    const flat = '뿌리가 앉을 자리를 먼저 봅니다. 물이 고이는 곳은 피합니다. 겉흙이 마르면 한 번에 충분히 줍니다.';
+    expect(styleRevisionReject(flat, '알겠습니다. 수정했습니다.')).toBe('분량 급감');
+  });
+
+  it('구조가 남아 있고 분량이 비슷하면 채택한다(null)', () => {
+    const revised = original.replace('잦은 물은 뿌리를 약하게 합니다.', '물을 자주 주면 뿌리가 약해집니다.');
+    expect(styleRevisionReject(original, revised)).toBeNull();
+  });
+
+  it('빈 응답·공백만이면 폐기한다', () => {
+    expect(styleRevisionReject(original, '')).toBe('빈 응답');
+    expect(styleRevisionReject(original, '   \n  ')).toBe('빈 응답');
+  });
+
+  it('소제목은 살아 있어도 분량이 60% 미만으로 줄면 폐기한다', () => {
+    expect(styleRevisionReject(original, '## 심는 자리\n물 고이는 곳은 피합니다.')).toBe('분량 급감');
+  });
+
+  it('소제목이 없던 본문에 소제목을 붙여 오는 것은 막지 않는다(구조 개선)', () => {
+    const flat = '뿌리가 앉을 자리를 먼저 봅니다. 물이 고이는 곳은 피합니다. 겉흙이 마르면 한 번에 충분히 줍니다.';
+    expect(styleRevisionReject(flat, `## 심는 자리\n${flat}`)).toBeNull();
   });
 });

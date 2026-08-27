@@ -28,7 +28,7 @@ import { brandContext, activeBrandSlug, getBrand, lexiconGuide } from '../conten
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid } from '../content/priorCoverage';
 import { collectExistingContent } from '../content/novelty';
 import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard } from '../sessions/digest';
-import { blogStyleIssues } from '../content/styleLint';
+import { blogStyleIssues, styleRevisionReject } from '../content/styleLint';
 import { factGateBlog, buildEvidence, runFactGateWithRepair, repairSentences, applySentenceRepairs, extractFactCard, FACT_CARD_HEADER } from '../content/factGate';
 import type { FactGateResult } from '../content/factGate';
 import { readInjected, readVerified } from '../agents/workspace';
@@ -740,11 +740,20 @@ async function packageDesignFinalize(a: {
   //     브리프 폴백 산출물(finalDeliverable === brief, 작가 무응답)은 건너뛴다: 여기서 개정하면 아래 게이트의
   //     briefFallback 동일성 검사가 더는 성립하지 않아, 작가가 쓰지 않은 글이 게이트를 통과한다(2026-08-26 가드).
   let styleResidual: string[] = [];
+  // 게이트 뒤 재계산(Fix round 1-5)이 볼 수 있게 린트 실행 여부·최초 이슈 수를 블록 밖으로 남긴다.
+  let styleLinted = false;
+  let styleBefore = 0;
   if (CONFIG.blogStyleLint && mission !== 'research' && finalDeliverable.trim()
     && finalDeliverable.trim() !== brief.trim() && !signal?.aborted) {
+    styleLinted = true;
     const before = blogStyleIssues(finalDeliverable);
+    styleBefore = before.length;
     if (before.length) {
       styleResidual = before;
+      // 아래 요약 로그의 괄호 — 채택되면 계획서 문구 '수정 1회' 그대로, 아니면 폐기·실패 사유를 적는다.
+      // 폐기 시 잔존 수는 수정 전과 같아서(원문 유지), 괄호가 없으면 '작가가 고쳤는데 하나도 안 줄었다'와
+      // 구분이 안 된다 — 새 가드가 얼마나 발동하는지 아는 유일한 현장 신호라 여기서 갈라 둔다.
+      let styleVerdict = '수정 1회';
       try {
         const revised = await writeBlogBody({
           bus, writer, model: modelForTier(assign, writer.tier), topic, brief, personaGuide, keyword, factCard,
@@ -754,11 +763,18 @@ async function packageDesignFinalize(a: {
           },
           signal,
         });
-        if (revised.trim()) { finalDeliverable = revised; styleResidual = blogStyleIssues(finalDeliverable); }
+        // Fix round 1 — 채택 전 구조·분량 가드(styleRevisionReject). 사실 게이트의 작가 재작성이 같은 성격의
+        // 가드를 이미 달고 있는데(factGate.ts) 이 경로에는 없어서, 작가가 퇴화 응답("네, 고쳤습니다")을 내면
+        // 완성된 본문이 통째로 그 답변으로 대체됐다. 게다가 린트는 게이트보다 먼저 돌아, 대체된 퇴화 본문이
+        // 게이트의 기준 본문이 된다(briefFallback 동일성 검사는 브리프만 보므로 이걸 못 잡는다).
+        const reject = styleRevisionReject(finalDeliverable, revised);
+        if (!reject) { finalDeliverable = revised; styleResidual = blogStyleIssues(finalDeliverable); }
+        else { styleVerdict = `수정 폐기: ${reject}`; bus.emit('log', { message: `문체 린트 수정 폐기(${reject}) — 본문 유지` }); }
       } catch (e) {
+        styleVerdict = '수정 실패';
         bus.emit('log', { message: `문체 린트 수정 실패(본문 유지): ${e instanceof Error ? e.message : String(e)}` });
       }
-      const sm = `[문체린트] 블로그 — 이슈 ${before.length} → ${styleResidual.length}(수정 1회)`;
+      const sm = `[문체린트] 블로그 — 이슈 ${before.length} → ${styleResidual.length}(${styleVerdict})`;
       console.log(sm);
       bus.emit('log', { message: sm });
     }
@@ -776,6 +792,7 @@ async function packageDesignFinalize(a: {
   // --- 사실 게이트(2026-08-26, 스펙 §2) — 본문 주장을 브리프·주입 근거와 대조. hold 면 작가 수정 1회 후 재판정.
   //     결과는 fact_gate.json → piece.factGate → 자동 임시저장 차단(사람 버튼은 유지). 자동 경로는 fail-closed. ---
   let gateResult: FactGateResult | null = null;
+  const bodyBeforeGate = finalDeliverable; // Fix round 1-5 — 게이트가 본문을 바꿨는지 판별해 문체 잔존 수를 다시 센다.
   if (CONFIG.factGate && mission !== 'research' && finalDeliverable.trim() && !signal?.aborted) {
     // 브리프 폴백 산출물(2026-08-26 수선) — 작가 무응답이 겹치면 finalDeliverable = brief 그대로가 된다
     // (runOrg: `body || brief || …`). 그 상태로 게이트를 돌리면 브리프를 브리프 자신과 대조해 전부
@@ -833,6 +850,19 @@ async function packageDesignFinalize(a: {
     const gm = `사실 게이트 — 주장 ${gateResult.claims.length}건 · 무근거 ${gateResult.unsupported.length} · 참고 ${gateResult.unverified?.length ?? 0} · 모순 ${gateResult.contradicted.length} · 수정 라운드 ${gateResult.repaired ? '예' : '아니오'} · 판정 ${gateResult.status}${filteredNote}${judgmentEg}${gateResult.error ? ` (${gateResult.error})` : ''}`;
     console.log(`[사실게이트] ${gm}`);
     bus.emit('log', { message: gm });
+
+    // Fix round 1-5 — 게이트가 본문을 바꿨으면 문체 잔존 수를 '최종 본문'으로 다시 센다(LLM 콜 없음, 결정적
+    // 재계산 1회). 게이트의 표적 수정은 무근거 문장에 유보어("대개·흔히·보통")를 일부러 넣는데, 그건 ⓒ 유보
+    // 중첩이 세는 바로 그 표현이다 — 재계산이 없으면 텔레그램의 '✍ 문체 N건 잔존'이 게이트 이전 본문 기준이라
+    // 실제 발행 본문과 어긋난다(대개 과소 보고). 린트가 실제로 돈 런에서만 덮어쓴다(리서치·킬스위치 off·
+    // 브리프 폴백 런에 style_lint.json 이 새로 생기지 않게).
+    if (styleLinted && finalDeliverable !== bodyBeforeGate) {
+      styleResidual = blogStyleIssues(finalDeliverable);
+      const rm = `[문체린트] 게이트 후 재계산 — 잔존 ${styleResidual.length}(최종 본문 기준)`;
+      bus.emit('log', { message: rm });
+      try { writeStyleLint(bus.runId, { issues: styleResidual, before: styleBefore, checkedTs: new Date().toISOString() }); }
+      catch (e) { bus.emit('log', { message: `문체 린트 재기록 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
+    }
   }
 
   // --- 발행용 초안 포장 — org 본문을 제목·메타·태그·이미지 슬롯·SEO 점수로 포장(재생성 아님). 실패해도 본문은 유지.

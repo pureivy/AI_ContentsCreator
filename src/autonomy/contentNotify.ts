@@ -197,7 +197,9 @@ export async function notifyBlogReady(p: BlogReadyInfo, runId: string): Promise<
     if (!contentReadyNotifyEnabled()) return;
     const excerpt = readDraftExcerpt(runId);
     // 문체 린트 잔존 건수 — 세션 기록(style_lint.json)에서 읽는다. 없으면 0(구 런·린트 off·기록 실패).
-    const styleResidual = (runId ? readStyleLint(runId)?.issues.length : 0) ?? 0;
+    // Fix round 1 — `?.issues?.length` 로 한 단계 더 방어한다(readStyleLint 의 Array 검증과 이중). 여기서 던지면
+    // 바깥 try 가 삼켜 텔레그램은 물론 notifyWebhookOnly 알림까지 함께 유실된다.
+    const styleResidual = (runId ? readStyleLint(runId)?.issues?.length : 0) ?? 0;
     if (telegramCreds()) await sendTelegramHtml(blogReadyHtml(p, excerpt, undefined, styleResidual), blogButtons(p.id));
     await notifyWebhookOnly({
       title: `${blogReadyLabel(p.revised)}${brandTag(p.brand)} · ${p.title ?? '(제목 미정)'}`,

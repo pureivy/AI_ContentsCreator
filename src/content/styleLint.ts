@@ -173,3 +173,28 @@ export function blogStyleIssues(bodyMarkdown: string): string[] {
   issues.push(...nounEnded.slice(0, 3).map((t) => `명사형 종결 목록 — "${clipLine(t)}"`));
   return issues;
 }
+
+/** 수정본이 원본의 몇 배 이하로 줄면 퇴화로 본다 — 문체 수정은 문장을 다듬는 일이라 분량은 거의 그대로다. */
+const STYLE_REVISION_MIN_RATIO = 0.6;
+
+/**
+ * 문체 린트 수정본 채택 가드(Fix round 1) — 작가가 퇴화 응답("네, 고쳤습니다")을 내면 완성된 본문이 통째로
+ * 그 답변으로 대체되던 결함을 막는다. 반환값은 폐기 사유(채택 가능하면 null)라 호출부가 로그에 사유를 적는다.
+ *
+ * 두 겹으로 본다.
+ *  · 구조 — 원본에 소제목(H2+)이 있었으면 수정본에도 있어야 한다. 원본에 없었으면 요구하지 않는다(소제목 없는
+ *    짧은 본문의 정상 수정본을 헛되이 버리지 않으려는 것 — 대신 그 경우는 분량 바닥이 유일한 방어다).
+ *  · 분량 — 원본의 60% 미만이면 폐기. **구조 검사만으로는 못 막는 경로가 있다**: 원본에 H2 가 없으면 구조
+ *    가지는 통과라, 짧은 메타 답변을 걸러 내는 것은 이 바닥뿐이다. 지우지 말 것.
+ * 형제 경로(사실 게이트 작가 재작성)는 factGate.ts 의 `if (!repaired || !/^#{2,}\s/m.test(repaired))` 가 같은
+ * 일을 더 엄격하게(항상 H2 요구) 한다 — 게이트는 판정 뒤 재작성이라 원본 구조가 보장된 자리라서 그렇다.
+ */
+export function styleRevisionReject(original: string, revised: string): '빈 응답' | '구조 손실' | '분량 급감' | null {
+  const rev = String(revised ?? '').trim();
+  if (!rev) return '빈 응답';
+  const orig = String(original ?? '').trim();
+  const hasH2 = (s: string): boolean => /^#{2,}\s/m.test(s);
+  if (hasH2(orig) && !hasH2(rev)) return '구조 손실';
+  if (rev.length < orig.length * STYLE_REVISION_MIN_RATIO) return '분량 급감';
+  return null;
+}

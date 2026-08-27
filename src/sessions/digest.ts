@@ -92,7 +92,13 @@ export function readFactCard(runId: string): string {
 export interface StyleLintRecord { issues: string[]; before: number; checkedTs: string }
 export function writeStyleLint(runId: string, r: StyleLintRecord): void { writeSessionFile(runId, 'style_lint.json', JSON.stringify(r, null, 2)); }
 export function readStyleLint(runId: string): StyleLintRecord | null {
-  try { return JSON.parse(fs.readFileSync(sessionFile(runId, 'style_lint.json'), 'utf-8')) as StyleLintRecord; } catch { return null; }
+  // Fix round 1 — issues 배열까지 확인한다. 파싱은 되는데 필드가 없는 구·손상 기록을 그대로 돌려주면 호출부의
+  // `.issues.length` 가 TypeError 를 내고, 그 예외를 notifyBlogReady 의 바깥 try 가 삼켜 텔레그램뿐 아니라
+  // 웹훅 알림까지 통째로 사라진다(검토 대기 자체를 모르게 된다).
+  try {
+    const r = JSON.parse(fs.readFileSync(sessionFile(runId, 'style_lint.json'), 'utf-8')) as StyleLintRecord;
+    return r && Array.isArray(r.issues) ? r : null;
+  } catch { return null; }
 }
 /** 사실 게이트 결과(스펙 §2-2) — advancePieceReady 가 piece 로 옮긴다. */
 export function writeFactGate(runId: string, r: FactGateResult): void { writeSessionFile(runId, 'fact_gate.json', JSON.stringify(r, null, 2)); }
