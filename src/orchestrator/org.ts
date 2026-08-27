@@ -27,7 +27,8 @@ import { getRunSettings } from '../runsettings';
 import { brandContext, activeBrandSlug, getBrand, lexiconGuide } from '../content/brand';
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid } from '../content/priorCoverage';
 import { collectExistingContent } from '../content/novelty';
-import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeFactCard, readFactCard } from '../sessions/digest';
+import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard } from '../sessions/digest';
+import { blogStyleIssues } from '../content/styleLint';
 import { factGateBlog, buildEvidence, runFactGateWithRepair, repairSentences, applySentenceRepairs, extractFactCard, FACT_CARD_HEADER } from '../content/factGate';
 import type { FactGateResult } from '../content/factGate';
 import { readInjected, readVerified } from '../agents/workspace';
@@ -732,6 +733,39 @@ async function packageDesignFinalize(a: {
 }): Promise<RunOutcome> {
   const { bus, topic, company, assign, subproblems, teams, critic, critiqueText, writerTeam, brief, serpText, keyword, mission, writer, personaGuide, factCard, signal } = a;
   let finalDeliverable = a.finalDeliverable;
+
+  // --- 문체 린트(2026-08-27 말투 감사 권고 3) — 결정적 4종 검사(styleLint.blogStyleIssues) 후 작가 수정 1회.
+  //     **사실 게이트보다 먼저** 돈다: 게이트는 사람에게 나가는 최종 본문을 판정해야 하므로, 본문을 바꾸는
+  //     린트 수정이 그 뒤에 오면 판정과 본문이 어긋난다. 비차단·fail-open — 수정이 실패하면 원문을 그대로 간다.
+  //     브리프 폴백 산출물(finalDeliverable === brief, 작가 무응답)은 건너뛴다: 여기서 개정하면 아래 게이트의
+  //     briefFallback 동일성 검사가 더는 성립하지 않아, 작가가 쓰지 않은 글이 게이트를 통과한다(2026-08-26 가드).
+  let styleResidual: string[] = [];
+  if (CONFIG.blogStyleLint && mission !== 'research' && finalDeliverable.trim()
+    && finalDeliverable.trim() !== brief.trim() && !signal?.aborted) {
+    const before = blogStyleIssues(finalDeliverable);
+    if (before.length) {
+      styleResidual = before;
+      try {
+        const revised = await writeBlogBody({
+          bus, writer, model: modelForTier(assign, writer.tier), topic, brief, personaGuide, keyword, factCard,
+          revise: {
+            baseBody: finalDeliverable,
+            feedback: `[문체 린트] 아래 지적만 고치고 사실·수치·구조는 그대로\n${before.map((i) => `- ${i}`).join('\n')}`,
+          },
+          signal,
+        });
+        if (revised.trim()) { finalDeliverable = revised; styleResidual = blogStyleIssues(finalDeliverable); }
+      } catch (e) {
+        bus.emit('log', { message: `문체 린트 수정 실패(본문 유지): ${e instanceof Error ? e.message : String(e)}` });
+      }
+      const sm = `[문체린트] 블로그 — 이슈 ${before.length} → ${styleResidual.length}(수정 1회)`;
+      console.log(sm);
+      bus.emit('log', { message: sm });
+    }
+    // 잔존은 검토 알림('✍ 문체 N건 잔존')이 읽는다 — 사실 게이트와 별개 파일이라 FACT_GATE=off 여도 표시가 산다.
+    try { writeStyleLint(bus.runId, { issues: styleResidual, before: before.length, checkedTs: new Date().toISOString() }); }
+    catch (e) { bus.emit('log', { message: `문체 린트 기록 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
+  }
 
   // 잔여 플레이스홀더/가짜수치 경고(생성 지침이 이미 금지 — 보통 0건).
   const placeholders = findTemplateNumbers(finalDeliverable);

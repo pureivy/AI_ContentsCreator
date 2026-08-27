@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { narrationStyleIssues, cardStyleIssues, hookKeywordLeadIssues, metaSummaryIssues } from './styleLint';
+import { narrationStyleIssues, cardStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, blogStyleIssues } from './styleLint';
 
 describe('hookKeywordLeadIssues — 훅 첫 2초 키워드 낭독(2026-08-20 조회수 감사)', () => {
   it('훅 앞 12자 안에 키워드 전체가 있으면 검출한다(공백 무시)', () => {
@@ -102,5 +102,113 @@ describe('metaSummaryIssues — 요약·설명 메타투(2026-08-27 권고 2)', 
     const [msg] = metaSummaryIssues('묘목 고르는 법을 소개합니다.');
     expect(msg).toContain('소개합니다');
     expect(msg).toContain('결론 한 줄 + 조건 한 줄');
+  });
+});
+
+// 블로그 문체 린트(2026-08-27 말투 감사 권고 3) — 쇼츠·카드에만 있던 결정적 문체 검사를 본문에도 건다.
+// 실코퍼스(data/sessions/*/draft.json bodyMarkdown 209편) 측정으로 임계·경계를 정했다(task-3 보고서).
+describe('blogStyleIssues — 블로그 본문 문체 4종(2026-08-27 권고 3)', () => {
+  it('ⓐ 대비문 3회 이상을 검출한다', () => {
+    const md = [
+      '뿌리가 문제가 아니라 자리가 문제입니다.',
+      '굵기가 아니라 잔뿌리를 봅니다.',
+      '물의 양이 아니라 간격이 정합니다.',
+    ].join('\n');
+    const issues = blogStyleIssues(md);
+    expect(issues.some((i) => i.includes('대비문'))).toBe(true);
+    expect(issues.some((i) => i.includes('3회'))).toBe(true);
+  });
+
+  it("ⓐ 2회 이하는 통과하고, 조사 없는 비교('원줄기보다 굵어지면')는 대비문으로 세지 않는다", () => {
+    const md = [
+      '뿌리가 문제가 아니라 자리가 문제입니다.',
+      '굵기가 아니라 잔뿌리를 봅니다.',
+      '가지가 원줄기보다 굵어지면 잘라 냅니다.',
+    ].join('\n');
+    expect(blogStyleIssues(md)).toEqual([]);
+  });
+
+  it("ⓐ 조사가 붙은 대비('~보다는')는 대비문으로 센다", () => {
+    const md = [
+      '뿌리가 문제가 아니라 자리가 문제입니다.',
+      '굵기가 아니라 잔뿌리를 봅니다.',
+      '전체를 짧게 치기보다는 안쪽 가지를 솎습니다.',
+    ].join('\n');
+    expect(blogStyleIssues(md).some((i) => i.includes('대비문'))).toBe(true);
+  });
+
+  it('ⓑ 문장 20개 이상에서 합쇼체 비율 60% 초과를 검출한다', () => {
+    const md = [
+      ...Array.from({ length: 15 }, (_, i) => `${i + 1}번 자리는 볕이 좋습니다.`),
+      ...Array.from({ length: 6 }, () => '물은 아침에 주세요.'),
+    ].join('\n');
+    expect(blogStyleIssues(md).some((i) => i.includes('합쇼체 비율 71%'))).toBe(true);
+  });
+
+  it('ⓑ 문장 20개 미만이면 비율을 보지 않는다', () => {
+    const md = Array.from({ length: 10 }, (_, i) => `${i + 1}번 자리는 볕이 좋습니다.`).join('\n');
+    expect(blogStyleIssues(md).some((i) => i.includes('합쇼체'))).toBe(false);
+  });
+
+  // 계획서 지정 정규식은 '습니다|입니다' 다 — '봅니다·줍니다' 같은 나머지 -ㅂ니다 는 분자에 안 들어간다.
+  // 실코퍼스 209편: 지정 정규식이면 최대 59%(발동 0편)이고, '니다' 전체로 넓히면 중앙값 70%·169편 발동이라
+  // 매 편 목소리를 갈아엎으라는 지적이 된다. 지정 범위를 그대로 두고 상한 가드로 쓴다(task-3 보고서).
+  it('ⓑ 습니다·입니다가 아닌 -ㅂ니다 종결(봅니다)은 분자에 넣지 않는다', () => {
+    const md = Array.from({ length: 21 }, (_, i) => `${i + 1}번 자리는 흙부터 봅니다.`).join('\n');
+    expect(blogStyleIssues(md).some((i) => i.includes('합쇼체'))).toBe(false);
+  });
+
+  it('ⓒ 한 문장 유보 표현 2개 이상을 문장별로 검출한다', () => {
+    const md = '겉흙이 하얗게 말라 보여도 아래는 젖어 있는 경우가 많아서 대개 과하게 줍니다.';
+    const issues = blogStyleIssues(md);
+    expect(issues.some((i) => i.startsWith('유보 중첩'))).toBe(true);
+    expect(issues.some((i) => i.includes('경우가 많아서'))).toBe(true);
+  });
+
+  it('ⓒ 문장마다 유보 표현이 하나면 통과한다', () => {
+    const md = '겉흙이 마르면 물을 줍니다.\n대개 이틀에 한 번이면 충분합니다.';
+    expect(blogStyleIssues(md)).toEqual([]);
+  });
+
+  it('ⓓ 서술어 없이 끝나는 목록 줄을 검출한다', () => {
+    const issues = blogStyleIssues('- 나무의 나이와 키\n- 접목 자리 확인');
+    expect(issues.filter((i) => i.startsWith('명사형 종결 목록'))).toHaveLength(2);
+    expect(issues.some((i) => i.includes('나무의 나이와 키'))).toBe(true);
+  });
+
+  it('ⓓ 서술어로 끝나는 목록 줄은 통과한다', () => {
+    const md = '- 나무의 나이를 확인하세요.\n1. 접목 자리를 봅니다.\n- 흙이 말랐는지 만져 봐요.';
+    expect(blogStyleIssues(md)).toEqual([]);
+  });
+
+  it('ⓓ 인용 체크박스(>>>)는 항목만 보고 첫 줄(상자 제목)은 제외한다', () => {
+    const md = '>>> 올리브 체크\n>>> 1) 접목 자리 확인\n>>> 2) 품종 라벨 확인';
+    const issues = blogStyleIssues(md);
+    expect(issues).toHaveLength(2);
+    expect(issues.some((i) => i.includes('올리브 체크'))).toBe(false);
+    expect(issues.some((i) => i.includes('접목 자리 확인'))).toBe(true);
+  });
+
+  it('원예 상용어(전정·관수·도장지·시비)는 차단하지 않는다', () => {
+    const md = '전정은 늦겨울에 합니다.\n관수는 아침에 합니다.\n도장지는 밑동에서 올라옵니다.\n시비는 봄에 합니다.';
+    expect(blogStyleIssues(md)).toEqual([]);
+  });
+
+  it('표·코드 블록은 검사 대상에서 벗긴다', () => {
+    const md = [
+      '| 항목 | 시기 |',
+      '| --- | --- |',
+      '| 전정 | 2월 |',
+      '',
+      '```',
+      '- 코드 안 목록',
+      '대개 보통 흔히 대체로',
+      '```',
+    ].join('\n');
+    expect(blogStyleIssues(md)).toEqual([]);
+  });
+
+  it('빈 본문은 통과한다', () => {
+    expect(blogStyleIssues('')).toEqual([]);
   });
 });

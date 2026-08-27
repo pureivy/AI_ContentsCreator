@@ -187,3 +187,21 @@ describe('blogReadyHtml — 자동 임시저장 off 안내(전면 수동 검토)
     expect(html.indexOf(MANUAL)).toBeLessThan(html.indexOf('본문 발췌'));
   });
 });
+
+// 문체 린트 잔존(2026-08-27 권고 3) — 수정 1회 뒤에도 남은 지적 건수를 검토 메시지에 1줄로 알린다.
+// 발행을 막지 않는 표시 전용이라 사실 게이트 줄 옆에 붙고, 0건이면 줄 자체가 없다.
+describe('blogReadyHtml — 문체 린트 잔존 줄(2026-08-27 권고 3)', () => {
+  it('잔존 건수가 있으면 ✍ 문체 N건 잔존 줄이 붙는다', () => {
+    expect(blogReadyHtml({ id: 'p1', title: 'T' }, '', false, 2)).toContain('✍ 문체 2건 잔존');
+  });
+  it('0건이면 줄이 없다(기존 메시지 그대로)', () => {
+    expect(blogReadyHtml({ id: 'p1', title: 'T' }, '', false, 0)).not.toContain('문체');
+    expect(blogReadyHtml({ id: 'p1', title: 'T' }, '', false)).not.toContain('문체');
+  });
+  it('사실 게이트 줄 옆(아래)·수동 검토 안내 위에 온다', () => {
+    const fg = { status: 'hold' as const, unsupported: ['근거 없는 문장'], contradicted: [], checkedTs: 't' };
+    const html = blogReadyHtml({ id: 'p1', title: 'T', factGate: fg }, '본문 발췌', false, 1);
+    expect(html.indexOf('✍ 문체 1건 잔존')).toBeGreaterThan(html.indexOf('사실 게이트'));
+    expect(html.indexOf('✍ 문체 1건 잔존')).toBeLessThan(html.indexOf('✋'));
+  });
+});

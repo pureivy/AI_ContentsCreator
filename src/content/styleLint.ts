@@ -107,3 +107,69 @@ export function metaSummaryIssues(text: string): string[] {
   const hits = [...new Set((text ?? '').match(META_SUMMARY_RE) ?? [])];
   return hits.slice(0, 3).map((h) => `설명·요약 메타투 "${h}" — 요약·설명을 그 말로 끝내지 말고 "결론 한 줄 + 조건 한 줄" 꼴로 다시 써라`);
 }
+
+/**
+ * 블로그 본문 문체 린트(순수, 2026-08-27 말투 감사 권고 3) — 쇼츠·카드에만 걸려 있던 결정적 문체 검사를
+ * 본문에도 건다. 검사 4종(실코퍼스 209편 측정으로 경계를 잡았다 — task-3-report.md):
+ *   ⓐ 대비문("A가 아니라 B"/"A보다는 B") 3회 이상 — 한 편에서 세 번 넘게 쓰면 하우스 상투로 읽힌다.
+ *   ⓑ 합쇼체(습니다/입니다) 종결 비율 60% 초과(산문 20문장 이상일 때만) — 어미 메트로놈.
+ *   ⓒ 한 문장에 유보 표현 2개 이상 — "대개 …경우가 많습니다" 꼴로 단정을 두 겹 피하는 문장.
+ *   ⓓ 목록·체크리스트 줄이 서술어 없이 명사로 끝남 — 사람 글은 목록도 말로 끝난다.
+ * 검사 전 마크다운 껍데기(표·코드펜스·인용/목록 마커·헤더·강조)를 벗긴다.
+ * 비차단 — 결과는 작가 수정 1회(org.ts packageDesignFinalize)의 피드백일 뿐 발행을 막지 않는다.
+ * 킬스위치(BLOG_STYLE_LINT)는 호출부가 본다 — 이 모듈은 CONFIG 를 읽지 않는 순수 함수로 남긴다.
+ */
+/** ⓐ 대비문 — 조사('보다는'/'보다도')를 필수로 둔다. 계획서 원안(`보다\s*(?:는|도)?\s*`)은 조사 없는 일반
+ * 비교("가지가 원줄기보다 굵어지면")까지 세어 실코퍼스 209편 중 144편(69%)이 이 가지 하나로 3회를 넘겼다
+ * (조사 필수로 좁히면 0편, 대비문 전체 발동은 88%→41%). 지적 대상은 수사적 대비지 사실 비교가 아니다. */
+const CONTRAST_RE = /(?:가|이|은|는|도)\s*아니라|보다\s*(?:는|도)\s*/g;
+/** ⓒ 유보 표현 — 계획서 지정 목록 그대로. factGate.HEDGE_RE(판정 선분류)와는 목적이 달라 별개로 둔다. */
+const BLOG_HEDGE_RE = /대개|보통|흔히|대체로|대부분|경우가 많|수 있|로 봅니다|으로 봅니다|편입니다/g;
+/** ⓓ 목록 줄 — 불릿·번호·네이버 인용 체크박스(>>>). */
+const BLOG_LIST_RE = /^\s*(?:[-*]\s+|\d+\.\s+|>{3}\s*)/;
+/** ⓓ 서술어 종결 — 끝 글자가 서술어 어미면 통과(세요·니다는 요·다에 포함되지만 계획서 표기를 그대로 둔다). */
+const PREDICATE_END_RE = /(?:다|요|죠|까|세요|니다)$/;
+
+export function blogStyleIssues(bodyMarkdown: string): string[] {
+  const src = String(bodyMarkdown ?? '');
+  if (!src.trim()) return [];
+  const clipLine = (s: string): string => (s.length > 80 ? `${s.slice(0, 80)}…` : s);
+  // 표·코드펜스는 문체가 아니다(수치 표·명령어) — 벗기되 줄 구조는 유지한다(ⓓ가 줄 단위 검사).
+  const lines = src.replace(/```[\s\S]*?```/g, '\n').split('\n').filter((l) => !/^\s*\|/.test(l));
+  const isList = (l: string): boolean => BLOG_LIST_RE.test(l);
+  const plain = (l: string): string =>
+    l.replace(BLOG_LIST_RE, '').replace(/^\s*>+\s*/, '').replace(/[*_`]/g, '').trim();
+  // 헤더는 문장이 아니다(제목은 원래 명사형) — 4종 검사 모두에서 뺀다.
+  const bodyLines = lines.filter((l) => !/^\s*#{1,6}\s/.test(l));
+  // 문장 분리는 '줄 먼저, 그다음 종결부호' — 마침표 없는 목록 줄이 뒷 문장과 한 덩어리가 되는 것을 막는다.
+  const sentencesOf = (ls: string[]): string[] => ls
+    .map(plain).filter(Boolean)
+    .flatMap((l) => l.split(/(?<=[.!?…])\s+/))
+    .map((s) => s.trim()).filter(Boolean);
+  const allSentences = sentencesOf(bodyLines);
+  // ⓑ의 분모는 산문 문장만 — 명사로 끝나는 목록 줄을 분모에 넣으면 비율이 구조적으로 낮아져 검사가 죽는다.
+  const proseSentences = sentencesOf(bodyLines.filter((l) => !isList(l)));
+
+  const issues: string[] = [];
+  const contrast = (bodyLines.map(plain).join('\n').match(CONTRAST_RE) ?? []).length;
+  if (contrast >= 3) issues.push(`대비문("A가 아니라 B") ${contrast}회 — 2회 이하로`);
+  if (proseSentences.length >= 20) {
+    const ratio = proseSentences.filter((s) => /(?:습니다|입니다)[.!?…]*$/.test(s)).length / proseSentences.length;
+    // 실코퍼스 209편 최대 59% — 60% 초과는 '지금보다 나빠지면 잡는' 상한 가드다(현행 중앙값 31%).
+    if (ratio > 0.60) issues.push(`합쇼체 비율 ${Math.round(ratio * 100)}% — 60% 이하로(문단 통째로 말투를 정하라)`);
+  }
+  const hedgeStacked = allSentences.filter((s) => (s.match(BLOG_HEDGE_RE) ?? []).length >= 2);
+  issues.push(...hedgeStacked.slice(0, 3).map((s) => `유보 중첩 — "${clipLine(s)}"`));
+  const listItems: string[] = [];
+  lines.forEach((l, i) => {
+    if (!isList(l)) return;
+    // 인용 체크박스(>>>)의 첫 줄은 상자 '제목'이라 명사형이 정상이다(실코퍼스: "올리브 체크"·
+    // "9월 정원 준비 점검"·"물 줄 때 확인 순서"). 항목 줄만 본다.
+    if (/^\s*>{3}/.test(l) && !/^\s*>{3}/.test(lines[i - 1] ?? '')) return;
+    const t = plain(l);
+    if (t) listItems.push(t);
+  });
+  const nounEnded = listItems.filter((t) => !PREDICATE_END_RE.test(t.replace(/[.!?…·,:;)"'\]]+$/, '')));
+  issues.push(...nounEnded.slice(0, 3).map((t) => `명사형 종결 목록 — "${clipLine(t)}"`));
+  return issues;
+}

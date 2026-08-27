@@ -15,6 +15,7 @@ import {
 } from './notify';
 import type { TgButton } from './notify';
 import type { FactGateInfo } from '../content/factGate';
+import { readStyleLint } from '../sessions/digest';
 
 export interface BlogReadyInfo {
   id: string; title?: string; keyword?: string; seoScore?: number; brand?: string;
@@ -125,8 +126,11 @@ export function factGateLines(info: FactGateInfo | undefined, maxItems: number, 
 /** 자동 임시저장이 꺼진 동안의 안내 1줄(2026-08-27 사용자 확정) — 사람이 버튼을 눌러야 저장된다는 사실을 못 박는다. */
 const MANUAL_REVIEW_LINE = '✋ 수동 검토 대기 — 아래 "네이버 임시저장" 버튼으로 저장';
 
-/** 블로그 ready 텔레그램 메시지(HTML). 순수 — 테스트 대상(autoDraft 는 기본값만 CONFIG 에서 읽는다). */
-export function blogReadyHtml(p: BlogReadyInfo, excerpt: string, autoDraft = CONFIG.autoNaverDraft): string {
+/**
+ * 블로그 ready 텔레그램 메시지(HTML). 순수 — 테스트 대상(autoDraft 는 기본값만 CONFIG 에서 읽는다).
+ * styleResidual = 문체 린트 수정 1회 뒤에도 남은 지적 수(2026-08-27 권고 3) — 0 이면 줄 자체가 없다.
+ */
+export function blogReadyHtml(p: BlogReadyInfo, excerpt: string, autoDraft = CONFIG.autoNaverDraft, styleResidual = 0): string {
   const meta = [p.keyword, typeof p.seoScore === 'number' ? `SEO ${p.seoScore}점` : '']
     .filter(Boolean).join(' · ');
   return [
@@ -134,6 +138,8 @@ export function blogReadyHtml(p: BlogReadyInfo, excerpt: string, autoDraft = CON
     `<b>${escapeHtml(clip(p.title ?? '(제목 미정)', 200))}</b>`,
     meta ? escapeHtml(meta) : '',
     factGateLines(p.factGate, 3) ? escapeHtml(factGateLines(p.factGate, 3)) : '',
+    // 문체 린트 잔존(2026-08-27 권고 3) — 사실 게이트 줄 옆. 발행을 막지 않는 표시 전용이라 건수만 낸다.
+    styleResidual > 0 ? escapeHtml(`✍ 문체 ${styleResidual}건 잔존`) : '',
     // 사실 게이트 줄 '아래' — 보류 사유를 먼저 읽고 버튼을 누르는 순서.
     autoDraft ? '' : escapeHtml(MANUAL_REVIEW_LINE),
     excerpt ? `\n${escapeHtml(excerpt)}` : '',
@@ -190,7 +196,9 @@ export async function notifyBlogReady(p: BlogReadyInfo, runId: string): Promise<
   try {
     if (!contentReadyNotifyEnabled()) return;
     const excerpt = readDraftExcerpt(runId);
-    if (telegramCreds()) await sendTelegramHtml(blogReadyHtml(p, excerpt), blogButtons(p.id));
+    // 문체 린트 잔존 건수 — 세션 기록(style_lint.json)에서 읽는다. 없으면 0(구 런·린트 off·기록 실패).
+    const styleResidual = (runId ? readStyleLint(runId)?.issues.length : 0) ?? 0;
+    if (telegramCreds()) await sendTelegramHtml(blogReadyHtml(p, excerpt, undefined, styleResidual), blogButtons(p.id));
     await notifyWebhookOnly({
       title: `${blogReadyLabel(p.revised)}${brandTag(p.brand)} · ${p.title ?? '(제목 미정)'}`,
       body: [excerpt, `검토: ${reviewLink(p.id)}`].filter(Boolean).join('\n'),

@@ -87,6 +87,13 @@ export function writeFactCard(runId: string, card: string): void { writeSessionF
 export function readFactCard(runId: string): string {
   try { return fs.readFileSync(sessionFile(runId, 'fact_card.md'), 'utf-8'); } catch { return ''; }
 }
+/** 블로그 문체 린트 결과(2026-08-27 권고 3) — 수정 1회 뒤 '잔존' 지적. 검토 알림(contentNotify)이 건수만 읽어
+ * '✍ 문체 N건 잔존' 한 줄로 보여 준다. 사실 게이트와 별개 파일이라 FACT_GATE=off 여도 표시가 살아 있다. */
+export interface StyleLintRecord { issues: string[]; before: number; checkedTs: string }
+export function writeStyleLint(runId: string, r: StyleLintRecord): void { writeSessionFile(runId, 'style_lint.json', JSON.stringify(r, null, 2)); }
+export function readStyleLint(runId: string): StyleLintRecord | null {
+  try { return JSON.parse(fs.readFileSync(sessionFile(runId, 'style_lint.json'), 'utf-8')) as StyleLintRecord; } catch { return null; }
+}
 /** 사실 게이트 결과(스펙 §2-2) — advancePieceReady 가 piece 로 옮긴다. */
 export function writeFactGate(runId: string, r: FactGateResult): void { writeSessionFile(runId, 'fact_gate.json', JSON.stringify(r, null, 2)); }
 export function readFactGate(runId: string): FactGateResult | null {
