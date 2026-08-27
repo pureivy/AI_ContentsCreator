@@ -335,14 +335,14 @@ describe('lacksSpeciesAnchor — 이름·꽃말·유래 축 수종 앵커 게이
   });
 });
 
-describe('normalizeIdeaCandidates — 5후보 응답 파서(순수)', () => {
-  it('ideas 배열을 정리해 돌려준다(제목 정리·상한 5)', () => {
+describe('normalizeIdeaCandidates — 8후보 응답 파서(순수)', () => {
+  it('ideas 배열을 정리해 돌려준다(제목 정리·상한 8 — 2026-08-27 사용자 확정 5→8)', () => {
     const out = normalizeIdeaCandidates({ ideas: [
       { title: '  - "은행나무 이름 유래"', keyword: '은행나무 유래', subNiche: '수종 이야기' },
       { title: '단풍 드는 순서', keyword: '' },
-      { title: 'a' }, { title: 'b' }, { title: 'c' }, { title: 'd' },
+      { title: 'a' }, { title: 'b' }, { title: 'c' }, { title: 'd' }, { title: 'e' }, { title: 'f' }, { title: 'g' },
     ] });
-    expect(out).toHaveLength(5);
+    expect(out).toHaveLength(8);
     expect(out[0]!.title.startsWith('은행나무')).toBe(true); // 선행 기호·따옴표 정리
     expect(out[0]!.keyword).toBe('은행나무 유래');
     expect(out[0]!.subNiche).toBe('수종 이야기');

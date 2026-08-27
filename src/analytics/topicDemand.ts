@@ -217,7 +217,12 @@ export async function assessCandidatesDemand(keywords: string[], signal?: AbortS
     try {
       // 데이터랩에도 정제본을 보낸다(같은 이유) — 응답 키워드는 힌트 표기라 원문 행으로 되짚어 붙인다.
       const byHint = new Map(targets.map((t) => [normKw(t.hint), t.raw]));
-      for (const t of await datalabTrend(targets.slice(0, MAX_TREND).map((x) => x.hint), 13, signal)) {
+      // 후보가 8개(2026-08-27)라 5개 상한으로 잘라 보내면 뒤 3개는 시즌 미상 → 비수기 판정 불가. MAX_TREND 씩 나눠 전부 조회.
+      const trendRows: Awaited<ReturnType<typeof datalabTrend>> = [];
+      for (let i = 0; i < targets.length; i += MAX_TREND) {
+        trendRows.push(...await datalabTrend(targets.slice(i, i + MAX_TREND).map((x) => x.hint), 13, signal));
+      }
+      for (const t of trendRows) {
         const raw = byHint.get(normKw(t.keyword));
         const row = (raw !== undefined ? out.get(raw) : undefined)
           ?? out.get(t.keyword)

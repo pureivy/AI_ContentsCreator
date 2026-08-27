@@ -287,7 +287,7 @@ export function seedKeywordBlock(winners: string, seeds: string[]): string {
 const IDEA_SYSTEM =
   '너는 1인 AI 콘텐츠 회사의 자율 편집 기획자다. 소재 범위의 기준은 [브랜드 컨텍스트]다 — 소개가 말하는 영역 안에서만, ' +
   '금지 목록의 소재는 절대 제안하지 마라. [팀·업무 범위]는 제작 공정 설명일 뿐 소재 범위가 아니다. ' +
-  '다음에 제작하면 검색 노출·유입에 가치있는 네이버 블로그(정보/하우투·리뷰) 콘텐츠 아이디어를 서로 소재가 다른 5개, 가장 자신 있는 것부터 순서대로 제안하라.\n' +
+  '다음에 제작하면 검색 노출·유입에 가치있는 네이버 블로그(정보/하우투·리뷰) 콘텐츠 아이디어를 서로 소재가 다른 8개, 가장 자신 있는 것부터 순서대로 제안하라(2026-08-27 사용자 확정 8개 — 검색량·시기·수종 게이트가 겹쳐 후보가 전멸하지 않게 폭을 넓힌다).\n' +
   '- 검색 의도가 뚜렷하고 실용적인 주제(하우투/비교/리뷰/체크리스트 등). 시의성·계절성도 고려한다.\n' +
   '- [브랜드 컨텍스트]가 있으면 그 기업의 제품·타겟 고객의 관심사와 자연스럽게 연결되는 주제를 우선하라(노골적 광고성 주제 금지 — 독자에게 유용한 정보가 우선).\n' +
   '- [성과 상위 키워드]는 어떤 분야가 통했는지의 참고다 — 그 분야의 인접·연관 영역에서 새로운 키워드를 발굴하라(성과 키워드 자체나 그 변형의 재사용은 금지). 없으면(콜드스타트) 영역 안에서 다양하게 탐색한다.\n' +
@@ -309,9 +309,10 @@ const IDEA_ANGLES = [
   '초보 입문(처음 시작하는 사람 기준)', '증상·상황별 진단',
   '실제 사례·후기 관점', '한 가지 쟁점 깊이 파기',
 ];
-/** 후보 파서(순수, 테스트 대상) — {ideas:[...]} 5후보 응답을 방어적으로 정규화. 구형 단일 오브젝트
+/** 후보 파서(순수, 테스트 대상) — {ideas:[...]} 8후보 응답을 방어적으로 정규화. 구형 단일 오브젝트
  *  응답({title,...})도 1건 목록으로 수용(하위호환). 제목 정리·중복 제거·상한. */
-export function normalizeIdeaCandidates(raw: unknown, max = 5): Array<{ title: string; keyword?: string; subNiche?: string }> {
+export const IDEA_CANDIDATES = 8; // 2026-08-27 사용자 확정(5→8)
+export function normalizeIdeaCandidates(raw: unknown, max = IDEA_CANDIDATES): Array<{ title: string; keyword?: string; subNiche?: string }> {
   const src = (raw as { ideas?: unknown } | null)?.ideas;
   const list = Array.isArray(src) ? src : [raw];
   const out: Array<{ title: string; keyword?: string; subNiche?: string }> = [];
@@ -533,7 +534,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}\n\n` +
     diversityBlock +
     (productLines.length ? `subNiche 는 반드시 다음 제품 라인 중 가장 관련 있는 하나로: ${productLines.join(' | ')}\n\n` : '') +
-    `형식: {"ideas":[{"title":"...","keyword":"...","subNiche":"..."} — 서로 소재가 다른 5개]}`;
+    `형식: {"ideas":[{"title":"...","keyword":"...","subNiche":"..."} — 서로 소재가 다른 8개]}`;
 
   // 후보 수 확장(2026-08-14, 사용자 승인) — 사이클당 1건×2시도는 포화 시즌에 슬롯 좌초를 만들었다
   // (08-12~14 3슬롯 연속: 틱당 보류 2+기각 2~4, 지연 38분+). 한 호출로 5후보를 받아 게이트를 통과하는
