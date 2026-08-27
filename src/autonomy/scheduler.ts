@@ -686,7 +686,9 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         console.log(`[auto-cycle] 아이디어 유사 감지 — "${title}" ≈ (${top.kind}) "${top.title}" → 새 소재 우선, 없으면 다른 시각으로 채택`);
         // 폴백 자격은 계열 게이트 none 후보만(리뷰 확정: 소프트 후보가 폴백으로 채택되면 창설 사고
         // 경로 — 포도 4편째 유사 폴백 채택 — 가 감쇠 완화 뒤로 다시 열린다).
-        if (!similarFallback && gate.level === 'none') {
+        // 검색량 하한 미달(마지막 라운드 완화로 demote 된 것 포함)은 폴백 자격도 없다 — 2026-08-27 실사고:
+        // "올리브나무 화분 재배" 10미만/월이 유사 폴백으로 채택돼 게이트가 무력화됐다.
+        if (!similarFallback && gate.level === 'none' && !demand.relaxed) {
           similarFallback = { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
           similarFallbackLine = demand.line;   // 마지막 라운드에 기억으로 후순위가 된 후보가 여기로 온다(로그가 '조회 없음'으로 새지 않게)
         }

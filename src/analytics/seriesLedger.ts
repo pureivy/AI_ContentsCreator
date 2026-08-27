@@ -27,6 +27,8 @@ export interface SeriesScores {
   /** 7일 창 단순 횟수(감쇠 무관) — 리뷰 확정 회귀 대응: 격일 케이던스에선 감쇠 합이 하드 임계에
    *  영원히 못 미친다(점근합 2.06<2.4). v1 의미론의 결정적 바닥선용. */
   n7species: Map<string, number>; n7activity: Map<string, number>; n7combo: Map<string, number>;
+  /** 3일 내 같은 수종 편수(2026-08-27). */
+  n3species: Map<string, number>;
 }
 export type SeriesGate = { level: 'hard' | 'soft' | 'none'; key?: string; why?: string };
 
@@ -41,6 +43,9 @@ export const SERIES_HARD_COMBO = 1.6;
 export const SERIES_HARD_SINGLE = 2.4;
 export const SERIES_N7_COMBO = 2;
 export const SERIES_N7_SINGLE = 3;
+/** 같은 수종 3일 내 1편+ 이면 하드(2026-08-27 사용자: "며칠 전에 올리브 글을 썼는데" — 3일 만의 같은 수종 재등장 차단). */
+export const SERIES_N3_DAYS = 3;
+export const SERIES_N3_SPECIES = 1;
 const N7_DAYS = 7;
 const MAX_LEDGER = 300;
 
@@ -91,6 +96,7 @@ export function computeSeriesScores(entries: SeriesEntry[], now = Date.now()): S
   const s: SeriesScores = {
     species: new Map(), activity: new Map(), combo: new Map(),
     n7species: new Map(), n7activity: new Map(), n7combo: new Map(),
+    n3species: new Map(),
   };
   const add = (m: Map<string, number>, k: string, w: number): void => { m.set(k, (m.get(k) ?? 0) + w); };
   for (const e of entries) {
@@ -100,7 +106,8 @@ export function computeSeriesScores(entries: SeriesEntry[], now = Date.now()): S
     if (ageDays < 0 || ageDays > HORIZON_DAYS) continue;
     const w = Math.exp(-ageDays / TAU_DAYS);
     const in7 = ageDays <= N7_DAYS;
-    if (e.species) { add(s.species, e.species, w); if (in7) add(s.n7species, e.species, 1); }
+    const in3 = ageDays <= SERIES_N3_DAYS;
+    if (e.species) { add(s.species, e.species, w); if (in7) add(s.n7species, e.species, 1); if (in3) add(s.n3species, e.species, 1); }
     if (e.activity) { add(s.activity, e.activity, w); if (in7) add(s.n7activity, e.activity, 1); }
     if (e.species && e.activity) { const k = `${e.species}×${e.activity}`; add(s.combo, k, w); if (in7) add(s.n7combo, k, 1); }
   }
@@ -116,11 +123,16 @@ export function gateForLabels(l: { species: string | null; activity: string | nu
   const spN = l.species ? sc.n7species.get(l.species) ?? 0 : 0;
   const acN = l.activity ? sc.n7activity.get(l.activity) ?? 0 : 0;
   const cbN = comboKey ? sc.n7combo.get(comboKey) ?? 0 : 0;
+  const sp3 = l.species ? sc.n3species?.get(l.species) ?? 0 : 0;
   if (comboKey && (cb >= SERIES_HARD_COMBO || cbN >= SERIES_N7_COMBO)) {
     return { level: 'hard', key: comboKey, why: cbN >= SERIES_N7_COMBO ? `조합 7일 ${cbN}편` : `조합 ${cb.toFixed(1)}` };
   }
   if (l.species && (sp >= SERIES_HARD_SINGLE || spN >= SERIES_N7_SINGLE)) {
     return { level: 'hard', key: l.species, why: spN >= SERIES_N7_SINGLE ? `수종 7일 ${spN}편` : `수종 ${sp.toFixed(1)}` };
+  }
+  // 3일 바닥선(2026-08-27) — 감쇠 합·7일 3편에 못 미쳐도 같은 수종이 3일 안에 1편이라도 있으면 하드.
+  if (l.species && sp3 >= SERIES_N3_SPECIES) {
+    return { level: 'hard', key: l.species, why: `수종 3일 ${sp3}편` };
   }
   if (l.activity && (ac >= SERIES_HARD_SINGLE || acN >= SERIES_N7_SINGLE)) {
     return { level: 'hard', key: l.activity, why: acN >= SERIES_N7_SINGLE ? `행위 7일 ${acN}편` : `행위 ${ac.toFixed(1)}` };
@@ -172,7 +184,7 @@ function entriesForBrand(slug?: string, now = Date.now()): SeriesEntry[] {
 /** 현재 브랜드 점수(실적재) — 실패는 빈 점수(전 게이트 통과, fail-open). */
 export function seriesScoresFor(slug?: string, now = Date.now()): SeriesScores {
   try { return computeSeriesScores(entriesForBrand(slug, now), now); }
-  catch { return { species: new Map(), activity: new Map(), combo: new Map(), n7species: new Map(), n7activity: new Map(), n7combo: new Map() }; }
+  catch { return { species: new Map(), activity: new Map(), combo: new Map(), n7species: new Map(), n7activity: new Map(), n7combo: new Map(), n3species: new Map() }; }
 }
 
 /** 텍스트 후보 게이트(폴백 라벨 경로) — 클러스터 소진 등 라벨 분류가 없는 지점용. 원장 키 포함 대조로 보강. */
@@ -208,7 +220,7 @@ export function cooldownSummary(slug?: string): { hard: string[]; soft: string[]
         if (isHard) expand(hardTokens, key, kind);
       }
     };
-    for (const [k, v] of sc.species) push(k, v, sc.n7species.get(k) ?? 0, 'species');
+    for (const [k, v] of sc.species) push(k, v, (sc.n3species?.get(k) ?? 0) >= SERIES_N3_SPECIES ? SERIES_N7_SINGLE : sc.n7species.get(k) ?? 0, 'species'); // 3일 내 재등장은 하드로 표시
     for (const [k, v] of sc.activity) push(k, v, sc.n7activity.get(k) ?? 0, 'activity');
     for (const [k, v] of sc.combo) push(k, v, sc.n7combo.get(k) ?? 0, 'combo');
     return { hard, soft, excludeTokens: [...tokens], excludeTokensHard: [...hardTokens] };

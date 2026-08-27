@@ -35,8 +35,15 @@ describe('gateForLabels — 조합 엄격·단독 느슨·소프트 2단계(순�
     const combo = gateForLabels({ species: '포도', activity: '전정' }, s);
     expect(combo.level).toBe('hard');
     expect(combo.key).toBe('포도×전정');
+    // 같은 수종의 새 조합: 감쇠 점수 ~1.5 < 2.4(단독 하드)라 종전엔 소프트였지만, 3일 바닥선(2026-08-27
+    // 사용자: 며칠 만의 같은 수종 재등장 금지)이 먼저 걸려 하드. 3일이 지나면 종전대로 소프트.
     const newCombo = gateForLabels({ species: '포도', activity: '월동' }, s);
-    expect(newCombo.level).toBe('soft'); // 수종 점수 ~1.6 < 2.4(단독 하드) — 회피 권고만
+    expect(newCombo).toMatchObject({ level: 'hard', key: '포도', why: '수종 3일 2편' });
+    const s4 = computeSeriesScores([
+      { species: '포도', activity: '전정', ts: daysAgo(3.5) },
+      { species: '포도', activity: '전정', ts: daysAgo(4.5) },
+    ], NOW);
+    expect(gateForLabels({ species: '포도', activity: '월동' }, s4).level).not.toBe('hard'); // 바닥선 해제 — 감쇠 점수(~0.9)만 남는다
   });
   it('계절적으로 정당한 주 2편(0·4일 전)은 소프트에 그친다 — 이분법 완화', () => {
     const s = computeSeriesScores([
@@ -62,6 +69,14 @@ describe('gateForLabels — 조합 엄격·단독 느슨·소프트 2단계(순�
     expect(s.species.get('포도')!).toBeLessThan(SERIES_HARD_SINGLE); // 감쇠만으로는 미달
     expect(gateForLabels({ species: '포도', activity: null }, s).level).toBe('hard'); // 바닥선이 차단
     expect(gateForLabels({ species: '포도', activity: null }, s).why).toContain('7일 3편');
+  });
+  it('N3 수종 바닥선 — 같은 수종이 3일 안에 1편이라도 있으면 하드(2026-08-27 올리브 3일 만 재등장)', () => {
+    const now = new Date('2026-08-27T18:00:00+09:00').getTime();
+    const sc = computeSeriesScores([{ species: '올리브나무', activity: '물주기', ts: '2026-08-24T21:01:00+09:00' }], now);
+    expect(gateForLabels({ species: '올리브나무', activity: '화분' }, sc)).toMatchObject({ level: 'hard', key: '올리브나무', why: '수종 3일 1편' });
+    // 4일이 지나면 3일 바닥선은 풀리고 감쇠 점수(1편 = 약 0.3)만 남아 none.
+    const later = new Date('2026-08-29T06:00:00+09:00').getTime();
+    expect(gateForLabels({ species: '올리브나무', activity: '화분' }, computeSeriesScores([{ species: '올리브나무', activity: '물주기', ts: '2026-08-24T21:01:00+09:00' }], later)).level).toBe('none');
   });
   it('N7 조합 바닥선 — 같은 조합 7일 2편이면 간격과 무관하게 하드', () => {
     const s = computeSeriesScores([
