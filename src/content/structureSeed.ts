@@ -5,16 +5,20 @@
  * 체크리스트는 "글당 1곳"). 문구를 아무리 다양화해도 글의 뼈대가 매편 같은 자리에 같은 순서로 서서
  * "같은 사람이 같은 틀로 찍어낸 글" 인상이 남았다(말투 감사 §3).
  *
- * 해법: 런마다 골격을 한 벌 뽑아(시드) 프롬프트에 [이번 글 구조] 로 주입한다. 시드는 블로그(도입 유형·
- * 중심 명제 인용 위치·표/체크리스트/예고 온오프)와 파생물(카드 본문 줄 수·해시태그 수·쇼츠 씬 수)을
- * 함께 정한다 — 한 세트의 골격이 따로 놀지 않게 같은 자료구조에서 나온다.
+ * 해법: 런마다 골격을 한 벌 뽑아(시드) 프롬프트에 [이번 글 구조] 로 주입한다. 시드 한 벌은 블로그(도입 유형·
+ * 중심 명제 인용 위치·표/체크리스트/예고 온오프)와 파생물(카드 본문 줄 수·해시태그 수·쇼츠 씬 수) 값을
+ * 모두 담지만, **한 세트가 같은 시드를 공유하지는 않는다** — 카드·쇼츠 잡은 각자 currentStructureSeed() 로
+ * 새로 뽑아 자기 필드만 읽는다. 그래서 블로그 런이 남긴 cardLines·hashtags·shortsScenes 는 읽히지 않는다.
  *
  * 불변식:
  *  - 선택 블록(표·체크리스트·예고)은 **정확히 2개만** true — 셋 다 켜면 지금과 같은 만능 골격이 되고,
  *    하나만 켜면 글이 앙상해진다.
  *  - 예고는 "결론을 다음 편으로 미루기"가 아니다(결론 의무는 보호 자산). 켜져도 '마무리를 완결한 뒤
- *    맨 끝 한 줄' 까지만 허용한다 — genreGuide 의 '예고로 닫지 마라' 와 충돌하지 않는다.
- *  - 킬스위치 STRUCTURE_VARIETY=off → FIXED_STRUCTURE_SEED 고정(종전 동작).
+ *    맨 끝 한 줄' 까지만 허용한다. 이 한 줄과 genreGuide 의 '예고로 닫지 마라' 는 같은 프롬프트에 함께
+ *    들어가면 정면 충돌하므로, 예고가 켜진 런에서는 buildGenreGuide(axes, teaser) 가 그 문장을 뺀다
+ *    (org.ts — Fix round 2026-08-27). 결론을 미루지 말라는 제약은 위 괄호 문구가 계속 건다.
+ *  - 킬스위치 STRUCTURE_VARIETY=off → 새로 '뽑는' 자리(currentStructureSeed/resolveStructureSeed)만
+ *    FIXED_STRUCTURE_SEED 고정(종전 동작). 이미 기록된 시드를 '읽는' 승계는 킬스위치와 무관하다.
  */
 import { CONFIG } from '../config';
 import { readStructureSeed, writeStructureSeed } from '../sessions/digest';
@@ -48,7 +52,7 @@ const OPENERS: readonly OpenerKind[] = ['scene', 'question', 'claim', 'contrast'
  * 킬스위치 off 시의 고정 시드 = 2026-08-27 이전 동작.
  *  - thesisQuote 'after-hook' : 구 문구 "도입 훅 직후가 최적"
  *  - table+checklist true, teaser false : 구 문구는 표·프레임을 권하고 예고는 금지했다("이 글 안에서 완결")
- *  - openers 'question' : 구 문구 "독자의 상황·질문으로 바로 시작한다"
+ *  - openers 'question' : 구 문구의 도입 처방("독자의 상황·질문으로 바로 시작한다" — 지금은 이 블록에 위임)
  *  - cardLines 4 / hashtags 12 : 카드 프롬프트에 수치 지시가 없던 자리의 기본값(계획서 지정값)
  *  - shortsScenes 5 : 40초 상한에서 구 계산(min(6, 8, floor(40/8))) 이 내던 실제 값
  */
@@ -105,10 +109,11 @@ export function resolveStructureSeed(runId: string): StructureSeed {
  * 초안에 없는 골격을 새로 뽑아 "유지하라"고 말하면 그건 유지가 아니라 재구성 지시다. 호출부는 null 일 때
  * STRUCTURE_KEEP_BLOCK(있는 그대로 두라)을 넣는다.
  * 승계분은 자기 런에도 남긴다 — 연쇄 리비전이 같은 골격을 물려받는다(브리프·사실 카드와 같은 패턴).
- * off 면 원 런 기록과 무관하게 고정 시드다 — 종전 지시문이 만들던 골격이 곧 고정 시드라 초안과 어긋나지 않는다.
+ * 킬스위치는 보지 않는다(Fix round 2026-08-27): STRUCTURE_VARIETY 는 시드를 '뽑는' 동작만 지배한다.
+ * off 로 되돌린 뒤 다양화 시드로 쓰인 초안을 개정할 때 고정 시드를 끼워 넣으면, 초안에 없는 표·프레임을
+ * "유지하라"고 말하는 셈이라 작가가 없던 구조를 새로 만든다. 기록이 있으면 승계, 없으면 null 이 양쪽 다 옳다.
  */
 export function inheritStructureSeed(runId: string, baseRunId?: string): StructureSeed | null {
-  if (!CONFIG.structureVariety) return { ...FIXED_STRUCTURE_SEED };
   const inherited = baseRunId ? readStructureSeed(baseRunId) : null;
   if (!inherited) return null;
   try { writeStructureSeed(runId, inherited); } catch { /* fail-open */ }

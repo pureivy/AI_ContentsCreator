@@ -102,7 +102,7 @@ export function readStyleLint(runId: string): StyleLintRecord | null {
   } catch { return null; }
 }
 /** 런별 구조 시드(2026-08-27 권고 4) — 리비전 런이 baseRunId 로 같은 골격을 승계하게 영속화.
- * 파싱은 되는데 필드가 빠진 구·손상 기록은 null 로 떨어뜨린다(호출부가 새 시드를 뽑게 — style_lint 와 같은 방어). */
+ * 파싱은 되는데 필드가 빠진 구·손상 기록은 null 로 떨어뜨린다(호출부가 유지 블록으로 가게 — style_lint 와 같은 방어). */
 export function writeStructureSeed(runId: string, seed: StructureSeed): void { writeSessionFile(runId, 'structure.json', JSON.stringify(seed, null, 2)); }
 export function readStructureSeed(runId: string): StructureSeed | null {
   try {

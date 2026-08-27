@@ -107,7 +107,7 @@ export const BLOG_BODY_GUIDE =
   '- [리서치·SEO 브리프]와 [검수 의견]은 본문 품질을 높이기 위한 참고자료일 뿐, 발행 여부를 정하는 판정이 아니다. 그 자료에 "보류/반려/재검토/확인 필요" 같은 표현이 있어도 집필을 멈추거나 미루지 마라. 논쟁 중이거나 미검증인 주장·수치는 본문에서 조용히 빼고, 검증 가능한 정보만으로 완결된 글을 쓰면 된다.\n' +
   '- 회사 내부 프로세스(검수자 이름, 브리프 상태, 반려/보류, 담당자·기한, 이 작업 자체)를 본문에 절대 언급하지 마라. 독자는 회사 내부를 모른다.\n' +
   '- 작업 진행을 묻는 말(예: "진행할까요?")·머리말·메타 설명 금지. 곧바로 본문 첫 줄부터 시작한다(독자에게 말을 거는 것은 말투 설정에 따른다).\n' +
-  '- AI 티 나는 상투 표현을 쓰지 마라. 금지: ①인사·예고형 도입("여러분 안녕하세요", "오늘은 ~에 대해 알아보겠습니다", "~를 소개해드리겠습니다") — 독자의 상황·질문으로 바로 시작한다. ②알맹이 없는 빈 수식어("매력적인", "완벽한", "최고의", "엄청난", "다양한") — 구체 사실·수치로 대체한다("매력적인 공간"→"테이블 네 개뿐인 조용한 공간"). ③클리셰 종결("놓치지 마세요", "꼭 한번 ~해보세요", "~하시는 것을 추천드립니다", "기대됩니다") — 구체적 실천 제안으로 맺는다. ④과공손·수동태("~라고 할 수 있습니다", "~되어집니다") — 능동·단정으로. ⑤진부한 연결어("바로 그것은", "함께 살펴보겠습니다"). 문장 길이를 전부 균일하게 맞추지 말고 짧은 문장과 중간 문장을 섞어 리듬을 준다. "3가지/5가지" 식 완벽 대칭 리스트와 단락마다 "핵심→설명→정리"를 기계적으로 반복하는 구조를 피한다.\n' +
+  '- AI 티 나는 상투 표현을 쓰지 마라. 금지: ①인사·예고형 도입("여러분 안녕하세요", "오늘은 ~에 대해 알아보겠습니다", "~를 소개해드리겠습니다") — 도입 유형은 아래 [이번 글 구조] 를 따른다. ②알맹이 없는 빈 수식어("매력적인", "완벽한", "최고의", "엄청난", "다양한") — 구체 사실·수치로 대체한다("매력적인 공간"→"테이블 네 개뿐인 조용한 공간"). ③클리셰 종결("놓치지 마세요", "꼭 한번 ~해보세요", "~하시는 것을 추천드립니다", "기대됩니다") — 구체적 실천 제안으로 맺는다. ④과공손·수동태("~라고 할 수 있습니다", "~되어집니다") — 능동·단정으로. ⑤진부한 연결어("바로 그것은", "함께 살펴보겠습니다"). 문장 길이를 전부 균일하게 맞추지 말고 짧은 문장과 중간 문장을 섞어 리듬을 준다. "3가지/5가지" 식 완벽 대칭 리스트와 단락마다 "핵심→설명→정리"를 기계적으로 반복하는 구조를 피한다.\n' +
   // ── 자연스러움 감사(2026-08-11) 투입분: 고수준 수사·리듬의 반복이 "AI 티"의 본체였다(저수준 상투구는 위에서 이미 차단).
   '- 재정의 수사 쿼터: "X가 아니라 Y", "X보다 Y가 먼저" 문형은 글 전체(제목·요약 포함) 최대 2회 — 이 브랜드 글의 최대 지문이다(실측 한 편 7회). 세 번째부터는 재정의 없이 바로 본론을 단언하거나 다른 진입로("사실은", "다들 X부터 보는데")를 써라.\n' +
   // 어미 규칙 3차 교정(2026-08-11): 전역 비율(60%)은 추적 불가로 2연속 미달(75%·65%) → 문단 규칙으로
@@ -158,6 +158,30 @@ async function serpPopularBrief(topic: string, signal?: AbortSignal): Promise<st
 }
 
 /**
+ * [글의 성격] 장르 축 지침 — 브랜드 설정(genreAxes)의 축을 골고루 쓰라고 요구한다(2026-08-01 장르 수렴 대응).
+ *
+ * Fix round(2026-08-27) — `teaser` 는 이번 런 구조 시드의 예고 온오프다. 예고가 켜진 런(pickStructureSeed
+ * 기준 3에 2)에 마지막 '예고로 닫지 마라' 문장을 그대로 붙이면 같은 프롬프트 안의 structureBlock
+ * ('마무리를 완결한 뒤, 맨 끝에 다음 편 한 줄')과 정면 충돌해 어느 쪽이 이길지 비결정적이 된다.
+ * 켜진 런에서만 그 한 문장을 뺀다 — 결론을 예고로 미루지 말라는 제약은 structureBlock 쪽 문구가 계속 건다.
+ * 인자를 안 넘기면(falsy) 종전대로 금지 문장이 붙는다 = 골격을 건드리지 않는 수정·개정 라운드에 맞는 동작.
+ */
+export function buildGenreGuide(axes: readonly string[], teaser?: boolean): string {
+  if (!axes.length) return '';
+  return `[글의 성격] 이 블로그가 한 가지 틀로만 반복되지 않게, 다음 축을 골고루 쓴다 — ${axes.map((x: string, i: number) => `${i + 1}) ${x}`).join(' ')}. `
+    + '**주어진 주제가 한 축(예: 고르기·구매)에 치우쳐 있어도 그 틀에 갇히지 마라 — 최소 한 개 섹션은 다른 축으로 쓴다.** '
+    + '예: 구매 주제라면 심은 뒤 첫 계절에 실제로 하는 일, 그때 흔한 실패와 회복까지 이어서 다룬다. '
+    + '**주제가 대상 이름만 주어졌고 각도가 없으면(예: 품종명 한 단어), 구매·고르기를 기본값으로 잡지 마라** — '
+    + '위 축 가운데 [이미 포화된 소재]·[최근 발행]에 덜 나온 축을 골라 각도를 세워라. '
+    // 관찰·이야기 축 예외(2026-08-13, 나무 이야기 축 3순위 투입 전제조건) — 이 하드코딩이 예외 없이
+    // 걸리면 개화·단풍·낙엽 같은 '나무가 스스로 하는 일' 글이 매번 심기·전정 작업 지시로 억지 착지해
+    // 하우투 장르로 되돌아간다(08-01 장르 수렴과 같은 경로).
+    + '독자가 오늘 실제로 해볼 수 있는 행동을 최소 하나 제시하라("기록만 해두라"로 끝내지 말 것). '
+    + '단, 개화·단풍·낙엽처럼 나무가 스스로 하는 일을 다루는 관찰·이야기 글은 예외다 — 심기·전정 같은 작업 지시로 억지 마무리하지 말고, 언제 어디서 무엇이 어떻게 보이는지 구체적인 관찰 포인트로 끝내도 좋다. '
+    + (teaser ? '' : '맺음을 "다음 글에서는…" 예고로 닫지 마라 — 이 글 안에서 완결한다.');
+}
+
+/**
  * 최종 블로그 본문 집필 — 작가(content_lead)가 리서치 브리프[+검수 의견]을 참고해 발행용 본문 1편을 쓴다.
  * 검수 의견은 "약점·주의점 목록"으로 프레이밍한다(발행 판정이 아님) — 적대적 비평("재반려/보류")을 작가가
  * 게이트로 오해해 본문 대신 질문·메타 코멘터리를 내는 퇴화를 막는다. 그래도 소제목 없는 퇴화가 나오면
@@ -185,9 +209,12 @@ export async function writeBlogBody(a: {
   /** [이번 글 구조] 블록(2026-08-27 권고 4) — 호출부가 시드로 조립해 넘긴다(structureBlock / STRUCTURE_KEEP_BLOCK).
    *  BLOG_BODY_GUIDE 가 인용구·프레임·표를 이 블록에 위임하므로 집필·개정 어느 호출에도 비워 두지 마라. */
   structure?: string;
+  /** 이번 런 구조 시드의 예고 온오프 — true 면 genreGuide 의 '예고로 닫지 마라'를 빼 structure 블록과의 충돌을 막는다.
+   *  골격을 유지만 하는 라운드(문체 린트·사실 게이트 수정, 리비전)는 넘기지 않는다 — 금지 문장이 그대로 살아 있는 편이 맞다. */
+  teaser?: boolean;
   signal?: AbortSignal;
 }): Promise<string> {
-  const { bus, writer, model, topic, brief, critiqueText, serpText, revise, personaGuide, keyword, microModel, factCard, structure = '', signal } = a;
+  const { bus, writer, model, topic, brief, critiqueText, serpText, revise, personaGuide, keyword, microModel, factCard, structure = '', teaser, signal } = a;
   const brandSlug = activeBrandSlug() || undefined;
   // 같은 주제 기존 글이 있으면 '관점을 완전히 다르게' 지시를 주입(revise 는 자기 초안 개정이라 제외).
   let priorCoverage = revise ? '' : priorCoverageBrief('블로그', topic, keyword, { brandSlug });
@@ -260,19 +287,7 @@ export async function writeBlogBody(a: {
   // 같은 장르를 어색하게 비트는 결과만 나온다 — 그래서 장르 자체를 명시적으로 요구한다.
   // **장르 축은 업종마다 다르므로 브랜드 설정(genreAxes)에서 온다** — 미설정 브랜드는 이 지침 자체를 생략.
   const axes = revise ? [] : (getBrand()?.genreAxes ?? []);
-  const genreGuide = axes.length
-    ? `[글의 성격] 이 블로그가 한 가지 틀로만 반복되지 않게, 다음 축을 골고루 쓴다 — ${axes.map((x: string, i: number) => `${i + 1}) ${x}`).join(' ')}. `
-      + '**주어진 주제가 한 축(예: 고르기·구매)에 치우쳐 있어도 그 틀에 갇히지 마라 — 최소 한 개 섹션은 다른 축으로 쓴다.** '
-      + '예: 구매 주제라면 심은 뒤 첫 계절에 실제로 하는 일, 그때 흔한 실패와 회복까지 이어서 다룬다. '
-      + '**주제가 대상 이름만 주어졌고 각도가 없으면(예: 품종명 한 단어), 구매·고르기를 기본값으로 잡지 마라** — '
-      + '위 축 가운데 [이미 포화된 소재]·[최근 발행]에 덜 나온 축을 골라 각도를 세워라. '
-      // 관찰·이야기 축 예외(2026-08-13, 나무 이야기 축 3순위 투입 전제조건) — 이 하드코딩이 예외 없이
-      // 걸리면 개화·단풍·낙엽 같은 '나무가 스스로 하는 일' 글이 매번 심기·전정 작업 지시로 억지 착지해
-      // 하우투 장르로 되돌아간다(08-01 장르 수렴과 같은 경로).
-      + '독자가 오늘 실제로 해볼 수 있는 행동을 최소 하나 제시하라("기록만 해두라"로 끝내지 말 것). '
-      + '단, 개화·단풍·낙엽처럼 나무가 스스로 하는 일을 다루는 관찰·이야기 글은 예외다 — 심기·전정 같은 작업 지시로 억지 마무리하지 말고, 언제 어디서 무엇이 어떻게 보이는지 구체적인 관찰 포인트로 끝내도 좋다. '
-      + '맺음을 "다음 글에서는…" 예고로 닫지 마라 — 이 글 안에서 완결한다.'
-    : '';
+  const genreGuide = buildGenreGuide(axes, teaser);
   // 근거의 출처를 브랜드 자신의 경험으로 되돌린다(실측: 외부로 떠넘기는 지시 5→32회, 1인칭 실경험 4편 중 1건).
   // 업종 무관하게 성립하는 문구만 쓴다 — 특정 표현(지역명·현장명)을 지시하지 않는다(사용자 지시 2026-08-01).
   //
@@ -705,10 +720,12 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   // 구조 시드(2026-08-27 권고 4) — 이 런의 골격을 뽑아 sessions/<runId>/structure.json 에 남긴다(리비전이 승계).
   const structureSeed = research ? null : resolveStructureSeed(bus.runId);
   if (structureSeed) {
-    bus.emit('log', { message: `구조 시드 — 도입 ${structureSeed.openers} · 중심명제 ${structureSeed.thesisQuote} · 표 ${structureSeed.table ? 'O' : 'X'}/체크리스트 ${structureSeed.checklist ? 'O' : 'X'}/예고 ${structureSeed.teaser ? 'O' : 'X'} · 카드 ${structureSeed.cardLines}줄·태그 ${structureSeed.hashtags}개 · 쇼츠 ${structureSeed.shortsScenes}씬` });
+    // 로그는 이 런이 실제로 쓰는 필드만 — cardLines·hashtags·shortsScenes 는 카드·쇼츠 잡이 각자 뽑으므로
+    // 여기 값은 저장만 되고 아무 데서도 읽히지 않는다(알리면 세트가 공유하는 것으로 오해된다).
+    bus.emit('log', { message: `구조 시드 — 도입 ${structureSeed.openers} · 중심명제 ${structureSeed.thesisQuote} · 표 ${structureSeed.table ? 'O' : 'X'}/체크리스트 ${structureSeed.checklist ? 'O' : 'X'}/예고 ${structureSeed.teaser ? 'O' : 'X'}` });
   }
   const structure = structureSeed ? structureBlock(structureSeed) : '';
-  const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, microModel: assign.micro, factCard: factCard || undefined, structure, signal });
+  const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, microModel: assign.micro, factCard: factCard || undefined, structure, teaser: structureSeed?.teaser, signal });
   const finalDeliverable = body || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
   return packageDesignFinalize({
@@ -1015,7 +1032,7 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
     console.log(`[사실게이트] ${factCardMsg}`);
     bus.emit('log', { message: factCardMsg });
   }
-  // 구조 시드(2026-08-27 권고 4) — 원 런 시드를 승계해 개정이 골격을 바꾸지 않게 한다(없으면 새로 뽑는다).
+  // 구조 시드(2026-08-27 권고 4) — 원 런 시드를 승계해 개정이 골격을 바꾸지 않게 한다.
   // 이 런에도 남겨 연쇄 리비전이 같은 골격을 물려받는다(브리프·사실 카드와 같은 패턴).
   // 승계 전용 — 물려받을 시드가 없으면(이 기능 이전 조각) 골격을 새로 뽑지 않고 '있는 그대로 유지' 블록을 쓴다.
   const structureSeed = inheritStructureSeed(bus.runId, revise.baseRunId);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { REVISE_NO_NEW_FACTS, buildReviseContext, BLOG_BODY_GUIDE } from './org';
+import { REVISE_NO_NEW_FACTS, buildReviseContext, BLOG_BODY_GUIDE, buildGenreGuide } from './org';
 import { FACT_CARD_HEADER } from '../content/factGate';
 
 describe('리비전 컨텍스트(스펙 §3) — 브리프·목소리 지침이 개정에도 들어간다', () => {
@@ -44,4 +44,33 @@ it('리비전 컨텍스트에 [이번 글 구조] 블록이 들어간다(같은 
   const ctx = buildReviseContext({ brief: 'B', voiceGuide: 'V', baseBody: '초안', feedback: 'F', structure: '[이번 글 구조] 골격' });
   expect(ctx).toContain('[이번 글 구조] 골격');
   expect(ctx.indexOf('[이번 글 구조] 골격')).toBeLessThan(ctx.indexOf('[기존 초안]'));
+});
+
+// Fix round(finding 3) — 도입 자리 고정 문구('독자의 상황·질문으로 바로 시작한다')는 시드 openers 4값 중
+// 3값(주장·대비·장면)과 경쟁하는 상시 처방이었다. 인사·예고형 도입 금지 자체는 남기고 꼬리만 위임한다.
+it('BLOG_BODY_GUIDE — 도입 유형도 [이번 글 구조] 에 위임한다', () => {
+  expect(BLOG_BODY_GUIDE).toContain('도입 유형은 아래 [이번 글 구조] 를 따른다');
+  expect(BLOG_BODY_GUIDE).not.toContain('독자의 상황·질문으로 바로 시작한다');
+  expect(BLOG_BODY_GUIDE).toContain('①인사·예고형 도입');
+});
+
+// Fix round(finding 1) — 시드의 예고가 켜지면(뽑기의 2/3) genreGuide 의 '예고로 닫지 마라'와
+// structureBlock 의 '맨 끝에 다음 편 한 줄'이 같은 프롬프트 안에서 정면 충돌한다. 켜진 런에서만 뺀다.
+describe('buildGenreGuide — 장르 축 지침 × 구조 시드 예고', () => {
+  const axes = ['고르기·구매', '심은 뒤 첫 계절 관리'];
+  it('예고가 꺼진 런(기본)에는 "예고로 닫지 마라"가 붙는다', () => {
+    expect(buildGenreGuide(axes)).toContain('예고로 닫지 마라');
+    expect(buildGenreGuide(axes, false)).toContain('예고로 닫지 마라');
+  });
+  it('예고가 켜진 런에서는 그 문장만 빠지고 나머지 축 지침은 그대로다', () => {
+    const g = buildGenreGuide(axes, true);
+    expect(g).not.toContain('예고로 닫지 마라');
+    expect(g).toContain('[글의 성격]');
+    expect(g).toContain('1) 고르기·구매');
+    expect(g).toContain('행동을 최소 하나 제시하라');
+  });
+  it('genreAxes 미설정 브랜드는 예고 여부와 무관하게 빈 문자열', () => {
+    expect(buildGenreGuide([], true)).toBe('');
+    expect(buildGenreGuide([], false)).toBe('');
+  });
 });

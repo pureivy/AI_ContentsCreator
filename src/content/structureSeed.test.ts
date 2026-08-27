@@ -181,7 +181,9 @@ describe('resolveStructureSeed / inheritStructureSeed — sessions/<runId>/struc
     expect(inheritStructureSeed('run-F-rev')).toBeNull();
   });
 
-  it('off 면 원 런이 다양화 시드를 남겼어도 고정 시드를 쓴다', () => {
+  // Fix round(finding 2) — 킬스위치는 시드를 '뽑는' 동작만 지배한다. 기록된 시드를 고정 시드로 갈아치우면
+  // 다양화 시드로 쓰인 초안의 리비전이 "표·프레임을 유지하라"는 지시를 받아 없던 구조를 새로 만든다.
+  it('off 여도 기록된 시드를 그대로 승계한다(고정 시드로 갈아치우지 않는다)', () => {
     fs.mkdirSync(path.join(tmpDir, 'run-D'), { recursive: true });
     const varied: StructureSeed = {
       thesisQuote: 'none', table: false, checklist: true, teaser: true,
@@ -189,7 +191,16 @@ describe('resolveStructureSeed / inheritStructureSeed — sessions/<runId>/struc
     };
     fs.writeFileSync(path.join(tmpDir, 'run-D', 'structure.json'), JSON.stringify(varied), 'utf-8');
     cfg.structureVariety = false;
-    expect(inheritStructureSeed('run-D-rev', 'run-D')).toEqual(FIXED_STRUCTURE_SEED);
+    expect(inheritStructureSeed('run-D-rev', 'run-D')).toEqual(varied);
+    // 연쇄 리비전도 같은 골격을 물려받는다 — off 경로의 종전 구현은 이 파일을 아예 남기지 않았다.
+    const chained = JSON.parse(fs.readFileSync(path.join(tmpDir, 'run-D-rev', 'structure.json'), 'utf-8')) as StructureSeed;
+    expect(chained).toEqual(varied);
+  });
+
+  it('off 이고 물려받을 기록도 없으면 null(호출부가 유지 블록을 쓴다)', () => {
+    cfg.structureVariety = false;
+    expect(inheritStructureSeed('run-G-rev', 'run-없음')).toBeNull();
+    expect(fs.existsSync(path.join(tmpDir, 'run-G-rev', 'structure.json'))).toBe(false);
   });
 
   it('손상된 structure.json 은 승계하지 않는다(null)', () => {
