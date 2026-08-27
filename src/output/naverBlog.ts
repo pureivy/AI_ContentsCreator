@@ -10,6 +10,7 @@ import { scoreSeo } from './seo';
 import { renderMarkdown, renderHtml, stripEmoji } from './render';
 import { registerFormatter } from './formatter';
 import { brandContext, getBrand, lexiconGuide } from '../content/brand';
+import { metaSummaryIssues } from '../content/styleLint';
 import { seasonalContext } from '../util/solarTerms';
 import type { AssetBundle, BlogDraft, FormatterInput } from './formatter';
 
@@ -22,6 +23,7 @@ const PACK_SYSTEM =
   // 제목 병기는 검색결과에서 "지금 안 하면 늦는다" 시의성 훅(CTR)이 된다. 키워드 대체 금지·선택 적용.
   '  [오늘·절기]가 주어지고 주제가 현재·다가오는 절기와 시기적으로 맞물리면, 제목 후보 1~2개에 절기명을 자연스럽게 병기하라(예: "…, 처서 전에 끝내야 하는 이유"). 핵심 키워드 표기를 절기로 대체하지 말고, 시기가 안 맞으면 넣지 마라.\n' +
   '- meta: 100~200자 요약(검색 스니펫용). 핵심 키워드 포함, 글의 이득을 한 문장으로.\n' +
+  '  메타 요약투 금지 — "정리했습니다/담았어요/알아봅니다/알아보세요/살펴봅니다/소개합니다" 로 끝내지 말고 "결론 한 줄 + 조건 한 줄" 꼴로 써라(예: "잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요.").\n' +
   '- tags: 5~10개(핵심·연관 키워드, # 없이). 띄어쓰기 없이 붙여쓴다("카페창업" O, "카페 창업" X). 본문과 무관한 태그 금지.\n' +
   '- images: 본문 흐름에 맞는 이미지 3개 슬롯. alt(대체텍스트)와 prompt(이미지 생성 프롬프트, 한국어).\n' +
   '이모지·이모티콘·장식 특수문자는 제목·메타·태그 어디에도 쓰지 마라. 본문에 없는 사실을 지어내지 마라.';
@@ -60,13 +62,14 @@ export async function packageNaverBlog(input: FormatterInput): Promise<AssetBund
   const pinnedKeyword = stripEmoji(asString(input.keyword).trim());
   // 이모지 결정적 제거 — 지침(작가·편집자 프롬프트)이 1차 방어, 여기가 최종 보증(발행 초안엔 이모지 0).
   const body = stripInternalMarkers(stripTrailingTagDump(stripEmoji(input.body)));
-  let meta: {
+  type PackMeta = {
     primaryKeyword?: string; titles?: unknown; meta?: string; tags?: unknown;
     images?: Array<{ alt?: string; prompt?: string }>;
-  } | null = null;
-  try {
-    meta = await microJSON(
-      model, PACK_SYSTEM,
+  };
+  // 지연 조립 — meta 요약투 재시도(권고 2)는 같은 프롬프트에 피드백만 덧붙여 다시 부른다. 함수로 두는 이유는
+  // 조립부(seasonalContext·brandContext·getBrand·lexiconGuide)가 던져도 호출부 try 안에서 터지게 하기 위해서다:
+  // 문 수준에서 조립하면 종전에 fail-open(meta=null 폴백)이던 실패가 포장 전체를 죽인다.
+  const packUser = () =>
       `[주제] ${topic}\n\n[오늘·절기] ${seasonalContext()}\n\n[본문]\n${body.slice(0, 6000)}\n` +
       // SEO 포장도 microJSON 직행 — 브랜드 설정 시 태그·메타에 브랜드 연관 키워드가 자연스럽게 실리게.
       (brandContext() ? `\n${brandContext()}\n` : '') +
@@ -74,17 +77,36 @@ export async function packageNaverBlog(input: FormatterInput): Promise<AssetBund
       (pinnedKeyword ? `\n[핵심 키워드(고정)] ${pinnedKeyword} — primaryKeyword 는 정확히 이 값으로 쓰고, titles 5개 중 4개 이상과 meta 에 이 표기를 그대로 포함하라.\n` : '') +
       (serpText ? `\n[네이버 상위 노출 제목(실측)]\n${serpText.slice(0, 800)}\n` : '') +
       `${researchBrief ? `\n[리서치·SEO 브리프]\n${researchBrief.slice(0, 1500)}` : ''}\n\n` +
-      `형식: {"primaryKeyword":"...","titles":["...","...","...","...","..."],"meta":"...","tags":["...","..."],"images":[{"alt":"...","prompt":"..."}]}`,
-      { maxOutputTokens: 900, signal },
-    );
-  } catch { /* 포장 실패 시 폴백 아래 */ }
+      `형식: {"primaryKeyword":"...","titles":["...","...","...","...","..."],"meta":"...","tags":["...","..."],"images":[{"alt":"...","prompt":"..."}]}`;
+  const askPack = (feedback: string) => microJSON<PackMeta>(model, PACK_SYSTEM, packUser() + feedback, { maxOutputTokens: 900, signal });
+  let meta: PackMeta | null = null;
+  try { meta = await askPack(''); } catch { /* 포장 실패 시 폴백 아래 */ }
+
+  // 요약투 린트 + 같은 콜 1회 재시도(2026-08-27 권고 2). 검사는 '실제로 실릴' 문자열(이모지 제거·200자 절단
+  // 뒤)에 건다 — 원본 필드를 보면 린트와 발행물이 갈라지고 잔존 로그가 다른 문장을 인용하게 된다.
+  // 재시도가 깨끗할 때 갈아끼우는 것은 meta 뿐이다: 제목 후보·태그는 자기 제약(15~40자·키워드 4/5 포함·
+  // 조어 금지)이 따로 있어 meta 표적 재생성이 통째로 덮으면 통제 못 하는 드리프트가 된다.
+  const metaText = (m: PackMeta | null): string => stripEmoji(asString(m?.meta)).trim().slice(0, 200);
+  let metaDescription = metaText(meta);
+  const metaIssues = metaSummaryIssues(metaDescription);
+  if (metaIssues.length) {
+    try {
+      const retry = await askPack(
+        `\n\n[meta 재작성 — 아래 지적만 고쳐 같은 JSON 스키마로 다시 출력하라(다른 필드는 그대로 둬도 된다)]\n`
+        + metaIssues.map((i) => `- ${i}`).join('\n'),
+      );
+      const fixed = metaText(retry);
+      if (fixed && !metaSummaryIssues(fixed).length) metaDescription = fixed;
+    } catch { /* 재시도 실패 = 1차 meta 유지(fail-open — 포장은 계속 간다) */ }
+    // 잔존은 로그만 — 발행을 막지 않는다(린트 공통 원칙).
+    if (metaSummaryIssues(metaDescription).length) console.log(`[메타] 요약투 잔존 — "${metaDescription.slice(0, 60)}"`);
+  }
 
   // 고정 키워드 우선 — LLM 재추출값은 고정이 없을 때만(과녁 고정: 검사기·리비전 피드백·제목이 같은 표기를 본다).
   const primaryKeyword = pinnedKeyword || stripEmoji(asString(meta?.primaryKeyword).trim() || seedKeyword(topic));
   const titles = (Array.isArray(meta?.titles) ? meta!.titles as unknown[] : [])
     .map((t) => stripEmoji(asString(t)).trim()).filter(Boolean).slice(0, 5);
   const titleCandidates = titles.length ? titles : [topic];
-  const metaDescription = stripEmoji(asString(meta?.meta)).trim().slice(0, 200);
   const tags = (Array.isArray(meta?.tags) ? meta!.tags as unknown[] : [])
     .map((t) => stripEmoji(asString(t)).replace(/^#/, '').trim()).filter(Boolean).slice(0, 10);
   const imageSlots = (meta?.images ?? [])

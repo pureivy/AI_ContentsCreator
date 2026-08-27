@@ -93,3 +93,17 @@ export function cardStyleIssues(slides: Array<{ headline?: string; body?: string
   }
   return issues.slice(0, 4);
 }
+
+/**
+ * 요약·설명 메타투 린트(순수, 2026-08-27 말투 감사 권고 2) — 블로그 meta(검색 스니펫)와 쇼츠
+ * description(유튜브 설명 = 인스타 캡션에 복제)이 "…를 정리했습니다"·"…에 대해 알아봅니다" 로
+ * 끝나 채널 전체가 한 템플릿으로 읽혔다(실측). 요약·설명은 "결론 한 줄 + 조건 한 줄" 꼴이어야 한다.
+ * 프롬프트(brand.ts 어휘 가드·naverBlog PACK_SYSTEM·쇼츠 기획)가 1차 방어, 여기가 결정적 2차 방어다.
+ * 반환 문구는 블로그 meta 재시도 피드백과 쇼츠 수정 라운드(probs) 양쪽에 그대로 실린다 — 형식 하나.
+ */
+const META_SUMMARY_RE = /정리했습니다|정리했어요|담았습니다|담았어요|알아봅니다|알아보세요|살펴봅니다|살펴보세요|소개합니다|소개해요|함께 알아|에 대해 알아/g;
+
+export function metaSummaryIssues(text: string): string[] {
+  const hits = [...new Set((text ?? '').match(META_SUMMARY_RE) ?? [])];
+  return hits.slice(0, 3).map((h) => `설명·요약 메타투 "${h}" — 요약·설명을 그 말로 끝내지 말고 "결론 한 줄 + 조건 한 줄" 꼴로 다시 써라`);
+}

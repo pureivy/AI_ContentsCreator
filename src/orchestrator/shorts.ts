@@ -25,7 +25,7 @@ import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues, parityIssues, parityToInfo } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue, stripUnsourcedStatOverlays } from '../content/timingParity';
 import type { FactGateInfo } from '../content/factGate';
-import { narrationStyleIssues, hookKeywordLeadIssues } from '../content/styleLint';
+import { narrationStyleIssues, hookKeywordLeadIssues, metaSummaryIssues } from '../content/styleLint';
 import { promiseStore } from '../content/promises';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
@@ -596,6 +596,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     'screenText 는 씬당 1줄 15자 이내 키워드 요약(비워도 됨).',
     '씬 kind(선택): 씬1="hook", 마지막 씬="cta". 본문 씬 중 어울리는 곳에만 "stat"(핵심 수치 1개: value 숫자·unit 단위·label 15자)·"list"(items 2~4개, 각 18자)·"quote"(text 40자, source 출처)·"chart"(비교 수치 2~5개가 막대그래프로 자라나는 연출: series 각 {label 8자, value 숫자≥0}, unit 단위, highlight 강조할 막대 인덱스) — 억지 배정 금지, 애매하면 kind 생략. chart 는 내레이션이 수치 비교를 말할 때만.',
     '수치 규칙: stat.value 와 chart.series 의 value 는 원문(블로그 초안)에 있는 수치 또는 대본 구조상 자명한 숫자(단계 수·항목 수)만. 불확실하면 그 kind 를 쓰지 마라. narration 은 수치를 한글로 낭독하되 JSON 값은 아라비아 숫자. chart 씬의 screenText 에는 핵심 수치 비교를 요약하라(렌더 실패 대비).',
+    'description(유튜브 설명 — 인스타 캡션에도 그대로 복제된다)은 요약투로 끝내지 마라 — "정리했습니다/담았어요/알아봅니다/알아보세요/살펴봅니다/소개합니다" 금지. "결론 한 줄 + 조건 한 줄" 꼴로 써라(예: "잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요.").',
     'JSON 형식: {"title":"대표 제목","titles":["정보형","후킹형","질문형"],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|chart|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0}}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}',
   ].filter(Boolean).join('\n');
   type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown }>; description?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
@@ -664,7 +665,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 시기·수치 원문 대조(2026-08-27 권고 1, 결정적) — 활엽수 실사고: 블로그가 "근거 확실치 않다"고 한 시기를
     // 파생 쇼츠가 내레이션·자막·오버레이 세 군데에서 단정했다. TIMING_PARITY=off 면 함수가 빈 배열을 낸다.
     const timing = sourceBody ? timingParityIssues(sourceBody, timingFields(plan)).map(formatTimingIssue) : [];
-    // 소스별 캡 합 최대 15(narrationStyleIssues ≤5 + hookKeywordLeadIssues ≤1 + standalone ≤4 + parity ≤2 + 시기·수치 ≤3) —
+    // 소스별 캡 합 최대 16(narrationStyleIssues ≤5 + hookKeywordLeadIssues ≤1 + standalone ≤4 + parity ≤2 + 시기·수치 ≤3 + 설명 요약투 ≤1) —
     // 이미 소스별로 상한을 뒀으므로 최종 캡을 또 씌우면 뒤 소스(정합)만 밀려나는 desync 가 재발한다. 최종 캡 없음.
     const probs = [
       ...narrationStyleIssues(plan.scenes.map((s) => s.narration)),
@@ -673,6 +674,9 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       ...standalone.slice(0, 4),
       ...parity.slice(0, 2),
       ...timing.slice(0, 3),
+      // 설명 요약투(2026-08-27 권고 2, 결정적) — description 은 유튜브 설명이자 인스타 캡션이다.
+      // 새 콜을 만들지 않고 기존 수정 라운드에 얹는다(= 플랜이 말하는 "1회 재생성").
+      ...metaSummaryIssues(plan.description).slice(0, 1),
     ];
     let planChanged = false;
     if (probs.length) {
@@ -706,6 +710,8 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     }
     // 시기·수치 잔존(권고 1) — 오버레이 제거까지 끝난 최종 대본 기준. LLM 재호출 없음(결정적).
     const timingResidual = sourceBody ? timingParityIssues(sourceBody, timingFields(plan)).map(formatTimingIssue) : [];
+    // 설명 요약투 잔존(권고 2) — 수정 라운드 뒤 최종 description 기준. 로그만(발행 차단 없음).
+    if (metaSummaryIssues(plan.description).length) console.log(`[메타] 요약투 잔존 — "${plan.description.slice(0, 60)}"`);
     // 원문 정합 잔존(스펙 §2-4) — 정합 문제로 수정 라운드가 돌았을 때만 1회 재판정(비용). 표시 전용.
     // 수정본 파싱 실패(planChanged=false) 는 대본이 1차 판정 때와 바이트 동일 — LLM 재호출 없이 1차 parity 를 그대로 잔존으로 재사용한다.
     // 시기·수치만 잔존해도 factGate 를 붙인다(그래야 텔레그램 줄이 나간다) — 단 status 는 정합 판정이 정한다:

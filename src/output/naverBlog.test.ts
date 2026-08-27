@@ -1,5 +1,14 @@
-import { describe, it, expect } from 'vitest';
-import { stripTrailingTagDump, stripInternalMarkers } from './naverBlog';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+// microJSON 만 가짜로 — scoreSeo 가 같은 모듈의 findTemplateNumbers 를 쓰므로 부분 목이어야 한다.
+vi.mock('../orchestrator/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../orchestrator/agent')>()),
+  microJSON: vi.fn(),
+}));
+import { microJSON } from '../orchestrator/agent';
+import { stripTrailingTagDump, stripInternalMarkers, packageNaverBlog } from './naverBlog';
+
+const mocked = microJSON as unknown as ReturnType<typeof vi.fn>;
+beforeEach(() => mocked.mockReset());
 
 // 실측(2026-08-10 사용자 지적): 작가 모델이 가끔 본문 끝에 맨 키워드를 나열한다("포도나무수확시기
 // 포도수확시기 … 비온디트리" — 태그 접두 없음). 발행 레이어의 #태그 칩과 중복이고 본문 키워드
@@ -50,5 +59,55 @@ describe('stripInternalMarkers — URL 없는 [근거:]·데이터 없음 표식
     const out = stripInternalMarkers('발아율은 ⚠️ 데이터 없음: 매우 낮은 수준입니다. 다음 문단도 있습니다.');
     expect(out).toContain('다음 문단도 있습니다.');
     expect(out).not.toContain('데이터 없음');
+  });
+});
+
+// 요약·설명 메타투 재시도(2026-08-27 권고 2) — 검색 스니펫(meta)이 "…를 정리했습니다"로 끝나면
+// 프롬프트가 샌 것이다. 같은 콜을 1회만 다시 부르고, 재시도가 깨끗할 때만 meta 를 갈아끼운다:
+// 제목 후보·태그는 자기 제약(15~40자·키워드 4/5 포함)이 따로 있어 meta 표적 재생성이 덮으면 안 된다.
+describe('packageNaverBlog — meta 요약투 린트 + 1회 재시도(권고 2)', () => {
+  const pack = (meta: string, titles: string[]) => ({
+    primaryKeyword: '가을 묘목', titles, meta, tags: ['가을묘목', '묘목심기'], images: [{ alt: '뿌리', prompt: '뿌리 사진' }],
+  });
+  const input = { topic: '가을 묘목 심는 법', body: '뿌리부터 봅니다. 잎은 나중입니다.', model: 'micro' };
+  const CLEAN = '잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요.';
+
+  it('meta 가 깨끗하면 재시도하지 않는다', async () => {
+    mocked.mockResolvedValueOnce(pack(CLEAN, ['가을 묘목 고르는 기준 한 가지']));
+    const b = await packageNaverBlog(input);
+    expect(mocked).toHaveBeenCalledTimes(1);
+    expect(b.draft.metaDescription).toBe(CLEAN);
+  });
+
+  it('요약투면 1회 재시도하고, 깨끗해진 meta 만 갈아끼운다(제목 후보는 1차 유지)', async () => {
+    mocked
+      .mockResolvedValueOnce(pack('가을 묘목 심는 법을 정리했습니다.', ['1차 제목 후보입니다']))
+      .mockResolvedValueOnce(pack(CLEAN, ['재시도 제목 후보입니다']));
+    const b = await packageNaverBlog(input);
+    expect(mocked).toHaveBeenCalledTimes(2);
+    expect(b.draft.metaDescription).toBe(CLEAN);
+    expect(b.draft.titleCandidates).toEqual(['1차 제목 후보입니다']);
+    expect(String(mocked.mock.calls[1]?.[2])).toContain('결론 한 줄 + 조건 한 줄');
+  });
+
+  it('재시도 후에도 잔존하면 1차 meta 를 유지하고 로그만 남긴다(콜 2회 초과 금지·발행 차단 없음)', async () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    mocked
+      .mockResolvedValueOnce(pack('가을 묘목 심는 법을 정리했습니다.', ['1차 제목 후보입니다']))
+      .mockResolvedValueOnce(pack('묘목 고르는 법을 알아봅니다.', ['재시도 제목 후보입니다']));
+    const b = await packageNaverBlog(input);
+    expect(mocked).toHaveBeenCalledTimes(2);
+    expect(b.draft.metaDescription).toBe('가을 묘목 심는 법을 정리했습니다.');
+    expect(spy.mock.calls.some((c) => String(c[0]).includes('[메타] 요약투 잔존'))).toBe(true);
+    spy.mockRestore();
+  });
+
+  it('재시도 콜이 던져도 1차 결과로 계속 간다(fail-open)', async () => {
+    mocked
+      .mockResolvedValueOnce(pack('핵심만 담았어요.', ['1차 제목 후보입니다']))
+      .mockRejectedValueOnce(new Error('boom'));
+    const b = await packageNaverBlog(input);
+    expect(mocked).toHaveBeenCalledTimes(2);
+    expect(b.draft.metaDescription).toBe('핵심만 담았어요.');
   });
 });
