@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { PieceStore, selectResumablePiece, autoDraftBlockedByFactGate, planAutoNaverDraft } from './pieces';
+import { PieceStore, selectResumablePiece, autoDraftBlockedByFactGate, planAutoNaverDraft, shouldAutoDeriveOnDecision } from './pieces';
 import type { Piece } from './pieces';
 
 let dir = '';
@@ -152,5 +152,20 @@ describe('PieceStore.update — factGate: undefined 로 이전 보류 해제', (
     expect(autoDraftBlockedByFactGate(s.get(p.id)!)).toBe(false);
     // 재시작 후에도 풀린 상태여야 한다(JSON.stringify 가 undefined 키를 떨군다).
     expect(autoDraftBlockedByFactGate(new PieceStore(dir).get(p.id)!)).toBe(false);
+  });
+});
+
+describe('shouldAutoDeriveOnDecision — 자동 임시저장 off 시 세트 파생 시점(블로그 완성 즉시)', () => {
+  it('off: SEO 통과(draft-off)·리비전 소진(revise-exhausted) 이면 즉시 파생', () => {
+    expect(shouldAutoDeriveOnDecision('draft-off', false)).toBe(true);
+    expect(shouldAutoDeriveOnDecision('revise-exhausted', false)).toBe(true);
+  });
+  it('off: 아직 리비전 중·skip 이면 파생하지 않는다', () => {
+    expect(shouldAutoDeriveOnDecision('revise', false)).toBe(false);
+    expect(shouldAutoDeriveOnDecision('skip', false)).toBe(false);
+  });
+  it('on: 어떤 결정에서도 여기선 파생하지 않는다(네이버 저장 성공 훅이 담당)', () => {
+    for (const d of ['draft-off', 'revise-exhausted', 'draft', 'fact-hold', 'revise', 'skip'] as const)
+      expect(shouldAutoDeriveOnDecision(d, true)).toBe(false);
   });
 });

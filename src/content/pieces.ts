@@ -175,6 +175,14 @@ export type AutoDraftDecision =
   /** SEO 미달 + 리비전 여유 있음 → 자동 리비전 런 후보(효과측 게이트는 호출측에서). */
   | 'revise';
 
+/** 자동 임시저장 off 운영에서 카드뉴스·숏폼 세트를 언제 파생하나(2026-08-27 사용자 확정 "블로그 완성 즉시").
+ *  off: SEO 통과(draft-off) 또는 자동 리비전 소진(revise-exhausted) = 자동 파이프라인상 본문 확정 → true.
+ *  on: 기존대로 네이버 저장 성공 훅에서만 파생(여기선 항상 false). 순수 함수 — 효과는 main.ts autoDeriveSet. */
+export function shouldAutoDeriveOnDecision(decision: AutoDraftDecision, autoNaverDraft: boolean): boolean {
+  if (autoNaverDraft) return false;
+  return decision === 'draft-off' || decision === 'revise-exhausted';
+}
+
 export function planAutoNaverDraft(
   p: Pick<Piece, 'factGate'> & Partial<Pick<Piece, 'runId' | 'stage' | 'naverDraftUrl' | 'seoScore' | 'autoRevisions'>>,
   opts: { autoNaverDraft: boolean; seoMin: number },

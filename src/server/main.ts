@@ -56,7 +56,7 @@ import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame } from '../tools/shortsRender';
 import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
-import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft } from '../content/pieces';
+import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft, shouldAutoDeriveOnDecision } from '../content/pieces';
 import { toFactGateInfo } from '../content/factGate';
 import { readFactGate } from '../sessions/digest';
 import { listPersonas } from '../content/personas';
@@ -2020,6 +2020,28 @@ let naverProfileBusy: string | null = null;
 // 임시저장 잡 기동(공용) — 검토 탭 버튼(pieceNaverDraftHandler)과 자동 게이트(maybeAutoNaverDraft)가
 // 같은 가드·프로필 뮤텍스를 공유한다. 잡 등록(set)까지 동기 — await 금지(TOCTOU 차단: 이중 기동 방지).
 type NaverDraftStart = { ok: true } | { error: string; status: 400 | 404 | 409 };
+/** 블로그 본문 확정 → 카드뉴스·숏폼 자동 파생(piece당 각 1회, AUTO_CARDNEWS / AUTO_SHORTS 로 켜고 끔).
+ *  호출 지점: 네이버 임시저장 성공 훅 + 자동 임시저장 off 시 ready 확정(maybeAutoNaverDraft). 가드가 멱등을 보장. */
+function autoDeriveSet(id: string, title: string): void {
+  if (CONFIG.autoCardNews && !cardNewsStore().list().some((x) => x.sourcePieceId === id)) {
+    const dc = deriveCardNewsFromPiece(id);
+    console.log('error' in dc
+      ? `[카드뉴스] 자동 파생 실패 — ${title.slice(0, 25)}: ${dc.error}`
+      : `[카드뉴스] 자동 파생 시작 — ${title.slice(0, 30)} (${dc.card.id})`);
+  }
+  // error 레코드는 점유로 안 본다(2026-08-20 하드 캡 리뷰) — 길이 상한 등으로 실패한 파생이 그 글의
+  // 쇼츠를 영구 결손시키지 않게. 단 같은 글 실패 2회부터는 재파생 중단(계속 실패하는 소재 폭주 방지).
+  if (CONFIG.autoShorts && (() => {
+    const mine = shortsStore().list().filter((x) => x.sourcePieceId === id);
+    return !mine.some((x) => x.stage !== 'error') && mine.filter((x) => x.stage === 'error').length < 2;
+  })()) {
+    const ds = deriveShortsFromPiece(id);
+    console.log('error' in ds
+      ? `[숏폼] 자동 파생 실패 — ${title.slice(0, 25)}: ${ds.error}`
+      : `[숏폼] 자동 파생 시작 — ${title.slice(0, 30)} (${ds.short.id})`);
+  }
+}
+
 function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string } = {}): NaverDraftStart {
   const dryRun = opts.dryRun === true;
   const piece = pieceStore().get(id);
@@ -2060,24 +2082,9 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
       if (!dryRun && pieceStore().get(id)?.runId === runIdAtStart) {
         pieceStore().update(id, { naverDraftUrl: r.draftUrl ?? r.adminUrl, naverDraftTs: job.endedTs });
         // 저장 성공 = 본문 확정 → 카드뉴스·숏폼 자동 파생(사용자 확정 워크플로우: 주제 하나 →
-        // 블로그+카드뉴스+숏폼 세트). piece당 각 1회, AUTO_CARDNEWS / AUTO_SHORTS 로 켜고 끔.
-        if (CONFIG.autoCardNews && !cardNewsStore().list().some((x) => x.sourcePieceId === id)) {
-          const dc = deriveCardNewsFromPiece(id);
-          console.log('error' in dc
-            ? `[카드뉴스] 자동 파생 실패 — ${piece.title.slice(0, 25)}: ${dc.error}`
-            : `[카드뉴스] 자동 파생 시작 — ${piece.title.slice(0, 30)} (${dc.card.id})`);
-        }
-        // error 레코드는 점유로 안 본다(2026-08-20 하드 캡 리뷰) — 길이 상한 등으로 실패한 파생이 그 글의
-        // 쇼츠를 영구 결손시키지 않게. 단 같은 글 실패 2회부터는 재파생 중단(계속 실패하는 소재 폭주 방지).
-        if (CONFIG.autoShorts && (() => {
-          const mine = shortsStore().list().filter((x) => x.sourcePieceId === id);
-          return !mine.some((x) => x.stage !== 'error') && mine.filter((x) => x.stage === 'error').length < 2;
-        })()) {
-          const ds = deriveShortsFromPiece(id);
-          console.log('error' in ds
-            ? `[숏폼] 자동 파생 실패 — ${piece.title.slice(0, 25)}: ${ds.error}`
-            : `[숏폼] 자동 파생 시작 — ${piece.title.slice(0, 30)} (${ds.short.id})`);
-        }
+        // 블로그+카드뉴스+숏폼 세트). 자동 임시저장이 꺼진 운영(2026-08-27)에서는 ready 시점에 이미
+        // 파생됐으므로 여기선 가드에 걸려 no-op — 사람이 버튼으로 저장한 글도 중복 파생되지 않는다.
+        autoDeriveSet(id, piece.title);
       }
     } else {
       job.status = 'failed';
@@ -2182,8 +2189,10 @@ function maybeAutoNaverDraft(pieceId: string): boolean {
   if (decision === 'draft-off') {
     if (!AUTO_DRAFT_OFF_LOGGED.has(pieceId)) {
       AUTO_DRAFT_OFF_LOGGED.add(pieceId);
-      console.log(`[발행담당] ${piece.title.slice(0, 30)} — 자동 임시저장 꺼짐 → 수동 검토 대기(텔레그램·검토 탭 버튼)`);
+      console.log(`[발행담당] ${piece.title.slice(0, 30)} — 자동 임시저장 꺼짐 → 수동 검토 대기(텔레그램·검토 탭 버튼) · 카드뉴스·숏폼은 지금 파생`);
     }
+    // 블로그 완성 즉시 파생(2026-08-27 사용자 확정) — 임시저장 버튼 타이밍에 세트 생산이 묶이지 않게.
+    if (shouldAutoDeriveOnDecision(decision, CONFIG.autoNaverDraft)) autoDeriveSet(pieceId, piece.title);
     return false;
   }
   if (decision === 'fact-hold') {
@@ -2200,6 +2209,8 @@ function maybeAutoNaverDraft(pieceId: string): boolean {
   }
   if (decision === 'revise-exhausted') {
     console.log(`[발행담당] ${piece.title.slice(0, 30)} — SEO ${seo ?? '미측정'}점 < ${CONFIG.naverDraftSeoMin} · 자동 리비전 소진 → 수동 검토 대기`);
+    // 자동 임시저장 off 운영에선 리비전 소진 = 자동 파이프라인상 본문 확정 → 세트 파생(on 운영은 기존대로 사람 저장 뒤).
+    if (shouldAutoDeriveOnDecision(decision, CONFIG.autoNaverDraft)) autoDeriveSet(pieceId, piece.title);
     return false;
   }
   // decision === 'revise' — 여기부터는 효과 있는 게이트(진행 중 런·잡, 본문·체크리스트 유무)만 남는다.
