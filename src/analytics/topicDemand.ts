@@ -17,6 +17,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { activeBrandSlug, brandSeedKeywords, getBrand, offBrandTerm } from '../content/brand';
+import { discoverySeeds } from './discoverySeeds';
+import { readTrendSnap } from './trendSignal';
 import { datalabEnabled, datalabTrend } from '../grounding/naver_datalab';
 import { searchAdEnabled, searchAdVolumes } from '../grounding/naver_searchad';
 
@@ -283,11 +285,23 @@ export function demandSeeds(slug?: string, now = new Date()): string[] {
   // 슬롯 예약 — 브랜드 시드가 상한을 통째로 먹으면 winners 축이 영영 측정되지 않는다
   // (실측 2026-08-26: data/brand.yaml 시드 21개 > 상한 15 → winners 0개 도달).
   const brand = brandSeedKeywords().map((k) => (k || '').trim()).filter(Boolean);
-  const take = Math.min(brand.length, SNAP_MAX_SEEDS - winTop.length);
-  // 전부 못 담을 때만 날짜로 창을 돌린다 — 21개 시드가 ~3일이면 한 바퀴(수요는 그 사이 안 뒤집힌다).
-  // 다 담기는 경우엔 회전이 순서만 흔들어 스냅샷 diff 를 무의미하게 만드므로 고정.
-  const offset = brand.length > take ? dayOfYear(now) % brand.length : 0;
-  const window = Array.from({ length: take }, (_, i) => brand[(offset + i) % brand.length]!);
+  const take = Math.min(brand.length ? Math.max(brand.length, SNAP_MAX_SEEDS) : SNAP_MAX_SEEDS, SNAP_MAX_SEEDS - winTop.length);
+  const window: string[] = [];
+  if (getBrand()?.speciesCatalog?.length) {
+    // 발굴 시드 회전(2026-08-27) — 브랜드 시드 21개 고정 창 대신 카탈로그의 '안 다룬 수종'을 날짜로 돌리고,
+    // 오늘 자동완성 스냅샷에 그 수종의 연관 검색어가 있으면 그 표기(사람이 실제로 치는 구절)를 수요 표에 싣는다.
+    const disc = discoverySeeds(Math.max(1, Math.ceil(take / 2)), now, s || undefined);
+    const trend = (() => { try { return readTrendSnap(s || undefined); } catch { return null; } })();
+    for (const seed of disc) {
+      const rel = (trend?.entries?.[seed] ?? []).slice(0, 2);
+      for (const k of (rel.length ? [seed, ...rel] : [seed])) if (window.length < take) window.push(k);
+    }
+  } else {
+    // 카탈로그 없는 브랜드 — 종전 동작: 전부 못 담을 때만 날짜로 창을 돌린다(21개 시드가 ~3일이면 한 바퀴).
+    const t = Math.min(brand.length, take);
+    const offset = brand.length > t ? dayOfYear(now) % brand.length : 0;
+    for (let i = 0; i < t; i++) window.push(brand[(offset + i) % brand.length]!);
+  }
 
   const out: string[] = [];
   const seen = new Set<string>();

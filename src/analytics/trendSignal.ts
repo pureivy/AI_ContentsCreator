@@ -11,7 +11,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
-import { activeBrandSlug, brandFileSuffixFor, brandSeedKeywords } from '../content/brand';
+import { activeBrandSlug, brandFileSuffixFor } from '../content/brand';
+import { discoverySeeds } from './discoverySeeds';
 import { naverAutocomplete } from '../grounding/naver_autocomplete';
 import { fetchTimeout } from '../util/fetch';
 
@@ -70,7 +71,7 @@ function localDateStr(d = new Date()): string {
 export async function refreshTrendSnapshot(signal?: AbortSignal): Promise<void> {
   try {
     const slug = activeBrandSlug();
-    const seeds = brandSeedKeywords().slice(0, MAX_SEEDS);
+    const seeds = discoverySeeds(MAX_SEEDS);   // 카탈로그 회전(2026-08-27) — 안 다룬 수종부터 자동완성을 긁는다
     if (!seeds.length) return;
     const today = localDateStr();
     const cur = readTrendSnap(slug);
