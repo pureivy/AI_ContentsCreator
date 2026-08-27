@@ -312,9 +312,12 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     const cardTexts = plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / '));
     const probs = await standaloneIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', cardTexts, topic, keyword, io.signal);
     // 원문 정합(스펙 §2-4) — 파생물이 원문에 없는 사실을 새로 지어내거나 원문 결론을 뒤집는지 대조(fail-open).
-    // FACT_GATE=off 면 1차·잔존 판정을 통째로 건너뛴다(킬스위치가 실제로 꺼져야 한다 — 2026-08-26 최종 리뷰 F1):
-    // parity 가 빈 배열이면 아래 잔존 블록(if (parity.length …))도 죽어 plan.factGate 가 아예 안 붙는다.
-    // 대신 정합 지적이 수정 라운드 입력(probs)에서도 빠진다 — off 의 정의 그대로.
+    // FACT_GATE=off 면 LLM 정합 1차·잔존 판정을 통째로 건너뛴다(킬스위치가 실제로 꺼져야 한다 — 2026-08-26 최종 리뷰 F1):
+    // parity 가 빈 배열이면 정합 지적이 수정 라운드 입력(probs)에서도 빠진다 — off 의 정의 그대로.
+    // 단 2026-08-27(권고 1) 이후로 plan.factGate 자체는 FACT_GATE=off 여도 붙을 수 있다 — 아래 잔존 블록이
+    // (parity.length || timingResidual.length) 라, **자기 킬스위치(TIMING_PARITY)** 로 사는 시기·수치만
+    // 잔존해도 열린다. 그때 status 는 parityToInfo([]) 의 'pass' 라 보류(hold)가 생기지 않는다(표시 전용).
+    // 둘 다 끄려면 FACT_GATE=off + TIMING_PARITY=off.
     const parity = CONFIG.factGate && sourceBody ? await parityIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', cardTexts, sourceBody, io.signal) : [];
     probs.push(...parity);
     // 시기·수치 원문 대조(2026-08-27 권고 1, 결정적·비차단) — 같은 소재를 3채널이 서로 다른 시기로 말하던
@@ -356,7 +359,9 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
           ? parityToInfo(await parityIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / ')), sourceBody, io.signal))
           : parityToInfo(parity))
         : parityToInfo([]);
-      const factGate = timingResidual.length ? { ...base, timing: timingResidual.slice(0, 5) } : base;
+      // timing 은 자르지 않고 통째로 싣는다 — 텔레그램 머리줄 N 은 잔존 '건수'라, 여기서 5건으로 자르면
+      // 8건이 "5건"으로 나간다(Fix round 1). 예시 줄 캡(2줄)은 factGateLines 가 표시 시점에 씌운다.
+      const factGate = timingResidual.length ? { ...base, timing: timingResidual } : base;
       plan = { ...plan, factGate };
       if (factGate.status === 'hold') { const m2 = `원문 정합 잔존 ${factGate.unsupported.length}건 — 검토 메시지에 표시`; console.log(`[카드뉴스] ${m2}`); io.bus?.emit('log', { message: m2 }); }
       if (timingResidual.length) { const m4 = `시기·수치 원문 불일치 잔존 ${timingResidual.length}건 — 검토 메시지에 표시`; console.log(`[카드뉴스] ${m4}`); io.bus?.emit('log', { message: m4 }); }

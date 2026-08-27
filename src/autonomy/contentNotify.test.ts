@@ -138,6 +138,11 @@ describe('factGateLines — 텔레그램 보류 표시(스펙 §2-3)', () => {
     expect(err).toContain('⚠ 원문과 다른 시기·수치 1건');
     // timing 이 없으면 기존 동작 그대로(빈 문자열).
     expect(factGateLines({ status: 'pass', unsupported: [], contradicted: [], timing: [], checkedTs: 't' }, 2)).toBe('');
+    // N 은 잔존 '건수'다(예시 캡이 아니다) — 오케스트레이터가 timing 을 5건으로 잘라 8건이 "5건"으로 나가던
+    // 결함의 계약면(Fix round 1). 자르기는 표시 시점에만 일어난다.
+    const many = factGateLines({ status: 'pass', unsupported: [], contradicted: [], timing: Array.from({ length: 8 }, (_, i) => `t${i}`), checkedTs: 't' }, 2, '원문 정합', false);
+    expect(many.split('\n')[0]).toBe('⚠ 원문과 다른 시기·수치 8건');
+    expect(many.split('\n')).toHaveLength(3); // 머리줄 + 예시 2줄
   });
   it('쇼츠 캡션에 시기·수치 줄이 실린다', () => {
     const s = shortsCaptionHtml({ id: 's1', topic: 'T', factGate: { status: 'pass', unsupported: [], contradicted: [], timing: ['씬2: "8월"'], checkedTs: 't' } });
