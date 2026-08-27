@@ -261,8 +261,16 @@ describe('screenTextLabelIssues — 자막에 붙은 대본용 딱지', () => {
     expect(issues[0]).toContain('도장지 정의');
   });
 
-  it('독자에게 하는 말은 통과한다(원예 상용어 과차단 금지)', () => {
-    expect(screenTextLabelIssues(['잎 끝부터 보세요', '물은 한 번에 충분히', '전정은 잎 진 뒤에'])).toEqual([]);
+  it('서술형 주장·원예 행위어는 통과한다(명사구 한정 — 실데이터 오탐 근거)', () => {
+    // 'X가 핵심'은 목차 딱지가 아니라 독자에게 하는 말이고, '가지 정리'는 전정을 뜻하는 원예 상용어다.
+    // 실데이터(plan.json screenText 808건) 적중 13건 중 7건이 이 두 부류였다 — 과차단 금지 원칙.
+    expect(screenTextLabelIssues(['물주기 간격이 핵심', '속가지 정리', '전정은 잎 진 뒤에'])).toEqual([]);
+    expect(screenTextLabelIssues(['통풍과 배수가 핵심', '끝 콩알 정리', '물빼기가 핵심'])).toEqual([]);
+  });
+
+  it('명사구 딱지는 그대로 잡는다(가드가 라벨 검출 자체를 무력화하지 않는다)', () => {
+    // 같은 실데이터에서 남아야 하는 적중들.
+    expect(screenTextLabelIssues(['첫해 관리 핵심', '대처법 정리', '감나무 깍지벌레 정의'])).toHaveLength(3);
   });
 
   it('빈 자막은 무시한다', () => {
@@ -294,5 +302,12 @@ describe('monthWordOutsideNarration — 고유어 월은 내레이션에만', ()
 
   it("'정월'은 월 이름으로 취급하지 않는다", () => {
     expect(monthWordOutsideNarration('정월 대보름')).toBe('정월 대보름');
+  });
+
+  it("공백 경계의 '이월 <명사>'는 치환된다 — 계획서가 지정한 뒤 경계에 \\s 가 있어서다(현재 동작 고정)", () => {
+    // 이월(carry-over)이 2월로 바뀌는 알려진 경계 사례. 경계 규칙은 계획서 확정 사항이라 그대로 두고,
+    // 대신 '의도된 동작'으로 못박는다(뒤집으려면 계획서의 경계 목록부터 고쳐야 한다).
+    expect(monthWordOutsideNarration('이월 재고')).toBe('2월 재고');
+    expect(monthWordOutsideNarration('이월 묘목')).toBe('2월 묘목');
   });
 });

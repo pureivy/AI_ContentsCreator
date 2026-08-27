@@ -405,7 +405,8 @@ export function recentPhrasesToAvoid(
 /**
  * 마무리 문단 첫 문장 추출(순수, 2026-08-27 말투 감사 권고 5) — 최근 글의 '닫는 문형'을 작가에게 보여 주는
  * 로테이션 지시의 원자료. 마크다운 껍데기(소제목·표·코드·인용/목록 마커·구분선·이미지 마커)를 벗기고
- * 남은 **마지막 문단**의 첫 문장을 뽑는다. styleSignatureOf 의 closing 은 '마무리 소제목'이라 다른 축이다
+ * 남은 **마지막 문단**의 첫 문장을 뽑는다(꼬리가 해시태그·키워드 나열 줄이면 건너뛴다 — 2026-08-27 리뷰
+ * 실측: bodyMarkdown 자체가 태그 줄로 끝나는 초안이 90건 중 2건). styleSignatureOf 의 closing 은 '마무리 소제목'이라 다른 축이다
  * (소제목만 바꾸고 같은 문형으로 닫는 글을 못 잡았다 — 그래서 문장 층위를 따로 본다).
  */
 export function endingSentenceOf(body: string): string {
@@ -417,9 +418,15 @@ export function endingSentenceOf(body: string): string {
     .replace(/^\s*-{3,}\s*$/gm, '\n')        // 구분선
     .replace(/^\s*>+\s*/gm, '')              // 인용 마커
     .replace(/^\s*(?:[-*]\s+|\d+\.\s+)/gm, '') // 목록 마커
+    .replace(/^\s*(?:#\S+\s*)+$/gm, '\n')      // 해시태그 전용 줄 — '#' 뒤 공백이 없어 소제목 스트립에 안 걸린다(실측)
     .replace(/[*_`]/g, '');
   const paras = cleaned.split(/\n\s*\n/).map((p) => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
-  const last = paras[paras.length - 1] ?? '';
+  // 꼬리 키워드 나열 방어(실측 2/90건) — 마지막 '문단'이 문장 종결부호도 한글 종결어미도 없이 끝나면
+  // 그것은 문장이 아니라 태그·키워드 줄이다("포도나무수확시기 포도수확시기 …"). 한 칸 앞 문단을 쓴다.
+  const endsAsSentence = (p: string): boolean => /[.!?…]$/.test(p) || /(?:다|요|죠|까|세요|니다)$/.test(p);
+  let i = paras.length - 1;
+  if (i > 0 && !endsAsSentence(paras[i] ?? '')) i -= 1;
+  const last = paras[i] ?? '';
   return (last.split(/(?<=[.!?…])\s/)[0] ?? last).slice(0, 60);
 }
 

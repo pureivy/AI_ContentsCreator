@@ -204,14 +204,24 @@ export function styleRevisionReject(original: string, revised: string): '빈 응
  * 대본 구조 라벨("정의"·"구분법"·"요약"·"정리"·"핵심")이 그대로 화면에 올라간 실측이 있었다. 목차 딱지가
  * 붙으면 영상이 강의 슬라이드처럼 읽힌다. 그 라벨로 **끝나는** 명사구만 잡는다 — "정리한 뒤 심으세요"
  * 처럼 서술어로 이어지는 자막은 정상이라 통과한다(원예 상용어 과차단 금지 원칙).
- * 비차단: 결과는 쇼츠 수정 라운드(probs)의 입력일 뿐 발행을 막지 않는다.
+ * 명사구 가드 2겹(실데이터 808건 실측, 2026-08-27 리뷰) — 접미 정규식만으로는 적중의 과반이 오탐이었다:
+ *   (a) 주격·주제격 조사 뒤의 라벨은 서술형 주장이다("물주기 간격**이** 핵심" = 독자에게 하는 말, 목차 딱지 아님).
+ *   (b) "가지/눈/순/잎/열매/알/뿌리 + 정리"는 전정·눈따기를 뜻하는 원예 상용어다("속가지 정리").
+ * 비차단: 결과는 쇼츠 수정 라운드(probs)의 입력일 뿐 발행을 막지 않는다. 단 오탐 1건이면 멀쩡한 플랜이
+ * 재생성 라운드를 한 번 더 돌므로(비용·변형 위험) 가드를 앞에 둔다.
  */
 const SCREEN_LABEL_RE = /(정의|구분법|구별법|요약|정리|핵심)$/;
+/** (a) 서술형 주장 — 조사 뒤 라벨. */
+const SCREEN_LABEL_PREDICATIVE_RE = /(?:이|가|은|는|도)\s+(?:정의|구분법|구별법|요약|정리|핵심)$/;
+/** (b) 원예 행위어 — 'X 정리'(가지 정리=전정). */
+const SCREEN_LABEL_HORTI_RE = /(?:가지|순|잎|열매|알|눈|뿌리)\s*정리$/;
 
 export function screenTextLabelIssues(screenTexts: string[]): string[] {
   const issues: string[] = [];
   screenTexts.forEach((t, i) => {
     const s = String(t ?? '').trim().replace(/[.!?…:·,]+$/, '');
+    if (SCREEN_LABEL_PREDICATIVE_RE.test(s)) return;
+    if (SCREEN_LABEL_HORTI_RE.test(s)) return;
     if (!s || !SCREEN_LABEL_RE.test(s)) return;
     issues.push(`항목${i + 1}: 자막 "${s}" 는 대본용 딱지다 — 화면에는 독자에게 하는 말만 써라(예: "잎 끝부터 봅니다")`);
   });

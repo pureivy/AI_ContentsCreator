@@ -400,7 +400,7 @@ function recentHooksToAvoid(brand: string | undefined, excludeId: string, limit 
   try {
     const store = shortsStore();
     const rows: string[] = [];
-    for (const e of [...store.list()].reverse()) {   // 최신부터
+    for (const e of store.list()) {   // 최신부터 — shortsStore.list() 가 이미 createdTs 내림차순이다(뒤집지 않는다)
       if (e.id === excludeId || (e.brand ?? undefined) !== (brand ?? undefined)) continue;
       try {
         const p = JSON.parse(fs.readFileSync(path.join(store.dirFor(e.id), 'plan.json'), 'utf-8')) as
@@ -658,6 +658,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   // 고유어 월은 내레이션(TTS) 전용 — 화면·검색 필드는 숫자 월로 되돌린다(권고 5, 결정적).
   // 단 키워드 정확 표기가 깨지는 경우는 원문을 유지한다: 키워드 규칙(사용자 확정 자산)이 우선이다.
   const numMonth = (t: string): string => {
+    if (!CONFIG.voiceRotation) return t; // 이 태스크(권고 5)의 되돌림 레버 하나로 묶는다 — .env.example 참조
     const out = monthWordOutsideNarration(t);
     return keyword && t.includes(keyword) && !out.includes(keyword) ? t : out;
   };
@@ -739,7 +740,8 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       ...metaSummaryIssues(plan.description).slice(0, 1),
       // 자막 대본 딱지(2026-08-27 권고 5, 결정적) — screenText 가 "정의/구분법/요약" 같은 목차 라벨로 끝나면
       // 화면이 강의 슬라이드처럼 읽힌다. 프롬프트 지시(압축 안전선)의 2차 방어, 비차단.
-      ...screenTextLabelIssues(plan.scenes.map((s) => s.screenText ?? '')).slice(0, 2),
+      // VOICE_ROTATION 게이트 — 이 태스크가 넣은 동작은 스위치 하나로 전부 되돌아간다.
+      ...(CONFIG.voiceRotation ? screenTextLabelIssues(plan.scenes.map((s) => s.screenText ?? '')).slice(0, 2) : []),
     ];
     let planChanged = false;
     if (probs.length) {

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL } from './shorts';
+import { ShortsStore } from '../content/shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
 
@@ -184,5 +188,23 @@ describe('pickTitleTypes — 런별 제목 유형 선택·질문형 상한', () 
 
   it('키워드가 있는 런은 정보형을 반드시 포함한다(키워드 정확 표기 규칙 유지)', () => {
     for (let i = 0; i < 100; i++) expect(pickTitleTypes([], { keywordFirst: true })).toContain('정보형');
+  });
+});
+
+// 이 파일의 리더들(recentHooksToAvoid·recentShortsTitles)이 기대는 스토어 계약 — 방향이 뒤집히면
+// '최근 5편' 주입이 조용히 '가장 오래된 5편'이 된다(2026-08-27 실측 결함, 회귀 방지).
+describe('ShortsStore.list() — createdTs 내림차순(최신순) 고정', () => {
+  it('최신 항목을 먼저 돌려준다 — 리더는 .reverse() 하면 안 된다', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shorts-store-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'index.json'), JSON.stringify([
+        { id: 'old', topic: '옛 편', stage: 'ready', createdTs: '2026-07-13T00:00:00.000Z', updatedTs: '2026-07-13T00:00:00.000Z' },
+        { id: 'mid', topic: '중간 편', stage: 'ready', createdTs: '2026-08-01T00:00:00.000Z', updatedTs: '2026-08-01T00:00:00.000Z' },
+        { id: 'new', topic: '최신 편', stage: 'ready', createdTs: '2026-08-26T00:00:00.000Z', updatedTs: '2026-08-26T00:00:00.000Z' },
+      ]), 'utf-8');
+      expect(new ShortsStore(dir).list().map((e) => e.id)).toEqual(['new', 'mid', 'old']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
