@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickDiscoverySeeds } from './discoverySeeds';
+import { pickDiscoverySeeds, looksLikeGardenQuery } from './discoverySeeds';
 
 const CAT = [
   { group: '유실수', species: [{ name: '사과나무' }, { name: '배나무' }, { name: '매실나무' }, { name: '대추나무' }] },
@@ -28,5 +28,12 @@ describe('pickDiscoverySeeds — 안 다룬 수종 회전 + 브랜드 시드 소
   });
   it('카탈로그 없으면 브랜드 시드 그대로(종전 동작)', () => {
     expect(pickDiscoverySeeds({ catalog: undefined, coverage: new Map(), brandSeeds: BRAND, max: 8 })).toEqual(BRAND);
+  });
+});
+
+describe('looksLikeGardenQuery — 자동완성 잡음 제거', () => {
+  it('원예 의도어가 있으면 통과, 노래·상호·의원은 제외', () => {
+    for (const q of ['매실나무 묘목', '체리나무키우기', '대추나무 가지치기 시기', '호두나무 심는 간격']) expect(looksLikeGardenQuery(q)).toBe(true);
+    for (const q of ['대추나무 사랑걸렸네', '대추나무집', '대추나무한의원', '체리나무 원목']) expect(looksLikeGardenQuery(q)).toBe(false);
   });
 });

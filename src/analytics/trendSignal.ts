@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { activeBrandSlug, brandFileSuffixFor } from '../content/brand';
-import { discoverySeeds } from './discoverySeeds';
+import { discoverySeeds, looksLikeGardenQuery } from './discoverySeeds';
 import { naverAutocomplete } from '../grounding/naver_autocomplete';
 import { fetchTimeout } from '../util/fetch';
 
@@ -81,7 +81,8 @@ export async function refreshTrendSnapshot(signal?: AbortSignal): Promise<void> 
     for (const kw of seeds) {
       try {
         const rel = await naverAutocomplete(kw, signal);
-        if (rel.length) entries[kw] = rel.slice(0, MAX_SUGGESTIONS);
+        const relOk = rel.filter(looksLikeGardenQuery);   // 노래·상호·의원 류 자동완성 잡음 제거(2026-08-27)
+        if (relOk.length) entries[kw] = relOk.slice(0, MAX_SUGGESTIONS);
       } catch { /* 키워드별 fail-open */ }
       try {
         const yt = await ytAutocomplete(kw, signal);
