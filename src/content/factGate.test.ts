@@ -114,6 +114,14 @@ describe('gateVerdict — 판정 집계', () => {
  * 일반 상식 문장의 무근거(soft)는 참고(unverified)로 통과시킨다. FACT_GATE_STRICT=1 이면 예전 동작으로 복귀.
  */
 describe('isHardClaim / gateVerdict — hard(보류) · soft(참고) 분리', () => {
+  it('한글 수사 오인 — 이번·일주일·백도·천도·팔도·사회 는 수치가 아니다(일반 상식 → soft)', () => {
+    for (const text of ['이번 가을에는 낙엽을 걷어냅니다.', '일주일 정도 지켜봅니다.', '백도 품종은 늦게 익습니다.', '천도복숭아는 털이 없습니다.', '팔도 어디서나 자랍니다.'])
+      expect(isHardClaim({ text, kind: 'general' })).toBe(false);
+  });
+  it('한글 수사+단위 — 삼일·오회·천원 은 수치 주장(hard)', () => {
+    for (const text of ['삼일 만에 마릅니다.', '오회 나눠 줍니다.', '천원 차이입니다.'])
+      expect(isHardClaim({ text, kind: 'general' })).toBe(true);
+  });
   const u = (text: string, kind: FactClaim['kind']): FactClaim => ({ text, kind, status: 'unsupported' });
 
   it('hard kind 집합 — 수치·시기·약제·법령·가격·통계·경험(수종·병해충·일반은 soft)', () => {
@@ -194,7 +202,7 @@ describe('factGateBlog — hard/soft 결과 조립', () => {
         { text: '뿌리가 3배 넘게 뻗습니다.', kind: 'general' },
       ] })
       .mockResolvedValueOnce({ verdicts: [{ index: 1, status: 'unsupported' }, { index: 2, status: 'unsupported' }] });
-    const r = await factGateBlog({ model: 'm', body: 'x', evidence: 'e' });
+    const r = await factGateBlog({ model: 'm', body: 'x', evidence: 'e', strict: false });
     expect(r.status).toBe('hold');
     expect(r.unsupported).toEqual(['뿌리가 3배 넘게 뻗습니다.']);
     expect(r.unverified).toEqual(['낙엽이 지고 나면 나무는 쉬는 철로 들어갑니다.']);
@@ -204,7 +212,7 @@ describe('factGateBlog — hard/soft 결과 조립', () => {
     mocked
       .mockResolvedValueOnce({ claims: [{ text: '낙엽이 지고 나면 나무는 쉬는 철로 들어갑니다.', kind: 'general' }] })
       .mockResolvedValueOnce({ verdicts: [{ index: 1, status: 'unsupported' }] });
-    const gate = vi.fn(async () => factGateBlog({ model: 'm', body: 'x', evidence: 'e' }));
+    const gate = vi.fn(async () => factGateBlog({ model: 'm', body: 'x', evidence: 'e', strict: false }));
     const targeted = vi.fn();
     const repair = vi.fn();
     const r = await runFactGateWithRepair({ gate, repair, targeted }, '## 소제목\n본문');

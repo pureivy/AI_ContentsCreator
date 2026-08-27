@@ -171,8 +171,12 @@ export function isHardClaim(c: { text: string; kind: ClaimKind }): boolean {
   return HARD_CLAIM_KINDS.has(c.kind)
     || HARD_FACT_RE.test(c.text)
     || /\d/.test(c.text)
-    || /(?:[일이삼사오육칠팔구십백천]+\s*(?:배|회|번|일|주|개월|년|도|cm|m|kg|g|ml|리터|원|%))/.test(c.text);
+    || KO_NUM_UNIT_RE.test(c.text.replace(KO_NUM_FALSE_POS_RE, ''));
 }
+
+/** 한글 수사+단위(삼일·오회·천원). 일상어·품종명 오인(이번=이+번, 일주일=일+주, 백도·천도·팔도=~+도, 사회=사+회)은 먼저 지운다(2026-08-27 리뷰). */
+const KO_NUM_UNIT_RE = /(?<![가-힣])[일이삼사오육칠팔구십백천]+\s*(?:배|회|번|일|주|개월|년|도|cm|m|kg|g|ml|리터|원|%)/;
+const KO_NUM_FALSE_POS_RE = /이번|일주일|백도|천도|팔도|사회/g;
 
 /**
  * 판정 집계 — 무근거(unsupported) 주장을 hard(보류)와 soft(참고)로 가른다(2026-08-27 사용자 지시 ①).
@@ -303,7 +307,7 @@ export async function judgeClaims(
 }
 
 /** 블로그 본문 사실 게이트 종단 — 추출→판정→집계. LLM 무응답이면 fail-closed(error)로 자동 경로를 막는다. */
-export async function factGateBlog(a: { model: string; body: string; evidence: string; signal?: AbortSignal; maxClaims?: number }): Promise<FactGateResult> {
+export async function factGateBlog(a: { model: string; body: string; evidence: string; signal?: AbortSignal; maxClaims?: number; strict?: boolean }): Promise<FactGateResult> {
   const checkedTs = new Date().toISOString();
   const base = { claims: [] as FactClaim[], unsupported: [] as string[], contradicted: [] as string[], unverified: [] as string[], repaired: false, checkedTs };
   const must = numericClaimSentences(a.body, Math.min(15, a.maxClaims ?? 20));
@@ -331,7 +335,7 @@ export async function factGateBlog(a: { model: string; body: string; evidence: s
   };
   // 유보문(hedged)은 판정기가 contradicted 로 판정했을 때만 유지하고, 그 외엔 hedged_general 로 코드가 확정한다.
   const fixed = judged.map((c, i) => (toJudge[i]!.hedged && c.status !== 'contradicted') ? { ...c, status: 'hedged_general' as const } : c);
-  const v = gateVerdict(fixed);
+  const v = gateVerdict(fixed, a.strict);
   return { ...base, claims: fixed, ...v, filtered };
 }
 
