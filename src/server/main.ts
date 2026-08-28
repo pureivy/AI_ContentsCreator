@@ -1010,7 +1010,7 @@ function cardActorNames(): { planner?: string; designer?: string } {
 // 카드뉴스 잡을 '런'으로 등록 — 오피스 뷰·활동 피드·타임라인이 런 이벤트로 구동되므로, 버스를
 // 흘리면 송하영·민준호가 실제로 일하는 모습(스폰·작업 애니메이션·스트림·지표)이 그대로 보인다.
 // 런 취소 버튼 → abort 로 잡 중단까지 연결. 완료 시 이벤트 영속(리플레이 가능).
-function launchCardNewsRun(cardId: string, topic: string, opts: { sourceBody?: string; slideCount?: number; stylePreset?: string } = {}): string {
+function launchCardNewsRun(cardId: string, topic: string, opts: { sourceBody?: string; slideCount?: number; stylePreset?: string; sourceFlagged?: string[] } = {}): string {
   const id = runId();
   const bus = createBus(id);
   const abort = new AbortController();
@@ -1073,7 +1073,7 @@ function deriveCardNewsFromPiece(pieceId: string, slides?: number, style?: strin
   const card = cardNewsStore().create({
     topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, auto, ...cardActorNames(),
   });
-  launchCardNewsRun(card.id, piece.title, { sourceBody: body, slideCount: slides, stylePreset: style });
+  launchCardNewsRun(card.id, piece.title, { sourceBody: body, slideCount: slides, stylePreset: style, sourceFlagged: sourceFlaggedClaims(piece.runId) });
   return { card };
 }
 async function cardNewsFromPieceHandler(c: Context): Promise<Response> {
@@ -1165,7 +1165,7 @@ function shortsActorNames(): { writer?: string; director?: string } {
 
 // 숏폼 잡을 '런'으로 등록 — 유하린·서준영의 스폰·작업·지표가 오피스 뷰에 흐르고,
 // 런 취소 → abort 로 잡 중단, 완료 시 이벤트 영속(리플레이). launchCardNewsRun 과 동일 패턴.
-function launchShortsRun(shortsId: string, topic: string, opts: { sourceBody?: string; sceneCount?: number } = {}): string {
+function launchShortsRun(shortsId: string, topic: string, opts: { sourceBody?: string; sceneCount?: number; sourceFlagged?: string[] } = {}): string {
   const id = runId();
   const bus = createBus(id);
   const abort = new AbortController();
@@ -1215,6 +1215,22 @@ async function shortsCreateHandler(c: Context): Promise<Response> {
 }
 
 // 블로그 초안 → 숏폼 파생(공용) — 검토 탭 버튼·네이버 저장 성공 자동 훅이 공유.
+/**
+ * 원문(블로그) 사실 게이트가 건 주장 — unsupported + unverified(2026-08-28 처방 C).
+ * 파생물이 이 문장들을 다시 실으면 승계로 표시한다. 실사고: 블로그 hold ↔ 파생 pass 인데
+ * '근거 미확인'으로 분류된 손질 시기가 그대로 숏폼 화면 목록에 떴다.
+ * 읽기 실패는 빈 배열(fail-open) — 승계 검사가 파생 생성을 막지 않는다.
+ */
+function sourceFlaggedClaims(runId: string | undefined): string[] {
+  if (!runId) return [];
+  try {
+    const g = readFactGate(runId);
+    // unverified 는 '보류시키진 않았지만 근거가 확인되지 않은' 문장이다 — 원문에선 참고로 통과시켜도
+    // 파생물이 단정문·화면 목록으로 바꿔 실으면 성격이 달라진다. 그래서 unsupported 와 함께 본다.
+    return g ? [...(g.unsupported ?? []), ...(g.unverified ?? [])].filter(Boolean) : [];
+  } catch { return []; }
+}
+
 function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false): { short: Shorts } | { error: string } {
   const piece = pieceStore().get(pieceId);
   if (!piece) return { error: 'unknown piece' };
@@ -1228,7 +1244,7 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false): 
   const short = shortsStore().create({
     topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, auto, ...shortsActorNames(),
   });
-  launchShortsRun(short.id, piece.title, { sourceBody: body, sceneCount: scenes });
+  launchShortsRun(short.id, piece.title, { sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId) });
   return { short };
 }
 async function shortsFromPieceHandler(c: Context): Promise<Response> {
@@ -3907,7 +3923,9 @@ if (!process.env.VITEST) {
             } catch { /* 본문 없이도 재개 — planShorts 는 sourceBody 없이 동작 */ }
           }
           shortsStore().update(sid, { recoveries: (s.recoveries ?? 0) + 1 });
-          launchShortsRun(sid, s.topic, sourceBody ? { sourceBody } : {});
+          launchShortsRun(sid, s.topic, sourceBody
+            ? { sourceBody, sourceFlagged: sourceFlaggedClaims(pieceStore().get(s.sourcePieceId ?? '')?.runId) }
+            : {});
           // eslint-disable-next-line no-console
           console.log(`[부팅 복구] 중단된 숏폼 자동 재개 — ${s.topic.slice(0, 30)} (${(s.recoveries ?? 0) + 1}/2회차)`);
         } catch (e) { console.log(`[부팅 복구] 숏폼 ${sid} 재개 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }

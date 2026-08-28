@@ -40,6 +40,7 @@ import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
 import { normalizeSceneKind, fixMonthNames, cutAtWordBoundary } from '../tools/shortsCommon';
+import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
 import type { EventBus } from '../events/bus';
 
@@ -632,7 +633,7 @@ export function pruneQuoteSources(plan: Plan, sourceBody: string | undefined): {
   return { plan: { ...plan, scenes }, pruned };
 }
 
-async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형']): Promise<Plan | null> {
+async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형'], sourceFlagged: string[] = []): Promise<Plan | null> {
   const capSec = CONFIG.shortsMaxDurationSec;
   // 제목 후보 유형(권고 5) — 스키마 예시와 유형 설명이 같은 목록을 가리켜야 작가가 순서대로 채운다.
   const titlesJson = titleTypes.map((t) => `"${t}"`).join(',');
@@ -652,6 +653,9 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 문제제기→방법→방법→다른주제→목록. 블로그는 훑어 읽으며 필요한 대목만 골라 가는 매체라 병렬 나열이
     // 통하지만, 숏폼은 되감기가 없어 한 줄기로 끝까지 끌고 가야 한다. 복붙 금지는 '문장'의 문제였고,
     // 이 지시는 '구성'의 문제다 — 원문에서 가져올 것은 사실이지 순서가 아니다.
+    // 원문 미검증 주장 예방(2026-08-28 처방 C) — 사후 검출(inheritedClaims)의 짝. 작가가 애초에 안 쓰는 게
+    // 가장 싸다. 원문에 '있으니까 안전하다'는 판단을 여기서 무너뜨린다 — 원문에 있어도 근거는 없는 문장들이다.
+    sourceFlagged.length ? `[원문에서 근거가 확인되지 않은 주장 — 원문 본문에 적혀 있어도 대본·자막·화면 어디에도 쓰지 마라. 사실 게이트가 근거를 못 찾은 문장들이다]\n${sourceFlagged.slice(0, 8).map((c, i) => `${i + 1}. ${c}`).join('\n')}\n이 주장들을 바꿔 말하거나 요약해서 싣는 것도 금지다(수치·시기만 떼어 목록에 넣는 것 포함). 이 소재를 꼭 다뤄야 하면 단정 대신 조건·한계를 밝혀 쓰고 숫자는 적지 마라.` : '',
     sourceBody ? '[매체 전환 — 요약본이 아니라 새 대본] 원문에서 가져오는 것은 **사실과 근거**이지 구성이 아니다. 원문의 소제목 순서를 그대로 따라가지 마라 — 블로그는 필요한 대목만 골라 읽는 매체라 여러 갈래를 나란히 둬도 되지만, 숏폼은 되감기가 없어 한 줄기로만 끝까지 간다. 원문의 여러 축 중 **하나만 골라** 그 축으로 끝까지 밀고, 나머지는 통째로 버려라(다 담으면 아무것도 안 남는다). 고른 축은 훅에서 던진 문제와 마지막 씬의 답이 같은 줄기로 이어져야 한다.' : '',
     '',
     `씬 ${n}개의 유튜브 숏폼 대본을 기획하라. 씬1=훅(3패턴 중 택1), 씬2=전제(이 영상이 무엇에 대한 이야기이고 왜 문제/중요한지를 못박는다 — 원문의 핵심 인과 한 줄), 마지막 씬=CTA.`,
@@ -770,7 +774,11 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 시기·수치 원문 대조(2026-08-27 권고 1, 결정적) — 활엽수 실사고: 블로그가 "근거 확실치 않다"고 한 시기를
     // 파생 쇼츠가 내레이션·자막·오버레이 세 군데에서 단정했다. TIMING_PARITY=off 면 함수가 빈 배열을 낸다.
     const timing = sourceBody ? timingParityIssues(sourceBody, timingFields(plan)).map(formatTimingIssue) : [];
-    // 소스별 캡 합 최대 18(narrationStyleIssues ≤5 + hookKeywordLeadIssues ≤1 + standalone ≤4 + parity ≤2 + 시기·수치 ≤3 + 설명 요약투 ≤1 + 자막 딱지 ≤2) —
+    // 원문 미검증 주장 승계(2026-08-28 처방 C, 결정적) — 실사고: 블로그 게이트가 hold 인데 파생 숏폼은 pass 였고,
+    // 원문에서 '근거 미확인'으로 분류된 손질 시기가 그대로 화면 목록에 떴다. 기존 두 축(정합·시기수치)은
+    // "원문에 충실한가"만 봐서 통과시킨다 — 이 축이 "원문이 애초에 믿을 만한가"를 본다.
+    const inherited = (sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(plan)) : []).map(formatInherited);
+    // 소스별 캡 합 최대 20(narrationStyleIssues ≤5 + hookKeywordLeadIssues ≤1 + standalone ≤4 + parity ≤2 + 시기·수치 ≤3 + 승계 ≤2 + 설명 요약투 ≤1 + 자막 딱지 ≤2) —
     // 이미 소스별로 상한을 뒀으므로 최종 캡을 또 씌우면 뒤 소스(정합)만 밀려나는 desync 가 재발한다. 최종 캡 없음.
     const probs = [
       ...narrationStyleIssues(plan.scenes.map((s) => s.narration)),
@@ -779,6 +787,8 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       ...standalone.slice(0, 4),
       ...parity.slice(0, 2),
       ...timing.slice(0, 3),
+      // 승계 지적(처방 C) — 소스별 예약 캡 원칙 그대로 몫을 준다(≤2). 위 캡 합 주석의 총계에 포함.
+      ...inherited.slice(0, 2),
       // 설명 요약투(2026-08-27 권고 2, 결정적) — description 은 유튜브 설명이자 인스타 캡션이다.
       // 새 콜을 만들지 않고 기존 수정 라운드에 얹는다(= 플랜이 말하는 "1회 재생성").
       // META_SUMMARY_LINT 게이트(Fix wave 소견 4) — 블로그 meta 재시도와 같은 레버로 함께 꺼진다.
@@ -820,13 +830,16 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     }
     // 시기·수치 잔존(권고 1) — 오버레이 제거까지 끝난 최종 대본 기준. LLM 재호출 없음(결정적).
     const timingResidual = sourceBody ? timingParityIssues(sourceBody, timingFields(plan)).map(formatTimingIssue) : [];
+    // 승계 잔존(처방 C) — 수정 라운드 뒤 재계산. 원문 게이트가 hold 로 사람을 세운 사안을 파생물에서도
+    // 보이게 하는 것이 이 축의 목적이라, 잔존이 있으면 검토 알림까지 반드시 나가야 한다.
+    const inheritedResidual = (sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(plan)) : []).map(formatInherited);
     // 설명 요약투 잔존(권고 2) — 수정 라운드 뒤 최종 description 기준. 로그만(발행 차단 없음).
     if (metaSummaryIssues(plan.description).length) console.log(`[메타] 요약투 잔존 — "${plan.description.slice(0, 60)}"`);
     // 원문 정합 잔존(스펙 §2-4) — 정합 문제로 수정 라운드가 돌았을 때만 1회 재판정(비용). 표시 전용.
     // 수정본 파싱 실패(planChanged=false) 는 대본이 1차 판정 때와 바이트 동일 — LLM 재호출 없이 1차 parity 를 그대로 잔존으로 재사용한다.
     // 시기·수치만 잔존해도 factGate 를 붙인다(그래야 텔레그램 줄이 나간다) — 단 status 는 정합 판정이 정한다:
     // 결정적 비차단 린트가 보류(hold)를 만들어 자동 임시저장까지 막아서는 안 된다.
-    if ((parity.length || timingResidual.length) && sourceBody) {
+    if ((parity.length || timingResidual.length || inheritedResidual.length) && sourceBody) {
       const base = parity.length
         ? (planChanged
           ? parityToInfo(await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceBody, io.signal))
@@ -834,10 +847,14 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
         : parityToInfo([]);
       // timing 은 자르지 않고 통째로 싣는다 — 텔레그램 머리줄 N 은 잔존 '건수'라, 여기서 5건으로 자르면
       // 8건이 "5건"으로 나간다(Fix round 1). 예시 줄 캡(2줄)은 factGateLines 가 표시 시점에 씌운다.
-      const factGate = timingResidual.length ? { ...base, timing: timingResidual } : base;
+      // 승계 잔존을 timing 칸에 합류시킨다 — FactGateInfo 스키마를 늘리지 않고 기존 표시 경로(factGateLines)를
+      // 그대로 탄다. 두 축 다 '결정적·비차단·표시 전용'이라 성격이 같다(status 는 정합 판정이 정한다).
+      const displayResidual = [...timingResidual, ...inheritedResidual];
+      const factGate = displayResidual.length ? { ...base, timing: displayResidual } : base;
       plan = { ...plan, factGate };
       if (factGate.status === 'hold') { const m2 = `원문 정합 잔존 ${factGate.unsupported.length}건 — 검토 메시지에 표시`; console.log(`[숏폼] ${m2}`); io.bus?.emit('log', { message: m2 }); }
       if (timingResidual.length) { const m4 = `시기·수치 원문 불일치 잔존 ${timingResidual.length}건 — 검토 메시지에 표시`; console.log(`[숏폼] ${m4}`); io.bus?.emit('log', { message: m4 }); }
+      if (inheritedResidual.length) { const m5 = `원문 미검증 주장 승계 잔존 ${inheritedResidual.length}건 — 검토 메시지에 표시`; console.log(`[숏폼] ${m5}`); io.bus?.emit('log', { message: m5 }); }
     }
   } catch { /* 무해 */ }
   // quote 출처 가드 — factGate 등 위에서 채운 필드는 pruneQuoteSources 가 그대로 스프레드 보존한다(fail-open).
@@ -898,7 +915,11 @@ export function buildSceneImagePrompt(a: {
 /** 숏폼 생성 잡 — launch 래퍼가 버스·시그널을 주입(오피스 뷰 연동). 프론트는 GET 폴링. */
 export async function runShortsJob(
   id: string,
-  opts: { sourceBody?: string; sceneCount?: number; bus?: EventBus; signal?: AbortSignal } = {},
+  opts: {
+    sourceBody?: string; sceneCount?: number; bus?: EventBus; signal?: AbortSignal;
+    /** 원문(블로그) 사실 게이트가 건 주장 — unsupported + unverified. 파생물에 재등장하면 승계 표시(처방 C). */
+    sourceFlagged?: string[];
+  } = {},
 ): Promise<void> {
   const store = shortsStore();
   const short = store.get(id);
@@ -936,7 +957,7 @@ export async function runShortsJob(
       ? pickTitleTypes(recentShortsTitles(short.brand, short.id), { keywordFirst: !!short.keyword })
       : ['정보형', '후킹형', '질문형'];
     say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 제목 유형 ${titleTypes.join('·')}`);
-    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes);
+    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? []);
     if (!planned) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     // Plan 타입 재선언 — 길이 상한 루프의 재대입이 클로저(씬 map 등) 내로잉을 풀지 않게 non-null 로 고정.
     let plan: Plan = planned;

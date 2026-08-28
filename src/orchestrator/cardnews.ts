@@ -23,6 +23,7 @@ import { cardNewsStore } from '../content/cardnews';
 import { notifyCardnewsReady } from '../autonomy/contentNotify';
 import { standaloneIssues, parityIssues, parityToInfo } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue } from '../content/timingParity';
+import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
 import type { FactGateInfo } from '../content/factGate';
 import { cardStyleIssues } from '../content/styleLint';
 import { currentStructureSeed, type StructureSeed } from '../content/structureSeed';
@@ -329,12 +330,15 @@ export function cardStructureLines(seed: StructureSeed, variety: boolean): strin
   ];
 }
 
-async function planCards(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number | null, priorCoverage = '', endingsAvoid = '', seed: StructureSeed = currentStructureSeed()): Promise<Plan | null> {
+async function planCards(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number | null, priorCoverage = '', endingsAvoid = '', seed: StructureSeed = currentStructureSeed(), sourceFlagged: string[] = []): Promise<Plan | null> {
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 키워드] ${keyword}` : '',
     priorCoverage,
     sourceBody ? `[블로그 초안 본문 — 핵심과 그것이 성립하는 이유(전제 인과)를 함께 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${sourceBody.slice(0, 4000)}` : '',
+    // 원문 미검증 주장 예방(2026-08-28 처방 C) — 숏폼과 동일 사상. 카드는 문장이 짧아 조건·유보가 먼저
+    // 잘려 나가므로, 근거 없는 주장이 단정문 표지·헤드라인으로 굳기 더 쉽다.
+    sourceFlagged.length ? `[원문에서 근거가 확인되지 않은 주장 — 원문 본문에 적혀 있어도 카드 어디에도 쓰지 마라. 사실 게이트가 근거를 못 찾은 문장들이다]\n${sourceFlagged.slice(0, 8).map((c, i) => `${i + 1}. ${c}`).join('\n')}\n바꿔 말하거나 수치·시기만 떼어 싣는 것도 금지다. 이 소재를 꼭 다뤄야 하면 단정 대신 조건·한계를 밝혀 쓰고 숫자는 적지 마라.` : '',
     sourceBody ? '[주제]는 블로그 SEO 제목이다 — 제목의 수사(앵글)를 표지에 그대로 옮기지 말고, 표지는 대상(무엇에 관한 카드인지)을 앞세워 재작성하라.' : '',
     '',
     // 키워드가 있으면 '주제어' 수준이 아니라 정확 표기를 요구(2026-07-31 — 훅 자유는 유지: headline 또는 body 택일 허용).
@@ -420,6 +424,10 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     ];
     const timing = sourceBody ? timingParityIssues(sourceBody, timingFields(plan)).map(formatTimingIssue) : [];
     probs.push(...timing.slice(0, 3));
+    // 원문 미검증 주장 승계(2026-08-28 처방 C, 결정적·비차단) — 기존 두 축은 "원문에 충실한가"만 본다.
+    // 이 축은 "원문이 애초에 믿을 만한가"를 본다. 숏폼과 같은 몫(≤2)으로 수정 라운드에 얹는다.
+    const inherited = (sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(plan)) : []).map(formatInherited);
+    probs.push(...inherited.slice(0, 2));
     // 문체 결정적 린트(2026-08-11) — 종결어미 3장 연속 등 "AI 티" 지문을 같은 수정 라운드에 얹는다.
     probs.push(...cardStyleIssues(plan.slides));
     // 표지 키워드 정확 표기 게이트(결정적) — LLM '주제어' 판정과 별개로 [핵심 키워드] 그대로를 요구.
@@ -445,7 +453,8 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     // 수정본 불량(planChanged=false) 은 카드 문구가 1차 판정 때와 바이트 동일 — LLM 재호출 없이 1차 parity 를 그대로 잔존으로 재사용한다.
     // 시기·수치만 잔존해도 factGate 를 붙인다(텔레그램 줄이 나가야 하므로) — status 는 정합 판정이 정한다:
     // 결정적 비차단 린트가 보류(hold)를 만들어서는 안 된다.
-    if ((parity.length || timingResidual.length) && sourceBody) {
+    const inheritedResidual = (sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(plan)) : []).map(formatInherited);
+    if ((parity.length || timingResidual.length || inheritedResidual.length) && sourceBody) {
       const base = parity.length
         ? (planChanged
           ? parityToInfo(await parityIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / ')), sourceBody, io.signal))
@@ -453,10 +462,13 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
         : parityToInfo([]);
       // timing 은 자르지 않고 통째로 싣는다 — 텔레그램 머리줄 N 은 잔존 '건수'라, 여기서 5건으로 자르면
       // 8건이 "5건"으로 나간다(Fix round 1). 예시 줄 캡(2줄)은 factGateLines 가 표시 시점에 씌운다.
-      const factGate = timingResidual.length ? { ...base, timing: timingResidual } : base;
+      // 승계 잔존은 timing 칸에 합류 — 스키마를 늘리지 않고 기존 표시 경로를 탄다(숏폼과 동형).
+      const displayResidual = [...timingResidual, ...inheritedResidual];
+      const factGate = displayResidual.length ? { ...base, timing: displayResidual } : base;
       plan = { ...plan, factGate };
       if (factGate.status === 'hold') { const m2 = `원문 정합 잔존 ${factGate.unsupported.length}건 — 검토 메시지에 표시`; console.log(`[카드뉴스] ${m2}`); io.bus?.emit('log', { message: m2 }); }
       if (timingResidual.length) { const m4 = `시기·수치 원문 불일치 잔존 ${timingResidual.length}건 — 검토 메시지에 표시`; console.log(`[카드뉴스] ${m4}`); io.bus?.emit('log', { message: m4 }); }
+      if (inheritedResidual.length) { const m5 = `원문 미검증 주장 승계 잔존 ${inheritedResidual.length}건 — 검토 메시지에 표시`; console.log(`[카드뉴스] ${m5}`); io.bus?.emit('log', { message: m5 }); }
     }
   } catch { /* 무해 */ }
   // 오탈자 교정 — 수정 라운드가 바꾼 문구까지 포함해 최종 문구를 교열한다.
@@ -868,7 +880,11 @@ export async function repairCardNewsSlides(
 
 export async function runCardNewsJob(
   id: string,
-  opts: { sourceBody?: string; slideCount?: number; stylePreset?: string; bus?: EventBus; signal?: AbortSignal } = {},
+  opts: {
+    sourceBody?: string; slideCount?: number; stylePreset?: string; bus?: EventBus; signal?: AbortSignal;
+    /** 원문(블로그) 사실 게이트가 건 주장 — 카드 카피에 재등장하면 승계 표시(처방 C, 숏폼과 동형). */
+    sourceFlagged?: string[];
+  } = {},
 ): Promise<void> {
   const store = cardNewsStore();
   const card = store.get(id);
@@ -900,7 +916,7 @@ export async function runCardNewsJob(
     // 골격 다양화(2026-08-27 권고 4) — 본문 줄 수·해시태그 수를 런별 시드에서 받는다(off 면 4줄·12개 고정).
     const seed = currentStructureSeed();
     say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 마무리 로테이션 ${endingsAvoid ? '주입' : '해당없음'} · 골격 ${seed.cardLines}줄·태그 ${seed.hashtags}개`);
-    const plan = await planCards(io, card.topic, card.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), endingsAvoid, seed);
+    const plan = await planCards(io, card.topic, card.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), endingsAvoid, seed, opts.sourceFlagged ?? []);
     if (!plan) throw new Error('기획 실패 — 기획자 JSON 응답을 해석할 수 없습니다');
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ title: plan.title, slides: plan.slides }, null, 2), 'utf-8');
     say(`기획 완료 — ${plan.title.slice(0, 30)} · 슬라이드 ${plan.slides.length}장`);
