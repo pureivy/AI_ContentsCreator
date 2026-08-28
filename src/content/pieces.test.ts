@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { PieceStore, selectResumablePiece, autoDraftBlockedByFactGate, planAutoNaverDraft, shouldAutoDeriveOnDecision } from './pieces';
+import { PieceStore, selectResumablePiece, blogUrlForPiece, normalizeBlogUrl, autoDraftBlockedByFactGate, planAutoNaverDraft, shouldAutoDeriveOnDecision } from './pieces';
 import type { Piece } from './pieces';
 
 let dir = '';
@@ -155,17 +155,52 @@ describe('PieceStore.update — factGate: undefined 로 이전 보류 해제', (
   });
 });
 
-describe('shouldAutoDeriveOnDecision — 자동 임시저장 off 시 세트 파생 시점(블로그 완성 즉시)', () => {
-  it('off: SEO 통과(draft-off)·리비전 소진(revise-exhausted) 이면 즉시 파생', () => {
+// 2026-08-28 사용자 확정 — 파생은 '네이버 비공개 저장 뒤'. 저장 시점에 진짜 글 주소(logNo=…)가 나오고,
+// 그때 파생해야 파생물 캡션에 원본 블로그 링크가 붙는다. 08-27 의 'ready 즉시'는 링크를 잃어 되돌렸다.
+const ALL_DECISIONS = ['draft-off', 'revise-exhausted', 'draft', 'fact-hold', 'revise', 'skip'] as const;
+
+describe('shouldAutoDeriveOnDecision — 세트 파생 시점(네이버 비공개 저장 뒤)', () => {
+  afterEach(() => { delete process.env.DERIVE_ON_READY; });
+
+  it('어떤 결정에서도 여기선 파생하지 않는다 — 저장 성공 훅이 전담한다', () => {
+    for (const d of ALL_DECISIONS) {
+      expect(shouldAutoDeriveOnDecision(d, false)).toBe(false);
+      expect(shouldAutoDeriveOnDecision(d, true)).toBe(false);
+    }
+  });
+
+  it('DERIVE_ON_READY=1 이면 종전(08-27) 동작으로 되돌아간다 — 링크는 포기', () => {
+    process.env.DERIVE_ON_READY = '1';
     expect(shouldAutoDeriveOnDecision('draft-off', false)).toBe(true);
     expect(shouldAutoDeriveOnDecision('revise-exhausted', false)).toBe(true);
-  });
-  it('off: 아직 리비전 중·skip 이면 파생하지 않는다', () => {
     expect(shouldAutoDeriveOnDecision('revise', false)).toBe(false);
     expect(shouldAutoDeriveOnDecision('skip', false)).toBe(false);
+    // 자동 저장이 켜져 있으면 킬스위치와 무관하게 저장 훅이 담당한다(종전 계약 그대로).
+    for (const d of ALL_DECISIONS) expect(shouldAutoDeriveOnDecision(d, true)).toBe(false);
   });
-  it('on: 어떤 결정에서도 여기선 파생하지 않는다(네이버 저장 성공 훅이 담당)', () => {
-    for (const d of ['draft-off', 'revise-exhausted', 'draft', 'fact-hold', 'revise', 'skip'] as const)
-      expect(shouldAutoDeriveOnDecision(d, true)).toBe(false);
+});
+
+// 비공개 발행 URL 정규화(2026-08-28) — 파이썬 기본 모드가 '비공개 발행'이라 저장 직후 에디터가 돌려주는
+// 긴 PostView 주소가 들어온다. 캡션에 그대로 넣으면 한 줄을 잡아먹고 편집 세션 파라미터까지 노출된다.
+describe('blogUrlForPiece — 캡션용 링크 정규화', () => {
+  it('비공개 발행 직후 긴 PostView 주소를 짧은 정규 주소로 줄인다', () => {
+    // 실측 문자열(data/sessions/ba522a39fa7d/07_publish_result.json)
+    expect(normalizeBlogUrl('https://blog.naver.com/PostView.naver?blogId=biondi_tree&Redirect=View&logNo=224392805567&categoryNo=1&isAfterWrite=true'))
+      .toBe('https://blog.naver.com/biondi_tree/224392805567');
+  });
+
+  it('이미 짧은 주소는 그대로 둔다', () => {
+    expect(normalizeBlogUrl('https://blog.naver.com/biondi_tree/224345904342')).toBe('https://blog.naver.com/biondi_tree/224345904342');
+  });
+
+  it('m.blog 는 데스크톱도 여는 주소로 바꾼다(기존 계약)', () => {
+    expect(normalizeBlogUrl('https://m.blog.naver.com/biondi_tree/224345904342')).toBe('https://blog.naver.com/biondi_tree/224345904342');
+  });
+
+  it('발행 전·비URL이면 링크가 없다', () => {
+    expect(normalizeBlogUrl(undefined)).toBeUndefined();
+    expect(normalizeBlogUrl('')).toBeUndefined();
+    expect(normalizeBlogUrl('postwrite')).toBeUndefined();
+    expect(blogUrlForPiece(undefined)).toBeUndefined();
   });
 });

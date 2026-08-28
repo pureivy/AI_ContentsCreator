@@ -142,11 +142,21 @@ export function pieceStore(): PieceStore { return (_store ??= new PieceStore());
  *  발행 '시점'에 조회해야 한다: 파생물 생성 시점엔 블로그가 발행 전이라 publishedUrl 이 비어 있다(2026-07-31). */
 export function blogUrlForPiece(pieceId?: string): string | undefined {
   if (!pieceId) return undefined;
-  const u = pieceStore().get(pieceId)?.publishedUrl;
+  return normalizeBlogUrl(pieceStore().get(pieceId)?.publishedUrl);
+}
+
+/** 캡션용 링크 정규화(순수 — 테스트 대상). 스토어 조회와 분리해 표기 규칙만 검증할 수 있게 한다. */
+export function normalizeBlogUrl(u?: string): string | undefined {
   if (!u || !/^https?:\/\//.test(u)) return undefined;
   // 정규형으로 — RSS 감지가 m.blog 를 저장하기도 하는데, blog.naver.com 은 모바일을 자동 리다이렉트하지만
   // m.blog 는 데스크톱을 못 돌려보낸다(캡션 링크는 양쪽 시청자 모두 클릭).
-  return u.replace(/^https?:\/\/m\.blog\.naver\.com\//, 'https://blog.naver.com/');
+  const flat = u.replace(/^https?:\/\/m\.blog\.naver\.com\//, 'https://blog.naver.com/');
+  // 비공개 발행 직후 URL 은 에디터가 돌려주는 긴 꼴이다(2026-08-28 실측):
+  //   https://blog.naver.com/PostView.naver?blogId=biondi_tree&Redirect=View&logNo=224392805567&categoryNo=1&isAfterWrite=true&…
+  // 캡션에 그대로 넣으면 한 줄을 통째로 잡아먹고 isAfterWrite 같은 편집 세션 파라미터까지 노출된다.
+  // blogId + logNo 만 뽑아 짧은 정규 주소로 되돌린다(RSS 감지가 채우는 꼴과 같아져 표기도 일관된다).
+  const m = /[?&]blogId=([^&]+)[\s\S]*?[?&]logNo=(\d+)/.exec(flat);
+  return m ? `https://blog.naver.com/${m[1]}/${m[2]}` : flat;
 }
 
 /** 자동 임시저장 차단 판정 — hold(무근거·모순 잔존)·error(판정 실패, fail-closed). 사용자 확정: 자동 경로만 차단. */
@@ -175,10 +185,22 @@ export type AutoDraftDecision =
   /** SEO 미달 + 리비전 여유 있음 → 자동 리비전 런 후보(효과측 게이트는 호출측에서). */
   | 'revise';
 
-/** 자동 임시저장 off 운영에서 카드뉴스·숏폼 세트를 언제 파생하나(2026-08-27 사용자 확정 "블로그 완성 즉시").
- *  off: SEO 통과(draft-off) 또는 자동 리비전 소진(revise-exhausted) = 자동 파이프라인상 본문 확정 → true.
- *  on: 기존대로 네이버 저장 성공 훅에서만 파생(여기선 항상 false). 순수 함수 — 효과는 main.ts autoDeriveSet. */
+/**
+ * 카드뉴스·숏폼 세트를 언제 파생하나.
+ *
+ * 2026-08-28 사용자 확정 — **네이버 비공개 저장 뒤**에 파생한다. 이유는 캡션 링크다: 파이썬 발행은
+ * 기본이 '비공개 발행'이라 저장 시점에 진짜 글 주소(logNo=…)가 나오고, 그때 파생하면 파생물 캡션에
+ * 원본 블로그 링크를 걸 수 있다. 08-27 자동저장 off 전환 때 이 훅이 'ready 즉시'로 앞당겨지면서
+ * 파생물이 블로그 주소보다 먼저 만들어졌고, 링크가 붙지 않는다는 제보로 되돌린다.
+ *
+ * 항상 false 를 돌려주고, 파생은 저장 성공 훅(main.ts publishDraftToNaver.then → autoDeriveSet)이
+ * 전담한다 — 자동 저장이 켜졌든 꺼졌든 '저장된 뒤'라는 조건은 같다. 사람이 검토 탭 버튼으로 저장한
+ * 글도 같은 훅을 타므로 수동 운영(2026-08-27 전량 수동 검토)에서도 세트는 정상 생성된다.
+ *
+ * 킬스위치 DERIVE_ON_READY=1 — 저장을 기다리지 않고 종전처럼 본문 확정 즉시 파생(링크는 포기).
+ */
 export function shouldAutoDeriveOnDecision(decision: AutoDraftDecision, autoNaverDraft: boolean): boolean {
+  if (process.env.DERIVE_ON_READY !== '1') return false;
   if (autoNaverDraft) return false;
   return decision === 'draft-off' || decision === 'revise-exhausted';
 }

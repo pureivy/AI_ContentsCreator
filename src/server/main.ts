@@ -2100,10 +2100,23 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
       if (r.issues.length) job.error = r.issues.join(' · '); // PARTIAL — 저장은 됐지만 일부 문제(이미지 누락 등)
       // 잡 도는 사이 리비전으로 runId 가 바뀌었다면 이 결과는 옛 내용 — 현재 초안의 기록으로 남기지 않는다.
       if (!dryRun && pieceStore().get(id)?.runId === runIdAtStart) {
-        pieceStore().update(id, { naverDraftUrl: r.draftUrl ?? r.adminUrl, naverDraftTs: job.endedTs });
-        // 저장 성공 = 본문 확정 → 카드뉴스·숏폼 자동 파생(사용자 확정 워크플로우: 주제 하나 →
-        // 블로그+카드뉴스+숏폼 세트). 자동 임시저장이 꺼진 운영(2026-08-27)에서는 ready 시점에 이미
-        // 파생됐으므로 여기선 가드에 걸려 no-op — 사람이 버튼으로 저장한 글도 중복 파생되지 않는다.
+        // 비공개 발행(2026-08-28 수선) — 파이썬 기본 모드는 임시저장이 아니라 '비공개 발행'이라 진짜 글
+        // 주소(logNo=…)가 나온다. 종전엔 publish_mode 를 안 읽어 그 URL 이 naverDraftUrl 로만 들어갔고,
+        // publishedUrl 이 비어 파생물 캡션의 원본 블로그 링크가 끝내 안 붙었다(사용자 제보).
+        // 임시저장 폴백일 때는 URL 이 postwrite 라 절대 publishedUrl 로 쓰지 않는다.
+        const publishedNow = r.privatePublished && r.draftUrl && /logNo=|\/\d{6,}/.test(r.draftUrl)
+          ? r.draftUrl : undefined;
+        pieceStore().update(id, {
+          naverDraftUrl: r.draftUrl ?? r.adminUrl, naverDraftTs: job.endedTs,
+          // 이미 publishedUrl 이 있으면 덮지 않는다 — RSS 감지가 채운 정규 주소가 더 낫다(쿼리 없는 짧은 꼴).
+          ...(publishedNow && !pieceStore().get(id)?.publishedUrl
+            ? { publishedUrl: publishedNow, publishedTs: job.endedTs } : {}),
+        });
+        if (publishedNow) console.log(`[네이버] 비공개 발행 URL 기록 — ${publishedNow.slice(0, 80)}`);
+        // 저장 성공 = 본문 확정 + 블로그 주소 확보 → 카드뉴스·숏폼 자동 파생(주제 하나 → 세트).
+        // 2026-08-28 사용자 확정으로 이 훅이 파생의 **단일 경로**가 됐다 — 사람이 검토 탭·텔레그램
+        // 버튼으로 저장한 글도 같은 훅을 타므로 전량 수동 검토 운영에서도 세트는 정상 생성된다.
+        // autoDeriveSet 내부 가드가 중복 파생을 막는다(같은 piece 로 두 번 저장해도 no-op).
         autoDeriveSet(id, piece.title);
       }
     } else {
@@ -2236,7 +2249,8 @@ function maybeAutoNaverDraft(pieceId: string): boolean {
   }
   if (decision === 'revise-exhausted') {
     console.log(`[발행담당] ${piece.title.slice(0, 30)} — SEO ${seo ?? '미측정'}점 < ${CONFIG.naverDraftSeoMin} · 자동 리비전 소진 → 수동 검토 대기`);
-    // 자동 임시저장 off 운영에선 리비전 소진 = 자동 파이프라인상 본문 확정 → 세트 파생(on 운영은 기존대로 사람 저장 뒤).
+    // 파생은 기본적으로 네이버 비공개 저장 뒤에만(2026-08-28) — 저장 시점에 진짜 글 주소가 나와야
+    // 파생물 캡션에 원본 링크가 붙는다. 여기서는 킬스위치 DERIVE_ON_READY=1 일 때만 발동한다.
     if (shouldAutoDeriveOnDecision(decision, CONFIG.autoNaverDraft)) autoDeriveSet(pieceId, piece.title);
     return false;
   }

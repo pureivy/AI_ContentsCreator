@@ -285,6 +285,14 @@ export interface NaverDraftResult {
   status: string;
   draftUrl?: string;
   adminUrl?: string;
+  /**
+   * 비공개 발행 성공 여부(2026-08-28) — 파이썬 기본 모드는 'private_publish'(NAVER_PUBLISH_MODE)로,
+   * 발행 레이어에서 태그를 넣고 **비공개로 실제 발행**한다. 그러면 postwrite 가 아니라 진짜 글 주소
+   * (logNo=…)가 나온다. 종전엔 이 필드를 파싱하지 않아 그 URL 이 naverDraftUrl 로만 들어갔고,
+   * publishedUrl 은 계속 비어 파생물 캡션의 원본 블로그 링크가 붙지 않았다(사용자 제보).
+   * 임시저장 폴백(비공개 확인 실패·예외)이면 false — 그때 URL 은 postwrite 라 링크로 쓰면 안 된다.
+   */
+  privatePublished: boolean;
   issues: string[];
   /** 스크립트 stdout/stderr(캡) — 실패 원인 표시용. */
   output: string;
@@ -359,13 +367,13 @@ export async function publishDraftToNaver(
   // 발행 대상 브랜드 = piece 의 브랜드(호출부가 명시). 미지정이면 활성 브랜드(대화형 검토 탭 경로).
   const slug = opts.brand ?? activeBrandSlug();
   if (slug && !isSafeBrandSlug(slug)) {
-    return { ok: false, status: 'ERROR', issues: [`무효한 브랜드 슬러그: ${slug}`], output: '' };
+    return { ok: false, status: 'ERROR', privatePublished: false, issues: [`무효한 브랜드 슬러그: ${slug}`], output: '' };
   }
   const creds = naverPublishCreds(slug);
   const dryRun = opts.dryRun === true;
   if (!dryRun && !creds.blogId) {
     const where = slug ? `브랜드 '${slug}' 의 ` : '';
-    return { ok: false, status: 'ERROR', issues: [`${where}네이버 블로그 ID 미설정 — API 키 탭에서 이 브랜드의 발행 계정을 설정하세요.`], output: '' };
+    return { ok: false, status: 'ERROR', privatePublished: false, issues: [`${where}네이버 블로그 ID 미설정 — API 키 탭에서 이 브랜드의 발행 계정을 설정하세요.`], output: '' };
   }
   const finalContent = draftToFinalContent(draft);
 
@@ -395,7 +403,7 @@ export async function publishDraftToNaver(
     fs.writeFileSync(finalPath, JSON.stringify(finalContent, null, 2), 'utf-8');
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
   } catch (e) {
-    return { ok: false, status: 'ERROR', issues: [`발행 페이로드 기록 실패: ${e instanceof Error ? e.message : String(e)}`], output: '' };
+    return { ok: false, status: 'ERROR', privatePublished: false, issues: [`발행 페이로드 기록 실패: ${e instanceof Error ? e.message : String(e)}`], output: '' };
   }
 
   // 이전 런의 결과 파일이 남아 있으면 이번 런 실패 시 낡은 성공으로 오판 — 실행 전 제거.
@@ -428,11 +436,12 @@ export async function publishDraftToNaver(
       status,
       draftUrl: typeof res.draft_url === 'string' && res.draft_url ? res.draft_url : undefined,
       adminUrl: typeof res.admin_url === 'string' && res.admin_url ? res.admin_url : undefined,
+      privatePublished: res.publish_mode === 'private_published',
       issues: Array.isArray(res.issues) ? res.issues.map(String) : [],
       output: r.output,
     };
   } catch {
-    return { ok: false, status: 'ERROR', issues: ['발행 결과 파일 없음 — 스크립트 출력 참조'], output: r.output };
+    return { ok: false, status: 'ERROR', privatePublished: false, issues: ['발행 결과 파일 없음 — 스크립트 출력 참조'], output: r.output };
   }
 }
 
