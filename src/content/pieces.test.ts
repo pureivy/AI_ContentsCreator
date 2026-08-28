@@ -193,6 +193,11 @@ describe('blogUrlForPiece — 캡션용 링크 정규화', () => {
     expect(normalizeBlogUrl('https://blog.naver.com/biondi_tree/224345904342')).toBe('https://blog.naver.com/biondi_tree/224345904342');
   });
 
+  it('RSS 추적 파라미터를 떼어 낸다 — 캡션 링크에 남의 유입 코드를 달고 다니지 않게', () => {
+    expect(normalizeBlogUrl('https://blog.naver.com/biondi_tree/224393518611?fromRss=true&trackingCode=rss'))
+      .toBe('https://blog.naver.com/biondi_tree/224393518611');
+  });
+
   it('m.blog 는 데스크톱도 여는 주소로 바꾼다(기존 계약)', () => {
     expect(normalizeBlogUrl('https://m.blog.naver.com/biondi_tree/224345904342')).toBe('https://blog.naver.com/biondi_tree/224345904342');
   });

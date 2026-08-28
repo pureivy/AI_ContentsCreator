@@ -168,7 +168,12 @@ export function normalizeBlogUrl(u?: string): string | undefined {
   // 캡션에 그대로 넣으면 한 줄을 통째로 잡아먹고 isAfterWrite 같은 편집 세션 파라미터까지 노출된다.
   // blogId + logNo 만 뽑아 짧은 정규 주소로 되돌린다(RSS 감지가 채우는 꼴과 같아져 표기도 일관된다).
   const m = /[?&]blogId=([^&]+)[\s\S]*?[?&]logNo=(\d+)/.exec(flat);
-  return m ? `https://blog.naver.com/${m[1]}/${m[2]}` : flat;
+  if (m) return `https://blog.naver.com/${m[1]}/${m[2]}`;
+  // RSS 감지가 채운 주소는 짧지만 추적 파라미터가 붙어 온다(2026-08-29 실측):
+  //   https://blog.naver.com/biondi_tree/224393518611?fromRss=true&trackingCode=rss
+  // 캡션에 그대로 나가면 우리 링크에 남의 유입 코드를 달고 다니는 꼴이라 쿼리를 떼어 낸다.
+  const short = /^(https:\/\/blog\.naver\.com\/[^/?#]+\/\d+)(?:[?#]|$)/.exec(flat);
+  return short ? short[1]! : flat;
 }
 
 /** 자동 임시저장 차단 판정 — hold(무근거·모순 잔존)·error(판정 실패, fail-closed). 사용자 확정: 자동 경로만 차단. */
