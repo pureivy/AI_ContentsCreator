@@ -54,6 +54,14 @@ export interface BrandProfile {
   /** 어휘 함정 목록(2026-08-08 어휘 감사) — 일반 독자가 다른 뜻으로 먼저 읽거나 모르는 업종 한자어와
    *  그 대체 표현. 작가·기획자·패키저 지침(lexiconGuide)과 어휘 린트가 공용. 업종어라 브랜드별로 둔다. */
   avoidJargon?: Array<{ term: string; use: string }>;
+  /** 상용어 허용 목록(2026-08-28 사용자 확정) — 업종 독자에겐 일상어인 말. avoidJargon 의 반대 방향 신호다.
+   *  배경(실측): "전정"은 avoidJargon 에 없는데도 최근 글에서 통째로 사라졌다 — 제목·키워드에 박힌 글만
+   *  5회 쓰고, 자유 집필에선 0회에 "가위를 들다"·"다듬다"로 우회했다("1년에 가위를 몇 번 들 수 있는가").
+   *  원인은 금지 목록이 아니라 lexiconGuide ①(압축 한자어는 풀어 써라)·⑦(한 이름으로 통일하라)과
+   *  lexemeAvoid("일상 대화에서 안 쓰는 어휘는 어색함의 주범")의 **누적 압력**이다. 각각은 옳은데 합쳐지면
+   *  "한자어=위험" 신호가 돼 원예 상용어까지 우회한다. 금지만 있고 허용이 없던 구조가 문제였다.
+   *  업종 어휘라 브랜드별로 둔다(미설정=허용 블록 없음, 종전 동작). */
+  keepTerms?: string[];
   /** 시기 소재 달력(2026-08-27 단풍 실사고) — 제목에 이 말이 들어간 주제는 months(1~12) 가 '이번 달 또는
    *  다음 달'일 때만 채택한다. 검색량 게이트는 keyword 만 재서 "활엽수" 키워드에 단풍 글이 묻어 나갔다.
    *  업종 달력이라 브랜드별로 둔다(미설정=게이트 없음). */
@@ -223,6 +231,13 @@ export function normalizeBrand(raw: Partial<BrandProfile> | null | undefined): B
       .map((x) => ({ term: s((x as { term?: unknown })?.term, 20) ?? '', use: s((x as { use?: unknown })?.use, 40) ?? '' }))
       .filter((x) => x.term && x.use)
       .slice(0, 30),
+    // 허용 목록은 금지 목록과 **겹치면 안 된다** — 같은 말이 "쓰지 마라"와 "그대로 써라"로 동시에 나가면
+    // 작가는 둘 중 아무거나 고른다(가드가 무작위가 된다). avoidJargon 이 이긴다: 명시적 금지가 기본 허용보다 강하다.
+    keepTerms: (() => {
+      const banned = new Set((Array.isArray(raw?.avoidJargon) ? raw.avoidJargon as unknown[] : [])
+        .map((x) => s((x as { term?: unknown })?.term, 20) ?? '').filter(Boolean));
+      return arr(raw?.keepTerms, 40).filter((t) => !banned.has(t));
+    })(),
     seasonalSubjects: (Array.isArray(raw?.seasonalSubjects) ? raw.seasonalSubjects as unknown[] : [])
       .map((x) => ({
         term: s((x as { term?: unknown })?.term, 20) ?? '',
@@ -261,7 +276,11 @@ export function normalizeBrand(raw: Partial<BrandProfile> | null | undefined): B
  * 카드/쇼츠 기획자·제목 패키저 공용(org.ts 가드들과 달리 output 도 쓰므로 순환 없는 여기에 둔다).
  * avoid(브랜드 avoidJargon)는 업종 함정어 목록 — 미설정이면 일반 원칙만.
  */
-export function lexiconGuide(avoid?: Array<{ term: string; use: string }> | null): string {
+export function lexiconGuide(
+  avoid?: Array<{ term: string; use: string }> | null,
+  /** 상용어 허용 목록 — ①⑦·lexemeAvoid 의 누적 압력이 업종 일상어까지 밀어내는 것을 막는다(2026-08-28). */
+  keep?: string[] | null,
+): string {
   return '[어휘 — 일반 독자 눈높이] '
     + '① 일반 독자가 모르는 압축 한자어는 쉬운 말로 풀어 쓴다. 특히 다른 뜻으로 먼저 읽히는 말 금지'
     + '(실측 유출: 방조→범죄로, 시비→싸움으로, 동해→바다로 먼저 읽힌다). '
@@ -281,6 +300,14 @@ export function lexiconGuide(avoid?: Array<{ term: string; use: string }> | null
     + '⑦ 실무 용어는 처음 나올 때 반 문장으로 풀어라 — "뿌리분(뿌리와 흙이 뭉친 덩어리)", "도장지(위로만 웃자란 가지)", '
     + '"수관(가지와 잎이 이루는 윗부분)" — 판단 기준·행동 지시 자리에 미해설 용어를 두지 마라(실측: "뿌리분 가장자리에 꽂으세요"가 초보를 세운다). '
     + '같은 작업을 다른 이름으로 바꿔 부르지 마라(실측: 한 글에서 가지치기→전지→본전정 혼용).'
+    // ⑧ 허용 목록(2026-08-28 사용자 확정) — ①⑦ 과 lexemeAvoid 가 합쳐지면 "한자어=위험" 신호가 돼 업종
+    // 상용어까지 우회한다. 실측: "전정" 0회 · "1년에 가위를 몇 번 들 수 있는가"(한국어에 없는 표현).
+    // ①⑦ 바로 뒤에 둬 그 압력을 받는 자리에서 곧바로 예외를 세운다 — 떨어뜨리면 앞의 금지가 이긴다.
+    + (keep?.length
+      ? `\n⑧ 다만 아래는 이 분야 독자에겐 일상어다 — 한자어라는 이유로 우회하지 말고 그대로 써라(①⑦·과사용 어휘 지침보다 이 항목이 우선한다): ${keep.join(', ')}. `
+        + '이 말들을 "가위를 들다"·"손이 가다" 같은 완곡한 풀이로 바꾸면 오히려 어색하다(실측: "1년에 가위를 몇 번 들 수 있는가" — 일상에선 "1년에 몇 번 전정하는지"라고 말한다). '
+        + '⑦(한 이름으로 통일)은 여기에도 적용된다 — 이 목록에서 하나를 골라 글 전체에서 일관되게 쓰되, 고르는 후보에서 빼지는 마라.'
+      : '')
     + (avoid?.length ? `\n다음 말은 본문·제목·카피 어디에도 쓰지 말고 화살표 오른쪽처럼 풀어 쓴다: ${avoid.map((a) => `${a.term}→${a.use}`).join(', ')}` : '');
 }
 

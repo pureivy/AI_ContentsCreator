@@ -362,7 +362,7 @@ async function callRoleJSON<T>(
   if (io.bus && role) {
     const out = await runAgent({
       bus: io.bus, role, model: stdModel(),
-      task: `${task}\n\n${NO_FABRICATED_EXPERIENCE}\n\n${SELLER_INQUIRY_BAN}\n\n${lexiconGuide(getBrand()?.avoidJargon)}\n\n다른 텍스트 없이 JSON만 출력하라.`,
+      task: `${task}\n\n${NO_FABRICATED_EXPERIENCE}\n\n${SELLER_INQUIRY_BAN}\n\n${lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms)}\n\n다른 텍스트 없이 JSON만 출력하라.`,
       // 단발 JSON 기획은 추론 강제 OFF(→ sonnet --effort low) — 카드뉴스와 동일한 사고 폭주 상한
       // 초과 계열(2026-08-11 실측) 예방.
       stage: 'work', emitSpawn, maxOutputTokens, think: false, signal: io.signal,
@@ -370,7 +370,7 @@ async function callRoleJSON<T>(
     return extractFirstJson<T>(out.text);
   }
   // microJSON 폴백은 buildSystemPrompt 를 안 지나므로 브랜드 컨텍스트를 system 에 직접 합성.
-  const sys = [role?.systemPrompt || fallbackSystem, brandContext(), NO_FABRICATED_EXPERIENCE, SELLER_INQUIRY_BAN, lexiconGuide(getBrand()?.avoidJargon)].filter(Boolean).join('\n\n');
+  const sys = [role?.systemPrompt || fallbackSystem, brandContext(), NO_FABRICATED_EXPERIENCE, SELLER_INQUIRY_BAN, lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms)].filter(Boolean).join('\n\n');
   return microJSON<T>(stdModel(), sys, task, { maxOutputTokens, signal: io.signal });
 }
 
@@ -644,8 +644,18 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 그 축을 통째로 빼고 곁가지(겨울 자리)로만 대본을 만들어 세트의 메시지가 어긋났다. 소재 선택은
     // 원문이 이기고, 프레이밍(각도)은 중복 회피가 이긴다는 서열을 명시한다.
     sourceBody ? '원문 핵심 앵커: 원문 제목·소제목이 힘준 핵심 축 중 최소 1개를 대본의 중심 소재로 삼아라 — 원문이 강조하지 않은 곁가지만으로 대본을 채우면 실패다. 그 핵심 축이 [이미 만든 유사 주제] 목록에서 이미 다뤄진 경우에만 다음 축으로 넘어가고, 전부 다뤄졌다면 소재는 유지하되 다른 독자 상황·글 유형으로 재구성하라(소재 선택은 원문이, 프레이밍은 중복 회피가 이긴다).' : '',
+    // 매체 전환 선언(2026-08-28 사용자 지적) — 종전 지시는 "문장 복붙 금지"까지였다. 실측(short_b894bf71fb)
+    // 유사도는 38~56%라 복붙은 안 했는데도, 씬 순서가 원문 소제목 순서를 그대로 따라가 '요약본'이 됐다:
+    // 문제제기→방법→방법→다른주제→목록. 블로그는 훑어 읽으며 필요한 대목만 골라 가는 매체라 병렬 나열이
+    // 통하지만, 숏폼은 되감기가 없어 한 줄기로 끝까지 끌고 가야 한다. 복붙 금지는 '문장'의 문제였고,
+    // 이 지시는 '구성'의 문제다 — 원문에서 가져올 것은 사실이지 순서가 아니다.
+    sourceBody ? '[매체 전환 — 요약본이 아니라 새 대본] 원문에서 가져오는 것은 **사실과 근거**이지 구성이 아니다. 원문의 소제목 순서를 그대로 따라가지 마라 — 블로그는 필요한 대목만 골라 읽는 매체라 여러 갈래를 나란히 둬도 되지만, 숏폼은 되감기가 없어 한 줄기로만 끝까지 간다. 원문의 여러 축 중 **하나만 골라** 그 축으로 끝까지 밀고, 나머지는 통째로 버려라(다 담으면 아무것도 안 남는다). 고른 축은 훅에서 던진 문제와 마지막 씬의 답이 같은 줄기로 이어져야 한다.' : '',
     '',
     `씬 ${n}개의 유튜브 숏폼 대본을 기획하라. 씬1=훅(3패턴 중 택1), 씬2=전제(이 영상이 무엇에 대한 이야기이고 왜 문제/중요한지를 못박는다 — 원문의 핵심 인과 한 줄), 마지막 씬=CTA.`,
+    // 씬2 인과 연결(2026-08-28) — 실측: 훅이 "옆집 창이 마당을 본다"로 사생활 긴장을 세웠는데 씬2가 그걸
+    // 받지 않고 곧바로 "두 가지를 적어요"로 넘어가, 시청자에게 화제 전환으로 읽혔다. 원문에는 그 고리가
+    // 있었다("그럼 나무를 몇 미터짜리로 심어야 할까요") — 대본이 떨어뜨린 것이다.
+    '씬2는 훅이 세운 긴장을 **받아서** 이어라 — 훅의 문제가 왜 이 영상의 주제로 이어지는지 한 마디로 잇고 나서 전제를 말한다. 훅과 무관한 기준·항목을 씬2에서 새로 꺼내면 시청자에겐 화제 전환으로 들린다. 훅에서 세우지 않은 두 번째 축을 씬2에 끼워 넣지 마라.',
     '시청자는 원문 블로그를 본 적이 없다 — 영상 단독으로 완결되게 써라: 핵심 주제어(식물명·행위명 등)를 훅 또는 씬2에서 반드시 명시하고, 지시어·축약어("짝"·"그 방법"·"두 그루" 류)는 앞 씬에서 뜻을 세운 뒤에만 사용하라. 단, 명시는 검색 표기 그대로일 필요 없다 — 키워드 명사구를 통째로 주어 자리에 세우지 말고("가을 묘목 심는 법은 ~로 정해집니다" 식 금지, 검색용 문장 티가 난다) 조사·어순을 바꿔 말이 되는 꼴로 녹여라("가을에 묘목을 심을 땐 날짜보다 뿌리부터 봐요"). 검색 표기 그대로의 노출은 title·titles·description·해시태그·screenText 가 담당한다. 단 씬2(전제)의 정의 한 문장은 예외 — 뒤 씬에서 쓸 기준·개념(예: "두 선")은 씬2에서 이름 붙여 뜻을 세워라. 어순·조사는 바꿔도 되지만 정의 자체를 얼버무리지 마라. 훅에서 감춘 대상도 씬2에서 반드시 밝힌다.',
     '훅 금지 문형: "~보셨나요?/~라고요? + 정작/사실은/그럼 이미 ~" 질문-반전 공식(최근 편들이 과다 사용). 단정 선언("까맣게 익어도 아직 이릅니다"), 구체 장면, 숫자 제시, 청자 상황 지목, 짧은 제동("잠깐,") 등에서 앞 편들과 다른 유형을 골라라.',
     // 첫 2초 훅 분리(2026-08-20 조회수 감사) — 최근 47편 중 17편이 첫 2초를 키워드·상품명 낭독에 써서

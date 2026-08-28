@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
-import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug, brandFileSuffixFor, bannedTopicTerms, offBrandTerm } from './brand';
+import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug, brandFileSuffixFor, bannedTopicTerms, offBrandTerm, lexiconGuide } from './brand';
 
 // 브랜드 프로필 — 정규화·주입 블록(순수 함수) 회귀 방지.
 describe('normalizeBrand', () => {
@@ -200,5 +200,56 @@ describe('avoidJargon 데이터 — 톤에서 튀는 한자어 치환(활성+레
     expect(avoid.length).toBeLessThanOrEqual(30);
     expect(normalizeBrand({ name: '비온디트리', avoidJargon: avoid } as never)!.avoidJargon)
       .toEqual(avoid);
+  });
+});
+
+// 상용어 허용 목록(2026-08-28) — 금지만 있고 허용이 없던 구조가 원예 상용어를 밀어낸 실측 대응.
+// 발단: "전정"은 avoidJargon 에 없는데도 최근 글에서 0회가 되고 "1년에 가위를 몇 번 들 수 있는가"로 우회됐다.
+describe('keepTerms — 상용어 허용 목록', () => {
+  const readKeep = (rel: string): string[] => {
+    const raw = YAML.parse(fs.readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf-8')) as
+      { keepTerms?: string[] } | null;
+    return raw?.keepTerms ?? [];
+  };
+  const ACTIVE = '../../data/brand.yaml';
+  const REGISTRY = '../../data/brands/bionditree.yaml';
+  // 사용자가 이름을 짚어 확정한 말 — 이게 빠지면 이 태스크가 무의미해진다.
+  const MUST = ['전정', '가지치기', '시비', '접붙이기', '삽목', '활착'];
+
+  it('활성 brand.yaml 과 레지스트리 양쪽에 있고 서로 같다', () => {
+    // 활성만 고치고 레지스트리를 빠뜨리면 브랜드 전환 시 조용히 되돌아간다(기록된 전례).
+    const a = readKeep(ACTIVE);
+    const r = readKeep(REGISTRY);
+    expect(a.length).toBeGreaterThan(0);
+    expect(new Set(a)).toEqual(new Set(r));
+    for (const t of MUST) expect(a).toContain(t);
+  });
+
+  it('금지 목록과 겹치지 않는다 — 같은 말이 "쓰지 마라"+"써라"로 동시에 나가면 가드가 무작위가 된다', () => {
+    const raw = YAML.parse(fs.readFileSync(fileURLToPath(new URL(ACTIVE, import.meta.url)), 'utf-8')) as
+      { keepTerms?: string[]; avoidJargon?: Array<{ term: string }> };
+    const banned = new Set((raw.avoidJargon ?? []).map((a) => a.term));
+    expect((raw.keepTerms ?? []).filter((t) => banned.has(t))).toEqual([]);
+  });
+
+  it('충돌하면 avoidJargon 이 이긴다 — 명시적 금지가 기본 허용보다 강하다', () => {
+    const b = normalizeBrand({
+      name: 'T', avoidJargon: [{ term: '전정', use: '가지치기' }], keepTerms: ['전정', '시비'],
+    } as never);
+    expect(b?.keepTerms).toEqual(["시비"]);
+  });
+
+  it('lexiconGuide 가 ⑧ 허용 블록을 내고, 우선순위를 못박는다', () => {
+    const g = lexiconGuide([{ term: '동해', use: '겨울 추위 피해' }], ['전정', '시비']);
+    expect(g).toContain('⑧');
+    expect(g).toContain('전정, 시비');
+    expect(g).toContain('①⑦·과사용 어휘 지침보다 이 항목이 우선한다');
+    expect(g).toContain('동해→겨울 추위 피해'); // 금지 블록은 그대로 살아 있다
+  });
+
+  it('허용 목록이 없으면 ⑧ 블록 자체가 없다(회귀 0)', () => {
+    const g = lexiconGuide([{ term: '동해', use: '겨울 추위 피해' }]);
+    expect(g).not.toContain('⑧');
+    expect(g).toContain('동해→겨울 추위 피해');
   });
 });

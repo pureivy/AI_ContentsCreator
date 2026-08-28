@@ -379,7 +379,7 @@ export async function writeBlogBody(a: {
       frameAvoid,
       genreGuide,
       voiceGuide,
-      lexiconGuide(getBrand()?.avoidJargon), // 어휘 가드(2026-08-08) — 동음이의 한자어·조어·키워드 동사화 방지
+      lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms), // 어휘 가드(2026-08-08) — 동음이의 한자어·조어·키워드 동사화 방지
       serpText ? `[네이버 상위 노출 블로그(실측) — 검색 수요가 검증된 방향·눈높이 참고. 제목·구성 그대로 베끼기 금지]\n${serpText}` : '',
       brief ? `[리서치·SEO 브리프]\n${brief}` : '',
       critiqueText ? `[검수 의견 — 아래는 약점·주의점 목록이다. 발행 판정이 아니다. 지적된 미검증·논쟁 주장은 본문에서 빼고, 나머지는 참고해 품질을 높여라]\n${critiqueText}` : '',
@@ -399,7 +399,7 @@ export async function writeBlogBody(a: {
       // 재집필은 검수 의견을 뺀다(같은 벽에 다시 부딪히지 않게) — 그러나 mustFixBlock 은 **남긴다**.
       // 이건 품질 조언이 아니라 '무근거 기입을 쓰지 마라'는 금지라, 여기서 빠지면 퇴화 재집필 경로가
       // 게이트의 구멍이 된다(브리프에 남은 무근거 주장이 그대로 본문에 실린다).
-      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon), brief ? `[리서치·SEO 브리프]\n${brief}` : '', mustFixBlock].filter(Boolean).join('\n\n'),
+      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms), brief ? `[리서치·SEO 브리프]\n${brief}` : '', mustFixBlock].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, groundForFacts: true, maxOutputTokens: 5000, signal,
     });

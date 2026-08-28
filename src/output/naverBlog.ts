@@ -74,7 +74,7 @@ export async function packageNaverBlog(input: FormatterInput): Promise<AssetBund
       `[주제] ${topic}\n\n[오늘·절기] ${seasonalContext()}\n\n[본문]\n${body.slice(0, 6000)}\n` +
       // SEO 포장도 microJSON 직행 — 브랜드 설정 시 태그·메타에 브랜드 연관 키워드가 자연스럽게 실리게.
       (brandContext() ? `\n${brandContext()}\n` : '') +
-      `\n${lexiconGuide(getBrand()?.avoidJargon)}\n` + // 어휘 가드(2026-08-08) — 제목·메타·태그의 함정어·조어 방지
+      `\n${lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms)}\n` + // 어휘 가드(2026-08-08) — 제목·메타·태그의 함정어·조어 방지
       (pinnedKeyword ? `\n[핵심 키워드(고정)] ${pinnedKeyword} — primaryKeyword 는 정확히 이 값으로 쓰고, titles 5개 중 4개 이상과 meta 에 이 표기를 그대로 포함하라.\n` : '') +
       (serpText ? `\n[네이버 상위 노출 제목(실측)]\n${serpText.slice(0, 800)}\n` : '') +
       `${researchBrief ? `\n[리서치·SEO 브리프]\n${researchBrief.slice(0, 1500)}` : ''}\n\n` +
