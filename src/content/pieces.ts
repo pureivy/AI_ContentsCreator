@@ -29,6 +29,15 @@ export interface Piece {
   subNiche?: string;
   stage: PieceStage;
   publishedUrl?: string;
+  /**
+   * 비공개 발행 글 주소(2026-08-29) — 네이버 '비공개 발행'은 임시저장과 달리 진짜 글 주소(logNo=…)를
+   * 만들지만, 아직 **공개된 글은 아니다**. publishedUrl 에 넣었더니 두 가지가 깨졌다(실측):
+   *   ① RSS 발행 감지가 이 필드를 '이미 처리됨' 표시로 써서, 사람이 전체공개로 바꿔도 감지가 건너뛴다.
+   *   ② stage 가 'published' 가 아닌데 publishedUrl 만 차 있어 두 값이 어긋난다.
+   * 그래서 별도 필드로 둔다 — 파생물 캡션 링크는 이 값도 쓸 수 있지만(주소는 유효하다), 발행 여부
+   * 판정은 오직 publishedUrl 이 한다.
+   */
+  privateUrl?: string;
   /** 네이버 임시저장 성공 시 편집기 URL(발행 아님 — 사람이 네이버에서 확인 후 발행). */
   naverDraftUrl?: string;
   /** 마지막 네이버 임시저장 시각(ISO). */
@@ -142,7 +151,10 @@ export function pieceStore(): PieceStore { return (_store ??= new PieceStore());
  *  발행 '시점'에 조회해야 한다: 파생물 생성 시점엔 블로그가 발행 전이라 publishedUrl 이 비어 있다(2026-07-31). */
 export function blogUrlForPiece(pieceId?: string): string | undefined {
   if (!pieceId) return undefined;
-  return normalizeBlogUrl(pieceStore().get(pieceId)?.publishedUrl);
+  const p = pieceStore().get(pieceId);
+  // 공개 주소 우선. 없으면 비공개 발행 주소 — 주소 자체는 유효하고, 사람이 전체공개로 바꾸면
+  // 같은 주소가 그대로 열린다(파생물이 블로그보다 먼저 나가도 링크가 죽지 않는다).
+  return normalizeBlogUrl(p?.publishedUrl) ?? normalizeBlogUrl(p?.privateUrl);
 }
 
 /** 캡션용 링크 정규화(순수 — 테스트 대상). 스토어 조회와 분리해 표기 규칙만 검증할 수 있게 한다. */

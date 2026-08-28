@@ -197,6 +197,15 @@ describe('blogUrlForPiece — 캡션용 링크 정규화', () => {
     expect(normalizeBlogUrl('https://m.blog.naver.com/biondi_tree/224345904342')).toBe('https://blog.naver.com/biondi_tree/224345904342');
   });
 
+  it('공개 전이면 비공개 발행 주소를 쓴다 — 주소 자체는 유효하다', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pieces-priv-'));
+    const st = new PieceStore(dir);
+    const p = st.create({ title: 'T' });
+    st.update(p.id, { privateUrl: 'https://blog.naver.com/PostView.naver?blogId=biondi_tree&logNo=224393518611&isAfterWrite=true' });
+    // 전역 스토어를 쓰는 blogUrlForPiece 대신 순수 변환으로 규칙만 확인(스토어 주입 경로는 없음).
+    expect(normalizeBlogUrl(st.get(p.id)!.privateUrl)).toBe('https://blog.naver.com/biondi_tree/224393518611');
+  });
+
   it('발행 전·비URL이면 링크가 없다', () => {
     expect(normalizeBlogUrl(undefined)).toBeUndefined();
     expect(normalizeBlogUrl('')).toBeUndefined();

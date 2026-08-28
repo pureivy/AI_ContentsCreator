@@ -2122,15 +2122,16 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
         // 주소(logNo=…)가 나온다. 종전엔 publish_mode 를 안 읽어 그 URL 이 naverDraftUrl 로만 들어갔고,
         // publishedUrl 이 비어 파생물 캡션의 원본 블로그 링크가 끝내 안 붙었다(사용자 제보).
         // 임시저장 폴백일 때는 URL 이 postwrite 라 절대 publishedUrl 로 쓰지 않는다.
-        const publishedNow = r.privatePublished && r.draftUrl && /logNo=|\/\d{6,}/.test(r.draftUrl)
+        const privateNow = r.privatePublished && r.draftUrl && /logNo=|\/\d{6,}/.test(r.draftUrl)
           ? r.draftUrl : undefined;
         pieceStore().update(id, {
           naverDraftUrl: r.draftUrl ?? r.adminUrl, naverDraftTs: job.endedTs,
-          // 이미 publishedUrl 이 있으면 덮지 않는다 — RSS 감지가 채운 정규 주소가 더 낫다(쿼리 없는 짧은 꼴).
-          ...(publishedNow && !pieceStore().get(id)?.publishedUrl
-            ? { publishedUrl: publishedNow, publishedTs: job.endedTs } : {}),
+          // privateUrl 로 넣는다(2026-08-29 수선) — publishedUrl 에 넣었더니 RSS 발행 감지가 이 조각을
+          // '이미 처리됨'으로 보고 건너뛰어, 사람이 전체공개로 바꿔도 발행이 잡히지 않았다(실측 5건).
+          // 공개 판정은 publishedUrl 한 곳만 한다.
+          ...(privateNow ? { privateUrl: privateNow } : {}),
         });
-        if (publishedNow) console.log(`[네이버] 비공개 발행 URL 기록 — ${publishedNow.slice(0, 80)}`);
+        if (privateNow) console.log(`[네이버] 비공개 발행 — ${privateNow.slice(0, 80)}`);
         // 저장 성공 = 본문 확정 + 블로그 주소 확보 → 카드뉴스·숏폼 자동 파생(주제 하나 → 세트).
         // 2026-08-28 사용자 확정으로 이 훅이 파생의 **단일 경로**가 됐다 — 사람이 검토 탭·텔레그램
         // 버튼으로 저장한 글도 같은 훅을 타므로 전량 수동 검토 운영에서도 세트는 정상 생성된다.
