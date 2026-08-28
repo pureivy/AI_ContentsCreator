@@ -44,6 +44,33 @@ export async function datalabTrend(keywords: string[], months = 6, signal?: Abor
   });
 }
 
+/**
+ * 트렌드 조회 창(2026-08-28) — 13개월 이상이어야 '작년 같은 달'이 창 안에 들어온다.
+ *
+ * 종전 6개월은 계절 소재에서 잘못된 결론을 만들었다(실사고, 계수나무): 26-02~08 만 보면 4월 정점
+ * 뒤 8월은 저점이라 리서치팀이 "지금은 비수기, 봄을 노리는 자산형"으로 브리프를 썼다. 실제 14개월을
+ * 보면 작년 8월 61 → 9월 76 → 10월 94 로 **가을에 2차 정점**이 있고, 수요 게이트는 13개월을 조회해
+ * 이미 그걸 반영(seasonIdx 0.76)해 채택한 것이었다. 게이트와 브리프가 서로 다른 데이터를 보고
+ * 정반대 결론을 낸 셈이다 — 창을 게이트(topicDemand 의 13)와 맞춘다.
+ */
+const TREND_MONTHS = 13;
+
+/**
+ * 작년 같은 달 비교 한 줄(순수 — 테스트 대상). 스파크라인만 주면 LLM 이 맨 뒤 몇 점만 읽고
+ * "지금은 저점"이라 결론짓는다(실사고: 계수나무 브리프). 계절 소재에서 정작 필요한 비교는
+ * '작년 이맘때 대비 지금'과 '작년 다음 달'이다 — 수요 게이트의 seasonIdx 가 쓰는 것과 같은 두 점이라,
+ * 이 줄이 있어야 브리프와 게이트가 같은 근거 위에서 판단한다.
+ * 13점 미만(창을 다 못 받은 신생 키워드)이면 빈 문자열 — 없는 비교를 지어내지 않는다.
+ */
+export function seasonalHint(points: ReadonlyArray<TrendPoint>): string {
+  if (points.length < 13) return '';
+  const cur = points[points.length - 1]!.ratio;
+  const lastYear = points[points.length - 13]!.ratio;       // 작년 같은 달
+  const lastYearNext = points[points.length - 12]!.ratio;   // 작년 그 다음 달
+  return `\n작년 이맘때 ${Math.round(lastYear)} → 작년 다음 달 ${Math.round(lastYearNext)}`
+    + ` (지금 ${Math.round(cur)}) — 다음 달 방향은 이 두 값으로 판단하라.`;
+}
+
 async function ground(query: string, signal?: AbortSignal): Promise<string> {
   if (!datalabEnabled()) return '';
   const kw = seedKeyword(query);
@@ -54,13 +81,13 @@ async function ground(query: string, signal?: AbortSignal): Promise<string> {
     const candidates = [...new Set([kw, words.slice(0, 2).join(' '), words[0] ?? ''])].filter(Boolean);
     let trends: KeywordTrend[] = [];
     for (const cand of candidates) {
-      trends = await datalabTrend([cand], 6, signal);
+      trends = await datalabTrend([cand], TREND_MONTHS, signal);
       if (trends.length && trends[0]!.points.length) break;
     }
     if (!trends.length || !trends[0]!.points.length) return '';
     const t = trends[0]!;
     const spark = t.points.map((p) => `${p.period.slice(2, 7)}:${Math.round(p.ratio)}`).join(' ');
-    return `검색어트렌드 "${t.keyword}" — 최근 6개월 방향: ${t.direction} (상대지수 0~100)\n${spark}`.slice(0, GROUND_CAP);
+    return `검색어트렌드 "${t.keyword}" — 최근 ${TREND_MONTHS}개월 방향: ${t.direction} (상대지수 0~100)\n${spark}${seasonalHint(t.points)}`.slice(0, GROUND_CAP);
   } catch { return ''; }
 }
 
