@@ -106,6 +106,18 @@ describe('PromiseStore.expire — 만료 자동 청소', () => {
   const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'promises-exp-'));
   const d = (iso: string): Date => new Date(`${iso}T03:00:00Z`); // KST 정오 — 경계 애매함 회피
 
+  /** 등록 시각을 과거로 되돌린 스토어 — 실제 백로그(7월 말 등록)를 재현한다. */
+  const storeCreatedAt = (createdIso: string, windows: string[]): PromiseStore => {
+    const dir = tmp();
+    const s0 = new PromiseStore(dir);
+    for (const w of windows) s0.create({ topic: `주제 ${w}`, window: w, sourceKind: 'shorts', brand: 'b' });
+    const file = path.join(dir, 'index.json');
+    const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as Array<{ createdTs: string }>;
+    for (const r of raw) r.createdTs = createdIso;
+    fs.writeFileSync(file, JSON.stringify(raw), 'utf-8');
+    return new PromiseStore(dir);
+  };
+
   it('유예 기간이 지난 pending 을 dropped 로 비운다', () => {
     const s = new PromiseStore(tmp());
     const p = s.create({ topic: '8월 소재', window: '8월', sourceKind: 'shorts', brand: 'b' })!;
@@ -114,6 +126,30 @@ describe('PromiseStore.expire — 만료 자동 청소', () => {
     const gone = s.expire('b', d('2026-11-15'));
     expect(gone.map((x) => x.id)).toEqual([p.id]);
     expect(s.get(p.id)!.status).toBe('dropped');
+  });
+
+  // 실사고(2026-08-28) — 첫 자율 틱이 9·10·11월 약속 8건을 "창 경과"로 통째 폐기했다. 원인은 기준 시각을
+  // currentOccurrence 로 잡은 것: 8월에 9월을 물으면 **작년 9월**이 나와 도래 전 약속이 만료로 판정됐다.
+  // 기준은 '등록 후 처음 오는 도래'여야 한다 — 약속은 그 창을 한 번 통과해 봐야 놓쳤다고 말할 수 있다.
+  it('아직 도래하지 않은 약속은 지우지 않는다(7월 등록 · 8월 시점의 9~11월 약속)', () => {
+    const s = storeCreatedAt('2026-07-29T00:00:00.000Z', ['9월', '10월', '11월']);
+    expect(s.expire('b', d('2026-08-28'))).toEqual([]);
+    for (const p of s.list()) expect(p.status).toBe('pending');
+  });
+
+  it('등록 후 첫 창이 열리고 유예까지 지나야 만료된다', () => {
+    const s = storeCreatedAt('2026-07-29T00:00:00.000Z', ['9월', '11월']);
+    // 9월 창(9/1~10/30) + 유예 30일 → 11/30 이후. 11월 약속은 아직 창 안.
+    expect(s.expire('b', d('2026-11-15'))).toEqual([]);
+    expect(s.expire('b', d('2026-12-15')).map((x) => x.topic)).toEqual(['주제 9월']);
+    // 11월 창(11/1~12/31) + 유예 → 이듬해 1/30 이후
+    expect(s.expire('b', d('2027-03-01')).map((x) => x.topic)).toEqual(['주제 11월']);
+  });
+
+  it('등록 달과 도래 달이 같으면 그 달의 창을 첫 창으로 본다', () => {
+    const s = storeCreatedAt('2026-08-20T00:00:00.000Z', ['8월']);
+    expect(s.expire('b', d('2026-10-01'))).toEqual([]);        // 창 안
+    expect(s.expire('b', d('2026-11-15'))).toHaveLength(1);    // 창 + 유예 경과
   });
 
   it('시즌 창 안(이행 기회가 살아 있는 동안)에는 절대 지우지 않는다', () => {

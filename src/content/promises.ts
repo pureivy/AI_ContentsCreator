@@ -93,6 +93,20 @@ export function isDue(p: Pick<ContentPromise, 'dueMonth'>, now: Date = new Date(
   return now.getTime() >= occ.getTime() && now.getTime() < occ.getTime() + SEASON_WINDOW_DAYS * DAY_MS;
 }
 
+/**
+ * 기준 시각(보통 등록 시점) 이후 처음 오는 도래 창의 시작. 만료 계산 전용 — '이 약속이 통과해야 할
+ * 첫 창'을 가리킨다. 등록 당월이면 그 달 1일(이미 창 안에서 등록된 경우)을 그대로 쓴다. 순수.
+ */
+function firstOccurrenceOnOrAfter(dueMonth: number, fromMs: number): number | null {
+  if (!Number.isInteger(dueMonth) || dueMonth < 1 || dueMonth > 12 || !Number.isFinite(fromMs)) return null;
+  const k = new Date(fromMs + KST_MS);
+  const y = k.getUTCFullYear();
+  const sameYear = kstMonthStart(y, dueMonth).getTime();
+  // 등록 달과 도래 달이 같으면 그 달 1일이 fromMs 보다 앞설 수 있다 — 그때도 '그 창'이 이 약속의 첫 창이다.
+  if (k.getUTCMonth() + 1 <= dueMonth) return sameYear;
+  return kstMonthStart(y + 1, dueMonth).getTime();
+}
+
 /** 표시·정렬용 다음 도래 시각 — 창 안이면 현재 발생분, 지났으면 이듬해 발생분. 시기 미상은 null. 순수. */
 export function nextOccurrence(p: Pick<ContentPromise, 'dueMonth'>, now: Date = new Date()): Date | null {
   if (p.dueMonth === null) return null;
@@ -242,11 +256,19 @@ export class PromiseStore {
     const gone: ContentPromise[] = [];
     for (const p of this.list()) {
       if (p.status !== 'pending' || (p.brand ?? '') !== brand || p.dueMonth === null) continue;
-      const occ = currentOccurrence(p.dueMonth, now);
-      if (!occ) continue;
-      // 도래일 + EXPIRE_AFTER_DAYS(= 창 60일 + 유예 30일). isDue 와 같은 창 정의를 쓰므로
-      // 창 안(occ ~ occ+60일)인 약속은 여기 걸리지 않는다 — 이행 기회가 살아 있는 동안은 안 지운다.
-      const deadline = occ.getTime() + EXPIRE_AFTER_DAYS * DAY_MS;
+      // 기준은 **등록 후 처음 오는 도래**다(2026-08-28 실사고 수선). 약속은 그 창을 한 번 통과해 봐야
+      // '놓쳤다'고 말할 수 있다 — 7월에 등록한 9월 약속은 8월 시점에 아직 아무것도 놓치지 않았다.
+      //
+      // 처음엔 currentOccurrence 로 짰다가 사고가 났다: 그건 '오늘이 속하거나 직전에 지난 발생분'이라
+      // 8월에 9월 약속을 물으면 **작년 9월**을 돌려준다. 그 기준으로 재니 도래도 안 한 약속이 "창 경과"로
+      // 판정됐고, 첫 자율 틱에서 9·10·11월 약속 8건이 통째로 폐기됐다(실측). nextOccurrence 로 바꿔도
+      // 같았다 — 미래 도래에서 1년을 빼면 결국 등록 전의 창을 가리키기 때문이다.
+      const created = new Date(p.createdTs).getTime();
+      if (!Number.isFinite(created)) continue; // 손상 레코드는 건드리지 않는다(fail-open)
+      const firstDue = firstOccurrenceOnOrAfter(p.dueMonth, created);
+      if (!firstDue) continue;
+      // 그 창이 열린 뒤 유예(창 60일 + 30일)까지 지났으면 만료. 창이 아직 안 왔거나 진행 중이면 미래라 통과.
+      const deadline = firstDue + EXPIRE_AFTER_DAYS * DAY_MS;
       if (now.getTime() >= deadline) {
         const u = this.update(p.id, { status: 'dropped' });
         if (u) gone.push(u);
