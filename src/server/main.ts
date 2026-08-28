@@ -57,6 +57,7 @@ import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/sho
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame } from '../tools/shortsRender';
 import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft, shouldAutoDeriveOnDecision } from '../content/pieces';
+import { isTransientFailure, transientReason } from '../llm/transientError';
 import { toFactGateInfo } from '../content/factGate';
 import { readFactGate } from '../sessions/digest';
 import { listPersonas } from '../content/personas';
@@ -478,7 +479,24 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
         handle.status = 'error';
         // 실런 실패 → piece 에러 카운트(캡 초과 시 종료, 그 전엔 재개 대상). 취소와 구분해 폭주 방지.
         // 리비전 런 실패는 예외 — ready 초안이 멀쩡히 남아 있으므로 강등/카운트하지 않는다.
-        if (opts.pieceId && !opts.revise) { try { pieceStore().recordError(opts.pieceId); } catch { /* 무해 */ } }
+        // 일시적 실패(LLM 한도·혼잡·네트워크)도 예외(2026-08-28) — 시간이 풀어 주는 실패라 재시도
+        // 예산을 쓸 이유가 없다. 실사고: 세션 한도로 2초 만에 죽은 런이 errors 를 3으로 채워 조각이
+        // stage='error' 가 됐고, RESUMABLE_STAGES 에서 빠져 자율 틱이 영영 다시 집지 않았다.
+        const transient = isTransientFailure(e);
+        if (opts.pieceId && !opts.revise && !transient) { try { pieceStore().recordError(opts.pieceId); } catch { /* 무해 */ } }
+        if (opts.pieceId && transient) {
+          // 카운트는 안 하되 조각을 재개 가능한 자리로 되돌린다 — draft 로 승격된 채 런만 죽으면
+          // runId 가 빈 런을 가리킨 상태로 남아, 다음 틱이 그 잔해를 물고 재개한다.
+          try { pieceStore().update(opts.pieceId, { stage: 'idea', runId: undefined }); } catch { /* 무해 */ }
+          const reason = transientReason(e);
+          console.log(`[런] ${topic.slice(0, 30)} — ${reason} → 재시도 예산 보존, 다음 틱에 재개`);
+          // 조용히 재개하면 사람은 "왜 안 도나" 상태가 된다(실측 2026-08-28: 한도로 죽은 걸 로그를 파서야
+          // 알았다). 자동 복구된다는 사실과 사유·해제 시각을 알린다. 실패는 무해 — 알림이 복구를 막지 않는다.
+          void notify({
+            title: `⏸ 생산 일시 중단 — ${reason}`,
+            body: `"${topic.slice(0, 40)}" 은(는) 재시도 예산을 쓰지 않고 다음 자율 틱에서 자동 재개됩니다.`,
+          }).catch(() => { /* 무해 */ });
+        }
         bus.emit(EventType.error, { message: e instanceof Error ? e.message : String(e) });
         bus.emit(EventType.run_done, { status: 'error' });
       }
@@ -2229,9 +2247,11 @@ function maybeAutoNaverDraft(pieceId: string): boolean {
   if (decision === 'draft-off') {
     if (!AUTO_DRAFT_OFF_LOGGED.has(pieceId)) {
       AUTO_DRAFT_OFF_LOGGED.add(pieceId);
-      console.log(`[발행담당] ${piece.title.slice(0, 30)} — 자동 임시저장 꺼짐 → 수동 검토 대기(텔레그램·검토 탭 버튼) · 카드뉴스·숏폼은 지금 파생`);
+      console.log(`[발행담당] ${piece.title.slice(0, 30)} — 자동 임시저장 꺼짐 → 수동 검토 대기(텔레그램·검토 탭 버튼) · 카드뉴스·숏폼은 저장 뒤 파생`);
     }
-    // 블로그 완성 즉시 파생(2026-08-27 사용자 확정) — 임시저장 버튼 타이밍에 세트 생산이 묶이지 않게.
+    // 파생은 네이버 비공개 저장 뒤에만(2026-08-28 사용자 확정) — 저장 시점에 진짜 글 주소가 나와야
+    // 파생물 캡션에 원본 링크가 붙는다. 여기서는 킬스위치 DERIVE_ON_READY=1 일 때만 발동한다.
+    // (문구도 함께 고친다 — 옛 문구가 "지금 파생"이라 로그만 보면 새 동작과 정반대로 읽혔다.)
     if (shouldAutoDeriveOnDecision(decision, CONFIG.autoNaverDraft)) autoDeriveSet(pieceId, piece.title);
     return false;
   }
