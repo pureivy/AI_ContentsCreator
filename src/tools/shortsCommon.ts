@@ -29,6 +29,8 @@ export interface SceneKindFields {
   items?: string[];
   quote?: { text: string; source?: string };
   chart?: { series: Array<{ label: string; value: number }>; unit?: string; highlight?: number };
+  /** CTA 결론(2026-08-28) — "조건 → 답" 쌍. 무음 시청·되감기 없는 매체라 결론은 화면에도 남겨야 한다. */
+  takeaways?: Array<{ when: string; then: string }>;
 }
 export interface ShortsScene extends SceneKindFields { narration: string; screenText?: string }
 
@@ -50,7 +52,23 @@ export function cutAtWordBoundary(s: string, max: number): string {
 export function normalizeSceneKind(raw: unknown): SceneKindFields {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const kind = String(r.kind ?? '').trim().toLowerCase();
-  if (kind === 'hook' || kind === 'cta') return { kind };
+  if (kind === 'hook') return { kind };
+  // CTA 결론 카드(2026-08-28 사용자 요청) — 실측(short_6c8936f791): 내레이션은 "허리 높이면 회양목,
+  // 어깨 높이 상록이면 사철나무"라고 답을 주는데 화면엔 "자리별 나무 정하기" 라벨만 떴다. 조건·답이
+  // 모두 있는 쌍만 싣고, 없거나 불량이면 kind 만 남긴다(종전 동작 — CTA 씬 자체는 유지).
+  if (kind === 'cta') {
+    const takeaways = (Array.isArray(r.takeaways) ? r.takeaways : [])
+      .map((x) => {
+        const o = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>;
+        // when 은 시청자가 자기 상황을 찾는 조건, then 은 답 — 둘 다 있어야 화살표 표기가 성립한다.
+        const when = cutAtWordBoundary(asText(o.when), 12);
+        const then = cutAtWordBoundary(asText(o.then), 12);
+        return when && then ? { when, then } : null;
+      })
+      .filter((x): x is { when: string; then: string } => !!x)
+      .slice(0, 3);
+    return takeaways.length ? { kind, takeaways } : { kind };
+  }
   if (kind === 'stat') {
     const s = (r.stat && typeof r.stat === 'object' ? r.stat : {}) as Record<string, unknown>;
     const rawVal = asText(s.value).replace(/,/g, '').trim();

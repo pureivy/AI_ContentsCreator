@@ -189,3 +189,44 @@ describe('quote.source 절단 — 단어 경계(스펙 §6a, 실측 "biondi tree
     expect(k.quote?.source).toBe('biondi tree');
   });
 });
+
+// CTA 결론 카드(2026-08-28) — 결론이 소리로만 지나가면 무음 시청자에게 아무것도 안 남는다.
+// 실측(short_6c8936f791): 내레이션 "허리 높이면 회양목…" ↔ 화면 "자리별 나무 정하기".
+describe('normalizeSceneKind — cta takeaways', () => {
+  it('조건·답 쌍을 싣는다', () => {
+    expect(normalizeSceneKind({
+      kind: 'cta',
+      takeaways: [{ when: '허리 높이', then: '회양목' }, { when: '어깨 높이 상록', then: '사철나무' }],
+    })).toEqual({
+      kind: 'cta',
+      takeaways: [{ when: '허리 높이', then: '회양목' }, { when: '어깨 높이 상록', then: '사철나무' }],
+    });
+  });
+
+  it('한쪽만 있는 쌍은 버린다 — 화살표 표기가 성립하지 않는다', () => {
+    const r = normalizeSceneKind({ kind: 'cta', takeaways: [{ when: '허리 높이' }, { then: '회양목' }, { when: '어깨', then: '사철나무' }] });
+    expect(r.takeaways).toEqual([{ when: '어깨', then: '사철나무' }]);
+  });
+
+  it('takeaways 가 없거나 전부 불량이면 kind 만 남는다(종전 동작 — CTA 씬은 유지)', () => {
+    expect(normalizeSceneKind({ kind: 'cta' })).toEqual({ kind: 'cta' });
+    expect(normalizeSceneKind({ kind: 'cta', takeaways: [] })).toEqual({ kind: 'cta' });
+    expect(normalizeSceneKind({ kind: 'cta', takeaways: 'nope' })).toEqual({ kind: 'cta' });
+    expect(normalizeSceneKind({ kind: 'cta', takeaways: [{ when: {}, then: [] }] })).toEqual({ kind: 'cta' });
+  });
+
+  it('최대 3쌍 — 그 이상은 한 화면에 안 들어온다', () => {
+    const many = Array.from({ length: 6 }, (_, i) => ({ when: `조건${i}`, then: `답${i}` }));
+    expect(normalizeSceneKind({ kind: 'cta', takeaways: many }).takeaways).toHaveLength(3);
+  });
+
+  it('12자 초과는 단어 경계에서 자른다', () => {
+    const r = normalizeSceneKind({ kind: 'cta', takeaways: [{ when: '아주 긴 조건 문장이 여기 들어간다', then: '회양목' }] });
+    expect(r.takeaways![0]!.when.length).toBeLessThanOrEqual(12);
+    expect(r.takeaways![0]!.then).toBe('회양목');
+  });
+
+  it('hook 은 종전대로 kind 만 — takeaways 를 보내도 무시한다', () => {
+    expect(normalizeSceneKind({ kind: 'hook', takeaways: [{ when: 'a', then: 'b' }] })).toEqual({ kind: 'hook' });
+  });
+});

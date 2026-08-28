@@ -3572,6 +3572,11 @@ async function pickAutoWork(signal?: AbortSignal, force = false): Promise<AutoWo
         return !p ? 'missing' : p.stage === 'error' ? 'error' : 'ok';
       });
       if (reverted) console.log(`[auto-cycle] 예고 정합 복원 — ${reverted}건 pending 복귀(이행 piece 유실/실패)`);
+      // 만료 청소(2026-08-28) — 시즌 창을 놓친 지 오래된 약속을 비워 백로그가 스스로 숨 쉬게 한다.
+      // 실측: 7/29~8/1 12건 적재 후 27일간 캡 만석 → 그 사이 모든 신규 예고가 조용히 거절됐다.
+      // nextDue 앞에 둔다 — 만료분이 후보에서 먼저 빠져야 이번 틱이 살아 있는 약속을 본다.
+      const expired = promiseStore().expire(tickBrand);
+      for (const e of expired) console.log(`[auto-cycle] 예고 만료 폐기 — "${e.topic.slice(0, 40)}" (${e.window ?? '시기 미상'} 창 경과) → dropped`);
       const due = promiseStore().nextDue(tickBrand);
       if (due) {
         // 브랜드 소재 게이트 — 예고 경로는 신규성·범위 검사를 다 우회하므로 여기서 막는다. 게이트 신설(2026-07-31)

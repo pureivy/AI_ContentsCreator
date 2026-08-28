@@ -41,6 +41,21 @@ export interface ContentPromise {
 export const MAX_PENDING = 12;
 /** 시즌 창 — 도래 월 1일부터 이 기간 안에서만 자동 이행(지나면 이듬해로 재도래). */
 export const SEASON_WINDOW_DAYS = 60;
+/**
+ * 만료 청소 기준(2026-08-28 사용자 확정) — 시즌 창을 놓친 채 이 기간을 넘긴 약속은 자동 dropped.
+ *
+ * 배경(실측): 7/29~8/1 에 12건이 쌓인 뒤 27일간 fulfilled 가 0건이었다. 캡(MAX_PENDING)이 만석이라
+ * 그 뒤 모든 신규 예고가 조용히 거절됐다 — 시청자에게 "다음 편에 다루겠다"고 약속한 영상을 발행하면서
+ * 시스템은 그 약속을 등록조차 못 하는 상태가 한 달 가까이 이어졌다.
+ *
+ * 캡을 올리는 것으로는 안 풀린다(시간만 벌 뿐). 백로그가 스스로 숨을 쉬어야 한다 — 창을 놓친 약속은
+ * 이듬해까지 pending 으로 남아 슬롯을 점유하는데, 1년 뒤 그 주제를 그때 맥락으로 다시 잡는 편이 낫다.
+ *
+ * 값: 시즌 창(60일)보다 넉넉히 길게 둔다. 창 안에서는 이행 기회가 매 틱 살아 있어야 하고, 창을 놓친
+ * 뒤에도 한 달쯤은 사람이 손으로 이행할 여지를 남긴다(60+30). 창이 지나자마자 지우면 "며칠 늦었다고
+ * 약속을 버리는" 꼴이 된다.
+ */
+export const EXPIRE_AFTER_DAYS = SEASON_WINDOW_DAYS + 30;
 const KST_MS = 9 * 3600 * 1000;
 const DAY_MS = 24 * 3600 * 1000;
 
@@ -213,6 +228,31 @@ export class PromiseStore {
       }
     }
     return reverted;
+  }
+  /**
+   * 만료 청소(2026-08-28) — 시즌 창을 놓친 지 EXPIRE_AFTER_DAYS 넘은 pending 을 dropped 로.
+   * 자율 틱이 reconcile 과 함께 매번 호출(저비용, 순수 산술). 실측 대응: 백로그 만석으로 27일간
+   * 신규 예고가 전부 소실됐다 — 창을 놓친 약속이 이듬해까지 슬롯을 점유하는 구조가 원인이었다.
+   *
+   * 기준 시각은 **도래 창의 끝**이지 등록일이 아니다. 등록일 기준이면 먼 미래를 예고한 약속(8월에 등록한
+   * 12월 건)이 도래도 하기 전에 지워진다. 시기 미상(dueMonth=null)은 건드리지 않는다 — 자동 이행
+   * 대상이 아니라 애초에 사람이 처리하기로 한 것들이라, 자동으로 지우면 사람의 목록을 뺏는 셈이다.
+   */
+  expire(brand: string, now: Date = new Date()): ContentPromise[] {
+    const gone: ContentPromise[] = [];
+    for (const p of this.list()) {
+      if (p.status !== 'pending' || (p.brand ?? '') !== brand || p.dueMonth === null) continue;
+      const occ = currentOccurrence(p.dueMonth, now);
+      if (!occ) continue;
+      // 도래일 + EXPIRE_AFTER_DAYS(= 창 60일 + 유예 30일). isDue 와 같은 창 정의를 쓰므로
+      // 창 안(occ ~ occ+60일)인 약속은 여기 걸리지 않는다 — 이행 기회가 살아 있는 동안은 안 지운다.
+      const deadline = occ.getTime() + EXPIRE_AFTER_DAYS * DAY_MS;
+      if (now.getTime() >= deadline) {
+        const u = this.update(p.id, { status: 'dropped' });
+        if (u) gone.push(u);
+      }
+    }
+    return gone;
   }
 }
 

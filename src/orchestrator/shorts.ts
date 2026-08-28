@@ -677,13 +677,16 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     `본문 씬 내레이션은 1~3문장(합쳐서 30~70자, 낭독 5~12초) — "방법 한 문장+이유 한 문장"이 기본형이다. 리듬만 변주하라: 이유를 먼저 두는 씬, 질문으로 끝나는 씬을 최소 1개 섞되(단, 씬당 "무엇을+왜"는 유지 — 리듬을 바꾸라는 것이지 정보를 빼라는 것이 아니다), 질문으로 끝냈으면 그 답을 반드시 바로 다음 씬 첫 문장에서 준다. "~기 때문입니다"는 대본 전체 1회 이하. 씬2(전제)는 45~70자까지 허용. 훅·CTA 씬은 1~2문장(20~40자). 총 낭독 시간 ${Math.max(20, capSec - 25)}~${capSec - 10}초, 대본 전체(모든 씬 내레이션 합) ${budgetChars}자 이내를 반드시 맞춘다 — TTS 실측 속도는 초당 약 6자다. 이 총량이 씬 수보다 우선한다(넘칠 것 같으면 씬 수를 줄여서라도 지켜라).`,
     `압축 안전선: ${capSec}초에 맞추더라도 조사·주어는 남겨라("이 시기 질소 거름 주면" 금지 → "이 시기엔 질소 거름을 주면"). 앞 문장의 주어가 바뀌면 새 주어를 밝혀라. screenText 에 "정의·구분법·요약·정리" 같은 대본용 딱지를 쓰지 마라 — 화면에는 독자에게 하는 말만.`,
     'screenText 는 씬당 1줄 15자 이내 키워드 요약(비워도 됨).',
+    // CTA 결론 카드(2026-08-28 사용자 요청) — 결론이 소리로만 지나가면 무음 시청자에게 아무것도 안 남는다.
+    // 실측(short_6c8936f791): 내레이션은 "허리 높이면 회양목, 어깨 높이 상록이면 사철나무"인데 화면엔 "자리별 나무 정하기".
+    'CTA 씬에는 takeaways 를 채워라 — 이 영상의 결론("무얼 하라/무얼 골라라")을 "조건 → 답" 쌍 1~3개로 화면에 띄운다(when=시청자가 자기 상황을 알아보는 조건, then=그때의 답, 각 12자 이내). 예: {"when":"허리 높이","then":"회양목"}. 내레이션이 말한 답과 같아야 하고, 내레이션에 없는 답을 새로 만들지 마라. 조건별로 답이 갈리는 소재가 아니면 when 에 핵심 상황, then 에 할 일을 넣어라(예: {"when":"심기 전","then":"뿌리부터 확인"}). 결론이 조건과 무관한 단일 행동뿐이면 takeaways 를 생략해도 된다 — 억지로 쪼개지 마라.',
     '씬 kind(선택): 씬1="hook", 마지막 씬="cta". 본문 씬 중 어울리는 곳에만 "stat"(핵심 수치 1개: value 숫자·unit 단위·label 15자)·"list"(items 2~4개, 각 18자)·"quote"(text 40자, source 출처)·"chart"(비교 수치 2~5개가 막대그래프로 자라나는 연출: series 각 {label 8자, value 숫자≥0}, unit 단위, highlight 강조할 막대 인덱스) — 억지 배정 금지, 애매하면 kind 생략. chart 는 내레이션이 수치 비교를 말할 때만.',
     '수치 규칙: stat.value 와 chart.series 의 value 는 원문(블로그 초안)에 있는 수치 또는 대본 구조상 자명한 숫자(단계 수·항목 수)만. 불확실하면 그 kind 를 쓰지 마라. narration 은 수치를 한글로 낭독하되 JSON 값은 아라비아 숫자. chart 씬의 screenText 에는 핵심 수치 비교를 요약하라(렌더 실패 대비).',
     'description(유튜브 설명 — 인스타 캡션에도 그대로 복제된다)은 요약투로 끝내지 마라 — "정리했습니다/담았어요/알아봅니다/알아보세요/살펴봅니다/소개합니다" 금지. "결론 한 줄 + 조건 한 줄" 꼴로 써라(예: "잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요.").',
     shortsTitleTypeGuide(titleTypes, CONFIG.voiceRotation),
-    `JSON 형식: {"title":"대표 제목","titles":[${titlesJson}],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|chart|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0}}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}`,
+    `JSON 형식: {"title":"대표 제목","titles":[${titlesJson}],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|chart|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0},"takeaways":[{"when":"허리 높이","then":"회양목"}]}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}`,
   ].filter(Boolean).join('\n');
-  type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown }>; description?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
+  type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown; takeaways?: unknown }>; description?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
   const sys = '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.';
   // 고유어 월은 내레이션(TTS) 전용 — 화면·검색 필드는 숫자 월로 되돌린다(권고 5, 결정적).
   // 단 키워드 정확 표기가 깨지는 경우는 원문을 유지한다: 키워드 규칙(사용자 확정 자산)이 우선이다.

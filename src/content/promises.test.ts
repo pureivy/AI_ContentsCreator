@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { normalizeWindow, currentOccurrence, nextOccurrence, isDue, sanitizeTopic, PromiseStore, MAX_PENDING } from './promises';
+import { normalizeWindow, currentOccurrence, nextOccurrence, isDue, sanitizeTopic, PromiseStore, MAX_PENDING, SEASON_WINDOW_DAYS, EXPIRE_AFTER_DAYS } from './promises';
 
 describe('normalizeWindow', () => {
   it('"N월"과 계절어를 도래 월로 정규화한다', () => {
@@ -97,5 +97,63 @@ describe('PromiseStore', () => {
     expect(reverted).toBe(1);
     expect(s.get(a.id)?.status).toBe('pending');
     expect(s.get(b.id)?.status).toBe('fulfilled');
+  });
+});
+
+// 만료 청소(2026-08-28) — 실측: 7/29~8/1 12건 적재 후 27일간 fulfilled 0건, 캡 만석으로 그 사이
+// 모든 신규 예고가 조용히 거절됐다. 창을 놓친 약속이 이듬해까지 슬롯을 점유하던 구조가 원인.
+describe('PromiseStore.expire — 만료 자동 청소', () => {
+  const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'promises-exp-'));
+  const d = (iso: string): Date => new Date(`${iso}T03:00:00Z`); // KST 정오 — 경계 애매함 회피
+
+  it('유예 기간이 지난 pending 을 dropped 로 비운다', () => {
+    const s = new PromiseStore(tmp());
+    const p = s.create({ topic: '8월 소재', window: '8월', sourceKind: 'shorts', brand: 'b' })!;
+    // 8/1 도래 + 90일(창 60 + 유예 30) → 10월 말 이후 만료
+    expect(s.expire('b', d('2026-10-01'))).toEqual([]);       // 아직 유예 안
+    const gone = s.expire('b', d('2026-11-15'));
+    expect(gone.map((x) => x.id)).toEqual([p.id]);
+    expect(s.get(p.id)!.status).toBe('dropped');
+  });
+
+  it('시즌 창 안(이행 기회가 살아 있는 동안)에는 절대 지우지 않는다', () => {
+    const s = new PromiseStore(tmp());
+    const p = s.create({ topic: '9월 소재', window: '9월', sourceKind: 'shorts', brand: 'b' })!;
+    for (const day of ['2026-09-01', '2026-09-15', '2026-10-20']) {
+      expect(s.expire('b', d(day))).toEqual([]);
+      expect(s.get(p.id)!.status).toBe('pending');
+    }
+    expect(isDue(s.get(p.id)!, d('2026-09-15'))).toBe(true); // 같은 창 정의를 공유한다
+  });
+
+  it('유예는 창보다 길다 — 며칠 늦었다고 약속을 버리지 않는다', () => {
+    expect(EXPIRE_AFTER_DAYS).toBeGreaterThan(SEASON_WINDOW_DAYS);
+  });
+
+  it('시기 미상은 건드리지 않는다 — 사람이 처리하기로 한 목록을 뺏지 않는다', () => {
+    const s = new PromiseStore(tmp());
+    const p = s.create({ topic: '시기 없음', sourceKind: 'manual', brand: 'b' })!;
+    expect(p.dueMonth).toBeNull();
+    expect(s.expire('b', d('2030-01-01'))).toEqual([]);
+    expect(s.get(p.id)!.status).toBe('pending');
+  });
+
+  it('다른 브랜드·비 pending 은 불변', () => {
+    const s = new PromiseStore(tmp());
+    const other = s.create({ topic: '남의 브랜드', window: '8월', sourceKind: 'shorts', brand: 'other' })!;
+    const done = s.create({ topic: '이미 이행', window: '8월', sourceKind: 'shorts', brand: 'b' })!;
+    s.update(done.id, { status: 'fulfilled', fulfilledPieceId: 'piece_x' });
+    expect(s.expire('b', d('2026-12-01'))).toEqual([]);
+    expect(s.get(other.id)!.status).toBe('pending');
+    expect(s.get(done.id)!.status).toBe('fulfilled');
+  });
+
+  it('만료로 슬롯이 비면 새 예고가 다시 등록된다 — 이 기능의 존재 이유', () => {
+    const s = new PromiseStore(tmp());
+    for (let i = 0; i < MAX_PENDING; i++) s.create({ topic: `묵은 주제 ${i}`, window: '8월', sourceKind: 'shorts', brand: 'b' });
+    const late = d('2026-12-01');
+    expect(s.create({ topic: '새 예고', window: '12월', sourceKind: 'shorts', brand: 'b' })).toBeNull(); // 만석
+    expect(s.expire('b', late)).toHaveLength(MAX_PENDING);
+    expect(s.create({ topic: '새 예고', window: '12월', sourceKind: 'shorts', brand: 'b' })).not.toBeNull();
   });
 });

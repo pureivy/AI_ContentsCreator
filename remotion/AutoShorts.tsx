@@ -12,6 +12,7 @@ import { TitleOverlay } from './TitleOverlay';
 import { SpotlightMask } from './SpotlightMask';
 import { ParticleDrift } from './ParticleDrift';
 import { BarChartGrow } from './BarChartGrow';
+import { TakeawayCard } from './TakeawayCard';
 
 export const autoShortsSchema = z.object({
   scenes: z.array(z.object({
@@ -24,6 +25,8 @@ export const autoShortsSchema = z.object({
     kind: z.enum(['hook', 'stat', 'list', 'quote', 'chart', 'cta']).optional(),
     stat: z.object({ value: z.number(), unit: z.string().optional(), label: z.string().optional() }).optional(),
     items: z.array(z.string()).max(4).optional(),
+    /** CTA 결론(2026-08-28) — "조건 → 답" 쌍을 화면에 띄운다. 무음 시청·되감기 없음 대응. */
+    takeaways: z.array(z.object({ when: z.string(), then: z.string() })).max(3).optional(),
     quote: z.object({ text: z.string(), source: z.string().optional() }).optional(),
     chart: z.object({
       series: z.array(z.object({ label: z.string(), value: z.number() })).max(5),
@@ -85,6 +88,7 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
       {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}
       {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
       {s.kind === 'chart' && s.chart ? <BarChartGrow chart={s.chart} total={s.durationInFrames} /> : null}
+      {s.kind === 'cta' && s.takeaways?.length ? <TakeawayCard takeaways={s.takeaways} total={s.durationInFrames} /> : null}
       <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={caption?.bottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} hookFontPx={caption?.hookFontPx} />
       {s.audioSrc ? <Audio src={staticFile(s.audioSrc)} /> : null}
     </AbsoluteFill>
