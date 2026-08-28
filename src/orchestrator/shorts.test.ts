@@ -120,6 +120,31 @@ describe('timingFields — 시기·수치 대조 입력(권고 1)', () => {
       { field: '설명', text: '9월 기준 설명' },
     ]);
   });
+
+  // 결론 카드(2026-08-28) — 사용자 확정 분업에서 답은 화면에만 있다. 대조에서 빠지면 검증 안 받은
+  // 답이 화면으로 나간다(다른 오버레이는 전부 실리는데 이것만 빠져 있었다).
+  it('CTA 결론 카드도 대조 대상에 싣는다 — 화면이 답을 단독으로 지기 때문', () => {
+    const plan = {
+      title: 'T', titles: ['T'], description: '', hashtags: [],
+      scenes: [
+        { narration: '기준만 말합니다', screenText: '두 기준', kind: 'cta' as const,
+          takeaways: [{ when: '무릎~허리', then: '회양목' }, { when: '어깨 상록', then: '사철나무' }] },
+      ],
+    } as unknown as ShortsPlan;
+    expect(timingFields(plan)).toEqual([
+      { field: '씬1 내레이션', text: '기준만 말합니다' },
+      { field: '씬1 자막', text: '두 기준' },
+      { field: '씬1 결론', text: '무릎~허리 → 회양목, 어깨 상록 → 사철나무' },
+    ]);
+  });
+
+  it('takeaways 가 없는 CTA 는 결론 필드를 만들지 않는다(회귀 0)', () => {
+    const plan = {
+      title: 'T', titles: ['T'], description: '', hashtags: [],
+      scenes: [{ narration: '마무리', kind: 'cta' as const }],
+    } as unknown as ShortsPlan;
+    expect(timingFields(plan)).toEqual([{ field: '씬1 내레이션', text: '마무리' }]);
+  });
 });
 describe('applyShortsRevision — quote 편집', () => {
   it('kind=quote 씬만 text·source 를 바꾼다', () => {

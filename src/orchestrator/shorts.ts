@@ -609,6 +609,9 @@ export function timingFields(plan: Plan): Array<{ field: string; text: string }>
     if (s.kind === 'chart' && s.chart) out.push({ field: `씬${n} 차트`, text: s.chart.series.map((x) => `${x.label} ${x.value}${s.chart?.unit ?? ''}`).join(', ') });
     if (s.kind === 'list' && s.items?.length) out.push({ field: `씬${n} 목록`, text: s.items.join(' / ') });
     if (s.kind === 'quote' && s.quote?.text) out.push({ field: `씬${n} 인용`, text: s.quote.text });
+    // 결론 카드(2026-08-28) — 사용자 확정으로 화면이 답을 '단독으로' 진다(내레이션은 기준만 말한다).
+    // 그래서 이 텍스트가 대조에서 빠지면 검증받지 않은 답이 화면에만 떠서 나간다 — 다른 오버레이와 동렬로 싣는다.
+    if (s.kind === 'cta' && s.takeaways?.length) out.push({ field: `씬${n} 결론`, text: s.takeaways.map((t) => `${t.when} → ${t.then}`).join(', ') });
   });
   if (plan.description) out.push({ field: '설명', text: plan.description });
   return out;
@@ -679,7 +682,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     'screenText 는 씬당 1줄 15자 이내 키워드 요약(비워도 됨).',
     // CTA 결론 카드(2026-08-28 사용자 요청) — 결론이 소리로만 지나가면 무음 시청자에게 아무것도 안 남는다.
     // 실측(short_6c8936f791): 내레이션은 "허리 높이면 회양목, 어깨 높이 상록이면 사철나무"인데 화면엔 "자리별 나무 정하기".
-    'CTA 씬에는 takeaways 를 채워라 — 이 영상의 결론("무얼 하라/무얼 골라라")을 "조건 → 답" 쌍 1~3개로 화면에 띄운다(when=시청자가 자기 상황을 알아보는 조건, then=그때의 답, 각 12자 이내). 예: {"when":"허리 높이","then":"회양목"}. 내레이션이 말한 답과 같아야 하고, 내레이션에 없는 답을 새로 만들지 마라. 조건별로 답이 갈리는 소재가 아니면 when 에 핵심 상황, then 에 할 일을 넣어라(예: {"when":"심기 전","then":"뿌리부터 확인"}). 결론이 조건과 무관한 단일 행동뿐이면 takeaways 를 생략해도 된다 — 억지로 쪼개지 마라.',
+    'CTA 씬에는 takeaways 를 채워라 — 이 영상의 결론("무얼 하라/무얼 골라라")을 "조건 → 답" 쌍 1~3개로 화면에 띄운다(when=시청자가 자기 상황을 알아보는 조건, then=그때의 답, 각 12자 이내). 예: {"when":"허리 높이","then":"회양목"}. 답은 화면이 지고 내레이션은 기준·이유를 말한다(사용자 확정 2026-08-28) — 그러니 내레이션이 수종명·품목명을 일일이 읊지 않아도 되고, takeaways 가 내레이션을 그대로 복창할 필요도 없다. 다만 **답의 근거는 반드시 원문(블로그 초안)에 있어야 한다** — 원문에 없는 답을 화면에 지어 넣지 마라. 화면에만 나가는 만큼 이 항목은 내레이션보다 더 엄격히 원문에 붙어라. 조건별로 답이 갈리는 소재가 아니면 when 에 핵심 상황, then 에 할 일을 넣어라(예: {"when":"심기 전","then":"뿌리부터 확인"}). 결론이 조건과 무관한 단일 행동뿐이면 takeaways 를 생략해도 된다 — 억지로 쪼개지 마라.',
     '씬 kind(선택): 씬1="hook", 마지막 씬="cta". 본문 씬 중 어울리는 곳에만 "stat"(핵심 수치 1개: value 숫자·unit 단위·label 15자)·"list"(items 2~4개, 각 18자)·"quote"(text 40자, source 출처)·"chart"(비교 수치 2~5개가 막대그래프로 자라나는 연출: series 각 {label 8자, value 숫자≥0}, unit 단위, highlight 강조할 막대 인덱스) — 억지 배정 금지, 애매하면 kind 생략. chart 는 내레이션이 수치 비교를 말할 때만.',
     '수치 규칙: stat.value 와 chart.series 의 value 는 원문(블로그 초안)에 있는 수치 또는 대본 구조상 자명한 숫자(단계 수·항목 수)만. 불확실하면 그 kind 를 쓰지 마라. narration 은 수치를 한글로 낭독하되 JSON 값은 아라비아 숫자. chart 씬의 screenText 에는 핵심 수치 비교를 요약하라(렌더 실패 대비).',
     'description(유튜브 설명 — 인스타 캡션에도 그대로 복제된다)은 요약투로 끝내지 마라 — "정리했습니다/담았어요/알아봅니다/알아보세요/살펴봅니다/소개합니다" 금지. "결론 한 줄 + 조건 한 줄" 꼴로 써라(예: "잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요.").',
@@ -742,7 +745,10 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
           .filter(Boolean).slice(0, 8).join(' · ')
       : undefined;
     // 원문 정합(스펙 §2-4) — 파생물이 원문에 없는 사실을 새로 지어내거나 원문 결론을 뒤집는지 대조(fail-open).
-    const sceneTexts = (p: Plan): string[] => p.scenes.map((s) => `${s.narration}${s.screenText ? ` (자막: ${s.screenText})` : ''}`);
+    // 결론 카드를 함께 싣는다(2026-08-28) — 사용자 확정 분업에서 답은 화면에만 있다. 내레이션만 보여 주면
+    // 정합 판정이 '답이 없는 대본'을 보게 되고, 화면의 답은 아무 검사도 받지 않는다.
+    const sceneTexts = (p: Plan): string[] => p.scenes.map((s) => `${s.narration}${s.screenText ? ` (자막: ${s.screenText})` : ''}`
+      + (s.takeaways?.length ? ` (결론: ${s.takeaways.map((t) => `${t.when} → ${t.then}`).join(', ')})` : ''));
     // FACT_GATE=off 면 LLM 정합 1차·잔존 판정을 통째로 건너뛴다(킬스위치가 실제로 꺼져야 한다 — 2026-08-26 최종 리뷰 F1):
     // parity 가 빈 배열이면 정합 지적이 수정 라운드 입력에서도 빠지고, 아래 소스별 캡의 'parity ≤2' 몫이
     // 비어 상한이 13 이 된다(다른 소스는 그대로).
@@ -752,7 +758,12 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 둘 다 끄려면 FACT_GATE=off + TIMING_PARITY=off.
     const parity = CONFIG.factGate && sourceBody ? await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceBody, io.signal) : [];
     // 단독 이해 검산(LLM, 최대 5건) — 소스별 예약 캡의 몫 계산을 위해 먼저 변수로 받는다.
-    const standalone = await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)', plan.scenes.map((s) => s.narration), topic, keyword, io.signal, sourceCore);
+    // 결론 카드를 함께 넘긴다(2026-08-28) — 이 검사의 항목 4가 '결론 부재'다. 사용자 확정 분업에서
+    // 답은 화면에만 있으므로, 내레이션만 보여 주면 잘 만든 CTA 가 매번 '결론 없음'으로 걸린다(과차단).
+    // 판정자가 화면에 뜬 답까지 보고 나서 결론 유무를 판단하게 한다.
+    const standalone = await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)',
+      plan.scenes.map((s) => `${s.narration}${s.takeaways?.length ? ` [화면 결론: ${s.takeaways.map((t) => `${t.when} → ${t.then}`).join(', ')}]` : ''}`),
+      topic, keyword, io.signal, sourceCore);
     // 문체 결정적 린트(2026-08-11) — 프롬프트 지시만으로는 샌다는 실측("새 가지" 위반) 대응, 같은 수정 라운드에 얹는다.
     // 소스별 예약(2026-08-26 리뷰 수선) — 결정적 린트(문체·훅)를 앞에 둬 프롬프트-only 실측 누출 방지를
     // 우선 보장하고, LLM 판정(단독 이해·정합)은 각 소스당 상한을 둬 한쪽이 다른 쪽을 밀어내지 못하게 한다.
