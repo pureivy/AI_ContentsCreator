@@ -41,3 +41,39 @@ describe('themeCoverage / overThemeCap / block', () => {
     expect(themeRotationBlock(undefined, new Map())).toBe('');
   });
 });
+
+// 좁은 장 경고(2026-08-30) — 실사고: 16축 중 7축이 상한에 닿은 상태에서 두뇌가 상한 축으로 후보를
+// 채워 한 라운드 17건이 코드 기각됐고 생산이 멈췄다. 남은 자리를 세어 알려 주면 그 자리를 피한다.
+describe('themeRotationBlock — 좁은 장 경고', () => {
+  const cov = (m: Record<string, number>): Map<string, number> => new Map(Object.entries(m));
+
+  it('남은 축이 요구 후보 수 이하면 경고를 낸다', () => {
+    // 3축 중 2축 상한 → 열린 축 1개, 후보 2개 요구
+    const b = themeRotationBlock(TH, cov({ '심기·이식': 9, '병충해·문제 진단': 5 }), THEME_MONTHLY_CAP, 2);
+    expect(b).toContain('⚠ 지금 쓸 수 있는 축은 1개뿐이다(3축 중 2축 상한 도달)');
+    expect(b).toContain('상한 축으로 자리를 메우면 그 후보는 버려진다');
+  });
+
+  it('여유가 있으면 경고를 내지 않는다 — 정상 상태의 소음 방지', () => {
+    // 축을 넉넉히 둔 장: 10축 중 1축만 상한 → 열린 축 9개로 후보 3개 요구를 여유 있게 채운다.
+    const many = Array.from({ length: 10 }, (_, i) => ({ theme: `축${i}`, seeds: [`시드${i}`], match: [`토큰${i}`] }));
+    const b = themeRotationBlock(many, cov({ '축0': 9 }), THEME_MONTHLY_CAP, 3);
+    expect(b).toContain('상한 도달 → 제안 금지');            // 상한 안내는 그대로 나온다
+    expect(b).not.toContain('⚠ 지금 쓸 수 있는 축은');       // 좁은 장 경고만 없다
+  });
+
+  it('상한 축이 없으면 경고 자체가 없다', () => {
+    expect(themeRotationBlock(TH, cov({}), THEME_MONTHLY_CAP, 8)).not.toContain('⚠');
+  });
+
+  it('안 다룬 축이 하나도 없으면 대안을 덧붙인다', () => {
+    // 3축 전부 다뤘고 2축이 상한 → fresh 없음
+    const b = themeRotationBlock(TH, cov({ '심기·이식': 9, '병충해·문제 진단': 5, '번식·접목·삽목': 1 }), THEME_MONTHLY_CAP, 2);
+    expect(b).toContain('안 다룬 축이 없으면 최근 다룸 축에서 편수가 적은 것부터 고른다');
+  });
+
+  it('축 정의가 없으면 종전대로 빈 문자열', () => {
+    expect(themeRotationBlock(undefined, cov({}))).toBe('');
+    expect(themeRotationBlock([], cov({}))).toBe('');
+  });
+});

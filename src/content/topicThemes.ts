@@ -54,7 +54,13 @@ export function overThemeCap(
 }
 
 /** 프롬프트 블록 — 상한 도달(제안 금지) · 최근 다룸 · 아직 안 다룬 축(우선, 발굴 검색어 예시 동반). */
-export function themeRotationBlock(themes: TopicTheme[] | undefined, coverage: Map<string, number>, cap = THEME_MONTHLY_CAP): string {
+export function themeRotationBlock(
+  themes: TopicTheme[] | undefined,
+  coverage: Map<string, number>,
+  cap = THEME_MONTHLY_CAP,
+  /** 이 라운드가 요구하는 후보 수 — 남은 축이 이보다 적으면 '좁은 장' 경고를 낸다. */
+  candidates = 8,
+): string {
   if (!themes?.length) return '';
   const capped: string[] = []; const recent: string[] = []; const fresh: string[] = [];
   for (const th of themes) {
@@ -68,5 +74,19 @@ export function themeRotationBlock(themes: TopicTheme[] | undefined, coverage: M
   if (recent.length) lines.push(`- 최근 다룸 → 가급적 피함: ${recent.join(', ')}`);
   if (fresh.length) lines.push('- 아직 안 다룬 축 → 우선(사람들이 실제로 치는 검색어 예시):', ...fresh);
   lines.push('- 후보 8개는 서로 다른 축에서 고르고, 수종 × 축 조합은 기존 글과 겹치지 않게.');
+  // 좁은 장에서의 지시 강화(2026-08-30) — 축이 많이 막히면 "가급적 피함"까지 써야 후보가 채워진다.
+  // 그 사실을 명시하지 않으면 두뇌가 상한 축에서 8개를 억지로 만들고 전부 코드 기각된다(실측: 16축 중
+  // 7축 포화 상태에서 한 라운드 17건 기각, 생산 정지). 남은 자리를 세어 알려 주는 편이 정확하다.
+  // 임계는 '축의 절반'이 아니라 **요구 후보 수**로 잡는다 — 위 줄이 "후보 8개를 서로 다른 축에서"라고
+  // 요구하므로, 열린 축이 그보다 적거나 겨우 같으면 그 지시가 이미 성립하지 않는다(실측: 16축 중 7축
+  // 포화 = 열린 9축이지만 그중 6축은 이미 다룬 것이라 실질 여유가 없었다).
+  const open = themes.length - capped.length;
+  if (capped.length && open <= candidates + 1) {
+    lines.push(
+      `- ⚠ 지금 쓸 수 있는 축은 ${open}개뿐이다(${themes.length}축 중 ${capped.length}축 상한 도달).`
+      + ` 후보 8개를 채우려면 '아직 안 다룬 축'과 '최근 다룸' 축을 모두 써라 — 상한 축으로 자리를 메우면 그 후보는 버려진다.`
+      + (fresh.length ? '' : ' 안 다룬 축이 없으면 최근 다룸 축에서 편수가 적은 것부터 고른다.'),
+    );
+  }
   return lines.join('\n');
 }
