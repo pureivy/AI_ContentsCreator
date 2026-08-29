@@ -53,6 +53,14 @@ export interface Piece {
   notifiedTs?: string;
   /** 자율 사이클이 만든 것인지(수동 생성과 카덴스 쿼터 분리용). */
   auto?: boolean;
+  /**
+   * 사용자가 직접 촉발한 틱의 산출물(2026-08-29 사용자 확정) — "자율런"·"오토런" 지시문이나
+   * 수동 틱 버튼으로 만든 조각. auto 는 그대로 true 지만(자율 선정 산출물이 맞다) **케이던스 쿼터에는
+   * 넣지 않는다**: 사용자가 "지금 하나 더" 하고 시킨 것이 다음 정각 슬롯을 밀어내면 안 된다.
+   * 실측: 08-29 07:28 생성분이 기준점이 되어 17:00 정각 오토런이 12시간 간격에 막혔다.
+   * 미발행 초안 캡(contentReadyCap)에는 그대로 포함된다 — 그건 검토 홍수를 막는 별개 축이다.
+   */
+  userTriggered?: boolean;
   /** 클러스터 형제 소진으로 생성된 piece 의 출처(ClusterTopic.id) — 같은 시드 쿨다운 판정·성과 귀속용. */
   clusterSeedId?: string;
   /** 사실 게이트 결과(2026-08-26) — hold/error 면 자동 네이버 임시저장을 건너뛴다(수동 버튼은 유지). */
@@ -61,7 +69,7 @@ export interface Piece {
   updatedTs: string;
 }
 
-export interface CreatePieceInput { title: string; keyword?: string; subNiche?: string; stage?: PieceStage; brand?: string; auto?: boolean; clusterSeedId?: string; }
+export interface CreatePieceInput { title: string; keyword?: string; subNiche?: string; stage?: PieceStage; brand?: string; auto?: boolean; userTriggered?: boolean; clusterSeedId?: string; }
 
 const MAX_ERRORS = 3;
 
@@ -92,6 +100,7 @@ export class PieceStore {
       id: genId('piece'), title: input.title.trim(),
       keyword: input.keyword?.trim() || undefined, subNiche: input.subNiche?.trim() || undefined,
       brand: input.brand?.trim() || undefined, auto: input.auto,
+      ...(input.userTriggered ? { userTriggered: true } : {}),
       clusterSeedId: input.clusterSeedId || undefined,
       stage: input.stage ?? 'idea', errors: 0, createdTs: now, updatedTs: now,
     };
@@ -155,6 +164,19 @@ export function blogUrlForPiece(pieceId?: string): string | undefined {
   // 공개 주소 우선. 없으면 비공개 발행 주소 — 주소 자체는 유효하고, 사람이 전체공개로 바꾸면
   // 같은 주소가 그대로 열린다(파생물이 블로그보다 먼저 나가도 링크가 죽지 않는다).
   return normalizeBlogUrl(p?.publishedUrl) ?? normalizeBlogUrl(p?.privateUrl);
+}
+
+/**
+ * 케이던스 쿼터 기준점(순수 — 테스트 대상): 가장 최근 '쿼터에 잡히는' 자율 조각의 createdTs.
+ *
+ * 사용자가 직접 촉발한 틱(userTriggered)의 산출물은 제외한다(2026-08-29 사용자 확정) — "지금 하나 더"
+ * 하고 시킨 것이 다음 정각 슬롯을 밀어내면 안 된다. 실측: 07:28 생성분이 기준점이 되어 17:00 정각
+ * 오토런이 12시간 최소 간격에 막혔다. 없으면 '' (호출부가 무제한 통과로 해석).
+ */
+export function cadenceBaselineTs(pieces: ReadonlyArray<Pick<Piece, 'auto' | 'userTriggered' | 'createdTs'>>): string {
+  return pieces
+    .filter((p) => p.auto && !p.userTriggered)
+    .reduce((mx, p) => (p.createdTs > mx ? p.createdTs : mx), '');
 }
 
 /** 캡션용 링크 정규화(순수 — 테스트 대상). 스토어 조회와 분리해 표기 규칙만 검증할 수 있게 한다. */

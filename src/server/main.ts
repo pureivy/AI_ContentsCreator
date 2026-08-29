@@ -56,7 +56,7 @@ import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame } from '../tools/shortsRender';
 import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
-import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft, shouldAutoDeriveOnDecision } from '../content/pieces';
+import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft, shouldAutoDeriveOnDecision, cadenceBaselineTs } from '../content/pieces';
 import { isTransientFailure, transientReason } from '../llm/transientError';
 import { toFactGateInfo } from '../content/factGate';
 import { readFactGate } from '../sessions/digest';
@@ -598,7 +598,7 @@ async function startHandler(c: Context): Promise<Response> {
     // busy 시 조용히 소멸하던 함정(실사고 2026-08-18) — 지속 실행으로 런 종료를 기다렸다 시작하고,
     // 응답 문구도 현재 상태에 맞게(막연한 '곧 시작' 약속이 무산되면 "작동 안함"으로 체감된다).
     const busyNow = [...RUNS.values()].some((h) => h.status === 'running');
-    void stopAutoCycle.runNowPersistent({ label: '오토런 지시' });
+    void stopAutoCycle.runNowPersistent({ label: '오토런 지시', userTriggered: true });
     return c.json({ ok: true, autorun_tick: true, note: busyNow
       ? '오토런 지시로 인식 — 지금은 다른 런이 진행 중이라, 종료되는 대로 콘텐츠 1건을 자율 선정해 시작합니다(자동 재시도, 사무실 탭에서 관전).'
       : '오토런 지시로 인식 — 지금 만들 콘텐츠 1건을 자율 선정해 곧 시작합니다(사무실 탭에서 관전. 검토 대기가 가득이면 보류). 특정 주제로 쓰려던 것이면 그 주제를 입력해 주세요.' });
@@ -3537,12 +3537,14 @@ const isRunLive = (runId?: string): boolean => !!runId && RUNS.get(runId)?.statu
 // 없으면 autoCycleMinutes 를 낮게 잡을 때 하루 수십 편이 생성돼 미발행 초안이 범람한다.
 function canGenerateNew(pieces: Piece[], force = false): boolean {
   // 카덴스 쿼터는 자율 생산분만 계산 — 사용자 수동 생성은 오토런 쿼터에서 제외(사용자 지시).
-  const autoPieces = pieces.filter((p) => p.auto);
-  if (autoPieces.filter((p) => p.stage === 'ready').length >= CONFIG.contentReadyCap) return false; // 미발행 자율 초안 캡
+  // 사용자가 직접 촉발한 틱의 산출물은 케이던스 기준에서 뺀다(2026-08-29 사용자 확정) — "지금 하나 더"가
+  // 다음 정각 슬롯을 밀어내면 안 된다. 실측: 07:28 생성분이 기준점이 되어 17:00 슬롯이 12시간 간격에 막혔다.
+  // 미발행 초안 캡에는 그대로 포함한다(아래) — 그건 검토 홍수를 막는 별개 축이다.
+  if (pieces.filter((p) => p.auto && p.stage === 'ready').length >= CONFIG.contentReadyCap) return false; // 미발행 자율 초안 캡(사용자 촉발분 포함)
   // force(사용자 직접 실행 틱) — 간격을 기다리지 않고 즉시 생산(사용자 결정 2026-08-09). 캡은 유지(검토 홍수 방지).
   if (force) return true;
   const minIntervalMs = (7 * 24 * 60 * 60 * 1000) / CONFIG.contentCadencePerWeek;                    // 주 N편 → 최소 간격
-  const lastCreated = autoPieces.reduce((mx, p) => (p.createdTs > mx ? p.createdTs : mx), '');
+  const lastCreated = cadenceBaselineTs(pieces);
   return !lastCreated || (Date.now() - new Date(lastCreated).getTime()) >= minIntervalMs;
 }
 
@@ -3597,7 +3599,7 @@ async function demandCheckFor(
 type AutoWork = { kind: 'piece'; piece: Piece; promiseId?: string; clusterTopicId?: string } | { kind: 'research'; title: string; brand: string }
   | { kind: 'shorts'; pieceId: string; title: string } | { kind: 'cardnews'; pieceId: string; title: string };
 
-async function pickAutoWork(signal?: AbortSignal, force = false): Promise<AutoWork | null> {
+async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered = false): Promise<AutoWork | null> {
   const pieces = pieceStore().list();
   const resume = selectResumablePiece(pieces, isRunLive);
   if (resume) return { kind: 'piece', piece: resume }; // 재개는 케이던스와 무관 — 죽은 piece 회수 우선.
@@ -3651,7 +3653,7 @@ async function pickAutoWork(signal?: AbortSignal, force = false): Promise<AutoWo
             promiseStore().update(due.id, { status: 'dropped' });
             console.log(`[auto-cycle] 예고 폐기(검색 수요 미달) — "${due.topic.slice(0, 40)}" (${dem.line})`);
           } else {
-            const piece = pieceStore().create({ title: due.topic, brand: tickBrand || undefined, auto: true });
+            const piece = pieceStore().create({ title: due.topic, brand: tickBrand || undefined, auto: true, userTriggered });
             // fulfilled 마킹은 여기서 하지 않는다 — launch 가 런을 실제로 시작한 뒤에만(아래 launch 참조).
             console.log(`[auto-cycle] 예고 이행 착수 — "${due.topic.slice(0, 40)}" (출처: ${due.sourceKind}${due.window ? ` · ${due.window}` : ''})`);
             return { kind: 'piece', piece, promiseId: due.id };
@@ -3701,7 +3703,7 @@ async function pickAutoWork(signal?: AbortSignal, force = false): Promise<AutoWo
               clusterStore().update(cand.id, { status: 'dropped' });
               console.log(`[auto-cycle] 클러스터 기각(검색 수요 미달) — "${cand.keyword}" (${dem.line}) → dropped`);
             } else {
-              const piece = pieceStore().create({ title: cand.title, keyword: cand.keyword, brand: tickBrand || undefined, auto: true, clusterSeedId: cand.id });
+              const piece = pieceStore().create({ title: cand.title, keyword: cand.keyword, brand: tickBrand || undefined, auto: true, userTriggered, clusterSeedId: cand.id });
               console.log(`[auto-cycle] 클러스터 형제 착수 — "${cand.keyword}" (시드 "${cand.seedKeyword}")`);
               consumeOpportunityVerdict(cand.keyword, tickBrand || undefined); // 채택된 기회 소진(2026-08-24)
               return { kind: 'piece', piece, clusterTopicId: cand.id };
@@ -3714,7 +3716,7 @@ async function pickAutoWork(signal?: AbortSignal, force = false): Promise<AutoWo
     // 브랜드 고정 — 제안 LLM 대기(수 초) 중 브랜드가 전환되면 A 컨텍스트로 만든 아이디어가 B 에 귀속될 수
     // 있어 버린다(리서치 경로 main.ts 위 tickBrand 고정과 동일 원칙 — 종전엔 콘텐츠 경로만 빠져 있었음).
     if ((activeBrandSlug() || '') !== tickBrand) return null;
-    if (idea) return { kind: 'piece', piece: pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche, brand: tickBrand || undefined, auto: true }) };
+    if (idea) return { kind: 'piece', piece: pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche, brand: tickBrand || undefined, auto: true, userTriggered }) };
   }
   // 파생 콘텐츠 일일 케이던스(사용자 지시 2026-07-16: 쇼츠·카드뉴스 매일 1편) — 초안 있는 최신 블로그
   // 에서 파생(리서치된 내용 재사용 = 같은 주제 채널 전개라 신규성 가드 비대상). 케이던스는 자율 생산분만
@@ -3750,7 +3752,7 @@ const stopAutoCycle = startAutoCycle<AutoWork>({
   intervalMs: CONFIG.autoCycleMinutes * 60_000,
   isEnabled: autoRunEnabled, // 사용자 토글(대시보드 '자율' 칩 클릭) — 꺼짐이면 틱이 조용히 통과
   isBusy: () => [...RUNS.values()].some((h) => h.status === 'running'), // 자율런 포함 — 동시 1런만(단일 KV 슬롯 불변식).
-  pickWork: (signal, force) => pickAutoWork(signal, force),
+  pickWork: (signal, force, userTriggered) => pickAutoWork(signal, force, userTriggered),
   launch: (w) => {
     if (w.kind === 'research') {
       // 제안 도중 브랜드가 전환됐으면 이번 틱은 건너뜀 — A 컨텍스트 조사가 B 두뇌·게이트에 섞이지 않게.
@@ -3790,7 +3792,8 @@ void stopAutoCycle; // 프로세스 생존 동안 유지(unref 타이머라 종�
 app.post('/autonomy/tick', async (c) => {
   // 진행 중 런이 있어도 409 로 끝내지 않는다 — 지속 실행이 종료를 기다렸다 시작(오토런 지시 게이트와 동일 UX).
   const busyNow = [...RUNS.values()].some((h) => h.status === 'running');
-  void stopAutoCycle.runNowPersistent({ label: '수동 틱' }); // 비동기 기동 — 즉시 응답, 진행은 사무실/기록 탭에서.
+  // 수동 틱도 사용자 촉발 — 웹 UI 버튼이든 "자율런" 지시문이든 사람이 시킨 것은 쿼터에서 뺀다(2026-08-29).
+  void stopAutoCycle.runNowPersistent({ label: '수동 틱', userTriggered: true }); // 비동기 기동 — 즉시 응답, 진행은 사무실/기록 탭에서.
   return c.json({ ok: true, note: busyNow
     ? '자율 사이클 예약 — 진행 중 런이 끝나는 대로 콘텐츠 1건을 자율 선정해 시작합니다(자동 재시도).'
     : '자율 사이클 1틱 실행 — 지금 만들 콘텐츠 1건을 자율 선정해 곧 시작합니다(사무실 탭에서 관전).' });

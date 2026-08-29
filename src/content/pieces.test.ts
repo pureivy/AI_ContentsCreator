@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { PieceStore, selectResumablePiece, blogUrlForPiece, normalizeBlogUrl, autoDraftBlockedByFactGate, planAutoNaverDraft, shouldAutoDeriveOnDecision } from './pieces';
+import { PieceStore, selectResumablePiece, blogUrlForPiece, normalizeBlogUrl, cadenceBaselineTs, autoDraftBlockedByFactGate, planAutoNaverDraft, shouldAutoDeriveOnDecision } from './pieces';
 import type { Piece } from './pieces';
 
 let dir = '';
@@ -216,5 +216,38 @@ describe('blogUrlForPiece — 캡션용 링크 정규화', () => {
     expect(normalizeBlogUrl('')).toBeUndefined();
     expect(normalizeBlogUrl('postwrite')).toBeUndefined();
     expect(blogUrlForPiece(undefined)).toBeUndefined();
+  });
+});
+
+// 케이던스 기준점(2026-08-29 사용자 확정) — "자율런" 지시문·수동 틱으로 만든 조각은 쿼터에서 뺀다.
+// 실사고: 08-29 07:28 생성분이 기준점이 되어 17:00 정각 오토런이 12시간 최소 간격에 막혔다.
+describe('cadenceBaselineTs — 쿼터 기준점', () => {
+  const p = (createdTs: string, auto: boolean, userTriggered = false) => ({ auto, userTriggered, createdTs });
+
+  it('사용자 촉발분은 기준점이 되지 않는다 — "지금 하나 더"가 정각 슬롯을 밀어내면 안 된다', () => {
+    expect(cadenceBaselineTs([
+      p('2026-08-28T21:06:00Z', true),               // 정각 슬롯 산출물
+      p('2026-08-29T07:28:00Z', true, true),         // 사용자가 시킨 것 — 더 최신이지만 제외
+    ])).toBe('2026-08-28T21:06:00Z');
+  });
+
+  it('수동 생성(auto=false)도 종전대로 제외', () => {
+    expect(cadenceBaselineTs([
+      p('2026-08-28T21:06:00Z', true),
+      p('2026-08-29T09:00:00Z', false),
+    ])).toBe('2026-08-28T21:06:00Z');
+  });
+
+  it('쿼터 대상이 없으면 빈 문자열(무제한 통과)', () => {
+    expect(cadenceBaselineTs([p('2026-08-29T07:28:00Z', true, true)])).toBe('');
+    expect(cadenceBaselineTs([])).toBe('');
+  });
+
+  it('쿼터 대상 중 가장 최신을 고른다', () => {
+    expect(cadenceBaselineTs([
+      p('2026-08-27T10:00:00Z', true),
+      p('2026-08-28T21:06:00Z', true),
+      p('2026-08-28T06:06:00Z', true),
+    ])).toBe('2026-08-28T21:06:00Z');
   });
 });

@@ -43,7 +43,7 @@ export interface AutoCycleDeps<T = string> {
   /** 이번 틱에 처리할 작업(재개 대상 piece 또는 새 아이디어). null 이면 띄우지 않음.
    *  force=true 는 사용자가 직접 실행한 틱(runNow) — 케이던스 간격을 기다리지 않고 즉시 생산한다
    *  (사용자 결정 2026-08-09). 타이머 자동 틱은 force 없음(무인 도배 방지 유지). */
-  pickWork: (signal?: AbortSignal, force?: boolean) => Promise<T | null>;
+  pickWork: (signal?: AbortSignal, force?: boolean, userTriggered?: boolean) => Promise<T | null>;
   /** 선택된 작업으로 자율 런을 띄운다(main.ts 의 launchRun 으로 위임). */
   launch: (work: T) => void;
   /** 로그 표기용 — 작업을 한 줄로 요약. */
@@ -57,20 +57,22 @@ export type AutoTickOutcome = 'launched' | 'idle' | 'busy' | 'overlap' | 'error'
 /** 정지 함수 + runNow(수동 즉시 1틱) + runNowPersistent(busy 시 재시도 — 슬롯·지시 침묵 소멸 방지). */
 export type AutoCycleControl = (() => void) & {
   runNow: () => Promise<AutoTickOutcome>;
-  runNowPersistent: (opts?: { label?: string; retryMs?: number; maxAttempts?: number; respectToggle?: boolean }) => Promise<AutoTickOutcome>;
+  runNowPersistent: (opts?: { label?: string; retryMs?: number; maxAttempts?: number; respectToggle?: boolean; userTriggered?: boolean }) => Promise<AutoTickOutcome>;
 };
 
 export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): AutoCycleControl {
   let ticking = false; // 재진입 가드 — pickWork(LLM)이 주기보다 길어도 틱이 겹쳐 다중 자율런이 뜨지 않게.
   // 핵심 1틱 — isEnabled 게이트 제외(타이머 틱과 수동 실행이 공유). isBusy·재진입은 항상 적용.
-  const core = async (force = false): Promise<AutoTickOutcome> => {
+  // userTriggered — 사용자가 "자율런" 지시문·수동 틱 버튼으로 직접 촉발한 틱인가(2026-08-29 사용자 확정).
+  // force 로는 구분할 수 없다: 정각 슬롯도 force 로 돈다(간격 우회가 목적이라 같다). 그래서 별도 신호로 흘린다.
+  const core = async (force = false, userTriggered = false): Promise<AutoTickOutcome> => {
     if (ticking) return 'overlap';
     ticking = true;
     try {
       // 블로커는 사용자 런일 수도, 다른 자율 런(리서치 등)일 수도 있다 — '사용자 런'으로 단정하던
       // 종전 문구는 실사고(2026-08-18: 리서치 런에 밀린 18:00 슬롯) 원인 추적을 헷갈리게 했다.
       if (deps.isBusy()) { deps.log?.('진행 중 런 있음 — 자율 사이클 건너뜀'); return 'busy'; }
-      const work = await deps.pickWork(undefined, force);
+      const work = await deps.pickWork(undefined, force, userTriggered);
       // 제안 도중 다른 런이 도착했을 수 있으니 launch 직전 재확인(유휴 게이트 비원자성 완화).
       if (deps.isBusy()) { deps.log?.('제안 도중 다른 런 도착 — 자율 사이클 보류'); return 'busy'; }
       if (work != null) { deps.log?.(`자율 사이클 — "${deps.describe?.(work) ?? String(work)}"`); deps.launch(work); return 'launched'; }
@@ -93,18 +95,18 @@ export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): AutoCycleCon
   const stop = (() => { if (timer) clearInterval(timer); }) as AutoCycleControl;
   // 수동 즉시 실행(사용자 '자율런 돌려줘') — 토글 무시, isBusy·재진입 가드 유지.
   // force=true: 사용자 지시는 케이던스를 기다리지 않고 즉시 생산(사용자 결정 2026-08-09).
-  stop.runNow = () => core(true);
+  stop.runNow = () => core(true, true); // 수동 즉시 실행 = 사용자 촉발
   // busy(런 충돌) 시 포기하지 않는 실행 — 정각 슬롯·사용자 오토런 지시가 진행 중 런에 밀려 조용히
   // 소멸하던 실사고(2026-08-18: 30분 유휴 틱의 리서치 런이 18:00 슬롯을 삼킴) 봉합. 동시 대기는 1건만.
   let persistentWaiting = false;
   stop.runNowPersistent = async (opts = {}) => {
-    const { label = '자율 틱', retryMs = 180_000, maxAttempts = 10, respectToggle = false } = opts;
+    const { label = '자율 틱', retryMs = 180_000, maxAttempts = 10, respectToggle = false, userTriggered = false } = opts;
     if (persistentWaiting) { deps.log?.(`${label} — 이미 재시도 대기 중(중복 요청 무시)`); return 'busy'; }
     persistentWaiting = true;
     try {
       for (let i = 1; ; i++) {
         if (respectToggle && deps.isEnabled && !deps.isEnabled()) return 'idle'; // 대기 중 토글 오프 존중
-        const r = await core(true);
+        const r = await core(true, userTriggered);
         if (r !== 'busy' && r !== 'overlap') return r;
         if (i >= maxAttempts) { deps.log?.(`${label} — 재시도 ${maxAttempts}회 소진(런 장기 점유), 이번 슬롯 포기`); return 'busy'; }
         deps.log?.(`${label} — 진행 중 런 종료 대기, ${Math.max(1, Math.round(retryMs / 60_000))}분 후 재시도(${i}/${maxAttempts})`);
