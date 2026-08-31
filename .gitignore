@@ -31,3 +31,6 @@ sessions/*/
 # 블로그 스킬 Python venv/바이트캐시 (커밋 제외)
 scripts/blog_skills/venv/
 scripts/blog_skills/__pycache__/
+
+# 데스크탑 런처(.app) 로그
+.launcher-logs/
