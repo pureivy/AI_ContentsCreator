@@ -62,22 +62,36 @@ async function logTgFailure(method: string, r: Response): Promise<void> {
   try { console.log(`[알림] 텔레그램 ${method} 실패 — HTTP ${r.status} ${(await r.text()).slice(0, 200)}`); } catch { /* 무해 */ }
 }
 const logTgError = (method: string, e: unknown): void => {
-  console.log(`[알림] 텔레그램 ${method} 예외 — ${e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200)}`);
+  // 원인 코드(cause.code)·이름을 함께 남긴다 — "fetch failed" 만으로는 미전송인지 응답 유실인지 못 가른다.
+  // 실사고 ②(중복 2통)의 분류를 이 정보 없이 추론해야 했다.
+  const x = e as { name?: string; cause?: { code?: unknown } };
+  const detail = [x?.name, typeof x?.cause?.code === 'string' ? x.cause.code : ''].filter(Boolean).join('/');
+  console.log(`[알림] 텔레그램 ${method} 예외 — ${e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200)}${detail ? ` (${detail})` : ''}`);
 };
 
 /**
- * 이 전송 실패를 재시도할 가치가 있는가(순수) — 시간이 풀어 주는 실패만 true.
+ * 이 전송을 재시도해도 되는가(순수) — **전송되지 않았음이 확실할 때만** true.
  *
- * 실사고(2026-08-31): 유튜브 업로드 완료 알림이 "fetch failed" 한 번에 영구 소실됐다. 업로드는
- * 성공했는데 사람은 그 사실을 못 받았다. 이 환경은 blip 이 잦다 — 같은 날 getUpdates 도 여러 번
- * 같은 사유로 실패하고 복구했다. 수신부에만 백오프 루프가 있고 송신부는 1회 시도뿐이던 비대칭이 원인.
+ * 실사고 2건이 이 판정을 만들었다(둘 다 2026-08-31, 방향이 정반대다):
+ *  ① 오전: 알림이 "fetch failed" 한 번에 영구 소실됐다(재시도 없음) → 재시도를 넣었다.
+ *  ② 밤: 그 재시도가 중복 2통을 만들었다. 로그는 "예외 — fetch failed" → "복구(재시도 1회 후)" 인데
+ *     사용자에겐 2통이 도착했다. 첫 전송은 텔레그램에 **이미 닿았고** 응답만 유실된 것이다.
  *
- * 4xx 를 재시도하지 않는 이유: 토큰 폐기(401)·chat not found(400)·HTML 파싱 오류(400)는 몇 번을
- * 보내도 같은 답이다. 재시도하면 실패를 늦게 알게 되고 API 만 두들긴다.
+ * sendMessage 에는 멱등 키가 없다. 따라서 '보냈는지 모르는' 실패를 재시도하면 반드시 중복이 난다.
+ * 판정 기준을 '실패했나'에서 '미전송이 확실한가'로 바꾼다 —
+ *   확실히 미전송: DNS 실패·연결 거부(요청이 서버에 닿지도 못함), 429·5xx(서버가 명시적으로 거절)
+ *   불확실:       타임아웃·연결 리셋·소켓 종료 — 요청은 갔을 수 있고 응답만 유실됐을 수 있다
+ * 불확실은 보내지 않는다. 손실과 중복 중 하나를 골라야 한다면 사용자가 원한 건 1통이다(사용자 확정).
  */
+const RETRIABLE_CAUSE = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED']);
 export function shouldRetryTelegram(x: { status?: number; error?: unknown }): boolean {
-  if (x.error !== undefined) return true;          // 네트워크 예외 — fetch failed · timeout · ECONNRESET
-  if (x.status === undefined) return false;         // 판단 근거 없음 — 재시도 안 함(무한 루프 방어)
+  if (x.error !== undefined) {
+    const e = x.error as { name?: string; cause?: { code?: unknown } };
+    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') return false; // 응답만 못 받았을 수 있다
+    const code = typeof e?.cause?.code === 'string' ? e.cause.code : '';
+    return RETRIABLE_CAUSE.has(code); // 사유 불명은 보수적으로 false
+  }
+  if (x.status === undefined) return false;
   return x.status === 429 || x.status >= 500;
 }
 
@@ -110,7 +124,12 @@ export async function sendTelegramHtml(html: string, buttons?: TgButton[][]): Pr
       error = e;
       logTgError('sendMessage', e);
     }
-    if (attempt >= DELAYS.length || !shouldRetryTelegram({ status, error })) return false;
+    if (!shouldRetryTelegram({ status, error })) {
+      // 중복 방지로 포기했다는 사실을 남긴다 — 알림이 안 왔을 때 '왜 재시도조차 안 했나'의 답이 된다.
+      if (error !== undefined) console.log('[알림]', '텔레그램 전송 여부 불확실 — 중복 방지를 위해 재시도 안 함');
+      return false;
+    }
+    if (attempt >= DELAYS.length) return false;
     await new Promise<void>((res) => setTimeout(res, DELAYS[attempt]!));
   }
 }
