@@ -7,7 +7,9 @@ PROJ="/Users/sangbumnam/AI_Factory/AI_ContentsCreator"
 LOG="$PROJ/.launcher-logs"
 
 # LaunchServices(더블클릭) 경유 시 PATH 가 /usr/bin:/bin:/usr/sbin:/sbin 로 축소되므로 pnpm/node 위치를 보강.
-export PATH="$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+# ~/.local/bin·~/.claude/local 도 필수 — claude CLI 가 여기 산다. 빠지면 서버는 정상 기동하지만
+# 모든 LLM 호출이 "spawn claude ENOENT" 로 죽어 오토런이 조용히 아무 일도 안 한다(실사고 2026-08-31).
+export PATH="$HOME/.local/bin:$HOME/.claude/local:$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 notify() { osascript -e "display notification \"$2\" with title \"$1\"" >/dev/null 2>&1; }
 alert()  { osascript -e "display dialog \"$1\" with title \"AI 콘텐츠 스튜디오\" buttons {\"확인\"} default button 1 with icon caution giving up after 60" >/dev/null 2>&1; }
@@ -17,6 +19,11 @@ cd "$PROJ" || { alert "프로젝트 폴더를 찾을 수 없습니다:\n$PROJ"; 
 
 if ! command -v pnpm >/dev/null 2>&1; then
   alert "pnpm 을 찾을 수 없습니다.\n\nPATH: $PATH"; exit 1
+fi
+
+# claude CLI 는 모든 콘텐츠 생성의 백엔드 — 없으면 서버는 떠도 오토런·런이 전부 조용히 실패한다.
+if ! command -v claude >/dev/null 2>&1; then
+  alert "claude CLI 를 찾을 수 없습니다.\n\n서버는 뜨지만 글·오토런이 동작하지 않습니다.\n\nPATH: $PATH"; exit 1
 fi
 
 echo "🎬 AI 콘텐츠 스튜디오 서버 시작…"

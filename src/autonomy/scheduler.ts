@@ -574,11 +574,18 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   let rejectNote = '';
   const IDEA_ROUNDS = 2;   // 마지막 라운드 판정(기아 방지 밸브)이 이 숫자에 매달려 있어 상수로 묶는다
   for (let attempt = 0; attempt < IDEA_ROUNDS; attempt++) {
+    // 실패 사유를 삼키지 않는다 — 실사고 2026-08-31 08:55~10:55: 런처 축소 PATH 로 claude CLI 가
+    // ENOENT 였는데 여기서 조용히 null 이 되어, 오토런 틱이 2시간 동안 "처리할 작업 없음"만 남겼다.
+    // 아래 기각 분기들은 모두 사유를 남기는데 이 경로만 예외였던 것이 원인 추적을 막았다.
+    let callError = '';
     const o = await microJSON<{ ideas?: unknown }>(
       micro, IDEA_SYSTEM, rejectNote ? `${baseUser}\n\n${rejectNote}` : baseUser, { maxOutputTokens: 900, signal },
-    ).catch(() => null);
+    ).catch((e: unknown) => { callError = e instanceof Error ? e.message : String(e); return null; });
     const cands = normalizeIdeaCandidates(o);
-    if (!cands.length) return null; // 응답 자체가 무효 — 이번 주기 스킵
+    if (!cands.length) {
+      console.log(`[auto-cycle] 아이디어 제안 실패 — ${callError || '모델 응답이 후보 0개(형식 불일치)'} → 이번 주기 스킵`);
+      return null; // 응답 자체가 무효 — 이번 주기 스킵
+    }
     // 검색 수요 묶음 조회(2026-08-26) — 라운드당 딱 1회(검색광고 ≤2콜 + 데이터랩 1콜). 후보당 개별
     // 조회는 라운드당 수십 콜이 된다. 킬스위치 off 면 호출 자체를 생략해 비용이 0이다.
     // 검색광고 자격이 없으면(키 미설정) 조회도 로그도 하지 않는다 — '조회 실패'가 아니라 '측정 안 함'이고,

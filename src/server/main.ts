@@ -45,6 +45,7 @@ import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
+import { claudeCliProblem } from '../llm/claudeCli';
 import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision, speciesCoverageFor } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -4035,6 +4036,11 @@ const port = CONFIG.port;
 if (!process.env.VITEST) serve({ fetch: app.fetch, hostname: CONFIG.host, port }, (info) => {
   // eslint-disable-next-line no-console
   console.log(`[ai-contents-studio] http://${CONFIG.host}:${info.port}  (backend=claude)  · React=/ · lite=/lite`);
+  // CLI 부재를 부팅 로그에서 즉시 드러낸다 — 실사고 2026-08-31: 런처 축소 PATH 로 claude 를 못 찾아
+  // 모든 LLM 호출이 ENOENT 였는데, 호출부들이 실패를 삼켜 서버는 2시간 동안 정상처럼 보였다.
+  const cliProblem = claudeCliProblem();
+  // eslint-disable-next-line no-console
+  if (cliProblem) console.error(`[ai-contents-studio] ⚠️ ${cliProblem}`);
 });
 
 // 메타(페이스북) OAuth 콜백 전용 HTTPS 리스너 — 페이스북은 OAuth 리디렉션에 HTTPS 를 강제한다
