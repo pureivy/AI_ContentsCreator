@@ -237,6 +237,7 @@ export interface Config {
   readonly contentReadyCap: number;
   /** 일일 성과 동기화 시각 "HH:MM"(로컬). 빈 문자열=off. 등록된 수집기로 발행 piece 성과를 측정→강화(수집기 미설정 시 no-op). */
   readonly performanceSyncTime: string;
+  readonly naverSyncTime: string;
   /** 발행 후 성과 측정까지 대기일 — 네이버 트래픽이 축적될 시간(콜드스타트 지연). 이 창 도달 전 piece 는 측정 안 함. */
   readonly performanceWindowDays: number;
   /** 주입 지식(injected.md) 반영 한도(자 수) — 에이전트 매 런 시스템프롬프트에 들어가는 양. 초과분은 최신 우선(tail)로 잘림. */
@@ -402,6 +403,10 @@ export const CONFIG: Config = {
   contentCadencePerWeek: Math.max(1, envInt('CONTENT_CADENCE_PER_WEEK', 3)),
   contentReadyCap: Math.max(1, envInt('CONTENT_READY_CAP', 5)),
   performanceSyncTime: env('PERFORMANCE_SYNC_TIME', '').trim(),
+  // 네이버 성과 수집 시각(사용자 결정 2026-08-31) — 헤드리스 크롬으로 글마다 통계를 열어 30분쯤
+  // 걸리고 그동안 프로필을 점유해 임시저장이 막힌다. 사람이 안 쓰는 새벽에 하루 1회만 돈다
+  // (네이버 통계 자체가 일 단위 집계라 더 자주 볼 이유도 없다). 빈값=off.
+  naverSyncTime: env('NAVER_SYNC_TIME', '03:00').trim(),
   performanceWindowDays: Math.max(0, envInt('PERFORMANCE_WINDOW_DAYS', 14)),
   injectedKnowledgeCap: Math.max(500, envInt('INJECTED_KNOWLEDGE_CAP', 10000)),
   topicDemandGate: envBool('TOPIC_DEMAND_GATE', true),

@@ -2460,7 +2460,8 @@ function performanceHandler(c: Context): Response {
     })
     .sort((a, b) => b.ts.localeCompare(a.ts));
   return c.json({
-    refreshBusy: perfRefreshBusy, // 새로고침 백그라운드 수집 진행 여부 — 프론트 폴링 종료 판정
+    refreshBusy: perfRefreshBusy, // 빠른 갱신(유튜브·메타) 진행 여부 — 프론트 폴링 종료 판정
+    naverBusy: naverRefreshBusy || !!naverProfileBusy, // 네이버 수집·브라우저 작업 진행 여부(임시저장 대기 안내용)
     strategy: {
       winners: s.winners.slice(0, 20), subNiches: s.subNiches, measuredPieces: s.measuredPieces,
       // 채널 학습(쇼츠·릴스·카드뉴스) — 키워드 점수표가 아니라 직원 강화가 남긴 교훈 문장(위키 performance
@@ -2505,42 +2506,65 @@ function performanceHandler(c: Context): Response {
 }
 app.get('/performance', performanceHandler);
 app.get('/api/performance', performanceHandler);
-// 성과 즉시 재수집(대시보드 새로고침 버튼) — 쇼츠 유튜브·릴스·카드뉴스 메타는 순수 API. 네이버 블로그도
-// 포함하되(RSS 발행 감지 → syncPerformance) headful 크롬을 쓰므로, syncPerformance 의 하루 1회 게이트
-// (측정뿐 아니라 '시도'도 포함 — naverAttempts)·프로필 락이 같은 날 재기동을 막는다.
-// 동시 트리거는 중복 샘플 append 를 만들므로 in-flight 가드.
+// 성과 즉시 재수집 — 채널 성격이 정반대라 **두 경로로 분리**한다(사용자 결정 2026-08-31).
+//   빠른 갱신(유튜브·릴스·카드뉴스): 순수 API, 브라우저·프로필 락 없음. 실측 96초(쇼츠 100 + 카드뉴스
+//   97 을 유튜브·IG·FB 로 force 조회 — 대부분이 메타 미디어별 콜). 카운터가 연속 변한다.
+//   네이버 수집: 헤드리스 크롬으로 글마다 통계 페이지를 연다 — 18초 × 98건 ≈ 30분, 그동안 프로필을
+//   점유해 임시저장이 막힌다. 게다가 게이트가 이미 'KST 하루 1회'라 대부분의 호출은 헛수고다.
+// 종전엔 둘이 한 버튼에 묶여 있어 싼 쪽이 비싼 쪽의 제약을 그대로 뒤집어썼다(실측 2026-08-31:
+// 유튜브 숫자를 갱신하려다 30분간 임시저장이 "✗ 시작 실패"로 막혔다).
+// 네이버 수동 경로를 없애지는 않는다 — 새벽 자동 수집이 실패한 날의 유일한 복구 수단이다(실측: 같은 날
+// 아침 BLOG_PYTHON 결함으로 자동 수집이 통째로 실패했고, 수동 새로고침이 그날 데이터를 살렸다).
+// 동시 트리거는 중복 샘플 append 를 만들므로 각각 in-flight 가드.
 let perfRefreshBusy = false;
-/** 재수집 본체(백그라운드) — 네이버 일일 추적은 조각 수만큼 순차 브라우저 런이라 수 분 걸릴 수 있다.
- *  실측 2026-07-31: KST 날짜 전환 직후 새로고침 → 19조각 × ~14초 = 약 4분. 동기 응답이던 시절엔
- *  브라우저 fetch 가 타임아웃해 수집은 성공했는데 UI 는 에러로 보였다 → 즉시 응답+폴링으로 전환. */
-async function runPerfRefresh(): Promise<void> {
+let naverRefreshBusy = false;
+
+/** 빠른 갱신(백그라운드) — 순수 API 채널만. 실측 96초. allSettled: 한 채널 실패가 다른 채널을 막지 않음.
+ *  전 채널 force — 측정창 지나 동결된 옛 콘텐츠 숫자도 갱신한다. */
+async function runFastRefresh(): Promise<void> {
   try {
-    // 네이버 블로그: 발행 감지(공개 RSS — 프로필 락 무관) 후 성과 수집. syncPerformance 가 프로필 락·측정창·
-    // 하루 1회(시도 포함) 게이트를 스스로 처리하므로, 수집 대상이 없거나 프로필 사용 중이면 조용히 건너뛴다
-    // (일일 동기화와 동일 동작·안전). 쇼츠·릴스·카드뉴스는 순수 API 라 병행. allSettled — 한 채널 실패가 다른 채널을 막지 않음.
-    // 전 채널 force — 새로고침은 측정창 지나 동결된 옛 콘텐츠 숫자도 갱신한다(네이버 편입 사용자 확정
-    // 2026-07-31 — 헤드리스 전환으로 크롬 비용 해소). 네이버는 시도 게이트(하루 1회)가 그대로 상한.
     await Promise.allSettled([
-      discoverPublishedNaver().then(() => syncPerformance({ force: true })),
       syncShortsPerformance({ force: true }),
       syncShortsMetaPerformance({ force: true }),
       syncCardnewsPerformance({ force: true }),
-      // 이웃·구독자·팔로워 — 종전엔 07:30 일일 브리핑에서만 갱신돼, 새로고침을 눌러도 카드 숫자가
-      // 그대로였다(실측 2026-08-02: 스냅샷이 07-31 에 멈춰 있었다). 순수 API 4콜·약 1초,
-      // 브라우저도 게이트도 없으므로 일일 경로에만 둘 이유가 없다.
+      // 이웃·구독자·팔로워 — 순수 API 4콜·약 1초. 종전엔 07:30 브리핑에서만 갱신돼 새로고침을 눌러도
+      // 카드 숫자가 그대로였다(실측 2026-08-02: 스냅샷이 07-31 에서 정지).
       recordFollowersSnapshot(),
     ]);
   } finally { perfRefreshBusy = false; }
 }
+
+/** 네이버 수집(백그라운드) — 발행 감지(공개 RSS) 후 성과 수집. syncPerformance 가 프로필 락·측정창·
+ *  하루 1회(시도 포함) 게이트를 스스로 처리하므로, 대상이 없거나 프로필 사용 중이면 조용히 건너뛴다.
+ *  수 분~30분 걸린다 — 프론트는 naverBusy 로 폴링한다. */
+async function runNaverRefresh(): Promise<void> {
+  try {
+    await discoverPublishedNaver().then(() => syncPerformance({ force: true }));
+  } catch (e) {
+    console.log('[perf-sync]', `네이버 수집 실패(무해): ${e instanceof Error ? e.message : String(e)}`);
+  } finally { naverRefreshBusy = false; }
+}
+
 function perfRefreshHandler(c: Context): Response {
   // 이미 진행 중이면 에러가 아니라 '진행 중' — 프론트는 같은 폴링 경로로 합류한다(종전 409 는 UI 에 에러로 떴음).
   if (perfRefreshBusy) return c.json({ ok: true, started: false, busy: true });
   perfRefreshBusy = true;
-  void runPerfRefresh();
+  void runFastRefresh();
   return c.json({ ok: true, started: true });
+}
+function naverRefreshHandler(c: Context): Response {
+  if (naverRefreshBusy) return c.json({ ok: true, started: false, busy: true });
+  // 프로필을 이미 다른 브라우저 작업(임시저장 등)이 쓰고 있으면 시작하지 않고 사유를 돌려준다 —
+  // 시작해 봐야 syncPerformance 가 첫 줄에서 건너뛰고 끝난다(사용자에겐 '눌렀는데 아무 일도 안 남').
+  if (naverProfileBusy) return c.json({ ok: false, started: false, busy: true, note: `네이버 브라우저 작업이 진행 중입니다(${naverProfileBusy}) — 완료 후 다시 시도하세요.` });
+  naverRefreshBusy = true;
+  void runNaverRefresh();
+  return c.json({ ok: true, started: true, note: '네이버 수집 시작 — 글마다 브라우저로 통계를 읽어 수 분~30분 걸립니다. 그동안 임시저장은 대기합니다.' });
 }
 app.post('/performance/refresh', perfRefreshHandler);
 app.post('/api/performance/refresh', perfRefreshHandler);
+app.post('/performance/refresh/naver', naverRefreshHandler);
+app.post('/api/performance/refresh/naver', naverRefreshHandler);
 
 // 실제 네이버 수집기 등록 — 일일 성과 동기화(syncPerformance)가 publishedUrl 있는 piece 를 자동 수집.
 // measure 는 fail-open(미로그인·데이터 없음 → null) — 루프를 깨지 않는다. 수동 POST /metrics 는 계속 유효.
@@ -3915,12 +3939,29 @@ const stopPerfSync = startDaily({
   // 설정 비어 있음 + 스냅샷 07-31 에서 정지). 브리핑 설정 여부와 팔로워 추적은 서로 묶일 이유가 없다.
   // 조회수 감사(2026-08-20) 일일 배선 — 리서치 판정 수확 + 자동완성 트렌드 스냅샷(둘 다 fail-open, 주제 두뇌가 소비).
   // 검색 수요 스냅샷(2026-08-26)도 여기 합류 — 시드 키워드의 절대 검색량·시즌 지수(하루 ~6콜, 킬스위치 off 면 0콜).
-  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void recordFollowersSnapshot().catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void refreshDemandSnapshot().catch(() => {}); void refreshYtNicheSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); }, // 쇼츠·카드뉴스·릴스는 순수 API — 프로필 락 무관
+  run: () => { void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void recordFollowersSnapshot().catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void refreshDemandSnapshot().catch(() => {}); void refreshYtNicheSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); }, // 전부 순수 API — 프로필 락 무관. 네이버는 아래 새벽 잡으로 분리(2026-08-31).
   log: (m) => console.log('[perf-sync]', m),
 });
 if (CONFIG.performanceSyncTime) {
   // eslint-disable-next-line no-console
   console.log(`[ai-contents-studio] 성과 동기화 활성 — ${CONFIG.performanceSyncTime} · 수집기 "${getCollector().name}"(측정창 ${CONFIG.performanceWindowDays}일)`);
+}
+
+// 네이버 성과 수집(새벽 1회) — 위 07:30 잡에서 분리(사용자 결정 2026-08-31). 분리 이유는 비용 구조다:
+// 순수 API 채널은 수 초에 끝나는데 네이버만 헤드리스 크롬으로 글마다 통계를 열어 18초×98건 ≈ 30분이
+// 걸리고, 그동안 프로필을 점유해 임시저장이 막힌다. 사람이 안 쓰는 시간대로 옮긴다.
+// KST 자정 이후라 '하루 1회' 게이트가 깨끗이 리셋된 뒤이고, 06:00 정각 오토런과도 3시간 여유가 있다.
+const stopNaverSync = startDaily({
+  time: CONFIG.naverSyncTime,
+  key: 'naver-sync',
+  // 발행 감지(공개 RSS)가 publishedUrl 을 채운 뒤 성과 수집 — 순서 의존이라 then 으로 잇는다.
+  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); },
+  log: (m) => console.log('[naver-sync]', m),
+});
+void stopNaverSync;
+if (CONFIG.naverSyncTime) {
+  // eslint-disable-next-line no-console
+  console.log(`[ai-contents-studio] 네이버 성과 수집 — 매일 ${CONFIG.naverSyncTime}(하루 1회 · 수동은 성과탭 "네이버 수집")`);
 }
 // 수요 게이트 상태 1줄(2026-08-26 리뷰 M2) — 켜져 있어도 검색광고 키가 없으면 전량 fail-open 이라
 // 아무 판정도 일어나지 않는다. 그 '조용한 무동작'이 부팅 로그에서 바로 보이게 한다.

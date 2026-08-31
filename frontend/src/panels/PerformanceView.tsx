@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchPerformance, fetchFollowers, refreshPerformance, deletePiece, deleteShorts, deleteCardNews, PerfData, FollowersData } from "../api";
+import { fetchPerformance, fetchFollowers, refreshPerformance, refreshNaverPerformance, deletePiece, deleteShorts, deleteCardNews, PerfData, FollowersData } from "../api";
 import Ico, { type IcoName } from "./Ico";
 import PlatformMark, { type Platform } from "./PlatformMark";
 import FollowerTrendModal, { type FollowerField, latestFollower, followerDelta } from "./FollowerTrend";
@@ -59,15 +59,16 @@ export default function PerformanceView() {
   const load = () => { setLoading(true); return fetchPerformance().then((d) => { setData(d); setLoading(false); }); };
   useEffect(() => { void load(); void fetchFollowers().then(setFollowers); }, []);
 
-  // 새로고침 = 채널 성과 즉시 재수집(쇼츠 유튜브·릴스·카드뉴스 API + 네이버 블로그 Playwright) 후 재조회 —
+  // 새로고침 = 순수 API 채널(쇼츠 유튜브·릴스·카드뉴스) 즉시 재수집 후 재조회 — 실측 96초.
   // 종전엔 저장값 재조회뿐이라 숫자가 안 변해 '죽은 버튼'으로 보였다(2026-07-20 사용자 보고).
-  // 블로그는 발행 감지 후 측정창 지난 미측정 글만 수집(브라우저 열릴 수 있음·로그인 세션 필요·프로필 사용 중이면 건너뜀).
+  // 네이버는 2026-08-31 에 아래 별도 버튼으로 분리했다 — 브라우저로 글마다 통계를 열어 30분 걸리고
+  // 그동안 프로필을 점유해 임시저장이 막힌다(실측: 유튜브 숫자 보려다 30분간 임시저장 차단).
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState("");
   const doRefresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
-    setRefreshMsg("⏳ 재수집 중… (네이버 일일 수집이 있으면 브라우저 창이 여러 번 열렸다 닫힐 수 있어요)");
+    setRefreshMsg("⏳ 재수집 중…");
     const r = await refreshPerformance(); // 서버는 즉시 응답(백그라운드 수집) — 진행 중이었으면 그 수집에 합류
     if (!r.ok) {
       await load(); // 시작 실패해도 표시는 최신 저장값으로 갱신
@@ -76,11 +77,9 @@ export default function PerformanceView() {
       setRefreshMsg(`⚠ ${r.error || "재수집 실패"} — 표시만 갱신됨`);
       return;
     }
-    // 완료까지 폴링(최대 8분 — 네이버 순차 브라우저 런은 조각 수에 비례) — 도중에도 표를 계속 갱신.
-    const deadline = Date.now() + 8 * 60_000;
-    // 팔로워는 순수 API 라 서버에서 1~2초면 끝난다(실측 2026-08-02). 반면 네이버 조각 수집은 수 분 걸리고
-    // refreshBusy 는 그때까지 참이다. 폴링이 끝난 뒤에야 팔로워를 읽으면 이미 갱신된 값이 몇 분간 화면에
-    // 안 뜬다 — 사용자에겐 "새로고침해도 숫자가 그대로"로 보인다(신고 2026-08-02). 폴링 안에서 같이 읽는다.
+    // 완료까지 폴링(실측 96초 — 여유 5분) — 도중에도 표를 계속 갱신.
+    const deadline = Date.now() + 5 * 60_000;
+    // 팔로워도 폴링 안에서 같이 읽는다 — 먼저 끝난 값이 화면에 바로 뜨게(신고 2026-08-02).
     void fetchFollowers().then(setFollowers);
     let d = await fetchPerformance();
     while (d?.refreshBusy && Date.now() < deadline) {
@@ -94,6 +93,35 @@ export default function PerformanceView() {
     setRefreshing(false);
     const t = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
     setRefreshMsg(d?.refreshBusy ? "⏳ 수집이 아직 진행 중 — 잠시 후 새로고침으로 확인하세요" : `✓ ${t} 재수집됨`);
+  };
+
+  // 네이버 수집(별도) — 평소엔 새벽 자동 1회로 충분하다. 이 버튼은 그 자동 수집이 실패한 날의 복구 수단이라
+  // 남겨 둔다(실측 2026-08-31: 인터프리터 경로 결함으로 자동 수집이 통째로 실패했고 수동 실행이 그날을 살렸다).
+  // 오래 걸리고 그동안 임시저장이 막히므로, 문구로 그 사실을 미리 알린다.
+  const [naverRunning, setNaverRunning] = useState(false);
+  const [naverMsg, setNaverMsg] = useState("");
+  const doNaverCollect = async () => {
+    if (naverRunning) return;
+    setNaverRunning(true);
+    setNaverMsg("⏳ 네이버 수집 중… 글마다 통계를 읽어 수 분~30분 걸립니다. 그동안 임시저장은 대기합니다.");
+    const r = await refreshNaverPerformance();
+    if (!r.ok) {
+      setNaverRunning(false);
+      setNaverMsg(`⚠ ${r.note || r.error || "시작 실패"}`);
+      return;
+    }
+    // 완료까지 폴링(최대 45분 — 글 수에 비례, 실측 98건 ≈ 14분). 도중에도 표를 계속 갱신.
+    const deadline = Date.now() + 45 * 60_000;
+    let d = await fetchPerformance();
+    while (d?.naverBusy && Date.now() < deadline) {
+      setData(d);
+      await new Promise((res) => setTimeout(res, 10_000));
+      d = await fetchPerformance();
+    }
+    if (d) setData(d);
+    setNaverRunning(false);
+    const t = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+    setNaverMsg(d?.naverBusy ? "⏳ 아직 진행 중 — 잠시 후 새로고침으로 확인하세요" : `✓ ${t} 네이버 수집 완료`);
   };
 
   // 행 삭제(완전 삭제) — 대시보드 카드 + 연결 파일(산출물·초안 세션·성과 기록)을 휴지통(data/.trash)으로
@@ -201,15 +229,22 @@ export default function PerformanceView() {
         <p className="apikeys-sub">
           블로그·쇼츠·카드뉴스 채널별 성과와, 성과로 학습된 전략(키워드·서브니치 EWMA)을 모아 봅니다.
           <button className="btn ghost" style={{ marginLeft: 10 }} onClick={() => { void doRefresh(); }} disabled={refreshing}
-            title="블로그·쇼츠 유튜브·릴스·카드뉴스 성과를 즉시 재수집합니다 (블로그는 발행 14일 안 글의 오늘분 일일 추적 + 측정창 지난 미측정 글 강화 — 하루 1회 멱등, 브라우저가 열릴 수 있고 네이버 로그인 세션이 필요)">
+            title="쇼츠 유튜브·릴스·카드뉴스 성과를 즉시 재수집합니다 — 브라우저를 쓰지 않아 1~2분이면 끝납니다(실측 96초).">
             {refreshing ? "재수집 중…" : "새로고침"}
           </button>
           {refreshMsg && <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>{refreshMsg}</span>}
+          {/* 네이버는 별도 버튼(2026-08-31) — 브라우저로 글마다 통계를 열어 30분쯤 걸리고 그동안 임시저장이
+              막힌다. 평소엔 새벽 자동 1회로 충분하고, 이 버튼은 그게 실패한 날의 복구 수단이다. */}
+          <button className="btn ghost" style={{ marginLeft: 6 }} onClick={() => { void doNaverCollect(); }} disabled={naverRunning}
+            title="네이버 블로그 조회수를 지금 수집합니다 — 글마다 브라우저로 통계를 열어 수 분~30분 걸리고, 그동안 임시저장이 대기합니다. 평소엔 매일 새벽에 자동으로 돕니다.">
+            {naverRunning ? "네이버 수집 중…" : "네이버 수집"}
+          </button>
+          {naverMsg && <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>{naverMsg}</span>}
           {/* 신선도 표기 — 숫자가 그대로일 때 '수집이 안 됐다'와 '수집했는데 실제로 안 변했다'를 구분할
               수단이 없었다(사용자 신고 2026-08-02). 블로그 조회는 네이버 하루 1회 게이트라 같은 날
               새로고침해도 시각이 안 바뀌는 게 정상 — 그 사실이 화면에 보여야 한다. */}
           <span className="muted" style={{ display: "block", marginTop: 6, fontSize: 11.5 }}>
-            블로그 조회 마지막 측정 {fmtWhen(lastMeasuredAt)}<span style={{ opacity: 0.7 }}> (네이버는 하루 1회 — 같은 날 새로고침해도 조회수는 안 바뀝니다)</span>
+            블로그 조회 마지막 측정 {fmtWhen(lastMeasuredAt)}<span style={{ opacity: 0.7 }}> (네이버는 매일 새벽 자동 수집 · 하루 1회라 같은 날 다시 수집해도 조회수는 안 바뀝니다)</span>
             {" · "}팔로워 기준 {fmtWhen(followers?.latest?.ts ?? null)}
           </span>
         </p>

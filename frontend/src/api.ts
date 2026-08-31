@@ -968,8 +968,10 @@ export interface CardnewsPerfRow {
   fb: { url: string; likes: number | null; shares: number | null; series: number[]; ts: string | null } | null; // series = 좋아요 추이(FB 게시물은 조회 미제공)
 }
 export interface PerfData {
-  /** 새로고침 백그라운드 재수집 진행 중 여부 — true 면 프론트가 폴링으로 완료를 기다린다. */
+  /** 빠른 갱신(유튜브·릴스·카드뉴스) 진행 중 — true 면 프론트가 폴링으로 완료를 기다린다. */
   refreshBusy?: boolean;
+  /** 네이버 수집 또는 다른 네이버 브라우저 작업(임시저장 등) 진행 중 — 수 분~30분. 별도 폴링 대상. */
+  naverBusy?: boolean;
   strategy: {
     winners: Array<{ keyword: string; score: number; samples: number }>; subNiches: Record<string, number>; measuredPieces: number;
     /** 채널 학습(쇼츠·릴스·카드뉴스) — 직원 강화가 남긴 교훈 문장(위키 performance 페이지 요약). */
@@ -1016,11 +1018,25 @@ export async function fetchTitleTiming(): Promise<TitleTimingReport | null> {
   try { const r = await fetch("/api/analytics/title-timing"); return r.ok ? await r.json() : null; }
   catch { return null; }
 }
-/** 채널 성과 즉시 재수집 시작(쇼츠 유튜브·릴스·카드뉴스 API + 네이버 일일 추적) — 서버는 백그라운드로
- *  돌리고 즉시 응답한다(started=시작, busy=이미 진행 중). 완료는 fetchPerformance().refreshBusy 로 폴링. */
+/** 빠른 갱신 시작(쇼츠 유튜브·릴스·카드뉴스 — 전부 순수 API, 실측 96초) — 서버는 백그라운드로 돌리고
+ *  즉시 응답한다(started=시작, busy=이미 진행 중). 완료는 fetchPerformance().refreshBusy 로 폴링.
+ *  네이버는 여기 없다 — 브라우저를 쓰고 30분 걸려 별도 경로로 분리했다(2026-08-31). */
 export async function refreshPerformance(): Promise<{ ok: boolean; started?: boolean; busy?: boolean; error?: string }> {
   try {
     const r = await fetch("/performance/refresh", { method: "POST" });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return await r.json();
+  } catch {
+    return { ok: false, error: "network" };
+  }
+}
+
+/** 네이버 성과 수집 시작 — 글마다 헤드리스 브라우저로 통계를 읽어 수 분~30분. 평소엔 새벽 자동 1회로
+ *  충분하고, 이 수동 경로는 그 자동 수집이 실패한 날의 복구 수단이다. 완료는 naverBusy 로 폴링.
+ *  ok=false + note = 다른 네이버 브라우저 작업(임시저장 등)이 프로필을 쓰는 중이라 시작하지 않음. */
+export async function refreshNaverPerformance(): Promise<{ ok: boolean; started?: boolean; busy?: boolean; note?: string; error?: string }> {
+  try {
+    const r = await fetch("/performance/refresh/naver", { method: "POST" });
     if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
     return await r.json();
   } catch {
