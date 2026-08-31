@@ -93,7 +93,7 @@ import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, contentReadyNo
 import { startTelegramBot } from '../autonomy/telegramBot';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
-import { publishDraftToNaver, naverPublishCreds, collectNaverMetrics } from '../tools/blog_skills';
+import { publishDraftToNaver, naverPublishCreds, collectNaverMetrics, blogSkillProblem } from '../tools/blog_skills';
 import { coerceBlogDraft } from '../output/smarteditor';
 import type { MetricSample } from '../analytics/performance';
 import { classifyAndAssign, getStatuses, reassign, setIngestStatus } from '../tools/classify';
@@ -3840,6 +3840,11 @@ void stopDaily;
 async function syncPerformance(opts?: { force?: boolean }): Promise<void> {
   // 사용자 트리거 브라우저 작업(임시저장·수집)이 프로필을 쓰는 중이면 이번 주기는 건너뛴다(프로필 락 충돌 방지).
   if (naverProfileBusy) { console.log('[perf-sync]', `프로필 사용 중(${naverProfileBusy}) — 이번 주기 건너뜀`); return; }
+  // 사전 점검(실사고 2026-08-31) — 인터프리터·스크립트가 없으면 어떤 piece 도 성공할 수 없다.
+  // 그냥 돌리면 전 조각이 '빈손 시도'로 끝나며 markNaverAttempt 가 하루 1회 게이트를 소진해,
+  // 설정을 고쳐도 그날은 복구되지 않는다(실측: 새로고침 한 번에 94개 소진). 루프 전에 멈춘다.
+  const skillProblem = blogSkillProblem('naver_stats.py');
+  if (skillProblem) { console.log('[perf-sync]', `네이버 수집 건너뜀 — ${skillProblem}`); return; }
   naverProfileBusy = '일일동기화';
   try {
   const collector = getCollector();
@@ -4041,6 +4046,11 @@ if (!process.env.VITEST) serve({ fetch: app.fetch, hostname: CONFIG.host, port }
   const cliProblem = claudeCliProblem();
   // eslint-disable-next-line no-console
   if (cliProblem) console.error(`[ai-contents-studio] ⚠️ ${cliProblem}`);
+  // 네이버 수집·발행의 외부 파이썬도 같은 이유로 부팅 때 드러낸다(실사고 2026-08-31: .env 가 삭제된
+  // 사본을 가리켜 블로그 성과가 하루 종일 0건이었는데 로그는 '표본 없음'으로만 보였다).
+  const blogProblem = blogSkillProblem('naver_stats.py');
+  // eslint-disable-next-line no-console
+  if (blogProblem) console.error(`[ai-contents-studio] ⚠️ 네이버 블로그 스킬 — ${blogProblem}`);
 });
 
 // 메타(페이스북) OAuth 콜백 전용 HTTPS 리스너 — 페이스북은 OAuth 리디렉션에 HTTPS 를 강제한다
