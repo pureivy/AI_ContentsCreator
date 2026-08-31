@@ -31,6 +31,7 @@ import { promiseStore } from '../content/promises';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import { generateImagesForDraft, searchCardRefs } from '../tools/blog_skills';
+import { pruneByPrefix, humanBytes } from '../util/prune';
 import { stdModel, visionCapable } from './visionCommon';
 
 const RUNNING = new Set<string>();
@@ -1064,6 +1065,11 @@ export async function runCardNewsJob(
     // qaUnresolved 는 빈값도 명시 기록(undefined) — 재실행에서 이전 미해결 잔재가 새 완성본을 계속 막지 않게.
     store.update(id, { stage: 'ready', slides: ok, topic: plan.title || card.topic, qaUnresolved: qaUnresolvedSlides.length ? qaUnresolvedSlides : undefined });
     say(`${plan.title.slice(0, 30)} — ${ok}/${count}장 완성${ok < count ? ` (생성 실패 ${count - ok}장 건너뜀)` : ''}`);
+    // 재시도 잔해 정리(2026-08-31) — bg-retry1·bg-retry2·bg-repair 는 실패한 라운드의 산출물이라
+    // 슬라이드가 나온 뒤엔 쓸 곳이 없는데 영구 보존됐다(실측 2.0G / 224개 폴더). 최종 배경 bg/ 는
+    // 접두사 비교라 걸리지 않는다. 정리 실패는 무해 — pruneByPrefix 가 fail-open.
+    const freedBg = pruneByPrefix(dir, ['bg-retry', 'bg-repair']);
+    if (freedBg) say(`재시도 잔해 정리 — ${humanBytes(freedBg)} 회수`);
     // 검토 대기 알림(슬라이드 앨범 동봉) — fire-and-forget, 실패 무해.
     {
       const done = store.get(id);

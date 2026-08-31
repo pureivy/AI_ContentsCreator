@@ -120,6 +120,35 @@ export async function ensureMetaVideo(dir: string, signal?: AbortSignal): Promis
 }
 
 /**
+ * 발행 완료 쇼츠의 원본 정리 — final.mp4 를 저용량 preview.mp4 로 교체한다(사용자 확정 2026-08-31).
+ * 실패하면 원본을 그대로 둔다(fail-open) — 정리는 산출물을 잃는 대가를 치르면 안 된다.
+ * 반환: 회수한 바이트(0 = 아무것도 안 함).
+ *
+ * 프록시 규격: 세로 960(원본 1920의 절반) · CRF 30 · 오디오 64k. 미리보기 전용이라 화질보다 크기다.
+ * meta.mp4(릴스 업로드용 재인코딩본)와는 목적이 다르다 — 그쪽은 업로드 한도(95MB) 회피용이라 CRF 23.
+ */
+export async function archiveShortsVideo(dir: string, signal?: AbortSignal): Promise<number> {
+  const video = path.join(dir, 'final.mp4');
+  let size = 0;
+  try { size = fs.statSync(video).size; } catch { return 0; } // 이미 없음 — 멱등
+  const out = path.join(dir, 'preview.mp4');
+  const tmp = path.join(dir, `.preview-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`);
+  try {
+    await ff(['-i', video, '-vf', 'scale=-2:960', '-c:v', 'libx264', '-crf', '30', '-preset', 'veryfast',
+      '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', tmp], 600_000, signal);
+    // 프록시가 원본보다 크면(아주 짧은 영상 등) 교체할 이유가 없다 — 원본 유지가 낫다.
+    const proxySize = fs.statSync(tmp).size;
+    if (proxySize >= size) { fs.rmSync(tmp, { force: true }); return 0; }
+    fs.renameSync(tmp, out);
+    fs.rmSync(video, { force: true });   // 프록시가 자리를 잡은 뒤에만 원본 제거
+    return size - proxySize;
+  } catch {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* 무해 */ }
+    return 0; // 재인코딩 실패 — 원본 보존
+  }
+}
+
+/**
  * 씬 배열 → dir/final.mp4 + subtitles.srt. images[i] 는 씬 i 의 배경(없으면 null → 단색 폴백).
  * 개별 씬 실패는 이슈로 기록하고 해당 씬을 단색 배경·무음으로라도 완성(전체 실패 방지).
  */

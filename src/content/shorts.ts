@@ -68,6 +68,8 @@ export interface Shorts {
   metaPublishedTs?: string;
   /** 메타 측정 창 경과 후 강화 1회 완료(멱등) — perfReflected(유튜브)와 독립. */
   metaPerfReflected?: boolean;
+  /** 원본 영상(final.mp4)을 저용량 preview.mp4 로 교체한 시각(2026-08-31 저장공간 정책). 있으면 재실행 안 함. */
+  videoArchivedTs?: string;
   createdTs: string;
   updatedTs: string;
 }

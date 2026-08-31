@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { bundle } from '@remotion/bundler';
+import { pruneDir, humanBytes } from '../util/prune';
 import { selectComposition, renderMedia, makeCancelSignal } from '@remotion/renderer';
 import { prepareScenes, buildSrt, resolveClipSrc, defaultSceneFx, FPS, probeDuration } from './shortsCommon';
 import type { ShortsScene, ShortsRenderResult } from './shortsCommon';
@@ -97,5 +98,11 @@ export async function renderShortsVideoRemotion(
   fs.writeFileSync(srtPath, buildSrt(prepared.map((p) => ({ narration: p.narration, durationSec: p.durationSec }))), 'utf-8');
 
   const durationSec = Math.round(prepared.reduce((a, p) => a + p.durationSec, 0) * 10) / 10;
+  // 번들 정리(2026-08-31) — bundle/public 은 이 렌더에서만 쓰는 webpack 산출물이라 final.mp4 가 나온
+  // 뒤엔 아무도 안 읽는다. 실측: 쇼츠당 평균 65MB × 131건 = 8.2G 가 그냥 쌓여 있었다.
+  // narr_*.mp3 는 남긴다 — ffmpeg 폴백이 재사용해 TTS 이중 과금을 막는다(shortsRender.ts:169).
+  // clips/ 는 대상이 아니다: 재작성 경로가 씬별 클립을 재사용한다(shorts.ts:255).
+  const freed = pruneDir(work, /\.mp3$/i);
+  if (freed) console.log('[쇼츠]', `렌더 작업물 정리 — ${humanBytes(freed)} 회수`);
   return { ok: true, videoPath, srtPath, durationSec, sceneCount: prepared.length, issues };
 }

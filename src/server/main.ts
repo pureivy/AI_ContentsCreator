@@ -55,7 +55,7 @@ import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsS
 import { shortsStore } from '../content/shorts';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
-import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame } from '../tools/shortsRender';
+import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo } from '../tools/shortsRender';
 import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft, shouldAutoDeriveOnDecision, cadenceBaselineTs } from '../content/pieces';
 import { isTransientFailure, transientReason } from '../llm/transientError';
@@ -83,6 +83,8 @@ import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
 import { buildTitleTimingReport } from '../analytics/titleTiming';
 import { promiseStore } from '../content/promises';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
+import { shouldArchiveShortsVideo } from '../content/shortsArchive';
+import { humanBytes } from '../util/prune';
 import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor, appendMetrics, naverTrackingDue, topInflow, latestDwell, latestLikes, latestTouch, sameKstDay } from '../analytics/performance';
 import { fetchBlogSympathy } from '../analytics/naverSympathy';
 import { naverAttemptAt, markNaverAttempt } from '../analytics/naverAttempts';
@@ -1288,10 +1290,28 @@ function shortsGetHandler(c: Context): Response {
   return x ? c.json({ short: { ...x, running: isShortsRunning(x.id) } }) : c.json({ error: 'unknown short' }, 404);
 }
 // MP4 서빙 — Range 지원(Safari 는 Range 없이는 <video> 재생 거부, Chrome 도 시킹에 필요).
+// 발행 완료 쇼츠의 원본 정리(2026-08-31 사용자 확정) — 유튜브·릴스가 둘 다 확인되면 final.mp4 를
+// 저용량 preview.mp4 로 바꾼다. 실측상 원본이 건당 50MB 로 단일 최대 항목이었다(144건 7.2G).
+// 판정은 순수 함수(shouldArchiveShortsVideo)에 두고, 여기선 기동·기록만 한다. 전 구간 fail-open —
+// 정리가 실패해도 발행 흐름은 건드리지 않는다(원본이 남을 뿐).
+function maybeArchiveShortsVideo(id: string): void {
+  const s = shortsStore().get(id);
+  if (!s || !shouldArchiveShortsVideo(s)) return;
+  void archiveShortsVideo(shortsStore().dirFor(id)).then((freed) => {
+    if (!freed) return; // 재인코딩 실패·이미 없음 — 기록도 남기지 않아 다음에 재시도된다
+    shortsStore().update(id, { videoArchivedTs: new Date().toISOString() });
+    console.log('[쇼츠]', `${(s.title ?? s.topic ?? id).slice(0, 30)} — 발행 완료, 원본을 미리보기용으로 교체(${humanBytes(freed)} 회수)`);
+  }).catch(() => { /* 무해 */ });
+}
+
 function shortsVideoHandler(c: Context): Response {
   const id = c.req.param('id') ?? '';
   if (!shortsStore().get(id)) return c.json({ error: 'unknown short' }, 404);
-  const fp = path.join(shortsStore().dirFor(id), 'final.mp4');
+  // 발행 완료 건은 원본(final.mp4)이 저용량 preview.mp4 로 교체돼 있다(2026-08-31 정리 정책).
+  // 원본 우선, 없으면 프록시 — 미리보기는 어느 쪽이든 재생된다.
+  const sdir = shortsStore().dirFor(id);
+  let fp = path.join(sdir, 'final.mp4');
+  if (!fs.existsSync(fp)) fp = path.join(sdir, 'preview.mp4');
   let size = 0;
   try { size = fs.statSync(fp).size; } catch { return c.json({ error: 'video not found' }, 404); }
   const range = c.req.header('range');
@@ -1483,6 +1503,7 @@ app.post('/shorts/:id/youtube', async (c) => {
     });
     if (!r.ok) return c.json({ error: r.error }, 502);
     shortsStore().update(id, { youtubeId: r.videoId, youtubeUrl: r.url, youtubeTs: new Date().toISOString() });
+    maybeArchiveShortsVideo(id); // 릴스도 이미 올라갔으면 여기서 원본 정리
     if (r.thumbnailError) console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 24)} — 썸네일 미적용: ${r.thumbnailError}`);
     console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 유튜브 비공개 업로드 완료 (${publisherName()})`);
     return c.json({ ok: true, url: r.url, thumbnailError: r.thumbnailError });
@@ -1894,6 +1915,7 @@ app.post('/shorts/:id/meta', async (c) => {
     if (r.fbError) console.log(`[발행담당] 페북 릴스 실패 사유: ${r.fbError}`);
     // fbError 는 200 과 함께(IG 릴스는 실제 공개됨 — 502 로 뒤집으면 실패 위장).
     if (r.fbCoverError) console.log(`[발행담당] 페북 릴스 커버 미적용: ${r.fbCoverError}`);
+    maybeArchiveShortsVideo(s.id); // 유튜브도 이미 올라갔으면 여기서 원본 정리
     return c.json({ ok: true, igPermalink: r.igPermalink ?? s.igPermalink, fbReelId: r.fbReelId ?? s.fbReelId, fbError: r.fbError ?? r.fbCoverError });
   } finally {
     metaPublishInFlight.delete(id);
@@ -1912,6 +1934,7 @@ app.post('/shorts/meta-reconcile', async (c) => {
     .map((s) => ({ id: s.id, title: s.title ?? s.topic ?? '', igReelId: s.igReelId }));
   const matches = matchOrphanReels(targets, reels);
   for (const m of matches) shortsStore().update(m.shortsId, { igReelId: m.reelId, igPermalink: m.permalink, metaPublishedTs: m.timestamp });
+  for (const m of matches) maybeArchiveShortsVideo(m.shortsId); // 감지 경로로 릴스가 확인된 건도 동일 정리
   if (matches.length) console.log(`[발행담당] 릴스 재조정 — 브랜드 '${brand || '범용'}': ${matches.length}건 백필(라이브 릴스 ${reels.length}개)`);
   return c.json({ ok: true, reconciled: matches.length, reelsOnIg: reels.length, items: matches.map((m) => ({ shortsId: m.shortsId, permalink: m.permalink })) });
 });
