@@ -578,13 +578,23 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // ENOENT 였는데 여기서 조용히 null 이 되어, 오토런 틱이 2시간 동안 "처리할 작업 없음"만 남겼다.
     // 아래 기각 분기들은 모두 사유를 남기는데 이 경로만 예외였던 것이 원인 추적을 막았다.
     let callError = '';
+    // 출력 상한 2000(실사고 2026-08-31 17:00 정각 슬롯) — 종전 900 은 claudeCli 의 3배 환산(2700)이
+    // 하한 4000 에 눌려 실효 4000 이었고, 그 4000 을 응답이 넘겨 "exceeded the 4000 output token
+    // maximum" 으로 라운드가 통째로 죽었다. 이 프롬프트는 후보 8개를 한국어 제목·키워드·서브니치로
+    // 요구하는 데다 로테이션·쿨다운·수요 블록이 계속 늘어 출력이 커졌다. 2000×3=6000 으로 5할 여유를 준다.
+    // (haiku 는 --effort low 를 안 붙여 기본 effort 로 돌기 때문에 사고 토큰도 이 상한을 함께 쓴다.)
     const o = await microJSON<{ ideas?: unknown }>(
-      micro, IDEA_SYSTEM, rejectNote ? `${baseUser}\n\n${rejectNote}` : baseUser, { maxOutputTokens: 900, signal },
+      micro, IDEA_SYSTEM, rejectNote ? `${baseUser}\n\n${rejectNote}` : baseUser, { maxOutputTokens: 2000, signal },
     ).catch((e: unknown) => { callError = e instanceof Error ? e.message : String(e); return null; });
     const cands = normalizeIdeaCandidates(o);
     if (!cands.length) {
-      console.log(`[auto-cycle] 아이디어 제안 실패 — ${callError || '모델 응답이 후보 0개(형식 불일치)'} → 이번 주기 스킵`);
-      return null; // 응답 자체가 무효 — 이번 주기 스킵
+      const last = attempt >= IDEA_ROUNDS - 1;
+      console.log(`[auto-cycle] 아이디어 제안 실패 — ${callError || '모델 응답이 후보 0개(형식 불일치)'}`
+        + ` → ${last ? '이번 주기 스킵' : '다음 라운드 재시도'}`);
+      // 종전엔 첫 라운드 실패가 곧 틱 전체 포기였다 — 응답 절단은 매 호출 달라지는 일시적 실패라
+      // 남은 라운드를 써 보지도 않고 버릴 이유가 없다(라운드 수 IDEA_ROUNDS 로 이미 상한이 있다).
+      if (last) return null;
+      continue;
     }
     // 검색 수요 묶음 조회(2026-08-26) — 라운드당 딱 1회(검색광고 ≤2콜 + 데이터랩 1콜). 후보당 개별
     // 조회는 라운드당 수십 콜이 된다. 킬스위치 off 면 호출 자체를 생략해 비용이 0이다.
