@@ -291,7 +291,7 @@ export async function runBlogPublish(roleId: string, arg: string, signal?: Abort
   // 게이트를 프로필 기준으로 바꾸면 이 툴이 실제로 네이버에 쓰게 되므로 그건 사용자 결정 사항이다.
   if (!p.dryRun && !hasSession) {
     return `(blog_publish: 네이버 세션 파일이 없어 실행하지 않았습니다 — ${CONFIG.naverSessionFile || 'NAVER_SESSION_FILE 미설정'}.\n`
-      + '검토 탭의 "네이버 임시저장"은 브라우저 프로필로 동작하므로 그 경로를 사용하세요.)';
+      + '검토 탭의 "네이버 비공개 발행"은 브라우저 프로필로 동작하므로 그 경로를 사용하세요.)';
   }
   const args = ['--final-content', finalPath, '--image-manifest', manifestPath, '--run-dir', cwd];
   if (CONFIG.naverSessionFile) args.push('--session-file', CONFIG.naverSessionFile);

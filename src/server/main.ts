@@ -899,7 +899,7 @@ function pieceDeleteHandler(c: Context): Response {
     return c.json({ error: '이 카드의 런이 실행 중입니다 — 취소 후 삭제하세요.' }, 409);
   }
   if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') {
-    return c.json({ error: '네이버 임시저장이 진행 중입니다 — 완료 후 삭제하세요.' }, 409);
+    return c.json({ error: '네이버 비공개 발행이 진행 중입니다 — 완료 후 삭제하세요.' }, 409);
   }
   if (COLLECT_JOBS.get(id)?.status === 'running') {
     return c.json({ error: '성과 수집이 진행 중입니다 — 완료 후 삭제하세요.' }, 409);
@@ -2024,7 +2024,7 @@ async function pieceReviseHandler(c: Context): Promise<Response> {
   }
   // 네이버 임시저장이 도는 중이면 개정 금지 — 저장 결과가 옛 내용과 뒤엉키는 것 방지(상호 가드).
   if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') {
-    return c.json({ error: '네이버 임시저장이 진행 중입니다 — 완료 후 수정 요청하세요.' }, 409);
+    return c.json({ error: '네이버 비공개 발행이 진행 중입니다 — 완료 후 수정 요청하세요.' }, 409);
   }
   let baseBody = '';
   try {
@@ -2039,13 +2039,19 @@ async function pieceReviseHandler(c: Context): Promise<Response> {
 app.post('/pieces/:id/revise', pieceReviseHandler);
 app.post('/api/pieces/:id/revise', pieceReviseHandler);
 
-// 네이버 임시저장(검토 탭) — 완성 초안을 실제 네이버 SmartEditor 에 임시저장한다(발행 아님).
+// 네이버 비공개 발행(검토 탭) — 완성 초안을 네이버에 **비공개로 실제 발행**한다(전체공개는 사람이 전환).
+// 이름이 오래 '임시저장'이었던 이유: 2026-08-28 에 파이썬 기본 모드가 private_publish 로 바뀌었는데
+// UI·상태값·필드명은 옛 이름 그대로였다. 사용자 확인(2026-08-31) 후 사람이 보는 문구만 실제 동작에
+// 맞췄다 — 저장 필드(naverDraftUrl/naverDraftTs)와 status 상수(DRAFT_SAVED)는 호환 위해 유지.
+// 비공개 발행이 실패하면 파이썬이 임시저장으로 폴백하므로, 완료 문구는 privatePublished 로 갈라 쓴다.
 // Playwright 브라우저(기본 headful — 최초 로그인/캡차를 사람이 처리)가 최대 15분 걸릴 수 있어
 // 백그라운드 잡으로 돌리고, 프론트는 GET 으로 폴링한다. 사용자 클릭이 곧 승인(신뢰 경로).
 interface NaverDraftJob {
   status: 'running' | 'saved' | 'failed';
   startedTs: string; endedTs?: string;
   url?: string; adminUrl?: string; error?: string; dryRun: boolean;
+  /** 비공개로 실제 발행됐는가(false = 임시저장 폴백) — 완료 문구·링크 안내가 갈린다. */
+  privatePublished?: boolean;
   /** 자동 게이트가 기동한 잡의 담당자 표기(발행 담당) — 수동(검토 탭 버튼) 잡은 비움. */
   actor?: string;
 }
@@ -2086,7 +2092,7 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
   const piece = pieceStore().get(id);
   if (!piece) return { error: 'unknown piece', status: 404 };
   if (!piece.runId) return { error: '초안이 아직 없습니다.', status: 409 };
-  if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') return { error: '이미 네이버 임시저장이 진행 중입니다.', status: 409 };
+  if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') return { error: '이미 네이버 비공개 발행이 진행 중입니다.', status: 409 };
   // 실런은 브라우저를 여니 프로필 뮤텍스 필요 — 수집·타 임시저장·일일동기화와 상호 배제.
   if (!dryRun && naverProfileBusy) {
     return { error: `네이버 브라우저 작업이 진행 중입니다(${naverProfileBusy}) — 완료 후 다시 시도하세요.`, status: 409 };
@@ -2111,11 +2117,11 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
 
   const job: NaverDraftJob = { status: 'running', startedTs: new Date().toISOString(), dryRun, actor: opts.actor };
   NAVER_DRAFT_JOBS.set(id, job);
-  if (!dryRun) naverProfileBusy = `임시저장:${piece.title.slice(0, 20)}`; // ── 동기 구간 끝(뮤텍스 획득)
+  if (!dryRun) naverProfileBusy = `비공개 발행:${piece.title.slice(0, 20)}`; // ── 동기 구간 끝(뮤텍스 획득)
   void publishDraftToNaver(sessionDir, draft, { dryRun, brand: pubBrand }).then((r) => {
     job.endedTs = new Date().toISOString();
     if (r.ok) {
-      job.status = 'saved'; job.url = r.draftUrl; job.adminUrl = r.adminUrl;
+      job.status = 'saved'; job.url = r.draftUrl; job.adminUrl = r.adminUrl; job.privatePublished = r.privatePublished;
       if (r.issues.length) job.error = r.issues.join(' · '); // PARTIAL — 저장은 됐지만 일부 문제(이미지 누락 등)
       // 잡 도는 사이 리비전으로 runId 가 바뀌었다면 이 결과는 옛 내용 — 현재 초안의 기록으로 남기지 않는다.
       if (!dryRun && pieceStore().get(id)?.runId === runIdAtStart) {
@@ -2151,7 +2157,7 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
     // 자동(발행 담당) 잡 종료 알림 — 채널 설정 시에만. 수동 잡은 사용자가 화면에서 폴링하므로 제외.
     if (opts.actor && !dryRun && notifyConfigured()) {
       void notify({
-        title: `📗 ${opts.actor} — 네이버 임시저장 ${job.status === 'saved' ? '완료' : '실패'} · ${piece.title.slice(0, 40)}`,
+        title: `📗 ${opts.actor} — 네이버 ${job.privatePublished ? '비공개 발행' : '임시저장'} ${job.status === 'saved' ? '완료' : '실패'} · ${piece.title.slice(0, 40)}`,
         body: job.url ?? job.adminUrl ?? job.error ?? '',
       });
     }
@@ -2177,11 +2183,11 @@ function pieceNaverDraftStatusHandler(c: Context): Response {
   const job = NAVER_DRAFT_JOBS.get(id);
   // 잡 없음 = 진행 중 아님 — 'idle'. 과거 저장 이력(url)은 참고용으로만 싣는다(재시작으로 잡이
   // 유실된 폴링이 옛 'saved' 를 '방금 완료'로 오인하지 않도록 status 는 idle 고정).
-  if (!job) return c.json({ status: 'idle', url: piece.naverDraftUrl, saved_ts: piece.naverDraftTs });
+  if (!job) return c.json({ status: 'idle', url: piece.naverDraftUrl, saved_ts: piece.naverDraftTs, private_published: !!piece.privateUrl });
   return c.json({
     status: job.status, url: job.url ?? piece.naverDraftUrl, admin_url: job.adminUrl,
     error: job.error, dry_run: job.dryRun, started_ts: job.startedTs, ended_ts: job.endedTs,
-    actor: job.actor,
+    actor: job.actor, private_published: !!job.privatePublished,
   });
 }
 

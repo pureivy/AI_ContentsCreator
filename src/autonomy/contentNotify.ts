@@ -125,7 +125,7 @@ export function factGateLines(info: FactGateInfo | undefined, maxItems: number, 
 }
 
 /** 자동 임시저장이 꺼진 동안의 안내 1줄(2026-08-27 사용자 확정) — 사람이 버튼을 눌러야 저장된다는 사실을 못 박는다. */
-const MANUAL_REVIEW_LINE = '✋ 수동 검토 대기 — 아래 "네이버 임시저장" 버튼으로 저장';
+const MANUAL_REVIEW_LINE = '✋ 수동 검토 대기 — 아래 "네이버 비공개 발행" 버튼으로 발행';
 
 /** 브리프 게이트 줄(2026-08-28) — `⚖ 브리프 반려 43/70 · 미해소 3건` + 지적 최대 2건. 순수 — 테스트 대상.
  * 통과(approved)면 빈 문자열: 정상은 알리지 않는다(줄이 늘면 반려 줄이 묻힌다).
@@ -197,7 +197,7 @@ export function shortsCaptionHtml(s: ShortsReadyInfo): string {
 
 // 발행 버튼(인라인 키보드) — callback_data 규격은 telegramBot.parseCallback 과 한 쌍("<op>:<id>", ≤64바이트).
 const blogButtons = (id: string): TgButton[][] => [[
-  { text: '📗 네이버 임시저장', callback_data: `bp:${id}` },
+  { text: '📗 네이버 비공개 발행', callback_data: `bp:${id}` },
   { text: '✍ 수정요청', callback_data: `rv:${id}` },
 ]];
 const cardnewsButtons = (id: string): TgButton[][] => [[
