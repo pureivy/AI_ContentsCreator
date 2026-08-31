@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   escapeHtml, stripMarkdown, reviewLink, studioBase,
-  blogReadyHtml, cardnewsCaptionHtml, shortsCaptionHtml, factGateLines, briefGateLines,
+  blogReadyHtml, cardnewsCaptionHtml, shortsCaptionHtml, factGateLines, briefGateLines, youtubeUploadedHtml,
 } from './contentNotify';
 
 describe('escapeHtml', () => {
@@ -260,5 +260,38 @@ describe('blogReadyHtml — 브리프 게이트 줄 배치(2026-08-28)', () => {
   it('기록이 없으면 기존 메시지 그대로다(회귀 0)', () => {
     expect(blogReadyHtml({ id: 'p1', title: 'T' }, '', false, 0)).not.toContain('브리프');
     expect(blogReadyHtml({ id: 'p1', title: 'T' }, '', false, 0, null)).not.toContain('브리프');
+  });
+});
+
+// 사용자 요청(2026-08-31) — 유튜브 비공개 업로드만 알림으로 받는다. 릴스·인스타 발행은 제외(소음).
+// 배경: 발행 계열은 전부 console.log 뿐이라 스튜디오를 안 보고 있으면 올라간 줄 몰랐다.
+// "비공개"를 문구에 못박는 이유: 이 파이프라인은 유튜브에 **비공개로만** 올리고 전체공개 전환은
+// 사람이 한다. 알림이 '발행됐다'로 읽히면 이미 공개된 줄 알고 확인을 건너뛰게 된다.
+describe('youtubeUploadedHtml — 유튜브 비공개 업로드 완료 알림', () => {
+  it('제목·규격·비공개 표시·링크를 담는다', () => {
+    const h = youtubeUploadedHtml({
+      id: 's1', topic: '사과나무묘목 고르기', title: '사과나무묘목 고르기, 확인할 네 곳',
+      brand: 'bionditree', durationSec: 35, scenes: 5, url: 'https://youtube.com/shorts/ABC',
+    });
+    expect(h).toContain('유튜브 비공개 업로드 완료');
+    expect(h).toContain('bionditree');
+    expect(h).toContain('<b>사과나무묘목 고르기, 확인할 네 곳</b>');
+    expect(h).toContain('35초');
+    expect(h).toContain('씬 5개');
+    expect(h).toContain('https://youtube.com/shorts/ABC');
+  });
+
+  it('title 이 없으면 topic 으로 대체한다', () => {
+    expect(youtubeUploadedHtml({ id: 's1', topic: '주제만', url: 'u' })).toContain('<b>주제만</b>');
+  });
+
+  it('규격이 없으면 그 줄을 생략한다(빈 줄 방지)', () => {
+    const h = youtubeUploadedHtml({ id: 's1', topic: 'T', url: 'u' });
+    expect(h).not.toContain('초 · 씬');
+    expect(h.split('\n').every((l) => l.trim() !== '')).toBe(true);
+  });
+
+  it('제목의 HTML 특수문자를 이스케이프한다', () => {
+    expect(youtubeUploadedHtml({ id: 's1', topic: '<b>A&B</b>', url: 'u' })).toContain('&lt;b&gt;A&amp;B&lt;/b&gt;');
   });
 });

@@ -91,7 +91,7 @@ import { naverAttemptAt, markNaverAttempt } from '../analytics/naverAttempts';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
-import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
+import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, notifyYoutubeUploaded, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
 import { startTelegramBot } from '../autonomy/telegramBot';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
@@ -1506,6 +1506,15 @@ app.post('/shorts/:id/youtube', async (c) => {
     maybeArchiveShortsVideo(id); // 릴스도 이미 올라갔으면 여기서 원본 정리
     if (r.thumbnailError) console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 24)} — 썸네일 미적용: ${r.thumbnailError}`);
     console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 유튜브 비공개 업로드 완료 (${publisherName()})`);
+    // 텔레그램 알림(사용자 요청 2026-08-31) — 발행 계열 중 유튜브만. 종전엔 콘솔 로그뿐이라 스튜디오를
+    // 보고 있지 않으면 올라간 사실을 알 수 없었다. 릴스·인스타는 제외(세트당 3건이면 소음).
+    // url 이 없으면 알리지 않는다 — 링크 없는 "업로드 완료"는 확인할 방법이 없어 알림 가치가 없다.
+    if (r.url) {
+      void notifyYoutubeUploaded({
+        id, topic: s.topic, title: s.title, brand: s.brand,
+        durationSec: s.durationSec, scenes: s.scenes, url: r.url,
+      });
+    }
     return c.json({ ok: true, url: r.url, thumbnailError: r.thumbnailError });
   } finally {
     ytPublishInFlight.delete(id);

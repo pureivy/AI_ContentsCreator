@@ -65,25 +65,53 @@ const logTgError = (method: string, e: unknown): void => {
   console.log(`[알림] 텔레그램 ${method} 예외 — ${e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200)}`);
 };
 
+/**
+ * 이 전송 실패를 재시도할 가치가 있는가(순수) — 시간이 풀어 주는 실패만 true.
+ *
+ * 실사고(2026-08-31): 유튜브 업로드 완료 알림이 "fetch failed" 한 번에 영구 소실됐다. 업로드는
+ * 성공했는데 사람은 그 사실을 못 받았다. 이 환경은 blip 이 잦다 — 같은 날 getUpdates 도 여러 번
+ * 같은 사유로 실패하고 복구했다. 수신부에만 백오프 루프가 있고 송신부는 1회 시도뿐이던 비대칭이 원인.
+ *
+ * 4xx 를 재시도하지 않는 이유: 토큰 폐기(401)·chat not found(400)·HTML 파싱 오류(400)는 몇 번을
+ * 보내도 같은 답이다. 재시도하면 실패를 늦게 알게 되고 API 만 두들긴다.
+ */
+export function shouldRetryTelegram(x: { status?: number; error?: unknown }): boolean {
+  if (x.error !== undefined) return true;          // 네트워크 예외 — fetch failed · timeout · ECONNRESET
+  if (x.status === undefined) return false;         // 판단 근거 없음 — 재시도 안 함(무한 루프 방어)
+  return x.status === 429 || x.status >= 500;
+}
+
 /** 텔레그램 HTML 메시지(링크 미리보기 off — 로컬/태일넷 링크는 미리보기 불가). buttons=인라인 키보드(선택). */
 export async function sendTelegramHtml(html: string, buttons?: TgButton[][]): Promise<boolean> {
   const tg = telegramCreds();
   if (!tg) return false;
-  try {
-    const r = await fetch(`${TG_API}${encodeURIComponent(tg.token)}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: tg.chatId, text: html.slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true,
-        ...(buttons?.length ? { reply_markup: { inline_keyboard: buttons } } : {}),
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!r.ok) await logTgFailure('sendMessage', r);
-    return r.ok;
-  } catch (e) {
-    logTgError('sendMessage', e);
-    return false;
+  const body = JSON.stringify({
+    chat_id: tg.chatId, text: html.slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true,
+    ...(buttons?.length ? { reply_markup: { inline_keyboard: buttons } } : {}),
+  });
+  // 일시 실패 재시도(2026-08-31) — 1.5s·4s 백오프로 3회. 알림은 '놓치면 사람이 모르는' 정보라
+  // 한 번의 blip 으로 버리면 안 된다. 지속 실패(4xx)는 첫 시도에서 바로 포기한다.
+  const DELAYS = [1_500, 4_000];
+  for (let attempt = 0; ; attempt++) {
+    let status: number | undefined;
+    let error: unknown;
+    try {
+      const r = await fetch(`${TG_API}${encodeURIComponent(tg.token)}/sendMessage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (r.ok) {
+        if (attempt) console.log('[알림]', `텔레그램 sendMessage 복구(재시도 ${attempt}회 후)`);
+        return true;
+      }
+      status = r.status;
+      await logTgFailure('sendMessage', r);
+    } catch (e) {
+      error = e;
+      logTgError('sendMessage', e);
+    }
+    if (attempt >= DELAYS.length || !shouldRetryTelegram({ status, error })) return false;
+    await new Promise<void>((res) => setTimeout(res, DELAYS[attempt]!));
   }
 }
 

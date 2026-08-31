@@ -195,6 +195,42 @@ export function shortsCaptionHtml(s: ShortsReadyInfo): string {
   ].filter(Boolean).join('\n');
 }
 
+/** 유튜브 비공개 업로드 완료 알림 입력 — 쇼츠 레코드에서 표시에 쓰는 필드만. */
+export interface YoutubeUploadedInfo {
+  id: string; topic: string; title?: string; brand?: string;
+  durationSec?: number; scenes?: number; url: string;
+}
+
+/**
+ * 유튜브 비공개 업로드 완료 알림(사용자 요청 2026-08-31) — 발행 계열 중 이것만 알린다.
+ * 릴스·인스타는 제외했다: 세트당 3건이면 금방 소음이 되고, 사용자가 확인하고 싶은 건 유튜브뿐이다.
+ *
+ * "비공개"를 문구에 못박는다 — 이 파이프라인은 유튜브에 비공개로만 올리고 전체공개 전환은 사람이 한다.
+ * 알림이 '발행됐다'로 읽히면 이미 공개된 줄 알고 확인을 건너뛰게 된다.
+ */
+export function youtubeUploadedHtml(s: YoutubeUploadedInfo): string {
+  const specs = [
+    typeof s.durationSec === 'number' ? `${s.durationSec}초` : '',
+    typeof s.scenes === 'number' ? `씬 ${s.scenes}개` : '',
+  ].filter(Boolean).join(' · ');
+  return [
+    escapeHtml(`📺 유튜브 비공개 업로드 완료${brandTag(s.brand)}`),
+    `<b>${escapeHtml(clip(s.title || s.topic, 200))}</b>`,
+    specs ? escapeHtml(specs) : '',
+    s.url,
+  ].filter(Boolean).join('\n');
+}
+
+/** 전송 — 알림 채널이 꺼져 있으면 조용히 통과. 실패는 무해(업로드 자체는 이미 성공했다). */
+export async function notifyYoutubeUploaded(s: YoutubeUploadedInfo): Promise<void> {
+  try {
+    if (!contentReadyNotifyEnabled()) return;
+    const html = youtubeUploadedHtml(s);
+    if (telegramCreds()) await sendTelegramHtml(html);
+    await notifyWebhookOnly({ title: `📺 유튜브 비공개 업로드 완료${brandTag(s.brand)} · ${s.title || s.topic}`, body: s.url });
+  } catch { /* 무해 */ }
+}
+
 // 발행 버튼(인라인 키보드) — callback_data 규격은 telegramBot.parseCallback 과 한 쌍("<op>:<id>", ≤64바이트).
 const blogButtons = (id: string): TgButton[][] => [[
   { text: '📗 네이버 비공개 발행', callback_data: `bp:${id}` },
