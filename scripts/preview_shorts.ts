@@ -60,7 +60,7 @@ async function propsFromShort(dir: string, publicDir: string): Promise<Record<st
   );
 
   return stageAndBuildProps(publicDir, prepared, plan.scenes, {
-    clips,
+    clips, fxSeedKey: path.basename(dir), // 실렌더와 같은 시드 — 미리보기가 실제와 다른 연출을 보여주면 안 된다
     caption: {
       bottomPct: CONFIG.shortsCaptionBottomPct, fontPx: CONFIG.shortsCaptionFontPx, hookFontPx: CONFIG.shortsCaptionHookFontPx,
       ...(CONFIG.shortsCaptionOutline ? { outline: true } : {}),

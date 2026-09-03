@@ -8,7 +8,7 @@ import path from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { pruneDir, humanBytes } from '../util/prune';
 import { selectComposition, renderMedia, makeCancelSignal } from '@remotion/renderer';
-import { prepareScenes, buildSrt, resolveClipSrc, defaultSceneFx, FPS, probeDuration } from './shortsCommon';
+import { prepareScenes, buildSrt, resolveClipSrc, defaultSceneFx, fxSeed, FPS, probeDuration } from './shortsCommon';
 import type { ShortsScene, ShortsRenderResult, PreparedScene } from './shortsCommon';
 
 /**
@@ -51,6 +51,8 @@ export async function stageAndBuildProps(
     clips?: Array<string | null>;
     caption?: { bottomPct?: number; keyword?: string; outline?: boolean; fontPx?: number; hookFontPx?: number };
     title?: { imagePath: string; topPct?: number; widthPct?: number };
+    /** 연출 변주 시드 — 보통 쇼츠 id. 편마다 다른 조합을 뽑되 재렌더에는 같은 값이 나온다. */
+    fxSeedKey?: string;
   } = {},
 ): Promise<Record<string, unknown>> {
   fs.mkdirSync(publicDir, { recursive: true });
@@ -71,7 +73,8 @@ export async function stageAndBuildProps(
     const sc = scenes[p.index];
     // 씬 연출 — 결정적 kind 기본값(스틸 씬만). 클립 씬은 undefined(클립이 곧 모션, 종전 동작).
     // month 는 렌더 시점 — 계절 파티클(봄 꽃잎/가을 낙엽/겨울 눈) 배정용.
-    const fx = defaultSceneFx(sc?.kind, p.index, !!videoSrc, new Date().getMonth() + 1);
+    // 시드는 쇼츠 id — 편마다 연출 조합이 갈리고, 같은 편을 재조립하면 같은 화면이 나온다.
+    const fx = defaultSceneFx(sc?.kind, p.index, !!videoSrc, new Date().getMonth() + 1, opts.fxSeedKey ? fxSeed(opts.fxSeedKey) : undefined);
     return {
       imageSrc, audioSrc, videoSrc, screenText: p.screenText, durationInFrames: p.durationInFrames,
       ...(clipFrames ? { clipFrames } : {}),
@@ -127,7 +130,7 @@ export async function renderShortsVideoRemotion(
 
   // 2) 에셋 스테이징 + inputProps 조립 — 미리보기 스크립트(scripts/preview_shorts.ts)와 공유한다.
   //    복사본이 아니라 같은 함수라야, 미리보기가 실렌더와 다른 길을 타는 사고가 안 난다.
-  const inputProps = await stageAndBuildProps(publicDir, prepared, scenes, opts);
+  const inputProps = await stageAndBuildProps(publicDir, prepared, scenes, { ...opts, fxSeedKey: path.basename(dir) });
 
   // 3) 번들 + 렌더
   const videoPath = path.join(dir, 'final.mp4');

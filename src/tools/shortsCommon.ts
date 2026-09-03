@@ -81,6 +81,28 @@ export function emptyKindScenes(scenes: ReadonlyArray<SceneKindFields>): Array<{
   return out;
 }
 
+/**
+ * 본문 씬의 연출 적용률(순수) — 훅·CTA 를 뺀 가운데 씬 중 몇 개가 kind 를 가졌나.
+ *
+ * 종전 로그는 `scenes.map(s => s.kind).filter(Boolean)` 으로 전 씬을 셌는데, 훅과 CTA 는 프롬프트가
+ * 항상 붙이라고 못박은 자리라 이 값은 사실상 절대 0 이 되지 않는다 — 그래서 "본문 씬 최소 1개"
+ * 규칙이 지켜지는지 한 번도 확인된 적이 없었다(실측 2026-09-03: 40편 193씬 중 본문 113개가
+ * kind 없이 나갔는데 로그는 매번 "연출 hook·cta" 라고만 찍혔다).
+ *
+ * 가장자리 판정은 위치와 kind 둘 다 본다 — 프롬프트는 씬1=hook·마지막=cta 를 요구하지만
+ * 작가가 어기는 경우가 있어, 어느 쪽으로든 훅/CTA 로 보이면 본문에서 뺀다.
+ */
+export function bodyKindCoverage(scenes: ReadonlyArray<SceneKindFields>): { body: number; withKind: number; kinds: SceneKind[] } {
+  const kinds: SceneKind[] = [];
+  let body = 0;
+  scenes.forEach((s, i) => {
+    if (i === 0 || i === scenes.length - 1 || s.kind === 'hook' || s.kind === 'cta') return;
+    body++;
+    if (s.kind) kinds.push(s.kind);
+  });
+  return { body, withKind: kinds.length, kinds };
+}
+
 export function normalizeSceneKind(raw: unknown): SceneKindFields {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const kind = String(r.kind ?? '').trim().toLowerCase();
@@ -269,19 +291,87 @@ export function seasonalParticles(month?: number): SceneAccent | undefined {
   return undefined;
 }
 /**
- * kind 기반 결정적 씬 연출(순수) — I2V 상한제로 스틸이 된 씬의 움직임 공백을 Remotion 네이티브로 메운다.
- * 클립 씬은 undefined(클립이 곧 모션 — 종전 fade 엔터 유지). 오버레이 씬(stat/list/quote)은 배경 subtle 캡
- * (패널 모션이 주인공 — 배경이 시선을 뺏지 않게), 훅은 push 강줌+스포트라이트, 본문은 strong 줌 + 엔터 변주.
- * 파티클은 런당 최대 2씬(본문 index 1 + cta) — 과장 방지 캡을 코드로 강제.
+ * 문자열 → 안정적 정수 시드(순수). 같은 쇼츠는 언제 다시 렌더해도 같은 연출을 받는다.
+ *
+ * FNV-1a 뒤에 murmur3 의 마무리 혼합(fmix32)을 붙인다. FNV 만 쓰면 하위 비트가 문자열 끝쪽
+ * 글자에만 좌우돼서, `"…:0"` `"…:1"` 처럼 접미사가 같은 키들이 같은 하위 비트를 받는다.
+ * 실제로 그 함정에 빠졌다 — 서로 다른 쇼츠 두 편이 5개 씬 연출을 통째로 똑같이 받았다.
  */
-export function defaultSceneFx(kind: SceneKind | undefined, index: number, hasClip: boolean, month?: number): SceneFx | undefined {
+export function fxSeed(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+/**
+ * 축별로 후보 하나를 고른다(순수). 시프트로 비트를 나눠 쓰지 않고 축마다 다시 해싱한다 —
+ * 나눠 쓰면 축 하나당 2~3비트뿐이라 편이 달라도 같은 조합이 나오기 쉽다.
+ */
+function pick<T>(list: readonly T[], seed: number, axis: number): T {
+  return list[fxSeed(`${seed}#${axis}`) % list.length]!;
+}
+
+// ── 연출 변주표(2026-09-03) ─────────────────────────────────────────────────
+// 종전엔 kind 하나에 연출 하나가 고정이었다 — 훅은 언제나 push+스포트라이트, stat 은 언제나
+// fade+subtle. 편마다 같은 자리에서 같은 움직임이 나오니 여러 편을 이어 보면 한 틀에서 찍어낸
+// 티가 난다. 유튜브 노출이 끊긴 뒤 '틀에서 찍어낸 티'를 줄이는 게 과제가 됐으므로, kind 별로
+// '허용되는 연출 묶음'을 두고 쇼츠 id 시드로 고른다.
+//
+// 무작위가 아니라 시드다 — 같은 쇼츠를 재조립해도 같은 화면이 나와야 재작성 경로가 성립한다.
+// 묶음 안의 후보는 전부 그 kind 에 안전한 것만 담는다(카드 씬 배경이 strong 으로 튀지 않는 등).
+const HOOK_FX: readonly SceneFx[] = [
+  { enter: 'none', move: 'push', intensity: 'strong', accent: 'spotlight' },
+  { enter: 'scale', move: 'zoom-in', intensity: 'strong', accent: 'spotlight' },
+  { enter: 'none', move: 'push', intensity: 'strong' },
+  { enter: 'fade', move: 'zoom-out', intensity: 'strong', accent: 'spotlight' },
+];
+// 카드 씬 — 패널이 주인공이라 배경은 subtle~normal 로 묶는다(strong 은 시선을 뺏는다).
+const CARD_ENTER: readonly NonNullable<SceneFx['enter']>[] = ['fade', 'wipe', 'scale', 'slide-up'];
+const CARD_MOVE: readonly NonNullable<SceneFx['move']>[] = ['zoom-in', 'zoom-out', 'none'];
+const CARD_INTENSITY: readonly NonNullable<SceneFx['intensity']>[] = ['subtle', 'subtle', 'normal'];
+// 본문(카드 없는) 씬 — 배경뿐이라 크게 움직여도 된다.
+const BODY_ENTER: readonly NonNullable<SceneFx['enter']>[] = ['slide-up', 'fade', 'wipe', 'scale'];
+const BODY_MOVE: readonly NonNullable<SceneFx['move']>[] = ['zoom-in', 'zoom-out', 'push'];
+const CTA_ENTER: readonly NonNullable<SceneFx['enter']>[] = ['fade', 'scale', 'slide-up'];
+
+/**
+ * kind 기반 씬 연출(순수) — I2V 상한제로 스틸이 된 씬의 움직임 공백을 Remotion 네이티브로 메운다.
+ * 클립 씬은 undefined(클립이 곧 모션 — 종전 fade 엔터 유지).
+ *
+ * seed 를 주면 kind 별 허용 묶음에서 편마다 다른 조합을 고른다(편 간 판박이 제거). seed 를 안 주면
+ * 종전 고정 연출 그대로다 — 구 호출부·테스트 불변.
+ *
+ * 파티클은 런당 최대 2씬(본문 한 곳 + cta) — 과장 방지 캡을 코드로 강제한다.
+ */
+export function defaultSceneFx(kind: SceneKind | undefined, index: number, hasClip: boolean, month?: number, seed?: number): SceneFx | undefined {
   if (hasClip) return undefined;
-  if (kind === 'hook' || (index === 0 && !kind)) return { enter: 'none', move: 'push', intensity: 'strong', accent: 'spotlight' };
   const seasonal = seasonalParticles(month);
-  if (kind === 'stat') return { enter: 'fade', intensity: 'subtle' };
-  if (kind === 'list') return { enter: 'wipe', intensity: 'subtle' };
-  if (kind === 'quote') return { enter: 'scale', intensity: 'subtle' };
-  if (kind === 'chart') return { enter: 'slide-up', intensity: 'subtle' };
-  if (kind === 'cta') return { enter: 'fade', move: 'zoom-out', intensity: 'normal', ...(seasonal ? { accent: seasonal } : {}) };
-  return { enter: index % 2 === 0 ? 'slide-up' : 'fade', intensity: 'strong', ...(seasonal && index === 1 ? { accent: seasonal } : {}) };
+  if (seed === undefined) { // 종전 동작 보존
+    if (kind === 'hook' || (index === 0 && !kind)) return { enter: 'none', move: 'push', intensity: 'strong', accent: 'spotlight' };
+    if (kind === 'stat') return { enter: 'fade', intensity: 'subtle' };
+    if (kind === 'list') return { enter: 'wipe', intensity: 'subtle' };
+    if (kind === 'quote') return { enter: 'scale', intensity: 'subtle' };
+    if (kind === 'chart') return { enter: 'slide-up', intensity: 'subtle' };
+    if (kind === 'cta') return { enter: 'fade', move: 'zoom-out', intensity: 'normal', ...(seasonal ? { accent: seasonal } : {}) };
+    return { enter: index % 2 === 0 ? 'slide-up' : 'fade', intensity: 'strong', ...(seasonal && index === 1 ? { accent: seasonal } : {}) };
+  }
+  // 씬마다 다른 축을 쓰도록 시드에 index 를 섞는다 — 한 편 안에서도 씬끼리 같은 조합이 반복되지 않게.
+  const sc = fxSeed(`${seed}:${index}`);
+  if (kind === 'hook' || (index === 0 && !kind)) return pick(HOOK_FX, sc, 0);
+  if (kind === 'cta') {
+    return { enter: pick(CTA_ENTER, sc, 0), move: pick(['zoom-out', 'zoom-in'] as const, sc, 2), intensity: 'normal', ...(seasonal ? { accent: seasonal } : {}) };
+  }
+  if (kind === 'stat' || kind === 'list' || kind === 'quote' || kind === 'chart' || kind === 'compare') {
+    return { enter: pick(CARD_ENTER, sc, 0), move: pick(CARD_MOVE, sc, 2), intensity: pick(CARD_INTENSITY, sc, 4) };
+  }
+  // 파티클은 본문 한 곳에만 — 어느 본문 씬이 걸릴지는 편마다 달라진다(종전엔 항상 index 1).
+  // 반드시 편 단위 seed 로 뽑는다. 씬 단위 sc 로 뽑으면 씬마다 제각기 '내가 그 자리'라고 판단해
+  // 캡이 무너진다(테스트가 실제로 2곳을 잡아냈다).
+  const particleAt = 1 + (seed % 2);
+  return {
+    enter: pick(BODY_ENTER, sc, 0), move: pick(BODY_MOVE, sc, 2), intensity: 'strong',
+    ...(seasonal && index === particleAt ? { accent: seasonal } : {}),
+  };
 }

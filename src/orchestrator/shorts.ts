@@ -41,7 +41,7 @@ import { blogUrlForPiece } from '../content/pieces';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
-import { normalizeSceneKind, emptyKindScenes, fixMonthNames, cutAtWordBoundary } from '../tools/shortsCommon';
+import { normalizeSceneKind, emptyKindScenes, bodyKindCoverage, fixMonthNames, cutAtWordBoundary } from '../tools/shortsCommon';
 import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
 import type { EventBus } from '../events/bus';
@@ -694,12 +694,16 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 만들어 둔 연출(StatCountUp·ListReveal·BarChartGrow·QuoteCard)이 놀고 있었다.
     // '언제 붙이는가'를 방아쇠로 명시하고 최소 1개를 요구하되, 날조 방어는 그대로 둔다.
     '씬 kind: 씬1="hook", 마지막 씬="cta". 본문 씬은 아래 방아쇠에 걸리면 해당 kind 를 붙여라 — 무음으로 보는 시청자에게 배경+자막만 흐르는 씬은 아무것도 남기지 않는다.',
-    '  · 내레이션이 핵심 수치 하나를 말한다 → "stat"(value 숫자·unit 단위·label 15자)',
-    '  · 두 가지 이상을 나열한다 → "list"(items 2~4개, 각 18자)',
-    '  · 두 값을 견준다 → "chart"(series 각 {label 8자, value 숫자≥0}, unit, highlight 강조 인덱스)',
-    '  · 원문 문장을 그대로 인용한다 → "quote"(text 40자, source 출처)',
+    // 방아쇠를 '내레이션이 …하면' 에서 '원문에 …이 있으면' 으로 뒤집는다(2026-09-03).
+    // 종전 문구는 작가가 방금 쓴 내레이션을 되돌아보게 했는데, 애초에 수치를 안 쓰면 영영 안 걸린다.
+    // 원문을 먼저 훑게 하면 소재가 가진 수치·목록이 대본으로 넘어온다(실측: stat 6·list 5 / 193씬).
+    '  [먼저 할 일] 대본을 쓰기 전에 원문(블로그 초안)에서 수치와 나열을 뽑아라. 원예 글에는 대개 둘 다 있다 — 수치는 간격·깊이·리터·횟수·기간·온도·비율, 나열은 준비물·순서·조건·품종. 뽑은 것이 있으면 그 내용을 담은 본문 씬에 아래 kind 를 붙인다.',
+    '  · 원문에 수치가 있고 그게 그 씬의 요지다 → "stat"(value 숫자·unit 단위·label 15자). 내레이션에서도 그 수치를 말해라 — 화면과 소리가 같은 것을 가리켜야 한다.',
+    '  · 원문이 두 가지 이상을 나열·병렬한다 → "list"(items 2~4개, 각 18자). 준비물·순서·조건·품종 전부 해당한다. 내레이션이 다 읊을 필요는 없다 — 화면이 나열을 맡고 내레이션은 기준을 말한다.',
     '  · 흔한 실수와 올바른 방법을 대비한다 → "compare"',
-    '  본문 씬 중 최소 1개는 kind 를 갖게 하라. 단 원문에 없는 수치를 지어내 kind 를 채우지는 마라 — 그럴 바엔 생략한다(날조 금지가 우선).',
+    '  · 원문에 서로 견줄 수 있는 같은 단위의 수치가 둘 이상 있다(예: 봄 90% vs 가을 70%) → "chart"(series 각 {label 8자, value 숫자≥0}, unit, highlight 강조 인덱스). 단위가 다르거나 한쪽이 수치가 아니면 chart 가 아니라 compare 다.',
+    '  · 원문 문장을 그대로 인용한다 → "quote"(text 40자, source 출처)',
+    '  본문 씬 중 최소 1개는 반드시 kind 를 갖게 하라 — 본문이 전부 비면 그 영상은 처음부터 끝까지 배경과 자막만으로 흐른다. 다만 원문에 없는 수치·나열을 지어내 채우지는 마라. 지어낼 상황이면 그 씬 대신 다른 본문 씬에 붙일 곳을 찾아라(날조 금지가 최소 1개보다 우선한다).',
     '수치 규칙: stat.value 와 chart.series 의 value 는 원문(블로그 초안)에 있는 수치 또는 대본 구조상 자명한 숫자(단계 수·항목 수)만. 불확실하면 그 kind 를 쓰지 마라. narration 은 수치를 한글로 낭독하되 JSON 값은 아라비아 숫자. chart 씬의 screenText 에는 핵심 수치 비교를 요약하라(렌더 실패 대비).',
     'description(유튜브 설명 — 인스타 캡션에도 그대로 복제된다)은 요약투로 끝내지 마라 — "정리했습니다/담았어요/알아봅니다/알아보세요/살펴봅니다/소개합니다" 금지. "결론 한 줄 + 조건 한 줄" 꼴로 써라(예: "잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요.").',
     // compare 채우기(2026-09-03 실측): 첫 런에서 두 작가 모두 kind='compare' 만 보내고 bad·good 을 비웠다.
@@ -1035,9 +1039,12 @@ export async function runShortsJob(
     if (fit.compressed) say(`대본 감량 — ${fit.beforeChars}→${fit.afterChars}자(길이 상한 ${CONFIG.shortsMaxDurationSec}초 예산)`);
     plan = fit.plan;
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
-    const kindsUsed = plan.scenes.map((s) => s.kind).filter(Boolean);
+    // 본문 적용률만 본다 — 훅·CTA 는 프롬프트가 항상 붙이라 한 자리라 세어 봐야 규칙 위반이 안 드러난다.
+    const cov = bodyKindCoverage(plan.scenes);
     const emptyKinds = emptyKindScenes(plan.scenes);
-    say(`대본 완성 — ${plan.title.slice(0, 30)} · 씬 ${plan.scenes.length}개 · 낭독 ~${Math.round(shortsNarrationChars(plan) / SHORTS_TTS_CPS)}초 추정${kindsUsed.length ? ` · 연출 ${kindsUsed.join('·')}` : ' · 연출 없음'}`);
+    say(`대본 완성 — ${plan.title.slice(0, 30)} · 씬 ${plan.scenes.length}개 · 낭독 ~${Math.round(shortsNarrationChars(plan) / SHORTS_TTS_CPS)}초 추정 · 본문 연출 ${cov.withKind}/${cov.body}${cov.kinds.length ? `(${cov.kinds.join('·')})` : ''}`);
+    // '본문 씬 최소 1개' 규칙 위반 — 배경과 자막만으로 흐르는 영상이 된다. 무음 시청자에게 남는 게 없다.
+    if (cov.body > 0 && cov.withKind === 0) say('본문 연출 없음 — 배경+자막만으로 렌더된다(본문 최소 1개 규칙 미달)');
     // 선언만 하고 페이로드를 안 채운 씬 — 화면에 아무것도 안 그려진다. 지시문이 안 먹은 신호다.
     if (emptyKinds.length) say(`연출 페이로드 누락 — ${emptyKinds.map((e) => `씬${e.index}(${e.kind})`).join(' ')} · 화면 요소 없이 렌더된다`);
     checkAbort();

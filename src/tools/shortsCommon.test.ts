@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary , emptyKindScenes} from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, bodyKindCoverage, defaultSceneFx, fxSeed } from './shortsCommon';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
   it('오디오 + 꼬리여백(0.6), 하한 2.8', () => {
@@ -290,5 +290,88 @@ describe('emptyKindScenes — 선언만 하고 비어 있는 연출 탐지(순�
   });
   it('빈 items 는 누락으로 본다 — 배열만 있고 항목이 없으면 화면에 안 나온다', () => {
     expect(emptyKindScenes([{ kind: 'list', items: [] }])).toEqual([{ index: 1, kind: 'list' }]);
+  });
+});
+
+describe('bodyKindCoverage', () => {
+  it('훅·CTA 는 본문에서 뺀다 — 그 둘은 프롬프트가 항상 붙이라 한 자리다', () => {
+    const cov = bodyKindCoverage([{ kind: 'hook' }, {}, { kind: 'stat' }, {}, { kind: 'cta' }]);
+    expect(cov.body).toBe(3);
+    expect(cov.withKind).toBe(1);
+    expect(cov.kinds).toEqual(['stat']);
+  });
+  it('본문이 전부 비면 withKind 0 — 종전 로그가 절대 못 잡던 상태', () => {
+    const cov = bodyKindCoverage([{ kind: 'hook' }, {}, {}, { kind: 'cta' }]);
+    expect(cov.withKind).toBe(0);
+    expect(cov.body).toBe(2);
+  });
+  it('위치로도 가장자리를 뺀다 — 작가가 hook/cta 를 안 붙인 경우', () => {
+    const cov = bodyKindCoverage([{}, { kind: 'list' }, {}]);
+    expect(cov.body).toBe(1);
+    expect(cov.withKind).toBe(1);
+  });
+  it('씬 2개 이하면 본문이 없다', () => {
+    expect(bodyKindCoverage([{ kind: 'hook' }, { kind: 'cta' }]).body).toBe(0);
+    expect(bodyKindCoverage([]).body).toBe(0);
+  });
+});
+
+describe('defaultSceneFx — 편 간 변주', () => {
+  const seedA = fxSeed('short_aaaaaaaaaa');
+  const seedB = fxSeed('short_bbbbbbbbbb');
+
+  it('시드가 없으면 종전 고정 연출 그대로', () => {
+    expect(defaultSceneFx('hook', 0, false)).toEqual({ enter: 'none', move: 'push', intensity: 'strong', accent: 'spotlight' });
+    expect(defaultSceneFx('stat', 2, false)).toEqual({ enter: 'fade', intensity: 'subtle' });
+  });
+  it('같은 시드는 같은 연출 — 재조립해도 화면이 안 바뀐다', () => {
+    for (const i of [0, 1, 2, 3, 4]) {
+      expect(defaultSceneFx('stat', i, false, 9, seedA)).toEqual(defaultSceneFx('stat', i, false, 9, seedA));
+    }
+  });
+  it('편이 다르면 연출 묶음이 갈린다 — 여러 편에 걸쳐 같은 조합만 나오지 않는다', () => {
+    const a = [0, 1, 2, 3, 4, 5].map((i) => JSON.stringify(defaultSceneFx(undefined, i, false, 9, seedA)));
+    const b = [0, 1, 2, 3, 4, 5].map((i) => JSON.stringify(defaultSceneFx(undefined, i, false, 9, seedB)));
+    expect(a).not.toEqual(b);
+  });
+  it('한 편 안에서도 씬끼리 조합이 반복되지 않는다', () => {
+    const seen = [1, 2, 3, 4].map((i) => JSON.stringify(defaultSceneFx(undefined, i, false, undefined, seedA)));
+    expect(new Set(seen).size).toBeGreaterThan(1);
+  });
+  it('카드 씬 배경은 절대 strong 이 아니다 — 패널이 주인공이라 시선을 뺏으면 안 된다', () => {
+    for (const seed of [seedA, seedB, fxSeed('x'), fxSeed('y'), fxSeed('z')]) {
+      for (const k of ['stat', 'list', 'quote', 'chart', 'compare'] as const) {
+        for (const i of [1, 2, 3, 4]) {
+          expect(defaultSceneFx(k, i, false, 9, seed)?.intensity).not.toBe('strong');
+        }
+      }
+    }
+  });
+  it('클립 씬은 시드가 있어도 undefined — 클립이 곧 모션', () => {
+    expect(defaultSceneFx('stat', 1, true, 9, seedA)).toBeUndefined();
+  });
+  it('파티클은 한 편에 본문 1곳 + cta 로 제한된다', () => {
+    for (const seed of [seedA, seedB, fxSeed('q')]) {
+      const body = [1, 2, 3, 4, 5].filter((i) => defaultSceneFx(undefined, i, false, 9, seed)?.accent?.startsWith('particles-'));
+      expect(body.length).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+describe('fxSeed — 하위 비트 함정 회귀', () => {
+  it('접미사가 같은 키들이 서로 다른 하위 비트를 받는다', () => {
+    // FNV-1a 만 쓰던 시절, "…:0" 처럼 끝이 같은 키는 하위 비트가 같아져 서로 다른 두 편이
+    // 5개 씬 연출을 통째로 똑같이 받았다(실측: short_f7da9c2057 vs short_fab8242762).
+    const lows = ['3612565752:0', '3454849696:0', '111:0', '222:0', '333:0'].map((k) => fxSeed(k) % 4);
+    expect(new Set(lows).size).toBeGreaterThan(1);
+  });
+  it('가까운 문자열이 서로 다른 조합으로 갈린다', () => {
+    const keys = Array.from({ length: 200 }, (_, i) => `short_${i.toString(16).padStart(10, '0')}`);
+    const combos = new Set(keys.map((k) => {
+      const s = fxSeed(k);
+      return [0, 1, 2, 3, 4].map((i) => JSON.stringify(defaultSceneFx(i === 0 ? 'hook' : undefined, i, false, 9, s))).join('|');
+    }));
+    // 완벽한 200/200 을 요구하면 취약한 테스트가 된다 — 판박이가 아니라는 것만 못박는다.
+    expect(combos.size).toBeGreaterThan(150);
   });
 });
