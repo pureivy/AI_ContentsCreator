@@ -41,7 +41,7 @@ import { blogUrlForPiece } from '../content/pieces';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
-import { normalizeSceneKind, normalizeSceneOverlay, fixMonthNames, cutAtWordBoundary } from '../tools/shortsCommon';
+import { normalizeSceneKind, fixMonthNames, cutAtWordBoundary } from '../tools/shortsCommon';
 import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
 import type { EventBus } from '../events/bus';
@@ -689,16 +689,21 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // CTA 결론 카드(2026-08-28 사용자 요청) — 결론이 소리로만 지나가면 무음 시청자에게 아무것도 안 남는다.
     // 실측(short_6c8936f791): 내레이션은 "허리 높이면 회양목, 어깨 높이 상록이면 사철나무"인데 화면엔 "자리별 나무 정하기".
     'CTA 씬에는 takeaways 를 채워라 — 이 영상의 결론("무얼 하라/무얼 골라라")을 "조건 → 답" 쌍 1~3개로 화면에 띄운다(when=시청자가 자기 상황을 알아보는 조건, then=그때의 답, 각 12자 이내). 예: {"when":"허리 높이","then":"회양목"}. 답은 화면이 지고 내레이션은 기준·이유를 말한다(사용자 확정 2026-08-28) — 그러니 내레이션이 수종명·품목명을 일일이 읊지 않아도 되고, takeaways 가 내레이션을 그대로 복창할 필요도 없다. 다만 **답의 근거는 반드시 원문(블로그 초안)에 있어야 한다** — 원문에 없는 답을 화면에 지어 넣지 마라. 화면에만 나가는 만큼 이 항목은 내레이션보다 더 엄격히 원문에 붙어라. 조건별로 답이 갈리는 소재가 아니면 when 에 핵심 상황, then 에 할 일을 넣어라(예: {"when":"심기 전","then":"뿌리부터 확인"}). 결론이 조건과 무관한 단일 행동뿐이면 takeaways 를 생략해도 된다 — 억지로 쪼개지 마라.',
-    '씬 kind(선택): 씬1="hook", 마지막 씬="cta". 본문 씬 중 어울리는 곳에만 "stat"(핵심 수치 1개: value 숫자·unit 단위·label 15자)·"list"(items 2~4개, 각 18자)·"quote"(text 40자, source 출처)·"chart"(비교 수치 2~5개가 막대그래프로 자라나는 연출: series 각 {label 8자, value 숫자≥0}, unit 단위, highlight 강조할 막대 인덱스) — 억지 배정 금지, 애매하면 kind 생략. chart 는 내레이션이 수치 비교를 말할 때만.',
+    // 실측(2026-09-03, 최근 40편): 본문 씬 111개가 kind 없이 배경+자막만으로 흘렀고 chart 0회·quote 1회였다.
+    // 종전 지시가 "억지 배정 금지, 애매하면 생략"으로 끝나 작가가 기본값을 '생략'으로 읽었다 —
+    // 만들어 둔 연출(StatCountUp·ListReveal·BarChartGrow·QuoteCard)이 놀고 있었다.
+    // '언제 붙이는가'를 방아쇠로 명시하고 최소 1개를 요구하되, 날조 방어는 그대로 둔다.
+    '씬 kind: 씬1="hook", 마지막 씬="cta". 본문 씬은 아래 방아쇠에 걸리면 해당 kind 를 붙여라 — 무음으로 보는 시청자에게 배경+자막만 흐르는 씬은 아무것도 남기지 않는다.',
+    '  · 내레이션이 핵심 수치 하나를 말한다 → "stat"(value 숫자·unit 단위·label 15자)',
+    '  · 두 가지 이상을 나열한다 → "list"(items 2~4개, 각 18자)',
+    '  · 두 값을 견준다 → "chart"(series 각 {label 8자, value 숫자≥0}, unit, highlight 강조 인덱스)',
+    '  · 원문 문장을 그대로 인용한다 → "quote"(text 40자, source 출처)',
+    '  · 흔한 실수와 올바른 방법을 대비한다 → "compare"(bad·good 각 {label 14자, note 18자}). 예: bad={"label":"웃자란 가지","note":"꽃눈이 안 앉아요"} good={"label":"짧은 곁가지","note":"여기에 열매가 달려요"}. 양쪽 다 있어야 성립한다.',
+    '  본문 씬 중 최소 1개는 kind 를 갖게 하라. 단 원문에 없는 수치를 지어내 kind 를 채우지는 마라 — 그럴 바엔 생략한다(날조 금지가 우선).',
     '수치 규칙: stat.value 와 chart.series 의 value 는 원문(블로그 초안)에 있는 수치 또는 대본 구조상 자명한 숫자(단계 수·항목 수)만. 불확실하면 그 kind 를 쓰지 마라. narration 은 수치를 한글로 낭독하되 JSON 값은 아라비아 숫자. chart 씬의 screenText 에는 핵심 수치 비교를 요약하라(렌더 실패 대비).',
     'description(유튜브 설명 — 인스타 캡션에도 그대로 복제된다)은 요약투로 끝내지 마라 — "정리했습니다/담았어요/알아봅니다/알아보세요/살펴봅니다/소개합니다" 금지. "결론 한 줄 + 조건 한 줄" 꼴로 써라(예: "잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요.").',
     shortsTitleTypeGuide(titleTypes, CONFIG.voiceRotation),
-    '[화면 도해] 화면에서 "어디"를 가리켜야 뜻이 통하는 씬에는 overlay 를 넣어라(안 넣어도 된다 — 가리킬 지점이 없으면 생략).',
-    '  · kind: arrow(자를 자리·볼 지점을 가리킴) · circle(이 부분) · cross(여기는 아님) · check(이게 맞음) · measure(치수·간격) · step(순서 번호)',
-    '  · at: 9분할 위치 tl·tc·tr·ml·mc·mr 중 하나(하단은 자막이 쓰므로 쓰지 마라)',
-    '  · label: 8자 이내 짧은 말(치수는 "60cm", 이유는 "여기서 분지"). step 은 숫자만.',
-    '  · 한 씬에 하나만. 배경 이미지가 이미 설명하는 것을 중복해 가리키지 마라.',
-    `JSON 형식: {"title":"대표 제목","titles":[${titlesJson}],"scenes":[{"narration":"...","screenText":"...","overlay":{"kind":"arrow","at":"mc","label":"여기"},"kind":"hook|stat|list|quote|chart|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0},"takeaways":[{"when":"허리 높이","then":"회양목"}]}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}`,
+    `JSON 형식: {"title":"대표 제목","titles":[${titlesJson}],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|chart|compare|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0},"takeaways":[{"when":"허리 높이","then":"회양목"}],"compare":{"bad":{"label":"웃자란 가지","note":"꽃눈이 안 앉아요"},"good":{"label":"짧은 곁가지","note":"여기 열매가 달려요"}}}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}`,
   ].filter(Boolean).join('\n');
   type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown; takeaways?: unknown }>; description?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
   // 역할 프롬프트가 없을 때만 쓰이는 폴백(callRoleJSON: role.systemPrompt || fallback).
@@ -716,7 +721,6 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       narration: cleanNarration(s?.narration),
       screenText: numMonth(stripEmoji(String(s?.screenText ?? '')).trim()).slice(0, 20),
       ...normalizeSceneKind(s), // 불량 페이로드는 {} 강등 — 기본 씬으로 렌더
-      ...(normalizeSceneOverlay((s as { overlay?: unknown })?.overlay) ? { overlay: normalizeSceneOverlay((s as { overlay?: unknown }).overlay) } : {}),
     })).filter((s) => s.narration);
     if (scenes.length < 3) return null;
     const titles = (Array.isArray(j.titles) ? j.titles : []).map((t) => numMonth(stripEmoji(String(t ?? '')).trim())).filter(Boolean).slice(0, 3);

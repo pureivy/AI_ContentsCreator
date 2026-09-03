@@ -13,7 +13,7 @@ import { SpotlightMask } from './SpotlightMask';
 import { ParticleDrift } from './ParticleDrift';
 import { BarChartGrow } from './BarChartGrow';
 import { TakeawayCard } from './TakeawayCard';
-import { SceneOverlay } from './SceneOverlay';
+import { CompareCard } from './CompareCard';
 
 export const autoShortsSchema = z.object({
   scenes: z.array(z.object({
@@ -23,16 +23,15 @@ export const autoShortsSchema = z.object({
     durationInFrames: z.number(),
     videoSrc: z.string().nullable().optional(),
     clipFrames: z.number().optional(), // 실제 클립 길이(30fps 기준 프레임) — 감속 재생 배율 산정용. 없으면 CLIP_FRAMES 폴백.
-    kind: z.enum(['hook', 'stat', 'list', 'quote', 'chart', 'cta']).optional(),
+    kind: z.enum(['hook', 'stat', 'list', 'quote', 'chart', 'cta', 'compare']).optional(),
     stat: z.object({ value: z.number(), unit: z.string().optional(), label: z.string().optional() }).optional(),
     items: z.array(z.string()).max(4).optional(),
     /** CTA 결론(2026-08-28) — "조건 → 답" 쌍을 화면에 띄운다. 무음 시청·되감기 없음 대응. */
     takeaways: z.array(z.object({ when: z.string(), then: z.string() })).max(3).optional(),
-    /** 배경 위 도해(2026-09-03) — AI 이미지가 못 하는 '가공 흔적'이자 나무 니치의 설명 수단. */
-    overlay: z.object({
-      kind: z.enum(['arrow', 'circle', 'cross', 'check', 'measure', 'step']),
-      at: z.enum(['tl', 'tc', 'tr', 'ml', 'mc', 'mr', 'bl', 'bc', 'br']),
-      label: z.string().optional(),
+    /** 대비 씬(2026-09-03) — "이것 말고 이것". 위치 추측이 필요 없는 연출(화살표 도해 대체). */
+    compare: z.object({
+      bad: z.object({ label: z.string(), note: z.string().optional() }),
+      good: z.object({ label: z.string(), note: z.string().optional() }),
     }).optional(),
     quote: z.object({ text: z.string(), source: z.string().optional() }).optional(),
     chart: z.object({
@@ -96,8 +95,7 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
       {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
       {s.kind === 'chart' && s.chart ? <BarChartGrow chart={s.chart} total={s.durationInFrames} /> : null}
       {s.kind === 'cta' && s.takeaways?.length ? <TakeawayCard takeaways={s.takeaways} total={s.durationInFrames} /> : null}
-      {/* 도해 — 배경·액센트 위, 자막 아래(자막이 최상단이라 겹쳐도 글자가 살아 있다) */}
-      {s.overlay ? <SceneOverlay overlay={s.overlay} total={s.durationInFrames} /> : null}
+      {s.kind === 'compare' && s.compare ? <CompareCard compare={s.compare} /> : null}
       <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={caption?.bottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} hookFontPx={caption?.hookFontPx} />
       {s.audioSrc ? <Audio src={staticFile(s.audioSrc)} /> : null}
     </AbsoluteFill>

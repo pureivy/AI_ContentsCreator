@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary , normalizeSceneOverlay} from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary } from './shortsCommon';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
   it('오디오 + 꼬리여백(0.6), 하한 2.8', () => {
@@ -231,33 +231,36 @@ describe('normalizeSceneKind — cta takeaways', () => {
   });
 });
 
-describe('normalizeSceneOverlay — 화면 도해 검증(순수, 2026-09-03)', () => {
-  it('어휘 안의 값은 그대로 통과', () => {
-    expect(normalizeSceneOverlay({ kind: 'arrow', at: 'mc', label: '여기' }))
-      .toEqual({ kind: 'arrow', at: 'mc', label: '여기' });
+describe('normalizeSceneKind — compare(대비 씬, 2026-09-03)', () => {
+  it('양쪽이 다 있으면 그대로 싣는다', () => {
+    const r = normalizeSceneKind({
+      kind: 'compare',
+      bad: { label: '웃자란 가지', note: '꽃눈이 안 앉아요' },
+      good: { label: '짧은 곁가지', note: '여기 열매가 달려요' },
+    });
+    expect(r.kind).toBe('compare');
+    expect(r.compare?.bad.label).toBe('웃자란 가지');
+    expect(r.compare?.good.note).toBe('여기 열매가 달려요');
   });
-  it('어휘 밖 kind 는 undefined — 도해 없이 렌더(fail-open)', () => {
-    expect(normalizeSceneOverlay({ kind: 'sparkle', at: 'mc' })).toBeUndefined();
-    expect(normalizeSceneOverlay(null)).toBeUndefined();
-    expect(normalizeSceneOverlay('arrow')).toBeUndefined();
+  it('한쪽만 있으면 kind 만 남긴다 — 대비가 성립하지 않는다', () => {
+    expect(normalizeSceneKind({ kind: 'compare', bad: { label: '웃자란 가지' } }))
+      .toEqual({ kind: 'compare' });
+    expect(normalizeSceneKind({ kind: 'compare' })).toEqual({ kind: 'compare' });
   });
-  it('모르는 위치는 중앙으로 강등', () => {
-    expect(normalizeSceneOverlay({ kind: 'circle', at: 'center' })?.at).toBe('mc');
-    expect(normalizeSceneOverlay({ kind: 'circle' })?.at).toBe('mc');
+  it('note 는 선택 — 없으면 필드를 넣지 않는다', () => {
+    const r = normalizeSceneKind({ kind: 'compare', bad: { label: 'A' }, good: { label: 'B' } });
+    expect(r.compare).toEqual({ bad: { label: 'A' }, good: { label: 'B' } });
   });
-  it('하단 행은 중간 행으로 올린다 — 자막이 화면 하단을 쓰므로 겹치면 둘 다 안 읽힌다', () => {
-    expect(normalizeSceneOverlay({ kind: 'cross', at: 'bl' })?.at).toBe('ml');
-    expect(normalizeSceneOverlay({ kind: 'cross', at: 'bc' })?.at).toBe('mc');
-    expect(normalizeSceneOverlay({ kind: 'cross', at: 'br' })?.at).toBe('mr');
+  it('label 14자·note 18자 캡(단어 경계)', () => {
+    const r = normalizeSceneKind({
+      kind: 'compare',
+      bad: { label: '아주 길게 늘어진 웃자란 가지 여러 개', note: '이렇게 되면 꽃눈이 전혀 앉지 않아서 열매가 안 달립니다' },
+      good: { label: 'B' },
+    });
+    expect((r.compare!.bad.label).length).toBeLessThanOrEqual(14);
+    expect((r.compare!.bad.note ?? '').length).toBeLessThanOrEqual(18);
   });
-  it('라벨은 8자 캡 + 단어 경계 절단', () => {
-    const o = normalizeSceneOverlay({ kind: 'measure', at: 'mc', label: '담장까지 두 팔 벌린 폭' });
-    expect((o?.label ?? '').length).toBeLessThanOrEqual(8);
-  });
-  it('라벨이 비면 필드 자체를 넣지 않는다', () => {
-    expect(normalizeSceneOverlay({ kind: 'check', at: 'tr', label: '   ' })).toEqual({ kind: 'check', at: 'tr' });
-  });
-  it('대소문자·공백을 흡수한다', () => {
-    expect(normalizeSceneOverlay({ kind: ' ARROW ', at: ' TR ' })).toEqual({ kind: 'arrow', at: 'tr' });
+  it('이형 페이로드는 kind 만 — 렌더 무중단(fail-open)', () => {
+    expect(normalizeSceneKind({ kind: 'compare', bad: 'x', good: 3 })).toEqual({ kind: 'compare' });
   });
 });

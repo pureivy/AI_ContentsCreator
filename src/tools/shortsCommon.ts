@@ -22,7 +22,7 @@ export const FRAME_H = 2880;
 export const SHORTS_TTS_TONE =
   '활기차고 대화하듯, 약간 빠른 템포로 친근하게 낭독한다. 첫 훅은 궁금증을 자아내게 힘주어, 핵심 수치와 결론은 또렷하고 자신감 있게. 광고 성우톤이 아니라 아는 사람이 알려주듯.';
 
-export type SceneKind = 'hook' | 'stat' | 'list' | 'quote' | 'chart' | 'cta';
+export type SceneKind = 'hook' | 'stat' | 'list' | 'quote' | 'chart' | 'cta' | 'compare';
 export interface SceneKindFields {
   kind?: SceneKind;
   stat?: { value: number; unit?: string; label?: string };
@@ -31,49 +31,14 @@ export interface SceneKindFields {
   chart?: { series: Array<{ label: string; value: number }>; unit?: string; highlight?: number };
   /** CTA 결론(2026-08-28) — "조건 → 답" 쌍. 무음 시청·되감기 없는 매체라 결론은 화면에도 남겨야 한다. */
   takeaways?: Array<{ when: string; then: string }>;
+  /**
+   * 대비 씬(2026-09-03) — 틀린 것과 맞는 것을 화면에서 나란히 보여준다.
+   * 가리키기 도해(화살표)를 뺀 자리를 메운다: 작가는 이미지를 못 보므로 '이미지의 어디'는 못 짚지만,
+   * '무엇 대신 무엇'은 원문만으로 정확히 쓸 수 있다. 위치 추측이 필요 없는 연출이다.
+   */
+  compare?: { bad: { label: string; note?: string }; good: { label: string; note?: string } };
 }
-/**
- * 씬 도해(2026-09-03) — 배경 위에 우리가 직접 그리는 표시. AI 이미지가 못 하는 '가공 흔적'이자,
- * 나무 니치에서는 실촬영보다 명확한 설명 수단이다(어디를 자르는지는 사진보다 화살표가 정확하다).
- * 실촬영 소재가 없어 대안으로 넣는다(사용자 확정 2026-09-03).
- *
- * 위치는 9분할 격자로만 받는다 — 좌표를 LLM 에 맡기면 화면 밖이나 자막 위로 나간다.
- */
-export type OverlayKind = 'arrow' | 'circle' | 'cross' | 'check' | 'measure' | 'step';
-export type OverlayAt = 'tl' | 'tc' | 'tr' | 'ml' | 'mc' | 'mr' | 'bl' | 'bc' | 'br';
-export interface SceneOverlay {
-  kind: OverlayKind;
-  at: OverlayAt;
-  /** 짧은 라벨(치수·이유) — 8자 캡. step 은 숫자만 쓴다. */
-  label?: string;
-}
-const OVERLAY_KINDS = new Set<string>(['arrow', 'circle', 'cross', 'check', 'measure', 'step']);
-const OVERLAY_AT = new Set<string>(['tl', 'tc', 'tr', 'ml', 'mc', 'mr', 'bl', 'bc', 'br']);
-
-/**
- * LLM 도해 오브젝트 검증(순수) — 어휘 밖이면 undefined(도해 없이 렌더). 자막이 화면 하단을 쓰므로
- * 하단 행(bl·bc·br)은 중간 행으로 올린다 — 겹치면 둘 다 안 읽힌다.
- */
-export function normalizeSceneOverlay(raw: unknown): SceneOverlay | undefined {
-  const r = (raw && typeof raw === 'object' ? raw : null) as Record<string, unknown> | null;
-  if (!r) return undefined;
-  const kind = String(r.kind ?? '').trim().toLowerCase();
-  if (!OVERLAY_KINDS.has(kind)) return undefined;
-  let at = String(r.at ?? '').trim().toLowerCase();
-  if (!OVERLAY_AT.has(at)) at = 'mc';
-  if (at === 'bl') at = 'ml'; else if (at === 'bc') at = 'mc'; else if (at === 'br') at = 'mr'; // 자막 영역 회피
-  const label = cutAtWordBoundary(asText(r.label), 8);
-  const out: SceneOverlay = { kind: kind as OverlayKind, at: at as OverlayAt };
-  if (label) out.label = label;
-  return out;
-}
-
-export interface ShortsScene extends SceneKindFields {
-  narration: string;
-  screenText?: string;
-  /** 배경 위 도해(2026-09-03) — 없으면 종전대로 배경만. */
-  overlay?: SceneOverlay;
-}
+export interface ShortsScene extends SceneKindFields { narration: string; screenText?: string }
 
 /**
  * LLM 씬 오브젝트에서 kind·페이로드를 검증 추출 — 실패 시 {} 로 강등(fail-open, 렌더 무중단).
@@ -97,6 +62,18 @@ export function normalizeSceneKind(raw: unknown): SceneKindFields {
   // CTA 결론 카드(2026-08-28 사용자 요청) — 실측(short_6c8936f791): 내레이션은 "허리 높이면 회양목,
   // 어깨 높이 상록이면 사철나무"라고 답을 주는데 화면엔 "자리별 나무 정하기" 라벨만 떴다. 조건·답이
   // 모두 있는 쌍만 싣고, 없거나 불량이면 kind 만 남긴다(종전 동작 — CTA 씬 자체는 유지).
+  // 대비 씬 — 양쪽이 다 있어야 성립한다(한쪽만 있으면 대비가 아니다). 불량이면 kind 만 남긴다.
+  if (kind === 'compare') {
+    const side = (v: unknown): { label: string; note?: string } | null => {
+      const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+      const label = cutAtWordBoundary(asText(o.label), 14);
+      if (!label) return null;
+      const note = cutAtWordBoundary(asText(o.note), 18);
+      return note ? { label, note } : { label };
+    };
+    const bad = side(r.bad), good = side(r.good);
+    return bad && good ? { kind, compare: { bad, good } } : { kind };
+  }
   if (kind === 'cta') {
     const takeaways = (Array.isArray(r.takeaways) ? r.takeaways : [])
       .map((x) => {
