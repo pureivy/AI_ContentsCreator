@@ -355,11 +355,17 @@ export function varyLayout(
 //
 // 무작위가 아니라 시드다 — 같은 쇼츠를 재조립해도 같은 화면이 나와야 재작성 경로가 성립한다.
 // 묶음 안의 후보는 전부 그 kind 에 안전한 것만 담는다(카드 씬 배경이 strong 으로 튀지 않는 등).
+// 훅은 enter 를 절대 바꾸지 않는다 — 'none' 고정(2026-09-03 실사고).
+// 첫 프레임이 곧 커버다: 유튜브 업로드는 extractFirstFrame 으로 프레임 0 을 커버로 지정하고
+// 릴스 커버도 같은 자리를 쓴다. 그런데 'none' 을 뺀 엔터는 전부 opacity 0 에서 시작하므로
+// 프레임 0 이 새까맣게 나온다. 상단 캘리는 씬 밖 오버레이라 그대로 보여서, 결과가 '검은 배경에
+// 제목만' 이 된다(실측: short_1a95e1e542, 프레임 0 평균 밝기 8/255).
+// 변주는 move·intensity·accent 로만 준다 — 이 셋은 프레임 0 불투명도에 영향이 없다.
 const HOOK_FX: readonly SceneFx[] = [
   { enter: 'none', move: 'push', intensity: 'strong', accent: 'spotlight' },
-  { enter: 'scale', move: 'zoom-in', intensity: 'strong', accent: 'spotlight' },
+  { enter: 'none', move: 'zoom-in', intensity: 'strong', accent: 'spotlight' },
   { enter: 'none', move: 'push', intensity: 'strong' },
-  { enter: 'fade', move: 'zoom-out', intensity: 'strong', accent: 'spotlight' },
+  { enter: 'none', move: 'zoom-out', intensity: 'strong', accent: 'spotlight' },
 ];
 // 'wipe' 는 변주 묶음에서 뺀다(2026-09-03 실측). Series 는 씬을 겹치지 않으므로 와이프가 아직
 // 안 열린 쪽에는 아무것도 없고, 루트 배경인 검정이 그대로 드러난다 — 실측에서 씬 전환 0.2초 동안

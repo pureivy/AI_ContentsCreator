@@ -432,3 +432,27 @@ describe('varyLayout — 자막·제목 배치 미세 변주', () => {
     }
   });
 });
+
+describe('훅 첫 프레임 — 커버가 검게 나오면 안 된다', () => {
+  it('어떤 시드에서도 훅 enter 는 none — 프레임 0 이 커버로 쓰인다', () => {
+    // 실사고(2026-09-03, short_1a95e1e542): 훅이 enter:'fade' 로 뽑혀 프레임 0 이 opacity 0 →
+    // 평균 밝기 8/255. 상단 캘리는 씬 밖 오버레이라 그대로 보여 "검은 배경에 제목만" 이 됐다.
+    // 유튜브 커버(extractFirstFrame)와 릴스 커버가 그 프레임을 쓴다.
+    for (let n = 0; n < 120; n++) {
+      const fx = defaultSceneFx('hook', 0, false, 9, fxSeed(`short_${n}`));
+      expect(fx?.enter).toBe('none');
+    }
+  });
+  it('첫 씬이 kind 없이 와도 마찬가지다', () => {
+    for (let n = 0; n < 60; n++) {
+      expect(defaultSceneFx(undefined, 0, false, 9, fxSeed(`s${n}`))?.enter).toBe('none');
+    }
+  });
+  it('훅 변주는 move·intensity·accent 로만 준다 — 실제로 갈리는지', () => {
+    const seen = new Set(Array.from({ length: 40 }, (_, n) => {
+      const fx = defaultSceneFx('hook', 0, false, 9, fxSeed(`short_${n}`));
+      return `${fx?.move}/${fx?.accent ?? '-'}`;
+    }));
+    expect(seen.size).toBeGreaterThan(1);
+  });
+});
