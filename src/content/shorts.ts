@@ -85,6 +85,21 @@ export interface Shorts {
   updatedTs: string;
 }
 
+/**
+ * QA 미해결 발행 차단 사유(순수) — 카드뉴스 qaPublishBlockReason 의 쇼츠판.
+ *
+ * 실사고(2026-09-03, short_5b5f7f4231): 썸네일이 "줄자로"를 "좔자로"로 냈고 비전 QA 는 정확히
+ * 불합격을 냈는데, 재시도 소진 뒤 "디자인본 우선" 방침이 그 이미지를 로그도 없이 그대로 썼다.
+ * 카드뉴스는 같은 사고(2026-08-10) 뒤에 게이트를 달았고 쇼츠에는 없었다.
+ *
+ * 방침은 그대로 둔다(오타 있는 디자인본이 영상 프레임 폴백보다 낫다) — 대신 사람이 한 번 보게 한다.
+ * 발행 라우트가 모든 경로(UI 버튼·텔레그램)의 관문이라 여기 한 곳만 지키면 된다.
+ */
+export function shortsQaPublishBlockReason(thumbQaFailed: boolean, force = false): string | null {
+  if (!thumbQaFailed || force) return null;
+  return '썸네일 한글 QA가 오타 가능성을 미해결로 남겼습니다 — 썸네일을 확인한 뒤 발행을 확정하거나, 썸네일을 재생성하세요';
+}
+
 export interface CreateShortsInput {
   topic: string;
   platform?: ShortsPlatform;

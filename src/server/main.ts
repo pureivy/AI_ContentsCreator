@@ -52,13 +52,13 @@ import { promisify } from 'node:util';
 import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
-import { shortsStore } from '../content/shorts';
+import { shortsStore, shortsQaPublishBlockReason } from '../content/shorts';
 import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, youtubeQuotaCommitted, shouldStartSecondRun, SIBLING_PLAN_WAIT_MS, type ShortsPlatform } from '../content/shortsPlatform';
 import { pickWriter, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo } from '../tools/shortsRender';
-import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
+import { generateDesignedThumbnail, thumbTextQaFailed } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft, shouldAutoDeriveOnDecision, cadenceBaselineTs } from '../content/pieces';
 import { isTransientFailure, transientReason } from '../llm/transientError';
 import { toFactGateInfo } from '../content/factGate';
@@ -1559,6 +1559,13 @@ app.post('/shorts/:id/youtube', async (c) => {
   if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
   // 길이 상한 발행 게이트(2026-08-20 하드 캡) — 어떤 경로(수정요청 재조립·구버전 잔존분)로 ready 가 됐든 초과본 발행 차단.
   if ((s.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) return c.json({ error: `길이 상한 초과(${s.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초) — ✍수정요청으로 대본을 줄인 뒤 발행하세요` }, 409);
+  // 썸네일 QA 미해결 게이트(실사고 2026-09-03: 오타 썸네일이 조용히 발행) — 카드뉴스와 동일 방식.
+  // 사용자 확인(force) 또는 썸네일 재생성으로 해제된다. 모든 발행 경로가 이 라우트를 지난다.
+  {
+    const force = !!(await c.req.json<{ force?: boolean }>().catch(() => ({} as { force?: boolean }))).force;
+    const qaBlock = shortsQaPublishBlockReason(thumbTextQaFailed(shortsStore().dirFor(id)), force);
+    if (qaBlock) return c.json({ error: qaBlock, thumb_qa_unresolved: true }, 409);
+  }
   if (s.youtubeUrl) return c.json({ error: '이미 업로드됨', url: s.youtubeUrl }, 409); // 중복 영상·쿼터 낭비 방지
   // 채널 게이트(2026-09-03) — 인스타 전용으로 만든 대본을 유튜브에 올리지 않는다(레거시 미지정분은 통과).
   if (!canPublishTo(s.platform, 'youtube')) {
@@ -1970,6 +1977,13 @@ app.post('/shorts/:id/meta', async (c) => {
   // 채널 게이트(2026-09-03) — 유튜브 전용 대본을 릴스로 내보내지 않는다(레거시 미지정분은 통과).
   if (!canPublishTo(s.platform, 'instagram')) {
     return c.json({ error: `${platformLabel(s.platform)} 전용 숏폼입니다 — 릴스에는 인스타용 대본을 올리세요` }, 409);
+  }
+  // 썸네일 QA 미해결 게이트(실사고 2026-09-03: 오타 썸네일이 조용히 발행) — 카드뉴스와 동일 방식.
+  // 사용자 확인(force) 또는 썸네일 재생성으로 해제된다. 모든 발행 경로가 이 라우트를 지난다.
+  {
+    const force = !!(await c.req.json<{ force?: boolean }>().catch(() => ({} as { force?: boolean }))).force;
+    const qaBlock = shortsQaPublishBlockReason(thumbTextQaFailed(shortsStore().dirFor(id)), force);
+    if (qaBlock) return c.json({ error: qaBlock, thumb_qa_unresolved: true }, 409);
   }
   const shortsAcct = getMetaAccount(s.brand ?? '');
   const fbLinked = !!(shortsAcct.pageId && shortsAcct.pageToken); // 발행기와 동일 판정(토큰까지)
