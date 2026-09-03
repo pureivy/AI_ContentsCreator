@@ -92,16 +92,20 @@ export function youtubeDailyCapBlock(
 }
 
 /**
- * 오늘(KST) 유튜브 몫이 이미 찼는가(순수) — 생성 쪽 게이트.
+ * 오늘(KST) 이 채널의 자율런 몫이 이미 찼는가(순수) — '자동' 생성 게이트.
  *
- * 발행만 1편으로 막으면 하루 2~3편이 만들어지고 1편만 올라가 나머지는 버려진다(LLM·이미지 비용).
- * 그래서 파생 시점에도 같은 상한을 본다. '찼다'의 기준은 두 가지 합:
- *  · 오늘 이미 업로드된 편
- *  · 오늘 만들어졌고 아직 안 올라간 유튜브용 편(실패분 제외 — 실패는 몫을 잡지 않는다)
+ * 적용 범위가 중요하다. 이건 스케줄러가 알아서 도는 자율런에만 건다. 사용자가 직접 지시한 생성은
+ * 상한을 보지 않는다(사용자 확정 2026-09-03) — 손으로 시킨 일까지 막으면 도구가 아니라 방해가 된다.
+ * 코드로는 autoDeriveSet(자율)과 shortsFromPieceHandler(수동)가 갈라져 있고, 이 함수는 전자에서만 불린다.
+ *
+ * 발행만 막으면 하루 2~3편이 만들어지고 1편만 올라가 나머지는 버려진다(LLM·이미지 비용). 그래서
+ * 파생 시점에도 같은 상한을 본다. '찼다'의 기준은 두 가지 합:
+ *  · 오늘 이미 업로드된 편(유튜브는 youtubeTs, 인스타는 igReelId 보유분)
+ *  · 오늘 만들어졌고 아직 안 올라간 그 채널 편(실패분 제외 — 실패는 몫을 잡지 않는다)
  */
-export function youtubeQuotaCommitted(
-  list: ReadonlyArray<{ platform?: ShortsPlatform; stage?: string; createdTs?: string; youtubeTs?: string }>,
-  now: number, cap: number,
+export function platformQuotaCommitted(
+  list: ReadonlyArray<{ platform?: ShortsPlatform; stage?: string; createdTs?: string; youtubeTs?: string; igReelId?: string }>,
+  now: number, cap: number, platform: ShortsPlatform,
 ): boolean {
   if (cap <= 0) return false;
   const today = kstDate(now);
@@ -111,8 +115,9 @@ export function youtubeQuotaCommitted(
     return Number.isFinite(t) && kstDate(t) === today;
   };
   const used = list.filter((s) => {
-    if (onToday(s.youtubeTs)) return true; // 이미 올라감(채널 무관 — 업로드 자체가 몫)
-    return s.platform === 'youtube' && s.stage !== 'error' && !s.youtubeTs && onToday(s.createdTs);
+    if (platform === 'youtube' && onToday(s.youtubeTs)) return true; // 이미 올라감 — 업로드 자체가 몫
+    if (s.platform !== platform || s.stage === 'error') return false;
+    return onToday(s.createdTs);
   }).length;
   return used >= cap;
 }

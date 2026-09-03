@@ -53,7 +53,7 @@ import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
 import { shortsStore, shortsQaPublishBlockReason } from '../content/shorts';
-import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, youtubeQuotaCommitted, type ShortsPlatform } from '../content/shortsPlatform';
+import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, type ShortsPlatform } from '../content/shortsPlatform';
 import { pickWriter, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
@@ -2241,9 +2241,11 @@ function autoDeriveSet(id: string, title: string): void {
       const mine = shortsStore().list().filter((x) => x.sourcePieceId === id && x.platform === platform);
       // error 레코드는 점유로 안 본다(2026-08-20 하드 캡 리뷰) — 다만 같은 글·같은 채널 2회 실패면 중단.
       if (mine.some((x) => x.stage !== 'error') || mine.filter((x) => x.stage === 'error').length >= 2) return false;
-      // 유튜브는 하루 상한만큼만 만든다 — 발행에서만 막으면 2~3편 만들어 1편만 올리고 버리게 된다.
-      if (platform === 'youtube' && youtubeQuotaCommitted(shortsStore().list(), Date.now(), CONFIG.youtubeDailyCap)) {
-        console.log(`[숏폼] 자동 파생 건너뜀(유튜브) — 오늘 몫 소진(상한 ${CONFIG.youtubeDailyCap}편) · ${title.slice(0, 25)}`);
+      // 채널별 하루 상한(사용자 확정 2026-09-03: 유튜브·인스타 각 1편) — 자율런에만 건다.
+      // 발행에서만 막으면 2~3편 만들어 1편만 올리고 나머지를 버리게 된다(LLM·이미지 비용).
+      // 직접 지시한 생성(shortsFromPieceHandler)은 이 상한을 보지 않는다.
+      if (platformQuotaCommitted(shortsStore().list(), Date.now(), CONFIG.shortsAutoDailyCap, platform)) {
+        console.log(`[숏폼] 자동 파생 건너뜀(${platformLabel(platform)}) — 오늘 몫 소진(자율런 상한 ${CONFIG.shortsAutoDailyCap}편/채널) · ${title.slice(0, 25)}`);
         return false;
       }
       return true;
