@@ -49,6 +49,11 @@ export interface Shorts {
   bgFallbacks?: number;
   /** 담당자 실명(작가·디렉터) — UI 표기. */
   writer?: string;
+  /**
+   * 작가 페르소나 id(2026-09-03) — 편마다 다른 작가가 쓰고 그 작가의 목소리로 낭독한다.
+   * 미지정은 레거시(148편 전부 유하린·같은 목소리). shortsWriters.SHORTS_WRITERS 참조.
+   */
+  writerId?: string;
   director?: string;
   /** 원문 정합 판정(2026-08-26) — 수정 라운드 뒤 잔존한 원문 밖 사실·결론 반전. 표시 전용(파생은 자동 발행 없음). */
   factGate?: FactGateInfo;
@@ -83,6 +88,7 @@ export interface Shorts {
 export interface CreateShortsInput {
   topic: string;
   platform?: ShortsPlatform;
+  writerId?: string;
   keyword?: string;
   sourcePieceId?: string;
   writer?: string;
@@ -120,7 +126,7 @@ export class ShortsStore {
       brand: activeBrandSlug() || undefined, topic: input.topic.trim(),
       keyword: input.keyword?.trim() || undefined,
       sourcePieceId: input.sourcePieceId, auto: input.auto, platform: input.platform,
-      writer: input.writer, director: input.director,
+      writer: input.writer, writerId: input.writerId, director: input.director,
       stage: 'planning', createdTs: now, updatedTs: now,
     };
     this.items.set(s.id, s);

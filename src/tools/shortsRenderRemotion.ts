@@ -15,6 +15,7 @@ export async function renderShortsVideoRemotion(
   dir: string, scenes: ShortsScene[], images: Array<string | null>,
   opts: {
     voice?: string; instructions?: string; signal?: AbortSignal; clips?: Array<string | null>;
+    elevenVoiceId?: string; elevenVoiceSettings?: Record<string, number>;
     /** 자막 옵션 — 위치(하단 여백 %)·키워드 강조색·검은 테두리·글자 크기(AutoShorts caption prop 으로 전달). */
     caption?: { bottomPct?: number; keyword?: string; outline?: boolean; fontPx?: number; hookFontPx?: number };
     /** 상단 제목 캘리(투명 PNG 절대경로) — public/ 로 스테이징해 전 씬 고정 오버레이. */

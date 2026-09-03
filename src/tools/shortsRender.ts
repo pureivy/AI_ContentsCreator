@@ -169,6 +169,7 @@ export async function renderShortsVideo(
   dir: string, scenes: ShortsScene[], images: Array<string | null>,
   opts: {
     voice?: string; instructions?: string; signal?: AbortSignal;
+    elevenVoiceId?: string; elevenVoiceSettings?: Record<string, number>;
     /** 상단 제목 캘리(투명 PNG) — Remotion 경로와 동일 형태. 폴백에서도 제목이 사라지지 않게(2026-08-08). */
     title?: { imagePath: string; topPct?: number; widthPct?: number };
   } = {},
@@ -200,7 +201,7 @@ export async function renderShortsVideo(
       if (fs.existsSync(remotionMp3)) {
         fs.copyFileSync(remotionMp3, dst);
       } else {
-        const mp3 = await synthesize(scene.narration, { voice: opts.voice, instructions: opts.instructions ?? SHORTS_TTS_TONE, signal: opts.signal });
+        const mp3 = await synthesize(scene.narration, { voice: opts.voice, instructions: opts.instructions ?? SHORTS_TTS_TONE, elevenVoiceId: opts.elevenVoiceId, elevenVoiceSettings: opts.elevenVoiceSettings, signal: opts.signal });
         fs.writeFileSync(dst, mp3);
       }
       audioDur = await probeDuration(dst);

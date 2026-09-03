@@ -163,7 +163,11 @@ export async function probeDuration(file: string): Promise<number> {
 /** 씬별 TTS 합성(실패 시 무음)·길이 실측·프레임/오프셋 산출. 두 렌더러 공유. */
 export async function prepareScenes(
   workDir: string, scenes: ShortsScene[], images: Array<string | null>,
-  opts: { voice?: string; instructions?: string; signal?: AbortSignal },
+  opts: {
+    voice?: string; instructions?: string; signal?: AbortSignal;
+    /** 작가별 목소리(2026-09-03) — 미지정이면 전역 기본 보이스. */
+    elevenVoiceId?: string; elevenVoiceSettings?: Record<string, number>;
+  },
 ): Promise<{ prepared: PreparedScene[]; issues: string[] }> {
   fs.mkdirSync(workDir, { recursive: true });
   const issues: string[] = [];
@@ -179,6 +183,7 @@ export async function prepareScenes(
       // 이웃 씬 스티칭(경계 운율 연속). 둘 다 ElevenLabs 경로 전용이라 폴백(openai/say)엔 무영향.
       const mp3 = await synthesize(sc.narration, {
         voice: opts.voice, instructions: opts.instructions ?? SHORTS_TTS_TONE,
+        elevenVoiceId: opts.elevenVoiceId, elevenVoiceSettings: opts.elevenVoiceSettings,
         pauseBreaks: CONFIG.shortsTtsBreaks,
         previousText: CONFIG.shortsTtsStitch ? scenes[i - 1]?.narration : undefined,
         nextText: CONFIG.shortsTtsStitch ? scenes[i + 1]?.narration : undefined,

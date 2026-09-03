@@ -19,6 +19,7 @@ import { rolesById } from '../agents/company';
 import { stripEmoji } from '../output/render';
 import { shortsStore, type Shorts} from '../content/shorts';
 import { platformPlanGuide, platformSceneCount, platformLabel } from '../content/shortsPlatform';
+import { writerById, writerByName, type ShortsWriter } from '../content/shortsWriters';
 import { notifyShortsReady } from '../autonomy/contentNotify';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
@@ -279,7 +280,7 @@ export async function reviseShorts(
       if (CONFIG.shortsRenderer !== 'ffmpeg') {
         try {
           rr = await renderShortsVideoRemotion(dir, p.scenes, imgs, {
-            clips: clps, signal: opts.signal,
+            clips: clps, signal: opts.signal, ...writerVoiceOpts(short),
             caption: {
               bottomPct: CONFIG.shortsCaptionBottomPct, fontPx: CONFIG.shortsCaptionFontPx, hookFontPx: CONFIG.shortsCaptionHookFontPx,
               ...(CONFIG.shortsCaptionKeyword && short.keyword ? { keyword: short.keyword } : {}),
@@ -292,7 +293,7 @@ export async function reviseShorts(
       if (!rr || !rr.ok) {
         if (rr) say(`모션 렌더 실패 → ffmpeg 폴백${rr.issues.length ? ` (${rr.issues.join(' · ').slice(0, 120)})` : ''}`);
         rr = await renderShortsVideo(dir, p.scenes, imgs, {
-          signal: opts.signal,
+          signal: opts.signal, ...writerVoiceOpts(short),
           ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
         });
       }
@@ -915,6 +916,17 @@ export function buildSceneImagePrompt(a: {
 
 /** 숏폼 생성 잡 — launch 래퍼가 버스·시그널을 주입(오피스 뷰 연동). 프론트는 GET 폴링. */
 /**
+ * 이 편을 쓴 작가의 목소리 옵션(2026-09-03) — 렌더 호출에 펼쳐 넣는다.
+ * writerId 가 없으면(레거시 148편) 빈 객체 → 전역 기본 보이스로 종전과 동일하게 낭독된다.
+ */
+function writerVoiceOpts(short: Pick<Shorts, 'writerId' | 'writer'>): { elevenVoiceId?: string; elevenVoiceSettings?: Record<string, number> } {
+  const w: ShortsWriter | undefined = writerById(short.writerId) ?? writerByName(short.writer);
+  if (!w) return {}; // 레거시(148편) — 전역 기본 보이스로 종전과 동일
+  console.log(`[숏폼] 낭독 — ${w.name} 목소리(${w.voiceNote})`);
+  return { elevenVoiceId: w.voiceId, elevenVoiceSettings: { ...w.voiceSettings } };
+}
+
+/**
  * 같은 글에서 파생된 '다른 채널' 형제의 확정 대본(2026-09-03) — 훅·제목만 뽑아 회피 지시로 만든다.
  * 채널 지침만 주면 같은 본문에서 같은 각도가 나온다(두 런이 같은 원문을 본다). 먼저 끝난 쪽이
  * 기준이 되고 나중 쪽이 비켜 간다. 형제가 아직 대본 전이면 빈 문자열 — 순서 보장은 하지 않는다.
@@ -990,11 +1002,14 @@ export async function runShortsJob(
       : ['정보형', '후킹형', '질문형'];
     // 채널 지침(2026-09-03) — 같은 원문에서 유튜브용·인스타용이 서로 다른 대본이 되게 하는 축.
     const platformGuide = platformPlanGuide(short.platform);
+    // 작가 문체(2026-09-03) — 편마다 다른 작가가 쓰고 그 작가의 목소리로 읽는다. 레거시는 빈 문자열.
+    const writerProfile = writerById(short.writerId) ?? writerByName(short.writer);
+    const writerGuide = writerProfile?.styleGuide ?? '';
     // 다른 채널용 형제가 이미 대본을 냈으면 그 훅·제목을 보여주고 겹치지 말라고 못박는다.
     // 지침만으로는 같은 원문에서 같은 각도가 나온다(두 런이 같은 본문을 본다).
     const siblingGuide = siblingPlanToAvoid(short);
-    say(`기획 가드 — 채널 ${platformLabel(short.platform)} · 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 형제 대본 ${siblingGuide ? '주입' : '없음'} · 제목 유형 ${titleTypes.join('·')}`);
-    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, siblingGuide, priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? []);
+    say(`기획 가드 — 채널 ${platformLabel(short.platform)} · 작가 ${writerProfile?.name ?? short.writer ?? '미지정'} · 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 형제 대본 ${siblingGuide ? '주입' : '없음'} · 제목 유형 ${titleTypes.join('·')}`);
+    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, writerGuide, siblingGuide, priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? []);
     if (!planned) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     // Plan 타입 재선언 — 길이 상한 루프의 재대입이 클로저(씬 map 등) 내로잉을 풀지 않게 non-null 로 고정.
     let plan: Plan = planned;
@@ -1119,7 +1134,7 @@ export async function runShortsJob(
       if (CONFIG.shortsRenderer !== 'ffmpeg') {
         try {
           rr = await renderShortsVideoRemotion(dir, p.scenes, imgs, {
-            clips: clps, signal: opts.signal,
+            clips: clps, signal: opts.signal, ...writerVoiceOpts(short),
             // 자막 옵션 — 위치(플랫폼 UI 가림 회피)·키워드 강조색(설정 기반, A/B 선택 후 기본값 확정).
             caption: {
               bottomPct: CONFIG.shortsCaptionBottomPct,
@@ -1138,7 +1153,7 @@ export async function runShortsJob(
         if (rr) say(`모션 렌더 실패 → ffmpeg 슬라이드쇼로 폴백${rr.issues.length ? ` (${rr.issues.join(' · ').slice(0, 140)})` : ''}`);
         // 폴백에도 상단 제목 전달 — Remotion 실패 시 제목이 통째로 사라지던 실측(참나무 쇼츠) 봉합.
         rr = await renderShortsVideo(dir, p.scenes, imgs, {
-          signal: opts.signal,
+          signal: opts.signal, ...writerVoiceOpts(short),
           ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
         });
       }

@@ -54,6 +54,7 @@ import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
 import { shortsStore } from '../content/shorts';
 import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, youtubeQuotaCommitted, shouldStartSecondRun, SIBLING_PLAN_WAIT_MS, type ShortsPlatform } from '../content/shortsPlatform';
+import { pickWriter } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo } from '../tools/shortsRender';
@@ -1195,6 +1196,17 @@ function shortsActorNames(): { writer?: string; director?: string } {
   } catch { return {}; }
 }
 
+/**
+ * 이번 편 작가 배정(2026-09-03) — 최근 쓴 작가를 피해 돌린다. 작가마다 문체 지침과 목소리가 다르다.
+ * 종전에는 company.yaml 의 shorts_writer 한 명(유하린)이 148편을 전부 썼고 목소리도 하나였다.
+ * 디렉터는 그대로 한 명이다(연출 톤까지 나누면 검증할 축이 너무 많아진다 — 필요하면 다음 단계).
+ */
+function assignShortsWriter(): { writer: string; writerId: string; director?: string } {
+  const recent = shortsStore().list().slice(0, 12).map((x) => x.writerId); // list() 최신순
+  const w = pickWriter(recent);
+  return { writer: w.name, writerId: w.id, director: shortsActorNames().director };
+}
+
 // 숏폼 잡을 '런'으로 등록 — 유하린·서준영의 스폰·작업·지표가 오피스 뷰에 흐르고,
 // 런 취소 → abort 로 잡 중단, 완료 시 이벤트 영속(리플레이). launchCardNewsRun 과 동일 패턴.
 function launchShortsRun(shortsId: string, topic: string, opts: { sourceBody?: string; sceneCount?: number; sourceFlagged?: string[] } = {}): string {
@@ -1241,7 +1253,7 @@ async function shortsCreateHandler(c: Context): Promise<Response> {
   if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
   const sim = noveltyViolation(topic, b.keyword, b.force);
   if (sim) return c.json(noveltyError(sim), 409);
-  const short = shortsStore().create({ topic, keyword: b.keyword, ...shortsActorNames() });
+  const short = shortsStore().create({ topic, keyword: b.keyword, ...assignShortsWriter() });
   const run = launchShortsRun(short.id, topic, { sceneCount: b.scenes });
   return c.json({ short, run_id: run });
 }
@@ -1293,7 +1305,7 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, p
   } catch { /* 아래에서 거절 */ }
   if (!body) return { error: '초안 본문(draft.json)을 읽을 수 없습니다.' };
   const short = shortsStore().create({
-    topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, auto, platform, ...shortsActorNames(),
+    topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, auto, platform, ...assignShortsWriter(),
   });
   const start = (): void => {
     launchShortsRun(short.id, piece.title, { sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId!) });
