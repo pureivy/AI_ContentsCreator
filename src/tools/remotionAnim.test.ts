@@ -137,3 +137,55 @@ describe('spotlightRadius·particleState — 액센트 수학(순수·결정적)
     expect(A.particleState(5, 9999).y01).toBeLessThan(1.15); // 순환 유지
   });
 });
+
+describe('popIn (스프링 등장)', () => {
+  it('시작은 0, 지연 프레임 전에는 계속 0', () => {
+    expect(A.popIn(0, 30)).toBe(0);
+    expect(A.popIn(3, 30, 10)).toBe(0);
+    expect(A.popIn(10, 30, 10)).toBe(0);
+  });
+  it('오버슛한다 — 어딘가에서 1 을 넘는다(ease-out 과의 차이)', () => {
+    const peak = Math.max(...Array.from({ length: 30 }, (_, i) => A.popIn(i, 30)));
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThan(1.2); // 과하면 카드가 화면 밖으로 튄다
+  });
+  it('정착한 뒤로는 정확히 1 — 씬 내내 흔들림이 남지 않는다', () => {
+    expect(A.popIn(22, 30)).toBeCloseTo(1, 2); // 끝자락(아직 미세 오버슛)
+    for (const f of [23, 60, 200]) expect(A.popIn(f, 30)).toBe(1);
+  });
+  it('delay 는 시간축 평행이동일 뿐 곡선을 바꾸지 않는다', () => {
+    for (const f of [1, 5, 12, 21]) expect(A.popIn(f + 40, 30, 40)).toBeCloseTo(A.popIn(f, 30), 10);
+  });
+});
+
+describe('captionWordPop / staggerPop', () => {
+  it('단어 i 는 i*perWord 프레임에 시작한다', () => {
+    expect(A.captionWordPop(12, 30, 2, 6)).toBe(0);
+    expect(A.captionWordPop(18, 30, 2, 6)).toBeGreaterThan(0);
+  });
+  it('빈 목록은 1(나눗셈 0 방어)', () => {
+    expect(A.staggerPop(0, 100, 0, 0, 30)).toBe(1);
+  });
+  it('뒤 항목일수록 늦게 뜬다', () => {
+    const a = A.staggerPop(40, 180, 0, 3, 30);
+    const b = A.staggerPop(40, 180, 2, 3, 30);
+    expect(a).toBeGreaterThan(b);
+  });
+});
+
+describe('kenBurnsMove — 화면 절반 치수 주입', () => {
+  it('기본값은 종전 1080x1920 하드코딩과 동일', () => {
+    const withDefault = A.kenBurnsMove(50, 100, 0, 'zoom-in', 'strong');
+    const explicit = A.kenBurnsMove(50, 100, 0, 'zoom-in', 'strong', { w: 540, h: 960 });
+    expect(explicit).toEqual(withDefault);
+  });
+  it('화면이 좁아지면 팬 캡도 좁아진다 — 검은 띠 방지 불변식이 치수를 따라간다', () => {
+    const wide = A.kenBurnsMove(90, 100, 0, 'zoom-in', 'strong', { w: 540, h: 960 });
+    const narrow = A.kenBurnsMove(90, 100, 0, 'zoom-in', 'strong', { w: 120, h: 960 });
+    expect(Math.abs(narrow.x)).toBeLessThan(Math.abs(wide.x));
+    // 어떤 치수에서도 노출 불가 불변식: |x| ≤ (s-1)*half/s
+    for (const [m, half] of [[wide, 540], [narrow, 120]] as const) {
+      expect(Math.abs(m.x)).toBeLessThanOrEqual(((m.scale - 1) * half) / m.scale + 1e-9);
+    }
+  });
+});

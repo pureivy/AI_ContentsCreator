@@ -10,7 +10,8 @@
  * 두 패널이 0.4초 간격으로 들어와 시선이 위→아래로 흐른다.
  */
 import React from 'react';
-import { useCurrentFrame, interpolate, AbsoluteFill } from 'remotion';
+import { useCurrentFrame, useVideoConfig, AbsoluteFill } from 'remotion';
+import { popIn } from './anim';
 
 const BAD = '#FF6B5E';
 const GOOD = '#4ADE80';
@@ -19,12 +20,14 @@ const Panel: React.FC<{
   side: { label: string; note?: string }; tone: string; mark: string; delay: number;
 }> = ({ side, tone, mark, delay }) => {
   const f = useCurrentFrame();
-  const p = interpolate(f, [delay, delay + 10], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+  const { fps } = useVideoConfig();
+  const p = popIn(f, fps, delay); // 오버슛이 있어 두 패널이 차례로 '툭' 얹힌다
+  const o = Math.min(1, p);
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 28, padding: '34px 44px',
       background: 'rgba(0,0,0,0.66)', borderRadius: 26, border: `4px solid ${tone}`,
-      opacity: p, transform: `translateY(${(1 - p) * 26}px)`,
+      opacity: o, transform: `translateY(${(1 - p) * 26}px)`,
     }}>
       <div style={{
         flex: 'none', width: 92, height: 92, borderRadius: '50%', background: tone,

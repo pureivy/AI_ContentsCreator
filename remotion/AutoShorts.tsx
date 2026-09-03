@@ -1,6 +1,6 @@
 import React from 'react';
 import { z } from 'zod';
-import { AbsoluteFill, Series, Audio, staticFile, OffthreadVideo, useCurrentFrame } from 'remotion';
+import { AbsoluteFill, Series, Audio, staticFile, OffthreadVideo, useCurrentFrame, useVideoConfig } from 'remotion';
 import { sceneEnterFade } from './anim';
 import { KenBurnsImage } from './KenBurnsImage';
 import { KineticCaption } from './KineticCaption';
@@ -14,6 +14,7 @@ import { ParticleDrift } from './ParticleDrift';
 import { BarChartGrow } from './BarChartGrow';
 import { TakeawayCard } from './TakeawayCard';
 import { CompareCard } from './CompareCard';
+import { FONT_FAMILY } from './loadFonts';
 
 export const autoShortsSchema = z.object({
   scenes: z.array(z.object({
@@ -22,7 +23,7 @@ export const autoShortsSchema = z.object({
     screenText: z.string(),
     durationInFrames: z.number(),
     videoSrc: z.string().nullable().optional(),
-    clipFrames: z.number().optional(), // 실제 클립 길이(30fps 기준 프레임) — 감속 재생 배율 산정용. 없으면 CLIP_FRAMES 폴백.
+    clipFrames: z.number().optional(), // 실제 클립 길이(컴포지션 fps 기준 프레임) — 감속 재생 배율 산정용. 없으면 CLIP_SECONDS 폴백.
     kind: z.enum(['hook', 'stat', 'list', 'quote', 'chart', 'cta', 'compare']).optional(),
     stat: z.object({ value: z.number(), unit: z.string().optional(), label: z.string().optional() }).optional(),
     items: z.array(z.string()).max(4).optional(),
@@ -53,15 +54,12 @@ export const autoShortsSchema = z.object({
   title: z.object({ imageSrc: z.string(), topPct: z.number().optional(), widthPct: z.number().optional() }).optional(),
 });
 export type AutoShortsProps = z.infer<typeof autoShortsSchema>;
-export const defaultProps: AutoShortsProps = {
-  scenes: [{ imageSrc: null, audioSrc: null, screenText: '샘플 자막 한 줄', durationInFrames: 90 }],
-  totalFrames: 90,
-};
 
-const CLIP_FRAMES = 180; // 6초 클립 × 30fps 컴포지션 — clipFrames 미지정 시 감속 배율 산정 폴백
+const CLIP_SECONDS = 6; // clipFrames 미지정 시 감속 배율 산정 폴백 — 프레임 수는 fps 에서 유도
 
 const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; caption?: AutoShortsProps['caption'] }> = ({ s, index, caption }) => {
   const f = useCurrentFrame();
+  const { fps } = useVideoConfig();
   // 씬 엔터 이펙트 — 종전 '6프레임 페이드인(첫 씬 제외)'을 일반화. 씬 길이 불변이라 TTS 싱크 무손상.
   // TransitionSeries(씬 오버랩=전체 길이 단축)는 '오디오가 길이를 지배' 불변식·SRT 누적 시계와 충돌해 채택하지 않는다.
   const enter = s.fx?.enter ?? (index > 0 ? 'fade' : 'none');
@@ -79,7 +77,7 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
         <OffthreadVideo
           src={staticFile(s.videoSrc)}
           muted
-          playbackRate={Math.min(1, (s.clipFrames ?? CLIP_FRAMES) / Math.max(1, s.durationInFrames))}
+          playbackRate={Math.min(1, (s.clipFrames ?? CLIP_SECONDS * fps) / Math.max(1, s.durationInFrames))}
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         />
       ) : (
@@ -103,10 +101,12 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
 };
 
 export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title }) => (
-  <AbsoluteFill style={{ background: '#000', fontFamily: '"Noto Sans KR", sans-serif' }}>
+  <AbsoluteFill style={{ background: '#000', fontFamily: FONT_FAMILY }}>
     <Series>
       {scenes.map((s, i) => (
-        <Series.Sequence key={i} durationInFrames={Math.max(1, s.durationInFrames)}>
+        // name 은 Studio 타임라인 라벨 전용 — 렌더 결과에는 영향이 없다. 어느 씬이 어느 연출인지
+        // 스크럽하며 바로 짚으려고 붙인다(`pnpm studio`).
+        <Series.Sequence key={i} durationInFrames={Math.max(1, s.durationInFrames)} name={`씬${i + 1} · ${s.kind ?? '무연출'}`}>
           <Scene s={s} index={i} caption={caption} />
         </Series.Sequence>
       ))}

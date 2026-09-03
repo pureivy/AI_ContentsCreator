@@ -1,6 +1,6 @@
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame } from 'remotion';
-import { captionWordProgress } from './anim';
+import { AbsoluteFill, useCurrentFrame, useVideoConfig } from 'remotion';
+import { captionWordPop } from './anim';
 
 /** 키워드 토큰 매칭(2자 이상) — 자막 단어에 키워드 토큰이 포함되면 강조색. 조사 오탐 방지로 1자는 제외. */
 const kwMatcher = (keyword?: string): ((w: string) => boolean) => {
@@ -25,6 +25,7 @@ export const KineticCaption: React.FC<{
   hookFontPx?: number;
 }> = ({ text, variant, bottomPct = 20, keyword, outline, fontPx = 70, hookFontPx = 84 }) => {
   const f = useCurrentFrame();
+  const { fps } = useVideoConfig();
   const words = text.split(/\s+/).filter(Boolean);
   if (!words.length) return null; // 빈 자막 — 배경 박스(특히 cta 배지)도 그리지 않음
   const isHook = variant === 'hook';
@@ -37,15 +38,18 @@ export const KineticCaption: React.FC<{
     <AbsoluteFill style={{ justifyContent: 'flex-end', alignItems: 'center', paddingBottom: `${bottomPct}%` }}>
       <div style={box}>
         {words.map((w, i) => {
-          // 단어별 부드러운 등장(ease-out rise) — 이산 점프 대신 5프레임 fade+slide-up.
-          const p = captionWordProgress(f, i);
+          // 단어별 스프링 등장 — 종전 ease-out 은 '스르륵 멈춤'이라 쇼츠에서 밋밋했다.
+          // 살짝 넘겼다 자리잡아 한 단어씩 '툭' 얹히는 맛이 난다. 오버슛이 1 을 넘기므로
+          // opacity 는 클램프하고, 넘치는 몫은 translateY 가 위로 살짝 튀는 데 쓴다.
+          const p = captionWordPop(f, fps, i);
+          const o = Math.min(1, p);
           return (
             <span key={i} style={{
               fontSize: isHook ? hookFontPx : fontPx, fontWeight: 800,
               color: isHook || isKw(w) ? '#ffd54a' : '#fff',
               lineHeight: 1.25, textShadow: '0 3px 18px rgba(0,0,0,.75)',
               ...(outline ? { WebkitTextStroke: '8px rgba(0,0,0,0.9)', paintOrder: 'stroke fill' } : {}),
-              opacity: p, transform: `translateY(${(1 - p) * 16}px)`,
+              opacity: o, transform: `translateY(${(1 - p) * 16}px)`,
             }}>{w}</span>
           );
         })}

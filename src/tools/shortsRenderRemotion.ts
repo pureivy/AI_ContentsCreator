@@ -11,6 +11,24 @@ import { selectComposition, renderMedia, makeCancelSignal } from '@remotion/rend
 import { prepareScenes, buildSrt, resolveClipSrc, defaultSceneFx, FPS, probeDuration } from './shortsCommon';
 import type { ShortsScene, ShortsRenderResult } from './shortsCommon';
 
+/**
+ * 렌더 품질·환경 옵션 — 종전엔 codec 만 넘기고 나머지를 전부 Remotion 기본값에 맡겼다.
+ * 기본값이 나쁘진 않지만, 유튜브·인스타가 한 번 더 재인코딩하는 경로라 원본 쪽에서 잃은 화질은
+ * 되돌릴 수 없다. 값을 못박아 Remotion 판올림에 기본값이 바뀌어도 결과가 흔들리지 않게 한다.
+ */
+export const RENDER_OPTS = {
+  crf: 18,                      // h264 기본값과 동일 — 명시해 고정(판올림 방어)
+  x264Preset: 'slow' as const,  // 같은 crf 에서 파일이 작아진다. 렌더 시간은 프레임 그리기가 지배해 체감 영향 적음
+  // 색공간 태깅 — 미지정(default)은 태그를 안 붙여 플레이어가 bt601 로 넘겨짚고, 그 결과 색이
+  // 옅게 보인다("업로드하니 색이 죽었다"의 흔한 원인). bt709 로 명시.
+  colorSpace: 'bt709' as const,
+  // macOS 는 angle 백엔드가 GPU 를 태운다. 이 컴포지션은 그림자·블러·그라디언트가 많아 이득이 있다.
+  chromiumOptions: { gl: 'angle' as const },
+  // delayRender 대기 상한 — 기본 30초. 씬 이미지 로딩(<Img>)에 폰트 로딩(loadFonts.ts)이 더해져
+  // 여유를 둔다. 넘치면 폰트가 아니라 렌더 전체가 죽으므로 넉넉한 편이 안전하다.
+  timeoutInMilliseconds: 90_000,
+};
+
 export async function renderShortsVideoRemotion(
   dir: string, scenes: ShortsScene[], images: Array<string | null>,
   opts: {
@@ -88,7 +106,16 @@ export async function renderShortsVideoRemotion(
     const { cancelSignal, cancel } = makeCancelSignal();
     if (opts.signal?.aborted) cancel();
     opts.signal?.addEventListener('abort', () => cancel());
-    await renderMedia({ serveUrl, composition, codec: 'h264', outputLocation: videoPath, inputProps, cancelSignal });
+    let lastPct = -1;
+    await renderMedia({
+      serveUrl, composition, codec: 'h264', outputLocation: videoPath, inputProps, cancelSignal,
+      ...RENDER_OPTS,
+      // 진행 로그 — 종전엔 렌더 몇 분 동안 아무것도 안 찍혀 멈춘 건지 도는 건지 알 수 없었다. 10% 단위.
+      onProgress: ({ progress }) => {
+        const pct = Math.floor(progress * 10) * 10;
+        if (pct > lastPct) { lastPct = pct; console.log('[쇼츠]', `렌더 ${pct}%`); }
+      },
+    });
   } catch (e) {
     return { ok: false, issues: [...issues, `Remotion 렌더 실패: ${e instanceof Error ? e.message.slice(0, 160) : e}`] };
   }
