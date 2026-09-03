@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  SHORTS_PLATFORMS, platformLabel, platformPlanGuide,
+  SHORTS_PLATFORMS, platformLabel, platformPlanGuide, autoDailyCapFor,
   canPublishTo, kstDate, youtubeUploadsToday, youtubeDailyCapBlock, platformQuotaCommitted,
 } from './shortsPlatform';
 
@@ -125,3 +125,21 @@ describe('platformQuotaCommitted — 자율런 채널별 생성 상한(순수)',
 });
 
 
+
+describe('autoDailyCapFor — 채널별 자율런 상한', () => {
+  const caps = { youtube: 1, instagram: 2 };
+  it('채널마다 다른 값을 준다', () => {
+    expect(autoDailyCapFor('youtube', caps)).toBe(1);
+    expect(autoDailyCapFor('instagram', caps)).toBe(2);
+  });
+  it('레거시(채널 미지정)는 유튜브 값 — 보수적으로 조인다', () => {
+    expect(autoDailyCapFor(undefined, caps)).toBe(1);
+  });
+  it('상한이 실제로 갈린다 — 인스타 1편 만든 뒤에도 인스타 몫이 남는다', () => {
+    const now = Date.parse('2026-09-03T00:00:00Z');
+    const made = [{ platform: 'instagram' as const, stage: 'ready', createdTs: '2026-09-02T21:44:00Z' }];
+    expect(platformQuotaCommitted(made, now, autoDailyCapFor('instagram', caps), 'instagram')).toBe(false);
+    // 같은 상황에서 유튜브 상한(1)이었다면 찼을 것
+    expect(platformQuotaCommitted(made, now, autoDailyCapFor('youtube', caps), 'instagram')).toBe(true);
+  });
+});

@@ -91,6 +91,13 @@ export function youtubeDailyCapBlock(
   return `오늘(${kstDate(now)}) 유튜브 업로드 ${used}/${cap}편 — 하루 상한에 걸렸습니다. 내일 올리거나 상한(YOUTUBE_DAILY_CAP)을 조정하세요.`;
 }
 
+/** 채널별 자율런 하루 상한 조회(순수) — 미지의 채널은 유튜브 값으로 본다(보수적). */
+export function autoDailyCapFor(
+  platform: ShortsPlatform | undefined, caps: { youtube: number; instagram: number },
+): number {
+  return platform === 'instagram' ? caps.instagram : caps.youtube;
+}
+
 /**
  * 오늘(KST) 이 채널의 자율런 몫이 이미 찼는가(순수) — '자동' 생성 게이트.
  *

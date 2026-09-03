@@ -53,7 +53,7 @@ import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
 import { shortsStore, shortsQaPublishBlockReason } from '../content/shorts';
-import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, type ShortsPlatform } from '../content/shortsPlatform';
+import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, autoDailyCapFor, type ShortsPlatform } from '../content/shortsPlatform';
 import { pickWriter, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
@@ -2244,8 +2244,8 @@ function autoDeriveSet(id: string, title: string): void {
       // 채널별 하루 상한(사용자 확정 2026-09-03: 유튜브·인스타 각 1편) — 자율런에만 건다.
       // 발행에서만 막으면 2~3편 만들어 1편만 올리고 나머지를 버리게 된다(LLM·이미지 비용).
       // 직접 지시한 생성(shortsFromPieceHandler)은 이 상한을 보지 않는다.
-      if (platformQuotaCommitted(shortsStore().list(), Date.now(), CONFIG.shortsAutoDailyCap, platform)) {
-        console.log(`[숏폼] 자동 파생 건너뜀(${platformLabel(platform)}) — 오늘 몫 소진(자율런 상한 ${CONFIG.shortsAutoDailyCap}편/채널) · ${title.slice(0, 25)}`);
+      if (platformQuotaCommitted(shortsStore().list(), Date.now(), autoDailyCapFor(platform, CONFIG.shortsAutoDailyCap), platform)) {
+        console.log(`[숏폼] 자동 파생 건너뜀(${platformLabel(platform)}) — 오늘 몫 소진(자율런 상한 ${autoDailyCapFor(platform, CONFIG.shortsAutoDailyCap)}편) · ${title.slice(0, 25)}`);
         return false;
       }
       return true;

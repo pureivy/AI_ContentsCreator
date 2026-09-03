@@ -156,9 +156,16 @@ export interface Config {
   readonly shortsMaxDurationSec: number;
   /** 유튜브 하루 업로드 상한(2026-09-03, 사용자 확정 1편) — 0 이하면 상한 없음. 인스타는 적용하지 않는다. */
   readonly youtubeDailyCap: number;
-  /** 자율런이 채널당 하루에 만드는 편수 상한(사용자 확정 2026-09-03: 유튜브·인스타 각 1편).
-   *  직접 지시한 생성에는 적용되지 않는다 — 자동으로 도는 것만 조인다. 0 이면 상한 없음. */
-  readonly shortsAutoDailyCap: number;
+  /**
+   * 자율런이 채널당 하루에 만드는 편수 상한 — 채널마다 따로 둔다(2026-09-03).
+   *
+   * 하나로 묶었다가 쪼갠 이유는 두 채널의 성과 분포가 다르기 때문이다(실측 108편):
+   * 유튜브는 최대가 중앙값의 2배로 천장이 단단하고(2,000회 이상 1편), 인스타는 31배까지 벌어지는
+   * 긴 꼬리다(2,000회 이상 19편·17%). 유튜브는 더 올려도 안 퍼지고, 인스타는 편수가 곧 복권 장수다.
+   *
+   * 직접 지시한 생성에는 적용되지 않는다 — 자동으로 도는 것만 조인다. 0 이면 상한 없음.
+   */
+  readonly shortsAutoDailyCap: { readonly youtube: number; readonly instagram: number };
   /** 쇼츠 자막 하단 여백(%) — 플랫폼 UI 가림 회피용 위치 조정(5~60 클램프). */
   readonly shortsCaptionBottomPct: number;
   /** 쇼츠 자막 글자 크기(px) — 일반 씬(훅 제외). */
@@ -353,7 +360,11 @@ export const CONFIG: Config = {
   shortsMaxDurationSec: Math.min(180, Math.max(20, envInt('SHORTS_MAX_DURATION_SEC', 60))),
   // 대량생산 신호를 줄이는 쪽이 목적이라 기본 1편. 인스타는 막히지 않았고 성과가 나는 채널이라 제외한다.
   youtubeDailyCap: envInt('YOUTUBE_DAILY_CAP', 1),
-  shortsAutoDailyCap: envInt('SHORTS_AUTO_DAILY_CAP', 1),
+  // 채널별 키가 없으면 종전 통합 키(SHORTS_AUTO_DAILY_CAP)로 떨어진다 — 기존 설정이 그대로 산다.
+  shortsAutoDailyCap: {
+    youtube: envInt('YOUTUBE_AUTO_DAILY_CAP', envInt('SHORTS_AUTO_DAILY_CAP', 1)),
+    instagram: envInt('INSTAGRAM_AUTO_DAILY_CAP', envInt('SHORTS_AUTO_DAILY_CAP', 1)),
+  },
   // 자막 하단 여백(%) — 유튜브 쇼츠·릴스 하단 UI(~25%)에 안 가리는 안전 영역. 기본 32 + 키워드 강조색
   // = 사용자 A/B/C/D 비교 후 C안 확정(2026-07-30). 종전(20·무강조)으로 되돌리려면 env 로 조정.
   shortsCaptionBottomPct: Math.min(60, Math.max(5, envInt('SHORTS_CAPTION_BOTTOM_PCT', 50))),
