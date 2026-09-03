@@ -9,7 +9,7 @@ import { bundle } from '@remotion/bundler';
 import { pruneDir, humanBytes } from '../util/prune';
 import { selectComposition, renderMedia, makeCancelSignal } from '@remotion/renderer';
 import { prepareScenes, buildSrt, resolveClipSrc, defaultSceneFx, FPS, probeDuration } from './shortsCommon';
-import type { ShortsScene, ShortsRenderResult } from './shortsCommon';
+import type { ShortsScene, ShortsRenderResult, PreparedScene } from './shortsCommon';
 
 /**
  * 렌더 품질·환경 옵션 — 종전엔 codec 만 넘기고 나머지를 전부 Remotion 기본값에 맡겼다.
@@ -18,40 +18,43 @@ import type { ShortsScene, ShortsRenderResult } from './shortsCommon';
  */
 export const RENDER_OPTS = {
   crf: 18,                      // h264 기본값과 동일 — 명시해 고정(판올림 방어)
-  x264Preset: 'slow' as const,  // 같은 crf 에서 파일이 작아진다. 렌더 시간은 프레임 그리기가 지배해 체감 영향 적음
+  // Remotion 기본값과 동일 — 명시해 고정. 'slow' 도 재 보았지만 실에셋 기준 렌더 29s→35s(+21%)에
+  // 파일은 35MB→34MB(-3%)라 남는 장사가 아니었다. 유튜브·인스타가 어차피 재인코딩하므로 원본
+  // 파일 크기는 업로드 대역폭 말고는 의미가 없다.
+  x264Preset: 'medium' as const,
   // 색공간 태깅 — 미지정(default)은 태그를 안 붙여 플레이어가 bt601 로 넘겨짚고, 그 결과 색이
   // 옅게 보인다("업로드하니 색이 죽었다"의 흔한 원인). bt709 로 명시.
   colorSpace: 'bt709' as const,
-  // macOS 는 angle 백엔드가 GPU 를 태운다. 이 컴포지션은 그림자·블러·그라디언트가 많아 이득이 있다.
-  chromiumOptions: { gl: 'angle' as const },
+  // chromiumOptions.gl 은 일부러 비운다 — Remotion 문서가 macOS 에 'angle' 을 권하길래 넣어
+  // 봤지만, 실에셋 렌더 4회 측정에서 angle 30s / 기본 30s 로 차이가 없었다(그림자·블러가 많아
+  // 이득을 볼 줄 알았는데 아니었다). 효과 없는 설정을 남기면 다음 사람이 근거로 오해한다.
   // delayRender 대기 상한 — 기본 30초. 씬 이미지 로딩(<Img>)에 폰트 로딩(loadFonts.ts)이 더해져
   // 여유를 둔다. 넘치면 폰트가 아니라 렌더 전체가 죽으므로 넉넉한 편이 안전하다.
   timeoutInMilliseconds: 90_000,
 };
 
-export async function renderShortsVideoRemotion(
-  dir: string, scenes: ShortsScene[], images: Array<string | null>,
+
+/**
+ * 에셋 스테이징(public/) + AutoShorts inputProps 조립.
+ *
+ * staticFile 은 bare 파일명을 publicDir 기준으로 찾으므로, 씬 이미지·낭독 mp3·I2V 클립·제목
+ * 캘리를 전부 그 디렉터리로 복사한 뒤 파일명만 props 에 싣는다.
+ *
+ * renderShortsVideoRemotion 에서 떼어낸 이유는 미리보기(scripts/preview_shorts.ts)와 공유하기
+ * 위해서다. 미리보기가 이 함수를 그대로 쓰면, 거기서 잘 나온 화면은 실렌더에서도 잘 나온다.
+ */
+export async function stageAndBuildProps(
+  publicDir: string,
+  prepared: PreparedScene[],
+  scenes: ShortsScene[],
   opts: {
-    voice?: string; instructions?: string; signal?: AbortSignal; clips?: Array<string | null>;
-    elevenVoiceId?: string; elevenVoiceSettings?: Record<string, number>;
-    /** 자막 옵션 — 위치(하단 여백 %)·키워드 강조색·검은 테두리·글자 크기(AutoShorts caption prop 으로 전달). */
+    clips?: Array<string | null>;
     caption?: { bottomPct?: number; keyword?: string; outline?: boolean; fontPx?: number; hookFontPx?: number };
-    /** 상단 제목 캘리(투명 PNG 절대경로) — public/ 로 스테이징해 전 씬 고정 오버레이. */
     title?: { imagePath: string; topPct?: number; widthPct?: number };
   } = {},
-): Promise<ShortsRenderResult> {
-  const entry = path.resolve('remotion/index.ts');
-  if (!fs.existsSync(entry)) return { ok: false, issues: ['remotion 엔트리 부재'] };
-
-  const work = path.join(dir, 'remotion');
-  const publicDir = path.join(work, 'public');
+): Promise<Record<string, unknown>> {
   fs.mkdirSync(publicDir, { recursive: true });
-
-  // 1) TTS·길이
-  const { prepared, issues } = await prepareScenes(work, scenes, images, opts);
-  if (!prepared.length) return { ok: false, issues: [...issues, '조립할 씬 없음'] };
-
-  // 2) 에셋 스테이징(public/) — staticFile 참조용 bare 파일명으로 복사
+  // staticFile 참조용 bare 파일명으로 복사
   const propScenes = await Promise.all(prepared.map(async (p) => {
     const nn = String(p.index + 1).padStart(2, '0');
     let imageSrc: string | null = null, audioSrc: string | null = null;
@@ -97,6 +100,34 @@ export async function renderShortsVideoRemotion(
     } catch { /* 스테이징 실패 — 오버레이 생략 */ }
   }
   const inputProps = { scenes: propScenes, totalFrames, ...(opts.caption ? { caption: opts.caption } : {}), ...(titleProp ? { title: titleProp } : {}) };
+  return inputProps;
+}
+
+export async function renderShortsVideoRemotion(
+  dir: string, scenes: ShortsScene[], images: Array<string | null>,
+  opts: {
+    voice?: string; instructions?: string; signal?: AbortSignal; clips?: Array<string | null>;
+    elevenVoiceId?: string; elevenVoiceSettings?: Record<string, number>;
+    /** 자막 옵션 — 위치(하단 여백 %)·키워드 강조색·검은 테두리·글자 크기(AutoShorts caption prop 으로 전달). */
+    caption?: { bottomPct?: number; keyword?: string; outline?: boolean; fontPx?: number; hookFontPx?: number };
+    /** 상단 제목 캘리(투명 PNG 절대경로) — public/ 로 스테이징해 전 씬 고정 오버레이. */
+    title?: { imagePath: string; topPct?: number; widthPct?: number };
+  } = {},
+): Promise<ShortsRenderResult> {
+  const entry = path.resolve('remotion/index.ts');
+  if (!fs.existsSync(entry)) return { ok: false, issues: ['remotion 엔트리 부재'] };
+
+  const work = path.join(dir, 'remotion');
+  const publicDir = path.join(work, 'public');
+  fs.mkdirSync(publicDir, { recursive: true });
+
+  // 1) TTS·길이
+  const { prepared, issues } = await prepareScenes(work, scenes, images, opts);
+  if (!prepared.length) return { ok: false, issues: [...issues, '조립할 씬 없음'] };
+
+  // 2) 에셋 스테이징 + inputProps 조립 — 미리보기 스크립트(scripts/preview_shorts.ts)와 공유한다.
+  //    복사본이 아니라 같은 함수라야, 미리보기가 실렌더와 다른 길을 타는 사고가 안 난다.
+  const inputProps = await stageAndBuildProps(publicDir, prepared, scenes, opts);
 
   // 3) 번들 + 렌더
   const videoPath = path.join(dir, 'final.mp4');

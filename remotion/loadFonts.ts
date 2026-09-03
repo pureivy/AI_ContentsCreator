@@ -35,6 +35,8 @@ Promise.all(
   ),
 )
   // 실패해도 렌더는 계속한다 — 폰트 하나 때문에 영상 생성이 통째로 죽는 쪽이 더 나쁘다.
-  // 이 경우 위 스택의 시스템 폰트로 떨어진다(종전 동작과 동일).
-  .catch(() => undefined)
+  // 다만 조용히 넘어가지는 않는다: 폴백 결과가 이 맥에서는 멀쩡해 보여서, 로그가 없으면 이 커밋이
+  // 없애려던 바로 그 사고(선언한 폰트가 아닌 채로 계속 나감)가 그대로 재현된다.
+  // 브라우저 콘솔이라 renderMedia 의 onBrowserLog 를 켠 쪽에만 보인다(scripts/preview_shorts.ts).
+  .catch((e: unknown) => { console.warn('[폰트] Pretendard 로딩 실패 — 시스템 폰트로 렌더된다:', e); })
   .then(() => { continueRender(handle); });
