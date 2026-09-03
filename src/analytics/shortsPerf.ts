@@ -17,6 +17,7 @@ import { pieceStore } from '../content/pieces';
 import { GRAPH, FB_GRAPH } from '../tools/metaPublish';
 // cardnewsPerf ↔ shortsPerf 순환 — 함수 선언만이라 안전(최상위 상호 호출 없음)
 import { cardnewsSignal, parseIgInsights } from './cardnewsPerf';
+import { fetchVideoAnalytics, shortsFeedShare, ymd, isAuthError, hasMeasurement, ANALYTICS_LAG_DAYS } from './ytAnalytics';
 
 export interface VideoStats { views: number; likes: number; comments: number }
 
@@ -193,7 +194,60 @@ export async function syncShortsPerformance(opts: { force?: boolean } = {}): Pro
         }
       } catch (e) { console.log('[perf-sync]', `쇼츠 ${s.id} 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
     }
+    await collectShortsAnalytics(due, now, days);
   } catch (e) { console.log('[perf-sync]', `쇼츠 동기화 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+}
+
+/** 애널리틱스 수집 대상 상한 — 영상당 요청 2회라 force 전량 재수집 때 폭주하지 않게 최근분만. */
+export const ANALYTICS_MAX_VIDEOS = 30;
+
+/**
+ * 시청 지속률·유입 경로 동봉 수집(youtube:analytics 샘플) — 조회수 수집과 별개 줄로 쌓는다.
+ * 스코프 없는 토큰(재연결 전)이면 첫 실패에서 전체 중단하고 1회만 경고한다(영상마다 403 로그 방지).
+ * 애널리틱스는 처리 지연이 있어 신작은 며칠 뒤에야 값이 붙는다 — 빈 응답은 스킵(0 으로 기록하지 않음).
+ */
+async function collectShortsAnalytics(due: Shorts[], now: number, days: number, signal?: AbortSignal): Promise<void> {
+  const targets = due
+    .filter((s) => !!s.youtubeId && !!s.youtubeTs)
+    .sort((a, b) => (a.youtubeTs! < b.youtubeTs! ? 1 : -1))
+    .slice(0, ANALYTICS_MAX_VIDEOS);
+  if (!targets.length) return;
+  if (due.length > targets.length) {
+    console.log('[perf-sync]', `쇼츠 애널리틱스 — 최근 ${targets.length}편만 수집(대상 ${due.length}편, 상한 ${ANALYTICS_MAX_VIDEOS})`);
+  }
+  // 애널리틱스는 처리 지연이 있어 최근 며칠은 조회해도 빈 응답이다 — 경계까지만 묻고 그 뒤 업로드분은 건너뛴다.
+  const end = ymd(now - ANALYTICS_LAG_DAYS * 86_400_000);
+  let ok = 0, skipped = 0; const pcts: number[] = []; const shares: number[] = [];
+  for (const s of targets) {
+    const upload = new Date(s.youtubeTs!).getTime();
+    if (ymd(upload) > end) { skipped += 1; continue; } // 아직 처리 구간에 못 들어온 신작
+    try {
+      const start = ymd(upload - 86_400_000); // 업로드 전날부터(타임존 경계 방어)
+      const { retention, traffic } = await fetchVideoAnalytics(s.brand ?? '', s.youtubeId!, start, end, signal);
+      if (!hasMeasurement(retention, traffic)) { skipped += 1; continue; } // 처리 전·빈 측정 — 다음 틱 재시도
+      appendMetrics(s.id, {
+        measuredAt: new Date().toISOString(), views: retention!.views, searchInflow: [],
+        avgViewPct: retention!.avgViewPct, avgViewSec: retention!.avgViewSec,
+        watchMinutes: retention!.watchMinutes, traffic, source: 'youtube:analytics',
+      });
+      ok += 1; pcts.push(retention!.avgViewPct);
+      const share = shortsFeedShare(traffic);
+      if (share !== null) shares.push(share);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (isAuthError(msg)) { // 토큰·스코프 문제는 전 영상 공통 — 조기 종료
+        console.log('[perf-sync]', `쇼츠 애널리틱스 중단(무해) — ${msg.slice(0, 120)} · 채널 재연결(yt-analytics 스코프) 필요`);
+        return;
+      }
+      skipped += 1; // 일시 오류는 이 영상만 건너뛴다(다음 틱 재시도)
+      console.log('[perf-sync]', `쇼츠 애널리틱스 ${s.id} 스킵(무해) — ${msg.slice(0, 100)}`);
+    }
+  }
+  if (!ok) return;
+  const med = (xs: number[]): number => { const a = [...xs].sort((x, y) => x - y); return a[Math.floor(a.length / 2)] ?? 0; };
+  const shareTxt = shares.length ? ` · Shorts 피드 비중 중앙 ${Math.round(med(shares) * 100)}%` : '';
+  const skipTxt = skipped ? ` · 미처리·스킵 ${skipped}편` : '';
+  console.log('[perf-sync]', `쇼츠 애널리틱스 ${ok}편 — 시청비율 중앙 ${Math.round(med(pcts))}%${shareTxt}${skipTxt}`);
 }
 
 /** 릴스 강화 1회 — reinforceShorts 의 메타 채널 판. 신호는 도달·저장률·공유율(cardnewsSignal 재사용). */

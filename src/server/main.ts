@@ -1413,7 +1413,11 @@ app.get('/youtube/oauth/start', (c) => {
   u.searchParams.set('response_type', 'code');
   // readonly 추가(2026-07-29) — 구독자 수 조회(channels.list mine=true)용. 기존 연결 토큰은 upload 뿐이라
   // 재연결 전까지는 팔로워 추적이 API 키 공개 통계 폴백으로 동작한다(analytics/followers).
-  u.searchParams.set('scope', 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly');
+  // yt-analytics.readonly 추가(2026-09-03) — 트래픽 소스별 조회(Shorts 피드 유입이 실제로 오는지)와
+  // 평균 시청 지속률 조회용. Data API 의 viewCount 만으로는 '노출이 끊긴 것'과 '보다가 이탈한 것'을
+  // 구분할 수 없다(09-02 신작 조회 붕괴 진단에서 드러난 계측 공백). 스코프 추가는 재동의가 필요하므로
+  // 기존 토큰은 그대로 두고, 사용자가 '채널 연결'을 다시 눌러야 애널리틱스 조회가 켜진다.
+  u.searchParams.set('scope', 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly');
   u.searchParams.set('access_type', 'offline');
   u.searchParams.set('prompt', 'consent');
   u.searchParams.set('state', nonce);
