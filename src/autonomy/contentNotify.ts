@@ -15,6 +15,7 @@ import {
 } from './notify';
 import type { TgButton } from './notify';
 import type { FactGateInfo } from '../content/factGate';
+import { platformLabel, type ShortsPlatform } from '../content/shortsPlatform';
 import { readStyleLint, readBriefGate } from '../sessions/digest';
 import type { BriefGateRecord } from '../sessions/digest';
 
@@ -33,6 +34,8 @@ export interface CardReadyInfo {
 export interface ShortsReadyInfo {
   id: string; topic: string; brand?: string; durationSec?: number; scenes?: number;
   sourcePieceId?: string; writer?: string; director?: string;
+  /** 발행 대상 채널(2026-09-03 분리) — 버튼·캡션 표기에 쓴다. 미지정은 레거시(양쪽 겸용). */
+  platform?: ShortsPlatform;
   factGate?: FactGateInfo;
 }
 
@@ -180,7 +183,7 @@ export function cardnewsCaptionHtml(c: CardReadyInfo): string {
 
 /** 쇼츠 ready 캡션(HTML, 영상에 부착). 순수 — 테스트 대상. */
 export function shortsCaptionHtml(s: ShortsReadyInfo): string {
-  const staff = [s.writer, s.director].filter(Boolean).join('·');
+  const staff = [s.platform ? `${platformLabel(s.platform)}용` : '', s.writer, s.director].filter(Boolean).join('·');
   const specs = [
     typeof s.durationSec === 'number' ? `${s.durationSec}초` : '',
     typeof s.scenes === 'number' ? `씬 ${s.scenes}개` : '',
@@ -240,9 +243,13 @@ const cardnewsButtons = (id: string): TgButton[][] => [[
   { text: '📸 인스타 발행', callback_data: `cp:${id}` },
   { text: '✍ 수정요청', callback_data: `rv:${id}` },
 ]];
-const shortsButtons = (id: string): TgButton[][] => [[
-  { text: '▶️ 유튜브 업로드', callback_data: `sy:${id}` },
-  { text: '🎬 릴스 발행', callback_data: `sm:${id}` },
+/**
+ * 숏폼 검토 버튼 — 채널 전용 레코드는 그 채널 버튼만 띄운다(2026-09-03 채널 분리).
+ * 레거시(platform 미지정)는 종전대로 둘 다. 잘못 눌러도 서버가 409 로 막지만, 애초에 안 보이는 게 낫다.
+ */
+const shortsButtons = (id: string, platform?: ShortsPlatform): TgButton[][] => [[
+  ...(!platform || platform === 'youtube' ? [{ text: '▶️ 유튜브 업로드', callback_data: `sy:${id}` }] : []),
+  ...(!platform || platform === 'instagram' ? [{ text: '🎬 릴스 발행', callback_data: `sm:${id}` }] : []),
   { text: '✍ 수정요청', callback_data: `rv:${id}` },
 ]];
 
@@ -315,9 +322,9 @@ export async function notifyShortsReady(s: ShortsReadyInfo, videoPath: string): 
     if (telegramCreds()) {
       // 1080×1920 고정 — Remotion 컴포지션·ffmpeg 폴백 모두 이 규격으로 렌더(shortsRender). 커버는 320px 축소본.
       const thumb = await tgVideoThumb(videoPath);
-      const sent = await sendTelegramVideo(videoPath, caption, shortsButtons(s.id),
+      const sent = await sendTelegramVideo(videoPath, caption, shortsButtons(s.id, s.platform),
         { width: 1080, height: 1920, thumbnailPath: thumb ?? undefined });
-      if (!sent) await sendTelegramHtml(`${caption}\n(영상은 스튜디오에서 확인 — 전송 한도 초과/실패)`, shortsButtons(s.id));
+      if (!sent) await sendTelegramHtml(`${caption}\n(영상은 스튜디오에서 확인 — 전송 한도 초과/실패)`, shortsButtons(s.id, s.platform));
     }
     await notifyWebhookOnly({
       title: `🎬 쇼츠 검토 대기${brandTag(s.brand)} · ${s.topic}`,

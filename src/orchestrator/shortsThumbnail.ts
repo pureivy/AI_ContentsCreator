@@ -143,6 +143,17 @@ export function manifestFirstImage(manifestPath: string): string | null {
  * hookImage 없거나 키 없으면 false(영상 프레임 폴백). QA 2회 실패 시 마지막 생성본 사용(디자인 우선 방침).
  * 작업물은 실행별 고유 디렉터리(.thumb/<run>)에 격리하고 종료 시 정리 — 동시 실행·stale 재사용 방지. 어떤 예외도 밖으로 던지지 않음(폴백 유도).
  */
+/** 썸네일 한글 QA 미해결 표식 파일명 — 발행 게이트가 소비한다(아티팩트와 함께 남아 재시작에도 살아남음). */
+export const THUMB_QA_MARKER = 'thumb-qa-failed.json';
+/** 이 쇼츠의 썸네일이 한글 QA 를 못 넘긴 채 발행 대기 중인가(순수 판독). */
+export function thumbTextQaFailed(dir: string): boolean {
+  try { return fs.existsSync(path.join(dir, THUMB_QA_MARKER)); } catch { return false; }
+}
+/** 표식 제거 — 재생성이 QA 를 통과했을 때. 없으면 무해. */
+function clearThumbQaMarker(dir: string): void {
+  try { fs.rmSync(path.join(dir, THUMB_QA_MARKER), { force: true }); } catch { /* 무해 */ }
+}
+
 export async function generateDesignedThumbnail(input: {
   dir: string; title: string; description: string; titles?: string[]; hookImage: string | null; signal?: AbortSignal;
   /** 핵심 키워드(정확 표기) — copy 미제공 시 planThumbnailCopy 가 line1 라벨로 강제한다. */
@@ -162,7 +173,9 @@ export async function generateDesignedThumbnail(input: {
     fs.writeFileSync(draftPath, JSON.stringify({ topic: copy.line1, imageSlots: [{ alt: '썸네일', prompt }] }), 'utf-8');
 
     let lastPng: string | null = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // 3회로 늘림(2026-09-03) — 한글 자소 깨짐은 흔한 실패라 한 번 더 뽑는 값이 오타 발행보다 싸다.
+    // 실측(short_5b5f7f4231): 썸네일이 "줄자로"를 "좔자로"로 냈고 2회 모두 QA 를 못 넘겼다.
+    for (let attempt = 0; attempt < 3; attempt++) {
       const outDir = path.join(work, `out${attempt}`);
       const manifest = path.join(work, `m${attempt}.json`);
       try {
@@ -173,9 +186,21 @@ export async function generateDesignedThumbnail(input: {
       const png = manifestFirstImage(manifest); // 실패 슬롯이면 null → 이 시도 이미지 안 씀
       if (!png) continue;
       lastPng = png;
-      if (await qaKoreanText(png, expected, input.signal)) { await toThumbnailJpg(png, input.dir, input.signal); return true; }
+      if (await qaKoreanText(png, expected, input.signal)) {
+        await toThumbnailJpg(png, input.dir, input.signal);
+        clearThumbQaMarker(input.dir); // 재생성이 통과했으면 발행 게이트를 연다
+        return true;
+      }
+      console.log('[숏폼]', `썸네일 한글 QA 불합격 — ${attempt + 1}/3회차 재생성`);
     }
-    if (lastPng) { await toThumbnailJpg(lastPng, input.dir, input.signal); return true; } // QA 못 넘겨도 디자인본 우선
+    if (lastPng) {
+      // QA 를 못 넘겨도 디자인본을 쓴다(영상 프레임 폴백보다 낫다는 방침). 다만 조용히 나가면 안 된다 —
+      // 종전엔 로그가 한 줄도 없어서, 오타가 박힌 썸네일이 발행될 때까지 아무도 몰랐다(실측 2026-09-03).
+      console.log('[숏폼]', `⚠ 썸네일 한글 QA 3회 실패 — 오타 가능성 있는 이미지로 발행됩니다. 발행 전 눈으로 확인하세요: ${path.join(input.dir, 'thumbnail.jpg')}`);
+      await toThumbnailJpg(lastPng, input.dir, input.signal);
+      try { fs.writeFileSync(path.join(input.dir, THUMB_QA_MARKER), JSON.stringify({ expected, at: new Date().toISOString() }, null, 2), 'utf-8'); } catch { /* 표식 실패는 무해 */ }
+      return true;
+    }
     return false;
   } catch { return false; } // 어떤 실패도 밖으로 던지지 않음 — 호출부(완성부·엔드포인트)는 프레임 폴백
   finally { try { fs.rmSync(work, { recursive: true, force: true }); } catch { /* 정리 실패 무해 */ } }

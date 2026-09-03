@@ -441,27 +441,43 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
                   {/* 숏폼 칼럼 — 배지·MP4·수정 버튼까지 4항목이 한 줄에 들어가게 기준폭 확대+줄바꿈 금지
                       (사용자 요청 2026-08-13: 좁은 basis 260 에서 글자가 두 줄로 꺾였다). 패널이 좁으면
                       칼럼 자체가 아래로 내려가(컨테이너 flexWrap) 전폭을 쓴다. */}
+                  {/* 채널 분리(2026-09-03) — 글당 유튜브용·인스타용 2건이라 목록으로 편다.
+                      구 서버 응답(shortsList 없음)이면 단건 하위호환으로 그린다. */}
                   <div style={{ flex: "1 1 320px", minWidth: "min(280px, 100%)" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, whiteSpace: "nowrap" }}>
-                      <b><Ico name="play" size={12} /> 숏폼</b>
-                      {derived?.shorts
-                        ? <span className="badge">{derived.shorts.running || ["planning", "designing", "rendering"].includes(derived.shorts.stage) ? "생성 중…" : derived.shorts.stage === "ready" ? `완성 · ${derived.shorts.durationSec ?? 0}초` : "실패"}</span>
-                        : <button className="btn ghost" disabled={deriveBusy !== ""} onClick={doDeriveShorts}>{deriveBusy === "shorts" ? "시작 중…" : "만들기"}</button>}
-                      {derived?.shorts?.stage === "ready" && (
-                        <a className="btn ghost" href={`/shorts/${derived.shorts.id}/video`} download={`shorts-${derived.shorts.id}.mp4`}>MP4</a>
-                      )}
-                      {derived?.shorts?.stage === "ready" && !derived.shorts.running && (
-                        <button className="btn ghost" disabled={dRevBusy}
-                          title="자유 피드백으로 대본·제목 개정 — 필요 씬만 다시 그리고 재조립합니다(발행 전 한정)"
-                          onClick={() => { const sid = derived.shorts!.id; setDRev(dRev?.kind === "shorts" ? null : { kind: "shorts", id: sid }); setDRevText(""); }}>
-                          <Ico name="pencil" size={11} /> 수정
-                        </button>
-                      )}
-                    </div>
-                    {derived?.shorts?.stage === "ready" && (
-                      <video controls preload="metadata" src={`/shorts/${derived.shorts.id}/video`}
-                        style={{ width: 180, aspectRatio: "9/16", borderRadius: 8, background: "#000" }} />
-                    )}
+                    {(() => {
+                      const list = derived?.shortsList ?? (derived?.shorts ? [derived.shorts] : []);
+                      if (!list.length) {
+                        return (
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, whiteSpace: "nowrap" }}>
+                            <b><Ico name="play" size={12} /> 숏폼</b>
+                            <button className="btn ghost" disabled={deriveBusy !== ""} onClick={doDeriveShorts}>{deriveBusy === "shorts" ? "시작 중…" : "만들기"}</button>
+                          </div>
+                        );
+                      }
+                      const label = (pf?: string): string => (pf === "youtube" ? "유튜브용" : pf === "instagram" ? "인스타용" : "숏폼");
+                      return list.map((sh) => (
+                        <div key={sh.id} style={{ marginBottom: 10 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, whiteSpace: "nowrap" }}>
+                            <b><Ico name="play" size={12} /> {label(sh.platform)}</b>
+                            <span className="badge">{sh.running || ["planning", "designing", "rendering"].includes(sh.stage) ? "생성 중…" : sh.stage === "ready" ? `완성 · ${sh.durationSec ?? 0}초` : "실패"}</span>
+                            {sh.stage === "ready" && (
+                              <a className="btn ghost" href={`/shorts/${sh.id}/video`} download={`shorts-${sh.id}.mp4`}>MP4</a>
+                            )}
+                            {sh.stage === "ready" && !sh.running && (
+                              <button className="btn ghost" disabled={dRevBusy}
+                                title="자유 피드백으로 대본·제목 개정 — 필요 씬만 다시 그리고 재조립합니다(발행 전 한정)"
+                                onClick={() => { setDRev(dRev?.kind === "shorts" && dRev.id === sh.id ? null : { kind: "shorts", id: sh.id }); setDRevText(""); }}>
+                                <Ico name="pencil" size={11} /> 수정
+                              </button>
+                            )}
+                          </div>
+                          {sh.stage === "ready" && (
+                            <video controls preload="metadata" src={`/shorts/${sh.id}/video`}
+                              style={{ width: 180, aspectRatio: "9/16", borderRadius: 8, background: "#000" }} />
+                          )}
+                        </div>
+                      ));
+                    })()}
                   </div>
                 </div>
                 {/* 파생 수정 요청 폼 — ✍ 수정 버튼 토글. 서버가 문구 개정→부분 재생성→재조립(수 분). */}

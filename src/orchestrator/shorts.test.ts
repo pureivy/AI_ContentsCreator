@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues } from './shorts';
+import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt, diversifyTitle, titleShape } from './shorts';
 import { ShortsStore } from '../content/shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
@@ -260,5 +260,120 @@ describe('ShortsStore.list() — createdTs 내림차순(최신순) 고정', () =
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('buildSceneImagePrompt — 촬영 지시 변주', () => {
+  const base = { style: '가을빛 수채화', scene: '수국 앞에서 가위를 든 손', total: 4 };
+
+  it('시드가 없으면 종전 문구 그대로', () => {
+    const t = buildSceneImagePrompt({ ...base, index: 1 });
+    expect(t).toContain('얕은 심도와 부드러운 조명');
+    expect(t).toContain('구도: 세로 9:16 프레임을 피사체로 자연스럽게 채운다.');
+  });
+  it('시드를 주면 조명·심도·앵글·생활감 지시가 붙는다', () => {
+    const t = buildSceneImagePrompt({ ...base, index: 1, seed: 'short_a' });
+    expect(t).toContain('빛과 심도(전 씬 동일)');
+    expect(t).toContain('생활감:');
+    expect(t).toMatch(/구도: 세로 9:16\. .+ 담는다\./);
+  });
+  it('빛·심도는 한 편 안에서 모든 씬이 같다 — 시리즈 일관성 유지', () => {
+    const light = (i: number) => buildSceneImagePrompt({ ...base, index: i, seed: 'short_a' })
+      .split('\n').find((l) => l.startsWith('빛과 심도'));
+    expect(new Set([0, 1, 2, 3].map(light)).size).toBe(1);
+  });
+  it('앵글·생활감은 씬마다 갈린다 — 한 편 안에서도 화면이 바뀐다', () => {
+    const frame = (i: number) => buildSceneImagePrompt({ ...base, index: i, seed: 'short_a' })
+      .split('\n').filter((l) => l.startsWith('구도') || l.startsWith('생활감')).join();
+    expect(new Set([0, 1, 2, 3].map(frame)).size).toBeGreaterThan(1);
+  });
+  it('편이 다르면 빛·심도가 갈린다 — 176편이 같은 조명을 받던 문제', () => {
+    const light = (id: string) => buildSceneImagePrompt({ ...base, index: 1, seed: id })
+      .split('\n').find((l) => l.startsWith('빛과 심도'));
+    const seen = new Set(Array.from({ length: 30 }, (_, i) => light(`short_${i}`)));
+    expect(seen.size).toBeGreaterThan(3);
+  });
+  it('글자 금지·손 왜곡 방어는 시드와 무관하게 항상 붙는다', () => {
+    for (const seed of [undefined, 'short_a', 'short_b']) {
+      const t = buildSceneImagePrompt({ ...base, index: 0, seed });
+      expect(t).toContain('글자·자막·숫자·로고·워터마크');
+      expect(t).toContain('손·손가락 왜곡');
+      expect(t).toContain('[전 씬 공통 스타일] 가을빛 수채화');
+    }
+  });
+});
+
+describe('diversifyTitle — 대표 제목 구조 수렴 차단', () => {
+  const recent = [
+    '상토 배양토 차이 몰라도, 포대 수는 이렇게 계산해요',
+    '수국 9월 관리, 이번 달엔 이것만 정해요',
+    '산수유 열매 적을 때, 지금 확인할 순서',
+  ];
+
+  it('실사고 재현 — 후보가 전부 무쉼표인데 대표만 쉼표였던 short_5b5f7f4231', () => {
+    const title = '측백나무 생울타리, 몇 그루인지 줄자로 끝냅니다';
+    const cands = [
+      '측백나무 생울타리 그루 수 계산법',
+      '측백나무 그루 수는 폭과 길이로 나옵니다',
+      '측백나무 심는데 왜 그루 수부터 세야 할까요',
+    ];
+    const out = diversifyTitle(title, cands, recent, '측백나무');
+    expect(out).not.toBe(title);
+    expect(out).not.toContain(',');
+    expect(out).toContain('측백나무'); // 키워드 규칙은 지킨다
+  });
+  it('키워드 없는 후보는 안 고른다 — 검색 노출 자산이 우선', () => {
+    const title = '수국 9월 관리, 이것만 정해요';
+    const cands = ['가지를 자를지 둘지 먼저 정합니다']; // 키워드 없음
+    expect(diversifyTitle(title, cands, recent, '수국')).toBe(title);
+  });
+  it('최근 것들과 꼴이 다르면 그대로 둔다', () => {
+    const title = '측백나무 그루 수는 폭으로 정해집니다'; // plain
+    expect(diversifyTitle(title, ['측백나무 계산법, 이렇게'], recent, '측백나무')).toBe(title);
+  });
+  it('바꿀 후보가 없으면 원본 유지(fail-open)', () => {
+    const title = '수국 9월 관리, 이것만 정해요';
+    expect(diversifyTitle(title, ['수국 관리, 다른 쉼표 제목'], recent, '수국')).toBe(title);
+    expect(diversifyTitle(title, [], recent, '수국')).toBe(title);
+  });
+  it('최근 표본이 3편 미만이면 개입하지 않는다', () => {
+    const title = '수국 9월 관리, 이것만 정해요';
+    expect(diversifyTitle(title, ['수국 관리는 이렇게 합니다'], recent.slice(0, 2), '수국')).toBe(title);
+  });
+  it('최근 과반이 같은 꼴일 때만 개입한다', () => {
+    const mixed = ['수국 관리는 이렇습니다', '산수유 열매가 적은 이유', '상토 차이, 뒷면을 보세요'];
+    const title = '측백나무 생울타리, 줄자로 끝냅니다'; // comma — mixed 중 1/3 만 comma
+    expect(diversifyTitle(title, ['측백나무 그루 수 계산법'], mixed, '측백나무')).toBe(title);
+  });
+  it('titleShape — 물음표·쉼표·평서를 가른다', () => {
+    expect(titleShape('수국 언제 자를까요?')).toBe('question');
+    expect(titleShape('수국 9월 관리, 이것만')).toBe('comma');
+    expect(titleShape('수국은 9월에 결정됩니다')).toBe('plain');
+  });
+});
+
+describe('buildSceneImagePrompt — 수종 앵커', () => {
+  const base = { style: '플랫 디자인', scene: '담장 위 작은 나무들', index: 2, total: 4 };
+  const SUBJ = '측백나무 — 비늘 모양 잎의 침엽수, 원뿔형 수형';
+
+  it('subject 를 주면 씬 묘사보다 먼저 종을 못박는다', () => {
+    const t = buildSceneImagePrompt({ ...base, subject: SUBJ });
+    expect(t).toContain('[대상 식물');
+    expect(t).toContain('측백나무');
+    expect(t.indexOf('[대상 식물')).toBeLessThan(t.indexOf('장면(씬'));
+  });
+  it('시드 유무와 무관하게 항상 걸린다 — 수종 정확성은 연출 변주와 별개다', () => {
+    for (const seed of [undefined, 'short_a']) {
+      expect(buildSceneImagePrompt({ ...base, seed, subject: SUBJ })).toContain('[대상 식물');
+    }
+  });
+  it('subject 가 없으면 앵커 줄이 안 붙는다(종전 동작)', () => {
+    expect(buildSceneImagePrompt(base)).not.toContain('[대상 식물');
+  });
+  it('실사고 재현 — 씬 묘사가 "작은 나무들"뿐이어도 종이 프롬프트에 남는다', () => {
+    // short_5b5f7f4231: 4씬 중 1씬만 수종명을 적었고 나머지는 "생울타리"·"작은 나무 아이콘들"
+    // 이라 활엽수가 나왔다(측백나무는 침엽수).
+    const t = buildSceneImagePrompt({ style: '플랫', scene: '담장 위에 일정 간격으로 배치된 작은 나무 아이콘들', index: 2, total: 4, subject: SUBJ });
+    expect(t).toContain('침엽수');
   });
 });

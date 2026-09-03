@@ -52,11 +52,13 @@ import { promisify } from 'node:util';
 import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
-import { shortsStore } from '../content/shorts';
+import { shortsStore, shortsQaPublishBlockReason } from '../content/shorts';
+import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, youtubeQuotaCommitted, type ShortsPlatform } from '../content/shortsPlatform';
+import { pickWriter, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo } from '../tools/shortsRender';
-import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
+import { generateDesignedThumbnail, thumbTextQaFailed } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft, shouldAutoDeriveOnDecision, cadenceBaselineTs } from '../content/pieces';
 import { isTransientFailure, transientReason } from '../llm/transientError';
 import { toFactGateInfo } from '../content/factGate';
@@ -826,17 +828,27 @@ app.post('/runs/:id/message', (c) => c.json({ ok: true }));
 /** 활성 브랜드의 자료만 통과 — 범용 모드(활성 없음)면 브랜드 태그 없는 자료만. 탭 전환의 핵심. */
 function brandMatch(x: { brand?: string }): boolean { return (x.brand ?? '') === activeBrandSlug(); }
 
-/** 파생 콘텐츠 요약(카드뉴스·숏폼) — 캘린더 배지·검토 미리보기·성과 컬럼용. 최신 1건씩. */
+/**
+ * 파생 콘텐츠 요약(카드뉴스·숏폼) — 캘린더 배지·검토 미리보기·성과 컬럼용.
+ * 숏폼은 2026-09-03 채널 분리로 글당 2건(유튜브용·인스타용)이 된다. shortsList 가 전부이고,
+ * shorts 는 최신 1건 하위호환 필드다(캘린더 배지·성과 컬럼이 아직 단건을 본다).
+ */
+interface DerivedShorts { id: string; stage: string; durationSec?: number; running: boolean; platform?: ShortsPlatform }
 interface DerivedSummary {
   cardnews?: { id: string; stage: string; slides?: number; running: boolean };
-  shorts?: { id: string; stage: string; durationSec?: number; running: boolean };
+  shorts?: DerivedShorts;
+  shortsList?: DerivedShorts[];
 }
 function derivedSummary(pieceId: string): DerivedSummary {
   const out: DerivedSummary = {};
   const cn = cardNewsStore().list().find((x) => x.sourcePieceId === pieceId); // list() 최신순 → 첫 매치 = 최신
   if (cn) out.cardnews = { id: cn.id, stage: cn.stage, slides: cn.slides, running: isCardNewsRunning(cn.id) };
-  const sh = shortsStore().list().find((x) => x.sourcePieceId === pieceId);
-  if (sh) out.shorts = { id: sh.id, stage: sh.stage, durationSec: sh.durationSec, running: isShortsRunning(sh.id) };
+  const mine = shortsStore().list().filter((x) => x.sourcePieceId === pieceId)
+    .map((x): DerivedShorts => ({ id: x.id, stage: x.stage, durationSec: x.durationSec, running: isShortsRunning(x.id), platform: x.platform }));
+  // 채널 순서 고정(유튜브 → 인스타 → 레거시) — 목록이 폴링마다 뒤집히지 않게.
+  const rank = (p?: ShortsPlatform): number => (p === 'youtube' ? 0 : p === 'instagram' ? 1 : 2);
+  mine.sort((a, b) => rank(a.platform) - rank(b.platform));
+  if (mine.length) { out.shortsList = mine; out.shorts = mine[0]; }
   return out;
 }
 
@@ -1184,6 +1196,17 @@ function shortsActorNames(): { writer?: string; director?: string } {
   } catch { return {}; }
 }
 
+/**
+ * 이번 편 작가 배정(2026-09-03) — 최근 쓴 작가를 피해 돌린다. 작가마다 문체 지침과 목소리가 다르다.
+ * 종전에는 company.yaml 의 shorts_writer 한 명(유하린)이 148편을 전부 썼고 목소리도 하나였다.
+ * 디렉터는 그대로 한 명이다(연출 톤까지 나누면 검증할 축이 너무 많아진다 — 필요하면 다음 단계).
+ */
+function assignShortsWriter(): { writer: string; writerId: string; director?: string } {
+  const recent = shortsStore().list().slice(0, 12).map((x) => x.writerId); // list() 최신순
+  const w = pickWriter(recent);
+  return { writer: w.name, writerId: w.id, director: shortsActorNames().director };
+}
+
 // 숏폼 잡을 '런'으로 등록 — 유하린·서준영의 스폰·작업·지표가 오피스 뷰에 흐르고,
 // 런 취소 → abort 로 잡 중단, 완료 시 이벤트 영속(리플레이). launchCardNewsRun 과 동일 패턴.
 function launchShortsRun(shortsId: string, topic: string, opts: { sourceBody?: string; sceneCount?: number; sourceFlagged?: string[] } = {}): string {
@@ -1230,7 +1253,7 @@ async function shortsCreateHandler(c: Context): Promise<Response> {
   if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
   const sim = noveltyViolation(topic, b.keyword, b.force);
   if (sim) return c.json(noveltyError(sim), 409);
-  const short = shortsStore().create({ topic, keyword: b.keyword, ...shortsActorNames() });
+  const short = shortsStore().create({ topic, keyword: b.keyword, ...assignShortsWriter() });
   const run = launchShortsRun(short.id, topic, { sceneCount: b.scenes });
   return c.json({ short, run_id: run });
 }
@@ -1252,7 +1275,41 @@ function sourceFlaggedClaims(runId: string | undefined): string[] {
   } catch { return []; }
 }
 
-function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false): { short: Shorts } | { error: string } {
+/**
+ * 형제(다른 채널) 대본이 나온 뒤 두 번째 런을 출발시킨다(2026-09-03).
+ * 동시에 띄우면 둘 다 서로를 못 봐서 같은 축의 대본이 나온다(실측: 09-03 시험에서 '형제 대본 없음' 2건,
+ * 문체만 갈리고 알맹이가 같았다). 레코드는 지금 만들어 UI 에 보이게 하고, 출발만 미룬다.
+ * 서버가 도중에 죽어도 부팅 복구 스윕이 planning 상태를 재개하므로 유실되지 않는다.
+ */
+/**
+ * 형제편 출발 대기(2026-09-03 개편) — 원편이 '자산을 다 만든 뒤' 출발한다.
+ *
+ * 종전엔 원편의 '대본만' 나오면 출발했다. 두 편이 각자 대본·이미지를 만들되 각도만 안 겹치게 하는
+ * 설계였기 때문이다. 이제 형제편은 원편 자산을 통째로 물려받으므로, 이미지·클립까지 다 나온 뒤여야
+ * 한다. 판정 기준은 원편의 stage — ready 면 완성, error 면 물려받을 게 없으니 자기가 새로 만든다.
+ */
+/** 원편 완성 대기 상한 — 넘으면 형제편이 자체 생성한다(생성이 멈추는 것보다 낫다). */
+const PRIMARY_WAIT_MS = 25 * 60_000;
+function startAfterPrimary(primaryId: string, selfId: string, start: (inherit: boolean) => void): void {
+  const began = Date.now();
+  const tick = (): void => {
+    const p = shortsStore().get(primaryId);
+    const waited = Date.now() - began;
+    if (p?.stage === 'ready') { start(true); return; }
+    if (p?.stage === 'error' || !p) {
+      console.log(`[숏폼] 원편 실패·부재 — ${selfId} 는 자체 생성으로 진행`);
+      start(false); return;
+    }
+    if (waited > PRIMARY_WAIT_MS) {
+      console.log(`[숏폼] 원편 완성 대기 시간 초과(${Math.round(PRIMARY_WAIT_MS / 60000)}분) — ${selfId} 는 자체 생성으로 진행`);
+      start(false); return;
+    }
+    setTimeout(tick, 10_000);
+  };
+  setTimeout(tick, 10_000);
+}
+
+function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, platform?: ShortsPlatform, inheritFromPrimary?: string): { short: Shorts } | { error: string } {
   const piece = pieceStore().get(pieceId);
   if (!piece) return { error: 'unknown piece' };
   if (!piece.runId) return { error: '초안이 아직 없습니다.' };
@@ -1263,18 +1320,34 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false): 
   } catch { /* 아래에서 거절 */ }
   if (!body) return { error: '초안 본문(draft.json)을 읽을 수 없습니다.' };
   const short = shortsStore().create({
-    topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, auto, ...shortsActorNames(),
+    topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, auto, platform, ...assignShortsWriter(),
   });
-  launchShortsRun(short.id, piece.title, { sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId) });
+  const start = (inherit: boolean): void => {
+    launchShortsRun(short.id, piece.title, {
+      sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId!),
+      // 승계는 원편이 ready 일 때만 — 실패했으면 물려받을 자산이 없으니 자체 생성으로 떨어진다.
+      ...(inherit && inheritFromPrimary ? { inheritFrom: inheritFromPrimary } : {}),
+    });
+  };
+  if (inheritFromPrimary) startAfterPrimary(inheritFromPrimary, short.id, start); else start(false);
   return { short };
 }
 async function shortsFromPieceHandler(c: Context): Promise<Response> {
   const id = c.req.param('id') ?? '';
   if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
-  const b = await c.req.json<{ scenes?: number }>().catch(() => ({}) as { scenes?: number });
-  const r = deriveShortsFromPiece(id, b.scenes);
-  if ('error' in r) return c.json({ error: r.error }, r.error === 'unknown piece' ? 404 : 409);
-  return c.json({ short: r.short });
+  const b = await c.req.json<{ scenes?: number; platform?: ShortsPlatform }>().catch(() => ({}) as { scenes?: number; platform?: ShortsPlatform });
+  // platform 미지정이면 채널별로 각각 만든다(자동 파생과 같은 계약). 응답의 short 는 하위호환 유지.
+  const targets: ShortsPlatform[] = b.platform ? [b.platform] : [...SHORTS_PLATFORMS];
+  // 자동 파생과 같은 계약 — 첫 채널이 원편, 나머지는 그 자산 승계(수동·자동이 갈라지면 안 된다).
+  const made: Shorts[] = []; let firstError = ''; let primaryId = '';
+  for (const platform of targets) {
+    const r = deriveShortsFromPiece(id, b.scenes, false, platform, primaryId || undefined);
+    if ('error' in r) { firstError ||= r.error; continue; }
+    made.push(r.short);
+    if (!primaryId) primaryId = r.short.id;
+  }
+  if (!made.length) return c.json({ error: firstError || '파생 실패' }, firstError === 'unknown piece' ? 404 : 409);
+  return c.json({ short: made[0], shorts: made });
 }
 
 function shortsListHandler(c: Context): Response {
@@ -1464,6 +1537,23 @@ async function shortsReviseHandler(c: Context): Promise<Response> {
   console.log(`[발행담당] 숏폼 수정 요청 반영 — ${id} 씬 ${r.changedScenes.join(',') || '문구없음'}${r.regenScenes.length ? ` · 배경 ${r.regenScenes.join(',')}` : ''}${r.titleChanged ? ' · 제목' : ''}${r.titleArtChanged ? ' · 캘리' : ''}`);
   return c.json(r);
 }
+/**
+ * 숏폼 작가 페르소나 목록(2026-09-03) — 직원 화면이 조직도(company.yaml 역할)만 읽어서 새 작가가
+ * 안 보인다는 제보 반영. 이들은 별도 에이전트가 아니라 shorts_writer 역할의 필명·문체·목소리다
+ * (집필 규칙 2,098자는 한 역할에 모여 있고, 셋으로 복제하면 규칙이 갈라진다).
+ * 그래서 조직도에 '직원'으로 넣지 않고 이 목록으로 따로 보여 준다. 편성 실적은 최근 30편 기준.
+ */
+app.get('/shorts/writers', (c) => {
+  const recent = shortsStore().list().filter(brandMatch).slice(0, 30);
+  return c.json({
+    writers: SHORTS_WRITERS.map((w) => ({
+      id: w.id, name: w.name, voiceNote: w.voiceNote, styleGuide: w.styleGuide,
+      recentCount: recent.filter((s) => s.writerId === w.id).length,
+    })),
+    recentTotal: recent.length,
+  });
+});
+
 app.post('/shorts/:id/revise', shortsReviseHandler);
 app.post('/api/shorts/:id/revise', shortsReviseHandler);
 
@@ -1490,7 +1580,24 @@ app.post('/shorts/:id/youtube', async (c) => {
   if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
   // 길이 상한 발행 게이트(2026-08-20 하드 캡) — 어떤 경로(수정요청 재조립·구버전 잔존분)로 ready 가 됐든 초과본 발행 차단.
   if ((s.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) return c.json({ error: `길이 상한 초과(${s.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초) — ✍수정요청으로 대본을 줄인 뒤 발행하세요` }, 409);
+  // 썸네일 QA 미해결 게이트(실사고 2026-09-03: 오타 썸네일이 조용히 발행) — 카드뉴스와 동일 방식.
+  // 사용자 확인(force) 또는 썸네일 재생성으로 해제된다. 모든 발행 경로가 이 라우트를 지난다.
+  {
+    const force = !!(await c.req.json<{ force?: boolean }>().catch(() => ({} as { force?: boolean }))).force;
+    const qaBlock = shortsQaPublishBlockReason(thumbTextQaFailed(shortsStore().dirFor(id)), force);
+    if (qaBlock) return c.json({ error: qaBlock, thumb_qa_unresolved: true }, 409);
+  }
   if (s.youtubeUrl) return c.json({ error: '이미 업로드됨', url: s.youtubeUrl }, 409); // 중복 영상·쿼터 낭비 방지
+  // 채널 게이트(2026-09-03) — 인스타 전용으로 만든 대본을 유튜브에 올리지 않는다(레거시 미지정분은 통과).
+  if (!canPublishTo(s.platform, 'youtube')) {
+    return c.json({ error: `${platformLabel(s.platform)} 전용 숏폼입니다 — 유튜브에는 유튜브용 대본을 올리세요` }, 409);
+  }
+  // 하루 상한(사용자 확정 2026-09-03: 1편) — 대량생산 신호를 줄이는 게 목적이라 발행 지점에서 막는다.
+  // 브랜드별 채널이므로 같은 브랜드 업로드만 센다. 인스타(메타)에는 적용하지 않는다.
+  const capBlock = youtubeDailyCapBlock(
+    shortsStore().list().filter((x) => (x.brand ?? '') === (s.brand ?? '')), Date.now(), CONFIG.youtubeDailyCap,
+  );
+  if (capBlock) return c.json({ error: capBlock }, 409);
   if (ytPublishInFlight.has(id)) return c.json({ error: '이미 업로드 처리 중입니다' }, 409);
   ytPublishInFlight.add(id);
   try {
@@ -1888,6 +1995,17 @@ app.post('/shorts/:id/meta', async (c) => {
   if ((s.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) return c.json({ error: `길이 상한 초과(${s.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초) — ✍수정요청으로 대본을 줄인 뒤 발행하세요` }, 409);
   // 완료 판정 = 릴스 id + 실제 퍼머링크 + (페이지 연결 시) FB 릴스 id. 홈 URL 잔재만 있으면 재시도가 링크를 보강하게 통과.
   // FB 페이지를 나중에 연결한 경우 IG 완료만으로 막으면 페북 릴스는 영구히 못 올라간다 → FB 미게시면 통과.
+  // 채널 게이트(2026-09-03) — 유튜브 전용 대본을 릴스로 내보내지 않는다(레거시 미지정분은 통과).
+  if (!canPublishTo(s.platform, 'instagram')) {
+    return c.json({ error: `${platformLabel(s.platform)} 전용 숏폼입니다 — 릴스에는 인스타용 대본을 올리세요` }, 409);
+  }
+  // 썸네일 QA 미해결 게이트(실사고 2026-09-03: 오타 썸네일이 조용히 발행) — 카드뉴스와 동일 방식.
+  // 사용자 확인(force) 또는 썸네일 재생성으로 해제된다. 모든 발행 경로가 이 라우트를 지난다.
+  {
+    const force = !!(await c.req.json<{ force?: boolean }>().catch(() => ({} as { force?: boolean }))).force;
+    const qaBlock = shortsQaPublishBlockReason(thumbTextQaFailed(shortsStore().dirFor(id)), force);
+    if (qaBlock) return c.json({ error: qaBlock, thumb_qa_unresolved: true }, 409);
+  }
   const shortsAcct = getMetaAccount(s.brand ?? '');
   const fbLinked = !!(shortsAcct.pageId && shortsAcct.pageToken); // 발행기와 동일 판정(토큰까지)
   const metaDir = shortsStore().dirFor(id);
@@ -2112,14 +2230,34 @@ function autoDeriveSet(id: string, title: string): void {
   }
   // error 레코드는 점유로 안 본다(2026-08-20 하드 캡 리뷰) — 길이 상한 등으로 실패한 파생이 그 글의
   // 쇼츠를 영구 결손시키지 않게. 단 같은 글 실패 2회부터는 재파생 중단(계속 실패하는 소재 폭주 방지).
-  if (CONFIG.autoShorts && (() => {
-    const mine = shortsStore().list().filter((x) => x.sourcePieceId === id);
-    return !mine.some((x) => x.stage !== 'error') && mine.filter((x) => x.stage === 'error').length < 2;
-  })()) {
-    const ds = deriveShortsFromPiece(id);
-    console.log('error' in ds
-      ? `[숏폼] 자동 파생 실패 — ${title.slice(0, 25)}: ${ds.error}`
-      : `[숏폼] 자동 파생 시작 — ${title.slice(0, 30)} (${ds.short.id})`);
+  // 채널별로 따로 만든다(2026-09-03 사용자 확정) — 같은 글에서 유튜브용·인스타용 대본을 각각 생성.
+  // 점유·실패 판정은 채널별로 센다. 한쪽이 실패해도 다른 쪽은 만들어져야 한다.
+  if (CONFIG.autoShorts) {
+    // 채널별 편은 만들되 비싼 상단(대본·이미지·클립·캘리)은 한 벌만 만든다(2026-09-03 사용자 확정).
+    // 종전엔 채널마다 독립 런이라 이미지가 두 벌이었다 — 편당 비용은 이미지가 지배한다.
+    // 분리의 원래 근거("중복 콘텐츠 회피")는 유튜브가 인스타를 못 본다는 점에서 성립하지 않았다.
+    // 첫 채널이 원편(자산 생성), 나머지는 그 자산을 승계하고 낭독만 제 작가 목소리로 새로 뜬다.
+    const need = SHORTS_PLATFORMS.filter((platform) => {
+      const mine = shortsStore().list().filter((x) => x.sourcePieceId === id && x.platform === platform);
+      // error 레코드는 점유로 안 본다(2026-08-20 하드 캡 리뷰) — 다만 같은 글·같은 채널 2회 실패면 중단.
+      if (mine.some((x) => x.stage !== 'error') || mine.filter((x) => x.stage === 'error').length >= 2) return false;
+      // 유튜브는 하루 상한만큼만 만든다 — 발행에서만 막으면 2~3편 만들어 1편만 올리고 버리게 된다.
+      if (platform === 'youtube' && youtubeQuotaCommitted(shortsStore().list(), Date.now(), CONFIG.youtubeDailyCap)) {
+        console.log(`[숏폼] 자동 파생 건너뜀(유튜브) — 오늘 몫 소진(상한 ${CONFIG.youtubeDailyCap}편) · ${title.slice(0, 25)}`);
+        return false;
+      }
+      return true;
+    });
+    // 유튜브가 상한으로 빠지면 인스타가 원편이 된다 — 그러지 않으면 인스타 생산이 통째로 멈춘다.
+    let primaryId = '';
+    for (const platform of need) {
+      const ds = deriveShortsFromPiece(id, undefined, false, platform, primaryId || undefined);
+      if ('error' in ds) { console.log(`[숏폼] 자동 파생 실패(${platformLabel(platform)}) — ${title.slice(0, 25)}: ${ds.error}`); continue; }
+      console.log(primaryId
+        ? `[숏폼] 자동 파생 시작(${platformLabel(platform)}·승계) — ${title.slice(0, 30)} (${ds.short.id}) · 원편 완성 대기`
+        : `[숏폼] 자동 파생 시작(${platformLabel(platform)}·원편) — ${title.slice(0, 30)} (${ds.short.id})`);
+      if (!primaryId) primaryId = ds.short.id;
+    }
   }
 }
 

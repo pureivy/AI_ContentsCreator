@@ -809,9 +809,13 @@ export async function ttsFetch(text: string, voice?: string): Promise<Blob | nul
 export type PieceStage =
   | "idea" | "research" | "draft" | "ready" | "published" | "measured" | "reflected" | "error";
 /** 파생 콘텐츠 요약(카드뉴스·숏폼) — 콘텐츠 세트 상태를 캘린더 배지·검토 미리보기·성과 컬럼에 표시. */
+export interface DerivedShorts { id: string; stage: string; durationSec?: number; running: boolean; platform?: "youtube" | "instagram" }
 export interface DerivedSummary {
   cardnews?: { id: string; stage: string; slides?: number; running: boolean };
-  shorts?: { id: string; stage: string; durationSec?: number; running: boolean };
+  /** 최신 1건(하위호환 — 캘린더 배지·성과 컬럼). 채널 분리 후 전체는 shortsList. */
+  shorts?: DerivedShorts;
+  /** 글당 숏폼 전체(2026-09-03 채널 분리: 유튜브용·인스타용). 구 서버 응답이면 없다. */
+  shortsList?: DerivedShorts[];
 }
 export interface PieceInfo {
   id: string;
@@ -1123,6 +1127,8 @@ export async function deleteCardNews(id: string, opts?: { purge?: boolean }): Pr
 export type ShortsStage = "planning" | "designing" | "rendering" | "ready" | "error";
 export interface ShortsInfo {
   id: string;
+  /** 발행 대상 채널(2026-09-03 분리) — 없으면 레거시(양 채널 겸용). */
+  platform?: "youtube" | "instagram";
   topic: string;
   keyword?: string;
   sourcePieceId?: string;
@@ -1135,6 +1141,8 @@ export interface ShortsInfo {
   scenes?: number;
   bgFallbacks?: number;
   writer?: string;
+  /** 작가 필명 id(2026-09-03) — 아바타 얼굴 해석용. 레거시 편은 없다. */
+  writerId?: string;
   director?: string;
   error?: string;
   youtubeUrl?: string;
@@ -1230,4 +1238,14 @@ export async function runPiece(id: string): Promise<{ ok: boolean; run_id?: stri
     const j = await r.json().catch(() => ({} as { run_id?: string; error?: string }));
     return r.ok ? { ok: true, run_id: j.run_id } : { ok: false, error: j.error || `HTTP ${r.status}` };
   } catch { return { ok: false, error: "network" }; }
+}
+
+// 숏폼 작가 페르소나(2026-09-03) — shorts_writer 역할의 필명·문체·목소리. 조직도(역할)와 다른 층위라 따로 읽는다.
+export interface ShortsWriterInfo { id: string; name: string; voiceNote: string; styleGuide: string; recentCount: number }
+export async function fetchShortsWriters(): Promise<{ writers: ShortsWriterInfo[]; recentTotal: number }> {
+  try {
+    const r = await fetch("/shorts/writers");
+    if (!r.ok) return { writers: [], recentTotal: 0 };
+    return await r.json();
+  } catch { return { writers: [], recentTotal: 0 }; }
 }
