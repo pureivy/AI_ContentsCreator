@@ -965,18 +965,24 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   } catch { return plan; }
 }
 
-async function designScenes(io: JobIO, topic: string, plan: Plan): Promise<{ preset: string; style: string; prompts: string[] }> {
+async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: string): Promise<{ preset: string; style: string; prompts: string[]; subject?: string }> {
   const user = [
     `[주제] ${topic}`,
+    keyword ? `[핵심 대상] ${keyword}` : '',
     '[씬 — 내레이션 요지]',
     ...plan.scenes.map((s, i) => `${i + 1}. ${s.narration.slice(0, 60)}${s.screenText ? ` (자막: ${s.screenText})` : ''}`),
     '',
     `각 씬의 세로(9:16) 배경 이미지 프롬프트를 설계하라. scenes 는 정확히 ${plan.scenes.length}개.`,
     '이미지 안 글자 금지.',
+    // 수종 오식별(2026-09-03 실사고) — "측백나무 생울타리" 편에서 4씬 중 1씬만 수종명을 적었고
+    // 나머지는 "생울타리", "작은 나무 아이콘들"이라고만 써서, 이미지 모델이 활엽수를 그렸다.
+    // 측백나무는 침엽수다. 원예 채널에서 수종이 틀린 화면은 신뢰를 직접 깎는다.
+    '수종 고정(가장 중요): subject 에 이 영상의 대상 식물과 "그림으로 구별되는 특징"을 적어라 — 잎 모양·수형·색 위주로 한 줄(예: "측백나무 — 비늘 모양 잎이 납작한 부채처럼 갈라지는 침엽수, 원뿔형 수형, 짙은 청록"). 모르면 subject 를 비워라(지어내지 마라).',
+    '그리고 모든 씬 묘사(prompt)에 그 식물이 무엇인지 매번 명시하라 — "나무", "생울타리", "묘목" 처럼 뭉뚱그리지 마라. 화면에 식물이 안 나오는 씬(도구·흙·줄자만)은 예외다.',
     'style_preset 은 주제·내용·톤에 어울리게 선택하라 — photorealistic 을 기본값처럼 고르지 말 것. photorealistic=실물 시연·하우투·생활, manhwa=스토리·유머·과장, watercolor=감성·계절·에세이, ink_wash=차분한 전통·사색적 주제, flat_design=정보·정책·경제·비교·수치, retro_poster=이벤트·프로모션·복고.',
-    'JSON 형식: {"style_preset":"photorealistic|manhwa|watercolor|ink_wash|flat_design|retro_poster","style":"모든 씬 공통 스타일 문구(팔레트·질감·조명)","scenes":[{"prompt":"장면 묘사(한국어 150자 이내)"}]}',
+    'JSON 형식: {"style_preset":"photorealistic|manhwa|watercolor|ink_wash|flat_design|retro_poster","style":"모든 씬 공통 스타일 문구(팔레트·질감·조명)","subject":"대상 식물 — 구별되는 겉모습 한 줄(없으면 빈 문자열)","scenes":[{"prompt":"장면 묘사(한국어 150자 이내)"}]}',
   ].join('\n');
-  const j = await callRoleJSON<{ style_preset?: unknown; style?: unknown; scenes?: Array<{ prompt?: unknown }> }>(
+  const j = await callRoleJSON<{ style_preset?: unknown; style?: unknown; subject?: unknown; scenes?: Array<{ prompt?: unknown }> }>(
     io, 'shorts_director', '당신은 숏폼 영상 디렉터입니다. 요청된 JSON 스키마만 출력합니다.', user, 1800, true,
   );
   const rawPreset = String(j?.style_preset ?? '').trim();
@@ -986,7 +992,10 @@ async function designScenes(io: JobIO, topic: string, plan: Plan): Promise<{ pre
     const p = String(j?.scenes?.[i]?.prompt ?? '').trim().slice(0, 200);
     return p || `${topic} 를 상징하는 한국 생활 장면, ${s.narration.slice(0, 30)} 분위기`;
   });
-  return { preset, style, prompts };
+  const subject = String(j?.subject ?? '').trim().slice(0, 120);
+  if (subject) console.log('[숏폼]', `수종 앵커 — ${subject}`);
+  else if (keyword) console.log('[숏폼]', `수종 앵커 없음 — 디렉터가 '${keyword}' 겉모습을 못 적었다(화면 수종이 틀릴 수 있음)`);
+  return { preset, style, prompts, ...(subject ? { subject } : {}) };
 }
 
 /**
@@ -1049,13 +1058,16 @@ const HOOK_PUSH: readonly string[] = [
  * seed(보통 쇼츠 id)를 주면 촬영 지시가 편마다 갈린다. 안 주면 종전 문구 그대로다.
  */
 export function buildSceneImagePrompt(a: {
-  style: string; scene: string; index: number; total: number; seed?: string;
+  style: string; scene: string; index: number; total: number; seed?: string; subject?: string;
 }): string {
-  const { style, index: i, total, seed } = a;
+  const { style, index: i, total, seed, subject } = a;
   const scene = a.scene.trim() || '주제를 상징하는 한국 생활 장면';
   const isHook = i === 0;
   const p: string[] = [];
   p.push(`[전 씬 공통 스타일] ${style}`);
+  // 수종 앵커 — 씬 묘사가 "나무"라고만 해도 이 줄이 종을 못박는다. 실사고(2026-09-03): 측백나무
+  // 편의 4씬 중 3씬이 활엽수로 나왔다. 침엽수인데. 원예 채널에서 이건 신뢰 문제다.
+  if (subject) p.push(`[대상 식물 — 화면의 나무·풀은 반드시 이것] ${subject}. 다른 종으로 대체하거나 일반적인 나무로 뭉개지 마라.`);
   if (!seed) { // 종전 동작 보존
     p.push(`장면(씬 ${i + 1}/${total}${isHook ? ', 훅' : ''}): ${scene}.${isHook ? HOOK_PUSH[0] : ''}`);
     p.push('구도: 세로 9:16 프레임을 피사체로 자연스럽게 채운다.');
@@ -1216,7 +1228,7 @@ export async function runShortsJob(
     // 디렉터를 engaged 웨이브에 배선 — standby 팀은 org 와 달리 delegation 이벤트가 없어,
     // 디자인 단계 내내 오피스가 디렉터를 유휴·배회로 그리고 WORKING 칩도 0 이었다(수선 2026-08-12).
     opts.bus?.emit('delegation', { team_id: 'shorts', from: 'shorts_writer', to: 'shorts_director', summary: '씬 비주얼 연출' });
-    const design = await designScenes(io, short.topic, plan);
+    const design = await designScenes(io, short.topic, plan, short.keyword);
     say(`디자인 확정 — ${design.preset} · ${design.style.slice(0, 40)}`);
     checkAbort();
 
@@ -1228,7 +1240,7 @@ export async function runShortsJob(
       imageSlots: plan.scenes.map((s, i) => ({
         alt: s.screenText || s.narration.slice(0, 30),
         // seed=쇼츠 id — 촬영 지시(조명·심도·앵글·생활감)가 편마다 갈린다. 재생성해도 같은 지시가 나온다.
-        prompt: buildSceneImagePrompt({ style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length, seed: id }),
+        prompt: buildSceneImagePrompt({ style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length, seed: id, ...(design.subject ? { subject: design.subject } : {}) }),
       })),
     };
     const bgDraftPath = path.join(dir, 'bg-draft.json');
@@ -1254,6 +1266,7 @@ export async function runShortsJob(
     const qa = await qaSceneImages({
       dir, images, scenePrompts: bgDraft.imageSlots.map((s) => s.prompt),
       preset: design.preset, signal: opts.signal,
+      ...(design.subject ? { subject: design.subject } : {}), // 수종 오식별 검사
     });
     images = qa.images;
     if (qa.regenerated) say(`씬 QA — ${qa.regenerated}장 재생성 (${qa.issues.slice(0, 3).join(' · ')})`);
