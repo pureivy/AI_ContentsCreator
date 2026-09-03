@@ -1,5 +1,10 @@
 /**
- * 숏폼 작가 페르소나 풀 — 편마다 다른 작가가 쓰고, 작가마다 다른 목소리로 읽는다(2026-09-03).
+ * 숏폼 작가 3인 — 편마다 다른 작가가 쓰고, 작가마다 다른 목소리로 읽는다(2026-09-03).
+ *
+ * id 는 company.yaml 의 역할 id 와 같다. 오피스·직원 화면·티커가 전부 역할 로스터를 읽기 때문에,
+ * 층위를 나누면(코드 페르소나 vs 역할) 새 작가가 어디에도 안 보인다(사용자 제보 2026-09-03).
+ * 집필 규칙은 각 역할의 system_prompt 에 있고(같은 base + 각자 문체 블록), 이 파일은 그 역할이
+ * 어떤 목소리로 읽히는지와 배정 규칙만 담는다.
  *
  * 왜: 148편이 전부 같은 작가(유하린)·같은 목소리(Jisoo)·같은 문체였다. 채널 지문의 큰 축이다.
  * 유튜브 대량생산 판정을 피하는 실질은 '결과물이 매번 다른 것'이고, 작가를 나누면 문체·훅·마무리와
@@ -28,7 +33,7 @@ export interface ShortsWriter {
 
 export const SHORTS_WRITERS: readonly ShortsWriter[] = [
   {
-    id: 'w_haerin',
+    id: 'shorts_writer',
     name: '유하린',
     voiceId: 'iWLjl1zCuqXRkW6494ve',
     voiceNote: 'Jisoo — 여성·젊은 톤·또렷함(종전 전 편이 쓰던 목소리)',
@@ -41,7 +46,7 @@ export const SHORTS_WRITERS: readonly ShortsWriter[] = [
     ].join('\n'),
   },
   {
-    id: 'w_taeyun',
+    id: 'shorts_writer_b',
     name: '임태윤',
     voiceId: 'm3gJBS8OofDJfycyA2Ip',
     voiceNote: 'Taehyung — 남성·젊은 톤·친근한 소셜 화법',
@@ -54,7 +59,7 @@ export const SHORTS_WRITERS: readonly ShortsWriter[] = [
     ].join('\n'),
   },
   {
-    id: 'w_jaehyun',
+    id: 'shorts_writer_c',
     name: '곽재현',
     voiceId: 'H9ihk5yaEtJLXjhBgRaF',
     voiceNote: 'Jay Lee — 남성·중년 톤·설명형(이 니치 주 시청층 40~60대와 맞음)',
@@ -68,8 +73,15 @@ export const SHORTS_WRITERS: readonly ShortsWriter[] = [
   },
 ];
 
+/** 초기 배정분(2026-09-03 오전)에 쓰던 임시 id — 역할 id 로 합치기 전 레코드 호환. */
+const LEGACY_ID: Record<string, string> = {
+  w_haerin: 'shorts_writer', w_taeyun: 'shorts_writer_b', w_jaehyun: 'shorts_writer_c',
+};
+
 export function writerById(id: string | undefined): ShortsWriter | undefined {
-  return SHORTS_WRITERS.find((w) => w.id === id);
+  if (!id) return undefined;
+  const key = LEGACY_ID[id] ?? id;
+  return SHORTS_WRITERS.find((w) => w.id === key);
 }
 
 /** 이름으로 조회(레거시 레코드는 writerId 없이 이름만 있다). */

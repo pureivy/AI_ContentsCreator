@@ -635,7 +635,7 @@ export function pruneQuoteSources(plan: Plan, sourceBody: string | undefined): {
   return { plan: { ...plan, scenes }, pruned };
 }
 
-async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형'], sourceFlagged: string[] = []): Promise<Plan | null> {
+async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형'], sourceFlagged: string[] = [], writerRole = 'shorts_writer'): Promise<Plan | null> {
   const capSec = CONFIG.shortsMaxDurationSec;
   // 제목 후보 유형(권고 5) — 스키마 예시와 유형 설명이 같은 목록을 가리켜야 작가가 순서대로 채운다.
   const titlesJson = titleTypes.map((t) => `"${t}"`).join(',');
@@ -701,6 +701,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     `JSON 형식: {"title":"대표 제목","titles":[${titlesJson}],"scenes":[{"narration":"...","screenText":"...","overlay":{"kind":"arrow","at":"mc","label":"여기"},"kind":"hook|stat|list|quote|chart|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0},"takeaways":[{"when":"허리 높이","then":"회양목"}]}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}`,
   ].filter(Boolean).join('\n');
   type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown; takeaways?: unknown }>; description?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
+  // 역할 프롬프트가 없을 때만 쓰이는 폴백(callRoleJSON: role.systemPrompt || fallback).
   const sys = '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.';
   // 고유어 월은 내레이션(TTS) 전용 — 화면·검색 필드는 숫자 월로 되돌린다(권고 5, 결정적).
   // 단 키워드 정확 표기가 깨지는 경우는 원문을 유지한다: 키워드 규칙(사용자 확정 자산)이 우선이다.
@@ -741,11 +742,11 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   };
   // 예산 3000(CLI 상한 ×3=9000) — 문체 제약 투입(2026-08-11) 후 사고량 증가로 종전 2200(6600)이
   // 즉시 초과됐다(실측: 테스트 런 2건 연속 "exceeded 6600 output token maximum").
-  let plan = parsePlan(await callRoleJSON<PlanRaw>(io, 'shorts_writer', sys, user, 3000, true));
+  let plan = parsePlan(await callRoleJSON<PlanRaw>(io, writerRole, sys, user, 3000, true));
   if (!plan) {
     // 파싱 불가·미완결 JSON 1회 재시도(카드뉴스와 동일 패턴) — 실측 2026-08-11 "보리수나무묘목" 런이
     // 단발 실패로 통째 죽었다. 재시도는 완결 JSON 강조 + 토큰 여유 상향.
-    plan = parsePlan(await callRoleJSON<PlanRaw>(io, 'shorts_writer', sys,
+    plan = parsePlan(await callRoleJSON<PlanRaw>(io, writerRole, sys,
       `${user}\n\n반드시 완결된 JSON 하나만 출력하라(설명·마크다운 코드펜스 금지).`, 3400, false));
   }
   if (!plan) return null;
@@ -810,7 +811,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     if (probs.length) {
       const m = `단독 이해·문체 검산 — ${probs.length}건 → 수정 라운드 (${probs[0]?.slice(0, 50)})`;
       console.log(`[숏폼] ${m}`); io.bus?.emit('log', { message: m });
-      const fixed = parsePlan(await callRoleJSON<PlanRaw>(io, 'shorts_writer', sys,
+      const fixed = parsePlan(await callRoleJSON<PlanRaw>(io, writerRole, sys,
         `${user}\n\n[단독 이해·문체 검산 실패 — 아래 문제를 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지)]\n${probs.map((p) => `- ${p}`).join('\n')}`, 3400, false));
       // 수정본 파싱 실패 시 원본 유지. 수정 라운드가 대본만 고치고 메타(제목 후보·설명·해시태그)를
       // 빠뜨려도 원본 것을 승계(무손실 병합 — parsePlan 의 [topic] 폴백 제목이 원본을 덮지 않게).
@@ -1009,13 +1010,15 @@ export async function runShortsJob(
     // 채널 지침(2026-09-03) — 같은 원문에서 유튜브용·인스타용이 서로 다른 대본이 되게 하는 축.
     const platformGuide = platformPlanGuide(short.platform);
     // 작가 문체(2026-09-03) — 편마다 다른 작가가 쓰고 그 작가의 목소리로 읽는다. 레거시는 빈 문자열.
+    // 문체 지침은 각 작가 역할의 system_prompt 가 담당한다(company.yaml). 여기서는 어느 역할로
+    // 호출할지와 로그 표기만 정한다 — 같은 말을 두 번 주면 서로 어긋날 때 무엇이 이겼는지 못 읽는다.
     const writerProfile = writerById(short.writerId) ?? writerByName(short.writer);
-    const writerGuide = writerProfile?.styleGuide ?? '';
+    const writerRole = writerProfile?.id ?? 'shorts_writer';
     // 다른 채널용 형제가 이미 대본을 냈으면 그 훅·제목을 보여주고 겹치지 말라고 못박는다.
     // 지침만으로는 같은 원문에서 같은 각도가 나온다(두 런이 같은 본문을 본다).
     const siblingGuide = siblingPlanToAvoid(short);
     say(`기획 가드 — 채널 ${platformLabel(short.platform)} · 작가 ${writerProfile?.name ?? short.writer ?? '미지정'} · 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 형제 대본 ${siblingGuide ? '주입' : '없음'} · 제목 유형 ${titleTypes.join('·')}`);
-    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, writerGuide, siblingGuide, priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? []);
+    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, siblingGuide, priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? [], writerRole);
     if (!planned) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     // Plan 타입 재선언 — 길이 상한 루프의 재대입이 클로저(씬 map 등) 내로잉을 풀지 않게 non-null 로 고정.
     let plan: Plan = planned;
