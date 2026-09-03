@@ -25,9 +25,13 @@ export const RENDER_OPTS = {
   // 색공간 태깅 — 미지정(default)은 태그를 안 붙여 플레이어가 bt601 로 넘겨짚고, 그 결과 색이
   // 옅게 보인다("업로드하니 색이 죽었다"의 흔한 원인). bt709 로 명시.
   colorSpace: 'bt709' as const,
-  // chromiumOptions.gl 은 일부러 비운다 — Remotion 문서가 macOS 에 'angle' 을 권하길래 넣어
-  // 봤지만, 실에셋 렌더 4회 측정에서 angle 30s / 기본 30s 로 차이가 없었다(그림자·블러가 많아
-  // 이득을 볼 줄 알았는데 아니었다). 효과 없는 설정을 남기면 다음 사람이 근거로 오해한다.
+  // WebGL2 백엔드 — @remotion/effects 의 셰이더 효과에 필수다. 없으면 렌더가 첫 프레임에서
+  // "Failed to acquire WebGL2 context for canvas effect" 로 죽는다(실측 2026-09-04).
+  //
+  // 이 줄은 한 번 뺐다가 되돌린 것이다. 2026-09-03 에 '속도가 빨라지나' 보려고 4회 측정했고
+  // angle 30s / 기본 30s 로 차이가 없어 뺐다 — 그 측정 자체는 맞았다. 다만 속도만 봤을 뿐,
+  // 이 설정의 진짜 용도가 '셰이더를 돌릴 수 있게 하는 것'이라는 걸 그때는 몰랐다.
+  chromiumOptions: { gl: 'angle' as const },
   // delayRender 대기 상한 — 기본 30초. 씬 이미지 로딩(<Img>)에 폰트 로딩(loadFonts.ts)이 더해져
   // 여유를 둔다. 넘치면 폰트가 아니라 렌더 전체가 죽으므로 넉넉한 편이 안전하다.
   timeoutInMilliseconds: 90_000,

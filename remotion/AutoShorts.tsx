@@ -1,6 +1,7 @@
 import React from 'react';
 import { z } from 'zod';
-import { AbsoluteFill, Series, Audio, staticFile, OffthreadVideo, useCurrentFrame, useVideoConfig } from 'remotion';
+import { AbsoluteFill, Series, Audio, staticFile, useCurrentFrame, useVideoConfig, random } from 'remotion';
+import { Video } from '@remotion/media';
 import { sceneEnterFade } from './anim';
 import { KenBurnsImage } from './KenBurnsImage';
 import { KineticCaption } from './KineticCaption';
@@ -15,6 +16,7 @@ import { BarChartGrow } from './BarChartGrow';
 import { TakeawayCard } from './TakeawayCard';
 import { CompareCard } from './CompareCard';
 import { FONT_FAMILY } from './loadFonts';
+import { pickFilmLook, filmLookEffects, type FilmLook } from './filmLook';
 
 export const autoShortsSchema = z.object({
   scenes: z.array(z.object({
@@ -59,9 +61,11 @@ export type AutoShortsProps = z.infer<typeof autoShortsSchema>;
 
 const CLIP_SECONDS = 6; // clipFrames 미지정 시 감속 배율 산정 폴백 — 프레임 수는 fps 에서 유도
 
-const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; caption?: AutoShortsProps['caption']; driftSeed?: string }> = ({ s, index, caption, driftSeed }) => {
+const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; caption?: AutoShortsProps['caption']; driftSeed?: string; look?: FilmLook }> = ({ s, index, caption, driftSeed, look }) => {
   const f = useCurrentFrame();
   const { fps } = useVideoConfig();
+  // 필름 룩 — 배경(이미지·클립)에만 건다. 자막·카드는 별도 레이어라 영향이 없다(글자는 보정 대상이 아니다).
+  const effects = look ? filmLookEffects(look) : undefined;
   // 씬 엔터 이펙트 — 종전 '6프레임 페이드인(첫 씬 제외)'을 일반화. 씬 길이 불변이라 TTS 싱크 무손상.
   // TransitionSeries(씬 오버랩=전체 길이 단축)는 '오디오가 길이를 지배' 불변식·SRT 누적 시계와 충돌해 채택하지 않는다.
   const enter = s.fx?.enter ?? (index > 0 ? 'fade' : 'none');
@@ -76,14 +80,17 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
         // 루프 금지 — 씬이 클립(≈6초)보다 길면 재생 속도를 낮춰 클립 한 번이 씬 전체를 덮는다.
         // 종전 <Loop>는 씬 중간에 클립이 처음으로 되감겨 '튕김'이 보였고(실측: 씬 6.6~8.0s vs 클립 6.04s
         // 로 거의 매 씬 발생), 감속 재생은 튕김 제거에 더해 I2V 잔결함(형태 흔들림)도 시각적으로 완화한다.
-        <OffthreadVideo
+        // @remotion/media 의 <Video>(4.0.520) — OffthreadVideo 와 달리 effects 프롭을 받는다.
+        // 그래서 클립 씬도 스틸 씬과 같은 필름 룩을 받는다(색이 튀면 보정 안 한 것만 못하다).
+        <Video
           src={staticFile(s.videoSrc)}
           muted
           playbackRate={Math.min(1, (s.clipFrames ?? CLIP_SECONDS * fps) / Math.max(1, s.durationInFrames))}
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          {...(effects ? { effects } : {})}
         />
       ) : (
-        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={s.fx?.move} intensity={s.fx?.intensity} driftSeed={driftSeed ? `${driftSeed}:${index}` : undefined} />
+        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={s.fx?.move} intensity={s.fx?.intensity} driftSeed={driftSeed ? `${driftSeed}:${index}` : undefined} {...(effects ? { effects } : {})} />
       )}
       {/* 액센트 — 배경 위·자막/오버레이 아래(텍스트는 어두워지거나 가려지지 않게) */}
       {s.fx?.accent === 'spotlight' ? <SpotlightMask /> : null}
@@ -102,18 +109,23 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
   );
 };
 
-export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, driftSeed }) => (
+export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, driftSeed }) => {
+  // 룩은 편 단위로 하나 — 실제 촬영본은 한 편 안에서 색이 튀지 않는다. driftSeed(=쇼츠 id)가 없으면
+  // 보정 없음(구 props 폴백).
+  const look = driftSeed ? pickFilmLook(driftSeed) : undefined;
+  return (
   <AbsoluteFill style={{ background: '#000', fontFamily: FONT_FAMILY }}>
     <Series>
       {scenes.map((s, i) => (
         // name 은 Studio 타임라인 라벨 전용 — 렌더 결과에는 영향이 없다. 어느 씬이 어느 연출인지
         // 스크럽하며 바로 짚으려고 붙인다(`pnpm studio`).
         <Series.Sequence key={i} durationInFrames={Math.max(1, s.durationInFrames)} name={`씬${i + 1} · ${s.kind ?? '무연출'}`}>
-          <Scene s={s} index={i} caption={caption} driftSeed={driftSeed} />
+          <Scene s={s} index={i} caption={caption} driftSeed={driftSeed} look={look} />
         </Series.Sequence>
       ))}
     </Series>
     {title?.imageSrc ? <TitleOverlay imageSrc={title.imageSrc} topPct={title.topPct} widthPct={title.widthPct} /> : null}
     <ProgressBar />
   </AbsoluteFill>
-);
+  );
+};
