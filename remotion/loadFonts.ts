@@ -20,6 +20,8 @@ import boldUrl from './fonts/Pretendard-Bold.woff2';
 import extraBoldUrl from './fonts/Pretendard-ExtraBold.woff2';
 
 /** 컴포넌트가 참조할 폰트 스택 — 로딩 실패 시에도 읽히도록 시스템 한글 폰트를 뒤에 남긴다. */
+/** 측정용 단일 패밀리명 — layout-utils 는 스택이 아니라 이름 하나를 받는다. */
+export const FONT_NAME = 'Pretendard';
 export const FONT_FAMILY = 'Pretendard, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif';
 
 // 모듈 최상단 실행 — Remotion 은 동시 렌더 탭마다 이 모듈을 한 번씩 평가하고, 각 탭이 제 핸들을

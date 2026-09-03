@@ -80,7 +80,8 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const fromIdx = argv.indexOf('--from');
   const from = fromIdx >= 0 ? argv[fromIdx + 1] : undefined;
-  const rest = argv.filter((a, i) => i !== fromIdx && i !== fromIdx + 1);
+  // fromIdx 가 -1(=--from 없음)일 때 i !== fromIdx+1 이 인덱스 0 을 걸러내던 버그 수선.
+  const rest = fromIdx >= 0 ? argv.filter((_, i) => i !== fromIdx && i !== fromIdx + 1) : argv;
   const out = path.resolve(rest[0] ?? 'out/preview.mp4');
   fs.mkdirSync(path.dirname(out), { recursive: true });
 
