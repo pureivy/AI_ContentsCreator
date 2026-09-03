@@ -20,6 +20,10 @@ import { CompareCard } from './CompareCard';
 import { FONT_FAMILY } from './loadFonts';
 import { pickFilmLook, filmLookEffects, type FilmLook } from './filmLook';
 import { pickCaptionMotion, type CaptionMotionName } from './captionMotion';
+import { pickTechniques, techniqueScene, type EditTechnique } from './editTechniques';
+import { TechniqueLayer } from './TechniqueLayer';
+import { saturation } from '@remotion/effects/saturation';
+import { contrast } from '@remotion/effects/contrast';
 
 export const autoShortsSchema = z.object({
   scenes: z.array(z.object({
@@ -66,11 +70,23 @@ export type AutoShortsProps = z.infer<typeof autoShortsSchema>;
 
 const CLIP_SECONDS = 6; // clipFrames 미지정 시 감속 배율 산정 폴백 — 프레임 수는 fps 에서 유도
 
-const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; caption?: AutoShortsProps['caption']; driftSeed?: string; look?: FilmLook; capMotion?: CaptionMotionName }> = ({ s, index, caption, driftSeed, look, capMotion }) => {
+const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; caption?: AutoShortsProps['caption']; driftSeed?: string; look?: FilmLook; capMotion?: CaptionMotionName;
+  /** 이 씬에 걸린 선택 기법(없으면 undefined). */
+  tech?: EditTechnique; techSeed?: string }> = ({ s, index, caption, driftSeed, look, capMotion, tech, techSeed }) => {
   const f = useCurrentFrame();
   const { fps } = useVideoConfig();
   // 필름 룩 — 배경(이미지·클립)에만 건다. 자막·카드는 별도 레이어라 영향이 없다(글자는 보정 대상이 아니다).
-  const effects = look ? filmLookEffects(look) : undefined;
+  const baseEffects = look ? filmLookEffects(look) : undefined;
+  // 흑백 인서트 — 이 씬만 색을 뺀다. '잠깐 다른 결로 넘어갔다 돌아오는' 편집 장치다.
+  //
+  // 처음엔 duotone 을 썼는데 실렌더에서 원본 사진이 두 색으로 뭉개져 알아볼 수 없었다.
+  // duotone 은 세기 파라미터가 없어(darkColor·lightColor·threshold 뿐) 약하게 걸 방법이 없다 —
+  // 사진 기반 채널에는 맞지 않는 도구였다. 채도만 빼면 사진은 그대로 읽히면서 결만 바뀐다.
+  const effects = tech === '흑백 인서트' && baseEffects
+    ? [...baseEffects, saturation({ amount: 0.12 }), contrast({ amount: 1.06 })]
+    : baseEffects;
+  // 정지 강조 — 이 씬의 배경 모션만 멈춘다(자막·카드는 그대로 움직인다). 씬 길이는 안 건드린다.
+  const frozen = tech === '정지 강조';
   // 씬 엔터 이펙트 — 종전 '6프레임 페이드인(첫 씬 제외)'을 일반화. 씬 길이 불변이라 TTS 싱크 무손상.
   // TransitionSeries(씬 오버랩=전체 길이 단축)는 '오디오가 길이를 지배' 불변식·SRT 누적 시계와 충돌해 채택하지 않는다.
   const enter = s.fx?.enter ?? (index > 0 ? 'fade' : 'none');
@@ -95,13 +111,15 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
           {...(effects ? { effects } : {})}
         />
       ) : (
-        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={s.fx?.move} intensity={s.fx?.intensity} driftSeed={driftSeed ? `${driftSeed}:${index}` : undefined} {...(effects ? { effects } : {})} />
+        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={frozen ? 'none' : s.fx?.move} intensity={s.fx?.intensity} driftSeed={driftSeed ? `${driftSeed}:${index}` : undefined} {...(effects ? { effects } : {})} />
       )}
       {/* 액센트 — 배경 위·자막/오버레이 아래(텍스트는 어두워지거나 가려지지 않게) */}
       {s.fx?.accent === 'spotlight' ? <SpotlightMask /> : null}
       {s.fx?.accent?.startsWith('particles-') ? (
         <ParticleDrift kind={s.fx.accent.slice('particles-'.length) as 'leaves' | 'petals' | 'snow'} sceneIndex={index} />
       ) : null}
+      {/* 선택 기법 층 — 배경 위·자막 아래. 자막을 덮으면 읽기가 죽는다. */}
+      {tech && techSeed ? <TechniqueLayer tech={tech} seed={techSeed} total={s.durationInFrames} /> : null}
       {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} {...(driftSeed ? { seed: `${driftSeed}:${index}` } : {})} /> : null}
       {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}
       {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
@@ -126,6 +144,13 @@ export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, 
   // 빛샘 색 — 실제 필름 라이트리크는 호박~주황 범위다. 청록으로 돌리면 필름이 아니라 글리치로 보인다.
   // 자막 모션 — 편마다 하나. 영상에서 가장 오래 보이는 요소라 여기가 갈려야 체감이 크다.
   const capMotion = driftSeed ? pickCaptionMotion(random(`${driftSeed}:capmotion`)) : undefined;
+  // 선택 편집 기법 — 편마다 2가지. 파라미터만 갈리던 종전엔 8편이 사실상 2조합뿐이었다(실측).
+  const techs = driftSeed ? pickTechniques(driftSeed) : [];
+  const techAt = new Map<number, EditTechnique>();
+  for (const t of techs) {
+    const at = techniqueScene(driftSeed ?? '', t, scenes.length);
+    if (at >= 0 && !techAt.has(at)) techAt.set(at, t); // 한 씬에 둘씩 겹치지 않게
+  }
   const flashHue = Math.round((look && look.temperature < 0 ? 30 : 8) + (driftSeed ? random(`${driftSeed}:flashHue`) * 22 : 0));
   return (
   <AbsoluteFill style={{ background: '#000', fontFamily: FONT_FAMILY }}>
@@ -140,7 +165,7 @@ export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, 
         // name 은 Studio 타임라인 라벨 전용 — 렌더 결과에는 영향이 없다.
         const seq = (
           <TransitionSeries.Sequence key={`s${i}`} durationInFrames={Math.max(1, s.durationInFrames)} name={`씬${i + 1} · ${s.kind ?? '무연출'}`}>
-            <Scene s={s} index={i} caption={caption} driftSeed={driftSeed} look={look} capMotion={capMotion} />
+            <Scene s={s} index={i} caption={caption} driftSeed={driftSeed} look={look} capMotion={capMotion} {...(techAt.get(i) ? { tech: techAt.get(i), techSeed: `${driftSeed}:${i}` } : {})} />
           </TransitionSeries.Sequence>
         );
         // 컷 위 빛샘 — 씬과 씬 사이에만(첫 씬 앞·마지막 씬 뒤에는 컷이 없다).
