@@ -1,7 +1,7 @@
 import React from 'react';
 import { AbsoluteFill, useCurrentFrame, useVideoConfig } from 'remotion';
 import { fitTextOnNLines } from '@remotion/layout-utils';
-import { captionWordPop } from './anim';
+import { captionWordStyle, type CaptionMotionName } from './captionMotion';
 import { FONT_NAME } from './loadFonts';
 
 /** 자막 좌우 여백(box padding 64 × 2) + 단어 사이 gap 여유. 측정 폭을 이만큼 좁게 잡는다. */
@@ -52,7 +52,9 @@ export const KineticCaption: React.FC<{
   fontPx?: number;
   /** 글자 크기(px) — 훅 씬. 기본 84(종전 78). */
   hookFontPx?: number;
-}> = ({ text, variant, bottomPct = 20, keyword, outline, fontPx = 70, hookFontPx = 84 }) => {
+  /** 등장 모션 — 편마다 다르다. 미지정=종전 동작('튀어오름'). */
+  motion?: CaptionMotionName;
+}> = ({ text, variant, bottomPct = 20, keyword, outline, fontPx = 70, hookFontPx = 84, motion = '튀어오름' }) => {
   const f = useCurrentFrame();
   const { fps, width } = useVideoConfig();
   const words = text.split(/\s+/).filter(Boolean);
@@ -69,18 +71,16 @@ export const KineticCaption: React.FC<{
     <AbsoluteFill style={{ justifyContent: 'flex-end', alignItems: 'center', paddingBottom: `${bottomPct}%` }}>
       <div style={box}>
         {words.map((w, i) => {
-          // 단어별 스프링 등장 — 종전 ease-out 은 '스르륵 멈춤'이라 쇼츠에서 밋밋했다.
-          // 살짝 넘겼다 자리잡아 한 단어씩 '툭' 얹히는 맛이 난다. 오버슛이 1 을 넘기므로
-          // opacity 는 클램프하고, 넘치는 몫은 translateY 가 위로 살짝 튀는 데 쓴다.
-          const p = captionWordPop(f, fps, i);
-          const o = Math.min(1, p);
+          // 단어별 등장 — 모션 종류는 편마다 갈린다(captionMotion). 자막은 영상 시간의 100% 를
+          // 차지하므로, 여기가 늘 같으면 앞에서 색·카메라를 갈라 놔도 지문이 남는다.
+          const wordStyle = captionWordStyle(motion, f, fps, i);
           return (
             <span key={i} style={{
               fontSize: size, fontWeight: 800,
               color: isHook || isKw(w) ? '#ffd54a' : '#fff',
               lineHeight: 1.25, textShadow: '0 3px 18px rgba(0,0,0,.75)',
               ...(outline ? { WebkitTextStroke: '8px rgba(0,0,0,0.9)', paintOrder: 'stroke fill' } : {}),
-              opacity: o, transform: `translateY(${(1 - p) * 16}px)`,
+              ...wordStyle,
             }}>{w}</span>
           );
         })}

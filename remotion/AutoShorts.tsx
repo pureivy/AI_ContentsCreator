@@ -19,6 +19,7 @@ import { TakeawayCard } from './TakeawayCard';
 import { CompareCard } from './CompareCard';
 import { FONT_FAMILY } from './loadFonts';
 import { pickFilmLook, filmLookEffects, type FilmLook } from './filmLook';
+import { pickCaptionMotion, type CaptionMotionName } from './captionMotion';
 
 export const autoShortsSchema = z.object({
   scenes: z.array(z.object({
@@ -65,7 +66,7 @@ export type AutoShortsProps = z.infer<typeof autoShortsSchema>;
 
 const CLIP_SECONDS = 6; // clipFrames 미지정 시 감속 배율 산정 폴백 — 프레임 수는 fps 에서 유도
 
-const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; caption?: AutoShortsProps['caption']; driftSeed?: string; look?: FilmLook }> = ({ s, index, caption, driftSeed, look }) => {
+const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; caption?: AutoShortsProps['caption']; driftSeed?: string; look?: FilmLook; capMotion?: CaptionMotionName }> = ({ s, index, caption, driftSeed, look, capMotion }) => {
   const f = useCurrentFrame();
   const { fps } = useVideoConfig();
   // 필름 룩 — 배경(이미지·클립)에만 건다. 자막·카드는 별도 레이어라 영향이 없다(글자는 보정 대상이 아니다).
@@ -107,7 +108,7 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
       {s.kind === 'chart' && s.chart ? <BarChartGrow chart={s.chart} total={s.durationInFrames} /> : null}
       {s.kind === 'cta' && s.takeaways?.length ? <TakeawayCard takeaways={s.takeaways} total={s.durationInFrames} /> : null}
       {s.kind === 'compare' && s.compare ? <CompareCard compare={s.compare} /> : null}
-      <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={caption?.bottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} hookFontPx={caption?.hookFontPx} />
+      <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={caption?.bottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} hookFontPx={caption?.hookFontPx} {...(capMotion ? { motion: capMotion } : {})} />
       {s.audioSrc ? <Audio src={staticFile(s.audioSrc)} /> : null}
     </AbsoluteFill>
   );
@@ -123,6 +124,8 @@ export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, 
   const flashFrames = driftSeed ? 9 + Math.floor(random(`${driftSeed}:flashLen`) * 8) : 0; // 9~16프레임(0.3~0.53초)
   const flashStrength = driftSeed ? 0.18 + random(`${driftSeed}:flashAmp`) * 0.16 : 0;      // 0.18~0.34
   // 빛샘 색 — 실제 필름 라이트리크는 호박~주황 범위다. 청록으로 돌리면 필름이 아니라 글리치로 보인다.
+  // 자막 모션 — 편마다 하나. 영상에서 가장 오래 보이는 요소라 여기가 갈려야 체감이 크다.
+  const capMotion = driftSeed ? pickCaptionMotion(random(`${driftSeed}:capmotion`)) : undefined;
   const flashHue = Math.round((look && look.temperature < 0 ? 30 : 8) + (driftSeed ? random(`${driftSeed}:flashHue`) * 22 : 0));
   return (
   <AbsoluteFill style={{ background: '#000', fontFamily: FONT_FAMILY }}>
@@ -137,7 +140,7 @@ export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, 
         // name 은 Studio 타임라인 라벨 전용 — 렌더 결과에는 영향이 없다.
         const seq = (
           <TransitionSeries.Sequence key={`s${i}`} durationInFrames={Math.max(1, s.durationInFrames)} name={`씬${i + 1} · ${s.kind ?? '무연출'}`}>
-            <Scene s={s} index={i} caption={caption} driftSeed={driftSeed} look={look} />
+            <Scene s={s} index={i} caption={caption} driftSeed={driftSeed} look={look} capMotion={capMotion} />
           </TransitionSeries.Sequence>
         );
         // 컷 위 빛샘 — 씬과 씬 사이에만(첫 씬 앞·마지막 씬 뒤에는 컷이 없다).
