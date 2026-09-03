@@ -1,7 +1,9 @@
 import React from 'react';
 import { z } from 'zod';
-import { AbsoluteFill, Series, Audio, staticFile, useCurrentFrame, useVideoConfig, random } from 'remotion';
+import { AbsoluteFill, Audio, staticFile, useCurrentFrame, useVideoConfig, random } from 'remotion';
+import { TransitionSeries } from '@remotion/transitions';
 import { Video } from '@remotion/media';
+import { CutFlash } from './CutFlash';
 import { sceneEnterFade } from './anim';
 import { KenBurnsImage } from './KenBurnsImage';
 import { KineticCaption } from './KineticCaption';
@@ -113,17 +115,38 @@ export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, 
   // 룩은 편 단위로 하나 — 실제 촬영본은 한 편 안에서 색이 튀지 않는다. driftSeed(=쇼츠 id)가 없으면
   // 보정 없음(구 props 폴백).
   const look = driftSeed ? pickFilmLook(driftSeed) : undefined;
+  // 컷 빛샘 — 0.4초. 짧게 스쳐야 '편집한 흔적'이지, 길면 화면을 가리는 방해물이 된다.
+  // 편마다 켜고 끈다(3편 중 2편꼴) — 매 편 같은 장치가 들어가면 그것 자체가 또 판박이가 된다.
+  const flashFrames = driftSeed && random(`${driftSeed}:flash`) < 0.66 ? 12 : 0;
+  // 빛샘 색 — 실제 필름 라이트리크는 호박~주황 범위다. 청록으로 돌리면 필름이 아니라 글리치로 보인다.
+  const flashHue = look && look.temperature < 0 ? 40 : 15;
   return (
   <AbsoluteFill style={{ background: '#000', fontFamily: FONT_FAMILY }}>
-    <Series>
-      {scenes.map((s, i) => (
-        // name 은 Studio 타임라인 라벨 전용 — 렌더 결과에는 영향이 없다. 어느 씬이 어느 연출인지
-        // 스크럽하며 바로 짚으려고 붙인다(`pnpm studio`).
-        <Series.Sequence key={i} durationInFrames={Math.max(1, s.durationInFrames)} name={`씬${i + 1} · ${s.kind ?? '무연출'}`}>
-          <Scene s={s} index={i} caption={caption} driftSeed={driftSeed} look={look} />
-        </Series.Sequence>
-      ))}
-    </Series>
+    {/*
+      Series → TransitionSeries 로 옮긴 이유는 Overlay 하나 때문이다. Overlay 는 컷 위에 얹히기만
+      하고 앞뒤 씬 길이를 건드리지 않는다 — 종전에 전환을 통째로 닫아 뒀던 이유("씬이 겹쳐 전체
+      길이가 줄어 오디오 싱크가 깨진다")가 Overlay 에는 적용되지 않는다. Transition 은 여전히
+      안 쓴다(그건 실제로 길이를 줄인다).
+    */}
+    <TransitionSeries>
+      {scenes.flatMap((s, i) => {
+        // name 은 Studio 타임라인 라벨 전용 — 렌더 결과에는 영향이 없다.
+        const seq = (
+          <TransitionSeries.Sequence key={`s${i}`} durationInFrames={Math.max(1, s.durationInFrames)} name={`씬${i + 1} · ${s.kind ?? '무연출'}`}>
+            <Scene s={s} index={i} caption={caption} driftSeed={driftSeed} look={look} />
+          </TransitionSeries.Sequence>
+        );
+        // 컷 위 빛샘 — 씬과 씬 사이에만(첫 씬 앞·마지막 씬 뒤에는 컷이 없다).
+        // 커버가 되는 첫 프레임을 건드리지 않으려면 i>0 조건이 필수다.
+        if (i === 0 || !driftSeed || !flashFrames) return [seq];
+        return [
+          <TransitionSeries.Overlay key={`o${i}`} durationInFrames={flashFrames}>
+            <CutFlash cutIndex={i} seed={driftSeed} hueShift={flashHue} />
+          </TransitionSeries.Overlay>,
+          seq,
+        ];
+      })}
+    </TransitionSeries>
     {title?.imageSrc ? <TitleOverlay imageSrc={title.imageSrc} topPct={title.topPct} widthPct={title.widthPct} /> : null}
     <ProgressBar />
   </AbsoluteFill>
