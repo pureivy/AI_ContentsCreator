@@ -53,7 +53,7 @@ import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
 import { shortsStore, shortsQaPublishBlockReason } from '../content/shorts';
-import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, youtubeQuotaCommitted, shouldStartSecondRun, SIBLING_PLAN_WAIT_MS, type ShortsPlatform } from '../content/shortsPlatform';
+import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, youtubeQuotaCommitted, type ShortsPlatform } from '../content/shortsPlatform';
 import { pickWriter, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
@@ -1281,20 +1281,35 @@ function sourceFlaggedClaims(runId: string | undefined): string[] {
  * 문체만 갈리고 알맹이가 같았다). 레코드는 지금 만들어 UI 에 보이게 하고, 출발만 미룬다.
  * 서버가 도중에 죽어도 부팅 복구 스윕이 planning 상태를 재개하므로 유실되지 않는다.
  */
-function startAfterSiblingPlan(siblingId: string, selfId: string, start: () => void): void {
+/**
+ * 형제편 출발 대기(2026-09-03 개편) — 원편이 '자산을 다 만든 뒤' 출발한다.
+ *
+ * 종전엔 원편의 '대본만' 나오면 출발했다. 두 편이 각자 대본·이미지를 만들되 각도만 안 겹치게 하는
+ * 설계였기 때문이다. 이제 형제편은 원편 자산을 통째로 물려받으므로, 이미지·클립까지 다 나온 뒤여야
+ * 한다. 판정 기준은 원편의 stage — ready 면 완성, error 면 물려받을 게 없으니 자기가 새로 만든다.
+ */
+/** 원편 완성 대기 상한 — 넘으면 형제편이 자체 생성한다(생성이 멈추는 것보다 낫다). */
+const PRIMARY_WAIT_MS = 25 * 60_000;
+function startAfterPrimary(primaryId: string, selfId: string, start: (inherit: boolean) => void): void {
   const began = Date.now();
   const tick = (): void => {
-    const sib = shortsStore().get(siblingId);
-    const planExists = fs.existsSync(path.join(shortsStore().dirFor(siblingId), 'plan.json'));
-    const d = shouldStartSecondRun({ siblingPlanExists: planExists, siblingStage: sib?.stage, waitedMs: Date.now() - began });
-    if (!d.start) { setTimeout(tick, 5_000); return; }
-    if (d.reason !== 'plan') console.log(`[숏폼] 형제 대본 대기 종료(${d.reason}) — ${selfId} 그대로 출발`);
-    start();
+    const p = shortsStore().get(primaryId);
+    const waited = Date.now() - began;
+    if (p?.stage === 'ready') { start(true); return; }
+    if (p?.stage === 'error' || !p) {
+      console.log(`[숏폼] 원편 실패·부재 — ${selfId} 는 자체 생성으로 진행`);
+      start(false); return;
+    }
+    if (waited > PRIMARY_WAIT_MS) {
+      console.log(`[숏폼] 원편 완성 대기 시간 초과(${Math.round(PRIMARY_WAIT_MS / 60000)}분) — ${selfId} 는 자체 생성으로 진행`);
+      start(false); return;
+    }
+    setTimeout(tick, 10_000);
   };
-  setTimeout(tick, 5_000);
+  setTimeout(tick, 10_000);
 }
 
-function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, platform?: ShortsPlatform, waitForPlanOf?: string): { short: Shorts } | { error: string } {
+function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, platform?: ShortsPlatform, inheritFromPrimary?: string): { short: Shorts } | { error: string } {
   const piece = pieceStore().get(pieceId);
   if (!piece) return { error: 'unknown piece' };
   if (!piece.runId) return { error: '초안이 아직 없습니다.' };
@@ -1307,10 +1322,14 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, p
   const short = shortsStore().create({
     topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, auto, platform, ...assignShortsWriter(),
   });
-  const start = (): void => {
-    launchShortsRun(short.id, piece.title, { sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId!) });
+  const start = (inherit: boolean): void => {
+    launchShortsRun(short.id, piece.title, {
+      sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId!),
+      // 승계는 원편이 ready 일 때만 — 실패했으면 물려받을 자산이 없으니 자체 생성으로 떨어진다.
+      ...(inherit && inheritFromPrimary ? { inheritFrom: inheritFromPrimary } : {}),
+    });
   };
-  if (waitForPlanOf) startAfterSiblingPlan(waitForPlanOf, short.id, start); else start();
+  if (inheritFromPrimary) startAfterPrimary(inheritFromPrimary, short.id, start); else start(false);
   return { short };
 }
 async function shortsFromPieceHandler(c: Context): Promise<Response> {
@@ -1319,11 +1338,13 @@ async function shortsFromPieceHandler(c: Context): Promise<Response> {
   const b = await c.req.json<{ scenes?: number; platform?: ShortsPlatform }>().catch(() => ({}) as { scenes?: number; platform?: ShortsPlatform });
   // platform 미지정이면 채널별로 각각 만든다(자동 파생과 같은 계약). 응답의 short 는 하위호환 유지.
   const targets: ShortsPlatform[] = b.platform ? [b.platform] : [...SHORTS_PLATFORMS];
-  const made: Shorts[] = []; let firstError = ''; let prevId = '';
+  // 자동 파생과 같은 계약 — 첫 채널이 원편, 나머지는 그 자산 승계(수동·자동이 갈라지면 안 된다).
+  const made: Shorts[] = []; let firstError = ''; let primaryId = '';
   for (const platform of targets) {
-    const r = deriveShortsFromPiece(id, b.scenes, false, platform, prevId);
+    const r = deriveShortsFromPiece(id, b.scenes, false, platform, primaryId || undefined);
     if ('error' in r) { firstError ||= r.error; continue; }
-    made.push(r.short); prevId = r.short.id;
+    made.push(r.short);
+    if (!primaryId) primaryId = r.short.id;
   }
   if (!made.length) return c.json({ error: firstError || '파생 실패' }, firstError === 'unknown piece' ? 404 : 409);
   return c.json({ short: made[0], shorts: made });
@@ -2212,20 +2233,30 @@ function autoDeriveSet(id: string, title: string): void {
   // 채널별로 따로 만든다(2026-09-03 사용자 확정) — 같은 글에서 유튜브용·인스타용 대본을 각각 생성.
   // 점유·실패 판정은 채널별로 센다. 한쪽이 실패해도 다른 쪽은 만들어져야 한다.
   if (CONFIG.autoShorts) {
-    let prevId = ''; // 앞 채널 런 — 두 번째는 이 대본이 나온 뒤 출발한다(각도 겹침 방지)
-    for (const platform of SHORTS_PLATFORMS) {
+    // 채널별 편은 만들되 비싼 상단(대본·이미지·클립·캘리)은 한 벌만 만든다(2026-09-03 사용자 확정).
+    // 종전엔 채널마다 독립 런이라 이미지가 두 벌이었다 — 편당 비용은 이미지가 지배한다.
+    // 분리의 원래 근거("중복 콘텐츠 회피")는 유튜브가 인스타를 못 본다는 점에서 성립하지 않았다.
+    // 첫 채널이 원편(자산 생성), 나머지는 그 자산을 승계하고 낭독만 제 작가 목소리로 새로 뜬다.
+    const need = SHORTS_PLATFORMS.filter((platform) => {
       const mine = shortsStore().list().filter((x) => x.sourcePieceId === id && x.platform === platform);
       // error 레코드는 점유로 안 본다(2026-08-20 하드 캡 리뷰) — 다만 같은 글·같은 채널 2회 실패면 중단.
-      if (mine.some((x) => x.stage !== 'error') || mine.filter((x) => x.stage === 'error').length >= 2) continue;
+      if (mine.some((x) => x.stage !== 'error') || mine.filter((x) => x.stage === 'error').length >= 2) return false;
       // 유튜브는 하루 상한만큼만 만든다 — 발행에서만 막으면 2~3편 만들어 1편만 올리고 버리게 된다.
       if (platform === 'youtube' && youtubeQuotaCommitted(shortsStore().list(), Date.now(), CONFIG.youtubeDailyCap)) {
         console.log(`[숏폼] 자동 파생 건너뜀(유튜브) — 오늘 몫 소진(상한 ${CONFIG.youtubeDailyCap}편) · ${title.slice(0, 25)}`);
-        continue;
+        return false;
       }
-      const ds = deriveShortsFromPiece(id, undefined, false, platform, prevId);
+      return true;
+    });
+    // 유튜브가 상한으로 빠지면 인스타가 원편이 된다 — 그러지 않으면 인스타 생산이 통째로 멈춘다.
+    let primaryId = '';
+    for (const platform of need) {
+      const ds = deriveShortsFromPiece(id, undefined, false, platform, primaryId || undefined);
       if ('error' in ds) { console.log(`[숏폼] 자동 파생 실패(${platformLabel(platform)}) — ${title.slice(0, 25)}: ${ds.error}`); continue; }
-      console.log(`[숏폼] 자동 파생 시작(${platformLabel(platform)}) — ${title.slice(0, 30)} (${ds.short.id})${prevId ? ` · 앞 채널 대본 대기(최대 ${Math.round(SIBLING_PLAN_WAIT_MS / 60000)}분)` : ''}`);
-      prevId = ds.short.id;
+      console.log(primaryId
+        ? `[숏폼] 자동 파생 시작(${platformLabel(platform)}·승계) — ${title.slice(0, 30)} (${ds.short.id}) · 원편 완성 대기`
+        : `[숏폼] 자동 파생 시작(${platformLabel(platform)}·원편) — ${title.slice(0, 30)} (${ds.short.id})`);
+      if (!primaryId) primaryId = ds.short.id;
     }
   }
 }

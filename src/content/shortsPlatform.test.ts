@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  SHORTS_PLATFORMS, platformLabel, platformPlanGuide, platformSceneCount,
+  SHORTS_PLATFORMS, platformLabel, platformPlanGuide,
   canPublishTo, kstDate, youtubeUploadsToday, youtubeDailyCapBlock, youtubeQuotaCommitted,
-  shouldStartSecondRun, SIBLING_PLAN_WAIT_MS,
 } from './shortsPlatform';
 
 describe('platformPlanGuide — 채널별로 다른 대본이 나오게 하는 지침(순수)', () => {
@@ -28,16 +27,6 @@ describe('platformPlanGuide — 채널별로 다른 대본이 나오게 하는 �
   });
 });
 
-describe('platformSceneCount — 채널별 기본 씬 수(순수)', () => {
-  it('인스타는 한 씬 적게, 최소 4는 지킨다', () => {
-    expect(platformSceneCount('instagram', 6)).toBe(5);
-    expect(platformSceneCount('instagram', 4)).toBe(4);
-  });
-  it('유튜브·레거시는 그대로', () => {
-    expect(platformSceneCount('youtube', 6)).toBe(6);
-    expect(platformSceneCount(undefined, 5)).toBe(5);
-  });
-});
 
 describe('canPublishTo — 채널 발행 게이트(순수)', () => {
   it('자기 채널에만 올릴 수 있다', () => {
@@ -121,27 +110,3 @@ describe('youtubeQuotaCommitted — 생성 쪽 상한(순수)', () => {
   });
 });
 
-describe('shouldStartSecondRun — 두 번째 채널 런 출발 시점(순수)', () => {
-  it('형제 대본이 나오면 바로 출발한다 — 그게 기다린 이유다', () => {
-    expect(shouldStartSecondRun({ siblingPlanExists: true, siblingStage: 'designing', waitedMs: 3_000 }))
-      .toEqual({ start: true, reason: 'plan' });
-  });
-  it('대본 전이면 기다린다', () => {
-    expect(shouldStartSecondRun({ siblingPlanExists: false, siblingStage: 'planning', waitedMs: 3_000 }))
-      .toEqual({ start: false, reason: 'wait' });
-  });
-  it('형제가 실패하면 기다리지 않는다 — 영영 안 오는 대본을 기다리면 두 번째가 유실된다', () => {
-    expect(shouldStartSecondRun({ siblingPlanExists: false, siblingStage: 'error', waitedMs: 3_000 }))
-      .toEqual({ start: true, reason: 'sibling-error' });
-  });
-  it('상한을 넘으면 그냥 출발한다(fail-open)', () => {
-    expect(shouldStartSecondRun({ siblingPlanExists: false, siblingStage: 'planning', waitedMs: SIBLING_PLAN_WAIT_MS }))
-      .toEqual({ start: true, reason: 'timeout' });
-  });
-  it('상한은 호출측이 덮어쓸 수 있다', () => {
-    expect(shouldStartSecondRun({ siblingPlanExists: false, waitedMs: 1_000, maxWaitMs: 500 }).reason).toBe('timeout');
-  });
-  it('대기 상한은 6분 — 기획 단계만 넘기면 된다', () => {
-    expect(SIBLING_PLAN_WAIT_MS).toBe(360_000);
-  });
-});

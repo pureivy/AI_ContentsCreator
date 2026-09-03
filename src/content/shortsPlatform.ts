@@ -48,11 +48,10 @@ export function platformPlanGuide(platform: ShortsPlatform | undefined): string 
   return '';
 }
 
-/** 채널별 권장 씬 수(순수) — 인스타는 짧게 끊고, 유튜브는 완결에 필요한 만큼 둔다. */
-export function platformSceneCount(platform: ShortsPlatform | undefined, base: number): number {
-  if (platform === 'instagram') return Math.max(4, base - 1);
-  return base;
-}
+// platformSceneCount 폐기(2026-09-03) — 인스타를 한 씬 짧게 끊던 장치. 근거는 "채널별로 다른
+// 영상이어야 중복으로 안 찍힌다"였는데 유튜브는 인스타를 볼 수 없어 그 전제가 성립하지 않았다.
+// 게다가 대본을 공유하는 구조에서는 씬을 하나 빼는 안전한 방법이 없다 — 뒤에서 자르면 CTA 결론
+// 카드가 날아가고, 본문에서 빼면 "질문 씬의 답은 다음 씬 첫 문장"이라는 자체 규칙이 깨진다.
 
 /**
  * 이 숏폼을 해당 채널에 올릴 수 있는가(순수).
@@ -118,19 +117,6 @@ export function youtubeQuotaCommitted(
   return used >= cap;
 }
 
-/** 형제 대본을 기다리는 최대 시간(ms) — 기획 단계만 넘기면 되므로 넉넉히 6분. */
-export const SIBLING_PLAN_WAIT_MS = 6 * 60_000;
-
-/**
- * 두 번째 채널 런을 지금 출발시킬 것인가(순수).
- * 목적은 '형제 대본을 보고 다른 각도를 고르게' 하는 것이므로 plan.json 이 생기면 바로 간다.
- * 형제가 실패(error)했거나 기다림이 상한을 넘으면 그냥 간다 — 기다리다 영영 안 만드는 쪽이 더 나쁘다.
- */
-export function shouldStartSecondRun(
-  a: { siblingPlanExists: boolean; siblingStage?: string; waitedMs: number; maxWaitMs?: number },
-): { start: boolean; reason: 'plan' | 'sibling-error' | 'timeout' | 'wait' } {
-  if (a.siblingPlanExists) return { start: true, reason: 'plan' };
-  if (a.siblingStage === 'error') return { start: true, reason: 'sibling-error' };
-  if (a.waitedMs >= (a.maxWaitMs ?? SIBLING_PLAN_WAIT_MS)) return { start: true, reason: 'timeout' };
-  return { start: false, reason: 'wait' };
-}
+// shouldStartSecondRun / SIBLING_PLAN_WAIT_MS 폐기(2026-09-03) — 두 번째 채널이 첫 채널의
+// '대본'을 보고 각도를 피해 출발하게 하던 장치. 이제 대본을 공유하므로 피할 대상이 없다.
+// 형제편 출발은 원편의 '완성'을 기다린다(server/main.ts startAfterPrimary).
