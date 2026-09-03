@@ -17,7 +17,8 @@ import { microJSON, runAgent, extractFirstJson } from './agent';
 import { getCompany } from '../agents/company-loader';
 import { rolesById } from '../agents/company';
 import { stripEmoji } from '../output/render';
-import { shortsStore } from '../content/shorts';
+import { shortsStore, type Shorts} from '../content/shorts';
+import { platformPlanGuide, platformSceneCount, platformLabel } from '../content/shortsPlatform';
 import { notifyShortsReady } from '../autonomy/contentNotify';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
@@ -344,7 +345,7 @@ export async function reviseShorts(
     // 갱신 알림(완성 영상 재발송) — 사용자가 수정 결과를 바로 검수. 실패 무해.
     const done = store.get(id);
     if (done) {
-      void notifyShortsReady({ id, topic: done.topic, brand: done.brand, durationSec: r.durationSec, scenes: r.sceneCount, sourcePieceId: done.sourcePieceId, writer: done.writer, director: done.director, factGate: done.factGate }, revisedVideoPath).catch(() => { /* 무해 */ });
+      void notifyShortsReady({ id, topic: done.topic, brand: done.brand, platform: done.platform, durationSec: r.durationSec, scenes: r.sceneCount, sourcePieceId: done.sourcePieceId, writer: done.writer, director: done.director, factGate: done.factGate }, revisedVideoPath).catch(() => { /* 무해 */ });
     }
     return { ok: true, changedScenes: applied.changedScenes, regenScenes: applied.regenScenes, titleChanged: applied.titleChanged, titleArtChanged: !!applied.titleArtCopy };
   } catch (e) {
@@ -913,6 +914,35 @@ export function buildSceneImagePrompt(a: {
 }
 
 /** 숏폼 생성 잡 — launch 래퍼가 버스·시그널을 주입(오피스 뷰 연동). 프론트는 GET 폴링. */
+/**
+ * 같은 글에서 파생된 '다른 채널' 형제의 확정 대본(2026-09-03) — 훅·제목만 뽑아 회피 지시로 만든다.
+ * 채널 지침만 주면 같은 본문에서 같은 각도가 나온다(두 런이 같은 원문을 본다). 먼저 끝난 쪽이
+ * 기준이 되고 나중 쪽이 비켜 간다. 형제가 아직 대본 전이면 빈 문자열 — 순서 보장은 하지 않는다.
+ */
+function siblingPlanToAvoid(short: Shorts): string {
+  if (!short.platform || !short.sourcePieceId) return '';
+  try {
+    const store = shortsStore();
+    for (const sib of store.list()) {
+      if (sib.id === short.id || sib.sourcePieceId !== short.sourcePieceId) continue;
+      if (!sib.platform || sib.platform === short.platform) continue;
+      const f = path.join(store.dirFor(sib.id), 'plan.json');
+      if (!fs.existsSync(f)) continue;
+      const plan = JSON.parse(fs.readFileSync(f, 'utf-8')) as { title?: string; scenes?: Array<{ narration?: string }> };
+      const hook = plan.scenes?.[0]?.narration?.trim() ?? '';
+      const title = plan.title?.trim() ?? '';
+      if (!hook && !title) continue;
+      return [
+        `[다른 채널 대본 — 겹치지 마라] 같은 글로 ${platformLabel(sib.platform)}용 숏폼이 이미 이렇게 나갔다.`,
+        title ? `· 제목: ${title}` : '',
+        hook ? `· 첫 문장: ${hook}` : '',
+        '같은 각도·같은 훅·같은 결론 문장을 쓰지 마라. 원문의 다른 축을 골라 다른 이야기로 만들어라.',
+      ].filter(Boolean).join('\n');
+    }
+  } catch { /* 형제 대본 읽기 실패는 무해 — 지침 없이 진행 */ }
+  return '';
+}
+
 export async function runShortsJob(
   id: string,
   opts: {
@@ -935,7 +965,9 @@ export async function runShortsJob(
     // 상한 역산(씬당 최소 ~8초 = 낭독+연출)은 그대로 씌운다: 40초 상한에서는 실질 4~5씬이고 6씬은
     // 상한 48초부터 열린다. 시드 off 는 종전 기본값 5씬(= min(6, 8, floor(40/8)))과 같은 값이다.
     const seed = currentStructureSeed();
-    const n = Math.min(Math.max(4, opts.sceneCount ?? seed.shortsScenes), 8, Math.max(4, Math.floor(CONFIG.shortsMaxDurationSec / 8)));
+    // 채널별 기본 씬 수(2026-09-03) — 인스타는 한 씬 적게 끊어 더 빨리 끝낸다(스크롤 소비).
+    const seedScenes = platformSceneCount(short.platform, seed.shortsScenes);
+    const n = Math.min(Math.max(4, opts.sceneCount ?? seedScenes), 8, Math.max(4, Math.floor(CONFIG.shortsMaxDurationSec / 8)));
 
     // 1) 기획 — 대본(훅·씬·내레이션·자막)·제목 3후보·설명·해시태그
     store.update(id, { stage: 'planning' });
@@ -956,8 +988,13 @@ export async function runShortsJob(
     const titleTypes = CONFIG.voiceRotation
       ? pickTitleTypes(recentShortsTitles(short.brand, short.id), { keywordFirst: !!short.keyword })
       : ['정보형', '후킹형', '질문형'];
-    say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 제목 유형 ${titleTypes.join('·')}`);
-    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? []);
+    // 채널 지침(2026-09-03) — 같은 원문에서 유튜브용·인스타용이 서로 다른 대본이 되게 하는 축.
+    const platformGuide = platformPlanGuide(short.platform);
+    // 다른 채널용 형제가 이미 대본을 냈으면 그 훅·제목을 보여주고 겹치지 말라고 못박는다.
+    // 지침만으로는 같은 원문에서 같은 각도가 나온다(두 런이 같은 본문을 본다).
+    const siblingGuide = siblingPlanToAvoid(short);
+    say(`기획 가드 — 채널 ${platformLabel(short.platform)} · 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 형제 대본 ${siblingGuide ? '주입' : '없음'} · 제목 유형 ${titleTypes.join('·')}`);
+    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, siblingGuide, priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? []);
     if (!planned) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     // Plan 타입 재선언 — 길이 상한 루프의 재대입이 클로저(씬 map 등) 내로잉을 풀지 않게 non-null 로 고정.
     let plan: Plan = planned;
@@ -1157,7 +1194,7 @@ export async function runShortsJob(
       if (done) {
         // 발송 정착 후 notifiedTs 기록 — 도중에 프로세스가 죽으면 미기록으로 남아 부팅 복구 스윕이 재발송.
         void notifyShortsReady({
-          id, topic: done.topic, brand: done.brand, durationSec: r.durationSec, scenes: r.sceneCount,
+          id, topic: done.topic, brand: done.brand, platform: done.platform, durationSec: r.durationSec, scenes: r.sceneCount,
           sourcePieceId: done.sourcePieceId, writer: done.writer, director: done.director, factGate: done.factGate,
         }, finalVideoPath).finally(() => { try { store.update(id, { notifiedTs: new Date().toISOString() }); } catch { /* 무해 */ } });
       }

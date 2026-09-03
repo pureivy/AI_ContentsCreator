@@ -9,6 +9,7 @@ import { CONFIG } from '../config';
 import { activeBrandSlug } from './brand';
 import { genId } from '../util/ids';
 import type { FactGateInfo } from './factGate';
+import type { ShortsPlatform } from './shortsPlatform';
 
 export type ShortsStage = 'planning' | 'designing' | 'rendering' | 'ready' | 'error';
 
@@ -18,6 +19,11 @@ export interface Shorts {
   notifiedTs?: string;
   /** 브랜드(고객사) 슬러그 — 생성 시점의 활성 브랜드(범용이면 undefined). */
   brand?: string;
+  /**
+   * 발행 대상 채널(2026-09-03) — 유튜브와 인스타를 대본부터 따로 만든다. 미지정은 레거시 레코드
+   * (그 이전 108편)로 양 채널 겸용이며 발행 게이트도 열어 둔다.
+   */
+  platform?: ShortsPlatform;
   /** 주제(독립 생성) 또는 원본 블로그 제목(파생). */
   topic: string;
   keyword?: string;
@@ -76,6 +82,7 @@ export interface Shorts {
 
 export interface CreateShortsInput {
   topic: string;
+  platform?: ShortsPlatform;
   keyword?: string;
   sourcePieceId?: string;
   writer?: string;
@@ -112,7 +119,7 @@ export class ShortsStore {
       id: genId('short'),
       brand: activeBrandSlug() || undefined, topic: input.topic.trim(),
       keyword: input.keyword?.trim() || undefined,
-      sourcePieceId: input.sourcePieceId, auto: input.auto,
+      sourcePieceId: input.sourcePieceId, auto: input.auto, platform: input.platform,
       writer: input.writer, director: input.director,
       stage: 'planning', createdTs: now, updatedTs: now,
     };
