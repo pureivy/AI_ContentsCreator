@@ -236,6 +236,34 @@ async function rewordSlideCopy(s: PlanSlide, problem: string, signal?: AbortSign
 
 /** 표지(1번 슬라이드)에 핵심 키워드 정확 표기가 있는지(공백 무시 — "가을채소 흙준비"≈"가을채소흙준비").
  *  결정적 게이트·마지노선 공용(순수, export 는 테스트용). 키워드 없으면 항상 통과. */
+/**
+ * 마지막 장이 행동 지시인가(순수) — 아니면 수정 라운드 입력이 되는 지적 문구.
+ *
+ * 종전 규정은 마지막 장에 대해 "body 는 비우거나 한 줄로 짧게"라고 길이만 말했다. 무엇을 담으라는
+ * 말이 없으니 결과가 갈렸다 — 최근 19건 실측에서 4건이 CTA 가 아니라 마무리 감상이거나 정보 장이
+ * 하나 더 붙은 꼴이었다("잎자루 하나가 시작입니다", "블루베리 단풍 사과, 한 줄씩 다릅니다").
+ *
+ * 쇼츠 CTA 씬에는 takeaways("조건 → 답")를 화면에 띄우라는 규정이 이미 있다. 같은 사고를 카드뉴스로
+ * 옮기는 것이고, 다만 카드는 이미지 모델이 글자를 그리므로 구조 필드가 아니라 문구 규정으로 낸다.
+ *
+ * 판별은 한국어 청유·명령 어미('세요' 계열)로 한다. 최근 19건에 돌려 보면 CTA 15 / 아님 4 로
+ * 사람이 읽고 가른 것과 일치했다. 헤드라인만 보지 않고 body 까지 합쳐 보는 게 중요하다 —
+ * 헤드라인이 서술문이어도 body 가 행동을 지시하는 경우가 있다("거름은 미루세요").
+ */
+export function ctaSlideIssues(slides: ReadonlyArray<{ headline: string; body: string }>): string[] {
+  if (slides.length < 2) return []; // 표지뿐인 세트는 마무리 장이 없다
+  const last = slides[slides.length - 1]!;
+  const text = `${last.headline ?? ''} ${last.body ?? ''}`;
+  // 인정하는 두 갈래.
+  //  · 행동 지시 — '세요' 계열 청유·명령
+  //  · 독자에게 던지는 질문 — 댓글·자기 점검을 부르므로 마무리로서 유효하다("어디에 해당하나요")
+  // 전수 검사(149건)에서 질문형을 빼면 오탐이 생겼다: '네 가지 중 어디에 해당하나요' 같은 정상
+  // 마무리가 지적당했다.
+  if (/세요|십시오|합시다/.test(text)) return [];
+  if (/[?？]|나요|까요|가요\s*$/.test(text)) return [];
+  return [`마지막 ${slides.length}번 장이 독자 행동으로 끝나지 않는다("${String(last.headline ?? '').slice(0, 24)}") — 마무리 장은 오늘·지금 할 수 있는 한 가지를 시키는 문장으로 끝내라(조건이 갈리면 "~면 ~하세요" 꼴).`];
+}
+
 export function coverIncludesKeyword(slides: Array<{ headline: string; body: string }>, keyword?: string): boolean {
   const kw = (keyword || '').trim();
   const s0 = slides[0];
@@ -362,6 +390,9 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
       ? `슬라이드 ${n}장(표지 1 + 본문 ${Math.max(1, n - 2)} + 마무리 1)의 카드뉴스를 기획하라.`
       : '슬라이드 수는 스토리라인의 핵심 메시지 개수에 맞게 3~8장 사이에서 스스로 정하라(표지 1 + 본문 여러 장 + 마무리 1). 억지로 채우거나 줄이지 말고 내용 밀도에 맞춰라. 문체 쿼터(질문·명사구·1인칭) 때문에 정보 장이 부족하면 장 수를 늘려서 해결하라 — 정보 장을 빼서 해결하지 마라.',
     '표지와 마무리 장의 body 는 비우거나 한 줄로 짧게. 카드 텍스트에 이모지 금지(캡션에는 허용).',
+    // 마무리 장 CTA(2026-09-04) — 종전엔 길이만 규정하고 내용을 안 말해서 결과가 갈렸다(실측 19건 중
+    // 4건이 마무리 감상·정보 장). 쇼츠 CTA 씬의 takeaways 규정을 카드뉴스로 옮긴 것.
+    '마무리 장은 반드시 독자가 오늘·지금 할 수 있는 한 가지 행동으로 끝내라 — 감상("~가 시작입니다")이나 정보 한 줄 더("~은 ~입니다")로 끝내지 마라. 조건에 따라 답이 갈리면 "~면 ~하세요" 꼴로 조건과 행동을 함께 준다. 앞 장들에서 이미 말한 내용을 요약하는 자리가 아니라, 읽은 사람이 마당에 나가서 할 일을 짚어 주는 자리다.',
     // 골격 다양화(2026-08-27 권고 4) — 세트마다 카드 밀도가 같으면 피드에서 같은 판형으로 읽힌다.
     // 줄 수·해시태그 수는 런별 구조 시드가 정한다(STRUCTURE_VARIETY=off 면 이 두 줄 자체가 빠진다 = base).
     ...cardStructureLines(seed, CONFIG.structureVariety),
@@ -408,6 +439,9 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     // body 의 \n 은 한 줄로 접는다 — 검산 프롬프트가 번호 목록이라 줄바꿈이 항목 경계처럼 보이면 판정 정밀도가 떨어진다.
     const cardTexts = plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / '));
     const probs = await standaloneIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', cardTexts, topic, keyword, io.signal);
+    // 마무리 장 CTA — 결정적 검사라 LLM 호출이 없다. 지적이 있으면 아래 수정 라운드 입력에 합류한다
+    // (통과하면 비용 0). 지시문만으로는 샌다는 걸 쇼츠 compare·제목에서 이미 겪었다.
+    probs.push(...ctaSlideIssues(plan.slides));
     // 원문 정합(스펙 §2-4) — 파생물이 원문에 없는 사실을 새로 지어내거나 원문 결론을 뒤집는지 대조(fail-open).
     // FACT_GATE=off 면 LLM 정합 1차·잔존 판정을 통째로 건너뛴다(킬스위치가 실제로 꺼져야 한다 — 2026-08-26 최종 리뷰 F1):
     // parity 가 빈 배열이면 정합 지적이 수정 라운드 입력(probs)에서도 빠진다 — off 의 정의 그대로.

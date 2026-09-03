@@ -2,8 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   applyCardRevision, applyProofread, buildCardImagePrompt, buildSlideQaPrompt, buildSlideTranscribePrompt,
   coverIncludesKeyword, extractDesignFromDraftPrompt, findSlidesWithChars, parseSlideNosFromFeedback,
-  resolveForcedPreset, stripForDiff, formatRecentEndings, cardVoiceGuide, cardStructureLines,
-} from './cardnews';
+  resolveForcedPreset, stripForDiff, formatRecentEndings, cardVoiceGuide, cardStructureLines, ctaSlideIssues } from './cardnews';
 import { FIXED_STRUCTURE_SEED } from '../content/structureSeed';
 
 type CardPlan = Parameters<typeof applyCardRevision>[0];
@@ -334,5 +333,60 @@ describe('cardStructureLines — 카드 골격 지시(STRUCTURE_VARIETY)', () =>
     const lines = cardStructureLines({ ...FIXED_STRUCTURE_SEED, cardLines: 3, hashtags: 11 }, true).join('\n');
     expect(lines).toContain('3줄');
     expect(lines).toContain('11개');
+  });
+});
+
+describe('ctaSlideIssues — 마무리 장이 행동으로 끝나는가', () => {
+  const s = (headline: string, body = '') => ({ headline, body });
+
+  it('실사고 재현 — 마무리 감상으로 끝나면 지적한다', () => {
+    // 실측(card_34c4b86cc4): "잎자루 하나가 시작입니다 / 이름을 다 몰라도 무리는 나눌 수 있습니다"
+    const out = ctaSlideIssues([s('참나무 종류, 잎자루부터'), s('잎자루 하나가 시작입니다', '이름을 다 몰라도\n무리는 나눌 수 있습니다')]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain('마지막 2번 장');
+  });
+  it('정보 장이 하나 더 붙은 꼴도 지적한다', () => {
+    // 실측(card_22f52010ba)
+    expect(ctaSlideIssues([s('표지'), s('블루베리 단풍 사과, 한 줄씩 다릅니다', '블루베리는 산성 흙, 피트모스 비중 높게')])).toHaveLength(1);
+  });
+
+  it('행동 지시로 끝나면 통과', () => {
+    // 실측(card_06f79a136b)
+    expect(ctaSlideIssues([s('표지'), s('오늘 마당에서 두 팔을 벌려 보세요', '그 폭이 몇 해 뒤 나무 자리입니다')])).toHaveLength(0);
+  });
+  it('헤드라인이 서술문이어도 body 가 행동을 지시하면 통과', () => {
+    // 실측(card_b60ec3e1bf) — 헤드라인만 보면 놓친다
+    expect(ctaSlideIssues([s('표지'), s('거름과 전정, 지금은 순서가 다릅니다', '잎이 아직 짙다면 거름은 미루세요')])).toHaveLength(0);
+  });
+  it('다른 청유·명령 어미도 인정한다', () => {
+    for (const t of ['오늘 확인해 보세요', '내일 아침에 살펴보십시오', '함께 정리합시다']) {
+      expect(ctaSlideIssues([s('표지'), s(t)])).toHaveLength(0);
+    }
+  });
+
+  it('마지막 장만 본다 — 중간 장의 행동 지시는 대상이 아니다', () => {
+    expect(ctaSlideIssues([s('표지'), s('지금 잘라 보세요'), s('그래서 그렇습니다')])).toHaveLength(1);
+  });
+  it('표지뿐이면 마무리 장이 없으므로 통과', () => {
+    expect(ctaSlideIssues([s('표지만')])).toHaveLength(0);
+    expect(ctaSlideIssues([])).toHaveLength(0);
+  });
+  it('지적 문구가 무엇을 하라는지 알려준다 — 그대로 수정 라운드 입력이 된다', () => {
+    const [msg] = ctaSlideIssues([s('표지'), s('끝입니다')]);
+    expect(msg).toContain('오늘');
+    expect(msg).toContain('하세요');
+  });
+});
+
+describe('ctaSlideIssues — 질문형 마무리도 인정', () => {
+  const s = (headline: string, body = '') => ({ headline, body });
+  it('독자에게 던지는 질문은 통과 — 댓글·자기 점검을 부른다', () => {
+    // 실측(card_096bda17fd)
+    expect(ctaSlideIssues([s('표지'), s('네 가지 중 어디에 해당하나요')])).toHaveLength(0);
+    expect(ctaSlideIssues([s('표지'), s('올해는 어느 쪽이었을까요')])).toHaveLength(0);
+    expect(ctaSlideIssues([s('표지'), s('당신 마당은 어떤가요?')])).toHaveLength(0);
+  });
+  it('서술 종결은 여전히 지적한다', () => {
+    expect(ctaSlideIssues([s('표지'), s('낙엽수 심기는 10~11월입니다')])).toHaveLength(1);
   });
 });
