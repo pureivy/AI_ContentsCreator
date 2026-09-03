@@ -41,7 +41,7 @@ import { blogUrlForPiece } from '../content/pieces';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
-import { normalizeSceneKind, fixMonthNames, cutAtWordBoundary } from '../tools/shortsCommon';
+import { normalizeSceneKind, emptyKindScenes, fixMonthNames, cutAtWordBoundary } from '../tools/shortsCommon';
 import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
 import type { EventBus } from '../events/bus';
@@ -698,10 +698,14 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     '  · 두 가지 이상을 나열한다 → "list"(items 2~4개, 각 18자)',
     '  · 두 값을 견준다 → "chart"(series 각 {label 8자, value 숫자≥0}, unit, highlight 강조 인덱스)',
     '  · 원문 문장을 그대로 인용한다 → "quote"(text 40자, source 출처)',
-    '  · 흔한 실수와 올바른 방법을 대비한다 → "compare"(bad·good 각 {label 14자, note 18자}). 예: bad={"label":"웃자란 가지","note":"꽃눈이 안 앉아요"} good={"label":"짧은 곁가지","note":"여기에 열매가 달려요"}. 양쪽 다 있어야 성립한다.',
+    '  · 흔한 실수와 올바른 방법을 대비한다 → "compare"',
     '  본문 씬 중 최소 1개는 kind 를 갖게 하라. 단 원문에 없는 수치를 지어내 kind 를 채우지는 마라 — 그럴 바엔 생략한다(날조 금지가 우선).',
     '수치 규칙: stat.value 와 chart.series 의 value 는 원문(블로그 초안)에 있는 수치 또는 대본 구조상 자명한 숫자(단계 수·항목 수)만. 불확실하면 그 kind 를 쓰지 마라. narration 은 수치를 한글로 낭독하되 JSON 값은 아라비아 숫자. chart 씬의 screenText 에는 핵심 수치 비교를 요약하라(렌더 실패 대비).',
     'description(유튜브 설명 — 인스타 캡션에도 그대로 복제된다)은 요약투로 끝내지 마라 — "정리했습니다/담았어요/알아봅니다/알아보세요/살펴봅니다/소개합니다" 금지. "결론 한 줄 + 조건 한 줄" 꼴로 써라(예: "잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요.").',
+    // compare 채우기(2026-09-03 실측): 첫 런에서 두 작가 모두 kind='compare' 만 보내고 bad·good 을 비웠다.
+    // 내레이션은 실제로 대비를 말했으니 방아쇠는 먹었고, 빠진 건 '필드를 채우라'는 지시였다 —
+    // takeaways 에는 그런 지시문이 따로 있었고 그건 매번 채워졌다. 같은 강도로 적는다.
+    'compare 씬에는 bad·good 를 반드시 채워라 — kind 만 보내면 화면에 아무것도 안 나온다(한쪽이라도 비면 통째로 무시된다). bad=하지 말 것·틀린 쪽, good=할 것·맞는 쪽. label 은 대상(14자 이내), note 는 그 이유나 결과(18자 이내). 예: bad={"label":"웃자란 가지","note":"꽃눈이 안 앉아요"} good={"label":"짧은 곁가지","note":"여기 열매가 달려요"}. 내레이션이 말한 대비를 화면에 옮기는 것이지 새 내용을 지어내는 게 아니다 — 원문에 없는 대비는 만들지 마라.',
     shortsTitleTypeGuide(titleTypes, CONFIG.voiceRotation),
     `JSON 형식: {"title":"대표 제목","titles":[${titlesJson}],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|chart|compare|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0},"takeaways":[{"when":"허리 높이","then":"회양목"}],"compare":{"bad":{"label":"웃자란 가지","note":"꽃눈이 안 앉아요"},"good":{"label":"짧은 곁가지","note":"여기 열매가 달려요"}}}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}`,
   ].filter(Boolean).join('\n');
@@ -1031,7 +1035,11 @@ export async function runShortsJob(
     if (fit.compressed) say(`대본 감량 — ${fit.beforeChars}→${fit.afterChars}자(길이 상한 ${CONFIG.shortsMaxDurationSec}초 예산)`);
     plan = fit.plan;
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
-    say(`대본 완성 — ${plan.title.slice(0, 30)} · 씬 ${plan.scenes.length}개 · 낭독 ~${Math.round(shortsNarrationChars(plan) / SHORTS_TTS_CPS)}초 추정`);
+    const kindsUsed = plan.scenes.map((s) => s.kind).filter(Boolean);
+    const emptyKinds = emptyKindScenes(plan.scenes);
+    say(`대본 완성 — ${plan.title.slice(0, 30)} · 씬 ${plan.scenes.length}개 · 낭독 ~${Math.round(shortsNarrationChars(plan) / SHORTS_TTS_CPS)}초 추정${kindsUsed.length ? ` · 연출 ${kindsUsed.join('·')}` : ' · 연출 없음'}`);
+    // 선언만 하고 페이로드를 안 채운 씬 — 화면에 아무것도 안 그려진다. 지시문이 안 먹은 신호다.
+    if (emptyKinds.length) say(`연출 페이로드 누락 — ${emptyKinds.map((e) => `씬${e.index}(${e.kind})`).join(' ')} · 화면 요소 없이 렌더된다`);
     checkAbort();
 
     // 2) 디자인 — 씬별 세로 비주얼 프롬프트(전 씬 일관 스타일 + 장면 변주)

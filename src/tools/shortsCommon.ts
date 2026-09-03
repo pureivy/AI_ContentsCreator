@@ -55,6 +55,32 @@ export function cutAtWordBoundary(s: string, max: number): string {
   return (sp > 0 ? head.slice(0, sp) : head).trim();
 }
 
+/**
+ * kind 는 선언됐는데 그 페이로드가 비어 렌더가 아무것도 못 그리는 씬(순수, 2026-09-03).
+ *
+ * normalizeSceneKind 는 불량 페이로드를 조용히 {kind} 로 강등한다(fail-open — 렌더 무중단이 우선).
+ * 그 침묵이 실측에서 문제가 됐다: compare 도입 첫 런에서 두 작가 모두 kind 만 보내고 bad·good 을
+ * 비웠는데 로그에 아무 흔적이 없어, 영상을 열어 보고서야 알았다. 지시문이 안 먹은 것을 다음 런
+ * 전에 알아채려면 세어서 말해 줘야 한다.
+ *
+ * cta 는 제외한다 — takeaways 생략이 설계상 허용된다(조건 없는 단일 행동 결론).
+ */
+export function emptyKindScenes(scenes: ReadonlyArray<SceneKindFields>): Array<{ index: number; kind: SceneKind }> {
+  const out: Array<{ index: number; kind: SceneKind }> = [];
+  scenes.forEach((s, i) => {
+    const k = s.kind;
+    if (!k) return;
+    const missing =
+      (k === 'stat' && !s.stat) ||
+      (k === 'list' && !s.items?.length) ||
+      (k === 'quote' && !s.quote) ||
+      (k === 'chart' && !s.chart) ||
+      (k === 'compare' && !s.compare);
+    if (missing) out.push({ index: i + 1, kind: k });
+  });
+  return out;
+}
+
 export function normalizeSceneKind(raw: unknown): SceneKindFields {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const kind = String(r.kind ?? '').trim().toLowerCase();

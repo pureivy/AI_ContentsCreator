@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary } from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary , emptyKindScenes} from './shortsCommon';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
   it('오디오 + 꼬리여백(0.6), 하한 2.8', () => {
@@ -262,5 +262,33 @@ describe('normalizeSceneKind — compare(대비 씬, 2026-09-03)', () => {
   });
   it('이형 페이로드는 kind 만 — 렌더 무중단(fail-open)', () => {
     expect(normalizeSceneKind({ kind: 'compare', bad: 'x', good: 3 })).toEqual({ kind: 'compare' });
+  });
+});
+
+describe('emptyKindScenes — 선언만 하고 비어 있는 연출 탐지(순수, 2026-09-03)', () => {
+  it('페이로드가 없는 kind 를 집어낸다', () => {
+    expect(emptyKindScenes([
+      { kind: 'hook' },
+      { kind: 'compare' },
+      { kind: 'stat' },
+    ])).toEqual([{ index: 2, kind: 'compare' }, { index: 3, kind: 'stat' }]);
+  });
+  it('채워진 kind 는 잡지 않는다', () => {
+    expect(emptyKindScenes([
+      { kind: 'compare', compare: { bad: { label: 'a' }, good: { label: 'b' } } },
+      { kind: 'stat', stat: { value: 3 } },
+      { kind: 'list', items: ['a', 'b'] },
+      { kind: 'quote', quote: { text: 'x' } },
+      { kind: 'chart', chart: { series: [{ label: 'a', value: 1 }] } },
+    ])).toEqual([]);
+  });
+  it('cta 는 제외 — takeaways 생략이 설계상 허용된다', () => {
+    expect(emptyKindScenes([{ kind: 'cta' }])).toEqual([]);
+  });
+  it('kind 없는 씬은 대상이 아니다', () => {
+    expect(emptyKindScenes([{}, { kind: undefined }])).toEqual([]);
+  });
+  it('빈 items 는 누락으로 본다 — 배열만 있고 항목이 없으면 화면에 안 나온다', () => {
+    expect(emptyKindScenes([{ kind: 'list', items: [] }])).toEqual([{ index: 1, kind: 'list' }]);
   });
 });
