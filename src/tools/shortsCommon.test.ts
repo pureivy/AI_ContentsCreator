@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary } from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary , normalizeSceneOverlay} from './shortsCommon';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
   it('오디오 + 꼬리여백(0.6), 하한 2.8', () => {
@@ -228,5 +228,36 @@ describe('normalizeSceneKind — cta takeaways', () => {
 
   it('hook 은 종전대로 kind 만 — takeaways 를 보내도 무시한다', () => {
     expect(normalizeSceneKind({ kind: 'hook', takeaways: [{ when: 'a', then: 'b' }] })).toEqual({ kind: 'hook' });
+  });
+});
+
+describe('normalizeSceneOverlay — 화면 도해 검증(순수, 2026-09-03)', () => {
+  it('어휘 안의 값은 그대로 통과', () => {
+    expect(normalizeSceneOverlay({ kind: 'arrow', at: 'mc', label: '여기' }))
+      .toEqual({ kind: 'arrow', at: 'mc', label: '여기' });
+  });
+  it('어휘 밖 kind 는 undefined — 도해 없이 렌더(fail-open)', () => {
+    expect(normalizeSceneOverlay({ kind: 'sparkle', at: 'mc' })).toBeUndefined();
+    expect(normalizeSceneOverlay(null)).toBeUndefined();
+    expect(normalizeSceneOverlay('arrow')).toBeUndefined();
+  });
+  it('모르는 위치는 중앙으로 강등', () => {
+    expect(normalizeSceneOverlay({ kind: 'circle', at: 'center' })?.at).toBe('mc');
+    expect(normalizeSceneOverlay({ kind: 'circle' })?.at).toBe('mc');
+  });
+  it('하단 행은 중간 행으로 올린다 — 자막이 화면 하단을 쓰므로 겹치면 둘 다 안 읽힌다', () => {
+    expect(normalizeSceneOverlay({ kind: 'cross', at: 'bl' })?.at).toBe('ml');
+    expect(normalizeSceneOverlay({ kind: 'cross', at: 'bc' })?.at).toBe('mc');
+    expect(normalizeSceneOverlay({ kind: 'cross', at: 'br' })?.at).toBe('mr');
+  });
+  it('라벨은 8자 캡 + 단어 경계 절단', () => {
+    const o = normalizeSceneOverlay({ kind: 'measure', at: 'mc', label: '담장까지 두 팔 벌린 폭' });
+    expect((o?.label ?? '').length).toBeLessThanOrEqual(8);
+  });
+  it('라벨이 비면 필드 자체를 넣지 않는다', () => {
+    expect(normalizeSceneOverlay({ kind: 'check', at: 'tr', label: '   ' })).toEqual({ kind: 'check', at: 'tr' });
+  });
+  it('대소문자·공백을 흡수한다', () => {
+    expect(normalizeSceneOverlay({ kind: ' ARROW ', at: ' TR ' })).toEqual({ kind: 'arrow', at: 'tr' });
   });
 });

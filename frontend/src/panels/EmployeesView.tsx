@@ -219,7 +219,8 @@ export default function EmployeesView() {
                   작가 필명 {shortsWriters.length}인 — 편마다 번갈아 배정, 목소리도 각자 다릅니다
                 </div>
                 {shortsWriters.map((w) => (
-                  <div key={w.id} style={{ fontSize: 12, marginBottom: 3 }} title={w.styleGuide}>
+                  <div key={w.id} style={{ fontSize: 12, marginBottom: 3, display: "flex", alignItems: "center", gap: 6 }} title={w.styleGuide}>
+                    <Avatar id={w.id} glyph="✍️" size={20} head />
                     <b>{w.name}</b>
                     <span className="muted"> · {w.voiceNote}</span>
                     {w.recentCount > 0 && <span className="chip" style={{ marginLeft: 6 }}>최근 {w.recentCount}편</span>}

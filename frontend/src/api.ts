@@ -1141,6 +1141,8 @@ export interface ShortsInfo {
   scenes?: number;
   bgFallbacks?: number;
   writer?: string;
+  /** 작가 필명 id(2026-09-03) — 아바타 얼굴 해석용. 레거시 편은 없다. */
+  writerId?: string;
   director?: string;
   error?: string;
   youtubeUrl?: string;

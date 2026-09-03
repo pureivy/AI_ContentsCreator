@@ -60,6 +60,7 @@ export async function renderShortsVideoRemotion(
       ...(sc?.quote ? { quote: sc.quote } : {}),
       ...(sc?.chart ? { chart: sc.chart } : {}),
       ...(sc?.takeaways ? { takeaways: sc.takeaways } : {}),
+      ...(sc?.overlay ? { overlay: sc.overlay } : {}), // 배경 위 도해(2026-09-03)
       ...(fx ? { fx } : {}),
     };
   }));

@@ -41,7 +41,7 @@ import { blogUrlForPiece } from '../content/pieces';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
-import { normalizeSceneKind, fixMonthNames, cutAtWordBoundary } from '../tools/shortsCommon';
+import { normalizeSceneKind, normalizeSceneOverlay, fixMonthNames, cutAtWordBoundary } from '../tools/shortsCommon';
 import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
 import type { EventBus } from '../events/bus';
@@ -693,7 +693,12 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     '수치 규칙: stat.value 와 chart.series 의 value 는 원문(블로그 초안)에 있는 수치 또는 대본 구조상 자명한 숫자(단계 수·항목 수)만. 불확실하면 그 kind 를 쓰지 마라. narration 은 수치를 한글로 낭독하되 JSON 값은 아라비아 숫자. chart 씬의 screenText 에는 핵심 수치 비교를 요약하라(렌더 실패 대비).',
     'description(유튜브 설명 — 인스타 캡션에도 그대로 복제된다)은 요약투로 끝내지 마라 — "정리했습니다/담았어요/알아봅니다/알아보세요/살펴봅니다/소개합니다" 금지. "결론 한 줄 + 조건 한 줄" 꼴로 써라(예: "잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요.").',
     shortsTitleTypeGuide(titleTypes, CONFIG.voiceRotation),
-    `JSON 형식: {"title":"대표 제목","titles":[${titlesJson}],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|chart|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0},"takeaways":[{"when":"허리 높이","then":"회양목"}]}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}`,
+    '[화면 도해] 화면에서 "어디"를 가리켜야 뜻이 통하는 씬에는 overlay 를 넣어라(안 넣어도 된다 — 가리킬 지점이 없으면 생략).',
+    '  · kind: arrow(자를 자리·볼 지점을 가리킴) · circle(이 부분) · cross(여기는 아님) · check(이게 맞음) · measure(치수·간격) · step(순서 번호)',
+    '  · at: 9분할 위치 tl·tc·tr·ml·mc·mr 중 하나(하단은 자막이 쓰므로 쓰지 마라)',
+    '  · label: 8자 이내 짧은 말(치수는 "60cm", 이유는 "여기서 분지"). step 은 숫자만.',
+    '  · 한 씬에 하나만. 배경 이미지가 이미 설명하는 것을 중복해 가리키지 마라.',
+    `JSON 형식: {"title":"대표 제목","titles":[${titlesJson}],"scenes":[{"narration":"...","screenText":"...","overlay":{"kind":"arrow","at":"mc","label":"여기"},"kind":"hook|stat|list|quote|chart|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0},"takeaways":[{"when":"허리 높이","then":"회양목"}]}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}`,
   ].filter(Boolean).join('\n');
   type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown; takeaways?: unknown }>; description?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
   const sys = '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.';
@@ -710,6 +715,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       narration: cleanNarration(s?.narration),
       screenText: numMonth(stripEmoji(String(s?.screenText ?? '')).trim()).slice(0, 20),
       ...normalizeSceneKind(s), // 불량 페이로드는 {} 강등 — 기본 씬으로 렌더
+      ...(normalizeSceneOverlay((s as { overlay?: unknown })?.overlay) ? { overlay: normalizeSceneOverlay((s as { overlay?: unknown }).overlay) } : {}),
     })).filter((s) => s.narration);
     if (scenes.length < 3) return null;
     const titles = (Array.isArray(j.titles) ? j.titles : []).map((t) => numMonth(stripEmoji(String(t ?? '')).trim())).filter(Boolean).slice(0, 3);

@@ -18,6 +18,11 @@ const ROLE_SPRITE: Record<string, string> = {
   cardnews_planner: "cardplanner",   // 송하영 (여, 카드뉴스 기획자 — gpt-image 생성 2포즈 세트)
   cardnews_designer: "carddesigner", // 민준호 (남, 카드 디자이너 — gpt-image 생성 2포즈 세트)
   shorts_writer: "shortswriter",     // 유하린 (여, 숏폼 작가 — gpt-image 생성 2포즈 세트)
+  // 작가 필명 3인(2026-09-03) — 같은 shorts_writer 역할의 필명이라 역할 id 로는 구분이 안 된다.
+  // 호출부가 writerId 를 넘기면 각자의 얼굴이 나온다(안 넘기면 종전대로 유하린).
+  w_haerin: "shortswriter",          // 유하린 — 기존 캐릭터 재사용
+  w_taeyun: "shortswriter2",         // 임태윤 (남 20대 후반, 안경·니트 — gen_shorts_writer_sprites.mjs)
+  w_jaehyun: "shortswriter3",        // 곽재현 (남 50대, 작업 조끼·전정가위 — 같은 스크립트)
   shorts_director: "shortsdirector", // 서준영 (남, 숏폼 영상 디렉터 — gpt-image 생성 2포즈 세트)
   jarvis: "jarvis",             // 자비스 — 2포즈 스프라이트(jarvis_stand/jarvis_sit_front) 사용(TWO_POSE_CHARS).
                                 //   두 파일이 모두 없을 때만 '얼굴+SVG 정장' 폴백(OfficeView TwoPoseFigure).
@@ -25,7 +30,7 @@ const ROLE_SPRITE: Record<string, string> = {
 };
 
 /** 2포즈(stand/sit_front) 축약 캐릭터 — 9포즈 풀세트 없이 생성된 아바타. OfficeView 가 포즈를 둘로 접는다. */
-export const TWO_POSE_CHARS = new Set(["jarvis", "cardplanner", "carddesigner", "shortswriter", "shortsdirector"]);
+export const TWO_POSE_CHARS = new Set(["jarvis", "cardplanner", "carddesigner", "shortswriter", "shortswriter2", "shortswriter3", "shortsdirector"]);
 
 /** 역할 id/레벨/직무 → 스프라이트 캐릭터. 매칭 없으면 null(이모지 폴백). */
 export function spriteFor(id = "", level = "", title = ""): string | null {

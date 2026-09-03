@@ -92,7 +92,7 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
         <span className="muted" style={{ marginLeft: "auto" }}>{fmtWhen(s.updatedTs)}</span>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }} className="muted">
-        {s.writer && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Avatar id="shorts_writer" glyph="✍️" size={18} head /> 대본 {s.writer}</span>}
+        {s.writer && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }} title="편마다 작가가 바뀝니다 — 문체와 낭독 목소리도 각자 다릅니다"><Avatar id={s.writerId ?? "shorts_writer"} glyph="✍️" size={18} head /> 대본 {s.writer}</span>}
         {s.director && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Avatar id="shorts_director" glyph="🎬" size={18} head /> 연출 {s.director}</span>}
         {running && <span>… 작업 중(자동 갱신)</span>}
         {s.stage === "ready" && typeof s.bgFallbacks === "number" && s.bgFallbacks > 0 && (

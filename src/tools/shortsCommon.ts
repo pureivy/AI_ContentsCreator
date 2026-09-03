@@ -32,7 +32,48 @@ export interface SceneKindFields {
   /** CTA 결론(2026-08-28) — "조건 → 답" 쌍. 무음 시청·되감기 없는 매체라 결론은 화면에도 남겨야 한다. */
   takeaways?: Array<{ when: string; then: string }>;
 }
-export interface ShortsScene extends SceneKindFields { narration: string; screenText?: string }
+/**
+ * 씬 도해(2026-09-03) — 배경 위에 우리가 직접 그리는 표시. AI 이미지가 못 하는 '가공 흔적'이자,
+ * 나무 니치에서는 실촬영보다 명확한 설명 수단이다(어디를 자르는지는 사진보다 화살표가 정확하다).
+ * 실촬영 소재가 없어 대안으로 넣는다(사용자 확정 2026-09-03).
+ *
+ * 위치는 9분할 격자로만 받는다 — 좌표를 LLM 에 맡기면 화면 밖이나 자막 위로 나간다.
+ */
+export type OverlayKind = 'arrow' | 'circle' | 'cross' | 'check' | 'measure' | 'step';
+export type OverlayAt = 'tl' | 'tc' | 'tr' | 'ml' | 'mc' | 'mr' | 'bl' | 'bc' | 'br';
+export interface SceneOverlay {
+  kind: OverlayKind;
+  at: OverlayAt;
+  /** 짧은 라벨(치수·이유) — 8자 캡. step 은 숫자만 쓴다. */
+  label?: string;
+}
+const OVERLAY_KINDS = new Set<string>(['arrow', 'circle', 'cross', 'check', 'measure', 'step']);
+const OVERLAY_AT = new Set<string>(['tl', 'tc', 'tr', 'ml', 'mc', 'mr', 'bl', 'bc', 'br']);
+
+/**
+ * LLM 도해 오브젝트 검증(순수) — 어휘 밖이면 undefined(도해 없이 렌더). 자막이 화면 하단을 쓰므로
+ * 하단 행(bl·bc·br)은 중간 행으로 올린다 — 겹치면 둘 다 안 읽힌다.
+ */
+export function normalizeSceneOverlay(raw: unknown): SceneOverlay | undefined {
+  const r = (raw && typeof raw === 'object' ? raw : null) as Record<string, unknown> | null;
+  if (!r) return undefined;
+  const kind = String(r.kind ?? '').trim().toLowerCase();
+  if (!OVERLAY_KINDS.has(kind)) return undefined;
+  let at = String(r.at ?? '').trim().toLowerCase();
+  if (!OVERLAY_AT.has(at)) at = 'mc';
+  if (at === 'bl') at = 'ml'; else if (at === 'bc') at = 'mc'; else if (at === 'br') at = 'mr'; // 자막 영역 회피
+  const label = cutAtWordBoundary(asText(r.label), 8);
+  const out: SceneOverlay = { kind: kind as OverlayKind, at: at as OverlayAt };
+  if (label) out.label = label;
+  return out;
+}
+
+export interface ShortsScene extends SceneKindFields {
+  narration: string;
+  screenText?: string;
+  /** 배경 위 도해(2026-09-03) — 없으면 종전대로 배경만. */
+  overlay?: SceneOverlay;
+}
 
 /**
  * LLM 씬 오브젝트에서 kind·페이로드를 검증 추출 — 실패 시 {} 로 강등(fail-open, 렌더 무중단).
