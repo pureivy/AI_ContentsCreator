@@ -533,6 +533,31 @@ function recentShortsTitles(brand: string | undefined, excludeId: string, limit 
   } catch { return []; }
 }
 
+/**
+ * 최근 숏폼의 대표 제목(같은 브랜드, 최신 순, fail-open) — 제목 구조 수렴 차단용 입력.
+ *
+ * 후보(titles)를 보는 recentShortsTitles 와 목적이 다르다. 실측(2026-09-03, 최근 38편):
+ * 후보는 47%만 쉼표를 쓰는데 대표 제목은 38/38 이 "<키워드 구>, <행동>" 한 틀이었다.
+ * 후보 단계의 다양성이 대표 제목에서 통째로 붕괴한다 — 그런데 유튜브에 올라가는 건 대표 제목이다.
+ * 원인은 단순했다: 후보에는 유형 지시가 있고 대표 제목에는 구조 지시가 아예 없었다.
+ */
+function recentShortsMainTitles(brand: string | undefined, excludeId: string, limit = 6): string[] {
+  try {
+    const store = shortsStore();
+    const out: string[] = [];
+    for (const e of store.list()) {
+      if (e.id === excludeId || (e.brand ?? undefined) !== (brand ?? undefined)) continue;
+      try {
+        const p = JSON.parse(fs.readFileSync(path.join(store.dirFor(e.id), 'plan.json'), 'utf-8')) as { title?: unknown };
+        const t = String(p.title ?? '').trim();
+        if (t) out.push(t);
+      } catch { /* plan.json 없는 항목 무시 */ }
+      if (out.length >= limit) break;
+    }
+    return out;
+  } catch { return []; }
+}
+
 /** 유보 표현 — 압축 LLM 이 "군더더기"로 지워 단정문(결론 반전)을 만든 실측 대응.
  *  '미루'는 "미루고/미룹니다"(유보)만 노린다 — 미루나무는 수종명이라 제외(2026-08-26 최종 리뷰 F5d). */
 export const HEDGE_RE = /대개|흔히|보통|대체로|경우가 많|수 있|봐요|가능성|편이에요|편입니다|미루(?!나무)/;
@@ -636,7 +661,7 @@ export function pruneQuoteSources(plan: Plan, sourceBody: string | undefined): {
   return { plan: { ...plan, scenes }, pruned };
 }
 
-async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형'], sourceFlagged: string[] = [], writerRole = 'shorts_writer'): Promise<Plan | null> {
+async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형'], sourceFlagged: string[] = [], writerRole = 'shorts_writer', recentMainTitles: string[] = []): Promise<Plan | null> {
   const capSec = CONFIG.shortsMaxDurationSec;
   // 제목 후보 유형(권고 5) — 스키마 예시와 유형 설명이 같은 목록을 가리켜야 작가가 순서대로 채운다.
   const titlesJson = titleTypes.map((t) => `"${t}"`).join(',');
@@ -711,6 +736,12 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 내레이션은 실제로 대비를 말했으니 방아쇠는 먹었고, 빠진 건 '필드를 채우라'는 지시였다 —
     // takeaways 에는 그런 지시문이 따로 있었고 그건 매번 채워졌다. 같은 강도로 적는다.
     'compare 씬에는 bad·good 를 반드시 채워라 — kind 만 보내면 화면에 아무것도 안 나온다(한쪽이라도 비면 통째로 무시된다). bad=하지 말 것·틀린 쪽, good=할 것·맞는 쪽. label 은 대상(14자 이내), note 는 그 이유나 결과(18자 이내). 예: bad={"label":"웃자란 가지","note":"꽃눈이 안 앉아요"} good={"label":"짧은 곁가지","note":"여기 열매가 달려요"}. 내레이션이 말한 대비를 화면에 옮기는 것이지 새 내용을 지어내는 게 아니다 — 원문에 없는 대비는 만들지 마라.',
+    // 대표 제목 구조 수렴 차단(2026-09-03 실측) — 최근 38편의 대표 제목이 38/38 "<키워드 구>, <행동>"
+    // 이었다. 후보(titles)에는 유형 지시가 있는데 대표 제목에는 구조 지시가 아예 없어서, 모델이
+    // 가장 자연스러운 한 꼴로 수렴한 것. 지시문만으로는 새므로 최근 제목을 직접 보여준다.
+    recentMainTitles.length
+      ? `[최근 대표 제목 — 구조가 겹치면 안 된다]\n${recentMainTitles.map((t) => `· ${t}`).join('\n')}\n대표 제목(title)은 위 제목들과 다른 문장 구조로 써라. 특히 "<키워드 구>, <행동>" 쉼표 두 토막 꼴이 위에 이미 많으면 이번엔 쓰지 마라. 쓸 수 있는 꼴: 쉼표 없이 한 문장으로 잇기("~는 ~부터 봅니다"), 결론 먼저("~은 ~입니다"), 질문("~면 어떻게 될까요"), 조건절("~할 때 ~하세요"), 장면 제시("~앞에서 손이 멈춘다면"). 단, 핵심 키워드를 앞쪽에 두라는 위 규칙이 이 규칙보다 우선한다 — 구조를 바꾸느라 키워드를 빼거나 뒤로 밀지 마라.`
+      : '',
     shortsTitleTypeGuide(titleTypes, CONFIG.voiceRotation),
     `JSON 형식: {"title":"대표 제목","titles":[${titlesJson}],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|chart|compare|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0},"takeaways":[{"when":"허리 높이","then":"회양목"}],"compare":{"bad":{"label":"웃자란 가지","note":"꽃눈이 안 앉아요"},"good":{"label":"짧은 곁가지","note":"여기 열매가 달려요"}}}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}`,
   ].filter(Boolean).join('\n');
@@ -1112,7 +1143,8 @@ export async function runShortsJob(
     // 지침만으로는 같은 원문에서 같은 각도가 나온다(두 런이 같은 본문을 본다).
     const siblingGuide = siblingPlanToAvoid(short);
     say(`기획 가드 — 채널 ${platformLabel(short.platform)} · 작가 ${writerProfile?.name ?? short.writer ?? '미지정'} · 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 형제 대본 ${siblingGuide ? '주입' : '없음'} · 제목 유형 ${titleTypes.join('·')}`);
-    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, siblingGuide, priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? [], writerRole);
+    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, siblingGuide, priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? [], writerRole,
+      recentShortsMainTitles(short.brand, short.id)); // 대표 제목 구조 수렴 차단
     if (!planned) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     // Plan 타입 재선언 — 길이 상한 루프의 재대입이 클로저(씬 map 등) 내로잉을 풀지 않게 non-null 로 고정.
     let plan: Plan = planned;
