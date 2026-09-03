@@ -117,3 +117,20 @@ export function youtubeQuotaCommitted(
   }).length;
   return used >= cap;
 }
+
+/** 형제 대본을 기다리는 최대 시간(ms) — 기획 단계만 넘기면 되므로 넉넉히 6분. */
+export const SIBLING_PLAN_WAIT_MS = 6 * 60_000;
+
+/**
+ * 두 번째 채널 런을 지금 출발시킬 것인가(순수).
+ * 목적은 '형제 대본을 보고 다른 각도를 고르게' 하는 것이므로 plan.json 이 생기면 바로 간다.
+ * 형제가 실패(error)했거나 기다림이 상한을 넘으면 그냥 간다 — 기다리다 영영 안 만드는 쪽이 더 나쁘다.
+ */
+export function shouldStartSecondRun(
+  a: { siblingPlanExists: boolean; siblingStage?: string; waitedMs: number; maxWaitMs?: number },
+): { start: boolean; reason: 'plan' | 'sibling-error' | 'timeout' | 'wait' } {
+  if (a.siblingPlanExists) return { start: true, reason: 'plan' };
+  if (a.siblingStage === 'error') return { start: true, reason: 'sibling-error' };
+  if (a.waitedMs >= (a.maxWaitMs ?? SIBLING_PLAN_WAIT_MS)) return { start: true, reason: 'timeout' };
+  return { start: false, reason: 'wait' };
+}

@@ -53,7 +53,7 @@ import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
 import { shortsStore } from '../content/shorts';
-import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, youtubeQuotaCommitted, type ShortsPlatform } from '../content/shortsPlatform';
+import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, youtubeQuotaCommitted, shouldStartSecondRun, SIBLING_PLAN_WAIT_MS, type ShortsPlatform } from '../content/shortsPlatform';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo } from '../tools/shortsRender';
@@ -827,17 +827,27 @@ app.post('/runs/:id/message', (c) => c.json({ ok: true }));
 /** 활성 브랜드의 자료만 통과 — 범용 모드(활성 없음)면 브랜드 태그 없는 자료만. 탭 전환의 핵심. */
 function brandMatch(x: { brand?: string }): boolean { return (x.brand ?? '') === activeBrandSlug(); }
 
-/** 파생 콘텐츠 요약(카드뉴스·숏폼) — 캘린더 배지·검토 미리보기·성과 컬럼용. 최신 1건씩. */
+/**
+ * 파생 콘텐츠 요약(카드뉴스·숏폼) — 캘린더 배지·검토 미리보기·성과 컬럼용.
+ * 숏폼은 2026-09-03 채널 분리로 글당 2건(유튜브용·인스타용)이 된다. shortsList 가 전부이고,
+ * shorts 는 최신 1건 하위호환 필드다(캘린더 배지·성과 컬럼이 아직 단건을 본다).
+ */
+interface DerivedShorts { id: string; stage: string; durationSec?: number; running: boolean; platform?: ShortsPlatform }
 interface DerivedSummary {
   cardnews?: { id: string; stage: string; slides?: number; running: boolean };
-  shorts?: { id: string; stage: string; durationSec?: number; running: boolean };
+  shorts?: DerivedShorts;
+  shortsList?: DerivedShorts[];
 }
 function derivedSummary(pieceId: string): DerivedSummary {
   const out: DerivedSummary = {};
   const cn = cardNewsStore().list().find((x) => x.sourcePieceId === pieceId); // list() 최신순 → 첫 매치 = 최신
   if (cn) out.cardnews = { id: cn.id, stage: cn.stage, slides: cn.slides, running: isCardNewsRunning(cn.id) };
-  const sh = shortsStore().list().find((x) => x.sourcePieceId === pieceId);
-  if (sh) out.shorts = { id: sh.id, stage: sh.stage, durationSec: sh.durationSec, running: isShortsRunning(sh.id) };
+  const mine = shortsStore().list().filter((x) => x.sourcePieceId === pieceId)
+    .map((x): DerivedShorts => ({ id: x.id, stage: x.stage, durationSec: x.durationSec, running: isShortsRunning(x.id), platform: x.platform }));
+  // 채널 순서 고정(유튜브 → 인스타 → 레거시) — 목록이 폴링마다 뒤집히지 않게.
+  const rank = (p?: ShortsPlatform): number => (p === 'youtube' ? 0 : p === 'instagram' ? 1 : 2);
+  mine.sort((a, b) => rank(a.platform) - rank(b.platform));
+  if (mine.length) { out.shortsList = mine; out.shorts = mine[0]; }
   return out;
 }
 
@@ -1253,7 +1263,26 @@ function sourceFlaggedClaims(runId: string | undefined): string[] {
   } catch { return []; }
 }
 
-function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, platform?: ShortsPlatform): { short: Shorts } | { error: string } {
+/**
+ * 형제(다른 채널) 대본이 나온 뒤 두 번째 런을 출발시킨다(2026-09-03).
+ * 동시에 띄우면 둘 다 서로를 못 봐서 같은 축의 대본이 나온다(실측: 09-03 시험에서 '형제 대본 없음' 2건,
+ * 문체만 갈리고 알맹이가 같았다). 레코드는 지금 만들어 UI 에 보이게 하고, 출발만 미룬다.
+ * 서버가 도중에 죽어도 부팅 복구 스윕이 planning 상태를 재개하므로 유실되지 않는다.
+ */
+function startAfterSiblingPlan(siblingId: string, selfId: string, start: () => void): void {
+  const began = Date.now();
+  const tick = (): void => {
+    const sib = shortsStore().get(siblingId);
+    const planExists = fs.existsSync(path.join(shortsStore().dirFor(siblingId), 'plan.json'));
+    const d = shouldStartSecondRun({ siblingPlanExists: planExists, siblingStage: sib?.stage, waitedMs: Date.now() - began });
+    if (!d.start) { setTimeout(tick, 5_000); return; }
+    if (d.reason !== 'plan') console.log(`[숏폼] 형제 대본 대기 종료(${d.reason}) — ${selfId} 그대로 출발`);
+    start();
+  };
+  setTimeout(tick, 5_000);
+}
+
+function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, platform?: ShortsPlatform, waitForPlanOf?: string): { short: Shorts } | { error: string } {
   const piece = pieceStore().get(pieceId);
   if (!piece) return { error: 'unknown piece' };
   if (!piece.runId) return { error: '초안이 아직 없습니다.' };
@@ -1266,7 +1295,10 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, p
   const short = shortsStore().create({
     topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, auto, platform, ...shortsActorNames(),
   });
-  launchShortsRun(short.id, piece.title, { sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId) });
+  const start = (): void => {
+    launchShortsRun(short.id, piece.title, { sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId!) });
+  };
+  if (waitForPlanOf) startAfterSiblingPlan(waitForPlanOf, short.id, start); else start();
   return { short };
 }
 async function shortsFromPieceHandler(c: Context): Promise<Response> {
@@ -1275,11 +1307,11 @@ async function shortsFromPieceHandler(c: Context): Promise<Response> {
   const b = await c.req.json<{ scenes?: number; platform?: ShortsPlatform }>().catch(() => ({}) as { scenes?: number; platform?: ShortsPlatform });
   // platform 미지정이면 채널별로 각각 만든다(자동 파생과 같은 계약). 응답의 short 는 하위호환 유지.
   const targets: ShortsPlatform[] = b.platform ? [b.platform] : [...SHORTS_PLATFORMS];
-  const made: Shorts[] = []; let firstError = '';
+  const made: Shorts[] = []; let firstError = ''; let prevId = '';
   for (const platform of targets) {
-    const r = deriveShortsFromPiece(id, b.scenes, false, platform);
+    const r = deriveShortsFromPiece(id, b.scenes, false, platform, prevId);
     if ('error' in r) { firstError ||= r.error; continue; }
-    made.push(r.short);
+    made.push(r.short); prevId = r.short.id;
   }
   if (!made.length) return c.json({ error: firstError || '파생 실패' }, firstError === 'unknown piece' ? 404 : 409);
   return c.json({ short: made[0], shorts: made });
@@ -2137,6 +2169,7 @@ function autoDeriveSet(id: string, title: string): void {
   // 채널별로 따로 만든다(2026-09-03 사용자 확정) — 같은 글에서 유튜브용·인스타용 대본을 각각 생성.
   // 점유·실패 판정은 채널별로 센다. 한쪽이 실패해도 다른 쪽은 만들어져야 한다.
   if (CONFIG.autoShorts) {
+    let prevId = ''; // 앞 채널 런 — 두 번째는 이 대본이 나온 뒤 출발한다(각도 겹침 방지)
     for (const platform of SHORTS_PLATFORMS) {
       const mine = shortsStore().list().filter((x) => x.sourcePieceId === id && x.platform === platform);
       // error 레코드는 점유로 안 본다(2026-08-20 하드 캡 리뷰) — 다만 같은 글·같은 채널 2회 실패면 중단.
@@ -2146,10 +2179,10 @@ function autoDeriveSet(id: string, title: string): void {
         console.log(`[숏폼] 자동 파생 건너뜀(유튜브) — 오늘 몫 소진(상한 ${CONFIG.youtubeDailyCap}편) · ${title.slice(0, 25)}`);
         continue;
       }
-      const ds = deriveShortsFromPiece(id, undefined, false, platform);
-      console.log('error' in ds
-        ? `[숏폼] 자동 파생 실패(${platformLabel(platform)}) — ${title.slice(0, 25)}: ${ds.error}`
-        : `[숏폼] 자동 파생 시작(${platformLabel(platform)}) — ${title.slice(0, 30)} (${ds.short.id})`);
+      const ds = deriveShortsFromPiece(id, undefined, false, platform, prevId);
+      if ('error' in ds) { console.log(`[숏폼] 자동 파생 실패(${platformLabel(platform)}) — ${title.slice(0, 25)}: ${ds.error}`); continue; }
+      console.log(`[숏폼] 자동 파생 시작(${platformLabel(platform)}) — ${title.slice(0, 30)} (${ds.short.id})${prevId ? ` · 앞 채널 대본 대기(최대 ${Math.round(SIBLING_PLAN_WAIT_MS / 60000)}분)` : ''}`);
+      prevId = ds.short.id;
     }
   }
 }

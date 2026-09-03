@@ -809,9 +809,13 @@ export async function ttsFetch(text: string, voice?: string): Promise<Blob | nul
 export type PieceStage =
   | "idea" | "research" | "draft" | "ready" | "published" | "measured" | "reflected" | "error";
 /** 파생 콘텐츠 요약(카드뉴스·숏폼) — 콘텐츠 세트 상태를 캘린더 배지·검토 미리보기·성과 컬럼에 표시. */
+export interface DerivedShorts { id: string; stage: string; durationSec?: number; running: boolean; platform?: "youtube" | "instagram" }
 export interface DerivedSummary {
   cardnews?: { id: string; stage: string; slides?: number; running: boolean };
-  shorts?: { id: string; stage: string; durationSec?: number; running: boolean };
+  /** 최신 1건(하위호환 — 캘린더 배지·성과 컬럼). 채널 분리 후 전체는 shortsList. */
+  shorts?: DerivedShorts;
+  /** 글당 숏폼 전체(2026-09-03 채널 분리: 유튜브용·인스타용). 구 서버 응답이면 없다. */
+  shortsList?: DerivedShorts[];
 }
 export interface PieceInfo {
   id: string;
