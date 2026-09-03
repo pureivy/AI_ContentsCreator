@@ -17,7 +17,7 @@ import path from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { selectComposition, renderMedia } from '@remotion/renderer';
 import { RENDER_OPTS, stageAndBuildProps } from '../src/tools/shortsRenderRemotion';
-import { sceneDurationSec, sceneFrames, probeDuration } from '../src/tools/shortsCommon';
+import { sceneDurationSec, sceneFrames, probeDuration, varyLayout } from '../src/tools/shortsCommon';
 import type { ShortsScene, PreparedScene } from '../src/tools/shortsCommon';
 import { CONFIG } from '../src/config';
 import { sampleProps } from '../remotion/sampleProps';
@@ -51,6 +51,10 @@ async function propsFromShort(dir: string, publicDir: string): Promise<Record<st
     return fs.existsSync(c) ? c : null;
   });
   const titleArt = path.join(dir, 'title-art.png');
+  const lay = varyLayout({
+    bottomPct: CONFIG.shortsCaptionBottomPct, fontPx: CONFIG.shortsCaptionFontPx, hookFontPx: CONFIG.shortsCaptionHookFontPx,
+    titleTopPct: CONFIG.shortsTitleTopPct, titleWidthPct: CONFIG.shortsTitleWidthPct,
+  }, path.basename(dir));
 
   const missing = prepared.filter((p) => !p.audioPath).length;
   console.log(
@@ -61,12 +65,13 @@ async function propsFromShort(dir: string, publicDir: string): Promise<Record<st
 
   return stageAndBuildProps(publicDir, prepared, plan.scenes, {
     clips, fxSeedKey: path.basename(dir), // 실렌더와 같은 시드 — 미리보기가 실제와 다른 연출을 보여주면 안 된다
+    // 실렌더와 같은 배치 산식 — 미리보기가 실제와 다른 자막 크기를 보여주면 안 된다.
     caption: {
-      bottomPct: CONFIG.shortsCaptionBottomPct, fontPx: CONFIG.shortsCaptionFontPx, hookFontPx: CONFIG.shortsCaptionHookFontPx,
+      bottomPct: lay.bottomPct, fontPx: lay.fontPx, hookFontPx: lay.hookFontPx,
       ...(CONFIG.shortsCaptionOutline ? { outline: true } : {}),
     },
     ...(fs.existsSync(titleArt)
-      ? { title: { imagePath: titleArt, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } }
+      ? { title: { imagePath: titleArt, topPct: lay.titleTopPct, widthPct: lay.titleWidthPct } }
       : {}),
   });
 }

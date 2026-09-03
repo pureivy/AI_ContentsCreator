@@ -313,6 +313,40 @@ function pick<T>(list: readonly T[], seed: number, axis: number): T {
   return list[fxSeed(`${seed}#${axis}`) % list.length]!;
 }
 
+// ── 자막·제목 배치 미세 변주(2026-09-03) ─────────────────────────────────────
+// 자막 크기·위치와 상단 제목 배치가 176편 전부 같은 픽셀에 있었다. 사용자가 손보정한 값이라
+// 갈아엎지 않는다 — 보정값을 중심으로 좁은 폭만 흔든다. 편끼리 프레임이 겹치지 않게 하는 게
+// 목적이고, 읽기 편함은 보정값이 이미 잡아 놨다.
+//
+// 폭이 좁은 데는 이유가 있다. bottomPct 를 크게 흔들면 플랫폼 UI(하단 ~25%)에 자막이 먹히고,
+// fontPx 를 크게 흔들면 줄바꿈이 달라져 두 줄이 세 줄이 된다.
+const JITTER = { bottomPct: 3, fontPx: 3, hookFontPx: 4, titleTopPct: 2, titleWidthPct: 4 } as const;
+
+/** 시드 기준 −n..+n 의 정수 흔들림(순수). */
+function jitter(seed: number, axis: number, n: number): number {
+  return (fxSeed(`${seed}~${axis}`) % (2 * n + 1)) - n;
+}
+
+/**
+ * 편별 자막·제목 배치(순수). seed 가 없으면 보정값 그대로다(구 호출부·테스트 불변).
+ * 하한을 두는 값들은 그 하한을 절대 안 넘는다 — 자막이 플랫폼 UI 에 먹히거나 제목이 잘리면
+ * 변주의 이득보다 손해가 크다.
+ */
+export function varyLayout(
+  base: { bottomPct: number; fontPx: number; hookFontPx: number; titleTopPct: number; titleWidthPct: number },
+  seed?: string,
+): { bottomPct: number; fontPx: number; hookFontPx: number; titleTopPct: number; titleWidthPct: number } {
+  if (!seed) return base;
+  const n = fxSeed(seed);
+  return {
+    bottomPct: Math.max(30, base.bottomPct + jitter(n, 0, JITTER.bottomPct)),      // 30 미만은 하단 UI 위험
+    fontPx: Math.max(56, base.fontPx + jitter(n, 1, JITTER.fontPx)),
+    hookFontPx: Math.max(70, base.hookFontPx + jitter(n, 2, JITTER.hookFontPx)),
+    titleTopPct: Math.max(3, base.titleTopPct + jitter(n, 3, JITTER.titleTopPct)), // 3 미만은 상단 UI 에 물림
+    titleWidthPct: Math.min(88, Math.max(64, base.titleWidthPct + jitter(n, 4, JITTER.titleWidthPct))),
+  };
+}
+
 // ── 연출 변주표(2026-09-03) ─────────────────────────────────────────────────
 // 종전엔 kind 하나에 연출 하나가 고정이었다 — 훅은 언제나 push+스포트라이트, stat 은 언제나
 // fade+subtle. 편마다 같은 자리에서 같은 움직임이 나오니 여러 편을 이어 보면 한 틀에서 찍어낸

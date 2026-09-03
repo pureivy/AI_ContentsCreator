@@ -41,7 +41,7 @@ import { blogUrlForPiece } from '../content/pieces';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
-import { normalizeSceneKind, emptyKindScenes, bodyKindCoverage, fixMonthNames, cutAtWordBoundary } from '../tools/shortsCommon';
+import { normalizeSceneKind, emptyKindScenes, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, cutAtWordBoundary } from '../tools/shortsCommon';
 import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
 import type { EventBus } from '../events/bus';
@@ -275,6 +275,7 @@ export async function reviseShorts(
     }
     // 재조립 — 잡과 동일한 폴백 체인(Remotion → ffmpeg). 내레이션 TTS 는 전 씬 재합성(교정 사전 적용).
     say(CONFIG.shortsRenderer === 'ffmpeg' ? '재조립 시작 — ffmpeg 슬라이드쇼' : '재조립 시작 — Remotion 모션그래픽');
+    const lay = layoutFor(id); // 편별 자막·제목 배치(보정값 기준 좁은 흔들림)
     const reassemble = async (p: Plan, imgs: Array<string | null>, clps: typeof clips): Promise<Awaited<ReturnType<typeof renderShortsVideo>>> => {
       let rr = null as Awaited<ReturnType<typeof renderShortsVideo>> | null;
       if (CONFIG.shortsRenderer !== 'ffmpeg') {
@@ -282,11 +283,11 @@ export async function reviseShorts(
           rr = await renderShortsVideoRemotion(dir, p.scenes, imgs, {
             clips: clps, signal: opts.signal, ...writerVoiceOpts(short),
             caption: {
-              bottomPct: CONFIG.shortsCaptionBottomPct, fontPx: CONFIG.shortsCaptionFontPx, hookFontPx: CONFIG.shortsCaptionHookFontPx,
+              bottomPct: lay.bottomPct, fontPx: lay.fontPx, hookFontPx: lay.hookFontPx,
               ...(CONFIG.shortsCaptionKeyword && short.keyword ? { keyword: short.keyword } : {}),
               ...(CONFIG.shortsCaptionOutline ? { outline: true } : {}),
             },
-            ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
+            ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: lay.titleTopPct, widthPct: lay.titleWidthPct } } : {}),
           });
         } catch (e) { say(`모션 렌더 예외 → ffmpeg 폴백: ${e instanceof Error ? e.message.slice(0, 80) : e}`); rr = null; }
       }
@@ -918,17 +919,83 @@ async function designScenes(io: JobIO, topic: string, plan: Plan): Promise<{ pre
  * 반복) + 시네마토그래피(구도·조명·씬 변주). 자막·내레이션은 렌더러가 얹으므로
  * 이미지엔 글자를 넣지 않는다(오타 원천 차단). 순수 함수(생성 없이 프롬프트 검증 가능).
  */
+// ── 촬영 지시 변주(2026-09-03) ────────────────────────────────────────────────
+// 종전엔 모든 편·모든 씬에 "얕은 심도와 부드러운 조명"이 그대로 붙었다. 하필 그 둘은 생성 이미지의
+// 기본값이자 'AI가 만든 사진' 하면 떠오르는 바로 그 문법이다 — 176편이 같은 지시를 받았으니
+// 같은 얼굴로 나오는 게 당연했다.
+//
+// 나누는 기준이 중요하다. 조명·심도는 '전 씬 공통 팔레트·질감·조명 유지'라는 기존 의도가 있으므로
+// 편 단위로 고정하고(편 간에만 갈림), 앵글·거리는 씬 단위로 갈라 한 편 안에서도 화면이 바뀌게 한다.
+const LIGHTING: readonly string[] = [
+  '부드러운 자연광, 그림자가 옅다',
+  '측면에서 들어오는 또렷한 빛, 그림자 경계가 분명하다',
+  '흐린 날의 고른 빛, 그림자가 거의 없고 색이 차분하다',
+  '역광에 가까운 낮은 햇빛, 가장자리가 빛나고 앞면은 살짝 어둡다',
+  '늦은 오후의 따뜻한 사광, 길게 늘어진 그림자',
+];
+const DEPTH: readonly string[] = [
+  '얕은 심도로 피사체만 또렷하고 배경은 부드럽게 풀린다',
+  '전경부터 배경까지 고르게 또렷한 깊은 심도',
+  '중간 심도 — 피사체와 그 주변까지 읽히고 먼 배경만 풀린다',
+];
+const ANGLE: readonly string[] = [
+  '눈높이에서 정면으로',
+  '지면 가까이 낮은 각도에서 올려다보며',
+  '위에서 내려다보는 부감으로',
+  '어깨 너머로 손끝을 따라가듯',
+  '비스듬한 측면에서',
+];
+const DISTANCE: readonly string[] = [
+  '피사체가 프레임을 넉넉히 채우게',
+  '한 발 물러나 주변 상황이 함께 보이게',
+  '아주 가까이 붙어 질감이 드러나게',
+  '피사체를 한쪽으로 밀고 반대쪽에 여백을 두어',
+];
+// 생활감 — 생성 이미지가 가장 티 나는 지점은 '너무 깨끗하다'는 것이다. 원예 소재에 실제로 있는
+// 지저분함을 지시로 준다. 지어내는 게 아니라 현실을 복원하는 쪽이다.
+const TEXTURE: readonly string[] = [
+  '흙이 묻은 손과 손톱, 쓴 자국이 있는 도구',
+  '고르지 않은 흙 표면, 떨어진 잎 몇 장',
+  '색이 바랜 화분, 물 자국이 남은 받침',
+  '벌레 먹은 잎이나 마른 끝이 한두 장 섞여',
+  '오래 써 길이 든 장갑과 앞치마',
+];
+const HOOK_PUSH: readonly string[] = [
+  ' 첫 3초에 스크롤을 멈출, 가장 시선을 끄는 강렬한 장면으로 연출한다.',
+  ' 첫 화면이다 — 무슨 일이 벌어지기 직전의 순간을 잡아 다음이 궁금해지게 한다.',
+  ' 첫 화면이다 — 문제가 눈에 바로 보이는 상태를 클로즈업으로 보여준다.',
+];
+
+/**
+ * 숏폼 씬 이미지(gpt-image-2, 세로 9:16) 프롬프트 조립 — shorts-gen 의 스타일 일관성(전 씬 공통 앵커
+ * 반복) + 시네마토그래피(구도·조명·씬 변주). 자막·내레이션은 렌더러가 얹으므로
+ * 이미지엔 글자를 넣지 않는다(오타 원천 차단). 순수 함수(생성 없이 프롬프트 검증 가능).
+ *
+ * seed(보통 쇼츠 id)를 주면 촬영 지시가 편마다 갈린다. 안 주면 종전 문구 그대로다.
+ */
 export function buildSceneImagePrompt(a: {
-  style: string; scene: string; index: number; total: number;
+  style: string; scene: string; index: number; total: number; seed?: string;
 }): string {
-  const { style, index: i, total } = a;
+  const { style, index: i, total, seed } = a;
   const scene = a.scene.trim() || '주제를 상징하는 한국 생활 장면';
   const isHook = i === 0;
   const p: string[] = [];
   p.push(`[전 씬 공통 스타일] ${style}`);
-  p.push(`장면(씬 ${i + 1}/${total}${isHook ? ', 훅' : ''}): ${scene}.${isHook ? ' 첫 3초에 스크롤을 멈출, 가장 시선을 끄는 강렬한 장면으로 연출한다.' : ''}`);
-  p.push('구도: 세로 9:16 프레임을 피사체로 자연스럽게 채운다.');
-  p.push('시네마토그래피: 얕은 심도와 부드러운 조명으로 피사체를 또렷하게. 이전 씬과 구분되는 앵글·피사체·범위로 변주하되, 전 씬 공통 팔레트·질감·조명을 동일하게 유지해 시리즈 일관성을 낸다.');
+  if (!seed) { // 종전 동작 보존
+    p.push(`장면(씬 ${i + 1}/${total}${isHook ? ', 훅' : ''}): ${scene}.${isHook ? HOOK_PUSH[0] : ''}`);
+    p.push('구도: 세로 9:16 프레임을 피사체로 자연스럽게 채운다.');
+    p.push('시네마토그래피: 얕은 심도와 부드러운 조명으로 피사체를 또렷하게. 이전 씬과 구분되는 앵글·피사체·범위로 변주하되, 전 씬 공통 팔레트·질감·조명을 동일하게 유지해 시리즈 일관성을 낸다.');
+    p.push('금지: 이미지 안에 글자·자막·숫자·로고·워터마크·간판 텍스트를 넣지 않는다(자막은 렌더러가 따로 얹는다). 손·손가락 왜곡과 어색한 합성을 피한다.');
+    return p.join('\n');
+  }
+  const vid = fxSeed(seed);                      // 편 단위 — 씬이 바뀌어도 같다
+  const sc = fxSeed(`${seed}@${i}`);             // 씬 단위
+  const at = <T,>(list: readonly T[], n: number, axis: number): T => list[fxSeed(`${n}#${axis}`) % list.length]!;
+  p.push(`장면(씬 ${i + 1}/${total}${isHook ? ', 훅' : ''}): ${scene}.${isHook ? at(HOOK_PUSH, vid, 0) : ''}`);
+  p.push(`구도: 세로 9:16. ${at(ANGLE, sc, 1)} ${at(DISTANCE, sc, 2)} 담는다.`);
+  p.push(`빛과 심도(전 씬 동일): ${at(LIGHTING, vid, 3)}. ${at(DEPTH, vid, 4)}.`);
+  p.push(`생활감: ${at(TEXTURE, sc, 5)} — 새것처럼 말끔하게 정돈된 연출은 피한다.`);
+  p.push('씬 변주: 이전 씬과 구분되는 앵글·피사체·범위를 쓰되, 전 씬 공통 팔레트·질감·조명은 동일하게 유지해 시리즈 일관성을 낸다.');
   p.push('금지: 이미지 안에 글자·자막·숫자·로고·워터마크·간판 텍스트를 넣지 않는다(자막은 렌더러가 따로 얹는다). 손·손가락 왜곡과 어색한 합성을 피한다.');
   return p.join('\n');
 }
@@ -938,6 +1005,21 @@ export function buildSceneImagePrompt(a: {
  * 이 편을 쓴 작가의 목소리 옵션(2026-09-03) — 렌더 호출에 펼쳐 넣는다.
  * writerId 가 없으면(레거시 148편) 빈 객체 → 전역 기본 보이스로 종전과 동일하게 낭독된다.
  */
+/**
+ * 이 편의 자막·제목 배치(2026-09-03) — 보정값을 시드로 살짝 흔든다. 176편이 같은 픽셀에
+ * 자막을 얹던 것을 편마다 어긋나게 하는 게 목적이다. 폭은 좁고 하한이 걸려 있어 읽기 편함은
+ * 그대로다(varyLayout 주석 참조).
+ */
+function layoutFor(shortId: string): { bottomPct: number; fontPx: number; hookFontPx: number; titleTopPct: number; titleWidthPct: number } {
+  return varyLayout({
+    bottomPct: CONFIG.shortsCaptionBottomPct,
+    fontPx: CONFIG.shortsCaptionFontPx,
+    hookFontPx: CONFIG.shortsCaptionHookFontPx,
+    titleTopPct: CONFIG.shortsTitleTopPct,
+    titleWidthPct: CONFIG.shortsTitleWidthPct,
+  }, shortId);
+}
+
 function writerVoiceOpts(short: Pick<Shorts, 'writerId' | 'writer'>): { elevenVoiceId?: string; elevenVoiceSettings?: Record<string, number> } {
   const w: ShortsWriter | undefined = writerById(short.writerId) ?? writerByName(short.writer);
   if (!w) return {}; // 레거시(148편) — 전역 기본 보이스로 종전과 동일
@@ -1069,7 +1151,8 @@ export async function runShortsJob(
     const bgDraft = {
       imageSlots: plan.scenes.map((s, i) => ({
         alt: s.screenText || s.narration.slice(0, 30),
-        prompt: buildSceneImagePrompt({ style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length }),
+        // seed=쇼츠 id — 촬영 지시(조명·심도·앵글·생활감)가 편마다 갈린다. 재생성해도 같은 지시가 나온다.
+        prompt: buildSceneImagePrompt({ style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length, seed: id }),
       })),
     };
     const bgDraftPath = path.join(dir, 'bg-draft.json');
@@ -1157,6 +1240,7 @@ export async function runShortsJob(
     }
     // 조립 1회(Remotion → ffmpeg 폴백 체인) — 길이 상한 재조립(아래 하드 캡)이 재사용하므로 클로저로 묶는다.
     // imgs·clps 를 인자로 받는 이유: 결정적 트리밍이 씬을 제거하면 씬별 이미지·클립 배열도 같이 줄어야 한다.
+    const lay = layoutFor(id); // 편별 자막·제목 배치(보정값 기준 좁은 흔들림)
     const assemble = async (p: Plan, imgs: Array<string | null>, clps: typeof cv.clips): Promise<Awaited<ReturnType<typeof renderShortsVideo>>> => {
       let rr = null as Awaited<ReturnType<typeof renderShortsVideo>> | null;
       if (CONFIG.shortsRenderer !== 'ffmpeg') {
@@ -1165,13 +1249,13 @@ export async function runShortsJob(
             clips: clps, signal: opts.signal, ...writerVoiceOpts(short),
             // 자막 옵션 — 위치(플랫폼 UI 가림 회피)·키워드 강조색(설정 기반, A/B 선택 후 기본값 확정).
             caption: {
-              bottomPct: CONFIG.shortsCaptionBottomPct,
-              fontPx: CONFIG.shortsCaptionFontPx,
-              hookFontPx: CONFIG.shortsCaptionHookFontPx,
+              bottomPct: lay.bottomPct,
+              fontPx: lay.fontPx,
+              hookFontPx: lay.hookFontPx,
               ...(CONFIG.shortsCaptionKeyword && short.keyword ? { keyword: short.keyword } : {}),
               ...(CONFIG.shortsCaptionOutline ? { outline: true } : {}),
             },
-            ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: CONFIG.shortsTitleTopPct, widthPct: CONFIG.shortsTitleWidthPct } } : {}),
+            ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: lay.titleTopPct, widthPct: lay.titleWidthPct } } : {}),
           });
         }
         catch (e) { say(`모션 렌더 예외 → ffmpeg 폴백: ${e instanceof Error ? e.message.slice(0, 80) : e}`); rr = null; }

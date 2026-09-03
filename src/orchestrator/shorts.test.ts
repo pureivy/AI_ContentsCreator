@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues } from './shorts';
+import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt } from './shorts';
 import { ShortsStore } from '../content/shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
@@ -259,6 +259,46 @@ describe('ShortsStore.list() — createdTs 내림차순(최신순) 고정', () =
       expect(new ShortsStore(dir).list().map((e) => e.id)).toEqual(['new', 'mid', 'old']);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('buildSceneImagePrompt — 촬영 지시 변주', () => {
+  const base = { style: '가을빛 수채화', scene: '수국 앞에서 가위를 든 손', total: 4 };
+
+  it('시드가 없으면 종전 문구 그대로', () => {
+    const t = buildSceneImagePrompt({ ...base, index: 1 });
+    expect(t).toContain('얕은 심도와 부드러운 조명');
+    expect(t).toContain('구도: 세로 9:16 프레임을 피사체로 자연스럽게 채운다.');
+  });
+  it('시드를 주면 조명·심도·앵글·생활감 지시가 붙는다', () => {
+    const t = buildSceneImagePrompt({ ...base, index: 1, seed: 'short_a' });
+    expect(t).toContain('빛과 심도(전 씬 동일)');
+    expect(t).toContain('생활감:');
+    expect(t).toMatch(/구도: 세로 9:16\. .+ 담는다\./);
+  });
+  it('빛·심도는 한 편 안에서 모든 씬이 같다 — 시리즈 일관성 유지', () => {
+    const light = (i: number) => buildSceneImagePrompt({ ...base, index: i, seed: 'short_a' })
+      .split('\n').find((l) => l.startsWith('빛과 심도'));
+    expect(new Set([0, 1, 2, 3].map(light)).size).toBe(1);
+  });
+  it('앵글·생활감은 씬마다 갈린다 — 한 편 안에서도 화면이 바뀐다', () => {
+    const frame = (i: number) => buildSceneImagePrompt({ ...base, index: i, seed: 'short_a' })
+      .split('\n').filter((l) => l.startsWith('구도') || l.startsWith('생활감')).join();
+    expect(new Set([0, 1, 2, 3].map(frame)).size).toBeGreaterThan(1);
+  });
+  it('편이 다르면 빛·심도가 갈린다 — 176편이 같은 조명을 받던 문제', () => {
+    const light = (id: string) => buildSceneImagePrompt({ ...base, index: 1, seed: id })
+      .split('\n').find((l) => l.startsWith('빛과 심도'));
+    const seen = new Set(Array.from({ length: 30 }, (_, i) => light(`short_${i}`)));
+    expect(seen.size).toBeGreaterThan(3);
+  });
+  it('글자 금지·손 왜곡 방어는 시드와 무관하게 항상 붙는다', () => {
+    for (const seed of [undefined, 'short_a', 'short_b']) {
+      const t = buildSceneImagePrompt({ ...base, index: 0, seed });
+      expect(t).toContain('글자·자막·숫자·로고·워터마크');
+      expect(t).toContain('손·손가락 왜곡');
+      expect(t).toContain('[전 씬 공통 스타일] 가을빛 수채화');
     }
   });
 });

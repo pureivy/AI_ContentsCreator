@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, bodyKindCoverage, defaultSceneFx, fxSeed } from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout } from './shortsCommon';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
   it('오디오 + 꼬리여백(0.6), 하한 2.8', () => {
@@ -387,6 +387,48 @@ describe("defaultSceneFx — 'wipe' 자동 선택 금지", () => {
           expect(defaultSceneFx(k, i, false, 9, s)?.enter).not.toBe('wipe');
         }
       }
+    }
+  });
+});
+
+describe('varyLayout — 자막·제목 배치 미세 변주', () => {
+  const base = { bottomPct: 50, fontPx: 70, hookFontPx: 84, titleTopPct: 5, titleWidthPct: 74 };
+
+  it('시드가 없으면 보정값 그대로', () => {
+    expect(varyLayout(base)).toEqual(base);
+  });
+  it('같은 편은 같은 배치 — 재조립해도 자막이 안 움직인다', () => {
+    expect(varyLayout(base, 'short_a')).toEqual(varyLayout(base, 'short_a'));
+  });
+  it('편이 다르면 배치가 갈린다', () => {
+    const seen = new Set(Array.from({ length: 40 }, (_, i) => JSON.stringify(varyLayout(base, `short_${i}`))));
+    expect(seen.size).toBeGreaterThan(20);
+  });
+  it('안전 하한을 절대 안 넘는다 — 자막이 플랫폼 UI 에 먹히면 변주 이득보다 손해가 크다', () => {
+    for (let i = 0; i < 300; i++) {
+      const v = varyLayout(base, `short_${i}`);
+      expect(v.bottomPct).toBeGreaterThanOrEqual(30);
+      expect(v.fontPx).toBeGreaterThanOrEqual(56);
+      expect(v.hookFontPx).toBeGreaterThanOrEqual(70);
+      expect(v.titleTopPct).toBeGreaterThanOrEqual(3);
+      expect(v.titleWidthPct).toBeGreaterThanOrEqual(64);
+      expect(v.titleWidthPct).toBeLessThanOrEqual(88);
+    }
+  });
+  it('흔들림 폭이 좁다 — 줄바꿈이 바뀔 만큼 크면 안 된다', () => {
+    for (let i = 0; i < 300; i++) {
+      const v = varyLayout(base, `short_${i}`);
+      expect(Math.abs(v.bottomPct - base.bottomPct)).toBeLessThanOrEqual(3);
+      expect(Math.abs(v.fontPx - base.fontPx)).toBeLessThanOrEqual(3);
+      expect(Math.abs(v.hookFontPx - base.hookFontPx)).toBeLessThanOrEqual(4);
+    }
+  });
+  it('보정값이 이미 하한 근처여도 하한 아래로 안 내려간다', () => {
+    const low = { bottomPct: 31, fontPx: 57, hookFontPx: 71, titleTopPct: 3, titleWidthPct: 65 };
+    for (let i = 0; i < 200; i++) {
+      const v = varyLayout(low, `s${i}`);
+      expect(v.bottomPct).toBeGreaterThanOrEqual(30);
+      expect(v.titleTopPct).toBeGreaterThanOrEqual(3);
     }
   });
 });
