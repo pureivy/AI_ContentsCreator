@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt } from './shorts';
+import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt, diversifyTitle, titleShape } from './shorts';
 import { ShortsStore } from '../content/shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
@@ -300,5 +300,54 @@ describe('buildSceneImagePrompt — 촬영 지시 변주', () => {
       expect(t).toContain('손·손가락 왜곡');
       expect(t).toContain('[전 씬 공통 스타일] 가을빛 수채화');
     }
+  });
+});
+
+describe('diversifyTitle — 대표 제목 구조 수렴 차단', () => {
+  const recent = [
+    '상토 배양토 차이 몰라도, 포대 수는 이렇게 계산해요',
+    '수국 9월 관리, 이번 달엔 이것만 정해요',
+    '산수유 열매 적을 때, 지금 확인할 순서',
+  ];
+
+  it('실사고 재현 — 후보가 전부 무쉼표인데 대표만 쉼표였던 short_5b5f7f4231', () => {
+    const title = '측백나무 생울타리, 몇 그루인지 줄자로 끝냅니다';
+    const cands = [
+      '측백나무 생울타리 그루 수 계산법',
+      '측백나무 그루 수는 폭과 길이로 나옵니다',
+      '측백나무 심는데 왜 그루 수부터 세야 할까요',
+    ];
+    const out = diversifyTitle(title, cands, recent, '측백나무');
+    expect(out).not.toBe(title);
+    expect(out).not.toContain(',');
+    expect(out).toContain('측백나무'); // 키워드 규칙은 지킨다
+  });
+  it('키워드 없는 후보는 안 고른다 — 검색 노출 자산이 우선', () => {
+    const title = '수국 9월 관리, 이것만 정해요';
+    const cands = ['가지를 자를지 둘지 먼저 정합니다']; // 키워드 없음
+    expect(diversifyTitle(title, cands, recent, '수국')).toBe(title);
+  });
+  it('최근 것들과 꼴이 다르면 그대로 둔다', () => {
+    const title = '측백나무 그루 수는 폭으로 정해집니다'; // plain
+    expect(diversifyTitle(title, ['측백나무 계산법, 이렇게'], recent, '측백나무')).toBe(title);
+  });
+  it('바꿀 후보가 없으면 원본 유지(fail-open)', () => {
+    const title = '수국 9월 관리, 이것만 정해요';
+    expect(diversifyTitle(title, ['수국 관리, 다른 쉼표 제목'], recent, '수국')).toBe(title);
+    expect(diversifyTitle(title, [], recent, '수국')).toBe(title);
+  });
+  it('최근 표본이 3편 미만이면 개입하지 않는다', () => {
+    const title = '수국 9월 관리, 이것만 정해요';
+    expect(diversifyTitle(title, ['수국 관리는 이렇게 합니다'], recent.slice(0, 2), '수국')).toBe(title);
+  });
+  it('최근 과반이 같은 꼴일 때만 개입한다', () => {
+    const mixed = ['수국 관리는 이렇습니다', '산수유 열매가 적은 이유', '상토 차이, 뒷면을 보세요'];
+    const title = '측백나무 생울타리, 줄자로 끝냅니다'; // comma — mixed 중 1/3 만 comma
+    expect(diversifyTitle(title, ['측백나무 그루 수 계산법'], mixed, '측백나무')).toBe(title);
+  });
+  it('titleShape — 물음표·쉼표·평서를 가른다', () => {
+    expect(titleShape('수국 언제 자를까요?')).toBe('question');
+    expect(titleShape('수국 9월 관리, 이것만')).toBe('comma');
+    expect(titleShape('수국은 9월에 결정됩니다')).toBe('plain');
   });
 });

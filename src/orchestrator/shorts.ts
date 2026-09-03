@@ -558,6 +558,44 @@ function recentShortsMainTitles(brand: string | undefined, excludeId: string, li
   } catch { return []; }
 }
 
+/**
+ * 제목 구조 지문(순수) — 대략의 문장 꼴만 본다. 정교한 구문 분석이 목적이 아니라
+ * "최근 것들과 같은 틀인가"만 가르면 되기 때문이다.
+ */
+export function titleShape(t: string): 'question' | 'comma' | 'plain' {
+  const x = t.trim();
+  if (/[?？]\s*$/.test(x)) return 'question';
+  if (x.includes(',')) return 'comma';
+  return 'plain';
+}
+
+/**
+ * 대표 제목 구조 수렴 차단(결정적, 2026-09-03) — 지시문이 안 먹어서 코드로 내린다.
+ *
+ * 실측: 최근 38편의 대표 제목이 38/38 "<키워드 구>, <행동>" 이었다. 프롬프트에 최근 제목을
+ * 직접 보여주고 "구조가 겹치면 안 된다"고 못박은 뒤에도 다음 런이 또 쉼표 꼴을 냈다
+ * (short_5b5f7f4231 — 후보 3개는 전부 쉼표가 없었는데 대표만 쉼표였다). compare 페이로드와
+ * 같은 실패 유형이다: 읽히긴 하는데 안 따른다.
+ *
+ * 그래서 후보 중에 다른 꼴이 있으면 그걸로 바꾼다. 안전장치 두 가지:
+ *  - 키워드 규칙이 우선이다. 키워드가 있으면 그것을 포함한 후보만 후보로 친다(검색 노출 자산).
+ *  - 바꿀 것이 없으면 원본을 그대로 둔다(fail-open) — 억지로 이상한 제목을 만들지 않는다.
+ */
+export function diversifyTitle(
+  title: string, candidates: readonly string[], recentTitles: readonly string[], keyword?: string,
+): string {
+  if (!title || recentTitles.length < 3) return title;
+  const shape = titleShape(title);
+  // 최근 것들의 과반이 이번 것과 같은 꼴일 때만 개입한다 — 우연히 겹친 한두 편으로 흔들지 않는다.
+  const same = recentTitles.filter((t) => titleShape(t) === shape).length;
+  if (same * 2 <= recentTitles.length) return title;
+  const alt = candidates.find((c) => {
+    const t = c.trim();
+    return t && t !== title && titleShape(t) !== shape && (!keyword || t.includes(keyword));
+  });
+  return alt ? alt.slice(0, 60) : title;
+}
+
 /** 유보 표현 — 압축 LLM 이 "군더더기"로 지워 단정문(결론 반전)을 만든 실측 대응.
  *  '미루'는 "미루고/미룹니다"(유보)만 노린다 — 미루나무는 수종명이라 제외(2026-08-26 최종 리뷰 F5d). */
 export const HEDGE_RE = /대개|흔히|보통|대체로|경우가 많|수 있|봐요|가능성|편이에요|편입니다|미루(?!나무)/;
@@ -774,6 +812,12 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     if (keyword && !title.includes(keyword)) {
       const alt = [...titles, topic].map((t) => t.slice(0, 60)).find((t) => t.includes(keyword));
       if (alt) title = alt;
+    }
+    // 구조 수렴 차단은 키워드 보정 '뒤에' — 키워드 규칙이 우선이라는 계약을 순서로도 못박는다.
+    const diversified = diversifyTitle(title, titles, recentMainTitles, keyword);
+    if (diversified !== title) {
+      console.log('[숏폼]', `대표 제목 구조 교체 — "${title}" → "${diversified}" (최근 편들과 같은 꼴)`);
+      title = diversified;
     }
     return {
       title,
