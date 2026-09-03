@@ -57,6 +57,9 @@ export async function stageAndBuildProps(
     title?: { imagePath: string; topPct?: number; widthPct?: number };
     /** 연출 변주 시드 — 보통 쇼츠 id. 편마다 다른 조합을 뽑되 재렌더에는 같은 값이 나온다. */
     fxSeedKey?: string;
+    /** 룩 자리 이동 — 형제편(원편 자산 승계)에 1 을 주면 원편과 다른 색을 받는다.
+     *  대본·이미지를 공유하는 사이라 색까지 같으면 두 편이 사실상 같은 영상이 된다. */
+    lookOffset?: number;
   } = {},
 ): Promise<Record<string, unknown>> {
   fs.mkdirSync(publicDir, { recursive: true });
@@ -106,7 +109,7 @@ export async function stageAndBuildProps(
       };
     } catch { /* 스테이징 실패 — 오버레이 생략 */ }
   }
-  const inputProps = { scenes: propScenes, totalFrames, ...(opts.fxSeedKey ? { driftSeed: opts.fxSeedKey } : {}), ...(opts.caption ? { caption: opts.caption } : {}), ...(titleProp ? { title: titleProp } : {}) };
+  const inputProps = { scenes: propScenes, totalFrames, ...(opts.fxSeedKey ? { driftSeed: opts.fxSeedKey } : {}), ...(opts.lookOffset ? { lookOffset: opts.lookOffset } : {}), ...(opts.caption ? { caption: opts.caption } : {}), ...(titleProp ? { title: titleProp } : {}) };
   return inputProps;
 }
 

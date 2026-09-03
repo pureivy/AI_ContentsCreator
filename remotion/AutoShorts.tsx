@@ -53,6 +53,8 @@ export const autoShortsSchema = z.object({
   })),
   /** 카메라 드리프트 시드(2026-09-03) — 편·씬마다 다른 손 흔들림. 미지정=흔들림 없음(종전 궤도). */
   driftSeed: z.string().optional(),
+  /** 룩 자리 이동(2026-09-04) — 형제편(같은 대본·이미지)이 원편과 다른 색을 받게. 원편 0, 형제 1. */
+  lookOffset: z.number().optional(),
   totalFrames: z.number(),
   /** 자막 옵션 — 위치(하단 여백 %)·키워드 강조색·테두리·글자 크기. 미지정=컴포넌트 기본값. */
   caption: z.object({ bottomPct: z.number().optional(), keyword: z.string().optional(), outline: z.boolean().optional(), fontPx: z.number().optional(), hookFontPx: z.number().optional() }).optional(),
@@ -111,15 +113,17 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
   );
 };
 
-export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, driftSeed }) => {
+export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, driftSeed, lookOffset }) => {
   // 룩은 편 단위로 하나 — 실제 촬영본은 한 편 안에서 색이 튀지 않는다. driftSeed(=쇼츠 id)가 없으면
   // 보정 없음(구 props 폴백).
-  const look = driftSeed ? pickFilmLook(driftSeed) : undefined;
-  // 컷 빛샘 — 0.4초. 짧게 스쳐야 '편집한 흔적'이지, 길면 화면을 가리는 방해물이 된다.
-  // 편마다 켜고 끈다(3편 중 2편꼴) — 매 편 같은 장치가 들어가면 그것 자체가 또 판박이가 된다.
-  const flashFrames = driftSeed && random(`${driftSeed}:flash`) < 0.66 ? 12 : 0;
+  const look = driftSeed ? pickFilmLook(driftSeed, lookOffset ?? 0) : undefined;
+  // 컷 빛샘 — 상시로 바꿨다(2026-09-04). 종전엔 3편 중 2편에만 걸었는데, 사용자가 "뭐가 바뀐지
+  // 모르겠다"고 한 편이 하필 안 걸린 편이었다. 장치를 껐다 켜는 것보다 '같은 장치를 매번 다르게'가
+  // 판박이를 더 잘 지운다 — 길이·세기·색을 편마다 가른다.
+  const flashFrames = driftSeed ? 9 + Math.floor(random(`${driftSeed}:flashLen`) * 8) : 0; // 9~16프레임(0.3~0.53초)
+  const flashStrength = driftSeed ? 0.18 + random(`${driftSeed}:flashAmp`) * 0.16 : 0;      // 0.18~0.34
   // 빛샘 색 — 실제 필름 라이트리크는 호박~주황 범위다. 청록으로 돌리면 필름이 아니라 글리치로 보인다.
-  const flashHue = look && look.temperature < 0 ? 40 : 15;
+  const flashHue = Math.round((look && look.temperature < 0 ? 30 : 8) + (driftSeed ? random(`${driftSeed}:flashHue`) * 22 : 0));
   return (
   <AbsoluteFill style={{ background: '#000', fontFamily: FONT_FAMILY }}>
     {/*
@@ -141,7 +145,7 @@ export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, 
         if (i === 0 || !driftSeed || !flashFrames) return [seq];
         return [
           <TransitionSeries.Overlay key={`o${i}`} durationInFrames={flashFrames}>
-            <CutFlash cutIndex={i} seed={driftSeed} hueShift={flashHue} />
+            <CutFlash cutIndex={i} seed={driftSeed} hueShift={flashHue} strength={flashStrength} />
           </TransitionSeries.Overlay>,
           seq,
         ];

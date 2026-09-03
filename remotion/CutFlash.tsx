@@ -20,7 +20,9 @@ export const CutFlash: React.FC<{
   readonly seed: string;
   /** 색상 회전(0~360). 편의 룩이 따뜻하면 낮게, 차가우면 높게. */
   readonly hueShift: number;
-}> = ({ cutIndex, seed, hueShift }) => {
+  /** 최대 불투명도(0~1) — 편마다 갈린다. 같은 장치라도 세기가 다르면 반복으로 안 읽힌다. */
+  readonly strength?: number;
+}> = ({ cutIndex, seed, hueShift, strength = 0.22 }) => {
   const frame = useCurrentFrame();
   const { durationInFrames, width, height } = useVideoConfig();
   // 오버레이 구간을 progress 0→1 로. 구간이 1프레임이어도 0 나눗셈이 안 나게 막는다.
@@ -32,7 +34,7 @@ export const CutFlash: React.FC<{
   // 종모양으로 여닫아 컷 직전·직후에는 0 이 되게 한다(경계에서 툭 끊기면 결함으로 보인다).
   const bell = Math.sin(progress * Math.PI);
   return (
-    <AbsoluteFill style={{ pointerEvents: 'none', opacity: 0.22 * bell, mixBlendMode: 'screen' }}>
+    <AbsoluteFill style={{ pointerEvents: 'none', opacity: strength * bell, mixBlendMode: 'screen' }}>
       <Solid
         width={width}
         height={height}

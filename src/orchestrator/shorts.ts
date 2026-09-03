@@ -1130,8 +1130,10 @@ async function finishShortsRun(a: {
   plan: Plan; images: Array<string | null>; clips: Array<string | null>;
   opts: { bus?: EventBus; signal?: AbortSignal };
   say: (m: string) => void; checkAbort: () => void;
+  /** 승계편이면 1 — 원편과 다른 필름 룩을 받는다. */
+  lookOffset?: number;
 }): Promise<void> {
-  const { id, store, dir, short, images, clips, opts, say, checkAbort } = a;
+  const { id, store, dir, short, images, clips, opts, say, checkAbort, lookOffset } = a;
   let plan = a.plan;
   const io: JobIO = { bus: opts.bus, signal: opts.signal };
   // 4) 조립 — 기본 Remotion 모션그래픽, 실패 시 ffmpeg 슬라이드쇼로 폴백(무중단).
@@ -1324,6 +1326,7 @@ export async function runShortsJob(
         await finishShortsRun({
           id, store, dir, short, plan: inheritedPlan, images: inhImages, clips: inhClips,
           opts, say, checkAbort,
+          lookOffset: 1, // 원편과 다른 색 — 같은 이미지를 쓰는 만큼 색이라도 갈라야 다른 편으로 읽힌다
         });
         return;
       }

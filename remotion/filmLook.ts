@@ -49,17 +49,17 @@ export interface FilmLook {
  */
 export const FILM_LOOKS: readonly FilmLook[] = [
   // 맑은 날 야외에서 찍어 살짝 따뜻하게 만진 느낌
-  { name: '따뜻한 오후', temperature: 0.12, tint: 0.02, contrast: 1.05, saturation: 1.04, vibrance: 0.08, brightness: 0.01, vignette: 0.18, aberration: 0 },
+  { name: '따뜻한 오후', temperature: 0.22, tint: 0.03, contrast: 1.14, saturation: 1.12, vibrance: 0.12, brightness: 0.01, vignette: 0.2, aberration: 0 },
   // 흐린 날·그늘. 채도를 낮추고 대비를 살짝 눌러 다큐멘터리 톤
-  { name: '흐린 날 다큐', temperature: -0.08, tint: -0.02, contrast: 0.97, saturation: 0.93, vibrance: 0.05, brightness: 0.02, vignette: 0.12, aberration: 0.15 },
+  { name: '흐린 날 다큐', temperature: -0.16, tint: -0.04, contrast: 0.92, saturation: 0.78, vibrance: 0.1, brightness: 0.03, vignette: 0.14, aberration: 0.06 },
   // 필름 스캔 느낌 — 그레인을 조금 더 주고 대비를 낮춰 바랜 톤
-  { name: '바랜 필름', temperature: 0.06, tint: 0.04, contrast: 0.94, saturation: 0.9, vibrance: 0.1, brightness: 0.03, vignette: 0.24, aberration: 0.2 },
+  { name: '바랜 필름', temperature: 0.12, tint: 0.08, contrast: 0.86, saturation: 0.8, vibrance: 0.16, brightness: 0.05, vignette: 0.34, aberration: 0.12 },
   // 최근 폰 카메라 결과물 — 대비·채도를 올리되 그레인은 최소
-  { name: '선명한 디지털', temperature: 0.02, tint: 0, contrast: 1.09, saturation: 1.07, vibrance: 0.06, brightness: 0, vignette: 0.08, aberration: 0 },
+  { name: '선명한 디지털', temperature: 0.02, tint: 0, contrast: 1.22, saturation: 1.18, vibrance: 0.08, brightness: -0.01, vignette: 0.06, aberration: 0 },
   // 아침·이슬. 차갑고 부드럽게
-  { name: '이른 아침', temperature: -0.13, tint: 0.03, contrast: 0.99, saturation: 0.96, vibrance: 0.09, brightness: 0.04, vignette: 0.14, aberration: 0.1 },
+  { name: '이른 아침', temperature: -0.24, tint: 0.05, contrast: 0.96, saturation: 0.92, vibrance: 0.14, brightness: 0.07, vignette: 0.12, aberration: 0.06 },
   // 해질녘. 가장 따뜻하고 비네트가 깊다
-  { name: '해질녘', temperature: 0.16, tint: 0.05, contrast: 1.03, saturation: 1.02, vibrance: 0.07, brightness: -0.02, vignette: 0.26, aberration: 0.12 },
+  { name: '해질녘', temperature: 0.28, tint: 0.09, contrast: 1.08, saturation: 1.06, vibrance: 0.1, brightness: -0.05, vignette: 0.32, aberration: 0.08 },
 ];
 
 /**
@@ -67,8 +67,9 @@ export const FILM_LOOKS: readonly FilmLook[] = [
  * remotion 의 random() 을 쓴다 — 서버 쪽 해시(fxSeed)를 끌어오면 node 모듈이 브라우저 번들에
  * 딸려 들어간다. random() 은 코어 API 라 번들 안에서 안전하고 결정적이다.
  */
-export function pickFilmLook(seed: string): FilmLook {
-  return FILM_LOOKS[Math.floor(random(`${seed}:look`) * FILM_LOOKS.length) % FILM_LOOKS.length]!;
+export function pickFilmLook(seed: string, offset = 0): FilmLook {
+  const base = Math.floor(random(`${seed}:look`) * FILM_LOOKS.length);
+  return FILM_LOOKS[(base + offset) % FILM_LOOKS.length]!;
 }
 
 /**
