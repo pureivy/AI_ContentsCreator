@@ -54,7 +54,7 @@ import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
 import { shortsStore } from '../content/shorts';
 import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, youtubeQuotaCommitted, shouldStartSecondRun, SIBLING_PLAN_WAIT_MS, type ShortsPlatform } from '../content/shortsPlatform';
-import { pickWriter } from '../content/shortsWriters';
+import { pickWriter, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo } from '../tools/shortsRender';
@@ -1516,6 +1516,23 @@ async function shortsReviseHandler(c: Context): Promise<Response> {
   console.log(`[발행담당] 숏폼 수정 요청 반영 — ${id} 씬 ${r.changedScenes.join(',') || '문구없음'}${r.regenScenes.length ? ` · 배경 ${r.regenScenes.join(',')}` : ''}${r.titleChanged ? ' · 제목' : ''}${r.titleArtChanged ? ' · 캘리' : ''}`);
   return c.json(r);
 }
+/**
+ * 숏폼 작가 페르소나 목록(2026-09-03) — 직원 화면이 조직도(company.yaml 역할)만 읽어서 새 작가가
+ * 안 보인다는 제보 반영. 이들은 별도 에이전트가 아니라 shorts_writer 역할의 필명·문체·목소리다
+ * (집필 규칙 2,098자는 한 역할에 모여 있고, 셋으로 복제하면 규칙이 갈라진다).
+ * 그래서 조직도에 '직원'으로 넣지 않고 이 목록으로 따로 보여 준다. 편성 실적은 최근 30편 기준.
+ */
+app.get('/shorts/writers', (c) => {
+  const recent = shortsStore().list().filter(brandMatch).slice(0, 30);
+  return c.json({
+    writers: SHORTS_WRITERS.map((w) => ({
+      id: w.id, name: w.name, voiceNote: w.voiceNote, styleGuide: w.styleGuide,
+      recentCount: recent.filter((s) => s.writerId === w.id).length,
+    })),
+    recentTotal: recent.length,
+  });
+});
+
 app.post('/shorts/:id/revise', shortsReviseHandler);
 app.post('/api/shorts/:id/revise', shortsReviseHandler);
 

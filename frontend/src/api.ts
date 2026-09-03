@@ -1237,3 +1237,13 @@ export async function runPiece(id: string): Promise<{ ok: boolean; run_id?: stri
     return r.ok ? { ok: true, run_id: j.run_id } : { ok: false, error: j.error || `HTTP ${r.status}` };
   } catch { return { ok: false, error: "network" }; }
 }
+
+// 숏폼 작가 페르소나(2026-09-03) — shorts_writer 역할의 필명·문체·목소리. 조직도(역할)와 다른 층위라 따로 읽는다.
+export interface ShortsWriterInfo { id: string; name: string; voiceNote: string; styleGuide: string; recentCount: number }
+export async function fetchShortsWriters(): Promise<{ writers: ShortsWriterInfo[]; recentTotal: number }> {
+  try {
+    const r = await fetch("/shorts/writers");
+    if (!r.ok) return { writers: [], recentTotal: 0 };
+    return await r.json();
+  } catch { return { writers: [], recentTotal: 0 }; }
+}

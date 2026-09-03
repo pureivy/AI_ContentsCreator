@@ -7,6 +7,7 @@ import {
   fetchCompany, fetchAgent, patchAgent, addSkill, deleteSkill,
   addTeam, renameTeam, deleteTeam, addMember, patchRole, deleteRole,
   CompanyInfo, RoleInfo, AgentProfile, clearInjectedKnowledge,
+  fetchShortsWriters, type ShortsWriterInfo,
 } from "../api";
 import Avatar from "./Avatar";
 import KnowledgeInject from "./KnowledgeInject";
@@ -41,6 +42,10 @@ function glyph(level: string, id: string, title: string): string {
 }
 
 export default function EmployeesView() {
+  // 숏폼 작가 페르소나(2026-09-03) — 조직도의 '역할'과 다른 층위라 따로 불러 숏폼팀 아래 붙인다.
+  const [shortsWriters, setShortsWriters] = useState<ShortsWriterInfo[]>([]);
+  useEffect(() => { void fetchShortsWriters().then((r) => setShortsWriters(r.writers)); }, []);
+
   const [company, setCompany] = useState<CompanyInfo | null>(null);
   // 전역 LLM 설정 — 로컬 모드면 직원별 모델(opus/sonnet/haiku)이 전부 로컬 모델로
   // 덮인다는 사실을 디렉터리에 표시(설정 자체는 🧩 LLM 패널에서).
@@ -205,6 +210,23 @@ export default function EmployeesView() {
             </div>
             {card(t.lead, false)}
             {t.members.map((m) => card(m, true))}
+            {/* 숏폼 작가 페르소나 — 별도 에이전트가 아니라 shorts_writer 역할의 필명·문체·목소리다.
+                집필 규칙은 한 역할에 모여 있고(2,098자) 셋으로 복제하면 규칙이 갈라지므로 '직원'으로
+                넣지 않는다. 편마다 돌아가며 배정되고 작가별로 목소리가 다르다. */}
+            {t.id === "shorts" && shortsWriters.length > 0 && (
+              <div className="emp-personas" style={{ margin: "6px 0 2px 10px", paddingLeft: 8, borderLeft: "2px solid var(--bd, #ddd)" }}>
+                <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
+                  작가 필명 {shortsWriters.length}인 — 편마다 번갈아 배정, 목소리도 각자 다릅니다
+                </div>
+                {shortsWriters.map((w) => (
+                  <div key={w.id} style={{ fontSize: 12, marginBottom: 3 }} title={w.styleGuide}>
+                    <b>{w.name}</b>
+                    <span className="muted"> · {w.voiceNote}</span>
+                    {w.recentCount > 0 && <span className="chip" style={{ marginLeft: 6 }}>최근 {w.recentCount}편</span>}
+                  </div>
+                ))}
+              </div>
+            )}
             {addingTo === t.id ? (
               <div className="emp-addmember">
                 <input autoFocus placeholder="새 팀원 이름 (예: 홍길동 사원)" value={newMember}
