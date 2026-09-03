@@ -99,7 +99,7 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
       {s.fx?.accent?.startsWith('particles-') ? (
         <ParticleDrift kind={s.fx.accent.slice('particles-'.length) as 'leaves' | 'petals' | 'snow'} sceneIndex={index} />
       ) : null}
-      {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} /> : null}
+      {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} {...(driftSeed ? { seed: `${driftSeed}:${index}` } : {})} /> : null}
       {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}
       {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
       {s.kind === 'chart' && s.chart ? <BarChartGrow chart={s.chart} total={s.durationInFrames} /> : null}
