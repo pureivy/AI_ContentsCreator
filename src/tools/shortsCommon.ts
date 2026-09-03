@@ -327,12 +327,16 @@ const HOOK_FX: readonly SceneFx[] = [
   { enter: 'none', move: 'push', intensity: 'strong' },
   { enter: 'fade', move: 'zoom-out', intensity: 'strong', accent: 'spotlight' },
 ];
+// 'wipe' 는 변주 묶음에서 뺀다(2026-09-03 실측). Series 는 씬을 겹치지 않으므로 와이프가 아직
+// 안 열린 쪽에는 아무것도 없고, 루트 배경인 검정이 그대로 드러난다 — 실측에서 씬 전환 0.2초 동안
+// 화면 오른쪽 절반이 순검정이었다(t=10s 우측 테두리 밝기 0.0). 전환이 아니라 결함으로 보인다.
+// 스키마에는 남겨 둔다(옛 props 호환) — 자동 선택만 안 한다.
 // 카드 씬 — 패널이 주인공이라 배경은 subtle~normal 로 묶는다(strong 은 시선을 뺏는다).
-const CARD_ENTER: readonly NonNullable<SceneFx['enter']>[] = ['fade', 'wipe', 'scale', 'slide-up'];
+const CARD_ENTER: readonly NonNullable<SceneFx['enter']>[] = ['fade', 'scale', 'slide-up', 'fade'];
 const CARD_MOVE: readonly NonNullable<SceneFx['move']>[] = ['zoom-in', 'zoom-out', 'none'];
 const CARD_INTENSITY: readonly NonNullable<SceneFx['intensity']>[] = ['subtle', 'subtle', 'normal'];
 // 본문(카드 없는) 씬 — 배경뿐이라 크게 움직여도 된다.
-const BODY_ENTER: readonly NonNullable<SceneFx['enter']>[] = ['slide-up', 'fade', 'wipe', 'scale'];
+const BODY_ENTER: readonly NonNullable<SceneFx['enter']>[] = ['slide-up', 'fade', 'scale', 'slide-up'];
 const BODY_MOVE: readonly NonNullable<SceneFx['move']>[] = ['zoom-in', 'zoom-out', 'push'];
 const CTA_ENTER: readonly NonNullable<SceneFx['enter']>[] = ['fade', 'scale', 'slide-up'];
 

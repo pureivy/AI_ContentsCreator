@@ -102,7 +102,7 @@ export async function stageAndBuildProps(
       };
     } catch { /* 스테이징 실패 — 오버레이 생략 */ }
   }
-  const inputProps = { scenes: propScenes, totalFrames, ...(opts.caption ? { caption: opts.caption } : {}), ...(titleProp ? { title: titleProp } : {}) };
+  const inputProps = { scenes: propScenes, totalFrames, ...(opts.fxSeedKey ? { driftSeed: opts.fxSeedKey } : {}), ...(opts.caption ? { caption: opts.caption } : {}), ...(titleProp ? { title: titleProp } : {}) };
   return inputProps;
 }
 

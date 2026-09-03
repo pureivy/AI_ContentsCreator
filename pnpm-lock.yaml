@@ -17,6 +17,9 @@ importers:
       '@remotion/bundler':
         specifier: ^4.0.485
         version: 4.0.485(postcss@8.5.15)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@remotion/noise':
+        specifier: 4.0.485
+        version: 4.0.485(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@remotion/renderer':
         specifier: ^4.0.485
         version: 4.0.485(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -516,6 +519,9 @@ packages:
     peerDependencies:
       react: '>=16.8.0'
       react-dom: '>=16.8.0'
+
+  '@remotion/noise@4.0.485':
+    resolution: {integrity: sha512-PQsVQSt59X05dBgBN0r9DuyX/wbDyEZ1maA2w4Iak+C/2ICkXTSRNM9l3CqvbCcdzTlaup2HKjSplBkuZIeEwg==}
 
   '@remotion/player@4.0.485':
     resolution: {integrity: sha512-kgc/Qfj4/XI+gkO3ZFglefDdaXWjbk3JRys2aZKekNetIX31mXcnXjzUadDqB3fMJ1H+qNQ9oen5MWZZDN3I1g==}
@@ -1583,6 +1589,9 @@ packages:
   signal-exit@3.0.7:
     resolution: {integrity: sha512-wnD2ZE+l+SPC/uoS0vXeE9L1+0wuaMqKlfz9AMUo38JsyLSBWSFcHR1Rri62LZc12vLr1gb3jl7iwQhgwpAbGQ==}
 
+  simplex-noise@4.0.1:
+    resolution: {integrity: sha512-zl/+bdSqW7HJOQ0oDbxrNYaF4F5ik0i7M6YOYmEoIJNtg16NpvWaTTM1Y7oV/7T0jFljawLgYPS81Uu2rsfo1A==}
+
   sisteransi@1.0.5:
     resolution: {integrity: sha512-bLGGlR1QxBcynn2d5YmDX4MGjlZvy2MRBDRNHLJ8VI6l6+9FUiyTFNJ0IveOSP0bcXgVDPRcfGqA0pjaqUpfVg==}
 
@@ -2249,6 +2258,14 @@ snapshots:
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
       remotion: 4.0.485(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+
+  '@remotion/noise@4.0.485(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+    dependencies:
+      remotion: 4.0.485(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      simplex-noise: 4.0.1
+    transitivePeerDependencies:
+      - react
+      - react-dom
 
   '@remotion/player@4.0.485(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
@@ -3393,6 +3410,8 @@ snapshots:
   siginfo@2.0.0: {}
 
   signal-exit@3.0.7: {}
+
+  simplex-noise@4.0.1: {}
 
   sisteransi@1.0.5: {}
 

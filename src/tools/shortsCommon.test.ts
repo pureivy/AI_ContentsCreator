@@ -375,3 +375,18 @@ describe('fxSeed — 하위 비트 함정 회귀', () => {
     expect(combos.size).toBeGreaterThan(150);
   });
 });
+
+describe("defaultSceneFx — 'wipe' 자동 선택 금지", () => {
+  it('어떤 시드·씬에서도 wipe 를 고르지 않는다', () => {
+    // Series 는 씬을 겹치지 않아 와이프의 미개방 영역이 루트 배경(검정)으로 드러난다.
+    // 실측(short_0b062a8f6a): 전환 0.2초간 화면 오른쪽이 순검정이었다.
+    for (let n = 0; n < 60; n++) {
+      const s = fxSeed(`short_${n}`);
+      for (const k of [undefined, 'stat', 'list', 'quote', 'chart', 'compare', 'hook', 'cta'] as const) {
+        for (const i of [0, 1, 2, 3, 4, 5]) {
+          expect(defaultSceneFx(k, i, false, 9, s)?.enter).not.toBe('wipe');
+        }
+      }
+    }
+  });
+});

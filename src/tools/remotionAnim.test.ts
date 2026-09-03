@@ -189,3 +189,52 @@ describe('kenBurnsMove — 화면 절반 치수 주입', () => {
     }
   });
 });
+
+describe('cameraDrift — 손 흔들림', () => {
+  it('시드가 없으면 0 — 구 호출부는 종전 궤도 그대로', () => {
+    expect(A.cameraDrift(30)).toEqual({ x: 0, y: 0, rotate: 0 });
+  });
+  it('결정적 — 같은 프레임·시드는 같은 값(재렌더 안정)', () => {
+    expect(A.cameraDrift(42, 'short_x:1')).toEqual(A.cameraDrift(42, 'short_x:1'));
+  });
+  it('씬마다·편마다 다르게 흔들린다', () => {
+    expect(A.cameraDrift(42, 'short_x:1')).not.toEqual(A.cameraDrift(42, 'short_x:2'));
+    expect(A.cameraDrift(42, 'short_x:1')).not.toEqual(A.cameraDrift(42, 'short_y:1'));
+  });
+  it('실제로 움직이되 진폭이 작다 — 배경이 자막보다 시끄러우면 안 된다', () => {
+    const xs = Array.from({ length: 240 }, (_, f) => A.cameraDrift(f, 'seed:0').x);
+    expect(Math.max(...xs.map(Math.abs))).toBeGreaterThan(1);   // 정지 아님
+    expect(Math.max(...xs.map(Math.abs))).toBeLessThanOrEqual(12);
+    const rs = Array.from({ length: 240 }, (_, f) => A.cameraDrift(f, 'seed:0').rotate);
+    expect(Math.max(...rs.map(Math.abs))).toBeLessThanOrEqual(0.3);
+  });
+  it('연속적이다 — 프레임 간 점프가 없어야 떨림이 아니라 흔들림으로 보인다', () => {
+    let maxStep = 0;
+    for (let f = 1; f < 300; f++) {
+      maxStep = Math.max(maxStep, Math.abs(A.cameraDrift(f, 's:0').x - A.cameraDrift(f - 1, 's:0').x));
+    }
+    expect(maxStep).toBeLessThan(1); // 프레임당 1px 미만
+  });
+});
+
+describe('kenBurnsMove — 드리프트를 얹어도 검은 띠가 안 난다', () => {
+  it('어떤 조합에서도 팬 오프셋이 축별 허용치를 안 넘는다', () => {
+    const moves = ['zoom-in', 'zoom-out', 'push'] as const;
+    const ints = ['subtle', 'normal', 'strong'] as const;
+    for (const mv of moves) for (const it of ints) for (const seed of ['a:0', 'b:1', 'c:2']) {
+      for (let f = 0; f <= 200; f += 7) {
+        const m = A.kenBurnsMove(f, 200, 1, mv, it, { w: 540, h: 960 }, seed);
+        expect(Math.abs(m.x)).toBeLessThanOrEqual(((m.scale - 1) * 540) / m.scale + 1e-9);
+        expect(Math.abs(m.y)).toBeLessThanOrEqual(((m.scale - 1) * 960) / m.scale + 1e-9);
+      }
+    }
+  });
+  it('드리프트를 주면 궤도가 실제로 달라진다', () => {
+    const plain = A.kenBurnsMove(60, 200, 1, 'zoom-in', 'normal');
+    const drifted = A.kenBurnsMove(60, 200, 1, 'zoom-in', 'normal', { w: 540, h: 960 }, 'seed:1');
+    expect(drifted).not.toEqual(plain);
+  });
+  it("move:'none' 은 드리프트도 안 받는다 — 완전 정지가 의도인 자리", () => {
+    expect(A.kenBurnsMove(60, 200, 1, 'none', 'normal', { w: 540, h: 960 }, 'seed:1')).toEqual({ scale: 1, x: 0, y: 0, rotate: 0 });
+  });
+});

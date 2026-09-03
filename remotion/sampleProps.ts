@@ -57,5 +57,6 @@ const scenes: Scene[] = [
 export const sampleProps: AutoShortsProps = {
   scenes,
   totalFrames: scenes.reduce((a, s) => a + s.durationInFrames, 0),
+  driftSeed: 'sample',
   caption: { bottomPct: 22, keyword: '수국 꽃대', outline: true },
 };

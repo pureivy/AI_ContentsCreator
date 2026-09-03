@@ -47,6 +47,8 @@ export const autoShortsSchema = z.object({
       accent: z.enum(['spotlight', 'particles-leaves', 'particles-petals', 'particles-snow']).optional(),
     }).optional(),
   })),
+  /** 카메라 드리프트 시드(2026-09-03) — 편·씬마다 다른 손 흔들림. 미지정=흔들림 없음(종전 궤도). */
+  driftSeed: z.string().optional(),
   totalFrames: z.number(),
   /** 자막 옵션 — 위치(하단 여백 %)·키워드 강조색·테두리·글자 크기. 미지정=컴포넌트 기본값. */
   caption: z.object({ bottomPct: z.number().optional(), keyword: z.string().optional(), outline: z.boolean().optional(), fontPx: z.number().optional(), hookFontPx: z.number().optional() }).optional(),
@@ -57,7 +59,7 @@ export type AutoShortsProps = z.infer<typeof autoShortsSchema>;
 
 const CLIP_SECONDS = 6; // clipFrames 미지정 시 감속 배율 산정 폴백 — 프레임 수는 fps 에서 유도
 
-const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; caption?: AutoShortsProps['caption'] }> = ({ s, index, caption }) => {
+const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; caption?: AutoShortsProps['caption']; driftSeed?: string }> = ({ s, index, caption, driftSeed }) => {
   const f = useCurrentFrame();
   const { fps } = useVideoConfig();
   // 씬 엔터 이펙트 — 종전 '6프레임 페이드인(첫 씬 제외)'을 일반화. 씬 길이 불변이라 TTS 싱크 무손상.
@@ -81,7 +83,7 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         />
       ) : (
-        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={s.fx?.move} intensity={s.fx?.intensity} />
+        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={s.fx?.move} intensity={s.fx?.intensity} driftSeed={driftSeed ? `${driftSeed}:${index}` : undefined} />
       )}
       {/* 액센트 — 배경 위·자막/오버레이 아래(텍스트는 어두워지거나 가려지지 않게) */}
       {s.fx?.accent === 'spotlight' ? <SpotlightMask /> : null}
@@ -100,14 +102,14 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
   );
 };
 
-export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title }) => (
+export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, driftSeed }) => (
   <AbsoluteFill style={{ background: '#000', fontFamily: FONT_FAMILY }}>
     <Series>
       {scenes.map((s, i) => (
         // name 은 Studio 타임라인 라벨 전용 — 렌더 결과에는 영향이 없다. 어느 씬이 어느 연출인지
         // 스크럽하며 바로 짚으려고 붙인다(`pnpm studio`).
         <Series.Sequence key={i} durationInFrames={Math.max(1, s.durationInFrames)} name={`씬${i + 1} · ${s.kind ?? '무연출'}`}>
-          <Scene s={s} index={i} caption={caption} />
+          <Scene s={s} index={i} caption={caption} driftSeed={driftSeed} />
         </Series.Sequence>
       ))}
     </Series>
