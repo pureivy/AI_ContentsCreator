@@ -167,6 +167,38 @@ function reinforceShorts(s: Shorts, m: MetricSample): number {
 }
 
 /**
+ * 인스타 릴스의 (제목·키워드, 조회수) — 축 성적 계산의 입력(2026-09-04).
+ * 유튜브가 아니라 인스타를 쓰는 이유는 igAxis 헤더 참조(유튜브 피드는 신호가 끊겼다).
+ */
+export function igReelViews(brand: string | undefined): Array<{ text: string; views: number }> {
+  const slug = brand ?? '';
+  const out: Array<{ text: string; views: number }> = [];
+  for (const s of shortsStore().list()) {
+    if ((s.brand ?? '') !== slug || !s.igReelId) continue;
+    try {
+      const v = latestSampleViews(readMetrics(s.id), 'meta:ig');
+      if (v === null) continue;
+      out.push({ text: `${s.title ?? ''} ${s.topic ?? ''} ${s.keyword ?? ''}`, views: v });
+    } catch { /* 이 편만 건너뛴다 */ }
+  }
+  return out;
+}
+
+/** 소스별 최신 표본의 조회수(없으면 null) — 축 성적은 '최종 도달'을 보므로 최대가 아니라 최신을 쓴다. */
+function latestSampleViews(samples: ReadonlyArray<MetricSample>, source: string): number | null {
+  let best: { at: number; v: number } | null = null;
+  for (const m of samples) {
+    if (m?.source !== source) continue;
+    const at = Date.parse(String(m.measuredAt ?? ''));
+    if (!Number.isFinite(at)) continue;
+    const v = Number(m.views);
+    if (!Number.isFinite(v)) continue;
+    if (!best || at > best.at) best = { at, v };
+  }
+  return best ? best.v : null;
+}
+
+/**
  * 브랜드 쇼츠의 편별 유튜브 검색어를 모은다 — 주제 제안이 실측 수요를 보게 하는 입구(2026-09-04).
  * 표본이 없으면 빈 배열(fail-open) — 수집 전이거나 애널리틱스 집계 전이면 신호 없이 종전대로 돈다.
  */

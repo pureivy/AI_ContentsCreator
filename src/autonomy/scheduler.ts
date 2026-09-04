@@ -33,7 +33,8 @@ import { overThemeCap, themeRotationBlock, THEME_MONTHLY_CAP } from '../content/
 import { brandThemeCoverage } from '../analytics/discoverySeeds';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 import { rankSearchDemand, searchDemandBlock, unconvertedSubjects, normalizeTerm } from '../analytics/ytSearchDemand';
-import { shortsSearchTerms } from '../analytics/shortsPerf';
+import { shortsSearchTerms, igReelViews } from '../analytics/shortsPerf';
+import { axisPerformance, axisBlock } from '../analytics/igAxis';
 import { findSpecies } from '../content/species';
 
 export interface AutoCycleDeps<T = string> {
@@ -521,6 +522,13 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       return searchDemandBlock(rows, { missed: unconvertedSubjects(scored) });
     } catch { return ''; } // fail-open — 신호 하나 때문에 제안이 멈추면 안 된다
   })();
+  // 인스타 소재 축 성적(2026-09-04 사용자 확정) — 같은 소재라도 각도로 도달이 갈린다.
+  // 실측 111편: 꽃·개화 중앙 1,362 · 전정 943 … 기타 557(39편, 가장 큰 덩어리이자 최하위권).
+  // "이 소재를 다뤄라"가 아니라 "각도를 이렇게 잡아라"로 쓴다 — 계절과 싸우지 않게.
+  const axisBlockStr = (() => {
+    try { return axisBlock(axisPerformance(igReelViews(activeBrandSlug() || undefined))); }
+    catch { return ''; } // fail-open
+  })();
   const existingLines = existing.slice(0, 30)
     .map((e) => `- (${e.kind}) ${e.title}${e.keyword ? ` [키워드: ${e.keyword}]` : ''}`).join('\n');
   // 다양성 강제(2026-07-23 감사) — 킬스위치 CONTENT_DIVERSITY=off 로 끔. 표면 novelty 가 못 잡는 '소재 쏠림'을
@@ -555,6 +563,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov, speciesCap); return b ? `${b}\n\n` : ''; })() +
     (() => { const b = themeRotationBlock(getBrand()?.topicThemes, themeCov); return b ? `${b}\n\n` : ''; })() +
     (searchBlock ? `${searchBlock}\n\n` : '') +
+    (axisBlockStr ? `${axisBlockStr}\n\n` : '') +
     jargonLine +
     (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +
