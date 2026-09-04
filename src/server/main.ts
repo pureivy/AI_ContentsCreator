@@ -2667,6 +2667,9 @@ function performanceHandler(c: Context): Response {
           avgViewPct: ytA?.avgViewPct ?? null,
           feedShare: ytA?.traffic ? shortsFeedShare(ytA.traffic) : null,
           measuredAt: ytA?.measuredAt ?? null,
+          // 이 편으로 들어온 검색어(2026-09-04) — 이 채널에서 검색은 유일하게 안 죽은 유입이다.
+          // 어떤 말로 찾아오는지가 다음 주제를 고르는 근거가 된다.
+          inflow: topInflow(readMetrics(x.id), 5),
         } : null,
         meta: x.metaPublishedTs ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, likes: ig?.likes ?? null, reflected: !!x.metaPerfReflected, stale: shortsMetaPerfStale(x, perfNow, perfDays), series: viewsSeriesFor(x.id, 'meta:ig'), ts: x.metaPublishedTs } : null,
         // 페북 릴스 — 게시된 조각만(fbReelId). 지표는 비디오 노드에서 수집한 meta:fb 표본.

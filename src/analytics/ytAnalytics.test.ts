@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { columnIndex, parseRetentionReport, parseTrafficReport, shortsFeedShare, ymd, isAuthError, hasMeasurement, ANALYTICS_LAG_DAYS } from './ytAnalytics';
+import { columnIndex, parseRetentionReport, parseTrafficReport, shortsFeedShare, ymd, isAuthError, hasMeasurement, ANALYTICS_LAG_DAYS, parseSearchTerms } from './ytAnalytics';
 
 const retentionJson = {
   columnHeaders: [
@@ -110,4 +110,23 @@ describe('hasMeasurement — 빈 측정 기록 방지(순수)', () => {
     expect(hasMeasurement(r(0), {})).toBe(false);
   });
   it('retention 자체가 없으면 기록하지 않는다', () => { expect(hasMeasurement(null, {})).toBe(false); });
+});
+
+describe('parseSearchTerms — 유튜브 검색어 파싱(순수, 2026-09-04)', () => {
+  it('조회수 많은 순으로 정렬한다', () => {
+    expect(parseSearchTerms({ rows: [['포도수확시기', 173], ['하스카프베리묘목', 551]] }))
+      .toEqual([{ keyword: '하스카프베리묘목', count: 551 }, { keyword: '포도수확시기', count: 173 }]);
+  });
+  it('빈 응답·행 없음은 빈 배열', () => {
+    expect(parseSearchTerms(null)).toEqual([]);
+    expect(parseSearchTerms({})).toEqual([]);
+    expect(parseSearchTerms({ rows: [] })).toEqual([]);
+  });
+  it('키워드 없는 행·0 이하·숫자 아닌 값은 버린다', () => {
+    expect(parseSearchTerms({ rows: [['', 10], ['정상', 0], ['이상', 'x'], ['좋음', 3]] }))
+      .toEqual([{ keyword: '좋음', count: 3 }]);
+  });
+  it('앞뒤 공백을 다듬는다', () => {
+    expect(parseSearchTerms({ rows: [['  포도  ', 5]] })).toEqual([{ keyword: '포도', count: 5 }]);
+  });
 });

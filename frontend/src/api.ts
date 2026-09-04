@@ -973,6 +973,8 @@ export interface ShortsPerfRow {
     /** 쇼츠 피드 유입 비중(0~1) — 낮으면 피드에 안 뿌려진 것이다. */
     feedShare?: number | null;
     measuredAt?: string | null;
+    /** 이 편으로 들어온 유튜브 검색어(조회 많은 순) — 다음 주제를 고르는 근거. */
+    inflow?: Array<{ keyword: string; count: number }>;
   } | null;
   meta: { permalink: string | null; views: number | null; likes: number | null; reflected: boolean; stale: boolean; series: number[]; ts: string } | null;
   // 페북 릴스 — 미게시면 null. coverPending 이면 커버(썸네일) 미적용 상태.

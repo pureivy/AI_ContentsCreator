@@ -418,6 +418,15 @@ export default function PerformanceView() {
                           <div className="perf-title-row">
                             <span className="perf-title-txt" title={r.title}>{r.title}</span>
                           </div>
+                          {/* 검색 유입어 — 이 채널에서 검색은 유일하게 안 죽은 유입이라, 어떤 말로
+                              찾아오는지가 다음 주제의 근거가 된다(2026-09-04 분석). */}
+                          {r.youtube?.inflow?.length ? (
+                            <div className="perf-inflow" title="이 편으로 들어온 유튜브 검색어">
+                              {r.youtube.inflow.slice(0, 3).map((k) => (
+                                <span key={k.keyword} className="perf-inflow-k">{k.keyword} <b>{k.count}</b></span>
+                              ))}
+                            </div>
+                          ) : null}
                         </td>
                         <td className="perf-c">
                           <span className="perf-links">{linkBadge("youtube", r.youtube?.url, "유튜브에서 열기", "유튜브 미업로드")}</span>

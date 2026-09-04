@@ -223,10 +223,11 @@ async function collectShortsAnalytics(due: Shorts[], now: number, days: number, 
     if (ymd(upload) > end) { skipped += 1; continue; } // 아직 처리 구간에 못 들어온 신작
     try {
       const start = ymd(upload - 86_400_000); // 업로드 전날부터(타임존 경계 방어)
-      const { retention, traffic } = await fetchVideoAnalytics(s.brand ?? '', s.youtubeId!, start, end, signal);
+      const { retention, traffic, searchTerms } = await fetchVideoAnalytics(s.brand ?? '', s.youtubeId!, start, end, signal);
       if (!hasMeasurement(retention, traffic)) { skipped += 1; continue; } // 처리 전·빈 측정 — 다음 틱 재시도
       appendMetrics(s.id, {
-        measuredAt: new Date().toISOString(), views: retention!.views, searchInflow: [],
+        // 검색어를 쌓는다(2026-09-04) — 종전엔 빈 배열이라 '무엇으로 들어왔는지'가 남지 않았다.
+        measuredAt: new Date().toISOString(), views: retention!.views, searchInflow: searchTerms,
         avgViewPct: retention!.avgViewPct, avgViewSec: retention!.avgViewSec,
         watchMinutes: retention!.watchMinutes, traffic, source: 'youtube:analytics',
       });

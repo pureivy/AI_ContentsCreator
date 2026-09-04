@@ -122,13 +122,42 @@ async function query(token: string, params: Record<string, string>, signal?: Abo
   throw new Error(last);
 }
 
-/** 영상 1편의 시청 지속률 + 유입 경로. 토큰·스코프 없으면 throw(호출측 fail-open). */
+/**
+ * reports 응답(insightTrafficSourceDetail 차원) → 검색어별 조회수(순수).
+ *
+ * 이 채널에서 검색은 유일하게 죽지 않은 유입이다(2026-09-04 분석). 피드가 끊긴 뒤에도 하루
+ * 200~340회로 유지됐고, 7월 30회에서 두 달 만에 그만큼 자랐다. 그런데 '무엇으로 들어왔는지'를
+ * 한 번도 안 쌓아 왔다 — searchInflow 필드는 네이버 블로그만 채우고 유튜브는 빈 배열이었다.
+ * 그래서 "하스카프베리묘목 551회" 같은 값을 임시 스크립트로만 볼 수 있었다.
+ */
+export function parseSearchTerms(json: unknown): Array<{ keyword: string; count: number }> {
+  const j = json as { rows?: unknown[][] } | null;
+  const out: Array<{ keyword: string; count: number }> = [];
+  for (const row of j?.rows ?? []) {
+    const keyword = String(row?.[0] ?? '').trim();
+    const count = Number(row?.[1]);
+    if (!keyword || !Number.isFinite(count) || count <= 0) continue;
+    out.push({ keyword, count });
+  }
+  return out.sort((a, b) => b.count - a.count);
+}
+
+/** 영상 1편의 시청 지속률 + 유입 경로 + 검색어. 토큰·스코프 없으면 throw(호출측 fail-open). */
 export async function fetchVideoAnalytics(
   slug: string, videoId: string, startDate: string, endDate: string, signal?: AbortSignal,
-): Promise<{ retention: YtRetention | null; traffic: YtTraffic }> {
+): Promise<{ retention: YtRetention | null; traffic: YtTraffic; searchTerms: Array<{ keyword: string; count: number }> }> {
   const token = await youtubeAccessToken(slug, signal);
   const base = { ids: 'channel==MINE', startDate, endDate, filters: `video==${videoId}` };
   const rj = await query(token, { ...base, metrics: 'views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage' }, signal);
   const tj = await query(token, { ...base, metrics: 'views', dimensions: 'insightTrafficSourceType', sort: '-views' }, signal);
-  return { retention: parseRetentionReport(rj), traffic: parseTrafficReport(tj) };
+  // 검색어는 실패해도 나머지를 버리지 않는다 — 지원 안 되는 조합·일시 오류로 지속률까지 잃으면 손해다.
+  let searchTerms: Array<{ keyword: string; count: number }> = [];
+  try {
+    const sj = await query(token, {
+      ...base, filters: `video==${videoId};insightTrafficSourceType==YT_SEARCH`,
+      metrics: 'views', dimensions: 'insightTrafficSourceDetail', sort: '-views', maxResults: '10',
+    }, signal);
+    searchTerms = parseSearchTerms(sj);
+  } catch { /* 무해 — 검색어 없이 진행 */ }
+  return { retention: parseRetentionReport(rj), traffic: parseTrafficReport(tj), searchTerms };
 }

@@ -1800,3 +1800,11 @@ button.upload-retry:hover { background: var(--panel2); }
 .media-sub { font-size: 10.5px; opacity: .6; }
 .media-meta input { font-size: 11px; padding: 4px 6px; border-radius: 5px; border: 1px solid var(--line, #333); background: transparent; color: inherit; width: 100%; }
 .media-del { font-size: 11px; padding: 4px; border-radius: 5px; cursor: pointer; opacity: .75; }
+
+/* 성과 탭 — 유튜브 검색 유입어(2026-09-04). 제목 아래 한 줄, 표 폭을 늘리지 않는다. */
+.perf-inflow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.perf-inflow-k {
+  font-size: 10.5px; line-height: 1.5; padding: 0 5px; border-radius: 3px;
+  background: var(--chip-bg, rgba(127, 127, 127, .12)); color: var(--muted, #6b7280); white-space: nowrap;
+}
+.perf-inflow-k b { font-weight: 600; color: var(--fg, inherit); font-variant-numeric: tabular-nums; }
