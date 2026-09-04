@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt, diversifyTitle, titleShape } from './shorts';
+import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt, diversifyTitle, titleShape, normalizeLatinName } from './shorts';
 import { ShortsStore } from '../content/shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
@@ -375,5 +375,41 @@ describe('buildSceneImagePrompt — 수종 앵커', () => {
     // 이라 활엽수가 나왔다(측백나무는 침엽수).
     const t = buildSceneImagePrompt({ style: '플랫', scene: '담장 위에 일정 간격으로 배치된 작은 나무 아이콘들', index: 2, total: 4, subject: SUBJ });
     expect(t).toContain('침엽수');
+  });
+});
+
+describe('normalizeLatinName — 학명만 통과시킨다', () => {
+  it('정상 학명', () => {
+    expect(normalizeLatinName('Nandina domestica')).toBe('Nandina domestica');
+    expect(normalizeLatinName('Platycladus orientalis')).toBe('Platycladus orientalis');
+  });
+  it('군더더기를 떼어낸다', () => {
+    expect(normalizeLatinName('Nandina domestica (남천)')).toBe('Nandina domestica');
+    expect(normalizeLatinName('  Cornus officinalis  ')).toBe('Cornus officinalis');
+    expect(normalizeLatinName('Hydrangea macrophylla var. serrata')).toBe('Hydrangea macrophylla');
+  });
+  it('학명이 아니면 버린다 — 틀린 학명은 없느니만 못하다', () => {
+    for (const bad of ['남천', '나무', '', 'nandina domestica', 'Nandina', 'N. domestica', '123 456']) {
+      expect(normalizeLatinName(bad)).toBe('');
+    }
+  });
+});
+
+describe('buildSceneImagePrompt — 학명 앵커', () => {
+  const base = { style: '수채화', scene: '마당의 나무', index: 2, total: 4 };
+  it('학명이 있으면 앞에 세운다', () => {
+    const t = buildSceneImagePrompt({ ...base, subjectLatin: 'Nandina domestica', subject: '남천 — 깃꼴겹잎' });
+    expect(t).toContain('Nandina domestica');
+    expect(t).toContain('남천');
+    expect(t.indexOf('Nandina')).toBeLessThan(t.indexOf('장면(씬'));
+  });
+  it('학명만 있어도 앵커가 붙는다', () => {
+    expect(buildSceneImagePrompt({ ...base, subjectLatin: 'Nandina domestica' })).toContain('[대상 식물');
+  });
+  it('둘 다 없으면 앵커 줄이 없다', () => {
+    expect(buildSceneImagePrompt(base)).not.toContain('[대상 식물');
+  });
+  it('잎차례까지 지시한다 — 남천을 손바닥잎으로 그린 실사고 대응', () => {
+    expect(buildSceneImagePrompt({ ...base, subjectLatin: 'Nandina domestica' })).toContain('잎차례');
   });
 });

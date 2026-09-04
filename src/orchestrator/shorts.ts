@@ -966,7 +966,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   } catch { return plan; }
 }
 
-async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: string): Promise<{ preset: string; style: string; prompts: string[]; subject?: string }> {
+async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: string): Promise<{ preset: string; style: string; prompts: string[]; subject?: string; subjectLatin?: string }> {
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 대상] ${keyword}` : '',
@@ -978,12 +978,18 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
     // 수종 오식별(2026-09-03 실사고) — "측백나무 생울타리" 편에서 4씬 중 1씬만 수종명을 적었고
     // 나머지는 "생울타리", "작은 나무 아이콘들"이라고만 써서, 이미지 모델이 활엽수를 그렸다.
     // 측백나무는 침엽수다. 원예 채널에서 수종이 틀린 화면은 신뢰를 직접 깎는다.
-    '수종 고정(가장 중요): subject 에 이 영상의 대상 식물과 "그림으로 구별되는 특징"을 적어라 — 잎 모양·수형·색 위주로 한 줄(예: "측백나무 — 비늘 모양 잎이 납작한 부채처럼 갈라지는 침엽수, 원뿔형 수형, 짙은 청록"). 모르면 subject 를 비워라(지어내지 마라).',
+    // 수종 정확도(2026-09-04 2차) — 1차(수종 앵커)는 한글 이름 + 산문 묘사였는데, 그 묘사가
+    // LLM 기억에서 나오다 보니 틀렸다. 실측: 남천을 "손바닥 모양으로 갈라진 잎"이라고 적었는데
+    // 남천은 깃꼴겹잎이다. 학명을 함께 받는 이유가 여기 있다 — 이미지 모델은 식물 데이터셋을
+    // 학명으로 학습해서, 한글 이름이나 산문 묘사보다 학명 한 줄이 훨씬 정확하게 꽂힌다.
+    '수종 고정(가장 중요): 이 영상의 대상 식물을 두 칸으로 적어라. subject_latin 에는 학명(속명+종소명, 예: "Nandina domestica" "Platycladus orientalis"), subject 에는 한글 이름과 그림으로 구별되는 특징을 한 줄로(잎 모양·잎차례·수형·계절 색).',
+    '특징은 정확해야 한다 — 겹잎인지 홑잎인지, 잎차례가 어떤지, 침엽인지 활엽인지를 틀리지 마라. 원문(블로그 초안)에 그 식물의 생김새 묘사가 있으면 그것을 우선하고, 확신이 없으면 특징을 짧게만 쓰되 학명은 반드시 채워라 — 학명 하나가 애매한 산문보다 정확하다.',
+    '학명·이름을 모르는 소재(도구·흙·일반 정원 풍경)면 두 칸을 모두 비워라. 지어내지 마라.',
     '그리고 모든 씬 묘사(prompt)에 그 식물이 무엇인지 매번 명시하라 — "나무", "생울타리", "묘목" 처럼 뭉뚱그리지 마라. 화면에 식물이 안 나오는 씬(도구·흙·줄자만)은 예외다.',
     'style_preset 은 주제·내용·톤에 어울리게 선택하라 — photorealistic 을 기본값처럼 고르지 말 것. photorealistic=실물 시연·하우투·생활, manhwa=스토리·유머·과장, watercolor=감성·계절·에세이, ink_wash=차분한 전통·사색적 주제, flat_design=정보·정책·경제·비교·수치, retro_poster=이벤트·프로모션·복고.',
-    'JSON 형식: {"style_preset":"photorealistic|manhwa|watercolor|ink_wash|flat_design|retro_poster","style":"모든 씬 공통 스타일 문구(팔레트·질감·조명)","subject":"대상 식물 — 구별되는 겉모습 한 줄(없으면 빈 문자열)","scenes":[{"prompt":"장면 묘사(한국어 150자 이내)"}]}',
+    'JSON 형식: {"style_preset":"photorealistic|manhwa|watercolor|ink_wash|flat_design|retro_poster","style":"모든 씬 공통 스타일 문구(팔레트·질감·조명)","subject_latin":"학명(모르면 빈 문자열)","subject":"한글 이름 — 구별되는 겉모습 한 줄(없으면 빈 문자열)","scenes":[{"prompt":"장면 묘사(한국어 150자 이내)"}]}',
   ].join('\n');
-  const j = await callRoleJSON<{ style_preset?: unknown; style?: unknown; subject?: unknown; scenes?: Array<{ prompt?: unknown }> }>(
+  const j = await callRoleJSON<{ style_preset?: unknown; style?: unknown; subject?: unknown; subject_latin?: unknown; scenes?: Array<{ prompt?: unknown }> }>(
     io, 'shorts_director', '당신은 숏폼 영상 디렉터입니다. 요청된 JSON 스키마만 출력합니다.', user, 1800, true,
   );
   const rawPreset = String(j?.style_preset ?? '').trim();
@@ -994,9 +1000,30 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
     return p || `${topic} 를 상징하는 한국 생활 장면, ${s.narration.slice(0, 30)} 분위기`;
   });
   const subject = String(j?.subject ?? '').trim().slice(0, 120);
-  if (subject) console.log('[숏폼]', `수종 앵커 — ${subject}`);
-  else if (keyword) console.log('[숏폼]', `수종 앵커 없음 — 디렉터가 '${keyword}' 겉모습을 못 적었다(화면 수종이 틀릴 수 있음)`);
-  return { preset, style, prompts, ...(subject ? { subject } : {}) };
+  const subjectLatin = normalizeLatinName(String(j?.subject_latin ?? ''));
+  if (subject || subjectLatin) {
+    console.log('[숏폼]', `수종 앵커 — ${subjectLatin ? `${subjectLatin} · ` : '학명 없음 · '}${subject || '(특징 없음)'}`);
+    if (!subjectLatin) console.log('[숏폼]', '학명 미기재 — 한글 이름만으로는 이미지 모델이 종을 자주 틀린다');
+  } else if (keyword) {
+    console.log('[숏폼]', `수종 앵커 없음 — 디렉터가 '${keyword}' 겉모습을 못 적었다(화면 수종이 틀릴 수 있음)`);
+  }
+  return { preset, style, prompts, ...(subject ? { subject } : {}), ...(subjectLatin ? { subjectLatin } : {}) };
+}
+
+/**
+ * 학명 정규화(순수) — 속명+종소명 두 낱말만 통과시킨다.
+ *
+ * 이미지 모델은 식물 데이터셋을 학명으로 학습해서, 한글 이름이나 산문 묘사보다 학명 한 줄이
+ * 훨씬 정확하게 꽂힌다. 다만 LLM 이 "Nandina domestica (남천)" 처럼 군더더기를 붙이거나
+ * "나무" 같은 엉뚱한 값을 넣기도 하므로, 학명 꼴이 아니면 버린다 — 틀린 학명은 없느니만 못하다.
+ *
+ * 통과 조건: 첫 낱말은 대문자로 시작(속명), 둘째 낱말은 소문자(종소명), 둘 다 알파벳.
+ * 품종명(세 번째 낱말)은 잘라낸다 — 이미지 모델에 도움이 안 되고 오히려 노이즈다.
+ */
+export function normalizeLatinName(raw: string): string {
+  const t = String(raw ?? '').replace(/[()[\]]/g, ' ').trim();
+  const m = /^([A-Z][a-z]+)\s+([a-z][a-z-]+)\b/.exec(t);
+  return m ? `${m[1]} ${m[2]}` : '';
 }
 
 /**
@@ -1059,16 +1086,22 @@ const HOOK_PUSH: readonly string[] = [
  * seed(보통 쇼츠 id)를 주면 촬영 지시가 편마다 갈린다. 안 주면 종전 문구 그대로다.
  */
 export function buildSceneImagePrompt(a: {
-  style: string; scene: string; index: number; total: number; seed?: string; subject?: string;
+  style: string; scene: string; index: number; total: number; seed?: string; subject?: string; subjectLatin?: string;
 }): string {
-  const { style, index: i, total, seed, subject } = a;
+  const { style, index: i, total, seed, subject, subjectLatin } = a;
   const scene = a.scene.trim() || '주제를 상징하는 한국 생활 장면';
   const isHook = i === 0;
   const p: string[] = [];
   p.push(`[전 씬 공통 스타일] ${style}`);
   // 수종 앵커 — 씬 묘사가 "나무"라고만 해도 이 줄이 종을 못박는다. 실사고(2026-09-03): 측백나무
   // 편의 4씬 중 3씬이 활엽수로 나왔다. 침엽수인데. 원예 채널에서 이건 신뢰 문제다.
-  if (subject) p.push(`[대상 식물 — 화면의 나무·풀은 반드시 이것] ${subject}. 다른 종으로 대체하거나 일반적인 나무로 뭉개지 마라.`);
+  // 학명을 앞에 세운다 — 한글 이름·산문 묘사보다 이미지 모델이 훨씬 정확하게 알아듣는다.
+  // 실측(2026-09-04): 한글 묘사만 줬더니 남천을 "손바닥 모양 잎"으로 적었고(실제는 깃꼴겹잎)
+  // 그대로 그려졌다.
+  if (subjectLatin || subject) {
+    const head = subjectLatin ? `${subjectLatin}${subject ? ` (${subject})` : ''}` : subject;
+    p.push(`[대상 식물 — 화면의 나무·풀은 반드시 이 종] ${head}. 잎 모양·잎차례·수형을 이 종의 실제 모습대로 그린다. 다른 종으로 대체하거나 일반적인 나무로 뭉개지 마라.`);
+  }
   if (!seed) { // 종전 동작 보존
     p.push(`장면(씬 ${i + 1}/${total}${isHook ? ', 훅' : ''}): ${scene}.${isHook ? HOOK_PUSH[0] : ''}`);
     p.push('구도: 세로 9:16 프레임을 피사체로 자연스럽게 채운다.');
@@ -1404,7 +1437,7 @@ export async function runShortsJob(
       imageSlots: plan.scenes.map((s, i) => ({
         alt: s.screenText || s.narration.slice(0, 30),
         // seed=쇼츠 id — 촬영 지시(조명·심도·앵글·생활감)가 편마다 갈린다. 재생성해도 같은 지시가 나온다.
-        prompt: buildSceneImagePrompt({ style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length, seed: id, ...(design.subject ? { subject: design.subject } : {}) }),
+        prompt: buildSceneImagePrompt({ style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length, seed: id, ...(design.subject ? { subject: design.subject } : {}), ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}) }),
       })),
     };
     const bgDraftPath = path.join(dir, 'bg-draft.json');
@@ -1430,7 +1463,8 @@ export async function runShortsJob(
     const qa = await qaSceneImages({
       dir, images, scenePrompts: bgDraft.imageSlots.map((s) => s.prompt),
       preset: design.preset, signal: opts.signal,
-      ...(design.subject ? { subject: design.subject } : {}), // 수종 오식별 검사
+      ...(design.subject ? { subject: design.subject } : {}),
+      ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}), // 수종 오식별 검사
     });
     images = qa.images;
     if (qa.regenerated) say(`씬 QA — ${qa.regenerated}장 재생성 (${qa.issues.slice(0, 3).join(' · ')})`);
