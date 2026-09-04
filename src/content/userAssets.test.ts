@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { planAssetScenes, styleRefs } from './userAssets';
+import { planAssetScenes, styleRefs, planVideoScenes } from './userAssets';
 
 describe('planAssetScenes — 실사진 씬 배정', () => {
   it('훅부터 앞에서 채운다 — 첫 프레임이 곧 커버다', () => {
@@ -45,5 +45,48 @@ describe('styleRefs — 나머지는 스타일 레퍼런스로', () => {
   });
   it('사진이 없으면 빈 배열', () => {
     expect(styleRefs([], [])).toEqual([]);
+  });
+});
+
+describe('planVideoScenes — 영상 씬 배정', () => {
+  it('훅에는 안 넣는다 — 영상 첫 프레임은 커버로 약하다', () => {
+    const p = planVideoScenes([{ path: 'v.mp4', seconds: 30 }], [6, 6, 6]);
+    expect(p[0]).toBeNull();
+    expect(p.filter(Boolean)).toHaveLength(1);
+  });
+  it('씬보다 많이 짧은 영상은 안 쓴다 — 과한 감속은 결함으로 보인다', () => {
+    expect(planVideoScenes([{ path: 'short.mp4', seconds: 1 }], [6, 8]).filter(Boolean)).toHaveLength(0);
+    expect(planVideoScenes([{ path: 'ok.mp4', seconds: 5 }], [6, 8]).filter(Boolean)).toHaveLength(1);
+  });
+  it('긴 씬부터 채우고, 덮을 수 있는 것 중 가장 짧은 영상을 쓴다', () => {
+    const p = planVideoScenes(
+      [{ path: 'a.mp4', seconds: 5 }, { path: 'b.mp4', seconds: 12 }],
+      [4, 5, 10],
+    );
+    expect(p[2]).toBe('b.mp4'); // 10초 씬은 12초짜리로
+    expect(p[1]).toBe('a.mp4'); // 5초 씬은 5초짜리로
+    expect(p[0]).toBeNull();
+  });
+  it('한 영상은 한 씬에만', () => {
+    const p = planVideoScenes([{ path: 'v.mp4', seconds: 30 }], [5, 5, 5, 5]);
+    expect(p.filter(Boolean)).toHaveLength(1);
+  });
+  it('영상이 없거나 씬이 없으면 빈 배정', () => {
+    expect(planVideoScenes([], [5, 5])).toEqual([null, null]);
+    expect(planVideoScenes([{ path: 'v.mp4', seconds: 9 }], [])).toEqual([]);
+  });
+  it('길이를 모르는 항목은 무시한다', () => {
+    expect(planVideoScenes([{ path: 'v.mp4', seconds: 0 }], [5, 5]).filter(Boolean)).toHaveLength(0);
+  });
+});
+
+describe('planVideoScenes — 감속 최소화', () => {
+  it('씬을 통째로 덮는 영상이 있으면 그것을 쓴다(감속 0)', () => {
+    const p = planVideoScenes([{ path: 'exact.mp4', seconds: 9 }, { path: 'half.mp4', seconds: 5 }], [4, 9]);
+    expect(p[1]).toBe('exact.mp4');
+  });
+  it('못 덮으면 하한을 넘는 것 중 가장 긴 것 — 감속 폭이 가장 작다', () => {
+    const p = planVideoScenes([{ path: 'a.mp4', seconds: 5 }, { path: 'b.mp4', seconds: 7 }], [4, 10]);
+    expect(p[1]).toBe('b.mp4'); // 7/10 = 0.7배, a 였다면 0.5배
   });
 });

@@ -373,17 +373,17 @@ export async function retryClassify(refs: string[]): Promise<number | null> {
 export interface SkippedAttachment { file: string; reason: string }
 export async function uploadRunAttachments(
   files: File[],
-): Promise<{ ok: boolean; images: string[]; docs: string[]; skipped: SkippedAttachment[]; error?: string }> {
+): Promise<{ ok: boolean; images: string[]; videos: string[]; docs: string[]; skipped: SkippedAttachment[]; error?: string }> {
   const fd = new FormData();
   for (const f of files) fd.append("files", f);
   try {
     const r = await fetch("/runs/attachments", { method: "POST", body: fd });
-    const j = (await r.json().catch(() => ({}))) as { images?: string[]; docs?: string[]; skipped?: SkippedAttachment[]; error?: string };
-    if (!r.ok) return { ok: false, images: [], docs: [], skipped: j.skipped ?? [], error: j.error };
+    const j = (await r.json().catch(() => ({}))) as { images?: string[]; videos?: string[]; docs?: string[]; skipped?: SkippedAttachment[]; error?: string };
+    if (!r.ok) return { ok: false, images: [], videos: [], docs: [], skipped: j.skipped ?? [], error: j.error };
     // skipped: 서버가 용량·형식·개수 상한으로 제외한 파일 — 호출부가 사용자에게 고지하고 계속 여부를 묻는다.
-    return { ok: true, images: j.images ?? [], docs: j.docs ?? [], skipped: j.skipped ?? [] };
+    return { ok: true, images: j.images ?? [], videos: j.videos ?? [], docs: j.docs ?? [], skipped: j.skipped ?? [] };
   } catch {
-    return { ok: false, images: [], docs: [], skipped: [], error: "network" };
+    return { ok: false, images: [], videos: [], docs: [], skipped: [], error: "network" };
   }
 }
 

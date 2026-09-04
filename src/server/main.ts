@@ -307,6 +307,8 @@ interface LaunchOpts {
   keyword?: string;
   /** 첨부 이미지 경로(/runs/attachments 저장분) — 런 시작 전 vision 분석 결과를 주제에 병합. */
   images?: string[];
+  /** 첨부 영상 경로 — 파생 쇼츠의 씬 클립. 본 런(텍스트)에는 안 쓴다. */
+  videos?: string[];
   /** 첨부 문서 경로(/runs/attachments 저장분) — 런 시작 전 텍스트 추출(길면 micro 요약)해 주제에 병합. */
   docs?: string[];
   /** 지식 리서치 런 — 집필·포장 생략(draft.json 없음 → piece 승격·캘린더 오염 자연 차단). 두뇌 적재·직원 학습 전용. */
@@ -415,8 +417,13 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
   if (opts.pieceId) handle.pieceId = opts.pieceId; // 본편 생산 런 표식 — 완료 자율런의 기록 표시 기준
   // 첨부 실사진을 원고에 남긴다(2026-09-04) — 종전엔 vision 으로 '읽고' 버려서, 파생 쇼츠가
   // 사용자가 올린 사진을 화면에 쓸 방법이 없었다. 경로를 붙여 두면 파생이 그대로 집어 쓴다.
-  if (opts.pieceId && opts.images?.length) {
-    try { pieceStore().update(opts.pieceId, { assets: opts.images.slice(0, 8) }); } catch { /* 무해 */ }
+  if (opts.pieceId && (opts.images?.length || opts.videos?.length)) {
+    try {
+      pieceStore().update(opts.pieceId, {
+        ...(opts.images?.length ? { assets: opts.images.slice(0, 8) } : {}),
+        ...(opts.videos?.length ? { videoAssets: opts.videos.slice(0, 4) } : {}),
+      });
+    } catch { /* 무해 */ }
   }
   RUNS.set(id, handle);
   if (opts.auto) lastAutoRun = { ts: handle.created_ts, topic };
@@ -523,6 +530,8 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
 // ── 컴포저 멀티모달(이미지 첨부) ──
 // 업로드(POST /runs/attachments)가 저장 경로를 돌려주고, 클라이언트가 POST /runs 의 images 로 회신한다.
 const ATTACH_DIR = path.join(CONFIG.dataDir, 'attachments');
+/** 씬 클립으로 쓸 수 있는 영상 확장자 — ffmpeg/OffthreadVideo 가 다루는 범위로 좁힌다. */
+const VIDEO_EXTS = new Set(['.mp4', '.mov', '.m4v', '.webm']);
 
 async function attachmentsHandler(c: Context): Promise<Response> {
   const body = await c.req.parseBody({ all: true });
@@ -532,26 +541,32 @@ async function attachmentsHandler(c: Context): Promise<Response> {
   fs.mkdirSync(ATTACH_DIR, { recursive: true });
   const images: string[] = [];
   const docs: string[] = [];
+  // 영상 첨부(2026-09-04) — 파생 쇼츠가 씬 클립으로 쓴다. 문서 추출기·비전과는 무관한 경로라
+  // 따로 센다. 용량 상한이 큰 이유는 폰으로 찍은 몇 초짜리도 수십 MB 이기 때문.
+  const videos: string[] = [];
   // 무통보 탈락 금지 — 저장 못 한 파일은 사유와 함께 회신, 클라이언트가 사용자에게 고지·확인한다.
   const skipped: Array<{ file: string; reason: string }> = [];
   for (const f of files) {
     const isImg = f.type.startsWith('image/');
+    const isVid = !isImg && (f.type.startsWith('video/') || VIDEO_EXTS.has(path.extname(f.name || '').toLowerCase()));
     if (isImg && images.length >= 8) { skipped.push({ file: f.name, reason: '이미지 개수 상한(8장) 초과' }); continue; } // claude CLI vision 상한과 일치
-    if (!isImg && docs.length >= 8) { skipped.push({ file: f.name, reason: '문서 개수 상한(8건) 초과' }); continue; }
-    if (!isImg && !isSupportedExt(f.name || '')) { skipped.push({ file: f.name, reason: '미지원 형식' }); continue; } // 문서는 자료실 추출기 지원 형식만
-    if (f.size > (isImg ? 10_000_000 : 25_000_000)) { skipped.push({ file: f.name, reason: `용량 초과(${isImg ? '10MB' : '25MB'})` }); continue; } // 문서 25MB — /sources 와 동일
-    const ext = (path.extname(f.name || '').toLowerCase() || (isImg ? '.png' : '')).slice(0, 12);
+    if (isVid && videos.length >= 4) { skipped.push({ file: f.name, reason: '영상 개수 상한(4개) 초과' }); continue; } // 씬 수를 넘겨 받아 봐야 못 쓴다
+    if (!isImg && !isVid && docs.length >= 8) { skipped.push({ file: f.name, reason: '문서 개수 상한(8건) 초과' }); continue; }
+    if (!isImg && !isVid && !isSupportedExt(f.name || '')) { skipped.push({ file: f.name, reason: '미지원 형식' }); continue; } // 문서는 자료실 추출기 지원 형식만
+    const cap = isImg ? 10_000_000 : isVid ? 200_000_000 : 25_000_000;
+    if (f.size > cap) { skipped.push({ file: f.name, reason: `용량 초과(${isImg ? '10MB' : isVid ? '200MB' : '25MB'})` }); continue; }
+    const ext = (path.extname(f.name || '').toLowerCase() || (isImg ? '.png' : isVid ? '.mp4' : '')).slice(0, 12);
     // 원 파일명 stem 보존 — 문서 추출기의 확장자 판별·주제 병합 블록의 표시명에 쓰인다.
     const stem = path.basename(f.name || 'file', path.extname(f.name || ''))
       .replace(/[^\w가-힣.\-]+/g, '_').slice(0, 40) || 'file';
     const name = `${Date.now()}-${createHash('sha1').update(`${f.name}:${f.size}:${images.length + docs.length}`).digest('hex').slice(0, 8)}-${stem}${ext}`;
     await fs.promises.writeFile(path.join(ATTACH_DIR, name), Buffer.from(await f.arrayBuffer())); // 비동기 — 25MB 동기 쓰기의 이벤트 루프 정지 방지
-    (isImg ? images : docs).push(path.join(ATTACH_DIR, name));
+    (isImg ? images : isVid ? videos : docs).push(path.join(ATTACH_DIR, name));
   }
-  if (!images.length && !docs.length) {
-    return c.json({ error: '저장 가능한 파일이 없습니다 — 이미지(10MB)·문서 PDF/HWP/HWPX/DOCX/PPTX/XLSX/텍스트(25MB)만 지원', skipped }, 400);
+  if (!images.length && !docs.length && !videos.length) {
+    return c.json({ error: '저장 가능한 파일이 없습니다 — 이미지(10MB)·영상 mp4/mov/webm(200MB)·문서 PDF/HWP/HWPX/DOCX/PPTX/XLSX/텍스트(25MB)만 지원', skipped }, 400);
   }
-  return c.json({ ok: true, paths: [...images, ...docs], images, docs, skipped });
+  return c.json({ ok: true, paths: [...images, ...videos, ...docs], images, videos, docs, skipped });
 }
 
 // 첨부 문서 → 텍스트 추출(자료실 /sources 와 동일 추출기) 후 주제에 병합. 짧으면 원문 그대로,
@@ -1332,6 +1347,7 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, p
       sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId!),
       // 사용자가 컴포저에 첨부한 실사진 — 씬 배경·스타일 레퍼런스로 쓴다.
       ...(piece.assets?.length ? { userAssets: piece.assets } : {}),
+      ...(piece.videoAssets?.length ? { userVideos: piece.videoAssets } : {}),
       // 승계는 원편이 ready 일 때만 — 실패했으면 물려받을 자산이 없으니 자체 생성으로 떨어진다.
       ...(inherit && inheritFromPrimary ? { inheritFrom: inheritFromPrimary } : {}),
     });

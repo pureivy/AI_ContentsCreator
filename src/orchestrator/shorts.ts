@@ -37,14 +37,14 @@ import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { inheritShortsAssets, inheritedSceneImages, inheritedClips } from '../content/shortsInherit';
 import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom } from '../content/species';
-import { planAssetScenes, styleRefs } from '../content/userAssets';
+import { planAssetScenes, styleRefs, planVideoScenes } from '../content/userAssets';
 import { generateTitleArt } from './shortsTitleArt';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
 import { blogUrlForPiece } from '../content/pieces';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
-import { normalizeSceneKind, emptyKindScenes, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, cutAtWordBoundary } from '../tools/shortsCommon';
+import { normalizeSceneKind, emptyKindScenes, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, cutAtWordBoundary, probeDuration } from '../tools/shortsCommon';
 import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
 import type { EventBus } from '../events/bus';
@@ -1332,6 +1332,8 @@ export async function runShortsJob(
     /** 사용자 첨부 실사진(2026-09-04) — 일부 씬은 이 사진을 그대로 배경으로 쓰고,
      *  나머지 씬은 이 사진들의 색·빛·질감을 참고해 생성한다. */
     userAssets?: string[];
+    /** 사용자 첨부 실촬영 영상(2026-09-04) — 길이가 맞는 본문 씬에 클립으로 얹는다. */
+    userVideos?: string[];
     /** 형제편 승계 원본(2026-09-03) — 이 쇼츠 id 의 대본·이미지·클립·캘리를 물려받고 낭독만 새로 뜬다.
      *  기획·디자인·이미지 생성·씬 QA·I2V 를 통째로 건너뛴다(편당 비용의 대부분이 이미지다). */
     inheritFrom?: string;
@@ -1544,6 +1546,18 @@ export async function runShortsJob(
       // 실사진 씬은 I2V 대상에서 뺀다 — 실제로 찍은 사진을 생성 모델이 움직이면 형태가 무너진다.
       allowedScenes: new Set([...i2vPlan.allowed].filter((i) => !assetPlan[i])),
     });
+    // 사용자 실촬영 영상이 I2V 생성 클립을 이긴다(2026-09-04) — 실제로 찍은 화면이 언제나 낫다.
+    // 씬 길이는 낭독 실측 전이라 자수로 추정한다(렌더러의 sceneDurationSec 와 같은 산식).
+    const userVids = (opts.userVideos ?? []).filter((f) => { try { return fs.existsSync(f); } catch { return false; } });
+    if (userVids.length) {
+      const withDur = await Promise.all(userVids.map(async (f) => ({ path: f, seconds: await probeDuration(f).catch(() => 0) })));
+      const est = plan.scenes.map((sc) => Math.max(3.5, (sc.narration ?? '').length / SHORTS_TTS_CPS + 0.6));
+      const vPlan = planVideoScenes(withDur.filter((v) => v.seconds > 0), est);
+      const placed = vPlan.filter(Boolean).length;
+      cv.clips = cv.clips.map((c, i) => vPlan[i] ?? c);
+      const dropped = withDur.length - placed;
+      say(`실촬영 영상 ${withDur.length}개 — 씬 ${placed}개에 배치${dropped ? ` · ${dropped}개는 씬 길이에 안 맞아 제외` : ''}`);
+    }
     const clipCount = cv.clips.filter(Boolean).length;
     if (clipCount) say(`씬 I2V — ${clipCount}/${plan.scenes.length}장 클립화${cv.issues.length ? ` (${cv.issues[0]})` : ''}`);
     else if (cv.issues.length) say(`씬 I2V — 클립 0장 (${cv.issues.slice(0, 2).join(' · ')})`);

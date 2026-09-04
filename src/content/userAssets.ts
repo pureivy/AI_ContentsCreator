@@ -48,3 +48,49 @@ export function styleRefs(assets: readonly string[], plan: AssetPlan, max = 4): 
   // 배정된 사진도 톤의 기준이므로, 남는 게 없으면 배정분에서 앞쪽 몇 장을 참조로 재사용한다.
   return (rest.length ? rest : assets.slice()).slice(0, max);
 }
+
+/** 씬 길이 대비 영상이 이만큼은 되어야 배정한다. 이보다 짧으면 감속 배율이 0.5 밑으로 떨어져
+ *  실촬영 영상이 '고장 난 슬로모션'으로 보인다(렌더러는 클립 한 번으로 씬을 덮으려 속도를 낮춘다). */
+export const MIN_CLIP_COVERAGE = 0.5;
+
+/**
+ * 첨부 영상을 씬에 배정한다(순수).
+ *
+ * 이미지와 규칙이 다르다. 이미지는 어느 씬에 놓아도 화면이 성립하지만, 영상은 길이가 맞아야 한다 —
+ * 씬보다 많이 짧으면 렌더러가 감속으로 늘려 덮는데 0.5배 밑으로 가면 슬로모션이 아니라 결함으로 보인다.
+ * 그래서 '충분히 긴 영상'만 배정하고 나머지는 안 쓴다(억지로 넣느니 생성 이미지가 낫다).
+ *
+ * 훅(0)은 피한다 — 첫 프레임이 커버인데, 영상 첫 프레임은 대개 정지 상태라 커버로 약하다.
+ * 실사진은 훅에 넣지만 영상은 본문에 넣는 이유가 그것이다.
+ */
+export function planVideoScenes(
+  videos: ReadonlyArray<{ path: string; seconds: number }>,
+  sceneSeconds: readonly number[],
+): AssetPlan {
+  const out: Array<string | null> = sceneSeconds.map(() => null);
+  if (!videos.length || !sceneSeconds.length) return out;
+  const pool = videos.filter((v) => v.path && v.seconds > 0).slice();
+  // 본문 씬부터(훅 제외), 긴 씬부터 채운다 — 긴 씬일수록 채울 영상을 고르기 어렵다.
+  const order = sceneSeconds
+    .map((sec, i) => ({ i, sec }))
+    .filter((x) => x.i > 0)
+    .sort((a, b) => b.sec - a.sec);
+  for (const { i, sec } of order) {
+    if (!pool.length) break;
+    // 감속을 최소화하는 쪽으로 고른다.
+    //  1순위: 씬을 통째로 덮는 영상(감속 없음) 중 가장 짧은 것 — 더 긴 영상은 더 긴 씬에 남긴다
+    //  2순위: 못 덮으면 하한을 넘는 것 중 가장 긴 것 — 감속 폭이 가장 작다
+    // 종전엔 '하한만 넘으면 가장 짧은 것'을 골라서, 10초 씬에 5초 영상을 넣어 0.5배까지 늘렸다.
+    let exact = -1, partial = -1;
+    for (let k = 0; k < pool.length; k++) {
+      const d = pool[k]!.seconds;
+      if (d >= sec) { if (exact < 0 || d < pool[exact]!.seconds) exact = k; continue; }
+      if (d < sec * MIN_CLIP_COVERAGE) continue;
+      if (partial < 0 || d > pool[partial]!.seconds) partial = k;
+    }
+    const best = exact >= 0 ? exact : partial;
+    if (best < 0) continue;
+    out[i] = pool.splice(best, 1)[0]!.path;
+  }
+  return out;
+}
