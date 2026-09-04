@@ -32,7 +32,7 @@ import { pieceStore } from '../content/pieces';
 import { overThemeCap, themeRotationBlock, THEME_MONTHLY_CAP } from '../content/topicThemes';
 import { brandThemeCoverage } from '../analytics/discoverySeeds';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
-import { rankSearchDemand, searchDemandBlock, normalizeTerm } from '../analytics/ytSearchDemand';
+import { rankSearchDemand, searchDemandBlock, unconvertedSubjects, normalizeTerm } from '../analytics/ytSearchDemand';
 import { shortsSearchTerms } from '../analytics/shortsPerf';
 import { findSpecies } from '../content/species';
 
@@ -498,17 +498,16 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     try {
       const stems = [...(getBrand()?.compoundStems ?? []), ...seeds];
       const covered = existing.map((e) => normalizeTerm(`${e.title} ${e.keyword ?? ''}`));
-      const rows = rankSearchDemand(
-        shortsSearchTerms(activeBrandSlug() || undefined),
-        {
-          // 그 말을 정면으로 다룬 편이 있는가 — 제목·키워드에 그 말이 통째로 들어갔는지로 본다.
-          isCovered: (k) => { const n = normalizeTerm(k); return covered.some((c) => c.includes(n)); },
-          // 우리 분야의 말인가 — 수종 이름이나 업종어를 품고 있으면 우리 것으로 본다.
-          isRelevant: (k) => !!findSpecies(k) || stems.some((t) => t && k.includes(t)),
-          limit: 15,
-        },
-      );
-      return searchDemandBlock(rows);
+      const scored = shortsSearchTerms(activeBrandSlug() || undefined);
+      const rows = rankSearchDemand(scored, {
+        // 그 말을 정면으로 다룬 편이 있는가 — 제목·키워드에 그 말이 통째로 들어갔는지로 본다.
+        isCovered: (k) => { const n = normalizeTerm(k); return covered.some((c) => c.includes(n)); },
+        // 우리 분야의 말인가 — 수종 이름이나 업종어를 품고 있으면 우리 것으로 본다.
+        isRelevant: (k) => !!findSpecies(k) || stems.some((t) => t && k.includes(t)),
+        limit: 15,
+      });
+      // 편은 있는데 검색이 0 인 소재 — ①(외부 수요)만으로는 못 보는 '각도 실패' 신호.
+      return searchDemandBlock(rows, { missed: unconvertedSubjects(scored) });
     } catch { return ''; } // fail-open — 신호 하나 때문에 제안이 멈추면 안 된다
   })();
   const existingLines = existing.slice(0, 30)

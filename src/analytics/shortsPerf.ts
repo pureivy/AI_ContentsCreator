@@ -170,14 +170,24 @@ function reinforceShorts(s: Shorts, m: MetricSample): number {
  * 브랜드 쇼츠의 편별 유튜브 검색어를 모은다 — 주제 제안이 실측 수요를 보게 하는 입구(2026-09-04).
  * 표본이 없으면 빈 배열(fail-open) — 수집 전이거나 애널리틱스 집계 전이면 신호 없이 종전대로 돈다.
  */
-export function shortsSearchTerms(brand: string | undefined): Array<{ terms: SearchInflow[] }> {
+export function shortsSearchTerms(
+  brand: string | undefined,
+): Array<{ terms: SearchInflow[]; subject: string; searchViews: number }> {
   const slug = brand ?? '';
-  const out: Array<{ terms: SearchInflow[] }> = [];
+  const out: Array<{ terms: SearchInflow[]; subject: string; searchViews: number }> = [];
   for (const s of shortsStore().list()) {
     if ((s.brand ?? '') !== slug || !s.youtubeId) continue;
+    // 애널리틱스를 아직 못 받은 편은 '0 유입'이 아니라 '모름' — 채점 대상에서 뺀다.
+    // 이 구분이 없으면 신작이 전부 '못 먹은 소재'로 잡혀 각도를 바꾸라는 잘못된 신호가 된다.
     try {
-      const terms = topInflow(readMetrics(s.id), 10);
-      if (terms.length) out.push({ terms });
+      const samples = readMetrics(s.id);
+      if (!lastAnalyticsAt(samples)) continue;
+      const terms = topInflow(samples, 10);
+      out.push({
+        terms,
+        subject: (s.keyword ?? '').trim(),
+        searchViews: terms.reduce((a, t) => a + (Number(t.count) || 0), 0),
+      });
     } catch { /* 이 편만 건너뛴다 */ }
   }
   return out;

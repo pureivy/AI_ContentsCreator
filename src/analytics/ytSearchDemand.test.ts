@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { rankSearchDemand, searchDemandBlock, normalizeTerm, MIN_SEARCH_COUNT } from './ytSearchDemand';
+import { rankSearchDemand, searchDemandBlock, unconvertedSubjects, normalizeTerm, MIN_SEARCH_COUNT } from './ytSearchDemand';
 
 const v = (...terms: Array<[string, number]>) => ({ terms: terms.map(([keyword, count]) => ({ keyword, count })) });
 const all = { isCovered: () => false, isRelevant: () => true };
@@ -61,29 +61,47 @@ describe('normalizeTerm', () => {
   });
 });
 
-describe('searchDemandBlock — 프롬프트 블록(순수)', () => {
-  it('행이 없으면 빈 문자열 — 프롬프트에 빈 블록이 끼지 않는다', () => {
+describe('unconvertedSubjects — 편은 있는데 검색이 0 인 소재', () => {
+  it('0 인 소재만 고른다 — ①(외부 수요)만으로는 못 보는 신호다', () => {
+    expect(unconvertedSubjects([
+      { subject: '회양목', searchViews: 0 },
+      { subject: '고무나무', searchViews: 20 },
+    ])).toEqual(['회양목']);
+  });
+  it('같은 소재는 한 번만', () => {
+    expect(unconvertedSubjects([
+      { subject: '회양목', searchViews: 0 }, { subject: '회양목', searchViews: 0 },
+    ])).toEqual(['회양목']);
+  });
+  it('소재명이 비면 버린다', () => {
+    expect(unconvertedSubjects([{ subject: '', searchViews: 0 }])).toEqual([]);
+  });
+  it('상한을 지킨다', () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ subject: `소재${i}`, searchViews: 0 }));
+    expect(unconvertedSubjects(many, 5)).toHaveLength(5);
+  });
+});
+
+describe('searchDemandBlock — 성적표 블록(순수)', () => {
+  it('행도 실패도 없으면 빈 문자열', () => {
     expect(searchDemandBlock([])).toBe('');
   });
-  it('편 없는 말을 우선 고려하라고 못박고 이름을 부른다', () => {
-    const b = searchDemandBlock([
-      { keyword: '하스카프베리묘목', count: 551, covered: true },
-      { keyword: '하스카프베리효능', count: 6, covered: false },
-    ]);
-    expect(b).toContain('하스카프베리묘목 (551회) — 이미 다룬 말');
-    expect(b).toContain('우선 고려하라');
-    expect(b).toContain('하스카프베리효능');
-  });
-  it('전부 다뤘으면 인접한 말로 넓히라고 한다', () => {
+  it('주제 목록이 아니라 채점표라고 못박는다 — 이걸로 주제를 고르면 만든 것 주변만 맴돈다', () => {
     const b = searchDemandBlock([{ keyword: '고무나무', count: 20, covered: true }]);
-    expect(b).toContain('인접한 말');
+    expect(b).toContain('주제 목록이 아니라');
+    expect(b).toContain('주제는 검색 수요 데이터에서 고르되');
   });
-  it('keyword 를 검색어 표기 그대로 잡으라고 못박는다', () => {
-    expect(searchDemandBlock([{ keyword: '고무나무', count: 20, covered: false }]))
-      .toContain('그 검색어 표기 그대로');
+  it('먹힌 표기를 조회수와 함께 보여 준다', () => {
+    expect(searchDemandBlock([{ keyword: '하스카프베리묘목', count: 551, covered: true }]))
+      .toContain('하스카프베리묘목 (551회)');
   });
-  it('이 목록이 전부가 아니라고 밝힌다 — 생존자 편향을 막는다', () => {
-    expect(searchDemandBlock([{ keyword: '고무나무', count: 20, covered: false }]))
-      .toContain('여기 없는 새 소재를 막는 뜻이 아니다');
+  it('검색이 0 인 소재는 각도를 바꾸라고 한다', () => {
+    const b = searchDemandBlock([], { missed: ['회양목', '사철나무'] });
+    expect(b).toContain('회양목, 사철나무');
+    expect(b).toContain('각도를 바꿔라');
+  });
+  it('먹힌 표기가 있으면 그 표기에 붙이라고 한다', () => {
+    expect(searchDemandBlock([{ keyword: '고무나무 삽목', count: 20, covered: true }]))
+      .toContain('그 표기에 가깝게');
   });
 });

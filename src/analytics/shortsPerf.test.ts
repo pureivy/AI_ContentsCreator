@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import type { Shorts } from '../content/shorts';
 import { shortsSignal, parseStatsResponse, shortsPerfDue, shouldRecordMemory, countSamples, shortsMetaPerfDue, parseFbVideoStats, aggregateShortsTopicRows, pickAnalyticsTargets, lastAnalyticsAt, ANALYTICS_MAX_VIDEOS, ANALYTICS_RECENT_SLOTS } from './shortsPerf';
 
 describe('aggregateShortsTopicRows — 키워드 계열 중앙값 랭킹(순수, 2026-08-20 주제 되먹임)', () => {
@@ -123,18 +124,19 @@ describe('parseFbVideoStats', () => {
 });
 
 describe('pickAnalyticsTargets — 최신 우선 + 미수집 구작 순환(순수, 2026-09-04)', () => {
-  const mk = (n: number) => Array.from({ length: n }, (_, i) => ({
+  // pickAnalyticsTargets 가 보는 필드만 채운다(id·youtubeId·youtubeTs).
+  const mk = (n: number): Shorts[] => Array.from({ length: n }, (_, i) => ({
     id: `s${i}`, youtubeId: `y${i}`,
     // i 가 클수록 옛날 편
     youtubeTs: new Date(Date.UTC(2026, 7, 30) - i * 86400000).toISOString(),
-  })) as never[];
+  }) as Shorts);
 
   it('상한을 넘지 않는다', () => {
     expect(pickAnalyticsTargets(mk(109), () => 0)).toHaveLength(ANALYTICS_MAX_VIDEOS);
   });
   it('앞쪽 몫은 최신 편이 가져간다 — 숫자가 아직 움직이는 편이다', () => {
     const t = pickAnalyticsTargets(mk(109), () => 0);
-    expect(t.slice(0, ANALYTICS_RECENT_SLOTS).map((s: never) => (s as { id: string }).id))
+    expect(t.slice(0, ANALYTICS_RECENT_SLOTS).map((s) => s.id))
       .toEqual(Array.from({ length: ANALYTICS_RECENT_SLOTS }, (_, i) => `s${i}`));
   });
   it('나머지 몫은 한 번도 못 받은 구작이 가져간다 — 종전엔 영영 수집되지 않았다', () => {
@@ -142,13 +144,13 @@ describe('pickAnalyticsTargets — 최신 우선 + 미수집 구작 순환(순�
     // s20~s108 중 s100 만 아직 못 받았고 나머지는 최근에 받았다고 하자
     const lastAt = (id: string) => (id === 's100' ? 0 : 9_999_999_999);
     const t = pickAnalyticsTargets(list, lastAt);
-    expect(t.map((s: never) => (s as { id: string }).id)).toContain('s100');
+    expect(t.map((s) => s.id)).toContain('s100');
   });
   it('구작 중에서는 가장 오래 못 받은 순', () => {
     const list = mk(25);
     const stamp: Record<string, number> = { s20: 500, s21: 100, s22: 300, s23: 900, s24: 200 };
     const t = pickAnalyticsTargets(list, (id) => stamp[id] ?? 0, 22, 20);
-    expect(t.slice(20).map((s: never) => (s as { id: string }).id)).toEqual(['s21', 's24']);
+    expect(t.slice(20).map((s) => s.id)).toEqual(['s21', 's24']);
   });
   it('편이 상한보다 적으면 전부 준다', () => {
     expect(pickAnalyticsTargets(mk(5), () => 0)).toHaveLength(5);
