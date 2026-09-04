@@ -37,7 +37,8 @@ import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { inheritShortsAssets, inheritedSceneImages, inheritedClips } from '../content/shortsInherit';
 import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom } from '../content/species';
-import { planAssetScenes, styleRefs, planVideoSegments } from '../content/userAssets';
+import { planAssetScenes, styleRefs, planVideoSegments, orderAssetsByAssignment, type VideoSegment } from '../content/userAssets';
+import { describeUserMedia, mediaPlanGuide, assignMediaToScenes } from './shortsMediaBrief';
 import { generateTitleArt } from './shortsTitleArt';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
 import { blogUrlForPiece } from '../content/pieces';
@@ -1327,53 +1328,42 @@ async function finishShortsRun(a: {
 const SEGMENT_TAIL_SEC = 1.2;
 
 /**
- * 사용자 실촬영 영상을 씬 클립 위에 얹는다 — 생성 클립보다 실제로 찍은 화면이 언제나 낫다.
+ * 정해진 구간 배정대로 실촬영 영상을 굽고 씬 클립에 얹는다 — 생성 클립보다 실제로 찍은 화면이 낫다.
  *
- * 승계편에서도 같은 규칙을 써야 한다(2026-09-04 실측). 사계장미 편에서 사장님이 올린 실촬영
- * 영상이 두 편 어디에도 안 들어갔다: 원편은 파생 시점에 수종 사전이 그 종을 몰라 소재를 못 골랐고,
- * 형제편은 소재를 골라 넘겼는데 승계 분기가 이 배치 단계를 통째로 건너뛰어 승계 클립만 남았다.
- * 승계 대상은 '비싼 생성물'(대본·이미지·I2V)이지 사람이 찍어 온 화면이 아니다.
+ * 배정('어느 씬에 어느 구간')은 여기서 하지 않는다. 그건 대본이 나온 직후 내용 기준으로 정해지고
+ * (planVideoSegments + assignMediaToScenes), 그래야 그 씬의 이미지·I2V 를 애초에 안 만든다.
+ * 이 함수는 파일을 만드는 일만 한다.
  *
- * 낭독이 씬 길이를 정하는 불변식은 그대로다 — planVideoSegments 는 씬 길이에 맞는 구간만 배치하고
- * 안 맞는 것은 버린다. 여기서 길이를 바꾸지 않는다.
+ * 모든 구간을 clips/user_NN.mp4 로 굽는다 — 첫 구간(startSec 0)도 예외 없이. 파일명이 곧 '실촬영'
+ * 표시이고(shortsRenderRemotion 이 realFootage 를 세운다), 그 표시가 있어야 렌더러가 흑백·정지 같은
+ * 파괴적 기법을 이 씬에서 피한다. 형제편 승계도 이 이름으로 원편의 배치를 그대로 물려받는다.
+ *
+ * 여유를 1.2초 더 떼는 이유: 배정에 쓴 씬 길이는 낭독 실측 전의 자수 추정이라 실제보다 짧을 수
+ * 있다. 클립이 씬보다 짧으면 렌더러가 감속으로 늘려 슬로모션이 된다. 남는 꼬리는 그냥 잘린다.
+ *
+ * 굽기가 실패해도 올린 화면을 버리지 않는다 — 통짜라도 넣는다.
  */
-async function overlayUserVideos(
-  clips: Array<string | null>, plan: Plan, files: readonly string[] | undefined,
+async function applyUserSegments(
+  clips: Array<string | null>, segments: ReadonlyArray<VideoSegment | null>,
   dir: string, say: (m: string) => void, signal?: AbortSignal,
 ): Promise<Array<string | null>> {
-  const vids = (files ?? []).filter((f) => { try { return fs.existsSync(f); } catch { return false; } });
-  if (!vids.length) return clips;
-  const withDur = await Promise.all(vids.map(async (f) => ({ path: f, seconds: await probeDuration(f).catch(() => 0) })));
-  const usable = withDur.filter((v) => v.seconds > 0);
-  // 씬 길이는 낭독 실측 전이라 자수로 추정한다(렌더러의 sceneDurationSec 와 같은 산식).
-  const est = plan.scenes.map((sc) => Math.max(3.5, (sc.narration ?? '').length / SHORTS_TTS_CPS + 0.6));
-  const segs = planVideoSegments(usable, est);
+  if (!segments.some(Boolean)) return clips;
   const out = clips.slice();
-  let placed = 0, cut = 0, fellBack = 0;
-  for (let i = 0; i < segs.length; i++) {
-    const seg = segs[i];
+  let placed = 0, fellBack = 0;
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
     if (!seg) continue;
-    // 모든 실촬영 구간을 clips/user_NN.mp4 로 굽는다 — 첫 구간(startSec 0)도 예외 없이.
-    // 파일명이 곧 '실촬영' 표시다(shortsRenderRemotion 이 이걸 보고 realFootage 를 세운다). 그 표시가
-    // 있어야 렌더러가 흑백·정지 같은 파괴적 기법을 이 씬에서 피한다 — 실측으로 사장님 영상이
-    // 흑백으로 나간 적이 있다(2026-09-04).
-    //
-    // 여유를 1.2초 더 떼는 이유: 여기서 쓰는 씬 길이는 낭독 실측 전의 자수 추정이라 실제보다
-    // 짧게 나올 수 있다. 클립이 씬보다 짧으면 렌더러가 감속으로 늘려 슬로모션이 된다. 남는 꼬리는
-    // 씬이 추정대로면 그냥 안 쓰이고 잘린다.
-    const out1 = path.join(dir, 'clips', `user_${String(i + 1).padStart(2, '0')}.mp4`);
+    const dst = path.join(dir, 'clips', `user_${String(i + 1).padStart(2, '0')}.mp4`);
     try {
-      out[i] = await cutVideoSegment(seg.path, out1, seg.startSec, seg.seconds + SEGMENT_TAIL_SEC, signal);
-      placed++; cut++;
+      out[i] = await cutVideoSegment(seg.path, dst, seg.startSec, seg.seconds + SEGMENT_TAIL_SEC, signal);
+      placed++;
     } catch {
-      // 굽기가 실패해도 올린 화면을 버리지 않는다 — 통짜라도 넣는다(표시는 통짜 복사로 유지).
-      try { fs.mkdirSync(path.dirname(out1), { recursive: true }); fs.copyFileSync(seg.path, out1); out[i] = out1; }
+      try { fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.copyFileSync(seg.path, dst); out[i] = dst; }
       catch { out[i] = seg.path; }
       placed++; fellBack++;
     }
   }
-  const dropped = usable.length - new Set(segs.filter(Boolean).map((x) => x!.path)).size;
-  say(`실촬영 영상 ${usable.length}개 — 씬 ${placed}개에 배치${cut ? ` · ${cut}개 구간 추출` : ''}${fellBack ? ` · ${fellBack}개는 추출 실패로 통짜 사용` : ''}${dropped > 0 ? ` · ${dropped}개는 씬 길이에 안 맞아 제외` : ''}`);
+  say(`실촬영 구간 ${placed}개 배치${fellBack ? ` · ${fellBack}개는 추출 실패로 통짜 사용` : ''}`);
   return out;
 }
 
@@ -1429,8 +1419,15 @@ export async function runShortsJob(
         const inhImages = inheritedSceneImages(dir, inheritedPlan.scenes.length);
         const inhClips = inheritedClips(dir, inheritedPlan.scenes.length);
         say(`승계 자산 — 이미지 ${inhImages.filter(Boolean).length}/${inheritedPlan.scenes.length} · 클립 ${inhClips.filter(Boolean).length}`);
-        // 실촬영은 승계 대상이 아니다 — 이 편의 몫으로 다시 얹는다(2026-09-04).
-        const inhWithVideo = await overlayUserVideos(inhClips, inheritedPlan, opts.userVideos, dir, say, opts.signal);
+        // 원편이 실촬영을 어느 씬에 놓았는지 그대로 물려받는다(inheritedClips 가 user_NN 우선).
+        // 승계분에 실촬영이 없을 때만(원편이 굽기에 실패했을 때) 이 편에서 다시 얹는다.
+        const inhWithVideo = inhClips.some((c) => c && path.basename(c).startsWith('user_'))
+          ? inhClips
+          : await applyUserSegments(inhClips, planVideoSegments(
+              await Promise.all((opts.userVideos ?? []).map(async (f) => ({ path: f, seconds: await probeDuration(f).catch(() => 0) })))
+                .then((vs) => vs.filter((v) => v.seconds > 0)),
+              inheritedPlan.scenes.map((sc) => Math.max(3.5, (sc.narration ?? '').length / SHORTS_TTS_CPS + 0.6)),
+            ), dir, say, opts.signal);
         await finishShortsRun({
           id, store, dir, short, plan: inheritedPlan, images: inhImages, clips: inhWithVideo,
           opts, say, checkAbort,
@@ -1440,6 +1437,21 @@ export async function runShortsJob(
       }
       say(`자산 승계 실패(${inheritedFrom.id} 대본 없음) — 일반 생성으로 진행`);
     }
+
+    // 0) 실촬영 소재 읽기(2026-09-04 사용자 지시) — 대본을 쓰기 전에 화면을 먼저 본다.
+    //    종전엔 이게 파이프라인 맨 끝이라 대본·이미지·I2V 를 다 만든 뒤에 화면을 얹었다.
+    //    그래서 배정 기준이 길이뿐이었고, 실촬영이 들어갈 씬의 이미지·클립은 만들어 놓고 버렸다.
+    const userAssetFiles = (opts.userAssets ?? []).filter((f) => { try { return fs.existsSync(f); } catch { return false; } });
+    const userVideoFiles = (opts.userVideos ?? []).filter((f) => { try { return fs.existsSync(f); } catch { return false; } });
+    const videoDurations = new Map<string, number>();
+    for (const f of userVideoFiles) videoDurations.set(f, await probeDuration(f).catch(() => 0));
+    const briefs = await describeUserMedia([
+      ...userAssetFiles.map((f) => ({ file: f, kind: 'image' as const })),
+      ...userVideoFiles.filter((f) => (videoDurations.get(f) ?? 0) > 0)
+        .map((f) => ({ file: f, kind: 'video' as const, seconds: videoDurations.get(f)! })),
+    ], { topic: short.topic, ...(short.keyword ? { keyword: short.keyword } : {}), ...(opts.signal ? { signal: opts.signal } : {}) });
+    if (briefs.length) say(`실촬영 소재 ${briefs.length}건 확인 — ${briefs.map((b) => b.what.slice(0, 28)).join(' · ')}`);
+    else if (userAssetFiles.length || userVideoFiles.length) say('실촬영 소재를 읽지 못했다 — 길이 기준으로만 배정한다');
 
     // 1) 기획 — 대본(훅·씬·내레이션·자막)·제목 3후보·설명·해시태그
     store.update(id, { stage: 'planning' });
@@ -1471,7 +1483,7 @@ export async function runShortsJob(
     // 지침만으로는 같은 원문에서 같은 각도가 나온다(두 런이 같은 본문을 본다).
 
     say(`기획 가드 — 채널 ${platformLabel(short.platform)} · 작가 ${writerProfile?.name ?? short.writer ?? '미지정'} · 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 제목 유형 ${titleTypes.join('·')}`);
-    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? [], writerRole,
+    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, mediaPlanGuide(briefs), priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? [], writerRole,
       recentShortsMainTitles(short.brand, short.id)); // 대표 제목 구조 수렴 차단
     if (!planned) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     // Plan 타입 재선언 — 길이 상한 루프의 재대입이 클로저(씬 map 등) 내로잉을 풀지 않게 non-null 로 고정.
@@ -1507,10 +1519,32 @@ export async function runShortsJob(
     // 3) 씬 이미지 — 세로 1024×1536, 무텍스트(자막·내레이션은 렌더러가 얹음)
     store.update(id, { stage: 'rendering' });
     opts.bus?.emit('phase', { team_id: 'shorts', phase: 'integrate' });
-    say(`씬 이미지 생성 시작 — gpt-image-2 세로 ${plan.scenes.length}장`);
+    // 소재 → 씬 배정(2026-09-04) — 대본이 나왔으니 내레이션과 소재 설명을 나란히 놓고 고른다.
+    // 이 배정이 정해져야 '어느 씬을 생성하지 않을지'가 정해진다. 실패하면 길이 기준으로 떨어진다.
+    const mediaAt = await assignMediaToScenes(briefs, plan.scenes, opts.signal ? { signal: opts.signal } : {});
+    const ordered = orderAssetsByAssignment(userAssetFiles, mediaAt, plan.scenes.length);
+    const assetPlan = planAssetScenes(ordered.assets, plan.scenes.length, ordered.order);
+    const refPaths = styleRefs(ordered.assets, assetPlan);
+    // 씬 길이는 낭독 실측 전이라 자수로 추정한다(렌더러의 sceneDurationSec 와 같은 산식).
+    const sceneEst = plan.scenes.map((sc) => Math.max(3.5, (sc.narration ?? '').length / SHORTS_TTS_CPS + 0.6));
+    const videoPrefer = new Map<string, number>();
+    for (const f of userVideoFiles) { const at = mediaAt.get(f); if (at !== undefined) videoPrefer.set(f, at); }
+    const videoPlan = planVideoSegments(
+      userVideoFiles.map((f) => ({ path: f, seconds: videoDurations.get(f) ?? 0 })).filter((v) => v.seconds > 0),
+      sceneEst, videoPrefer,
+    );
+    // 실촬영이 덮는 씬 — 이미지도 I2V 도 만들지 않는다. 만들어 놓고 버리던 것이 헛돈이었다.
+    const covered = new Set<number>();
+    assetPlan.forEach((a, i) => { if (a) covered.add(i); });
+    videoPlan.forEach((v, i) => { if (v) covered.add(i); });
+    const slotScenes = plan.scenes.map((_, i) => i).filter((i) => !covered.has(i));
+    if (userAssetFiles.length || userVideoFiles.length) {
+      say(`실촬영 배정 — 사진 ${assetPlan.filter(Boolean).length}씬 · 영상 ${videoPlan.filter(Boolean).length}씬${covered.size ? ` · 이미지 ${covered.size}장 생성 안 함` : ''}`);
+    }
+    say(`씬 이미지 생성 시작 — gpt-image-2 세로 ${slotScenes.length}장${covered.size ? ` (전체 ${plan.scenes.length}씬 중 ${covered.size}씬은 실촬영)` : ''}`);
     const bgDraft = {
-      imageSlots: plan.scenes.map((s, i) => ({
-        alt: s.screenText || s.narration.slice(0, 30),
+      imageSlots: slotScenes.map((i) => ({
+        alt: plan.scenes[i]!.screenText || plan.scenes[i]!.narration.slice(0, 30),
         // seed=쇼츠 id — 촬영 지시(조명·심도·앵글·생활감)가 편마다 갈린다. 재생성해도 같은 지시가 나온다.
         prompt: buildSceneImagePrompt({
           style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length, seed: id,
@@ -1521,21 +1555,13 @@ export async function runShortsJob(
         }),
       })),
     };
-    // 실사진 배정(2026-09-04) — 배정된 씬은 생성하지 않고 사용자가 올린 사진을 그대로 쓴다.
-    // 나머지 씬은 그 사진들을 레퍼런스로 삼아 색·빛·질감을 맞춰 생성한다.
-    const assets = (opts.userAssets ?? []).filter((f) => { try { return fs.existsSync(f); } catch { return false; } });
-    const assetPlan = planAssetScenes(assets, plan.scenes.length);
-    const refPaths = styleRefs(assets, assetPlan);
-    if (assets.length) {
-      say(`실사진 ${assets.length}장 — 씬 ${assetPlan.filter(Boolean).length}개는 사진 그대로, 나머지는 그 톤으로 생성`);
-    }
     const bgDraftPath = path.join(dir, 'bg-draft.json');
     const bgManifestPath = path.join(dir, 'bg-manifest.json');
     fs.writeFileSync(bgDraftPath, JSON.stringify(bgDraft, null, 2), 'utf-8');
-    await generateImagesForDraft(bgDraftPath, path.join(dir, 'scenes'), bgManifestPath,
+    if (slotScenes.length) await generateImagesForDraft(bgDraftPath, path.join(dir, 'scenes'), bgManifestPath,
       {
-        imageStyle: design.preset, limit: plan.scenes.length, size: '1024x1536',
-        timeoutMs: 150_000 * plan.scenes.length,
+        imageStyle: design.preset, limit: slotScenes.length, size: '1024x1536',
+        timeoutMs: 150_000 * slotScenes.length,
         // 첨부 사진을 레퍼런스로 — 팔레트·질감·빛만 빌린다(카드뉴스가 쓰던 방식과 같다).
         ...(refPaths.length ? { refImages: refPaths } : {}),
       },
@@ -1545,10 +1571,11 @@ export async function runShortsJob(
     try {
       const m = JSON.parse(fs.readFileSync(bgManifestPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string } | null>; dry_run?: boolean };
       if (!m.dry_run) {
-        images = plan.scenes.map((_, i) => {
-          const im = m.images?.[i];
+        // 슬롯 k 는 slotScenes[k] 번 씬이다 — 실촬영 씬을 빼고 생성했으므로 번호가 밀린다.
+        slotScenes.forEach((sceneIdx, k) => {
+          const im = m.images?.[k];
           const fp = im?.file_path ? String(im.file_path) : '';
-          return fp && !im?.error && fs.existsSync(fp) ? fp : null;
+          images[sceneIdx] = fp && !im?.error && fs.existsSync(fp) ? fp : null;
         });
       }
     } catch { /* 전 씬 폴백 */ }
@@ -1588,8 +1615,11 @@ export async function runShortsJob(
     // I2V 컷 선정 — '정말 움직임이 필요한 핵심 컷'만 클립화(기본 1 = 훅, env SHORTS_I2V_MAX_CLIPS).
     // 탈락 씬은 Remotion 네이티브 연출(fx: push·엔터 이펙트·강도 변주)이 움직임 공백을 채운다.
     const scenePrompts = plan.scenes.map((_, i) => design.prompts[i] ?? '');
+    // 실촬영이 덮는 씬은 후보에서 아예 뺀다(2026-09-04) — 선정 뒤에 걸러 내면 상한 1편을 그 씬이
+    // 잡아먹고 클립을 만든 뒤 버리게 된다. 사장님 지적이 정확했다: "실촬영을 쓰면 I2V는 안 만들어도 된다".
     const i2vPlan = selectI2vScenes({
-      kinds: plan.scenes.map((s) => s.kind), motionPrompts, subjectScenes, scenePrompts, images,
+      kinds: plan.scenes.map((s) => s.kind), motionPrompts, subjectScenes, scenePrompts,
+      images: images.map((im, i) => (covered.has(i) ? null : im)),
       max: CONFIG.shortsI2vMaxClips,
     });
     if (i2vGate()) say(`I2V 컷 선정 — ${i2vPlan.allowed.size}/${plan.scenes.length}씬 (상한 ${CONFIG.shortsI2vMaxClips}${i2vPlan.reasons.length ? ` · ${i2vPlan.reasons.join(' ')}` : ''})`);
@@ -1600,10 +1630,10 @@ export async function runShortsJob(
       // 금지 문구가 항상 붙어 있어 손 판별(hasSubjectRisk)이 전 씬에 오탐했다(실측 2026-08-01).
       dir, images, scenePrompts, motionPrompts, subjectScenes, signal: opts.signal,
       // 실사진 씬은 I2V 대상에서 뺀다 — 실제로 찍은 사진을 생성 모델이 움직이면 형태가 무너진다.
-      allowedScenes: new Set([...i2vPlan.allowed].filter((i) => !assetPlan[i])),
+      allowedScenes: new Set([...i2vPlan.allowed].filter((i) => !covered.has(i))),
     });
-    // 사용자 실촬영 영상이 I2V 생성 클립을 이긴다(2026-09-04) — 실제로 찍은 화면이 언제나 낫다.
-    cv.clips = await overlayUserVideos(cv.clips, plan, opts.userVideos, dir, say, opts.signal);
+    // 실촬영 영상을 굽는다 — 배정은 위(내용 기준)에서 이미 정해졌고 여기서는 파일만 만든다.
+    cv.clips = await applyUserSegments(cv.clips, videoPlan, dir, say, opts.signal);
     const clipCount = cv.clips.filter(Boolean).length;
     if (clipCount) say(`씬 I2V — ${clipCount}/${plan.scenes.length}장 클립화${cv.issues.length ? ` (${cv.issues[0]})` : ''}`);
     else if (cv.issues.length) say(`씬 I2V — 클립 0장 (${cv.issues.slice(0, 2).join(' · ')})`);

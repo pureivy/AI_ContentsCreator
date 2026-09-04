@@ -72,10 +72,20 @@ export function inheritedSceneImages(dir: string, sceneCount: number): Array<str
   });
 }
 
-/** 승계 디렉터리에서 I2V 클립 경로를 씬 순서대로 읽는다(clip_NN.mp4 규약). */
+/**
+ * 승계 디렉터리에서 클립 경로를 씬 순서대로 읽는다.
+ *
+ * 실촬영(user_NN.mp4)이 생성 클립(clip_NN.mp4)을 이긴다 — 원편이 사용자 화면을 어느 씬에 놓았는지
+ * 그대로 물려받는다(2026-09-04). 형제편이 같은 대본을 쓰는데 실촬영만 다른 자리에 가면, 같은
+ * 화면을 두 번 다르게 배치한 꼴이 된다. 원편의 판단이 곧 이 편의 판단이다.
+ */
 export function inheritedClips(dir: string, sceneCount: number): Array<string | null> {
   return Array.from({ length: sceneCount }, (_, i) => {
-    const p = path.join(dir, 'clips', `clip_${String(i + 1).padStart(2, '0')}.mp4`);
-    try { return fs.existsSync(p) ? p : null; } catch { return null; }
+    const nn = String(i + 1).padStart(2, '0');
+    for (const name of [`user_${nn}.mp4`, `clip_${nn}.mp4`]) {
+      const p = path.join(dir, 'clips', name);
+      try { if (fs.existsSync(p)) return p; } catch { /* 다음 후보 */ }
+    }
+    return null;
   });
 }

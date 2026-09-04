@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { planAssetScenes, styleRefs, planVideoSegments } from './userAssets';
+import { planAssetScenes, styleRefs, planVideoSegments, orderAssetsByAssignment } from './userAssets';
 
 describe('planAssetScenes — 실사진 씬 배정', () => {
   it('훅부터 앞에서 채운다 — 첫 프레임이 곧 커버다', () => {
@@ -94,5 +94,55 @@ describe('planVideoSegments — 한 영상을 구간으로 쪼개 여러 씬에'
   });
   it('길이를 모르는 항목은 무시한다', () => {
     expect(planVideoSegments([{ path: 'v.mp4', seconds: 0 }], [5, 5]).filter(Boolean)).toHaveLength(0);
+  });
+});
+
+describe('planVideoSegments — 내용 기준 배정이 길이보다 우선', () => {
+  it('감독이 고른 씬을 먼저 잡는다 — 길이 기준이라면 다른 씬이 뽑혔을 자리', () => {
+    // 길이만 보면 가장 긴 씬3(10초)이 먼저 뽑힌다. 감독이 씬1을 고르면 씬1이 먼저다.
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 8 }], [4, 5, 6, 10], new Map([['v.mp4', 1]]));
+    expect(p[1]).not.toBeNull();
+    expect(p[1]!.startSec).toBe(0); // 지목된 자리가 첫 구간을 가져간다
+  });
+  it('훅을 지목하면 무시한다 — 첫 프레임이 커버라는 규칙이 이긴다', () => {
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 30 }], [5, 5, 5], new Map([['v.mp4', 0]]));
+    expect(p[0]).toBeNull();
+  });
+  it('지목한 씬을 덮을 만큼 안 남았으면 그 자리는 포기한다', () => {
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 2 }], [5, 10, 5], new Map([['v.mp4', 1]]));
+    expect(p[1]).toBeNull(); // 2초는 10초 씬의 절반에 못 미친다
+  });
+  it('지목이 없으면 종전대로 길이 기준', () => {
+    const a = planVideoSegments([{ path: 'v.mp4', seconds: 30 }], [5, 5, 6, 5]);
+    const b = planVideoSegments([{ path: 'v.mp4', seconds: 30 }], [5, 5, 6, 5], new Map());
+    expect(b).toEqual(a);
+  });
+});
+
+describe('orderAssetsByAssignment — 내용 배정을 planAssetScenes 입력으로', () => {
+  it('지목된 사진이 그 씬에 들어간다', () => {
+    const { assets, order } = orderAssetsByAssignment(['a.jpg', 'b.jpg'], new Map([['b.jpg', 2]]), 5);
+    const plan = planAssetScenes(assets, 5, order);
+    expect(plan[2]).toBe('b.jpg');
+  });
+  it('지목 없는 사진은 남은 씬을 종전 순서(훅부터)로 채운다', () => {
+    const { assets, order } = orderAssetsByAssignment(['a.jpg', 'b.jpg'], new Map([['b.jpg', 3]]), 5);
+    expect(assets).toEqual(['b.jpg', 'a.jpg']);
+    expect(order[0]).toBe(3);
+    expect(order.slice(1)).toEqual([0, 1, 2, 4]);
+  });
+  it('한 씬에 둘을 지목하면 뒤엣것은 무시한다', () => {
+    const { order } = orderAssetsByAssignment(['a.jpg', 'b.jpg'], new Map([['a.jpg', 1], ['b.jpg', 1]]), 4);
+    expect(order.filter((i) => i === 1)).toHaveLength(1);
+  });
+  it('범위 밖 지목은 무시한다', () => {
+    const { assets, order } = orderAssetsByAssignment(['a.jpg'], new Map([['a.jpg', 99]]), 3);
+    expect(assets).toEqual(['a.jpg']);
+    expect(order).toEqual([0, 1, 2]);
+  });
+  it('배정이 없으면 종전과 같다', () => {
+    const { assets, order } = orderAssetsByAssignment(['a.jpg', 'b.jpg'], new Map(), 4);
+    expect(assets).toEqual(['a.jpg', 'b.jpg']);
+    expect(order).toEqual([0, 1, 2, 3]);
   });
 });

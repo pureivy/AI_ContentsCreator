@@ -41,6 +41,31 @@ export function planAssetScenes(assets: readonly string[], sceneCount: number, o
   return out;
 }
 
+/**
+ * 내용 기준 배정을 planAssetScenes 가 받는 (사진 순서, 씬 순서) 쌍으로 편다(순수, 2026-09-04).
+ *
+ * planAssetScenes 는 "사진 목록을 씬 순서대로 하나씩 꽂는" 함수다. 그래서 "3번 사진은 2번 씬"
+ * 같은 배정을 그대로 못 받는다. 여기서 두 배열의 순서를 맞춰 준다 — 배정된 사진을 앞으로 당기고,
+ * 씬 순서도 같은 차례로 놓는다. 배정 없는 사진은 뒤에 붙고 종전 순서(훅부터)로 채워진다.
+ */
+export function orderAssetsByAssignment(
+  assets: readonly string[], at: ReadonlyMap<string, number>, sceneCount: number,
+): { assets: string[]; order: number[] } {
+  const valid = (i: number | undefined): i is number => Number.isInteger(i) && i! >= 0 && i! < sceneCount;
+  const taken = new Set<number>();
+  const head: Array<{ file: string; scene: number }> = [];
+  for (const f of assets) {
+    const i = at.get(f);
+    if (!valid(i) || taken.has(i)) continue;
+    taken.add(i);
+    head.push({ file: f, scene: i });
+  }
+  head.sort((a, b) => a.scene - b.scene);
+  const rest = assets.filter((f) => !head.some((h) => h.file === f));
+  const tail = Array.from({ length: sceneCount }, (_, i) => i).filter((i) => !taken.has(i));
+  return { assets: [...head.map((h) => h.file), ...rest], order: [...head.map((h) => h.scene), ...tail] };
+}
+
 /** 배정되지 않은 사진 — 스타일 레퍼런스로 넘긴다(생성 API 의 refImages 상한 4장). */
 export function styleRefs(assets: readonly string[], plan: AssetPlan, max = 4): string[] {
   const used = new Set(plan.filter((x): x is string => !!x));
@@ -72,6 +97,9 @@ export interface VideoSegment {
  *
  * 지키는 것 셋(전부 종전 규칙과 같은 이유):
  *  · 훅(0)은 비운다 — 영상 첫 프레임은 대개 정지 상태라 커버로 약하다.
+ *
+ * prefer 는 "이 영상은 이 씬"이라는 내용 기준 배정이다(감독이 대본과 소재 설명을 보고 고른다).
+ * 그 자리를 먼저 잡고, 남은 씬만 길이 기준으로 채운다 — 길이는 어디까지나 차선이다.
  *  · 구간이 씬 길이의 MIN_CLIP_COVERAGE 밑이면 안 쓴다 — 과한 감속은 결함으로 보인다.
  *  · 전 씬을 실촬영으로 덮지 않는다(상한 = 씬의 절반, 올림) — 한 클립을 4~5씬에 늘어놓으면
  *    같은 장면이 도는 것처럼 보이고 내레이션과도 어긋난다. 실사진 배정과 같은 상한·같은 이유.
@@ -79,6 +107,7 @@ export interface VideoSegment {
 export function planVideoSegments(
   videos: ReadonlyArray<{ path: string; seconds: number }>,
   sceneSeconds: readonly number[],
+  prefer: ReadonlyMap<string, number> = new Map(),
 ): ReadonlyArray<VideoSegment | null> {
   const out: Array<VideoSegment | null> = sceneSeconds.map(() => null);
   if (!videos.length || !sceneSeconds.length) return out;
@@ -88,13 +117,29 @@ export function planVideoSegments(
     .map((v) => ({ path: v.path, left: v.seconds, scenes: [] as Array<{ i: number; seconds: number }> }));
   if (!pool.length) return out;
   const cap = Math.ceil(sceneSeconds.length / 2);
+  const claimed = new Set<number>();
+  let placed = 0;
 
-  // 1) 어느 씬에 어느 영상을 몇 초 줄지 — 긴 씬부터(채울 영상을 고르기 어려운 쪽부터).
+  // 0) 내용으로 정해진 자리 먼저(2026-09-04) — 감독이 대본을 보고 "이 영상은 이 씬"이라고 고른 것.
+  //    길이 규칙은 여기서도 그대로다: 훅은 비우고, 씬 길이의 절반에 못 미치면 그 자리는 포기한다.
+  for (const [file, at] of prefer) {
+    if (placed >= cap) break;
+    if (!Number.isInteger(at) || at <= 0 || at >= sceneSeconds.length || claimed.has(at)) continue;
+    const v = pool.find((x) => x.path === file);
+    const sec = sceneSeconds[at]!;
+    if (!v || v.left < sec * MIN_CLIP_COVERAGE) continue;
+    const take = Math.min(sec, v.left);
+    v.scenes.push({ i: at, seconds: take });
+    v.left -= take;
+    claimed.add(at);
+    placed++;
+  }
+
+  // 1) 남은 씬 — 긴 씬부터(채울 영상을 고르기 어려운 쪽부터).
   const order = sceneSeconds
     .map((sec, i) => ({ i, sec }))
-    .filter((x) => x.i > 0)
+    .filter((x) => x.i > 0 && !claimed.has(x.i))
     .sort((a, b) => b.sec - a.sec);
-  let placed = 0;
   for (const { i, sec } of order) {
     if (placed >= cap) break;
     // 감속을 최소화하는 쪽으로 고른다(종전과 같은 기준, 대상이 '남은 시간'으로 바뀐 것뿐).
@@ -112,6 +157,7 @@ export function planVideoSegments(
     const take = Math.min(sec, pool[best]!.left);
     pool[best]!.scenes.push({ i, seconds: take });
     pool[best]!.left -= take;
+    claimed.add(i);
     placed++;
   }
 
