@@ -36,6 +36,7 @@ import { renderShortsVideo, ensureShortsDownload, extractFirstFrame } from '../t
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { inheritShortsAssets, inheritedSceneImages, inheritedClips } from '../content/shortsInherit';
+import { findSpecies, speciesAnchor, speciesSeasonalHint } from '../content/species';
 import { generateTitleArt } from './shortsTitleArt';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
 import { blogUrlForPiece } from '../content/pieces';
@@ -966,7 +967,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   } catch { return plan; }
 }
 
-async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: string): Promise<{ preset: string; style: string; prompts: string[]; subject?: string; subjectLatin?: string }> {
+async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: string): Promise<{ preset: string; style: string; prompts: string[]; subject?: string; subjectLatin?: string; species?: import('../content/species').Species }> {
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 대상] ${keyword}` : '',
@@ -999,15 +1000,18 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
     const p = String(j?.scenes?.[i]?.prompt ?? '').trim().slice(0, 200);
     return p || `${topic} 를 상징하는 한국 생활 장면, ${s.narration.slice(0, 30)} 분위기`;
   });
-  const subject = String(j?.subject ?? '').trim().slice(0, 120);
-  const subjectLatin = normalizeLatinName(String(j?.subject_latin ?? ''));
+  // 수종 사전이 이긴다(2026-09-04) — LLM 기억보다 표가 정확하다. 표에 없으면 LLM 값을 쓴다.
+  const known = findSpecies(`${keyword ?? ''} ${topic}`);
+  const subject = known ? speciesAnchor(known) : String(j?.subject ?? '').trim().slice(0, 120);
+  const subjectLatin = known ? known.latin : normalizeLatinName(String(j?.subject_latin ?? ''));
+  if (known) console.log('[숏폼]', `수종 사전 적중 — ${known.name} (${known.latin})${known.verified ? '' : ' · 형태 묘사 미검토'}`);
   if (subject || subjectLatin) {
     console.log('[숏폼]', `수종 앵커 — ${subjectLatin ? `${subjectLatin} · ` : '학명 없음 · '}${subject || '(특징 없음)'}`);
     if (!subjectLatin) console.log('[숏폼]', '학명 미기재 — 한글 이름만으로는 이미지 모델이 종을 자주 틀린다');
   } else if (keyword) {
     console.log('[숏폼]', `수종 앵커 없음 — 디렉터가 '${keyword}' 겉모습을 못 적었다(화면 수종이 틀릴 수 있음)`);
   }
-  return { preset, style, prompts, ...(subject ? { subject } : {}), ...(subjectLatin ? { subjectLatin } : {}) };
+  return { preset, style, prompts, ...(subject ? { subject } : {}), ...(subjectLatin ? { subjectLatin } : {}), ...(known ? { species: known } : {}) };
 }
 
 /**
@@ -1086,9 +1090,9 @@ const HOOK_PUSH: readonly string[] = [
  * seed(보통 쇼츠 id)를 주면 촬영 지시가 편마다 갈린다. 안 주면 종전 문구 그대로다.
  */
 export function buildSceneImagePrompt(a: {
-  style: string; scene: string; index: number; total: number; seed?: string; subject?: string; subjectLatin?: string;
+  style: string; scene: string; index: number; total: number; seed?: string; subject?: string; subjectLatin?: string; seasonal?: string;
 }): string {
-  const { style, index: i, total, seed, subject, subjectLatin } = a;
+  const { style, index: i, total, seed, subject, subjectLatin, seasonal } = a;
   const scene = a.scene.trim() || '주제를 상징하는 한국 생활 장면';
   const isHook = i === 0;
   const p: string[] = [];
@@ -1101,6 +1105,7 @@ export function buildSceneImagePrompt(a: {
   if (subjectLatin || subject) {
     const head = subjectLatin ? `${subjectLatin}${subject ? ` (${subject})` : ''}` : subject;
     p.push(`[대상 식물 — 화면의 나무·풀은 반드시 이 종] ${head}. 잎 모양·잎차례·수형을 이 종의 실제 모습대로 그린다. 다른 종으로 대체하거나 일반적인 나무로 뭉개지 마라.`);
+    if (seasonal) p.push(`[이 씬에 나오는 부위] ${seasonal}. 이 종의 실제 꽃·열매 모양대로 그린다.`);
   }
   if (!seed) { // 종전 동작 보존
     p.push(`장면(씬 ${i + 1}/${total}${isHook ? ', 훅' : ''}): ${scene}.${isHook ? HOOK_PUSH[0] : ''}`);
@@ -1437,7 +1442,13 @@ export async function runShortsJob(
       imageSlots: plan.scenes.map((s, i) => ({
         alt: s.screenText || s.narration.slice(0, 30),
         // seed=쇼츠 id — 촬영 지시(조명·심도·앵글·생활감)가 편마다 갈린다. 재생성해도 같은 지시가 나온다.
-        prompt: buildSceneImagePrompt({ style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length, seed: id, ...(design.subject ? { subject: design.subject } : {}), ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}) }),
+        prompt: buildSceneImagePrompt({
+          style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length, seed: id,
+          ...(design.subject ? { subject: design.subject } : {}),
+          ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}),
+          // 꽃·열매는 그 씬이 실제로 다룰 때만 — 늘 붙이면 꽃 없는 계절 장면에 꽃이 그려진다.
+          ...(design.species ? { seasonal: speciesSeasonalHint(design.species, `${design.prompts[i] ?? ''} ${plan.scenes[i]?.narration ?? ''}`) } : {}),
+        }),
       })),
     };
     const bgDraftPath = path.join(dir, 'bg-draft.json');
