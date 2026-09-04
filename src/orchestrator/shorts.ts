@@ -1595,8 +1595,8 @@ export async function runShortsJob(
     const refPaths = styleRefs(ordered.assets, assetPlan);
     // 씬 길이는 낭독 실측 전이라 자수로 추정한다(렌더러의 sceneDurationSec 와 같은 산식).
     const sceneEst = plan.scenes.map((sc) => Math.max(3.5, (sc.narration ?? '').length / SHORTS_TTS_CPS + 0.6));
-    const videoPrefer = new Map<string, readonly number[]>();
-    for (const f of userVideoFiles) { const at = mediaAt.get(f); if (at?.length) videoPrefer.set(f, at); }
+    const videoPrefer = new Map<string, number>();
+    for (const f of userVideoFiles) { const at = mediaAt.get(f); if (at !== undefined) videoPrefer.set(f, at); }
     const videoPlan = planVideoSegments(
       userVideoFiles.map((f) => ({ path: f, seconds: videoDurations.get(f) ?? 0 })).filter((v) => v.seconds > 0),
       sceneEst, videoPrefer,
@@ -1606,6 +1606,9 @@ export async function runShortsJob(
     assetPlan.forEach((a, i) => { if (a) covered.add(i); });
     videoPlan.forEach((v, i) => { if (v) covered.add(i); });
     const slotScenes = plan.scenes.map((_, i) => i).filter((i) => !covered.has(i));
+    // 실촬영이 한 씬이라도 들어가면 I2V 계열(모션 디렉팅·사람 판별·클립 생성)을 통째로 건너뛴다
+    // (사용자 확정 2026-09-04). 셋 다 I2V 전용이라, I2V 를 안 만들면 비전 호출도 낭비다.
+    const hasRealFootage = videoPlan.some(Boolean);
     if (userAssetFiles.length || userVideoFiles.length) {
       say(`실촬영 배정 — 사진 ${assetPlan.filter(Boolean).length}씬 · 영상 ${videoPlan.filter(Boolean).length}씬${covered.size ? ` · 이미지 ${covered.size}장 생성 안 함` : ''}`);
     }
@@ -1674,7 +1677,7 @@ export async function runShortsJob(
 
     // 3-c-i) 모션 디렉터 — 비전이 QA 통과 이미지를 '직접 보고' 씬 의도(내레이션·kind)에 맞는
     //        씬별 I2V 모션 프롬프트 설계. I2V 게이트가 닫혀 있으면 비전 호출도 생략(낭비 방지).
-    const motionPrompts = i2vGate()
+    const motionPrompts = i2vGate() && !hasRealFootage
       ? await directSceneMotion({
           images,
           scenes: plan.scenes.map((s) => ({ narration: s.narration, screenText: s.screenText, kind: s.kind })),
@@ -1685,7 +1688,7 @@ export async function runShortsJob(
     if (directed) say(`모션 디렉팅 — ${directed}/${plan.scenes.length}씬 맞춤 연출(나머지 정적 폴백)`);
     // 사람·손·도구 씬 판별(비전이 이미지를 직접 봄) — 그 씬은 I2V 를 건너뛰고 스틸로 남긴다.
     // 프롬프트로 '정지'를 요청하는 방식은 5B 모델이 무시해 실패했다(사용자 보고 2026-08-01).
-    const subjectScenes = i2vGate() ? await detectSubjectScenes(images, opts.signal) : new Set<number>();
+    const subjectScenes = i2vGate() && !hasRealFootage ? await detectSubjectScenes(images, opts.signal) : new Set<number>();
     if (subjectScenes.size) say(`사람·손·도구 씬 ${subjectScenes.size}개 — 모션 없이 스틸 유지(형태 왜곡 방지)`);
 
     // I2V 컷 선정 — '정말 움직임이 필요한 핵심 컷'만 클립화(기본 1 = 훅, env SHORTS_I2V_MAX_CLIPS).
@@ -1693,12 +1696,20 @@ export async function runShortsJob(
     const scenePrompts = plan.scenes.map((_, i) => design.prompts[i] ?? '');
     // 실촬영이 덮는 씬은 후보에서 아예 뺀다(2026-09-04) — 선정 뒤에 걸러 내면 상한 1편을 그 씬이
     // 잡아먹고 클립을 만든 뒤 버리게 된다. 사장님 지적이 정확했다: "실촬영을 쓰면 I2V는 안 만들어도 된다".
-    const i2vPlan = selectI2vScenes({
-      kinds: plan.scenes.map((s) => s.kind), motionPrompts, subjectScenes, scenePrompts,
-      images: images.map((im, i) => (covered.has(i) ? null : im)),
-      max: CONFIG.shortsI2vMaxClips,
-    });
-    if (i2vGate()) say(`I2V 컷 선정 — ${i2vPlan.allowed.size}/${plan.scenes.length}씬 (상한 ${CONFIG.shortsI2vMaxClips}${i2vPlan.reasons.length ? ` · ${i2vPlan.reasons.join(' ')}` : ''})`);
+    // 실촬영이 한 씬이라도 들어가면 I2V 는 아예 안 만든다(사용자 확정 2026-09-04).
+    //
+    // I2V 의 존재 이유는 "전 씬이 정지 이미지라 화면에 움직임이 없다"는 것 하나다. 진짜로 찍은
+    // 움직이는 화면이 들어간 순간 그 전제가 사라진다. 그런데도 다른 씬에 한 편을 만들면, 생성
+    // 모션이 실촬영 옆에 붙어 오히려 티가 나고 돈은 돈대로 나간다.
+    const i2vPlan = hasRealFootage
+      ? { allowed: new Set<number>(), reasons: [] as string[] }
+      : selectI2vScenes({
+          kinds: plan.scenes.map((s) => s.kind), motionPrompts, subjectScenes, scenePrompts,
+          images: images.map((im, i) => (covered.has(i) ? null : im)),
+          max: CONFIG.shortsI2vMaxClips,
+        });
+    if (hasRealFootage) say('I2V 건너뜀 — 실촬영 화면이 들어간다(생성 모션이 필요 없다)');
+    else if (i2vGate()) say(`I2V 컷 선정 — ${i2vPlan.allowed.size}/${plan.scenes.length}씬 (상한 ${CONFIG.shortsI2vMaxClips}${i2vPlan.reasons.length ? ` · ${i2vPlan.reasons.join(' ')}` : ''})`);
 
     // 3-c) 씬 배경 I2V — fal 클립화(키 없으면 no-op, 실패 씬은 스틸 폴백, fail-open).
     const cv = await i2vSceneClips({
