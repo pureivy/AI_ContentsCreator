@@ -133,3 +133,56 @@ describe('씬→이미지 매핑 — 실촬영 씬이 있으면 이름순 위치
     expect(P(inheritedSceneImages(to, 5)[0])).toBe('blog-image-01.png');
   });
 });
+
+describe('씬→이미지 매핑 — 디렉터리가 다른 동명 파일(2026-09-04 실사고)', () => {
+  // 실측: 씬3 이 QA 로 재생성돼 scenes-retry/blog-image-01.png 를 가리키는데 매핑엔 파일명만
+  // 남아, 읽는 쪽이 scenes/blog-image-01.png(=씬1 그림)를 집었다. 두 씬이 같은 그림이 됐다.
+  const mk = (): { from: string; to: string } => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'retry-'));
+    const from = path.join(root, 'p'); const to = path.join(root, 's');
+    fs.mkdirSync(path.join(from, 'scenes'), { recursive: true });
+    fs.mkdirSync(path.join(from, 'scenes-retry'), { recursive: true });
+    fs.writeFileSync(path.join(from, 'plan.json'), JSON.stringify({ title: 't', scenes: [{}, {}, {}] }));
+    fs.writeFileSync(path.join(from, 'scenes', 'blog-image-01.png'), '씬1 그림');
+    fs.writeFileSync(path.join(from, 'scenes', 'blog-image-02.png'), '씬2 그림');
+    fs.writeFileSync(path.join(from, 'scenes-retry', 'blog-image-01.png'), '씬3 재생성 그림');
+    return { from, to };
+  };
+
+  it('QA 재생성본을 씬1 그림으로 착각하지 않는다', () => {
+    const { from, to } = mk();
+    writeSceneImageMap(from, [
+      path.join(from, 'scenes', 'blog-image-01.png'),
+      path.join(from, 'scenes', 'blog-image-02.png'),
+      path.join(from, 'scenes-retry', 'blog-image-01.png'),
+    ]);
+    inheritShortsAssets(from, to);
+    const got = inheritedSceneImages(to, 3);
+    expect(fs.readFileSync(got[0]!, 'utf-8')).toBe('씬1 그림');
+    expect(fs.readFileSync(got[2]!, 'utf-8')).toBe('씬3 재생성 그림');
+  });
+  it('재생성 디렉터리도 형제편으로 복사된다 — 안 옮기면 그 씬이 빈다', () => {
+    const { from, to } = mk();
+    writeSceneImageMap(from, [null, null, path.join(from, 'scenes-retry', 'blog-image-01.png')]);
+    inheritShortsAssets(from, to);
+    expect(fs.existsSync(path.join(to, 'scenes-retry', 'blog-image-01.png'))).toBe(true);
+  });
+  it('편 폴더 밖 경로는 매핑에 안 담는다 — 형제편에 그 파일이 없다', () => {
+    const { from, to } = mk();
+    writeSceneImageMap(from, [path.join(os.tmpdir(), '남의-사진.jpg'), null, null]);
+    inheritShortsAssets(from, to);
+    expect(inheritedSceneImages(to, 3)[0]).toBeNull();
+  });
+  it('".." 이 섞인 값은 무시한다', () => {
+    const { from, to } = mk();
+    inheritShortsAssets(from, to);
+    fs.writeFileSync(path.join(to, SCENE_IMAGE_MAP), JSON.stringify(['../../etc/passwd', null, null]));
+    expect(inheritedSceneImages(to, 3)[0]).toBeNull();
+  });
+  it('파일명만 있는 옛 매핑은 종전대로 scenes/ 밑으로 읽는다', () => {
+    const { from, to } = mk();
+    inheritShortsAssets(from, to);
+    fs.writeFileSync(path.join(to, SCENE_IMAGE_MAP), JSON.stringify(['blog-image-01.png', null, null]));
+    expect(fs.readFileSync(inheritedSceneImages(to, 3)[0]!, 'utf-8')).toBe('씬1 그림');
+  });
+});

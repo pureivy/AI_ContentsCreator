@@ -33,7 +33,9 @@ export const SCENE_IMAGE_MAP = 'scene-images.json';
 /** 승계 대상 — 파일 단위. 낭독(remotion/narr_*.mp3)은 일부러 제외한다(작가별 목소리 유지). */
 export const INHERITED_FILES = ['plan.json', 'title-art.png', 'title-copy.json', 'thumbnail.jpg', 'thumb-qa-failed.json', SCENE_IMAGE_MAP] as const;
 /** 승계 대상 — 디렉터리 단위. */
-export const INHERITED_DIRS = ['scenes', 'clips'] as const;
+// scenes-retry·revise-imgs 도 옮긴다(2026-09-04) — 씬 QA 재생성본과 수정요청 재생성본이 여기 산다.
+// 이걸 빼면 매핑이 가리키는 파일이 형제편에 없어 그 씬만 빈다.
+export const INHERITED_DIRS = ['scenes', 'scenes-retry', 'revise-imgs', 'clips'] as const;
 
 export interface InheritResult {
   /** 실제로 복사된 항목(로그·검증용). */
@@ -75,11 +77,24 @@ export function inheritShortsAssets(fromDir: string, toDir: string): InheritResu
 }
 
 
-/** 원편이 씬→이미지 매핑을 남긴다(파일명만, 경로는 읽는 쪽에서 붙인다). 실패는 무해 — 위치 폴백. */
+/**
+ * 원편이 씬→이미지 매핑을 남긴다(편 폴더 기준 상대경로). 실패는 무해 — 위치 폴백.
+ *
+ * 파일명만 적었다가 실사고를 냈다(2026-09-04). 씬 이미지는 한 곳에만 있지 않다 —
+ * 처음 생성분은 scenes/, 씬 QA 재생성분은 scenes-retry/, 수정요청 재생성분은 revise-imgs/ 에
+ * 들어가고, 세 곳의 파일명이 똑같이 blog-image-01.png 로 겹친다. 실측: 씬3 이 QA 로 재생성돼
+ * scenes-retry/blog-image-01.png 를 가리키는데 매핑엔 "blog-image-01.png" 만 남아, 읽는 쪽이
+ * scenes/blog-image-01.png(=씬1 그림)를 집었다. 상대경로로 적어 그 충돌을 없앤다.
+ */
 export function writeSceneImageMap(dir: string, images: ReadonlyArray<string | null>): void {
   try {
-    const names = images.map((p) => (p ? path.basename(p) : null));
-    fs.writeFileSync(path.join(dir, SCENE_IMAGE_MAP), JSON.stringify(names), 'utf-8');
+    const rel = images.map((p) => {
+      if (!p) return null;
+      const r = path.relative(dir, p);
+      // 편 폴더 밖(사용자 첨부 사진 등)은 매핑에 못 담는다 — 형제편에 그 파일이 없다.
+      return r && !r.startsWith('..') && !path.isAbsolute(r) ? r.split(path.sep).join('/') : null;
+    });
+    fs.writeFileSync(path.join(dir, SCENE_IMAGE_MAP), JSON.stringify(rel), 'utf-8');
   } catch { /* 무해 — 없으면 위치 기준으로 읽는다 */ }
 }
 
@@ -90,8 +105,14 @@ export function writeSceneImageMap(dir: string, images: ReadonlyArray<string | n
 export function inheritedSceneImages(dir: string, sceneCount: number): Array<string | null> {
   const at = (f: string | null | undefined): string | null => {
     if (!f) return null;
-    const p = path.join(dir, 'scenes', f);
-    try { return fs.existsSync(p) ? p : null; } catch { return null; }
+    // 상대경로(신규) 우선, 파일명만 있는 옛 매핑은 scenes/ 밑으로 본다.
+    // '..' 이 섞인 값은 무시한다 — 매핑 파일이 편 폴더 밖을 가리킬 이유가 없다.
+    if (f.includes('..')) return null;
+    const candidates = f.includes('/') ? [path.join(dir, f)] : [path.join(dir, 'scenes', f)];
+    for (const p of candidates) {
+      try { if (fs.existsSync(p)) return p; } catch { /* 다음 후보 */ }
+    }
+    return null;
   };
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(dir, SCENE_IMAGE_MAP), 'utf-8')) as unknown;
