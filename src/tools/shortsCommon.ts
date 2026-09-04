@@ -82,6 +82,29 @@ export function emptyKindScenes(scenes: ReadonlyArray<SceneKindFields>): Array<{
 }
 
 /**
+ * 페이로드가 빈 kind 를 떼어 낸다(순수, 2026-09-04).
+ *
+ * 빈 kind 는 화면만 비는 게 아니라 그 씬을 세 군데서 잘못 대접한다.
+ *  · defaultSceneFx — 카드가 있는 씬으로 보고 얌전한 움직임(CARD_*)을 준다. 카드가 없는데.
+ *  · defaultSceneFx — 계절 파티클 배정에서도 빠진다(카드 씬은 액센트를 안 받는다).
+ *  · selectI2vScenes — kind 있는 씬은 점수 5, 없는 씬은 60. '화면에 이미 뭔가 있으니 모션은
+ *    다른 데 주자'고 판단한다. 실제로는 배경과 자막뿐인 씬이 가장 심심한 씬이 된다.
+ * 그래서 못 채운 kind 는 남겨 두지 않는다 — 셋 다 거짓 전제 위에서 돌게 된다.
+ *
+ * hook·cta 는 대상이 아니다(emptyKindScenes 가 이미 제외한다) — 페이로드 없이도 성립하는 자리다.
+ */
+export function dropEmptyKinds<T extends SceneKindFields>(scenes: readonly T[]): { scenes: T[]; dropped: number[] } {
+  const out = scenes.map((s) => ({ ...s }));
+  const dropped: number[] = [];
+  for (const e of emptyKindScenes(out)) {
+    const { kind: _drop, ...rest } = out[e.index - 1]!;
+    out[e.index - 1] = rest as T;
+    dropped.push(e.index);
+  }
+  return { scenes: out, dropped };
+}
+
+/**
  * 본문 씬의 연출 적용률(순수) — 훅·CTA 를 뺀 가운데 씬 중 몇 개가 kind 를 가졌나.
  *
  * 종전 로그는 `scenes.map(s => s.kind).filter(Boolean)` 으로 전 씬을 셌는데, 훅과 CTA 는 프롬프트가

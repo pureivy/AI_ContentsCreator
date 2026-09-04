@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout } from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout } from './shortsCommon';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
   it('오디오 + 꼬리여백(0.6), 하한 2.8', () => {
@@ -454,5 +454,34 @@ describe('훅 첫 프레임 — 커버가 검게 나오면 안 된다', () => {
       return `${fx?.move}/${fx?.accent ?? '-'}`;
     }));
     expect(seen.size).toBeGreaterThan(1);
+  });
+});
+
+describe('dropEmptyKinds — 못 채운 연출은 떼어 낸다(순수, 2026-09-04)', () => {
+  it('빈 compare 는 kind 가 사라진다 — 남겨 두면 연출·I2V 가 거짓 전제로 돈다', () => {
+    const r = dropEmptyKinds([{ kind: 'hook' }, { kind: 'compare' }, { kind: 'cta' }]);
+    expect(r.dropped).toEqual([2]);
+    expect(r.scenes[1]!.kind).toBeUndefined();
+  });
+  it('채워진 연출은 그대로 둔다', () => {
+    const full = { kind: 'compare' as const, compare: { bad: { label: '가' }, good: { label: '나' } } };
+    const r = dropEmptyKinds([{ kind: 'hook' as const }, full]);
+    expect(r.dropped).toEqual([]);
+    expect(r.scenes[1]!.kind).toBe('compare');
+  });
+  it('cta 는 takeaways 가 없어도 안 뗀다 — 설계상 허용된 생략이다', () => {
+    expect(dropEmptyKinds([{ kind: 'hook' }, { kind: 'list', items: ['가'] }, { kind: 'cta' }]).dropped).toEqual([]);
+  });
+  it('kind 말고는 아무것도 안 건드린다', () => {
+    const r = dropEmptyKinds([{ kind: 'stat', narration: '가', screenText: '나' } as never]);
+    expect(r.scenes[0]).toEqual({ narration: '가', screenText: '나' });
+  });
+  it('원본을 바꾸지 않는다', () => {
+    const src = [{ kind: 'compare' as const }];
+    dropEmptyKinds(src);
+    expect(src[0]!.kind).toBe('compare');
+  });
+  it('여러 개면 모두 뗀다', () => {
+    expect(dropEmptyKinds([{ kind: 'hook' }, { kind: 'stat' }, { kind: 'chart' }, { kind: 'cta' }]).dropped).toEqual([2, 3]);
   });
 });

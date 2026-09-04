@@ -45,7 +45,7 @@ import { blogUrlForPiece } from '../content/pieces';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
-import { normalizeSceneKind, emptyKindScenes, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, cutAtWordBoundary, probeDuration } from '../tools/shortsCommon';
+import { normalizeSceneKind, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, cutAtWordBoundary, probeDuration } from '../tools/shortsCommon';
 import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
 import type { EventBus } from '../events/bus';
@@ -618,6 +618,67 @@ export function restoreLostHedges(before: Plan, after: Plan): { plan: Plan; rest
 /** 길이 상한 초과 대본 압축 — LLM 감량(품질 우선) 후 예산 미달분은 결정적 트리밍이 마감(예산 보장).
  *  budgetCharsOverride: 렌더 후 실측 낭독 속도로 역산한 예산(재감량 경로) — 미지정 시 정적 예산.
  *  keptScenes: 살아남은 씬의 '입력 plan 기준' 인덱스(씬 제거 시 이미지·클립 매핑용). */
+/**
+ * kind 는 선언됐는데 페이로드가 빈 씬을 메운다 — 못 메우면 kind 를 뗀다(2026-09-04).
+ *
+ * 왜 지시문으로 안 끝나는가. 기획 프롬프트에는 이미 "compare 씬에는 bad·good 를 반드시 채워라"가
+ * 예시까지 붙어 들어가 있다(2026-09-03 대응). 그런데도 두 런 연속으로 kind 만 오고 페이로드가
+ * 비었다. 지시문을 더 세게 쓰는 건 이미 한 번 해 본 수라, 같은 수를 반복하는 대신 결정적으로 막는다.
+ *
+ * 왜 '떼는' 것까지 하는가. 빈 kind 는 화면만 비는 게 아니라 그 씬을 세 군데서 잘못 대접한다.
+ *  · defaultSceneFx — 카드가 있는 씬으로 보고 얌전한 움직임(CARD_*)을 준다. 카드가 없는데.
+ *  · defaultSceneFx — 계절 파티클 배정에서도 빠진다(카드 씬은 액센트를 안 받는다).
+ *  · selectI2vScenes — kind 있는 씬은 점수 5, 없는 씬은 60. 즉 '화면에 이미 뭔가 있으니 모션은
+ *    다른 데 주자'고 판단한다. 실제로는 배경과 자막뿐인 씬이 가장 심심한 씬이 된다.
+ * 채우지 못한 kind 를 그대로 두면 이 셋이 전부 거짓 전제 위에서 돈다. 떼는 편이 정직하다.
+ *
+ * 지어내지 말라고 못박는다 — 원문에 없는 대비·수치를 만들어 채우면 사실 게이트를 우회하게 된다.
+ */
+async function repairEmptyKinds(io: JobIO, plan: Plan): Promise<{ plan: Plan; filled: number[]; dropped: number[] }> {
+  const empties = emptyKindScenes(plan.scenes);
+  if (!empties.length) return { plan, filled: [], dropped: [] };
+  const SHAPE: Record<string, string> = {
+    stat: '{"value":숫자,"unit":"단위(선택)","label":"라벨(선택)"}',
+    list: '["항목","항목"] (2~4개)',
+    quote: '{"text":"인용문","source":"출처(원문에 그대로 있을 때만)"}',
+    chart: '{"series":[{"label":"라벨","value":숫자}],"unit":"단위","highlight":강조인덱스}',
+    compare: '{"bad":{"label":"14자 이내","note":"18자 이내"},"good":{"label":"14자 이내","note":"18자 이내"}}',
+  };
+  const j = await microJSON<{ scenes?: Array<Record<string, unknown> | null> }>(
+    stdModel(),
+    '당신은 숏폼 대본 에디터입니다. 요청된 JSON 스키마만 출력합니다.',
+    [
+      '아래 씬들은 화면 연출 종류(kind)만 선언되고 그 내용이 비어 있다. 그대로 두면 화면에 아무것도 안 나온다.',
+      '각 씬의 내레이션이 이미 말하고 있는 것을 화면 값으로 옮겨라.',
+      ...empties.map((e) => {
+        const sc = plan.scenes[e.index - 1]!;
+        return `씬${e.index} (kind=${e.kind}) 내레이션: ${sc.narration}
+  자막: ${sc.screenText ?? ''}
+  채울 형식 ${e.kind}: ${SHAPE[e.kind] ?? ''}`;
+      }),
+      '원문에 없는 수치·대비를 지어내지 마라. 내레이션이 그 연출을 담고 있지 않으면 그 씬은 빼라(빈 채로 두는 것이 지어내는 것보다 낫다).',
+      `JSON 형식: {"scenes":[{"index":씬번호,"kind":"${empties[0]!.kind}","<해당 필드>":...}]}`,
+    ].join('\n'),
+    { maxOutputTokens: 700, signal: io.signal },
+  ).catch(() => null);
+
+  const scenes = plan.scenes.map((sc) => ({ ...sc }));
+  const filled: number[] = [];
+  for (const r of j?.scenes ?? []) {
+    const idx = Math.trunc(Number(r?.index));
+    if (!Number.isInteger(idx) || idx < 1 || idx > scenes.length) continue;
+    const want = empties.find((e) => e.index === idx);
+    if (!want) continue; // 비어 있지 않던 씬은 건드리지 않는다
+    const fixed = normalizeSceneKind({ ...r, kind: want.kind });
+    if (emptyKindScenes([fixed]).length) continue; // 여전히 비었다 — 못 메운 것
+    scenes[idx - 1] = { ...scenes[idx - 1]!, ...fixed };
+    filled.push(idx);
+  }
+  // 끝내 못 메운 kind 는 뗀다 — 거짓 전제로 도는 하류 판단(연출·I2V)을 없앤다.
+  const cleaned = dropEmptyKinds(scenes);
+  return { plan: { ...plan, scenes: cleaned.scenes }, filled, dropped: cleaned.dropped };
+}
+
 async function fitShortsPlanToDuration(io: JobIO, plan: Plan, budgetCharsOverride?: number): Promise<{ plan: Plan; compressed: boolean; beforeChars: number; afterChars: number; keptScenes: number[] }> {
   const cap = CONFIG.shortsMaxDurationSec;
   const budget = budgetCharsOverride ?? Math.floor((cap - 5) * SHORTS_TTS_CPS); // 5초 여유 — TTS 속도 편차·업로드 인트로(1.6초)
@@ -787,7 +848,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     shortsTitleTypeGuide(titleTypes, CONFIG.voiceRotation),
     `JSON 형식: {"title":"대표 제목","titles":[${titlesJson}],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|chart|compare|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0},"takeaways":[{"when":"허리 높이","then":"회양목"}],"compare":{"bad":{"label":"웃자란 가지","note":"꽃눈이 안 앉아요"},"good":{"label":"짧은 곁가지","note":"여기 열매가 달려요"}}}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}`,
   ].filter(Boolean).join('\n');
-  type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown; takeaways?: unknown }>; description?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
+  type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown; chart?: unknown; compare?: unknown; takeaways?: unknown }>; description?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
   // 역할 프롬프트가 없을 때만 쓰이는 폴백(callRoleJSON: role.systemPrompt || fallback).
   const sys = '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.';
   // 고유어 월은 내레이션(TTS) 전용 — 화면·검색 필드는 숫자 월로 되돌린다(권고 5, 결정적).
@@ -1492,6 +1553,13 @@ export async function runShortsJob(
     const fit = await fitShortsPlanToDuration(io, plan);
     if (fit.compressed) say(`대본 감량 — ${fit.beforeChars}→${fit.afterChars}자(길이 상한 ${CONFIG.shortsMaxDurationSec}초 예산)`);
     plan = fit.plan;
+    // 빈 연출 메우기(2026-09-04) — kind 만 오고 내용이 빈 씬은 화면에 아무것도 못 그린다.
+    // 지시문은 이미 예시까지 붙여 뒀는데도 샜다. 메우고, 못 메우면 kind 를 뗀다(repairEmptyKinds 주석 참조).
+    const repaired = await repairEmptyKinds(io, plan);
+    if (repaired.filled.length || repaired.dropped.length) {
+      plan = repaired.plan;
+      say(`빈 연출 수선 — ${repaired.filled.length ? `씬 ${repaired.filled.join(',')} 채움` : ''}${repaired.filled.length && repaired.dropped.length ? ' · ' : ''}${repaired.dropped.length ? `씬 ${repaired.dropped.join(',')} 연출 해제(내용을 못 채움)` : ''}`);
+    }
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
     // 본문 적용률만 본다 — 훅·CTA 는 프롬프트가 항상 붙이라 한 자리라 세어 봐야 규칙 위반이 안 드러난다.
     const cov = bodyKindCoverage(plan.scenes);
