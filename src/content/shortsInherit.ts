@@ -16,8 +16,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+/**
+ * 씬→이미지 매핑 파일 이름. 원편이 남기고 형제편이 읽는다.
+ *
+ * 왜 파일이 필요한가(2026-09-04 실사고). 종전엔 scenes/ 안의 파일을 이름순으로 정렬해 앞에서부터
+ * 씬에 꽂았다. 전 씬을 생성하던 시절엔 그게 맞았다 — 파일 순서가 곧 씬 순서였다. 실촬영 씬은
+ * 이미지를 아예 안 만들게 되면서 그 전제가 깨졌다: 5씬 중 3번이 실촬영이면 생성 파일은 네 개
+ * (blog-image-01..04)이고, 이름순으로 꽂으면 3번 씬이 4번 씬 그림을 받고 마지막 씬은 빈다.
+ * 실측에서 인스타편의 4·5번 씬 그림이 밀리고 마지막 씬이 그라데이션으로 나갔다.
+ *
+ * 파일 이름에 씬 번호를 새기는 방법도 있었지만, 이미지 생성 스크립트·씬 QA 재생성·수정요청
+ * 재생성이 저마다 이름을 짓는다. 그 셋을 다 건드리는 것보다 매핑을 한 곳에 적어 두는 편이 좁다.
+ */
+export const SCENE_IMAGE_MAP = 'scene-images.json';
+
 /** 승계 대상 — 파일 단위. 낭독(remotion/narr_*.mp3)은 일부러 제외한다(작가별 목소리 유지). */
-export const INHERITED_FILES = ['plan.json', 'title-art.png', 'title-copy.json', 'thumbnail.jpg', 'thumb-qa-failed.json'] as const;
+export const INHERITED_FILES = ['plan.json', 'title-art.png', 'title-copy.json', 'thumbnail.jpg', 'thumb-qa-failed.json', SCENE_IMAGE_MAP] as const;
 /** 승계 대상 — 디렉터리 단위. */
 export const INHERITED_DIRS = ['scenes', 'clips'] as const;
 
@@ -60,16 +74,36 @@ export function inheritShortsAssets(fromDir: string, toDir: string): InheritResu
   return { copied, ok: true };
 }
 
-/** 승계 디렉터리에서 씬 이미지 경로를 씬 순서대로 읽는다(없는 자리는 null). */
+
+/** 원편이 씬→이미지 매핑을 남긴다(파일명만, 경로는 읽는 쪽에서 붙인다). 실패는 무해 — 위치 폴백. */
+export function writeSceneImageMap(dir: string, images: ReadonlyArray<string | null>): void {
+  try {
+    const names = images.map((p) => (p ? path.basename(p) : null));
+    fs.writeFileSync(path.join(dir, SCENE_IMAGE_MAP), JSON.stringify(names), 'utf-8');
+  } catch { /* 무해 — 없으면 위치 기준으로 읽는다 */ }
+}
+
+/**
+ * 승계 디렉터리에서 씬 이미지 경로를 씬 순서대로 읽는다(없는 자리는 null).
+ * 매핑 파일이 있으면 그걸 따르고, 없으면(2026-09-04 이전 편) 종전대로 이름순 위치로 읽는다.
+ */
 export function inheritedSceneImages(dir: string, sceneCount: number): Array<string | null> {
+  const at = (f: string | null | undefined): string | null => {
+    if (!f) return null;
+    const p = path.join(dir, 'scenes', f);
+    try { return fs.existsSync(p) ? p : null; } catch { return null; }
+  };
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, SCENE_IMAGE_MAP), 'utf-8')) as unknown;
+    if (Array.isArray(raw)) {
+      return Array.from({ length: sceneCount }, (_, i) => at(typeof raw[i] === 'string' ? raw[i] as string : null));
+    }
+  } catch { /* 매핑 없음 — 아래 위치 폴백 */ }
   let files: string[] = [];
   try {
     files = fs.readdirSync(path.join(dir, 'scenes')).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).sort();
   } catch { /* scenes 없음 */ }
-  return Array.from({ length: sceneCount }, (_, i) => {
-    const f = files[i];
-    return f ? path.join(dir, 'scenes', f) : null;
-  });
+  return Array.from({ length: sceneCount }, (_, i) => at(files[i]));
 }
 
 /**

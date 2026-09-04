@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { inheritShortsAssets, inheritedSceneImages, inheritedClips, INHERITED_FILES } from './shortsInherit';
+import { inheritShortsAssets, inheritedSceneImages, inheritedClips, writeSceneImageMap, INHERITED_FILES, SCENE_IMAGE_MAP } from './shortsInherit';
 
 const mk = (): { from: string; to: string } => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inherit-'));
@@ -76,5 +76,60 @@ describe('inheritedSceneImages / inheritedClips', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'empty-'));
     expect(inheritedSceneImages(root, 3)).toEqual([null, null, null]);
     expect(inheritedClips(root, 2)).toEqual([null, null]);
+  });
+});
+
+describe('씬→이미지 매핑 — 실촬영 씬이 있으면 이름순 위치로는 밀린다(2026-09-04 실사고)', () => {
+  // 실측: 5씬 중 3번이 실촬영이라 생성 이미지가 넷(blog-image-01..04)이었다. 이름순으로 꽂으니
+  // 3번 씬이 4번 씬 그림을 받고 마지막 씬은 그라데이션으로 나갔다. 인스타편에서 실제로 발생.
+  const mk5 = (): { from: string; to: string } => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'map-'));
+    const from = path.join(root, 'p'); const to = path.join(root, 's');
+    fs.mkdirSync(path.join(from, 'scenes'), { recursive: true });
+    fs.writeFileSync(path.join(from, 'plan.json'), JSON.stringify({ title: 't', scenes: [{}, {}, {}, {}, {}] }));
+    for (const n of ['blog-image-01.png', 'blog-image-02.png', 'blog-image-03.png', 'blog-image-04.png']) {
+      fs.writeFileSync(path.join(from, 'scenes', n), 'x');
+    }
+    return { from, to };
+  };
+  const P = (f: string | null): string | null => (f ? path.basename(f) : null);
+
+  it('매핑을 남기면 실촬영 씬만 비고 나머지는 제 그림을 받는다', () => {
+    const { from, to } = mk5();
+    // 씬2(0-base)가 실촬영 — 이미지 없음
+    writeSceneImageMap(from, [
+      path.join(from, 'scenes', 'blog-image-01.png'),
+      path.join(from, 'scenes', 'blog-image-02.png'),
+      null,
+      path.join(from, 'scenes', 'blog-image-03.png'),
+      path.join(from, 'scenes', 'blog-image-04.png'),
+    ]);
+    inheritShortsAssets(from, to);
+    expect(inheritedSceneImages(to, 5).map(P))
+      .toEqual(['blog-image-01.png', 'blog-image-02.png', null, 'blog-image-03.png', 'blog-image-04.png']);
+  });
+  it('매핑이 없으면 종전대로 이름순 위치 — 이전 편의 재조립을 막지 않는다', () => {
+    const { from, to } = mk5();
+    inheritShortsAssets(from, to);
+    expect(inheritedSceneImages(to, 5).map(P))
+      .toEqual(['blog-image-01.png', 'blog-image-02.png', 'blog-image-03.png', 'blog-image-04.png', null]);
+  });
+  it('매핑 파일이 형제편으로 복사된다 — 안 옮기면 형제편이 위치로 떨어진다', () => {
+    const { from, to } = mk5();
+    writeSceneImageMap(from, [null, null, null, null, null]);
+    inheritShortsAssets(from, to);
+    expect(fs.existsSync(path.join(to, SCENE_IMAGE_MAP))).toBe(true);
+  });
+  it('매핑이 가리키는 파일이 없어지면 그 자리는 null', () => {
+    const { from, to } = mk5();
+    writeSceneImageMap(from, [path.join(from, 'scenes', 'gone.png'), null, null, null, null]);
+    inheritShortsAssets(from, to);
+    expect(inheritedSceneImages(to, 5)[0]).toBeNull();
+  });
+  it('깨진 매핑 파일은 위치 폴백으로 떨어진다', () => {
+    const { from, to } = mk5();
+    inheritShortsAssets(from, to);
+    fs.writeFileSync(path.join(to, SCENE_IMAGE_MAP), '{ 망가짐');
+    expect(P(inheritedSceneImages(to, 5)[0])).toBe('blog-image-01.png');
   });
 });

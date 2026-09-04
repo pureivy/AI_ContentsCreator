@@ -35,7 +35,7 @@ import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './short
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame, cutVideoSegment } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
-import { inheritShortsAssets, inheritedSceneImages, inheritedClips } from '../content/shortsInherit';
+import { inheritShortsAssets, inheritedSceneImages, inheritedClips, writeSceneImageMap } from '../content/shortsInherit';
 import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom } from '../content/species';
 import { planAssetScenes, styleRefs, planVideoSegments, orderAssetsByAssignment, type VideoSegment } from '../content/userAssets';
 import { describeUserMedia, mediaPlanGuide, assignMediaToScenes } from './shortsMediaBrief';
@@ -1244,6 +1244,9 @@ async function finishShortsRun(a: {
 }): Promise<void> {
   const { id, store, dir, short, images, clips, opts, say, checkAbort, lookOffset } = a;
   let plan = a.plan;
+  // 씬→이미지 매핑을 남긴다 — 형제편이 이걸 읽어 같은 자리에 같은 그림을 놓는다.
+  // 실촬영 씬은 이미지를 안 만들어 scenes/ 의 파일 수와 씬 수가 어긋나므로, 이름순 위치로는 밀린다.
+  writeSceneImageMap(dir, images);
   const io: JobIO = { bus: opts.bus, signal: opts.signal };
   // 4) 조립 — 기본 Remotion 모션그래픽, 실패 시 ffmpeg 슬라이드쇼로 폴백(무중단).
   say(CONFIG.shortsRenderer === 'ffmpeg' ? '영상 조립 시작 — ffmpeg 슬라이드쇼' : '영상 조립 시작 — Remotion 모션그래픽');
