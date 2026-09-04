@@ -20,14 +20,14 @@ import { titleTypeGuidanceBlock } from '../analytics/titleTiming';
 import { shortsTopicSignalBlock } from '../analytics/shortsPerf';
 import { topicVerdictBlock, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { trendSignalBlock } from '../analytics/trendSignal';
-import { assessCandidatesDemand, demandSignalBlock, demandRejectBlock, demandRejectFor, rememberDemandReject, demandVerdict, formatDemandLine, normKw, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
+import { assessCandidatesDemand, demandSignalBlock, demandRejectBlock, demandRejectFor, rememberDemandReject, demandVerdict, formatDemandLine, normKw, readDemandSnap, familyVolume, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
 import { searchAdEnabled } from '../grounding/naver_searchad';
 import { ytNicheBlock } from '../analytics/ytNiche';
 import { ensureSeriesLabels, classifyCandidates, seriesScoresFor, gateForLabels, fillLabelsFromKnown, cooldownSummary } from '../analytics/seriesLedger';
 import { fallbackSeriesLabels } from '../content/seriesCooldown';
 import { seasonalContext } from '../util/solarTerms';
 import { offSeasonSubject, seasonalSubjectBlock, formatMonths } from '../content/seasonalSubjects';
-import { speciesCoverage, overSpeciesCap, speciesRotationBlock, speciesInText, SPECIES_MONTHLY_CAP } from '../content/speciesRotation';
+import { speciesCoverage, overSpeciesCap, speciesRotationBlock, speciesInText, speciesCapFor, SPECIES_MONTHLY_CAP } from '../content/speciesRotation';
 import { pieceStore } from '../content/pieces';
 import { overThemeCap, themeRotationBlock, THEME_MONTHLY_CAP } from '../content/topicThemes';
 import { brandThemeCoverage } from '../analytics/discoverySeeds';
@@ -474,6 +474,17 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   // 그 사이 브랜드가 전환되면 기각 기억을 A 로 읽고 B 에 쓰게 된다(아래 ResearchState 의 slug 고정과 같은 버그).
   const slug = activeBrandSlug() || '';
   const speciesCov = speciesCoverageFor(slug);   // 수종 로테이션(2026-08-27) — 프롬프트 블록·후보 게이트·winners 필터 공용
+  // 수종 월 상한에 수요 가중(2026-09-04 사용자 확정) — 수요 큰 수종은 몇 편 더 허용한다.
+  // 실측 배분이 어긋나 있었다: 수요 22/월 배롱나무에 6편, 검색 1,085회를 물어다 준 수종엔 3편.
+  // 느슨하게만 만든다 — 수요 미상 수종은 종전 상한(2편) 그대로다. 최고 성적이 수요 목록 밖
+  // 수종(하스카프베리)에서 나왔으므로, 낮은 수요로 조이면 그 발견 자체를 막게 된다.
+  const demandRows = (() => {
+    try { return (readDemandSnap(slug || undefined)?.rows ?? []).map((r) => ({ keyword: r.keyword, total: Math.max(r.volume, r.familyMax) })); }
+    catch { return [] as Array<{ keyword: string; total: number }>; }
+  })();
+  const speciesCap = (name: string): number => {
+    try { return speciesCapFor(familyVolume(demandRows, name).max); } catch { return SPECIES_MONTHLY_CAP; }
+  };
   const themeCov = brandThemeCoverage(new Date(), slug);   // 주제 축 로테이션(2026-08-27) — 수종과 직교
 
   // 브랜드 설정 시: 주제를 브랜드 제품·타겟에 조향 + 콜드스타트는 시드 키워드에서 출발 +
@@ -541,7 +552,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // 없어 공회전했다. 날짜+절기 한 줄이면 두뇌가 "처서 지나면 가을 식재 준비" 같은 타이밍을 스스로 잡는다.
     `${seasonalContext()}\n\n` +
     (() => { const b = seasonalSubjectBlock(getBrand()?.seasonalSubjects); return b ? `${b}\n\n` : ''; })() +
-    (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov); return b ? `${b}\n\n` : ''; })() +
+    (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov, speciesCap); return b ? `${b}\n\n` : ''; })() +
     (() => { const b = themeRotationBlock(getBrand()?.topicThemes, themeCov); return b ? `${b}\n\n` : ''; })() +
     (searchBlock ? `${searchBlock}\n\n` : '') +
     jargonLine +
@@ -693,7 +704,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       }
       // 수종 월 상한 게이트(하드, 비용 0, 2026-08-27) — 최근 30일 같은 수종 블로그가 상한이면 어떤 각도든 기각.
       // 유사 폴백보다 앞이라 '다른 시각' 우회도 막힌다(배롱 8편/월 실사고).
-      const capped = overSpeciesCap(`${title} ${keyword ?? ''}`, speciesCov, getBrand()?.speciesCatalog);
+      const capped = overSpeciesCap(`${title} ${keyword ?? ''}`, speciesCov, getBrand()?.speciesCatalog, speciesCap);
       if (capped) {
         console.log(`[auto-cycle] 아이디어 기각(수종 월 상한) — "${title}" (${capped.name}: 30일 ${capped.count}편 ≥ ${SPECIES_MONTHLY_CAP})`);
         rejects.push(`"${title}"=수종 월 상한(${capped.name} 최근 30일 ${capped.count}편 — 아직 안 다룬 수종으로)`);
