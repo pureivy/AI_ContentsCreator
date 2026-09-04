@@ -1233,7 +1233,13 @@ function assignShortsWriter(): { writer: string; writerId: string; director?: st
 
 // 숏폼 잡을 '런'으로 등록 — 유하린·서준영의 스폰·작업·지표가 오피스 뷰에 흐르고,
 // 런 취소 → abort 로 잡 중단, 완료 시 이벤트 영속(리플레이). launchCardNewsRun 과 동일 패턴.
-function launchShortsRun(shortsId: string, topic: string, opts: { sourceBody?: string; sceneCount?: number; sourceFlagged?: string[] } = {}): string {
+// opts 는 runShortsJob 으로 그대로 흘러간다 — 실촬영 소재·승계 원본까지 여기 선언해 둔다.
+// 종전엔 sourceBody·sceneCount·sourceFlagged 만 적혀 있었는데, 호출부가 스프레드로 넘기는
+// userAssets/userVideos/inheritFrom 이 타입 검사를 비껴가 통과하고 있었다(2026-09-04 발견).
+function launchShortsRun(shortsId: string, topic: string, opts: {
+  sourceBody?: string; sceneCount?: number; sourceFlagged?: string[];
+  userAssets?: string[]; userVideos?: string[]; inheritFrom?: string;
+} = {}): string {
   const id = runId();
   const bus = createBus(id);
   const abort = new AbortController();
@@ -1278,7 +1284,11 @@ async function shortsCreateHandler(c: Context): Promise<Response> {
   const sim = noveltyViolation(topic, b.keyword, b.force);
   if (sim) return c.json(noveltyError(sim), 409);
   const short = shortsStore().create({ topic, keyword: b.keyword, ...assignShortsWriter() });
-  const run = launchShortsRun(short.id, topic, { sceneCount: b.scenes });
+  // 제작실 직접 생성도 보관소를 본다(2026-09-04) — 블로그 글이 없을 뿐, 주제는 있다.
+  const run = launchShortsRun(short.id, topic, {
+    sceneCount: b.scenes,
+    ...mediaForTopic({ brand: short.brand, text: `${b.keyword ?? ''} ${topic}` }),
+  });
   return c.json({ short, run_id: run });
 }
 
@@ -1333,6 +1343,34 @@ function startAfterPrimary(primaryId: string, selfId: string, start: (inherit: b
   setTimeout(tick, 10_000);
 }
 
+/**
+ * 주제에 맞는 실촬영 소재 고르기 — 컴포저 첨부가 있으면 그걸, 없으면 보관소에서 꺼낸다.
+ *
+ * **숏폼을 만드는 모든 경로가 여기를 지나야 한다**(사용자 확정 2026-09-04: "자율런이든 직접
+ * 실행이든 제작실 생성이든, 주제가 나오면 보관소를 살펴보고 맞는 수종이 있으면 써야 한다").
+ * 종전엔 블로그 파생 경로에만 붙어 있어서, 제작실에서 주제만 넣어 만든 편과 서버 재시작 뒤
+ * 자동 재개된 편은 보관소를 아예 안 봤다.
+ *
+ * 수종 별칭은 사전이 판정한다 — '음나무'로 올린 영상이 '엄나무' 편에서 배제된 적이 있다.
+ */
+function mediaForTopic(opts: {
+  brand?: string; text: string; attached?: string[]; attachedVideos?: string[];
+}): { userAssets?: string[]; userVideos?: string[] } {
+  try {
+    const text = opts.text.trim();
+    const sp = findSpecies(text)?.name;
+    const lib = listMedia(opts.brand ?? (activeBrandSlug() || undefined));
+    const canon = (n: string): string => findSpecies(n)?.name ?? n;
+    const imgs = opts.attached?.length ? opts.attached
+      : matchMedia(lib, { species: sp, text, kind: 'image', limit: 8, canon }).map((m) => m.file);
+    const vids = opts.attachedVideos?.length ? opts.attachedVideos
+      : matchMedia(lib, { species: sp, text, kind: 'video', limit: 4, canon }).map((m) => m.file);
+    if (!opts.attached?.length && imgs.length) console.log('[숏폼]', `보관소 사진 ${imgs.length}장 사용 — ${sp ?? '범용'}`);
+    if (!opts.attachedVideos?.length && vids.length) console.log('[숏폼]', `보관소 영상 ${vids.length}개 사용 — ${sp ?? '범용'}`);
+    return { ...(imgs.length ? { userAssets: imgs } : {}), ...(vids.length ? { userVideos: vids } : {}) };
+  } catch { return {}; } // fail-open — 소재 조회 실패로 생성이 멈추면 안 된다
+}
+
 function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, platform?: ShortsPlatform, inheritFromPrimary?: string): { short: Shorts } | { error: string } {
   const piece = pieceStore().get(pieceId);
   if (!piece) return { error: 'unknown piece' };
@@ -1352,21 +1390,10 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, p
       // 사용자가 컴포저에 첨부한 실사진 — 씬 배경·스타일 레퍼런스로 쓴다.
       // 컴포저 첨부가 우선, 없으면 보관소에서 이 주제에 맞는 소재를 꺼내 쓴다(2026-09-04).
       // 보관소의 값어치가 여기 있다 — 한 번 올려 두면 그 수종 콘텐츠마다 자동으로 화면에 들어간다.
-      ...(() => {
-        const text = `${piece.keyword ?? ''} ${piece.title}`;
-        const sp = findSpecies(text)?.name;
-        const lib = listMedia(piece.brand ?? (activeBrandSlug() || undefined));
-        // 별칭을 표준명으로 — 사장님이 '음나무'로 올린 영상이 '엄나무' 편에서 배제됐다(2026-09-04).
-        // 같은 나무인데 부르는 이름이 둘이다. 그 판정은 수종 사전이 이미 하고 있다.
-        const canon = (n: string): string => findSpecies(n)?.name ?? n;
-        const imgs = piece.assets?.length ? piece.assets
-          : matchMedia(lib, { species: sp, text, kind: 'image', limit: 8, canon }).map((m) => m.file);
-        const vids = piece.videoAssets?.length ? piece.videoAssets
-          : matchMedia(lib, { species: sp, text, kind: 'video', limit: 4, canon }).map((m) => m.file);
-        if (!piece.assets?.length && imgs.length) console.log('[숏폼]', `보관소 사진 ${imgs.length}장 사용 — ${sp ?? '범용'}`);
-        if (!piece.videoAssets?.length && vids.length) console.log('[숏폼]', `보관소 영상 ${vids.length}개 사용 — ${sp ?? '범용'}`);
-        return { ...(imgs.length ? { userAssets: imgs } : {}), ...(vids.length ? { userVideos: vids } : {}) };
-      })(),
+      ...mediaForTopic({
+        brand: piece.brand, text: `${piece.keyword ?? ''} ${piece.title}`,
+        attached: piece.assets, attachedVideos: piece.videoAssets,
+      }),
       // 승계는 원편이 ready 일 때만 — 실패했으면 물려받을 자산이 없으니 자체 생성으로 떨어진다.
       ...(inherit && inheritFromPrimary ? { inheritFrom: inheritFromPrimary } : {}),
     });
@@ -4322,9 +4349,15 @@ if (!process.env.VITEST) {
             } catch { /* 본문 없이도 재개 — planShorts 는 sourceBody 없이 동작 */ }
           }
           shortsStore().update(sid, { recoveries: (s.recoveries ?? 0) + 1 });
+          // 재개도 보관소를 다시 본다 — 안 그러면 중단 전에 쓰기로 했던 실촬영이 재개 후 사라진다.
+          const piece = s.sourcePieceId ? pieceStore().get(s.sourcePieceId) : undefined;
+          const media = mediaForTopic({
+            brand: s.brand, text: `${s.keyword ?? ''} ${s.topic}`,
+            attached: piece?.assets, attachedVideos: piece?.videoAssets,
+          });
           launchShortsRun(sid, s.topic, sourceBody
-            ? { sourceBody, sourceFlagged: sourceFlaggedClaims(pieceStore().get(s.sourcePieceId ?? '')?.runId) }
-            : {});
+            ? { sourceBody, sourceFlagged: sourceFlaggedClaims(pieceStore().get(s.sourcePieceId ?? '')?.runId), ...media }
+            : media);
           // eslint-disable-next-line no-console
           console.log(`[부팅 복구] 중단된 숏폼 자동 재개 — ${s.topic.slice(0, 30)} (${(s.recoveries ?? 0) + 1}/2회차)`);
         } catch (e) { console.log(`[부팅 복구] 숏폼 ${sid} 재개 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
