@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { planAssetScenes, styleRefs, planVideoScenes } from './userAssets';
+import { planAssetScenes, styleRefs, planVideoSegments } from './userAssets';
 
 describe('planAssetScenes — 실사진 씬 배정', () => {
   it('훅부터 앞에서 채운다 — 첫 프레임이 곧 커버다', () => {
@@ -48,45 +48,51 @@ describe('styleRefs — 나머지는 스타일 레퍼런스로', () => {
   });
 });
 
-describe('planVideoScenes — 영상 씬 배정', () => {
-  it('훅에는 안 넣는다 — 영상 첫 프레임은 커버로 약하다', () => {
-    const p = planVideoScenes([{ path: 'v.mp4', seconds: 30 }], [6, 6, 6]);
-    expect(p[0]).toBeNull();
+describe('planVideoSegments — 한 영상을 구간으로 쪼개 여러 씬에', () => {
+  it('23초 한 개가 여러 씬을 덮는다 — 종전엔 한 씬만 덮고 17초가 버려졌다', () => {
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 23 }], [6, 6, 6, 6, 6]);
+    const used = p.filter(Boolean);
+    expect(used.length).toBeGreaterThan(1);
+    expect(used.every((x) => x!.path === 'v.mp4')).toBe(true);
+  });
+  it('구간이 겹치지 않고 씬 순서대로 앞에서 뒤로 간다', () => {
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 30 }], [6, 6, 6, 6, 6]);
+    const used = p.map((x, i) => (x ? { i, ...x } : null)).filter(Boolean) as Array<{ i: number; startSec: number; seconds: number }>;
+    for (let k = 1; k < used.length; k++) {
+      expect(used[k]!.i).toBeGreaterThan(used[k - 1]!.i);              // 씬 순서
+      expect(used[k]!.startSec).toBeGreaterThanOrEqual(used[k - 1]!.startSec + used[k - 1]!.seconds); // 겹침 없음
+    }
+  });
+  it('원본 길이를 넘겨 쓰지 않는다', () => {
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 10 }], [6, 6, 6, 6]);
+    const total = p.filter(Boolean).reduce((sum, x) => sum + x!.seconds, 0);
+    expect(total).toBeLessThanOrEqual(10);
+    for (const x of p.filter(Boolean)) expect(x!.startSec + x!.seconds).toBeLessThanOrEqual(10);
+  });
+  it('훅에는 안 넣는다', () => {
+    expect(planVideoSegments([{ path: 'v.mp4', seconds: 60 }], [6, 6, 6])[0]).toBeNull();
+  });
+  it('전 씬을 실촬영으로 덮지 않는다 — 상한은 씬의 절반(올림)', () => {
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 300 }], [6, 6, 6, 6, 6]);
+    expect(p.filter(Boolean).length).toBeLessThanOrEqual(3);
+  });
+  it('남은 구간이 하한에 못 미치면 거기서 멈춘다 — 과한 감속은 결함으로 보인다', () => {
+    // 7초 영상, 6초 씬들: 첫 씬에 6초를 주면 1초 남고 1 < 6*0.5 이라 더 못 쓴다.
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 7 }], [6, 6, 6, 6]);
     expect(p.filter(Boolean)).toHaveLength(1);
   });
-  it('씬보다 많이 짧은 영상은 안 쓴다 — 과한 감속은 결함으로 보인다', () => {
-    expect(planVideoScenes([{ path: 'short.mp4', seconds: 1 }], [6, 8]).filter(Boolean)).toHaveLength(0);
-    expect(planVideoScenes([{ path: 'ok.mp4', seconds: 5 }], [6, 8]).filter(Boolean)).toHaveLength(1);
-  });
-  it('긴 씬부터 채우고, 덮을 수 있는 것 중 가장 짧은 영상을 쓴다', () => {
-    const p = planVideoScenes(
-      [{ path: 'a.mp4', seconds: 5 }, { path: 'b.mp4', seconds: 12 }],
-      [4, 5, 10],
-    );
-    expect(p[2]).toBe('b.mp4'); // 10초 씬은 12초짜리로
-    expect(p[1]).toBe('a.mp4'); // 5초 씬은 5초짜리로
-    expect(p[0]).toBeNull();
-  });
-  it('한 영상은 한 씬에만', () => {
-    const p = planVideoScenes([{ path: 'v.mp4', seconds: 30 }], [5, 5, 5, 5]);
-    expect(p.filter(Boolean)).toHaveLength(1);
+  it('여러 영상이면 각자 자기 구간을 센다', () => {
+    const p = planVideoSegments([{ path: 'a.mp4', seconds: 12 }, { path: 'b.mp4', seconds: 12 }], [5, 6, 6, 6]);
+    const byPath = new Map<string, number>();
+    for (const x of p.filter(Boolean)) byPath.set(x!.path, (byPath.get(x!.path) ?? 0) + 1);
+    for (const [, n] of byPath) expect(n).toBeGreaterThan(0);
+    for (const x of p.filter(Boolean)) expect(x!.startSec + x!.seconds).toBeLessThanOrEqual(12);
   });
   it('영상이 없거나 씬이 없으면 빈 배정', () => {
-    expect(planVideoScenes([], [5, 5])).toEqual([null, null]);
-    expect(planVideoScenes([{ path: 'v.mp4', seconds: 9 }], [])).toEqual([]);
+    expect(planVideoSegments([], [5, 5])).toEqual([null, null]);
+    expect(planVideoSegments([{ path: 'v.mp4', seconds: 9 }], [])).toEqual([]);
   });
   it('길이를 모르는 항목은 무시한다', () => {
-    expect(planVideoScenes([{ path: 'v.mp4', seconds: 0 }], [5, 5]).filter(Boolean)).toHaveLength(0);
-  });
-});
-
-describe('planVideoScenes — 감속 최소화', () => {
-  it('씬을 통째로 덮는 영상이 있으면 그것을 쓴다(감속 0)', () => {
-    const p = planVideoScenes([{ path: 'exact.mp4', seconds: 9 }, { path: 'half.mp4', seconds: 5 }], [4, 9]);
-    expect(p[1]).toBe('exact.mp4');
-  });
-  it('못 덮으면 하한을 넘는 것 중 가장 긴 것 — 감속 폭이 가장 작다', () => {
-    const p = planVideoScenes([{ path: 'a.mp4', seconds: 5 }, { path: 'b.mp4', seconds: 7 }], [4, 10]);
-    expect(p[1]).toBe('b.mp4'); // 7/10 = 0.7배, a 였다면 0.5배
+    expect(planVideoSegments([{ path: 'v.mp4', seconds: 0 }], [5, 5]).filter(Boolean)).toHaveLength(0);
   });
 });

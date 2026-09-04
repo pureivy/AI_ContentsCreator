@@ -33,6 +33,39 @@ async function ff(args: string[], timeoutMs: number, signal?: AbortSignal): Prom
 }
 
 /**
+ * 첨부 영상에서 한 구간을 잘라 낸다(2026-09-04 사용자 허락: "숏폼 방향에 맞춰 자르거나 수정해도 됨").
+ *
+ * 왜 파일로 굽는가. 렌더러는 씬마다 클립 '파일 경로' 하나를 받는다(s.videoSrc). 시작 오프셋을
+ * 프롭으로 흘리려면 렌더러·zod 스키마·감속 배율 산식을 한꺼번에 손봐야 하는데, 잘라 둔 파일을
+ * 건네면 그 계약이 하나도 안 바뀐다. 한 영상에서 여러 구간을 쓰는 것도 파일이 갈리니 자연스럽다.
+ *
+ * 9:16 맞춤은 여기서 안 한다 — 렌더러의 objectFit:'cover' 가 이미 채워서 자른다. 여기서 또
+ * 자르면 두 번 잘려 피사체가 밀려난다.
+ *
+ * 재인코딩한다(-c copy 아님) — 스트림 복사는 키프레임 단위로만 잘려 시작 지점이 최대 몇 초까지
+ * 밀린다. 씬 길이에 맞춰 떼는 작업이라 그 오차를 감당할 수 없다.
+ *
+ * 실패는 던진다 — 호출부가 원본 통짜 배치로 되돌린다(사장님이 올린 화면을 조용히 버리지 않는다).
+ */
+export async function cutVideoSegment(
+  src: string, out: string, startSec: number, seconds: number, signal?: AbortSignal,
+): Promise<string> {
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  // 비트레이트 상한 — 첨부 영상은 대개 메신저를 거쳐 이미 압축돼 온다(실측 원본 3.2Mbps).
+  // crf 만 걸면 x264 가 그 압축 잡티까지 보존하려 들어 8.3초 구간이 21MB 로 부푼다(원본 대비 6배).
+  // 상한을 걸면 6.5MB 이고 1:1 로 봐도 차이가 없다. 렌더가 이 파일을 프레임 단위로 디코드하므로
+  // 부푼 파일은 그대로 렌더 시간이다. preset 을 올리는 쪽은 효과가 없었다(21→19MB, 시간 2배).
+  await ff([
+    '-ss', String(Math.max(0, startSec)), '-i', src, '-t', String(Math.max(0.1, seconds)),
+    '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21',
+    '-maxrate', '6M', '-bufsize', '12M', '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart', out,
+  ], 120_000, signal);
+  if (!fs.existsSync(out) || fs.statSync(out).size <= 0) throw new Error(`구간 추출 실패: ${src}`);
+  return out;
+}
+
+/**
  * 숏폼 썸네일 — final.mp4 의 훅 프레임(≈1s, 페이드인 이후·제목이 이미 구워진 첫 장면)을 dir/thumbnail.jpg 로 1장 추출.
  * 이미 있으면 그대로 반환. 영상 없으면 null. 스튜디오 카드 포스터·다운로드용(발행엔 미사용). best-effort — 실패는 null.
  */

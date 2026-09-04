@@ -53,44 +53,76 @@ export function styleRefs(assets: readonly string[], plan: AssetPlan, max = 4): 
  *  실촬영 영상이 '고장 난 슬로모션'으로 보인다(렌더러는 클립 한 번으로 씬을 덮으려 속도를 낮춘다). */
 export const MIN_CLIP_COVERAGE = 0.5;
 
+/** 씬 하나에 넣을 영상 구간 — 원본 경로와 그 안에서 잘라 쓸 위치. */
+export interface VideoSegment {
+  readonly path: string;
+  /** 원본에서 이 구간이 시작하는 지점(초). 0 이면 앞에서부터. */
+  readonly startSec: number;
+  /** 이 구간의 길이(초). */
+  readonly seconds: number;
+}
+
 /**
- * 첨부 영상을 씬에 배정한다(순수).
+ * 첨부 영상을 '구간으로 쪼개' 여러 씬에 배정한다(순수, 2026-09-04 사용자 허락).
  *
- * 이미지와 규칙이 다르다. 이미지는 어느 씬에 놓아도 화면이 성립하지만, 영상은 길이가 맞아야 한다 —
- * 씬보다 많이 짧으면 렌더러가 감속으로 늘려 덮는데 0.5배 밑으로 가면 슬로모션이 아니라 결함으로 보인다.
- * 그래서 '충분히 긴 영상'만 배정하고 나머지는 안 쓴다(억지로 넣느니 생성 이미지가 낫다).
+ * planVideoScenes 는 영상 하나를 씬 하나에만 썼다. 그래서 23초짜리 한 개를 올리면 6초 씬 하나만
+ * 덮고 17초가 버려졌다(실측). 사장님이 "숏폼 방향에 맞춰 자르거나 수정해도 된다"고 하셔서,
+ * 한 영상에서 서로 다른 구간을 떼어 여러 씬에 나눠 넣는다. 같은 장면이 반복되지 않게 구간은
+ * 겹치지 않고, 씬 순서대로 앞에서 뒤로 진행한다 — 영상 자체의 시간 흐름이 편의 흐름과 맞는다.
  *
- * 훅(0)은 피한다 — 첫 프레임이 커버인데, 영상 첫 프레임은 대개 정지 상태라 커버로 약하다.
- * 실사진은 훅에 넣지만 영상은 본문에 넣는 이유가 그것이다.
+ * 지키는 것 셋(전부 종전 규칙과 같은 이유):
+ *  · 훅(0)은 비운다 — 영상 첫 프레임은 대개 정지 상태라 커버로 약하다.
+ *  · 구간이 씬 길이의 MIN_CLIP_COVERAGE 밑이면 안 쓴다 — 과한 감속은 결함으로 보인다.
+ *  · 전 씬을 실촬영으로 덮지 않는다(상한 = 씬의 절반, 올림) — 한 클립을 4~5씬에 늘어놓으면
+ *    같은 장면이 도는 것처럼 보이고 내레이션과도 어긋난다. 실사진 배정과 같은 상한·같은 이유.
  */
-export function planVideoScenes(
+export function planVideoSegments(
   videos: ReadonlyArray<{ path: string; seconds: number }>,
   sceneSeconds: readonly number[],
-): AssetPlan {
-  const out: Array<string | null> = sceneSeconds.map(() => null);
+): ReadonlyArray<VideoSegment | null> {
+  const out: Array<VideoSegment | null> = sceneSeconds.map(() => null);
   if (!videos.length || !sceneSeconds.length) return out;
-  const pool = videos.filter((v) => v.path && v.seconds > 0).slice();
-  // 본문 씬부터(훅 제외), 긴 씬부터 채운다 — 긴 씬일수록 채울 영상을 고르기 어렵다.
+  // 남은 시간을 들고 다닌다 — 한 영상에서 여러 구간을 떼므로 '얼마나 남았나'가 선택 기준이다.
+  const pool = videos
+    .filter((v) => v.path && v.seconds > 0)
+    .map((v) => ({ path: v.path, left: v.seconds, scenes: [] as Array<{ i: number; seconds: number }> }));
+  if (!pool.length) return out;
+  const cap = Math.ceil(sceneSeconds.length / 2);
+
+  // 1) 어느 씬에 어느 영상을 몇 초 줄지 — 긴 씬부터(채울 영상을 고르기 어려운 쪽부터).
   const order = sceneSeconds
     .map((sec, i) => ({ i, sec }))
     .filter((x) => x.i > 0)
     .sort((a, b) => b.sec - a.sec);
+  let placed = 0;
   for (const { i, sec } of order) {
-    if (!pool.length) break;
-    // 감속을 최소화하는 쪽으로 고른다.
-    //  1순위: 씬을 통째로 덮는 영상(감속 없음) 중 가장 짧은 것 — 더 긴 영상은 더 긴 씬에 남긴다
-    //  2순위: 못 덮으면 하한을 넘는 것 중 가장 긴 것 — 감속 폭이 가장 작다
-    // 종전엔 '하한만 넘으면 가장 짧은 것'을 골라서, 10초 씬에 5초 영상을 넣어 0.5배까지 늘렸다.
+    if (placed >= cap) break;
+    // 감속을 최소화하는 쪽으로 고른다(종전과 같은 기준, 대상이 '남은 시간'으로 바뀐 것뿐).
+    //  1순위: 씬을 통째로 덮을 만큼 남은 것 중 가장 적게 남은 것 — 여유가 큰 영상은 뒤 씬에 남긴다
+    //  2순위: 못 덮으면 하한을 넘는 것 중 가장 많이 남은 것 — 감속 폭이 가장 작다
     let exact = -1, partial = -1;
     for (let k = 0; k < pool.length; k++) {
-      const d = pool[k]!.seconds;
-      if (d >= sec) { if (exact < 0 || d < pool[exact]!.seconds) exact = k; continue; }
-      if (d < sec * MIN_CLIP_COVERAGE) continue;
-      if (partial < 0 || d > pool[partial]!.seconds) partial = k;
+      const left = pool[k]!.left;
+      if (left >= sec) { if (exact < 0 || left < pool[exact]!.left) exact = k; continue; }
+      if (left < sec * MIN_CLIP_COVERAGE) continue;
+      if (partial < 0 || left > pool[partial]!.left) partial = k;
     }
     const best = exact >= 0 ? exact : partial;
     if (best < 0) continue;
-    out[i] = pool.splice(best, 1)[0]!.path;
+    const take = Math.min(sec, pool[best]!.left);
+    pool[best]!.scenes.push({ i, seconds: take });
+    pool[best]!.left -= take;
+    placed++;
+  }
+
+  // 2) 구간 위치 — 영상마다 씬 번호 순으로 앞에서 뒤로 떼어 낸다. 배정 순서(긴 씬 먼저)가 아니라
+  //    씬 순서를 따르는 이유: 영상의 시간 흐름과 편의 흐름이 어긋나면 같은 소재가 거꾸로 흐른다.
+  for (const v of pool) {
+    let cursor = 0;
+    for (const sc of v.scenes.slice().sort((a, b) => a.i - b.i)) {
+      out[sc.i] = { path: v.path, startSec: cursor, seconds: sc.seconds };
+      cursor += sc.seconds;
+    }
   }
   return out;
 }

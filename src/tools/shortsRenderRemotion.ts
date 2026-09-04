@@ -82,9 +82,13 @@ export async function stageAndBuildProps(
     // month 는 렌더 시점 — 계절 파티클(봄 꽃잎/가을 낙엽/겨울 눈) 배정용.
     // 시드는 쇼츠 id — 편마다 연출 조합이 갈리고, 같은 편을 재조립하면 같은 화면이 나온다.
     const fx = defaultSceneFx(sc?.kind, p.index, !!videoSrc, new Date().getMonth() + 1, opts.fxSeedKey ? fxSeed(opts.fxSeedKey) : undefined);
+    // 실촬영 표시 — 사용자가 올린 화면은 clips/user_NN.mp4 로 굽는다(orchestrator overlayUserVideos).
+    // 이 표시를 보고 렌더러가 흑백·정지 같은 파괴적 기법을 그 씬에서 피한다.
+    const realFootage = !!videoSrc && path.basename(opts.clips![p.index]!).startsWith('user_');
     return {
       imageSrc, audioSrc, videoSrc, screenText: p.screenText, durationInFrames: p.durationInFrames,
       ...(clipFrames ? { clipFrames } : {}),
+      ...(realFootage ? { realFootage } : {}),
       ...(sc?.kind ? { kind: sc.kind } : {}),
       ...(sc?.stat ? { stat: sc.stat } : {}),
       ...(sc?.items ? { items: sc.items } : {}),

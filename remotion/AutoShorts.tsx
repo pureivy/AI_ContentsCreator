@@ -33,6 +33,8 @@ export const autoShortsSchema = z.object({
     durationInFrames: z.number(),
     videoSrc: z.string().nullable().optional(),
     clipFrames: z.number().optional(), // 실제 클립 길이(컴포지션 fps 기준 프레임) — 감속 재생 배율 산정용. 없으면 CLIP_SECONDS 폴백.
+    /** 사용자가 찍어 올린 실촬영 화면인가(2026-09-04) — 파괴적 편집 기법이 이 씬을 피한다. */
+    realFootage: z.boolean().optional(),
     kind: z.enum(['hook', 'stat', 'list', 'quote', 'chart', 'cta', 'compare']).optional(),
     stat: z.object({ value: z.number(), unit: z.string().optional(), label: z.string().optional() }).optional(),
     items: z.array(z.string()).max(4).optional(),
@@ -147,8 +149,10 @@ export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, 
   // 선택 편집 기법 — 편마다 2가지. 파라미터만 갈리던 종전엔 8편이 사실상 2조합뿐이었다(실측).
   const techs = driftSeed ? pickTechniques(driftSeed) : [];
   const techAt = new Map<number, EditTechnique>();
+  // 실촬영 씬 — 흑백·정지처럼 화면을 지우는 기법은 여기를 피한다(사장님 영상이 흑백으로 나갔다).
+  const realScenes = new Set(scenes.flatMap((s, i) => (s.realFootage ? [i] : [])));
   for (const t of techs) {
-    const at = techniqueScene(driftSeed ?? '', t, scenes.length);
+    const at = techniqueScene(driftSeed ?? '', t, scenes.length, realScenes);
     if (at >= 0 && !techAt.has(at)) techAt.set(at, t); // 한 씬에 둘씩 겹치지 않게
   }
   const flashHue = Math.round((look && look.temperature < 0 ? 30 : 8) + (driftSeed ? random(`${driftSeed}:flashHue`) * 22 : 0));
