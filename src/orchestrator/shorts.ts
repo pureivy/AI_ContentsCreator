@@ -1542,23 +1542,30 @@ export async function runShortsJob(
       say(`실촬영 배정 — 사진 ${assetPlan.filter(Boolean).length}씬 · 영상 ${videoPlan.filter(Boolean).length}씬${covered.size ? ` · 이미지 ${covered.size}장 생성 안 함` : ''}`);
     }
     say(`씬 이미지 생성 시작 — gpt-image-2 세로 ${slotScenes.length}장${covered.size ? ` (전체 ${plan.scenes.length}씬 중 ${covered.size}씬은 실촬영)` : ''}`);
-    const bgDraft = {
-      imageSlots: slotScenes.map((i) => ({
-        alt: plan.scenes[i]!.screenText || plan.scenes[i]!.narration.slice(0, 30),
-        // seed=쇼츠 id — 촬영 지시(조명·심도·앵글·생활감)가 편마다 갈린다. 재생성해도 같은 지시가 나온다.
-        prompt: buildSceneImagePrompt({
-          style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length, seed: id,
-          ...(design.subject ? { subject: design.subject } : {}),
-          ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}),
-          // 꽃·열매는 그 씬이 실제로 다룰 때만 — 늘 붙이면 꽃 없는 계절 장면에 꽃이 그려진다.
-          ...(design.species ? { seasonal: speciesSeasonalHint(design.species, `${design.prompts[i] ?? ''} ${plan.scenes[i]?.narration ?? ''}`) } : {}),
-        }),
-      })),
-    };
+    // 프롬프트는 '씬 번호대로' 한 벌 만든다 — 이 배열이 여러 곳의 기준이다.
+    //  · bg-draft.json 은 전 씬을 담는다. 수정요청 재생성이 slots[씬번호-1] 로 읽고(위 applyRevision),
+    //    씬 QA 재생성도 scenePrompts[원본 씬번호] 로 읽는다. 여기서 슬롯을 줄이면 그 둘이 어긋나
+    //    엉뚱한 씬의 프롬프트로 좋은 이미지를 덮어쓴다.
+    //  · 생성에 넘기는 draft 만 따로(bg-gen.json) 축약한다 — 실촬영 씬은 만들지 않는다.
+    const scenePromptsAll = plan.scenes.map((_, i) => buildSceneImagePrompt({
+      // seed=쇼츠 id — 촬영 지시(조명·심도·앵글·생활감)가 편마다 갈린다. 재생성해도 같은 지시가 나온다.
+      style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length, seed: id,
+      ...(design.subject ? { subject: design.subject } : {}),
+      ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}),
+      // 꽃·열매는 그 씬이 실제로 다룰 때만 — 늘 붙이면 꽃 없는 계절 장면에 꽃이 그려진다.
+      ...(design.species ? { seasonal: speciesSeasonalHint(design.species, `${design.prompts[i] ?? ''} ${plan.scenes[i]?.narration ?? ''}`) } : {}),
+    }));
+    const slotOf = (i: number): { alt: string; prompt: string } => ({
+      alt: plan.scenes[i]!.screenText || plan.scenes[i]!.narration.slice(0, 30),
+      prompt: scenePromptsAll[i]!,
+    });
+    const bgDraft = { imageSlots: plan.scenes.map((_, i) => slotOf(i)) };
     const bgDraftPath = path.join(dir, 'bg-draft.json');
+    const bgGenPath = path.join(dir, 'bg-gen.json');
     const bgManifestPath = path.join(dir, 'bg-manifest.json');
     fs.writeFileSync(bgDraftPath, JSON.stringify(bgDraft, null, 2), 'utf-8');
-    if (slotScenes.length) await generateImagesForDraft(bgDraftPath, path.join(dir, 'scenes'), bgManifestPath,
+    fs.writeFileSync(bgGenPath, JSON.stringify({ imageSlots: slotScenes.map(slotOf) }, null, 2), 'utf-8');
+    if (slotScenes.length) await generateImagesForDraft(bgGenPath, path.join(dir, 'scenes'), bgManifestPath,
       {
         imageStyle: design.preset, limit: slotScenes.length, size: '1024x1536',
         timeoutMs: 150_000 * slotScenes.length,
@@ -1584,7 +1591,8 @@ export async function runShortsJob(
 
     // 3-b) 씬 배경 비전 QA — 잡글자·구도·왜곡 불량만 재생성(claude 비전, fail-open, 엔진 독립).
     const qa = await qaSceneImages({
-      dir, images, scenePrompts: bgDraft.imageSlots.map((s) => s.prompt),
+      // 씬 번호대로인 배열이어야 한다 — QA 는 images 의 원본 인덱스로 이 배열을 찾는다.
+      dir, images, scenePrompts: scenePromptsAll,
       preset: design.preset, signal: opts.signal,
       ...(design.subject ? { subject: design.subject } : {}),
       ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}), // 수종 오식별 검사
