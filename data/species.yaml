@@ -1,0 +1,287 @@
+# 수종 사전 — 이미지 생성 앵커의 근거 데이터
+#
+# 왜 파일로 두는가
+#   종전엔 디렉터 LLM 이 기억에서 수종 특징을 써냈다. 종이 통째로 바뀌는 사고는 앵커로 막았지만
+#   디테일이 틀렸다 — 실측(2026-09-04): 남천을 "손바닥 모양으로 갈라진 잎"이라고 적었는데
+#   남천은 깃꼴겹잎이다. 틀린 묘사가 그대로 그려진다.
+#   여기 있는 수종은 LLM 기억 대신 이 표를 쓴다. 없는 수종은 종전대로 LLM 이 쓴다(fail-open).
+#
+# ⚠ verified 플래그
+#   학명은 확립된 사실이라 신뢰도가 높지만, 형태 묘사(잎차례·꽃·열매)는 사람이 한 번 봐야 한다.
+#   원예 채널에서 식물 사실이 틀리면 신뢰가 직접 깎인다. 확인한 항목은 verified: true 로 바꿔라.
+#   verified 여부는 코드 동작을 바꾸지 않는다 — 무엇이 검토됐는지 표시하는 용도다.
+#
+# 필드
+#   latin   학명(속명+종소명). 이미지 모델이 가장 정확하게 알아듣는 이름.
+#   aliases 검색·키워드 표기 변형. 매칭에 쓴다.
+#   type    침엽/활엽 · 교목/관목
+#   leaf    잎 — 잎차례와 모양(여기가 가장 자주 틀린다)
+#   form    수형
+#   flower  꽃 — 시기·색·꽃차례
+#   fruit   열매 — 시기·색·모양
+#   note    화면에 나올 때 주의할 점(선택)
+#
+# 서술 원칙: 긍정문만 쓴다.
+#   "손바닥 모양이 아니다" 같은 부정문은 넣지 마라 — 이미지 모델은 부정을 잘 못 다뤄서
+#   오히려 그 형태를 그린다. 무엇이 아닌지 말고 무엇인지만 적는다.
+
+species:
+  수국:
+    latin: Hydrangea macrophylla
+    aliases: [수국나무]
+    type: 활엽 관목
+    leaf: 마주나기, 넓은 타원형 홑잎, 가장자리에 톱니, 잎맥이 뚜렷
+    form: 둥근 덤불, 높이 1~2m
+    flower: 6~7월, 공 모양·접시 모양 산방꽃차례, 토양 산도에 따라 청색~분홍
+    fruit: 관상 가치 낮음
+    note: 꽃송이 가장자리의 큰 네 갈래 조각은 장식꽃(무성화)
+    verified: false
+
+  남천:
+    latin: Nandina domestica
+    aliases: [남천나무]
+    type: 활엽 관목(상록성)
+    leaf: 2~3회 깃꼴겹잎, 작은잎은 좁은 피침형에 끝이 뾰족
+    form: 뿌리에서 가는 줄기가 여러 대 올라오는 다발 수형, 1~2m
+    flower: 6~7월, 흰 꽃이 원뿔꽃차례로
+    fruit: 가을~겨울, 붉은 구슬 모양이 송이로 달림
+    note: 겨울에 잎 전체가 붉게 물드는 것이 가장 큰 특징
+    verified: false
+
+  측백나무:
+    latin: Platycladus orientalis
+    aliases: [측백, 서양측백]
+    type: 침엽 교목
+    leaf: 비늘 모양 잎이 잔가지를 감싸며, 가지가 납작한 부채처럼 세로로 갈라짐
+    form: 원뿔형~달걀형, 생울타리로 자주 심음
+    flower: 눈에 잘 안 띔
+    fruit: 갈고리 돌기가 있는 회청색 구과
+    note: 잎이 납작한 비늘로 잔가지를 덮는 비늘잎 침엽수
+    verified: false
+
+  배롱나무:
+    latin: Lagerstroemia indica
+    aliases: [백일홍나무, 흰배롱나무]
+    type: 활엽 교목
+    leaf: 마주나기에 가까운 타원형 홑잎, 잎자루가 매우 짧음
+    form: 여러 줄기가 갈라지는 형태
+    flower: 7~9월, 주름진 꽃잎이 원뿔꽃차례로 오래 핌(분홍·자주·흰색)
+    fruit: 둥근 삭과
+    note: 수피가 매끈하게 벗겨져 얼룩덜룩한 것이 큰 특징
+    verified: false
+
+  산수유:
+    latin: Cornus officinalis
+    aliases: [산수유나무]
+    type: 활엽 교목
+    leaf: 마주나기, 타원형 홑잎, 잎맥이 가장자리를 따라 휘어 올라감
+    form: 여러 줄기, 5~7m
+    flower: 3월, 잎보다 먼저 노란 꽃이 우산 모양으로 뭉쳐 핌
+    fruit: 9~10월, 길쭉한 타원형 붉은 열매
+    verified: false
+
+  모감주나무:
+    latin: Koelreuteria paniculata
+    type: 활엽 교목
+    leaf: 어긋나기 깃꼴겹잎, 작은잎 가장자리에 불규칙한 톱니
+    form: 우산처럼 퍼지는 수형
+    flower: 6~7월, 노란 꽃이 큰 원뿔꽃차례로
+    fruit: 꽈리처럼 부푼 세모진 꼬투리, 익으면 갈색
+    verified: false
+
+  자귀나무:
+    latin: Albizia julibrissin
+    type: 활엽 교목
+    leaf: 2회 깃꼴겹잎, 작은잎이 매우 잘고 많음, 밤에 접힘
+    form: 옆으로 넓게 퍼지는 우산형
+    flower: 6~7월, 분홍 실 같은 수술이 부채처럼 퍼진 꽃
+    fruit: 납작하고 긴 콩꼬투리
+    verified: false
+
+  계수나무:
+    latin: Cercidiphyllum japonicum
+    type: 활엽 교목
+    leaf: 마주나기, 하트 모양 홑잎, 가장자리에 둔한 톱니
+    form: 곧게 자라는 원추형
+    flower: 3~5월, 잎보다 먼저 피며 눈에 잘 안 띔
+    fruit: 작고 굽은 꼬투리
+    note: 가을 단풍 때 달콤한 향이 나는 것으로 알려짐
+    verified: false
+
+  목련:
+    latin: Magnolia kobus
+    aliases: [백목련, 목련나무]
+    type: 활엽 교목
+    leaf: 어긋나기, 넓은 거꿀달걀형 홑잎
+    form: 곧은 줄기에 넓게 퍼지는 가지
+    flower: 3~4월, 잎보다 먼저 크고 흰 꽃이 위를 향해 핌
+    fruit: 울퉁불퉁한 골돌과, 익으면 붉은 씨가 실에 매달림
+    note: 겨울 꽃눈이 털로 덮인 붓 모양인 것이 특징
+    verified: false
+
+  라일락:
+    latin: Syringa vulgaris
+    aliases: [수수꽃다리]
+    type: 활엽 관목
+    leaf: 마주나기, 하트 모양에 가까운 넓은 달걀형 홑잎
+    form: 여러 줄기 덤불, 2~4m
+    flower: 4~5월, 작은 통꽃이 원뿔꽃차례로 뭉쳐 핌(연보라·흰색)
+    fruit: 갈색 삭과
+    verified: false
+
+  회양목:
+    latin: Buxus sinica
+    aliases: [회양목나무]
+    type: 활엽 관목(상록)
+    leaf: 마주나기, 작고 두꺼운 타원형 홑잎, 광택
+    form: 촘촘한 덤불 — 다듬어 생울타리·경계목으로
+    flower: 3~4월, 연노랑, 눈에 잘 안 띔
+    fruit: 뿔 세 개가 달린 작은 삭과
+    verified: false
+
+  사철나무:
+    latin: Euonymus japonicus
+    type: 활엽 관목(상록)
+    leaf: 마주나기, 두껍고 광택 있는 타원형 홑잎, 가장자리에 둔한 톱니
+    form: 곧게 자라는 덤불, 생울타리로 자주 심음
+    flower: 6~7월, 연녹색 작은 꽃
+    fruit: 가을에 붉게 익어 갈라지며 주황 씨가 드러남
+    verified: false
+
+  참나무:
+    latin: Quercus acutissima
+    aliases: [상수리나무, 도토리나무]
+    type: 활엽 교목
+    leaf: 어긋나기, 긴 타원형 홑잎, 가장자리에 바늘 같은 톱니
+    form: 곧은 줄기의 큰 교목
+    flower: 4~5월, 늘어지는 수꽃차례
+    fruit: 도토리 — 깍정이가 덥수룩한 털로 덮임
+    note: 참나무는 여러 종의 통칭 — 특정 종을 다루면 그 종의 학명으로 바꿔라
+    verified: false
+
+  블루베리:
+    latin: Vaccinium corymbosum
+    aliases: [블루베리나무]
+    type: 활엽 관목
+    leaf: 어긋나기, 타원형 홑잎, 가을에 붉게 물듦
+    form: 여러 줄기가 올라오는 덤불, 1~2m
+    flower: 4~5월, 흰~연분홍 종 모양 꽃이 아래를 향해
+    fruit: 6~8월, 짙은 남색에 흰 분(과분)이 덮임, 끝에 별 모양 꽃받침 자국
+    verified: false
+
+  하스카프베리:
+    latin: Lonicera caerulea
+    aliases: [하스카프, 허니베리]
+    type: 활엽 관목
+    leaf: 마주나기, 긴 타원형 홑잎
+    form: 낮게 퍼지는 덤불, 1~1.5m
+    flower: 4~5월, 연노랑 통꽃이 쌍으로
+    fruit: 6~7월, 길쭉한 남보라색 열매(블루베리보다 갸름)
+    verified: false
+
+  포도:
+    latin: Vitis vinifera
+    aliases: [포도나무]
+    type: 활엽 덩굴
+    leaf: 어긋나기, 손바닥 모양으로 3~5갈래 갈라진 큰 홑잎
+    form: 덩굴손으로 지지대를 감고 오르는 덩굴
+    flower: 5~6월, 작은 연녹색 꽃이 송이로
+    fruit: 8~10월, 알이 촘촘한 송이
+    verified: false
+
+  감나무:
+    latin: Diospyros kaki
+    aliases: [단감, 태추단감, 감풍단감, 감나무묘목]
+    type: 활엽 교목
+    leaf: 어긋나기, 두껍고 광택 있는 넓은 타원형 홑잎
+    form: 옆으로 퍼지는 수형
+    flower: 5~6월, 연노랑 종 모양 꽃
+    fruit: 9~11월, 주황색, 꼭지에 네 갈래 꽃받침이 붙어 있음
+    verified: false
+
+  사과나무:
+    latin: Malus domestica
+    aliases: [사과]
+    type: 활엽 교목
+    leaf: 어긋나기, 타원형 홑잎, 뒷면에 잔털
+    form: 옆으로 퍼지는 수형
+    flower: 4~5월, 흰~연분홍 다섯 장 꽃
+    fruit: 8~11월, 붉은~노란 열매
+    verified: false
+
+  무화과:
+    latin: Ficus carica
+    aliases: [무화과나무]
+    type: 활엽 관목·소교목
+    leaf: 어긋나기, 손바닥 모양으로 3~5갈래 깊게 갈라진 크고 두꺼운 홑잎
+    form: 여러 줄기가 벌어지는 수형
+    flower: 겉으로 안 보임 — 열매 안쪽에 핌
+    fruit: 8~10월, 물방울 모양, 익으면 자주~갈색
+    verified: false
+
+  석류나무:
+    latin: Punica granatum
+    aliases: [석류]
+    type: 활엽 관목·소교목
+    leaf: 마주나기, 좁고 긴 타원형 홑잎, 광택
+    form: 가시가 있는 여러 줄기
+    flower: 5~6월, 주홍색 통꽃
+    fruit: 9~10월, 붉고 둥글며 끝에 왕관 모양 꽃받침
+    verified: false
+
+  올리브나무:
+    latin: Olea europaea
+    aliases: [올리브]
+    type: 활엽 교목(상록)
+    leaf: 마주나기, 좁고 긴 홑잎, 앞면 짙은 녹색·뒷면 은빛
+    form: 비틀린 줄기, 은녹색 수관
+    flower: 5~6월, 작은 흰 꽃
+    fruit: 가을, 녹색에서 검게 익음
+    verified: false
+
+  체리나무:
+    latin: Prunus avium
+    aliases: [체리, 양벚나무]
+    type: 활엽 교목
+    leaf: 어긋나기, 긴 타원형 홑잎, 가장자리에 톱니
+    form: 곧은 줄기, 가로줄 무늬 수피
+    flower: 4월, 흰 꽃이 잎과 함께 또는 먼저
+    fruit: 6~7월, 붉은 구슬 모양
+    verified: false
+
+  복숭아나무:
+    latin: Prunus persica
+    aliases: [복숭아, 천중도복숭아]
+    type: 활엽 교목
+    leaf: 어긋나기, 좁고 긴 피침형 홑잎
+    form: 옆으로 퍼지는 낮은 수형
+    flower: 4월, 분홍 꽃이 잎보다 먼저
+    fruit: 7~8월, 솜털이 있는 둥근 열매, 가운데 골이 있음
+    verified: false
+
+  층층나무:
+    latin: Cornus controversa
+    type: 활엽 교목
+    leaf: 어긋나기, 넓은 타원형 홑잎, 잎맥이 가장자리를 따라 휨
+    form: 가지가 층층이 수평으로 뻗는 것이 큰 특징
+    flower: 5~6월, 흰 꽃이 평평한 산방꽃차례로
+    fruit: 가을, 검게 익는 작은 열매
+    verified: false
+
+  국수나무:
+    latin: Stephanandra incisa
+    type: 활엽 관목
+    leaf: 어긋나기, 삼각형에 가까운 홑잎, 가장자리가 깊게 갈라지고 톱니
+    form: 가는 가지가 활처럼 늘어지는 덤불
+    flower: 5~6월, 흰 작은 꽃
+    fruit: 작은 골돌과
+    verified: false
+
+  보리수나무:
+    latin: Elaeagnus umbellata
+    type: 활엽 관목
+    leaf: 어긋나기, 타원형 홑잎, 뒷면이 은빛 비늘털로 덮임
+    form: 가시가 있는 덤불
+    flower: 5~6월, 연노랑 통꽃, 향이 강함
+    fruit: 9~10월, 붉고 은빛 점이 박힌 작은 열매
+    verified: false

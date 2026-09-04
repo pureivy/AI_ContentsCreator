@@ -23,6 +23,8 @@ data/*
 !data/company.yaml
 # 역할→담당자 이름 매핑 — company.yaml 과 짝. 없으면 화면에 역할 id 가 뜬다.
 !data/people.yaml
+# 수종 사전 — 이미지 앵커의 근거 데이터. 없으면 다른 환경에서 수종 특징이 LLM 기억으로 돌아간다.
+!data/species.yaml
 # 지식 예외 하위의 비밀키·비지식·대용량은 재제외(실수로도 안 들어가게 이중 방어).
 data/secrets.json
 data/agents/*/workspace/
