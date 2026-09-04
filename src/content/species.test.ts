@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadSpecies, findSpecies, speciesAnchor, speciesSeasonalHint, speciesNameFrom, appendSpecies, resetSpeciesCache } from './species';
+import { loadSpecies, findSpecies, speciesAnchor, speciesSeasonalHint, speciesNameFrom, appendSpecies, resetSpeciesCache, stripSpeciesNamePrefix } from './species';
 
 const LIST = loadSpecies();
 
@@ -129,6 +129,39 @@ describe('appendSpecies — 새 수종 자동 축적', () => {
     const txt = fs.readFileSync(f, 'utf-8');
     expect(txt).toContain('auto: true');
     expect(txt).toContain('verified: false');
+    resetSpeciesCache();
+  });
+});
+
+describe('stripSpeciesNamePrefix — 앵커 앞머리 이름 제거(순수)', () => {
+  const tmp = () => {
+    const f = path.join(os.tmpdir(), `sp-${Math.random().toString(36).slice(2)}.yaml`);
+    fs.writeFileSync(f, 'species:\n  기존종:\n    latin: Existing species\n    leaf: 홑잎\n');
+    return f;
+  };
+  it('"이름 — 특징"에서 이름을 뗀다', () => {
+    expect(stripSpeciesNamePrefix('사계장미', '사계장미 — 홀수 깃꼴겹잎, 가시 있는 줄기'))
+      .toBe('홀수 깃꼴겹잎, 가시 있는 줄기');
+  });
+  it('붙임표 종류(—, –, -)를 모두 본다', () => {
+    expect(stripSpeciesNamePrefix('남천', '남천 - 깃꼴겹잎')).toBe('깃꼴겹잎');
+    expect(stripSpeciesNamePrefix('남천', '남천 – 깃꼴겹잎')).toBe('깃꼴겹잎');
+  });
+  it('앞머리가 이름이 아니면 그대로 둔다', () => {
+    expect(stripSpeciesNamePrefix('남천', '깃꼴겹잎, 붉은 열매')).toBe('깃꼴겹잎, 붉은 열매');
+  });
+  it('빈 값·이름만 있는 값은 undefined', () => {
+    expect(stripSpeciesNamePrefix('남천', '')).toBeUndefined();
+    expect(stripSpeciesNamePrefix('남천', undefined)).toBeUndefined();
+    expect(stripSpeciesNamePrefix('남천', '남천 — ')).toBeUndefined();
+  });
+  it('저장된 leaf 에 이름이 남지 않는다 — speciesAnchor 가 이름을 다시 붙이므로', () => {
+    const f = tmp();
+    appendSpecies({ name: '치자나무', latin: 'Gardenia jasminoides', leaf: '치자나무 — 마주나기 홑잎, 흰 꽃' }, f);
+    resetSpeciesCache();
+    const sp = findSpecies('치자나무', loadSpecies(f))!;
+    expect(sp.leaf).toBe('마주나기 홑잎, 흰 꽃');
+    expect(speciesAnchor(sp)).not.toContain('치자나무 — 치자나무');
     resetSpeciesCache();
   });
 });

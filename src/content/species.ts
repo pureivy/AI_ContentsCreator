@@ -96,6 +96,23 @@ export function speciesNameFrom(subject: string, keyword?: string): string {
 }
 
 /**
+ * 앵커 문구에서 앞머리 이름을 떼어 낸다(순수).
+ *
+ * 디렉터가 내는 subject 는 "사계장미 — 홀수 깃꼴겹잎, …" 꼴이고, 이걸 그대로 leaf 에 저장하면
+ * speciesAnchor 가 이름을 한 번 더 붙여 "사계장미 — 사계장미 — …"가 된다(2026-09-04 실측).
+ * 이름이 두 번 들어간 프롬프트가 이미지 모델에 어떤 영향을 주는지는 확실치 않지만, 사람이
+ * 검토할 표로서도 잎 칸에 이름이 들어 있는 건 잘못이다.
+ */
+export function stripSpeciesNamePrefix(name: string, leaf: string | undefined): string | undefined {
+  const t = String(leaf ?? '').trim();
+  if (!t) return undefined;
+  const head = String(name ?? '').trim();
+  if (!head) return t;
+  const m = new RegExp(`^${head.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[—–-]\\s*`).exec(t);
+  return (m ? t.slice(m[0].length).trim() : t) || undefined;
+}
+
+/**
  * 새 수종을 사전에 덧붙인다(2026-09-04) — 표에 없던 종이 나오면 한 번 기록해 다음부터 재사용한다.
  *
  * 왜 자동으로 쌓는가. 표에 없으면 매 편 디렉터가 특징을 새로 써내고, 그 값이 편마다 달라진다 —
@@ -115,12 +132,13 @@ export function appendSpecies(
     const cur = loadSpecies(file);
     if (cur.some((s) => s.name === entry.name || s.latin === entry.latin)) return false;
     const q = (v: string): string => JSON.stringify(String(v)); // YAML 안전 인용(콜론·따옴표 포함 대비)
+    const leaf = stripSpeciesNamePrefix(entry.name, entry.leaf); // "이름 — 특징"에서 이름 제거
     const lines = [
       '',
       `  ${entry.name}:`,
       `    latin: ${entry.latin}`,
       ...(entry.type ? [`    type: ${q(entry.type)}`] : []),
-      ...(entry.leaf ? [`    leaf: ${q(entry.leaf)}`] : []),
+      ...(leaf ? [`    leaf: ${q(leaf)}`] : []),
       ...(entry.form ? [`    form: ${q(entry.form)}`] : []),
       ...(entry.flower ? [`    flower: ${q(entry.flower)}`] : []),
       ...(entry.fruit ? [`    fruit: ${q(entry.fruit)}`] : []),
