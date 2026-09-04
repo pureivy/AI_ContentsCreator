@@ -111,6 +111,7 @@ interface CliResult {
   usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
 }
 
+
 export class ClaudeCliClient {
   async chat(params: ChatParams): Promise<ChatResult> {
     return SLOT.run(() => this._chat(params));
@@ -172,6 +173,7 @@ export class ClaudeCliClient {
       const child = spawn(CONFIG.claudeCliPath, args, { cwd: ensureNeutralCwd(), env, stdio: ['pipe', 'pipe', 'pipe'] });
 
       let deltaText = '';
+      let lastDeltaAt = Date.now(); // 마지막 델타 시각 — 결과 줄 없이 끝났을 때 '언제부터 조용했나'를 남긴다
       let result: CliResult | undefined;
       let stderrTail = '';
       let settled = false;
@@ -204,6 +206,7 @@ export class ClaudeCliClient {
           const inner = (ev as { event?: { type?: string; delta?: { type?: string; text?: string; thinking?: string } } }).event;
           if (inner?.type === 'content_block_delta' && inner.delta?.type === 'text_delta' && inner.delta.text) {
             deltaText += inner.delta.text;
+            lastDeltaAt = Date.now();
             params.onDelta?.(inner.delta.text);
           }
         } else if (ev.type === 'result') {
@@ -214,7 +217,21 @@ export class ClaudeCliClient {
       child.on('close', (code) => {
         cleanup();
         if (settled) return;
-        if (!result) return fail(`결과 없음(exit=${code}) ${stderrTail.trim()}`.trim());
+        if (!result) {
+          // 결과 줄 없이 끝난 실패 — 진단 정보를 실어 준다(2026-09-04 실사고).
+          //
+          // 실측: 사과나무 리비전 런이 본문 3,400자를 정상 스트리밍한 뒤 48초 정적, exit=0,
+          // result 줄 없음, stderr 비어 있음. 같은 호출을 손으로 재현하면 정상이라 원인을 못 좁혔다.
+          //
+          // 흘러온 부분 텍스트를 성공으로 회수하는 안을 검토했다가 접었다 — truncated 플래그를
+          // 하류에서 아무도 안 본다(로그·지표에만 쓴다). 반쪽 기사가 조용히 SEO 리비전을 타고
+          // 검토 대기까지 흘러가면, 실패가 보이던 지금보다 나쁘다. 실패는 실패로 두고, 대신
+          // 다음에 같은 일이 나면 원인을 좁힐 수 있게 '얼마나 받았고 얼마나 조용했는지'를 남긴다.
+          const got = deltaText.trim().length;
+          const quietSec = Math.round((Date.now() - lastDeltaAt) / 1000);
+          const detail = got ? `본문 ${got}자 수신 후 ${quietSec}초 무응답` : '수신 없음';
+          return fail(`결과 없음(exit=${code}) ${detail} ${stderrTail.trim()}`.trim());
+        }
         if (result.is_error || result.subtype !== 'success') {
           // 출력 상한 초과 — CLI 는 오류로 반환하지만 스트리밍된 부분 텍스트가 있으면 SDK 절단
           // 계약(text + truncated)으로 회수한다(마이크로 콜 하나 때문에 런 전체가 죽지 않게).
