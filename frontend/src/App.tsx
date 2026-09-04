@@ -880,6 +880,13 @@ export default function App() {
               <button type="button" title="제거" onClick={() => removeTopicDoc(i)}>×</button>
             </span>
           ))}
+          {/* 사진을 올리면 글 참고로만 쓰이는 게 아니라 파생 쇼츠 화면에 실제로 들어간다 —
+              모르면 "왜 내 사진이 영상에 나오지"가 되므로 올릴 때 알려 준다(2026-09-04). */}
+          {topicImages.length > 0 && (
+            <span className="chat-attach-note">
+              사진 {topicImages.length}장 — 쇼츠 씬 배경으로 쓰이고, 나머지 씬은 이 사진의 톤에 맞춰 생성됩니다
+            </span>
+          )}
         </div>
       )}
       <textarea

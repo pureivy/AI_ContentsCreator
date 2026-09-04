@@ -413,6 +413,11 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
   handle.brand = activeBrandSlug() || undefined;
   if (opts.revise) handle.revise = true; // 개정 런 표식 — 기록에서 원본 생성과 구분(중복 오해 방지)
   if (opts.pieceId) handle.pieceId = opts.pieceId; // 본편 생산 런 표식 — 완료 자율런의 기록 표시 기준
+  // 첨부 실사진을 원고에 남긴다(2026-09-04) — 종전엔 vision 으로 '읽고' 버려서, 파생 쇼츠가
+  // 사용자가 올린 사진을 화면에 쓸 방법이 없었다. 경로를 붙여 두면 파생이 그대로 집어 쓴다.
+  if (opts.pieceId && opts.images?.length) {
+    try { pieceStore().update(opts.pieceId, { assets: opts.images.slice(0, 8) }); } catch { /* 무해 */ }
+  }
   RUNS.set(id, handle);
   if (opts.auto) lastAutoRun = { ts: handle.created_ts, topic };
   evictRuns();
@@ -1325,6 +1330,8 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, p
   const start = (inherit: boolean): void => {
     launchShortsRun(short.id, piece.title, {
       sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId!),
+      // 사용자가 컴포저에 첨부한 실사진 — 씬 배경·스타일 레퍼런스로 쓴다.
+      ...(piece.assets?.length ? { userAssets: piece.assets } : {}),
       // 승계는 원편이 ready 일 때만 — 실패했으면 물려받을 자산이 없으니 자체 생성으로 떨어진다.
       ...(inherit && inheritFromPrimary ? { inheritFrom: inheritFromPrimary } : {}),
     });

@@ -37,6 +37,7 @@ import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { inheritShortsAssets, inheritedSceneImages, inheritedClips } from '../content/shortsInherit';
 import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom } from '../content/species';
+import { planAssetScenes, styleRefs } from '../content/userAssets';
 import { generateTitleArt } from './shortsTitleArt';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
 import { blogUrlForPiece } from '../content/pieces';
@@ -1328,6 +1329,9 @@ export async function runShortsJob(
     sourceBody?: string; sceneCount?: number; bus?: EventBus; signal?: AbortSignal;
     /** 원문(블로그) 사실 게이트가 건 주장 — unsupported + unverified. 파생물에 재등장하면 승계 표시(처방 C). */
     sourceFlagged?: string[];
+    /** 사용자 첨부 실사진(2026-09-04) — 일부 씬은 이 사진을 그대로 배경으로 쓰고,
+     *  나머지 씬은 이 사진들의 색·빛·질감을 참고해 생성한다. */
+    userAssets?: string[];
     /** 형제편 승계 원본(2026-09-03) — 이 쇼츠 id 의 대본·이미지·클립·캘리를 물려받고 낭독만 새로 뜬다.
      *  기획·디자인·이미지 생성·씬 QA·I2V 를 통째로 건너뛴다(편당 비용의 대부분이 이미지다). */
     inheritFrom?: string;
@@ -1459,11 +1463,24 @@ export async function runShortsJob(
         }),
       })),
     };
+    // 실사진 배정(2026-09-04) — 배정된 씬은 생성하지 않고 사용자가 올린 사진을 그대로 쓴다.
+    // 나머지 씬은 그 사진들을 레퍼런스로 삼아 색·빛·질감을 맞춰 생성한다.
+    const assets = (opts.userAssets ?? []).filter((f) => { try { return fs.existsSync(f); } catch { return false; } });
+    const assetPlan = planAssetScenes(assets, plan.scenes.length);
+    const refPaths = styleRefs(assets, assetPlan);
+    if (assets.length) {
+      say(`실사진 ${assets.length}장 — 씬 ${assetPlan.filter(Boolean).length}개는 사진 그대로, 나머지는 그 톤으로 생성`);
+    }
     const bgDraftPath = path.join(dir, 'bg-draft.json');
     const bgManifestPath = path.join(dir, 'bg-manifest.json');
     fs.writeFileSync(bgDraftPath, JSON.stringify(bgDraft, null, 2), 'utf-8');
     await generateImagesForDraft(bgDraftPath, path.join(dir, 'scenes'), bgManifestPath,
-      { imageStyle: design.preset, limit: plan.scenes.length, size: '1024x1536', timeoutMs: 150_000 * plan.scenes.length },
+      {
+        imageStyle: design.preset, limit: plan.scenes.length, size: '1024x1536',
+        timeoutMs: 150_000 * plan.scenes.length,
+        // 첨부 사진을 레퍼런스로 — 팔레트·질감·빛만 빌린다(카드뉴스가 쓰던 방식과 같다).
+        ...(refPaths.length ? { refImages: refPaths } : {}),
+      },
       opts.signal);
     // 슬롯 정렬 이미지 목록 — 실패 씬은 null(렌더러가 그라데이션 폴백, 순서 보존)
     let images: Array<string | null> = plan.scenes.map(() => null);
@@ -1477,6 +1494,8 @@ export async function runShortsJob(
         });
       }
     } catch { /* 전 씬 폴백 */ }
+    // 실사진이 생성본을 이긴다 — 배정된 씬은 사용자가 올린 사진을 쓴다.
+    images = images.map((g, i) => assetPlan[i] ?? g);
 
     // 3-b) 씬 배경 비전 QA — 잡글자·구도·왜곡 불량만 재생성(claude 비전, fail-open, 엔진 독립).
     const qa = await qaSceneImages({
@@ -1484,6 +1503,8 @@ export async function runShortsJob(
       preset: design.preset, signal: opts.signal,
       ...(design.subject ? { subject: design.subject } : {}),
       ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}), // 수종 오식별 검사
+      // 실사진 자리는 QA 재생성에서 뺀다 — 사용자가 고른 사진을 우리가 생성본으로 바꾸면 안 된다.
+      protectedScenes: new Set(assetPlan.map((a, i) => (a ? i : -1)).filter((i) => i >= 0)),
     });
     images = qa.images;
     if (qa.regenerated) say(`씬 QA — ${qa.regenerated}장 재생성 (${qa.issues.slice(0, 3).join(' · ')})`);
@@ -1519,7 +1540,9 @@ export async function runShortsJob(
     const cv = await i2vSceneClips({
       // 원시 장면 묘사를 넘긴다(빌드된 이미지 프롬프트 X) — 후자에는 '손·손가락 왜곡을 피한다' 는
       // 금지 문구가 항상 붙어 있어 손 판별(hasSubjectRisk)이 전 씬에 오탐했다(실측 2026-08-01).
-      dir, images, scenePrompts, motionPrompts, subjectScenes, allowedScenes: i2vPlan.allowed, signal: opts.signal,
+      dir, images, scenePrompts, motionPrompts, subjectScenes, signal: opts.signal,
+      // 실사진 씬은 I2V 대상에서 뺀다 — 실제로 찍은 사진을 생성 모델이 움직이면 형태가 무너진다.
+      allowedScenes: new Set([...i2vPlan.allowed].filter((i) => !assetPlan[i])),
     });
     const clipCount = cv.clips.filter(Boolean).length;
     if (clipCount) say(`씬 I2V — ${clipCount}/${plan.scenes.length}장 클립화${cv.issues.length ? ` (${cv.issues[0]})` : ''}`);

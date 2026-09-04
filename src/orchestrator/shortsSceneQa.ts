@@ -33,6 +33,10 @@ export async function qaSceneImages(opts: {
   subject?: string;
   /** 학명 — 판정자에게도 학명을 준다. 한글 이름만으로는 검증자도 종을 헷갈린다. */
   subjectLatin?: string;
+  /** 재생성에서 제외할 씬(0-base) — 사용자가 올린 실사진 자리.
+   *  QA 가 '구도가 어색하다'고 판정해 재생성하면 사용자 사진이 생성본으로 바뀐다. 그건 QA 가
+   *  할 일이 아니다 — 실사진은 사용자의 선택이고, 검수 대상은 우리가 만든 이미지다. */
+  protectedScenes?: ReadonlySet<number>;
 }): Promise<SceneQaResult> {
   const out: SceneQaResult = { images: opts.images.slice(), regenerated: 0, issues: [] };
   try {
@@ -40,7 +44,8 @@ export async function qaSceneImages(opts: {
     // non-null 이미지만 검수 대상으로, 원본 인덱스 추적.
     const checked = opts.images
       .map((p, origIndex) => ({ origIndex, path: p }))
-      .filter((c): c is { origIndex: number; path: string } => !!c.path && fs.existsSync(c.path));
+      .filter((c): c is { origIndex: number; path: string } => !!c.path && fs.existsSync(c.path))
+      .filter((c) => !opts.protectedScenes?.has(c.origIndex)); // 실사진은 검수·재생성 대상이 아니다
     if (!checked.length) return out;
 
     const qa = await microJSON<{ issues?: Array<{ scene?: unknown; problem?: unknown }> }>(
