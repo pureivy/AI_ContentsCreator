@@ -24,6 +24,8 @@ export interface Species {
   readonly note?: string;
   /** 사람이 형태 묘사를 확인했는가. 코드 동작은 안 바꾸고 표시만 한다. */
   readonly verified?: boolean;
+  /** 자동 추가분(디렉터 값) — 사람이 쓴 항목과 구분한다. */
+  readonly auto?: boolean;
 }
 
 let cache: Species[] | null = null;
@@ -80,4 +82,54 @@ export function speciesSeasonalHint(sp: Species, sceneText: string): string {
   if (sp.flower && /꽃|개화|봉오리|꽃눈/.test(t)) out.push(`꽃: ${sp.flower}`);
   if (sp.fruit && /열매|과실|수확|씨|종자|도토리/.test(t)) out.push(`열매: ${sp.fruit}`);
   return out.join(' · ');
+}
+
+/**
+ * 디렉터가 낸 값에서 수종 이름을 뽑는다(순수).
+ * subject 는 "남천 — 깃꼴겹잎, ..." 꼴이므로 구분자 앞이 이름이다. 없으면 키워드를 쓴다.
+ */
+export function speciesNameFrom(subject: string, keyword?: string): string {
+  const head = String(subject ?? '').split(/[—\-–(]/)[0]!.trim();
+  const name = head || String(keyword ?? '').trim();
+  // 이름다운 것만 — 공백이 섞인 구절("9월 정원 준비")이나 지나치게 긴 것은 수종명이 아니다.
+  return /^[가-힣A-Za-z]{2,12}$/.test(name) ? name : '';
+}
+
+/**
+ * 새 수종을 사전에 덧붙인다(2026-09-04) — 표에 없던 종이 나오면 한 번 기록해 다음부터 재사용한다.
+ *
+ * 왜 자동으로 쌓는가. 표에 없으면 매 편 디렉터가 특징을 새로 써내고, 그 값이 편마다 달라진다 —
+ * 같은 수종인데 영상마다 다른 잎 모양이 그려질 수 있다. 한 번 적어 두면 적어도 일관된다.
+ *
+ * 자동 추가분은 verified:false 와 auto:true 로 표시한다. 사람이 검토하기 전까지는 '디렉터가
+ * 기억에서 쓴 값'이라는 뜻이므로, 표에 있다고 해서 검증된 것은 아니다.
+ *
+ * 이미 있으면 아무것도 안 한다. 쓰기 실패는 삼킨다 — 사전 갱신 때문에 영상 생성이 죽으면 안 된다.
+ */
+export function appendSpecies(
+  entry: { name: string; latin: string; type?: string; leaf?: string; form?: string; flower?: string; fruit?: string },
+  file = path.join('data', 'species.yaml'),
+): boolean {
+  if (!entry.name || !entry.latin) return false;
+  try {
+    const cur = loadSpecies(file);
+    if (cur.some((s) => s.name === entry.name || s.latin === entry.latin)) return false;
+    const q = (v: string): string => JSON.stringify(String(v)); // YAML 안전 인용(콜론·따옴표 포함 대비)
+    const lines = [
+      '',
+      `  ${entry.name}:`,
+      `    latin: ${entry.latin}`,
+      ...(entry.type ? [`    type: ${q(entry.type)}`] : []),
+      ...(entry.leaf ? [`    leaf: ${q(entry.leaf)}`] : []),
+      ...(entry.form ? [`    form: ${q(entry.form)}`] : []),
+      ...(entry.flower ? [`    flower: ${q(entry.flower)}`] : []),
+      ...(entry.fruit ? [`    fruit: ${q(entry.fruit)}`] : []),
+      '    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전',
+      '    verified: false',
+      '',
+    ];
+    fs.appendFileSync(file, lines.join('\n'), 'utf-8');
+    resetSpeciesCache();
+    return true;
+  } catch { return false; }
 }

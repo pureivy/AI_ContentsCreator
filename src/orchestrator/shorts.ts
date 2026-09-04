@@ -36,7 +36,7 @@ import { renderShortsVideo, ensureShortsDownload, extractFirstFrame } from '../t
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { inheritShortsAssets, inheritedSceneImages, inheritedClips } from '../content/shortsInherit';
-import { findSpecies, speciesAnchor, speciesSeasonalHint } from '../content/species';
+import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom } from '../content/species';
 import { generateTitleArt } from './shortsTitleArt';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
 import { blogUrlForPiece } from '../content/pieces';
@@ -1004,7 +1004,15 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
   const known = findSpecies(`${keyword ?? ''} ${topic}`);
   const subject = known ? speciesAnchor(known) : String(j?.subject ?? '').trim().slice(0, 120);
   const subjectLatin = known ? known.latin : normalizeLatinName(String(j?.subject_latin ?? ''));
-  if (known) console.log('[숏폼]', `수종 사전 적중 — ${known.name} (${known.latin})${known.verified ? '' : ' · 형태 묘사 미검토'}`);
+  if (known) {
+    console.log('[숏폼]', `수종 사전 적중 — ${known.name} (${known.latin})${known.verified ? '' : ' · 형태 묘사 미검토'}`);
+  } else if (subjectLatin) {
+    // 표에 없던 종 — 한 번 적어 두면 다음 편부터 같은 값을 쓴다(편마다 잎 모양이 달라지는 것 방지).
+    const nm = speciesNameFrom(subject, keyword);
+    if (nm && appendSpecies({ name: nm, latin: subjectLatin, leaf: subject })) {
+      console.log('[숏폼]', `수종 사전 추가 — ${nm} (${subjectLatin}) · 검토 필요(auto)`);
+    }
+  }
   if (subject || subjectLatin) {
     console.log('[숏폼]', `수종 앵커 — ${subjectLatin ? `${subjectLatin} · ` : '학명 없음 · '}${subject || '(특징 없음)'}`);
     if (!subjectLatin) console.log('[숏폼]', '학명 미기재 — 한글 이름만으로는 이미지 모델이 종을 자주 틀린다');

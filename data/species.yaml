@@ -50,7 +50,7 @@ species:
 
   측백나무:
     latin: Platycladus orientalis
-    aliases: [측백, 서양측백]
+    aliases: [측백]
     type: 침엽 교목
     leaf: 비늘 모양 잎이 잔가지를 감싸며, 가지가 납작한 부채처럼 세로로 갈라짐
     form: 원뿔형~달걀형, 생울타리로 자주 심음
@@ -110,7 +110,7 @@ species:
 
   목련:
     latin: Magnolia kobus
-    aliases: [백목련, 목련나무]
+    aliases: [목련나무]
     type: 활엽 교목
     leaf: 어긋나기, 넓은 거꿀달걀형 홑잎
     form: 곧은 줄기에 넓게 퍼지는 가지
@@ -121,7 +121,6 @@ species:
 
   라일락:
     latin: Syringa vulgaris
-    aliases: [수수꽃다리]
     type: 활엽 관목
     leaf: 마주나기, 하트 모양에 가까운 넓은 달걀형 홑잎
     form: 여러 줄기 덤불, 2~4m
@@ -284,4 +283,35 @@ species:
     form: 가시가 있는 덤불
     flower: 5~6월, 연노랑 통꽃, 향이 강함
     fruit: 9~10월, 붉고 은빛 점이 박힌 작은 열매
+    verified: false
+
+  서양측백:
+    latin: Thuja occidentalis
+    aliases: [에메랄드그린]
+    type: 침엽 교목
+    leaf: 비늘 모양 잎, 잔가지가 납작한 부채처럼 갈라지며 수평으로 퍼짐
+    form: 좁은 원뿔형, 생울타리·차폐목으로 흔히 심음
+    flower: 눈에 잘 안 띔
+    fruit: 길쭉한 작은 구과, 익으면 갈색
+    note: 측백나무(Platycladus orientalis)와 다른 속 — 서양측백은 가지가 수평으로 눕고 측백은 세로로 선다
+    verified: false
+
+  수수꽃다리:
+    latin: Syringa oblata
+    type: 활엽 관목
+    leaf: 마주나기, 넓은 하트 모양 홑잎으로 라일락보다 폭이 넓다
+    form: 여러 줄기 덤불, 2~3m
+    flower: 4~5월, 연보라 통꽃이 원뿔꽃차례로, 향이 강함
+    fruit: 갈색 삭과
+    note: 한국 자생종 — 서양 라일락(Syringa vulgaris)과 다른 종
+    verified: false
+
+  백목련:
+    latin: Magnolia denudata
+    type: 활엽 교목
+    leaf: 어긋나기, 넓은 거꿀달걀형 홑잎
+    form: 곧은 줄기에 넓게 퍼지는 가지
+    flower: 3~4월, 잎보다 먼저 크고 흰 꽃이 위를 향해, 꽃잎이 아홉 장으로 도톰
+    fruit: 울퉁불퉁한 골돌과
+    note: 목련(Magnolia kobus)보다 꽃이 크고 꽃잎이 두껍다
     verified: false

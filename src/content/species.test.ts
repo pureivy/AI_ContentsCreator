@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { loadSpecies, findSpecies, speciesAnchor, speciesSeasonalHint } from './species';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { loadSpecies, findSpecies, speciesAnchor, speciesSeasonalHint, speciesNameFrom, appendSpecies, resetSpeciesCache } from './species';
 
 const LIST = loadSpecies();
 
@@ -77,5 +80,55 @@ describe('데이터 서술 원칙 — 긍정문만', () => {
       const text = [s.type, s.leaf, s.form, s.flower, s.fruit, s.note].filter(Boolean).join(' ');
       expect(text, `${s.name}: ${text}`).not.toMatch(/아니다|아니라|말고|하지 마|안 된다|금지/);
     }
+  });
+});
+
+describe('speciesNameFrom — 디렉터 값에서 이름 뽑기', () => {
+  it('구분자 앞이 이름', () => {
+    expect(speciesNameFrom('남천 — 깃꼴겹잎, 붉은 잎')).toBe('남천');
+    expect(speciesNameFrom('회양목(상록 관목)')).toBe('회양목');
+  });
+  it('subject 가 비면 키워드를 쓴다', () => {
+    expect(speciesNameFrom('', '치자나무')).toBe('치자나무');
+  });
+  it('수종명이 아닌 구절은 버린다 — 쓰레기가 사전에 쌓이면 안 된다', () => {
+    for (const bad of ['9월 정원 준비', '나무 상처 치료제', '', '가', '아주아주긴이름이계속이어지는것']) {
+      expect(speciesNameFrom(bad)).toBe('');
+    }
+  });
+});
+
+describe('appendSpecies — 새 수종 자동 축적', () => {
+  const tmp = () => {
+    const f = path.join(os.tmpdir(), `sp-${Math.random().toString(36).slice(2)}.yaml`);
+    fs.writeFileSync(f, 'species:\n  기존종:\n    latin: Existing species\n    leaf: 홑잎\n');
+    return f;
+  };
+  it('새 종을 덧붙이고 다시 읽힌다', () => {
+    const f = tmp();
+    expect(appendSpecies({ name: '치자나무', latin: 'Gardenia jasminoides', leaf: '마주나기 홑잎' }, f)).toBe(true);
+    resetSpeciesCache();
+    expect(findSpecies('치자나무', loadSpecies(f))?.latin).toBe('Gardenia jasminoides');
+    resetSpeciesCache();
+  });
+  it('이미 있으면 안 넣는다(이름·학명 둘 다로 판정)', () => {
+    const f = tmp();
+    expect(appendSpecies({ name: '기존종', latin: 'Other species' }, f)).toBe(false);
+    resetSpeciesCache();
+    expect(appendSpecies({ name: '다른이름', latin: 'Existing species' }, f)).toBe(false);
+    resetSpeciesCache();
+  });
+  it('이름이나 학명이 없으면 안 넣는다', () => {
+    const f = tmp();
+    expect(appendSpecies({ name: '', latin: 'Aaa bbb' }, f)).toBe(false);
+    expect(appendSpecies({ name: '무언가', latin: '' }, f)).toBe(false);
+  });
+  it('자동 추가분은 auto·verified 로 표시된다 — 검증된 것이 아니다', () => {
+    const f = tmp();
+    appendSpecies({ name: '치자나무', latin: 'Gardenia jasminoides' }, f);
+    const txt = fs.readFileSync(f, 'utf-8');
+    expect(txt).toContain('auto: true');
+    expect(txt).toContain('verified: false');
+    resetSpeciesCache();
   });
 });
