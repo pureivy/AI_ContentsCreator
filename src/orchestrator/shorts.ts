@@ -622,8 +622,16 @@ export function restoreLostHedges(before: Plan, after: Plan): { plan: Plan; rest
  * kind 는 선언됐는데 페이로드가 빈 씬을 메운다 — 못 메우면 kind 를 뗀다(2026-09-04).
  *
  * 왜 지시문으로 안 끝나는가. 기획 프롬프트에는 이미 "compare 씬에는 bad·good 를 반드시 채워라"가
- * 예시까지 붙어 들어가 있다(2026-09-03 대응). 그런데도 두 런 연속으로 kind 만 오고 페이로드가
+ * 예시까지 붙어 들어가 있다(2026-09-03 대응). 그런데도 세 런 연속으로 kind 만 오고 페이로드가
  * 비었다. 지시문을 더 세게 쓰는 건 이미 한 번 해 본 수라, 같은 수를 반복하는 대신 결정적으로 막는다.
+ *
+ * 재료는 대본 전체를 준다. 첫 판에서 실패한 이유가 이것이었다 — 그 씬의 내레이션 한 줄만 보여
+ * 줬는데, 실측 대본은 대비를 두 씬에 나눠 말하고 있었다(씬4 "꽃 바로 아래 마디는 피하세요",
+ * 씬5 "잎이 튼실한 자리 위를 잘라주세요"). compare 는 양쪽이 다 있어야 성립하므로 한 줄만으로는
+ * 채울 수가 없었다. 모델이 게을렀던 게 아니라 재료를 반만 준 것이다.
+ *
+ * 응답이 아무것도 못 채우면 한 번 더 부른다 — 빈 응답·형식 오류 같은 일시적 실패는 재시도로 산다.
+ * 두 번째도 못 채우면 거기서 멈춘다. 세 번째부터는 "지어내라"는 압력이 될 뿐이다.
  *
  * 왜 '떼는' 것까지 하는가. 빈 kind 는 화면만 비는 게 아니라 그 씬을 세 군데서 잘못 대접한다.
  *  · defaultSceneFx — 카드가 있는 씬으로 보고 얌전한 움직임(CARD_*)을 준다. 카드가 없는데.
@@ -632,48 +640,62 @@ export function restoreLostHedges(before: Plan, after: Plan): { plan: Plan; rest
  *    다른 데 주자'고 판단한다. 실제로는 배경과 자막뿐인 씬이 가장 심심한 씬이 된다.
  * 채우지 못한 kind 를 그대로 두면 이 셋이 전부 거짓 전제 위에서 돈다. 떼는 편이 정직하다.
  *
- * 지어내지 말라고 못박는다 — 원문에 없는 대비·수치를 만들어 채우면 사실 게이트를 우회하게 된다.
+ * 지어내지 말라고 못박는다 — 대본에 없는 대비·수치를 만들어 채우면 사실 게이트를 우회하게 된다.
  */
+const KIND_SHAPES: Record<string, string> = {
+  stat: '{"value":숫자,"unit":"단위(선택)","label":"라벨(선택)"}',
+  list: '["항목","항목"] (2~4개)',
+  quote: '{"text":"인용문","source":"출처(원문에 그대로 있을 때만)"}',
+  chart: '{"series":[{"label":"라벨","value":숫자}],"unit":"단위","highlight":강조인덱스}',
+  compare: '{"bad":{"label":"14자 이내","note":"18자 이내"},"good":{"label":"14자 이내","note":"18자 이내"}}',
+};
+
 async function repairEmptyKinds(io: JobIO, plan: Plan): Promise<{ plan: Plan; filled: number[]; dropped: number[] }> {
   const empties = emptyKindScenes(plan.scenes);
   if (!empties.length) return { plan, filled: [], dropped: [] };
-  const SHAPE: Record<string, string> = {
-    stat: '{"value":숫자,"unit":"단위(선택)","label":"라벨(선택)"}',
-    list: '["항목","항목"] (2~4개)',
-    quote: '{"text":"인용문","source":"출처(원문에 그대로 있을 때만)"}',
-    chart: '{"series":[{"label":"라벨","value":숫자}],"unit":"단위","highlight":강조인덱스}',
-    compare: '{"bad":{"label":"14자 이내","note":"18자 이내"},"good":{"label":"14자 이내","note":"18자 이내"}}',
+  const need = new Set(empties.map((e) => e.index));
+  const ask = async (retry: boolean): Promise<Array<Record<string, unknown> | null>> => {
+    const j = await microJSON<{ scenes?: Array<Record<string, unknown> | null> }>(
+      stdModel(),
+      '당신은 숏폼 대본 에디터입니다. 요청된 JSON 스키마만 출력합니다.',
+      [
+        '아래 숏폼 대본에서 일부 씬은 화면 연출 종류(kind)만 선언되고 그 내용이 비어 있다.',
+        '그대로 두면 그 씬 화면에 아무것도 안 나온다. 내레이션이 이미 말하고 있는 것을 화면 값으로 옮겨라.',
+        '',
+        // 대본 전체를 준다 — 한 씬이 가리키는 대비·수치가 앞뒤 씬 문장에 걸쳐 있는 경우가 실제로 있다.
+        ...plan.scenes.map((sc, i) => `씬${i + 1}${need.has(i + 1) ? ' ★채울 것' : ''}: ${sc.narration}${sc.screenText ? ` / 자막: ${sc.screenText}` : ''}`),
+        '',
+        ...empties.map((e) => `씬${e.index} 은 kind=${e.kind} 다. 채울 형식: ${KIND_SHAPES[e.kind] ?? ''}`),
+        '',
+        '★ 표시된 씬만 채워라. 그 씬이 가리키는 내용이 앞뒤 씬 문장에 나뉘어 있으면 대본 전체에서 찾아 합쳐라',
+        '  (예: 한 씬이 "이건 피하세요", 다음 씬이 "이렇게 하세요"면 그 둘이 compare 의 bad·good 이다).',
+        retry ? '앞선 시도가 아무것도 못 채웠다. 대본에 실제로 있는 말만으로 다시 시도하라.' : '',
+        '대본에 없는 수치·대비를 지어내지 마라. 대본 어디에도 그 연출의 재료가 없으면 그 씬은 빼라',
+        '(빈 채로 두는 것이 지어내는 것보다 낫다).',
+        'JSON 형식: {"scenes":[{"index":씬번호,"kind":"연출종류","<해당 필드>":...}]}',
+      ].filter(Boolean).join('\n'),
+      { maxOutputTokens: 700, signal: io.signal },
+    ).catch(() => null);
+    return j?.scenes ?? [];
   };
-  const j = await microJSON<{ scenes?: Array<Record<string, unknown> | null> }>(
-    stdModel(),
-    '당신은 숏폼 대본 에디터입니다. 요청된 JSON 스키마만 출력합니다.',
-    [
-      '아래 씬들은 화면 연출 종류(kind)만 선언되고 그 내용이 비어 있다. 그대로 두면 화면에 아무것도 안 나온다.',
-      '각 씬의 내레이션이 이미 말하고 있는 것을 화면 값으로 옮겨라.',
-      ...empties.map((e) => {
-        const sc = plan.scenes[e.index - 1]!;
-        return `씬${e.index} (kind=${e.kind}) 내레이션: ${sc.narration}
-  자막: ${sc.screenText ?? ''}
-  채울 형식 ${e.kind}: ${SHAPE[e.kind] ?? ''}`;
-      }),
-      '원문에 없는 수치·대비를 지어내지 마라. 내레이션이 그 연출을 담고 있지 않으면 그 씬은 빼라(빈 채로 두는 것이 지어내는 것보다 낫다).',
-      `JSON 형식: {"scenes":[{"index":씬번호,"kind":"${empties[0]!.kind}","<해당 필드>":...}]}`,
-    ].join('\n'),
-    { maxOutputTokens: 700, signal: io.signal },
-  ).catch(() => null);
 
   const scenes = plan.scenes.map((sc) => ({ ...sc }));
   const filled: number[] = [];
-  for (const r of j?.scenes ?? []) {
-    const idx = Math.trunc(Number(r?.index));
-    if (!Number.isInteger(idx) || idx < 1 || idx > scenes.length) continue;
-    const want = empties.find((e) => e.index === idx);
-    if (!want) continue; // 비어 있지 않던 씬은 건드리지 않는다
-    const fixed = normalizeSceneKind({ ...r, kind: want.kind });
-    if (emptyKindScenes([fixed]).length) continue; // 여전히 비었다 — 못 메운 것
-    scenes[idx - 1] = { ...scenes[idx - 1]!, ...fixed };
-    filled.push(idx);
-  }
+  const apply = (rows: Array<Record<string, unknown> | null>): void => {
+    for (const r of rows) {
+      const idx = Math.trunc(Number(r?.index));
+      if (!Number.isInteger(idx) || idx < 1 || idx > scenes.length) continue;
+      const want = empties.find((e) => e.index === idx);
+      if (!want || filled.includes(idx)) continue; // 비어 있지 않던 씬은 건드리지 않는다
+      const fixed = normalizeSceneKind({ ...r, kind: want.kind });
+      if (emptyKindScenes([fixed]).length) continue; // 여전히 비었다 — 못 메운 것
+      scenes[idx - 1] = { ...scenes[idx - 1]!, ...fixed };
+      filled.push(idx);
+    }
+  };
+  apply(await ask(false));
+  if (!filled.length) apply(await ask(true)); // 일시적 실패는 재시도로 산다. 두 번이면 충분하다.
+
   // 끝내 못 메운 kind 는 뗀다 — 거짓 전제로 도는 하류 판단(연출·I2V)을 없앤다.
   const cleaned = dropEmptyKinds(scenes);
   return { plan: { ...plan, scenes: cleaned.scenes }, filled, dropped: cleaned.dropped };

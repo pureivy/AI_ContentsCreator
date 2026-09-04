@@ -92,7 +92,7 @@ describe('씬→이미지 매핑 — 실촬영 씬이 있으면 이름순 위치
     }
     return { from, to };
   };
-  const P = (f: string | null): string | null => (f ? path.basename(f) : null);
+  const P = (f: string | null | undefined): string | null => (f ? path.basename(f) : null);
 
   it('매핑을 남기면 실촬영 씬만 비고 나머지는 제 그림을 받는다', () => {
     const { from, to } = mk5();
