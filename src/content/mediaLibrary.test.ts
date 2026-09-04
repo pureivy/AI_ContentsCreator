@@ -38,6 +38,22 @@ describe('matchMedia — 주제에 맞는 소재 고르기', () => {
     ];
     expect(matchMedia(items, { species: '수국' })[0]!.id).toBe('new');
   });
+  // 2026-09-04 실측 사고 — 사장님이 '사계장미' 딱지를 붙여 올린 영상이 사계장미 편에서 배제됐다.
+  // 그 시점 수종 사전에 사계장미가 없어 opts.species 가 비었고, 딱지가 붙은 소재는 점수가 0이었다.
+  it('사전이 그 수종을 몰라도 주제 문장에 이름이 있으면 쓴다', () => {
+    const items = [mk({ id: 'r', species: '사계장미', kind: 'video' })];
+    const got = matchMedia(items, { text: '사계장미 전정, 꽃 진 자리 어디를 자르나요', kind: 'video' });
+    expect(got.map((m) => m.id)).toEqual(['r']);
+  });
+  it('사전도 모르고 주제에도 이름이 없으면 안 쓴다', () => {
+    const items = [mk({ id: 'r', species: '사계장미' })];
+    expect(matchMedia(items, { text: '수국 9월 관리' })).toHaveLength(0);
+  });
+  it('수종 딱지 소재는 사전 판정이 있을 때 그 판정을 따른다 — 주제 문장보다 우선', () => {
+    const items = [mk({ id: 'r', species: '사계장미' })];
+    // 주제에 '사계장미'가 있어도 사전이 회양목으로 판정했다면 안 쓴다.
+    expect(matchMedia(items, { species: '회양목', text: '사계장미 전정' })).toHaveLength(0);
+  });
   it('빈 목록은 빈 결과', () => {
     expect(matchMedia([], { species: '수국' })).toEqual([]);
   });

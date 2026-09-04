@@ -1323,6 +1323,32 @@ async function finishShortsRun(a: {
 }
 
 
+/**
+ * 사용자 실촬영 영상을 씬 클립 위에 얹는다 — 생성 클립보다 실제로 찍은 화면이 언제나 낫다.
+ *
+ * 승계편에서도 같은 규칙을 써야 한다(2026-09-04 실측). 사계장미 편에서 사장님이 올린 실촬영
+ * 영상이 두 편 어디에도 안 들어갔다: 원편은 파생 시점에 수종 사전이 그 종을 몰라 소재를 못 골랐고,
+ * 형제편은 소재를 골라 넘겼는데 승계 분기가 이 배치 단계를 통째로 건너뛰어 승계 클립만 남았다.
+ * 승계 대상은 '비싼 생성물'(대본·이미지·I2V)이지 사람이 찍어 온 화면이 아니다.
+ *
+ * 낭독이 씬 길이를 정하는 불변식은 그대로다 — planVideoScenes 는 씬 길이에 맞는 영상만 배치하고
+ * 안 맞는 것은 버린다. 여기서 길이를 바꾸지 않는다.
+ */
+async function overlayUserVideos(
+  clips: Array<string | null>, plan: Plan, files: readonly string[] | undefined, say: (m: string) => void,
+): Promise<Array<string | null>> {
+  const vids = (files ?? []).filter((f) => { try { return fs.existsSync(f); } catch { return false; } });
+  if (!vids.length) return clips;
+  const withDur = await Promise.all(vids.map(async (f) => ({ path: f, seconds: await probeDuration(f).catch(() => 0) })));
+  // 씬 길이는 낭독 실측 전이라 자수로 추정한다(렌더러의 sceneDurationSec 와 같은 산식).
+  const est = plan.scenes.map((sc) => Math.max(3.5, (sc.narration ?? '').length / SHORTS_TTS_CPS + 0.6));
+  const vPlan = planVideoScenes(withDur.filter((v) => v.seconds > 0), est);
+  const placed = vPlan.filter(Boolean).length;
+  const dropped = withDur.length - placed;
+  say(`실촬영 영상 ${withDur.length}개 — 씬 ${placed}개에 배치${dropped ? ` · ${dropped}개는 씬 길이에 안 맞아 제외` : ''}`);
+  return clips.map((c, i) => vPlan[i] ?? c);
+}
+
 export async function runShortsJob(
   id: string,
   opts: {
@@ -1375,8 +1401,10 @@ export async function runShortsJob(
         const inhImages = inheritedSceneImages(dir, inheritedPlan.scenes.length);
         const inhClips = inheritedClips(dir, inheritedPlan.scenes.length);
         say(`승계 자산 — 이미지 ${inhImages.filter(Boolean).length}/${inheritedPlan.scenes.length} · 클립 ${inhClips.filter(Boolean).length}`);
+        // 실촬영은 승계 대상이 아니다 — 이 편의 몫으로 다시 얹는다(2026-09-04).
+        const inhWithVideo = await overlayUserVideos(inhClips, inheritedPlan, opts.userVideos, say);
         await finishShortsRun({
-          id, store, dir, short, plan: inheritedPlan, images: inhImages, clips: inhClips,
+          id, store, dir, short, plan: inheritedPlan, images: inhImages, clips: inhWithVideo,
           opts, say, checkAbort,
           lookOffset: 1, // 원편과 다른 색 — 같은 이미지를 쓰는 만큼 색이라도 갈라야 다른 편으로 읽힌다
         });
@@ -1547,17 +1575,7 @@ export async function runShortsJob(
       allowedScenes: new Set([...i2vPlan.allowed].filter((i) => !assetPlan[i])),
     });
     // 사용자 실촬영 영상이 I2V 생성 클립을 이긴다(2026-09-04) — 실제로 찍은 화면이 언제나 낫다.
-    // 씬 길이는 낭독 실측 전이라 자수로 추정한다(렌더러의 sceneDurationSec 와 같은 산식).
-    const userVids = (opts.userVideos ?? []).filter((f) => { try { return fs.existsSync(f); } catch { return false; } });
-    if (userVids.length) {
-      const withDur = await Promise.all(userVids.map(async (f) => ({ path: f, seconds: await probeDuration(f).catch(() => 0) })));
-      const est = plan.scenes.map((sc) => Math.max(3.5, (sc.narration ?? '').length / SHORTS_TTS_CPS + 0.6));
-      const vPlan = planVideoScenes(withDur.filter((v) => v.seconds > 0), est);
-      const placed = vPlan.filter(Boolean).length;
-      cv.clips = cv.clips.map((c, i) => vPlan[i] ?? c);
-      const dropped = withDur.length - placed;
-      say(`실촬영 영상 ${withDur.length}개 — 씬 ${placed}개에 배치${dropped ? ` · ${dropped}개는 씬 길이에 안 맞아 제외` : ''}`);
-    }
+    cv.clips = await overlayUserVideos(cv.clips, plan, opts.userVideos, say);
     const clipCount = cv.clips.filter(Boolean).length;
     if (clipCount) say(`씬 I2V — ${clipCount}/${plan.scenes.length}장 클립화${cv.issues.length ? ` (${cv.issues[0]})` : ''}`);
     else if (cv.issues.length) say(`씬 I2V — 클립 0장 (${cv.issues.slice(0, 2).join(' · ')})`);

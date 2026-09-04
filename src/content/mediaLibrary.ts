@@ -97,14 +97,23 @@ export function matchMedia(
   items: readonly MediaItem[], opts: { species?: string; text?: string; kind?: MediaKind; limit?: number },
 ): MediaItem[] {
   const text = String(opts.text ?? '');
+  const want = String(opts.species ?? '').trim();
   const scored: Array<{ m: MediaItem; s: number }> = [];
   for (const m of items) {
     if (opts.kind && m.kind !== opts.kind) continue;
-    if (m.species && opts.species && m.species !== opts.species) continue; // 다른 수종은 배제
+    const named = String(m.species ?? '').trim();
+    // 수종 판정 — 사전이 그 종을 알면 이름으로 맞추고, 모르면 주제 문장에 그 이름이 있는지로 본다.
+    //
+    // 뒤쪽이 없으면 실측 사고가 난다(2026-09-04): 사장님이 사계장미 영상을 올린 뒤 사계장미 편이
+    // 돌았는데, 그 시점 수종 사전에 사계장미가 없어 want 가 비었다. 그래서 '사계장미' 딱지가 붙은
+    // 영상이 사계장미 편에서 배제됐다 — 사전에 없다는 이유로. 소재에 사람이 직접 적어 둔 이름이
+    // 주제에 그대로 들어 있으면 그게 곧 근거다. 사전은 그 다음이다.
+    const hit = named ? (want ? named === want : text.includes(named)) : false;
+    if (named && !hit) continue; // 다른 수종·무관한 수종은 배제
     let s = 0;
-    if (m.species && opts.species && m.species === opts.species) s += 100;
+    if (hit) s += 100;
     for (const t of m.tags ?? []) if (t && text.includes(t)) s += 10;
-    if (!m.species) s += 1; // 범용 소재 — 없는 것보다 낫다
+    if (!named) s += 1; // 범용 소재 — 없는 것보다 낫다
     if (s > 0) scored.push({ m, s });
   }
   scored.sort((a, b) => b.s - a.s || b.m.createdTs.localeCompare(a.m.createdTs));
