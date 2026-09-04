@@ -8,7 +8,7 @@
 import { CONFIG } from '../config';
 import { getSecret, getMetaAccount } from '../secrets/store';
 import { fetchTimeout } from '../util/fetch';
-import { appendMetrics, readMetrics, type MetricSample } from './performance';
+import { appendMetrics, readMetrics, topInflow, type MetricSample, type SearchInflow } from './performance';
 import { shortsStore, type Shorts } from '../content/shorts';
 import { isSafeBrandSlug, activeBrandSlug, getBrand } from '../content/brand';
 import { llmWikiFor } from '../wiki/llmwiki';
@@ -166,6 +166,23 @@ function reinforceShorts(s: Shorts, m: MetricSample): number {
   return signal;
 }
 
+/**
+ * 브랜드 쇼츠의 편별 유튜브 검색어를 모은다 — 주제 제안이 실측 수요를 보게 하는 입구(2026-09-04).
+ * 표본이 없으면 빈 배열(fail-open) — 수집 전이거나 애널리틱스 집계 전이면 신호 없이 종전대로 돈다.
+ */
+export function shortsSearchTerms(brand: string | undefined): Array<{ terms: SearchInflow[] }> {
+  const slug = brand ?? '';
+  const out: Array<{ terms: SearchInflow[] }> = [];
+  for (const s of shortsStore().list()) {
+    if ((s.brand ?? '') !== slug || !s.youtubeId) continue;
+    try {
+      const terms = topInflow(readMetrics(s.id), 10);
+      if (terms.length) out.push({ terms });
+    } catch { /* 이 편만 건너뛴다 */ }
+  }
+  return out;
+}
+
 /** 일일 쇼츠 성과 동기화 — perf-sync 틱에서 piece 동기화와 나란히 호출(Task 3). */
 export async function syncShortsPerformance(opts: { force?: boolean } = {}): Promise<void> {
   try {
@@ -200,6 +217,45 @@ export async function syncShortsPerformance(opts: { force?: boolean } = {}): Pro
 
 /** 애널리틱스 수집 대상 상한 — 영상당 요청 2회라 force 전량 재수집 때 폭주하지 않게 최근분만. */
 export const ANALYTICS_MAX_VIDEOS = 30;
+/** 상한 중 '최신 우선'에 쓰는 몫. 나머지는 오래 못 받은 구작을 순환 수집한다. */
+export const ANALYTICS_RECENT_SLOTS = 20;
+
+/** 이 편이 애널리틱스를 마지막으로 받은 시각(ms). 한 번도 없으면 0(순수). */
+export function lastAnalyticsAt(samples: ReadonlyArray<{ measuredAt?: string; source?: string }>): number {
+  let best = 0;
+  for (const m of samples) {
+    if (m?.source !== 'youtube:analytics') continue;
+    const t = Date.parse(String(m.measuredAt ?? ''));
+    if (Number.isFinite(t) && t > best) best = t;
+  }
+  return best;
+}
+
+/**
+ * 이번 틱에 애널리틱스를 받을 편 고르기(순수, 2026-09-04).
+ *
+ * 종전엔 '최근 30편'만 잘라 썼다. 그래서 그보다 오래된 편은 영영 수집되지 않았고, 실제로 이
+ * 채널 최대 검색 수요(하스카프베리묘목 551회, 8월 중순 편)가 통째로 안 보였다 — 검색어를
+ * 주제 선정에 쓰기로 한 이상 그 공백은 그대로 판단 공백이 된다.
+ *
+ * 그렇다고 전량 수집은 API 왕복이 편당 3회라 부담이다. 그래서 상한은 두되 몫을 나눈다:
+ * 앞쪽은 최신(숫자가 아직 움직이는 편 — 강화 학습이 이걸 본다), 나머지는 '가장 오래 못 받은'
+ * 구작. 109편 기준 나흘이면 한 바퀴 돌고, 그 뒤로는 계속 갱신된다.
+ */
+export function pickAnalyticsTargets(
+  list: readonly Shorts[], lastAt: (id: string) => number,
+  max = ANALYTICS_MAX_VIDEOS, recentSlots = ANALYTICS_RECENT_SLOTS,
+): Shorts[] {
+  const byNewest = [...list].sort((a, b) => (a.youtubeTs! < b.youtubeTs! ? 1 : -1));
+  const recent = byNewest.slice(0, Math.max(0, Math.min(recentSlots, max)));
+  const taken = new Set(recent.map((s) => s.id));
+  // 나머지 몫 — 한 번도 못 받은 편(0)이 가장 앞, 그다음 오래된 순.
+  const backfill = byNewest
+    .filter((s) => !taken.has(s.id))
+    .sort((a, b) => lastAt(a.id) - lastAt(b.id))
+    .slice(0, Math.max(0, max - recent.length));
+  return [...recent, ...backfill];
+}
 
 /**
  * 시청 지속률·유입 경로 동봉 수집(youtube:analytics 샘플) — 조회수 수집과 별개 줄로 쌓는다.
@@ -207,13 +263,13 @@ export const ANALYTICS_MAX_VIDEOS = 30;
  * 애널리틱스는 처리 지연이 있어 신작은 며칠 뒤에야 값이 붙는다 — 빈 응답은 스킵(0 으로 기록하지 않음).
  */
 async function collectShortsAnalytics(due: Shorts[], now: number, days: number, signal?: AbortSignal): Promise<void> {
-  const targets = due
-    .filter((s) => !!s.youtubeId && !!s.youtubeTs)
-    .sort((a, b) => (a.youtubeTs! < b.youtubeTs! ? 1 : -1))
-    .slice(0, ANALYTICS_MAX_VIDEOS);
+  const targets = pickAnalyticsTargets(
+    due.filter((s) => !!s.youtubeId && !!s.youtubeTs),
+    (id) => { try { return lastAnalyticsAt(readMetrics(id)); } catch { return 0; } },
+  );
   if (!targets.length) return;
   if (due.length > targets.length) {
-    console.log('[perf-sync]', `쇼츠 애널리틱스 — 최근 ${targets.length}편만 수집(대상 ${due.length}편, 상한 ${ANALYTICS_MAX_VIDEOS})`);
+    console.log('[perf-sync]', `쇼츠 애널리틱스 — ${targets.length}편 수집(대상 ${due.length}편, 상한 ${ANALYTICS_MAX_VIDEOS} · 최신 우선 + 미수집 구작 순환)`);
   }
   // 애널리틱스는 처리 지연이 있어 최근 며칠은 조회해도 빈 응답이다 — 경계까지만 묻고 그 뒤 업로드분은 건너뛴다.
   const end = ymd(now - ANALYTICS_LAG_DAYS * 86_400_000);

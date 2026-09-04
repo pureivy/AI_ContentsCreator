@@ -32,6 +32,9 @@ import { pieceStore } from '../content/pieces';
 import { overThemeCap, themeRotationBlock, THEME_MONTHLY_CAP } from '../content/topicThemes';
 import { brandThemeCoverage } from '../analytics/discoverySeeds';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
+import { rankSearchDemand, searchDemandBlock, normalizeTerm } from '../analytics/ytSearchDemand';
+import { shortsSearchTerms } from '../analytics/shortsPerf';
+import { findSpecies } from '../content/species';
 
 export interface AutoCycleDeps<T = string> {
   /** 사이클 주기(ms). ≤0 이면 스케줄러는 no-op. */
@@ -487,6 +490,27 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   // 신규성 가드(사용자 원칙 2026-07-15) — 브랜드의 기존 글·쇼츠·카드뉴스 제목+키워드와 유사 금지.
   // 프롬프트 주입(사전)과 findSimilarContent 사후 검사 이중 방어 — 유사하면 기각 사유를 담아 1회 재시도.
   const existing = collectExistingContent(activeBrandSlug() || undefined);
+  // 실측 유튜브 검색어(2026-09-04 사용자 확정) — 이 채널에서 재현 가능한 성장 축은 검색이다.
+  // 피드가 끊긴 뒤에도 검색만 살아남았고, 평탄선을 넘긴 두 편은 둘 다 검색으로 넘겼다.
+  // 잡음 거르기는 여기서 한다: 수집된 말에는 무관한 트렌드어가 섞인다("감스트 리중딱" 등).
+  // 우리 분야인지는 수종 사전과 브랜드 업종어로 판정한다 — 둘 다 이미 있는 데이터다.
+  const searchBlock = (() => {
+    try {
+      const stems = [...(getBrand()?.compoundStems ?? []), ...seeds];
+      const covered = existing.map((e) => normalizeTerm(`${e.title} ${e.keyword ?? ''}`));
+      const rows = rankSearchDemand(
+        shortsSearchTerms(activeBrandSlug() || undefined),
+        {
+          // 그 말을 정면으로 다룬 편이 있는가 — 제목·키워드에 그 말이 통째로 들어갔는지로 본다.
+          isCovered: (k) => { const n = normalizeTerm(k); return covered.some((c) => c.includes(n)); },
+          // 우리 분야의 말인가 — 수종 이름이나 업종어를 품고 있으면 우리 것으로 본다.
+          isRelevant: (k) => !!findSpecies(k) || stems.some((t) => t && k.includes(t)),
+          limit: 15,
+        },
+      );
+      return searchDemandBlock(rows);
+    } catch { return ''; } // fail-open — 신호 하나 때문에 제안이 멈추면 안 된다
+  })();
   const existingLines = existing.slice(0, 30)
     .map((e) => `- (${e.kind}) ${e.title}${e.keyword ? ` [키워드: ${e.keyword}]` : ''}`).join('\n');
   // 다양성 강제(2026-07-23 감사) — 킬스위치 CONTENT_DIVERSITY=off 로 끔. 표면 novelty 가 못 잡는 '소재 쏠림'을
@@ -520,6 +544,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     (() => { const b = seasonalSubjectBlock(getBrand()?.seasonalSubjects); return b ? `${b}\n\n` : ''; })() +
     (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov); return b ? `${b}\n\n` : ''; })() +
     (() => { const b = themeRotationBlock(getBrand()?.topicThemes, themeCov); return b ? `${b}\n\n` : ''; })() +
+    (searchBlock ? `${searchBlock}\n\n` : '') +
     jargonLine +
     (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +
