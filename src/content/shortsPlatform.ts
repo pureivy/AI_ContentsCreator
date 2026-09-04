@@ -99,6 +99,26 @@ export function autoDailyCapFor(
 }
 
 /**
+ * 이 글에서 나온 파생에 자율런 상한을 걸어야 하는가(순수).
+ *
+ * 상한은 "스케줄러가 알아서 돈 것"에만 건다(사용자 확정 2026-09-04). 사용자가 주제를 넣어
+ * 직접 돌린 글도, 사용자가 "오토런 지시" 버튼을 눌러 시작한 글도 상한 밖이다 — 손으로 시킨
+ * 일까지 막으면 도구가 아니라 방해가 된다.
+ *
+ * 종전엔 파생 시점(autoDeriveSet)이 이 구분을 안 봤다. 그래서 사용자가 직접 돌린 사계장미
+ * 글의 숏폼이 그날 자율런이 채운 몫 때문에 통째로 누락됐다(실측 2026-09-04). 상한을 안 보는
+ * 건 "숏폼 버튼을 직접 누른 경우"뿐이었다.
+ *
+ * 판정 기준은 케이던스 기준선(cadenceBaselineTs)과 같다 — `auto && !userTriggered`.
+ * 두 곳이 다른 기준을 쓰면 "무엇이 자율 생산분인가"가 코드마다 달라진다.
+ * 출처를 모르면 상한을 건다(보수적) — 모르는 것을 무제한으로 열어 두지 않는다.
+ */
+export function autoCapApplies(source: { auto?: boolean; userTriggered?: boolean } | undefined): boolean {
+  if (!source) return true;
+  return source.auto === true && source.userTriggered !== true;
+}
+
+/**
  * 오늘(KST) 이 채널의 자율런 몫이 이미 찼는가(순수) — '자동' 생성 게이트.
  *
  * 적용 범위가 중요하다. 이건 스케줄러가 알아서 도는 자율런에만 건다. 사용자가 직접 지시한 생성은

@@ -56,7 +56,7 @@ import { shortsStore, shortsQaPublishBlockReason } from '../content/shorts';
 import { addMedia, listMedia, updateMedia, removeMedia, mediaDir, matchMedia } from '../content/mediaLibrary';
 import { probeDuration } from '../tools/shortsCommon';
 import { findSpecies } from '../content/species';
-import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, autoDailyCapFor, type ShortsPlatform } from '../content/shortsPlatform';
+import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, autoDailyCapFor, autoCapApplies, type ShortsPlatform } from '../content/shortsPlatform';
 import { pickWriter, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
@@ -2260,6 +2260,9 @@ type NaverDraftStart = { ok: true } | { error: string; status: 400 | 404 | 409 }
 /** 블로그 본문 확정 → 카드뉴스·숏폼 자동 파생(piece당 각 1회, AUTO_CARDNEWS / AUTO_SHORTS 로 켜고 끔).
  *  호출 지점: 네이버 임시저장 성공 훅 + 자동 임시저장 off 시 ready 확정(maybeAutoNaverDraft). 가드가 멱등을 보장. */
 function autoDeriveSet(id: string, title: string): void {
+  // 자율런 상한을 걸 대상인가 — 사용자가 주제를 넣어 돌린 글, "오토런 지시"로 시작한 글은 밖이다.
+  // (사용자 확정 2026-09-04. 종전엔 이 구분이 없어 직접 돌린 글의 숏폼이 통째로 누락됐다.)
+  const capped = autoCapApplies(pieceStore().get(id));
   if (CONFIG.autoCardNews && !cardNewsStore().list().some((x) => x.sourcePieceId === id)) {
     const dc = deriveCardNewsFromPiece(id);
     console.log('error' in dc
@@ -2279,10 +2282,11 @@ function autoDeriveSet(id: string, title: string): void {
       const mine = shortsStore().list().filter((x) => x.sourcePieceId === id && x.platform === platform);
       // error 레코드는 점유로 안 본다(2026-08-20 하드 캡 리뷰) — 다만 같은 글·같은 채널 2회 실패면 중단.
       if (mine.some((x) => x.stage !== 'error') || mine.filter((x) => x.stage === 'error').length >= 2) return false;
-      // 채널별 하루 상한(사용자 확정 2026-09-03: 유튜브·인스타 각 1편) — 자율런에만 건다.
+      // 채널별 하루 상한(사용자 확정 2026-09-03: 유튜브 1편·인스타 2편) — 자율런에만 건다.
       // 발행에서만 막으면 2~3편 만들어 1편만 올리고 나머지를 버리게 된다(LLM·이미지 비용).
-      // 직접 지시한 생성(shortsFromPieceHandler)은 이 상한을 보지 않는다.
-      if (platformQuotaCommitted(shortsStore().list(), Date.now(), autoDailyCapFor(platform, CONFIG.shortsAutoDailyCap), platform)) {
+      // '자율런'의 범위는 autoCapApplies 가 정한다 — 사용자가 직접 돌린 글의 파생은 상한 밖이고,
+      // 숏폼 버튼을 직접 누른 생성(shortsFromPieceHandler)도 애초에 이 함수를 안 거친다.
+      if (capped && platformQuotaCommitted(shortsStore().list(), Date.now(), autoDailyCapFor(platform, CONFIG.shortsAutoDailyCap), platform)) {
         console.log(`[숏폼] 자동 파생 건너뜀(${platformLabel(platform)}) — 오늘 몫 소진(자율런 상한 ${autoDailyCapFor(platform, CONFIG.shortsAutoDailyCap)}편) · ${title.slice(0, 25)}`);
         return false;
       }

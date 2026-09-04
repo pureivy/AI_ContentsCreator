@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   SHORTS_PLATFORMS, platformLabel, platformPlanGuide, autoDailyCapFor,
-  canPublishTo, kstDate, youtubeUploadsToday, youtubeDailyCapBlock, platformQuotaCommitted,
-} from './shortsPlatform';
+  canPublishTo, kstDate, youtubeUploadsToday, youtubeDailyCapBlock, platformQuotaCommitted, autoCapApplies } from './shortsPlatform';
 
 describe('platformPlanGuide — 채널별로 다른 대본이 나오게 하는 지침(순수)', () => {
   it('유튜브·인스타 지침이 서로 다르다', () => {
@@ -141,5 +140,31 @@ describe('autoDailyCapFor — 채널별 자율런 상한', () => {
     expect(platformQuotaCommitted(made, now, autoDailyCapFor('instagram', caps), 'instagram')).toBe(false);
     // 같은 상황에서 유튜브 상한(1)이었다면 찼을 것
     expect(platformQuotaCommitted(made, now, autoDailyCapFor('youtube', caps), 'instagram')).toBe(true);
+  });
+});
+
+describe('autoCapApplies — 상한을 걸 대상 판정(순수)', () => {
+  it('스케줄러가 알아서 돈 글에는 건다', () => {
+    expect(autoCapApplies({ auto: true })).toBe(true);
+  });
+  it('사용자가 주제를 넣어 돌린 글에는 안 건다', () => {
+    expect(autoCapApplies({})).toBe(false);
+    expect(autoCapApplies({ auto: false })).toBe(false);
+  });
+  it('사용자가 "오토런 지시"로 시작한 글에는 안 건다 — 손으로 시킨 일이다', () => {
+    expect(autoCapApplies({ auto: true, userTriggered: true })).toBe(false);
+  });
+  it('출처를 모르면 건다 — 모르는 것을 무제한으로 열지 않는다', () => {
+    expect(autoCapApplies(undefined)).toBe(true);
+  });
+  it('케이던스 기준선과 같은 기준을 쓴다 — auto && !userTriggered', () => {
+    const cases = [
+      { auto: true, userTriggered: false },
+      { auto: true, userTriggered: true },
+      { auto: false, userTriggered: false },
+      { auto: false, userTriggered: true },
+    ];
+    // cadenceBaselineTs 는 `p.auto && !p.userTriggered` 인 것만 자율 생산분으로 센다.
+    for (const c of cases) expect(autoCapApplies(c)).toBe(!!c.auto && !c.userTriggered);
   });
 });
