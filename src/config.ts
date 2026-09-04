@@ -156,6 +156,8 @@ export interface Config {
   readonly shortsMaxDurationSec: number;
   /** 유튜브 하루 업로드 상한(2026-09-03, 사용자 확정 1편) — 0 이하면 상한 없음. 인스타는 적용하지 않는다. */
   readonly youtubeDailyCap: number;
+  /** 페이스북을 성과 지표에서 채널로 셀 것인가(기본 off — 위 구현부 주석 참조). */
+  readonly fbAsChannel: boolean;
   /**
    * 자율런이 채널당 하루에 만드는 편수 상한 — 채널마다 따로 둔다(2026-09-03).
    *
@@ -360,6 +362,13 @@ export const CONFIG: Config = {
   shortsMaxDurationSec: Math.min(180, Math.max(20, envInt('SHORTS_MAX_DURATION_SEC', 60))),
   // 대량생산 신호를 줄이는 쪽이 목적이라 기본 1편. 인스타는 막히지 않았고 성과가 나는 채널이라 제외한다.
   youtubeDailyCap: envInt('YOUTUBE_DAILY_CAP', 1),
+  // 페이스북을 '채널'로 셀 것인가(2026-09-04 사용자 확정: 아니오).
+  // 실측: 릴스 110편 두 달 합계 291회(편당 중앙 2회), 같은 영상의 인스타는 150,961회 — 520배.
+  // 원인은 배포가 아니라 페이지다. 팬 0·팔로워 0 — 이 페이지는 인스타 Graph API 를 쓰려면
+  // 연결된 페이지가 필수라서 만든 부속물이고, 채널로 운영한 적이 없다.
+  // 게시는 그대로 둔다(비용 0, 나중에 키우기로 하면 쌓인 편이 자산이다). 성과 지표에서만 뺀다 —
+  // 0 인 숫자가 다른 채널과 나란히 서 있으면 "채널 하나가 죽었다"로 읽혀 판단을 흐린다.
+  fbAsChannel: envBool('FB_AS_CHANNEL', false),
   // 채널별 키가 없으면 종전 통합 키(SHORTS_AUTO_DAILY_CAP)로 떨어진다 — 기존 설정이 그대로 산다.
   shortsAutoDailyCap: {
     youtube: envInt('YOUTUBE_AUTO_DAILY_CAP', envInt('SHORTS_AUTO_DAILY_CAP', 1)),

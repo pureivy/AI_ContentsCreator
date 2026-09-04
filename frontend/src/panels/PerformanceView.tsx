@@ -178,9 +178,12 @@ export default function PerformanceView() {
   const reels = (ch?.shorts.filter((r) => r.meta) ?? [])
     .sort((a, b) => (b.meta!.ts).localeCompare(a.meta!.ts));
   const cardnews = ch?.cardnews ?? [];
-  // 전체 조회 합계 — 위 조회 카드 5종의 합. 좋아요(단위 다름)는 제외한다.
+  // 페이스북은 채널로 세지 않는다(2026-09-04 사용자 확정) — 팬 0·팔로워 0 인 페이지라 릴스 110편
+  // 두 달 합계가 291회다(같은 영상 인스타 150,961회). 게시는 계속하되 지표에서만 뺀다.
+  const fbOn = ch?.fbAsChannel === true;
+  // 전체 조회 합계 — 화면에 보이는 조회 카드의 합. 좋아요(단위 다름)는 제외한다.
   const totalViews = (s?.totalViews ?? 0) + (ch?.summary.shortsYtViews ?? 0) + (ch?.summary.reelsViews ?? 0)
-    + (ch?.summary.cardnewsViews ?? 0) + (ch?.summary.fbReelViews ?? 0);
+    + (ch?.summary.cardnewsViews ?? 0) + (fbOn ? (ch?.summary.fbReelViews ?? 0) : 0);
 
   // 최근 5개만 기본 표시, 나머지는 '더 보기'로 펼침(표별 독립 상태). 배열은 이미 최신순.
   const LIMIT = 5;
@@ -276,17 +279,21 @@ export default function PerformanceView() {
               <div className="perf-lbl" title="인스타그램 카드뉴스만의 조회 합계">인스타 카드뉴스 조회</div>
               <div style={subStyle} title="인스타 카드뉴스 좋아요 합계 — 카드뉴스 표의 인스타 좋아요 열 합과 일치">👍 {(ch?.summary.cardnewsLikes ?? 0).toLocaleString()}</div>
             </div>
-            <div className="perf-card">
-              <div className="perf-num">{(ch?.summary.fbReelViews ?? 0).toLocaleString()}</div>
-              <div className="perf-lbl" title="페이스북 페이지 릴스 조회 합계. 페이스북은 영상만 조회 지표가 있습니다">페이스북 릴스 조회</div>
-              <div style={subStyle} title="페이스북 릴스 좋아요 합계 — 쇼츠 표의 페이스북 👍 열 합과 일치">👍 {(ch?.summary.fbReelLikes ?? 0).toLocaleString()}{folStat("facebook", "팔로워")}</div>
-            </div>
-            <div className="perf-card">
-              <div className="perf-num">{(ch?.summary.fbPostLikes ?? 0).toLocaleString()}</div>
-              <div className="perf-lbl" title="페이스북 카드뉴스 게시물 좋아요 합계 — 카드뉴스 표의 페이스북 좋아요 열 합과 일치합니다">페북 카드뉴스 좋아요</div>
-              {/* 사진 게시물은 조회·노출 지표 미제공(실측: post_impressions 계열 무효, read_insights 앱심사 필요) — 오해 방지 안내. */}
-              <div style={subStyle}>조회수 미제공 (메타 API 제한)</div>
-            </div>
+            {fbOn ? (
+              <>
+                <div className="perf-card">
+                  <div className="perf-num">{(ch?.summary.fbReelViews ?? 0).toLocaleString()}</div>
+                  <div className="perf-lbl" title="페이스북 페이지 릴스 조회 합계. 페이스북은 영상만 조회 지표가 있습니다">페이스북 릴스 조회</div>
+                  <div style={subStyle} title="페이스북 릴스 좋아요 합계 — 쇼츠 표의 페이스북 👍 열 합과 일치">👍 {(ch?.summary.fbReelLikes ?? 0).toLocaleString()}{folStat("facebook", "팔로워")}</div>
+                </div>
+                <div className="perf-card">
+                  <div className="perf-num">{(ch?.summary.fbPostLikes ?? 0).toLocaleString()}</div>
+                  <div className="perf-lbl" title="페이스북 카드뉴스 게시물 좋아요 합계 — 카드뉴스 표의 페이스북 좋아요 열 합과 일치합니다">페북 카드뉴스 좋아요</div>
+                  {/* 사진 게시물은 조회·노출 지표 미제공(실측: post_impressions 계열 무효, read_insights 앱심사 필요) — 오해 방지 안내. */}
+                  <div style={subStyle}>조회수 미제공 (메타 API 제한)</div>
+                </div>
+              </>
+            ) : null}
             {/* 전체 합계 = 화면에 있는 조회 카드 5개의 합(사용자가 눈으로 검산할 수 있게 같은 값에서 계산). */}
             <div className="perf-card total">
               <div className="perf-num">{totalViews.toLocaleString()}</div>
@@ -462,7 +469,7 @@ export default function PerformanceView() {
                   <colgroup>
                     <col className="perf-col-title" /><col className="perf-col-link" />
                     <col className="perf-col-date perf-grp-start" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" />
-                    <col className="perf-col-date perf-grp-start" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" />
+                    {fbOn ? <><col className="perf-col-date perf-grp-start" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" /></> : null}
                     <col className="perf-col-refl perf-grp-start" /><col className="perf-col-act" />
                   </colgroup>
                   <thead>
@@ -471,7 +478,7 @@ export default function PerformanceView() {
                     <tr className="perf-grouprow">
                       <th className="perf-grp-soft" colSpan={2}>콘텐츠</th>
                       <th colSpan={4}><span className="perf-grp-in"><PlatformMark name="instagram" size={13} /> 인스타그램</span></th>
-                      <th className="perf-grp-edge" colSpan={4}><span className="perf-grp-in"><PlatformMark name="facebook" size={13} /> 페이스북</span></th>
+                      {fbOn ? <th className="perf-grp-edge" colSpan={4}><span className="perf-grp-in"><PlatformMark name="facebook" size={13} /> 페이스북</span></th> : null}
                       <th className="perf-grp-soft perf-grp-edge" colSpan={2}>학습</th>
                     </tr>
                     <tr>
@@ -482,10 +489,12 @@ export default function PerformanceView() {
                       <th className="perf-c" title="인스타 릴스 조회수 일별 추이">추이</th>
                       <th className="perf-r">조회</th>
                       <th className="perf-r">👍</th>
-                      <th className="perf-c perf-grp-edge" title="페이스북 릴스 게시일 — 인스타와 다른 날일 수 있습니다">게시일</th>
-                      <th className="perf-c" title="페이스북 릴스 조회수 일별 추이(같은 날 여러 번 수집해도 하루 1점)">추이</th>
-                      <th className="perf-r" title="페이스북 페이지 릴스 조회 — 미게시면 '—'">조회</th>
-                      <th className="perf-r" title="페이스북 릴스 좋아요. 🖼 는 커버(썸네일) 미적용 — 쇼츠 탭에서 '페북 커버 적용'">👍</th>
+                      {fbOn ? <>
+                        <th className="perf-c perf-grp-edge" title="페이스북 릴스 게시일 — 인스타와 다른 날일 수 있습니다">게시일</th>
+                        <th className="perf-c" title="페이스북 릴스 조회수 일별 추이(같은 날 여러 번 수집해도 하루 1점)">추이</th>
+                        <th className="perf-r" title="페이스북 페이지 릴스 조회 — 미게시면 '—'">조회</th>
+                        <th className="perf-r" title="페이스북 릴스 좋아요. 🖼 는 커버(썸네일) 미적용 — 쇼츠 탭에서 '페북 커버 적용'">👍</th>
+                      </> : null}
                       <th className="perf-c perf-grp-edge" title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th>
                       <th className="perf-c"></th>
                     </tr>
@@ -502,21 +511,23 @@ export default function PerformanceView() {
                         <td className="perf-c">
                           <span className="perf-links">
                             {linkBadge("instagram", r.meta?.permalink, "인스타그램 릴스 열기", "인스타그램 미게시")}
-                            {linkBadge("facebook", r.fb?.url, "페이스북 릴스 열기", "페이스북 페이지 미게시")}
+                            {fbOn ? linkBadge("facebook", r.fb?.url, "페이스북 릴스 열기", "페이스북 페이지 미게시") : null}
                           </span>
                         </td>
                         <td className="perf-date perf-c perf-grp-edge">{fmtDate(r.meta?.ts)}</td>
                         <td className="perf-spark perf-c"><Sparkline data={r.meta?.series ?? []} title={`${r.title} 인스타 릴스 조회 추이`} /></td>
                         <td className="perf-r">{r.meta ? fmt(r.meta.views) : "—"}</td>
                         <td className="perf-r">{r.meta ? fmt(r.meta.likes) : "—"}</td>
-                        <td className="perf-date perf-c perf-grp-edge">{fmtDate(r.fb?.ts)}</td>
-                        <td className="perf-spark perf-c"><Sparkline data={r.fb?.series ?? []} title={`${r.title} 페이스북 릴스 조회 추이`} /></td>
-                        <td className="perf-r">{r.fb ? fmt(r.fb.views) : "—"}</td>
-                        <td className="perf-r">
-                          {r.fb
-                            ? <>{fmt(r.fb.likes)}{r.fb.coverPending && <span title="커버(썸네일) 미적용 — 쇼츠 탭의 '🖼 페북 커버 적용'으로 보강" style={{ marginLeft: 3 }}>🖼</span>}</>
-                            : "—"}
-                        </td>
+                        {fbOn ? <>
+                          <td className="perf-date perf-c perf-grp-edge">{fmtDate(r.fb?.ts)}</td>
+                          <td className="perf-spark perf-c"><Sparkline data={r.fb?.series ?? []} title={`${r.title} 페이스북 릴스 조회 추이`} /></td>
+                          <td className="perf-r">{r.fb ? fmt(r.fb.views) : "—"}</td>
+                          <td className="perf-r">
+                            {r.fb
+                              ? <>{fmt(r.fb.likes)}{r.fb.coverPending && <span title="커버(썸네일) 미적용 — 쇼츠 탭의 '🖼 페북 커버 적용'으로 보강" style={{ marginLeft: 3 }}>🖼</span>}</>
+                              : "—"}
+                          </td>
+                        </> : null}
                         <td className="perf-c perf-grp-edge">{r.meta ? reflBadge(r.meta.reflected, r.meta.stale) : "—"}</td>
                         <td className="perf-c"><button className="btn ghost" title="숏폼 삭제 — 산출물·성과 포함(유튜브·릴스 행 모두 사라짐)" onClick={() => doDeleteShorts(r.id, r.title)}><Ico name="trash" size={12} /></button></td>
                       </tr>
@@ -538,7 +549,7 @@ export default function PerformanceView() {
                   <colgroup>
                     <col className="perf-col-title" /><col className="perf-col-link" />
                     <col className="perf-col-date perf-grp-start" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" /><col className="perf-col-num" />
-                    <col className="perf-col-date perf-grp-start" /><col className="perf-col-spark-w" /><col className="perf-col-num" /><col className="perf-col-num" />
+                    {fbOn ? <><col className="perf-col-date perf-grp-start" /><col className="perf-col-spark-w" /><col className="perf-col-num" /><col className="perf-col-num" /></> : null}
                     <col className="perf-col-refl perf-grp-start" /><col className="perf-col-act" />
                   </colgroup>
                   <thead>
@@ -546,7 +557,7 @@ export default function PerformanceView() {
                     <tr className="perf-grouprow">
                       <th className="perf-grp-soft" colSpan={2}>콘텐츠</th>
                       <th colSpan={5}><span className="perf-grp-in"><PlatformMark name="instagram" size={13} /> 인스타그램</span></th>
-                      <th className="perf-grp-edge" colSpan={4}><span className="perf-grp-in"><PlatformMark name="facebook" size={13} /> 페이스북</span></th>
+                      {fbOn ? <th className="perf-grp-edge" colSpan={4}><span className="perf-grp-in"><PlatformMark name="facebook" size={13} /> 페이스북</span></th> : null}
                       <th className="perf-grp-soft perf-grp-edge" colSpan={2}>학습</th>
                     </tr>
                     <tr>
@@ -559,10 +570,12 @@ export default function PerformanceView() {
                       <th className="perf-r">👍</th>
                       {/* 페이스북 사진 게시물은 조회·노출 지표를 주지 않는다(실측: post_impressions 계열 전부 무효) →
                           이 그룹의 추이는 좋아요 기준. 헤더에 '👍 추이'로 명시해 조회 추이로 오해되지 않게. */}
-                      <th className="perf-c perf-grp-edge" title="페이스북 페이지 게시일 — 인스타와 다른 날일 수 있습니다">게시일</th>
-                      <th className="perf-c" title="좋아요 일별 추이 — 페이스북 사진 게시물은 조회·노출 지표를 제공하지 않아(실측: post_impressions 계열 전부 무효) 좋아요를 추이로 씁니다">추이</th>
-                      <th className="perf-r">👍</th>
-                      <th className="perf-r">공유</th>
+                      {fbOn ? <>
+                        <th className="perf-c perf-grp-edge" title="페이스북 페이지 게시일 — 인스타와 다른 날일 수 있습니다">게시일</th>
+                        <th className="perf-c" title="좋아요 일별 추이 — 페이스북 사진 게시물은 조회·노출 지표를 제공하지 않아(실측: post_impressions 계열 전부 무효) 좋아요를 추이로 씁니다">추이</th>
+                        <th className="perf-r">👍</th>
+                        <th className="perf-r">공유</th>
+                      </> : null}
                       <th className="perf-c perf-grp-edge" title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th>
                       <th className="perf-c"></th>
                     </tr>
@@ -578,7 +591,7 @@ export default function PerformanceView() {
                         <td className="perf-c">
                           <span className="perf-links">
                             {linkBadge("instagram", r.ig?.permalink, "인스타그램 게시물 열기", "인스타그램 미게시")}
-                            {linkBadge("facebook", r.fb?.url, "페이스북 페이지 게시물 열기", "페이스북 페이지 미게시")}
+                            {fbOn ? linkBadge("facebook", r.fb?.url, "페이스북 페이지 게시물 열기", "페이스북 페이지 미게시") : null}
                           </span>
                         </td>
                         <td className="perf-date perf-c perf-grp-edge">{fmtDate(r.ig?.ts ?? r.ts)}</td>
@@ -586,10 +599,12 @@ export default function PerformanceView() {
                         <td className="perf-r">{r.ig ? fmt(r.ig.views) : "—"}</td>
                         <td className="perf-r">{r.ig ? fmt(r.ig.reach) : "—"}</td>
                         <td className="perf-r">{r.ig ? fmt(r.ig.likes) : "—"}</td>
-                        <td className="perf-date perf-c perf-grp-edge">{fmtDate(r.fb?.ts)}</td>
-                        <td className="perf-spark perf-c"><Sparkline data={r.fb?.series ?? []} title={`${r.topic} 페이스북 좋아요 추이`} /></td>
-                        <td className="perf-r">{r.fb ? fmt(r.fb.likes) : "—"}</td>
-                        <td className="perf-r">{r.fb ? fmt(r.fb.shares) : "—"}</td>
+                        {fbOn ? <>
+                          <td className="perf-date perf-c perf-grp-edge">{fmtDate(r.fb?.ts)}</td>
+                          <td className="perf-spark perf-c"><Sparkline data={r.fb?.series ?? []} title={`${r.topic} 페이스북 좋아요 추이`} /></td>
+                          <td className="perf-r">{r.fb ? fmt(r.fb.likes) : "—"}</td>
+                          <td className="perf-r">{r.fb ? fmt(r.fb.shares) : "—"}</td>
+                        </> : null}
                         <td className="perf-c perf-grp-edge">{reflBadge(r.reflected, r.stale)}</td>
                         <td className="perf-c"><button className="btn ghost" title="카드뉴스 삭제 — 산출물·성과 포함" onClick={() => doDeleteCardnews(r.id, r.topic)}><Ico name="trash" size={12} /></button></td>
                       </tr>

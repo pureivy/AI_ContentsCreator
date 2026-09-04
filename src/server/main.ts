@@ -2726,6 +2726,8 @@ function performanceHandler(c: Context): Response {
     channels: {
       shorts: shortsRows,
       cardnews: cardRows,
+      // 페이스북을 채널로 셀 것인가 — 화면이 이 값을 보고 페북 열·카드를 접는다(CONFIG 주석 참조).
+      fbAsChannel: CONFIG.fbAsChannel,
       summary: {
         shortsYtViews: shortsRows.reduce((n, r) => n + (r.youtube?.views ?? 0), 0),
         reelsViews: shortsRows.reduce((n, r) => n + (r.meta?.views ?? 0), 0),

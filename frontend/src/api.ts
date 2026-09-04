@@ -1000,6 +1000,8 @@ export interface PerfData {
   channels?: {
     shorts: ShortsPerfRow[];
     cardnews: CardnewsPerfRow[];
+    /** 페이스북을 채널로 셀 것인가(서버 CONFIG.fbAsChannel) — false 면 페북 열·카드를 접는다. */
+    fbAsChannel?: boolean;
     summary: {
       shortsYtViews: number; reelsViews: number; cardnewsViews: number; fbReelViews: number;
       ytLikes: number; reelsLikes: number; cardnewsLikes: number; fbReelLikes: number; fbPostLikes: number;
