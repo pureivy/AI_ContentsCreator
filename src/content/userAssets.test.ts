@@ -100,16 +100,16 @@ describe('planVideoSegments — 한 영상을 구간으로 쪼개 여러 씬에'
 describe('planVideoSegments — 내용 기준 배정이 길이보다 우선', () => {
   it('감독이 고른 씬을 먼저 잡는다 — 길이 기준이라면 다른 씬이 뽑혔을 자리', () => {
     // 길이만 보면 가장 긴 씬3(10초)이 먼저 뽑힌다. 감독이 씬1을 고르면 씬1이 먼저다.
-    const p = planVideoSegments([{ path: 'v.mp4', seconds: 8 }], [4, 5, 6, 10], new Map([['v.mp4', 1]]));
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 8 }], [4, 5, 6, 10], new Map([['v.mp4', [1]]]));
     expect(p[1]).not.toBeNull();
     expect(p[1]!.startSec).toBe(0); // 지목된 자리가 첫 구간을 가져간다
   });
   it('훅을 지목하면 무시한다 — 첫 프레임이 커버라는 규칙이 이긴다', () => {
-    const p = planVideoSegments([{ path: 'v.mp4', seconds: 30 }], [5, 5, 5], new Map([['v.mp4', 0]]));
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 30 }], [5, 5, 5], new Map([['v.mp4', [0]]]));
     expect(p[0]).toBeNull();
   });
   it('지목한 씬을 덮을 만큼 안 남았으면 그 자리는 포기한다', () => {
-    const p = planVideoSegments([{ path: 'v.mp4', seconds: 2 }], [5, 10, 5], new Map([['v.mp4', 1]]));
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 2 }], [5, 10, 5], new Map([['v.mp4', [1]]]));
     expect(p[1]).toBeNull(); // 2초는 10초 씬의 절반에 못 미친다
   });
   it('지목이 없으면 종전대로 길이 기준', () => {
@@ -121,22 +121,22 @@ describe('planVideoSegments — 내용 기준 배정이 길이보다 우선', ()
 
 describe('orderAssetsByAssignment — 내용 배정을 planAssetScenes 입력으로', () => {
   it('지목된 사진이 그 씬에 들어간다', () => {
-    const { assets, order } = orderAssetsByAssignment(['a.jpg', 'b.jpg'], new Map([['b.jpg', 2]]), 5);
+    const { assets, order } = orderAssetsByAssignment(['a.jpg', 'b.jpg'], new Map([['b.jpg', [2]]]), 5);
     const plan = planAssetScenes(assets, 5, order);
     expect(plan[2]).toBe('b.jpg');
   });
   it('지목 없는 사진은 남은 씬을 종전 순서(훅부터)로 채운다', () => {
-    const { assets, order } = orderAssetsByAssignment(['a.jpg', 'b.jpg'], new Map([['b.jpg', 3]]), 5);
+    const { assets, order } = orderAssetsByAssignment(['a.jpg', 'b.jpg'], new Map([['b.jpg', [3]]]), 5);
     expect(assets).toEqual(['b.jpg', 'a.jpg']);
     expect(order[0]).toBe(3);
     expect(order.slice(1)).toEqual([0, 1, 2, 4]);
   });
   it('한 씬에 둘을 지목하면 뒤엣것은 무시한다', () => {
-    const { order } = orderAssetsByAssignment(['a.jpg', 'b.jpg'], new Map([['a.jpg', 1], ['b.jpg', 1]]), 4);
+    const { order } = orderAssetsByAssignment(['a.jpg', 'b.jpg'], new Map([['a.jpg', [1]], ['b.jpg', [1]]]), 4);
     expect(order.filter((i) => i === 1)).toHaveLength(1);
   });
   it('범위 밖 지목은 무시한다', () => {
-    const { assets, order } = orderAssetsByAssignment(['a.jpg'], new Map([['a.jpg', 99]]), 3);
+    const { assets, order } = orderAssetsByAssignment(['a.jpg'], new Map([['a.jpg', [99]]]), 3);
     expect(assets).toEqual(['a.jpg']);
     expect(order).toEqual([0, 1, 2]);
   });
@@ -144,5 +144,35 @@ describe('orderAssetsByAssignment — 내용 배정을 planAssetScenes 입력으
     const { assets, order } = orderAssetsByAssignment(['a.jpg', 'b.jpg'], new Map(), 4);
     expect(assets).toEqual(['a.jpg', 'b.jpg']);
     expect(order).toEqual([0, 1, 2, 3]);
+  });
+});
+
+describe('planVideoSegments — 내용 배정을 길이가 덮어쓰지 않는다(2026-09-04 실측)', () => {
+  it('배정받은 영상은 지목된 씬에만 들어간다 — 길이로 더 퍼뜨리지 않는다', () => {
+    // 실측 사고: 넓게 찍은 하우스 밭 영상 하나가 3씬을 먹었다. 감독이 고른 자리는 한 곳뿐이었고
+    // 나머지 둘은 길이만 보고 채운 자리라, 클로즈업을 설명하는 대목에 밭 전경이 들어갔다.
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 60 }], [5, 6, 7, 6, 5], new Map([['v.mp4', [3]]]));
+    expect(p.filter(Boolean)).toHaveLength(1);
+    expect(p[3]).not.toBeNull();
+  });
+  it('감독이 여러 씬을 고르면 그만큼 들어간다', () => {
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 60 }], [5, 6, 7, 6, 5], new Map([['v.mp4', [1, 3]]]));
+    expect(p.filter(Boolean)).toHaveLength(2);
+    expect(p[1]).not.toBeNull();
+    expect(p[3]).not.toBeNull();
+    expect(p[1]!.startSec).toBeLessThan(p[3]!.startSec); // 씬 순서대로 앞에서 뒤로
+  });
+  it('배정을 못 받은 영상만 길이로 채운다', () => {
+    const p = planVideoSegments(
+      [{ path: 'a.mp4', seconds: 60 }, { path: 'b.mp4', seconds: 60 }],
+      [5, 6, 7, 6, 5], new Map([['a.mp4', [1]]]),
+    );
+    expect(p[1]!.path).toBe('a.mp4');
+    const others = p.filter((x, i) => x && i !== 1);
+    expect(others.every((x) => x!.path === 'b.mp4')).toBe(true); // a 는 더 안 퍼진다
+  });
+  it('배정이 아예 없으면 종전대로 전부 길이 기준', () => {
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 60 }], [5, 6, 7, 6, 5]);
+    expect(p.filter(Boolean).length).toBeGreaterThan(1);
   });
 });

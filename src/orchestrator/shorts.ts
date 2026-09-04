@@ -1595,8 +1595,8 @@ export async function runShortsJob(
     const refPaths = styleRefs(ordered.assets, assetPlan);
     // 씬 길이는 낭독 실측 전이라 자수로 추정한다(렌더러의 sceneDurationSec 와 같은 산식).
     const sceneEst = plan.scenes.map((sc) => Math.max(3.5, (sc.narration ?? '').length / SHORTS_TTS_CPS + 0.6));
-    const videoPrefer = new Map<string, number>();
-    for (const f of userVideoFiles) { const at = mediaAt.get(f); if (at !== undefined) videoPrefer.set(f, at); }
+    const videoPrefer = new Map<string, readonly number[]>();
+    for (const f of userVideoFiles) { const at = mediaAt.get(f); if (at?.length) videoPrefer.set(f, at); }
     const videoPlan = planVideoSegments(
       userVideoFiles.map((f) => ({ path: f, seconds: videoDurations.get(f) ?? 0 })).filter((v) => v.seconds > 0),
       sceneEst, videoPrefer,

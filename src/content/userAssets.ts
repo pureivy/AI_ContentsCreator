@@ -49,14 +49,14 @@ export function planAssetScenes(assets: readonly string[], sceneCount: number, o
  * 씬 순서도 같은 차례로 놓는다. 배정 없는 사진은 뒤에 붙고 종전 순서(훅부터)로 채워진다.
  */
 export function orderAssetsByAssignment(
-  assets: readonly string[], at: ReadonlyMap<string, number>, sceneCount: number,
+  assets: readonly string[], at: ReadonlyMap<string, readonly number[]>, sceneCount: number,
 ): { assets: string[]; order: number[] } {
-  const valid = (i: number | undefined): i is number => Number.isInteger(i) && i! >= 0 && i! < sceneCount;
   const taken = new Set<number>();
   const head: Array<{ file: string; scene: number }> = [];
   for (const f of assets) {
-    const i = at.get(f);
-    if (!valid(i) || taken.has(i)) continue;
+    // 사진은 한 장이 한 씬이다(planAssetScenes 계약) — 여러 씬을 받았으면 첫 자리만 쓴다.
+    const i = [...(at.get(f) ?? [])].sort((a, b) => a - b).find((k) => Number.isInteger(k) && k >= 0 && k < sceneCount && !taken.has(k));
+    if (i === undefined) continue;
     taken.add(i);
     head.push({ file: f, scene: i });
   }
@@ -98,8 +98,9 @@ export interface VideoSegment {
  * 지키는 것 셋(전부 종전 규칙과 같은 이유):
  *  · 훅(0)은 비운다 — 영상 첫 프레임은 대개 정지 상태라 커버로 약하다.
  *
- * prefer 는 "이 영상은 이 씬"이라는 내용 기준 배정이다(감독이 대본과 소재 설명을 보고 고른다).
- * 그 자리를 먼저 잡고, 남은 씬만 길이 기준으로 채운다 — 길이는 어디까지나 차선이다.
+ * prefer 는 "이 영상은 이 씬(들)"이라는 내용 기준 배정이다(감독이 대본과 소재 설명을 보고 고른다).
+ * 배정을 받은 영상은 그 자리에만 들어간다 — 길이 기준으로 더 퍼뜨리지 않는다. 길이는 배정을 못
+ * 받은 영상에만 쓰는 차선책이다. 내용을 본 판단을 길이가 덮어쓰면 분석을 앞으로 당긴 의미가 없다.
  *  · 구간이 씬 길이의 MIN_CLIP_COVERAGE 밑이면 안 쓴다 — 과한 감속은 결함으로 보인다.
  *  · 전 씬을 실촬영으로 덮지 않는다(상한 = 씬의 절반, 올림) — 한 클립을 4~5씬에 늘어놓으면
  *    같은 장면이 도는 것처럼 보이고 내레이션과도 어긋난다. 실사진 배정과 같은 상한·같은 이유.
@@ -107,7 +108,7 @@ export interface VideoSegment {
 export function planVideoSegments(
   videos: ReadonlyArray<{ path: string; seconds: number }>,
   sceneSeconds: readonly number[],
-  prefer: ReadonlyMap<string, number> = new Map(),
+  prefer: ReadonlyMap<string, readonly number[]> = new Map(),
 ): ReadonlyArray<VideoSegment | null> {
   const out: Array<VideoSegment | null> = sceneSeconds.map(() => null);
   if (!videos.length || !sceneSeconds.length) return out;
@@ -120,26 +121,35 @@ export function planVideoSegments(
   const claimed = new Set<number>();
   let placed = 0;
 
-  // 0) 내용으로 정해진 자리 먼저(2026-09-04) — 감독이 대본을 보고 "이 영상은 이 씬"이라고 고른 것.
+  // 0) 내용으로 정해진 자리 먼저(2026-09-04) — 감독이 대본과 소재 설명을 나란히 놓고 고른 것.
   //    길이 규칙은 여기서도 그대로다: 훅은 비우고, 씬 길이의 절반에 못 미치면 그 자리는 포기한다.
-  for (const [file, at] of prefer) {
-    if (placed >= cap) break;
-    if (!Number.isInteger(at) || at <= 0 || at >= sceneSeconds.length || claimed.has(at)) continue;
+  for (const [file, ats] of prefer) {
     const v = pool.find((x) => x.path === file);
-    const sec = sceneSeconds[at]!;
-    if (!v || v.left < sec * MIN_CLIP_COVERAGE) continue;
-    const take = Math.min(sec, v.left);
-    v.scenes.push({ i: at, seconds: take });
-    v.left -= take;
-    claimed.add(at);
-    placed++;
+    if (!v) continue;
+    for (const at of [...ats].sort((a, b) => a - b)) {
+      if (placed >= cap) break;
+      if (!Number.isInteger(at) || at <= 0 || at >= sceneSeconds.length || claimed.has(at)) continue;
+      const sec = sceneSeconds[at]!;
+      if (v.left < sec * MIN_CLIP_COVERAGE) continue;
+      const take = Math.min(sec, v.left);
+      v.scenes.push({ i: at, seconds: take });
+      v.left -= take;
+      claimed.add(at);
+      placed++;
+    }
   }
 
-  // 1) 남은 씬 — 긴 씬부터(채울 영상을 고르기 어려운 쪽부터).
-  const order = sceneSeconds
-    .map((sec, i) => ({ i, sec }))
-    .filter((x) => x.i > 0 && !claimed.has(x.i))
-    .sort((a, b) => b.sec - a.sec);
+  // 1) 남은 씬 — 길이 기준으로 채운다. 다만 '배정을 못 받은 영상'만 대상이다(2026-09-04 실측).
+  //
+  // 왜 배정받은 영상은 제외하는가. 실측에서 넓게 찍은 하우스 밭 영상 하나가 3씬을 먹었다. 감독이
+  // 고른 자리는 그중 한 곳("비닐하우스 장미도 마디 선택이 쌓인 결과예요")뿐이었고, 나머지 둘은
+  // 길이만 보고 채운 자리였다 — 그 두 씬은 "마디를 어디서 자르나"를 설명하는 클로즈업 대목이라
+  // 밭 전경이 말과 겉돌았다. 게다가 같은 화면이 세 씬 이어져 한 장면이 길게 이어지는 것처럼 보였다.
+  // 내용을 본 판단이 있는데 길이가 그걸 덮어쓰면, 분석을 앞으로 당긴 의미가 없다.
+  const unassigned = new Set(pool.filter((v) => !prefer.has(v.path)).map((v) => v.path));
+  const order = unassigned.size
+    ? sceneSeconds.map((sec, i) => ({ i, sec })).filter((x) => x.i > 0 && !claimed.has(x.i)).sort((a, b) => b.sec - a.sec)
+    : [];
   for (const { i, sec } of order) {
     if (placed >= cap) break;
     // 감속을 최소화하는 쪽으로 고른다(종전과 같은 기준, 대상이 '남은 시간'으로 바뀐 것뿐).
@@ -147,6 +157,7 @@ export function planVideoSegments(
     //  2순위: 못 덮으면 하한을 넘는 것 중 가장 많이 남은 것 — 감속 폭이 가장 작다
     let exact = -1, partial = -1;
     for (let k = 0; k < pool.length; k++) {
+      if (!unassigned.has(pool[k]!.path)) continue; // 배정받은 영상은 길이로 더 퍼뜨리지 않는다
       const left = pool[k]!.left;
       if (left >= sec) { if (exact < 0 || left < pool[exact]!.left) exact = k; continue; }
       if (left < sec * MIN_CLIP_COVERAGE) continue;

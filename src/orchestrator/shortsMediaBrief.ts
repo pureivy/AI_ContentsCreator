@@ -126,8 +126,8 @@ export async function assignMediaToScenes(
   briefs: readonly MediaBrief[],
   scenes: ReadonlyArray<{ narration?: string; screenText?: string }>,
   opts: { signal?: AbortSignal } = {},
-): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
+): Promise<Map<string, number[]>> {
+  const out = new Map<string, number[]>();
   if (!briefs.length || scenes.length < 2) return out;
   try {
     const j = await microJSON<{ picks?: Array<{ media?: unknown; scene?: unknown }> }>(
@@ -140,10 +140,13 @@ export async function assignMediaToScenes(
         `사용자가 올린 실촬영 소재 ${briefs.length}건이다(media 는 1부터).`,
         ...briefs.map((b, i) => `소재${i + 1}(${b.kind === 'video' ? '영상' : '사진'}): ${b.what}`),
         '',
-        '각 소재를 내용이 가장 잘 맞는 씬 하나에 배정하라. 한 씬에 둘을 배정하지 마라.',
+        '각 소재를 내용이 맞는 씬에 배정하라. 한 씬에 둘을 배정하지 마라.',
+        '한 소재를 여러 씬에 쓸 수 있다. 다만 그 화면이 그 씬의 내레이션을 실제로 보여 줄 때만이다 —',
+        '넓게 찍은 밭 화면을 "마디를 어디서 자르나" 같은 클로즈업 설명 씬에 넣으면 화면과 말이 겉돈다.',
+        '같은 화면이 여러 씬에 이어지면 한 장면이 길게 이어지는 것처럼 보인다. 정말 맞는 씬에만 배정하라.',
         '씬1(훅)에는 영상을 배정하지 마라 — 첫 프레임이 곧 커버라 정지 화면이 필요하다.',
         '어느 씬에도 안 맞는 소재는 목록에서 빼라(억지로 넣는 것보다 안 넣는 편이 낫다).',
-        'JSON 형식: {"picks":[{"media":번호,"scene":번호}]}',
+        'JSON 형식: {"picks":[{"media":번호,"scene":번호}]} — 한 소재가 여러 씬이면 항목을 여러 개 쓴다.',
       ].join('\n'),
       { maxOutputTokens: 300, signal: opts.signal },
     );
@@ -154,9 +157,9 @@ export async function assignMediaToScenes(
       if (!Number.isInteger(mi) || mi < 0 || mi >= briefs.length) continue;
       if (!Number.isInteger(si) || si < 0 || si >= scenes.length) continue;
       if (taken.has(si)) continue;              // 한 씬에 하나만
-      if (out.has(briefs[mi]!.file)) continue;  // 한 소재도 한 번만
       taken.add(si);
-      out.set(briefs[mi]!.file, si);
+      const f = briefs[mi]!.file;
+      out.set(f, [...(out.get(f) ?? []), si].sort((a, b) => a - b));
     }
   } catch { /* fail-open — 길이 기준 배정으로 떨어진다 */ }
   return out;
