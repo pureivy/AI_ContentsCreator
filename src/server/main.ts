@@ -1355,10 +1355,13 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, p
         const text = `${piece.keyword ?? ''} ${piece.title}`;
         const sp = findSpecies(text)?.name;
         const lib = listMedia(piece.brand ?? (activeBrandSlug() || undefined));
+        // 별칭을 표준명으로 — 사장님이 '음나무'로 올린 영상이 '엄나무' 편에서 배제됐다(2026-09-04).
+        // 같은 나무인데 부르는 이름이 둘이다. 그 판정은 수종 사전이 이미 하고 있다.
+        const canon = (n: string): string => findSpecies(n)?.name ?? n;
         const imgs = piece.assets?.length ? piece.assets
-          : matchMedia(lib, { species: sp, text, kind: 'image', limit: 8 }).map((m) => m.file);
+          : matchMedia(lib, { species: sp, text, kind: 'image', limit: 8, canon }).map((m) => m.file);
         const vids = piece.videoAssets?.length ? piece.videoAssets
-          : matchMedia(lib, { species: sp, text, kind: 'video', limit: 4 }).map((m) => m.file);
+          : matchMedia(lib, { species: sp, text, kind: 'video', limit: 4, canon }).map((m) => m.file);
         if (!piece.assets?.length && imgs.length) console.log('[숏폼]', `보관소 사진 ${imgs.length}장 사용 — ${sp ?? '범용'}`);
         if (!piece.videoAssets?.length && vids.length) console.log('[숏폼]', `보관소 영상 ${vids.length}개 사용 — ${sp ?? '범용'}`);
         return { ...(imgs.length ? { userAssets: imgs } : {}), ...(vids.length ? { userVideos: vids } : {}) };

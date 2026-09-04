@@ -94,26 +94,46 @@ export function removeMedia(id: string): boolean {
  * 수종이 '다른' 소재는 아예 안 쓴다.
  */
 export function matchMedia(
-  items: readonly MediaItem[], opts: { species?: string; text?: string; kind?: MediaKind; limit?: number },
+  items: readonly MediaItem[],
+  opts: {
+    species?: string; text?: string; kind?: MediaKind; limit?: number;
+    /**
+     * 수종 이름을 표준명으로 바꾸는 함수(2026-09-04). 호출부가 수종 사전을 물려 준다.
+     *
+     * 왜 필요한가. 사장님이 '음나무'로 딱지를 붙여 올린 영상이 '엄나무' 편에서 배제됐다.
+     * 같은 나무(Kalopanax septemlobus)인데 부르는 이름이 둘이고, 코드는 글자만 비교했다.
+     * 별칭은 이미 수종 사전이 알고 있다 — 그 판정을 여기로 끌어온다. 사전을 모르는 이름은
+     * 그대로 둔다(fail-open): 사전에 없다는 이유로 소재를 버리지 않는다.
+     */
+    canon?: (name: string) => string;
+  },
 ): MediaItem[] {
   const text = String(opts.text ?? '');
-  const want = String(opts.species ?? '').trim();
+  const canon = (n: string): string => {
+    const t = String(n ?? '').trim();
+    if (!t) return '';
+    try { return String(opts.canon?.(t) ?? t).trim() || t; } catch { return t; }
+  };
+  const want = canon(opts.species ?? '');
   const scored: Array<{ m: MediaItem; s: number }> = [];
   for (const m of items) {
     if (opts.kind && m.kind !== opts.kind) continue;
-    const named = String(m.species ?? '').trim();
+    const label = String(m.species ?? '').trim();
+    const named = canon(label);
     // 수종 판정 — 사전이 그 종을 알면 이름으로 맞추고, 모르면 주제 문장에 그 이름이 있는지로 본다.
     //
     // 뒤쪽이 없으면 실측 사고가 난다(2026-09-04): 사장님이 사계장미 영상을 올린 뒤 사계장미 편이
     // 돌았는데, 그 시점 수종 사전에 사계장미가 없어 want 가 비었다. 그래서 '사계장미' 딱지가 붙은
     // 영상이 사계장미 편에서 배제됐다 — 사전에 없다는 이유로. 소재에 사람이 직접 적어 둔 이름이
     // 주제에 그대로 들어 있으면 그게 곧 근거다. 사전은 그 다음이다.
-    const hit = named ? (want ? named === want : text.includes(named)) : false;
-    if (named && !hit) continue; // 다른 수종·무관한 수종은 배제
+    // 사전이 그 종을 알면 표준명끼리 맞추고, 모르면 주제 문장에 그 이름(사용자가 적은 표기든
+    // 표준명이든)이 있는지로 본다.
+    const hit = named ? (want ? named === want : text.includes(label) || text.includes(named)) : false;
+    if (label && !hit) continue; // 다른 수종·무관한 수종은 배제
     let s = 0;
     if (hit) s += 100;
     for (const t of m.tags ?? []) if (t && text.includes(t)) s += 10;
-    if (!named) s += 1; // 범용 소재 — 없는 것보다 낫다
+    if (!label) s += 1; // 범용 소재 — 없는 것보다 낫다
     if (s > 0) scored.push({ m, s });
   }
   scored.sort((a, b) => b.s - a.s || b.m.createdTs.localeCompare(a.m.createdTs));

@@ -58,3 +58,35 @@ describe('matchMedia — 주제에 맞는 소재 고르기', () => {
     expect(matchMedia([], { species: '수국' })).toEqual([]);
   });
 });
+
+describe('matchMedia — 별칭이 달라도 같은 나무면 쓴다(2026-09-04 실사고)', () => {
+  // 사장님이 '음나무'로 딱지를 붙여 올린 영상이 '엄나무 묘목' 편에서 배제됐다.
+  // 같은 나무(Kalopanax septemlobus)인데 부르는 이름이 둘이고 코드는 글자만 비교했다.
+  const canon = (n: string): string => (['엄나무', '음나무', '개두릅나무'].includes(n) ? '음나무' : n);
+
+  it('사전이 아는 별칭은 표준명으로 맞춘다', () => {
+    const items = [mk({ id: 'v', species: '음나무', kind: 'video' })];
+    expect(matchMedia(items, { species: '엄나무', kind: 'video', canon }).map((m) => m.id)).toEqual(['v']);
+  });
+  it('반대 방향도 같다 — 소재에 별칭, 주제에 표준명', () => {
+    const items = [mk({ id: 'v', species: '엄나무' })];
+    expect(matchMedia(items, { species: '음나무', canon })).toHaveLength(1);
+  });
+  it('사전 판정이 없어도 주제 문장에 사용자가 적은 표기가 있으면 쓴다', () => {
+    const items = [mk({ id: 'v', species: '음나무' })];
+    expect(matchMedia(items, { text: '음나무 묘목 고르기', canon })).toHaveLength(1);
+  });
+  it('다른 나무는 여전히 배제한다 — 별칭 처리가 문을 열어서는 안 된다', () => {
+    const items = [mk({ id: 'v', species: '두릅나무' })];
+    expect(matchMedia(items, { species: '엄나무', canon })).toHaveLength(0);
+  });
+  it('canon 이 없으면 종전대로 글자 비교', () => {
+    const items = [mk({ id: 'v', species: '음나무' })];
+    expect(matchMedia(items, { species: '엄나무' })).toHaveLength(0);
+  });
+  it('canon 이 던져도 안 터진다 — 사전 실패로 소재를 잃지 않는다', () => {
+    const items = [mk({ id: 'v', species: '음나무' })];
+    const boom = (): string => { throw new Error('사전 고장'); };
+    expect(matchMedia(items, { species: '음나무', canon: boom })).toHaveLength(1);
+  });
+});
