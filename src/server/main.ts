@@ -53,6 +53,9 @@ import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
 import { shortsStore, shortsQaPublishBlockReason } from '../content/shorts';
+import { addMedia, listMedia, updateMedia, removeMedia, mediaDir, matchMedia } from '../content/mediaLibrary';
+import { probeDuration } from '../tools/shortsCommon';
+import { findSpecies } from '../content/species';
 import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, autoDailyCapFor, type ShortsPlatform } from '../content/shortsPlatform';
 import { pickWriter, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
@@ -1346,8 +1349,20 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, p
     launchShortsRun(short.id, piece.title, {
       sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId!),
       // 사용자가 컴포저에 첨부한 실사진 — 씬 배경·스타일 레퍼런스로 쓴다.
-      ...(piece.assets?.length ? { userAssets: piece.assets } : {}),
-      ...(piece.videoAssets?.length ? { userVideos: piece.videoAssets } : {}),
+      // 컴포저 첨부가 우선, 없으면 보관소에서 이 주제에 맞는 소재를 꺼내 쓴다(2026-09-04).
+      // 보관소의 값어치가 여기 있다 — 한 번 올려 두면 그 수종 콘텐츠마다 자동으로 화면에 들어간다.
+      ...(() => {
+        const text = `${piece.keyword ?? ''} ${piece.title}`;
+        const sp = findSpecies(text)?.name;
+        const lib = listMedia(piece.brand ?? (activeBrandSlug() || undefined));
+        const imgs = piece.assets?.length ? piece.assets
+          : matchMedia(lib, { species: sp, text, kind: 'image', limit: 8 }).map((m) => m.file);
+        const vids = piece.videoAssets?.length ? piece.videoAssets
+          : matchMedia(lib, { species: sp, text, kind: 'video', limit: 4 }).map((m) => m.file);
+        if (!piece.assets?.length && imgs.length) console.log('[숏폼]', `보관소 사진 ${imgs.length}장 사용 — ${sp ?? '범용'}`);
+        if (!piece.videoAssets?.length && vids.length) console.log('[숏폼]', `보관소 영상 ${vids.length}개 사용 — ${sp ?? '범용'}`);
+        return { ...(imgs.length ? { userAssets: imgs } : {}), ...(vids.length ? { userVideos: vids } : {}) };
+      })(),
       // 승계는 원편이 ready 일 때만 — 실패했으면 물려받을 자산이 없으니 자체 생성으로 떨어진다.
       ...(inherit && inheritFromPrimary ? { inheritFrom: inheritFromPrimary } : {}),
     });
@@ -3483,6 +3498,74 @@ async function classifyModel(): Promise<string> {
 async function ingestModel(): Promise<string> {
   return resolveAssignment().micro;
 }
+// ── 사진·영상 보관소 ───────────────────────────────────────────────────────────
+// 문서 자료실(/sources)과 분리한다: 문서는 텍스트를 뽑아 위키에 넣는 지식이고, 사진·영상은
+// 화면에 그대로 나가는 소재다. 한 번 올려 두면 그 수종 콘텐츠가 만들어질 때 자동으로 꺼내 쓴다.
+app.post('/media', async (c) => {
+  const body = await c.req.parseBody({ all: true });
+  const raw = body['files'];
+  const files = (Array.isArray(raw) ? raw : [raw]).filter((x): x is File => x instanceof File);
+  if (!files.length) return c.json({ error: '파일이 필요합니다' }, 400);
+  const species = String(body['species'] ?? '').trim() || undefined;
+  const tags = String(body['tags'] ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  const note = String(body['note'] ?? '').trim() || undefined;
+  fs.mkdirSync(mediaDir(), { recursive: true });
+  const added: unknown[] = [];
+  const skipped: Array<{ file: string; reason: string }> = [];
+  for (const f of files) {
+    const isImg = f.type.startsWith('image/');
+    const isVid = !isImg && (f.type.startsWith('video/') || VIDEO_EXTS.has(path.extname(f.name || '').toLowerCase()));
+    if (!isImg && !isVid) { skipped.push({ file: f.name, reason: '사진·영상만 보관합니다' }); continue; }
+    const cap = isImg ? 20_000_000 : 500_000_000; // 보관소는 컴포저 첨부보다 넉넉히 — 원본을 두는 곳이다
+    if (f.size > cap) { skipped.push({ file: f.name, reason: `용량 초과(${isImg ? '20MB' : '500MB'})` }); continue; }
+    const ext = (path.extname(f.name || '').toLowerCase() || (isImg ? '.png' : '.mp4')).slice(0, 12);
+    const stem = path.basename(f.name || 'media', path.extname(f.name || ''))
+      .replace(/[^\w가-힣.\-]+/g, '_').slice(0, 40) || 'media';
+    const name = `${Date.now()}-${createHash('sha1').update(`${f.name}:${f.size}`).digest('hex').slice(0, 8)}-${stem}${ext}`;
+    const dest = path.join(mediaDir(), name);
+    await fs.promises.writeFile(dest, Buffer.from(await f.arrayBuffer()));
+    // 영상 길이는 여기서 한 번 재 둔다 — 씬 배정이 매번 ffprobe 를 돌지 않게.
+    let seconds: number | undefined;
+    if (isVid) { try { seconds = await probeDuration(dest); } catch { seconds = undefined; } }
+    added.push(addMedia({
+      file: dest, kind: isImg ? 'image' : 'video', name: f.name || name, bytes: f.size,
+      ...(seconds ? { seconds } : {}), ...(species ? { species } : {}), ...(tags.length ? { tags } : {}),
+      ...(note ? { note } : {}), ...(activeBrandSlug() ? { brand: activeBrandSlug() } : {}),
+    }));
+  }
+  if (!added.length) return c.json({ error: '보관할 파일이 없습니다', skipped }, 400);
+  return c.json({ ok: true, added, skipped });
+});
+app.get('/media', (c) => c.json({ media: listMedia(activeBrandSlug() || undefined) }));
+app.patch('/media/:id', async (c) => {
+  type MediaPatch = { species?: string; tags?: string[]; note?: string };
+  const b = await c.req.json<MediaPatch>().catch(() => ({} as MediaPatch));
+  const up = updateMedia(c.req.param('id') ?? '', {
+    ...(b.species !== undefined ? { species: b.species || undefined } : {}),
+    ...(b.tags !== undefined ? { tags: b.tags } : {}),
+    ...(b.note !== undefined ? { note: b.note || undefined } : {}),
+  });
+  return up ? c.json({ ok: true, item: up }) : c.json({ error: 'unknown media' }, 404);
+});
+app.delete('/media/:id', (c) => (removeMedia(c.req.param('id') ?? '')
+  ? c.json({ ok: true })
+  : c.json({ error: 'unknown media' }, 404)));
+// 파일 서빙 — 목록 썸네일·미리보기용. 보관소 밖 경로는 절대 안 내보낸다(경로 주입 방지).
+app.get('/media/file/:id', (c) => {
+  const hit = listMedia().find((m) => m.id === c.req.param('id'));
+  if (!hit) return c.json({ error: 'unknown media' }, 404);
+  const root = path.resolve(mediaDir());
+  const real = path.resolve(hit.file);
+  if (!real.startsWith(root + path.sep)) return c.json({ error: 'forbidden' }, 403);
+  try {
+    const buf = fs.readFileSync(real);
+    const ext = path.extname(real).toLowerCase();
+    const type = ext === '.mp4' || ext === '.m4v' ? 'video/mp4' : ext === '.mov' ? 'video/quicktime'
+      : ext === '.webm' ? 'video/webm' : ext === '.png' ? 'image/png' : 'image/jpeg';
+    return new Response(new Uint8Array(buf), { headers: { 'content-type': type, 'cache-control': 'private, max-age=86400' } });
+  } catch { return c.json({ error: 'read failed' }, 500); }
+});
+
 app.post('/sources', async (c) => {
   const body = await c.req.parseBody({ all: true });
   const raw = body['files'];

@@ -39,6 +39,7 @@ import { useJarvisVoice } from "./voice/useJarvisVoice";
 import { JarvisAvatar } from "./jarvis/JarvisAvatar";
 // 무거운 그래프 라이브러리(react-force-graph)는 모달을 열 때만 로드(초기 번들에서 분리).
 const WikiGraphView = lazy(() => import("./panels/WikiGraphView"));
+const MediaLibraryView = lazy(() => import("./panels/MediaLibraryView"));
 
 const AUTONOMY_LABEL = ["Off", "읽기전용", "초안(승인)", "자동"];
 
@@ -99,7 +100,7 @@ function progressNote(
   return "⏳ 편집장이 목표를 분석하는 중…";
 }
 
-type View = "office" | "graph" | "detail" | "employees" | "apikeys" | "llm" | "mcp" | "calendar" | "review" | "perf" | "studio" | "brand";
+type View = "office" | "graph" | "detail" | "employees" | "apikeys" | "llm" | "mcp" | "calendar" | "review" | "perf" | "studio" | "brand" | "media";
 type TLTab = "timeline" | "activity" | "workflow";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -1602,6 +1603,7 @@ export default function App() {
           <button className={view === "review" ? "active" : ""} onClick={() => setView("review")}><Ico name="eye" size={12} /> 검토</button>
           <button className={view === "perf" ? "active" : ""} onClick={() => setView("perf")}><Ico name="chart" size={12} /> 성과</button>
           <button className={view === "studio" ? "active" : ""} onClick={() => setView("studio")}><Ico name="pencil" size={12} /> 제작실</button>
+          <button className={view === "media" ? "active" : ""} onClick={() => setView("media")}><Ico name="cards" size={12} /> 보관소</button>
         </div>
         <div className="viewtoggle">
           <button className={view === "apikeys" ? "active" : ""} onClick={() => setView("apikeys")}><Ico name="key" size={12} /> API 키</button>
@@ -1710,6 +1712,10 @@ export default function App() {
       ) : view === "studio" ? (
         <main className="employees-stage">
           <StudioView />
+        </main>
+      ) : view === "media" ? (
+        <main className="employees-stage">
+          <Suspense fallback={null}><MediaLibraryView /></Suspense>
         </main>
       ) : view === "brand" ? (
         <main className="employees-stage">
