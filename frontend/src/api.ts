@@ -1171,7 +1171,7 @@ export async function fetchShorts(): Promise<ShortsInfo[]> {
   try { const r = await fetch("/shorts"); if (!r.ok) return []; return (await r.json()).shorts ?? []; }
   catch { return []; }
 }
-export async function createShorts(body: { topic: string; keyword?: string; scenes?: number }): Promise<{ ok: boolean; id?: string; error?: string }> {
+export async function createShorts(body: { topic: string; keyword?: string; scenes?: number; platform?: "youtube" | "instagram" }): Promise<{ ok: boolean; id?: string; error?: string }> {
   try {
     const r = await fetch("/shorts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json().catch(() => ({} as { short?: { id: string }; error?: string }));

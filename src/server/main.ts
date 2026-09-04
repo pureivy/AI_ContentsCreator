@@ -1276,20 +1276,42 @@ function launchShortsRun(shortsId: string, topic: string, opts: {
   return id;
 }
 
+/**
+ * 제작실 직접 생성(주제만) — 블로그 파생과 같은 계약으로 채널별 편을 만든다(2026-09-04).
+ *
+ * 종전엔 platform 없는 레코드 하나만 만들었다. 그러면 채널 지침이 안 붙고(platformPlanGuide
+ * 가 빈 문자열), 한 파일이 두 채널 모두에 올라갈 수 있다 — 09-03 에 없앤 '같은 물건을 두
+ * 채널에' 형태로 되돌아간다. 그게 유튜브 대량생산 지문의 축이었다.
+ *
+ * 파생 경로(shortsFromPieceHandler)와 같이 첫 채널이 원편(자산 생성), 나머지는 그 자산을
+ * 승계하고 낭독만 제 작가 목소리로 새로 뜬다 — 편당 비용은 이미지가 지배하므로 한 벌만 만든다.
+ */
 async function shortsCreateHandler(c: Context): Promise<Response> {
-  const b = await c.req.json<{ topic?: string; keyword?: string; scenes?: number; force?: boolean }>()
-    .catch(() => ({}) as { topic?: string; keyword?: string; scenes?: number; force?: boolean });
+  const b = await c.req.json<{ topic?: string; keyword?: string; scenes?: number; force?: boolean; platform?: ShortsPlatform }>()
+    .catch(() => ({}) as { topic?: string; keyword?: string; scenes?: number; force?: boolean; platform?: ShortsPlatform });
   const topic = (b.topic ?? '').trim();
   if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
   const sim = noveltyViolation(topic, b.keyword, b.force);
   if (sim) return c.json(noveltyError(sim), 409);
-  const short = shortsStore().create({ topic, keyword: b.keyword, ...assignShortsWriter() });
-  // 제작실 직접 생성도 보관소를 본다(2026-09-04) — 블로그 글이 없을 뿐, 주제는 있다.
-  const run = launchShortsRun(short.id, topic, {
-    sceneCount: b.scenes,
-    ...mediaForTopic({ brand: short.brand, text: `${b.keyword ?? ''} ${topic}` }),
-  });
-  return c.json({ short, run_id: run });
+  // 제작실 직접 생성도 보관소를 본다 — 블로그 글이 없을 뿐, 주제는 있다.
+  const media = mediaForTopic({ text: `${b.keyword ?? ''} ${topic}` });
+  const targets: ShortsPlatform[] = b.platform ? [b.platform] : [...SHORTS_PLATFORMS];
+  const made: Shorts[] = []; let primaryId = ''; let firstRun = '';
+  for (const platform of targets) {
+    const short = shortsStore().create({ topic, keyword: b.keyword, platform, ...assignShortsWriter() });
+    const inheritFrom = primaryId; // 루프 변수 고정 — 클로저가 나중 값을 보면 안 된다
+    const start = (inherit: boolean): void => {
+      const run = launchShortsRun(short.id, topic, {
+        ...(b.scenes ? { sceneCount: b.scenes } : {}), ...media,
+        ...(inherit && inheritFrom ? { inheritFrom } : {}),
+      });
+      if (!firstRun) firstRun = run;
+    };
+    if (inheritFrom) startAfterPrimary(inheritFrom, short.id, start); else start(false);
+    made.push(short);
+    if (!primaryId) primaryId = short.id;
+  }
+  return c.json({ short: made[0], shorts: made, run_id: firstRun });
 }
 
 // 블로그 초안 → 숏폼 파생(공용) — 검토 탭 버튼·네이버 저장 성공 자동 훅이 공유.

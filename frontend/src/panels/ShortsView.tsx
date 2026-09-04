@@ -194,6 +194,7 @@ export default function ShortsSection() {
   const [topic, setTopic] = useState("");
   const [keyword, setKeyword] = useState("");
   const [scenes, setScenes] = useState(6);
+  const [platform, setPlatform] = useState<"" | "youtube" | "instagram">(""); // 빈 값 = 둘 다
   const [srcPiece, setSrcPiece] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -221,7 +222,11 @@ export default function ShortsSection() {
     const t = topic.trim();
     if (!t) return;
     setBusy(true); setErr("");
-    const r = await createShorts({ topic: t, keyword: keyword.trim() || undefined, scenes });
+    // 채널 미선택 = 둘 다(유튜브 원편 + 인스타 승계) — 블로그 파생과 같은 계약.
+    const r = await createShorts({
+      topic: t, keyword: keyword.trim() || undefined, scenes,
+      ...(platform ? { platform } : {}),
+    });
     setBusy(false);
     if (r.ok) { setTopic(""); setKeyword(""); load(); } else setErr(r.error || "생성 실패");
   };
@@ -252,6 +257,15 @@ export default function ShortsSection() {
           <label className="muted">씬&nbsp;
             <select value={scenes} onChange={(e) => setScenes(Number(e.target.value))}>
               {[4, 5, 6, 7, 8].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          {/* 채널 — 미선택이면 둘 다 만든다(유튜브 원편 + 인스타 승계). 채널마다 대본 각도가
+              달라지므로, 한 파일을 두 곳에 올리던 종전 형태로 되돌아가지 않게 한다. */}
+          <label className="muted" title="채널마다 대본 각도가 다릅니다. '둘 다'는 유튜브편을 만들고 그 이미지를 인스타편이 승계합니다(이미지 한 벌).">채널&nbsp;
+            <select value={platform} onChange={(e) => setPlatform(e.target.value as "" | "youtube" | "instagram")}>
+              <option value="">둘 다</option>
+              <option value="youtube">유튜브만</option>
+              <option value="instagram">인스타만</option>
             </select>
           </label>
           <button className="btn start" disabled={busy || !topic.trim()} onClick={doCreate}>+ 생성</button>
