@@ -136,6 +136,7 @@ export async function renderShortsVideoRemotion(
   fs.mkdirSync(publicDir, { recursive: true });
 
   // 1) TTS·길이
+  // opts 에 clips 가 이미 들어 있다 — prepareScenes 가 배경 폴백 판정에 쓴다(클립이 있으면 폴백이 아니다).
   const { prepared, issues } = await prepareScenes(work, scenes, images, opts);
   if (!prepared.length) return { ok: false, issues: [...issues, '조립할 씬 없음'] };
 

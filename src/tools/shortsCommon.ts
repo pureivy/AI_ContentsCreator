@@ -256,6 +256,8 @@ export async function prepareScenes(
     voice?: string; instructions?: string; signal?: AbortSignal;
     /** 작가별 목소리(2026-09-03) — 미지정이면 전역 기본 보이스. */
     elevenVoiceId?: string; elevenVoiceSettings?: Record<string, number>;
+    /** 씬별 클립(2026-09-04) — 배경 폴백 판정에만 쓴다. 클립이 있으면 이미지가 없어도 화면은 찬다. */
+    clips?: Array<string | null>;
   },
 ): Promise<{ prepared: PreparedScene[]; issues: string[] }> {
   fs.mkdirSync(workDir, { recursive: true });
@@ -285,7 +287,11 @@ export async function prepareScenes(
     const durationSec = sceneDurationSec(audioDur);
     const durationInFrames = sceneFrames(durationSec);
     const imagePath = images[i] && fs.existsSync(images[i]!) ? images[i]! : null;
-    if (!imagePath) issues.push(`씬${i + 1} 배경 폴백(그라데이션)`);
+    // 클립이 있으면 이미지가 없어도 화면은 영상으로 찬다 — 폴백이 아니다(2026-09-04).
+    // 실촬영 씬은 이미지를 아예 안 만들므로, 이 구분이 없으면 정상 런마다 "배경 폴백"이 찍혀
+    // 정작 이미지 생성이 실패했을 때 그 경보를 못 알아본다.
+    const hasClip = !!opts.clips?.[i] && (() => { try { return fs.existsSync(opts.clips![i]!); } catch { return false; } })();
+    if (!imagePath && !hasClip) issues.push(`씬${i + 1} 배경 폴백(그라데이션)`);
     prepared.push({ index: i, imagePath, audioPath, screenText: sc.screenText ?? '', narration: sc.narration, durationSec, durationInFrames, startFrame });
     startFrame += durationInFrames;
   }
