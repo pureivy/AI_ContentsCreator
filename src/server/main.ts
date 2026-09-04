@@ -76,6 +76,7 @@ import { brandThemeCoverage } from '../analytics/discoverySeeds';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
 import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shortsMetaPerfStale } from '../analytics/shortsPerf';
+import { shortsFeedShare } from '../analytics/ytAnalytics';
 import { harvestTopicVerdicts, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { seriesGateForText, ensureSeriesLabels } from '../analytics/seriesLedger';
 import { refreshTrendSnapshot } from '../analytics/trendSignal';
@@ -2648,12 +2649,25 @@ function performanceHandler(c: Context): Response {
     .filter((x) => !!x.youtubeTs || !!x.metaPublishedTs)
     .map((x) => {
       const yt = x.youtubeTs ? latestMetricsBySource(x.id, 'youtube:') : null;
+      // 애널리틱스 표본은 따로 읽는다(2026-09-04) — 'youtube:' 접두로 뭉뚱그리면 더 자주 도는
+      // youtube:api 표본이 최신이라 시청비율·유입 경로가 매번 가려진다. 수집은 되는데 화면에
+      // 안 나오던 원인이 이것이다(실측: 26편에 기록이 있는데 성과 탭은 조회·좋아요만 보여줬다).
+      const ytA = x.youtubeTs ? latestMetricsBySource(x.id, 'youtube:analytics') : null;
       const ig = x.metaPublishedTs ? latestMetricsBySource(x.id, 'meta:ig') : null;
       const fbv = x.fbReelId ? latestMetricsBySource(x.id, 'meta:fb') : null;
       return {
         id: x.id, title: x.title || x.topic,
         // 업로드일은 채널별로 분리 — 유튜브 섹션은 youtubeTs, 릴스 섹션은 metaPublishedTs(양쪽 발행 시 상단 ts 는 최신값으로 정렬용).
-        youtube: x.youtubeTs ? { url: x.youtubeUrl ?? null, views: yt?.views ?? null, likes: yt?.likes ?? null, reflected: !!x.perfReflected, stale: shortsPerfStale(x, perfNow, perfDays), series: viewsSeriesFor(x.id, 'youtube:'), ts: x.youtubeTs } : null,
+        youtube: x.youtubeTs ? {
+          url: x.youtubeUrl ?? null, views: yt?.views ?? null, likes: yt?.likes ?? null,
+          reflected: !!x.perfReflected, stale: shortsPerfStale(x, perfNow, perfDays),
+          series: viewsSeriesFor(x.id, 'youtube:'), ts: x.youtubeTs,
+          // 시청 지속률·쇼츠 피드 비중(2026-09-03 수집 시작) — 조회수만으로는 '노출이 끊긴 것'과
+          // '보다가 이탈한 것'을 못 가른다. 애널리틱스 집계 지연(2일)으로 최근 편은 null 이다.
+          avgViewPct: ytA?.avgViewPct ?? null,
+          feedShare: ytA?.traffic ? shortsFeedShare(ytA.traffic) : null,
+          measuredAt: ytA?.measuredAt ?? null,
+        } : null,
         meta: x.metaPublishedTs ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, likes: ig?.likes ?? null, reflected: !!x.metaPerfReflected, stale: shortsMetaPerfStale(x, perfNow, perfDays), series: viewsSeriesFor(x.id, 'meta:ig'), ts: x.metaPublishedTs } : null,
         // 페북 릴스 — 게시된 조각만(fbReelId). 지표는 비디오 노드에서 수집한 meta:fb 표본.
         // 커버 미적용 여부(coverPending)도 함께 보내 성과 탭에서 바로 보이게 한다(발행 탭까지 가지 않아도 알게).

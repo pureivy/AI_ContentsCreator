@@ -965,7 +965,15 @@ export interface PerfRow {
 // stale = 미반영인데 수집 대상에서도 빠진 상태(비공개·삭제·포기 지평 경과) → '측정 중'이 아니라 '수집 불가'.
 export interface ShortsPerfRow {
   id: string; title: string; ts: string;
-  youtube: { url: string | null; views: number | null; likes: number | null; reflected: boolean; stale: boolean; series: number[]; ts: string } | null;
+  youtube: {
+    url: string | null; views: number | null; likes: number | null;
+    reflected: boolean; stale: boolean; series: number[]; ts: string;
+    /** 평균 시청 비율(%) — 반복 재생이 있으면 100 을 넘는다. 애널리틱스 집계 전이면 null. */
+    avgViewPct?: number | null;
+    /** 쇼츠 피드 유입 비중(0~1) — 낮으면 피드에 안 뿌려진 것이다. */
+    feedShare?: number | null;
+    measuredAt?: string | null;
+  } | null;
   meta: { permalink: string | null; views: number | null; likes: number | null; reflected: boolean; stale: boolean; series: number[]; ts: string } | null;
   // 페북 릴스 — 미게시면 null. coverPending 이면 커버(썸네일) 미적용 상태.
   fb: { url: string; views: number | null; likes: number | null; series: number[]; ts: string | null; coverPending: boolean } | null;

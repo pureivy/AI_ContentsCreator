@@ -388,13 +388,14 @@ export default function PerformanceView() {
                   <colgroup>
                     <col className="perf-col-title" /><col className="perf-col-link" />
                     <col className="perf-col-date perf-grp-start" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" />
+                    <col className="perf-col-num" /><col className="perf-col-num" />
                     <col className="perf-col-refl perf-grp-start" /><col className="perf-col-act" />
                   </colgroup>
                   <thead>
                     {/* 릴스·카드뉴스와 같은 2단 구조 — 네 표의 헤더 리듬을 맞춘다(단일 채널이라 그룹은 하나). */}
                     <tr className="perf-grouprow">
                       <th className="perf-grp-soft" colSpan={2}>콘텐츠</th>
-                      <th colSpan={4}><span className="perf-grp-in"><PlatformMark name="youtube" size={13} /> 유튜브</span></th>
+                      <th colSpan={6}><span className="perf-grp-in"><PlatformMark name="youtube" size={13} /> 유튜브</span></th>
                       <th className="perf-grp-soft perf-grp-edge" colSpan={2}>학습</th>
                     </tr>
                     <tr>
@@ -404,6 +405,8 @@ export default function PerformanceView() {
                       <th className="perf-c" title="유튜브 조회수 일별 추이">추이</th>
                       <th className="perf-r">조회</th>
                       <th className="perf-r">👍</th>
+                      <th className="perf-r" title="평균 시청 비율 — 끝까지 보면 100%에 가깝고 반복 재생이 있으면 100%를 넘는다. 낮으면 '보다가 이탈'이다">지속률</th>
+                      <th className="perf-r" title="쇼츠 피드에서 들어온 조회의 비중 — 낮으면 '피드에 안 뿌려진 것'이다. 조회수만으로는 이 둘을 못 가른다">피드</th>
                       <th className="perf-c perf-grp-edge" title="직원 메모리·위키에 학습 반영(✓ 반영) / 측정창 진행 중(측정 중) / 비공개·삭제·기한 경과로 영구 정체(수집 불가)">반영</th>
                       <th className="perf-c"></th>
                     </tr>
@@ -423,6 +426,12 @@ export default function PerformanceView() {
                         <td className="perf-spark perf-c"><Sparkline data={r.youtube?.series ?? []} title={`${r.title} 유튜브 조회 추이`} /></td>
                         <td className="perf-r">{r.youtube ? fmt(r.youtube.views) : "—"}</td>
                         <td className="perf-r">{r.youtube ? fmt(r.youtube.likes) : "—"}</td>
+                        <td className="perf-r" title={r.youtube?.measuredAt ? `애널리틱스 ${fmtDate(r.youtube.measuredAt)} 수집` : "애널리틱스 집계 전 — 유튜브가 2일가량 늦게 준다"}>
+                          {r.youtube?.avgViewPct != null ? `${Math.round(r.youtube.avgViewPct)}%` : "—"}
+                        </td>
+                        <td className="perf-r" title={r.youtube?.feedShare != null ? "쇼츠 피드 유입 비중" : "애널리틱스 집계 전 — 유튜브가 2일가량 늦게 준다"}>
+                          {r.youtube?.feedShare != null ? `${Math.round(r.youtube.feedShare * 100)}%` : "—"}
+                        </td>
                         <td className="perf-c perf-grp-edge">{r.youtube ? reflBadge(r.youtube.reflected, r.youtube.stale) : "—"}</td>
                         <td className="perf-c"><button className="btn ghost" title="숏폼 삭제 — 산출물·성과 포함(유튜브·릴스 행 모두 사라짐)" onClick={() => doDeleteShorts(r.id, r.title)}><Ico name="trash" size={12} /></button></td>
                       </tr>
