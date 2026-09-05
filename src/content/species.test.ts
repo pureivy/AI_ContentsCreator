@@ -50,6 +50,21 @@ describe('findSpecies — 키워드에서 수종 찾기', () => {
     // '보리수나무'가 있고 '수국'도 있다 — 부분 문자열 충돌을 확인
     expect(findSpecies('보리수나무묘목')?.name).toBe('보리수나무');
   });
+  it('흔한 원예 표현이 수종으로 오인되지 않는다 — 별칭은 부분문자열로 걸린다', () => {
+    // findSpecies 는 t.includes(key) 다. 그래서 짧은 별칭 하나가 표 전체를 오염시킨다:
+    // '배'를 배나무 별칭에 넣으면 '배수·배치·배양토'가 전부 배나무가 되고,
+    // '밤'을 넣으면 '한밤중 물주기'가 밤나무가 된다. 그래서 한 글자 별칭은 넣지 않았다.
+    // 별칭을 추가할 때 이 목록이 깨지면, 추가한 별칭이 너무 짧은 것이다.
+    expect(findSpecies('화분 배수가 안 될 때 속흙 확인')).toBeUndefined();
+    expect(findSpecies('묘목 배치 간격 정하기')).toBeUndefined();
+    expect(findSpecies('배양토 고르는 법')).toBeUndefined();
+    expect(findSpecies('한밤중 물주기는 피하세요')).toBeUndefined();
+    expect(findSpecies('밤에 기온이 떨어질 때 서리 대비')).toBeUndefined();
+    // 진짜 수종은 그대로 잡혀야 한다 — 위 방어가 과하면 이쪽이 깨진다
+    expect(findSpecies('배나무 묘목 심는 시기')?.name).toBe('배나무');
+    expect(findSpecies('밤나무 밤송이 수확')?.name).toBe('밤나무');
+    expect(findSpecies('배롱나무 전정 시기')?.name).toBe('배롱나무');
+  });
   it('모르는 소재는 undefined — 표가 파이프라인을 막지 않는다', () => {
     expect(findSpecies('9월 정원 준비')).toBeUndefined();
     expect(findSpecies('')).toBeUndefined();
