@@ -151,3 +151,61 @@ export function appendSpecies(
     return true;
   } catch { return false; }
 }
+
+/**
+ * 이미 있는 수종에 별칭 하나를 덧붙인다(2026-09-05).
+ *
+ * appendSpecies 와 기계가 다르다. 저쪽은 파일 끝에 새 블록을 붙이면 그만이지만, 별칭은
+ * 기존 블록 '안'을 고쳐야 한다. aliases 줄이 있으면 목록에 끼워 넣고, 없으면 latin 줄
+ * 다음에 새로 만든다.
+ *
+ * 왜 필요한가. 사장님이 '백일홍'으로 딱지를 붙인 영상이 '배롱나무' 편에서 배제됐다. 같은
+ * 나무라 학명이 겹쳐서 appendSpecies 로는 못 넣는다(학명 중복이면 건너뛴다) — 새 수종이
+ * 아니라 다른 이름일 뿐이기 때문이다.
+ *
+ * ⚠ 부르는 쪽이 checkAlias 로 먼저 걸러야 한다. 여기서는 '이미 있나'만 본다 — 짧거나
+ * 위험한 별칭인지 판정하는 것은 speciesLearn.checkAlias 의 일이다.
+ */
+export function appendSpeciesAlias(
+  name: string,
+  alias: string,
+  file = path.join('data', 'species.yaml'),
+): boolean {
+  const nm = String(name ?? '').trim();
+  const al = String(alias ?? '').trim();
+  if (!nm || !al || nm === al) return false;
+  try {
+    const cur = loadSpecies(file);
+    const sp = cur.find((s) => s.name === nm);
+    if (!sp) return false;
+    if (sp.name === al || (sp.aliases ?? []).includes(al)) return false;
+
+    const text = fs.readFileSync(file, 'utf-8');
+    const lines = text.split('\n');
+    // 블록의 시작 — 들여쓰기 2칸에 이름 그대로
+    const head = lines.findIndex((l) => l === `  ${nm}:`);
+    if (head < 0) return false;
+    // 블록의 끝 — 다음 수종이 시작하기 전까지
+    let end = lines.length;
+    for (let i = head + 1; i < lines.length; i++) {
+      if (/^  \S/.test(lines[i] ?? '')) { end = i; break; }
+    }
+    const aliasAt = lines.findIndex((l, i) => i > head && i < end && /^    aliases:\s*\[/.test(l));
+    if (aliasAt >= 0) {
+      const line = lines[aliasAt]!;
+      const m = /^(\s*aliases:\s*\[)(.*)(\])\s*$/.exec(line);
+      if (!m) return false;
+      const inner = m[2]!.trim();
+      lines[aliasAt] = `${m[1]}${inner ? `${inner}, ` : ''}${al}${m[3]}`;
+    } else {
+      const latinAt = lines.findIndex((l, i) => i > head && i < end && /^    latin:/.test(l));
+      const at = latinAt >= 0 ? latinAt + 1 : head + 1;
+      lines.splice(at, 0, `    aliases: [${al}]`);
+    }
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, lines.join('\n'), 'utf-8');
+    fs.renameSync(tmp, file); // 원자적 교체 — 쓰다 죽어도 사전이 깨지지 않는다
+    resetSpeciesCache();
+    return true;
+  } catch { return false; }
+}

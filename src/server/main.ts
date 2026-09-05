@@ -55,7 +55,8 @@ import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsS
 import { shortsStore, shortsQaPublishBlockReason } from '../content/shorts';
 import { addMedia, listMedia, updateMedia, removeMedia, mediaDir, matchMedia } from '../content/mediaLibrary';
 import { probeDuration } from '../tools/shortsCommon';
-import { findSpecies } from '../content/species';
+import { findSpecies, loadSpecies, appendSpecies, appendSpeciesAlias } from '../content/species';
+import { learnSpeciesLabel } from '../content/speciesLearn';
 import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, autoDailyCapFor, autoCapApplies, type ShortsPlatform } from '../content/shortsPlatform';
 import { pickWriter, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
@@ -105,6 +106,8 @@ import { publishDraftToNaver, naverPublishCreds, collectNaverMetrics, blogSkillP
 import { coerceBlogDraft } from '../output/smarteditor';
 import type { MetricSample } from '../analytics/performance';
 import { classifyAndAssign, getStatuses, reassign, setIngestStatus } from '../tools/classify';
+import { firstJson } from '../tools/classify';
+import { llm } from '../llm/client';
 import { transcribe, sttAvailable } from '../voice/stt';
 import { synthesize, listKoreanVoices, ttsAvailable } from '../voice/tts';
 import { getVoiceSettings, setVoiceSettings } from '../voice/setting';
@@ -1375,6 +1378,36 @@ function startAfterPrimary(primaryId: string, selfId: string, start: (inherit: b
  *
  * 수종 별칭은 사전이 판정한다 — '음나무'로 올린 영상이 '엄나무' 편에서 배제된 적이 있다.
  */
+/**
+ * 보관소 딱지로 수종 사전을 배운다(2026-09-05, 사용자 요청: "보관소에 넣으면 자동으로 사전에").
+ *
+ * 왜 '별칭'이 핵심인가. 사장님이 '백일홍'으로 올린 영상이 '배롱나무' 편에서 배제됐다.
+ * 여기서 새 수종으로 넣으려 하면 학명(Lagerstroemia indica)이 배롱나무와 겹쳐서
+ * appendSpecies 가 조용히 건너뛴다 — 사고가 그대로 남는다. 배울 것은 별칭이다.
+ *
+ * 기다리지 않는다. 업로드 응답은 바로 나가고 학습은 뒤에서 돈다 — 사전은 다음 런에 쓰이지,
+ * 이 응답에 쓰이지 않는다. 실패는 learnSpeciesLabel 안에서 전부 삼킨다.
+ */
+function learnMediaLabel(label: string | undefined): void {
+  const name = String(label ?? '').trim();
+  if (!name) return;
+  void learnSpeciesLabel(name, {
+    list: () => loadSpecies(),
+    known: (n) => !!findSpecies(n),
+    addAlias: (sp, alias) => appendSpeciesAlias(sp, alias),
+    addSpecies: (e) => appendSpecies(e),
+    log: (m) => console.log('[보관소]', m),
+    ask: async (question) => {
+      const res = await llm.chat({
+        model: resolveAssignment()['micro'], // 사전 한 줄 판정 — 저지연 등급이면 충분하다
+        messages: [{ role: 'user', content: question }],
+        maxOutputTokens: 500, temperature: 0, think: false, format: 'json',
+      });
+      return firstJson<unknown>(res.text ?? '');
+    },
+  }).then((msg) => { if (msg) console.log('[보관소]', msg); });
+}
+
 function mediaForTopic(opts: {
   brand?: string; text: string; attached?: string[]; attachedVideos?: string[];
 }): { userAssets?: string[]; userVideos?: string[] } {
@@ -3609,6 +3642,7 @@ app.post('/media', async (c) => {
     }));
   }
   if (!added.length) return c.json({ error: '보관할 파일이 없습니다', skipped }, 400);
+  learnMediaLabel(species); // 딱지가 사전에 없는 이름이면 배워 둔다 — 다음 런부터 이 소재가 걸린다
   return c.json({ ok: true, added, skipped });
 });
 app.get('/media', (c) => c.json({ media: listMedia(activeBrandSlug() || undefined) }));
@@ -3620,6 +3654,7 @@ app.patch('/media/:id', async (c) => {
     ...(b.tags !== undefined ? { tags: b.tags } : {}),
     ...(b.note !== undefined ? { note: b.note || undefined } : {}),
   });
+  if (up && b.species) learnMediaLabel(b.species); // 나중에 딱지를 고쳐 붙일 때도 같은 학습
   return up ? c.json({ ok: true, item: up }) : c.json({ error: 'unknown media' }, 404);
 });
 app.delete('/media/:id', (c) => (removeMedia(c.req.param('id') ?? '')
