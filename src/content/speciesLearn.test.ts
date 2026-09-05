@@ -89,6 +89,16 @@ describe('readVerdict — LLM 응답 좁히기(순수)', () => {
     const v = readVerdict({ kind: 'new', latin: 'Ficus carica', leaf: '어긋나기, 손바닥 모양' }, LIST);
     expect(v).toMatchObject({ kind: 'new', latin: 'Ficus carica', leaf: '어긋나기, 손바닥 모양' });
   });
+  it('괄호 이명이 붙은 학명은 속명 종소명만 남긴다', () => {
+    // 실측(2026-09-06): 자동 학습이 'Citrus japonica (Fortunella japonica)' 를 그대로 써서
+    // 사전 무결성 테스트가 잡았다. 이 문자열이 이미지 프롬프트의 종 앵커로 그대로 들어간다.
+    const v = readVerdict({ kind: 'new', latin: 'Citrus japonica (Fortunella japonica)' }, LIST);
+    expect(v.latin).toBe('Citrus japonica');
+  });
+  it('학명 꼴이 아니면 unknown — 틀린 학명보다 없는 편이 낫다', () => {
+    expect(readVerdict({ kind: 'new', latin: '금귤나무' }, LIST).kind).toBe('unknown');
+    expect(readVerdict({ kind: 'new', latin: 'Citrus' }, LIST).kind).toBe('unknown');
+  });
   it('쓰레기 입력은 unknown — 파싱 실패가 사전을 오염시키면 안 된다', () => {
     for (const bad of [null, undefined, {}, { kind: 'alias' }, 'nope', 42]) {
       expect(readVerdict(bad, LIST).kind).toBe('unknown');

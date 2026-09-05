@@ -18,6 +18,7 @@
  * 배웠다고 업로드가 실패하면 안 된다.
  */
 import type { Species } from './species';
+import { normalizeLatinName } from './species';
 
 /**
  * 별칭으로 써도 되는 이름인가(순수) — 이 파일에서 가장 중요한 함수다.
@@ -136,7 +137,9 @@ export function readVerdict(raw: unknown, list: readonly Species[]): LabelVerdic
     return { kind: 'unknown' };
   }
   if (kind === 'new') {
-    const latin = str('latin');
+    // LLM 은 "Citrus japonica (Fortunella japonica)" 처럼 이명을 괄호로 덧붙인다(실측 2026-09-06).
+    // 이 값이 그대로 이미지 프롬프트의 종 앵커가 되므로 여기서 '속명 종소명'으로 좁힌다.
+    const latin = normalizeLatinName(str('latin') ?? '');
     if (!latin) return { kind: 'unknown' }; // 학명 없이는 앵커 값이 없다
     return {
       kind: 'new', latin,

@@ -36,7 +36,7 @@ import { renderShortsVideo, ensureShortsDownload, extractFirstFrame, cutVideoSeg
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { inheritShortsAssets, inheritedSceneImages, inheritedClips, writeSceneImageMap } from '../content/shortsInherit';
-import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom } from '../content/species';
+import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom, normalizeLatinName } from '../content/species';
 import { planAssetScenes, styleRefs, planVideoSegments, orderAssetsByAssignment, type VideoSegment } from '../content/userAssets';
 import { describeUserMedia, mediaPlanGuide, assignMediaToScenes } from './shortsMediaBrief';
 import { generateTitleArt } from './shortsTitleArt';
@@ -1117,11 +1117,7 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
  * 통과 조건: 첫 낱말은 대문자로 시작(속명), 둘째 낱말은 소문자(종소명), 둘 다 알파벳.
  * 품종명(세 번째 낱말)은 잘라낸다 — 이미지 모델에 도움이 안 되고 오히려 노이즈다.
  */
-export function normalizeLatinName(raw: string): string {
-  const t = String(raw ?? '').replace(/[()[\]]/g, ' ').trim();
-  const m = /^([A-Z][a-z]+)\s+([a-z][a-z-]+)\b/.exec(t);
-  return m ? `${m[1]} ${m[2]}` : '';
-}
+export { normalizeLatinName } from '../content/species'; // 수종 데이터 규칙이라 사전 옆으로 옮겼다(2026-09-06)
 
 /**
  * 숏폼 씬 이미지(gpt-image-2, 세로 9:16) 프롬프트 조립 — shorts-gen 의 스타일 일관성(전 씬 공통 앵커

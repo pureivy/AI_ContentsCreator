@@ -35,6 +35,9 @@ import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedT
 import { rankSearchDemand, searchDemandBlock, unconvertedSubjects, normalizeTerm } from '../analytics/ytSearchDemand';
 import { shortsSearchTerms, igReelViews } from '../analytics/shortsPerf';
 import { axisPerformance, axisBlock } from '../analytics/igAxis';
+import { unusedStock, stockBlock, usedSpecies } from '../content/mediaStock';
+import { shortsStore } from '../content/shorts';
+import { listMedia } from '../content/mediaLibrary';
 import { findSpecies } from '../content/species';
 
 export interface AutoCycleDeps<T = string> {
@@ -525,6 +528,22 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   // 인스타 소재 축 성적(2026-09-04 사용자 확정) — 같은 소재라도 각도로 도달이 갈린다.
   // 실측 111편: 꽃·개화 중앙 1,362 · 전정 943 … 기타 557(39편, 가장 큰 덩어리이자 최하위권).
   // "이 소재를 다뤄라"가 아니라 "각도를 이렇게 잡아라"로 쓴다 — 계절과 싸우지 않게.
+  // 실촬영 재고(2026-09-06) — 아직 화면에 안 나간 사장님 촬영본이 있는 수종.
+  // 소진 판정은 clips/user_*.mp4 존재로 본다(배정 시도가 아니라 구워진 것이 근거).
+  const stockBlockStr = (() => {
+    try {
+      const brandSlug = activeBrandSlug() || undefined;
+      const canon = (n: string): string => findSpecies(n)?.name ?? n;
+      const used = usedSpecies(shortsStore().list().filter((x) => !brandSlug || x.brand === brandSlug), {
+        hasUserClip: (id) => {
+          try { return fs.readdirSync(path.join(CONFIG.dataDir, 'shorts', id, 'clips')).some((f) => f.startsWith('user_')); }
+          catch { return false; }
+        },
+        speciesOf: (t) => findSpecies(t)?.name,
+      });
+      return stockBlock(unusedStock(listMedia(brandSlug), used, canon));
+    } catch { return ''; }
+  })();
   const axisBlockStr = (() => {
     try { return axisBlock(axisPerformance(igReelViews(activeBrandSlug() || undefined))); }
     catch { return ''; } // fail-open
@@ -564,6 +583,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     (() => { const b = themeRotationBlock(getBrand()?.topicThemes, themeCov); return b ? `${b}\n\n` : ''; })() +
     (searchBlock ? `${searchBlock}\n\n` : '') +
     (axisBlockStr ? `${axisBlockStr}\n\n` : '') +
+    (stockBlockStr ? `${stockBlockStr}\n\n` : '') +
     jargonLine +
     (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +

@@ -113,6 +113,22 @@ export function stripSpeciesNamePrefix(name: string, leaf: string | undefined): 
 }
 
 /**
+ * 학명 표기를 '속명 종소명' 하나로 좁힌다(순수).
+ *
+ * LLM 은 "Citrus japonica (Fortunella japonica)" 처럼 이명을 괄호로 덧붙이곤 한다. 실제로
+ * 자동 학습이 그 값을 사전에 써서 무결성 테스트가 잡았다(2026-09-06). 이 문자열은 그대로
+ * 이미지 프롬프트의 종 앵커로 들어가므로, 괄호가 붙으면 모델이 종을 흐리게 잡는다.
+ * 형식에 안 맞으면 빈 문자열 — 학명 없이 가는 게 틀린 학명보다 낫다.
+ *
+ * (종전엔 orchestrator/shorts.ts 에 있었다. 수종 데이터의 규칙이므로 사전 옆으로 옮겼다.)
+ */
+export function normalizeLatinName(raw: string): string {
+  const t = String(raw ?? '').replace(/[()[\]]/g, ' ').trim();
+  const m = /^([A-Z][a-z]+)\s+([a-z][a-z-]+)\b/.exec(t);
+  return m ? `${m[1]} ${m[2]}` : '';
+}
+
+/**
  * 새 수종을 사전에 덧붙인다(2026-09-04) — 표에 없던 종이 나오면 한 번 기록해 다음부터 재사용한다.
  *
  * 왜 자동으로 쌓는가. 표에 없으면 매 편 디렉터가 특징을 새로 써내고, 그 값이 편마다 달라진다 —
@@ -128,15 +144,17 @@ export function appendSpecies(
   file = path.join('data', 'species.yaml'),
 ): boolean {
   if (!entry.name || !entry.latin) return false;
+  const latin = normalizeLatinName(entry.latin); // 괄호 이명 등 비표준 표기를 여기서 막는다
+  if (!latin) return false;
   try {
     const cur = loadSpecies(file);
-    if (cur.some((s) => s.name === entry.name || s.latin === entry.latin)) return false;
+    if (cur.some((s) => s.name === entry.name || s.latin === latin)) return false;
     const q = (v: string): string => JSON.stringify(String(v)); // YAML 안전 인용(콜론·따옴표 포함 대비)
     const leaf = stripSpeciesNamePrefix(entry.name, entry.leaf); // "이름 — 특징"에서 이름 제거
     const lines = [
       '',
       `  ${entry.name}:`,
-      `    latin: ${entry.latin}`,
+      `    latin: ${latin}`,
       ...(entry.type ? [`    type: ${q(entry.type)}`] : []),
       ...(leaf ? [`    leaf: ${q(leaf)}`] : []),
       ...(entry.form ? [`    form: ${q(entry.form)}`] : []),
