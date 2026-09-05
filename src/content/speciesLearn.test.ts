@@ -176,6 +176,31 @@ describe('appendSpeciesAlias — 기존 블록 안을 고친다', () => {
     });
   });
 
+  it('자동으로 붙은 별칭에 표시를 남긴다 — LLM 은 틀릴 수 있다', () => {
+    // 실측: haiku 가 '도장나무'(회양목의 이명)를 참나무라고 답했다. 표시가 없으면
+    // 사람이 무엇을 검토해야 할지 알 수 없다.
+    withFile(YAML, (f) => {
+      appendSpeciesAlias('배롱나무', '백일홍', f);
+      const line = fs.readFileSync(f, 'utf-8').split('\n').find((l) => l.includes('# auto'))!;
+      expect(line).toContain('# auto(사람 검토 전): 백일홍');
+    });
+  });
+
+  it('두 번째 자동 별칭은 표시에 이어 붙는다 — 주석이 겹치지 않는다', () => {
+    withFile(YAML, (f) => {
+      appendSpeciesAlias('배롱나무', '백일홍', f);
+      appendSpeciesAlias('배롱나무', '목백일홍', f);
+      const out = fs.readFileSync(f, 'utf-8');
+      const line = out.split('\n').find((l) => l.includes('aliases:') && l.includes('목백일홍'))!;
+      expect(line).toContain('# auto(사람 검토 전): 백일홍, 목백일홍');
+      expect((line.match(/# auto/g) ?? []).length).toBe(1); // 주석이 두 번 붙으면 안 된다
+      resetSpeciesCache();
+      // 주석이 붙어도 YAML 이 읽힌다
+      const sp2 = loadSpecies(f).find((x) => x.name === '배롱나무')!;
+      expect(sp2.aliases).toEqual(['백일홍나무', '흰배롱나무', '백일홍', '목백일홍']);
+    });
+  });
+
   it('덧붙인 뒤에도 YAML 이 멀쩡하다 — 다른 항목이 안 깨진다', () => {
     withFile(YAML, (f) => {
       appendSpeciesAlias('배롱나무', '백일홍', f);

@@ -190,17 +190,28 @@ export function appendSpeciesAlias(
     for (let i = head + 1; i < lines.length; i++) {
       if (/^  \S/.test(lines[i] ?? '')) { end = i; break; }
     }
+    // 자동으로 붙은 별칭에는 표시를 남긴다 — LLM 판정은 틀릴 수 있다(실측: haiku 가 '도장나무'를
+    // 회양목이 아니라 참나무라 했다). 표시가 없으면 사람이 무엇을 검토해야 할지 알 수 없다.
+    // 꼬리말을 괄호 안에 고정해 둔다 — 이름 목록만 파싱하면 되므로 두 번째 별칭이 붙어도
+    // 꼬리말이 이름으로 빨려 들어가지 않는다.
+    const mark = (prev: string, added: string): string => {
+      const m = /^(.*?)\s*#\s*auto\(사람 검토 전\):\s*(.*)$/.exec(prev);
+      const names = m ? `${m[2]!.trim()}, ${added}` : added;
+      const body = (m ? m[1]! : prev).replace(/\s+$/, '');
+      return `${body}  # auto(사람 검토 전): ${names}`;
+    };
     const aliasAt = lines.findIndex((l, i) => i > head && i < end && /^    aliases:\s*\[/.test(l));
     if (aliasAt >= 0) {
       const line = lines[aliasAt]!;
-      const m = /^(\s*aliases:\s*\[)(.*)(\])\s*$/.exec(line);
+      const m = /^(\s*aliases:\s*\[)([^\]]*)(\])(.*)$/.exec(line);
       if (!m) return false;
       const inner = m[2]!.trim();
-      lines[aliasAt] = `${m[1]}${inner ? `${inner}, ` : ''}${al}${m[3]}`;
+      const rebuilt = `${m[1]}${inner ? `${inner}, ` : ''}${al}${m[3]}`;
+      lines[aliasAt] = mark(`${rebuilt}${m[4]}`, al);
     } else {
       const latinAt = lines.findIndex((l, i) => i > head && i < end && /^    latin:/.test(l));
       const at = latinAt >= 0 ? latinAt + 1 : head + 1;
-      lines.splice(at, 0, `    aliases: [${al}]`);
+      lines.splice(at, 0, mark(`    aliases: [${al}]`, al));
     }
     const tmp = `${file}.tmp`;
     fs.writeFileSync(tmp, lines.join('\n'), 'utf-8');

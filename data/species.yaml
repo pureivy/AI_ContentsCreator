@@ -130,7 +130,7 @@ species:
 
   회양목:
     latin: Buxus sinica
-    aliases: [회양목나무]
+    aliases: [회양목나무, 도장나무]  # auto(사람 검토 전): 도장나무
     type: 활엽 관목(상록)
     leaf: 마주나기, 작고 두꺼운 타원형 홑잎, 광택
     form: 촘촘한 덤불 — 다듬어 생울타리·경계목으로

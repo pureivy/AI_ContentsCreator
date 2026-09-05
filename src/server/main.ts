@@ -1399,7 +1399,10 @@ function learnMediaLabel(label: string | undefined): void {
     log: (m) => console.log('[보관소]', m),
     ask: async (question) => {
       const res = await llm.chat({
-        model: resolveAssignment()['micro'], // 사전 한 줄 판정 — 저지연 등급이면 충분하다
+        // standard 등급을 쓴다. micro(haiku)로 실측하니 '도장나무'(회양목의 이명)를 한 번은
+        // '모르겠다', 한 번은 '참나무'라고 답했다 — 틀린 별칭은 그 수종 그림을 통째로 망친다.
+        // sonnet 은 같은 질문에 회양목으로 맞혔다. 업로드마다 한 번뿐인 호출이라 값이 싸다.
+        model: resolveAssignment()['standard'],
         messages: [{ role: 'user', content: question }],
         maxOutputTokens: 500, temperature: 0, think: false, format: 'json',
       });
