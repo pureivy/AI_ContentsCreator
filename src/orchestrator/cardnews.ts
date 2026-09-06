@@ -33,6 +33,7 @@ import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from 
 import { generateImagesForDraft, searchCardRefs } from '../tools/blog_skills';
 import { pruneByPrefix, humanBytes } from '../util/prune';
 import { stdModel, visionCapable } from './visionCommon';
+import { findSpecies, speciesAnchor } from '../content/species';
 
 const RUNNING = new Set<string>();
 export function isCardNewsRunning(id: string): boolean { return RUNNING.has(id); }
@@ -593,12 +594,21 @@ async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalys
 export function buildCardImagePrompt(a: {
   headline: string; body?: string; scene: string; style: string; title: string;
   index: number; total: number; hasRefs: boolean; preset: string;
+  /** 수종 앵커(2026-09-06) — 숏폼이 쓰던 것과 같은 값. 없으면 종전대로 무주입. */
+  subject?: string; subjectLatin?: string;
 }): string {
   const { headline, body, style, title, index: i, total, hasRefs, preset } = a;
   const ord = i === 0 ? '표지(1번)' : `${i + 1}번`;
   const scene = a.scene.trim() || `${title} 를 상징하는 한국 생활 장면`;
   const p: string[] = [];
   p.push(`[전체 톤·스타일 — 모든 슬라이드 공통] ${style}`);
+  // 수종 앵커 — 카드뉴스엔 이게 아예 없었다(실사고 2026-09-06). "대추나무 결실주" 카드의
+  // 식물 그림이 대추나무가 아니었는데, 프롬프트에 학명도 형태도 한 줄 없었기 때문이다.
+  // 숏폼은 2026-09-03 사고 뒤 앵커를 넣었는데 카드뉴스만 빠져 있었다. 같은 값을 같은 꼴로 넣는다.
+  if (a.subjectLatin || a.subject) {
+    const head = a.subjectLatin ? `${a.subjectLatin}${a.subject ? ` (${a.subject})` : ''}` : a.subject;
+    p.push(`[대상 식물 — 화면의 나무·풀은 반드시 이 종] ${head}. 잎 모양·잎차례·수형을 이 종의 실제 모습대로 그린다. 다른 종으로 대체하거나 일반적인 나무로 뭉개지 마라.`);
+  }
   if (hasRefs) p.push('[레퍼런스 스타일 차용] 첨부된 레퍼런스 이미지의 색 팔레트·타이포 형식·질감·여백 규칙·대비 감각만 차용한다. 특정 오브젝트·배치·이미지는 복제하지 않고, 이 슬라이드만의 구도와 시각 모티프를 새로 구성한다.');
   if (preset === 'handwritten_poster') {
     // 손글씨 임베드 포스터 — 실사 사진 위에 손글씨 캘리그래피 한글을 깊이·가림(occlusion)·원근으로 장면에
@@ -979,9 +989,13 @@ export async function runCardNewsJob(
     // 자소 정확도·완성 기준). gpt-image-2 가 한글 문구까지 직접 그리므로 '한 글자도 바꾸지 말고/자소
     // 결합 틀리면 실패'를 강하게 명시(이 프로젝트 무이모지 정책 유지, 페이지 번호는 넣지 않음).
     const hasRefs = refs.refPaths.length > 0;
+    // 수종 사전 조회(2026-09-06) — 숏폼과 같은 근거를 카드뉴스도 쓴다.
+    const known = findSpecies(`${card.keyword ?? ''} ${plan.title}`);
+    if (known) say(`수종 사전 적중 — ${known.name} (${known.latin})${known.verified ? '' : ' · 형태 묘사 미검토'}`);
     const cardPrompt = (i: number): string => buildCardImagePrompt({
       headline: plan.slides[i]!.headline, body: plan.slides[i]!.body, scene: design.prompts[i] ?? '',
       style: design.style, title: plan.title, index: i, total, hasRefs, preset: design.preset,
+      ...(known ? { subject: speciesAnchor(known), subjectLatin: known.latin } : {}),
     });
     const bgDraft = { imageSlots: plan.slides.map((s, i) => ({ alt: s.headline, prompt: cardPrompt(i) })) };
     const bgDraftPath = path.join(dir, 'bg-draft.json');

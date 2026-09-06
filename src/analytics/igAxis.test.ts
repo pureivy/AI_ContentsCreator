@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyAxis, axisPerformance, axisBlock, AXIS_NONE, IG_AXES } from './igAxis';
+import { classifyAxis, axisPerformance, axisBlock, isContainerTopic, AXIS_NONE, IG_AXES } from './igAxis';
 
 describe('classifyAxis — 소재 축 판별(순수)', () => {
   it('표현으로 축을 잡는다', () => {
@@ -72,5 +72,29 @@ describe('axisBlock — 프롬프트 블록(순수)', () => {
   });
   it('계절이 우선이라고 못박는다 — 축 신호가 시의성을 이기면 안 된다', () => {
     expect(axisBlock(perf)).toContain('계절과 싸우지 마라');
+  });
+});
+
+describe('isContainerTopic — 컨테이너 소품 게이트(순수)', () => {
+  it('화분·실내 주제만 참', () => {
+    expect(isContainerTopic('고무나무 화분 분갈이')).toBe(true);
+    expect(isContainerTopic('베란다 채소 키우기')).toBe(true);
+    expect(isContainerTopic('실내 공기정화 식물')).toBe(true);
+  });
+  it('노지 수종 주제는 거짓 — 이 편에 화분 소품이 들어가면 종이 틀어진다', () => {
+    // 실사고(2026-09-06): 이 제목의 씬2 에 "색이 바랜 화분"이 배정돼 대추나무가 아닌 그림이 나왔다.
+    expect(isContainerTopic('대추나무 결실주 대추나무 결실주, 열매보다 가지를 먼저 봅니다')).toBe(false);
+    expect(isContainerTopic('배롱나무 묘목 심는 시기')).toBe(false);
+    expect(isContainerTopic('과수원 사과나무 전정')).toBe(false);
+  });
+  it('빈 값은 거짓', () => {
+    expect(isContainerTopic('')).toBe(false);
+    expect(isContainerTopic('   ')).toBe(false);
+  });
+  it('축 분류와 같은 표현을 쓴다 — 두 곳이 갈라지면 한쪽만 고치게 된다', () => {
+    const axisTest = IG_AXES.find((a) => a.axis === '화분·실내')!.test;
+    for (const t of ['화분 물주기', '분갈이 시기', '노지 월동']) {
+      expect(isContainerTopic(t)).toBe(axisTest.test(t));
+    }
   });
 });

@@ -16,9 +16,29 @@ export function parseBadScenes(issues: Array<{ scene?: unknown }>, count: number
   return parseBadIndices(issues, 'scene', count);
 }
 
-/** 재생성 프롬프트 — 원본 + 글자·구도 강화 접미(순수 문자열). */
-export function buildRetryPrompt(base: string): string {
-  return `${base} 이미지 안에 어떤 글자·문자·숫자·워터마크도 넣지 말 것. 주 피사체를 화면 안에 온전히, 안정적 구도로.`;
+/**
+ * 재생성 프롬프트 — 원본 + 강화 접미 + QA 가 지적한 사유(순수 문자열).
+ *
+ * 사유를 되먹이는 이유(실사고 2026-09-06). "대추나무 결실주" 편에서 QA 가 씬2를 정확히
+ * 짚었다 — "직선으로 곧게 뻗은 줄기와 수형이 대추나무 특유의 지그재그 가지 형태와 다름".
+ * 그런데 재생성은 원본 프롬프트만 물려받아 같은 실패를 반복했다. 무엇이 틀렸는지 모르면
+ * 같은 그림이 다시 나온다. 수정요청 경로(shorts.ts)가 이미 쓰던 방식과 같은 꼴로 붙인다.
+ */
+export function buildRetryPrompt(base: string, issue?: string): string {
+  const note = String(issue ?? '').trim();
+  return `${base} 이미지 안에 어떤 글자·문자·숫자·워터마크도 넣지 말 것. 주 피사체를 화면 안에 온전히, 안정적 구도로.`
+    + (note ? `\n[직전 시도의 문제 — 최우선으로 고칠 것] ${note.slice(0, 200)}` : '');
+}
+
+/** 그 씬에 대해 QA 가 적은 사유를 꺼낸다(순수). 없으면 undefined. */
+export function reasonFor(
+  issues: ReadonlyArray<{ scene?: unknown; problem?: unknown } | null | undefined>,
+  scene: number | undefined,
+): string | undefined {
+  if (!Number.isInteger(scene)) return undefined;
+  const hit = issues.find((x) => Math.floor(Number(x?.scene)) === scene);
+  const t = String(hit?.problem ?? '').trim();
+  return t || undefined;
 }
 
 /** 불량 순번(1-base, checked 기준) → 원본 images 인덱스(순수). 범위밖은 제외. */
@@ -77,7 +97,11 @@ export async function qaSceneImages(opts: {
     const retryManifestPath = path.join(opts.dir, 'scenes-retry-manifest.json');
     const origIdxs = mapBadToOrig(bad, checked);
     const retryDraft = {
-      imageSlots: origIdxs.map((orig) => ({ alt: `scene ${orig + 1}`, prompt: buildRetryPrompt(opts.scenePrompts[orig] ?? '') })),
+      imageSlots: origIdxs.map((orig, j) => ({
+        alt: `scene ${orig + 1}`,
+        // bad[j] 는 checked 기준 순번 — rawIssues 도 같은 기준이라 그대로 대조한다
+        prompt: buildRetryPrompt(opts.scenePrompts[orig] ?? '', reasonFor(rawIssues, bad[j])),
+      })),
     };
     fs.writeFileSync(retryDraftPath, JSON.stringify(retryDraft, null, 2), 'utf-8');
     const rr = await generateImagesForDraft(retryDraftPath, retryDir, retryManifestPath,

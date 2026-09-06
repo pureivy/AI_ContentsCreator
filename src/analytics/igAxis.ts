@@ -32,6 +32,23 @@ export const IG_AXES: ReadonlyArray<{ axis: string; test: RegExp }> = [
   { axis: '관리·병해', test: /물주기|거름|비료|병해|해충|월동|보호/ },
 ];
 
+/**
+ * 이 주제가 '화분·실내' 재배 이야기인가(순수).
+ *
+ * 축 분류와 같은 표현을 쓴다 — 두 곳이 갈라지면 한쪽만 고쳐 놓고 고쳤다고 믿게 된다.
+ * 쓰임은 다르다. 축 분류는 성적을 묶는 데 쓰고, 이 함수는 이미지 프롬프트가 화분·받침
+ * 같은 컨테이너 소품을 넣어도 되는지 판정하는 데 쓴다.
+ *
+ * 왜 필요한가(실측 2026-09-06). "대추나무 결실주" 편의 씬2 프롬프트에 생활감 로테이션이
+ * "색이 바랜 화분, 물 자국이 남은 받침"을 넣었다. 결실주는 과수원 나무인데 화분을 지시하니
+ * 모델이 화분에 심긴 관엽식물을 그렸고, 대추나무가 아니게 됐다.
+ */
+export function isContainerTopic(text: string): boolean {
+  const t = String(text ?? '');
+  if (!t.trim()) return false;
+  return (IG_AXES.find((a) => a.axis === '화분·실내')?.test ?? /$^/).test(t);
+}
+
 /** 축에 안 걸리는 소재의 이름 — 실측에서 가장 큰 덩어리이자 최하위권이다. */
 export const AXIS_NONE = '기타';
 

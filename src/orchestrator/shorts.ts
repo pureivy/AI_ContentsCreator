@@ -37,6 +37,7 @@ import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { inheritShortsAssets, inheritedSceneImages, inheritedClips, writeSceneImageMap } from '../content/shortsInherit';
 import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom, normalizeLatinName } from '../content/species';
+import { isContainerTopic } from '../analytics/igAxis';
 import { planAssetScenes, styleRefs, planVideoSegments, orderAssetsByAssignment, type VideoSegment } from '../content/userAssets';
 import { describeUserMedia, mediaPlanGuide, assignMediaToScenes } from './shortsMediaBrief';
 import { generateTitleArt } from './shortsTitleArt';
@@ -1158,11 +1159,21 @@ const DISTANCE: readonly string[] = [
 ];
 // 생활감 — 생성 이미지가 가장 티 나는 지점은 '너무 깨끗하다'는 것이다. 원예 소재에 실제로 있는
 // 지저분함을 지시로 준다. 지어내는 게 아니라 현실을 복원하는 쪽이다.
+// ⚠ 화분·받침은 컨테이너 재배 소품이다. 노지 수종 편에 들어가면 화면이 통째로 뒤집힌다 —
+// 실사고(2026-09-06): "대추나무 결실주"(과수원 나무) 씬2 에 "색이 바랜 화분"이 배정되자
+// 모델이 화분에 심긴 관엽식물을 그렸고, 대추나무가 아니게 됐다. 씬 QA 가 잡아 재생성했지만
+// 재생성은 같은 프롬프트를 물려받으므로 화분이 그대로 따라가 또 틀렸다.
+// 그래서 컨테이너 소품은 화분·실내 주제일 때만 쓴다(TEXTURE_POTTED).
 const TEXTURE: readonly string[] = [
   '흙이 묻은 손과 손톱, 쓴 자국이 있는 도구',
   '고르지 않은 흙 표면, 떨어진 잎 몇 장',
-  '색이 바랜 화분, 물 자국이 남은 받침',
   '벌레 먹은 잎이나 마른 끝이 한두 장 섞여',
+  '오래 써 길이 든 장갑과 앞치마',
+];
+/** 화분·실내 주제에서만 쓰는 생활감 — 노지 편에 넣으면 종 자체가 틀어진다. */
+const TEXTURE_POTTED: readonly string[] = [
+  '색이 바랜 화분, 물 자국이 남은 받침',
+  '흙이 묻은 손과 손톱, 쓴 자국이 있는 도구',
   '오래 써 길이 든 장갑과 앞치마',
 ];
 const HOOK_PUSH: readonly string[] = [
@@ -1180,6 +1191,8 @@ const HOOK_PUSH: readonly string[] = [
  */
 export function buildSceneImagePrompt(a: {
   style: string; scene: string; index: number; total: number; seed?: string; subject?: string; subjectLatin?: string; seasonal?: string;
+  /** 화분·실내 주제인가 — 컨테이너 소품(화분·받침)을 써도 되는지 가른다(2026-09-06). */
+  potted?: boolean;
 }): string {
   const { style, index: i, total, seed, subject, subjectLatin, seasonal } = a;
   const scene = a.scene.trim() || '주제를 상징하는 한국 생활 장면';
@@ -1209,7 +1222,7 @@ export function buildSceneImagePrompt(a: {
   p.push(`장면(씬 ${i + 1}/${total}${isHook ? ', 훅' : ''}): ${scene}.${isHook ? at(HOOK_PUSH, vid, 0) : ''}`);
   p.push(`구도: 세로 9:16. ${at(ANGLE, sc, 1)} ${at(DISTANCE, sc, 2)} 담는다.`);
   p.push(`빛과 심도(전 씬 동일): ${at(LIGHTING, vid, 3)}. ${at(DEPTH, vid, 4)}.`);
-  p.push(`생활감: ${at(TEXTURE, sc, 5)} — 새것처럼 말끔하게 정돈된 연출은 피한다.`);
+  p.push(`생활감: ${at(a.potted ? TEXTURE_POTTED : TEXTURE, sc, 5)} — 새것처럼 말끔하게 정돈된 연출은 피한다.`);
   p.push('씬 변주: 이전 씬과 구분되는 앵글·피사체·범위를 쓰되, 전 씬 공통 팔레트·질감·조명은 동일하게 유지해 시리즈 일관성을 낸다.');
   p.push('금지: 이미지 안에 글자·자막·숫자·로고·워터마크·간판 텍스트를 넣지 않는다(자막은 렌더러가 따로 얹는다). 손·손가락 왜곡과 어색한 합성을 피한다.');
   return p.join('\n');
@@ -1642,6 +1655,8 @@ export async function runShortsJob(
     const scenePromptsAll = plan.scenes.map((_, i) => buildSceneImagePrompt({
       // seed=쇼츠 id — 촬영 지시(조명·심도·앵글·생활감)가 편마다 갈린다. 재생성해도 같은 지시가 나온다.
       style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length, seed: id,
+      // 화분 소품은 화분·실내 주제일 때만 — 노지 수종에 넣으면 종 자체가 틀어진다(2026-09-06 실사고)
+      potted: isContainerTopic(`${short.keyword ?? ''} ${short.topic}`),
       ...(design.subject ? { subject: design.subject } : {}),
       ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}),
       // 꽃·열매는 그 씬이 실제로 다룰 때만 — 늘 붙이면 꽃 없는 계절 장면에 꽃이 그려진다.
