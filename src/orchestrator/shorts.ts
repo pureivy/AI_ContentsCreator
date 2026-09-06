@@ -39,7 +39,7 @@ import { inheritShortsAssets, inheritedSceneImages, inheritedClips, writeSceneIm
 import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom, normalizeLatinName } from '../content/species';
 import { isContainerTopic } from '../analytics/igAxis';
 import { planAssetScenes, styleRefs, planVideoSegments, orderAssetsByAssignment, type VideoSegment } from '../content/userAssets';
-import { describeUserMedia, mediaPlanGuide, assignMediaToScenes } from './shortsMediaBrief';
+import { describeUserMedia, mediaPlanGuide, assignMediaToScenes, speciesRefFrame } from './shortsMediaBrief';
 import { generateTitleArt } from './shortsTitleArt';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
 import { blogUrlForPiece } from '../content/pieces';
@@ -1165,7 +1165,7 @@ const DISTANCE: readonly string[] = [
 // 재생성은 같은 프롬프트를 물려받으므로 화분이 그대로 따라가 또 틀렸다.
 // 그래서 컨테이너 소품은 화분·실내 주제일 때만 쓴다(TEXTURE_POTTED).
 const TEXTURE: readonly string[] = [
-  '흙이 묻은 손과 손톱, 쓴 자국이 있는 도구',
+  '흙이 묻은 손과 손톱',
   '고르지 않은 흙 표면, 떨어진 잎 몇 장',
   '벌레 먹은 잎이나 마른 끝이 한두 장 섞여',
   '오래 써 길이 든 장갑과 앞치마',
@@ -1173,7 +1173,7 @@ const TEXTURE: readonly string[] = [
 /** 화분·실내 주제에서만 쓰는 생활감 — 노지 편에 넣으면 종 자체가 틀어진다. */
 const TEXTURE_POTTED: readonly string[] = [
   '색이 바랜 화분, 물 자국이 남은 받침',
-  '흙이 묻은 손과 손톱, 쓴 자국이 있는 도구',
+  '흙이 묻은 손과 손톱',
   '오래 써 길이 든 장갑과 앞치마',
 ];
 const HOOK_PUSH: readonly string[] = [
@@ -1193,6 +1193,8 @@ export function buildSceneImagePrompt(a: {
   style: string; scene: string; index: number; total: number; seed?: string; subject?: string; subjectLatin?: string; seasonal?: string;
   /** 화분·실내 주제인가 — 컨테이너 소품(화분·받침)을 써도 되는지 가른다(2026-09-06). */
   potted?: boolean;
+  /** 이 종의 실물 사진이 참조로 첨부되는가(2026-09-06). 문구만 바꾼다 — 파일은 생성기가 붙인다. */
+  speciesRef?: boolean;
 }): string {
   const { style, index: i, total, seed, subject, subjectLatin, seasonal } = a;
   const scene = a.scene.trim() || '주제를 상징하는 한국 생활 장면';
@@ -1209,6 +1211,15 @@ export function buildSceneImagePrompt(a: {
     p.push(`[대상 식물 — 화면의 나무·풀은 반드시 이 종] ${head}. 잎 모양·잎차례·수형을 이 종의 실제 모습대로 그린다. 다른 종으로 대체하거나 일반적인 나무로 뭉개지 마라.`);
     if (seasonal) p.push(`[이 씬에 나오는 부위] ${seasonal}. 이 종의 실제 꽃·열매 모양대로 그린다.`);
   }
+  // 종 레퍼런스(2026-09-06) — 글자로 적은 형태를 모델이 못 옮긴다. 실측: 위 앵커가 "잎맥 세 개",
+  // "지그재그 수형"을 다 적었는데도 깃꼴 잎맥의 매끈한 나무가 나왔다. 사장님이 찍은 그 수종
+  // 프레임 한 장을 붙이자 한 번에 맞았다. 참조는 팔레트가 아니라 '이 종의 실물'로 못박는다.
+  if (a.speciesRef) {
+    p.push('[첨부 참조 사진 — 이 종의 실물] 첨부한 사진은 바로 이 종을 찍은 실물이다. 잎 모양·잎맥이 뻗는 방향·잎 가장자리·수피 질감·가지가 갈라지는 방식을 이 사진과 같게 그린다. 다만 구도·배치·피사체는 복제하지 말고 이 씬만의 장면으로 새로 구성한다.');
+  }
+  // 연장은 화면에 넣지 않는다(2026-09-06 실사고) — 생활감이 "쓴 자국이 있는 도구"를 부르면
+  // 전지가위가 들어오는데, 날과 축의 구조가 물리적으로 불가능하게 그려진다. 손만으로 충분하다.
+  p.push('[연장] 전지가위·톱·삽 같은 연장은 화면에 넣지 마라 — 날·축·손잡이 구조가 어긋나게 그려진다. 손은 나무를 짚거나 가리키는 정도로만 쓴다.');
   if (!seed) { // 종전 동작 보존
     p.push(`장면(씬 ${i + 1}/${total}${isHook ? ', 훅' : ''}): ${scene}.${isHook ? HOOK_PUSH[0] : ''}`);
     p.push('구도: 세로 9:16 프레임을 피사체로 자연스럽게 채운다.');
@@ -1627,6 +1638,20 @@ export async function runShortsJob(
     const ordered = orderAssetsByAssignment(userAssetFiles, mediaAt, plan.scenes.length);
     const assetPlan = planAssetScenes(ordered.assets, plan.scenes.length, ordered.order);
     const refPaths = styleRefs(ordered.assets, assetPlan);
+    // 종 레퍼런스(2026-09-06) — 보관소에 이 수종 소재가 있으면 실물 한 장을 참조로 붙인다.
+    // 사진이 없고 영상만 있는 경우가 대부분이라(대추나무가 그랬다) 프레임을 뽑아 쓴다.
+    // 이게 없으면 앵커에 형태를 다 적어도 종이 틀린다 — 실측으로 확인했다.
+    let speciesRefPath: string | null = null;
+    if (!refPaths.length && userVideoFiles.length) {
+      const src = userVideoFiles.find((f) => (videoDurations.get(f) ?? 0) > 0);
+      if (src) {
+        speciesRefPath = await speciesRefFrame(src, videoDurations.get(src) ?? 0, path.join(dir, 'refs'), opts.signal);
+        if (speciesRefPath) say('종 레퍼런스 — 보관소 영상에서 실물 프레임 1장 첨부');
+      }
+    } else if (refPaths.length) {
+      speciesRefPath = refPaths[0] ?? null; // 올린 사진이 있으면 그게 곧 실물이다
+    }
+    const genRefs = speciesRefPath ? [...new Set([speciesRefPath, ...refPaths])].slice(0, 4) : refPaths;
     // 씬 길이는 낭독 실측 전이라 자수로 추정한다(렌더러의 sceneDurationSec 와 같은 산식).
     const sceneEst = plan.scenes.map((sc) => Math.max(3.5, (sc.narration ?? '').length / SHORTS_TTS_CPS + 0.6));
     const videoPrefer = new Map<string, number>();
@@ -1657,6 +1682,7 @@ export async function runShortsJob(
       style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length, seed: id,
       // 화분 소품은 화분·실내 주제일 때만 — 노지 수종에 넣으면 종 자체가 틀어진다(2026-09-06 실사고)
       potted: isContainerTopic(`${short.keyword ?? ''} ${short.topic}`),
+      speciesRef: !!speciesRefPath,
       ...(design.subject ? { subject: design.subject } : {}),
       ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}),
       // 꽃·열매는 그 씬이 실제로 다룰 때만 — 늘 붙이면 꽃 없는 계절 장면에 꽃이 그려진다.
@@ -1676,8 +1702,8 @@ export async function runShortsJob(
       {
         imageStyle: design.preset, limit: slotScenes.length, size: '1024x1536',
         timeoutMs: 150_000 * slotScenes.length,
-        // 첨부 사진을 레퍼런스로 — 팔레트·질감·빛만 빌린다(카드뉴스가 쓰던 방식과 같다).
-        ...(refPaths.length ? { refImages: refPaths } : {}),
+        // 첨부 사진·실물 프레임을 레퍼런스로 — 종 레퍼런스가 있으면 맨 앞에 온다(형태의 근거).
+        ...(genRefs.length ? { refImages: genRefs } : {}),
       },
       opts.signal);
     // 슬롯 정렬 이미지 목록 — 실패 씬은 null(렌더러가 그라데이션 폴백, 순서 보존)
@@ -1701,6 +1727,8 @@ export async function runShortsJob(
       // 씬 번호대로인 배열이어야 한다 — QA 는 images 의 원본 인덱스로 이 배열을 찾는다.
       dir, images, scenePrompts: scenePromptsAll,
       preset: design.preset, signal: opts.signal,
+      // 재생성도 같은 레퍼런스를 받아야 한다 — 안 주면 종 근거 없이 다시 그려 또 틀린다(2026-09-06)
+      ...(genRefs.length ? { refImages: genRefs } : {}),
       ...(design.subject ? { subject: design.subject } : {}),
       ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}), // 수종 오식별 검사
       // 실사진 자리는 QA 재생성에서 뺀다 — 사용자가 고른 사진을 우리가 생성본으로 바꾸면 안 된다.

@@ -413,3 +413,41 @@ describe('buildSceneImagePrompt — 학명 앵커', () => {
     expect(buildSceneImagePrompt({ ...base, subjectLatin: 'Nandina domestica' })).toContain('잎차례');
   });
 });
+
+describe('buildSceneImagePrompt — 종 레퍼런스·연장 금지(2026-09-06)', () => {
+  const base = { style: '자연광', scene: '줄기 구조', index: 1, total: 4, seed: 's1' };
+  it('레퍼런스가 붙으면 팔레트가 아니라 실물이라고 못박는다', () => {
+    // 실측: 앵커에 "잎맥 세 개"·"지그재그 수형"을 다 적어도 종이 틀렸다. 실물 프레임 한 장이
+    // 붙자 맞았다. 참조를 스타일로만 읽히면 그 효과가 사라진다.
+    const p = buildSceneImagePrompt({ ...base, subjectLatin: 'Ziziphus jujuba', speciesRef: true });
+    expect(p).toContain('이 종의 실물');
+    expect(p).toContain('잎맥이 뻗는 방향');
+    expect(p).toContain('구도·배치·피사체는 복제하지 말고'); // 전 씬이 같은 그림이 되면 안 된다
+  });
+  it('레퍼런스가 없으면 그 줄은 안 나온다', () => {
+    expect(buildSceneImagePrompt({ ...base, subjectLatin: 'Ziziphus jujuba' })).not.toContain('이 종의 실물');
+  });
+  it('연장은 언제나 금지 — 전지가위 날·축이 물리적으로 불가능하게 그려졌다', () => {
+    const p = buildSceneImagePrompt(base);
+    expect(p).toContain('[연장]');
+    expect(p).toContain('전지가위');
+  });
+  it('생활감이 도구를 부르지 않는다 — 연장 금지와 모순되면 안 된다', () => {
+    for (let i = 0; i < 12; i++) {
+      const p = buildSceneImagePrompt({ ...base, index: i, total: 12, seed: `seed${i}` });
+      const line = p.split('\n').find((l) => l.startsWith('생활감:')) ?? '';
+      expect(line, line).not.toContain('도구');
+    }
+  });
+  it('화분 소품은 화분 주제에서만 — 노지 편에 나오면 종이 틀어진다', () => {
+    for (let i = 0; i < 12; i++) {
+      const line = buildSceneImagePrompt({ ...base, index: i, total: 12, seed: `s${i}` })
+        .split('\n').find((l) => l.startsWith('생활감:')) ?? '';
+      expect(line, line).not.toContain('화분');
+    }
+    const potted = Array.from({ length: 12 }, (_, i) =>
+      buildSceneImagePrompt({ ...base, index: i, total: 12, seed: `s${i}`, potted: true })
+        .split('\n').find((l) => l.startsWith('생활감:')) ?? '');
+    expect(potted.some((l) => l.includes('화분'))).toBe(true);
+  });
+});

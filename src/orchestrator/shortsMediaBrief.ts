@@ -48,6 +48,30 @@ async function videoFrames(file: string, seconds: number, outDir: string, signal
 }
 
 /**
+ * 종 레퍼런스 프레임 한 장을 뽑는다(2026-09-06) — 이미지 모델에게 '이 종의 실물'을 보여 준다.
+ *
+ * 왜 필요한가(실측). "대추나무 결실주" 편의 씬2 가 대추나무가 아니었다. 프롬프트에는 학명과
+ * 형태가 다 들어 있었다 — "잎 밑에서 갈라진 잎맥 세 개가 뚜렷함, 지그재그로 굽는 수형".
+ * 그런데도 모델은 깃꼴 잎맥의 매끈한 수피 나무를 그렸다. 글자로 적은 형태를 모델이 못 옮긴다.
+ *
+ * 같은 프롬프트에 사장님이 찍은 대추나무 프레임 한 장을 붙였더니 잎맥·톱니·거친 수피·지그재그
+ * 가지가 한 번에 맞았다. 보관소에 그 수종 소재가 있으면 그게 가장 싼 정답이다.
+ *
+ * 가운데 지점을 쓴다 — 앞뒤는 손이 들어오거나 흔들린 경우가 많다.
+ */
+export async function speciesRefFrame(
+  file: string, seconds: number, outDir: string, signal?: AbortSignal,
+): Promise<string | null> {
+  try {
+    fs.mkdirSync(outDir, { recursive: true });
+    const dst = path.join(outDir, 'species-ref.jpg');
+    await execFileP('ffmpeg', ['-nostdin', '-y', '-ss', String(Math.max(0.1, seconds * 0.5)), '-i', file,
+      '-frames:v', '1', '-vf', 'scale=768:-2', dst], { timeout: 20_000, signal });
+    return fs.existsSync(dst) && fs.statSync(dst).size > 0 ? dst : null;
+  } catch { return null; } // fail-open — 레퍼런스가 없어도 생성은 돈다
+}
+
+/**
  * 첨부 소재를 한 건씩 비전으로 읽는다.
  *
  * 한 번에 몰아 읽지 않는 이유: 영상은 프레임이 여러 장이라 "몇 번째 이미지가 몇 번 소재인지"가
