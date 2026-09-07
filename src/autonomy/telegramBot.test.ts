@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseCallback, reviseEndpointFor } from './telegramBot';
+import { parseCallback, reviseEndpointFor, runAction } from './telegramBot';
 
 describe('parseCallback', () => {
   it('발행 버튼 콜백 6종을 액션으로 파싱한다', () => {
@@ -27,5 +27,22 @@ describe('reviseEndpointFor — 수정요청 답장 대상 분기', () => {
     expect(reviseEndpointFor('card_e00fba6537')).toEqual({ path: '/cardnews/card_e00fba6537/revise', label: '카드뉴스', derived: true });
     expect(reviseEndpointFor('short_2916818808')).toEqual({ path: '/shorts/short_2916818808/revise', label: '숏폼', derived: true });
     expect(reviseEndpointFor('piece_d46aa8c450')).toEqual({ path: '/pieces/piece_d46aa8c450/revise', label: '블로그', derived: false });
+  });
+});
+
+describe('shorts_youtube 버튼 — 중복 완료 메시지 차단(2026-09-08)', () => {
+  const run = async (json: Record<string, unknown>): Promise<string> =>
+    runAction({ kind: 'shorts_youtube', id: 'short_1' }, async () => ({ ok: true, status: 200, json }));
+
+  it('라우트가 알렸으면 빈 문자열 — 같은 말이 두 통 오면 안 된다', async () => {
+    expect(await run({ ok: true, url: 'https://youtu.be/x', notified: true })).toBe('');
+  });
+  it('라우트가 안 알렸으면 버튼이 알린다 — 버튼을 눌렀는데 아무 응답이 없으면 안 된다', async () => {
+    const out = await run({ ok: true, url: 'https://youtu.be/x', notified: false });
+    expect(out).toContain('유튜브 비공개 업로드 완료');
+    expect(out).toContain('https://youtu.be/x');
+  });
+  it('url 이 없으면 라우트도 안 알리므로 버튼이 알린다', async () => {
+    expect(await run({ ok: true, notified: false })).toContain('업로드 완료');
   });
 });

@@ -224,6 +224,18 @@ export function youtubeUploadedHtml(s: YoutubeUploadedInfo): string {
   ].filter(Boolean).join('\n');
 }
 
+/**
+ * 이 업로드가 텔레그램 알림을 낳는가(순수 판정 — 부르는 쪽이 중복을 피하는 근거).
+ *
+ * 왜 필요한가(2026-09-08). 텔레그램 버튼으로 업로드하면 완료 메시지가 두 통 왔다 —
+ * 라우트가 notifyYoutubeUploaded 를 보내고, 버튼 핸들러가 자기 문구를 또 보냈다.
+ * telegramBot 에는 '액션이 직접 보냈으면 빈 문자열을 반환한다'는 규칙이 이미 있는데
+ * 유튜브만 안 지켰다. 그 규칙을 지키려면 '알림이 나갔나'를 알아야 한다.
+ */
+export function youtubeUploadNotifies(): boolean {
+  return contentReadyNotifyEnabled() && !!telegramCreds();
+}
+
 /** 전송 — 알림 채널이 꺼져 있으면 조용히 통과. 실패는 무해(업로드 자체는 이미 성공했다). */
 export async function notifyYoutubeUploaded(s: YoutubeUploadedInfo): Promise<void> {
   try {

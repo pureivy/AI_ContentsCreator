@@ -98,7 +98,7 @@ import { naverAttemptAt, markNaverAttempt } from '../analytics/naverAttempts';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
-import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, notifyYoutubeUploaded, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
+import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, notifyYoutubeUploaded, youtubeUploadNotifies, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
 import { startTelegramBot } from '../autonomy/telegramBot';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
@@ -1747,13 +1747,16 @@ app.post('/shorts/:id/youtube', async (c) => {
     // 텔레그램 알림(사용자 요청 2026-08-31) — 발행 계열 중 유튜브만. 종전엔 콘솔 로그뿐이라 스튜디오를
     // 보고 있지 않으면 올라간 사실을 알 수 없었다. 릴스·인스타는 제외(세트당 3건이면 소음).
     // url 이 없으면 알리지 않는다 — 링크 없는 "업로드 완료"는 확인할 방법이 없어 알림 가치가 없다.
+    // notified 는 알림을 '실제로 낸 조건'과 한 몸이어야 한다 — url 이 없으면 알림도 안 나가고,
+    // 그때 텔레그램 버튼까지 침묵하면 사람이 버튼을 누르고 아무 응답도 못 받는다(2026-09-08).
+    const notified = !!r.url && youtubeUploadNotifies();
     if (r.url) {
       void notifyYoutubeUploaded({
         id, topic: s.topic, title: s.title, brand: s.brand,
         durationSec: s.durationSec, scenes: s.scenes, url: r.url,
       });
     }
-    return c.json({ ok: true, url: r.url, thumbnailError: r.thumbnailError });
+    return c.json({ ok: true, url: r.url, thumbnailError: r.thumbnailError, notified });
   } finally {
     ytPublishInFlight.delete(id);
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldRetryTelegram } from './notify';
+import { shouldRetryTelegram, waitMsFor } from './notify';
 
 // 실사고 2건이 이 판정을 만들었다 — 방향이 정반대라 함께 적는다.
 //
@@ -61,5 +61,24 @@ describe('shouldRetryTelegram — 전송 재시도 판정(전송되지 않았음
   it('성공·정보 없음은 재시도 대상이 아니다', () => {
     expect(shouldRetryTelegram({ status: 200 })).toBe(false);
     expect(shouldRetryTelegram({})).toBe(false);
+  });
+});
+
+describe('waitMsFor — 429 재시도 대기(순수)', () => {
+  it('텔레그램이 준 retry_after 를 따른다 — 고정 백오프로는 플러드 제한을 못 넘긴다', () => {
+    // 실사고(2026-09-08): 카드뉴스 앨범 뒤 버튼 메시지가 안 왔다. 429 는 이미 재시도 대상인데
+    // 1.5s·4s 고정이라 세 번 다 너무 일찍 쳤고 조용히 포기했다.
+    expect(waitMsFor(30, 0)).toBe(30_250);
+    expect(waitMsFor(5, 1)).toBe(5_250);
+  });
+  it('retry_after 가 없으면 종전 백오프', () => {
+    expect(waitMsFor(undefined, 0)).toBe(1_500);
+    expect(waitMsFor(undefined, 1)).toBe(4_000);
+  });
+  it('마지막 칸을 넘으면 마지막 값을 쓴다 — undefined 로 setTimeout 을 부르지 않는다', () => {
+    expect(waitMsFor(undefined, 9)).toBe(4_000);
+  });
+  it('이상한 값은 무시하고 기본 백오프로 — 0·음수·NaN', () => {
+    for (const bad of [0, -5, NaN, Infinity]) expect(waitMsFor(bad, 0)).toBe(1_500);
   });
 });

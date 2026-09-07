@@ -67,14 +67,17 @@ const errText = (label: string, r: { status: number; json: Record<string, unknow
   `⚠️ ${label} — ${escapeHtml(typeof r.json?.error === 'string' ? r.json.error : `HTTP ${r.status}`)}`;
 
 /** 버튼 액션 실행 → 사용자에게 보낼 결과 문구. revise 는 답장 유도라 여기 없음. */
-async function runAction(a: Exclude<BotAction, { kind: 'revise' }>): Promise<string> {
+/** 액션 실행기가 쓰는 HTTP 호출 — 테스트가 갈아끼울 수 있게 인자로 뺀다(이 파일의 순수/부수 분리). */
+export type ApiCall = (pathname: string, body?: unknown, timeoutMs?: number) => Promise<{ ok: boolean; status: number; json: Record<string, unknown> | null }>;
+
+export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call: ApiCall = api): Promise<string> {
   switch (a.kind) {
     case 'naver_draft': {
-      const r = await api(`/pieces/${a.id}/naver-draft`, { actor: '텔레그램' }, 30_000);
+      const r = await call(`/pieces/${a.id}/naver-draft`, { actor: '텔레그램' }, 30_000);
       return r.ok ? '📗 네이버 비공개 발행 시작 — 완료되면 알림이 옵니다.' : errText('비공개 발행 시작 실패', r);
     }
     case 'cardnews_publish': {
-      const r = await api(`/cardnews/${a.id}/publish`);
+      const r = await call(`/cardnews/${a.id}/publish`);
       if (!r.ok) {
         // 오타 QA 미해결 게이트(409) — 실패로 끝내지 않고 '확인 후 강행' 2단계로 잇는다:
         // 의심 슬라이드 이미지를 보내 사용자가 텔레그램에서 바로 검수하고, 이상 없으면 강행(cf) 버튼.
@@ -97,20 +100,23 @@ async function runAction(a: Exclude<BotAction, { kind: 'revise' }>): Promise<str
     }
     case 'cardnews_force': {
       // 사용자가 의심 슬라이드를 확인한 뒤의 강행 발행 — 라우트의 force 게이트(qaPublishBlockReason)를 통과.
-      const r = await api(`/cardnews/${a.id}/publish`, { force: true });
+      const r = await call(`/cardnews/${a.id}/publish`, { force: true });
       if (!r.ok) return errText('카드뉴스 강행 발행 실패', r);
       const link = typeof r.json?.igPermalink === 'string' ? `\n${r.json.igPermalink}` : '';
       const fbErr = typeof r.json?.fbError === 'string' && r.json.fbError ? `\n(페북: ${r.json.fbError})` : '';
       return `📸 인스타 캐러셀 발행 완료(QA 확인 강행)${link}${fbErr}`;
     }
     case 'shorts_youtube': {
-      const r = await api(`/shorts/${a.id}/youtube`);
+      const r = await call(`/shorts/${a.id}/youtube`);
       if (!r.ok) return errText('유튜브 업로드 실패', r);
+      // 라우트가 이미 완료 알림(📺)을 보냈으면 여기선 아무것도 안 보낸다 — 안 그러면 같은 말이
+      // 두 통 온다(실사고 2026-09-08). '액션이 직접 전송한 경우 빈 문자열' 규칙(아래 호출부)을 따른다.
+      if (r.json?.notified === true) return '';
       const url = typeof r.json?.url === 'string' ? r.json.url : typeof r.json?.youtubeUrl === 'string' ? r.json.youtubeUrl : '';
       return `▶️ 유튜브 비공개 업로드 완료${url ? `\n${url}` : ''}\n공개 전환은 유튜브 스튜디오에서.`;
     }
     case 'shorts_meta': {
-      const r = await api(`/shorts/${a.id}/meta`);
+      const r = await call(`/shorts/${a.id}/meta`);
       if (!r.ok) return errText('릴스 발행 실패', r);
       const link = typeof r.json?.igPermalink === 'string' ? `\n${r.json.igPermalink}` : '';
       return `🎬 인스타 릴스 발행 완료${link}`;

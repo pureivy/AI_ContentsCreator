@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getSecret } from '../secrets/store';
+import { CONFIG } from '../config';
 
 export interface NotifyMessage { title: string; body: string; }
 
@@ -58,15 +59,43 @@ export function tgApiUrl(method: string): string | null {
 
 // 전송 실패는 무해하지만 무성(無聲)이면 안 된다 — 토큰 폐기·HTML 파싱 오류 같은 지속 실패를 진단할 유일한 흔적.
 // 응답 본문에 실제 사유(chat not found, can't parse entities 등)가 실려 온다. 토큰은 절대 로그에 남기지 않는다.
-async function logTgFailure(method: string, r: Response): Promise<void> {
-  try { console.log(`[알림] 텔레그램 ${method} 실패 — HTTP ${r.status} ${(await r.text()).slice(0, 200)}`); } catch { /* 무해 */ }
+/**
+ * 실패를 콘솔과 파일 양쪽에 남기고, 429 면 텔레그램이 알려 준 대기 시간(초)을 돌려준다.
+ *
+ * 파일에도 남기는 이유(2026-09-08). 카드뉴스 버튼 메시지가 안 온 사고를 조사하려는데
+ * 서버 로그가 재시작으로 사라져 원인을 못 밝혔다. 알림 실패는 '사람이 모르는 채로 지나가는'
+ * 종류라, 다음번엔 grep 한 번으로 답이 나와야 한다.
+ */
+async function logTgFailure(method: string, r: Response): Promise<number | undefined> {
+  let body = '';
+  try { body = (await r.text()).slice(0, 400); } catch { /* 무해 */ }
+  const line = `텔레그램 ${method} 실패 — HTTP ${r.status} ${body.slice(0, 200)}`;
+  console.log(`[알림] ${line}`);
+  appendNotifyLog(line);
+  if (r.status !== 429) return undefined;
+  try {
+    const j = JSON.parse(body) as { parameters?: { retry_after?: unknown } };
+    const sec = Number(j?.parameters?.retry_after);
+    return Number.isFinite(sec) && sec > 0 ? Math.min(sec, 120) : undefined; // 상한 2분 — 무한 대기 방지
+  } catch { return undefined; }
+}
+
+/** 알림 실패 기록 — data/logs/notify.log 에 append. 실패는 삼킨다(로그 때문에 알림이 죽으면 안 된다). */
+function appendNotifyLog(line: string): void {
+  try {
+    const dir = path.join(CONFIG.dataDir, 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, 'notify.log'), `${new Date().toISOString()} ${line}\n`, 'utf-8');
+  } catch { /* 무해 */ }
 }
 const logTgError = (method: string, e: unknown): void => {
   // 원인 코드(cause.code)·이름을 함께 남긴다 — "fetch failed" 만으로는 미전송인지 응답 유실인지 못 가른다.
   // 실사고 ②(중복 2통)의 분류를 이 정보 없이 추론해야 했다.
   const x = e as { name?: string; cause?: { code?: unknown } };
   const detail = [x?.name, typeof x?.cause?.code === 'string' ? x.cause.code : ''].filter(Boolean).join('/');
-  console.log(`[알림] 텔레그램 ${method} 예외 — ${e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200)}${detail ? ` (${detail})` : ''}`);
+  const line = `텔레그램 ${method} 예외 — ${e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200)}${detail ? ` (${detail})` : ''}`;
+  console.log(`[알림] ${line}`);
+  appendNotifyLog(line);
 };
 
 /**
@@ -95,6 +124,17 @@ export function shouldRetryTelegram(x: { status?: number; error?: unknown }): bo
   return x.status === 429 || x.status >= 500;
 }
 
+// 일시 실패 재시도(2026-08-31) — 1.5s·4s 백오프로 3회. 알림은 '놓치면 사람이 모르는' 정보라
+// 한 번의 blip 으로 버리면 안 된다. 지속 실패(4xx)는 첫 시도에서 바로 포기한다.
+const DELAYS = [1_500, 4_000] as const;
+
+/** 다음 재시도까지 기다릴 시간(ms, 순수). 텔레그램이 준 retry_after 가 있으면 그것을 따른다. */
+export function waitMsFor(retryAfterSec: number | undefined, attempt: number, delays: readonly number[] = DELAYS): number {
+  const sec = Number(retryAfterSec);
+  if (Number.isFinite(sec) && sec > 0) return Math.ceil(sec * 1000) + 250; // 여유 250ms
+  return delays[attempt] ?? delays[delays.length - 1] ?? 1_500;
+}
+
 /** 텔레그램 HTML 메시지(링크 미리보기 off — 로컬/태일넷 링크는 미리보기 불가). buttons=인라인 키보드(선택). */
 export async function sendTelegramHtml(html: string, buttons?: TgButton[][]): Promise<boolean> {
   const tg = telegramCreds();
@@ -103,12 +143,10 @@ export async function sendTelegramHtml(html: string, buttons?: TgButton[][]): Pr
     chat_id: tg.chatId, text: html.slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true,
     ...(buttons?.length ? { reply_markup: { inline_keyboard: buttons } } : {}),
   });
-  // 일시 실패 재시도(2026-08-31) — 1.5s·4s 백오프로 3회. 알림은 '놓치면 사람이 모르는' 정보라
-  // 한 번의 blip 으로 버리면 안 된다. 지속 실패(4xx)는 첫 시도에서 바로 포기한다.
-  const DELAYS = [1_500, 4_000];
   for (let attempt = 0; ; attempt++) {
     let status: number | undefined;
     let error: unknown;
+    let retryAfterSec: number | undefined;
     try {
       const r = await fetch(`${TG_API}${encodeURIComponent(tg.token)}/sendMessage`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
@@ -119,7 +157,7 @@ export async function sendTelegramHtml(html: string, buttons?: TgButton[][]): Pr
         return true;
       }
       status = r.status;
-      await logTgFailure('sendMessage', r);
+      retryAfterSec = await logTgFailure('sendMessage', r);
     } catch (e) {
       error = e;
       logTgError('sendMessage', e);
@@ -130,7 +168,10 @@ export async function sendTelegramHtml(html: string, buttons?: TgButton[][]): Pr
       return false;
     }
     if (attempt >= DELAYS.length) return false;
-    await new Promise<void>((res) => setTimeout(res, DELAYS[attempt]!));
+    // 429 면 텔레그램이 '언제 다시 오라'고 알려 준다(parameters.retry_after). 고정 1.5s·4s 로는
+    // 그룹 플러드 제한을 못 넘겨 세 번 다 헛치고 조용히 포기했다(2026-09-08). 이건 규칙을 푸는 게
+    // 아니다 — 429 는 텔레그램이 '안 보냈다'고 명시한 경우라 이미 재시도 대상이었다.
+    await new Promise<void>((res) => setTimeout(res, waitMsFor(retryAfterSec, attempt)));
   }
 }
 
