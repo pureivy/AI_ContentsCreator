@@ -53,5 +53,21 @@ export const TechniqueLayer: React.FC<{
     );
   }
 
-  return null; // '듀오톤 인서트'·'정지 강조'는 화면 층이 아니라 배경 쪽에서 처리한다
+  if (tech === '초점 띠') {
+    // 틸트시프트 — 위아래를 살짝 흐리고 가운데 띠만 선명. 재배장 전경처럼 배경이 복잡한 장면에서 시선을 모은다.
+    // 자막은 이 층 위라 선명하다. 실촬영 씬에는 안 건다(techniqueScene 이 피한다) — 잎 디테일이 곧 정보다.
+    const p = interpolate(f, [0, 16], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) });
+    const px = (4 + random(`${seed}:tsb`) * 3) * p; // 4~7px
+    const band = 24 + random(`${seed}:tsh`) * 6;    // 위아래 각 24~30%
+    const soft = 10;
+    const common: React.CSSProperties = { position: 'absolute', left: 0, right: 0, backdropFilter: `blur(${px.toFixed(1)}px)`, WebkitBackdropFilter: `blur(${px.toFixed(1)}px)` };
+    return (
+      <AbsoluteFill style={{ pointerEvents: 'none' }}>
+        <div style={{ ...common, top: 0, height: `${band}%`, maskImage: `linear-gradient(to bottom, black ${100 - soft * 2}%, transparent 100%)`, WebkitMaskImage: `linear-gradient(to bottom, black ${100 - soft * 2}%, transparent 100%)` }} />
+        <div style={{ ...common, bottom: 0, height: `${band}%`, maskImage: `linear-gradient(to top, black ${100 - soft * 2}%, transparent 100%)`, WebkitMaskImage: `linear-gradient(to top, black ${100 - soft * 2}%, transparent 100%)` }} />
+      </AbsoluteFill>
+    );
+  }
+
+  return null; // '정지 강조'·'컬러 팝'·'소프트 글로우'·'아이리스 리빌'·'핸드헬드 흔들림'은 화면 층이 아니라 Scene(배경 effects·transform)에서 처리한다
 };

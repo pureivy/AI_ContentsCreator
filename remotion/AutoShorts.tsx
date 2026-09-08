@@ -1,6 +1,6 @@
 import React from 'react';
 import { z } from 'zod';
-import { AbsoluteFill, Audio, staticFile, useCurrentFrame, useVideoConfig, random } from 'remotion';
+import { AbsoluteFill, Audio, staticFile, useCurrentFrame, useVideoConfig, random, interpolate, Easing } from 'remotion';
 import { TransitionSeries } from '@remotion/transitions';
 import { Video } from '@remotion/media';
 import { CutFlash } from './CutFlash';
@@ -23,6 +23,8 @@ import { pickCaptionMotion, type CaptionMotionName } from './captionMotion';
 import { pickTechniques, techniqueScene, type EditTechnique } from './editTechniques';
 import { TechniqueLayer } from './TechniqueLayer';
 import { saturation } from '@remotion/effects/saturation';
+import { vibrance } from '@remotion/effects/vibrance';
+import { glow } from '@remotion/effects/glow';
 import { contrast } from '@remotion/effects/contrast';
 
 export const autoShortsSchema = z.object({
@@ -84,9 +86,15 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
   // 처음엔 duotone 을 썼는데 실렌더에서 원본 사진이 두 색으로 뭉개져 알아볼 수 없었다.
   // duotone 은 세기 파라미터가 없어(darkColor·lightColor·threshold 뿐) 약하게 걸 방법이 없다 —
   // 사진 기반 채널에는 맞지 않는 도구였다. 채도만 빼면 사진은 그대로 읽히면서 결만 바뀐다.
-  const effects = tech === '흑백 인서트' && baseEffects
-    ? [...baseEffects, saturation({ amount: 0.12 }), contrast({ amount: 1.06 })]
-    : baseEffects;
+  // 컬러 팝(2026-09-08) — 씬 들어갈 때 채도·생동감이 올랐다 0.6초쯤에 정상으로 돌아온다. 흑백 인서트의 정반대.
+  const pop = tech === '컬러 팝' ? interpolate(f, [0, 4, 20], [0, 1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }) : 0;
+  // 소프트 글로우 — 밝은 부분에만(threshold) 부드러운 빛번짐. 세기는 편마다 조금 다르다.
+  const glowFx = tech === '소프트 글로우' && techSeed
+    ? [glow({ radius: 26, intensity: 0.32 + random(`${techSeed}:glow`) * 0.14, threshold: 0.58 })]
+    : [];
+  const popFx = pop > 0 ? [saturation({ amount: 1 + 0.32 * pop }), vibrance({ amount: 0.3 * pop }), contrast({ amount: 1 + 0.05 * pop })] : [];
+  const extra = [...popFx, ...glowFx];
+  const effects = extra.length ? [...(baseEffects ?? []), ...extra] : baseEffects;
   // 정지 강조 — 이 씬의 배경 모션만 멈춘다(자막·카드는 그대로 움직인다). 씬 길이는 안 건드린다.
   const frozen = tech === '정지 강조';
   // 씬 엔터 이펙트 — 종전 '6프레임 페이드인(첫 씬 제외)'을 일반화. 씬 길이 불변이라 TTS 싱크 무손상.
@@ -97,6 +105,20 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
   if (enter === 'slide-up') wrap.transform = `translateY(${(1 - p) * 24}px)`;
   else if (enter === 'scale') wrap.transform = `scale(${0.96 + 0.04 * p})`;
   else if (enter === 'wipe') { wrap.opacity = 1; wrap.clipPath = `inset(0 ${(1 - p) * 100}% 0 0)`; }
+  // 아이리스 리빌(2026-09-08) — 씬이 원형으로 열리며 시작한다. 엔터 페이드 대신 이걸로 들어온다.
+  if (tech === '아이리스 리빌') {
+    const r = interpolate(f, [0, 18], [8, 150], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) });
+    wrap.opacity = 1;
+    wrap.clipPath = `circle(${r.toFixed(1)}% at 50% 45%)`;
+  }
+  // 핸드헬드 흔들림 — 정지 이미지 씬에만(techniqueScene 이 실촬영 씬을 피한다), 아주 작게. 여러 사인파를 겹쳐 손떨림처럼.
+  if (tech === '핸드헬드 흔들림' && techSeed && !s.videoSrc) {
+    const amp = 3 + random(`${techSeed}:hha`) * 3; // 3~6px
+    const ph1 = random(`${techSeed}:hh1`) * 6.28, ph2 = random(`${techSeed}:hh2`) * 6.28, ph3 = random(`${techSeed}:hh3`) * 6.28;
+    const x = amp * Math.sin(f / 11 + ph1) + amp * 0.5 * Math.sin(f / 5.3 + ph2);
+    const y = amp * 0.8 * Math.sin(f / 9 + ph3) + amp * 0.4 * Math.sin(f / 4.1 + ph1);
+    wrap.transform = `${wrap.transform ?? ''} translate(${x.toFixed(2)}px, ${y.toFixed(2)}px) scale(1.025)`.trim();
+  }
   return (
     <AbsoluteFill style={wrap}>
       {s.videoSrc ? (

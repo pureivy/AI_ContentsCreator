@@ -17,7 +17,7 @@ describe('편집 기법 뽑기 — 편마다 쓰는 기술이 다르다', () => 
     const combos = new Set(Array.from({ length: 60 }, (_, n) => [...pickTechniques(`short_${n}`)].sort().join(',')));
     expect(combos.size).toBeGreaterThanOrEqual(6);
   });
-  it('다섯 기법이 모두 등장한다 — 죽은 항목이 없다', () => {
+  it('풀의 기법이 모두 등장한다 — 죽은 항목이 없다', () => {
     const seen = new Set(Array.from({ length: 300 }, (_, n) => pickTechniques(`s${n}`)).flat());
     expect(seen.size).toBe(EDIT_TECHNIQUES.length);
   });
@@ -45,12 +45,12 @@ describe('기법이 걸리는 씬', () => {
     expect(techniqueScene('x', '레터박스', 1)).toBe(-1);
   });
   it('결정적이다', () => {
-    expect(techniqueScene('x', '흑백 인서트', 5)).toBe(techniqueScene('x', '흑백 인서트', 5));
+    expect(techniqueScene('x', '정지 강조', 5)).toBe(techniqueScene('x', '정지 강조', 5));
   });
 });
 
 describe('techniqueScene — 실촬영 씬은 파괴적 기법을 피한다', () => {
-  it('흑백·정지는 실촬영 씬에 안 걸린다 — 사장님 영상이 흑백으로 나간 적이 있다', () => {
+  it('정지·핸드헬드·초점 띠는 실촬영 씬에 안 걸린다 — 사장님 영상이 흑백으로 나간 적이 있다(흑백은 풀에서 뺐다)', () => {
     const real = new Set([2]);
     for (const t of TECHNIQUES_UNSAFE_ON_REAL) {
       for (let n = 0; n < 200; n++) {
@@ -66,7 +66,7 @@ describe('techniqueScene — 실촬영 씬은 파괴적 기법을 피한다', ()
   });
   it('피할 자리가 없으면 아예 안 건다 — 억지로 거느니 안 거는 편이 낫다', () => {
     // 5씬(훅0·CTA4)이면 본문은 1·2·3뿐. 셋 다 실촬영이면 걸 자리가 없다.
-    expect(techniqueScene('x', '흑백 인서트', 5, new Set([1, 2, 3]))).toBe(-1);
+    expect(techniqueScene('x', '정지 강조', 5, new Set([1, 2, 3]))).toBe(-1);
   });
   it('실촬영 표시가 없으면 종전과 같은 자리를 고른다 — 기존 편의 재렌더가 안 바뀐다', () => {
     for (const t of EDIT_TECHNIQUES) {
@@ -76,5 +76,20 @@ describe('techniqueScene — 실촬영 씬은 파괴적 기법을 피한다', ()
         expect(at).toBeLessThanOrEqual(4);
       }
     }
+  });
+});
+
+describe('풀 개편(2026-09-08) — 흑백 인서트 제거, 다섯 기법 추가', () => {
+  it('흑백 인서트가 풀에 없다', () => {
+    expect((EDIT_TECHNIQUES as readonly string[]).includes('흑백 인서트')).toBe(false);
+  });
+  it('추가된 다섯 기법이 풀에 있다', () => {
+    for (const t of ['컬러 팝', '아이리스 리빌', '소프트 글로우', '핸드헬드 흔들림', '초점 띠']) expect(EDIT_TECHNIQUES).toContain(t);
+    expect(EDIT_TECHNIQUES).toHaveLength(9);
+  });
+  it('핸드헬드·초점 띠는 실촬영 씬을 피한다, 컬러 팝·글로우·아이리스는 실촬영에도 무해', () => {
+    expect(TECHNIQUES_UNSAFE_ON_REAL).toContain('핸드헬드 흔들림');
+    expect(TECHNIQUES_UNSAFE_ON_REAL).toContain('초점 띠');
+    for (const t of ['컬러 팝', '소프트 글로우', '아이리스 리빌']) expect(TECHNIQUES_UNSAFE_ON_REAL).not.toContain(t);
   });
 });
