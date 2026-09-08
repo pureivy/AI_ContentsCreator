@@ -58,19 +58,8 @@ export const SHORTS_WRITERS: readonly ShortsWriter[] = [
       '· 흔한 오해를 먼저 집고("이거 추위 탓인 줄 알잖아요") 뒤집는다.',
     ].join('\n'),
   },
-  {
-    id: 'shorts_writer_c',
-    name: '곽재현',
-    voiceId: 'H9ihk5yaEtJLXjhBgRaF',
-    voiceNote: 'Jay Lee — 남성·중년 톤·설명형(이 니치 주 시청층 40~60대와 맞음)',
-    voiceSettings: { stability: 0.65, similarity_boost: 0.8 },
-    styleGuide: [
-      '[작가: 곽재현 — 현장 서술형]',
-      '· 마당에서 본 장면으로 시작한다. 상황을 먼저 그리고 원인을 뒤에 붙인다.',
-      '· 차분하게 단정한다. 과장·감탄사를 쓰지 않는다.',
-      '· 계절과 시기를 축으로 삼는다("이맘때", "서리 내리기 전").',
-    ].join('\n'),
-  },
+  // 곽재현(shorts_writer_c) 삭제 — 2026-09-09 사장님 확정 "임태윤·유하린만 쓴다". Jay Lee 도 Rosa Oh 도 마음에 안 들었다.
+  // 레거시 11편의 writer/writerId 는 그대로 남고, 조회는 undefined → 전역 기본 목소리(유하린)로 떨어진다.
 ];
 
 /** 초기 배정분(2026-09-03 오전)에 쓰던 임시 id — 역할 id 로 합치기 전 레코드 호환. */
