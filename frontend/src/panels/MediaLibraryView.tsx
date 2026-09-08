@@ -97,9 +97,14 @@ export default function MediaLibraryView() {
     await fetch(`/media/${m.id}`, { method: "DELETE" });
     await load();
   };
-  /** 사무실 컴포저에 수종을 채워 넘긴다 — 주제는 사장님이 이어 적는다(수동 입력 한 번 클릭). */
-  const writeAbout = (sp: string) => {
-    window.location.assign(`/?topic=${encodeURIComponent(`${sp} `)}`);
+  /**
+   * 사무실 컴포저에 주제를 채우고 바로 보낸다(2026-09-08 사용자 요청 "시작 버튼까지"). 주제는 수종 + 딱지 태그 —
+   * 최종 제목은 작가가 다시 짓는다(초안 완성 시 piece.title 이 draft.title 로 바뀐다). 진행 중 런이 있으면
+   * App 이 채우기만 하고 알린다.
+   */
+  const writeAbout = (r: SpeciesRow) => {
+    const topic = [r.species, ...r.tags].join(" ");
+    window.location.assign(`/?topic=${encodeURIComponent(topic)}&start=1`);
   };
   const toggle = (sp: string) => setOpen((prev) => { const n = new Set(prev); if (n.has(sp)) n.delete(sp); else n.add(sp); return n; });
 
@@ -193,7 +198,7 @@ export default function MediaLibraryView() {
                           )}
                         </td>
                         <td>{kstDay(r.lastUsedTs)}</td>
-                        <td><button type="button" className="btn ghost" onClick={() => writeAbout(r.species)} title="사무실 입력창에 이 수종을 채워 넣습니다"><Ico name="pencil" size={11} /> 글 만들기</button></td>
+                        <td><button type="button" className="btn ghost" onClick={() => writeAbout(r)} title={`"${[r.species, ...r.tags].join(" ")}" 주제로 사무실에서 바로 시작합니다 (진행 중 런이 있으면 채우기만)`}><Ico name="pencil" size={11} /> 글 시작</button></td>
                       </tr>,
                       isOpen ? (
                         <tr key={`${r.species}-files`} className="media-usage-files">

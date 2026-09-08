@@ -282,6 +282,10 @@ export default function App() {
   // 딥링크 ?topic=<text> — 보관소 '사용 현황'의 "글 만들기" 버튼이 사무실 입력창에 수종을 채워 넘긴다(2026-09-08).
   // 런을 시작하지 않는다 — 주제는 사장님이 이어 적고 직접 보낸다. 1회성, 마운트 시 확정.
   const [deepLinkTopic] = useState<string | null>(() => new URLSearchParams(window.location.search).get("topic"));
+  // ?start=1 (2026-09-08 사용자 요청 "시작 버튼까지 같이 눌러지면") — 채운 뒤 바로 보낸다. 단 진행 중 런이 있으면
+  // 보내지 않는다: 그때 보내면 새 런이 아니라 '진행 중 런에 지시 주입'이 되어 엉뚱한 글에 수종이 섞인다.
+  const [deepLinkStart] = useState<boolean>(() => new URLSearchParams(window.location.search).get("start") === "1");
+  const autoStartedRef = useRef(false);
   const [view, setView] = useState<View>(() => (deepLinkPiece ? "review" : "office"));
   // 파라미터는 캡처 즉시 URL 에서 제거 — 남겨두면 새로고침마다 검토 탭으로 끌려간다(?run= 정리와 동일한 위생).
   useEffect(() => {
@@ -295,6 +299,7 @@ export default function App() {
     setChat(deepLinkTopic);
     const url = new URL(window.location.href);
     url.searchParams.delete("topic");
+    url.searchParams.delete("start");
     window.history.replaceState(null, "", url);
   }, [deepLinkTopic]);
   const [tlTab, setTlTab] = useState<TLTab>("timeline");  // 토론 타임라인 창: 타임라인 | 활동
@@ -855,6 +860,25 @@ export default function App() {
       submittingRef.current = false;
     }
   };
+  // 보관소 '글 만들기'(?topic=&start=1) — 입력창이 채워진 렌더에서 한 번만 보낸다. 서버의 실행 중 런은
+  // 스토어보다 /runs 가 먼저 안다(재접속 직후엔 스토어가 아직 idle 일 수 있다).
+  useEffect(() => {
+    if (!deepLinkTopic || !deepLinkStart || autoStartedRef.current) return;
+    if (chat !== deepLinkTopic) return;
+    autoStartedRef.current = true;
+    void (async () => {
+      try {
+        const r = await fetch("/runs");
+        const j = (await r.json()) as { runs?: Array<{ status?: string }> };
+        if (j.runs?.some((x) => x.status === "running")) {
+          window.alert("진행 중인 런이 있어 주제만 채워 두었습니다. 끝난 뒤 보내세요.");
+          return;
+        }
+      } catch { /* 확인 실패면 보낸다 — 서버가 동시 런을 막는다 */ }
+      await sendChat();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat, deepLinkTopic, deepLinkStart]);
 
   // 칩·플레이스홀더·버튼은 토큰화된 대상(directedTarget)으로 — 실명직책 표시. 직원명은
   // 입력 후 스페이스를 누르면 칩으로 토큰화되고 입력창엔 질문만 남는다(어색한 중복 제거).
