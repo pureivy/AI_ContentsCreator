@@ -39,7 +39,7 @@ import { unusedStock, stockBlock, usedSpecies } from '../content/mediaStock';
 import { shortsStore } from '../content/shorts';
 import { topicTargetBlock, topicPriorityBlock, demandGateForTarget, platformLabel, type ShortsPlatform } from '../content/shortsPlatform';
 import { listMedia } from '../content/mediaLibrary';
-import { findSpecies } from '../content/species';
+import { findSpecies, findSpeciesLoose } from '../content/species';
 
 export interface AutoCycleDeps<T = string> {
   /** 사이클 주기(ms). ≤0 이면 스케줄러는 no-op. */
@@ -553,7 +553,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
           try { return fs.readdirSync(path.join(CONFIG.dataDir, 'shorts', id, 'clips')).some((f) => f.startsWith('user_')); }
           catch { return false; }
         },
-        speciesOf: (t) => findSpecies(t)?.name,
+        speciesOf: (t) => findSpeciesLoose(t)?.name, // 소재 매칭과 같은 눈(2026-09-08) — 제목이 '나무'를 떼도 잡는다
       });
       return stockBlock(unusedStock(listMedia(brandSlug), used, canon));
     } catch { return ''; }

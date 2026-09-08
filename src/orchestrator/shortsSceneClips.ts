@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { probeDuration } from '../tools/shortsCommon';
-import { hasSubjectRisk } from './shortsMotionDirector';
+import { hasSubjectRisk, cameraOnlyMotionPrompt } from './shortsMotionDirector';
 
 export interface SceneClipsResult { clips: Array<string | null>; issues: string[] }
 
@@ -99,6 +99,8 @@ export async function i2vSceneClips(opts: {
   subjectScenes?: Set<number>;
   /** 상한 선정(selectI2vScenes) 통과 씬만 제출 — 미전달=전 씬 허용(하위호환). 제출 전 차단이라 과금 캡. */
   allowedScenes?: Set<number>;
+  /** 사람·손·도구 씬도 제출한다(2026-09-09) — 카메라 전용 프롬프트('사람·손·도구는 사진처럼 정지')를 강제. 기본 false(종전). */
+  allowSubject?: boolean;
   signal?: AbortSignal;
 }): Promise<SceneClipsResult> {
   const out: SceneClipsResult = { clips: opts.images.map(() => null), issues: [] };
@@ -120,12 +122,17 @@ export async function i2vSceneClips(opts: {
         // negative 를 모두 넣어도 5B 모델이 무시해 손가락·도구가 뒤틀린다(실측: 그렇게 보낸 씬에서 클립 QA 가
         // '손가락이 비정상적으로 붙어 형태가 왜곡됨' 검출). 프롬프트로 '부탁'하는 대신 구조로 차단 —
         // 이 씬은 클립 없이 스틸(켄번즈)로 렌더된다. 판별: 비전 분류(마커) 또는 장면 묘사 키워드.
-        if (opts.subjectScenes?.has(i) || (directed?.startsWith('Camera work only:') ?? false) || hasSubjectRisk(scenePrompt)) {
+        const subject = opts.subjectScenes?.has(i) || (directed?.startsWith('Camera work only:') ?? false) || hasSubjectRisk(scenePrompt);
+        if (subject && !opts.allowSubject) {
           out.issues.push(`씬${i + 1} 사람·손·도구 — I2V 생략(스틸 유지)`);
           return;
         }
         const b64 = fs.readFileSync(img).toString('base64');
-        const motion = directed ?? buildMotionPrompt(scenePrompt);
+        // 사람·손·도구 씬(허용 시, 2026-09-09) — 무조건 카메라 전용 프롬프트. 디렉터가 다른 걸 썼어도 덮는다.
+        const motion = subject
+          ? (directed?.startsWith('Camera work only:') ? directed : cameraOnlyMotionPrompt(undefined, i === 0))
+          : (directed ?? buildMotionPrompt(scenePrompt));
+        if (subject) out.issues.push(`씬${i + 1} 사람·손·도구 — 카메라 전용 모션으로 I2V`);
         // 1회 시도 전체(제출→폴링→다운로드→검증) — 타임아웃 signal 은 일회성이라 시도마다 새로 만든다.
         const attempt = async (): Promise<string> => {
           const sceneSignal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(I2V_TIMEOUT_MS)]) : AbortSignal.timeout(I2V_TIMEOUT_MS);

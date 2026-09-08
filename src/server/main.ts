@@ -56,7 +56,7 @@ import { shortsStore, shortsQaPublishBlockReason } from '../content/shorts';
 import { addMedia, listMedia, updateMedia, removeMedia, mediaDir, matchMedia } from '../content/mediaLibrary';
 import { buildMediaUsage, SOURCES_FILE, type UsageSource } from '../content/mediaUsage';
 import { probeDuration } from '../tools/shortsCommon';
-import { findSpecies, loadSpecies, appendSpecies, appendSpeciesAlias } from '../content/species';
+import { findSpecies, findSpeciesLoose, loadSpecies, appendSpecies, appendSpeciesAlias } from '../content/species';
 import { learnSpeciesLabel } from '../content/speciesLearn';
 import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, autoDailyCapFor, autoCapApplies, pickTopicTarget, shouldStartSecondRun, SIBLING_PLAN_WAIT_MS, type ShortsPlatform } from '../content/shortsPlatform';
 import { pickWriter, SHORTS_WRITERS } from '../content/shortsWriters';
@@ -1442,15 +1442,20 @@ function mediaForTopic(opts: {
 }): { userAssets?: string[]; userVideos?: string[] } {
   try {
     const text = opts.text.trim();
-    const sp = findSpecies(text)?.name;
+    // 느슨한 찾기(2026-09-08) — '공작단풍전정' 제목이 '공작단풍나무' 딱지 소재를 못 잡던 사고. 소재 매칭에서는
+    // '안 쓰는' 손해가 더 크다. 주제 게이트는 그대로 findSpecies(정확)다.
+    const sp = findSpeciesLoose(text)?.name;
     const lib = listMedia(opts.brand ?? (activeBrandSlug() || undefined));
-    const canon = (n: string): string => findSpecies(n)?.name ?? n;
-    const imgs = opts.attached?.length ? opts.attached
-      : matchMedia(lib, { species: sp, text, kind: 'image', limit: 8, canon }).map((m) => m.file);
+    const canon = (n: string): string => findSpeciesLoose(n)?.name ?? n;
+    // 보관소 사진은 쓰지 않는다 — 배경 0장, 참조도 0장(사용자 확정 2026-09-08 "보관소 이미지는 참고용으로도 쓰지 말고 무시").
+    // 종 참조는 보관소 영상에서 뽑는 프레임 한 장으로 충분하다. 컴포저에 직접 첨부한 사진은 사용자가 고른 것이라 종전대로 배경에 쓴다.
+    const imgs = opts.attached?.length ? opts.attached : [];
+    // 보관소 영상은 한 편에 하나만(사용자 확정 2026-09-08 "숏폼 만들 때 영상 보관소 영상 한 개만 사용해").
+    // 종전 4개는 영상마다 한 씬씩 먹어 같은 밭 화면이 여러 번 나왔다. 고르는 순서는 matchMedia 그대로 —
+    // 수종 일치 > 태그 일치 > 최근 올린 것. 컴포저에 직접 첨부한 영상은 사용자가 고른 것이라 제한하지 않는다.
     const vids = opts.attachedVideos?.length ? opts.attachedVideos
-      : matchMedia(lib, { species: sp, text, kind: 'video', limit: 4, canon }).map((m) => m.file);
-    if (!opts.attached?.length && imgs.length) console.log('[숏폼]', `보관소 사진 ${imgs.length}장 사용 — ${sp ?? '범용'}`);
-    if (!opts.attachedVideos?.length && vids.length) console.log('[숏폼]', `보관소 영상 ${vids.length}개 사용 — ${sp ?? '범용'}`);
+      : matchMedia(lib, { species: sp, text, kind: 'video', limit: 1, canon }).map((m) => m.file);
+    if (!opts.attachedVideos?.length && vids.length) console.log('[숏폼]', `보관소 영상 ${vids.length}개 사용 — ${sp ?? '범용'} (사진은 무시)`);
     return { ...(imgs.length ? { userAssets: imgs } : {}), ...(vids.length ? { userVideos: vids } : {}) };
   } catch { return {}; } // fail-open — 소재 조회 실패로 생성이 멈추면 안 된다
 }
@@ -3713,8 +3718,9 @@ app.get('/media/usage', (c) => {
         catch { return null; }
       },
       hasUserClip: (id) => { try { return fs.readdirSync(path.join(shortsDir(id), 'clips')).some((f) => f.startsWith('user_')); } catch { return false; } },
-      speciesOf: (t) => findSpecies(t)?.name,
-      canon: (n) => findSpecies(n)?.name ?? n,
+      // 느슨한 찾기 — 표도 소재 매칭과 같은 눈으로 본다('추희자두' 글이 자두나무 줄에 안 잡히던 것도 이걸로 잡힌다).
+      speciesOf: (t) => findSpeciesLoose(t)?.name,
+      canon: (n) => findSpeciesLoose(n)?.name ?? n,
     },
   );
   return c.json(usage);

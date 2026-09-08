@@ -29,7 +29,6 @@ import { timingParityIssues, formatTimingIssue, stripUnsourcedStatOverlays } fro
 import type { FactGateInfo } from '../content/factGate';
 import { narrationStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, screenTextLabelIssues, monthWordOutsideNarration } from '../content/styleLint';
 import { promiseStore } from '../content/promises';
-import { currentStructureSeed } from '../content/structureSeed';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame, cutVideoSegment } from '../tools/shortsRender';
@@ -432,7 +431,10 @@ function recentHooksToAvoid(brand: string | undefined, excludeId: string, limit 
 
 /** TTS 실측 속도(자/초) — 2026-08-14 실측: 대본 460자 → 낭독 77.3초(포즈 포함) ≈ 5.9자/초.
  *  종전 프롬프트 가정(7자/초, "30~70자=5~10초")이 이걸 몰라서 55초 지시가 77초 영상이 됐다. */
-const SHORTS_TTS_CPS = 5.9;
+// 낭독 속도 반영(2026-09-09 사용자 확정 "전 작가 공통 1.2, 씬 속도도 거기에 맞춰") — 5.9 는 속도 1.0 실측치다.
+// 씬 길이는 실제 낭독 길이가 정하므로 속도를 올리면 씬은 저절로 짧아지지만, 대본 단계의 자수 예산·씬 길이 추정
+// (실촬영 배정의 7할 규칙 포함)은 이 상수를 쓰므로 여기에도 속도를 곱해야 추정과 실제가 맞는다.
+const SHORTS_TTS_CPS = 5.9 * CONFIG.elevenLabsSpeed;
 
 function shortsNarrationChars(p: Plan): number { return p.scenes.reduce((s, x) => s + x.narration.length, 0); }
 
@@ -447,7 +449,7 @@ const splitNarrSentences = (t: string): string[] => t.split(/(?<=[.!?…])\s+/).
  * 최소 1문장 유지). 2단계 — 씬 단위: 뒤쪽 본문 씬을 통째로 제거(훅·씬2·CTA 보존, 최소 4씬).
  * keptScenes 는 원본 씬 인덱스 — 렌더 시 씬별 이미지·클립 배열을 함께 줄이는 매핑에 쓴다.
  */
-export function trimPlanToBudget(plan: Plan, budgetChars: number): { plan: Plan; keptScenes: number[]; trimmed: boolean } {
+export function trimPlanToBudget(plan: Plan, budgetChars: number, minScenes = 4): { plan: Plan; keptScenes: number[]; trimmed: boolean } {
   const total = (scs: Array<{ narration: string }>): number => scs.reduce((s, x) => s + x.narration.length, 0);
   const scenes = plan.scenes.map((s) => ({ ...s }));
   const kept = scenes.map((_, i) => i);
@@ -462,7 +464,7 @@ export function trimPlanToBudget(plan: Plan, budgetChars: number): { plan: Plan;
     scenes[cand]!.narration = splitNarrSentences(scenes[cand]!.narration).slice(0, -1).join(' ').trim();
     changed = true;
   }
-  while (total(scenes) > budgetChars && scenes.length > 4) {
+  while (total(scenes) > budgetChars && scenes.length > Math.max(1, minScenes)) { // 씬 하한(기본 4) — 쇼츠는 CONFIG.shortsScenes 를 넘겨 씬 수를 지킨다
     const drop = scenes.length - 2; // CTA 앞 본문 씬부터 뒤에서 제거
     scenes.splice(drop, 1);
     kept.splice(drop, 1);
@@ -741,7 +743,7 @@ async function fitShortsPlanToDuration(io: JobIO, plan: Plan, budgetCharsOverrid
   // 결정적 마감 — LLM 무응답·부분 이행 모두 여기서 예산을 보장한다(생성 실패 금지의 전제).
   let keptScenes = allIdx;
   if (shortsNarrationChars(out) > budget) {
-    const t = trimPlanToBudget(out, budget);
+    const t = trimPlanToBudget(out, budget, CONFIG.shortsScenes); // 씬 수는 항상 유지(2026-09-09) — 문장만 깎는다
     out = t.plan;
     keptScenes = t.keptScenes;
   }
@@ -793,7 +795,8 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   // 제목 후보 유형(권고 5) — 스키마 예시와 유형 설명이 같은 목록을 가리켜야 작가가 순서대로 채운다.
   const titlesJson = titleTypes.map((t) => `"${t}"`).join(',');
   const budgetChars = Math.floor((capSec - 5) * SHORTS_TTS_CPS);
-  const maxScenes = Math.min(8, Math.max(3, Math.floor(capSec / 8)));
+  // 씬 상한 = 요청 씬 수(2026-09-09). 종전 floor(capSec/8) 역산은 35초 상한에서 4가 되어 5번째 씬(CTA)을 잘라냈다.
+  const maxScenes = Math.min(8, Math.max(3, n));
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 키워드] ${keyword}` : '',
@@ -925,6 +928,14 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 단발 실패로 통째 죽었다. 재시도는 완결 JSON 강조 + 토큰 여유 상향.
     plan = parsePlan(await callRoleJSON<PlanRaw>(io, writerRole, sys,
       `${user}\n\n반드시 완결된 JSON 하나만 출력하라(설명·마크다운 코드펜스 금지).`, 3400, false));
+  }
+  if (plan && plan.scenes.length !== n) {
+    // 씬 수 불일치 1회 재요청(2026-09-09 "씬을 항상 5개") — 작가가 4씬으로 줄여 오면 정확한 개수를 못박아 다시 받는다.
+    io.bus?.emit('log', { message: `기획 씬 수 불일치 — ${plan.scenes.length}개(요청 ${n}개) · 1회 재요청` });
+    const again = parsePlan(await callRoleJSON<PlanRaw>(io, writerRole, sys,
+      `${user}\n\n씬은 정확히 ${n}개여야 한다(훅·전제·본문·CTA 를 합쳐 ${n}개) — 더도 덜도 말고 ${n}개. 반드시 완결된 JSON 하나만 출력하라.`, 3400, false));
+    if (again && again.scenes.length === n) plan = again;
+    else io.bus?.emit('log', { message: `기획 씬 수 불일치 유지 — ${plan.scenes.length}개로 진행` });
   }
   if (!plan) return null;
   // 단독 이해 검산 — 원문을 안 본 시청자 관점 텍스트 검사 후 1회 수정 라운드(fail-open, 실측 2026-07-29 결함 대응).
@@ -1196,6 +1207,8 @@ export function buildSceneImagePrompt(a: {
   potted?: boolean;
   /** 이 종의 실물 사진이 참조로 첨부되는가(2026-09-06). 문구만 바꾼다 — 파일은 생성기가 붙인다. */
   speciesRef?: boolean;
+  /** 성장 단계별 실제 크기(2026-09-08, 사전 size) — 없으면 학명으로 가늠하게 한다. */
+  subjectSize?: string;
 }): string {
   const { style, index: i, total, seed, subject, subjectLatin, seasonal } = a;
   const scene = a.scene.trim() || '주제를 상징하는 한국 생활 장면';
@@ -1217,6 +1230,13 @@ export function buildSceneImagePrompt(a: {
   // 프레임 한 장을 붙이자 한 번에 맞았다. 참조는 팔레트가 아니라 '이 종의 실물'로 못박는다.
   if (a.speciesRef) {
     p.push('[첨부 참조 사진 — 이 종의 실물] 첨부한 사진은 바로 이 종을 찍은 실물이다. 잎 모양·잎맥이 뻗는 방향·잎 가장자리·수피 질감·가지가 갈라지는 방식을 이 사진과 같게 그린다. 다만 구도·배치·피사체는 복제하지 말고 이 씬만의 장면으로 새로 구성한다.');
+  }
+  // 나무 크기(2026-09-08 사용자 지시) — 실측: 공작단풍(성목 2~3m) 마지막 씬이 사람 팔 위로 까마득히 솟은 거목으로 그려졌다.
+  // 장면이 가리키는 성장 단계의 실제 크기로 그리고, 사람·손·화분 같은 비례 기준이 있으면 그것에 맞춘다.
+  if (subjectLatin || subject) {
+    p.push(a.subjectSize
+      ? `[나무 크기 — 성장 단계에 맞게] 이 종의 실제 크기: ${a.subjectSize}. 장면 묘사가 가리키는 단계(묘목/유목/성목)의 크기로 그리고 성목 최대를 넘기지 마라. 사람·손·화분·도구가 함께 나오면 그 비례로 크기를 잡아라 — 사람 머리 위로 까마득히 솟는 거목으로 그리지 마라.`
+      : `[나무 크기 — 성장 단계에 맞게] ${subjectLatin ?? subject}의 실제 성장 단계별 크기(묘목→유목→성목의 높이와 폭)를 가늠해 장면 묘사가 가리키는 단계의 크기로 그리고, 이 종의 실제 최대 크기를 넘기지 마라. 사람·손·화분·도구가 함께 나오면 그 비례로 크기를 잡아라.`);
   }
   // 연장은 화면에 넣지 않는다(2026-09-06 실사고) — 생활감이 "쓴 자국이 있는 도구"를 부르면
   // 전지가위가 들어오는데, 날과 축의 구조가 물리적으로 불가능하게 그려진다. 손만으로 충분하다.
@@ -1538,14 +1558,10 @@ export async function runShortsJob(
   const checkAbort = (): void => { if (opts.signal?.aborted) throw new Error('취소됨'); };
   try {
     fs.mkdirSync(path.join(dir, 'scenes'), { recursive: true });
-    // 씬 수 — 명시 요청(opts.sceneCount)이 없으면 런별 구조 시드가 정한다(4~6, 2026-08-27 권고 4).
-    // 상한 역산(씬당 최소 ~8초 = 낭독+연출)은 그대로 씌운다: 40초 상한에서는 실질 4~5씬이고 6씬은
-    // 상한 48초부터 열린다. 시드 off 는 종전 기본값 5씬(= min(6, 8, floor(40/8)))과 같은 값이다.
-    const seed = currentStructureSeed();
-    // 채널별 씬 수 차등은 폐기(2026-09-03) — 대본을 공유하므로 채널마다 다를 수 없고, 애초에
-    // 그 근거였던 '중복 콘텐츠 회피'가 성립하지 않았다(유튜브는 인스타를 못 본다).
-    const seedScenes = seed.shortsScenes;
-    const n = Math.min(Math.max(4, opts.sceneCount ?? seedScenes), 8, Math.max(4, Math.floor(CONFIG.shortsMaxDurationSec / 8)));
+    // 씬 수 — 항상 CONFIG.shortsScenes(기본 5, 2026-09-09 사용자 확정 "씬을 항상 5개").
+    // 종전에는 구조 시드(4~6)와 상한 역산(씬당 ~8초)이 정해 4씬이 섞여 나왔다. 명시 요청(opts.sceneCount)만 예외.
+    // 채널별 씬 수 차등은 폐기(2026-09-03) — 대본을 공유하므로 채널마다 다를 수 없다.
+    const n = Math.min(Math.max(3, opts.sceneCount ?? CONFIG.shortsScenes), 8);
 
     // 1-a) 형제편 승계(2026-09-03) — 원편이 만든 자산을 물려받고 낭독만 이 편 작가 목소리로 새로 뜬다.
     //      기획·디자인·이미지·씬QA·I2V 를 건너뛴다. 승계가 실패하면(원편 대본 없음) 일반 생성으로 돌아간다.
@@ -1678,6 +1694,8 @@ export async function runShortsJob(
     const mediaAt = await assignMediaToScenes(briefs, plan.scenes, opts.signal ? { signal: opts.signal } : {});
     const ordered = orderAssetsByAssignment(userAssetFiles, mediaAt, plan.scenes.length);
     const assetPlan = planAssetScenes(ordered.assets, plan.scenes.length, ordered.order);
+    // 보관소 사진은 참조로도 쓰지 않는다(사용자 확정 2026-09-08 "보관소 이미지는 무시") — 종 참조는 보관소 영상 프레임 한 장뿐.
+    // 컴포저에 직접 첨부한 사진(userAssets)만 종전대로 배경·톤 참조로 쓴다.
     const refPaths = styleRefs(ordered.assets, assetPlan);
     // 종 레퍼런스(2026-09-06) — 보관소에 이 수종 소재가 있으면 실물 한 장을 참조로 붙인다.
     // 사진이 없고 영상만 있는 경우가 대부분이라(대추나무가 그랬다) 프레임을 뽑아 쓴다.
@@ -1699,8 +1717,11 @@ export async function runShortsJob(
     for (const f of userVideoFiles) { const at = mediaAt.get(f); if (at !== undefined) videoPrefer.set(f, at); }
     const videoPlan = planVideoSegments(
       userVideoFiles.map((f) => ({ path: f, seconds: videoDurations.get(f) ?? 0 })).filter((v) => v.seconds > 0),
-      sceneEst, videoPrefer,
+      sceneEst, videoPrefer, { mustUse: true }, // 보관소 영상 1개는 반드시 들어간다(사용자 확정 2026-09-08)
     );
+    if (videoPlan.some(Boolean) && ![...videoPrefer.entries()].some(([f, at]) => videoPlan[at]?.path === f)) {
+      say(`실촬영 배정 보정 — 감독 배정이 무효(훅·범위 밖·길이 미달)라 씬 ${videoPlan.findIndex(Boolean) + 1}에 길이 규칙으로 넣음`);
+    }
     // 실촬영이 덮는 씬 — 이미지도 I2V 도 만들지 않는다. 만들어 놓고 버리던 것이 헛돈이었다.
     const covered = new Set<number>();
     assetPlan.forEach((a, i) => { if (a) covered.add(i); });
@@ -1724,6 +1745,7 @@ export async function runShortsJob(
       // 화분 소품은 화분·실내 주제일 때만 — 노지 수종에 넣으면 종 자체가 틀어진다(2026-09-06 실사고)
       potted: isContainerTopic(`${short.keyword ?? ''} ${short.topic}`),
       speciesRef: !!speciesRefPath,
+      ...(design.species?.size ? { subjectSize: design.species.size } : {}),
       ...(design.subject ? { subject: design.subject } : {}),
       ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}),
       // 꽃·열매는 그 씬이 실제로 다룰 때만 — 늘 붙이면 꽃 없는 계절 장면에 꽃이 그려진다.
@@ -1772,6 +1794,7 @@ export async function runShortsJob(
       ...(genRefs.length ? { refImages: genRefs } : {}),
       ...(design.subject ? { subject: design.subject } : {}),
       ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}), // 수종 오식별 검사
+      ...(design.species?.size ? { subjectSize: design.species.size } : {}),   // 크기 검사(2026-09-08)
       // 실사진 자리는 QA 재생성에서 뺀다 — 사용자가 고른 사진을 우리가 생성본으로 바꾸면 안 된다.
       protectedScenes: new Set(assetPlan.map((a, i) => (a ? i : -1)).filter((i) => i >= 0)),
     });
@@ -1794,7 +1817,9 @@ export async function runShortsJob(
     // 사람·손·도구 씬 판별(비전이 이미지를 직접 봄) — 그 씬은 I2V 를 건너뛰고 스틸로 남긴다.
     // 프롬프트로 '정지'를 요청하는 방식은 5B 모델이 무시해 실패했다(사용자 보고 2026-08-01).
     const subjectScenes = i2vGate() && !hasRealFootage ? await detectSubjectScenes(images, opts.signal) : new Set<number>();
-    if (subjectScenes.size) say(`사람·손·도구 씬 ${subjectScenes.size}개 — 모션 없이 스틸 유지(형태 왜곡 방지)`);
+    if (subjectScenes.size) say(CONFIG.shortsI2vSubjectScenes
+      ? `사람·손·도구 씬 ${subjectScenes.size}개 — 카메라 전용 모션(사람·손은 사진처럼 정지)으로 I2V 후보 유지`
+      : `사람·손·도구 씬 ${subjectScenes.size}개 — 모션 없이 스틸 유지(형태 왜곡 방지)`);
 
     // I2V 컷 선정 — '정말 움직임이 필요한 핵심 컷'만 클립화(기본 1 = 훅, env SHORTS_I2V_MAX_CLIPS).
     // 탈락 씬은 Remotion 네이티브 연출(fx: push·엔터 이펙트·강도 변주)이 움직임 공백을 채운다.
@@ -1812,6 +1837,7 @@ export async function runShortsJob(
           kinds: plan.scenes.map((s) => s.kind), motionPrompts, subjectScenes, scenePrompts,
           images: images.map((im, i) => (covered.has(i) ? null : im)),
           max: CONFIG.shortsI2vMaxClips,
+          allowSubject: CONFIG.shortsI2vSubjectScenes, // 2026-09-09 — 손 씬도 후보(카메라 전용 모션)
         });
     if (hasRealFootage) say('I2V 건너뜀 — 실촬영 화면이 들어간다(생성 모션이 필요 없다)');
     else if (i2vGate()) say(`I2V 컷 선정 — ${i2vPlan.allowed.size}/${plan.scenes.length}씬 (상한 ${CONFIG.shortsI2vMaxClips}${i2vPlan.reasons.length ? ` · ${i2vPlan.reasons.join(' ')}` : ''})`);
@@ -1821,6 +1847,7 @@ export async function runShortsJob(
       // 원시 장면 묘사를 넘긴다(빌드된 이미지 프롬프트 X) — 후자에는 '손·손가락 왜곡을 피한다' 는
       // 금지 문구가 항상 붙어 있어 손 판별(hasSubjectRisk)이 전 씬에 오탐했다(실측 2026-08-01).
       dir, images, scenePrompts, motionPrompts, subjectScenes, signal: opts.signal,
+      allowSubject: CONFIG.shortsI2vSubjectScenes,
       // 실사진 씬은 I2V 대상에서 뺀다 — 실제로 찍은 사진을 생성 모델이 움직이면 형태가 무너진다.
       allowedScenes: new Set([...i2vPlan.allowed].filter((i) => !covered.has(i))),
     });
@@ -1833,11 +1860,18 @@ export async function runShortsJob(
 
     // 3-c-ii) 클립 비전 QA — 중간 프레임 검수(형태 붕괴·물체 출현·유령 글자·내레이션 모순),
     //         불량 클립만 QA 통과 스틸(켄번즈)로 강등. 재생성 없음 — 추가 과금 0, fail-open.
-    if (clipCount) {
-      const cq = await qaSceneClips({ dir, clips: cv.clips, narrations: plan.scenes.map((s) => s.narration), signal: opts.signal });
-      cv.clips = cq.clips;
+    // 사장님 실촬영(user_NN.mp4)은 클립 QA 대상이 아니다(2026-09-08 실사고) — 이 검수는 I2V 생성 클립의 형태 붕괴·유령
+    // 글자를 잡으려는 것인데, 사장님 영상을 "내레이션과 안 맞는다"며 버렸다. 그 씬은 영상이 들어갈 자리라 생성 이미지를
+    // 안 만들어 둔 터라 '스틸 폴백'이 검은 배경이 됐다(공작단풍 유튜브편 3번 씬). 실촬영은 사용자의 선택이고 반드시 들어간다.
+    const realClipAt = cv.clips.map((c) => !!c && path.basename(c).startsWith('user_'));
+    const genClips = cv.clips.map((c, i) => (realClipAt[i] ? null : c));
+    if (genClips.some(Boolean)) {
+      const cq = await qaSceneClips({ dir, clips: genClips, narrations: plan.scenes.map((s) => s.narration), signal: opts.signal });
+      cv.clips = cq.clips.map((c, i) => (realClipAt[i] ? cv.clips[i]! : c));
       if (cq.dropped) say(`클립 QA — ${cq.dropped}개 불량 → 스틸 폴백 (${cq.issues.slice(0, 2).join(' · ')})`);
       checkAbort();
+    } else if (clipCount) {
+      say('클립 QA 건너뜀 — 클립이 실촬영뿐(사장님 영상은 검수 대상이 아니다)');
     }
 
     await finishShortsRun({

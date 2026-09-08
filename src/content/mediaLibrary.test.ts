@@ -90,3 +90,16 @@ describe('matchMedia — 별칭이 달라도 같은 나무면 쓴다(2026-09-04 
     expect(matchMedia(items, { species: '음나무', canon: boom })).toHaveLength(1);
   });
 });
+
+describe("matchMedia — 사전이 모르는 딱지도 '나무'를 뗀 어간으로 맞춘다(2026-09-08)", () => {
+  const items = [
+    { id: 'a', file: '/x/a.mp4', kind: 'video', name: 'a', bytes: 1, species: '매실나무', createdTs: '2026-09-08T00:00:00Z' },
+    { id: 'b', file: '/x/b.mp4', kind: 'video', name: 'b', bytes: 1, species: '배나무', createdTs: '2026-09-08T00:00:00Z' },
+  ] as never[];
+  it("'매실 수확 시기' 제목이 '매실나무' 딱지 영상을 잡는다", () => {
+    expect(matchMedia(items, { text: '매실 수확 시기', kind: 'video' }).map((m) => m.id)).toEqual(['a']);
+  });
+  it("1자 어간은 안 쓴다 — '배수' 제목이 '배나무' 영상을 잡으면 안 된다", () => {
+    expect(matchMedia(items, { text: '마당 배수 문제', kind: 'video' })).toEqual([]);
+  });
+});

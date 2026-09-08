@@ -161,6 +161,14 @@ export interface Config {
   readonly shortsPerfDays: number;
   /** 쇼츠 총 길이 상한(초) — 대본 자수 예산·씬 수를 여기서 역산(사용자 확정 2026-08-14: 60초 이내). */
   readonly shortsMaxDurationSec: number;
+  /** 쇼츠 씬 수 — 항상 이 값(2026-09-09 사용자 확정: 5). 시드·상한 역산으로 흔들리지 않는다. */
+  readonly shortsScenes: number;
+  /**
+   * 사람·손·도구 씬에도 I2V 를 건다(2026-09-09 사용자 확정) — 단 '카메라만 움직이고 사람·손·도구는 사진처럼 정지'
+   * 프롬프트로만. 07-31 의 전면 제외는 wan 5B 가 손가락을 뭉개던 실측이었고, 09-03 부터 쓰는 veo3.1 lite 는 손을
+   * 훨씬 잘 지킨다. 실측: 나무전정 유튜브편이 5씬 중 4씬에 손이 나와 I2V 0컷이 됐다. 무너지면 0 으로 되돌린다.
+   */
+  readonly shortsI2vSubjectScenes: boolean;
   /** 유튜브 하루 업로드 상한(2026-09-03, 사용자 확정 1편) — 0 이하면 상한 없음. 인스타는 적용하지 않는다. */
   readonly youtubeDailyCap: number;
   /** 페이스북을 성과 지표에서 채널로 셀 것인가(기본 off — 위 구현부 주석 참조). */
@@ -368,8 +376,10 @@ export const CONFIG: Config = {
   autoYtUpload: envBool('AUTO_YT_UPLOAD', false),
   shortsPerfDays: Math.max(1, envInt('SHORTS_PERF_DAYS', 7)),
   shortsMaxDurationSec: Math.min(180, Math.max(20, envInt('SHORTS_MAX_DURATION_SEC', 60))),
+  shortsScenes: Math.min(8, Math.max(3, envInt('SHORTS_SCENES', 5))),
   // 대량생산 신호를 줄이는 쪽이 목적이라 기본 1편. 인스타는 막히지 않았고 성과가 나는 채널이라 제외한다.
   youtubeDailyCap: envInt('YOUTUBE_DAILY_CAP', 1),
+  shortsI2vSubjectScenes: envBool('SHORTS_I2V_SUBJECT_SCENES', true),
   // 페이스북을 '채널'로 셀 것인가(2026-09-04 사용자 확정: 아니오).
   // 실측: 릴스 110편 두 달 합계 291회(편당 중앙 2회), 같은 영상의 인스타는 150,961회 — 520배.
   // 원인은 배포가 아니라 페이지다. 팬 0·팔로워 0 — 이 페이지는 인스타 Graph API 를 쓰려면

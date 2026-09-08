@@ -36,6 +36,12 @@ describe('trimPlanToBudget — 결정적 트리밍(생성 실패 금지의 예�
     expect(r.keptScenes[r.keptScenes.length - 1]).toBe(5); // CTA 보존
     expect(r.plan.scenes.length).toBeGreaterThanOrEqual(4); // 최소 4씬
   });
+  it('minScenes 를 주면 그 아래로 씬을 빼지 않는다 — 예산 초과여도 문장만 깎고 씬 수를 지킨다(2026-09-09 항상 5씬)', () => {
+    const p = mk(['훅번째문장입니다.', '전제번째문장입니다.', '본문하나입니다.', '본문둘입니다.', 'CTA입니다.']);
+    const r = trimPlanToBudget(p, 20, 5);
+    expect(r.plan.scenes.length).toBe(5);
+    expect(r.keptScenes).toEqual([0, 1, 2, 3, 4]);
+  });
   it('최소 구성(4씬·전 씬 1문장)에서는 더 깎지 않고 멈춘다(생성 우선 — 무한루프 없음)', () => {
     const p = mk(['훅.', '전제.', '본문.', 'CTA.']);
     const r = trimPlanToBudget(p, 3);
@@ -349,6 +355,22 @@ describe('diversifyTitle — 대표 제목 구조 수렴 차단', () => {
     expect(titleShape('수국 언제 자를까요?')).toBe('question');
     expect(titleShape('수국 9월 관리, 이것만')).toBe('comma');
     expect(titleShape('수국은 9월에 결정됩니다')).toBe('plain');
+  });
+});
+
+describe('buildSceneImagePrompt — 나무 크기(2026-09-08)', () => {
+  const base = { style: '수채', scene: '잎이 진 겨울 골격을 올려다본 전신 구도', index: 4, total: 5, seed: 'short_x' };
+  it('사전에 size 가 있으면 그 크기와 성목 최대를 지키라고 못박는다', () => {
+    const t = buildSceneImagePrompt({ ...base, subjectLatin: 'Acer palmatum var. dissectum', subjectSize: '성목 2~3m, 최대 4m' });
+    expect(t).toContain('[나무 크기 — 성장 단계에 맞게] 이 종의 실제 크기: 성목 2~3m, 최대 4m');
+    expect(t).toContain('거목으로 그리지 마라');
+  });
+  it('size 가 없으면 학명으로 가늠하게 한다', () => {
+    const t = buildSceneImagePrompt({ ...base, subjectLatin: 'Ziziphus jujuba' });
+    expect(t).toContain('Ziziphus jujuba의 실제 성장 단계별 크기');
+  });
+  it('수종이 없으면 크기 줄도 없다', () => {
+    expect(buildSceneImagePrompt(base)).not.toContain('[나무 크기');
   });
 });
 

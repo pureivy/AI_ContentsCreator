@@ -41,7 +41,7 @@ export interface StructureSeed {
   cardLines: 2 | 3 | 4 | 5;
   /** 카드뉴스 해시태그 개수(10~15). */
   hashtags: number;
-  /** 쇼츠 씬 수(4~6). */
+  /** 쇼츠 씬 수(4~6) — 2026-09-09부터 쇼츠는 읽지 않는다(항상 CONFIG.shortsScenes). 다이제스트 호환용으로만 남긴다. */
   shortsScenes: 4 | 5 | 6;
 }
 

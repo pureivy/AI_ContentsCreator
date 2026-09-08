@@ -109,6 +109,7 @@ export function planVideoSegments(
   videos: ReadonlyArray<{ path: string; seconds: number }>,
   sceneSeconds: readonly number[],
   prefer: ReadonlyMap<string, number> = new Map(),
+  opts: { mustUse?: boolean } = {},
 ): ReadonlyArray<VideoSegment | null> {
   const out: Array<VideoSegment | null> = sceneSeconds.map(() => null);
   if (!videos.length || !sceneSeconds.length) return out;
@@ -132,9 +133,11 @@ export function planVideoSegments(
     place(v, at);
   }
 
-  // 1) 배정을 못 받은 영상만 길이로 채운다 — 내용을 본 판단이 있는데 길이가 덮어쓰면 안 된다.
+  // 1) 자리를 못 잡은 영상을 길이로 채운다 — 내용을 본 판단이 '성공'했으면 길이가 덮어쓰지 않는다(used).
+  //    배정이 훅(0)·범위 밖·길이 미달로 무효가 된 영상도 여기로 온다(2026-09-09 실측: 감독이 훅에 놓은
+  //    영상이 prefer 에 있다는 이유로 보정에서도 빠져 편 전체에서 사라졌다).
   //    긴 씬부터(채울 영상을 고르기 어려운 쪽부터), 감속이 가장 작은 영상을 고른다.
-  const rest = pool.filter((v) => !prefer.has(v.path) && !used.has(v.path));
+  const rest = pool.filter((v) => !used.has(v.path));
   if (rest.length) {
     const order = sceneSeconds
       .map((sec, i) => ({ i, sec }))
@@ -148,6 +151,13 @@ export function planVideoSegments(
       const exact = avail.filter((v) => v.seconds >= sec).sort((a, b) => a.seconds - b.seconds)[0];
       place(exact ?? avail.sort((a, b) => b.seconds - a.seconds)[0]!, i);
     }
+  }
+  // 2) 반드시 하나는 쓴다(사용자 확정 2026-09-08 "실제 촬영 영상은 한 개를 반드시 사용해") — 배정도 길이도
+  //    못 잡았으면 훅을 뺀 씬 중 가장 짧은 씬에 가장 긴 영상을 놓는다. 감속보다 누락이 나쁘다.
+  if (opts.mustUse && !used.size) {
+    const v = [...pool].sort((a, b) => b.seconds - a.seconds)[0];
+    const cand = sceneSeconds.map((sec, i) => ({ i, sec })).filter((x) => x.i > 0 && !claimed.has(x.i)).sort((a, b) => a.sec - b.sec)[0];
+    if (v && cand) place(v, cand.i);
   }
   return out;
 }

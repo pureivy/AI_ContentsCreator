@@ -21,6 +21,9 @@ export interface Species {
   readonly form?: string;
   readonly flower?: string;
   readonly fruit?: string;
+  /** 성장 단계별 실제 크기(2026-09-08, 사람이 적는다) — "묘목 30~60cm · 유목 1~1.5m · 성목 2~3m(폭이 높이보다 넓음), 최대 4m".
+   *  이미지 생성·검수가 '장면의 단계에 맞는 크기'와 '성목 최대'를 이 값으로 본다. 실측: 공작단풍 마지막 씬이 버드나무 크기 거목으로 그려졌다. */
+  readonly size?: string;
   readonly note?: string;
   /** 사람이 형태 묘사를 확인했는가. 코드 동작은 안 바꾸고 표시만 한다. */
   readonly verified?: boolean;
@@ -61,6 +64,37 @@ export function findSpecies(text: string, list = loadSpecies()): Species | undef
   }
   keys.sort((a, b) => b.key.length - a.key.length); // 긴 이름 우선
   return keys.find((k) => t.includes(k.key))?.sp;
+}
+
+/**
+ * 느슨한 수종 찾기(순수, 2026-09-08) — 보관소 소재 매칭 전용.
+ *
+ * 실사고: 사장님이 '공작단풍나무' 딱지로 올린 사진 2·영상 1이 "공작단풍전정, 도장지와 대목순 제거가 핵심"
+ * 편에서 통째로 빠졌다. 사전 항목은 업로드 때 자동 추가돼 별칭이 비어 있었고, 제목엔 '나무'가 없어
+ * findSpecies 가 못 잡았다. 살구·자두·매실처럼 제목이 '나무'를 떼고 쓰는 수종 전부에 같은 구멍이 있다.
+ *
+ * 규칙: 먼저 findSpecies(정확). 없으면 이름·별칭에서 끝의 '나무'를 뗀 어간(2자 이상)으로 다시 본다 —
+ * '공작단풍나무'→'공작단풍', '살구나무'→'살구'. 1자 어간('배'·'밤'·'감')은 오탐이 커서 안 쓴다.
+ * 긴 어간 먼저('공작단풍'이 '단풍'보다 앞) — findSpecies 와 같은 원칙.
+ *
+ * 주제 게이트(수종 상한·앵커)에는 쓰지 않는다 — 거기서 느슨하면 '가을 단풍 관리' 글이 단풍나무 편으로
+ * 세어져 상한을 먹는다. 소재를 '안 쓰는' 손해가 '엉뚱한 종을 쓰는' 손해보다 크다고 본 곳에만 쓴다.
+ */
+export function findSpeciesLoose(text: string, list = loadSpecies()): Species | undefined {
+  const exact = findSpecies(text, list);
+  if (exact) return exact;
+  const t = String(text ?? '');
+  if (!t.trim()) return undefined;
+  const stems: Array<{ key: string; sp: Species }> = [];
+  for (const sp of list) {
+    for (const name of [sp.name, ...(sp.aliases ?? [])]) {
+      if (!name.endsWith('나무')) continue;
+      const stem = name.slice(0, -2);
+      if (stem.length >= 2) stems.push({ key: stem, sp });
+    }
+  }
+  stems.sort((a, b) => b.key.length - a.key.length);
+  return stems.find((k) => t.includes(k.key))?.sp;
 }
 
 /**

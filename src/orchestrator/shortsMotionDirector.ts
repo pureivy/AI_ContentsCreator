@@ -81,14 +81,16 @@ export function selectI2vScenes(opts: {
   scenePrompts: string[];
   images: Array<string | null>;
   max: number;
+  /** 사람·손·도구 씬도 후보에 넣는다(2026-09-09) — 클립 단이 카메라 전용 프롬프트를 강제한다. 기본 false(종전). */
+  allowSubject?: boolean;
 }): { allowed: Set<number>; reasons: string[] } {
   const label = (k: MotionSceneCtx['kind'], i: number): string => (k === 'hook' || (i === 0 && !k)) ? '훅' : k ?? '본문';
   const scored = opts.images.map((img, i) => {
     const kind = opts.kinds[i];
-    const eligible = !!img
-      && !opts.subjectScenes.has(i)
-      && !(opts.motionPrompts[i]?.startsWith('Camera work only:') ?? false)
-      && !hasSubjectRisk(opts.scenePrompts[i] ?? '');
+    const subject = opts.subjectScenes.has(i)
+      || (opts.motionPrompts[i]?.startsWith('Camera work only:') ?? false)
+      || hasSubjectRisk(opts.scenePrompts[i] ?? '');
+    const eligible = !!img && (opts.allowSubject ? true : !subject);
     const score = ((kind === 'hook' || i === 0) ? 100 : kind === undefined ? 60 : kind === 'cta' ? 30 : 5) - i * 0.1;
     return { i, kind, eligible, score };
   });

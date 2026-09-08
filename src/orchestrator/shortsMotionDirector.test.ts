@@ -198,6 +198,14 @@ describe('selectI2vScenes — 결정적 I2V 컷 선정(상한제, 순수)', () =
     const r = selectI2vScenes({ ...o, max: 3 });
     expect([...r.allowed]).toEqual([4]); // 씬5만 생존
   });
+  it('allowSubject(2026-09-09) — 손·도구 씬도 후보에 들어 훅이 다시 1순위가 된다', async () => {
+    const { selectI2vScenes } = await import('./shortsMotionDirector');
+    const o = base(5);
+    o.subjectScenes = new Set([0, 1, 2, 3]);           // 나무전정 유튜브편 실측: 5씬 중 4씬에 손
+    o.kinds = ['hook', undefined, undefined, undefined, 'list'];
+    expect([...selectI2vScenes({ ...o, max: 1 }).allowed]).toEqual([4]);                       // 종전: 카드 씬만 남는다
+    expect([...selectI2vScenes({ ...o, max: 1, allowSubject: true }).allowed]).toEqual([0]);   // 허용: 훅
+  });
   it('상한 0=빈 셋(전 씬 스킵), 상한이 eligible 수보다 크면 전원', async () => {
     const { selectI2vScenes } = await import('./shortsMotionDirector');
     expect(selectI2vScenes({ ...base(4), max: 0 }).allowed.size).toBe(0);

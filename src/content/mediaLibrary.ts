@@ -128,7 +128,11 @@ export function matchMedia(
     // 주제에 그대로 들어 있으면 그게 곧 근거다. 사전은 그 다음이다.
     // 사전이 그 종을 알면 표준명끼리 맞추고, 모르면 주제 문장에 그 이름(사용자가 적은 표기든
     // 표준명이든)이 있는지로 본다.
-    const hit = named ? (want ? named === want : text.includes(label) || text.includes(named)) : false;
+    // 사전이 모르는 딱지('매실나무'가 사전에 없던 실측 2026-09-08)도 끝의 '나무'를 뗀 어간(2자 이상)으로 맞춘다 —
+    // 제목은 '매실 수확 시기'처럼 '나무'를 떼고 쓰는 일이 흔하다. 1자 어간('배'·'밤')은 오탐이 커서 안 쓴다.
+    const stem = (n: string): string => (n.endsWith('나무') && n.length >= 4 ? n.slice(0, -2) : '');
+    const inText = (n: string): boolean => !!n && (text.includes(n) || (!!stem(n) && text.includes(stem(n))));
+    const hit = named ? (want ? named === want : inText(label) || inText(named)) : false;
     if (label && !hit) continue; // 다른 수종·무관한 수종은 배제
     let s = 0;
     if (hit) s += 100;

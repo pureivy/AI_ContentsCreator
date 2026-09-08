@@ -2,14 +2,16 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadSpecies, findSpecies, speciesAnchor, speciesSeasonalHint, speciesNameFrom, appendSpecies, resetSpeciesCache, stripSpeciesNamePrefix } from './species';
+import { loadSpecies, findSpecies, findSpeciesLoose, speciesAnchor, speciesSeasonalHint, speciesNameFrom, appendSpecies, resetSpeciesCache, stripSpeciesNamePrefix } from './species';
 
 const LIST = loadSpecies();
 
 describe('수종 사전 — 데이터 무결성', () => {
   it('로드되고 학명이 모두 있다', () => {
     expect(LIST.length).toBeGreaterThan(20);
-    for (const s of LIST) expect(s.latin).toMatch(/^[A-Z][a-z]+ [a-z-]+$/);
+    // 이명식 학명 + 사람이 확인한 변종·아종 표기(var./subsp./f.)까지 허용 — 공작단풍 'Acer palmatum var. dissectum'(2026-09-08).
+    // 자동 학습 경로는 normalizeLatinName 이 여전히 이명식으로 자르므로, 변종 표기는 사람이 적은 항목에만 나타난다.
+    for (const s of LIST) expect(s.latin).toMatch(/^[A-Z][a-z]+ [a-z-]+( (var|subsp|f)\. [a-z-]+)?$/);
   });
   it('이름·별칭이 겹치지 않는다 — 겹치면 매칭이 엉킨다', () => {
     const keys: string[] = [];
@@ -189,4 +191,30 @@ describe('stripSpeciesNamePrefix — 앵커 앞머리 이름 제거(순수)', ()
     expect(speciesAnchor(sp)).not.toContain('치자나무 — 치자나무');
     resetSpeciesCache();
   });
+});
+
+describe('findSpeciesLoose — 보관소 매칭용 느슨한 찾기(순수)', () => {
+  const list = [
+    { name: '공작단풍나무', latin: 'Acer palmatum' },
+    { name: '단풍나무', latin: 'Acer' },
+    { name: '살구나무', latin: 'Prunus armeniaca' },
+    { name: '배나무', latin: 'Pyrus' },
+    { name: '사과나무', latin: 'Malus', aliases: ['사과'] },
+  ] as never[];
+  it('정확히 있으면 그대로(findSpecies 와 같다)', () => {
+    expect(findSpeciesLoose('공작단풍나무 전정', list)?.name).toBe('공작단풍나무');
+    expect(findSpeciesLoose('사과 묘목 고르기', list)?.name).toBe('사과나무');
+  });
+  it("제목이 '나무'를 뗀 표기면 어간으로 잡는다 — 실사고 '공작단풍전정'", () => {
+    expect(findSpeciesLoose('공작단풍전정, 도장지와 대목순 제거가 핵심', list)?.name).toBe('공작단풍나무');
+    expect(findSpeciesLoose('살구 결실주 고르는 법', list)?.name).toBe('살구나무');
+  });
+  it("긴 어간이 먼저 — '공작단풍'이 '단풍'보다 앞", () => {
+    expect(findSpeciesLoose('공작단풍 가지 정리', list)?.name).toBe('공작단풍나무');
+    expect(findSpeciesLoose('가을 단풍 관리', list)?.name).toBe('단풍나무');
+  });
+  it("1자 어간('배')은 쓰지 않는다 — '배수'가 배나무로 잡히면 안 된다", () => {
+    expect(findSpeciesLoose('마당 배수 문제', list)).toBeUndefined();
+  });
+  it('빈 문자열은 undefined', () => { expect(findSpeciesLoose('', list)).toBeUndefined(); });
 });

@@ -159,3 +159,19 @@ describe('planVideoSegments — 내용 배정을 길이가 덮어쓰지 않는�
     expect(p.filter(Boolean)).toHaveLength(1);
   });
 });
+
+describe('planVideoSegments — 반드시 하나는 쓴다(사용자 확정 2026-09-08)', () => {
+  it('감독 배정이 훅(0)이면 그 배정은 버리되 길이 규칙으로 다시 채운다 — 배정 실패가 누락이 되면 안 된다', () => {
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 13 }], [4.6, 9.9, 6, 6.2, 6.2], new Map([['v.mp4', 0]]));
+    expect(p[0]).toBeNull();
+    expect(p.filter(Boolean)).toHaveLength(1);
+  });
+  it('mustUse — 길이 하한에 못 미쳐도 훅을 뺀 가장 짧은 씬에 넣는다', () => {
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 1 }], [6, 8, 5], undefined, { mustUse: true });
+    expect(p[2]).toMatchObject({ path: 'v.mp4', seconds: 1 });
+    expect(p.filter(Boolean)).toHaveLength(1);
+  });
+  it('mustUse 여도 영상이 없으면 아무것도 안 넣는다', () => {
+    expect(planVideoSegments([], [6, 6], undefined, { mustUse: true }).filter(Boolean)).toHaveLength(0);
+  });
+});
