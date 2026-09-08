@@ -54,6 +54,7 @@ import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
 import { shortsStore, shortsQaPublishBlockReason } from '../content/shorts';
 import { addMedia, listMedia, updateMedia, removeMedia, mediaDir, matchMedia } from '../content/mediaLibrary';
+import { buildMediaUsage, SOURCES_FILE, type UsageSource } from '../content/mediaUsage';
 import { probeDuration } from '../tools/shortsCommon';
 import { findSpecies, loadSpecies, appendSpecies, appendSpeciesAlias } from '../content/species';
 import { learnSpeciesLabel } from '../content/speciesLearn';
@@ -3692,6 +3693,32 @@ app.post('/media', async (c) => {
   return c.json({ ok: true, added, skipped });
 });
 app.get('/media', (c) => c.json({ media: listMedia(activeBrandSlug() || undefined) }));
+/**
+ * 보관소 사용 현황(2026-09-08 사용자 결정) — 수종마다 블로그 발행·영상 실사용을 한 표로. 저장 상태 없이
+ * 요청 때마다 현재 파일(글 목록·쇼츠 목록·편 폴더의 clips/sources.json 또는 user_NN.mp4)로 다시 계산한다.
+ * 그래서 실시간이다. 주제 선정 로직은 건드리지 않는다 — 판단은 사람이 하고 여기는 사실만 보여 준다.
+ */
+app.get('/media/usage', (c) => {
+  const brand = activeBrandSlug() || undefined;
+  const shortsDir = (id: string): string => shortsStore().dirFor(id);
+  const usage = buildMediaUsage(
+    {
+      media: listMedia(brand),
+      pieces: pieceStore().list().filter((p) => (p.brand ?? '') === (brand ?? '')),
+      shorts: shortsStore().list().filter((s) => (s.brand ?? '') === (brand ?? '')),
+    },
+    {
+      sourcesOf: (id) => {
+        try { const j = JSON.parse(fs.readFileSync(path.join(shortsDir(id), SOURCES_FILE), 'utf-8')) as UsageSource[]; return Array.isArray(j) ? j : null; }
+        catch { return null; }
+      },
+      hasUserClip: (id) => { try { return fs.readdirSync(path.join(shortsDir(id), 'clips')).some((f) => f.startsWith('user_')); } catch { return false; } },
+      speciesOf: (t) => findSpecies(t)?.name,
+      canon: (n) => findSpecies(n)?.name ?? n,
+    },
+  );
+  return c.json(usage);
+});
 app.patch('/media/:id', async (c) => {
   type MediaPatch = { species?: string; tags?: string[]; note?: string };
   const b = await c.req.json<MediaPatch>().catch(() => ({} as MediaPatch));

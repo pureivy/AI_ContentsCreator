@@ -279,6 +279,9 @@ export default function App() {
   const [runs, setRuns] = useState<RunInfo[]>([]);
   // 딥링크 ?piece=<id> — 텔레그램 검토 알림 링크가 검토 탭의 해당 초안을 바로 연다(1회성, 마운트 시 확정).
   const [deepLinkPiece] = useState<string | null>(() => new URLSearchParams(window.location.search).get("piece"));
+  // 딥링크 ?topic=<text> — 보관소 '사용 현황'의 "글 만들기" 버튼이 사무실 입력창에 수종을 채워 넘긴다(2026-09-08).
+  // 런을 시작하지 않는다 — 주제는 사장님이 이어 적고 직접 보낸다. 1회성, 마운트 시 확정.
+  const [deepLinkTopic] = useState<string | null>(() => new URLSearchParams(window.location.search).get("topic"));
   const [view, setView] = useState<View>(() => (deepLinkPiece ? "review" : "office"));
   // 파라미터는 캡처 즉시 URL 에서 제거 — 남겨두면 새로고침마다 검토 탭으로 끌려간다(?run= 정리와 동일한 위생).
   useEffect(() => {
@@ -287,6 +290,13 @@ export default function App() {
     url.searchParams.delete("piece");
     window.history.replaceState(null, "", url);
   }, [deepLinkPiece]);
+  useEffect(() => {
+    if (!deepLinkTopic) return;
+    setChat(deepLinkTopic);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("topic");
+    window.history.replaceState(null, "", url);
+  }, [deepLinkTopic]);
   const [tlTab, setTlTab] = useState<TLTab>("timeline");  // 토론 타임라인 창: 타임라인 | 활동
   const [showHist, setShowHist] = useState(false);
   const histWrapRef = useRef<HTMLDivElement>(null);  // '📑 기록' 풀다운 바깥클릭 닫기용

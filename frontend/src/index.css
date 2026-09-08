@@ -1804,6 +1804,24 @@ button.upload-retry:hover { background: var(--panel2); }
 .media-sub { font-size: 10.5px; opacity: .6; }
 .media-meta input { font-size: 11px; padding: 4px 6px; border-radius: 5px; border: 1px solid var(--line, #333); background: transparent; color: inherit; width: 100%; }
 .media-del { font-size: 11px; padding: 4px; border-radius: 5px; cursor: pointer; opacity: .75; }
+/* 보관소 '사용 현황'(2026-09-08) — 성과 표와 같은 뼈대(perf-table), 폭만 화면에 맞춘다. */
+.media-usage { width: 100%; table-layout: auto; }
+.media-usage-sum { font-size: 12.5px; opacity: .72; margin: 0 0 8px; }
+.media-usage-filter { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.media-usage-toggle { background: none; border: 0; padding: 0; cursor: pointer; color: inherit; font: inherit; }
+.media-usage-unused td:first-child b { color: var(--fg, inherit); }
+.media-usage-title { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-usage-title a { color: inherit; text-decoration: underline dotted; }
+.media-usage-shorts { display: flex; flex-wrap: wrap; gap: 4px; }
+.media-usage-none { text-align: center; opacity: .6; padding: 20px 0 !important; }
+.media-usage-files td { background: var(--bg-neutral, rgba(127,127,127,.06)); padding: 8px 12px 8px 28px; }
+.media-usage-files ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.media-usage-files li { font-size: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.media-usage-file { font-variant-numeric: tabular-nums; }
+.media-usage-blog-public { background: rgba(34, 197, 94, .16); }
+.media-usage-blog-private { background: rgba(234, 179, 8, .18); }
+.media-usage-blog-ready { background: rgba(59, 130, 246, .16); }
+.media-usage-blog-none { background: rgba(127, 127, 127, .14); opacity: .8; }
 
 /* 성과 탭 — 유튜브 검색 유입어(2026-09-04). 제목 아래 한 줄, 표 폭을 늘리지 않는다. */
 .perf-inflow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }

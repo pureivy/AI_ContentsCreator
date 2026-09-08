@@ -36,6 +36,7 @@ import { renderShortsVideo, ensureShortsDownload, extractFirstFrame, cutVideoSeg
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { inheritShortsAssets, inheritedSceneImages, inheritedClips, writeSceneImageMap } from '../content/shortsInherit';
+import { SOURCES_FILE } from '../content/mediaUsage';
 import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom, normalizeLatinName } from '../content/species';
 import { isContainerTopic } from '../analytics/igAxis';
 import { planAssetScenes, styleRefs, planVideoSegments, orderAssetsByAssignment, type VideoSegment } from '../content/userAssets';
@@ -1500,6 +1501,14 @@ async function applyUserSegments(
     }
   }
   say(`실촬영 구간 ${placed}개 배치${fellBack ? ` · ${fellBack}개는 추출 실패로 통짜 사용` : ''}`);
+  // 어느 파일이 어느 씬에 들어갔는지 기록(2026-09-08) — 보관소 '사용 현황'이 파일 단위로 정확히 보는 근거.
+  // 종전엔 user_NN.mp4 존재로 '이 수종 영상이 쓰였다'까지만 알 수 있었다(같은 수종 영상이 둘이면 어느 것인지 모름).
+  // 실패는 삼킨다 — 기록 못 남겼다고 렌더가 멈추면 안 된다(그 편은 종전처럼 추정으로 보인다).
+  try {
+    const rows = segments.map((seg, i) => (seg ? { scene: i + 1, file: seg.path, startSec: seg.startSec, seconds: seg.seconds } : null)).filter(Boolean);
+    fs.mkdirSync(path.join(dir, 'clips'), { recursive: true });
+    fs.writeFileSync(path.join(dir, SOURCES_FILE), JSON.stringify(rows, null, 2), 'utf-8');
+  } catch { /* 무해 */ }
   return out;
 }
 
