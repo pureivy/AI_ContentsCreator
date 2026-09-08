@@ -62,13 +62,19 @@ export interface ShortsLike {
   readonly stage: string;
   readonly sourcePieceId?: string;
   readonly youtubeId?: string;
+  readonly youtubeUrl?: string;
   readonly youtubeTs?: string;
   readonly igReelId?: string;
+  readonly igPermalink?: string;
   readonly metaPublishedTs?: string;
   readonly createdTs: string;
 }
 
 export type BlogStatus = 'public' | 'private' | 'ready' | 'none';
+
+/** 채널별 최신 링크 — 표의 '링크' 열(아이콘). 실촬영 사용과 무관하게 그 수종으로 올라간 것 중 최신. */
+export interface ChannelLink { readonly url: string; readonly title: string; readonly ts: string }
+export interface SpeciesLinks { readonly blog?: ChannelLink; readonly youtube?: ChannelLink; readonly instagram?: ChannelLink }
 
 export interface ShortsUse {
   readonly shortId: string;
@@ -103,6 +109,8 @@ export interface SpeciesUsageRow {
   readonly lastUsedTs?: string;
   /** 영상이 한 번도 화면에 안 들어갔다(정확·추정 모두 없음). 사장님이 볼 목록의 기준. */
   readonly unused: boolean;
+  /** 채널별 최신 링크(2026-09-08 사용자 요청 "제목 대신 아이콘에 링크") — 블로그·유튜브·인스타. 없으면 키 없음. */
+  readonly links: SpeciesLinks;
 }
 
 export interface FileUse {
@@ -225,14 +233,31 @@ export function buildMediaUsage(
     pushUse(sp, { ...base, scenes: [], exact: false });
   }
 
-  // 4) 줄 조립.
+  // 4) 채널별 최신 링크 — 실촬영 사용과 무관하게 '그 수종으로 올라간 것'. 유튜브는 youtubeUrl(없으면 id 로 조립),
+  //    인스타는 igPermalink 만(igReelId 는 숫자 미디어 id 라 주소를 만들 수 없다).
+  const ytBy = new Map<string, ChannelLink>(); const igBy = new Map<string, ChannelLink>();
+  for (const s of input.shorts) {
+    const title = s.title ?? s.topic;
+    const sp = speciesOf(`${s.keyword ?? ''} ${title}`); if (!sp) continue;
+    const ytUrl = s.youtubeUrl || (s.youtubeId ? `https://youtube.com/shorts/${s.youtubeId}` : '');
+    if (ytUrl) { const ts = s.youtubeTs ?? s.createdTs; const cur = ytBy.get(sp); if (!cur || ts > cur.ts) ytBy.set(sp, { url: ytUrl, title, ts }); }
+    if (s.igPermalink) { const ts = s.metaPublishedTs ?? s.createdTs; const cur = igBy.get(sp); if (!cur || ts > cur.ts) igBy.set(sp, { url: s.igPermalink, title, ts }); }
+  }
+
+  // 5) 줄 조립.
   const rows: SpeciesUsageRow[] = [];
   for (const [sp, acc] of bySpecies) {
     const uses = (usesBySpecies.get(sp) ?? []).sort((a, b) => b.ts.localeCompare(a.ts));
+    const blog = blogStatusOf(posts.get(sp) ?? []);
+    const links: SpeciesLinks = {
+      ...(blog.latest?.url ? { blog: { url: blog.latest.url, title: blog.latest.title, ts: blog.latest.ts } } : {}),
+      ...(ytBy.has(sp) ? { youtube: ytBy.get(sp)! } : {}),
+      ...(igBy.has(sp) ? { instagram: igBy.get(sp)! } : {}),
+    };
     rows.push({
       species: sp, labels: [...acc.labels].sort(), images: acc.images, videos: acc.videos, tags: [...acc.tags].sort(),
-      firstAddedTs: acc.first, blog: blogStatusOf(posts.get(sp) ?? []), shorts: uses,
-      ...(uses.length ? { lastUsedTs: uses[0]!.ts } : {}), unused: uses.length === 0,
+      firstAddedTs: acc.first, blog, shorts: uses,
+      ...(uses.length ? { lastUsedTs: uses[0]!.ts } : {}), unused: uses.length === 0, links,
     });
   }
   rows.sort((a, b) => Number(b.unused) - Number(a.unused) || b.videos - a.videos || (b.images + b.videos) - (a.images + a.videos) || a.species.localeCompare(b.species, 'ko'));

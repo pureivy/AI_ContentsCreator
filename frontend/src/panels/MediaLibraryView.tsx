@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Ico from "./Ico";
+import PlatformMark from "./PlatformMark";
 
 /**
  * 사진·영상 보관소 — 한 번 올려 두고 여러 콘텐츠가 꺼내 쓴다.
@@ -17,10 +18,12 @@ interface MediaItem {
 }
 type Platform = "youtube" | "instagram";
 interface ShortsUse { shortId: string; title: string; platform?: Platform; scenes: number[]; exact: boolean; youtubeId?: string; igReelId?: string; ts: string }
+interface ChannelLink { url: string; title: string; ts: string }
 interface SpeciesRow {
   species: string; labels: string[]; images: number; videos: number; tags: string[]; firstAddedTs: string;
   blog: { status: "public" | "private" | "ready" | "none"; count: number; latest?: { id: string; title: string; ts: string; url?: string } };
   shorts: ShortsUse[]; lastUsedTs?: string; unused: boolean;
+  links: { blog?: ChannelLink; youtube?: ChannelLink; instagram?: ChannelLink };
 }
 interface FileUse { shortId: string; title: string; platform?: Platform; scene: number; youtubeId?: string; igReelId?: string; ts: string }
 interface Usage { species: SpeciesRow[]; files: Record<string, FileUse[]>; summary: { species: number; unused: number; blogNone: number; estimatedShorts: number } }
@@ -36,6 +39,12 @@ const published = (u: { youtubeId?: string; igReelId?: string }): string => {
   return out.length ? out.join("·") : "미게시";
 };
 const BLOG_LABEL: Record<SpeciesRow["blog"]["status"], string> = { public: "공개", private: "비공개 발행", ready: "검토 대기", none: "없음" };
+/** 채널 링크 배지(성과 탭과 같은 모양) — 있으면 브랜드 색 + 링크, 없으면 흐린 단색. 제목·날짜는 말풍선으로. */
+function LinkBadge({ name, link, off }: { name: "naver" | "youtube" | "instagram"; link?: ChannelLink; off: string }) {
+  return link
+    ? <a className="perf-link-badge" href={link.url} target="_blank" rel="noreferrer" title={`${link.title} · ${kstDay(link.ts)}`}><PlatformMark name={name} size={14} /></a>
+    : <span className="perf-link-badge off" title={off}><PlatformMark name={name} size={14} mono /></span>;
+}
 
 export default function MediaLibraryView() {
   const [mode, setMode] = useState<"files" | "usage">("files");
@@ -44,6 +53,7 @@ export default function MediaLibraryView() {
   const [usageErr, setUsageErr] = useState("");
   const [onlyUnused, setOnlyUnused] = useState(true);
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const [openUses, setOpenUses] = useState<Set<string>>(new Set()); // 실촬영 쓴 편 목록 펼침(수종 키)
   const [busy, setBusy] = useState(false);
   const [species, setSpecies] = useState("");
   const [tags, setTags] = useState("");
@@ -107,6 +117,7 @@ export default function MediaLibraryView() {
     window.location.assign(`/?topic=${encodeURIComponent(topic)}&start=1`);
   };
   const toggle = (sp: string) => setOpen((prev) => { const n = new Set(prev); if (n.has(sp)) n.delete(sp); else n.add(sp); return n; });
+  const toggleUses = (sp: string) => setOpenUses((prev) => { const n = new Set(prev); if (n.has(sp)) n.delete(sp); else n.add(sp); return n; });
 
   const rows = usage ? usage.species.filter((r) => !onlyUnused || r.unused) : [];
   const filesOf = (sp: string, labels: string[]): MediaItem[] => items.filter((m) => m.species && (m.species === sp || labels.includes(m.species)));
@@ -158,7 +169,7 @@ export default function MediaLibraryView() {
               <table className="perf-table media-usage">
                 <thead>
                   <tr>
-                    <th>수종</th><th>사진/영상</th><th>태그</th><th>블로그</th><th>최근 글</th><th>실촬영 쓴 편</th><th>마지막 사용</th><th></th>
+                    <th>수종</th><th>사진/영상</th><th>태그</th><th>블로그</th><th>링크</th><th>실촬영 쓴 편</th><th>마지막 사용</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -180,26 +191,38 @@ export default function MediaLibraryView() {
                         <td>
                           <span className={`chip media-usage-blog-${r.blog.status}`}>{BLOG_LABEL[r.blog.status]}{r.blog.status === "public" ? ` ${r.blog.count}편` : ""}</span>
                         </td>
-                        <td className="media-usage-title">
-                          {r.blog.latest
-                            ? (r.blog.latest.url ? <a href={r.blog.latest.url} target="_blank" rel="noreferrer">{r.blog.latest.title}</a> : r.blog.latest.title)
-                            : "-"}
-                          {r.blog.latest ? <span className="media-sub"> {kstDay(r.blog.latest.ts)}</span> : null}
+                        <td className="media-usage-links">
+                          {/* links 가 없는 구 서버 응답에도 표가 깨지지 않게 */}
+                          <LinkBadge name="naver" link={r.links?.blog} off="블로그 글 없음" />
+                          <LinkBadge name="youtube" link={r.links?.youtube} off="유튜브 게시 없음" />
+                          <LinkBadge name="instagram" link={r.links?.instagram} off="인스타 게시 없음" />
                         </td>
                         <td>
                           {r.shorts.length === 0 ? <span className="chip media-usage-blog-none">없음</span> : (
-                            <span className="media-usage-shorts">
-                              {r.shorts.map((u) => (
-                                <span key={u.shortId} className="chip" title={u.title}>
-                                  {platformLabel(u.platform)} · {published(u)}{u.exact ? (u.scenes.length ? ` · 씬 ${u.scenes.join(",")}` : "") : " · 추정"}
-                                </span>
-                              ))}
-                            </span>
+                            // 풀다운(2026-09-08 사장님 요청) — 칩을 옆으로 늘어놓으면 칸이 넓어져 옆 열이 잘렸다.
+                            // 목록은 칸 안이 아니라 아래 전체 폭 행에 펼친다 — 칸 안에 펼치면 그 열이 목록 폭만큼 넓어진다(실측 +250px).
+                            <button type="button" className="media-usage-dd" onClick={() => toggleUses(r.species)} title="누르면 편별로 펼칩니다">
+                              {r.shorts.length}편{r.shorts.some((u) => u.youtubeId || u.igReelId) ? "" : " · 미게시"}{r.shorts.every((u) => !u.exact) ? " · 추정" : ""} {openUses.has(r.species) ? "▴" : "▾"}
+                            </button>
                           )}
                         </td>
                         <td>{kstDay(r.lastUsedTs)}</td>
                         <td><button type="button" className="btn ghost" onClick={() => writeAbout(r)} title={`"${[r.species, ...r.tags].join(" ")}" 주제로 사무실에서 바로 시작합니다 (진행 중 런이 있으면 채우기만)`}><Ico name="pencil" size={11} /> 글 시작</button></td>
                       </tr>,
+                      openUses.has(r.species) ? (
+                        <tr key={`${r.species}-uses`} className="media-usage-files">
+                          <td colSpan={8}>
+                            <ul>
+                              {r.shorts.map((u) => (
+                                <li key={u.shortId}>
+                                  <b>{platformLabel(u.platform)}</b> · {published(u)}{u.exact ? (u.scenes.length ? ` · 씬 ${u.scenes.join(",")}` : "") : " · 추정"}
+                                  <span className="media-sub"> {kstDay(u.ts)} · {u.title}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </td>
+                        </tr>
+                      ) : null,
                       isOpen ? (
                         <tr key={`${r.species}-files`} className="media-usage-files">
                           <td colSpan={8}>

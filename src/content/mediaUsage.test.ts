@@ -22,9 +22,10 @@ const pieces: PieceLike[] = [
   { id: 'p4', title: '엄나무 묘목', stage: 'ready', createdTs: '2026-09-05T00:00:00Z' },
 ];
 const shorts: ShortsLike[] = [
-  { id: 's1', topic: '엄나무 묘목은 굵기 전에', platform: 'youtube', stage: 'ready', youtubeId: 'Y1', createdTs: '2026-09-04T22:00:00Z' },   // 기록 있음(정확)
-  { id: 's2', topic: '배롱나무 꽃 안 피는 이유', platform: 'instagram', stage: 'ready', igReelId: 'I1', createdTs: '2026-09-05T10:00:00Z' }, // 기록 없음·user 클립 있음(추정)
-  { id: 's3', topic: '감나무 잎 색', platform: 'youtube', stage: 'ready', createdTs: '2026-09-06T00:00:00Z' },                             // 실촬영 없음
+  { id: 's1', topic: '엄나무 묘목은 굵기 전에', platform: 'youtube', stage: 'ready', youtubeId: 'Y1', youtubeUrl: 'https://youtube.com/shorts/Y1', youtubeTs: '2026-09-04T23:00:00Z', createdTs: '2026-09-04T22:00:00Z' },   // 기록 있음(정확)
+  { id: 's2', topic: '배롱나무 꽃 안 피는 이유', platform: 'instagram', stage: 'ready', igReelId: 'I1', igPermalink: 'https://www.instagram.com/reel/AAA/', metaPublishedTs: '2026-09-05T11:00:00Z', createdTs: '2026-09-05T10:00:00Z' }, // 기록 없음·user 클립 있음(추정)
+  { id: 's3', topic: '감나무 잎 색', platform: 'youtube', stage: 'ready', youtubeId: 'Y3', createdTs: '2026-09-06T00:00:00Z' },             // 실촬영 없음 — 링크는 잡힌다
+  { id: 's4', topic: '감나무 거름', platform: 'youtube', stage: 'ready', youtubeId: 'Y4', youtubeTs: '2026-09-02T00:00:00Z', createdTs: '2026-09-01T00:00:00Z' }, // 더 오래된 감나무 유튜브
 ];
 const deps: UsageDeps = {
   sourcesOf: (id) => (id === 's1' ? [{ scene: 2, file: '/lib/eum.mp4', startSec: 0, seconds: 6 }, { scene: 4, file: '/lib/eum.mp4', startSec: 6, seconds: 5 }] : null),
@@ -81,6 +82,16 @@ describe('buildMediaUsage — 보관소 × 블로그 × 쇼츠 사용 현황(순
     expect(order.indexOf('감나무')).toBeLessThan(order.indexOf('엄나무'));
     expect(order.indexOf('자두나무')).toBeLessThan(order.indexOf('배롱나무'));
     expect(u.summary.unused).toBe(2);
+  });
+  it('링크 열 — 실촬영 사용과 무관하게 그 수종의 최신 블로그·유튜브·인스타 주소를 준다', () => {
+    const g = row('감나무');
+    expect(g.links.blog).toMatchObject({ url: 'https://n/2', title: '감나무 묘목 고르기' });
+    expect(g.links.youtube).toMatchObject({ url: 'https://youtube.com/shorts/Y3' }); // id 만 있어도 주소를 만든다 · 최신 우선
+    expect(g.links.instagram).toBeUndefined();
+    expect(row('배롱나무').links.instagram).toMatchObject({ url: 'https://www.instagram.com/reel/AAA/' });
+    expect(row('배롱나무').links.blog).toMatchObject({ url: 'https://n/p3' }); // 비공개 발행 주소도 링크
+    expect(row('엄나무').links.youtube).toMatchObject({ url: 'https://youtube.com/shorts/Y1' });
+    expect(row('자두나무').links).toEqual({});
   });
   it('deps 가 던져도 표는 나온다(fail-open)', () => {
     const bad: UsageDeps = { sourcesOf: () => { throw new Error('x'); }, hasUserClip: () => { throw new Error('x'); }, speciesOf: () => { throw new Error('x'); }, canon: () => { throw new Error('x'); } };
