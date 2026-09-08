@@ -63,6 +63,13 @@ export interface Piece {
   userTriggered?: boolean;
   /** 클러스터 형제 소진으로 생성된 piece 의 출처(ClusterTopic.id) — 같은 시드 쿨다운 판정·성과 귀속용. */
   clusterSeedId?: string;
+  /**
+   * 주제를 고를 때 본 채널(2026-09-08) — 'youtube' 는 검색 수요 표에서, 'instagram' 은 인스타 소재 축 ×
+   * 제철에서 골랐다는 뜻. 파생은 그대로 양 채널이다(유튜브 피드는 주제를 안 보므로 인스타 주제 글의
+   * 유튜브편도 공짜 조회). 하루 안에서 번갈아 고르는 근거(pickTopicTarget)이자 성과 귀속의 라벨.
+   * 미기록 = 레거시·예고·클러스터 경로.
+   */
+  shortsTarget?: 'youtube' | 'instagram';
   /** 사용자가 컴포저에 첨부한 실사진 경로(2026-09-04) — 파생 쇼츠가 씬 배경·스타일 레퍼런스로 쓴다.
    *  생성 이미지만 쓰던 구조에서 '실제로 찍은 소재'가 화면에 들어오는 유일한 통로다. */
   assets?: string[];
@@ -74,7 +81,7 @@ export interface Piece {
   updatedTs: string;
 }
 
-export interface CreatePieceInput { title: string; keyword?: string; subNiche?: string; stage?: PieceStage; brand?: string; auto?: boolean; userTriggered?: boolean; clusterSeedId?: string; }
+export interface CreatePieceInput { title: string; keyword?: string; subNiche?: string; stage?: PieceStage; brand?: string; auto?: boolean; userTriggered?: boolean; clusterSeedId?: string; shortsTarget?: 'youtube' | 'instagram'; }
 
 const MAX_ERRORS = 3;
 
@@ -107,6 +114,7 @@ export class PieceStore {
       brand: input.brand?.trim() || undefined, auto: input.auto,
       ...(input.userTriggered ? { userTriggered: true } : {}),
       clusterSeedId: input.clusterSeedId || undefined,
+      ...(input.shortsTarget ? { shortsTarget: input.shortsTarget } : {}),
       stage: input.stage ?? 'idea', errors: 0, createdTs: now, updatedTs: now,
     };
     this.items.set(p.id, p);

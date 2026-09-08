@@ -37,6 +37,7 @@ import { shortsSearchTerms, igReelViews } from '../analytics/shortsPerf';
 import { axisPerformance, axisBlock } from '../analytics/igAxis';
 import { unusedStock, stockBlock, usedSpecies } from '../content/mediaStock';
 import { shortsStore } from '../content/shorts';
+import { topicTargetBlock, topicPriorityBlock, demandGateForTarget, platformLabel, type ShortsPlatform } from '../content/shortsPlatform';
 import { listMedia } from '../content/mediaLibrary';
 import { findSpecies } from '../content/species';
 
@@ -239,7 +240,11 @@ function readSafe(p: string): string {
 const recentAuto: string[] = [];
 
 /** 다음에 제작할 콘텐츠 아이디어(구조화). */
-export interface ContentIdea { title: string; keyword?: string; subNiche?: string; }
+export interface ContentIdea {
+  title: string; keyword?: string; subNiche?: string;
+  /** 주제를 고를 때 본 채널(2026-09-08) — piece.shortsTarget 으로 기록된다. */
+  target?: ShortsPlatform;
+}
 
 /**
  * 주제 조향에 쓸 성과 키워드 선별(순수) — 두 겹.
@@ -459,7 +464,16 @@ export function pickRoundAdoption<T extends { rank: number }>(
   return undefined;
 }
 
-export async function proposeContentIdeas(signal?: AbortSignal): Promise<ContentIdea | null> {
+/**
+ * opts.target(2026-09-08) — 이번 틱이 어느 채널을 보고 주제를 고르는가. 'instagram' 이면 프롬프트의
+ * 출발점이 [검색 수요 실측] 표에서 [인스타 소재 축 성적]×제철로 바뀌고, 검색량 하한(하드 기각)을 걸지
+ * 않는다(배롱나무: 월 검색 22 · 인스타 중앙 2,757 — 검색량으로 조이면 인스타 히트가 못 태어난다).
+ * 'youtube'·미지정은 종전 그대로(검색 우선). 시기 밖 소재·수종/축 상한·쿨다운·유사 게이트는 채널과
+ * 무관하게 그대로 건다 — 그것들은 채널이 아니라 코퍼스 건강의 규칙이다.
+ */
+export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?: ShortsPlatform } = {}): Promise<ContentIdea | null> {
+  const target = opts.target;
+  const igTarget = target === 'instagram';
   const c = getCompany();
   // 팀·업무 범위(헌장) — 아이디어 생성의 재료(회사 정체성·콘텐츠 영역이 specialty 에 담겨 있음).
   // 비서실(자비스)은 응대·라우팅 헌장이라 콘텐츠 영역이 아님 — 주제 그라운딩 오염 방지 위해 제외.
@@ -579,6 +593,9 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // 없어 공회전했다. 날짜+절기 한 줄이면 두뇌가 "처서 지나면 가을 식재 준비" 같은 타이밍을 스스로 잡는다.
     `${seasonalContext()}\n\n` +
     (() => { const b = seasonalSubjectBlock(getBrand()?.seasonalSubjects); return b ? `${b}\n\n` : ''; })() +
+    // 채널 목표(2026-09-08) — 절기·제철 바로 뒤, 로테이션·검색 표보다 앞. 인스타 목표는 '무엇을 보고 고르나'를
+    // 통째로 바꾸므로 신호들보다 먼저 읽혀야 한다. 미지정은 무주입(종전 프롬프트 그대로).
+    (target ? `${topicTargetBlock(target)}\n\n` : '') +
     (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov, speciesCap); return b ? `${b}\n\n` : ''; })() +
     (() => { const b = themeRotationBlock(getBrand()?.topicThemes, themeCov); return b ? `${b}\n\n` : ''; })() +
     (searchBlock ? `${searchBlock}\n\n` : '') +
@@ -606,7 +623,9 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // ③-a' 수요 미달로 이미 기각된 키워드(2026-08-27): 재제안 금지 목록. 수요 표 바로 뒤에 붙여야
     //      '수요가 있는 것'과 '이미 없다고 실측된 것'을 두뇌가 한 자리에서 본다. 항목 없으면 빈 문자열.
     //      아래 [신호 우선순위]의 "금지가 항상 이긴다"가 이 블록에도 그대로 적용된다(줄 변경 불필요).
-    demandRejectBlock(slug) +
+    //      인스타 목표 틱(2026-09-08)엔 넣지 않는다 — 코드는 하한 미달을 통과시키는데 두뇌만 '제안 금지'를 받으면
+    //      지시끼리 충돌한다(위 주석의 대칭 사고). 기억 자체는 그대로 쌓인다 — 유튜브 틱에서 다시 쓰인다.
+    (igTarget ? '' : demandRejectBlock(slug)) +
     // ③-b 유튜브 니치 동향(2026-08-25): 최근 7일 조회 상위 영상 — 소재·프레이밍의 실반응 신호.
     ytNicheBlock(undefined, cdown.excludeTokens) +
     // ④ 계열 쿨다운 v2(감쇠 점수): 하드=금지(아래 후보 게이트가 코드로도 기각), 소프트=회피 권고 + 빈 방향 유도.
@@ -623,9 +642,8 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // 후보 8개가 전부 코드 기각으로 날아간다(실측 2026-08-30: 한 라운드 기각 17건 중 대부분이 축 상한,
     // 16축 중 7축 포화 상태에서 생산이 멈춤). 로테이션 블록은 이미 '제안 금지'라 적고 있었지만 서열
     // 선언이 그것을 1군으로 인정하지 않아 지시끼리 사실상 동급이었다.
-    `[신호 우선순위 — 위 신호들이 충돌할 때] 1) **주제 축·수종 상한 도달(제안 금지)** · 계열 쿨다운 금지·실측 폐기·기존 콘텐츠 유사 회피(금지) > 2) **[검색 수요 실측] 표 — 여기서 먼저 고른다(선택의 출발점)** > 3) 리서치 기회·실검색 연관어(보강) > 4) 성과 계열 확장(참고). 금지가 항상 이긴다.\n`
-      + `순서: 먼저 [검색 수요 실측] 표에서 지금 검색되는 키워드를 고르고, 그다음 1군 금지에 걸리는지 확인해 걸리면 표의 다음 행으로 내려가라. 상상으로 주제를 만든 뒤 수요를 맞춰 붙이지 마라 — 그렇게 나온 후보는 대부분 검색량 미달로 버려진다.\n`
-      + `상한 도달 축·수종은 아래 어떤 신호(시드·수요 표·연관어·성과 키워드)에 등장하더라도 후보로 내지 마라 — 코드가 기각해 그 자리가 통째로 버려진다. '아직 안 다룬 축'이 있으면 그 축에서 먼저 채워라.\n\n` +
+    // 문구는 shortsPlatform.topicPriorityBlock 이 채널 목표별로 든다(2026-09-08) — 유튜브·미지정은 종전 문구 그대로.
+    topicPriorityBlock(target) +
     `[기존 콘텐츠 — 주제·키워드 유사 금지]\n${existingLines || '(없음)'}\n\n` +
     `[최근 제작 — 중복 회피]\n${done || '(없음)'}\n\n` +
     `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}\n\n` +
@@ -691,7 +709,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     const logDemandAdopt = (title: string, keyword?: string, known?: string): void => {
       if (!demandOn) return;
       const line = known || demandGateDecision(demandRows, keyword, demandCfg).line;
-      console.log(`[auto-cycle] 수요 게이트 — "${title}" ${line || '조회 없음'} 채택`);
+      console.log(`[auto-cycle] 수요 게이트 — "${title}" ${line || '조회 없음'} 채택${target ? ` · 채널 목표 ${platformLabel(target)}` : ''}`);
     };
     const gated = cands.map((cand, i) => ({
       cand,
@@ -779,8 +797,12 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       // 필요 없고(그게 '재조회 0'의 요점), 프롬프트의 금지 블록은 CONFIG.topicDemandGate 만 보므로
       // 여기에 키 조건을 더하면 "제안 금지"라고 시켜 놓고 게이트는 통과시키는 지시 충돌이 난다.
       const remembered = demandRejectFor(slug, keyword);
+      // 채널 목표별 처리(2026-09-08, 순수 함수 demandGateForTarget) — 인스타 목표는 relax 를 안 쓴다. 마지막
+      // 라운드에 reject 가 demote(relaxed) 로 바뀌면 아래 통과 분기에 안 걸리고 후순위 보관함·유사 폴백 실격으로
+      // 흘러가, '하한을 걸지 않는다'가 마지막 라운드에만 뒤집힌다. 인스타에서 reject 는 언제나 통과라 밸브가 필요 없다.
+      const tg = demandGateForTarget(target, attempt === IDEA_ROUNDS - 1);
       const demand = demandGateDecision(demandRows, keyword, demandCfg, {
-        relax: attempt === IDEA_ROUNDS - 1,
+        relax: tg.relax,
         ...(remembered ? { remembered: { line: remembered.line } } : {}),
       });
       // 기억은 '실측 결과'이지 '채택 자격'이 아니다 — 판정이 난 자리에서 바로 기록한다. 아래 게이트
@@ -788,7 +810,12 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       // 여기서 기록하지 않으면 다음 틱에 같은 키워드가 또 검색광고 조회를 태운다(이 태스크가 없애려던
       // 재조회 낭비가 마지막 라운드 경로에만 남던 비대칭). 실패는 함수 안에서 삼켜지는 fire-and-forget.
       if (shouldRememberDemandReject(demand, remembered, keyword)) rememberDemandReject(slug, keyword, demand.line);
-      if (demand.verdict === 'reject') {
+      // 인스타 목표(2026-09-08) — 검색량 하한은 걸지 않는다. 기억·실측 어느 쪽이든 '하한 미달'은 이 글의
+      // 결격이 아니다(이 글은 검색이 아니라 공유로 퍼진다). 로그는 남겨 나중에 '검색 0 인데 인스타에서 터졌나'를
+      // 대조할 수 있게 한다. 비수기(demote)는 그대로 — 인스타야말로 제철이 생명이다.
+      if (tg.lowVolumePasses && demand.verdict === 'reject') {
+        console.log(`[auto-cycle] 검색 수요 미달 통과(인스타 목표) — "${title}" (${demand.line})`);
+      } else if (demand.verdict === 'reject') {
         console.log(remembered
           ? `[auto-cycle] 아이디어 기각(검색 수요 미달·기억) — "${title}" (${demand.line})`
           : `[auto-cycle] 아이디어 기각(검색 수요 미달) — "${title}" (${demand.line})`);
@@ -857,11 +884,13 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         }
         continue;
       }
-      logDemandAdopt(title, keyword);
+      // 판정 시점의 line 을 그대로 넘긴다 — 인스타 목표에서 기억 기각을 통과한 후보는 demandRows 에 없어
+      // 여기서 다시 계산하면 '조회 없음 채택'으로 새는 비대칭이 있었다(리뷰 2026-09-08).
+      logDemandAdopt(title, keyword, demand.line || undefined);
       recentAuto.push(title);
       if (recentAuto.length > 20) recentAuto.shift();
       if (keyword) consumeOpportunityVerdict(keyword); // 채택된 리서치 기회는 소진 — 다음 기획에 반복 주입 방지(2026-08-24)
-      return { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
+      return { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}), ...(target ? { target } : {}) };
     }
     // 제철 후보가 전멸했으면 후순위 보관함과 유사 폴백 중에서 고른다(pickRoundAdoption). 비수기(rank 0)는
     // '지금 덜 찾는다'일 뿐 수요가 없는 게 아니고 아직 안 다룬 새 소재라 폴백을 이긴다. 반대로 하한 미달
@@ -876,7 +905,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       recentAuto.push(idea.title);
       if (recentAuto.length > 20) recentAuto.shift();
       if (idea.keyword) consumeOpportunityVerdict(idea.keyword);
-      return idea;
+      return { ...idea, ...(target ? { target } : {}) };
     }
     // 새 소재 후보가 전멸했지만 유사 후보가 있으면 채택 — 좌초 대신 '같은 소재, 다른 시각' 글로 간다.
     // 폴백은 계열 게이트 none 후보만 대입되므로(위 자격 조건) 재검사 불필요 — v1의 폴백 뚫림
@@ -887,7 +916,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       recentAuto.push(similarFallback.title);
       if (recentAuto.length > 20) recentAuto.shift();
       if (similarFallback.keyword) consumeOpportunityVerdict(similarFallback.keyword);
-      return similarFallback;
+      return { ...similarFallback, ...(target ? { target } : {}) };
     }
     // 문구가 '전부 기각'이면 후순위 항목이 섞였을 때 노트가 사실과 어긋난다(후순위는 기각이 아니다).
     rejectNote = `[직전 제안 ${cands.length}건 전부 채택 불가(기각 또는 후순위) — 사유: ${rejects.slice(0, 4).join(' · ') || '전부 무효'}] 이 사유들과 소재를 전부 피해, 완전히 다른 소재·키워드로 5건을 다시 제안하라.`;

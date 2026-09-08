@@ -1434,6 +1434,36 @@ async function finishShortsRun(a: {
 const SEGMENT_TAIL_SEC = 1.2;
 
 /**
+ * 다른 채널용 형제 대본이 이미 있으면 그 제목·첫 문장을 '겹치지 마라' 지침으로 만든다(복원 2026-09-08).
+ * 승계를 끄고 채널마다 독립 런으로 돌아오자 09-03 의 문제가 그대로 돌아왔다 — 동시에 띄우면 같은 원문에서
+ * 같은 축의 대본이 나온다. 유튜브는 인스타를 못 보므로 '중복'이 문제가 아니라, 두 채널이 원하는 것(검색 답변형
+ * vs 공유 판정형)이 달라 각도가 갈려야 한다는 것이 사용자 의도다. 읽기 실패는 무해(빈 문자열).
+ */
+function siblingPlanToAvoid(short: Shorts): string {
+  if (!short.platform || !short.sourcePieceId) return '';
+  try {
+    const store = shortsStore();
+    for (const sib of store.list()) {
+      if (sib.id === short.id || sib.sourcePieceId !== short.sourcePieceId) continue;
+      if (!sib.platform || sib.platform === short.platform) continue;
+      const f = path.join(store.dirFor(sib.id), 'plan.json');
+      if (!fs.existsSync(f)) continue;
+      const plan = JSON.parse(fs.readFileSync(f, 'utf-8')) as { title?: string; scenes?: Array<{ narration?: string }> };
+      const hook = plan.scenes?.[0]?.narration?.trim() ?? '';
+      const title = plan.title?.trim() ?? '';
+      if (!hook && !title) continue;
+      return [
+        `[다른 채널 대본 — 겹치지 마라] 같은 글로 ${platformLabel(sib.platform)}용 숏폼이 이미 이렇게 나갔다.`,
+        title ? `· 제목: ${title}` : '',
+        hook ? `· 첫 문장: ${hook}` : '',
+        '같은 각도·같은 훅·같은 결론 문장을 쓰지 마라. 원문의 다른 축을 골라 다른 이야기로 만들어라.',
+      ].filter(Boolean).join('\n');
+    }
+  } catch { /* 형제 대본 읽기 실패는 무해 — 지침 없이 진행 */ }
+  return '';
+}
+
+/**
  * 정해진 구간 배정대로 실촬영 영상을 굽고 씬 클립에 얹는다 — 생성 클립보다 실제로 찍은 화면이 낫다.
  *
  * 배정('어느 씬에 어느 구간')은 여기서 하지 않는다. 그건 대본이 나온 직후 내용 기준으로 정해지고
@@ -1585,11 +1615,13 @@ export async function runShortsJob(
     // 호출할지와 로그 표기만 정한다 — 같은 말을 두 번 주면 서로 어긋날 때 무엇이 이겼는지 못 읽는다.
     const writerProfile = writerById(short.writerId) ?? writerByName(short.writer);
     const writerRole = writerProfile?.id ?? 'shorts_writer';
-    // 다른 채널용 형제가 이미 대본을 냈으면 그 훅·제목을 보여주고 겹치지 말라고 못박는다.
-    // 지침만으로는 같은 원문에서 같은 각도가 나온다(두 런이 같은 본문을 본다).
+    // 다른 채널용 형제가 이미 대본을 냈으면 그 훅·제목을 보여주고 겹치지 말라고 못박는다(복원 2026-09-08).
+    // 지침만으로는 같은 원문에서 같은 각도가 나온다(두 런이 같은 본문을 본다 — 09-03 실측). 두 번째 채널 런은
+    // 첫 채널의 plan.json 을 기다렸다 출발한다(server/main.ts startAfterSiblingPlan).
+    const siblingGuide = siblingPlanToAvoid(short);
 
-    say(`기획 가드 — 채널 ${platformLabel(short.platform)} · 작가 ${writerProfile?.name ?? short.writer ?? '미지정'} · 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 제목 유형 ${titleTypes.join('·')}`);
-    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, mediaPlanGuide(briefs), priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? [], writerRole,
+    say(`기획 가드 — 채널 ${platformLabel(short.platform)} · 작가 ${writerProfile?.name ?? short.writer ?? '미지정'} · 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 형제 대본 ${siblingGuide ? '주입' : '없음'} · 제목 유형 ${titleTypes.join('·')}`);
+    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, siblingGuide, mediaPlanGuide(briefs), priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? [], writerRole,
       recentShortsMainTitles(short.brand, short.id)); // 대표 제목 구조 수렴 차단
     if (!planned) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     // Plan 타입 재선언 — 길이 상한 루프의 재대입이 클로저(씬 map 등) 내로잉을 풀지 않게 non-null 로 고정.

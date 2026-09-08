@@ -138,6 +138,13 @@ export interface Config {
   readonly autoCardNews: boolean;
   /** 네이버 임시저장 성공 시 숏폼(MP4) 자동 파생 — piece당 1회. 글마다 이미지 ~6장 + TTS·ffmpeg(로컬) 비용. */
   readonly autoShorts: boolean;
+  /**
+   * 형제편(다른 채널용) 자산 승계(2026-09-03 도입, 2026-09-08 기본 끔) — 켜면 두 번째 채널 편이 원편의
+   * 대본·이미지·클립을 물려받고 낭독만 새로 뜬다(편당 이미지 비용 1벌). 끄면 채널마다 독립 런 — 대본부터
+   * 따로다(사용자 확정 2026-09-08 "채널별로 따로 만들어라, 비용은 생각하지 말고"). 승계 상태의 실측:
+   * 8쌍 전부 나레이션 5/5 씬 동일 — 채널 지침이 형제편에 전혀 닿지 않았다.
+   */
+  readonly shortsSiblingInherit: boolean;
   /** 쇼츠 렌더 엔진 — 'remotion'(모션그래픽, 기본) | 'ffmpeg'(슬라이드쇼 폴백/강제). */
   readonly shortsRenderer: 'remotion' | 'ffmpeg';
   /** fal.ai API 키 — 쇼츠 씬 배경 I2V(Phase 3). 비면 I2V 완전 비활성(스틸 폴백). */
@@ -350,6 +357,7 @@ export const CONFIG: Config = {
   naverDraftSeoMin: Math.min(Math.max(0, envInt('NAVER_DRAFT_SEO_MIN', 80)), 100),
   autoCardNews: envBool('AUTO_CARDNEWS', true),
   autoShorts: envBool('AUTO_SHORTS', true),
+  shortsSiblingInherit: envBool('SHORTS_SIBLING_INHERIT', false),
   shortsRenderer: env('SHORTS_RENDERER', 'remotion') === 'ffmpeg' ? 'ffmpeg' : 'remotion',
   falKey: env('FAL_KEY', ''),
   shortsI2v: env('SHORTS_I2V', 'fal') === 'off' ? 'off' : 'fal',

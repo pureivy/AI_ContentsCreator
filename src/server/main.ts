@@ -57,7 +57,7 @@ import { addMedia, listMedia, updateMedia, removeMedia, mediaDir, matchMedia } f
 import { probeDuration } from '../tools/shortsCommon';
 import { findSpecies, loadSpecies, appendSpecies, appendSpeciesAlias } from '../content/species';
 import { learnSpeciesLabel } from '../content/speciesLearn';
-import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, autoDailyCapFor, autoCapApplies, type ShortsPlatform } from '../content/shortsPlatform';
+import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, autoDailyCapFor, autoCapApplies, pickTopicTarget, shouldStartSecondRun, SIBLING_PLAN_WAIT_MS, type ShortsPlatform } from '../content/shortsPlatform';
 import { pickWriter, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
@@ -1286,8 +1286,8 @@ function launchShortsRun(shortsId: string, topic: string, opts: {
  * 가 빈 문자열), 한 파일이 두 채널 모두에 올라갈 수 있다 — 09-03 에 없앤 '같은 물건을 두
  * 채널에' 형태로 되돌아간다. 그게 유튜브 대량생산 지문의 축이었다.
  *
- * 파생 경로(shortsFromPieceHandler)와 같이 첫 채널이 원편(자산 생성), 나머지는 그 자산을
- * 승계하고 낭독만 제 작가 목소리로 새로 뜬다 — 편당 비용은 이미지가 지배하므로 한 벌만 만든다.
+ * 파생 경로(shortsFromPieceHandler)와 같은 계약 — 기본(2026-09-08)은 채널마다 독립 런으로
+ * 대본부터 따로 만든다. SHORTS_SIBLING_INHERIT=1 이면 첫 채널이 원편, 나머지가 자산을 승계한다.
  */
 async function shortsCreateHandler(c: Context): Promise<Response> {
   const b = await c.req.json<{ topic?: string; keyword?: string; scenes?: number; force?: boolean; platform?: ShortsPlatform }>()
@@ -1302,7 +1302,10 @@ async function shortsCreateHandler(c: Context): Promise<Response> {
   const made: Shorts[] = []; let primaryId = ''; let firstRun = '';
   for (const platform of targets) {
     const short = shortsStore().create({ topic, keyword: b.keyword, platform, ...assignShortsWriter() });
-    const inheritFrom = primaryId; // 루프 변수 고정 — 클로저가 나중 값을 보면 안 된다
+    // 승계는 SHORTS_SIBLING_INHERIT=1 일 때만(2026-09-08 기본 끔) — 끄면 채널마다 독립 런, 대본부터 따로.
+    // 독립 런의 두 번째 채널은 앞 채널 '대본'만 기다렸다 출발한다(형제 대본 회피 지침 주입).
+    const inheritFrom = CONFIG.shortsSiblingInherit ? primaryId : ''; // 루프 변수 고정 — 클로저가 나중 값을 보면 안 된다
+    const waitFor = CONFIG.shortsSiblingInherit ? '' : primaryId;
     const start = (inherit: boolean): void => {
       const run = launchShortsRun(short.id, topic, {
         ...(b.scenes ? { sceneCount: b.scenes } : {}), ...media,
@@ -1310,7 +1313,9 @@ async function shortsCreateHandler(c: Context): Promise<Response> {
       });
       if (!firstRun) firstRun = run;
     };
-    if (inheritFrom) startAfterPrimary(inheritFrom, short.id, start); else start(false);
+    if (inheritFrom) startAfterPrimary(inheritFrom, short.id, start);
+    else if (waitFor) startAfterSiblingPlan(waitFor, short.id, () => start(false));
+    else start(false);
     made.push(short);
     if (!primaryId) primaryId = short.id;
   }
@@ -1366,6 +1371,26 @@ function startAfterPrimary(primaryId: string, selfId: string, start: (inherit: b
     setTimeout(tick, 10_000);
   };
   setTimeout(tick, 10_000);
+}
+
+/**
+ * 형제(다른 채널) 대본이 나온 뒤 두 번째 런을 출발시킨다(복원 2026-09-08 — 승계 끔 기본에서 쓰인다).
+ * 동시에 띄우면 둘 다 서로를 못 봐서 같은 축의 대본이 나온다(09-03 실측 '형제 대본 없음' 2건, 문체만 갈리고
+ * 알맹이가 같았다). 레코드는 지금 만들어 UI 에 보이게 하고, 출발만 미룬다. 대본만 기다리므로 승계(원편 완성
+ * 대기)보다 훨씬 짧다 — 이미지·클립은 각자 만든다(사용자 확정 2026-09-08 "비용은 생각하지 말고").
+ * 서버가 도중에 죽어도 부팅 복구 스윕이 planning 상태를 재개하므로 유실되지 않는다.
+ */
+function startAfterSiblingPlan(siblingId: string, selfId: string, start: () => void): void {
+  const began = Date.now();
+  const tick = (): void => {
+    const sib = shortsStore().get(siblingId);
+    const planExists = fs.existsSync(path.join(shortsStore().dirFor(siblingId), 'plan.json'));
+    const d = shouldStartSecondRun({ siblingPlanExists: planExists, siblingStage: sib?.stage, waitedMs: Date.now() - began });
+    if (!d.start) { setTimeout(tick, 5_000); return; }
+    if (d.reason !== 'plan') console.log(`[숏폼] 형제 대본 대기 종료(${d.reason}) — ${selfId} 그대로 출발`);
+    start();
+  };
+  setTimeout(tick, 5_000);
 }
 
 /**
@@ -1429,7 +1454,11 @@ function mediaForTopic(opts: {
   } catch { return {}; } // fail-open — 소재 조회 실패로 생성이 멈추면 안 된다
 }
 
-function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, platform?: ShortsPlatform, inheritFromPrimary?: string): { short: Shorts } | { error: string } {
+/**
+ * 두 번째 채널 편의 출발 방식(2026-09-08) — inheritFromPrimary(승계 켬)면 원편 '완성'을 기다려 자산을 물려받고,
+ * waitForPlanOf(승계 끔, 기본)면 앞 채널 '대본'만 기다렸다 독립 런으로 출발한다(형제 대본 회피 지침 주입).
+ */
+function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, platform?: ShortsPlatform, inheritFromPrimary?: string, waitForPlanOf?: string): { short: Shorts } | { error: string } {
   const piece = pieceStore().get(pieceId);
   if (!piece) return { error: 'unknown piece' };
   if (!piece.runId) return { error: '초안이 아직 없습니다.' };
@@ -1456,7 +1485,9 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, p
       ...(inherit && inheritFromPrimary ? { inheritFrom: inheritFromPrimary } : {}),
     });
   };
-  if (inheritFromPrimary) startAfterPrimary(inheritFromPrimary, short.id, start); else start(false);
+  if (inheritFromPrimary) startAfterPrimary(inheritFromPrimary, short.id, start);
+  else if (waitForPlanOf) startAfterSiblingPlan(waitForPlanOf, short.id, () => start(false));
+  else start(false);
   return { short };
 }
 async function shortsFromPieceHandler(c: Context): Promise<Response> {
@@ -1465,10 +1496,12 @@ async function shortsFromPieceHandler(c: Context): Promise<Response> {
   const b = await c.req.json<{ scenes?: number; platform?: ShortsPlatform }>().catch(() => ({}) as { scenes?: number; platform?: ShortsPlatform });
   // platform 미지정이면 채널별로 각각 만든다(자동 파생과 같은 계약). 응답의 short 는 하위호환 유지.
   const targets: ShortsPlatform[] = b.platform ? [b.platform] : [...SHORTS_PLATFORMS];
-  // 자동 파생과 같은 계약 — 첫 채널이 원편, 나머지는 그 자산 승계(수동·자동이 갈라지면 안 된다).
+  // 자동 파생과 같은 계약 — 승계가 켜져 있으면 첫 채널이 원편, 나머지는 그 자산 승계(수동·자동이 갈라지면 안 된다).
+  // 기본(2026-09-08)은 승계 끔 — 채널마다 독립 런이라 대본부터 따로 나온다.
   const made: Shorts[] = []; let firstError = ''; let primaryId = '';
   for (const platform of targets) {
-    const r = deriveShortsFromPiece(id, b.scenes, false, platform, primaryId || undefined);
+    const prev = primaryId || undefined;
+    const r = deriveShortsFromPiece(id, b.scenes, false, platform, CONFIG.shortsSiblingInherit ? prev : undefined, CONFIG.shortsSiblingInherit ? undefined : prev);
     if ('error' in r) { firstError ||= r.error; continue; }
     made.push(r.short);
     if (!primaryId) primaryId = r.short.id;
@@ -2366,10 +2399,9 @@ function autoDeriveSet(id: string, title: string): void {
   // 채널별로 따로 만든다(2026-09-03 사용자 확정) — 같은 글에서 유튜브용·인스타용 대본을 각각 생성.
   // 점유·실패 판정은 채널별로 센다. 한쪽이 실패해도 다른 쪽은 만들어져야 한다.
   if (CONFIG.autoShorts) {
-    // 채널별 편은 만들되 비싼 상단(대본·이미지·클립·캘리)은 한 벌만 만든다(2026-09-03 사용자 확정).
-    // 종전엔 채널마다 독립 런이라 이미지가 두 벌이었다 — 편당 비용은 이미지가 지배한다.
-    // 분리의 원래 근거("중복 콘텐츠 회피")는 유튜브가 인스타를 못 본다는 점에서 성립하지 않았다.
-    // 첫 채널이 원편(자산 생성), 나머지는 그 자산을 승계하고 낭독만 제 작가 목소리로 새로 뜬다.
+    // 채널별 편을 대본부터 따로 만든다(2026-09-08 사용자 확정, 비용 불문). 두 채널이 원하는 것이 다르다 —
+    // 유튜브는 검색어 제목·한 편 완결, 인스타는 공유를 부르는 구성. 09-03~07 의 승계 방식(한 벌 만들고
+    // 형제편이 물려받기)은 8쌍 전부 나레이션이 같았다. SHORTS_SIBLING_INHERIT=1 이면 그 방식으로 되돌아간다.
     const need = SHORTS_PLATFORMS.filter((platform) => {
       const mine = shortsStore().list().filter((x) => x.sourcePieceId === id && x.platform === platform);
       // error 레코드는 점유로 안 본다(2026-08-20 하드 캡 리뷰) — 다만 같은 글·같은 채널 2회 실패면 중단.
@@ -2384,14 +2416,21 @@ function autoDeriveSet(id: string, title: string): void {
       }
       return true;
     });
-    // 유튜브가 상한으로 빠지면 인스타가 원편이 된다 — 그러지 않으면 인스타 생산이 통째로 멈춘다.
+    // 승계(SHORTS_SIBLING_INHERIT=1)일 때: 유튜브가 상한으로 빠지면 인스타가 원편이 된다 — 그러지 않으면
+    // 인스타 생산이 통째로 멈춘다. 기본(2026-09-08, 승계 끔)은 채널마다 독립 런 — 대본부터 따로, 동시 출발.
+    // 승계 상태의 실측: 8쌍 전부 나레이션 5/5 씬 동일 — 채널 지침(platformPlanGuide)이 형제편에 닿지 않았다.
     let primaryId = '';
     for (const platform of need) {
-      const ds = deriveShortsFromPiece(id, undefined, false, platform, primaryId || undefined);
+      const prev = primaryId || undefined;
+      const inheritFrom = CONFIG.shortsSiblingInherit ? prev : undefined;
+      const waitFor = CONFIG.shortsSiblingInherit ? undefined : prev; // 독립 런은 앞 채널 '대본'만 기다린다(각도 겹침 방지)
+      const ds = deriveShortsFromPiece(id, undefined, false, platform, inheritFrom, waitFor);
       if ('error' in ds) { console.log(`[숏폼] 자동 파생 실패(${platformLabel(platform)}) — ${title.slice(0, 25)}: ${ds.error}`); continue; }
-      console.log(primaryId
+      console.log(inheritFrom
         ? `[숏폼] 자동 파생 시작(${platformLabel(platform)}·승계) — ${title.slice(0, 30)} (${ds.short.id}) · 원편 완성 대기`
-        : `[숏폼] 자동 파생 시작(${platformLabel(platform)}·원편) — ${title.slice(0, 30)} (${ds.short.id})`);
+        : waitFor
+          ? `[숏폼] 자동 파생 시작(${platformLabel(platform)}·독립) — ${title.slice(0, 30)} (${ds.short.id}) · 앞 채널 대본 대기(최대 ${Math.round(SIBLING_PLAN_WAIT_MS / 60000)}분)`
+          : `[숏폼] 자동 파생 시작(${platformLabel(platform)}·${CONFIG.shortsSiblingInherit ? '원편' : '독립'}) — ${title.slice(0, 30)} (${ds.short.id})`);
       if (!primaryId) primaryId = ds.short.id;
     }
   }
@@ -2716,6 +2755,7 @@ function performanceHandler(c: Context): Response {
       const m = all.length ? all[all.length - 1]! : null;
       return {
         id: p.id, title: p.title, stage: p.stage, keyword: p.keyword, subNiche: p.subNiche,
+        shortsTarget: p.shortsTarget, // 채널 목표(2026-09-08) — 인스타 목표 글이 실제로 인스타에서 터졌는지 귀속용
         publishedUrl: p.publishedUrl, seoScore: p.seoScore,
         date: p.publishedTs ?? p.createdTs, // 발행일(없으면 작성일 폴백 — 레거시 piece)
         views: m ? m.views : null, dwellSec: latestDwell(all),
@@ -4042,6 +4082,11 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
     if (title) return { kind: 'research', title, brand: tickBrand };
   }
   if (canGenerateNew(pieces, force)) {  // 케이던스/백로그 초과면 신규 블로그 보류 → 아래 파생 케이던스로 폴백.
+    // 채널 목표(2026-09-08 사용자 확정 "채널별로 따로, 비용 불문") — 오늘 어느 채널 목표로 몇 편 골렸는지 세어
+    // 적은 쪽. 아침 슬롯 유튜브(검색 표 출발) · 저녁 슬롯 인스타(축×제철 출발). 예고 이행은 채널과 무관하게
+    // 먼저 갚고, 검색 유래 공급로(클러스터 형제)는 인스타 목표 틱엔 건너뛴다 — 자동완성 형제는 유튜브 성격이다.
+    const topicTarget = pickTopicTarget(pieces, Date.now(), tickBrand);
+    console.log(`[auto-cycle] 채널 목표 — ${platformLabel(topicTarget)} (오늘 자율 생산분 기준 번갈기${topicTarget === 'instagram' ? ' · 클러스터 형제 공급로 건너뜀' : ''})`);
     // 예고 이행 우선 — 콘텐츠가 시청자에게 한 "다음 편" 약속은 신규 아이디어보다 먼저 갚는다
     // (사용자 지적 2026-07-30: 예고만 하고 안 지키면 신뢰 역효과). 시기 명시+시즌 창 안의 약속만
     // 자동 대상(무기한 선점 방지 — 리뷰 반영). 이행 piece 가 ready 되면 기존 자동 파생이
@@ -4092,7 +4137,7 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
     } catch { /* 예고 대장 실패 무해 — 신규 아이디어로 폴백 */ }
     // 클러스터 형제 소진(스펙 2026-08-06) — 예고(약속)보다 뒤, 신규 아이디어보다 앞(검색 수요가 자동완성으로
     // 이미 검증된 주제). 케이던스(canGenerateNew) 안이므로 생산량은 불변, 다양성만 늘린다.
-    if (process.env.TOPIC_CLUSTER !== 'off') {
+    if (process.env.TOPIC_CLUSTER !== 'off' && topicTarget !== 'instagram') {
       try {
         const all = clusterStore().list().filter((t) => (t.brand ?? '') === tickBrand);
         // 쿨다운 입력 — 최근 자율 blog piece 의 clusterSeedId(최신순).
@@ -4141,11 +4186,18 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
         }
       } catch { /* 클러스터 실패 무해 — 신규 아이디어로 폴백 */ }
     }
-    const idea = await proposeContentIdeas(signal);
+    let idea = await proposeContentIdeas(signal, { target: topicTarget });
     // 브랜드 고정 — 제안 LLM 대기(수 초) 중 브랜드가 전환되면 A 컨텍스트로 만든 아이디어가 B 에 귀속될 수
     // 있어 버린다(리서치 경로 main.ts 위 tickBrand 고정과 동일 원칙 — 종전엔 콘텐츠 경로만 빠져 있었음).
     if ((activeBrandSlug() || '') !== tickBrand) return null;
-    if (idea) return { kind: 'piece', piece: pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche, brand: tickBrand || undefined, auto: true, userTriggered }) };
+    // fail-open(2026-09-08) — 인스타 목표 틱은 클러스터 공급로를 건너뛰므로, 후보가 전멸하면 유튜브 목표로 한 번
+    // 더 제안해 슬롯을 비우지 않는다. 채널 목표 하나 때문에 그날 생산이 서면 안 된다.
+    if (!idea && topicTarget === 'instagram') {
+      console.log('[auto-cycle] 인스타 목표 후보 전멸 — 유튜브 목표로 재시도(슬롯 보전)');
+      idea = await proposeContentIdeas(signal, { target: 'youtube' });
+      if ((activeBrandSlug() || '') !== tickBrand) return null;
+    }
+    if (idea) return { kind: 'piece', piece: pieceStore().create({ title: idea.title, keyword: idea.keyword, subNiche: idea.subNiche, brand: tickBrand || undefined, auto: true, userTriggered, ...(idea.target ? { shortsTarget: idea.target } : {}) }) };
   }
   // 파생 콘텐츠 일일 케이던스(사용자 지시 2026-07-16: 쇼츠·카드뉴스 매일 1편) — 초안 있는 최신 블로그
   // 에서 파생(리서치된 내용 재사용 = 같은 주제 채널 전개라 신규성 가드 비대상). 케이던스는 자율 생산분만

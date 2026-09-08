@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   SHORTS_PLATFORMS, platformLabel, platformPlanGuide, autoDailyCapFor,
-  canPublishTo, kstDate, youtubeUploadsToday, youtubeDailyCapBlock, platformQuotaCommitted, autoCapApplies } from './shortsPlatform';
+  canPublishTo, kstDate, youtubeUploadsToday, youtubeDailyCapBlock, platformQuotaCommitted, autoCapApplies,
+  pickTopicTarget, topicTargetBlock, topicPriorityBlock, demandGateForTarget,
+  shouldStartSecondRun, SIBLING_PLAN_WAIT_MS } from './shortsPlatform';
 
 describe('platformPlanGuide — 채널별로 다른 대본이 나오게 하는 지침(순수)', () => {
   it('유튜브·인스타 지침이 서로 다르다', () => {
@@ -20,6 +22,12 @@ describe('platformPlanGuide — 채널별로 다른 대본이 나오게 하는 �
     const ig = platformPlanGuide('instagram');
     expect(ig).toContain('24자');
     expect(ig).toContain('판단 장면');
+  });
+  it('인스타의 과녁은 저장이 아니라 공유다(2026-09-08 실측: 저장률은 히트를 못 가르고 공유가 가른다)', () => {
+    const ig = platformPlanGuide('instagram');
+    expect(ig).toContain('공유');
+    expect(ig).toContain('받는 사람');
+    expect(ig).not.toContain('저장하고 싶게');
   });
   it('레거시(미지정)는 빈 문자열 — 종전 동작 그대로', () => {
     expect(platformPlanGuide(undefined)).toBe('');
@@ -166,5 +174,95 @@ describe('autoCapApplies — 상한을 걸 대상 판정(순수)', () => {
     ];
     // cadenceBaselineTs 는 `p.auto && !p.userTriggered` 인 것만 자율 생산분으로 센다.
     for (const c of cases) expect(autoCapApplies(c)).toBe(!!c.auto && !c.userTriggered);
+  });
+});
+
+describe('pickTopicTarget — 오늘 자율 생산분의 채널 목표를 번갈아 고른다(순수)', () => {
+  const now = Date.parse('2026-09-08T09:00:00Z'); // KST 09-08 18:00
+  const today = '2026-09-08T00:30:00Z';           // KST 09-08 09:30
+  const yesterday = '2026-09-07T10:00:00Z';       // KST 09-07 19:00
+  it('오늘 아무것도 안 골랐으면 유튜브부터', () => {
+    expect(pickTopicTarget([], now, 'b')).toBe('youtube');
+  });
+  it('오늘 유튜브 목표로 하나 골랐으면 다음은 인스타', () => {
+    expect(pickTopicTarget([{ auto: true, shortsTarget: 'youtube', createdTs: today, brand: 'b' }], now, 'b')).toBe('instagram');
+  });
+  it('둘 다 하나씩이면 다시 유튜브(동률은 유튜브 먼저)', () => {
+    expect(pickTopicTarget([
+      { auto: true, shortsTarget: 'youtube', createdTs: today, brand: 'b' },
+      { auto: true, shortsTarget: 'instagram', createdTs: today, brand: 'b' },
+    ], now, 'b')).toBe('youtube');
+  });
+  it('어제 것·수동·사용자 촉발·다른 브랜드는 세지 않는다', () => {
+    expect(pickTopicTarget([
+      { auto: true, shortsTarget: 'youtube', createdTs: yesterday, brand: 'b' },
+      { auto: false, shortsTarget: 'youtube', createdTs: today, brand: 'b' },
+      { auto: true, userTriggered: true, shortsTarget: 'youtube', createdTs: today, brand: 'b' },
+      { auto: true, shortsTarget: 'youtube', createdTs: today, brand: 'other' },
+    ], now, 'b')).toBe('youtube');
+  });
+  it('목표 미기록 자율 편(예고·클러스터 경로)은 유튜브로 센다 — 아침에 예고를 갚은 날도 저녁은 인스타', () => {
+    expect(pickTopicTarget([{ auto: true, createdTs: today, brand: 'b' }], now, 'b')).toBe('instagram');
+  });
+  it('상한이 아니라 편수로 번갈아야 한다 — 유튜브 상한을 올려도 인스타 목표 틱이 온다', () => {
+    // 상한 기준이었다면 유튜브 상한 2 에서 1편 뒤에도 '유튜브 몫 남음'이라 인스타가 영영 안 온다.
+    expect(pickTopicTarget([{ auto: true, shortsTarget: 'youtube', createdTs: today, brand: 'b' }], now, 'b')).toBe('instagram');
+  });
+});
+
+describe('topicTargetBlock / topicPriorityBlock — 채널 목표별 주제 선정 지침(순수)', () => {
+  it('인스타 목표는 축×제철에서 출발하고 검색량 하한을 걸지 않는다고 못박는다', () => {
+    const b = topicTargetBlock('instagram');
+    expect(b).toContain('인스타 소재 축 성적');
+    expect(b).toContain('검색량 하한');
+    expect(b).toContain('공유');
+    expect(topicPriorityBlock('instagram')).toContain('[인스타 소재 축 성적] 상위 축 × 지금 절기');
+  });
+  it('유튜브 목표·미지정은 종전대로 검색 수요 표가 출발점 — 유튜브 목표 블록은 무주입(프롬프트가 종전과 같다)', () => {
+    expect(topicTargetBlock('youtube')).toBe('');
+    expect(topicPriorityBlock('youtube')).toBe(topicPriorityBlock(undefined));
+    expect(topicPriorityBlock(undefined)).toContain('[검색 수요 실측] 표 — 여기서 먼저 고른다');
+  });
+  it('인스타 블록은 실제로 존재하는 블록 이름만 참조한다 — [제철 소재] 라는 블록은 없다', () => {
+    expect(topicTargetBlock('instagram')).not.toContain('[제철 소재]');
+    expect(topicPriorityBlock('instagram')).not.toContain('[제철 소재]');
+    expect(topicTargetBlock('instagram')).toContain('[시기 밖 소재]');
+  });
+  it('두 채널의 우선순위 문구가 서로 다르다', () => {
+    expect(topicPriorityBlock('instagram')).not.toBe(topicPriorityBlock('youtube'));
+  });
+});
+
+describe('demandGateForTarget — 채널 목표별 검색 수요 게이트(순수)', () => {
+  it('인스타 목표는 하한 미달을 통과시키고, 마지막 라운드 완화(relax)를 쓰지 않는다', () => {
+    expect(demandGateForTarget('instagram', false)).toEqual({ relax: false, lowVolumePasses: true });
+    expect(demandGateForTarget('instagram', true)).toEqual({ relax: false, lowVolumePasses: true });
+  });
+  it('유튜브·미지정은 종전 그대로 — 마지막 라운드에만 완화, 하한 미달은 기각', () => {
+    expect(demandGateForTarget('youtube', false)).toEqual({ relax: false, lowVolumePasses: false });
+    expect(demandGateForTarget('youtube', true)).toEqual({ relax: true, lowVolumePasses: false });
+    expect(demandGateForTarget(undefined, true)).toEqual({ relax: true, lowVolumePasses: false });
+  });
+});
+
+describe('shouldStartSecondRun — 두 번째 채널 런 출발 시점(순수, 2026-09-08 복원)', () => {
+  it('형제 대본이 나오면 바로 출발한다 — 그게 기다린 이유다', () => {
+    expect(shouldStartSecondRun({ siblingPlanExists: true, siblingStage: 'designing', waitedMs: 3_000 }))
+      .toEqual({ start: true, reason: 'plan' });
+  });
+  it('대본 전이면 기다린다', () => {
+    expect(shouldStartSecondRun({ siblingPlanExists: false, siblingStage: 'planning', waitedMs: 3_000 }))
+      .toEqual({ start: false, reason: 'wait' });
+  });
+  it('형제가 실패하면 기다리지 않는다 — 영영 안 오는 대본을 기다리면 두 번째가 유실된다', () => {
+    expect(shouldStartSecondRun({ siblingPlanExists: false, siblingStage: 'error', waitedMs: 3_000 }))
+      .toEqual({ start: true, reason: 'sibling-error' });
+  });
+  it('상한을 넘으면 그냥 출발한다(fail-open)', () => {
+    expect(shouldStartSecondRun({ siblingPlanExists: false, siblingStage: 'planning', waitedMs: SIBLING_PLAN_WAIT_MS }))
+      .toEqual({ start: true, reason: 'timeout' });
+  });
+  it('대기 상한은 6분 — 기획 단계만 넘기면 된다', () => {
+    expect(SIBLING_PLAN_WAIT_MS).toBe(360_000);
   });
 });
