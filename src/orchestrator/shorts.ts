@@ -250,7 +250,7 @@ export async function reviseShorts(
             const rm = JSON.parse(fs.readFileSync(rmPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string } | null> };
             applied.regenScenes.forEach((k, i) => {
               const fp = rm.images?.[i]?.file_path ? String(rm.images[i]!.file_path) : '';
-              if (fp && !rm.images?.[i]?.error && fs.existsSync(fp)) images[k - 1] = fp;
+              if (fp && !rm.images?.[i]?.error && fs.existsSync(fp)) { images[k - 1] = fp; delete plan.scenes[k - 1]?.focus; } // 새 그림 — 옛 초점 무효
             });
           } catch { /* 기존 배경 유지 */ }
         } else say('씬 배경 재생성 실패 — 기존 배경 유지');
@@ -1761,14 +1761,21 @@ export async function runShortsJob(
     const bgManifestPath = path.join(dir, 'bg-manifest.json');
     fs.writeFileSync(bgDraftPath, JSON.stringify(bgDraft, null, 2), 'utf-8');
     fs.writeFileSync(bgGenPath, JSON.stringify({ imageSlots: slotScenes.map(slotOf) }, null, 2), 'utf-8');
-    if (slotScenes.length) await generateImagesForDraft(bgGenPath, path.join(dir, 'scenes'), bgManifestPath,
+    const genRes = slotScenes.length ? await generateImagesForDraft(bgGenPath, path.join(dir, 'scenes'), bgManifestPath,
       {
         imageStyle: design.preset, limit: slotScenes.length, size: '1024x1536',
         timeoutMs: 150_000 * slotScenes.length,
         // 첨부 사진·실물 프레임을 레퍼런스로 — 종 레퍼런스가 있으면 맨 앞에 온다(형태의 근거).
         ...(genRefs.length ? { refImages: genRefs } : {}),
       },
-      opts.signal);
+      opts.signal) : null;
+    // 실패를 소리 내어 남긴다(2026-09-09) — 종전엔 결과를 버려서 429(잔액 없음)가 '배경 폴백'으로만 보였다.
+    if (genRes && !genRes.ok) say(`씬 이미지 스크립트 실패 — ${genRes.output.split('\n').filter(Boolean).slice(-1)[0]?.slice(0, 160) ?? ''}`);
+    try {
+      const gm = JSON.parse(fs.readFileSync(bgManifestPath, 'utf-8')) as { images?: Array<{ error?: string } | null> };
+      const errs = (gm.images ?? []).map((x) => String(x?.error ?? '')).filter(Boolean);
+      if (errs.length) say(`씬 이미지 생성 실패 ${errs.length}/${slotScenes.length}장 — ${errs[0]!.replace(/\s+/g, ' ').slice(0, 160)}`);
+    } catch { /* 매니페스트 없음 — 아래 슬롯 정렬이 전 씬 폴백으로 처리 */ }
     // 슬롯 정렬 이미지 목록 — 실패 씬은 null(렌더러가 그라데이션 폴백, 순서 보존)
     let images: Array<string | null> = plan.scenes.map(() => null);
     try {
@@ -1795,10 +1802,17 @@ export async function runShortsJob(
       ...(design.subject ? { subject: design.subject } : {}),
       ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}), // 수종 오식별 검사
       ...(design.species?.size ? { subjectSize: design.species.size } : {}),   // 크기 검사(2026-09-08)
+      sceneHints: plan.scenes.map((s) => s.narration),                           // 초점 읽기(2026-09-09)
       // 실사진 자리는 QA 재생성에서 뺀다 — 사용자가 고른 사진을 우리가 생성본으로 바꾸면 안 된다.
       protectedScenes: new Set(assetPlan.map((a, i) => (a ? i : -1)).filter((i) => i >= 0)),
     });
     images = qa.images;
+    // 씬 초점(2026-09-09) — 좌표 기법(포인터 링·스포트라이트·인셋 확대창)의 입력. 이미지가 없거나 재생성된 씬은 없음.
+    let focusN = 0;
+    plan.scenes.forEach((sc, i) => { const pt = qa.focus[i]; if (pt && images[i]) { sc.focus = pt; focusN++; } else delete sc.focus; });
+    if (focusN) say(`씬 초점 — ${focusN}씬 좌표 확보(포인터 링·스포트라이트·확대창 후보)`);
+    // plan.json 은 기획 직후 한 번 쓰였다 — 초점을 담아 다시 쓴다. 안 그러면 수정요청 재조립(plan.json 을 읽는다)이 좌표 없이 돈다.
+    fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
     if (qa.regenerated) say(`씬 QA — ${qa.regenerated}장 재생성 (${qa.issues.slice(0, 3).join(' · ')})`);
     else if (qa.issues.length) say(`씬 QA — 이슈 ${qa.issues.length}건, 재생성 없음 (${qa.issues.slice(0, 3).join(' · ')})`);
     checkAbort();

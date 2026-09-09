@@ -20,8 +20,9 @@ import { CompareCard } from './CompareCard';
 import { FONT_FAMILY } from './loadFonts';
 import { pickFilmLook, filmLookEffects, type FilmLook } from './filmLook';
 import { pickCaptionMotion, type CaptionMotionName } from './captionMotion';
-import { pickTechniques, techniqueScene, type EditTechnique } from './editTechniques';
+import { assignTechniques, type EditTechnique } from './editTechniques';
 import { TechniqueLayer } from './TechniqueLayer';
+import { InsetZoom } from './InsetZoom';
 import { saturation } from '@remotion/effects/saturation';
 import { vibrance } from '@remotion/effects/vibrance';
 import { glow } from '@remotion/effects/glow';
@@ -37,6 +38,9 @@ export const autoShortsSchema = z.object({
     clipFrames: z.number().optional(), // 실제 클립 길이(컴포지션 fps 기준 프레임) — 감속 재생 배율 산정용. 없으면 CLIP_SECONDS 폴백.
     /** 사용자가 찍어 올린 실촬영 화면인가(2026-09-04) — 파괴적 편집 기법이 이 씬을 피한다. */
     realFootage: z.boolean().optional(),
+    /** 씬 초점(2026-09-09) — 화면 기준 0~1. 비전 QA 가 읽은 핵심 부위 중심을 서버가 cover 배치로 변환한 값.
+     *  포인터 링·스포트라이트·인셋 확대창은 이 값이 있는 씬에만 걸린다. */
+    focus: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) }).optional(),
     kind: z.enum(['hook', 'stat', 'list', 'quote', 'chart', 'cta', 'compare']).optional(),
     stat: z.object({ value: z.number(), unit: z.string().optional(), label: z.string().optional() }).optional(),
     items: z.array(z.string()).max(4).optional(),
@@ -76,7 +80,9 @@ const CLIP_SECONDS = 6; // clipFrames 미지정 시 감속 배율 산정 폴백 
 
 const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; caption?: AutoShortsProps['caption']; driftSeed?: string; look?: FilmLook; capMotion?: CaptionMotionName;
   /** 이 씬에 걸린 선택 기법(없으면 undefined). */
-  tech?: EditTechnique; techSeed?: string }> = ({ s, index, caption, driftSeed, look, capMotion, tech, techSeed }) => {
+  tech?: EditTechnique; techSeed?: string;
+  /** 다음 씬이 '줌 스루 전환'이면 이 씬 끝이 확대되며 흐려진다(앞 씬 쪽 절반). */
+  exitZoom?: boolean }> = ({ s, index, caption, driftSeed, look, capMotion, tech, techSeed, exitZoom }) => {
   const f = useCurrentFrame();
   const { fps } = useVideoConfig();
   // 필름 룩 — 배경(이미지·클립)에만 건다. 자막·카드는 별도 레이어라 영향이 없다(글자는 보정 대상이 아니다).
@@ -96,7 +102,9 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
   const extra = [...popFx, ...glowFx];
   const effects = extra.length ? [...(baseEffects ?? []), ...extra] : baseEffects;
   // 정지 강조 — 이 씬의 배경 모션만 멈춘다(자막·카드는 그대로 움직인다). 씬 길이는 안 건드린다.
-  const frozen = tech === '정지 강조';
+  // 좌표 기법(포인터 링·인셋 확대창)도 배경을 고정한다 — 켄번즈·드리프트로 배경이 움직이면 좌표가 어긋난다.
+  const pinned = tech === '포인터 링' || tech === '인셋 확대창';
+  const frozen = tech === '정지 강조' || pinned;
   // 씬 엔터 이펙트 — 종전 '6프레임 페이드인(첫 씬 제외)'을 일반화. 씬 길이 불변이라 TTS 싱크 무손상.
   // TransitionSeries(씬 오버랩=전체 길이 단축)는 '오디오가 길이를 지배' 불변식·SRT 누적 시계와 충돌해 채택하지 않는다.
   const enter = s.fx?.enter ?? (index > 0 ? 'fade' : 'none');
@@ -119,6 +127,21 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
     const y = amp * 0.8 * Math.sin(f / 9 + ph3) + amp * 0.4 * Math.sin(f / 4.1 + ph1);
     wrap.transform = `${wrap.transform ?? ''} translate(${x.toFixed(2)}px, ${y.toFixed(2)}px) scale(1.025)`.trim();
   }
+  // 줌 스루 전환(2026-09-09) — 이 씬은 확대된 채 흐리게 시작해 10프레임 안에 제자리로 온다(엔터 페이드 대신).
+  // 앞 씬은 exitZoom 으로 끝 8프레임 동안 확대되며 흐려진다. 두 절반이 컷에서 만나 '뚫고 들어가는' 느낌이 된다.
+  if (tech === '줌 스루 전환') {
+    const q = interpolate(f, [0, 10], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) });
+    wrap.opacity = 1;
+    wrap.transform = `${wrap.transform ?? ''} scale(${(1 + 0.3 * q).toFixed(3)})`.trim();
+    if (q > 0.01) wrap.filter = `blur(${(6 * q).toFixed(1)}px)`;
+  }
+  if (exitZoom) {
+    const q = interpolate(f, [s.durationInFrames - 8, s.durationInFrames], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.in(Easing.cubic) });
+    if (q > 0.01) {
+      wrap.transform = `${wrap.transform ?? ''} scale(${(1 + 0.35 * q).toFixed(3)})`.trim();
+      wrap.filter = `blur(${(6 * q).toFixed(1)}px)`;
+    }
+  }
   return (
     <AbsoluteFill style={wrap}>
       {s.videoSrc ? (
@@ -135,22 +158,23 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
           {...(effects ? { effects } : {})}
         />
       ) : (
-        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={frozen ? 'none' : s.fx?.move} intensity={s.fx?.intensity} driftSeed={driftSeed ? `${driftSeed}:${index}` : undefined} {...(effects ? { effects } : {})} />
+        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={frozen ? 'none' : s.fx?.move} intensity={s.fx?.intensity} driftSeed={driftSeed && !pinned ? `${driftSeed}:${index}` : undefined} {...(effects ? { effects } : {})} />
       )}
-      {/* 액센트 — 배경 위·자막/오버레이 아래(텍스트는 어두워지거나 가려지지 않게) */}
-      {s.fx?.accent === 'spotlight' ? <SpotlightMask /> : null}
+      {/* 액센트 — 배경 위·자막/오버레이 아래(텍스트는 어두워지거나 가려지지 않게). 스포트라이트 기법 씬은 액센트 스포트라이트와 겹치지 않게. */}
+      {s.fx?.accent === 'spotlight' && tech !== '스포트라이트' ? <SpotlightMask /> : null}
       {s.fx?.accent?.startsWith('particles-') ? (
         <ParticleDrift kind={s.fx.accent.slice('particles-'.length) as 'leaves' | 'petals' | 'snow'} sceneIndex={index} />
       ) : null}
       {/* 선택 기법 층 — 배경 위·자막 아래. 자막을 덮으면 읽기가 죽는다. */}
-      {tech && techSeed ? <TechniqueLayer tech={tech} seed={techSeed} total={s.durationInFrames} /> : null}
+      {tech && techSeed ? <TechniqueLayer tech={tech} seed={techSeed} total={s.durationInFrames} {...(s.focus ? { focus: s.focus } : {})} /> : null}
+      {tech === '인셋 확대창' && techSeed && s.imageSrc && s.focus ? <InsetZoom src={s.imageSrc} focus={s.focus} total={s.durationInFrames} seed={techSeed} {...(caption?.bottomPct != null ? { captionBottomPct: caption.bottomPct } : {})} /> : null}
       {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} {...(driftSeed ? { seed: `${driftSeed}:${index}` } : {})} /> : null}
       {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}
       {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
       {s.kind === 'chart' && s.chart ? <BarChartGrow chart={s.chart} total={s.durationInFrames} /> : null}
       {s.kind === 'cta' && s.takeaways?.length ? <TakeawayCard takeaways={s.takeaways} total={s.durationInFrames} /> : null}
       {s.kind === 'compare' && s.compare ? <CompareCard compare={s.compare} /> : null}
-      <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={caption?.bottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} hookFontPx={caption?.hookFontPx} {...(capMotion ? { motion: capMotion } : {})} />
+      <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={caption?.bottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} hookFontPx={caption?.hookFontPx} {...(capMotion ? { motion: capMotion } : {})} {...(tech === '키워드 팝' ? { pop: true } : {})} />
       {s.audioSrc ? <Audio src={staticFile(s.audioSrc)} /> : null}
     </AbsoluteFill>
   );
@@ -169,14 +193,13 @@ export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, 
   // 자막 모션 — 편마다 하나. 영상에서 가장 오래 보이는 요소라 여기가 갈려야 체감이 크다.
   const capMotion = driftSeed ? pickCaptionMotion(random(`${driftSeed}:capmotion`)) : undefined;
   // 선택 편집 기법 — 편마다 2가지. 파라미터만 갈리던 종전엔 8편이 사실상 2조합뿐이었다(실측).
-  const techs = driftSeed ? pickTechniques(driftSeed) : [];
-  const techAt = new Map<number, EditTechnique>();
   // 실촬영 씬 — 흑백·정지처럼 화면을 지우는 기법은 여기를 피한다(사장님 영상이 흑백으로 나갔다).
   const realScenes = new Set(scenes.flatMap((s, i) => (s.realFootage ? [i] : [])));
-  for (const t of techs) {
-    const at = techniqueScene(driftSeed ?? '', t, scenes.length, realScenes);
-    if (at >= 0 && !techAt.has(at)) techAt.set(at, t); // 한 씬에 둘씩 겹치지 않게
-  }
+  // 초점 씬 — 좌표 기법(포인터 링·스포트라이트·인셋 확대창)은 QA 가 좌표를 준 정지 이미지 씬에만 걸린다.
+  const focusScenes = new Set(scenes.flatMap((s, i) => (s.focus && !s.videoSrc ? [i] : [])));
+  const techAt = assignTechniques(driftSeed ?? '', scenes.length, realScenes, focusScenes);
+  // 줌 스루 전환은 앞 씬 끝에서 시작한다 — 그 씬에 exitZoom 을 준다.
+  const zoomExit = new Set([...techAt].filter(([, t]) => t === '줌 스루 전환').map(([i]) => i - 1));
   const flashHue = Math.round((look && look.temperature < 0 ? 30 : 8) + (driftSeed ? random(`${driftSeed}:flashHue`) * 22 : 0));
   return (
   <AbsoluteFill style={{ background: '#000', fontFamily: FONT_FAMILY }}>
@@ -191,7 +214,7 @@ export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, 
         // name 은 Studio 타임라인 라벨 전용 — 렌더 결과에는 영향이 없다.
         const seq = (
           <TransitionSeries.Sequence key={`s${i}`} durationInFrames={Math.max(1, s.durationInFrames)} name={`씬${i + 1} · ${s.kind ?? '무연출'}`}>
-            <Scene s={s} index={i} caption={caption} driftSeed={driftSeed} look={look} capMotion={capMotion} {...(techAt.get(i) ? { tech: techAt.get(i), techSeed: `${driftSeed}:${i}` } : {})} />
+            <Scene s={s} index={i} caption={caption} driftSeed={driftSeed} look={look} capMotion={capMotion} {...(techAt.get(i) ? { tech: techAt.get(i), techSeed: `${driftSeed}:${i}` } : {})} {...(zoomExit.has(i) ? { exitZoom: true } : {})} />
           </TransitionSeries.Sequence>
         );
         // 컷 위 빛샘 — 씬과 씬 사이에만(첫 씬 앞·마지막 씬 뒤에는 컷이 없다).

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { pruneDir, humanBytes } from '../util/prune';
 import { selectComposition, renderMedia, makeCancelSignal } from '@remotion/renderer';
-import { prepareScenes, buildSrt, resolveClipSrc, defaultSceneFx, fxSeed, FPS, probeDuration } from './shortsCommon';
+import { prepareScenes, buildSrt, resolveClipSrc, defaultSceneFx, fxSeed, FPS, probeDuration, probeImageSize, coverFocus } from './shortsCommon';
 import type { ShortsScene, ShortsRenderResult, PreparedScene } from './shortsCommon';
 
 /**
@@ -85,10 +85,16 @@ export async function stageAndBuildProps(
     // 실촬영 표시 — 사용자가 올린 화면은 clips/user_NN.mp4 로 굽는다(orchestrator overlayUserVideos).
     // 이 표시를 보고 렌더러가 흑백·정지 같은 파괴적 기법을 그 씬에서 피한다.
     const realFootage = !!videoSrc && path.basename(opts.clips![p.index]!).startsWith('user_');
+    // 씬 초점(2026-09-09) — 이미지 기준 좌표를 cover 배치로 화면 좌표에 옮긴다. 영상 씬·측정 실패는 초점 없음.
+    let focus: { x: number; y: number } | undefined;
+    if (sc?.focus && p.imagePath && !videoSrc) {
+      try { const sz = await probeImageSize(p.imagePath); focus = coverFocus(sc.focus, sz.w, sz.h) ?? undefined; } catch { /* 초점 없이 진행 */ }
+    }
     return {
       imageSrc, audioSrc, videoSrc, screenText: p.screenText, durationInFrames: p.durationInFrames,
       ...(clipFrames ? { clipFrames } : {}),
       ...(realFootage ? { realFootage } : {}),
+      ...(focus ? { focus } : {}),
       ...(sc?.kind ? { kind: sc.kind } : {}),
       ...(sc?.stat ? { stat: sc.stat } : {}),
       ...(sc?.items ? { items: sc.items } : {}),

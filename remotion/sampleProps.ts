@@ -19,6 +19,7 @@ const scenes: Scene[] = [
   {
     imageSrc: null, audioSrc: null, durationInFrames: sec(6), kind: 'stat',
     screenText: '뿌리 한 포기에 배양토 47리터',
+    focus: { x: 0.46, y: 0.52 }, // 좌표 기법(포인터 링·스포트라이트) 미리보기용 — 인셋 확대창은 imageSrc 가 있어야 뜬다
     stat: { value: 47, unit: 'L', label: '배양토 몫' },
     fx: { enter: 'fade', intensity: 'subtle' },
   },

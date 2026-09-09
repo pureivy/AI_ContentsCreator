@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseBadScenes, buildRetryPrompt, mapBadToOrig, reasonFor } from './shortsSceneQa';
+import { parseBadScenes, buildRetryPrompt, mapBadToOrig, reasonFor, parseFocus } from './shortsSceneQa';
 
 describe('parseBadScenes — 유효(1..count)·중복제거·정렬', () => {
   it('중복·범위밖·비정상값 방어, floor', () => {
@@ -58,5 +58,25 @@ describe('reasonFor — 씬별 사유 꺼내기(순수)', () => {
   });
   it('빈 사유는 undefined — 빈 줄을 프롬프트에 붙이지 않는다', () => {
     expect(reasonFor([{ scene: 2, problem: '  ' }], 2)).toBeUndefined();
+  });
+});
+
+describe('parseFocus — 비전이 보고한 초점을 원본 인덱스로(2026-09-09)', () => {
+  const checked = [{ origIndex: 1 }, { origIndex: 3 }]; // 검수 순번 1→씬1, 2→씬3(씬0 훅·씬2 실촬영은 검수 밖)
+  it('순번을 원본 인덱스로 옮기고, 없는 씬은 null', () => {
+    const f = parseFocus([{ scene: 1, x: 0.42, y: 0.55 }, { scene: 2, x: 0.7, y: 0.3 }], checked, 5);
+    expect(f).toEqual([null, { x: 0.42, y: 0.55 }, null, { x: 0.7, y: 0.3 }, null]);
+  });
+  it('범위 밖 순번·좌표·비정상값은 버린다', () => {
+    const f = parseFocus([{ scene: 3, x: 0.5, y: 0.5 }, { scene: 1, x: 1.2, y: 0.5 }, { scene: 2, x: 'a', y: 0.5 }, null], checked, 5);
+    expect(f.every((v) => v === null)).toBe(true);
+  });
+  it('가장자리는 6% 안쪽으로 당긴다 — 링이 화면 밖으로 반쯤 나가면 잘린 것으로 보인다', () => {
+    const f = parseFocus([{ scene: 1, x: 0, y: 1 }], checked, 5);
+    expect(f[1]).toEqual({ x: 0.06, y: 0.94 });
+  });
+  it('같은 씬이 두 번 오면 첫 것', () => {
+    const f = parseFocus([{ scene: 1, x: 0.2, y: 0.2 }, { scene: 1, x: 0.8, y: 0.8 }], checked, 5);
+    expect(f[1]).toEqual({ x: 0.2, y: 0.2 });
   });
 });

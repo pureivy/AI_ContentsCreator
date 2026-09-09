@@ -14,9 +14,50 @@ export const TechniqueLayer: React.FC<{
   readonly tech: EditTechnique;
   readonly seed: string;
   readonly total: number;
-}> = ({ tech, seed, total }) => {
+  /** 화면 기준 초점(0~1) — 좌표 기법(포인터 링·스포트라이트)의 입력. 없으면 그 기법은 안 그린다. */
+  readonly focus?: { readonly x: number; readonly y: number };
+}> = ({ tech, seed, total, focus }) => {
   const f = useCurrentFrame();
-  const { height } = useVideoConfig();
+  const { width, height } = useVideoConfig();
+
+  if (tech === '포인터 링' && focus) {
+    // 초점에 원이 조여들며 짚는다(2026-09-09) — "여기를 자른다"를 손가락 없이 말한다.
+    // 노란 링 + 검은 외곽선: 밝은 하늘·어두운 흙 어디에 놓여도 보인다. 자리 잡은 뒤엔 숨 쉬듯 살짝 뛰고,
+    // 1.4초마다 바깥으로 물결 하나가 퍼진다(계속 보라는 신호).
+    const cx = focus.x * width, cy = focus.y * height;
+    const d = 150 + random(`${seed}:ring`) * 40; // 150~190px
+    const ap = interpolate(f, [6, 18], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) });
+    const settle = 2.4 - 1.4 * ap;
+    const pulse = ap >= 1 ? 1 + 0.035 * Math.sin((f - 18) / 5) : 1;
+    const rf = Math.max(0, f - 18) % 42;
+    const rippleOn = f >= 18 && rf < 30;
+    const rp = Math.min(1, rf / 30);
+    const base: React.CSSProperties = { position: 'absolute', left: cx - d / 2, top: cy - d / 2, width: d, height: d, borderRadius: '50%' };
+    return (
+      <AbsoluteFill style={{ pointerEvents: 'none' }}>
+        {rippleOn ? <div style={{ ...base, border: '4px solid rgba(255,214,74,0.9)', opacity: (1 - rp) * 0.7, transform: `scale(${(1 + rp * 0.9).toFixed(3)})` }} /> : null}
+        <div style={{
+          ...base, border: '7px solid rgba(255,214,74,0.96)', opacity: ap,
+          boxShadow: '0 0 0 3px rgba(0,0,0,0.45), inset 0 0 0 3px rgba(0,0,0,0.35), 0 6px 24px rgba(0,0,0,0.35)',
+          transform: `scale(${(settle * pulse).toFixed(3)})`,
+        }} />
+      </AbsoluteFill>
+    );
+  }
+
+  if (tech === '스포트라이트' && focus) {
+    // 초점만 밝고 주변은 어둡게(2026-09-09) — 비네트의 강화판. 밑동·접목 자리처럼 작은 대상을 볼 때.
+    // 자막은 이 층 위라 어두워지지 않는다. 반경은 px 로 — circle 의 크기는 % 를 못 쓴다.
+    const a = interpolate(f, [0, 16], [0, 0.6 + random(`${seed}:spa`) * 0.12], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) });
+    const inner = 220 + random(`${seed}:spr`) * 60; // 맑은 반경 220~280px
+    const outer = inner + 200;
+    return (
+      <AbsoluteFill style={{
+        pointerEvents: 'none',
+        background: `radial-gradient(circle at ${(focus.x * 100).toFixed(1)}% ${(focus.y * 100).toFixed(1)}%, rgba(0,0,0,0) ${inner.toFixed(0)}px, rgba(0,0,0,${a.toFixed(3)}) ${outer.toFixed(0)}px)`,
+      }} />
+    );
+  }
 
   if (tech === '레터박스') {
     // 시네마 바 — 위아래에서 밀려 들어온다. 자막(하단 ~30%)을 안 건드리게 두께를 묶는다.
@@ -69,5 +110,5 @@ export const TechniqueLayer: React.FC<{
     );
   }
 
-  return null; // '정지 강조'·'컬러 팝'·'소프트 글로우'·'아이리스 리빌'·'핸드헬드 흔들림'은 화면 층이 아니라 Scene(배경 effects·transform)에서 처리한다
+  return null; // '정지 강조'·'컬러 팝'·'소프트 글로우'·'아이리스 리빌'·'핸드헬드 흔들림'·'줌 스루 전환'은 Scene(배경 effects·transform), '인셋 확대창'은 InsetZoom, '키워드 팝'은 KineticCaption 에서 처리한다
 };

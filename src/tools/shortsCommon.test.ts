@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout } from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus } from './shortsCommon';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
   it('오디오 + 꼬리여백(0.6), 하한 2.8', () => {
@@ -483,5 +483,30 @@ describe('dropEmptyKinds — 못 채운 연출은 떼어 낸다(순수, 2026-09-
   });
   it('여러 개면 모두 뗀다', () => {
     expect(dropEmptyKinds([{ kind: 'hook' }, { kind: 'stat' }, { kind: 'chart' }, { kind: 'cta' }]).dropped).toEqual([2, 3]);
+  });
+});
+
+describe('coverFocus — 이미지 초점을 cover 배치 화면 좌표로(2026-09-09)', () => {
+  it('1024×1536 을 1080×1920 에 놓으면 폭이 1280 으로 늘어 좌우 100px 씩 잘린다 — 중앙은 그대로, 가장자리는 바깥으로', () => {
+    expect(coverFocus({ x: 0.5, y: 0.5 }, 1024, 1536)).toEqual({ x: 0.5, y: 0.5 });
+    const p = coverFocus({ x: 0.25, y: 0.4 }, 1024, 1536)!;
+    expect(p.x).toBeCloseTo((0.25 * 1280 - 100) / 1080, 3); // 0.204
+    expect(p.y).toBeCloseTo(0.4, 3);
+  });
+  it('잘린 띠에 떨어진 초점은 null — 화면 밖을 짚을 수는 없다', () => {
+    expect(coverFocus({ x: 0.05, y: 0.5 }, 1024, 1536)).toBeNull();
+    expect(coverFocus({ x: 0.97, y: 0.5 }, 1024, 1536)).toBeNull();
+  });
+  it('화면과 같은 비율이면 그대로', () => {
+    expect(coverFocus({ x: 0.3, y: 0.7 }, 1080, 1920)).toEqual({ x: 0.3, y: 0.7 });
+  });
+  it('가로 사진(세로가 잘린다)도 같은 규칙', () => {
+    const p = coverFocus({ x: 0.5, y: 0.5 }, 1536, 1024)!; // 폭 1080 맞추면 높이 720 → 세로 cover 는 높이 1920 기준 → 폭 2880
+    expect(p).toEqual({ x: 0.5, y: 0.5 });
+    expect(coverFocus({ x: 0.1, y: 0.5 }, 1536, 1024)).toBeNull();
+  });
+  it('불량 입력은 null', () => {
+    expect(coverFocus({ x: NaN, y: 0.5 }, 1024, 1536)).toBeNull();
+    expect(coverFocus({ x: 0.5, y: 0.5 }, 0, 0)).toBeNull();
   });
 });

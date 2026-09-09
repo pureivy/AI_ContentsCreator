@@ -37,8 +37,30 @@ export interface SceneKindFields {
    * '무엇 대신 무엇'은 원문만으로 정확히 쓸 수 있다. 위치 추측이 필요 없는 연출이다.
    */
   compare?: { bad: { label: string; note?: string }; good: { label: string; note?: string } };
+  /**
+   * 씬 초점(2026-09-09) — 비전 QA 가 이미지에서 읽은 '핵심 부위 중심'(이미지 기준 0~1, 왼쪽 위 원점).
+   * 포인터 링·스포트라이트·인셋 확대창의 입력. 렌더 시 coverFocus 로 화면 좌표로 바꾼다.
+   * 이미지가 바뀌면(재생성·수정요청) 지운다 — 옛 그림의 좌표로 새 그림을 짚으면 엉뚱한 곳을 가리킨다.
+   */
+  focus?: { x: number; y: number };
 }
 export interface ShortsScene extends SceneKindFields { narration: string; screenText?: string }
+
+/**
+ * 이미지 기준 초점 → 화면 기준 초점(순수). 배경은 objectFit: cover 로 놓이므로 이미지 가장자리가 잘린다 —
+ * 1024×1536 을 1080×1920 에 놓으면 폭이 1280 으로 늘어 좌우 100px 씩 잘린다. 잘린 띠에 떨어진 초점은 null.
+ */
+export function coverFocus(
+  focus: { x: number; y: number }, imgW: number, imgH: number, canvasW = W, canvasH = H,
+): { x: number; y: number } | null {
+  if (!(imgW > 0 && imgH > 0) || !Number.isFinite(focus.x) || !Number.isFinite(focus.y)) return null;
+  const scale = Math.max(canvasW / imgW, canvasH / imgH);
+  const dispW = imgW * scale, dispH = imgH * scale;
+  const x = (focus.x * dispW + (canvasW - dispW) / 2) / canvasW;
+  const y = (focus.y * dispH + (canvasH - dispH) / 2) / canvasH;
+  if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+  return { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000 };
+}
 
 /**
  * LLM 씬 오브젝트에서 kind·페이로드를 검증 추출 — 실패 시 {} 로 강등(fail-open, 렌더 무중단).
@@ -247,6 +269,16 @@ export async function probeDuration(file: string): Promise<number> {
   const d = parseFloat(String(stdout).trim());
   if (!Number.isFinite(d) || d <= 0) throw new Error(`ffprobe 길이 측정 실패: ${file}`);
   return d;
+}
+
+/** 이미지 크기(ffprobe) — 초점 좌표 변환용. 실패하면 throw(호출부가 초점 없이 진행). */
+export async function probeImageSize(file: string): Promise<{ w: number; h: number }> {
+  const { stdout } = await execFileP('ffprobe',
+    ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', file],
+    { timeout: 15_000 });
+  const [w, h] = String(stdout).trim().split(',').map((v) => parseInt(v, 10));
+  if (!(w! > 0 && h! > 0)) throw new Error(`ffprobe 크기 측정 실패: ${file}`);
+  return { w: w!, h: h! };
 }
 
 /** 씬별 TTS 합성(실패 시 무음)·길이 실측·프레임/오프셋 산출. 두 렌더러 공유. */

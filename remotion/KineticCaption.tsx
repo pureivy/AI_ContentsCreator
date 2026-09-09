@@ -1,5 +1,5 @@
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame, useVideoConfig } from 'remotion';
+import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, Easing } from 'remotion';
 import { fitTextOnNLines } from '@remotion/layout-utils';
 import { captionWordStyle, type CaptionMotionName } from './captionMotion';
 import { FONT_NAME } from './loadFonts';
@@ -54,7 +54,9 @@ export const KineticCaption: React.FC<{
   hookFontPx?: number;
   /** 등장 모션 — 편마다 다르다. 미지정=종전 동작('튀어오름'). */
   motion?: CaptionMotionName;
-}> = ({ text, variant, bottomPct = 20, keyword, outline, fontPx = 70, hookFontPx = 84, motion = '튀어오름' }) => {
+  /** 키워드 팝(2026-09-09 기법) — 핵심 단어 하나가 자리 잡은 뒤 커지며 색이 붙는다. 키워드가 자막에 없으면 가장 긴 단어. */
+  pop?: boolean;
+}> = ({ text, variant, bottomPct = 20, keyword, outline, fontPx = 70, hookFontPx = 84, motion = '튀어오름', pop }) => {
   const f = useCurrentFrame();
   const { fps, width } = useVideoConfig();
   const words = text.split(/\s+/).filter(Boolean);
@@ -64,6 +66,12 @@ export const KineticCaption: React.FC<{
   const size = fitCaption(text, wanted, Math.max(200, width - CAPTION_SIDE_PAD));
   const isCta = variant === 'cta';
   const isKw = kwMatcher(isHook ? undefined : keyword); // 훅은 전체 노란색 — 키워드 강조 중복 방지
+  // 팝 대상 — 키워드 단어가 있으면 그것, 없으면 가장 긴 단어(조사 붙은 짧은 말은 강조해 봐야 뜻이 없다).
+  let popAt = -1;
+  if (pop && !isHook) {
+    popAt = words.findIndex((w) => isKw(w));
+    if (popAt < 0) words.forEach((w, i) => { if (popAt < 0 || w.length > words[popAt]!.length) popAt = i; });
+  }
   const box: React.CSSProperties = isCta
     ? { background: '#e53935', borderRadius: 999, padding: '24px 56px', display: 'flex', flexWrap: 'wrap', gap: '0 14px', justifyContent: 'center' }
     : { padding: '32px 64px', display: 'flex', flexWrap: 'wrap', gap: '0 14px', justifyContent: 'center' }; // 자막 배경 없음(사용자 지정) — 가독성은 textShadow 담당
@@ -74,13 +82,23 @@ export const KineticCaption: React.FC<{
           // 단어별 등장 — 모션 종류는 편마다 갈린다(captionMotion). 자막은 영상 시간의 100% 를
           // 차지하므로, 여기가 늘 같으면 앞에서 색·카메라를 갈라 놔도 지문이 남는다.
           const wordStyle = captionWordStyle(motion, f, fps, i);
+          // 키워드 팝 — 그 단어가 자리 잡은 뒤(등장 지연 + 8프레임) 1.28배로 튀었다 1.12배에 머문다.
+          // 프레임마다 바뀌는 건 transform 뿐(레이아웃 불변). 커진 만큼 옆 단어와 붙지 않게 고정 여백을 준다 — 값이 프레임과 무관해 줄바꿈이 흔들리지 않는다.
+          const isPop = i === popAt;
+          const popS = isPop
+            ? interpolate(f - (i * 6 + 8), [0, 6, 16], [1, 1.28, 1.12], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) })
+            : 1;
+          const popStyle: React.CSSProperties = isPop
+            ? { display: 'inline-block', margin: '0 0.14em', transformOrigin: 'center bottom', transform: `${wordStyle.transform ?? ''} scale(${popS.toFixed(3)})`.trim() }
+            : {};
           return (
             <span key={i} style={{
               fontSize: size, fontWeight: 800,
-              color: isHook || isKw(w) ? '#ffd54a' : '#fff',
+              color: isHook || isKw(w) || isPop ? '#ffd54a' : '#fff',
               lineHeight: 1.25, textShadow: '0 3px 18px rgba(0,0,0,.75)',
               ...(outline ? { WebkitTextStroke: '8px rgba(0,0,0,0.9)', paintOrder: 'stroke fill' } : {}),
               ...wordStyle,
+              ...popStyle,
             }}>{w}</span>
           );
         })}
