@@ -92,6 +92,7 @@ import { buildTitleTimingReport } from '../analytics/titleTiming';
 import { promiseStore } from '../content/promises';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
 import { shouldArchiveShortsVideo } from '../content/shortsArchive';
+import { runJanitor, type JanitorDeps } from '../autonomy/janitor';
 import { humanBytes } from '../util/prune';
 import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor, appendMetrics, naverTrackingDue, topInflow, latestDwell, latestLikes, latestTouch, sameKstDay } from '../analytics/performance';
 import { fetchBlogSympathy } from '../analytics/naverSympathy';
@@ -4451,6 +4452,41 @@ void stopNaverSync;
 if (CONFIG.naverSyncTime) {
   // eslint-disable-next-line no-console
   console.log(`[ai-contents-studio] 네이버 성과 수집 — 매일 ${CONFIG.naverSyncTime}(하루 1회 · 수동은 성과탭 "네이버 수집")`);
+}
+// 저장공간 정리(2026-09-10 사용자 확정) — 매일 새벽 휴지통 경유 정리. 규칙은 autonomy/janitor.ts.
+function janitorDeps(): JanitorDeps {
+  return {
+    dataDir: CONFIG.dataDir, sessionsDir: CONFIG.sessionsDir,
+    shorts: () => shortsStore().list(), cards: () => cardNewsStore().list(), pieces: () => pieceStore().list(),
+    removeShort: (id) => { shortsStore().remove(id); try { promiseStore().dropBySource(id); } catch { /* 무해 */ } },
+    isShortRunning: isShortsRunning,
+    isSessionRunning: (runId) => RUNS.get(runId)?.status === 'running',
+    archiveShort: async (id) => {
+      const s = shortsStore().get(id);
+      if (!s || !shouldArchiveShortsVideo(s)) return 0;
+      const freed = await archiveShortsVideo(shortsStore().dirFor(id));
+      if (freed) shortsStore().update(id, { videoArchivedTs: new Date().toISOString() });
+      return freed;
+    },
+    log: (m) => console.log('[janitor]', m),
+  };
+}
+const janitorOpts = () => ({ keepDays: CONFIG.janitorKeepDays, staleDays: CONFIG.janitorStaleDays, trashDays: CONFIG.janitorTrashDays });
+app.post('/maintenance/janitor', async (c) => {
+  const dryRun = c.req.query('dry') === '1';
+  const r = await runJanitor(janitorDeps(), { ...janitorOpts(), dryRun });
+  return c.json(r);
+});
+const stopJanitor = startDaily({
+  time: CONFIG.janitorTime,
+  key: 'janitor',
+  run: () => { void runJanitor(janitorDeps(), janitorOpts()).catch((e) => console.log('[janitor]', `실패: ${e instanceof Error ? e.message : String(e)}`)); },
+  log: (m) => console.log('[janitor]', m),
+});
+void stopJanitor;
+if (CONFIG.janitorTime) {
+  // eslint-disable-next-line no-console
+  console.log(`[ai-contents-studio] 저장공간 정리 — 매일 ${CONFIG.janitorTime}(발행 ${CONFIG.janitorKeepDays}일 뒤 중간물 · 미발행 ${CONFIG.janitorStaleDays}일 · 휴지통 ${CONFIG.janitorTrashDays}일)`);
 }
 // 수요 게이트 상태 1줄(2026-08-26 리뷰 M2) — 켜져 있어도 검색광고 키가 없으면 전량 fail-open 이라
 // 아무 판정도 일어나지 않는다. 그 '조용한 무동작'이 부팅 로그에서 바로 보이게 한다.

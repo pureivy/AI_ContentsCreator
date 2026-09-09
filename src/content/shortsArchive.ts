@@ -20,6 +20,8 @@ export interface ShortsArchiveInput {
   metaPublishedTs?: string;
   /** 이미 정리된 시각 — 있으면 재실행하지 않는다(멱등). */
   videoArchivedTs?: string;
+  /** 이 편의 채널(2026-09-08 채널 분리 이후 한 편은 한 채널). 없으면 옛 양채널 편. */
+  platform?: string;
 }
 
 /**
@@ -30,5 +32,9 @@ export function shouldArchiveShortsVideo(s: ShortsArchiveInput): boolean {
   if (s.videoArchivedTs) return false;
   const yt = !!(s.youtubeId ?? '').trim();
   const meta = !!(s.igReelId ?? '').trim() || !!(s.metaPublishedTs ?? '').trim();
-  return yt && meta;
+  // 채널 분리(2026-09-08) 이후 한 편은 한 채널에만 간다 — '둘 다' 조건이 영원히 안 맞아 정책이 멈춰 있었다
+  // (실측 2026-09-10: 발행됐는데 원본이 남은 편 26개 1.1G). 그 편의 채널이 발행되면 끝난 것이다.
+  if (s.platform === 'youtube') return yt;
+  if (s.platform === 'instagram') return meta;
+  return yt && meta; // 옛 양채널 편
 }

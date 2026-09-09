@@ -38,3 +38,18 @@ describe('shouldArchiveShortsVideo — 원본 정리 판정', () => {
     expect(shouldArchiveShortsVideo({ ...both, videoArchivedTs: '2026-08-31T00:00:00Z' })).toBe(false);
   });
 });
+
+describe('shouldArchiveShortsVideo — 채널 분리(2026-09-08) 이후: 그 편의 채널만 보면 된다', () => {
+  it('유튜브 편은 유튜브만 올라가면 정리한다', () => {
+    expect(shouldArchiveShortsVideo({ platform: 'youtube', youtubeId: 'yt1' })).toBe(true);
+    expect(shouldArchiveShortsVideo({ platform: 'youtube', igReelId: 'ig1' })).toBe(false);
+  });
+  it('인스타 편은 릴스만 올라가면 정리한다(수집 경로 metaPublishedTs 도 인정)', () => {
+    expect(shouldArchiveShortsVideo({ platform: 'instagram', igReelId: 'ig1' })).toBe(true);
+    expect(shouldArchiveShortsVideo({ platform: 'instagram', metaPublishedTs: '2026-09-09T00:00:00Z' })).toBe(true);
+    expect(shouldArchiveShortsVideo({ platform: 'instagram', youtubeId: 'yt1' })).toBe(false);
+  });
+  it('채널 표시가 없는 옛 편은 종전대로 둘 다', () => {
+    expect(shouldArchiveShortsVideo({ youtubeId: 'yt1' })).toBe(false);
+  });
+});
