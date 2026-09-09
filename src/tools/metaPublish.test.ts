@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildIgCaption, extractId, parsePermalink, realPermalink, graphError, metaLimitHint, matchRecentPublish, matchRecentFbPost, matchOrphanReels, publishCardNewsToMeta, publishShortsToMeta } from './metaPublish';
+import { buildIgCaption, extractId, parsePermalink, realPermalink, graphError, metaLimitHint, matchRecentPublish, matchRecentFbPost, matchOrphanReels, publishCardNewsToMeta, publishShortsToMeta, isMetaFetchTimeout, withMetaRetry } from './metaPublish';
 import { uploadToFalStorage } from './falStorage';
 import { getMetaAccount } from '../secrets/store';
 import fs from 'node:fs';
@@ -535,5 +535,26 @@ describe('matchRecentFbPost', () => {
     expect(matchRecentFbPost(posts, '전혀 다른 카드뉴스 캡션입니다', now)).toBeNull();
     expect(matchRecentFbPost(posts, '방학', now)).toBeNull();                       // <8자 → 오매칭 방지
     expect(matchRecentFbPost([{ id: 'x', created_time: '2026-07-27T08:24:30Z' }], '방학 시작에 10개였던 열매', now)).toBeNull();
+  });
+});
+
+describe('메타 가져오기 시간 초과 재시도(2026-09-10)', () => {
+  it('isMetaFetchTimeout: code -2 / subcode 2207003 / Timeout 만 참', () => {
+    expect(isMetaFetchTimeout('IG 자식 컨테이너 실패: Timeout(code -2, subcode 2207003)')).toBe(true);
+    expect(isMetaFetchTimeout('IG 발행 실패: Application request limit reached(code 4, subcode 2207051)')).toBe(false);
+    expect(isMetaFetchTimeout('IG 컨테이너 처리 실패(ERROR)')).toBe(false);
+  });
+  it('withMetaRetry: 시간 초과면 대기 후 다시 시도해 성공을 돌려준다', async () => {
+    let n = 0;
+    const r = await withMetaRetry(async () => { n++; if (n < 3) throw new Error('x 실패: Timeout(code -2, subcode 2207003)'); return 'ok'; }, 't', [0, 0]);
+    expect(r).toBe('ok'); expect(n).toBe(3);
+  });
+  it('withMetaRetry: 횟수를 다 쓰면 마지막 오류를 던지고, 다른 오류는 즉시 던진다', async () => {
+    let n = 0;
+    await expect(withMetaRetry(async () => { n++; throw new Error('Timeout(code -2, subcode 2207003)'); }, 't', [0])).rejects.toThrow('2207003');
+    expect(n).toBe(2);
+    n = 0;
+    await expect(withMetaRetry(async () => { n++; throw new Error('code 4 rate limit'); }, 't', [0, 0])).rejects.toThrow('code 4');
+    expect(n).toBe(1);
   });
 });

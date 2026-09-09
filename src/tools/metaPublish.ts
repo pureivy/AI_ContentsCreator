@@ -9,6 +9,10 @@
  * 채널 독립: FB 실패가 IG 성공을 취소하지 않는다(부분 성공 + fbError 로 사유 보고, 성공 위장 금지).
  */
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { CONFIG } from '../config';
 import { getMetaAccount } from '../secrets/store';
 import { uploadToFalStorage } from './falStorage';
@@ -103,6 +107,43 @@ async function graphJson(url: string, init: RequestInit, what: string): Promise<
   return j;
 }
 const tokenQs = (token: string): string => `access_token=${encodeURIComponent(token)}`;
+
+/**
+ * 메타가 image_url 을 받아오다 넘긴 시간 초과인가(순수) — code -2 / subcode 2207003 "Timeout".
+ * 실측 2026-09-10: 8장짜리 캐러셀에서 자식 컨테이너 하나가 이걸로 죽어 발행 전체가 실패했다. 우리 쪽 오류가 아니라
+ * 메타 쪽 가져오기가 느린 것이라 같은 요청을 잠시 뒤 다시 보내면 대개 붙는다.
+ */
+export function isMetaFetchTimeout(msg: string): boolean {
+  return /2207003|code -2\b|\bTimeout\b/i.test(msg);
+}
+
+/** 시간 초과(isMetaFetchTimeout)만 재시도 — 나머지 오류는 그대로 던진다. waits 는 시도 사이 대기(ms). */
+export async function withMetaRetry<T>(fn: () => Promise<T>, what: string, waits: readonly number[] = [3000, 6000]): Promise<T> {
+  for (let i = 0; ; i++) {
+    try { return await fn(); } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (i >= waits.length || !isMetaFetchTimeout(msg)) throw e;
+      console.log(`[meta] ${what} 시간 초과 — ${waits[i]! / 1000}초 뒤 재시도(${i + 1}/${waits.length})`);
+      await new Promise((res) => setTimeout(res, waits[i]));
+    }
+  }
+}
+
+const execFileP = promisify(execFile);
+/**
+ * 발행용 JPEG 변환 — 메타 이미지 컨테이너는 공식적으로 JPEG 만 받는다(PNG 는 실측 허용). 렌더 PNG 는 장당 2~3MB 라
+ * 메타가 URL 에서 받아오다 시간을 넘기기 쉽다(2026-09-10 실측). JPEG(품질 높음)는 장당 수백 KB 로 같은 화질.
+ * 변환은 임시 폴더에 두고 원본은 건드리지 않는다. 실패하면 null — 호출부가 PNG 그대로 올린다(종전 동작).
+ */
+export async function toMetaJpeg(pngPath: string, signal?: AbortSignal): Promise<string | null> {
+  if (/\.jpe?g$/i.test(pngPath)) return pngPath;
+  try {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aicc-meta-'));
+    const out = path.join(dir, path.basename(pngPath).replace(/\.[^.]+$/, '') + '.jpg');
+    await execFileP('ffmpeg', ['-v', 'error', '-y', '-i', pngPath, '-q:v', '2', '-pix_fmt', 'yuvj420p', out], { timeout: 30_000, signal });
+    return fs.existsSync(out) && fs.statSync(out).size > 0 ? out : null;
+  } catch { return null; }
+}
 /** 캐러셀 컨테이너 처리 대기 — FINISHED 까지 3초×maxTries회 폴링. */
 async function waitContainer(containerId: string, token: string, signal?: AbortSignal, maxTries = 10): Promise<void> {
   for (let i = 0; i < maxTries; i++) {
@@ -249,36 +290,41 @@ export async function publishCardNewsToMeta(opts: {
     out.igPermalink = realPermalink(opts.existing?.igPermalink);
     if (igLinked && !out.igMediaId) {
       // ① 슬라이드를 fal 스토리지 공개 URL 로 올림 — 인스타 로그인은 공개 image_url 필수(로컬 업로드 미지원, Meta 문서).
-      //    PNG 그대로 허용 실측. 순서 보존(슬라이드 정렬 순).
+      //    PNG 그대로 허용 실측이지만 장당 2~3MB 라 메타 가져오기 시간 초과(2207003)를 부른다 — JPEG 로 바꿔 올린다(2026-09-10).
+      //    순서 보존(슬라이드 정렬 순).
       const imageUrls: string[] = [];
-      for (const p of opts.slidePaths) imageUrls.push(await uploadToFalStorage(p, 'image/png', signal));
+      for (const p of opts.slidePaths) {
+        const jpg = await toMetaJpeg(p, signal);
+        imageUrls.push(jpg ? await uploadToFalStorage(jpg, 'image/jpeg', signal) : await uploadToFalStorage(p, 'image/png', signal));
+      }
 
       // ② 컨테이너 — 1장은 단일 이미지 포스트(캐러셀은 2~10장), 2장 이상은 캐러셀.
       let carId: string;
       if (imageUrls.length === 1) {
-        const single = await graphJson(`${GRAPH}/me/media`, {
+        const single = await withMetaRetry(() => graphJson(`${GRAPH}/me/media`, {
           method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({ image_url: imageUrls[0]!, caption: message, ...aiLabelParam(), access_token: token }),
-        }, 'IG 이미지 컨테이너');
+        }, 'IG 이미지 컨테이너'), 'IG 이미지 컨테이너');
         const sid = extractId(single);
         if (!sid) throw new Error('IG 이미지 컨테이너 응답 이형');
         carId = sid;
       } else {
         const childIds: string[] = [];
         for (const url of imageUrls) {
-          const child = await graphJson(`${GRAPH}/me/media`, {
+          // 시간 초과(2207003)는 장 단위로 재시도한다 — 한 장 때문에 8장 발행 전체를 버리지 않는다(2026-09-10 실측).
+          const child = await withMetaRetry(() => graphJson(`${GRAPH}/me/media`, {
             method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: new URLSearchParams({ image_url: url, is_carousel_item: 'true', access_token: token }),
-          }, 'IG 자식 컨테이너');
+          }, 'IG 자식 컨테이너'), `IG 자식 컨테이너 ${childIds.length + 1}/${imageUrls.length}`);
           const cid = extractId(child);
           if (!cid) throw new Error('IG 자식 컨테이너 응답 이형');
           childIds.push(cid);
         }
-        const carousel = await graphJson(`${GRAPH}/me/media`, {
+        const carousel = await withMetaRetry(() => graphJson(`${GRAPH}/me/media`, {
           method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           // is_ai_generated 는 부모 컨테이너에만 — 자식 아이템(:256)에 지정하면 에러(Meta 콘텐츠 발행 가이드).
           body: new URLSearchParams({ media_type: 'CAROUSEL', children: childIds.join(','), caption: message, ...aiLabelParam(), access_token: token }),
-        }, 'IG 캐러셀 컨테이너');
+        }, 'IG 캐러셀 컨테이너'), 'IG 캐러셀 컨테이너');
         const cid = extractId(carousel);
         if (!cid) throw new Error('IG 캐러셀 컨테이너 응답 이형');
         carId = cid;
