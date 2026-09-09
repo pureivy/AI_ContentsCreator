@@ -43,6 +43,8 @@ export interface JanitorDeps {
   isSessionRunning: (runId: string) => boolean;
   /** final→preview 교체. 회수 바이트(0 = 조건 미충족·이미 됨·실패). */
   archiveShort: (id: string) => Promise<number>;
+  /** 미리보기·스틸 같은 작업 산출 폴더(예: out/) — keepDays 지난 항목은 휴지통으로. 코드가 읽지 않는 스크래치다(2026-09-10). */
+  scratchDirs?: string[];
   log?: (m: string) => void;
 }
 
@@ -244,6 +246,17 @@ export async function runJanitor(deps: JanitorDeps, opts: JanitorOpts = {}): Pro
     let files: string[] = [];
     try { files = fs.readdirSync(imgDir).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)); } catch { continue; }
     for (const f of files) if (!used.has(f)) trash(path.join(imgDir, f), 'session-intermediates', path.join(runId, 'images', f));
+  }
+
+  // ── 작업 산출 폴더(out/ 등) — keepDays 지난 항목. pnpm preview·기법 스틸 같은 확인용 렌더라 다시 만들 수 있다.
+  for (const sd of deps.scratchDirs ?? []) {
+    let entries: string[] = [];
+    try { entries = fs.readdirSync(sd); } catch { continue; }
+    for (const f of entries) {
+      const p = path.join(sd, f);
+      try { if (now.getTime() - fs.statSync(p).mtimeMs < keepDays * DAY) continue; } catch { continue; }
+      trash(p, 'scratch-out', path.join(path.basename(sd), f));
+    }
   }
 
   // ── 휴지통 영구 삭제(trashDays 경과)

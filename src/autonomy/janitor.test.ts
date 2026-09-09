@@ -158,3 +158,22 @@ describe('runJanitor — 임시 data 디렉터리에서 실제 이동·삭제(fa
     expect(r2.purged.n).toBe(0);
   });
 });
+
+describe('runJanitor — 작업 산출 폴더(out/)', () => {
+  it('keepDays 지난 항목만 휴지통으로, 최근 것은 남긴다', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'janitor-out-'));
+    const out = path.join(root, 'out'); fs.mkdirSync(path.join(out, 'tech'), { recursive: true });
+    fs.writeFileSync(path.join(out, 'old.mp4'), Buffer.alloc(100)); fs.writeFileSync(path.join(out, 'tech', 'x.png'), Buffer.alloc(10)); fs.writeFileSync(path.join(out, 'fresh.png'), Buffer.alloc(10));
+    const old = new Date(NOW.getTime() - 20 * 86_400_000);
+    fs.utimesSync(path.join(out, 'old.mp4'), old, old); fs.utimesSync(path.join(out, 'tech'), old, old);
+    const deps: JanitorDeps = {
+      dataDir: root, sessionsDir: path.join(root, 'sessions'), shorts: () => [], cards: () => [], pieces: () => [],
+      removeShort: () => {}, isShortRunning: () => false, isSessionRunning: () => false, archiveShort: async () => 0, scratchDirs: [out],
+    };
+    const r = await runJanitor(deps, { now: NOW });
+    expect(fs.existsSync(path.join(out, 'old.mp4'))).toBe(false);
+    expect(fs.existsSync(path.join(out, 'tech'))).toBe(false);
+    expect(fs.existsSync(path.join(out, 'fresh.png'))).toBe(true);
+    expect(r.moved['scratch-out']).toEqual({ n: 2, bytes: 110 });
+  });
+});

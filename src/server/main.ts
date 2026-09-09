@@ -4468,6 +4468,7 @@ function janitorDeps(): JanitorDeps {
       if (freed) shortsStore().update(id, { videoArchivedTs: new Date().toISOString() });
       return freed;
     },
+    scratchDirs: [path.resolve('out')], // pnpm preview·기법 스틸 산출 — 코드가 읽지 않는다
     log: (m) => console.log('[janitor]', m),
   };
 }
