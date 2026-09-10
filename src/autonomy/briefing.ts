@@ -8,7 +8,8 @@ import { CONFIG } from '../config';
 import { brandFileSuffix, activeBrandSlug } from '../content/brand';
 import { pieceStore } from '../content/pieces';
 import { markdownHeadings } from '../content/priorCoverage';
-import { readNaverIndexingReport, GRACE_DAYS } from '../analytics/naverIndexing';
+import { readNaverIndexingReport, lowTrafficSuspects, cohortMedians, COHORT_AGE_DAYS, LOW_TRAFFIC_DAYS, LOW_TRAFFIC_VIEWS, type TrafficRow } from '../analytics/naverIndexing';
+import { latestMetrics, readMetrics, viewsAtAge } from '../analytics/performance';
 import { llmWiki } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
 import { followersSection } from '../analytics/followers';
@@ -84,21 +85,55 @@ function diversityWatchSection(): { heading: string; body: string } | null {
   };
 }
 
+/** 활성 브랜드 발행 글의 (제목·발행 후 일수·누적 네이버 조회) — 유입 판정 입력. 글 시계열엔 네이버·수동 표본만 있다. */
+function naverTrafficRows(now = Date.now()): TrafficRow[] {
+  const brand = activeBrandSlug() || '';
+  const out: TrafficRow[] = [];
+  for (const p of pieceStore().list()) {
+    if ((p.brand ?? '') !== brand || !p.publishedUrl) continue;
+    const t = Date.parse(p.publishedTs ?? p.updatedTs);
+    if (!Number.isFinite(t)) continue;
+    const m = latestMetrics(p.id);
+    out.push({
+      title: p.title,
+      ageDays: Math.max(0, Math.floor((now - t) / 86_400_000)),
+      views: typeof m?.views === 'number' ? m.views : null,
+      // 같은 나이끼리 견주기 위한 14일차 누적 — 최신 누적값으로 비교하면 오래된 글이 항상 커서 거짓 경보가 난다.
+      viewsAtAge: viewsAtAge(readMetrics(p.id), p.publishedTs ?? p.updatedTs, COHORT_AGE_DAYS),
+    });
+  }
+  return out;
+}
+
 /**
- * 네이버 색인 점검(사용자 요청 2026-07-23) — 캐시(refreshNaverIndexingCache 가 채움)를 읽어, 발행 글이
- * 네이버 블로그 검색에 자기 postId 로 뜨는지 요약. **없음(발행 GRACE_DAYS+ 경과)=저품질 강한 음성 신호**,
- * 있음=약한 양성(통합검색 색인보다 관대하므로 "정상" 단정 아님). 발행 직후는 '색인 대기'로 구분.
+ * 네이버 유입 점검 — 저품질 의심을 **실제 유입**으로 판정한다(2026-09-11 사용자 확정).
+ *
+ * 종전 판정('자기 제목 검색에 없음')은 오탐이었다. 실측: 의심 48편 중 47편이 조회가 잡혔고 중앙값 19회로
+ * '있음' 글(11회)보다 높았다. 같은 제목으로 검색되는 글 수가 의심 346 vs 있음 8(43배) — 흔한 제목이라
+ * 30위 밖으로 밀린 것을 저품질로 읽고 있었다. 상세 근거는 naverIndexing.ts 머리말.
+ * 검색 결과 수는 참고 수치로만 남긴다(저품질이라는 말은 붙이지 않는다).
  */
-function naverIndexingSection(): { heading: string; body: string } | null {
+function naverTrafficSection(now = Date.now()): { heading: string; body: string } | null {
+  const rows = naverTrafficRows(now);
+  if (!rows.length) return null;
+  const measured = rows.filter((r) => typeof r.views === 'number');
+  const suspect = lowTrafficSuspects(rows);
+  const co = cohortMedians(rows);
+  const lines = [`발행 ${rows.length}편 · 조회 측정 ${measured.length}편 · 유입 거의 없음 ${suspect.length}편(발행 ${LOW_TRAFFIC_DAYS}일+ · 조회 ${LOW_TRAFFIC_VIEWS}회 미만)`];
+  // 블로그 단위 낙차 — 저품질은 글 하나가 아니라 블로그 전체에 오므로 이 줄이 개별 글보다 먼저 보인다.
+  // 같은 나이(14일차) 누적으로 견준다 — 최신 누적값끼리 비교하면 오래된 글이 항상 커서 매일 거짓 경보가 난다.
+  if (co.recent !== null && co.older !== null) {
+    lines.push(`${COHORT_AGE_DAYS}일차 조회 중앙값 — 최근 발행 ${co.recent}회(${co.recentN}편) vs 그 이전 ${co.older}회(${co.olderN}편)`
+      + (co.recent * 3 < co.older ? ' ⚠ 최근분이 3분의 1 미만 — 블로그 단위 점검 필요' : ''));
+  }
+  for (const r of suspect.slice(0, 8)) lines.push(`✗ "${r.title.slice(0, 26)}" — 발행 ${r.ageDays}일차인데 조회 ${r.views}회`);
+  if (suspect.length > 8) lines.push(`… 외 ${suspect.length - 8}편`);
+  if (!suspect.length) lines.push('유입이 끊긴 글 없음 — 발행분 전부 네이버 조회가 잡힙니다.');
   const rep = readNaverIndexingReport();
-  if (!rep || !rep.results.length) return null;
-  const found = rep.results.filter((r) => r.found);
-  const suspect = rep.results.filter((r) => !r.found && r.checkable && r.ageDays >= GRACE_DAYS);
-  const waiting = rep.results.filter((r) => !r.found && r.checkable && r.ageDays < GRACE_DAYS);
-  const lines = [`발행 ${rep.results.length}편 · 검색결과 있음 ${found.length} · 저품질 의심 ${suspect.length} · 색인 대기 ${waiting.length}`];
-  for (const r of suspect) lines.push(`✗ "${r.title.slice(0, 26)}" — 자기 제목 검색에도 없음(발행 ${r.ageDays}일차) · 저품질 의심`);
-  if (!suspect.length) lines.push('저품질 의심 없음 — 오래된 글이 자기 제목 검색에 노출됨(있음=약한 양성이지 "정상" 단정은 아님).');
-  return { heading: '🔍 네이버 색인 점검', body: lines.join('\n') };
+  if (rep?.results.length) {
+    lines.push(`(참고) 자기 제목 검색 노출 ${rep.results.filter((r) => r.found).length}/${rep.results.length}편 — 제목이 흔할수록 상위 30위 밖으로 밀린다. 품질 지표가 아니다.`);
+  }
+  return { heading: '🔍 네이버 유입 점검', body: lines.join('\n') };
 }
 
 /** 실제 데이터(위키·결정·학습·승인)에서 일일 브리핑을 구성. */
@@ -134,6 +169,6 @@ export function buildBriefing(): NotifyMessage {
     }
   } catch { /* 예고 섹션 실패 무해 */ }
   try { const dv = diversityWatchSection(); if (dv) sections.push(dv); } catch { /* 감시 실패 무해 */ }
-  try { const ix = naverIndexingSection(); if (ix) sections.push(ix); } catch { /* 색인 섹션 실패 무해 */ }
+  try { const ix = naverTrafficSection(); if (ix) sections.push(ix); } catch { /* 색인 섹션 실패 무해 */ }
   return composeBriefing(date, sections);
 }

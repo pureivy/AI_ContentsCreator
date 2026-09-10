@@ -53,6 +53,30 @@ export function latestMetrics(pieceId: string): MetricSample | null {
   const all = readMetrics(pieceId);
   return all.length ? all[all.length - 1]! : null;
 }
+/**
+ * 발행 후 days 일차의 누적 조회(순수, 2026-09-11) — 그 시점까지 수집된 마지막 표본의 값.
+ *
+ * 왜 필요한가. 누적 조회를 그냥 비교하면 오래된 글이 언제나 크다(시간이 곧 누적이다). 그래서 '최근 글이
+ * 예전 글보다 조회가 적다'는 비교는 항상 참이 되어 거짓 경보를 만든다(실측: 최근 30일 11회 vs 그 이전 35회 —
+ * 같은 나이로 맞춰 재면 11회 vs 8회로 낙차가 없었다). 같은 나이끼리 재려면 이 함수가 필요하다.
+ *
+ * 시계열이 그 나이에 못 미치면 null — '아직 모른다'와 '적다'를 섞지 않는다.
+ */
+export function viewsAtAge(samples: readonly MetricSample[], publishedTs: string, days: number): number | null {
+  const pub = Date.parse(publishedTs);
+  if (!Number.isFinite(pub)) return null;
+  const cutoff = pub + days * 86_400_000;
+  let atOrBefore: number | null = null;
+  let reaches = false;
+  for (const s of samples) {
+    const t = Date.parse(s.measuredAt);
+    if (!Number.isFinite(t) || typeof s.views !== 'number') continue;
+    if (t <= cutoff) atOrBefore = s.views;
+    if (t >= cutoff) reaches = true;
+  }
+  return reaches ? atOrBefore : null;
+}
+
 /** 채널별 최신 샘플(순수) — 한 시계열에 youtube:api·meta:ig·meta:fb 가 섞이므로 소스 접두로 갈라 고른다. */
 export function latestSampleBySource(samples: MetricSample[], prefix: string): MetricSample | null {
   for (let i = samples.length - 1; i >= 0; i--) {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseManualMetrics, latestSampleBySource, viewsSeriesBySource, naverTrackingDue, topInflow, latestDwell, latestLikes, sameKstDay, latestTouch, type MetricSample } from './performance';
+import { parseManualMetrics, latestSampleBySource, viewsSeriesBySource, naverTrackingDue, topInflow, latestDwell, latestLikes, sameKstDay, latestTouch, type MetricSample, viewsAtAge } from './performance';
 import { performanceSignal } from './reinforce';
 
 // 스파크라인용 시계열(2026-07-20) — 소스 접두로 거른 샘플을 '하루 1점(그날 마지막 값)'으로 압축해
@@ -151,5 +151,26 @@ describe('topInflow / latestDwell — 최신 빈 표본이 과거 값을 가리�
     expect(latestLikes([s({ likes: 5 }), s({})])).toBe(5);       // 공감 조회 실패 표본이 과거 값 안 가림
     expect(latestLikes([s({ likes: 5 }), s({ likes: 0 })])).toBe(0); // 0 은 유효(공감 없음)
     expect(latestLikes([s({}), s({})])).toBeNull();
+  });
+});
+
+// 같은 나이끼리 비교하기 위한 '발행 N일차 누적 조회'(2026-09-11) — 최신 누적값끼리 견주면 오래된 글이
+// 언제나 커서 '최근이 적다'가 항상 참이 된다(실측 거짓 경보: 최근 11회 vs 이전 35회 → 같은 나이로는 11 vs 8).
+describe('viewsAtAge — 발행 N일차 누적 조회', () => {
+  const pub = '2026-08-01T00:00:00Z';
+  const s = (day: number, views: number): MetricSample =>
+    ({ measuredAt: new Date(Date.parse(pub) + day * 86_400_000).toISOString(), views, searchInflow: [], source: 'scrape:naver_advisor' });
+  it('그 나이까지의 마지막 표본 값', () => {
+    expect(viewsAtAge([s(0, 1), s(7, 12), s(14, 30), s(30, 80)], pub, 14)).toBe(30);
+    expect(viewsAtAge([s(0, 1), s(10, 12), s(30, 80)], pub, 14)).toBe(12); // 14일차 직전 표본
+  });
+  it('시계열이 그 나이에 못 미치면 null — 아직 모르는 것과 적은 것을 섞지 않는다', () => {
+    expect(viewsAtAge([s(0, 1), s(10, 12)], pub, 14)).toBeNull();
+    expect(viewsAtAge([], pub, 14)).toBeNull();
+  });
+  it('발행일이 깨졌거나 조회가 없는 표본은 건너뛴다', () => {
+    expect(viewsAtAge([s(14, 30)], '깨진값', 14)).toBeNull();
+    const noViews = [{ measuredAt: new Date(Date.parse(pub) + 20 * 86_400_000).toISOString(), searchInflow: [] }] as unknown as MetricSample[];
+    expect(viewsAtAge(noViews, pub, 14)).toBeNull();
   });
 });
