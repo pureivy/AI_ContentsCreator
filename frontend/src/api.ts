@@ -127,6 +127,18 @@ export interface AutonomyStatus {
   /** 진행 중인 자율런 id(있으면) — 유휴 시 오피스뷰 자동 관전용. */
   auto_run_id?: string | null;
   last_auto_ts: string | null; last_auto_topic: string | null;
+  /** 자율런 지시(2026-09-10) — 꺼진 것도 문구를 돌려준다(다시 켜기용). */
+  directive?: AutonomyDirective | null;
+}
+export interface AutonomyDirective { text: string; on: boolean; createdTs: string; maxPieces?: number; made: number; lastResult?: string }
+/** 자율런 지시 설정 — text(새 지시·''=삭제), on(켜기/끄기), maxPieces(편수 상한·null=해제). */
+export async function setAutonomyDirective(body: { text?: string; on?: boolean; maxPieces?: number | null }): Promise<{ ok: boolean; directive?: AutonomyDirective | null }> {
+  try {
+    const r = await fetch("/autonomy/directive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    return r.ok ? await r.json() : { ok: false };
+  } catch {
+    return { ok: false };
+  }
 }
 /** 오토런 온/오프 토글 — enabled 생략 시 서버가 반전. */
 export async function toggleAutonomy(): Promise<{ ok: boolean; run_enabled?: boolean }> {

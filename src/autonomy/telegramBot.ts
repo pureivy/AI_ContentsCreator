@@ -22,6 +22,35 @@ export type BotAction =
   | { kind: 'shorts_youtube'; id: string }
   | { kind: 'shorts_meta'; id: string };
 
+/**
+ * 자율런 지시 명령(순수, 2026-09-10) — "자율런 지시: …" 로 설정, "지시 끄기/켜기/상태/삭제". 아니면 null.
+ * '지시 N편: …' 꼴은 편수 상한을 함께 받는다.
+ */
+export type DirectiveCommand =
+  | { kind: 'set'; text: string; maxPieces?: number }
+  | { kind: 'off' } | { kind: 'on' } | { kind: 'show' } | { kind: 'clear' };
+export function parseDirectiveCommand(text: string): DirectiveCommand | null {
+  const t = text.trim();
+  const m = /^(?:자율런|오토런)?\s*지시\s*(?:(\d{1,2})\s*편)?\s*[:：]\s*([\s\S]+)$/.exec(t);
+  if (m && m[2]!.trim()) {
+    const n = m[1] ? Number(m[1]) : undefined;
+    return { kind: 'set', text: m[2]!.trim(), ...(n && n > 0 ? { maxPieces: n } : {}) };
+  }
+  const w = /^(?:자율런|오토런)?\s*지시\s*(끄기|해제|중지|off|켜기|재개|on|상태|확인|삭제|지우기)?\s*$/i.exec(t);
+  if (!w) return null;
+  const op = (w[1] ?? '상태').toLowerCase();
+  if (['끄기', '해제', '중지', 'off'].includes(op)) return { kind: 'off' };
+  if (['켜기', '재개', 'on'].includes(op)) return { kind: 'on' };
+  if (['삭제', '지우기'].includes(op)) return { kind: 'clear' };
+  return { kind: 'show' };
+}
+/** 지시 상태 한 줄(순수) — 텔레그램 답장용. */
+export function describeDirective(d: { text: string; on: boolean; made: number; maxPieces?: number; lastResult?: string } | null): string {
+  if (!d) return '자율런 지시 없음 — 기존 자율런으로 돕니다.\n설정: "자율런 지시: 보관소의 수종별 수확 후 전정" (편수 상한은 "지시 5편: …")';
+  const q = d.maxPieces ? `${d.made}/${d.maxPieces}편` : `${d.made}편`;
+  return `${d.on ? '🟢 지시 켜짐' : '⚪ 지시 꺼짐'} — "${d.text}" (${q})${!d.on && d.lastResult ? `\n사유: ${d.lastResult}` : ''}${d.on ? '' : '\n다시 켜기: "지시 켜기"'}`;
+}
+
 /** 콜백 데이터 파싱(≤64바이트 규격: "<op>:<id>"). 불명이면 null. 순수 — 테스트 대상. */
 export function parseCallback(data: string): BotAction | null {
   const m = /^(bp|rv|cp|cf|sy|sm):([A-Za-z0-9_]{1,48})$/.exec(data);
@@ -224,8 +253,20 @@ async function handleUpdate(u: TgUpdate, chatId: string, bootTs: number): Promis
     }
     return;
   }
+  // 자율런 지시(2026-09-10) — 문장으로 주제 범위를 정해 두면 자율런이 그 안에서만 고른다.
+  const dc = parseDirectiveCommand(text);
+  if (dc) {
+    const body = dc.kind === 'set' ? { text: dc.text, on: true, ...(dc.maxPieces ? { maxPieces: dc.maxPieces } : {}) }
+      : dc.kind === 'off' ? { on: false } : dc.kind === 'on' ? { on: true } : dc.kind === 'clear' ? { text: '' } : {};
+    const r = await api('/autonomy/directive', body, 15_000);
+    if (!r.ok) { void sendTelegramHtml(errText('자율런 지시 실패', r)); return; }
+    const d = (r.json?.directive ?? null) as { text: string; on: boolean; made: number; maxPieces?: number; lastResult?: string } | null;
+    const head = dc.kind === 'set' ? '📝 자율런 지시 설정 — 다음 틱부터 이 범위 안에서 주제를 고릅니다.\n' : dc.kind === 'off' ? '⏸ 지시를 껐습니다 — 기존 자율런으로 돕니다.\n' : dc.kind === 'clear' ? '🗑 지시를 지웠습니다.\n' : '';
+    void sendTelegramHtml(`${head}${escapeHtml(describeDirective(d))}`);
+    return;
+  }
   // 명령이 아닌 일반 텍스트 — 짧은 안내(발행은 알림 메시지의 버튼으로).
-  void sendTelegramHtml(`📌 발행·수정은 검토 대기 알림 메시지의 버튼으로 할 수 있습니다.\n스튜디오: ${studioBase()}/`);
+  void sendTelegramHtml(`📌 발행·수정은 검토 대기 알림 메시지의 버튼으로 할 수 있습니다.\n자율런 지시: "자율런 지시: …" · "지시 상태" · "지시 끄기"\n스튜디오: ${studioBase()}/`);
 }
 
 let started = false;

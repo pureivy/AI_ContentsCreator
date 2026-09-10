@@ -39,6 +39,7 @@ import { unusedStock, stockBlock, usedSpecies } from '../content/mediaStock';
 import { shortsStore } from '../content/shorts';
 import { topicTargetBlock, topicPriorityBlock, demandGateForTarget, platformLabel, type ShortsPlatform } from '../content/shortsPlatform';
 import { listMedia } from '../content/mediaLibrary';
+import { notify } from './notify';
 import { findSpecies, findSpeciesLoose } from '../content/species';
 
 export interface AutoCycleDeps<T = string> {
@@ -141,21 +142,118 @@ export function derivedContentDue(perDay: number, lastCreatedTs: string | undefi
 // ── 오토런 온/오프 토글(사용자 요청 2026-07-16) — 앱 전역 스위치(브랜드 무관), 재시작에도 유지 ──
 // AUTO_CYCLE_MINUTES(주기 설정)와 별개다: 주기는 기능의 존재, 토글은 사용자의 일시 정지 스위치.
 const autorunFile = (): string => path.join(CONFIG.dataDir, '_shared', 'autorun.json');
-let _autorunCache: boolean | undefined;
-/** 오토런 켜짐 여부 — 파일 없음/깨짐은 온(기존 동작 불변). 1회 읽고 캐시(틱마다 디스크 안 침). */
-export function autoRunEnabled(): boolean {
-  if (_autorunCache === undefined) {
-    try { _autorunCache = (JSON.parse(fs.readFileSync(autorunFile(), 'utf-8')) as { enabled?: unknown }).enabled !== false; }
-    catch { _autorunCache = true; }
-  }
-  return _autorunCache;
+
+/**
+ * 자율런 지시(2026-09-10 사용자 확정) — "보관소의 수종별 수확 후 전정 및 거름주는 방법"처럼 사람이 준 테마 안에서만
+ * 주제를 고르게 하는 옵션. 켜져 있으면 아이디어 제안 프롬프트 맨 위에 최우선 블록으로 들어가고, 자율 판단 게이트
+ * (수종·축 월 상한, 검색 수요, 계열 쿨다운, 소재 포화, 리서치 폐기)는 기각 대신 로그만 남긴다. 사장님 정책 게이트
+ * (브랜드 범위, 시기, 기존 글 유사 금지, 함정어)는 그대로다. 클러스터 형제 공급로는 지시 중 건너뛴다.
+ * 끄면 종전 자율런과 바이트 단위로 같다(블록 미주입·게이트 원상). made/maxPieces 로 편수 상한, 두뇌가 '더 낼 주제
+ * 없음'이라 답하면 자동으로 꺼지고 알린다.
+ */
+export interface AutorunDirective {
+  text: string;
+  on: boolean;
+  createdTs: string;
+  /** 편수 상한(선택) — 도달하면 자동으로 꺼진다. */
+  maxPieces?: number;
+  /** 이 지시로 채택된 주제 수. */
+  made: number;
+  /** 꺼진 사유(소진·상한·수동) — 화면 표시용. */
+  lastResult?: string;
 }
-export function setAutoRunEnabled(v: boolean): void {
-  _autorunCache = v;
+interface AutorunState { enabled?: boolean; directive?: AutorunDirective }
+let _autorunState: AutorunState | undefined;
+function autorunState(): AutorunState {
+  if (_autorunState === undefined) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(autorunFile(), 'utf-8')) as AutorunState;
+      _autorunState = raw && typeof raw === 'object' ? raw : {};
+    } catch { _autorunState = {}; }
+  }
+  return _autorunState;
+}
+function writeAutorunState(): void {
   try {
     fs.mkdirSync(path.dirname(autorunFile()), { recursive: true });
-    fs.writeFileSync(autorunFile(), JSON.stringify({ enabled: v }));
-  } catch { /* 영속 실패해도 런타임 토글은 유효(다음 재시작에 기본 온) */ }
+    fs.writeFileSync(autorunFile(), JSON.stringify(autorunState()));
+  } catch { /* 영속 실패해도 런타임 값은 유효(다음 재시작에 기본값) */ }
+}
+/** 오토런 켜짐 여부 — 파일 없음/깨짐은 온(기존 동작 불변). 1회 읽고 캐시(틱마다 디스크 안 침). */
+export function autoRunEnabled(): boolean { return autorunState().enabled !== false; }
+export function setAutoRunEnabled(v: boolean): void { autorunState().enabled = v; writeAutorunState(); }
+
+/** 저장된 지시(꺼진 것 포함) — 화면이 문구를 보여 주고 다시 켤 수 있게. 없으면 null. */
+export function autorunDirective(): AutorunDirective | null { return autorunState().directive ?? null; }
+/** 지금 적용 중인 지시 — 켜져 있고 문구가 있을 때만. */
+export function activeDirective(): AutorunDirective | null {
+  const d = autorunState().directive;
+  return d && d.on && d.text.trim() ? d : null;
+}
+/**
+ * 지시 설정 — text 를 주면 새 지시(made 0 부터), 없으면 기존 지시의 on/maxPieces 만 바꾼다.
+ * text 가 빈 문자열이면 지시 삭제. maxPieces null 은 상한 해제.
+ */
+export function setAutorunDirective(input: { text?: string; on?: boolean; maxPieces?: number | null }): AutorunDirective | null {
+  const st = autorunState();
+  if (typeof input.text === 'string') {
+    const text = input.text.trim().slice(0, 300);
+    if (!text) { delete st.directive; writeAutorunState(); return null; }
+    if (!st.directive || st.directive.text !== text) {
+      st.directive = { text, on: input.on ?? true, createdTs: new Date().toISOString(), made: 0 };
+    } else if (typeof input.on === 'boolean') st.directive.on = input.on;
+  } else if (st.directive && typeof input.on === 'boolean') {
+    st.directive.on = input.on;
+    if (input.on) delete st.directive.lastResult;
+  }
+  if (st.directive && input.maxPieces !== undefined) {
+    if (input.maxPieces === null || !(input.maxPieces > 0)) delete st.directive.maxPieces;
+    else st.directive.maxPieces = Math.floor(input.maxPieces);
+  }
+  writeAutorunState();
+  return st.directive ?? null;
+}
+export function clearAutorunDirective(): void { delete autorunState().directive; writeAutorunState(); }
+/** 지시로 주제 하나 채택 — 편수를 올리고 상한에 닿으면 끈다. */
+export function noteDirectivePiece(): { made: number; finished: boolean } {
+  const d = autorunState().directive;
+  if (!d) return { made: 0, finished: false };
+  d.made += 1;
+  const finished = !!d.maxPieces && d.made >= d.maxPieces;
+  if (finished) { d.on = false; d.lastResult = `편수 상한 ${d.maxPieces}편 도달`; }
+  writeAutorunState();
+  return { made: d.made, finished };
+}
+/** 두뇌가 '지시 안에서 더 낼 주제 없음'이라 답함 — 끄고 사유를 남긴다. */
+export function finishDirective(reason: string): void {
+  const d = autorunState().directive;
+  if (!d) return;
+  d.on = false;
+  d.lastResult = `소진 — ${reason || '더 낼 주제 없음'}`.slice(0, 160);
+  writeAutorunState();
+}
+
+/**
+ * 지시 블록(순수) — 아이디어 제안 프롬프트 맨 위. 보관소 수종 목록을 같이 주면 "보관소의 수종별" 같은 지시를
+ * 두뇌가 스스로 펼칠 수 있다. 소진 응답 형식을 여기서 정한다(proposeContentIdeas 가 exhausted 를 읽는다).
+ */
+export function directiveBlock(d: Pick<AutorunDirective, 'text' | 'maxPieces' | 'made'>, librarySpecies: readonly string[] = []): string {
+  const lib = librarySpecies.length
+    ? `\n· 지시가 '보관소'나 '촬영한 수종'을 가리키면 이 목록에서 고른다(보관소 수종): ${librarySpecies.join(', ')}`
+    : '';
+  const quota = d.maxPieces ? `\n· 편수 상한 ${d.maxPieces}편 중 ${d.made}편 진행됨.` : '';
+  return `[사장님 지시 — 최우선]\n"${d.text}"\n` +
+    `· 후보 ${IDEA_CANDIDATES}개는 전부 이 지시 안에서 낸다 — 지시 밖 소재는 제안하지 마라. 지시가 여러 대상(수종별 등)을 뜻하면 대상마다 하나씩 나눠 낸다.${lib}${quota}\n` +
+    '· [기존 콘텐츠 — 유사 금지]는 그대로 지킨다 — 지시에 맞아도 이미 다룬 글과 겹치면 다른 대상·다른 대목으로.\n' +
+    '· 로테이션·검색 수요·계열 회피 신호는 참고일 뿐, 이 지시가 그것들보다 앞선다(브랜드 범위·시기·함정어 규칙은 그대로).\n' +
+    '· 지시 안에서 아직 안 다룬 새 주제가 정말 없으면 {"ideas":[],"exhausted":true,"reason":"한 줄"} 로 답하라.';
+}
+/** 보관소에 있는 수종(표준명, 중복 제거) — 지시 블록 입력. 실패는 빈 목록. */
+function librarySpeciesFor(slug: string): string[] {
+  try {
+    const canon = (n: string): string => findSpecies(n)?.name ?? n;
+    return [...new Set(listMedia(slug || undefined).map((m) => m.species).filter((s): s is string => !!s).map(canon))];
+  } catch { return []; }
 }
 
 /**
@@ -244,6 +342,8 @@ export interface ContentIdea {
   title: string; keyword?: string; subNiche?: string;
   /** 주제를 고를 때 본 채널(2026-09-08) — piece.shortsTarget 으로 기록된다. */
   target?: ShortsPlatform;
+  /** 사장님 지시(2026-09-10) 아래서 채택됐는가 — 로그·화면 표시용. */
+  directive?: boolean;
 }
 
 /**
@@ -562,6 +662,10 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     try { return axisBlock(axisPerformance(igReelViews(activeBrandSlug() || undefined))); }
     catch { return ''; } // fail-open
   })();
+  // 사장님 지시(2026-09-10) — 켜져 있으면 최우선 블록 + 자율 판단 게이트 완화. 꺼져 있으면 아래 전부 종전 그대로.
+  const directive = activeDirective();
+  const directiveBlockStr = directive ? directiveBlock(directive, librarySpeciesFor(slug)) : '';
+  if (directive) console.log(`[auto-cycle] 사장님 지시 적용 — "${directive.text.slice(0, 50)}"${directive.maxPieces ? ` (${directive.made}/${directive.maxPieces}편)` : ` (${directive.made}편째)`}`);
   const existingLines = existing.slice(0, 30)
     .map((e) => `- (${e.kind}) ${e.title}${e.keyword ? ` [키워드: ${e.keyword}]` : ''}`).join('\n');
   // 다양성 강제(2026-07-23 감사) — 킬스위치 CONTENT_DIVERSITY=off 로 끔. 표면 novelty 가 못 잡는 '소재 쏠림'을
@@ -592,12 +696,14 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     // 절기 시의성 신호(2026-08-07 사용자 제안) — 종전엔 "시의성·계절성 고려" 지시만 있고 오늘 날짜가
     // 없어 공회전했다. 날짜+절기 한 줄이면 두뇌가 "처서 지나면 가을 식재 준비" 같은 타이밍을 스스로 잡는다.
     `${seasonalContext()}\n\n` +
+    (directiveBlockStr ? `${directiveBlockStr}\n\n` : '') +
     (() => { const b = seasonalSubjectBlock(getBrand()?.seasonalSubjects); return b ? `${b}\n\n` : ''; })() +
     // 채널 목표(2026-09-08) — 절기·제철 바로 뒤, 로테이션·검색 표보다 앞. 인스타 목표는 '무엇을 보고 고르나'를
     // 통째로 바꾸므로 신호들보다 먼저 읽혀야 한다. 미지정은 무주입(종전 프롬프트 그대로).
     (target ? `${topicTargetBlock(target)}\n\n` : '') +
-    (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov, speciesCap); return b ? `${b}\n\n` : ''; })() +
-    (() => { const b = themeRotationBlock(getBrand()?.topicThemes, themeCov); return b ? `${b}\n\n` : ''; })() +
+    // 로테이션 블록은 '제안 불가'를 말한다 — 지시 중엔 코드가 상한을 통과시키므로 지시끼리 충돌하지 않게 뺀다.
+    (directive ? '' : (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov, speciesCap); return b ? `${b}\n\n` : ''; })()) +
+    (directive ? '' : (() => { const b = themeRotationBlock(getBrand()?.topicThemes, themeCov); return b ? `${b}\n\n` : ''; })()) +
     (searchBlock ? `${searchBlock}\n\n` : '') +
     (axisBlockStr ? `${axisBlockStr}\n\n` : '') +
     (stockBlockStr ? `${stockBlockStr}\n\n` : '') +
@@ -625,11 +731,11 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     //      아래 [신호 우선순위]의 "금지가 항상 이긴다"가 이 블록에도 그대로 적용된다(줄 변경 불필요).
     //      인스타 목표 틱(2026-09-08)엔 넣지 않는다 — 코드는 하한 미달을 통과시키는데 두뇌만 '제안 금지'를 받으면
     //      지시끼리 충돌한다(위 주석의 대칭 사고). 기억 자체는 그대로 쌓인다 — 유튜브 틱에서 다시 쓰인다.
-    (igTarget ? '' : demandRejectBlock(slug)) +
+    (igTarget || directive ? '' : demandRejectBlock(slug)) + // 지시 중엔 수요 미달을 코드가 통과시킨다 — 금지 블록도 뺀다
     // ③-b 유튜브 니치 동향(2026-08-25): 최근 7일 조회 상위 영상 — 소재·프레이밍의 실반응 신호.
     ytNicheBlock(undefined, cdown.excludeTokens) +
     // ④ 계열 쿨다운 v2(감쇠 점수): 하드=금지(아래 후보 게이트가 코드로도 기각), 소프트=회피 권고 + 빈 방향 유도.
-    ((cdown.hard.length || cdown.soft.length)
+    (!directive && (cdown.hard.length || cdown.soft.length)
       ? `[계열 쿨다운 — 최근 집중해서 다룬 계열(괄호는 감쇠 점수)]\n`
         + (cdown.hard.length ? `금지: ${cdown.hard.join(', ')} — 이 계열·조합은 제안 불가.\n` : '')
         + (cdown.soft.length ? `가급적 회피: ${cdown.soft.join(', ')} — 꼭 쓰려면 안 다룬 새 조합(다른 행위·상황)으로만.\n` : '')
@@ -654,6 +760,15 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
   // 후보 수 확장(2026-08-14, 사용자 승인) — 사이클당 1건×2시도는 포화 시즌에 슬롯 좌초를 만들었다
   // (08-12~14 3슬롯 연속: 틱당 보류 2+기각 2~4, 지연 38분+). 한 호출로 5후보를 받아 게이트를 통과하는
   // 첫 후보를 채택 — 개당 통과율 p 일 때 시도당 통과율이 1-(1-p)^5 로 뛴다. 비용은 haiku 소형 호출 1회분.
+  // 지시 아래 채택 — 편수를 올리고 상한에 닿으면 끄고 알린다(세 채택 경로 공용).
+  const markDirectivePiece = (): void => {
+    if (!directive) return;
+    const r = noteDirectivePiece();
+    if (r.finished) {
+      console.log(`[auto-cycle] 사장님 지시 완료 — "${directive.text.slice(0, 40)}" ${r.made}편(상한 도달) → 지시 꺼짐, 다음 틱부터 기존 자율런`);
+      void notify({ title: '자율런 지시 완료', body: `"${directive.text.slice(0, 60)}" — 편수 상한 ${r.made}편에 닿아 지시를 껐습니다. 다음부터는 기존 자율런으로 돕니다.` }).catch(() => {});
+    }
+  };
   let rejectNote = '';
   const IDEA_ROUNDS = 2;   // 마지막 라운드 판정(기아 방지 밸브)이 이 숫자에 매달려 있어 상수로 묶는다
   for (let attempt = 0; attempt < IDEA_ROUNDS; attempt++) {
@@ -669,6 +784,14 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     const o = await microJSON<{ ideas?: unknown }>(
       micro, IDEA_SYSTEM, rejectNote ? `${baseUser}\n\n${rejectNote}` : baseUser, { maxOutputTokens: 2000, signal },
     ).catch((e: unknown) => { callError = e instanceof Error ? e.message : String(e); return null; });
+    if (directive && (o as { exhausted?: unknown } | null)?.exhausted === true) {
+      // 지시 소진 — 두뇌가 '지시 안에서 더 낼 주제 없음'이라 답했다. 끄고 알린 뒤 이번 틱은 쉰다(다음 틱은 종전 자율런).
+      const reason = asString((o as { reason?: unknown }).reason).trim().slice(0, 120);
+      finishDirective(reason);
+      console.log(`[auto-cycle] 사장님 지시 소진 — "${directive.text.slice(0, 40)}" (${reason || '더 낼 주제 없음'}) → 지시 꺼짐, 다음 틱부터 기존 자율런`);
+      void notify({ title: '자율런 지시 완료', body: `"${directive.text.slice(0, 60)}" — ${directive.made}편 만든 뒤 더 낼 주제가 없어 지시를 껐습니다${reason ? `(${reason})` : ''}. 다음부터는 기존 자율런으로 돕니다.` }).catch(() => {});
+      return null;
+    }
     const cands = normalizeIdeaCandidates(o);
     if (!cands.length) {
       const last = attempt >= IDEA_ROUNDS - 1;
@@ -752,14 +875,16 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       // 수종 월 상한 게이트(하드, 비용 0, 2026-08-27) — 최근 30일 같은 수종 블로그가 상한이면 어떤 각도든 기각.
       // 유사 폴백보다 앞이라 '다른 시각' 우회도 막힌다(배롱 8편/월 실사고).
       const capped = overSpeciesCap(`${title} ${keyword ?? ''}`, speciesCov, getBrand()?.speciesCatalog, speciesCap);
-      if (capped) {
+      if (capped && directive) console.log(`[auto-cycle] 수종 월 상한 통과(사장님 지시) — "${title}" (${capped.name} ${capped.count}편)`);
+      else if (capped) {
         console.log(`[auto-cycle] 아이디어 기각(수종 월 상한) — "${title}" (${capped.name}: 30일 ${capped.count}편 ≥ ${SPECIES_MONTHLY_CAP})`);
         rejects.push(`"${title}"=수종 월 상한(${capped.name} 최근 30일 ${capped.count}편 — 아직 안 다룬 수종으로)`);
         continue;
       }
       // 주제 축 월 상한 게이트(하드, 비용 0, 2026-08-27) — 같은 축(심기·구매·거름·전정…)이 30일 상한이면 기각.
       const cappedTheme = overThemeCap(`${title} ${keyword ?? ''}`, themeCov, getBrand()?.topicThemes);
-      if (cappedTheme) {
+      if (cappedTheme && directive) console.log(`[auto-cycle] 주제 축 월 상한 통과(사장님 지시) — "${title}" (${cappedTheme.theme})`);
+      else if (cappedTheme) {
         console.log(`[auto-cycle] 아이디어 기각(주제 축 월 상한) — "${title}" (${cappedTheme.theme}: 30일 ${cappedTheme.count}편 ≥ ${THEME_MONTHLY_CAP})`);
         rejects.push(`"${title}"=주제 축 월 상한(${cappedTheme.theme} 최근 30일 ${cappedTheme.count}편 — 아직 안 다룬 축으로)`);
         continue;
@@ -776,7 +901,8 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       // 재제안되던 실사고(처서: 08-16 폐기 판정 후 08-18~20 3건 재배정) 봉합. 정규화 완전 일치만
       // 기각해 과차단을 막는다(파생 주제 판단은 프롬프트의 topicVerdictBlock 이 담당).
       const avoided = keyword ? avoidVerdictFor(keyword) : null;
-      if (avoided) {
+      if (avoided && directive) console.log(`[auto-cycle] 리서치 폐기 판정 통과(사장님 지시) — "${title}"`);
+      else if (avoided) {
         console.log(`[auto-cycle] 아이디어 기각(리서치 폐기 판정) — "${title}" (키워드 "${keyword}": ${avoided.reason.slice(0, 50)})`);
         rejects.push(`"${title}"=리서치 실측 폐기 키워드(${keyword} — ${avoided.reason.slice(0, 40)})`);
         continue;
@@ -813,7 +939,10 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       // 인스타 목표(2026-09-08) — 검색량 하한은 걸지 않는다. 기억·실측 어느 쪽이든 '하한 미달'은 이 글의
       // 결격이 아니다(이 글은 검색이 아니라 공유로 퍼진다). 로그는 남겨 나중에 '검색 0 인데 인스타에서 터졌나'를
       // 대조할 수 있게 한다. 비수기(demote)는 그대로 — 인스타야말로 제철이 생명이다.
-      if (tg.lowVolumePasses && demand.verdict === 'reject') {
+      if (directive && demand.verdict !== 'pass') {
+        // 지시 중엔 수요 하한·비수기 모두 결격이 아니다 — 사장님이 직접 넣는 수동 런과 같은 급. 실측은 로그로 남긴다.
+        console.log(`[auto-cycle] 검색 수요 게이트 통과(사장님 지시) — "${title}"${demand.line ? ` (${demand.line})` : ''}`);
+      } else if (tg.lowVolumePasses && demand.verdict === 'reject') {
         console.log(`[auto-cycle] 검색 수요 미달 통과(인스타 목표) — "${title}" (${demand.line})`);
       } else if (demand.verdict === 'reject') {
         console.log(remembered
@@ -824,7 +953,8 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       }
       // 계열 쿨다운 v2 게이트(하드만 기각, 2026-08-25) — 감쇠 점수 기반. 조합(수종×행위)은 엄격,
       // 단독은 느슨, 소프트는 기각 없이 순서만 뒤로(위 정렬) — 포도 4편/6일·전정 6편/7일 실사고 계보.
-      if (gate.level === 'hard') {
+      if (gate.level === 'hard' && directive) console.log(`[auto-cycle] 계열 쿨다운 통과(사장님 지시) — "${title}" (${gate.key})`);
+      else if (gate.level === 'hard') {
         console.log(`[auto-cycle] 아이디어 기각(계열 쿨다운 하드) — "${title}" (${gate.key}: ${gate.why})`);
         rejects.push(`"${title}"=계열 쿨다운(${gate.key} — 최근 집중, 다른 계열·조합으로)`);
         continue;
@@ -853,7 +983,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       }
       // 개념 포화 기각 — 표면 유사(findSimilarContent)는 통과했지만 핵심 소재가 여러 편과 겹치면 1회만 다른 축 유도.
       // attempt 0 에서만(2번째 시도는 통과시켜 기아 방지 — 다양성은 강제하되 생산은 막지 않는다).
-      if (diversityOn && attempt === 0) {
+      if (diversityOn && attempt === 0 && !directive) { // 소재 포화는 자율 판단 — 지시 중엔 안 건다
         const sat = saturatedThemeMatches({ title, ...(keyword ? { keyword } : {}) }, existing, 3, getBrand()?.compoundStems ?? []);
         if (sat.length) {
           console.log(`[auto-cycle] 아이디어 기각(소재 포화) — "${title}" ≈ "${sat[0]!.title}"`);
@@ -865,7 +995,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       // 보관하면 수종 앵커·유사·소재 포화 게이트를 건너뛴 후보가 라운드 끝에 채택돼, 유사 폴백 자격을
       // 계열 게이트 none 으로 좁혀 막았던 구멍이 두 번째 폴백 경로로 다시 열린다(위 유사 폴백 자격
       // 주석의 포도 4편 사고 계보). 로그는 항상, 보관은 자격(계열 none)일 때만 — 유사 폴백과 같은 규칙.
-      if (demand.verdict === 'demote') {
+      if (demand.verdict === 'demote' && !directive) {
         console.log(demand.relaxed
           ? `[auto-cycle] 아이디어 후순위(검색 수요 미달·기아 방지) — "${title}" (${demand.line})`
           : `[auto-cycle] 아이디어 후순위(검색 비수기) — "${title}" (${demand.line})`);
@@ -889,8 +1019,9 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       logDemandAdopt(title, keyword, demand.line || undefined);
       recentAuto.push(title);
       if (recentAuto.length > 20) recentAuto.shift();
+      markDirectivePiece();
       if (keyword) consumeOpportunityVerdict(keyword); // 채택된 리서치 기회는 소진 — 다음 기획에 반복 주입 방지(2026-08-24)
-      return { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}), ...(target ? { target } : {}) };
+      return { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}), ...(target ? { target } : {}), ...(directive ? { directive: true } : {}) };
     }
     // 제철 후보가 전멸했으면 후순위 보관함과 유사 폴백 중에서 고른다(pickRoundAdoption). 비수기(rank 0)는
     // '지금 덜 찾는다'일 뿐 수요가 없는 게 아니고 아직 안 다룬 새 소재라 폴백을 이긴다. 반대로 하한 미달
@@ -904,8 +1035,9 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       logDemandAdopt(idea.title, idea.keyword, line);
       recentAuto.push(idea.title);
       if (recentAuto.length > 20) recentAuto.shift();
+      markDirectivePiece();
       if (idea.keyword) consumeOpportunityVerdict(idea.keyword);
-      return { ...idea, ...(target ? { target } : {}) };
+      return { ...idea, ...(target ? { target } : {}), ...(directive ? { directive: true } : {}) };
     }
     // 새 소재 후보가 전멸했지만 유사 후보가 있으면 채택 — 좌초 대신 '같은 소재, 다른 시각' 글로 간다.
     // 폴백은 계열 게이트 none 후보만 대입되므로(위 자격 조건) 재검사 불필요 — v1의 폴백 뚫림
@@ -915,8 +1047,9 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       logDemandAdopt(similarFallback.title, similarFallback.keyword, similarFallbackLine);
       recentAuto.push(similarFallback.title);
       if (recentAuto.length > 20) recentAuto.shift();
+      markDirectivePiece();
       if (similarFallback.keyword) consumeOpportunityVerdict(similarFallback.keyword);
-      return { ...similarFallback, ...(target ? { target } : {}) };
+      return { ...similarFallback, ...(target ? { target } : {}), ...(directive ? { directive: true } : {}) };
     }
     // 문구가 '전부 기각'이면 후순위 항목이 섞였을 때 노트가 사실과 어긋난다(후순위는 기각이 아니다).
     rejectNote = `[직전 제안 ${cands.length}건 전부 채택 불가(기각 또는 후순위) — 사유: ${rejects.slice(0, 4).join(' · ') || '전부 무효'}] 이 사유들과 소재를 전부 피해, 완전히 다른 소재·키워드로 5건을 다시 제안하라.`;

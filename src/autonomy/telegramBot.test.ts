@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseCallback, reviseEndpointFor, runAction } from './telegramBot';
+import { parseCallback, reviseEndpointFor, runAction, parseDirectiveCommand, describeDirective } from './telegramBot';
 
 describe('parseCallback', () => {
   it('발행 버튼 콜백 6종을 액션으로 파싱한다', () => {
@@ -44,5 +44,34 @@ describe('shorts_youtube 버튼 — 중복 완료 메시지 차단(2026-09-08)',
   });
   it('url 이 없으면 라우트도 안 알리므로 버튼이 알린다', async () => {
     expect(await run({ ok: true, notified: false })).toContain('업로드 완료');
+  });
+});
+
+describe('parseDirectiveCommand — 텔레그램 자율런 지시 명령(순수, 2026-09-10)', () => {
+  it('설정 — "자율런 지시: …" / 접두 생략 / 편수 상한', () => {
+    expect(parseDirectiveCommand('자율런 지시: 보관소의 수종별 수확 후 전정 및 거름주는 방법')).toEqual({ kind: 'set', text: '보관소의 수종별 수확 후 전정 및 거름주는 방법' });
+    expect(parseDirectiveCommand('지시：감나무만')).toEqual({ kind: 'set', text: '감나무만' });
+    expect(parseDirectiveCommand('지시 5편: 가을 심기')).toEqual({ kind: 'set', text: '가을 심기', maxPieces: 5 });
+    expect(parseDirectiveCommand('오토런 지시 3 편 : 전정')).toEqual({ kind: 'set', text: '전정', maxPieces: 3 });
+  });
+  it('끄기·켜기·상태·삭제', () => {
+    expect(parseDirectiveCommand('지시 끄기')).toEqual({ kind: 'off' });
+    expect(parseDirectiveCommand('자율런 지시 해제')).toEqual({ kind: 'off' });
+    expect(parseDirectiveCommand('지시 켜기')).toEqual({ kind: 'on' });
+    expect(parseDirectiveCommand('지시')).toEqual({ kind: 'show' });
+    expect(parseDirectiveCommand('지시 상태')).toEqual({ kind: 'show' });
+    expect(parseDirectiveCommand('지시 삭제')).toEqual({ kind: 'clear' });
+  });
+  it('일반 문장·수정 지시·빈 문구는 명령이 아니다', () => {
+    expect(parseDirectiveCommand('지시사항을 정리한 글')).toBeNull();
+    expect(parseDirectiveCommand('자율런 실행')).toBeNull();
+    expect(parseDirectiveCommand('지시:   ')).toBeNull();
+    expect(parseDirectiveCommand('오늘 감나무 글 써줘')).toBeNull();
+  });
+  it('describeDirective — 없음/켜짐/꺼짐(사유)', () => {
+    expect(describeDirective(null)).toContain('지시 없음');
+    expect(describeDirective({ text: 'A', on: true, made: 1, maxPieces: 3 })).toContain('1/3편');
+    const off = describeDirective({ text: 'A', on: false, made: 3, maxPieces: 3, lastResult: '편수 상한 3편 도달' });
+    expect(off).toContain('꺼짐'); expect(off).toContain('상한'); expect(off).toContain('다시 켜기');
   });
 });

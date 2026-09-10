@@ -124,6 +124,8 @@ button, input, select, textarea { font-family: inherit; }
   background: var(--panel); border-bottom: 1px solid var(--border); overflow-x: auto;
 }
 .dash-company-wrap { position: relative; flex-shrink: 0; }
+/* 자율 칩 감싸개(2026-09-10) — 바가 align-items: stretch 로 칩 높이를 맞추는데, 감싼 상자 안의 칩은 안 늘어나 혼자 낮았다. 상자를 flex 로 두고 칩을 늘린다. */
+.dash-auto-wrap { display: flex; align-items: stretch; }
 .dash-company {
   display: flex; align-items: center; gap: 8px; padding: 5px 13px 5px 6px; flex-shrink: 0;
   background: var(--bg-elevated);   /* Wanted: flat 표면(그라디언트 금지) */
@@ -160,6 +162,21 @@ button.dash-company:hover { border-color: var(--accent); }
 .dash-live.on { color: var(--pro); border-color: #00bf4066; background: var(--bg-success-subtle); }
 .dash-dot { width: 6.5px; height: 6.5px; border-radius: 50%; background: var(--muted); }
 .dash-live.on .dash-dot { background: var(--pro); box-shadow: 0 0 7px var(--pro); animation: dashpulse 1.4s infinite; }
+/* 자율런 지시 입력 메뉴(2026-09-10) — 브랜드 메뉴와 같은 컨테이너, 폭만 넓게 */
+.dash-directive { max-width: calc(100vw - 16px); box-sizing: border-box; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.dash-switch { font: inherit; font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel2); color: var(--muted); cursor: pointer; }
+.dash-switch.on { color: var(--pro); border-color: #00bf4066; background: var(--bg-success-subtle); }
+.dash-switch:disabled { opacity: .5; cursor: default; }
+.dash-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+.dash-seg-btn { font: inherit; font-size: 11px; font-weight: 600; padding: 4px 11px; border: 0; background: var(--panel2); color: var(--muted); cursor: pointer; }
+.dash-seg-btn + .dash-seg-btn { border-left: 1px solid var(--border); }
+.dash-seg-btn.on { background: var(--bg-primary-subtle); color: var(--text); }
+.dash-seg-btn:disabled { opacity: .45; cursor: default; }
+.dash-directive-note { font-size: 11px; }
+.dash-directive-title { font-size: 11px; font-weight: 700; color: var(--text); }
+.dash-directive-head { justify-content: space-between; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.dash-directive-text { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); color: var(--text); resize: vertical; }
+.dash-directive-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; }
 /* 클릭 가능한 지표 칩(button 리셋 + 호버 강조) → 드릴다운 패널 진입 */
 .dash-chip.clickable { cursor: pointer; font: inherit; text-align: left; transition: border-color .12s, background .12s; }
 .dash-chip.clickable:hover { border-color: var(--accent); background: var(--panel); }

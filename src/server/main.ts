@@ -46,7 +46,7 @@ import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
 import { claudeCliProblem } from '../llm/claudeCli';
-import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision, speciesCoverageFor } from '../autonomy/scheduler';
+import { startAutoCycle, proposeContentIdeas, activeDirective, autorunDirective, setAutorunDirective, clearAutorunDirective, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision, speciesCoverageFor } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
@@ -3002,6 +3002,22 @@ app.post('/autonomy/toggle', async (c) => {
   return c.json({ ok: true, run_enabled: next });
 });
 
+// 자율런 지시(2026-09-10 사용자 확정) — text 로 새 지시, on 으로 켜고 끄기, maxPieces 편수 상한(null=해제).
+// 빈 body 는 조회만. 지시가 켜지면 다음 틱부터 아이디어 제안이 그 안에서만 고른다(scheduler.activeDirective).
+app.post('/autonomy/directive', async (c) => {
+  const b = await c.req.json<{ text?: unknown; on?: unknown; maxPieces?: unknown }>().catch(() => ({} as { text?: unknown; on?: unknown; maxPieces?: unknown }));
+  const input: { text?: string; on?: boolean; maxPieces?: number | null } = {};
+  if (typeof b.text === 'string') input.text = b.text;
+  if (typeof b.on === 'boolean') input.on = b.on;
+  if (b.maxPieces === null) input.maxPieces = null;
+  else if (typeof b.maxPieces === 'number' && Number.isFinite(b.maxPieces)) input.maxPieces = b.maxPieces;
+  const changed = Object.keys(input).length > 0;
+  const d = changed ? setAutorunDirective(input) : autorunDirective();
+  if (changed) console.log(`[auto-cycle] 사장님 지시 ${d ? (d.on ? '켜짐' : '꺼짐') : '삭제'}${d ? ` — "${d.text.slice(0, 50)}"${d.maxPieces ? ` (상한 ${d.maxPieces}편)` : ''}` : ''}`);
+  return c.json({ ok: true, directive: d });
+});
+app.delete('/autonomy/directive', (c) => { clearAutorunDirective(); console.log('[auto-cycle] 사장님 지시 삭제'); return c.json({ ok: true, directive: null }); });
+
 // 자율 사이클 상태 — 프론트 대시보드의 '🤖 자율' 칩용. enabled 면 주기, active 면 자율 런 진행 중.
 app.get('/autonomy/status', (c) => {
   // 진행 중인 자율런 — 프론트가 유휴 시 자동 관전(watchLive)할 수 있게 run_id 를 노출한다.
@@ -3009,6 +3025,7 @@ app.get('/autonomy/status', (c) => {
   return c.json({
     enabled: CONFIG.autoCycleMinutes > 0,
     run_enabled: autoRunEnabled(), // 사용자 토글(칩 클릭) — enabled(주기 설정 존재)와 별개
+    directive: autorunDirective(), // 사장님 지시(2026-09-10) — 꺼진 것도 문구를 돌려줘 화면이 다시 켤 수 있게
     interval_minutes: CONFIG.autoCycleMinutes,
     shell: CONFIG.agentShell,
     active: !!activeAuto,
@@ -4171,7 +4188,9 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
     } catch { /* 예고 대장 실패 무해 — 신규 아이디어로 폴백 */ }
     // 클러스터 형제 소진(스펙 2026-08-06) — 예고(약속)보다 뒤, 신규 아이디어보다 앞(검색 수요가 자동완성으로
     // 이미 검증된 주제). 케이던스(canGenerateNew) 안이므로 생산량은 불변, 다양성만 늘린다.
-    if (process.env.TOPIC_CLUSTER !== 'off' && topicTarget !== 'instagram') {
+    // 사장님 지시(2026-09-10) 중엔 클러스터 형제 공급로를 건너뛴다 — 지시와 무관한 주제를 끌어온다.
+    if (activeDirective()) console.log(`[auto-cycle] 사장님 지시 중 — "${activeDirective()!.text.slice(0, 50)}" (클러스터 형제 공급로 건너뜀)`);
+    if (process.env.TOPIC_CLUSTER !== 'off' && topicTarget !== 'instagram' && !activeDirective()) {
       try {
         const all = clusterStore().list().filter((t) => (t.brand ?? '') === tickBrand);
         // 쿨다운 입력 — 최근 자율 blog piece 의 clusterSeedId(최신순).

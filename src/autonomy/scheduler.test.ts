@@ -540,3 +540,69 @@ describe('shouldRememberDemandReject — 기각 기억 기록 자격(순수)', (
     expect(shouldRememberDemandReject({ verdict: 'reject' }, null, undefined)).toBe(false);
   });
 });
+
+// 자율런 지시(2026-09-10 사용자 확정) — 같은 autorun.json 에 영속, 토글과 서로 덮어쓰지 않는다.
+describe('자율런 지시 — 영속·상한·소진(순수 저장소)', () => {
+  it('설정→켜짐, 토글과 공존, 재로드 유지, 상한 도달 시 자동 꺼짐, 소진 사유 기록, 삭제', async () => {
+    const os = await import('node:os');
+    const fs = await import('node:fs');
+    const pathm = await import('node:path');
+    const tmp = fs.mkdtempSync(pathm.join(os.tmpdir(), 'autorun-dir-'));
+    process.env.GEPA_DATA_DIR = tmp;
+    vi.resetModules();
+    let mod = await import('./scheduler');
+    expect(mod.activeDirective()).toBeNull();
+    const d = mod.setAutorunDirective({ text: ' 보관소의 수종별 수확 후 전정 ', maxPieces: 2 });
+    expect(d).toMatchObject({ text: '보관소의 수종별 수확 후 전정', on: true, made: 0, maxPieces: 2 });
+    expect(mod.activeDirective()?.text).toBe('보관소의 수종별 수확 후 전정');
+    mod.setAutoRunEnabled(false); // 토글이 지시를 지우지 않는다
+    expect(mod.autoRunEnabled()).toBe(false);
+    expect(mod.activeDirective()?.text).toBe('보관소의 수종별 수확 후 전정');
+    mod.setAutoRunEnabled(true);
+    vi.resetModules();
+    mod = await import('./scheduler'); // 재시작
+    expect(mod.activeDirective()?.maxPieces).toBe(2);
+    expect(mod.noteDirectivePiece()).toEqual({ made: 1, finished: false });
+    expect(mod.noteDirectivePiece()).toEqual({ made: 2, finished: true });
+    expect(mod.activeDirective()).toBeNull();               // 상한 도달 → 꺼짐
+    expect(mod.autorunDirective()?.lastResult).toContain('상한');
+    expect(mod.setAutorunDirective({ on: true })?.on).toBe(true); // 다시 켜기(사유 지움)
+    expect(mod.autorunDirective()?.lastResult).toBeUndefined();
+    mod.finishDirective('수종 전부 다룸');
+    expect(mod.activeDirective()).toBeNull();
+    expect(mod.autorunDirective()?.lastResult).toContain('소진');
+    expect(mod.setAutorunDirective({ text: '' })).toBeNull(); // 빈 문구 = 삭제
+    expect(mod.autorunDirective()).toBeNull();
+    delete process.env.GEPA_DATA_DIR;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+  it('같은 문구를 다시 주면 편수를 잃지 않고, 다른 문구면 새 지시(0편)', async () => {
+    const os = await import('node:os');
+    const fs = await import('node:fs');
+    const pathm = await import('node:path');
+    const tmp = fs.mkdtempSync(pathm.join(os.tmpdir(), 'autorun-dir2-'));
+    process.env.GEPA_DATA_DIR = tmp;
+    vi.resetModules();
+    const mod = await import('./scheduler');
+    mod.setAutorunDirective({ text: 'A' });
+    mod.noteDirectivePiece();
+    expect(mod.setAutorunDirective({ text: 'A', maxPieces: 5 })).toMatchObject({ made: 1, maxPieces: 5 });
+    expect(mod.setAutorunDirective({ text: 'B' })).toMatchObject({ text: 'B', made: 0 });
+    expect(mod.setAutorunDirective({ maxPieces: null })?.maxPieces).toBeUndefined();
+    delete process.env.GEPA_DATA_DIR;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+  it('directiveBlock — 문구·보관소 수종·상한·소진 형식을 담고, 기존 글 유사 금지는 유지한다고 말한다', async () => {
+    const mod = await import('./scheduler');
+    const b = mod.directiveBlock({ text: '보관소의 수종별 수확 후 전정', maxPieces: 5, made: 2 }, ['대추나무', '감나무']);
+    expect(b.startsWith('[사장님 지시 — 최우선]')).toBe(true);
+    expect(b).toContain('"보관소의 수종별 수확 후 전정"');
+    expect(b).toContain('대추나무, 감나무');
+    expect(b).toContain('5편 중 2편');
+    expect(b).toContain('"exhausted":true');
+    expect(b).toContain('유사 금지');
+    const plain = mod.directiveBlock({ text: 'X', made: 0 });
+    expect(plain).not.toContain('보관소 수종');
+    expect(plain).not.toContain('편수 상한');
+  });
+});
