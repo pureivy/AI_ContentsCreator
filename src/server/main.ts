@@ -1520,7 +1520,9 @@ async function shortsFromPieceHandler(c: Context): Promise<Response> {
 function shortsListHandler(c: Context): Response {
   return c.json({
     shorts: shortsStore().list().filter(brandMatch).map((x) => {
-      const m = x.youtubeUrl ? latestMetrics(x.id) : null; // 업로드된 쇼츠만 — 최신 수집값 뱃지용
+      // 업로드된 쇼츠만 — 유튜브 성과 뱃지용(2026-09-11 수정). latestMetrics 는 소스를 안 가려서, 인스타·
+      // 애널리틱스 표본이 최신이면 그 값이 '유튜브 성과' 라벨을 달고 나갔다. 성과 탭 좋아요와 같은 결함.
+      const m = x.youtubeUrl ? (latestMetricsBySource(x.id, 'youtube:api') ?? latestMetricsBySource(x.id, 'youtube:')) : null;
       return { ...x, running: isShortsRunning(x.id), ...(m ? { views: m.views, likes: m.likes ?? 0 } : {}) };
     }),
   });
@@ -2783,7 +2785,13 @@ function performanceHandler(c: Context): Response {
   const shortsRows = shortsStore().list().filter(brandMatch)
     .filter((x) => !!x.youtubeTs || !!x.metaPublishedTs)
     .map((x) => {
-      const yt = x.youtubeTs ? latestMetricsBySource(x.id, 'youtube:') : null;
+      // 조회·좋아요·댓글은 공개 API 표본(youtube:api)에만 있다(2026-09-11) — 'youtube:' 접두는 애널리틱스
+      // 표본(조회·시청비율·유입만)까지 잡는다. 수집 틱에서 애널리틱스가 API 뒤에 돌아, 애널리틱스가 잡히는
+      // 편(반응이 쌓인 옛 편)마다 좋아요 칸이 '-' 로 비었다 — 실측 업로드 120편 중 26편, 합계 699 vs 실제 844.
+      // 바로 아래 2026-09-04 수정(시청비율·유입이 API 표본에 가려지던 것)의 정반대 결함이다.
+      // api 표본이 없는 옛 편은 종전 접두로 떨어뜨려 조회수까지 잃지 않게 한다.
+      const ytApi = x.youtubeTs ? latestMetricsBySource(x.id, 'youtube:api') : null;
+      const yt = ytApi ?? (x.youtubeTs ? latestMetricsBySource(x.id, 'youtube:') : null);
       // 애널리틱스 표본은 따로 읽는다(2026-09-04) — 'youtube:' 접두로 뭉뚱그리면 더 자주 도는
       // youtube:api 표본이 최신이라 시청비율·유입 경로가 매번 가려진다. 수집은 되는데 화면에
       // 안 나오던 원인이 이것이다(실측: 26편에 기록이 있는데 성과 탭은 조회·좋아요만 보여줬다).
@@ -2796,7 +2804,8 @@ function performanceHandler(c: Context): Response {
         youtube: x.youtubeTs ? {
           url: x.youtubeUrl ?? null, views: yt?.views ?? null, likes: yt?.likes ?? null,
           reflected: !!x.perfReflected, stale: shortsPerfStale(x, perfNow, perfDays),
-          series: viewsSeriesFor(x.id, 'youtube:'), ts: x.youtubeTs,
+          // 추이도 같은 소스로 — 애널리틱스 조회수는 집계 기준이 달라, 섞으면 위 조회수와 마지막 점이 어긋난다.
+          series: viewsSeriesFor(x.id, ytApi ? 'youtube:api' : 'youtube:'), ts: x.youtubeTs,
           // 시청 지속률·쇼츠 피드 비중(2026-09-03 수집 시작) — 조회수만으로는 '노출이 끊긴 것'과
           // '보다가 이탈한 것'을 못 가른다. 애널리틱스 집계 지연(2일)으로 최근 편은 null 이다.
           avgViewPct: ytA?.avgViewPct ?? null,

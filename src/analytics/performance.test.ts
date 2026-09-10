@@ -32,6 +32,18 @@ describe('latestSampleBySource (채널별 최신 샘플)', () => {
     expect(latestSampleBySource(mixed, 'meta:ig')?.views).toBe(5);
     expect(latestSampleBySource(mixed, 'meta:fb')?.views).toBe(4);
   });
+  // 2026-09-11 실사고 — 성과 탭 유튜브 좋아요가 26편에서 '-' 로 비었다. 좋아요는 youtube:api 표본에만 있는데
+  // 화면이 'youtube:' 접두로 골라, 뒤에 도는 youtube:analytics(좋아요 없음)가 최신이면 값이 통째로 가려졌다.
+  it("'youtube:' 접두는 애널리틱스 표본까지 잡는다 — 좋아요·댓글은 'youtube:api' 로 골라야 한다", () => {
+    const rows: MetricSample[] = [
+      { measuredAt: '2026-09-10T22:21:48Z', views: 886, likes: 7, comments: 2, searchInflow: [], source: 'youtube:api' },
+      { measuredAt: '2026-09-10T22:21:51Z', views: 880, searchInflow: [], source: 'youtube:analytics' },
+    ];
+    expect(latestSampleBySource(rows, 'youtube:')?.likes).toBeUndefined();  // 화면이 '-' 로 비던 자리
+    expect(latestSampleBySource(rows, 'youtube:api')?.likes).toBe(7);
+    expect(latestSampleBySource(rows, 'youtube:api')?.comments).toBe(2);
+    expect(latestSampleBySource(rows, 'youtube:analytics')?.views).toBe(880); // 시청비율·유입은 그대로 애널리틱스에서
+  });
   it('일치 없음·빈 시계열·source 없는 레거시 샘플 → null 안전', () => {
     expect(latestSampleBySource(mixed, 'naver:')).toBeNull();
     expect(latestSampleBySource([], 'youtube:')).toBeNull();
