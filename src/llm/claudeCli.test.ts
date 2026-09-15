@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
-import { ensureNeutralCwd } from './claudeCli';
+import { ensureNeutralCwd, diagnoseCliFailure } from './claudeCli';
 
 // 실사고(2026-08-10 13:21): 상주 서버 가동 중 macOS 임시폴더 청소가 중립 cwd 를 지워 이후 모든
 // claude spawn 이 ENOENT 로 죽었다 — Node 는 cwd 부재도 실행 파일 부재와 같은 "spawn claude ENOENT"
@@ -64,5 +64,26 @@ describe('claudeCliProblem — 부팅 점검', () => {
   it('없는 절대 경로면 사유를 돌려준다', async () => {
     const { claudeCliProblem } = await import('./claudeCli');
     expect(claudeCliProblem('/nonexistent/claude', '')).toBeTruthy();
+  });
+});
+
+// 결과 줄 없이 끝나는 실패(2026-09-15 실측 3건 — 전부 SEO 리비전 런·opus·exit=0·stderr 빈값).
+// 손으로 재현이 안 돼, 다음번에 원인을 좁히도록 '끝에 무엇이 왔는지'를 한 줄 진단으로 남긴다.
+describe('diagnoseCliFailure — 결과 줄 없는 종료의 첫 갈래', () => {
+  const base = { linesAfterChildClose: 0, endsWithNewline: true, lines: 120, exitSignal: null as string | null };
+  it('자식 종료 뒤에도 줄이 더 왔으면 우리 쪽 읽기 경합', () => {
+    expect(diagnoseCliFailure({ ...base, linesAfterChildClose: 3 })).toContain('경합');
+  });
+  it('시그널 종료면 외부 종료 — 경합보다 뒤, 잘림보다 앞', () => {
+    expect(diagnoseCliFailure({ ...base, exitSignal: 'SIGKILL', endsWithNewline: false })).toContain('시그널');
+  });
+  it('원문이 줄바꿈 없이 끝났으면 출력이 줄 도중에 끊긴 것', () => {
+    expect(diagnoseCliFailure({ ...base, endsWithNewline: false })).toContain('줄 도중에 끊김');
+  });
+  it('한 줄도 없었으면 기동 직후 종료', () => {
+    expect(diagnoseCliFailure({ ...base, lines: 0 })).toContain('한 줄도');
+  });
+  it('전부 정상인데 결과 줄만 없으면 원인 미상으로 명시', () => {
+    expect(diagnoseCliFailure(base)).toContain('원인 미상');
   });
 });

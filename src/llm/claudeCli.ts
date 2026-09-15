@@ -37,6 +37,49 @@ const SLOT = new Semaphore(CONFIG.anthropicConcurrency);
 
 // 중립 작업 디렉토리 — 스튜디오 프로젝트의 CLAUDE.md/설정이 생성 프롬프트에 새어들지 않게.
 const NEUTRAL_CWD = path.join(os.tmpdir(), 'ai-contents-claude-cli');
+
+// ── 결과 줄 없이 끝나는 실패의 진단(2026-09-15) ──────────────────────────────────────────
+// 실측 3건(09-04 사과나무 3,400자 · 09-15 06:28 0자 · 09-15 17:31 572자)이 전부 SEO 리비전 런,
+// 전부 opus, 전부 exit=0 에 stderr 비어 있음. 손으로 재현은 안 된다(같은 구조를 160회 돌려도 재현 실패).
+// 그래서 '다음에 또 나면 끝에 무엇이 왔는지'를 파일로 남긴다 — 원문 꼬리·이벤트 분포·경합 여부까지.
+/** 진단 덤프 입력(순수 조립 대상). */
+export interface CliFailureInfo {
+  model: string; exitCode: number | null; exitSignal: string | null;
+  elapsedMs: number; gotChars: number; quietSec: number;
+  lines: number; linesAfterChildClose: number; endsWithNewline: boolean;
+  eventCounts: Record<string, number>; lastEventType: string;
+  promptChars: number; systemChars: number; maxTokens: number;
+  stderrTail: string; rawTail: string;
+}
+
+/**
+ * 사람이 읽을 한 줄 진단(순수) — 원인을 좁히는 첫 갈래를 바로 보여 준다.
+ *  · 자식 종료 뒤에도 줄이 더 왔다 = 우리 쪽 경합(읽기 전에 판정함)
+ *  · 원문이 줄바꿈 없이 끝났다 = 출력이 중간에 잘림(파이프·프로세스 급종료)
+ *  · 둘 다 아니면 = CLI 가 결과 줄 자체를 안 보낸 것
+ */
+export function diagnoseCliFailure(i: Pick<CliFailureInfo, 'linesAfterChildClose' | 'endsWithNewline' | 'lines' | 'exitSignal'>): string {
+  if (i.linesAfterChildClose > 0) return `우리 쪽 읽기 경합 의심 — 자식 종료 뒤 ${i.linesAfterChildClose}줄이 더 왔다`;
+  if (i.exitSignal) return `시그널 종료(${i.exitSignal}) — 외부에서 프로세스가 끊겼다`;
+  if (!i.endsWithNewline) return '출력이 줄 도중에 끊김 — 파이프·프로세스 급종료 의심';
+  if (!i.lines) return 'CLI 가 한 줄도 안 보냄 — 기동 직후 종료 의심';
+  return 'CLI 가 결과 줄을 안 보냄 — 스트림은 정상 종료(원인 미상)';
+}
+
+const FAIL_DIR = (): string => path.join(CONFIG.dataDir, '_shared', 'cli-fail');
+/** 진단 덤프 기록 — 최신 20개만 남긴다. 실패해도 무해(로그만). 반환: 기록한 경로(실패 시 ''). */
+function writeCliFailureDump(info: CliFailureInfo): string {
+  try {
+    const dir = FAIL_DIR();
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const file = path.join(dir, `${stamp}-${info.model.replace(/[^a-z0-9-]/gi, '')}.json`);
+    fs.writeFileSync(file, JSON.stringify({ ...info, diagnosis: diagnoseCliFailure(info) }, null, 1), 'utf-8');
+    const olds = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
+    for (const f of olds.slice(0, Math.max(0, olds.length - 20))) { try { fs.unlinkSync(path.join(dir, f)); } catch { /* 무해 */ } }
+    return file;
+  } catch { return ''; }
+}
 /** spawn 직전 매번 보장 — 부팅 1회 mkdir 는 상주 서버에서 부족하다(실사고 2026-08-10 13:21: macOS
  *  임시폴더 청소가 이 디렉토리를 지워 이후 모든 호출이 "spawn claude ENOENT" — cwd 부재도 실행 파일
  *  부재와 같은 코드로 보고돼 CLI 문제로 오독). mkdir 1회 비용은 CLI 부팅(~1.5s) 대비 무시 가능. */
@@ -177,6 +220,14 @@ export class ClaudeCliClient {
       let result: CliResult | undefined;
       let stderrTail = '';
       let settled = false;
+      // 진단용(2026-09-15) — 결과 줄 없이 끝나는 실패의 원인을 다음번에 좁히기 위한 관측값.
+      let rawTail = '';                    // 원문 꼬리 64KB — 마지막에 무엇이 왔는지가 핵심 단서
+      let lines = 0;                       // 파싱 시도한 줄 수
+      let lastEventType = '';
+      const eventCounts: Record<string, number> = {};
+      let childClosed = false, rlClosed = false;
+      let exitCode: number | null = null, exitSignal: string | null = null;
+      let linesAtChildClose = -1;          // 자식 종료 시점의 줄 수 — 이후 더 오면 우리 쪽 읽기 경합이다
       const fail = (msg: string) => {
         if (settled) return; settled = true;
         try { child.kill('SIGKILL'); } catch { /* 이미 종료 */ }
@@ -197,11 +248,17 @@ export class ClaudeCliClient {
       child.on('error', (e) => { cleanup(); fail(`실행 실패(${e.message}) — claude CLI 설치/PATH 확인`); });
       child.stderr.on('data', (d: Buffer) => { stderrTail = (stderrTail + d.toString()).slice(-2000); });
 
+      // 원문 꼬리 — readline 과 별개 리스너(같은 청크를 함께 받는다). 파싱 전 원문이라 잘림·잡음이 그대로 남는다.
+      child.stdout.on('data', (d: Buffer) => { rawTail = (rawTail + d.toString('utf-8')).slice(-65_536); });
+
       const rl = createInterface({ input: child.stdout });
       rl.on('line', (line) => {
         if (!line.trim()) return;
+        lines++;
         let ev: Record<string, unknown>;
-        try { ev = JSON.parse(line) as Record<string, unknown>; } catch { return; } // 비JSON 잡음 무시
+        try { ev = JSON.parse(line) as Record<string, unknown>; eventCounts.__unparsed__ = eventCounts.__unparsed__ ?? 0; } catch { eventCounts.__unparsed__ = (eventCounts.__unparsed__ ?? 0) + 1; return; } // 비JSON 잡음 무시
+        lastEventType = String(ev.type ?? '');
+        eventCounts[lastEventType] = (eventCounts[lastEventType] ?? 0) + 1;
         if (ev.type === 'stream_event') {
           const inner = (ev as { event?: { type?: string; delta?: { type?: string; text?: string; thinking?: string } } }).event;
           if (inner?.type === 'content_block_delta' && inner.delta?.type === 'text_delta' && inner.delta.text) {
@@ -214,7 +271,12 @@ export class ClaudeCliClient {
         }
       });
 
-      child.on('close', (code) => {
+      // 판정은 **자식 종료와 stdout 읽기 종료가 모두 끝난 뒤**에 한다(2026-09-15).
+      // 종전엔 child 'close' 에서 바로 판정해, 마지막 결과 줄이 아직 readline 큐에 있으면 놓칠 수 있었다.
+      // 재현은 안 됐지만 가능성을 없애고, 그래도 놓쳤다면 linesAfterChildClose 가 그 사실을 증언한다.
+      const decide = () => {
+        if (!childClosed || !rlClosed) return;
+        const code = exitCode;
         cleanup();
         if (settled) return;
         if (!result) {
@@ -230,6 +292,15 @@ export class ClaudeCliClient {
           const got = deltaText.trim().length;
           const quietSec = Math.round((Date.now() - lastDeltaAt) / 1000);
           const detail = got ? `본문 ${got}자 수신 후 ${quietSec}초 무응답` : '수신 없음';
+          const info: CliFailureInfo = {
+            model, exitCode: code, exitSignal, elapsedMs: Date.now() - t0, gotChars: got, quietSec,
+            lines, linesAfterChildClose: linesAtChildClose >= 0 ? lines - linesAtChildClose : 0,
+            endsWithNewline: rawTail.endsWith('\n'), eventCounts, lastEventType,
+            promptChars: prompt.length, systemChars: (system ?? '').length, maxTokens,
+            stderrTail: stderrTail.slice(-2000), rawTail,
+          };
+          const dump = writeCliFailureDump(info);
+          console.log('[claude-cli]', `결과 줄 없이 종료 — ${diagnoseCliFailure(info)}${dump ? ` · 진단 기록 ${dump}` : ''}`);
           return fail(`결과 없음(exit=${code}) ${detail} ${stderrTail.trim()}`.trim());
         }
         if (result.is_error || result.subtype !== 'success') {
@@ -266,7 +337,12 @@ export class ClaudeCliClient {
           truncated: stopReason === 'max_tokens',
           doneReason: stopReason || (result.subtype ?? ''),
         });
+      };
+      child.on('close', (code, signal) => {
+        exitCode = code; exitSignal = signal; childClosed = true; linesAtChildClose = lines;
+        decide();
       });
+      rl.on('close', () => { rlClosed = true; decide(); });
 
       // 런 취소(abort→SIGKILL) 직후 stdin 에 쓰면 EPIPE 가 'error' 이벤트로 올라오는데, 핸들러가 없으면
       // 프로세스 전체가 죽는다(2026-08-27 실사고 — 취소 한 번에 서버 다운). 삼키고 fail 로만 정리한다.
