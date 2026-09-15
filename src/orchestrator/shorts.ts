@@ -33,7 +33,7 @@ import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame, cutVideoSegment } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
-import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
+import { generateDesignedThumbnail, thumbTextQaFailed, type ThumbCopy } from './shortsThumbnail';
 import { inheritShortsAssets, inheritedSceneImages, inheritedClips, writeSceneImageMap } from '../content/shortsInherit';
 import { SOURCES_FILE } from '../content/mediaUsage';
 import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom, normalizeLatinName } from '../content/species';
@@ -338,8 +338,10 @@ export async function reviseShorts(
     fs.writeFileSync(path.join(dir, 'caption.txt'), caption, 'utf-8');
     store.update(id, { stage: 'ready', scenes: r.sceneCount, durationSec: r.durationSec, topic: plan.title });
     say(`수정 완료 — ${plan.title.slice(0, 30)} · ${r.durationSec}초`);
-    // 썸네일 — 제목/캘리 문구/배경이 바뀐 경우만 재생성(문구 일치 유지). 실패 무해.
-    if (applied.titleChanged || applied.titleArtCopy || applied.regenScenes.length) {
+    // 썸네일 — 제목/캘리 문구/배경이 바뀐 경우 재생성(문구 일치 유지). 실패 무해.
+    // 한글 QA 미해결 표식이 남아 있으면 무엇을 고쳤든 다시 만든다(2026-09-16 사용자 제보) — 종전엔 대본만
+    // 고치는 수정요청에서 썸네일을 건드리지 않아, 발행할 때마다 같은 '오타 가능성 미해결' 경고가 되돌아왔다.
+    if (applied.titleChanged || applied.titleArtCopy || applied.regenScenes.length || thumbTextQaFailed(dir)) {
       try {
         const hook = images.find((p): p is string => !!p && fs.existsSync(p)) ?? null;
         const ok = await generateDesignedThumbnail({

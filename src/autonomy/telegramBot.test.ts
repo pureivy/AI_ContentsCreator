@@ -1,8 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { parseCallback, reviseEndpointFor, runAction, parseDirectiveCommand, describeDirective } from './telegramBot';
+import { parseCallback, reviseEndpointFor, runAction, parseDirectiveCommand, describeDirective, type Senders } from './telegramBot';
+
+/** 테스트용 발신부 — 실제 텔레그램을 치지 않는다. */
+const stubSend = (log: Array<{ kind: 'photo' | 'html'; text: string; buttons?: unknown }> = []): { send: Senders; log: typeof log } => ({
+  log,
+  send: {
+    photos: async (_f: string[], caption: string) => { log.push({ kind: 'photo', text: caption }); return true; },
+    html: async (html: string, buttons?: unknown) => { log.push({ kind: 'html', text: html, buttons }); return true; },
+  } as unknown as Senders,
+});
 
 describe('parseCallback', () => {
-  it('발행 버튼 콜백 6종을 액션으로 파싱한다', () => {
+  it('발행 버튼 콜백 9종을 액션으로 파싱한다', () => {
     expect(parseCallback('bp:piece_d46aa8c450')).toEqual({ kind: 'naver_draft', id: 'piece_d46aa8c450' });
     expect(parseCallback('rv:piece_d46aa8c450')).toEqual({ kind: 'revise', id: 'piece_d46aa8c450' });
     expect(parseCallback('cp:card_e00fba6537')).toEqual({ kind: 'cardnews_publish', id: 'card_e00fba6537' });
@@ -10,6 +19,10 @@ describe('parseCallback', () => {
     expect(parseCallback('cf:card_e00fba6537')).toEqual({ kind: 'cardnews_force', id: 'card_e00fba6537' });
     expect(parseCallback('sy:short_2916818808')).toEqual({ kind: 'shorts_youtube', id: 'short_2916818808' });
     expect(parseCallback('sm:short_2916818808')).toEqual({ kind: 'shorts_meta', id: 'short_2916818808' });
+    // 썸네일 한글 QA 미해결 2단계(2026-09-16) — 업로드가 409 로 막힌 뒤 안내 메시지의 버튼들.
+    expect(parseCallback('yf:short_2916818808')).toEqual({ kind: 'shorts_youtube_force', id: 'short_2916818808' });
+    expect(parseCallback('mf:short_2916818808')).toEqual({ kind: 'shorts_meta_force', id: 'short_2916818808' });
+    expect(parseCallback('tr:short_2916818808')).toEqual({ kind: 'shorts_thumb_regen', id: 'short_2916818808' });
   });
 
   it('규격 밖 데이터는 null — 주입·오타 콜백을 액션으로 오인하지 않는다', () => {
@@ -73,5 +86,51 @@ describe('parseDirectiveCommand — 텔레그램 자율런 지시 명령(순수,
     expect(describeDirective({ text: 'A', on: true, made: 1, maxPieces: 3 })).toContain('1/3편');
     const off = describeDirective({ text: 'A', on: false, made: 3, maxPieces: 3, lastResult: '편수 상한 3편 도달' });
     expect(off).toContain('꺼짐'); expect(off).toContain('상한'); expect(off).toContain('다시 켜기');
+  });
+});
+
+// 썸네일 한글 QA 미해결(409) — 종전엔 업로드 버튼이 막히기만 하고 앞으로 갈 길이 없었다.
+// 수정요청은 대본만 고쳐 표식이 그대로 남아, 눌러도 같은 경고가 되돌아왔다(사용자 제보 2026-09-16).
+describe('썸네일 QA 미해결 — 확인 후 강행 2단계', () => {
+  const qa409 = { ok: false, status: 409, json: { error: '썸네일 한글 QA가 오타 가능성을 미해결로 남겼습니다', thumb_qa_unresolved: true } };
+  it('유튜브는 안내를 직접 보내고 빈 문자열 — 강행·재생성 두 버튼을 함께 준다', async () => {
+    const s = stubSend();
+    expect(await runAction({ kind: 'shorts_youtube', id: 'short_1' }, async () => qa409, s.send)).toBe('');
+    const guide = s.log.find((x) => x.kind === 'html')!;
+    expect(guide.text).toContain('썸네일 한글 QA 미해결');
+    expect(guide.text).toContain('수정요청은 대본만 고치므로'); // 사용자가 헛수고하지 않게 명시
+    expect(JSON.stringify(guide.buttons)).toContain('tr:short_1');
+    expect(JSON.stringify(guide.buttons)).toContain('yf:short_1');
+  });
+  it('릴스는 같은 안내에 릴스 강행 버튼', async () => {
+    const s = stubSend();
+    expect(await runAction({ kind: 'shorts_meta', id: 'short_1' }, async () => qa409, s.send)).toBe('');
+    expect(JSON.stringify(s.log.find((x) => x.kind === 'html')!.buttons)).toContain('mf:short_1');
+  });
+  it('QA 가 아닌 409·다른 실패는 종전대로 오류 문구', async () => {
+    const other = { ok: false, status: 409, json: { error: '이미 업로드됨' } };
+    const s = stubSend();
+    expect(await runAction({ kind: 'shorts_youtube', id: 'short_1' }, async () => other, s.send)).toContain('이미 업로드됨');
+    expect(await runAction({ kind: 'shorts_meta', id: 'short_1' }, async () => other, s.send)).toContain('이미 업로드됨');
+    expect(s.log).toEqual([]);
+  });
+  it('강행 버튼은 force 를 실어 같은 발행 라우트를 부른다', async () => {
+    const seen: Array<{ p: string; b: unknown }> = [];
+    const call = async (p: string, b?: unknown) => { seen.push({ p, b }); return { ok: true, status: 200, json: { notified: false, url: 'https://youtu.be/x' } }; };
+    await runAction({ kind: 'shorts_youtube_force', id: 'short_1' }, call);
+    await runAction({ kind: 'shorts_meta_force', id: 'short_1' }, call);
+    expect(seen[0]).toEqual({ p: '/shorts/short_1/youtube', b: { force: true } });
+    expect(seen[1]).toEqual({ p: '/shorts/short_1/meta', b: { force: true } });
+  });
+  it('썸네일 다시 만들기는 재생성 라우트를 부른다', async () => {
+    const seen: string[] = [];
+    const s = stubSend();
+    await runAction({ kind: 'shorts_thumb_regen', id: 'short_1' }, async (p) => { seen.push(p); return { ok: true, status: 200, json: { ok: true } }; }, s.send);
+    expect(seen).toEqual(['/shorts/short_1/thumbnail/regenerate']);
+    expect(JSON.stringify(s.log.find((x) => x.kind === 'html')!.buttons)).toContain('sy:short_1'); // 이어서 발행
+  });
+  it('재생성이 실패하면 오류 문구', async () => {
+    const out = await runAction({ kind: 'shorts_thumb_regen', id: 'short_1' }, async () => ({ ok: false, status: 502, json: { error: '썸네일 생성 실패' } }), stubSend().send);
+    expect(out).toContain('썸네일 생성 실패');
   });
 });

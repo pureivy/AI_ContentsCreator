@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { getSecret } from '../secrets/store';
-import { telegramCreds, tgApiUrl, sendTelegramHtml, sendTelegramPhotos } from './notify';
+import { telegramCreds, tgApiUrl, sendTelegramHtml, sendTelegramPhotos, type TgButton } from './notify';
 import { studioBase, escapeHtml } from './contentNotify';
 
 export type BotAction =
@@ -20,7 +20,12 @@ export type BotAction =
   | { kind: 'cardnews_publish'; id: string }
   | { kind: 'cardnews_force'; id: string }
   | { kind: 'shorts_youtube'; id: string }
-  | { kind: 'shorts_meta'; id: string };
+  | { kind: 'shorts_meta'; id: string }
+  // 썸네일 한글 QA 미해결(2026-09-16 사용자 요청) — 카드뉴스와 같은 '확인 후 강행' 2단계를 숏폼에도.
+  // 종전엔 업로드 버튼이 409 로 막히기만 하고 앞으로 갈 길이 없었다(수정요청은 대본만 고쳐 표식이 그대로 남는다).
+  | { kind: 'shorts_youtube_force'; id: string }
+  | { kind: 'shorts_meta_force'; id: string }
+  | { kind: 'shorts_thumb_regen'; id: string };
 
 /**
  * 자율런 지시 명령(순수, 2026-09-10) — "자율런 지시: …" 로 설정, "지시 끄기/켜기/상태/삭제". 아니면 null.
@@ -53,7 +58,7 @@ export function describeDirective(d: { text: string; on: boolean; made: number; 
 
 /** 콜백 데이터 파싱(≤64바이트 규격: "<op>:<id>"). 불명이면 null. 순수 — 테스트 대상. */
 export function parseCallback(data: string): BotAction | null {
-  const m = /^(bp|rv|cp|cf|sy|sm):([A-Za-z0-9_]{1,48})$/.exec(data);
+  const m = /^(bp|rv|cp|cf|sy|sm|yf|mf|tr):([A-Za-z0-9_]{1,48})$/.exec(data);
   if (!m) return null;
   const id = m[2]!;
   switch (m[1]) {
@@ -63,6 +68,9 @@ export function parseCallback(data: string): BotAction | null {
     case 'cf': return { kind: 'cardnews_force', id };
     case 'sy': return { kind: 'shorts_youtube', id };
     case 'sm': return { kind: 'shorts_meta', id };
+    case 'yf': return { kind: 'shorts_youtube_force', id };
+    case 'mf': return { kind: 'shorts_meta_force', id };
+    case 'tr': return { kind: 'shorts_thumb_regen', id };
     default: return null;
   }
 }
@@ -98,8 +106,11 @@ const errText = (label: string, r: { status: number; json: Record<string, unknow
 /** 버튼 액션 실행 → 사용자에게 보낼 결과 문구. revise 는 답장 유도라 여기 없음. */
 /** 액션 실행기가 쓰는 HTTP 호출 — 테스트가 갈아끼울 수 있게 인자로 뺀다(이 파일의 순수/부수 분리). */
 export type ApiCall = (pathname: string, body?: unknown, timeoutMs?: number) => Promise<{ ok: boolean; status: number; json: Record<string, unknown> | null }>;
+/** 사용자에게 직접 보내는 통로(사진·본문) — 테스트가 갈아끼울 수 있게 인자로 뺀다(ApiCall 과 같은 사상). */
+export interface Senders { photos: typeof sendTelegramPhotos; html: typeof sendTelegramHtml }
+const REAL_SENDERS: Senders = { photos: sendTelegramPhotos, html: sendTelegramHtml };
 
-export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call: ApiCall = api): Promise<string> {
+export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call: ApiCall = api, send: Senders = REAL_SENDERS): Promise<string> {
   switch (a.kind) {
     case 'naver_draft': {
       const r = await call(`/pieces/${a.id}/naver-draft`, { actor: '텔레그램' }, 30_000);
@@ -137,7 +148,10 @@ export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call:
     }
     case 'shorts_youtube': {
       const r = await call(`/shorts/${a.id}/youtube`);
-      if (!r.ok) return errText('유튜브 업로드 실패', r);
+      if (!r.ok) {
+        if (await sendThumbQaGuide(r, a.id, 'youtube', send)) return '';
+        return errText('유튜브 업로드 실패', r);
+      }
       // 라우트가 이미 완료 알림(📺)을 보냈으면 여기선 아무것도 안 보낸다 — 안 그러면 같은 말이
       // 두 통 온다(실사고 2026-09-08). '액션이 직접 전송한 경우 빈 문자열' 규칙(아래 호출부)을 따른다.
       if (r.json?.notified === true) return '';
@@ -146,11 +160,72 @@ export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call:
     }
     case 'shorts_meta': {
       const r = await call(`/shorts/${a.id}/meta`);
-      if (!r.ok) return errText('릴스 발행 실패', r);
+      if (!r.ok) {
+        if (await sendThumbQaGuide(r, a.id, 'instagram', send)) return '';
+        return errText('릴스 발행 실패', r);
+      }
       const link = typeof r.json?.igPermalink === 'string' ? `\n${r.json.igPermalink}` : '';
       return `🎬 인스타 릴스 발행 완료${link}`;
     }
+    case 'shorts_youtube_force': {
+      // 사용자가 썸네일을 눈으로 확인한 뒤의 강행 업로드 — 라우트의 force 게이트를 통과한다.
+      const r = await call(`/shorts/${a.id}/youtube`, { force: true });
+      if (!r.ok) return errText('유튜브 강행 업로드 실패', r);
+      if (r.json?.notified === true) return '';
+      const url = typeof r.json?.url === 'string' ? r.json.url : typeof r.json?.youtubeUrl === 'string' ? r.json.youtubeUrl : '';
+      return `▶️ 유튜브 비공개 업로드 완료(썸네일 확인 강행)${url ? `\n${url}` : ''}\n공개 전환은 유튜브 스튜디오에서.`;
+    }
+    case 'shorts_meta_force': {
+      const r = await call(`/shorts/${a.id}/meta`, { force: true });
+      if (!r.ok) return errText('릴스 강행 발행 실패', r);
+      const link = typeof r.json?.igPermalink === 'string' ? `\n${r.json.igPermalink}` : '';
+      return `🎬 인스타 릴스 발행 완료(썸네일 확인 강행)${link}`;
+    }
+    case 'shorts_thumb_regen': {
+      // 썸네일만 다시 만든다(수 분). 통과하면 표식이 지워져 발행 게이트가 열린다.
+      const r = await call(`/shorts/${a.id}/thumbnail/regenerate`, {}, 300_000);
+      if (!r.ok) return errText('썸네일 재생성 실패', r);
+      const thumb = shortsThumbPath(a.id);
+      if (thumb) await send.photos([thumb], '🖼 썸네일 재생성 완료 — 문구를 확인하고 발행하세요');
+      await send.html('아래 버튼으로 이어서 발행하세요.', shortsPublishButtons(a.id));
+      return '';
+    }
   }
+}
+
+/** 이 숏폼의 썸네일 파일 경로(있으면) — 텔레그램 검수 사진용. */
+function shortsThumbPath(id: string): string | null {
+  const p = path.join(CONFIG.dataDir, 'shorts', id, 'thumbnail.jpg');
+  try { return fs.existsSync(p) ? p : null; } catch { return null; }
+}
+/** 발행 재시도 버튼(두 채널 모두 — 라우트가 채널 전용이면 409 로 막으므로 안전). */
+const shortsPublishButtons = (id: string): TgButton[][] => [[
+  { text: '▶️ 유튜브 업로드', callback_data: `sy:${id}` },
+  { text: '🎬 릴스 발행', callback_data: `sm:${id}` },
+]];
+/**
+ * 썸네일 한글 QA 미해결(409) 안내 — 카드뉴스의 '확인 후 강행' 2단계를 숏폼에 맞춘 것(2026-09-16).
+ * 썸네일을 보내 눈으로 검수하게 하고, 다시 만들기와 강행 발행 두 길을 준다. 안내를 보냈으면 true.
+ */
+async function sendThumbQaGuide(
+  r: { status: number; json: Record<string, unknown> | null }, id: string, ch: 'youtube' | 'instagram',
+  send: Senders = REAL_SENDERS,
+): Promise<boolean> {
+  if (r.status !== 409 || r.json?.thumb_qa_unresolved !== true) return false;
+  const thumb = shortsThumbPath(id);
+  if (thumb) await send.photos([thumb], '⚠️ 썸네일 한글 오타 의심');
+  const forceOp = ch === 'youtube' ? 'yf' : 'mf';
+  const forceLabel = ch === 'youtube' ? '✅ 확인했어요 — 강행 업로드' : '✅ 확인했어요 — 강행 발행';
+  await send.html(
+    '⚠️ 썸네일 한글 QA 미해결 — 위 이미지의 글자를 확인하세요.\n'
+    + '문구가 정상이면 강행하고, 글자가 깨졌으면 썸네일을 다시 만드세요(수 분).\n'
+    + `✍ 수정요청은 대본만 고치므로 이 경고는 그대로 남습니다.\n${studioBase()}/`,
+    [[
+      { text: '🖼 썸네일 다시 만들기', callback_data: `tr:${id}` },
+      { text: forceLabel, callback_data: `${forceOp}:${id}` },
+    ]],
+  );
+  return true;
 }
 
 /** 텔레그램 저수준 호출(응답 JSON 반환) — force_reply 의 message_id 회수 등에 사용. */
