@@ -282,6 +282,12 @@ export interface Config {
   readonly topicDemandMinVolume: number;
   /** 시즌 지수(0~1) 하한 — 이 미만이면 비수기로 후순위(기각 아님). 0~1 로 클램프. */
   readonly topicDemandMinSeason: number;
+  /**
+   * 최근 사용 수종 제외 창(일, 2026-09-17 사용자 확정 30일) — 이 기간 안에 다룬 수종은 어떤 각도로도
+   * 다시 안 잡는다. 종전 규칙은 '30일 누적 N편'(카운트)뿐이라 6일·3일 간격 재등장이 규칙 안이었다.
+   * 0 이면 게이트 끔(종전 동작 — 카운트 상한만).
+   */
+  readonly speciesRecentDays: number;
 }
 
 export const CONFIG: Config = {
@@ -468,6 +474,8 @@ export const CONFIG: Config = {
   topicDemandMinVolume: Math.max(0, envInt('TOPIC_DEMAND_MIN_VOLUME', 30)),
   // 1 초과 값은 모든 후보를 비수기로 만든다(0 미만은 게이트 무효) — 오설정이 사이클을 굶기지 않게 클램프.
   topicDemandMinSeason: Math.min(Math.max(0, envFloat('TOPIC_DEMAND_MIN_SEASON', 0.25)), 1),
+  // 상한 90일 — 카탈로그 79종에 하루 ~1.7편이 수종 글이라 그 이상은 후보가 구조적으로 마른다.
+  speciesRecentDays: Math.min(90, Math.max(0, envInt('SPECIES_RECENT_DAYS', 30))),
 };
 
 export function systemRamGB(): number {

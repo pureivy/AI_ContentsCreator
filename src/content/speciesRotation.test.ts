@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { speciesInText, speciesCoverage, overSpeciesCap, speciesRotationBlock, SPECIES_MONTHLY_CAP, speciesCapFor } from './speciesRotation';
+import { speciesInText, speciesCoverage, overSpeciesCap, speciesRotationBlock, SPECIES_MONTHLY_CAP, speciesCapFor, speciesRecency, usedRecently, speciesRecentBlock } from './speciesRotation';
 
 const CAT = [
   { group: '유실수', species: [{ name: '사과나무', aliases: ['사과'] }, { name: '배나무' }, { name: '블루베리', aliases: ['블루베리나무'] }, { name: '매실나무', aliases: ['매실'] }] },
@@ -92,5 +92,55 @@ describe('overSpeciesCap — 수종별 상한 함수', () => {
   });
   it('카탈로그에 없는 수종은 상한 대상이 아니다', () => {
     expect(overSpeciesCap('하스카프베리 재배', cov, catalog, () => 4)).toBeNull();
+  });
+});
+
+describe('speciesRecency — 최근 사용 수종 제외(2026-09-17 사용자 확정)', () => {
+  const spOf = (t: string): string | null => speciesInText(t, CAT);
+  const items = [
+    { title: '모과나무 가지치기', keyword: '모과나무 전정', ts: d(6) },   // 카탈로그 밖 — 이 눈으로는 안 잡힌다
+    { title: '배롱나무 묘목 고르기', keyword: '배롱나무 묘목', ts: d(3) },
+    { title: '배롱나무 전정', keyword: '배롱 가지치기', ts: d(12) },      // 같은 수종 더 옛 건은 덮지 않는다
+    { title: '느티나무 심는 시기', keyword: '느티나무 식재', ts: d(40) }, // 창 밖
+  ];
+
+  it('수종별로 가장 최근 1건의 며칠 전만 남긴다', () => {
+    const r = speciesRecency(items, spOf, NOW, 30);
+    expect(r.get('배롱나무')).toBe(3);
+    expect(r.has('느티나무')).toBe(false);   // 40일 전 — 창 밖
+  });
+
+  it('창을 0 으로 주면 빈 지도 — 게이트 끄기(SPECIES_RECENT_DAYS=0)', () => {
+    expect(speciesRecency(items, spOf, NOW, 0).size).toBe(0);
+  });
+
+  it('판정 눈을 주입받는다 — 카탈로그 밖 수종도 사전 눈으로 잡힌다(아로니아 계보)', () => {
+    const loose = (t: string): string | null => (t.includes('모과') ? '모과나무' : speciesInText(t, CAT));
+    expect(speciesRecency(items, loose, NOW, 30).get('모과나무')).toBe(6);
+  });
+
+  it('usedRecently — 창 안 수종은 며칠 전까지 돌려주고, 밖이면 null', () => {
+    const r = speciesRecency(items, spOf, NOW, 30);
+    expect(usedRecently('배롱나무 가을 거름 주는 법', r, spOf)).toEqual({ name: '배롱나무', daysAgo: 3 });
+    expect(usedRecently('느티나무 묘목 고르기', r, spOf)).toBeNull();
+    expect(usedRecently('상토 배양토 차이', r, spOf)).toBeNull();   // 수종 없는 주제는 대상 아님
+  });
+
+  it('usedRecently — 각도·행위를 바꿔도 같은 수종이면 걸린다(카운트 상한과 다른 축)', () => {
+    const r = speciesRecency([{ title: '배롱나무 가지치기', ts: d(3) }], spOf, NOW, 30);
+    expect(usedRecently('배롱나무 묘목 고르기, 뿌리 상태 먼저', r, spOf)).not.toBeNull();
+  });
+
+  it('speciesRecentBlock — 가까운 순으로 금지 목록을 쓴다', () => {
+    const r = speciesRecency(items, spOf, NOW, 30);
+    const b = speciesRecentBlock(r, 30);
+    expect(b).toContain('[최근 30일 안에 다룬 수종 — 제안 금지]');
+    expect(b).toContain('배롱나무(3일 전)');
+    expect(b).toContain('코드가 기각한다');
+  });
+
+  it('speciesRecentBlock — 빈 지도·창 0 이면 무주입', () => {
+    expect(speciesRecentBlock(new Map(), 30)).toBe('');
+    expect(speciesRecentBlock(new Map([['배롱나무', 3]]), 0)).toBe('');
   });
 });

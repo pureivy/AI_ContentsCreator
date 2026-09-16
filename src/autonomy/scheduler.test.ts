@@ -484,6 +484,16 @@ describe('pickRoundAdoption — 후순위 vs 유사 폴백(순수)', () => {
   it('rank 0 이 섞여 있으면 폴백이 있어도 rank 0 을 고른다(pickDemoted 순서 그대로)', () => {
     expect(pickRoundAdoption([e('수요미달', 1), e('비수기', 0)], true)).toEqual({ source: 'demoted', pick: e('비수기', 0) });
   });
+  // 최근 수종(rank 2, 2026-09-17) — '안 다룬 수종의 유사 각도'가 '최근 다룬 수종의 새 각도'보다 낫다.
+  it('rank 2(최근 수종)는 유사 폴백에 진다', () => {
+    expect(pickRoundAdoption([e('최근수종', 2)], true)).toEqual({ source: 'fallback' });
+  });
+  it('폴백이 없으면 rank 2 도 채택된다(좌초 대신 생산 — 기아 방지 밸브)', () => {
+    expect(pickRoundAdoption([e('최근수종', 2)], false)).toEqual({ source: 'demoted', pick: e('최근수종', 2) });
+  });
+  it('rank 1 이 rank 2 를 이긴다 — 수종 로테이션이 검색량 하한보다 뒤가 아니다', () => {
+    expect(pickRoundAdoption([e('최근수종', 2), e('수요미달', 1)], false)).toEqual({ source: 'demoted', pick: e('수요미달', 1) });
+  });
 });
 
 describe('demandGateDecision — 기억된 수요 미달(opts.remembered)', () => {
@@ -604,5 +614,42 @@ describe('자율런 지시 — 영속·상한·소진(순수 저장소)', () => 
     const plain = mod.directiveBlock({ text: 'X', made: 0 });
     expect(plain).not.toContain('보관소 수종');
     expect(plain).not.toContain('편수 상한');
+  });
+});
+
+// 보관소 지시 강제(2026-09-16) — 프롬프트에 목록을 줘도 두뇌가 벗어났다.
+// 실측: 지시 13편 중 포도·아로니아 2편이 목록 밖. 아로니아는 검색 수요 0에 수종 사전에도 없었는데,
+// 지시 중엔 수요·계열 게이트가 통과라 아무 그물에도 안 걸리고 발행까지 갔다.
+describe('directiveWantsLibrary / offLibrarySpecies — 지시가 보관소를 가리킬 때의 코드 강제', () => {
+  it('보관소·촬영·재고·찍은 이 들어간 지시만 목록 강제 대상', async () => {
+    const m = await import('./scheduler');
+    expect(m.directiveWantsLibrary('보관소의 수종별 수확 후 전정')).toBe(true);
+    expect(m.directiveWantsLibrary('직접 찍은 수종 위주로')).toBe(true);
+    expect(m.directiveWantsLibrary('가을 전정 주제로만')).toBe(false);
+    expect(m.directiveWantsLibrary('')).toBe(false);
+  });
+  it('목록 이름·어간으로 잡는다 — 수종 사전에 없어도 된다', async () => {
+    const { offLibrarySpecies } = await import('./scheduler');
+    const lib = ['감나무', '매실나무', '배롱나무'];
+    const none = () => undefined;
+    expect(offLibrarySpecies('감나무 시비방법, 가을 거름', lib, none)).toBe(false);
+    expect(offLibrarySpecies('매실 수확 후 가지치기', lib, none)).toBe(false); // '매실나무'의 어간
+    expect(offLibrarySpecies('아로니아 거름 주기, 추분 전까지', lib, none)).toBe(true);
+    expect(offLibrarySpecies('포도 수확 후 가지치기', lib, none)).toBe(true);
+  });
+  it('별칭은 사전 표준명으로 살린다 — 백일홍은 배롱나무다', async () => {
+    const { offLibrarySpecies } = await import('./scheduler');
+    const lib = ['배롱나무'];
+    const canon = (t: string) => (t.includes('백일홍') ? '배롱나무' : undefined);
+    expect(offLibrarySpecies('백일홍 가을 전정', lib, canon)).toBe(false);
+    expect(offLibrarySpecies('아로니아 가을 전정', lib, canon)).toBe(true);
+  });
+  it('목록이 비면 강제하지 않는다 — 막을 근거가 없다(종전 동작)', async () => {
+    const { offLibrarySpecies } = await import('./scheduler');
+    expect(offLibrarySpecies('아무 수종', [], () => undefined)).toBe(false);
+  });
+  it("한 글자 어간은 안 쓴다 — '감나무'를 '감' 으로 줄이면 '감기·감자' 까지 통과한다", async () => {
+    const { offLibrarySpecies } = await import('./scheduler');
+    expect(offLibrarySpecies('감귤 수확 후 거름', ['감나무'], () => undefined)).toBe(true);
   });
 });

@@ -27,7 +27,7 @@ import { ensureSeriesLabels, classifyCandidates, seriesScoresFor, gateForLabels,
 import { fallbackSeriesLabels } from '../content/seriesCooldown';
 import { seasonalContext } from '../util/solarTerms';
 import { offSeasonSubject, seasonalSubjectBlock, formatMonths } from '../content/seasonalSubjects';
-import { speciesCoverage, overSpeciesCap, speciesRotationBlock, speciesInText, speciesCapFor, SPECIES_MONTHLY_CAP } from '../content/speciesRotation';
+import { speciesCoverage, overSpeciesCap, speciesRotationBlock, speciesInText, speciesCapFor, SPECIES_MONTHLY_CAP, speciesRecency, usedRecently, speciesRecentBlock } from '../content/speciesRotation';
 import { pieceStore } from '../content/pieces';
 import { overThemeCap, themeRotationBlock, THEME_MONTHLY_CAP } from '../content/topicThemes';
 import { brandThemeCoverage } from '../analytics/discoverySeeds';
@@ -246,8 +246,43 @@ export function directiveBlock(d: Pick<AutorunDirective, 'text' | 'maxPieces' | 
     `· 후보 ${IDEA_CANDIDATES}개는 전부 이 지시 안에서 낸다 — 지시 밖 소재는 제안하지 마라. 지시가 여러 대상(수종별 등)을 뜻하면 대상마다 하나씩 나눠 낸다.${lib}${quota}\n` +
     '· [기존 콘텐츠 — 유사 금지]는 그대로 지킨다 — 지시에 맞아도 이미 다룬 글과 겹치면 다른 대상·다른 대목으로.\n' +
     '· 로테이션·검색 수요·계열 회피 신호는 참고일 뿐, 이 지시가 그것들보다 앞선다(브랜드 범위·시기·함정어 규칙은 그대로).\n' +
+    '· 단 [최근 N일 안에 다룬 수종 — 제안 금지]는 이 지시보다 앞선다(2026-09-17 사장님 확정) — 코드가 기각한다.\n' +
     '· 지시 안에서 아직 안 다룬 새 주제가 정말 없으면 {"ideas":[],"exhausted":true,"reason":"한 줄"} 로 답하라.';
 }
+/**
+ * 지시가 보관소를 가리키는가(순수) — 그러면 목록 밖 수종을 코드가 막는다(2026-09-16 사용자 확정).
+ * 프롬프트에 목록을 줘도 두뇌는 벗어난다: 실측으로 지시 13편 중 2편(포도·아로니아)이 목록 밖이었고,
+ * 아로니아는 검색 수요가 사실상 0(10미만/월·계열 최대 0)에 수종 사전에도 없어 자동 학습까지 됐다.
+ * 지시 중엔 수요·계열·축 게이트를 통과시키므로 그것들을 잡을 그물이 아예 없었다.
+ */
+export function directiveWantsLibrary(text: string): boolean {
+  return /보관소|촬영|재고|찍은/.test(text || '');
+}
+
+/**
+ * 후보가 보관소 수종을 가리키지 않는가(순수) — 두 경로가 모두 실패할 때만 true.
+ *  ① 목록 이름 글자 대조('감나무' 또는 '나무'를 뗀 어간) — 수종 사전과 무관하다. 사전에 없는 새 이름
+ *     (아로니아처럼)도 이 대조로 잡힌다.
+ *  ② 사전 표준명 대조 — 별칭으로 쓴 경우('백일홍' → 배롱나무)를 살린다.
+ * 목록이 비면 강제할 근거가 없으므로 false(종전 동작).
+ */
+export function offLibrarySpecies(
+  text: string, lib: readonly string[], canon: (t: string) => string | undefined,
+): boolean {
+  if (!lib.length) return false;
+  const t = (text || '').replace(/\s+/g, '');
+  const hit = lib.some((sp) => {
+    const s = (sp || '').replace(/\s+/g, '');
+    if (!s) return false;
+    if (t.includes(s)) return true;
+    const stem = s.replace(/나무$/, '');
+    return stem.length >= 2 && t.includes(stem);
+  });
+  if (hit) return false;
+  const c = canon(text);
+  return !(c && lib.includes(c));
+}
+
 /** 보관소에 있는 수종(표준명, 중복 제거) — 지시 블록 입력. 실패는 빈 목록. */
 function librarySpeciesFor(slug: string): string[] {
   try {
@@ -383,6 +418,42 @@ export function speciesCoverageFor(slug: string | undefined, now = new Date()): 
   } catch { return new Map(); }
 }
 
+/**
+ * 수종 판정 눈(최근 수종 게이트 전용) — **수종 사전 먼저**, 없으면 브랜드 카탈로그.
+ *
+ * 순서가 중요하다. 카탈로그(brand.yaml)는 로테이션 가족으로 묶여 있어 체리나무가 앵두나무를, 단풍나무가
+ * 공작단풍을 별칭으로 흡수한다. 카운트 상한에서는 무해한 근사였다(두 수종이 2편을 나눠 쓴다). 하지만
+ * 날짜 창에서는 '같은 수종이다'라는 단정이 되어, 체리 글 하나가 앵두를 한 달간 잠근다. 사장님의 수종
+ * 사전(data/species.yaml)은 둘을 별개로 두고 있고, 공작단풍나무 학명은 사장님이 직접 정정했다
+ * (2026-09-08 — 일반 단풍으로 적혀 있어 맞게 그린 씬이 반려됐다). 그 눈을 따른다.
+ * 사전에 없는 이름은 카탈로그로 떨어지고, 둘 다 없으면 null(수종 없는 주제 — 게이트 대상 아님).
+ *
+ * 최근 수종 지도와 후보 검사는 반드시 이 함수를 같이 써야 한다(다른 눈을 쓰면 키가 안 맞아
+ * 게이트가 조용히 통과한다). 카운트 상한·로테이션 블록은 종전 눈(카탈로그) 그대로다.
+ */
+function speciesKeyOf(text: string): string | null {
+  return findSpeciesLoose(text)?.name ?? speciesInText(text, getBrand()?.speciesCatalog) ?? null;
+}
+
+/** 최근 CONFIG.speciesRecentDays 일 안에 다룬 수종 → 며칠 전. 후보 루프·예고·클러스터 게이트 공용. */
+export function speciesRecencyFor(slug: string | undefined, now = new Date()): Map<string, number> {
+  try {
+    const items = pieceStore().list()
+      .filter((p) => (p.brand ?? '') === (slug ?? '') && p.stage !== 'idea' && p.stage !== 'error')
+      .map((p) => ({ title: p.title, keyword: p.keyword, ts: p.createdTs }));
+    return speciesRecency(items, speciesKeyOf, now, CONFIG.speciesRecentDays);
+  } catch { return new Map(); }
+}
+
+/**
+ * 후보 한 건이 최근 수종인가 — 예고·클러스터 경로(main.ts)용 편의 함수. 지도를 매번 새로 만든다
+ * (경로당 후보 1건이라 비용이 무의미하고, 틱 사이 코퍼스 변화를 그대로 반영한다).
+ */
+export function usedRecentlyFor(text: string, slug: string | undefined, now = new Date()): { name: string; daysAgo: number } | null {
+  if (CONFIG.speciesRecentDays <= 0) return null;
+  return usedRecently(text, speciesRecencyFor(slug, now), speciesKeyOf);
+}
+
 function readStrategyWinners(): string {
   try {
     const slug = activeBrandSlug();
@@ -391,9 +462,13 @@ function readStrategyWinners(): string {
     };
     const cov = speciesCoverageFor(slug || undefined);
     const themeCovW = brandThemeCoverage(new Date(), slug || '');
+    const recentSp = speciesRecencyFor(slug || undefined);
     return eligibleWinners(raw.winners ?? [], getBrand()?.perfEraSince)
       // 월 상한에 닿은 수종의 성과 키워드는 빼서 '통했던 배롱'이 매 틱 되주입되는 고리를 끊는다(2026-08-27).
       .filter((w) => !overSpeciesCap(w.keyword ?? '', cov, getBrand()?.speciesCatalog))
+      // 최근 창 안에 다룬 수종도 같은 이유로 뺀다(2026-09-17) — 아래 후보 게이트가 기각할 소재를
+      // '통했던 키워드'로 들이밀면 후보 8개가 통째로 코드 기각으로 날아간다.
+      .filter((w) => !usedRecently(w.keyword ?? '', recentSp, speciesKeyOf))
       .filter((w) => !overThemeCap(w.keyword ?? '', themeCovW, getBrand()?.topicThemes))   // 축 상한도 같은 이유(수렴 고리 차단)
       .slice(0, 8)
       .map((w) => `- ${w.keyword}${typeof w.score === 'number' ? ` (점수 ${w.score.toFixed(2)})` : ''}`)
@@ -536,7 +611,8 @@ export function shouldRememberDemandReject(
 
 /**
  * 후순위 보관함에서 채택할 후보 하나(순수) — rank 오름차순, 같은 rank 는 먼저 담긴 순서를 유지한다
- * (rank 0=비수기, 1=기아 방지 밸브. '지금 덜 찾는 소재'가 '아예 검색량이 없는 소재'보다 항상 낫다).
+ * (rank 0=비수기, 1=기아 방지 밸브, 2=최근 수종. '지금 덜 찾는 소재'가 '아예 검색량이 없는 소재'보다
+ * 항상 낫고, 둘 다 '최근에 다룬 수종'보다 낫다).
  * 엄격 부등호 비교라서 안정성이 구현에 박혀 있다 — sort 로 바꾸면 동률 순서 보장을 잃는다.
  */
 export function pickDemoted<T extends { rank: number }>(list: readonly T[]): T | undefined {
@@ -551,15 +627,16 @@ export function pickDemoted<T extends { rank: number }>(list: readonly T[]): T |
  *
  * rank 0(비수기)은 폴백을 이긴다 — 아직 안 다룬 새 소재이고 소재 자체엔 수요가 있다(지금 덜 찾을 뿐).
  * rank 1(기아 방지 밸브 = 검색량 하한 미달)은 폴백에 진다(2026-08-26 최종 리뷰 I3) — '이 표기로는
- * 아무도 안 찾는다'가 실측된 후보라, 이미 다룬 소재라도 검색량이 확인된 유사 폴백이 낫다. 폴백이
- * 없으면 rank 1 도 채택한다(좌초보다는 생산).
+ * 아무도 안 찾는다'가 실측된 후보라, 이미 다룬 소재라도 검색량이 확인된 유사 폴백이 낫다.
+ * rank 2(최근 수종, 2026-09-17)도 폴백에 진다 — '안 다룬 수종의 유사 각도'가 '최근 다룬 수종의 새 각도'보다
+ * 낫다(사장님이 고른 축은 수종 로테이션이다). 폴백이 없으면 rank 1·2 도 채택한다(좌초보다는 생산).
  */
 export function pickRoundAdoption<T extends { rank: number }>(
   demoted: readonly T[],
   hasFallback: boolean,
 ): { source: 'demoted'; pick: T } | { source: 'fallback' } | undefined {
   const best = pickDemoted(demoted);
-  if (best && (best.rank !== 1 || !hasFallback)) return { source: 'demoted', pick: best };
+  if (best && (best.rank < 1 || !hasFallback)) return { source: 'demoted', pick: best };
   if (hasFallback) return { source: 'fallback' };
   return undefined;
 }
@@ -604,6 +681,8 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     try { return speciesCapFor(familyVolume(demandRows, name).max); } catch { return SPECIES_MONTHLY_CAP; }
   };
   const themeCov = brandThemeCoverage(new Date(), slug);   // 주제 축 로테이션(2026-08-27) — 수종과 직교
+  // 최근 수종 제외(2026-09-17 사용자 확정) — 카운트(월 상한)와 달리 '며칠 전'을 잰다. 지시 중에도 건다.
+  const speciesRecent = speciesRecencyFor(slug);
 
   // 브랜드 설정 시: 주제를 브랜드 제품·타겟에 조향 + 콜드스타트는 시드 키워드에서 출발 +
   // subNiche 를 제품 라인으로 제약(기존 서브니치 EWMA 가 그대로 '제품 라인별 성과 학습'이 된다).
@@ -664,7 +743,11 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
   })();
   // 사장님 지시(2026-09-10) — 켜져 있으면 최우선 블록 + 자율 판단 게이트 완화. 꺼져 있으면 아래 전부 종전 그대로.
   const directive = activeDirective();
-  const directiveBlockStr = directive ? directiveBlock(directive, librarySpeciesFor(slug)) : '';
+  const libSpecies = directive ? librarySpeciesFor(slug) : [];
+  const directiveBlockStr = directive ? directiveBlock(directive, libSpecies) : '';
+  // 보관소 지시면 목록을 코드로 강제한다 — 프롬프트 지시만으로는 샌다(위 offLibrarySpecies 주석의 실측).
+  const libGate = !!directive && directiveWantsLibrary(directive.text) && libSpecies.length > 0;
+  if (libGate) console.log(`[auto-cycle] 보관소 수종 강제 — ${libSpecies.length}종, 목록 밖 주제는 기각`);
   if (directive) console.log(`[auto-cycle] 사장님 지시 적용 — "${directive.text.slice(0, 50)}"${directive.maxPieces ? ` (${directive.made}/${directive.maxPieces}편)` : ` (${directive.made}편째)`}`);
   const existingLines = existing.slice(0, 30)
     .map((e) => `- (${e.kind}) ${e.title}${e.keyword ? ` [키워드: ${e.keyword}]` : ''}`).join('\n');
@@ -701,6 +784,9 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     // 채널 목표(2026-09-08) — 절기·제철 바로 뒤, 로테이션·검색 표보다 앞. 인스타 목표는 '무엇을 보고 고르나'를
     // 통째로 바꾸므로 신호들보다 먼저 읽혀야 한다. 미지정은 무주입(종전 프롬프트 그대로).
     (target ? `${topicTargetBlock(target)}\n\n` : '') +
+    // 최근 수종 제외(2026-09-17) — 이 블록만은 지시 중에도 넣는다. 아래 후보 게이트가 지시와 무관하게
+    // 기각하므로 코드와 프롬프트가 같은 말을 한다(로테이션 블록을 지시 중에 뺀 이유는 그 반대였다).
+    (() => { const b = speciesRecentBlock(speciesRecent, CONFIG.speciesRecentDays); return b ? `${b}\n` : ''; })() +
     // 로테이션 블록은 '제안 불가'를 말한다 — 지시 중엔 코드가 상한을 통과시키므로 지시끼리 충돌하지 않게 뺀다.
     (directive ? '' : (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov, speciesCap); return b ? `${b}\n\n` : ''; })()) +
     (directive ? '' : (() => { const b = themeRotationBlock(getBrand()?.topicThemes, themeCov); return b ? `${b}\n\n` : ''; })()) +
@@ -845,10 +931,10 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     let similarFallback: ContentIdea | null = null;
     let similarFallbackLine = '';   // 그 후보의 수요 판정 문구(기억 경로는 demandRows 에 없다 — 채택 로그용)
     // 후순위 보관함 — 라운드 안에서만 산다(라운드 밖에 두면 1라운드 기각 사유를 되먹인 뒤에도
-    // 그 라운드의 후보가 2라운드 끝에 되살아난다). rank 0=비수기, 1=기아 방지 밸브(아래).
+    // 그 라운드의 후보가 2라운드 끝에 되살아난다). rank 0=비수기, 1=기아 방지 밸브(아래), 2=최근 수종.
     // line 은 그 후보의 판정 문구 — 채택 로그가 '조회 없음'으로 새지 않게 함께 들고 간다(기억 경로는
-    // 조회 대상에서 빠져 demandRows 에 없다).
-    const demoted: Array<{ idea: ContentIdea; rank: 0 | 1; line: string }> = [];
+    // 조회 대상에서 빠져 demandRows 에 없다). recent 는 rank 2 의 사유(로그 문구용).
+    const demoted: Array<{ idea: ContentIdea; rank: 0 | 1 | 2; line: string; recent?: { name: string; daysAgo: number } }> = [];
     for (const { cand, gate } of gated) {
       const { title, keyword } = cand;
       if (recentAuto.includes(title)) {
@@ -864,12 +950,31 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
         rejects.push(`"${title}"=브랜드가 안 다루는 소재(${off})`);
         continue;
       }
+      // 보관소 지시 강제(하드, 비용 0, 2026-09-16) — 지시가 보관소를 가리키면 목록 밖 수종은 여기서 막는다.
+      // 지시 중엔 수요·계열·축 게이트가 전부 통과라, 이 그물이 없으면 목록 밖 주제가 그대로 발행까지 간다.
+      if (libGate && offLibrarySpecies(`${title} ${keyword ?? ''}`, libSpecies, (t) => findSpeciesLoose(t)?.name)) {
+        console.log(`[auto-cycle] 아이디어 기각(보관소 밖 수종) — "${title}"`);
+        rejects.push(`"${title}"=보관소에 없는 수종(지시는 보관소에 소재가 있는 수종만 — 예: ${libSpecies.slice(0, 8).join(', ')})`);
+        continue;
+      }
       // 시기 소재 게이트(하드, 비용 0) — 검색량 게이트는 keyword 만 재므로 제목의 달력 소재를 따로 본다
       // (2026-08-27: "활엽수" 키워드(시즌 0.81)에 단풍 글이 묻어 나감). 이번 달·다음 달 밖이면 기각.
       const offSeason = offSeasonSubject(`${title} ${keyword ?? ''}`, getBrand()?.seasonalSubjects);
       if (offSeason) {
         console.log(`[auto-cycle] 아이디어 기각(시기 밖 소재) — "${title}" (${offSeason.term}: ${formatMonths(offSeason.months)}, 지금 ${new Date().getMonth() + 1}월)`);
         rejects.push(`"${title}"=시기 밖 소재(${offSeason.term}은 ${formatMonths(offSeason.months)} — 지금~다음 달 검색 소재만)`);
+        continue;
+      }
+      // 최근 수종 게이트(하드, 비용 0, 2026-09-17 사용자 확정) — 창 안에 다룬 수종은 각도·행위를 바꿔도 기각.
+      // 카운트 상한과 다른 축이다: 상한은 '30일에 몇 편'만 재서 6일·3일 간격 재등장을 규칙 안으로 허용했다
+      // (모과나무 09-10→09-16, 석류나무 09-13→09-16 — 둘 다 누적 1편/상한 2편, 행위도 달라 쿨다운 미발동).
+      // **지시 중에도 건다** — 사장님이 지시문에 직접 쓴 조건이라 완화 대상이 아니다.
+      // 마지막 라운드는 기각이 아니라 후순위로 낮춘다(아래 보관 지점) — 카탈로그 79종 중 창 안이 32종이라
+      // 여유가 크지 않고, 그 때문에 슬롯이 서는 것은 사장님이 원한 바가 아니다(검색 수요 밸브와 같은 형태).
+      const recentSp = usedRecently(`${title} ${keyword ?? ''}`, speciesRecent, speciesKeyOf);
+      if (recentSp && attempt < IDEA_ROUNDS - 1) {   // 마지막 라운드는 기각 대신 후순위(아래 보관 지점)
+        console.log(`[auto-cycle] 아이디어 기각(최근 수종) — "${title}" (${recentSp.name} ${recentSp.daysAgo}일 전)`);
+        rejects.push(`"${title}"=최근 ${CONFIG.speciesRecentDays}일 안에 다룬 수종(${recentSp.name} ${recentSp.daysAgo}일 전 — 아직 안 다룬 수종으로)`);
         continue;
       }
       // 수종 월 상한 게이트(하드, 비용 0, 2026-08-27) — 최근 30일 같은 수종 블로그가 상한이면 어떤 각도든 기각.
@@ -975,7 +1080,9 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
         // 경로 — 포도 4편째 유사 폴백 채택 — 가 감쇠 완화 뒤로 다시 열린다).
         // 검색량 하한 미달(마지막 라운드 완화로 demote 된 것 포함)은 폴백 자격도 없다 — 2026-08-27 실사고:
         // "올리브나무 화분 재배" 10미만/월이 유사 폴백으로 채택돼 게이트가 무력화됐다.
-        if (!similarFallback && gate.level === 'none' && !demand.relaxed) {
+        // 최근 수종(마지막 라운드 후순위 후보)은 폴백 자격도 없다(2026-09-17) — 여기서 걸러 주지 않으면
+        // 최근 수종이 유사 폴백 경로로 채택돼 게이트가 무력화된다(수요 하한 미달을 자격에서 뺀 것과 같은 구멍).
+        if (!similarFallback && gate.level === 'none' && !demand.relaxed && !recentSp) {
           similarFallback = { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
           similarFallbackLine = demand.line;   // 마지막 라운드에 기억으로 후순위가 된 후보가 여기로 온다(로그가 '조회 없음'으로 새지 않게)
         }
@@ -995,6 +1102,23 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       // 보관하면 수종 앵커·유사·소재 포화 게이트를 건너뛴 후보가 라운드 끝에 채택돼, 유사 폴백 자격을
       // 계열 게이트 none 으로 좁혀 막았던 구멍이 두 번째 폴백 경로로 다시 열린다(위 유사 폴백 자격
       // 주석의 포도 4편 사고 계보). 로그는 항상, 보관은 자격(계열 none)일 때만 — 유사 폴백과 같은 규칙.
+      // 최근 수종 후순위(마지막 라운드 기아 방지, 2026-09-17) — 보관은 **여기서** 한다. 게이트 자리에서 바로
+      // 보관하면 수종 앵커·유사·소재 포화를 건너뛴 후보가 라운드 끝에 채택된다(아래 비수기 보관 주석과 같은 이유).
+      // rank 2 — 비수기(0)·수요 미달(1)보다 뒤고, 유사 폴백에도 진다: '안 다룬 수종의 유사 각도'가
+      // '최근 다룬 수종의 새 각도'보다 낫다(사장님이 고른 축은 수종 로테이션이다).
+      if (recentSp) {
+        console.log(`[auto-cycle] 아이디어 후순위(최근 수종·기아 방지) — "${title}" (${recentSp.name} ${recentSp.daysAgo}일 전)`);
+        rejects.push(`"${title}"=후순위(최근 ${CONFIG.speciesRecentDays}일 안에 다룬 수종 — ${recentSp.name} ${recentSp.daysAgo}일 전)`);
+        if (gate.level === 'none') {
+          demoted.push({
+            idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) },
+            rank: 2,
+            line: demand.line,
+            recent: recentSp,
+          });
+        }
+        continue;
+      }
       if (demand.verdict === 'demote' && !directive) {
         console.log(demand.relaxed
           ? `[auto-cycle] 아이디어 후순위(검색 수요 미달·기아 방지) — "${title}" (${demand.line})`
@@ -1028,10 +1152,12 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     // (rank 1)은 검색량이 실측으로 0 에 가까운 후보라, 검색량이 있을 수 있는 유사 폴백에 진다(리뷰 I3).
     const adoption = pickRoundAdoption(demoted, !!similarFallback);
     if (adoption?.source === 'demoted') {
-      const { idea, rank, line } = adoption.pick;
-      console.log(rank === 1
-        ? `[auto-cycle] 수요 미달 후보 채택(기아 방지) — "${idea.title}"`
-        : `[auto-cycle] 수요 비수기 후보 채택(대안 없음) — "${idea.title}"`);
+      const { idea, rank, line, recent } = adoption.pick;
+      console.log(recent
+        ? `[auto-cycle] 최근 수종 후보 채택(기아 방지) — "${idea.title}" (${recent.name} ${recent.daysAgo}일 전 · 안 다룬 수종 후보 없음)`
+        : rank === 1
+          ? `[auto-cycle] 수요 미달 후보 채택(기아 방지) — "${idea.title}"`
+          : `[auto-cycle] 수요 비수기 후보 채택(대안 없음) — "${idea.title}"`);
       logDemandAdopt(idea.title, idea.keyword, line);
       recentAuto.push(idea.title);
       if (recentAuto.length > 20) recentAuto.shift();

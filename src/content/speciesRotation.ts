@@ -71,6 +71,70 @@ export function speciesCapFor(volume: number | undefined, base = SPECIES_MONTHLY
   return base;
 }
 
+/**
+ * 최근 사용 수종 제외 창(기본값, 2026-09-17 사용자 확정) — 실제 값은 CONFIG.speciesRecentDays.
+ *
+ * 종전 규칙은 카운트뿐이었다: 30일에 같은 수종 2편(수요 큰 수종 3~4편). 그래서 날짜 간격은 아무도 안
+ * 재고 있었고, 며칠 만의 재등장이 규칙 안이었다 — 실측 2026-09-16: 모과나무 09-10→09-16(6일), 석류나무
+ * 09-13→09-16(3일). 둘 다 누적 1편이라 상한에 안 닿았고 행위도 달라(전정→묘목, 시비→월동) 계열 쿨다운도
+ * 안 걸렸다. 사장님: "최근 주제로 사용한 것들이 계속 나온다 — 최근 사용한 주제는 안 쓰기로 하지 않았나?"
+ */
+export const SPECIES_RECENT_DAYS = 30;
+
+/**
+ * 수종별 '며칠 전에 마지막으로 다뤘나'(순수) — 창 안의 가장 최근 1건만 남긴다.
+ *
+ * speciesOf 를 호출부에서 주입받는다 — 카탈로그 대조(speciesInText)만으로는 사전에 없는 새 이름을 놓치는데
+ * (아로니아 실사고 2026-09-16), 그 판정 눈은 호출부마다 다르다. 지도를 만들 때와 후보를 잴 때 **같은 눈**을
+ * 쓰는 것이 이 함수의 유일한 계약이다(다르면 키가 안 맞아 게이트가 조용히 통과한다).
+ */
+export function speciesRecency(
+  items: Array<{ title: string; keyword?: string; ts: string }>,
+  speciesOf: (text: string) => string | null | undefined,
+  now = new Date(), days = SPECIES_RECENT_DAYS,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  if (days <= 0) return out;
+  const nowMs = now.getTime();
+  const since = nowMs - days * 86_400_000;
+  for (const it of items) {
+    const t = new Date(it.ts).getTime();
+    if (!Number.isFinite(t) || t < since || t > nowMs + 60_000) continue;
+    const sp = speciesOf(`${it.title} ${it.keyword ?? ''}`);
+    if (!sp) continue;
+    const ago = Math.max(0, Math.floor((nowMs - t) / 86_400_000));
+    const prev = out.get(sp);
+    if (prev === undefined || ago < prev) out.set(sp, ago);
+  }
+  return out;
+}
+
+/** 후보가 최근 창 안에 다룬 수종인가(순수) — {name, daysAgo} 또는 null. speciesOf 는 지도와 같은 눈. */
+export function usedRecently(
+  text: string, recency: Map<string, number>,
+  speciesOf: (text: string) => string | null | undefined,
+): { name: string; daysAgo: number } | null {
+  if (!recency.size) return null;
+  const sp = speciesOf(text);
+  if (!sp) return null;
+  const ago = recency.get(sp);
+  return ago === undefined ? null : { name: sp, daysAgo: ago };
+}
+
+/**
+ * 프롬프트 블록 — 최근 N일 다룬 수종(제안 금지).
+ *
+ * 금지형으로 쓴다. 지시 중에도 코드가 같이 막기 때문이다 — 코드는 통과시키는데 프롬프트만 금지하면
+ * 지시끼리 충돌한다(수종·축 로테이션 블록을 지시 중에 뺀 이유가 그것이었다). 여기는 반대로 양쪽이 같다.
+ */
+export function speciesRecentBlock(recency: Map<string, number>, days = SPECIES_RECENT_DAYS): string {
+  if (!recency.size || days <= 0) return '';
+  const rows = [...recency.entries()].sort((a, b) => (a[1] - b[1]) || a[0].localeCompare(b[0]))
+    .map(([name, ago]) => `${name}(${ago}일 전)`);
+  return `[최근 ${days}일 안에 다룬 수종 — 제안 금지]\n${rows.join(', ')}\n`
+    + '이 수종은 각도·행위를 바꿔도 제안하지 마라(코드가 기각한다). 아직 안 다룬 수종에서 고른다.\n';
+}
+
 /** cap 인자 정규화(순수) — 숫자면 그대로, 함수면 수종별 상한. 종전 호출부는 그대로 동작한다. */
 function capOf(cap: number | ((name: string) => number), name: string): number {
   if (typeof cap !== 'function') return cap;
