@@ -56,6 +56,59 @@ export function overThemeCap(
   return n >= cap ? { theme: th, count: n } : null;
 }
 
+/**
+ * 최근 사용 축 제외 창(기본값, 2026-09-17 사용자 확정) — 실제 값은 CONFIG.themeRecentDays.
+ *
+ * 수종에 건 날짜 창(speciesRotation.SPECIES_RECENT_DAYS)과 같은 모양이고 같은 결함을 고친다. 축 상한은
+ * '30일에 5편'이라 하루 세 편을 전부 전정으로 채워도 규칙 안이었다. 실측 2026-09-17(최근 30일 70편):
+ * 가지치기 11 · 거름 11 · 수확 8 · 묘목 구매 6 — 네 축이 절반을 먹었고 24축 중 6축은 한 편도 없었다.
+ * 창은 7일 — 축 24개에 하루 2.5편이면 한 바퀴가 ~10일이라 굶지 않는다.
+ */
+export const THEME_RECENT_DAYS = 7;
+
+/** 축별 '며칠 전에 마지막으로 썼나'(순수) — 창 안의 가장 최근 1건. themeOf 는 지도·검사 공용 눈. */
+export function themeRecency(
+  items: Array<{ title: string; keyword?: string; ts: string }>,
+  themeOf: (text: string) => string | null | undefined,
+  now = new Date(), days = THEME_RECENT_DAYS,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  if (days <= 0) return out;
+  const nowMs = now.getTime();
+  const since = nowMs - days * 86_400_000;
+  for (const it of items) {
+    const t = new Date(it.ts).getTime();
+    if (!Number.isFinite(t) || t < since || t > nowMs + 60_000) continue;
+    const th = themeOf(`${it.title} ${it.keyword ?? ''}`);
+    if (!th) continue;
+    const ago = Math.max(0, Math.floor((nowMs - t) / 86_400_000));
+    const prev = out.get(th);
+    if (prev === undefined || ago < prev) out.set(th, ago);
+  }
+  return out;
+}
+
+/** 후보가 최근 창 안에 쓴 축인가(순수) — {theme, daysAgo} 또는 null. */
+export function usedThemeRecently(
+  text: string, recency: Map<string, number>,
+  themeOf: (text: string) => string | null | undefined,
+): { theme: string; daysAgo: number } | null {
+  if (!recency.size) return null;
+  const th = themeOf(text);
+  if (!th) return null;
+  const ago = recency.get(th);
+  return ago === undefined ? null : { theme: th, daysAgo: ago };
+}
+
+/** 프롬프트 블록 — 최근 N일 쓴 축(제안 금지). 코드가 같이 막으므로 금지형으로 쓴다(지시 중에도 주입). */
+export function themeRecentBlock(recency: Map<string, number>, days = THEME_RECENT_DAYS): string {
+  if (!recency.size || days <= 0) return '';
+  const rows = [...recency.entries()].sort((a, b) => (a[1] - b[1]) || a[0].localeCompare(b[0]))
+    .map(([theme, ago]) => `${theme}(${ago}일 전)`);
+  return `[최근 ${days}일 안에 쓴 주제 축 — 제안 금지]\n${rows.join(', ')}\n`
+    + '수종을 바꿔도 이 축이면 기각된다(코드가 막는다). 아래 로테이션의 적게 다룬 축에서 골라라.\n';
+}
+
 /** 프롬프트 블록 — 상한 도달(제안 금지) · 최근 다룸 · 아직 안 다룬 축(우선, 발굴 검색어 예시 동반). */
 export function themeRotationBlock(
   themes: TopicTheme[] | undefined,

@@ -46,7 +46,7 @@ import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
 import { claudeCliProblem } from '../llm/claudeCli';
-import { startAutoCycle, proposeContentIdeas, activeDirective, autorunDirective, setAutorunDirective, clearAutorunDirective, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision, speciesCoverageFor, usedRecentlyFor } from '../autonomy/scheduler';
+import { startAutoCycle, proposeContentIdeas, activeDirective, autorunDirective, setAutorunDirective, clearAutorunDirective, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision, speciesCoverageFor, usedRecentlyFor, usedThemeRecentlyFor } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
@@ -4176,6 +4176,7 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
         // 최근 수종 게이트(2026-09-17) — 예고 경로는 후보 루프를 통째로 우회하므로 여기서도 막는다.
         // dropped 가 아니라 보류(pending 유지) — 소재 포화와 같은 성질이다: 창이 지나면 저절로 풀린다.
         const recentSp = (off || satur.length) ? null : usedRecentlyFor(due.topic, tickBrand || undefined);
+        const recentTh = (off || satur.length || recentSp) ? null : usedThemeRecentlyFor(due.topic, tickBrand || undefined);
         if (off) {
           promiseStore().update(due.id, { status: 'dropped' });
           console.log(`[auto-cycle] 예고 기각(브랜드 범위 밖) — "${due.topic.slice(0, 40)}" (소재 "${off}") → dropped`);
@@ -4183,6 +4184,8 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
           console.log(`[auto-cycle] 예고 보류(소재 포화) — "${due.topic.slice(0, 40)}" ≈ "${satur[0]!.title.slice(0, 30)}" → 신규 아이디어로 폴백`);
         } else if (recentSp) {
           console.log(`[auto-cycle] 예고 보류(최근 수종) — "${due.topic.slice(0, 40)}" (${recentSp.name} ${recentSp.daysAgo}일 전) → 신규 아이디어로 폴백`);
+        } else if (recentTh) {
+          console.log(`[auto-cycle] 예고 보류(최근 축) — "${due.topic.slice(0, 40)}" (${recentTh.theme} ${recentTh.daysAgo}일 전) → 신규 아이디어로 폴백`);
         } else {
           // 검색 수요 게이트(2026-08-26 리뷰 C1) — 기존 검사(범위·포화) 뒤, 채택 직전.
           // 미달은 pending 유지가 아니라 dropped 다: 월 검색량은 기다린다고 바뀌지 않아(포화처럼 시간이
@@ -4231,6 +4234,7 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
           // 최근 수종 게이트(2026-09-17) — 형제 소진도 후보 루프를 우회하는 공급로다. 계열 쿨다운과 같은
           // 처리(보류·pending 유지) — 창이 지나면 저절로 풀리고, 중복은 소진 시점 재검증이 따로 거른다.
           const recentCl = (off || avoided || dupWhy || sat.length || cooledCl) ? null : usedRecentlyFor(`${cand.title} ${cand.keyword}`, tickBrand || undefined);
+          const recentThCl = (off || avoided || dupWhy || sat.length || cooledCl || recentCl) ? null : usedThemeRecentlyFor(`${cand.title} ${cand.keyword}`, tickBrand || undefined);
           if (off || avoided || dupWhy) {
             clusterStore().update(cand.id, { status: 'dropped' });
             console.log(`[auto-cycle] 클러스터 기각 — "${cand.keyword}" (${off ? `소재 "${off}"` : avoided ? `리서치 폐기 판정(${avoided.reason.slice(0, 40)})` : dupWhy}) → dropped`);
@@ -4240,6 +4244,8 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
             console.log(`[auto-cycle] 클러스터 보류(계열 쿨다운 "${cooledCl}") — "${cand.keyword}" → 신규 아이디어로 폴백`);
           } else if (recentCl) {
             console.log(`[auto-cycle] 클러스터 보류(최근 수종) — "${cand.keyword}" (${recentCl.name} ${recentCl.daysAgo}일 전) → 신규 아이디어로 폴백`);
+          } else if (recentThCl) {
+            console.log(`[auto-cycle] 클러스터 보류(최근 축) — "${cand.keyword}" (${recentThCl.theme} ${recentThCl.daysAgo}일 전) → 신규 아이디어로 폴백`);
           } else {
             // 검색 수요 게이트(2026-08-26 리뷰 C1) — 형제는 자동완성 유래라 약한 자연 방어가 있지만
             // 검색량 자체는 검증된 적이 없다. 미달이면 리서치 폐기 소급과 같은 메커니즘(dropped)으로

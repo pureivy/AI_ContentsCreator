@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, shouldRememberDemandReject } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, orderCandidates, shouldRememberDemandReject } from './scheduler';
 import type { DemandRow } from '../analytics/topicDemand';
 
 describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
@@ -484,15 +484,20 @@ describe('pickRoundAdoption — 후순위 vs 유사 폴백(순수)', () => {
   it('rank 0 이 섞여 있으면 폴백이 있어도 rank 0 을 고른다(pickDemoted 순서 그대로)', () => {
     expect(pickRoundAdoption([e('수요미달', 1), e('비수기', 0)], true)).toEqual({ source: 'demoted', pick: e('비수기', 0) });
   });
-  // 최근 수종(rank 2, 2026-09-17) — '안 다룬 수종의 유사 각도'가 '최근 다룬 수종의 새 각도'보다 낫다.
-  it('rank 2(최근 수종)는 유사 폴백에 진다', () => {
-    expect(pickRoundAdoption([e('최근수종', 2)], true)).toEqual({ source: 'fallback' });
+  // 로테이션 후순위(rank 2=최근 축, 3=최근 수종, 2026-09-17) — '안 겹치는 소재의 유사 각도'가
+  // '겹치는 소재의 새 각도'보다 낫다.
+  it('rank 2(최근 축)·3(최근 수종) 모두 유사 폴백에 진다', () => {
+    expect(pickRoundAdoption([e('최근축', 2)], true)).toEqual({ source: 'fallback' });
+    expect(pickRoundAdoption([e('최근수종', 3)], true)).toEqual({ source: 'fallback' });
   });
-  it('폴백이 없으면 rank 2 도 채택된다(좌초 대신 생산 — 기아 방지 밸브)', () => {
-    expect(pickRoundAdoption([e('최근수종', 2)], false)).toEqual({ source: 'demoted', pick: e('최근수종', 2) });
+  it('폴백이 없으면 rank 2·3 도 채택된다(좌초 대신 생산 — 기아 방지 밸브)', () => {
+    expect(pickRoundAdoption([e('최근수종', 3)], false)).toEqual({ source: 'demoted', pick: e('최근수종', 3) });
   });
-  it('rank 1 이 rank 2 를 이긴다 — 수종 로테이션이 검색량 하한보다 뒤가 아니다', () => {
-    expect(pickRoundAdoption([e('최근수종', 2), e('수요미달', 1)], false)).toEqual({ source: 'demoted', pick: e('수요미달', 1) });
+  it('최근 축(2)이 최근 수종(3)을 이긴다 — 같은 나무가 또 나오는 쪽이 눈에 더 띈다', () => {
+    expect(pickRoundAdoption([e('최근수종', 3), e('최근축', 2)], false)).toEqual({ source: 'demoted', pick: e('최근축', 2) });
+  });
+  it('rank 1 이 rank 2·3 을 이긴다 — 로테이션 겹침이 검색량 하한보다 뒤다', () => {
+    expect(pickRoundAdoption([e('최근수종', 3), e('수요미달', 1)], false)).toEqual({ source: 'demoted', pick: e('수요미달', 1) });
   });
 });
 
@@ -651,5 +656,36 @@ describe('directiveWantsLibrary / offLibrarySpecies — 지시가 보관소를 �
   it("한 글자 어간은 안 쓴다 — '감나무'를 '감' 으로 줄이면 '감기·감자' 까지 통과한다", async () => {
     const { offLibrarySpecies } = await import('./scheduler');
     expect(offLibrarySpecies('감귤 수확 후 거름', ['감나무'], () => undefined)).toBe(true);
+  });
+});
+
+// 후보 검사 순서(2026-09-17 사용자 요청) — 1차 계열, 2차 검색량. 게이트를 통과한 첫 후보가 채택되므로
+// 이 순서가 곧 '같은 조건이면 무엇이 이기나'다.
+describe('orderCandidates — 계열 먼저, 그다음 검색량', () => {
+  const c = (id: string, level: string, vol?: number) => ({ id, level, vol });
+  const run = (xs: Array<{ id: string; level: string; vol?: number }>): string[] =>
+    orderCandidates(xs, (x) => x.level, (x) => x.vol).map((x) => x.id);
+
+  it('검색량 큰 후보가 앞선다', () => {
+    expect(run([c('적음', 'none', 30), c('많음', 'none', 3000)])).toEqual(['많음', '적음']);
+  });
+
+  it('계열이 검색량을 이긴다 — 쿨다운은 건강 규칙, 검색량은 기대 수익', () => {
+    expect(run([c('소프트대박', 'soft', 9000), c('깨끗', 'none', 30)])).toEqual(['깨끗', '소프트대박']);
+  });
+
+  it('측정값 없는 후보는 0 이 아니라 동점 — 수요 목록 밖 틈새를 뒤로 밀지 않는다', () => {
+    // 하스카프베리(수요 목록 밖)가 최고 성적을 냈다. 모름을 0 으로 깎으면 그 발견을 막는다.
+    expect(run([c('모름A', 'none'), c('측정됨', 'none', 50), c('모름B', 'none')]))
+      .toEqual(['모름A', '측정됨', '모름B']);   // 모름끼리는 두뇌 순서 유지, 사이에 낀 측정값은 자리 그대로
+  });
+
+  it('동점·모름은 두뇌가 내놓은 순서(자신 있는 것부터)를 지킨다', () => {
+    expect(run([c('첫째', 'none', 100), c('둘째', 'none', 100)])).toEqual(['첫째', '둘째']);
+  });
+
+  it('빈 목록·전부 소프트도 안전하다', () => {
+    expect(run([])).toEqual([]);
+    expect(run([c('a', 'soft', 10), c('b', 'soft', 99)])).toEqual(['b', 'a']);
   });
 });

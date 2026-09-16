@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   contentTokens, familyVolume, seasonIndex, demandScore, demandVerdict, formatDemandLine,
-  buildDemandBlock, assessCandidatesDemand, type DemandRow, type DemandSnap, BLOCK_ROWS, SNAP_MAX_SEEDS, MAX_WINNER_SEEDS } from './topicDemand';
+  buildDemandBlock, assessCandidatesDemand, mergeDemandRows, type DemandRow, type DemandSnap, BLOCK_ROWS, SNAP_MAX_SEEDS, MAX_WINNER_SEEDS } from './topicDemand';
 
 // 커넥터는 전량 가짜 — 실제 네이버 호출 없이 묶음 호출 횟수·매핑만 검증한다.
 const H = vi.hoisted(() => ({
@@ -336,7 +336,8 @@ describe('스냅샷 IO — 킬스위치·시드 슬롯·하루 1회·실패 시 
     const { refreshDemandSnapshot, demandSignalBlock } = await import('./topicDemand');
     await refreshDemandSnapshot();
     const snap = JSON.parse(fs.readFileSync(snapFile(), 'utf-8')) as DemandSnap;
-    expect(snap.rows.map((r) => r.keyword)).toEqual(['사과나무 비료', '블루베리 비료', '블루베리 묘목']); // winners 중복은 합쳐짐
+    // 행 순서는 점수순이다(2026-09-17 누적 도입) — 여기서 보는 건 '어떤 시드가 실렸나'와 winners 중복 합침.
+    expect([...snap.rows.map((r) => r.keyword)].sort()).toEqual(['블루베리 묘목', '블루베리 비료', '사과나무 비료']);
     expect(snap.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     const before = H.calls.length;
     await refreshDemandSnapshot();
@@ -545,5 +546,48 @@ describe('수요 미달 기각 기억 — TTL·정규화 대조·킬스위치·�
     expect(m.demandRejectFor('다른브랜드', '가을 거름')).toBeNull();
     expect(m.demandRejectBlock('다른브랜드')).toBe('');
     expect(fs.existsSync(rejFile('다른브랜드'))).toBe(false);
+  });
+});
+
+describe('mergeDemandRows — 실측 누적(2026-09-17 "표를 키운다")', () => {
+  const row = (keyword: string, volume: number, ts?: string) =>
+    ({ keyword, volume, approx: false, familyMax: volume, ...(ts ? { ts } : {}) });
+
+  it('새 키워드는 표에 더해진다', () => {
+    const out = mergeDemandRows({ date: '2026-09-17', rows: [row('능소화', 47000)] }, [row('소나무 월동', 5)], '2026-09-17');
+    expect(out?.map((r) => r.keyword)).toEqual(['능소화', '소나무 월동']);
+  });
+
+  it('같은 키워드는 새 측정이 이긴다 — 수요는 계절을 탄다', () => {
+    const out = mergeDemandRows({ date: '2026-09-01', rows: [row('능소화', 100, '2026-09-01')] }, [row('능소화', 47000)], '2026-09-17');
+    expect(out).toHaveLength(1);
+    expect(out?.[0]).toMatchObject({ volume: 47000, ts: '2026-09-17' });
+  });
+
+  it('띄어쓰기만 다른 표기는 한 행으로 합친다', () => {
+    const out = mergeDemandRows({ date: '2026-09-17', rows: [row('가을 거름', 0)] }, [row('가을거름', 40)], '2026-09-17');
+    expect(out).toHaveLength(1);
+    expect(out?.[0]!.volume).toBe(40);
+  });
+
+  it('TTL 지난 행은 떨어진다', () => {
+    const out = mergeDemandRows(
+      { date: '2026-09-17', rows: [row('옛것', 900, '2026-06-01'), row('최근', 10, '2026-09-10')] },
+      [row('새것', 20)], '2026-09-17', 400, 60,
+    );
+    expect(out?.map((r) => r.keyword)).not.toContain('옛것');
+    expect(out?.map((r) => r.keyword)).toEqual(expect.arrayContaining(['최근', '새것']));
+  });
+
+  it('상한은 점수순으로 남긴다 — 프롬프트가 싣는 건 상위 행이다', () => {
+    const snap = { date: '2026-09-17', rows: [row('큰것', 50000, '2026-09-01'), row('작은것', 10, '2026-09-01')] };
+    const out = mergeDemandRows(snap, [row('중간', 500)], '2026-09-17', 2);
+    expect(out?.map((r) => r.keyword)).toEqual(['큰것', '중간']);
+  });
+
+  it('새 실측이 없거나 바뀐 게 없으면 null — 파일을 안 쓴다', () => {
+    expect(mergeDemandRows({ date: '2026-09-17', rows: [] }, [], '2026-09-17')).toBeNull();
+    const same = { date: '2026-09-17', rows: [row('능소화', 47000, '2026-09-17')] };
+    expect(mergeDemandRows(same, [row('능소화', 47000)], '2026-09-17')).toBeNull();
   });
 });

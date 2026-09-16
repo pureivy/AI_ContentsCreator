@@ -7,8 +7,15 @@
 export interface SpeciesEntry { name: string; aliases?: string[] }
 export interface SpeciesGroup { group: string; species: SpeciesEntry[] }
 
-/** 30일 내 같은 수종 블로그 상한(초과분부터 하드 기각). 하루 2편·수종 60여 종이면 수종당 2편/월이 자연 배분. */
-export const SPECIES_MONTHLY_CAP = 2;
+/**
+ * 30일 내 같은 수종 블로그 상한(초과분부터 하드 기각). 2 → 3(2026-09-17 사용자 확정).
+ *
+ * 2 는 최근 수종 창이 없던 시절의 숫자였다. 지금은 창(CONFIG.speciesRecentDays, 기본 10일)이 간격을 잡아
+ * 30일에 최대 4편이 물리적 한계라, 상한 2 는 창보다 먼저 막아 보너스 계단(성과·수요)을 가려 버렸다.
+ * 3 이면 보통 수종이 3편, 잘 되는 수종이 4편으로 한 자리 앞선다 — 계단이 살아난다.
+ * 용량 문제는 아니다: 수종을 단 글이 월 50편인데 카탈로그가 79종이라 병목은 상한이 아니라 제안 쪽이다.
+ */
+export const SPECIES_MONTHLY_CAP = 3;
 export const SPECIES_WINDOW_DAYS = 30;
 
 const compact = (s: string): string => (s ?? '').normalize('NFC').replace(/\s+/g, '');
@@ -133,6 +140,30 @@ export function speciesRecentBlock(recency: Map<string, number>, days = SPECIES_
     .map(([name, ago]) => `${name}(${ago}일 전)`);
   return `[최근 ${days}일 안에 다룬 수종 — 제안 금지]\n${rows.join(', ')}\n`
     + '이 수종은 각도·행위를 바꿔도 제안하지 마라(코드가 기각한다). 아직 안 다룬 수종에서 고른다.\n';
+}
+
+/**
+ * 성과 가중 월 상한(순수, 2026-09-17 사용자 확정) — 검색량과 **숏폼 조회수**를 나란히 본다.
+ *
+ * 사장님: "검색량 큰 수종을 좀 더 허용하고, 올린 숏츠 조회수가 많은 것도 좀 더 허용하면 어때?"
+ * perfRatio 는 그 수종 숏폼 조회수 중앙값 ÷ 우리 전체 중앙값(유튜브·인스타 중 큰 쪽). 절대 조회수가 아니라
+ * 배수인 이유는 두 채널의 눈금이 전혀 다르기 때문이다(실측 2026-09-17: 유튜브 중앙 1,055 · 인스타 888).
+ *
+ * 두 보너스를 **더하지 않고 큰 쪽만** 쓴다. 검색량과 조회수는 부분적으로 같은 것을 재는 신호라 더하면
+ * 한 수종이 상한을 독식한다 — 배롱나무(검색 100,550 · 조회 2.12배)가 정확히 그 모양이고, 로테이션 체계가
+ * 애초에 그 수종 8편/월 때문에 생겼다. 어느 한 축만 강해도 자리를 더 주되, 두 배로 주지는 않는다.
+ *
+ * 실효 상한은 결국 최근 수종 창(CONFIG.speciesRecentDays)이 정한다 — 10일 창이면 30일에 세 편이 물리적
+ * 최대치라, 여기서 4를 줘도 그 이상은 나올 수 없다. 이 함수는 천장이고 간격은 그쪽이 잡는다.
+ */
+export function speciesCapFrom(
+  signals: { searchVolume?: number; perfRatio?: number },
+  base = SPECIES_MONTHLY_CAP,
+): number {
+  const search = speciesCapFor(signals.searchVolume, base) - base;
+  const r = Number(signals.perfRatio);
+  const perf = !Number.isFinite(r) || r <= 0 ? 0 : r >= 3 ? 2 : r >= 1.5 ? 1 : 0;
+  return base + Math.max(search, perf);
 }
 
 /** cap 인자 정규화(순수) — 숫자면 그대로, 함수면 수종별 상한. 종전 호출부는 그대로 동작한다. */

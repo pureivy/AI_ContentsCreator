@@ -437,6 +437,76 @@ export async function syncShortsMetaPerformance(opts: { force?: boolean } = {}):
  *  rows: 쇼츠 1편 = 1행(발행 72h+ 경과분의 최신 YT·IG 조회수, 미측정 채널은 음수).
  *  미측정(-1)은 0 이 아니라 '없음'으로 다룬다 — 단일 채널만 발행된 계열이 합산 랭킹에서 '부진'으로
  *  오귀속되던 리뷰 지적 대응. 랭킹 키는 측정된 채널 중앙값의 최대값(채널 커버리지 차이에 강건). */
+/**
+ * 수종별 숏폼 성과 배수(순수, 2026-09-17) — 그 수종 조회수 중앙값 ÷ 우리 전체 중앙값, 유튜브·인스타 중 큰 쪽.
+ *
+ * 배수로 재는 이유는 두 채널의 눈금이 다르기 때문이다(실측: 유튜브 중앙 1,055 · 인스타 888).
+ * minSamples 로 표본을 막는다 — 2편이면 '중앙값'이 두 편 평균이라, 운 좋은 한 편이 상한을 열어 준다
+ * (실측 2026-09-17: 자두나무 4.54배·참나무 3.23배가 둘 다 2편이었다).
+ */
+export function speciesPerfRatios(
+  rows: ReadonlyArray<{ species: string; yt: number; ig: number }>,
+  minSamples = 3,
+): Map<string, number> {
+  const med = (xs: number[]): number | null => {
+    const a = xs.filter((x) => x >= 0).sort((x, y) => x - y);
+    return a.length ? (a.length % 2 ? a[(a.length - 1) / 2]! : Math.round((a[a.length / 2 - 1]! + a[a.length / 2]!) / 2)) : null;
+  };
+  const allYt: number[] = []; const allIg: number[] = [];
+  const by = new Map<string, { yt: number[]; ig: number[] }>();
+  for (const r of rows) {
+    if (!r?.species) continue;
+    const g = by.get(r.species) ?? { yt: [], ig: [] };
+    if (r.yt >= 0) { g.yt.push(r.yt); allYt.push(r.yt); }
+    if (r.ig >= 0) { g.ig.push(r.ig); allIg.push(r.ig); }
+    by.set(r.species, g);
+  }
+  const cy = med(allYt); const ci = med(allIg);
+  const out = new Map<string, number>();
+  for (const [sp, g] of by) {
+    if (Math.max(g.yt.length, g.ig.length) < minSamples) continue;
+    const y = med(g.yt); const i = med(g.ig);
+    const ry = y !== null && cy ? y / cy : 0;
+    const ri = i !== null && ci ? i / ci : 0;
+    const r = Math.max(ry, ri);
+    if (r > 0) out.set(sp, r);
+  }
+  return out;
+}
+
+/**
+ * 수종별 숏폼 성과 배수(실데이터) — 수종 월 상한의 두 번째 신호. 발행 72시간 경과분만(연령 편향 차단).
+ * speciesOf 는 호출부의 수종 판정 눈 — 최근 수종 게이트와 같은 함수를 넘겨야 키가 맞는다.
+ */
+export function speciesShortsPerf(
+  speciesOf: (text: string) => string | null | undefined,
+  slug?: string,
+  now = Date.now(),
+): Map<string, number> {
+  try {
+    const brand = slug ?? activeBrandSlug();
+    const rows: Array<{ species: string; yt: number; ig: number }> = [];
+    for (const s of shortsStore().list()) {
+      if ((s.brand ?? '') !== (brand || '')) continue;
+      const pubTs = s.youtubeTs ?? s.metaPublishedTs;
+      if (!pubTs) continue;
+      const age = now - new Date(pubTs).getTime();
+      if (!Number.isFinite(age) || age < 3 * 86_400_000) continue;
+      const samples = readMetrics(s.id);
+      const latest = (source: string): number => {
+        for (let i = samples.length - 1; i >= 0; i--) { const x = samples[i]!; if (x.source === source) return x.views; }
+        return -1;
+      };
+      const yt = latest('youtube:api'); const ig = latest('meta:ig');
+      if (yt < 0 && ig < 0) continue;
+      const piece = s.sourcePieceId ? (() => { try { return pieceStore().get(s.sourcePieceId!); } catch { return undefined; } })() : undefined;
+      const sp = speciesOf(`${piece?.title ?? s.title ?? s.topic ?? ''} ${piece?.keyword ?? s.keyword ?? ''}`);
+      if (sp) rows.push({ species: sp, yt, ig });
+    }
+    return speciesPerfRatios(rows);
+  } catch { return new Map(); }
+}
+
 export function aggregateShortsTopicRows(
   rows: Array<{ label: string; yt: number; ig: number }>,
 ): Array<{ label: string; n: number; ytMed: number | null; igMed: number | null }> {

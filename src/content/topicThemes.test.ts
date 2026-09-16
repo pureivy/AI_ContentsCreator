@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { themeInText, themeCoverage, overThemeCap, themeRotationBlock, THEME_MONTHLY_CAP } from './topicThemes';
+import { themeInText, themeCoverage, overThemeCap, themeRotationBlock, THEME_MONTHLY_CAP, themeRecency, usedThemeRecently, themeRecentBlock } from './topicThemes';
 import type { TopicTheme } from './topicThemes';
 
 const TH = [
@@ -120,5 +120,45 @@ describe('themeRotationBlock — 커버리지 하위 축 우선 지목', () => {
     const cov = new Map([['A', 5], ['B', 2], ['C', 0], ['D', 3], ['E', 5]]);
     const out = themeRotationBlock(themes, cov, 5);
     expect(out.indexOf('· C(0편)')).toBeLessThan(out.indexOf('· B(2편)'));
+  });
+});
+
+describe('themeRecency — 최근 사용 축 제외(2026-09-17 사용자 확정)', () => {
+  const thOf = (t: string): string | null => themeInText(t, TH);
+  const items = [
+    { title: '사과나무 접붙이기 요령', ts: d(2) },
+    { title: '배나무 접목 시기', ts: d(5) },              // 같은 축 더 옛 건은 덮지 않는다
+    { title: '감나무 심는 시기', ts: d(1) },
+    { title: '매실나무 벌레 약', ts: d(20) },             // 창 밖
+  ];
+
+  it('축별로 가장 최근 1건의 며칠 전만 남긴다', () => {
+    const r = themeRecency(items, thOf, NOW, 7);
+    expect(r.get('번식·접목·삽목')).toBe(2);
+    expect(r.get('심기·이식')).toBe(1);
+    expect(r.has('병충해·문제 진단')).toBe(false);   // 20일 전 — 창 밖
+  });
+
+  it('창 0 이면 빈 지도 — 게이트 끄기(THEME_RECENT_DAYS=0)', () => {
+    expect(themeRecency(items, thOf, NOW, 0).size).toBe(0);
+  });
+
+  it('usedThemeRecently — 수종을 바꿔도 같은 축이면 걸린다(카운트 상한과 다른 축)', () => {
+    const r = themeRecency([{ title: '사과나무 접붙이기', ts: d(2) }], thOf, NOW, 7);
+    expect(usedThemeRecently('호두나무 접목하는 법', r, thOf)).toEqual({ theme: '번식·접목·삽목', daysAgo: 2 });
+    expect(usedThemeRecently('호두나무 벌레 약 고르기', r, thOf)).toBeNull();
+    expect(usedThemeRecently('호두나무 이야기', r, thOf)).toBeNull();   // 축 없는 주제는 대상 아님
+  });
+
+  it('themeRecentBlock — 가까운 순으로 금지 목록을 쓴다', () => {
+    const b = themeRecentBlock(themeRecency(items, thOf, NOW, 7), 7);
+    expect(b).toContain('[최근 7일 안에 쓴 주제 축 — 제안 금지]');
+    expect(b).toContain('심기·이식(1일 전)');
+    expect(b).toContain('수종을 바꿔도');
+  });
+
+  it('themeRecentBlock — 빈 지도·창 0 이면 무주입', () => {
+    expect(themeRecentBlock(new Map(), 7)).toBe('');
+    expect(themeRecentBlock(new Map([['심기·이식', 1]]), 0)).toBe('');
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { speciesInText, speciesCoverage, overSpeciesCap, speciesRotationBlock, SPECIES_MONTHLY_CAP, speciesCapFor, speciesRecency, usedRecently, speciesRecentBlock } from './speciesRotation';
+import { speciesInText, speciesCoverage, overSpeciesCap, speciesRotationBlock, SPECIES_MONTHLY_CAP, speciesCapFor, speciesCapFrom, speciesRecency, usedRecently, speciesRecentBlock } from './speciesRotation';
 
 const CAT = [
   { group: '유실수', species: [{ name: '사과나무', aliases: ['사과'] }, { name: '배나무' }, { name: '블루베리', aliases: ['블루베리나무'] }, { name: '매실나무', aliases: ['매실'] }] },
@@ -60,29 +60,29 @@ describe('speciesRotationBlock — 제안 금지·피함·우선 목록', () => 
 
 describe('speciesCapFor — 수요 가중 월 상한(순수, 2026-09-04)', () => {
   it('수요가 크면 몇 편 더 허용한다', () => {
-    expect(speciesCapFor(7110)).toBe(4);   // 회양목
-    expect(speciesCapFor(1930)).toBe(3);   // 홍매화
-    expect(speciesCapFor(230)).toBe(2);    // 포도나무 — 종전 그대로
+    expect(speciesCapFor(7110)).toBe(5);   // 회양목 — 기본 3 + 2
+    expect(speciesCapFor(1930)).toBe(4);   // 홍매화 — 기본 3 + 1
+    expect(speciesCapFor(230)).toBe(3);    // 포도나무 — 보너스 없음(기본값)
   });
   it('수요 미상·0 은 종전 상한 그대로 — 조이지 않는다', () => {
     // 이 채널 최고 성적(하스카프베리 검색 1,085회)이 수요 목록 밖 수종에서 나왔다.
     // 낮은 수요로 상한을 낮췄다면 그 발견 자체를 막았을 것이다.
-    expect(speciesCapFor(undefined)).toBe(2);
-    expect(speciesCapFor(0)).toBe(2);
-    expect(speciesCapFor(NaN)).toBe(2);
-    expect(speciesCapFor(22)).toBe(2);     // 배롱나무 — 종전대로 막힌다
+    expect(speciesCapFor(undefined)).toBe(3);
+    expect(speciesCapFor(0)).toBe(3);
+    expect(speciesCapFor(NaN)).toBe(3);
+    expect(speciesCapFor(22)).toBe(3);     // 수요 22/월 — 보너스 없음
   });
 });
 
 describe('overSpeciesCap — 수종별 상한 함수', () => {
   const catalog = [{ group: '관목', species: [{ name: '배롱나무' }, { name: '회양목' }] }];
-  const cov = new Map([['배롱나무', 2], ['회양목', 2]]);
+  const cov = new Map([['배롱나무', 3], ['회양목', 3]]);   // 기본 상한 3(2026-09-17)에 닿은 상태
 
   it('숫자 상한은 종전대로 동작한다', () => {
-    expect(overSpeciesCap('배롱나무 전정', cov, catalog)).toMatchObject({ name: '배롱나무', count: 2 });
+    expect(overSpeciesCap('배롱나무 전정', cov, catalog)).toMatchObject({ name: '배롱나무', count: 3 });
   });
   it('수종별 함수를 주면 그 수종만 여유가 생긴다', () => {
-    const capFor = (n: string) => (n === '회양목' ? 4 : 2);
+    const capFor = (n: string) => (n === '회양목' ? 5 : 3);
     expect(overSpeciesCap('회양목 생울타리', cov, catalog, capFor)).toBeNull();
     expect(overSpeciesCap('배롱나무 전정', cov, catalog, capFor)).not.toBeNull();
   });
@@ -91,7 +91,7 @@ describe('overSpeciesCap — 수종별 상한 함수', () => {
     expect(overSpeciesCap('배롱나무 전정', cov, catalog, boom)).not.toBeNull();
   });
   it('카탈로그에 없는 수종은 상한 대상이 아니다', () => {
-    expect(overSpeciesCap('하스카프베리 재배', cov, catalog, () => 4)).toBeNull();
+    expect(overSpeciesCap('하스카프베리 재배', cov, catalog, () => 5)).toBeNull();
   });
 });
 
@@ -142,5 +142,29 @@ describe('speciesRecency — 최근 사용 수종 제외(2026-09-17 사용자 �
   it('speciesRecentBlock — 빈 지도·창 0 이면 무주입', () => {
     expect(speciesRecentBlock(new Map(), 30)).toBe('');
     expect(speciesRecentBlock(new Map([['배롱나무', 3]]), 0)).toBe('');
+  });
+});
+
+describe('speciesCapFrom — 검색량·숏폼 조회수 가중 상한(2026-09-17 사용자 확정)', () => {
+  const B = 3;   // 기본 상한을 명시 — 기본값이 바뀌어도 계단 자체를 검증한다
+  it('숏폼이 우리 중앙값의 3배 이상이면 두 자리 더 준다', () => {
+    expect(speciesCapFrom({ perfRatio: 3.31 }, B)).toBe(5);   // 무화과
+  });
+  it('1.5배 이상이면 한 자리', () => {
+    expect(speciesCapFrom({ perfRatio: 2.12 }, B)).toBe(4);   // 배롱나무
+  });
+  it('중앙값 언저리·미달은 기본 상한 그대로 — 조이지는 않는다', () => {
+    expect(speciesCapFrom({ perfRatio: 1.01 }, B)).toBe(3);   // 감나무
+    expect(speciesCapFrom({ perfRatio: 0.6 }, B)).toBe(3);    // 단풍나무
+    expect(speciesCapFrom({}, B)).toBe(3);
+    expect(speciesCapFrom({ perfRatio: NaN }, B)).toBe(3);
+  });
+  it('두 신호는 더하지 않고 큰 쪽만 — 한 수종이 상한을 독식하지 못하게', () => {
+    // 배롱나무: 검색 100,550(+2) · 조회 2.12배(+1) → 6 이 아니라 5.
+    expect(speciesCapFrom({ searchVolume: 100550, perfRatio: 2.12 }, B)).toBe(5);
+  });
+  it('검색량만 커도, 조회수만 커도 자리를 받는다', () => {
+    expect(speciesCapFrom({ searchVolume: 7110 }, B)).toBe(5);
+    expect(speciesCapFrom({ searchVolume: 30, perfRatio: 3.5 }, B)).toBe(5);
   });
 });

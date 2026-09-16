@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Shorts } from '../content/shorts';
-import { shortsSignal, parseStatsResponse, shortsPerfDue, shouldRecordMemory, countSamples, shortsMetaPerfDue, parseFbVideoStats, aggregateShortsTopicRows, pickAnalyticsTargets, lastAnalyticsAt, ANALYTICS_MAX_VIDEOS, ANALYTICS_RECENT_SLOTS } from './shortsPerf';
+import { shortsSignal, parseStatsResponse, shortsPerfDue, shouldRecordMemory, countSamples, shortsMetaPerfDue, parseFbVideoStats, aggregateShortsTopicRows, speciesPerfRatios, pickAnalyticsTargets, lastAnalyticsAt, ANALYTICS_MAX_VIDEOS, ANALYTICS_RECENT_SLOTS } from './shortsPerf';
 
 describe('aggregateShortsTopicRows — 키워드 계열 중앙값 랭킹(순수, 2026-08-20 주제 되먹임)', () => {
   it('같은 계열 여러 편은 중앙값으로 묶고, 합산 중앙값 내림차순 정렬한다', () => {
@@ -173,5 +173,34 @@ describe('lastAnalyticsAt — 마지막 애널리틱스 수집 시각(순수)', 
   });
   it('깨진 시각은 무시한다', () => {
     expect(lastAnalyticsAt([{ measuredAt: '언젠가', source: 'youtube:analytics' }])).toBe(0);
+  });
+});
+
+describe('speciesPerfRatios — 수종별 숏폼 성과 배수(2026-09-17)', () => {
+  const r = (species: string, yt: number, ig: number) => ({ species, yt, ig });
+  // 전체 중앙값이 유튜브 1000·인스타 900 이 되도록 깐 표본.
+  const base = [
+    r('감나무', 1000, 900), r('감나무', 1000, 900), r('감나무', 1000, 900),
+    r('블루베리', 1000, 900), r('블루베리', 1000, 900), r('블루베리', 1000, 900),
+  ];
+
+  it('중앙값 대비 배수를 돌려준다 — 채널 중 큰 쪽', () => {
+    const out = speciesPerfRatios([...base, r('무화과', 1000, 2700), r('무화과', 1000, 2700), r('무화과', 1000, 2700)]);
+    expect(out.get('무화과')).toBeCloseTo(3, 1);   // 인스타 2700/900
+    expect(out.get('감나무')).toBeCloseTo(1, 1);
+  });
+
+  it('표본이 모자란 수종은 빠진다 — 운 좋은 한 편이 상한을 열면 안 된다', () => {
+    const out = speciesPerfRatios([...base, r('자두나무', 9000, 9000), r('자두나무', 9000, 9000)]);
+    expect(out.has('자두나무')).toBe(false);   // 2편 — minSamples 미달
+  });
+
+  it('미측정(-1)은 그 채널 계산에서만 빠진다', () => {
+    const out = speciesPerfRatios([...base, r('참나무', 3000, -1), r('참나무', 3000, -1), r('참나무', 3000, -1)]);
+    expect(out.get('참나무')).toBeCloseTo(3, 1);   // 유튜브만으로 판정
+  });
+
+  it('빈 입력은 빈 지도', () => {
+    expect(speciesPerfRatios([]).size).toBe(0);
   });
 });

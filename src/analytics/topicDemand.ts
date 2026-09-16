@@ -38,6 +38,8 @@ export interface DemandRow {
   /** 시즌 지수(0~1) — max(현재 월, 작년 다음달)/정점. 데이터 없으면 undefined(판정 생략). */
   seasonIdx?: number;
   direction?: '상승' | '하락' | '보합';
+  /** 이 행을 실측한 날(YYYY-MM-DD) — 누적 표의 나이·중복 판정용. 옛 스냅샷 행에는 없다(스냅샷 date 로 본다). */
+  ts?: string;
 }
 
 export type DemandVerdict = 'pass' | 'demote' | 'reject' | 'unknown';
@@ -67,6 +69,13 @@ export const MAX_WINNER_SEEDS = 8;   // winners 몫(나머지는 발굴 창 — 
 const STALE_DAYS = 3;     // 수요는 주 단위로 움직인다 — 이보다 낡은 스냅샷은 '실측'이라 부르지 않는다
 // 표에서 두뇌에 보여줄 행 수 — 시드가 40으로 늘어 상위만 잘라 보여도 축이 골고루 담긴다.
 export const BLOCK_ROWS = 16;
+/**
+ * 누적 실측 표(2026-09-17 사용자 확정 "표를 키운다") — 시드 조회만으로는 표가 26행에 머물렀다.
+ * 매 라운드 후보 8개를 이미 재고 있으면서 그 숫자를 버리고 있었다(기각분만 30일 기억). 통과·기각 가리지
+ * 않고 여기에 쌓으면 조회 비용 0으로 표가 매일 커지고, 프롬프트는 여전히 상위 BLOCK_ROWS 행만 싣는다.
+ */
+export const SNAP_MAX_ROWS = 400;
+export const SNAP_ROW_TTL_DAYS = 60;   // 수요는 계절을 탄다 — 두 달 넘은 실측은 표에서 뺀다
 
 /** 표기 정규화(공백 제거·소문자) — 스케줄러의 행 조회 폴백도 같은 규칙을 써야 '가을 거름'과 '가을거름'이
  *  서로 다른 키워드로 갈리지 않는다(그래서 모듈 밖으로 연다). */
@@ -330,6 +339,71 @@ export function demandSeeds(slug?: string, now = new Date()): string[] {
 }
 
 /**
+ * 실측 행 누적(순수, 2026-09-17) — 기존 표에 새 실측을 덮어 쓰고, 오래된 행을 떨군 뒤 상한으로 자른다.
+ *
+ * 같은 키워드는 **새 측정이 이긴다**(수요는 계절을 탄다). 자를 때는 최신순이 아니라 점수순으로 남긴다 —
+ * 프롬프트가 싣는 것이 상위 BLOCK_ROWS 행이므로, 오래됐어도 검색량이 큰 행이 표의 값어치다.
+ * 나이는 행의 ts 로 보고, ts 가 없는 옛 행은 스냅샷 date 를 나이로 쓴다.
+ * 바뀐 게 없으면 null — 호출부가 파일 쓰기를 건너뛴다.
+ */
+export function mergeDemandRows(
+  snap: DemandSnap | null,
+  fresh: readonly DemandRow[],
+  today: string,
+  max = SNAP_MAX_ROWS,
+  ttlDays = SNAP_ROW_TTL_DAYS,
+): DemandRow[] | null {
+  const clean = (fresh ?? []).filter((r) => r && typeof r.keyword === 'string' && normKw(r.keyword));
+  if (!clean.length) return null;
+  const cutoff = new Date(`${today}T00:00:00`).getTime() - ttlDays * 86_400_000;
+  const fresherThanTtl = (ts: string | undefined): boolean => {
+    if (!ts) return true;                                  // 날짜를 모르는 옛 행은 살려 둔다(아래 상한이 정리한다)
+    const t = new Date(`${ts}T00:00:00`).getTime();
+    return !Number.isFinite(t) || t >= cutoff;
+  };
+  const byKey = new Map<string, DemandRow>();
+  for (const r of snap?.rows ?? []) {
+    const k = normKw(r?.keyword ?? '');
+    if (!k) continue;
+    const ts = r.ts ?? snap?.date;
+    if (!fresherThanTtl(ts)) continue;
+    byKey.set(k, ts ? { ...r, ts } : r);
+  }
+  for (const r of clean) byKey.set(normKw(r.keyword), { ...r, ts: today });
+  const rows = [...byKey.values()].sort((a, b) => demandScore(b) - demandScore(a)).slice(0, max);
+  const same = rows.length === (snap?.rows?.length ?? -1)
+    && rows.every((r, i) => {
+      const o = snap!.rows[i];
+      return !!o && normKw(o.keyword) === normKw(r.keyword) && o.volume === r.volume
+        && o.familyMax === r.familyMax && o.seasonIdx === r.seasonIdx && o.ts === r.ts;
+    });
+  return same ? null : rows;
+}
+
+/**
+ * 후보 실측을 표에 누적(2026-09-17 사용자 확정 "표를 키운다") — 자율 틱이 라운드마다 부른다. 조회는 이미
+ * 끝나 있으므로 추가 비용 0. 통과·기각을 가리지 않는다(0/월 행도 실측이고, 점수순 정렬이 알아서 뒤로 민다).
+ *
+ * 스냅샷 파일이 아직 없으면 **만들지 않는다** — date 를 오늘로 박으면 일일 시드 갱신이 그날 통째로
+ * 건너뛰어진다(refreshDemandSnapshot 의 하루 1회 가드가 date 를 본다). 시드 갱신이 먼저 파일을 만든다.
+ */
+export function rememberDemandRows(rows: Iterable<DemandRow>, slug?: string): void {
+  try {
+    if (!CONFIG.topicDemandGate) return;
+    const s = slug ?? activeBrandSlug();
+    const snap = readDemandSnap(s);
+    if (!snap) return;
+    const merged = mergeDemandRows(snap, [...rows], localDateStr());
+    if (!merged) return;
+    const f = snapPath(s);
+    const tmp = `${f}.${process.pid}.tmp`;
+    // date 는 그대로 둔다 — 시드 갱신 표지이자 프롬프트의 신선도(STALE_DAYS) 기준이다.
+    fs.writeFileSync(tmp, JSON.stringify({ date: snap.date, rows: merged } satisfies DemandSnap, null, 2), 'utf-8');
+    fs.renameSync(tmp, f);
+  } catch { /* 누적 실패는 무해 — 다음 라운드에 다시 쌓인다 */ }
+}
+
+/**
  * 일일 수요 스냅샷 — perf-sync 틱에서 fire-and-forget. 같은 날 재호출은 no-op.
  * 5개씩 끊어 부르는 이유: 한 묶음이 검색광고 1콜 + 데이터랩 1콜이라 이 크기여야 **전 시드가** 시즌
  * 지수까지 받는다(10개씩이면 뒤 5개는 시즌 미상). 15 시드 = 하루 6콜.
@@ -349,15 +423,17 @@ export async function refreshDemandSnapshot(signal?: AbortSignal): Promise<void>
       rows.push(...m.values());
     }
     if (!rows.length) return;   // 전 묶음 실패 — 어제 스냅샷을 빈 표로 덮지 않는다
+    // 누적분과 합친다(2026-09-17) — 종전처럼 통째로 덮으면 자율 틱이 쌓아 둔 후보 실측이 매일 아침 날아간다.
+    const merged = mergeDemandRows(readDemandSnap(slug), rows, today) ?? rows;
     const f = snapPath(slug);
     fs.mkdirSync(path.dirname(f), { recursive: true });
     // 원자적 쓰기(tmp+rename) — 자율 틱의 읽기가 찢어진 JSON 을 만나지 않게. tmp 이름에 pid 를 넣는 이유:
     // 부팅 예열(+20s)과 perf-sync 틱이 겹쳐 두 쓰기가 같은 tmp 를 잡으면 서로의 파일을 rename 해 간다
     // (2026-08-26 최종 리뷰 M1). 같은 프로세스 안 동시 실행은 하루 1회 가드가 이미 막는다.
     const tmp = `${f}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ date: today, rows } satisfies DemandSnap, null, 2), 'utf-8');
+    fs.writeFileSync(tmp, JSON.stringify({ date: today, rows: merged } satisfies DemandSnap, null, 2), 'utf-8');
     fs.renameSync(tmp, f);
-    console.log(`[demand] 수요 스냅샷 갱신 — ${rows.length} 키워드(${today})`);
+    console.log(`[demand] 수요 스냅샷 갱신 — 시드 ${rows.length} · 표 ${merged.length} 키워드(${today})`);
   } catch (e) {
     console.log(`[demand] 스냅샷 갱신 실패(무해): ${errMsg(e)}`);
   }
