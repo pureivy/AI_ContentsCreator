@@ -27,7 +27,8 @@ import { getRunSettings } from '../runsettings';
 import { brandContext, activeBrandSlug, getBrand, lexiconGuide } from '../content/brand';
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid, recentBlogEndings } from '../content/priorCoverage';
 import { collectExistingContent } from '../content/novelty';
-import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard, writeBriefGate } from '../sessions/digest';
+import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard, writeBriefGate, writeFactSupply } from '../sessions/digest';
+import { supplyFacts, factSupplyBlock } from '../content/factSupply';
 import { parseBriefVerdict, parseUnresolved, isBlocking, describeVerdict, VERDICT_FORMAT } from './briefVerdict';
 import { blogStyleIssues, styleRevisionReject } from '../content/styleLint';
 import { resolveStructureSeed, inheritStructureSeed, structureBlock, STRUCTURE_KEEP_BLOCK } from '../content/structureSeed';
@@ -133,6 +134,9 @@ const buildBlogBodyGuide = (variety: boolean): string =>
   '- 구조: 검색 의도를 바로 충족하는 도입 훅 → H2/H3 소제목으로 나눈 본문 → 핵심 요약·마무리.\n' +
   '- 키워드 계층 분리: 핵심 키워드의 정확 표기는 첫 문단 1회·소제목 1곳까지만 — 그 밖에는 조사·어순을 바꾼 변형("가을에 묘목을 심을 때는")으로 녹여라. 네이버는 형태소 분석이라 변형이 검색 손실을 만들지 않고, 정확 표기 반복·억지 관형절("입추 직후에 적용하는 가을 묘목 심는 법은," 식)은 과최적화로 오히려 해롭다.\n' +
   '- 하우투면 번호 단계로, 리뷰면 장단점·비교·총평 구조로 전개한다.\n' +
+  // 사실 공급(2026-09-17) — 실측: 사실 카드에 식물 사실 평균 3건이라 작가가 어느 나무에나 맞는 일반론
+  // (물 빠짐·잎 진 뒤·첫해 참기·화분은 반)으로 2,000자를 채웠고, 그게 "수종만 바뀐 같은 글"의 뿌리였다.
+  '- 브리프 끝의 [재배·이야기 사실 조사(자동 수집)]가 있으면 그 고유 사실을 본문의 뼈대로 쓴다. 어느 나무에나 맞는 일반론으로 섹션을 채우지 마라 — 고유 사실이 없는 소주제는 짧게 지나가거나 뺀다.\n' +
   '- 사실·수치·시기·약제·품종 특성은 브리프·제공 자료에 있는 것만 쓴다. 없는 값은 지어내지 말고 생략하거나, 유보어("대개/흔히")를 붙인 일반론으로만 말한다. 본문에 [근거: …] 표기는 남기지 않는다(발행 시 제거되며, 근거는 브리프에 있다).\n' +
   '- 분량은 한국어 약 1,500~4,000자(정보/하우투·리뷰에 적정). 군더더기·패딩·동어반복 금지, 독자가 끝까지 읽게 쓴다.\n' +
   '- 이모지·이모티콘·장식 특수문자(★✔♥ 등)를 소제목·본문 어디에도 쓰지 마라. 강조는 서식으로만 한다: 핵심 문장·수치는 **굵게**, 용어·미묘한 강조나 인용 뉘앙스는 *이탤릭*(둘 다 남발하지 말고 구조상 중요한 곳에만). 글자 크기·글꼴은 발행기가 가독성에 맞게 자동 처리하니 지정하지 마라.\n' +
@@ -425,6 +429,23 @@ async function extractFactCardSafe(
   } catch {
     return { card: null, failed: true };
   }
+}
+
+/** 사실 부족 종료(2026-09-17) — 자율 런이 고유 사실 기준 미만일 때 집필 대신 던진다. main.ts 가 잡아
+ *  piece 를 error+factStarved 로 기록하고 다음 틱을 띄운다(주제 교체). 일시 장애(isTransientFailure)와 다르다. */
+export class FactStarvedError extends Error {
+  readonly count: number;
+  readonly need: number;
+  readonly species?: string;
+  constructor(a: { topic: string; count: number; need: number; species?: string }) {
+    super(`사실 부족 — "${a.topic.slice(0, 40)}" 고유 사실 ${a.count}건 < ${a.need}`);
+    this.name = 'FactStarvedError';
+    this.count = a.count; this.need = a.need;
+    if (a.species) this.species = a.species;
+  }
+}
+export function isFactStarved(e: unknown): e is FactStarvedError {
+  return e instanceof FactStarvedError || (e instanceof Error && e.name === 'FactStarvedError');
 }
 
 export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcome> {
@@ -822,11 +843,32 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   //     제작팀(작가)은 병렬 팀 단계에서 빠졌고, 여기서 리서치팀 브리프를 받아 단독 집필한다(리서치→집필 핸드오프). ---
   bus.emit('phase', { team_id: '_ceo', phase: 'integrate' });
   const writerModel = modelForTier(assign, writer.tier);
-  const brief = usableTeams.map((t) => `## ${t.team.name}\n${t.deliverable}`).join('\n\n');
+  let brief = usableTeams.map((t) => `## ${t.team.name}\n${t.deliverable}`).join('\n\n');
   // 지식 리서치 런 — 블로그 집필을 생략하고 팀 산출물 종합(brief)이 곧 산출물(리서치 보고서).
   // 조사→토론→두뇌 적재→직원 학습만 수행한다(SERP 조향·포장도 불필요).
   const research = opts.mission === 'research';
   if (research) bus.emit('log', { message: '지식 리서치 런 — 집필·포장 생략, 리서치 보고서를 두뇌(위키)에 적재' });
+  // 사실 공급(2026-09-17) — 리서치팀은 키워드팀이라 브리프에 식물 사실이 거의 없다. 코드가 검색해 고유
+  // 사실을 브리프 끝에 붙이고, 자율 런은 기준 미만이면 집필하지 않는다(주제 교체는 main.ts·scheduler 몫).
+  // writeResearchBrief 앞이어야 한다 — 리비전이 research_brief.md 를 재주입하므로 블록이 파일에 함께 남아야 한다.
+  if (CONFIG.factSupply && !research && brief.trim()) {
+    const fsr = await supplyFacts({ topic, keyword: opts.keyword, model: assign.standard, signal });
+    try { writeFactSupply(bus.runId, fsr); }
+    catch (e) { bus.emit('log', { message: `사실 공급 영속화 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
+    const cult = fsr.facts.filter((f) => f.specific && f.kind === 'cultivation').length;
+    const lore = fsr.facts.filter((f) => f.specific && f.kind === 'lore').length;
+    const line = fsr.status === 'error'
+      ? `사실 공급 — 실패(무해, 종전대로 집필): ${fsr.error ?? ''}`
+      : `사실 공급 — "${fsr.subject}" 고유 사실 ${fsr.specificCount}건(재배 ${cult}·이야기 ${lore}) / 검색 결과 ${fsr.resultCount}건 / 질의 ${fsr.queries.length}개`;
+    console.log(`[사실공급] ${line}`);
+    bus.emit('log', { message: line });
+    const block = fsr.status === 'ok' ? factSupplyBlock(fsr) : '';
+    if (block) brief = `${brief}\n\n${block}`;
+    if (fsr.status === 'ok' && fsr.specificCount < CONFIG.factMinSpecific) {
+      if (opts.factStrict) throw new FactStarvedError({ topic, count: fsr.specificCount, need: CONFIG.factMinSpecific, species: fsr.species });
+      mustFix.push(`수종 고유 사실이 ${fsr.specificCount}건(기준 ${CONFIG.factMinSpecific}) — 일반론으로 채우지 말고 있는 사실 안에서 짧게 써라`);
+    }
+  }
   // 인기 방향 조향 — 실제 네이버 블로그 상위 노출 글(실측 SERP)을 작가·제목 패키저에 주입(fail-open).
   const serpText = research ? '' : await serpPopularBrief(topic, signal);
   if (serpText) bus.emit('log', { message: `네이버 SERP 실측 — 상위 노출 ${serpText.split('\n').length - 1}건을 집필 방향에 반영` });

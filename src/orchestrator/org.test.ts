@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { REVISE_NO_NEW_FACTS, buildReviseContext, BLOG_BODY_GUIDE, blogBodyGuide, buildGenreGuide } from './org';
+import { REVISE_NO_NEW_FACTS, buildReviseContext, BLOG_BODY_GUIDE, blogBodyGuide, buildGenreGuide, FactStarvedError, isFactStarved } from './org';
 import { FACT_CARD_HEADER } from '../content/factGate';
 
 describe('리비전 컨텍스트(스펙 §3) — 브리프·목소리 지침이 개정에도 들어간다', () => {
@@ -97,5 +97,24 @@ describe('buildGenreGuide — 장르 축 지침 × 구조 시드 예고', () => 
   it('genreAxes 미설정 브랜드는 예고 여부와 무관하게 빈 문자열', () => {
     expect(buildGenreGuide([], true)).toBe('');
     expect(buildGenreGuide([], false)).toBe('');
+  });
+});
+
+describe('FactStarvedError — 사실 부족 종료 신호', () => {
+  it('count/need/species 를 싣고 name 으로 식별된다', () => {
+    const e = new FactStarvedError({ topic: '음나무 자리', count: 2, need: 5, species: '음나무' });
+    expect(e.name).toBe('FactStarvedError');
+    expect(e.message).toContain('고유 사실 2건');
+    expect(e.count).toBe(2); expect(e.need).toBe(5); expect(e.species).toBe('음나무');
+    expect(isFactStarved(e)).toBe(true);
+    expect(isFactStarved(new Error('x'))).toBe(false);
+  });
+});
+
+describe('BLOG_BODY_GUIDE — 사실 공급 블록을 뼈대로 쓰라는 지침', () => {
+  it('일반론으로 채우지 말라는 문장이 있다', () => {
+    expect(BLOG_BODY_GUIDE).toContain('[재배·이야기 사실 조사');
+    expect(BLOG_BODY_GUIDE).toContain('일반론으로 섹션을 채우지 마라');
+    expect(blogBodyGuide(false)).toContain('일반론으로 섹션을 채우지 마라'); // 킬스위치 off 문구에도 — 골격 다양화와 무관한 지침
   });
 });

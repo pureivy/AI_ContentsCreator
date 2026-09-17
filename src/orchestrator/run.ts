@@ -43,6 +43,9 @@ export interface RunOptions {
   persona?: string;
   /** persona='custom' 일 때 사용자가 직접 입력한 말투 텍스트. */
   personaText?: string;
+  /** 사실 공급 엄격 모드(2026-09-17) — true 면 고유 사실이 CONFIG.factMinSpecific 미만일 때 집필하지 않고
+   *  FactStarvedError 로 끝낸다(자율 런 전용 — main.ts 가 auto && !userTriggered 로 계산). 사용자 런은 항상 false. */
+  factStrict?: boolean;
 }
 
 export interface RunOutcome {
