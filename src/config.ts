@@ -122,7 +122,7 @@ export interface Config {
   readonly factSupply: boolean;
   /** 고유 사실 하한 — 자율 런이 이 미만이면 집필 보류·주제 교체(사용자 런은 표시만). */
   readonly factMinSpecific: number;
-  /** 연속 사실 부족 재시도 상한(같은 시간대 60분 창) — 넘으면 그 주기는 건너뛴다. */
+  /** 60분 창 안의 사실 부족 재시도 상한 — 창 안에서 N번째까지 즉시 다음 주제로 재시도하고, 그 뒤는 그 주기를 건너뛴다(알림은 창당 1회). */
   readonly factSupplyRetry: number;
   /** 사실 부족 수종 재제안 금지 창(일). */
   readonly factStarvedDays: number;

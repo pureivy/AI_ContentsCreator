@@ -156,6 +156,8 @@ let lastAutoRun: { ts: string; topic: string } | null = null;
 // 사실 부족 재시도 창(2026-09-17) — 최근 60분 안의 사실 부족 종료 시각. 연속 부족이 CONFIG.factSupplyRetry 를
 // 넘으면 그 주기는 건너뛴다(검색이 안 나오는 날에 틱을 계속 돌리지 않게). 시간 창이라 리셋 코드가 필요 없다.
 let factStarvedAt: number[] = [];
+// 건너뜀 알림은 창당 1회(최종 리뷰 I5) — 창이 이미 찬 뒤 틱마다 부족이 나면 알림이 틱마다 반복됐다.
+let factStarvedNotifiedAt = 0;
 /** RUNS 무한 누적 방지 — 캡 초과 시 오래된 '종료' 런부터 제거(running 보존, 이벤트는 events.jsonl 영속). */
 function evictRuns(): void {
   if (RUNS.size <= RUNS_CAP) return;
@@ -525,7 +527,10 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
               setTimeout(() => { void stopAutoCycle.runNowPersistent({ label: '사실 부족 재시도', respectToggle: true }); }, 1_000);
             } else {
               console.log(`[사실공급] 사실 부족 ${factStarvedAt.length}연속 — 이번 주기 건너뜀(다음 정각·타이머 틱에서 재개)`);
-              void notify({ title: '⏸ 이번 주기 건너뜀 — 사실 부족', body: `최근 1시간에 ${factStarvedAt.length}개 주제가 수종 고유 사실 ${e.need}건을 못 채웠습니다. 다음 틱에서 다시 시도합니다.` }).catch(() => { /* 무해 */ });
+              if (now - factStarvedNotifiedAt > 3_600_000) {
+                factStarvedNotifiedAt = now;
+                void notify({ title: '⏸ 이번 주기 건너뜀 — 사실 부족', body: `최근 1시간에 ${factStarvedAt.length}개 주제가 수종 고유 사실 ${e.need}건을 못 채웠습니다. 다음 틱에서 다시 시도합니다.` }).catch(() => { /* 무해 */ });
+              }
             }
           }
           return;
