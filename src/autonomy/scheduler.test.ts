@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, orderCandidates, shouldRememberDemandReject, factStarvedItems } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, orderCandidates, shouldRememberDemandReject, factStarvedItems, factStarvedRecentlyFor } from './scheduler';
 import type { DemandRow } from '../analytics/topicDemand';
+import { CONFIG } from '../config';
 
 describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -711,5 +712,17 @@ describe('factStarvedItems — 사실 부족 기록을 로테이션 재료로', 
   it('slug 미지정(범용 모드)은 brand 없는 조각만', () => {
     const pieces = [{ title: 'a', factStarved: { ts: 't' } }, { title: 'b', brand: 'x', factStarved: { ts: 't' } }];
     expect(factStarvedItems(pieces, undefined).map((i) => i.title)).toEqual(['a']);
+  });
+});
+
+describe('factStarvedRecentlyFor — 예고·클러스터 경로용 사실 부족 수종 게이트', () => {
+  // CONFIG 는 런타임 가변 객체(readonly 는 타입 힌트일 뿐) — 창을 0으로 강제하고 복원한다(structureSeed.test 와 같은 관용구).
+  const cfg = CONFIG as unknown as { factStarvedDays: number };
+  let orig = 0;
+  beforeEach(() => { orig = cfg.factStarvedDays; });
+  afterEach(() => { cfg.factStarvedDays = orig; });
+  it('창이 0(끔)이면 조각 저장소를 보지 않고 null', () => {
+    cfg.factStarvedDays = 0;
+    expect(factStarvedRecentlyFor('음나무 자리', 'b')).toBeNull();
   });
 });

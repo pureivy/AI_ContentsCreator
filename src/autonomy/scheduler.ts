@@ -489,6 +489,13 @@ export function usedRecentlyFor(text: string, slug: string | undefined, now = ne
   return usedRecently(text, speciesRecencyFor(slug, now), speciesKeyOf);
 }
 
+/** 후보 한 건이 최근 사실 부족으로 닫힌 수종인가 — 예고·클러스터 경로(main.ts)용. 후보 루프의 같은 게이트와 같은 눈.
+ *  rotationItems 는 error 조각을 빼므로 usedRecentlyFor 로는 안 보인다(최종 리뷰 I1). */
+export function factStarvedRecentlyFor(text: string, slug: string | undefined, now = new Date()): { name: string; daysAgo: number } | null {
+  if (CONFIG.factStarvedDays <= 0) return null;
+  return usedRecently(text, factStarvedRecencyFor(slug, now), speciesKeyOf);
+}
+
 function readStrategyWinners(): string {
   try {
     const slug = activeBrandSlug();
