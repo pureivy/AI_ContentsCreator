@@ -253,3 +253,14 @@ describe('keepTerms — 상용어 허용 목록', () => {
     expect(g).toContain('동해→겨울 추위 피해');
   });
 });
+
+describe('normalizeBrand — contentModules / topicThemes 상한', () => {
+  it('contentModules 를 name+match 로 정규화하고 빈 항목은 버린다', () => {
+    const b = normalizeBrand({ name: 'x', contentModules: [{ name: '화분 vs 마당', match: ['화분'] }, { name: '', match: ['a'] }, { name: 'b', match: [] }] } as never);
+    expect(b?.contentModules).toEqual([{ name: '화분 vs 마당', match: ['화분'] }]);
+  });
+  it('topicThemes 는 32개까지 받는다(이야기 5축 추가로 24 초과)', () => {
+    const themes = Array.from({ length: 30 }, (_, i) => ({ theme: `t${i}`, seeds: [], match: [`m${i}`] }));
+    expect(normalizeBrand({ name: 'x', topicThemes: themes } as never)?.topicThemes).toHaveLength(30);
+  });
+});

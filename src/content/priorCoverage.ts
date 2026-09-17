@@ -64,7 +64,7 @@ function blogStyleSig(runId: string | undefined): { opening: string; closing: st
   } catch { return null; }
 }
 /** 블로그 초안 본문 원문 — piece.runId → data/sessions/<runId>/draft.json 의 bodyMarkdown(없으면 ''). */
-function blogBodyOf(runId: string | undefined): string {
+export function blogBodyOf(runId: string | undefined): string {
   if (!runId) return '';
   try {
     const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };

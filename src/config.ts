@@ -126,6 +126,10 @@ export interface Config {
   readonly factSupplyRetry: number;
   /** 사실 부족 수종 재제안 금지 창(일). */
   readonly factStarvedDays: number;
+  /** 내용 모듈 로테이션(2026-09-17) — 최근 N편에 쓴 소재 모듈을 작가 금지 목록으로. off 면 블록 미주입(종전 동작). */
+  readonly moduleRotation: boolean;
+  /** 금지 목록을 만들 최근 편 수(1~20). 하루 2~3편이라 5편 ≈ 이틀. */
+  readonly moduleRecentPieces: number;
   /** 파생 콘텐츠 시기·수치 원문 대조(2026-08-27 권고 1) — 결정적 검사. off 면 검출·오버레이 제거 모두 중단. */
   readonly timingParity: boolean;
   /** 블로그 본문 문체 린트(2026-08-27 권고 3) — 결정적 4종 검사 후 작가 수정 1회. off 면 검사·수정 모두 중단. */
@@ -390,6 +394,8 @@ export const CONFIG: Config = {
   factMinSpecific: Math.min(Math.max(1, envInt('FACT_MIN_SPECIFIC', 5)), 20),
   factSupplyRetry: Math.min(Math.max(0, envInt('FACT_SUPPLY_RETRY', 2)), 5),
   factStarvedDays: Math.min(Math.max(0, envInt('FACT_STARVED_DAYS', 14)), 90),
+  moduleRotation: envBool('MODULE_ROTATION', true),
+  moduleRecentPieces: Math.min(Math.max(1, envInt('MODULE_RECENT_PIECES', 5)), 20),
   // 시기·수치 원문 대조(2026-08-27 권고 1) — 활엽수 실사고: 블로그 "근거 확실치 않다" ↔ 쇼츠 "지금이 적기" + 오버레이 "8월".
   timingParity: envBool('TIMING_PARITY', true),
   blogStyleLint: envBool('BLOG_STYLE_LINT', true),
