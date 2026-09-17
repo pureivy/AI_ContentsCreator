@@ -18,12 +18,23 @@
  * 심기로 잡을 수 있고 월동으로 잡을 수 있다.
  *
  * 축 분류는 표현 매칭이라 근사다. 정교한 분류기가 아니라 '기울이는 신호'로만 쓴다.
+ *
+ * '이야기·유래' 축(2026-09-18) — 읽을 거리 편(전설·꽃말·유래·역사·명소)이 블로그에 들어오면서(topicThemes 이야기 5축)
+ * 그 파생 숏폼이 '기타'로 떨어졌다. 기타는 최하위 축이라 이 블록이 "기타로 읽히지 않게 하라"고 매 틱 말하는 것과
+ * 두뇌 프롬프트의 "8개 중 2개는 읽을 거리"가 정면 충돌한다. 자기 칸을 주면 (1) 그 충돌이 사라지고 (2) 이야기 편의
+ * 인스타 성적을 재배 축과 나란히 잴 수 있다. 판정 표현은 content/loreTopic 이 한 벌로 갖고 있다. 맨 앞에 두는
+ * 이유: '꽃말'은 '꽃'을, '보호수'는 '보호'를 품어 뒤에 두면 꽃·개화/관리·병해가 먼저 잡는다.
  */
+import { CONFIG } from '../config';
+import { LORE_TOPIC_RE } from '../content/loreTopic';
 
 export interface AxisPerf { readonly axis: string; readonly count: number; readonly median: number }
 
 /** 소재 축 — 이름과 판별 표현. 앞에서부터 먼저 걸리는 축을 쓴다(구체적인 것을 앞에). */
+export const AXIS_LORE = '이야기·유래';
+
 export const IG_AXES: ReadonlyArray<{ axis: string; test: RegExp }> = [
+  { axis: AXIS_LORE, test: LORE_TOPIC_RE },
   { axis: '전정·가지치기', test: /전정|가지치기|자르|잘라|솎|삽목|접목/ },
   { axis: '꽃·개화', test: /꽃|개화|봉오리|화단/ },
   { axis: '열매·수확', test: /열매|수확|과실|당도|익는/ },
@@ -52,11 +63,16 @@ export function isContainerTopic(text: string): boolean {
 /** 축에 안 걸리는 소재의 이름 — 실측에서 가장 큰 덩어리이자 최하위권이다. */
 export const AXIS_NONE = '기타';
 
+/** 지금 켜진 축 — SHORTS_LORE=off 면 이야기 축을 빼서 종전 6축(이야기 편은 기타)으로 돌아간다. */
+function activeAxes(): ReadonlyArray<{ axis: string; test: RegExp }> {
+  return CONFIG.shortsLore ? IG_AXES : IG_AXES.filter((a) => a.axis !== AXIS_LORE);
+}
+
 /** 텍스트가 어느 축인가(순수). 어느 것에도 안 걸리면 AXIS_NONE. */
 export function classifyAxis(text: string): string {
   const t = String(text ?? '');
   if (!t.trim()) return AXIS_NONE;
-  return IG_AXES.find((a) => a.test.test(t))?.axis ?? AXIS_NONE;
+  return activeAxes().find((a) => a.test.test(t))?.axis ?? AXIS_NONE;
 }
 
 /** 중앙값(순수). 빈 배열은 0. */
@@ -105,6 +121,11 @@ export function axisBlock(perf: readonly AxisPerf[]): string {
     '· 축은 소재가 아니라 프레이밍이다 — 같은 수종도 전정으로, 심기로, 월동으로 잡을 수 있다.',
     none
       ? `· 다만 어느 축에도 안 걸리는 주제가 가장 많고(${none.count}편) 성적도 낮다(중앙 ${none.median.toLocaleString()}회). 주제를 정했으면 그 주제가 위 축 중 하나로 읽히는지 확인하라.`
+      : '',
+    // 이야기 축은 5편이 쌓이기 전엔 표에 안 나온다(minCount) — 그동안 위 '기타' 문장이 이야기 후보를 재배 각도로
+    // 되돌리지 않게 못박는다. 표에 오르면 이 줄은 빠지고 숫자가 말한다.
+    CONFIG.shortsLore && !perf.some((p) => p.axis === AXIS_LORE)
+      ? '· 읽을 거리(전설·꽃말·유래·역사·명소 이야기)는 아직 표본이 없어 이 표에 없다 — 축 성적을 이유로 이야기 후보를 빼거나 재배 각도로 바꾸지 마라. 이야기 편은 따로 잰다.'
       : '',
     '· 계절과 싸우지 마라. 지금 시기에 맞지 않는 축이면 이 신호보다 시의성이 우선이다.',
   ].filter(Boolean).join('\n');

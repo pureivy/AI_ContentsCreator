@@ -130,6 +130,9 @@ export interface Config {
   readonly moduleRotation: boolean;
   /** 금지 목록을 만들 최근 편 수(1~20). 하루 2~3편이라 5편 ≈ 이틀. */
   readonly moduleRecentPieces: number;
+  /** 숏폼 읽을 거리(2026-09-18) — 인스타 축 성적에 '이야기·유래' 축, 숏폼 기획 장르 분기(이야기형), 재배 편 훅에
+   *  이야기 사실 소재. off 면 셋 다 종전 동작(이야기 편은 '기타'로 분류되고 하우투 지침을 받는다). */
+  readonly shortsLore: boolean;
   /** 파생 콘텐츠 시기·수치 원문 대조(2026-08-27 권고 1) — 결정적 검사. off 면 검출·오버레이 제거 모두 중단. */
   readonly timingParity: boolean;
   /** 블로그 본문 문체 린트(2026-08-27 권고 3) — 결정적 4종 검사 후 작가 수정 1회. off 면 검사·수정 모두 중단. */
@@ -396,6 +399,9 @@ export const CONFIG: Config = {
   factStarvedDays: Math.min(Math.max(0, envInt('FACT_STARVED_DAYS', 14)), 90),
   moduleRotation: envBool('MODULE_ROTATION', true),
   moduleRecentPieces: Math.min(Math.max(1, envInt('MODULE_RECENT_PIECES', 5)), 20),
+  // 숏폼 읽을 거리(2026-09-18) — 숏폼은 블로그에서 파생되므로 주제는 따라오는데, 축 블록이 이야기 주제를 '기타(최하위)'로
+  // 밀어내고 기획 지침이 하우투 전용이라 이야기 편이 방법 꼴로 눌리던 것.
+  shortsLore: envBool('SHORTS_LORE', true),
   // 시기·수치 원문 대조(2026-08-27 권고 1) — 활엽수 실사고: 블로그 "근거 확실치 않다" ↔ 쇼츠 "지금이 적기" + 오버레이 "8월".
   timingParity: envBool('TIMING_PARITY', true),
   blogStyleLint: envBool('BLOG_STYLE_LINT', true),

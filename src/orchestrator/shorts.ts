@@ -38,6 +38,7 @@ import { inheritShortsAssets, inheritedSceneImages, inheritedClips, writeSceneIm
 import { SOURCES_FILE } from '../content/mediaUsage';
 import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom, normalizeLatinName } from '../content/species';
 import { isContainerTopic } from '../analytics/igAxis';
+import { shortsGenreOf, genreGuide, genreSceneGuide, loreHookGuide, loreHookSource, type ShortsGenre } from '../content/shortsGenre';
 import { planAssetScenes, styleRefs, planVideoSegments, orderAssetsByAssignment, type VideoSegment } from '../content/userAssets';
 import { describeUserMedia, mediaPlanGuide, assignMediaToScenes, speciesRefFrame } from './shortsMediaBrief';
 import { generateTitleArt } from './shortsTitleArt';
@@ -792,8 +793,16 @@ export function pruneQuoteSources(plan: Plan, sourceBody: string | undefined): {
   return { plan: { ...plan, scenes }, pruned };
 }
 
-async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형'], sourceFlagged: string[] = [], writerRole = 'shorts_writer', recentMainTitles: string[] = []): Promise<Plan | null> {
+async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형'], sourceFlagged: string[] = [], writerRole = 'shorts_writer', recentMainTitles: string[] = [], loreFacts: string[] = []): Promise<Plan | null> {
   const capSec = CONFIG.shortsMaxDurationSec;
+  // 장르 분기(2026-09-18) — 원본 제목이 이야기 축이면 하우투 전용 네 줄(결론·기본형·takeaways·뽑을 것)을 이야기형으로.
+  // 재배 편은 사실 공급이 모아 온 이야기 사실을 훅 소재로 받는다. 그 사실은 블로그 본문에 없으므로 정합·시기수치
+  // 게이트가 보는 원문(sourceForGates)에도 같은 줄을 덧붙인다 — 안 그러면 훅이 '원문에 없는 사실'로 잡혀 수정된다.
+  const genre: ShortsGenre = shortsGenreOf(topic, CONFIG.shortsLore);
+  const guide = genreGuide(genre);
+  const hooks = CONFIG.shortsLore && genre === 'howto' ? loreFacts : [];
+  const hookSource = loreHookSource(hooks);
+  const sourceForGates = sourceBody && hookSource ? `${sourceBody}\n\n${hookSource}` : sourceBody;
   // 제목 후보 유형(권고 5) — 스키마 예시와 유형 설명이 같은 목록을 가리켜야 작가가 순서대로 채운다.
   const titlesJson = titleTypes.map((t) => `"${t}"`).join(',');
   const budgetChars = Math.floor((capSec - 5) * SHORTS_TTS_CPS);
@@ -837,16 +846,18 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     '[우선순위] 아래 문체 지침은 표현 방식 지침이다 — 원문에서 추린 방법·이유·위험 근거 문장을 삭제하는 방식으로 이행하지 마라. 문체와 정보가 충돌하면 정보를 남기고 문체를 양보하라.',
     // 결론 의무+낭독 명료성(사용자 확정 2026-08-12): "잎 색 변화" 편 실측 — 보는 법 3갈래를 나열하고
     // 각각이 뭘 뜻하는지 한 번도 안 말해 "무얼 주장하는지 모르겠는" 영상이 됐다.
-    '결론 의무: 구별·진단 소재면 각 갈래에 그것이 대개 무엇을 뜻하는지 한 마디를 붙여라("이건 대개 물 쪽 문제예요" — 통설 수준은 "대개/흔히"를 붙여 단정 가능, 사건 날조와 다르다). 영상 전체에 명시적 판정 또는 행동 결론을 최소 1개 남기고, 결론을 다음 편 예고로 대체하지 마라.',
+    guide.conclusion,
     '낭독 명료성: 소리로만 듣고 되돌릴 수 없는 매체다 — 동음이의 전문어는 풀어 말하고("수분 나무"→"꽃가루받이 나무", "눈"→"꽃이 될 눈", "뿌리분"→"뿌리와 흙이 뭉친 덩어리"), 주어·비교 대상을 떨어낸 조각문 금지("밀리미터보다 옆 가지와 비교해요" 식 초압축 — 실측). 내레이션에서 언급하는 개수("다섯 곳")는 실제로 그 수만큼 세어 줘야 한다.',
     '문장 종결을 섞어라: 한 씬의 두 문장을 같은 어미로 끝내지 마라("~ㅂ니다"+"~ㅂ니다" 금지). 대본 전체에서 "-ㅂ니다" 종결은 절반 이하로 하고 "~요/~죠/~거든요/~는데요/~하세요"를 섞어라. 습관적 설명 현재형("치웁니다", "심지 않습니다")은 청자에게 말 거는 꼴("치우세요", "지금은 심지 마세요")로. 아나운서 원고가 아니라 옆에서 알려주는 말로 들려야 한다.',
     '대본 전체 1~2곳에 사람 말의 결을 넣어라 — 짧은 제동("잠깐,"), 정정·양보("아, 포트묘는 예외예요"), 판단의 표명("색보다 끝알부터 봐요" — "나는/저는" 같은 1인칭 주어는 쓰지 마라, 주어 없이도 시점이 전달된다. 사용자 확정 2026-08-12). 겪지 않은 사건·일화를 지어내는 것은 금지(판단·관점만). 정보 밀도를 깎는 잡담도 금지. 판단 문장은 근거·이유 문장을 밀어내고 그 자리를 차지하게 하지 마라 — 근거에 덧붙이는 한 줄이다. "X가 아니라 Y" 재정의 문형은 대본 전체 1회 이하 — 앞 편들이 이미 상투로 만든 틀이다.',
-    `본문 씬 내레이션은 1~3문장(합쳐서 30~70자, 낭독 5~12초) — "방법 한 문장+이유 한 문장"이 기본형이다. 리듬만 변주하라: 이유를 먼저 두는 씬, 질문으로 끝나는 씬을 최소 1개 섞되(단, 씬당 "무엇을+왜"는 유지 — 리듬을 바꾸라는 것이지 정보를 빼라는 것이 아니다), 질문으로 끝냈으면 그 답을 반드시 바로 다음 씬 첫 문장에서 준다. "~기 때문입니다"는 대본 전체 1회 이하. 씬2(전제)는 45~70자까지 허용. 훅·CTA 씬은 1~2문장(20~40자). 총 낭독 시간 ${Math.max(20, capSec - 25)}~${capSec - 10}초, 대본 전체(모든 씬 내레이션 합) ${budgetChars}자 이내를 반드시 맞춘다 — TTS 실측 속도는 초당 약 6자다. 이 총량이 씬 수보다 우선한다(넘칠 것 같으면 씬 수를 줄여서라도 지켜라).`,
+    `본문 씬 내레이션은 1~3문장(합쳐서 30~70자, 낭독 5~12초) — ${guide.bodyForm} 리듬만 변주하라: 이유를 먼저 두는 씬, 질문으로 끝나는 씬을 최소 1개 섞되(단, 씬당 "무엇을+왜"는 유지 — 리듬을 바꾸라는 것이지 정보를 빼라는 것이 아니다), 질문으로 끝냈으면 그 답을 반드시 바로 다음 씬 첫 문장에서 준다. "~기 때문입니다"는 대본 전체 1회 이하. 씬2(전제)는 45~70자까지 허용. 훅·CTA 씬은 1~2문장(20~40자). 총 낭독 시간 ${Math.max(20, capSec - 25)}~${capSec - 10}초, 대본 전체(모든 씬 내레이션 합) ${budgetChars}자 이내를 반드시 맞춘다 — TTS 실측 속도는 초당 약 6자다. 이 총량이 씬 수보다 우선한다(넘칠 것 같으면 씬 수를 줄여서라도 지켜라).`,
     `압축 안전선: ${capSec}초에 맞추더라도 조사·주어는 남겨라("이 시기 질소 거름 주면" 금지 → "이 시기엔 질소 거름을 주면"). 앞 문장의 주어가 바뀌면 새 주어를 밝혀라. screenText 에 "정의·구분법·요약·정리" 같은 대본용 딱지를 쓰지 마라 — 화면에는 독자에게 하는 말만.`,
     'screenText 는 씬당 1줄 15자 이내 키워드 요약(비워도 됨).',
     // CTA 결론 카드(2026-08-28 사용자 요청) — 결론이 소리로만 지나가면 무음 시청자에게 아무것도 안 남는다.
     // 실측(short_6c8936f791): 내레이션은 "허리 높이면 회양목, 어깨 높이 상록이면 사철나무"인데 화면엔 "자리별 나무 정하기".
-    'CTA 씬에는 takeaways 를 채워라 — 이 영상의 결론("무얼 하라/무얼 골라라")을 "조건 → 답" 쌍 1~3개로 화면에 띄운다(when=시청자가 자기 상황을 알아보는 조건, then=그때의 답, 각 12자 이내). 예: {"when":"허리 높이","then":"회양목"}. 답은 화면이 지고 내레이션은 기준·이유를 말한다(사용자 확정 2026-08-28) — 그러니 내레이션이 수종명·품목명을 일일이 읊지 않아도 되고, takeaways 가 내레이션을 그대로 복창할 필요도 없다. 다만 **답의 근거는 반드시 원문(블로그 초안)에 있어야 한다** — 원문에 없는 답을 화면에 지어 넣지 마라. 화면에만 나가는 만큼 이 항목은 내레이션보다 더 엄격히 원문에 붙어라. 조건별로 답이 갈리는 소재가 아니면 when 에 핵심 상황, then 에 할 일을 넣어라(예: {"when":"심기 전","then":"뿌리부터 확인"}). 결론이 조건과 무관한 단일 행동뿐이면 takeaways 를 생략해도 된다 — 억지로 쪼개지 마라.',
+    guide.takeaways,
+    // 훅 소재(③, 재배 편만) — 이야기형은 원문 자체가 이야기라 안 준다.
+    loreHookGuide(hooks),
     // 실측(2026-09-03, 최근 40편): 본문 씬 111개가 kind 없이 배경+자막만으로 흘렀고 chart 0회·quote 1회였다.
     // 종전 지시가 "억지 배정 금지, 애매하면 생략"으로 끝나 작가가 기본값을 '생략'으로 읽었다 —
     // 만들어 둔 연출(StatCountUp·ListReveal·BarChartGrow·QuoteCard)이 놀고 있었다.
@@ -855,7 +866,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 방아쇠를 '내레이션이 …하면' 에서 '원문에 …이 있으면' 으로 뒤집는다(2026-09-03).
     // 종전 문구는 작가가 방금 쓴 내레이션을 되돌아보게 했는데, 애초에 수치를 안 쓰면 영영 안 걸린다.
     // 원문을 먼저 훑게 하면 소재가 가진 수치·목록이 대본으로 넘어온다(실측: stat 6·list 5 / 193씬).
-    '  [먼저 할 일] 대본을 쓰기 전에 원문(블로그 초안)에서 수치와 나열을 뽑아라. 원예 글에는 대개 둘 다 있다 — 수치는 간격·깊이·리터·횟수·기간·온도·비율, 나열은 준비물·순서·조건·품종. 뽑은 것이 있으면 그 내용을 담은 본문 씬에 아래 kind 를 붙인다.',
+    guide.extract,
     '  · 원문에 수치가 있고 그게 그 씬의 요지다 → "stat"(value 숫자·unit 단위·label 15자). 내레이션에서도 그 수치를 말해라 — 화면과 소리가 같은 것을 가리켜야 한다.',
     '  · 원문이 두 가지 이상을 나열·병렬한다 → "list"(items 2~4개, 각 18자). 준비물·순서·조건·품종 전부 해당한다. 내레이션이 다 읊을 필요는 없다 — 화면이 나열을 맡고 내레이션은 기준을 말한다.',
     '  · 흔한 실수와 올바른 방법을 대비한다 → "compare"',
@@ -959,7 +970,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // (parity.length || timingResidual.length) 라, **자기 킬스위치(TIMING_PARITY)** 로 사는 시기·수치만
     // 잔존해도 열린다. 그때 status 는 parityToInfo([]) 의 'pass' 라 보류(hold)가 생기지 않는다(표시 전용).
     // 둘 다 끄려면 FACT_GATE=off + TIMING_PARITY=off.
-    const parity = CONFIG.factGate && sourceBody ? await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceBody, io.signal) : [];
+    const parity = CONFIG.factGate && sourceForGates ? await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceForGates, io.signal) : [];
     // 단독 이해 검산(LLM, 최대 5건) — 소스별 예약 캡의 몫 계산을 위해 먼저 변수로 받는다.
     // 결론 카드를 함께 넘긴다(2026-08-28) — 이 검사의 항목 4가 '결론 부재'다. 사용자 확정 분업에서
     // 답은 화면에만 있으므로, 내레이션만 보여 주면 잘 만든 CTA 가 매번 '결론 없음'으로 걸린다(과차단).
@@ -972,7 +983,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 우선 보장하고, LLM 판정(단독 이해·정합)은 각 소스당 상한을 둬 한쪽이 다른 쪽을 밀어내지 못하게 한다.
     // 시기·수치 원문 대조(2026-08-27 권고 1, 결정적) — 활엽수 실사고: 블로그가 "근거 확실치 않다"고 한 시기를
     // 파생 쇼츠가 내레이션·자막·오버레이 세 군데에서 단정했다. TIMING_PARITY=off 면 함수가 빈 배열을 낸다.
-    const timing = sourceBody ? timingParityIssues(sourceBody, timingFields(plan)).map(formatTimingIssue) : [];
+    const timing = sourceForGates ? timingParityIssues(sourceForGates, timingFields(plan)).map(formatTimingIssue) : [];
     // 원문 미검증 주장 승계(2026-08-28 처방 C, 결정적) — 실사고: 블로그 게이트가 hold 인데 파생 숏폼은 pass 였고,
     // 원문에서 '근거 미확인'으로 분류된 손질 시기가 그대로 화면 목록에 떴다. 기존 두 축(정합·시기수치)은
     // "원문에 충실한가"만 봐서 통과시킨다 — 이 축이 "원문이 애초에 믿을 만한가"를 본다.
@@ -1017,8 +1028,8 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     }
     // dataviz 오버레이 결정적 제거(권고 1) — 반드시 수정 라운드 '뒤'에: 앞에서 떼면 작가가 같은 값을
     // 그대로 다시 실어 보내고(수정본은 parsePlan→normalizeSceneKind 를 새로 통과한다) 제거가 무효가 된다.
-    if (sourceBody) {
-      const st = stripUnsourcedStatOverlays(plan.scenes, sourceBody);
+    if (sourceForGates) {
+      const st = stripUnsourcedStatOverlays(plan.scenes, sourceForGates);
       if (st.removed.length) {
         plan = { ...plan, scenes: st.scenes };
         for (const v of st.removed) {
@@ -1028,7 +1039,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       }
     }
     // 시기·수치 잔존(권고 1) — 오버레이 제거까지 끝난 최종 대본 기준. LLM 재호출 없음(결정적).
-    const timingResidual = sourceBody ? timingParityIssues(sourceBody, timingFields(plan)).map(formatTimingIssue) : [];
+    const timingResidual = sourceForGates ? timingParityIssues(sourceForGates, timingFields(plan)).map(formatTimingIssue) : [];
     // 승계 잔존(처방 C) — 수정 라운드 뒤 재계산. 원문 게이트가 hold 로 사람을 세운 사안을 파생물에서도
     // 보이게 하는 것이 이 축의 목적이라, 잔존이 있으면 검토 알림까지 반드시 나가야 한다.
     const inheritedResidual = (sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(plan)) : []).map(formatInherited);
@@ -1038,10 +1049,10 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 수정본 파싱 실패(planChanged=false) 는 대본이 1차 판정 때와 바이트 동일 — LLM 재호출 없이 1차 parity 를 그대로 잔존으로 재사용한다.
     // 시기·수치만 잔존해도 factGate 를 붙인다(그래야 텔레그램 줄이 나간다) — 단 status 는 정합 판정이 정한다:
     // 결정적 비차단 린트가 보류(hold)를 만들어 자동 임시저장까지 막아서는 안 된다.
-    if ((parity.length || timingResidual.length || inheritedResidual.length) && sourceBody) {
+    if ((parity.length || timingResidual.length || inheritedResidual.length) && sourceForGates) {
       const base = parity.length
         ? (planChanged
-          ? parityToInfo(await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceBody, io.signal))
+          ? parityToInfo(await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceForGates, io.signal))
           : parityToInfo(parity))
         : parityToInfo([]);
       // timing 은 자르지 않고 통째로 싣는다 — 텔레그램 머리줄 N 은 잔존 '건수'라, 여기서 5건으로 자르면
@@ -1058,7 +1069,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   } catch { /* 무해 */ }
   // quote 출처 가드 — factGate 등 위에서 채운 필드는 pruneQuoteSources 가 그대로 스프레드 보존한다(fail-open).
   try {
-    const pq = pruneQuoteSources(plan, sourceBody);
+    const pq = pruneQuoteSources(plan, sourceForGates);
     if (pq.pruned) {
       const m = `quote 출처 ${pq.pruned}건 제거 — 원문에 없는 출처 라벨`;
       console.log(`[숏폼] ${m}`); io.bus?.emit('log', { message: m });
@@ -1068,6 +1079,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
 }
 
 async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: string): Promise<{ preset: string; style: string; prompts: string[]; subject?: string; subjectLatin?: string; species?: import('../content/species').Species }> {
+  const sceneGenreGuide = genreSceneGuide(shortsGenreOf(topic, CONFIG.shortsLore));
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 대상] ${keyword}` : '',
@@ -1087,6 +1099,8 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
     '특징은 정확해야 한다 — 겹잎인지 홑잎인지, 잎차례가 어떤지, 침엽인지 활엽인지를 틀리지 마라. 원문(블로그 초안)에 그 식물의 생김새 묘사가 있으면 그것을 우선하고, 확신이 없으면 특징을 짧게만 쓰되 학명은 반드시 채워라 — 학명 하나가 애매한 산문보다 정확하다.',
     '학명·이름을 모르는 소재(도구·흙·일반 정원 풍경)면 두 칸을 모두 비워라. 지어내지 마라.',
     '그리고 모든 씬 묘사(prompt)에 그 식물이 무엇인지 매번 명시하라 — "나무", "생울타리", "묘목" 처럼 뭉뚱그리지 마라. 화면에 식물이 안 나오는 씬(도구·흙·줄자만)은 예외다.',
+    // 이야기형 편(2026-09-18) — 재배 시연이 아니라 그 나무가 선 자리·풍경. 하우투는 빈 문자열(종전 그대로).
+    ...(sceneGenreGuide ? [sceneGenreGuide] : []),
     'style_preset 은 주제·내용·톤에 어울리게 선택하라 — photorealistic 을 기본값처럼 고르지 말 것. photorealistic=실물 시연·하우투·생활, manhwa=스토리·유머·과장, watercolor=감성·계절·에세이, ink_wash=차분한 전통·사색적 주제, flat_design=정보·정책·경제·비교·수치, retro_poster=이벤트·프로모션·복고.',
     'JSON 형식: {"style_preset":"photorealistic|manhwa|watercolor|ink_wash|flat_design|retro_poster","style":"모든 씬 공통 스타일 문구(팔레트·질감·조명)","subject_latin":"학명(모르면 빈 문자열)","subject":"한글 이름 — 구별되는 겉모습 한 줄(없으면 빈 문자열)","scenes":[{"prompt":"장면 묘사(한국어 150자 이내)"}]}',
   ].join('\n');
@@ -1540,6 +1554,8 @@ export async function runShortsJob(
     sourceBody?: string; sceneCount?: number; bus?: EventBus; signal?: AbortSignal;
     /** 원문(블로그) 사실 게이트가 건 주장 — unsupported + unverified. 파생물에 재등장하면 승계 표시(처방 C). */
     sourceFlagged?: string[];
+    /** 원문 런의 사실 공급이 모은 이야기 사실(2026-09-18) — 재배 편의 훅·CTA 소재. 이야기형 편은 안 쓴다. */
+    loreFacts?: string[];
     /** 사용자 첨부 실사진(2026-09-04) — 일부 씬은 이 사진을 그대로 배경으로 쓰고,
      *  나머지 씬은 이 사진들의 색·빛·질감을 참고해 생성한다. */
     userAssets?: string[];
@@ -1647,9 +1663,9 @@ export async function runShortsJob(
     // 첫 채널의 plan.json 을 기다렸다 출발한다(server/main.ts startAfterSiblingPlan).
     const siblingGuide = siblingPlanToAvoid(short);
 
-    say(`기획 가드 — 채널 ${platformLabel(short.platform)} · 작가 ${writerProfile?.name ?? short.writer ?? '미지정'} · 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 형제 대본 ${siblingGuide ? '주입' : '없음'} · 제목 유형 ${titleTypes.join('·')}`);
+    say(`기획 가드 — 채널 ${platformLabel(short.platform)} · 작가 ${writerProfile?.name ?? short.writer ?? '미지정'} · 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 형제 대본 ${siblingGuide ? '주입' : '없음'} · 제목 유형 ${titleTypes.join('·')} · 장르 ${shortsGenreOf(short.topic, CONFIG.shortsLore) === 'lore' ? '이야기형' : '하우투'} · 훅 소재 ${shortsGenreOf(short.topic, CONFIG.shortsLore) === 'howto' && CONFIG.shortsLore ? (opts.loreFacts ?? []).length : 0}건`);
     const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, siblingGuide, mediaPlanGuide(briefs), priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? [], writerRole,
-      recentShortsMainTitles(short.brand, short.id)); // 대표 제목 구조 수렴 차단
+      recentShortsMainTitles(short.brand, short.id), opts.loreFacts ?? []); // 대표 제목 구조 수렴 차단 · 훅 소재(이야기 사실)
     if (!planned) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     // Plan 타입 재선언 — 길이 상한 루프의 재대입이 클로저(씬 map 등) 내로잉을 풀지 않게 non-null 로 고정.
     let plan: Plan = planned;

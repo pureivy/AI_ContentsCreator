@@ -68,7 +68,8 @@ import { generateDesignedThumbnail, thumbTextQaFailed } from '../orchestrator/sh
 import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft, shouldAutoDeriveOnDecision, cadenceBaselineTs } from '../content/pieces';
 import { isTransientFailure, transientReason } from '../llm/transientError';
 import { toFactGateInfo } from '../content/factGate';
-import { readFactGate } from '../sessions/digest';
+import { readFactGate, readFactSupply } from '../sessions/digest';
+import { pickLoreHooks } from '../content/shortsGenre';
 import { listPersonas } from '../content/personas';
 import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeBrandSlug, deleteBrand, isSafeBrandSlug, offBrandTerm, lintLexicon } from '../content/brand';
 import type { BrandProfile } from '../content/brand';
@@ -1274,7 +1275,7 @@ function assignShortsWriter(): { writer: string; writerId: string; director?: st
 // 종전엔 sourceBody·sceneCount·sourceFlagged 만 적혀 있었는데, 호출부가 스프레드로 넘기는
 // userAssets/userVideos/inheritFrom 이 타입 검사를 비껴가 통과하고 있었다(2026-09-04 발견).
 function launchShortsRun(shortsId: string, topic: string, opts: {
-  sourceBody?: string; sceneCount?: number; sourceFlagged?: string[];
+  sourceBody?: string; sceneCount?: number; sourceFlagged?: string[]; loreFacts?: string[];
   userAssets?: string[]; userVideos?: string[]; inheritFrom?: string;
 } = {}): string {
   const id = runId();
@@ -1363,6 +1364,15 @@ async function shortsCreateHandler(c: Context): Promise<Response> {
  * '근거 미확인'으로 분류된 손질 시기가 그대로 숏폼 화면 목록에 떴다.
  * 읽기 실패는 빈 배열(fail-open) — 승계 검사가 파생 생성을 막지 않는다.
  */
+/**
+ * 원문 런의 사실 공급(fact_supply.json)에서 숏폼 훅 소재로 쓸 이야기 사실(2026-09-18). 공급이 없던 런(종전·off)은 빈 배열.
+ * 파생·부팅 복구 두 경로가 같은 함수를 쓴다 — 한쪽만 넣으면 복구된 편만 훅 소재를 잃는다.
+ */
+function loreFactsFor(runId: string | undefined): string[] {
+  if (!runId || !CONFIG.shortsLore) return [];
+  try { return pickLoreHooks(readFactSupply(runId)?.facts); } catch { return []; }
+}
+
 function sourceFlaggedClaims(runId: string | undefined): string[] {
   if (!runId) return [];
   try {
@@ -1512,7 +1522,7 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, p
   });
   const start = (inherit: boolean): void => {
     launchShortsRun(short.id, piece.title, {
-      sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId!),
+      sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId!), loreFacts: loreFactsFor(piece.runId),
       // 사용자가 컴포저에 첨부한 실사진 — 씬 배경·스타일 레퍼런스로 쓴다.
       // 컴포저 첨부가 우선, 없으면 보관소에서 이 주제에 맞는 소재를 꺼내 쓴다(2026-09-04).
       // 보관소의 값어치가 여기 있다 — 한 번 올려 두면 그 수종 콘텐츠마다 자동으로 화면에 들어간다.
@@ -4626,7 +4636,7 @@ if (!process.env.VITEST) {
             attached: piece?.assets, attachedVideos: piece?.videoAssets,
           });
           launchShortsRun(sid, s.topic, sourceBody
-            ? { sourceBody, sourceFlagged: sourceFlaggedClaims(pieceStore().get(s.sourcePieceId ?? '')?.runId), ...media }
+            ? { sourceBody, sourceFlagged: sourceFlaggedClaims(piece?.runId), loreFacts: loreFactsFor(piece?.runId), ...media }
             : media);
           // eslint-disable-next-line no-console
           console.log(`[부팅 복구] 중단된 숏폼 자동 재개 — ${s.topic.slice(0, 30)} (${(s.recoveries ?? 0) + 1}/2회차)`);

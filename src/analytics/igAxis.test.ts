@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyAxis, axisPerformance, axisBlock, isContainerTopic, AXIS_NONE, IG_AXES } from './igAxis';
+import { classifyAxis, axisPerformance, axisBlock, isContainerTopic, AXIS_NONE, AXIS_LORE, IG_AXES } from './igAxis';
 
 describe('classifyAxis — 소재 축 판별(순수)', () => {
   it('표현으로 축을 잡는다', () => {
@@ -19,6 +19,18 @@ describe('classifyAxis — 소재 축 판별(순수)', () => {
   it('축 목록에 중복 이름이 없다', () => {
     const names = IG_AXES.map((a) => a.axis);
     expect(new Set(names).size).toBe(names.length);
+  });
+  it('읽을 거리 편은 이야기·유래 축 — 꽃말의 "꽃"·보호수의 "보호"가 뒤 축에 먼저 잡히지 않는다', () => {
+    expect(classifyAxis('동백꽃 꽃말과 이름 유래')).toBe(AXIS_LORE);
+    expect(classifyAxis('마을 보호수가 된 느티나무 이야기')).toBe(AXIS_LORE);
+    expect(classifyAxis('은행나무 전설, 천 년을 산 나무')).toBe(AXIS_LORE);
+    expect(IG_AXES[0]!.axis).toBe(AXIS_LORE);
+  });
+  it('재배 편은 종전 축 그대로 — 이야기 축이 앞에 와도 기준선 분류가 안 바뀐다', () => {
+    expect(classifyAxis('자두나무 가지치기, 높이는 손이 정합니다')).toBe('전정·가지치기');
+    expect(classifyAxis('무화과 비료, 가을엔 이것부터 확인하세요')).toBe('관리·병해');
+    expect(classifyAxis('능소화 담장에 올리면 벽이 상할까요')).toBe(AXIS_NONE);
+    expect(classifyAxis('노래기 방제, 지금 뿌려야 하는 약')).toBe(AXIS_NONE); // '노래'가 이야기 축을 가로채지 않는다(구절 토큰)
   });
 });
 
@@ -55,6 +67,12 @@ describe('axisBlock — 프롬프트 블록(순수)', () => {
     { axis: '전정·가지치기', count: 17, median: 943 },
     { axis: AXIS_NONE, count: 39, median: 557 },
   ];
+  it('이야기 축이 표에 없으면 "이야기 후보를 빼지 마라" 한 줄, 표에 오르면 그 줄은 빠진다', () => {
+    expect(axisBlock(perf)).toContain('읽을 거리(전설·꽃말·유래·역사·명소 이야기)는 아직 표본이 없어');
+    const withLore = [...perf, { axis: AXIS_LORE, count: 5, median: 1200 }];
+    expect(axisBlock(withLore)).not.toContain('아직 표본이 없어');
+    expect(axisBlock(withLore)).toContain('- 이야기·유래: 중앙 1,200회 (5편)');
+  });
   it('축이 둘 미만이면 빈 문자열 — 비교가 안 되면 신호가 아니다', () => {
     expect(axisBlock([])).toBe('');
     expect(axisBlock([{ axis: '전정·가지치기', count: 9, median: 900 }])).toBe('');
