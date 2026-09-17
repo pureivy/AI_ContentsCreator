@@ -30,10 +30,11 @@ import { recentModulesToAvoid, moduleAvoidBlock } from '../content/contentModule
 import { collectExistingContent } from '../content/novelty';
 import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard, writeBriefGate, writeFactSupply } from '../sessions/digest';
 import { supplyFacts, factSupplyBlock } from '../content/factSupply';
+import type { FactSupplyResult } from '../content/factSupply';
 import { parseBriefVerdict, parseUnresolved, isBlocking, describeVerdict, VERDICT_FORMAT } from './briefVerdict';
 import { blogStyleIssues, styleRevisionReject } from '../content/styleLint';
 import { resolveStructureSeed, inheritStructureSeed, structureBlock, STRUCTURE_KEEP_BLOCK } from '../content/structureSeed';
-import { factGateBlog, buildEvidence, runFactGateWithRepair, repairSentences, applySentenceRepairs, extractFactCard, FACT_CARD_HEADER } from '../content/factGate';
+import { factGateBlog, buildEvidence, runFactGateWithRepair, repairSentences, applySentenceRepairs, extractFactCard, FACT_CARD_HEADER, mergeSuppliedFacts } from '../content/factGate';
 import type { FactGateResult } from '../content/factGate';
 import { readInjected, readVerified } from '../agents/workspace';
 import { llmWiki } from '../wiki/llmwiki';
@@ -454,6 +455,11 @@ export class FactStarvedError extends Error {
 export function isFactStarved(e: unknown): e is FactStarvedError {
   return e instanceof FactStarvedError || (e instanceof Error && e.name === 'FactStarvedError');
 }
+/** 사실 부족으로 던질 것인가(순수, 최종 리뷰 I3) — 엄격 런이고 수종이 잡힌 주제만. 보류의 근거는 "수종 고유 사실"이라
+ *  수종 없는 소재(상처 치료제·상토)는 질의 자체가 수종 꼴이라 부족 판정이 무의미하다 — 그런 주제는 mustFix 로만 표시. */
+export function shouldThrowStarved(strict: boolean, species: string | undefined, count: number, need: number): boolean {
+  return strict && !!species && count < need;
+}
 
 export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcome> {
   const company = opts.company ?? DEFAULT_COMPANY;
@@ -858,8 +864,10 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   // 사실 공급(2026-09-17) — 리서치팀은 키워드팀이라 브리프에 식물 사실이 거의 없다. 코드가 검색해 고유
   // 사실을 브리프 끝에 붙이고, 자율 런은 기준 미만이면 집필하지 않는다(주제 교체는 main.ts·scheduler 몫).
   // writeResearchBrief 앞이어야 한다 — 리비전이 research_brief.md 를 재주입하므로 블록이 파일에 함께 남아야 한다.
+  let factSupply: FactSupplyResult | null = null;   // 사실 카드 병합(아래)이 다시 본다
   if (CONFIG.factSupply && !research && brief.trim()) {
     const fsr = await supplyFacts({ topic, keyword: opts.keyword, model: assign.standard, signal });
+    factSupply = fsr;
     try { writeFactSupply(bus.runId, fsr); }
     catch (e) { bus.emit('log', { message: `사실 공급 영속화 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
     const cult = fsr.facts.filter((f) => f.specific && f.kind === 'cultivation').length;
@@ -872,7 +880,10 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
     const block = fsr.status === 'ok' ? factSupplyBlock(fsr) : '';
     if (block) brief = `${brief}\n\n${block}`;
     if (fsr.status === 'ok' && fsr.specificCount < CONFIG.factMinSpecific) {
-      if (opts.factStrict) throw new FactStarvedError({ topic, count: fsr.specificCount, need: CONFIG.factMinSpecific, species: fsr.species });
+      // 수종 없는 소재는 엄격 런이라도 던지지 않는다(최종 리뷰 I3) — 표시만 하고 집필한다.
+      if (shouldThrowStarved(!!opts.factStrict, fsr.species, fsr.specificCount, CONFIG.factMinSpecific)) {
+        throw new FactStarvedError({ topic, count: fsr.specificCount, need: CONFIG.factMinSpecific, species: fsr.species });
+      }
       mustFix.push(`수종 고유 사실이 ${fsr.specificCount}건(기준 ${CONFIG.factMinSpecific}) — 일반론으로 채우지 말고 있는 사실 안에서 짧게 써라`);
     }
   }
@@ -891,6 +902,10 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   if (CONFIG.factGate && !research && brief.trim()) {
     const extracted = await extractFactCardSafe(assign.micro, brief, { signal });
     factCard = extracted.card;
+    // 공급 사실은 카드에 그대로(최종 리뷰 I2) — 브리프 끝의 블록은 게이트 근거 절단(12K자) 밖에 놓이기 일쑤고, LLM 카드는
+    // 25줄 상한에 출처를 의역·URL 을 떨어뜨린다. 결정적으로 덧붙여 영속 카드·작가·게이트 근거가 같은 줄을 본다.
+    const supplied = factSupply?.status === 'ok' ? factSupplyBlock(factSupply).split('\n').slice(1) : [];   // 헤더 제외
+    factCard = mergeSuppliedFacts(factCard, supplied);
     if (factCard) {
       try { writeFactCard(bus.runId, factCard); }
       catch (e) { bus.emit('log', { message: `사실 카드 영속화 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }

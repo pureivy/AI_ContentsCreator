@@ -276,6 +276,26 @@ export async function extractFactCard(
   return lines.length ? lines.join('\n') : null;
 }
 
+/**
+ * 공급된 고유 사실을 카드에 결정적으로 덧붙인다(순수, 최종 리뷰 I2) — LLM 압축 카드는 25줄 상한에 출처를 의역하고
+ * URL 을 떨어뜨려 공급 사실이 빠지거나 변형됐다. 공급 줄("- [재배] … (근거: 출처, URL)")은 이미 카드 꼴이라
+ * 그대로 붙이고, 공백만 다른 중복은 뺀다. 붙일 것이 없으면 카드를 그대로(빈 결과는 null) 돌려준다.
+ */
+export function mergeSuppliedFacts(card: string | null, supplied: string[]): string | null {
+  if (!supplied.length) return card;
+  const key = (l: string): string => l.replace(/\s+/g, '');
+  const have = new Set((card ?? '').split('\n').map(key));
+  const extra: string[] = [];
+  for (const l of supplied) {
+    const k = key(l);
+    if (!k || have.has(k)) continue;
+    have.add(k);
+    extra.push(l);
+  }
+  const merged = [card ?? '', ...extra].filter(Boolean).join('\n');
+  return merged || null;
+}
+
 /** 추출된 주장을 근거 자료와 대조해 판정한다(LLM). */
 export async function judgeClaims(
   model: string, claims: Array<{ text: string; kind: ClaimKind; hedged?: boolean }>, evidence: string, opts: { signal?: AbortSignal } = {},

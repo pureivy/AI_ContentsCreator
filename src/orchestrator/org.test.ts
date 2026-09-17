@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { REVISE_NO_NEW_FACTS, buildReviseContext, BLOG_BODY_GUIDE, blogBodyGuide, buildGenreGuide, FactStarvedError, isFactStarved } from './org';
+import { REVISE_NO_NEW_FACTS, buildReviseContext, BLOG_BODY_GUIDE, blogBodyGuide, buildGenreGuide, FactStarvedError, isFactStarved, shouldThrowStarved } from './org';
 import { FACT_CARD_HEADER } from '../content/factGate';
 
 describe('리비전 컨텍스트(스펙 §3) — 브리프·목소리 지침이 개정에도 들어간다', () => {
@@ -130,5 +130,21 @@ describe('BLOG_BODY_GUIDE — 사실 공급 블록을 뼈대로 쓰라는 지침
     expect(BLOG_BODY_GUIDE).toContain('[재배·이야기 사실 조사');
     expect(BLOG_BODY_GUIDE).toContain('일반론으로 섹션을 채우지 마라');
     expect(blogBodyGuide(false)).toContain('일반론으로 섹션을 채우지 마라'); // 킬스위치 off 문구에도 — 골격 다양화와 무관한 지침
+  });
+});
+
+describe('shouldThrowStarved — 사실 부족으로 던질 것인가(최종 리뷰 I3)', () => {
+  it('엄격 런 + 수종 + 기준 미만 → 던진다', () => {
+    expect(shouldThrowStarved(true, '음나무', 2, 5)).toBe(true);
+  });
+  it('수종 없는 소재는 엄격 런이라도 던지지 않는다(표시만)', () => {
+    expect(shouldThrowStarved(true, undefined, 0, 5)).toBe(false);
+    expect(shouldThrowStarved(true, '', 0, 5)).toBe(false);
+  });
+  it('엄격이 아니면 던지지 않는다', () => {
+    expect(shouldThrowStarved(false, '음나무', 0, 5)).toBe(false);
+  });
+  it('기준 이상이면 던지지 않는다', () => {
+    expect(shouldThrowStarved(true, '음나무', 5, 5)).toBe(false);
   });
 });

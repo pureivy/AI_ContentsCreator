@@ -8,7 +8,7 @@ import {
   isJudgmentSentence, hasHedge, hasEventMarkers, classifyClaim,
   isHardClaim, HARD_CLAIM_KINDS,
   applySentenceRepairs, repairSentences,
-  extractFactCard, FACT_CARD_HEADER,
+  extractFactCard, FACT_CARD_HEADER, mergeSuppliedFacts,
 } from './factGate';
 import type { FactClaim, FactGateResult } from './factGate';
 
@@ -873,5 +873,24 @@ describe('extractFactCard', () => {
   it('헤더 문구', () => {
     expect(FACT_CARD_HEADER).toContain('이 목록 밖의 사실');
     expect(FACT_CARD_HEADER).toBe('[사실 카드 — 브리프에서 근거가 확인된 사실. 이 목록 밖의 사실·수치·시기·약제는 쓰지 말고, 꼭 필요하면 유보어("대개/흔히")를 붙인 일반론이나 판단문("~라고 봅니다")으로만 말하라]');
+  });
+});
+
+describe('mergeSuppliedFacts — 공급 사실을 카드에 결정적으로 덧붙인다(순수)', () => {
+  const s1 = '- [재배] 음나무는 전국 산지에 자생한다 (근거: 두산백과, https://t/1)';
+  const s2 = '- [이야기] 음나무 가시로 잡귀를 막는다는 풍습이 있다 (근거: 한국민속대백과, https://t/2)';
+  it('카드에 없는 줄만 뒤에 붙인다 — 공백만 다른 줄은 중복으로 본다', () => {
+    const card = '- 음나무는 두릅나무과 낙엽교목이다 (근거: 두산백과)\n-  [재배]  음나무는 전국 산지에 자생한다 (근거: 두산백과, https://t/1)';
+    expect(mergeSuppliedFacts(card, [s1, s2])).toBe(`${card}\n${s2}`);
+  });
+  it('카드가 null 이면 공급 줄만으로 카드를 만든다', () => {
+    expect(mergeSuppliedFacts(null, [s1, s2])).toBe(`${s1}\n${s2}`);
+  });
+  it('공급이 비면 카드를 그대로(null 은 null)', () => {
+    expect(mergeSuppliedFacts('- a', [])).toBe('- a');
+    expect(mergeSuppliedFacts(null, [])).toBeNull();
+  });
+  it('공급 안의 중복·빈 줄도 한 번만', () => {
+    expect(mergeSuppliedFacts(null, [s1, '', s1])).toBe(s1);
   });
 });
