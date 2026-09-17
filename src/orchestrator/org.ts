@@ -26,6 +26,7 @@ import { seedKeyword } from '../grounding/naver_common';
 import { getRunSettings } from '../runsettings';
 import { brandContext, activeBrandSlug, getBrand, lexiconGuide } from '../content/brand';
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid, recentBlogEndings } from '../content/priorCoverage';
+import { recentModulesToAvoid, moduleAvoidBlock } from '../content/contentModules';
 import { collectExistingContent } from '../content/novelty';
 import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard, writeBriefGate, writeFactSupply } from '../sessions/digest';
 import { supplyFacts, factSupplyBlock } from '../content/factSupply';
@@ -200,18 +201,18 @@ async function serpPopularBrief(topic: string, signal?: AbortSignal): Promise<st
  * 켜진 런에서만 그 한 문장을 뺀다 — 결론을 예고로 미루지 말라는 제약은 structureBlock 쪽 문구가 계속 건다.
  * 인자를 안 넘기면(falsy) 종전대로 금지 문장이 붙는다 = 골격을 건드리지 않는 수정·개정 라운드에 맞는 동작.
  */
-export function buildGenreGuide(axes: readonly string[], teaser?: boolean): string {
+export function buildGenreGuide(axes: readonly string[], teaser?: boolean, avoidTodayAction?: boolean): string {
   if (!axes.length) return '';
   return `[글의 성격] 이 블로그가 한 가지 틀로만 반복되지 않게, 다음 축을 골고루 쓴다 — ${axes.map((x: string, i: number) => `${i + 1}) ${x}`).join(' ')}. `
-    + '**주어진 주제가 한 축(예: 고르기·구매)에 치우쳐 있어도 그 틀에 갇히지 마라 — 최소 한 개 섹션은 다른 축으로 쓴다.** '
-    + '예: 구매 주제라면 심은 뒤 첫 계절에 실제로 하는 일, 그때 흔한 실패와 회복까지 이어서 다룬다. '
+    // 2026-09-17 정정 — 종전 "최소 한 개 섹션은 다른 축으로 + 구매 주제면 첫 계절·실패·회복까지"가 매 글을
+    // 모든 축의 합집합으로 만들었다(실측 75편: 5개 이상 모듈 44편). 한 글은 한 축만, 깊이는 고유 사실로.
+    + '**이 글은 제목이 약속한 축 하나만 다룬다. 다른 축의 섹션을 덧붙이지 말고, 그 축 안에서 [재배·이야기 사실 조사]의 고유 사실로 깊이를 낸다.** '
     + '**주제가 대상 이름만 주어졌고 각도가 없으면(예: 품종명 한 단어), 구매·고르기를 기본값으로 잡지 마라** — '
     + '위 축 가운데 [이미 포화된 소재]·[최근 발행]에 덜 나온 축을 골라 각도를 세워라. '
-    // 관찰·이야기 축 예외(2026-08-13, 나무 이야기 축 3순위 투입 전제조건) — 이 하드코딩이 예외 없이
-    // 걸리면 개화·단풍·낙엽 같은 '나무가 스스로 하는 일' 글이 매번 심기·전정 작업 지시로 억지 착지해
-    // 하우투 장르로 되돌아간다(08-01 장르 수렴과 같은 경로).
-    + '독자가 오늘 실제로 해볼 수 있는 행동을 최소 하나 제시하라("기록만 해두라"로 끝내지 말 것). '
-    + '단, 개화·단풍·낙엽처럼 나무가 스스로 하는 일을 다루는 관찰·이야기 글은 예외다 — 심기·전정 같은 작업 지시로 억지 마무리하지 말고, 언제 어디서 무엇이 어떻게 보이는지 구체적인 관찰 포인트로 끝내도 좋다. '
+    + (avoidTodayAction ? '' : '독자가 오늘 실제로 해볼 수 있는 행동을 최소 하나 제시하라("기록만 해두라"로 끝내지 말 것). ')
+    // 관찰·이야기 축 예외(2026-08-13, 2026-09-17 확장) — 개화·단풍·낙엽 관찰뿐 아니라 전설·꽃말·유래·역사·
+    // 쓰임새·문학·명소 글도 심기·전정 작업 지시로 억지 착지하면 하우투로 되돌아간다.
+    + '단, 관찰·이야기 글(개화·단풍·낙엽 관찰, 전설·설화·꽃말·유래·역사·쓰임새·문학·명소)은 예외다 — 심기·전정 같은 작업 지시로 억지 마무리하지 말고, 이야기가 가리키는 것(지금 어디서 무엇을 보면 되는지, 그 나무를 마당에 들일 때 이야기가 남긴 한 가지)으로 끝내도 좋다. '
     + (teaser ? '' : '맺음을 "다음 글에서는…" 예고로 닫지 마라 — 이 글 안에서 완결한다.');
 }
 
@@ -279,6 +280,10 @@ export async function writeBlogBody(a: {
   // 같은 문형("오늘 하나만 해보세요")으로 닫는 수렴을 못 잡았다. 최근 5편의 마무리 문단 첫 문장 원문을
   // 직접 보여 준다(카드·쇼츠의 마무리·훅 로테이션과 같은 원리). revise 는 본문 유지가 목적이라 제외.
   const endingAvoid = (revise || !CONFIG.voiceRotation || process.env.WRITER_STYLE_DIVERGE === 'off') ? '' : recentBlogEndings(brandSlug, 5);
+  // 내용 모듈 로테이션(2026-09-17) — 표면(문형·상투구)이 아니라 소재 덩어리를 돌린다. 수종이 달라 priorCoverage 가
+  // 안 걸리는 글끼리도 화분·묘목·첫해가 매번 겹치던 실측 대응. revise 는 본문 유지가 목적이라 제외.
+  const moduleNames = (revise || !CONFIG.moduleRotation) ? [] : recentModulesToAvoid(brandSlug, `${topic} ${keyword ?? ''}`);
+  const moduleAvoid = moduleNames.length ? moduleAvoidBlock(moduleNames, getBrand()?.contentModules) : '';
   // 어휘 상투구 회피(2026-07-24) — recentStyleToAvoid(구조)를 넘어, 하우투 글마다 단골로 반복되는 정형 표현
   // ('물주기 리듬'·'손가락 넣어 습도 확인' 등)을 어휘 층위에서 막는다. 같은 킬스위치·revise 제외.
   // 2026-08-06: 하드코딩 예시만으론 새로 생기는 상투구('갈리는 지점' 소제목 3편 실측)를 못 막아,
@@ -327,7 +332,7 @@ export async function writeBlogBody(a: {
   // 같은 장르를 어색하게 비트는 결과만 나온다 — 그래서 장르 자체를 명시적으로 요구한다.
   // **장르 축은 업종마다 다르므로 브랜드 설정(genreAxes)에서 온다** — 미설정 브랜드는 이 지침 자체를 생략.
   const axes = revise ? [] : (getBrand()?.genreAxes ?? []);
-  const genreGuide = buildGenreGuide(axes, teaser);
+  const genreGuide = buildGenreGuide(axes, teaser, moduleNames.includes('오늘 할 일 하나'));
   // 근거의 출처를 브랜드 자신의 경험으로 되돌린다(실측: 외부로 떠넘기는 지시 5→32회, 1인칭 실경험 4편 중 1건).
   // 업종 무관하게 성립하는 문구만 쓴다 — 특정 표현(지역명·현장명)을 지시하지 않는다(사용자 지시 2026-08-01).
   //
@@ -354,7 +359,8 @@ export async function writeBlogBody(a: {
   // 사후 판정할 수 없었다(배롱나무 중복 조사에서 실측). 발화 여부만 한 줄 남긴다.
   if (!revise) {
     bus.emit('log', {
-      message: `작가 다양성 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 스타일지문 ${styleAvoid ? '주입' : '없음'} · 마무리회피 ${endingAvoid ? '주입' : '없음'} · 반복상투구 ${ticPhrases.length}건${ticPhrases.length ? `(${ticPhrases.slice(0, 3).join(', ')}${ticPhrases.length > 3 ? ' 외' : ''})` : ''} · 과사용어간 ${ticLexemes.length}건${ticLexemes.length ? `(${ticLexemes.slice(0, 3).join(', ')}${ticLexemes.length > 3 ? ' 외' : ''})` : ''}`,
+      message: `작가 다양성 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 스타일지문 ${styleAvoid ? '주입' : '없음'} · 마무리회피 ${endingAvoid ? '주입' : '없음'} · 반복상투구 ${ticPhrases.length}건${ticPhrases.length ? `(${ticPhrases.slice(0, 3).join(', ')}${ticPhrases.length > 3 ? ' 외' : ''})` : ''} · 과사용어간 ${ticLexemes.length}건${ticLexemes.length ? `(${ticLexemes.slice(0, 3).join(', ')}${ticLexemes.length > 3 ? ' 외' : ''})` : ''}`
+        + ` · 금지모듈 ${moduleNames.length}건${moduleNames.length ? `(${moduleNames.slice(0, 3).join(', ')}${moduleNames.length > 3 ? ' 외' : ''})` : ''}`,
     });
   }
   // 지침 선택은 '이 콜에 [이번 글 구조] 블록이 실리는가'로 정한다 — 위임 문구와 블록이 항상 짝으로 나간다.
@@ -381,6 +387,7 @@ export async function writeBlogBody(a: {
       priorCoverage,
       styleAvoid,
       endingAvoid,
+      moduleAvoid,
       phraseAvoid,
       lexemeAvoid,
       frameAvoid,
@@ -406,7 +413,7 @@ export async function writeBlogBody(a: {
       // 재집필은 검수 의견을 뺀다(같은 벽에 다시 부딪히지 않게) — 그러나 mustFixBlock 은 **남긴다**.
       // 이건 품질 조언이 아니라 '무근거 기입을 쓰지 마라'는 금지라, 여기서 빠지면 퇴화 재집필 경로가
       // 게이트의 구멍이 된다(브리프에 남은 무근거 주장이 그대로 본문에 실린다).
-      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms), brief ? `[리서치·SEO 브리프]\n${brief}` : '', mustFixBlock].filter(Boolean).join('\n\n'),
+      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, moduleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms), brief ? `[리서치·SEO 브리프]\n${brief}` : '', mustFixBlock].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, groundForFacts: true, maxOutputTokens: 5000, signal,
     });

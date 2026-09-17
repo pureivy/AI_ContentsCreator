@@ -98,6 +98,20 @@ describe('buildGenreGuide — 장르 축 지침 × 구조 시드 예고', () => 
     expect(buildGenreGuide([], true)).toBe('');
     expect(buildGenreGuide([], false)).toBe('');
   });
+  it('다른 축 섹션을 덧붙이라는 문장이 없고, 한 축만 깊게 다루라는 문장이 있다', () => {
+    const g = buildGenreGuide(axes);
+    expect(g).not.toContain('최소 한 개 섹션은 다른 축으로');
+    expect(g).not.toContain('첫 계절에 실제로 하는 일');
+    expect(g).toContain('제목이 약속한 축 하나만');
+    expect(g).toContain('다른 축의 섹션을 덧붙이지');
+  });
+  it('avoidTodayAction 이면 "오늘 해볼 행동" 요구를 뺀다', () => {
+    expect(buildGenreGuide(axes, false, true)).not.toContain('행동을 최소 하나 제시하라');
+    expect(buildGenreGuide(axes, false, false)).toContain('행동을 최소 하나 제시하라');
+  });
+  it('이야기 글(전설·꽃말·유래…) 예외가 명시된다', () => {
+    expect(buildGenreGuide(axes)).toContain('전설·설화·꽃말·유래');
+  });
 });
 
 describe('FactStarvedError — 사실 부족 종료 신호', () => {
