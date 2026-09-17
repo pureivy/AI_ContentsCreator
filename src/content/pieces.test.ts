@@ -58,6 +58,16 @@ describe('PieceStore (라이프사이클 영속)', () => {
     expect(u?.createdTs).toBe(p.createdTs);
     expect(u?.seoScore).toBe(72);
   });
+
+  it('markFactStarved — 사실 부족 조각은 error 로 닫히고 사유가 남는다(재개 대상 아님)', () => {
+    const s = new PieceStore(dir);
+    const p = s.create({ title: '음나무가 잘 자라는 자리', keyword: '음나무', auto: true });
+    const m = s.markFactStarved(p.id, { ts: '2026-09-17T09:00:00.000Z', count: 2, need: 5, species: '음나무' });
+    expect(m?.stage).toBe('error');
+    expect(m?.factStarved).toEqual({ ts: '2026-09-17T09:00:00.000Z', count: 2, need: 5, species: '음나무' });
+    expect(new PieceStore(dir).get(p.id)?.factStarved?.species).toBe('음나무');
+    expect(selectResumablePiece(s.list(), () => false)).toBeNull(); // error 는 재개 대상이 아니다
+  });
 });
 
 describe('selectResumablePiece (재개 우선 — 완전 자율 내구성)', () => {

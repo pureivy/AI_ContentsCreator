@@ -15,6 +15,8 @@ import type { FactGateInfo } from './factGate';
 export type PieceStage =
   | 'idea' | 'research' | 'draft' | 'ready' | 'published' | 'measured' | 'reflected' | 'error';
 
+export interface FactStarvedInfo { ts: string; count: number; need: number; species?: string }
+
 /** 비종료 스테이지 — 자율 사이클이 '재개' 대상으로 스캔(런이 죽어 stranded 된 piece 회수). */
 export const RESUMABLE_STAGES: readonly PieceStage[] = ['idea', 'research', 'draft'];
 
@@ -77,6 +79,9 @@ export interface Piece {
   videoAssets?: string[];
   /** 사실 게이트 결과(2026-08-26) — hold/error 면 자동 네이버 임시저장을 건너뛴다(수동 버튼은 유지). */
   factGate?: FactGateInfo;
+  /** 사실 부족 종료(2026-09-17) — 자율 런이 고유 사실 기준 미만이라 집필하지 않은 조각. stage 는 error 로 닫히고
+   *  이 기록이 같은 수종의 재제안을 CONFIG.factStarvedDays 동안 막는다(scheduler). rotationItems 는 error 를 빼므로 별도 필드. */
+  factStarved?: FactStarvedInfo;
   createdTs: string;
   updatedTs: string;
 }
@@ -151,6 +156,11 @@ export class PieceStore {
     if (!p) return undefined;
     const errors = (p.errors ?? 0) + 1;
     return this.update(id, errors >= MAX_ERRORS ? { errors, stage: 'error' } : { errors });
+  }
+  /** 사실 부족 종료 — 재시도 예산과 무관하게 바로 닫는다(다시 돌려도 검색 결과는 같다). */
+  markFactStarved(id: string, info: FactStarvedInfo): Piece | undefined {
+    if (!this.items.get(id)) return undefined;
+    return this.update(id, { stage: 'error', errors: MAX_ERRORS, factStarved: info });
   }
 }
 

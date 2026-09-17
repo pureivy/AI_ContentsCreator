@@ -25,6 +25,7 @@ import { createBus, getBus, disposeBus } from '../events/bus';
 import type { EventBus } from '../events/bus';
 import { runId } from '../util/ids';
 import { startRun } from '../orchestrator/index';
+import { isFactStarved } from '../orchestrator/org';
 import { microCall } from '../orchestrator/agent';
 import { getCompany, reloadCompany, editRole, deleteRole, addTeam, renameTeam, deleteTeam, addMember } from '../agents/company-loader';
 import { rolesById } from '../agents/company';
@@ -151,6 +152,9 @@ const RUNS = new Map<string, RunHandle>();
 const RUNS_CAP = 200;
 // 마지막 자율 사이클 런(있으면) — /autonomy/status 표출용.
 let lastAutoRun: { ts: string; topic: string } | null = null;
+// 사실 부족 재시도 창(2026-09-17) — 최근 60분 안의 사실 부족 종료 시각. 연속 부족이 CONFIG.factSupplyRetry 를
+// 넘으면 그 주기는 건너뛴다(검색이 안 나오는 날에 틱을 계속 돌리지 않게). 시간 창이라 리셋 코드가 필요 없다.
+let factStarvedAt: number[] = [];
 /** RUNS 무한 누적 방지 — 캡 초과 시 오래된 '종료' 런부터 제거(running 보존, 이벤트는 events.jsonl 영속). */
 function evictRuns(): void {
   if (RUNS.size <= RUNS_CAP) return;
@@ -465,6 +469,9 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
         agentId: opts.agent, path: opts.path, budgetUsd: opts.budgetUsd, revise: opts.revise, keyword: opts.keyword,
         pieceId: opts.pieceId, // 제작 런 표식 — 단축경로(즉답) 분류 우회(질문형 가제 좌초 방지)
         mission: opts.mission, persona: opts.persona, personaText: opts.personaText,
+        // 사실 공급 엄격 모드(2026-09-17) — 자율 런만. 사용자가 직접 띄운 런(수동·userTriggered 틱·리비전)은 절대 보류하지 않는다.
+        factStrict: !!opts.auto && !opts.revise && opts.mission !== 'research'
+          && !(opts.pieceId && pieceStore().get(opts.pieceId)?.userTriggered),
       });
     })
     .then((outcome) => {
@@ -503,6 +510,25 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
         bus.emit(EventType.run_done, { status: 'cancelled' });
       } else {
         handle.status = 'error';
+        if (isFactStarved(e)) {
+          // 사실 부족(2026-09-17) — 재시도 예산·에러 카운트가 아니라 '이 주제로는 못 쓴다'는 판정. 조각을 닫고
+          // 같은 수종을 창 안에서 다시 안 잡게 기록한 뒤, 슬롯을 지키려 즉시 다음 틱을 띄운다(주제 교체).
+          if (opts.pieceId) { try { pieceStore().markFactStarved(opts.pieceId, { ts: new Date().toISOString(), count: e.count, need: e.need, ...(e.species ? { species: e.species } : {}) }); } catch { /* 무해 */ } }
+          console.log(`[사실공급] "${topic.slice(0, 30)}" — 고유 사실 ${e.count}건 < ${e.need} → 집필 보류, 주제 교체`);
+          bus.emit(EventType.error, { message: e.message });
+          bus.emit(EventType.run_done, { status: 'error' });
+          const now = Date.now();
+          factStarvedAt = [...factStarvedAt.filter((t) => now - t < 3_600_000), now];
+          if (opts.auto) {
+            if (factStarvedAt.length <= CONFIG.factSupplyRetry) {
+              setTimeout(() => { void stopAutoCycle.runNowPersistent({ label: '사실 부족 재시도', respectToggle: true }); }, 1_000);
+            } else {
+              console.log(`[사실공급] 사실 부족 ${factStarvedAt.length}연속 — 이번 주기 건너뜀(다음 정각·타이머 틱에서 재개)`);
+              void notify({ title: '⏸ 이번 주기 건너뜀 — 사실 부족', body: `최근 1시간에 ${factStarvedAt.length}개 주제가 수종 고유 사실 ${e.need}건을 못 채웠습니다. 다음 틱에서 다시 시도합니다.` }).catch(() => { /* 무해 */ });
+            }
+          }
+          return;
+        }
         // 실런 실패 → piece 에러 카운트(캡 초과 시 종료, 그 전엔 재개 대상). 취소와 구분해 폭주 방지.
         // 리비전 런 실패는 예외 — ready 초안이 멀쩡히 남아 있으므로 강등/카운트하지 않는다.
         // 일시적 실패(LLM 한도·혼잡·네트워크)도 예외(2026-08-28) — 시간이 풀어 주는 실패라 재시도
