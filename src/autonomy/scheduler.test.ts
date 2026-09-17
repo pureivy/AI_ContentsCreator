@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, orderCandidates, shouldRememberDemandReject } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, orderCandidates, shouldRememberDemandReject, factStarvedItems } from './scheduler';
 import type { DemandRow } from '../analytics/topicDemand';
 
 describe('startAutoCycle (유휴 게이트 자율 사이클)', () => {
@@ -687,5 +687,20 @@ describe('orderCandidates — 계열 먼저, 그다음 검색량', () => {
   it('빈 목록·전부 소프트도 안전하다', () => {
     expect(run([])).toEqual([]);
     expect(run([c('a', 'soft', 10), c('b', 'soft', 99)])).toEqual(['b', 'a']);
+  });
+});
+
+describe('factStarvedItems — 사실 부족 기록을 로테이션 재료로', () => {
+  it('브랜드가 같고 factStarved 가 있는 조각만, ts 는 부족 판정 시각', () => {
+    const pieces = [
+      { title: '음나무 자리', keyword: '음나무', brand: 'b', factStarved: { ts: '2026-09-17T09:00:00.000Z' } },
+      { title: '호두나무 뿌리', keyword: '호두나무', brand: 'b' },
+      { title: '감나무 거름', keyword: '감나무', brand: 'other', factStarved: { ts: '2026-09-10T00:00:00.000Z' } },
+    ];
+    expect(factStarvedItems(pieces, 'b')).toEqual([{ title: '음나무 자리', keyword: '음나무', ts: '2026-09-17T09:00:00.000Z' }]);
+  });
+  it('slug 미지정(범용 모드)은 brand 없는 조각만', () => {
+    const pieces = [{ title: 'a', factStarved: { ts: 't' } }, { title: 'b', brand: 'x', factStarved: { ts: 't' } }];
+    expect(factStarvedItems(pieces, undefined).map((i) => i.title)).toEqual(['a']);
   });
 });

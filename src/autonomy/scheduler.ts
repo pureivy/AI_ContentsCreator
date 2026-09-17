@@ -443,6 +443,20 @@ function rotationItems(slug: string | undefined): Array<{ title: string; keyword
     .map((p) => ({ title: p.title, keyword: p.keyword, ts: p.createdTs }));
 }
 
+/** 사실 부족 기록(2026-09-17)을 로테이션 재료 꼴로 — rotationItems 는 error 조각을 빼므로 별도. ts 는 부족 판정 시각. */
+export function factStarvedItems(
+  pieces: Array<{ title: string; keyword?: string; brand?: string; factStarved?: { ts: string } }>, slug: string | undefined,
+): Array<{ title: string; keyword?: string; ts: string }> {
+  return pieces
+    .filter((p) => (p.brand ?? '') === (slug ?? '') && p.factStarved?.ts)
+    .map((p) => ({ title: p.title, ...(p.keyword ? { keyword: p.keyword } : {}), ts: p.factStarved!.ts }));
+}
+/** 최근 CONFIG.factStarvedDays 안에 사실 부족으로 닫힌 수종 → 며칠 전. */
+export function factStarvedRecencyFor(slug: string | undefined, now = new Date()): Map<string, number> {
+  try { return speciesRecency(factStarvedItems(pieceStore().list(), slug), speciesKeyOf, now, CONFIG.factStarvedDays); }
+  catch { return new Map(); }
+}
+
 /** 최근 CONFIG.speciesRecentDays 일 안에 다룬 수종 → 며칠 전. 후보 루프·예고·클러스터 게이트 공용. */
 export function speciesRecencyFor(slug: string | undefined, now = new Date()): Map<string, number> {
   try { return speciesRecency(rotationItems(slug), speciesKeyOf, now, CONFIG.speciesRecentDays); }
@@ -745,6 +759,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
   const themeCov = brandThemeCoverage(new Date(), slug);   // 주제 축 로테이션(2026-08-27) — 수종과 직교
   // 최근 수종·축 제외(2026-09-17 사용자 확정) — 카운트(월 상한)와 달리 '며칠 전'을 잰다. 둘 다 지시 중에도 건다.
   const speciesRecent = speciesRecencyFor(slug);
+  const factStarvedRecent = factStarvedRecencyFor(slug);   // 사실 부족 수종(2026-09-17) — 검색해도 안 나온 수종은 창 안에서 재제안 금지
   const themeRecent = themeRecencyFor(slug);
 
   // 브랜드 설정 시: 주제를 브랜드 제품·타겟에 조향 + 콜드스타트는 시드 키워드에서 출발 +
@@ -1163,6 +1178,14 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       if (gate.level === 'hard') {
         console.log(`[auto-cycle] 아이디어 기각(계열 쿨다운 하드) — "${title}" (${gate.key}: ${gate.why})`);
         rejects.push(`"${title}"=계열 쿨다운(${gate.key} — 최근 집중, 다른 계열·조합으로)`);
+        continue;
+      }
+      // 사실 부족 수종 게이트(하드, 비용 0, 2026-09-17) — 고유 사실이 기준 미만이라 집필 못 한 수종은 각도를
+      // 바꿔도 같은 검색 결과다. 지시 중에도 건다. 마지막 라운드에도 기각(후순위로 살리면 같은 벽에 또 부딪힌다).
+      const starved = usedRecently(`${title} ${keyword ?? ''}`, factStarvedRecent, speciesKeyOf);
+      if (starved) {
+        console.log(`[auto-cycle] 아이디어 기각(사실 부족 수종) — "${title}" (${starved.name} ${starved.daysAgo}일 전)`);
+        rejects.push(`"${title}"=최근 ${CONFIG.factStarvedDays}일 안에 사실 부족으로 닫힌 수종(${starved.name} — 자료가 있는 다른 수종으로)`);
         continue;
       }
       // 수종 앵커 게이트(하드) — 이름·상징 유래 축(4순위, 2026-08-13 투입) 전용 함정 차단. 실측(08-01):
