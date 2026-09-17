@@ -351,6 +351,15 @@ describe('lacksSpeciesAnchor — 이름·꽃말·유래 축 수종 앵커 게이
     expect(lacksSpeciesAnchor('가을 정원의 상징, 단풍 감상법')).toBe(false);
     expect(lacksSpeciesAnchor('묘목 고르는 법')).toBe(false);
   });
+  it('전설·설화·민담·신화도 트리거다(2026-09-17 읽을 거리 축)', () => {
+    expect(lacksSpeciesAnchor('나무에 얽힌 전설 모음')).toBe(true);
+    expect(lacksSpeciesAnchor('은행나무 전설, 천 년을 산 나무')).toBe(false);
+  });
+  it("'나무'로 안 끝나는 수종도 사전 적중이면 앵커다(능소화·무궁화)", () => {
+    expect(lacksSpeciesAnchor('능소화 꽃말과 전설')).toBe(false);
+    expect(lacksSpeciesAnchor('무궁화 이름의 유래')).toBe(false);
+    expect(lacksSpeciesAnchor('장미 꽃말과 전설')).toBe(true); // 사전에 '장미' 단독 항목 없음 — 화초 미끄러짐 그대로 기각
+  });
 });
 
 describe('normalizeIdeaCandidates — 8후보 응답 파서(순수)', () => {
