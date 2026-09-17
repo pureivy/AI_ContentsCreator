@@ -125,6 +125,12 @@ describe('FactStarvedError — 사실 부족 종료 신호', () => {
   });
 });
 
+it('BLOG_BODY_GUIDE — 결론 의무 문구에 "오늘 할" 토큰이 없다(금지 모듈 "오늘 할 일 하나"와 충돌하지 않게)', () => {
+  expect(BLOG_BODY_GUIDE).not.toContain('오늘 할 행동');
+  expect(BLOG_BODY_GUIDE).toContain('독자가 할 행동을 반드시 말하라');
+  expect(blogBodyGuide(false)).not.toContain('오늘 할 행동');
+});
+
 describe('BLOG_BODY_GUIDE — 사실 공급 블록을 뼈대로 쓰라는 지침', () => {
   it('일반론으로 채우지 말라는 문장이 있다', () => {
     expect(BLOG_BODY_GUIDE).toContain('[재배·이야기 사실 조사');
