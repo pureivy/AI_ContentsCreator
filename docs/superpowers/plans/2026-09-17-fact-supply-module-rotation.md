@@ -198,7 +198,7 @@ describe('factSubjectOf — 사실 수집 대상', () => {
     expect(factSubjectOf('음나무가 잘 자라는 지역, 중부·남부 다르게 심는 법', '음나무')).toEqual({ subject: '음나무', species: '음나무' });
     expect(factSubjectOf('엄나무 묘목, 뿌리목부터 확인하세요')).toEqual({ subject: '음나무', species: '음나무' }); // 별칭
   });
-  it('수종이 없으면 keyword(2어절 이하) → 없으면 제목 첫 어절', () => {
+  it('수종이 없으면 keyword(3어절 이하) → 없으면 제목 첫 어절', () => {
     expect(factSubjectOf('나무 상처 치료제, 바르면 안 되는 5가지 자리', '나무 상처 치료제')).toEqual({ subject: '나무 상처 치료제' });
     expect(factSubjectOf('상토 배양토 차이, 구덩이로 포대 수 계산', '상토 배양토 차이 구덩이 포대')).toEqual({ subject: '상토' });
     expect(factSubjectOf('상토 배양토 차이')).toEqual({ subject: '상토' });
@@ -327,12 +327,12 @@ export const FACT_SUPPLY_HEADER = '## 재배·이야기 사실 조사(자동 수
 
 const compact = (s: string): string => (s ?? '').normalize('NFC').replace(/\s+/g, '');
 
-/** 수집 대상 — 수종 사전 적중 → 키워드(2어절 이하) → 제목 첫 어절. */
+/** 수집 대상 — 수종 사전 적중 → 키워드(3어절 이하) → 제목 첫 어절. */
 export function factSubjectOf(topic: string, keyword?: string): { subject: string; species?: string } {
   const sp = findSpeciesLoose(`${topic} ${keyword ?? ''}`);
   if (sp) return { subject: sp.name, species: sp.name };
   const kw = (keyword ?? '').trim();
-  if (kw && kw.split(/\s+/).length <= 2) return { subject: kw };
+  if (kw && kw.split(/\s+/).length <= 3) return { subject: kw };
   const first = topic.trim().split(/[\s,·]+/)[0] ?? '';
   return { subject: first || kw || topic.trim() };
 }
