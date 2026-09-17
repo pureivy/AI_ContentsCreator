@@ -15,10 +15,12 @@ import { getBrand, activeBrandSlug } from '../src/content/brand';
 import { themeInText } from '../src/content/topicThemes';
 import { speciesInText } from '../src/content/speciesRotation';
 import { findSpeciesLoose } from '../src/content/species';
+import { modulesInBody } from '../src/content/contentModules';
+import { blogBodyOf } from '../src/content/priorCoverage';
 
 const RULES_LIVE = '2026-09-17';   // 최근 축 창·수종 창·지시 우회 제거가 서버에 올라간 날
 
-interface Piece { title: string; keyword?: string; createdTs: string; brand?: string; stage: string }
+interface Piece { title: string; keyword?: string; createdTs: string; brand?: string; stage: string; runId?: string }
 
 const themeOf = (t: string): string | null => themeInText(t, getBrand()?.topicThemes);
 const speciesOf = (t: string): string | null =>
@@ -55,6 +57,24 @@ function summarize(s: Slice): string[] {
     `  쏠림 — 상위 4축이 ${share}%  ${top.slice(0, 4).map(([t, n]) => `${t} ${n}`).join(' · ') || '(없음)'}`,
     `  폭   — 쓴 축 ${themes.size}/${allThemes} · 쓴 수종 ${species.size} · 한 수종 최다 ${maxSp}편`,
   ];
+  // 이야기 축 비율(2026-09-17 읽을 거리 축) — 5축 합이 15% 미만이면 쿼터를 후속 결정(스펙 §4-1).
+  const LORE = new Set(['전설·설화·민담', '꽃말·상징·이름 유래', '역사·문화·쓰임새', '문학·예술 속 나무', '명소·군락지·풍경']);
+  const loreN = [...themes.entries()].filter(([t]) => LORE.has(t)).reduce((a, r) => a + r[1], 0);
+  out.push(`  이야기 — 5축 합 ${loreN}편(${themed ? Math.round((loreN / themed) * 100) : 0}%)`);
+  // 모듈 분포(2026-09-17) — 기준선(규칙 전 75편): 묘목 80% · 잎 진 뒤/첫해 78% · 화분 61%.
+  const mods = getBrand()?.contentModules ?? [];
+  if (mods.length && s.pieces.length) {
+    const cnt = new Map<string, number>();
+    let withBody = 0;
+    for (const p of s.pieces) {
+      const body = blogBodyOf(p.runId);
+      if (!body) continue;
+      withBody++;
+      for (const m of modulesInBody(body, mods)) cnt.set(m, (cnt.get(m) ?? 0) + 1);
+    }
+    const line = mods.map((m) => `${m.name} ${withBody ? Math.round(((cnt.get(m.name) ?? 0) / withBody) * 100) : 0}%`).join(' · ');
+    out.push(`  모듈 — (본문 있는 ${withBody}편) ${line}`);
+  }
   return out;
 }
 
