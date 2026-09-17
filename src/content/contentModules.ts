@@ -28,7 +28,7 @@ export function modulesInBody(body: string, modules: readonly ContentModule[] | 
   const whole = compact(body);
   const out: string[] = [];
   for (const m of modules) {
-    const toks = m.match.map(compact).filter(Boolean);
+    const toks = [...new Set(m.match.map(compact).filter(Boolean))];
     const inHeading = toks.some((t) => headings.includes(t));
     const total = toks.reduce((a, t) => a + count(whole, t), 0);
     if (inHeading || total >= 3) out.push(m.name);

@@ -18,6 +18,10 @@ describe('modulesInBody — 소제목 1회 또는 본문 3회', () => {
     expect(modulesInBody('묘목을 봅니다. 묘목이 좋다. 묘목 고르기.', M)).toEqual(['묘목 보는 자리']);
     expect(modulesInBody('화분도 됩니다. 화분은 반만.', M)).toEqual([]);
   });
+  it('공백만 다른 토큰(첫해/첫 해)은 한 토큰으로 세어 2회로는 모듈이 아니다', () => {
+    expect(modulesInBody('첫해에는 참고, 첫 해가 지나면 자릅니다.', M)).toEqual([]);
+    expect(modulesInBody('첫해, 첫 해, 첫해 — 세 번이면 모듈입니다.', M)).toEqual(['첫해 참기']);
+  });
   it('여러 토큰의 횟수는 합산, 같은 모듈은 1번, 카탈로그 없으면 빈 배열', () => {
     expect(modulesInBody('뿌리목 한 번, 접목부 두 번, 접목부 세 번', M)).toEqual(['묘목 보는 자리']);
     expect(modulesInBody('## 화분\n화분 화분 화분', M)).toEqual(['화분 vs 마당']);
