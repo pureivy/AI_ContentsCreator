@@ -143,6 +143,7 @@ export async function collectSearchResults(queries: string[], deps: FactSupplyDe
     ]);
     for (const e of enc) push({ title: e.title, url: e.link, snippet: e.description });
     for (const w of web) push({ title: w.title, url: w.url, snippet: w.snippet });
+    if (out.length >= cap) break;   // cap 에 닿으면 남은 질의는 부르지 않는다(질의당 웹 타임아웃 8초가 헛돌던 것)
   }
   return out;
 }
@@ -158,7 +159,9 @@ export async function supplyFacts(
   const base = { subject, ...(species ? { species } : {}), queries, checkedTs };
   try {
     const hits = await collectSearchResults(queries, deps, a.signal);
-    if (!hits.length) return { ...base, status: 'ok', resultCount: 0, facts: [], specificCount: 0 };
+    // 결과 0건은 '사실 사막'이 아니라 커넥터 장애다(최종 리뷰 C2) — 백과·웹 양쪽이 8개 질의에 URL 하나도 못 주는
+    // 수종은 없다. 커넥터 실패는 []로 삼켜지므로 여기서 구분이 안 되고, fail-open(error → 보류 없이 종전 집필)을 택한다.
+    if (!hits.length) return { ...base, status: 'error', resultCount: 0, facts: [], specificCount: 0, error: 'no results' };
     const numbered = hits.map((h, i) => `${i + 1}. [${h.title}] ${h.snippet} (${h.url})`).join('\n');
     const user = [
       `대상: "${subject}"${species ? '(수종)' : '(소재)'}. 아래 검색 결과에서 **${subject}에만 해당하는** 사실을 뽑아라.`,

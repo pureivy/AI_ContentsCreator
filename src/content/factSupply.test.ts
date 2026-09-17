@@ -139,20 +139,37 @@ describe('collectSearchResults / supplyFacts — 수집·추출(의존성 주입
     expect(r.specificCount).toBe(2);
     expect(r.facts[1]!.url).toBe('https://web/1');
   });
-  it('검색 결과가 0이면 ok·specificCount 0 (LLM 호출 안 함)', async () => {
+  it('검색 결과가 0이면 error(커넥터 장애로 본다, fail-open)·LLM 호출 안 함', async () => {
     let called = 0;
     const r = await supplyFacts({ topic: '음나무 자리', model: 'm' }, deps({ encyc: async () => [], web: async () => [], llm: async () => { called++; return null; } }));
-    expect(r.status).toBe('ok');
+    expect(r.status).toBe('error');
+    expect(r.error).toBe('no results');
     expect(r.specificCount).toBe(0);
     expect(called).toBe(0);
+  });
+  it('cap 에 닿으면 남은 질의는 부르지 않는다', async () => {
+    const asked: string[] = [];
+    const many = (q: string) => Array.from({ length: 5 }, (_, i) => ({ title: `${q} ${i}`, url: `https://x/${q}/${i}`, snippet: 's' }));
+    const hits = await collectSearchResults(['q1', 'q2', 'q3'], deps({
+      encyc: async () => [],
+      web: async (q) => { asked.push(q); return many(q); },
+    }), undefined, 5);
+    expect(hits).toHaveLength(5);
+    expect(asked).toEqual(['q1']);
   });
   it('LLM 이 null 을 주면 error (보류 사유가 아니다)', async () => {
     const r = await supplyFacts({ topic: '음나무 자리', model: 'm' }, deps({ llm: async () => null }));
     expect(r.status).toBe('error');
     expect(r.facts).toEqual([]);
   });
-  it('커넥터가 던져도 error 로 삼킨다', async () => {
+  it('커넥터 하나가 던져도 다른 쪽이 결과를 주면 ok — 예외는 밖으로 안 나간다', async () => {
     const r = await supplyFacts({ topic: '음나무 자리', model: 'm' }, deps({ encyc: async () => { throw new Error('boom'); } }));
-    expect(['ok', 'error']).toContain(r.status); // web 만으로 진행되면 ok, 둘 다 죽으면 error — 예외는 밖으로 안 나간다
+    expect(r.status).toBe('ok');
+    expect(r.resultCount).toBe(2);   // 백과가 죽어 web 의 전설 질의 결과 2건만(terms/1 도 웹 쪽에서 들어온다)
+  });
+  it('양쪽 커넥터가 모든 질의에 []를 주면 error — 커넥터 전멸을 사실 부족으로 오인하지 않는다', async () => {
+    const r = await supplyFacts({ topic: '음나무 자리', model: 'm' }, deps({ encyc: async () => [], web: async () => [] }));
+    expect(r.status).toBe('error');
+    expect(r.error).toBe('no results');
   });
 });
