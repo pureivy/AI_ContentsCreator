@@ -34,6 +34,17 @@ export const FACT_SUPPLY_HEADER = '## 재배·이야기 사실 조사(자동 수
 
 const compact = (s: string): string => (s ?? '').normalize('NFC').replace(/\s+/g, '');
 
+/** 사실 부족 보류 대상인가(순수). 자율 런이고, 리비전·리서치가 아니며, 조각이 자율 생성(auto)이고 사용자 촉발이 아닐 때만.
+ *  사용자가 등록한 아이디어(auto 없음)를 자율 틱이 재개하는 경우도 사용자 주제다 — 보류하지 않는다(최종 리뷰 C1). */
+export function shouldHoldForFacts(
+  opts: { auto?: boolean; revise?: unknown; mission?: string },
+  piece: { auto?: boolean; userTriggered?: boolean } | undefined,
+): boolean {
+  if (!opts.auto || opts.revise || opts.mission === 'research') return false;
+  if (!piece) return true;                 // 조각 없는 자율 런(컴포저 주제 없음) — 자율 선정 그대로
+  return piece.auto === true && !piece.userTriggered;
+}
+
 /** 수집 대상 — 수종 사전 적중 → 키워드(3어절 이하) → 제목 첫 어절. */
 export function factSubjectOf(topic: string, keyword?: string): { subject: string; species?: string } {
   const sp = findSpeciesLoose(`${topic} ${keyword ?? ''}`);

@@ -1,6 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import { factSubjectOf, factQueriesFor, isSpecificFact, attachRefs, factSupplyBlock, FACT_SUPPLY_HEADER, collectSearchResults, supplyFacts } from './factSupply';
+import { factSubjectOf, factQueriesFor, isSpecificFact, attachRefs, factSupplyBlock, FACT_SUPPLY_HEADER, collectSearchResults, supplyFacts, shouldHoldForFacts } from './factSupply';
 import type { SearchHit, FactSupplyResult, FactSupplyDeps } from './factSupply';
+
+describe('shouldHoldForFacts — 사실 부족 보류 대상(최종 리뷰 C1)', () => {
+  it('자율 런 + 자율 생성 조각 → 보류 대상', () => {
+    expect(shouldHoldForFacts({ auto: true }, { auto: true })).toBe(true);
+  });
+  it('사용자가 등록한 아이디어(auto 없음)를 자율 틱이 재개해도 사용자 주제 — 보류 안 함', () => {
+    expect(shouldHoldForFacts({ auto: true }, {})).toBe(false);
+  });
+  it('수동 틱 버튼 조각(userTriggered) — 보류 안 함', () => {
+    expect(shouldHoldForFacts({ auto: true }, { auto: true, userTriggered: true })).toBe(false);
+  });
+  it('자율 런이 아니면 — 보류 안 함', () => {
+    expect(shouldHoldForFacts({}, { auto: true })).toBe(false);
+    expect(shouldHoldForFacts({ auto: false }, { auto: true })).toBe(false);
+  });
+  it('리비전·리서치 런 — 보류 안 함', () => {
+    expect(shouldHoldForFacts({ auto: true, revise: { baseBody: 'b', feedback: 'f' } }, { auto: true })).toBe(false);
+    expect(shouldHoldForFacts({ auto: true, mission: 'research' }, { auto: true })).toBe(false);
+  });
+  it('조각 없는 자율 런(컴포저 주제 없음) — 자율 선정 그대로 보류 대상', () => {
+    expect(shouldHoldForFacts({ auto: true }, undefined)).toBe(true);
+  });
+});
 
 describe('factSubjectOf — 사실 수집 대상', () => {
   it('수종이 잡히면 수종명이 대상', () => {

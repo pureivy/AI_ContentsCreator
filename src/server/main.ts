@@ -74,6 +74,7 @@ import { getBrand, saveBrand, normalizeBrand, listBrands, activateBrand, activeB
 import type { BrandProfile } from '../content/brand';
 import { offSeasonSubject, formatMonths } from '../content/seasonalSubjects';
 import { overSpeciesCap, SPECIES_MONTHLY_CAP } from '../content/speciesRotation';
+import { shouldHoldForFacts } from '../content/factSupply';
 import { overThemeCap, THEME_MONTHLY_CAP } from '../content/topicThemes';
 import { brandThemeCoverage } from '../analytics/discoverySeeds';
 import type { Piece } from '../content/pieces';
@@ -470,8 +471,8 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
         pieceId: opts.pieceId, // 제작 런 표식 — 단축경로(즉답) 분류 우회(질문형 가제 좌초 방지)
         mission: opts.mission, persona: opts.persona, personaText: opts.personaText,
         // 사실 공급 엄격 모드(2026-09-17) — 자율 런만. 사용자가 직접 띄운 런(수동·userTriggered 틱·리비전)은 절대 보류하지 않는다.
-        factStrict: !!opts.auto && !opts.revise && opts.mission !== 'research'
-          && !(opts.pieceId && pieceStore().get(opts.pieceId)?.userTriggered),
+        // 사용자가 등록한 아이디어(auto 없음)를 자율 틱이 재개하는 경우도 사용자 주제다(최종 리뷰 C1).
+        factStrict: shouldHoldForFacts(opts, opts.pieceId ? pieceStore().get(opts.pieceId) : undefined),
       });
     })
     .then((outcome) => {
