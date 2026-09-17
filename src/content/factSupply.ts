@@ -9,6 +9,8 @@
  * (ref 번호로 대조) — 날조 URL 이 결정적으로 막힌다. "어느 나무에나 맞는 말"은 고유 사실이 아니다.
  */
 import { findSpeciesLoose } from './species';
+import { speciesInText, type SpeciesGroup } from './speciesRotation';
+import { getBrand } from './brand';
 import { naverEncyc } from '../grounding/naver_encyc';
 import { webSearch } from '../tools/web_search';
 import { microJSON } from '../orchestrator/agent';
@@ -45,14 +47,24 @@ export function shouldHoldForFacts(
   return piece.auto === true && !piece.userTriggered;
 }
 
-/** 수집 대상 — 수종 사전 적중 → 키워드(3어절 이하) → 제목 첫 어절. */
-export function factSubjectOf(topic: string, keyword?: string): { subject: string; species?: string } {
-  const sp = findSpeciesLoose(`${topic} ${keyword ?? ''}`);
-  if (sp) return { subject: sp.name, species: sp.name };
+/** 수집 대상 — 수종 사전 적중 → 브랜드 카탈로그 적중 → 키워드(3어절 이하) → 제목 첫 어절.
+ *  카탈로그 폴백(최종 리뷰 C3): 사전(species.yaml)은 이미지 앵커용 68종이라 회화나무·은행나무·느티나무 같은
+ *  카탈로그 29종이 빠져 이야기 질의를 못 받았다. 스케줄러의 speciesKeyOf 와 같은 순서·같은 눈이다. */
+export function factSubjectOf(
+  topic: string, keyword?: string, catalog?: SpeciesGroup[],
+): { subject: string; species?: string; aliases: string[] } {
+  const text = `${topic} ${keyword ?? ''}`;
+  const sp = findSpeciesLoose(text);
+  if (sp) return { subject: sp.name, species: sp.name, aliases: [...(sp.aliases ?? [])] };
+  const cat = speciesInText(text, catalog);
+  if (cat) {
+    const entry = catalog?.flatMap((g) => g.species ?? []).find((s) => s.name === cat);
+    return { subject: cat, species: cat, aliases: [...(entry?.aliases ?? [])] };
+  }
   const kw = (keyword ?? '').trim();
-  if (kw && kw.split(/\s+/).length <= 3) return { subject: kw };
+  if (kw && kw.split(/\s+/).length <= 3) return { subject: kw, aliases: [] };
   const first = topic.trim().split(/[\s,·]+/)[0] ?? '';
-  return { subject: first || kw || topic.trim() };
+  return { subject: first || kw || topic.trim(), aliases: [] };
 }
 
 /** 결정적 질의 — 수종이면 재배 5 + 이야기 3, 아니면 재배·특성·주의 3. */
@@ -154,7 +166,7 @@ export async function supplyFacts(
   a: { topic: string; keyword?: string; model: string; signal?: AbortSignal }, deps: FactSupplyDeps = DEFAULT_DEPS,
 ): Promise<FactSupplyResult> {
   const checkedTs = new Date().toISOString();
-  const { subject, species } = factSubjectOf(a.topic, a.keyword);
+  const { subject, species, aliases } = factSubjectOf(a.topic, a.keyword, getBrand()?.speciesCatalog);
   const queries = factQueriesFor(subject, species);
   const base = { subject, ...(species ? { species } : {}), queries, checkedTs };
   try {
@@ -175,7 +187,6 @@ export async function supplyFacts(
     ].join('\n\n');
     const json = await deps.llm(a.model, SYS, user, { maxOutputTokens: 2400, signal: a.signal });
     if (!json) return { ...base, status: 'error', resultCount: hits.length, facts: [], specificCount: 0, error: 'llm null' };
-    const aliases = species ? (findSpeciesLoose(species)?.aliases ?? []) : [];
     const facts = attachRefs(json, hits, species, aliases);
     return { ...base, status: 'ok', resultCount: hits.length, facts, specificCount: facts.filter((f) => f.specific).length };
   } catch (e) {

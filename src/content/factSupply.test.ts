@@ -26,14 +26,27 @@ describe('shouldHoldForFacts — 사실 부족 보류 대상(최종 리뷰 C1)',
 });
 
 describe('factSubjectOf — 사실 수집 대상', () => {
-  it('수종이 잡히면 수종명이 대상', () => {
-    expect(factSubjectOf('음나무가 잘 자라는 지역, 중부·남부 다르게 심는 법', '음나무')).toEqual({ subject: '음나무', species: '음나무' });
-    expect(factSubjectOf('엄나무 묘목, 뿌리목부터 확인하세요')).toEqual({ subject: '음나무', species: '음나무' }); // 별칭
+  it('수종이 잡히면 수종명이 대상, 별칭은 사전에서', () => {
+    expect(factSubjectOf('음나무가 잘 자라는 지역, 중부·남부 다르게 심는 법', '음나무')).toEqual({ subject: '음나무', species: '음나무', aliases: ['엄나무', '개두릅나무'] });
+    expect(factSubjectOf('엄나무 묘목, 뿌리목부터 확인하세요')).toEqual({ subject: '음나무', species: '음나무', aliases: ['엄나무', '개두릅나무'] }); // 별칭
   });
   it('수종이 없으면 keyword(3어절 이하) → 없으면 제목 첫 어절', () => {
-    expect(factSubjectOf('나무 상처 치료제, 바르면 안 되는 5가지 자리', '나무 상처 치료제')).toEqual({ subject: '나무 상처 치료제' });
-    expect(factSubjectOf('상토 배양토 차이, 구덩이로 포대 수 계산', '상토 배양토 차이 구덩이 포대')).toEqual({ subject: '상토' });
-    expect(factSubjectOf('상토 배양토 차이')).toEqual({ subject: '상토' });
+    expect(factSubjectOf('나무 상처 치료제, 바르면 안 되는 5가지 자리', '나무 상처 치료제')).toEqual({ subject: '나무 상처 치료제', aliases: [] });
+    expect(factSubjectOf('상토 배양토 차이, 구덩이로 포대 수 계산', '상토 배양토 차이 구덩이 포대')).toEqual({ subject: '상토', aliases: [] });
+    expect(factSubjectOf('상토 배양토 차이')).toEqual({ subject: '상토', aliases: [] });
+  });
+  it('사전에 없는 카탈로그 수종은 카탈로그로 잡는다(별칭도 카탈로그에서) — 이야기 질의 8개가 나온다', () => {
+    const catalog = [{ group: 'x', species: [{ name: '회화나무', aliases: ['괴목'] }] }];
+    const r = factSubjectOf('회화나무가 선비의 나무가 된 이유', undefined, catalog);
+    expect(r).toEqual({ subject: '회화나무', species: '회화나무', aliases: ['괴목'] });
+    expect(factQueriesFor(r.subject, r.species)).toHaveLength(8);
+  });
+  it('카탈로그 없이 부르면 종전처럼 사전만 본다', () => {
+    expect(factSubjectOf('회화나무가 선비의 나무가 된 이유')).toEqual({ subject: '회화나무가', aliases: [] });
+  });
+  it('사전과 카탈로그가 둘 다 맞으면 사전이 이긴다', () => {
+    const catalog = [{ group: 'x', species: [{ name: '엄나무', aliases: ['카탈로그별칭'] }] }];
+    expect(factSubjectOf('엄나무 묘목 고르기', undefined, catalog)).toEqual({ subject: '음나무', species: '음나무', aliases: ['엄나무', '개두릅나무'] });
   });
 });
 
