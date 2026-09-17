@@ -118,6 +118,14 @@ export interface Config {
   readonly briefGate: boolean;
   /** 브리프 게이트 재작업 라운드 상한(0~3 클램프). 0 이면 판독·표시만 하고 재작업은 돌리지 않는다. */
   readonly briefGateRounds: number;
+  /** 사실 공급(2026-09-17) — 집필 전 수종 고유 사실(재배+이야기)을 코드가 검색·추출해 브리프에 붙인다. off 면 단계 생략(종전 동작). */
+  readonly factSupply: boolean;
+  /** 고유 사실 하한 — 자율 런이 이 미만이면 집필 보류·주제 교체(사용자 런은 표시만). */
+  readonly factMinSpecific: number;
+  /** 연속 사실 부족 재시도 상한(같은 시간대 60분 창) — 넘으면 그 주기는 건너뛴다. */
+  readonly factSupplyRetry: number;
+  /** 사실 부족 수종 재제안 금지 창(일). */
+  readonly factStarvedDays: number;
   /** 파생 콘텐츠 시기·수치 원문 대조(2026-08-27 권고 1) — 결정적 검사. off 면 검출·오버레이 제거 모두 중단. */
   readonly timingParity: boolean;
   /** 블로그 본문 문체 린트(2026-08-27 권고 3) — 결정적 4종 검사 후 작가 수정 1회. off 면 검사·수정 모두 중단. */
@@ -377,6 +385,11 @@ export const CONFIG: Config = {
   // 43/70 판정 62초 뒤 집필 착수) 대응. 판정을 읽어 재작업을 돌리고, 남은 지적은 작가에게 필수 반영으로 넘긴다.
   briefGate: envBool('BRIEF_GATE', true),
   briefGateRounds: Math.min(Math.max(0, envInt('BRIEF_GATE_ROUNDS', 1)), 3),
+  // 사실 공급(2026-09-17) — 사실 카드에 식물 사실이 평균 3건(9편은 0건)이라 작가가 일반론으로 채우던 실측 대응.
+  factSupply: envBool('FACT_SUPPLY', true),
+  factMinSpecific: Math.min(Math.max(1, envInt('FACT_MIN_SPECIFIC', 5)), 20),
+  factSupplyRetry: Math.min(Math.max(0, envInt('FACT_SUPPLY_RETRY', 2)), 5),
+  factStarvedDays: Math.min(Math.max(0, envInt('FACT_STARVED_DAYS', 14)), 90),
   // 시기·수치 원문 대조(2026-08-27 권고 1) — 활엽수 실사고: 블로그 "근거 확실치 않다" ↔ 쇼츠 "지금이 적기" + 오버레이 "8월".
   timingParity: envBool('TIMING_PARITY', true),
   blogStyleLint: envBool('BLOG_STYLE_LINT', true),

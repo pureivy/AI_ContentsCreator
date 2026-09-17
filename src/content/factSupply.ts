@@ -9,6 +9,9 @@
  * (ref 번호로 대조) — 날조 URL 이 결정적으로 막힌다. "어느 나무에나 맞는 말"은 고유 사실이 아니다.
  */
 import { findSpeciesLoose } from './species';
+import { naverEncyc } from '../grounding/naver_encyc';
+import { webSearch } from '../tools/web_search';
+import { microJSON } from '../orchestrator/agent';
 
 export type FactKind = 'cultivation' | 'lore';
 export interface SearchHit { title: string; url: string; snippet: string }
@@ -98,4 +101,70 @@ export function factSupplyBlock(r: FactSupplyResult): string {
     .map((f) => `- [${f.kind === 'lore' ? '이야기' : '재배'}] ${f.text} (근거: ${f.source}, ${f.url})`);
   if (!lines.length) return '';
   return [FACT_SUPPLY_HEADER, ...lines].join('\n');
+}
+
+export interface FactSupplyDeps {
+  encyc: (q: string, display: number, signal?: AbortSignal) => Promise<Array<{ title: string; link: string; description: string }>>;
+  web: (q: string, limit: number, signal?: AbortSignal) => Promise<Array<{ title: string; url: string; snippet: string }>>;
+  llm: (model: string, system: string, user: string, opts: { maxOutputTokens?: number; signal?: AbortSignal }) => Promise<unknown>;
+}
+const DEFAULT_DEPS: FactSupplyDeps = {
+  encyc: (q, display, signal) => naverEncyc(q, display, signal),
+  web: (q, limit, signal) => webSearch(q, limit, signal),
+  llm: (model, system, user, opts) => microJSON(model, system, user, opts),
+};
+
+/** 질의마다 백과 5 + 웹 5, URL 로 중복 제거, cap 까지. 개별 커넥터 실패는 그 질의만 비운다. */
+export async function collectSearchResults(queries: string[], deps: FactSupplyDeps, signal?: AbortSignal, cap = 40): Promise<SearchHit[]> {
+  const out: SearchHit[] = [];
+  const seen = new Set<string>();
+  const push = (h: SearchHit): void => {
+    const u = h.url.trim();
+    if (!u || seen.has(u) || out.length >= cap) return;
+    seen.add(u);
+    out.push({ title: h.title.trim(), url: u, snippet: h.snippet.trim() });
+  };
+  for (const q of queries) {
+    if (signal?.aborted) break;
+    const [enc, web] = await Promise.all([
+      deps.encyc(q, 5, signal).catch(() => []),
+      deps.web(q, 5, signal).catch(() => []),
+    ]);
+    for (const e of enc) push({ title: e.title, url: e.link, snippet: e.description });
+    for (const w of web) push({ title: w.title, url: w.url, snippet: w.snippet });
+  }
+  return out;
+}
+
+const SYS = '너는 원예 콘텐츠의 사실 수집 보조자다. 검색 결과에 적힌 내용만 옮기고, 요청된 JSON 스키마만 출력한다.';
+
+export async function supplyFacts(
+  a: { topic: string; keyword?: string; model: string; signal?: AbortSignal }, deps: FactSupplyDeps = DEFAULT_DEPS,
+): Promise<FactSupplyResult> {
+  const checkedTs = new Date().toISOString();
+  const { subject, species } = factSubjectOf(a.topic, a.keyword);
+  const queries = factQueriesFor(subject, species);
+  const base = { subject, ...(species ? { species } : {}), queries, checkedTs };
+  try {
+    const hits = await collectSearchResults(queries, deps, a.signal);
+    if (!hits.length) return { ...base, status: 'ok', resultCount: 0, facts: [], specificCount: 0 };
+    const numbered = hits.map((h, i) => `${i + 1}. [${h.title}] ${h.snippet} (${h.url})`).join('\n');
+    const user = [
+      `대상: "${subject}"${species ? '(수종)' : '(소재)'}. 아래 검색 결과에서 **${subject}에만 해당하는** 사실을 뽑아라.`,
+      '- 결과에 적힌 내용만 쓴다. 결과에 없는 것을 아는 대로 보태지 마라.',
+      '- kind: "cultivation"(자생지·내한성·토양·볕·수형·생장·개화 결실·전정 시기·병해충·번식·주의) 또는 "lore"(전설·설화·이름 유래·꽃말·상징·역사·문화·쓰임새·문학·명소).',
+      '- specific: 그 대상에만 해당하면 true, 어느 나무에나 통하는 일반론("물 빠짐이 좋아야 한다")이면 false.',
+      '- ref: 그 사실이 적힌 결과 번호(1부터). 한 사실에 하나.',
+      '- 각 사실은 한 문장, 최대 20개.',
+      `[검색 결과]\n${numbered}`,
+      'JSON 형식: {"facts":[{"text":"...","ref":1,"kind":"cultivation","specific":true}]}',
+    ].join('\n\n');
+    const json = await deps.llm(a.model, SYS, user, { maxOutputTokens: 2400, signal: a.signal });
+    if (!json) return { ...base, status: 'error', resultCount: hits.length, facts: [], specificCount: 0, error: 'llm null' };
+    const aliases = species ? (findSpeciesLoose(species)?.aliases ?? []) : [];
+    const facts = attachRefs(json, hits, species, aliases);
+    return { ...base, status: 'ok', resultCount: hits.length, facts, specificCount: facts.filter((f) => f.specific).length };
+  } catch (e) {
+    return { ...base, status: 'error', resultCount: 0, facts: [], specificCount: 0, error: e instanceof Error ? e.message : String(e) };
+  }
 }

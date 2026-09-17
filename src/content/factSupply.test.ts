@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { factSubjectOf, factQueriesFor, isSpecificFact, attachRefs, factSupplyBlock, FACT_SUPPLY_HEADER } from './factSupply';
-import type { SearchHit, FactSupplyResult } from './factSupply';
+import { factSubjectOf, factQueriesFor, isSpecificFact, attachRefs, factSupplyBlock, FACT_SUPPLY_HEADER, collectSearchResults, supplyFacts } from './factSupply';
+import type { SearchHit, FactSupplyResult, FactSupplyDeps } from './factSupply';
 
 describe('factSubjectOf — 사실 수집 대상', () => {
   it('수종이 잡히면 수종명이 대상', () => {
@@ -90,5 +90,46 @@ describe('factSupplyBlock — 브리프에 붙는 블록', () => {
   });
   it('고유 사실이 0이면 빈 문자열', () => {
     expect(factSupplyBlock({ status: 'ok', subject: 'x', queries: [], resultCount: 0, facts: [], specificCount: 0, checkedTs: 't' })).toBe('');
+  });
+});
+
+describe('collectSearchResults / supplyFacts — 수집·추출(의존성 주입)', () => {
+  const deps = (overrides: Partial<FactSupplyDeps> = {}): FactSupplyDeps => ({
+    encyc: async (q) => (q.includes('재배') ? [{ title: '음나무 - 두산백과', link: 'https://terms/1', description: '전국 산지 자생' }] : []),
+    web: async (q) => (q.includes('전설') ? [{ title: '음나무 민속', url: 'https://web/1', snippet: '가시로 잡귀를 막는다' }, { title: '음나무 - 두산백과', url: 'https://terms/1', snippet: '중복' }] : []),
+    llm: async () => ({ facts: [
+      { text: '음나무는 전국 산지에 자생한다', ref: 1, kind: 'cultivation', specific: true },
+      { text: '음나무 가시로 잡귀를 막는다는 풍습이 있다', ref: 2, kind: 'lore', specific: true },
+    ] }),
+    ...overrides,
+  });
+  it('질의마다 백과+웹을 모으고 URL 로 중복 제거, 번호는 1부터', async () => {
+    const hits = await collectSearchResults(['음나무 재배', '음나무 전설 설화 유래'], deps());
+    expect(hits.map((h) => h.url)).toEqual(['https://terms/1', 'https://web/1']);
+  });
+  it('supplyFacts — ok 상태와 고유 사실 수', async () => {
+    const r = await supplyFacts({ topic: '음나무가 잘 자라는 자리', model: 'm' }, deps());
+    expect(r.status).toBe('ok');
+    expect(r.species).toBe('음나무');
+    expect(r.queries).toHaveLength(8);
+    expect(r.resultCount).toBe(2);
+    expect(r.specificCount).toBe(2);
+    expect(r.facts[1]!.url).toBe('https://web/1');
+  });
+  it('검색 결과가 0이면 ok·specificCount 0 (LLM 호출 안 함)', async () => {
+    let called = 0;
+    const r = await supplyFacts({ topic: '음나무 자리', model: 'm' }, deps({ encyc: async () => [], web: async () => [], llm: async () => { called++; return null; } }));
+    expect(r.status).toBe('ok');
+    expect(r.specificCount).toBe(0);
+    expect(called).toBe(0);
+  });
+  it('LLM 이 null 을 주면 error (보류 사유가 아니다)', async () => {
+    const r = await supplyFacts({ topic: '음나무 자리', model: 'm' }, deps({ llm: async () => null }));
+    expect(r.status).toBe('error');
+    expect(r.facts).toEqual([]);
+  });
+  it('커넥터가 던져도 error 로 삼킨다', async () => {
+    const r = await supplyFacts({ topic: '음나무 자리', model: 'm' }, deps({ encyc: async () => { throw new Error('boom'); } }));
+    expect(['ok', 'error']).toContain(r.status); // web 만으로 진행되면 ok, 둘 다 죽으면 error — 예외는 밖으로 안 나간다
   });
 });

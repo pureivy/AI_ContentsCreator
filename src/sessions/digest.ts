@@ -10,6 +10,7 @@ import path from 'node:path';
 import { CONFIG } from '../config';
 import type { FactGateResult } from '../content/factGate';
 import type { StructureSeed } from '../content/structureSeed';
+import type { FactSupplyResult } from '../content/factSupply';
 
 export interface AgentOutput {
   id: string;
@@ -87,6 +88,14 @@ export function readResearchBriefWithFallback(runId: string): string {
 export function writeFactCard(runId: string, card: string): void { writeSessionFile(runId, 'fact_card.md', card); }
 export function readFactCard(runId: string): string {
   try { return fs.readFileSync(sessionFile(runId, 'fact_card.md'), 'utf-8'); } catch { return ''; }
+}
+/** 사실 공급 결과(2026-09-17) — 검토 알림·리포트가 고유 사실 수를 읽는다. */
+export function writeFactSupply(runId: string, r: FactSupplyResult): void { writeSessionFile(runId, 'fact_supply.json', JSON.stringify(r, null, 2)); }
+export function readFactSupply(runId: string): FactSupplyResult | null {
+  try {
+    const r = JSON.parse(fs.readFileSync(sessionFile(runId, 'fact_supply.json'), 'utf-8')) as FactSupplyResult;
+    return r && typeof r.specificCount === 'number' && Array.isArray(r.facts) ? r : null;
+  } catch { return null; }
 }
 /** 블로그 문체 린트 결과(2026-08-27 권고 3) — 수정 1회 뒤 '잔존' 지적. 검토 알림(contentNotify)이 건수만 읽어
  * '✍ 문체 N건 잔존' 한 줄로 보여 준다. 사실 게이트와 별개 파일이라 FACT_GATE=off 여도 표시가 살아 있다. */

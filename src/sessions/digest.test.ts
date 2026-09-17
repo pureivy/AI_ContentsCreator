@@ -73,4 +73,11 @@ describe('readResearchBriefWithFallback — research_brief.md 없을 때 work �
     const { readResearchBriefWithFallback } = await import('./digest');
     expect(readResearchBriefWithFallback('r5-없음')).toBe('');
   });
+  it('사실 공급 결과를 JSON 으로 쓰고 읽는다(없으면 null)', async () => {
+    const { writeFactSupply, readFactSupply } = await import('./digest');
+    expect(readFactSupply('r9')).toBeNull();
+    const r = { status: 'ok' as const, subject: '음나무', species: '음나무', queries: ['음나무 재배'], resultCount: 1, facts: [], specificCount: 0, checkedTs: 't' };
+    writeFactSupply('r9', r);
+    expect(readFactSupply('r9')).toEqual(r);
+  });
 });
