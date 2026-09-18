@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { shortsStore, type Shorts } from '../src/content/shorts';
 import { readMetrics, latestSampleBySource } from '../src/analytics/performance';
-import { median, ratioOf, segmentByYoutubeTs, sixHour400PlusRatio } from '../src/analytics/hookReport';
+import { median, ratioOf, hookFootageFrom, segmentByYoutubeTs, sixHour400PlusRatio, type SixHourRow } from '../src/analytics/hookReport';
 
 function parseArgs(argv: string[]): { since: string; brand: string } {
   let since = '';
@@ -39,13 +39,19 @@ function hookCharsOf(id: string): number | null {
   } catch { return null; }
 }
 
-/** clips/sources.json 에 scene 1(훅) 실촬영 클립이 있는가. */
+/**
+ * clips/sources.json 에 scene 1(훅) 실촬영 클립이 있는가 — 그 파일 자체가 없는 구편(2026-09-09 이전)은
+ * user_01.mp4 파일명 관례로 폴백한다(hookFootageFrom, 리뷰 fix round 1).
+ */
 function hasHookFootage(id: string): boolean {
+  const dir = shortsStore().dirFor(id);
+  let rows: Array<{ scene?: unknown }> | null = null;
   try {
-    const raw = fs.readFileSync(path.join(shortsStore().dirFor(id), 'clips', 'sources.json'), 'utf-8');
-    const rows = JSON.parse(raw) as unknown;
-    return Array.isArray(rows) && rows.some((r) => (r as { scene?: unknown })?.scene === 1);
-  } catch { return false; }
+    const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'clips', 'sources.json'), 'utf-8')) as unknown;
+    if (Array.isArray(parsed)) rows = parsed as Array<{ scene?: unknown }>;
+  } catch { /* sources.json 없음/파싱 불가 → rows null 유지, 아래서 폴백 */ }
+  const hasUser01 = fs.existsSync(path.join(dir, 'clips', 'user_01.mp4'));
+  return hookFootageFrom(rows, hasUser01);
 }
 
 // 단위를 포맷터 안에 넣는다 — 밖에서 문자열로 이어 붙이면 표본 0(null) 일 때 '-자'·'-%' 처럼 단위가 샌다.
@@ -58,7 +64,7 @@ function summarize(label: string, rows: Shorts[]): string[] {
   const footageFlags: boolean[] = [];
   const igViews: number[] = [];
   const sharesFlags: boolean[] = [];
-  const sixHourRows: Array<{ metaPublishedTs?: string; samples: { measuredAt: string; views: number }[] }> = [];
+  const sixHourRows: SixHourRow[] = [];
   const ytPct: number[] = [];
 
   for (const r of rows) {

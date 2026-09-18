@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { median, ratioOf, segmentByYoutubeTs, sixHourViewsIfEligible, sixHour400PlusRatio } from './hookReport';
+import { median, ratioOf, hookFootageFrom, segmentByYoutubeTs, sixHourViewsIfEligible, sixHour400PlusRatio } from './hookReport';
 
 describe('median (중앙값)', () => {
   it('빈 배열 → null', () => {
@@ -21,6 +21,23 @@ describe('ratioOf (비율)', () => {
     expect(ratioOf([true, true, false, false])).toBe(0.5);
     expect(ratioOf([true, true, true])).toBe(1);
     expect(ratioOf([false])).toBe(0);
+  });
+});
+
+// 리뷰 fix round 1 — clips/sources.json 은 2026-09-09 이후 편에만 있다. 없는 구편까지 '실촬영 없음'으로
+// 확정해 버리면 분모가 왜곡되므로, 파일이 없을 때만 scene 1 파일명 관례(user_01.mp4)로 폴백한다.
+describe('hookFootageFrom (훅 실촬영 판정 — sources.json 없는 구편은 user_01.mp4 로 폴백)', () => {
+  it('sources.json 에 scene 1 있음 → true(파일 존재 여부는 안 본다)', () => {
+    expect(hookFootageFrom([{ scene: 1 }], false)).toBe(true);
+  });
+  it('sources.json 없음(null) + user_01.mp4 있음 → true', () => {
+    expect(hookFootageFrom(null, true)).toBe(true);
+  });
+  it('sources.json 없음(null) + user_01.mp4 도 없음 → false', () => {
+    expect(hookFootageFrom(null, false)).toBe(false);
+  });
+  it('sources.json 있는데 scene 1 없음 → false — user_01.mp4 가 있어도 무시(실제 자료를 우선)', () => {
+    expect(hookFootageFrom([{ scene: 2 }], true)).toBe(false);
   });
 });
 

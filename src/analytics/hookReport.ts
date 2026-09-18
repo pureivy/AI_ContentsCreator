@@ -19,6 +19,22 @@ export function ratioOf(flags: boolean[]): number | null {
   return flags.filter(Boolean).length / flags.length;
 }
 
+export interface HookFootageRow { scene?: unknown }
+
+/**
+ * 훅(1번 씬) 실촬영 판정(순수, 리뷰 fix round 1) — clips/sources.json 은 2026-09-09 이후 편에만
+ * 있다(src/orchestrator/shorts.ts 클립 재사용 주석 참조). sources.json 이 있으면 그 안의 scene===1
+ * 존재 여부를 그대로 믿고(파일명 관례는 안 본다 — 실촬영 배정 안 된 편에 우연히 옛 user_01.mp4 가
+ * 남아 있어도 오탐되지 않게), 없는 구편만 scene 1 파일명 관례(user_01.mp4, shorts.ts:1616)로 판정한다
+ * — 둘 다 "이 씬에 실촬영을 배정했다"는 같은 사실을 다른 시대의 다른 자료로 기록한 것뿐이다.
+ * 어느 경우든 참/거짓을 확정해 반환한다(표본에서 빼지 않는다) — 이 지표는 "전체 편 중 훅 실촬영 비율"
+ * 이라 sources.json 이 없다고 그 편을 세지 않으면 분모가 왜곡된다.
+ */
+export function hookFootageFrom(sourcesRows: HookFootageRow[] | null, hasUser01File: boolean): boolean {
+  if (sourcesRows) return sourcesRows.some((r) => r.scene === 1);
+  return hasUser01File;
+}
+
 export interface YoutubeTsRow { youtubeTs?: string }
 
 /**
