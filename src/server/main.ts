@@ -62,7 +62,8 @@ import { learnSpeciesLabel } from '../content/speciesLearn';
 import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, autoDailyCapFor, autoCapApplies, pickTopicTarget, shouldStartSecondRun, SIBLING_PLAN_WAIT_MS, type ShortsPlatform } from '../content/shortsPlatform';
 import { pickWriter, recentWriterIdsFor, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
-import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
+import { runShortsJob, isShortsRunning, reviseShorts, hookStillFor } from '../orchestrator/shorts';
+import { inheritedSceneImages, inheritedClips } from '../content/shortsInherit';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo } from '../tools/shortsRender';
 import { generateDesignedThumbnail, thumbTextQaFailed } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft, shouldAutoDeriveOnDecision, cadenceBaselineTs } from '../content/pieces';
@@ -2317,21 +2318,26 @@ async function shortsThumbnailRegenHandler(c: Context): Promise<Response> {
   if (isShortsRunning(id)) return c.json({ error: '생성이 진행 중입니다 — 완료 후 다시 시도하세요' }, 409);
   if (thumbGenInFlight.has(id)) return c.json({ error: '이미 썸네일 생성 중입니다' }, 409);
   const dir = shortsStore().dirFor(id);
-  const hook = (() => {
-    try {
-      const f = fs.readdirSync(path.join(dir, 'scenes')).filter((x) => /\.(png|jpe?g)$/i.test(x)).sort()[0];
-      return f ? path.join(dir, 'scenes', f) : null;
-    } catch { return null; }
-  })();
-  if (!hook) return c.json({ error: '훅 씬 이미지가 없어 디자인 썸네일을 만들 수 없습니다(영상 프레임만 가능)' }, 409);
   thumbGenInFlight.add(id);
   try {
     // 클라이언트 이탈해도 작업·락이 무한 점유되지 않게 상한(4분) — generateDesignedThumbnail 은 예외를 던지지 않음.
+    const signal = AbortSignal.timeout(240_000);
+    // 훅 정지 화면 — 완성 런과 같은 hookStillFor(2026-09-18). 종전엔 scenes/ 이름순 첫 파일을 집었는데,
+    // 훅이 실촬영으로 덮인 편(SHORTS_HOOK_FOOTAGE)은 scenes/ 에 훅 그림이 없어 2번 씬 그림으로 만들었다.
+    // 씬 수는 plan.json(레코드의 scenes 는 옛 편에 없다) — 지도·클립을 씬 순서로 읽어 images[0] 이 훅이 되게 한다.
+    // 둘 다 없으면 scenes/ 파일 수(종전 동작 범위 유지 — 이름순 첫 파일).
+    const sceneCount = (() => {
+      try { return (JSON.parse(fs.readFileSync(path.join(dir, 'plan.json'), 'utf-8')) as { scenes?: unknown[] }).scenes?.length ?? 0; } catch { return 0; }
+    })() || s.scenes || (() => {
+      try { return fs.readdirSync(path.join(dir, 'scenes')).filter((x) => /\.(png|jpe?g)$/i.test(x)).length; } catch { return 0; }
+    })();
+    const hook = sceneCount > 0 ? await hookStillFor(inheritedSceneImages(dir, sceneCount), inheritedClips(dir, sceneCount), dir, signal) : null;
+    if (!hook) return c.json({ error: '훅 씬 이미지가 없어 디자인 썸네일을 만들 수 없습니다(영상 프레임만 가능)' }, 409);
     // 영상 상단 캘리와 같은 카피 재사용(title-copy.json) — 재생성 썸네일이 영상 속 제목과 문구가 어긋나지 않게.
     const savedCopy = (() => {
       try { return JSON.parse(fs.readFileSync(path.join(dir, 'title-copy.json'), 'utf-8')) as { line1: string; line2: string; points: string[] }; } catch { return undefined; }
     })();
-    const ok = await generateDesignedThumbnail({ dir, title: s.title ?? s.topic, description: s.description ?? '', titles: s.titles, keyword: s.keyword, hookImage: hook, signal: AbortSignal.timeout(240_000), ...(savedCopy?.line1 ? { copy: savedCopy } : {}) });
+    const ok = await generateDesignedThumbnail({ dir, title: s.title ?? s.topic, description: s.description ?? '', titles: s.titles, keyword: s.keyword, hookImage: hook, signal, ...(savedCopy?.line1 ? { copy: savedCopy } : {}) });
     if (!ok) return c.json({ error: '썸네일 생성 실패(무해 — 기존 유지)' }, 502);
     shortsStore().update(id, {}); // updatedTs 갱신 → 포스터 캐시버스트
     return c.json({ ok: true });

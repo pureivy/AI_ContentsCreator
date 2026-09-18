@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { inheritShortsAssets, inheritedSceneImages, inheritedClips, writeSceneImageMap, reviseClipsFor, INHERITED_FILES, SCENE_IMAGE_MAP } from './shortsInherit';
+import { inheritShortsAssets, inheritedSceneImages, inheritedClips, writeSceneImageMap, readSceneImageMap, reviseClipsFor, reviseImagesFor, INHERITED_FILES, SCENE_IMAGE_MAP } from './shortsInherit';
 
 const mk = (): { from: string; to: string } => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inherit-'));
@@ -67,6 +67,65 @@ describe('reviseClipsFor — 수정요청 재조립의 씬별 클립 결정(순�
   it('건드리지 않은 씬은 그대로 둔다', () => {
     const inherited = ['/d/clips/user_01.mp4', '/d/clips/clip_02.mp4', null];
     expect(reviseClipsFor(inherited, [])).toEqual(inherited);
+  });
+});
+
+describe('reviseImagesFor — 수정요청 재조립의 씬 배경 복원(순수, 2026-09-18)', () => {
+  // 실측(short_94a11c8c61 유형, 훅 실촬영): 5씬, 훅(0)이 클립으로 덮여 매니페스트는 4장(슬롯 순서).
+  // 종전엔 매니페스트를 씬 번호로 읽어 [img1, img2, img3, img4, null] — 본문 전 씬이 한 칸씩 당겨지고
+  // 마지막 씬이 그라데이션, images[0] 이 차서 훅 미들프레임 썸네일도 안 걸렸다.
+  const manifest4 = ['/d/scenes/blog-image-01.png', '/d/scenes/blog-image-02.png', '/d/scenes/blog-image-03.png', '/d/scenes/blog-image-04.png'];
+  it('지도가 있으면 지도 그대로 — 클립이 덮은 자리의 null 은 그 자리에 남고 뒤가 당겨지지 않는다', () => {
+    const map = [null, '/d/scenes/blog-image-01.png', '/d/scenes/blog-image-02.png', '/d/scenes/blog-image-03.png', '/d/scenes/blog-image-04.png'];
+    expect(reviseImagesFor(map, manifest4, 5)).toEqual([null, '/d/scenes/blog-image-01.png', '/d/scenes/blog-image-02.png', '/d/scenes/blog-image-03.png', '/d/scenes/blog-image-04.png']);
+    expect(reviseImagesFor(map, manifest4, 5)).not.toEqual([...manifest4, null]);
+  });
+  it('지도는 씬 QA 재생성본(scenes-retry)도 안다 — 매니페스트엔 없는 그림', () => {
+    // 실측 short_94a11c8c61: 씬2 실촬영, 씬4 는 QA 로 scenes-retry/blog-image-01.png 로 교체됨.
+    const map = ['/d/scenes/blog-image-01.png', null, '/d/scenes/blog-image-02.png', '/d/scenes-retry/blog-image-01.png', '/d/scenes/blog-image-04.png'];
+    expect(reviseImagesFor(map, manifest4, 5)).toEqual(map);
+  });
+  it('지도가 없으면(2026-09-04 이전 편) 매니페스트 순서 — 덮인 씬이 없어 씬 순서와 같다', () => {
+    expect(reviseImagesFor(null, manifest4, 4)).toEqual(manifest4);
+  });
+  it('매니페스트 폴백도 실패 슬롯의 null 을 제자리에 둔다(걸러내지 않는다)', () => {
+    expect(reviseImagesFor(null, ['/d/a.png', null, '/d/c.png'], 3)).toEqual(['/d/a.png', null, '/d/c.png']);
+  });
+  it('씬 수에 맞춰 자르거나 null 로 채운다', () => {
+    expect(reviseImagesFor(null, manifest4, 5)).toEqual([...manifest4, null]);
+    expect(reviseImagesFor(null, manifest4, 2)).toEqual(manifest4.slice(0, 2));
+    expect(reviseImagesFor([null, '/d/x.png'], [], 3)).toEqual([null, '/d/x.png', null]);
+  });
+  it('재생성 씬 덮어쓰기는 씬 번호 기준 — 지도 위에 얹어도 자리가 맞는다', () => {
+    // reviseShorts 는 복원된 배열의 images[k-1] 에 재생성본을 덮어쓴다(k 는 1-base). 지도 기준이면 3번 씬은 3번 자리.
+    const map = [null, '/d/scenes/blog-image-01.png', '/d/scenes/blog-image-02.png', '/d/scenes/blog-image-03.png', '/d/scenes/blog-image-04.png'];
+    const images = reviseImagesFor(map, manifest4, 5);
+    for (const [k, fp] of [[3, '/d/revise-imgs/blog-image-01.png']] as Array<[number, string]>) images[k - 1] = fp;
+    expect(images).toEqual([null, '/d/scenes/blog-image-01.png', '/d/revise-imgs/blog-image-01.png', '/d/scenes/blog-image-03.png', '/d/scenes/blog-image-04.png']);
+  });
+});
+
+describe('readSceneImageMap — 지도 파일 유무를 호출부가 알아야 한다', () => {
+  const mkDir = (): string => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'map-read-'));
+    fs.mkdirSync(path.join(dir, 'scenes'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'scenes', 'blog-image-01.png'), 'x');
+    return dir;
+  };
+  it('지도가 없으면 null — 이름순 위치로 추측하지 않는다(수정요청은 매니페스트로 떨어져야 한다)', () => {
+    const dir = mkDir();
+    expect(readSceneImageMap(dir, 3)).toBeNull();
+    expect(inheritedSceneImages(dir, 3)[0]).toContain('blog-image-01.png'); // 승계는 종전대로 위치 폴백
+  });
+  it('깨진 지도도 null', () => {
+    const dir = mkDir();
+    fs.writeFileSync(path.join(dir, SCENE_IMAGE_MAP), '{ 망가짐');
+    expect(readSceneImageMap(dir, 3)).toBeNull();
+  });
+  it('지도가 있으면 씬 순서대로, 없는 자리·사라진 파일은 null', () => {
+    const dir = mkDir();
+    writeSceneImageMap(dir, [null, path.join(dir, 'scenes', 'blog-image-01.png'), path.join(dir, 'scenes', 'gone.png')]);
+    expect(readSceneImageMap(dir, 3)).toEqual([null, path.join(dir, 'scenes', 'blog-image-01.png'), null]);
   });
 });
 

@@ -34,7 +34,7 @@ import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './short
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame, cutVideoSegment } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, thumbTextQaFailed, type ThumbCopy } from './shortsThumbnail';
-import { inheritShortsAssets, inheritedSceneImages, inheritedClips, reviseClipsFor, writeSceneImageMap } from '../content/shortsInherit';
+import { inheritShortsAssets, inheritedSceneImages, inheritedClips, reviseClipsFor, reviseImagesFor, readSceneImageMap, writeSceneImageMap } from '../content/shortsInherit';
 import { SOURCES_FILE, type UsageSource } from '../content/mediaUsage';
 import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom, normalizeLatinName } from '../content/species';
 import { isContainerTopic } from '../analytics/igAxis';
@@ -220,16 +220,20 @@ export async function reviseShorts(
     store.update(id, { title: plan.title, topic: plan.title, description: plan.description, hashtags: plan.hashtags });
     say(`수정 요청 반영 — 씬 ${applied.changedScenes.join(',') || '없음'}${applied.regenScenes.length ? ` · 배경 재생성 ${applied.regenScenes.join(',')}` : ''}${applied.titleChanged ? ' · 제목' : ''}${applied.titleArtCopy ? ' · 캘리 문구' : ''}`);
 
-    // 씬 배경 재구성 — 기존 매니페스트 슬롯 정렬 + regen 씬만 새로 그림(bg-draft 프롬프트 재사용).
-    let images: Array<string | null> = plan.scenes.map(() => null);
+    // 씬 배경 재구성(2026-09-18 수정) — 씬 인덱스 지도(scene-images.json)가 진실, 없으면 매니페스트
+    // 순서. 종전엔 bg-manifest.json 을 씬 번호로 읽었는데 그건 슬롯 순서(덮인 씬 제외)라 실촬영 씬
+    // 뒤의 배경이 한 칸씩 당겨지고 마지막 씬이 비었다 — reviseImagesFor 참고. regen 씬만 새로 그림
+    // (bg-draft 프롬프트 재사용).
+    let manifestImages: Array<string | null> = [];
     try {
       const m = JSON.parse(fs.readFileSync(path.join(dir, 'bg-manifest.json'), 'utf-8')) as { images?: Array<{ file_path?: string; error?: string } | null> };
-      images = plan.scenes.map((_, i) => {
-        const im = m.images?.[i];
+      // 자리 보존 — 실패 슬롯은 null 로 남긴다(걸러내면 뒤가 당겨진다).
+      manifestImages = (m.images ?? []).map((im) => {
         const fp = im?.file_path ? String(im.file_path) : '';
         return fp && !im?.error && fs.existsSync(fp) ? fp : null;
       });
-    } catch { /* 전 씬 폴백 */ }
+    } catch { /* 매니페스트 없음 — 지도만 본다 */ }
+    const images: Array<string | null> = reviseImagesFor(readSceneImageMap(dir, plan.scenes.length), manifestImages, plan.scenes.length);
     if (applied.regenScenes.length) {
       let slots: Array<{ prompt?: string }> = [];
       try { slots = (JSON.parse(fs.readFileSync(path.join(dir, 'bg-draft.json'), 'utf-8')) as { imageSlots?: Array<{ prompt?: string }> }).imageSlots ?? []; } catch { /* 프롬프트 없음 */ }
@@ -262,6 +266,9 @@ export async function reviseShorts(
     // (SHORTS_HOOK_FOOTAGE 로 훅 실촬영이 늘면서 드러남). inheritedClips 로 실촬영을 먼저 찾고,
     // 재생성 씬에서도 실촬영은 유지한다 — reviseClipsFor 참고(배경 재생성은 실촬영 씬과 무관하다).
     const clips: Array<string | null> = reviseClipsFor(inheritedClips(dir, plan.scenes.length), applied.regenScenes);
+    // 이미지도 클립도 없는 씬은 렌더러 그라데이션 — 편 폴더 밖 첨부 사진은 지도에 못 담겨 여기로 온다(reviseImagesFor 참고). 로그만.
+    const bare = plan.scenes.map((_, i) => i + 1).filter((k) => !images[k - 1] && !clips[k - 1]);
+    if (bare.length) say(`배경 없는 씬 ${bare.join(',')} — 그라데이션 폴백`);
     // 제목 캘리 — 제목/캘리 문구가 바뀌면 재생성, 아니면 기존 에셋 재사용(카피는 title-copy.json).
     let titleArt: { imagePath: string; copy: ThumbCopy } | null = null;
     if (CONFIG.shortsTitleOverlay) {
@@ -1326,8 +1333,10 @@ function writerVoiceOpts(short: Pick<Shorts, 'writerId' | 'writer'>): { elevenVo
  * 이미지)이었다. 훅이 실촬영 영상으로 덮이면(SHORTS_HOOK_FOOTAGE) 그 씬은 이미지를 생성하지
  * 않으므로(`covered`) 정지 화면이 없다 — 클립 중간 지점을 뽑아 대신 쓴다. 추출이 실패하면
  * 종전 방식(images.find)으로 그대로 떨어진다(fail-open).
+ * 완성 런·수정요청·대시보드 '썸네일 재생성' 버튼(main.ts)이 같이 쓴다 — 씬 인덱스 배열을 넘겨야
+ * 한다(images[0] 이 훅). scenes/ 이름순 첫 파일은 훅이 실촬영이면 2번 씬 그림이다.
  */
-async function hookStillFor(
+export async function hookStillFor(
   images: ReadonlyArray<string | null>, clips: ReadonlyArray<string | null> | undefined,
   dir: string, signal?: AbortSignal,
 ): Promise<string | null> {

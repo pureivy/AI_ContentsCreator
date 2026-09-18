@@ -102,33 +102,70 @@ export function writeSceneImageMap(dir: string, images: ReadonlyArray<string | n
   } catch { /* 무해 — 없으면 위치 기준으로 읽는다 */ }
 }
 
+/** 매핑 값(상대경로 또는 옛 파일명)을 편 폴더 안의 실재 파일로 푼다. 없으면 null. */
+function sceneImageAt(dir: string, f: string | null | undefined): string | null {
+  if (!f) return null;
+  // 상대경로(신규) 우선, 파일명만 있는 옛 매핑은 scenes/ 밑으로 본다.
+  // '..' 이 섞인 값은 무시한다 — 매핑 파일이 편 폴더 밖을 가리킬 이유가 없다.
+  if (f.includes('..')) return null;
+  const candidates = f.includes('/') ? [path.join(dir, f)] : [path.join(dir, 'scenes', f)];
+  for (const p of candidates) {
+    try { if (fs.existsSync(p)) return p; } catch { /* 다음 후보 */ }
+  }
+  return null;
+}
+
+/**
+ * 씬→이미지 매핑 파일을 씬 순서대로 읽는다(없는 자리는 null). 매핑 파일이 없거나 깨졌으면 null —
+ * 호출부가 제 폴백(승계는 이름순 위치, 수정요청은 bg-manifest 순서)으로 떨어진다.
+ */
+export function readSceneImageMap(dir: string, sceneCount: number): Array<string | null> | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, SCENE_IMAGE_MAP), 'utf-8')) as unknown;
+    if (Array.isArray(raw)) {
+      return Array.from({ length: sceneCount }, (_, i) => sceneImageAt(dir, typeof raw[i] === 'string' ? raw[i] as string : null));
+    }
+  } catch { /* 매핑 없음·깨짐 */ }
+  return null;
+}
+
 /**
  * 승계 디렉터리에서 씬 이미지 경로를 씬 순서대로 읽는다(없는 자리는 null).
  * 매핑 파일이 있으면 그걸 따르고, 없으면(2026-09-04 이전 편) 종전대로 이름순 위치로 읽는다.
  */
 export function inheritedSceneImages(dir: string, sceneCount: number): Array<string | null> {
-  const at = (f: string | null | undefined): string | null => {
-    if (!f) return null;
-    // 상대경로(신규) 우선, 파일명만 있는 옛 매핑은 scenes/ 밑으로 본다.
-    // '..' 이 섞인 값은 무시한다 — 매핑 파일이 편 폴더 밖을 가리킬 이유가 없다.
-    if (f.includes('..')) return null;
-    const candidates = f.includes('/') ? [path.join(dir, f)] : [path.join(dir, 'scenes', f)];
-    for (const p of candidates) {
-      try { if (fs.existsSync(p)) return p; } catch { /* 다음 후보 */ }
-    }
-    return null;
-  };
-  try {
-    const raw = JSON.parse(fs.readFileSync(path.join(dir, SCENE_IMAGE_MAP), 'utf-8')) as unknown;
-    if (Array.isArray(raw)) {
-      return Array.from({ length: sceneCount }, (_, i) => at(typeof raw[i] === 'string' ? raw[i] as string : null));
-    }
-  } catch { /* 매핑 없음 — 아래 위치 폴백 */ }
+  const mapped = readSceneImageMap(dir, sceneCount);
+  if (mapped) return mapped;
   let files: string[] = [];
   try {
     files = fs.readdirSync(path.join(dir, 'scenes')).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).sort();
   } catch { /* scenes 없음 */ }
-  return Array.from({ length: sceneCount }, (_, i) => at(files[i]));
+  return Array.from({ length: sceneCount }, (_, i) => sceneImageAt(dir, files[i]));
+}
+
+/**
+ * 수정요청(reviseShorts) 재조립의 씬 배경 복원(순수, 2026-09-18).
+ *
+ * bg-manifest.json 은 **슬롯** 순서다 — 실촬영·사진으로 덮인 씬은 이미지를 생성하지 않으므로
+ * 항목 수가 씬 수보다 적고, 덮인 씬 뒤의 항목은 한 칸씩 당겨져 있다. 종전 수정요청 경로는 이걸
+ * 씬 번호로 읽어, 덮인 씬 뒤의 모든 정지 씬이 다음 씬 그림을 받고 마지막 씬은 그라데이션으로
+ * 나갔다(실측 short_94a11c8c61: 씬2 실촬영, 매니페스트 4장, 씬5 빈 배경). SHORTS_HOOK_FOOTAGE 로
+ * 훅(0)이 실촬영으로 덮이는 게 기본이 되면서 본문 전 씬이 밀리고, `images[0]` 이 엉뚱하게 차서
+ * 훅 미들프레임 썸네일(hookStillFor)까지 안 걸렸다.
+ *
+ * 원편이 남긴 씬 인덱스 지도(scene-images.json, finishShortsRun 이 씀)가 진실이다 — 씬 QA 재생성본
+ * (scenes-retry/)도 지도에만 있다. 지도가 없는 편(2026-09-04 이전)은 덮인 씬이 없어 매니페스트
+ * 순서 == 씬 순서이므로 매니페스트로 떨어진다. 어느 쪽이든 null 은 그 자리에 그대로 둔다(밀지
+ * 않는다) — 클립이 덮은 씬은 클립이, 나머지는 렌더러 그라데이션이 받는다.
+ *
+ * 편 폴더 밖 사진(작성기 첨부)은 지도에 못 담겨 null 로 읽힌다(writeSceneImageMap 규약) — 그 씬은
+ * 그라데이션이 된다. 드문 경우(보관소 사진 0장)라 여기서 되살리지 않는다(2026-09-18 확정).
+ */
+export function reviseImagesFor(
+  map: ReadonlyArray<string | null> | null, manifest: ReadonlyArray<string | null>, sceneCount: number,
+): Array<string | null> {
+  const src = map ?? manifest;
+  return Array.from({ length: sceneCount }, (_, i) => src[i] ?? null);
 }
 
 /**
