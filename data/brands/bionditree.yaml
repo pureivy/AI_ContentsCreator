@@ -153,7 +153,6 @@ seasonalSubjects:
       - 12
   - term: 월동
     months:
-      - 10
       - 11
       - 12
       - 1
