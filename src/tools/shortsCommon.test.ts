@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus, hookVoiceSettings, splitPhrases, captionsFor, captionsForScene } from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus, hookVoiceSettings, splitPhrases, captionsFor, captionsForScene, teaserFor } from './shortsCommon';
 import { CONFIG } from '../config';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
@@ -618,5 +618,18 @@ describe('captionsForScene — 어느 씬에 구절 자막을 붙이나(prepareS
     const was = cfg.shortsCaptions;
     cfg.shortsCaptions = false;
     try { expect(captionsForScene(1, undefined, text, 150)).toBeUndefined(); } finally { cfg.shortsCaptions = was; }
+  });
+});
+
+describe('teaserFor — 결론 예고(2026-09-18)', () => {
+  it('CTA takeaways 의 첫 조건만, 답은 안 준다', () => {
+    expect(teaserFor([{ kind: 'hook' }, {}, {}, { kind: 'cta', takeaways: [{ when: '허리 높이', then: '회양목' }] }])).toBe('허리 높이');
+  });
+  it('takeaways 없거나 씬이 2개 이하면 undefined', () => {
+    expect(teaserFor([{ kind: 'hook' }, {}, { kind: 'cta' }])).toBeUndefined();
+    expect(teaserFor([{ kind: 'hook' }, { kind: 'cta', takeaways: [{ when: 'a', then: 'b' }] }])).toBeUndefined();
+  });
+  it('12자로 자른다', () => {
+    expect(teaserFor([{}, {}, {}, { kind: 'cta', takeaways: [{ when: '가나다라마바사아자차카타파하', then: 'x' }] }])).toHaveLength(12);
   });
 });

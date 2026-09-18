@@ -44,7 +44,25 @@ export interface SceneKindFields {
    */
   focus?: { x: number; y: number };
 }
-export interface ShortsScene extends SceneKindFields { narration: string; screenText?: string }
+export interface ShortsScene extends SceneKindFields {
+  narration: string; screenText?: string;
+  /** 결론 예고(2026-09-18) — CTA 의 첫 조건(답은 뺀다). 오케스트레이터가 씬 2(index 1)에만 넣는다(teaserFor). */
+  teaser?: string;
+}
+
+/**
+ * 결론 예고 문구(순수, 2026-09-18) — CTA 씬 첫 takeaway 의 조건(when)만 돌려준다. 답(then)은 끝까지 감춘다.
+ * 첫 몇 초 안에 "끝에 무엇이 나오는지"를 보여 주면 마지막까지 보게 만드는 이유가 생긴다 — 답까지 보여 주면
+ * 그 이유가 사라진다. 씬이 2개 이하(훅+CTA 뿐)면 예고할 '중간'이 없으므로 undefined. takeaways 가 없어도 undefined —
+ * 그 편은 종전과 똑같이 렌더된다(필드 자체를 안 만든다). normalizeSceneKind 가 when 을 12자로 이미 잘라 두지만
+ * 구 plan.json 이나 직접 만든 씬도 오므로 같은 상한을 다시 건다.
+ */
+export function teaserFor(scenes: ReadonlyArray<{ kind?: string; takeaways?: Array<{ when: string; then: string }> }>): string | undefined {
+  if (scenes.length <= 2) return undefined;
+  const when = scenes.find((s) => s.kind === 'cta')?.takeaways?.[0]?.when;
+  if (typeof when !== 'string' || !when.trim()) return undefined;
+  return cutAtWordBoundary(when, 12) || undefined;
+}
 
 /**
  * 이미지 기준 초점 → 화면 기준 초점(순수). 배경은 objectFit: cover 로 놓이므로 이미지 가장자리가 잘린다 —

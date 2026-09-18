@@ -17,6 +17,7 @@ import { SpotlightMask } from './SpotlightMask';
 import { ParticleDrift } from './ParticleDrift';
 import { BarChartGrow } from './BarChartGrow';
 import { TakeawayCard } from './TakeawayCard';
+import { TeaserCard } from './TeaserCard';
 import { CompareCard } from './CompareCard';
 import { FONT_FAMILY } from './loadFonts';
 import { pickFilmLook, filmLookEffects, type FilmLook } from './filmLook';
@@ -67,6 +68,8 @@ export const autoShortsSchema = z.object({
     /** 구절 자막(2026-09-18) — 내레이션을 4~14자 구절로 나눈 것(씬 로컬 프레임). 서버가 본문 씬에만 채운다.
      *  있으면 하단(bottomPct)에 구절이 뜨고 라벨(screenText)은 9% 위로 비켜 선다. 없으면 종전(라벨만). */
     captions: z.array(z.object({ text: z.string(), startFrame: z.number(), endFrame: z.number() })).optional(),
+    /** 결론 예고(2026-09-18) — CTA 첫 조건. 서버가 씬 2에만 넣는다. 있으면 첫 1.5초 상단 오른쪽에 작은 카드가 스친다. */
+    teaser: z.string().optional(),
   })),
   /** 카메라 드리프트 시드(2026-09-03) — 편·씬마다 다른 손 흔들림. 미지정=흔들림 없음(종전 궤도). */
   driftSeed: z.string().optional(),
@@ -182,6 +185,8 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
       {s.kind === 'chart' && s.chart ? <BarChartGrow chart={s.chart} total={s.durationInFrames} /> : null}
       {s.kind === 'cta' && s.takeaways?.length ? <TakeawayCard takeaways={s.takeaways} total={s.durationInFrames} /> : null}
       {s.kind === 'compare' && s.compare ? <CompareCard compare={s.compare} /> : null}
+      {/* 결론 예고 — 씬 2 첫 1.5초, 제목 캘리 아래·라벨 위 오른쪽. 서버가 넣은 씬에만. */}
+      {s.teaser ? <TeaserCard teaser={s.teaser} /> : null}
       <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={labelBottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} hookFontPx={caption?.hookFontPx} {...(capMotion ? { motion: capMotion } : {})} {...(tech === '키워드 팝' ? { pop: true } : {})} />
       {/* 구절 자막 — 라벨이 비켜 준 원래 자리(bottomPct)에 낭독 진행대로 한 구절씩. 본문 씬에만 온다(서버가 훅·CTA 엔 안 채운다). */}
       {hasCaptions ? <PhraseCaption captions={s.captions!} bottomPct={caption?.bottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} {...(capMotion ? { motion: capMotion } : {})} /> : null}

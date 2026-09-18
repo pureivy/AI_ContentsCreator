@@ -47,7 +47,7 @@ import { blogUrlForPiece } from '../content/pieces';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
-import { normalizeSceneKind, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, cutAtWordBoundary, probeDuration } from '../tools/shortsCommon';
+import { normalizeSceneKind, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, cutAtWordBoundary, probeDuration, teaserFor } from '../tools/shortsCommon';
 import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
 import type { EventBus } from '../events/bus';
@@ -1779,6 +1779,12 @@ export async function runShortsJob(
     if (repaired.filled.length || repaired.dropped.length) {
       plan = repaired.plan;
       say(`빈 연출 수선 — ${repaired.filled.length ? `씬 ${repaired.filled.join(',')} 채움` : ''}${repaired.filled.length && repaired.dropped.length ? ' · ' : ''}${repaired.dropped.length ? `씬 ${repaired.dropped.join(',')} 연출 해제(내용을 못 채움)` : ''}`);
+    }
+    // 결론 예고(2026-09-18, SHORTS_TEASER) — CTA 첫 조건을 씬 2에 실어 "끝에 무엇이 나오는지"만 보여 준다(답은 감춘다).
+    // plan.json 에 담아야 재조립·승계·미리보기가 같은 카드를 본다. takeaways 없는 편은 필드도 없다(종전 렌더 그대로).
+    if (CONFIG.shortsTeaser) {
+      const t = teaserFor(plan.scenes);
+      if (t && plan.scenes[1]) plan.scenes[1] = { ...plan.scenes[1], teaser: t };
     }
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
     // 본문 적용률만 본다 — 훅·CTA 는 프롬프트가 항상 붙이라 한 자리라 세어 봐야 규칙 위반이 안 드러난다.

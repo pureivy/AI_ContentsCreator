@@ -247,6 +247,9 @@ export interface Config {
   /** 본문 씬 구절 자막(2026-09-18) — 내레이션을 4~14자 구절로 나눠 글자 수 비례 타이밍으로 하단에 띄운다.
    *  릴스·쇼츠는 무음 자동재생이라 첫 시청에서 낭독이 안 들린다 — 화면 글자가 내용을 대신해야 한다. SHORTS_CAPTIONS=false 킬스위치. */
   readonly shortsCaptions: boolean;
+  /** 씬 2 결론 예고 카드(2026-09-18) — CTA 첫 조건만 "끝에 나오는 것 · 조건 → ?" 로 잠깐 띄운다. 답은 감춘다 — 끝까지 볼 이유.
+   *  takeaways 없는 편은 아무것도 안 붙는다. SHORTS_TEASER=false 킬스위치. */
+  readonly shortsTeaser: boolean;
   /** macOS say 폴백 음색. */
   readonly voiceTtsVoice: string;
   readonly voiceSttModel: string;
@@ -482,6 +485,7 @@ export const CONFIG: Config = {
   shortsHookVoice: envBool('SHORTS_HOOK_VOICE', true),
   shortsHookFootage: envBool('SHORTS_HOOK_FOOTAGE', true),
   shortsCaptions: envBool('SHORTS_CAPTIONS', true),
+  shortsTeaser: envBool('SHORTS_TEASER', true),
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
   voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),
 
