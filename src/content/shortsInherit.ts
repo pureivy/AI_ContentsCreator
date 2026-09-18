@@ -148,3 +148,21 @@ export function inheritedClips(dir: string, sceneCount: number): Array<string | 
     return null;
   });
 }
+
+/**
+ * 수정요청(reviseShorts) 재조립에서 씬별로 어느 클립을 살릴지 정한다(순수, 2026-09-18).
+ *
+ * regen_image 요청은 "그 씬의 생성 배경을 다시 그려라"는 뜻이다. 실촬영(user_NN.mp4)이 덮은
+ * 씬은 애초에 배경 이미지를 생성하지 않으므로 이 요청과 무관하다 — 화면은 사용자가 찍은 그대로
+ * 다. I2V 클립(clip_NN.mp4)은 그 배경 이미지에서 뽑은 것이라 배경이 바뀌면 같이 폐기해야
+ * 한다(스틸+fx 폴백). 종전엔 재생성 씬의 클립을 종류 구분 없이 통째로 비웠는데, 실촬영이
+ * 훅(0)을 덮은 편을 수정하면 그 씬이 그라데이션으로 퇴화했다(SHORTS_HOOK_FOOTAGE 로 훅
+ * 실촬영이 늘면서 드러난 실사고).
+ */
+export function reviseClipsFor(inherited: ReadonlyArray<string | null>, regenScenes: readonly number[]): Array<string | null> {
+  const regen = new Set(regenScenes);
+  return inherited.map((c, i) => {
+    if (!regen.has(i + 1)) return c;
+    return c && path.basename(c).startsWith('user_') ? c : null;
+  });
+}

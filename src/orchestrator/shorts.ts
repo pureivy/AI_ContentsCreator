@@ -34,7 +34,7 @@ import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './short
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame, cutVideoSegment } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, thumbTextQaFailed, type ThumbCopy } from './shortsThumbnail';
-import { inheritShortsAssets, inheritedSceneImages, inheritedClips, writeSceneImageMap } from '../content/shortsInherit';
+import { inheritShortsAssets, inheritedSceneImages, inheritedClips, reviseClipsFor, writeSceneImageMap } from '../content/shortsInherit';
 import { SOURCES_FILE } from '../content/mediaUsage';
 import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom, normalizeLatinName } from '../content/species';
 import { isContainerTopic } from '../analytics/igAxis';
@@ -257,12 +257,11 @@ export async function reviseShorts(
         } else say('씬 배경 재생성 실패 — 기존 배경 유지');
       } else say('씬 프롬프트 원본 없음(bg-draft) — 배경 재생성 생략');
     }
-    // I2V 클립 재사용 — 배경이 바뀐 씬은 클립 폐기(스틸+fx 폴백), 나머지는 기존 클립 유지.
-    const clips: Array<string | null> = plan.scenes.map((_, i) => {
-      if (applied.regenScenes.includes(i + 1)) return null;
-      const p = path.join(dir, 'clips', `clip_${String(i + 1).padStart(2, '0')}.mp4`);
-      return fs.existsSync(p) ? p : null;
-    });
+    // 클립 재사용(2026-09-18 수정) — 종전엔 clip_NN.mp4 존재만 봐서 실촬영(user_NN.mp4)을 못 찾았다.
+    // 훅(0)이 실촬영으로 덮인 편을 수정하면 그 씬이 이미지도 클립도 없이 그라데이션으로 퇴화했다
+    // (SHORTS_HOOK_FOOTAGE 로 훅 실촬영이 늘면서 드러남). inheritedClips 로 실촬영을 먼저 찾고,
+    // 재생성 씬에서도 실촬영은 유지한다 — reviseClipsFor 참고(배경 재생성은 실촬영 씬과 무관하다).
+    const clips: Array<string | null> = reviseClipsFor(inheritedClips(dir, plan.scenes.length), applied.regenScenes);
     // 제목 캘리 — 제목/캘리 문구가 바뀌면 재생성, 아니면 기존 에셋 재사용(카피는 title-copy.json).
     let titleArt: { imagePath: string; copy: ThumbCopy } | null = null;
     if (CONFIG.shortsTitleOverlay) {

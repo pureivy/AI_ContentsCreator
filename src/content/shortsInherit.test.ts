@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { inheritShortsAssets, inheritedSceneImages, inheritedClips, writeSceneImageMap, INHERITED_FILES, SCENE_IMAGE_MAP } from './shortsInherit';
+import { inheritShortsAssets, inheritedSceneImages, inheritedClips, writeSceneImageMap, reviseClipsFor, INHERITED_FILES, SCENE_IMAGE_MAP } from './shortsInherit';
 
 const mk = (): { from: string; to: string } => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inherit-'));
@@ -52,6 +52,21 @@ describe('inheritShortsAssets', () => {
     fs.rmSync(from, { recursive: true, force: true });
     expect(fs.existsSync(path.join(to, 'plan.json'))).toBe(true);
     expect(fs.readdirSync(path.join(to, 'scenes'))).toHaveLength(3);
+  });
+});
+
+describe('reviseClipsFor — 수정요청 재조립의 씬별 클립 결정(순수, 2026-09-18)', () => {
+  it('재생성 씬이라도 실촬영(user_NN)은 유지한다 — 배경 재생성은 그 씬과 무관하다', () => {
+    const inherited = ['/d/clips/user_01.mp4', '/d/clips/clip_02.mp4', null];
+    expect(reviseClipsFor(inherited, [1])).toEqual(['/d/clips/user_01.mp4', '/d/clips/clip_02.mp4', null]);
+  });
+  it('재생성 씬의 I2V 클립(clip_NN)은 폐기한다 — 스틸+fx 폴백으로 떨어져야 한다', () => {
+    const inherited = ['/d/clips/user_01.mp4', '/d/clips/clip_02.mp4', null];
+    expect(reviseClipsFor(inherited, [2])).toEqual(['/d/clips/user_01.mp4', null, null]);
+  });
+  it('건드리지 않은 씬은 그대로 둔다', () => {
+    const inherited = ['/d/clips/user_01.mp4', '/d/clips/clip_02.mp4', null];
+    expect(reviseClipsFor(inherited, [])).toEqual(inherited);
   });
 });
 
