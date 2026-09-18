@@ -37,7 +37,15 @@ export const InsetZoom: React.FC<{
   let top: number;
   if (gapAbove >= D + 40) top = titleBottom + (gapAbove - D) / 2;                 // 제목과 자막 사이
   else if (capBottom + 40 + D <= height * 0.78) top = capBottom + 40;              // 자막 아래(플랫폼 UI 위)
-  else top = Math.max(titleBottom, capTop - D - 40);                               // 마지막 수단 — 자막 위로
+  else {
+    // 마지막 수단 — 제목과 자막 사이가 D+40 에 못 미친다. 구절 자막(2026-09-18)이 라벨을 9% 올린 뒤로는 기본값
+    // (bottomPct 50 → 라벨 59)에서 늘 여기로 온다: gapAbove 428 vs D 400. 종전 max(titleBottom, capTop−D−40) 은
+    // 창을 제목선에 딱 붙였다(여유 0). 제목선 아래 24px 를 먼저 확보하고 남는 만큼을 자막 쪽에 준다 — capTop 은
+    // '두 줄 라벨' 가정(240px)이라 한 줄 라벨이면 실제 글자는 88px 더 아래에 있어, 자막 쪽 여유가 0 이어도 글자와
+    // 닿지 않는다. 자리가 D 보다 작으면(라벨 62 이상) 제목 쪽으로 넘치되 자막은 절대 안 덮는다.
+    // 라벨 58/59 → 제목 24·자막 15/4, 60 → 18·0, 62 → −4·0.
+    top = Math.min(titleBottom + 24, capTop - D);
+  }
   top = Math.round(top);
   const ap = interpolate(f, [6, 20], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.back(1.4)) });
   const z0 = 1.9 + random(`${seed}:iz`) * 0.3;        // 1.9~2.2배

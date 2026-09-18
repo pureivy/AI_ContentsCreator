@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus, hookVoiceSettings, splitPhrases, captionsFor } from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus, hookVoiceSettings, splitPhrases, captionsFor, captionsForScene } from './shortsCommon';
+import { CONFIG } from '../config';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
   it('오디오 + 꼬리여백(0.6), 하한 2.8', () => {
@@ -38,6 +39,24 @@ describe('buildSrt — 누적 타이밍', () => {
       { narration: '첫 구절 둘째 구절', durationSec: 5, captions: [{ text: '첫 구절', startFrame: 0, endFrame: 60 }, { text: '둘째 구절', startFrame: 60, endFrame: 150 }] },
       { narration: '둘째 씬', durationSec: 2 },
     ])).toBe('1\n00:00:00,000 --> 00:00:02,000\n첫 구절\n\n2\n00:00:02,000 --> 00:00:05,000\n둘째 구절\n\n3\n00:00:05,000 --> 00:00:07,000\n둘째 씬\n');
+  });
+  it('구절 항목은 다음 씬과 겹치지 않는다 — 프레임 반올림이 durationSec 을 넘어도 씬 끝에서 클램프(fix 2026-09-18)', () => {
+    // durationSec 4.9833 → 150프레임(5.000s). 클램프가 없으면 마지막 구절이 09,983(다음 씬 시작)을 넘어 10,000 에 끝난다.
+    const srt = buildSrt([
+      { narration: '앞 씬', durationSec: 5 },
+      { narration: 'A B', durationSec: 4.9833, captions: [{ text: 'A', startFrame: 0, endFrame: 80 }, { text: 'B', startFrame: 80, endFrame: 150 }] },
+      { narration: '뒤 씬', durationSec: 2.8 },
+    ]);
+    const ms = (t: string) => { const [h, m, s, r] = t.split(/[:,]/).map(Number); return ((h! * 60 + m!) * 60 + s!) * 1000 + r!; };
+    const cues = [...srt.matchAll(/(\d\d:\d\d:\d\d,\d{3}) --> (\d\d:\d\d:\d\d,\d{3})/g)].map((m) => ({ from: ms(m[1]!), to: ms(m[2]!) }));
+    expect(cues).toHaveLength(4);
+    cues.forEach((c, i) => {
+      expect(c.to).toBeGreaterThanOrEqual(c.from);
+      if (i > 0) expect(c.from).toBeGreaterThanOrEqual(cues[i - 1]!.to); // 단조·비겹침
+    });
+    expect(cues[2]!.to).toBe(9983);   // 마지막 구절은 씬 끝(clock + durationSec)에 맞춘다
+    expect(cues[3]!.from).toBe(9983);
+    expect(srt.split('\n').filter((l) => /-->/.test(l))[1]).toBe('00:00:05,000 --> 00:00:07,667'); // 앞 구절은 프레임/FPS 그대로
   });
 });
 describe('normalizeSceneKind — 검증 추출, 실패 시 {} 강등', () => {
@@ -562,4 +581,42 @@ describe('splitPhrases / captionsFor — 구절 자막(2026-09-18)', () => {
     ]);
   });
   it('빈 내레이션은 빈 배열', () => { expect(captionsFor('', 60)).toEqual([]); });
+  it('구간 불변식 — 길이 ≥ 0·연속·첫 0·마지막 = 씬 끝, 구절 수가 낭독 구간보다 많아도(fix 2026-09-18)', () => {
+    const texts = [
+      '가위 든 손이 멈추는 가지, 꼭 하나씩 있죠. 그 가지는 대개 웃자란 쪽이에요.',
+      '가. 나. 다. 라. 마. 바. 사. 아. 자. 차. 카. 타. 파. 하.', // 2자 문장 14개 → 병합돼 4자 구절 7개
+    ];
+    for (const dur of [1, 20, 31, 150]) { // 20·31 은 낭독 구간(dur−18)이 2·13 프레임 — 구절 수보다 작거나 비슷
+      for (const text of texts) {
+        const c = captionsFor(text, dur);
+        expect(c.length).toBeGreaterThan(0);
+        expect(c[0]!.startFrame).toBe(0);
+        expect(c[c.length - 1]!.endFrame).toBe(dur);
+        c.forEach((x, i) => {
+          expect(x.endFrame).toBeGreaterThanOrEqual(x.startFrame);
+          if (i > 0) expect(x.startFrame).toBe(c[i - 1]!.endFrame);
+        });
+      }
+    }
+  });
+});
+
+describe('captionsForScene — 어느 씬에 구절 자막을 붙이나(prepareScenes·미리보기 공용, fix 2026-09-18)', () => {
+  const cfg = CONFIG as unknown as { shortsCaptions: boolean };
+  const text = '가위 든 손이 멈추는 가지, 꼭 하나씩 있죠.';
+  it('본문 씬(index ≥ 1, 훅·CTA 아님)에만', () => {
+    expect(captionsForScene(1, undefined, text, 150)).toEqual(captionsFor(text, 150));
+    expect(captionsForScene(2, 'list', text, 150)).toEqual(captionsFor(text, 150));
+    expect(captionsForScene(0, undefined, text, 150)).toBeUndefined();  // 첫 씬 — kind 가 없어도 훅 자리
+    expect(captionsForScene(2, 'hook', text, 150)).toBeUndefined();
+    expect(captionsForScene(3, 'cta', text, 150)).toBeUndefined();
+  });
+  it('빈 내레이션은 undefined(필드를 안 만든다)', () => {
+    expect(captionsForScene(1, undefined, '   ', 150)).toBeUndefined();
+  });
+  it('SHORTS_CAPTIONS=off 면 본문 씬도 undefined', () => {
+    const was = cfg.shortsCaptions;
+    cfg.shortsCaptions = false;
+    try { expect(captionsForScene(1, undefined, text, 150)).toBeUndefined(); } finally { cfg.shortsCaptions = was; }
+  });
 });

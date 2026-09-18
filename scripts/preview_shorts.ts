@@ -17,7 +17,7 @@ import path from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { selectComposition, renderMedia } from '@remotion/renderer';
 import { RENDER_OPTS, stageAndBuildProps } from '../src/tools/shortsRenderRemotion';
-import { sceneDurationSec, sceneFrames, probeDuration, varyLayout } from '../src/tools/shortsCommon';
+import { sceneDurationSec, sceneFrames, probeDuration, varyLayout, captionsForScene } from '../src/tools/shortsCommon';
 import type { ShortsScene, PreparedScene } from '../src/tools/shortsCommon';
 import { CONFIG } from '../src/config';
 import { sampleProps } from '../remotion/sampleProps';
@@ -39,9 +39,13 @@ async function propsFromShort(dir: string, publicDir: string): Promise<Record<st
     // 실렌더와 같은 길이 산식 — 낭독 길이가 씬 길이를 지배한다.
     const durationSec = sceneDurationSec(audioPath ? await probeDuration(audioPath) : 0);
     const img = images[i] ? path.join(dir, 'scenes', images[i]!) : null;
+    const narration = plan.scenes[i]?.narration ?? '';
+    // 실렌더와 같은 구절 자막 판정 — 미리보기가 실제와 다른 자막을 보여주면 안 된다.
+    const captions = captionsForScene(i, plan.scenes[i]?.kind, narration, sceneFrames(durationSec));
     prepared.push({
       index: i, imagePath: img, audioPath, screenText: plan.scenes[i]?.screenText ?? '',
-      narration: plan.scenes[i]?.narration ?? '', durationSec, durationInFrames: sceneFrames(durationSec), startFrame,
+      narration, durationSec, durationInFrames: sceneFrames(durationSec), startFrame,
+      ...(captions ? { captions } : {}),
     });
     startFrame += sceneFrames(durationSec);
   }

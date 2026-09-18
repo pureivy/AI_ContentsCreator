@@ -13,7 +13,7 @@ import path from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { selectComposition, renderStill } from '@remotion/renderer';
 import { RENDER_OPTS, stageAndBuildProps } from '../src/tools/shortsRenderRemotion';
-import type { ShortsScene, PreparedScene } from '../src/tools/shortsCommon';
+import { captionsForScene, type ShortsScene, type PreparedScene } from '../src/tools/shortsCommon';
 import { assignTechniques, EDIT_TECHNIQUES, type EditTechnique } from '../remotion/editTechniques';
 import { CONFIG } from '../src/config';
 
@@ -26,10 +26,14 @@ async function main(): Promise<void> {
   const keyword = index.find((s) => s.id === shortId)?.keyword;
   const images = fs.readdirSync(path.join(dir, 'scenes')).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).sort();
   const FR = 180; // 씬 6초 고정 — 낭독 없이 화면만 본다
-  const prepared: PreparedScene[] = plan.scenes.map((s, i) => ({
-    index: i, imagePath: images[i] ? path.join(dir, 'scenes', images[i]!) : null, audioPath: null,
-    screenText: s.screenText ?? '', narration: s.narration, durationSec: FR / 30, durationInFrames: FR, startFrame: i * FR,
-  }));
+  const prepared: PreparedScene[] = plan.scenes.map((s, i) => {
+    const captions = captionsForScene(i, s.kind, s.narration, FR); // 실렌더와 같은 판정 — 구절 자막도 스틸에 찍힌다
+    return {
+      index: i, imagePath: images[i] ? path.join(dir, 'scenes', images[i]!) : null, audioPath: null,
+      screenText: s.screenText ?? '', narration: s.narration, durationSec: FR / 30, durationInFrames: FR, startFrame: i * FR,
+      ...(captions ? { captions } : {}),
+    };
+  });
   const scenes: ShortsScene[] = plan.scenes.map((s) => ({ ...s, focus: { x: 0.5, y: 0.55 } }));
   const n = scenes.length;
   const focusSet = new Set(Array.from({ length: Math.max(0, n - 2) }, (_, i) => i + 1));

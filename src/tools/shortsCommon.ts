@@ -333,6 +333,18 @@ export function captionsFor(narration: string, durationInFrames: number, fps = F
   return out;
 }
 
+/**
+ * 이 씬에 구절 자막을 붙이나, 붙이면 무엇을 — 본문 씬(index ≥ 1, 훅·CTA 아님)에만, CONFIG.shortsCaptions 일 때만.
+ * 아니면 undefined(필드 자체를 안 만든다 — off 경로가 종전과 같아야 한다). prepareScenes 와 미리보기 스크립트
+ * (scripts/preview_shorts.ts·preview_techniques.ts)가 같은 판정을 쓴다 — 미리보기가 실렌더와 다른 화면을 보여주면 안 된다.
+ * 훅은 라벨(screenText)이 곧 자막이고 CTA 는 결론 카드가 화면을 쓴다.
+ */
+export function captionsForScene(index: number, kind: SceneKind | undefined, narration: string, durationInFrames: number): Caption[] | undefined {
+  if (!CONFIG.shortsCaptions || index < 1 || kind === 'hook' || kind === 'cta') return undefined;
+  const captions = captionsFor(narration, durationInFrames);
+  return captions.length ? captions : undefined;
+}
+
 export function fmtSrtTime(sec: number): string {
   const ms = Math.round(sec * 1000);
   const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
@@ -340,16 +352,21 @@ export function fmtSrtTime(sec: number): string {
   const p = (n: number, w = 2) => String(n).padStart(w, '0');
   return `${p(h)}:${p(m)}:${p(s)},${p(r, 3)}`;
 }
-/** SRT — 구절 자막이 있는 씬은 구절별 항목(프레임/FPS 시각 + 씬 시계), 없는 씬은 종전대로 씬당 한 항목. 번호는 이어진다. */
+/**
+ * SRT — 구절 자막이 있는 씬은 구절별 항목(프레임/FPS 시각 + 씬 시계), 없는 씬은 종전대로 씬당 한 항목. 번호는 이어진다.
+ * 구절 시각은 씬 끝(clock + durationSec)에서 클램프한다 — endFrame = round(durationSec·FPS) 라 프레임 시각이 durationSec 을
+ * 최대 ½프레임 넘을 수 있고, 다음 씬은 반올림 전 durationSec 에서 시작하므로 클램프 없이는 항목이 16ms 겹친다(실측).
+ */
 export function buildSrt(scenes: { narration: string; durationSec: number; captions?: Caption[] }[]): string {
   const lines: string[] = [];
   let clock = 0, n = 0;
   for (const sc of scenes) {
+    const end = clock + sc.durationSec;
     const cues = sc.captions?.length
-      ? sc.captions.map((c) => ({ from: clock + c.startFrame / FPS, to: clock + c.endFrame / FPS, text: c.text }))
-      : [{ from: clock, to: clock + sc.durationSec, text: sc.narration }];
+      ? sc.captions.map((c) => ({ from: Math.min(end, clock + c.startFrame / FPS), to: Math.min(end, clock + c.endFrame / FPS), text: c.text }))
+      : [{ from: clock, to: end, text: sc.narration }];
     for (const c of cues) lines.push(`${++n}`, `${fmtSrtTime(c.from)} --> ${fmtSrtTime(c.to)}`, c.text, '');
-    clock += sc.durationSec;
+    clock = end;
   }
   return lines.join('\n');
 }
@@ -433,13 +450,11 @@ export async function prepareScenes(
     // 정작 이미지 생성이 실패했을 때 그 경보를 못 알아본다.
     const hasClip = !!opts.clips?.[i] && (() => { try { return fs.existsSync(opts.clips![i]!); } catch { return false; } })();
     if (!imagePath && !hasClip) issues.push(`씬${i + 1} 배경 폴백(그라데이션)`);
-    // 구절 자막(2026-09-18) — 본문 씬(1번 이후, 훅·CTA 아님)에만. 훅은 라벨(screenText)이 곧 자막이고
-    // CTA 는 결론 카드가 화면을 쓴다. 끄면(SHORTS_CAPTIONS=false) 필드 자체가 없어 렌더가 종전과 같다.
-    const isBody = i >= 1 && sc.kind !== 'hook' && sc.kind !== 'cta';
-    const captions = CONFIG.shortsCaptions && isBody ? captionsFor(sc.narration, durationInFrames) : [];
+    // 구절 자막(2026-09-18) — 본문 씬에만(판정은 captionsForScene, 미리보기와 공용). 끄면 필드 자체가 없어 렌더가 종전과 같다.
+    const captions = captionsForScene(i, sc.kind, sc.narration, durationInFrames);
     prepared.push({
       index: i, imagePath, audioPath, screenText: sc.screenText ?? '', narration: sc.narration, durationSec, durationInFrames, startFrame,
-      ...(captions.length ? { captions } : {}),
+      ...(captions ? { captions } : {}),
     });
     startFrame += durationInFrames;
   }
