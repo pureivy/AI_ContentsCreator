@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SHORTS_WRITERS, writerById, writerByName, pickWriter } from './shortsWriters';
+import { SHORTS_WRITERS, writerById, writerByName, pickWriter, recentWriterIdsFor } from './shortsWriters';
 
 describe('SHORTS_WRITERS — 작가 풀 계약', () => {
   it('작가는 2명(유하린·임태윤, 2026-09-09 사장님 확정)이고 id·이름·목소리가 모두 다르다', () => {
@@ -71,5 +71,29 @@ describe('pickWriter — 최근 쓴 작가 회피(순수)', () => {
     }
     for (let i = 1; i < picked.length; i++) expect(picked[i]).not.toBe(picked[i - 1]);
     expect(new Set(picked).size).toBe(2);
+  });
+});
+
+describe('recentWriterIdsFor — 채널별 최근 작가(2026-09-18)', () => {
+  const rows = [
+    { platform: 'instagram', writerId: 'shorts_writer' },
+    { platform: 'youtube', writerId: 'shorts_writer_b' },
+    { platform: 'instagram', writerId: 'shorts_writer' },
+    { platform: 'youtube', writerId: 'shorts_writer_b' },
+    { writerId: 'shorts_writer' }, // 레거시(채널 미기록)
+  ];
+  it('같은 채널의 기록만 최신순으로', () => {
+    expect(recentWriterIdsFor(rows, 'youtube')).toEqual(['shorts_writer_b', 'shorts_writer_b']);
+    expect(recentWriterIdsFor(rows, 'instagram')).toEqual(['shorts_writer', 'shorts_writer']);
+  });
+  it('채널 미지정은 레거시(채널 없는) 기록만 본다', () => {
+    expect(recentWriterIdsFor(rows, undefined)).toEqual(['shorts_writer']);
+  });
+  it('limit 을 지킨다', () => {
+    expect(recentWriterIdsFor(rows, 'youtube', 1)).toEqual(['shorts_writer_b']);
+  });
+  it('유튜브가 임태윤만 12편이면 다음은 유하린, 인스타가 유하린만이면 다음은 임태윤 — 채널 안에서 번갈고 두 편은 다른 목소리', () => {
+    expect(pickWriter(recentWriterIdsFor(rows, 'youtube')).id).toBe('shorts_writer');
+    expect(pickWriter(recentWriterIdsFor(rows, 'instagram')).id).toBe('shorts_writer_b');
   });
 });

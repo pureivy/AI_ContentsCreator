@@ -79,6 +79,17 @@ export function writerByName(name: string | undefined): ShortsWriter | undefined
 }
 
 /**
+ * 채널별 최근 작가(2026-09-18). 종전엔 채널 구분 없이 최근 12편을 봐서, 한 글의 두 편이 같은 순간 파생되면
+ * 항상 유튜브=임태윤·인스타=유하린으로 굳었다(실측 24편 12:12). 채널 안에서 번갈아야 한다는 사장님 요구.
+ * shorts 는 최신순. 채널 미기록(레거시)은 '' 채널로 본다.
+ */
+export function recentWriterIdsFor(
+  shorts: ReadonlyArray<{ platform?: string; writerId?: string }>, platform: string | undefined, limit = 12,
+): Array<string | undefined> {
+  return shorts.filter((s) => (s.platform ?? '') === (platform ?? '')).slice(0, limit).map((s) => s.writerId);
+}
+
+/**
  * 다음 편 작가 고르기(순수) — 최근 쓴 작가를 피한다. 최근 목록은 최신순.
  * 같은 작가가 연달아 나오지 않게 하는 게 목적이라 '가장 오래 안 쓴 작가'를 고른다.
  * 동률이면 목록 순서(안정) — 무작위를 쓰지 않는 이유는 재현성과 테스트 때문이다.

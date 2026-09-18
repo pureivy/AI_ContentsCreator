@@ -60,7 +60,7 @@ import { probeDuration } from '../tools/shortsCommon';
 import { findSpecies, findSpeciesLoose, loadSpecies, appendSpecies, appendSpeciesAlias } from '../content/species';
 import { learnSpeciesLabel } from '../content/speciesLearn';
 import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, autoDailyCapFor, autoCapApplies, pickTopicTarget, shouldStartSecondRun, SIBLING_PLAN_WAIT_MS, type ShortsPlatform } from '../content/shortsPlatform';
-import { pickWriter, SHORTS_WRITERS } from '../content/shortsWriters';
+import { pickWriter, recentWriterIdsFor, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo } from '../tools/shortsRender';
@@ -1263,9 +1263,9 @@ function shortsActorNames(): { writer?: string; director?: string } {
  * 종전에는 company.yaml 의 shorts_writer 한 명(유하린)이 148편을 전부 썼고 목소리도 하나였다.
  * 디렉터는 그대로 한 명이다(연출 톤까지 나누면 검증할 축이 너무 많아진다 — 필요하면 다음 단계).
  */
-function assignShortsWriter(): { writer: string; writerId: string; director?: string } {
-  const recent = shortsStore().list().slice(0, 12).map((x) => x.writerId); // list() 최신순
-  const w = pickWriter(recent);
+function assignShortsWriter(platform?: ShortsPlatform): { writer: string; writerId: string; director?: string } {
+  const w = pickWriter(recentWriterIdsFor(shortsStore().list(), platform)); // 채널별 번갈기(2026-09-18)
+  console.log(`[숏폼] 작가 배정 — 채널 ${platform ?? '미지정'} · ${w.name}`);
   return { writer: w.name, writerId: w.id, director: shortsActorNames().director };
 }
 
@@ -1336,7 +1336,7 @@ async function shortsCreateHandler(c: Context): Promise<Response> {
   const targets: ShortsPlatform[] = b.platform ? [b.platform] : [...SHORTS_PLATFORMS];
   const made: Shorts[] = []; let primaryId = ''; let firstRun = '';
   for (const platform of targets) {
-    const short = shortsStore().create({ topic, keyword: b.keyword, platform, ...assignShortsWriter() });
+    const short = shortsStore().create({ topic, keyword: b.keyword, platform, ...assignShortsWriter(platform) });
     // 승계는 SHORTS_SIBLING_INHERIT=1 일 때만(2026-09-08 기본 끔) — 끄면 채널마다 독립 런, 대본부터 따로.
     // 독립 런의 두 번째 채널은 앞 채널 '대본'만 기다렸다 출발한다(형제 대본 회피 지침 주입).
     const inheritFrom = CONFIG.shortsSiblingInherit ? primaryId : ''; // 루프 변수 고정 — 클로저가 나중 값을 보면 안 된다
@@ -1518,7 +1518,7 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, p
   } catch { /* 아래에서 거절 */ }
   if (!body) return { error: '초안 본문(draft.json)을 읽을 수 없습니다.' };
   const short = shortsStore().create({
-    topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, auto, platform, ...assignShortsWriter(),
+    topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, auto, platform, ...assignShortsWriter(platform),
   });
   const start = (inherit: boolean): void => {
     launchShortsRun(short.id, piece.title, {
