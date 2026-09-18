@@ -112,3 +112,26 @@ describe('blogStatusOf — 발행 상태(순수)', () => {
   });
   it('글이 없으면 none', () => { expect(blogStatusOf([])).toEqual({ status: 'none', count: 0 }); });
 });
+
+describe('buildMediaUsage — 여분 클립 줄(role: spare, fix round 2)도 파일·씬 단위로 센다', () => {
+  // 씬 2 는 배정 클립(m4), 같은 씬 뒷 절반에 여분(m5)이 들어갔다 — sources.json 에 같은 모양의 줄이 하나 더 붙는다.
+  const shorts2: ShortsLike[] = [
+    { id: 's9', topic: '엄나무 묘목 심기', platform: 'youtube', stage: 'ready', youtubeId: 'Y9', createdTs: '2026-09-18T00:00:00Z' },
+  ];
+  const deps2: UsageDeps = {
+    sourcesOf: (id) => (id === 's9' ? [
+      { scene: 2, file: '/lib/eum.mp4', startSec: 0, seconds: 7 },
+      { scene: 2, file: '/lib/jadu.mp4', startSec: 0, seconds: 4.7, role: 'spare' },
+    ] : null),
+    hasUserClip: () => true, speciesOf, canon,
+  };
+  const u = buildMediaUsage({ media, pieces: [], shorts: shorts2 }, deps2);
+  it('여분 파일(m5)이 파일 표에 그 씬으로 오르고, 그 수종 줄은 정확(exact) 사용으로 잡힌다', () => {
+    expect(u.files['m4']!.map((f) => f.scene)).toEqual([2]);
+    expect(u.files['m5']!.map((f) => f.scene)).toEqual([2]);
+    const jadu = u.species.find((r) => r.species === '자두나무')!;
+    expect(jadu.unused).toBe(false);
+    expect(jadu.shorts[0]).toMatchObject({ shortId: 's9', exact: true, scenes: [2] });
+    expect(u.summary.estimatedShorts).toBe(0); // 기록이 있으니 추정이 아니다
+  });
+});

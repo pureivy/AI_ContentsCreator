@@ -224,8 +224,9 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
       {s.kind === 'chart' && s.chart ? <BarChartGrow chart={s.chart} total={s.durationInFrames} /> : null}
       {s.kind === 'cta' && s.takeaways?.length ? <TakeawayCard takeaways={s.takeaways} total={s.durationInFrames} /> : null}
       {s.kind === 'compare' && s.compare ? <CompareCard compare={s.compare} /> : null}
-      {/* 결론 예고 — 첫 1.5초, 제목 캘리 예약 상자 아래·라벨 위 오른쪽. 서버가 넣은 씬에만, 가운데 카드 연출 씬은 제외(겹침). */}
-      {s.teaser && !(s.kind && TEASER_CLASH_KINDS.has(s.kind)) ? <TeaserCard teaser={s.teaser} {...(titleTopPct != null ? { titleTopPct } : {})} /> : null}
+      {/* 결론 예고 — 첫 1.5초, 제목 캘리 예약 상자 아래·라벨 위 오른쪽. 서버가 넣은 씬에만, 가운데 카드 연출 씬은 제외(겹침).
+          인셋 확대창(초점 있음)도 제외 — 창의 위 끝(≈644px)이 카드 띠(641~739px)와 겹친다. 기법은 렌더 시점에 정해지므로 여기서만 거를 수 있다. */}
+      {s.teaser && !(s.kind && TEASER_CLASH_KINDS.has(s.kind)) && !(tech === '인셋 확대창' && s.imageSrc && s.focus) ? <TeaserCard teaser={s.teaser} {...(titleTopPct != null ? { titleTopPct } : {})} /> : null}
       <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={labelBottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} hookFontPx={caption?.hookFontPx} {...(capMotion ? { motion: capMotion } : {})} {...(tech === '키워드 팝' ? { pop: true } : {})} />
       {/* 구절 자막 — 라벨이 비켜 준 원래 자리(bottomPct)에 낭독 진행대로 한 구절씩. 본문 씬에만 온다(서버가 훅·CTA 엔 안 채운다). */}
       {hasCaptions ? <PhraseCaption captions={s.captions!} bottomPct={caption?.bottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} {...(capMotion ? { motion: capMotion } : {})} /> : null}

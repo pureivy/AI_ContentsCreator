@@ -31,6 +31,8 @@ export interface UsageSource {
   readonly file: string;
   readonly startSec: number;
   readonly seconds: number;
+  /** 'spare' = 중간 컷 뒷 절반에 들어간 여분 클립(fix round 2). 없으면 씬 배정 클립. 사용 현황은 둘을 같은 줄로 센다 — 파일·씬만 본다. */
+  readonly role?: 'spare';
 }
 
 export interface MediaLike {

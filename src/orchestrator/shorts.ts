@@ -35,7 +35,7 @@ import { renderShortsVideo, ensureShortsDownload, extractFirstFrame, cutVideoSeg
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, thumbTextQaFailed, type ThumbCopy } from './shortsThumbnail';
 import { inheritShortsAssets, inheritedSceneImages, inheritedClips, reviseClipsFor, writeSceneImageMap } from '../content/shortsInherit';
-import { SOURCES_FILE } from '../content/mediaUsage';
+import { SOURCES_FILE, type UsageSource } from '../content/mediaUsage';
 import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom, normalizeLatinName } from '../content/species';
 import { isContainerTopic } from '../analytics/igAxis';
 import { shortsGenreOf, genreGuide, genreSceneGuide, loreHookGuide, loreHookSource, type ShortsGenre } from '../content/shortsGenre';
@@ -1530,14 +1530,30 @@ async function normalizeSpareClips(a: {
   const est = a.sceneEst.map((sec, i) => ({ index: i, durationInFrames: sceneFrames(sec), hasClip: !!a.clips[i] }));
   const spareAt = planSpareClips(est, pool);
   const out: string[] = [];
+  const rows: UsageSource[] = [];
   for (const [i, spare] of [...spareAt].sort(([x], [y]) => x - y)) {
     const frames = est[i]!.durationInFrames;
     const cut = midcutAt(frames) ?? Math.round(frames / 2);
+    const seconds = (frames - cut) / FPS + SEGMENT_TAIL_SEC;
     const dst = path.join(a.dir, 'clips', `spare_${String(i + 1).padStart(2, '0')}.mp4`);
-    try { out.push(await cutVideoSegment(spare.path, dst, 0, (frames - cut) / FPS + SEGMENT_TAIL_SEC, a.signal)); }
-    catch { a.say(`여분 실촬영 굽기 실패 — 씬 ${i + 1} 중간 컷은 원래 클립 그대로`); }
+    try {
+      out.push(await cutVideoSegment(spare.path, dst, 0, seconds, a.signal));
+      rows.push({ scene: i + 1, file: spare.path, startSec: 0, seconds: Math.min(spare.seconds, seconds), role: 'spare' });
+    } catch { a.say(`여분 실촬영 굽기 실패 — 씬 ${i + 1} 중간 컷은 원래 클립 그대로`); }
   }
-  if (out.length) a.say(`여분 실촬영 ${out.length}건 정규화 — 5초 넘는 실촬영 씬 ${[...spareAt.keys()].sort((x, y) => x - y).map((i) => i + 1).join(',')} 뒷 절반 교체 후보`);
+  // 사용 현황 기록(fix round 2) — applyUserSegments 가 쓴 clips/sources.json 에 같은 모양으로 덧붙인다. 여분도 보관소 영상이
+  // 화면에 들어간 것이라 안 적으면 '사용 현황'이 그 파일을 미사용으로 센다. 읽는 쪽(buildMediaUsage)은 file·scene 만 본다.
+  // 실패는 삼킨다 — 기록 못 남겼다고 렌더가 멈추면 안 된다(applyUserSegments 와 같은 태도).
+  if (rows.length) {
+    try {
+      const f = path.join(a.dir, SOURCES_FILE);
+      let prev: UsageSource[] = [];
+      try { const j = JSON.parse(fs.readFileSync(f, 'utf-8')) as unknown; if (Array.isArray(j)) prev = j as UsageSource[]; } catch { /* 없으면 새로 */ }
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, JSON.stringify([...prev, ...rows], null, 2), 'utf-8');
+    } catch { /* 무해 */ }
+  }
+  if (out.length) a.say(`여분 실촬영 ${out.length}건 정규화 — 5초 넘는 실촬영 씬 ${rows.map((r) => r.scene).join(',')} 뒷 절반 교체 후보`);
   return out;
 }
 
