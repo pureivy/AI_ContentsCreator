@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus, hookVoiceSettings, splitPhrases, captionsFor, captionsForScene, teaserFor, midcutAt, planSpareClips } from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus, hookVoiceSettings, splitPhrases, captionsFor, captionsForScene, teaserFor, teaserSceneIndex, midcutAt, planSpareClips } from './shortsCommon';
 import { CONFIG } from '../config';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
@@ -631,6 +631,22 @@ describe('teaserFor — 결론 예고(2026-09-18)', () => {
   });
   it('12자로 자른다', () => {
     expect(teaserFor([{}, {}, {}, { kind: 'cta', takeaways: [{ when: '가나다라마바사아자차카타파하', then: 'x' }] }])).toHaveLength(12);
+  });
+});
+
+describe('teaserSceneIndex — 예고 카드를 얹을 본문 씬(순수, fix round 1)', () => {
+  it('index ≥ 1 · cta 아님 · 가운데 카드 연출(list·chart·compare·quote·stat) 아님 — 그중 첫 씬', () => {
+    expect(teaserSceneIndex([{ kind: 'hook' }, {}, {}, { kind: 'cta' }])).toBe(1);
+    expect(teaserSceneIndex([{ kind: 'hook' }, { kind: 'list' }, {}, { kind: 'cta' }])).toBe(2);
+    expect(teaserSceneIndex([{ kind: 'hook' }, { kind: 'chart' }, { kind: 'compare' }, { kind: 'quote' }, { kind: 'stat' }, {}, { kind: 'cta' }])).toBe(5);
+  });
+  it('후보가 없으면 undefined — 전부 카드 연출이거나 훅+CTA 뿐', () => {
+    expect(teaserSceneIndex([{ kind: 'hook' }, { kind: 'stat' }, { kind: 'chart' }, { kind: 'cta' }])).toBeUndefined();
+    expect(teaserSceneIndex([{ kind: 'hook' }, { kind: 'cta' }])).toBeUndefined();
+  });
+  it('훅(0)은 kind 가 없어도 후보가 아니다', () => {
+    expect(teaserSceneIndex([{}, { kind: 'cta' }])).toBeUndefined();
+    expect(teaserSceneIndex([{}, {}, { kind: 'cta' }])).toBe(1);
   });
 });
 

@@ -61,8 +61,8 @@ export async function stageAndBuildProps(
     /** 룩 자리 이동 — 형제편(원편 자산 승계)에 1 을 주면 원편과 다른 색을 받는다.
      *  대본·이미지를 공유하는 사이라 색까지 같으면 두 편이 사실상 같은 영상이 된다. */
     lookOffset?: number;
-    /** 여분 실촬영(2026-09-18, SHORTS_MIDCUT) — 씬 배정(videoPlan)에 안 쓰인 보관소 영상 절대경로. 5초 넘는 클립 씬의
-     *  뒷 절반을 이걸로 바꾼다(clip2_NN.mp4). 없으면 클립 씬은 컷 없이 종전 그대로. */
+    /** 여분 실촬영(2026-09-18, SHORTS_MIDCUT) — 오케스트레이터가 cutVideoSegment 로 구운 clips/spare_NN.mp4 절대경로(씬 번호 순).
+     *  5초 넘는 클립 씬의 뒷 절반을 이걸로 바꾼다(clip2_NN.mp4 로 복사·길이 측정만). 없으면 클립 씬은 컷 없이 종전 그대로. */
     spareClips?: string[];
   } = {},
 ): Promise<Record<string, unknown>> {
@@ -171,7 +171,7 @@ export async function renderShortsVideoRemotion(
     caption?: { bottomPct?: number; keyword?: string; outline?: boolean; fontPx?: number; hookFontPx?: number };
     /** 상단 제목 캘리(투명 PNG 절대경로) — public/ 로 스테이징해 전 씬 고정 오버레이. */
     title?: { imagePath: string; topPct?: number; widthPct?: number };
-    /** 여분 실촬영(2026-09-18) — 씬 배정에 안 쓰인 보관소 영상. 5초 넘는 클립 씬의 중간 컷 교체용(stageAndBuildProps). */
+    /** 여분 실촬영(2026-09-18) — 정규화된 clips/spare_NN.mp4. 5초 넘는 클립 씬의 중간 컷 교체용(stageAndBuildProps). */
     spareClips?: string[];
   } = {},
 ): Promise<ShortsRenderResult> {

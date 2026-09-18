@@ -47,7 +47,7 @@ import { blogUrlForPiece } from '../content/pieces';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
-import { normalizeSceneKind, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, cutAtWordBoundary, probeDuration, teaserFor } from '../tools/shortsCommon';
+import { normalizeSceneKind, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, cutAtWordBoundary, probeDuration, teaserFor, teaserSceneIndex, sceneFrames, midcutAt, planSpareClips, FPS } from '../tools/shortsCommon';
 import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
 import type { EventBus } from '../events/bus';
@@ -1356,7 +1356,7 @@ async function finishShortsRun(a: {
   say: (m: string) => void; checkAbort: () => void;
   /** 승계편이면 1 — 원편과 다른 필름 룩을 받는다. */
   lookOffset?: number;
-  /** 여분 실촬영(2026-09-18, SHORTS_MIDCUT) — 씬 배정에 안 쓰인 보관소 영상. 5초 넘는 클립 씬의 뒷 절반을 이걸로 바꾼다. */
+  /** 여분 실촬영(2026-09-18, SHORTS_MIDCUT) — normalizeSpareClips 가 구운 clips/spare_NN.mp4. 5초 넘는 클립 씬의 뒷 절반을 이걸로 바꾼다. */
   spareClips?: string[];
 }): Promise<void> {
   const { id, store, dir, short, images, clips, opts, say, checkAbort, lookOffset, spareClips } = a;
@@ -1508,6 +1508,38 @@ async function finishShortsRun(a: {
 
 /** 구간을 뗄 때 씬 길이보다 더 떼는 여유(초) — 씬 길이 추정이 실제보다 짧을 때 감속을 막는다. */
 const SEGMENT_TAIL_SEC = 1.2;
+
+/**
+ * 중간 컷 여분 클립 굽기(fix round 1) — 배정에 안 쓰인 보관소 영상 중 실제로 쓰일 것만 clips/spare_NN.mp4 로 정규화한다.
+ *
+ * 쓰일 씬은 planSpareClips(렌더러와 같은 규칙: 5초 넘는 클립 씬, 뒷 절반의 MIN_CLIP_COVERAGE, 여분 하나는 한 번)가 자수 추정
+ * 길이로 정한다. 씬 번호 순으로 돌려주므로 렌더러(stageAndBuildProps → planSpareClips, 실측 길이)가 같은 순서로 다시 집는다 —
+ * 실측이 추정과 달라 후보 씬이 바뀌면 배정이 한 칸 밀릴 수 있지만 하한(MIN_CLIP_COVERAGE)은 렌더러가 다시 본다.
+ * 굽기 실패는 그 여분을 버린다 — 실촬영 배치(applyUserSegments)와 달리 통짜 폴백이 없다: 통짜 원본(HEVC·회전)이 바로 문제라서다.
+ */
+async function normalizeSpareClips(a: {
+  userVideoFiles: readonly string[]; videoDurations: ReadonlyMap<string, number>;
+  videoPlan: ReadonlyArray<VideoSegment | null>; clips: ReadonlyArray<string | null>; sceneEst: readonly number[];
+  dir: string; say: (m: string) => void; signal?: AbortSignal;
+}): Promise<string[]> {
+  const used = new Set(a.videoPlan.flatMap((v) => (v ? [v.path] : [])));
+  const pool = a.userVideoFiles
+    .filter((f) => !used.has(f) && (a.videoDurations.get(f) ?? 0) > 0)
+    .map((f) => ({ path: f, seconds: a.videoDurations.get(f)! }));
+  if (!pool.length) return [];
+  const est = a.sceneEst.map((sec, i) => ({ index: i, durationInFrames: sceneFrames(sec), hasClip: !!a.clips[i] }));
+  const spareAt = planSpareClips(est, pool);
+  const out: string[] = [];
+  for (const [i, spare] of [...spareAt].sort(([x], [y]) => x - y)) {
+    const frames = est[i]!.durationInFrames;
+    const cut = midcutAt(frames) ?? Math.round(frames / 2);
+    const dst = path.join(a.dir, 'clips', `spare_${String(i + 1).padStart(2, '0')}.mp4`);
+    try { out.push(await cutVideoSegment(spare.path, dst, 0, (frames - cut) / FPS + SEGMENT_TAIL_SEC, a.signal)); }
+    catch { a.say(`여분 실촬영 굽기 실패 — 씬 ${i + 1} 중간 컷은 원래 클립 그대로`); }
+  }
+  if (out.length) a.say(`여분 실촬영 ${out.length}건 정규화 — 5초 넘는 실촬영 씬 ${[...spareAt.keys()].sort((x, y) => x - y).map((i) => i + 1).join(',')} 뒷 절반 교체 후보`);
+  return out;
+}
 
 /**
  * 다른 채널용 형제 대본이 이미 있으면 그 제목·첫 문장을 '겹치지 마라' 지침으로 만든다(복원 2026-09-08).
@@ -1783,11 +1815,13 @@ export async function runShortsJob(
       plan = repaired.plan;
       say(`빈 연출 수선 — ${repaired.filled.length ? `씬 ${repaired.filled.join(',')} 채움` : ''}${repaired.filled.length && repaired.dropped.length ? ' · ' : ''}${repaired.dropped.length ? `씬 ${repaired.dropped.join(',')} 연출 해제(내용을 못 채움)` : ''}`);
     }
-    // 결론 예고(2026-09-18, SHORTS_TEASER) — CTA 첫 조건을 씬 2에 실어 "끝에 무엇이 나오는지"만 보여 준다(답은 감춘다).
+    // 결론 예고(2026-09-18, SHORTS_TEASER) — CTA 첫 조건을 본문 첫 씬에 실어 "끝에 무엇이 나오는지"만 보여 준다(답은 감춘다).
+    // 가운데 카드 연출(list·chart 등)이 있는 씬은 건너뛴다(teaserSceneIndex) — 카드끼리 겹친다. 후보가 없으면 카드 없음.
     // plan.json 에 담아야 재조립·승계·미리보기가 같은 카드를 본다. takeaways 없는 편은 필드도 없다(종전 렌더 그대로).
     if (CONFIG.shortsTeaser) {
       const t = teaserFor(plan.scenes);
-      if (t && plan.scenes[1]) plan.scenes[1] = { ...plan.scenes[1], teaser: t };
+      const at = teaserSceneIndex(plan.scenes);
+      if (t && at !== undefined && plan.scenes[at]) plan.scenes[at] = { ...plan.scenes[at], teaser: t };
     }
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
     // 본문 적용률만 본다 — 훅·CTA 는 프롬프트가 항상 붙이라 한 자리라 세어 봐야 규칙 위반이 안 드러난다.
@@ -2024,9 +2058,12 @@ export async function runShortsJob(
 
     // 여분 실촬영(2026-09-18, SHORTS_MIDCUT) — 씬 배정(videoPlan)에 안 들어간 보관소 영상. 5초 넘는 실촬영 씬의 뒷 절반을
     // 이걸로 바꾼다(한 영상은 한 씬 규칙과 별개 — 배정은 그대로고, 남는 영상을 같은 씬 안에서 잇는 것뿐이다).
-    const usedVideo = new Set(videoPlan.flatMap((v) => (v ? [v.path] : [])));
-    const spareClips = CONFIG.shortsMidcut ? userVideoFiles.filter((f) => !usedVideo.has(f) && (videoDurations.get(f) ?? 0) > 0) : [];
-    if (spareClips.length) say(`여분 실촬영 ${spareClips.length}건 — 5초 넘는 실촬영 씬의 중간 컷 교체 후보`);
+    // 실제로 쓰일 것만 골라 실촬영 클립과 같은 굽기(cutVideoSegment: h264·yuv420p·회전 굽기·길이 절단)를 거친다(fix round 1) —
+    // 보관소 원본은 HEVC·회전 메타·18~28초라, 통짜로 넣으면 디코더 없는 환경에서 렌더러 폴백이 필름 룩을 못 받고 번들만 커진다.
+    // 어느 씬이 쓸지는 낭독 실측 전이라 자수 추정(sceneEst — videoPlan 과 같은 산식)으로 정하고, 뒷 절반 + 여유(SEGMENT_TAIL_SEC)만 뗀다.
+    const spareClips = CONFIG.shortsMidcut ? await normalizeSpareClips({
+      userVideoFiles, videoDurations, videoPlan, clips: cv.clips, sceneEst, dir, say, signal: opts.signal,
+    }) : [];
     await finishShortsRun({
       id, store, dir, short, plan, images, clips: cv.clips, opts, say, checkAbort,
       ...(spareClips.length ? { spareClips } : {}),

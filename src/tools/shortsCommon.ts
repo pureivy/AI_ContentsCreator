@@ -47,7 +47,7 @@ export interface SceneKindFields {
 }
 export interface ShortsScene extends SceneKindFields {
   narration: string; screenText?: string;
-  /** 결론 예고(2026-09-18) — CTA 의 첫 조건(답은 뺀다). 오케스트레이터가 씬 2(index 1)에만 넣는다(teaserFor). */
+  /** 결론 예고(2026-09-18) — CTA 의 첫 조건(답은 뺀다). 오케스트레이터가 본문 한 씬에만 넣는다(teaserFor·teaserSceneIndex). */
   teaser?: string;
 }
 
@@ -63,6 +63,21 @@ export function teaserFor(scenes: ReadonlyArray<{ kind?: string; takeaways?: Arr
   const when = scenes.find((s) => s.kind === 'cta')?.takeaways?.[0]?.when;
   if (typeof when !== 'string' || !when.trim()) return undefined;
   return cutAtWordBoundary(when, 12) || undefined;
+}
+/** 화면 가운데 큰 카드를 그리는 연출 — 예고 카드(상단 오른쪽 띠)와 세로로 겹친다(fix round 1 실측: 4항목 list 위 끝 ≈27.8%,
+ *  chart ≈26.8%, compare·quote ≈29%). remotion/AutoShorts.tsx 의 Scene 이 같은 목록으로 렌더 시점에 한 번 더 거른다. */
+const TEASER_CLASH_KINDS: ReadonlySet<string> = new Set(['list', 'chart', 'compare', 'quote', 'stat']);
+/**
+ * 예고 카드를 얹을 씬(순수, fix round 1) — 본문(index ≥ 1, cta 아님) 중 가운데 카드 연출이 없는 첫 씬. 없으면 undefined(카드 없음).
+ * 종전엔 무조건 씬 2였는데, 씬 2가 list·chart 면 카드와 연출 패널이 상단 오른쪽에서 겹쳤다.
+ */
+export function teaserSceneIndex(scenes: ReadonlyArray<{ kind?: string }>): number | undefined {
+  for (let i = 1; i < scenes.length; i++) {
+    const k = scenes[i]?.kind;
+    if (k === 'cta' || (k && TEASER_CLASH_KINDS.has(k))) continue;
+    return i;
+  }
+  return undefined;
 }
 
 /**

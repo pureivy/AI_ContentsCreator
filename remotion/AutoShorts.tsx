@@ -74,7 +74,7 @@ export const autoShortsSchema = z.object({
     /** 구절 자막(2026-09-18) — 내레이션을 4~14자 구절로 나눈 것(씬 로컬 프레임). 서버가 본문 씬에만 채운다.
      *  있으면 하단(bottomPct)에 구절이 뜨고 라벨(screenText)은 9% 위로 비켜 선다. 없으면 종전(라벨만). */
     captions: z.array(z.object({ text: z.string(), startFrame: z.number(), endFrame: z.number() })).optional(),
-    /** 결론 예고(2026-09-18) — CTA 첫 조건. 서버가 씬 2에만 넣는다. 있으면 첫 1.5초 상단 오른쪽에 작은 카드가 스친다. */
+    /** 결론 예고(2026-09-18) — CTA 첫 조건. 서버가 본문 한 씬(가운데 카드 연출 없는 첫 씬)에만 넣는다. 있으면 첫 1.5초 상단 오른쪽에 작은 카드가 스친다. */
     teaser: z.string().optional(),
   })),
   /** 카메라 드리프트 시드(2026-09-03) — 편·씬마다 다른 손 흔들림. 미지정=흔들림 없음(종전 궤도). */
@@ -90,12 +90,17 @@ export const autoShortsSchema = z.object({
 export type AutoShortsProps = z.infer<typeof autoShortsSchema>;
 
 const CLIP_SECONDS = 6; // clipFrames 미지정 시 감속 배율 산정 폴백 — 프레임 수는 fps 에서 유도
+// 예고 카드와 겹치는 가운데 카드 연출 — 서버(shortsCommon teaserSceneIndex)가 같은 목록으로 씬을 고르지만, 구 plan.json 이나
+// 직접 만든 props 가 올 수 있어 렌더 시점에 한 번 더 거른다(fix round 1).
+const TEASER_CLASH_KINDS = new Set<string>(['list', 'chart', 'compare', 'quote', 'stat']);
 
 const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; caption?: AutoShortsProps['caption']; driftSeed?: string; look?: FilmLook; capMotion?: CaptionMotionName;
   /** 이 씬에 걸린 선택 기법(없으면 undefined). */
   tech?: EditTechnique; techSeed?: string;
   /** 다음 씬이 '줌 스루 전환'이면 이 씬 끝이 확대되며 흐려진다(앞 씬 쪽 절반). */
-  exitZoom?: boolean }> = ({ s, index, caption, driftSeed, look, capMotion, tech, techSeed, exitZoom }) => {
+  exitZoom?: boolean;
+  /** 상단 제목 캘리의 topPct — 예고 카드가 그 예약 상자(26%) 아래에 앉는 기준. 캘리가 없으면 TitleOverlay 기본값(5)과 같은 자리. */
+  titleTopPct?: number }> = ({ s, index, caption, driftSeed, look, capMotion, tech, techSeed, exitZoom, titleTopPct }) => {
   const f = useCurrentFrame();
   const { fps } = useVideoConfig();
   // 필름 룩 — 배경(이미지·클립)에만 건다. 자막·카드는 별도 레이어라 영향이 없다(글자는 보정 대상이 아니다).
@@ -219,8 +224,8 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
       {s.kind === 'chart' && s.chart ? <BarChartGrow chart={s.chart} total={s.durationInFrames} /> : null}
       {s.kind === 'cta' && s.takeaways?.length ? <TakeawayCard takeaways={s.takeaways} total={s.durationInFrames} /> : null}
       {s.kind === 'compare' && s.compare ? <CompareCard compare={s.compare} /> : null}
-      {/* 결론 예고 — 씬 2 첫 1.5초, 제목 캘리 아래·라벨 위 오른쪽. 서버가 넣은 씬에만. */}
-      {s.teaser ? <TeaserCard teaser={s.teaser} /> : null}
+      {/* 결론 예고 — 첫 1.5초, 제목 캘리 예약 상자 아래·라벨 위 오른쪽. 서버가 넣은 씬에만, 가운데 카드 연출 씬은 제외(겹침). */}
+      {s.teaser && !(s.kind && TEASER_CLASH_KINDS.has(s.kind)) ? <TeaserCard teaser={s.teaser} {...(titleTopPct != null ? { titleTopPct } : {})} /> : null}
       <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={labelBottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} hookFontPx={caption?.hookFontPx} {...(capMotion ? { motion: capMotion } : {})} {...(tech === '키워드 팝' ? { pop: true } : {})} />
       {/* 구절 자막 — 라벨이 비켜 준 원래 자리(bottomPct)에 낭독 진행대로 한 구절씩. 본문 씬에만 온다(서버가 훅·CTA 엔 안 채운다). */}
       {hasCaptions ? <PhraseCaption captions={s.captions!} bottomPct={caption?.bottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} {...(capMotion ? { motion: capMotion } : {})} /> : null}
@@ -263,7 +268,7 @@ export const AutoShorts: React.FC<AutoShortsProps> = ({ scenes, caption, title, 
         // name 은 Studio 타임라인 라벨 전용 — 렌더 결과에는 영향이 없다.
         const seq = (
           <TransitionSeries.Sequence key={`s${i}`} durationInFrames={Math.max(1, s.durationInFrames)} name={`씬${i + 1} · ${s.kind ?? '무연출'}`}>
-            <Scene s={s} index={i} caption={caption} driftSeed={driftSeed} look={look} capMotion={capMotion} {...(techAt.get(i) ? { tech: techAt.get(i), techSeed: `${driftSeed}:${i}` } : {})} {...(zoomExit.has(i) ? { exitZoom: true } : {})} />
+            <Scene s={s} index={i} caption={caption} driftSeed={driftSeed} look={look} capMotion={capMotion} {...(techAt.get(i) ? { tech: techAt.get(i), techSeed: `${driftSeed}:${i}` } : {})} {...(zoomExit.has(i) ? { exitZoom: true } : {})} {...(title?.topPct != null ? { titleTopPct: title.topPct } : {})} />
           </TransitionSeries.Sequence>
         );
         // 컷 위 빛샘 — 씬과 씬 사이에만(첫 씬 앞·마지막 씬 뒤에는 컷이 없다).
