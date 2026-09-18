@@ -137,7 +137,8 @@ export async function stageAndBuildProps(
       ...(sc?.takeaways ? { takeaways: sc.takeaways } : {}),
       ...(sc?.compare ? { compare: sc.compare } : {}),
       // 결론 예고(2026-09-18) — 오케스트레이터가 씬 2에만 넣는다(teaserFor). 없으면 필드도 없다.
-      ...(sc?.teaser ? { teaser: sc.teaser } : {}),
+      // 렌더 시점에도 게이트를 본다 — plan.json 에 남은 teaser 가 재조립·승계 경로에서 off 를 뚫지 않게(captionsForScene 과 같은 원칙).
+      ...(CONFIG.shortsTeaser && sc?.teaser ? { teaser: sc.teaser } : {}),
       ...(fx ? { fx } : {}),
       // 구절 자막(2026-09-18) — prepareScenes 가 본문 씬에만 채운다. 없으면 필드도 없다(종전 렌더 그대로).
       ...(p.captions?.length ? { captions: p.captions } : {}),

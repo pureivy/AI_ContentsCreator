@@ -201,8 +201,9 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
         />
       ) : (
         // 중간 컷(cutAtFrame)은 배경이 고정된 씬(정지 강조·포인터 링·인셋 확대창)엔 안 준다 — 좌표 기법은 배경이 그 자리에
-        // 있어야 성립하고, 정지 강조는 멈추는 것이 연출이다. 그 씬은 컷 없이 종전 그대로.
-        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={frozen ? 'none' : s.fx?.move} intensity={s.fx?.intensity} driftSeed={driftSeed && !pinned ? `${driftSeed}:${index}` : undefined} {...(effects ? { effects } : {})} {...(s.cutAtFrame && !frozen ? { cutAtFrame: s.cutAtFrame } : {})} />
+        // 있어야 성립하고, 정지 강조는 멈추는 것이 연출이다. 스포트라이트(초점 있음)도 뺀다 — 고정된 빛 자리 밑에서 배경이
+        // 1.25배로 튀면 밝힌 대상이 빛 밖으로 나간다. 그 씬은 컷 없이 종전 그대로.
+        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={frozen ? 'none' : s.fx?.move} intensity={s.fx?.intensity} driftSeed={driftSeed && !pinned ? `${driftSeed}:${index}` : undefined} {...(effects ? { effects } : {})} {...(s.cutAtFrame && !frozen && !(tech === '스포트라이트' && s.focus) ? { cutAtFrame: s.cutAtFrame } : {})} />
       )}
       {/* 액센트 — 배경 위·자막/오버레이 아래(텍스트는 어두워지거나 가려지지 않게). 스포트라이트 기법 씬은 액센트 스포트라이트와 겹치지 않게. */}
       {s.fx?.accent === 'spotlight' && tech !== '스포트라이트' ? <SpotlightMask /> : null}
