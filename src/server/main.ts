@@ -517,8 +517,8 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
         if (isFactStarved(e)) {
           // 사실 부족(2026-09-17) — 재시도 예산·에러 카운트가 아니라 '이 주제로는 못 쓴다'는 판정. 조각을 닫고
           // 같은 수종을 창 안에서 다시 안 잡게 기록한 뒤, 슬롯을 지키려 즉시 다음 틱을 띄운다(주제 교체).
-          if (opts.pieceId) { try { pieceStore().markFactStarved(opts.pieceId, { ts: new Date().toISOString(), count: e.count, need: e.need, ...(e.species ? { species: e.species } : {}) }); } catch { /* 무해 */ } }
-          console.log(`[사실공급] "${topic.slice(0, 30)}" — 고유 사실 ${e.count}건 < ${e.need} → 집필 보류, 주제 교체`);
+          if (opts.pieceId) { try { pieceStore().markFactStarved(opts.pieceId, { ts: new Date().toISOString(), count: e.count, need: e.need, ...(e.species ? { species: e.species } : {}), ...(e.kind ? { kind: e.kind } : {}) }); } catch { /* 무해 */ } }
+          console.log(`[사실공급] "${topic.slice(0, 30)}" — ${e.kind === 'lore' ? '이야기' : '고유'} 사실 ${e.count}건 < ${e.need} → 집필 보류${e.kind === 'lore' ? '(이야기 각도)' : ''}, 주제 교체`);
           bus.emit(EventType.error, { message: e.message });
           bus.emit(EventType.run_done, { status: 'error' });
           const now = Date.now();

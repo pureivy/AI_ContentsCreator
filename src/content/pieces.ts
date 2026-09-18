@@ -15,7 +15,7 @@ import type { FactGateInfo } from './factGate';
 export type PieceStage =
   | 'idea' | 'research' | 'draft' | 'ready' | 'published' | 'measured' | 'reflected' | 'error';
 
-export interface FactStarvedInfo { ts: string; count: number; need: number; species?: string }
+export interface FactStarvedInfo { ts: string; count: number; need: number; species?: string; /** 'lore'=이야기 사실 부족(이야기 각도만 막음, 2026-09-18). 없으면 일반 부족. */ kind?: 'lore' }
 
 /** 비종료 스테이지 — 자율 사이클이 '재개' 대상으로 스캔(런이 죽어 stranded 된 piece 회수). */
 export const RESUMABLE_STAGES: readonly PieceStage[] = ['idea', 'research', 'draft'];

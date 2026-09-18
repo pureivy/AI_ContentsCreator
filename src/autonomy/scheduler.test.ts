@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, orderCandidates, shouldRememberDemandReject, factStarvedItems, factStarvedRecentlyFor } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, orderCandidates, shouldRememberDemandReject, factStarvedItems, factStarvedRecentlyFor, starvedHit } from './scheduler';
 import type { DemandRow } from '../analytics/topicDemand';
 import { CONFIG } from '../config';
 
@@ -712,6 +712,31 @@ describe('factStarvedItems — 사실 부족 기록을 로테이션 재료로', 
   it('slug 미지정(범용 모드)은 brand 없는 조각만', () => {
     const pieces = [{ title: 'a', factStarved: { ts: 't' } }, { title: 'b', brand: 'x', factStarved: { ts: 't' } }];
     expect(factStarvedItems(pieces, undefined).map((i) => i.title)).toEqual(['a']);
+  });
+  it('kind 로 가른다 — 이야기 부족(lore)은 일반 목록에 안 섞이고, 그 반대도', () => {
+    const pieces = [
+      { title: '마가목 설화', keyword: '마가목', brand: 'b', factStarved: { ts: 't1', kind: 'lore' } },
+      { title: '음나무 자리', keyword: '음나무', brand: 'b', factStarved: { ts: 't2' } },
+    ];
+    expect(factStarvedItems(pieces, 'b').map((i) => i.title)).toEqual(['음나무 자리']);
+    expect(factStarvedItems(pieces, 'b', 'lore').map((i) => i.title)).toEqual(['마가목 설화']);
+  });
+});
+
+describe('starvedHit — 일반 부족은 각도 불문, 이야기 부족은 이야기 축 후보만(2026-09-18 마가목)', () => {
+  const general = new Map([['음나무', 1]]);
+  const lore = new Map([['마가목', 2]]);
+  it('일반 부족 수종은 재배 제목도 이야기 제목도 잡힌다', () => {
+    expect(starvedHit('음나무 심는 자리', general, lore)).toMatchObject({ name: '음나무', kind: 'general' });
+    expect(starvedHit('음나무 전설, 천 년의 나무', general, lore)).toMatchObject({ name: '음나무', kind: 'general' });
+  });
+  it('이야기 부족 수종은 이야기 축 제목만 잡히고 재배 제목은 열려 있다', () => {
+    expect(starvedHit('마가목 설화와 자생지의 풍경', general, lore)).toMatchObject({ name: '마가목', kind: 'lore' });
+    expect(starvedHit('마가목 열매가 안 달리는 이유', general, lore)).toBeNull();
+    expect(starvedHit('마가목 심는 자리, 물빠짐부터', general, lore)).toBeNull();
+  });
+  it('둘 다 없으면 null', () => {
+    expect(starvedHit('감나무 거름', general, lore)).toBeNull();
   });
 });
 

@@ -35,6 +35,7 @@ import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedT
 import { rankSearchDemand, searchDemandBlock, unconvertedSubjects, normalizeTerm } from '../analytics/ytSearchDemand';
 import { shortsSearchTerms, igReelViews } from '../analytics/shortsPerf';
 import { axisPerformance, axisBlock } from '../analytics/igAxis';
+import { isLoreTopic } from '../content/loreTopic';
 import { unusedStock, stockBlock, usedSpecies } from '../content/mediaStock';
 import { shortsStore } from '../content/shorts';
 import { topicTargetBlock, topicPriorityBlock, demandGateForTarget, platformLabel, type ShortsPlatform } from '../content/shortsPlatform';
@@ -443,18 +444,29 @@ function rotationItems(slug: string | undefined): Array<{ title: string; keyword
     .map((p) => ({ title: p.title, keyword: p.keyword, ts: p.createdTs }));
 }
 
-/** 사실 부족 기록(2026-09-17)을 로테이션 재료 꼴로 — rotationItems 는 error 조각을 빼므로 별도. ts 는 부족 판정 시각. */
+/** 사실 부족 기록(2026-09-17)을 로테이션 재료 꼴로 — rotationItems 는 error 조각을 빼므로 별도. ts 는 부족 판정 시각.
+ *  kind(2026-09-18): 'lore'=이야기 사실 부족(그 수종의 이야기 각도만 막는다), 'general'=고유 사실 전체 부족(수종 자체를 막는다). */
 export function factStarvedItems(
-  pieces: Array<{ title: string; keyword?: string; brand?: string; factStarved?: { ts: string } }>, slug: string | undefined,
+  pieces: Array<{ title: string; keyword?: string; brand?: string; factStarved?: { ts: string; kind?: string } }>, slug: string | undefined,
+  kind: 'general' | 'lore' = 'general',
 ): Array<{ title: string; keyword?: string; ts: string }> {
   return pieces
-    .filter((p) => (p.brand ?? '') === (slug ?? '') && p.factStarved?.ts)
+    .filter((p) => (p.brand ?? '') === (slug ?? '') && p.factStarved?.ts && ((p.factStarved.kind === 'lore') === (kind === 'lore')))
     .map((p) => ({ title: p.title, ...(p.keyword ? { keyword: p.keyword } : {}), ts: p.factStarved!.ts }));
 }
 /** 최근 CONFIG.factStarvedDays 안에 사실 부족으로 닫힌 수종 → 며칠 전. */
-export function factStarvedRecencyFor(slug: string | undefined, now = new Date()): Map<string, number> {
-  try { return speciesRecency(factStarvedItems(pieceStore().list(), slug), speciesKeyOf, now, CONFIG.factStarvedDays); }
+export function factStarvedRecencyFor(slug: string | undefined, now = new Date(), kind: 'general' | 'lore' = 'general'): Map<string, number> {
+  try { return speciesRecency(factStarvedItems(pieceStore().list(), slug, kind), speciesKeyOf, now, CONFIG.factStarvedDays); }
   catch { return new Map(); }
+}
+/** 후보가 사실 부족 수종인가(순수) — 일반 부족은 각도 불문, 이야기 부족은 후보가 이야기 축일 때만 잡는다.
+ *  마가목 실측(2026-09-18): 재배 사실 17건·이야기 3건 — 재배 글은 열어 두고 "설화" 각도만 막아야 한다. */
+export function starvedHit(text: string, general: Map<string, number>, lore: Map<string, number>): { name: string; daysAgo: number; kind: 'general' | 'lore' } | null {
+  const g = usedRecently(text, general, speciesKeyOf);
+  if (g) return { ...g, kind: 'general' };
+  if (!isLoreTopic(text)) return null;
+  const l = usedRecently(text, lore, speciesKeyOf);
+  return l ? { ...l, kind: 'lore' } : null;
 }
 
 /** 최근 CONFIG.speciesRecentDays 일 안에 다룬 수종 → 며칠 전. 후보 루프·예고·클러스터 게이트 공용. */
@@ -491,9 +503,9 @@ export function usedRecentlyFor(text: string, slug: string | undefined, now = ne
 
 /** 후보 한 건이 최근 사실 부족으로 닫힌 수종인가 — 예고·클러스터 경로(main.ts)용. 후보 루프의 같은 게이트와 같은 눈.
  *  rotationItems 는 error 조각을 빼므로 usedRecentlyFor 로는 안 보인다(최종 리뷰 I1). */
-export function factStarvedRecentlyFor(text: string, slug: string | undefined, now = new Date()): { name: string; daysAgo: number } | null {
+export function factStarvedRecentlyFor(text: string, slug: string | undefined, now = new Date()): { name: string; daysAgo: number; kind: 'general' | 'lore' } | null {
   if (CONFIG.factStarvedDays <= 0) return null;
-  return usedRecently(text, factStarvedRecencyFor(slug, now), speciesKeyOf);
+  return starvedHit(text, factStarvedRecencyFor(slug, now), factStarvedRecencyFor(slug, now, 'lore'));
 }
 
 function readStrategyWinners(): string {
@@ -538,7 +550,9 @@ const IDEA_SYSTEM =
   '너는 1인 AI 콘텐츠 회사의 자율 편집 기획자다. 소재 범위의 기준은 [브랜드 컨텍스트]다 — 소개가 말하는 영역 안에서만, ' +
   '금지 목록의 소재는 절대 제안하지 마라. [팀·업무 범위]는 제작 공정 설명일 뿐 소재 범위가 아니다. ' +
   '다음에 제작하면 검색 노출·유입에 가치있는 네이버 블로그 콘텐츠 아이디어(정보·하우투·리뷰와 **읽을 거리** — 전설·설화·꽃말·유래·역사·쓰임새·문학·명소처럼 수종과 얽힌 이야기)를 서로 소재가 다른 8개, 가장 자신 있는 것부터 순서대로 제안하라(2026-08-27 사용자 확정 8개 — 검색량·시기·수종 게이트가 겹쳐 후보가 전멸하지 않게 폭을 넓힌다).\n' +
-  '- 실용 주제(하우투/비교/리뷰/체크리스트)와 읽을 거리(전설·꽃말·유래·역사·쓰임새 이야기)를 섞어라 — 8개 중 최소 2개는 읽을 거리. 이야기 후보의 keyword 는 수종명 그대로(예: keyword "회화나무" + 제목 "회화나무가 선비의 나무가 된 이유"). 시의성·계절성도 고려한다.\n' +
+  // 2026-09-18 정정 — "최소 2개"가 보관소 수종(묘목장 나무, 이야기 거의 없음) 틱에서 없는 이야기를 지어내게 했고,
+  // 분류어(설화·전설)가 제목에 그대로 박혔다(실측: "마가목 설화와 자생지, …옮기는 법" — 설화 없음). 있을 때만, 내용으로.
+  '- 읽을 거리 후보는 그 수종에 실제로 전해지는 이야기가 있을 때만 낸다 — 궁궐·서원·마을의 오래된 나무, 천연기념물·보호수, 널리 알려진 꽃말, 기록된 이름 유래, 고사·문학 속 나무. 있으면 최대 2개, 없으면 0개(억지로 채우지 마라 — 묘목장 수종 대부분은 이야기가 없다). "설화·전설·꽃말" 같은 분류어를 제목에 붙여 이야기 글처럼 보이게 하지 말고 이야기의 내용을 제목으로 써라(예: keyword "회화나무" + 제목 "회화나무가 선비의 나무가 된 이유"). 이야기 후보의 keyword 는 수종명 그대로. 시의성·계절성도 고려한다.\n' +
   '- [브랜드 컨텍스트]가 있으면 그 기업의 제품·타겟 고객의 관심사와 자연스럽게 연결되는 주제를 우선하라(노골적 광고성 주제 금지 — 독자에게 유용한 정보가 우선).\n' +
   '- [성과 상위 키워드]는 어떤 분야가 통했는지의 참고다 — 그 분야의 인접·연관 영역에서 새로운 키워드를 발굴하라(성과 키워드 자체나 그 변형의 재사용은 금지). 없으면(콜드스타트) 영역 안에서 다양하게 탐색한다.\n' +
   '- 단, 성과 기록에는 브랜드 범위가 지금과 달랐던 시절의 주제가 남아 있을 수 있다. 그런 키워드는 "무엇이 통했나"의 신호(예: 계절 타이밍·비교·증상 진단 같은 접근 방식)로만 읽고, 그 소재 자체나 인접 소재로 확장하지 마라 — 소재 범위의 기준은 언제나 [브랜드 컨텍스트]다.\n' +
@@ -771,6 +785,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
   // 최근 수종·축 제외(2026-09-17 사용자 확정) — 카운트(월 상한)와 달리 '며칠 전'을 잰다. 둘 다 지시 중에도 건다.
   const speciesRecent = speciesRecencyFor(slug);
   const factStarvedRecent = factStarvedRecencyFor(slug);   // 사실 부족 수종(2026-09-17) — 검색해도 안 나온 수종은 창 안에서 재제안 금지
+  const factStarvedRecentLore = factStarvedRecencyFor(slug, new Date(), 'lore'); // 이야기 사실 부족(2026-09-18) — 그 수종의 이야기 각도만 막는다
   const themeRecent = themeRecencyFor(slug);
 
   // 브랜드 설정 시: 주제를 브랜드 제품·타겟에 조향 + 콜드스타트는 시드 키워드에서 출발 +
@@ -1193,10 +1208,12 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       }
       // 사실 부족 수종 게이트(하드, 비용 0, 2026-09-17) — 고유 사실이 기준 미만이라 집필 못 한 수종은 각도를
       // 바꿔도 같은 검색 결과다. 지시 중에도 건다. 마지막 라운드에도 기각(후순위로 살리면 같은 벽에 또 부딪힌다).
-      const starved = usedRecently(`${title} ${keyword ?? ''}`, factStarvedRecent, speciesKeyOf);
+      const starved = starvedHit(`${title} ${keyword ?? ''}`, factStarvedRecent, factStarvedRecentLore);
       if (starved) {
-        console.log(`[auto-cycle] 아이디어 기각(사실 부족 수종) — "${title}" (${starved.name} ${starved.daysAgo}일 전)`);
-        rejects.push(`"${title}"=최근 ${CONFIG.factStarvedDays}일 안에 사실 부족으로 닫힌 수종(${starved.name} — 자료가 있는 다른 수종으로)`);
+        console.log(`[auto-cycle] 아이디어 기각(사실 부족 수종${starved.kind === 'lore' ? '·이야기 각도' : ''}) — "${title}" (${starved.name} ${starved.daysAgo}일 전)`);
+        rejects.push(starved.kind === 'lore'
+          ? `"${title}"=최근 ${CONFIG.factStarvedDays}일 안에 이야기 사실 부족으로 닫힌 수종(${starved.name} — 이 수종은 이야기 각도 말고 실용 각도로)`
+          : `"${title}"=최근 ${CONFIG.factStarvedDays}일 안에 사실 부족으로 닫힌 수종(${starved.name} — 자료가 있는 다른 수종으로)`);
         continue;
       }
       // 수종 앵커 게이트(하드) — 이름·상징 유래 축(4순위, 2026-08-13 투입) 전용 함정 차단. 실측(08-01):

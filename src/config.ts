@@ -126,6 +126,8 @@ export interface Config {
   readonly factSupplyRetry: number;
   /** 사실 부족 수종 재제안 금지 창(일). */
   readonly factStarvedDays: number;
+  /** 이야기 축 주제의 이야기 사실 하한(2026-09-18) — 자율 런이 이 미만이면 집필 보류·주제 교체, 그 수종은 이야기 각도만 창 안에서 막는다. 0=끔. */
+  readonly factMinLore: number;
   /** 내용 모듈 로테이션(2026-09-17) — 최근 N편에 쓴 소재 모듈을 작가 금지 목록으로. off 면 블록 미주입(종전 동작). */
   readonly moduleRotation: boolean;
   /** 금지 목록을 만들 최근 편 수(1~20). 하루 2~3편이라 5편 ≈ 이틀. */
@@ -397,6 +399,8 @@ export const CONFIG: Config = {
   factMinSpecific: Math.min(Math.max(1, envInt('FACT_MIN_SPECIFIC', 5)), 20),
   factSupplyRetry: Math.min(Math.max(0, envInt('FACT_SUPPLY_RETRY', 2)), 5),
   factStarvedDays: Math.min(Math.max(0, envInt('FACT_STARVED_DAYS', 14)), 90),
+  // 이야기 사실 하한(2026-09-18) — 마가목 실측: 총 20건이라 통과했지만 이야기 3건뿐(설화 0건)이라 '설화' 딱지만 붙은 재배 글이 됐다.
+  factMinLore: Math.min(Math.max(0, envInt('FACT_MIN_LORE', 4)), 20),
   moduleRotation: envBool('MODULE_ROTATION', true),
   moduleRecentPieces: Math.min(Math.max(1, envInt('MODULE_RECENT_PIECES', 5)), 20),
   // 숏폼 읽을 거리(2026-09-18) — 숏폼은 블로그에서 파생되므로 주제는 따라오는데, 축 블록이 이야기 주제를 '기타(최하위)'로

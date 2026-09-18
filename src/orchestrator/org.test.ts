@@ -110,7 +110,7 @@ describe('buildGenreGuide — 장르 축 지침 × 구조 시드 예고', () => 
     expect(buildGenreGuide(axes, false, false)).toContain('행동을 최소 하나 제시하라');
   });
   it('이야기 글(전설·꽃말·유래…) 예외가 명시된다', () => {
-    expect(buildGenreGuide(axes)).toContain('전설·설화·꽃말·유래');
+    expect(buildGenreGuide(axes)).toContain('전설·꽃말·유래·역사·쓰임새·문학·명소');
   });
 });
 
@@ -122,6 +122,22 @@ describe('FactStarvedError — 사실 부족 종료 신호', () => {
     expect(e.count).toBe(2); expect(e.need).toBe(5); expect(e.species).toBe('음나무');
     expect(isFactStarved(e)).toBe(true);
     expect(isFactStarved(new Error('x'))).toBe(false);
+  });
+  it('kind=lore 는 메시지·필드에 이야기 부족으로 남는다(2026-09-18)', () => {
+    const e = new FactStarvedError({ topic: '마가목 설화와 자생지', count: 3, need: 4, species: '마가목', kind: 'lore' });
+    expect(e.kind).toBe('lore');
+    expect(e.message).toContain('이야기 사실 3건 < 4');
+    expect(new FactStarvedError({ topic: 't', count: 1, need: 5 }).kind).toBeUndefined();
+  });
+});
+
+describe('buildGenreGuide — 이야기 글 예외(2026-09-18 정정)', () => {
+  const axes = ['재배', '이야기'];
+  it('작가가 베끼던 예시 구절이 없고, 분류어는 실제 이야기가 있을 때만 쓰라고 한다', () => {
+    const g = buildGenreGuide(axes);
+    expect(g).not.toContain('이야기가 남긴 한 가지');
+    expect(g).toContain('분류어만 있고 이야기가 없으면 제목에서 그 말을 빼고');
+    expect(g).toContain('옮기기 같은 작업 지시 섹션을 덧붙이지 말고');
   });
 });
 

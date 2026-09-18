@@ -31,6 +31,7 @@ import { collectExistingContent } from '../content/novelty';
 import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard, writeBriefGate, writeFactSupply } from '../sessions/digest';
 import { supplyFacts, factSupplyBlock } from '../content/factSupply';
 import type { FactSupplyResult } from '../content/factSupply';
+import { isLoreTopic } from '../content/loreTopic';
 import { parseBriefVerdict, parseUnresolved, isBlocking, describeVerdict, VERDICT_FORMAT } from './briefVerdict';
 import { blogStyleIssues, styleRevisionReject } from '../content/styleLint';
 import { resolveStructureSeed, inheritStructureSeed, structureBlock, STRUCTURE_KEEP_BLOCK } from '../content/structureSeed';
@@ -214,7 +215,9 @@ export function buildGenreGuide(axes: readonly string[], teaser?: boolean, avoid
     + (avoidTodayAction ? '' : '독자가 오늘 실제로 해볼 수 있는 행동을 최소 하나 제시하라("기록만 해두라"로 끝내지 말 것). ')
     // 관찰·이야기 축 예외(2026-08-13, 2026-09-17 확장) — 개화·단풍·낙엽 관찰뿐 아니라 전설·꽃말·유래·역사·
     // 쓰임새·문학·명소 글도 심기·전정 작업 지시로 억지 착지하면 하우투로 되돌아간다.
-    + '단, 관찰·이야기 글(개화·단풍·낙엽 관찰, 전설·설화·꽃말·유래·역사·쓰임새·문학·명소)은 예외다 — 심기·전정 같은 작업 지시로 억지 마무리하지 말고, 이야기가 가리키는 것(지금 어디서 무엇을 보면 되는지, 그 나무를 마당에 들일 때 이야기가 남긴 한 가지)으로 끝내도 좋다. '
+    // 2026-09-18 정정 — 종전 예시 구절 "그 나무를 마당에 들일 때 이야기가 남긴 한 가지"를 작가가 소제목으로 그대로 베꼈고(마가목),
+    // 제목의 '설화'가 본문에 없었다. 예시 구절을 빼고, 분류어는 실제 이야기가 있을 때만 쓰게 한다.
+    + '단, 관찰·이야기 글(개화·단풍·낙엽 관찰, 전설·꽃말·유래·역사·쓰임새·문학·명소)은 예외다 — 심기·전정·옮기기 같은 작업 지시 섹션을 덧붙이지 말고, 이야기가 가리키는 것(지금 어디서 무엇을 보면 되는지)으로 끝낸다. 제목에 설화·전설·꽃말·유래를 썼으면 본문에 실제로 그 이야기(인물·사건·기록·뜻)가 있어야 한다 — 분류어만 있고 이야기가 없으면 제목에서 그 말을 빼고 실용 각도로 다시 잡아라. '
     + (teaser ? '' : '맺음을 "다음 글에서는…" 예고로 닫지 마라 — 이 글 안에서 완결한다.');
 }
 
@@ -447,11 +450,14 @@ export class FactStarvedError extends Error {
   readonly count: number;
   readonly need: number;
   readonly species?: string;
-  constructor(a: { topic: string; count: number; need: number; species?: string }) {
-    super(`사실 부족 — "${a.topic.slice(0, 40)}" 고유 사실 ${a.count}건 < ${a.need}`);
+  /** 'lore'=이야기 축 주제의 이야기 사실 부족(2026-09-18) — 수종은 살리고 이야기 각도만 막는다. */
+  readonly kind?: 'lore';
+  constructor(a: { topic: string; count: number; need: number; species?: string; kind?: 'lore' }) {
+    super(`${a.kind === 'lore' ? '이야기 사실' : '사실'} 부족 — "${a.topic.slice(0, 40)}" ${a.kind === 'lore' ? '이야기' : '고유'} 사실 ${a.count}건 < ${a.need}`);
     this.name = 'FactStarvedError';
     this.count = a.count; this.need = a.need;
     if (a.species) this.species = a.species;
+    if (a.kind) this.kind = a.kind;
   }
 }
 export function isFactStarved(e: unknown): e is FactStarvedError {
@@ -887,6 +893,14 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
         throw new FactStarvedError({ topic, count: fsr.specificCount, need: CONFIG.factMinSpecific, species: fsr.species });
       }
       mustFix.push(`수종 고유 사실이 ${fsr.specificCount}건(기준 ${CONFIG.factMinSpecific}) — 일반론으로 채우지 말고 있는 사실 안에서 짧게 써라`);
+    }
+    // 이야기 축 주제의 이야기 사실 하한(2026-09-18) — 총 건수는 넘겨도 이야기가 없으면 '설화' 딱지만 붙은 재배 글이 된다
+    // (마가목 실측: 재배 17·이야기 3, 설화 0). 자율 런은 주제 교체, 사용자 런은 제목에서 딱지를 떼라고만 한다.
+    if (fsr.status === 'ok' && CONFIG.factMinLore > 0 && isLoreTopic(topic) && lore < CONFIG.factMinLore) {
+      if (shouldThrowStarved(!!opts.factStrict, fsr.species, lore, CONFIG.factMinLore)) {
+        throw new FactStarvedError({ topic, count: lore, need: CONFIG.factMinLore, species: fsr.species, kind: 'lore' });
+      }
+      mustFix.push(`이야기 사실이 ${lore}건뿐(기준 ${CONFIG.factMinLore}) — 제목에 설화·전설·꽃말을 약속하지 마라. 있는 이야기 사실만 짧게 쓰고 나머지는 실용 각도로 제목을 다시 잡아라`);
     }
   }
   // 인기 방향 조향 — 실제 네이버 블로그 상위 노출 글(실측 SERP)을 작가·제목 패키저에 주입(fail-open).
