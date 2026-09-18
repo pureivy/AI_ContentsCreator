@@ -168,9 +168,13 @@ export class PieceStore {
  * 재개 대상 선택(순수 — 테스트 가능) — 비종료 스테이지 & 라이브 런 없음 중 가장 오래된 piece. 없으면 null.
  * 자율 틱은 '새 아이디어 제안'보다 이 재개를 먼저 처리해, 사용자 런 양보·재시작으로 죽은 piece 를 회수한다.
  */
-export function selectResumablePiece(pieces: Piece[], isLive: (runId?: string) => boolean): Piece | null {
+export function selectResumablePiece(
+  pieces: Piece[], isLive: (runId?: string) => boolean,
+  /** 추가 보류 판정(2026-09-18) — false 면 이번 틱엔 건너뛴다(조각은 그대로 남아 조건이 풀리면 재개). */
+  allow?: (p: Piece) => boolean,
+): Piece | null {
   const resumable = pieces
-    .filter((p) => RESUMABLE_STAGES.includes(p.stage) && !isLive(p.runId))
+    .filter((p) => RESUMABLE_STAGES.includes(p.stage) && !isLive(p.runId) && (!allow || allow(p)))
     .sort((a, b) => a.createdTs.localeCompare(b.createdTs));
   return resumable[0] ?? null;
 }

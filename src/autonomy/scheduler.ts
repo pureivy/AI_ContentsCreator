@@ -160,8 +160,10 @@ export interface AutorunDirective {
   maxPieces?: number;
   /** 이 지시로 채택된 주제 수. */
   made: number;
-  /** 꺼진 사유(소진·상한·수동) — 화면 표시용. */
+  /** 꺼진 사유(상한·수동) 또는 최근 보류 사유(소진) — 화면 표시용. */
   lastResult?: string;
+  /** 마지막 소진 판정 시각(2026-09-18) — 지시는 그대로 켜 두고 그 틱만 쉰다. 알림은 이 시각 기준으로 6시간당 1회. */
+  exhaustedTs?: string;
 }
 interface AutorunState { enabled?: boolean; directive?: AutorunDirective }
 let _autorunState: AutorunState | undefined;
@@ -225,13 +227,30 @@ export function noteDirectivePiece(): { made: number; finished: boolean } {
   writeAutorunState();
   return { made: d.made, finished };
 }
-/** 두뇌가 '지시 안에서 더 낼 주제 없음'이라 답함 — 끄고 사유를 남긴다. */
-export function finishDirective(reason: string): void {
+/** 소진 알림 간격 — 같은 지시가 계속 소진이면 6시간에 한 번만 알린다(틱마다 울리면 소음). */
+export const DIRECTIVE_EXHAUST_NOTIFY_MS = 6 * 3_600_000;
+/**
+ * 두뇌가 '지시 안에서 더 낼 주제 없음'이라 답함 — **지시는 켜 둔 채** 그 틱만 쉰다(2026-09-18 사장님 확정
+ * "지시 유지, 그 틱은 쉬기"). 종전(09-10)엔 여기서 지시를 껐는데, 같은 틱의 채널 폴백이 꺼진 상태로 돌아
+ * 지시 밖 수종(편백)을 냈고, 사장님이 다시 켜야 했다. 지시를 끄는 건 사장님뿐이다.
+ * 반환: 이번 소진을 알릴 것인가(간격 안이면 false).
+ */
+export function holdDirective(reason: string, now = new Date()): boolean {
   const d = autorunState().directive;
-  if (!d) return;
-  d.on = false;
-  d.lastResult = `소진 — ${reason || '더 낼 주제 없음'}`.slice(0, 160);
+  if (!d) return false;
+  const prev = d.exhaustedTs ? Date.parse(d.exhaustedTs) : NaN;
+  const notify = !Number.isFinite(prev) || now.getTime() - prev >= DIRECTIVE_EXHAUST_NOTIFY_MS;
+  d.exhaustedTs = now.toISOString();
+  d.lastResult = `소진 보류 — ${reason || '더 낼 주제 없음'}`.slice(0, 160);
   writeAutorunState();
+  return notify;
+}
+/** 지시가 이번 틱에 소진 판정을 받았는가(같은 틱의 채널 폴백이 지시 없이 도는 것을 막는다). */
+export function directiveExhaustedWithin(ms: number, now = new Date()): boolean {
+  const d = autorunState().directive;
+  if (!d?.on || !d.exhaustedTs) return false;
+  const t = Date.parse(d.exhaustedTs);
+  return Number.isFinite(t) && now.getTime() - t < ms;
 }
 
 /**
@@ -286,7 +305,7 @@ export function offLibrarySpecies(
 }
 
 /** 보관소에 있는 수종(표준명, 중복 제거) — 지시 블록 입력. 실패는 빈 목록. */
-function librarySpeciesFor(slug: string): string[] {
+export function librarySpeciesFor(slug: string): string[] {
   try {
     const canon = (n: string): string => findSpecies(n)?.name ?? n;
     return [...new Set(listMedia(slug || undefined).map((m) => m.species).filter((s): s is string => !!s).map(canon))];
@@ -983,11 +1002,14 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       micro, IDEA_SYSTEM, rejectNote ? `${baseUser}\n\n${rejectNote}` : baseUser, { maxOutputTokens: 2000, signal },
     ).catch((e: unknown) => { callError = e instanceof Error ? e.message : String(e); return null; });
     if (directive && (o as { exhausted?: unknown } | null)?.exhausted === true) {
-      // 지시 소진 — 두뇌가 '지시 안에서 더 낼 주제 없음'이라 답했다. 끄고 알린 뒤 이번 틱은 쉰다(다음 틱은 종전 자율런).
+      // 지시 소진 — 두뇌가 '지시 안에서 더 낼 주제 없음'이라 답했다. 지시는 켜 둔 채 이번 틱만 쉰다(2026-09-18).
+      // 수종·축 창이 지나면 저절로 후보가 열린다. 끄는 건 사장님 몫 — 알림에 그렇게 적는다.
       const reason = asString((o as { reason?: unknown }).reason).trim().slice(0, 120);
-      finishDirective(reason);
-      console.log(`[auto-cycle] 사장님 지시 소진 — "${directive.text.slice(0, 40)}" (${reason || '더 낼 주제 없음'}) → 지시 꺼짐, 다음 틱부터 기존 자율런`);
-      void notify({ title: '자율런 지시 완료', body: `"${directive.text.slice(0, 60)}" — ${directive.made}편 만든 뒤 더 낼 주제가 없어 지시를 껐습니다${reason ? `(${reason})` : ''}. 다음부터는 기존 자율런으로 돕니다.` }).catch(() => {});
+      const shouldNotify = holdDirective(reason);
+      console.log(`[auto-cycle] 사장님 지시 소진 — "${directive.text.slice(0, 40)}" (${reason || '더 낼 주제 없음'}) → 지시 유지, 이번 틱은 쉼`);
+      if (shouldNotify) {
+        void notify({ title: '자율런 지시 — 이번 틱 쉼', body: `"${directive.text.slice(0, 60)}" — ${directive.made}편 만든 뒤 지금은 지시 안에서 더 낼 주제가 없어 이번 틱을 쉽니다${reason ? `(${reason})` : ''}. 지시는 켜 둡니다 — 수종·축 금지 창이 풀리면 다시 냅니다. 일반 자율런으로 돌리려면 지시를 꺼 주세요.` }).catch(() => {});
+      }
       return null;
     }
     const cands = normalizeIdeaCandidates(o);

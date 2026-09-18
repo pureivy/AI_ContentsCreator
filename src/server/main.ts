@@ -47,7 +47,7 @@ import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
 import { claudeCliProblem } from '../llm/claudeCli';
-import { startAutoCycle, proposeContentIdeas, activeDirective, autorunDirective, setAutorunDirective, clearAutorunDirective, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision, speciesCoverageFor, usedRecentlyFor, usedThemeRecentlyFor, factStarvedRecentlyFor } from '../autonomy/scheduler';
+import { startAutoCycle, proposeContentIdeas, activeDirective, autorunDirective, setAutorunDirective, clearAutorunDirective, directiveExhaustedWithin, directiveWantsLibrary, librarySpeciesFor, offLibrarySpecies, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision, speciesCoverageFor, usedRecentlyFor, usedThemeRecentlyFor, factStarvedRecentlyFor } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
@@ -4178,7 +4178,23 @@ type AutoWork = { kind: 'piece'; piece: Piece; promiseId?: string; clusterTopicI
 
 async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered = false): Promise<AutoWork | null> {
   const pieces = pieceStore().list();
-  const resume = selectResumablePiece(pieces, isRunLive);
+  // 보관소 지시 중 재개 보류(2026-09-18) — 지시가 꺼진 틈에 만들어진 보관소 밖 자율 조각(편백)이 지시를 다시
+  // 켠 뒤에도 '재개 우선'으로 틱마다 되살아났다. 지우지 않고 보류만 한다 — 지시를 끄면 그대로 재개된다.
+  // 사용자 조각(auto 아님)은 보류 대상이 아니다.
+  const libHold = (() => {
+    const d = activeDirective();
+    if (!d || !directiveWantsLibrary(d.text)) return null;
+    const lib = librarySpeciesFor(activeBrandSlug() || '');
+    return lib.length ? lib : null;
+  })();
+  const resume = selectResumablePiece(pieces, isRunLive, libHold
+    ? (p) => {
+        if (!p.auto) return true;
+        const off = offLibrarySpecies(`${p.title} ${p.keyword ?? ''}`, libHold, (t) => findSpeciesLoose(t)?.name);
+        if (off) console.log(`[auto-cycle] 재개 보류(보관소 지시 밖 수종) — "${p.title.slice(0, 40)}" (지시를 끄면 재개)`);
+        return !off;
+      }
+    : undefined);
   if (resume) return { kind: 'piece', piece: resume }; // 재개는 케이던스와 무관 — 죽은 piece 회수 우선.
   // 지식 리서치 게이트 — 주기 도래 시 신규 콘텐츠보다 먼저 1건. 조사 결과(두뇌·교훈)가 이후 콘텐츠 품질을
   // 끌어올리는 컴파운딩 순서(지식 먼저, 제작 나중). 제안 실패 시 콘텐츠 흐름으로 자연 폴백.
@@ -4327,6 +4343,12 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
     if ((activeBrandSlug() || '') !== tickBrand) return null;
     // fail-open(2026-09-08) — 인스타 목표 틱은 클러스터 공급로를 건너뛰므로, 후보가 전멸하면 유튜브 목표로 한 번
     // 더 제안해 슬롯을 비우지 않는다. 채널 목표 하나 때문에 그날 생산이 서면 안 된다.
+    // 지시 소진 틱(2026-09-18)엔 채널 폴백을 돌리지 않는다 — 종전엔 소진으로 지시가 꺼진 직후 이 재시도가
+    // 지시 없이 돌아 보관소 밖 수종(편백)을 냈다. 소진은 '이 틱은 쉰다'는 판정이지 '다른 조건으로 다시'가 아니다.
+    if (!idea && directiveExhaustedWithin(60_000)) {
+      console.log('[auto-cycle] 지시 소진 틱 — 채널 폴백 없이 이번 틱은 쉼');
+      return null;
+    }
     if (!idea && topicTarget === 'instagram') {
       console.log('[auto-cycle] 인스타 목표 후보 전멸 — 유튜브 목표로 재시도(슬롯 보전)');
       idea = await proposeContentIdeas(signal, { target: 'youtube' });

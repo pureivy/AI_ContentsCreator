@@ -593,9 +593,17 @@ describe('자율런 지시 — 영속·상한·소진(순수 저장소)', () => 
     expect(mod.autorunDirective()?.lastResult).toContain('상한');
     expect(mod.setAutorunDirective({ on: true })?.on).toBe(true); // 다시 켜기(사유 지움)
     expect(mod.autorunDirective()?.lastResult).toBeUndefined();
-    mod.finishDirective('수종 전부 다룸');
-    expect(mod.activeDirective()).toBeNull();
-    expect(mod.autorunDirective()?.lastResult).toContain('소진');
+    // 소진은 끄지 않고 보류만(2026-09-18 사장님 확정 "지시 유지, 그 틱은 쉬기") — 알림은 6시간당 1회.
+    const t0 = new Date('2026-09-18T07:00:00.000Z');
+    expect(mod.holdDirective('수종 전부 다룸', t0)).toBe(true);
+    expect(mod.activeDirective()?.on).toBe(true);
+    expect(mod.autorunDirective()?.lastResult).toContain('소진 보류');
+    expect(mod.directiveExhaustedWithin(60_000, new Date(t0.getTime() + 30_000))).toBe(true);
+    expect(mod.directiveExhaustedWithin(60_000, new Date(t0.getTime() + 90_000))).toBe(false);
+    expect(mod.holdDirective('아직', new Date(t0.getTime() + 3_600_000))).toBe(false);   // 1시간 뒤 — 알림 없음
+    expect(mod.holdDirective('아직', new Date(t0.getTime() + 7 * 3_600_000))).toBe(true); // 7시간 뒤 — 다시 알림
+    expect(mod.setAutorunDirective({ on: false })?.on).toBe(false);                     // 끄는 건 사장님
+    expect(mod.directiveExhaustedWithin(60_000, new Date(t0.getTime() + 7 * 3_600_000 + 1))).toBe(false); // 꺼지면 false
     expect(mod.setAutorunDirective({ text: '' })).toBeNull(); // 빈 문구 = 삭제
     expect(mod.autorunDirective()).toBeNull();
     delete process.env.GEPA_DATA_DIR;

@@ -98,6 +98,15 @@ describe('selectResumablePiece (재개 우선 — 완전 자율 내구성)', () 
     expect(selectResumablePiece(pieces, () => false)).toBeNull();
   });
 
+  it('allow 가 false 면 그 틱은 건너뛰고 다음 후보로 — 조각은 남는다(보관소 지시 밖 수종 보류, 2026-09-18)', () => {
+    const held = mk({ id: 'cypress', stage: 'draft', title: '편백나무, 좁은 마당에서', auto: true, createdTs: '2026-01-01T00:00:00.000Z' });
+    const ok = mk({ id: 'plum', stage: 'idea', title: '자두나무 가지치기', auto: true, createdTs: '2026-01-02T00:00:00.000Z' });
+    const allow = (p: Piece) => !p.title.includes('편백');
+    expect(selectResumablePiece([held, ok], () => false, allow)?.id).toBe('plum');
+    expect(selectResumablePiece([held], () => false, allow)).toBeNull();
+    expect(selectResumablePiece([held], () => false)?.id).toBe('cypress'); // allow 없으면 종전
+  });
+
   it('재개 대상 여럿이면 가장 오래된 것', () => {
     const older = mk({ id: 'old', stage: 'idea', createdTs: '2026-01-01T00:00:00.000Z' });
     const newer = mk({ id: 'new', stage: 'draft', createdTs: '2026-02-01T00:00:00.000Z' });

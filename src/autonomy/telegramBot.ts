@@ -53,7 +53,9 @@ export function parseDirectiveCommand(text: string): DirectiveCommand | null {
 export function describeDirective(d: { text: string; on: boolean; made: number; maxPieces?: number; lastResult?: string } | null): string {
   if (!d) return '자율런 지시 없음 — 기존 자율런으로 돕니다.\n설정: "자율런 지시: 보관소의 수종별 수확 후 전정" (편수 상한은 "지시 5편: …")';
   const q = d.maxPieces ? `${d.made}/${d.maxPieces}편` : `${d.made}편`;
-  return `${d.on ? '🟢 지시 켜짐' : '⚪ 지시 꺼짐'} — "${d.text}" (${q})${!d.on && d.lastResult ? `\n사유: ${d.lastResult}` : ''}${d.on ? '' : '\n다시 켜기: "지시 켜기"'}`;
+  // 켜진 채 소진 보류 중이면(2026-09-18) 그 사유도 보인다 — 왜 생산이 쉬는지 상태 한 줄로 알 수 있게.
+  const why = d.lastResult ? `\n사유: ${d.lastResult}` : '';
+  return `${d.on ? '🟢 지시 켜짐' : '⚪ 지시 꺼짐'} — "${d.text}" (${q})${!d.on ? why : (d.lastResult?.startsWith('소진 보류') ? why : '')}${d.on ? '' : '\n다시 켜기: "지시 켜기"'}`;
 }
 
 /** 콜백 데이터 파싱(≤64바이트 규격: "<op>:<id>"). 불명이면 null. 순수 — 테스트 대상. */
