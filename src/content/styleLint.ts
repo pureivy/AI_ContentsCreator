@@ -74,7 +74,23 @@ export function hookKeywordLeadIssues(narrations: string[], keyword?: string): s
  */
 export function compressionRelintProbs(scenes: Array<{ narration: string }>, keyword?: string): string[] {
   const narrations = scenes.map((s) => s.narration);
-  return [...narrationStyleIssues(narrations), ...hookKeywordLeadIssues(narrations, keyword)];
+  return [...narrationStyleIssues(narrations), ...hookKeywordLeadIssues(narrations, keyword), ...hookLengthIssues(narrations)];
+}
+
+/**
+ * 훅 20자 한 문장 린트(순수, §2 2026-09-18) — 훅 문형을 "장면 지목"으로 못박아도 프롬프트 지시만으로는
+ * 문장이 길어지거나 두 문장으로 늘어지는 것을 못 막는다(실측: 훅이 길수록 첫 2초 안에 요지가 안 잡혀
+ * 이탈이 는다). 공백 제거 글자 수 또는 문장 종결 부호 개수, 둘 중 하나만 넘어도 한 건으로 지적한다 —
+ * 두 조건을 따로 지적하면 "20자 넘고 두 문장"인 흔한 사례가 두 건으로 잡혀 수정 라운드 입력이 부풀뿐더러
+ * 결국 같은 처방("한 문장으로 줄여라")을 두 번 말하는 것이라 하나로 합친다.
+ */
+export function hookLengthIssues(narrations: string[], max = 24): string[] {
+  const hook = (narrations[0] ?? '').trim();
+  if (!hook) return [];
+  const stripped = hook.replace(/\s+/g, '');
+  const terminals = (hook.match(/[.!?…]/g) ?? []).length;
+  if (stripped.length <= max && terminals < 2) return [];
+  return [`항목1: 훅이 ${stripped.length}자·${terminals}문장 — 20자 이내 한 문장으로 줄여라(첫 2초가 이탈을 정한다)`];
 }
 
 /**

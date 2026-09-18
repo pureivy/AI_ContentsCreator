@@ -27,7 +27,7 @@ import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues, parityIssues, parityToInfo } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue, stripUnsourcedStatOverlays } from '../content/timingParity';
 import type { FactGateInfo } from '../content/factGate';
-import { narrationStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs } from '../content/styleLint';
+import { narrationStyleIssues, hookKeywordLeadIssues, hookLengthIssues, metaSummaryIssues, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs } from '../content/styleLint';
 import { promiseStore } from '../content/promises';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
@@ -828,7 +828,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     sourceFlagged.length ? `[원문에서 근거가 확인되지 않은 주장 — 원문 본문에 적혀 있어도 대본·자막·화면 어디에도 쓰지 마라. 사실 게이트가 근거를 못 찾은 문장들이다]\n${sourceFlagged.slice(0, 8).map((c, i) => `${i + 1}. ${c}`).join('\n')}\n이 주장들을 바꿔 말하거나 요약해서 싣는 것도 금지다(수치·시기만 떼어 목록에 넣는 것 포함). 이 소재를 꼭 다뤄야 하면 단정 대신 조건·한계를 밝혀 쓰고 숫자는 적지 마라.` : '',
     sourceBody ? '[매체 전환 — 요약본이 아니라 새 대본] 원문에서 가져오는 것은 **사실과 근거**이지 구성이 아니다. 원문의 소제목 순서를 그대로 따라가지 마라 — 블로그는 필요한 대목만 골라 읽는 매체라 여러 갈래를 나란히 둬도 되지만, 숏폼은 되감기가 없어 한 줄기로만 끝까지 간다. 원문의 여러 축 중 **하나만 골라** 그 축으로 끝까지 밀고, 나머지는 통째로 버려라(다 담으면 아무것도 안 남는다). 고른 축은 훅에서 던진 문제와 마지막 씬의 답이 같은 줄기로 이어져야 한다.' : '',
     '',
-    `씬 ${n}개의 유튜브 숏폼 대본을 기획하라. 씬1=훅(3패턴 중 택1), 씬2=전제(이 영상이 무엇에 대한 이야기이고 왜 문제/중요한지를 못박는다 — 원문의 핵심 인과 한 줄), 마지막 씬=CTA.`,
+    `씬 ${n}개의 유튜브 숏폼 대본을 기획하라. 씬1=훅 — 유형은 ① 장면 지목(청자가 지금 겪는 한 장면: 가위 앞에서 멈춘 손, 옆집 창, 콩알 열매) ② 단정 선언 ③ 숫자 제시. ①이 기본값이다(인스타 상위 8편 중 5편이 ①, 실측 2026-09-18). [최근 숏폼의 훅] 목록에 ①이 연달아 있으면 ②③으로. 씬2=전제(이 영상이 무엇에 대한 이야기이고 왜 문제/중요한지를 못박는다 — 원문의 핵심 인과 한 줄), 마지막 씬=CTA.`,
     // 씬2 인과 연결(2026-08-28) — 실측: 훅이 "옆집 창이 마당을 본다"로 사생활 긴장을 세웠는데 씬2가 그걸
     // 받지 않고 곧바로 "두 가지를 적어요"로 넘어가, 시청자에게 화제 전환으로 읽혔다. 원문에는 그 고리가
     // 있었다("그럼 나무를 몇 미터짜리로 심어야 할까요") — 대본이 떨어뜨린 것이다.
@@ -851,7 +851,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     '낭독 명료성: 소리로만 듣고 되돌릴 수 없는 매체다 — 동음이의 전문어는 풀어 말하고("수분 나무"→"꽃가루받이 나무", "눈"→"꽃이 될 눈", "뿌리분"→"뿌리와 흙이 뭉친 덩어리"), 주어·비교 대상을 떨어낸 조각문 금지("밀리미터보다 옆 가지와 비교해요" 식 초압축 — 실측). 내레이션에서 언급하는 개수("다섯 곳")는 실제로 그 수만큼 세어 줘야 한다.',
     '문장 종결을 섞어라: 한 씬의 두 문장을 같은 어미로 끝내지 마라("~ㅂ니다"+"~ㅂ니다" 금지). 대본 전체에서 "-ㅂ니다" 종결은 절반 이하로 하고 "~요/~죠/~거든요/~는데요/~하세요"를 섞어라. 습관적 설명 현재형("치웁니다", "심지 않습니다")은 청자에게 말 거는 꼴("치우세요", "지금은 심지 마세요")로. 아나운서 원고가 아니라 옆에서 알려주는 말로 들려야 한다.',
     '대본 전체 1~2곳에 사람 말의 결을 넣어라 — 짧은 제동("잠깐,"), 정정·양보("아, 포트묘는 예외예요"), 판단의 표명("색보다 끝알부터 봐요" — "나는/저는" 같은 1인칭 주어는 쓰지 마라, 주어 없이도 시점이 전달된다. 사용자 확정 2026-08-12). 겪지 않은 사건·일화를 지어내는 것은 금지(판단·관점만). 정보 밀도를 깎는 잡담도 금지. 판단 문장은 근거·이유 문장을 밀어내고 그 자리를 차지하게 하지 마라 — 근거에 덧붙이는 한 줄이다. "X가 아니라 Y" 재정의 문형은 대본 전체 1회 이하 — 앞 편들이 이미 상투로 만든 틀이다.',
-    `본문 씬 내레이션은 1~3문장(합쳐서 30~70자, 낭독 5~12초) — ${guide.bodyForm} 리듬만 변주하라: 이유를 먼저 두는 씬, 질문으로 끝나는 씬을 최소 1개 섞되(단, 씬당 "무엇을+왜"는 유지 — 리듬을 바꾸라는 것이지 정보를 빼라는 것이 아니다), 질문으로 끝냈으면 그 답을 반드시 바로 다음 씬 첫 문장에서 준다. "~기 때문입니다"는 대본 전체 1회 이하. 씬2(전제)는 45~70자까지 허용. 훅·CTA 씬은 1~2문장(20~40자). 총 낭독 시간 ${Math.max(20, capSec - 25)}~${capSec - 10}초, 대본 전체(모든 씬 내레이션 합) ${budgetChars}자 이내를 반드시 맞춘다 — TTS 실측 속도는 초당 약 6자다. 이 총량이 씬 수보다 우선한다(넘칠 것 같으면 씬 수를 줄여서라도 지켜라).`,
+    `본문 씬 내레이션은 1~3문장(합쳐서 30~70자, 낭독 5~12초) — ${guide.bodyForm} 리듬만 변주하라: 이유를 먼저 두는 씬, 질문으로 끝나는 씬을 최소 1개 섞되(단, 씬당 "무엇을+왜"는 유지 — 리듬을 바꾸라는 것이지 정보를 빼라는 것이 아니다), 질문으로 끝냈으면 그 답을 반드시 바로 다음 씬 첫 문장에서 준다. "~기 때문입니다"는 대본 전체 1회 이하. 씬2(전제)는 45~70자까지 허용. 훅 씬은 20자 이내 한 문장(첫 2초 — 초과분은 코드가 되돌려 보낸다). CTA 씬은 1~2문장(20~40자). 총 낭독 시간 ${Math.max(20, capSec - 25)}~${capSec - 10}초, 대본 전체(모든 씬 내레이션 합) ${budgetChars}자 이내를 반드시 맞춘다 — TTS 실측 속도는 초당 약 6자다. 이 총량이 씬 수보다 우선한다(넘칠 것 같으면 씬 수를 줄여서라도 지켜라).`,
     `압축 안전선: ${capSec}초에 맞추더라도 조사·주어는 남겨라("이 시기 질소 거름 주면" 금지 → "이 시기엔 질소 거름을 주면"). 앞 문장의 주어가 바뀌면 새 주어를 밝혀라. screenText 에 "정의·구분법·요약·정리" 같은 대본용 딱지를 쓰지 마라 — 화면에는 독자에게 하는 말만.`,
     'screenText 는 씬당 1줄 15자 이내 키워드 요약(비워도 됨).',
     // CTA 결론 카드(2026-08-28 사용자 요청) — 결론이 소리로만 지나가면 무음 시청자에게 아무것도 안 남는다.
@@ -989,12 +989,14 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 원문에서 '근거 미확인'으로 분류된 손질 시기가 그대로 화면 목록에 떴다. 기존 두 축(정합·시기수치)은
     // "원문에 충실한가"만 봐서 통과시킨다 — 이 축이 "원문이 애초에 믿을 만한가"를 본다.
     const inherited = (sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(plan)) : []).map(formatInherited);
-    // 소스별 캡 합 최대 20(narrationStyleIssues ≤5 + hookKeywordLeadIssues ≤1 + standalone ≤4 + parity ≤2 + 시기·수치 ≤3 + 승계 ≤2 + 설명 요약투 ≤1 + 자막 딱지 ≤2) —
+    // 소스별 캡 합 최대 21(narrationStyleIssues ≤5 + hookKeywordLeadIssues ≤1 + hookLengthIssues ≤1 + standalone ≤4 + parity ≤2 + 시기·수치 ≤3 + 승계 ≤2 + 설명 요약투 ≤1 + 자막 딱지 ≤2) —
     // 이미 소스별로 상한을 뒀으므로 최종 캡을 또 씌우면 뒤 소스(정합)만 밀려나는 desync 가 재발한다. 최종 캡 없음.
     const probs = [
       ...narrationStyleIssues(plan.scenes.map((s) => s.narration)),
       // 훅 키워드 낭독 결정적 린트(2026-08-20) — 프롬프트 지시 단독은 샌다는 실측 전례(문체 린트와 동일 사상).
       ...hookKeywordLeadIssues(plan.scenes.map((s) => s.narration), keyword),
+      // 훅 20자 한 문장 결정적 린트(§2 2026-09-18) — 문형·글자수 지시만으로는 새므로(같은 사상).
+      ...hookLengthIssues(plan.scenes.map((s) => s.narration)).slice(0, 1),
       ...standalone.slice(0, 4),
       ...parity.slice(0, 2),
       ...timing.slice(0, 3),

@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import { narrationStyleIssues, cardStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, blogStyleIssues, styleRevisionReject, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs } from './styleLint';
+import { narrationStyleIssues, cardStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, blogStyleIssues, styleRevisionReject, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs, hookLengthIssues } from './styleLint';
+
+describe('hookLengthIssues — 훅 20자 한 문장(2026-09-18)', () => {
+  it('24자 초과면 지적', () => {
+    expect(hookLengthIssues(['올리브 화분 들였는데 잎이 자꾸 떨어진다면요. 원인은 물보다 묘목 고를 때부터 있었어요.'])).toHaveLength(1);
+  });
+  it('두 문장이면 지적', () => {
+    expect(hookLengthIssues(['삽부터 들면 못 버텨요. 순서가 틀렸거든요.'])).toHaveLength(1);
+  });
+  it('20자 한 문장은 통과', () => {
+    expect(hookLengthIssues(['블루베리 색, 반은 거짓말이에요.'])).toEqual([]);
+    expect(hookLengthIssues([])).toEqual([]);
+  });
+});
 
 describe('compressionRelintProbs — 감량 뒤 결정적 재검산(2026-09-18)', () => {
   it('훅 키워드 낭독·질문+반전 공식을 다시 잡는다', () => {
