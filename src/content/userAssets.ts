@@ -23,13 +23,19 @@ export type AssetPlan = ReadonlyArray<string | null>;
  * 전 씬을 실사진으로 덮지는 않는다 — 사진이 씬 내용과 안 맞으면 생성본만 못하다. 상한은 씬의
  * 절반(올림)이고, 그 이상 올려도 나머지는 스타일 레퍼런스로만 쓰인다.
  */
-export function planAssetScenes(assets: readonly string[], sceneCount: number, order?: readonly number[]): AssetPlan {
+export function planAssetScenes(
+  assets: readonly string[], sceneCount: number, order?: readonly number[],
+  opts: { hookFirst?: boolean } = {},
+): AssetPlan {
   const out: Array<string | null> = Array.from({ length: Math.max(0, sceneCount) }, () => null);
   if (!assets.length || sceneCount <= 0) return out;
   const cap = Math.min(assets.length, Math.ceil(sceneCount / 2));
   // 배정 순서 — 지정이 없으면 훅부터 앞에서 차례로.
-  const seq = (order?.length ? order : Array.from({ length: sceneCount }, (_, i) => i))
+  const seq0 = (order?.length ? order : Array.from({ length: sceneCount }, (_, i) => i))
     .filter((i) => Number.isInteger(i) && i >= 0 && i < sceneCount);
+  // 훅 예약(2026-09-18) — 영상이 한 편도 훅을 못 채웠을 때, 내용 배정 순서와 무관하게 사진이라도
+  // 먼저 준다(SHORTS_HOOK_FOOTAGE). 중복 제거하며 0 을 맨 앞으로 당긴다.
+  const seq = opts.hookFirst ? [0, ...seq0.filter((i) => i !== 0)] : seq0;
   const seen = new Set<number>();
   let k = 0;
   for (const idx of seq) {
@@ -109,7 +115,7 @@ export function planVideoSegments(
   videos: ReadonlyArray<{ path: string; seconds: number }>,
   sceneSeconds: readonly number[],
   prefer: ReadonlyMap<string, number> = new Map(),
-  opts: { mustUse?: boolean } = {},
+  opts: { mustUse?: boolean; hookFirst?: boolean } = {},
 ): ReadonlyArray<VideoSegment | null> {
   const out: Array<VideoSegment | null> = sceneSeconds.map(() => null);
   if (!videos.length || !sceneSeconds.length) return out;
@@ -123,6 +129,21 @@ export function planVideoSegments(
     claimed.add(i);
     used.add(v.path);
   };
+
+  // -1) 훅(0) 예약(2026-09-18, SHORTS_HOOK_FOOTAGE) — 실사면 채널 인상이 첫 화면에서 갈린다.
+  //     감독이 훅에 고른 영상이 있고 길이가 되면 그것, 아니면 훅 길이를 채울 수 있는 가장 긴 영상.
+  //     아무것도 안 맞으면 훅은 비우고 아래 종전 규칙(훅 제외)을 그대로 탄다.
+  if (opts.hookFirst) {
+    const hookSec = sceneSeconds[0]!;
+    let hookPick: { path: string; seconds: number } | undefined;
+    for (const [file, at] of prefer) {
+      if (at !== 0) continue;
+      const v = pool.find((x) => x.path === file);
+      if (v && fits(v, hookSec)) { hookPick = v; break; }
+    }
+    if (!hookPick) hookPick = pool.filter((v) => fits(v, hookSec)).sort((a, b) => b.seconds - a.seconds)[0];
+    if (hookPick) place(hookPick, 0);
+  }
 
   // 0) 내용으로 정해진 자리 먼저 — 감독이 대본과 소재 설명을 나란히 놓고 고른 것.
   for (const [file, at] of prefer) {

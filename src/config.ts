@@ -241,6 +241,9 @@ export interface Config {
   readonly shortsTtsStitch: boolean;
   /** 쇼츠 훅(0번) 씬 낭독 — 표현 폭을 넓히고(stability↓·style↑) 첫 구절 뒤 0.4초 쉼을 준다(ElevenLabs 전용). SHORTS_HOOK_VOICE=false 킬스위치. */
   readonly shortsHookVoice: boolean;
+  /** 훅(0번) 씬에 실촬영(사진·영상)을 우선 배정 — 첫 화면이 실사면 채널 인상이 달라진다(2026-09-18).
+   *  종전엔 훅을 아예 비웠다(정지 화면이 커버로 필요하다는 이유). SHORTS_HOOK_FOOTAGE=false 킬스위치. */
+  readonly shortsHookFootage: boolean;
   /** macOS say 폴백 음색. */
   readonly voiceTtsVoice: string;
   readonly voiceSttModel: string;
@@ -474,6 +477,7 @@ export const CONFIG: Config = {
   shortsTtsBreaks: envBool('SHORTS_TTS_BREAKS', true),
   shortsTtsStitch: envBool('SHORTS_TTS_STITCH', true),
   shortsHookVoice: envBool('SHORTS_HOOK_VOICE', true),
+  shortsHookFootage: envBool('SHORTS_HOOK_FOOTAGE', true),
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
   voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),
 

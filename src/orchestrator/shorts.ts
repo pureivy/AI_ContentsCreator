@@ -40,7 +40,7 @@ import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, species
 import { isContainerTopic } from '../analytics/igAxis';
 import { shortsGenreOf, genreGuide, genreSceneGuide, loreHookGuide, loreHookSource, type ShortsGenre } from '../content/shortsGenre';
 import { planAssetScenes, styleRefs, planVideoSegments, orderAssetsByAssignment, type VideoSegment } from '../content/userAssets';
-import { describeUserMedia, mediaPlanGuide, assignMediaToScenes, speciesRefFrame } from './shortsMediaBrief';
+import { describeUserMedia, mediaPlanGuide, assignMediaToScenes, speciesRefFrame, clipMidFrame } from './shortsMediaBrief';
 import { generateTitleArt } from './shortsTitleArt';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
 import { blogUrlForPiece } from '../content/pieces';
@@ -344,7 +344,7 @@ export async function reviseShorts(
     // 고치는 수정요청에서 썸네일을 건드리지 않아, 발행할 때마다 같은 '오타 가능성 미해결' 경고가 되돌아왔다.
     if (applied.titleChanged || applied.titleArtCopy || applied.regenScenes.length || thumbTextQaFailed(dir)) {
       try {
-        const hook = images.find((p): p is string => !!p && fs.existsSync(p)) ?? null;
+        const hook = await hookStillFor(images, clips, dir, opts.signal);
         const ok = await generateDesignedThumbnail({
           dir, title: plan.title, description: plan.description, titles: plan.titles, keyword: short.keyword, hookImage: hook, signal: opts.signal,
           ...(titleArt ? { copy: titleArt.copy } : {}),
@@ -1090,6 +1090,11 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
 
 async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: string): Promise<{ preset: string; style: string; prompts: string[]; subject?: string; subjectLatin?: string; species?: import('../content/species').Species }> {
   const sceneGenreGuide = genreSceneGuide(shortsGenreOf(topic, CONFIG.shortsLore));
+  // 훅(0번) 이미지 지침(2026-09-18, SHORTS_HOOK_FOOTAGE) — 실촬영이 훅을 못 채운 편은 이 프롬프트로
+  // 생성한 이미지가 그대로 훅 화면이 된다. 넓은 풍경·정면 전경은 스와이프를 안 멈춘다(실측).
+  const hookImageGuide = CONFIG.shortsHookFootage
+    ? '씬1(훅)은 첫 2초에 스와이프를 멈추게 하는 화면 — 대비가 큰 클로즈업(가위 앞에서 멈춘 손, 잎 한 장, 열매 단면, 상처 난 줄기). 넓은 풍경·정면 나무 전경·글자 금지. 이야기형은 위 지침이 우선.'
+    : '';
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 대상] ${keyword}` : '',
@@ -1111,6 +1116,7 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
     '그리고 모든 씬 묘사(prompt)에 그 식물이 무엇인지 매번 명시하라 — "나무", "생울타리", "묘목" 처럼 뭉뚱그리지 마라. 화면에 식물이 안 나오는 씬(도구·흙·줄자만)은 예외다.',
     // 이야기형 편(2026-09-18) — 재배 시연이 아니라 그 나무가 선 자리·풍경. 하우투는 빈 문자열(종전 그대로).
     ...(sceneGenreGuide ? [sceneGenreGuide] : []),
+    ...(hookImageGuide ? [hookImageGuide] : []),
     'style_preset 은 주제·내용·톤에 어울리게 선택하라 — photorealistic 을 기본값처럼 고르지 말 것. photorealistic=실물 시연·하우투·생활, manhwa=스토리·유머·과장, watercolor=감성·계절·에세이, ink_wash=차분한 전통·사색적 주제, flat_design=정보·정책·경제·비교·수치, retro_poster=이벤트·프로모션·복고.',
     'JSON 형식: {"style_preset":"photorealistic|manhwa|watercolor|ink_wash|flat_design|retro_poster","style":"모든 씬 공통 스타일 문구(팔레트·질감·조명)","subject_latin":"학명(모르면 빈 문자열)","subject":"한글 이름 — 구별되는 겉모습 한 줄(없으면 빈 문자열)","scenes":[{"prompt":"장면 묘사(한국어 150자 이내)"}]}',
   ].join('\n');
@@ -1317,6 +1323,27 @@ function writerVoiceOpts(short: Pick<Shorts, 'writerId' | 'writer'>): { elevenVo
 // 하던 블록. 이제 대본을 공유하므로 겹칠 두 대본이 없다.
 
 /**
+ * 디자인 썸네일에 붙일 훅(0번) 정지 화면(2026-09-18) — 종전엔 늘 `images[0]`(또는 첫 정지
+ * 이미지)이었다. 훅이 실촬영 영상으로 덮이면(SHORTS_HOOK_FOOTAGE) 그 씬은 이미지를 생성하지
+ * 않으므로(`covered`) 정지 화면이 없다 — 클립 중간 지점을 뽑아 대신 쓴다. 추출이 실패하면
+ * 종전 방식(images.find)으로 그대로 떨어진다(fail-open).
+ */
+async function hookStillFor(
+  images: ReadonlyArray<string | null>, clips: ReadonlyArray<string | null> | undefined,
+  dir: string, signal?: AbortSignal,
+): Promise<string | null> {
+  const clip = clips?.[0];
+  if (CONFIG.shortsHookFootage && !images[0] && clip && fs.existsSync(clip)) {
+    try {
+      const durationSec = await probeDuration(clip);
+      const frame = await clipMidFrame(clip, durationSec, path.join(dir, 'refs'), signal);
+      if (frame) return frame;
+    } catch { /* fail-open — 아래 종전 방식으로 */ }
+  }
+  return images.find((p): p is string => !!p && fs.existsSync(p)) ?? null;
+}
+
+/**
  * 4) 조립~마무리 — 대본·이미지·클립이 준비된 뒤의 공통 경로.
  *
  * runShortsJob 본문에서 떼어냈다(2026-09-03). 형제편은 자산을 승계해 1~3단계를 통째로 건너뛰는데,
@@ -1449,7 +1476,7 @@ async function finishShortsRun(a: {
 
   // 디자인 썸네일 — 훅 씬 배경 위에 손글씨 제목/핵심(gpt-image). best-effort: 실패해도 완성 유지(엔드포인트가 영상 프레임 폴백).
   try {
-    const hook = images.find((p): p is string => !!p && fs.existsSync(p)) ?? null;
+    const hook = await hookStillFor(images, clips, dir, opts.signal);
     const ok = await generateDesignedThumbnail({
       dir, title: plan.title, description: plan.description, titles: plan.titles, keyword: short.keyword, hookImage: hook, signal: opts.signal,
       ...(titleArt ? { copy: titleArt.copy } : {}), // 상단 제목 캘리와 같은 카피 재사용 — 영상·썸네일 문구 일치
@@ -1783,9 +1810,24 @@ export async function runShortsJob(
     opts.bus?.emit('phase', { team_id: 'shorts', phase: 'integrate' });
     // 소재 → 씬 배정(2026-09-04) — 대본이 나왔으니 내레이션과 소재 설명을 나란히 놓고 고른다.
     // 이 배정이 정해져야 '어느 씬을 생성하지 않을지'가 정해진다. 실패하면 길이 기준으로 떨어진다.
-    const mediaAt = await assignMediaToScenes(briefs, plan.scenes, opts.signal ? { signal: opts.signal } : {});
+    const mediaAt = await assignMediaToScenes(briefs, plan.scenes, {
+      ...(opts.signal ? { signal: opts.signal } : {}), hookFirst: CONFIG.shortsHookFootage,
+    });
     const ordered = orderAssetsByAssignment(userAssetFiles, mediaAt, plan.scenes.length);
-    const assetPlan = planAssetScenes(ordered.assets, plan.scenes.length, ordered.order);
+    // 영상 배정을 사진보다 먼저 정한다(2026-09-18) — 훅(0)에 실사를 채울 우선순위는 영상이 사진보다
+    // 높다(움직임·클로즈업). 영상이 훅을 채우면 사진의 훅 예약은 필요 없다.
+    // 씬 길이는 낭독 실측 전이라 자수로 추정한다(렌더러의 sceneDurationSec 와 같은 산식).
+    const sceneEst = plan.scenes.map((sc) => Math.max(3.5, (sc.narration ?? '').length / SHORTS_TTS_CPS + 0.6));
+    const videoPrefer = new Map<string, number>();
+    for (const f of userVideoFiles) { const at = mediaAt.get(f); if (at !== undefined) videoPrefer.set(f, at); }
+    const videoPlan = planVideoSegments(
+      userVideoFiles.map((f) => ({ path: f, seconds: videoDurations.get(f) ?? 0 })).filter((v) => v.seconds > 0),
+      sceneEst, videoPrefer, { mustUse: true, hookFirst: CONFIG.shortsHookFootage }, // 보관소 영상 1개는 반드시 들어간다(사용자 확정 2026-09-08)
+    );
+    // 사진은 영상이 훅을 하나도 못 채웠을 때만 훅을 예약한다 — 영상이 우선이다.
+    const assetPlan = planAssetScenes(ordered.assets, plan.scenes.length, ordered.order, {
+      hookFirst: CONFIG.shortsHookFootage && !videoPlan.some(Boolean),
+    });
     // 보관소 사진은 참조로도 쓰지 않는다(사용자 확정 2026-09-08 "보관소 이미지는 무시") — 종 참조는 보관소 영상 프레임 한 장뿐.
     // 컴포저에 직접 첨부한 사진(userAssets)만 종전대로 배경·톤 참조로 쓴다.
     const refPaths = styleRefs(ordered.assets, assetPlan);
@@ -1803,14 +1845,6 @@ export async function runShortsJob(
       speciesRefPath = refPaths[0] ?? null; // 올린 사진이 있으면 그게 곧 실물이다
     }
     const genRefs = speciesRefPath ? [...new Set([speciesRefPath, ...refPaths])].slice(0, 4) : refPaths;
-    // 씬 길이는 낭독 실측 전이라 자수로 추정한다(렌더러의 sceneDurationSec 와 같은 산식).
-    const sceneEst = plan.scenes.map((sc) => Math.max(3.5, (sc.narration ?? '').length / SHORTS_TTS_CPS + 0.6));
-    const videoPrefer = new Map<string, number>();
-    for (const f of userVideoFiles) { const at = mediaAt.get(f); if (at !== undefined) videoPrefer.set(f, at); }
-    const videoPlan = planVideoSegments(
-      userVideoFiles.map((f) => ({ path: f, seconds: videoDurations.get(f) ?? 0 })).filter((v) => v.seconds > 0),
-      sceneEst, videoPrefer, { mustUse: true }, // 보관소 영상 1개는 반드시 들어간다(사용자 확정 2026-09-08)
-    );
     if (videoPlan.some(Boolean) && ![...videoPrefer.entries()].some(([f, at]) => videoPlan[at]?.path === f)) {
       say(`실촬영 배정 보정 — 감독 배정이 무효(훅·범위 밖·길이 미달)라 씬 ${videoPlan.findIndex(Boolean) + 1}에 길이 규칙으로 넣음`);
     }

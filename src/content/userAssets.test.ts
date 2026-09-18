@@ -175,3 +175,33 @@ describe('planVideoSegments — 반드시 하나는 쓴다(사용자 확정 2026
     expect(planVideoSegments([], [6, 6], undefined, { mustUse: true }).filter(Boolean)).toHaveLength(0);
   });
 });
+
+describe('planVideoSegments hookFirst(2026-09-18)', () => {
+  const secs = [3.5, 6, 6, 6, 4];
+  it('hookFirst 면 씬0이 먼저 받는다 — 배정된 클립이 있으면 그것, 없으면 가장 긴 클립', () => {
+    const v = [{ path: 'a.mp4', seconds: 7 }, { path: 'b.mp4', seconds: 12 }];
+    const out = planVideoSegments(v, secs, new Map([['a.mp4', 0]]), { hookFirst: true });
+    expect(out[0]?.path).toBe('a.mp4');
+    const out2 = planVideoSegments(v, secs, new Map(), { hookFirst: true });
+    expect(out2[0]?.path).toBe('b.mp4');
+  });
+  it('hookFirst 가 없으면 종전 — 씬0은 비운다', () => {
+    const v = [{ path: 'a.mp4', seconds: 7 }];
+    expect(planVideoSegments(v, secs, new Map([['a.mp4', 0]]))[0]).toBeNull();
+  });
+  it('훅 길이에 못 미치는 클립은 훅에 안 넣는다', () => {
+    const v = [{ path: 'a.mp4', seconds: 1 }];
+    expect(planVideoSegments(v, [3.5, 6], new Map(), { hookFirst: true })[0]).toBeNull();
+  });
+});
+
+describe('planAssetScenes hookFirst', () => {
+  it('내용 배정이 씬2·3이어도 씬0을 먼저 준다', () => {
+    const out = planAssetScenes(['p1', 'p2', 'p3'], 5, [2, 3, 0, 1, 4], { hookFirst: true });
+    expect(out[0]).toBe('p1');
+    // 종전(hookFirst 없음) 실측값(2026-09-18, npx tsx -e 로 확인): cap=3 인 채로 seq 를 그대로
+    // 따라가면 0 은 세 번째로 채워져 'p3' 를 받는다 — null 이 아니다. hookFirst 는 그 순서를
+    // 바꿔 0 을 맨 앞으로 당길 뿐, hookFirst 가 없을 때의 동작은 이 값 그대로 불변이어야 한다.
+    expect(planAssetScenes(['p1', 'p2', 'p3'], 5, [2, 3, 0, 1, 4])[0]).toBe('p3');
+  });
+});

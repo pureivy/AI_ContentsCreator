@@ -72,6 +72,23 @@ export async function speciesRefFrame(
 }
 
 /**
+ * 훅(0번) 씬을 실촬영 영상이 덮을 때 쓰는 썸네일용 정지 프레임(2026-09-18) — speciesRefFrame 골격을
+ * 그대로 따른다. 훅 씬은 이미지를 생성하지 않으므로(covered), 썸네일이 쓸 정지 화면이 따로 없다 —
+ * 클립 중간 지점을 뽑아 대신 쓴다(앞뒤는 손이 들어오거나 흔들린 경우가 많다).
+ */
+export async function clipMidFrame(
+  file: string, seconds: number, outDir: string, signal?: AbortSignal,
+): Promise<string | null> {
+  try {
+    fs.mkdirSync(outDir, { recursive: true });
+    const dst = path.join(outDir, 'hook-frame.jpg');
+    await execFileP('ffmpeg', ['-nostdin', '-y', '-ss', String(Math.max(0.1, seconds * 0.5)), '-i', file,
+      '-frames:v', '1', '-vf', 'scale=768:-2', dst], { timeout: 20_000, signal });
+    return fs.existsSync(dst) && fs.statSync(dst).size > 0 ? dst : null;
+  } catch { return null; } // fail-open — 실패하면 호출부가 종전 방식(images.find)으로 폴백한다
+}
+
+/**
  * 첨부 소재를 한 건씩 비전으로 읽는다.
  *
  * 한 번에 몰아 읽지 않는 이유: 영상은 프레임이 여러 장이라 "몇 번째 이미지가 몇 번 소재인지"가
@@ -149,7 +166,7 @@ export function mediaPlanGuide(briefs: readonly MediaBrief[]): string {
 export async function assignMediaToScenes(
   briefs: readonly MediaBrief[],
   scenes: ReadonlyArray<{ narration?: string; screenText?: string }>,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; hookFirst?: boolean } = {},
 ): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   if (!briefs.length || scenes.length < 2) return out;
@@ -167,8 +184,12 @@ export async function assignMediaToScenes(
         '각 소재를 내용이 가장 잘 맞는 씬 하나에 배정하라 — 한 소재는 한 씬이다(사용자 확정 2026-09-04).',
         '그 화면이 그 씬의 내레이션을 실제로 보여 주는 자리를 골라라. 넓게 찍은 밭 화면을 "마디를 어디서',
         '자르나" 같은 클로즈업 설명 씬에 넣으면 화면과 말이 겉돈다(실측).',
-        '씬1(훅)에는 영상을 배정하지 마라 — 첫 프레임이 곧 커버라 정지 화면이 필요하다.',
-        '영상 소재는 반드시 한 씬에 배정하라(사용자 확정 2026-09-08: 실촬영 영상 한 개는 반드시 쓴다) — 딱 맞는 씬이 없어도 가장 가까운 씬(씬1 제외)을 골라라.',
+        opts.hookFirst
+          ? '씬1(훅)에는 첫 2초에 손이 멈추게 하는 영상(움직임·클로즈업)을 우선 배정하라 — 첫 화면이 실사면 채널 인상이 달라진다(2026-09-18).'
+          : '씬1(훅)에는 영상을 배정하지 마라 — 첫 프레임이 곧 커버라 정지 화면이 필요하다.',
+        opts.hookFirst
+          ? '영상 소재는 반드시 한 씬에 배정하라(사용자 확정 2026-09-08: 실촬영 영상 한 개는 반드시 쓴다) — 딱 맞는 씬이 없어도 가장 가까운 씬을 골라라.'
+          : '영상 소재는 반드시 한 씬에 배정하라(사용자 확정 2026-09-08: 실촬영 영상 한 개는 반드시 쓴다) — 딱 맞는 씬이 없어도 가장 가까운 씬(씬1 제외)을 골라라.',
         '사진 소재만, 어느 씬에도 안 맞으면 목록에서 뺄 수 있다(억지로 넣는 것보다 안 넣는 편이 낫다).',
         'JSON 형식: {"picks":[{"media":번호,"scene":번호}]}',
       ].join('\n'),
