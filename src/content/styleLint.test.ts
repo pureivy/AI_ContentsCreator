@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { narrationStyleIssues, cardStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, blogStyleIssues, styleRevisionReject, screenTextLabelIssues, monthWordOutsideNarration } from './styleLint';
+import { narrationStyleIssues, cardStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, blogStyleIssues, styleRevisionReject, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs } from './styleLint';
+
+describe('compressionRelintProbs — 감량 뒤 결정적 재검산(2026-09-18)', () => {
+  it('훅 키워드 낭독·질문+반전 공식을 다시 잡는다', () => {
+    const probs = compressionRelintProbs([{ narration: '회화나무 심는 법 보셨나요? 정작 뿌리가 문제죠.' }, { narration: '둘째 씬이에요.' }], '회화나무');
+    expect(probs.some((p) => p.includes('키워드'))).toBe(true);
+  });
+  it('깨끗한 대본은 빈 배열', () => {
+    expect(compressionRelintProbs([{ narration: '가위 든 손이 멈추는 가지, 꼭 하나씩 있죠.' }, { narration: '그 가지는 대개 웃자란 쪽이에요.' }])).toEqual([]);
+  });
+});
 
 describe('hookKeywordLeadIssues — 훅 첫 2초 키워드 낭독(2026-08-20 조회수 감사)', () => {
   it('훅 앞 12자 안에 키워드 전체가 있으면 검출한다(공백 무시)', () => {

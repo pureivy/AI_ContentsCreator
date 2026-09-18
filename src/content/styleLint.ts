@@ -67,6 +67,17 @@ export function hookKeywordLeadIssues(narrations: string[], keyword?: string): s
 }
 
 /**
+ * 감량 뒤 결정적 재검산(순수, §4-1 2026-09-18) — fitShortsPlanToDuration 의 압축은 감량만 하고 재검산이
+ * 없어, 압축이 문체·훅 규칙을 다시 어겨도 그대로 통과했다(실측: 압축이 CTA 가 되받는 근거 문장을 지워
+ * "옹이부터 보세요"가 허공에 뜬 사고). narrationStyleIssues·hookKeywordLeadIssues 를 감량 후 씬에 그대로
+ * 다시 돌린다 — 압축 전 1차 검산(planShorts)과 같은 함수, 다른 시점이라 이 자리에서 export 해 둔다.
+ */
+export function compressionRelintProbs(scenes: Array<{ narration: string }>, keyword?: string): string[] {
+  const narrations = scenes.map((s) => s.narration);
+  return [...narrationStyleIssues(narrations), ...hookKeywordLeadIssues(narrations, keyword)];
+}
+
+/**
  * 카드뉴스 슬라이드 문체 린트 — 실측 지문 2종.
  * ① 같은 종결어미('-ㅂ니다')로 끝나는 장이 3장 연속(40장 중 36장 실측)
  * ② 'X가 아니라 Y' 재정의 문형 2회 이상

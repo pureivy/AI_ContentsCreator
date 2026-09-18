@@ -27,7 +27,7 @@ import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues, parityIssues, parityToInfo } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue, stripUnsourcedStatOverlays } from '../content/timingParity';
 import type { FactGateInfo } from '../content/factGate';
-import { narrationStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, screenTextLabelIssues, monthWordOutsideNarration } from '../content/styleLint';
+import { narrationStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs } from '../content/styleLint';
 import { promiseStore } from '../content/promises';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
@@ -725,6 +725,7 @@ async function fitShortsPlanToDuration(io: JobIO, plan: Plan, budgetCharsOverrid
       cur,
       `합계 ${budget}자 이내는 반드시 지켜라 — 표현 다듬기로 모자라면 덜 중요한 문장을 통째로 빼라. 찔끔 깎은 초과 응답은 무효다(실측: 목표 341자에 364자 응답이 반복돼 코드가 강제 트리밍하게 된다 — 그러면 네가 고른 문장이 아니라 뒤 문장이 잘린다).`,
       '규칙: 사실·수치·결론과 씬별 "무엇을+왜"는 유지하고 군더더기·중복 표현만 깎아라. 조사·주어를 떨어낸 초압축은 감량이 아니라 훼손이다("이 시기 질소 거름 주면" 금지 → "이 시기엔 질소 거름을 주면"). 구어체 존댓말·숫자 한글 낭독 등 원문 문체 유지, 이모지 금지. 유보어("대개/흔히/보통/~일 수 있다/~봐요/가능성")는 군더더기가 아니다 — 남겨라. 원문 결론의 방향("미루라/하지 마라")을 뒤집지 마라.',
+      '마지막 씬(CTA)·결론 카드가 되받는 앞 씬의 사물·이름·근거(예: 결론이 "옹이부터 보라"면 옹이가 처음 나오는 문장)는 지우지 마라 — 지우면 결론이 허공에 뜬다(실측).',
       'JSON 형식: {"scenes":[{"index":씬번호,"narration":"..."}]} — 전 씬 포함.',
     ].join('\n'),
     { maxOutputTokens: 1200, signal: io.signal },
@@ -1673,6 +1674,51 @@ export async function runShortsJob(
     const fit = await fitShortsPlanToDuration(io, plan);
     if (fit.compressed) say(`대본 감량 — ${fit.beforeChars}→${fit.afterChars}자(길이 상한 ${CONFIG.shortsMaxDurationSec}초 예산)`);
     plan = fit.plan;
+    // 감량 뒤 재검산(§4-1, 2026-09-18) — fitShortsPlanToDuration 은 감량만 하고 재검산이 없어, 압축이
+    // 문체·훅 규칙을 다시 어기거나 CTA 가 되받는 근거 문장을 지워도 그대로 통과했다(실측: "옹이부터
+    // 보세요" CTA인데 압축이 옹이를 처음 소개하는 문장을 지워 결론이 허공에 떴다). planShorts 의 1차
+    // 검산·수정 라운드(사용은 topic·keyword·sourceBody 등 클로저 변수라 여기서 재현할 수 없다)와 달리
+    // 여기는 인덱스 기반 내레이션만 고치는 최소 라운드다 — fitShortsPlanToDuration 자신의 압축 호출과
+    // 같은 스키마({"scenes":[{"index":...,"narration":"..."}]})를 재사용해 kind·stat·quote 등 씬의
+    // 나머지 필드는 그대로 보존한다(전체 재파싱은 작가가 안 돌려준 필드를 normalizeSceneKind 가 지운다).
+    if (fit.compressed) {
+      try {
+        const relintProbs = [
+          ...compressionRelintProbs(plan.scenes, short.keyword),
+          ...(await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)',
+            plan.scenes.map((s) => `${s.narration}${s.takeaways?.length ? ` [화면 결론: ${s.takeaways.map((t) => `${t.when} → ${t.then}`).join(', ')}]` : ''}`),
+            short.topic, short.keyword, io.signal, undefined)).slice(0, 3),
+        ];
+        if (relintProbs.length) {
+          say(`감량 뒤 검산 — ${relintProbs.length}건 → 수정`);
+          const budget = Math.floor((CONFIG.shortsMaxDurationSec - 5) * SHORTS_TTS_CPS);
+          const cur = plan.scenes.map((s, i) => `${i + 1}. ${s.narration}`).join('\n');
+          const j = await callRoleJSON<{ scenes?: Array<{ index?: unknown; narration?: unknown } | null> }>(
+            io, writerRole,
+            '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.',
+            [
+              '아래 숏폼 대본은 길이 상한을 맞추려 감량한 결과다. 감량 뒤 검산에서 문제가 나왔다 — 내레이션만 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지).',
+              cur,
+              `[감량 뒤 검산 실패 — 아래 문제를 고쳐라]\n${relintProbs.map((p) => `- ${p}`).join('\n')}`,
+              `[예산] 모든 씬 내레이션 합계 ${budget}자 이내를 반드시 지켜라`,
+              'JSON 형식: {"scenes":[{"index":씬번호,"narration":"..."}]} — 전 씬 포함.',
+            ].join('\n\n'), 1600, false,
+          ).catch(() => null);
+          if (j?.scenes) {
+            plan = { ...plan, scenes: plan.scenes.map((s) => ({ ...s })) };
+            for (const s of j.scenes) {
+              const idx = typeof s?.index === 'number' && Number.isInteger(s.index) ? s.index : 0; // 1-base
+              if (idx < 1 || idx > plan.scenes.length) continue;
+              const narration = cleanNarration(s?.narration);
+              if (narration) plan.scenes[idx - 1] = { ...plan.scenes[idx - 1]!, narration };
+            }
+          }
+          if (shortsNarrationChars(plan) > budget) plan = trimPlanToBudget(plan, budget, CONFIG.shortsScenes).plan;
+        } else {
+          say('감량 뒤 검산 — 이상 없음');
+        }
+      } catch { /* fail-open — 재검산 실패로 감량 결과 자체를 막지 않는다 */ }
+    }
     // 빈 연출 메우기(2026-09-04) — kind 만 오고 내용이 빈 씬은 화면에 아무것도 못 그린다.
     // 지시문은 이미 예시까지 붙여 뒀는데도 샜다. 메우고, 못 메우면 kind 를 뗀다(repairEmptyKinds 주석 참조).
     const repaired = await repairEmptyKinds(io, plan);
