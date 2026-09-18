@@ -19,6 +19,17 @@ describe('matchMedia — 주제에 맞는 소재 고르기', () => {
     const items = [mk({ id: 'g' })];
     expect(matchMedia(items, { species: '수국' })).toHaveLength(1);
   });
+  it('제목에 적힌 둘째 수종의 소재도 쓴다 — 주 수종 소재가 없으면 그것이 유일한 실촬영(2026-09-18 복숭아·자두 실사고)', () => {
+    const text = '복숭아나무와 자두나무, 손 가는 일이 다릅니다';
+    const plum = mk({ id: 'plum', kind: 'video', species: '자두나무' });
+    expect(matchMedia([plum], { species: '복숭아나무', text, kind: 'video' }).map((m) => m.id)).toEqual(['plum']);
+    // 주 수종 소재가 있으면 그쪽이 먼저
+    const peach = mk({ id: 'peach', kind: 'video', species: '복숭아나무', createdTs: '2026-08-01T00:00:00Z' });
+    expect(matchMedia([plum, peach], { species: '복숭아나무', text, kind: 'video' }).map((m) => m.id)).toEqual(['peach', 'plum']);
+    // 제목에 없는 수종은 여전히 배제
+    const fig = mk({ id: 'fig', kind: 'video', species: '무화과나무' });
+    expect(matchMedia([fig], { species: '복숭아나무', text, kind: 'video' })).toHaveLength(0);
+  });
   it('태그가 주제에 걸리면 점수가 오른다', () => {
     const items = [mk({ id: 'p' }), mk({ id: 'q', tags: ['전정'] })];
     expect(matchMedia(items, { text: '가을 전정 방법' })[0]!.id).toBe('q');
@@ -49,10 +60,12 @@ describe('matchMedia — 주제에 맞는 소재 고르기', () => {
     const items = [mk({ id: 'r', species: '사계장미' })];
     expect(matchMedia(items, { text: '수국 9월 관리' })).toHaveLength(0);
   });
-  it('수종 딱지 소재는 사전 판정이 있을 때 그 판정을 따른다 — 주제 문장보다 우선', () => {
+  it('주 수종 판정이 있어도 제목에 적힌 다른 수종 딱지는 쓴다 — 제목에 없는 수종만 배제(2026-09-18 규칙 변경)', () => {
+    // 종전(09-04)엔 사전 판정이 있으면 제목 문장을 안 봤다. 그 규칙이 "복숭아나무와 자두나무" 편에서 자두 영상을
+    // 버리게 했다. 제목이 그 수종을 직접 부르면 그 소재는 무관하지 않다.
     const items = [mk({ id: 'r', species: '사계장미' })];
-    // 주제에 '사계장미'가 있어도 사전이 회양목으로 판정했다면 안 쓴다.
-    expect(matchMedia(items, { species: '회양목', text: '사계장미 전정' })).toHaveLength(0);
+    expect(matchMedia(items, { species: '회양목', text: '사계장미 전정' })).toHaveLength(1);
+    expect(matchMedia(items, { species: '회양목', text: '회양목 전정' })).toHaveLength(0);
   });
   it('빈 목록은 빈 결과', () => {
     expect(matchMedia([], { species: '수국' })).toEqual([]);

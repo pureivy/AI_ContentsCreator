@@ -132,10 +132,14 @@ export function matchMedia(
     // 제목은 '매실 수확 시기'처럼 '나무'를 떼고 쓰는 일이 흔하다. 1자 어간('배'·'밤')은 오탐이 커서 안 쓴다.
     const stem = (n: string): string => (n.endsWith('나무') && n.length >= 4 ? n.slice(0, -2) : '');
     const inText = (n: string): boolean => !!n && (text.includes(n) || (!!stem(n) && text.includes(stem(n))));
-    const hit = named ? (want ? named === want : inText(label) || inText(named)) : false;
+    // 주 수종(want)이 잡혀도 제목에 적힌 다른 수종의 소재는 쓴다(2026-09-18 실사고): "복숭아나무와 자두나무, 손 가는
+    // 일이 다릅니다" 편에서 want=복숭아나무 하나만 보고 자두나무 영상 2개를 버렸다 — 복숭아 영상은 없었으니 실촬영 0.
+    // 두 수종을 비교하는 글에서 둘째 수종 화면은 무관한 소재가 아니다. 주 수종이 있으면 그쪽이 먼저(+50).
+    const primary = !!want && named === want;
+    const hit = named ? (primary || inText(label) || inText(named)) : false;
     if (label && !hit) continue; // 다른 수종·무관한 수종은 배제
     let s = 0;
-    if (hit) s += 100;
+    if (hit) s += primary ? 150 : 100;
     for (const t of m.tags ?? []) if (t && text.includes(t)) s += 10;
     if (!label) s += 1; // 범용 소재 — 없는 것보다 낫다
     if (s > 0) scored.push({ m, s });
