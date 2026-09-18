@@ -90,7 +90,10 @@ export function hookLengthIssues(narrations: string[], max = 24): string[] {
   const stripped = hook.replace(/\s+/g, '');
   const terminals = (hook.match(/[.!?…]/g) ?? []).length;
   if (stripped.length <= max && terminals < 2) return [];
-  return [`항목1: 훅이 ${stripped.length}자·${terminals}문장 — 20자 이내 한 문장으로 줄여라(첫 2초가 이탈을 정한다)`];
+  // 종결부호가 위반 사유일 때만 "M문장"을 얹는다 — 종결부호 없는 장문(terminals<2)에 "0문장"을 붙이면
+  // 되레 "문제없음"처럼 읽힌다(리뷰 fix round 1 지적). 그 경우는 글자 수만 알린다.
+  const detail = terminals >= 2 ? `${stripped.length}자·${terminals}문장` : `${stripped.length}자`;
+  return [`항목1: 훅이 ${detail} — 20자 이내 한 문장으로 줄여라(첫 2초가 이탈을 정한다)`];
 }
 
 /**

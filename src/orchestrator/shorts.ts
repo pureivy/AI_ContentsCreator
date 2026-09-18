@@ -794,6 +794,16 @@ export function pruneQuoteSources(plan: Plan, sourceBody: string | undefined): {
   return { plan: { ...plan, scenes }, pruned };
 }
 
+/** 원문 핵심 축 요약(제목+소제목, 순수) — standaloneIssues 의 '원문 정합' 검사 입력. 파생이 아니면
+ *  undefined(검사 생략). planShorts 의 1차 검산과 runShortsJob 의 감량 뒤 재검산(§4-1, fix round 1)
+ *  양쪽이 같은 값을 만들어야 두 시점의 정합 판정이 어긋나지 않는다 — 한 곳에 둔다. */
+function sourceCoreOf(topic: string, sourceBody: string | undefined): string | undefined {
+  return sourceBody
+    ? [topic, ...sourceBody.split('\n').filter((l) => /^##\s/.test(l)).map((l) => l.replace(/^#+\s*/, '').trim())]
+        .filter(Boolean).slice(0, 8).join(' · ')
+    : undefined;
+}
+
 async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형'], sourceFlagged: string[] = [], writerRole = 'shorts_writer', recentMainTitles: string[] = [], loreFacts: string[] = []): Promise<Plan | null> {
   const capSec = CONFIG.shortsMaxDurationSec;
   // 장르 분기(2026-09-18) — 원본 제목이 이야기 축이면 하우투 전용 네 줄(결론·기본형·takeaways·뽑을 것)을 이야기형으로.
@@ -955,10 +965,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   // 단독 이해 검산 — 원문을 안 본 시청자 관점 텍스트 검사 후 1회 수정 라운드(fail-open, 실측 2026-07-29 결함 대응).
   try {
     // 원문 핵심 축 요약(제목+소제목) — 검산의 '원문 정합' 항목 입력. 파생이 아니면 undefined(검사 생략).
-    const sourceCore = sourceBody
-      ? [topic, ...sourceBody.split('\n').filter((l) => /^##\s/.test(l)).map((l) => l.replace(/^#+\s*/, '').trim())]
-          .filter(Boolean).slice(0, 8).join(' · ')
-      : undefined;
+    const sourceCore = sourceCoreOf(topic, sourceBody);
     // 원문 정합(스펙 §2-4) — 파생물이 원문에 없는 사실을 새로 지어내거나 원문 결론을 뒤집는지 대조(fail-open).
     // 결론 카드를 함께 싣는다(2026-08-28) — 사용자 확정 분업에서 답은 화면에만 있다. 내레이션만 보여 주면
     // 정합 판정이 '답이 없는 대본'을 보게 되고, 화면의 답은 아무 검사도 받지 않는다.
@@ -1679,21 +1686,32 @@ export async function runShortsJob(
     // 감량 뒤 재검산(§4-1, 2026-09-18) — fitShortsPlanToDuration 은 감량만 하고 재검산이 없어, 압축이
     // 문체·훅 규칙을 다시 어기거나 CTA 가 되받는 근거 문장을 지워도 그대로 통과했다(실측: "옹이부터
     // 보세요" CTA인데 압축이 옹이를 처음 소개하는 문장을 지워 결론이 허공에 떴다). planShorts 의 1차
-    // 검산·수정 라운드(사용은 topic·keyword·sourceBody 등 클로저 변수라 여기서 재현할 수 없다)와 달리
-    // 여기는 인덱스 기반 내레이션만 고치는 최소 라운드다 — fitShortsPlanToDuration 자신의 압축 호출과
-    // 같은 스키마({"scenes":[{"index":...,"narration":"..."}]})를 재사용해 kind·stat·quote 등 씬의
-    // 나머지 필드는 그대로 보존한다(전체 재파싱은 작가가 안 돌려준 필드를 normalizeSceneKind 가 지운다).
+    // 검산·수정 라운드가 쓰는 거대한 작가 프롬프트(`user` — 원문·유사주제·문체 가드 수십 줄을 엮은
+    // 클로저 지역 변수)는 여기서 재현할 수 없어, 여기는 인덱스 기반 내레이션만 고치는 최소 라운드다 —
+    // fitShortsPlanToDuration 자신의 압축 호출과 같은 스키마({"scenes":[{"index":...,"narration":"..."}]})
+    // 를 재사용해 kind·stat·quote 등 씬의 나머지 필드는 그대로 보존한다(전체 재파싱은 작가가 안 돌려준
+    // 필드를 normalizeSceneKind 가 지운다). topic·keyword·sourceBody 는 short/opts 에서 그대로 꺼낼 수
+    // 있어 sourceCore(원문 정합 입력)만은 planShorts 와 동일하게 재구성한다(fix round 1).
     if (fit.compressed) {
+      // 원문 정합 입력 — planShorts 의 1차 검산과 같은 값을 만든다(sourceCoreOf, fix round 1).
+      // 이전 판은 undefined 로 고정해 파생물(블로그 기반)의 '원문 정합' 검사 축을 이 라운드에서만 껐었다.
+      const sourceCore = sourceCoreOf(short.topic, opts.sourceBody);
+      let relintProbs: string[] = [];
       try {
-        const relintProbs = [
+        relintProbs = [
           ...compressionRelintProbs(plan.scenes, short.keyword),
           ...(await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)',
             plan.scenes.map((s) => `${s.narration}${s.takeaways?.length ? ` [화면 결론: ${s.takeaways.map((t) => `${t.when} → ${t.then}`).join(', ')}]` : ''}`),
-            short.topic, short.keyword, io.signal, undefined)).slice(0, 3),
+            short.topic, short.keyword, io.signal, sourceCore)).slice(0, 3),
         ];
-        if (relintProbs.length) {
-          say(`감량 뒤 검산 — ${relintProbs.length}건 → 수정`);
-          const budget = Math.floor((CONFIG.shortsMaxDurationSec - 5) * SHORTS_TTS_CPS);
+      } catch { /* fail-open — 검산 판정 자체가 실패하면 '이상 없음'과 동일하게 다룬다 */ }
+      // 예산은 try 밖에서 계산해 둔다 — 아래 수정 라운드가 무엇을 하든(성공·부분 실패·예외) 예산 가드는
+      // 항상 돈다(fix round 1: 종전엔 이 가드가 수정 라운드와 같은 try 안에 있어, 라운드 중 예외가 나면
+      // 늘어난(줄지 않은) 미가드 내레이션이 그대로 남을 수 있었다).
+      const budget = Math.floor((CONFIG.shortsMaxDurationSec - 5) * SHORTS_TTS_CPS);
+      if (relintProbs.length) {
+        say(`감량 뒤 검산 — ${relintProbs.length}건 → 수정`);
+        try {
           const cur = plan.scenes.map((s, i) => `${i + 1}. ${s.narration}`).join('\n');
           const j = await callRoleJSON<{ scenes?: Array<{ index?: unknown; narration?: unknown } | null> }>(
             io, writerRole,
@@ -1707,19 +1725,27 @@ export async function runShortsJob(
             ].join('\n\n'), 1600, false,
           ).catch(() => null);
           if (j?.scenes) {
-            plan = { ...plan, scenes: plan.scenes.map((s) => ({ ...s })) };
+            let out: Plan = { ...plan, scenes: plan.scenes.map((s) => ({ ...s })) };
             for (const s of j.scenes) {
               const idx = typeof s?.index === 'number' && Number.isInteger(s.index) ? s.index : 0; // 1-base
-              if (idx < 1 || idx > plan.scenes.length) continue;
+              if (idx < 1 || idx > out.scenes.length) continue;
               const narration = cleanNarration(s?.narration);
-              if (narration) plan.scenes[idx - 1] = { ...plan.scenes[idx - 1]!, narration };
+              if (narration) out.scenes[idx - 1] = { ...out.scenes[idx - 1]!, narration };
             }
+            // 압축과 같은 실측 대응(fix round 1) — 감량 뒤 수정 라운드도 유보어를 지워 결론을 반전시킬 수
+            // 있다. fitShortsPlanToDuration 의 같은 처리(restoreLostHedges 호출부)와 같은 모양으로 둔다.
+            try {
+              const hedged = restoreLostHedges(plan, out);
+              if (hedged.restored.length) { out = hedged.plan; say(`감량 뒤 검산 — 유보어 소실 씬 ${hedged.restored.join(',')} 원문장 복원`); }
+            } catch { /* fail-open — 복원 실패로 수정 라운드 자체를 막지 않는다 */ }
+            plan = out;
           }
-          if (shortsNarrationChars(plan) > budget) plan = trimPlanToBudget(plan, budget, CONFIG.shortsScenes).plan;
-        } else {
-          say('감량 뒤 검산 — 이상 없음');
-        }
-      } catch { /* fail-open — 재검산 실패로 감량 결과 자체를 막지 않는다 */ }
+        } catch { /* fail-open — 수정 라운드 실패 시 감량 결과를 그대로 쓴다(아래 예산 가드는 그대로 돈다) */ }
+        // 결정적 마감 — 수정 라운드가 실패·부분 이행했어도 예산은 여기서 반드시 보장한다(try 밖, 무조건 실행).
+        if (shortsNarrationChars(plan) > budget) plan = trimPlanToBudget(plan, budget, CONFIG.shortsScenes).plan;
+      } else {
+        say('감량 뒤 검산 — 이상 없음');
+      }
     }
     // 빈 연출 메우기(2026-09-04) — kind 만 오고 내용이 빈 씬은 화면에 아무것도 못 그린다.
     // 지시문은 이미 예시까지 붙여 뒀는데도 샜다. 메우고, 못 메우면 kind 를 뗀다(repairEmptyKinds 주석 참조).

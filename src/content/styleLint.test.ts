@@ -12,6 +12,11 @@ describe('hookLengthIssues — 훅 20자 한 문장(2026-09-18)', () => {
     expect(hookLengthIssues(['블루베리 색, 반은 거짓말이에요.'])).toEqual([]);
     expect(hookLengthIssues([])).toEqual([]);
   });
+  it('종결부호 없는 장문(리뷰 fix round 1) — "0문장"으로 오해되지 않게 글자수만 알린다', () => {
+    const issues = hookLengthIssues(['잎이 자꾸 떨어지는데 원인을 도무지 모르겠어서 답답한 요즘이네요 정말']);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).not.toMatch(/\d+문장/); // "한 문장으로 줄여라" 고정 문구는 남되 "N문장" 개수 표기는 없어야 한다
+  });
 });
 
 describe('compressionRelintProbs — 감량 뒤 결정적 재검산(2026-09-18)', () => {
