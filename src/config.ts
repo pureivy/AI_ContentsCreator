@@ -239,6 +239,8 @@ export interface Config {
   readonly shortsTtsBreaks: boolean;
   /** 쇼츠 씬별 합성에 previous_text/next_text 스티칭(ElevenLabs 전용) — 씬 경계 운율 연속성. SHORTS_TTS_STITCH=false 킬스위치. */
   readonly shortsTtsStitch: boolean;
+  /** 쇼츠 훅(0번) 씬 낭독 — 표현 폭을 넓히고(stability↓·style↑) 첫 구절 뒤 0.4초 쉼을 준다(ElevenLabs 전용). SHORTS_HOOK_VOICE=false 킬스위치. */
+  readonly shortsHookVoice: boolean;
   /** macOS say 폴백 음색. */
   readonly voiceTtsVoice: string;
   readonly voiceSttModel: string;
@@ -471,6 +473,7 @@ export const CONFIG: Config = {
   elevenLabsSpeed: Math.min(1.2, Math.max(0.7, envFloat('ELEVENLABS_SPEED', 1.0))),
   shortsTtsBreaks: envBool('SHORTS_TTS_BREAKS', true),
   shortsTtsStitch: envBool('SHORTS_TTS_STITCH', true),
+  shortsHookVoice: envBool('SHORTS_HOOK_VOICE', true),
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
   voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),
 

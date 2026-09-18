@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import fs from 'node:fs';
 import { audio } from './audio';
 import { CONFIG } from '../config';
-import { synthesize, listKoreanVoices, injectPauseBreaks } from './tts';
+import { synthesize, listKoreanVoices, injectPauseBreaks, injectHookBreak } from './tts';
 
 // CONFIG 는 런타임 가변 객체(readonly 는 타입 힌트일 뿐) — 테스트에서 제공자/키를 강제하고 복원한다.
 const cfg = CONFIG as unknown as { ttsProvider: string; openaiApiKey: string; elevenLabsApiKey: string };
@@ -100,6 +100,17 @@ describe('injectPauseBreaks', () => {
   it('이미 break 태그가 있으면 이중 주입하지 않는다', () => {
     const src = '앞 문장. <break time="1s" /> 뒤 문장.';
     expect(injectPauseBreaks(src)).toBe(src);
+  });
+});
+
+describe('injectHookBreak — 훅 첫 구절 뒤 쉼(2026-09-18)', () => {
+  it('쉼표가 없으면 첫 어절 뒤', () => {
+    expect(injectHookBreak('가위 든 손이 멈추는 가지, 꼭 하나씩 있죠.')).toBe('가위 든 손이 멈추는 가지, <break time="0.4s" /> 꼭 하나씩 있죠.');
+    expect(injectHookBreak('블루베리 색 반은 거짓말이에요.')).toBe('블루베리 <break time="0.4s" /> 색 반은 거짓말이에요.');
+  });
+  it('이미 break 가 있거나 어절이 하나면 그대로', () => {
+    expect(injectHookBreak('잠깐, <break time="0.2s" /> 멈춰요')).toContain('0.2s');
+    expect(injectHookBreak('잠깐')).toBe('잠깐');
   });
 });
 

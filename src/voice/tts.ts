@@ -83,6 +83,21 @@ export function injectPauseBreaks(text: string, maxBreaks = 3): string {
 }
 
 /**
+ * 훅(0번) 씬 전용 — 첫 구절 뒤에 0.4초 쉼을 줘서 도입부를 몰아 읽지 않게 한다(2026-09-18).
+ * 이미 break 태그가 있으면 그대로 둔다. 첫 쉼표가 있으면 injectPauseBreaks 와 같은 자리(쉼표 뒤)에,
+ * 없으면 첫 어절(첫 공백) 뒤에 삽입한다 — 어절이 하나뿐이면 자를 자리가 없으므로 그대로 둔다.
+ */
+export function injectHookBreak(text: string): string {
+  if (!text || text.includes('<break')) return text;
+  if (/,\s+(?=\S)/.test(text)) {
+    return text.replace(/,\s+(?=\S)/, ', <break time="0.4s" /> ');
+  }
+  const idx = text.indexOf(' ');
+  if (idx === -1) return text;
+  return `${text.slice(0, idx)} <break time="0.4s" /> ${text.slice(idx + 1)}`;
+}
+
+/**
  * ElevenLabs TTS(/v1/text-to-speech/{voice_id}) → mp3 Buffer. 음성은 voice_id 로 지정(음색 자체가 캐릭터).
  * output_format=mp3_44100_128, model 은 CONFIG.elevenLabsModel(기본 eleven_multilingual_v2, 한국어 지원).
  * OpenAI 의 instructions 같은 자유 톤 지시는 없음 — 선택한 voice_id 가 낭독 캐릭터를 담는다.
@@ -95,6 +110,8 @@ async function synthesizeElevenLabs(
     voiceId?: string; pauseBreaks?: boolean; previousText?: string; nextText?: string;
     /** 작가별 낭독 설정(2026-09-03) — 같은 문장도 작가마다 다르게 읽히게. speed 와 병합된다. */
     voiceSettings?: Record<string, number>;
+    /** 훅(0번) 씬 전용 쉼(2026-09-18) — pauseBreaks 보다 우선한다. */
+    hookBreak?: boolean;
     signal?: AbortSignal;
   },
 ): Promise<Buffer> {
@@ -104,7 +121,7 @@ async function synthesizeElevenLabs(
   const url = `${ELEVENLABS_TTS_URL}/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`;
   // 낭독 속도 — voice_settings.speed(1.0 기본, >1.0 빠르게). 1.0 이면 생략(음성 기본 설정 유지).
   const body: Record<string, unknown> = {
-    text: opts.pauseBreaks ? injectPauseBreaks(text) : text,
+    text: opts.hookBreak ? injectHookBreak(text) : (opts.pauseBreaks ? injectPauseBreaks(text) : text),
     model_id: CONFIG.elevenLabsModel,
   };
   if (opts.previousText) body.previous_text = opts.previousText;
@@ -152,6 +169,8 @@ export async function synthesize(
     elevenVoiceSettings?: Record<string, number>;
     /** ElevenLabs 전용 — 문장·쉼표 경계 break 태그 주입(몰아 읽기 대응). 폴백 경로엔 미적용. */
     pauseBreaks?: boolean;
+    /** ElevenLabs 전용 — 훅(0번) 씬 첫 구절 뒤 쉼(2026-09-18, pauseBreaks 보다 우선). 폴백 경로엔 미적용. */
+    hookBreak?: boolean;
     /** ElevenLabs 전용 — 이웃 세그먼트 텍스트 스티칭(경계 운율 연속). 낭독되지 않는다. */
     previousText?: string; nextText?: string;
     signal?: AbortSignal;
@@ -169,6 +188,7 @@ export async function synthesize(
         voiceId: opts.elevenVoiceId,
         voiceSettings: opts.elevenVoiceSettings,
         pauseBreaks: opts.pauseBreaks,
+        hookBreak: opts.hookBreak,
         previousText: opts.previousText ? sanitizeForTts(opts.previousText) : undefined,
         nextText: opts.nextText ? sanitizeForTts(opts.nextText) : undefined,
         signal: opts.signal,

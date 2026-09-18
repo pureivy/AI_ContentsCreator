@@ -281,6 +281,20 @@ export async function probeImageSize(file: string): Promise<{ w: number; h: numb
   return { w: w!, h: h! };
 }
 
+/**
+ * 훅(0번) 씬 낭독 표현 폭(2026-09-18) — stability 를 낮춰(하한 0.2) 억양 변화 폭을 넓히고,
+ * style 을 높여(상한 0.6) 감정 표현을 키운다. base 를 변형하지 않고 새 객체를 반환한다
+ * (작가별 공유 설정 객체를 다른 씬이 이어 쓰므로 훅 씬만 바꾸고 원본은 그대로 둬야 한다).
+ */
+export function hookVoiceSettings(base: Record<string, number> | undefined): Record<string, number> {
+  const b = base ?? {};
+  return {
+    ...b,
+    stability: Math.max(0.2, (b.stability ?? 0.5) - 0.1),
+    style: Math.min(0.6, (b.style ?? 0) + 0.15),
+  };
+}
+
 /** 씬별 TTS 합성(실패 시 무음)·길이 실측·프레임/오프셋 산출. 두 렌더러 공유. */
 export async function prepareScenes(
   workDir: string, scenes: ShortsScene[], images: Array<string | null>,
@@ -304,10 +318,14 @@ export async function prepareScenes(
     try {
       // 몰아 읽기 대응(실측 2026-08-11, 30클립 중 8클립 경계 0ms): 문장·쉼표 경계 break 태그 +
       // 이웃 씬 스티칭(경계 운율 연속). 둘 다 ElevenLabs 경로 전용이라 폴백(openai/say)엔 무영향.
+      // 훅(0번) 씬은 표현 폭을 넓히고 첫 구절 뒤 쉼을 준다(2026-09-18) — hookBreak 가 pauseBreaks 를 대신한다.
+      const isHook = i === 0 && CONFIG.shortsHookVoice;
       const mp3 = await synthesize(sc.narration, {
         voice: opts.voice, instructions: opts.instructions ?? SHORTS_TTS_TONE,
-        elevenVoiceId: opts.elevenVoiceId, elevenVoiceSettings: opts.elevenVoiceSettings,
+        elevenVoiceId: opts.elevenVoiceId,
+        elevenVoiceSettings: isHook ? hookVoiceSettings(opts.elevenVoiceSettings) : opts.elevenVoiceSettings,
         pauseBreaks: CONFIG.shortsTtsBreaks,
+        hookBreak: isHook,
         previousText: CONFIG.shortsTtsStitch ? scenes[i - 1]?.narration : undefined,
         nextText: CONFIG.shortsTtsStitch ? scenes[i + 1]?.narration : undefined,
         signal: opts.signal,

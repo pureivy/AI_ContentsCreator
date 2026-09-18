@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus } from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus, hookVoiceSettings } from './shortsCommon';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
   it('오디오 + 꼬리여백(0.6), 하한 2.8', () => {
@@ -508,5 +508,13 @@ describe('coverFocus — 이미지 초점을 cover 배치 화면 좌표로(2026-
   it('불량 입력은 null', () => {
     expect(coverFocus({ x: NaN, y: 0.5 }, 1024, 1536)).toBeNull();
     expect(coverFocus({ x: 0.5, y: 0.5 }, 0, 0)).toBeNull();
+  });
+});
+
+describe('hookVoiceSettings — 훅 씬 표현 폭(2026-09-18)', () => {
+  it('stability -0.1(하한 0.2), style +0.15(상한 0.6)', () => {
+    expect(hookVoiceSettings({ stability: 0.5, similarity_boost: 0.75 })).toEqual({ stability: 0.4, similarity_boost: 0.75, style: 0.15 });
+    expect(hookVoiceSettings({ stability: 0.25, style: 0.5 })).toEqual({ stability: 0.2, style: 0.6 });
+    expect(hookVoiceSettings(undefined)).toEqual({ stability: 0.4, style: 0.15 });
   });
 });
