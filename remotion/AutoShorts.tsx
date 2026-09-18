@@ -6,7 +6,8 @@ import { Video } from '@remotion/media';
 import { CutFlash } from './CutFlash';
 import { sceneEnterFade } from './anim';
 import { KenBurnsImage } from './KenBurnsImage';
-import { KineticCaption } from './KineticCaption';
+import { KineticCaption, CAPTION_BOTTOM_PCT } from './KineticCaption';
+import { PhraseCaption } from './PhraseCaption';
 import { ProgressBar } from './ProgressBar';
 import { StatCountUp } from './StatCountUp';
 import { ListReveal } from './ListReveal';
@@ -63,6 +64,9 @@ export const autoShortsSchema = z.object({
       intensity: z.enum(['subtle', 'normal', 'strong']).optional(),
       accent: z.enum(['spotlight', 'particles-leaves', 'particles-petals', 'particles-snow']).optional(),
     }).optional(),
+    /** 구절 자막(2026-09-18) — 내레이션을 4~14자 구절로 나눈 것(씬 로컬 프레임). 서버가 본문 씬에만 채운다.
+     *  있으면 하단(bottomPct)에 구절이 뜨고 라벨(screenText)은 9% 위로 비켜 선다. 없으면 종전(라벨만). */
+    captions: z.array(z.object({ text: z.string(), startFrame: z.number(), endFrame: z.number() })).optional(),
   })),
   /** 카메라 드리프트 시드(2026-09-03) — 편·씬마다 다른 손 흔들림. 미지정=흔들림 없음(종전 궤도). */
   driftSeed: z.string().optional(),
@@ -109,6 +113,10 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
   // TransitionSeries(씬 오버랩=전체 길이 단축)는 '오디오가 길이를 지배' 불변식·SRT 누적 시계와 충돌해 채택하지 않는다.
   const enter = s.fx?.enter ?? (index > 0 ? 'fade' : 'none');
   const p = enter === 'none' ? 1 : sceneEnterFade(f, 6);
+  // 구절 자막(2026-09-18)이 있으면 라벨(screenText)은 9% 위로 올라가 구절에게 하단을 내준다.
+  // 인셋 확대창도 같은 값을 본다 — 창이 자막을 덮지 않게 자리를 고르는 기준이 '라벨의 하단'이므로.
+  const hasCaptions = !!s.captions?.length;
+  const labelBottomPct = hasCaptions ? (caption?.bottomPct ?? CAPTION_BOTTOM_PCT) + 9 : caption?.bottomPct;
   const wrap: React.CSSProperties = { opacity: p };
   if (enter === 'slide-up') wrap.transform = `translateY(${(1 - p) * 24}px)`;
   else if (enter === 'scale') wrap.transform = `scale(${0.96 + 0.04 * p})`;
@@ -167,14 +175,16 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
       ) : null}
       {/* 선택 기법 층 — 배경 위·자막 아래. 자막을 덮으면 읽기가 죽는다. */}
       {tech && techSeed ? <TechniqueLayer tech={tech} seed={techSeed} total={s.durationInFrames} {...(s.focus ? { focus: s.focus } : {})} /> : null}
-      {tech === '인셋 확대창' && techSeed && s.imageSrc && s.focus ? <InsetZoom src={s.imageSrc} focus={s.focus} total={s.durationInFrames} seed={techSeed} {...(caption?.bottomPct != null ? { captionBottomPct: caption.bottomPct } : {})} /> : null}
+      {tech === '인셋 확대창' && techSeed && s.imageSrc && s.focus ? <InsetZoom src={s.imageSrc} focus={s.focus} total={s.durationInFrames} seed={techSeed} {...(labelBottomPct != null ? { captionBottomPct: labelBottomPct } : {})} /> : null}
       {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} {...(driftSeed ? { seed: `${driftSeed}:${index}` } : {})} /> : null}
       {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}
       {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
       {s.kind === 'chart' && s.chart ? <BarChartGrow chart={s.chart} total={s.durationInFrames} /> : null}
       {s.kind === 'cta' && s.takeaways?.length ? <TakeawayCard takeaways={s.takeaways} total={s.durationInFrames} /> : null}
       {s.kind === 'compare' && s.compare ? <CompareCard compare={s.compare} /> : null}
-      <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={caption?.bottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} hookFontPx={caption?.hookFontPx} {...(capMotion ? { motion: capMotion } : {})} {...(tech === '키워드 팝' ? { pop: true } : {})} />
+      <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={labelBottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} hookFontPx={caption?.hookFontPx} {...(capMotion ? { motion: capMotion } : {})} {...(tech === '키워드 팝' ? { pop: true } : {})} />
+      {/* 구절 자막 — 라벨이 비켜 준 원래 자리(bottomPct)에 낭독 진행대로 한 구절씩. 본문 씬에만 온다(서버가 훅·CTA 엔 안 채운다). */}
+      {hasCaptions ? <PhraseCaption captions={s.captions!} bottomPct={caption?.bottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} {...(capMotion ? { motion: capMotion } : {})} /> : null}
       {s.audioSrc ? <Audio src={staticFile(s.audioSrc)} /> : null}
     </AbsoluteFill>
   );

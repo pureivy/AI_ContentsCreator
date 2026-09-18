@@ -5,9 +5,11 @@ import { captionWordStyle, type CaptionMotionName } from './captionMotion';
 import { FONT_NAME } from './loadFonts';
 
 /** 자막 좌우 여백(box padding 64 × 2) + 단어 사이 gap 여유. 측정 폭을 이만큼 좁게 잡는다. */
-const CAPTION_SIDE_PAD = 160;
+export const CAPTION_SIDE_PAD = 160;
 /** 자막은 두 줄까지 — 세 줄이 되면 카드 영역까지 올라와 화면이 막힌다. */
 const CAPTION_MAX_LINES = 2;
+/** 하단 여백(%) 기본값 — 라벨·구절 자막·인셋 확대창이 같은 기준을 본다. */
+export const CAPTION_BOTTOM_PCT = 20;
 
 /**
  * 넘치면 줄이고, 넘치지 않으면 보정값 그대로(순수하지 않음 — 브라우저 측정을 쓴다).
@@ -19,10 +21,10 @@ const CAPTION_MAX_LINES = 2;
  * 측정은 폰트가 로딩된 뒤라야 맞다(loadFonts 의 delayRender 가 그것을 보장한다). 그래도 어떤
  * 이유로든 실패하면 보정값을 그대로 쓴다 — 자막 크기 하나 때문에 영상 생성이 죽는 쪽이 더 나쁘다.
  */
-const fitCaption = (text: string, maxFontSize: number, boxWidth: number): number => {
+export const fitCaption = (text: string, maxFontSize: number, boxWidth: number, maxLines = CAPTION_MAX_LINES): number => {
   try {
     const { fontSize } = fitTextOnNLines({
-      text, maxLines: CAPTION_MAX_LINES, maxBoxWidth: boxWidth,
+      text, maxLines, maxBoxWidth: boxWidth,
       fontFamily: FONT_NAME, fontWeight: 800, maxFontSize, validateFontIsLoaded: false,
     });
     return Math.min(maxFontSize, Math.max(1, fontSize));
@@ -32,7 +34,7 @@ const fitCaption = (text: string, maxFontSize: number, boxWidth: number): number
 };
 
 /** 키워드 토큰 매칭(2자 이상) — 자막 단어에 키워드 토큰이 포함되면 강조색. 조사 오탐 방지로 1자는 제외. */
-const kwMatcher = (keyword?: string): ((w: string) => boolean) => {
+export const kwMatcher = (keyword?: string): ((w: string) => boolean) => {
   const tokens = (keyword ?? '').split(/\s+/).filter((t) => t.length >= 2);
   if (!tokens.length) return () => false;
   return (w) => tokens.some((t) => w.includes(t) || (w.length >= 2 && t.includes(w)));
@@ -56,7 +58,7 @@ export const KineticCaption: React.FC<{
   motion?: CaptionMotionName;
   /** 키워드 팝(2026-09-09 기법) — 핵심 단어 하나가 자리 잡은 뒤 커지며 색이 붙는다. 키워드가 자막에 없으면 가장 긴 단어. */
   pop?: boolean;
-}> = ({ text, variant, bottomPct = 20, keyword, outline, fontPx = 70, hookFontPx = 84, motion = '튀어오름', pop }) => {
+}> = ({ text, variant, bottomPct = CAPTION_BOTTOM_PCT, keyword, outline, fontPx = 70, hookFontPx = 84, motion = '튀어오름', pop }) => {
   const f = useCurrentFrame();
   const { fps, width } = useVideoConfig();
   const words = text.split(/\s+/).filter(Boolean);

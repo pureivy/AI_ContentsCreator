@@ -103,6 +103,8 @@ export async function stageAndBuildProps(
       ...(sc?.takeaways ? { takeaways: sc.takeaways } : {}),
       ...(sc?.compare ? { compare: sc.compare } : {}),
       ...(fx ? { fx } : {}),
+      // 구절 자막(2026-09-18) — prepareScenes 가 본문 씬에만 채운다. 없으면 필드도 없다(종전 렌더 그대로).
+      ...(p.captions?.length ? { captions: p.captions } : {}),
     };
   }));
   const totalFrames = prepared.reduce((a, p) => a + p.durationInFrames, 0);
@@ -176,7 +178,7 @@ export async function renderShortsVideoRemotion(
 
   // 4) SRT
   const srtPath = path.join(dir, 'subtitles.srt');
-  fs.writeFileSync(srtPath, buildSrt(prepared.map((p) => ({ narration: p.narration, durationSec: p.durationSec }))), 'utf-8');
+  fs.writeFileSync(srtPath, buildSrt(prepared.map((p) => ({ narration: p.narration, durationSec: p.durationSec, ...(p.captions ? { captions: p.captions } : {}) }))), 'utf-8');
 
   const durationSec = Math.round(prepared.reduce((a, p) => a + p.durationSec, 0) * 10) / 10;
   // 번들 정리(2026-08-31) — bundle/public 은 이 렌더에서만 쓰는 webpack 산출물이라 final.mp4 가 나온

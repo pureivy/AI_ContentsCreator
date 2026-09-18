@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus, hookVoiceSettings } from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus, hookVoiceSettings, splitPhrases, captionsFor } from './shortsCommon';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
   it('오디오 + 꼬리여백(0.6), 하한 2.8', () => {
@@ -32,6 +32,12 @@ describe('buildSrt — 누적 타이밍', () => {
       { narration: '첫 씬', durationSec: 3 },
       { narration: '둘째 씬', durationSec: 2 },
     ])).toBe('1\n00:00:00,000 --> 00:00:03,000\n첫 씬\n\n2\n00:00:03,000 --> 00:00:05,000\n둘째 씬\n');
+  });
+  it('구절 자막이 있는 씬은 구절별 항목(프레임/fps 시각), 번호는 이어진다(2026-09-18)', () => {
+    expect(buildSrt([
+      { narration: '첫 구절 둘째 구절', durationSec: 5, captions: [{ text: '첫 구절', startFrame: 0, endFrame: 60 }, { text: '둘째 구절', startFrame: 60, endFrame: 150 }] },
+      { narration: '둘째 씬', durationSec: 2 },
+    ])).toBe('1\n00:00:00,000 --> 00:00:02,000\n첫 구절\n\n2\n00:00:02,000 --> 00:00:05,000\n둘째 구절\n\n3\n00:00:05,000 --> 00:00:07,000\n둘째 씬\n');
   });
 });
 describe('normalizeSceneKind — 검증 추출, 실패 시 {} 강등', () => {
@@ -517,4 +523,43 @@ describe('hookVoiceSettings — 훅 씬 표현 폭(2026-09-18)', () => {
     expect(hookVoiceSettings({ stability: 0.25, style: 0.5 })).toEqual({ stability: 0.2, style: 0.6 });
     expect(hookVoiceSettings(undefined)).toEqual({ stability: 0.4, style: 0.15 });
   });
+});
+
+describe('splitPhrases / captionsFor — 구절 자막(2026-09-18)', () => {
+  it('문장·쉼표·접속 경계로 4~14자 구절', () => {
+    const p = splitPhrases('가위 든 손이 멈추는 가지, 꼭 하나씩 있죠. 그 가지는 대개 웃자란 쪽이에요.');
+    // 둘째 문장은 공백 빼고 정확히 14자 — 상한 안이라 쉼표·접속 단계로 내려가지 않고 통째로 남는다.
+    expect(p).toEqual(['가위 든 손이 멈추는 가지,', '꼭 하나씩 있죠.', '그 가지는 대개 웃자란 쪽이에요.']);
+  });
+  it('짧은 조각은 앞에 붙는다', () => {
+    expect(splitPhrases('잠깐, 멈춰요.')).toEqual(['잠깐, 멈춰요.']);
+    // 쉼표 뒤 2자 조각 — 앞 구절에 붙어 15자가 되더라도 몇 프레임짜리 깜빡임보다 낫다.
+    expect(splitPhrases('아주 긴 문장이 여기 있습니다, 네.')).toEqual(['아주 긴 문장이 여기 있습니다, 네.']);
+    // 첫 조각이 짧으면 앞 구절이 없으니 뒤에 붙는다.
+    expect(splitPhrases('잠깐, 여기서 멈추고 가지를 보세요.')).toEqual(['잠깐, 여기서 멈추고 가지를 보세요.']);
+  });
+  it('접속 어미(고·면·는데·지만) 경계 — 쉼표가 없을 때', () => {
+    expect(splitPhrases('가지를 잘라 내고 남은 자리를 살펴봅니다.')).toEqual(['가지를 잘라 내고', '남은 자리를 살펴봅니다.']);
+  });
+  it('경계가 없으면 상한 안 마지막 공백에서 자른다', () => {
+    expect(splitPhrases('가을에는 나무가 겨울 채비를 하느라 뿌리를 깊이 내립니다.'))
+      .toEqual(['가을에는 나무가 겨울 채비를', '하느라 뿌리를 깊이 내립니다.']);
+  });
+  it('빈 문자열·공백만은 빈 배열, 여러 공백은 하나로', () => {
+    expect(splitPhrases('')).toEqual([]);
+    expect(splitPhrases('   ')).toEqual([]);
+    expect(splitPhrases('꼭  하나씩   있죠.')).toEqual(['꼭 하나씩 있죠.']);
+  });
+  it('글자 수 비례 타이밍, 마지막 구절은 씬 끝까지', () => {
+    const c = captionsFor('가위 든 손이 멈추는 가지, 꼭 하나씩 있죠.', 150, 30, 0.6);
+    expect(c[0]!.startFrame).toBe(0);
+    expect(c[c.length - 1]!.endFrame).toBe(150);
+    expect(c.every((x, i) => i === 0 || x.startFrame === c[i - 1]!.endFrame)).toBe(true);
+    // 낭독 구간 132프레임(150 − 0.6s×30)을 공백 뺀 글자 수 11:7 로 나눈다 — 공백을 세면 15:8 이라 86 이 된다.
+    expect(c).toEqual([
+      { text: '가위 든 손이 멈추는 가지,', startFrame: 0, endFrame: 81 },
+      { text: '꼭 하나씩 있죠.', startFrame: 81, endFrame: 150 },
+    ]);
+  });
+  it('빈 내레이션은 빈 배열', () => { expect(captionsFor('', 60)).toEqual([]); });
 });

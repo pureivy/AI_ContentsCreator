@@ -229,10 +229,14 @@ export interface ShortsRenderResult {
   ok: boolean; videoPath?: string; srtPath?: string;
   durationSec?: number; sceneCount?: number; issues: string[];
 }
+/** 구절 자막 한 조각 — 프레임은 씬 로컬(0 = 씬 첫 프레임). */
+export interface Caption { text: string; startFrame: number; endFrame: number }
 export interface PreparedScene {
   index: number; imagePath: string | null; audioPath: string | null;
   screenText: string; narration: string;
   durationSec: number; durationInFrames: number; startFrame: number;
+  /** 구절 자막(2026-09-18) — 본문 씬(훅·CTA 제외)에만, CONFIG.shortsCaptions 일 때 채운다. 없으면 종전 라벨만. */
+  captions?: Caption[];
 }
 
 export function sceneDurationSec(audioDurSec: number): number {
@@ -246,6 +250,89 @@ export function fixMonthNames(s: string): string {
   return (s ?? '').replace(/십월/g, '시월').replace(/육월/g, '유월');
 }
 
+// ── 구절 자막(2026-09-18) ────────────────────────────────────────────────────
+// 인스타 릴스·유튜브 쇼츠는 무음 자동재생으로 시작한다 — 첫 시청에서 낭독은 안 들린다. 종전 화면 글자는
+// 씬당 15자 라벨(screenText)뿐이라, 소리를 켜기 전엔 무슨 얘긴지 알 수 없었다. 내레이션을 4~14자 구절로
+// 나눠 낭독 진행에 맞춰 하단에 한 구절씩 띄운다. 단어 단위 싱크(forced alignment)는 없다 — 구절 글자 수
+// 비례로 시각을 배정한다. ElevenLabs 낭독 속도가 대체로 고르므로 구절 단위에서는 어긋남이 눈에 안 띈다.
+const PHRASE_MIN = 4;
+const PHRASE_MAX = 14;
+/** 공백 뺀 글자 수 — 화면 폭을 먹는 건 글자지 공백이 아니다. 문장부호는 센다(화면에 보인다). */
+const phraseLen = (s: string): number => Array.from(s.replace(/\s+/g, '')).length;
+
+/** 경계 정규식 뒤의 공백에서 자른다 — 경계 문자(마침표·쉼표·어미)는 앞 조각에 남는다. */
+const splitAfter = (s: string, re: RegExp): string[] => s.split(re).map((t) => t.trim()).filter(Boolean);
+
+/** 상한을 넘는 조각을 '상한 안 마지막 공백'에서 잘라 나간다(탐욕). 첫 단어가 이미 상한을 넘으면 통째로 둔다. */
+const packWords = (s: string): string[] => {
+  const words = s.split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  let cur: string[] = [], len = 0;
+  for (const w of words) {
+    const wl = phraseLen(w);
+    if (cur.length && len + wl > PHRASE_MAX) { out.push(cur.join(' ')); cur = []; len = 0; }
+    cur.push(w); len += wl;
+  }
+  if (cur.length) out.push(cur.join(' '));
+  return out;
+};
+
+/**
+ * 내레이션 → 4~14자 구절(순수). 경계 우선순위: 문장 종결(.!?…) > 쉼표 > 접속 어미(고·면·는데·지만) >
+ * 상한 안 마지막 공백. 상위 경계로 나눈 조각이 상한 안이면 더 내려가지 않는다 — "잠깐, 멈춰요." 는 쉼표가
+ * 있어도 한 구절이다. 4자 미만 조각은 앞 구절에 붙인다(첫 조각이면 뒤에). 붙여서 상한을 살짝 넘겨도
+ * 다시 나누지 않는다 — 넘친 만큼은 렌더러가 글자를 줄여 받고, 2~3자 조각이 몇 프레임 깜빡이는 쪽이 더 나쁘다.
+ */
+export function splitPhrases(narration: string): string[] {
+  const text = (narration ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return [];
+  const levels: Array<(s: string) => string[]> = [
+    (s) => splitAfter(s, /(?<=[.!?…])\s+/),
+    (s) => splitAfter(s, /(?<=,)\s+/),
+    (s) => splitAfter(s, /(?<=(?:고|면|는데|지만))\s+/),
+    packWords,
+  ];
+  let pieces = [text];
+  for (const split of levels) {
+    pieces = pieces.flatMap((p) => (phraseLen(p) > PHRASE_MAX ? split(p) : [p]));
+  }
+  // 짧은 조각 흡수 — 앞 구절에, 앞이 없으면 뒤에. 한 번만 지나간다(다시 나누지 않으므로 종료가 보장된다).
+  const out: string[] = [];
+  let carry = '';
+  for (const p of pieces) {
+    const t = carry ? `${carry} ${p}` : p;
+    carry = '';
+    if (phraseLen(t) < PHRASE_MIN) {
+      if (out.length) out[out.length - 1] = `${out[out.length - 1]} ${t}`;
+      else carry = t;
+    } else out.push(t);
+  }
+  if (carry) out.push(carry);
+  return out;
+}
+
+/**
+ * 구절별 표시 프레임(순수). 낭독 구간 = durationInFrames − 꼬리 여백(하한 1). 구절 글자 수 비례로 나누되
+ * 누적 반올림이라 경계가 빈틈없이 이어지고, 마지막 구절은 씬 끝(꼬리 여백 포함)까지 남는다 — 낭독이
+ * 끝나도 마지막 말은 화면에 남아 있어야 읽는다.
+ */
+export function captionsFor(narration: string, durationInFrames: number, fps = FPS, tailPadSec = TAIL_PAD_SEC): Caption[] {
+  const phrases = splitPhrases(narration);
+  if (!phrases.length || !(durationInFrames >= 1)) return [];
+  const spoken = Math.max(1, durationInFrames - Math.round(tailPadSec * fps));
+  const weights = phrases.map(phraseLen);
+  const total = weights.reduce((a, b) => a + b, 0);
+  const out: Caption[] = [];
+  let acc = 0, start = 0;
+  phrases.forEach((text, i) => {
+    acc += weights[i]!;
+    const end = i === phrases.length - 1 ? durationInFrames : Math.round((spoken * acc) / total);
+    out.push({ text, startFrame: start, endFrame: end });
+    start = end;
+  });
+  return out;
+}
+
 export function fmtSrtTime(sec: number): string {
   const ms = Math.round(sec * 1000);
   const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
@@ -253,13 +340,17 @@ export function fmtSrtTime(sec: number): string {
   const p = (n: number, w = 2) => String(n).padStart(w, '0');
   return `${p(h)}:${p(m)}:${p(s)},${p(r, 3)}`;
 }
-export function buildSrt(scenes: { narration: string; durationSec: number }[]): string {
+/** SRT — 구절 자막이 있는 씬은 구절별 항목(프레임/FPS 시각 + 씬 시계), 없는 씬은 종전대로 씬당 한 항목. 번호는 이어진다. */
+export function buildSrt(scenes: { narration: string; durationSec: number; captions?: Caption[] }[]): string {
   const lines: string[] = [];
-  let clock = 0;
-  scenes.forEach((sc, i) => {
-    lines.push(`${i + 1}`, `${fmtSrtTime(clock)} --> ${fmtSrtTime(clock + sc.durationSec)}`, sc.narration, '');
+  let clock = 0, n = 0;
+  for (const sc of scenes) {
+    const cues = sc.captions?.length
+      ? sc.captions.map((c) => ({ from: clock + c.startFrame / FPS, to: clock + c.endFrame / FPS, text: c.text }))
+      : [{ from: clock, to: clock + sc.durationSec, text: sc.narration }];
+    for (const c of cues) lines.push(`${++n}`, `${fmtSrtTime(c.from)} --> ${fmtSrtTime(c.to)}`, c.text, '');
     clock += sc.durationSec;
-  });
+  }
   return lines.join('\n');
 }
 export async function probeDuration(file: string): Promise<number> {
@@ -342,7 +433,14 @@ export async function prepareScenes(
     // 정작 이미지 생성이 실패했을 때 그 경보를 못 알아본다.
     const hasClip = !!opts.clips?.[i] && (() => { try { return fs.existsSync(opts.clips![i]!); } catch { return false; } })();
     if (!imagePath && !hasClip) issues.push(`씬${i + 1} 배경 폴백(그라데이션)`);
-    prepared.push({ index: i, imagePath, audioPath, screenText: sc.screenText ?? '', narration: sc.narration, durationSec, durationInFrames, startFrame });
+    // 구절 자막(2026-09-18) — 본문 씬(1번 이후, 훅·CTA 아님)에만. 훅은 라벨(screenText)이 곧 자막이고
+    // CTA 는 결론 카드가 화면을 쓴다. 끄면(SHORTS_CAPTIONS=false) 필드 자체가 없어 렌더가 종전과 같다.
+    const isBody = i >= 1 && sc.kind !== 'hook' && sc.kind !== 'cta';
+    const captions = CONFIG.shortsCaptions && isBody ? captionsFor(sc.narration, durationInFrames) : [];
+    prepared.push({
+      index: i, imagePath, audioPath, screenText: sc.screenText ?? '', narration: sc.narration, durationSec, durationInFrames, startFrame,
+      ...(captions.length ? { captions } : {}),
+    });
     startFrame += durationInFrames;
   }
   return { prepared, issues };
