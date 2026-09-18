@@ -872,7 +872,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     '  · 흔한 실수와 올바른 방법을 대비한다 → "compare"',
     '  · 원문에 서로 견줄 수 있는 같은 단위의 수치가 둘 이상 있다(예: 봄 90% vs 가을 70%) → "chart"(series 각 {label 8자, value 숫자≥0}, unit, highlight 강조 인덱스). 단위가 다르거나 한쪽이 수치가 아니면 chart 가 아니라 compare 다.',
     '  · 원문 문장을 그대로 인용한다 → "quote"(text 40자, source 출처)',
-    '  본문 씬 중 최소 1개는 반드시 kind 를 갖게 하라 — 본문이 전부 비면 그 영상은 처음부터 끝까지 배경과 자막만으로 흐른다. 다만 원문에 없는 수치·나열을 지어내 채우지는 마라. 지어낼 상황이면 그 씬 대신 다른 본문 씬에 붙일 곳을 찾아라(날조 금지가 최소 1개보다 우선한다).',
+    guide.kindRule,
     '수치 규칙: stat.value 와 chart.series 의 value 는 원문(블로그 초안)에 있는 수치 또는 대본 구조상 자명한 숫자(단계 수·항목 수)만. 불확실하면 그 kind 를 쓰지 마라. narration 은 수치를 한글로 낭독하되 JSON 값은 아라비아 숫자. chart 씬의 screenText 에는 핵심 수치 비교를 요약하라(렌더 실패 대비).',
     'description(유튜브 설명 — 인스타 캡션에도 그대로 복제된다)은 요약투로 끝내지 마라 — "정리했습니다/담았어요/알아봅니다/알아보세요/살펴봅니다/소개합니다" 금지. "결론 한 줄 + 조건 한 줄" 꼴로 써라(예: "잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요.").',
     // compare 채우기(2026-09-03 실측): 첫 런에서 두 작가 모두 kind='compare' 만 보내고 bad·good 을 비웠다.

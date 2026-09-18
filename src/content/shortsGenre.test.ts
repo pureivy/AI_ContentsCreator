@@ -40,6 +40,14 @@ describe('genreGuide — 장르별 네 줄', () => {
     expect(genreSceneGuide('howto')).toBe('');
     expect(genreSceneGuide('lore')).toContain('ink_wash·watercolor·manhwa');
   });
+  it('이야기형은 원문의 추정을 단정으로 바꾸지 말라고 하고(회화나무 실측), kind 를 억지로 붙이지 않는다', () => {
+    const l = genreGuide('lore');
+    expect(l.conclusion).toContain('추정으로 쓴 문장');
+    expect(l.conclusion).toContain('원문이 이유로 명시한');
+    expect(l.kindRule).toContain('억지로 kind 를 붙이지 마라');
+    expect(l.kindRule).not.toContain('최소 1개는 반드시');
+    expect(genreGuide('howto').kindRule).toContain('최소 1개는 반드시 kind');
+  });
 });
 
 describe('pickLoreHooks — 사실 공급에서 훅 소재', () => {
