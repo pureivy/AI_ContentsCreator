@@ -335,7 +335,31 @@ export function setYoutubeToken(slug: string, refreshToken: string): void {
 //  · 페이스북 로그인(META_APP_ID)        → pageId  + pageToken(=페이지 액세스 토큰, FB 페이지 게시용).
 // 토큰 필드를 절대 겹쳐 쓰지 않는다 — 한쪽 재연결이 다른 쪽 자격증명을 조용히 깨뜨리면
 // '연결됐는데 발행 실패'를 진단 불가로 만든다(setMetaToken·setMetaPage 가 서로를 보존).
-export interface MetaAccount { pageId: string; igUserId: string; pageAccessToken: string; pageToken: string }
+export interface MetaAccount {
+  pageId: string; igUserId: string; pageAccessToken: string; pageToken: string;
+  /** IG 장기 토큰 발급·갱신 시각(ISO, 2026-09-18) — 60일 만료 계산과 자동 갱신 주기의 기준. 없으면 발급 시각 미상(구 저장분). */
+  igTokenTs?: string;
+}
+/** IG 장기 토큰 수명(일) — Instagram Login 의 ig_exchange_token / ig_refresh_token 은 60일. */
+export const IG_TOKEN_LIFE_DAYS = 60;
+/** IG 토큰 만료 시각(순수) — 발급 시각 미상이면 null. */
+export function igTokenExpiresAt(igTokenTs: string | undefined): Date | null {
+  const t = igTokenTs ? Date.parse(igTokenTs) : NaN;
+  return Number.isFinite(t) ? new Date(t + IG_TOKEN_LIFE_DAYS * 86_400_000) : null;
+}
+/**
+ * IG 토큰 유지보수 판정(순수, 2026-09-18) — 2026-09-18 새벽 토큰 만료로 릴스·카드뉴스 발행과 성과 수집이 통째로 끊긴
+ * 실사고 대응. 갱신은 발급 24시간 뒤부터 가능하고 만료 뒤엔 불가(재연결만). 7일마다 갱신하면 한 번 실패해도
+ * 여유가 남는다. 발급 시각 미상(구 저장분)은 'stamp' — 지금을 발급 시각으로 적고 다음 주기에 갱신한다.
+ */
+export function igTokenPlan(igTokenTs: string | undefined, now = new Date()): 'none' | 'stamp' | 'refresh' | 'expired' {
+  if (!igTokenTs) return 'stamp';
+  const exp = igTokenExpiresAt(igTokenTs);
+  if (!exp) return 'stamp';
+  if (now.getTime() >= exp.getTime()) return 'expired';
+  const ageDays = (now.getTime() - Date.parse(igTokenTs)) / 86_400_000;
+  return ageDays >= 7 ? 'refresh' : 'none';
+}
 const META_TOKENS_KEY = 'META_TOKENS';
 /** 보존 요건(순수) — IG 연결(igUserId+토큰) 또는 FB 페이지 연결(pageId+페이지토큰) 중 하나라도 성립하면 유지. */
 function hasAnyMetaLink(a: Partial<MetaAccount>): boolean {
@@ -359,7 +383,12 @@ export function getMetaAccount(slug: string): MetaAccount {
   return {
     pageId: (a.pageId ?? '').trim(), igUserId: (a.igUserId ?? '').trim(),
     pageAccessToken: (a.pageAccessToken ?? '').trim(), pageToken: (a.pageToken ?? '').trim(),
+    ...(a.igTokenTs ? { igTokenTs: a.igTokenTs } : {}),
   };
+}
+/** 메타 연결이 있는 브랜드 슬러그 전부 — 토큰 유지보수 잡이 돈다(범용 '' 포함). */
+export function listMetaAccountSlugs(): string[] {
+  return Object.entries(readMetaTokens()).filter(([, a]) => hasAnyMetaLink(a)).map(([s]) => s);
 }
 /** blob 쓰기 공용 — 유효 연결 없는 항목은 떨어낸다(죽은 자격증명 잔존 방지). */
 function writeMetaTokens(clean: Record<string, Partial<MetaAccount>>): void {
@@ -369,13 +398,14 @@ function writeMetaTokens(clean: Record<string, Partial<MetaAccount>>): void {
  * 인스타그램 연결 저장 — null 이면 IG 연결만 해제. 같은 브랜드의 FB 페이지 연결(pageId/pageToken)은
  * 그대로 보존한다(인스타 재연결이 페북 발행을 깨뜨리지 않게).
  */
-export function setMetaToken(slug: string, acct: { igUserId: string; pageAccessToken: string } | null): void {
+export function setMetaToken(slug: string, acct: { igUserId: string; pageAccessToken: string; igTokenTs?: string } | null): void {
   const map = readMetaTokens();
   const clean: Record<string, Partial<MetaAccount>> = {};
   for (const [s, a] of Object.entries(map)) if (hasAnyMetaLink(a)) clean[s] = a;
   const prev = clean[slug] ?? map[slug] ?? {};
   if (acct && acct.igUserId.trim() && acct.pageAccessToken.trim()) {
-    clean[slug] = { ...prev, igUserId: acct.igUserId, pageAccessToken: acct.pageAccessToken };
+    // 발급 시각은 호출자가 주면 그것, 아니면 지금 — 연결·갱신 모두 새 토큰이므로 60일 시계가 다시 시작한다.
+    clean[slug] = { ...prev, igUserId: acct.igUserId, pageAccessToken: acct.pageAccessToken, igTokenTs: acct.igTokenTs ?? new Date().toISOString() };
   } else {
     const kept: Partial<MetaAccount> = { pageId: prev.pageId, pageToken: prev.pageToken };
     if (hasAnyMetaLink(kept)) clean[slug] = kept; // FB 페이지 연결만 남기고 IG 자격증명 제거
@@ -402,7 +432,7 @@ export function setMetaPage(slug: string, page: { pageId: string; pageToken: str
   if (page && page.pageId.trim() && page.pageToken.trim()) {
     clean[slug] = { ...prev, pageId: page.pageId, pageToken: page.pageToken };
   } else {
-    const kept: Partial<MetaAccount> = { igUserId: prev.igUserId, pageAccessToken: prev.pageAccessToken };
+    const kept: Partial<MetaAccount> = { igUserId: prev.igUserId, pageAccessToken: prev.pageAccessToken, ...(prev.igTokenTs ? { igTokenTs: prev.igTokenTs } : {}) };
     if (hasAnyMetaLink(kept)) clean[slug] = kept; // IG 연결만 남기고 페이지 자격증명 제거
     else delete clean[slug];
   }

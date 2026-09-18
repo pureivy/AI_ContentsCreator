@@ -104,6 +104,8 @@ import { naverAttemptAt, markNaverAttempt } from '../analytics/naverAttempts';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
+import { maintainIgTokens, checkIgToken } from '../tools/igToken';
+import { igTokenExpiresAt } from '../secrets/store';
 import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, notifyYoutubeUploaded, youtubeUploadNotifies, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
 import { startTelegramBot } from '../autonomy/telegramBot';
 import { buildBriefing } from '../autonomy/briefing';
@@ -1892,11 +1894,23 @@ app.get('/meta/status', (c) => {
   const client = !!(getSecret('INSTAGRAM_APP_ID') && getSecret('INSTAGRAM_APP_SECRET'));
   const fbClient = !!(getSecret('META_APP_ID') && getSecret('META_APP_SECRET'));
   const a = getMetaAccount(brand);
+  // 토큰 수명(2026-09-18) — 만료·임박이면 UI 가 "재연결" 버튼을 보인다. 종전엔 저장된 토큰이 있으면 '연결됨'이라
+  // 만료 뒤에도 발행 버튼만 보여 재연결 경로가 숨었다. 발급 시각 미상(구 저장분)은 expiresAt 없음.
+  const exp = igTokenExpiresAt(a.igTokenTs);
+  const daysLeft = exp ? Math.floor((exp.getTime() - Date.now()) / 86_400_000) : undefined;
   // pageId 는 공개 식별자(토큰류 절대 미포함) — UI 가 페이지 링크·연결 상태 표시에 쓴다.
   return c.json({
     client, connected: !!(a.igUserId && a.pageAccessToken),
     fbClient, fbConnected: !!(a.pageId && a.pageToken), pageId: a.pageId || undefined,
+    ...(exp ? { igExpiresAt: exp.toISOString(), igDaysLeft: daysLeft, igExpired: (daysLeft ?? 1) < 0 } : {}),
   });
+});
+// 수동 점검·갱신(2026-09-18) — 일일 잡을 기다리지 않고 지금 돌린다. 결과에 토큰은 없다.
+app.post('/meta/token/check', async (c) => {
+  const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
+  if (brand && !isSafeBrandSlug(brand)) return c.json({ error: '비정상 브랜드 슬러그' }, 400);
+  const r = await checkIgToken(brand);
+  return c.json(r);
 });
 app.get('/meta/oauth/start', (c) => {
   const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
@@ -4552,7 +4566,7 @@ const stopPerfSync = startDaily({
   // 설정 비어 있음 + 스냅샷 07-31 에서 정지). 브리핑 설정 여부와 팔로워 추적은 서로 묶일 이유가 없다.
   // 조회수 감사(2026-08-20) 일일 배선 — 리서치 판정 수확 + 자동완성 트렌드 스냅샷(둘 다 fail-open, 주제 두뇌가 소비).
   // 검색 수요 스냅샷(2026-08-26)도 여기 합류 — 시드 키워드의 절대 검색량·시즌 지수(하루 ~6콜, 킬스위치 off 면 0콜).
-  run: () => { void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void recordFollowersSnapshot().catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void refreshDemandSnapshot().catch(() => {}); void refreshYtNicheSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); }, // 전부 순수 API — 프로필 락 무관. 네이버는 아래 새벽 잡으로 분리(2026-08-31).
+  run: () => { void maintainIgTokens().catch(() => {}); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void recordFollowersSnapshot().catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void refreshDemandSnapshot().catch(() => {}); void refreshYtNicheSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); }, // 전부 순수 API — 프로필 락 무관. 네이버는 아래 새벽 잡으로 분리(2026-08-31).
   log: (m) => console.log('[perf-sync]', m),
 });
 if (CONFIG.performanceSyncTime) {

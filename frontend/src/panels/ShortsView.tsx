@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   fetchShorts, createShorts, createShortsFromPiece, deleteShorts,
   fetchPieces, ShortsInfo, PieceInfo, uploadShortsYoutube, fetchYoutubeStatus,
-  publishShortsMeta, fetchMetaStatus, regenerateShortsThumbnail,
+  publishShortsMeta, fetchMetaStatus, regenerateShortsThumbnail, igReconnectNeeded,
 } from "../api";
 import Avatar from "./Avatar";
 import Ico, { type IcoName } from "./Ico";
@@ -202,10 +202,11 @@ export default function ShortsSection() {
   const [metaReady, setMetaReady] = useState(false);
   // 페이스북 페이지는 인스타와 독립 연결(앱·토큰이 다름) — 별 상태.
   const [fbReady, setFbReady] = useState(false);
+  const [igReconnect, setIgReconnect] = useState<{ expired: boolean; daysLeft?: number } | null>(null);
 
   const load = () => {
     fetchShorts().then(setItems); fetchPieces().then(setPieces); fetchYoutubeStatus().then(setYt);
-    fetchMetaStatus().then((m) => { setMetaReady(m.client && m.connected); setFbReady(!!m.fbClient && !!m.fbConnected); });
+    fetchMetaStatus().then((m) => { setMetaReady(m.client && m.connected); setFbReady(!!m.fbClient && !!m.fbConnected); setIgReconnect(igReconnectNeeded(m) ? { expired: !!m.igExpired, daysLeft: m.igDaysLeft } : null); });
   };
   useEffect(() => {
     load();
@@ -246,6 +247,14 @@ export default function ShortsSection() {
 
   return (
     <>
+      {/* 인스타 토큰 만료·임박(2026-09-18) — 저장된 토큰이 있으면 '연결됨'이라 재연결 경로가 숨던 것. 콜백이 localhost 라 Mac mini 브라우저에서. */}
+      {igReconnect && (
+        <div className="review-section" style={{ borderColor: "#e53935" }}>
+          <b>⚠️ 인스타그램 토큰 {igReconnect.expired ? "만료됨" : `${igReconnect.daysLeft}일 뒤 만료`}</b>
+          <span style={{ marginLeft: 8, opacity: .8 }}>{igReconnect.expired ? "릴스·카드뉴스 발행과 성과 수집이 멈춰 있습니다." : "자동 갱신이 안 되면 발행이 멈춥니다."}</span>
+          <a className="btn" style={{ marginLeft: 12 }} href="/meta/oauth/start" target="_blank" rel="noreferrer" title="이 서버(Mac mini)의 브라우저에서 열어야 합니다 — 콜백이 localhost 로 돌아옵니다">🔄 인스타 재연결</a>
+        </div>
+      )}
       {/* 새 숏폼 — 독립 주제 */}
       <div className="review-section">
         <h3>새 숏폼</h3>

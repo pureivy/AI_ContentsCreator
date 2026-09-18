@@ -1249,6 +1249,12 @@ export interface MetaStatus {
   client: boolean; connected: boolean;            // 인스타그램 앱 설정 / 인스타 계정 연결
   fbClient?: boolean; fbConnected?: boolean;      // 메타 앱 설정 / 페이스북 페이지 연결(독립 축)
   pageId?: string;
+  /** IG 토큰 수명(2026-09-18) — 만료·7일 이내면 화면이 "재연결" 버튼을 보인다. 발급 시각 미상이면 없음. */
+  igExpiresAt?: string; igDaysLeft?: number; igExpired?: boolean;
+}
+/** 재연결 버튼을 보여야 하는가(순수) — 만료됐거나 7일 이내. */
+export function igReconnectNeeded(m: MetaStatus): boolean {
+  return !!m.connected && (!!m.igExpired || (typeof m.igDaysLeft === "number" && m.igDaysLeft <= 7));
 }
 export async function fetchMetaStatus(): Promise<MetaStatus> {
   try { const r = await fetch("/meta/status"); return await r.json() as MetaStatus; }

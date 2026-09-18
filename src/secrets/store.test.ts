@@ -387,18 +387,19 @@ describe('메타 IG·FB 연결 독립성', () => {
   it('페이지 연결이 IG 자격증명을 보존하고, IG 재연결이 페이지 토큰을 보존', () => {
     mod.setMetaToken('b', { igUserId: 'IG1', pageAccessToken: 'IGTOK1' });
     mod.setMetaPage('b', { pageId: 'PG1', pageToken: 'PGTOK1' });
-    expect(mod.getMetaAccount('b')).toEqual({ igUserId: 'IG1', pageAccessToken: 'IGTOK1', pageId: 'PG1', pageToken: 'PGTOK1' });
+    expect(mod.getMetaAccount('b')).toMatchObject({ igUserId: 'IG1', pageAccessToken: 'IGTOK1', pageId: 'PG1', pageToken: 'PGTOK1' });
+    expect(Date.parse(mod.getMetaAccount('b').igTokenTs ?? '')).toBeGreaterThan(0); // IG 연결 저장은 발급 시각을 찍는다(2026-09-18)
     mod.setMetaToken('b', { igUserId: 'IG2', pageAccessToken: 'IGTOK2' }); // 인스타 재연결(60일 토큰 갱신)
-    expect(mod.getMetaAccount('b')).toEqual({ igUserId: 'IG2', pageAccessToken: 'IGTOK2', pageId: 'PG1', pageToken: 'PGTOK1' });
+    expect(mod.getMetaAccount('b')).toMatchObject({ igUserId: 'IG2', pageAccessToken: 'IGTOK2', pageId: 'PG1', pageToken: 'PGTOK1' });
     mod.setMetaPage('b', { pageId: 'PG2', pageToken: 'PGTOK2' });          // 페이지 재연결
-    expect(mod.getMetaAccount('b')).toEqual({ igUserId: 'IG2', pageAccessToken: 'IGTOK2', pageId: 'PG2', pageToken: 'PGTOK2' });
+    expect(mod.getMetaAccount('b')).toMatchObject({ igUserId: 'IG2', pageAccessToken: 'IGTOK2', pageId: 'PG2', pageToken: 'PGTOK2' });
   });
 
   it('한쪽 해제는 다른 쪽만 남긴다(연결 축 부분 해제)', () => {
     mod.setMetaToken('b', { igUserId: 'IG1', pageAccessToken: 'IGTOK1' });
     mod.setMetaPage('b', { pageId: 'PG1', pageToken: 'PGTOK1' });
     mod.setMetaPage('b', null);                                  // 페북만 해제
-    expect(mod.getMetaAccount('b')).toEqual({ igUserId: 'IG1', pageAccessToken: 'IGTOK1', pageId: '', pageToken: '' });
+    expect(mod.getMetaAccount('b')).toMatchObject({ igUserId: 'IG1', pageAccessToken: 'IGTOK1', pageId: '', pageToken: '' });
     mod.setMetaPage('b', { pageId: 'PG1', pageToken: 'PGTOK1' });
     mod.setMetaToken('b', null);                                 // 인스타만 해제
     expect(mod.getMetaAccount('b')).toEqual({ igUserId: '', pageAccessToken: '', pageId: 'PG1', pageToken: 'PGTOK1' });
