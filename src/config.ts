@@ -319,6 +319,11 @@ export interface Config {
    * 재등장이 규칙 안이었다. 10일이면 이 사건의 두 건(모과 6일·석류 3일)은 그대로 잡히면서
    * 카탈로그 79종 중 59종·보관소 53종 중 36종이 열려 있다(30일은 43·28). 카운트 상한(2편/30일)이
    * 그 뒤를 받쳐 같은 수종이 한 달에 세 번 나오는 것은 여전히 막는다. 0 이면 게이트 끔.
+   *
+   * 2026-09-18 기본 2일로 하향(사장님: "수종을 제한할 필요가 있나, 내용을 다양하게 쓰면 되지 않나"). 위 10일은
+   * 글이 '수종만 바뀐 같은 글'이던 때의 숫자다. 사실 공급·모듈 로테이션·이야기 축·축 7일 창이 들어온 뒤로 같은
+   * 수종도 다른 글이 되므로 이 창은 이틀 연속만 막고, 몰림은 월 상한이, 같은 수종×같은 각도는 유사 주제 감지가
+   * 맡는다. 7일 창이 보관소 53종의 18종을 잠가 보관소 지시가 소진되던 실측이 계기였다.
    */
   readonly speciesRecentDays: number;
   /**
@@ -329,7 +334,7 @@ export interface Config {
   readonly themeRecentDays: number;
   /**
    * 30일 내 같은 수종 상한의 기본값(2026-09-17 사용자 확정 2 → 3) — 검색량·숏폼 성과가 여기에 +1~+2 를 더한다.
-   * 실효 간격은 speciesRecentDays 창이 잡는다(10일 창이면 30일에 4편이 물리적 최대).
+   * 실효 간격은 speciesRecentDays 창이 잡는다(2일 창에선 이 상한이 몰림을 막는 주된 가드다).
    */
   readonly speciesMonthlyCap: number;
 }
@@ -536,7 +541,7 @@ export const CONFIG: Config = {
   // 1 초과 값은 모든 후보를 비수기로 만든다(0 미만은 게이트 무효) — 오설정이 사이클을 굶기지 않게 클램프.
   topicDemandMinSeason: Math.min(Math.max(0, envFloat('TOPIC_DEMAND_MIN_SEASON', 0.25)), 1),
   // 상한 90일 — 카탈로그 79종에 하루 ~1.7편이 수종 글이라 그 이상은 후보가 구조적으로 마른다.
-  speciesRecentDays: Math.min(90, Math.max(0, envInt('SPECIES_RECENT_DAYS', 10))),
+  speciesRecentDays: Math.min(90, Math.max(0, envInt('SPECIES_RECENT_DAYS', 2))),
   // 상한 30일 — 축 24개에 하루 ~2.5편이면 한 바퀴가 ~10일이라 그 이상은 후보가 마른다.
   themeRecentDays: Math.min(30, Math.max(0, envInt('THEME_RECENT_DAYS', 7))),
   speciesMonthlyCap: Math.min(8, Math.max(1, envInt('SPECIES_MONTHLY_CAP', 3))),
