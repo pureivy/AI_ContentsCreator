@@ -250,6 +250,9 @@ export interface Config {
   /** 씬 2 결론 예고 카드(2026-09-18) — CTA 첫 조건만 "끝에 나오는 것 · 조건 → ?" 로 잠깐 띄운다. 답은 감춘다 — 끝까지 볼 이유.
    *  takeaways 없는 편은 아무것도 안 붙는다. SHORTS_TEASER=false 킬스위치. */
   readonly shortsTeaser: boolean;
+  /** 5초 넘는 씬 중간 컷(2026-09-18) — 스틸은 다른 크롭(켄번즈 궤도·1.25배)으로 점프컷, 클립 씬은 여분 실촬영이 있을 때만
+   *  뒷 절반을 다른 클립으로 교체. 씬 수·낭독·자막 불변. SHORTS_MIDCUT=false 킬스위치(cutAtFrame 자체를 안 넣는다). */
+  readonly shortsMidcut: boolean;
   /** macOS say 폴백 음색. */
   readonly voiceTtsVoice: string;
   readonly voiceSttModel: string;
@@ -486,6 +489,7 @@ export const CONFIG: Config = {
   shortsHookFootage: envBool('SHORTS_HOOK_FOOTAGE', true),
   shortsCaptions: envBool('SHORTS_CAPTIONS', true),
   shortsTeaser: envBool('SHORTS_TEASER', true),
+  shortsMidcut: envBool('SHORTS_MIDCUT', true),
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
   voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),
 

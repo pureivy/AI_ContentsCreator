@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { synthesize } from '../voice/tts';
 import { CONFIG } from '../config';
+import { MIN_CLIP_COVERAGE } from '../content/userAssets';
 
 const execFileP = promisify(execFile);
 
@@ -361,6 +362,48 @@ export function captionsForScene(index: number, kind: SceneKind | undefined, nar
   if (!CONFIG.shortsCaptions || index < 1 || kind === 'hook' || kind === 'cta') return undefined;
   const captions = captionsFor(narration, durationInFrames);
   return captions.length ? captions : undefined;
+}
+
+// ── 중간 컷(2026-09-18, SHORTS_MIDCUT) ───────────────────────────────────────
+// 한 씬이 5초를 넘으면 같은 화면이 그만큼 머문다 — 숏폼에서 5초는 길다. 씬 중간에서 다른 크롭으로 점프컷하면
+// 씬 수·낭독·자막은 그대로 둔 채 화면만 한 번 더 바뀐다. 스틸 씬은 켄번즈 궤도를 바꾸고(KenBurnsImage cutAtFrame),
+// 클립 씬은 여분 실촬영이 있을 때만 뒷 절반을 다른 클립으로 바꾼다(없으면 컷 없음 — 같은 클립을 끊어 봐야 튐만 보인다).
+/**
+ * 씬 중간 컷 프레임(순수) — minSec 초를 넘는 씬만, 중간 프레임. 이하면 undefined(필드 자체를 안 만든다).
+ * 반올림이다(floor 가 아니라) — 브리프 검산값(151→76)을 따른다. 홀수 길이에서 1프레임 차이라 화면상 의미는 없다.
+ */
+export function midcutAt(durationInFrames: number, fps = FPS, minSec = 5): number | undefined {
+  if (!(durationInFrames > minSec * fps)) return undefined;
+  return Math.round(durationInFrames / 2);
+}
+
+/**
+ * 클립 씬 중간 컷의 여분 클립 배정(순수). 컷 후보인 클립 씬(index 순)마다, 아직 안 쓴 여분 중 뒷 절반
+ * (durationInFrames − cut)을 MIN_CLIP_COVERAGE 이상 덮는 첫 것을 준다 — planVideoSegments 와 같은 하한(과한 감속은
+ * 결함으로 보인다). 여분 하나는 한 편에서 한 번만. 스틸 씬·컷 후보 아닌 씬은 건너뛴다(그 씬은 켄번즈 컷 또는 컷 없음).
+ * stageAndBuildProps 가 씬을 병렬(Promise.all)로 처리하므로 배정은 그 전에 여기서 한 번에 정한다 — await 사이에서
+ * 같은 여분을 두 씬이 집는 경쟁을 없애고, 같은 입력엔 같은 배정이 나온다.
+ */
+export function planSpareClips(
+  scenes: ReadonlyArray<{ index: number; durationInFrames: number; hasClip: boolean }>,
+  spares: ReadonlyArray<{ path: string; seconds: number }>,
+  fps = FPS,
+): Map<number, { path: string; seconds: number }> {
+  const out = new Map<number, { path: string; seconds: number }>();
+  const pool = spares.filter((v) => v.path && v.seconds > 0);
+  if (!pool.length) return out;
+  const used = new Set<string>();
+  for (const sc of [...scenes].sort((a, b) => a.index - b.index)) {
+    if (!sc.hasClip) continue;
+    const cut = midcutAt(sc.durationInFrames, fps);
+    if (cut === undefined) continue;
+    const need = (MIN_CLIP_COVERAGE * (sc.durationInFrames - cut)) / fps;
+    const pick = pool.find((v) => !used.has(v.path) && v.seconds >= need);
+    if (!pick) continue;
+    used.add(pick.path);
+    out.set(sc.index, pick);
+  }
+  return out;
 }
 
 export function fmtSrtTime(sec: number): string {

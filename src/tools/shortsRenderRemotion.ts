@@ -8,8 +8,9 @@ import path from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { pruneDir, humanBytes } from '../util/prune';
 import { selectComposition, renderMedia, makeCancelSignal } from '@remotion/renderer';
-import { prepareScenes, buildSrt, resolveClipSrc, defaultSceneFx, fxSeed, FPS, probeDuration, probeImageSize, coverFocus } from './shortsCommon';
+import { prepareScenes, buildSrt, resolveClipSrc, defaultSceneFx, fxSeed, FPS, probeDuration, probeImageSize, coverFocus, midcutAt, planSpareClips } from './shortsCommon';
 import type { ShortsScene, ShortsRenderResult, PreparedScene } from './shortsCommon';
+import { CONFIG } from '../config';
 
 /**
  * 렌더 품질·환경 옵션 — 종전엔 codec 만 넘기고 나머지를 전부 Remotion 기본값에 맡겼다.
@@ -60,9 +61,24 @@ export async function stageAndBuildProps(
     /** 룩 자리 이동 — 형제편(원편 자산 승계)에 1 을 주면 원편과 다른 색을 받는다.
      *  대본·이미지를 공유하는 사이라 색까지 같으면 두 편이 사실상 같은 영상이 된다. */
     lookOffset?: number;
+    /** 여분 실촬영(2026-09-18, SHORTS_MIDCUT) — 씬 배정(videoPlan)에 안 쓰인 보관소 영상 절대경로. 5초 넘는 클립 씬의
+     *  뒷 절반을 이걸로 바꾼다(clip2_NN.mp4). 없으면 클립 씬은 컷 없이 종전 그대로. */
+    spareClips?: string[];
   } = {},
 ): Promise<Record<string, unknown>> {
   fs.mkdirSync(publicDir, { recursive: true });
+  // 중간 컷 여분 클립 배정(2026-09-18) — 씬 map 이 병렬이라 배정은 여기서 한 번에 정한다(planSpareClips 주석).
+  // 길이(ffprobe)는 미리 한 번씩만 잰다. 측정 실패·0초는 풀에서 빠진다.
+  const sparePool: Array<{ path: string; seconds: number }> = [];
+  if (CONFIG.shortsMidcut) {
+    for (const f of opts.spareClips ?? []) {
+      try { const d = await probeDuration(f); if (d > 0) sparePool.push({ path: f, seconds: d }); } catch { /* 못 잰 여분은 안 쓴다 */ }
+    }
+  }
+  const spareAt = planSpareClips(
+    prepared.map((p) => ({ index: p.index, durationInFrames: p.durationInFrames, hasClip: !!resolveClipSrc(opts.clips?.[p.index], String(p.index + 1).padStart(2, '0')) })),
+    sparePool,
+  );
   // staticFile 참조용 bare 파일명으로 복사
   const propScenes = await Promise.all(prepared.map(async (p) => {
     const nn = String(p.index + 1).padStart(2, '0');
@@ -76,6 +92,22 @@ export async function stageAndBuildProps(
       fs.copyFileSync(clipPath, path.join(publicDir, videoSrc));
       // 실제 클립 길이(ffprobe)로 Loop 프레임 산정 — '모든 클립 6초' 하드코딩 가정 제거(길이 가변 시 루프 경계 프리즈/점프 방지).
       try { const d = await probeDuration(clipPath); if (d > 0) clipFrames = Math.max(1, Math.round(d * FPS)); } catch { /* 산정 실패 시 AutoShorts CLIP_FRAMES 상수 폴백 */ }
+    }
+    // 중간 컷(2026-09-18, SHORTS_MIDCUT) — 5초 넘는 씬만. 스틸 씬은 프레임만 주면 KenBurnsImage 가 다른 크롭으로 점프한다.
+    // 클립 씬은 여분 클립이 배정됐을 때만(같은 클립을 중간에 끊어 봐야 튐만 보인다) — 여분을 clip2_NN 으로 스테이징한다.
+    // off 거나 후보가 아니면 필드 자체를 안 만든다(종전 렌더와 바이트 동일).
+    let cutAtFrame: number | undefined, videoSrc2: string | undefined, clipFrames2: number | undefined;
+    if (CONFIG.shortsMidcut) {
+      const cut = midcutAt(p.durationInFrames);
+      const spare = spareAt.get(p.index);
+      if (cut !== undefined && !videoSrc) cutAtFrame = cut;
+      else if (cut !== undefined && spare) {
+        const dst = `clip2_${nn}.mp4`;
+        try {
+          fs.copyFileSync(spare.path, path.join(publicDir, dst));
+          cutAtFrame = cut; videoSrc2 = dst; clipFrames2 = Math.max(1, Math.round(spare.seconds * FPS));
+        } catch { /* 여분 스테이징 실패 — 그 씬은 컷 없이 종전 그대로 */ }
+      }
     }
     const sc = scenes[p.index];
     // 씬 연출 — 결정적 kind 기본값(스틸 씬만). 클립 씬은 undefined(클립이 곧 모션, 종전 동작).
@@ -93,6 +125,8 @@ export async function stageAndBuildProps(
     return {
       imageSrc, audioSrc, videoSrc, screenText: p.screenText, durationInFrames: p.durationInFrames,
       ...(clipFrames ? { clipFrames } : {}),
+      ...(cutAtFrame !== undefined ? { cutAtFrame } : {}),
+      ...(videoSrc2 ? { videoSrc2, clipFrames2 } : {}),
       ...(realFootage ? { realFootage } : {}),
       ...(focus ? { focus } : {}),
       ...(sc?.kind ? { kind: sc.kind } : {}),
@@ -136,6 +170,8 @@ export async function renderShortsVideoRemotion(
     caption?: { bottomPct?: number; keyword?: string; outline?: boolean; fontPx?: number; hookFontPx?: number };
     /** 상단 제목 캘리(투명 PNG 절대경로) — public/ 로 스테이징해 전 씬 고정 오버레이. */
     title?: { imagePath: string; topPct?: number; widthPct?: number };
+    /** 여분 실촬영(2026-09-18) — 씬 배정에 안 쓰인 보관소 영상. 5초 넘는 클립 씬의 중간 컷 교체용(stageAndBuildProps). */
+    spareClips?: string[];
   } = {},
 ): Promise<ShortsRenderResult> {
   const entry = path.resolve('remotion/index.ts');

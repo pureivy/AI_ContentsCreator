@@ -1,6 +1,6 @@
 import React from 'react';
 import { z } from 'zod';
-import { AbsoluteFill, Audio, staticFile, useCurrentFrame, useVideoConfig, random, interpolate, Easing } from 'remotion';
+import { AbsoluteFill, Audio, Sequence, staticFile, useCurrentFrame, useVideoConfig, random, interpolate, Easing } from 'remotion';
 import { TransitionSeries } from '@remotion/transitions';
 import { Video } from '@remotion/media';
 import { CutFlash } from './CutFlash';
@@ -38,6 +38,12 @@ export const autoShortsSchema = z.object({
     durationInFrames: z.number(),
     videoSrc: z.string().nullable().optional(),
     clipFrames: z.number().optional(), // 실제 클립 길이(컴포지션 fps 기준 프레임) — 감속 재생 배율 산정용. 없으면 CLIP_SECONDS 폴백.
+    /** 중간 컷(2026-09-18, SHORTS_MIDCUT) — 이 프레임부터 다른 크롭(스틸) 또는 다른 클립(videoSrc2)으로 점프컷. 서버가 5초 넘는 씬에만 넣는다.
+     *  클립 씬은 videoSrc2 가 함께 올 때만 온다(같은 클립을 끊어 봐야 튐만 보인다). 없으면 종전 그대로. */
+    cutAtFrame: z.number().optional(),
+    /** 중간 컷 뒤 절반의 여분 실촬영(public/clip2_NN.mp4) — cutAtFrame 과 짝. */
+    videoSrc2: z.string().nullable().optional(),
+    clipFrames2: z.number().optional(),
     /** 사용자가 찍어 올린 실촬영 화면인가(2026-09-04) — 파괴적 편집 기법이 이 씬을 피한다. */
     realFootage: z.boolean().optional(),
     /** 씬 초점(2026-09-09) — 화면 기준 0~1. 비전 QA 가 읽은 핵심 부위 중심을 서버가 cover 배치로 변환한 값.
@@ -155,7 +161,32 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
   }
   return (
     <AbsoluteFill style={wrap}>
-      {s.videoSrc ? (
+      {s.videoSrc && s.videoSrc2 && s.cutAtFrame ? (
+        // 중간 컷 클립 교체(2026-09-18) — 앞 절반은 원래 클립, cutAtFrame 부터 여분 실촬영(videoSrc2)으로 하드컷.
+        // 각 <Video>는 제 구간만 덮으면 되므로 감속 배율도 구간 길이 기준이다(원래 클립이 절반만 덮으면 정속으로 돈다).
+        // Sequence 안에서 useCurrentFrame 이 0 부터 다시 세므로 두 번째 클립은 제 처음부터 재생된다.
+        // 룩·muted·style 은 아래 단일 <Video>와 같아야 한다 — 절반씩 색이 다르면 보정 안 한 것만 못하다.
+        <>
+          <Sequence from={0} durationInFrames={s.cutAtFrame} name="클립 앞 절반">
+            <Video
+              src={staticFile(s.videoSrc)}
+              muted
+              playbackRate={Math.min(1, (s.clipFrames ?? CLIP_SECONDS * fps) / Math.max(1, s.cutAtFrame))}
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              {...(effects ? { effects } : {})}
+            />
+          </Sequence>
+          <Sequence from={s.cutAtFrame} durationInFrames={Math.max(1, s.durationInFrames - s.cutAtFrame)} name="클립 뒤 절반(여분)">
+            <Video
+              src={staticFile(s.videoSrc2)}
+              muted
+              playbackRate={Math.min(1, (s.clipFrames2 ?? CLIP_SECONDS * fps) / Math.max(1, s.durationInFrames - s.cutAtFrame))}
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              {...(effects ? { effects } : {})}
+            />
+          </Sequence>
+        </>
+      ) : s.videoSrc ? (
         // 루프 금지 — 씬이 클립(≈6초)보다 길면 재생 속도를 낮춰 클립 한 번이 씬 전체를 덮는다.
         // 종전 <Loop>는 씬 중간에 클립이 처음으로 되감겨 '튕김'이 보였고(실측: 씬 6.6~8.0s vs 클립 6.04s
         // 로 거의 매 씬 발생), 감속 재생은 튕김 제거에 더해 I2V 잔결함(형태 흔들림)도 시각적으로 완화한다.
@@ -169,7 +200,9 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
           {...(effects ? { effects } : {})}
         />
       ) : (
-        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={frozen ? 'none' : s.fx?.move} intensity={s.fx?.intensity} driftSeed={driftSeed && !pinned ? `${driftSeed}:${index}` : undefined} {...(effects ? { effects } : {})} />
+        // 중간 컷(cutAtFrame)은 배경이 고정된 씬(정지 강조·포인터 링·인셋 확대창)엔 안 준다 — 좌표 기법은 배경이 그 자리에
+        // 있어야 성립하고, 정지 강조는 멈추는 것이 연출이다. 그 씬은 컷 없이 종전 그대로.
+        <KenBurnsImage src={s.imageSrc} total={s.durationInFrames} index={index} move={frozen ? 'none' : s.fx?.move} intensity={s.fx?.intensity} driftSeed={driftSeed && !pinned ? `${driftSeed}:${index}` : undefined} {...(effects ? { effects } : {})} {...(s.cutAtFrame && !frozen ? { cutAtFrame: s.cutAtFrame } : {})} />
       )}
       {/* 액센트 — 배경 위·자막/오버레이 아래(텍스트는 어두워지거나 가려지지 않게). 스포트라이트 기법 씬은 액센트 스포트라이트와 겹치지 않게. */}
       {s.fx?.accent === 'spotlight' && tech !== '스포트라이트' ? <SpotlightMask /> : null}

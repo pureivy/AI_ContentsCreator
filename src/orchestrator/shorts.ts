@@ -1356,8 +1356,10 @@ async function finishShortsRun(a: {
   say: (m: string) => void; checkAbort: () => void;
   /** 승계편이면 1 — 원편과 다른 필름 룩을 받는다. */
   lookOffset?: number;
+  /** 여분 실촬영(2026-09-18, SHORTS_MIDCUT) — 씬 배정에 안 쓰인 보관소 영상. 5초 넘는 클립 씬의 뒷 절반을 이걸로 바꾼다. */
+  spareClips?: string[];
 }): Promise<void> {
-  const { id, store, dir, short, images, clips, opts, say, checkAbort, lookOffset } = a;
+  const { id, store, dir, short, images, clips, opts, say, checkAbort, lookOffset, spareClips } = a;
   let plan = a.plan;
   // 씬→이미지 매핑을 남긴다 — 형제편이 이걸 읽어 같은 자리에 같은 그림을 놓는다.
   // 실촬영 씬은 이미지를 안 만들어 scenes/ 의 파일 수와 씬 수가 어긋나므로, 이름순 위치로는 밀린다.
@@ -1390,6 +1392,7 @@ async function finishShortsRun(a: {
             ...(CONFIG.shortsCaptionOutline ? { outline: true } : {}),
           },
           ...(titleArt ? { title: { imagePath: titleArt.imagePath, topPct: lay.titleTopPct, widthPct: lay.titleWidthPct } } : {}),
+          ...(spareClips?.length ? { spareClips } : {}),
         });
       }
       catch (e) { say(`모션 렌더 예외 → ffmpeg 폴백: ${e instanceof Error ? e.message.slice(0, 80) : e}`); rr = null; }
@@ -2019,8 +2022,14 @@ export async function runShortsJob(
       say('클립 QA 건너뜀 — 클립이 실촬영뿐(사장님 영상은 검수 대상이 아니다)');
     }
 
+    // 여분 실촬영(2026-09-18, SHORTS_MIDCUT) — 씬 배정(videoPlan)에 안 들어간 보관소 영상. 5초 넘는 실촬영 씬의 뒷 절반을
+    // 이걸로 바꾼다(한 영상은 한 씬 규칙과 별개 — 배정은 그대로고, 남는 영상을 같은 씬 안에서 잇는 것뿐이다).
+    const usedVideo = new Set(videoPlan.flatMap((v) => (v ? [v.path] : [])));
+    const spareClips = CONFIG.shortsMidcut ? userVideoFiles.filter((f) => !usedVideo.has(f) && (videoDurations.get(f) ?? 0) > 0) : [];
+    if (spareClips.length) say(`여분 실촬영 ${spareClips.length}건 — 5초 넘는 실촬영 씬의 중간 컷 교체 후보`);
     await finishShortsRun({
       id, store, dir, short, plan, images, clips: cv.clips, opts, say, checkAbort,
+      ...(spareClips.length ? { spareClips } : {}),
     });
   } catch (e) {
     const msg = opts.signal?.aborted ? '취소됨' : e instanceof Error ? e.message.slice(0, 300) : String(e);

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus, hookVoiceSettings, splitPhrases, captionsFor, captionsForScene, teaserFor } from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus, hookVoiceSettings, splitPhrases, captionsFor, captionsForScene, teaserFor, midcutAt, planSpareClips } from './shortsCommon';
 import { CONFIG } from '../config';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
@@ -631,5 +631,39 @@ describe('teaserFor — 결론 예고(2026-09-18)', () => {
   });
   it('12자로 자른다', () => {
     expect(teaserFor([{}, {}, {}, { kind: 'cta', takeaways: [{ when: '가나다라마바사아자차카타파하', then: 'x' }] }])).toHaveLength(12);
+  });
+});
+
+describe('midcutAt — 5초 넘는 씬은 중간에 컷(2026-09-18)', () => {
+  it('5초 이하는 없음, 초과면 중간 프레임', () => {
+    expect(midcutAt(150, 30)).toBeUndefined();
+    expect(midcutAt(151, 30)).toBe(76);
+    expect(midcutAt(240, 30)).toBe(120);
+  });
+  it('기본 fps·minSec 는 FPS(30)·5초', () => {
+    expect(midcutAt(150)).toBeUndefined();
+    expect(midcutAt(200)).toBe(100);
+    expect(midcutAt(120, 30, 3)).toBe(60);
+  });
+});
+
+describe('planSpareClips — 클립 씬 중간 컷의 여분 클립 배정(순수, 2026-09-18)', () => {
+  const sc = (index: number, durationInFrames: number, hasClip: boolean) => ({ index, durationInFrames, hasClip });
+  it('클립 씬·컷 후보만, 뒷 절반의 MIN_CLIP_COVERAGE(0.5) 이상 덮는 첫 여분을 준다', () => {
+    // 씬 240프레임 → 컷 120 → 뒷 절반 4초 → 2초 이상이면 된다. 1.5초짜리는 못 쓴다.
+    const got = planSpareClips([sc(0, 240, false), sc(1, 240, true), sc(2, 120, true)], [{ path: 'a', seconds: 1.5 }, { path: 'b', seconds: 2 }]);
+    expect(got.get(1)).toEqual({ path: 'b', seconds: 2 });
+    expect(got.has(0)).toBe(false); // 스틸 씬 — 여분 클립은 클립 씬만
+    expect(got.has(2)).toBe(false); // 4초 씬 — 컷 후보 아님
+  });
+  it('여분 하나는 한 편에서 한 번만', () => {
+    const got = planSpareClips([sc(1, 240, true), sc(2, 240, true), sc(3, 240, true)], [{ path: 'a', seconds: 9 }, { path: 'b', seconds: 9 }]);
+    expect(got.get(1)?.path).toBe('a');
+    expect(got.get(2)?.path).toBe('b');
+    expect(got.has(3)).toBe(false);
+  });
+  it('여분이 없거나 길이 0 이면 빈 맵', () => {
+    expect(planSpareClips([sc(1, 240, true)], []).size).toBe(0);
+    expect(planSpareClips([sc(1, 240, true)], [{ path: 'a', seconds: 0 }]).size).toBe(0);
   });
 });
