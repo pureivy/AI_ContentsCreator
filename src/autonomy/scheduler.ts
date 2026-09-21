@@ -1088,6 +1088,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     // 실검색 각도 검증(2026-09-21) — 후보 수종별 자동완성(네이버+유튜브)을 이 라운드에서 한 번씩만 조회한다.
     // 공개 엔드포인트라 키·비용 없음. 실패는 빈 배열(fail-open → 판정 unknown → 통과).
     const angleSuggest = new Map<string, string[]>();
+    const angleHints = new Map<string, string[]>(); // 수종 → 연관어(다음 라운드 노트용 — rejects 는 4건만 실리므로 따로 모은다)
     if (CONFIG.angleCheck) {
       const spNames = [...new Set(gated.map(({ cand }) => findSpeciesLoose(`${cand.title} ${cand.keyword ?? ''}`)?.name).filter((n): n is string => !!n))];
       await Promise.all(spNames.map(async (sp) => {
@@ -1336,8 +1337,16 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
         const sp = findSpeciesLoose(`${title} ${keyword ?? ''}`)?.name;
         const v = sp ? angleVerdict(sp, title, angleSuggest.get(sp) ?? []) : null;
         if (v && v.status === 'unverified') {
-          console.log(`[auto-cycle] 아이디어 후순위(실검색 각도 밖) — "${title}" (${sp} 연관어: ${v.angles.join(' · ')})`);
-          rejects.push(`"${title}"=실검색 각도 밖(${angleNote(sp!, v.angles)})`);
+          // 마지막 라운드가 아니면 기각 — 노트의 연관어를 받은 다음 라운드가 그 안에서 다시 내게 한다(첫 실측 2026-09-21:
+          // 1라운드 끝에 후순위 채택이 돌아 연관어 노트가 한 번도 안 쓰인 채 '마가목 명소' 각도가 나갔다).
+          // 마지막 라운드만 후순위(rank 4) — 좌초보다는 생산.
+          rejects.push(`"${title}"=실검색 각도 밖(${sp})`);
+          angleHints.set(sp!, v.angles);
+          if (attempt < IDEA_ROUNDS - 1) {
+            console.log(`[auto-cycle] 아이디어 기각(실검색 각도 밖) — "${title}" (${sp} 연관어: ${v.angles.join(' · ')})`);
+            continue;
+          }
+          console.log(`[auto-cycle] 아이디어 후순위(실검색 각도 밖·기아 방지) — "${title}" (${sp} 연관어: ${v.angles.join(' · ')})`);
           if (gate.level === 'none') {
             demoted.push({ idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) }, rank: 4, line: demand.line, rotation: `실검색 각도 밖 — ${sp}` });
           }
@@ -1387,7 +1396,11 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       return { ...similarFallback, ...(target ? { target } : {}), ...(directive ? { directive: true } : {}) };
     }
     // 문구가 '전부 기각'이면 후순위 항목이 섞였을 때 노트가 사실과 어긋난다(후순위는 기각이 아니다).
-    rejectNote = `[직전 제안 ${cands.length}건 전부 채택 불가(기각 또는 후순위) — 사유: ${rejects.slice(0, 4).join(' · ') || '전부 무효'}] 이 사유들과 소재를 전부 피해, 완전히 다른 소재·키워드로 5건을 다시 제안하라.`;
+    // 실검색 연관어(2026-09-21) — 각도 밖으로 기각된 수종은 '피하라'가 아니라 '이 각도로 다시 내라'다. 일반 기각 사유와
+    // 문장이 반대라 따로 붙인다(rejects 4건 슬라이스에 밀리지 않게).
+    const angleLines = [...angleHints.entries()].map(([sp, angles]) => angleNote(sp, angles)).filter(Boolean);
+    rejectNote = `[직전 제안 ${cands.length}건 전부 채택 불가(기각 또는 후순위) — 사유: ${rejects.slice(0, 4).join(' · ') || '전부 무효'}] 이 사유들과 소재를 전부 피해, 완전히 다른 소재·키워드로 5건을 다시 제안하라.`
+      + (angleLines.length ? `\n[실검색 연관어 — 아래 수종은 피하지 말고 이 각도로 다시 내라(사람들이 실제 치는 검색어다)]\n${angleLines.map((l) => `· ${l}`).join('\n')}` : '');
   }
   return null; // 두 라운드(최대 10후보) 전부 기각 — 이번 주기 스킵(다음 주기에 새 각도로 재시도)
 }
