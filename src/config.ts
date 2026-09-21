@@ -132,6 +132,8 @@ export interface Config {
   readonly moduleRotation: boolean;
   /** 금지 목록을 만들 최근 편 수(1~20). 하루 2~3편이라 5편 ≈ 이틀. */
   readonly moduleRecentPieces: number;
+  /** 실검색 각도 검증(2026-09-21) — 후보 수종의 네이버·유튜브 자동완성을 즉석 조회해 제목의 각도가 그 안에 있는지 본다. 없으면 후순위+연관어 노트. off 면 조회·판정 없음. */
+  readonly angleCheck: boolean;
   /** 숏폼 읽을 거리(2026-09-18) — 인스타 축 성적에 '이야기·유래' 축, 숏폼 기획 장르 분기(이야기형), 재배 편 훅에
    *  이야기 사실 소재. off 면 셋 다 종전 동작(이야기 편은 '기타'로 분류되고 하우투 지침을 받는다). */
   readonly shortsLore: boolean;
@@ -425,6 +427,8 @@ export const CONFIG: Config = {
   // 숏폼 읽을 거리(2026-09-18) — 숏폼은 블로그에서 파생되므로 주제는 따라오는데, 축 블록이 이야기 주제를 '기타(최하위)'로
   // 밀어내고 기획 지침이 하우투 전용이라 이야기 편이 방법 꼴로 눌리던 것.
   shortsLore: envBool('SHORTS_LORE', true),
+  // 실검색 각도 검증(2026-09-21) — 호두나무 실사고: 수종 검색량(9,700)만 보고 '흙부터'라는 각도를 두뇌가 지어냈다.
+  angleCheck: envBool('ANGLE_CHECK', true),
   // 시기·수치 원문 대조(2026-08-27 권고 1) — 활엽수 실사고: 블로그 "근거 확실치 않다" ↔ 쇼츠 "지금이 적기" + 오버레이 "8월".
   timingParity: envBool('TIMING_PARITY', true),
   blogStyleLint: envBool('BLOG_STYLE_LINT', true),

@@ -19,7 +19,9 @@ import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, br
 import { titleTypeGuidanceBlock } from '../analytics/titleTiming';
 import { shortsTopicSignalBlock, speciesShortsPerf } from '../analytics/shortsPerf';
 import { topicVerdictBlock, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
-import { trendSignalBlock } from '../analytics/trendSignal';
+import { trendSignalBlock, ytAutocomplete } from '../analytics/trendSignal';
+import { naverAutocomplete } from '../grounding/naver_autocomplete';
+import { angleVerdict, angleNote } from '../analytics/angleCheck';
 import { assessCandidatesDemand, demandSignalBlock, demandRejectBlock, demandRejectFor, rememberDemandReject, rememberDemandRows, demandVerdict, formatDemandLine, normKw, readDemandSnap, familyVolume, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
 import { searchAdEnabled } from '../grounding/naver_searchad';
 import { ytNicheBlock } from '../analytics/ytNiche';
@@ -722,7 +724,7 @@ export function orderCandidates<T>(
 
 /**
  * 후순위 보관함에서 채택할 후보 하나(순수) — rank 오름차순, 같은 rank 는 먼저 담긴 순서를 유지한다
- * (rank 0=비수기, 1=기아 방지 밸브, 2=최근 축, 3=최근 수종. '지금 덜 찾는 소재'가 '아예 검색량이 없는
+ * (rank 0=비수기, 1=기아 방지 밸브, 2=최근 축, 3=최근 수종, 4=실검색 각도 밖(2026-09-21). '지금 덜 찾는 소재'가 '아예 검색량이 없는
  * 소재'보다 항상 낫고, 둘 다 로테이션이 겹치는 후보보다 낫다).
  * 엄격 부등호 비교라서 안정성이 구현에 박혀 있다 — sort 로 바꾸면 동률 순서 보장을 잃는다.
  */
@@ -1082,7 +1084,17 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     // rank 0=비수기, 1=기아 방지 밸브(아래), 2=최근 축, 3=최근 수종.
     // line 은 그 후보의 판정 문구 — 채택 로그가 '조회 없음'으로 새지 않게 함께 들고 간다(기억 경로는
     // 조회 대상에서 빠져 demandRows 에 없다). rotation 은 rank 2·3 의 사유(로그 문구용).
-    const demoted: Array<{ idea: ContentIdea; rank: 0 | 1 | 2 | 3; line: string; rotation?: string }> = [];
+    const demoted: Array<{ idea: ContentIdea; rank: 0 | 1 | 2 | 3 | 4; line: string; rotation?: string }> = [];
+    // 실검색 각도 검증(2026-09-21) — 후보 수종별 자동완성(네이버+유튜브)을 이 라운드에서 한 번씩만 조회한다.
+    // 공개 엔드포인트라 키·비용 없음. 실패는 빈 배열(fail-open → 판정 unknown → 통과).
+    const angleSuggest = new Map<string, string[]>();
+    if (CONFIG.angleCheck) {
+      const spNames = [...new Set(gated.map(({ cand }) => findSpeciesLoose(`${cand.title} ${cand.keyword ?? ''}`)?.name).filter((n): n is string => !!n))];
+      await Promise.all(spNames.map(async (sp) => {
+        const [nv, yt] = await Promise.all([naverAutocomplete(sp, signal).catch(() => []), ytAutocomplete(sp, signal).catch(() => [])]);
+        angleSuggest.set(sp, [...nv, ...yt]);
+      }));
+    }
     for (const { cand, gate } of gated) {
       const { title, keyword } = cand;
       if (recentAuto.includes(title)) {
@@ -1317,6 +1329,22 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
         }
         continue;
       }
+      // 실검색 각도 검증(2026-09-21) — 수종 검색량은 통과했어도 제목의 '내용'이 사람들이 실제 치는 연관어 밖이면
+      // 후순위(rank 4, 기각 아님). 호두나무 실사고: 연관어는 묘목·재배·가지치기·열매 안 열려요인데 '흙부터'로 나갔다.
+      // 노트에 연관어를 실어 다음 라운드가 그 안에서 각도를 잡게 한다. 연관어가 없는 수종은 판정 없이 통과.
+      if (CONFIG.angleCheck) {
+        const sp = findSpeciesLoose(`${title} ${keyword ?? ''}`)?.name;
+        const v = sp ? angleVerdict(sp, title, angleSuggest.get(sp) ?? []) : null;
+        if (v && v.status === 'unverified') {
+          console.log(`[auto-cycle] 아이디어 후순위(실검색 각도 밖) — "${title}" (${sp} 연관어: ${v.angles.join(' · ')})`);
+          rejects.push(`"${title}"=실검색 각도 밖(${angleNote(sp!, v.angles)})`);
+          if (gate.level === 'none') {
+            demoted.push({ idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) }, rank: 4, line: demand.line, rotation: `실검색 각도 밖 — ${sp}` });
+          }
+          continue;
+        }
+        if (v && v.status === 'ok') console.log(`[auto-cycle] 실검색 각도 일치 — "${title}" (${sp}: ${v.matched.join(' · ')})`);
+      }
       // 판정 시점의 line 을 그대로 넘긴다 — 인스타 목표에서 기억 기각을 통과한 후보는 demandRows 에 없어
       // 여기서 다시 계산하면 '조회 없음 채택'으로 새는 비대칭이 있었다(리뷰 2026-09-08).
       logDemandAdopt(title, keyword, demand.line || undefined);
@@ -1332,7 +1360,9 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     const adoption = pickRoundAdoption(demoted, !!similarFallback);
     if (adoption?.source === 'demoted') {
       const { idea, rank, line, rotation } = adoption.pick;
-      console.log(rotation
+      console.log(rank === 4
+        ? `[auto-cycle] 실검색 각도 밖 후보 채택(대안 없음) — "${idea.title}" (${rotation})`
+        : rotation
         ? `[auto-cycle] 로테이션 후보 채택(기아 방지) — "${idea.title}" (${rotation} · 안 겹치는 후보 없음)`
         : rank === 1
           ? `[auto-cycle] 수요 미달 후보 채택(기아 방지) — "${idea.title}"`

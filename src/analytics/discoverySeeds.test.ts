@@ -37,6 +37,10 @@ describe('looksLikeGardenQuery — 자동완성 잡음 제거', () => {
     for (const q of ['매실나무 묘목', '체리나무키우기', '대추나무 가지치기 시기', '호두나무 심는 간격']) expect(looksLikeGardenQuery(q)).toBe(true);
     for (const q of ['대추나무 사랑걸렸네', '대추나무집', '대추나무한의원', '체리나무 원목']) expect(looksLikeGardenQuery(q)).toBe(false);
   });
+  it('증상형 검색(안 자라는·죽어가는·잎이 노랗게)도 원예 의도다(2026-09-21)', () => {
+    for (const q of ['호두나무 안 자라는 이유', '소나무 죽어가요', '블루베리 잎이 노랗게', '감나무 시들음']) expect(looksLikeGardenQuery(q)).toBe(true);
+    for (const q of ['호두나무캠핑장', '무궁화호 예매']) expect(looksLikeGardenQuery(q)).toBe(false);
+  });
 });
 
 describe('pickThemeSeeds — 안 다룬 축부터, 상한 축 제외, 날짜 회전', () => {

@@ -33,7 +33,7 @@ export function parseYtSuggest(json: unknown): string[] {
 }
 
 /** 유튜브 자동완성 조회 — 키 불필요 공개 엔드포인트(oe=utf8 필수 — 미지정 시 EUC-KR 모지바케 실측). */
-async function ytAutocomplete(seed: string, signal?: AbortSignal): Promise<string[]> {
+export async function ytAutocomplete(seed: string, signal?: AbortSignal): Promise<string[]> {
   const u = `https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&hl=ko&gl=kr&oe=utf8&q=${encodeURIComponent(seed)}`;
   const r = await fetchTimeout(u, {}, signal);
   if (!r.ok) throw new Error(`yt suggest HTTP ${r.status}`);
