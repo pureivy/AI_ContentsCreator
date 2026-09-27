@@ -399,23 +399,27 @@ export function midcutAt(durationInFrames: number, fps = FPS, minSec = 5): numbe
  * stageAndBuildProps 가 씬을 병렬(Promise.all)로 처리하므로 배정은 그 전에 여기서 한 번에 정한다 — await 사이에서
  * 같은 여분을 두 씬이 집는 경쟁을 없애고, 같은 입력엔 같은 배정이 나온다.
  */
-export function planSpareClips(
+export function planSpareClips<T extends { path: string; seconds: number; startSec?: number }>(
   scenes: ReadonlyArray<{ index: number; durationInFrames: number; hasClip: boolean }>,
-  spares: ReadonlyArray<{ path: string; seconds: number }>,
+  spares: readonly T[],
   fps = FPS,
-): Map<number, { path: string; seconds: number }> {
-  const out = new Map<number, { path: string; seconds: number }>();
+): Map<number, T> {
+  const out = new Map<number, T>();
   const pool = spares.filter((v) => v.path && v.seconds > 0);
   if (!pool.length) return out;
+  // 같은 파일의 다른 구간은 서로 다른 여분이다(2026-09-28) — 한 편에 보관소 영상이 하나만 넘어오므로
+  // '안 쓰인 다른 파일'이라는 종전 공급원은 항상 비어 있었다(89편 내내 여분 0건). 그래서 중복 판정을
+  // 경로가 아니라 (경로, 구간)으로 본다. 렌더러는 이미 구워진 spare_NN.mp4 를 넘기므로 경로가 이미 다르다.
+  const keyOf = (v: T): string => `${v.path}@${v.startSec ?? 0}`;
   const used = new Set<string>();
   for (const sc of [...scenes].sort((a, b) => a.index - b.index)) {
     if (!sc.hasClip) continue;
     const cut = midcutAt(sc.durationInFrames, fps);
     if (cut === undefined) continue;
     const need = (MIN_CLIP_COVERAGE * (sc.durationInFrames - cut)) / fps;
-    const pick = pool.find((v) => !used.has(v.path) && v.seconds >= need);
+    const pick = pool.find((v) => !used.has(keyOf(v)) && v.seconds >= need);
     if (!pick) continue;
-    used.add(pick.path);
+    used.add(keyOf(pick));
     out.set(sc.index, pick);
   }
   return out;

@@ -39,7 +39,8 @@ import { SOURCES_FILE, type UsageSource } from '../content/mediaUsage';
 import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom, normalizeLatinName } from '../content/species';
 import { isContainerTopic } from '../analytics/igAxis';
 import { shortsGenreOf, genreGuide, genreSceneGuide, loreHookGuide, loreHookSource, type ShortsGenre } from '../content/shortsGenre';
-import { planAssetScenes, styleRefs, planVideoSegments, orderAssetsByAssignment, type VideoSegment } from '../content/userAssets';
+import { planAssetScenes, styleRefs, planVideoSegments, orderAssetsByAssignment, SEGMENT_TAIL_SEC, type VideoSegment } from '../content/userAssets';
+import { spareWindows, windowSceneSec, usableStart } from '../content/mediaRotation';
 import { describeUserMedia, mediaPlanGuide, assignMediaToScenes, speciesRefFrame, clipMidFrame } from './shortsMediaBrief';
 import { generateTitleArt } from './shortsTitleArt';
 import { uploadShortsToYoutube } from '../tools/youtubeUpload';
@@ -1515,8 +1516,7 @@ async function finishShortsRun(a: {
 }
 
 
-/** 구간을 뗄 때 씬 길이보다 더 떼는 여유(초) — 씬 길이 추정이 실제보다 짧을 때 감속을 막는다. */
-const SEGMENT_TAIL_SEC = 1.2;
+
 
 /**
  * 중간 컷 여분 클립 굽기(fix round 1) — 배정에 안 쓰인 보관소 영상 중 실제로 쓰일 것만 clips/spare_NN.mp4 로 정규화한다.
@@ -1531,10 +1531,24 @@ async function normalizeSpareClips(a: {
   videoPlan: ReadonlyArray<VideoSegment | null>; clips: ReadonlyArray<string | null>; sceneEst: readonly number[];
   dir: string; say: (m: string) => void; signal?: AbortSignal;
 }): Promise<string[]> {
-  const used = new Set(a.videoPlan.flatMap((v) => (v ? [v.path] : [])));
-  const pool = a.userVideoFiles
-    .filter((f) => !used.has(f) && (a.videoDurations.get(f) ?? 0) > 0)
-    .map((f) => ({ path: f, seconds: a.videoDurations.get(f)! }));
+  const assigned = new Map<string, number>();
+  for (const v of a.videoPlan) if (v) assigned.set(v.path, v.startSec);
+  const pool: Array<{ path: string; seconds: number; startSec: number }> = [];
+  for (const f of a.userVideoFiles) {
+    const dur = a.videoDurations.get(f) ?? 0;
+    if (dur <= 0) continue;
+    // 종전 공급원 — 배정에 안 쓰인 파일. 컴포저에 여러 개 첨부했을 때만 존재한다.
+    if (!assigned.has(f)) { pool.push({ path: f, seconds: dur, startSec: 0 }); continue; }
+    // 배정된 파일의 남는 구간(2026-09-28) — 보관소 경로는 영상이 하나뿐이고 그 하나는 반드시 쓰이므로
+    // 종전 공급원이 항상 비어 있었다(89편 내내 여분 0건). 같은 파일의 다른 구간이 유일한 여분이다.
+    if (!CONFIG.shortsMediaRotate) continue;
+    // 같은 파일에서 오는 여분은 **한 편에 하나만**. 클립 씬이 여럿이면(I2V 클립 포함) 같은 파일이 여러 자리를
+    // 먹어 09-04("한 영상을 여러 씬에 쪼개 넣지 않는다")·09-08("한 편에 영상 1개") 경계를 넓힌다.
+    // 중간 컷은 있으면 좋은 것이고, 목적(여분 0건 → 1건)은 하나로 달성된다.
+    for (const w of spareWindows(f, dur, assigned.get(f)!, {
+      sceneSec: windowSceneSec(CONFIG.shortsMaxDurationSec, CONFIG.shortsScenes), tailSec: SEGMENT_TAIL_SEC,
+    }).slice(0, 1)) pool.push({ path: w.file, seconds: w.seconds, startSec: w.startSec });
+  }
   if (!pool.length) return [];
   const est = a.sceneEst.map((sec, i) => ({ index: i, durationInFrames: sceneFrames(sec), hasClip: !!a.clips[i] }));
   const spareAt = planSpareClips(est, pool);
@@ -1546,8 +1560,8 @@ async function normalizeSpareClips(a: {
     const seconds = (frames - cut) / FPS + SEGMENT_TAIL_SEC;
     const dst = path.join(a.dir, 'clips', `spare_${String(i + 1).padStart(2, '0')}.mp4`);
     try {
-      out.push(await cutVideoSegment(spare.path, dst, 0, seconds, a.signal));
-      rows.push({ scene: i + 1, file: spare.path, startSec: 0, seconds: Math.min(spare.seconds, seconds), role: 'spare' });
+      out.push(await cutVideoSegment(spare.path, dst, spare.startSec, seconds, a.signal));
+      rows.push({ scene: i + 1, file: spare.path, startSec: spare.startSec, seconds: Math.min(spare.seconds, seconds), role: 'spare' });
     } catch { a.say(`여분 실촬영 굽기 실패 — 씬 ${i + 1} 중간 컷은 원래 클립 그대로`); }
   }
   // 사용 현황 기록(fix round 2) — applyUserSegments 가 쓴 clips/sources.json 에 같은 모양으로 덧붙인다. 여분도 보관소 영상이
@@ -1562,7 +1576,7 @@ async function normalizeSpareClips(a: {
       fs.writeFileSync(f, JSON.stringify([...prev, ...rows], null, 2), 'utf-8');
     } catch { /* 무해 */ }
   }
-  if (out.length) a.say(`여분 실촬영 ${out.length}건 정규화 — 5초 넘는 실촬영 씬 ${rows.map((r) => r.scene).join(',')} 뒷 절반 교체 후보`);
+  if (out.length) a.say(`여분 실촬영 ${out.length}건 정규화 — 5초 넘는 실촬영 씬 ${rows.map((r) => `${r.scene}(${r.startSec}초)`).join(',')} 뒷 절반 교체 후보`);
   return out;
 }
 
@@ -1657,6 +1671,9 @@ export async function runShortsJob(
     userAssets?: string[];
     /** 사용자 첨부 실촬영 영상(2026-09-04) — 길이가 맞는 본문 씬에 클립으로 얹는다. */
     userVideos?: string[];
+    /** 영상별 구간 시작점(초, 2026-09-28 로테이션) — 파일 경로 → startSec. 없으면 앞에서 뗀다(종전).
+     *  보관소에서 고를 때 파일과 함께 정해 온다. 그래야 비전이 그 구간만 읽고 작가가 실제로 나갈 화면을 보고 쓴다. */
+    userVideoStarts?: Record<string, number>;
     /** 형제편 승계 원본(2026-09-03) — 이 쇼츠 id 의 대본·이미지·클립·캘리를 물려받고 낭독만 새로 뜬다.
      *  기획·디자인·이미지 생성·씬 QA·I2V 를 통째로 건너뛴다(편당 비용의 대부분이 이미지다). */
     inheritFrom?: string;
@@ -1698,11 +1715,24 @@ export async function runShortsJob(
         // 승계분에 실촬영이 없을 때만(원편이 굽기에 실패했을 때) 이 편에서 다시 얹는다.
         const inhWithVideo = inhClips.some((c) => c && path.basename(c).startsWith('user_'))
           ? inhClips
-          : await applyUserSegments(inhClips, planVideoSegments(
-              await Promise.all((opts.userVideos ?? []).map(async (f) => ({ path: f, seconds: await probeDuration(f).catch(() => 0) })))
-                .then((vs) => vs.filter((v) => v.seconds > 0)),
-              inheritedPlan.scenes.map((sc) => Math.max(3.5, (sc.narration ?? '').length / SHORTS_TTS_CPS + 0.6)),
-            ), dir, say, opts.signal);
+          : await (async () => {
+              const inhEst = inheritedPlan.scenes.map((sc) => Math.max(3.5, (sc.narration ?? '').length / SHORTS_TTS_CPS + 0.6));
+              const inhVideoScenes = inhEst.filter((_, i) => i > 0 || CONFIG.shortsHookFootage);
+              const vs = await Promise.all((opts.userVideos ?? []).map(async (f) => {
+                const seconds = await probeDuration(f).catch(() => 0);
+                const s0 = Number(opts.userVideoStarts?.[f]);
+                const want = Number.isFinite(s0) && s0 > 0 && s0 < seconds ? s0 : 0;
+                return { path: f, seconds, startSec: usableStart(seconds, want, inhVideoScenes) };
+              }));
+              // 본문 경로와 **같은 opts** 를 넘긴다(2026-09-28 리뷰). 가드(usableStart)는 훅 씬을 포함해 "쓸 수 있다"고
+              // 판정하는데 배치가 hookFirst·mustUse 없이 돌면 훅에 못 놓고 본문은 첫 실패에서 break 해 **실촬영이 0개**가 된다
+              // (실측: 보관소 79개 길이 × 실제 252편 씬 = 26,460 케이스 중 2,760건(10.4%) 누락. 종전 startSec=0 에선 0건).
+              // 2026-09-09 "실촬영 누락은 감속보다 나쁘다"를 어기는 자리였다.
+              return applyUserSegments(inhClips, planVideoSegments(
+                vs.filter((v) => v.seconds > 0), inhEst, new Map(),
+                { mustUse: true, hookFirst: CONFIG.shortsHookFootage },
+              ), dir, say, opts.signal);
+            })();
         await finishShortsRun({
           id, store, dir, short, plan: inheritedPlan, images: inhImages, clips: inhWithVideo,
           opts, say, checkAbort,
@@ -1720,10 +1750,20 @@ export async function runShortsJob(
     const userVideoFiles = (opts.userVideos ?? []).filter((f) => { try { return fs.existsSync(f); } catch { return false; } });
     const videoDurations = new Map<string, number>();
     for (const f of userVideoFiles) videoDurations.set(f, await probeDuration(f).catch(() => 0));
+    // 구간 시작점(2026-09-28) — 실제 길이를 넘는 값은 버린다(보관소 메타 길이가 틀렸거나 파일이 교체된 경우).
+    const startOf = (f: string): number => {
+      const s0 = Number(opts.userVideoStarts?.[f]);
+      const dur = videoDurations.get(f) ?? 0;
+      return Number.isFinite(s0) && s0 > 0 && s0 < dur ? s0 : 0;
+    };
+    // 비전은 '실제로 나갈 구간'만 읽는다 — 파일 전체를 읽히면 작가가 화면에 없는 장면을 전제로 쓴다(2026-09-04 교훈).
     const briefs = await describeUserMedia([
       ...userAssetFiles.map((f) => ({ file: f, kind: 'image' as const })),
       ...userVideoFiles.filter((f) => (videoDurations.get(f) ?? 0) > 0)
-        .map((f) => ({ file: f, kind: 'video' as const, seconds: videoDurations.get(f)! })),
+        .map((f) => ({
+          file: f, kind: 'video' as const, seconds: videoDurations.get(f)!,
+          ...(startOf(f) > 0 ? { startSec: startOf(f), windowSec: windowSceneSec(CONFIG.shortsMaxDurationSec, CONFIG.shortsScenes) + SEGMENT_TAIL_SEC } : {}),
+        })),
     ], { topic: short.topic, ...(short.keyword ? { keyword: short.keyword } : {}), ...(opts.signal ? { signal: opts.signal } : {}) });
     if (briefs.length) say(`실촬영 소재 ${briefs.length}건 확인 — ${briefs.map((b) => b.what.slice(0, 28)).join(' · ')}`);
     else if (userAssetFiles.length || userVideoFiles.length) say('실촬영 소재를 읽지 못했다 — 길이 기준으로만 배정한다');
@@ -1887,10 +1927,18 @@ export async function runShortsJob(
     const sceneEst = plan.scenes.map((sc) => Math.max(3.5, (sc.narration ?? '').length / SHORTS_TTS_CPS + 0.6));
     const videoPrefer = new Map<string, number>();
     for (const f of userVideoFiles) { const at = mediaAt.get(f); if (at !== undefined) videoPrefer.set(f, at); }
+    // 구간이 이 편의 어떤 씬도 못 채우면 앞으로 되돌린다 — mustUse 가 강제 배치하면 0.5배 밑 감속이 걸린다(usableStart).
+    const videoScenes = sceneEst.filter((_, i) => i > 0 || CONFIG.shortsHookFootage);
+    const startHere = (f: string): number => usableStart(videoDurations.get(f) ?? 0, startOf(f), videoScenes);
+    for (const f of userVideoFiles) {
+      if (startOf(f) > 0 && startHere(f) === 0) say(`실촬영 구간 되돌림 — ${startOf(f)}초 뒤가 이 편의 씬을 못 채운다(앞에서 뗀다)`);
+    }
     const videoPlan = planVideoSegments(
-      userVideoFiles.map((f) => ({ path: f, seconds: videoDurations.get(f) ?? 0 })).filter((v) => v.seconds > 0),
+      userVideoFiles.map((f) => ({ path: f, seconds: videoDurations.get(f) ?? 0, startSec: startHere(f) })).filter((v) => v.seconds > 0),
       sceneEst, videoPrefer, { mustUse: true, hookFirst: CONFIG.shortsHookFootage }, // 보관소 영상 1개는 반드시 들어간다(사용자 확정 2026-09-08)
     );
+    const rotated = videoPlan.filter((v) => v && v.startSec > 0).length;
+    if (rotated) say(`실촬영 구간 로테이션 — ${rotated}씬이 영상 앞이 아닌 구간(${videoPlan.filter(Boolean).map((v) => `${v!.startSec}초`).join(' · ')})`);
     // 사진은 영상이 훅을 하나도 못 채웠을 때만 훅을 예약한다 — 영상이 우선이다.
     const assetPlan = planAssetScenes(ordered.assets, plan.scenes.length, ordered.order, {
       hookFirst: CONFIG.shortsHookFootage && !videoPlan.some(Boolean),

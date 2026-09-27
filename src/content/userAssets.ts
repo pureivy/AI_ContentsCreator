@@ -83,6 +83,15 @@ export function styleRefs(assets: readonly string[], plan: AssetPlan, max = 4): 
  *  실촬영 영상이 '고장 난 슬로모션'으로 보인다(렌더러는 클립 한 번으로 씬을 덮으려 속도를 낮춘다). */
 export const MIN_CLIP_COVERAGE = 0.5;
 
+/**
+ * 구간을 뗄 때 씬 길이보다 더 떼는 여유(초).
+ *
+ * 배정에 쓴 씬 길이는 낭독 실측 전의 자수 추정이라 실제보다 짧을 수 있다. 클립이 씬보다 짧으면 렌더러가
+ * 감속으로 늘려 슬로모션이 된다. 남는 꼬리는 그냥 잘린다. 구간 로테이션(mediaRotation)의 간격도 이 값을
+ * 더해서 잡는다 — 잘라 쓰는 폭과 구간 간격이 어긋나면 구간이 서로 겹친다.
+ */
+export const SEGMENT_TAIL_SEC = 1.2;
+
 /** 씬 하나에 넣을 영상 구간 — 원본 경로와 그 안에서 잘라 쓸 위치. */
 export interface VideoSegment {
   readonly path: string;
@@ -112,7 +121,7 @@ export interface VideoSegment {
  * 어딘가를 골라야 할 근거가 없다.
  */
 export function planVideoSegments(
-  videos: ReadonlyArray<{ path: string; seconds: number }>,
+  videos: ReadonlyArray<{ path: string; seconds: number; startSec?: number }>,
   sceneSeconds: readonly number[],
   prefer: ReadonlyMap<string, number> = new Map(),
   opts: { mustUse?: boolean; hookFirst?: boolean } = {},
@@ -123,9 +132,13 @@ export function planVideoSegments(
   if (!pool.length) return out;
   const claimed = new Set<number>();
   const used = new Set<string>();
-  const fits = (v: { seconds: number }, sec: number): boolean => v.seconds >= sec * MIN_CLIP_COVERAGE;
-  const place = (v: { path: string; seconds: number }, i: number): void => {
-    out[i] = { path: v.path, startSec: 0, seconds: Math.min(sceneSeconds[i]!, v.seconds) };
+  // 쓸 수 있는 길이는 파일 전체가 아니라 startSec 뒤로 남은 길이다(2026-09-28 로테이션).
+  // 전체 길이로 판정하면 9.6초 파일을 6초부터 잘라 3.6초로 7초 씬을 덮으며 0.5배 감속이 걸린다 —
+  // MIN_CLIP_COVERAGE 가 막으려던 '고장 난 슬로모션'이 바로 그것이다. 보관소 길이 분포에 9~13초가 여럿이라 실제로 터진다.
+  const avail = (v: { seconds: number; startSec?: number }): number => v.seconds - Math.max(0, v.startSec ?? 0);
+  const fits = (v: { seconds: number; startSec?: number }, sec: number): boolean => avail(v) >= sec * MIN_CLIP_COVERAGE;
+  const place = (v: { path: string; seconds: number; startSec?: number }, i: number): void => {
+    out[i] = { path: v.path, startSec: Math.max(0, v.startSec ?? 0), seconds: Math.min(sceneSeconds[i]!, avail(v)) };
     claimed.add(i);
     used.add(v.path);
   };
@@ -135,13 +148,13 @@ export function planVideoSegments(
   //     아무것도 안 맞으면 훅은 비우고 아래 종전 규칙(훅 제외)을 그대로 탄다.
   if (opts.hookFirst) {
     const hookSec = sceneSeconds[0]!;
-    let hookPick: { path: string; seconds: number } | undefined;
+    let hookPick: { path: string; seconds: number; startSec?: number } | undefined;
     for (const [file, at] of prefer) {
       if (at !== 0) continue;
       const v = pool.find((x) => x.path === file);
       if (v && fits(v, hookSec)) { hookPick = v; break; }
     }
-    if (!hookPick) hookPick = pool.filter((v) => fits(v, hookSec)).sort((a, b) => b.seconds - a.seconds)[0];
+    if (!hookPick) hookPick = pool.filter((v) => fits(v, hookSec)).sort((a, b) => avail(b) - avail(a))[0];
     if (hookPick) place(hookPick, 0);
   }
 
@@ -165,18 +178,18 @@ export function planVideoSegments(
       .filter((x) => x.i > 0 && !claimed.has(x.i))
       .sort((a, b) => b.sec - a.sec);
     for (const { i, sec } of order) {
-      const avail = rest.filter((v) => !used.has(v.path) && fits(v, sec));
-      if (!avail.length) break;
+      const usable = rest.filter((v) => !used.has(v.path) && fits(v, sec));
+      if (!usable.length) break;
       // 씬을 통째로 덮는 것 중 가장 짧은 것(여유가 큰 영상은 더 긴 씬에 남긴다),
       // 없으면 하한을 넘는 것 중 가장 긴 것(감속 폭이 가장 작다).
-      const exact = avail.filter((v) => v.seconds >= sec).sort((a, b) => a.seconds - b.seconds)[0];
-      place(exact ?? avail.sort((a, b) => b.seconds - a.seconds)[0]!, i);
+      const exact = usable.filter((v) => avail(v) >= sec).sort((a, b) => avail(a) - avail(b))[0];
+      place(exact ?? usable.sort((a, b) => avail(b) - avail(a))[0]!, i);
     }
   }
   // 2) 반드시 하나는 쓴다(사용자 확정 2026-09-08 "실제 촬영 영상은 한 개를 반드시 사용해") — 배정도 길이도
   //    못 잡았으면 훅을 뺀 씬 중 가장 짧은 씬에 가장 긴 영상을 놓는다. 감속보다 누락이 나쁘다.
   if (opts.mustUse && !used.size) {
-    const v = [...pool].sort((a, b) => b.seconds - a.seconds)[0];
+    const v = [...pool].sort((a, b) => avail(b) - avail(a))[0];
     const cand = sceneSeconds.map((sec, i) => ({ i, sec })).filter((x) => x.i > 0 && !claimed.has(x.i)).sort((a, b) => a.sec - b.sec)[0];
     if (v && cand) place(v, cand.i);
   }

@@ -58,9 +58,24 @@ describe('planVideoSegments — 영상 하나는 씬 하나', () => {
     expect(p.filter(Boolean)).toHaveLength(2);
     expect(new Set(p.filter(Boolean).map((x) => x!.path)).size).toBe(2); // 같은 영상을 두 번 안 쓴다
   });
-  it('구간은 언제나 영상 앞에서 뗀다', () => {
+  it('구간 지정이 없으면 영상 앞에서 뗀다', () => {
     const p = planVideoSegments([{ path: 'v.mp4', seconds: 30 }], [6, 6, 6]);
     expect(p.filter(Boolean)[0]!.startSec).toBe(0);
+  });
+  it('startSec 을 주면 그 자리에서 뗀다 — 편마다 다른 구간을 쓰는 로테이션(2026-09-28)', () => {
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 30, startSec: 8.2 }], [6, 6, 6]);
+    const seg = p.filter(Boolean)[0]!;
+    expect(seg.startSec).toBe(8.2);
+    expect(seg.seconds).toBe(6);
+  });
+  it('길이 판정은 파일 전체가 아니라 startSec 뒤로 남은 길이로 본다 — 안 그러면 0.5배 감속이 걸린다', () => {
+    // 9.6초 파일을 6초부터 쓰면 남는 건 3.6초. 7초 씬의 절반(3.5)은 넘으니 쓸 수 있지만 8초 씬(하한 4)은 못 쓴다.
+    expect(planVideoSegments([{ path: 'v.mp4', seconds: 9.6, startSec: 6 }], [6, 7]).filter(Boolean)).toHaveLength(1);
+    expect(planVideoSegments([{ path: 'v.mp4', seconds: 9.6, startSec: 6 }], [6, 8]).filter(Boolean)).toHaveLength(0);
+  });
+  it('남은 길이보다 길게 쓰지 않는다', () => {
+    const p = planVideoSegments([{ path: 'v.mp4', seconds: 9.6, startSec: 6 }], [6, 7]);
+    expect(p.filter(Boolean)[0]!.seconds).toBeCloseTo(3.6, 5);
   });
   it('원본보다 길게 쓰지 않는다', () => {
     const p = planVideoSegments([{ path: 'v.mp4', seconds: 4 }], [6, 6]);

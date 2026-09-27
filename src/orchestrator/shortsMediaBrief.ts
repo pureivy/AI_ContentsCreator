@@ -32,9 +32,20 @@ export interface MediaBrief {
   readonly use?: string;
 }
 
-/** 영상에서 대표 프레임 몇 장을 뽑는다 — 앞·중간·뒤. 한 장만 보면 정지 장면인지 아닌지도 모른다. */
-async function videoFrames(file: string, seconds: number, outDir: string, signal?: AbortSignal): Promise<string[]> {
-  const at = [0.15, 0.5, 0.85].map((r) => Math.max(0.1, seconds * r));
+/**
+ * 영상에서 대표 프레임 몇 장을 뽑는다 — 앞·중간·뒤. 한 장만 보면 정지 장면인지 아닌지도 모른다.
+ *
+ * 구간(startSec·windowSec)이 오면 **그 구간 안에서만** 뽑는다(2026-09-28 로테이션). 파일 전체를 읽히면
+ * 38초 영상의 뒷부분을 쓰면서 설명은 앞부분 화면을 가리키게 되고, 그 설명을 보고 쓴 대본이 화면과 겉돈다
+ * (2026-09-04 에 순서를 뒤집은 이유가 그거다). 구간이 없으면 종전대로 파일 전체를 본다.
+ */
+async function videoFrames(
+  file: string, seconds: number, outDir: string, signal?: AbortSignal,
+  window: { startSec?: number; windowSec?: number } = {},
+): Promise<string[]> {
+  const from = Math.max(0, Math.min(window.startSec ?? 0, Math.max(0, seconds - 0.2)));
+  const span = Math.max(0.2, Math.min(window.windowSec ?? seconds - from, seconds - from));
+  const at = [0.15, 0.5, 0.85].map((r) => Math.max(0.1, from + span * r));
   const out: string[] = [];
   for (let k = 0; k < at.length; k++) {
     const dst = path.join(outDir, `f${k}.jpg`);
@@ -95,7 +106,7 @@ export async function clipMidFrame(
  * 흐려진다. 소재는 보통 한두 건이라 건별 호출이 비싸지 않고, 어긋날 여지가 없는 쪽이 낫다.
  */
 export async function describeUserMedia(
-  items: ReadonlyArray<{ file: string; kind: 'image' | 'video'; seconds?: number }>,
+  items: ReadonlyArray<{ file: string; kind: 'image' | 'video'; seconds?: number; startSec?: number; windowSec?: number }>,
   opts: { topic: string; keyword?: string; signal?: AbortSignal } = { topic: '' },
 ): Promise<MediaBrief[]> {
   if (!items.length || !visionCapable()) return [];
@@ -107,7 +118,10 @@ export async function describeUserMedia(
       let paths: string[] = [it.file];
       if (it.kind === 'video') {
         tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'brief-'));
-        paths = await videoFrames(it.file, Math.max(1, it.seconds ?? 1), tmp, opts.signal);
+        paths = await videoFrames(it.file, Math.max(1, it.seconds ?? 1), tmp, opts.signal, {
+          ...(it.startSec !== undefined ? { startSec: it.startSec } : {}),
+          ...(it.windowSec !== undefined ? { windowSec: it.windowSec } : {}),
+        });
         if (!paths.length) continue;
       }
       const j = await microJSON<{ what?: unknown; use?: unknown }>(

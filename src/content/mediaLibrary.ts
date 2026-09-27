@@ -93,7 +93,7 @@ export function removeMedia(id: string): boolean {
  * 안 쓰느니만 못하다. 그다음이 태그 일치, 마지막이 범용(수종 없는) 소재다.
  * 수종이 '다른' 소재는 아예 안 쓴다.
  */
-export function matchMedia(
+function scoreMedia(
   items: readonly MediaItem[],
   opts: {
     species?: string; text?: string; kind?: MediaKind; limit?: number;
@@ -107,7 +107,7 @@ export function matchMedia(
      */
     canon?: (name: string) => string;
   },
-): MediaItem[] {
+): Array<{ m: MediaItem; s: number; g: number }> {
   const text = String(opts.text ?? '');
   const canon = (n: string): string => {
     const t = String(n ?? '').trim();
@@ -115,7 +115,7 @@ export function matchMedia(
     try { return String(opts.canon?.(t) ?? t).trim() || t; } catch { return t; }
   };
   const want = canon(opts.species ?? '');
-  const scored: Array<{ m: MediaItem; s: number }> = [];
+  const scored: Array<{ m: MediaItem; s: number; g: number }> = [];
   for (const m of items) {
     if (opts.kind && m.kind !== opts.kind) continue;
     const label = String(m.species ?? '').trim();
@@ -138,12 +138,34 @@ export function matchMedia(
     const primary = !!want && named === want;
     const hit = named ? (primary || inText(label) || inText(named)) : false;
     if (label && !hit) continue; // 다른 수종·무관한 수종은 배제
-    let s = 0;
-    if (hit) s += primary ? 150 : 100;
+    // 등급(g)과 가점(태그)을 나눠 센다(2026-09-28). 등급은 '수종이 맞느냐'이고 태그는 '더 어울리느냐'다.
+    // 로테이션이 등급으로 후보를 자르므로 섞으면 안 된다 — 태그 하나(+10) 때문에 같은 수종의 다른 영상이
+    // 후보에서 통째로 빠져 로테이션이 한 파일에 묶였다(실측: 자두나무 160 vs 150).
+    const g = hit ? (primary ? 150 : 100) : 1; // 딱지 없는 범용 소재 — 없는 것보다 낫다(딱지가 있고 안 맞으면 위에서 이미 걸렀다)
+    let s = g;
     for (const t of m.tags ?? []) if (t && text.includes(t)) s += 10;
-    if (!label) s += 1; // 범용 소재 — 없는 것보다 낫다
-    if (s > 0) scored.push({ m, s });
+    if (s > 0) scored.push({ m, s, g });
   }
   scored.sort((a, b) => b.s - a.s || b.m.createdTs.localeCompare(a.m.createdTs));
-  return scored.slice(0, opts.limit ?? 8).map((x) => x.m);
+  return scored.slice(0, opts.limit ?? 8);
+}
+
+/**
+ * 점수를 붙여 고른다(2026-09-28) — 로테이션이 '같은 등급 안에서만' 돌려야 하기 때문에 점수가 필요하다.
+ *
+ * `matchMedia` 는 점수를 버리고 목록만 돌려준다. 그 목록의 첫 항목만 집으면(종전 `limit: 1`) 같은 수종은
+ * 영원히 같은 파일이 뽑힌다 — 그래서 후보를 다 받아 등급별로 나눌 자리가 필요해졌다.
+ * 등급을 섞으면 안 되는 이유는 배점 자체에 있다: 수종 일치 150 > 제목에 적힌 다른 수종 100 > 범용 1.
+ * 안 쓴 범용 소재가 다 쓴 수종 일치 소재를 이기면 수국 편에 회양목이 들어간다.
+ */
+export function matchMediaScored(
+  items: readonly MediaItem[], opts: Parameters<typeof scoreMedia>[1],
+): Array<{ item: MediaItem; score: number; grade: number }> {
+  return scoreMedia(items, opts).map((x) => ({ item: x.m, score: x.s, grade: x.g }));
+}
+
+export function matchMedia(
+  items: readonly MediaItem[], opts: Parameters<typeof scoreMedia>[1],
+): MediaItem[] {
+  return scoreMedia(items, opts).map((x) => x.m);
 }

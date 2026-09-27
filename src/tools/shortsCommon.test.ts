@@ -678,6 +678,18 @@ describe('planSpareClips — 클립 씬 중간 컷의 여분 클립 배정(순�
     expect(got.get(2)?.path).toBe('b');
     expect(got.has(3)).toBe(false);
   });
+  it('같은 파일의 다른 구간은 서로 다른 여분이다 — 한 편에 영상 하나만 넘어오므로 이게 유일한 여분 공급원(2026-09-28)', () => {
+    const got = planSpareClips([sc(1, 240, true), sc(2, 240, true)],
+      [{ path: 'a', seconds: 9, startSec: 16.4 }, { path: 'a', seconds: 9, startSec: 24.6 }]);
+    expect(got.get(1)).toEqual({ path: 'a', seconds: 9, startSec: 16.4 });
+    expect(got.get(2)).toEqual({ path: 'a', seconds: 9, startSec: 24.6 });
+  });
+  it('같은 파일·같은 구간은 여전히 한 번만', () => {
+    const got = planSpareClips([sc(1, 240, true), sc(2, 240, true)],
+      [{ path: 'a', seconds: 9, startSec: 16.4 }]);
+    expect(got.get(1)?.startSec).toBe(16.4);
+    expect(got.has(2)).toBe(false);
+  });
   it('여분이 없거나 길이 0 이면 빈 맵', () => {
     expect(planSpareClips([sc(1, 240, true)], []).size).toBe(0);
     expect(planSpareClips([sc(1, 240, true)], [{ path: 'a', seconds: 0 }]).size).toBe(0);

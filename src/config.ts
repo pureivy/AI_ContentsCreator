@@ -255,6 +255,10 @@ export interface Config {
   /** 5초 넘는 씬 중간 컷(2026-09-18) — 스틸은 다른 크롭(켄번즈 궤도·1.25배)으로 점프컷, 클립 씬은 여분 실촬영이 있을 때만
    *  뒷 절반을 다른 클립으로 교체. 씬 수·낭독·자막 불변. SHORTS_MIDCUT=false 킬스위치(cutAtFrame 자체를 안 넣는다). */
   readonly shortsMidcut: boolean;
+  /** 보관소 영상 로테이션(2026-09-28) — 같은 수종에 영상이 여럿이면 번갈아 쓰고, 하나뿐이면 편마다 그 영상의 다른 구간을 쓴다.
+   *  종전엔 점수·최신 순 첫 파일의 앞 구간이 늘 나갔다(실측: 감나무 3개 중 1개가 6편, 89편 전부 startSec 0).
+   *  여분 중간 컷도 같은 파일의 남는 구간에서 나온다. SHORTS_MEDIA_ROTATE=false 킬스위치(종전 동작). */
+  readonly shortsMediaRotate: boolean;
   /** macOS say 폴백 음색. */
   readonly voiceTtsVoice: string;
   readonly voiceSttModel: string;
@@ -499,6 +503,7 @@ export const CONFIG: Config = {
   shortsCaptions: envBool('SHORTS_CAPTIONS', true),
   shortsTeaser: envBool('SHORTS_TEASER', true),
   shortsMidcut: envBool('SHORTS_MIDCUT', true),
+  shortsMediaRotate: envBool('SHORTS_MEDIA_ROTATE', true),
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
   voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),
 

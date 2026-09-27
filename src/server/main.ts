@@ -54,7 +54,9 @@ import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
 import { shortsStore, shortsQaPublishBlockReason } from '../content/shorts';
-import { addMedia, listMedia, updateMedia, removeMedia, mediaDir, matchMedia } from '../content/mediaLibrary';
+import { addMedia, listMedia, updateMedia, removeMedia, mediaDir, matchMedia, matchMediaScored } from '../content/mediaLibrary';
+import { pickRotatedVideo, readMediaHistory, windowSceneSec } from '../content/mediaRotation';
+import { SEGMENT_TAIL_SEC } from '../content/userAssets';
 import { buildMediaUsage, SOURCES_FILE, type UsageSource } from '../content/mediaUsage';
 import { probeDuration } from '../tools/shortsCommon';
 import { findSpecies, findSpeciesLoose, loadSpecies, appendSpecies, appendSpeciesAlias } from '../content/species';
@@ -1279,7 +1281,7 @@ function assignShortsWriter(platform?: ShortsPlatform): { writer: string; writer
 // userAssets/userVideos/inheritFrom 이 타입 검사를 비껴가 통과하고 있었다(2026-09-04 발견).
 function launchShortsRun(shortsId: string, topic: string, opts: {
   sourceBody?: string; sceneCount?: number; sourceFlagged?: string[]; loreFacts?: string[];
-  userAssets?: string[]; userVideos?: string[]; inheritFrom?: string;
+  userAssets?: string[]; userVideos?: string[]; userVideoStarts?: Record<string, number>; inheritFrom?: string;
 } = {}): string {
   const id = runId();
   const bus = createBus(id);
@@ -1335,11 +1337,12 @@ async function shortsCreateHandler(c: Context): Promise<Response> {
   const sim = noveltyViolation(topic, b.keyword, b.force);
   if (sim) return c.json(noveltyError(sim), 409);
   // 제작실 직접 생성도 보관소를 본다 — 블로그 글이 없을 뿐, 주제는 있다.
-  const media = mediaForTopic({ text: `${b.keyword ?? ''} ${topic}` });
   const targets: ShortsPlatform[] = b.platform ? [b.platform] : [...SHORTS_PLATFORMS];
   const made: Shorts[] = []; let primaryId = ''; let firstRun = '';
   for (const platform of targets) {
     const short = shortsStore().create({ topic, keyword: b.keyword, platform, ...assignShortsWriter(platform) });
+    // 채널마다 다시 고른다(2026-09-28) — 한 번 고른 것을 두 채널이 나눠 쓰면 형제 오프셋이 먹지 않는다.
+    const media = mediaForTopic({ text: `${b.keyword ?? ''} ${topic}`, platform });
     // 승계는 SHORTS_SIBLING_INHERIT=1 일 때만(2026-09-08 기본 끔) — 끄면 채널마다 독립 런, 대본부터 따로.
     // 독립 런의 두 번째 채널은 앞 채널 '대본'만 기다렸다 출발한다(형제 대본 회피 지침 주입).
     const inheritFrom = CONFIG.shortsSiblingInherit ? primaryId : ''; // 루프 변수 고정 — 클로저가 나중 값을 보면 안 된다
@@ -1484,8 +1487,8 @@ function learnMediaLabel(label: string | undefined): void {
 }
 
 function mediaForTopic(opts: {
-  brand?: string; text: string; attached?: string[]; attachedVideos?: string[];
-}): { userAssets?: string[]; userVideos?: string[] } {
+  brand?: string; text: string; attached?: string[]; attachedVideos?: string[]; platform?: ShortsPlatform;
+}): { userAssets?: string[]; userVideos?: string[]; userVideoStarts?: Record<string, number> } {
   try {
     const text = opts.text.trim();
     // 느슨한 찾기(2026-09-08) — '공작단풍전정' 제목이 '공작단풍나무' 딱지 소재를 못 잡던 사고. 소재 매칭에서는
@@ -1496,13 +1499,35 @@ function mediaForTopic(opts: {
     // 보관소 사진은 쓰지 않는다 — 배경 0장, 참조도 0장(사용자 확정 2026-09-08 "보관소 이미지는 참고용으로도 쓰지 말고 무시").
     // 종 참조는 보관소 영상에서 뽑는 프레임 한 장으로 충분하다. 컴포저에 직접 첨부한 사진은 사용자가 고른 것이라 종전대로 배경에 쓴다.
     const imgs = opts.attached?.length ? opts.attached : [];
+    const withImgs = (rest: { userVideos?: string[]; userVideoStarts?: Record<string, number> }) =>
+      ({ ...(imgs.length ? { userAssets: imgs } : {}), ...rest });
+    // 컴포저에 직접 첨부한 영상은 사용자가 고른 것이라 개수·구간을 건드리지 않는다.
+    if (opts.attachedVideos?.length) return withImgs({ userVideos: opts.attachedVideos });
+
     // 보관소 영상은 한 편에 하나만(사용자 확정 2026-09-08 "숏폼 만들 때 영상 보관소 영상 한 개만 사용해").
-    // 종전 4개는 영상마다 한 씬씩 먹어 같은 밭 화면이 여러 번 나왔다. 고르는 순서는 matchMedia 그대로 —
-    // 수종 일치 > 태그 일치 > 최근 올린 것. 컴포저에 직접 첨부한 영상은 사용자가 고른 것이라 제한하지 않는다.
-    const vids = opts.attachedVideos?.length ? opts.attachedVideos
-      : matchMedia(lib, { species: sp, text, kind: 'video', limit: 1, canon }).map((m) => m.file);
-    if (!opts.attachedVideos?.length && vids.length) console.log('[숏폼]', `보관소 영상 ${vids.length}개 사용 — ${sp ?? '범용'} (사진은 무시)`);
-    return { ...(imgs.length ? { userAssets: imgs } : {}), ...(vids.length ? { userVideos: vids } : {}) };
+    // 종전 4개는 영상마다 한 씬씩 먹어 같은 밭 화면이 여러 번 나왔다.
+    if (!CONFIG.shortsMediaRotate) {
+      const vids = matchMedia(lib, { species: sp, text, kind: 'video', limit: 1, canon }).map((m) => m.file);
+      if (vids.length) console.log('[숏폼]', `보관소 영상 ${vids.length}개 사용 — ${sp ?? '범용'} (사진은 무시)`);
+      return withImgs(vids.length ? { userVideos: vids } : {});
+    }
+    // 로테이션(2026-09-28) — 개수는 그대로 하나고, '어느 파일의 어느 구간'을 이력으로 고른다.
+    // 길이를 모르는 항목은 버리지 않고 씬 하나치로 본다(구간 하나 = 종전 동작) — 사전 밖 소재를 배제하지 않는
+    // matchMedia 의 태도와 같다. 실제 길이는 런에서 ffprobe 로 다시 잰다.
+    const sceneSec = windowSceneSec(CONFIG.shortsMaxDurationSec, CONFIG.shortsScenes);
+    const cands = matchMediaScored(lib, { species: sp, text, kind: 'video', limit: 24, canon })
+      .map(({ item, grade }) => ({ file: item.file, seconds: Number(item.seconds) > 0 ? Number(item.seconds) : sceneSec, grade }));
+    const pick = pickRotatedVideo(cands, readMediaHistory(path.join(CONFIG.dataDir, 'shorts')), {
+      sceneSec, tailSec: SEGMENT_TAIL_SEC,
+      // 형제편을 한 칸 밀어 가른다 — 둘째 채널 런은 첫째의 sources.json 을 아직 못 봐서(경합) 이력만으론 같은 것을 집는다.
+      offset: opts.platform === 'instagram' ? 1 : 0,
+    });
+    if (!pick) return withImgs({});
+    console.log('[숏폼]', `보관소 영상 1개 사용 — ${sp ?? '범용'} · ${path.basename(pick.file)} @${pick.startSec}초 (후보 ${cands.length}개, 사진은 무시)`);
+    return withImgs({
+      userVideos: [pick.file],
+      ...(pick.startSec > 0 ? { userVideoStarts: { [pick.file]: pick.startSec } } : {}),
+    });
   } catch { return {}; } // fail-open — 소재 조회 실패로 생성이 멈추면 안 된다
 }
 
@@ -1531,7 +1556,7 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, p
       // 보관소의 값어치가 여기 있다 — 한 번 올려 두면 그 수종 콘텐츠마다 자동으로 화면에 들어간다.
       ...mediaForTopic({
         brand: piece.brand, text: `${piece.keyword ?? ''} ${piece.title}`,
-        attached: piece.assets, attachedVideos: piece.videoAssets,
+        attached: piece.assets, attachedVideos: piece.videoAssets, ...(platform ? { platform } : {}),
       }),
       // 승계는 원편이 ready 일 때만 — 실패했으면 물려받을 자산이 없으니 자체 생성으로 떨어진다.
       ...(inherit && inheritFromPrimary ? { inheritFrom: inheritFromPrimary } : {}),
@@ -4675,7 +4700,7 @@ if (!process.env.VITEST) {
           const piece = s.sourcePieceId ? pieceStore().get(s.sourcePieceId) : undefined;
           const media = mediaForTopic({
             brand: s.brand, text: `${s.keyword ?? ''} ${s.topic}`,
-            attached: piece?.assets, attachedVideos: piece?.videoAssets,
+            attached: piece?.assets, attachedVideos: piece?.videoAssets, ...(s.platform ? { platform: s.platform } : {}),
           });
           launchShortsRun(sid, s.topic, sourceBody
             ? { sourceBody, sourceFlagged: sourceFlaggedClaims(piece?.runId), loreFacts: loreFactsFor(piece?.runId), ...media }
