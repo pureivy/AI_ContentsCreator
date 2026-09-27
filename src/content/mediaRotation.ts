@@ -75,16 +75,26 @@ export interface RotationUse {
 }
 
 /**
- * 후보 한 건 — `grade` 는 **수종 판정 등급만** 담는다(주 수종 150 > 제목에 적힌 다른 수종 100 > 범용 1).
+ * 후보 한 건. 두 값을 **따로** 받는다 — 순서가 있기 때문이다.
  *
- * 태그 가점(+10)은 여기 섞지 마라. 등급으로 후보를 자르기 때문에, 태그 하나가 같은 수종의 다른 영상을
- * 후보에서 통째로 빼 버린다(실측 2026-09-28: 자두나무 두 영상이 160 vs 150 이 되어 로테이션이 한 파일에
- * 묶였다). 태그 선호는 입력 순서가 이미 담고 있다 — 동률일 때 앞 후보가 먼저 나간다.
+ * `grade` 는 수종 판정 등급(주 수종 150 > 제목에 적힌 다른 수종 100 > 범용 1). `bonus` 는 태그 적합 가점
+ * (제목에 걸린 태그 하나당 +10).
+ *
+ * 왜 한 점수로 합치면 안 되는가. 합치면 **등급이 뒤집힌다** — 등급 100(제목에 적힌 둘째 수종)에 태그가 6개
+ * 붙으면 160 이 되어 등급 150(주 수종)을 이기고, 그 편에 다른 수종 화면이 들어간다. 자두나무 실측(160 vs 150)이
+ * 그 조짐이었다.
+ *
+ * 왜 그래도 `bonus` 로 후보를 좁히는가. 태그 어휘가 **화면에 무엇이 찍혔는지**를 말한다(결실주·개화주·묘목·꽃 —
+ * '가을'은 79개 전부에 붙어 아무것도 안 가른다). "묘목은 뿌리부터 확인해야 합니다" 편에 결실주(열매 달린 성목)
+ * 화면이 들어가면 내레이션은 묘목을 말하는데 화면은 다 큰 나무다. 다양성으로 살 수 있는 값이 아니다.
+ * 실측(실제 제목 252개): 같은 등급 후보가 둘 이상인 61편 중 태그가 후보를 가르는 건 11편이고, 그중 6편은
+ * 좁힌 뒤에도 둘 이상 남아 로테이션이 그대로 돈다. 로테이션을 잃는 건 5편(8%)뿐이다.
  */
 export interface RotationCandidate {
   readonly file: string;
   readonly seconds: number;
   readonly grade: number;
+  readonly bonus?: number;
 }
 
 export interface RotationPick {
@@ -97,8 +107,9 @@ export interface RotationPick {
  *
  * 순서가 둘이다. **파일이 먼저고 구간이 나중이다** — 사용자가 말한 것도 그 순서다("여러 보관소
  * 영상을 다양하게", 그다음 "영상이 하나밖에 없을 때도").
- *  1) 최상위 등급만 남긴다. 등급을 넘어 섞지 않는다 — 다 쓴 수종 일치 영상을 한 번 더 쓰는
- *     것이 안 쓴 범용 영상을 쓰는 것보다 낫다(수국 편에 회양목이 들어가면 안 쓰느니만 못하다).
+ *  1) 최상위 등급만 남기고, 그 안에서 태그 적합이 가장 높은 것만 남긴다. 등급을 넘어 섞지 않는다 —
+ *     다 쓴 수종 일치 영상을 한 번 더 쓰는 것이 안 쓴 범용 영상을 쓰는 것보다 낫다(수국 편에 회양목이
+ *     들어가면 안 쓰느니만 못하다). 태그도 같은 이유다(묘목 편에 결실주 화면).
  *  2) 파일을 마지막으로 쓴 시점 오름차순으로 줄 세운다(한 번도 안 쓴 것이 맨 앞).
  *  3 각 파일의 구간도 같은 자로 줄 세운다.
  *  4) 파일을 한 바퀴씩 돌며 낸다(파일1 첫 구간, 파일2 첫 구간, 파일1 둘째 구간, …) — 그래야
@@ -115,8 +126,14 @@ export function pickRotatedVideo(
 ): RotationPick | undefined {
   const live = candidates.filter((c) => c.file && c.seconds > 0);
   if (!live.length) return undefined;
+  // 1) 수종 등급으로 먼저 자른다 — 등급을 넘어 섞지 않는다.
   const top = Math.max(...live.map((c) => c.grade));
-  const tier = live.filter((c) => c.grade === top);
+  const byGrade = live.filter((c) => c.grade === top);
+  // 2) 그 안에서 태그 적합이 가장 높은 것들만 남긴다 — 화면 내용이 다양성보다 먼저다(위 주석).
+  //    아무 태그도 안 걸리면(전원 0) 전원이 남아 종전처럼 다 로테이션한다.
+  const bonusOf = (c: RotationCandidate): number => (Number.isFinite(c.bonus) ? Math.max(0, c.bonus!) : 0);
+  const topBonus = Math.max(...byGrade.map(bonusOf));
+  const tier = byGrade.filter((c) => bonusOf(c) === topBonus);
 
   // (파일, 구간) → 마지막으로 나간 시점. 없으면 -Infinity(한 번도 안 쓴 것이 가장 오래된 것).
   const lastAt = (file: string, startSec: number): number => {
@@ -139,7 +156,7 @@ export function pickRotatedVideo(
   }).filter((r) => r.wins.length);
   if (!rows.length) return undefined;
 
-  rows.sort((a, b) => a.newest - b.newest || a.i - b.i); // 동률이면 입력 순서(총점·최신 순 — 태그 선호가 여기서 산다)
+  rows.sort((a, b) => a.newest - b.newest || a.i - b.i); // 동률이면 입력 순서(총점·최신 순)
   const ranked: RotationPick[] = [];
   const deepest = Math.max(...rows.map((r) => r.wins.length));
   for (let k = 0; k < deepest; k++) {

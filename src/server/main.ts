@@ -1516,7 +1516,8 @@ function mediaForTopic(opts: {
     // matchMedia 의 태도와 같다. 실제 길이는 런에서 ffprobe 로 다시 잰다.
     const sceneSec = windowSceneSec(CONFIG.shortsMaxDurationSec, CONFIG.shortsScenes);
     const cands = matchMediaScored(lib, { species: sp, text, kind: 'video', limit: 24, canon })
-      .map(({ item, grade }) => ({ file: item.file, seconds: Number(item.seconds) > 0 ? Number(item.seconds) : sceneSec, grade }));
+      // grade(수종 등급)와 bonus(태그 적합)를 따로 넘긴다 — 합치면 등급이 뒤집힌다(RotationCandidate 주석).
+      .map(({ item, score, grade }) => ({ file: item.file, seconds: Number(item.seconds) > 0 ? Number(item.seconds) : sceneSec, grade, bonus: score - grade }));
     const pick = pickRotatedVideo(cands, readMediaHistory(path.join(CONFIG.dataDir, 'shorts')), {
       sceneSec, tailSec: SEGMENT_TAIL_SEC,
       // 형제편을 한 칸 밀어 가른다 — 둘째 채널 런은 첫째의 sources.json 을 아직 못 봐서(경합) 이력만으론 같은 것을 집는다.

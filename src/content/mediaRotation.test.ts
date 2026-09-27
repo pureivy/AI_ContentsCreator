@@ -74,11 +74,34 @@ describe('pickRotatedVideo — 안 쓴 파일·안 쓴 구간을 먼저(순수)'
     expect(got?.file).toBe('a'); // 다 쓴 a 를 재사용하더라도 점수 1 짜리로 내려가지 않는다
   });
 
-  it('태그 가점은 등급이 아니다 — 같은 수종의 다른 영상이 후보에서 빠지면 안 된다(자두나무 실측 2026-09-28)', () => {
-    // 등급이 같으면(둘 다 수종 일치 150) 둘 다 후보다. 태그 선호는 입력 순서로만 반영된다.
-    const got = pickRotatedVideo([cand('tagged', 19), cand('plain', 9)], [use('tagged', 0, 100)],
-      { sceneSec: SC, tailSec: TAIL });
-    expect(got?.file).toBe('plain');
+  it('태그가 안 걸리면 같은 등급 전원이 후보다 — 실제 제목 61편 중 50편이 이 경우', () => {
+    const got = pickRotatedVideo([cand('a', 19), cand('b', 9)], [use('a', 0, 100)], { sceneSec: SC, tailSec: TAIL });
+    expect(got?.file).toBe('b');
+  });
+
+  it('태그 가점이 등급을 이기면 안 된다 — 등급 100+태그 6개(160)가 등급 150 을 이기면 다른 수종이 들어간다', () => {
+    const got = pickRotatedVideo(
+      [{ file: 'other-species', seconds: 19, grade: 100, bonus: 60 }, { file: 'primary', seconds: 19, grade: 150, bonus: 0 }],
+      [], { sceneSec: SC, tailSec: TAIL });
+    expect(got?.file).toBe('primary');
+  });
+
+  it('등급 안에서는 태그 적합이 다양성을 이긴다 — 묘목 편에 결실주 화면이 들어가면 안 된다', () => {
+    // 태그가 걸린 쪽을 막 썼어도 그것을 쓴다(내용이 먼저다).
+    const got = pickRotatedVideo(
+      [{ file: 'sapling', seconds: 9, grade: 150, bonus: 10 }, { file: 'fruiting', seconds: 9, grade: 150, bonus: 0 }],
+      [use('sapling', 0, 999)], { sceneSec: SC, tailSec: TAIL });
+    expect(got?.file).toBe('sapling');
+  });
+
+  it('태그로 좁힌 뒤에도 둘 이상 남으면 그 안에서 로테이션한다 — 대추나무 실측(후보 3 → 2)', () => {
+    const three = [
+      { file: 'x', seconds: 19, grade: 150, bonus: 10 },
+      { file: 'y', seconds: 19, grade: 150, bonus: 10 },
+      { file: 'z', seconds: 19, grade: 150, bonus: 0 },
+    ];
+    expect(pickRotatedVideo(three, [use('x', 0, 100)], { sceneSec: SC, tailSec: TAIL })?.file).toBe('y');
+    expect(pickRotatedVideo(three, [use('y', 0, 100)], { sceneSec: SC, tailSec: TAIL })?.file).toBe('x');
   });
 
   it('형제편 오프셋 — 파일이 둘이면 다른 파일, 하나면 다른 구간', () => {
