@@ -3,10 +3,10 @@ title: SERP
 slug: serp
 type: entity
 aliases: []
-sources: ["maintain:auto","run:c456764a73e4","run:e3bc4c0237fd","run:09728aa829d0","run:9de6e35562e2","run:e75405119079","run:6c2dd3d59234","run:31b9f4f362ac"]
+sources: ["maintain:auto","run:c456764a73e4","run:e3bc4c0237fd","run:09728aa829d0","run:9de6e35562e2","run:e75405119079","run:6c2dd3d59234","run:31b9f4f362ac","run:b00636ec84fd"]
 contributors: ["한지원","리서치·SEO팀"]
-updated: 2026-09-23
-summary: 검색 결과 페이지(Search Engine Results Page). 네이버 블로그 SERP의 상위 5건을 분석하여 경쟁도를 실측한다. 게이트 기준: 발행 후 경과 일수(1년 이상 여부)와 내용 직접일치도(오염 40
+updated: 2026-09-29
+summary: 검색 엔진 결과 페이지(Search Engine Results Page)를 의미하며, 본 리서치에서는 네이버 블로그 SERP 상위 결과의 문서 성질과 갱신 현황을 분석 대상으로 삼았다. 문장형·감성형 시드 '여름에서
 ---
 [[검색 엔진]]에서 사용자의 검색 쿼리에 대해 반환하는 결과 페이지를 의미하며, 유기 검색 결과뿐만 아니라 광고, 스니펫, 나렐 정보 등 다양한 요소를 포함한다. [[검색 엔진 최적화]]에서 SERP 순위는 웹사이트의 가시성과 트래픽에 직접적인 영향을 미치는 주요 지표다.
 
@@ -54,3 +54,9 @@ Search Engine Results Page. 네이버 블로그 검색 상위 5건 분석을 통
 ## 관련
 - [[확정 게이트]]
 - [[리서치·SEO팀]]
+
+## 갱신 (2026-09-29)
+검색 엔진 결과 페이지(Search Engine Results Page)를 의미하며, 본 리서치에서는 네이버 블로그 SERP 상위 결과의 문서 성질과 갱신 현황을 분석 대상으로 삼았다. 문장형·감성형 시드 '여름에서 가을로의 정원'을 네이버 블로그 SERP에 조회했을 때 오로라 여행기·금잔화·서평 등 완전 무관 문서로만 반환되는 '매칭 실패형 오염'이 확인됐다.
+
+## 관련
+- [[시드 오염]]
