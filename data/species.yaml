@@ -332,7 +332,7 @@ species:
 
   서양측백:
     latin: Thuja occidentalis
-    aliases: [에메랄드그린]
+    aliases: [에메랄드그린, 에머랄드그린]  # auto(사람 검토 전): 에머랄드그린
     type: 침엽 교목
     leaf: 비늘 모양 잎, 잔가지가 납작한 부채처럼 갈라지며 수평으로 퍼짐
     form: 좁은 원뿔형, 생울타리·차폐목으로 흔히 심음
@@ -535,7 +535,7 @@ species:
 
   설중매나무:
     latin: Prunus mume
-    aliases: [설중매]  # auto(사람 검토 전): 설중매
+    aliases: [설중매, 매실나무]  # auto(사람 검토 전): 설중매, 매실나무
     type: "낙엽 소교목"
     leaf: "어긋나기, 넓은 달걀형 잎으로 끝이 뾰족하고 가장자리에 잔톱니가 있다"
     form: "작은키나무로 가지가 옆으로 퍼지며 자란다"
@@ -601,5 +601,123 @@ species:
     form: "넓게 퍼지는 개장형 수형"
     flower: "4~5월, 진한 분홍색(적색에 가까움) 포엽 4장이 십자형으로 배열, 중심에 작은 두상 꽃차례"
     fruit: "가을(9~10월)에 붉은색 타원형 핵과가 여러 개 모여 달림"
+    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
+    verified: false
+
+  단풍나무:
+    latin: Acer palmatum
+    type: "낙엽 활엽 소교목"
+    leaf: "마주나기, 손바닥 모양으로 5~7갈래로 갈라진 단풍잎, 가을에 붉은색·주황색·노란색으로 물듦"
+    form: "둥근 수관을 이루는 여러 줄기 소교목"
+    flower: "4~5월, 자주색을 띤 작은 꽃이 산방꽃차례로 핌"
+    fruit: "9~10월, 날개 달린 시과(프로펠러 모양) 열매"
+    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
+    verified: false
+
+  동백나무:
+    latin: Camellia japonica
+    type: "상록 활엽 소교목~교목"
+    leaf: "어긋나기, 두껍고 광택 있는 타원형 잎, 가장자리에 잔톱니"
+    form: "둥근 수형, 밀생한 짙은 녹색 수관"
+    flower: "겨울~이른 봄 개화, 붉은색 또는 흰색·분홍색 큰 꽃, 꽃잎이 통째로 통꽃처럼 떨어짐"
+    fruit: "가을에 익는 둥근 갈색 삭과, 속에 씨앗"
+    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
+    verified: false
+
+  황매화:
+    latin: Kerria japonica
+    type: "낙엽 관목"
+    leaf: "어긋나기, 긴 타원형, 끝이 뾰족하고 가장자리에 겹톱니"
+    form: "가지가 총상으로 늘어지는 총생 관목형, 녹색 가지"
+    flower: "4~5월, 노란색 겹꽃 또는 홑꽃, 가지 끝에 하나씩 달림"
+    fruit: "6~8월, 갈색 수과가 여러 개 모여 달림"
+    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
+    verified: false
+
+  이팝나무:
+    latin: Chionanthus retusus
+    type: "낙엽 활엽 교목"
+    leaf: "마주나기, 타원형~난형 잎, 가장자리 밋밋함"
+    form: "둥근 수관을 이루는 중대형 낙엽교목"
+    flower: "5월경 흰색 꽃, 가늘게 갈라진 4장의 꽃잎이 원추꽃차례로 가지 전체를 덮어 눈이 쌓인 듯한 모습"
+    fruit: "가을에 타원형의 검푸른 핵과가 포도송이처럼 달림"
+    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
+    verified: false
+
+  마가목:
+    latin: Sorbus commixta
+    type: "낙엽 활엽 소교목~교목"
+    leaf: "어긋나기, 기수우상복엽으로 작은잎 9~13장이 마주 붙은 깃꼴 모양, 작은잎은 피침형에 가장자리 톱니"
+    form: "곧은 줄기에 가지가 사방으로 퍼지는 둥근 수형"
+    flower: "5~6월, 흰색 꽃이 가지 끝에 산방꽃차례로 모여 핌"
+    fruit: "9~10월, 둥근 열매가 붉은색으로 익어 포도송이처럼 뭉쳐 달림"
+    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
+    verified: false
+
+  산딸나무:
+    latin: Cornus kousa
+    type: "낙엽 활엽 소교목"
+    leaf: "마주나기, 달걀형 잎으로 끝이 뾰족하고 측맥이 잎 가장자리를 따라 둥글게 휘어짐"
+    form: "층을 이루며 옆으로 퍼지는 수형"
+    flower: "5~6월, 흰색 4장의 큰 포엽이 십자 모양으로 꽃차례를 감싸며 중앙에 작은 꽃들이 모여 핌"
+    fruit: "9~10월, 붉은색 둥근 열매가 딸기처럼 오돌토돌한 표면을 이루며 모여 달림"
+    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
+    verified: false
+
+  아로니아:
+    latin: Aronia melanocarpa
+    leaf: "타원형 홑잎에 잔톱니, 여러 대가 모여나는 관목 수형, 가을엔 잎이 붉게 물듦"
+    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
+    verified: false
+
+  구지뽕나무:
+    latin: Maclura tricuspidata
+    type: "낙엽 활엽 소교목"
+    leaf: "어긋나기, 달걀형 또는 타원형 잎, 가장자리 밋밋함"
+    form: "가지에 굵은 가시가 있고 줄기가 다소 구부러진 소교목형"
+    flower: "5~6월, 연한 황록색, 둥근 두상꽃차례"
+    fruit: "9~10월, 붉은색으로 익는 둥근 오디 모양 열매, 표면에 돌기가 있음"
+    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
+    verified: false
+
+  오디나무:
+    latin: Morus alba
+    type: "낙엽 교목"
+    leaf: "어긋나기이며 잎은 넓은 달걀 모양으로 가장자리에 톱니가 있고 어린 가지 잎은 갈라지는 형태를 보인다"
+    form: "둥근 수관을 이루는 낙엽 활엽 교목"
+    flower: "봄철에 연한 황록색의 미상꽃차례로 핀다"
+    fruit: "초여름에 검붉게 익는 긴 타원형 취과(오디)를 맺는다"
+    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
+    verified: false
+
+  천리향나무:
+    latin: Daphne odora
+    type: "상록 관목"
+    leaf: "어긋나기, 긴 타원형 잎이 가지 끝에 모여 달림, 두껍고 광택 있음"
+    form: "둥근 형태의 소관목, 높이 1~2m"
+    flower: "2~4월, 가지 끝에 두상 취산꽃차례로 자주색~흰색 꽃이 모여 피며 강한 향기가 남"
+    fruit: "5~6월, 붉은색 타원형 장과"
+    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
+    verified: false
+
+  으름나무:
+    latin: Akebia quinata
+    type: "낙엽 덩굴성 목본"
+    leaf: "어긋나기, 손바닥 모양의 장상복엽으로 5개의 타원형 소엽이 모여 달림"
+    form: "덩굴성으로 다른 나무나 지주를 감고 올라감"
+    flower: "4~5월, 암자색 또는 연자색 꽃이 짧은 꽃대에 총상으로 달림"
+    fruit: "9~10월, 자주색의 소시지 모양 열매가 익으면 세로로 갈라짐"
+    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
+    verified: false
+
+  좀작살나무:
+    latin: Callicarpa dichotoma
+    leaf: "마주나는 긴 타원형 잎, 잎겨드랑이마다 보라색 좁쌀 열매가 촘촘히 뭉쳐 달림, 가지가 양옆으로 벌어진 수형"
+    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
+    verified: false
+
+  칠엽수:
+    latin: Aesculus turbinata
+    leaf: "손가락처럼 갈라진 큰 손모양 겹잎(작은잎 5~7장), 넓게 퍼지는 큰 수형, 가을에 굵고 넓은 낙엽이 많이 떨어짐"
     auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
     verified: false
