@@ -918,7 +918,11 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     (directive ? '' : (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov, speciesCap); return b ? `${b}\n\n` : ''; })()) +
     // 축 로테이션 블록은 지시 중에도 넣는다(2026-09-17) — 축 상한은 더 이상 지시로 통과되지 않고,
     // 이 블록은 '적게 다룬 축'을 이름으로 지목해 후보를 그쪽으로 보내는 유일한 장치다.
-    (() => { const b = themeRotationBlock(getBrand()?.topicThemes, themeCov); return b ? `${b}\n\n` : ''; })() +
+    // 지시가 보관소를 가리키면 예시도 그 수종으로 적는다(2026-09-29 실사고) — 적게 다룬 축은 수종이
+    // 안 붙는 축(지지대·옥상 마당·비용·경계·전설·문학)이라, 일반 씨앗을 그대로 보여 주면 두뇌가 수종
+    // 없는 제목을 짓고 화이트리스트(libGate)가 그걸 기각한다. 열린 축과 허용 수종이 서로를 못 만나
+    // 후보가 전멸하던 조임을 푼다. libGate 가 아니면 빈 배열 → 블록은 종전과 글자 단위로 같다.
+    (() => { const b = themeRotationBlock(getBrand()?.topicThemes, themeCov, THEME_MONTHLY_CAP, 8, libGate ? libSpecies : []); return b ? `${b}\n\n` : ''; })() +
     (searchBlock ? `${searchBlock}\n\n` : '') +
     (axisBlockStr ? `${axisBlockStr}\n\n` : '') +
     (stockBlockStr ? `${stockBlockStr}\n\n` : '') +

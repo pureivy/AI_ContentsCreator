@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { themeInText, themeCoverage, overThemeCap, themeRotationBlock, THEME_MONTHLY_CAP, themeRecency, usedThemeRecently, themeRecentBlock } from './topicThemes';
+import { themeInText, themeCoverage, overThemeCap, themeRotationBlock, THEME_MONTHLY_CAP, themeRecency, usedThemeRecently, themeRecentBlock, speciesSeed } from './topicThemes';
 import type { TopicTheme } from './topicThemes';
 
 const TH = [
@@ -160,5 +160,47 @@ describe('themeRecency — 최근 사용 축 제외(2026-09-17 사용자 확정)
   it('themeRecentBlock — 빈 지도·창 0 이면 무주입', () => {
     expect(themeRecentBlock(new Map(), 7)).toBe('');
     expect(themeRecentBlock(new Map([['심기·이식', 1]]), 0)).toBe('');
+  });
+});
+
+// 실사고(2026-09-29): 06:00 오토런이 후보 9개를 전부 기각당해 빈손으로 끝났다. 축 용량은 남아 있었다 —
+// 29축 중 14축이 열려 있고 월 수용량 145편에 30일 생산 62편. 막힌 건 조합이었다: 열린 축이 하필
+// 수종이 안 붙는 축(지지대·옥상 마당·비용·경계·전설·문학)이라 검색어 예시가 "나무 지지대 설치 방법"처럼
+// 수종 없는 말이었고, 사장님 지시가 켜 둔 보관소 화이트리스트가 그런 제목을 '보관소 밖 수종'으로 기각했다
+// (실측: "나무 멀칭, 제대로 깔아야 뿌리가 산다"). 수종이 자연스럽게 붙는 축은 전부 월 상한이었다.
+describe('speciesSeed — 일반 검색어를 보관소 수종으로 한정(2026-09-29)', () => {
+  it("홀로 선 '나무' 토큰을 수종으로 바꾼다", () => {
+    expect(speciesSeed('나무 지지대', '감나무')).toBe('감나무 지지대');
+    expect(speciesSeed('옥상 정원 나무', '감나무')).toBe('옥상 정원 감나무');
+    expect(speciesSeed('시 속의 나무', '배롱나무')).toBe('시 속의 배롱나무');
+  });
+  it('조사가 붙은 나무도 그 자리에서 바꾼다 — 접두하면 "감나무 나무가 안 자라요" 가 된다', () => {
+    expect(speciesSeed('나무가 안 자라요', '황금회화나무')).toBe('황금회화나무가 안 자라요');
+    expect(speciesSeed('나무의 수명', '소나무')).toBe('소나무의 수명');
+  });
+  it("'나무' 가 없으면 앞에 붙인다", () => {
+    expect(speciesSeed('묘목 파는 곳', '대추나무')).toBe('대추나무 묘목 파는 곳');
+  });
+  it("긴 단어 속 '나무' 는 바꾸지 않는다 — '감나무지주목' 같은 말이 생기면 안 된다", () => {
+    expect(speciesSeed('나무지주목 설치방법', '감나무')).toBe('감나무 나무지주목 설치방법');
+  });
+  it('수종이 비면 원문 그대로', () => {
+    expect(speciesSeed('나무 지지대', '')).toBe('나무 지지대');
+  });
+});
+
+describe('themeRotationBlock — 보관소 지시 중에는 예시도 그 수종으로', () => {
+  const cov = new Map([['심기·이식', 5]]); // 나머지 두 축은 0편이라 '적게 다룬 축'
+  it('수종 목록을 주면 예시가 수종으로 한정된다', () => {
+    const b = themeRotationBlock(TH, cov, THEME_MONTHLY_CAP, 8, ['감나무', '대추나무']);
+    expect(b).toMatch(/감나무|대추나무/);
+    expect(b).not.toMatch(/예\) 나무 접붙이기/); // 수종 없는 원문 예시는 안 나온다
+    expect(b).toMatch(/보관소/);                  // 왜 한정했는지 한 줄 있어야 두뇌가 안 헤맨다
+  });
+  it('수종 목록이 없으면 종전 그대로(회귀)', () => {
+    const before = themeRotationBlock(TH, cov);
+    expect(themeRotationBlock(TH, cov, THEME_MONTHLY_CAP, 8, [])).toBe(before);
+    expect(themeRotationBlock(TH, cov, THEME_MONTHLY_CAP, 8)).toBe(before);
+    expect(before).toMatch(/예\) 나무 접붙이기/);
   });
 });

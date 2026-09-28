@@ -110,12 +110,42 @@ export function themeRecentBlock(recency: Map<string, number>, days = THEME_RECE
 }
 
 /** 프롬프트 블록 — 상한 도달(제안 금지) · 최근 다룸 · 아직 안 다룬 축(우선, 발굴 검색어 예시 동반). */
+/**
+ * 일반 검색어 씨앗을 특정 수종으로 한정한다(순수, 2026-09-29).
+ *
+ * 왜 필요한가(실사고). 사장님 지시가 보관소를 가리키면 코드가 53종 화이트리스트를 하드로 건다
+ * (scheduler `libGate`). 그런데 로테이션이 지목하는 '적게 다룬 축'은 하필 수종이 안 붙는 축들이라
+ * (지지대·옥상 마당·비용·경계·전설·문학) 씨앗이 "나무 지지대 설치 방법"처럼 수종 없는 말이다.
+ * 두뇌가 그 예시를 그대로 따라 제목을 지으면 화이트리스트가 '보관소 밖 수종'으로 기각한다
+ * (실측 09-29 06:00: "나무 멀칭, 제대로 깔아야 뿌리가 산다"). 수종이 자연스럽게 붙는 축은 전부
+ * 월 상한이라, 열린 축에 수종을 붙여 주지 않으면 그 틱은 후보가 전멸한다.
+ *
+ * 규칙은 둘뿐이다. 홀로 선 '나무' 토큰이 있으면 그 자리를 수종이 차지하고, 없으면 앞에 붙인다.
+ * **토큰 단위로만 바꾼다** — '나무지주목' 처럼 더 긴 낱말 속의 '나무' 를 건드리면 '감나무지주목' 이
+ * 되어 아무도 안 치는 말이 나온다.
+ */
+export function speciesSeed(seed: string, species: string): string {
+  const sp = String(species ?? '').trim();
+  const s = String(seed ?? '').trim();
+  if (!sp || !s) return s;
+  // 조사가 붙은 '나무가·나무를·나무의…' 도 같은 자리다 — 조사는 남기고 앞머리만 바꾼다.
+  // 이게 없으면 "나무가 안 자라요" 가 "감나무 나무가 안 자라요" 로 접두되어 아무도 안 치는 말이 된다.
+  const JOSA = /^나무(이|가|를|은|는|의|에|에서|도|만|으로|로|와|과|부터|까지|보다|처럼)?$/;
+  const parts = s.split(/\s+/);
+  const at = parts.findIndex((w) => JOSA.test(w));
+  if (at >= 0) { parts[at] = parts[at]!.replace(/^나무/, sp); return parts.join(' '); }
+  return `${sp} ${s}`;
+}
+
 export function themeRotationBlock(
   themes: TopicTheme[] | undefined,
   coverage: Map<string, number>,
   cap = THEME_MONTHLY_CAP,
   /** 이 라운드가 요구하는 후보 수 — 남은 축이 이보다 적으면 '좁은 장' 경고를 낸다. */
   candidates = 8,
+  /** 보관소 지시가 강제하는 수종 목록(2026-09-29). 주면 적게 다룬 축의 예시를 그 수종으로 적는다.
+   *  비면 종전과 글자 단위로 같다 — 지시가 꺼진 평소 런은 아무것도 안 바뀐다. */
+  species: readonly string[] = [],
 ): string {
   if (!themes?.length) return '';
   // 우선 목록의 기준을 'n===0' 에서 **커버리지 하위**로 바꾼다(2026-09-01 사용자 요청: 다양한 주제).
@@ -128,7 +158,11 @@ export function themeRotationBlock(
   const priority: Array<{ n: number; line: string }> = [];
   for (const th of themes) {
     const n = coverage.get(th.theme) ?? 0;
-    const seeds = (th.seeds ?? []).slice(0, 4).join(', ');
+    // 지시가 수종을 강제하면 예시도 그 수종으로 — 축마다 시작 수종을 옮겨 한 축 안에서도 여러 종이 보이게 한다.
+    const raw = (th.seeds ?? []).slice(0, 4);
+    const seeds = (species.length
+      ? raw.map((sd, j) => speciesSeed(sd, species[(themes.indexOf(th) + j) % species.length]!))
+      : raw).join(', ');
     if (n >= cap) capped.push(`${th.theme}(${n}편)`);
     else if (n <= lowMark) priority.push({ n, line: `  · ${th.theme}(${n}편): 예) ${seeds}` });
     else recent.push(`${th.theme}(${n}편)`);
@@ -138,7 +172,12 @@ export function themeRotationBlock(
   const lines = [`[주제 축 로테이션 — 최근 ${THEME_WINDOW_DAYS}일 블로그 기준, 축당 상한 ${cap}편 · 수종 로테이션과 별개 축]`];
   if (capped.length) lines.push(`- 상한 도달 → 제안 금지(코드가 기각한다): ${capped.join(', ')}`);
   if (recent.length) lines.push(`- 최근 다룸 → 가급적 피함: ${recent.join(', ')}`);
-  if (fresh.length) lines.push('- 적게 다룬 축 → **여기서 우선 고른다**(사람들이 실제로 치는 검색어 예시):', ...fresh);
+  if (fresh.length) {
+    lines.push('- 적게 다룬 축 → **여기서 우선 고른다**(사람들이 실제로 치는 검색어 예시):', ...fresh);
+    // 왜 예시에 수종이 박혀 있는지 한 줄로 못박는다 — 안 적으면 두뇌가 예시의 수종을 '고정값'으로 읽거나
+    // 반대로 수종을 떼고 일반 제목을 지어 화이트리스트에 걸린다(둘 다 실측된 실패다).
+    if (species.length) lines.push('  ※ 지시가 보관소 수종만 허용하므로 예시도 그 수종으로 적었다. 수종은 보관소 목록 안에서 바꿔도 되지만, 수종 없는 일반 제목은 코드가 기각한다.');
+  }
   lines.push('- 후보 8개는 서로 다른 축에서 고르고, 수종 × 축 조합은 기존 글과 겹치지 않게.');
   // 좁은 장에서의 지시 강화(2026-08-30) — 축이 많이 막히면 "가급적 피함"까지 써야 후보가 채워진다.
   // 그 사실을 명시하지 않으면 두뇌가 상한 축에서 8개를 억지로 만들고 전부 코드 기각된다(실측: 16축 중
