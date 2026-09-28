@@ -9,6 +9,7 @@
  * (ref 번호로 대조) — 날조 URL 이 결정적으로 막힌다. "어느 나무에나 맞는 말"은 고유 사실이 아니다.
  */
 import { findSpeciesLoose } from './species';
+import { currentPlaceNames, obsoletePlacesIn } from './placeNames';
 import { speciesInText, type SpeciesGroup } from './speciesRotation';
 import { getBrand } from './brand';
 import { naverEncyc } from '../grounding/naver_encyc';
@@ -101,7 +102,15 @@ export function attachRefs(
   const out: SuppliedFact[] = [];
   const seen = new Set<string>();
   for (const f of list as RawFact[]) {
-    const text = typeof f?.text === 'string' ? f.text.trim().replace(/^[-•*]\s+/, '') : '';
+    // 옛 행정구역 이름을 현행으로 옮긴다(2026-09-29) — 출처가 1995년 이전 자료면 '금릉·온양'이 그대로
+    // 본문까지 간다(사장님 지적). 사실이 확정되는 이 자리 한 곳이면 브리프·사실 카드·본문이 모두 따라온다.
+    const rawText = typeof f?.text === 'string' ? f.text.trim().replace(/^[-•*]\s+/, '') : '';
+    const text = currentPlaceNames(rawText);
+    if (text !== rawText) {
+      const moved = obsoletePlacesIn(rawText).map((x) => `${x.from}→${x.to}`).join(' · ');
+      // eslint-disable-next-line no-console
+      console.log('[사실공급]', `옛 행정구역 이름 교정 — ${moved}`);
+    }
     const ref = typeof f?.ref === 'number' ? f.ref : Number(f?.ref);
     if (!text || !Number.isInteger(ref) || ref < 1 || ref > hits.length) continue;
     const key = compact(text);
