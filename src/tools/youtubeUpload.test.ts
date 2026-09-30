@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildVideoMeta, buildMultipartBody, extractVideoId, buildStatusUpdate, classifyThumb } from './youtubeUpload';
+import { buildVideoMeta, buildMultipartBody, extractVideoId, buildStatusUpdate, classifyThumb, majorityChannel, decideChannelConnect } from './youtubeUpload';
 
 describe('buildVideoMeta — 블로그 링크 줄(2026-07-31)', () => {
   it('설명 본문과 태그 줄 사이에 링크, 미지정 시 종전과 동일', () => {
@@ -98,5 +98,38 @@ describe('classifyThumb — 공개 썸네일 판정(순수)', () => {
     expect(classifyThumb(200, 0, 0)).toBe('placeholder');
     expect(classifyThumb(200, 243_655, 23_435)).toBe('ok');
     expect(classifyThumb(200, 0, 23_435)).toBe('ok'); // oardefault 가 없어도 hqdefault 가 정상이면 정상
+  });
+});
+
+// 채널 연결 보호 장치(2026-10-01 실사고) — 재연결 때 계정을 잘못 골라 Acoustic AI Singer 로 두 번 연결됐다.
+// 완료 화면이 똑같아 티가 안 났고, 그대로 업로드했으면 엉뚱한 채널에 올라갔다.
+describe('majorityChannel — 업로드 이력의 채널(순수)', () => {
+  it('가장 많이 나온 채널, 빈 목록이면 null', () => {
+    const v = (id: string, t: string) => ({ snippet: { channelId: id, channelTitle: t } });
+    expect(majorityChannel([v('UC_B', '비온디트리'), v('UC_B', '비온디트리'), v('UC_X', '다른채널')])).toEqual({ id: 'UC_B', title: '비온디트리' });
+    expect(majorityChannel([])).toBeNull();
+    expect(majorityChannel([{ snippet: {} }])).toBeNull();
+  });
+});
+
+describe('decideChannelConnect — 원래 채널과 다르면 저장하지 않는다(순수)', () => {
+  const B = { id: 'UC_B', title: '비온디트리' };
+  const X = { id: 'UC_X', title: 'Acoustic AI Singer' };
+  it('같은 채널이면 저장', () => {
+    expect(decideChannelConnect(B, B, false).save).toBe(true);
+  });
+  it('다른 채널이면 거절하고 두 채널 이름을 모두 알려 준다', () => {
+    const d = decideChannelConnect(X, B, false);
+    expect(d.save).toBe(false);
+    expect(d.message).toContain('Acoustic AI Singer');
+    expect(d.message).toContain('비온디트리');
+  });
+  it('채널을 일부러 바꿀 때(change_channel)는 허용', () => {
+    expect(decideChannelConnect(X, B, true).save).toBe(true);
+  });
+  it('원래 채널을 모르면(첫 연결·업로드 이력 없음) 저장하고 채널 이름을 보여 준다', () => {
+    const d = decideChannelConnect(B, null, false);
+    expect(d.save).toBe(true);
+    expect(d.message).toContain('비온디트리');
   });
 });

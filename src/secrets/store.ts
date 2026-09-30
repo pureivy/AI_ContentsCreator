@@ -298,7 +298,8 @@ export function setNaverAccount(slug: string, patch: Partial<NaverAccount>): voi
 // NAVER_ACCOUNTS 와 동일 패턴 — 공용 OAuth 클라이언트 1개 + 브랜드별 refresh token 을
 // YOUTUBE_TOKENS 한 키에 JSON({"<slug>":{refreshToken}})으로 저장(.env 단일 저장소).
 // 브랜드 폴백 없음 — 미연결 브랜드는 빈 토큰(업로드 시 명확히 에러) → 채널 섞임 원천 차단.
-export interface YoutubeAccount { refreshToken: string }
+/** channelId·channelTitle(2026-10-01) — 연결 때 확인한 채널. 재연결 보호 장치가 '원래 채널'로 쓴다(없으면 업로드 이력으로 판정). */
+export interface YoutubeAccount { refreshToken: string; channelId?: string; channelTitle?: string }
 const YT_TOKENS_KEY = 'YOUTUBE_TOKENS';
 
 function readYoutubeTokens(): Record<string, Partial<YoutubeAccount>> {
@@ -313,15 +314,22 @@ function readYoutubeTokens(): Record<string, Partial<YoutubeAccount>> {
 /** 업로드에 쓸 브랜드 채널 토큰 — 범용('')도 blob 의 '' 키(평면 키 없음). 미연결이면 빈 문자열. */
 export function getYoutubeAccount(slug: string): YoutubeAccount {
   const a = readYoutubeTokens()[slug] ?? {};
-  return { refreshToken: (a.refreshToken ?? '').trim() };
+  return {
+    refreshToken: (a.refreshToken ?? '').trim(),
+    ...(a.channelId ? { channelId: a.channelId } : {}),
+    ...(a.channelTitle ? { channelTitle: a.channelTitle } : {}),
+  };
 }
 
-/** 브랜드 채널 토큰 저장 — 빈 문자열이면 해당 브랜드 연결 해제. */
-export function setYoutubeToken(slug: string, refreshToken: string): void {
+/** 브랜드 채널 토큰 저장 — 빈 문자열이면 해당 브랜드 연결 해제. channel 을 주면 확인한 채널도 함께 적는다. */
+export function setYoutubeToken(slug: string, refreshToken: string, channel?: { id: string; title: string }): void {
   const map = readYoutubeTokens();
   const clean: Record<string, Partial<YoutubeAccount>> = {};
-  for (const [s, a] of Object.entries(map)) if (a.refreshToken?.trim()) clean[s] = { refreshToken: a.refreshToken.trim() };
-  if (refreshToken.trim()) clean[slug] = { refreshToken: refreshToken.trim() };
+  for (const [s, a] of Object.entries(map)) {
+    if (!a.refreshToken?.trim()) continue;
+    clean[s] = { refreshToken: a.refreshToken.trim(), ...(a.channelId ? { channelId: a.channelId } : {}), ...(a.channelTitle ? { channelTitle: a.channelTitle } : {}) };
+  }
+  if (refreshToken.trim()) clean[slug] = { refreshToken: refreshToken.trim(), ...(channel ? { channelId: channel.id, channelTitle: channel.title } : {}) };
   else delete clean[slug];
   writeEnvValue(YT_TOKENS_KEY, Object.keys(clean).length ? JSON.stringify(clean) : undefined);
 }

@@ -39,7 +39,7 @@ import { mineClusterForPiece, filterCandidates } from '../orchestrator/clusterMi
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
-import { uploadShortsToYoutube, publishWhenReady, PUBLISH_SAFETY_MIN } from '../tools/youtubeUpload';
+import { uploadShortsToYoutube, publishWhenReady, PUBLISH_SAFETY_MIN, fetchMyChannel, channelOfUploads, decideChannelConnect } from '../tools/youtubeUpload';
 import { publishCardNewsToMeta, publishShortsToMeta, realPermalink, listIgMedia, matchOrphanReels, GRAPH } from '../tools/metaPublish';
 import { llmWiki, slugify } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
@@ -1707,11 +1707,12 @@ app.get('/api/shorts', shortsListHandler);
 const YT_REDIRECT = `http://127.0.0.1:${CONFIG.port}/youtube/oauth/callback`; // PORT 변경 시 구글 콘솔 리디렉션 URI 도 함께 갱신
 // OAuth state = 1회용 난수 논스(브랜드는 서버 메모리에서 복원, 10분 TTL) — 위조 콜백으로 임의
 // 브랜드에 공격자 토큰을 심는 CSRF 차단 + 비정상 슬러그가 토큰 blob 에 저장되는 것 차단.
-const YT_OAUTH_PENDING = new Map<string, { brand: string; exp: number }>();
+const YT_OAUTH_PENDING = new Map<string, { brand: string; exp: number; changeChannel?: boolean }>();
 app.get('/youtube/status', (c) => {
   const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
   const client = !!(getSecret('YOUTUBE_OAUTH_CLIENT_ID') && getSecret('YOUTUBE_OAUTH_CLIENT_SECRET'));
-  return c.json({ client, connected: !!getYoutubeAccount(brand).refreshToken });
+  const acct = getYoutubeAccount(brand);
+  return c.json({ client, connected: !!acct.refreshToken, channel: acct.channelTitle });
 });
 app.get('/youtube/oauth/start', (c) => {
   const brand = c.req.query('brand') ?? (activeBrandSlug() || '');
@@ -1720,7 +1721,8 @@ app.get('/youtube/oauth/start', (c) => {
   if (!id) return c.text('유튜브 OAuth 클라이언트 미설정 — 키 탭에서 먼저 입력하세요', 400);
   const nonce = randomBytes(16).toString('hex');
   for (const [k, v] of YT_OAUTH_PENDING) if (v.exp < Date.now()) YT_OAUTH_PENDING.delete(k); // 만료 청소
-  YT_OAUTH_PENDING.set(nonce, { brand, exp: Date.now() + 10 * 60_000 });
+  // change_channel=1 — 이 브랜드의 채널을 일부러 바꿀 때만. 없으면 원래 채널과 다른 연결은 거절된다(콜백 보호 장치).
+  YT_OAUTH_PENDING.set(nonce, { brand, exp: Date.now() + 10 * 60_000, changeChannel: c.req.query('change_channel') === '1' });
   const u = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   u.searchParams.set('client_id', id);
   u.searchParams.set('redirect_uri', YT_REDIRECT);
@@ -1757,11 +1759,27 @@ app.get('/youtube/oauth/callback', async (c) => {
         redirect_uri: YT_REDIRECT, grant_type: 'authorization_code',
       }),
     });
-    const j = await r.json() as { refresh_token?: string; error?: string };
+    const j = await r.json() as { refresh_token?: string; access_token?: string; error?: string };
     if (!j.refresh_token) return done(`연결 실패: refresh token 없음(${j.error ?? r.status}) — 구글 계정 보안 설정에서 이 앱 액세스를 제거한 뒤 다시 연결하세요`);
-    setYoutubeToken(brand, j.refresh_token);
-    console.log(`[발행담당] 유튜브 채널 연결 — 브랜드 '${brand || '범용'}'`);
-    return done(`✅ 채널 연결 완료 (브랜드: ${brand || '범용'})`);
+    // 채널 확인(2026-10-01 보호 장치) — 계정을 잘못 고르면 다른 채널로 연결되는데 완료 화면이 같아 티가 안 났다.
+    // 원래 채널: 저장된 채널 → 없으면 이 브랜드가 올린 영상들의 채널. 다르면 저장하지 않는다(change_channel=1 이면 허용).
+    const me = j.access_token ? await fetchMyChannel(j.access_token) : null;
+    if (!me) return done('연결 실패: 이 구글 계정의 유튜브 채널을 확인하지 못했습니다(채널이 없거나 조회 오류) — 저장하지 않았습니다. 다시 시도하세요');
+    const stored = getYoutubeAccount(brand);
+    const expected = stored.channelId
+      ? { id: stored.channelId, title: stored.channelTitle ?? stored.channelId }
+      : await channelOfUploads(j.access_token!, shortsStore().list()
+        .filter((x) => (x.brand ?? '') === brand && !!x.youtubeId)
+        .sort((a, b) => (b.youtubeTs ?? '').localeCompare(a.youtubeTs ?? ''))
+        .map((x) => x.youtubeId!));
+    const verdict = decideChannelConnect(me, expected, !!pending.changeChannel);
+    if (!verdict.save) {
+      console.log(`[발행담당] 유튜브 채널 연결 거절 — 브랜드 '${brand || '범용'}': 선택 '${me.title}' ≠ 원래 '${expected?.title ?? '?'}'`);
+      return done(`⛔ 연결 거절: ${verdict.message}. (채널을 정말 바꾸려는 거라면 이 주소로: http://127.0.0.1:${CONFIG.port}/youtube/oauth/start?brand=${encodeURIComponent(brand)}&change_channel=1)`);
+    }
+    setYoutubeToken(brand, j.refresh_token, me);
+    console.log(`[발행담당] 유튜브 채널 연결 — 브랜드 '${brand || '범용'}' · ${verdict.message}`);
+    return done(`✅ 채널 연결 완료 (브랜드: ${brand || '범용'} · ${verdict.message})`);
   } catch (e) { return done(`연결 실패: ${e instanceof Error ? e.message.slice(0, 120) : e}`); }
 });
 // 유튜브 업로드 in-flight 락 — youtubeUrl 은 업로드 '완료 후'에야 기록되므로 그 가드만으로는

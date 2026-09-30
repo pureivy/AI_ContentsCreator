@@ -168,6 +168,13 @@ describe('유튜브 브랜드별 채널 토큰 — 격리·라운드트립(네�
     expect(mod.getYoutubeAccount('brand-b')).toEqual({ refreshToken: 'token_b_updated' });
   });
 
+  it('확인한 채널을 함께 저장하고, 다른 브랜드 저장 때도 지워지지 않는다(2026-10-01 연결 보호 장치)', () => {
+    mod.setYoutubeToken('brand-a', 'token_a', { id: 'UC_A', title: '채널A' });
+    mod.setYoutubeToken('brand-b', 'token_b');
+    expect(mod.getYoutubeAccount('brand-a')).toEqual({ refreshToken: 'token_a', channelId: 'UC_A', channelTitle: '채널A' });
+    expect(mod.getYoutubeAccount('brand-b')).toEqual({ refreshToken: 'token_b' });
+  });
+
   it('빈 문자열로 연결 해제 — A 저장 → setYoutubeToken("A", "") → 빈 토큰', () => {
     mod.setYoutubeToken('brand-a', 'token_a');
     mod.setYoutubeToken('brand-a', '');

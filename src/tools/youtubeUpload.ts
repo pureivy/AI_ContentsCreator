@@ -189,7 +189,7 @@ async function probeThumb(id: string, signal?: AbortSignal): Promise<ThumbState>
 type YtApiError = { error?: { errors?: Array<{ reason?: string }>; message?: string } };
 const apiReason = (j: unknown, status: number): string => (j as YtApiError)?.error?.errors?.[0]?.reason ?? String(status);
 
-/** 공개 여부 변경(videos.update part=status). 권한 부족이면 'no_scope' — 연결 토큰에 youtube.force-ssl 이 없을 때. */
+/** 공개 여부 변경(videos.update part=status). 권한 부족(insufficientPermissions)이면 'no_scope' — 연결 토큰에 youtube.force-ssl 이 없을 때. */
 async function setPrivacy(access: string, id: string, current: Record<string, unknown> | undefined, privacy: 'public' | 'private', signal?: AbortSignal, publishAt?: string): Promise<'ok' | 'no_scope' | string> {
   const r = await fetch('https://www.googleapis.com/youtube/v3/videos?part=status', {
     method: 'PUT', signal,
@@ -199,7 +199,9 @@ async function setPrivacy(access: string, id: string, current: Record<string, un
   if (r.ok) return 'ok';
   const j: unknown = await r.json().catch(() => ({}));
   const reason = apiReason(j, r.status);
-  if (r.status === 403 && /insufficient|forbidden/i.test(reason)) return 'no_scope';
+  if (r.status === 403 && /insufficient/i.test(reason)) return 'no_scope';
+  // forbidden 은 권한 부족이 아니라 '연결된 채널이 이 영상의 주인이 아님'이다(2026-10-01 실측: 재연결 때 다른 채널을 골랐다).
+  if (r.status === 403 && /forbidden/i.test(reason)) return '공개 전환 거절(forbidden) — 연결된 채널이 이 영상의 채널이 아님, 채널 연결 확인';
   return `공개 전환 실패(${reason})`;
 }
 
@@ -300,6 +302,59 @@ export async function publishWhenReady(opts: {
         ? `공개 처리 중 오류: ${why} — 공개 전환은 이미 됐다. 썸네일 복구 중이었다면 비공개로 되돌렸을 수 있어 ${RECOVERY_SAFETY_MIN}분 뒤 예약 공개에 맡겼다 — 공개·썸네일을 확인하세요`
         : `공개 처리 중 오류: ${why} — 업로드 때 건 예약 공개 시각에 공개된다` };
   }
+}
+
+export interface YtChannel { id: string; title: string }
+
+/** 이 액세스 토큰의 채널(channels.list mine=true). 채널이 없거나 조회 실패면 null. */
+export async function fetchMyChannel(access: string, signal?: AbortSignal): Promise<YtChannel | null> {
+  try {
+    const r = await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true', { headers: { Authorization: `Bearer ${access}` }, signal });
+    const j = await r.json() as { items?: Array<{ id?: string; snippet?: { title?: string } }> };
+    const it = j.items?.[0];
+    return r.ok && it?.id ? { id: it.id, title: it.snippet?.title ?? it.id } : null;
+  } catch { return null; }
+}
+
+/** 영상 목록의 다수 채널(순수) — 이 브랜드가 올려 온 채널을 업로드 이력으로 판정한다. 빈 목록이면 null. */
+export function majorityChannel(items: ReadonlyArray<{ snippet?: { channelId?: string; channelTitle?: string } }>): YtChannel | null {
+  const n = new Map<string, { title: string; count: number }>();
+  for (const it of items) {
+    const id = it.snippet?.channelId;
+    if (!id) continue;
+    const e = n.get(id) ?? { title: it.snippet?.channelTitle ?? id, count: 0 };
+    e.count++; n.set(id, e);
+  }
+  let best: YtChannel | null = null; let bestN = 0;
+  for (const [id, e] of n) if (e.count > bestN) { best = { id, title: e.title }; bestN = e.count; }
+  return best;
+}
+
+/** 이 브랜드가 올려 온 채널 — 업로드한 영상(최근 최대 20편)의 채널을 조회해 다수결. 공개 영상은 어느 토큰으로도 보인다. */
+export async function channelOfUploads(access: string, videoIds: readonly string[], signal?: AbortSignal): Promise<YtChannel | null> {
+  const ids = videoIds.filter(Boolean).slice(0, 20);
+  if (!ids.length) return null;
+  try {
+    const r = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${ids.map(encodeURIComponent).join(',')}`, { headers: { Authorization: `Bearer ${access}` }, signal });
+    if (!r.ok) return null;
+    const j = await r.json() as { items?: Array<{ snippet?: { channelId?: string; channelTitle?: string } }> };
+    return majorityChannel(j.items ?? []);
+  } catch { return null; }
+}
+
+/**
+ * 채널 연결 보호 장치(순수, 2026-10-01 실사고) — 재연결 때 계정 선택을 잘못하면 다른 채널(그날은 Acoustic AI Singer)로
+ * 연결되는데, 완료 화면이 똑같아 티가 안 났다. 그대로 업로드하면 엉뚱한 채널에 올라간다.
+ * expected(저장된 채널 → 없으면 업로드 이력의 채널)와 다르면 저장하지 않는다. 채널을 일부러 바꿀 땐 changeChannel.
+ */
+export function decideChannelConnect(me: YtChannel, expected: YtChannel | null, changeChannel: boolean): { save: boolean; message: string } {
+  if (!expected || expected.id === me.id) return { save: true, message: `채널 '${me.title}'` };
+  if (changeChannel) return { save: true, message: `채널을 '${expected.title}' → '${me.title}'(으)로 바꿈` };
+  return {
+    save: false,
+    message: `선택한 채널은 '${me.title}'인데, 이 브랜드는 '${expected.title}' 채널에 올려 왔습니다 — 저장하지 않았습니다. ` +
+      `계정 선택 화면에서 '${expected.title}' 채널이 있는 구글 계정을 고르세요`,
+  };
 }
 
 /** 브랜드 채널의 구독자 수 조회 — 팔로워 추적(analytics/followers)용. 미연결·실패는 null(무해). */
