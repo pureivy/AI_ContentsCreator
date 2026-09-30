@@ -35,6 +35,25 @@ describe('buildMotionDirectorTask — 배치 프롬프트 조립(순수)', () =>
   });
 });
 
+describe('훅 판정은 원래 씬 번호로 — 훅 씬 이미지가 없는 편(2026-09-30)', () => {
+  it('buildMotionDirectorTask: sceneIndices 가 [1,2]면 첫 줄은 본문 가이드(훅 아님)', () => {
+    const t = buildMotionDirectorTask([{ narration: '둘째씬 내레이션입니다' }, { narration: '셋째씬 내레이션입니다' }], '', [1, 2]);
+    const first = t.split('\n').find((l) => l.startsWith('1. ['))!;
+    expect(first).toContain('본문 씬');
+    expect(t).not.toContain('훅 씬');
+  });
+  it('buildMotionDirectorTask: sceneIndices 없으면 종전대로 첫 줄이 훅', () => {
+    const t = buildMotionDirectorTask([{ narration: '첫씬 내레이션입니다' }], '');
+    expect(t).toContain('훅 씬');
+  });
+  it('parseMotionPrompts: 손 씬이 원래 씬2면 카메라 전용 템플릿도 훅 push-in 이 아니라 drift', () => {
+    const out = parseMotionPrompts({ motions: [{ scene: 1, prompt: 'x', subject: 'hands' }] }, 1, [undefined], [1]);
+    expect(out[0]?.startsWith('Camera work only:')).toBe(true);
+    expect(out[0]).toContain('very slow camera drift');
+    expect(out[0]).not.toContain('push-in');
+  });
+});
+
 describe('sanitizeMotionPrompt — 결정적 가드(순수)', () => {
   it('정상 프롬프트 통과 + no text 접미 보장', () => {
     const ok = sanitizeMotionPrompt('Slow push-in toward the berry bush, leaves swaying gently in the breeze.');
@@ -142,6 +161,25 @@ describe('directSceneMotion — null 구멍 images 의 origIndex 정렬 리맵(�
     expect(task).toContain('첫씬 내레이션');
     expect(task).toContain('셋째씬 내레이션');
     expect(task).not.toContain('비전에 안 가야');
+  });
+
+  it('images=[null, A, B](훅 이미지 생성 실패) → 비전 task 첫 줄이 훅 가이드가 아니고, 손 씬 템플릿도 훅 push-in 이 아니다', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'motion-'));
+    const imgA = path.join(dir, 'a.png'); fs.writeFileSync(imgA, 'x');
+    const imgB = path.join(dir, 'b.png'); fs.writeFileSync(imgB, 'x');
+    const { microJSON } = await import('./agent');
+    const mj = microJSON as unknown as ReturnType<typeof vi.fn>;
+    mj.mockClear();
+    // 비전 순번 1(=원래 씬 2)이 손 씬 — 파싱 단계도 원래 씬 번호로 훅 여부를 봐야 drift 가 나온다.
+    mj.mockResolvedValue({ motions: [{ scene: 1, prompt: P2, subject: 'hands' }, { scene: 2, prompt: P2 }] });
+    const scenes = [{ narration: '이미지 없는 훅' }, { narration: '둘째씬 내레이션입니다' }, { narration: '셋째씬 내레이션입니다' }];
+    const out = await directSceneMotion({ images: [null, imgA, imgB], scenes });
+    const task = mj.mock.calls[0]?.[2] as string;
+    expect(task).not.toContain('훅 씬');
+    expect(out[0]).toBeNull();
+    expect(out[1]?.startsWith('Camera work only:')).toBe(true);
+    expect(out[1]).toContain('very slow camera drift');
+    expect(out[1]).not.toContain('push-in');
   });
 
   it('비전이 일부 씬을 누락하면 그 씬만 null(다른 씬으로 밀리지 않음)', async () => {

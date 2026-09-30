@@ -120,9 +120,10 @@ export function motionGuideFor(kind: MotionSceneCtx['kind'], isFirst: boolean): 
 }
 
 /** 비전 배치 task 프롬프트(순수) — 이미지 순번과 씬 컨텍스트·의도 가이드를 함께 제시. */
-export function buildMotionDirectorTask(scenes: MotionSceneCtx[], styleHint: string): string {
+export function buildMotionDirectorTask(scenes: MotionSceneCtx[], styleHint: string, sceneIndices?: number[]): string {
   const lines = scenes.map((s, i) => {
-    const guide = motionGuideFor(s.kind, i === 0);
+    // 훅 여부는 나열 순번이 아니라 원래 씬 번호로 — 훅 씬 이미지가 없으면(생성·QA 실패) 첫 줄은 본문 씬이다(2026-09-30).
+    const guide = motionGuideFor(s.kind, (sceneIndices?.[i] ?? i) === 0);
     const ctx = [`내레이션: ${s.narration.slice(0, 60)}`, s.screenText ? `자막: ${s.screenText}` : ''].filter(Boolean).join(' / ');
     return `${i + 1}. [${guide}] ${ctx}`;
   });
@@ -162,13 +163,13 @@ const FLAGGED_SUBJECTS = new Set(['person', 'animal', 'hands', 'hand', 'face', '
 /** 비전 응답 → 씬별 모션 프롬프트 배열(순수) — 순번 범위 검증, 누락·불량 씬은 null.
  *  subject 가 사람·동물·손·얼굴·도구면 LLM 창작 프롬프트를 버리고 카메라 전용 템플릿을 강제(코드 게이트,
  *  사용자 확정 2026-07-31). kinds 는 카메라 선택(훅=push-in 등)에만 쓰는 선택 인자. */
-export function parseMotionPrompts(resp: { motions?: Array<{ scene?: unknown; prompt?: unknown; subject?: unknown }> } | null, count: number, kinds?: Array<MotionSceneCtx['kind']>): Array<string | null> {
+export function parseMotionPrompts(resp: { motions?: Array<{ scene?: unknown; prompt?: unknown; subject?: unknown }> } | null, count: number, kinds?: Array<MotionSceneCtx['kind']>, sceneIndices?: number[]): Array<string | null> {
   const out: Array<string | null> = Array.from({ length: count }, () => null);
   for (const m of resp?.motions ?? []) {
     const n = Math.floor(Number(m?.scene));
     if (!Number.isFinite(n) || n < 1 || n > count) continue;
     const subj = typeof m?.subject === 'string' ? m.subject.trim().toLowerCase() : '';
-    out[n - 1] ??= FLAGGED_SUBJECTS.has(subj) ? cameraOnlyMotionPrompt(kinds?.[n - 1], n === 1) : sanitizeMotionPrompt(m?.prompt);
+    out[n - 1] ??= FLAGGED_SUBJECTS.has(subj) ? cameraOnlyMotionPrompt(kinds?.[n - 1], (sceneIndices?.[n - 1] ?? n - 1) === 0) : sanitizeMotionPrompt(m?.prompt);
   }
   return out;
 }
@@ -190,14 +191,15 @@ export async function directSceneMotion(opts: {
       .slice(0, 8);
     if (!checked.length) return out;
     const ctxScenes = checked.map((c) => opts.scenes[c.origIndex] ?? { narration: '' });
+    const sceneIndices = checked.map((c) => c.origIndex);
     const resp = await microJSON<{ motions?: Array<{ scene?: unknown; prompt?: unknown }> }>(
       stdModel(),
       '당신은 쇼츠 영상의 모션 디렉터입니다. 씬 이미지를 직접 보고 요청된 JSON 스키마만 출력합니다.',
-      buildMotionDirectorTask(ctxScenes, opts.styleHint ?? ''),
+      buildMotionDirectorTask(ctxScenes, opts.styleHint ?? '', sceneIndices),
       // 씬당 ~100토큰 × 8 + 여유 — QA(500)보다 큰 생성형 출력.
       { maxOutputTokens: 1200, visionPaths: checked.map((c) => c.path), signal: opts.signal },
     );
-    const prompts = parseMotionPrompts(resp, checked.length, ctxScenes.map((s) => s.kind));
+    const prompts = parseMotionPrompts(resp, checked.length, ctxScenes.map((s) => s.kind), sceneIndices);
     checked.forEach((c, k) => { out[c.origIndex] = prompts[k] ?? null; });
   } catch { /* fail-open — 전 씬 정적 접미 폴백 */ }
   return out;
