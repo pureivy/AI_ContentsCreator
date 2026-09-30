@@ -38,8 +38,9 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
   const [view, setView] = useState<"md" | "html">("md");
   const [feedback, setFeedback] = useState("");
   const [revBusy, setRevBusy] = useState(false);
-  // 네이버 비공개 발행(자동) — 서버 백그라운드 잡 + 폴링. 이름이 오래 '임시저장'이었으나 실제 동작은
-  // 2026-08-28 부터 비공개 발행이다(사용자 확인 2026-08-31). 폴백 시에만 임시저장이라 문구를 갈라 쓴다.
+  // 네이버 발행(자동) — 서버 백그라운드 잡 + 폴링. 이름이 오래 '임시저장'이었으나 실제 동작은
+  // 2026-08-28 부터 비공개 발행, 2026-10-01 부터 전체공개 발행이다(설정 확인 실패 시 비공개, 오류 시 임시저장 폴백).
+  // 결과마다 사용자가 갈 곳이 달라 문구를 갈라 쓴다.
   const [naverBusy, setNaverBusy] = useState(false);
   const [naverMsg, setNaverMsg] = useState("");
   // 성과 자동 수집 — 서버 백그라운드 잡 + 폴링
@@ -207,7 +208,7 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
     void pollCollect(sel);
   };
 
-  // 네이버 비공개 발행 폴링 — 3초 간격, 최대 ~16분(서버 쪽 Playwright 타임아웃 15분 커버).
+  // 네이버 발행 폴링 — 3초 간격, 최대 ~16분(서버 쪽 Playwright 타임아웃 15분 커버).
   const pollNaver = async (id: string) => {
     if (pollingRef.current === id) return;
     pollingRef.current = id;
@@ -220,8 +221,10 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
         if (!s || s.status === "running") continue;
         setNaverBusy(false);
         if (s.status === "saved") {
-          // 비공개 발행과 임시저장 폴백은 사용자가 갈 곳이 다르다(글 목록 vs 임시저장 목록) — 갈라 안내한다.
-          setNaverMsg(s.private_published
+          // 전체공개·비공개 발행·임시저장 폴백은 사용자가 갈 곳이 다르다 — 갈라 안내한다.
+          setNaverMsg(s.public_published
+            ? `✓ 네이버 전체공개 발행 완료${s.dry_run ? " (dry-run)" : ""}${s.error ? ` — 일부 문제: ${s.error}` : ""} — 댓글·공감·검색·외부 공유 허용, 블로그/카페 공유는 링크만. 공개 글 주소는 다음 발행 감지 때 자동 등록됩니다(바로 등록하려면 아래에 붙여넣기).`
+            : s.private_published
             ? `✓ 네이버 비공개 발행 완료${s.dry_run ? " (dry-run)" : ""}${s.error ? ` — 일부 문제: ${s.error}` : ""} — 블로그 글 목록에 비공개로 올라갔습니다. 확인 후 전체공개로 전환하고, 공개된 글 URL을 아래에 등록하세요.`
             : `✓ 네이버 임시저장 완료(비공개 발행이 안 돼 폴백)${s.dry_run ? " (dry-run)" : ""}${s.error ? ` — 일부 문제: ${s.error}` : ""} — 네이버 글쓰기의 임시저장 목록에서 확인 후 발행하고, 발행된 글 URL을 아래에 등록하세요.`);
           await load();
@@ -230,9 +233,9 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
           if (selRef.current === id && d && "draft" in d) setData(d);
         } else if (s.status === "idle") {
           // 폴링 중 잡이 사라짐 = 서버 재시작 등으로 진행 상태 유실 — 성공/실패 단정 불가.
-          setNaverMsg("⚠ 진행 상태가 유실됐습니다(서버 재시작 가능성) — 네이버 블로그의 글 목록(비공개)과 임시저장 목록을 직접 확인하세요.");
+          setNaverMsg("⚠ 진행 상태가 유실됐습니다(서버 재시작 가능성) — 네이버 블로그의 글 목록과 임시저장 목록을 직접 확인하세요.");
         } else {
-          setNaverMsg(`✗ 네이버 비공개 발행 실패: ${s.error ?? "원인 불명 — 서버 로그 확인"}`);
+          setNaverMsg(`✗ 네이버 발행 실패: ${s.error ?? "원인 불명 — 서버 로그 확인"}`);
         }
         return;
       }
@@ -522,7 +525,7 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
                 </div>
               )}
 
-              {/* 발행 — ① 네이버 비공개 발행(자동) → ② 네이버에서 전체공개로 전환 후 URL 등록(수동) */}
+              {/* 발행 — ① 네이버 발행(자동, 2026-10-01 부터 전체공개) → ② 공개 글 URL 등록(발행 감지가 자동으로도 채운다) */}
               <div className="review-section">
                 <h3>발행</h3>
                 {data.piece.publishedUrl ? (
@@ -530,12 +533,12 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
                 ) : (
                   <>
                     <div className="review-inline">
-                      <button className="btn start" disabled={naverBusy} onClick={doNaverDraft}>
-                        {naverBusy ? "네이버에 발행 중…" : "네이버 비공개 발행(자동)"}
+                      <button className="btn start" disabled={naverBusy} onClick={doNaverDraft} title="전체공개로 발행 — 댓글·공감·검색·외부 공유 허용, 블로그/카페 공유는 링크만. 설정 확인에 실패하면 비공개로 발행합니다.">
+                        {naverBusy ? "네이버에 발행 중…" : "네이버 발행(자동)"}
                       </button>
                       {data.piece.naverDraftUrl && (
-                        /* 비공개 발행이면 진짜 글 주소(logNo=…), 임시저장 폴백이면 postwrite 편집기 URL — 링크 문구를 갈라 쓴다. */
-                        <a className="muted" href={data.piece.naverDraftUrl} target="_blank" rel="noreferrer"><Ico name="external-link" size={11} /> {data.piece.privateUrl ? "네이버에서 글 열기(비공개)" : "네이버 글쓰기 열기(임시저장 불러오기)"}</a>
+                        /* 실제 발행(전체공개·비공개)이면 진짜 글 주소(logNo=…), 임시저장 폴백이면 postwrite 편집기 URL — 링크 문구를 갈라 쓴다. */
+                        <a className="muted" href={data.piece.naverDraftUrl} target="_blank" rel="noreferrer"><Ico name="external-link" size={11} /> {data.piece.privateUrl ? "네이버에서 글 열기" : "네이버 글쓰기 열기(임시저장 불러오기)"}</a>
                       )}
                     </div>
                     {naverMsg && <p className="review-msg">{naverMsg}</p>}

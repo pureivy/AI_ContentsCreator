@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   escapeHtml, stripMarkdown, reviewLink, studioBase,
-  blogReadyHtml, cardnewsCaptionHtml, shortsCaptionHtml, factGateLines, briefGateLines, youtubeUploadedHtml,
+  blogReadyHtml, cardnewsCaptionHtml, shortsCaptionHtml, factGateLines, briefGateLines, youtubeUploadedHtml, naverPublishLabel,
 } from './contentNotify';
+import { CONFIG } from '../config';
 
 describe('escapeHtml', () => {
   it('&·<·> 를 이스케이프한다(텔레그램 HTML parse_mode 안전)', () => {
@@ -168,7 +169,11 @@ describe('factGateLines — 텔레그램 보류 표시(스펙 §2-3)', () => {
 // 문구는 2026-08-31 에 "임시저장"→"비공개 발행"으로 갱신 — 실제 동작이 08-28 부터 비공개 발행인데
 // UI 이름만 옛 것으로 남아 사용자가 "임시저장으로 들어갔다"고 오해했다(버튼 이름도 같이 바뀌었다).
 describe('blogReadyHtml — 자동 발행 off 안내(전면 수동 검토)', () => {
-  const MANUAL = '✋ 수동 검토 대기 — 아래 "네이버 비공개 발행" 버튼으로 발행';
+  // 2026-10-01 — 버튼 이름이 실제 동작(NAVER_PUBLISH_PUBLIC)을 따른다: 켜짐=전체공개 발행, 꺼짐=비공개 발행.
+  const MANUAL = `✋ 수동 검토 대기 — 아래 "${naverPublishLabel()}" 버튼으로 발행`;
+  it('버튼 이름은 공개 발행 설정을 따른다', () => {
+    expect(naverPublishLabel()).toBe(CONFIG.naverPublishPublic ? '네이버 발행(전체공개)' : '네이버 비공개 발행');
+  });
 
   it('off 면 수동 검토 줄을 넣고, on 이면 기존 문구 그대로', () => {
     expect(blogReadyHtml({ id: 'p1', title: 'T' }, '', false)).toContain(MANUAL);
@@ -279,6 +284,12 @@ describe('youtubeUploadedHtml — 유튜브 비공개 업로드 완료 알림', 
     expect(h).toContain('35초');
     expect(h).toContain('씬 5개');
     expect(h).toContain('https://youtube.com/shorts/ABC');
+  });
+
+  it('공개 발행(publicPending, 2026-10-01)이면 "자동 공개"로 쓴다 — 비공개라고 하면 사람이 스튜디오에서 또 손댄다', () => {
+    const h = youtubeUploadedHtml({ id: 's1', topic: 'T', url: 'https://youtube.com/shorts/ABC', publicPending: true });
+    expect(h).toContain('자동 공개');
+    expect(h).not.toContain('비공개');
   });
 
   it('title 이 없으면 topic 으로 대체한다', () => {

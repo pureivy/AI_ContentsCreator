@@ -318,6 +318,8 @@ export interface NaverDraftResult {
    * 임시저장 폴백(비공개 확인 실패·예외)이면 false — 그때 URL 은 postwrite 라 링크로 쓰면 안 된다.
    */
   privatePublished: boolean;
+  /** 전체공개로 발행됐는가(2026-10-01, public 요청 시) — true 면 privatePublished 도 true(둘 다 '진짜 글 주소'). */
+  publicPublished: boolean;
   issues: string[];
   /** 스크립트 stdout/stderr(캡) — 실패 원인 표시용. */
   output: string;
@@ -387,18 +389,18 @@ function assertSafeSlug(slug: string): void {
  *   없어도 열린 브라우저에서 직접 로그인하면 된다(최대 10분 대기, 전체 타임아웃 15분).
  */
 export async function publishDraftToNaver(
-  sessionDir: string, draft: BlogDraft, opts: { dryRun?: boolean; brand?: string } = {}, signal?: AbortSignal,
+  sessionDir: string, draft: BlogDraft, opts: { dryRun?: boolean; brand?: string; public?: boolean } = {}, signal?: AbortSignal,
 ): Promise<NaverDraftResult> {
   // 발행 대상 브랜드 = piece 의 브랜드(호출부가 명시). 미지정이면 활성 브랜드(대화형 검토 탭 경로).
   const slug = opts.brand ?? activeBrandSlug();
   if (slug && !isSafeBrandSlug(slug)) {
-    return { ok: false, status: 'ERROR', privatePublished: false, issues: [`무효한 브랜드 슬러그: ${slug}`], output: '' };
+    return { ok: false, status: 'ERROR', privatePublished: false, publicPublished: false, issues: [`무효한 브랜드 슬러그: ${slug}`], output: '' };
   }
   const creds = naverPublishCreds(slug);
   const dryRun = opts.dryRun === true;
   if (!dryRun && !creds.blogId) {
     const where = slug ? `브랜드 '${slug}' 의 ` : '';
-    return { ok: false, status: 'ERROR', privatePublished: false, issues: [`${where}네이버 블로그 ID 미설정 — API 키 탭에서 이 브랜드의 발행 계정을 설정하세요.`], output: '' };
+    return { ok: false, status: 'ERROR', privatePublished: false, publicPublished: false, issues: [`${where}네이버 블로그 ID 미설정 — API 키 탭에서 이 브랜드의 발행 계정을 설정하세요.`], output: '' };
   }
   const finalContent = draftToFinalContent(draft);
 
@@ -428,7 +430,7 @@ export async function publishDraftToNaver(
     fs.writeFileSync(finalPath, JSON.stringify(finalContent, null, 2), 'utf-8');
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
   } catch (e) {
-    return { ok: false, status: 'ERROR', privatePublished: false, issues: [`발행 페이로드 기록 실패: ${e instanceof Error ? e.message : String(e)}`], output: '' };
+    return { ok: false, status: 'ERROR', privatePublished: false, publicPublished: false, issues: [`발행 페이로드 기록 실패: ${e instanceof Error ? e.message : String(e)}`], output: '' };
   }
 
   // 이전 런의 결과 파일이 남아 있으면 이번 런 실패 시 낡은 성공으로 오판 — 실행 전 제거.
@@ -448,6 +450,9 @@ export async function publishDraftToNaver(
   if (creds.loginId) env.NAVER_ID = creds.loginId;   // naver_publish.py 가 읽는 이름으로 매핑
   if (creds.loginPw) env.NAVER_PW = creds.loginPw;
   if (profileDir) env.NAVER_PROFILE_DIR = profileDir; // 미설정(범용)이면 python 기본 프로필(cli) 유지
+  // 전체공개 발행(2026-10-01) — 이 신뢰 경로가 명시적으로 요청할 때만. 파이썬 기본값은 비공개 그대로 둔다.
+  // .env 의 NAVER_PUBLISH_MODE=draft(임시저장 킬스위치)는 덮어쓰지 않는다.
+  if (opts.public && (process.env.NAVER_PUBLISH_MODE ?? '').trim().toLowerCase() !== 'draft') env.NAVER_PUBLISH_MODE = 'public_publish';
 
   const r = await runScript('naver_publish.py', args, sessionDir, signal, { timeoutMs: NAVER_PUBLISH_TIMEOUT_MS, env });
   pruneNaverProfileCache(profileDir); // 캐시만 정리(세션 보존) — 프로필 무한 증식 차단
@@ -461,12 +466,14 @@ export async function publishDraftToNaver(
       status,
       draftUrl: typeof res.draft_url === 'string' && res.draft_url ? res.draft_url : undefined,
       adminUrl: typeof res.admin_url === 'string' && res.admin_url ? res.admin_url : undefined,
-      privatePublished: res.publish_mode === 'private_published',
+      // '진짜 글로 발행됨'(비공개·전체공개) — 호출부가 이걸 보고 글 주소를 기록한다.
+      privatePublished: res.publish_mode === 'private_published' || res.publish_mode === 'public_published',
+      publicPublished: res.publish_mode === 'public_published',
       issues: Array.isArray(res.issues) ? res.issues.map(String) : [],
       output: r.output,
     };
   } catch {
-    return { ok: false, status: 'ERROR', privatePublished: false, issues: ['발행 결과 파일 없음 — 스크립트 출력 참조'], output: r.output };
+    return { ok: false, status: 'ERROR', privatePublished: false, publicPublished: false, issues: ['발행 결과 파일 없음 — 스크립트 출력 참조'], output: r.output };
   }
 }
 

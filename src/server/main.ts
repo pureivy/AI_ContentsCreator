@@ -39,7 +39,7 @@ import { mineClusterForPiece, filterCandidates } from '../orchestrator/clusterMi
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
-import { uploadShortsToYoutube } from '../tools/youtubeUpload';
+import { uploadShortsToYoutube, publishWhenReady, PUBLISH_SAFETY_MIN } from '../tools/youtubeUpload';
 import { publishCardNewsToMeta, publishShortsToMeta, realPermalink, listIgMedia, matchOrphanReels, GRAPH } from '../tools/metaPublish';
 import { llmWiki, slugify } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
@@ -1702,7 +1702,8 @@ app.post('/api/pieces/:id/shorts', shortsFromPieceHandler);
 app.get('/shorts', shortsListHandler);
 app.get('/api/shorts', shortsListHandler);
 // ── 유튜브 발행(브랜드별 채널) — 공용 OAuth 클라이언트 + 브랜드 refresh token(YOUTUBE_TOKENS).
-//    비공개 업로드 고정 — 공개 전환은 사람이 유튜브 스튜디오에서(네이버 '임시저장' 원칙).
+//    2026-10-01 사용자 확정: 사람이 누른 업로드는 공개 발행(YOUTUBE_PUBLISH_PUBLIC) — 비공개로 올려 처리·썸네일을 확인한 뒤
+//    공개로 바꾼다(publishWhenReady). 종전(~09-30)엔 비공개 업로드 고정, 공개 전환은 사람이 스튜디오에서 했다.
 const YT_REDIRECT = `http://127.0.0.1:${CONFIG.port}/youtube/oauth/callback`; // PORT 변경 시 구글 콘솔 리디렉션 URI 도 함께 갱신
 // OAuth state = 1회용 난수 논스(브랜드는 서버 메모리에서 복원, 10분 TTL) — 위조 콜백으로 임의
 // 브랜드에 공격자 토큰을 심는 CSRF 차단 + 비정상 슬러그가 토큰 blob 에 저장되는 것 차단.
@@ -1730,7 +1731,9 @@ app.get('/youtube/oauth/start', (c) => {
   // 평균 시청 지속률 조회용. Data API 의 viewCount 만으로는 '노출이 끊긴 것'과 '보다가 이탈한 것'을
   // 구분할 수 없다(09-02 신작 조회 붕괴 진단에서 드러난 계측 공백). 스코프 추가는 재동의가 필요하므로
   // 기존 토큰은 그대로 두고, 사용자가 '채널 연결'을 다시 눌러야 애널리틱스 조회가 켜진다.
-  u.searchParams.set('scope', 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly');
+  // youtube.force-ssl 추가(2026-10-01) — 업로드 뒤 공개 전환·썸네일 복구(videos.update)용. upload 스코프로는 공개 여부를
+  // 바꿀 수 없다. 기존 토큰은 재연결 전까지 예약 공개(publishAt)로 공개된다(자동 썸네일 복구만 빠진다).
+  u.searchParams.set('scope', 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.force-ssl https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly');
   u.searchParams.set('access_type', 'offline');
   u.searchParams.set('prompt', 'consent');
   u.searchParams.set('state', nonce);
@@ -1846,17 +1849,34 @@ app.post('/shorts/:id/youtube', async (c) => {
     // 미지정 시 유튜브가 중간 프레임을 자동 선택해 커버가 엉뚱해짐(실측 2026-07-22, 사용자 방침: 맨 처음이 보이게).
     const ytVideo = (await ensureShortsDownload(ytDir)) ?? path.join(ytDir, 'final.mp4');
     const ytCover = await extractFirstFrame(ytVideo, path.join(ytDir, 'yt-cover.jpg'));
+    // 공개 발행(2026-10-01) — 비공개 + 예약 공개 안전망으로 올리고, 뒤에서 처리 확인 → 공개 전환 → 썸네일 확인.
+    const goPublic = CONFIG.youtubePublishPublic;
+    const publishAt = goPublic ? new Date(Date.now() + PUBLISH_SAFETY_MIN * 60_000).toISOString() : undefined;
     const r = await uploadShortsToYoutube({
       slug: s.brand ?? '', videoPath: ytVideo,
       title: s.title ?? s.topic, description: s.description ?? '', hashtags: s.hashtags ?? [],
       blogUrl: blogUrlForPiece(s.sourcePieceId), // 원본 블로그 링크 — 발행 시점 조회(사용자 확정 2026-07-31)
       thumbnailPath: ytCover ?? undefined,
+      publishAt,
     });
     if (!r.ok) return c.json({ error: r.error }, 502);
     shortsStore().update(id, { youtubeId: r.videoId, youtubeUrl: r.url, youtubeTs: new Date().toISOString() });
     maybeArchiveShortsVideo(id); // 릴스도 이미 올라갔으면 여기서 원본 정리
-    if (r.thumbnailError) console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 24)} — 썸네일 미적용: ${r.thumbnailError}`);
-    console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 유튜브 비공개 업로드 완료 (${publisherName()})`);
+    const ytLabel = (s.title ?? s.topic).slice(0, 30);
+    if (r.thumbnailError) console.log(`[발행담당] ${ytLabel.slice(0, 24)} — 썸네일 미적용: ${r.thumbnailError}`);
+    console.log(`[발행담당] ${ytLabel} — 유튜브 ${goPublic ? '업로드 완료(처리 확인 뒤 공개 전환)' : '비공개 업로드 완료'} (${publisherName()})`);
+    if (goPublic && r.videoId) {
+      // 기다리지 않는다 — 처리·썸네일 확인은 수 분 걸린다. 썸네일이 끝내 안 뜨면 사람이 봐야 하니 알림.
+      void publishWhenReady({
+        slug: s.brand ?? '', videoId: r.videoId, thumbnailPath: ytCover ?? undefined, publishAt,
+        log: (m) => console.log(`[발행담당] ${ytLabel} — 유튜브 ${m}`),
+      }).then((o) => {
+        console.log(`[발행담당] ${ytLabel} — 유튜브 공개 처리: ${o.note}`);
+        if (o.thumb !== 'ok' && notifyConfigured()) {
+          void notify({ title: `⚠️ 유튜브 공개·썸네일 확인 필요 · ${ytLabel}`, body: `${o.note}\n${r.url ?? ''}` }).catch(() => { /* 무해 */ });
+        }
+      });
+    }
     // 텔레그램 알림(사용자 요청 2026-08-31) — 발행 계열 중 유튜브만. 종전엔 콘솔 로그뿐이라 스튜디오를
     // 보고 있지 않으면 올라간 사실을 알 수 없었다. 릴스·인스타는 제외(세트당 3건이면 소음).
     // url 이 없으면 알리지 않는다 — 링크 없는 "업로드 완료"는 확인할 방법이 없어 알림 가치가 없다.
@@ -1866,10 +1886,10 @@ app.post('/shorts/:id/youtube', async (c) => {
     if (r.url) {
       void notifyYoutubeUploaded({
         id, topic: s.topic, title: s.title, brand: s.brand,
-        durationSec: s.durationSec, scenes: s.scenes, url: r.url,
+        durationSec: s.durationSec, scenes: s.scenes, url: r.url, publicPending: goPublic,
       });
     }
-    return c.json({ ok: true, url: r.url, thumbnailError: r.thumbnailError, notified });
+    return c.json({ ok: true, url: r.url, thumbnailError: r.thumbnailError, notified, public_pending: goPublic });
   } finally {
     ytPublishInFlight.delete(id);
   }
@@ -2453,7 +2473,9 @@ async function pieceReviseHandler(c: Context): Promise<Response> {
 app.post('/pieces/:id/revise', pieceReviseHandler);
 app.post('/api/pieces/:id/revise', pieceReviseHandler);
 
-// 네이버 비공개 발행(검토 탭) — 완성 초안을 네이버에 **비공개로 실제 발행**한다(전체공개는 사람이 전환).
+// 네이버 발행(검토 탭) — 완성 초안을 네이버에 **실제 발행**한다. 2026-10-01 사용자 확정으로 사람이 누른 발행은
+// 전체공개(NAVER_PUBLISH_PUBLIC, 발행 설정 확인 실패 시 비공개로 폴백), 자동 게이트 잡은 비공개 그대로.
+// 이하는 비공개 발행 시절(2026-08-28~09-30)의 기록 — 완성 초안을 **비공개로 실제 발행**했다(전체공개는 사람이 전환).
 // 이름이 오래 '임시저장'이었던 이유: 2026-08-28 에 파이썬 기본 모드가 private_publish 로 바뀌었는데
 // UI·상태값·필드명은 옛 이름 그대로였다. 사용자 확인(2026-08-31) 후 사람이 보는 문구만 실제 동작에
 // 맞췄다 — 저장 필드(naverDraftUrl/naverDraftTs)와 status 상수(DRAFT_SAVED)는 호환 위해 유지.
@@ -2464,8 +2486,10 @@ interface NaverDraftJob {
   status: 'running' | 'saved' | 'failed';
   startedTs: string; endedTs?: string;
   url?: string; adminUrl?: string; error?: string; dryRun: boolean;
-  /** 비공개로 실제 발행됐는가(false = 임시저장 폴백) — 완료 문구·링크 안내가 갈린다. */
+  /** 실제 글로 발행됐는가(비공개·전체공개, false = 임시저장 폴백) — 완료 문구·링크 안내가 갈린다. */
   privatePublished?: boolean;
+  /** 전체공개로 발행됐는가(2026-10-01). false 인데 privatePublished 면 비공개 발행(설정 확인 실패 폴백 포함). */
+  publicPublished?: boolean;
   /** 자동 게이트가 기동한 잡의 담당자 표기(발행 담당) — 수동(검토 탭 버튼) 잡은 비움. */
   actor?: string;
 }
@@ -2533,8 +2557,11 @@ function autoDeriveSet(id: string, title: string): void {
   }
 }
 
-function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string } = {}): NaverDraftStart {
+function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string; auto?: boolean } = {}): NaverDraftStart {
   const dryRun = opts.dryRun === true;
+  // 전체공개는 사람이 누른 발행만(2026-10-01) — 자동 게이트(auto)는 사람 검토 없이 도는 길이라 비공개 그대로.
+  // actor 로 가르면 안 된다: 텔레그램 버튼(사람)도 actor 를 싣는다.
+  const wantPublic = CONFIG.naverPublishPublic && !opts.auto;
   const piece = pieceStore().get(id);
   if (!piece) return { error: 'unknown piece', status: 404 };
   if (!piece.runId) return { error: '초안이 아직 없습니다.', status: 409 };
@@ -2563,11 +2590,11 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
 
   const job: NaverDraftJob = { status: 'running', startedTs: new Date().toISOString(), dryRun, actor: opts.actor };
   NAVER_DRAFT_JOBS.set(id, job);
-  if (!dryRun) naverProfileBusy = `비공개 발행:${piece.title.slice(0, 20)}`; // ── 동기 구간 끝(뮤텍스 획득)
-  void publishDraftToNaver(sessionDir, draft, { dryRun, brand: pubBrand }).then((r) => {
+  if (!dryRun) naverProfileBusy = `${wantPublic ? '발행' : '비공개 발행'}:${piece.title.slice(0, 20)}`; // ── 동기 구간 끝(뮤텍스 획득)
+  void publishDraftToNaver(sessionDir, draft, { dryRun, brand: pubBrand, public: wantPublic }).then((r) => {
     job.endedTs = new Date().toISOString();
     if (r.ok) {
-      job.status = 'saved'; job.url = r.draftUrl; job.adminUrl = r.adminUrl; job.privatePublished = r.privatePublished;
+      job.status = 'saved'; job.url = r.draftUrl; job.adminUrl = r.adminUrl; job.privatePublished = r.privatePublished; job.publicPublished = r.publicPublished;
       if (r.issues.length) job.error = r.issues.join(' · '); // PARTIAL — 저장은 됐지만 일부 문제(이미지 누락 등)
       // 잡 도는 사이 리비전으로 runId 가 바뀌었다면 이 결과는 옛 내용 — 현재 초안의 기록으로 남기지 않는다.
       if (!dryRun && pieceStore().get(id)?.runId === runIdAtStart) {
@@ -2584,7 +2611,9 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
           // 공개 판정은 publishedUrl 한 곳만 한다.
           ...(privateNow ? { privateUrl: privateNow } : {}),
         });
-        if (privateNow) console.log(`[네이버] 비공개 발행 — ${privateNow.slice(0, 80)}`);
+        // 전체공개 글도 여기(privateUrl)에 적는다 — publishedUrl 은 RSS 발행 감지가 채우는 자리라 건드리지 않는다
+        // (감지가 성과 수집 등록까지 이어서 한다). 링크 조회(blogUrlForPiece)는 publishedUrl 이 없으면 이 주소를 쓴다.
+        if (privateNow) console.log(`[네이버] ${r.publicPublished ? '전체공개' : '비공개'} 발행 — ${privateNow.slice(0, 80)}`);
         // 저장 성공 = 본문 확정 + 블로그 주소 확보 → 카드뉴스·숏폼 자동 파생(주제 하나 → 세트).
         // 2026-08-28 사용자 확정으로 이 훅이 파생의 **단일 경로**가 됐다 — 사람이 검토 탭·텔레그램
         // 버튼으로 저장한 글도 같은 훅을 타므로 전량 수동 검토 운영에서도 세트는 정상 생성된다.
@@ -2603,7 +2632,7 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
     // 자동(발행 담당) 잡 종료 알림 — 채널 설정 시에만. 수동 잡은 사용자가 화면에서 폴링하므로 제외.
     if (opts.actor && !dryRun && notifyConfigured()) {
       void notify({
-        title: `📗 ${opts.actor} — 네이버 ${job.privatePublished ? '비공개 발행' : '임시저장'} ${job.status === 'saved' ? '완료' : '실패'} · ${piece.title.slice(0, 40)}`,
+        title: `📗 ${opts.actor} — 네이버 ${job.publicPublished ? '전체공개 발행' : job.privatePublished ? '비공개 발행' : '임시저장'} ${job.status === 'saved' ? '완료' : '실패'} · ${piece.title.slice(0, 40)}`,
         body: job.url ?? job.adminUrl ?? job.error ?? '',
       });
     }
@@ -2633,7 +2662,7 @@ function pieceNaverDraftStatusHandler(c: Context): Response {
   return c.json({
     status: job.status, url: job.url ?? piece.naverDraftUrl, admin_url: job.adminUrl,
     error: job.error, dry_run: job.dryRun, started_ts: job.startedTs, ended_ts: job.endedTs,
-    actor: job.actor, private_published: !!job.privatePublished,
+    actor: job.actor, private_published: !!job.privatePublished, public_published: !!job.publicPublished,
   });
 }
 
@@ -2715,7 +2744,7 @@ function maybeAutoNaverDraft(pieceId: string): boolean {
     return false;
   }
   if (decision === 'draft') {
-    const r = startNaverDraftJob(pieceId, { actor: publisherName() });
+    const r = startNaverDraftJob(pieceId, { actor: publisherName(), auto: true });
     console.log('error' in r
       ? `[발행담당] ${piece.title.slice(0, 30)} — 임시저장 기동 실패: ${r.error}`
       : `[발행담당] ${piece.title.slice(0, 30)} — SEO ${seo}점(기준 ${CONFIG.naverDraftSeoMin}) 통과 → 네이버 임시저장 시작`);

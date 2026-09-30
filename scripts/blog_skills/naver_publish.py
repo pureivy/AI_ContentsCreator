@@ -1164,15 +1164,188 @@ def set_images_ai(page) -> str:
 def publish_mode() -> str:
     """발행 방식 — 기본 'private_publish'(발행 레이어를 열어 태그+비공개로 실제 발행: 태그 확실히 저장,
     글은 비공개라 검토 후 사람이 전체공개로 전환). 킬스위치 NAVER_PUBLISH_MODE=draft 로 예전 임시저장 복귀.
+    'public_publish'(2026-10-01 사용자 확정) — 전체공개로 발행하고 발행 설정을 사용자 지정값으로 맞춘다.
+    이 값은 검토 탭 버튼 경로(blog_skills.publishDraftToNaver)가 명시적으로 넘길 때만 쓰인다 — 스크립트
+    기본값은 비공개 그대로 둔다(에이전트 툴 경로가 열리더라도 공개 발행까지 열리지 않게).
     태그는 '발행 설정' 레이어에만 있어 임시저장으론 저장되지 않는다(2026-07-21 DOM 프로브 실증)."""
     return os.environ.get("NAVER_PUBLISH_MODE", "private_publish").strip().lower()
 
 
-def publish_private_with_tags(page, tags: list, run_dir: str, issues: list) -> bool:
-    """발행 레이어 → 태그 입력 → 공개설정=비공개 → 확정 발행. 태그는 이 레이어(input#tag-input)에만 있다.
-    [하드 세이프가드] 비공개 라디오(input#open_private)가 checked 로 확인될 때만 확정 발행한다 — 확인 실패 시
-    발행을 취소하고 False 반환(호출부가 임시저장으로 폴백). 실수로 '전체공개' 되는 것을 원천 차단.
-    성공(비공개 발행 완료) 시 True."""
+# 전체공개 발행 설정(2026-10-01 사용자 확정) — 레이어의 공개 설정·발행 설정을 이 값으로 맞춘다.
+#   공개 설정: 전체공개 / 댓글허용·공감허용·검색허용·외부 공유 허용: 켬 / 블로그·카페 공유: 켬 + '링크 허용'(본문 허용 아님)
+#   발행 시간: 현재 / '이 설정을 기본값으로 유지': 끔(사람이 쓰는 기본값을 건드리지 않는다)
+# 셀렉터는 라벨 글자로 찾는다(id 는 비공개 라디오 open_private 만 실측). 체크박스는 '토글'이 아니라 '목표 상태'로
+# 맞춘다 — 댓글허용은 기본으로 켜져 있어 무조건 클릭하면 꺼진다. 전부 읽어 확인한 뒤에만 발행한다.
+PUBLISH_LAYER_JS = r"""(act) => {
+    const norm = (s) => (s || '').replace(/\s+/g, '');
+    const cb = [...document.querySelectorAll('button')].find(x => /confirm_btn/.test(x.className));
+    let root = cb;
+    while (root && !(root.querySelector && root.querySelector('input#open_private'))) root = root.parentElement;
+    root = root || document;
+    const labels = [...root.querySelectorAll('label')];
+    const ctl = (text, type) => {
+        for (const l of labels) {
+            if (!norm(l.textContent).startsWith(norm(text))) continue;
+            const f = l.getAttribute('for');
+            let inp = f ? document.getElementById(f) : null;
+            if (!inp) inp = l.querySelector('input');
+            if (!inp && l.previousElementSibling && l.previousElementSibling.tagName === 'INPUT') inp = l.previousElementSibling;
+            if (inp && (!type || inp.type === type)) return { l, inp };
+        }
+        return null;
+    };
+    const pub = () => {
+        const inp = root.querySelector('input#open_public');
+        if (inp) return { l: inp.closest('label') || document.querySelector('label[for=open_public]'), inp };
+        return ctl('전체공개', 'radio');
+    };
+    const BOXES = { comment: '댓글허용', sympathy: '공감허용', search: '검색허용', share: '블로그/카페 공유', external: '외부 공유 허용' };
+    // 블로그/카페 공유 옆 드롭다운 — '링크 허용' / '본문 허용'. 라벨에서 위로 올라가며 값 표시 요소를 찾는다.
+    const shareTrigger = () => {
+        const c = ctl(BOXES.share, 'checkbox');
+        let row = c ? c.l : null;
+        for (let i = 0; row && i < 4; i++, row = row.parentElement) {
+            const sel = row.querySelector('select');
+            if (sel) return { sel };
+            const btn = [...row.querySelectorAll('button, [role=button], [role=combobox], [aria-haspopup]')]
+                .find(b => /(링크|본문)\s*허용/.test(b.textContent || ''));
+            if (btn) return { btn };
+        }
+        return null;
+    };
+    const shareValue = () => {
+        const t = shareTrigger();
+        if (!t) return '';
+        if (t.sel) return norm((t.sel.options[t.sel.selectedIndex] || {}).text);
+        return norm(t.btn.textContent);
+    };
+    const click = (c) => { if (c.l) c.l.click(); else c.inp.click(); };
+    if (act === 'select_public') {
+        const c = pub(); if (!c) return false;
+        c.inp.click(); if (c.l && !c.inp.checked) c.l.click();
+        return true;
+    }
+    if (act && act.startsWith('check:')) {
+        const c = ctl(BOXES[act.slice(6)], 'checkbox');
+        if (!c || c.inp.disabled) return false;
+        if (!c.inp.checked) click(c);
+        if (!c.inp.checked) c.inp.click();
+        return c.inp.checked;
+    }
+    if (act === 'uncheck_keep_default') {
+        const c = ctl('이 설정을 기본값으로 유지', 'checkbox');
+        if (c && c.inp.checked) click(c);
+        return !c || !c.inp.checked;
+    }
+    if (act === 'select_now') {
+        const c = ctl('현재', 'radio');
+        if (c && !c.inp.checked) click(c);
+        return !!(c && c.inp.checked);
+    }
+    if (act === 'open_share_menu') {
+        const t = shareTrigger();
+        if (!t) return false;
+        if (t.sel) {
+            const o = [...t.sel.options].find(o => norm(o.text) === '링크허용');
+            if (!o) return false;
+            t.sel.value = o.value; t.sel.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+        }
+        t.btn.click(); return true;
+    }
+    if (act === 'pick_link') {
+        const opt = [...document.querySelectorAll('li, button, a, [role=option], [role=menuitem], span')]
+            .filter(e => e.offsetParent !== null && norm(e.textContent) === '링크허용')
+            .find(e => !shareTrigger() || !shareTrigger().btn || !shareTrigger().btn.contains(e));
+        if (!opt) return false;
+        opt.click(); return true;
+    }
+    if (act === 'html') return root === document ? '' : root.outerHTML;
+    // state — 발행 직전 확인용 스냅샷
+    const st = { found: root !== document };
+    const p = pub(); st.public = !!(p && p.inp.checked);
+    const priv = root.querySelector('input#open_private'); st.private = !!(priv && priv.checked);
+    for (const [k, t] of Object.entries(BOXES)) {
+        const c = ctl(t, 'checkbox');
+        st[k] = c ? (c.inp.checked ? 'on' : (c.inp.disabled ? 'disabled' : 'off')) : 'missing';
+    }
+    st.shareMode = shareValue();
+    const now = ctl('현재', 'radio'); st.now = !!(now && now.inp.checked);
+    const keep = ctl('이 설정을 기본값으로 유지', 'checkbox'); st.keepDefault = !!(keep && keep.inp.checked);
+    return st;
+}"""
+
+
+def public_settings_problems(st: dict) -> list:
+    """발행 설정 스냅샷이 사용자 지정값과 다른 항목(순수) — 빈 목록이어야 전체공개 발행을 누른다."""
+    if not isinstance(st, dict):
+        return ["설정 읽기 실패"]
+    probs = []
+    if not st.get("public"):
+        probs.append("전체공개 아님")
+    names = {"comment": "댓글허용", "sympathy": "공감허용", "search": "검색허용",
+             "share": "블로그/카페 공유", "external": "외부 공유 허용"}
+    for k, label in names.items():
+        if st.get(k) != "on":
+            probs.append(f"{label}={st.get(k)}")
+    if st.get("shareMode") != "링크허용":
+        probs.append(f"블로그/카페 공유 방식='{st.get('shareMode') or '?'}'(링크 허용 아님)")
+    if not st.get("now"):
+        probs.append("발행 시간이 '현재' 아님")
+    if st.get("keepDefault"):
+        probs.append("'이 설정을 기본값으로 유지'가 켜짐")
+    return probs
+
+
+def apply_public_settings(page) -> tuple:
+    """발행 레이어를 전체공개 + 사용자 지정 발행 설정으로 맞춘다. (성공 여부, 남은 문제 목록) 반환.
+    전체공개를 먼저 고른다 — 비공개 상태에선 공감·검색·공유 항목이 비활성이라 체크가 안 먹는다."""
+    if not page.evaluate(PUBLISH_LAYER_JS, "select_public"):
+        return False, ["전체공개 라디오 못 찾음"]
+    st = {}
+    for _ in range(12):  # 최대 ~3초 — 항목이 활성화될 때까지
+        time.sleep(0.25)
+        st = page.evaluate(PUBLISH_LAYER_JS, "state")
+        if st.get("public") and st.get("sympathy") not in ("disabled", "missing"):
+            break
+    for k in ("comment", "sympathy", "search", "share", "external"):
+        page.evaluate(PUBLISH_LAYER_JS, f"check:{k}")
+        time.sleep(_rand(0.15, 0.3))
+    st = page.evaluate(PUBLISH_LAYER_JS, "state")
+    if st.get("shareMode") != "링크허용":
+        if page.evaluate(PUBLISH_LAYER_JS, "open_share_menu"):
+            time.sleep(0.4)
+            page.evaluate(PUBLISH_LAYER_JS, "pick_link")
+            time.sleep(0.4)
+    page.evaluate(PUBLISH_LAYER_JS, "select_now")
+    page.evaluate(PUBLISH_LAYER_JS, "uncheck_keep_default")
+    time.sleep(0.4)
+    st = page.evaluate(PUBLISH_LAYER_JS, "state")
+    log(f"  발행 설정 스냅샷: {st}")
+    probs = public_settings_problems(st)
+    return (not probs), probs
+
+
+def _dump_publish_layer(page, run_dir: str) -> None:
+    """진단 — 발행 직전 레이어 스크린샷 + HTML(라벨 셀렉터가 깨지면 이걸 보고 고친다)."""
+    try:
+        sd = os.path.join(run_dir, "screenshots"); os.makedirs(sd, exist_ok=True)
+        page.screenshot(path=os.path.join(sd, "publish_layer.png"))
+        html = page.evaluate(PUBLISH_LAYER_JS, "html")
+        if html:
+            with open(os.path.join(sd, "publish_layer.html"), "w", encoding="utf-8") as f:
+                f.write(html)
+    except Exception:
+        pass
+
+
+def publish_with_tags(page, tags: list, run_dir: str, issues: list, want_public: bool = False):
+    """발행 레이어 → 태그 입력 → 공개설정 → 확정 발행. 태그는 이 레이어(input#tag-input)에만 있다.
+    want_public(2026-10-01): 전체공개 + 사용자 지정 발행 설정. 설정을 전부 읽어 확인했을 때만 전체공개로 누르고,
+    하나라도 어긋나면 **비공개로** 발행한다(글 주소·태그·파생은 그대로 살고, 사람이 네이버에서 공개로 바꾸면 된다).
+    [하드 세이프가드] 비공개로 갈 땐 비공개 라디오(input#open_private)가 checked 로 확인될 때만 확정 발행한다 —
+    확인 실패 시 발행을 취소하고 None(호출부가 임시저장으로 폴백). 뜻하지 않은 전체공개를 원천 차단.
+    반환: 'public' | 'private' | None(발행 안 함)."""
     try:
         # 1) 발행 레이어 열기 — 우상단 '발행' 버튼(publish_btn). 확정(confirm_btn) 아님.
         opened = page.evaluate("""() => {
@@ -1181,7 +1354,7 @@ def publish_private_with_tags(page, tags: list, run_dir: str, issues: list) -> b
             if (b) { b.click(); return true; } return false; }""")
         if not opened:
             log("  발행 레이어 열기 실패(publish_btn 못 찾음) — 임시저장 폴백")
-            return False
+            return None
         # 태그 입력칸이 뜰 때까지 대기(레이어 렌더 확인)
         ti = page.locator("input#tag-input").first
         ti.wait_for(state="visible", timeout=6000)
@@ -1199,32 +1372,50 @@ def publish_private_with_tags(page, tags: list, run_dir: str, issues: list) -> b
                 log(f"  태그 '{tag}' 입력 실패: {str(e)[:40]}")
         log(f"  태그 {entered}/{len(tags)}개 입력(발행 레이어)")
 
-        # 3) 공개설정=비공개 — 라디오 input + 라벨 병행 클릭(React 핸들러 확실히 트리거)
-        page.evaluate("""() => {
-            const r = document.querySelector('input#open_private');
-            if (r) { r.click();
-                const lb = r.closest('label') || document.querySelector('label[for=open_private]');
-                if (lb) lb.click(); } }""")
-        time.sleep(0.5)
+        visibility = None
+        # 3a) 전체공개 + 발행 설정 — 전부 확인돼야 전체공개로 누른다.
+        if want_public:
+            ok, probs = apply_public_settings(page)
+            if ok:
+                visibility = "public"
+                log("  전체공개·발행 설정 확인됨 ✓ (댓글·공감·검색·외부 공유 허용, 블로그/카페 공유=링크 허용)")
+            else:
+                log(f"  ⚠ 전체공개 설정 확인 실패 — 비공개로 발행: {' · '.join(probs)}")
+                issues.append(f"전체공개 설정 확인 실패 → 비공개로 발행({' · '.join(probs)[:120]}) — 네이버에서 공개로 바꾸세요")
 
-        # 4) [하드 세이프가드] 비공개가 실제 checked 인지 검증 — 아니면 절대 발행하지 않는다.
-        is_private = page.evaluate("() => { const r=document.querySelector('input#open_private'); return !!(r && r.checked); }")
-        if not is_private:
-            log("  ⚠ 비공개 선택 확인 실패 — 확정 발행 취소(전체공개 위험 차단), 임시저장 폴백")
-            issues.append("비공개 확인 실패 → 발행 안 함(임시저장 폴백)")
-            try: page.keyboard.press("Escape")
-            except Exception: pass
-            return False
-        log("  비공개 확인됨 ✓ — 확정 발행 진행")
+        # 3b) 공개설정=비공개 — 라디오 input + 라벨 병행 클릭(React 핸들러 확실히 트리거)
+        if visibility is None:
+            page.evaluate("""() => {
+                const r = document.querySelector('input#open_private');
+                if (r) { r.click();
+                    const lb = r.closest('label') || document.querySelector('label[for=open_private]');
+                    if (lb) lb.click(); } }""")
+            time.sleep(0.5)
+            # 4) [하드 세이프가드] 비공개가 실제 checked 인지 검증 — 아니면 절대 발행하지 않는다.
+            is_private = page.evaluate("() => { const r=document.querySelector('input#open_private'); return !!(r && r.checked); }")
+            if not is_private:
+                log("  ⚠ 비공개 선택 확인 실패 — 확정 발행 취소(전체공개 위험 차단), 임시저장 폴백")
+                issues.append("비공개 확인 실패 → 발행 안 함(임시저장 폴백)")
+                try: page.keyboard.press("Escape")
+                except Exception: pass
+                return None
+            visibility = "private"
+            log("  비공개 확인됨 ✓ — 확정 발행 진행")
 
-        # 진단 스크린샷(발행 직전 레이어 상태)
-        try:
-            sd = os.path.join(run_dir, "screenshots"); os.makedirs(sd, exist_ok=True)
-            page.screenshot(path=os.path.join(sd, "publish_layer.png"))
-        except Exception:
-            pass
+        # 진단 덤프(발행 직전 레이어 상태)
+        _dump_publish_layer(page, run_dir)
 
-        # 5) 확정 발행 — 레이어 하단 '발행'(confirm_btn). 비공개 검증 통과 후에만 도달.
+        # 5) 확정 발행 직전 재확인 — 전체공개면 설정 스냅샷이 여전히 맞아야 한다(렌더 사이 되돌림 차단).
+        if visibility == "public":
+            probs = public_settings_problems(page.evaluate(PUBLISH_LAYER_JS, "state"))
+            if probs:
+                log(f"  ⚠ 확정 직전 재확인 실패 — 발행 취소, 임시저장 폴백: {' · '.join(probs)}")
+                issues.append(f"전체공개 확정 직전 설정 어긋남 → 발행 안 함(임시저장 폴백): {' · '.join(probs)[:120]}")
+                try: page.keyboard.press("Escape")
+                except Exception: pass
+                return None
+
+        # 6) 확정 발행 — 레이어 하단 '발행'(confirm_btn). 공개설정 검증 통과 후에만 도달.
         confirmed = page.evaluate("""() => {
             const b = [...document.querySelectorAll('button')].find(
                 x => /confirm_btn/.test(x.className) && x.textContent.trim() === '발행');
@@ -1233,17 +1424,17 @@ def publish_private_with_tags(page, tags: list, run_dir: str, issues: list) -> b
             log("  확정 발행 버튼(confirm_btn) 못 찾음 — 임시저장 폴백")
             try: page.keyboard.press("Escape")
             except Exception: pass
-            return False
+            return None
         time.sleep(4)  # 발행 처리·네비게이션 대기
         dismiss_editor_popup(page)
-        log(f"  비공개 발행 완료 — {page.url}")
-        return True
+        log(f"  {'전체공개' if visibility == 'public' else '비공개'} 발행 완료 — {page.url}")
+        return visibility
     except Exception as e:
-        log(f"  비공개 발행 중 예외 — 임시저장 폴백: {str(e)[:80]}")
-        issues.append(f"비공개 발행 실패(임시저장 폴백): {str(e)[:80]}")
+        log(f"  발행 중 예외 — 임시저장 폴백: {str(e)[:80]}")
+        issues.append(f"발행 실패(임시저장 폴백): {str(e)[:80]}")
         try: page.keyboard.press("Escape")
         except Exception: pass
-        return False
+        return None
 
 
 def write_post(
@@ -1597,12 +1788,17 @@ def write_post(
 
     saved = False
     published_private = False
-    # 기본: 비공개 발행(태그를 발행 레이어에서 확실히 저장). 비공개 검증 실패·오류 시 임시저장으로 폴백.
+    published_visibility = None  # 'public' | 'private' | None
+    # 기본: 비공개 발행(태그를 발행 레이어에서 확실히 저장). public_publish 면 전체공개(설정 확인 실패 시 비공개).
+    # 검증 실패·오류 시 임시저장으로 폴백.
     if publish_mode() != 'draft' and tags:
-        log("\n[STEP 10] 비공개 발행(태그 포함) — 검토 후 사람이 전체공개로 전환")
-        if publish_private_with_tags(page, tags, run_dir, issues):
+        want_public = publish_mode() == 'public_publish'
+        log("\n[STEP 10] " + ("전체공개 발행(태그·발행 설정 포함)" if want_public
+                               else "비공개 발행(태그 포함) — 검토 후 사람이 전체공개로 전환"))
+        published_visibility = publish_with_tags(page, tags, run_dir, issues, want_public=want_public)
+        if published_visibility:
             saved = True
-            published_private = True
+            published_private = True  # '실제 글로 발행됨'(임시저장 아님) — 아래 임시저장 로직 건너뜀
         else:
             log("  → 임시저장으로 폴백")
     if published_private:
@@ -1653,6 +1849,8 @@ def write_post(
         dismiss_editor_popup(page)
         time.sleep(1)
         log("  임시저장 완료!")
+    elif published_visibility == "public":
+        log("  전체공개 발행 완료.")
     elif published_private:
         log("  비공개 발행 완료 — 네이버에서 검토 후 '전체공개'로 전환하세요.")
 
@@ -1676,7 +1874,8 @@ def write_post(
 
     return {
         "status":               status,
-        "publish_mode":         "private_published" if published_private else "draft_saved",
+        "publish_mode":         ("public_published" if published_visibility == "public"
+                                 else "private_published" if published_private else "draft_saved"),
         "draft_url":            draft_url,
         "admin_url":            f"https://blog.naver.com/{blog_id}/postlist",
         "saved_at":             datetime.now().strftime("%Y-%m-%dT%H:%M:%S+09:00"),

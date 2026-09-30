@@ -106,6 +106,12 @@ export interface Config {
   readonly blogAutoImage: boolean;
   /** ready 도달 시 자동 네이버 임시저장 — SEO 점수가 기준(naverDraftSeoMin) 이상일 때만. 발행은 여전히 사람 수동. */
   readonly autoNaverDraft: boolean;
+  /**
+   * 사람이 누른 네이버 발행(검토 탭·텔레그램 버튼)을 전체공개로(2026-10-01 사용자 확정, 기본 켬) — 발행 설정은
+   * 댓글·공감·검색·외부 공유 허용, 블로그/카페 공유=링크 허용. 설정 확인에 실패하면 비공개로 발행한다.
+   * 0 이면 종전 비공개 발행. 자동 게이트(AUTO_NAVER_DRAFT) 잡은 이 값과 무관하게 비공개 그대로다.
+   */
+  readonly naverPublishPublic: boolean;
   /** 사실 게이트(2026-08-26, 사용자 절대 규칙) — 본문 주장을 브리프·근거와 대조해 무근거·모순이면 자동 임시저장 보류. */
   readonly factGate: boolean;
   /** 사실 게이트가 판정할 주장 수 상한(5~40 클램프). */
@@ -176,6 +182,12 @@ export interface Config {
   readonly shortsI2vMaxClips: number;
   /** ready 쇼츠 자동 유튜브 비공개 업로드(옵트인). */
   readonly autoYtUpload: boolean;
+  /**
+   * 사람이 누른 유튜브 업로드를 공개로(2026-10-01 사용자 확정, 기본 켬). 비공개로 올려 썸네일을 건 뒤 처리가 끝나면
+   * 공개로 바꾸고 썸네일이 실제로 떴는지 확인한다(안 떴으면 비공개→공개를 한 번 더 — 08-31 실증 복구 절차).
+   * 0 이면 종전 비공개 업로드. 자동 업로드(AUTO_YT_UPLOAD) 는 이 값과 무관하게 비공개 그대로다.
+   */
+  readonly youtubePublishPublic: boolean;
   /** 쇼츠 성과 측정창(일) — 업로드 후 이 기간 매일 수집, 경과 시 강화 1회. */
   readonly shortsPerfDays: number;
   /** 쇼츠 총 길이 상한(초) — 대본 자수 예산·씬 수를 여기서 역산(사용자 확정 2026-08-14: 60초 이내). */
@@ -411,6 +423,7 @@ export const CONFIG: Config = {
   // 2026-08-27 사용자 확정 — 기본 off. 근거 유무와 무관하게 모든 블로그 글은 수동 검토 후 버튼으로 임시저장한다
   // (SEO 자동 리비전은 그대로 유지 — 꺼지는 건 임시저장 '호출'뿐).
   autoNaverDraft: envBool('AUTO_NAVER_DRAFT', false),
+  naverPublishPublic: envBool('NAVER_PUBLISH_PUBLIC', true),
   // 사실 게이트(2026-08-26, 사용자 절대 규칙) — 본문 주장을 브리프·근거와 대조해 무근거·모순이면 자동 임시저장 보류.
   factGate: envBool('FACT_GATE', true),
   factGateMaxClaims: Math.min(Math.max(5, envInt('FACT_GATE_MAX_CLAIMS', 20)), 40),
@@ -454,6 +467,7 @@ export const CONFIG: Config = {
   // 1로 줄인 날 fal 3연속 실패까지 겹쳐 클립 0장 편이 잇따랐다). 나머지 씬은 Remotion 네이티브 모션(fx).
   shortsI2vMaxClips: Math.min(8, Math.max(0, envInt('SHORTS_I2V_MAX_CLIPS', 2))),
   autoYtUpload: envBool('AUTO_YT_UPLOAD', false),
+  youtubePublishPublic: envBool('YOUTUBE_PUBLISH_PUBLIC', true),
   shortsPerfDays: Math.max(1, envInt('SHORTS_PERF_DAYS', 7)),
   shortsMaxDurationSec: Math.min(180, Math.max(20, envInt('SHORTS_MAX_DURATION_SEC', 60))),
   shortsScenes: Math.min(8, Math.max(3, envInt('SHORTS_SCENES', 5))),

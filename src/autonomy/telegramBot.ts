@@ -12,7 +12,7 @@ import path from 'node:path';
 import { CONFIG } from '../config';
 import { getSecret } from '../secrets/store';
 import { telegramCreds, tgApiUrl, sendTelegramHtml, sendTelegramPhotos, type TgButton } from './notify';
-import { studioBase, escapeHtml } from './contentNotify';
+import { studioBase, escapeHtml, naverPublishLabel } from './contentNotify';
 
 export type BotAction =
   | { kind: 'naver_draft'; id: string }
@@ -112,11 +112,17 @@ export type ApiCall = (pathname: string, body?: unknown, timeoutMs?: number) => 
 export interface Senders { photos: typeof sendTelegramPhotos; html: typeof sendTelegramHtml }
 const REAL_SENDERS: Senders = { photos: sendTelegramPhotos, html: sendTelegramHtml };
 
+// 유튜브 업로드 완료 문구 — 공개 발행(2026-10-01, 라우트의 public_pending)이면 자동 공개 예정, 아니면 종전 비공개 안내.
+const ytDoneText = (j: Record<string, unknown> | null): string =>
+  (j?.public_pending === true ? '▶️ 유튜브 업로드 완료 — 자동 공개 예정' : '▶️ 유튜브 비공개 업로드 완료');
+const ytDoneTail = (j: Record<string, unknown> | null): string =>
+  (j?.public_pending === true ? '\n썸네일까지 확인하고, 안 뜨면 따로 알려 드립니다.' : '\n공개 전환은 유튜브 스튜디오에서.');
+
 export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call: ApiCall = api, send: Senders = REAL_SENDERS): Promise<string> {
   switch (a.kind) {
     case 'naver_draft': {
       const r = await call(`/pieces/${a.id}/naver-draft`, { actor: '텔레그램' }, 30_000);
-      return r.ok ? '📗 네이버 비공개 발행 시작 — 완료되면 알림이 옵니다.' : errText('비공개 발행 시작 실패', r);
+      return r.ok ? `📗 ${naverPublishLabel()} 시작 — 완료되면 알림이 옵니다.` : errText(`${naverPublishLabel()} 시작 실패`, r);
     }
     case 'cardnews_publish': {
       const r = await call(`/cardnews/${a.id}/publish`);
@@ -158,7 +164,7 @@ export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call:
       // 두 통 온다(실사고 2026-09-08). '액션이 직접 전송한 경우 빈 문자열' 규칙(아래 호출부)을 따른다.
       if (r.json?.notified === true) return '';
       const url = typeof r.json?.url === 'string' ? r.json.url : typeof r.json?.youtubeUrl === 'string' ? r.json.youtubeUrl : '';
-      return `▶️ 유튜브 비공개 업로드 완료${url ? `\n${url}` : ''}\n공개 전환은 유튜브 스튜디오에서.`;
+      return `${ytDoneText(r.json)}${url ? `\n${url}` : ''}${ytDoneTail(r.json)}`;
     }
     case 'shorts_meta': {
       const r = await call(`/shorts/${a.id}/meta`);
@@ -175,7 +181,7 @@ export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call:
       if (!r.ok) return errText('유튜브 강행 업로드 실패', r);
       if (r.json?.notified === true) return '';
       const url = typeof r.json?.url === 'string' ? r.json.url : typeof r.json?.youtubeUrl === 'string' ? r.json.youtubeUrl : '';
-      return `▶️ 유튜브 비공개 업로드 완료(썸네일 확인 강행)${url ? `\n${url}` : ''}\n공개 전환은 유튜브 스튜디오에서.`;
+      return `${ytDoneText(r.json)}(썸네일 확인 강행)${url ? `\n${url}` : ''}${ytDoneTail(r.json)}`;
     }
     case 'shorts_meta_force': {
       const r = await call(`/shorts/${a.id}/meta`, { force: true });

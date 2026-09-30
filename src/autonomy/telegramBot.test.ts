@@ -55,6 +55,12 @@ describe('shorts_youtube 버튼 — 중복 완료 메시지 차단(2026-09-08)',
     expect(out).toContain('유튜브 비공개 업로드 완료');
     expect(out).toContain('https://youtu.be/x');
   });
+  it('공개 발행(public_pending, 2026-10-01)이면 "자동 공개"로 알린다 — 스튜디오 공개 안내는 빼고', async () => {
+    const out = await run({ ok: true, url: 'https://youtu.be/x', notified: false, public_pending: true });
+    expect(out).toContain('자동 공개');
+    expect(out).not.toContain('비공개');
+    expect(out).not.toContain('스튜디오');
+  });
   it('url 이 없으면 라우트도 안 알리므로 버튼이 알린다', async () => {
     expect(await run({ ok: true, notified: false })).toContain('업로드 완료');
   });

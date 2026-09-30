@@ -127,8 +127,10 @@ export function factGateLines(info: FactGateInfo | undefined, maxItems: number, 
   return withTiming([head, ...items].join('\n'));
 }
 
+/** 네이버 발행 버튼 이름 — 실제 동작과 같아야 한다(2026-10-01 전체공개 발행부터 NAVER_PUBLISH_PUBLIC 을 따른다). */
+export const naverPublishLabel = (): string => (CONFIG.naverPublishPublic ? '네이버 발행(전체공개)' : '네이버 비공개 발행');
 /** 자동 임시저장이 꺼진 동안의 안내 1줄(2026-08-27 사용자 확정) — 사람이 버튼을 눌러야 저장된다는 사실을 못 박는다. */
-const MANUAL_REVIEW_LINE = '✋ 수동 검토 대기 — 아래 "네이버 비공개 발행" 버튼으로 발행';
+const manualReviewLine = (): string => `✋ 수동 검토 대기 — 아래 "${naverPublishLabel()}" 버튼으로 발행`;
 
 /** 브리프 게이트 줄(2026-08-28) — `⚖ 브리프 반려 43/70 · 미해소 3건` + 지적 최대 2건. 순수 — 테스트 대상.
  * 통과(approved)면 빈 문자열: 정상은 알리지 않는다(줄이 늘면 반려 줄이 묻힌다).
@@ -163,7 +165,7 @@ export function blogReadyHtml(p: BlogReadyInfo, excerpt: string, autoDraft = CON
     // 문체 린트 잔존(2026-08-27 권고 3) — 사실 게이트 줄 옆. 발행을 막지 않는 표시 전용이라 건수만 낸다.
     styleResidual > 0 ? escapeHtml(`✍ 문체 ${styleResidual}건 잔존`) : '',
     // 사실 게이트 줄 '아래' — 보류 사유를 먼저 읽고 버튼을 누르는 순서.
-    autoDraft ? '' : escapeHtml(MANUAL_REVIEW_LINE),
+    autoDraft ? '' : escapeHtml(manualReviewLine()),
     excerpt ? `\n${escapeHtml(excerpt)}` : '',
     `\n검토: ${reviewLink(p.id)}`,
   ].filter(Boolean).join('\n');
@@ -198,10 +200,12 @@ export function shortsCaptionHtml(s: ShortsReadyInfo): string {
   ].filter(Boolean).join('\n');
 }
 
-/** 유튜브 비공개 업로드 완료 알림 입력 — 쇼츠 레코드에서 표시에 쓰는 필드만. */
+/** 유튜브 업로드 완료 알림 입력 — 쇼츠 레코드에서 표시에 쓰는 필드만. */
 export interface YoutubeUploadedInfo {
   id: string; topic: string; title?: string; brand?: string;
   durationSec?: number; scenes?: number; url: string;
+  /** 공개 발행(2026-10-01) — 지금은 비공개지만 처리·썸네일 확인 뒤 자동 공개된다. 없으면 종전 '비공개 업로드'. */
+  publicPending?: boolean;
 }
 
 /**
@@ -210,14 +214,18 @@ export interface YoutubeUploadedInfo {
  *
  * "비공개"를 문구에 못박는다 — 이 파이프라인은 유튜브에 비공개로만 올리고 전체공개 전환은 사람이 한다.
  * 알림이 '발행됐다'로 읽히면 이미 공개된 줄 알고 확인을 건너뛰게 된다.
+ * 2026-10-01 공개 발행(publicPending)부터는 "자동 공개 예정"으로 쓴다 — 공개 전환·썸네일 확인은 서버가 하고,
+ * 썸네일이 끝내 안 뜨면 따로 경고 알림이 간다.
  */
+const youtubeUploadedHead = (s: YoutubeUploadedInfo): string =>
+  s.publicPending ? '📺 유튜브 업로드 완료 — 자동 공개 예정(썸네일 확인)' : '📺 유튜브 비공개 업로드 완료';
 export function youtubeUploadedHtml(s: YoutubeUploadedInfo): string {
   const specs = [
     typeof s.durationSec === 'number' ? `${s.durationSec}초` : '',
     typeof s.scenes === 'number' ? `씬 ${s.scenes}개` : '',
   ].filter(Boolean).join(' · ');
   return [
-    escapeHtml(`📺 유튜브 비공개 업로드 완료${brandTag(s.brand)}`),
+    escapeHtml(`${youtubeUploadedHead(s)}${brandTag(s.brand)}`),
     `<b>${escapeHtml(clip(s.title || s.topic, 200))}</b>`,
     specs ? escapeHtml(specs) : '',
     s.url,
@@ -242,13 +250,13 @@ export async function notifyYoutubeUploaded(s: YoutubeUploadedInfo): Promise<voi
     if (!contentReadyNotifyEnabled()) return;
     const html = youtubeUploadedHtml(s);
     if (telegramCreds()) await sendTelegramHtml(html);
-    await notifyWebhookOnly({ title: `📺 유튜브 비공개 업로드 완료${brandTag(s.brand)} · ${s.title || s.topic}`, body: s.url });
+    await notifyWebhookOnly({ title: `${youtubeUploadedHead(s)}${brandTag(s.brand)} · ${s.title || s.topic}`, body: s.url });
   } catch { /* 무해 */ }
 }
 
 // 발행 버튼(인라인 키보드) — callback_data 규격은 telegramBot.parseCallback 과 한 쌍("<op>:<id>", ≤64바이트).
 const blogButtons = (id: string): TgButton[][] => [[
-  { text: '📗 네이버 비공개 발행', callback_data: `bp:${id}` },
+  { text: `📗 ${naverPublishLabel()}`, callback_data: `bp:${id}` },
   { text: '✍ 수정요청', callback_data: `rv:${id}` },
 ]];
 const cardnewsButtons = (id: string): TgButton[][] => [[

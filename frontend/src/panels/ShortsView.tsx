@@ -134,7 +134,7 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
             </button>
             {canYt && (s.youtubeUrl ? (
               <>
-                <a className="btn ghost" href={s.youtubeUrl} target="_blank" rel="noreferrer" title="비공개 업로드됨 — 공개 전환은 유튜브 스튜디오에서. 그때 커버를 '동영상 프레임' 맨 앞(0초=디자인 썸네일)으로 지정하세요">▶ 유튜브(비공개)</a>
+                <a className="btn ghost" href={s.youtubeUrl} target="_blank" rel="noreferrer" title="유튜브 업로드됨 — 2026-10-01 부터 처리가 끝나면 서버가 공개로 바꾸고 썸네일까지 확인합니다(안 뜨면 알림). 그 전 업로드분은 비공개일 수 있습니다">▶ 유튜브</a>
                 {typeof s.views === "number" && (
                   <span className="chip" title="유튜브 성과(최신 수집 — 매일 갱신)">👁 {fmtCount(s.views)}{typeof s.likes === "number" ? ` · 👍 ${fmtCount(s.likes)}` : ""}</span>
                 )}

@@ -840,7 +840,7 @@ export interface PieceInfo {
   publishedTs?: string; // 발행 시각 — 검토 탭 발행 이후 그룹의 안정 정렬 축(서버는 늘 내려주고 있었음)
   naverDraftUrl?: string;
   naverDraftTs?: string;
-  /** 비공개로 실제 발행됐을 때의 글 주소(logNo=…). 임시저장 폴백이면 없다 — 링크 문구를 가르는 기준. */
+  /** 실제 발행(비공개·전체공개)된 글 주소(logNo=…). 임시저장 폴백이면 없다 — 링크 문구를 가르는 기준. */
   privateUrl?: string;
   seoScore?: number;
   errors?: number;
@@ -925,13 +925,15 @@ export async function fetchPieceMetrics(id: string): Promise<MetricSample[]> {
   try { const r = await fetch(`/pieces/${id}/metrics`); if (!r.ok) return []; return (await r.json()).metrics ?? []; }
   catch { return []; }
 }
-// 네이버 비공개 발행(검토 탭) — 서버가 백그라운드 잡으로 Playwright 발행을 수행. 상태는 폴링으로 확인.
+// 네이버 발행(검토 탭, 2026-10-01 부터 전체공개) — 서버가 백그라운드 잡으로 Playwright 발행을 수행. 상태는 폴링으로 확인.
 export interface NaverDraftStatus {
   status: "idle" | "running" | "saved" | "failed";
   url?: string; admin_url?: string; error?: string; dry_run?: boolean;
   started_ts?: string; ended_ts?: string;
-  /** 비공개로 실제 발행됐는가 — false 면 임시저장 폴백이라 사용자가 갈 곳이 다르다. */
+  /** 실제 글로 발행됐는가(비공개·전체공개) — false 면 임시저장 폴백이라 사용자가 갈 곳이 다르다. */
   private_published?: boolean;
+  /** 전체공개로 발행됐는가(2026-10-01). */
+  public_published?: boolean;
 }
 export async function startNaverDraft(id: string, dryRun = false): Promise<{ ok: boolean; error?: string }> {
   try {
