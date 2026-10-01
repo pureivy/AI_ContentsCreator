@@ -225,6 +225,19 @@ export function normalizeBlogUrl(u?: string): string | undefined {
   return short ? short[1]! : flat;
 }
 
+/**
+ * 네이버 발행 잡 결과 → 조각에 적을 주소(순수 — 테스트 대상).
+ * - privateUrl: 진짜 글 주소(logNo=…)가 나온 실제 발행(비공개·전체공개). 임시저장 폴백(postwrite)은 링크로 못 쓴다.
+ * - publishedUrl: **전체공개**로 발행됐을 때만(2026-10-01 사용자 확정) — 바로 'published' 로 넘겨 미발행 초안 상한
+ *   (CONTENT_READY_CAP)에서 뺀다. 종전엔 03:00 RSS 감지까지 ready 로 남아 상한을 먹었다(10-02 06:00 슬롯 전멸).
+ *   비공개 발행은 여전히 감지에 맡긴다 — 사람이 공개로 바꿔야 진짜 발행이다.
+ */
+export function naverJobUrls(r: { privatePublished: boolean; publicPublished: boolean; draftUrl?: string }): { privateUrl?: string; publishedUrl?: string } {
+  const real = r.privatePublished && r.draftUrl && /logNo=|\/\d{6,}/.test(r.draftUrl) ? r.draftUrl : undefined;
+  if (!real) return {};
+  return { privateUrl: real, ...(r.publicPublished ? { publishedUrl: normalizeBlogUrl(real) ?? real } : {}) };
+}
+
 /** 자동 임시저장 차단 판정 — hold(무근거·모순 잔존)·error(판정 실패, fail-closed). 사용자 확정: 자동 경로만 차단. */
 export function autoDraftBlockedByFactGate(p: { factGate?: FactGateInfo }): boolean {
   return p.factGate?.status === 'hold' || p.factGate?.status === 'error';

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { PieceStore, selectResumablePiece, blogUrlForPiece, normalizeBlogUrl, cadenceBaselineTs, autoDraftBlockedByFactGate, planAutoNaverDraft, shouldAutoDeriveOnDecision } from './pieces';
+import { PieceStore, selectResumablePiece, blogUrlForPiece, normalizeBlogUrl, cadenceBaselineTs, autoDraftBlockedByFactGate, planAutoNaverDraft, shouldAutoDeriveOnDecision, naverJobUrls } from './pieces';
 import type { Piece } from './pieces';
 
 let dir = '';
@@ -268,5 +268,23 @@ describe('cadenceBaselineTs — 쿼터 기준점', () => {
       p('2026-08-28T21:06:00Z', true),
       p('2026-08-28T06:06:00Z', true),
     ])).toBe('2026-08-28T21:06:00Z');
+  });
+});
+
+// 2026-10-02 실사고 — 전체공개로 발행한 글이 03:00 RSS 감지 전까지 ready 로 남아 미발행 초안 상한(5)을 먹었고,
+// 06:00 정각 슬롯이 빈손으로 끝났다. 전체공개 성공은 그 자리에서 발행됨이다.
+describe('naverJobUrls — 네이버 발행 잡 결과 → 조각 주소(순수)', () => {
+  const LONG = 'https://blog.naver.com/PostView.naver?blogId=biondi_tree&Redirect=View&logNo=224392805567&categoryNo=1&isAfterWrite=true';
+  it('전체공개 발행이면 privateUrl + 정규화된 publishedUrl(바로 발행됨)', () => {
+    expect(naverJobUrls({ privatePublished: true, publicPublished: true, draftUrl: LONG }))
+      .toEqual({ privateUrl: LONG, publishedUrl: 'https://blog.naver.com/biondi_tree/224392805567' });
+  });
+  it('비공개 발행이면 privateUrl 만 — 공개 판정은 RSS 감지에 맡긴다', () => {
+    expect(naverJobUrls({ privatePublished: true, publicPublished: false, draftUrl: LONG })).toEqual({ privateUrl: LONG });
+  });
+  it('임시저장 폴백(postwrite 편집기 주소)이면 아무것도 적지 않는다', () => {
+    expect(naverJobUrls({ privatePublished: false, publicPublished: false, draftUrl: 'https://blog.naver.com/biondi_tree/postwrite' })).toEqual({});
+    // 공개 플래그가 서도 글 주소 꼴이 아니면 발행됨으로 넘기지 않는다
+    expect(naverJobUrls({ privatePublished: true, publicPublished: true, draftUrl: 'https://blog.naver.com/biondi_tree/postwrite' })).toEqual({});
   });
 });

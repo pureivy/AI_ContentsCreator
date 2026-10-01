@@ -68,7 +68,7 @@ import { runShortsJob, isShortsRunning, reviseShorts, hookStillFor } from '../or
 import { inheritedSceneImages, inheritedClips } from '../content/shortsInherit';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo } from '../tools/shortsRender';
 import { generateDesignedThumbnail, thumbTextQaFailed } from '../orchestrator/shortsThumbnail';
-import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft, shouldAutoDeriveOnDecision, cadenceBaselineTs } from '../content/pieces';
+import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft, shouldAutoDeriveOnDecision, cadenceBaselineTs, naverJobUrls } from '../content/pieces';
 import { isTransientFailure, transientReason } from '../llm/transientError';
 import { toFactGateInfo } from '../content/factGate';
 import { readFactGate, readFactSupply } from '../sessions/digest';
@@ -2620,8 +2620,7 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
         // 주소(logNo=…)가 나온다. 종전엔 publish_mode 를 안 읽어 그 URL 이 naverDraftUrl 로만 들어갔고,
         // publishedUrl 이 비어 파생물 캡션의 원본 블로그 링크가 끝내 안 붙었다(사용자 제보).
         // 임시저장 폴백일 때는 URL 이 postwrite 라 절대 publishedUrl 로 쓰지 않는다.
-        const privateNow = r.privatePublished && r.draftUrl && /logNo=|\/\d{6,}/.test(r.draftUrl)
-          ? r.draftUrl : undefined;
+        const { privateUrl: privateNow, publishedUrl: publicNow } = naverJobUrls(r);
         pieceStore().update(id, {
           naverDraftUrl: r.draftUrl ?? r.adminUrl, naverDraftTs: job.endedTs,
           // privateUrl 로 넣는다(2026-08-29 수선) — publishedUrl 에 넣었더니 RSS 발행 감지가 이 조각을
@@ -2629,9 +2628,11 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
           // 공개 판정은 publishedUrl 한 곳만 한다.
           ...(privateNow ? { privateUrl: privateNow } : {}),
         });
-        // 전체공개 글도 여기(privateUrl)에 적는다 — publishedUrl 은 RSS 발행 감지가 채우는 자리라 건드리지 않는다
-        // (감지가 성과 수집 등록까지 이어서 한다). 링크 조회(blogUrlForPiece)는 publishedUrl 이 없으면 이 주소를 쓴다.
+        // 실제 발행 글 주소는 privateUrl 에 적는다(비공개·전체공개 공통). 비공개는 publishedUrl 을 RSS 감지에 맡기고,
+        // 전체공개는 아래에서 바로 발행됨으로 넘긴다(naverJobUrls).
         if (privateNow) console.log(`[네이버] ${r.publicPublished ? '전체공개' : '비공개'} 발행 — ${privateNow.slice(0, 80)}`);
+        // 전체공개면 바로 '발행됨'(2026-10-02) — 수동 '발행 등록'·RSS 감지와 같은 setPublished. 미발행 초안 상한에서 즉시 빠진다.
+        if (publicNow) pieceStore().setPublished(id, publicNow);
         // 저장 성공 = 본문 확정 + 블로그 주소 확보 → 카드뉴스·숏폼 자동 파생(주제 하나 → 세트).
         // 2026-08-28 사용자 확정으로 이 훅이 파생의 **단일 경로**가 됐다 — 사람이 검토 탭·텔레그램
         // 버튼으로 저장한 글도 같은 훅을 타므로 전량 수동 검토 운영에서도 세트는 정상 생성된다.

@@ -223,7 +223,7 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
         if (s.status === "saved") {
           // 전체공개·비공개 발행·임시저장 폴백은 사용자가 갈 곳이 다르다 — 갈라 안내한다.
           setNaverMsg(s.public_published
-            ? `✓ 네이버 전체공개 발행 완료${s.dry_run ? " (dry-run)" : ""}${s.error ? ` — 일부 문제: ${s.error}` : ""} — 댓글·공감·검색·외부 공유 허용, 블로그/카페 공유는 링크만. 공개 글 주소는 다음 발행 감지 때 자동 등록됩니다(바로 등록하려면 아래에 붙여넣기).`
+            ? `✓ 네이버 전체공개 발행 완료${s.dry_run ? " (dry-run)" : ""}${s.error ? ` — 일부 문제: ${s.error}` : ""} — 댓글·공감·검색·외부 공유 허용, 블로그/카페 공유는 링크만. 발행됨으로 바로 등록했습니다(성과 추적 시작).`
             : s.private_published
             ? `✓ 네이버 비공개 발행 완료${s.dry_run ? " (dry-run)" : ""}${s.error ? ` — 일부 문제: ${s.error}` : ""} — 블로그 글 목록에 비공개로 올라갔습니다. 확인 후 전체공개로 전환하고, 공개된 글 URL을 아래에 등록하세요.`
             : `✓ 네이버 임시저장 완료(비공개 발행이 안 돼 폴백)${s.dry_run ? " (dry-run)" : ""}${s.error ? ` — 일부 문제: ${s.error}` : ""} — 네이버 글쓰기의 임시저장 목록에서 확인 후 발행하고, 발행된 글 URL을 아래에 등록하세요.`);
@@ -525,7 +525,7 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
                 </div>
               )}
 
-              {/* 발행 — ① 네이버 발행(자동, 2026-10-01 부터 전체공개) → ② 공개 글 URL 등록(발행 감지가 자동으로도 채운다) */}
+              {/* 발행 — ① 네이버 발행(자동, 2026-10-01 부터 전체공개 — 성공하면 바로 발행됨) → ② 비공개·임시저장 폴백일 때만 공개 후 URL 등록(발행 감지가 자동으로도 채운다) */}
               <div className="review-section">
                 <h3>발행</h3>
                 {data.piece.publishedUrl ? (
