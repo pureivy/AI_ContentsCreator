@@ -13,7 +13,7 @@ type Call = { url: string; method: string; body?: Record<string, unknown> };
 /** 가짜 유튜브 — putStatus: 공개 여부 변경 응답 코드, thumbs: 썸네일 탐침마다 돌려줄 이미지 크기(끝나면 마지막 값 반복). */
 function fakeYoutube(o: { putStatus?: number[]; thumbs: number[]; tokenFailAfter?: number }) {
   const calls: Call[] = [];
-  let put = 0, probe = 0, token = 0;
+  let put = 0, probe = 0, token = 0, wasPublic = false;
   const res = (status: number, json: unknown = {}, bytes = 0): Response =>
     ({ ok: status >= 200 && status < 300, status, json: async () => json, arrayBuffer: async () => new ArrayBuffer(bytes) }) as unknown as Response;
   const fn = vi.fn(async (input: string | URL, init?: RequestInit) => {
@@ -32,12 +32,17 @@ function fakeYoutube(o: { putStatus?: number[]; thumbs: number[]; tokenFailAfter
     }
     if (url.includes('/youtube/v3/videos?part=status') && method === 'PUT') {
       const code = o.putStatus?.[put++] ?? 200;
-      return code === 403 ? res(403, { error: { errors: [{ reason: 'insufficientPermissions' }] } }) : res(code, {});
+      if (code === 403) return res(403, { error: { errors: [{ reason: 'insufficientPermissions' }] } });
+      const st = (body?.status ?? {}) as Record<string, unknown>;
+      // 실제 API: 한 번 공개된 영상엔 예약 공개를 걸 수 없다(2026-10-02 실측 — 복구가 이걸로 통째로 거절됐다).
+      if (st.publishAt && wasPublic) return res(400, { error: { errors: [{ reason: 'invalidPublishAt' }] } });
+      if (code < 300 && st.privacyStatus === 'public') wasPublic = true;
+      return res(code, {});
     }
     if (url.includes('/thumbnails/set')) return res(200, {});
     if (url.startsWith('https://www.youtube.com/oembed')) return res(200, {});
     if (url.startsWith('https://i.ytimg.com/')) {
-      const b = o.thumbs[Math.min(Math.floor(probe / 2), o.thumbs.length - 1)]!; // 탐침 1회 = oar + hq 두 장
+      const b = o.thumbs[Math.min(probe, o.thumbs.length - 1)]!; // 탐침 1회 = 세로(oardefault) 한 장
       probe++;
       return res(200, {}, b);
     }
@@ -72,16 +77,15 @@ describe('publishWhenReady — 공개 전환·썸네일 확인(가짜 유튜브)
     expect(yt.puts()).toHaveLength(1); // 복구 시도 없음(권한이 없다)
   });
 
-  it('썸네일 자리표시 → 비공개(예약 공개 안전망 포함) → 썸네일 지정 → 공개, 복구 확인', async () => {
+  it('썸네일 자리표시 → 비공개 → 썸네일 지정 → 공개, 복구 확인(한 번 공개된 영상이라 예약 공개는 못 건다)', async () => {
     yt = fakeYoutube({ thumbs: [1097, 1097, 250_000] });
     globalThis.fetch = yt.fn as unknown as typeof fetch;
     const o = await publishWhenReady({ slug: 'b', videoId: 'v1', thumbnailPath: undefined, ...FAST });
     expect(o).toMatchObject({ state: 'public', thumb: 'ok', recovered: true });
     const puts = yt.puts();
     expect(puts.map((p) => p.privacyStatus)).toEqual(['public', 'private', 'public']);
-    // 되돌린 사이 서버가 죽어도 비공개로 남지 않게 — 비공개 되돌림에만 예약 공개가 걸린다.
-    expect(typeof puts[1]!.publishAt).toBe('string');
-    expect(Date.parse(String(puts[1]!.publishAt))).toBeGreaterThan(Date.now());
+    // 복구의 비공개 되돌림에 예약 공개를 실으면 invalidPublishAt 으로 거절돼 복구가 통째로 안 된다(10-02 실사고).
+    expect('publishAt' in puts[1]!).toBe(false);
     expect('publishAt' in puts[2]!).toBe(false);
   });
 

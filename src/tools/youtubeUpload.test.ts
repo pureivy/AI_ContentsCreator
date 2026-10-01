@@ -90,14 +90,18 @@ describe('buildStatusUpdate — videos.update 는 상태를 통째로 덮어쓴�
 
 describe('classifyThumb — 공개 썸네일 판정(순수)', () => {
   it('oEmbed 가 200 이 아니면 아직 공개 전(비공개는 401/403)', () => {
-    expect(classifyThumb(403, 250_000, 25_000)).toBe('not_public');
-    expect(classifyThumb(0, 0, 0)).toBe('not_public');
+    expect(classifyThumb(403, 250_000)).toBe('not_public');
+    expect(classifyThumb(0, 0)).toBe('not_public');
   });
   it('공개인데 1,097바이트 회색 자리표시면 썸네일 없음, 수십 KB 이상이면 정상(08-31·10-01 실측)', () => {
-    expect(classifyThumb(200, 1097, 1097)).toBe('placeholder');
-    expect(classifyThumb(200, 0, 0)).toBe('placeholder');
-    expect(classifyThumb(200, 243_655, 23_435)).toBe('ok');
-    expect(classifyThumb(200, 0, 23_435)).toBe('ok'); // oardefault 가 없어도 hqdefault 가 정상이면 정상
+    expect(classifyThumb(200, 1097)).toBe('placeholder');
+    expect(classifyThumb(200, 0)).toBe('placeholder');
+    expect(classifyThumb(200, 243_655)).toBe('ok');
+  });
+  it('세로(oardefault)가 자리표시면 가로(hqdefault)가 멀쩡해도 썸네일 없음 — 쇼츠 화면은 세로를 쓴다(2026-10-02 실사고)', () => {
+    // tDK8E6KxQQw: oardefault 1,097 · hqdefault 18,433(디자인 썸네일) — 쇼츠 피드엔 중간 프레임이 나왔다.
+    expect(classifyThumb(200, 1097)).toBe('placeholder');
+    expect(classifyThumb(200, 0)).toBe('placeholder');
   });
 });
 

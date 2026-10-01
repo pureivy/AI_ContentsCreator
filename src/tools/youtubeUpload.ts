@@ -40,7 +40,8 @@ export const PUBLISH_SAFETY_MIN = 30;
  * videos.update(part=status) 바디(순수). part=status 는 상태를 **통째로 덮어쓴다** — 빠진 필드는 기본값으로 돌아간다.
  * 그래서 지금 상태에서 쓸 수 있는 필드(embeddable·license·publicStatsViewable)를 옮겨 싣고 공개 여부만 바꾼다.
  * 아동용 아님·AI 합성 공개는 업로드 때와 같게 못박는다. 현재 상태의 publishAt 은 옮기지 않는다 — 공개로 가면 의미가 없다.
- * 비공개로 되돌릴 때(썸네일 복구)는 호출부가 새 publishAt 을 준다 — 되돌린 뒤 서버가 죽어도 그 시각에 다시 공개되게.
+ * publishAt 인자는 아직 한 번도 공개된 적 없는 영상에만 쓸 수 있다 — 한 번 공개된 영상에 걸면 유튜브가 invalidPublishAt 으로
+ * 요청을 통째로 거절한다(2026-10-02 실측: 썸네일 복구의 비공개 되돌림에 실었다가 복구가 안 됐다).
  */
 export function buildStatusUpdate(id: string, current: Record<string, unknown> | undefined, privacy: 'public' | 'private', publishAt?: string): Record<string, unknown> {
   const keep: Record<string, unknown> = {};
@@ -49,17 +50,17 @@ export function buildStatusUpdate(id: string, current: Record<string, unknown> |
   return { id, status: { ...keep, privacyStatus: privacy, ...at, selfDeclaredMadeForKids: false, containsSyntheticMedia: true } };
 }
 
-/** 썸네일 복구로 비공개로 되돌릴 때 거는 예약 공개(분) — 그 사이 서버가 죽어도 영상이 비공개로 남지 않게. */
-export const RECOVERY_SAFETY_MIN = 10;
-
 export type ThumbState = 'ok' | 'placeholder' | 'not_public';
 /**
  * 공개 썸네일 판정(순수) — oEmbed 가 200 이 아니면 아직 공개 전(비공개 영상은 401/403).
- * 공개인데 이미지가 1,097바이트 회색 자리표시면 썸네일 없음 — 정상은 수십~수백 KB(2026-08-31·10-01 실측).
+ * 판정은 **세로(oardefault)만** 본다 — 쇼츠 피드·채널 쇼츠 칸이 쓰는 게 이것이고, 1,097바이트 회색 자리표시면
+ * 썸네일 없음(정상은 수십~수백 KB, 2026-08-31·10-01 실측). 가로(hqdefault)는 판정에 쓰지 않는다:
+ * 10-02 배롱나무 편은 가로에 디자인 썸네일이 멀쩡히 있는데 세로가 자리표시라 쇼츠 화면에 중간 프레임이 나왔고,
+ * 가로를 예비로 보던 종전 판정이 이를 '정상'으로 넘겨 복구를 안 돌렸다.
  */
-export function classifyThumb(oembedStatus: number, oarBytes: number, hqBytes: number): ThumbState {
+export function classifyThumb(oembedStatus: number, oarBytes: number): ThumbState {
   if (oembedStatus !== 200) return 'not_public';
-  return Math.max(oarBytes, hqBytes) > 2000 ? 'ok' : 'placeholder';
+  return oarBytes > 2000 ? 'ok' : 'placeholder';
 }
 
 /** multipart/related 바디 조립(순수 Buffer) — ① JSON 메타 ② video/mp4 바이트. */
@@ -183,7 +184,7 @@ async function probeThumb(id: string, signal?: AbortSignal): Promise<ThumbState>
   let oe = 0;
   try { oe = (await fetch(`https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/shorts/${id}`, { signal })).status; } catch { oe = 0; }
   if (oe !== 200) return 'not_public';
-  return classifyThumb(oe, await bytes(`https://i.ytimg.com/vi/${id}/oardefault.jpg`), await bytes(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`));
+  return classifyThumb(oe, await bytes(`https://i.ytimg.com/vi/${id}/oardefault.jpg`));
 }
 
 type YtApiError = { error?: { errors?: Array<{ reason?: string }>; message?: string } };
@@ -282,8 +283,9 @@ export async function publishWhenReady(opts: {
     if (t === 'ok') return { state: 'public', thumb: t, recovered: false, note: '공개 · 썸네일 확인' };
     log(`썸네일 ${t === 'placeholder' ? '없음(회색 자리표시)' : '확인 불가'} — 비공개→공개로 한 번 더(복구 절차)`);
     access = await youtubeAccessToken(opts.slug, opts.signal);
-    const back = await setPrivacy(access, id, current, 'private', opts.signal,
-      new Date(Date.now() + RECOVERY_SAFETY_MIN * 60_000).toISOString());
+    // 예약 공개를 싣지 않는다 — 이미 공개된 영상이라 invalidPublishAt 으로 거절된다(10-02 실측). 대신 비공개 구간을 짧게
+    // 둔다(대기 ≤20초 → 썸네일 지정 → 곧바로 공개). 그 사이 서버가 죽으면 비공개로 남으니 실패 문구가 그걸 알린다.
+    const back = await setPrivacy(access, id, current, 'private', opts.signal);
     if (back !== 'ok') {
       return { state: 'public', thumb: t, recovered: false, note: `공개됐지만 썸네일 없음 — 자동 복구 실패(${back}), 스튜디오에서 비공개→썸네일 지정→공개` };
     }
@@ -291,7 +293,7 @@ export async function publishWhenReady(opts: {
     const te = await setThumbnail(access, id, opts.thumbnailPath, opts.signal);
     if (te) log(`썸네일 지정 응답: ${te.slice(0, 60)}`);
     const again = await setPrivacy(access, id, current, 'public', opts.signal);
-    if (again !== 'ok') return { state: 'failed', thumb: t, recovered: true, note: `복구 중 공개 재전환 실패(${again}) — 비공개 상태, ${RECOVERY_SAFETY_MIN}분 뒤 예약 공개로 공개된다(안 되면 스튜디오에서 공개)` };
+    if (again !== 'ok') return { state: 'failed', thumb: t, recovered: true, note: `복구 중 공개 재전환 실패(${again}) — 영상이 비공개 상태, 스튜디오에서 공개하세요` };
     t = await waitThumb();
     return { state: 'public', thumb: t, recovered: true,
       note: t === 'ok' ? '공개 · 썸네일 복구됨' : '공개됐지만 썸네일이 여전히 없음 — 스튜디오에서 비공개→썸네일 지정→공개' };
@@ -299,7 +301,7 @@ export async function publishWhenReady(opts: {
     const why = e instanceof Error ? e.message.slice(0, 80) : String(e);
     return { state: 'failed', thumb: 'unknown', recovered: false,
       note: publishAtCleared
-        ? `공개 처리 중 오류: ${why} — 공개 전환은 이미 됐다. 썸네일 복구 중이었다면 비공개로 되돌렸을 수 있어 ${RECOVERY_SAFETY_MIN}분 뒤 예약 공개에 맡겼다 — 공개·썸네일을 확인하세요`
+        ? `공개 처리 중 오류: ${why} — 공개 전환은 이미 됐다. 썸네일 복구 중이었다면 비공개로 남았을 수 있다 — 스튜디오에서 공개 여부·썸네일을 확인하세요`
         : `공개 처리 중 오류: ${why} — 업로드 때 건 예약 공개 시각에 공개된다` };
   }
 }
