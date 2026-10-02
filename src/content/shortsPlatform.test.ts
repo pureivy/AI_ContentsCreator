@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   SHORTS_PLATFORMS, platformLabel, platformPlanGuide, autoDailyCapFor,
-  canPublishTo, kstDate, youtubeUploadsToday, youtubeDailyCapBlock, platformQuotaCommitted, autoCapApplies,
+  canPublishTo, kstDate, youtubeUploadsToday, youtubeDailyCapBlock, platformQuotaCommitted, autoCapApplies, PLATFORM_QUOTA_AUTO_CUTOVER,
   pickTopicTarget, topicTargetBlock, topicPriorityBlock, demandGateForTarget,
   shouldStartSecondRun, SIBLING_PLAN_WAIT_MS } from './shortsPlatform';
 
@@ -102,13 +102,13 @@ describe('platformQuotaCommitted — 자율런 채널별 생성 상한(순수)',
     expect(platformQuotaCommitted([{ youtubeTs: yTs }], now, 1, 'youtube')).toBe(true);
   });
   it('오늘 만든 미발행 편도 그 채널 몫을 잡는다 — 만들어 놓고 못 올리는 낭비 방지', () => {
-    expect(platformQuotaCommitted([{ platform: 'youtube', stage: 'planning', createdTs: yTs }], now, 1, 'youtube')).toBe(true);
+    expect(platformQuotaCommitted([{ platform: 'youtube', stage: 'planning', createdTs: yTs, auto: true }], now, 1, 'youtube')).toBe(true);
   });
   it('인스타도 같은 상한을 받는다(2026-09-03 — 종전엔 유튜브만 막혔다)', () => {
-    expect(platformQuotaCommitted([{ platform: 'instagram', stage: 'ready', createdTs: yTs }], now, 1, 'instagram')).toBe(true);
+    expect(platformQuotaCommitted([{ platform: 'instagram', stage: 'ready', createdTs: yTs, auto: true }], now, 1, 'instagram')).toBe(true);
   });
   it('채널이 다르면 서로 몫을 안 잡는다', () => {
-    const list = [{ platform: 'instagram' as const, stage: 'ready', createdTs: yTs }];
+    const list = [{ platform: 'instagram' as const, stage: 'ready', createdTs: yTs, auto: true }];
     expect(platformQuotaCommitted(list, now, 1, 'youtube')).toBe(false);
     expect(platformQuotaCommitted(list, now, 1, 'instagram')).toBe(true);
   });
@@ -116,16 +116,37 @@ describe('platformQuotaCommitted — 자율런 채널별 생성 상한(순수)',
     expect(platformQuotaCommitted([{ youtubeTs: yTs }], now, 1, 'instagram')).toBe(false);
   });
   it('실패분은 몫을 잡지 않는다', () => {
-    expect(platformQuotaCommitted([{ platform: 'youtube', stage: 'error', createdTs: yTs }], now, 1, 'youtube')).toBe(false);
+    expect(platformQuotaCommitted([{ platform: 'youtube', stage: 'error', createdTs: yTs, auto: true }], now, 1, 'youtube')).toBe(false);
   });
   it('어제 것은 세지 않는다', () => {
-    expect(platformQuotaCommitted([{ platform: 'youtube', stage: 'ready', createdTs: '2026-09-02T01:00:00Z' }], now, 1, 'youtube')).toBe(false);
+    expect(platformQuotaCommitted([{ platform: 'youtube', stage: 'ready', createdTs: '2026-09-02T01:00:00Z', auto: true }], now, 1, 'youtube')).toBe(false);
+  });
+  it('숏폼 버튼으로 만든 편(auto 아님)은 오토런 몫을 안 먹는다 — 2026-10-02 모과나무 유튜브 편 누락(전환 뒤)', () => {
+    const at = Date.parse('2026-10-03T03:00:00Z'); // 10-03 12:00 KST
+    const ts = '2026-10-03T01:00:00Z';
+    const manual = [{ platform: 'youtube' as const, stage: 'ready', createdTs: ts, auto: false }, { platform: 'youtube' as const, stage: 'ready', createdTs: ts }];
+    expect(platformQuotaCommitted(manual, at, 1, 'youtube')).toBe(false);
+    expect(platformQuotaCommitted([{ ...manual[0]!, auto: true }], at, 1, 'youtube')).toBe(true);
+  });
+  it('전환 전(10-03 00:00 KST 전)에 만든 편은 auto 표시와 무관하게 센다 — 그때는 오토런 세트 파생도 auto:false 였다', () => {
+    expect(PLATFORM_QUOTA_AUTO_CUTOVER).toBe(Date.parse('2026-10-03T00:00:00+09:00'));
+    const at = Date.parse('2026-10-02T12:00:00Z'); // 10-02 21:00 KST
+    const old = [{ platform: 'youtube' as const, stage: 'ready', createdTs: '2026-10-02T01:00:00Z', auto: false }];
+    expect(platformQuotaCommitted(old, at, 1, 'youtube')).toBe(true);
+    expect(platformQuotaCommitted([{ platform: 'youtube' as const, stage: 'ready', createdTs: '2026-10-02T01:00:00Z' }], at, 1, 'youtube')).toBe(true);
+    // 전환 직전·직후 경계 — 같은 KST 날(10-03)에 직전 편은 없다(직전은 10-02 KST), 직후 수동 편은 안 센다
+    const after = Date.parse('2026-10-02T16:00:00Z');
+    expect(platformQuotaCommitted([{ platform: 'youtube' as const, stage: 'ready', createdTs: '2026-10-02T15:00:00Z', auto: false }], after, 1, 'youtube')).toBe(false);
+    expect(platformQuotaCommitted([{ platform: 'youtube' as const, stage: 'ready', createdTs: '2026-10-02T14:59:59Z', auto: false }], Date.parse('2026-10-02T14:59:59Z'), 1, 'youtube')).toBe(true);
+  });
+  it('업로드는 누가 만들었든 센다', () => {
+    expect(platformQuotaCommitted([{ platform: 'youtube', stage: 'ready', createdTs: yTs, auto: false, youtubeTs: yTs }], now, 1, 'youtube')).toBe(true);
   });
   it('cap 0 이하는 상한 없음', () => {
     expect(platformQuotaCommitted([{ youtubeTs: yTs }], now, 0, 'youtube')).toBe(false);
   });
   it('상한 2 면 두 편까지', () => {
-    const one = [{ platform: 'instagram' as const, stage: 'ready', createdTs: yTs }];
+    const one = [{ platform: 'instagram' as const, stage: 'ready', createdTs: yTs, auto: true }];
     expect(platformQuotaCommitted(one, now, 2, 'instagram')).toBe(false);
     expect(platformQuotaCommitted([...one, ...one], now, 2, 'instagram')).toBe(true);
   });
@@ -144,7 +165,7 @@ describe('autoDailyCapFor — 채널별 자율런 상한', () => {
   });
   it('상한이 실제로 갈린다 — 인스타 1편 만든 뒤에도 인스타 몫이 남는다', () => {
     const now = Date.parse('2026-09-03T00:00:00Z');
-    const made = [{ platform: 'instagram' as const, stage: 'ready', createdTs: '2026-09-02T21:44:00Z' }];
+    const made = [{ platform: 'instagram' as const, stage: 'ready', createdTs: '2026-09-02T21:44:00Z', auto: true }];
     expect(platformQuotaCommitted(made, now, autoDailyCapFor('instagram', caps), 'instagram')).toBe(false);
     // 같은 상황에서 유튜브 상한(1)이었다면 찼을 것
     expect(platformQuotaCommitted(made, now, autoDailyCapFor('youtube', caps), 'instagram')).toBe(true);

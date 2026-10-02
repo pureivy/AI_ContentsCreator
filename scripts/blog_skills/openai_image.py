@@ -141,6 +141,10 @@ def main() -> int:
     ap.add_argument("--allow-text", action="store_true",
                     help="프롬프트에 명시된 문구의 이미지 내 렌더링 허용(카드뉴스 완성 카드) — 기본은 no-text")
     ap.add_argument("--dry-run", action="store_true", help="API 미호출(키 불필요) — 매니페스트만 계획대로 기록")
+    # 블로그 실촬영 컷(2026-10-02) — 슬롯 앞 N개는 이미 채워져 있다(보관소 영상 프레임). 그 슬롯은 건너뛰고
+    # 나머지만 생성하되, 파일 번호·index 는 원래 슬롯 번호를 그대로 쓴다(blog-image-02.png 부터, index 1 부터).
+    # 번호를 당기면 발행이 매니페스트 index 로 본문 마커에 꽂으므로 실촬영 자리에 AI 그림이 들어간다.
+    ap.add_argument("--start-index", type=int, default=0, help="앞 N개 슬롯 건너뜀(이미 채워진 슬롯) — 번호는 원래 슬롯 번호 유지")
     args = ap.parse_args()
 
     # 참조 이미지 검증 — 존재하는 파일만, 캡 4장(요청 크기 폭주 방지). 전부 무효면 일반 생성으로 폴백.
@@ -158,6 +162,7 @@ def main() -> int:
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
     slots = load_slots(args.draft, args.content, args.limit)
+    start = max(0, args.start_index)
     if not slots:
         # 슬롯이 없으면 빈 매니페스트를 남기고 정상 종료(파이프라인 차단 방지).
         manifest = {"images": [], "count": 0, "model": args.model, "dry_run": args.dry_run,
@@ -180,6 +185,8 @@ def main() -> int:
 
     images = []
     for i, slot in enumerate(slots):
+        if i < start:
+            continue  # 이미 채워진 슬롯(실촬영 컷) — 호출부가 매니페스트 앞에 합친다
         prompt = build_prompt(slot, args.image_style, args.business_type, args.topic, args.allow_text)
         filename = f"blog-image-{i + 1:02d}.png"
         file_path = out_dir / filename

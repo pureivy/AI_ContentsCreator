@@ -1,0 +1,19 @@
+{
+ "isSuccess": true,
+ "result": {
+  "userId": "biondi_tree",
+  "loggedIn": true,
+  "blogOwner": false,
+  "statAllowYn": true,
+  "mateInfo": null,
+  "mateCitations": {
+   "cumulativeCount": 23908,
+   "currentMonthCount": 449,
+   "selectionPeriodCount": 8123,
+   "currentMonth": 10,
+   "selectionPeriodMonth": 8
+  },
+  "totalVisitor": 5625,
+  "todayVisitor": 75
+ }
+}

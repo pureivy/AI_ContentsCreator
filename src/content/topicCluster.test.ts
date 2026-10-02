@@ -71,6 +71,18 @@ describe('pickNextSibling — 쿨다운·소진 상한(순수)', () => {
     expect(pickNextSibling([], [], [])).toBeNull();
   });
 
+  // 2026-10-02 수종 필수 — 수종 없는 형제는 상태를 그대로 두고 고르기에서만 뺀다. 맨 앞 형제를 고른 뒤 보류하면 매 틱 같은
+  // 형제가 다시 뽑혀 뒤를 막는다(등록순 맨 앞 1건).
+  it('skip — 건너뛴 형제가 맨 앞이어도 다음 형제를 고르고, 건너뛴 형제는 pending 그대로(skip 을 빼면 다시 고른다)', () => {
+    const head = mk('h1', '나무 이식', 'pending', '1');
+    const all = [head, mk('b2', '배롱나무', 'pending', '2')];
+    const skip = (t: ClusterTopic) => t.seedKeyword === '나무 이식';
+    expect(pickNextSibling(all, all, [], skip)?.id).toBe('b2');
+    expect(head.status).toBe('pending');
+    expect(pickNextSibling(all, all, [])?.id).toBe('h1');
+    expect(pickNextSibling([head], [head], [], skip)).toBeNull();
+  });
+
   it('등록 오래된 순 — 같은 조건이면 createdTs 이른 것', () => {
     const all = [mk('n2', '감나무', 'pending', '2'), mk('n1', '배롱나무', 'pending', '1')];
     expect(pickNextSibling(all, all, [])?.id).toBe('n1');

@@ -47,7 +47,7 @@ import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
 import { claudeCliProblem } from '../llm/claudeCli';
-import { startAutoCycle, proposeContentIdeas, activeDirective, autorunDirective, setAutorunDirective, clearAutorunDirective, directiveExhaustedWithin, directiveWantsLibrary, librarySpeciesFor, offLibrarySpecies, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision, speciesCoverageFor, usedRecentlyFor, usedThemeRecentlyFor, factStarvedRecentlyFor } from '../autonomy/scheduler';
+import { startAutoCycle, proposeContentIdeas, activeDirective, autorunDirective, setAutorunDirective, clearAutorunDirective, directiveExhaustedWithin, directiveWantsLibrary, librarySpeciesFor, offLibrarySpecies, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision, speciesCoverageFor, usedRecentlyFor, usedThemeRecentlyFor, factStarvedRecentlyFor, requiredSpeciesOf, bindSpeciesKeyword, rememberedDemandReject } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
@@ -82,6 +82,7 @@ import { shouldHoldForFacts } from '../content/factSupply';
 import { overThemeCap, THEME_MONTHLY_CAP } from '../content/topicThemes';
 import { brandThemeCoverage } from '../analytics/discoverySeeds';
 import type { Piece } from '../content/pieces';
+import { releaseBlogFramesOfDeletedPiece, releaseBlogFramesOfRemovedRun } from '../content/blogFrames';
 import { ingestMetrics } from '../analytics/reinforce';
 import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shortsMetaPerfStale } from '../analytics/shortsPerf';
 import { syncShortsClipPerformance } from '../analytics/clipPerf';
@@ -89,12 +90,13 @@ import { shortsFeedShare } from '../analytics/ytAnalytics';
 import { harvestTopicVerdicts, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { seriesGateForText, ensureSeriesLabels } from '../analytics/seriesLedger';
 import { refreshTrendSnapshot } from '../analytics/trendSignal';
-import { refreshDemandSnapshot, assessCandidatesDemand, demandRejectFor, rememberDemandReject, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
+import { refreshDemandSnapshot, assessCandidatesDemand, rememberDemandReject, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
 import { searchAdEnabled } from '../grounding/naver_searchad';
 import { refreshYtNicheSnapshot } from '../analytics/ytNiche';
 import { syncCardnewsPerformance, cardnewsPerfStale } from '../analytics/cardnewsPerf';
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
+import { recordNaverBlogKpis, latestAiCitations, readBlogSearchQueries } from '../analytics/naverBlogKpi';
 import { buildTitleTimingReport } from '../analytics/titleTiming';
 import { promiseStore, choosePromise } from '../content/promises';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
@@ -113,8 +115,9 @@ import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, notifyYoutubeU
 import { startTelegramBot } from '../autonomy/telegramBot';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
-import { publishDraftToNaver, naverPublishCreds, collectNaverMetrics, blogSkillProblem, publishShortsToNaverClip } from '../tools/blog_skills';
+import { publishDraftToNaver, naverPublishCreds, collectNaverMetrics, isViewsSample, blogSkillProblem, publishShortsToNaverClip } from '../tools/blog_skills';
 import { buildClipDescription, pickClipVideo, blogLogNoFromUrl, canPublishClip, CLIP_CATEGORY, clipProfileUrl } from '../content/naverClip';
+import { planClipQueue, type ClipQueueEntry } from '../content/naverClipQueue';
 import { coerceBlogDraft } from '../output/smarteditor';
 import type { MetricSample } from '../analytics/performance';
 import { classifyAndAssign, getStatuses, reassign, setIngestStatus } from '../tools/classify';
@@ -886,7 +889,12 @@ app.delete('/runs/:id', (c) => {
   RUNS.get(id)?.abort.abort();
   RUNS.delete(id);
   // 영속 세션(data/sessions/{id})도 삭제 — 안 지우면 /runs 가 영속에서 다시 복원해 '삭제 안 됨'으로 보인다.
-  if (id && !/[/\\]|\.\./.test(id)) { try { fs.rmSync(path.join(CONFIG.sessionsDir, id), { recursive: true, force: true }); } catch { /* 무해 */ } }
+  // 지우기 전에 블로그 실촬영 컷 반납(2026-10-02 2차 리뷰) — 초안 없는 미연결 런이면 그 컷을 반납 줄로 굳힌다. 세션이 사라지면
+  // 원장 판정이 '세션 없음 = 막는다'로 돌아가 이미 풀린 컷이 다시 막힌다. 초안·발행 글 보호 조건은 함수 안.
+  if (id && !/[/\\]|\.\./.test(id)) {
+    releaseBlogFramesOfRemovedRun(id, { dataDir: CONFIG.dataDir, sessionsDir: CONFIG.sessionsDir }, 'run-deleted');
+    try { fs.rmSync(path.join(CONFIG.sessionsDir, id), { recursive: true, force: true }); } catch { /* 무해 */ }
+  }
   return c.json({ ok: true });
 });
 app.post('/runs/:id/message', (c) => c.json({ ok: true }));
@@ -989,6 +997,9 @@ function pieceDeleteHandler(c: Context): Response {
   }
   NAVER_DRAFT_JOBS.delete(id); // 지난 잡 기록 정리(메모리)
   COLLECT_JOBS.delete(id);
+  // 블로그 실촬영 컷 반납(2026-10-02) — 미발행 글이면 그 컷을 다른 글이 쓸 수 있게 원장에 반납 줄을 남긴다.
+  // 발행 흔적이 있으면 아무것도 안 한다(카드를 지워도 네이버 글은 남는다). 세션을 휴지통으로 옮기기 전에 부른다.
+  releaseBlogFramesOfDeletedPiece(piece, { dataDir: CONFIG.dataDir, sessionsDir: CONFIG.sessionsDir });
   pieceStore().remove(id);
   // purge=1(성과 대시보드 완전 삭제) — 초안 런 세션·성과 시계열도 휴지통 이동. 기본(무파라미터)은 종전 비파괴 유지.
   if (c.req.query('purge') === '1') {
@@ -2354,6 +2365,35 @@ app.post('/shorts/:id/meta', async (c) => {
 //    업로드는 수 분(인코딩 대기 최대 10분) 걸린다 — Node fetch 의 응답 헤더 제한(5분)에 걸리지 않게 202 로 바로
 //    답하고 뒤에서 돌린 뒤 결과를 텔레그램으로 알린다(dryRun·check 는 짧아서 기다렸다 답한다).
 const naverClipInFlight = new Set<string>();
+/** 프로필이 바빠 대기 중인 클립 업로드(메모리 전용 — 재시작하면 사라진다, naverClipQueue.ts). */
+const naverClipQueue: ClipQueueEntry[] = [];
+// 15초마다 대기열을 본다 — 프로필이 풀렸으면 가장 먼저 누른 하나를 같은 라우트로 다시 보낸다(중복 공개 방지
+// 검사·이미 올라감 검사를 그대로 다시 받는다). 오래 기다린 건 버리고 사유를 남긴다.
+setInterval(() => {
+  if (!naverClipQueue.length) return;
+  const plan = planClipQueue(naverClipQueue, Date.now(), !!naverProfileBusy || naverRefreshBusy);
+  naverClipQueue.splice(0, naverClipQueue.length, ...plan.rest);
+  for (const e of plan.expired) {
+    shortsStore().update(e.id, { naverClipQueuedTs: undefined, naverClipError: '클립 대기가 2시간을 넘어 취소됐습니다 — 다시 눌러 주세요' });
+  }
+  const next = plan.start;
+  if (!next) return;
+  shortsStore().update(next.id, { naverClipQueuedTs: undefined });
+  void Promise.resolve(app.request(`/shorts/${next.id}/naver-clip`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next.force ? { force: true } : {}),
+  })).then(async (r: Response) => {
+    const j = await r.json().catch(() => ({})) as { error?: string; queued?: boolean };
+    if (j.queued) return; // 그 사이 다른 작업이 프로필을 잡았다 — 라우트가 다시 대기열에 넣었다
+    if (r.status >= 400) {
+      shortsStore().update(next.id, { naverClipError: (j.error ?? `대기 뒤 업로드 시작 실패(HTTP ${r.status})`).slice(0, 300) });
+      console.log(`[발행담당] 네이버 클립 대기 뒤 시작 실패 — ${next.id}: ${j.error ?? r.status}`);
+    } else {
+      console.log(`[발행담당] 네이버 클립 대기 끝 — ${next.id} 업로드 시작`);
+    }
+  }).catch((err: unknown) => {
+    shortsStore().update(next.id, { naverClipError: `대기 뒤 업로드 시작 실패: ${String(err instanceof Error ? err.message : err).slice(0, 200)}` });
+  });
+}, 15_000).unref?.();
 /** 스크립트 결과를 레코드에 반영(공용) — 번호가 확인되면 기록, '등록 뒤 미확인'이면 재시도 차단 표시. */
 function applyNaverClipResult(id: string, r: { status: string; mediaContentNo?: string; clipHandle?: string; videoId?: string; error?: string }): { status: string; url: string } {
   const url = clipProfileUrl(r.clipHandle);
@@ -2403,8 +2443,18 @@ app.post('/shorts/:id/naver-clip', async (c) => {
   if (!check && !video) return c.json({ error: '원본 영상(final.mp4)이 정리돼 없습니다 — 저화질 미리보기본은 클립에 올리지 않습니다' }, 409);
   if (naverClipInFlight.has(id)) return c.json({ error: '이미 클립 업로드 처리 중입니다' }, 409);
   // 네이버 Chrome 프로필은 블로그 발행·성과 수집과 하나를 같이 쓴다 — 동시에 열면 프로필 락으로 실패한다.
-  if (naverProfileBusy) return c.json({ error: `네이버 브라우저 작업이 진행 중입니다(${naverProfileBusy}) — 완료 후 다시 시도하세요.` }, 409);
-  if (naverRefreshBusy) return c.json({ error: '네이버 성과 수집이 진행 중입니다 — 끝난 뒤 다시 시도하세요.' }, 409);
+  // 실제 업로드는 거절하지 않고 대기열에 넣는다(2026-10-02 사장님 요청) — 프로필이 풀리면 서버가 이어서 올린다.
+  // 확인(check)·드라이런은 사람이 결과를 바로 보려는 요청이라 종전처럼 409 로 돌려준다.
+  if (naverProfileBusy || naverRefreshBusy) {
+    const why = naverProfileBusy ? `네이버 브라우저 작업이 진행 중입니다(${naverProfileBusy})` : '네이버 성과 수집이 진행 중입니다';
+    if (check || body.dryRun) return c.json({ error: `${why} — 끝난 뒤 다시 시도하세요.` }, 409);
+    if (!naverClipQueue.some((e) => e.id === id)) {
+      naverClipQueue.push({ id, queuedAt: Date.now(), force: !!body.force });
+      shortsStore().update(id, { naverClipQueuedTs: new Date().toISOString(), naverClipError: undefined });
+      console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 네이버 클립 대기(${why}) — 끝나면 자동으로 올림`);
+    }
+    return c.json({ ok: true, queued: true, note: `${why} — 끝나면 자동으로 올립니다` }, 202);
+  }
   const label = (s.title ?? s.topic).slice(0, 30);
   naverClipInFlight.add(id);
   naverProfileBusy = `클립:${label.slice(0, 20)}`; // ── 동기 구간 끝(뮤텍스 획득)
@@ -2676,7 +2726,9 @@ function autoDeriveSet(id: string, title: string): void {
       const prev = primaryId || undefined;
       const inheritFrom = CONFIG.shortsSiblingInherit ? prev : undefined;
       const waitFor = CONFIG.shortsSiblingInherit ? undefined : prev; // 독립 런은 앞 채널 '대본'만 기다린다(각도 겹침 방지)
-      const ds = deriveShortsFromPiece(id, undefined, false, platform, inheritFrom, waitFor);
+      // 상한 적용 편에만 auto 표시(2026-10-02) — platformQuotaCommitted 가 이 표시로 '오토런 몫'을 센다.
+      // 사람이 숏폼 버튼으로 만든 편이 오토런 몫을 먹어 모과나무 편의 유튜브 파생이 건너뛰어졌다.
+      const ds = deriveShortsFromPiece(id, undefined, capped, platform, inheritFrom, waitFor);
       if ('error' in ds) { console.log(`[숏폼] 자동 파생 실패(${platformLabel(platform)}) — ${title.slice(0, 25)}: ${ds.error}`); continue; }
       console.log(inheritFrom
         ? `[숏폼] 자동 파생 시작(${platformLabel(platform)}·승계) — ${title.slice(0, 30)} (${ds.short.id}) · 원편 완성 대기`
@@ -2929,9 +2981,12 @@ async function measurePiece(piece: Piece, dryRun: boolean, signal?: AbortSignal)
   if (!piece.publishedUrl) return { sample: null, note: '발행 URL 없음' };
   const runDir = path.join(CONFIG.sessionsDir, piece.runId ?? piece.id, 'metrics');
   // 범용 piece(brand=undefined)는 범용('') 계정/프로필로 수집 — activeBrandSlug 폴백 방지(격리).
-  const m = await collectNaverMetrics(piece.publishedUrl, runDir, { dryRun, brand: piece.brand ?? '' }, signal);
+  // publishedTs — 글별 검색 유입을 발행일부터 누적으로 묻는 기간 계산용(2026-10-02). 레거시 piece 는 작성일 폴백
+  // (발행 전 기간은 유입 0 이라 더 이르게 잡아도 값이 틀어지지 않는다).
+  const m = await collectNaverMetrics(piece.publishedUrl, runDir, { dryRun, brand: piece.brand ?? '', publishedTs: piece.publishedTs ?? piece.createdTs }, signal);
   if (!m) return { sample: null, note: '수집 결과 파싱 실패' };
-  if (!m.views && m.searchInflow.length === 0) return { sample: null, note: m.note };
+  // 조회수 없는 결과는 표본이 아니다(유입만 붙은 표본 금지 — 리뷰 2026-10-02). 종전 가드도 유입이 늘 비어 사실상 같았다.
+  if (!isViewsSample(m)) return { sample: null, note: m.note };
   // 공감 — 공개 like API(브라우저·로그인 무관, 1콜) 동봉. 실패는 무해(likes 미기록 — latestLikes 가 과거 값 유지).
   const likes = await fetchBlogSympathy(piece.publishedUrl, signal);
   const sample: MetricSample = {
@@ -2940,6 +2995,7 @@ async function measurePiece(piece: Piece, dryRun: boolean, signal?: AbortSignal)
     ...(m.dwellSec ? { dwellSec: m.dwellSec } : {}),
     ...(typeof likes === 'number' ? { likes } : {}),
     searchInflow: m.searchInflow,
+    ...(typeof m.searchCv === 'number' ? { searchCv: m.searchCv } : {}),
     source: m.source,
   };
   return { sample, note: m.note };
@@ -3115,6 +3171,16 @@ function performanceHandler(c: Context): Response {
       })),
     },
     pieces: rows,
+    // 네이버 블로그 채널 지표(2026-10-02) — AI 브리핑 인용수(누적·이번 달)와 최근 하루의 블로그 전체 검색어.
+    // 글별 검색어는 pieces[].inflow(통계 유입경로 누적)에 있다. 이 목록은 글 귀속이 없다.
+    naverBlog: (() => {
+      const slug = activeBrandSlug() || '';
+      const lastSearch = readBlogSearchQueries(slug).filter((r) => r.status === 'ok').pop() ?? null;
+      return {
+        aiCitations: latestAiCitations(slug),
+        searchQueries: lastSearch ? { ...lastSearch, queries: (lastSearch.queries ?? []).slice(0, 20) } : null,
+      };
+    })(),
     summary: {
       count: rows.length,
       measured: measured.length,
@@ -3177,6 +3243,8 @@ async function runFastRefresh(): Promise<void> {
       // 이웃·구독자·팔로워 — 순수 API 4콜·약 1초. 종전엔 07:30 브리핑에서만 갱신돼 새로고침을 눌러도
       // 카드 숫자가 그대로였다(실측 2026-08-02: 스냅샷이 07-31 에서 정지).
       recordFollowersSnapshot(),
+      // AI 브리핑 인용수·블로그 전체 검색어(2026-10-02) — 쿠키 파일만 읽는 API 2~8콜, 하루 1회 멱등.
+      recordNaverBlogKpis(activeBrandSlug() || ''),
     ]);
   } finally { perfRefreshBusy = false; }
 }
@@ -3400,6 +3468,7 @@ function purgeBrandData(slug: string): { pieces: number; cards: number; shorts: 
   };
   const pieces = pieceStore().list().filter((x) => (x.brand ?? '') === slug);
   for (const x of pieces) {
+    releaseBlogFramesOfDeletedPiece(x, { dataDir: CONFIG.dataDir, sessionsDir: CONFIG.sessionsDir }, 'brand-purged'); // 세션 이동 전(매니페스트를 읽는다)
     if (x.runId) move(path.join(CONFIG.sessionsDir, x.runId), path.join('sessions', x.runId));
     // id 가 이미 'piece_' 접두를 포함(genId) — 종전 `piece_${x.id}` 는 이중 접두라 이동이 항상 no-op 이던 버그.
     move(path.join(CONFIG.dataDir, 'analytics', 'metrics', `${x.id}.jsonl`), path.join('metrics', `${x.id}.jsonl`));
@@ -4367,7 +4436,8 @@ async function demandCheckFor(
   // 기각 기억(2026-08-27) — 지난 틱에 실측으로 하한 미달이 확정된 키워드는 API 를 부르지 않는다(조회 비용 0).
   // 세 경로(후보 루프·예고·클러스터)가 같은 원장을 공유해야, 어느 경로에서 떨어진 키워드든 다른 경로로
   // 되돌아오지 않는다. 여기엔 기아 방지 밸브가 없다(단건 판정이라 '후보 전멸' 개념 자체가 없음).
-  const remembered = demandRejectFor(slug, keyword);
+  // 수종 키워드 하한 면제(2026-10-02 2차 리뷰) — 면제 키워드는 후보 루프처럼 기억을 건너뛰고 실제 조회로 간다(시즌 판정·로그가 돈다).
+  const remembered = rememberedDemandReject(slug, keyword);
   if (remembered) return demandGateDecision(new Map(), keyword, cfg, { remembered: { line: remembered.line } });
   // 검색광고 키는 여기서부터(API 경로)만 요구한다 — 위 기억 조회보다 앞에 두면 키 없는 설정에서 이 두 경로만
   // 원장을 못 보게 되고, 스케줄러(키와 무관하게 기억을 본다)와 갈려 '세 경로가 같은 원장을 공유'가 깨진다.
@@ -4384,6 +4454,9 @@ async function demandCheckFor(
 // 자율 틱 작업 유형 — 콘텐츠 piece(재개/신규) 또는 지식 리서치 미션(조사→토론→두뇌 적재→학습).
 type AutoWork = { kind: 'piece'; piece: Piece; promiseId?: string; clusterTopicId?: string } | { kind: 'research'; title: string; brand: string }
   | { kind: 'shorts'; pieceId: string; title: string } | { kind: 'cardnews'; pieceId: string; title: string };
+
+/** 수종 없어 건너뛴 클러스터 형제 중 이미 로그를 남긴 것(형제 id, 프로세스 메모리) — 같은 형제의 건너뜀 줄은 한 번만. */
+const loggedNoSpeciesSiblings = new Set<string>();
 
 async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered = false): Promise<AutoWork | null> {
   const pieces = pieceStore().list();
@@ -4470,54 +4543,75 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
         const recentSeeds = pieces.filter((p) => p.auto && (p.brand ?? '') === tickBrand)
           .sort((a, b) => b.createdTs.localeCompare(a.createdTs))
           .map((p) => p.clusterSeedId);
-        const cand = pickNextSibling(all.filter((t) => t.status === 'pending'), all, recentSeeds);
+        // 수종 필수(2026-10-02, BLOG_REQUIRE_SPECIES) — 형제 소진도 후보 루프를 우회하는 공급로다(처서 사고 계보). 제목의 수종으로
+        // 키워드를 보정해도 수종이 없는 형제는 **고르지 않고 건너뛴다(pending 유지)** — dropped 로 지우면 수종 필수를 꺼도 못
+        // 되살리고, 고른 뒤 보류하면 등록순 맨 앞이라 매 틱 같은 형제가 다시 뽑혀 뒤를 전부 막는다(예고 대장 40틱 정체와 같은 꼴).
+        // 끄면(BLOG_REQUIRE_SPECIES=false) 건너뜀도 보정도 없다 — 종전 그대로 다시 소진된다. 사장님 지시 중엔 이 공급로 자체를 건너뛴다.
+        const bindCl = (t: { title: string; keyword: string }) => (CONFIG.blogRequireSpecies ? bindSpeciesKeyword({ title: t.title, keyword: t.keyword }) : null);
+        const noSpeciesCl = CONFIG.blogRequireSpecies
+          ? (t: { title: string; keyword: string }) => !requiredSpeciesOf(bindCl(t)?.cand.keyword || t.title)
+          : undefined;
+        const pendingCl = all.filter((t) => t.status === 'pending');
+        const cand = pickNextSibling(pendingCl, all, recentSeeds, noSpeciesCl);
+        // 건너뛴 형제가 이번 틱의 차례였을 때만 한 줄 남긴다(매 틱 같은 목록을 되풀이하지 않게). 같은 형제는 프로세스당 한 번만 —
+        // 차례인 형제가 그대로면 매 틱 같은 줄이 반복됐다(2026-10-02 2차 리뷰).
+        const headCl = noSpeciesCl ? pickNextSibling(pendingCl, all, recentSeeds) : null;
+        if (headCl && headCl !== cand && !loggedNoSpeciesSiblings.has(headCl.id)) {
+          loggedNoSpeciesSiblings.add(headCl.id);
+          console.log(`[auto-cycle] 클러스터 건너뜀(수종 없음) — "${headCl.keyword}" → pending 유지(수종 필수를 끄면 다시 소진), 다음 형제${cand ? ` "${cand.keyword}"` : ' 없음'}`);
+        }
         if (cand) {
           // 소진 시점 재검증 — 채굴과 소진 사이 코퍼스가 변했을 수 있다(스펙 ③). 게이트는 채굴과 동일한
           // filterCandidates 재사용 — 시드 가족(파생·동일 키워드)은 차별화 부분으로만 대조(전 후보 오기각 방지).
           const seedTitle = (cand.seedPieceId ? pieceStore().get(cand.seedPieceId)?.title : undefined) ?? '';
-          const off = offBrandTerm(`${cand.title} ${cand.keyword}`);
+          // 수종 키워드 보정(2026-10-02) — 수종 없는 형제는 위에서 이미 건너뛰었다. 아래 게이트·기록·로그는 전부 보정된 키워드
+          // (clKeyword)로 본다 — piece 가 받는 키워드가 이것이라, 옛 키워드로 판정하면 판정 대상과 실제 글이 어긋난다.
+          const clBound = bindCl(cand);
+          const clKeyword = clBound?.cand.keyword ?? cand.keyword;
+          if (clBound?.from) console.log(`[auto-cycle] 클러스터 수종 키워드 보정 — "${clBound.from}" → "${clKeyword}"`);
+          const off = offBrandTerm(`${cand.title} ${clKeyword}`);
           // 리서치 폐기 판정 게이트(2026-08-20 리뷰) — proposeContentIdeas 만 막으면 클러스터 소진 경로로
           // 폐기 키워드가 그대로 재배정된다(처서 실사고의 두 번째 공급로). 정규화 완전 일치만 기각.
-          const avoided = off ? null : avoidVerdictFor(cand.keyword, tickBrand || undefined);
+          const avoided = off ? null : avoidVerdictFor(clKeyword, tickBrand || undefined);
           const existingNow = collectExistingContent(tickBrand || undefined);
-          const gate = (off || avoided) ? null : filterCandidates([cand.keyword], cand.seedKeyword, seedTitle, existingNow);
+          const gate = (off || avoided) ? null : filterCandidates([clKeyword], cand.seedKeyword, seedTitle, existingNow);
           const dupWhy = gate && !gate.pass.length ? (gate.rejected[0]?.why ?? '게이트 기각') : '';
-          const sat = (off || avoided || dupWhy) ? [] : saturatedThemeMatches({ title: cand.title, keyword: cand.keyword }, existingNow, 3, getBrand()?.compoundStems ?? []);
+          const sat = (off || avoided || dupWhy) ? [] : saturatedThemeMatches({ title: cand.title, keyword: clKeyword }, existingNow, 3, getBrand()?.compoundStems ?? []);
           // 계열 쿨다운 v2(2026-08-25) — 백로그의 같은 계열 형제도 하드 구간엔 소진하지 않는다(폴백 라벨 경로).
           // dropped 가 아니라 보류(pending 유지) — 점수가 식으면 자연 해제되고, 소진 시점 재검증이 중복은 따로 거른다.
-          const clGate = (off || avoided || dupWhy || sat.length) ? null : seriesGateForText(`${cand.title} ${cand.keyword}`, tickBrand || undefined);
+          const clGate = (off || avoided || dupWhy || sat.length) ? null : seriesGateForText(`${cand.title} ${clKeyword}`, tickBrand || undefined);
           const cooledCl = clGate && clGate.level === 'hard' ? clGate.key ?? '계열' : null;
           // 최근 수종 게이트(2026-09-17) — 형제 소진도 후보 루프를 우회하는 공급로다. 계열 쿨다운과 같은
           // 처리(보류·pending 유지) — 창이 지나면 저절로 풀리고, 중복은 소진 시점 재검증이 따로 거른다.
-          const recentCl = (off || avoided || dupWhy || sat.length || cooledCl) ? null : usedRecentlyFor(`${cand.title} ${cand.keyword}`, tickBrand || undefined);
-          const recentThCl = (off || avoided || dupWhy || sat.length || cooledCl || recentCl) ? null : usedThemeRecentlyFor(`${cand.title} ${cand.keyword}`, tickBrand || undefined);
+          const recentCl = (off || avoided || dupWhy || sat.length || cooledCl) ? null : usedRecentlyFor(`${cand.title} ${clKeyword}`, tickBrand || undefined);
+          const recentThCl = (off || avoided || dupWhy || sat.length || cooledCl || recentCl) ? null : usedThemeRecentlyFor(`${cand.title} ${clKeyword}`, tickBrand || undefined);
           // 사실 부족 수종 게이트(최종 리뷰 I1) — 예고 경로와 같은 이유로 여기도 복사(보류·pending 유지).
-          const starvedCl = (off || avoided || dupWhy || sat.length || cooledCl || recentCl || recentThCl) ? null : factStarvedRecentlyFor(`${cand.title} ${cand.keyword}`, tickBrand || undefined);
+          const starvedCl = (off || avoided || dupWhy || sat.length || cooledCl || recentCl || recentThCl) ? null : factStarvedRecentlyFor(`${cand.title} ${clKeyword}`, tickBrand || undefined);
           if (off || avoided || dupWhy) {
             clusterStore().update(cand.id, { status: 'dropped' });
-            console.log(`[auto-cycle] 클러스터 기각 — "${cand.keyword}" (${off ? `소재 "${off}"` : avoided ? `리서치 폐기 판정(${avoided.reason.slice(0, 40)})` : dupWhy}) → dropped`);
+            console.log(`[auto-cycle] 클러스터 기각 — "${clKeyword}" (${off ? `소재 "${off}"` : avoided ? `리서치 폐기 판정(${avoided.reason.slice(0, 40)})` : dupWhy}) → dropped`);
           } else if (sat.length) {
-            console.log(`[auto-cycle] 클러스터 보류(소재 포화) — "${cand.keyword}" ≈ "${sat[0]!.title.slice(0, 24)}" → 신규 아이디어로 폴백`);
+            console.log(`[auto-cycle] 클러스터 보류(소재 포화) — "${clKeyword}" ≈ "${sat[0]!.title.slice(0, 24)}" → 신규 아이디어로 폴백`);
           } else if (cooledCl) {
-            console.log(`[auto-cycle] 클러스터 보류(계열 쿨다운 "${cooledCl}") — "${cand.keyword}" → 신규 아이디어로 폴백`);
+            console.log(`[auto-cycle] 클러스터 보류(계열 쿨다운 "${cooledCl}") — "${clKeyword}" → 신규 아이디어로 폴백`);
           } else if (recentCl) {
-            console.log(`[auto-cycle] 클러스터 보류(최근 수종) — "${cand.keyword}" (${recentCl.name} ${recentCl.daysAgo}일 전) → 신규 아이디어로 폴백`);
+            console.log(`[auto-cycle] 클러스터 보류(최근 수종) — "${clKeyword}" (${recentCl.name} ${recentCl.daysAgo}일 전) → 신규 아이디어로 폴백`);
           } else if (recentThCl) {
-            console.log(`[auto-cycle] 클러스터 보류(최근 축) — "${cand.keyword}" (${recentThCl.theme} ${recentThCl.daysAgo}일 전) → 신규 아이디어로 폴백`);
+            console.log(`[auto-cycle] 클러스터 보류(최근 축) — "${clKeyword}" (${recentThCl.theme} ${recentThCl.daysAgo}일 전) → 신규 아이디어로 폴백`);
           } else if (starvedCl) {
-            console.log(`[auto-cycle] 클러스터 보류(사실 부족 수종) — "${cand.keyword}" (${starvedCl.name} ${starvedCl.daysAgo}일 전) → 신규 아이디어로 폴백`);
+            console.log(`[auto-cycle] 클러스터 보류(사실 부족 수종) — "${clKeyword}" (${starvedCl.name} ${starvedCl.daysAgo}일 전) → 신규 아이디어로 폴백`);
           } else {
             // 검색 수요 게이트(2026-08-26 리뷰 C1) — 형제는 자동완성 유래라 약한 자연 방어가 있지만
             // 검색량 자체는 검증된 적이 없다. 미달이면 리서치 폐기 소급과 같은 메커니즘(dropped)으로
             // 백로그에서 빼고(사유는 로그) 다음 경로(신규 아이디어)로 진행한다.
-            const dem = await demandCheckFor(cand.keyword, '클러스터', signal, tickBrand);
+            const dem = await demandCheckFor(clKeyword, '클러스터', signal, tickBrand);
             if (dem.verdict === 'reject') {
               clusterStore().update(cand.id, { status: 'dropped' });
-              console.log(`[auto-cycle] 클러스터 기각(검색 수요 미달) — "${cand.keyword}" (${dem.line}) → dropped`);
+              console.log(`[auto-cycle] 클러스터 기각(검색 수요 미달) — "${clKeyword}" (${dem.line}) → dropped`);
             } else {
-              const piece = pieceStore().create({ title: cand.title, keyword: cand.keyword, brand: tickBrand || undefined, auto: true, userTriggered, clusterSeedId: cand.id });
-              console.log(`[auto-cycle] 클러스터 형제 착수 — "${cand.keyword}" (시드 "${cand.seedKeyword}")`);
-              consumeOpportunityVerdict(cand.keyword, tickBrand || undefined); // 채택된 기회 소진(2026-08-24)
+              const piece = pieceStore().create({ title: cand.title, keyword: clKeyword, brand: tickBrand || undefined, auto: true, userTriggered, clusterSeedId: cand.id });
+              console.log(`[auto-cycle] 클러스터 형제 착수 — "${clKeyword}" (시드 "${cand.seedKeyword}")`);
+              consumeOpportunityVerdict(clKeyword, tickBrand || undefined); // 채택된 기회 소진(2026-08-24)
               return { kind: 'piece', piece, clusterTopicId: cand.id };
             }
           }
@@ -4553,7 +4647,9 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
     const all = shortsStore().list().filter((s) => (s.brand ?? '') === tickBrand);
     // error 제외(2026-08-20 하드 캡 리뷰) — 실패 건이 케이던스 슬롯을 소진하거나 소스 글을 영구 점유하지 않게.
     // 같은 글 실패 2회부터는 재파생 중단(폭주 방지) — 네이버 저장 훅의 파생 게이트와 동일 규약.
-    const last = all.filter((s) => s.auto && s.stage !== 'error').reduce((mx, s) => (s.createdTs > mx ? s.createdTs : mx), ''); // 자율 생산분만(수동 제외)
+    // 단독 파생만 센다(!s.platform) — 2026-10-02 부터 채널 세트 파생(autoDeriveSet, platform 지정)도 오토런 몫이면 auto:true 라,
+    // 그것까지 세면 AUTO_SHORTS_PER_DAY 단독 케이던스가 세트 파생에 밀려 영영 돌지 않는다. 단독 파생은 platform 없이 만든다(launch).
+    const last = all.filter((s) => s.auto && !s.platform && s.stage !== 'error').reduce((mx, s) => (s.createdTs > mx ? s.createdTs : mx), ''); // 자율 단독 생산분만(수동·세트 제외)
     if (derivedContentDue(CONFIG.autoShortsPerDay, last || undefined) && !all.some((s) => isShortsRunning(s.id))) {
       const src = derivable.find((p) => {
         const mine = all.filter((s) => s.sourcePieceId === p.id);
@@ -4739,7 +4835,7 @@ const stopPerfSync = startDaily({
   // 설정 비어 있음 + 스냅샷 07-31 에서 정지). 브리핑 설정 여부와 팔로워 추적은 서로 묶일 이유가 없다.
   // 조회수 감사(2026-08-20) 일일 배선 — 리서치 판정 수확 + 자동완성 트렌드 스냅샷(둘 다 fail-open, 주제 두뇌가 소비).
   // 검색 수요 스냅샷(2026-08-26)도 여기 합류 — 시드 키워드의 절대 검색량·시즌 지수(하루 ~6콜, 킬스위치 off 면 0콜).
-  run: () => { void maintainIgTokens().catch(() => {}); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void syncShortsClipPerformance(); void recordFollowersSnapshot().catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void refreshDemandSnapshot().catch(() => {}); void refreshYtNicheSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); }, // 전부 순수 API — 프로필 락 무관. 네이버는 아래 새벽 잡으로 분리(2026-08-31).
+  run: () => { void maintainIgTokens().catch(() => {}); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void syncShortsClipPerformance(); void recordFollowersSnapshot().catch(() => {}); void recordNaverBlogKpis(activeBrandSlug() || '').catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void refreshDemandSnapshot().catch(() => {}); void refreshYtNicheSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); }, // 전부 순수 API — 프로필 락 무관. 네이버는 아래 새벽 잡으로 분리(2026-08-31).
   log: (m) => console.log('[perf-sync]', m),
 });
 if (CONFIG.performanceSyncTime) {
@@ -4814,6 +4910,11 @@ if (CONFIG.telegramBot && !process.env.VITEST) startTelegramBot();
 // TS 편집 포함) 잡은 사라지는데 stage 는 그대로라 검토탭이 영구 "생성 중…"이 된다.
 // 새 프로세스엔 살아있는 잡이 없으므로 비종료 stage 는 전부 고아 — error 로 마감한다.
 if (!process.env.VITEST) {
+  // 클립 대기 표시 정리(2026-10-02) — 대기는 메모리에만 있었으니 재시작으로 이미 사라졌다. 표시만 남으면 화면이
+  // '대기 중'으로 영영 멈춘다. 몰래 이어 올리지 않고, 사람이 다시 누르게 사유를 남긴다(naverClipQueue.ts).
+  for (const x of shortsStore().list()) {
+    if (x.naverClipQueuedTs) shortsStore().update(x.id, { naverClipQueuedTs: undefined, naverClipError: '서버 재시작으로 클립 대기가 취소됐습니다 — 다시 눌러 주세요' });
+  }
   const orphanErr = '서버 재시작으로 생성이 중단되었습니다 — 삭제 후 다시 만들어 주세요';
   const orphanCards = cardNewsStore().list().filter((x) => x.stage !== 'ready' && x.stage !== 'error');
   for (const x of orphanCards) cardNewsStore().update(x.id, { stage: 'error', error: orphanErr });

@@ -90,6 +90,9 @@ export interface Shorts {
   naverClipVideoId?: string;
   /** 마지막 클립 업로드 실패 사유 — 업로드는 뒤에서 돌아서 대시보드가 이걸로 실패를 보여 준다. */
   naverClipError?: string;
+  /** 프로필이 바빠(성과 수집·블로그 발행) 업로드가 대기 중인 시각(2026-10-02) — 풀리면 서버가 이어서 올린다.
+   *  대기 자체는 메모리에만 있고, 이 표시는 화면용이다(재시작 때 지운다 — naverClipQueue.ts). */
+  naverClipQueuedTs?: string;
   /** 원본 영상(final.mp4)을 저용량 preview.mp4 로 교체한 시각(2026-08-31 저장공간 정책). 있으면 재실행 안 함. */
   videoArchivedTs?: string;
   createdTs: string;

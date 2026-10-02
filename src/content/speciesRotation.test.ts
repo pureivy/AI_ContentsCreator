@@ -1,4 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import YAML from 'yaml';
+import { findSpeciesLoose } from './species';
 import { speciesInText, speciesCoverage, overSpeciesCap, speciesRotationBlock, SPECIES_MONTHLY_CAP, speciesCapFor, speciesCapFrom, speciesRecency, usedRecently, speciesRecentBlock } from './speciesRotation';
 
 const CAT = [
@@ -166,5 +170,32 @@ describe('speciesCapFrom — 검색량·숏폼 조회수 가중 상한(2026-09-1
   it('검색량만 커도, 조회수만 커도 자리를 받는다', () => {
     expect(speciesCapFrom({ searchVolume: 7110 }, B)).toBe(5);
     expect(speciesCapFrom({ searchVolume: 30, perfRatio: 3.5 }, B)).toBe(5);
+  });
+});
+
+describe('실제 브랜드 카탈로그(data/brands/bionditree.yaml) — 농원 흔한 수종이 수종 판정에 잡힌다(2026-10-02 2차 리뷰)', () => {
+  // 수종 필수·하한 면제 게이트의 눈(scheduler.speciesKeyOf)과 같은 순서 — 사전(느슨) → 카탈로그.
+  const cat = (YAML.parse(fs.readFileSync(path.join('data', 'brands', 'bionditree.yaml'), 'utf-8')) as { speciesCatalog: Parameters<typeof speciesInText>[1] }).speciesCatalog;
+  const keyOf = (t: string): string | null => findSpeciesLoose(t)?.name ?? speciesInText(t, cat) ?? null;
+
+  it('향나무·율마·주목(복합 표기)과 흔한 수종 전부', () => {
+    const want: Record<string, string> = {
+      '향나무 가지치기 시기': '향나무', '가이즈카향나무 전정': '향나무', '율마 키우기': '율마', '골드크레스트 물주기': '율마',
+      '주목 가지치기 시기': '주목나무', '주목 열매 독성': '주목나무', '주목나무 묘목': '주목나무',
+      '회양목 전정': '회양목', '소나무 전지': '소나무', '단풍나무 심기': '단풍나무', '은행나무 암수 구별': '은행나무',
+      '느티나무 키우기': '느티나무', '벚나무 병해충': '벚나무', '목련 꽃눈': '목련', '동백나무 월동': '동백나무',
+      '무궁화 진딧물': '무궁화', '산수유 열매': '산수유', '이팝나무 꽃': '이팝나무', '철쭉 전정 시기': '철쭉',
+      '영산홍 꽃 진 뒤': '철쭉', '화살나무 가지치기': '화살나무', '남천 키우기': '남천',
+    };
+    for (const [t, sp] of Object.entries(want)) expect([t, keyOf(t)]).toEqual([t, sp]);
+    // 알려진 한계 — 사전의 느슨한 어간('단풍')이 카탈로그보다 먼저라 '화살나무 단풍'은 단풍나무로 읽힌다('단풍 시기'와 같은 부류).
+    expect(keyOf('화살나무 단풍')).toBe('단풍나무');
+    // 측백 계열 품종은 측백으로 잡히기만 하면 된다(사전은 서양측백, 카탈로그는 측백나무)
+    for (const t of ['스카이로켓 생울타리', '에메랄드그린 간격', '블루엔젤 키우기']) expect(keyOf(t)).toMatch(/측백/);
+  });
+
+  it("'주목'은 동음이의어 — 단독으로는 수종이 아니다(주목할 만한·주목받는)", () => {
+    expect(keyOf('주목할 만한 가을 정원 관리')).toBeNull();
+    expect(keyOf('요즘 주목받는 정원 트렌드')).toBeNull();
   });
 });

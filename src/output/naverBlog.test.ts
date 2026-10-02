@@ -5,7 +5,7 @@ vi.mock('../orchestrator/agent', async (importOriginal) => ({
   microJSON: vi.fn(),
 }));
 import { microJSON } from '../orchestrator/agent';
-import { stripTrailingTagDump, stripInternalMarkers, packageNaverBlog } from './naverBlog';
+import { stripTrailingTagDump, stripInternalMarkers, packageNaverBlog, titleFormBlock } from './naverBlog';
 import { CONFIG } from '../config';
 
 const mocked = microJSON as unknown as ReturnType<typeof vi.fn>;
@@ -124,5 +124,69 @@ describe('packageNaverBlog — meta 요약투 린트 + 1회 재시도(권고 2)'
       expect(mocked).toHaveBeenCalledTimes(1);
       expect(b.draft.metaDescription).toBe('가을 묘목 심는 법을 정리했습니다.');
     } finally { cfg.metaSummaryLint = orig; }
+  });
+});
+
+// 제목 형식 로테이션(2026-10-02) — 40편 실측 제목이 전부 "키워드, 관점 문장" 한 꼴이었다(키워드 맨 앞 40/40·
+// 쉼표형 35/40·질문형 0). 시드의 titleForm 이 오면 1순위(=발행 제목)에 그 형식을 걸고, 안 오면 포장 프롬프트가
+// 종전과 같아야 한다(킬스위치·구 시드 리비전).
+describe('packageNaverBlog — 제목 형식(titleForm)', () => {
+  const pack = (titles: string[]) => ({
+    primaryKeyword: '배롱나무 가지치기', titles, meta: '잎이 진 뒤에 자릅니다. 굵은 가지는 봄으로 미룹니다.',
+    tags: ['배롱나무가지치기', '배롱나무'], images: [{ alt: '가지', prompt: '가지 사진' }],
+  });
+  const base = { topic: '배롱나무 가지치기', body: '잎이 진 뒤에 자릅니다.', model: 'micro', keyword: '배롱나무 가지치기' };
+
+  it('형식이 없으면 종전 시스템 프롬프트(키워드 앞쪽·클릭 유도·처서 예시)이고 형식 블록이 없다', async () => {
+    mocked.mockResolvedValueOnce(pack(['배롱나무 가지치기, 잎이 진 뒤로 미루는 이유']));
+    await packageNaverBlog(base);
+    const [, sys, user] = mocked.mock.calls[0] as [string, string, string];
+    expect(sys).toContain('핵심 키워드를 앞쪽에 자연스럽게, 15~40자, 클릭 유도');
+    expect(sys).toContain('처서 전에 끝내야 하는 이유');
+    expect(user).not.toContain('[이번 글 제목 형식');
+  });
+
+  it('형식이 오면 1순위에 그 형식을 걸고, 고정 키워드 정확 표기를 못박는다', async () => {
+    mocked.mockResolvedValueOnce(pack(['배롱나무 가지치기, 언제 해야 하나요?']));
+    await packageNaverBlog({ ...base, titleForm: 'question' });
+    const [, sys, user] = mocked.mock.calls[0] as [string, string, string];
+    expect(sys).not.toContain('클릭 유도');
+    expect(sys).not.toContain('처서 전에 끝내야 하는 이유');
+    expect(sys).toContain('[이번 글 제목 형식]을 따른다');
+    expect(user).toContain('[이번 글 제목 형식 — titles 첫 번째 후보(발행 제목)에 반드시 적용] 질문형');
+    expect(user).toContain('핵심 키워드 "배롱나무 가지치기" 표기를');
+  });
+
+  // 브리프의 '제목 후보'(키워드 앞부분·클릭 유도)와 SERP 제목이 형식 블록 뒤에 오면 마지막에 읽힌 꼴로 끌려간다.
+  it('형식 블록은 브리프·SERP 뒤, 형식 줄 바로 앞에 오고 그 자료보다 우선함을 밝힌다', async () => {
+    mocked.mockResolvedValueOnce(pack(['배롱나무 가지치기 시기와 방법']));
+    await packageNaverBlog({ ...base, titleForm: 'variant', researchBrief: '제목 후보: 배롱나무 가지치기, 지금 하면 안 되는 이유', serpText: '1. 배롱나무 가지치기 꿀팁' });
+    const user = String(mocked.mock.calls[0]?.[2]);
+    const at = user.indexOf('[이번 글 제목 형식');
+    expect(at).toBeGreaterThan(user.indexOf('[리서치·SEO 브리프]'));
+    expect(at).toBeGreaterThan(user.indexOf('[네이버 상위 노출 제목(실측)]'));
+    expect(at).toBeLessThan(user.indexOf('형식: {'));
+    expect(user).toContain('패턴보다 우선한다');
+  });
+
+  it('형식 블록은 형식마다 다르다', () => {
+    const forms = ['twist', 'question', 'answer', 'variant', 'compare'] as const;
+    expect(new Set(forms.map((f) => titleFormBlock(f, 'X'))).size).toBe(5);
+  });
+
+  it('형식 런에서 1순위가 고정 키워드를 잃으면 키워드를 담은 다음 후보를 올린다(seo 키워드 포함 보증)', async () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    mocked.mockResolvedValueOnce(pack(['언제 잘라야 하나요?', '배롱나무 가지치기, 언제 해야 하나요?', '배롱나무 가지치기 시기와 방법']));
+    const b = await packageNaverBlog({ ...base, titleForm: 'question' });
+    expect(b.draft.titleCandidates[0]).toBe('배롱나무 가지치기, 언제 해야 하나요?');
+    expect(b.draft.titleCandidates).toHaveLength(3);
+    expect(b.draft.seo.checklist.find((c) => c.label === '제목에 핵심 키워드 포함')?.ok).toBe(true);
+    spy.mockRestore();
+  });
+
+  it('형식이 없는 런은 순서를 건드리지 않는다(종전 동작)', async () => {
+    mocked.mockResolvedValueOnce(pack(['언제 잘라야 하나요?', '배롱나무 가지치기 시기와 방법']));
+    const b = await packageNaverBlog(base);
+    expect(b.draft.titleCandidates[0]).toBe('언제 잘라야 하나요?');
   });
 });

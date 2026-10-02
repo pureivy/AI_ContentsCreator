@@ -767,24 +767,43 @@ def insert_divider_ui(page):
         log(f"  구분선 삽입 실패(무해): {str(e)[:50]}")
 
 
-def convert_quotes_and_ai(page, quote_groups: list) -> str:
+def is_real_photo(entry) -> bool:
+    """실촬영 컷(2026-10-02) — 보관소 영상에서 뗀 우리 밭 사진. 'AI 활용' 표시를 켜지 않는다.
+    생성 이미지가 아닌데 AI 표시를 달면 실사진을 넣은 이유(네이버 07-06 공지의 '실제로 오인될 수 있는 생성
+    이미지' 위험을 줄이는 것)가 사라지고, 표시 자체도 사실과 다르다. 나머지 생성 이미지는 종전대로 켠다.
+    판정은 우리 finalize 가 다는 source 'archive_frame' 하나만 본다 — ai:false 를 받아 주면 모델이 쓰는 blog_publish
+    매니페스트가 생성 이미지의 AI 표시를 끌 수 있다(2026-10-02 리뷰. TS 쪽 runBlogPublish 도 두 필드를 지운다)."""
+    return isinstance(entry, dict) and entry.get("source") == "archive_frame"
+
+
+def convert_quotes_and_ai(page, quote_groups: list, ai_flags: list | None = None) -> str:
     """평문으로 타이핑된 '인용구 문단 그룹'을 네이티브 인용구(quotation) 컴포넌트로 변환하고, 이미지는
     'AI 활용(ai:true)' 표시를 켠다 — 단 한 번의 setDocumentData(순서·구조 보존). 스타일(굵게)은 이 호출
     '이후' 명령으로 다시 입힌다(문서 API 가 spanStyle 을 제거하므로).
     quote_groups: [{lines:[문단텍스트…], layout:'quotation_line|default|quotation_corner'}] — 타이핑 순서 그대로. 그룹의
-    연속 문단들이 인용구 하나가 된다(프레임 요약 박스는 여러 줄이 한 박스). 반환: 'ok:quotes=N' 등."""
-    return page.evaluate("""(groups) => {
+    연속 문단들이 인용구 하나가 된다(프레임 요약 박스는 여러 줄이 한 박스). 반환: 'ok:quotes=N' 등.
+    ai_flags: 삽입 순서대로 이미지마다 AI 표시 여부(없거나 모자라면 true — 종전 동작). 실촬영 컷만 false.
+    문서의 이미지 수가 ai_flags 길이와 다르면(업로드는 됐는데 기록이 빠짐·편집기가 이미지를 더 만듦 등) 순서 짝이
+    믿을 수 없다 — 전부 true(종전 동작)로 두고 반환에 ';ai_fallback=이미지수/표시수' 를 붙인다(호출부가 로그)."""
+    return page.evaluate("""([groups, flags0]) => {
         const ds = window.SE?.launcher?._editors?.blogpc001?._documentService;
         if (!ds) return 'no_ds';
         const rid = () => 'g'+Math.random().toString(36).slice(2,10);
         const norm = s => (s||'').replace(/\\s+/g,' ').trim();
         const ptext = p => norm((p.nodes||[]).map(n=>n.value||'').join(''));
         const doc = ds.getDocumentData();
+        const nImg = doc.document.components.filter(c => c['@ctype'] === 'image').length;
+        const mismatch = !!(flags0 && flags0.length && flags0.length !== nImg);
+        const flags = mismatch ? null : flags0;
         const out = [];
         let gi = 0;  // 그룹 포인터 — 타이핑 순서 매칭(동일 문구 중복에도 안전)
+        let ii = 0;  // 이미지 포인터 — 문서 순서 = 삽입 순서
         for (const c of doc.document.components) {
             const ct = c['@ctype'];
-            if (ct === 'image') { c.ai = true; out.push(c); continue; }   // 이미지 AI 활용 표시 ON
+            if (ct === 'image') {                                           // 이미지 AI 활용 표시 — 실촬영 컷만 끔
+                c.ai = (flags && ii < flags.length) ? !!flags[ii] : true; ii++;
+                out.push(c); continue;
+            }
             if (ct !== 'text') { out.push(c); continue; }                  // 구분선 등 구조 컴포넌트 보존
             const ps = c.value || [];
             let run = [];
@@ -807,8 +826,8 @@ def convert_quotes_and_ai(page, quote_groups: list) -> str:
         }
         doc.document.components = out;
         try { ds.setDocumentData(doc); } catch(e){ return 'error:'+e.message; }
-        return 'ok:quotes='+gi+'/'+groups.length;
-    }""", quote_groups)
+        return 'ok:quotes='+gi+'/'+groups.length + (mismatch ? ';ai_fallback='+nImg+'/'+flags0.length : '');
+    }""", [quote_groups, ai_flags or []])
 
 
 def toggle_image_ai_ui(page):
@@ -829,7 +848,7 @@ def toggle_image_ai_ui(page):
         pass
 
 
-def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
+def type_body_human(page, se_text: dict, images: list, issues: list, ai_flags: list | None = None) -> tuple:
     """
     본문을 '사람처럼' 입력한다 — 문단은 한 글자씩 타이핑하고 사이사이 Enter, 이미지는 해당 위치에서
     이미지 버튼으로 삽입(사람이 사진 올리듯). 소제목·인용구는 '평문'으로 순서대로 타이핑만 하고, 굵게·
@@ -868,7 +887,11 @@ def type_body_human(page, se_text: dict, images: list, issues: list) -> tuple:
                 fc.value.set_files(str(img_path))
                 time.sleep(7)
                 upload_count[0] += 1
-                toggle_image_ai_ui(page)  # AI 활용 표시 ON(UI 토글 — 스타일 보존 위해 setDocumentData 대신)
+                real = is_real_photo(entry)
+                if ai_flags is not None:
+                    ai_flags.append(not real)  # 삽입 순서 — convert_quotes_and_ai 가 같은 순서로 ai 를 맞춘다
+                if not real:
+                    toggle_image_ai_ui(page)  # AI 활용 표시 ON(UI 토글 — 스타일 보존 위해 setDocumentData 대신)
                 dismiss_editor_popup(page)
                 time.sleep(_rand(0.5, 1.0))
                 return
@@ -1141,21 +1164,25 @@ def bold_title_via_command(page) -> str:
     return "no_title"
 
 
-def set_images_ai(page) -> str:
+def set_images_ai(page, skip_ids=None) -> str:
     """모든 이미지 컴포넌트의 ai 필드를 true 로 설정 — 'AI 활용(생성) 이미지' 표시(사용자 요청).
-    SE 이미지 컴포넌트에 ai 불리언 필드가 있어 documentService 로 직접 설정한다."""
+    SE 이미지 컴포넌트에 ai 불리언 필드가 있어 documentService 로 직접 설정한다.
+    skip_ids: 실촬영 컷(is_real_photo) 컴포넌트 id — 이것만 ai=false(2026-10-02)."""
     try:
-        return str(page.evaluate("""() => {
+        return str(page.evaluate("""(skip) => {
             const ds = window.SE?.launcher?._editors?.blogpc001?._documentService;
             if (!ds) return 'no_ds';
             const doc = ds.getDocumentData();
             let n = 0;
+            let real = 0;
             for (const c of doc.document.components) {
-                if (c['@ctype'] === 'image') { c.ai = true; n++; }
+                if (c['@ctype'] !== 'image') continue;
+                if ((skip || []).includes(c.id)) { c.ai = false; real++; continue; }
+                c.ai = true; n++;
             }
-            if (n) { try { ds.setDocumentData(doc); } catch(e) { return 'err:' + e.message; } }
-            return 'ok:' + n;
-        }"""))
+            if (n || real) { try { ds.setDocumentData(doc); } catch(e) { return 'err:' + e.message; } }
+            return 'ok:' + n + (real ? ' real:' + real : '');
+        }""", list(skip_ids or [])))
     except Exception as e:
         return 'err:' + str(e)[:60]
 
@@ -1512,6 +1539,7 @@ def write_post(
     # ── 사람처럼 입력 경로 — 본문을 타이핑하고 이미지를 위치에 삽입, 제목 스타일만 반영 ──
     image_comps = []  # 대표사진 설정(STEP 9)용 — 두 경로 모두에서 채운다.
     preexisting_image_ids = set()  # 폴백 시 제외할 '사람 경로에서 이미 삽입된' 이미지 컴포넌트 id.
+    real_comp_ids = []  # 실촬영 컷 컴포넌트 id(API 경로) — 'AI 활용' 표시에서 뺀다(2026-10-02).
     if human:
         log("\n[STEP 4~7] 본문 사람처럼 입력")
         if not focus_body_editor(page, run_dir):
@@ -1519,13 +1547,20 @@ def write_post(
             human = False
         else:
             try:
-                headings, quote_groups, rich_blocks, image_upload_count = type_body_human(page, se_text, images, issues)
+                human_ai_flags = []
+                headings, quote_groups, rich_blocks, image_upload_count = type_body_human(page, se_text, images, issues, human_ai_flags)
                 log(f"  타이핑 완료 — 소제목 {len(headings)}개, 인용구 {len(quote_groups)}개, 표/코드 {len(rich_blocks)}개, 이미지 {image_upload_count}장")
                 time.sleep(1.0)
                 # ① 인용구 변환 + 이미지 AI 표시 — 단 한 번의 setDocumentData(순서·구조 보존, 스타일 제거).
                 if quote_groups or image_upload_count:
-                    conv = convert_quotes_and_ai(page, quote_groups)
+                    conv = convert_quotes_and_ai(page, quote_groups, human_ai_flags)
                     log(f"  [인용구 변환] {conv}")
+                    # 실촬영 컷 확인용(2026-10-02) — 첫 실발행에서 'AI 표시 끔 1' 이 보여야 한다.
+                    if isinstance(conv, str) and ";ai_fallback=" in conv:
+                        # 문서 이미지 수와 표시 목록이 어긋남 — 순서 짝을 믿을 수 없어 전부 AI 표시(종전 동작)로 뒀다.
+                        log(f"  ⚠ [image-ai] 이미지 수 불일치({conv.split(';ai_fallback=')[1]} = 문서/표시) — 실촬영 포함 전부 AI 표시 켬(종전 동작)")
+                    else:
+                        log(f"  [image-ai] 사람 경로 — 이미지 {len(human_ai_flags)}장 중 AI 표시 끔(실촬영) {human_ai_flags.count(False)}장")
                     if isinstance(conv, str) and conv.startswith("error"):
                         issues.append(f"인용구 변환 실패: {conv}")
                     time.sleep(1.2)   # 재렌더 대기
@@ -1663,6 +1698,13 @@ def write_post(
         img_pos_map = {}
         for pos in image_positions:
             img_pos_map.setdefault(pos["after_section"], []).append(pos["image_index"])
+        # 실촬영 컷(매니페스트 source=archive_frame) 의 컴포넌트 id — set_images_ai 가 이것만 AI 표시를 끈다.
+        entry_by_slot = {e.get("index", k): e for k, e in enumerate(images) if isinstance(e, dict)}
+        for slot_idx, entry in entry_by_slot.items():
+            if is_real_photo(entry):
+                comp = comp_for(slot_idx)
+                if comp is not None and comp.get("id"):
+                    real_comp_ids.append(comp.get("id"))
         final_comps = []
         for img_idx in img_pos_map.get(-1, []):
             comp = comp_for(img_idx)
@@ -1714,8 +1756,12 @@ def write_post(
     # ── 이미지 'AI 활용' 표시 ON — API 경로만 setDocumentData(ai:true). 사람 경로는 타이핑 중 UI 토글로
     #    이미 처리했다(여기서 setDocumentData 를 돌리면 명령으로 준 굵게·소제목 스타일이 전부 제거됨). ──
     if image_comps and not human:
-        ai_result = set_images_ai(page)
+        ai_result = set_images_ai(page, real_comp_ids)
         log(f"  [image-ai] AI 이미지 표시: {ai_result}")
+        if real_comp_ids and "real:" not in str(ai_result):
+            # 컴포넌트 id 가 setDocumentData 뒤에 바뀌었다는 뜻 — 실촬영 컷에도 AI 표시가 붙었다(종전 동작).
+            log(f"  ⚠ [image-ai] 실촬영 컷 {len(real_comp_ids)}장을 문서에서 못 찾음 — AI 표시가 붙었을 수 있다")
+            issues.append("실촬영 컷 AI 표시 해제 실패(컴포넌트 id 불일치) — 네이버에서 해당 사진의 'AI 활용' 표시 확인")
         if ai_result.startswith("err"):
             issues.append(f"이미지 AI 표시 실패: {ai_result}")
         time.sleep(0.5)

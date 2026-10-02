@@ -1182,6 +1182,7 @@ export interface ShortsInfo {
   naverClipUrl?: string;
   naverClipSubmittedTs?: string; // '등록'은 눌렀는데 공개 확인을 못 함 — 재시도 막힘
   naverClipError?: string;  // 마지막 클립 업로드 실패 사유
+  naverClipQueuedTs?: string; // 네이버 수집·발행이 프로필을 쓰는 중이라 업로드 대기 중(끝나면 서버가 자동으로 올림)
   clipRunning?: boolean;    // 지금 클립 업로드 중(서버 뒤에서 수 분)
   videoArchivedTs?: string; // 원본이 저화질 사본으로 정리됨 — 클립에 못 올린다
   views?: number;
@@ -1228,7 +1229,7 @@ export async function publishShortsMeta(id: string): Promise<{ ok?: boolean; igP
   catch { return { error: "요청 실패" }; }
 }
 // 네이버 클립 — 업로드는 서버 뒤에서 수 분 돈다(202 started). check=true 는 '등록 뒤 미확인' 편을 목록과 대조만 한다.
-export async function publishShortsNaverClip(id: string, opts?: { check?: boolean }): Promise<{ ok?: boolean; started?: boolean; status?: string; url?: string; error?: string; issues?: string[] }> {
+export async function publishShortsNaverClip(id: string, opts?: { check?: boolean }): Promise<{ ok?: boolean; started?: boolean; queued?: boolean; note?: string; status?: string; url?: string; error?: string; issues?: string[] }> {
   try { const r = await fetch(`/shorts/${id}/naver-clip`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts?.check ? { check: true } : {}) }); return await r.json(); }
   catch { return { error: "요청 실패" }; }
 }

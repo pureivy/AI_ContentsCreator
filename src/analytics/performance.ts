@@ -29,6 +29,8 @@ export interface MetricSample {
   watchMinutes?: number;
   traffic?: Record<string, number>;
   searchInflow: SearchInflow[];
+  /** 네이버 블로그 검색 엔진 유입 합(발행~측정 누적, 2026-10-02) — searchInflow 와 같은 통계 유입경로 출처. 하위호환 optional. */
+  searchCv?: number;
   /** 'manual' | 'scrape:<collector>' — 수집 출처(신뢰도 구분). */
   source?: string;
 }

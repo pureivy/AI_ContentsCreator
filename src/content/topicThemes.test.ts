@@ -203,4 +203,11 @@ describe('themeRotationBlock — 보관소 지시 중에는 예시도 그 수종
     expect(themeRotationBlock(TH, cov, THEME_MONTHLY_CAP, 8)).toBe(before);
     expect(before).toMatch(/예\) 나무 접붙이기/);
   });
+  it('수종 필수 틱(2026-10-02)은 이유 줄을 바꿔 줄 수 있다 — 수종 목록이 비면 그 줄도 안 나온다', () => {
+    const note = '  ※ 수종 필수 이유';
+    const b = themeRotationBlock(TH, cov, THEME_MONTHLY_CAP, 8, ['감나무'], note);
+    expect(b).toContain(note);
+    expect(b).not.toMatch(/보관소/);
+    expect(themeRotationBlock(TH, cov, THEME_MONTHLY_CAP, 8, [], note)).toBe(themeRotationBlock(TH, cov));
+  });
 });

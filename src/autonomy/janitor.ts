@@ -22,6 +22,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { humanBytes } from '../util/prune';
+import { releaseBlogFramesOfRemovedRun } from '../content/blogFrames';
 
 export interface JanitorShort {
   id: string; stage: string; platform?: string;
@@ -233,7 +234,12 @@ export async function runJanitor(deps: JanitorDeps, opts: JanitorOpts = {}): Pro
     if (!p) { // 규칙 4 — 글과 연결 안 된 세션
       let mtime = 0;
       try { mtime = fs.statSync(fs.existsSync(path.join(dir, 'run.json')) ? path.join(dir, 'run.json') : dir).mtimeMs; } catch { continue; }
-      if (now.getTime() - mtime >= staleDays * DAY) trash(dir, 'unlinked-sessions', runId);
+      if (now.getTime() - mtime >= staleDays * DAY) {
+        // 블로그 실촬영 컷 반납(2026-10-02 2차 리뷰) — 초안 없는 미연결 런의 컷은 세션이 있을 때 이미 풀려 있었다. 세션을 치우면
+        // 그 판정 근거가 사라져 다시 막히므로 옮기기 전에 반납 줄로 굳혀 둔다(조건·발행 글 보호는 함수 안). 계획(dryRun)이면 안 쓴다.
+        if (!dryRun) releaseBlogFramesOfRemovedRun(runId, { dataDir: deps.dataDir, sessionsDir: deps.sessionsDir }, 'janitor-unlinked');
+        trash(dir, 'unlinked-sessions', runId);
+      }
       continue;
     }
     const age = daysSince(p.publishedTs, now);

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { REVISE_NO_NEW_FACTS, buildReviseContext, BLOG_BODY_GUIDE, blogBodyGuide, buildGenreGuide, FactStarvedError, isFactStarved, shouldThrowStarved } from './org';
+import { REVISE_NO_NEW_FACTS, buildReviseContext, BLOG_BODY_GUIDE, blogBodyGuide, buildGenreGuide, FactStarvedError, isFactStarved, shouldThrowStarved, frameOpenerItem } from './org';
+import { structureBlock, STRUCTURE_KEEP_BLOCK, FIXED_STRUCTURE_SEED } from '../content/structureSeed';
 import { FACT_CARD_HEADER } from '../content/factGate';
 
 describe('리비전 컨텍스트(스펙 §3) — 브리프·목소리 지침이 개정에도 들어간다', () => {
@@ -73,6 +74,15 @@ it('리비전 컨텍스트에 [이번 글 구조] 블록이 들어간다(같은 
 
 // Fix round(finding 3) — 도입 자리 고정 문구('독자의 상황·질문으로 바로 시작한다')는 시드 openers 4값 중
 // 3값(주장·대비·장면)과 경쟁하는 상시 처방이었다. 인사·예고형 도입 금지 자체는 남기고 꼬리만 위임한다.
+// 2026-10-02 — 소제목 형식은 시드(headingStyle)가 돌린다. '소제목 1~2개는 구나 질문으로'가 상시로 남으면
+// 번호·키워드 구 런과 충돌한다. off(blogBodyGuide(false))는 종전 문구 그대로.
+it('BLOG_BODY_GUIDE — 소제목 형식을 [이번 글 구조] 에 위임하고, off 는 종전 문구를 유지한다', () => {
+  expect(BLOG_BODY_GUIDE).toContain('소제목 형식은 아래 [이번 글 구조] 를 따른다');
+  expect(BLOG_BODY_GUIDE).not.toContain('소제목 1~2개는 완결 서술문 대신');
+  expect(blogBodyGuide(false)).toContain('소제목 1~2개는 완결 서술문 대신');
+  expect(blogBodyGuide(false)).not.toContain('소제목 형식은 아래 [이번 글 구조]');
+});
+
 it('BLOG_BODY_GUIDE — 도입 유형도 [이번 글 구조] 에 위임한다', () => {
   expect(BLOG_BODY_GUIDE).toContain('도입 유형은 아래 [이번 글 구조] 를 따른다');
   expect(BLOG_BODY_GUIDE).not.toContain('독자의 상황·질문으로 바로 시작한다');
@@ -168,5 +178,21 @@ describe('shouldThrowStarved — 사실 부족으로 던질 것인가(최종 리
   });
   it('기준 이상이면 던지지 않는다', () => {
     expect(shouldThrowStarved(true, '음나무', 5, 5)).toBe(false);
+  });
+});
+
+// 2026-10-02 — [구성 반복 회피] ⑤는 [이번 글 구조] 블록에 도입 유형 줄이 있을 때만 위임한다. 유지 블록(STRUCTURE_KEEP_BLOCK)엔
+// 도입 유형이 없어, 블록 유무만 보고 위임하면 없는 지시를 가리키게 된다.
+describe('frameOpenerItem — ⑤ 도입 단정 대안', () => {
+  const delegate = '도입 유형은 [이번 글 구조] 를 따른다';
+  it('집필 블록(structureBlock — 도입 유형 줄 있음)이면 위임한다', () => {
+    expect(frameOpenerItem(structureBlock(FIXED_STRUCTURE_SEED))).toContain(delegate);
+    expect(frameOpenerItem(structureBlock(FIXED_STRUCTURE_SEED, { revise: true }))).toContain(delegate);
+  });
+  it('유지 블록(도입 유형 없음)·빈 블록이면 종전 대안 목록', () => {
+    for (const s of [STRUCTURE_KEEP_BLOCK, '']) {
+      expect(frameOpenerItem(s)).not.toContain(delegate);
+      expect(frameOpenerItem(s)).toContain('현장 장면 묘사, 절기·날씨 신호, 통념 반박, 실제 질문 인용으로');
+    }
   });
 });

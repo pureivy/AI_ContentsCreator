@@ -1,0 +1,345 @@
+{
+ "logNo": "224427392358",
+ "fetchedAt": "2026-10-02T17:35:22+0900",
+ "periods": [
+  {
+   "dim": "MONTH",
+   "start": "2026-09-01",
+   "status": 200,
+   "total": {
+    "columnInfo": [
+     "date",
+     "referrerDomain",
+     "referrerSearchEngine",
+     "cv",
+     "cv_p"
+    ],
+    "rows": {
+     "date": [
+      "2026-09-01"
+     ],
+     "cv": [
+      1
+     ],
+     "referrerSearchEngine": [
+      "1"
+     ],
+     "referrerDomain": [
+      "Daum 검색_PC"
+     ],
+     "cv_p": [
+      100
+     ]
+    }
+   },
+   "details": [
+    {
+     "domain": "Daum 검색_PC",
+     "status": 200,
+     "data": {
+      "columnInfo": [
+       "date",
+       "searchQuery",
+       "referrerUrl",
+       "cv",
+       "cv_p"
+      ],
+      "rows": {
+       "date": [
+        "2026-09-01"
+       ],
+       "cv": [
+        1
+       ],
+       "searchQuery": [
+        "하스카프 베리 묘목"
+       ],
+       "cv_p": [
+        100
+       ],
+       "referrerUrl": [
+        "https://search.daum.net/search?w=tot&q=%ED%95%98%EC%8A%A4%EC%B9%B4%ED%94%84%20%EB%B2%A0%EB%A6%AC%20%EB%AC%98%EB%AA%A9&DA=UME&sugo=12&o=3&sq=%ED%95%98%EC%8A%A4%EC%B9%B4%ED%94%84"
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "dim": "DATE",
+   "start": "2026-10-01",
+   "status": 200,
+   "total": {
+    "columnInfo": [
+     "date",
+     "referrerDomain",
+     "referrerSearchEngine",
+     "cv",
+     "cv_p"
+    ],
+    "rows": {
+     "date": [
+      "2026-10-01",
+      "2026-10-01",
+      "2026-10-01",
+      "2026-10-01",
+      "2026-10-01"
+     ],
+     "cv": [
+      3,
+      2,
+      1,
+      1,
+      1
+     ],
+     "referrerSearchEngine": [
+      "1",
+      "0",
+      "0",
+      "1",
+      "1"
+     ],
+     "referrerDomain": [
+      "네이버 통합검색_모바일",
+      "네이버 블로그_모바일",
+      "네이버 메인_모바일_홈판",
+      "네이버 블로그검색_PC",
+      "네이버 통합검색_PC"
+     ],
+     "cv_p": [
+      37.5,
+      25,
+      12.5,
+      12.5,
+      12.5
+     ]
+    }
+   },
+   "details": [
+    {
+     "domain": "네이버 통합검색_모바일",
+     "status": 200,
+     "data": {
+      "columnInfo": [
+       "date",
+       "searchQuery",
+       "referrerUrl",
+       "cv",
+       "cv_p"
+      ],
+      "rows": {
+       "date": [
+        "2026-10-01",
+        "2026-10-01",
+        "2026-10-01"
+       ],
+       "cv": [
+        1,
+        1,
+        1
+       ],
+       "searchQuery": [
+        "감나무 묘목",
+        "감나무 옮겨심기",
+        "단감나무옮겨심기"
+       ],
+       "cv_p": [
+        33.33333333333333,
+        33.33333333333333,
+        33.33333333333333
+       ],
+       "referrerUrl": [
+        "https://m.search.naver.com/search.naver?ssc=tab.m.all&where=m&query=%EA%B0%90%EB%82%98%EB%AC%B4+%EB%AC%98%EB%AA%A9",
+        "https://m.search.naver.com/search.naver?ssc=tab.m.all&where=m&query=%EA%B0%90%EB%82%98%EB%AC%B4+%EC%98%AE%EA%B2%A8%EC%8B%AC%EA%B8%B0",
+        "https://m.search.naver.com/search.naver?ssc=tab.m.all&where=m&query=%EB%8B%A8%EA%B0%90%EB%82%98%EB%AC%B4%EC%98%AE%EA%B2%A8%EC%8B%AC%EA%B8%B0"
+       ]
+      }
+     }
+    },
+    {
+     "domain": "네이버 블로그검색_PC",
+     "status": 200,
+     "data": {
+      "columnInfo": [
+       "date",
+       "searchQuery",
+       "referrerUrl",
+       "cv",
+       "cv_p"
+      ],
+      "rows": {
+       "date": [
+        "2026-10-01"
+       ],
+       "cv": [
+        1
+       ],
+       "searchQuery": [
+        "1년생감나무묘목"
+       ],
+       "cv_p": [
+        100
+       ],
+       "referrerUrl": [
+        "https://search.naver.com/search.naver?ssc=tab.blog.all&query=1%EB%85%84%EC%83%9D%EA%B0%90%EB%82%98%EB%AC%B4%EB%AC%98%EB%AA%A9"
+       ]
+      }
+     }
+    },
+    {
+     "domain": "네이버 통합검색_PC",
+     "status": 200,
+     "data": {
+      "columnInfo": [
+       "date",
+       "searchQuery",
+       "referrerUrl",
+       "cv",
+       "cv_p"
+      ],
+      "rows": {
+       "date": [
+        "2026-10-01"
+       ],
+       "cv": [
+        1
+       ],
+       "searchQuery": [
+        "감나무 묘목"
+       ],
+       "cv_p": [
+        100
+       ],
+       "referrerUrl": [
+        "https://search.naver.com/search.naver?ssc=tab.nx.all&where=nexearch&query=%EA%B0%90%EB%82%98%EB%AC%B4+%EB%AC%98%EB%AA%A9"
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "dim": "DATE",
+   "start": "2026-10-02",
+   "status": 200,
+   "total": {
+    "columnInfo": [
+     "date",
+     "referrerDomain",
+     "referrerSearchEngine",
+     "cv",
+     "cv_p"
+    ],
+    "rows": {
+     "date": [
+      "2026-10-02",
+      "2026-10-02",
+      "2026-10-02"
+     ],
+     "cv": [
+      5,
+      2,
+      1
+     ],
+     "referrerSearchEngine": [
+      "1",
+      "1",
+      "0"
+     ],
+     "referrerDomain": [
+      "네이버 통합검색_PC",
+      "네이버 통합검색_모바일",
+      "네이버 메인_모바일_홈판"
+     ],
+     "cv_p": [
+      62.5,
+      25,
+      12.5
+     ]
+    }
+   },
+   "details": [
+    {
+     "domain": "네이버 통합검색_PC",
+     "status": 200,
+     "data": {
+      "columnInfo": [
+       "date",
+       "searchQuery",
+       "referrerUrl",
+       "cv",
+       "cv_p"
+      ],
+      "rows": {
+       "date": [
+        "2026-10-02",
+        "2026-10-02",
+        "2026-10-02",
+        "2026-10-02"
+       ],
+       "cv": [
+        2,
+        1,
+        1,
+        1
+       ],
+       "searchQuery": [
+        "감나무 묘목",
+        "3년생감나무거름주기",
+        "가을 감나무 식재 시기",
+        "가을단감묘목"
+       ],
+       "cv_p": [
+        40,
+        20,
+        20,
+        20
+       ],
+       "referrerUrl": [
+        "https://search.naver.com/search.naver?ssc=tab.nx.all&where=nexearch&query=%EA%B0%90%EB%82%98%EB%AC%B4+%EB%AC%98%EB%AA%A9",
+        "https://search.naver.com/search.naver?ssc=tab.nx.all&where=nexearch&query=3%EB%85%84%EC%83%9D%EA%B0%90%EB%82%98%EB%AC%B4%EA%B1%B0%EB%A6%84%EC%A3%BC%EA%B8%B0",
+        "https://search.naver.com/search.naver?ssc=tab.nx.all&where=nexearch&query=%EA%B0%80%EC%9D%84+%EA%B0%90%EB%82%98%EB%AC%B4+%EC%8B%9D%EC%9E%AC+%EC%8B%9C%EA%B8%B0",
+        "https://search.naver.com/search.naver?ssc=tab.nx.all&where=nexearch&query=%EA%B0%80%EC%9D%84%EB%8B%A8%EA%B0%90%EB%AC%98%EB%AA%A9"
+       ]
+      }
+     }
+    },
+    {
+     "domain": "네이버 통합검색_모바일",
+     "status": 200,
+     "data": {
+      "columnInfo": [
+       "date",
+       "searchQuery",
+       "referrerUrl",
+       "cv",
+       "cv_p"
+      ],
+      "rows": {
+       "date": [
+        "2026-10-02",
+        "2026-10-02"
+       ],
+       "cv": [
+        1,
+        1
+       ],
+       "searchQuery": [
+        "감나무끍는것",
+        "전의 감나무 묘목"
+       ],
+       "cv_p": [
+        50,
+        50
+       ],
+       "referrerUrl": [
+        "https://m.search.naver.com/search.naver?ssc=tab.m.all&where=m&query=%EA%B0%90%EB%82%98%EB%AC%B4%EB%81%8D%EB%8A%94%EA%B2%83",
+        "https://m.search.naver.com/search.naver?ssc=tab.m.all&where=m&query=%EC%A0%84%EC%9D%98+%EA%B0%90%EB%82%98%EB%AC%B4+%EB%AC%98%EB%AA%A9"
+       ]
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

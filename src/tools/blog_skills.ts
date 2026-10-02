@@ -18,6 +18,7 @@ import { activeBrandSlug, isSafeBrandSlug } from '../content/brand';
 import { getNaverAccount } from '../secrets/store';
 import { coerceBlogDraft, draftToFinalContent } from '../output/smarteditor';
 import type { BlogDraft } from '../output/formatter';
+import { statInflowPeriods, periodsArg, parseRefererDump } from '../analytics/naverReferer';
 
 export interface BlogSkillResult { ok: boolean; output: string }
 
@@ -165,7 +166,7 @@ export async function runImageGenerate(roleId: string, arg: string, signal?: Abo
  */
 export async function generateImagesForDraft(
   draftJsonPath: string, outDir: string, manifestPath: string,
-  opts: { businessType?: string; imageStyle?: string; topic?: string; limit?: number; timeoutMs?: number; refImages?: readonly string[]; allowText?: boolean; size?: string } = {},
+  opts: { businessType?: string; imageStyle?: string; topic?: string; limit?: number; timeoutMs?: number; refImages?: readonly string[]; allowText?: boolean; size?: string; startIndex?: number } = {},
   signal?: AbortSignal,
 ): Promise<BlogSkillResult> {
   const limit = Math.min(Math.max(1, opts.limit ?? 4), 8);
@@ -173,6 +174,8 @@ export async function generateImagesForDraft(
     '--image-style', opts.imageStyle ?? 'photorealistic',
     '--limit', String(limit)];
   if (opts.allowText) args.push('--allow-text'); // 카드뉴스 완성 카드 — 명시 문구 렌더링 허용
+  // 블로그 실촬영 컷(2026-10-02) — 앞 슬롯은 이미 채워졌다. 번호는 원래 슬롯 번호 그대로(02 부터).
+  if (opts.startIndex && opts.startIndex > 0) args.push('--start-index', String(Math.floor(opts.startIndex)));
   if (opts.size) args.push('--size', opts.size); // 숏폼 세로형(1024x1536) 등 — 미지정 시 스크립트 기본 1024x1024
   if (opts.businessType) args.push('--business-type', opts.businessType);
   if (opts.topic) args.push('--topic', opts.topic);
@@ -184,6 +187,59 @@ export async function generateImagesForDraft(
   // 타임아웃은 장수 비례 — 고품질 1장에 ~1분이라 기본 3분은 5장에서 SIGKILL 됐다(카드뉴스 E2E 실측).
   const timeoutMs = opts.timeoutMs ?? Math.max(BLOG_TIMEOUT_MS, 90_000 * limit);
   return runScript('openai_image.py', args, path.dirname(manifestPath), signal, { timeoutMs });
+}
+
+/** blog_frame.py 결과(RESULT_JSON) — ok:false 는 품질 거절(다음 후보로), error 는 실행 실패(기록하지 않는다). */
+export interface BlogFrameCapture {
+  ok: boolean;
+  atSec?: number;
+  hash?: string;
+  /** 화면 서명(24x32 회색조 base64) — blogFrames.signatureSimilarity 가 읽는다. */
+  sig?: string;
+  sharpness?: number;
+  brightness?: number;
+  reason?: string;
+  /** 스크립트가 아예 못 돌았거나 RESULT_JSON 이 없다 — 거절 기록을 남기지 않는다(일시 장애일 수 있다). */
+  error?: string;
+  /**
+   * 그 순간에서 한 장도 못 뗐다(extract_failed — ffmpeg 는 돌았다). error 와 함께 온다. 화질 판정은 아니지만
+   * 그 순간의 문제라, 호출부가 기한부(FRAME_BAD_TTL_DAYS)로 기록해 다음 런마다 다시 시도하지 않게 한다.
+   */
+  badMoment?: boolean;
+}
+
+/** `RESULT_JSON: {...}` 마지막 줄 → 결과(순수). 없으면 error. */
+export function parseBlogFrameOutput(output: string): BlogFrameCapture {
+  const line = output.split('\n').reverse().find((l) => l.trim().startsWith('RESULT_JSON:'));
+  if (!line) return { ok: false, error: output.slice(0, 200) || '(출력 없음)' };
+  try {
+    const o = JSON.parse(line.trim().slice('RESULT_JSON:'.length)) as Record<string, unknown>;
+    const reason = typeof o.reason === 'string' ? o.reason : undefined;
+    if (o.ok !== true) {
+      // no_input·extract_failed·error:… 는 파일·도구 문제다 — 그 순간의 화질 판정이 아니다.
+      if (reason === 'extract_failed') return { ok: false, error: reason, badMoment: true };
+      if (!reason || reason === 'no_input' || reason.startsWith('error')) return { ok: false, error: reason ?? 'unknown' };
+      return { ok: false, reason };
+    }
+    const n = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+    return { ok: true, atSec: n(o.atSec), hash: typeof o.hash === 'string' ? o.hash : undefined, sig: typeof o.sig === 'string' ? o.sig : undefined, sharpness: n(o.sharpness), brightness: n(o.brightness) };
+  } catch {
+    return { ok: false, error: 'RESULT_JSON 파싱 실패' };
+  }
+}
+
+/**
+ * 블로그 실촬영 컷 한 장 — 보관소 영상의 한 순간(또는 보관소 사진)을 사진처럼 보정해 outPng 로 쓴다.
+ * AI 를 거치지 않는다(다시 그리면 생성 이미지가 된다). exact 는 그 순간 그대로(리비전 재현 폴백).
+ */
+export async function captureBlogFrame(
+  src: { kind: 'video' | 'image'; file: string; atSec: number; exact?: boolean }, outPng: string, signal?: AbortSignal,
+): Promise<BlogFrameCapture> {
+  const args = src.kind === 'image'
+    ? ['--image', src.file, '--out', outPng]
+    : ['--video', src.file, '--at', String(src.atSec), '--out', outPng, ...(src.exact ? ['--exact'] : [])];
+  const r = await runScript('blog_frame.py', args, path.dirname(outPng), signal, { timeoutMs: 60_000 });
+  return parseBlogFrameOutput(r.output);
 }
 
 /**
@@ -281,6 +337,13 @@ export async function runBlogPublish(roleId: string, arg: string, signal?: Abort
   const manifestPath = path.join(cwd, '06_image_manifest.json');
   // 업로드 이미지는 샌드박스 하위 경로만 허용 — 모델이 임의 파일경로를 넣어도 유출 불가.
   const { manifest: safeManifest, dropped } = containImageManifest(p.imageManifest ?? { images: [] }, cwd);
+  // 'AI 활용' 표시를 끄는 실촬영 표시(source 'archive_frame' · ai)는 우리 finalize 만 단다 — 모델이 넣은 값은 지운다
+  // (안 지우면 생성 이미지에 실사진 표시를 달아 AI 표시를 끌 수 있다, 2026-10-02 리뷰).
+  safeManifest.images = (safeManifest.images as unknown[]).map((it) => {
+    if (!it || typeof it !== 'object') return it;
+    const { source: _s, ai: _a, ...rest } = it as Record<string, unknown>;
+    return rest;
+  });
   fs.writeFileSync(finalPath, JSON.stringify(p.finalContent, null, 2), 'utf-8');
   fs.writeFileSync(manifestPath, JSON.stringify(safeManifest, null, 2), 'utf-8');
   const hasSession = !!CONFIG.naverSessionFile && fs.existsSync(CONFIG.naverSessionFile);
@@ -569,6 +632,8 @@ export interface CollectedMetrics {
   views: number;
   dwellSec?: number;
   searchInflow: Array<{ keyword: string; count: number; rank?: number }>;
+  /** 검색 엔진 유입 합(발행~지금 누적) — 블로그 통계 유입경로에서 얻었을 때만(2026-10-02). */
+  searchCv?: number;
   source: string;
   /** 수집기가 남긴 안내(로그인 필요·자동추출 실패 등) — UI 표시용. */
   note?: string;
@@ -627,7 +692,7 @@ export function statsResultFrom(r: BlogSkillResult): CollectedMetrics | null {
  * runDir 에 캡처 원본(naver_stats_capture.json)을 남겨 추출기 정밀화에 쓴다.
  */
 export async function collectNaverMetrics(
-  publishedUrl: string, runDir: string, opts: { dryRun?: boolean; brand?: string } = {}, signal?: AbortSignal,
+  publishedUrl: string, runDir: string, opts: { dryRun?: boolean; brand?: string; publishedTs?: string } = {}, signal?: AbortSignal,
 ): Promise<CollectedMetrics | null> {
   try { fs.mkdirSync(runDir, { recursive: true }); } catch { /* 무해 */ }
   // 이 글의 브랜드 계정/프로필로 통계 조회 — 미지정이면 활성 브랜드. 브랜드마다 로그인 세션이 다르다.
@@ -644,7 +709,37 @@ export async function collectNaverMetrics(
   if (creds.loginId) env.NAVER_ID = creds.loginId;
   if (creds.loginPw) env.NAVER_PW = creds.loginPw;
   if (profileDir) env.NAVER_PROFILE_DIR = profileDir;
+  // 글별 검색 유입(2026-10-02) — 발행일~지금 기간을 넘기고 결과는 파일로 받는다(RESULT_JSON 은 출력 상한
+  // 12KB 안에 있어야 조회수가 산다). 낡은 파일을 이번 결과로 오판하지 않게 먼저 지운다.
+  const refererOut = path.join(runDir, 'naver_stat_referer.json');
+  try { fs.rmSync(refererOut, { force: true }); } catch { /* 없음 */ }
+  const periods = statInflowPeriods(opts.publishedTs);
+  if (periods.length && !opts.dryRun) args.push('--inflow-periods', periodsArg(periods), '--referer-out', refererOut);
   const r = await runScript('naver_stats.py', args, runDir, signal, { timeoutMs: NAVER_STATS_TIMEOUT_MS, env });
   pruneNaverProfileCache(profileDir); // 캐시만 정리(세션 보존) — 일일 수집이 프로필을 키우던 주범
-  return statsResultFrom(r);
+  return withRefererInflow(statsResultFrom(r), refererOut);
+}
+
+/**
+ * 통계 유입경로 덤프가 있으면 검색 유입을 그 값으로 바꾼다(fail-open — 파일 없음·깨짐이면 결과 그대로).
+ * 어드바이저 경로(종전 searchInflow)는 응답한 적이 없어 늘 빈 배열이었다 — 덮어써도 잃는 것이 없다.
+ * 수집 실패 결과(ok:false — RESULT_JSON 없음, views 0)에는 싣지 않는다(리뷰 2026-10-02): 유입만 붙은
+ * views:0 결과가 표본으로 적히면 published→measured 로 넘어가 latestMetrics·viewsAtAge·강화를 오염시킨다.
+ */
+export function withRefererInflow(m: CollectedMetrics | null, refererOut: string): CollectedMetrics | null {
+  if (!m || m.ok === false) return m;
+  let dump: unknown;
+  try { dump = JSON.parse(fs.readFileSync(refererOut, 'utf-8')); } catch { return m; }
+  const s = parseRefererDump(dump);
+  if (!s.ok) return m;
+  return { ...m, searchInflow: s.inflow, searchCv: s.searchCv };
+}
+
+/**
+ * 수집 결과가 성과 표본이 되나(순수) — 조회수가 있을 때만. 유입만 있는 표본은 만들지 않는다(리뷰 2026-10-02).
+ * 종전 가드(`!views && 유입 0건`)는 searchInflow 가 늘 빈 배열이라 사실상 `!views` 였다 — 그 의미를 그대로 지킨다.
+ * 조회수 0 은 '아직 집계 전·순위 리스트 밖·수집 실패'이지 실제 0 이 아니다(blog_stat_cumulative_cv 는 0 을 내지 않는다).
+ */
+export function isViewsSample(m: CollectedMetrics): boolean {
+  return m.ok !== false && m.views > 0;
 }

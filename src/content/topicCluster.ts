@@ -138,11 +138,14 @@ export function clusterStore(): ClusterStore { return (store ??= new ClusterStor
  * recentAutoBlogSeeds: 최근 자율 blog piece 들의 clusterSeedId(최신순) — 앞 SEED_COOLDOWN_PIECES 개 안에
  * 같은 시드 그룹의 형제가 있으면 그 시드는 이번 틱에서 제외한다("추희자두 주간" 방지).
  * 시드 그룹 판정: clusterSeedId 는 ClusterTopic.id 라서 all 에서 id→seedKeyword 를 역참조해 비교.
+ * skip(2026-10-02): 이번 설정에서 소진하지 않을 형제(수종 필수 중 수종 없는 형제) — 상태는 pending 그대로 두고 고르기에서만 뺀다.
+ * 고른 뒤 보류하면 등록순 맨 앞이라 매 틱 같은 형제가 다시 뽑혀 뒤를 전부 막는다.
  */
 export function pickNextSibling(
   pending: ClusterTopic[],
   all: ClusterTopic[],
   recentAutoBlogSeeds: Array<string | undefined>,
+  skip?: (t: ClusterTopic) => boolean,
 ): ClusterTopic | null {
   const byId = new Map(all.map((t) => [t.id, t]));
   const cooled = new Set<string>(); // 쿨다운 걸린 seedKeyword
@@ -156,6 +159,7 @@ export function pickNextSibling(
   }
   return [...pending]
     .filter((t) => t.status === 'pending')
+    .filter((t) => !skip?.(t))
     .filter((t) => !cooled.has(t.seedKeyword))
     .filter((t) => (consumedBySeed.get(t.seedKeyword) ?? 0) < CONSUME_CAP_PER_SEED)
     .sort((a, b) => a.createdTs.localeCompare(b.createdTs))[0] ?? null;

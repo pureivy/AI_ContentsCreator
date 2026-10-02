@@ -5,7 +5,7 @@ import path from 'node:path';
 import { CONFIG } from '../config';
 import {
   pickStructureSeed, structureBlock, currentStructureSeed, resolveStructureSeed, inheritStructureSeed,
-  FIXED_STRUCTURE_SEED, STRUCTURE_KEEP_BLOCK, type StructureSeed,
+  FIXED_STRUCTURE_SEED, STRUCTURE_KEEP_BLOCK, TITLE_FORM_TEXT, type StructureSeed,
 } from './structureSeed';
 
 // CONFIG 는 런타임 가변 객체(readonly 는 타입 힌트일 뿐) — 킬스위치·세션 경로를 강제하고 복원한다.
@@ -39,9 +39,18 @@ describe('pickStructureSeed — 시드 분포', () => {
     for (const v of ['none', 'after-hook', 'mid', 'before-close']) {
       expect(seeds.some((s) => s.thesisQuote === v)).toBe(true);
     }
-    for (const v of ['scene', 'question', 'claim', 'contrast']) {
+    for (const v of ['scene', 'question', 'claim', 'contrast', 'answer']) {
       expect(seeds.some((s) => s.openers === v)).toBe(true);
     }
+    for (const v of ['twist', 'question', 'answer', 'variant', 'compare']) {
+      expect(seeds.some((s) => s.titleForm === v)).toBe(true);
+    }
+    for (const v of ['sentence', 'numbered', 'question', 'keyword']) {
+      expect(seeds.some((s) => s.headingStyle === v)).toBe(true);
+    }
+    for (const v of [3, 4, 5, 6]) expect(seeds.some((s) => s.headings === v)).toBe(true);
+    expect(seeds.some((s) => s.quickAnswer === true)).toBe(true);
+    expect(seeds.some((s) => s.quickAnswer === false)).toBe(true);
     for (const v of [2, 3, 4, 5]) expect(seeds.some((s) => s.cardLines === v)).toBe(true);
     for (const v of [10, 11, 12, 13, 14, 15]) expect(seeds.some((s) => s.hashtags === v)).toBe(true);
     for (const v of [4, 5, 6]) expect(seeds.some((s) => s.shortsScenes === v)).toBe(true);
@@ -51,7 +60,11 @@ describe('pickStructureSeed — 시드 분포', () => {
     for (const r of [() => 0, () => 0.999999, () => 1]) {
       const s = pickStructureSeed(r);
       expect(['none', 'after-hook', 'mid', 'before-close']).toContain(s.thesisQuote);
-      expect(['scene', 'question', 'claim', 'contrast']).toContain(s.openers);
+      expect(['scene', 'question', 'claim', 'contrast', 'answer']).toContain(s.openers);
+      expect(['twist', 'question', 'answer', 'variant', 'compare']).toContain(s.titleForm);
+      expect(['sentence', 'numbered', 'question', 'keyword']).toContain(s.headingStyle);
+      expect(s.headings).toBeGreaterThanOrEqual(3); // seo.ts 'H2 3개 이상' 하한
+      expect(s.headings).toBeLessThanOrEqual(6);
       expect(s.cardLines).toBeGreaterThanOrEqual(2);
       expect(s.cardLines).toBeLessThanOrEqual(5);
       expect(s.hashtags).toBeGreaterThanOrEqual(10);
@@ -61,20 +74,63 @@ describe('pickStructureSeed — 시드 분포', () => {
     }
   });
 
-  it('선택 블록(표·체크리스트·예고)은 항상 정확히 2개만 true', () => {
-    const offCount = { table: 0, checklist: 0, teaser: 0 };
+  it('선택 블록(표·체크리스트·예고·빠른 답)은 항상 정확히 2개만 true — 넷 다 한 번씩은 켜지고 꺼진다', () => {
+    const onCount = { table: 0, checklist: 0, teaser: 0, quickAnswer: 0 };
     const rand = lcg(20260827);
     for (let i = 0; i < 1000; i++) {
       const s = pickStructureSeed(rand);
-      expect([s.table, s.checklist, s.teaser].filter(Boolean).length).toBe(2);
-      if (!s.table) offCount.table++;
-      if (!s.checklist) offCount.checklist++;
-      if (!s.teaser) offCount.teaser++;
+      expect([s.table, s.checklist, s.teaser, s.quickAnswer].filter(Boolean).length).toBe(2);
+      if (s.table) onCount.table++;
+      if (s.checklist) onCount.checklist++;
+      if (s.teaser) onCount.teaser++;
+      if (s.quickAnswer) onCount.quickAnswer++;
     }
-    // 세 블록 모두가 꺼지는 쪽으로 뽑힌 적이 있어야 한다(한 블록만 계속 꺼지는 퇴화 방지).
-    expect(offCount.table).toBeGreaterThan(0);
-    expect(offCount.checklist).toBeGreaterThan(0);
-    expect(offCount.teaser).toBeGreaterThan(0);
+    // 어느 블록도 상시 on/상시 off 로 퇴화하지 않는다.
+    for (const n of Object.values(onCount)) {
+      expect(n).toBeGreaterThan(0);
+      expect(n).toBeLessThan(1000);
+    }
+  });
+
+  // 같은 답을 두 번 하지 않게 — 도입이 답 먼저면 빠른 답 블록은 후보에서 빠진다.
+  it('도입이 answer 인 런은 빠른 답 블록이 꺼진다(표·체크리스트·예고 중 2개)', () => {
+    const rand = lcg(11);
+    let answerRuns = 0;
+    for (let i = 0; i < 1000; i++) {
+      const s = pickStructureSeed(rand);
+      if (s.openers !== 'answer') continue;
+      answerRuns++;
+      expect(s.quickAnswer).toBe(false);
+      expect([s.table, s.checklist, s.teaser].filter(Boolean).length).toBe(2);
+    }
+    expect(answerRuns).toBeGreaterThan(0);
+  });
+
+  // 2026-10-02 — 통념 반박 도입(대비)이 매편 같은 글 인상의 대표 지문이었다. 몫을 종전 1/4 → 1/9 로 줄였다.
+  it('대비(contrast) 도입 몫은 종전 1/4 보다 확실히 작다(목표 1/9)', () => {
+    const rand = lcg(20261002);
+    const N = 5000;
+    let contrast = 0;
+    for (let i = 0; i < N; i++) if (pickStructureSeed(rand).openers === 'contrast') contrast++;
+    const share = contrast / N;
+    expect(share).toBeGreaterThan(0.07);
+    expect(share).toBeLessThan(0.16);
+  });
+
+  it('제목 형식·소제목 형식은 한 값으로 쏠리지 않는다(각 값 몫이 균등 근처)', () => {
+    const rand = lcg(5);
+    const N = 5000;
+    const t: Record<string, number> = {};
+    const h: Record<string, number> = {};
+    for (let i = 0; i < N; i++) {
+      const s = pickStructureSeed(rand);
+      t[s.titleForm!] = (t[s.titleForm!] ?? 0) + 1;
+      h[s.headingStyle!] = (h[s.headingStyle!] ?? 0) + 1;
+    }
+    for (const n of Object.values(t)) expect(Math.abs(n / N - 1 / 5)).toBeLessThan(0.04);
+    for (const n of Object.values(h)) expect(Math.abs(n / N - 1 / 4)).toBeLessThan(0.04);
+    // 종전 단일 형식(관점형 제목)은 더 이상 기본값이 아니다 — 5편 중 1편 꼴.
+    expect(t.twist! / N).toBeLessThan(0.25);
   });
 });
 
@@ -83,6 +139,7 @@ describe('currentStructureSeed — 킬스위치', () => {
     cfg.structureVariety = false;
     const s = currentStructureSeed(lcg(1));
     expect(s).toEqual(FIXED_STRUCTURE_SEED);
+    expect(s.openers).toBe('question');
     expect(s.thesisQuote).toBe('after-hook');
     expect(s.table).toBe(true);
     expect(s.checklist).toBe(true);
@@ -90,6 +147,19 @@ describe('currentStructureSeed — 킬스위치', () => {
     expect(s.cardLines).toBe(4);
     expect(s.hashtags).toBe(12);
     expect(s.shortsScenes).toBe(5);
+  });
+
+  // 2026-10-02 — 고정 시드는 structure.json 에 남아 리비전이 승계한다. 새 필드가 들어 있으면 다시 켠 뒤의 개정이 원 글에 없던
+  // 제목 형식·소제목 형식·빠른 답을 "유지하라"고 지시하게 된다 — 키 집합이 HEAD(8개)와 같아야 한다.
+  it('off 고정 시드에는 2026-10-02 추가 필드가 없다(키 집합이 종전 8개 그대로)', () => {
+    cfg.structureVariety = false;
+    const s = currentStructureSeed(lcg(1));
+    expect(Object.keys(s).sort()).toEqual(['cardLines', 'checklist', 'hashtags', 'openers', 'shortsScenes', 'table', 'teaser', 'thesisQuote']);
+    for (const k of ['titleForm', 'headingStyle', 'headings', 'quickAnswer'] as const) expect(k in s).toBe(false);
+    // 다시 켠 뒤의 개정 블록도 그 줄들을 내지 않는다(구 기록과 같은 취급).
+    const rev = structureBlock(s, { revise: true });
+    expect(rev).not.toContain('소제목(## H2)');
+    expect(rev).not.toContain('빠른 답');
   });
 
   it('on 이면 rand 로 뽑는다(고정 시드와 다른 조합이 나온다)', () => {
@@ -103,6 +173,7 @@ describe('structureBlock — 작가 프롬프트 주입 문자열', () => {
   const seed: StructureSeed = {
     thesisQuote: 'mid', table: true, checklist: false, teaser: true,
     openers: 'contrast', cardLines: 3, hashtags: 11, shortsScenes: 6,
+    titleForm: 'question', headingStyle: 'numbered', headings: 4, quickAnswer: false,
   };
 
   it('머리표와 다섯 항목(도입·중심 명제·표·체크리스트·예고)을 모두 담는다', () => {
@@ -115,14 +186,72 @@ describe('structureBlock — 작가 프롬프트 주입 문자열', () => {
     expect(b).toContain('예고');
   });
 
-  it('도입 유형 4종을 각각 다른 문구로 지시한다', () => {
-    const texts = (['scene', 'question', 'claim', 'contrast'] as const)
+  it('도입 유형 5종을 각각 다른 문구로 지시한다', () => {
+    const texts = (['scene', 'question', 'claim', 'contrast', 'answer'] as const)
       .map((o) => structureBlock({ ...seed, openers: o }));
-    expect(new Set(texts).size).toBe(4);
+    expect(new Set(texts).size).toBe(5);
+    expect(structureBlock({ ...seed, openers: 'answer' })).toContain('첫 2~3문장 안에');
     expect(structureBlock({ ...seed, openers: 'scene' })).toContain('장면');
     expect(structureBlock({ ...seed, openers: 'question' })).toContain('질문');
     expect(structureBlock({ ...seed, openers: 'claim' })).toContain('단정');
     expect(structureBlock({ ...seed, openers: 'contrast' })).toContain('통념');
+  });
+
+  // 통념 반박 공식("~라고들 합니다. 그런데")은 대비 도입에서만 허용 — 나머지 넷은 명시적으로 금지한다.
+  it('통념-반박 공식은 contrast 에서만 허용하고, 다른 도입 유형은 금지 문구를 단다', () => {
+    const c = structureBlock({ ...seed, openers: 'contrast' });
+    expect(c).toContain('이 유형에서만 허용');
+    expect(c).not.toContain('통념-반박 공식으로 열지 마라');
+    for (const o of ['scene', 'question', 'claim', 'answer'] as const) {
+      const b = structureBlock({ ...seed, openers: o });
+      expect(b).toContain('통념-반박 공식으로 열지 마라');
+      expect(b).toContain('라고들 합니다');
+    }
+  });
+
+  it('소제목 형식 4종·개수를 지시한다(번호형은 "N가지" 쪼개기가 아님을 못박는다)', () => {
+    const by = (h: NonNullable<StructureSeed['headingStyle']>) => structureBlock({ ...seed, headingStyle: h, headings: 5 });
+    expect(by('numbered')).toContain('"## 1. …"');
+    expect(by('numbered')).toContain('"N가지" 쪼개기가 아니다');
+    expect(by('question')).toContain('질문');
+    expect(by('keyword')).toContain('하위 주제어');
+    expect(by('sentence')).toContain('완결 서술문');
+    expect(new Set((['sentence', 'numbered', 'question', 'keyword'] as const).map(by)).size).toBe(4);
+    expect(by('keyword')).toContain('정확히 5개');
+    expect(structureBlock({ ...seed, headings: 3 })).toContain('정확히 3개');
+  });
+
+  it('빠른 답 블록은 시드대로 켜고 끄며, 결론을 대신하지 못하게 한다', () => {
+    const on = structureBlock({ ...seed, quickAnswer: true, table: false });
+    expect(on).toContain('빠른 답: 넣는다');
+    expect(on).toContain('결론을 대신하지 마라');
+    expect(on).not.toContain('표가 켜져 있으니');
+    expect(structureBlock({ ...seed, quickAnswer: true, table: true })).toContain('표가 켜져 있으니');
+    expect(structureBlock({ ...seed, quickAnswer: false })).toContain('빠른 답: 넣지 마라');
+  });
+
+  it('새 집필 블록은 페르소나의 도입부·소제목·예고 규칙보다 우선함을 밝힌다', () => {
+    expect(structureBlock(seed)).toContain('이 블록이 우선한다');
+  });
+
+  // 제목은 작가가 아니라 포장 단계가 만든다 — 작가 블록에 제목 형식을 싣지 않는다(본문 각도를 제목 꼴에 끌려가게 하지 않게).
+  it('작가 블록에는 제목 형식이 실리지 않는다(포장 단계 몫)', () => {
+    const b = structureBlock({ ...seed, titleForm: 'compare' });
+    expect(b).not.toContain('비교·종류형');
+    expect(b).not.toContain('제목 형식');
+  });
+
+  it('구 기록(2026-10-02 이전, 새 필드 없음)의 개정 블록은 새 필드 줄을 내지 않는다 — undefined 도, 없던 골격도 없다', () => {
+    const old: StructureSeed = {
+      thesisQuote: 'none', table: false, checklist: true, teaser: true,
+      openers: 'claim', cardLines: 2, hashtags: 15, shortsScenes: 4,
+    };
+    const r = structureBlock(old, { revise: true });
+    expect(r).not.toContain('undefined');
+    expect(r).not.toContain('소제목(## H2)');
+    expect(r).not.toContain('빠른 답');
+    expect(r).toContain('도입 유형');
+    expect(r).toContain('예고');
   });
 
   it('중심 명제 인용 위치 4값을 구분해 쓴다', () => {
@@ -161,6 +290,30 @@ describe('resolveStructureSeed / inheritStructureSeed — sessions/<runId>/struc
     const s = resolveStructureSeed('run-A');
     const saved = JSON.parse(fs.readFileSync(path.join(tmpDir, 'run-A', 'structure.json'), 'utf-8')) as StructureSeed;
     expect(saved).toEqual(s);
+  });
+
+  // 2026-10-02 — 형식별 성과 비교의 키가 되려면 새 필드가 기록·승계 양쪽에서 살아 있어야 한다.
+  it('새 필드(제목 형식·소제목 형식·개수·빠른 답)도 기록되고 리비전이 그대로 승계한다', () => {
+    const s = resolveStructureSeed('run-H');
+    const saved = JSON.parse(fs.readFileSync(path.join(tmpDir, 'run-H', 'structure.json'), 'utf-8')) as StructureSeed;
+    for (const k of ['titleForm', 'headingStyle', 'headings', 'quickAnswer'] as const) {
+      expect(saved[k]).toBeDefined();
+      expect(saved[k]).toEqual(s[k]);
+    }
+    const rev = inheritStructureSeed('run-H-rev', 'run-H');
+    expect(rev).toEqual(s);
+  });
+
+  it('구 기록(새 필드 없음)도 승계는 그대로 된다(새 필드는 undefined 로 남고 지어 넣지 않는다)', () => {
+    fs.mkdirSync(path.join(tmpDir, 'run-I'), { recursive: true });
+    const old = {
+      thesisQuote: 'mid', table: true, checklist: true, teaser: false,
+      openers: 'scene', cardLines: 3, hashtags: 12, shortsScenes: 5,
+    };
+    fs.writeFileSync(path.join(tmpDir, 'run-I', 'structure.json'), JSON.stringify(old), 'utf-8');
+    const rev = inheritStructureSeed('run-I-rev', 'run-I');
+    expect(rev).toEqual(old);
+    expect(rev?.titleForm).toBeUndefined();
   });
 
   it('리비전 런(baseRunId)은 원 런과 같은 시드를 승계하고 자기 런에도 남긴다(연쇄 리비전)', () => {
@@ -219,5 +372,26 @@ describe('STRUCTURE_KEEP_BLOCK — 시드를 모르는 자리의 유지 블록',
     expect(STRUCTURE_KEEP_BLOCK).toContain('>>');
     expect(STRUCTURE_KEEP_BLOCK).toContain('표');
     expect(STRUCTURE_KEEP_BLOCK).toContain('새로 넣거나 빼지 마라');
+  });
+});
+
+// 제목 형식 문구(2026-10-02) — 포장 단계가 제목 후보 1순위에 건다. 다섯 형식이 서로 다른 지시여야 하고,
+// 사실을 지어낼 수 있는 실제 수치·수종 예시를 담으면 안 된다(예시 구절 복사 사고 — ○○ 자리표시만).
+describe('TITLE_FORM_TEXT — 제목 형식 지시', () => {
+  it('다섯 형식이 모두 다르고 각자의 꼴을 말한다', () => {
+    const v = Object.values(TITLE_FORM_TEXT);
+    expect(v.length).toBe(5);
+    expect(new Set(v).size).toBe(5);
+    expect(TITLE_FORM_TEXT.question).toContain('물음표');
+    expect(TITLE_FORM_TEXT.answer).toContain('구체적인 답');
+    expect(TITLE_FORM_TEXT.variant).toContain('하위 주제어 하나');
+    expect(TITLE_FORM_TEXT.variant).toContain('나열하지 말고');
+    expect(TITLE_FORM_TEXT.compare).toContain('비교가 없으면');
+  });
+  it('예시는 ○○ 자리표시만 쓴다(실제 수치 예시 없음)', () => {
+    for (const t of Object.values(TITLE_FORM_TEXT)) {
+      expect(t).toContain('○○');
+      expect(t).not.toMatch(/\d+월/);
+    }
   });
 });

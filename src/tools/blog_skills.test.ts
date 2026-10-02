@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { parseImagePayload, parsePublishPayload, containImageManifest, parseStatsOutput,
@@ -246,5 +247,69 @@ describe('parseNaverClipResult — 클립 결과 파일', () => {
   });
   it('깨진 파일은 null', () => {
     expect(parseNaverClipResult('{')).toBeNull();
+  });
+});
+
+// 글별 검색 유입(2026-10-02) — 통계 유입경로 덤프가 searchInflow 를 채운다. 조회수·노트는 그대로,
+// 파일이 없거나 깨졌으면 종전 결과 그대로(fail-open — 조회수 수집을 절대 깨지 않는다).
+describe('withRefererInflow — 덤프 파일로 검색 유입 채우기', () => {
+  const base = { ok: true, views: 19, searchInflow: [], source: 'scrape:naver_advisor', note: '누적 조회수', captured: 18 };
+  const tmp = (name: string, body: string): string => {
+    const p = path.join(os.tmpdir(), `referer-${process.pid}-${name}.json`);
+    fs.writeFileSync(p, body, 'utf-8');
+    return p;
+  };
+  it('실측 덤프 → 검색어·searchCv 채움, 조회수·노트 불변', async () => {
+    const { withRefererInflow } = await import('./blog_skills');
+    const real = fs.readFileSync(new URL('../analytics/fixtures/naver_stat_referer.224427392358.json', import.meta.url), 'utf-8');
+    const r = withRefererInflow({ ...base }, tmp('real', real))!;
+    expect(r.views).toBe(19);
+    expect(r.note).toBe('누적 조회수');
+    expect(r.searchCv).toBe(13);
+    expect(r.searchInflow[0]).toEqual({ keyword: '감나무 묘목', count: 4 });
+  });
+  it('파일 없음·깨진 JSON·해석 불가 → 입력 그대로, null 은 null', async () => {
+    const { withRefererInflow } = await import('./blog_skills');
+    expect(withRefererInflow({ ...base }, path.join(os.tmpdir(), 'no-such-referer.json'))).toEqual(base);
+    expect(withRefererInflow({ ...base }, tmp('garbled', '{"periods": [ broken'))).toEqual(base);
+    expect(withRefererInflow({ ...base }, tmp('fail', '{"periods":[{"dim":"DATE","start":"2026-10-01","status":500}]}'))).toEqual(base);
+    expect(withRefererInflow(null, tmp('x', '{}'))).toBeNull();
+  });
+  it('일부 기간이 실패한 덤프(중단은 아님)는 싣지 않는다 — 조회수는 그대로, 검색 유입은 비운 채(2차 리뷰)', async () => {
+    const { withRefererInflow } = await import('./blog_skills');
+    const dump = JSON.parse(fs.readFileSync(new URL('../analytics/fixtures/naver_stat_referer.224427392358.json', import.meta.url), 'utf-8')) as { periods: unknown[] };
+    dump.periods.push({ dim: 'DATE', start: '2026-10-03', status: 500, total: null, details: [] });
+    expect(withRefererInflow({ ...base }, tmp('partial', JSON.stringify(dump)))).toEqual(base);
+  });
+  it('수집 실패 결과(ok:false, views 0)에는 좋은 덤프가 있어도 유입을 싣지 않는다(리뷰 2026-10-02)', async () => {
+    const { withRefererInflow, statsResultFrom } = await import('./blog_skills');
+    const real = tmp('real-fail', fs.readFileSync(new URL('../analytics/fixtures/naver_stat_referer.224427392358.json', import.meta.url), 'utf-8'));
+    // 대조군 — 같은 덤프가 정상 결과에는 실린다(덤프 자체는 유효).
+    expect(withRefererInflow({ ...base }, real)!.searchCv).toBe(13);
+    const failed = statsResultFrom({ ok: false, output: '(exit 1)' })!;
+    expect(failed.ok).toBe(false);
+    const r = withRefererInflow(failed, real)!;
+    expect(r).toEqual(failed);
+    expect(r.searchInflow).toEqual([]);
+    expect(r.searchCv).toBeUndefined();
+  });
+  it('조회수를 먼저 출력한 뒤 검색 유입 단계에서 강제 종료(SIGKILL, ok:false)돼도 조회수는 산다', async () => {
+    const { statsResultFrom } = await import('./blog_skills');
+    const r = statsResultFrom({ ok: false, output: 'RESULT_JSON: {"views": 19, "source": "scrape:naver_advisor", "note": "누적", "captured": 18}\n검색 유입 수집 중단(무해, 이번 결과는 버림): 시간 상한 · 40콜' })!;
+    expect(r.ok).toBe(true);
+    expect(r.views).toBe(19);
+  });
+  it('isViewsSample — 조회수가 있을 때만 표본(유입만 있는 결과·실패 결과는 표본 아님)', async () => {
+    const { isViewsSample } = await import('./blog_skills');
+    expect(isViewsSample({ ...base })).toBe(true);
+    expect(isViewsSample({ ...base, views: 0 })).toBe(false);
+    expect(isViewsSample({ ...base, views: 0, searchInflow: [{ keyword: '감나무 묘목', count: 4 }], searchCv: 13 })).toBe(false);
+    expect(isViewsSample({ ...base, ok: false, views: 0 })).toBe(false);
+  });
+  it('옛 RESULT_JSON(새 필드 없음)은 종전대로 파싱 — searchCv 없음', () => {
+    const r = parseStatsOutput('RESULT_JSON: {"views": 271, "dwellSec": null, "searchInflow": [], "source": "scrape:naver_advisor", "note": "", "captured": 16}')!;
+    expect(r.views).toBe(271);
+    expect(r.searchCv).toBeUndefined();
+    expect(r.dwellSec).toBeUndefined();
   });
 });

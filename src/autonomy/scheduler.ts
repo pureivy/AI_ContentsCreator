@@ -31,7 +31,7 @@ import { seasonalContext } from '../util/solarTerms';
 import { offSeasonSubject, seasonalSubjectBlock, formatMonths } from '../content/seasonalSubjects';
 import { speciesCoverage, overSpeciesCap, speciesRotationBlock, speciesInText, speciesCapFrom, speciesRecency, usedRecently, speciesRecentBlock } from '../content/speciesRotation';
 import { pieceStore } from '../content/pieces';
-import { overThemeCap, themeRotationBlock, THEME_MONTHLY_CAP, themeInText, themeRecency, usedThemeRecently, themeRecentBlock } from '../content/topicThemes';
+import { overThemeCap, themeRotationBlock, THEME_MONTHLY_CAP, themeInText, themeRecency, usedThemeRecently, themeRecentBlock, speciesSeed } from '../content/topicThemes';
 import { brandThemeCoverage } from '../analytics/discoverySeeds';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
 import { rankSearchDemand, searchDemandBlock, unconvertedSubjects, normalizeTerm } from '../analytics/ytSearchDemand';
@@ -632,6 +632,138 @@ export function lacksSpeciesAnchor(text: string): boolean {
 }
 
 /**
+ * 수종 필수 게이트(2026-10-02, BLOG_REQUIRE_SPECIES) — 메인 키워드가 구체적 수종을 부르는가.
+ *
+ * 자체 데이터(공개 163편): 조회수를 확실히 가르는 건 하나뿐이었다 — 메인 키워드에 수종이 있느냐. 기간을 맞춰도
+ * 14일 ×1.4(p=0.04)·30일 ×2.5(n=66), 묘목 글 안에서 중앙 23 vs 6. 하위 15편은 대부분 "가을 물주기 시기"·
+ * "정원 상태 진단"·"묘목선별"·"그늘 정원 나무" 같은 수종 없는 주제였고, 실제 검색 유입어의 81%가
+ * '수종 + 증상·시기 질문'("자두나무 가지치기 언제")이다.
+ *
+ * 눈은 최근 수종 게이트와 같다(speciesKeyOf: 사전 느슨 → 카탈로그) — 매실·음나무(엄나무)·블루베리처럼 '나무'를
+ * 떼고 쓰거나 사전에 없는 카탈로그 수종도 잡는다. 다만 느슨한 어간이 식물 용어 속에서 가짜로 걸리는 자리는
+ * 가린다 — 로그·조각 전수 대조(10-02)에서 나온 진짜 오탐은 둘뿐이었다: '도장지'(회양목 별칭 도장나무의 어간)·
+ * '포도당'(포도). 가리지 않으면 "여름 도장지 정리"가 회양목 글로 통과하고, 보정이 키워드에 '도장'을 박는다.
+ */
+const SPECIES_FALSE_STEMS = /도장지|포도당/g;
+export function requiredSpeciesOf(text: string, keyOf: (t: string) => string | null = speciesKeyOf): string | null {
+  const t = String(text ?? '').normalize('NFC').replace(SPECIES_FALSE_STEMS, ' ');
+  return t.trim() ? keyOf(t) : null;
+}
+
+/**
+ * 검색량 하한 면제 대상인가(2026-10-02 사장님 결정 "수종 키워드는 하한 면제", DEMAND_FLOOR_SPECIES_EXEMPT) — 판정 눈은 수종 필수
+ * 게이트와 같다(requiredSpeciesOf). 자체 데이터: 조회수는 검색량과 상관이 없었고 실제 유입의 81%가 '수종 + 증상·시기' 롱테일
+ * (검색량 아주 작음)이었다 — 상위 글 "감나무 깍지벌레"도 검색량은 작았다. 수종 없는 일반 키워드는 하한 그대로다.
+ */
+export function speciesFloorExempt(
+  keyword: string | undefined, on: boolean = CONFIG.demandFloorSpeciesExempt,
+  speciesOf: (t: string) => string | null = requiredSpeciesOf,
+): boolean {
+  return on && !!keyword && !!speciesOf(keyword);
+}
+
+/**
+ * 기각 기억 조회(2026-10-02 2차 리뷰) — 하한 면제 키워드(speciesFloorExempt)는 기억을 보지 않고 실제 조회로 간다. 면제 전 하한으로
+ * 쌓인 기억이 30일 동안 그 키워드를 막지 않게, 그리고 시즌 판정·로그가 실제 행으로 돌게 한다. 후보 루프와 예고·클러스터
+ * (main.demandCheckFor)가 같은 규칙을 쓰도록 한 곳에 둔다.
+ */
+export function rememberedDemandReject(
+  slug: string, keyword: string | undefined,
+  exempt: (keyword: string) => boolean = (k) => speciesFloorExempt(k),
+  lookup: (slug: string, keyword: string | undefined) => ReturnType<typeof demandRejectFor> = demandRejectFor,
+): ReturnType<typeof demandRejectFor> {
+  return keyword && exempt(keyword) ? null : lookup(slug, keyword);
+}
+
+/**
+ * 이번 틱에 수종 필수를 거는가(순수) — 사람이 고른 주제는 걸지 않는다.
+ * 수동 런·예고 이행은 proposeContentIdeas 를 거치지 않으므로 애초에 대상이 아니다. 여기서 가르는 건 지시뿐이다:
+ * 지시문이 수종을 정하지 않으면("정원 관리 글") 사장님이 일반 주제를 고른 것이라 면제한다. 지시가 수종을 부르거나
+ * 보관소(=수종 목록)를 가리키면 수종에 묶인 지시라 그대로 건다 — 보관소 지시는 libGate 가 이미 제목·키워드 어딘가의
+ * 수종을 강제하므로, 이 게이트가 더하는 건 '그 수종을 키워드로 옮기기'뿐이다.
+ */
+export function speciesRequiredFor(
+  on: boolean, directive: { text: string } | null | undefined,
+  speciesOf: (t: string) => string | null = requiredSpeciesOf,
+): boolean {
+  if (!on) return false;
+  if (!directive) return true;
+  return directiveWantsLibrary(directive.text) || !!speciesOf(directive.text);
+}
+
+// 낱말 끝 조사 — 긴 것부터(에서·으로가 에·로보다 먼저).
+const JOSA_TAIL = /(에서|으로|부터|까지|보다|처럼|이란|이|가|를|을|은|는|의|에|도|만|로|와|과|란)$/;
+
+/**
+ * 제목에 실제로 쓰인 수종 표기(순수) — 대표명이 아니라 글자 그대로. '매실'은 사전에서 설중매나무(별칭)로
+ * 풀리는데, 대표명을 키워드에 넣으면 "설중매나무 가지치기"처럼 아무도 안 치는 말이 된다.
+ * 낱말 단위로 보고 끝의 조사만 뗀다(떼고도 같은 수종일 때만 — '포도'의 '도'를 조사로 떼면 수종이 사라진다).
+ */
+export function speciesSurfaceIn(text: string, speciesOf: (t: string) => string | null = requiredSpeciesOf): string | null {
+  for (const raw of String(text ?? '').normalize('NFC').split(/[\s,·…!?:;"'“”‘’()[\]/|~—]+/)) {
+    const w = raw.replace(/[.\-]+$/, '');
+    if (!w) continue;
+    const sp = speciesOf(w);
+    if (!sp) continue;
+    const m = w.match(JOSA_TAIL);
+    if (m) {
+      const stem = w.slice(0, -m[0].length);
+      if (stem && speciesOf(stem) === sp) return stem;
+    }
+    return w;
+  }
+  return null;
+}
+
+/**
+ * 결정적 구제(순수) — 키워드엔 수종이 없는데 제목이 수종을 부르면 그 수종을 키워드로 옮긴다(기각하지 않는다).
+ * "나무 심는 깊이" + 제목 "블루베리, 심는 깊이가…" → "블루베리 심는 깊이". 옮기는 규칙은 speciesSeed(09-29 축 씨앗
+ * 보정과 같은 함수) — 홀로 선 '나무' 자리를 수종이 차지하고, 없으면 앞에 붙인다.
+ * 키워드가 없으면 메인 키워드는 제목이라(하류가 제목에서 뽑는다) 바꿀 것이 없다.
+ */
+export function bindSpeciesKeyword<T extends { title: string; keyword?: string }>(
+  cand: T, speciesOf: (t: string) => string | null = requiredSpeciesOf,
+): { cand: T; from?: string } {
+  if (!cand.keyword || speciesOf(cand.keyword)) return { cand };
+  const surface = speciesSurfaceIn(cand.title, speciesOf);
+  if (!surface) return { cand };
+  return { cand: { ...cand, keyword: speciesSeed(cand.keyword, surface) }, from: cand.keyword };
+}
+
+/**
+ * 축 씨앗에 붙일 '지금 쓸 수 있는' 수종(순수) — 수종 필수 틱에서 themeRotationBlock 예시를 일반어("나무 심는 깊이")
+ * 대신 수종 표기("○○ 심는 깊이")로 적기 위한 목록. 막힌 수종(최근 창·월 상한·사실 부족)은 빼고, 수요 표에서
+ * 시즌 지수가 하한 미만으로 실측된 수종도 뺀다(모름은 남긴다 — 수요 목록 밖 틈새를 막지 않는 기존 원칙).
+ * 검색량 큰 순, 같으면 카탈로그 순. 비면 빈 배열 → 블록은 종전 일반 씨앗 그대로(게이트·프롬프트 줄이 따로 말한다).
+ */
+export function inSeasonSpecies(
+  names: readonly string[],
+  opts: { blocked: (n: string) => boolean; volumeOf: (n: string) => number | undefined; seasonOf: (n: string) => number | undefined; minSeason: number; limit?: number },
+): string[] {
+  return [...new Set(names)]
+    .filter((n) => n && !opts.blocked(n))
+    .filter((n) => { const s = opts.seasonOf(n); return s === undefined || s >= opts.minSeason; })
+    .map((n, i) => ({ n, i, v: opts.volumeOf(n) ?? 0 }))
+    .sort((a, b) => (b.v - a.v) || (a.i - b.i))
+    .slice(0, opts.limit ?? 12)
+    .map((e) => e.n);
+}
+
+/** 수종 필수 프롬프트 블록 — 예시는 형식만(09-18 '설화 딱지' 교훈: 예시 구절은 그대로 출력에 박힌다).
+ *  floorExempt(수종 키워드 하한 면제, 2026-10-02) 면 마지막 줄이 '수종 + 증상·시기 질문 롱테일을 keyword 로'가 된다 — 종전 줄은
+ *  "표에 없는 긴 질문형 keyword 는 하한에 걸린다"며 수종명 단독으로 물러서게 했는데, 면제 뒤엔 그 롱테일이 바로 노릴 자리다.
+ *  off 면 종전 문구 그대로. */
+export function speciesRequiredBlock(floorExempt: boolean): string {
+  return '[수종 필수 — 자체 데이터(2026-10-02)]\n' +
+    '· 후보마다 구체적인 수종 하나에 묶어라. keyword 에 수종명이 반드시 들어간다 — 수종 없는 일반 키워드(형식: "나무 심는 깊이"·"묘목 고르는 법"·"정원 나무 추천")는 코드가 기각한다.\n' +
+    '  근거: 우리 블로그에서 수종이 키워드에 있는 글은 같은 기간 조회가 1.4~2.5배였고, 하위권은 거의 다 수종 없는 일반 주제였다.\n' +
+    '· 일반 소재(심기·물주기·거름·지지대·울타리·도구…)는 지금 철에 맞는 수종 하나를 골라 그 수종의 이야기로 좁혀라(형식: "○○ 심는 깊이", "○○ 묘목 고르는 법"). 추천·종류 글도 대표 수종 하나를 keyword 로 세운다.\n' +
+    (floorExempt
+      ? '· 실제 검색 유입의 81%가 "수종 + 증상·시기 질문"이다(형식: "○○나무 가지치기 언제", "○○나무 잎 마름 증상", "○○ 열매 안 열리는 이유"). keyword 를 이런 수종 + 증상·시기 질문 롱테일로 세워라 — 수종이 든 keyword 는 검색량 하한을 걸지 않는다(검색량이 작아도 기각되지 않는다. 우리 글 조회수는 검색량과 상관이 없었다). [검색 수요 실측]·연관어 표에 같은 뜻의 표기가 있으면 그 표기를 쓴다.\n'
+      : '· 실제 검색 유입의 81%가 "수종 + 증상·시기 질문"이다(형식: "○○나무 가지치기 언제", "○○나무 잎 마름 증상"). 그런 표기가 [검색 수요 실측]·연관어 표에 있으면 그대로 keyword 로 쓰고, 없으면 keyword 는 수종명(또는 수종명+행위 2어절)으로 두고 질문은 제목이 진다 — 표에 없는 긴 질문형 keyword 는 검색량 하한에 걸린다.\n');
+}
+
+/**
  * 후보 1건의 검색 수요 판정 + 로그·기각사유 문구(순수, 테스트 대상).
  *
  * 종전 주제 선정은 절대 검색량을 한 번도 보지 않았다 — 실측(2026-08-26)으로 우리가 쓰던 롱테일이
@@ -647,17 +779,23 @@ export function lacksSpeciesAnchor(text: string): boolean {
  *
  * opts.remembered: 지난 틱에 실측으로 하한 미달을 받아 기억된 키워드(2026-08-27) — rows 를 아예 보지 않고
  * 그때의 실측 줄로 판정한다(그래서 호출부는 이 후보를 API 조회 대상에서도 뺀다 — 조회 비용 0).
+ *
+ * opts.floorExempt: 검색량 하한 면제 판정(2026-10-02, 기본 speciesFloorExempt — 수종 키워드). 면제 키워드는 하한 미달이어도
+ * 기각하지 않고 시즌 지수만 본다(통과 또는 비수기 demote, `exempted: true`, 줄 끝에 '수종 키워드 하한 면제'). 행이 없으면(미조회·
+ * 조회 실패) 종전과 같은 unknown — 면제가 '모름'을 통과로 바꾸는 일은 없다(원래 통과다). 기억된 기각도 보지 않는다:
+ * 면제 전 하한으로 쌓인 기억이 30일 동안 그 키워드를 계속 막는다.
  */
 export function demandGateDecision(
   rows: Map<string, DemandRow>,
   keyword: string | undefined,
   cfg: { minVolume: number; minSeason: number },
-  opts: { relax?: boolean; remembered?: { line: string } } = {},
-): { verdict: DemandVerdict; line: string; relaxed?: boolean } {
+  opts: { relax?: boolean; remembered?: { line: string }; floorExempt?: (keyword: string) => boolean } = {},
+): { verdict: DemandVerdict; line: string; relaxed?: boolean; exempted?: boolean } {
+  const exempt = !!keyword && (opts.floorExempt ?? ((k: string) => speciesFloorExempt(k)))(keyword);
   // 기억된 기각은 rows 보다 먼저 본다 — 이 후보는 조회하지 않았으니 rows 에 없고(unknown = fail-open),
   // 순서를 뒤집으면 기억이 통째로 무력화된다. 기아 방지 밸브는 기억에도 똑같이 적용한다: 규칙을 갈라 두면
   // '기억됐다는 이유로' 마지막 라운드 밸브가 안 먹혀 후보 전멸 시 슬롯이 선다.
-  if (opts.remembered) {
+  if (opts.remembered && !exempt) {
     return opts.relax
       ? { verdict: 'demote', line: opts.remembered.line, relaxed: true }
       : { verdict: 'reject', line: opts.remembered.line };
@@ -669,6 +807,8 @@ export function demandGateDecision(
     : undefined;
   const line = row ? formatDemandLine(row) : '';
   const verdict = demandVerdict(row, cfg);
+  // 하한만 뺀다(minVolume 0) — 시즌 지수 판정은 그대로라 비수기 수종 키워드는 종전처럼 후순위다.
+  if (exempt && verdict === 'reject') return { verdict: demandVerdict(row, { ...cfg, minVolume: 0 }), line: `${line} · 수종 키워드 하한 면제`, exempted: true };
   if (opts.relax && verdict === 'reject') return { verdict: 'demote', line, relaxed: true };
   return { verdict, line };
 }
@@ -874,6 +1014,31 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
   const libGate = !!directive && directiveWantsLibrary(directive.text) && libSpecies.length > 0;
   if (libGate) console.log(`[auto-cycle] 보관소 수종 강제 — ${libSpecies.length}종, 목록 밖 주제는 기각`);
   if (directive) console.log(`[auto-cycle] 사장님 지시 적용 — "${directive.text.slice(0, 50)}"${directive.maxPieces ? ` (${directive.made}/${directive.maxPieces}편)` : ` (${directive.made}편째)`}`);
+  // 수종 필수(2026-10-02, BLOG_REQUIRE_SPECIES) — 메인 키워드가 수종을 부르게 한다. 사장님 지시가 수종을 정하지 않은
+  // 일반 지시면 면제(사람이 고른 범위). off 면 아래 프롬프트 줄·키워드 보정·게이트·축 예시 수종이 전부 빠진다(종전 동작).
+  const needSpecies = speciesRequiredFor(CONFIG.blogRequireSpecies, directive);
+  if (CONFIG.blogRequireSpecies && !needSpecies) console.log('[auto-cycle] 수종 필수 면제 — 사장님 지시가 수종을 정하지 않은 일반 지시');
+  // 축 예시에 박을 수종 — 보관소 지시면 종전대로 보관소 목록, 수종 필수 틱이면 지금 열린 제철 수종(일반 씨앗 "나무 심는 깊이"를
+  // 두뇌가 그대로 따라 쓰면 게이트가 기각한다 — 09-29 보관소 조임과 같은 구조라 같은 장치로 푼다).
+  const seedSpecies: string[] = libGate ? libSpecies : needSpecies ? (() => {
+    try {
+      const snap = readDemandSnap(slug || undefined)?.rows ?? [];
+      const seasonBy = new Map<string, number>();
+      for (const r of snap) {
+        const k = requiredSpeciesOf(r.keyword);
+        if (k && typeof r.seasonIdx === 'number') seasonBy.set(k, Math.max(seasonBy.get(k) ?? 0, r.seasonIdx));
+      }
+      const names = (getBrand()?.speciesCatalog ?? []).flatMap((g) => (g.species ?? []).map((s) => s.name));
+      return inSeasonSpecies(names, {
+        blocked: (n) => !!usedRecently(n, speciesRecent, speciesKeyOf)
+          || (speciesCov.get(n) ?? 0) >= speciesCap(n)
+          || !!starvedHit(n, factStarvedRecent, factStarvedRecentLore),
+        volumeOf: (n) => familyVolume(demandRows, n).max || undefined,
+        seasonOf: (n) => seasonBy.get(requiredSpeciesOf(n) ?? n),
+        minSeason: CONFIG.topicDemandMinSeason,
+      });
+    } catch { return []; }   // fail-open — 예시 수종이 없어도 게이트·프롬프트 줄은 그대로 선다
+  })() : [];
   const existingLines = existing.slice(0, 30)
     .map((e) => `- (${e.kind}) ${e.title}${e.keyword ? ` [키워드: ${e.keyword}]` : ''}`).join('\n');
   // 다양성 강제(2026-07-23 감사) — 킬스위치 CONTENT_DIVERSITY=off 로 끔. 표면 novelty 가 못 잡는 '소재 쏠림'을
@@ -922,7 +1087,15 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     // 안 붙는 축(지지대·옥상 마당·비용·경계·전설·문학)이라, 일반 씨앗을 그대로 보여 주면 두뇌가 수종
     // 없는 제목을 짓고 화이트리스트(libGate)가 그걸 기각한다. 열린 축과 허용 수종이 서로를 못 만나
     // 후보가 전멸하던 조임을 푼다. libGate 가 아니면 빈 배열 → 블록은 종전과 글자 단위로 같다.
-    (() => { const b = themeRotationBlock(getBrand()?.topicThemes, themeCov, THEME_MONTHLY_CAP, 8, libGate ? libSpecies : []); return b ? `${b}\n\n` : ''; })() +
+    // 수종 필수 틱(2026-10-02)도 같은 장치를 쓴다 — 예시를 열린 제철 수종으로 적는다(seedSpecies, 꺼지면 종전 그대로).
+    (() => {
+      const b = libGate
+        ? themeRotationBlock(getBrand()?.topicThemes, themeCov, THEME_MONTHLY_CAP, 8, seedSpecies)
+        : themeRotationBlock(getBrand()?.topicThemes, themeCov, THEME_MONTHLY_CAP, 8, seedSpecies,
+          '  ※ 예시의 수종은 지금 열린 제철 수종으로 붙인 자리 표시다. 다른 수종으로 바꿔도 되지만, 수종 없는 일반 키워드는 코드가 기각한다.');
+      return b ? `${b}\n\n` : '';
+    })() +
+    (needSpecies ? `${speciesRequiredBlock(CONFIG.demandFloorSpeciesExempt)}\n` : '') +
     (searchBlock ? `${searchBlock}\n\n` : '') +
     (axisBlockStr ? `${axisBlockStr}\n\n` : '') +
     (stockBlockStr ? `${stockBlockStr}\n\n` : '') +
@@ -946,13 +1119,15 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     //     쿨다운 계열 행은 뺀다 — 금지된 계열이 '수요 있는 소재'로 표에 남으면 지시끼리 충돌한다.
     // 최근 수종도 표에서 뺀다(2026-09-17) — 표가 커질수록 상위 행이 고정되는데, 그 행이 최근 수종이면
     // 두뇌는 '수요 있는 소재'로 읽고 코드는 기각한다(쿨다운 계열 행을 뺀 것과 같은 지시 충돌).
-    demandSignalBlock(activeBrandSlug() || '', [...cdown.excludeTokens, ...speciesRecent.keys()]) +
+    // 수종 키워드 하한 면제(2026-10-02) — 켜져 있으면 표의 하한 문구가 '일반 키워드에만'으로 바뀐다(off 면 종전 그대로).
+    demandSignalBlock(activeBrandSlug() || '', [...cdown.excludeTokens, ...speciesRecent.keys()], { speciesFloorExempt: CONFIG.demandFloorSpeciesExempt }) +
     // ③-a' 수요 미달로 이미 기각된 키워드(2026-08-27): 재제안 금지 목록. 수요 표 바로 뒤에 붙여야
     //      '수요가 있는 것'과 '이미 없다고 실측된 것'을 두뇌가 한 자리에서 본다. 항목 없으면 빈 문자열.
     //      아래 [신호 우선순위]의 "금지가 항상 이긴다"가 이 블록에도 그대로 적용된다(줄 변경 불필요).
     //      인스타 목표 틱(2026-09-08)엔 넣지 않는다 — 코드는 하한 미달을 통과시키는데 두뇌만 '제안 금지'를 받으면
     //      지시끼리 충돌한다(위 주석의 대칭 사고). 기억 자체는 그대로 쌓인다 — 유튜브 틱에서 다시 쓰인다.
-    (igTarget || directive ? '' : demandRejectBlock(slug)) + // 지시 중엔 수요 미달을 코드가 통과시킨다 — 금지 블록도 뺀다
+    // 하한 면제 수종 키워드(2026-10-02)는 금지 목록에서 뺀다 — 면제 전에 쌓인 기억이 '제안 금지'로 실리면 코드는 통과시키는데 두뇌만 피한다.
+    (igTarget || directive ? '' : demandRejectBlock(slug, undefined, CONFIG.demandFloorSpeciesExempt ? (k) => speciesFloorExempt(k) : undefined)) + // 지시 중엔 수요 미달을 코드가 통과시킨다 — 금지 블록도 뺀다
     // ③-b 유튜브 니치 동향(2026-08-25): 최근 7일 조회 상위 영상 — 소재·프레이밍의 실반응 신호.
     ytNicheBlock(undefined, cdown.excludeTokens) +
     // ④ 계열 쿨다운 v2(감쇠 점수): 하드=금지(아래 후보 게이트가 코드로도 기각), 소프트=회피 권고 + 빈 방향 유도.
@@ -993,6 +1168,25 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     }
   };
   let rejectNote = '';
+  // 수종 없는 후보 최후 보류함(2026-10-02) — **라운드 밖에 산다. 일부러다.** 아래 후순위 보관함(demoted)은 라운드 안에서만
+  // 살지만, 이 게이트는 1라운드에서 '원래라면 채택됐을' 후보를 막는다. 그 틱의 2라운드가 다른 게이트(축 상한·최근 축·
+  // 보관소 밖)로 전멸하면, 보관함이 라운드와 함께 사라질 경우 이 게이트 하나가 빈 틱을 만든다(09-29 전멸과 같은 꼴).
+  // 그래서 두 라운드를 다 써도 수종 붙은 후보가 없을 때만, 여기 담긴 것 중 종전 규칙이 골랐을 것을 채택한다.
+  // rank: -1 = 모든 게이트 통과(종전이면 즉시 채택) · 0~4 = 후순위 보관함과 같은 뜻 · 0.5 = 유사 폴백 자격
+  // (pickRoundAdoption 서열 그대로 — 비수기는 유사 폴백을 이기고, 유사 폴백은 rank 1 이상을 이긴다).
+  const noSpeciesReserve: Array<{ idea: ContentIdea; rank: number; line: string }> = [];
+  const adoptNoSpecies = (): ContentIdea | null => {
+    const best = pickDemoted(noSpeciesReserve);
+    if (!best) return null;
+    const { idea, line } = best;
+    console.log(`[auto-cycle] 수종 없는 후보 채택(기아 방지 — 두 라운드에 수종 붙은 후보 없음) — "${idea.title}"${idea.keyword ? ` (키워드 "${idea.keyword}")` : ''}`);
+    if (CONFIG.topicDemandGate && searchAdEnabled()) console.log(`[auto-cycle] 수요 게이트 — "${idea.title}" ${line || '조회 없음'} 채택${target ? ` · 채널 목표 ${platformLabel(target)}` : ''}`);
+    recentAuto.push(idea.title);
+    if (recentAuto.length > 20) recentAuto.shift();
+    markDirectivePiece();
+    if (idea.keyword) consumeOpportunityVerdict(idea.keyword);
+    return { ...idea, ...(target ? { target } : {}), ...(directive ? { directive: true } : {}) };
+  };
   const IDEA_ROUNDS = 2;   // 마지막 라운드 판정(기아 방지 밸브)이 이 숫자에 매달려 있어 상수로 묶는다
   for (let attempt = 0; attempt < IDEA_ROUNDS; attempt++) {
     // 실패 사유를 삼키지 않는다 — 실사고 2026-08-31 08:55~10:55: 런처 축소 PATH 로 claude CLI 가
@@ -1011,6 +1205,12 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       // 지시 소진 — 두뇌가 '지시 안에서 더 낼 주제 없음'이라 답했다. 지시는 켜 둔 채 이번 틱만 쉰다(2026-09-18).
       // 수종·축 창이 지나면 저절로 후보가 열린다. 끄는 건 사장님 몫 — 알림에 그렇게 적는다.
       const reason = asString((o as { reason?: unknown }).reason).trim().slice(0, 120);
+      // 단 1라운드에서 수종 없음으로 미룬 후보가 있으면 그것을 채택한다(2026-10-02) — 종전이면 그 후보는 1라운드에 이미
+      // 채택됐다. 여기서 쉬면 수종 필수 게이트 혼자 빈 틱을 만든다. 채택하는 틱이라 소진 보류 기록·'쉼' 알림은 남기지 않는다.
+      if (noSpeciesReserve.length) {
+        console.log(`[auto-cycle] 사장님 지시 소진 — "${directive.text.slice(0, 40)}" (${reason || '더 낼 주제 없음'}) → 1라운드 보류 후보로 채택`);
+        return adoptNoSpecies();
+      }
       const shouldNotify = holdDirective(reason);
       console.log(`[auto-cycle] 사장님 지시 소진 — "${directive.text.slice(0, 40)}" (${reason || '더 낼 주제 없음'}) → 지시 유지, 이번 틱은 쉼`);
       if (shouldNotify) {
@@ -1018,14 +1218,21 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       }
       return null;
     }
-    const cands = normalizeIdeaCandidates(o);
+    // 수종 키워드 보정(2026-10-02) — 수요 조회·계열 분류·정렬이 전부 cand.keyword 를 읽으므로 그보다 **앞에서** 바꾼다
+    // (루프 안에서 바꾸면 새 키워드는 수요 행이 없어 '조회 없음'으로 fail-open 통과한다).
+    const cands = normalizeIdeaCandidates(o).map((c) => {
+      if (!needSpecies) return c;
+      const r = bindSpeciesKeyword(c);
+      if (r.from) console.log(`[auto-cycle] 수종 키워드 보정 — "${r.from}" → "${r.cand.keyword}" (제목 "${c.title}")`);
+      return r.cand;
+    });
     if (!cands.length) {
       const last = attempt >= IDEA_ROUNDS - 1;
       console.log(`[auto-cycle] 아이디어 제안 실패 — ${callError || '모델 응답이 후보 0개(형식 불일치)'}`
         + ` → ${last ? '이번 주기 스킵' : '다음 라운드 재시도'}`);
       // 종전엔 첫 라운드 실패가 곧 틱 전체 포기였다 — 응답 절단은 매 호출 달라지는 일시적 실패라
       // 남은 라운드를 써 보지도 않고 버릴 이유가 없다(라운드 수 IDEA_ROUNDS 로 이미 상한이 있다).
-      if (last) return null;
+      if (last) return adoptNoSpecies();   // 1라운드에서 수종 없음으로 미룬 후보가 있으면 그것(없으면 null — 종전과 같다)
       continue;
     }
     // 검색 수요 묶음 조회(2026-08-26) — 라운드당 딱 1회(검색광고 ≤2콜 + 데이터랩 1콜). 후보당 개별
@@ -1035,8 +1242,10 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     const demandOn = CONFIG.topicDemandGate && searchAdEnabled();
     const demandCfg = { minVolume: CONFIG.topicDemandMinVolume, minSeason: CONFIG.topicDemandMinSeason };
     // 기억된 기각 키워드는 조회 대상에서 뺀다(2026-08-27) — 판정은 기억으로 이미 나 있으므로 조회 비용 0.
+    // 하한 면제 수종 키워드(2026-10-02)는 기억이 있어도 다시 조회한다 — 기억은 면제 전 하한으로 쌓인 것이라 판정에 안 쓰고,
+    // 새 행이 있어야 시즌 지수(비수기 후순위)를 본다.
     const demandTargets = demandOn
-      ? cands.map((c) => c.keyword).filter((k): k is string => !!k && !demandRejectFor(slug, k))
+      ? cands.map((c) => c.keyword).filter((k): k is string => !!k && (speciesFloorExempt(k) || !demandRejectFor(slug, k)))
       : [];
     // 후보 계열 분류(라운드당 micro 1콜, 실패 시 결정적 폴백 + 원장 키 포함 대조 보강) + 게이트 선계산.
     // 소프트 후보는 뒤로 미룬다(안정 정렬) — none 후보가 있으면 그쪽을 먼저 채택.
@@ -1078,6 +1287,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       (e) => volumeOf(e.cand.keyword),
     );
     const rejects: string[] = [];
+    let noSpRound = 0;   // 이번 라운드 '수종 없음' 수 — 라운드 끝 노트에 '버리지 말고 수종에 묶어라' 줄을 붙일지
     // 유사 폴백(사용자 원칙 개정 2026-08-14) — 기존과 유사한 후보는 기각이 아니라 '다른 시각 생성'
     // 대상. 새 소재 후보를 우선하되, 이번 라운드에 새 소재가 없으면 유사 후보를 채택한다 — 집필 시점에
     // priorCoverageBrief 가 이전 글 앵글을 주입해 프레이밍을 바꾼다(same-topic different content 배선).
@@ -1102,6 +1312,21 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     }
     for (const { cand, gate } of gated) {
       const { title, keyword } = cand;
+      // 수종 필수(2026-10-02) — 판정은 여기서, 처리는 '채택·보관' 자리에서 한다. 다른 게이트는 그대로 다 거치게 둬야
+      // (1) 기각 사유가 진짜 결격 순서대로 남고 (2) 최후 보류함에 든 후보가 다른 게이트를 건너뛴 채 채택되지 않는다
+      // (유사 폴백 자격·비수기 보관 주석의 포도 4편 사고와 같은 구멍). 보정(bindSpeciesKeyword)은 이미 끝난 키워드다.
+      const noSp = needSpecies && !requiredSpeciesOf(keyword || title);
+      const holdNoSpecies = (rank: number, line: string, where: string): void => {
+        console.log(`[auto-cycle] 아이디어 기각(수종 없음) — "${title}"${keyword ? ` (키워드 "${keyword}")` : ''} · ${where} → 최후 보류(두 라운드에 수종 붙은 후보가 없을 때만)`);
+        // 한 후보에 노트 한 줄(2026-10-02) — 후순위 분기가 방금 사유를 남겼으면 거기에 이어 붙인다. 따로 두 줄을 넣으면
+        // 노트에 실리는 4건 중 2자리를 한 후보가 먹는다.
+        const why = `수종 없음(키워드 "${keyword ?? title}" — 지금 철 수종 하나에 묶어 "○○ ${(keyword ?? '').replace(/^나무\s*/, '') || '소재'}" 꼴로)`;
+        const prev = rejects.at(-1);
+        if (prev?.startsWith(`"${title}"=`)) rejects[rejects.length - 1] = `${prev} · ${why}`;
+        else rejects.push(`"${title}"=${why}`);
+        noSpeciesReserve.push({ idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) }, rank, line });
+        noSpRound++;
+      };
       if (recentAuto.includes(title)) {
         // 종전엔 여기서 로그 없이 전체 return null — 재탕 제목 하나가 슬롯을 '침묵 좌초'시켰다(08-14 관측).
         console.log(`[auto-cycle] 아이디어 스킵(최근 제안 재탕) — "${title}"`);
@@ -1205,7 +1430,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       // 기억 조회에는 `demandOn`(검색광고 키 여부)을 걸지 않는다 — 기억은 이미 받아 둔 실측이라 키가
       // 필요 없고(그게 '재조회 0'의 요점), 프롬프트의 금지 블록은 CONFIG.topicDemandGate 만 보므로
       // 여기에 키 조건을 더하면 "제안 금지"라고 시켜 놓고 게이트는 통과시키는 지시 충돌이 난다.
-      const remembered = demandRejectFor(slug, keyword);
+      const remembered = rememberedDemandReject(slug, keyword);
       // 채널 목표별 처리(2026-09-08, 순수 함수 demandGateForTarget) — 인스타 목표는 relax 를 안 쓴다. 마지막
       // 라운드에 reject 가 demote(relaxed) 로 바뀌면 아래 통과 분기에 안 걸리고 후순위 보관함·유사 폴백 실격으로
       // 흘러가, '하한을 걸지 않는다'가 마지막 라운드에만 뒤집힌다. 인스타에서 reject 는 언제나 통과라 밸브가 필요 없다.
@@ -1219,6 +1444,8 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       // 여기서 기록하지 않으면 다음 틱에 같은 키워드가 또 검색광고 조회를 태운다(이 태스크가 없애려던
       // 재조회 낭비가 마지막 라운드 경로에만 남던 비대칭). 실패는 함수 안에서 삼켜지는 fire-and-forget.
       if (shouldRememberDemandReject(demand, remembered, keyword)) rememberDemandReject(slug, keyword, demand.line);
+      // 수종 키워드 하한 면제(2026-10-02) — 종전이면 여기서 '검색 수요 미달'로 기각됐을 후보. 면제가 얼마나 도는지 로그로 센다.
+      if (demand.exempted) console.log(`[auto-cycle] 검색량 하한 면제(수종 키워드) — "${title}" (${demand.line})`);
       // 인스타 목표(2026-09-08) — 검색량 하한은 걸지 않는다. 기억·실측 어느 쪽이든 '하한 미달'은 이 글의
       // 결격이 아니다(이 글은 검색이 아니라 공유로 퍼진다). 로그는 남겨 나중에 '검색 0 인데 인스타에서 터졌나'를
       // 대조할 수 있게 한다. 비수기(demote)는 그대로 — 인스타야말로 제철이 생명이다.
@@ -1273,7 +1500,10 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
         // "올리브나무 화분 재배" 10미만/월이 유사 폴백으로 채택돼 게이트가 무력화됐다.
         // 최근 수종(마지막 라운드 후순위 후보)은 폴백 자격도 없다(2026-09-17) — 여기서 걸러 주지 않으면
         // 최근 수종이 유사 폴백 경로로 채택돼 게이트가 무력화된다(수요 하한 미달을 자격에서 뺀 것과 같은 구멍).
-        if (!similarFallback && gate.level === 'none' && !demand.relaxed && !recentSp && !recentTh) {
+        // 수종 없는 후보는 유사 폴백 자리도 못 잡는다(2026-10-02) — 잡으면 수종 붙은 후순위 후보(rank 1~4)를 이긴다.
+        // 자격은 같으므로 최후 보류함에 유사 폴백 서열(0.5)로 넣는다.
+        if (noSp && gate.level === 'none' && !demand.relaxed && !recentSp && !recentTh) holdNoSpecies(0.5, demand.line, '유사 폴백 자격');
+        else if (!similarFallback && gate.level === 'none' && !demand.relaxed && !recentSp && !recentTh) {
           similarFallback = { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
           similarFallbackLine = demand.line;   // 마지막 라운드에 기억으로 후순위가 된 후보가 여기로 온다(로그가 '조회 없음'으로 새지 않게)
         }
@@ -1303,7 +1533,8 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
           : `최근 축 — ${recentTh!.theme} ${recentTh!.daysAgo}일 전`;
         console.log(`[auto-cycle] 아이디어 후순위(${recentSp ? '최근 수종' : '최근 축'}·기아 방지) — "${title}" (${why.split(' — ')[1]})`);
         rejects.push(`"${title}"=후순위(${why})`);
-        if (gate.level === 'none') {
+        if (gate.level === 'none' && noSp) holdNoSpecies(recentSp ? 3 : 2, demand.line, '후순위');
+        else if (gate.level === 'none') {
           demoted.push({
             idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) },
             rank: recentSp ? 3 : 2,
@@ -1325,7 +1556,8 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
         // "전부 무효"로 나가, 두뇌는 뭐가 문제였는지(비수기냐 수요 미달이냐) 모른 채 다시 제안했다.
         // 보관 자격(계열 none)과 무관하게 기록한다 — 노트는 두뇌에게 주는 정보고, 보관은 별개 판단이다.
         rejects.push(`"${title}"=후순위(${demand.relaxed ? '검색 수요 미달' : '검색 비수기'}${demand.line ? ` — ${demand.line}` : ''})`);
-        if (gate.level === 'none') {
+        if (gate.level === 'none' && noSp) holdNoSpecies(demand.relaxed ? 1 : 0, demand.line, '후순위');
+        else if (gate.level === 'none') {
           demoted.push({
             idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) },
             rank: demand.relaxed ? 1 : 0,   // 비수기(0)가 하한 미달(1)보다 항상 낫다 — 소재 자체엔 수요가 있다
@@ -1351,13 +1583,17 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
             continue;
           }
           console.log(`[auto-cycle] 아이디어 후순위(실검색 각도 밖·기아 방지) — "${title}" (${sp} 연관어: ${v.angles.join(' · ')})`);
-          if (gate.level === 'none') {
+          if (gate.level === 'none' && noSp) holdNoSpecies(4, demand.line, '후순위');
+          else if (gate.level === 'none') {
             demoted.push({ idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) }, rank: 4, line: demand.line, rotation: `실검색 각도 밖 — ${sp}` });
           }
           continue;
         }
         if (v && v.status === 'ok') console.log(`[auto-cycle] 실검색 각도 일치 — "${title}" (${sp}: ${v.matched.join(' · ')})`);
       }
+      // 수종 없음(2026-10-02) — 다른 게이트를 전부 통과한 후보다(종전이면 여기서 채택). 막고 다음 후보로 간다.
+      // 1라운드 사유는 rejectNote 로 두뇌에 가서 2라운드가 수종을 붙여 다시 낸다. 최후 보류함이 빈 틱을 막는다.
+      if (noSp) { holdNoSpecies(-1, demand.line, '다른 게이트 전부 통과'); continue; }
       // 판정 시점의 line 을 그대로 넘긴다 — 인스타 목표에서 기억 기각을 통과한 후보는 demandRows 에 없어
       // 여기서 다시 계산하면 '조회 없음 채택'으로 새는 비대칭이 있었다(리뷰 2026-09-08).
       logDemandAdopt(title, keyword, demand.line || undefined);
@@ -1404,9 +1640,13 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     // 문장이 반대라 따로 붙인다(rejects 4건 슬라이스에 밀리지 않게).
     const angleLines = [...angleHints.entries()].map(([sp, angles]) => angleNote(sp, angles)).filter(Boolean);
     rejectNote = `[직전 제안 ${cands.length}건 전부 채택 불가(기각 또는 후순위) — 사유: ${rejects.slice(0, 4).join(' · ') || '전부 무효'}] 이 사유들과 소재를 전부 피해, 완전히 다른 소재·키워드로 5건을 다시 제안하라.`
-      + (angleLines.length ? `\n[실검색 연관어 — 아래 수종은 피하지 말고 이 각도로 다시 내라(사람들이 실제 치는 검색어다)]\n${angleLines.map((l) => `· ${l}`).join('\n')}` : '');
+      + (angleLines.length ? `\n[실검색 연관어 — 아래 수종은 피하지 말고 이 각도로 다시 내라(사람들이 실제 치는 검색어다)]\n${angleLines.map((l) => `· ${l}`).join('\n')}` : '')
+      // 수종 없음(2026-10-02)은 위 '전부 피해'와 반대다 — 소재는 살리고 수종에 묶으면 된다(연관어 줄과 같은 이유로 따로 붙인다).
+      + (noSpRound ? `\n[수종 없음 ${noSpRound}건 — 그 소재는 버리지 말고 지금 철 수종 하나에 묶어 다시 내라(형식: "○○ 심는 깊이"). keyword 에 수종명이 없으면 코드가 기각한다]` : '');
   }
-  return null; // 두 라운드(최대 10후보) 전부 기각 — 이번 주기 스킵(다음 주기에 새 각도로 재시도)
+  // 두 라운드 전부 기각 — 수종 없음으로 미룬 후보가 있으면 그것을 채택한다(이 게이트 혼자서는 빈 틱을 만들지 않는다).
+  // 없으면 null — 이번 주기 스킵(다음 주기에 새 각도로 재시도).
+  return adoptNoSpecies();
 }
 
 // ============================================================

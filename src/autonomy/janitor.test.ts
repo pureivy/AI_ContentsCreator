@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
+import { appendBlogFrame, blogFrameLedgerPath, readBlogFrameReleases } from '../content/blogFrames';
 import { daysSince, isShortPublished, shortPublishedTs, isStaleUnpublishedShort, shortPruneTargets, cardPruneTargets, trashEntryExpired, runJanitor, type JanitorDeps } from './janitor';
 
 const NOW = new Date('2026-09-10T03:30:00+09:00');
@@ -176,5 +177,51 @@ describe('runJanitor — 작업 산출 폴더(out/)', () => {
     expect(fs.existsSync(path.join(out, 'tech'))).toBe(false);
     expect(fs.existsSync(path.join(out, 'fresh.png'))).toBe(true);
     expect(r.moved['scratch-out']).toEqual({ n: 2, bytes: 110 });
+  });
+});
+
+describe('runJanitor — 미연결 세션을 치우기 전 실촬영 컷 반납(2026-10-02 2차 리뷰)', () => {
+  const mk = (withDraft: boolean) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'janitor-frames-'));
+    const run = 'dddddddd4444';
+    const dir = path.join(root, 'sessions', run);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'run.json'), '{}');
+    if (withDraft) fs.writeFileSync(path.join(dir, 'draft.json'), '{}');
+    const old = new Date(NOW.getTime() - 40 * 86_400_000);
+    fs.utimesSync(path.join(dir, 'run.json'), old, old);
+    appendBlogFrame(blogFrameLedgerPath(root), { ts: ago(40), runId: run, mediaId: 'a', file: '/m/a.mp4', kind: 'video', atSec: 8.5, species: '감나무', status: 'used' });
+    const deps: JanitorDeps = {
+      dataDir: root, sessionsDir: path.join(root, 'sessions'), shorts: () => [], cards: () => [], pieces: () => [],
+      removeShort: () => {}, isShortRunning: () => false, isSessionRunning: () => false, archiveShort: async () => 0,
+    };
+    return { root, run, dir, deps, releases: () => readBlogFrameReleases(blogFrameLedgerPath(root)) };
+  };
+
+  it('초안 없는 미연결 세션 — 반납 줄을 남긴 뒤 휴지통으로', async () => {
+    const t = mk(false);
+    await runJanitor(t.deps, { now: NOW });
+    expect(fs.existsSync(t.dir)).toBe(false);
+    expect(t.releases()).toEqual([expect.objectContaining({ runIds: [t.run], frames: [], reason: 'janitor-unlinked' })]);
+  });
+
+  it('초안이 있으면 반납하지 않는다(세션은 종전처럼 치운다) · dryRun 은 아무것도 안 쓴다', async () => {
+    const a = mk(true);
+    await runJanitor(a.deps, { now: NOW });
+    expect(fs.existsSync(a.dir)).toBe(false);
+    expect(a.releases()).toEqual([]);
+    const b = mk(false);
+    await runJanitor(b.deps, { now: NOW, dryRun: true });
+    expect(fs.existsSync(b.dir)).toBe(true);
+    expect(b.releases()).toEqual([]);
+  });
+
+  it('발행 흔적이 있는 글이 같은 컷을 쓰면 반납하지 않는다', async () => {
+    const t = mk(false);
+    appendBlogFrame(blogFrameLedgerPath(t.root), { ts: ago(30), runId: 'eeeeeeee5555', pieceId: 'P', from: t.run, mediaId: 'a', file: '/m/a.mp4', kind: 'video', atSec: 8.5, species: '감나무', status: 'used' });
+    fs.mkdirSync(path.join(t.root, 'pieces'), { recursive: true });
+    fs.writeFileSync(path.join(t.root, 'pieces', 'index.json'), JSON.stringify([{ id: 'P', runId: 'eeeeeeee5555', stage: 'published', publishedUrl: 'https://n/1' }]));
+    await runJanitor({ ...t.deps, pieces: () => [{ id: 'P', runId: 'eeeeeeee5555', publishedUrl: 'https://n/1' }] }, { now: NOW });
+    expect(t.releases()).toEqual([]);
   });
 });

@@ -14,20 +14,42 @@ import { metaSummaryIssues } from '../content/styleLint';
 import { CONFIG } from '../config';
 import { seasonalContext } from '../util/solarTerms';
 import type { AssetBundle, BlogDraft, FormatterInput } from './formatter';
+import { TITLE_FORM_TEXT, type TitleForm } from '../content/structureSeed';
 
-const PACK_SYSTEM =
+/**
+ * 포장 시스템 프롬프트. formed(이번 런에 제목 형식이 주어짐, 2026-10-02)가 false 면 **종전 문구 그대로**다 —
+ * STRUCTURE_VARIETY=off·구 시드 리비전에서 포장이 바이트 단위로 예전과 같아야 킬스위치 동일성 계약이 성립한다.
+ * true 면 제목 꼴을 고정하던 두 군데를 뺀다: ① "키워드를 앞쪽에 … 클릭 유도"(40편 실측: 키워드 맨 앞 40/40·
+ * "키워드, 반전 문장" 35/40) ② 절기 병기 예시 "…, 처서 전에 끝내야 하는 이유"(그 자체가 관점형 템플릿).
+ * 형식은 사용자 프롬프트의 [이번 글 제목 형식] 블록이 정한다.
+ */
+const buildPackSystem = (formed: boolean): string =>
   '너는 네이버 블로그 SEO 편집자다. 주어진 블로그 본문을 바탕으로 발행용 메타데이터를 만든다.\n' +
   '- primaryKeyword: 이 글의 핵심 타겟 키워드 1개(검색량 있을 법한 명사구).\n' +
-  '- titles: 검색 노출에 유리한 제목 후보 5개. 핵심 키워드를 앞쪽에 자연스럽게, 15~40자, 클릭 유도. 과장·낚시 금지. 사전에 없는 조어를 만들지 마라(실측 유출: "첫 식재자들" — "처음 심는 분들"처럼 일상어로).\n' +
+  (formed
+    ? '- titles: 검색 노출에 유리한 제목 후보 5개. 핵심 키워드를 자연스럽게 포함, 15~40자. 첫 번째 후보(발행 제목)는 아래 [이번 글 제목 형식]을 따른다. 과장·낚시 금지. 사전에 없는 조어를 만들지 마라(실측 유출: "첫 식재자들" — "처음 심는 분들"처럼 일상어로).\n'
+    : '- titles: 검색 노출에 유리한 제목 후보 5개. 핵심 키워드를 앞쪽에 자연스럽게, 15~40자, 클릭 유도. 과장·낚시 금지. 사전에 없는 조어를 만들지 마라(실측 유출: "첫 식재자들" — "처음 심는 분들"처럼 일상어로).\n') +
   '  [네이버 상위 노출 제목]이 주어지면 실제 상위 글들의 제목 패턴(구체 수치·대상·상황 명시)을 참고하되 그대로 베끼지 마라.\n' +
   // 절기 병기(2026-08-07 사용자 승인) — 실측상 절기 합성 키워드는 월 10미만이라 SEO 타겟은 불가하지만,
   // 제목 병기는 검색결과에서 "지금 안 하면 늦는다" 시의성 훅(CTR)이 된다. 키워드 대체 금지·선택 적용.
-  '  [오늘·절기]가 주어지고 주제가 현재·다가오는 절기와 시기적으로 맞물리면, 제목 후보 1~2개에 절기명을 자연스럽게 병기하라(예: "…, 처서 전에 끝내야 하는 이유"). 핵심 키워드 표기를 절기로 대체하지 말고, 시기가 안 맞으면 넣지 마라.\n' +
+  '  [오늘·절기]가 주어지고 주제가 현재·다가오는 절기와 시기적으로 맞물리면, 제목 후보 1~2개에 절기명을 자연스럽게 병기하라'
+  + (formed ? '(첫 후보에 넣을 때는 그 형식을 깨지 않는 자리에)' : '(예: "…, 처서 전에 끝내야 하는 이유")')
+  + '. 핵심 키워드 표기를 절기로 대체하지 말고, 시기가 안 맞으면 넣지 마라.\n' +
   '- meta: 100~200자 요약(검색 스니펫용). 핵심 키워드 포함, 글의 이득을 한 문장으로.\n' +
   '  메타 요약투 금지 — "정리했습니다/담았어요/알아봅니다/알아보세요/살펴봅니다/소개합니다" 로 끝내지 말고 "결론 한 줄 + 조건 한 줄" 꼴로 써라(예: "잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요.").\n' +
   '- tags: 5~10개(핵심·연관 키워드, # 없이). 띄어쓰기 없이 붙여쓴다("카페창업" O, "카페 창업" X). 본문과 무관한 태그 금지.\n' +
   '- images: 본문 흐름에 맞는 이미지 3개 슬롯. alt(대체텍스트)와 prompt(이미지 생성 프롬프트, 한국어).\n' +
   '이모지·이모티콘·장식 특수문자는 제목·메타·태그 어디에도 쓰지 마라. 본문에 없는 사실을 지어내지 마라.';
+const PACK_SYSTEM = buildPackSystem(false);
+const PACK_SYSTEM_FORMED = buildPackSystem(true);
+
+/** [이번 글 제목 형식] 블록(순수) — 첫 후보에 형식을 걸고, 키워드 정확 표기(seo.ts includes 판정)를 못박는다. */
+export function titleFormBlock(form: TitleForm, keyword?: string): string {
+  return `\n[이번 글 제목 형식 — titles 첫 번째 후보(발행 제목)에 반드시 적용] ${TITLE_FORM_TEXT[form]}.\n`
+    + `- 어느 형식이든 ${keyword ? `핵심 키워드 "${keyword}"` : '핵심 키워드'} 표기를 띄어쓰기·붙여쓰기까지 그대로 포함하고, 15~40자를 지키고, 본문이 다루지 않는 내용을 약속하지 마라. 키워드·연관어를 나열하지 마라(나열형 제목은 저품질 신호).\n`
+    + '- 이 형식은 위 [리서치·SEO 브리프]의 제목 후보·[네이버 상위 노출 제목]의 패턴보다 우선한다(그 자료는 키워드·소재 참고로만).\n'
+    + '- 나머지 4개 후보는 서로 다른 형식으로 써도 된다(사람이 고를 대안).\n';
+}
 
 /** 작가가 본문 끝에 남기는 태그류 제거(순수) — ① "태그: #…" 줄(종전) ② 맨 키워드 나열
  *  (구두점 없는 4+ 토큰 한 줄, 실측 2026-08-10: "포도나무수확시기 … 비온디트리"가 본문으로 발행됨).
@@ -59,7 +81,7 @@ export function stripInternalMarkers(md: string): string {
 }
 
 export async function packageNaverBlog(input: FormatterInput): Promise<AssetBundle> {
-  const { topic, researchBrief, serpText, model, signal } = input;
+  const { topic, researchBrief, serpText, model, titleForm, signal } = input;
   const pinnedKeyword = stripEmoji(asString(input.keyword).trim());
   // 이모지 결정적 제거 — 지침(작가·편집자 프롬프트)이 1차 방어, 여기가 최종 보증(발행 초안엔 이모지 0).
   const body = stripInternalMarkers(stripTrailingTagDump(stripEmoji(input.body)));
@@ -78,8 +100,11 @@ export async function packageNaverBlog(input: FormatterInput): Promise<AssetBund
       (pinnedKeyword ? `\n[핵심 키워드(고정)] ${pinnedKeyword} — primaryKeyword 는 정확히 이 값으로 쓰고, titles 5개 중 4개 이상과 meta 에 이 표기를 그대로 포함하라.\n` : '') +
       (serpText ? `\n[네이버 상위 노출 제목(실측)]\n${serpText.slice(0, 800)}\n` : '') +
       `${researchBrief ? `\n[리서치·SEO 브리프]\n${researchBrief.slice(0, 1500)}` : ''}\n\n` +
+      // 제목 형식 블록은 브리프·SERP 뒤, 형식 줄 바로 앞 — 브리프(SEO 전략가의 '제목 후보', 페르소나 규칙 "키워드 앞부분·
+      // 클릭 유도")와 상위 노출 제목이 대부분 키워드 맨 앞 관점형이라, 블록이 그보다 앞에 있으면 마지막에 읽힌 꼴로 끌려간다.
+      (titleForm ? `${titleFormBlock(titleForm, pinnedKeyword || undefined)}\n` : '') +
       `형식: {"primaryKeyword":"...","titles":["...","...","...","...","..."],"meta":"...","tags":["...","..."],"images":[{"alt":"...","prompt":"..."}]}`;
-  const askPack = (feedback: string) => microJSON<PackMeta>(model, PACK_SYSTEM, packUser() + feedback, { maxOutputTokens: 900, signal });
+  const askPack = (feedback: string) => microJSON<PackMeta>(model, titleForm ? PACK_SYSTEM_FORMED : PACK_SYSTEM, packUser() + feedback, { maxOutputTokens: 900, signal });
   let meta: PackMeta | null = null;
   try { meta = await askPack(''); } catch { /* 포장 실패 시 폴백 아래 */ }
 
@@ -109,6 +134,15 @@ export async function packageNaverBlog(input: FormatterInput): Promise<AssetBund
   const primaryKeyword = pinnedKeyword || stripEmoji(asString(meta?.primaryKeyword).trim() || seedKeyword(topic));
   const titles = (Array.isArray(meta?.titles) ? meta!.titles as unknown[] : [])
     .map((t) => stripEmoji(asString(t)).trim()).filter(Boolean).slice(0, 5);
+  // 제목 형식 런의 키워드 보증(2026-10-02) — 형식을 지키다 1순위가 고정 키워드를 잃으면(seo '제목에 핵심 키워드 포함' 실패)
+  // 키워드를 담은 다음 후보를 1순위로 올린다. 형식보다 과녁 고정이 우선이다. 형식 없는 런은 종전 그대로(순서 불변).
+  if (titleForm && pinnedKeyword && titles.length > 1 && !titles[0]!.includes(pinnedKeyword)) {
+    const i = titles.findIndex((t) => t.includes(pinnedKeyword));
+    if (i > 0) {
+      console.log(`[제목] 형식(${titleForm}) 1순위에 키워드 "${pinnedKeyword}" 없음 — ${i + 1}순위 "${titles[i]}"로 교체`);
+      titles.unshift(...titles.splice(i, 1));
+    }
+  }
   const titleCandidates = titles.length ? titles : [topic];
   const tags = (Array.isArray(meta?.tags) ? meta!.tags as unknown[] : [])
     .map((t) => stripEmoji(asString(t)).replace(/^#/, '').trim()).filter(Boolean).slice(0, 10);

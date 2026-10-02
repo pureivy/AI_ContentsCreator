@@ -5,6 +5,7 @@
  * Phase 2: youtube/instagram 포매터를 registerFormatter 로 추가하면 캘린더가 platform 으로 팬아웃.
  */
 import type { SeoResult } from './seo';
+import type { TitleForm } from '../content/structureSeed';
 
 /** 발행 초안 — 사람이 검토·수정 후 네이버에 게시. */
 export interface BlogDraft {
@@ -35,6 +36,8 @@ export interface FormatterInput {
   /** 핵심 타겟 키워드 고정(piece.keyword) — 지정 시 패키저가 재추출하지 않고 이 표기를 그대로 쓴다.
    *  런마다 키워드가 바뀌면 SEO 게이트·리비전이 움직이는 과녁을 쫓게 된다(실사고: 78→56→67 하락 루프). */
   keyword?: string;
+  /** 이번 런 구조 시드의 제목 형식(2026-10-02) — 있으면 제목 후보 1순위(=발행 제목)에 그 형식을 건다. 없으면 종전 프롬프트 그대로. */
+  titleForm?: TitleForm;
   model: string;             // 구조작업용 모델(micro/haiku)
   internalLinks?: string[];
   signal?: AbortSignal;

@@ -144,9 +144,20 @@ export function autoCapApplies(source: { auto?: boolean; userTriggered?: boolean
  * 파생 시점에도 같은 상한을 본다. '찼다'의 기준은 두 가지 합:
  *  · 오늘 이미 업로드된 편(유튜브는 youtubeTs, 인스타는 igReelId 보유분)
  *  · 오늘 만들어졌고 아직 안 올라간 그 채널 편(실패분 제외 — 실패는 몫을 잡지 않는다)
+ *
+ * 둘째 항목은 **오토런이 만든 편(auto === true)만** 센다(2026-10-02 사장님 확정). 숏폼 버튼으로 만든 편까지
+ * 세면 손으로 시킨 일이 오토런 몫을 먹는다 — 실사고: 배롱나무 글 유튜브 편을 버튼으로 한 번 더 만든 날,
+ * 저녁 오토런의 모과나무 글 유튜브 파생이 '오늘 몫 소진'으로 건너뛰어졌다(밀린 글을 주워 가는 대기열이
+ * 없어 그대로 두면 영구 누락). 업로드는 종전처럼 누가 만들었든 센다 — 올라간 것 자체가 채널 몫이다.
+ *
+ * 전환 시각(PLATFORM_QUOTA_AUTO_CUTOVER) 전에 만든 편은 auto 와 무관하게 센다(종전 규칙, 2차 리뷰) — 그 전엔 세트 파생도
+ * auto:false 로 기록돼 표시만으로는 오토런 편을 가를 수 없다. 전환 당일(10-02 KST)만 의미가 있고 그 뒤엔 '오늘' 편이
+ * 전부 전환 뒤라 저절로 효력이 없다.
  */
+export const PLATFORM_QUOTA_AUTO_CUTOVER = Date.parse('2026-10-02T15:00:00Z'); // 2026-10-03 00:00 KST
+
 export function platformQuotaCommitted(
-  list: ReadonlyArray<{ platform?: ShortsPlatform; stage?: string; createdTs?: string; youtubeTs?: string; igReelId?: string }>,
+  list: ReadonlyArray<{ platform?: ShortsPlatform; stage?: string; createdTs?: string; youtubeTs?: string; igReelId?: string; auto?: boolean }>,
   now: number, cap: number, platform: ShortsPlatform,
 ): boolean {
   if (cap <= 0) return false;
@@ -159,6 +170,8 @@ export function platformQuotaCommitted(
   const used = list.filter((s) => {
     if (platform === 'youtube' && onToday(s.youtubeTs)) return true; // 이미 올라감 — 업로드 자체가 몫
     if (s.platform !== platform || s.stage === 'error') return false;
+    const t = Date.parse(s.createdTs ?? '');
+    if (s.auto !== true && !(Number.isFinite(t) && t < PLATFORM_QUOTA_AUTO_CUTOVER)) return false; // 전환 뒤엔 오토런 편만
     return onToday(s.createdTs);
   }).length;
   return used >= cap;

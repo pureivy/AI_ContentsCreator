@@ -442,7 +442,10 @@ export async function refreshDemandSnapshot(signal?: AbortSignal): Promise<void>
 /** 블록 조립(순수, 테스트 대상) — demandSignalBlock 의 코어.
  *  excludeTokens: 계열 쿨다운 토큰. 쿨다운으로 '제안 불가'인 계열이 수요 표에 남으면 두뇌 눈에는
  *  "수요 있는 소재"로 보여 금지 지시와 정면 충돌한다(트렌드 블록이 같은 이유로 같은 필터를 쓴다). */
-export function buildDemandBlock(snap: DemandSnap | null, now = Date.now(), excludeTokens: string[] = []): string {
+export function buildDemandBlock(
+  snap: DemandSnap | null, now = Date.now(), excludeTokens: string[] = [],
+  opts: { speciesFloorExempt?: boolean } = {},
+): string {
   if (!snap || !Array.isArray(snap.rows) || !snap.rows.length) return '';
   const age = now - new Date(`${snap.date}T00:00:00`).getTime();
   if (!Number.isFinite(age) || age > STALE_DAYS * 86_400_000) return '';
@@ -465,15 +468,19 @@ export function buildDemandBlock(snap: DemandSnap | null, now = Date.now(), excl
     // 걸러지는 구조였다. 위쪽 행일수록 지금 시즌에 실제로 검색되는 키워드다.
     `반영 지침: **후보 8개 중 최소 5개는 이 표의 키워드나 그 계열에서 세워라** — 위 행일수록 우선. ` +
     `표에 없는 소재를 쓰려면 그 주제가 왜 지금 검색되는지 근거가 있어야 한다. ` +
-    `검색량 ${CONFIG.topicDemandMinVolume}/월 미만·시즌 지수 ${CONFIG.topicDemandMinSeason} 미만 키워드로 주제를 세우지 마라. ` +
+    // 수종 키워드 하한 면제(2026-10-02, DEMAND_FLOOR_SPECIES_EXEMPT) — 게이트가 수종 키워드를 하한에서 빼므로 이 줄도 같은 말을
+    // 해야 한다(안 그러면 두뇌가 '수종 + 증상·시기' 롱테일을 스스로 버린다). off 면 종전 문구 그대로.
+    (opts.speciesFloorExempt
+      ? `시즌 지수 ${CONFIG.topicDemandMinSeason} 미만 키워드로 주제를 세우지 마라. 검색량 ${CONFIG.topicDemandMinVolume}/월 하한은 수종 없는 일반 키워드에만 건다 — 수종 키워드는 검색량이 작아도 된다. `
+      : `검색량 ${CONFIG.topicDemandMinVolume}/월 미만·시즌 지수 ${CONFIG.topicDemandMinSeason} 미만 키워드로 주제를 세우지 마라. `) +
     '수요가 있는 키워드는 그대로 keyword 로 쓰고, 계열 최대 연관어의 검색량이 더 크면 주제는 그 수요를 겨냥하되 표기는 자연스러운 띄어쓰기로 써라.\n\n';
 }
 
 /** 주제 두뇌 주입용 블록 — 킬스위치 off·스냅샷 없음·낡음은 빈 문자열(무주입).
  *  excludeTokens 는 계열 쿨다운 토큰(호출부가 cooldownSummary 에서 넘긴다). */
-export function demandSignalBlock(slug?: string, excludeTokens: string[] = []): string {
+export function demandSignalBlock(slug?: string, excludeTokens: string[] = [], opts: { speciesFloorExempt?: boolean } = {}): string {
   if (!CONFIG.topicDemandGate) return '';
-  try { return buildDemandBlock(readDemandSnap(slug), Date.now(), excludeTokens); } catch { return ''; }
+  try { return buildDemandBlock(readDemandSnap(slug), Date.now(), excludeTokens, opts); } catch { return ''; }
 }
 
 // ============================================================
@@ -548,11 +555,14 @@ export function demandRejectFor(slug: string, keyword: string | undefined, now =
   return rejectFresh(e, now) ? e! : null;
 }
 
-/** 주제 두뇌 주입용 '제안 금지' 블록 — 항목 없음·전부 만료·킬스위치 off 면 빈 문자열(무주입). */
-export function demandRejectBlock(slug: string, now = new Date()): string {
+/** 주제 두뇌 주입용 '제안 금지' 블록 — 항목 없음·전부 만료·킬스위치 off 면 빈 문자열(무주입).
+ *  skip: 이제 게이트가 통과시키는 키워드(2026-10-02 수종 키워드 하한 면제) — 원장에 남은 옛 기각을 '제안 금지'로 실으면
+ *  코드는 통과시키는데 두뇌만 피하는 지시 충돌이 난다(인스타 목표 틱에서 블록을 뺀 것과 같은 이유). 원장은 건드리지 않는다. */
+export function demandRejectBlock(slug: string, now = new Date(), skip?: (keyword: string) => boolean): string {
   if (!CONFIG.topicDemandGate) return '';
   const items = Object.values(readRejects(slug))
     .filter((e) => rejectFresh(e, now))
+    .filter((e) => !skip?.(e.keyword))
     .sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0))   // 최근순 — 오래된 것부터 목록에서 밀린다
     .slice(0, REJECT_BLOCK_ROWS);
   if (!items.length) return '';

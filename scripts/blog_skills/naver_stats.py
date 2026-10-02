@@ -9,7 +9,11 @@
   추출(조회수·유입 키워드)을 시도한다. 실패해도 덤프가 남아 다음 실행의 추출기를 정밀화할 수 있다.
 - 폴백: 블로그 통계 페이지 DOM. 그래도 없으면 빈 샘플(fail-open) — 호출자는 수동 입력으로 되돌린다.
 
-계약: 마지막 줄에 `RESULT_JSON: {...}` 를 출력한다(TS 가 이 줄을 파싱).
+검색 유입(2026-10-02 정정): 위 어드바이저 inflow-* 후보 경로는 한 번도 응답한 적이 없다(캡처 167건 전수 —
+  searchInflow 3,853건 전부 빈 배열의 원인). 글별 검색어는 블로그 통계(blog.stat) 게시물 '유입경로' api 에
+  있다 → blog_stat_post_referer, 결과는 --referer-out 파일(해석은 TS).
+
+계약: `RESULT_JSON: {...}` 줄을 출력한다(TS 는 마지막 RESULT_JSON 줄을 파싱 — 검색 유입 단계의 로그 줄이 뒤에 올 수 있다).
   {views:int, dwellSec:int|None, searchInflow:[{keyword,count,rank?}], source:str, note:str, captured:int}
 자격증명은 절대 출력하지 않는다. 로그인 벽이면 note 로 안내하고 빈 샘플로 종료(exit 0, fail-open).
 """
@@ -22,6 +26,7 @@ import sys
 import time
 from datetime import date, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -145,6 +150,139 @@ def blog_stat_cumulative_cv(context, log_no: str):
                 total += v; found = True
         d += timedelta(days=1)
     return total if found else None
+
+
+def parse_inflow_periods(spec: str) -> list:
+    """'MONTH:2026-09-01,WEEK:2026-09-21,DATE:2026-10-01' → [(dim, start)]. 형식이 틀린 조각은 버린다."""
+    out = []
+    for part in (spec or "").split(","):
+        dim, _, start = part.strip().partition(":")
+        if dim in ("MONTH", "WEEK", "DATE") and re.fullmatch(r"\d{4}-\d{2}-\d{2}", start):
+            out.append((dim, start))
+    return out
+
+
+def period_end(dim: str, start: str) -> date:
+    """집계 기간의 마지막 날(WEEK=+6일, MONTH=그 달 말일, DATE=그날)."""
+    s = date.fromisoformat(start)
+    if dim == "WEEK":
+        return s + timedelta(days=6)
+    if dim == "MONTH":
+        return (s.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    return s
+
+
+def period_days(dim: str, start: str, today: date) -> list:
+    """집계 기간(MONTH/WEEK) → 그 안의 날짜들(오늘까지). 주·월 롤업이 아직 안 된 기간을 일 단위로 다시 묻는 폴백용."""
+    s = date.fromisoformat(start)
+    end = min(period_end(dim, start), today)
+    return [(s + timedelta(days=i)).isoformat() for i in range((end - s).days + 1)]
+
+
+def search_domains(total_data) -> list:
+    """refererTotal(열 배열) → 검색 유입 도메인 [(domain, cv)]. referrerSearchEngine=='1' 이고 cv>0 인 것만."""
+    rows = (total_data or {}).get("rows") or {}
+    doms = rows.get("referrerDomain") or []
+    engs = rows.get("referrerSearchEngine") or []
+    cvs = rows.get("cv") or []
+    return [(d, _num(c)) for d, e, c in zip(doms, engs, cvs) if str(e) == "1" and _num(c) > 0 and d]
+
+
+def rolled_up(total_data) -> bool:
+    """refererTotal 에 실제 도메인 행이 있나. 롤업 전 주(WEEK)는 domain ''·cv 0 한 줄짜리 자리표시를 준다."""
+    rows = (total_data or {}).get("rows") or {}
+    return any(str(d) for d in (rows.get("referrerDomain") or []))
+
+
+def blog_stat_post_referer(context, log_no: str, periods: list, deadline: float = None,
+                           max_calls: int = 200, max_fails: int = 3, clock=time.monotonic) -> dict:
+    """이 글(log_no)의 검색 유입 검색어 — 네이버 통계 게시물 '유입경로' 탭의 실제 소스(2026-10-02 역추적).
+    - api/blog/article/referer/total: 도메인별 유입(refererTotal). 같이 오는 refererDetail 은 **1위 도메인만**,
+      최대 20행이라 그대로 쓰면 검색어가 잘린다.
+    - api/blog/article/referer/total/detail?refererDomain=&searchEngine=1&size=200: 도메인 하나의 검색어 전부.
+    진행 중인(끝난 지 3일 안 된) 주·월만 일(DATE) 단위로 쪼개 다시 묻는다 — 500 이거나 200 + 빈 자리표시 행일 때.
+    401·로그인 벽·요청 실패나 오래된 기간의 500 은 쪼개지 않고 실패로 남긴다(쪼개도 같은 이유로 또 실패한다).
+    상한(리뷰 2026-10-02): 마감 시각(deadline, clock 기준)·호출 수(max_calls, detail 포함)·연속 실패(max_fails).
+    상한에 걸리면 남은 기간을 status 0 + skipped 로 적고 덤프에 aborted 사유를 남긴다 — 값이 누적이라 일부만
+    합친 덤프는 과소 계상이므로 TS(parseRefererDump)가 통째로 버린다. 종전엔 상한이 없어 6개월 된 글의 요청이
+    전부 실패하면 199콜 × 15초로 수집 상한(5분)에 걸려 SIGKILL — 조회수 표본까지 잃고 프로필 락을 잡았다.
+    원본 열 배열을 그대로 돌려준다(해석은 TS parseRefererDump — 단위 테스트 대상). 실패는 status 로 남긴다."""
+    hdr = {"referer": "https://m.blog.naver.com/", "accept": "application/json"}
+    base = "https://blog.stat.naver.com/api/blog/article/referer/total"
+    today = date.today()
+    if deadline is None:
+        deadline = clock() + 75
+    state = {"calls": 0, "fails": 0, "aborted": ""}
+
+    def _stop() -> str:
+        """다음 요청을 못 하는 사유('' 이면 계속). 남은 시간 2초 미만이면 시작하지 않는다(시작한 요청은 끝까지 간다)."""
+        if state["aborted"]:
+            return state["aborted"]
+        if state["fails"] >= max_fails:
+            state["aborted"] = f"연속 실패 {state['fails']}회"
+        elif state["calls"] >= max_calls:
+            state["aborted"] = f"호출 상한 {max_calls}콜"
+        elif deadline - clock() < 2:
+            state["aborted"] = "시간 상한"
+        return state["aborted"]
+
+    def _get(url):
+        """(상태, {dataId: data}). HTTP 200 이어도 본문 statusCode 가 200 이 아니면 그 값을 상태로(0=요청 실패).
+        요청 시간 상한은 남은 시간으로 깎는다 — 마감 직전에 시작한 요청이 15초를 더 끌지 않게."""
+        state["calls"] += 1
+        timeout_ms = max(1000, min(15000, int((deadline - clock()) * 1000)))
+        try:
+            r = context.request.get(url, headers=hdr, timeout=timeout_ms)
+            body = r.json() if "json" in r.headers.get("content-type", "") else None
+        except Exception:
+            state["fails"] += 1
+            return 0, {}
+        status = r.status
+        if status == 200 and not isinstance(body, dict):
+            status = 598  # JSON 아님(로그인 벽 HTML 등)
+        elif status == 200 and body.get("statusCode", 200) != 200:
+            status = _num(body.get("statusCode")) or 599
+        if status != 200:
+            state["fails"] += 1
+            return status, {}
+        state["fails"] = 0
+        lst = (body.get("result") or {}).get("statDataList") or []
+        return 200, {s.get("dataId"): s.get("data") for s in lst if isinstance(s, dict)}
+
+    out = []
+    queue = list(periods)
+    while queue:
+        if _stop():
+            break
+        dim, start = queue.pop(0)
+        q = f"contentId={log_no}&timeDimension={dim}&startDate={start}"
+        status, data = _get(f"{base}?{q}&exclude=")
+        # 롤업 전 — 진행 중인 월은 500, 진행 중인 주는 200 + 빈 자리표시 행(실측 2026-10-02). 일 단위로
+        # 대체하고 대체된 기간은 합산에서 빠진다(이중 계상 방지). 자리표시는 유입이 정말 0 인 기간에도 오므로
+        # 끝난 지 3일이 지난 기간(롤업은 몇 시간 안에 끝난다)은 0 으로 믿는다 — 옛 글 새로고침이 빈 달마다
+        # 일 단위 30콜로 불어나 프로필을 오래 잡지 않게. 500 도 같은 이유로 진행 중인 기간에서만 쪼갠다.
+        fresh = period_end(dim, start) >= today - timedelta(days=3)
+        if dim in ("MONTH", "WEEK") and fresh and (status == 500 or (status == 200 and not rolled_up(data.get("refererTotal")))):
+            if status == 500:
+                state["fails"] = 0  # 롤업 전 500 은 예정된 응답 — 연속 실패로 세지 않는다
+            out.append({"dim": dim, "start": start, "status": status, "expanded": True})
+            queue = [("DATE", d) for d in period_days(dim, start, today)] + queue
+            continue
+        entry = {"dim": dim, "start": start, "status": status, "total": data.get("refererTotal"), "details": []}
+        if status == 200:
+            for dom, _cv in search_domains(entry["total"]):
+                if _stop():
+                    entry["details"].append({"domain": dom, "status": 0, "skipped": True})
+                    continue
+                st, dd = _get(f"{base}/detail?{q}&refererDomain={quote(dom)}&searchEngine=1&size=200")
+                entry["details"].append({"domain": dom, "status": st, "data": dd.get("refererDetail")})
+        out.append(entry)
+    for dim, start in queue:  # 상한에 걸려 못 물은 기간 — 조용히 빼면 periodsFailed 가 거짓말을 한다
+        out.append({"dim": dim, "start": start, "status": 0, "skipped": True})
+    dump = {"logNo": log_no, "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "calls": state["calls"], "periods": out}
+    if state["aborted"]:
+        dump["aborted"] = state["aborted"]
+    return dump
 
 
 def extract_advisor_metrics(captures: list, log_no: str = "") -> dict:
@@ -288,14 +426,68 @@ def extract_metrics(captures: list, log_no: str) -> dict:
     return {"views": views, "dwellSec": dwell, "searchInflow": search_inflow}
 
 
+def emit_views(captures: list, stat_cv, log_no: str, run_dir: str) -> None:
+    """조회수 결과(RESULT_JSON) — 검색 유입 수집 **전에** 출력한다(리뷰 2026-10-02). 그 뒤 단계가 늘어져
+    수집 상한(5분)에 SIGKILL 돼도 이 줄은 이미 출력돼 있어 TS(statsResultFrom)가 조회수 표본을 살린다."""
+    # 캡처 덤프(추출기 정밀화용) — 자격증명 없음.
+    try:
+        with open(os.path.join(run_dir, "naver_stats_capture.json"), "w", encoding="utf-8") as f:
+            json.dump(captures, f, ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+    # 어드바이저에 로그인 세션이 적용됐는지 — 캡처에 Unauthorized 가 남아 있으면 세션 미확립.
+    def _unauth(cap):
+        b = cap.get("body")
+        return isinstance(b, dict) and "unauthorized" in str(b.get("message", "")).lower()
+    all_unauth = bool(captures) and all(_unauth(c) for c in captures)
+
+    # 어드바이저 실측 엔드포인트 정밀 추출을 우선, 부족분은 범용 휴리스틱으로 보강.
+    adv = extract_advisor_metrics(captures, log_no)
+    gen = extract_metrics(captures, log_no)
+    # 조회수 우선순위: blog.stat 누적(게시물 조회수 실소스) > 어드바이저 글별 당일 > 휴리스틱.
+    views = stat_cv if stat_cv is not None else (adv["views"] or gen["views"])
+    metrics = {
+        "views": views,
+        "dwellSec": adv["dwellSec"] or gen["dwellSec"],
+        "searchInflow": adv["searchInflow"] or gen["searchInflow"],
+    }
+    # 로그인은 됐지만(권한 응답 수신) 수치가 0 = 발행 직후 미집계일 가능성.
+    logged = any(isinstance(c.get("body"), dict) and c["body"].get("data") not in (None,) for c in captures)
+    if stat_cv is not None:
+        note = ("네이버 통계 게시물 누적 조회수입니다."
+                + ("" if metrics["searchInflow"] else " (검색 유입 키워드는 별도 수집.)"))
+    elif metrics["views"]:
+        note = ("어드바이저 글별 당일 조회수 — 누적(통계 게시물 조회수)과 다를 수 있어 정확값은 수동 입력 권장."
+                + ("" if metrics["searchInflow"] else " (검색 유입은 글 단위 데이터가 없어 비웠습니다.)"))
+    elif metrics["searchInflow"]:
+        note = ""
+    elif all_unauth or not captures:
+        note = ("어드바이저 로그인 세션 미확립 — 브라우저에서 네이버에 로그인(로그인 상태 유지 체크) 후 "
+                "다시 시도하세요. 계속 실패하면 수동 입력으로 대체할 수 있습니다.")
+    elif logged:
+        note = ("로그인·수집 정상인데 이 글의 어드바이저 조회수가 0입니다 — 조회가 적은 글은 채널 순위 "
+                "리스트에 안 잡히거나 당일 조회가 0일 수 있습니다. 누적 게시물 조회수는 네이버 통계에서 "
+                "확인해 수동 입력을 권장합니다(발행 당일은 지연 집계로 0일 수 있음).")
+    else:
+        note = "자동 추출 실패 — 캡처 덤프(naver_stats_capture.json) 확인 후 추출기 정밀화 필요. 수동 입력으로 대체 가능."
+    emit({**metrics, "source": "scrape:naver_advisor", "note": note, "captured": len(captures)})
+
+
+
 # ── 메인 ──────────────────────────────────────────────────────────────────
 def main():
+    t0 = time.monotonic()  # 검색 유입 단계 마감 계산용(수집 상한 5분 안에서 끝나게)
     load_env(str(PROJECT_ROOT))
     parser = argparse.ArgumentParser(description="네이버 블로그 성과 수집")
     parser.add_argument("--url", required=True, help="발행된 글 URL")
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    # 글별 검색 유입(2026-10-02) — TS 가 발행일로 계산한 기간 목록. 결과는 RESULT_JSON 이 아니라 파일로:
+    # TS 출력 상한(12KB)을 넘기면 마지막 RESULT_JSON 줄이 잘려 조회수까지 잃는다.
+    parser.add_argument("--inflow-periods", default="")
+    parser.add_argument("--referer-out", default="")
     args = parser.parse_args()
 
     os.makedirs(args.run_dir, exist_ok=True)
@@ -462,51 +654,29 @@ def main():
             except Exception:
                 stat_cv = None
 
+        # 조회수 결과를 먼저 출력 — 아래 검색 유입이 어떻게 끝나든(실패·상한·SIGKILL) 조회수 표본은 산다.
+        emit_views(captures, stat_cv, log_no, args.run_dir)
+
+        # 글별 검색 유입 검색어 — 조회수와 별개 파일. captures 에 섞지 않는다(extract_metrics 가 cv 키를
+        # 조회수로 집어 갈 수 있다). 어떤 실패도 조회수 경로를 건드리지 않게 통째로 감싼다.
+        # 마감: 이 단계 75초, 그리고 스크립트 시작 후 240초(TS 상한 5분 전에 브라우저를 닫고 프로필 락을 푼다 —
+        # 앞의 누적 조회수 단계가 오래 걸린 날엔 이 단계가 그만큼 짧아진다).
+        periods = parse_inflow_periods(args.inflow_periods)
+        if args.referer_out and periods:
+            try:
+                deadline = min(time.monotonic() + 75, t0 + 240)
+                dump = blog_stat_post_referer(context, log_no, periods, deadline=deadline)
+                if dump.get("aborted"):
+                    log(f"검색 유입 수집 중단(무해, 이번 결과는 버림): {dump['aborted']} · {dump.get('calls')}콜")
+                # 원자적 쓰기 — 쓰는 도중 강제 종료돼도 반쪽 파일이 남지 않게.
+                tmp = args.referer_out + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(dump, f, ensure_ascii=False)
+                os.replace(tmp, args.referer_out)
+            except Exception as e:
+                log(f"검색 유입 수집 실패(무해): {str(e)[:120]}")
+
         context.close()
-
-    # 캡처 덤프(추출기 정밀화용) — 자격증명 없음.
-    try:
-        with open(os.path.join(args.run_dir, "naver_stats_capture.json"), "w", encoding="utf-8") as f:
-            json.dump(captures, f, ensure_ascii=False, indent=1)
-    except Exception:
-        pass
-
-    # 어드바이저에 로그인 세션이 적용됐는지 — 캡처에 Unauthorized 가 남아 있으면 세션 미확립.
-    def _unauth(cap):
-        b = cap.get("body")
-        return isinstance(b, dict) and "unauthorized" in str(b.get("message", "")).lower()
-    all_unauth = bool(captures) and all(_unauth(c) for c in captures)
-
-    # 어드바이저 실측 엔드포인트 정밀 추출을 우선, 부족분은 범용 휴리스틱으로 보강.
-    adv = extract_advisor_metrics(captures, log_no)
-    gen = extract_metrics(captures, log_no)
-    # 조회수 우선순위: blog.stat 누적(게시물 조회수 실소스) > 어드바이저 글별 당일 > 휴리스틱.
-    views = stat_cv if stat_cv is not None else (adv["views"] or gen["views"])
-    metrics = {
-        "views": views,
-        "dwellSec": adv["dwellSec"] or gen["dwellSec"],
-        "searchInflow": adv["searchInflow"] or gen["searchInflow"],
-    }
-    # 로그인은 됐지만(권한 응답 수신) 수치가 0 = 발행 직후 미집계일 가능성.
-    logged = any(isinstance(c.get("body"), dict) and c["body"].get("data") not in (None,) for c in captures)
-    if stat_cv is not None:
-        note = ("네이버 통계 게시물 누적 조회수입니다."
-                + ("" if metrics["searchInflow"] else " (검색 유입 키워드는 별도 수집.)"))
-    elif metrics["views"]:
-        note = ("어드바이저 글별 당일 조회수 — 누적(통계 게시물 조회수)과 다를 수 있어 정확값은 수동 입력 권장."
-                + ("" if metrics["searchInflow"] else " (검색 유입은 글 단위 데이터가 없어 비웠습니다.)"))
-    elif metrics["searchInflow"]:
-        note = ""
-    elif all_unauth or not captures:
-        note = ("어드바이저 로그인 세션 미확립 — 브라우저에서 네이버에 로그인(로그인 상태 유지 체크) 후 "
-                "다시 시도하세요. 계속 실패하면 수동 입력으로 대체할 수 있습니다.")
-    elif logged:
-        note = ("로그인·수집 정상인데 이 글의 어드바이저 조회수가 0입니다 — 조회가 적은 글은 채널 순위 "
-                "리스트에 안 잡히거나 당일 조회가 0일 수 있습니다. 누적 게시물 조회수는 네이버 통계에서 "
-                "확인해 수동 입력을 권장합니다(발행 당일은 지연 집계로 0일 수 있음).")
-    else:
-        note = "자동 추출 실패 — 캡처 덤프(naver_stats_capture.json) 확인 후 추출기 정밀화 필요. 수동 입력으로 대체 가능."
-    emit({**metrics, "source": "scrape:naver_advisor", "note": note, "captured": len(captures)})
 
 
 if __name__ == "__main__":

@@ -21,6 +21,8 @@ import { finalizeRun } from './finalize';
 import { formatterFor } from '../output';
 import type { AssetBundle } from '../output';
 import { parseImagePlan, draftFiles } from '../output/naverBlog';
+import { prepareRealFrame } from './realFrame';
+import { realFrameSceneTags, withRealFrameSlot } from '../content/blogFrames';
 import { naverSerp } from '../grounding/naver_search';
 import { seedKeyword } from '../grounding/naver_common';
 import { getRunSettings } from '../runsettings';
@@ -34,7 +36,7 @@ import type { FactSupplyResult } from '../content/factSupply';
 import { isLoreTopic } from '../content/loreTopic';
 import { parseBriefVerdict, parseUnresolved, isBlocking, describeVerdict, VERDICT_FORMAT } from './briefVerdict';
 import { blogStyleIssues, styleRevisionReject } from '../content/styleLint';
-import { resolveStructureSeed, inheritStructureSeed, structureBlock, STRUCTURE_KEEP_BLOCK } from '../content/structureSeed';
+import { resolveStructureSeed, inheritStructureSeed, structureBlock, STRUCTURE_KEEP_BLOCK, type TitleForm } from '../content/structureSeed';
 import { factGateBlog, buildEvidence, runFactGateWithRepair, repairSentences, applySentenceRepairs, extractFactCard, FACT_CARD_HEADER, mergeSuppliedFacts } from '../content/factGate';
 import type { FactGateResult } from '../content/factGate';
 import { readInjected, readVerified } from '../agents/workspace';
@@ -129,7 +131,9 @@ const buildBlogBodyGuide = (variety: boolean): string =>
   // 주어 생략 확정(사용자 2026-08-12): 시점은 1인칭 판단 그대로 두되 "나는/저는/저희는" 주어 명시는
   // 뺀다 — 한국어는 주어 없이도 시점이 전달되고, NO_FABRICATED_EXPERIENCE 의 예문 꼴과도 일치한다.
   '- 1인칭 판단·유보(주어 생략): 글당 최소 2회는 우리의 판단을 단정으로 말하라 — 단 "나는/저는/저희는" 같은 1인칭 주어는 표면에 쓰지 마라. 주어 없이 시점만 남긴다: "다섯 군데를 봅니다", "~라고 봅니다", "이건 심어 봐야 아는 부분입니다", "이럴 땐 자리부터 정합니다". 1~2곳은 "대개", "~인 경우가 많습니다" 수준의 유보를 남겨 모든 주장에 확신 등급을 붙이지 마라. 겪지 않은 사건을 지어내는 것은 계속 금지 — 판단·관점만.\n' +
-  '- 과잉 완결 금지: 모든 문단을 결론 문장으로 닫지 마라 — 글당 2~3개 문단은 관찰만 하고 끝내거나 다음 문단으로 흘려보내라. "~이유입니다/~때문입니다" 클린처는 글당 2회 이하. 소제목 1~2개는 완결 서술문 대신 구("가시, 흰 수액, 떨어지는 것들")나 질문으로 써라.\n' +
+  '- 과잉 완결 금지: 모든 문단을 결론 문장으로 닫지 마라 — 글당 2~3개 문단은 관찰만 하고 끝내거나 다음 문단으로 흘려보내라. "~이유입니다/~때문입니다" 클린처는 글당 2회 이하. '
+  // 2026-10-02 — 소제목 형식은 시드(headingStyle)가 돌린다. 이 문장이 남으면 '번호·키워드 구' 런과 충돌한다.
+  + (variety ? '소제목 형식은 아래 [이번 글 구조] 를 따른다.\n' : '소제목 1~2개는 완결 서술문 대신 구("가시, 흰 수액, 떨어지는 것들")나 질문으로 써라.\n') +
   // 결론 의무(사용자 확정 2026-08-12): 정확성 가드가 과작동해 진단·주장이 사라진 실측("잎 색 변화" 편 —
   // 원인명 0회, 독자가 "무얼 주장하는지 모르겠다") 대응. 문단 미완결(위)과 별개로 글 전체는 반드시 판정을 준다.
   // '오늘 할' 토큰은 뺀다(최종 리뷰 I4) — '오늘 할 일 하나' 모듈이 금지된 런에서 금지 블록과 정면 충돌하던 문구.
@@ -222,7 +226,18 @@ export function buildGenreGuide(axes: readonly string[], teaser?: boolean, avoid
 }
 
 /**
- * 최종 블로그 본문 집필 — 작가(content_lead)가 리서치 브리프[+검수 의견]을 참고해 발행용 본문 1편을 쓴다.
+ * [구성 반복 회피] ⑤번 항목(순수) — 도입 유형을 [이번 글 구조] 에 맡기는 건 그 블록에 **도입 유형 줄이 실제로 있을 때만**이다
+ * (2026-10-02). STRUCTURE_KEEP_BLOCK('기존 골격 유지')에는 도입 유형이 없어, 그 블록만 보고 위임 문구를 넣으면 매달린 참조가 된다.
+ * 지금은 ⑤가 집필 런(structureBlock 전체)에만 실리지만(개정 라운드는 frameAvoid 자체가 비어 있다) 조건을 블록 내용에 묶어 둔다.
+ */
+export function frameOpenerItem(structure: string): string {
+  return structure.includes('- 도입 유형:')
+    ? "⑤ '검색해서 들어오셨을 겁니다' 류 도입 단정(도입 유형은 [이번 글 구조] 를 따른다)."
+    : "⑤ '검색해서 들어오셨을 겁니다' 류 도입 단정(현장 장면 묘사, 절기·날씨 신호, 통념 반박, 실제 질문 인용으로).";
+}
+
+/**
+ * 최종 블로그 본문 집필 —작가(content_lead)가 리서치 브리프[+검수 의견]을 참고해 발행용 본문 1편을 쓴다.
  * 검수 의견은 "약점·주의점 목록"으로 프레이밍한다(발행 판정이 아님) — 적대적 비평("재반려/보류")을 작가가
  * 게이트로 오해해 본문 대신 질문·메타 코멘터리를 내는 퇴화를 막는다. 그래도 소제목 없는 퇴화가 나오면
  * 브리프 단독으로 1회 재집필(검수 의견을 빼 같은 벽에 다시 부딪히지 않게 입력 자체를 바꾼다).
@@ -332,7 +347,10 @@ export async function writeBlogBody(a: {
     + '③ 정해진 시각 스마트폰 사진 여러 장 판정법(아침·정오·오후 3장 등) — 그림자 길이 재기, 화분 들어 무게 느끼기, '
     + '가지에 표식 달고 1주 뒤 대조, 잎 만져 보기, 물 준 날 달력 표시 같은 다른 판정·기록법이 많다 '
     + "④ '세 갈래·네 갈래·N가지' 숫자 쪼개기 남용(이분법 대비, 원칙 하나+예외, 먼저-그다음-마지막 서사로) "
-    + "⑤ '검색해서 들어오셨을 겁니다' 류 도입 단정(현장 장면 묘사, 절기·날씨 신호, 통념 반박, 실제 질문 인용으로).";
+    // 2026-10-02 — 구조 블록이 실리는 런은 도입 유형을 시드가 정한다. 여기서 '통념 반박'을 대안으로 권하면
+    // contrast 가 아닌 런에도 "~라고들 합니다. 그런데" 공식이 새어 든다(40편 실측의 대표 지문). 블록이 없거나 블록에 도입
+    // 유형 줄이 없으면(유지 블록) 종전 문구.
+    + frameOpenerItem(structure);
   // 글의 '장르'가 한 축(예: 구매 전 체크리스트)으로 수렴한 실측(2026-08-01: 07-31 이후 5/5편) 대응.
   // 위 styleAvoid 는 최근 글의 도입·마무리를 피하게 하는데, 최근 글이 전부 같은 장르면 대조군이 사라져
   // 같은 장르를 어색하게 비트는 결과만 나온다 — 그래서 장르 자체를 명시적으로 요구한다.
@@ -937,7 +955,7 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   if (structureSeed) {
     // 로그는 이 런이 실제로 쓰는 필드만 — cardLines·hashtags·shortsScenes 는 카드·쇼츠 잡이 각자 뽑으므로
     // 여기 값은 저장만 되고 아무 데서도 읽히지 않는다(알리면 세트가 공유하는 것으로 오해된다).
-    bus.emit('log', { message: `구조 시드 — 도입 ${structureSeed.openers} · 중심명제 ${structureSeed.thesisQuote} · 표 ${structureSeed.table ? 'O' : 'X'}/체크리스트 ${structureSeed.checklist ? 'O' : 'X'}/예고 ${structureSeed.teaser ? 'O' : 'X'}` });
+    bus.emit('log', { message: `구조 시드 — 도입 ${structureSeed.openers} · 제목 ${structureSeed.titleForm ?? '-'} · 소제목 ${structureSeed.headingStyle ?? '-'}×${structureSeed.headings ?? '-'} · 중심명제 ${structureSeed.thesisQuote} · 표 ${structureSeed.table ? 'O' : 'X'}/체크리스트 ${structureSeed.checklist ? 'O' : 'X'}/예고 ${structureSeed.teaser ? 'O' : 'X'}/빠른답 ${structureSeed.quickAnswer ? 'O' : 'X'}` });
   }
   // 킬스위치는 '뽑기'만이 아니라 '주입'까지 지배한다(Fix wave 소견 2) — off 면 블록을 아예 넣지 않고
   // 작가 지침도 base 문구로 돌아간다(blogBodyGuide). 시드 영속화는 그대로 둔다(리비전 승계 계약 불변).
@@ -948,7 +966,10 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   return packageDesignFinalize({
     bus, topic, company, assign, subproblems, teams: usableTeams,
     critic: critic ?? null, critiqueText, writerTeam, finalDeliverable, brief, serpText, keyword: opts.keyword,
-    mission: opts.mission, writer, personaGuide: personaPrompt(opts.persona, opts.personaText), factCard: factCard || undefined, signal,
+    // 제목 형식(2026-10-02) — 블록 주입과 같은 조건(킬스위치 off 면 넘기지 않아 포장 프롬프트가 종전 그대로).
+    titleForm: structureSeed && CONFIG.structureVariety ? structureSeed.titleForm : undefined,
+    mission: opts.mission, writer, personaGuide: personaPrompt(opts.persona, opts.personaText), factCard: factCard || undefined,
+    pieceId: opts.pieceId, signal,
   });
 }
 
@@ -980,6 +1001,12 @@ async function packageDesignFinalize(a: {
   personaGuide?: string;
   /** 사실 카드(브리프에서 근거 확인된 사실) — 게이트 수정 라운드(writeBlogBody revise)와 게이트 근거 첫 블록에 전달. */
   factCard?: string;
+  /** 이번 런 구조 시드의 제목 형식(2026-10-02) — 포장(formatterFor)에 넘겨 제목 후보 1순위에 건다. 없으면 종전 포장 프롬프트. */
+  titleForm?: TitleForm;
+  /** 연결된 piece — 블로그 실촬영 컷 원장(같은 글은 자기 컷을 다시 쓴다). */
+  pieceId?: string;
+  /** 리비전 런의 원 런 — 실촬영 컷을 원 런 세션에서 복사해 온다. */
+  baseRunId?: string;
   signal?: AbortSignal;
 }): Promise<RunOutcome> {
   const { bus, topic, company, assign, subproblems, teams, critic, critiqueText, writerTeam, brief, serpText, keyword, mission, writer, personaGuide, factCard, signal } = a;
@@ -1130,7 +1157,7 @@ async function packageDesignFinalize(a: {
   if (!signal?.aborted && mission !== 'research') {
     try {
       bus.emit('phase', { team_id: '_ceo', phase: 'review' });
-      assets = await formatterFor('naver_blog')({ topic, body: finalDeliverable, researchBrief: brief, serpText, keyword, model: assign.micro, signal });
+      assets = await formatterFor('naver_blog')({ topic, body: finalDeliverable, researchBrief: brief, serpText, keyword, titleForm: a.titleForm, model: assign.micro, signal });
       bus.emit('log', { message: `초안 포장 — 제목 "${assets.meta.title}" · SEO ${assets.draft.seo.score}/100 · 태그 ${assets.draft.tags.length}개 · 이미지 ${assets.draft.imageSlots.length}슬롯` });
     } catch (e) {
       bus.emit('log', { message: `초안 포장 실패(본문 유지): ${e instanceof Error ? e.message : String(e)}` });
@@ -1142,6 +1169,16 @@ async function packageDesignFinalize(a: {
   //     디자이너가 로스터에 없거나 OPENAI 키 미설정이면 통째로 건너뜀(기존 동작 불변, fail-open). ---
   let autoImages = false;
   const designer = writerTeam?.members.find((m) => (m.tools ?? []).includes('image_generate'));
+  // 블로그 실촬영 컷(2026-10-02 사장님 결정) — 이미지가 실제로 나갈 런(finalize 게이트와 같은 조건)이면 디자이너보다
+  // 먼저 보관소 영상에서 한 장을 뗀다. 나오면 1번 슬롯(첫 [IMAGE:] 마커)이 실사진이고 디자이너는 2·3번만 계획한다.
+  // 킬스위치 BLOG_REAL_FRAME=false · 실패 · 소진이면 null → 종전 그대로 전부 생성 이미지.
+  const realFrame = assets && !signal?.aborted && CONFIG.blogRealFrame
+    && (CONFIG.blogAutoImage || (!!designer && !!CONFIG.openaiApiKey))
+    ? await prepareRealFrame({
+      runId: bus.runId, pieceId: a.pieceId, baseRunId: a.baseRunId, topic, keyword, brand: activeBrandSlug() || undefined, signal,
+      log: (m) => { console.log('[실촬영]', m); bus.emit('log', { message: m }); },
+    })
+    : null;
   if (assets && designer && CONFIG.openaiApiKey && !signal?.aborted) {
     try {
       const slotLines = assets.draft.imageSlots.map((s, i) => `${i + 1}. ${s.alt} — ${s.prompt}`).join('\n') || '(초안 슬롯 없음)';
@@ -1151,7 +1188,11 @@ async function packageDesignFinalize(a: {
         task:
           '수석 작가의 최종 카피를 검토하고(협의), 본문 [IMAGE:] 슬롯과 글의 톤에 맞는 삽입 이미지 계획을 확정하라. ' +
           '각 이미지: alt(대체텍스트, 한국어) · prompt(생성 프롬프트 — 피사체·구도·스타일·조명, 한국 생활 맥락, 텍스트/워터마크/로고 금지, 150자 이내로 간결하게). ' +
-          '최대 3장. 협의 코멘트는 1~2문장으로 짧게, 마지막 줄에 JSON 한 줄로 출력: {"images":[{"alt":"...","prompt":"..."}]}',
+          (realFrame
+            ? `이미지 1번은 이미 정해졌다 — ${realFrame.species} 실물 사진(우리 농원에서 직접 찍은 영상의 한 장면${realFrameSceneTags(realFrame.tags).length ? `, ${realFrameSceneTags(realFrame.tags).join('·')}` : ''})이 본문 첫 [IMAGE:] 마커 자리에 들어간다. ` +
+              '너는 그다음 마커들에 들어갈 생성 이미지만 계획하라 — 최대 2장. 1번처럼 나무 전체를 보여 주는 장면은 반복하지 말고 본문이 설명하는 작업·부위·상황을 보여 줘라. '
+            : '최대 3장. ') +
+          '협의 코멘트는 1~2문장으로 짧게, 마지막 줄에 JSON 한 줄로 출력: {"images":[{"alt":"...","prompt":"..."}]}',
         context:
           `[작가 최종 카피(발췌)]\n${finalDeliverable.slice(0, 5000)}\n\n` +
           (markers.length ? `[본문 IMAGE 마커]\n${markers.map((m, i) => `${i + 1}. ${m}`).join('\n')}\n\n` : '') +
@@ -1159,7 +1200,7 @@ async function packageDesignFinalize(a: {
         // 1600 토큰 — 한국어 상세 프롬프트 3개 + 코멘트가 700 에선 잘려 JSON 이 깨졌다(E2E 실측).
         stage: 'work', emitSpawn: true, groundWikiOnly: true, maxOutputTokens: 1600, signal,
       });
-      const slots = parseImagePlan(plan.text, 3);
+      const slots = parseImagePlan(plan.text, realFrame ? 2 : 3);
       if (slots.length) assets.draft.imageSlots = slots;
       autoImages = true;                               // 슬롯 확정 → finalize 가 실제 이미지 생성
       bus.emit('log', { message: `이미지 기획(${designer.name} 디자이너) — 슬롯 ${assets.draft.imageSlots.length}개 확정${slots.length ? '' : ' (계획 파싱 실패 — 편집자 슬롯 유지)'}` });
@@ -1167,10 +1208,16 @@ async function packageDesignFinalize(a: {
       bus.emit('log', { message: `이미지 기획 실패(무해 — 프롬프트 슬롯 유지): ${e instanceof Error ? e.message : String(e)}` });
     }
   }
+  // 실촬영 컷을 1번 슬롯으로 — 디자이너가 없거나(BLOG_AUTO_IMAGE 경로) 실패해 편집자 슬롯 3개가 남아도 총 3장으로 맞춘다.
+  if (assets && realFrame) {
+    assets.draft.imageSlots = withRealFrameSlot(assets.draft.imageSlots, {
+      alt: realFrame.alt, prompt: `실촬영 — 보관소 영상 ${realFrame.mediaFile.split('/').pop() ?? ''} @${realFrame.atSec}초(생성하지 않음)`,
+    });
+  }
   // 이미지 실생성이 예정된 런(finalize 게이트와 동일 조건)이면 draft.html 이 생성 파일(images/blog-image-0N.png)을
   // <img> 로 참조하게 재렌더 — 본문 [IMAGE:] 마커 위치에 이미지가 실제로 삽입된 미리보기가 된다.
   if (assets) {
-    const imagesReady = !!CONFIG.openaiApiKey && (CONFIG.blogAutoImage || autoImages)
+    const imagesReady = (!!realFrame || (!!CONFIG.openaiApiKey && (CONFIG.blogAutoImage || autoImages)))
       && assets.draft.imageSlots.length > 0 && !signal?.aborted; // 키 없으면 dry-run(파일 미생성) — 자리표시 박스 유지
     assets.files = draftFiles(assets.draft, imagesReady); // 슬롯 갱신 반영 겸 재동기화
   }
@@ -1184,7 +1231,9 @@ async function packageDesignFinalize(a: {
     // 토론 전 초안이 그대로 verified.md 로 새지 않게.
     verifiedInputs: teams.map((t) => ({ id: t.team.lead.id, text: t.deliverable })),
     critique: critic && critiqueText ? { id: critic.id, name: critic.name, text: critiqueText } : undefined,
-    deliverable: finalDeliverable, converged: false, ingestModel: assign.micro, reflectModel: assign.standard, assets, autoImages, signal,
+    deliverable: finalDeliverable, converged: false, ingestModel: assign.micro, reflectModel: assign.standard, assets, autoImages,
+    ...(realFrame ? { realFrame: { file: realFrame.file, alt: realFrame.alt, mediaId: realFrame.mediaId, atSec: realFrame.atSec, species: realFrame.species, ...(realFrame.hash ? { hash: realFrame.hash } : {}) } } : {}),
+    signal,
   });
 
   return {
@@ -1271,6 +1320,10 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
     bus, topic, company, assign, subproblems: [], teams: [],
     critic: null, critiqueText: '', writerTeam, finalDeliverable, brief, factCard: factCard || undefined,
     serpText: await serpPopularBrief(topic, signal), // 제목 재패키징도 인기 패턴 참고(fail-open)
-    keyword: opts.keyword, writer, signal,
+    keyword: opts.keyword, writer,
+    // 제목 형식도 원 런 시드를 승계한다 — 구 기록(필드 없음)이면 undefined → 종전 포장(재포장이 제목 꼴을 바꾸지 않게).
+    titleForm: CONFIG.structureVariety ? structureSeed?.titleForm : undefined,
+    pieceId: opts.pieceId, baseRunId: revise.baseRunId, // 실촬영 컷 — 같은 글은 원 런의 컷을 다시 쓴다(새 컷 소비 없음)
+    signal,
   });
 }

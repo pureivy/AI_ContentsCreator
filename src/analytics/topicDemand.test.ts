@@ -194,6 +194,15 @@ describe('buildDemandBlock — 두뇌 주입 블록(순수)', () => {
     expect(b).toContain('미만 키워드로 주제를 세우지 마라. 수요가 있는 키워드는 그대로 keyword 로 쓰고, 계열 최대 연관어의 검색량이 더 크면 주제는 그 수요를 겨냥하되 표기는 자연스러운 띄어쓰기로 써라.');
     expect(b).not.toContain('그 표기를 우선하라');
   });
+  // 2026-10-02 수종 키워드 하한 면제 — 켜면 하한 문구가 '일반 키워드에만'으로 바뀌고, 끄면(기본 인자) 종전 문구 그대로.
+  it('speciesFloorExempt 면 하한 문구가 수종 없는 일반 키워드에만 걸린다', () => {
+    const on = buildDemandBlock(snap, NOW, [], { speciesFloorExempt: true });
+    expect(on).toContain('/월 하한은 수종 없는 일반 키워드에만 건다 — 수종 키워드는 검색량이 작아도 된다.');
+    expect(on).toMatch(/시즌 지수 [\d.]+ 미만 키워드로 주제를 세우지 마라\./);
+    expect(on).not.toMatch(/검색량 \d+\/월 미만·시즌 지수/);
+    expect(buildDemandBlock(snap, NOW, [], { speciesFloorExempt: false })).toBe(buildDemandBlock(snap, NOW));
+    expect(buildDemandBlock(snap, NOW)).toMatch(/검색량 \d+\/월 미만·시즌 지수/);
+  });
   it(`상위 ${BLOCK_ROWS}줄까지만 담는다`, () => {
     const many: DemandSnap = { date: '2026-08-26', rows: Array.from({ length: 20 }, (_, i) => row({ keyword: `k${i}`, volume: i * 100 })) };
     expect(buildDemandBlock(many, NOW).split('\n').filter((l) => l.startsWith('- ')).length).toBe(BLOCK_ROWS);
@@ -538,6 +547,22 @@ describe('수요 미달 기각 기억 — TTL·정규화 대조·킬스위치·�
     const b = m.demandRejectBlock('테스트나무', new Date('2026-08-21T00:00:00.000Z'));
     expect(b).toContain('새 키워드');
     expect(b).not.toContain('묵은');
+  });
+
+  // 2026-10-02 수종 키워드 하한 면제 — 게이트가 통과시키는 키워드를 '제안 금지'로 싣지 않는다(원장은 그대로).
+  it('skip 에 걸리는 키워드는 블록에서만 빠진다(원장·조회는 그대로)', async () => {
+    seedFile({
+      감나무깍지벌레: { keyword: '감나무 깍지벌레', line: 'L1', ts: '2026-08-20T00:00:00.000Z' },
+      가을거름: { keyword: '가을 거름', line: 'L2', ts: '2026-08-20T00:00:00.000Z' },
+    });
+    const m = await import('./topicDemand');
+    const now = new Date('2026-08-21T00:00:00.000Z');
+    const b = m.demandRejectBlock('테스트나무', now, (k) => k.startsWith('감나무'));
+    expect(b).toContain('가을 거름');
+    expect(b).not.toContain('감나무 깍지벌레');
+    expect(m.demandRejectFor('테스트나무', '감나무 깍지벌레', now)).not.toBeNull();
+    expect(m.demandRejectBlock('테스트나무', now)).toContain('감나무 깍지벌레');   // skip 없으면 종전 그대로
+    expect(m.demandRejectBlock('테스트나무', now, () => true)).toBe('');
   });
 
   it('브랜드별로 격리된다 — 다른 슬러그의 기억은 보이지 않는다', async () => {

@@ -72,11 +72,13 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
     onChanged();
   };
   // 업로드는 서버 뒤에서 수 분 돈다 — 진행 중이면 목록을 주기적으로 다시 읽어 결과(번호·실패 사유)를 반영한다.
+  // 대기 중(네이버 수집·발행이 프로필을 쓰는 중)도 같다 — 서버가 이어서 올리면 '올리는 중'으로 넘어간다.
+  const clipQueued = !!s.naverClipQueuedTs;
   useEffect(() => {
-    if (!s.clipRunning) return;
+    if (!s.clipRunning && !clipQueued) return;
     const t = setInterval(onChanged, 15_000);
     return () => clearInterval(t);
-  }, [s.clipRunning, onChanged]);
+  }, [s.clipRunning, clipQueued, onChanged]);
   const [thumbBusy, setThumbBusy] = useState(false);
   const [thumbErr, setThumbErr] = useState("");
   const doThumbnail = async () => {
@@ -191,6 +193,8 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
               <a className="btn ghost" href={s.naverClipUrl ?? "https://clip.naver.com/"} target="_blank" rel="noreferrer" title={`네이버 클립 #${s.naverClipNo} — 전체공개`}>🟩 클립</a>
             ) : s.clipRunning ? (
               <span className="chip" title="브라우저로 업로드·인코딩·등록 중 — 끝나면 텔레그램으로 알립니다">🟩 클립 올리는 중…(몇 분)</span>
+            ) : clipQueued ? (
+              <span className="chip" title="네이버 성과 수집이나 블로그 발행이 같은 브라우저를 쓰는 중입니다 — 끝나면 서버가 자동으로 올립니다(2시간 넘게 기다리면 취소)">🟩 클립 대기 중 — 끝나면 자동 업로드</span>
             ) : s.naverClipSubmittedTs ? (
               <button className="btn ghost" disabled={clipBusy} onClick={() => doClip(true)}
                 title="'등록'은 눌렀는데 공개 확인을 못 했습니다 — 다시 올리지 않고 클립 목록과 대조만 합니다">
@@ -204,7 +208,7 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
                 {clipBusy ? "시작 중…" : "🟩 네이버 클립(즉시 공개)"}
               </button>
             ))}
-            {canYt && !s.naverClipNo && !s.clipRunning && s.naverClipError && !clipErr && (
+            {canYt && !s.naverClipNo && !s.clipRunning && !clipQueued && s.naverClipError && !clipErr && (
               <span className="muted" style={{ color: "var(--con)" }}>클립 실패: {s.naverClipError}</span>
             )}
             {clipErr && <span className="muted" style={{ color: "var(--con)" }}>{clipErr}</span>}

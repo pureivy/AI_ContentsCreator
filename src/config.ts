@@ -104,6 +104,8 @@ export interface Config {
   readonly naverSessionFile: string;
   /** finalize 후 완성 초안(draft.json)에 이미지 자동 생성(옵트인, 기본 off — 기본 런 경로 불변). */
   readonly blogAutoImage: boolean;
+  /** 블로그 실촬영 컷(2026-10-02) — 글마다 한 장은 보관소 영상 프레임(재사용 금지 원장). false = 전부 생성 이미지(종전). */
+  readonly blogRealFrame: boolean;
   /** ready 도달 시 자동 네이버 임시저장 — SEO 점수가 기준(naverDraftSeoMin) 이상일 때만. 발행은 여전히 사람 수동. */
   readonly autoNaverDraft: boolean;
   /**
@@ -140,6 +142,10 @@ export interface Config {
   readonly moduleRecentPieces: number;
   /** 실검색 각도 검증(2026-09-21) — 후보 수종의 네이버·유튜브 자동완성을 즉석 조회해 제목의 각도가 그 안에 있는지 본다. 없으면 후순위+연관어 노트. off 면 조회·판정 없음. */
   readonly angleCheck: boolean;
+  /** 블로그 자율 주제 수종 필수(2026-10-02) — 자체 데이터 163편: 메인 키워드에 수종이 있는 글이 14일 ×1.4·30일 ×2.5 조회,
+   *  하위 15편은 대부분 수종 없는 일반 주제. on 이면 제안 프롬프트가 수종에 묶고, 일반 키워드는 제목의 수종으로 보정하고,
+   *  그래도 없으면 '수종 없음'으로 기각(수종 붙은 후보가 하나도 없는 틱만 최후 채택). off 면 종전 동작. */
+  readonly blogRequireSpecies: boolean;
   /** 숏폼 읽을 거리(2026-09-18) — 인스타 축 성적에 '이야기·유래' 축, 숏폼 기획 장르 분기(이야기형), 재배 편 훅에
    *  이야기 사실 소재. off 면 셋 다 종전 동작(이야기 편은 '기타'로 분류되고 하우투 지침을 받는다). */
   readonly shortsLore: boolean;
@@ -334,6 +340,11 @@ export interface Config {
   readonly topicDemandGate: boolean;
   /** 월 검색량 하한 — 후보(또는 계열 최대 연관어)가 이 미만이면 기각. 실측 근거: 우리 롱테일이 0~30/월이었다. */
   readonly topicDemandMinVolume: number;
+  /** 수종 키워드는 검색량 하한 면제(2026-10-02 사장님 결정) — 자체 데이터상 조회수는 검색량과 상관이 없었고 실제 유입의 81%가
+   *  '수종 + 증상·시기' 롱테일(검색량 아주 작음)이었다. 수종을 부르는 키워드(requiredSpeciesOf)만 하한을 건너뛰고 시즌 지수
+   *  판정은 그대로, 수종 없는 일반 키워드는 하한 그대로. BLOG_REQUIRE_SPECIES 와 따로 끈다 — 수종 필수를 꺼도 이 결정은 남는다.
+   *  off 면 판정·프롬프트 모두 종전. */
+  readonly demandFloorSpeciesExempt: boolean;
   /** 시즌 지수(0~1) 하한 — 이 미만이면 비수기로 후순위(기각 아님). 0~1 로 클램프. */
   readonly topicDemandMinSeason: number;
   /**
@@ -425,6 +436,7 @@ export const CONFIG: Config = {
   openaiImageModel: env('OPENAI_IMAGE_MODEL', 'gpt-image-2'),
   naverSessionFile: env('NAVER_SESSION_FILE', path.join(ROOT, '.naver_session.json')),
   blogAutoImage: envBool('BLOG_AUTO_IMAGE', false),
+  blogRealFrame: envBool('BLOG_REAL_FRAME', true),
   // 2026-08-27 사용자 확정 — 기본 off. 근거 유무와 무관하게 모든 블로그 글은 수동 검토 후 버튼으로 임시저장한다
   // (SEO 자동 리비전은 그대로 유지 — 꺼지는 건 임시저장 '호출'뿐).
   autoNaverDraft: envBool('AUTO_NAVER_DRAFT', false),
@@ -451,6 +463,7 @@ export const CONFIG: Config = {
   shortsLore: envBool('SHORTS_LORE', true),
   // 실검색 각도 검증(2026-09-21) — 호두나무 실사고: 수종 검색량(9,700)만 보고 '흙부터'라는 각도를 두뇌가 지어냈다.
   angleCheck: envBool('ANGLE_CHECK', true),
+  blogRequireSpecies: envBool('BLOG_REQUIRE_SPECIES', true),
   // 시기·수치 원문 대조(2026-08-27 권고 1) — 활엽수 실사고: 블로그 "근거 확실치 않다" ↔ 쇼츠 "지금이 적기" + 오버레이 "8월".
   timingParity: envBool('TIMING_PARITY', true),
   blogStyleLint: envBool('BLOG_STYLE_LINT', true),
@@ -569,6 +582,7 @@ export const CONFIG: Config = {
   injectedKnowledgeCap: Math.max(500, envInt('INJECTED_KNOWLEDGE_CAP', 10000)),
   topicDemandGate: envBool('TOPIC_DEMAND_GATE', true),
   topicDemandMinVolume: Math.max(0, envInt('TOPIC_DEMAND_MIN_VOLUME', 30)),
+  demandFloorSpeciesExempt: envBool('DEMAND_FLOOR_SPECIES_EXEMPT', true),
   // 1 초과 값은 모든 후보를 비수기로 만든다(0 미만은 게이트 무효) — 오설정이 사이클을 굶기지 않게 클램프.
   topicDemandMinSeason: Math.min(Math.max(0, envFloat('TOPIC_DEMAND_MIN_SEASON', 0.25)), 1),
   // 상한 90일 — 카탈로그 79종에 하루 ~1.7편이 수종 글이라 그 이상은 후보가 구조적으로 마른다.

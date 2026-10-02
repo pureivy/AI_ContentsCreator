@@ -16,6 +16,7 @@ import { genId } from '../util/ids';
 import type { AssetBundle } from '../output';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { renderHtml } from '../output/render';
+import { mergeRealFrameManifest } from '../content/blogFrames';
 
 /**
  * 완성된 blog-image-NN.png 파일명들 → 슬롯 번호(NN) 정렬 매니페스트 images 배열(순수).
@@ -64,6 +65,11 @@ export interface FinalizeArgs {
   assets?: AssetBundle;
   /** 이미지 디자이너가 슬롯을 확정한 런 — 초안 이미지 실생성(generateImagesForDraft) 트리거. */
   autoImages?: boolean;
+  /**
+   * 블로그 실촬영 컷(2026-10-02) — org 가 이미 세션 images/blog-image-01.png 로 써 둔 보관소 영상 프레임.
+   * 있으면 생성은 슬롯 2번부터(02~), 매니페스트 맨 앞에 실촬영 항목(source archive_frame · ai:false)을 합친다.
+   */
+  realFrame?: { file: string; alt: string; mediaId: string; atSec: number; species: string; hash?: string };
   /** 설정 시 LLM Wiki 적재(Karpathy ingest)에 쓸 micro 모델. */
   ingestModel?: string;
   /** 교훈 추출(reflect)용 모델 — 미지정 시 ingestModel. 약한 micro 가 교훈 JSON 을 못 내는 변동성 보완용(standard 권장). */
@@ -136,17 +142,23 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
   //     images/ + image_manifest.json 을 남긴다. 트리거: 이미지 디자이너가 슬롯을 확정한 런(autoImages —
   //     제작팀 image_designer 협의 스테이지) 또는 옵트인 BLOG_AUTO_IMAGE. 둘 다 아니면 기존 런 경로 불변.
   //     OPENAI_API_KEY 없으면 스크립트가 dry-run(계획만). 실패는 무해(런 종료·발행을 막지 않음). ---
-  if ((CONFIG.blogAutoImage || a.autoImages) && a.assets?.files?.length && !a.signal?.aborted) {
+  //     실촬영 컷(realFrame)만 있는 런(디자이너 실패·생성 꺼짐)도 들어온다 — 이미 뗀 실사진을 매니페스트에 올려야
+  //     발행이 그 사진을 쓴다. 그때는 생성 스크립트를 부르지 않는다.
+  if ((CONFIG.blogAutoImage || a.autoImages || a.realFrame) && a.assets?.files?.length && !a.signal?.aborted) {
     try {
       const dir = path.join(CONFIG.sessionsDir, a.bus.runId);
       const draftPath = path.join(dir, 'draft.json');
       const imagesDir = path.join(dir, 'images');
       const manifestPath = path.join(dir, 'image_manifest.json');
       if (fs.existsSync(draftPath)) {
-        const r = await generateImagesForDraft(
-          draftPath, imagesDir, manifestPath,
-          { topic: a.topic, imageStyle: 'photorealistic', limit: 3 }, a.signal,
-        );
+        // 실촬영 컷이 슬롯 1번을 차지한다 — 생성은 2번부터, 파일 번호도 02 부터(번호를 당기면 발행이 매니페스트
+        // index 로 마커에 꽂아 실촬영 자리에 생성 그림이 들어간다). 총 장수는 그대로 3(실촬영 1 + 생성 2).
+        const r = (CONFIG.blogAutoImage || a.autoImages)
+          ? await generateImagesForDraft(
+            draftPath, imagesDir, manifestPath,
+            { topic: a.topic, imageStyle: 'photorealistic', limit: 3, startIndex: a.realFrame ? 1 : 0 }, a.signal,
+          )
+          : { ok: true, output: '생성 이미지 없음 — 실촬영 컷만' };
         // 매니페스트 복원 — 생성이 도중 중단돼 매니페스트가 안 써졌어도 완성된 images/blog-image-NN.png 를
         // 슬롯 번호대로 살려 발행이 쓰게 한다. 없으면 부분 이미지(예: 2/3)가 전부 유실돼 텍스트만 발행되던
         // 회귀 차단(2026-07-24 실측). cardnews 배경 복원과 동일 원리.
@@ -158,6 +170,18 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
             recovered = images.filter(Boolean).length;
             if (recovered) fs.writeFileSync(manifestPath, JSON.stringify({ images }, null, 2), 'utf-8');
           } catch { /* 복원 실패는 무해 — 텍스트만 발행 */ }
+        }
+        // 실촬영 컷을 매니페스트 맨 앞에(index 0, source archive_frame, ai:false). 복원 매니페스트도 여기를 지난다 —
+        // 복원은 표시 없이 blog-image-01.png 를 집어 오므로, 다시 표시하지 않으면 발행이 실사진에 'AI 활용'을 단다.
+        if (a.realFrame && fs.existsSync(a.realFrame.file)) {
+          try {
+            let cur: unknown = {};
+            try { cur = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')); } catch { /* 없음 — 실촬영만 */ }
+            const merged = mergeRealFrameManifest(cur, { ...a.realFrame, file_path: a.realFrame.file });
+            fs.writeFileSync(manifestPath, JSON.stringify(merged, null, 2), 'utf-8');
+          } catch (e) {
+            a.bus.emit(EventType.log, { message: `실촬영 컷 매니페스트 합치기 실패(무해): ${e instanceof Error ? e.message : String(e)}` });
+          }
         }
         // 실재 반영 재렌더(실사고 2026-08-31) — 위에서 저장한 draft.html 의 <img> 는 '이 런은 이미지를
         // 생성할 예정'이라는 **예측**(org.ts)으로 찍힌 것이라, 생성이 실패하면 없는 파일을 가리켜 미리보기가

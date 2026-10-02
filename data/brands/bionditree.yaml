@@ -310,6 +310,10 @@ speciesCatalog:
           - 주목 묘목
           - 주목 심기
           - 주목 전정
+          - 주목 가지치기
+          - 주목 키우기
+          - 주목 열매
+          - 주목 생울타리
       - name: 느티나무
         aliases:
           - 느티
@@ -422,6 +426,15 @@ speciesCatalog:
           - 목서
       - name: 피라칸타
         aliases: []
+      - name: 향나무
+        aliases:
+          - 가이즈카향나무
+          - 가이즈까향나무
+          - 둥근향나무
+          - 옥향
+      - name: 율마
+        aliases:
+          - 골드크레스트
   - group: 특용수·기타(검색량 큰 수종 — 2026-08-27 검
     species:
       - name: 황칠나무
