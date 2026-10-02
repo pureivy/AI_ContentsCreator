@@ -112,16 +112,99 @@ def switch_state(page, label_part: str):
     return loc.first, loc.first.get_attribute("aria-checked") == "true"
 
 
+DROPDOWN = "button[class*='ClipDetailForm_dropdown']"
+# 메뉴 항목이 아닌 곳 — 최근 사용 카테고리 칩(2026-10-02 등장)과 드롭다운 버튼 자신의 글자.
+NOT_MENU_JS = "n => !n.closest(\"[class*='categoryTag']\") && !n.closest(\"button[class*='ClipDetailForm_dropdown']\")"
+
+
+def categories_set(page, first: str, second: str) -> bool:
+    """드롭다운 두 칸에 실제로 그 값이 들어갔는가 — 선택 성공의 유일한 근거."""
+    dd = page.locator(DROPDOWN)
+    try:
+        texts = [dd.nth(i).inner_text(timeout=2000) for i in range(dd.count())]
+    except Exception:
+        return False
+    return any(first in t for t in texts) and any(second in t for t in texts)
+
+
 def pick_menu(page, button_text: str, option_text: str) -> bool:
-    page.locator(f"button:has-text('{button_text}')").first.click()
-    time.sleep(1.0)
-    opt = page.get_by_text(option_text, exact=True)
-    if opt.count() == 0:
+    """드롭다운을 열고 '메뉴 안의 보이는' 항목을 누른다(칩·버튼 글자는 뺀다)."""
+    btn = page.locator(f"{DROPDOWN}:has-text('{button_text}')")
+    if btn.count() == 0:
+        btn = page.locator(f"button:has-text('{button_text}')")
+    if btn.count() == 0:
+        log(f"[카테고리] '{button_text}' 칸을 못 찾음")
+        return False
+    btn = btn.first
+    for _ in range(20):  # 2차 칸은 1차를 고른 뒤에야 활성화된다 — 최대 ~10초
+        if btn.is_enabled():
+            break
+        time.sleep(0.5)
+    else:
+        log(f"[카테고리] '{button_text}' 칸이 활성화되지 않음")
+        return False
+    btn.click()
+    # 항목은 '화면에 보이는 글자(innerText)'로 찾는다. get_by_text(exact) 는 숨은 글자까지 든 textContent 로 맞춰서
+    # 메뉴의 <li>리빙, 홈</li> 을 못 찾았다(2026-10-02 실측 — 펼친 메뉴에 그 항목이 분명히 있었다).
+    find_js = """(t) => {
+      const ok = (n) => { const r = n.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+      const hits = [...document.querySelectorAll('li, [role=option], [role=menuitem]')].filter(n =>
+        (n.innerText || '').trim() === t && ok(n)
+        && !n.closest("[class*='categoryTag']") && !n.closest('nav, aside, header'));
+      return hits.length ? hits[hits.length - 1] : null;
+    }"""
+    opt = None
+    for _ in range(10):  # 메뉴가 펼쳐질 때까지 최대 ~5초
+        time.sleep(0.5)
+        h = page.evaluate_handle(find_js, option_text)
+        opt = h.as_element()
+        if opt is not None:
+            break
+    if opt is None:
+        log(f"[카테고리] '{button_text}' 메뉴에서 '{option_text}' 항목을 못 찾음")
         page.keyboard.press("Escape")
         return False
-    opt.last.click()
+    try:
+        opt.scroll_into_view_if_needed(timeout=3000)
+        opt.click(timeout=5000)
+    except Exception:
+        opt.click(timeout=5000, force=True)  # 펼침 애니메이션이 덜 끝났으면 위치는 맞으니 강제로 누른다
     time.sleep(1.0)
     return True
+
+
+def pick_categories(page, first: str, second: str) -> bool:
+    """카테고리 두 칸을 채운다.
+
+    2026-10-02 실패(모과나무 편, 두 번): 네이버가 폼 아래에 '최근 사용 카테고리' 칩("리빙, 홈 › 원예, 재배")을
+    새로 붙였다. 종전 코드는 `get_by_text("리빙, 홈").last` 로 그 칩 안의 글자를 집어 눌렀고, 칩 글자는
+    눌러도 드롭다운이 안 채워져 2차 칸이 비활성으로 남았다(30초 대기 끝 실패).
+    순서: 이미 채워졌으면 그대로 → 최근 사용 칩(두 값이 다 든 것) → 드롭다운 메뉴. 매번 드롭다운 글자로 확인한다.
+    """
+    if categories_set(page, first, second):
+        log("[카테고리] 이미 선택돼 있음")
+        return True
+    chip = page.locator("[class*='categoryTag']").filter(has_text=first).filter(has_text=second)
+    for i in range(chip.count()):
+        c = chip.nth(i)
+        try:
+            if c.is_visible():
+                c.click(timeout=5000)
+                time.sleep(1.5)
+                if categories_set(page, first, second):
+                    log("[카테고리] 최근 사용 칩으로 선택")
+                    return True
+        except Exception as e:
+            log(f"[카테고리] 칩 선택 실패(드롭다운으로): {str(e)[:80]}")
+        break
+    if not pick_menu(page, "1차 카테고리", first):
+        return False
+    if not pick_menu(page, "2차 카테고리", second):
+        return False
+    ok = categories_set(page, first, second)
+    if ok:
+        log("[카테고리] 드롭다운으로 선택")
+    return ok
 
 
 def attach_blog(page, title: str, res: Result) -> bool:
@@ -360,8 +443,37 @@ def drive(page, args, res: Result, description: str, upload, run_dir: Path, capt
             res.issue(f"커버 업로드 실패 — 프레임 후보 첫 장으로 올라갑니다: {str(e)[:80]}")
 
     # ── 카테고리(필수) ──
-    if not pick_menu(page, "1차 카테고리", args.category_first) or not pick_menu(page, "2차 카테고리", args.category_second):
+    try:
+        cats_ok = pick_categories(page, args.category_first, args.category_second)
+    except Exception as e:
+        log(f"[카테고리] 예외: {str(e)[:200]}")
+        cats_ok = False
+    if not cats_ok:
         page.screenshot(path=str(run_dir / "clip_form.png"), full_page=True)
+        # 진단 덤프 — 화면이 또 바뀌었을 때 어디가 어긋났는지 바로 보이게(1차 메뉴를 연 상태의 DOM).
+        try:
+            dd = page.locator(DROPDOWN)
+            if dd.count():
+                dd.first.click(timeout=3000)
+                time.sleep(1.5)
+            dump = page.evaluate("""(t) => {
+              const out = [];
+              for (const n of document.querySelectorAll('body *')) {
+                if (n.children.length === 0 && (n.textContent || '').trim() === t) {
+                  const r = n.getBoundingClientRect();
+                  const chain = []; let p = n;
+                  for (let i = 0; i < 6 && p; i++, p = p.parentElement) chain.push(p.tagName + '.' + (p.className || '').toString().slice(0, 60) + (p.getAttribute && p.getAttribute('role') ? '[role=' + p.getAttribute('role') + ']' : ''));
+                  out.push({ visible: r.width > 0 && r.height > 0, rect: [r.x, r.y, r.width, r.height].map(Math.round), chain });
+                }
+              }
+              const dds = [...document.querySelectorAll("button[class*='ClipDetailForm_dropdown']")].map(b => ({ text: b.innerText, disabled: b.disabled, expanded: b.getAttribute('aria-expanded') }));
+              return { matches: out, dropdowns: dds };
+            }""", args.category_first)
+            (run_dir / "clip_category_dump.json").write_text(json.dumps(dump, ensure_ascii=False, indent=1), encoding="utf-8")
+            page.screenshot(path=str(run_dir / "clip_category_open.png"), full_page=False)
+            page.keyboard.press("Escape")
+        except Exception as e:
+            log(f"[카테고리] 진단 덤프 실패: {str(e)[:80]}")
         res.save(status="FAILED", error=f"카테고리 선택 실패: {args.category_first} › {args.category_second}")
         return 1
 
