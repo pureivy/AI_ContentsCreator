@@ -3,10 +3,11 @@
 // 외부 요청 없이(오프라인·CSP 안전) 각 브랜드의 식별 요소(형태 + 브랜드 색)를 직접 그린다.
 // 크기는 배지(25×22px) 안에서 도형이 같은 시각 무게를 갖도록 통일.
 
-export type Platform = "naver" | "youtube" | "instagram" | "facebook";
+export type Platform = "naver" | "clip" | "youtube" | "instagram" | "facebook";
 
 const LABEL: Record<Platform, string> = {
   naver: "네이버 블로그",
+  clip: "네이버 클립",
   youtube: "유튜브",
   instagram: "인스타그램",
   facebook: "페이스북",
@@ -26,6 +27,18 @@ export default function PlatformMark({ name, size = 14, mono = false }: { name: 
       <svg {...common}>
         <rect x="2" y="2" width="20" height="20" rx="4" fill={fg ?? "#03C75A"} />
         <path d="M8 7.5v9h2.6v-4.4l2.8 4.4H16v-9h-2.6v4.4L10.6 7.5H8z" fill={mono ? "var(--panel)" : "#fff"} />
+      </svg>
+    );
+  }
+  if (name === "clip") {
+    // 네이버 클립 — 네이버 초록 사각형 위에 클립 크리에이터 마크(원 테두리 + 재생 삼각형)를 흰색으로.
+    // 블로그(N)와 같은 초록을 써서 '네이버 채널'임을 잇고, 모양으로 영상 채널을 가른다.
+    const ink = mono ? "var(--panel)" : "#fff";
+    return (
+      <svg {...common}>
+        <rect x="2" y="2" width="20" height="20" rx="4" fill={fg ?? "#03C75A"} />
+        <circle cx="12" cy="12" r="6" fill="none" stroke={ink} strokeWidth="1.9" />
+        <path d="M10.6 9.4l4 2.6-4 2.6V9.4z" fill={ink} />
       </svg>
     );
   }

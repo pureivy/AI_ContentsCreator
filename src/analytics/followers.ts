@@ -14,6 +14,7 @@ import { getMetaAccount, getNaverAccount, getSecret } from '../secrets/store';
 import { shortsStore } from '../content/shorts';
 import { fetchYoutubeSubscribers } from '../tools/youtubeUpload';
 import { GRAPH, FB_GRAPH } from '../tools/metaPublish';
+import { fetchClipFollowers } from './clipPerf';
 
 export interface FollowerSnapshot {
   date: string; // KST YYYY-MM-DD
@@ -25,6 +26,8 @@ export interface FollowerSnapshot {
   youtube: number | null;
   instagram: number | null;
   facebook: number | null;
+  /** 네이버 클립 팔로워(2026-10-02) — 클립 크리에이터 프로필 정보, 브랜드 프로필 쿠키로 조회. 하위호환 optional. */
+  clip?: number | null;
 }
 
 const kstDate = (): string => new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
@@ -105,14 +108,15 @@ export async function recordFollowersSnapshot(signal?: AbortSignal): Promise<Fol
   const meta = getMetaAccount(slug);
   let naverBlogId = '';
   try { naverBlogId = getNaverAccount(slug).blogId; } catch { /* 계정 미설정 — 이웃 수 생략 */ }
-  const [naver, youtube, instagram, facebook] = await Promise.all([
+  const [naver, youtube, instagram, facebook, clip] = await Promise.all([
     naverBlogId ? fetchNaverNeighbors(naverBlogId, signal) : Promise.resolve(null),
     // OAuth(mine=true) 우선 — 스코프가 upload 뿐이면 403 → API 키 공개 통계 폴백(실측 2026-07-29).
     fetchYoutubeSubscribers(slug, signal).then((n) => n ?? fetchYoutubeSubscribersViaApiKey(slug, signal)),
     meta.pageAccessToken ? fetchIgFollowers(meta.pageAccessToken, signal) : Promise.resolve(null),
     meta.pageId && meta.pageToken ? fetchFbFollowers(meta.pageId, meta.pageToken, signal) : Promise.resolve(null),
+    fetchClipFollowers(slug),
   ]);
-  const snap: FollowerSnapshot = { date: kstDate(), ts: new Date().toISOString(), naver, youtube, instagram, facebook };
+  const snap: FollowerSnapshot = { date: kstDate(), ts: new Date().toISOString(), naver, youtube, instagram, facebook, clip };
   try {
     const file = fileFor(slug);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -127,6 +131,7 @@ export async function recordFollowersSnapshot(signal?: AbortSignal): Promise<Fol
           youtube: snap.youtube ?? todayExisting.youtube,
           instagram: snap.instagram ?? todayExisting.instagram,
           facebook: snap.facebook ?? todayExisting.facebook,
+          clip: snap.clip ?? todayExisting.clip ?? null,
         }
       : snap;
     const all = [...rest, merged].sort((a, b) => a.date.localeCompare(b.date)).slice(-400);
@@ -157,6 +162,8 @@ export function followersSection(): { heading: string; body: string } | null {
       fmt('유튜브', cur.youtube, prev?.youtube),
       fmt('인스타', cur.instagram, prev?.instagram),
       fmt('페북', cur.facebook, prev?.facebook),
+      // 클립은 2026-10-02 시작 — 연결 전 브랜드(기록 없음)는 '미연결'로 소음을 만들지 않게 뺀다.
+      ...(cur.clip != null || prev?.clip != null ? [fmt('클립', cur.clip ?? null, prev?.clip)] : []),
     ].join(' · '),
   };
 }

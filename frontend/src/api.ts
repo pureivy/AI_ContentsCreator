@@ -993,6 +993,8 @@ export interface ShortsPerfRow {
   meta: { permalink: string | null; views: number | null; likes: number | null; reflected: boolean; stale: boolean; series: number[]; ts: string } | null;
   // 페북 릴스 — 미게시면 null. coverPending 이면 커버(썸네일) 미적용 상태.
   fb: { url: string; views: number | null; likes: number | null; series: number[]; ts: string | null; coverPending: boolean } | null;
+  // 네이버 클립(2026-10-02) — 미게시면 null. views = 재생수(클립 크리에이터 집계).
+  clip?: { url: string | null; no: string | null; views: number | null; likes: number | null; series: number[]; ts: string } | null;
 }
 export interface CardnewsPerfRow {
   id: string; topic: string; ts: string; reflected: boolean; stale: boolean;
@@ -1018,6 +1020,7 @@ export interface PerfData {
     fbAsChannel?: boolean;
     summary: {
       shortsYtViews: number; reelsViews: number; cardnewsViews: number; fbReelViews: number;
+      clipViews?: number; clipLikes?: number;
       ytLikes: number; reelsLikes: number; cardnewsLikes: number; fbReelLikes: number; fbPostLikes: number;
     };
   };
@@ -1029,7 +1032,7 @@ export async function fetchPerformance(): Promise<PerfData | null> {
 
 // 팔로워·이웃 일일 스냅샷(브리핑 수집 공유) — 성과탭 채널 카드 표기+추이 그래프용(2026-07-31).
 /** ts = 마지막 수집 시각(ISO) — 하루에 여러 번 갱신되므로 date 만으론 신선도를 알 수 없다(2026-08-02). */
-export interface FollowerSnapshot { date: string; ts?: string | null; naver?: number | null; youtube?: number | null; instagram?: number | null; facebook?: number | null }
+export interface FollowerSnapshot { date: string; ts?: string | null; naver?: number | null; youtube?: number | null; instagram?: number | null; facebook?: number | null; clip?: number | null }
 export interface FollowersData { snapshots: FollowerSnapshot[]; latest: FollowerSnapshot | null; goal: number }
 export async function fetchFollowers(): Promise<FollowersData | null> {
   try { const r = await fetch("/api/followers"); return r.ok ? await r.json() : null; }

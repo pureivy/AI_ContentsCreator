@@ -84,6 +84,7 @@ import { brandThemeCoverage } from '../analytics/discoverySeeds';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
 import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shortsMetaPerfStale } from '../analytics/shortsPerf';
+import { syncShortsClipPerformance } from '../analytics/clipPerf';
 import { shortsFeedShare } from '../analytics/ytAnalytics';
 import { harvestTopicVerdicts, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { seriesGateForText, ensureSeriesLabels } from '../analytics/seriesLedger';
@@ -3031,7 +3032,7 @@ function performanceHandler(c: Context): Response {
   const perfNow = Date.now();
   const perfDays = CONFIG.shortsPerfDays;
   const shortsRows = shortsStore().list().filter(brandMatch)
-    .filter((x) => !!x.youtubeTs || !!x.metaPublishedTs)
+    .filter((x) => !!x.youtubeTs || !!x.metaPublishedTs || !!x.naverClipTs)
     .map((x) => {
       // 조회·좋아요·댓글은 공개 API 표본(youtube:api)에만 있다(2026-09-11) — 'youtube:' 접두는 애널리틱스
       // 표본(조회·시청비율·유입만)까지 잡는다. 수집 틱에서 애널리틱스가 API 뒤에 돌아, 애널리틱스가 잡히는
@@ -3073,7 +3074,12 @@ function performanceHandler(c: Context): Response {
           ts: x.fbReelTs ?? null, // 페북 게시일(인스타와 다를 수 있음). 구 데이터는 null → '—'
           coverPending: !x.fbReelCoverTs,
         } : null,
-        ts: [x.youtubeTs, x.metaPublishedTs].filter(Boolean).sort().pop()!,
+        // 네이버 클립(2026-10-02) — 재생수·좋아요(naver:clip, 매일 수집). 학습 반영은 아직 없다.
+        clip: x.naverClipTs ? (() => {
+          const cm = latestMetricsBySource(x.id, 'naver:clip');
+          return { url: x.naverClipUrl ?? null, no: x.naverClipNo ?? null, views: cm?.views ?? null, likes: cm?.likes ?? null, series: viewsSeriesFor(x.id, 'naver:clip'), ts: x.naverClipTs };
+        })() : null,
+        ts: [x.youtubeTs, x.metaPublishedTs, x.naverClipTs].filter(Boolean).sort().pop()!,
       };
     })
     .sort((a, b) => b.ts.localeCompare(a.ts));
@@ -3123,6 +3129,8 @@ function performanceHandler(c: Context): Response {
       summary: {
         shortsYtViews: shortsRows.reduce((n, r) => n + (r.youtube?.views ?? 0), 0),
         reelsViews: shortsRows.reduce((n, r) => n + (r.meta?.views ?? 0), 0),
+        clipViews: shortsRows.reduce((n, r) => n + (r.clip?.views ?? 0), 0),
+        clipLikes: shortsRows.reduce((n, r) => n + (r.clip?.likes ?? 0), 0),
         cardnewsViews: cardRows.reduce((n, r) => n + (r.ig?.views ?? 0), 0),
         // 채널별 좋아요 — 요약 카드가 조회(크게)+좋아요(작게)를 함께 보여준다(사용자 제안 2026-07-30).
         // 각 값은 해당 표의 좋아요 열 합과 1:1 로 일치.
@@ -3164,6 +3172,7 @@ async function runFastRefresh(): Promise<void> {
     await Promise.allSettled([
       syncShortsPerformance({ force: true }),
       syncShortsMetaPerformance({ force: true }),
+      syncShortsClipPerformance(), // 네이버 클립(2026-10-02) — 쿠키 파일만 읽는 API 호출이라 프로필 락과 무관
       syncCardnewsPerformance({ force: true }),
       // 이웃·구독자·팔로워 — 순수 API 4콜·약 1초. 종전엔 07:30 브리핑에서만 갱신돼 새로고침을 눌러도
       // 카드 숫자가 그대로였다(실측 2026-08-02: 스냅샷이 07-31 에서 정지).
@@ -4730,7 +4739,7 @@ const stopPerfSync = startDaily({
   // 설정 비어 있음 + 스냅샷 07-31 에서 정지). 브리핑 설정 여부와 팔로워 추적은 서로 묶일 이유가 없다.
   // 조회수 감사(2026-08-20) 일일 배선 — 리서치 판정 수확 + 자동완성 트렌드 스냅샷(둘 다 fail-open, 주제 두뇌가 소비).
   // 검색 수요 스냅샷(2026-08-26)도 여기 합류 — 시드 키워드의 절대 검색량·시즌 지수(하루 ~6콜, 킬스위치 off 면 0콜).
-  run: () => { void maintainIgTokens().catch(() => {}); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void recordFollowersSnapshot().catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void refreshDemandSnapshot().catch(() => {}); void refreshYtNicheSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); }, // 전부 순수 API — 프로필 락 무관. 네이버는 아래 새벽 잡으로 분리(2026-08-31).
+  run: () => { void maintainIgTokens().catch(() => {}); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void syncShortsClipPerformance(); void recordFollowersSnapshot().catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void refreshDemandSnapshot().catch(() => {}); void refreshYtNicheSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); }, // 전부 순수 API — 프로필 락 무관. 네이버는 아래 새벽 잡으로 분리(2026-08-31).
   log: (m) => console.log('[perf-sync]', m),
 });
 if (CONFIG.performanceSyncTime) {

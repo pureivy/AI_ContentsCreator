@@ -4,9 +4,9 @@ import { FollowersData } from "../api";
 // 단일 시리즈 라인(범례 불필요 — 제목이 시리즈명), 2px 선·8px+ 히트 타겟·은은한 그리드,
 // 텍스트는 잉크 토큰(시리즈 색 금지) — dataviz 규칙. 외부 의존성 없음(인라인 SVG, Sparkline 관례).
 
-export type FollowerField = "naver" | "youtube" | "instagram" | "facebook";
+export type FollowerField = "naver" | "youtube" | "instagram" | "facebook" | "clip";
 export const FOLLOWER_LABEL: Record<FollowerField, string> = {
-  naver: "네이버 이웃", youtube: "유튜브 구독자", instagram: "인스타 팔로워", facebook: "페이스북 팔로워",
+  naver: "네이버 이웃", youtube: "유튜브 구독자", instagram: "인스타 팔로워", facebook: "페이스북 팔로워", clip: "네이버 클립 팔로워",
 };
 
 /** 스냅샷 배열에서 해당 채널의 (date, value) 시계열 — 수치 없는 날은 제외(수집 실패 날 0 오염 방지). */
