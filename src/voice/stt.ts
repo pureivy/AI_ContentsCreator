@@ -11,7 +11,8 @@ export function sttAvailable(): boolean {
 
 export async function transcribe(
   input: Buffer,
-  opts: { model?: string; lang?: string; signal?: AbortSignal } = {},
+  /** timeoutMs — mlx_whisper 상한(기본 120초). 씬마다 부르는 발음 확인은 짧게 끊는다(ttsCheck). */
+  opts: { model?: string; lang?: string; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<string> {
   const model = opts.model ?? getVoiceSettings().sttModel;
   const lang = opts.lang ?? 'ko';
@@ -25,7 +26,7 @@ export async function transcribe(
       { signal: opts.signal, timeoutMs: 60_000 });
     await audio.run('mlx_whisper',
       [wavPath, '--language', lang, '--model', model, '--output-dir', dir, '--output-format', 'txt'],
-      { signal: opts.signal, timeoutMs: 120_000 });
+      { signal: opts.signal, timeoutMs: opts.timeoutMs ?? 120_000 });
     return fs.existsSync(txtPath) ? fs.readFileSync(txtPath, 'utf-8').trim() : '';
   } finally {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* */ }

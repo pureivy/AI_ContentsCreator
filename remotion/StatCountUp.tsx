@@ -1,12 +1,13 @@
 import React from 'react';
 import { AbsoluteFill, useCurrentFrame } from 'remotion';
-import { countUpValue, sceneFadeOpacity } from './anim';
+import { countUpValue, isStaticStatUnit, sceneFadeOpacity } from './anim';
 import { DrawnUnderline } from './DrawnUnderline';
 
 /** stat 씬 오버레이 — 중앙대(하단 25% 자막 세이프존 회피) 반투명 패널에 CountUp 수치+단위+라벨. */
 export const StatCountUp: React.FC<{ stat: { value: number; unit?: string; label?: string }; total: number; seed?: string }> = ({ stat, total, seed }) => {
   const f = useCurrentFrame();
-  const v = countUpValue(f, total, stat.value);
+  // 달력 월·순번은 세지 않고 처음부터 최종값 — 카운트업 중간값이 다른 날짜로 읽힌다(isStaticStatUnit).
+  const v = isStaticStatUnit(stat.unit) ? stat.value : countUpValue(f, total, stat.value);
   return (
     <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center', paddingBottom: '30%' }}>
       <div style={{ background: 'rgba(0,0,0,.45)', borderRadius: 32, padding: '48px 72px', textAlign: 'center', opacity: sceneFadeOpacity(f, total, 8) }}>

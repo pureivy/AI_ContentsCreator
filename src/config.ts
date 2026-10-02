@@ -255,6 +255,9 @@ export interface Config {
   readonly shortsTtsStitch: boolean;
   /** 쇼츠 훅(0번) 씬 낭독 — 표현 폭을 넓히고(stability↓·style↑) 첫 구절 뒤 0.4초 쉼을 준다(ElevenLabs 전용). SHORTS_HOOK_VOICE=false 킬스위치. */
   readonly shortsHookVoice: boolean;
+  /** 쇼츠 씬 낭독의 수종명 발음 확인(2026-10-02) — 씬마다 로컬 STT(mlx_whisper)로 받아 적어 수종명이 안 들리면 최대 2회 재합성한다.
+   *  실측: 같은 편 안에서 "배롱나무"가 두 씬만 [배록나무]·[배럭나무]로 나왔다. SHORTS_TTS_STT_CHECK=false 킬스위치. */
+  readonly shortsTtsSttCheck: boolean;
   /** 훅(0번) 씬에 실촬영(사진·영상)을 우선 배정 — 첫 화면이 실사면 채널 인상이 달라진다(2026-09-18).
    *  종전엔 훅을 아예 비웠다(정지 화면이 커버로 필요하다는 이유). SHORTS_HOOK_FOOTAGE=false 킬스위치. */
   readonly shortsHookFootage: boolean;
@@ -513,6 +516,7 @@ export const CONFIG: Config = {
   shortsTtsBreaks: envBool('SHORTS_TTS_BREAKS', true),
   shortsTtsStitch: envBool('SHORTS_TTS_STITCH', true),
   shortsHookVoice: envBool('SHORTS_HOOK_VOICE', true),
+  shortsTtsSttCheck: envBool('SHORTS_TTS_STT_CHECK', true),
   shortsHookFootage: envBool('SHORTS_HOOK_FOOTAGE', true),
   shortsCaptions: envBool('SHORTS_CAPTIONS', true),
   shortsTeaser: envBool('SHORTS_TEASER', true),

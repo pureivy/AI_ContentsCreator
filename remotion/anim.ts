@@ -150,6 +150,13 @@ export function countUpValue(local: number, total: number, value: number, settle
   const d = Number.isInteger(value) ? 0 : 1;
   return Number((value * eased).toFixed(d));
 }
+/**
+ * 세는 수가 아닌 단위인가(2026-10-02) — 달력 월·순번은 0부터 올라가면 중간값이 다른 뜻으로 읽힌다.
+ * 실측: "11월 가을 심기 마감선" 카드가 0→11 로 올라가며 "2월 마감선"·"8월 마감선"이 잠깐씩 보였다. 기간인 '개월'은 센다.
+ */
+export function isStaticStatUnit(unit?: string): boolean {
+  return /^(?:월|월초|월말|월중|번째|회차|주차)$/.test((unit ?? '').trim());
+}
 /** 리스트 항목 index 의 등장 진행도(0..1) — enter 프레임부터 씬의 windowRatio 구간에 슬롯 분배. */
 export function staggerProgress(local: number, total: number, index: number, count: number, enter = 15, windowRatio = 0.6, rise = 12): number {
   if (count <= 0) return 1;

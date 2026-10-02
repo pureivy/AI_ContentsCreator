@@ -27,8 +27,8 @@ import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues, parityIssues, parityToInfo } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue, stripUnsourcedStatOverlays } from '../content/timingParity';
 import type { FactGateInfo } from '../content/factGate';
-import { narrationStyleIssues, hookKeywordLeadIssues, hookLengthIssues, metaSummaryIssues, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs } from '../content/styleLint';
-import { promiseStore } from '../content/promises';
+import { narrationStyleIssues, hookKeywordLeadIssues, hookLengthIssues, metaSummaryIssues, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs, closingSceneIssues, announcesNextEpisode, stripNextEpisode, mentionsNextEpisode, screenTextAnnounces } from '../content/styleLint';
+import { promiseStore, MAX_PENDING } from '../content/promises';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame, cutVideoSegment } from '../tools/shortsRender';
@@ -36,7 +36,7 @@ import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, thumbTextQaFailed, type ThumbCopy } from './shortsThumbnail';
 import { inheritShortsAssets, inheritedSceneImages, inheritedClips, reviseClipsFor, reviseImagesFor, readSceneImageMap, writeSceneImageMap } from '../content/shortsInherit';
 import { SOURCES_FILE, type UsageSource } from '../content/mediaUsage';
-import { findSpecies, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom, normalizeLatinName } from '../content/species';
+import { findSpecies, findSpeciesLoose, speciesNamesIn, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom, normalizeLatinName } from '../content/species';
 import { isContainerTopic } from '../analytics/igAxis';
 import { shortsGenreOf, genreGuide, genreSceneGuide, loreHookGuide, loreHookSource, type ShortsGenre } from '../content/shortsGenre';
 import { planAssetScenes, styleRefs, planVideoSegments, orderAssetsByAssignment, SEGMENT_TAIL_SEC, type VideoSegment } from '../content/userAssets';
@@ -786,6 +786,77 @@ export function timingFields(plan: Plan): Array<{ field: string; text: string }>
   return out;
 }
 
+/**
+ * 이 숏폼이 다음 편을 예고해도 되는가(2026-10-02). 셋 중 하나라도 걸리면 예고 금지 — 이유를 함께 돌려준다.
+ * ① 예고 대장 만석 — 등록이 거절돼 지켜지지 않는 약속이 영상에 남는다(실측: 12/12 에서 6편이 낭독, 등록 0).
+ * ② 원글이 예고 이행 글 — 이행 글의 파생이 또 예고하면 약속이 꼬리를 물어 자율 틱이 같은 수종 후속편으로만 찬다
+ *    (기존 266편 중 108편이 예고했다). 연쇄는 한 단계까지만.
+ * ③ 같은 글의 다른 채널 편이 이미 예고했다 — 글 하나에 약속 하나. 이행 글은 블로그·두 채널 숏폼을 다 만든다.
+ * 대장 읽기 실패는 '자리 있음'(fail-open).
+ */
+export function promiseRoomFor(short: { id?: string; brand?: string; sourcePieceId?: string }): { room: boolean; why?: string } {
+  try {
+    if (promiseStore().pending(short.brand ?? '').length >= MAX_PENDING) return { room: false, why: '예고 대장 만석' };
+    if (short.sourcePieceId && promiseStore().fulfilledBy(short.sourcePieceId)) return { room: false, why: '예고 이행 글의 파생(연쇄 예고 금지)' };
+    if (short.sourcePieceId) {
+      const store = shortsStore();
+      for (const sib of store.list()) {
+        if (sib.id === short.id || sib.sourcePieceId !== short.sourcePieceId || sib.stage === 'error') continue;
+        if (promiseStore().list().some((p) => p.sourceId === sib.id && p.status !== 'dropped')) return { room: false, why: '같은 글의 다른 채널 편이 이미 예고' };
+        try {
+          const sp = JSON.parse(fs.readFileSync(path.join(store.dirFor(sib.id), 'plan.json'), 'utf-8')) as { next?: { topic?: string } };
+          if (sp.next?.topic) return { room: false, why: '같은 글의 다른 채널 편이 이미 예고' };
+        } catch { /* 형제 대본 없음 — 통과 */ }
+      }
+    }
+    return { room: true };
+  } catch { return { room: true }; }
+}
+
+/**
+ * 다음 편 예고 정리(순수, 2026-10-02 숏폼 10편 감사) — 낭독 직전 대본 기준으로 '영상이 한 약속 = 대장의 약속'을 맞춘다.
+ *
+ * 자리 있음: next 가 있는데 마지막 씬에 앞을 가리키는 말이 하나도 없으면(mentionsNextEpisode, 넉넉한 판정) next 를
+ *   지운다 — 시청자가 듣지 않은 주제가 대장 자리를 먹지 않게(실측 10편 중 3편). 반대로 예고 문장은 있는데 next 가
+ *   없으면(수정 라운드도 못 채움) 그 문장을 덜어낸다 — 등록할 주제가 없는 약속이다.
+ * 자리 없음: 예고 문장과 자막의 예고 표지를 덜고 next 를 지운다.
+ * 예고 문장뿐인 CTA 면 문장은 그대로 둔다(빈 CTA 보다 낫다) — 수정 라운드 린트가 먼저 잡는 경우다.
+ */
+export function settleNextEpisode<P extends { scenes: Array<{ narration: string; screenText?: string }>; next?: { topic: string; window?: string } }>(
+  plan: P, room: boolean,
+): { plan: P; note?: string } {
+  const lastIdx = plan.scenes.length - 1;
+  const last = plan.scenes[lastIdx];
+  if (!last) return { plan };
+  const announced = announcesNextEpisode(last);
+  const { next: _next, ...withoutNext } = plan;
+  let why: string;
+  if (room) {
+    if (plan.next && !mentionsNextEpisode(last)) return { plan: withoutNext as P, note: `예고 없는 next 제거 — "${plan.next.topic.slice(0, 30)}"(영상이 말하지 않은 약속)` };
+    if (plan.next || !announced) return { plan };
+    why = '예고했지만 next 미선언';
+  } else {
+    if (!announced) return plan.next ? { plan: withoutNext as P, note: '예고 금지 — next 제거' } : { plan };
+    why = '예고 금지';
+  }
+  const stripped = stripNextEpisode(last.narration);
+  const scenes = plan.scenes.map((s, i) => (i === lastIdx
+    ? { ...s, narration: stripped || s.narration, ...(screenTextAnnounces(s.screenText) ? { screenText: '' } : {}) }
+    : s));
+  return {
+    plan: { ...withoutNext, scenes } as P,
+    note: stripped && stripped !== last.narration.trim() ? `${why} — CTA 예고 문장 제거`
+      : stripped ? `${why} — 자막 예고 표지 제거` : `${why} — CTA 가 예고뿐이라 문장은 유지(next 만 제거)`,
+  };
+}
+
+/** 예고 주제에 대상 수종이 없으면 원글의 수종을 붙인다 — 주제가 그대로 다음 글 제목이 되므로(실측: "심는 구덩이 크기와 첫 물주기 순서"). */
+export function promiseTopicWithSpecies(topic: string, context: string): string {
+  if (speciesNamesIn(topic).length) return topic;
+  const sp = findSpeciesLoose(context)?.name;
+  return sp && !topic.includes(sp) ? `${sp} ${topic}` : topic;
+}
+
 /** quote 출처 라벨은 원문(블로그 본문)에 그 문자열이 있을 때만 유지 — 패러프레이즈에 가짜 출처("— 재배 기록")가 붙어 발행된 실측 6건 대응(스펙 §6a). */
 export function pruneQuoteSources(plan: Plan, sourceBody: string | undefined): { plan: Plan; pruned: number } {
   const norm = (s: string) => s.replace(/\s+/g, '').toLowerCase();
@@ -811,8 +882,11 @@ function sourceCoreOf(topic: string, sourceBody: string | undefined): string | u
     : undefined;
 }
 
-async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형'], sourceFlagged: string[] = [], writerRole = 'shorts_writer', recentMainTitles: string[] = [], loreFacts: string[] = []): Promise<Plan | null> {
+async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형'], sourceFlagged: string[] = [], writerRole = 'shorts_writer', recentMainTitles: string[] = [], loreFacts: string[] = [],
+  /** promiseRoom: 예고 대장에 자리가 있는가(없으면 예고 금지) · hookFootage: 씬1(훅)에 그대로 나갈 실촬영 영상의 비전 묘사. */
+  extra: { promiseRoom?: boolean; hookFootage?: string } = {}): Promise<Plan | null> {
   const capSec = CONFIG.shortsMaxDurationSec;
+  const promiseRoom = extra.promiseRoom !== false;
   // 장르 분기(2026-09-18) — 원본 제목이 이야기 축이면 하우투 전용 네 줄(결론·기본형·takeaways·뽑을 것)을 이야기형으로.
   // 재배 편은 사실 공급이 모아 온 이야기 사실을 훅 소재로 받는다. 그 사실은 블로그 본문에 없으므로 정합·시기수치
   // 게이트가 보는 원문(sourceForGates)에도 같은 줄을 덧붙인다 — 안 그러면 훅이 '원문에 없는 사실'로 잡혀 수정된다.
@@ -855,9 +929,17 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 첫 2초 훅 분리(2026-08-20 조회수 감사) — 최근 47편 중 17편이 첫 2초를 키워드·상품명 낭독에 써서
     // 추천 피드 이탈 요인이 됐다. 검색 표기는 제목·캘리·화면텍스트가 담당(사용자 확정 원칙 유지).
     '훅 첫 문장을 키워드·수종명·상품명 낭독으로 열지 마라 — 첫 2초(약 12자)가 스와이프 이탈을 결정한다. 긴장·장면·숫자·상황 지목으로 열고, 키워드 명시는 훅의 뒷문장 또는 씬2에서 하라.',
+    // 훅 화면 고정(2026-10-02 숏폼 10편 감사) — 훅 씬에는 보관소 실촬영이 그대로 나가는데 작가는 그걸 몰라 장면을 지어냈다.
+    // 실측 4/10편: 꽃 핀 배롱나무 밭 위에 "잎 다 떨어진 배롱나무 앞", 길가 대추나무 위에 "가지가 빗자루처럼 뭉쳐",
+    // 서 있는 묘목 위에 "잔뿌리를 만지다 손이 멈췄어요". 비전 묘사는 맞았다(로그 대조) — 작가가 그게 훅인 줄 몰랐던 것.
+    extra.hookFootage ? `[훅 화면 — 씬1 에는 이 실촬영 영상이 그대로 나간다] ${extra.hookFootage}\n씬1(훅) 내레이션은 이 화면에 실제로 보이는 것만 가리켜라 — 화면에 없는 손·도구·뿌리·리본, 화면과 다른 잎 상태(다 떨어진 잎·만개한 꽃)나 병 증상을 지어내지 마라. 위 장면 지목 예시(가위 앞에서 멈춘 손 등)보다 이 규칙이 우선한다. 장면 지목형이면 이 화면 속 대상을 지목하고, 화면이 주제의 장면과 다르면 화면 묘사 없는 단정 선언·숫자형 훅으로 써라.` : '',
     keyword ? `대표 제목(title)과 정보형 제목 후보에는 핵심 키워드 '${keyword}' 를 정확히 이 표기 그대로, 가급적 앞쪽에 포함하라(검색 노출용 — 제한된 글자수를 이유로 키워드를 빼지 마라). 키워드는 명사구 그대로 자연스럽게 결합하고 어미를 붙여 동사화하지 마라.` : '',
-    'CTA 씬은 팔로우할 이유를 담아라 — 이 채널이 계속 주는 가치 한 구절(브랜드 맥락에 맞게) 또는 다음 편 예고 중 하나. "구독과 좋아요 부탁드려요" 같은 기계적 문구 금지. "계속 기록/정리해 드립니다" 계열 문구 재사용 금지 — 기록하는 채널 컨셉은 유지하되 표현은 매편 새로 지어라.',
-    '다음 편 예고를 CTA 에 넣었으면 JSON 의 next 필드에 그 주제와 적절한 시기("N월")를 선언하라 — 예고는 시스템이 약속으로 기록해 그 시기에 실제로 제작한다. 지킬 수 있는 예고만 하고, 예고를 안 했으면 next 를 생략하라.',
+    `CTA 씬은 팔로우할 이유를 담아라 — 이 채널이 계속 주는 가치 한 구절(브랜드 맥락에 맞게)${promiseRoom ? ' 또는 다음 편 예고 중 하나' : ''}. "구독과 좋아요 부탁드려요" 같은 기계적 문구 금지. "계속 기록/정리해 드립니다" 계열 문구 재사용 금지 — 기록하는 채널 컨셉은 유지하되 표현은 매편 새로 지어라.`,
+    // 예고는 대장에 자리가 있을 때만(2026-10-02) — 만석이면 등록이 거절돼 지켜지지 않는 약속이 영상에 남았다(실측 6/10편).
+    // 이행은 다음 자율 틱이다(같은 날 사장님 확정) — 시기를 기다리지 않으므로 지금 계절에 맞는 주제만 예고하게 한다.
+    promiseRoom
+      ? '다음 편 예고를 CTA 에 넣었으면 JSON 의 next 필드에 그 주제를 선언하라 — 예고는 시스템이 약속으로 기록해 **다음 자율 제작(보통 반나절~하루 뒤)에 바로** 블로그 글과 숏폼으로 만든다. 그러니 지금 계절에 바로 할 수 있는 주제만 예고하라. next.topic 에는 대상 수종명을 반드시 넣어라("심는 구덩이 크기" 처럼 대상 없는 주제 금지 — 그대로 다음 글 제목이 된다). window 는 지금 달("N월"). 예고를 안 했으면 next 를 생략하라.'
+      : '이번 편은 다음 편 예고 금지 — 예고 대장이 가득 차 지킬 수 없는 약속이 된다. "다음엔/다음 편에" 문장도, 자막의 \'예고\' 딱지도 쓰지 말고 팔로우할 가치 한 구절로 닫아라. next 필드는 생략하라.',
     '내레이션은 TTS 낭독용: 구어체 존댓말, 숫자는 한글로("30%"→"삼십 퍼센트") — 단 월 이름은 고유어로("10월"→"시월", "6월"→"유월") — 고유어 월은 내레이션에만 쓰고 title·titles·description·screenText·hashtags 에는 숫자 월("9월")을 쓴다. 이모지·괄호 지문 금지. 발음이 헷갈려 뜻이 뒤집히는 표현은 풀어 써라 — "새 가지"는 숫자 "세 가지"로 들리니 "새로 난 가지"처럼, 희귀 활용형("아뭅니다" 류)은 평이한 꼴("잘 아물어요")로.',
     // 이해도 감사(2026-08-11 블라인드 실측) 교훈: 문체 지침이 정의·이유 문장을 밀어내면 파생물이 원문 없이
     // 이해 불가가 된다 — 아래 우선순위 선언이 문체 블록 전체를 지배한다.
@@ -1011,6 +1093,8 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       ...hookKeywordLeadIssues(plan.scenes.map((s) => s.narration), keyword),
       // 훅 20자 한 문장 결정적 린트(§2 2026-09-18) — 문형·글자수 지시만으로는 새므로(같은 사상).
       ...hookLengthIssues(plan.scenes.map((s) => s.narration)).slice(0, 1),
+      // 마무리 씬(2026-10-02, 결정적) — 대장 만석 예고·next 없는 예고·cta 아닌 마지막 씬. 위 캡 합 주석의 총계 밖 ≤2.
+      ...closingSceneIssues(plan.scenes, { promiseRoom, hasNext: !!plan.next }).slice(0, 2),
       ...standalone.slice(0, 4),
       ...parity.slice(0, 2),
       ...timing.slice(0, 3),
@@ -1039,6 +1123,9 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
           titles: fixed.titles.length > 1 ? fixed.titles : plan.titles,
           description: fixed.description || plan.description,
           hashtags: fixed.hashtags.length ? fixed.hashtags : plan.hashtags,
+          // 예고 승계(2026-10-02) — 수정본이 next 를 빠뜨려도 CTA 가 여전히 예고하면 원본 선언을 잇는다. 종전엔
+          // 이 병합이 next 를 떨어뜨려, 영상은 예고하는데 대장엔 안 올라가는 경로가 하나 더 있었다.
+          ...(!fixed.next && plan.next && promiseRoom && announcesNextEpisode(fixed.scenes[fixed.scenes.length - 1]) ? { next: plan.next } : {}),
         };
         planChanged = true;
       }
@@ -1084,6 +1171,11 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       if (inheritedResidual.length) { const m5 = `원문 미검증 주장 승계 잔존 ${inheritedResidual.length}건 — 검토 메시지에 표시`; console.log(`[숏폼] ${m5}`); io.bus?.emit('log', { message: m5 }); }
     }
   } catch { /* 무해 */ }
+  // 다음 편 예고 정리(2026-10-02, 결정적) — 수정 라운드 뒤 최종 대본 기준. 낭독 직전에 finishShortsRun 이 대장을 다시 본다.
+  {
+    const st = settleNextEpisode(plan, promiseRoom);
+    if (st.note) { plan = st.plan; const m = `예고 정리 — ${st.note}`; console.log(`[숏폼] ${m}`); io.bus?.emit('log', { message: m }); }
+  }
   // quote 출처 가드 — factGate 등 위에서 채운 필드는 pruneQuoteSources 가 그대로 스프레드 보존한다(fail-open).
   try {
     const pq = pruneQuoteSources(plan, sourceForGates);
@@ -1093,6 +1185,11 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     }
     return pq.plan;
   } catch { return plan; }
+}
+
+/** 지금 달(KST, 1~12) — 디렉터 프롬프트의 계절 기준. 서버 TZ 와 무관하게 서울 기준. */
+function kstMonthNow(now: number = Date.now()): number {
+  return new Date(now + 9 * 3600 * 1000).getUTCMonth() + 1;
 }
 
 async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: string): Promise<{ preset: string; style: string; prompts: string[]; subject?: string; subjectLatin?: string; species?: import('../content/species').Species }> {
@@ -1110,6 +1207,10 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
     '',
     `각 씬의 세로(9:16) 배경 이미지 프롬프트를 설계하라. scenes 는 정확히 ${plan.scenes.length}개.`,
     '이미지 안 글자 금지.',
+    // 계절·행동 일치(2026-10-02 숏폼 10편 감사) — 디렉터는 지금이 몇 월인지 몰랐다. 실측: 시월 꽃눈 편 두 개가 봄 개화·꽃봉오리
+    // 그림으로 나갔고, "잎이 진 뒤에 자르세요" 씬에 잎 무성한 가지를 가위로 자르는 장면이 나갔다(메시지와 정반대).
+    `계절: 지금은 ${kstMonthNow()}월이다. 모든 씬의 잎·꽃·열매 상태는 지금 계절로 그려라. 그 씬 내레이션이 다른 계절의 모습을 직접 말할 때만(예: "봄에 꽃이 피면") 그 계절로 그린다 — 지나간 일을 떠올리는 말("올여름 꽃 핀 자리")은 지금 계절의 흔적(시든 꽃자리·빈 꽃대)으로 그려라.`,
+    '행동 일치: 내레이션이 미루라거나 하지 말라고 한 행동(예: 잎이 있을 때 자르기)을 화면이 진행 중인 것으로 그리지 마라 — 그 씬은 기다리는 모습이나 올바른 시점의 모습으로 그린다.',
     // 수종 오식별(2026-09-03 실사고) — "측백나무 생울타리" 편에서 4씬 중 1씬만 수종명을 적었고
     // 나머지는 "생울타리", "작은 나무 아이콘들"이라고만 써서, 이미지 모델이 활엽수를 그렸다.
     // 측백나무는 침엽수다. 원예 채널에서 수종이 틀린 화면은 신뢰를 직접 깎는다.
@@ -1371,6 +1472,33 @@ async function finishShortsRun(a: {
 }): Promise<void> {
   const { id, store, dir, short, images, clips, opts, say, checkAbort, lookOffset, spareClips } = a;
   let plan = a.plan;
+  // 낭독 직전 예고 재확인·자리 예약(2026-10-02) — 기획 시점엔 자리가 있었어도 형제 채널 런이 그 사이 예고했을 수 있다.
+  // 등록을 렌더 뒤에 하면 둘 다 확인을 통과하고 뒤엣것만 거절돼 '낭독은 했는데 등록은 없는' 편이 생긴다(리뷰 지적) —
+  // 그래서 확인과 등록을 낭독 전에 한 자리에서 한다. 잡이 실패하면 runShortsJob 이 dropBySource 로 되돌린다.
+  {
+    const rm = promiseRoomFor(short);
+    const notes: string[] = [];
+    let st = settleNextEpisode(plan, rm.room);
+    if (st.note) { plan = st.plan; notes.push(rm.room ? st.note : `${st.note}(${rm.why})`); }
+    if (plan.next?.topic) {
+      let reserved: ReturnType<ReturnType<typeof promiseStore>['create']> = null;
+      try {
+        reserved = promiseStore().create({
+          topic: promiseTopicWithSpecies(plan.next.topic, `${short.keyword ?? ''} ${short.topic} ${plan.title}`), window: plan.next.window,
+          sourceKind: 'shorts', sourceId: id, sourceTopic: plan.title, brand: short.brand ?? null,
+        });
+      } catch { /* 무해 — 아래에서 예고를 덜어낸다 */ }
+      if (reserved) say(`예고 등록(낭독 전 예약) — "${reserved.topic.slice(0, 30)}"`);
+      else {
+        st = settleNextEpisode(plan, false);
+        if (st.note) { plan = st.plan; notes.push(`${st.note}(등록 거절)`); }
+      }
+    }
+    if (notes.length) {
+      try { fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8'); } catch { /* 무해 — 메모리 대본으로 진행 */ }
+      say(`예고 정리(낭독 직전) — ${notes.join(' · ')}`);
+    }
+  }
   // 씬→이미지 매핑을 남긴다 — 형제편이 이걸 읽어 같은 자리에 같은 그림을 놓는다.
   // 실촬영 씬은 이미지를 안 만들어 scenes/ 의 파일 수와 씬 수가 어긋나므로, 이름순 위치로는 밀린다.
   writeSceneImageMap(dir, images);
@@ -1472,18 +1600,15 @@ async function finishShortsRun(a: {
         sourcePieceId: done.sourcePieceId, writer: done.writer, director: done.director, factGate: done.factGate,
       }, finalVideoPath).finally(() => { try { store.update(id, { notifiedTs: new Date().toISOString() }); } catch { /* 무해 */ } });
     }
-    // 예고 대장 등록 — CTA 에 다음 편 예고를 선언했으면 약속으로 기록(자율 틱이 시기 도래 시 이행). 실패 무해.
-    // brand 는 잡의 것을 명시(null=범용) — 라이브 activeBrand 로의 오귀속 방지.
-    if (plan.next?.topic) {
-      try {
-        const pr = promiseStore().create({
-          topic: plan.next.topic, window: plan.next.window,
-          sourceKind: 'shorts', sourceId: id, sourceTopic: plan.title, brand: done?.brand ?? null,
-        });
-        if (pr) say(`예고 등록 — "${pr.topic.slice(0, 30)}"${pr.window ? ` (${pr.window})` : ''}`);
-        else say('예고 등록 보류 — 미이행 약속이 가득(백로그 캡)');
-      } catch { /* 무해 */ }
-    }
+    // 예고 정합 마감(2026-10-02) — 등록은 낭독 전에 예약했다(위). 렌더 뒤 재감량(fit2)이 예고 문장을 지웠으면
+    // 영상에 남은 말이 기준이다 — 예고가 사라졌으면 예약을 취소한다.
+    try {
+      const mine = promiseStore().list().find((p) => p.sourceId === id && p.status === 'pending');
+      if (mine && !mentionsNextEpisode(plan.scenes[plan.scenes.length - 1])) {
+        promiseStore().dropBySource(id);
+        say(`예고 취소 — 최종 대본에서 예고 문장이 빠짐("${mine.topic.slice(0, 30)}")`);
+      }
+    } catch { /* 무해 */ }
   }
 
   // 디자인 썸네일 — 훅 씬 배경 위에 손글씨 제목/핵심(gpt-image). best-effort: 실패해도 완성 유지(엔드포인트가 영상 프레임 폴백).
@@ -1767,6 +1892,7 @@ export async function runShortsJob(
     ], { topic: short.topic, ...(short.keyword ? { keyword: short.keyword } : {}), ...(opts.signal ? { signal: opts.signal } : {}) });
     if (briefs.length) say(`실촬영 소재 ${briefs.length}건 확인 — ${briefs.map((b) => b.what.slice(0, 28)).join(' · ')}`);
     else if (userAssetFiles.length || userVideoFiles.length) say('실촬영 소재를 읽지 못했다 — 길이 기준으로만 배정한다');
+    const hookVideoBriefs = CONFIG.shortsHookFootage ? briefs.filter((b) => b.kind === 'video') : [];
 
     // 1) 기획 — 대본(훅·씬·내레이션·자막)·제목 3후보·설명·해시태그
     store.update(id, { stage: 'planning' });
@@ -1799,9 +1925,17 @@ export async function runShortsJob(
     // 첫 채널의 plan.json 을 기다렸다 출발한다(server/main.ts startAfterSiblingPlan).
     const siblingGuide = siblingPlanToAvoid(short);
 
+    const promiseRoom = promiseRoomFor(short);
+    if (!promiseRoom.room) say(`예고 금지 — ${promiseRoom.why}`);
+    // 훅 화면(2026-10-02) — 보관소 영상 '파일'과 그 비전 묘사가 정확히 하나씩일 때만. 파일이 둘인데 묘사가 하나면
+    // hookFirst 가 묘사 못 받은 다른 영상을 씬1에 둘 수 있다(리뷰 지적).
+    const hookFootage = userVideoFiles.length === 1 && hookVideoBriefs.length === 1 ? hookVideoBriefs[0]!.what : undefined;
     say(`기획 가드 — 채널 ${platformLabel(short.platform)} · 작가 ${writerProfile?.name ?? short.writer ?? '미지정'} · 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 형제 대본 ${siblingGuide ? '주입' : '없음'} · 제목 유형 ${titleTypes.join('·')} · 장르 ${shortsGenreOf(short.topic, CONFIG.shortsLore) === 'lore' ? '이야기형' : '하우투'} · 훅 소재 ${shortsGenreOf(short.topic, CONFIG.shortsLore) === 'howto' && CONFIG.shortsLore ? (opts.loreFacts ?? []).length : 0}건`);
     const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, siblingGuide, mediaPlanGuide(briefs), priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? [], writerRole,
-      recentShortsMainTitles(short.brand, short.id), opts.loreFacts ?? []); // 대표 제목 구조 수렴 차단 · 훅 소재(이야기 사실)
+      recentShortsMainTitles(short.brand, short.id), opts.loreFacts ?? [], // 대표 제목 구조 수렴 차단 · 훅 소재(이야기 사실)
+      // 예고 대장 자리 · 훅 화면(2026-10-02) — 보관소 영상이 정확히 1개면 hookFirst 가 그걸 씬1에 놓는다. 여럿이면 어느 게
+      // 훅이 될지 기획 시점엔 모르므로 묘사를 주지 않는다(종전 mediaPlanGuide 만).
+      { promiseRoom: promiseRoom.room, ...(hookFootage ? { hookFootage } : {}) });
     if (!planned) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     // Plan 타입 재선언 — 길이 상한 루프의 재대입이 클로저(씬 map 등) 내로잉을 풀지 않게 non-null 로 고정.
     let plan: Plan = planned;
@@ -1937,6 +2071,13 @@ export async function runShortsJob(
       userVideoFiles.map((f) => ({ path: f, seconds: videoDurations.get(f) ?? 0, startSec: startHere(f) })).filter((v) => v.seconds > 0),
       sceneEst, videoPrefer, { mustUse: true, hookFirst: CONFIG.shortsHookFootage }, // 보관소 영상 1개는 반드시 들어간다(사용자 확정 2026-09-08)
     );
+    // 훅 화면 약속 점검(2026-10-02) — 작가는 이 영상이 씬1에 나간다고 듣고 훅을 썼다. 배치가 어긋났거나 구간이 되돌려졌으면
+    // 훅 내레이션이 다른 화면을 가리킬 수 있다 — 막지는 않고(디렉터가 훅 이미지를 내레이션에 맞춰 그린다) 흔적을 남긴다.
+    if (hookFootage) {
+      const v0 = videoPlan[0];
+      if (!v0 || v0.path !== userVideoFiles[0]) say('훅 화면 어긋남 — 작가에게 알린 실촬영이 씬1에 배치되지 않았다(훅 이미지로 대체)');
+      else if (startHere(v0.path) !== startOf(v0.path)) say('훅 화면 어긋남 — 실촬영 구간이 앞으로 되돌려져 묘사한 구간과 다르다');
+    }
     const rotated = videoPlan.filter((v) => v && v.startSec > 0).length;
     if (rotated) say(`실촬영 구간 로테이션 — ${rotated}씬이 영상 앞이 아닌 구간(${videoPlan.filter(Boolean).map((v) => `${v!.startSec}초`).join(' · ')})`);
     // 사진은 영상이 훅을 하나도 못 채웠을 때만 훅을 예약한다 — 영상이 우선이다.
@@ -2144,6 +2285,8 @@ export async function runShortsJob(
   } catch (e) {
     const msg = opts.signal?.aborted ? '취소됨' : e instanceof Error ? e.message.slice(0, 300) : String(e);
     store.update(id, { stage: 'error', error: msg });
+    // 낭독 전에 예약한 예고를 되돌린다 — 실패한 편은 아무에게도 약속하지 않았다(2026-10-02).
+    try { if (promiseStore().dropBySource(id)) say('예고 예약 취소 — 실패한 편'); } catch { /* 무해 */ }
     say(`${short.topic.slice(0, 30)} — 실패: ${msg}`);
   } finally {
     RUNNING.delete(id);

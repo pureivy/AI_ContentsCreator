@@ -33,6 +33,11 @@ export function narrationStyleIssues(narrations: string[]): string[] {
     if (n.includes('새 가지')) {
       issues.push(`항목${i + 1}: '새 가지'는 낭독 시 숫자 '세 가지'로 들린다 — '새로 난 가지'처럼 풀어 써라`);
     }
+    // 사동사 오용(2026-10-02 실측, 사과나무 화분 편 두 씬) — "꽃이 잘 안 앉혀요"·"꽃이 고르게 앉혀요".
+    // '앉히다'는 나무가 꽃눈을 앉히는 것이지 꽃이 주어일 수 없다.
+    if (/꽃이[^.?!을를]{0,8}앉혀/.test(n)) { // 목적어(을/를)가 끼면 다른 주어의 문장이다("꽃이 진 뒤 눈을 앉혀요")
+      issues.push(`항목${i + 1}: '꽃이 … 앉혀요'는 주어와 동사가 안 맞는다 — '꽃이 앉아요/달려요' 또는 '(나무가) 꽃눈을 앉혀요'로 고쳐라`);
+    }
   });
   const hook = narrations[0] ?? '';
   if (/(?:보셨나요|라고요|다고요|시나요)\?/.test(hook) && /(정작|사실|그럼 이미)/.test(hook)) {
@@ -94,6 +99,88 @@ export function hookLengthIssues(narrations: string[], max = 24): string[] {
   // 되레 "문제없음"처럼 읽힌다(리뷰 fix round 1 지적). 그 경우는 글자 수만 알린다.
   const detail = terminals >= 2 ? `${stripped.length}자·${terminals}문장` : `${stripped.length}자`;
   return [`항목1: 훅이 ${detail} — 20자 이내 한 문장으로 줄여라(첫 2초가 이탈을 정한다)`];
+}
+
+/**
+ * 다음 편 예고 판별(2026-10-02) — 두 단계로 나눈다. 놓치는 쪽과 잘못 잡는 쪽의 비용이 다르기 때문이다.
+ *
+ * isPromiseSentence(강): 이 문장이 예고인가 — 예고 문장을 덜어낼 때·"예고했는데 next 없음"을 지적할 때 쓴다.
+ *   ① "다음 편/영상/장/시간" 은 그 자체로 예고 ② 앞을 가리키는 말(다음·이어서·다시·돌아오·다뤄…)이 있고
+ *   "~게요/~겠습니다"로 끝나면 예고. 단 "~세요"로 끝나는 지시문은 아니다 — "다음엔 술이 보이는지 보세요"는
+ *   '그다음 순서'다(실측 short_8e9a97b12e). "다음 해 봄에 꽃이 늘어요"·"다음 달엔 거름을 주세요"도 아니다.
+ * mentionsNextEpisode(약): 앞을 가리키는 말이 하나라도 있는가 — next 를 '지울지' 정할 때만 쓴다. 예고한 영상의
+ *   next 를 지우면 약속이 사라지고(이번 수선이 막으려던 바로 그 사고), 예고 안 한 영상의 next 를 남기면 대장 자리를
+ *   하나 더 먹을 뿐이라, 지우는 쪽은 넉넉한 표지로 판정한다. 기존 266편 실측 누락 문형: "다음에 다뤄볼게요",
+ *   "이어서 다뤄볼게요", "다음 장은 ~예요", "시월에 다룰게요", "다시 올게요", "돌아올게요", 자막 "다음엔 ~"·"~은 다음에".
+ */
+const FORWARD_RE = /다음|이어서|다시\s*올|돌아오|돌아올|다뤄|다룰|다룹|예고/;
+// '장마'·'시간대'는 편이 아니다("다음 장마 전엔"). 이 표지는 어미와 무관하게 예고라 지시문 제외보다 먼저 본다
+// ("다음 편도 기대해 주세요", "자세한 방법은 다음 편에서 확인하세요").
+const PROMISE_NOUN_RE = /다음\s*(?:편|영상|장(?!마)|시간(?!대))/;
+const PROMISE_END_RE = /(?:게요|겠습니다|겠어요)[.!?…~]*$/;
+const IMPERATIVE_END_RE = /세요[.!?…~]*$/;
+/** 화면 자막의 예고 표지 — "짧은가지 늘리는 법 예고", "다음엔 겨울눈 이야기", "겨울 전정은 다음에". */
+const NEXT_EPISODE_SCREEN_RE = /예고|다음\s*(?:편|엔|에)/;
+/** next 를 지울지 판정하는 넉넉한 표지(약). */
+const FORWARD_MENTION_RE = /다음|이어|다시|돌아오|돌아올|다뤄|다룰|다룹|영상|예고/;
+
+/** 이 문장이 다음 편 예고인가(순수, 강 판정). */
+export function isPromiseSentence(sentence: string): boolean {
+  const t = sentence.trim();
+  if (!t) return false;
+  if (PROMISE_NOUN_RE.test(t)) return true;
+  if (IMPERATIVE_END_RE.test(t)) return false;
+  return FORWARD_RE.test(t) && PROMISE_END_RE.test(t);
+}
+
+/** 텍스트에서 예고 문장만 덜어낸다(순수). 남는 문장이 없으면 빈 문자열 — 호출측이 원문 유지 여부를 정한다. */
+export function stripNextEpisode(text: string): string {
+  return splitSentences(text).filter((s) => !isPromiseSentence(s)).join(' ').trim();
+}
+
+/** 마지막 씬이 다음 편을 예고하는가(순수, 강) — 내레이션 예고 문장 또는 자막 예고 표지. */
+export function announcesNextEpisode(scene: { narration?: string; screenText?: string } | undefined): boolean {
+  if (!scene) return false;
+  return splitSentences(scene.narration ?? '').some(isPromiseSentence) || NEXT_EPISODE_SCREEN_RE.test(scene.screenText ?? '');
+}
+
+/** 자막이 예고 표지를 달고 있는가(순수) — 대장 만석일 때 자막을 비울지 정한다. */
+export function screenTextAnnounces(screenText: string | undefined): boolean {
+  return NEXT_EPISODE_SCREEN_RE.test(screenText ?? '');
+}
+
+/** 앞 편을 가리키는 말이 하나라도 있는가(순수, 약) — next 를 지울지 판정할 때만 쓴다. */
+export function mentionsNextEpisode(scene: { narration?: string; screenText?: string } | undefined): boolean {
+  if (!scene) return false;
+  return FORWARD_MENTION_RE.test(scene.narration ?? '') || FORWARD_MENTION_RE.test(scene.screenText ?? '');
+}
+
+/**
+ * 마무리 씬 린트(순수, 2026-10-02 숏폼 10편 감사).
+ * ① 예고 대장이 가득 찼는데 마지막 씬이 다음 편을 예고한다 — 등록이 거절돼 지켜지지 않는 약속이 영상에 남는다
+ *    (실측: 대장 12/12 만석에서 10편 중 6편이 "다음엔 ~"을 낭독, 등록 0건).
+ * ② 예고는 했는데 next 를 선언하지 않았다 — 대장에 안 올라가 이행되지 않는다.
+ * ③ 마지막 씬 kind 가 cta 가 아닌 연출(compare 등)이다 — 렌더러는 kind 로 결론 카드·CTA 자막을 고르므로
+ *    마무리가 통째로 빠진다(실측: 감나무·이팝나무 인스타 편이 비교 카드로 끝남).
+ */
+export function closingSceneIssues(
+  scenes: Array<{ narration?: string; screenText?: string; kind?: string }>,
+  opts: { promiseRoom: boolean; hasNext: boolean },
+): string[] {
+  const n = scenes.length;
+  const last = scenes[n - 1];
+  if (!last) return [];
+  const issues: string[] = [];
+  const announced = announcesNextEpisode(last);
+  if (announced && !opts.promiseRoom) {
+    issues.push(`항목${n}: 이번 편은 다음 편 예고 금지(예고 대장이 가득 차 지킬 수 없다) — "다음엔/다음 편" 문장과 자막의 '예고'를 지우고 팔로우할 가치 한 구절로 닫아라. next 는 생략하라`);
+  } else if (announced && !opts.hasNext) {
+    issues.push(`항목${n}: 다음 편을 예고했는데 next 가 없다 — next 에 그 주제(대상 수종명 포함)를 선언하라. 선언하지 않을 거면 예고 문장을 지워라`);
+  }
+  if (last.kind && last.kind !== 'cta') {
+    issues.push(`항목${n}: 마지막 씬 kind 가 "${last.kind}" 다 — 마지막 씬은 kind="cta" 로 닫아라(그 연출은 본문 씬으로 옮겨라). cta 가 아니면 결론 카드가 화면에 안 나온다`);
+  }
+  return issues;
 }
 
 /**

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadSpecies, findSpecies, findSpeciesLoose, speciesAnchor, speciesSeasonalHint, speciesNameFrom, appendSpecies, resetSpeciesCache, stripSpeciesNamePrefix } from './species';
+import { loadSpecies, findSpecies, findSpeciesLoose, speciesNamesIn, speciesAnchor, speciesSeasonalHint, speciesNameFrom, appendSpecies, resetSpeciesCache, stripSpeciesNamePrefix } from './species';
 
 const LIST = loadSpecies();
 
@@ -71,6 +71,35 @@ describe('findSpecies — 키워드에서 수종 찾기', () => {
     expect(findSpecies('9월 정원 준비')).toBeUndefined();
     expect(findSpecies('')).toBeUndefined();
     expect(findSpecies('나무 상처 치료제')).toBeUndefined();
+  });
+});
+
+describe('speciesNamesIn — 낭독에서 들려야 할 수종명(발음 확인용, 순수)', () => {
+  it('원문에 쓰인 이름을 그대로 — 실측 배롱나무 편 씬1·2', () => {
+    expect(speciesNamesIn('이 배롱나무, 가지를 쳐도 될까요.')).toEqual(['배롱나무']);
+    expect(speciesNamesIn('배롱나무 전정은 잎이 떨어진 뒤로 미룹니다. 배롱나무는 추위에 약해요.')).toEqual(['배롱나무']);
+  });
+  it('긴 이름 안의 짧은 이름은 따로 세지 않는다', () => {
+    expect(speciesNamesIn('흰배롱나무 꽃이 핍니다')).toEqual(['흰배롱나무']);
+    expect(speciesNamesIn('공작단풍나무 전정')).toEqual(['공작단풍나무']);
+    expect(speciesNamesIn('백일홍나무라고도 부릅니다')).toEqual(['백일홍나무']);
+  });
+  it('긴 이름과 따로 떨어져 나오면 짧은 이름도 센다', () => {
+    expect(speciesNamesIn('공작단풍나무는 단풍나무보다 잎이 잘게 갈라집니다')).toEqual(['공작단풍나무', '단풍나무']);
+  });
+  it('별칭은 대표명으로 바꾸지 않는다 — 들려야 하는 건 쓰인 낱말이다', () => {
+    expect(speciesNamesIn('백일홍 꽃은 백 일 간다')).toEqual(['백일홍']);
+  });
+  it('여러 수종이면 모두', () => {
+    expect(speciesNamesIn('이팝나무와 배롱나무를 나란히 심었다').sort()).toEqual(['배롱나무', '이팝나무']);
+  });
+  it('수종명이 없으면 빈 배열 — 확인 자체를 건너뛴다', () => {
+    expect(speciesNamesIn('지금은 눈으로 기록할 때예요. 올여름 꽃 핀 자리와 안 핀 가지를 구분해 두세요.')).toEqual([]);
+    expect(speciesNamesIn('')).toEqual([]);
+  });
+  it('표를 넘겨받아 쓴다(가상 목록)', () => {
+    const list = [{ name: '가나나무', latin: 'A b', aliases: ['가나'] }, { name: '다라', latin: 'C d' }];
+    expect(speciesNamesIn('가나나무 옆 가나, 다라', list).sort()).toEqual(['가나', '가나나무', '다라']);
   });
 });
 

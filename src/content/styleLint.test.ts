@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { narrationStyleIssues, cardStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, blogStyleIssues, styleRevisionReject, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs, hookLengthIssues } from './styleLint';
+import { narrationStyleIssues, cardStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, blogStyleIssues, styleRevisionReject, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs, hookLengthIssues, closingSceneIssues, stripNextEpisode, announcesNextEpisode, isPromiseSentence, mentionsNextEpisode } from './styleLint';
 
 describe('hookLengthIssues — 훅 20자 한 문장(2026-09-18)', () => {
   it('24자 초과면 지적', () => {
@@ -363,5 +363,85 @@ describe('monthWordOutsideNarration — 고유어 월은 내레이션에만', ()
     // 대신 '의도된 동작'으로 못박는다(뒤집으려면 계획서의 경계 목록부터 고쳐야 한다).
     expect(monthWordOutsideNarration('이월 재고')).toBe('2월 재고');
     expect(monthWordOutsideNarration('이월 묘목')).toBe('2월 묘목');
+  });
+});
+
+describe('꽃이 앉혀요 — 사동사 오용(2026-10-02 실측)', () => {
+  it('꽃이 주어인 앉혀요를 잡는다', () => {
+    expect(narrationStyleIssues(['훅', '옆구리엔 잎눈뿐이라 꽃이 잘 안 앉혀요.']).some((x) => x.includes('앉혀요'))).toBe(true);
+    expect(narrationStyleIssues(['훅', '내년 꽃이 고르게 앉혀요.']).some((x) => x.includes('앉혀요'))).toBe(true);
+  });
+  it('나무가 꽃눈을 앉히는 꼴은 통과', () => {
+    expect(narrationStyleIssues(['훅', '사과나무는 짧은가지 끝에 꽃눈을 앉혀요.']).some((x) => x.includes('앉혀요'))).toBe(false);
+  });
+});
+
+describe('closingSceneIssues — 마무리 씬(2026-10-02 숏폼 10편 감사)', () => {
+  const body = [{ narration: '훅', kind: 'hook' }, { narration: '본문' }];
+  it('대장 만석인데 예고하면 지적', () => {
+    const r = closingSceneIssues([...body, { narration: '꽃눈을 세어 보세요. 다음엔 전정 요령을 짚어볼게요.', kind: 'cta' }], { promiseRoom: false, hasNext: true });
+    expect(r).toHaveLength(1);
+    expect(r[0]).toContain('예고 금지');
+  });
+  it('자막의 예고 딱지도 예고로 본다', () => {
+    expect(announcesNextEpisode({ narration: '가지 뻗기를 다스려야 해요.', screenText: '짧은가지 늘리는 법 예고' })).toBe(true);
+  });
+  it('여유가 있는데 next 없이 예고하면 선언을 요구', () => {
+    const r = closingSceneIssues([...body, { narration: '자른 자리는 다음 편에 보여드릴게요.', kind: 'cta' }], { promiseRoom: true, hasNext: false });
+    expect(r[0]).toContain('next 가 없다');
+  });
+  it('여유가 있고 next 가 있으면 통과', () => {
+    expect(closingSceneIssues([...body, { narration: '다음엔 겨울눈 보는 법 짚어볼게요.', kind: 'cta' }], { promiseRoom: true, hasNext: true })).toEqual([]);
+  });
+  it('"다음 해"·"다음 달"은 예고가 아니다', () => {
+    expect(announcesNextEpisode({ narration: '다음 해 봄에 꽃이 늘어요. 다음 달엔 거름을 주세요.' })).toBe(false);
+  });
+  it('마지막 씬이 compare 면 cta 로 닫으라고 지적', () => {
+    const r = closingSceneIssues([...body, { narration: '말라 있으면 눕혀 묻어 두세요.', kind: 'compare' }], { promiseRoom: true, hasNext: false });
+    expect(r).toHaveLength(1);
+    expect(r[0]).toContain('kind="cta"');
+  });
+});
+
+describe('stripNextEpisode', () => {
+  it('예고 문장만 덜어낸다', () => {
+    expect(stripNextEpisode('낙엽 확인 후 가위를 드세요. 자른 자리는 다음 편에 보여드릴게요.')).toBe('낙엽 확인 후 가위를 드세요.');
+  });
+  it('예고뿐이면 빈 문자열', () => {
+    expect(stripNextEpisode('다음엔 겨울눈 보는 법 짚어볼게요.')).toBe('');
+  });
+});
+
+describe('isPromiseSentence — 실제 문형(2026-10-02 리뷰, 기존 266편)', () => {
+  it.each([
+    '화분나무 이야기는 다음에 다뤄볼게요.', '이어서 다뤄볼게요.', '다음 장은 물 주기 차이예요.', '가을엔 흙 배합도 다뤄볼게요.',
+    '시월에 다룰게요.', '다시 올게요.', '돌아올게요.', '다음 영상에서 열매 솎는 법 알려드릴게요.', '다음엔 겨울눈 보는 법 짚어볼게요.',
+    '자른 자리는 다음 편에 보여드릴게요.',
+  ])('예고: %s', (s) => expect(isPromiseSentence(s)).toBe(true));
+  it.each([
+    '다음엔 술이 보이는지 보세요.', '다음 해 봄에 꽃이 늘어요.', '다음 달엔 거름을 주세요.', '계속 기록해 드릴게요.', '낙엽 확인 후 가위를 드세요.',
+  ])('예고 아님: %s', (s) => expect(isPromiseSentence(s)).toBe(false));
+  it('자막 표지 — "다음엔 ~", "~은 다음에", "다음 편:"', () => {
+    expect(announcesNextEpisode({ narration: '지금 보세요.', screenText: '다음엔 겨울눈 이야기' })).toBe(true);
+    expect(announcesNextEpisode({ narration: '지금 보세요.', screenText: '겨울 전정은 다음에' })).toBe(true);
+    expect(announcesNextEpisode({ narration: '지금 보세요.', screenText: '다음 편: 자르는 자리' })).toBe(true);
+  });
+  it('약한 표지(mentionsNextEpisode)는 넉넉하다', () => {
+    expect(mentionsNextEpisode({ narration: '열매 이야기는 이어집니다.' })).toBe(true);
+    expect(mentionsNextEpisode({ narration: '뿌리 보고 결정하세요.' })).toBe(false);
+  });
+  it('"꽃이 진 뒤 눈을 앉혀요"는 사동사 오용이 아니다', () => {
+    expect(narrationStyleIssues(['훅', '꽃이 진 뒤 눈을 앉혀요.']).some((x) => x.includes('앉혀요'))).toBe(false);
+  });
+});
+
+describe('isPromiseSentence — 재검토 경계(2026-10-02)', () => {
+  it('"다음 편" 표지는 지시문 어미여도 예고', () => {
+    expect(isPromiseSentence('다음 편도 기대해 주세요.')).toBe(true);
+    expect(isPromiseSentence('자세한 방법은 다음 편에서 확인하세요.')).toBe(true);
+  });
+  it('"다음 장마"·"다음 시간대"는 예고가 아니다', () => {
+    expect(isPromiseSentence('다음 장마 전엔 배수로를 파 둬요.')).toBe(false);
+    expect(isPromiseSentence('다음 시간대엔 그늘이 들어요.')).toBe(false);
   });
 });

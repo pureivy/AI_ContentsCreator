@@ -95,7 +95,7 @@ import { syncCardnewsPerformance, cardnewsPerfStale } from '../analytics/cardnew
 import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
 import { buildTitleTimingReport } from '../analytics/titleTiming';
-import { promiseStore } from '../content/promises';
+import { promiseStore, choosePromise } from '../content/promises';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
 import { shouldArchiveShortsVideo } from '../content/shortsArchive';
 import { runJanitor, type JanitorDeps } from '../autonomy/janitor';
@@ -2526,7 +2526,9 @@ type NaverDraftStart = { ok: true } | { error: string; status: 400 | 404 | 409 }
 function autoDeriveSet(id: string, title: string): void {
   // 자율런 상한을 걸 대상인가 — 사용자가 주제를 넣어 돌린 글, "오토런 지시"로 시작한 글은 밖이다.
   // (사용자 확정 2026-09-04. 종전엔 이 구분이 없어 직접 돌린 글의 숏폼이 통째로 누락됐다.)
-  const capped = autoCapApplies(pieceStore().get(id));
+  // 예고 이행 글은 상한 밖이다(2026-10-02 사장님 확정 "예고가 있으면 그 주제로 블로그·숏폼을 우선 제작") — 저녁 슬롯이
+  // 약속을 갚을 때 유튜브 몫(하루 1편)이 아침에 이미 찼으면 유튜브 시청자에게 한 예고가 숏폼 없이 끝난다.
+  const capped = autoCapApplies(pieceStore().get(id)) && !promiseStore().fulfilledBy(id);
   if (CONFIG.autoCardNews && !cardNewsStore().list().some((x) => x.sourcePieceId === id)) {
     const dc = deriveCardNewsFromPiece(id);
     console.log('error' in dc
@@ -4300,9 +4302,9 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
     const topicTarget = pickTopicTarget(pieces, Date.now(), tickBrand);
     console.log(`[auto-cycle] 채널 목표 — ${platformLabel(topicTarget)} (오늘 자율 생산분 기준 번갈기${topicTarget === 'instagram' ? ' · 클러스터 형제 공급로 건너뜀' : ''})`);
     // 예고 이행 우선 — 콘텐츠가 시청자에게 한 "다음 편" 약속은 신규 아이디어보다 먼저 갚는다
-    // (사용자 지적 2026-07-30: 예고만 하고 안 지키면 신뢰 역효과). 시기 명시+시즌 창 안의 약속만
-    // 자동 대상(무기한 선점 방지 — 리뷰 반영). 이행 piece 가 ready 되면 기존 자동 파생이
-    // 카드뉴스·쇼츠까지 이어주고, priorCoverage 가 앞선 편의 앵글을 주입한다.
+    // (사용자 지적 2026-07-30: 예고만 하고 안 지키면 신뢰 역효과). 2026-10-02 부터 시기와 무관하게 다음 틱에서
+    // 등록순으로 갚는다(아래 choosePromise). 이행 piece 가 ready 되면 기존 자동 파생이 카드뉴스·쇼츠까지
+    // 이어주고(약속 이행 글은 숏폼 자율 하루 상한 면제 — autoDeriveSet), priorCoverage 가 앞선 편의 앵글을 주입한다.
     try {
       // 정합 복원 — 이행 piece 가 삭제·종료실패(stage:'error')면 약속을 pending 으로 되살린다
       // ("갚은 척 기록만 남는" 신뢰 역전 방지). 저비용이라 매 틱 수행.
@@ -4316,48 +4318,26 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
       // nextDue 앞에 둔다 — 만료분이 후보에서 먼저 빠져야 이번 틱이 살아 있는 약속을 본다.
       const expired = promiseStore().expire(tickBrand);
       for (const e of expired) console.log(`[auto-cycle] 예고 만료 폐기 — "${e.topic.slice(0, 40)}" (${e.window ?? '시기 미상'} 창 경과) → dropped`);
-      const due = promiseStore().nextDue(tickBrand);
-      if (due) {
-        // 브랜드 소재 게이트 — 예고 경로는 신규성·범위 검사를 다 우회하므로 여기서 막는다. 게이트 신설(2026-07-31)
-        // 이전에 등록된 오프브랜드 약속의 이행 방지. 걸리면 dropped 처리 후 신규 아이디어로 폴백.
-        const off = offBrandTerm(due.topic);
-        // 소재 포화 게이트 — 예고 이행은 신규성·포화 검사를 우회해 같은 축을 자기복제한다(실측 2026-08-01:
-        // 감나무묘목 글이 예고한 "상자 받으면 뿌리·접목부 확인"이 그대로 다음 글로 발주). 이행 시점에
-        // 코퍼스가 이미 그 소재로 포화면 미룬다 — dropped 가 아니라 pending 유지(시즌·맥락이 바뀌면 살아난다).
-        const satur = off ? [] : saturatedThemeMatches({ title: due.topic }, collectExistingContent(tickBrand || undefined), 3, getBrand()?.compoundStems ?? []);
-        // 최근 수종 게이트(2026-09-17) — 예고 경로는 후보 루프를 통째로 우회하므로 여기서도 막는다.
-        // dropped 가 아니라 보류(pending 유지) — 소재 포화와 같은 성질이다: 창이 지나면 저절로 풀린다.
-        const recentSp = (off || satur.length) ? null : usedRecentlyFor(due.topic, tickBrand || undefined);
-        const recentTh = (off || satur.length || recentSp) ? null : usedThemeRecentlyFor(due.topic, tickBrand || undefined);
-        // 사실 부족 수종 게이트(최종 리뷰 I1) — 부족으로 닫힌 조각은 error 라 최근 수종 지도에 안 보이고, 예고는
-        // reconcile 이 pending 으로 되살려 틱마다 같은 수종을 다시 잡았다. 후보 루프의 14일 게이트를 여기도 복사한다.
-        const starvedSp = (off || satur.length || recentSp || recentTh) ? null : factStarvedRecentlyFor(due.topic, tickBrand || undefined);
-        if (off) {
-          promiseStore().update(due.id, { status: 'dropped' });
-          console.log(`[auto-cycle] 예고 기각(브랜드 범위 밖) — "${due.topic.slice(0, 40)}" (소재 "${off}") → dropped`);
-        } else if (satur.length) {
-          console.log(`[auto-cycle] 예고 보류(소재 포화) — "${due.topic.slice(0, 40)}" ≈ "${satur[0]!.title.slice(0, 30)}" → 신규 아이디어로 폴백`);
-        } else if (recentSp) {
-          console.log(`[auto-cycle] 예고 보류(최근 수종) — "${due.topic.slice(0, 40)}" (${recentSp.name} ${recentSp.daysAgo}일 전) → 신규 아이디어로 폴백`);
-        } else if (recentTh) {
-          console.log(`[auto-cycle] 예고 보류(최근 축) — "${due.topic.slice(0, 40)}" (${recentTh.theme} ${recentTh.daysAgo}일 전) → 신규 아이디어로 폴백`);
-        } else if (starvedSp) {
-          console.log(`[auto-cycle] 예고 보류(사실 부족 수종) — "${due.topic.slice(0, 40)}" (${starvedSp.name} ${starvedSp.daysAgo}일 전) → 신규 아이디어로 폴백`);
-        } else {
-          // 검색 수요 게이트(2026-08-26 리뷰 C1) — 기존 검사(범위·포화) 뒤, 채택 직전.
-          // 미달은 pending 유지가 아니라 dropped 다: 월 검색량은 기다린다고 바뀌지 않아(포화처럼 시간이
-          // 풀어 주는 조건이 아니다) pending 으로 두면 틱마다 재조회하며 영원히 미이행으로 남는다.
-          const dem = await demandCheckFor(due.topic, '예고', signal, tickBrand);
-          if (dem.verdict === 'reject') {
-            promiseStore().update(due.id, { status: 'dropped' });
-            console.log(`[auto-cycle] 예고 폐기(검색 수요 미달) — "${due.topic.slice(0, 40)}" (${dem.line})`);
-          } else {
-            const piece = pieceStore().create({ title: due.topic, brand: tickBrand || undefined, auto: true, userTriggered });
-            // fulfilled 마킹은 여기서 하지 않는다 — launch 가 런을 실제로 시작한 뒤에만(아래 launch 참조).
-            console.log(`[auto-cycle] 예고 이행 착수 — "${due.topic.slice(0, 40)}" (출처: ${due.sourceKind}${due.window ? ` · ${due.window}` : ''})`);
-            return { kind: 'piece', piece, promiseId: due.id };
-          }
-        }
+      // 이행 — 대기열을 등록순으로 훑어 첫 통과분을 갚는다(2026-10-02 사장님 확정: "예고가 있으면 다음 오토런에서
+      // 그 주제로 블로그·숏폼을 우선 제작"). 종전엔 시즌 창 안의 맨 앞 1건만 보고, 그게 소재 포화·최근 수종·최근 축·
+      // 검색 수요 게이트에 걸리면 신규 아이디어로 넘어갔다 — 실측: 07-29 배롱나무 약속이 포화 오탐('나무' 어간)에
+      // 40틱 연속 보류되는 동안 뒤 약속은 한 번도 검토되지 않았고 31건 중 이행 0. 다양성 게이트는 시스템이 스스로
+      // 고르는 주제용이라 약속에는 안 건다(choosePromise 주석). 브랜드 범위 밖=폐기, 사실 부족 수종=보류만 남긴다.
+      const choice = choosePromise(promiseStore().dueQueue(tickBrand), {
+        offBrand: (t) => offBrandTerm(t) || null,
+        starved: (t) => { const sp = factStarvedRecentlyFor(t, tickBrand || undefined); return sp ? `${sp.name} ${sp.daysAgo}일 전` : null; },
+      });
+      for (const d of choice.dropped) {
+        promiseStore().update(d.promise.id, { status: 'dropped' });
+        console.log(`[auto-cycle] 예고 기각(브랜드 범위 밖) — "${d.promise.topic.slice(0, 40)}" (소재 "${d.term}") → dropped`);
+      }
+      for (const h of choice.held) console.log(`[auto-cycle] 예고 보류(사실 부족 수종) — "${h.promise.topic.slice(0, 40)}" (${h.reason}) → 다음 약속`);
+      if (choice.pick) {
+        const due = choice.pick;
+        const piece = pieceStore().create({ title: due.topic, brand: tickBrand || undefined, auto: true, userTriggered });
+        // fulfilled 마킹은 여기서 하지 않는다 — launch 가 런을 실제로 시작한 뒤에만(아래 launch 참조).
+        console.log(`[auto-cycle] 예고 이행 착수 — "${due.topic.slice(0, 40)}" (출처: ${due.sourceKind}${due.sourceTopic ? ` · ${due.sourceTopic.slice(0, 30)}` : ''} · 대기 ${choice.held.length}건 건너뜀)`);
+        return { kind: 'piece', piece, promiseId: due.id };
       }
     } catch { /* 예고 대장 실패 무해 — 신규 아이디어로 폴백 */ }
     // 클러스터 형제 소진(스펙 2026-08-06) — 예고(약속)보다 뒤, 신규 아이디어보다 앞(검색 수요가 자동완성으로
@@ -4725,7 +4705,11 @@ if (!process.env.VITEST) {
   const orphanShorts = shortsStore().list().filter((x) => x.stage !== 'ready' && x.stage !== 'error');
   const recoverIds = orphanShorts.filter((x) => (x.recoveries ?? 0) < 2).map((x) => x.id);
   for (const x of orphanShorts) {
-    if (!recoverIds.includes(x.id)) shortsStore().update(x.id, { stage: 'error', error: `${orphanErr} (자동 재개 2회 소진)` });
+    if (!recoverIds.includes(x.id)) {
+      shortsStore().update(x.id, { stage: 'error', error: `${orphanErr} (자동 재개 2회 소진)` });
+      // 낭독 전에 예약한 예고가 남지 않게(2026-10-02) — 끝내 영상이 안 나온 편은 아무에게도 약속하지 않았다.
+      try { promiseStore().dropBySource(x.id); } catch { /* 무해 */ }
+    }
   }
   if (recoverIds.length) {
     const timer = setTimeout(() => {

@@ -7,6 +7,9 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { synthesize } from '../voice/tts';
+import { sttAvailable } from '../voice/stt';
+import { synthesizeChecked, ttsCheckNote } from '../voice/ttsCheck';
+import { speciesNamesIn } from '../content/species';
 import { CONFIG } from '../config';
 import { MIN_CLIP_COVERAGE } from '../content/userAssets';
 
@@ -498,6 +501,11 @@ export async function prepareScenes(
   const issues: string[] = [];
   const prepared: PreparedScene[] = [];
   let startFrame = 0;
+  // 수종명 발음 확인(2026-10-02) — STT 가용성은 수종명이 나온 첫 씬에서 한 번만 본다(which 셸 호출).
+  let sttOk: boolean | undefined;
+  // 받아쓰기가 끝내 못 적은 이름(2026-10-02 리뷰) — 이팝나무처럼 STT 어휘 밖인 이름은 발음이 맞아도 매번 3회 합성이 된다.
+  // 한 번 'miss' 로 끝난 이름은 이 편 나머지 씬에서 확인하지 않는다.
+  const sttDeaf = new Set<string>();
   for (let i = 0; i < scenes.length; i++) {
     if (opts.signal?.aborted) throw new Error('취소됨');
     const sc = scenes[i]!;
@@ -508,7 +516,7 @@ export async function prepareScenes(
       // 이웃 씬 스티칭(경계 운율 연속). 둘 다 ElevenLabs 경로 전용이라 폴백(openai/say)엔 무영향.
       // 훅(0번) 씬은 표현 폭을 넓히고 첫 구절 뒤 쉼을 준다(2026-09-18) — hookBreak 가 pauseBreaks 를 대신한다.
       const isHook = i === 0 && CONFIG.shortsHookVoice;
-      const mp3 = await synthesize(sc.narration, {
+      const synth = (): Promise<Buffer> => synthesize(sc.narration, {
         voice: opts.voice, instructions: opts.instructions ?? SHORTS_TTS_TONE,
         elevenVoiceId: opts.elevenVoiceId,
         elevenVoiceSettings: isHook ? hookVoiceSettings(opts.elevenVoiceSettings) : opts.elevenVoiceSettings,
@@ -518,6 +526,23 @@ export async function prepareScenes(
         nextText: CONFIG.shortsTtsStitch ? scenes[i + 1]?.narration : undefined,
         signal: opts.signal,
       });
+      // 수종명이 나오는 씬만 받아 적어 확인한다 — 안 들리면 같은 옵션으로 최대 2회 재합성(voice/ttsCheck).
+      // 이름은 원문 내레이션에서 뽑는다(TTS 입력 정제본이 아니라). 끄면 사전·STT 를 아예 안 건드린다.
+      const names = CONFIG.shortsTtsSttCheck ? speciesNamesIn(sc.narration).filter((n) => !sttDeaf.has(n)) : [];
+      if (names.length && sttOk === undefined) {
+        sttOk = sttAvailable();
+        if (!sttOk) console.log('[숏폼] 발음 확인 건너뜀 — STT 없음(mlx_whisper·ffmpeg)');
+      }
+      let mp3: Buffer;
+      if (names.length && sttOk) {
+        const checked = await synthesizeChecked(synth, names, { signal: opts.signal });
+        const note = ttsCheckNote(i + 1, checked);
+        if (note) console.log(`[숏폼] ${note}`);
+        // 받아쓰기가 한 번 실패하면 이 편 나머지 씬은 확인 없이 간다 — 씬마다 상한(45초)까지 기다리지 않게.
+        if (checked.outcome === 'stt-error') sttOk = false;
+        if (checked.outcome === 'miss') for (const n of checked.missing) sttDeaf.add(n);
+        mp3 = checked.mp3;
+      } else mp3 = await synth();
       audioPath = path.join(workDir, `narr_${nn}.mp3`);
       fs.writeFileSync(audioPath, mp3);
       audioDur = await probeDuration(audioPath);

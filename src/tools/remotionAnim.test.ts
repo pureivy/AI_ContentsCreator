@@ -238,3 +238,15 @@ describe('kenBurnsMove — 드리프트를 얹어도 검은 띠가 안 난다', 
     expect(A.kenBurnsMove(60, 200, 1, 'none', 'normal', { w: 540, h: 960 }, 'seed:1')).toEqual({ scale: 1, x: 0, y: 0, rotate: 0 });
   });
 });
+
+describe('isStaticStatUnit — 달력 월·순번은 카운트업 안 함(2026-10-02)', () => {
+  it('월·주차·번째는 정지, 개월·%·시간은 센다', () => {
+    expect(A.isStaticStatUnit('월')).toBe(true);
+    expect(A.isStaticStatUnit(' 주차 ')).toBe(true);
+    expect(A.isStaticStatUnit('번째')).toBe(true);
+    expect(A.isStaticStatUnit('개월')).toBe(false);
+    expect(A.isStaticStatUnit('%')).toBe(false);
+    expect(A.isStaticStatUnit('시간')).toBe(false);
+    expect(A.isStaticStatUnit(undefined)).toBe(false);
+  });
+});

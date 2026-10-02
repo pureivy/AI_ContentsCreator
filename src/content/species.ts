@@ -67,6 +67,33 @@ export function findSpecies(text: string, list = loadSpecies()): Species | undef
 }
 
 /**
+ * 글에 글자 그대로 나오는 수종 이름·별칭을 모두 뽑는다(순수, 2026-10-02) — 낭독 발음 확인용.
+ *
+ * findSpecies 는 '어느 종인가' 하나만 답하지만, 발음 확인은 '어떤 낱말이 들려야 하는가'를 묻는다 —
+ * 그래서 대표명으로 바꾸지 않고 글에 쓰인 낱말을 그대로 돌려준다('백일홍'이라 썼으면 '백일홍').
+ * 긴 이름이 먼저 자리를 차지하고, 그 자리와 겹치는 짧은 이름은 버린다 — '흰배롱나무' 안의 '배롱나무',
+ * '공작단풍나무' 안의 '단풍나무'를 따로 세면 같은 낱말을 두 번 확인하게 된다.
+ */
+export function speciesNamesIn(text: string, list = loadSpecies()): string[] {
+  const t = String(text ?? '');
+  if (!t.trim()) return [];
+  const keys = [...new Set(list.flatMap((sp) => [sp.name, ...(sp.aliases ?? [])]))]
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length); // 긴 이름 우선
+  const taken: Array<[number, number]> = [];
+  const out: string[] = [];
+  for (const key of keys) {
+    for (let at = t.indexOf(key); at >= 0; at = t.indexOf(key, at + 1)) {
+      const end = at + key.length;
+      if (taken.some(([s, e]) => at < e && s < end)) continue; // 더 긴 이름의 자리와 겹침
+      taken.push([at, end]);
+      if (!out.includes(key)) out.push(key);
+    }
+  }
+  return out;
+}
+
+/**
  * 느슨한 수종 찾기(순수, 2026-09-08) — 보관소 소재 매칭 전용.
  *
  * 실사고: 사장님이 '공작단풍나무' 딱지로 올린 사진 2·영상 1이 "공작단풍전정, 도장지와 대목순 제거가 핵심"

@@ -7,6 +7,8 @@
  * 이행(리뷰 반영 2026-07-30): 시기가 명시된(dueMonth) 약속만 자동 이행 대상이고, 도래 후
  * 60일의 '시즌 창' 안에서만 발화한다 — 계절 콘텐츠가 철 지나 나가면 역가치(9월 파종 글이 12월에).
  * 창을 놓친 약속은 이듬해 같은 창에 다시 도래. 시기 없는 약속은 브리핑에만 노출(수동 처리).
+ * → 2026-10-02 사장님 확정으로 이행 기준이 바뀌었다: 시기와 무관하게 다음 자율 틱에서 등록순으로 갚는다
+ *   (dueQueue·choosePromise). 시기 창(isDue·nextDue)은 만료 계산과 기존 표시용으로만 남는다.
  * fulfilled 마킹은 런이 실제로 시작된 뒤(호출측 launch)에만 — 실패 piece 는 reconcile 이 pending 복원.
  */
 import fs from 'node:fs';
@@ -33,12 +35,20 @@ export interface ContentPromise {
   sourceTopic?: string;
   status: PromiseStatus;
   fulfilledPieceId?: string;
+  /** 이행 실패로 pending 에 되돌려진 횟수(2026-10-02) — 대기열 뒤로 밀고, MAX_FULFILL_ATTEMPTS 에 닿으면 폐기. */
+  attempts?: number;
   createdTs: string;
   updatedTs: string;
 }
 
 /** 미이행 백로그 캡 — 예고 남발이 신규 아이디어 슬롯을 무한 선점하지 않게(초과 등록은 거절). */
 export const MAX_PENDING = 12;
+/**
+ * 이행 재시도 상한(2026-10-02) — 이행 글이 실패하면 reconcile 이 pending 으로 되살리는데, 등록순 대기열에서는 그 약속이
+ * 다시 맨 앞이라 매 틱 같은 실패를 반복하며 뒤 약속을 막는다(리뷰 지적: 사실 부족 재시도는 강제 틱이라 시간당 여러 번).
+ * 두 번 실패하면 버린다.
+ */
+export const MAX_FULFILL_ATTEMPTS = 2;
 /** 시즌 창 — 도래 월 1일부터 이 기간 안에서만 자동 이행(지나면 이듬해로 재도래). */
 export const SEASON_WINDOW_DAYS = 60;
 /**
@@ -219,6 +229,23 @@ export class PromiseStore {
         (currentOccurrence(a.dueMonth!, now)?.getTime() ?? 0) - (currentOccurrence(b.dueMonth!, now)?.getTime() ?? 0)
         || a.createdTs.localeCompare(b.createdTs))[0];
   }
+  /**
+   * 이행 대기열(2026-10-02 사장님 확정 — "예고가 있으면 다음 오토런에서 그 주제로 블로그·숏폼을 우선 제작").
+   *
+   * 자율 틱은 이제 nextDue 가 아니라 이걸 본다. 종전 nextDue 는 시즌 창 안의 '맨 앞 1건'만 돌려줘서 그 1건이
+   * 보류되면 뒤 약속은 한 번도 검토되지 않았다 — 실측: 07-29 배롱나무 약속이 소재 포화 오탐으로 40틱 연속
+   * 보류되는 동안 31건 중 이행 0. 시기(window)도 더 이상 기다리지 않는다 — 시청자가 들은 말은 "다음엔"이다.
+   * 시기 미상 약속도 대상이다. 등록 오래된 순(먼저 한 약속부터 갚는다).
+   */
+  dueQueue(brand: string): ContentPromise[] {
+    return this.list()
+      .filter((p) => p.status === 'pending' && (p.brand ?? '') === brand)
+      .sort((a, b) => (a.attempts ?? 0) - (b.attempts ?? 0) || a.createdTs.localeCompare(b.createdTs)); // 실패해 되돌아온 약속은 뒤로
+  }
+  /** 이 piece 가 갚고 있는 약속(이행 표시 뒤) — 숏폼 자율 하루 상한 면제 판정용. */
+  fulfilledBy(pieceId: string): ContentPromise | undefined {
+    return this.list().find((p) => p.status === 'fulfilled' && p.fulfilledPieceId === pieceId);
+  }
   /** 미이행 목록(브랜드) — 브리핑·UI 용. 시기 있는 건 다음 도래 이른 순, 시기 미상은 맨 뒤(등록순). nextDue 와 같은 기준. */
   pending(brand: string, now: Date = new Date()): ContentPromise[] {
     return this.list()
@@ -230,6 +257,7 @@ export class PromiseStore {
   /**
    * 정합 복원 — fulfilled 인데 이행 piece 가 사라졌거나 종료 실패(stage:'error')면 pending 으로 복원.
    * 자율 틱이 매번 호출(저비용) — "갚은 척 기록만 남고 산출물은 없는" 신뢰 역전을 막는다.
+   * 되돌릴 때마다 attempts 를 올리고 MAX_FULFILL_ATTEMPTS 에 닿으면 pending 대신 dropped(2026-10-02).
    */
   reconcile(brand: string, pieceState: (pieceId: string) => 'ok' | 'error' | 'missing'): number {
     let reverted = 0;
@@ -237,7 +265,10 @@ export class PromiseStore {
       if (p.status !== 'fulfilled' || (p.brand ?? '') !== brand || !p.fulfilledPieceId) continue;
       const st = pieceState(p.fulfilledPieceId);
       if (st === 'error' || st === 'missing') {
-        this.update(p.id, { status: 'pending', fulfilledPieceId: undefined });
+        const attempts = (p.attempts ?? 0) + 1;
+        this.update(p.id, attempts >= MAX_FULFILL_ATTEMPTS
+          ? { status: 'dropped', fulfilledPieceId: undefined, attempts }
+          : { status: 'pending', fulfilledPieceId: undefined, attempts });
         reverted++;
       }
     }
@@ -276,6 +307,30 @@ export class PromiseStore {
     }
     return gone;
   }
+}
+
+/**
+ * 대기열에서 이번 틱에 갚을 약속 하나를 고른다(순수, 2026-10-02).
+ *
+ * 걸리는 약속은 건너뛰고 다음 약속을 본다 — 맨 앞 하나가 막혀 전부 멈추던 구조(nextDue)의 수선이다.
+ * 약속에 거는 검사는 둘뿐이다: 브랜드 범위 밖이면 폐기, 사실 부족 수종이면 보류(pending 유지).
+ * 주제 다양성용 게이트(소재 포화·최근 수종·최근 축·검색 수요)는 일부러 안 건다 — 그건 시스템이 스스로 고르는
+ * 주제에 거는 규칙이고, 예고는 시청자에게 이미 한 약속이라 '같은 수종 연속'이 오히려 정상이다.
+ */
+export function choosePromise(
+  queue: readonly ContentPromise[],
+  checks: { offBrand: (topic: string) => string | null; starved: (topic: string) => string | null },
+): { pick?: ContentPromise; dropped: Array<{ promise: ContentPromise; term: string }>; held: Array<{ promise: ContentPromise; reason: string }> } {
+  const dropped: Array<{ promise: ContentPromise; term: string }> = [];
+  const held: Array<{ promise: ContentPromise; reason: string }> = [];
+  for (const p of queue) {
+    const off = checks.offBrand(p.topic);
+    if (off) { dropped.push({ promise: p, term: off }); continue; }
+    const starved = checks.starved(p.topic);
+    if (starved) { held.push({ promise: p, reason: starved }); continue; }
+    return { pick: p, dropped, held };
+  }
+  return { dropped, held };
 }
 
 let store: PromiseStore | null = null;

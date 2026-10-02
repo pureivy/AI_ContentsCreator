@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt, diversifyTitle, titleShape, normalizeLatinName } from './shorts';
+import { applyShortsRevision, settleNextEpisode, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt, diversifyTitle, titleShape, normalizeLatinName } from './shorts';
 import { ShortsStore } from '../content/shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
@@ -471,5 +471,77 @@ describe('buildSceneImagePrompt — 종 레퍼런스·연장 금지(2026-09-06)'
       buildSceneImagePrompt({ ...base, index: i, total: 12, seed: `s${i}`, potted: true })
         .split('\n').find((l) => l.startsWith('생활감:')) ?? '');
     expect(potted.some((l) => l.includes('화분'))).toBe(true);
+  });
+});
+
+describe('settleNextEpisode — 영상이 한 약속 = 대장의 약속(2026-10-02)', () => {
+  const plan = (cta: string, next?: { topic: string; window?: string }, screenText?: string) => ({
+    scenes: [{ narration: '훅' }, { narration: '본문' }, { narration: cta, ...(screenText !== undefined ? { screenText } : {}) }],
+    ...(next ? { next } : {}),
+  });
+  it('대장 만석 + 예고 → 예고 문장·자막 딱지·next 를 덜어낸다', () => {
+    const r = settleNextEpisode(plan('가지 뻗기를 다스려야 짧은가지가 늘어요. 다음엔 전정 요령을 짚어볼게요.', { topic: '사과나무 전정 요령', window: '10월' }, '짧은가지 늘리는 법 예고'), false);
+    expect(r.plan.scenes[2]!.narration).toBe('가지 뻗기를 다스려야 짧은가지가 늘어요.');
+    expect(r.plan.scenes[2]!.screenText).toBe(''); // 예고 표지가 달린 자막은 통째로 비운다(남기면 엉뚱한 라벨)
+    expect(r.plan.next).toBeUndefined();
+    expect(r.note).toContain('예고 문장 제거');
+  });
+  it('대장 만석 + 예고뿐인 CTA → 문장은 유지하고 next 만 지운다', () => {
+    const r = settleNextEpisode(plan('다음엔 겨울눈 보는 법 짚어볼게요.', { topic: '대추나무 겨울눈' }), false);
+    expect(r.plan.scenes[2]!.narration).toBe('다음엔 겨울눈 보는 법 짚어볼게요.');
+    expect(r.plan.next).toBeUndefined();
+  });
+  it('자리 있음 + 예고 + next → 그대로', () => {
+    const p = plan('자른 자리는 다음 편에 보여드릴게요.', { topic: '배롱나무 절단면' });
+    const r = settleNextEpisode(p, true);
+    expect(r.plan).toBe(p);
+    expect(r.note).toBeUndefined();
+  });
+  it('자리 있음 + 예고 없이 next 만 → next 제거(시청자가 듣지 않은 약속)', () => {
+    const r = settleNextEpisode(plan('지금 마당 대추나무부터 살펴보세요.', { topic: '대추나무 겨울눈 확인법' }), true);
+    expect(r.plan.next).toBeUndefined();
+    expect(r.note).toContain('예고 없는 next');
+  });
+  it('예고도 next 도 없으면 손대지 않는다', () => {
+    const p = plan('뿌리 보고 결정하세요.');
+    expect(settleNextEpisode(p, false).plan).toBe(p);
+    expect(settleNextEpisode(p, true).plan).toBe(p);
+  });
+});
+
+describe('settleNextEpisode — 실제 문형(2026-10-02 리뷰, 기존 266편)', () => {
+  const plan = (cta: string, next?: { topic: string }, screenText?: string) => ({
+    scenes: [{ narration: '훅' }, { narration: '본문' }, { narration: cta, ...(screenText !== undefined ? { screenText } : {}) }],
+    ...(next ? { next } : {}),
+  });
+  it.each([
+    '화분나무 이야기는 다음에 다뤄볼게요.',
+    '이어서 다뤄볼게요.',
+    '다음 장은 물 주기 차이예요.',
+    '가을엔 흙 배합도 다뤄볼게요.',
+    '시월에 다룰게요.',
+    '다시 올게요.',
+    '다음 영상에서 열매 솎는 법 알려드릴게요.',
+  ])('자리 있음 + next 있음 → 예고한 편의 next 를 지우지 않는다: %s', (cta) => {
+    const p = plan(cta, { topic: '후속 주제' });
+    expect(settleNextEpisode(p, true).plan.next).toEqual({ topic: '후속 주제' });
+  });
+  it('약한 표지만 있어도(이어집니다) next 를 지키는 쪽으로 판정', () => {
+    const p = plan('열매 이야기는 이어집니다.', { topic: '후속' });
+    expect(settleNextEpisode(p, true).plan).toBe(p);
+  });
+  it('자리 있음 + 예고했는데 next 없음 → 예고 문장을 덜어낸다', () => {
+    const r = settleNextEpisode(plan('뿌리부터 보세요. 다음엔 묻는 법을 짚어볼게요.'), true);
+    expect(r.plan.scenes[2]!.narration).toBe('뿌리부터 보세요.');
+    expect(r.note).toContain('next 미선언');
+  });
+  it('대장 만석 + 자막만 예고("다음엔 겨울눈 이야기") → 자막을 비우고 next 제거', () => {
+    const r = settleNextEpisode(plan('지금 가지 끝을 보세요.', { topic: '겨울눈' }, '다음엔 겨울눈 이야기'), false);
+    expect(r.plan.scenes[2]!.screenText).toBe('');
+    expect(r.plan.next).toBeUndefined();
+  });
+  it('"다음엔 ~ 보세요"(지시문)는 예고가 아니라 지우지 않는다', () => {
+    const p = plan('다음엔 술이 보이는지 보세요.');
+    expect(settleNextEpisode(p, false).plan).toBe(p);
   });
 });

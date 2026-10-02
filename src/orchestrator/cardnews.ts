@@ -27,7 +27,6 @@ import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
 import type { FactGateInfo } from '../content/factGate';
 import { cardStyleIssues } from '../content/styleLint';
 import { currentStructureSeed, type StructureSeed } from '../content/structureSeed';
-import { promiseStore } from '../content/promises';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import { generateImagesForDraft, searchCardRefs } from '../tools/blog_skills';
@@ -398,9 +397,11 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     // 골격 다양화(2026-08-27 권고 4) — 세트마다 카드 밀도가 같으면 피드에서 같은 판형으로 읽힌다.
     // 줄 수·해시태그 수는 런별 구조 시드가 정한다(STRUCTURE_VARIETY=off 면 이 두 줄 자체가 빠진다 = base).
     ...cardStructureLines(seed, CONFIG.structureVariety),
-    'caption 은 인스타그램 게시글 본문 — 한 덩어리 문장 금지. 슬라이드 body 처럼 줄바꿈 \\n 으로 문단을 나눠 읽기 쉽게: 첫 줄 훅 한 문장(핵심 주제어 포함 — 단 키워드 명사구를 통째로 주어 자리에 넣지 말고("~법의 기준은" 식 금지) 조사를 섞어 말로 풀어라) → 빈 줄 → 핵심 포인트 2~4줄(각 줄 짧게, 줄마다 \\n) → 빈 줄 → 마무리 한 줄. 마무리는 매번 다르게 — 저장 유도·다음 편 예고·독자에게 되묻기·계절 인사 중 이번 주제에 맞는 것 하나만. "기록합니다/남겨둘게요" 같은 계정 자기서술 반복과 기계적 "팔로우 부탁" 문구 금지. 이모지는 적당히.',
-    '다음 편 예고를 캡션에 넣었으면 JSON 의 next 필드에 그 주제와 적절한 시기("N월")를 선언하라 — 예고는 시스템이 약속으로 기록해 그 시기에 실제로 제작한다. 지킬 수 있는 예고만 하고, 예고를 안 했으면 next 를 생략하라.',
-    'JSON 형식: {"title":"...","slides":[{"headline":"...","body":"줄바꿈은 \\n"}],"caption":"훅 한 줄\\n\\n핵심 포인트 한 줄\\n다음 포인트 한 줄\\n\\n마무리 행동유도","hashtags":["#태그1","#태그2"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}',
+    'caption 은 인스타그램 게시글 본문 — 한 덩어리 문장 금지. 슬라이드 body 처럼 줄바꿈 \\n 으로 문단을 나눠 읽기 쉽게: 첫 줄 훅 한 문장(핵심 주제어 포함 — 단 키워드 명사구를 통째로 주어 자리에 넣지 말고("~법의 기준은" 식 금지) 조사를 섞어 말로 풀어라) → 빈 줄 → 핵심 포인트 2~4줄(각 줄 짧게, 줄마다 \\n) → 빈 줄 → 마무리 한 줄. 마무리는 매번 다르게 — 저장 유도·독자에게 되묻기·계절 인사 중 이번 주제에 맞는 것 하나만. "기록합니다/남겨둘게요" 같은 계정 자기서술 반복과 기계적 "팔로우 부탁" 문구 금지. 이모지는 적당히.',
+    // 예고는 숏폼만 한다(2026-10-02) — 예고는 다음 자율 틱에서 바로 이행되는데, 글 하나에서 쇼츠 두 채널·카드뉴스가
+    // 저마다 예고하면 약속이 셋씩 쌓여 자율 틱이 후속편으로만 찬다. 글 하나에 약속 하나(promiseRoomFor)는 숏폼 쪽이 지킨다.
+    '캡션·슬라이드에 다음 편 예고("다음 편에서~", "다음엔 ~ 다룰게요")를 쓰지 마라. next 필드는 생략하라.',
+    'JSON 형식: {"title":"...","slides":[{"headline":"...","body":"줄바꿈은 \\n"}],"caption":"훅 한 줄\\n\\n핵심 포인트 한 줄\\n다음 포인트 한 줄\\n\\n마무리 행동유도","hashtags":["#태그1","#태그2"]}',
   ].filter(Boolean).join('\n');
   type PlannerSlide = { headline?: unknown; body?: unknown };
   type PlannerRaw = { title?: unknown; slides?: PlannerSlide[]; caption?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
@@ -1137,18 +1138,8 @@ export async function runCardNewsJob(
           sourcePieceId: done.sourcePieceId, planner: done.planner, designer: done.designer, factGate: done.factGate,
         }, dir).finally(() => { try { store.update(id, { notifiedTs: new Date().toISOString() }); } catch { /* 무해 */ } });
       }
-      // 예고 대장 등록 — 캡션에 다음 편 예고를 선언했으면 약속으로 기록(자율 틱이 시기 도래 시 이행). 실패 무해.
-      // brand 는 잡의 것을 명시(null=범용) — 라이브 activeBrand 로의 오귀속 방지.
-      if (plan.next?.topic) {
-        try {
-          const pr = promiseStore().create({
-            topic: plan.next.topic, window: plan.next.window,
-            sourceKind: 'cardnews', sourceId: id, sourceTopic: plan.title, brand: done?.brand ?? null,
-          });
-          if (pr) say(`예고 등록 — "${pr.topic.slice(0, 30)}"${pr.window ? ` (${pr.window})` : ''}`);
-          else say('예고 등록 보류 — 미이행 약속이 가득(백로그 캡)');
-        } catch { /* 무해 */ }
-      }
+      // 예고 대장 등록은 하지 않는다(2026-10-02, 예고는 숏폼만) — 기획 지침이 예고를 금하고, 그래도 next 가 오면 버린다.
+      if (plan.next?.topic) say(`카드뉴스 예고 무시 — "${plan.next.topic.slice(0, 30)}"(예고는 숏폼만)`);
     }
   } catch (e) {
     const msg = opts.signal?.aborted ? '취소됨' : e instanceof Error ? e.message.slice(0, 300) : String(e);

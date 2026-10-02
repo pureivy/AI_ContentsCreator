@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { normalizeWindow, currentOccurrence, nextOccurrence, isDue, sanitizeTopic, PromiseStore, MAX_PENDING, SEASON_WINDOW_DAYS, EXPIRE_AFTER_DAYS } from './promises';
+import { normalizeWindow, currentOccurrence, nextOccurrence, isDue, sanitizeTopic, PromiseStore, MAX_PENDING, SEASON_WINDOW_DAYS, EXPIRE_AFTER_DAYS, choosePromise, MAX_FULFILL_ATTEMPTS, type ContentPromise } from './promises';
 
 describe('normalizeWindow', () => {
   it('"N월"과 계절어를 도래 월로 정규화한다', () => {
@@ -197,5 +197,51 @@ describe('PromiseStore.expire — 만료 자동 청소', () => {
     expect(s.create({ topic: '새 예고', window: '12월', sourceKind: 'shorts', brand: 'b' })).toBeNull(); // 만석
     expect(s.expire('b', late)).toHaveLength(MAX_PENDING);
     expect(s.create({ topic: '새 예고', window: '12월', sourceKind: 'shorts', brand: 'b' })).not.toBeNull();
+  });
+});
+
+describe('이행 대기열 — 다음 오토런 우선 이행(2026-10-02 사장님 확정)', () => {
+  it('dueQueue — 시기와 무관하게 pending 전부, 등록 오래된 순', () => {
+    const s = new PromiseStore(fs.mkdtempSync(path.join(os.tmpdir(), 'promises-q-')));
+    s.create({ topic: '11월 건', window: '11월', sourceKind: 'shorts', brand: 'b' });
+    s.create({ topic: '시기 미상 건', sourceKind: 'shorts', brand: 'b' });
+    const done = s.create({ topic: '이미 갚은 건', window: '9월', sourceKind: 'shorts', brand: 'b' })!;
+    s.update(done.id, { status: 'fulfilled', fulfilledPieceId: 'piece_1' });
+    s.create({ topic: '다른 브랜드 건', sourceKind: 'shorts', brand: 'x' });
+    expect(s.dueQueue('b').map((p) => p.topic)).toEqual(['11월 건', '시기 미상 건']);
+    expect(s.fulfilledBy('piece_1')?.topic).toBe('이미 갚은 건');
+    expect(s.fulfilledBy('piece_2')).toBeUndefined();
+  });
+  it('choosePromise — 막힌 약속은 건너뛰고 다음 약속을 고른다(맨 앞 1건에 멈추지 않는다)', () => {
+    const mk = (topic: string): ContentPromise => ({ id: topic, topic, dueMonth: null, sourceKind: 'shorts', status: 'pending', createdTs: '', updatedTs: '' });
+    const r = choosePromise([mk('카지노 묘목'), mk('석류나무 겨울전정'), mk('배롱나무 절단면')], {
+      offBrand: (t) => (t.includes('카지노') ? '카지노' : null),
+      starved: (t) => (t.includes('석류') ? '석류나무 3일 전' : null),
+    });
+    expect(r.pick?.topic).toBe('배롱나무 절단면');
+    expect(r.dropped.map((d) => d.promise.topic)).toEqual(['카지노 묘목']);
+    expect(r.held.map((h) => h.promise.topic)).toEqual(['석류나무 겨울전정']);
+  });
+  it('choosePromise — 전부 막히면 pick 없음', () => {
+    const mk = (topic: string): ContentPromise => ({ id: topic, topic, dueMonth: null, sourceKind: 'shorts', status: 'pending', createdTs: '', updatedTs: '' });
+    expect(choosePromise([mk('a')], { offBrand: () => null, starved: () => '부족' }).pick).toBeUndefined();
+    expect(choosePromise([], { offBrand: () => null, starved: () => null }).pick).toBeUndefined();
+  });
+});
+
+describe('이행 재시도 상한(2026-10-02 리뷰)', () => {
+  it('실패로 되돌아온 약속은 대기열 뒤로, 상한에 닿으면 폐기', () => {
+    const s = new PromiseStore(fs.mkdtempSync(path.join(os.tmpdir(), 'promises-att-')));
+    const a = s.create({ topic: '먼저 한 약속', sourceKind: 'shorts', brand: 'b' })!;
+    s.create({ topic: '나중 약속', sourceKind: 'shorts', brand: 'b' });
+    s.update(a.id, { status: 'fulfilled', fulfilledPieceId: 'piece_fail' });
+    s.reconcile('b', () => 'error');
+    expect(s.get(a.id)?.status).toBe('pending');
+    expect(s.dueQueue('b').map((p) => p.topic)).toEqual(['나중 약속', '먼저 한 약속']);
+    for (let i = 1; i < MAX_FULFILL_ATTEMPTS; i++) {
+      s.update(a.id, { status: 'fulfilled', fulfilledPieceId: 'piece_fail' });
+      s.reconcile('b', () => 'error');
+    }
+    expect(s.get(a.id)?.status).toBe('dropped');
   });
 });
