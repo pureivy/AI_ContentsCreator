@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   escapeHtml, stripMarkdown, reviewLink, studioBase,
-  blogReadyHtml, cardnewsCaptionHtml, shortsCaptionHtml, factGateLines, briefGateLines, youtubeUploadedHtml, naverPublishLabel,
+  blogReadyHtml, cardnewsCaptionHtml, shortsCaptionHtml, factGateLines, briefGateLines, youtubeUploadedHtml, naverPublishLabel, naverClipDoneHtml,
 } from './contentNotify';
 import { CONFIG } from '../config';
 
@@ -304,5 +304,26 @@ describe('youtubeUploadedHtml — 유튜브 비공개 업로드 완료 알림', 
 
   it('제목의 HTML 특수문자를 이스케이프한다', () => {
     expect(youtubeUploadedHtml({ id: 's1', topic: '<b>A&B</b>', url: 'u' })).toContain('&lt;b&gt;A&amp;B&lt;/b&gt;');
+  });
+});
+
+describe('naverClipDoneHtml — 클립 결과 알림(2026-10-02)', () => {
+  const base = { id: 'short_1', title: '배롱나무 지금 가위 대면 늦가지가 얼어요', brand: 'bionditree', url: 'https://clip.naver.com/@bionditree' };
+  it('공개 완료는 링크와 함께, 버튼 없이', () => {
+    const m = naverClipDoneHtml({ ...base, status: 'PUBLISHED' });
+    expect(m.html).toContain('발행 완료');
+    expect(m.html).toContain('https://clip.naver.com/@bionditree');
+    expect(m.buttons).toBeUndefined();
+  });
+  it('등록 뒤 미확인은 다시 올리기가 아니라 확인 버튼', () => {
+    const m = naverClipDoneHtml({ ...base, status: 'SUBMITTED' });
+    expect(m.html).toContain('공개 확인을 못 했습니다');
+    expect(JSON.stringify(m.buttons)).toContain('nk:short_1');
+    expect(JSON.stringify(m.buttons)).not.toContain('nc:');
+  });
+  it('실패는 사유를 이스케이프해 싣는다', () => {
+    const m = naverClipDoneHtml({ ...base, status: 'FAILED', error: '카테고리 <선택> 실패' });
+    expect(m.html).toContain('업로드 실패');
+    expect(m.html).toContain('&lt;선택&gt;');
   });
 });

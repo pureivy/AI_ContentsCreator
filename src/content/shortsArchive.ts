@@ -22,19 +22,40 @@ export interface ShortsArchiveInput {
   videoArchivedTs?: string;
   /** 이 편의 채널(2026-09-08 채널 분리 이후 한 편은 한 채널). 없으면 옛 양채널 편. */
   platform?: string;
+  /** 유튜브 업로드 시각 — 클립 대기 기한을 잰다. */
+  youtubeTs?: string;
+  /** 네이버 클립 번호(mediaContentNo) — 있으면 클립도 끝난 것. */
+  naverClipNo?: string;
+}
+
+/** 정리 판정 옵션 — 유튜브용 편이 네이버 클립을 기다리는 기한(2026-10-02). 0 이면 기다리지 않는다(종전). */
+export interface ShortsArchiveOpts {
+  clipWaitDays?: number;
+  now?: number;
 }
 
 /**
  * 원본을 프록시로 바꿔도 되는가 — 유튜브와 인스타(릴스)가 **둘 다** 확인됐을 때만 true.
  * 인스타 확인은 igReelId(발행 응답) 또는 metaPublishedTs(수집 경로) 어느 쪽이든 인정한다.
  */
-export function shouldArchiveShortsVideo(s: ShortsArchiveInput): boolean {
+export function shouldArchiveShortsVideo(s: ShortsArchiveInput, opts: ShortsArchiveOpts = {}): boolean {
   if (s.videoArchivedTs) return false;
   const yt = !!(s.youtubeId ?? '').trim();
   const meta = !!(s.igReelId ?? '').trim() || !!(s.metaPublishedTs ?? '').trim();
   // 채널 분리(2026-09-08) 이후 한 편은 한 채널에만 간다 — '둘 다' 조건이 영원히 안 맞아 정책이 멈춰 있었다
   // (실측 2026-09-10: 발행됐는데 원본이 남은 편 26개 1.1G). 그 편의 채널이 발행되면 끝난 것이다.
-  if (s.platform === 'youtube') return yt;
+  // 유튜브용 편은 네이버 클립에도 간다(2026-10-02) — 클립은 원본(final.mp4)을 올리므로 유튜브 직후 정리하면
+  // 저화질 사본만 남는다. 클립이 올라가거나 기한(clipWaitDays)이 지나면 정리한다. 기한 덕에 원본이 쌓이지 않는다.
+  if (s.platform === 'youtube') return yt && (!!(s.naverClipNo ?? '').trim() || clipWaitOver(s.youtubeTs, opts));
   if (s.platform === 'instagram') return meta;
   return yt && meta; // 옛 양채널 편
+}
+
+/** 클립 대기 기한이 지났는가 — 기한 0(끔)이거나 업로드 시각을 모르면 기다리지 않는다. */
+function clipWaitOver(youtubeTs: string | undefined, opts: ShortsArchiveOpts): boolean {
+  const days = opts.clipWaitDays ?? 0;
+  if (!(days > 0)) return true;
+  const t = Date.parse(youtubeTs ?? '');
+  if (!Number.isFinite(t)) return true;
+  return (opts.now ?? Date.now()) - t >= days * 86_400_000;
 }

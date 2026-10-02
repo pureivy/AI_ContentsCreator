@@ -1175,6 +1175,12 @@ export interface ShortsInfo {
   igPermalink?: string;
   fbReelId?: string;
   fbReelCoverTs?: string;   // 없으면 페북 릴스 커버 미적용 → '페북에도 올리기'가 보강한다
+  naverClipNo?: string;     // 네이버 클립 번호(2026-10-02) — 있으면 클립에 공개됨
+  naverClipUrl?: string;
+  naverClipSubmittedTs?: string; // '등록'은 눌렀는데 공개 확인을 못 함 — 재시도 막힘
+  naverClipError?: string;  // 마지막 클립 업로드 실패 사유
+  clipRunning?: boolean;    // 지금 클립 업로드 중(서버 뒤에서 수 분)
+  videoArchivedTs?: string; // 원본이 저화질 사본으로 정리됨 — 클립에 못 올린다
   views?: number;
   likes?: number;
   running?: boolean;
@@ -1216,6 +1222,11 @@ export async function uploadShortsYoutube(id: string): Promise<{ ok: boolean; ur
 }
 export async function publishShortsMeta(id: string): Promise<{ ok?: boolean; igPermalink?: string; fbReelId?: string; error?: string; fbError?: string }> {
   try { const r = await fetch(`/shorts/${id}/meta`, { method: "POST" }); return await r.json(); }
+  catch { return { error: "요청 실패" }; }
+}
+// 네이버 클립 — 업로드는 서버 뒤에서 수 분 돈다(202 started). check=true 는 '등록 뒤 미확인' 편을 목록과 대조만 한다.
+export async function publishShortsNaverClip(id: string, opts?: { check?: boolean }): Promise<{ ok?: boolean; started?: boolean; status?: string; url?: string; error?: string; issues?: string[] }> {
+  try { const r = await fetch(`/shorts/${id}/naver-clip`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts?.check ? { check: true } : {}) }); return await r.json(); }
   catch { return { error: "요청 실패" }; }
 }
 export async function regenerateShortsThumbnail(id: string): Promise<{ ok?: boolean; error?: string }> {

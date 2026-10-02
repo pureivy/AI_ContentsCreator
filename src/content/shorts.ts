@@ -79,6 +79,17 @@ export interface Shorts {
   metaPublishedTs?: string;
   /** 메타 측정 창 경과 후 강화 1회 완료(멱등) — perfReflected(유튜브)와 독립. */
   metaPerfReflected?: boolean;
+  /** 네이버 클립 발행 결과(2026-10-02) — 공개된 클립 번호(mediaContentNo)와 시각. */
+  naverClipNo?: string;
+  naverClipTs?: string;
+  /** 클립 채널 주소(개별 클립 주소 형식은 미확인 — 채널로 건다). */
+  naverClipUrl?: string;
+  /** '등록'은 눌렀는데 공개 확인을 못 한 시각 — 있으면 재시도를 막는다(같은 클립이 두 번 공개되지 않게). */
+  naverClipSubmittedTs?: string;
+  /** 그때 올린 영상 id — '클립 확인'이 이 id 로 목록과 대조한다(결과 파일이 덮여도 남게 레코드에 둔다). */
+  naverClipVideoId?: string;
+  /** 마지막 클립 업로드 실패 사유 — 업로드는 뒤에서 돌아서 대시보드가 이걸로 실패를 보여 준다. */
+  naverClipError?: string;
   /** 원본 영상(final.mp4)을 저용량 preview.mp4 로 교체한 시각(2026-08-31 저장공간 정책). 있으면 재실행 안 함. */
   videoArchivedTs?: string;
   createdTs: string;

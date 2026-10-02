@@ -140,3 +140,54 @@ describe('썸네일 QA 미해결 — 확인 후 강행 2단계', () => {
     expect(out).toContain('썸네일 생성 실패');
   });
 });
+
+// 네이버 클립(2026-10-02) — 유튜브용 편을 클립에도. 업로드는 202 로 시작만 하고 결과는 서버가 알린다.
+describe('네이버 클립 버튼', () => {
+  it('nc/nf/nk 콜백을 클립 액션으로 읽는다', () => {
+    expect(parseCallback('nc:short_fe6da81caf')).toEqual({ kind: 'shorts_clip', id: 'short_fe6da81caf' });
+    expect(parseCallback('nf:short_fe6da81caf')).toEqual({ kind: 'shorts_clip_force', id: 'short_fe6da81caf' });
+    expect(parseCallback('nk:short_fe6da81caf')).toEqual({ kind: 'shorts_clip_check', id: 'short_fe6da81caf' });
+  });
+  it('시작만 알리고, 강행은 force 를 싣는다', async () => {
+    const seen: Array<{ p: string; b: unknown }> = [];
+    const call = async (p: string, b?: unknown) => { seen.push({ p, b }); return { ok: true, status: 202, json: { ok: true, started: true } }; };
+    const out = await runAction({ kind: 'shorts_clip', id: 'short_1' }, call, stubSend().send);
+    expect(out).toContain('업로드 시작');
+    expect(seen[0]!.p).toBe('/shorts/short_1/naver-clip');
+    await runAction({ kind: 'shorts_clip_force', id: 'short_1' }, call, stubSend().send);
+    expect(seen[1]!.b).toEqual({ force: true });
+  });
+  it('썸네일 QA 미해결이면 클립 강행 버튼(nf)을 준다', async () => {
+    const s = stubSend();
+    const qa409 = { ok: false, status: 409, json: { error: 'QA', thumb_qa_unresolved: true } };
+    expect(await runAction({ kind: 'shorts_clip', id: 'short_1' }, async () => qa409, s.send)).toBe('');
+    expect(JSON.stringify(s.log.find((x) => x.kind === 'html')!.buttons)).toContain('nf:short_1');
+  });
+  it('등록 뒤 미확인으로 막히면 확인 버튼(nk)을 준다 — 다시 올리지 않게', async () => {
+    const s = stubSend();
+    const r409 = { ok: false, status: 409, json: { error: '공개 확인을 못 한 편', submitted: true } };
+    expect(await runAction({ kind: 'shorts_clip', id: 'short_1' }, async () => r409, s.send)).toBe('');
+    expect(JSON.stringify(s.log[0]!.buttons)).toContain('nk:short_1');
+  });
+  it('확인: 공개돼 있으면 기록, 없으면 다시 올리기 버튼', async () => {
+    const seen: unknown[] = [];
+    const found = await runAction({ kind: 'shorts_clip_check', id: 'short_1' }, async (_p, b) => { seen.push(b); return { ok: true, status: 200, json: { status: 'RECOVERED', url: 'https://clip.naver.com/@bionditree' } }; }, stubSend().send);
+    expect(seen[0]).toEqual({ check: true });
+    expect(found).toContain('기록했습니다');
+    const s = stubSend();
+    expect(await runAction({ kind: 'shorts_clip_check', id: 'short_1' }, async () => ({ ok: true, status: 200, json: { status: 'NOT_FOUND' } }), s.send)).toBe('');
+    expect(JSON.stringify(s.log[0]!.buttons)).toContain('nc:short_1');
+  });
+  it('확인: 아직 처리 중(초안으로 보임)이면 실패가 아니라 다시 확인 버튼', async () => {
+    const s = stubSend();
+    const pending = { ok: false, status: 409, json: { status: 'STILL_DRAFT', error: '등록한 영상이 아직 초안으로 보입니다', submitted: true } };
+    expect(await runAction({ kind: 'shorts_clip_check', id: 'short_1' }, async () => pending, s.send)).toBe('');
+    expect(s.log[0]!.text).toContain('아직 초안');
+    expect(JSON.stringify(s.log[0]!.buttons)).toContain('nk:short_1');
+  });
+  it('실패는 사유를 그대로 알린다', async () => {
+    const out = await runAction({ kind: 'shorts_clip', id: 'short_1' }, async () => ({ ok: false, status: 409, json: { error: '원본 영상(final.mp4)이 정리돼 없습니다' } }), stubSend().send);
+    expect(out).toContain('네이버 클립 업로드 실패');
+    expect(out).toContain('final.mp4');
+  });
+});

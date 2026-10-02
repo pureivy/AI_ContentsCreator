@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import { parseImagePayload, parsePublishPayload, containImageManifest, parseStatsOutput,
-  publishDraftToNaver, collectNaverMetrics } from './blog_skills';
+  publishDraftToNaver, collectNaverMetrics, parseNaverClipResult } from './blog_skills';
 import type { BlogDraft } from '../output/formatter';
 
 describe('parseImagePayload', () => {
@@ -235,5 +235,16 @@ describe('statsResultFrom — 수집 실패 사유 보존', () => {
     const { statsResultFrom } = await import('./blog_skills');
     const r = statsResultFrom({ ok: false, output: 'x'.repeat(5000) });
     expect(r!.note!.length).toBeLessThanOrEqual(300);
+  });
+});
+
+describe('parseNaverClipResult — 클립 결과 파일', () => {
+  it('번호·영상 id 를 문자열로 정규화하고 빈 값은 버린다', () => {
+    const r = parseNaverClipResult(JSON.stringify({ status: 'PUBLISHED', media_content_no: 7617327, video_id: 'V1', clip_handle: 'bionditree', draft_no: null, issues: ['x'] }));
+    expect(r).toMatchObject({ status: 'PUBLISHED', mediaContentNo: '7617327', videoId: 'V1', clipHandle: 'bionditree', issues: ['x'] });
+    expect(r!.draftNo).toBeUndefined();
+  });
+  it('깨진 파일은 null', () => {
+    expect(parseNaverClipResult('{')).toBeNull();
   });
 });

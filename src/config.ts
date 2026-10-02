@@ -202,6 +202,8 @@ export interface Config {
   readonly shortsI2vSubjectScenes: boolean;
   /** 유튜브 하루 업로드 상한(2026-09-03, 사용자 확정 1편) — 0 이하면 상한 없음. 인스타는 적용하지 않는다. */
   readonly youtubeDailyCap: number;
+  /** 유튜브용 숏폼이 네이버 클립을 기다리며 원본(final.mp4)을 남겨 두는 일수(2026-10-02). 0 이면 기다리지 않는다. */
+  readonly naverClipWaitDays: number;
   /** 페이스북을 성과 지표에서 채널로 셀 것인가(기본 off — 위 구현부 주석 참조). */
   readonly fbAsChannel: boolean;
   /**
@@ -476,6 +478,8 @@ export const CONFIG: Config = {
   shortsScenes: Math.min(8, Math.max(3, envInt('SHORTS_SCENES', 5))),
   // 대량생산 신호를 줄이는 쪽이 목적이라 기본 1편. 인스타는 막히지 않았고 성과가 나는 채널이라 제외한다.
   youtubeDailyCap: envInt('YOUTUBE_DAILY_CAP', 1),
+  // 클립은 원본을 올린다 — 유튜브 직후 저화질 사본으로 바꾸면 클립에 못 올린다. 기한이 지나면 정리한다.
+  naverClipWaitDays: Math.max(0, envInt('NAVER_CLIP_WAIT_DAYS', 7)),
   shortsI2vSubjectScenes: envBool('SHORTS_I2V_SUBJECT_SCENES', true),
   // 페이스북을 '채널'로 셀 것인가(2026-09-04 사용자 확정: 아니오).
   // 실측: 릴스 110편 두 달 합계 291회(편당 중앙 2회), 같은 영상의 인스타는 150,961회 — 520배.

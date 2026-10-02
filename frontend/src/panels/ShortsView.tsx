@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   fetchShorts, createShorts, createShortsFromPiece, deleteShorts,
   fetchPieces, ShortsInfo, PieceInfo, uploadShortsYoutube, fetchYoutubeStatus,
-  publishShortsMeta, fetchMetaStatus, regenerateShortsThumbnail, igReconnectNeeded,
+  publishShortsMeta, fetchMetaStatus, regenerateShortsThumbnail, igReconnectNeeded, publishShortsNaverClip,
 } from "../api";
 import Avatar from "./Avatar";
 import Ico, { type IcoName } from "./Ico";
@@ -61,6 +61,22 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
     else setMetaErr(r.fbError ? `인스타 릴스는 발행됨 / 페북 릴스 실패: ${r.fbError}` : "");
     onChanged(); // 부분 성공 링크도 즉시 반영
   };
+  const [clipBusy, setClipBusy] = useState(false);
+  const [clipErr, setClipErr] = useState("");
+  const doClip = async (check = false) => {
+    setClipBusy(true); setClipErr("");
+    const r = await publishShortsNaverClip(s.id, { check });
+    setClipBusy(false);
+    if (r.error) setClipErr(r.error);
+    else if (r.status === "NOT_FOUND") setClipErr("공개된 클립이 없습니다 — 다시 올릴 수 있습니다");
+    onChanged();
+  };
+  // 업로드는 서버 뒤에서 수 분 돈다 — 진행 중이면 목록을 주기적으로 다시 읽어 결과(번호·실패 사유)를 반영한다.
+  useEffect(() => {
+    if (!s.clipRunning) return;
+    const t = setInterval(onChanged, 15_000);
+    return () => clearInterval(t);
+  }, [s.clipRunning, onChanged]);
   const [thumbBusy, setThumbBusy] = useState(false);
   const [thumbErr, setThumbErr] = useState("");
   const doThumbnail = async () => {
@@ -171,6 +187,27 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
                 {metaBusy ? "커버 적용 중…" : "🖼 페북 커버 적용"}
               </button>
             ) : null)}
+            {canYt && (s.naverClipNo ? (
+              <a className="btn ghost" href={s.naverClipUrl ?? "https://clip.naver.com/"} target="_blank" rel="noreferrer" title={`네이버 클립 #${s.naverClipNo} — 전체공개`}>🟩 클립</a>
+            ) : s.clipRunning ? (
+              <span className="chip" title="브라우저로 업로드·인코딩·등록 중 — 끝나면 텔레그램으로 알립니다">🟩 클립 올리는 중…(몇 분)</span>
+            ) : s.naverClipSubmittedTs ? (
+              <button className="btn ghost" disabled={clipBusy} onClick={() => doClip(true)}
+                title="'등록'은 눌렀는데 공개 확인을 못 했습니다 — 다시 올리지 않고 클립 목록과 대조만 합니다">
+                {clipBusy ? "확인 중…" : "🔎 클립 확인"}
+              </button>
+            ) : s.videoArchivedTs ? (
+              <span className="muted" style={{ fontSize: 11 }} title="원본 영상이 저화질 사본으로 정리돼 클립에 올리지 않습니다">🟩 클립 불가(원본 정리됨)</span>
+            ) : (
+              <button className="btn ghost" disabled={clipBusy} onClick={() => doClip()}
+                title="네이버 클립에 올립니다 — 등록하면 바로 전체공개. 브라우저로 올리므로 몇 분 걸립니다(블로그 발행과 동시에는 못 함)">
+                {clipBusy ? "시작 중…" : "🟩 네이버 클립(즉시 공개)"}
+              </button>
+            ))}
+            {canYt && !s.naverClipNo && !s.clipRunning && s.naverClipError && !clipErr && (
+              <span className="muted" style={{ color: "var(--con)" }}>클립 실패: {s.naverClipError}</span>
+            )}
+            {clipErr && <span className="muted" style={{ color: "var(--con)" }}>{clipErr}</span>}
             {metaErr && <span className="muted" style={{ color: "var(--con)" }}>{metaErr}</span>}
             {ytErr && <span className="muted" style={{ color: "var(--con)" }}>{ytErr}</span>}
             {s.youtubeUrl && (

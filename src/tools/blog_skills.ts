@@ -477,6 +477,91 @@ export async function publishDraftToNaver(
   }
 }
 
+// ====================== 네이버 클립 업로드(2026-10-02) ======================
+
+/** 클립 업로드 결과 — naver_clip_publish.py 의 결과 파일을 정규화한 것. */
+export interface NaverClipResult {
+  /** PUBLISHED | RECOVERED | SUBMITTED | DRY_RUN | NOT_FOUND·STILL_DRAFT(확인 전용) | LOGIN_REQUIRED | FAILED | ERROR */
+  status: string;
+  /** 공개된 클립 번호(mediaContentNo) — PUBLISHED·RECOVERED 때만. */
+  mediaContentNo?: string;
+  clipHandle?: string;
+  draftNo?: string;
+  videoId?: string;
+  error?: string;
+  issues: string[];
+  output: string;
+  /** 지난 실행이 남긴 결과(서버 재시작 등으로 못 읽은 것)를 돌려준 경우 — 이번엔 스크립트를 돌리지 않았다. */
+  leftover?: boolean;
+}
+
+/** 결과 파일 → 정규화(순수). 깨졌으면 null. */
+export function parseNaverClipResult(raw: string, output = ''): NaverClipResult | null {
+  let res: Record<string, unknown>;
+  try { res = JSON.parse(raw) as Record<string, unknown>; } catch { return null; }
+  const str = (v: unknown): string | undefined => (v === null || v === undefined || v === '' ? undefined : String(v));
+  return {
+    status: String(res.status ?? 'FAILED'),
+    mediaContentNo: str(res.media_content_no),
+    clipHandle: str(res.clip_handle),
+    draftNo: str(res.draft_no),
+    videoId: str(res.video_id),
+    error: str(res.error),
+    issues: Array.isArray(res.issues) ? res.issues.map(String) : [],
+    output,
+  };
+}
+
+// 업로드 + 인코딩 대기(최대 10분) + 등록 확인(2분) — 넉넉히 20분.
+const NAVER_CLIP_TIMEOUT_MS = 20 * 60_000;
+
+/**
+ * 숏폼을 네이버 클립에 올린다 — 사람이 누른 버튼의 신뢰 경로(라우트가 가드·뮤텍스를 맡는다).
+ * 블로그 발행과 같은 브랜드 프로필(로그인 상태)을 쓴다. 공개 API 가 없어 PC웹을 조작한다.
+ */
+export async function publishShortsToNaverClip(opts: {
+  slug: string; videoPath: string; description: string; coverPath?: string; blogLogNo?: string;
+  categoryFirst: string; categorySecond: string; aiGenerated: boolean; uploadName: string; runDir: string; dryRun?: boolean;
+  /** 올리지 않고 이미 공개됐는지만 본다(RECOVERED/NOT_FOUND) — '등록 뒤 미확인' 편을 풀 때. */
+  checkOnly?: boolean; videoId?: string;
+}, signal?: AbortSignal): Promise<NaverClipResult> {
+  const { slug } = opts;
+  if (slug && !isSafeBrandSlug(slug)) return { status: 'ERROR', error: `무효한 브랜드 슬러그: ${slug}`, issues: [], output: '' };
+  try { fs.mkdirSync(opts.runDir, { recursive: true }); } catch { /* 스크립트가 다시 만든다 */ }
+  const resultPath = path.join(opts.runDir, 'clip_result.json');
+  // 지난 실행의 결과를 먼저 본다 — 서버가 실행 중에 재시작되면 파이썬은 끝까지 돌아 결과를 남기는데 아무도
+  // 안 읽는다. 그 결과가 '등록함/공개됨'이면 지우고 다시 올리지 않고 그대로 돌려준다(중복 공개 방지).
+  if (!opts.checkOnly) {
+    try {
+      const prev = parseNaverClipResult(fs.readFileSync(resultPath, 'utf-8'));
+      if (prev && ['SUBMITTED', 'PUBLISHED', 'RECOVERED'].includes(prev.status)) return { ...prev, leftover: true };
+    } catch { /* 없음 */ }
+  }
+  try { fs.rmSync(resultPath, { force: true }); } catch { /* 없음 */ } // 낡은 결과를 성공으로 오판하지 않게
+  const args = [
+    ...(opts.checkOnly ? ['--check-only'] : ['--video', opts.videoPath]), '--description', opts.description,
+    '--category-first', opts.categoryFirst, '--category-second', opts.categorySecond,
+    '--upload-name', opts.uploadName, '--run-dir', opts.runDir, '--result-file', resultPath,
+  ];
+  if (opts.coverPath) args.push('--cover', opts.coverPath);
+  if (opts.blogLogNo) args.push('--blog-log-no', opts.blogLogNo);
+  if (opts.aiGenerated) args.push('--ai-generated');
+  if (opts.dryRun) args.push('--dry-run');
+  if (opts.videoId) args.push('--video-id', opts.videoId);
+  if (naverPublishCreds(slug).headless) args.push('--headless');
+  const profileDir = naverProfileDir(slug);
+  const env: Record<string, string> = {};
+  if (profileDir) env.NAVER_PROFILE_DIR = profileDir;
+  const r = await runScript('naver_clip_publish.py', args, opts.runDir, signal, { timeoutMs: NAVER_CLIP_TIMEOUT_MS, env });
+  pruneNaverProfileCache(profileDir);
+  // 업로드용 사본(~50MB) — 스크립트가 지우지만, 시간 초과로 강제 종료되면 남는다.
+  try { fs.rmSync(path.join(opts.runDir, `${opts.uploadName}${path.extname(opts.videoPath || '.mp4')}`), { force: true }); } catch { /* 무해 */ }
+  let raw = '';
+  try { raw = fs.readFileSync(resultPath, 'utf-8'); } catch { /* 없음 */ }
+  return parseNaverClipResult(raw, r.output)
+    ?? { status: 'ERROR', error: '클립 결과 파일 없음 — 스크립트 출력 참조', issues: [], output: r.output };
+}
+
 // ====================== 성과 자동 수집(네이버 통계 스크레이프) ======================
 
 export interface CollectedMetrics {

@@ -25,6 +25,10 @@ export type BotAction =
   // 종전엔 업로드 버튼이 409 로 막히기만 하고 앞으로 갈 길이 없었다(수정요청은 대본만 고쳐 표식이 그대로 남는다).
   | { kind: 'shorts_youtube_force'; id: string }
   | { kind: 'shorts_meta_force'; id: string }
+  // 네이버 클립(2026-10-02) — 유튜브용 편을 클립에도. 강행(nf)은 썸네일 QA 확인 뒤.
+  | { kind: 'shorts_clip'; id: string }
+  | { kind: 'shorts_clip_force'; id: string }
+  | { kind: 'shorts_clip_check'; id: string }
   | { kind: 'shorts_thumb_regen'; id: string };
 
 /**
@@ -60,7 +64,7 @@ export function describeDirective(d: { text: string; on: boolean; made: number; 
 
 /** 콜백 데이터 파싱(≤64바이트 규격: "<op>:<id>"). 불명이면 null. 순수 — 테스트 대상. */
 export function parseCallback(data: string): BotAction | null {
-  const m = /^(bp|rv|cp|cf|sy|sm|yf|mf|tr):([A-Za-z0-9_]{1,48})$/.exec(data);
+  const m = /^(bp|rv|cp|cf|sy|sm|yf|mf|tr|nc|nf|nk):([A-Za-z0-9_]{1,48})$/.exec(data);
   if (!m) return null;
   const id = m[2]!;
   switch (m[1]) {
@@ -73,6 +77,9 @@ export function parseCallback(data: string): BotAction | null {
     case 'yf': return { kind: 'shorts_youtube_force', id };
     case 'mf': return { kind: 'shorts_meta_force', id };
     case 'tr': return { kind: 'shorts_thumb_regen', id };
+    case 'nc': return { kind: 'shorts_clip', id };
+    case 'nf': return { kind: 'shorts_clip_force', id };
+    case 'nk': return { kind: 'shorts_clip_check', id };
     default: return null;
   }
 }
@@ -189,6 +196,40 @@ export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call:
       const link = typeof r.json?.igPermalink === 'string' ? `\n${r.json.igPermalink}` : '';
       return `🎬 인스타 릴스 발행 완료(썸네일 확인 강행)${link}`;
     }
+    case 'shorts_clip':
+    case 'shorts_clip_force': {
+      // 업로드는 수 분 걸려 라우트가 202 로 바로 답하고 뒤에서 돈다 — 결과는 서버가 따로 알린다.
+      // (기다리면 Node fetch 의 응답 헤더 제한 5분에 끊겨, 올라갔는데 '실패'로 알리게 된다.)
+      const force = a.kind === 'shorts_clip_force';
+      const r = await call(`/shorts/${a.id}/naver-clip`, force ? { force: true } : {});
+      if (!r.ok) {
+        if (!force && await sendThumbQaGuide(r, a.id, 'clip', send)) return '';
+        if (r.json?.submitted === true) {
+          await send.html(errText('네이버 클립', r), [[{ text: '🔎 클립 확인', callback_data: `nk:${a.id}` }]]);
+          return '';
+        }
+        return errText('네이버 클립 업로드 실패', r);
+      }
+      return `🟩 네이버 클립 업로드 시작${force ? '(썸네일 확인 강행)' : ''} — 몇 분 걸립니다. 끝나면 결과를 알려드릴게요.`;
+    }
+    case 'shorts_clip_check': {
+      // '등록 뒤 미확인' 편을 푼다 — 올리지 않고 공개 목록만 본다(1분 안팎). 결과 문구는 서버 알림과 같은 규칙.
+      const r = await call(`/shorts/${a.id}/naver-clip`, { check: true }, 5 * 60_000);
+      if (!r.ok) {
+        // 아직 처리 중(번호 없음·초안으로 보임) — 실패가 아니니 다시 확인할 버튼을 준다.
+        if (r.json?.submitted === true) {
+          await send.html(errText('네이버 클립 확인', r), [[{ text: '🔎 다시 확인', callback_data: `nk:${a.id}` }]]);
+          return '';
+        }
+        return errText('클립 확인 실패', r);
+      }
+      if (r.json?.status === 'NOT_FOUND') {
+        await send.html('🔎 공개된 클립이 없습니다 — 다시 올릴 수 있습니다.', [[{ text: '🟩 네이버 클립', callback_data: `nc:${a.id}` }]]);
+        return '';
+      }
+      const url = typeof r.json?.url === 'string' ? `\n${escapeHtml(r.json.url)}` : '';
+      return `🟩 네이버 클립 확인 — 공개돼 있어 기록했습니다${url}`;
+    }
     case 'shorts_thumb_regen': {
       // 썸네일만 다시 만든다(수 분). 통과하면 표식이 지워져 발행 게이트가 열린다.
       const r = await call(`/shorts/${a.id}/thumbnail/regenerate`, {}, 300_000);
@@ -210,20 +251,21 @@ function shortsThumbPath(id: string): string | null {
 const shortsPublishButtons = (id: string): TgButton[][] => [[
   { text: '▶️ 유튜브 업로드', callback_data: `sy:${id}` },
   { text: '🎬 릴스 발행', callback_data: `sm:${id}` },
+  { text: '🟩 네이버 클립', callback_data: `nc:${id}` },
 ]];
 /**
  * 썸네일 한글 QA 미해결(409) 안내 — 카드뉴스의 '확인 후 강행' 2단계를 숏폼에 맞춘 것(2026-09-16).
  * 썸네일을 보내 눈으로 검수하게 하고, 다시 만들기와 강행 발행 두 길을 준다. 안내를 보냈으면 true.
  */
 async function sendThumbQaGuide(
-  r: { status: number; json: Record<string, unknown> | null }, id: string, ch: 'youtube' | 'instagram',
+  r: { status: number; json: Record<string, unknown> | null }, id: string, ch: 'youtube' | 'instagram' | 'clip',
   send: Senders = REAL_SENDERS,
 ): Promise<boolean> {
   if (r.status !== 409 || r.json?.thumb_qa_unresolved !== true) return false;
   const thumb = shortsThumbPath(id);
   if (thumb) await send.photos([thumb], '⚠️ 썸네일 한글 오타 의심');
-  const forceOp = ch === 'youtube' ? 'yf' : 'mf';
-  const forceLabel = ch === 'youtube' ? '✅ 확인했어요 — 강행 업로드' : '✅ 확인했어요 — 강행 발행';
+  const forceOp = ch === 'youtube' ? 'yf' : ch === 'clip' ? 'nf' : 'mf';
+  const forceLabel = ch === 'instagram' ? '✅ 확인했어요 — 강행 발행' : '✅ 확인했어요 — 강행 업로드';
   await send.html(
     '⚠️ 썸네일 한글 QA 미해결 — 위 이미지의 글자를 확인하세요.\n'
     + '문구가 정상이면 강행하고, 글자가 깨졌으면 썸네일을 다시 만드세요(수 분).\n'

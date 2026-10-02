@@ -15,6 +15,7 @@ describe('janitor 순수 판정(2026-09-10 저장공간 정리)', () => {
   });
   it('isShortPublished — 어느 채널이든 id·발행시각이 있으면 발행. 빈 문자열은 미발행', () => {
     expect(isShortPublished({ youtubeId: 'y' })).toBe(true);
+    expect(isShortPublished({ naverClipNo: '7617327' })).toBe(true); // 클립에만 올라간 편(2026-10-02)
     expect(isShortPublished({ metaPublishedTs: ago(1) })).toBe(true);
     expect(isShortPublished({ youtubeId: '', igReelId: '' })).toBe(false);
   });

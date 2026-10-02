@@ -108,11 +108,12 @@ import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
 import { maintainIgTokens, checkIgToken } from '../tools/igToken';
 import { igTokenExpiresAt } from '../secrets/store';
-import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, notifyYoutubeUploaded, youtubeUploadNotifies, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
+import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, notifyYoutubeUploaded, notifyNaverClipDone, youtubeUploadNotifies, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
 import { startTelegramBot } from '../autonomy/telegramBot';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
-import { publishDraftToNaver, naverPublishCreds, collectNaverMetrics, blogSkillProblem } from '../tools/blog_skills';
+import { publishDraftToNaver, naverPublishCreds, collectNaverMetrics, blogSkillProblem, publishShortsToNaverClip } from '../tools/blog_skills';
+import { buildClipDescription, pickClipVideo, blogLogNoFromUrl, canPublishClip, CLIP_CATEGORY, clipProfileUrl } from '../content/naverClip';
 import { coerceBlogDraft } from '../output/smarteditor';
 import type { MetricSample } from '../analytics/performance';
 import { classifyAndAssign, getStatuses, reassign, setIngestStatus } from '../tools/classify';
@@ -1594,7 +1595,7 @@ function shortsListHandler(c: Context): Response {
       // 업로드된 쇼츠만 — 유튜브 성과 뱃지용(2026-09-11 수정). latestMetrics 는 소스를 안 가려서, 인스타·
       // 애널리틱스 표본이 최신이면 그 값이 '유튜브 성과' 라벨을 달고 나갔다. 성과 탭 좋아요와 같은 결함.
       const m = x.youtubeUrl ? (latestMetricsBySource(x.id, 'youtube:api') ?? latestMetricsBySource(x.id, 'youtube:')) : null;
-      return { ...x, running: isShortsRunning(x.id), ...(m ? { views: m.views, likes: m.likes ?? 0 } : {}) };
+      return { ...x, running: isShortsRunning(x.id), clipRunning: naverClipInFlight.has(x.id), ...(m ? { views: m.views, likes: m.likes ?? 0 } : {}) };
     }),
   });
 }
@@ -1609,7 +1610,7 @@ function shortsGetHandler(c: Context): Response {
 // 정리가 실패해도 발행 흐름은 건드리지 않는다(원본이 남을 뿐).
 function maybeArchiveShortsVideo(id: string): void {
   const s = shortsStore().get(id);
-  if (!s || !shouldArchiveShortsVideo(s)) return;
+  if (!s || !shouldArchiveShortsVideo(s, { clipWaitDays: CONFIG.naverClipWaitDays })) return;
   void archiveShortsVideo(shortsStore().dirFor(id)).then((freed) => {
     if (!freed) return; // 재인코딩 실패·이미 없음 — 기록도 남기지 않아 다음에 재시도된다
     shortsStore().update(id, { videoArchivedTs: new Date().toISOString() });
@@ -2344,6 +2345,115 @@ app.post('/shorts/:id/meta', async (c) => {
   } finally {
     metaPublishInFlight.delete(id);
   }
+});
+// ── 네이버 클립 발행(2026-10-02 사장님 확정) — 유튜브용 숏폼을 사람 버튼으로 클립에도 올린다.
+//    공개 API 가 없어 클립 크리에이터 PC웹을 블로그 발행과 같은 Playwright 프로필로 조작한다(naver_clip_publish.py).
+//    '등록'을 누르면 바로 전체공개다 — 그래서 가드는 유튜브 라우트와 같게, 중복 공개는 세 겹으로 막는다:
+//    ① 기록된 클립 번호 ② '등록 뒤 미확인'(naverClipSubmittedTs) ③ 스크립트가 올리기 전에 같은 클립을 목록에서 찾는다.
+//    업로드는 수 분(인코딩 대기 최대 10분) 걸린다 — Node fetch 의 응답 헤더 제한(5분)에 걸리지 않게 202 로 바로
+//    답하고 뒤에서 돌린 뒤 결과를 텔레그램으로 알린다(dryRun·check 는 짧아서 기다렸다 답한다).
+const naverClipInFlight = new Set<string>();
+/** 스크립트 결과를 레코드에 반영(공용) — 번호가 확인되면 기록, '등록 뒤 미확인'이면 재시도 차단 표시. */
+function applyNaverClipResult(id: string, r: { status: string; mediaContentNo?: string; clipHandle?: string; videoId?: string; error?: string }): { status: string; url: string } {
+  const url = clipProfileUrl(r.clipHandle);
+  if ((r.status === 'PUBLISHED' || r.status === 'RECOVERED') && r.mediaContentNo) {
+    shortsStore().update(id, { naverClipNo: r.mediaContentNo, naverClipUrl: url, naverClipTs: new Date().toISOString(), naverClipSubmittedTs: undefined, naverClipError: undefined });
+    maybeArchiveShortsVideo(id); // 클립까지 끝났으면 원본 정리
+    return { status: r.status, url };
+  }
+  // 공개는 됐는데 번호가 아직 없는 경우(처리 중)도 미확인으로 둔다 — 다시 올리면 두 번 공개된다.
+  // '아직 초안'은 이미 있는 미확인 표시를 지킬 뿐 새로 만들지 않는다 — 드라이런 초안을 보고 막으면 안 된다.
+  if (r.status === 'STILL_DRAFT' && !shortsStore().get(id)?.naverClipSubmittedTs) return { status: r.status, url };
+  if (r.status === 'SUBMITTED' || r.status === 'PUBLISHED' || r.status === 'RECOVERED' || r.status === 'STILL_DRAFT') {
+    const cur = shortsStore().get(id);
+    shortsStore().update(id, {
+      naverClipSubmittedTs: cur?.naverClipSubmittedTs ?? new Date().toISOString(),
+      ...(r.videoId && !cur?.naverClipVideoId ? { naverClipVideoId: r.videoId } : {}),
+    });
+    return { status: r.status === 'STILL_DRAFT' ? r.status : 'SUBMITTED', url };
+  }
+  if (r.status === 'NOT_FOUND') {
+    shortsStore().update(id, { naverClipSubmittedTs: undefined, naverClipError: undefined });
+    return { status: r.status, url };
+  }
+  if (r.status !== 'DRY_RUN') shortsStore().update(id, { naverClipError: (r.error ?? r.status).slice(0, 300) });
+  return { status: r.status, url };
+}
+app.post('/shorts/:id/naver-clip', async (c) => {
+  const id = c.req.param('id') ?? '';
+  // 본문을 먼저 읽는다 — 레코드를 읽은 뒤 await 하면 그 사이 다른 요청이 바꾼 상태를 놓친다.
+  const body = await c.req.json<{ force?: boolean; dryRun?: boolean; check?: boolean }>().catch(() => ({} as { force?: boolean; dryRun?: boolean; check?: boolean }));
+  const s = shortsStore().get(id);
+  if (!s) return c.json({ error: 'unknown shorts' }, 404);
+  if (s.naverClipNo) return c.json({ error: '이미 클립에 올라갔습니다', url: s.naverClipUrl ?? clipProfileUrl() }, 409);
+  const check = !!body.check;
+  if (!check) {
+    if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
+    if ((s.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) return c.json({ error: `길이 상한 초과(${s.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초) — ✍수정요청으로 대본을 줄인 뒤 발행하세요` }, 409);
+    if (!canPublishClip(s.platform)) return c.json({ error: `${platformLabel(s.platform)} 전용 숏폼입니다 — 클립에는 유튜브용 편을 올리세요` }, 409);
+    const qaBlock = shortsQaPublishBlockReason(thumbTextQaFailed(shortsStore().dirFor(id)), !!body.force);
+    if (qaBlock) return c.json({ error: qaBlock, thumb_qa_unresolved: true }, 409);
+    if (s.naverClipSubmittedTs && !body.dryRun) {
+      return c.json({ error: `클립 '등록'을 눌렀지만 공개 확인을 못 한 편입니다(${s.naverClipSubmittedTs.slice(0, 16)}) — '클립 확인'을 누르세요. 두 번 공개되지 않게 다시 올리지 않습니다.`, submitted: true }, 409);
+    }
+  }
+  const dir = shortsStore().dirFor(id);
+  const video = check ? '' : pickClipVideo(dir);
+  if (!check && !video) return c.json({ error: '원본 영상(final.mp4)이 정리돼 없습니다 — 저화질 미리보기본은 클립에 올리지 않습니다' }, 409);
+  if (naverClipInFlight.has(id)) return c.json({ error: '이미 클립 업로드 처리 중입니다' }, 409);
+  // 네이버 Chrome 프로필은 블로그 발행·성과 수집과 하나를 같이 쓴다 — 동시에 열면 프로필 락으로 실패한다.
+  if (naverProfileBusy) return c.json({ error: `네이버 브라우저 작업이 진행 중입니다(${naverProfileBusy}) — 완료 후 다시 시도하세요.` }, 409);
+  if (naverRefreshBusy) return c.json({ error: '네이버 성과 수집이 진행 중입니다 — 끝난 뒤 다시 시도하세요.' }, 409);
+  const label = (s.title ?? s.topic).slice(0, 30);
+  naverClipInFlight.add(id);
+  naverProfileBusy = `클립:${label.slice(0, 20)}`; // ── 동기 구간 끝(뮤텍스 획득)
+  if (!check && !body.dryRun) shortsStore().update(id, { naverClipError: undefined });
+  const job = (async () => {
+    try {
+      const thumb = path.join(dir, 'thumbnail.jpg');
+      // 지난 '등록' 시도의 영상 id — 레코드 우선, 없으면 결과 파일. 드라이런 결과는 쓰지 않는다(그 초안은 등록한 적이 없다).
+      let prevVideoId: string | undefined;
+      try {
+        const prev = JSON.parse(fs.readFileSync(path.join(dir, 'naver-clip', 'clip_result.json'), 'utf-8')) as { status?: string; video_id?: string };
+        if (prev.status === 'SUBMITTED' || prev.status === 'PUBLISHED') prevVideoId = prev.video_id ?? undefined;
+      } catch { /* 없음 */ }
+      const r = await publishShortsToNaverClip({
+        slug: s.brand ?? '', videoPath: video || '',
+        description: buildClipDescription(s.title ?? s.topic, s.description ?? '', s.hashtags ?? []),
+        coverPath: fs.existsSync(thumb) ? thumb : undefined,
+        blogLogNo: blogLogNoFromUrl(blogUrlForPiece(s.sourcePieceId)) ?? undefined,
+        categoryFirst: CLIP_CATEGORY.first, categorySecond: CLIP_CATEGORY.second,
+        aiGenerated: CONFIG.metaAiLabel, // 인스타 'AI 정보' 라벨과 같은 방침
+        uploadName: id, runDir: path.join(dir, 'naver-clip'), dryRun: !!body.dryRun,
+        checkOnly: check, videoId: check ? (shortsStore().get(id)?.naverClipVideoId ?? prevVideoId) : undefined,
+      });
+      const applied = applyNaverClipResult(id, r);
+      const what = check ? '클립 확인' : body.dryRun ? '클립 드라이런' : '클립';
+      console.log(`[발행담당] ${label} — 네이버 ${what}: ${applied.status}${r.mediaContentNo ? ` #${r.mediaContentNo}` : ''}${r.leftover ? '(지난 실행 결과)' : ''}${r.error ? ` — ${r.error}` : ''}`);
+      if (applied.status !== 'PUBLISHED' && applied.status !== 'RECOVERED' && applied.status !== 'DRY_RUN' && applied.status !== 'NOT_FOUND') {
+        console.log(`[발행담당] 클립 스크립트 출력 끝: ${r.output.slice(-300)}`);
+      }
+      return { ...applied, mediaContentNo: r.mediaContentNo, draftNo: r.draftNo, error: r.error, issues: r.issues };
+    } finally {
+      naverProfileBusy = null; // 뮤텍스 해제
+      naverClipInFlight.delete(id);
+    }
+  })();
+  if (check || body.dryRun) {
+    const out = await job;
+    const ok = ['PUBLISHED', 'RECOVERED', 'DRY_RUN', 'NOT_FOUND'].includes(out.status);
+    // 확인 결과 '아직'(번호 없음·초안으로 보임)은 실패가 아니라 기다릴 일 — 읽을 수 있는 사유와 함께 409.
+    const pending = out.status === 'SUBMITTED' || out.status === 'STILL_DRAFT';
+    const error = out.status === 'STILL_DRAFT' ? (out.error ?? '등록한 영상이 아직 초안으로 보입니다 — 잠시 뒤 다시 확인하세요')
+      : out.status === 'SUBMITTED' ? '공개는 보이는데 클립 번호가 아직 없습니다 — 잠시 뒤 다시 확인하세요' : out.error;
+    return c.json({ ok, ...out, error, submitted: pending || undefined }, ok ? 200 : out.status === 'LOGIN_REQUIRED' ? 401 : pending ? 409 : 502);
+  }
+  void job.then((out) => notifyNaverClipDone({ id, title: s.title ?? s.topic, brand: s.brand, status: out.status, url: out.url, error: out.error, issues: out.issues }))
+    .catch((e) => {
+      shortsStore().update(id, { naverClipError: String(e instanceof Error ? e.message : e).slice(0, 300) });
+      void notifyNaverClipDone({ id, title: s.title ?? s.topic, brand: s.brand, status: 'ERROR', error: String(e instanceof Error ? e.message : e) });
+    });
+  return c.json({ ok: true, started: true }, 202);
 });
 // 릴스 재조정 — 라이브 IG 릴스인데 로컬 영속이 유실된 쇼츠(발행 중 재시작 등)를 캡션=제목 매칭으로 백필.
 // 안전: igReelId 없는 쇼츠만 채우고 재발행하지 않음(중복 공개 방지). 성과 대시보드 누락 복구용.
@@ -4654,7 +4764,7 @@ function janitorDeps(): JanitorDeps {
     isSessionRunning: (runId) => RUNS.get(runId)?.status === 'running',
     archiveShort: async (id) => {
       const s = shortsStore().get(id);
-      if (!s || !shouldArchiveShortsVideo(s)) return 0;
+      if (!s || !shouldArchiveShortsVideo(s, { clipWaitDays: CONFIG.naverClipWaitDays })) return 0;
       const freed = await archiveShortsVideo(shortsStore().dirFor(id));
       if (freed) shortsStore().update(id, { videoArchivedTs: new Date().toISOString() });
       return freed;

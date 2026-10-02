@@ -53,3 +53,27 @@ describe('shouldArchiveShortsVideo — 채널 분리(2026-09-08) 이후: 그 편
     expect(shouldArchiveShortsVideo({ youtubeId: 'yt1' })).toBe(false);
   });
 });
+
+describe('shouldArchiveShortsVideo — 유튜브 편은 네이버 클립을 기다린다(2026-10-02)', () => {
+  // 클립은 원본 final.mp4 를 올린다. 유튜브 직후 정리하면 저화질 preview.mp4 만 남아 클립에 못 올린다.
+  const now = Date.parse('2026-10-10T00:00:00Z');
+  const opts = { clipWaitDays: 7, now };
+  it('유튜브만 올라가고 기한 안이면 정리하지 않는다', () => {
+    expect(shouldArchiveShortsVideo({ platform: 'youtube', youtubeId: 'yt1', youtubeTs: '2026-10-05T00:00:00Z' }, opts)).toBe(false);
+  });
+  it('클립까지 올라가면 바로 정리한다', () => {
+    expect(shouldArchiveShortsVideo({ platform: 'youtube', youtubeId: 'yt1', youtubeTs: '2026-10-09T00:00:00Z', naverClipNo: '7617327' }, opts)).toBe(true);
+  });
+  it('기한이 지나면 클립 없이도 정리한다 — 원본이 쌓이지 않게', () => {
+    expect(shouldArchiveShortsVideo({ platform: 'youtube', youtubeId: 'yt1', youtubeTs: '2026-10-02T00:00:00Z' }, opts)).toBe(true);
+  });
+  it('업로드 시각을 모르면 기다리지 않는다', () => {
+    expect(shouldArchiveShortsVideo({ platform: 'youtube', youtubeId: 'yt1' }, opts)).toBe(true);
+  });
+  it('기한 0 이면 종전처럼 유튜브만 보고 정리한다', () => {
+    expect(shouldArchiveShortsVideo({ platform: 'youtube', youtubeId: 'yt1', youtubeTs: '2026-10-09T00:00:00Z' }, { clipWaitDays: 0, now })).toBe(true);
+  });
+  it('유튜브가 안 올라갔으면 클립만으로는 정리하지 않는다', () => {
+    expect(shouldArchiveShortsVideo({ platform: 'youtube', naverClipNo: '7617327' }, opts)).toBe(false);
+  });
+});

@@ -249,8 +249,51 @@ export async function notifyYoutubeUploaded(s: YoutubeUploadedInfo): Promise<voi
   try {
     if (!contentReadyNotifyEnabled()) return;
     const html = youtubeUploadedHtml(s);
-    if (telegramCreds()) await sendTelegramHtml(html);
+    // 유튜브에 올린 편은 다음 순서가 클립이다(2026-10-02) — 알림에서 바로 누르게 버튼을 단다.
+    if (telegramCreds()) await sendTelegramHtml(html, [[{ text: '🟩 네이버 클립에도 올리기', callback_data: `nc:${s.id}` }]]);
     await notifyWebhookOnly({ title: `${youtubeUploadedHead(s)}${brandTag(s.brand)} · ${s.title || s.topic}`, body: s.url });
+  } catch { /* 무해 */ }
+}
+
+/** 네이버 클립 업로드 결과 알림 입력(2026-10-02). 업로드는 수 분 걸려 버튼이 기다리지 않고, 끝나면 서버가 알린다. */
+export interface NaverClipDoneInfo {
+  id: string; title: string; brand?: string;
+  /** PUBLISHED | RECOVERED | SUBMITTED | NOT_FOUND | 실패 상태들 */
+  status: string; url?: string; error?: string; issues?: string[];
+}
+/** 알림 본문(순수). 'SUBMITTED'(등록 뒤 미확인)는 확인 버튼과 함께 — 두 번 공개되지 않게 재업로드 대신 확인을 유도한다. */
+export function naverClipDoneHtml(s: NaverClipDoneInfo): { html: string; buttons?: TgButton[][] } {
+  const title = `<b>${escapeHtml(clip(s.title, 200))}</b>`;
+  const tail = [
+    s.url ? escapeHtml(s.url) : '',
+    s.issues?.length ? escapeHtml(`참고: ${s.issues.join(' / ')}`) : '',
+  ].filter(Boolean);
+  if (s.status === 'PUBLISHED' || s.status === 'RECOVERED') {
+    const head = s.status === 'RECOVERED' ? '🟩 네이버 클립 — 이미 공개돼 있어 기록만 했습니다' : '🟩 네이버 클립 발행 완료(전체공개)';
+    return { html: [escapeHtml(`${head}${brandTag(s.brand)}`), title, ...tail].join('\n') };
+  }
+  if (s.status === 'SUBMITTED') {
+    return {
+      html: [escapeHtml(`⚠️ 네이버 클립 — '등록'은 눌렀는데 공개 확인을 못 했습니다${brandTag(s.brand)}`), title,
+        escapeHtml('다시 올리면 두 번 공개될 수 있어 막아 뒀습니다. 잠시 뒤 아래 버튼으로 확인하세요.'), ...tail].join('\n'),
+      buttons: [[{ text: '🔎 클립 확인', callback_data: `nk:${s.id}` }]],
+    };
+  }
+  if (s.status === 'NOT_FOUND') {
+    return {
+      html: [escapeHtml(`🟩 네이버 클립 — 공개된 클립이 없습니다. 다시 올릴 수 있습니다${brandTag(s.brand)}`), title].join('\n'),
+      buttons: [[{ text: '🟩 네이버 클립', callback_data: `nc:${s.id}` }]],
+    };
+  }
+  return { html: [escapeHtml(`⚠️ 네이버 클립 업로드 실패${brandTag(s.brand)}`), title, escapeHtml(s.error ?? s.status), ...tail].join('\n') };
+}
+/** 전송 — 알림 채널이 꺼져 있으면 조용히 통과. 실패는 무해. */
+export async function notifyNaverClipDone(s: NaverClipDoneInfo): Promise<void> {
+  try {
+    // 버튼에 대한 답이라 '새 콘텐츠 알림' 설정과 무관하게 보낸다 — 끄면 "끝나면 알려드릴게요" 뒤에 침묵한다.
+    if (!telegramCreds()) return;
+    const m = naverClipDoneHtml(s);
+    await sendTelegramHtml(m.html, m.buttons);
   } catch { /* 무해 */ }
 }
 
@@ -270,6 +313,7 @@ const cardnewsButtons = (id: string): TgButton[][] => [[
 const shortsButtons = (id: string, platform?: ShortsPlatform): TgButton[][] => [[
   ...(!platform || platform === 'youtube' ? [{ text: '▶️ 유튜브 업로드', callback_data: `sy:${id}` }] : []),
   ...(!platform || platform === 'instagram' ? [{ text: '🎬 릴스 발행', callback_data: `sm:${id}` }] : []),
+  ...(!platform || platform === 'youtube' ? [{ text: '🟩 네이버 클립', callback_data: `nc:${id}` }] : []),
   { text: '✍ 수정요청', callback_data: `rv:${id}` },
 ]];
 

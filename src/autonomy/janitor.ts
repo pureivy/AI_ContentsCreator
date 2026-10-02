@@ -26,6 +26,8 @@ import { humanBytes } from '../util/prune';
 export interface JanitorShort {
   id: string; stage: string; platform?: string;
   youtubeId?: string; igReelId?: string; metaPublishedTs?: string; youtubeTs?: string; videoArchivedTs?: string;
+  /** 네이버 클립(2026-10-02) — 클립에만 올라간 편도 발행된 것이다(미발행 30일 삭제 대상이 아니다). */
+  naverClipNo?: string; naverClipTs?: string;
   createdTs: string; updatedTs?: string;
 }
 export interface JanitorCard { id: string; stage: string; igMediaId?: string; fbPostId?: string; metaPublishedTs?: string; createdTs: string; updatedTs?: string }
@@ -84,13 +86,13 @@ export function daysSince(ts: string | undefined, now: Date): number | null {
 }
 
 /** 어느 채널이든 발행됐는가(순수) — 중간 산출물 정리 기준. 원본 교체(규칙 5)는 shortsArchive 가 채널 기준으로 따로 본다. */
-export function isShortPublished(s: Pick<JanitorShort, 'youtubeId' | 'igReelId' | 'metaPublishedTs'>): boolean {
-  return !!(s.youtubeId ?? '').trim() || !!(s.igReelId ?? '').trim() || !!(s.metaPublishedTs ?? '').trim();
+export function isShortPublished(s: Pick<JanitorShort, 'youtubeId' | 'igReelId' | 'metaPublishedTs' | 'naverClipNo'>): boolean {
+  return !!(s.youtubeId ?? '').trim() || !!(s.igReelId ?? '').trim() || !!(s.metaPublishedTs ?? '').trim() || !!(s.naverClipNo ?? '').trim();
 }
 
 /** 발행 시각(순수) — 유튜브·메타 기록 중 있는 것, 없으면 갱신 시각. */
 export function shortPublishedTs(s: JanitorShort): string | undefined {
-  return s.youtubeTs || s.metaPublishedTs || (isShortPublished(s) ? s.updatedTs : undefined);
+  return s.youtubeTs || s.metaPublishedTs || s.naverClipTs || (isShortPublished(s) ? s.updatedTs : undefined);
 }
 
 /** 미발행 상태로 staleDays 이상 묵은 쇼츠인가(순수) — 규칙 3. 생성 중(planning 등)은 제외. */
