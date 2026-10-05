@@ -79,7 +79,9 @@ export const KineticCaption: React.FC<{
   motion?: CaptionMotionName;
   /** 키워드 팝(2026-09-09 기법) — 핵심 단어 하나가 자리 잡은 뒤 커지며 색이 붙는다. 키워드가 자막에 없으면 가장 긴 단어. */
   pop?: boolean;
-}> = ({ text, variant, bottomPct = CAPTION_BOTTOM_PCT, keyword, outline, fontPx = 70, hookFontPx = 84, motion = '튀어오름', pop }) => {
+  /** 라벨 기본 글자색(2026-10-05) — 아래 내레이션 자막(흰색)과 갈라 보이게. 훅(전체 노랑)·CTA 배지(흰 글자)엔 안 쓴다. 미지정=흰색. */
+  baseColor?: string;
+}> = ({ text, variant, bottomPct = CAPTION_BOTTOM_PCT, keyword, outline, fontPx = 70, hookFontPx = 84, motion = '튀어오름', pop, baseColor }) => {
   const f = useCurrentFrame();
   const { fps, width } = useVideoConfig();
   const words = text.split(/\s+/).filter(Boolean);
@@ -117,7 +119,7 @@ export const KineticCaption: React.FC<{
           return (
             <span key={i} style={{
               fontSize: size, fontWeight: 800,
-              color: isHook || isKw(w) || isPop ? '#ffd54a' : '#fff',
+              color: isHook || isKw(w) || isPop ? '#ffd54a' : (!isCta && baseColor) || '#fff',
               lineHeight: 1.25, textShadow: '0 3px 18px rgba(0,0,0,.75)',
               ...(outline ? { WebkitTextStroke: '8px rgba(0,0,0,0.9)', paintOrder: 'stroke fill' } : {}),
               ...wordStyle,

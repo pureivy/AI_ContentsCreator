@@ -191,7 +191,7 @@ export async function stageAndBuildProps(
       };
     } catch { /* 스테이징 실패 — 오버레이 생략 */ }
   }
-  const inputProps = { scenes: propScenes, totalFrames, ...(opts.fxSeedKey ? { driftSeed: opts.fxSeedKey } : {}), ...(opts.lookOffset ? { lookOffset: opts.lookOffset } : {}), ...(opts.caption ? { caption: opts.caption } : {}), ...(titleProp ? { title: titleProp } : {}) };
+  const inputProps = { scenes: propScenes, totalFrames, ...(opts.fxSeedKey ? { driftSeed: opts.fxSeedKey } : {}), ...(opts.lookOffset ? { lookOffset: opts.lookOffset } : {}), ...(opts.caption ? { caption: { ...opts.caption, ...(CONFIG.shortsLabelColor ? { labelColor: CONFIG.shortsLabelColor } : {}) } } : {}), ...(titleProp ? { title: titleProp } : {}) };
   return inputProps;
 }
 

@@ -93,7 +93,9 @@ export const autoShortsSchema = z.object({
   lookOffset: z.number().optional(),
   totalFrames: z.number(),
   /** 자막 옵션 — 위치(하단 여백 %)·키워드 강조색·테두리·글자 크기. 미지정=컴포넌트 기본값. */
-  caption: z.object({ bottomPct: z.number().optional(), keyword: z.string().optional(), outline: z.boolean().optional(), fontPx: z.number().optional(), hookFontPx: z.number().optional() }).optional(),
+  caption: z.object({ bottomPct: z.number().optional(), keyword: z.string().optional(), outline: z.boolean().optional(), fontPx: z.number().optional(), hookFontPx: z.number().optional(),
+    /** 라벨(화면 글자) 기본색(2026-10-05) — 아래 내레이션 자막(흰색)과 갈라 보이게. 미지정=흰색(종전). */
+    labelColor: z.string().optional() }).optional(),
   /** 상단 고정 제목(별도 생성한 투명 캘리 PNG) — 전 씬 지속 오버레이. 미지정=없음(종전). */
   title: z.object({ imageSrc: z.string(), topPct: z.number().optional(), widthPct: z.number().optional() }).optional(),
 });
@@ -253,7 +255,7 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
       {/* 결론 예고 — 첫 1.5초, 제목 캘리 예약 상자 아래·라벨 위 오른쪽. 서버가 넣은 씬에만, 가운데 카드 연출 씬은 제외(겹침).
           인셋 확대창(초점 있음)도 제외 — 창의 위 끝(≈644px)이 카드 띠(641~739px)와 겹친다. 기법은 렌더 시점에 정해지므로 여기서만 거를 수 있다. */}
       {s.teaser && !(s.kind && TEASER_CLASH_KINDS.has(s.kind)) && !(tech === '인셋 확대창' && s.imageSrc && s.focus) ? <TeaserCard teaser={s.teaser} {...(titleTopPct != null ? { titleTopPct } : {})} /> : null}
-      <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={labelBottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} hookFontPx={caption?.hookFontPx} {...(capMotion ? { motion: capMotion } : {})} {...(tech === '키워드 팝' ? { pop: true } : {})} />
+      <KineticCaption text={s.screenText} variant={s.kind === 'hook' || s.kind === 'cta' ? s.kind : undefined} bottomPct={labelBottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} hookFontPx={caption?.hookFontPx} {...(caption?.labelColor ? { baseColor: caption.labelColor } : {})} {...(capMotion ? { motion: capMotion } : {})} {...(tech === '키워드 팝' ? { pop: true } : {})} />
       {/* 구절 자막 — 라벨이 비켜 준 원래 자리(bottomPct)에 낭독 진행대로 한 구절씩. 본문 씬에만 온다(서버가 훅·CTA 엔 안 채운다). */}
       {hasCaptions ? <PhraseCaption captions={s.captions!} bottomPct={caption?.bottomPct} keyword={caption?.keyword} outline={caption?.outline} fontPx={caption?.fontPx} {...(capMotion ? { motion: capMotion } : {})} /> : null}
       {s.audioSrc ? <Audio src={staticFile(s.audioSrc)} /> : null}

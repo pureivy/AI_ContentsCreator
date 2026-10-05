@@ -308,6 +308,8 @@ export interface Config {
    *  예비 동작·정착 넘김·안쪽 요소 시차·낭독 싱크 박자(낭독 mp3 의 쉼 위치 기준). 씬 길이는 안 바꾼다.
    *  SHORTS_CARD_MOTION_V2=false 면 카드 필드(card) 자체를 안 넣는다 — 종전 카드 그대로(props 동일). */
   readonly shortsCardMotionV2: boolean;
+  /** 숏폼 라벨(화면 글자) 기본색(2026-10-05, SHORTS_LABEL_COLOR) — 아래 내레이션 자막(흰색)과 갈라 보이게. 기본 #8ED8FF, 'off'=흰색(종전). */
+  readonly shortsLabelColor: string;
   /** macOS say 폴백 음색. */
   readonly voiceTtsVoice: string;
   readonly voiceSttModel: string;
@@ -571,6 +573,8 @@ export const CONFIG: Config = {
   shortsFlowCheck: envBool('SHORTS_FLOW_CHECK', true),
   shortsMidcut: envBool('SHORTS_MIDCUT', true),
   shortsMediaRotate: envBool('SHORTS_MEDIA_ROTATE', true),
+  // 기본 하늘색(2026-10-05 사장님 확정 — 연두는 잎 배경에, 살구는 흙·노란 캘리에 묻혔다). 'off'·잘못된 값이면 흰색(종전).
+  shortsLabelColor: (/^#[0-9a-fA-F]{6}$/.test(env('SHORTS_LABEL_COLOR', '#8ED8FF')) ? env('SHORTS_LABEL_COLOR', '#8ED8FF') : ''),
   shortsCardMotionV2: envBool('SHORTS_CARD_MOTION_V2', true),
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
   voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),
