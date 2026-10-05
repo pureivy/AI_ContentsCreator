@@ -206,6 +206,8 @@ export interface YoutubeUploadedInfo {
   durationSec?: number; scenes?: number; url: string;
   /** 공개 발행(2026-10-01) — 지금은 비공개지만 처리·썸네일 확인 뒤 자동 공개된다. 없으면 종전 '비공개 업로드'. */
   publicPending?: boolean;
+  /** 처음부터 공개로 올림(2026-10-05, YOUTUBE_UPLOAD_PUBLIC_DIRECT) — 이미 공개, 서버는 커버만 확인한다. publicPending 보다 우선. */
+  publicDirect?: boolean;
 }
 
 /**
@@ -218,7 +220,8 @@ export interface YoutubeUploadedInfo {
  * 썸네일이 끝내 안 뜨면 따로 경고 알림이 간다.
  */
 const youtubeUploadedHead = (s: YoutubeUploadedInfo): string =>
-  s.publicPending ? '📺 유튜브 업로드 완료 — 자동 공개 예정(썸네일 확인)' : '📺 유튜브 비공개 업로드 완료';
+  s.publicDirect ? '📺 유튜브 공개 업로드 완료 — 이미 공개됨(커버 확인 중)'
+    : s.publicPending ? '📺 유튜브 업로드 완료 — 자동 공개 예정(썸네일 확인)' : '📺 유튜브 비공개 업로드 완료';
 export function youtubeUploadedHtml(s: YoutubeUploadedInfo): string {
   const specs = [
     typeof s.durationSec === 'number' ? `${s.durationSec}초` : '',
@@ -295,6 +298,32 @@ export async function notifyNaverClipDone(s: NaverClipDoneInfo): Promise<void> {
     const m = naverClipDoneHtml(s);
     await sendTelegramHtml(m.html, m.buttons);
   } catch { /* 무해 */ }
+}
+
+/** 클립 올리기 권유 입력(2026-10-05) — 블로그 발행이 감지된 글의 유튜브용 완성 편. */
+export interface NaverClipNudgeInfo { id: string; title: string; brand?: string; blogTitle?: string; /** 넣을 재생목록(없으면 문구에서 뺀다). */ playlist?: string }
+/**
+ * 클립 올리기 권유(순수) — 같은 날 올리게 버튼을 준다. 버튼은 스튜디오 버튼과 같은 `nc:`(같은 라우트·같은 중복 공개 방지,
+ * 프로필이 바쁘면 대기열). 공개는 여전히 사람이 누른다 — 이 알림은 누를 기회만 준다.
+ */
+export function naverClipNudgeHtml(s: NaverClipNudgeInfo): { html: string; buttons: TgButton[][] } {
+  return {
+    html: [
+      escapeHtml(`🟩 블로그가 발행됐습니다 — 이 숏폼을 네이버 클립에도 올릴까요?${brandTag(s.brand)}`),
+      `<b>${escapeHtml(clip(s.title, 200))}</b>`,
+      s.blogTitle ? escapeHtml(`원본 글: ${clip(s.blogTitle, 80)}`) : '',
+      escapeHtml(`누르면 블로그 링크·카테고리${s.playlist ? `·재생목록(${s.playlist})` : ''}까지 채워 바로 공개합니다(전체공개).`),
+    ].filter(Boolean).join('\n'),
+    buttons: [[{ text: '🟩 네이버 클립에 올리기', callback_data: `nc:${s.id}` }]],
+  };
+}
+/** 전송 — '새 콘텐츠 알림' 설정(NOTIFY_CONTENT_READY)과 텔레그램이 다 켜졌을 때만. 보냈으면 true. 실패는 무해. */
+export async function notifyNaverClipNudge(s: NaverClipNudgeInfo): Promise<boolean> {
+  try {
+    if (!youtubeUploadNotifies()) return false; // 버튼이 본체라 웹훅만 있는 채널엔 보내지 않는다
+    const m = naverClipNudgeHtml(s);
+    return await sendTelegramHtml(m.html, m.buttons);
+  } catch { return false; }
 }
 
 // 발행 버튼(인라인 키보드) — callback_data 규격은 telegramBot.parseCallback 과 한 쌍("<op>:<id>", ≤64바이트).

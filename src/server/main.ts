@@ -39,7 +39,7 @@ import { mineClusterForPiece, filterCandidates } from '../orchestrator/clusterMi
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
-import { uploadShortsToYoutube, publishWhenReady, PUBLISH_SAFETY_MIN, fetchMyChannel, channelOfUploads, decideChannelConnect } from '../tools/youtubeUpload';
+import { uploadShortsToYoutube, publishWhenReady, verifyPublicCover, coverNeedsAlert, PUBLISH_SAFETY_MIN, fetchMyChannel, channelOfUploads, decideChannelConnect } from '../tools/youtubeUpload';
 import { publishCardNewsToMeta, publishShortsToMeta, realPermalink, listIgMedia, matchOrphanReels, GRAPH } from '../tools/metaPublish';
 import { llmWiki, slugify } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
@@ -64,7 +64,7 @@ import { learnSpeciesLabel } from '../content/speciesLearn';
 import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, autoDailyCapFor, autoCapApplies, pickTopicTarget, shouldStartSecondRun, SIBLING_PLAN_WAIT_MS, type ShortsPlatform } from '../content/shortsPlatform';
 import { pickWriter, recentWriterIdsFor, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
-import { runShortsJob, isShortsRunning, reviseShorts, hookStillFor } from '../orchestrator/shorts';
+import { runShortsJob, isShortsRunning, reviseShorts, hookStillFor, siblingPlanFile } from '../orchestrator/shorts';
 import { inheritedSceneImages, inheritedClips } from '../content/shortsInherit';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo } from '../tools/shortsRender';
 import { generateDesignedThumbnail, thumbTextQaFailed } from '../orchestrator/shortsThumbnail';
@@ -111,12 +111,12 @@ import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
 import { maintainIgTokens, checkIgToken } from '../tools/igToken';
 import { igTokenExpiresAt } from '../secrets/store';
-import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, notifyYoutubeUploaded, notifyNaverClipDone, youtubeUploadNotifies, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
+import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, notifyYoutubeUploaded, notifyNaverClipDone, notifyNaverClipNudge, youtubeUploadNotifies, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
 import { startTelegramBot } from '../autonomy/telegramBot';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
-import { publishDraftToNaver, naverPublishCreds, collectNaverMetrics, isViewsSample, blogSkillProblem, publishShortsToNaverClip } from '../tools/blog_skills';
-import { buildClipDescription, pickClipVideo, blogLogNoFromUrl, canPublishClip, CLIP_CATEGORY, clipProfileUrl } from '../content/naverClip';
+import { publishDraftToNaver, naverPublishCreds, collectNaverMetrics, isViewsSample, blogSkillProblem, publishShortsToNaverClip, checkYoutubeCover } from '../tools/blog_skills';
+import { buildClipSearchDescription, pickClipVideo, blogLogNoFromUrl, canPublishClip, CLIP_CATEGORY, clipProfileUrl, clipPlaylistName, clipNudgeDue, pickClipDescription } from '../content/naverClip';
 import { planClipQueue, type ClipQueueEntry } from '../content/naverClipQueue';
 import { coerceBlogDraft } from '../output/smarteditor';
 import type { MetricSample } from '../analytics/performance';
@@ -1015,7 +1015,9 @@ async function piecePublishedHandler(c: Context): Promise<Response> {
   const body = await c.req.json<{ url?: string }>().catch(() => ({}) as { url?: string });
   const url = (body.url ?? '').trim();
   if (!url) return c.json({ error: 'url 이 필요합니다' }, 400);
-  return c.json({ piece: pieceStore().setPublished(id, url) });
+  const piece = pieceStore().setPublished(id, url);
+  nudgeNaverClipsForPiece(id); // 발행 등록 = 블로그 링크가 생겼다 — 그 글의 숏폼을 클립에도(2026-10-05)
+  return c.json({ piece });
 }
 // 성과 측정치 수집(v1 주 경로 = 수동 입력) — 사람이 네이버 통계에서 붙여넣기 → 강화 루프 트리거(멱등).
 async function pieceMetricsPostHandler(c: Context): Promise<Response> {
@@ -1447,7 +1449,8 @@ function startAfterSiblingPlan(siblingId: string, selfId: string, start: () => v
   const began = Date.now();
   const tick = (): void => {
     const sib = shortsStore().get(siblingId);
-    const planExists = fs.existsSync(path.join(shortsStore().dirFor(siblingId), 'plan.json'));
+    // 미리보기(제목·훅)가 먼저 나오면 그걸로 출발한다(2026-10-05) — 대본 뒤 단계가 늘어 plan.json 은 늦게 나올 수 있다.
+    const planExists = !!siblingPlanFile(shortsStore().dirFor(siblingId));
     const d = shouldStartSecondRun({ siblingPlanExists: planExists, siblingStage: sib?.stage, waitedMs: Date.now() - began });
     if (!d.start) { setTimeout(tick, 5_000); return; }
     if (d.reason !== 'plan') console.log(`[숏폼] 형제 대본 대기 종료(${d.reason}) — ${selfId} 그대로 출발`);
@@ -1880,23 +1883,35 @@ app.post('/shorts/:id/youtube', async (c) => {
     // 미지정 시 유튜브가 중간 프레임을 자동 선택해 커버가 엉뚱해짐(실측 2026-07-22, 사용자 방침: 맨 처음이 보이게).
     const ytVideo = (await ensureShortsDownload(ytDir)) ?? path.join(ytDir, 'final.mp4');
     const ytCover = await extractFirstFrame(ytVideo, path.join(ytDir, 'yt-cover.jpg'));
-    // 공개 발행(2026-10-01) — 비공개 + 예약 공개 안전망으로 올리고, 뒤에서 처리 확인 → 공개 전환 → 썸네일 확인.
+    // 공개 발행(2026-10-01) — 기본은 처음부터 공개로 올린다(2026-10-05 사장님 확정). 비공개로 올려 공개로 바꾸면
+    // 유튜브가 쇼츠 커버를 중간 장면으로 골라 사장님이 매번 손으로 고쳤다(ok_asis1 채널은 공개 업로드라 첫 장면).
+    // YOUTUBE_UPLOAD_PUBLIC_DIRECT=false 면 종전: 비공개 + 예약 공개 안전망 → 처리 확인 → 공개 전환 → 썸네일 확인.
     const goPublic = CONFIG.youtubePublishPublic;
-    const publishAt = goPublic ? new Date(Date.now() + PUBLISH_SAFETY_MIN * 60_000).toISOString() : undefined;
+    const direct = goPublic && CONFIG.youtubeUploadPublicDirect;
+    const publishAt = goPublic && !direct ? new Date(Date.now() + PUBLISH_SAFETY_MIN * 60_000).toISOString() : undefined;
     const r = await uploadShortsToYoutube({
       slug: s.brand ?? '', videoPath: ytVideo,
       title: s.title ?? s.topic, description: s.description ?? '', hashtags: s.hashtags ?? [],
       blogUrl: blogUrlForPiece(s.sourcePieceId), // 원본 블로그 링크 — 발행 시점 조회(사용자 확정 2026-07-31)
       thumbnailPath: ytCover ?? undefined,
-      publishAt,
+      publishAt, privacy: direct ? 'public' : 'private',
     });
     if (!r.ok) return c.json({ error: r.error }, 502);
     shortsStore().update(id, { youtubeId: r.videoId, youtubeUrl: r.url, youtubeTs: new Date().toISOString() });
     maybeArchiveShortsVideo(id); // 릴스도 이미 올라갔으면 여기서 원본 정리
     const ytLabel = (s.title ?? s.topic).slice(0, 30);
     if (r.thumbnailError) console.log(`[발행담당] ${ytLabel.slice(0, 24)} — 썸네일 미적용: ${r.thumbnailError}`);
-    console.log(`[발행담당] ${ytLabel} — 유튜브 ${goPublic ? '업로드 완료(처리 확인 뒤 공개 전환)' : '비공개 업로드 완료'} (${publisherName()})`);
-    if (goPublic && r.videoId) {
+    console.log(`[발행담당] ${ytLabel} — 유튜브 ${direct ? '공개 업로드 완료(커버 확인 중)' : goPublic ? '업로드 완료(처리 확인 뒤 공개 전환)' : '비공개 업로드 완료'} (${publisherName()})`);
+    if (direct && r.videoId) {
+      // 커버 확인만 한다 — 비공개로 되돌리지 않는다(그 전환이 중간 장면 커버를 만들던 길). 중간 장면·없음이면 알림.
+      void verifyPublicCover({ videoId: r.videoId, check: checkYoutubeCover }).then((o) => {
+        console.log(`[발행담당] ${ytLabel} — 유튜브 커버 확인: ${o.note}`);
+        // unknown(판정 불가 — 파이썬 없음·이미지 조회 실패·잠정 커버)은 로그만 — 알림은 확인된 문제(중간 장면·없음)만(리뷰 2026-10-05).
+        if (coverNeedsAlert(o.state) && notifyConfigured()) {
+          void notify({ title: `⚠️ 유튜브 쇼츠 커버 확인 필요 · ${ytLabel}`, body: `${o.note}\n${r.url ?? ''}` }).catch(() => { /* 무해 */ });
+        }
+      }).catch((e) => console.log(`[발행담당] ${ytLabel} — 유튜브 커버 확인 중단(무해): ${e instanceof Error ? e.message : String(e)}`));
+    } else if (goPublic && r.videoId) {
       // 기다리지 않는다 — 처리·썸네일 확인은 수 분 걸린다. 썸네일이 끝내 안 뜨면 사람이 봐야 하니 알림.
       void publishWhenReady({
         slug: s.brand ?? '', videoId: r.videoId, thumbnailPath: ytCover ?? undefined, publishAt,
@@ -1914,13 +1929,16 @@ app.post('/shorts/:id/youtube', async (c) => {
     // notified 는 알림을 '실제로 낸 조건'과 한 몸이어야 한다 — url 이 없으면 알림도 안 나가고,
     // 그때 텔레그램 버튼까지 침묵하면 사람이 버튼을 누르고 아무 응답도 못 받는다(2026-09-08).
     const notified = !!r.url && youtubeUploadNotifies();
+    // 이 알림엔 '네이버 클립에도 올리기' 버튼이 달린다 — 클립 권유 한 번으로 친다(2026-10-05, 블로그 발행 감지 때 또 보내지 않게).
+    if (notified && canPublishClip(s.platform) && !s.naverClipNudgedTs) shortsStore().update(id, { naverClipNudgedTs: new Date().toISOString() });
     if (r.url) {
       void notifyYoutubeUploaded({
         id, topic: s.topic, title: s.title, brand: s.brand,
-        durationSec: s.durationSec, scenes: s.scenes, url: r.url, publicPending: goPublic,
+        durationSec: s.durationSec, scenes: s.scenes, url: r.url, publicPending: goPublic && !direct, publicDirect: direct,
       });
     }
-    return c.json({ ok: true, url: r.url, thumbnailError: r.thumbnailError, notified, public_pending: goPublic });
+    // 바로 공개(direct)는 '공개 예정'이 아니라 이미 공개다(리뷰 2026-10-05) — public_pending 은 예약·전환 대기 경로만.
+    return c.json({ ok: true, url: r.url, thumbnailError: r.thumbnailError, notified, public_pending: goPublic && !direct, public_direct: direct });
   } finally {
     ytPublishInFlight.delete(id);
   }
@@ -2420,6 +2438,45 @@ function applyNaverClipResult(id: string, r: { status: string; mediaContentNo?: 
   if (r.status !== 'DRY_RUN') shortsStore().update(id, { naverClipError: (r.error ?? r.status).slice(0, 300) });
   return { status: r.status, url };
 }
+/**
+ * 블로그 발행이 감지된 글의 유튜브용 숏폼에 '클립에도 올리기' 권유를 보낸다(2026-10-05 사장님 승인).
+ * 왜. 클립은 유튜브와 달리 사람이 스튜디오에 들어가야만 올라가서, 발행 당일을 놓치면 그대로 묵었다.
+ * 공개는 여전히 사람 버튼이다 — 텔레그램 버튼(nc:)이 스튜디오 버튼과 같은 이 라우트를 부른다(중복 공개 방지·대기열 그대로).
+ * 한 편에 한 번만(naverClipNudgedTs) — 보내기 전에 표시부터 한다(같은 글이 두 경로로 감지돼도 한 통).
+ * 발행 '이벤트'로만 부른다 — 전체 훑기를 하면 7월부터 쌓인 미업로드 편에 첫날 수십 통이 간다.
+ */
+function nudgeNaverClipsForPiece(pieceId: string): void {
+  try {
+    if (!youtubeUploadNotifies()) return; // 새 콘텐츠 알림이 꺼졌거나 텔레그램이 없으면(버튼이 본체) 보내지 않는다
+    const piece = pieceStore().get(pieceId);
+    for (const x of shortsStore().list()) {
+      if (x.sourcePieceId !== pieceId) continue;
+      const due = clipNudgeDue(x, {
+        hasFinal: !!pickClipVideo(shortsStore().dirFor(x.id)),
+        inFlight: naverClipInFlight.has(x.id) || naverClipQueue.some((e) => e.id === x.id),
+      });
+      if (!due) continue;
+      shortsStore().update(x.id, { naverClipNudgedTs: new Date().toISOString() });
+      const playlist = CONFIG.naverClipPlaylist ? clipPlaylistName(clipSearchMaterial(x).species) : undefined;
+      void notifyNaverClipNudge({ id: x.id, title: x.title ?? x.topic, brand: x.brand, blogTitle: piece?.title, playlist }).then((sent) => {
+        console.log(`[발행담당] ${(x.title ?? x.topic).slice(0, 30)} — 클립 올리기 권유 ${sent ? '보냄' : '전송 실패'}`);
+      });
+    }
+  } catch (e) {
+    console.log(`[발행담당] 클립 권유 실패(무해): ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+/**
+ * 클립 설명·재생목록 재료(2026-10-05) — 원본 글의 실제 검색 유입어·주 키워드·수종. 파일 읽기는 여기서, 고르기는 순수 함수가.
+ * 수종은 정확 판정(findSpecies)만 쓴다 — 느슨하게 잡으면 엉뚱한 재생목록에 들어간다. 못 찾으면 재생목록 없이 올린다.
+ */
+function clipSearchMaterial(s: { title?: string; topic: string; sourcePieceId?: string }) {
+  const piece = s.sourcePieceId ? pieceStore().get(s.sourcePieceId) : undefined;
+  const speciesList = loadSpecies();
+  const species = findSpecies(piece?.keyword ?? '', speciesList) ?? findSpecies(piece?.title ?? '', speciesList) ?? findSpecies(s.title ?? s.topic, speciesList);
+  const inflow = piece ? topInflow(readMetrics(piece.id), 10) : [];
+  return { keyword: piece?.keyword, inflow, species, speciesList };
+}
 app.post('/shorts/:id/naver-clip', async (c) => {
   const id = c.req.param('id') ?? '';
   // 본문을 먼저 읽는다 — 레코드를 읽은 뒤 await 하면 그 사이 다른 요청이 바꾼 상태를 놓친다.
@@ -2468,9 +2525,17 @@ app.post('/shorts/:id/naver-clip', async (c) => {
         const prev = JSON.parse(fs.readFileSync(path.join(dir, 'naver-clip', 'clip_result.json'), 'utf-8')) as { status?: string; video_id?: string };
         if (prev.status === 'SUBMITTED' || prev.status === 'PUBLISHED') prevVideoId = prev.video_id ?? undefined;
       } catch { /* 없음 */ }
+      // 설명 첫 줄·태그는 실제 검색 유입어로(2026-10-05). 유입은 매일 바뀌어 설명도 바뀔 수 있다 — '클립 확인'은
+      // 실제로 올린 설명을 쓰고, 스크립트는 제목 '줄'로도 같은 편을 찾는다(--match-title).
+      const mat = clipSearchMaterial(s);
+      const title = (s.title ?? s.topic).trim();
+      const built = buildClipSearchDescription({ title, body: s.description ?? '', hashtags: s.hashtags ?? [], ...mat });
+      const description = pickClipDescription(built, shortsStore().get(id)?.naverClipDescription, !!body.dryRun && !check); // 확인·재업로드는 지난번 설명 그대로
+      if (!check && !body.dryRun) shortsStore().update(id, { naverClipDescription: description });
+      const playlist = CONFIG.naverClipPlaylist ? clipPlaylistName(mat.species) : undefined;
       const r = await publishShortsToNaverClip({
         slug: s.brand ?? '', videoPath: video || '',
-        description: buildClipDescription(s.title ?? s.topic, s.description ?? '', s.hashtags ?? []),
+        description, matchTitle: title, playlist,
         coverPath: fs.existsSync(thumb) ? thumb : undefined,
         blogLogNo: blogLogNoFromUrl(blogUrlForPiece(s.sourcePieceId)) ?? undefined,
         categoryFirst: CLIP_CATEGORY.first, categorySecond: CLIP_CATEGORY.second,
@@ -2797,7 +2862,7 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
         // 전체공개는 아래에서 바로 발행됨으로 넘긴다(naverJobUrls).
         if (privateNow) console.log(`[네이버] ${r.publicPublished ? '전체공개' : '비공개'} 발행 — ${privateNow.slice(0, 80)}`);
         // 전체공개면 바로 '발행됨'(2026-10-02) — 수동 '발행 등록'·RSS 감지와 같은 setPublished. 미발행 초안 상한에서 즉시 빠진다.
-        if (publicNow) pieceStore().setPublished(id, publicNow);
+        if (publicNow) { pieceStore().setPublished(id, publicNow); nudgeNaverClipsForPiece(id); }
         // 저장 성공 = 본문 확정 + 블로그 주소 확보 → 카드뉴스·숏폼 자동 파생(주제 하나 → 세트).
         // 2026-08-28 사용자 확정으로 이 훅이 파생의 **단일 경로**가 됐다 — 사람이 검토 탭·텔레그램
         // 버튼으로 저장한 글도 같은 훅을 타므로 전량 수동 검토 운영에서도 세트는 정상 생성된다.
@@ -3254,7 +3319,7 @@ async function runFastRefresh(): Promise<void> {
  *  수 분~30분 걸린다 — 프론트는 naverBusy 로 폴링한다. */
 async function runNaverRefresh(): Promise<void> {
   try {
-    await discoverPublishedNaver().then(() => syncPerformance({ force: true }));
+    await discoverPublishedNaver().then((ids) => { ids.forEach(nudgeNaverClipsForPiece); return syncPerformance({ force: true }); });
   } catch (e) {
     console.log('[perf-sync]', `네이버 수집 실패(무해): ${e instanceof Error ? e.message : String(e)}`);
   } finally { naverRefreshBusy = false; }
@@ -4851,7 +4916,7 @@ const stopNaverSync = startDaily({
   time: CONFIG.naverSyncTime,
   key: 'naver-sync',
   // 발행 감지(공개 RSS)가 publishedUrl 을 채운 뒤 성과 수집 — 순서 의존이라 then 으로 잇는다.
-  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); },
+  run: () => { void discoverPublishedNaver().then((ids) => { ids.forEach(nudgeNaverClipsForPiece); return syncPerformance(); }); },
   log: (m) => console.log('[naver-sync]', m),
 });
 void stopNaverSync;

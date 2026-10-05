@@ -42,8 +42,25 @@ export function scoreSeo(input: {
   add('본문 분량 적정(1,500~4,000자)', bl >= 1500 && bl <= 4000, `${bl}자`);
 
   // 키워드 배치·밀도
-  const firstPara = body.split(/\n\n/).find((p) => p.trim() && !p.startsWith('#')) ?? '';
-  add('첫 문단에 핵심 키워드', !!kw && firstPara.includes(kw));
+  // 도입부 = 첫 소제목 앞 글 문단 2개(2026-10-05, 참고 블로그 2026-10-02 수선 이식). 첫머리 굵은 요약 두 줄(편집 확정 규칙)이
+  // 생기면서 '첫 문단'이 요약 한 줄이 될 수 있다 — 키워드가 둘째 요약 줄이나 바로 다음 도입 문단에 있어도 도입부로 인정한다.
+  // 이미지 자리·구분선은 건너뛰고, 굵게·이탤릭 마커는 떼고 본다("**라일락** 꽃말"이 "라일락 꽃말"과 같게).
+  // 소제목으로 바로 시작하는 글은 도입부가 없다 — 종전엔 소제목 아래 첫 문단을 봤지만, 그건 첫 문단이 아니다(참고 블로그와 같은 판정).
+  // 리뷰(2026-10-05): 그러면 소제목으로 바로 시작하는 글은 늘 미달이 된다 — 그 경우엔 첫 소제목 자체나 그 바로 아래
+  // 굵은 요약 덩어리(줄마다 **…**)에 키워드가 있어도 인정한다('키워드가 글 맨 앞에 나온다'는 뜻은 그대로).
+  const paras = body.split(/\n\n/).map((x) => x.trim()).filter((p) => p && !/^\[IMAGE:/.test(p) && !/^-{3,}$/.test(p));
+  const lead: string[] = [];
+  for (const p of paras) {
+    if (p.startsWith('#')) break;
+    lead.push(p);
+    if (lead.length === 2) break;
+  }
+  if (!lead.length && paras[0]?.startsWith('#')) {
+    lead.push(paras[0].replace(/^#+\s*/, ''));
+    const next = paras[1];
+    if (next && !next.startsWith('#') && next.split('\n').every((l) => /^\*\*.+\*\*[.!?…]?$/.test(l.trim()))) lead.push(next);
+  }
+  add('첫 문단에 핵심 키워드', !!kw && lead.join('\n').replace(/[*_]/g, '').includes(kw));
   const occ = countKeyword(body, kw);
   const density = bl > 0 && kw ? (occ * kw.length) / bl * 100 : 0;
   add('키워드 밀도 0.5~2.5%(과최적화 경계)', density >= 0.5 && density <= 2.5, `${density.toFixed(1)}% (${occ}회)`);

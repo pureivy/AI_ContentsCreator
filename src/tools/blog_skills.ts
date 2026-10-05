@@ -242,6 +242,36 @@ export async function captureBlogFrame(
   return parseBlogFrameOutput(r.output);
 }
 
+export type YtCoverState = 'first' | 'middle' | 'missing' | 'unknown';
+export interface YtCoverCheck { state: YtCoverState; cover?: string; simFirst?: number; simMid?: number }
+
+/** yt_cover_check.py 출력 파싱(순수) — RESULT_JSON 이 없거나 깨졌으면 unknown(판정 보류). */
+export function parseYtCoverOutput(output: string): YtCoverCheck {
+  const line = output.split('\n').reverse().find((l) => l.trim().startsWith('RESULT_JSON:'));
+  if (!line) return { state: 'unknown' };
+  try {
+    const o = JSON.parse(line.slice(line.indexOf('{'))) as Record<string, unknown>;
+    const st = String(o.state ?? '');
+    const state: YtCoverState = st === 'first' || st === 'middle' || st === 'missing' ? st : 'unknown';
+    return {
+      state,
+      ...(typeof o.cover === 'string' ? { cover: o.cover } : {}),
+      ...(typeof o.simFirst === 'number' ? { simFirst: o.simFirst } : {}),
+      ...(typeof o.simMid === 'number' ? { simMid: o.simMid } : {}),
+    };
+  } catch { return { state: 'unknown' }; }
+}
+
+/**
+ * 유튜브 쇼츠 커버가 첫 장면(디자인 썸네일)인지 그림으로 판정(2026-10-05) — 공개 이미지만 본다(인증 불필요).
+ * 종전 확인은 크기만 봐서 중간 장면이 커버여도 통과했다(yt_cover_check.py 머리말). 실패는 unknown.
+ */
+export async function checkYoutubeCover(videoId: string, signal?: AbortSignal): Promise<YtCoverCheck> {
+  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) return { state: 'unknown' };
+  const r = await runScript('yt_cover_check.py', ['--video-id', videoId], os.tmpdir(), signal, { timeoutMs: 60_000 });
+  return parseYtCoverOutput(r.output);
+}
+
 /**
  * 카드뉴스 레퍼런스 검색 — cardnews_search.py(DuckDuckGo 이미지 검색·다운로드·Pillow 검증).
  * 검색 실패·0장은 무해(빈 매니페스트, exit 0) — 호출부는 레퍼런스 없이 기존 경로로 진행(fail-open).
@@ -578,16 +608,40 @@ export function parseNaverClipResult(raw: string, output = ''): NaverClipResult 
 // 업로드 + 인코딩 대기(최대 10분) + 등록 확인(2분) — 넉넉히 20분.
 const NAVER_CLIP_TIMEOUT_MS = 20 * 60_000;
 
-/**
- * 숏폼을 네이버 클립에 올린다 — 사람이 누른 버튼의 신뢰 경로(라우트가 가드·뮤텍스를 맡는다).
- * 블로그 발행과 같은 브랜드 프로필(로그인 상태)을 쓴다. 공개 API 가 없어 PC웹을 조작한다.
- */
-export async function publishShortsToNaverClip(opts: {
+export type NaverClipOpts = {
   slug: string; videoPath: string; description: string; coverPath?: string; blogLogNo?: string;
   categoryFirst: string; categorySecond: string; aiGenerated: boolean; uploadName: string; runDir: string; dryRun?: boolean;
   /** 올리지 않고 이미 공개됐는지만 본다(RECOVERED/NOT_FOUND) — '등록 뒤 미확인' 편을 풀 때. */
   checkOnly?: boolean; videoId?: string;
-}, signal?: AbortSignal): Promise<NaverClipResult> {
+  /** 중복 공개 검사용 제목(2026-10-05) — 설명 첫 줄이 검색어로 바뀌어, 같은 편은 제목 '줄'로 찾는다. */
+  matchTitle?: string;
+  /** 넣을 재생목록 이름(2026-10-05, "<수종> 키우기") — 없으면 안 넣는다. 실패해도 업로드는 계속된다. */
+  playlist?: string;
+};
+
+/** naver_clip_publish.py 인자(순수) — 헤드리스 여부만 호출부가 붙인다. */
+export function naverClipArgs(opts: NaverClipOpts, resultPath: string): string[] {
+  const args = [
+    ...(opts.checkOnly ? ['--check-only'] : ['--video', opts.videoPath]), '--description', opts.description,
+    '--category-first', opts.categoryFirst, '--category-second', opts.categorySecond,
+    '--upload-name', opts.uploadName, '--run-dir', opts.runDir, '--result-file', resultPath,
+  ];
+  if (opts.coverPath) args.push('--cover', opts.coverPath);
+  if (opts.blogLogNo) args.push('--blog-log-no', opts.blogLogNo);
+  if (opts.aiGenerated) args.push('--ai-generated');
+  if (opts.dryRun) args.push('--dry-run');
+  if (opts.videoId) args.push('--video-id', opts.videoId);
+  if (opts.matchTitle) args.push('--match-title', opts.matchTitle);
+  // 드라이런은 재생목록을 넘기지 않는다(리뷰 2026-10-05) — '새 재생목록 만들기'는 등록 전에도 즉시 전체 공개로 저장된다.
+  if (opts.playlist && !opts.checkOnly && !opts.dryRun) args.push('--playlist', opts.playlist);
+  return args;
+}
+
+/**
+ * 숏폼을 네이버 클립에 올린다 — 사람이 누른 버튼의 신뢰 경로(라우트가 가드·뮤텍스를 맡는다).
+ * 블로그 발행과 같은 브랜드 프로필(로그인 상태)을 쓴다. 공개 API 가 없어 PC웹을 조작한다.
+ */
+export async function publishShortsToNaverClip(opts: NaverClipOpts, signal?: AbortSignal): Promise<NaverClipResult> {
   const { slug } = opts;
   if (slug && !isSafeBrandSlug(slug)) return { status: 'ERROR', error: `무효한 브랜드 슬러그: ${slug}`, issues: [], output: '' };
   try { fs.mkdirSync(opts.runDir, { recursive: true }); } catch { /* 스크립트가 다시 만든다 */ }
@@ -601,16 +655,7 @@ export async function publishShortsToNaverClip(opts: {
     } catch { /* 없음 */ }
   }
   try { fs.rmSync(resultPath, { force: true }); } catch { /* 없음 */ } // 낡은 결과를 성공으로 오판하지 않게
-  const args = [
-    ...(opts.checkOnly ? ['--check-only'] : ['--video', opts.videoPath]), '--description', opts.description,
-    '--category-first', opts.categoryFirst, '--category-second', opts.categorySecond,
-    '--upload-name', opts.uploadName, '--run-dir', opts.runDir, '--result-file', resultPath,
-  ];
-  if (opts.coverPath) args.push('--cover', opts.coverPath);
-  if (opts.blogLogNo) args.push('--blog-log-no', opts.blogLogNo);
-  if (opts.aiGenerated) args.push('--ai-generated');
-  if (opts.dryRun) args.push('--dry-run');
-  if (opts.videoId) args.push('--video-id', opts.videoId);
+  const args = naverClipArgs(opts, resultPath);
   if (naverPublishCreds(slug).headless) args.push('--headless');
   const profileDir = naverProfileDir(slug);
   const env: Record<string, string> = {};

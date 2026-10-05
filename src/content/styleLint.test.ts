@@ -445,3 +445,25 @@ describe('isPromiseSentence — 재검토 경계(2026-10-02)', () => {
     expect(isPromiseSentence('다음 시간대엔 그늘이 들어요.')).toBe(false);
   });
 });
+
+// 한 문장 한 줄(2026-10-05 편집 확정 규칙) — 문체 린트가 새 꼴을 지적하거나 수정 라운드로 '되돌리게' 만들면 안 된다.
+// 린트는 줄 → 종결부호 순으로 문장을 나누므로 같은 글을 문단으로 쓰든 줄마다 쓰든 판정이 같아야 한다.
+describe('blogStyleIssues — 한 문장 한 줄 꼴(2026-10-05)', () => {
+  const sentences = [
+    '라일락은 4월 중순에 핍니다.', '향은 한두 주면 사라져요.', '그래서 꽃말이 첫사랑이 됐다고 봅니다.',
+    '잎은 마주나고 광택이 있습니다.', '가지 끝 눈을 세어 두세요.', '겨울 추위가 꽃눈을 깨웁니다.',
+  ];
+  const para = `**라일락 꽃말은 첫사랑의 시작입니다.**\n**향이 짧아서 붙은 이름이에요.**\n\n${sentences.slice(0, 3).join(' ')}\n\n## 잎과 눈\n\n${sentences.slice(3).join(' ')}`;
+  const lines = `**라일락 꽃말은 첫사랑의 시작입니다.**\n**향이 짧아서 붙은 이름이에요.**\n\n${sentences.slice(0, 3).join('\n')}\n\n## 잎과 눈\n\n${sentences.slice(3).join('\n')}`;
+  it('문단 꼴과 한 줄 꼴의 판정이 같다', () => {
+    expect(blogStyleIssues(lines)).toEqual(blogStyleIssues(para));
+  });
+  it('굵은 요약 줄·굵은 예시 단독 줄은 지적 대상이 아니다', () => {
+    expect(blogStyleIssues(lines)).toEqual([]);
+  });
+  it('합쇼체 비율은 줄 꼴에서도 문장 단위로 센다(분모가 줄 수로 부풀지 않음)', () => {
+    const hamnida = Array.from({ length: 22 }, (_, i) => `${i + 1}번째 관찰입니다.`).join('\n');
+    expect(blogStyleIssues(hamnida).some((x) => x.startsWith('합쇼체 비율'))).toBe(true);
+    expect(blogStyleIssues(hamnida.replace(/\n/g, ' '))).toEqual(blogStyleIssues(hamnida));
+  });
+});

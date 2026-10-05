@@ -603,6 +603,13 @@ def parse_body_to_comps(body: str) -> list:
             quote_buf.append(make_body_para(q.group(2)))
             i += 1
             continue
+        # 프레임 상자(>>>) 바로 아래 '빈 줄 없이' 이어지는 번호·글머리 항목은 상자 안으로 — 사람 경로 absorb_frame_items 와
+        # 같은 규칙(리뷰 2026-10-05: 종전엔 사람 경로에만 있어 두 경로의 상자 모양이 달랐다). 빈 줄은 위 분기 전에 이미
+        # flush_quote 로 상자를 닫으므로, 빈 줄 뒤 별도 목록은 흡수되지 않는다(draftToFinalContent 가 그 빈 줄을 보존).
+        if s and quote_buf and quote_layout == "quotation_corner" and _FRAME_ITEM_RE.match(s):
+            quote_buf.append(make_body_para(re.sub(r"^[-*]\s+", "• ", s, count=1)))
+            i += 1
+            continue
         flush_quote()
         if s:
             # 목록 정돈 — SE 목록 컴포넌트 미지원이라 문단으로 들어간다. 원시 "- " 노출 대신 "• "로
@@ -917,7 +924,9 @@ def type_body_human(page, se_text: dict, images: list, issues: list, ai_flags: l
         first_block = True
 
     for i, section in enumerate(sections):
-        heading = section.get("heading", "").strip()
+        # 번호 소제목("1. …")은 SE 자동 번호목록을 일으켜 번호가 사라지고 뒤 문단까지 목록에 삼켜진다(2026-10-05 라일락 편
+        # 실측). 인용구와 같은 방식으로 "1) …"로 무해화한다 — headings 에도 이 텍스트가 들어가 서식 매칭이 맞는다.
+        heading = safe_heading_text(section.get("heading", ""))
         body = section.get("body", "")
         level = section.get("heading_level", "HEADING1")
         if heading:
@@ -988,6 +997,10 @@ def type_body_human(page, se_text: dict, images: list, issues: list, ai_flags: l
                         break
                     qlines.append(m2.group(2))
                     k += 1
+                # 프레임 상자(>>>) 바로 아래 이어지는 번호·글머리 항목은 상자 안으로(작가가 첫 줄에만 >>> 를 다는 이탈 —
+                # 참고 블로그 2026-10-04 실측). 프레임 캡(QUOTE_LINE_CAP 10)은 그대로 적용된다.
+                if depth == 3:
+                    k = absorb_frame_items(body_lines, k, qlines)
                 # 인용구 안 목록 접두 무해화 — "1. "·"- " 문단이 SE 자동목록으로 바뀌면 변환 매칭이 깨진다.
                 qlines = [re.sub(r"^[-*]\s+", "• ", re.sub(r"^(\d+)\.\s+", r"\1) ", q.strip()))
                           for q in qlines if q.strip()]
@@ -1038,9 +1051,9 @@ def type_body_human(page, se_text: dict, images: list, issues: list, ai_flags: l
                 time.sleep(0.15)
                 first_block = True                             # 목록 종료가 새 문단을 이미 만듦
                 continue
-            # 일반 문단
+            # 일반 문단 — "**1. …**"처럼 서식 마커 뒤 번호로 시작하면 자동목록이 걸린다(마커는 타이핑되지 않음) → "1) …".
             newline_before()
-            human_type_rich(page, line)  # 굵게·이탤릭 반영
+            human_type_rich(page, safe_paragraph_text(line))  # 굵게·이탤릭 반영
             k += 1
         for slot in after_map.get(i, []):
             newline_before()  # 직전이 이미지면(first_block) Enter 생략 → 이미지 사이 빈 문단 방지
@@ -1143,6 +1156,215 @@ def apply_heading_styles(page, headings: list) -> str:
     }""",
         headings,
     )
+
+
+# ── 자동목록 무해화·프레임 항목 흡수(2026-10-05 참고 블로그(ok_asis1) 서식 이식) ──────────────
+# 라일락 편(224431207647, 세션 333f4387e23d)에서 구조 시드 번호형 소제목 "1. 꽃말 한 줄, …"을 타이핑하자 SE 가
+# 자동 번호목록으로 바꿔 번호가 사라지고 뒤 문단까지 목록에 삼켰다(doc_structure.json: 소제목 1만 "1." 없이 본문과 한 덩어리).
+# 인용구 줄과 같은 방식으로 "1) …"·"• …"로 바꿔 목록 트리거를 피한다(참고 블로그 2026-10-04 실측 확인 방식).
+_FRAME_ITEM_RE = re.compile(r"^(?:\d+[.)]|[-*•])\s+\S")
+# 굵게·이탤릭 마커로 시작해 목록 분기(^[-*]|\d+\.)에 안 걸린 일반 문단("**1. 잎의 광택**") — 마커는 타이핑되지 않으므로
+# 문단 첫머리에 "1. "이 그대로 입력돼 같은 자동목록이 걸린다.
+_PARA_LIST_LEAD_RE = re.compile(r"^((?:\*\*|__|\*|_)+)(\d+\.|-)\s+")
+
+
+def absorb_frame_items(body_lines: list, k: int, qlines: list) -> int:
+    """>>> 상자 직후 연속된 목록 항목(빈 줄 전까지)을 qlines 에 붙이고 다음 인덱스를 돌려준다.
+    작가가 첫 줄에만 >>> 를 달면 "1) …" 항목들이 상자 밖 본문으로 빠진다(참고 블로그 2026-10-04 실측).
+    경계는 빈 줄 또는 '목록 꼴이 아닌 첫 줄'. 발행 페이로드는 빈 줄을 대부분 버리지만 >>> 줄 뒤의 빈 줄만은 남긴다
+    (draftToFinalContent, 리뷰 2026-10-05) — 초안에서 상자와 띄어 쓴 별도 목록이 상자에 삼켜지지 않게.
+    API 경로(parse_body_to_comps)도 같은 규칙."""
+    while k < len(body_lines):
+        t = body_lines[k].strip()
+        if not t or not _FRAME_ITEM_RE.match(t):
+            break
+        qlines.append(t)
+        k += 1
+    return k
+
+
+def safe_heading_text(heading: str) -> str:
+    """소제목 앞 "1. "·"- "는 SE 자동목록 트리거 — "1) "·"• "로 바꿔 소제목이 목록이 되지 않게 한다."""
+    h = (heading or "").strip()
+    return re.sub(r"^[-*]\s+", "• ", re.sub(r"^(\d+)\.\s+", r"\1) ", h))
+
+
+def safe_paragraph_text(line: str) -> str:
+    """일반 문단 중 서식 마커 바로 뒤 "N. "·"- "로 시작하는 줄만 "N) "·"• "로(목록 분기에 안 걸린 자동목록 트리거).
+    마커 없는 "1. …" 줄은 목록 분기가 의도적으로 SE 자동목록을 쓰므로 여기 오지 않는다 — 건드리지 않는다."""
+    def repl(m):
+        lead = m.group(2)
+        return m.group(1) + ("• " if lead == "-" else lead[:-1] + ") ")
+    return _PARA_LIST_LEAD_RE.sub(repl, line, count=1)
+
+
+# ── 발행 서식(2026-10-05 사장님 확정 — 참고 블로그 ok_asis1 의 2026-10-04 서식 이식, NAVER_RICH_FORMAT) ──
+# 편집기 실측(참고 블로그 2026-10-04): setDocumentData 는 spanStyle 을 지우지만 컴포넌트 종류·nodeStyle(fontSizeCode·bold)·
+# paragraphStyle(align)·image caption(문단 배열)은 보존한다 — 종전 26pt 소제목 spanStyle 이 실제 글에 안 나온 원인.
+# sectionTitle 은 value 가 아니라 title 필드다. 참고 블로그 첫 실발행(무기력 편)에서 소제목 5·fs16·가운데 2·설명 3 확인.
+# 참고 블로그는 이 변환을 JS 안에서 했다. 여기서는 Python 순수 함수(plan_rich_format)로 옮겨 단위 테스트하고, 사람 경로는
+# getDocumentData → 변환 → setDocumentData, API 경로는 STEP 7 직전 컴포넌트 목록에 그대로 건다(두 경로 같은 규칙).
+_PUNCT_ONLY_RE = re.compile(r"^[\s.,!?…·:;'\"”’)\]~-]*$")
+
+
+def rich_format_enabled() -> bool:
+    """기본 활성 — NAVER_RICH_FORMAT=false/0/off 로 끄면 종전 서식(소제목=굵은 본문 문단, 크기 미지정) 그대로."""
+    return os.environ.get("NAVER_RICH_FORMAT", "true").strip().lower() not in ("0", "false", "no", "off")
+
+
+def image_caption_map(images: list) -> dict:
+    """이미지 파일명 → 사진 설명(alt). 에디터의 image 컴포넌트는 fileName 으로 대응한다.
+    실촬영 컷은 finalize 가 alt 를 "<수종> — 비온디트리 농원에서 직접 촬영"으로 단다(그대로 설명이 된다).
+    리뷰(2026-10-05): 실촬영 컷(is_real_photo)에만 단다 — 생성 이미지의 alt 는 "…근접 사진"처럼 읽혀, 설명으로 달면
+    AI 이미지가 실사진처럼 보인다(네이버 07-06 스팸 공지 위험)."""
+    out = {}
+    for e in images or []:
+        if not is_real_photo(e):
+            continue
+        fp = e.get("file_path") or ""
+        alt = (e.get("alt") or "").strip()
+        if fp and alt:
+            out[Path(fp).name] = alt[:60]
+    return out
+
+
+def _rf_norm(s: str) -> str:
+    return re.sub(r"\s+", " ", s or "").strip()
+
+
+def _rf_para_text(para: dict) -> str:
+    return _rf_norm("".join((n or {}).get("value") or "" for n in (para.get("nodes") or [])))
+
+
+def _rf_node_bold(n: dict) -> bool:
+    """굵게 판정 — 사람 경로는 명령 굵게(nodeStyle.bold), API 경로는 우리가 만든 spanStyle(font-weight:bold)."""
+    if (n.get("style") or {}).get("bold"):
+        return True
+    return "font-weight:bold" in (n.get("spanStyle") or "").replace(" ", "")
+
+
+def _rf_all_bold(para: dict) -> bool:
+    """문단 전체가 굵은가 — 글자 노드가 모두 굵어야 한다. 굵게 밖으로 빠진 문장부호 노드("**…다**.")는 무시한다."""
+    ns = [n for n in (para.get("nodes") or []) if ((n or {}).get("value") or "").strip()]
+    core = [n for n in ns if not _PUNCT_ONLY_RE.match(n.get("value") or "")]
+    return bool(core) and all(_rf_node_bold(n) for n in core)
+
+
+def _rf_fs16_node(n: dict) -> dict:
+    """본문 글자 노드 → 16pt(fontSizeCode fs16). spanStyle 굵게는 setDocumentData 가 지우므로 nodeStyle.bold 로 옮긴다
+    (API 경로 — 종전엔 이 경로의 **굵게**가 저장본에서 사라졌다)."""
+    if (n or {}).get("@ctype") != "textNode":
+        return n
+    st = dict(n.get("style") or {})
+    if _rf_node_bold(n):
+        st["bold"] = True
+    st["fontSizeCode"] = "fs16"
+    st["@ctype"] = "nodeStyle"
+    return {**n, "style": st}
+
+
+def plan_rich_format(components: list, headings: list, captions: dict, new_id=None) -> tuple:
+    """서식 변환(순수 — 입력을 바꾸지 않는다). 반환: (새 컴포넌트 목록, 통계 dict).
+    ① 소제목 문단(headings 텍스트와 일치, 문서 순서대로 1회씩 소비) → 네이버 '소제목'(sectionTitle) 컴포넌트
+    ② 본문 text 컴포넌트의 글자 노드 → 16pt  ③ 본문 맨 위에 '이어서' 놓인 전부 굵은 문단(첫머리 요약) → 가운데 정렬
+    ④ 이미지 → 사진 설명(alt, 이미 설명이 있으면 그대로). 이미지 컴포넌트의 id·ai 는 건드리지 않는다 — 실촬영 컷의
+       AI 표시 해제(set_images_ai skip_ids·convert_quotes_and_ai)가 id·순서로 짝을 맞춘다.
+    ③을 '맨 위 연속 구간'으로 좁힌 이유: 참고 블로그는 '첫 소제목 전 전부 굵은 문단'을 다 가운데로 보냈는데, 우리 편집
+    규칙은 핵심 예시 문장을 굵은 단독 줄로 허용한다 — 도입부에 그런 줄이 있으면 요약도 아닌데 가운데로 간다.
+    인용구·표·구분선·소제목이 나오거나 굵지 않은 글 문단이 나오면 구간이 닫힌다(빈 문단·이미지는 건너뛴다)."""
+    new_id = new_id or uid
+    hq = {}
+    for h in headings or []:
+        k = _rf_norm(h.get("text") if isinstance(h, dict) else h)
+        if k:
+            hq[k] = hq.get(k, 0) + 1
+    stats = {"titles": 0, "fs16": 0, "center": 0, "captions": 0}
+    out = []
+    lead_open = True
+    for c in components or []:
+        ct = (c or {}).get("@ctype")
+        if ct == "image":
+            alt = (captions or {}).get(c.get("fileName") or "")
+            cap = c.get("caption")
+            if alt and not (isinstance(cap, list) and cap):
+                c = {**c, "caption": [{"@ctype": "paragraph", "id": new_id(),
+                                       "nodes": [{"@ctype": "textNode", "id": new_id(), "value": alt}]}]}
+                stats["captions"] += 1
+            out.append(c)
+            continue
+        if ct != "text":
+            if ct != "documentTitle":
+                lead_open = False
+            out.append(c)
+            continue
+        buf = []
+        chunks = [0]
+
+        def flush():
+            if buf:
+                out.append({**c, "id": c.get("id") if chunks[0] == 0 else new_id(), "value": list(buf)})
+                chunks[0] += 1
+                buf.clear()
+
+        for para in (c.get("value") or []):
+            txt = _rf_para_text(para)
+            if txt and hq.get(txt, 0) > 0:
+                hq[txt] -= 1
+                flush()
+                lead_open = False
+                out.append({"@ctype": "sectionTitle", "id": new_id(), "layout": "default", "title": [para]})
+                stats["titles"] += 1
+                continue
+            if not txt:
+                buf.append(para)
+                continue
+            p2 = {**para, "nodes": [_rf_fs16_node(n) for n in (para.get("nodes") or [])]}
+            stats["fs16"] += 1
+            if lead_open and _rf_all_bold(para):
+                p2["style"] = {**(para.get("style") or {}), "align": "center", "@ctype": "paragraphStyle"}
+                stats["center"] += 1
+            else:
+                lead_open = False
+            buf.append(p2)
+        flush()
+    return out, stats
+
+
+def rich_format_summary(stats: dict, n_headings: int) -> str:
+    return (f"ok:titles={stats['titles']}/{n_headings},fs16={stats['fs16']},"
+            f"center={stats['center']},captions={stats['captions']}")
+
+
+def rich_format_heading_issue(summary: str) -> str:
+    """소제목 일부만 변환됐으면 issue 문구, 아니면 "" (리뷰 2026-10-05). 맞춘 수 < 소제목 수 = 일부 소제목이 본문 문단으로
+    남았다(텍스트 불일치 — 타이핑 중 바뀐 글자 등). 글은 그대로 발행 가능하지만 소제목 모양이 섞이므로 사람에게 알린다."""
+    m = re.search(r"titles=(\d+)/(\d+)", summary or "")
+    if m and int(m.group(1)) < int(m.group(2)):
+        return f"소제목 일부만 변환({m.group(1)}/{m.group(2)}) — 나머지는 본문 문단으로 남음"
+    return ""
+
+
+def apply_rich_format(page, headings: list, captions: dict) -> str:
+    """사람(·하이브리드) 경로 — 타이핑·인용구 변환·표 스플라이스가 끝난 문서에 서식을 한 번의 setDocumentData 로 입힌다.
+    리뷰(2026-10-05): 어떤 예외도 밖으로 내보내지 않는다 — 새면 사람 경로 바깥 except 가 '사람처럼 입력 실패'로 받아
+    이미 타이핑한 본문을 API 일괄 경로(setDocumentData 통째)로 다시 쓴다. 실패는 "error:…"로 돌려주고 본문은 그대로 둔다."""
+    try:
+        doc = page.evaluate("""() => {
+            const ds = window.SE?.launcher?._editors?.blogpc001?._documentService;
+            return ds ? ds.getDocumentData() : null;
+        }""")
+        if not doc or not isinstance(doc.get("document"), dict):
+            return "no_ds"
+        comps, stats = plan_rich_format(doc["document"].get("components") or [], headings, captions)
+        doc["document"]["components"] = comps
+        res = page.evaluate("""(doc) => {
+            const ds = window.SE?.launcher?._editors?.blogpc001?._documentService;
+            if (!ds) return 'no_ds';
+            try { ds.setDocumentData(doc); return 'ok'; } catch(e) { return 'error:' + e.message; }
+        }""", doc)
+        return rich_format_summary(stats, len(headings or [])) if res == "ok" else str(res)
+    except Exception as e:
+        return "error:" + str(e)[:80]
 
 
 def bold_title_via_command(page) -> str:
@@ -1573,6 +1795,16 @@ def write_post(
                     if not (isinstance(sp, str) and sp.startswith("ok")):
                         issues.append(f"표/코드 삽입 실패(플레이스홀더 잔존 가능): {sp}")
                     time.sleep(1.2)   # 재렌더 대기
+                # ①-c 서식(2026-10-05, NAVER_RICH_FORMAT) — 소제목 컴포넌트·본문 16pt·첫머리 요약 가운데·사진 설명.
+                #     인용구 변환(①)이 이미지 ai 를 맞춘 '뒤'에 돈다 — 변환은 이미지 id·ai 를 그대로 둔다(plan_rich_format).
+                if rich_format_enabled():
+                    rf = apply_rich_format(page, headings, image_caption_map(images))
+                    log(f"  [서식] {rf}")
+                    if not (isinstance(rf, str) and rf.startswith("ok")):
+                        issues.append(f"서식 적용 실패(본문은 유지): {rf}")
+                    elif rich_format_heading_issue(rf):
+                        issues.append(rich_format_heading_issue(rf))
+                    time.sleep(1.2)   # 재렌더 대기
                 # ② 소제목 굵게는 타이핑 중 명령(Cmd+B)으로 이미 반영됐고 변환을 거쳐도 유지된다(별도 재적용
                 #    불필요 — JS Range 로 설정한 선택은 SE 굵게 명령이 인식하지 않는다).
                 # ③ 대표사진용 이미지 컴포넌트 재조회 + 구조 덤프(검증용).
@@ -1588,8 +1820,9 @@ def write_post(
                         for c in doc_after["document"]["components"]:
                             ct = c.get("@ctype")
                             txt = ""
-                            if ct in ("text", "quotation"):
-                                for para in (c.get("value") or []):
+                            if ct in ("text", "quotation", "sectionTitle"):
+                                # sectionTitle(서식 켜짐)은 value 가 아니라 title 필드 — 사후 점검 때 소제목이 보이게.
+                                for para in (c.get("title" if ct == "sectionTitle" else "value") or []):
                                     txt += "".join(n.get("value", "") for n in (para.get("nodes") or []))
                             struct.append({"type": ct, "text": txt[:40]})
                         with open(os.path.join(run_dir, "doc_structure.json"), "w", encoding="utf-8") as f:
@@ -1716,6 +1949,20 @@ def write_post(
                 comp = comp_for(img_idx)
                 if comp is not None:
                     final_comps.append(comp)
+
+        # 서식(2026-10-05, NAVER_RICH_FORMAT) — 사람 경로와 같은 규칙을 조립된 컴포넌트에 바로 건다(문서 왕복 불필요).
+        # 소제목 목록은 build_document_components 가 실제로 만든 소제목 문자열 그대로(make_heading_para 의 텍스트).
+        # 이 경로는 타이핑이 없어 자동목록이 안 걸리므로 소제목 번호("1. ")는 손대지 않는다.
+        if rich_format_enabled():
+            api_headings = [{"text": s.get("heading", "")} for s in se_text.get("sections", []) if s.get("heading", "")]
+            try:
+                final_comps, rf_stats = plan_rich_format(final_comps, api_headings, image_caption_map(images))
+                rf = rich_format_summary(rf_stats, len(api_headings))
+                log(f"  [서식] {rf}")
+                if rich_format_heading_issue(rf):
+                    issues.append(rich_format_heading_issue(rf))
+            except Exception as e:  # 서식은 부가 — 실패해도 조립된 컴포넌트(종전 서식) 그대로 발행
+                issues.append(f"서식 적용 실패(본문은 유지): error:{str(e)[:80]}")
 
         # ── STEP 7: SE ONE setDocumentData ────────────────────────────────────
         log("\n[STEP 7] SE ONE setDocumentData")

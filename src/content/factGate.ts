@@ -147,7 +147,7 @@ const cut = (s: string | undefined, n: number): string => (s ?? '').trim().slice
 
 /** 근거 말뭉치 — 판정기가 출처 종류를 알도록 블록마다 머리말. SERP 제목은 경쟁 블로그 주장이라 넣지 않는다.
  * factCard(있으면) 는 첫 블록 — 브리프에서 근거가 확인된 사실만 압축한 카드라 판정기가 가장 먼저 본다(2026-08-26). */
-export function buildEvidence(parts: { factCard?: string; brief?: string; critiqueText?: string; wikiGrounding?: string; injected?: string; verified?: string }): string {
+export function buildEvidence(parts: { factCard?: string; brief?: string; critiqueText?: string; wikiGrounding?: string; injected?: string; verified?: string; editorRules?: string }): string {
   const blocks: string[] = [];
   const fc = cut(parts.factCard, CAP.factCard); if (fc) blocks.push(`[사실 카드(브리프 근거 확정)]\n${fc}`);
   // Fix round 4(I3) — 카드는 브리프 예산에서 뺀다. 카드는 브리프에서 뽑은 압축본이라 둘을 합치면 같은 내용이
@@ -159,7 +159,20 @@ export function buildEvidence(parts: { factCard?: string; brief?: string; critiq
   const w = cut(parts.wikiGrounding, CAP.wiki); if (w) blocks.push(`[작가에게 주입된 위키 발췌]\n${w}`);
   const i = cut(parts.injected, CAP.injected); if (i) blocks.push(`[주입된 외부 지식(사람이 넣음)]\n${i}`);
   const v = cut(parts.verified, CAP.verified); if (v) blocks.push(`[근거 표기된 지식(verified)]\n${v}`);
+  // 편집 확정 규칙(2026-10-05, 참고 블로그 2026-10-03 이식) — 규칙이 작가에게 쓰라고 시킨 풀이("활착(뿌리가 새 흙에 자리 잡음)")가
+  // 브리프에 없다고 근거 미확인으로 걸리면 자기모순이다(참고 블로그 실측: 규칙대로 쓴 정의가 걸렸다). 짧은 목록이라 상한 없이 싣는다.
+  // 리뷰(2026-10-05): 규칙 전체를 '운영자 확정'으로 실으면 규칙의 예시 문장("접목묘가 더 빨리 자랍니다")이 본문 주장의 근거가
+  // 된다 — 호출부는 용어 풀이 규칙만 넘기고(jargonRulesForEvidence), 머리말이 그 한계를 판정기에 못 박는다.
+  const er = (parts.editorRules ?? '').trim(); if (er) blocks.push(`${EDITOR_RULES_EVIDENCE_HEADER}\n${er}`);
   return blocks.join('\n\n');
+}
+
+export const EDITOR_RULES_EVIDENCE_HEADER = '[편집 확정 규칙 — 용어 풀이에만 근거로 인정 — 예시 문장은 근거 아님]';
+
+/** 편집 확정 규칙 중 용어 풀이 규칙만(순수) — "전정(가지치기)"·"이식은 옮겨 심기" 같은 낱말 풀이 목록.
+ *  가리키는 말·비유·의인화 규칙은 예시 문장이 사실 주장처럼 읽혀("접목묘가 더 빨리 자랍니다") 근거 말뭉치에서 뺀다. */
+export function jargonRulesForEvidence(rules: readonly string[] | undefined): string {
+  return (rules ?? []).filter((r) => /용어[^—]*풀어|일상어를 함께/.test(r)).join('\n');
 }
 
 /** 보류(hold)를 부르는 주장 종류 — 틀리면 나무가 죽거나 돈·법이 걸리는 값들(2026-08-27 사용자 지시 ①).
@@ -421,7 +434,7 @@ function normalizeNumericToken(tok: string): string {
 /** replacement 가 원문에 없던 수치·월·연도 "값"을 새로 들이면 true(새 사실 가드).
  * Fix round 1: 패턴 존재 여부가 아니라 토큰 집합으로 비교한다 — "3cm"→"5cm" 처럼 같은 종류라도
  * 값이 바뀌는 수치 스왑을 잡아낸다(존재 여부만 보면 원문에 이미 단위가 있으면 값이 바뀌어도 통과했다). */
-function introducesNewFacts(original: string, replacement: string): boolean {
+export function introducesNewFacts(original: string, replacement: string): boolean {
   for (const re of [UNIT_RE, MONTH_RE, YEAR_RE]) {
     const flags = re.flags.includes('g') ? re.flags : `${re.flags}g`;
     const reG = new RegExp(re.source, flags);
@@ -442,7 +455,7 @@ function charBigrams(s: string): Set<string> {
 }
 
 /** 문자 바이그램 Dice 유사도(0~1). 양쪽 다 바이그램이 없으면 1(빈 문자열끼리는 같다고 본다). */
-function diceSimilarity(a: string, b: string): number {
+export function diceSimilarity(a: string, b: string): number {
   const A = charBigrams(a), B = charBigrams(b);
   if (!A.size && !B.size) return 1;
   if (!A.size || !B.size) return 0;
@@ -524,6 +537,9 @@ function spliceReplace(line: string, start: number, end: number, replacement: st
  */
 export function applySentenceRepairs(
   body: string, unsupported: string[], repairs: SentenceRepair[],
+  /** 유사도 하한(2026-10-05) — 사실 교정은 0.4(기본, 종전 그대로). 읽기 쉬움 검수는 비유를 풀어 써 글자 겹침이 크게
+   *  줄어 0.2 를 넘긴다(readability.ts READABILITY_SIM_FLOOR — 참고 블로그 2026-10-03 같은 변경). */
+  simFloor: number = REPLACEMENT_SIM_FLOOR,
 ): { body: string; applied: number; missed: string[] } {
   if (!Array.isArray(repairs)) return { body, applied: 0, missed: [...unsupported] };
 
@@ -540,7 +556,7 @@ export function applySentenceRepairs(
     if (!r) { missed.push(original); continue; }
     if (introducesNewFacts(original, r.replacement)) { missed.push(original); continue; }
     // Fix round 4(I4) — 원문과 너무 안 닮은 치환은 교정이 아니라 다른 문장이다(하한 미만이면 미적용).
-    if (r.action !== 'delete' && diceSimilarity(original, r.replacement) < REPLACEMENT_SIM_FLOOR) { missed.push(original); continue; }
+    if (r.action !== 'delete' && diceSimilarity(original, r.replacement) < simFloor) { missed.push(original); continue; }
     const loc = locateSentence(lines, original);
     if (!loc) { missed.push(original); continue; }
 
@@ -550,7 +566,11 @@ export function applySentenceRepairs(
     if (r.action === 'delete' && /^#{1,6}\s*/.test(line)) { missed.push(original); continue; }
     const markerLen = lineMarkerLen(line);
     const start = Math.max(loc.start, markerLen); // 마커 구간은 치환 범위에서 제외
-    const replacement = r.action === 'delete' ? '' : r.replacement;
+    // 2026-10-05 — 문장 전체를 감싼 굵게(**…**)는 살린다. 접두 일치(rule③)는 ** 를 뗀 원문으로 찾고 ** 포함 스팬을 돌려줘,
+    // 치환문(마커 없음)이 굵게까지 지웠다. 첫머리 굵은 요약 두 줄(편집 확정 규칙)이 읽기 쉬움 검수·사실 게이트 수정을 거치며
+    // 평문이 되면 발행기의 '맨 위 굵은 요약 가운데 정렬'(naver_publish plan_rich_format)도 함께 사라진다.
+    const wrappedBold = r.action !== 'delete' && /^\*\*[^*]+\*\*[.!?…]?$/.test(line.slice(start, loc.end)) && !r.replacement.includes('**');
+    const replacement = r.action === 'delete' ? '' : wrappedBold ? `**${r.replacement}**` : r.replacement;
 
     let next: string;
     if (r.action === 'delete' && start <= markerLen && loc.end >= line.length) {

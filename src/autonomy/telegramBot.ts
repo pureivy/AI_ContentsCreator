@@ -120,10 +120,13 @@ export interface Senders { photos: typeof sendTelegramPhotos; html: typeof sendT
 const REAL_SENDERS: Senders = { photos: sendTelegramPhotos, html: sendTelegramHtml };
 
 // 유튜브 업로드 완료 문구 — 공개 발행(2026-10-01, 라우트의 public_pending)이면 자동 공개 예정, 아니면 종전 비공개 안내.
+// 바로 공개(public_direct, 2026-10-05)는 이미 공개 — '공개 예정'·'비공개'로 쓰면 사람이 스튜디오에서 또 손댄다.
 const ytDoneText = (j: Record<string, unknown> | null): string =>
-  (j?.public_pending === true ? '▶️ 유튜브 업로드 완료 — 자동 공개 예정' : '▶️ 유튜브 비공개 업로드 완료');
+  (j?.public_direct === true ? '▶️ 유튜브 공개 업로드 완료 — 이미 공개됨(커버 확인 중)'
+    : j?.public_pending === true ? '▶️ 유튜브 업로드 완료 — 자동 공개 예정' : '▶️ 유튜브 비공개 업로드 완료');
 const ytDoneTail = (j: Record<string, unknown> | null): string =>
-  (j?.public_pending === true ? '\n썸네일까지 확인하고, 안 뜨면 따로 알려 드립니다.' : '\n공개 전환은 유튜브 스튜디오에서.');
+  (j?.public_direct === true ? '\n커버가 첫 장면이 아니면 따로 알려 드립니다.'
+    : j?.public_pending === true ? '\n썸네일까지 확인하고, 안 뜨면 따로 알려 드립니다.' : '\n공개 전환은 유튜브 스튜디오에서.');
 
 export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call: ApiCall = api, send: Senders = REAL_SENDERS): Promise<string> {
   switch (a.kind) {

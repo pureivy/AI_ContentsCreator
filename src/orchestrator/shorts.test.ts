@@ -545,3 +545,49 @@ describe('settleNextEpisode — 실제 문형(2026-10-02 리뷰, 기존 266편)'
     expect(settleNextEpisode(p, false).plan).toBe(p);
   });
 });
+
+describe('settleNextEpisode — 예고를 덜어도 CTA 는 행동으로 닫는다(2026-10-05, 실측 short_8a08fe7899)', () => {
+  // 산딸 유튜브 편 낭독 직전 대본(세션 316b859a3942 감량본) — 같은 글의 인스타 편이 먼저 예고해 자리 없음(room=false).
+  // 종전: 예고 문장만 덜어 "가을엔 개화주보다 열매를 눌러보는 게 정확해요." 한 줄로 끝났다(행동 없음, 4→5 건너뜀).
+  const takeaways = [
+    { when: '겉만 붉을 때', then: '아직 안 익음' }, { when: '눌러서 물렁할 때', then: '다 익은 상태' }, { when: '가시 있으면', then: '산딸기, 다른 나무' },
+  ];
+  const real = {
+    scenes: [
+      { narration: '저 나무, 가을에 꽃 핀다죠.', screenText: '가을에 꽃 핀다?', kind: 'hook' },
+      { narration: '산딸나무 가을 개화주는 꽃이 아니라 다음 여름 꽃 볼 키까지 왔다는 뜻이에요.', screenText: '꽃은 여름에 끝났어요' },
+      { narration: '가지에 달린 붉은 열매, 겉만 붉으면 아직이고 눌러서 물렁해야 익은 거예요.', screenText: '눌러서 확인하기', kind: 'compare' },
+      { narration: '열매만 보면 산딸기와 헷갈리는데, 산딸나무는 가시 없이 외줄기로 칠에서 십이 미터 자라요.', screenText: '가시 있으면 산딸기', kind: 'stat' },
+      { narration: '가을엔 개화주보다 열매를 눌러보는 게 정확해요. 다음엔 미국산딸나무 열매와 비교해드릴게요.', screenText: '열매부터 눌러보세요', kind: 'cta', takeaways },
+    ],
+    next: { topic: '미국산딸나무와 산딸나무 열매 모양 구분', window: '10월' },
+  };
+  it('예고 문장을 덜고 남은 판정 뒤에 자막의 행동 문장을 붙인다 — 카드·자막·다른 씬은 그대로', () => {
+    const r = settleNextEpisode(real, false);
+    const cta = r.plan.scenes[4]!;
+    expect(cta.narration).toBe('가을엔 개화주보다 열매를 눌러보는 게 정확해요. 열매부터 눌러보세요.');
+    expect(cta.narration).not.toContain('다음엔');
+    expect(cta.screenText).toBe('열매부터 눌러보세요');
+    expect(cta.takeaways).toEqual(takeaways);
+    expect(cta.narration.length).toBeLessThanOrEqual(real.scenes[4]!.narration.length);
+    expect(r.plan.scenes.slice(0, 4)).toEqual(real.scenes.slice(0, 4));
+    expect(r.plan.next).toBeUndefined();
+    expect(r.note).toContain('자막 행동 문장');
+  });
+  it('남은 문장이 이미 "~세요"면 붙이지 않는다', () => {
+    const p = { scenes: [{ narration: '훅' }, { narration: '본문' }, { narration: '열매부터 눌러보세요. 다음엔 미국산딸나무와 비교해드릴게요.', screenText: '열매부터 눌러보세요' }] };
+    expect(settleNextEpisode(p, false).plan.scenes[2]!.narration).toBe('열매부터 눌러보세요.');
+  });
+  it('예고뿐인 CTA 는 자막 행동 문장으로 바꾼다 — 자막이 행동 문장이 아니면 종전대로 유지', () => {
+    const teaser = '다음엔 겨울눈 보는 법 짚어볼게요.';
+    const a = settleNextEpisode({ scenes: [{ narration: '훅' }, { narration: teaser, screenText: '가지 끝부터 보세요' }] }, false);
+    expect(a.plan.scenes[1]!.narration).toBe('가지 끝부터 보세요.');
+    const b = settleNextEpisode({ scenes: [{ narration: '훅' }, { narration: teaser, screenText: '겨울눈 보는 법' }] }, false);
+    expect(b.plan.scenes[1]!.narration).toBe(teaser);
+  });
+  it('숫자가 든 자막·예고 표지 자막은 낭독에 쓰지 않는다', () => {
+    const base = '가을엔 열매가 더 정확해요. 다음엔 미국산딸나무와 비교해드릴게요.';
+    expect(settleNextEpisode({ scenes: [{ narration: '훅' }, { narration: base, screenText: '7m 거리 두세요' }] }, false).plan.scenes[1]!.narration).toBe('가을엔 열매가 더 정확해요.');
+    expect(settleNextEpisode({ scenes: [{ narration: '훅' }, { narration: base, screenText: '다음엔 꼭 보세요' }] }, false).plan.scenes[1]!.narration).toBe('가을엔 열매가 더 정확해요.');
+  });
+});

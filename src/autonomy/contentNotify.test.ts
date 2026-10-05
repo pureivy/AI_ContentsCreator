@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   escapeHtml, stripMarkdown, reviewLink, studioBase,
-  blogReadyHtml, cardnewsCaptionHtml, shortsCaptionHtml, factGateLines, briefGateLines, youtubeUploadedHtml, naverPublishLabel, naverClipDoneHtml,
+  blogReadyHtml, cardnewsCaptionHtml, shortsCaptionHtml, factGateLines, briefGateLines, youtubeUploadedHtml, naverPublishLabel, naverClipDoneHtml, naverClipNudgeHtml,
 } from './contentNotify';
+import { parseCallback } from './telegramBot';
 import { CONFIG } from '../config';
 
 describe('escapeHtml', () => {
@@ -292,6 +293,13 @@ describe('youtubeUploadedHtml — 유튜브 비공개 업로드 완료 알림', 
     expect(h).not.toContain('비공개');
   });
 
+  it('바로 공개(publicDirect, 2026-10-05)면 "이미 공개됨(커버 확인 중)" — 공개 예정·비공개라고 쓰지 않는다', () => {
+    const h = youtubeUploadedHtml({ id: 's1', topic: 'T', url: 'u', publicDirect: true });
+    expect(h).toContain('이미 공개됨(커버 확인 중)');
+    expect(h).not.toContain('공개 예정');
+    expect(h).not.toContain('비공개');
+  });
+
   it('title 이 없으면 topic 으로 대체한다', () => {
     expect(youtubeUploadedHtml({ id: 's1', topic: '주제만', url: 'u' })).toContain('<b>주제만</b>');
   });
@@ -325,5 +333,21 @@ describe('naverClipDoneHtml — 클립 결과 알림(2026-10-02)', () => {
     const m = naverClipDoneHtml({ ...base, status: 'FAILED', error: '카테고리 <선택> 실패' });
     expect(m.html).toContain('업로드 실패');
     expect(m.html).toContain('&lt;선택&gt;');
+  });
+});
+
+// 2026-10-05 — 블로그 발행이 감지되면 같은 날 클립 버튼을 준다. 버튼은 스튜디오 버튼과 같은 nc: 경로(가드·대기열 그대로).
+describe('naverClipNudgeHtml — 클립 올리기 권유', () => {
+  it('버튼 콜백이 클립 업로드 액션으로 읽힌다(같은 라우트)', () => {
+    const m = naverClipNudgeHtml({ id: 'short_abc123', title: '감나무 흰가루', brand: 'bionditree', blogTitle: '감나무 잎 흰가루' });
+    expect(m.buttons).toHaveLength(1);
+    expect(parseCallback(m.buttons[0]![0]!.callback_data)).toEqual({ kind: 'shorts_clip', id: 'short_abc123' });
+    expect(m.html).toContain('<b>감나무 흰가루</b>');
+    expect(m.html).toContain('원본 글: 감나무 잎 흰가루');
+    expect(m.html).not.toContain('재생목록'); // 재생목록이 없으면 약속하지 않는다
+    expect(naverClipNudgeHtml({ id: 'short_1', title: 't', playlist: '감나무 키우기' }).html).toContain('재생목록(감나무 키우기)');
+  });
+  it('제목은 이스케이프한다', () => {
+    expect(naverClipNudgeHtml({ id: 'short_1', title: 'a<b>&' }).html).toContain('<b>a&lt;b&gt;&amp;</b>');
   });
 });

@@ -108,8 +108,10 @@ export function matchPublished(
 const noticed = new Set<string>(); // 모호/포기 안내는 piece 당 1회(프로세스 생애)
 
 /** 브랜드별 RSS 조회 → 보수적 매칭 → publishedUrl 자동 설정 + 피드 로그.
- *  전량 fail-open — 어떤 실패도 throw 로 새지 않는다(이어지는 syncPerformance 보장). */
-export async function discoverPublishedNaver(): Promise<void> {
+ *  전량 fail-open — 어떤 실패도 throw 로 새지 않는다(이어지는 syncPerformance 보장).
+ *  이번에 발행으로 감지한 piece id 를 돌려준다(2026-10-05) — 그 글의 숏폼에 클립 올리기 권유를 보내는 근거. */
+export async function discoverPublishedNaver(): Promise<string[]> {
+  const found: string[] = [];
   try {
     const { targets, gaveUp } = selectDiscoveryTargets(pieceStore().list(), Date.now());
     for (const p of gaveUp) {
@@ -117,7 +119,7 @@ export async function discoverPublishedNaver(): Promise<void> {
       noticed.add(p.id);
       console.log(`[성과분석] ${p.title.slice(0, 30)} — 임시저장 30일 경과, 자동 감지 포기. 발행했다면 URL 을 수동 등록해 주세요`);
     }
-    if (!targets.length) return; // 대상 없으면 RSS 조회 0회
+    if (!targets.length) return found; // 대상 없으면 RSS 조회 0회
     const byBrand = new Map<string, Piece[]>();
     for (const p of targets) {
       const slug = p.brand ?? '';
@@ -135,7 +137,10 @@ export async function discoverPublishedNaver(): Promise<void> {
           pieces.map((p) => ({ id: p.id, title: p.title, draftTs: p.naverDraftTs! })), items);
         for (const m of matched) {
           const p = pieceStore().setPublished(m.pieceId, m.url, m.pubDate); // pubDate = 실제 발행시각 → publishedTs (삭제 경합이면 undefined — 무해)
-          if (p) console.log(`[성과분석] ${p.title.slice(0, 30)} — 네이버 발행 감지, 성과 추적 시작`);
+          if (p) {
+            console.log(`[성과분석] ${p.title.slice(0, 30)} — 네이버 발행 감지, 성과 추적 시작`);
+            found.push(p.id);
+          }
         }
         for (const id of ambiguous) {
           if (noticed.has(id)) continue;
@@ -150,4 +155,5 @@ export async function discoverPublishedNaver(): Promise<void> {
   } catch (e) {
     console.log(`[publish-discover] 감지 실패(무해): ${e instanceof Error ? e.message : String(e)}`);
   }
+  return found;
 }

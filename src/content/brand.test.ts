@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
-import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug, brandFileSuffixFor, bannedTopicTerms, offBrandTerm, lexiconGuide } from './brand';
+import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug, brandFileSuffixFor, bannedTopicTerms, offBrandTerm, lexiconGuide, editorRulesGuide } from './brand';
 
 // 브랜드 프로필 — 정규화·주입 블록(순수 함수) 회귀 방지.
 describe('normalizeBrand', () => {
@@ -262,5 +262,29 @@ describe('normalizeBrand — contentModules / topicThemes 상한', () => {
   it('topicThemes 는 32개까지 받는다(이야기 5축 추가로 24 초과)', () => {
     const themes = Array.from({ length: 30 }, (_, i) => ({ theme: `t${i}`, seeds: [], match: [`m${i}`] }));
     expect(normalizeBrand({ name: 'x', topicThemes: themes } as never)?.topicThemes).toHaveLength(30);
+  });
+});
+
+// 편집 확정 규칙(2026-10-05) — normalizeBrand 가 모르는 키는 버리고 saveBrand 가 그 결과를 brand.yaml·brands/<slug>.yaml 에
+// 다시 쓰므로, 여기서 정규화하지 않으면 읽을 때 무시되고 저장 한 번에 지워진다.
+describe('editorRules — 정규화·블록', () => {
+  it('문자열만 트림해 받고 300자·20개로 자른다', () => {
+    const long = 'ㄱ'.repeat(400);
+    const b = normalizeBrand({ name: 'x', editorRules: [' 한 문장마다 줄을 바꾼다. ', '', 3, long, ...Array.from({ length: 30 }, (_, i) => `r${i}`)] } as never)!;
+    expect(b.editorRules![0]).toBe('한 문장마다 줄을 바꾼다.');
+    expect(b.editorRules![1]).toBe('3');
+    expect(b.editorRules![2]).toHaveLength(300);
+    expect(b.editorRules).toHaveLength(20);
+  });
+  it('미설정이면 빈 배열이고 블록은 빈 문자열(프롬프트 무변경)', () => {
+    const b = normalizeBrand({ name: 'x' })!;
+    expect(b.editorRules).toEqual([]);
+    expect(editorRulesGuide(b)).toBe('');
+    expect(editorRulesGuide(null)).toBe('');
+  });
+  it('블록은 우선순위 머리말 + 번호 목록', () => {
+    const g = editorRulesGuide(normalizeBrand({ name: 'x', editorRules: ['한 문장마다 줄을 바꾼다.', '글 맨 위에 굵은 요약 두 줄.'] } as never));
+    expect(g.split('\n')[0]).toContain('다른 문체 지침과 겹치면 이 규칙이 이긴다');
+    expect(g).toContain('\n1. 한 문장마다 줄을 바꾼다.\n2. 글 맨 위에 굵은 요약 두 줄.');
   });
 });

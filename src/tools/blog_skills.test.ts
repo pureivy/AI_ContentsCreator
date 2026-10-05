@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { parseImagePayload, parsePublishPayload, containImageManifest, parseStatsOutput,
-  publishDraftToNaver, collectNaverMetrics, parseNaverClipResult } from './blog_skills';
+  publishDraftToNaver, collectNaverMetrics, parseNaverClipResult, naverClipArgs } from './blog_skills';
 import type { BlogDraft } from '../output/formatter';
 
 describe('parseImagePayload', () => {
@@ -311,5 +311,21 @@ describe('withRefererInflow — 덤프 파일로 검색 유입 채우기', () =>
     expect(r.views).toBe(271);
     expect(r.searchCv).toBeUndefined();
     expect(r.dwellSec).toBeUndefined();
+  });
+});
+
+// 리뷰(2026-10-05) — 드라이런이 실제 전체 공개 재생목록을 만들었다('만들기'는 등록 전에도 즉시 저장).
+describe('naverClipArgs — 재생목록은 실제 등록 때만', () => {
+  const base = { slug: 'b', videoPath: '/v.mp4', description: 'd', categoryFirst: '취미', categorySecond: '원예',
+    aiGenerated: false, uploadName: 'u', runDir: '/r', playlist: '감나무 키우기' };
+  it('실제 등록이면 --playlist 를 넘긴다', () => {
+    const a = naverClipArgs(base, '/r/clip_result.json');
+    expect(a.slice(a.indexOf('--playlist'), a.indexOf('--playlist') + 2)).toEqual(['--playlist', '감나무 키우기']);
+  });
+  it('드라이런·확인 전용이면 넘기지 않는다', () => {
+    const dry = naverClipArgs({ ...base, dryRun: true }, '/r/x.json');
+    expect(dry).toContain('--dry-run');
+    expect(dry).not.toContain('--playlist');
+    expect(naverClipArgs({ ...base, checkOnly: true }, '/r/x.json')).not.toContain('--playlist');
   });
 });

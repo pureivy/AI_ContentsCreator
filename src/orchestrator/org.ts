@@ -26,18 +26,19 @@ import { realFrameSceneTags, withRealFrameSlot } from '../content/blogFrames';
 import { naverSerp } from '../grounding/naver_search';
 import { seedKeyword } from '../grounding/naver_common';
 import { getRunSettings } from '../runsettings';
-import { brandContext, activeBrandSlug, getBrand, lexiconGuide } from '../content/brand';
+import { brandContext, activeBrandSlug, getBrand, lexiconGuide, editorRulesGuide } from '../content/brand';
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid, recentBlogEndings } from '../content/priorCoverage';
 import { recentModulesToAvoid, moduleAvoidBlock } from '../content/contentModules';
 import { collectExistingContent } from '../content/novelty';
-import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard, writeBriefGate, writeFactSupply } from '../sessions/digest';
+import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard, writeBriefGate, writeFactSupply, writeReadability } from '../sessions/digest';
 import { supplyFacts, factSupplyBlock } from '../content/factSupply';
 import type { FactSupplyResult } from '../content/factSupply';
 import { isLoreTopic } from '../content/loreTopic';
 import { parseBriefVerdict, parseUnresolved, isBlocking, describeVerdict, VERDICT_FORMAT } from './briefVerdict';
 import { blogStyleIssues, styleRevisionReject } from '../content/styleLint';
+import { readabilityPrompt, acceptReadabilityFixes, applyReadabilityFixes } from '../content/readability';
 import { resolveStructureSeed, inheritStructureSeed, structureBlock, STRUCTURE_KEEP_BLOCK, type TitleForm } from '../content/structureSeed';
-import { factGateBlog, buildEvidence, runFactGateWithRepair, repairSentences, applySentenceRepairs, extractFactCard, FACT_CARD_HEADER, mergeSuppliedFacts } from '../content/factGate';
+import { factGateBlog, buildEvidence, runFactGateWithRepair, repairSentences, applySentenceRepairs, extractFactCard, FACT_CARD_HEADER, mergeSuppliedFacts, jargonRulesForEvidence } from '../content/factGate';
 import type { FactGateResult } from '../content/factGate';
 import { readInjected, readVerified } from '../agents/workspace';
 import { llmWiki } from '../wiki/llmwiki';
@@ -127,7 +128,9 @@ const buildBlogBodyGuide = (variety: boolean): string =>
   // 어미 규칙 3차 교정(2026-08-11): 전역 비율(60%)은 추적 불가로 2연속 미달(75%·65%) → 문단 규칙으로
   // 전환했더니 준수율 85%인데도 66% — "최소 1문장"의 산수가 3~4문장 문단에서 66~75%를 낳았다.
   // 수량을 문단 길이에 비례시켜 교정한다(2~3문장=1개, 4문장=2개 → 산술상 50~66%).
-  '- 어미 배합(문단 규칙): 각 문단에서 "-ㅂ니다"가 아닌 종결(해요체 -요/-죠/-거든요/-고요, 명사 종결 "결론은 배치.", 질문)로 끝나는 문장을 **2~3문장 문단은 1개, 4문장 문단은 2개** 넣어라. 같은 어미가 3문장 연속되면 마지막 문장을 바꿔 써라. 바꾸는 법: "물을 줄이는 것이 안전합니다"→"물부터 줄이는 게 안전해요", "확인이 필요합니다"→"한 번 확인해 보세요", "이것이 기준입니다"→"기준은 이거 하나예요". 목표 톤 예시: "나무는 당분을 계속 밀어 넣거든요", "어깨만 검고 아래가 붉으면 아직이에요".\n' +
+  // 2026-10-05 — 편집 확정 규칙(한 문장 한 줄, brand.yaml editorRules)이 들어오며 '문단'이 한 줄=한 문장이 됐다. 그대로 두면
+  // 1문장 문단마다 비-합쇼체 1개를 요구하는 셈이 돼(산술상 100%) 어미 배합이 뒤집힌다 — 셈의 단위를 빈 줄로 나뉜 덩어리로 옮긴다.
+  '- 어미 배합(덩어리 규칙): 빈 줄로 나뉜 각 덩어리(한 문장마다 줄을 바꿔 써도 빈 줄 없이 이어진 줄들은 한 덩어리로 센다)에서 "-ㅂ니다"가 아닌 종결(해요체 -요/-죠/-거든요/-고요, 명사 종결 "결론은 배치.", 질문)로 끝나는 문장을 **2~3문장 덩어리는 1개, 4문장 덩어리는 2개** 넣어라. 같은 어미가 3문장 연속되면 마지막 문장을 바꿔 써라. 바꾸는 법: "물을 줄이는 것이 안전합니다"→"물부터 줄이는 게 안전해요", "확인이 필요합니다"→"한 번 확인해 보세요", "이것이 기준입니다"→"기준은 이거 하나예요". 목표 톤 예시: "나무는 당분을 계속 밀어 넣거든요", "어깨만 검고 아래가 붉으면 아직이에요".\n' +
   // 주어 생략 확정(사용자 2026-08-12): 시점은 1인칭 판단 그대로 두되 "나는/저는/저희는" 주어 명시는
   // 뺀다 — 한국어는 주어 없이도 시점이 전달되고, NO_FABRICATED_EXPERIENCE 의 예문 꼴과도 일치한다.
   '- 1인칭 판단·유보(주어 생략): 글당 최소 2회는 우리의 판단을 단정으로 말하라 — 단 "나는/저는/저희는" 같은 1인칭 주어는 표면에 쓰지 마라. 주어 없이 시점만 남긴다: "다섯 군데를 봅니다", "~라고 봅니다", "이건 심어 봐야 아는 부분입니다", "이럴 땐 자리부터 정합니다". 1~2곳은 "대개", "~인 경우가 많습니다" 수준의 유보를 남겨 모든 주장에 확신 등급을 붙이지 마라. 겪지 않은 사건을 지어내는 것은 계속 금지 — 판단·관점만.\n' +
@@ -148,7 +151,9 @@ const buildBlogBodyGuide = (variety: boolean): string =>
   '- 사실·수치·시기·약제·품종 특성은 브리프·제공 자료에 있는 것만 쓴다. 없는 값은 지어내지 말고 생략하거나, 유보어("대개/흔히")를 붙인 일반론으로만 말한다. 본문에 [근거: …] 표기는 남기지 않는다(발행 시 제거되며, 근거는 브리프에 있다).\n' +
   '- 분량은 한국어 약 1,500~4,000자(정보/하우투·리뷰에 적정). 군더더기·패딩·동어반복 금지, 독자가 끝까지 읽게 쓴다.\n' +
   '- 이모지·이모티콘·장식 특수문자(★✔♥ 등)를 소제목·본문 어디에도 쓰지 마라. 강조는 서식으로만 한다: 핵심 문장·수치는 **굵게**, 용어·미묘한 강조나 인용 뉘앙스는 *이탤릭*(둘 다 남발하지 말고 구조상 중요한 곳에만). 글자 크기·글꼴은 발행기가 가독성에 맞게 자동 처리하니 지정하지 마라.\n' +
-  '- 가독성: 한 문단은 2~4문장으로 짧게 끊고, 문단과 문단 사이에는 빈 줄을 넣어 간격을 둔다(빽빽하게 붙이지 마라).\n' +
+  // 2026-10-05 — 한 문장 한 줄(편집 확정 규칙)과 맞물리게 '문단'을 빈 줄 사이 덩어리로 다시 정의한다. 종전 문구("한 문단은 2~4문장")는
+  // 한 줄에 여러 문장을 붙여 쓰라는 뜻으로 읽혀 편집 규칙과 정면 충돌했다. STRUCTURE_VARIETY 와 무관한 공통 줄이라 off 지침도 같이 바뀐다.
+  '- 가독성: 빈 줄로 나뉜 덩어리 하나는 2~4문장으로 짧게 끊고, 덩어리와 덩어리 사이에는 빈 줄을 넣어 간격을 둔다(빽빽하게 붙이지 마라). 덩어리 안에서는 한 문장마다 줄을 바꿔 써도 같은 덩어리다.\n' +
   '- 리치 서식을 글의 성격에 맞게 "필요할 때만" 적절히 활용한다(억지로 넣지 말 것). 발행 시 실제 네이버 서식으로 렌더된다:\n' +
   '  · 인용구 3종 — ">" 깊이가 스타일이다(사용자 확정 2026-08-10). "> "=버티컬라인: 섹션 중간의 핵심 규칙·주의 한 줄(글당 2~3곳). ">> "=따옴표: 글의 중심 명제 한 문장('
   + (variety ? '글당 0~1곳 — 아래 [이번 글 구조] 지시를 따른다' : '글당 1곳, 도입 훅 직후가 최적')
@@ -378,7 +383,8 @@ export async function writeBlogBody(a: {
     + '기관명을 대는 것은 수치·규격처럼 출처가 정말 필요한 한두 곳으로 제한하라.'
     + '\n[운영 데이터 비공개] 검색량·문서수·자동완성·상위노출 건수 같은 SEO 조사 수치는 글의 방향을 잡는 데만 쓰고 본문에 쓰지 마라 — 독자가 읽을 글이지 운영 보고서가 아니다.';
   // 리비전 컨텍스트(스펙 §3) — voiceGuide 를 리비전에도 넣는다(종전엔 초안+피드백뿐이라 목소리·브리프가 빠졌다).
-  const reviseContext = revise ? buildReviseContext({ factCard, brief, voiceGuide, baseBody: revise.baseBody, feedback: revise.feedback, structure }) : '';
+  // 편집 확정 규칙(2026-10-05)은 리비전에도 — 문체 린트 수정·사람 수정 요청이 한 줄 한 문장·첫머리 요약을 되돌리지 않게.
+  const reviseContext = revise ? [buildReviseContext({ factCard, brief, voiceGuide, baseBody: revise.baseBody, feedback: revise.feedback, structure }), editorRulesGuide()].filter(Boolean).join('\n\n') : '';
   // 가드 발화 가시화(2026-08-06) — 프롬프트 컨텍스트는 이벤트에 안 남아 "가드가 있는데 왜 뚫렸나"를
   // 사후 판정할 수 없었다(배롱나무 중복 조사에서 실측). 발화 여부만 한 줄 남긴다.
   if (!revise) {
@@ -418,6 +424,7 @@ export async function writeBlogBody(a: {
       genreGuide,
       voiceGuide,
       lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms), // 어휘 가드(2026-08-08) — 동음이의 한자어·조어·키워드 동사화 방지
+      editorRulesGuide(), // 편집 확정 규칙(2026-10-05) — 한 문장 한 줄·첫머리 굵은 요약·쉬운 말(brand.yaml editorRules)
       serpText ? `[네이버 상위 노출 블로그(실측) — 검색 수요가 검증된 방향·눈높이 참고. 제목·구성 그대로 베끼기 금지]\n${serpText}` : '',
       brief ? `[리서치·SEO 브리프]\n${brief}` : '',
       critiqueText ? `[검수 의견 — 아래는 약점·주의점 목록이다. 발행 판정이 아니다. 지적된 미검증·논쟁 주장은 본문에서 빼고, 나머지는 참고해 품질을 높여라]\n${critiqueText}` : '',
@@ -437,7 +444,7 @@ export async function writeBlogBody(a: {
       // 재집필은 검수 의견을 뺀다(같은 벽에 다시 부딪히지 않게) — 그러나 mustFixBlock 은 **남긴다**.
       // 이건 품질 조언이 아니라 '무근거 기입을 쓰지 마라'는 금지라, 여기서 빠지면 퇴화 재집필 경로가
       // 게이트의 구멍이 된다(브리프에 남은 무근거 주장이 그대로 본문에 실린다).
-      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, moduleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms), brief ? `[리서치·SEO 브리프]\n${brief}` : '', mustFixBlock].filter(Boolean).join('\n\n'),
+      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, moduleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms), editorRulesGuide(), brief ? `[리서치·SEO 브리프]\n${brief}` : '', mustFixBlock].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, groundForFacts: true, maxOutputTokens: 5000, signal,
     });
@@ -1064,6 +1071,27 @@ async function packageDesignFinalize(a: {
     catch (e) { bus.emit('log', { message: `문체 린트 기록 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
   }
 
+  // --- 읽기 쉬움 검수(2026-10-05 사장님 확정, 참고 블로그 2026-10-03 이식) — 처음 읽는 독자가 멈칫할 문장만 일상어로
+  //     치환. 문체 린트 뒤·사실 게이트 앞(게이트가 사람에게 나갈 최종 문장을 판정). 비차단·fail-open — 실패하면 본문 그대로.
+  //     브리프 폴백 산출물은 건너뛴다(문체 린트와 같은 이유 — 게이트의 briefFallback 동일성 검사를 깨지 않게).
+  //     소제목 수가 달라지면(마커 파손 의심) 결과를 버린다 — 사실 게이트 표적 수정의 구조 가드와 같은 기준.
+  if (CONFIG.blogReadability && mission !== 'research' && finalDeliverable.trim()
+    && finalDeliverable.trim() !== brief.trim() && !signal?.aborted) {
+    try {
+      const j = await microJSON<{ fixes?: unknown }>(assign.standard, '당신은 한국어 교열 편집자입니다. JSON만 출력합니다.',
+        readabilityPrompt(finalDeliverable, getBrand()?.audience ?? '', keyword), { maxOutputTokens: 3000, signal });
+      const fixes = acceptReadabilityFixes(finalDeliverable, j?.fixes, keyword);
+      const r = fixes.length ? applyReadabilityFixes(finalDeliverable, fixes, keyword) : { body: finalDeliverable, applied: 0, missed: [] as string[] };
+      const h2Lines = (md: string): number => (md.match(/^#{2,}\s/gm) ?? []).length;
+      if (r.applied && h2Lines(r.body) === h2Lines(finalDeliverable)) finalDeliverable = r.body;
+      const m = `[읽기쉬움] 블로그 — 고친 문장 ${r.applied}/${fixes.length}${r.missed.length ? ` · 미적용 ${r.missed.length}` : ''}`;
+      console.log(m); bus.emit('log', { message: m });
+      try { writeReadability(bus.runId, { fixes, applied: r.applied, missed: r.missed, checkedTs: new Date().toISOString() }); } catch { /* 무해 */ }
+    } catch (e) {
+      bus.emit('log', { message: `읽기 쉬움 검수 실패(본문 유지): ${e instanceof Error ? e.message : String(e)}` });
+    }
+  }
+
   // 잔여 플레이스홀더/가짜수치 경고(생성 지침이 이미 금지 — 보통 0건).
   const placeholders = findTemplateNumbers(finalDeliverable);
   if (placeholders.length) {
@@ -1088,6 +1116,7 @@ async function packageDesignFinalize(a: {
         const evidence = buildEvidence({
           factCard, brief, critiqueText, wikiGrounding: wiki.context,
           injected: readInjected(writer.id, 4000), verified: readVerified(writer.id, 3000),
+          editorRules: jargonRulesForEvidence(getBrand()?.editorRules), // 규칙이 시킨 용어 풀이만 — 예시 문장은 근거가 아니다(2026-10-05 리뷰)
         });
         // 게이트는 자동 발행을 가르는 판정 — 표본 2런에서 haiku 판정이 같은 브리프에 지지 10↔2 로 흔들려 standard 로 상향(2026-08-26 실측)
         const gate = (body: string) => factGateBlog({ model: assign.standard, body, evidence, signal, maxClaims: CONFIG.factGateMaxClaims });

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildVideoMeta, buildMultipartBody, extractVideoId, buildStatusUpdate, classifyThumb, majorityChannel, decideChannelConnect } from './youtubeUpload';
+import { buildVideoMeta, buildMultipartBody, extractVideoId, buildStatusUpdate, classifyThumb, majorityChannel, decideChannelConnect, verifyPublicCover, coverNeedsAlert, type CoverState } from './youtubeUpload';
+import { parseYtCoverOutput } from './blog_skills';
 
 describe('buildVideoMeta — 블로그 링크 줄(2026-07-31)', () => {
   it('설명 본문과 태그 줄 사이에 링크, 미지정 시 종전과 동일', () => {
@@ -135,5 +136,79 @@ describe('decideChannelConnect — 원래 채널과 다르면 저장하지 않�
     const d = decideChannelConnect(B, null, false);
     expect(d.save).toBe(true);
     expect(d.message).toContain('비온디트리');
+  });
+});
+
+describe('공개 직행 업로드 — 쇼츠 커버가 첫 장면(2026-10-05)', () => {
+  it('privacy=public 이면 공개로 싣고 예약 공개는 뺀다(공개 업로드에 publishAt 은 거절된다)', () => {
+    const m = buildVideoMeta('t', 'd', [], undefined, '2026-10-05T10:00:00Z', 'public') as { status: Record<string, unknown> };
+    expect(m.status.privacyStatus).toBe('public');
+    expect(m.status.publishAt).toBeUndefined();
+  });
+  it('기본은 종전 그대로 비공개 + 예약 공개', () => {
+    const m = buildVideoMeta('t', 'd', [], undefined, '2026-10-05T10:00:00Z') as { status: Record<string, unknown> };
+    expect(m.status.privacyStatus).toBe('private');
+    expect(m.status.publishAt).toBe('2026-10-05T10:00:00Z');
+  });
+  const seq = (states: CoverState[]) => { let i = 0; return async () => ({ state: states[Math.min(i++, states.length - 1)]! }); };
+  it('첫 장면이 확인되면 바로 끝', async () => {
+    const o = await verifyPublicCover({ videoId: 'x', check: seq(['missing', 'first']), pollMs: 0, tries: 5 });
+    expect(o.state).toBe('first');
+  });
+  it('중간 장면은 두 번 연속이어야 확정 — 처리 직후 잠깐 걸린 프레임으로 오경보하지 않는다', async () => {
+    expect((await verifyPublicCover({ videoId: 'x', check: seq(['middle', 'first']), pollMs: 0, tries: 5 })).state).toBe('first');
+    const o = await verifyPublicCover({ videoId: 'x', check: seq(['middle', 'middle']), pollMs: 0, tries: 5 });
+    expect(o.state).toBe('middle');
+    expect(o.note).toContain('맨 앞 프레임');
+  });
+  it('끝까지 커버가 없으면 missing, 조회 실패는 unknown', async () => {
+    expect((await verifyPublicCover({ videoId: 'x', check: seq(['missing']), pollMs: 0, tries: 3 })).state).toBe('missing');
+    const boom = async (): Promise<{ state: CoverState }> => { throw new Error('net'); };
+    expect((await verifyPublicCover({ videoId: 'x', check: boom, pollMs: 0, tries: 2 })).state).toBe('unknown');
+  });
+  // 리뷰(2026-10-05) — 공개 업로드 커버는 sardefault. oardefault 만 보이는 초기의 중간 장면은 잠정.
+  it('oardefault 중간 장면은 잠정 — 확정 셈에 넣지 않고, sardefault 첫 장면이 뜨면 first', async () => {
+    const seqC = (xs: Array<{ state: CoverState; cover?: string }>) => {
+      let i = 0;
+      return async () => xs[Math.min(i++, xs.length - 1)]!;
+    };
+    const o = await verifyPublicCover({ videoId: 'x', pollMs: 0, tries: 6, check: seqC([
+      { state: 'middle', cover: 'oardefault' }, { state: 'middle', cover: 'oardefault' }, { state: 'first', cover: 'sardefault' }]) });
+    expect(o.state).toBe('first');
+  });
+  it('oardefault 중간 장면이 마지막 시도들까지 이어지면 그때 middle 로 확정', async () => {
+    const calls: number[] = [];
+    let n = 0;
+    const check = async () => { calls.push(++n); return { state: 'middle' as CoverState, cover: 'oardefault' }; };
+    const o = await verifyPublicCover({ videoId: 'x', check, pollMs: 0, tries: 4 });
+    expect(o.state).toBe('middle');
+    expect(calls).toHaveLength(4); // 두 번 만에 확정하지 않고 끝까지 본다
+  });
+  it('oardefault 중간 장면이 마지막 한 번뿐이면 확정하지 않는다(unknown — 알림 없음)', async () => {
+    const xs: Array<{ state: CoverState; cover?: string }> = [{ state: 'missing' }, { state: 'missing' }, { state: 'middle', cover: 'oardefault' }];
+    let i = 0;
+    const o = await verifyPublicCover({ videoId: 'x', check: async () => xs[i++]!, pollMs: 0, tries: 3 });
+    expect(o.state).toBe('unknown');
+    expect(o.note).toContain('잠정');
+  });
+  it('sardefault 중간 장면은 종전대로 두 번 연속이면 바로 확정', async () => {
+    let n = 0;
+    const check = async () => { n++; return { state: 'middle' as CoverState, cover: 'sardefault' }; };
+    expect((await verifyPublicCover({ videoId: 'x', check, pollMs: 0, tries: 10 })).state).toBe('middle');
+    expect(n).toBe(2);
+  });
+  it('알림은 중간 장면·없음만 — unknown(파이썬 없음 등)은 로그만', () => {
+    expect(coverNeedsAlert('middle')).toBe(true);
+    expect(coverNeedsAlert('missing')).toBe(true);
+    expect(coverNeedsAlert('unknown')).toBe(false);
+    expect(coverNeedsAlert('first')).toBe(false);
+  });
+  it('yt_cover_check.py 출력 파싱 — 결과 줄이 없거나 깨지면 unknown', () => {
+    expect(parseYtCoverOutput('RESULT_JSON: {"state":"first","cover":"sardefault","simFirst":0.93,"simMid":-0.07}'))
+      .toEqual({ state: 'first', cover: 'sardefault', simFirst: 0.93, simMid: -0.07 });
+    expect(parseYtCoverOutput('경고\nRESULT_JSON: {"state":"middle"}').state).toBe('middle');
+    expect(parseYtCoverOutput('').state).toBe('unknown');
+    expect(parseYtCoverOutput('RESULT_JSON: {broken').state).toBe('unknown');
+    expect(parseYtCoverOutput('RESULT_JSON: {"state":"weird"}').state).toBe('unknown');
   });
 });

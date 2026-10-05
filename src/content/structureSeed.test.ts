@@ -230,6 +230,21 @@ describe('structureBlock — 작가 프롬프트 주입 문자열', () => {
     expect(structureBlock({ ...seed, quickAnswer: false })).toContain('빠른 답: 넣지 마라');
   });
 
+  // 2026-10-05 — 첫머리 굵은 요약 두 줄(편집 확정 규칙)이 한 줄 답을 맡는다. 빠른 답이 한 줄 답으로 나오면 맨 위에 같은 답이 두 번.
+  it('빠른 답은 조건별로 갈리는 답만 — 한 줄 답·요약 반복 금지, 근거 없으면 생략', () => {
+    const on = structureBlock({ ...seed, quickAnswer: true, table: false });
+    expect(on).toContain('시기·지역·조건별로 갈리는 답');
+    expect(on).toContain('한 줄짜리 답은 이 블록으로 쓰지 마라');
+    expect(on).toContain('같은 답 두 번 금지');
+    expect(on).toContain('근거 값이 없으면 이 블록은 생략한다');
+    expect(on).not.toContain('(한 줄 답,');
+  });
+  it('답 먼저 도입은 첫머리 요약을 되풀이하지 않는다', () => {
+    const b = structureBlock({ ...seed, openers: 'answer' });
+    expect(b).toContain('요약 문장을 되풀이하지 말고');
+    expect(structureBlock({ ...seed, openers: 'question' })).not.toContain('요약 문장을 되풀이하지 말고');
+  });
+
   it('새 집필 블록은 페르소나의 도입부·소제목·예고 규칙보다 우선함을 밝힌다', () => {
     expect(structureBlock(seed)).toContain('이 블록이 우선한다');
   });

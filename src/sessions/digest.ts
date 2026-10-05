@@ -110,6 +110,10 @@ export function readStyleLint(runId: string): StyleLintRecord | null {
     return r && Array.isArray(r.issues) ? r : null;
   } catch { return null; }
 }
+/** 읽기 쉬움 검수 기록(2026-10-05) — 고친 문장 원문·치환안과 적용 수. 사후 점검용(검토 알림은 읽지 않는다). */
+export function writeReadability(runId: string, r: { fixes: Array<{ original: string; replacement: string }>; applied: number; missed: string[]; checkedTs: string }): void {
+  writeSessionFile(runId, 'readability.json', JSON.stringify(r, null, 2));
+}
 /** 브리프 게이트 기록(2026-08-28) — 팩트체커 판정과 재작업 결과. 검토 알림(contentNotify)이 읽어
  * '⚖ 브리프 반려 43/70 · 미해소 3건' 한 줄로 보여 준다. 사실 게이트·문체 린트와 별개 파일이라
  * FACT_GATE=off 여도 표시가 살아 있다(같은 이유로 style_lint.json 도 분리돼 있다). */

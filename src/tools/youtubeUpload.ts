@@ -1,6 +1,6 @@
 /**
  * 유튜브 숏폼 업로드 — 브랜드별 refresh token(YOUTUBE_TOKENS)으로 access token 을 갱신해
- * videos.insert(multipart)로 비공개(private) 업로드한다.
+ * videos.insert(multipart)로 업로드한다. 기본은 처음부터 공개(2026-10-05, YOUTUBE_UPLOAD_PUBLIC_DIRECT — verifyPublicCover 참고).
  * 공개 발행(2026-10-01 사용자 확정, YOUTUBE_PUBLISH_PUBLIC) — 비공개로 올릴 때 예약 공개(publishAt)를 안전망으로 걸고,
  * publishWhenReady 가 처리 완료를 기다려 공개로 바꾼 뒤 썸네일이 실제로 떴는지 확인한다. 공개 상태에서 올리지 않는
  * 이유: 썸네일이 안 붙은 영상은 공개 상태에서 고쳐지지 않고 '비공개 → 공개' 전환 때만 고쳐졌다(2026-08-31 실증).
@@ -15,7 +15,7 @@ export interface YtUploadResult { ok: boolean; videoId?: string; url?: string; e
 /** snippet/status 메타데이터(순수) — 제목 100자·꺾쇠 제거, 설명 5000자, tags ≤15개·30자, private 고정.
  *  blogUrl(파생 쇼츠의 원본 네이버 글, 2026-07-31)은 설명 본문과 태그 사이 클릭 가능한 링크 줄.
  *  publishAt(2026-10-01) — 예약 공개 시각(ISO). 비공개일 때만 걸 수 있고, 그 시각에 유튜브가 스스로 공개한다. */
-export function buildVideoMeta(title: string, description: string, hashtags: string[], blogUrl?: string, publishAt?: string): Record<string, unknown> {
+export function buildVideoMeta(title: string, description: string, hashtags: string[], blogUrl?: string, publishAt?: string, privacy: 'public' | 'private' = 'private'): Record<string, unknown> {
   const clean = (s: string): string => s.replace(/[<>]/g, ''); // 유튜브 API 는 제목·설명·태그에 <> 금지
   const t = clean(title).trim().slice(0, 100) || '쇼츠';
   const tagLine = hashtags.filter(Boolean).join(' ');
@@ -26,7 +26,8 @@ export function buildVideoMeta(title: string, description: string, hashtags: str
     snippet: { title: t, description: desc, tags, categoryId: '22' },
     // containsSyntheticMedia: 스튜디오의 'AI 사용(변형·합성 콘텐츠) 공개 — 예' 체크와 동일.
     // 쇼츠는 전량 AI 생성(스크립트·TTS 음성·AI 배경/클립)이라 상시 true — 유튜브 공개 의무 준수.
-    status: { privacyStatus: 'private', ...(publishAt ? { publishAt } : {}), selfDeclaredMadeForKids: false, containsSyntheticMedia: true },
+    // 예약 공개(publishAt)는 비공개일 때만 유효하다 — 공개 업로드에 실으면 유튜브가 거절한다.
+    status: { privacyStatus: privacy, ...(publishAt && privacy === 'private' ? { publishAt } : {}), selfDeclaredMadeForKids: false, containsSyntheticMedia: true },
   };
 }
 
@@ -108,8 +109,10 @@ export async function uploadShortsToYoutube(opts: {
   /** 원본 네이버 블로그 URL(파생 쇼츠일 때) — 설명에 '전체 가이드' 링크 줄로 삽입. */
   blogUrl?: string;
   thumbnailPath?: string; signal?: AbortSignal;
-  /** 예약 공개 시각(ISO) — 공개 발행일 때 안전망(PUBLISH_SAFETY_MIN). 없으면 종전대로 비공개 고정. */
+  /** 예약 공개 시각(ISO) — 비공개→공개 방식의 안전망(PUBLISH_SAFETY_MIN). 없으면 종전대로 비공개 고정. */
   publishAt?: string;
+  /** 처음부터 공개로 올린다(2026-10-05, YOUTUBE_UPLOAD_PUBLIC_DIRECT) — 쇼츠 커버가 첫 장면으로 잡힌다(verifyPublicCover). */
+  privacy?: 'public' | 'private';
 }): Promise<YtUploadResult> {
   try {
     const clientId = getSecret('YOUTUBE_OAUTH_CLIENT_ID') ?? '';
@@ -125,7 +128,7 @@ export async function uploadShortsToYoutube(opts: {
 
     const boundary = `yt-${Date.now().toString(36)}-gepa`;
     const body = buildMultipartBody(
-      buildVideoMeta(opts.title, opts.description, opts.hashtags, opts.blogUrl, opts.publishAt),
+      buildVideoMeta(opts.title, opts.description, opts.hashtags, opts.blogUrl, opts.publishAt, opts.privacy ?? 'private'),
       fs.readFileSync(opts.videoPath), boundary);
     const r = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status', {
       method: 'POST', signal,
@@ -304,6 +307,54 @@ export async function publishWhenReady(opts: {
         ? `공개 처리 중 오류: ${why} — 공개 전환은 이미 됐다. 썸네일 복구 중이었다면 비공개로 남았을 수 있다 — 스튜디오에서 공개 여부·썸네일을 확인하세요`
         : `공개 처리 중 오류: ${why} — 업로드 때 건 예약 공개 시각에 공개된다` };
   }
+}
+
+export type CoverState = 'first' | 'middle' | 'missing' | 'unknown';
+export interface CoverOutcome { state: CoverState; note: string }
+/** 커버 확인 결과가 텔레그램 알림감인가(리뷰 2026-10-05) — 확인된 문제(중간 장면·없음)만. unknown(파이썬 없음·조회 실패·
+ *  잠정 커버)은 로그만 남긴다 — 판정 못 한 것을 '확인 필요'로 보내면 매 업로드마다 헛알림이 된다. */
+export const coverNeedsAlert = (s: CoverState): boolean => s === 'middle' || s === 'missing';
+
+/**
+ * 공개 업로드 뒤 쇼츠 커버 확인(2026-10-05) — 커버가 영상 첫 장면(디자인 썸네일)인지 그림으로 본다.
+ *
+ * 왜 바꿨나. 비공개로 올려 공개로 바꾸던 방식(10-01~10-04, 그 전엔 사람이 공개)에서는 유튜브가 쇼츠 커버(oardefault)를
+ * **중간 장면**으로 골라, 사장님이 업로드 직후마다 앱에서 맨 앞 프레임으로 손수 고쳤다. 처음부터 공개로 올리는
+ * ok_asis1 채널은 커버(sardefault)가 첫 장면으로 생긴다(10-05 두 채널 전수 대조: 우리 28/28 oardefault, ok_asis1 8/8
+ * sardefault). 그래서 공개로 바로 올리고, 여기서는 **확인만** 한다 — 비공개로 되돌리는 08-31 복구는 하지 않는다
+ * (그 전환이 바로 중간 장면 커버를 만드는 길이었다). 중간 장면이면 사람이 고치도록 알린다.
+ * check 는 주입(테스트용) — 기본은 blog_skills.checkYoutubeCover.
+ *
+ * 리뷰(2026-10-05): 공개 업로드의 커버는 sardefault 로 생긴다. sardefault 가 아직 없고 oardefault(전환식 커버 자리)만
+ * 보이는 동안의 '중간 장면'은 잠정이다 — 확정 셈(두 번 연속)에 넣지 않고, 마지막 시도들(끝의 두 번)까지 이어질 때만
+ * 중간 장면으로 확정한다. cover 를 모르는 응답(구 출력)은 종전처럼 바로 센다.
+ */
+export async function verifyPublicCover(opts: {
+  videoId: string; check: (id: string, signal?: AbortSignal) => Promise<{ state: CoverState; cover?: string }>;
+  signal?: AbortSignal; pollMs?: number; tries?: number;
+}): Promise<CoverOutcome> {
+  const pollMs = opts.pollMs ?? 30_000;
+  const tries = opts.tries ?? 20;
+  let last: CoverState = 'unknown';
+  let middleSeen = 0;
+  let provisional = 0; // oardefault 중간 장면 연속 횟수(잠정)
+  for (let i = 0; i < tries; i++) {
+    await sleep(pollMs, opts.signal);
+    let cover: string | undefined;
+    try { const r = await opts.check(opts.videoId, opts.signal); last = r.state; cover = r.cover; } catch { last = 'unknown'; }
+    if (last === 'first') return { state: 'first', note: '공개 · 쇼츠 커버가 첫 장면(디자인 썸네일)' };
+    if (last === 'middle' && cover === 'oardefault') { provisional++; middleSeen = 0; continue; }
+    provisional = 0;
+    // 처리 직후 잠깐 다른 프레임이 걸렸다가 바뀌는지 보려고 중간 장면은 두 번 연속 봐야 확정한다.
+    if (last === 'middle' && ++middleSeen >= 2) break;
+    if (last !== 'middle') middleSeen = 0;
+  }
+  if (last === 'middle' && (provisional === 0 || provisional >= Math.min(2, tries))) {
+    return { state: 'middle', note: '공개됐지만 쇼츠 커버가 중간 장면 — 유튜브 앱/스튜디오에서 커버를 맨 앞 프레임(0초)으로 지정하세요' };
+  }
+  if (last === 'middle') return { state: 'unknown', note: '공개됨 · 커버가 아직 잠정(중간 장면으로 한 번만 보임) — 앱에서 한 번 확인하세요' };
+  if (last === 'missing') return { state: 'missing', note: '공개됐지만 쇼츠 커버가 아직 없음(회색 자리표시) — 잠시 뒤 앱에서 확인하세요' };
+  return { state: 'unknown', note: '공개됨 · 커버 판정 불가(이미지 조회 실패) — 앱에서 한 번 확인하세요' };
 }
 
 export interface YtChannel { id: string; title: string }

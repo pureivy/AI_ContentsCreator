@@ -80,6 +80,10 @@ export interface BrandProfile {
   /** 카드뉴스 기본 이미지 스타일 프리셋(브랜드 고정, 2026-07-22) — 수동·검토탭·자동 파생 전부 적용.
    *  미설정 = 디자이너가 주제 보고 자동 선택. 값 검증은 소비처(resolveForcedPreset)가 담당. */
   cardStyle?: string;
+  /** 편집 확정 규칙(2026-10-05 사장님 확정 — 참고 블로그(ok_asis1) 2026-10-03 writingRules.editorRules 이식).
+   *  블로그 글의 형식·말투를 사람이 확정한 문장 목록 그대로 블로그 작가·리비전·제목 포장에 건다(editorRulesGuide).
+   *  업종·채널 취향이라 브랜드별로 둔다(미설정=프롬프트 무변경, 종전 동작). 쇼츠·카드에는 걸지 않는다(줄바꿈·요약 줄은 블로그 서식). */
+  editorRules?: string[];
 }
 
 const brandPath = (): string => path.join(CONFIG.dataDir, 'brand.yaml');
@@ -275,7 +279,22 @@ export function normalizeBrand(raw: Partial<BrandProfile> | null | undefined): B
       .slice(0, 20),
     channel: s(raw?.channel, 200),
     cardStyle: s(raw?.cardStyle, 40),
+    // 규칙 문장은 예시를 품어 길다 — 300자·20개 캡(참고 블로그와 같은 값, 프롬프트 폭주 방지).
+    editorRules: arr(raw?.editorRules, 20, 300),
   };
+}
+
+/**
+ * 편집 확정 규칙 블록(순수) — 블로그 작가·리비전(문체 린트 수정·사람 수정 요청 포함)·제목 포장 공용.
+ * 규칙이 없으면 빈 문자열 — 어느 프롬프트에도 아무것도 넣지 않는다(종전 동작 그대로).
+ * "겹치면 이 규칙이 이긴다": 작가 기본 지침의 문단·어미 규칙과 페르소나(company.yaml)의 [문체]·[도입부] 규칙이
+ * 여러 문장 문단을 전제로 쓰여 있어, 한 문장 한 줄 규칙과 부딪힐 때 어느 쪽인지 작가가 고르지 않게 한다.
+ */
+export function editorRulesGuide(b: BrandProfile | null = getBrand()): string {
+  const rules = b?.editorRules ?? [];
+  if (!rules.length) return '';
+  return '[편집 확정 규칙 — 운영자가 확정한 이 블로그의 글 형식·말투다. 다른 문체 지침과 겹치면 이 규칙이 이긴다]\n'
+    + rules.map((r, i) => `${i + 1}. ${r}`).join('\n');
 }
 
 /**

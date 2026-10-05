@@ -153,6 +153,9 @@ export interface Config {
   readonly timingParity: boolean;
   /** 블로그 본문 문체 린트(2026-08-27 권고 3) — 결정적 4종 검사 후 작가 수정 1회. off 면 검사·수정 모두 중단. */
   readonly blogStyleLint: boolean;
+  /** 블로그 읽기 쉬움 검수(2026-10-05, 참고 블로그 이식) — 처음 읽는 독자가 멈칫할 문장만 일상어로 치환(LLM 1회).
+   *  문체 린트 뒤·사실 게이트 앞. off 면 그 단계가 통째로 빠진다(종전 동작). */
+  readonly blogReadability: boolean;
   /** 요약·설명 메타투 린트(2026-08-27 권고 2) — 블로그 meta 재생성 1회 + 쇼츠 description 수정 라운드 합류.
    *  off 면 검사와 그 재시도가 함께 멈춘다(블로그 포장 LLM 콜이 최대 1회로 돌아간다). */
   readonly metaSummaryLint: boolean;
@@ -194,6 +197,8 @@ export interface Config {
    * 0 이면 종전 비공개 업로드. 자동 업로드(AUTO_YT_UPLOAD) 는 이 값과 무관하게 비공개 그대로다.
    */
   readonly youtubePublishPublic: boolean;
+  /** 처음부터 공개로 업로드(2026-10-05) — false 면 종전 비공개 업로드 + 공개 전환(publishWhenReady). youtubePublishPublic 이 켜져 있을 때만 의미. */
+  readonly youtubeUploadPublicDirect: boolean;
   /** 쇼츠 성과 측정창(일) — 업로드 후 이 기간 매일 수집, 경과 시 강화 1회. */
   readonly shortsPerfDays: number;
   /** 쇼츠 총 길이 상한(초) — 대본 자수 예산·씬 수를 여기서 역산(사용자 확정 2026-08-14: 60초 이내). */
@@ -210,6 +215,8 @@ export interface Config {
   readonly youtubeDailyCap: number;
   /** 유튜브용 숏폼이 네이버 클립을 기다리며 원본(final.mp4)을 남겨 두는 일수(2026-10-02). 0 이면 기다리지 않는다. */
   readonly naverClipWaitDays: number;
+  /** 클립을 수종 재생목록("<수종> 키우기")에 넣는가(2026-10-05, 기본 켬). 실패해도 업로드는 막지 않는다. */
+  readonly naverClipPlaylist: boolean;
   /** 페이스북을 성과 지표에서 채널로 셀 것인가(기본 off — 위 구현부 주석 참조). */
   readonly fbAsChannel: boolean;
   /**
@@ -275,6 +282,20 @@ export interface Config {
   /** 씬 2 결론 예고 카드(2026-09-18) — CTA 첫 조건만 "끝에 나오는 것 · 조건 → ?" 로 잠깐 띄운다. 답은 감춘다 — 끝까지 볼 이유.
    *  takeaways 없는 편은 아무것도 안 붙는다. SHORTS_TEASER=false 킬스위치. */
   readonly shortsTeaser: boolean;
+  /** 검산 수정 라운드를 '문제 씬만 고치기'로(2026-10-05, 사장님 승인) — 통째 재집필이 94%였고 씬 사이 건너뜀을 새로 만들었다(11편 분석).
+   *  SHORTS_PARTIAL_FIX=false 면 아래 두 곳이 종전 동작으로 돌아간다:
+   *  ① 기획 단계 수정 라운드 — 켬: 부분 수정 + 채택 판정(나아지지 않으면 첫 원고 유지), 구조 문제·무효 수정만 통째 재집필.
+   *     끔: 종전 통째 재집필(예외는 '수정 없음'으로 삼킨다 — 버그 수정이라 끔에도 적용).
+   *  ② 감량 뒤 수정 — 켬: 재검산에서 원문 핵심 축 지적 제외, 원문 발췌(정합 판정과 같은 6000자)·화면 글자를 준 부분 수정,
+   *     결론 카드는 새 내레이션과 어긋날 때만 지움, 채택 판정(문제 증가·새 건너뜀이면 감량본 유지).
+   *     끔: 종전 재검산(원문 핵심 축 포함)·번호 목록 프롬프트·내레이션만 병합·판정 없음.
+   *  스위치 밖(항상 켬): 씬 수 넘침 시 CTA 보존(fitSceneCount)·씬별 자수 예산 지시·트리밍 판정 문장 보호·HEDGE_RE·
+   *  검색 키워드 린트·훅 화면 어긋남 처리·최종 원문 대조(FACT_GATE 가 가른다)·형제 대본 미리보기 파일. */
+  readonly shortsPartialFix: boolean;
+  /** 최종 대본 흐름 점검(2026-10-05) — 감량·트리밍 뒤 LLM 1회로 씬 이음새를 보고 끊긴 이음 문장만 고친다(예산 안에서만,
+   *  훅·마지막 씬 제외, 화면 글자 유지). SHORTS_FLOW_CHECK=false 면 그 단계만 건너뛴다. 흐름 점검이 바꾼 씬의 원문 대조는
+   *  이 스위치가 아니라 최종 원문 대조(FACT_GATE)가 맡는다. */
+  readonly shortsFlowCheck: boolean;
   /** 5초 넘는 씬 중간 컷(2026-09-18) — 스틸은 다른 크롭(켄번즈 궤도·1.25배)으로 점프컷, 클립 씬은 여분 실촬영이 있을 때만
    *  뒷 절반을 다른 클립으로 교체. 씬 수·낭독·자막 불변. SHORTS_MIDCUT=false 킬스위치(cutAtFrame 자체를 안 넣는다). */
   readonly shortsMidcut: boolean;
@@ -467,6 +488,7 @@ export const CONFIG: Config = {
   // 시기·수치 원문 대조(2026-08-27 권고 1) — 활엽수 실사고: 블로그 "근거 확실치 않다" ↔ 쇼츠 "지금이 적기" + 오버레이 "8월".
   timingParity: envBool('TIMING_PARITY', true),
   blogStyleLint: envBool('BLOG_STYLE_LINT', true),
+  blogReadability: envBool('BLOG_READABILITY', true),
   // 요약·설명 메타투 린트(2026-08-27 권고 2) — meta·쇼츠 설명이 "…정리했습니다"로 끝나 채널 전체가 한 템플릿으로 읽힌 실측 대응.
   metaSummaryLint: envBool('META_SUMMARY_LINT', true),
   // 마무리·제목 로테이션(2026-08-27 권고 5) — 카드 마무리 장·블로그 마무리 문단·쇼츠 제목 유형이 고정 틀로 수렴한 실측 대응.
@@ -486,6 +508,8 @@ export const CONFIG: Config = {
   shortsI2vMaxClips: Math.min(8, Math.max(0, envInt('SHORTS_I2V_MAX_CLIPS', 2))),
   autoYtUpload: envBool('AUTO_YT_UPLOAD', false),
   youtubePublishPublic: envBool('YOUTUBE_PUBLISH_PUBLIC', true),
+  // 비공개→공개 전환은 쇼츠 커버를 중간 장면으로 만든다(10-05 진단, ok_asis1 대조) — 기본은 공개로 바로 올린다.
+  youtubeUploadPublicDirect: envBool('YOUTUBE_UPLOAD_PUBLIC_DIRECT', true),
   shortsPerfDays: Math.max(1, envInt('SHORTS_PERF_DAYS', 7)),
   shortsMaxDurationSec: Math.min(180, Math.max(20, envInt('SHORTS_MAX_DURATION_SEC', 60))),
   shortsScenes: Math.min(8, Math.max(3, envInt('SHORTS_SCENES', 5))),
@@ -493,6 +517,7 @@ export const CONFIG: Config = {
   youtubeDailyCap: envInt('YOUTUBE_DAILY_CAP', 1),
   // 클립은 원본을 올린다 — 유튜브 직후 저화질 사본으로 바꾸면 클립에 못 올린다. 기한이 지나면 정리한다.
   naverClipWaitDays: Math.max(0, envInt('NAVER_CLIP_WAIT_DAYS', 7)),
+  naverClipPlaylist: envBool('NAVER_CLIP_PLAYLIST', true),
   shortsI2vSubjectScenes: envBool('SHORTS_I2V_SUBJECT_SCENES', true),
   // 페이스북을 '채널'로 셀 것인가(2026-09-04 사용자 확정: 아니오).
   // 실측: 릴스 110편 두 달 합계 291회(편당 중앙 2회), 같은 영상의 인스타는 150,961회 — 520배.
@@ -537,6 +562,8 @@ export const CONFIG: Config = {
   shortsHookFootage: envBool('SHORTS_HOOK_FOOTAGE', true),
   shortsCaptions: envBool('SHORTS_CAPTIONS', true),
   shortsTeaser: envBool('SHORTS_TEASER', true),
+  shortsPartialFix: envBool('SHORTS_PARTIAL_FIX', true),
+  shortsFlowCheck: envBool('SHORTS_FLOW_CHECK', true),
   shortsMidcut: envBool('SHORTS_MIDCUT', true),
   shortsMediaRotate: envBool('SHORTS_MEDIA_ROTATE', true),
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),

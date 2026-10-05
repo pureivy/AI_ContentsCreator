@@ -189,3 +189,23 @@ describe('coerceBlogDraft', () => {
     expect(d!.imageSlots).toEqual([{ alt: 'a', prompt: 'p' }]);
   });
 });
+
+// 리뷰(2026-10-05) — 발행기는 >>> 상자 바로 아래 '빈 줄 없이' 이어진 목록을 상자 안으로 흡수한다. 빈 줄을 다 버리면
+// 초안에서 띄어 쓴 별도 목록까지 삼켜지므로, 프레임 줄 뒤의 빈 줄만 보존한다.
+describe('draftToFinalContent — 프레임(>>>) 뒤 빈 줄 보존', () => {
+  it('>>> 줄 뒤 빈 줄은 하나 남기고, 붙어 있는 목록은 그대로 붙여 둔다', () => {
+    const sep = draftToFinalContent(mkDraft({ bodyMarkdown: '## 소제목\n\n>>> 오늘 볼 것\n\n1) 따로 쓴 목록\n2) 둘째\n\n문장.' }));
+    expect(sep.smarteditor_text.sections[0]!.body).toBe('>>> 오늘 볼 것\n\n1) 따로 쓴 목록\n2) 둘째\n문장.');
+    const glued = draftToFinalContent(mkDraft({ bodyMarkdown: '## 소제목\n\n>>> 오늘 볼 것\n1) 상자 항목\n\n문장.' }));
+    expect(glued.smarteditor_text.sections[0]!.body).toBe('>>> 오늘 볼 것\n1) 상자 항목\n\n문장.'); // 상자 구간 끝의 빈 줄도 보존(무해 — 발행기가 건너뜀)
+  });
+  it('상자에 붙은 항목 뒤 빈 줄도 남긴다 — 그 뒤 별도 목록이 상자에 삼켜지지 않게', () => {
+    const r = draftToFinalContent(mkDraft({ bodyMarkdown: '>>> 오늘 볼 것\n1) 상자 항목\n\n2) 따로 목록\n\n3) 셋째' }));
+    expect(r.smarteditor_text.sections[0]!.body).toBe('>>> 오늘 볼 것\n1) 상자 항목\n\n2) 따로 목록\n3) 셋째');
+  });
+  it('프레임이 아닌 줄 뒤 빈 줄·섹션 끝 프레임 뒤 빈 줄은 종전대로 버린다', () => {
+    const r = draftToFinalContent(mkDraft({ bodyMarkdown: '>> 따옴표\n\n문장.\n\n>>> 끝 상자\n\n## 다음\n\n본문.' }));
+    expect(r.smarteditor_text.sections[0]!.body).toBe('>> 따옴표\n문장.\n>>> 끝 상자');
+    expect(r.smarteditor_text.sections[1]!.body).toBe('본문.');
+  });
+});

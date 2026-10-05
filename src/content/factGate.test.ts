@@ -8,9 +8,12 @@ import {
   isJudgmentSentence, hasHedge, hasEventMarkers, classifyClaim,
   isHardClaim, HARD_CLAIM_KINDS,
   applySentenceRepairs, repairSentences,
-  extractFactCard, FACT_CARD_HEADER, mergeSuppliedFacts,
+  extractFactCard, FACT_CARD_HEADER, mergeSuppliedFacts, jargonRulesForEvidence,
 } from './factGate';
 import type { FactClaim, FactGateResult } from './factGate';
+import fs from 'node:fs';
+import path from 'node:path';
+import YAML from 'yaml';
 
 const mocked = microJSON as unknown as ReturnType<typeof vi.fn>;
 beforeEach(() => mocked.mockReset());
@@ -892,5 +895,79 @@ describe('mergeSuppliedFacts — 공급 사실을 카드에 결정적으로 덧�
   });
   it('공급 안의 중복·빈 줄도 한 번만', () => {
     expect(mergeSuppliedFacts(null, [s1, '', s1])).toBe(s1);
+  });
+});
+
+// 유사도 하한 인자(2026-10-05) — 읽기 쉬움 검수가 0.2 로 쓴다. 기본값은 종전 0.4 그대로(사실 교정 경로 불변).
+describe('applySentenceRepairs — 유사도 하한 인자', () => {
+  // 비유를 풀어 쓴 치환(지어낸 비유 "그림" → 실제 모습) — 글자 겹침이 0.2~0.4 사이로 떨어지는 전형.
+  const body = '가지 끝에 그림이 걸려 있어요. 다음 문장입니다.';
+  const fix = [{ index: 1, action: 'judgment' as const, replacement: '가지 끝에 작은 눈이 보여요.' }];
+  it('기본(0.4)에서는 많이 바뀐 치환을 막는다', () => {
+    expect(applySentenceRepairs(body, ['가지 끝에 그림이 걸려 있어요.'], fix).applied).toBe(0);
+  });
+  it('하한을 낮추면(0.2) 받아들인다', () => {
+    const r = applySentenceRepairs(body, ['가지 끝에 그림이 걸려 있어요.'], fix, 0.2);
+    expect(r.applied).toBe(1);
+    expect(r.body).toContain('가지 끝에 작은 눈이 보여요.');
+  });
+});
+
+// 굵게 감싼 문장 보존(2026-10-05) — 첫머리 굵은 요약 줄이 치환을 거쳐도 굵게 남아야 발행기가 가운데 정렬한다.
+describe('applySentenceRepairs — 문장 전체를 감싼 굵게는 살린다', () => {
+  it('**…** 줄을 평문 치환문으로 바꿔도 굵게가 남는다', () => {
+    const body = '**라일락은 4월 중순에 핍니다.**\n도입 문장입니다.';
+    const r = applySentenceRepairs(body, ['라일락은 4월 중순에 핍니다.'], [{ index: 1, action: 'hedge', replacement: '라일락은 대개 4월 중순에 핍니다.' }]);
+    expect(r.applied).toBe(1);
+    expect(r.body.split('\n')[0]).toBe('**라일락은 대개 4월 중순에 핍니다.**');
+  });
+  it('문장 일부만 굵은 줄·치환문이 스스로 ** 를 가진 경우는 그대로 둔다', () => {
+    const body = '꽃말은 **첫사랑**입니다. 다음 문장입니다.';
+    const r = applySentenceRepairs(body, ['꽃말은 **첫사랑**입니다.'], [{ index: 1, action: 'hedge', replacement: '꽃말은 흔히 **첫사랑**이라고 합니다.' }]);
+    expect(r.body).toBe('꽃말은 흔히 **첫사랑**이라고 합니다. 다음 문장입니다.');
+  });
+});
+
+// 편집 확정 규칙을 근거 말뭉치에(2026-10-05) — 규칙이 시킨 용어 풀이가 '근거 미확인'으로 걸리는 자기모순 방지.
+describe('buildEvidence — 편집 확정 규칙 블록', () => {
+  it('규칙이 있으면 마지막 블록으로 싣는다', () => {
+    const e = buildEvidence({ brief: '브리프', editorRules: '원예 용어는 처음 나올 때 풀어 준다 — 활착(뿌리가 새 흙에 자리 잡음)' });
+    expect(e).toContain('[편집 확정 규칙 — 용어 풀이에만 근거로 인정 — 예시 문장은 근거 아님]\n원예 용어는');
+    expect(e).not.toContain('운영자가 확정');
+    expect(e.indexOf('[리서치·SEO 브리프]')).toBeLessThan(e.indexOf('[편집 확정 규칙'));
+  });
+  it('없거나 비면 블록이 없다(종전 말뭉치 그대로)', () => {
+    expect(buildEvidence({ brief: '브리프' })).toBe(buildEvidence({ brief: '브리프', editorRules: '  ' }));
+    expect(buildEvidence({ brief: '브리프' })).not.toContain('편집 확정 규칙');
+  });
+  // 리뷰(2026-10-05): 규칙 전체를 실으면 예시 문장("접목묘가 더 빨리 자랍니다")이 같은 문장의 근거가 됐다.
+  it('jargonRulesForEvidence — 용어 풀이 규칙만 고르고 예시 문장 규칙은 뺀다', () => {
+    const rules = [
+      '휴대폰에서 읽기 쉽게 한 문장마다 줄을 바꾼다 — 문장 하나가 한 줄이다.',
+      '어렵거나 예스러운 말에는 일상어를 함께 쓴다 — "이식"은 "옮겨 심기", "식재"는 "심기"처럼.',
+      '원예 용어는 써도 되지만 글에서 처음 나올 때 반 문장으로 풀어 준다 — 전정(가지치기), 활착(뿌리가 새 흙에 자리 잡음).',
+      '"전자/후자" 같은 가리키는 말 대신 그 대상의 이름을 다시 쓴다 — "후자가 더 빨리 자랍니다"가 아니라 "접목묘가 더 빨리 자랍니다".',
+      '새로 지어낸 비유·조어 대신 일상에서 쓰는 말로 쓴다 — "1년에 몇 번 전정하는지".',
+    ];
+    const picked = jargonRulesForEvidence(rules);
+    expect(picked).toContain('활착(뿌리가 새 흙에 자리 잡음)');
+    expect(picked).toContain('"이식"은 "옮겨 심기"');
+    expect(picked).not.toContain('접목묘가 더 빨리 자랍니다');
+    expect(picked).not.toContain('한 문장마다 줄을 바꾼다');
+    expect(picked).not.toContain('1년에 몇 번 전정하는지');
+    expect(jargonRulesForEvidence(undefined)).toBe('');
+    const e = buildEvidence({ brief: '브리프', editorRules: picked });
+    expect(e).not.toContain('접목묘가 더 빨리');
+    expect(e).toContain('예시 문장은 근거 아님');
+  });
+  // 실제 브랜드 규칙 문구로도 확인 — 문구가 바뀌어 용어 풀이 규칙이 빠지면 '규칙대로 쓴 풀이가 근거 미확인' 자기모순이 돌아온다.
+  const brandYaml = path.join(process.cwd(), 'data', 'brands', 'bionditree.yaml');
+  it.skipIf(!fs.existsSync(brandYaml))('실제 bionditree 규칙에서 용어 풀이 두 규칙만 고른다', () => {
+    const rules = (YAML.parse(fs.readFileSync(brandYaml, 'utf-8')) as { editorRules?: string[] }).editorRules ?? [];
+    const picked = jargonRulesForEvidence(rules).split('\n');
+    expect(picked).toHaveLength(2);
+    expect(picked.some((r) => r.includes('일상어'))).toBe(true);
+    expect(picked.some((r) => r.includes('원예 용어'))).toBe(true);
+    expect(picked.join('\n')).not.toContain('접목묘가 더 빨리 자랍니다');
   });
 });

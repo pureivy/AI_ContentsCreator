@@ -78,16 +78,25 @@ def first_line(s) -> str:
     return norm(str(s or "").strip().split("\n", 1)[0])
 
 
-def find_published(items: list, description: str, video_id=None):
-    """이미 공개(초안 아님)된 같은 클립. 영상 id, 설명 전체, 또는 첫 줄(제목)이 같으면 같은 편으로 본다.
-    첫 줄 비교는 사람이 손으로 올렸거나 수정요청으로 본문이 바뀐 경우를 잡는다(제목이 편마다 다르다)."""
-    want, title = norm(description), first_line(description)
+def lines_of(s) -> list:
+    return [norm(x) for x in str(s or "").split("\n") if norm(x)]
+
+
+def find_published(items: list, description: str, video_id=None, title=None):
+    """이미 공개(초안 아님)된 같은 클립. 영상 id, 설명 전체, 또는 제목 줄이 같으면 같은 편으로 본다.
+    제목 비교는 사람이 손으로 올렸거나 수정요청으로 본문이 바뀐 경우를 잡는다(제목이 편마다 다르다).
+
+    2026-10-05: 설명 첫 줄이 검색어("감나무 흰곰팡이")로 바뀌었다. 첫 줄끼리 비교하면 같은 검색어를 쓴 다른 편을
+    같은 편으로 오인해(올리지 않고 남의 번호를 기록) 버린다. 그래서 제목은 따로 받고(--match-title), 상대 설명의
+    '어느 줄이든' 제목과 같으면 같은 편으로 본다 — 예전 꼴(제목이 첫 줄)과 새 꼴(검색어 다음 줄) 모두 잡힌다."""
+    want = norm(description)
+    title = norm(title) if title else first_line(description)
     for it in items:
         if it.get("draft"):
             continue
         if video_id and it.get("videoId") == video_id:
             return it
-        if norm(it.get("description")) == want or (len(title) >= 8 and first_line(it.get("description")) == title):
+        if norm(it.get("description")) == want or (len(title) >= 8 and title in lines_of(it.get("description"))):
             return it
     return None
 
@@ -207,6 +216,153 @@ def pick_categories(page, first: str, second: str) -> bool:
     return ok
 
 
+PL_ADD = "[class*='PlaylistAddPopup_popup']"
+PL_NEW = "[class*='NewPlaylistPopup_popup']"
+
+
+PL_TITLE_KEYS = ("title", "name", "playlistTitle")
+
+
+def find_playlist(page, profile_key: str, name: str):
+    """이 이름의 재생목록을 API 로 찾는다 — (상태, 항목). 상태: 'found'(정확히 같은 제목) | 'absent'(조회 성공·없음) |
+    'unknown'(조회 실패·응답 꼴이 다름). 리뷰(2026-10-05): 종전엔 조회 실패·필드 이름 불일치도 '없음'으로 읽혀
+    같은 이름의 재생목록을 하나 더 만들었다 — '만들기'는 즉시 전체 공개로 저장된다. 만들기는 'absent' 일 때만."""
+    try:
+        for p in range(1, 11):
+            j = api_get(page, f"/profiles/{profile_key}/playlists?size=20&page={p}")
+            items = j.get("items") if isinstance(j, dict) else None
+            if not isinstance(items, list):
+                return "unknown", None
+            if items and not any(isinstance(it, dict) and any(isinstance(it.get(k), str) for k in PL_TITLE_KEYS) for it in items):
+                return "unknown", None  # 제목 필드 이름이 바뀌었다 — 없다고 단정할 수 없다
+            for it in items:
+                if isinstance(it, dict) and any(norm(it.get(k)) == norm(name) for k in PL_TITLE_KEYS):
+                    return "found", it
+            if p >= int((j.get("commonInfo") or {}).get("totalPages") or 1):
+                return "absent", None
+        return "unknown", None  # 10쪽을 넘었다 — 끝까지 못 봤다
+    except Exception as e:
+        log(f"[재생목록] 목록 조회 실패: {str(e)[:80]}")
+        return "unknown", None
+
+
+def should_create_playlist(lookup: str, picked: str) -> bool:
+    """새로 만들지 판정(순수) — 화면 목록에서도 못 찾았고(picked 'not-found') API 조회가 '없음'을 확인했을 때만.
+    API 가 'found' 인데 화면에 없거나 조회가 'unknown' 이면 만들지 않고 실패로 둔다(중복 공개 재생목록 방지)."""
+    return picked == "not-found" and lookup == "absent"
+
+
+def close_playlist_popups(page):
+    """재생목록 창을 모두 닫는다(취소) — 창이 '등록' 버튼을 덮은 채 남으면 등록이 막힌다."""
+    for sel in (PL_NEW, PL_ADD):
+        for _ in range(2):
+            pop = page.locator(sel)
+            if pop.count() == 0 or not pop.first.is_visible():
+                break
+            btn = pop.first.locator("button[class*='cancelBtn'], button[class*='closeBtn']")
+            try:
+                if btn.count():
+                    btn.first.click(timeout=3000)
+                else:
+                    page.keyboard.press("Escape")
+            except Exception:
+                page.keyboard.press("Escape")
+            time.sleep(1.0)
+
+
+def playlist_in_form(page) -> bool:
+    """폼에 재생목록이 하나 이상 걸렸는가 — 넣기 성공의 근거.
+    폼은 이름을 보여 주지 않는다(2026-10-05 실측): 제목이 '재생목록 1'이 되고 버튼이 '재생목록 추가'→'재생목록 편집'으로 바뀐다."""
+    try:
+        return "편집" in page.locator("button[class*='playlistBtn']").first.inner_text(timeout=3000)
+    except Exception:
+        return False
+
+
+def pick_in_popup(page, pop, name: str) -> str:
+    """재생목록 창 목록에서 정확히 같은 이름의 항목을 고른다 — 'clicked'·'already'·'not-found'·'no-popup'.
+    검색으로 좁힌 뒤, 이미 체크돼 있으면(새로 만들면 자동 선택될 수 있다) 두지 않고 그대로."""
+    search = pop.locator("input[class*='searchInput']")
+    if search.count():
+        search.first.fill(name)
+        search.first.press("Enter")
+        time.sleep(2.0)
+    return page.evaluate("""([sel, t]) => {
+      const pop = document.querySelector(sel);
+      if (!pop) return 'no-popup';
+      // 목록 항목(li) 안의 글자만 — 검색 결과 없음 안내가 검색어를 그대로 굵게 되풀이해 그걸 집은 적이 있다(2026-10-05 실측).
+      const hits = [...pop.querySelectorAll("ul li [class*='listItemText'], ul li")].filter(n => n.children.length === 0 && (n.innerText || '').trim() === t);
+      if (!hits.length) return 'not-found';
+      // 항목 = li.listItem > label.listItemLabel > input(숨은 체크박스) + span.checkbox + span.listItemText.
+      // 고르면 li 에 listItemSelected, span 에 checkboxChecked 가 붙는다 — 이미 골라져 있으면 누르지 않는다(누르면 해제된다).
+      const li = hits[0].closest('li') || hits[0];
+      const box = li.querySelector('input[type=checkbox]');
+      const on = /Selected/.test(li.className) || !!li.querySelector("[class*='checkboxChecked']") || (box && box.checked === true);
+      if (on) return 'already';
+      (li.querySelector('label') || hits[0]).click();
+      return 'clicked';
+    }""", [PL_ADD, name])
+
+
+def add_to_playlist(page, profile_key: str, name: str, res: Result, run_dir: Path, writes: list) -> bool:
+    """클립을 재생목록 name 에 넣는다(2026-10-05) — 화면 목록에 있으면 고르고, API 조회로 없음이 확인될 때만 만든다
+    (should_create_playlist, 리뷰 2026-10-05). 실패해도 업로드는 계속한다.
+
+    화면(2026-10-05 정찰): 폼의 '재생목록 추가'(button.ClipDetailForm_playlistBtn) → 'PlaylistAddPopup'(검색창·목록·
+    '새 재생목록 만들기'·취소/완료) → '새 재생목록 만들기'는 'NewPlaylistPopup'(textarea#playlist-title-input 150자,
+    전체 공개 기본, '만들기'). 목록 API: GET /profiles/{key}/playlists?size=20&page=N (items[].title).
+    '만들기'는 그 자리에서 저장된다(POST /profiles/{key}/playlists — 클립을 등록하지 않아도 남는다, 드라이런 실측).
+    항목 선택·'완료'는 폼 상태만 바꾸고 아무것도 쓰지 않는다(실측) — 연결은 '등록' 때 함께 저장될 것으로 본다(실제 등록 경로는 미검증).
+    """
+    start = len(writes)
+    try:
+        lookup, _ = find_playlist(page, profile_key, name)
+        log(f"[재생목록] 목록 조회: {lookup}")
+        page.locator("button[class*='playlistBtn']").first.click(timeout=5000)
+        pop = page.locator(PL_ADD).first
+        pop.wait_for(state="visible", timeout=10000)
+        time.sleep(1.5)
+        # 화면 목록에서 먼저 정확한 이름을 찾는다 — 있으면 고르고 끝(만들지 않는다).
+        picked = pick_in_popup(page, pop, name)
+        log(f"[재생목록] 목록 선택: {picked}")
+        if should_create_playlist(lookup, picked):
+            pop.locator("button[class*='newPlaylistBtn']").first.click(timeout=5000)
+            new = page.locator(PL_NEW).first
+            new.wait_for(state="visible", timeout=10000)
+            new.locator("textarea#playlist-title-input, textarea[name=title]").first.fill(name)
+            time.sleep(0.5)
+            new.locator("button[class*='createBtn']").first.click(timeout=5000)
+            new.wait_for(state="hidden", timeout=15000)
+            log(f"[재생목록] 새로 만듦: {name}")
+            res.save(playlist_created=name)
+            time.sleep(2.0)
+            picked = pick_in_popup(page, pop, name)
+            log(f"[재생목록] 만든 뒤 선택: {picked}")
+        if picked in ("no-popup", "not-found"):
+            why = "" if lookup == "absent" else f" — 목록 조회 '{lookup}'라 새로 만들지 않음"
+            raise RuntimeError(f"목록에서 '{name}' 항목을 못 찾음({picked}){why}")
+        time.sleep(1.0)
+        pop.locator("button[class*='confirmBtn']").first.click(timeout=5000)
+        page.locator(PL_ADD).first.wait_for(state="hidden", timeout=10000)
+        time.sleep(1.0)
+        if not playlist_in_form(page):
+            raise RuntimeError("완료 뒤 폼에 재생목록이 걸리지 않음('재생목록 편집'으로 안 바뀜)")
+        res.save(playlist=name, playlist_writes=writes[start:])
+        log(f"[재생목록] 넣음: {name}")
+        return True
+    except Exception as e:
+        res.issue(f"재생목록 '{name}' 넣기 실패 — 재생목록 없이 올립니다: {str(e)[:120]}")
+        try:
+            page.screenshot(path=str(run_dir / "clip_playlist_fail.png"), full_page=False)
+            dump = page.evaluate("""(sel) => { const p = document.querySelector(sel); return p ? p.outerHTML.replace(/<svg[\\s\\S]*?<\\/svg>/g, '').slice(0, 8000) : null; }""", PL_ADD)
+            (run_dir / "clip_playlist_dump.html").write_text(dump or "", encoding="utf-8")
+        except Exception:
+            pass
+        res.save(playlist_writes=writes[start:])
+        close_playlist_popups(page)
+        return False
+
+
 def attach_blog(page, title: str, res: Result) -> bool:
     page.get_by_role("button", name="블로그", exact=True).first.click()
     time.sleep(2.5)
@@ -246,6 +402,8 @@ def main():
     ap.add_argument("--ai-generated", action="store_true")
     ap.add_argument("--upload-name", default="", help="올릴 파일 이름(확장자 제외) — 초안 식별용")
     ap.add_argument("--video-id", default="", help="--check-only 때 지난 시도의 영상 id")
+    ap.add_argument("--match-title", default="", help="중복 공개 검사용 제목 — 설명의 어느 줄이든 이것과 같으면 같은 편")
+    ap.add_argument("--playlist", default="", help="넣을 재생목록 이름(없으면 만든다). 실패해도 업로드는 계속")
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--result-file", required=True)
     ap.add_argument("--dry-run", action="store_true", help="다 채우고 '등록' 직전에 멈춘다")
@@ -325,8 +483,12 @@ def run(args, res: Result, description: str, upload, run_dir: Path) -> int:
                         j = r.json()
                         if isinstance(j, dict):
                             captured["draft"] = j
-                    elif r.request.method in ("POST", "PUT", "PATCH") and "/studio/webapi/" in r.url and captured.get("submitted"):
-                        captured.setdefault("after_submit", []).append({"method": r.request.method, "url": r.url.split("?")[0], "status": r.status})
+                    elif r.request.method in ("POST", "PUT", "PATCH", "DELETE") and "/studio/webapi/" in r.url:
+                        # 등록 전 쓰기도 남긴다(2026-10-05) — 재생목록 '만들기'처럼 등록과 무관하게 바로 저장되는 동작을 결과에서 보이게.
+                        w = {"method": r.request.method, "url": r.url.split("?")[0], "status": r.status}
+                        captured.setdefault("writes", []).append(w)
+                        if captured.get("submitted"):
+                            captured.setdefault("after_submit", []).append(w)
                 except Exception:
                     pass
 
@@ -363,7 +525,7 @@ def drive(page, args, res: Result, description: str, upload, run_dir: Path, capt
     if args.video_id:
         res.save(video_id=args.video_id)  # 확인이 실패해도 다음 확인이 같은 영상 id 로 대조하게 남긴다
     items = list_vods(page, profile_key)
-    dup = find_published(items, description, args.video_id or None)
+    dup = find_published(items, description, args.video_id or None, args.match_title or None)
     if dup:
         log(f"[중복] 이미 공개된 클립 {dup.get('mediaContentNo')} — 업로드하지 않음")
         res.save(status="RECOVERED", media_content_no=str(dup.get("mediaContentNo") or ""), video_id=dup.get("videoId"))
@@ -497,6 +659,15 @@ def drive(page, args, res: Result, description: str, upload, run_dir: Path, capt
             res.issue(f"블로그 링크 실패: {str(e)[:80]}")
             page.keyboard.press("Escape")
 
+    # ── 재생목록(2026-10-05, 수종별 "<수종> 키우기") — 최선 노력. 실패는 주의로만 남기고 등록은 그대로 간다. ──
+    # 드라이런은 건너뛴다(리뷰 2026-10-05) — '새 재생목록 만들기'는 등록 전에도 그 자리에서 전체 공개로 저장된다(실측).
+    if args.playlist.strip() and args.dry_run:
+        log(f"[재생목록] 드라이런 — '{args.playlist.strip()}' 넣기 생략(만들기가 즉시 공개 저장이라)")
+        res.save(playlist_skipped="dry_run")
+    elif args.playlist.strip():
+        add_to_playlist(page, profile_key, args.playlist.strip(), res, run_dir, captured.setdefault("writes", []))
+        close_playlist_popups(page)  # 어떤 경우든 창이 등록 버튼을 덮지 않게
+
     # ── 공개 설정 확인 — 기본 켜짐. 꺼져 있으면 사람이 바꾼 것이니 손대지 않고 보고만 한다. ──
     _, pub = switch_state(page, "전체 공개")
     res.save(public=bool(pub))
@@ -523,7 +694,7 @@ def drive(page, args, res: Result, description: str, upload, run_dir: Path, capt
     while time.time() < deadline:
         time.sleep(4)
         try:
-            hit = find_published(list_vods(page, profile_key), description, video_id)
+            hit = find_published(list_vods(page, profile_key), description, video_id, args.match_title or None)
         except Exception:
             continue
         if hit:

@@ -93,6 +93,10 @@ export interface Shorts {
   /** 프로필이 바빠(성과 수집·블로그 발행) 업로드가 대기 중인 시각(2026-10-02) — 풀리면 서버가 이어서 올린다.
    *  대기 자체는 메모리에만 있고, 이 표시는 화면용이다(재시작 때 지운다 — naverClipQueue.ts). */
   naverClipQueuedTs?: string;
+  /** 클립 올리기 권유(텔레그램 버튼)를 보낸 시각(2026-10-05) — 한 편에 한 번만 보낸다(유튜브 업로드 알림의 버튼도 한 번으로 친다). */
+  naverClipNudgedTs?: string;
+  /** 실제 업로드에 쓴 클립 설명(2026-10-05) — 설명이 검색 유입으로 매일 바뀔 수 있어, '클립 확인'은 올린 그 글자로 대조한다. */
+  naverClipDescription?: string;
   /** 원본 영상(final.mp4)을 저용량 preview.mp4 로 교체한 시각(2026-08-31 저장공간 정책). 있으면 재실행 안 함. */
   videoArchivedTs?: string;
   createdTs: string;

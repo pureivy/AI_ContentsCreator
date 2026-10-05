@@ -18,16 +18,18 @@ import { getCompany } from '../agents/company-loader';
 import { rolesById } from '../agents/company';
 import { stripEmoji } from '../output/render';
 import { shortsStore, type Shorts} from '../content/shorts';
-import { platformPlanGuide, platformLabel } from '../content/shortsPlatform';
+import { platformPlanGuide, platformLabel, SIBLING_PREVIEW_FILE } from '../content/shortsPlatform';
 import { writerById, writerByName, type ShortsWriter } from '../content/shortsWriters';
 import { notifyShortsReady } from '../autonomy/contentNotify';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
 import { qaSceneClips } from './shortsClipQa';
-import { standaloneIssues, parityIssues, parityToInfo } from './standaloneQa';
+import { standaloneIssues, parityIssues, parityIssuesChecked, parityToInfo, PARITY_SOURCE_CHARS } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue, stripUnsourcedStatOverlays } from '../content/timingParity';
 import type { FactGateInfo } from '../content/factGate';
-import { narrationStyleIssues, hookKeywordLeadIssues, hookLengthIssues, metaSummaryIssues, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs, closingSceneIssues, announcesNextEpisode, stripNextEpisode, mentionsNextEpisode, screenTextAnnounces } from '../content/styleLint';
+import { isJudgmentSentence } from '../content/factGate';
+import type { ShortsPlatform } from '../content/shortsPlatform';
+import { narrationStyleIssues, hookKeywordLeadIssues, hookLengthIssues, metaSummaryIssues, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs, closingSceneIssues, announcesNextEpisode, stripNextEpisode, mentionsNextEpisode, screenTextAnnounces, isPromiseSentence } from '../content/styleLint';
 import { promiseStore, MAX_PENDING } from '../content/promises';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
@@ -451,12 +453,29 @@ function shortsNarrationChars(p: Plan): number { return p.scenes.reduce((s, x) =
 /** 문장 분리(트리밍용) — styleLint 와 같은 대략 규칙(종결부호 기준). */
 const splitNarrSentences = (t: string): string[] => t.split(/(?<=[.!?…])\s+/).map((s) => s.trim()).filter(Boolean);
 
+/** 판정 문장("~면 ~예요/~세요/~적어요") — 조건 뒤에 결론·지시가 붙은 꼴. 씬의 답이라 트리밍이 맨 나중에 건드린다(2026-10-05).
+ *  조건절 문장은 전부 본다 — "긁어보면 속이 보여요" 같은 확인법도 조건→결과라 빼면 뒤 판정의 근거가 사라진다. */
+const VERDICT_SENT_RE = /(?:면|다면|라면)[\s,].*(?:요|다|죠)[.!?…~]*$/;
+/** 앞 문장을 되받는 첫머리 — 이런 문장이 뒤에 있으면 앞 문장을 빼면 지시어가 허공에 뜬다. */
+const BACKREF_START_RE = /^(?:(?:그|이|저)\s|그래서|그럼|그러면|그런데|그러니|그렇다고|그때|이때|이런|그런|그게|이게|그건|이건|하지만|대신)/;
+
+/**
+ * 트리밍 보호 문장(순수) — 씬의 첫 문장(앞 씬을 받는 자리), 판정 문장, 다음 문장이 되받는 문장.
+ * 실측(2026-10-05 숏폼 11편 분석): 종전 트리밍은 가장 긴 본문 씬의 '마지막 문장'을 뺐는데 그게 대개 판정이었다
+ * (호두 유튜브 "그 아래서만 났다면 품종은 못 살린 거예요" 삭제 → 씬4가 확인법만 남고 답이 사라짐).
+ */
+export function protectedSentences(sents: readonly string[]): boolean[] {
+  return sents.map((s, i) => i === 0 || VERDICT_SENT_RE.test(s) || isJudgmentSentence(s) || (i + 1 < sents.length && BACKREF_START_RE.test(sents[i + 1]!)));
+}
+
 /**
  * 결정적 트리밍(순수, 테스트 대상) — LLM 감량이 예산에 못 미쳐도(실측 2026-08-20: 목표 341자에 364자
  * 응답, 3라운드 전부 미달 → 60.7초 실패) 코드가 예산을 보장한다. 생성 실패 금지(사용자 확정 2026-08-20:
  * "쇼츠는 반드시 생성되어야 함")의 핵심 장치.
- * 1단계 — 문장 단위: 본문 씬(훅·CTA 제외, 씬2 전제는 후순위)에서 긴 씬부터 마지막 문장을 제거(전 씬
- * 최소 1문장 유지). 2단계 — 씬 단위: 뒤쪽 본문 씬을 통째로 제거(훅·씬2·CTA 보존, 최소 4씬).
+ * 1단계 — 문장 단위: 본문 씬(훅·CTA 제외, 씬2 전제는 후순위)에서 긴 씬부터 문장을 제거(전 씬 최소 1문장 유지).
+ *   2026-10-05: 보호 문장(protectedSentences — 첫 문장·판정·되받히는 문장)이 아닌 문장을 먼저 뺀다. 본문 씬 전부가
+ *   보호 문장뿐일 때만 종전대로 긴 씬의 마지막 문장을 뺀다. 씬2(전제)는 그 뒤 — 씬2 의 틀 문장이 남은 씬들의 전제다.
+ * 2단계 — 씬 단위: 뒤쪽 본문 씬을 통째로 제거(훅·씬2·CTA 보존, 최소 4씬).
  * keptScenes 는 원본 씬 인덱스 — 렌더 시 씬별 이미지·클립 배열을 함께 줄이는 매핑에 쓴다.
  */
 export function trimPlanToBudget(plan: Plan, budgetChars: number, minScenes = 4): { plan: Plan; keptScenes: number[]; trimmed: boolean } {
@@ -465,14 +484,36 @@ export function trimPlanToBudget(plan: Plan, budgetChars: number, minScenes = 4)
   const kept = scenes.map((_, i) => i);
   let changed = false;
   let guard = 40; // 폭주 방지 — 씬×문장 수보다 넉넉한 상한
+  const dropAt = (i: number, k: number): void => {
+    const ss = splitNarrSentences(scenes[i]!.narration);
+    ss.splice(k, 1);
+    scenes[i]!.narration = ss.join(' ').trim();
+    changed = true;
+  };
+  /** 씬 i 에서 뺄 수 있는 비보호 문장 중 마지막 것의 위치(없으면 -1). */
+  const freeIdx = (i: number): number => {
+    const ss = splitNarrSentences(scenes[i]!.narration);
+    if (ss.length < 2) return -1;
+    const prot = protectedSentences(ss);
+    for (let k = ss.length - 1; k >= 0; k--) if (!prot[k]) return k;
+    return -1;
+  };
   while (total(scenes) > budgetChars && guard-- > 0) {
     const order = [...scenes.keys()]
       .filter((i) => i > 0 && i < scenes.length - 1) // 훅·CTA 는 문장 트리밍 제외(각 1~2문장 핵심)
       .sort((a, b) => (a === 1 ? 1 : 0) - (b === 1 ? 1 : 0) || scenes[b]!.narration.length - scenes[a]!.narration.length);
-    const cand = order.find((i) => splitNarrSentences(scenes[i]!.narration).length >= 2);
-    if (cand === undefined) break; // 더 뺄 문장 없음 — 씬 단위로
-    scenes[cand]!.narration = splitNarrSentences(scenes[cand]!.narration).slice(0, -1).join(' ').trim();
-    changed = true;
+    const body = order.filter((i) => i !== 1);
+    // ① 본문 씬의 비보호 문장 ② 본문 씬의 마지막 문장(종전 규칙) ③ 씬2 의 비보호 문장 ④ 씬2 의 마지막 문장.
+    const free = body.find((i) => freeIdx(i) >= 0);
+    if (free !== undefined) { dropAt(free, freeIdx(free)); continue; }
+    const legacy = body.find((i) => splitNarrSentences(scenes[i]!.narration).length >= 2);
+    if (legacy !== undefined) { dropAt(legacy, splitNarrSentences(scenes[legacy]!.narration).length - 1); continue; }
+    if (order.includes(1) && splitNarrSentences(scenes[1]!.narration).length >= 2) {
+      const k = freeIdx(1);
+      dropAt(1, k >= 0 ? k : splitNarrSentences(scenes[1]!.narration).length - 1);
+      continue;
+    }
+    break; // 더 뺄 문장 없음 — 씬 단위로
   }
   while (total(scenes) > budgetChars && scenes.length > Math.max(1, minScenes)) { // 씬 하한(기본 4) — 쇼츠는 CONFIG.shortsScenes 를 넘겨 씬 수를 지킨다
     const drop = scenes.length - 2; // CTA 앞 본문 씬부터 뒤에서 제거
@@ -615,8 +656,12 @@ export function diversifyTitle(
 }
 
 /** 유보 표현 — 압축 LLM 이 "군더더기"로 지워 단정문(결론 반전)을 만든 실측 대응.
- *  '미루'는 "미루고/미룹니다"(유보)만 노린다 — 미루나무는 수종명이라 제외(2026-08-26 최종 리뷰 F5d). */
-export const HEDGE_RE = /대개|흔히|보통|대체로|경우가 많|수 있|봐요|가능성|편이에요|편입니다|미루(?!나무)/;
+ *  '미루'는 "미루고/미룹니다"(유보)만 노린다 — 미루나무는 수종명이라 제외(2026-08-26 최종 리뷰 F5d).
+ *  '수 있'(2026-10-05): 맨 '수 있'은 그대로 유보로 본다 — "썩을/안 필/입을/부러질/올 수 있어요"는 전부 가능성 유보이고,
+ *  가능성 꼴만 남겼던 좁힘(…일/있을/생길/될 수 있)은 이들을 놓쳤다(리뷰 지적). 예외는 '알아보는 능력' 동사뿐이다 —
+ *  "가려낼 수 있어요"(능력)를 유보로 오판한 실측(호두 인스타: 수정 라운드가 "가려내요"로 줄이자 긴 원문장을 되살렸고, 그
+ *  초과분을 트리밍이 판정 문장으로 메웠다). 예외 목록: 가려낼·구별할·구분할·알아볼·알아챌·확인할·고를·찾을·볼·알. */
+export const HEDGE_RE = /대개|흔히|보통|대체로|경우가 많|(?<!(?:가려낼|구별할|구분할|알아볼|알아챌|확인할|고를|찾을|볼|알)\s?)수 있|수도 있|봐요|가능성|편이에요|편입니다|미루(?!나무)/;
 /** 원문에 유보 토큰이 있던 씬이 압축본에서 사라지면 원 내레이션으로 되돌린다(스펙 §6b) — 순수 함수, 입력 불변. */
 export function restoreLostHedges(before: Plan, after: Plan): { plan: Plan; restored: number[] } {
   const restored: number[] = [];
@@ -627,6 +672,529 @@ export function restoreLostHedges(before: Plan, after: Plan): { plan: Plan; rest
     return { ...s, narration: orig.narration };
   });
   return { plan: { ...after, scenes }, restored };
+}
+
+// ───────────────────────────────────────────────────────────────────────────────────────────────
+// 대본 흐름 보존(2026-10-05 숏폼 11편 분석, 사장님 승인) — 씬 사이 '건너뜀'이 작가 첫 원고 6/44(14%)에서 최종 17/44(39%)
+// 로 늘었다. 늘어난 자리: 수정 라운드 11 · 압축 4 · 기계 트리밍 1 · CTA 잘림 1. 수정 라운드는 작가에게 현 대본을 안 주고
+// 원 지시+문제 목록만 줘서 94%가 통째 재집필이었다(훅 85편 중 83편 교체, 씬 유사도 중앙 0.08). 아래 순수 함수들은
+// 그 경로를 '문제 씬만 고치기'로 바꾸고, 씬 수 넘침이 CTA 를 자르지 않게 하고, 마지막에 이음새만 한 번 본다.
+// ───────────────────────────────────────────────────────────────────────────────────────────────
+
+/** 씬 수 맞추기(순수) — 넘치면 앞 n-1 + 마지막 씬(CTA). 모자라면 그대로(지어낼 수 없다).
+ *  종전 parsePlan 은 앞에서 n 개를 잘라 마지막 CTA 를 떨어뜨렸다(09-18 이후 91편 중 20편이 CTA 없이 끝남 — 호두 인스타:
+ *  수정본 7씬 → 앞 5씬만 남아 결론 카드 없이 "흔들어 보면…" 으로 끝남). */
+export function fitSceneCount<T>(scenes: readonly T[], n: number): T[] {
+  if (n < 2 || scenes.length <= n) return scenes.slice();
+  return [...scenes.slice(0, n - 1), scenes[scenes.length - 1]!];
+}
+
+/**
+ * 씬별 자수 예산(순수) — 작가 지시가 실제 예산에서 나오게(2026-10-05). 종전 지시는 "본문 2문장 40~65자, 30~55초"
+ * (company.yaml)와 "본문 30~70자"(기획 프롬프트)였는데 실제 예산은 (상한 35초−여유 5초)×7.08자/초 ≈ 212자다 —
+ * 첫 원고 93편 중 60편이 예산 초과, 30편이 평균 26% 압축됐고 압축이 이음 문장부터 지웠다.
+ * 예산의 92%를 목표로 둔다(작가는 대개 조금 넘긴다). 훅은 훅 규칙(20자) 고정, 나머지를 씬2 1.1 · 본문 1.0 · CTA 0.75 로 나눈다.
+ */
+export function sceneCharBudgets(budgetChars: number, n: number, hookMax = 20): { hook: number; premise: number; body: number; cta: number; total: number } {
+  const target = Math.floor(budgetChars * 0.92);
+  const bodyCount = Math.max(0, n - 3);
+  const unit = Math.max(0, target - hookMax) / (1.1 + bodyCount + 0.75);
+  return {
+    hook: hookMax,
+    premise: Math.min(70, Math.floor(unit * 1.1)),
+    body: Math.min(70, Math.floor(unit)),
+    cta: Math.min(45, Math.floor(unit * 0.75)),
+    total: budgetChars,
+  };
+}
+
+/** 씬 i(0-base)의 자수 상한 — sceneCharBudgets 를 씬 자리에 맞춰 읽는다. */
+export function sceneBudgetAt(b: ReturnType<typeof sceneCharBudgets>, i: number, n: number): number {
+  return i === 0 ? b.hook : i === n - 1 ? b.cta : i === 1 ? b.premise : b.body;
+}
+
+/**
+ * 훅 실촬영이 주제와 어긋나는가(순수, 2026-10-05) — 어긋나면 사유, 아니면 ''.
+ * 실측(호두 인스타·유튜브): 주제 "잎이 안 나요"인데 훅 실촬영은 "초록 잎이 무성하고 열매" — 작가가 그 묘사로 훅을 써서
+ * "잎이랑 열매가 저렇게 가득하죠"가 나갔다(주제와 정반대 장면을 가리킨다). 주제의 '없음·안 됨'과 화면의 '가득함'이
+ * 같은 부위(잎·꽃·열매)에서 부딪히거나, 주제가 고사·시듦인데 화면이 싱싱하면 어긋남으로 본다.
+ */
+export function footageContradictsTopic(topic: string, footage: string | undefined): string {
+  if (!footage) return '';
+  const t = topic.replace(/\s+/g, ' ');
+  const f = footage.replace(/\s+/g, ' ');
+  const parts: Array<{ name: string; absent: RegExp; full: RegExp }> = [
+    { name: '잎', absent: /(?:잎|싹|새순)[이가은는]?\s*(?:다\s*)?(?:안\s|안나|못\s|없|떨어|진\s|지고|말라|마르|시들|누렇|갈변)/, full: /(?:잎|잎사귀)[이가]?\s*(?:무성|가득|풍성|빽빽|싱싱|무럭)|(?:초록|푸른|무성한|싱그러운)\s*잎|잎이\s*달린|잎\s*달린/ },
+    { name: '꽃', absent: /꽃[이은]?\s*(?:안\s|안피|못\s|없)|개화\s*(?:안|불량|실패)/, full: /꽃[이가]?\s*(?:만개|활짝|가득|피어|핀\s)|만개|꽃\s*핀/ },
+    { name: '열매', absent: /(?:열매|호두|감|대추|사과|배)[가이는은]?\s*(?:안\s|안열|못\s|없|안\s*달)|결실\s*(?:안|불량)/, full: /(?:열매|호두|감|대추)[가이]?\s*(?:주렁|가득|달려|맺혀|달린)|주렁주렁/ },
+  ];
+  for (const p of parts) if (p.absent.test(t) && p.full.test(f)) return `주제는 ${p.name}이 없거나 상한 상태인데 훅 화면은 ${p.name}이 가득한 장면`;
+  if (/(?:고사|죽어|죽은|말라\s*죽|시들)/.test(t) && /(?:싱싱|무성|건강|푸르게)/.test(f)) return '주제는 고사·시듦인데 훅 화면은 싱싱한 나무';
+  return '';
+}
+
+/** 화면을 가리키는 훅(장면 지목형) — 훅 화면이 주제와 어긋난 편에서 수정·흐름 단계가 이런 훅을 되살리면 거절한다. */
+export const FOOTAGE_DEICTIC_RE = /^(?:지금\s*)?(?:이|저)\s|이렇게|저렇게|보이죠|보세요|가득|무성|주렁|매달/;
+
+/** 훅 화면 어긋남일 때 작가·수정·흐름 프롬프트에 같은 문구로 싣는다. */
+export function assertiveHookRule(why: string): string {
+  return `[훅 — 화면 묘사 금지] 씬1 에 나가는 실촬영은 이 편 주제의 장면이 아니다(${why}). 씬1(훅) 내레이션은 화면을 묘사하거나 가리키지 말고("이 나무, 잎이 가득하죠" 류 금지) 단정 선언·숫자 제시형으로 써라. 실촬영 묘사를 주제의 증상처럼 쓰지 마라.`;
+}
+
+/** 키워드 핵심어(순수) — 키워드 안의 수종명, 없으면 첫 낱말. */
+function keywordTokens(keyword: string): { head: string; rest: string[] } {
+  const toks = keyword.split(/\s+/).map((x) => x.trim()).filter((x) => x.length >= 2);
+  const sp = speciesNamesIn(keyword)[0];
+  const head = sp ?? toks[0] ?? '';
+  return { head, rest: toks.filter((x) => x !== head && !head.includes(x)) };
+}
+
+/**
+ * 검색 키워드·답 앞세우기 린트(순수, 2026-10-05) — 네이버 클립 AI 요약은 낭독(음성 인식)·화면 글자를 읽고, 유튜브는 검색이
+ * 천장 밖으로 나가는 유일한 길이다(09-08 실측). 유튜브 편: 씬1~2(내레이션·화면 텍스트)에 수종명과 키워드의 다른 낱말 하나가
+ * 함께 나와야 한다. 인스타 편: 공유형 훅은 유지하되 수종명을 내레이션에서 한 번은 소리 내 말해야 한다. 최대 1건.
+ */
+export function keywordEarlyIssues(
+  scenes: ReadonlyArray<{ narration: string; screenText?: string }>, keyword: string | undefined, platform: ShortsPlatform | undefined,
+): string[] {
+  if (!keyword?.trim() || !scenes.length) return [];
+  const sq = (s: string): string => s.replace(/\s+/g, '');
+  const { head, rest } = keywordTokens(keyword);
+  if (!head) return [];
+  if (platform === 'youtube') {
+    const early = sq(scenes.slice(0, 2).map((s) => `${s.narration} ${s.screenText ?? ''}`).join(' '));
+    const ok = early.includes(sq(head)) && (!rest.length || rest.some((r) => early.includes(sq(r))));
+    return ok ? [] : [`항목2: 유튜브 편은 씬1~2 에서 검색 키워드("${keyword}")와 직접 답을 한 문장으로 말해야 한다 — 씬2 첫 문장을 "${head}${rest[0] ? ` ${rest[0]}` : ''}는 ~예요" 꼴의 답으로(훅은 종전대로 키워드로 열지 않는다)`];
+  }
+  const spoken = sq(scenes.map((s) => s.narration).join(' '));
+  return spoken.includes(sq(head)) ? [] : [`항목2: 핵심 키워드의 대상("${head}")이 내레이션에 한 번도 안 나온다 — 소리로 한 번은 말하라(검색·AI 요약이 음성을 읽는다)`];
+}
+
+/** 부분 수정 응답(작가 LLM) — 고친 씬만. 씬 수·순서·연출 종류는 바꿀 수 없다. */
+export interface PartialFix {
+  scenes?: Array<{ index?: unknown; narration?: unknown; screenText?: unknown; takeaways?: unknown; items?: unknown } | null>;
+  description?: unknown;
+  next?: { topic?: unknown; window?: unknown } | null;
+}
+
+/** 대본 표시(부분 수정·흐름 점검 공용) — 화면 글자(자막·결론 카드·목록·대비)까지 같이 보여 줘야 함께 고친다. */
+export function scriptForEdit(scenes: readonly ShortsScene[]): string {
+  return scenes.map((s, i) => {
+    const bits = [`씬${i + 1}${s.kind ? `[${s.kind}]` : ''} (${s.narration.length}자) 내레이션: ${s.narration}`];
+    if (s.screenText) bits.push(`자막: ${s.screenText}`);
+    if (s.takeaways?.length) bits.push(`결론 카드: ${s.takeaways.map((t) => `${t.when} → ${t.then}`).join(' / ')}`);
+    if (s.items?.length) bits.push(`목록: ${s.items.join(' · ')}`);
+    if (s.compare) bits.push(`대비: ${s.compare.bad.label} ✕ / ${s.compare.good.label} ○`);
+    return bits.join(' | ');
+  }).join('\n');
+}
+
+/**
+ * 부분 수정 프롬프트(순수, 2026-10-05) — 문제 씬만 고쳐 돌려받는다. 원 기획 지시 전문을 다시 주지 않는다: 그 지시는
+ * 전체 대본 스키마로 끝나 통째 재집필을 부른다(실측 94%). 대신 현 대본·문제·씬별 상한·원문 발췌·훅 규칙만 준다.
+ * 길이는 참고 프로젝트의 교열 방식(원문 대비 1.2배 이내)을 따른다.
+ */
+export function partialFixPrompt(a: {
+  scenes: readonly ShortsScene[]; problems: readonly string[]; budgets: ReturnType<typeof sceneCharBudgets>;
+  stage: 'plan' | 'compressed'; sourceExcerpt?: string; flagged?: readonly string[]; hookRule?: string; keyword?: string;
+  hookEditable: boolean; description?: string;
+}): string {
+  const n = a.scenes.length;
+  const b = a.budgets;
+  return [
+    a.stage === 'compressed'
+      ? '아래 숏폼 대본은 길이 상한에 맞추려 감량한 결과다. 감량 뒤 검산에서 문제가 나왔다.'
+      : '아래 숏폼 대본(작가 첫 원고)에서 검산 문제가 나왔다.',
+    '대본 전체를 다시 쓰지 마라. 문제가 지목한 씬만 고쳐 그 씬 번호와 새 내레이션을 돌려줘라 — 출력하지 않은 씬은 지금 그대로 쓴다.',
+    '',
+    `[현재 대본 — 씬 ${n}개]`,
+    scriptForEdit(a.scenes),
+    a.description ? `[설명] ${a.description}` : '',
+    '',
+    `[검산 문제]\n${a.problems.map((p) => `- ${p}`).join('\n')}`,
+    '',
+    '[고치는 규칙]',
+    `· 씬 수(${n}개)·순서·연출 종류(kind)는 그대로다. 씬을 늘리거나 합치지 마라.`,
+    '· 고친 씬은 앞 씬을 받아서 시작하고 다음 씬으로 넘겨 줘야 한다 — 이음말·정의 문장·판정 문장("~면 ~예요")을 지우지 마라. 앞 씬에서 세우지 않은 말을 새로 꺼내지 마라. 고친 문장이 다른 씬이 말한 사실과 어긋나면 안 된다(앞에서 "향이 한두 주면 사라진다"고 했으면 "향은 오래간다"고 쓰지 마라 — 라이브 점검 실측).',
+    a.hookEditable
+      ? `· 씬1(훅)은 문제가 씬1 을 지목했으니 고쳐도 된다 — ${b.hook}자 이내 한 문장, 키워드로 열지 마라.`
+      : '· 씬1(훅)은 고치지 마라(문제가 훅을 지목하지 않았다).',
+    `· 길이: 고친 씬은 지금 길이의 1.2배 이내, 씬별 상한 훅 ${b.hook}자 · 씬2 ${b.premise}자 · 본문 ${b.body}자 · 마지막 씬 ${b.cta}자. 대본 전체 ${b.total}자 이내. 늘려야 하면 같은 씬의 덜 중요한 말을 바꿔 말해 자리를 만든다.`,
+    a.stage === 'compressed'
+      // 감량 뒤 수정은 카드를 지키는 쪽(2026-10-05 리뷰) — 병합이 cards:'keepUnlessDiverged' 로 돈다. 프롬프트도 그 규칙대로 말한다.
+      ? '· 내레이션을 고친 씬에 자막·결론 카드·목록이 있으면 새 내레이션에 맞춰 함께 돌려줘라(그대로 맞으면 그대로 옮겨 적어라). 돌려주지 않은 결론 카드·목록은 그대로 남는다 — 단 새 내레이션이 그 카드가 되받던 말을 지우면 카드도 지워진다.'
+      : '· 내레이션을 고친 씬에 자막·결론 카드·목록이 있으면 새 내레이션에 맞춰 함께 돌려줘라(그대로 맞으면 그대로 옮겨 적어라). 돌려주지 않은 결론 카드·목록은 지워진다 — 화면에 옛 주장이 남는 것보다 낫기 때문이다.',
+    '· 사실·수치·시기는 아래 원문에 있는 것만. 원문 결론의 방향을 뒤집지 마라. 유보어("대개/흔히/~일 수 있어요/~봐요")는 남겨라. 구어체 존댓말, 숫자는 한글 낭독, 이모지 금지.',
+    a.keyword ? `· 핵심 키워드 "${a.keyword}" 의 대상 이름이 든 구절은 고쳐도 그 이름을 남겨라.` : '',
+    a.hookRule ?? '',
+    a.flagged?.length ? `[원문에서 근거가 확인되지 않은 주장 — 쓰지 마라]\n${a.flagged.slice(0, 6).map((c) => `- ${c}`).join('\n')}` : '',
+    a.sourceExcerpt ? `[원문 블로그 발췌 — 사실 확인용, 문장 복붙 금지]\n${a.sourceExcerpt}` : '',
+    '',
+    'JSON 형식: {"scenes":[{"index":씬번호,"narration":"...","screenText":"...","takeaways":[{"when":"...","then":"..."}],"items":["..."]}],"description":"(설명 문제를 지적받았을 때만)","next":{"topic":"...","window":"N월"}} — 고친 씬만, screenText·takeaways·items·description·next 는 해당할 때만.',
+  ].filter((x) => x !== '').join('\n');
+}
+
+/** 짧은 화면 글자가 새 내레이션과 여전히 맞는가 — 글자 두 개씩 겹침 비율(대략). */
+function screenTextStillFits(screenText: string, narration: string): boolean {
+  const grams = (s: string): Set<string> => {
+    const x = s.replace(/[^가-힣0-9a-zA-Z]/g, '');
+    return new Set(Array.from({ length: Math.max(0, x.length - 1) }, (_, i) => x.slice(i, i + 2)));
+  };
+  const a = grams(screenText);
+  if (!a.size) return true;
+  const b = grams(narration);
+  let hit = 0;
+  for (const g of a) if (b.has(g)) hit++;
+  return hit / a.size >= 0.4;
+}
+
+/**
+ * 부분 수정 병합(순수, 테스트 대상) — 고친 씬만 바꾸고 나머지는 그대로. 검증:
+ *  · 번호 범위·중복·빈 문자열 거절, 씬1 은 hookEditable 일 때만, 훅 화면 어긋남 편은 화면 지목 훅(hookReject) 거절.
+ *  · 길이: 원 길이 1.2배+4자 또는 그 자리의 씬 예산 중 큰 값 이내(감량본은 원 길이가 너무 짧아 정의를 되살릴 자리가 없다).
+ *  · 키워드 대상 이름을 지운 수정 거절.
+ *  · 내레이션이 바뀌었는데 결론 카드(takeaways)·목록(items)을 새로 안 주면 옛 것을 지운다 — 참고 프로젝트 3f2bdde 와 같다
+ *    (옛 주장이 화면에만 남는 것보다 카드 없이 나가는 편이 안전). 자막은 새로 안 주면 새 내레이션과 겹치는 만큼만 남긴다
+ *    (실측 모과 인스타: 감량 뒤 수정이 내레이션만 바꿔 CTA 자막 "꽃말은 평범"이 남았다).
+ *  · budgetChars 를 주면 합계가 넘을 때 가장 많이 늘어난 수정부터 되돌린다(트리밍은 이음새를 다시 끊는다).
+ *  · cards(2026-10-05 리뷰) — 새 카드·목록·자막을 안 준 채 내레이션만 바뀌었을 때 화면 글자를 어떻게 할지:
+ *    'drop'(기본, 기획 단계 부분 수정) 위 규칙대로 지운다.
+ *    'keep'(흐름 점검) 카드·목록·자막을 그대로 둔다 — 흐름 점검은 이음 말만 바꾸므로 화면의 결론이 틀릴 일이 없다
+ *      (실측 산딸: 흐름 점검이 CTA 이음 문장을 고치자 결론 카드가 통째로 지워졌다, droppedCards=[5]).
+ *    'keepUnlessDiverged'(감량 뒤 수정) 카드·목록은 그대로 두되, 옛 내레이션에 걸려 있던 카드(조건·결과 중 한 칸이라도 글자
+ *      겹침 40% 이상)가 새 내레이션에서 걸 데가 사라졌으면 바뀐 말과 어긋난 것으로 보고 지운다(droppedCards 로 보고). 카드를
+ *      처음부터 되풀이하지 않던 CTA(답은 화면에만)는 지우지 않는다. 자막은 'drop' 과 같다(새 내레이션과 겹칠 때만 남김).
+ */
+export function mergePartialFix(
+  plan: Plan, cand: PartialFix | null | undefined,
+  opts: { hookEditable: boolean; budgets: ReturnType<typeof sceneCharBudgets>; keyword?: string; hookReject?: RegExp; budgetChars?: number; onlyScenes?: readonly number[]; fixScreen?: (s: string) => string; cards?: 'drop' | 'keep' | 'keepUnlessDiverged' } ,
+): { plan: Plan; changed: number[]; rejected: string[]; droppedCards: number[]; descriptionChanged: boolean } {
+  const cardMode = opts.cards ?? 'drop';
+  /** 옛 내레이션에 걸려 있던 카드가 새 내레이션에선 걸 데가 없다 — 'keepUnlessDiverged' 의 어긋남 판정(대략). 카드 = 칸 묶음. */
+  const fitsAny = (fields: readonly string[], narr: string): boolean => fields.some((f) => !!f.trim() && screenTextStillFits(f, narr));
+  const diverged = (cards: ReadonlyArray<readonly string[]>, oldN: string, newN: string): boolean =>
+    cards.some((c) => fitsAny(c, oldN) && !fitsAny(c, newN));
+  const n = plan.scenes.length;
+  const scenes = plan.scenes.map((s) => ({ ...s }));
+  const changed: number[] = []; const rejected: string[] = []; const droppedCards: number[] = [];
+  const head = opts.keyword ? keywordTokens(opts.keyword).head.replace(/\s+/g, '') : '';
+  const fixScreen = opts.fixScreen ?? ((s: string) => s);
+  for (const s of cand?.scenes ?? []) {
+    const idx = typeof s?.index === 'number' && Number.isInteger(s.index) ? s.index : Math.trunc(Number(s?.index));
+    if (!Number.isInteger(idx) || idx < 1 || idx > n || changed.includes(idx)) continue;
+    if (opts.onlyScenes && !opts.onlyScenes.includes(idx)) { rejected.push(`씬${idx}: 지목 밖`); continue; }
+    const cur = scenes[idx - 1]!;
+    const narration = s?.narration === undefined ? '' : cleanNarration(s.narration, 240);
+    if (!narration) continue;
+    if (idx === 1 && !opts.hookEditable && narration !== cur.narration) { rejected.push('씬1: 훅 수정 불가'); continue; }
+    if (idx === 1 && opts.hookReject?.test(narration)) { rejected.push('씬1: 화면 지목 훅'); continue; }
+    const cap = Math.max(Math.ceil(plan.scenes[idx - 1]!.narration.length * 1.2) + 4, sceneBudgetAt(opts.budgets, idx - 1, n));
+    if (narration.length > cap) { rejected.push(`씬${idx}: ${narration.length}자 > 상한 ${cap}자`); continue; }
+    if (head && plan.scenes[idx - 1]!.narration.replace(/\s+/g, '').includes(head) && !narration.replace(/\s+/g, '').includes(head)) { rejected.push(`씬${idx}: 키워드 대상 삭제`); continue; }
+    const next: ShortsScene = { ...cur, narration };
+    const st = typeof s?.screenText === 'string' ? fixScreen(stripEmoji(s.screenText).trim()).slice(0, 20) : undefined;
+    const narrChanged = narration !== cur.narration;
+    if (st !== undefined && st !== '') next.screenText = st;
+    else if (cardMode !== 'keep' && narrChanged && cur.screenText && !screenTextStillFits(cur.screenText, narration)) next.screenText = '';
+    const dropOld = (cards: ReadonlyArray<readonly string[]>): boolean => narrChanged && (cardMode === 'drop' || (cardMode === 'keepUnlessDiverged' && diverged(cards, cur.narration, narration)));
+    if (cur.kind === 'cta' && s?.takeaways !== undefined) {
+      const tk = normalizeSceneKind({ kind: 'cta', takeaways: s.takeaways }).takeaways;
+      if (tk?.length) next.takeaways = tk;
+    } else if (cur.takeaways?.length && dropOld(cur.takeaways.map((t) => [t.when, t.then]))) { delete next.takeaways; droppedCards.push(idx); }
+    if (cur.kind === 'list' && s?.items !== undefined) {
+      const it = normalizeSceneKind({ kind: 'list', items: s.items }).items;
+      if (it?.length) next.items = it;
+    } else if (cur.kind === 'list' && cur.items?.length && dropOld(cur.items.map((x) => [x]))) { delete next.items; delete next.kind; droppedCards.push(idx); }
+    if (!narrChanged && next.screenText === cur.screenText && JSON.stringify(next.takeaways) === JSON.stringify(cur.takeaways) && JSON.stringify(next.items) === JSON.stringify(cur.items)) continue;
+    scenes[idx - 1] = next;
+    changed.push(idx);
+  }
+  // 예산 — 늘어난 수정부터 되돌린다.
+  if (opts.budgetChars !== undefined) {
+    const tot = (): number => scenes.reduce((a, x) => a + x.narration.length, 0);
+    const growth = changed.map((k) => ({ k, g: scenes[k - 1]!.narration.length - plan.scenes[k - 1]!.narration.length }))
+      .filter((x) => x.g > 0).sort((x, y) => y.g - x.g);
+    for (const { k } of growth) {
+      if (tot() <= opts.budgetChars) break;
+      scenes[k - 1] = { ...plan.scenes[k - 1]! };
+      changed.splice(changed.indexOf(k), 1);
+      const di = droppedCards.indexOf(k);
+      if (di >= 0) droppedCards.splice(di, 1);
+      rejected.push(`씬${k}: 예산 초과로 되돌림`);
+    }
+  }
+  const desc = typeof cand?.description === 'string' ? fixScreen(stripEmoji(cand.description).trim()).slice(0, 500) : '';
+  const descriptionChanged = !!desc && desc !== plan.description;
+  const nx = cand?.next && typeof cand.next.topic === 'string' && cand.next.topic.trim()
+    ? { topic: cand.next.topic.trim().slice(0, 120), window: typeof cand.next.window === 'string' && cand.next.window.trim() ? cand.next.window.trim() : undefined }
+    : undefined;
+  return {
+    plan: { ...plan, scenes, ...(descriptionChanged ? { description: desc } : {}), ...(nx && !plan.next ? { next: nx } : {}) },
+    changed: changed.sort((a, b) => a - b), rejected, droppedCards: [...new Set(droppedCards)].sort((a, b) => a - b), descriptionChanged,
+  };
+}
+
+/** 화면 카드(결론 카드·목록)가 사라진 씬 번호(순수, 1-base) — 어느 단계든 카드가 빠지면 로그로 남기려고(2026-10-05 리뷰).
+ *  씬 수가 다르면(통째 재집필) 마지막 씬끼리 맞춰 본다 — 결론 카드는 늘 마지막 씬에 있다. */
+export function lostCards(prev: Plan, next: Plan): number[] {
+  const has = (s: ShortsScene | undefined): boolean => !!(s?.takeaways?.length || (s?.kind === 'list' && s.items?.length));
+  if (prev.scenes.length !== next.scenes.length) {
+    return has(prev.scenes[prev.scenes.length - 1]) && !has(next.scenes[next.scenes.length - 1]) ? [next.scenes.length] : [];
+  }
+  return prev.scenes.flatMap((s, i) => (has(s) && !has(next.scenes[i]) ? [i + 1] : []));
+}
+
+/** 문제가 훅(씬1)을 지목하는가 — "항목1:"(결정적 린트·단독 이해 공통 꼴) 또는 "1:"·"씬1". */
+export function problemsTargetHook(problems: readonly string[]): boolean {
+  return problems.some((p) => /^(?:항목\s*1(?![0-9~])|1\s*[:：]|씬\s*1(?![0-9]))/.test(p.trim()));
+}
+
+/** 건너뜀류 문제(단독 이해 항목 2·3 계열) — 지시어 미정의·전제 도약·화제 전환·미해소. */
+const JUMP_PROBLEM_RE = /전제|도약|갑자기|정의 없이|정의되지|지시어|가리키|미해소|화제|연결 없이|이어지지|맥락 없이|뜬금/;
+const problemScene = (p: string): number | null => {
+  const m = p.trim().match(/^(?:항목\s*|씬\s*)?(\d+)/);
+  return m ? Number(m[1]) : null;
+};
+
+/**
+ * 부분 수정 채택 판정(순수) — "나아지지 않았으면 첫 원고를 둔다"(사장님 승인 정의: 문제가 늘었거나 새 건너뜀이 생김).
+ * before/after 는 같은 종류의 검사 묶음이어야 한다(결정적 린트 + 단독 이해). 정합(원문 대조)은 양쪽 다 뺀다 — 한쪽에만
+ * 있으면 늘 '나아짐'으로 보인다. 새 건너뜀 = 수정본의 건너뜀류 문제가 첫 원고에서 건너뜀으로 지목되지 않은 씬을 짚음
+ * (씬 번호를 못 읽으면 건수 비교).
+ */
+export function partialFixVerdict(before: readonly string[], after: readonly string[], changed?: readonly number[]): { accept: boolean; why: string } {
+  if (after.length > before.length) return { accept: false, why: `문제 ${before.length}→${after.length}건` };
+  const jb = before.filter((p) => JUMP_PROBLEM_RE.test(p));
+  const ja = after.filter((p) => JUMP_PROBLEM_RE.test(p));
+  const seen = new Set(jb.map(problemScene).filter((x): x is number => x !== null));
+  // changed(부분 수정이 바꾼 씬)를 주면 그 씬과 바로 뒤 씬에 걸린 건너뜀만 '새 것'으로 센다 — 손대지 않은 이음새의 새 지적은
+  // 수정이 만든 게 아니라 판정 흔들림이다(그걸로 좋은 수정을 버리지 않게). 통째 재집필은 전 씬이 바뀌었으니 주지 않는다.
+  const touched = (k: number): boolean => !changed || changed.includes(k) || changed.includes(k - 1);
+  const fresh = ja.filter((p) => { const k = problemScene(p); return k === null ? false : !seen.has(k) && touched(k); });
+  if (fresh.length) return { accept: false, why: `새 건너뜀 — ${fresh[0]!.slice(0, 60)}` };
+  if (ja.length > jb.length && ja.some((p) => problemScene(p) === null)) return { accept: false, why: `건너뜀 ${jb.length}→${ja.length}건` };
+  return { accept: true, why: `문제 ${before.length}→${after.length}건` };
+}
+
+/**
+ * 부분 수정으로는 못 고치는 구조 문제(순수) — 통째 재집필로 넘긴다. 결론 부재(단독 이해 항목 4)·마지막 씬이 CTA 가 아님.
+ * 부분 수정이 아무것도 못 고친 경우(응답 불가·유효 수정 0)도 호출부가 재집필로 넘긴다.
+ */
+export function structuralProblems(problems: readonly string[]): string[] {
+  return problems.filter((p) => /결론 부재|결론이 (?:없|끝까지)|마지막 씬 kind/.test(p));
+}
+
+/**
+ * 흐름 점검 프롬프트(순수, 2026-10-05, SHORTS_FLOW_CHECK) — 감량·트리밍까지 끝난 최종 대본의 이음새만 본다:
+ * 씬 k+1 이 씬 k 를 받는가, 씬2 가 세운 틀(무엇을 왜)을 뒤 씬이 지키는가, CTA 가 본문에서 나오는가.
+ * 끊긴 이음새의 문장만 고친다(최대 1회). 예산을 넘기느니 바꿔 말한다. 훅은 건드리지 않는다.
+ */
+export function flowCheckPrompt(a: { scenes: readonly ShortsScene[]; budgets: ReturnType<typeof sceneCharBudgets>; keyword?: string; hookRule?: string; sourceExcerpt?: string }): string {
+  const n = a.scenes.length;
+  const cur = a.scenes.reduce((s, x) => s + x.narration.length, 0);
+  return [
+    '아래는 완성 직전의 숏폼 대본이다. 소리로 한 번만 듣는 시청자 입장에서 씬 사이 이음새만 점검하라.',
+    `[대본 — 씬 ${n}개, 내레이션 합계 ${cur}자]`,
+    scriptForEdit(a.scenes),
+    '',
+    // 이음새마다 판정을 받는다(2026-10-05 라이브 점검) — "끊긴 곳만 보고하라"는 첫 판은 분석상 4곳 중 3곳이 끊긴 산딸나무 인스타
+    // 최종본을 "끊김 없음"으로 냈다. 판정을 칸마다 강제하고 끊김의 꼴을 실례로 준다.
+    `이음새 ${n - 1}곳(씬1→2 … 씬${n - 1}→${n})을 하나씩 판정하라. 끊김의 꼴:`,
+    '  (a) 앞 씬들에 없던 대상·이름·기준이 이음말 없이 처음 나온다(예: 열매 보는 법 다음 씬이 갑자기 "산딸기는 가시 있는 덤불이고…")',
+    '  (b) 앞 씬이 던진 질문·조건·약속에 답하지 않고 화제가 바뀐다',
+    '  (c) 지시어("그", "이 기준", "그래서")가 앞에서 세우지 않은 것을 가리키거나, "그래서"인데 인과가 없다',
+    '  (d) 씬2 가 세운 틀(무엇을 왜 보는지)을 뒤 씬이 벗어난다, 또는 마지막 씬이 본문에 없던 새 정보로 닫는다',
+    '끊긴 이음새만 고쳐라 — 양쪽 씬 중 한 씬의 이음 문장(첫 문장 또는 끝 문장)만 바꿔 말한다. 멀쩡한 이음새의 씬은 출력하지 마라.',
+    // 마지막 이음새는 앞 씬 끝에서 잇는다(2026-10-05 리뷰) — CTA 는 결론 카드·행동 문장을 싣는 자리라, 이음 말 때문에 고치면
+    // 결론이 흔들린다(실측 산딸: CTA 를 고치자 결론 카드가 지워졌다). 코드도 마지막 이음새에선 씬${n}을 고칠 후보로 두지 않는다.
+    `씬${n - 1}→${n}(마지막 이음새)이 끊겼으면 씬${n - 1} 끝 문장을 고쳐 마지막 씬으로 넘겨라 — 마지막 씬(결론·결론 카드)은 고치지 마라.`,
+    `규칙: 씬1(훅)은 고치지 마라(1→2 가 끊겼으면 씬2 첫 문장으로 잇는다). 고친 씬은 지금 길이의 1.2배 이내, 대본 전체 ${a.budgets.total}자 이내 — 넘칠 것 같으면 덧붙이지 말고 바꿔 말하라. 다른 씬이 말한 사실과 어긋나게 쓰지 마라. 유보어·판정 문장은 남긴다. 구어체 존댓말, 이모지 금지.`,
+    // 이음 말만 고치는 단계다(2026-10-05 리뷰) — 새 사실·판별 기준이 여기서 들어오면 원문 대조를 다시 받아야 한다.
+    '새 사실·수치·판별 기준 추가 금지 — 이음 말(받는 말·넘기는 말)만 바꿔라. 이미 대본에 있는 말과 아래 원문에 있는 말로만 잇는다.',
+    a.keyword ? `핵심 키워드 "${a.keyword}" 의 대상 이름이 든 구절은 그 이름을 남겨라.` : '',
+    a.hookRule ?? '',
+    a.sourceExcerpt ? `[원문 블로그 발췌 — 사실 확인용, 새 사실을 꺼내 오지 마라]\n${a.sourceExcerpt}` : '',
+    `JSON 형식: {"transitions":[{"at":1,"ok":true,"why":"한 줄"} … 씬${n - 1}→${n} 까지 ${n - 1}개],"scenes":[{"index":씬번호,"narration":"..."}]} — 고칠 곳이 없으면 scenes 는 빈 배열.`,
+  ].filter(Boolean).join('\n');
+}
+
+/** 흐름 점검 응답에서 고칠 수 있는 씬(끊긴 이음새 양쪽, 훅 제외) — 순수. transitions 의 ok:false 와 breaks(구 꼴) 둘 다 읽는다. */
+export function flowBreaks(j: { transitions?: unknown; breaks?: unknown } | null | undefined): Array<{ at: number; why: string }> {
+  const rows = [
+    ...(Array.isArray(j?.transitions) ? j!.transitions as unknown[] : []).filter((t) => (t as { ok?: unknown } | null)?.ok === false),
+    ...(Array.isArray(j?.breaks) ? j!.breaks as unknown[] : []),
+  ];
+  return rows.map((r) => ({ at: Math.trunc(Number((r as { at?: unknown } | null)?.at)), why: String((r as { why?: unknown } | null)?.why ?? '').slice(0, 80) }))
+    .filter((r) => Number.isInteger(r.at));
+}
+/** 끊긴 이음새에서 고칠 수 있는 씬(순수) — 훅(씬1)과, 마지막 이음새의 마지막 씬(CTA)은 빼고 앞 씬으로 잇는다(2026-10-05 리뷰).
+ *  CTA 를 이음 말 때문에 고치면 결론 카드·행동 문장이 흔들린다. 앞 이음새(k-1→k)에 걸린 씬은 그대로 후보다. */
+export function flowFixScenes(breaks: ReadonlyArray<{ at: number }>, n: number): number[] {
+  const out = new Set<number>();
+  for (const { at: k } of breaks) {
+    if (!Number.isInteger(k) || k < 1 || k >= n) continue;
+    if (k >= 2) out.add(k);
+    if (k + 1 < n) out.add(k + 1);
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+/**
+ * 기획 단계 수정 라운드의 채택 결정(호출자 주입, 2026-10-05 리뷰) — 부분 수정 판정 → 필요하면 통째 재집필.
+ * 어느 호출(재검산·재집필)이 예외를 던져도 앞서 채택한 수정은 지킨다. 종전엔 재집필 예외가 바깥 try 로 튀어 채택한 부분
+ * 수정을 버리고 오버레이 수치 제거(stripUnsourcedStatOverlays)·factGate 잔존 표시까지 건너뛰었다.
+ * 재검산이 실패한 후보는 채택하지 않는다(나아졌는지 모른다). 돌려주는 stage 는 씬별 출처 기록용이다.
+ */
+export async function chooseFixedPlan(a: {
+  base: Plan; merged: ReturnType<typeof mergePartialFix>; before: readonly string[];
+  recheck: (p: Plan) => Promise<string[]>; fullRewrite: () => Promise<Plan | null>;
+  hookConflict?: boolean; say: (m: string) => void;
+}): Promise<{ plan: Plan; stage: string } | null> {
+  const { base, merged, before } = a;
+  let best: { plan: Plan; stage: string } | null = null;
+  let needFull = !merged.changed.length && !merged.descriptionChanged && !(merged.plan.next && !base.next);
+  if (!needFull) {
+    const after = await a.recheck(merged.plan).catch(() => null);
+    if (after) {
+      const v = partialFixVerdict(before, after, merged.changed);
+      if (v.accept) best = { plan: merged.plan, stage: '부분 수정' };
+      if (structuralProblems(before).length && structuralProblems(after).length) needFull = true;
+      a.say(`부분 수정 판정 — ${v.accept ? '채택' : '첫 원고 유지'}(${v.why})${needFull ? ' · 구조 문제 남음 → 통째 재집필' : ''}`);
+    } else a.say('부분 수정 재검산 실패 — 첫 원고 유지');
+  } else a.say('부분 수정 무효(유효 수정 0) → 통째 재집필');
+  if (needFull) {
+    let fixed = await a.fullRewrite().catch(() => null);
+    // 훅 화면 어긋남 편에서 재집필이 화면 지목 훅을 되살리면 첫 원고 훅으로 되돌린다(첫 원고 훅이 멀쩡할 때만) — 부분 수정의 hookReject 와 같은 규칙.
+    if (fixed && a.hookConflict && FOOTAGE_DEICTIC_RE.test(fixed.scenes[0]?.narration ?? '') && !FOOTAGE_DEICTIC_RE.test(base.scenes[0]?.narration ?? '')) {
+      fixed = { ...fixed, scenes: [{ ...fixed.scenes[0]!, narration: base.scenes[0]!.narration }, ...fixed.scenes.slice(1)] };
+    }
+    if (!fixed) a.say(`통째 재집필 실패 — ${best ? '채택한 부분 수정 유지' : '첫 원고 유지'}`);
+    else {
+      const after2 = await a.recheck(fixed).catch(() => null);
+      if (!after2) a.say(`통째 재집필 재검산 실패 — ${best ? '채택한 부분 수정 유지' : '첫 원고 유지'}`);
+      else {
+        const v2 = partialFixVerdict(before, after2);
+        a.say(`통째 재집필 판정 — ${v2.accept ? '채택' : '유지'}(${v2.why})`);
+        if (v2.accept) best = { plan: fixed, stage: '통째 재집필' };
+      }
+    }
+  }
+  return best;
+}
+
+// ───────────────────────────────────────────────────────────────────────────────────────────────
+// 씬별 출처와 최종 원문 대조(2026-10-05 리뷰) — 첫 원고 뒤 LLM 단계(부분 수정·통째 재집필·감량·감량 뒤 수정·흐름 점검)가 씬을
+// 바꿀 때마다 판본을 쌓고, 기획 파이프라인 끝에서 원문 대조를 한 번 돌려 지적된 '바뀐 씬'만 통과 판본으로 되돌린다.
+// 종전엔 단계마다 따로 대조(factRecheck)하거나 아예 안 해서 틈이 있었고(첫 원고 지적 0건이면 부분 수정 뒤 재대조 없음),
+// 바뀌지 않은 씬의 지적은 버렸다.
+// ───────────────────────────────────────────────────────────────────────────────────────────────
+
+/** 한 씬의 판본 — 만든 단계(stage), 원문 대조 결과(ok: true 통과·false 지적·undefined 미확인), 첫 원고 판본인가(draft). */
+export interface SceneVersion { stage: string; scene: ShortsScene; ok?: boolean; draft?: boolean }
+/** 씬 자리별 판본 더미(오래된 것 → 최신). 맨 위가 지금 대본의 그 씬이다. */
+export type SceneTrace = SceneVersion[][];
+
+export function traceStart(scenes: readonly ShortsScene[]): SceneTrace {
+  return scenes.map((s) => [{ stage: '첫 원고', scene: { ...s }, draft: true }]);
+}
+
+/**
+ * 단계 결과 기록(순수, 새 더미를 돌려준다).
+ *  llm: LLM 이 쓴 단계면 바뀐 씬마다 새 판본을 쌓는다. 결정적 단계(트리밍·오버레이 제거·예고 정리)는 맨 위 판본을 제자리에서
+ *       고친다 — 같은 판본의 손질이라 원문 대조 결과(ok)를 잇는다.
+ *  kept: 씬이 빠졌을 때 새 씬 i 가 옛 몇 번 씬인지(trimPlanToBudget·fitShortsPlanToDuration 의 keptScenes, 0-base).
+ *  씬 수가 바뀌었는데 kept 가 없으면(통째 재집필) 대응을 모르므로 더미를 새로 시작한다 — 되돌릴 판본이 없어 지적은 보류로 남는다.
+ */
+export function traceRecord(trace: SceneTrace, scenes: readonly ShortsScene[], stage: string, opts: { llm: boolean; kept?: readonly number[] }): SceneTrace {
+  const same = (a: ShortsScene, b: ShortsScene): boolean => JSON.stringify(a) === JSON.stringify(b);
+  let base = trace;
+  if (opts.kept && opts.kept.length === scenes.length && opts.kept.every((k) => Number.isInteger(k) && k >= 0 && k < trace.length)) {
+    base = opts.kept.map((k) => trace[k]!);
+  }
+  if (base.length !== scenes.length) return scenes.map((s) => [{ stage, scene: { ...s } }]);
+  return base.map((vs, i) => {
+    const top = vs[vs.length - 1]!;
+    const s = scenes[i]!;
+    if (same(top.scene, s)) return vs;
+    if (opts.llm) return [...vs, { stage, scene: { ...s } }];
+    return [...vs.slice(0, -1), { ...top, scene: { ...s } }];
+  });
+}
+
+/** 원문 대조 결과를 지금 판본(맨 위)에 적는다(순수). issues=null(판정 실패)이면 그대로. 씬 번호를 못 읽는 지적이 섞이면
+ *  통과(ok:true)는 적지 않는다 — 그 지적이 어느 씬 얘기인지 모른다. */
+export function traceMarkParity(trace: SceneTrace, issues: readonly string[] | null): SceneTrace {
+  if (!issues) return trace;
+  const flagged = new Set(issues.map(problemScene));
+  const unknown = flagged.has(null);
+  return trace.map((vs, i) => {
+    const bad = flagged.has(i + 1);
+    if (!bad && unknown) return vs;
+    const top = vs[vs.length - 1]!;
+    return [...vs.slice(0, -1), { ...top, ok: !bad }];
+  });
+}
+
+/** 첫 원고 뒤 LLM 단계가 바꿨는데 아직 원문 대조를 못 받은 씬이 있는가 — 최종 대조를 돌릴지(첫 원고 대조가 실패했어도 돈다). */
+export function traceNeedsParity(trace: SceneTrace): boolean {
+  return trace.some((vs) => vs[vs.length - 1]!.ok === undefined);
+}
+
+/**
+ * 최종 원문 대조 뒤 되돌리기(순수). 지적된 씬 중 LLM 단계가 바꾼 씬(맨 위가 첫 원고 판본이 아님)은 가장 최근의 통과 판본
+ * (ok:true)으로, 그런 판본이 없으면 지적받지 않은 첫 원고 판본으로 되돌린다. 되돌릴 판본이 없는 씬·바뀐 적 없는 씬의 지적·
+ * 씬 번호를 못 읽는 지적은 remaining 으로 남긴다 — 보류(hold) 표시 대상이다(종전 factRecheck 는 이것들을 버렸다).
+ * hookReject: 훅 화면 어긋남 편 — 되돌릴 훅 판본이 화면 지목 훅이면 되돌리지 않는다.
+ */
+export function finalParityRevert(trace: SceneTrace, scenes: readonly ShortsScene[], issues: readonly string[], opts: { hookReject?: RegExp } = {}): {
+  scenes: ShortsScene[]; reverted: Array<{ scene: number; from: string; to: string }>; remaining: string[];
+} {
+  const out = scenes.map((s) => ({ ...s }));
+  const reverted: Array<{ scene: number; from: string; to: string }> = [];
+  const aligned = trace.length === scenes.length;
+  const done = new Set<number>();
+  for (const k of new Set(issues.map(problemScene))) {
+    if (k === null || !aligned || k < 1 || k > scenes.length) continue;
+    const vs = trace[k - 1]!;
+    const top = vs[vs.length - 1]!;
+    if (top.draft) continue; // LLM 단계가 바꾼 적 없는 씬 — 되돌릴 데가 없다, 지적은 보류로
+    let target: SceneVersion | undefined;
+    for (let j = vs.length - 2; j >= 0; j--) {
+      const v = vs[j]!;
+      if (v.ok === true || (v.draft && v.ok !== false)) { target = v; break; }
+    }
+    // 훅 화면 어긋남 편에서 화면 지목 훅으로 되돌리지 않는다 — 수정 단계들이 거절한 꼴이다(지적은 보류로 남긴다).
+    if (!target || (k === 1 && opts.hookReject?.test(target.scene.narration))) continue;
+    out[k - 1] = { ...target.scene };
+    reverted.push({ scene: k, from: top.stage, to: target.stage });
+    done.add(k);
+  }
+  const remaining = issues.filter((p) => { const k = problemScene(p); return k === null || !done.has(k); });
+  return { scenes: out, reverted, remaining };
+}
+
+/**
+ * 최종 원문 대조 결과로 factGate 를 만든다(순수). result=null(판정 실패) — 대본은 그대로 두고 판정 실패(error)로 표시하되,
+ * 이미 보류(hold)면 그 표시를 지킨다. 결과가 있으면 잔존 지적(remaining)이 unsupported 가 되고(있으면 hold), 시기·수치·승계 잔존
+ * (display)은 timing 칸에 싣는다. 지적·잔존·이전 표시가 다 없으면 undefined(필드 없음 — 종전 통과 편과 같다).
+ */
+export function finalFactGate(prev: FactGateInfo | undefined, result: { remaining: readonly string[]; display: readonly string[] } | null, now = new Date().toISOString()): FactGateInfo | undefined {
+  if (!result) return prev?.status === 'hold' ? prev : { ...(prev ?? parityToInfo([])), status: 'error', checkedTs: now };
+  if (!result.remaining.length && !result.display.length && !prev) return undefined;
+  const base = { ...parityToInfo([...result.remaining]), checkedTs: now };
+  return result.display.length ? { ...base, timing: [...result.display] } : base;
+}
+
+/** 종전 감량 뒤 수정 병합(순수, SHORTS_PARTIAL_FIX=false 경로) — 응답의 내레이션만 바꾸고 자막·결론 카드·목록·연출은 그대로 둔다. */
+export function mergeNarrationOnly(plan: Plan, scenes: ReadonlyArray<{ index?: unknown; narration?: unknown } | null>): Plan {
+  const out: Plan = { ...plan, scenes: plan.scenes.map((s) => ({ ...s })) };
+  for (const s of scenes) {
+    const idx = typeof s?.index === 'number' && Number.isInteger(s.index) ? s.index : 0; // 1-base
+    if (idx < 1 || idx > out.scenes.length) continue;
+    const narration = cleanNarration(s?.narration);
+    if (narration) out.scenes[idx - 1] = { ...out.scenes[idx - 1]!, narration };
+  }
+  return out;
 }
 
 /** 길이 상한 초과 대본 압축 — LLM 감량(품질 우선) 후 예산 미달분은 결정적 트리밍이 마감(예산 보장).
@@ -731,6 +1299,9 @@ async function fitShortsPlanToDuration(io: JobIO, plan: Plan, budgetCharsOverrid
       `아래 숏폼 내레이션 합계가 ${before}자로 낭독 상한(${cap}초 ≈ ${budget}자)을 넘는다. 씬 구성은 유지하고 내레이션만 감량해 합계 ${budget}자 이내로 만들어라.`,
       cur,
       `합계 ${budget}자 이내는 반드시 지켜라 — 표현 다듬기로 모자라면 덜 중요한 문장을 통째로 빼라. 찔끔 깎은 초과 응답은 무효다(실측: 목표 341자에 364자 응답이 반복돼 코드가 강제 트리밍하게 된다 — 그러면 네가 고른 문장이 아니라 뒤 문장이 잘린다).`,
+      // 빼는 순서(2026-10-05 숏폼 11편 분석) — 압축이 "산딸기랑 자주 헷갈리는데" 같은 이음 문장과 "개화주란" 정의부터 지워
+      // 씬 사이가 끊긴 4건이 나왔다. 이음·정의·판정은 문장 수는 적어도 흐름의 뼈대라 맨 나중에 뺀다.
+      '빼는 순서: 먼저 수식어·예시·같은 말 되풀이 → 그다음 덧붙인 부연 → 맨 나중에야 ① 앞 씬을 받아 잇는 이음 문장("그래서/그런데/그럼 ~" 류, 앞 씬의 질문에 답하는 첫 문장) ② 뒤 씬이 쓰는 말의 정의 문장 ③ 판정 문장("~면 ~예요/~하세요"). 이 셋을 지우면 씬 사이가 끊긴다 — 줄여야 하면 지우지 말고 짧게 바꿔 말하라.',
       '규칙: 사실·수치·결론과 씬별 "무엇을+왜"는 유지하고 군더더기·중복 표현만 깎아라. 조사·주어를 떨어낸 초압축은 감량이 아니라 훼손이다("이 시기 질소 거름 주면" 금지 → "이 시기엔 질소 거름을 주면"). 구어체 존댓말·숫자 한글 낭독 등 원문 문체 유지, 이모지 금지. 유보어("대개/흔히/보통/~일 수 있다/~봐요/가능성")는 군더더기가 아니다 — 남겨라. 원문 결론의 방향("미루라/하지 마라")을 뒤집지 마라.',
       '마지막 씬(CTA)·결론 카드가 되받는 앞 씬의 사물·이름·근거(예: 결론이 "옹이부터 보라"면 옹이가 처음 나오는 문장)는 지우지 마라 — 지우면 결론이 허공에 뜬다(실측).',
       'JSON 형식: {"scenes":[{"index":씬번호,"narration":"..."}]} — 전 씬 포함.',
@@ -821,6 +1392,7 @@ export function promiseRoomFor(short: { id?: string; brand?: string; sourcePiece
  *   없으면(수정 라운드도 못 채움) 그 문장을 덜어낸다 — 등록할 주제가 없는 약속이다.
  * 자리 없음: 예고 문장과 자막의 예고 표지를 덜고 next 를 지운다.
  * 예고 문장뿐인 CTA 면 문장은 그대로 둔다(빈 CTA 보다 낫다) — 수정 라운드 린트가 먼저 잡는 경우다.
+ * 예고를 덜어 CTA 의 행동 문장이 사라지면 자막의 행동 문장(ctaActionFromScreen)으로 닫는다 — 예고뿐인 CTA 도 그 문장으로 바꾼다.
  */
 export function settleNextEpisode<P extends { scenes: Array<{ narration: string; screenText?: string }>; next?: { topic: string; window?: string } }>(
   plan: P, room: boolean,
@@ -840,14 +1412,35 @@ export function settleNextEpisode<P extends { scenes: Array<{ narration: string;
     why = '예고 금지';
   }
   const stripped = stripNextEpisode(last.narration);
+  const cut = stripped !== last.narration.trim();
+  // 행동 문장 되살리기(2026-10-05, 실측 산딸 유튜브 short_8a08fe7899) — 예고를 덜고 남은 CTA 가 "~게 정확해요" 같은 판정 한 줄뿐이면
+  // 영상이 행동 없이 끝난다. 자막이 이미 행동 문장("열매부터 눌러보세요")이면 그걸 낭독에 붙인다 — 새 사실이 아니라 화면에 이미
+  // 나가는 말이고, 덜어낸 예고보다 길어지지 않을 때만. 앞 씬과의 이음새(그 편의 4→5)는 이걸로 고쳐지지 않는다 — 이 정리는 흐름 점검 뒤에 돈다.
+  const action = cut ? ctaActionFromScreen(stripped, last.screenText) : '';
+  const fixed = action && `${stripped} ${action}`.trim().length <= last.narration.trim().length ? `${stripped} ${action}`.trim() : '';
   const scenes = plan.scenes.map((s, i) => (i === lastIdx
-    ? { ...s, narration: stripped || s.narration, ...(screenTextAnnounces(s.screenText) ? { screenText: '' } : {}) }
+    ? { ...s, narration: fixed || stripped || s.narration, ...(screenTextAnnounces(s.screenText) ? { screenText: '' } : {}) }
     : s));
   return {
     plan: { ...withoutNext, scenes } as P,
-    note: stripped && stripped !== last.narration.trim() ? `${why} — CTA 예고 문장 제거`
+    note: fixed ? `${why} — CTA 예고 문장 제거·자막 행동 문장으로 마무리("${action.slice(0, 20)}")`
+      : stripped && cut ? `${why} — CTA 예고 문장 제거`
       : stripped ? `${why} — 자막 예고 표지 제거` : `${why} — CTA 가 예고뿐이라 문장은 유지(next 만 제거)`,
   };
+}
+
+/**
+ * 예고를 덜어 낸 CTA 에 붙일 행동 문장(순수) — 남은 내레이션이 이미 "~세요"로 끝나면 빈 문자열(그대로 충분).
+ * 자막이 "~세요"로 끝나는 행동 문장이고, 숫자(낭독은 한글 숫자)·예고 표지가 없고, 내레이션에 이미 같은 말이 없을 때만 그 자막을 쓴다.
+ */
+export function ctaActionFromScreen(remainder: string, screenText: string | undefined): string {
+  const r = remainder.trim();
+  if (/세요[.!?…~]*$/.test(r)) return '';
+  const st = (screenText ?? '').trim();
+  if (!/세요[.!?…~]*$/.test(st) || /[0-9]/.test(st) || isPromiseSentence(st) || screenTextAnnounces(st)) return '';
+  const bare = st.replace(/[.!?…~]+$/, '');
+  if (r.replace(/\s+/g, '').includes(bare.replace(/\s+/g, ''))) return '';
+  return `${bare}.`;
 }
 
 /** 예고 주제에 대상 수종이 없으면 원글의 수종을 붙인다 — 주제가 그대로 다음 글 제목이 되므로(실측: "심는 구덩이 크기와 첫 물주기 순서"). */
@@ -883,10 +1476,14 @@ function sourceCoreOf(topic: string, sourceBody: string | undefined): string | u
 }
 
 async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형'], sourceFlagged: string[] = [], writerRole = 'shorts_writer', recentMainTitles: string[] = [], loreFacts: string[] = [],
-  /** promiseRoom: 예고 대장에 자리가 있는가(없으면 예고 금지) · hookFootage: 씬1(훅)에 그대로 나갈 실촬영 영상의 비전 묘사. */
-  extra: { promiseRoom?: boolean; hookFootage?: string } = {}): Promise<Plan | null> {
+  /** promiseRoom: 예고 대장에 자리가 있는가(없으면 예고 금지) · hookFootage: 씬1(훅)에 그대로 나갈 실촬영 영상의 비전 묘사.
+   *  hookConflict: 훅 실촬영이 주제와 어긋난 사유(footageContradictsTopic) — 있으면 hookFootage 대신 단정형 훅을 강제한다.
+   *  platform: 채널 — 유튜브는 씬2 에 '키워드+답' 한 문장(2026-10-05).
+   *  trace: 씬별 출처 출력 칸(2026-10-05) — 돌려준 대본의 씬마다 어느 단계가 바꿨고 원문 대조를 받았는지. 최종 원문 대조(runShortsJob)가 쓴다. */
+  extra: { promiseRoom?: boolean; hookFootage?: string; hookConflict?: string; platform?: ShortsPlatform; trace?: { value?: SceneTrace } } = {}): Promise<Plan | null> {
   const capSec = CONFIG.shortsMaxDurationSec;
   const promiseRoom = extra.promiseRoom !== false;
+  const hookRule = extra.hookConflict ? assertiveHookRule(extra.hookConflict) : '';
   // 장르 분기(2026-09-18) — 원본 제목이 이야기 축이면 하우투 전용 네 줄(결론·기본형·takeaways·뽑을 것)을 이야기형으로.
   // 재배 편은 사실 공급이 모아 온 이야기 사실을 훅 소재로 받는다. 그 사실은 블로그 본문에 없으므로 정합·시기수치
   // 게이트가 보는 원문(sourceForGates)에도 같은 줄을 덧붙인다 — 안 그러면 훅이 '원문에 없는 사실'로 잡혀 수정된다.
@@ -900,6 +1497,8 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   const budgetChars = Math.floor((capSec - 5) * SHORTS_TTS_CPS);
   // 씬 상한 = 요청 씬 수(2026-09-09). 종전 floor(capSec/8) 역산은 35초 상한에서 4가 되어 5번째 씬(CTA)을 잘라냈다.
   const maxScenes = Math.min(8, Math.max(3, n));
+  // 씬별 자수(2026-10-05) — 같은 예산에서 나온다(sceneCharBudgets 주석). 35초·속도 1.2·5씬 → 훅 20 · 씬2 50 · 본문 45 · CTA 34.
+  const budgets = sceneCharBudgets(budgetChars, maxScenes);
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 키워드] ${keyword}` : '',
@@ -925,6 +1524,11 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 있었다("그럼 나무를 몇 미터짜리로 심어야 할까요") — 대본이 떨어뜨린 것이다.
     '씬2는 훅이 세운 긴장을 **받아서** 이어라 — 훅의 문제가 왜 이 영상의 주제로 이어지는지 한 마디로 잇고 나서 전제를 말한다. 훅과 무관한 기준·항목을 씬2에서 새로 꺼내면 시청자에겐 화제 전환으로 들린다. 훅에서 세우지 않은 두 번째 축을 씬2에 끼워 넣지 마라.',
     '시청자는 원문 블로그를 본 적이 없다 — 영상 단독으로 완결되게 써라: 핵심 주제어(식물명·행위명 등)를 훅 또는 씬2에서 반드시 명시하고, 지시어·축약어("짝"·"그 방법"·"두 그루" 류)는 앞 씬에서 뜻을 세운 뒤에만 사용하라. 단, 명시는 검색 표기 그대로일 필요 없다 — 키워드 명사구를 통째로 주어 자리에 세우지 말고("가을 묘목 심는 법은 ~로 정해집니다" 식 금지, 검색용 문장 티가 난다) 조사·어순을 바꿔 말이 되는 꼴로 녹여라("가을에 묘목을 심을 땐 날짜보다 뿌리부터 봐요"). 검색 표기 그대로의 노출은 title·titles·description·해시태그·screenText 가 담당한다. 단 씬2(전제)의 정의 한 문장은 예외 — 뒤 씬에서 쓸 기준·개념(예: "두 선")은 씬2에서 이름 붙여 뜻을 세워라. 어순·조사는 바꿔도 되지만 정의 자체를 얼버무리지 마라. 훅에서 감춘 대상도 씬2에서 반드시 밝힌다.',
+    // 검색어+답 앞세우기(2026-10-05 사장님 승인) — 네이버 클립 AI 요약은 낭독·화면 글자를 읽고, 유튜브는 검색이 유일한 확대 경로다.
+    // 위 '키워드 명사구를 주어로 세우지 마라'는 검색어 나열 꼴을 막는 규칙이라, 말이 되는 '수종+행위는 ~예요' 답 문장과는 다르다 —
+    // 둘이 부딪히지 않게 유튜브 씬2 만 예외로 못박는다. 훅(씬1)은 종전대로 키워드로 열지 않는다(hookKeywordLeadIssues).
+    extra.platform === 'youtube' ? '단 이 유튜브 편의 씬2 첫 문장은 위 규칙의 예외다 — 훅을 받는 그 첫 문장이 곧 답이다: 검색 키워드의 대상과 행위를 주어로 세우고 그 답을 바로 말하는 한 문장으로 써라(예: "배롱나무 가지치기는 잎이 다 진 뒤, 11월부터예요"). 말이 되는 꼴로(검색어 나열 "가지치기 시기 배롱나무는" 금지). 씬2 screenText 에도 그 답을 짧게(예: "11월, 잎 진 뒤").' : '',
+    extra.platform === 'instagram' && keyword ? '인스타 편은 공유형 훅을 유지하되, 핵심 키워드의 대상 이름(수종명)은 내레이션에서 한 번은 소리 내 말하라 — 검색·AI 요약이 음성을 읽는다.' : '',
     '훅 금지 문형: "~보셨나요?/~라고요? + 정작/사실은/그럼 이미 ~" 질문-반전 공식(최근 편들이 과다 사용). 단정 선언("까맣게 익어도 아직 이릅니다"), 구체 장면, 숫자 제시, 청자 상황 지목, 짧은 제동("잠깐,") 등에서 앞 편들과 다른 유형을 골라라.',
     // 첫 2초 훅 분리(2026-08-20 조회수 감사) — 최근 47편 중 17편이 첫 2초를 키워드·상품명 낭독에 써서
     // 추천 피드 이탈 요인이 됐다. 검색 표기는 제목·캘리·화면텍스트가 담당(사용자 확정 원칙 유지).
@@ -932,7 +1536,9 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 훅 화면 고정(2026-10-02 숏폼 10편 감사) — 훅 씬에는 보관소 실촬영이 그대로 나가는데 작가는 그걸 몰라 장면을 지어냈다.
     // 실측 4/10편: 꽃 핀 배롱나무 밭 위에 "잎 다 떨어진 배롱나무 앞", 길가 대추나무 위에 "가지가 빗자루처럼 뭉쳐",
     // 서 있는 묘목 위에 "잔뿌리를 만지다 손이 멈췄어요". 비전 묘사는 맞았다(로그 대조) — 작가가 그게 훅인 줄 몰랐던 것.
-    extra.hookFootage ? `[훅 화면 — 씬1 에는 이 실촬영 영상이 그대로 나간다] ${extra.hookFootage}\n씬1(훅) 내레이션은 이 화면에 실제로 보이는 것만 가리켜라 — 화면에 없는 손·도구·뿌리·리본, 화면과 다른 잎 상태(다 떨어진 잎·만개한 꽃)나 병 증상을 지어내지 마라. 위 장면 지목 예시(가위 앞에서 멈춘 손 등)보다 이 규칙이 우선한다. 장면 지목형이면 이 화면 속 대상을 지목하고, 화면이 주제의 장면과 다르면 화면 묘사 없는 단정 선언·숫자형 훅으로 써라.` : '',
+    // 훅 화면이 주제와 어긋나면(2026-10-05, 호두 두 편) 묘사를 주지 않고 단정형 훅을 강제한다 — 묘사를 주면 작가가 그걸로 훅을 쓴다.
+    hookRule,
+    !hookRule && extra.hookFootage ? `[훅 화면 — 씬1 에는 이 실촬영 영상이 그대로 나간다] ${extra.hookFootage}\n씬1(훅) 내레이션은 이 화면에 실제로 보이는 것만 가리켜라 — 화면에 없는 손·도구·뿌리·리본, 화면과 다른 잎 상태(다 떨어진 잎·만개한 꽃)나 병 증상을 지어내지 마라. 위 장면 지목 예시(가위 앞에서 멈춘 손 등)보다 이 규칙이 우선한다. 장면 지목형이면 이 화면 속 대상을 지목하고, 화면이 주제의 장면과 다르면 화면 묘사 없는 단정 선언·숫자형 훅으로 써라.` : '',
     keyword ? `대표 제목(title)과 정보형 제목 후보에는 핵심 키워드 '${keyword}' 를 정확히 이 표기 그대로, 가급적 앞쪽에 포함하라(검색 노출용 — 제한된 글자수를 이유로 키워드를 빼지 마라). 키워드는 명사구 그대로 자연스럽게 결합하고 어미를 붙여 동사화하지 마라.` : '',
     `CTA 씬은 팔로우할 이유를 담아라 — 이 채널이 계속 주는 가치 한 구절(브랜드 맥락에 맞게)${promiseRoom ? ' 또는 다음 편 예고 중 하나' : ''}. "구독과 좋아요 부탁드려요" 같은 기계적 문구 금지. "계속 기록/정리해 드립니다" 계열 문구 재사용 금지 — 기록하는 채널 컨셉은 유지하되 표현은 매편 새로 지어라.`,
     // 예고는 대장에 자리가 있을 때만(2026-10-02) — 만석이면 등록이 거절돼 지켜지지 않는 약속이 영상에 남았다(실측 6/10편).
@@ -950,7 +1556,10 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     '낭독 명료성: 소리로만 듣고 되돌릴 수 없는 매체다 — 동음이의 전문어는 풀어 말하고("수분 나무"→"꽃가루받이 나무", "눈"→"꽃이 될 눈", "뿌리분"→"뿌리와 흙이 뭉친 덩어리"), 주어·비교 대상을 떨어낸 조각문 금지("밀리미터보다 옆 가지와 비교해요" 식 초압축 — 실측). 내레이션에서 언급하는 개수("다섯 곳")는 실제로 그 수만큼 세어 줘야 한다.',
     '문장 종결을 섞어라: 한 씬의 두 문장을 같은 어미로 끝내지 마라("~ㅂ니다"+"~ㅂ니다" 금지). 대본 전체에서 "-ㅂ니다" 종결은 절반 이하로 하고 "~요/~죠/~거든요/~는데요/~하세요"를 섞어라. 습관적 설명 현재형("치웁니다", "심지 않습니다")은 청자에게 말 거는 꼴("치우세요", "지금은 심지 마세요")로. 아나운서 원고가 아니라 옆에서 알려주는 말로 들려야 한다.',
     '대본 전체 1~2곳에 사람 말의 결을 넣어라 — 짧은 제동("잠깐,"), 정정·양보("아, 포트묘는 예외예요"), 판단의 표명("색보다 끝알부터 봐요" — "나는/저는" 같은 1인칭 주어는 쓰지 마라, 주어 없이도 시점이 전달된다. 사용자 확정 2026-08-12). 겪지 않은 사건·일화를 지어내는 것은 금지(판단·관점만). 정보 밀도를 깎는 잡담도 금지. 판단 문장은 근거·이유 문장을 밀어내고 그 자리를 차지하게 하지 마라 — 근거에 덧붙이는 한 줄이다. "X가 아니라 Y" 재정의 문형은 대본 전체 1회 이하 — 앞 편들이 이미 상투로 만든 틀이다.',
-    `본문 씬 내레이션은 1~3문장(합쳐서 30~70자, 낭독 5~12초) — ${guide.bodyForm} 리듬만 변주하라: 이유를 먼저 두는 씬, 질문으로 끝나는 씬을 최소 1개 섞되(단, 씬당 "무엇을+왜"는 유지 — 리듬을 바꾸라는 것이지 정보를 빼라는 것이 아니다), 질문으로 끝냈으면 그 답을 반드시 바로 다음 씬 첫 문장에서 준다. "~기 때문입니다"는 대본 전체 1회 이하. 씬2(전제)는 45~70자까지 허용. 훅 씬은 20자 이내 한 문장(첫 2초 — 초과분은 코드가 되돌려 보낸다). CTA 씬은 1~2문장(20~40자). 총 낭독 시간 ${Math.max(20, capSec - 25)}~${capSec - 10}초, 대본 전체(모든 씬 내레이션 합) ${budgetChars}자 이내를 반드시 맞춘다 — TTS 실측 속도는 초당 약 6자다. 이 총량이 씬 수보다 우선한다(넘칠 것 같으면 씬 수를 줄여서라도 지켜라).`,
+    // 길이 지시는 실제 예산에서 계산한다(2026-10-05) — 종전 "본문 30~70자·총 20~25초·초당 약 6자"는 예산(212자)과 따로 놀아
+    // 첫 원고 93편 중 60편이 넘쳤고 압축이 이음 문장부터 지웠다. "씬 수를 줄여서라도"는 항상 5씬(09-09 확정)과 부딪혀 뺐다.
+    `[길이 예산 — 대본 전체 ${budgetChars}자 이내, 낭독 약 ${capSec - 5}초(TTS 실측 초당 약 ${SHORTS_TTS_CPS.toFixed(1)}자)] 씬별 상한: 훅 ${budgets.hook}자 · 씬2(전제) ${budgets.premise}자 · 본문 씬 각 ${budgets.body}자 · CTA ${budgets.cta}자. 이 상한 안에서 쓰면 감량 단계가 문장을 지우지 않는다 — 넘친 원고는 기계 감량이 이음 문장부터 지워 씬 사이가 끊긴다(실측). 줄일 것은 씬이 아니라 문장이다(씬 수는 ${maxScenes}개 고정).`,
+    `본문 씬 내레이션은 1~2문장 — ${guide.bodyForm} 리듬만 변주하라: 이유를 먼저 두는 씬, 질문으로 끝나는 씬을 최소 1개 섞되(단, 씬당 "무엇을+왜"는 유지 — 리듬을 바꾸라는 것이지 정보를 빼라는 것이 아니다), 질문으로 끝냈으면 그 답을 반드시 바로 다음 씬 첫 문장에서 준다. "~기 때문입니다"는 대본 전체 1회 이하. 훅 씬은 ${budgets.hook}자 이내 한 문장(첫 2초 — 초과분은 코드가 되돌려 보낸다). CTA 씬은 1~2문장.`,
     `압축 안전선: ${capSec}초에 맞추더라도 조사·주어는 남겨라("이 시기 질소 거름 주면" 금지 → "이 시기엔 질소 거름을 주면"). 앞 문장의 주어가 바뀌면 새 주어를 밝혀라. screenText 에 "정의·구분법·요약·정리" 같은 대본용 딱지를 쓰지 마라 — 화면에는 독자에게 하는 말만.`,
     'screenText 는 씬당 1줄 15자 이내 키워드 요약(비워도 됨).',
     // CTA 결론 카드(2026-08-28 사용자 요청) — 결론이 소리로만 지나가면 무음 시청자에게 아무것도 안 남는다.
@@ -1000,7 +1609,9 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   };
   const parsePlan = (j: PlanRaw | null): Plan | null => {
     if (!j || !Array.isArray(j.scenes) || !j.scenes.length) return null;
-    const scenes = j.scenes.slice(0, maxScenes).map((s) => ({
+    // 여기서 n 개로 자르지 않는다(2026-10-05) — 앞에서 자르면 넘친 원고의 마지막 CTA 가 떨어진다(호두 인스타 7씬 → 결론 없이 끝남).
+    // 씬 수는 호출부가 맞춘다: 첫 원고는 재요청, 그래도 넘치면 fitSceneCount(앞 n-1 + CTA). 12 는 폭주 방지 상한일 뿐이다.
+    const scenes = j.scenes.slice(0, 12).map((s) => ({
       narration: cleanNarration(s?.narration),
       screenText: numMonth(stripEmoji(String(s?.screenText ?? '')).trim()).slice(0, 20),
       ...normalizeSceneKind(s), // 불량 페이로드는 {} 강등 — 기본 씬으로 렌더
@@ -1048,9 +1659,16 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     const again = parsePlan(await callRoleJSON<PlanRaw>(io, writerRole, sys,
       `${user}\n\n씬은 정확히 ${n}개여야 한다(훅·전제·본문·CTA 를 합쳐 ${n}개) — 더도 덜도 말고 ${n}개. 반드시 완결된 JSON 하나만 출력하라.`, 3400, false));
     if (again && again.scenes.length === n) plan = again;
-    else io.bus?.emit('log', { message: `기획 씬 수 불일치 유지 — ${plan.scenes.length}개로 진행` });
+    else if (plan.scenes.length > n) {
+      // 넘친 채로 남으면 앞 n-1 + 마지막 씬(CTA)으로 맞춘다(2026-10-05) — 종전엔 앞 n 개로 잘려 CTA 가 떨어졌다.
+      io.bus?.emit('log', { message: `기획 씬 수 넘침 유지 — ${plan.scenes.length}개 → 앞 ${n - 1}개 + 마지막 씬(CTA)` });
+      plan = { ...plan, scenes: fitSceneCount(plan.scenes, n) };
+    } else io.bus?.emit('log', { message: `기획 씬 수 불일치 유지 — ${plan.scenes.length}개로 진행` });
   }
   if (!plan) return null;
+  // 씬별 출처(2026-10-05) — 아래 단계마다 기록해 최종 원문 대조가 '바뀐 씬'을 통과 판본으로 되돌릴 수 있게 한다.
+  let trace = traceStart(plan.scenes);
+  const record = (stage: string, llm: boolean): void => { trace = traceRecord(trace, plan!.scenes, stage, { llm }); };
   // 단독 이해 검산 — 원문을 안 본 시청자 관점 텍스트 검사 후 1회 수정 라운드(fail-open, 실측 2026-07-29 결함 대응).
   try {
     // 원문 핵심 축 요약(제목+소제목) — 검산의 '원문 정합' 항목 입력. 파생이 아니면 undefined(검사 생략).
@@ -1067,7 +1685,10 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // (parity.length || timingResidual.length) 라, **자기 킬스위치(TIMING_PARITY)** 로 사는 시기·수치만
     // 잔존해도 열린다. 그때 status 는 parityToInfo([]) 의 'pass' 라 보류(hold)가 생기지 않는다(표시 전용).
     // 둘 다 끄려면 FACT_GATE=off + TIMING_PARITY=off.
-    const parity = CONFIG.factGate && sourceForGates ? await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceForGates, io.signal) : [];
+    // 판정 실패(null)는 출처 기록에 '미확인'으로 남는다 — 최종 원문 대조가 다시 본다. 수정 라운드 입력에선 종전대로 빈 배열.
+    const parityRaw = CONFIG.factGate && sourceForGates ? await parityIssuesChecked('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceForGates, io.signal) : [];
+    const parity = parityRaw ?? [];
+    trace = traceMarkParity(trace, parityRaw);
     // 단독 이해 검산(LLM, 최대 5건) — 소스별 예약 캡의 몫 계산을 위해 먼저 변수로 받는다.
     // 결론 카드를 함께 넘긴다(2026-08-28) — 이 검사의 항목 4가 '결론 부재'다. 사용자 확정 분업에서
     // 답은 화면에만 있으므로, 내레이션만 보여 주면 잘 만든 CTA 가 매번 '결론 없음'으로 걸린다(과차단).
@@ -1080,54 +1701,103 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 우선 보장하고, LLM 판정(단독 이해·정합)은 각 소스당 상한을 둬 한쪽이 다른 쪽을 밀어내지 못하게 한다.
     // 시기·수치 원문 대조(2026-08-27 권고 1, 결정적) — 활엽수 실사고: 블로그가 "근거 확실치 않다"고 한 시기를
     // 파생 쇼츠가 내레이션·자막·오버레이 세 군데에서 단정했다. TIMING_PARITY=off 면 함수가 빈 배열을 낸다.
-    const timing = sourceForGates ? timingParityIssues(sourceForGates, timingFields(plan)).map(formatTimingIssue) : [];
+    const timingFor = (p: Plan): string[] => (sourceForGates ? timingParityIssues(sourceForGates, timingFields(p)).map(formatTimingIssue) : []);
     // 원문 미검증 주장 승계(2026-08-28 처방 C, 결정적) — 실사고: 블로그 게이트가 hold 인데 파생 숏폼은 pass 였고,
     // 원문에서 '근거 미확인'으로 분류된 손질 시기가 그대로 화면 목록에 떴다. 기존 두 축(정합·시기수치)은
-    // "원문에 충실한가"만 봐서 통과시킨다 — 이 축이 "원문이 애초에 믿을 만한가"를 본다.
-    const inherited = (sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(plan)) : []).map(formatInherited);
+    // "원문에 충실한가"만 봐서 통과시킨다 — 이 축이 "원문이 애초에 믿을 만한가"를 본다(detProbs 안에서 돈다).
     // 소스별 캡 합 최대 21(narrationStyleIssues ≤5 + hookKeywordLeadIssues ≤1 + hookLengthIssues ≤1 + standalone ≤4 + parity ≤2 + 시기·수치 ≤3 + 승계 ≤2 + 설명 요약투 ≤1 + 자막 딱지 ≤2) —
     // 이미 소스별로 상한을 뒀으므로 최종 캡을 또 씌우면 뒤 소스(정합)만 밀려나는 desync 가 재발한다. 최종 캡 없음.
-    const probs = [
-      ...narrationStyleIssues(plan.scenes.map((s) => s.narration)),
-      // 훅 키워드 낭독 결정적 린트(2026-08-20) — 프롬프트 지시 단독은 샌다는 실측 전례(문체 린트와 동일 사상).
-      ...hookKeywordLeadIssues(plan.scenes.map((s) => s.narration), keyword),
-      // 훅 20자 한 문장 결정적 린트(§2 2026-09-18) — 문형·글자수 지시만으로는 새므로(같은 사상).
-      ...hookLengthIssues(plan.scenes.map((s) => s.narration)).slice(0, 1),
-      // 마무리 씬(2026-10-02, 결정적) — 대장 만석 예고·next 없는 예고·cta 아닌 마지막 씬. 위 캡 합 주석의 총계 밖 ≤2.
-      ...closingSceneIssues(plan.scenes, { promiseRoom, hasNext: !!plan.next }).slice(0, 2),
-      ...standalone.slice(0, 4),
-      ...parity.slice(0, 2),
-      ...timing.slice(0, 3),
-      // 승계 지적(처방 C) — 소스별 예약 캡 원칙 그대로 몫을 준다(≤2). 위 캡 합 주석의 총계에 포함.
-      ...inherited.slice(0, 2),
-      // 설명 요약투(2026-08-27 권고 2, 결정적) — description 은 유튜브 설명이자 인스타 캡션이다.
-      // 새 콜을 만들지 않고 기존 수정 라운드에 얹는다(= 플랜이 말하는 "1회 재생성").
-      // META_SUMMARY_LINT 게이트(Fix wave 소견 4) — 블로그 meta 재시도와 같은 레버로 함께 꺼진다.
-      ...descriptionLintIssues(plan.description),
-      // 자막 대본 딱지(2026-08-27 권고 5, 결정적) — screenText 가 "정의/구분법/요약" 같은 목차 라벨로 끝나면
-      // 화면이 강의 슬라이드처럼 읽힌다. 프롬프트 지시(압축 안전선)의 2차 방어, 비차단.
-      // VOICE_ROTATION 게이트 — 이 태스크가 넣은 동작은 스위치 하나로 전부 되돌아간다.
-      ...(CONFIG.voiceRotation ? screenTextLabelIssues(plan.scenes.map((s) => s.screenText ?? '')).slice(0, 2) : []),
-    ];
+    // 결정적 검사 묶음(2026-10-05 함수로 묶음) — 부분 수정 채택 판정이 수정 전·후에 같은 묶음을 다시 돌려 비교한다.
+    const detProbs = (p: Plan): string[] => {
+      const narrs = p.scenes.map((s) => s.narration);
+      return [
+        ...narrationStyleIssues(narrs),
+        // 훅 키워드 낭독 결정적 린트(2026-08-20) — 프롬프트 지시 단독은 샌다는 실측 전례(문체 린트와 동일 사상).
+        ...hookKeywordLeadIssues(narrs, keyword),
+        // 훅 20자 한 문장 결정적 린트(§2 2026-09-18) — 문형·글자수 지시만으로는 새므로(같은 사상).
+        ...hookLengthIssues(narrs).slice(0, 1),
+        // 마무리 씬(2026-10-02, 결정적) — 대장 만석 예고·next 없는 예고·cta 아닌 마지막 씬. 위 캡 합 주석의 총계 밖 ≤2.
+        ...closingSceneIssues(p.scenes, { promiseRoom, hasNext: !!p.next }).slice(0, 2),
+        // 훅 화면 어긋남(2026-10-05) — 단정형 훅을 지시했는데도 화면 지목 훅이 나오면 되돌려 보낸다. 총계 밖 ≤1.
+        ...(extra.hookConflict && FOOTAGE_DEICTIC_RE.test(narrs[0] ?? '') ? [`항목1: 훅이 실촬영 화면을 가리킨다 — 그 화면은 이 편 주제의 장면이 아니다(${extra.hookConflict}). 화면 묘사 없이 단정 선언·숫자형으로 바꿔라`] : []),
+        // 검색 키워드·답 앞세우기(2026-10-05) — 유튜브는 씬1~2, 인스타는 내레이션 어딘가. 총계 밖 ≤1.
+        ...keywordEarlyIssues(p.scenes, keyword, extra.platform),
+        ...timingFor(p).slice(0, 3),
+        // 승계 지적(처방 C) — 소스별 예약 캡 원칙 그대로 몫을 준다(≤2). 위 캡 합 주석의 총계에 포함.
+        ...(sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(p)) : []).map(formatInherited).slice(0, 2),
+        // 설명 요약투(2026-08-27 권고 2, 결정적) — description 은 유튜브 설명이자 인스타 캡션이다.
+        // 새 콜을 만들지 않고 기존 수정 라운드에 얹는다(= 플랜이 말하는 "1회 재생성").
+        // META_SUMMARY_LINT 게이트(Fix wave 소견 4) — 블로그 meta 재시도와 같은 레버로 함께 꺼진다.
+        ...descriptionLintIssues(p.description),
+        // 자막 대본 딱지(2026-08-27 권고 5, 결정적) — screenText 가 "정의/구분법/요약" 같은 목차 라벨로 끝나면
+        // 화면이 강의 슬라이드처럼 읽힌다. 프롬프트 지시(압축 안전선)의 2차 방어, 비차단.
+        // VOICE_ROTATION 게이트 — 이 태스크가 넣은 동작은 스위치 하나로 전부 되돌아간다.
+        ...(CONFIG.voiceRotation ? screenTextLabelIssues(p.scenes.map((s) => s.screenText ?? '')).slice(0, 2) : []),
+      ];
+    };
+    const probs = [...detProbs(plan), ...standalone.slice(0, 4), ...parity.slice(0, 2)];
     let planChanged = false;
     if (probs.length) {
       const m = `단독 이해·문체 검산 — ${probs.length}건 → 수정 라운드 (${probs[0]?.slice(0, 50)})`;
       console.log(`[숏폼] ${m}`); io.bus?.emit('log', { message: m });
-      const fixed = parsePlan(await callRoleJSON<PlanRaw>(io, writerRole, sys,
-        `${user}\n\n[단독 이해·문체 검산 실패 — 아래 문제를 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지)]\n${probs.map((p) => `- ${p}`).join('\n')}`, 3400, false));
-      // 수정본 파싱 실패 시 원본 유지. 수정 라운드가 대본만 고치고 메타(제목 후보·설명·해시태그)를
-      // 빠뜨려도 원본 것을 승계(무손실 병합 — parsePlan 의 [topic] 폴백 제목이 원본을 덮지 않게).
-      if (fixed) {
-        plan = {
+      const say1 = (t: string): void => { console.log(`[숏폼] ${t}`); io.bus?.emit('log', { message: t }); };
+      // 통째 재집필(종전 경로) — SHORTS_PARTIAL_FIX=off 이거나 부분 수정이 구조 문제를 못 고쳤을 때만.
+      const fullRewrite = async (): Promise<Plan | null> => {
+        const raw = parsePlan(await callRoleJSON<PlanRaw>(io, writerRole, sys,
+          `${user}\n\n[단독 이해·문체 검산 실패 — 아래 문제를 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지)]\n${probs.map((p) => `- ${p}`).join('\n')}`, 3400, false));
+        if (!raw) return null;
+        // 씬 수가 어긋나도 뒤를 자르지 않는다 — 앞 n-1 + 마지막 씬(CTA)(2026-10-05, fitSceneCount 주석).
+        const fixed = raw.scenes.length > maxScenes ? { ...raw, scenes: fitSceneCount(raw.scenes, maxScenes) } : raw;
+        // 수정본 파싱 실패 시 원본 유지. 수정 라운드가 대본만 고치고 메타(제목 후보·설명·해시태그)를
+        // 빠뜨려도 원본 것을 승계(무손실 병합 — parsePlan 의 [topic] 폴백 제목이 원본을 덮지 않게).
+        return {
           ...fixed,
-          titles: fixed.titles.length > 1 ? fixed.titles : plan.titles,
-          description: fixed.description || plan.description,
-          hashtags: fixed.hashtags.length ? fixed.hashtags : plan.hashtags,
+          titles: fixed.titles.length > 1 ? fixed.titles : plan!.titles,
+          description: fixed.description || plan!.description,
+          hashtags: fixed.hashtags.length ? fixed.hashtags : plan!.hashtags,
           // 예고 승계(2026-10-02) — 수정본이 next 를 빠뜨려도 CTA 가 여전히 예고하면 원본 선언을 잇는다. 종전엔
           // 이 병합이 next 를 떨어뜨려, 영상은 예고하는데 대장엔 안 올라가는 경로가 하나 더 있었다.
-          ...(!fixed.next && plan.next && promiseRoom && announcesNextEpisode(fixed.scenes[fixed.scenes.length - 1]) ? { next: plan.next } : {}),
+          ...(!fixed.next && plan!.next && promiseRoom && announcesNextEpisode(fixed.scenes[fixed.scenes.length - 1]) ? { next: plan!.next } : {}),
         };
-        planChanged = true;
+      };
+      if (!CONFIG.shortsPartialFix) {
+        // 예외는 '수정 없음'으로(2026-10-05 리뷰) — 종전엔 바깥 try 로 튀어 오버레이 제거·factGate 를 건너뛰었다.
+        const fixed = await fullRewrite().catch(() => null);
+        if (fixed) {
+          const lost = lostCards(plan, fixed);
+          if (lost.length) say1(`통째 재집필 — 화면 카드 사라짐 씬 ${lost.join(',')}`);
+          plan = fixed; planChanged = true; record('통째 재집필', true);
+        }
+      } else {
+        // 부분 수정(2026-10-05, 사장님 승인) — 현 대본을 주고 문제 씬만 받는다. 실측: 통째 재집필이 94%였고 훅 85편 중 83편이
+        // 바뀌었으며 수정 라운드가 건너뜀 11건을 새로 만들었다. 채택 판정은 수정 전·후 같은 검사 묶음(결정적 린트 + 단독 이해
+        // 1회 재검산)으로 — 문제가 늘었거나 새 건너뜀이 생기면 첫 원고를 그대로 둔다. 정합(원문 대조)은 비교에서 뺀다
+        // (수정 뒤 재판정은 아래 잔존 블록이 planChanged 로 하고, 첫 원고 지적이 없어 그 블록이 안 돌아도 runShortsJob 끝의 최종 원문 대조가 본다).
+        const before = [...detProbs(plan), ...standalone.slice(0, 4)];
+        const recheck = async (p: Plan): Promise<string[]> => [...detProbs(p), ...(await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)',
+          p.scenes.map((s) => `${s.narration}${s.takeaways?.length ? ` [화면 결론: ${s.takeaways.map((t) => `${t.when} → ${t.then}`).join(', ')}]` : ''}`),
+          topic, keyword, io.signal, sourceCore)).slice(0, 4)];
+        const hookEditable = problemsTargetHook(probs);
+        const j = await callRoleJSON<PartialFix>(io, writerRole, sys, partialFixPrompt({
+          scenes: plan.scenes, problems: probs, budgets, stage: 'plan', hookEditable, description: plan.description,
+          // 원문 창은 정합 판정과 같은 길이(2026-10-05 리뷰) — 수정이 못 본 원문 뒤쪽 사실을 판정이 '없는 사실'로 잡지 않게.
+          ...(sourceForGates ? { sourceExcerpt: sourceForGates.slice(0, PARITY_SOURCE_CHARS) } : {}),
+          ...(sourceFlagged.length ? { flagged: sourceFlagged } : {}),
+          ...(hookRule ? { hookRule } : {}), ...(keyword ? { keyword } : {}),
+        }), 1600, false).catch(() => null);
+        const merged = mergePartialFix(plan, j, {
+          hookEditable, budgets, fixScreen: numMonth,
+          ...(keyword ? { keyword } : {}), ...(extra.hookConflict ? { hookReject: FOOTAGE_DEICTIC_RE } : {}),
+        });
+        say1(`부분 수정 — 씬 ${merged.changed.join(',') || '없음'}${merged.descriptionChanged ? ' · 설명' : ''}${merged.droppedCards.length ? ` · 화면 카드 해제 ${merged.droppedCards.join(',')}` : ''}${merged.rejected.length ? ` · 거절 ${merged.rejected.slice(0, 3).join(' / ')}` : ''}`);
+        const best = await chooseFixedPlan({
+          base: plan, merged, before, recheck, fullRewrite, hookConflict: !!extra.hookConflict, say: say1,
+        });
+        if (best) {
+          const lost = lostCards(plan, best.plan);
+          if (lost.length && best.stage !== '부분 수정') say1(`${best.stage} — 화면 카드 사라짐 씬 ${lost.join(',')}`);
+          plan = best.plan; planChanged = true; record(best.stage, true);
+        }
       }
     }
     // dataviz 오버레이 결정적 제거(권고 1) — 반드시 수정 라운드 '뒤'에: 앞에서 떼면 작가가 같은 값을
@@ -1136,6 +1806,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       const st = stripUnsourcedStatOverlays(plan.scenes, sourceForGates);
       if (st.removed.length) {
         plan = { ...plan, scenes: st.scenes };
+        record('오버레이 제거', false);
         for (const v of st.removed) {
           const m3 = `오버레이 수치 원문 부재 → 제거 — "${v}"`;
           console.log(`[숏폼] ${m3}`); io.bus?.emit('log', { message: m3 });
@@ -1154,10 +1825,11 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 시기·수치만 잔존해도 factGate 를 붙인다(그래야 텔레그램 줄이 나간다) — 단 status 는 정합 판정이 정한다:
     // 결정적 비차단 린트가 보류(hold)를 만들어 자동 임시저장까지 막아서는 안 된다.
     if ((parity.length || timingResidual.length || inheritedResidual.length) && sourceForGates) {
+      // 재판정 결과는 출처 기록에도 적는다 — 최종 원문 대조가 이 판본을 '통과'로 되돌릴 자리로 쓴다.
+      const recheckParity = parity.length && planChanged ? await parityIssuesChecked('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceForGates, io.signal) : null;
+      if (recheckParity) trace = traceMarkParity(trace, recheckParity);
       const base = parity.length
-        ? (planChanged
-          ? parityToInfo(await parityIssues('유튜브 숏폼 대본(씬 내레이션)', sceneTexts(plan), sourceForGates, io.signal))
-          : parityToInfo(parity))
+        ? (planChanged ? parityToInfo(recheckParity ?? []) : parityToInfo(parity))
         : parityToInfo([]);
       // timing 은 자르지 않고 통째로 싣는다 — 텔레그램 머리줄 N 은 잔존 '건수'라, 여기서 5건으로 자르면
       // 8건이 "5건"으로 나간다(Fix round 1). 예시 줄 캡(2줄)은 factGateLines 가 표시 시점에 씌운다.
@@ -1174,7 +1846,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   // 다음 편 예고 정리(2026-10-02, 결정적) — 수정 라운드 뒤 최종 대본 기준. 낭독 직전에 finishShortsRun 이 대장을 다시 본다.
   {
     const st = settleNextEpisode(plan, promiseRoom);
-    if (st.note) { plan = st.plan; const m = `예고 정리 — ${st.note}`; console.log(`[숏폼] ${m}`); io.bus?.emit('log', { message: m }); }
+    if (st.note) { plan = st.plan; record('예고 정리', false); const m = `예고 정리 — ${st.note}`; console.log(`[숏폼] ${m}`); io.bus?.emit('log', { message: m }); }
   }
   // quote 출처 가드 — factGate 등 위에서 채운 필드는 pruneQuoteSources 가 그대로 스프레드 보존한다(fail-open).
   try {
@@ -1182,9 +1854,11 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     if (pq.pruned) {
       const m = `quote 출처 ${pq.pruned}건 제거 — 원문에 없는 출처 라벨`;
       console.log(`[숏폼] ${m}`); io.bus?.emit('log', { message: m });
+      plan = pq.plan; record('출처 정리', false);
     }
-    return pq.plan;
-  } catch { return plan; }
+  } catch { /* fail-open */ }
+  if (extra.trace) extra.trace.value = trace;
+  return plan;
 }
 
 /** 지금 달(KST, 1~12) — 디렉터 프롬프트의 계절 기준. 서버 TZ 와 무관하게 서울 기준. */
@@ -1705,12 +2379,30 @@ async function normalizeSpareClips(a: {
   return out;
 }
 
+// 축은 같게, 각도만 다르게(2026-10-05) — 종전 "원문의 다른 축을 골라라"는 원문 핵심 앵커("핵심 축 중 최소 1개")·단독 이해
+// 검산 항목 5(원문 핵심 축)·매체 전환("하나만 골라라")과 정면으로 부딪혔다. 두 번째 채널 편이 곁가지 축을 고르면 검산이
+// '원문핵심 어긋남'으로 되돌리고, 수정 라운드가 원문 이름·시기를 덧붙여 건너뜀이 생겼다(라일락 인스타 실측).
+export const SIBLING_ANGLE_RULE = '같은 훅·같은 결론 문장·같은 씬 순서를 쓰지 마라. 원문의 핵심 축은 같게 두고 각도만 바꿔라 — 다른 독자 상황(누가 언제 겪나), 다른 판정(무엇을 보고 어떻게 정하나), 다른 화자 시점(묻는 사람·알려주는 사람) 중 하나로. 채널 지침(유튜브=검색 답, 인스타=공유할 한 줄 판정)이 각도를 가른다.';
+
 /**
  * 다른 채널용 형제 대본이 이미 있으면 그 제목·첫 문장을 '겹치지 마라' 지침으로 만든다(복원 2026-09-08).
  * 승계를 끄고 채널마다 독립 런으로 돌아오자 09-03 의 문제가 그대로 돌아왔다 — 동시에 띄우면 같은 원문에서
  * 같은 축의 대본이 나온다. 유튜브는 인스타를 못 보므로 '중복'이 문제가 아니라, 두 채널이 원하는 것(검색 답변형
  * vs 공유 판정형)이 달라 각도가 갈려야 한다는 것이 사용자 의도다. 읽기 실패는 무해(빈 문자열).
  */
+/** 형제 편이 낸 대본 파일 — 최종 plan.json, 없으면 기획 채택 직후의 미리보기(SIBLING_PREVIEW_FILE). 둘 다 없으면 undefined.
+ *  두 번째 채널 런의 출발 판정(server/main.ts startAfterSiblingPlan)과 '겹치지 마라' 지침(siblingPlanToAvoid)이 같이 쓴다. */
+export function siblingPlanFile(dir: string): string | undefined {
+  return [path.join(dir, 'plan.json'), path.join(dir, SIBLING_PREVIEW_FILE)].find((x) => fs.existsSync(x));
+}
+
+/** 형제 대본 미리보기 쓰기(2026-10-05) — 제목·훅만. 실패는 무해(두 번째 런은 plan.json 또는 대기 상한으로 출발한다). */
+export function writeSiblingPreview(dir: string, plan: Pick<Plan, 'title' | 'scenes'>): void {
+  try {
+    fs.writeFileSync(path.join(dir, SIBLING_PREVIEW_FILE), JSON.stringify({ title: plan.title, scenes: plan.scenes.slice(0, 1).map((s) => ({ narration: s.narration })) }, null, 2), 'utf-8');
+  } catch { /* 무해 */ }
+}
+
 function siblingPlanToAvoid(short: Shorts): string {
   if (!short.platform || !short.sourcePieceId) return '';
   try {
@@ -1718,8 +2410,9 @@ function siblingPlanToAvoid(short: Shorts): string {
     for (const sib of store.list()) {
       if (sib.id === short.id || sib.sourcePieceId !== short.sourcePieceId) continue;
       if (!sib.platform || sib.platform === short.platform) continue;
-      const f = path.join(store.dirFor(sib.id), 'plan.json');
-      if (!fs.existsSync(f)) continue;
+      // 최종 plan.json 이 없으면 기획 채택 직후의 미리보기(제목·훅)를 읽는다(2026-10-05, writeSiblingPreview).
+      const f = siblingPlanFile(store.dirFor(sib.id));
+      if (!f) continue;
       const plan = JSON.parse(fs.readFileSync(f, 'utf-8')) as { title?: string; scenes?: Array<{ narration?: string }> };
       const hook = plan.scenes?.[0]?.narration?.trim() ?? '';
       const title = plan.title?.trim() ?? '';
@@ -1728,7 +2421,7 @@ function siblingPlanToAvoid(short: Shorts): string {
         `[다른 채널 대본 — 겹치지 마라] 같은 글로 ${platformLabel(sib.platform)}용 숏폼이 이미 이렇게 나갔다.`,
         title ? `· 제목: ${title}` : '',
         hook ? `· 첫 문장: ${hook}` : '',
-        '같은 각도·같은 훅·같은 결론 문장을 쓰지 마라. 원문의 다른 축을 골라 다른 이야기로 만들어라.',
+        SIBLING_ANGLE_RULE,
       ].filter(Boolean).join('\n');
     }
   } catch { /* 형제 대본 읽기 실패는 무해 — 지침 없이 진행 */ }
@@ -1930,19 +2623,36 @@ export async function runShortsJob(
     // 훅 화면(2026-10-02) — 보관소 영상 '파일'과 그 비전 묘사가 정확히 하나씩일 때만. 파일이 둘인데 묘사가 하나면
     // hookFirst 가 묘사 못 받은 다른 영상을 씬1에 둘 수 있다(리뷰 지적).
     const hookFootage = userVideoFiles.length === 1 && hookVideoBriefs.length === 1 ? hookVideoBriefs[0]!.what : undefined;
+    // 훅 화면이 주제와 어긋나는가(2026-10-05, 호두 두 편 "잎이 안 나요" ↔ 화면 "잎이 무성") — 어긋나면 그 묘사를 작가에게 아예 안 준다.
+    // mediaPlanGuide 도 같은 묘사를 "이 장면을 보여 주는 씬을 두라"로 싣기 때문에 거기서도 뺀다(배정은 그대로 — 화면은 씬1 에 나간다).
+    const hookConflict = footageContradictsTopic(short.topic, hookFootage);
+    if (hookConflict) say(`훅 화면 어긋남 — ${hookConflict} · 묘사 없이 단정형 훅으로`);
+    const planBriefs = hookConflict ? briefs.filter((b) => b.what !== hookFootage) : briefs;
     say(`기획 가드 — 채널 ${platformLabel(short.platform)} · 작가 ${writerProfile?.name ?? short.writer ?? '미지정'} · 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 형제 대본 ${siblingGuide ? '주입' : '없음'} · 제목 유형 ${titleTypes.join('·')} · 장르 ${shortsGenreOf(short.topic, CONFIG.shortsLore) === 'lore' ? '이야기형' : '하우투'} · 훅 소재 ${shortsGenreOf(short.topic, CONFIG.shortsLore) === 'howto' && CONFIG.shortsLore ? (opts.loreFacts ?? []).length : 0}건`);
-    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, siblingGuide, mediaPlanGuide(briefs), priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? [], writerRole,
+    const traceBox: { value?: SceneTrace } = {};
+    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, siblingGuide, mediaPlanGuide(planBriefs), priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? [], writerRole,
       recentShortsMainTitles(short.brand, short.id), opts.loreFacts ?? [], // 대표 제목 구조 수렴 차단 · 훅 소재(이야기 사실)
       // 예고 대장 자리 · 훅 화면(2026-10-02) — 보관소 영상이 정확히 1개면 hookFirst 가 그걸 씬1에 놓는다. 여럿이면 어느 게
       // 훅이 될지 기획 시점엔 모르므로 묘사를 주지 않는다(종전 mediaPlanGuide 만).
-      { promiseRoom: promiseRoom.room, ...(hookFootage ? { hookFootage } : {}) });
+      {
+        promiseRoom: promiseRoom.room, ...(hookFootage && !hookConflict ? { hookFootage } : {}),
+        ...(hookConflict ? { hookConflict } : {}), ...(short.platform ? { platform: short.platform } : {}),
+        trace: traceBox,
+      });
     if (!planned) throw new Error('기획 실패 — 작가 JSON 응답을 해석할 수 없습니다');
     // Plan 타입 재선언 — 길이 상한 루프의 재대입이 클로저(씬 map 등) 내로잉을 풀지 않게 non-null 로 고정.
     let plan: Plan = planned;
+    // 씬별 출처(2026-10-05 리뷰) — planShorts 가 쌓은 판본 더미를 잇는다(못 받았으면 지금 대본을 첫 원고로 친다).
+    let trace: SceneTrace = traceBox.value ?? traceStart(plan.scenes);
+    // 형제 대본 미리보기(2026-10-05 리뷰) — 두 번째 채널 런은 이 편의 제목·훅만 보면 출발할 수 있다. 감량·감량 뒤 수정·흐름 점검·
+    // 최종 원문 대조가 붙으며 plan.json 이 늦게 나와 대기 상한(SIBLING_PLAN_WAIT_MS)을 넘길 수 있어, 기획 단계 채택 직후 따로 쓴다.
+    // plan.json 을 일찍 쓰지 않는 이유: 수정 요청·예고 대장(promiseRoomFor)·제목 이력·유사 주제가 plan.json 을 '최종본'으로 읽는다.
+    writeSiblingPreview(dir, plan);
     // 길이 상한 집행(사용자 확정 2026-08-14: 총 60초 이내) — 예산 초과 대본은 1회 압축.
     const fit = await fitShortsPlanToDuration(io, plan);
     if (fit.compressed) say(`대본 감량 — ${fit.beforeChars}→${fit.afterChars}자(길이 상한 ${CONFIG.shortsMaxDurationSec}초 예산)`);
     plan = fit.plan;
+    if (fit.compressed) trace = traceRecord(trace, plan.scenes, '감량', { llm: true, kept: fit.keptScenes });
     // 감량 뒤 재검산(§4-1, 2026-09-18) — fitShortsPlanToDuration 은 감량만 하고 재검산이 없어, 압축이
     // 문체·훅 규칙을 다시 어기거나 CTA 가 되받는 근거 문장을 지워도 그대로 통과했다(실측: "옹이부터
     // 보세요" CTA인데 압축이 옹이를 처음 소개하는 문장을 지워 결론이 허공에 떴다). planShorts 의 1차
@@ -1952,59 +2662,191 @@ export async function runShortsJob(
     // 를 재사용해 kind·stat·quote 등 씬의 나머지 필드는 그대로 보존한다(전체 재파싱은 작가가 안 돌려준
     // 필드를 normalizeSceneKind 가 지운다). topic·keyword·sourceBody 는 short/opts 에서 그대로 꺼낼 수
     // 있어 sourceCore(원문 정합 입력)만은 planShorts 와 동일하게 재구성한다(fix round 1).
+    // 원문 정합 대조용 원문 — planShorts 의 sourceForGates 와 같은 값(재배 편은 이야기 사실 줄을 덧붙인다 — 훅 소재가 '원문에 없는 사실'로 안 잡히게).
+    const loreSrc = CONFIG.shortsLore && shortsGenreOf(short.topic, CONFIG.shortsLore) === 'howto' ? loreHookSource(opts.loreFacts ?? []) : '';
+    const sourceForGates = opts.sourceBody && loreSrc ? `${opts.sourceBody}\n\n${loreSrc}` : opts.sourceBody;
+    const budget = Math.floor((CONFIG.shortsMaxDurationSec - 5) * SHORTS_TTS_CPS);
+    const budgets = sceneCharBudgets(budget, plan.scenes.length);
+    const hookRule = hookConflict ? assertiveHookRule(hookConflict) : '';
+    const sceneTextsWithScreen = (p: Plan): string[] => p.scenes.map((s) => `${s.narration}${s.screenText ? ` (자막: ${s.screenText})` : ''}`
+      + (s.takeaways?.length ? ` (결론: ${s.takeaways.map((t) => `${t.when} → ${t.then}`).join(', ')})` : '')
+      + (s.items?.length ? ` (목록: ${s.items.join(', ')})` : ''));
+    // 화면 글자 월 표기 — planShorts 의 numMonth 와 같은 규칙(고유어 월은 낭독 전용, 키워드 정확 표기가 깨지면 원문 유지).
+    const screenMonth = (t: string): string => {
+      if (!CONFIG.voiceRotation) return t;
+      const o = monthWordOutsideNarration(t);
+      return short.keyword && t.includes(short.keyword) && !o.includes(short.keyword) ? t : o;
+    };
     if (fit.compressed) {
-      // 원문 정합 입력 — planShorts 의 1차 검산과 같은 값을 만든다(sourceCoreOf, fix round 1).
-      // 이전 판은 undefined 로 고정해 파생물(블로그 기반)의 '원문 정합' 검사 축을 이 라운드에서만 껐었다.
-      const sourceCore = sourceCoreOf(short.topic, opts.sourceBody);
+      // SHORTS_PARTIAL_FIX 가 이 단계 변경 전부를 가른다(2026-10-05 리뷰) — 끄면 종전 경로(원문 핵심 축 검사 포함 재검산, 번호
+      // 목록 프롬프트, 전 씬 응답의 내레이션만 병합, 채택 판정 없음) 그대로다.
+      const partial = CONFIG.shortsPartialFix;
+      // 원문 핵심 축 지적은 이 단계에서 걸지 않는다(2026-10-05, 켬일 때) — 감량본은 축을 고를 단계가 아니고, 그 지적이 수정 라운드에
+      // 원문 이름·시기를 끼워 넣게 해 건너뜀을 만들었다(라일락 두 편). 축 검사는 첫 원고 검산(planShorts)이 맡는다.
+      // 끔이면 종전대로 planShorts 의 1차 검산과 같은 원문 정합 입력(sourceCoreOf, fix round 1)을 준다.
+      const sourceCore = partial ? undefined : sourceCoreOf(short.topic, opts.sourceBody);
+      const relint = async (p: Plan): Promise<string[]> => [
+        ...compressionRelintProbs(p.scenes, short.keyword),
+        ...(await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)',
+          p.scenes.map((s) => `${s.narration}${s.takeaways?.length ? ` [화면 결론: ${s.takeaways.map((t) => `${t.when} → ${t.then}`).join(', ')}]` : ''}`),
+          short.topic, short.keyword, io.signal, sourceCore)).filter((x) => !partial || !/^원문\s*핵심/.test(x)).slice(0, 3),
+      ];
       let relintProbs: string[] = [];
       try {
-        relintProbs = [
-          ...compressionRelintProbs(plan.scenes, short.keyword),
-          ...(await standaloneIssues('유튜브 숏폼 대본(씬 내레이션)',
-            plan.scenes.map((s) => `${s.narration}${s.takeaways?.length ? ` [화면 결론: ${s.takeaways.map((t) => `${t.when} → ${t.then}`).join(', ')}]` : ''}`),
-            short.topic, short.keyword, io.signal, sourceCore)).slice(0, 3),
-        ];
+        relintProbs = await relint(plan);
       } catch { /* fail-open — 검산 판정 자체가 실패하면 '이상 없음'과 동일하게 다룬다 */ }
       // 예산은 try 밖에서 계산해 둔다 — 아래 수정 라운드가 무엇을 하든(성공·부분 실패·예외) 예산 가드는
       // 항상 돈다(fix round 1: 종전엔 이 가드가 수정 라운드와 같은 try 안에 있어, 라운드 중 예외가 나면
       // 늘어난(줄지 않은) 미가드 내레이션이 그대로 남을 수 있었다).
-      const budget = Math.floor((CONFIG.shortsMaxDurationSec - 5) * SHORTS_TTS_CPS);
       if (relintProbs.length) {
         say(`감량 뒤 검산 — ${relintProbs.length}건 → 수정`);
         try {
-          const cur = plan.scenes.map((s, i) => `${i + 1}. ${s.narration}`).join('\n');
-          const j = await callRoleJSON<{ scenes?: Array<{ index?: unknown; narration?: unknown } | null> }>(
-            io, writerRole,
-            '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.',
-            [
-              '아래 숏폼 대본은 길이 상한을 맞추려 감량한 결과다. 감량 뒤 검산에서 문제가 나왔다 — 내레이션만 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지).',
-              cur,
-              `[감량 뒤 검산 실패 — 아래 문제를 고쳐라]\n${relintProbs.map((p) => `- ${p}`).join('\n')}`,
-              `[예산] 모든 씬 내레이션 합계 ${budget}자 이내를 반드시 지켜라`,
-              'JSON 형식: {"scenes":[{"index":씬번호,"narration":"..."}]} — 전 씬 포함.',
-            ].join('\n\n'), 1600, false,
-          ).catch(() => null);
-          if (j?.scenes) {
-            let out: Plan = { ...plan, scenes: plan.scenes.map((s) => ({ ...s })) };
-            for (const s of j.scenes) {
-              const idx = typeof s?.index === 'number' && Number.isInteger(s.index) ? s.index : 0; // 1-base
-              if (idx < 1 || idx > out.scenes.length) continue;
-              const narration = cleanNarration(s?.narration);
-              if (narration) out.scenes[idx - 1] = { ...out.scenes[idx - 1]!, narration };
+          if (!partial) {
+            // 종전 경로(SHORTS_PARTIAL_FIX=false) — 내레이션 번호 목록만 주고 전 씬을 받아 내레이션만 바꾼다(화면 글자는 손대지 않음).
+            const cur = plan.scenes.map((s, i) => `${i + 1}. ${s.narration}`).join('\n');
+            const j = await callRoleJSON<{ scenes?: Array<{ index?: unknown; narration?: unknown } | null> }>(
+              io, writerRole,
+              '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.',
+              [
+                '아래 숏폼 대본은 길이 상한을 맞추려 감량한 결과다. 감량 뒤 검산에서 문제가 나왔다 — 내레이션만 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지).',
+                cur,
+                `[감량 뒤 검산 실패 — 아래 문제를 고쳐라]\n${relintProbs.map((p) => `- ${p}`).join('\n')}`,
+                `[예산] 모든 씬 내레이션 합계 ${budget}자 이내를 반드시 지켜라`,
+                'JSON 형식: {"scenes":[{"index":씬번호,"narration":"..."}]} — 전 씬 포함.',
+              ].join('\n\n'), 1600, false,
+            ).catch(() => null);
+            if (j?.scenes) {
+              let out = mergeNarrationOnly(plan, j.scenes);
+              // 압축과 같은 실측 대응(fix round 1) — 감량 뒤 수정 라운드도 유보어를 지워 결론을 반전시킬 수
+              // 있다. fitShortsPlanToDuration 의 같은 처리(restoreLostHedges 호출부)와 같은 모양으로 둔다.
+              try {
+                const hedged = restoreLostHedges(plan, out);
+                if (hedged.restored.length) { out = hedged.plan; say(`감량 뒤 검산 — 유보어 소실 씬 ${hedged.restored.join(',')} 원문장 복원`); }
+              } catch { /* fail-open — 복원 실패로 수정 라운드 자체를 막지 않는다 */ }
+              plan = out;
+              trace = traceRecord(trace, plan.scenes, '감량 뒤 수정', { llm: true });
             }
+          } else {
+            // 감량 뒤 수정(2026-10-05) — 원문 발췌와 화면 글자(자막·결론 카드·목록)를 함께 주고 고친 씬만 받는다(부분 수정과 같은 병합).
+            // 종전엔 내레이션 번호 목록만 줘서 작가가 원문 없이 사실을 지었고(산딸나무 CTA), 자막이 옛 내용으로 남았다(모과 "꽃말은 평범").
+            // 결론 카드·목록은 응답이 빠뜨려도 지우지 않는다 — 새 내레이션과 어긋날 때만 지운다(cards:'keepUnlessDiverged', 리뷰).
+            const hookEditable = problemsTargetHook(relintProbs);
+            const j = await callRoleJSON<PartialFix>(io, writerRole, '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.',
+              partialFixPrompt({
+                scenes: plan.scenes, problems: relintProbs, budgets, stage: 'compressed', hookEditable,
+                ...(sourceForGates ? { sourceExcerpt: sourceForGates.slice(0, PARITY_SOURCE_CHARS) } : {}),
+                ...(opts.sourceFlagged?.length ? { flagged: opts.sourceFlagged } : {}),
+                ...(hookRule ? { hookRule } : {}), ...(short.keyword ? { keyword: short.keyword } : {}),
+              }), 1600, false).catch(() => null);
+            const merged = mergePartialFix(plan, j, {
+              hookEditable, budgets, budgetChars: budget, fixScreen: screenMonth, cards: 'keepUnlessDiverged',
+              ...(short.keyword ? { keyword: short.keyword } : {}), ...(hookConflict ? { hookReject: FOOTAGE_DEICTIC_RE } : {}),
+            });
+            let out = merged.plan;
+            const cardNote = merged.droppedCards.length ? ` · 화면 카드 해제(새 내레이션과 어긋남) 씬 ${merged.droppedCards.join(',')}` : '';
+            if (merged.changed.length) say(`감량 뒤 수정 — 씬 ${merged.changed.join(',')}${cardNote}${merged.rejected.length ? ` · 거절 ${merged.rejected.slice(0, 3).join(' / ')}` : ''}`);
             // 압축과 같은 실측 대응(fix round 1) — 감량 뒤 수정 라운드도 유보어를 지워 결론을 반전시킬 수
             // 있다. fitShortsPlanToDuration 의 같은 처리(restoreLostHedges 호출부)와 같은 모양으로 둔다.
             try {
               const hedged = restoreLostHedges(plan, out);
               if (hedged.restored.length) { out = hedged.plan; say(`감량 뒤 검산 — 유보어 소실 씬 ${hedged.restored.join(',')} 원문장 복원`); }
             } catch { /* fail-open — 복원 실패로 수정 라운드 자체를 막지 않는다 */ }
-            plan = out;
+            // 채택 판정(2026-10-05 리뷰) — 기획 단계 부분 수정과 같은 기준: 같은 검사 묶음(결정적 린트 + 단독 이해)을 다시 돌려
+            // 문제가 늘었거나 바꾼 씬에 새 건너뜀이 생기면 감량본을 그대로 둔다. 재검산 실패도 '모름'이라 채택하지 않는다.
+            if (merged.changed.length) {
+              const after = await relint(out).catch(() => null);
+              const v = after ? partialFixVerdict(relintProbs, after, merged.changed) : { accept: false, why: '재검산 실패' };
+              say(`감량 뒤 수정 판정 — ${v.accept ? '채택' : '감량본 유지'}(${v.why})`);
+              if (v.accept) {
+                plan = out;
+                trace = traceRecord(trace, plan.scenes, '감량 뒤 수정', { llm: true });
+              }
+            }
           }
         } catch { /* fail-open — 수정 라운드 실패 시 감량 결과를 그대로 쓴다(아래 예산 가드는 그대로 돈다) */ }
         // 결정적 마감 — 수정 라운드가 실패·부분 이행했어도 예산은 여기서 반드시 보장한다(try 밖, 무조건 실행).
-        if (shortsNarrationChars(plan) > budget) plan = trimPlanToBudget(plan, budget, CONFIG.shortsScenes).plan;
+        if (shortsNarrationChars(plan) > budget) {
+          const t = trimPlanToBudget(plan, budget, CONFIG.shortsScenes);
+          plan = t.plan;
+          trace = traceRecord(trace, plan.scenes, '트리밍', { llm: false, kept: t.keptScenes });
+        }
       } else {
         say('감량 뒤 검산 — 이상 없음');
+      }
+    }
+    // 최종 흐름 점검(2026-10-05, SHORTS_FLOW_CHECK) — 감량·트리밍·감량 뒤 수정까지 끝난 대본의 이음새를 LLM 1회로 보고, 끊긴 이음
+    // 문장만 고친다(훅 제외·예산 안에서만·최대 1회). 11편 분석에서 최종본 건너뜀 17/44 의 대부분은 앞 단계가 문장을 빼거나 바꾸며 생겼다 —
+    // 앞 단계를 고쳐도 남는 것을 마지막에 한 번 잇는다. 고친 결과가 결정적 린트를 늘리거나 유보어를 지우면 그 수정은 버린다.
+    if (CONFIG.shortsFlowCheck && plan.scenes.length >= 3) {
+      try {
+        const j = await microJSON<PartialFix & { transitions?: unknown; breaks?: unknown }>(stdModel(), '당신은 숏폼 대본 에디터입니다. 요청된 JSON 스키마만 출력합니다.',
+          flowCheckPrompt({
+            scenes: plan.scenes, budgets, ...(short.keyword ? { keyword: short.keyword } : {}), ...(hookRule ? { hookRule } : {}),
+            // 짧은 원문 발췌(2026-10-05 리뷰) — 이음 말을 고를 때 원문 밖 말을 지어내지 않게. 판정은 아래 최종 원문 대조가 한다.
+            ...(sourceForGates ? { sourceExcerpt: sourceForGates.slice(0, 1500) } : {}),
+          }),
+          { maxOutputTokens: 1400, signal: io.signal });
+        const breaks = flowBreaks(j);
+        const allowed = flowFixScenes(breaks, plan.scenes.length);
+        if (!allowed.length) say('흐름 점검 — 끊긴 이음새 없음');
+        else {
+          // 화면 글자는 그대로(cards:'keep', 2026-10-05 리뷰) — 흐름 점검은 이음 말만 바꾼다. 종전 병합은 카드 없이 온 CTA 수정에
+          // 결론 카드·자막을 지웠다(실측 산딸 droppedCards=[5]).
+          const merged = mergePartialFix(plan, { scenes: j?.scenes ?? [] }, {
+            hookEditable: false, budgets, budgetChars: budget, onlyScenes: allowed, fixScreen: screenMonth, cards: 'keep',
+            ...(short.keyword ? { keyword: short.keyword } : {}),
+          });
+          const cardNote = merged.droppedCards.length ? ` · 화면 카드 해제 씬 ${merged.droppedCards.join(',')}` : '';
+          let out = merged.plan;
+          const hedged = restoreLostHedges(plan, out);
+          if (hedged.restored.length) out = hedged.plan;
+          const lint = (p: Plan): number => compressionRelintProbs(p.scenes, short.keyword).length;
+          if (merged.changed.length && lint(out) > lint(plan)) {
+            say(`흐름 점검 — 수정이 문체·훅 린트를 늘려 버림(끊김 ${breaks.map((b) => `${b.at}→${b.at + 1}`).join(',')})${cardNote}`);
+          } else if (merged.changed.length) {
+            plan = out;
+            trace = traceRecord(trace, plan.scenes, '흐름 점검', { llm: true });
+            say(`흐름 점검 — 끊김 ${breaks.map((b) => `${b.at}→${b.at + 1}`).join(',')} · 씬 ${merged.changed.join(',')} 이음 문장 수정${cardNote}${merged.rejected.length ? ` · 거절 ${merged.rejected.slice(0, 2).join(' / ')}` : ''}`);
+          } else say(`흐름 점검 — 끊김 ${breaks.map((b) => `${b.at}→${b.at + 1}`).join(',')} · 유효 수정 없음${merged.rejected.length ? `(${merged.rejected.slice(0, 2).join(' / ')})` : ''}`);
+        }
+      } catch { say('흐름 점검 실패 — 대본 그대로 진행'); }
+    }
+    // 최종 원문 대조(2026-10-05 리뷰, FACT_GATE 아래) — 기획 파이프라인 끝(흐름 점검 뒤, plan.json·낭독 전)에서 한 번. 첫 원고 뒤 LLM
+    // 단계(부분 수정·통째 재집필·감량·감량 뒤 수정·흐름 점검)가 바꿨는데 대조를 못 받은 씬이 있을 때만 돈다(traceNeedsParity).
+    // 지적된 씬 중 바뀐 씬은 가장 최근 통과 판본(없으면 지적 없던 첫 원고 판본)으로 되돌리고, 나머지 지적(바뀐 적 없는 씬·되돌릴
+    // 판본 없음·씬 번호 불명)은 factGate.unsupported 에 보류(hold)로 싣는다 — 종전 단계별 factRecheck 는 이것들을 버렸다.
+    // fail-open: 판정 실패면 대본은 그대로 두고 판정 실패(error)로 표시한다(이미 hold 면 그대로). 숏폼 factGate 는 표시 전용이다
+    // (텔레그램 검토 메시지) — 업로드를 막지 않는다.
+    if (CONFIG.factGate && sourceForGates && traceNeedsParity(trace)) {
+      const issues = await parityIssuesChecked('유튜브 숏폼 대본(씬 내레이션)', sceneTextsWithScreen(plan), sourceForGates, io.signal).catch(() => null);
+      if (!issues) {
+        plan = { ...plan, factGate: finalFactGate(plan.factGate, null) };
+        say('최종 원문 대조 실패 — 대본 그대로 진행(판정 실패 표시)');
+      } else {
+        const r = finalParityRevert(trace, plan.scenes, issues, hookConflict ? { hookReject: FOOTAGE_DEICTIC_RE } : {});
+        if (r.reverted.length) {
+          const pre = plan;
+          plan = { ...plan, scenes: r.scenes };
+          // 옛 판본이 되살린 것을 다시 거른다 — 원문에 없는 오버레이 수치·출처 라벨, 길이 예산, 예고 정리(모두 결정적).
+          const st = stripUnsourcedStatOverlays(plan.scenes, sourceForGates);
+          if (st.removed.length) plan = { ...plan, scenes: st.scenes };
+          plan = pruneQuoteSources(plan, sourceForGates).plan;
+          if (shortsNarrationChars(plan) > budget) plan = trimPlanToBudget(plan, budget, CONFIG.shortsScenes).plan;
+          const se = settleNextEpisode(plan, promiseRoom.room);
+          if (se.note) plan = se.plan;
+          const lost = lostCards(pre, plan);
+          say(`최종 원문 대조 — 씬 ${r.reverted.map((x) => `${x.scene}(${x.from}→${x.to})`).join(', ')} 되돌림${lost.length ? ` · 화면 카드 사라짐 씬 ${lost.join(',')}` : ''} (${issues[0]?.slice(0, 50)})`);
+        }
+        // 시기·수치·승계 잔존도 최종 대본으로 다시 센다(결정적) — planShorts 의 값은 감량 전 대본 기준이다.
+        const display = [
+          ...timingParityIssues(sourceForGates, timingFields(plan)).map(formatTimingIssue),
+          ...(opts.sourceFlagged?.length ? inheritedClaims(opts.sourceFlagged, timingFields(plan)) : []).map(formatInherited),
+        ];
+        const fg = finalFactGate(plan.factGate, { remaining: r.remaining, display });
+        if (fg) plan = { ...plan, factGate: fg };
+        say(r.remaining.length
+          ? `최종 원문 대조 — 잔존 ${r.remaining.length}건 보류(검토 메시지에 표시): ${r.remaining[0]!.slice(0, 50)}`
+          : `최종 원문 대조 — 잔존 없음${r.reverted.length ? '(되돌림 뒤)' : ''}`);
       }
     }
     // 빈 연출 메우기(2026-09-04) — kind 만 오고 내용이 빈 씬은 화면에 아무것도 못 그린다.

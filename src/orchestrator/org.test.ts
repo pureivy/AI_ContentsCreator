@@ -196,3 +196,21 @@ describe('frameOpenerItem — ⑤ 도입 단정 대안', () => {
     }
   });
 });
+
+// 2026-10-05 — 한 문장 한 줄(편집 확정 규칙)과 맞물리게 '문단' 셈을 빈 줄 사이 덩어리로 옮겼다. 두 줄은 STRUCTURE_VARIETY 와
+// 무관한 공통 줄이라 on/off 지침이 함께 바뀐다(off 의 base 동일성 계약은 [이번 글 구조] 위임 문구에 대한 것이다).
+describe('blogBodyGuide — 한 문장 한 줄과 양립하는 어미 배합·가독성(2026-10-05)', () => {
+  for (const [name, g] of [['on', blogBodyGuide(true)], ['off', blogBodyGuide(false)]] as const) {
+    it(`${name}: 어미 배합은 덩어리 단위로 센다(줄마다 1개가 아니다)`, () => {
+      expect(g).toContain('어미 배합(덩어리 규칙)');
+      expect(g).toContain('빈 줄 없이 이어진 줄들은 한 덩어리로 센다');
+      expect(g).toContain('**2~3문장 덩어리는 1개, 4문장 덩어리는 2개**');
+      expect(g).not.toContain('2~3문장 문단은 1개');
+    });
+    it(`${name}: 가독성은 덩어리 2~4문장 + 덩어리 안 줄바꿈 허용`, () => {
+      expect(g).toContain('빈 줄로 나뉜 덩어리 하나는 2~4문장');
+      expect(g).toContain('한 문장마다 줄을 바꿔 써도 같은 덩어리다');
+      expect(g).not.toContain('한 문단은 2~4문장');
+    });
+  }
+});

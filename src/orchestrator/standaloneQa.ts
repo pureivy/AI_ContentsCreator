@@ -48,8 +48,20 @@ export async function standaloneIssues(
   }
 }
 
+/** 원문 정합 판정이 보는 원문 길이 — 숏폼 수정 프롬프트의 원문 발췌도 같은 창을 쓴다(2026-10-05 리뷰: 수정은 2500자만 보고
+ *  판정은 6000자를 봐서, 원문 뒤쪽 사실을 수정이 못 보고 판정은 '없는 사실'로 잡는 어긋남이 있었다). */
+export const PARITY_SOURCE_CHARS = 6000;
+
 /** 파생물(카드·쇼츠) 원문 정합 — 원문 블로그에 없는 사실 추가·원문 결론 반전을 잡는다(스펙 §2-4). 실패는 빈 배열. */
 export async function parityIssues(kindLabel: string, texts: string[], sourceBody: string, signal?: AbortSignal): Promise<string[]> {
+  return (await parityIssuesChecked(kindLabel, texts, sourceBody, signal)) ?? [];
+}
+
+/**
+ * parityIssues 와 같되 판정 실패(LLM 무응답·예외)를 null 로 구분한다(2026-10-05 숏폼 최종 원문 대조) — 실패를 '이상 없음'으로
+ * 읽으면 검산 안 된 대본이 통과로 표시된다. 판정 생략(Claude 모델 아님·원문 없음)은 종전대로 빈 배열.
+ */
+export async function parityIssuesChecked(kindLabel: string, texts: string[], sourceBody: string, signal?: AbortSignal): Promise<string[] | null> {
   try {
     if (!stdModel().startsWith('claude-')) return [];
     if (!sourceBody.trim() || !texts.length) return [];
@@ -63,14 +75,15 @@ export async function parityIssues(kindLabel: string, texts: string[], sourceBod
         '[텍스트 — 순서대로]',
         ...texts.map((t, i) => `${i + 1}. ${t}`),
         '',
-        `[원문 블로그]\n${sourceBody.slice(0, 6000)}`,
+        `[원문 블로그]\n${sourceBody.slice(0, PARITY_SOURCE_CHARS)}`,
         '사소한 표현 차이는 보고하지 마라 — 사실이 다르거나 결론이 뒤집힌 것만. 없으면 빈 배열.',
         'JSON 형식: {"problems":["항목N: 문제 한 줄(원문 근거 포함)"]}',
       ].join('\n'),
       { maxOutputTokens: 600, signal },
     );
-    return (j?.problems ?? []).map((p) => String(p ?? '').trim()).filter(Boolean).slice(0, 5);
-  } catch { return []; }
+    if (!j) return null;
+    return (j.problems ?? []).map((p) => String(p ?? '').trim()).filter(Boolean).slice(0, 5);
+  } catch { return null; }
 }
 
 export function parityToInfo(issues: string[]): FactGateInfo {

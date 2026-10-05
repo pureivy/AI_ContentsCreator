@@ -54,6 +54,11 @@ export function draftToFinalContent(d: BlogDraft): SeFinalContent {
   let heading = '';
   let level: 'HEADING1' | 'HEADING2' = 'HEADING1';
   let lines: string[] = [];
+  /** 프레임(>>>) 상자 뒤의 빈 줄(리뷰 2026-10-05) — 발행기는 상자 바로 아래 '빈 줄 없이' 이어진 목록 항목을 상자 안으로
+   *  흡수한다(naver_publish absorb_frame_items·parse_body_to_comps). 빈 줄을 다 버리면 초안에서 띄어 쓴 별도 목록까지
+   *  상자에 삼켜지므로, 상자 구간(>>> 줄 + 거기 붙은 목록 줄) 뒤의 빈 줄 하나만 남긴다(다른 빈 줄은 종전대로 버린다). */
+  let frameRun = false;
+  let blankAfterFrame = false;
 
   /** 누적 버퍼를 섹션으로 확정하고, '마지막 섹션 인덱스'를 반환(아무것도 없으면 -1 = 본문 맨 앞). */
   const flush = (): number => {
@@ -64,12 +69,17 @@ export function draftToFinalContent(d: BlogDraft): SeFinalContent {
       level = 'HEADING1';
     }
     lines = [];
+    frameRun = false;
+    blankAfterFrame = false;
     return sections.length - 1;
   };
 
   for (const raw of body.split('\n')) {
     const line = raw.trimEnd();
-    if (!line.trim()) continue; // 빈 줄 — python 이 어차피 건너뜀(줄 단위 문단)
+    if (!line.trim()) { // 빈 줄 — python 이 어차피 건너뜀(줄 단위 문단). 프레임 줄 뒤만 기억한다.
+      if (frameRun) blankAfterFrame = true;
+      continue;
+    }
     let m: RegExpMatchArray | null;
     if ((m = line.match(/^\s*\[IMAGE:[^\]]*\]\s*$/))) {
       if (slotIdx < slots.length) positions.push({ after_section: flush(), image_index: slotIdx++ });
@@ -90,7 +100,13 @@ export function draftToFinalContent(d: BlogDraft): SeFinalContent {
     // 구분선(---)·인용(>)·소스코드(```)·표(|)는 원문 마크다운 그대로 보존 — python(parse_body_to_comps)이
     // SE 리치 컴포넌트로 렌더한다. [IMAGE:] 만 제거하고 굵게(**)·리치 마커는 모두 유지.
     const text = cleanBody(line.trim());
-    if (text) lines.push(text);
+    if (text) {
+      if (blankAfterFrame) lines.push('');
+      // 상자 구간 — >>> 줄, 또는 빈 줄 없이 이어진 목록 꼴 줄(발행기 _FRAME_ITEM_RE 와 같은 꼴). 빈 줄이 끼면 구간이 닫힌다.
+      frameRun = /^>>>/.test(text) || (frameRun && !blankAfterFrame && /^(?:\d+[.)]|[-*•])\s+\S/.test(text));
+      blankAfterFrame = false;
+      lines.push(text);
+    }
   }
   flush();
   // 마커/소제목보다 슬롯이 많으면 남은 이미지를 본문 끝에(렌더러와 동일).

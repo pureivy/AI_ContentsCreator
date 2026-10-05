@@ -3,7 +3,7 @@ vi.mock('./agent', () => ({ microJSON: vi.fn() }));
 vi.mock('./visionCommon', () => ({ stdModel: vi.fn(() => 'claude-sonnet-5') }));
 import { microJSON } from './agent';
 import { stdModel } from './visionCommon';
-import { parityIssues, parityToInfo } from './standaloneQa';
+import { parityIssues, parityIssuesChecked, parityToInfo, PARITY_SOURCE_CHARS } from './standaloneQa';
 
 const m = microJSON as unknown as ReturnType<typeof vi.fn>;
 beforeEach(() => m.mockReset());
@@ -26,6 +26,22 @@ describe('parityIssues — 파생물 원문 정합(스펙 §2-4)', () => {
   it('실패는 빈 배열(fail-open)', async () => {
     m.mockRejectedValueOnce(new Error('x'));
     expect(await parityIssues('k', ['a'], 'b')).toEqual([]);
+  });
+  it('parityIssuesChecked — 판정 실패(무응답·예외)는 null, 생략(Claude 아님)은 빈 배열(2026-10-05 최종 원문 대조)', async () => {
+    m.mockResolvedValueOnce(null);
+    expect(await parityIssuesChecked('k', ['a'], 'b')).toBeNull();
+    m.mockRejectedValueOnce(new Error('x'));
+    expect(await parityIssuesChecked('k', ['a'], 'b')).toBeNull();
+    m.mockResolvedValueOnce({ problems: [] });
+    expect(await parityIssuesChecked('k', ['a'], 'b')).toEqual([]);
+    (stdModel as unknown as ReturnType<typeof vi.fn>).mockReturnValueOnce('llama3');
+    expect(await parityIssuesChecked('k', ['a'], 'b')).toEqual([]);
+  });
+  it('원문 창은 PARITY_SOURCE_CHARS(6000자) — 숏폼 수정 프롬프트도 같은 창을 쓴다', async () => {
+    expect(PARITY_SOURCE_CHARS).toBe(6000);
+    m.mockResolvedValueOnce({ problems: [] });
+    await parityIssues('k', ['a'], `${'가'.repeat(PARITY_SOURCE_CHARS)}꼬리`);
+    expect(String(m.mock.calls[0]![2])).not.toContain('꼬리');
   });
   it('parityToInfo', () => {
     expect(parityToInfo([]).status).toBe('pass');
