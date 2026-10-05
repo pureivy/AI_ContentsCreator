@@ -303,6 +303,11 @@ export interface Config {
    *  종전엔 점수·최신 순 첫 파일의 앞 구간이 늘 나갔다(실측: 감나무 3개 중 1개가 6편, 89편 전부 startSec 0).
    *  여분 중간 컷도 같은 파일의 남는 구간에서 나온다. SHORTS_MEDIA_ROTATE=false 킬스위치(종전 동작). */
   readonly shortsMediaRotate: boolean;
+  /** 카드 모션 v2(2026-10-05, 사장님 결정 — 직접 제작 모드는 안 쓰고 좋은 점만 결정적 카드로 이식).
+   *  대비 카드 순차 공개(✕→✓→선→정답 알약)·카드 머리줄(대본 문장 그대로, 고를 게 없으면 없음)·목록 글자 키움·
+   *  예비 동작·정착 넘김·안쪽 요소 시차·낭독 싱크 박자(낭독 mp3 의 쉼 위치 기준). 씬 길이는 안 바꾼다.
+   *  SHORTS_CARD_MOTION_V2=false 면 카드 필드(card) 자체를 안 넣는다 — 종전 카드 그대로(props 동일). */
+  readonly shortsCardMotionV2: boolean;
   /** macOS say 폴백 음색. */
   readonly voiceTtsVoice: string;
   readonly voiceSttModel: string;
@@ -566,6 +571,7 @@ export const CONFIG: Config = {
   shortsFlowCheck: envBool('SHORTS_FLOW_CHECK', true),
   shortsMidcut: envBool('SHORTS_MIDCUT', true),
   shortsMediaRotate: envBool('SHORTS_MEDIA_ROTATE', true),
+  shortsCardMotionV2: envBool('SHORTS_CARD_MOTION_V2', true),
   voiceTtsVoice: env('VOICE_TTS_VOICE', 'Yuna'),
   voiceSttModel: env('VOICE_STT_MODEL', 'mlx-community/whisper-large-v3-turbo'),
 

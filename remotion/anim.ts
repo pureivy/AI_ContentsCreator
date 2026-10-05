@@ -195,3 +195,56 @@ export function staggerPop(local: number, total: number, index: number, count: n
   const slot = (windowEnd - enter) / count;
   return popIn(local, fps, enter + slot * index);
 }
+
+// ── 카드 모션 v2(2026-10-05) ─────────────────────────────────────────────────
+// 직접 제작 모션그래픽 파일럿에서 읽기 좋았던 움직임(순차 공개·예비 동작·정착 넘김·안쪽 요소 시차)을 결정적 곡선으로
+// 옮긴다. 전부 프레임만 입력으로 받는 순수 함수다(스프링 물리 대신 닫힌 식 — 테스트로 넘김 폭을 못박을 수 있다).
+// 씬 길이와 무관하다 — 고정 길이 시퀀스 안의 transform·opacity 만 바꾼다.
+
+/** 정착 넘김 폭 — easeOutBack 의 s. 1.2 면 최대 ≈ +5.3% 넘겼다 돌아온다(1.7 은 +10% 로 출렁여 보였다). */
+export const SETTLE_OVERSHOOT = 1.2;
+/** easeOutBack(0..1 → 0..≈1.05..1) — 끝에서 살짝 넘겼다 자리 잡는다. 입력은 0..1 로 자른다. */
+export function backOut(t: number, s = SETTLE_OVERSHOOT): number {
+  const x = clamp01(t) - 1;
+  return 1 + (s + 1) * x * x * x + s * x * x;
+}
+/** 카드·행 정착(0 → 넘김 → 1) — delay 프레임부터 dur 프레임 동안. delay 전에는 0. */
+export function settleIn(local: number, delay: number, dur = 14): number {
+  if (local < delay) return 0;
+  return backOut((local - delay) / Math.max(1, dur));
+}
+/**
+ * 예비 동작 배율 — at 프레임에 새 요소가 뜨기 직전 pre 프레임 동안 1 → 1−depth 로 움츠렸다가, at 부터 back 프레임 동안
+ * 넘겼다 1 로 돌아온다. 정답이 '툭' 들어오기 전에 숨을 한 번 들이쉬는 셈이다. 그 밖에서는 정확히 1.
+ */
+export function anticipateScale(local: number, at: number, pre = 5, depth = 0.03, back = 10): number {
+  if (local >= at + back) return 1;
+  if (local >= at) return 1 - depth + depth * backOut((local - at) / Math.max(1, back));
+  if (pre <= 0 || local < at - pre) return 1;
+  return 1 - depth * smoothstep((local - (at - pre)) / pre);
+}
+/** 선 긋기 진행(0..1, 시작·끝 부드럽게) — 취소선·화살표·밑줄. */
+export function drawIn(local: number, start: number, dur = 8): number {
+  return smoothstep((local - start) / Math.max(1, dur));
+}
+/**
+ * 서버 박자 → 실제 등장 프레임(순수). 박자가 없거나 개수가 안 맞으면 fallback(종전 박자). 순서와 최소 간격(minGap)을
+ * 보장하고 floor 이전에는 뜨지 않게 민다. 서버가 이미 지킨 조건이지만 직접 만든 props 도 오므로 한 번 더 건다.
+ */
+export function resolveBeats(beats: readonly number[] | undefined, fallback: readonly number[], minGap = 10, floor = 0): number[] {
+  const src = beats && beats.length === fallback.length && beats.every((b) => Number.isFinite(b)) ? beats : fallback;
+  const out: number[] = [];
+  src.forEach((b, i) => out.push(Math.round(Math.max(b, i === 0 ? floor : out[i - 1]! + minGap))));
+  return out;
+}
+/** 종전 목록 박자(staggerPop 과 같은 슬롯 분배) — v2 목록의 fail-open 기본값. */
+export function listFallbackBeats(total: number, count: number, enter = 15, windowRatio = 0.6): number[] {
+  const windowEnd = Math.max(enter + 1, total * windowRatio);
+  const slot = (windowEnd - enter) / Math.max(1, count);
+  return Array.from({ length: count }, (_, i) => Math.round(enter + slot * i));
+}
+/** 종전 결론 행 박자(TakeawayCard 와 같은 산식) — v2 결론 카드의 fail-open 기본값. */
+export function takeawayFallbackBeats(total: number, count: number): number[] {
+  const stagger = Math.max(1, Math.floor((total * 0.55) / Math.max(1, count)));
+  return Array.from({ length: count }, (_, i) => 12 + i * stagger);
+}

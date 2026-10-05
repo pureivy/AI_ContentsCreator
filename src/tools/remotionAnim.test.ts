@@ -250,3 +250,60 @@ describe('isStaticStatUnit — 달력 월·순번은 카운트업 안 함(2026-1
     expect(A.isStaticStatUnit(undefined)).toBe(false);
   });
 });
+
+// ── 카드 모션 v2(2026-10-05) ─────────────────────────────────────────────────
+describe('backOut·settleIn — 정착 넘김(결정적 곡선)', () => {
+  it('0 에서 시작해 1 로 끝나고, 중간에 최대 ≈5% 넘긴다', () => {
+    expect(A.backOut(0)).toBeCloseTo(0, 6);
+    expect(A.backOut(1)).toBeCloseTo(1, 6);
+    let peak = 0;
+    for (let t = 0; t <= 1; t += 0.01) peak = Math.max(peak, A.backOut(t));
+    expect(peak).toBeGreaterThan(1.03);
+    expect(peak).toBeLessThan(1.07);
+  });
+  it('settleIn — delay 전 0, delay+dur 이후 정확히 1', () => {
+    expect(A.settleIn(4, 5, 14)).toBe(0);
+    expect(A.settleIn(5, 5, 14)).toBeCloseTo(0, 6);
+    expect(A.settleIn(19, 5, 14)).toBeCloseTo(1, 6);
+    expect(A.settleIn(400, 5, 14)).toBeCloseTo(1, 6);
+  });
+});
+describe('anticipateScale — 정답 직전 예비 동작', () => {
+  it('구간 밖 1, 등장 프레임에 1−depth 까지 움츠렸다 넘기며 1 로', () => {
+    expect(A.anticipateScale(0, 100)).toBe(1);
+    expect(A.anticipateScale(94, 100, 5, 0.03)).toBe(1);
+    expect(A.anticipateScale(100, 100, 5, 0.03)).toBeCloseTo(0.97, 6);
+    expect(A.anticipateScale(97, 100, 5, 0.03)).toBeLessThan(1);
+    expect(A.anticipateScale(97, 100, 5, 0.03)).toBeGreaterThan(0.97);
+    expect(A.anticipateScale(110, 100, 5, 0.03, 10)).toBe(1);
+    let peak = 0;
+    for (let f = 100; f < 110; f++) peak = Math.max(peak, A.anticipateScale(f, 100, 5, 0.03, 10));
+    expect(peak).toBeGreaterThan(1); // 넘김
+    expect(peak).toBeLessThan(1.01);
+  });
+});
+describe('drawIn — 선 긋기', () => {
+  it('시작 전 0, 끝 1, 단조 증가', () => {
+    expect(A.drawIn(9, 10, 8)).toBe(0);
+    expect(A.drawIn(18, 10, 8)).toBe(1);
+    expect(A.drawIn(13, 10, 8)).toBeLessThan(A.drawIn(15, 10, 8));
+  });
+});
+describe('resolveBeats — 서버 박자 vs 종전 박자', () => {
+  it('개수가 맞으면 서버 박자, 아니면 fallback', () => {
+    expect(A.resolveBeats([0, 133], [4, 16], 12)).toEqual([0, 133]);
+    expect(A.resolveBeats(undefined, [4, 16], 12)).toEqual([4, 16]);
+    expect(A.resolveBeats([3], [4, 16], 12)).toEqual([4, 16]);
+    expect(A.resolveBeats([0, Number.NaN], [4, 16], 12)).toEqual([4, 16]);
+  });
+  it('순서·최소 간격·floor 를 보장한다', () => {
+    expect(A.resolveBeats([0, 5, 6], [0, 0, 0], 10, 8)).toEqual([8, 18, 28]);
+  });
+  it('fallback 산식은 종전 컴포넌트와 같다', () => {
+    // staggerPop 의 delay(enter + slot·i)와 같은 시각
+    const total = 213, n = 4, slot = (total * 0.6 - 15) / n;
+    expect(A.listFallbackBeats(total, n)).toEqual([0, 1, 2, 3].map((i) => Math.round(15 + slot * i)));
+    // TakeawayCard 의 12 + i·floor(total·0.55/n)
+    expect(A.takeawayFallbackBeats(196, 2)).toEqual([12, 12 + Math.floor((196 * 0.55) / 2)]);
+  });
+});

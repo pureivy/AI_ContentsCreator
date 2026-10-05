@@ -1,0 +1,49 @@
+<!--
+  정보 카드 기준 스타일 "유리 + 알약" — Biz_Contents_Creator 확정 스타일 B(2026-10-01)를 나무 농원 파일럿용으로 옮김(2026-10-05).
+  흐린 반투명 유리 카드(backdrop blur + 흰 테두리) 안에:
+   - 대비(우리 compare): ✕ 흰 알약(오해·나쁜 쪽) / ✓ 강조색 알약(맞는 쪽, 흰 글자) — 라벨 + 작은 설명 줄
+   - 상황→행동(우리 cta takeaways): '상황' 흰 알약 → 가는 화살표 → '행동' 강조색 알약(흰 글자)
+   - 목록(우리 list): 번호 원(강조색) + 흰 알약 줄
+  색은 CSS 변수만(--ink --accent --accent2 --card), 선택자 접두는 씬 루트(.sNN)로 바꿔 쓴다. 애니메이션은 자유
+  (알약이 차례로 미끄러져 들어오기, 화살표 그려지기, 맞는 쪽 알약 살짝 튀기 등) — 모양·질감만 이 기준을 지킨다.
+  우리 그래픽 구역은 세로 600px 안팎(위는 제목 캘리, 아래는 라벨·구절 자막) — 카드 높이를 그 안에 맞춘다.
+-->
+<style>
+.ic-card{width:960px;padding:36px 36px 40px;border-radius:44px;background:rgba(255,255,255,.30);border:2px solid rgba(255,255,255,.75);-webkit-backdrop-filter:blur(28px) saturate(1.3);backdrop-filter:blur(28px) saturate(1.3);box-shadow:0 26px 60px rgba(20,40,20,.22),inset 0 1px 0 rgba(255,255,255,.9)}
+.ic-h{font-size:52px;font-weight:900;color:var(--ink);text-align:center;letter-spacing:-1px}
+.ic-row{display:flex;align-items:center;gap:16px;margin-top:24px}
+.ic-when{flex:0 0 auto;padding:18px 26px;border-radius:999px;background:rgba(255,255,255,.72);font-size:34px;font-weight:800;color:var(--ink)}
+.ic-arr{flex:0 0 auto;width:54px;height:24px}
+.ic-then{flex:1;padding:18px 28px;border-radius:999px;background:var(--accent);color:#fff;font-size:38px;font-weight:900;text-align:center;box-shadow:0 10px 24px rgba(0,0,0,.16)}
+.ic-num{flex:0 0 auto;width:64px;height:64px;border-radius:50%;background:var(--accent);color:#fff;font-size:34px;font-weight:900;display:flex;align-items:center;justify-content:center}
+.ic-item{flex:1;padding:16px 28px;border-radius:999px;background:rgba(255,255,255,.72);font-size:38px;font-weight:900;color:var(--ink)}
+.ic-mark{flex:0 0 auto;width:72px;height:72px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:40px;font-weight:900}
+.ic-mark.no{background:rgba(255,255,255,.72);color:var(--ink)}
+.ic-mark.ok{background:var(--accent);color:#fff}
+.ic-side{flex:1;padding:16px 30px;border-radius:36px}
+.ic-side.no{background:rgba(255,255,255,.72);color:var(--ink)}
+.ic-side.ok{background:var(--accent);color:#fff;box-shadow:0 10px 24px rgba(0,0,0,.16)}
+.ic-label{font-size:42px;font-weight:900;letter-spacing:-1px}
+.ic-note{font-size:30px;font-weight:700;opacity:.85;margin-top:4px}
+</style>
+
+<!-- 대비(compare) -->
+<div class="ic-card">
+  <div class="ic-h">향으로 구분해요</div>
+  <div class="ic-row"><div class="ic-mark no">✕</div><div class="ic-side no"><div class="ic-label">명자나무로 오해</div><div class="ic-note">작고 비슷해 보여서</div></div></div>
+  <div class="ic-row"><div class="ic-mark ok">✓</div><div class="ic-side ok"><div class="ic-label">모과나무는 향 퍼짐</div><div class="ic-note">익으면서 향이 퍼져요</div></div></div>
+</div>
+
+<!-- 상황→행동(cta takeaways) -->
+<div class="ic-card">
+  <div class="ic-h">보온 지금, 전정은 낙엽 후</div>
+  <div class="ic-row"><div class="ic-when">올해·작년 심은 나무</div><svg class="ic-arr" viewBox="0 0 54 24"><path d="M2 12H46M38 4l10 8-10 8" fill="none" stroke="var(--ink)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" opacity=".55"/></svg><div class="ic-then">밑동 보온</div></div>
+  <div class="ic-row"><div class="ic-when">잎 아직 있음</div><svg class="ic-arr" viewBox="0 0 54 24"><path d="M2 12H46M38 4l10 8-10 8" fill="none" stroke="var(--ink)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" opacity=".55"/></svg><div class="ic-then">전정 보류</div></div>
+</div>
+
+<!-- 목록(list) -->
+<div class="ic-card">
+  <div class="ic-h">어린나무부터 보온</div>
+  <div class="ic-row"><div class="ic-num">1</div><div class="ic-item">올해·작년에 심은 나무</div></div>
+  <div class="ic-row"><div class="ic-num">2</div><div class="ic-item">여러 겨울 넘긴 나무</div></div>
+</div>

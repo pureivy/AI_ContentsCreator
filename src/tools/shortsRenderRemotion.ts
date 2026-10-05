@@ -10,6 +10,7 @@ import { pruneDir, humanBytes } from '../util/prune';
 import { selectComposition, renderMedia, makeCancelSignal } from '@remotion/renderer';
 import { prepareScenes, buildSrt, resolveClipSrc, defaultSceneFx, fxSeed, FPS, probeDuration, probeImageSize, coverFocus, midcutAt, planSpareClips } from './shortsCommon';
 import type { ShortsScene, ShortsRenderResult, PreparedScene } from './shortsCommon';
+import { cardHeaderFor, cardElements, cardBeats, probeSpeechTimeline, alignSegments, titleBottomPx } from './shortsCardSync';
 import { CONFIG } from '../config';
 
 /**
@@ -79,6 +80,14 @@ export async function stageAndBuildProps(
     prepared.map((p) => ({ index: p.index, durationInFrames: p.durationInFrames, hasClip: !!resolveClipSrc(opts.clips?.[p.index], String(p.index + 1).padStart(2, '0')) })),
     sparePool,
   );
+  // 카드 모션 v2(2026-10-05) — 카드가 제목 캘리 아래 끝에서 시작하도록 캘리 실제 높이를 잰다. 못 재면 렌더러 기본 자리.
+  let cardTopPx: number | undefined;
+  if (CONFIG.shortsCardMotionV2 && opts.title?.imagePath && fs.existsSync(opts.title.imagePath)) {
+    try {
+      const bottom = titleBottomPx(await probeImageSize(opts.title.imagePath), opts.title.topPct ?? 5, opts.title.widthPct ?? 74);
+      if (bottom !== undefined) cardTopPx = bottom + 16;
+    } catch { /* 렌더러 기본 자리 */ }
+  }
   // staticFile 참조용 bare 파일명으로 복사
   const propScenes = await Promise.all(prepared.map(async (p) => {
     const nn = String(p.index + 1).padStart(2, '0');
@@ -122,6 +131,29 @@ export async function stageAndBuildProps(
     if (sc?.focus && p.imagePath && !videoSrc) {
       try { const sz = await probeImageSize(p.imagePath); focus = coverFocus(sc.focus, sz.w, sz.h) ?? undefined; } catch { /* 초점 없이 진행 */ }
     }
+    // 카드 모션 v2(2026-10-05, SHORTS_CARD_MOTION_V2) — 카드를 그리는 씬에만 card 필드를 단다. 머리줄은 대본 문장 그대로(cardHeaderFor),
+    // 박자는 낭독 mp3 의 쉼에 맞춘 요소별 등장 프레임(cardBeats). 타임라인을 못 재면 박자 없이(종전 박자) 간다.
+    // 끄면 필드 자체가 없다 — 렌더러가 종전 카드를 그린다(props 동일).
+    let card: { header?: string; beats?: number[]; topPx?: number } | undefined;
+    if (CONFIG.shortsCardMotionV2 && sc) {
+      const els = cardElements(sc);
+      if (els || (sc.kind === 'stat' && sc.stat)) {
+        const header = cardHeaderFor({ ...sc, screenText: p.screenText });
+        let beats: number[] | undefined;
+        let headerAt: number | undefined;
+        if ((els || header) && p.audioPath) {
+          const tl = await probeSpeechTimeline(p.audioPath);
+          if (tl) {
+            const segs = alignSegments(p.narration, tl);
+            if (els) beats = cardBeats(els, segs, p.durationInFrames);
+            // 머리줄은 그 문장을 말하는 순간에(2026-10-05 사장님 확정) — 씬 시작에 띄우면 ✓ 줄보다 4초쯤 먼저 답을 말해
+            // 차례 공개의 긴장이 사라졌다. 못 찾으면 종전대로 씬 시작.
+            if (header) headerAt = cardBeats([header], segs, p.durationInFrames)?.[0];
+          }
+        }
+        card = { ...(header ? { header } : {}), ...(headerAt !== undefined ? { headerAt } : {}), ...(beats ? { beats } : {}), ...(cardTopPx !== undefined ? { topPx: cardTopPx } : {}) };
+      }
+    }
     return {
       imageSrc, audioSrc, videoSrc, screenText: p.screenText, durationInFrames: p.durationInFrames,
       ...(clipFrames ? { clipFrames } : {}),
@@ -136,6 +168,7 @@ export async function stageAndBuildProps(
       ...(sc?.chart ? { chart: sc.chart } : {}),
       ...(sc?.takeaways ? { takeaways: sc.takeaways } : {}),
       ...(sc?.compare ? { compare: sc.compare } : {}),
+      ...(card ? { card } : {}),
       // 결론 예고(2026-09-18) — 오케스트레이터가 씬 2에만 넣는다(teaserFor). 없으면 필드도 없다.
       // 렌더 시점에도 게이트를 본다 — plan.json 에 남은 teaser 가 재조립·승계 경로에서 off 를 뚫지 않게(captionsForScene 과 같은 원칙).
       ...(CONFIG.shortsTeaser && sc?.teaser ? { teaser: sc.teaser } : {}),

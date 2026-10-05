@@ -6,19 +6,19 @@ import { Video } from '@remotion/media';
 import { CutFlash } from './CutFlash';
 import { sceneEnterFade } from './anim';
 import { KenBurnsImage } from './KenBurnsImage';
-import { KineticCaption, CAPTION_BOTTOM_PCT } from './KineticCaption';
+import { KineticCaption, CAPTION_BOTTOM_PCT, captionTopPx } from './KineticCaption';
 import { PhraseCaption } from './PhraseCaption';
 import { ProgressBar } from './ProgressBar';
-import { StatCountUp } from './StatCountUp';
-import { ListReveal } from './ListReveal';
+import { StatCountUp, StatCountUpV2 } from './StatCountUp';
+import { ListReveal, ListRevealV2 } from './ListReveal';
 import { QuoteCard } from './QuoteCard';
 import { TitleOverlay } from './TitleOverlay';
 import { SpotlightMask } from './SpotlightMask';
 import { ParticleDrift } from './ParticleDrift';
 import { BarChartGrow } from './BarChartGrow';
-import { TakeawayCard } from './TakeawayCard';
+import { TakeawayCard, TakeawayCardV2 } from './TakeawayCard';
 import { TeaserCard } from './TeaserCard';
-import { CompareCard } from './CompareCard';
+import { CompareCard, CompareCardV2 } from './CompareCard';
 import { FONT_FAMILY } from './loadFonts';
 import { pickFilmLook, filmLookEffects, type FilmLook } from './filmLook';
 import { pickCaptionMotion, type CaptionMotionName } from './captionMotion';
@@ -76,6 +76,16 @@ export const autoShortsSchema = z.object({
     captions: z.array(z.object({ text: z.string(), startFrame: z.number(), endFrame: z.number() })).optional(),
     /** 결론 예고(2026-09-18) — CTA 첫 조건. 서버가 본문 한 씬(가운데 카드 연출 없는 첫 씬)에만 넣는다. 있으면 첫 1.5초 상단 오른쪽에 작은 카드가 스친다. */
     teaser: z.string().optional(),
+    /** 카드 모션 v2(2026-10-05, SHORTS_CARD_MOTION_V2) — 있으면 대비·목록·결론·수치 카드를 v2 로 그린다. 없으면 종전 카드 그대로.
+     *  header: 대본 문장 그대로의 결론 한 줄(서버 cardHeaderFor), beats: 요소별 등장 프레임(낭독 싱크, 씬 로컬),
+     *  topPx: 제목 캘리 실제 아래 끝 + 여백(카드 무대 위 끝). */
+    card: z.object({
+      header: z.string().optional(),
+      /** 머리줄 등장 프레임(그 문장을 말하는 순간, 씬 로컬). 없으면 0. */
+      headerAt: z.number().optional(),
+      beats: z.array(z.number()).optional(),
+      topPx: z.number().optional(),
+    }).optional(),
   })),
   /** 카메라 드리프트 시드(2026-09-03) — 편·씬마다 다른 손 흔들림. 미지정=흔들림 없음(종전 궤도). */
   driftSeed: z.string().optional(),
@@ -102,7 +112,7 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
   /** 상단 제목 캘리의 topPct — 예고 카드가 그 예약 상자(26%) 아래에 앉는 기준. 캘리가 없으면 TitleOverlay 기본값(5)과 같은 자리. */
   titleTopPct?: number }> = ({ s, index, caption, driftSeed, look, capMotion, tech, techSeed, exitZoom, titleTopPct }) => {
   const f = useCurrentFrame();
-  const { fps } = useVideoConfig();
+  const { fps, width, height } = useVideoConfig();
   // 필름 룩 — 배경(이미지·클립)에만 건다. 자막·카드는 별도 레이어라 영향이 없다(글자는 보정 대상이 아니다).
   const baseEffects = look ? filmLookEffects(look) : undefined;
   // 흑백 인서트 — 이 씬만 색을 뺀다. '잠깐 다른 결로 넘어갔다 돌아오는' 편집 장치다.
@@ -157,6 +167,14 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
     wrap.transform = `${wrap.transform ?? ''} scale(${(1 + 0.3 * q).toFixed(3)})`.trim();
     if (q > 0.01) wrap.filter = `blur(${(6 * q).toFixed(1)}px)`;
   }
+  // 카드 모션 v2 — 카드 무대의 아래 끝은 이 씬 라벨의 위 끝에서 20px 위. 카드가 라벨·구절 자막을 덮지 않게.
+  const cardV2 = s.card ? {
+    ...(s.card.header ? { header: s.card.header } : {}),
+    ...(s.card.headerAt != null ? { headerAt: s.card.headerAt } : {}),
+    ...(s.card.beats ? { beats: s.card.beats } : {}),
+    ...(s.card.topPx != null ? { topPx: s.card.topPx } : {}),
+    bottomPx: captionTopPx(s.screenText, { bottomPct: labelBottomPct, fontPx: caption?.fontPx ?? 70, width, height, cta: s.kind === 'cta' }) - 20,
+  } : undefined;
   if (exitZoom) {
     const q = interpolate(f, [s.durationInFrames - 8, s.durationInFrames], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.in(Easing.cubic) });
     if (q > 0.01) {
@@ -218,12 +236,20 @@ const Scene: React.FC<{ s: AutoShortsProps['scenes'][number]; index: number; cap
       {/* 선택 기법 층 — 배경 위·자막 아래. 자막을 덮으면 읽기가 죽는다. */}
       {tech && techSeed ? <TechniqueLayer tech={tech} seed={techSeed} total={s.durationInFrames} {...(s.focus ? { focus: s.focus } : {})} /> : null}
       {tech === '인셋 확대창' && techSeed && s.imageSrc && s.focus ? <InsetZoom src={s.imageSrc} focus={s.focus} total={s.durationInFrames} seed={techSeed} {...(labelBottomPct != null ? { captionBottomPct: labelBottomPct } : {})} /> : null}
-      {s.kind === 'stat' && s.stat ? <StatCountUp stat={s.stat} total={s.durationInFrames} {...(driftSeed ? { seed: `${driftSeed}:${index}` } : {})} /> : null}
-      {s.kind === 'list' && s.items?.length ? <ListReveal items={s.items} total={s.durationInFrames} /> : null}
+      {s.kind === 'stat' && s.stat ? (s.card
+        ? <StatCountUpV2 stat={s.stat} total={s.durationInFrames} {...(driftSeed ? { seed: `${driftSeed}:${index}` } : {})} />
+        : <StatCountUp stat={s.stat} total={s.durationInFrames} {...(driftSeed ? { seed: `${driftSeed}:${index}` } : {})} />) : null}
+      {s.kind === 'list' && s.items?.length ? (cardV2
+        ? <ListRevealV2 items={s.items} total={s.durationInFrames} {...cardV2} />
+        : <ListReveal items={s.items} total={s.durationInFrames} />) : null}
       {s.kind === 'quote' && s.quote ? <QuoteCard quote={s.quote} total={s.durationInFrames} /> : null}
       {s.kind === 'chart' && s.chart ? <BarChartGrow chart={s.chart} total={s.durationInFrames} /> : null}
-      {s.kind === 'cta' && s.takeaways?.length ? <TakeawayCard takeaways={s.takeaways} total={s.durationInFrames} /> : null}
-      {s.kind === 'compare' && s.compare ? <CompareCard compare={s.compare} /> : null}
+      {s.kind === 'cta' && s.takeaways?.length ? (cardV2
+        ? <TakeawayCardV2 takeaways={s.takeaways} total={s.durationInFrames} {...cardV2} />
+        : <TakeawayCard takeaways={s.takeaways} total={s.durationInFrames} />) : null}
+      {s.kind === 'compare' && s.compare ? (cardV2
+        ? <CompareCardV2 compare={s.compare} total={s.durationInFrames} {...cardV2} />
+        : <CompareCard compare={s.compare} />) : null}
       {/* 결론 예고 — 첫 1.5초, 제목 캘리 예약 상자 아래·라벨 위 오른쪽. 서버가 넣은 씬에만, 가운데 카드 연출 씬은 제외(겹침).
           인셋 확대창(초점 있음)도 제외 — 창의 위 끝(≈644px)이 카드 띠(641~739px)와 겹친다. 기법은 렌더 시점에 정해지므로 여기서만 거를 수 있다. */}
       {s.teaser && !(s.kind && TEASER_CLASH_KINDS.has(s.kind)) && !(tech === '인셋 확대창' && s.imageSrc && s.focus) ? <TeaserCard teaser={s.teaser} {...(titleTopPct != null ? { titleTopPct } : {})} /> : null}

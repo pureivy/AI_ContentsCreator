@@ -1,6 +1,6 @@
 import React from 'react';
 import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, Easing } from 'remotion';
-import { fitTextOnNLines } from '@remotion/layout-utils';
+import { fitTextOnNLines, measureText } from '@remotion/layout-utils';
 import { captionWordStyle, type CaptionMotionName } from './captionMotion';
 import { FONT_NAME } from './loadFonts';
 
@@ -31,6 +31,27 @@ export const fitCaption = (text: string, maxFontSize: number, boxWidth: number, 
   } catch {
     return maxFontSize;
   }
+};
+
+/**
+ * 라벨 글자의 위 끝(px, 화면 위에서부터) — 카드 모션 v2(2026-10-05)의 카드가 이 선을 넘지 않게 자리를 잡는다.
+ * 아래 KineticCaption 과 같은 산식(크기 맞춤·상자 여백)을 따른다. 줄 수는 단어 폭 합으로 1·2줄을 가린다(브라우저 측정).
+ * 주의: paddingBottom 의 % 는 CSS 상 '폭' 기준이다 — bottomPct 50 은 화면 높이의 절반이 아니라 1080×0.5 = 540px.
+ * CTA(빨간 알약)는 상자 자체가 보이므로 상자 위 끝을, 그 밖은 글자 위 끝을 돌려준다. 측정 실패는 두 줄로 본다(보수적).
+ */
+export const captionTopPx = (text: string, o: { bottomPct?: number; fontPx: number; width: number; height: number; cta?: boolean }): number => {
+  const words = text.split(/\s+/).filter(Boolean);
+  const bottom = ((o.bottomPct ?? CAPTION_BOTTOM_PCT) / 100) * o.width;
+  if (!words.length) return o.height - bottom;
+  const size = fitCaption(text, o.fontPx, Math.max(200, o.width - CAPTION_SIDE_PAD));
+  const padX = o.cta ? 56 : 64, padY = o.cta ? 24 : 32;
+  let lines = 2;
+  try {
+    const w = words.reduce((a, wd) => a + measureText({ text: wd, fontFamily: FONT_NAME, fontSize: size, fontWeight: 800, validateFontIsLoaded: false }).width, 0)
+      + 14 * (words.length - 1);
+    lines = w > o.width - 2 * padX ? 2 : 1;
+  } catch { /* 두 줄로 본다 */ }
+  return o.height - bottom - (2 * padY + lines * size * 1.25) + (o.cta ? 0 : padY);
 };
 
 /** 키워드 토큰 매칭(2자 이상) — 자막 단어에 키워드 토큰이 포함되면 강조색. 조사 오탐 방지로 1자는 제외. */

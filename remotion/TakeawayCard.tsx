@@ -1,6 +1,7 @@
 import React from 'react';
 import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate } from 'remotion';
-import { popIn } from './anim';
+import { popIn, settleIn, smoothstep, anticipateScale, resolveBeats, takeawayFallbackBeats } from './anim';
+import { CardStage, CardHeader, headerHeight, headerFontPx, CARD_WIDTH } from './CardStage';
 
 /**
  * CTA 씬 결론 오버레이(2026-08-28 사용자 요청) — "무얼 심어라"를 화면에 띄운다.
@@ -55,5 +56,64 @@ export const TakeawayCard: React.FC<{
         })}
       </div>
     </AbsoluteFill>
+  );
+};
+
+// ── 카드 모션 v2(2026-10-05) ─────────────────────────────────────────────────
+// 행마다 조건 → (화살표) → 답 순서로 풀린다. 답은 행이 한 번 움츠렸다(예비 동작) 넘기며 튀어나온다 — 시선이 답에 꽂힌다.
+// 행 박자는 서버(card.beats), 없으면 종전 산식(12 + i·씬 55% 등분).
+
+// 종전(46·42·56)보다 답을 키운다 — 결론 씬은 라벨이 아래(구절 자막 없음)라 무대가 넉넉하다.
+const TK_WHEN = 46, TK_ARROW = 44, TK_THEN = 62;
+
+export const TakeawayCardV2: React.FC<{
+  takeaways: Array<{ when: string; then: string }>;
+  total: number; header?: string; headerAt?: number; beats?: number[]; topPx?: number; bottomPx: number;
+}> = ({ takeaways, total, header, headerAt, beats, topPx, bottomPx }) => {
+  const f = useCurrentFrame();
+  const { width } = useVideoConfig();
+  const cardW = Math.round(width * CARD_WIDTH);
+  const rows = takeaways.slice(0, 3);
+  const at = resolveBeats(beats, takeawayFallbackBeats(total, rows.length), 12, header && !headerAt ? 8 : 0);
+  // 한 행이 두 줄로 접힐 수 있다(flexWrap) — 높이는 넉넉히 두 줄 기준으로 잡지 않고, 긴 행만 두 줄로 센다.
+  const rowH = (t: { when: string; then: string }): number => {
+    const oneLine = (t.when.length * TK_WHEN + t.then.length * TK_THEN) * 0.95 + TK_ARROW + 2 * 18 < cardW - 68;
+    return (oneLine ? TK_THEN * 1.25 : TK_WHEN * 1.25 + TK_THEN * 1.25) + 40;
+  };
+  const est = (header ? headerHeight(headerFontPx(header, cardW)) : 0) + rows.reduce((a, t) => a + rowH(t), 0) + (rows.length - 1) * 16;
+  return (
+    <CardStage topPx={topPx} bottomPx={bottomPx} estHeight={est}>
+      {header ? <CardHeader text={header} at={headerAt ?? 0} /> : null}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {rows.map((t, i) => {
+          const s0 = at[i]!;
+          const answerAt = s0 + 10;
+          // 시차: 행 판·조건 → 화살표(+5) → 답(+10, 직전 4프레임 행이 움츠림).
+          const p = settleIn(f, s0, 14);
+          const pa = settleIn(f, s0 + 5, 10);
+          const pt = settleIn(f, answerAt, 12);
+          const pulse = anticipateScale(f, answerAt, 4, 0.025, 10);
+          return (
+            <div key={i} style={{
+              background: 'rgba(0,0,0,.72)', borderRadius: 22, padding: '20px 34px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 18, flexWrap: 'wrap',
+              textShadow: '0 2px 12px rgba(0,0,0,.6)',
+              opacity: smoothstep((f - s0) / 6),
+              transform: `translateY(${((1 - p) * 22).toFixed(2)}px) scale(${pulse.toFixed(4)})`,
+            }}>
+              <span style={{ fontSize: TK_WHEN, fontWeight: 600, color: 'rgba(255,255,255,.86)' }}>{t.when}</span>
+              <span style={{
+                fontSize: TK_ARROW, color: '#ffd54a', fontWeight: 800, display: 'inline-block',
+                opacity: smoothstep((f - s0 - 5) / 5), transform: `translateX(${((1 - pa) * -14).toFixed(2)}px)`,
+              }}>→</span>
+              <span style={{
+                fontSize: TK_THEN, fontWeight: 800, color: '#fff', display: 'inline-block',
+                opacity: Math.min(1, pt * 2), transform: `scale(${(0.7 + 0.3 * pt).toFixed(4)})`, transformOrigin: 'left center',
+              }}>{t.then}</span>
+            </div>
+          );
+        })}
+      </div>
+    </CardStage>
   );
 };
