@@ -111,8 +111,10 @@ export async function uploadShortsToYoutube(opts: {
   thumbnailPath?: string; signal?: AbortSignal;
   /** 예약 공개 시각(ISO) — 비공개→공개 방식의 안전망(PUBLISH_SAFETY_MIN). 없으면 종전대로 비공개 고정. */
   publishAt?: string;
-  /** 처음부터 공개로 올린다(2026-10-05, YOUTUBE_UPLOAD_PUBLIC_DIRECT) — 쇼츠 커버가 첫 장면으로 잡힌다(verifyPublicCover). */
+  /** 처음부터 공개로 올린다(2026-10-05, YOUTUBE_UPLOAD_PUBLIC_DIRECT) — 커버는 verifyPublicCover 로 확인. */
   privacy?: 'public' | 'private';
+  /** API 커버 지정(thumbnails.set)을 건너뛴다(2026-10-06 시험, YOUTUBE_SHORTS_SET_THUMBNAIL=false). */
+  skipThumbnail?: boolean;
 }): Promise<YtUploadResult> {
   try {
     const clientId = getSecret('YOUTUBE_OAUTH_CLIENT_ID') ?? '';
@@ -144,7 +146,11 @@ export async function uploadShortsToYoutube(opts: {
     if (!id) return { ok: false, error: '업로드 응답 이형(id 없음)' };
     // 커스텀 썸네일 설정(best-effort) — 쇼츠는 Data API(thumbnails.set)로 커버 지정이 안 돼 403 이 정상(영상 업로드는 성공).
     // 쇼츠 커버는 스튜디오/앱의 '동영상 프레임' 선택으로만 지정된다(첫 프레임=디자인 썸네일). 실패는 note 만.
-    const thumbnailError = await setThumbnail(access, id, opts.thumbnailPath, signal);
+    // 쇼츠 커버 시험(2026-10-06, YOUTUBE_SHORTS_SET_THUMBNAIL=false) — 공개 직행으로 바꾼 뒤에도 10-05 대추나무 편(s3EFmZEFp0o)은
+    // 10분 넘게 커버가 비어 앱에 중간 장면이 떴고 사장님이 손으로 고쳤다. 우리는 thumbnails.set 이 200(채널 인증)이라 커스텀 커버가
+    // oardefault 로 늦게 붙고, 지정이 안 되는 ok_asis1(403)은 유튜브가 첫 장면을 sardefault 로 바로 잡았다(8/8). 지정을 빼면 우리도
+    // sardefault 첫 장면이 되는지 본다 — 커버 판정(verifyPublicCover)이 sar/oar 둘 다 보므로 결과는 로그로 확인.
+    const thumbnailError = opts.skipThumbnail ? undefined : await setThumbnail(access, id, opts.thumbnailPath, signal);
     // 쇼츠 분류는 파일(세로 1080×1920·3분 이하)로 자동 판정 — URL 은 표시용이지만 쇼츠 플레이어로 열리게 /shorts/ 형식.
     return { ok: true, videoId: id, url: `https://youtube.com/shorts/${id}`, thumbnailError };
   } catch (e) {

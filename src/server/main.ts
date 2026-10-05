@@ -1896,6 +1896,8 @@ app.post('/shorts/:id/youtube', async (c) => {
       blogUrl: blogUrlForPiece(s.sourcePieceId), // 원본 블로그 링크 — 발행 시점 조회(사용자 확정 2026-07-31)
       thumbnailPath: ytCover ?? undefined,
       publishAt, privacy: direct ? 'public' : 'private',
+      // 공개 직행일 때만 커버 지정을 끈다(시험) — 비공개→공개 경로의 썸네일 복구(publishWhenReady)는 지정이 필요하다.
+      ...(direct && !CONFIG.youtubeShortsSetThumbnail ? { skipThumbnail: true } : {}),
     });
     if (!r.ok) return c.json({ error: r.error }, 502);
     shortsStore().update(id, { youtubeId: r.videoId, youtubeUrl: r.url, youtubeTs: new Date().toISOString() });

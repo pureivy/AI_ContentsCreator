@@ -199,6 +199,8 @@ export interface Config {
   readonly youtubePublishPublic: boolean;
   /** 처음부터 공개로 업로드(2026-10-05) — false 면 종전 비공개 업로드 + 공개 전환(publishWhenReady). youtubePublishPublic 이 켜져 있을 때만 의미. */
   readonly youtubeUploadPublicDirect: boolean;
+  /** 쇼츠 업로드 때 API 커버 지정(thumbnails.set)을 할지(2026-10-06). false=지정 안 함(시험 중) — 유튜브 자동 커버(첫 장면)를 본다. */
+  readonly youtubeShortsSetThumbnail: boolean;
   /** 쇼츠 성과 측정창(일) — 업로드 후 이 기간 매일 수집, 경과 시 강화 1회. */
   readonly shortsPerfDays: number;
   /** 쇼츠 총 길이 상한(초) — 대본 자수 예산·씬 수를 여기서 역산(사용자 확정 2026-08-14: 60초 이내). */
@@ -517,6 +519,7 @@ export const CONFIG: Config = {
   youtubePublishPublic: envBool('YOUTUBE_PUBLISH_PUBLIC', true),
   // 비공개→공개 전환은 쇼츠 커버를 중간 장면으로 만든다(10-05 진단, ok_asis1 대조) — 기본은 공개로 바로 올린다.
   youtubeUploadPublicDirect: envBool('YOUTUBE_UPLOAD_PUBLIC_DIRECT', true),
+  youtubeShortsSetThumbnail: envBool('YOUTUBE_SHORTS_SET_THUMBNAIL', false),
   shortsPerfDays: Math.max(1, envInt('SHORTS_PERF_DAYS', 7)),
   shortsMaxDurationSec: Math.min(180, Math.max(20, envInt('SHORTS_MAX_DURATION_SEC', 60))),
   shortsScenes: Math.min(8, Math.max(3, envInt('SHORTS_SCENES', 5))),
