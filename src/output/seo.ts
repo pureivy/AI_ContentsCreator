@@ -3,20 +3,13 @@
  * 네이버 C-Rank/DIA 는 비공개 + 과최적화 역효과 → 이 점수는 '가이드'(패널티 밴드)이지 극대화 타겟이 아니다.
  */
 import { findTemplateNumbers } from '../orchestrator/agent';
+import { hasKeyword, countKeyword } from '../content/keywordForm';
 
 export interface SeoCheck { label: string; ok: boolean; note?: string }
 export interface SeoResult { score: number; checklist: SeoCheck[] }
 
 /** 한국어 대략 글자수(공백 제외 아님 — 전체 길이). */
 function len(s: string): number { return (s || '').length; }
-
-/** 본문 내 키워드 출현 횟수(단순 substring — 형태소 분석 없음, 근사). */
-function countKeyword(body: string, kw: string): number {
-  if (!kw) return 0;
-  let n = 0, i = 0;
-  while ((i = body.indexOf(kw, i)) >= 0) { n++; i += kw.length; }
-  return n;
-}
 
 export function scoreSeo(input: {
   title: string;
@@ -32,7 +25,9 @@ export function scoreSeo(input: {
   // 제목
   const tl = len(title);
   add('제목 길이 적정(15~40자)', tl >= 15 && tl <= 40, `${tl}자`);
-  add('제목에 핵심 키워드 포함', !!kw && title.includes(kw));
+  // 키워드 판정은 띄어쓰기·조사를 무시한다(2026-10-05, keywordForm.ts) — 검색어 꼴 "대추나무 심는시기"와 글 꼴
+  // "대추나무 심는 시기는"을 같게 본다. 종전 includes 판정이 검색어 꼴을 문장 주어로 세우게 만든 원인이었다.
+  add('제목에 핵심 키워드 포함', !!kw && hasKeyword(title, kw));
 
   // 본문 구조
   const h2 = (body.match(/^##\s/gm) || []).length;
@@ -60,7 +55,7 @@ export function scoreSeo(input: {
     const next = paras[1];
     if (next && !next.startsWith('#') && next.split('\n').every((l) => /^\*\*.+\*\*[.!?…]?$/.test(l.trim()))) lead.push(next);
   }
-  add('첫 문단에 핵심 키워드', !!kw && lead.join('\n').replace(/[*_]/g, '').includes(kw));
+  add('첫 문단에 핵심 키워드', !!kw && hasKeyword(lead.join('\n'), kw));
   const occ = countKeyword(body, kw);
   const density = bl > 0 && kw ? (occ * kw.length) / bl * 100 : 0;
   add('키워드 밀도 0.5~2.5%(과최적화 경계)', density >= 0.5 && density <= 2.5, `${density.toFixed(1)}% (${occ}회)`);

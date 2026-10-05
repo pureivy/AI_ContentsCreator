@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { narrationStyleIssues, cardStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, blogStyleIssues, styleRevisionReject, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs, hookLengthIssues, closingSceneIssues, stripNextEpisode, announcesNextEpisode, isPromiseSentence, mentionsNextEpisode } from './styleLint';
+import { narrationStyleIssues, cardStyleIssues, hookKeywordLeadIssues, metaSummaryIssues, blogStyleIssues, calqueIssues, keywordFormIssues, styleRevisionReject, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs, hookLengthIssues, closingSceneIssues, stripNextEpisode, announcesNextEpisode, isPromiseSentence, mentionsNextEpisode } from './styleLint';
 
 describe('hookLengthIssues — 훅 20자 한 문장(2026-09-18)', () => {
   it('24자 초과면 지적', () => {
@@ -191,6 +191,20 @@ describe('blogStyleIssues — 블로그 본문 문체 4종(2026-08-27 권고 3)'
     const issues = blogStyleIssues(md);
     expect(issues.some((i) => i.startsWith('유보 중첩'))).toBe(true);
     expect(issues.some((i) => i.includes('경우가 많아서'))).toBe(true);
+  });
+
+  // 2026-10-05 — 작가 지침이 판단을 "보통 ~입니다"로 쓰라고 한다. 가능의 '수 있'은 약한 유보라 '보통' 하나와 겹쳐도 통과.
+  it('ⓒ "보통 … 수 있어요"(유보 1 + 가능 1)는 통과한다', () => {
+    const md = '가을에 심으면 보통 겨울 동안 뿌리가 흙에 붙을 시간을 벌 수 있어요.';
+    expect(blogStyleIssues(md).some((i) => i.startsWith('유보 중첩'))).toBe(false);
+  });
+  it('ⓒ 강한 유보 둘(아마 … 것 같)은 잡는다', () => {
+    expect(blogStyleIssues('아마 올해는 열매가 적을 것 같아요.').some((i) => i.startsWith('유보 중첩'))).toBe(true);
+    expect(blogStyleIssues('보통 이맘때는 뿌리가 마를 수도 있어요.').some((i) => i.startsWith('유보 중첩'))).toBe(true);
+  });
+  it("ⓒ '수 있'까지 합쳐 유보 3개면 잡는다", () => {
+    const md = '보통 지금 심을 수 있고 봄에도 옮길 수 있어요.'; // 유보 1('보통') + 가능 2('수 있') = 3
+    expect(blogStyleIssues(md).some((i) => i.startsWith('유보 중첩'))).toBe(true);
   });
 
   it('ⓒ 문장마다 유보 표현이 하나면 통과한다', () => {
@@ -465,5 +479,59 @@ describe('blogStyleIssues — 한 문장 한 줄 꼴(2026-10-05)', () => {
     const hamnida = Array.from({ length: 22 }, (_, i) => `${i + 1}번째 관찰입니다.`).join('\n');
     expect(blogStyleIssues(hamnida).some((x) => x.startsWith('합쇼체 비율'))).toBe(true);
     expect(blogStyleIssues(hamnida.replace(/\n/g, ' '))).toEqual(blogStyleIssues(hamnida));
+  });
+});
+
+// 2026-10-05 사장님 지적 — "10월 하순부터 11월 초순이 대추나무 심는시기의 마지막 가을 창입니다"(창=window 직역).
+describe('calqueIssues — 영어 직역 말투', () => {
+  it('기간을 뜻하는 "창"을 잡는다', () => {
+    expect(calqueIssues('10월 하순부터 11월 초순이 대추나무 심는시기의 마지막 가을 창입니다.')).toHaveLength(1);
+    expect(calqueIssues('**10월 하순부터 11월 초순이 가을 식재 창입니다.**')[0]).toContain('식재 창');
+    expect(calqueIssues('심는 창이 짧아요.')).toHaveLength(1);
+    expect(calqueIssues('봄 창은 3월 중순부터예요.')).toHaveLength(1);
+  });
+  it('창문·창고·창작·창가·창업은 잡지 않는다', () => {
+    for (const t of ['창문을 열어 두세요.', '겨울엔 창고에 들여놓으세요.', '창작 동화 같은 이야기예요.', '가을 창가에 화분을 두세요.', '봄 창업 박람회', '마지막 창의적인 시도']) {
+      expect(calqueIssues(t)).toEqual([]);
+    }
+  });
+  // 리뷰(2026-10-05) — 실내 식물 글의 진짜 창문이 걸렸다.
+  it('실내 창문 문맥("겨울 창을 열어", "봄 창 밖", "여름 창가", "겨울 창으로 드는 햇빛")은 잡지 않는다', () => {
+    for (const t of ['겨울 창을 열어 환기하세요.', '봄 창 밖이 따뜻해도 밤엔 들이세요.', '여름 창가는 너무 뜨거워요.', '겨울 창으로 드는 햇빛이면 충분해요.', '가을 창이 닫혀 있으면 습해요.', '겨울 창틀에 두지 마세요.']) {
+      expect(calqueIssues(t), t).toEqual([]);
+    }
+    expect(calqueIssues('가을 식재 창이에요.')).toHaveLength(1); // 시기 문맥은 그대로 잡는다
+  });
+  it("대체어로 '마지막'을 주지 않는다(리뷰 2026-10-05 — 브리프 금칙어)", () => {
+    const m = calqueIssues('가을 식재 창입니다.')[0]!;
+    expect(m).toContain('"늦어도 △월까지"');
+    expect(m).not.toContain('마지막 시기');
+  });
+  it('"윈도우"·"전략을 가져가다"를 잡고, 물건을 가져가는 문장은 두다', () => {
+    expect(calqueIssues('식재 윈도우가 짧습니다.')).toHaveLength(1);
+    expect(calqueIssues('봄 식재 전략을 가져가는 게 낫습니다.')).toHaveLength(1);
+    expect(calqueIssues('묘목은 뿌리째 가져가세요.')).toEqual([]);
+  });
+  it('blogStyleIssues 에 실린다(소제목·굵은 요약 포함)', () => {
+    const body = '**대추나무는 땅 상태로 확인해요.**\n**10월 하순부터 11월 초순이 가을 식재 창입니다.**\n\n## 마지막 가을 창, 땅으로 확인\n본문이에요.';
+    expect(blogStyleIssues(body).filter((x) => x.startsWith('영어 직역'))).toHaveLength(1);
+    expect(blogStyleIssues('## 창문 옆 화분\n창가에 둡니다.')).toEqual([]);
+  });
+});
+
+describe('keywordFormIssues — 검색어 꼴 키워드', () => {
+  it('띄어쓰기 빠진 검색어 꼴을 세고 바른 꼴을 알려 준다', () => {
+    const body = '**대추나무 심는시기는 땅 상태로 확인합니다.**\n\n## 대추나무 심는시기, 땅과 서리로\n10월 하순이 대추나무 심는시기의 마지막이에요.';
+    const r = keywordFormIssues(body, '대추나무 심는시기');
+    expect(r).toHaveLength(1);
+    expect(r[0]).toContain('3회');
+    expect(r[0]).toContain('"대추나무 심는 시기"');
+    expect(blogStyleIssues(body, '대추나무 심는시기').some((x) => x.startsWith('검색어 꼴'))).toBe(true);
+  });
+  it('바른 꼴·띄어쓰기가 원래 바른 키워드·키워드 없음은 통과', () => {
+    expect(keywordFormIssues('대추나무 심는 시기는 가을이에요.', '대추나무 심는시기')).toEqual([]);
+    expect(keywordFormIssues('라일락 꽃말의 유래', '라일락 꽃말')).toEqual([]);
+    expect(keywordFormIssues('대추나무 심는시기', '')).toEqual([]);
+    expect(blogStyleIssues('대추나무 심는시기')).toEqual([]);
   });
 });

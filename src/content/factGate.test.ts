@@ -5,7 +5,7 @@ import { microJSON } from '../orchestrator/agent';
 import {
   splitBodySentences, numericClaimSentences, buildEvidence, gateVerdict, formatGateFeedback, toFactGateInfo,
   extractFactClaims, judgeClaims, factGateBlog, runFactGateWithRepair,
-  isJudgmentSentence, hasHedge, hasEventMarkers, classifyClaim,
+  isJudgmentSentence, hasHedge, hasEventMarkers, classifyClaim, FACT_EXEMPT_RE,
   isHardClaim, HARD_CLAIM_KINDS,
   applySentenceRepairs, repairSentences,
   extractFactCard, FACT_CARD_HEADER, mergeSuppliedFacts, jargonRulesForEvidence,
@@ -237,6 +237,9 @@ describe('formatGateFeedback / toFactGateInfo', () => {
     expect(f).toContain('5cm 두께로 덮습니다');
     expect(f).toContain('잎이 진 뒤 거름');
     expect(f).toContain('새 사실·수치를 추가하지 마라');
+    // 2026-10-05 — 작가 재작성 경로도 '봅니다' 세탁·구체 주장 유보 금지
+    expect(f).toContain('"~라고 봅니다"로 바꿔 남기지 마라');
+    expect(f).toContain('확률("살아남을 확률이 높다") 주장은 지워라');
   });
   it('info 는 claims 를 뺀 요약만 담는다', () => {
     expect(toFactGateInfo(r)).toEqual({ status: 'hold', unsupported: r.unsupported, contradicted: r.contradicted, unverified: [], checkedTs: r.checkedTs });
@@ -353,7 +356,7 @@ describe('선분류(2026-08-26 hold 율 저감) — 3런 실측 문장', () => {
   });
   it('classifyClaim 우선순위: event > judgment > hedged > claim', () => {
     expect(classifyClaim({ text: '지난해 우리 밭에서는 그렇게 봤습니다.', kind: 'experience' })).toBe('event');
-    expect(classifyClaim({ text: '모자란 쪽이 안전하다고 봅니다.', kind: 'general' })).toBe('judgment');
+    expect(classifyClaim({ text: '병든 잎과 떨어진 열매를 치우는 일이 먼저예요.', kind: 'general' })).toBe('judgment');
     expect(classifyClaim({ text: '흔히 양분 쪽입니다.', kind: 'pest' })).toBe('hedged');
     expect(classifyClaim({ text: '가을에 양을 줄입니다.', kind: 'treatment' })).toBe('claim');
     expect(classifyClaim({ text: '무거우면 그게 신호예요', kind: 'experience' })).toBe('claim'); // 표지 없는 experience 는 일반 주장
@@ -364,7 +367,7 @@ describe('factGateBlog — 선분류 반영', () => {
   it('판단문은 판정에 보내지 않고 filtered 에 세며, 유보문은 판정이 unsupported 여도 hedged_general, 표지 없는 experience 는 일반 판정', async () => {
     mocked
       .mockResolvedValueOnce({ claims: [
-        { text: '모자란 쪽이 안전하다고 봅니다.', kind: 'general' },
+        { text: '병든 잎을 치우는 일이 먼저예요.', kind: 'general' },
         { text: '흔히 양분 쪽입니다.', kind: 'pest' },
         { text: '무거우면 그게 신호예요', kind: 'experience' },
         { text: '가을에 양을 줄입니다.', kind: 'treatment' },
@@ -372,10 +375,10 @@ describe('factGateBlog — 선분류 반영', () => {
       .mockResolvedValueOnce({ verdicts: [{ index: 1, status: 'unsupported' }, { index: 2, status: 'supported', evidence: '브리프' }, { index: 3, status: 'unsupported' }] });
     const r = await factGateBlog({ model: 'm', body: 'x', evidence: 'e' });
     const judgeUser = String(mocked.mock.calls[1]![2]);
-    expect(judgeUser).not.toContain('안전하다고 봅니다');           // 판단문 제외
+    expect(judgeUser).not.toContain('치우는 일이 먼저');           // 판단문(순수 권유) 제외
     expect(judgeUser).toContain('(유보)');                          // 유보문은 모순 여부만
     // Fix round 4(C3) — filtered 는 개수가 아니라 걸러낸 문장 텍스트(개수 = 배열 길이)
-    expect(r.filtered).toEqual({ judgment: ['모자란 쪽이 안전하다고 봅니다.'], hedged: ['흔히 양분 쪽입니다.'] });
+    expect(r.filtered).toEqual({ judgment: ['병든 잎을 치우는 일이 먼저예요.'], hedged: ['흔히 양분 쪽입니다.'] });
     expect(r.claims.find((c) => c.text.includes('흔히'))!.status).toBe('hedged_general');
     expect(r.claims.find((c) => c.text.includes('무거우면'))!.status).toBe('supported');
     expect(r.claims.find((c) => c.text.includes('무거우면'))!.kind).toBe('general');
@@ -391,7 +394,7 @@ describe('factGateBlog — 선분류 반영', () => {
     expect(r.contradicted).toHaveLength(1);
   });
   it('전부 판단문이면 판정 콜 없이 pass', async () => {
-    mocked.mockResolvedValueOnce({ claims: [{ text: '자리부터 정한다고 봅니다.', kind: 'general' }] });
+    mocked.mockResolvedValueOnce({ claims: [{ text: '자리부터 정하는 일이 먼저예요.', kind: 'general' }] });
     const r = await factGateBlog({ model: 'm', body: 'x', evidence: 'e' });
     expect(r.status).toBe('pass'); expect(mocked).toHaveBeenCalledTimes(1);
   });
@@ -497,12 +500,16 @@ describe('applySentenceRepairs — 문장 단위 치환(순수)', () => {
 });
 
 describe('repairSentences — 프롬프트·검증', () => {
-  it('규칙(새 사실 금지·hedge/judgment/delete)이 프롬프트에 있고 잘못된 index/action 은 버린다', async () => {
-    mocked.mockResolvedValueOnce({ repairs: [{ index: 1, action: 'hedge', replacement: 'a.' }, { index: 9, action: 'hedge', replacement: 'b.' }, { index: 2, action: 'rewrite', replacement: 'c.' }] });
+  // 2026-10-05 — judgment("~라고 봅니다"로 바꾸기)는 무근거 주장 세탁 통로라 LLM 선택지에서 뺐다(hedge·delete 만).
+  it('규칙(새 사실 금지·hedge/delete)이 프롬프트에 있고 잘못된 index/action·judgment 는 버린다', async () => {
+    mocked.mockResolvedValueOnce({ repairs: [{ index: 1, action: 'hedge', replacement: 'a.' }, { index: 9, action: 'hedge', replacement: 'b.' }, { index: 2, action: 'judgment', replacement: 'c라고 봅니다.' }] });
     const r = await repairSentences('m', 'body', ['s1', 's2']);
     expect(r).toEqual([{ index: 1, action: 'hedge', replacement: 'a.' }]);
     const user = String(mocked.mock.calls[0]![2]);
-    expect(user).toContain('새 사실·수치'); expect(user).toContain('hedge'); expect(user).toContain('judgment'); expect(user).toContain('delete');
+    expect(user).toContain('새 사실·수치'); expect(user).toContain('hedge'); expect(user).toContain('delete');
+    expect(user).toContain('"hedge|delete"');
+    expect(user).toContain('"~라고 봅니다/~로 보입니다"로 바꿔 남기지 마라');
+    expect(user).toContain('확률("살아남을 확률이 높다") 주장은 hedge 하지 말고 delete');
   });
 });
 
@@ -875,7 +882,9 @@ describe('extractFactCard', () => {
   });
   it('헤더 문구', () => {
     expect(FACT_CARD_HEADER).toContain('이 목록 밖의 사실');
-    expect(FACT_CARD_HEADER).toBe('[사실 카드 — 브리프에서 근거가 확인된 사실. 이 목록 밖의 사실·수치·시기·약제는 쓰지 말고, 꼭 필요하면 유보어("대개/흔히")를 붙인 일반론이나 판단문("~라고 봅니다")으로만 말하라]');
+    // 2026-10-05 — '판단문("~라고 봅니다")으로만 말하라'를 뺐다(무근거 주장을 '봅니다'로 감싸 남기는 통로).
+    expect(FACT_CARD_HEADER).toBe('[사실 카드 — 브리프에서 근거가 확인된 사실. 이 목록 밖의 사실·수치·시기·약제는 쓰지 말고, 꼭 필요하면 유보어("보통/대개")를 붙인 원예 통설 수준 일반론으로만 말하고, 근거 없는 구체 주장·비교는 쓰지 마라]');
+    expect(FACT_CARD_HEADER).not.toContain('봅니다');
   });
 });
 
@@ -969,5 +978,41 @@ describe('buildEvidence — 편집 확정 규칙 블록', () => {
     expect(picked.some((r) => r.includes('일상어'))).toBe(true);
     expect(picked.some((r) => r.includes('원예 용어'))).toBe(true);
     expect(picked.join('\n')).not.toContain('접목묘가 더 빨리 자랍니다');
+  });
+});
+
+// 2026-10-05 — '~라고 봅니다' 세탁 통로 차단. 휴지통 대추나무 초안 실측: 1차에서 무근거였던 "…안전한 선택이에요"가 표적 수정으로
+// "…안전한 선택이라고 봅니다"가 돼 filtered.judgment 로 통과했다. 쇼츠 트리밍 보호(isJudgmentSentence)는 그대로 둔다.
+describe('사실 게이트 — 판단 유보 꼴은 판정 면제가 아니다(2026-10-05)', () => {
+  const laundered = '심은 날짜가 11월 중순을 넘어간다면 가을보다 이듬해 3월 중순이 안전한 선택이라고 봅니다.';
+  it('"~라고 봅니다"·"게 안전합니다"·"편이 낫습니다" 문장은 판정 대상(claim)이다', () => {
+    expect(classifyClaim({ text: laundered, kind: 'time' })).toBe('claim');
+    expect(classifyClaim({ text: '감나무 가을 거름은 모자란 쪽이 안전하다고 봅니다.', kind: 'general' })).toBe('claim');
+    expect(classifyClaim({ text: '화분은 마당 나무와 같은 기준으로 넣지 않는 게 안전합니다.', kind: 'general' })).toBe('claim');
+    expect(classifyClaim({ text: '봄까지 기다리는 편이 낫습니다.', kind: 'general' })).not.toBe('judgment'); // '편이' 유보문 — 판정기가 모순을 본다
+    expect(FACT_EXEMPT_RE.test(laundered)).toBe(false);
+  });
+  it('순수 권유·채널 자기서술은 여전히 면제', () => {
+    for (const s of ['벌레 쪽부터 보는 편입니다.', '병든 잎과 떨어진 열매를 치우는 일이 먼저예요.', '이 시기에 타이머부터 손봐야 합니다', '계절 단위로 이어서 기록하고 있어요'])
+      expect(classifyClaim({ text: s, kind: 'general' }), s).toBe('judgment');
+  });
+  it('쇼츠 트리밍 보호용 isJudgmentSentence 는 그대로 "봅니다"를 판단 문장으로 본다', () => {
+    expect(isJudgmentSentence(laundered)).toBe(true);
+  });
+  it('주장 추출 프롬프트는 "~라고 봅니다"를 제외하지 않고 비교·확률 주장을 뽑게 한다', async () => {
+    mocked.mockResolvedValueOnce({ claims: [] });
+    await extractFactClaims('m', '본문', []);
+    const user = String(mocked.mock.calls[0]![2]);
+    expect(user).toContain('비교·확률·안전 주장("~보다 성공률이 높다", "~하는 쪽이 살아남을 확률이 높다"');
+    expect(user).not.toContain('1인칭 판단·관점·권유("~라고 봅니다"');
+  });
+  it('판정 면제가 사라진 문장은 판정 콜로 간다(무근거면 hold)', async () => {
+    mocked
+      .mockResolvedValueOnce({ claims: [{ text: laundered, kind: 'time' }] })
+      .mockResolvedValueOnce({ verdicts: [{ index: 1, status: 'unsupported' }] });
+    const r = await factGateBlog({ model: 'm', body: laundered, evidence: 'e' });
+    expect(String(mocked.mock.calls[1]![2])).toContain('안전한 선택이라고 봅니다');
+    expect(r.status).toBe('hold');
+    expect(r.filtered?.judgment).toEqual([]);
   });
 });

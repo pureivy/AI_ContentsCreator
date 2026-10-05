@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderHtml, renderMarkdown, stripEmoji } from './render';
+import { renderHtml, renderMarkdown, stripEmoji, META_LABEL_MD } from './render';
 import type { BlogDraft } from './formatter';
 
 // 네이버 블로그 렌더 — 이모지 제거·완성 HTML 문서·[IMAGE:] 마커 위치 이미지 삽입이 결정적으로 동작해야 한다.
@@ -131,5 +131,19 @@ describe('renderHtml — readySlots(실재 파일 기준 슬롯별 판정)', () 
   it('readySlots 미지정이면 종전 imagesReady 동작 그대로(하위 호환)', () => {
     expect(renderHtml(d, { imagesReady: true })).toContain('src="images/blog-image-02.png"');
     expect(renderHtml(d, { imagesReady: false })).not.toContain('<img');
+  });
+});
+
+// 2026-10-05 — 메타가 미리보기 맨 위에 '> 인용'으로 그려져 사장님이 메타 문장("…마지막 가을 창입니다")을 본문 첫 문장으로 읽었다.
+// 메타는 발행 본문에 들어가지 않는다 — 이름표를 단 칸으로 뗀다.
+describe('메타는 본문이 아니다(2026-10-05)', () => {
+  it('draft.md: 메타를 인용(>)이 아니라 이름표 줄 + 구분선으로 그린다', () => {
+    const md = renderMarkdown({ ...base, bodyMarkdown: '본문 첫 줄.' });
+    expect(md).not.toContain('> 장마철 집안 습도를');
+    expect(md).toContain(`${META_LABEL_MD} 장마철 집안 습도를 낮추는 실전 방법.\n\n---\n\n본문 첫 줄.`);
+  });
+  it('draft.html: 리드 칸에 "검색 설명(메타 · 본문 아님)" 이름표', () => {
+    const html = renderHtml({ ...base, bodyMarkdown: '본문.' });
+    expect(html).toContain('<div class="lead"><span class="lead-label">검색 설명(메타 · 본문 아님)</span>장마철 집안 습도를 낮추는 실전 방법.</div>');
   });
 });

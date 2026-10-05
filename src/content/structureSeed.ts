@@ -130,9 +130,12 @@ const pickWeighted = <T>(items: ReadonlyArray<readonly [T, number]>, r: number):
  * 등록하거나 (b) 이행 배선이 생길 때까지 teaser 를 상수 false 로 고정한다(선택 블록은 표·체크리스트 2택).
  * (b)는 '선택 블록 중 정확히 2개만 true' 불변식을 다시 써야 하므로 배선(a) 쪽이 자연스럽다.
  */
-export function pickStructureSeed(rand: () => number): StructureSeed {
-  const thesisQuote = pick(THESIS, rand());
-  const openers = pickWeighted(OPENER_WEIGHTS, rand());
+export function pickStructureSeed(rand: () => number, opts: { boldSummary?: boolean } = {}): StructureSeed {
+  // 첫머리 굵은 요약(편집 확정 규칙, 2026-10-05)이 켜진 런 — 요약 두 줄이 이미 답이라, '답 먼저' 도입과 도입 직후 중심 명제
+  // 인용까지 붙으면 첫 소제목 앞에 같은 답이 세 번 쌓인다(대추나무 초안: 메타·요약·도입이 같은 날짜). 두 후보를 빼고 뽑는다.
+  // rand() 소비 순서·횟수는 그대로다 — 끈 런(boldSummary 없음)의 시드는 종전과 바이트 단위로 같다.
+  const thesisQuote = pick(opts.boldSummary ? THESIS.filter((t) => t !== 'after-hook') : THESIS, rand());
+  const openers = pickWeighted(opts.boldSummary ? OPENER_WEIGHTS.filter(([k]) => k !== 'answer') : OPENER_WEIGHTS, rand());
   // 선택 블록은 후보에서 '서로 다른 둘'을 뽑는 방식 — 정확히 2개 true 가 구조적으로 보장된다.
   // 도입이 답 먼저면 빠른 답 블록은 후보에서 뺀다(같은 답 두 번). 2026-10-02 전에는 '끌 하나'(3택) 방식이었다.
   const pool: OptionalBlock[] = openers === 'answer'
@@ -158,16 +161,16 @@ export function pickStructureSeed(rand: () => number): StructureSeed {
 }
 
 /** 킬스위치를 본 시드 — off 면 고정 시드 사본(호출부가 변형해도 상수가 오염되지 않게 복사). */
-export function currentStructureSeed(rand: () => number = Math.random): StructureSeed {
-  return CONFIG.structureVariety ? pickStructureSeed(rand) : { ...FIXED_STRUCTURE_SEED };
+export function currentStructureSeed(rand: () => number = Math.random, opts: { boldSummary?: boolean } = {}): StructureSeed {
+  return CONFIG.structureVariety ? pickStructureSeed(rand, opts) : { ...FIXED_STRUCTURE_SEED };
 }
 
 /**
  * 새 집필 런의 시드 확정 — 뽑아서 sessions/<runId>/structure.json 에 남긴다(리비전이 승계).
  * 영속화 실패는 fail-open(부가 기록 실패로 런이 죽으면 안 된다, 스펙 §8).
  */
-export function resolveStructureSeed(runId: string): StructureSeed {
-  const seed = currentStructureSeed();
+export function resolveStructureSeed(runId: string, opts: { boldSummary?: boolean } = {}): StructureSeed {
+  const seed = currentStructureSeed(Math.random, opts);
   try { writeStructureSeed(runId, seed); } catch { /* fail-open */ }
   return seed;
 }
@@ -218,9 +221,11 @@ const HEADING_TEXT: Record<HeadingStyle, string> = {
   sentence: '완결 서술문 — 소제목만 읽어도 그 섹션의 답이 보이게 한 문장으로 쓴다',
   numbered: '번호 — "## 1. …", "## 2. …"처럼 읽는 순서 번호를 붙인 짧은 명사구로 쓴다(모든 H2에 연속 번호). '
     + '번호는 읽는 순서 안내일 뿐 "N가지" 쪼개기가 아니다 — 본문·제목에서 "N가지"로 약속하지 마라',
-  question: '질문 — 독자가 검색창에 칠 법한 질문으로 쓰고("…언제 하나요?"), 소제목 바로 아래 첫 문장이 그 질문의 답이다',
-  keyword: '키워드 구 — 핵심 대상에 하위 주제어(시기·방법·간격·온도·지역·크기 같은 것)를 붙인 명사구로 쓴다'
-    + '(예: "○○ 심는 시기", "○○ 지역별 월동 방법"). 하위 주제어는 소제목마다 다르게, 핵심 키워드 정확 표기는 소제목 1곳까지(나머지는 변형)',
+  // 2026-10-05 — "뭐가 다릅니까?", "어디를 봅니까?"처럼 합쇼체 의문문이 나왔다(10-02~04 시드 런 2/6편). 말하듯 묻는 꼴로 못박는다.
+  question: '질문 — 독자가 실제로 묻는 말로 쓰고 "~할까요?/~나요?/~인가요?"처럼 말하듯 끝낸다("…언제 심나요?", "지금 심어도 될까요?" — "~습니까?" 금지), 소제목 바로 아래 첫 문장이 그 질문의 답이다',
+  // 2026-10-05 — 대추나무 초안(keyword×6): 소제목 6개 중 4개에 수종명, 2개에 검색어 꼴 키워드. 수종명 2곳·키워드 1곳으로 묶는다.
+  keyword: '주제어 구 — 그 섹션이 다루는 하위 주제어(시기·방법·간격·온도·지역·크기 같은 것)를 담은 짧은 구로 쓴다'
+    + '(예: "○○와 △△, 언제 할까", "△△별 ○○ 방법" — 자리표시만 두고 이번 글의 하위 주제어로 채워라). 하위 주제어는 소제목마다 다르게, 핵심 키워드는 바른 띄어쓰기 꼴로 소제목 1곳까지·수종 이름은 소제목 2곳까지(나머지는 수종명 없이 — 검색어 꼴 "○○ 심는시기"처럼 붙여 쓰지 마라)',
 };
 
 const THESIS_TEXT: Record<ThesisQuotePos, string> = {
@@ -235,7 +240,7 @@ const THESIS_TEXT: Record<ThesisQuotePos, string> = {
  * 말한다 — 리비전은 잘 쓰인 구조를 보존하는 것이 목적이라, 구성 지시문을 그대로 넣으면 재구성을 부른다.
  */
 export function structureBlock(seed: StructureSeed, opts: { revise?: boolean } = {}): string {
-  // 페르소나(company.yaml content_lead)의 [도입부 — 첫 3문장 규칙]·"H2 3~5개"·[마무리 — 이웃 전환](예고)이 매 런
+  // 페르소나(company.yaml content_lead)의 [도입부](2026-10-05 첫 3문장 규칙 삭제 — 지금은 이 블록의 도입 유형을 따르라고만 한다)·"H2 3~5개"·[마무리 — 이웃 전환](예고)이 매 런
   // 시스템 프롬프트로 같은 꼴을 지시한다 — 이 블록이 이번 글에 한해 그보다 우선함을 명시한다(2026-10-02).
   const head = opts.revise
     ? '[이번 글 구조] 이 글의 골격은 아래와 같다 — 개정하면서 이 골격을 유지하고, 요청과 무관한 구조 변경은 하지 마라.'
@@ -243,7 +248,9 @@ export function structureBlock(seed: StructureSeed, opts: { revise?: boolean } =
       + '작가 기본 지침의 도입부 규칙·소제목 개수와 형식·마무리 예고 규칙과 겹치면 이 블록이 우선한다.';
   // 2026-10-02 추가 필드는 구 기록에 없다 — 있을 때만 줄을 낸다(없는 골격을 '유지하라'고 말하면 재구성 지시가 된다).
   const headingLine = seed.headingStyle && HEADING_TEXT[seed.headingStyle]
-    ? `- 소제목(## H2): ${seed.headings ? `정확히 ${seed.headings}개(마무리 포함), ` : ''}형식은 ${HEADING_TEXT[seed.headingStyle]}`
+    ? `- 소제목(## H2): ${seed.headings ? `정확히 ${seed.headings}개(마무리 포함), ` : ''}형식은 ${HEADING_TEXT[seed.headingStyle]}. `
+      // 2026-10-05 — 형식과 무관하게 소제목마다 수종명·키워드를 붙이던 습관(대추나무 초안 6개 중 4개) — styleLint 소제목 검사와 같은 기준.
+      + '어느 형식이든 핵심 키워드는 소제목 1곳까지, 수종 이름은 2곳까지 — 소제목은 독자가 실제로 묻거나 찾는 말로 쓴다'
     : '';
   const quickLine = typeof seed.quickAnswer === 'boolean'
     ? `- 빠른 답: ${seed.quickAnswer
@@ -271,13 +278,13 @@ export function structureBlock(seed: StructureSeed, opts: { revise?: boolean } =
 
 /**
  * 제목 형식 지시(2026-10-02) — 포장 단계(naverBlog.packageNaverBlog)가 제목 후보 1순위(=발행 제목)에 건다.
- * 공통 제약: 핵심 키워드 정확 표기 포함(seo.ts '제목에 핵심 키워드 포함'이 includes 판정)·15~40자·본문이 약속하지 않은 것 금지.
+ * 공통 제약: 핵심 키워드 포함(seo.ts '제목에 핵심 키워드 포함'은 띄어쓰기·조사를 무시한다 — 2026-10-05, 바른 띄어쓰기 꼴로 쓴다)·15~40자·본문이 약속하지 않은 것 금지.
  * 키워드·연관어 나열은 어느 형식에서도 금지 — 네이버는 키워드 나열 제목을 저품질로 본다.
  * 예시는 ○○ 자리표시로만 둔다 — 실제 수종 예시 구절은 모델이 그대로 베낀다(2026-09-18 마가목 소제목 사고).
  */
 export const TITLE_FORM_TEXT: Record<TitleForm, string> = {
   twist: '관점형 — 핵심 키워드 뒤 쉼표, 이어서 이 글의 관점·이유를 담은 짧은 문장(예: "○○ 가지치기, 잎이 진 뒤로 미루는 이유")',
-  question: '질문형 — 독자가 실제로 검색할 법한 질문을 물음표로 끝낸다. 핵심 키워드를 질문 안에 그대로 넣는다(예: "○○ 가지치기, 언제 해야 하나요?"). 답은 제목에 쓰지 않는다',
+  question: '질문형 — 독자가 실제로 검색할 법한 질문을 물음표로 끝낸다. 핵심 키워드를 바른 띄어쓰기 꼴로 질문 안에 넣는다(예: "○○ 가지치기, 언제 해야 하나요?"). 답은 제목에 쓰지 않는다',
   answer: '답 먼저형 — 핵심 키워드와 본문의 구체적인 답(시기·기간·수치·조건)을 그대로 담는다(예: "○○ 심는 시기, 남부 △월·중부 △월"). '
     + '본문에 그런 구체 값이 없으면 지어내지 말고 질문형으로 쓴다',
   variant: '정보형 — 핵심 키워드에 자연스러운 하위 주제어 하나를 이어 붙인 담백한 제목(예: "○○ 가지치기 시기와 방법", "○○ 심는 간격과 깊이"). '

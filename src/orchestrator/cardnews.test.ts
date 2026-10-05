@@ -2,8 +2,15 @@ import { describe, it, expect } from 'vitest';
 import {
   applyCardRevision, applyProofread, buildCardImagePrompt, buildSlideQaPrompt, buildSlideTranscribePrompt,
   coverIncludesKeyword, extractDesignFromDraftPrompt, findSlidesWithChars, parseSlideNosFromFeedback,
-  resolveForcedPreset, stripForDiff, formatRecentEndings, cardVoiceGuide, cardStructureLines, ctaSlideIssues } from './cardnews';
+  resolveForcedPreset, stripForDiff, formatRecentEndings, cardVoiceGuide, cardStructureLines, ctaSlideIssues,
+  CARD_HEADLINE_MAX_CHARS, CARD_BODY_MAX_LINES, CARD_BODY_MAX_CHARS, cardDensityOver, cardDensityIssues, fitCardDensity, withCoverKeyword, shrunkSlideOk,
+  secondCoverIssues, cardCopyLintIssues } from './cardnews';
 import { FIXED_STRUCTURE_SEED } from '../content/structureSeed';
+import { cardVoiceIssues } from '../content/styleLint';
+import { normalizeBrand } from '../content/brand';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import YAML from 'yaml';
 
 type CardPlan = Parameters<typeof applyCardRevision>[0];
 
@@ -301,17 +308,24 @@ describe('cardVoiceGuide — [말맛] 마무리 지시(VOICE_ROTATION × 최근 
     expect(g).not.toContain('관찰 장면');
   });
 
+  // 2026-10-05 — 유형 메뉴를 전부 행동형으로 바꿨다. 종전 메뉴의 관찰 장면·결론 단정·"~이면 ~합니다"는 ctaSlideIssues 가 매번
+  // 지적해 수정 라운드가 되돌리는 충돌이었다.
   it('on + 최근 마무리 없음 → 유형 로테이션만, 없는 블록을 참조하지 않는다', () => {
     const g = cardVoiceGuide(true, false);
-    expect(g).toContain('관찰 장면');
-    expect(g).toContain('조건문');
+    expect(g).toContain('조건+행동');
+    expect(g).toContain('점검 질문');
     expect(g).not.toContain('[최근 마무리]');
+  });
+  it('on 메뉴의 유형은 전부 행동형 — ctaSlideIssues 가 지적하는 관찰 장면·결론 단정은 없다', () => {
+    const g = cardVoiceGuide(true, true);
+    expect(g).not.toContain('관찰 장면');
+    expect(g).not.toContain('결론 단정');
   });
 
   it('on + 최근 마무리 있음 → 참조 문구가 붙는다', () => {
     const g = cardVoiceGuide(true, true);
     expect(g).toContain('아래 [최근 마무리] 와 같은 문형·같은 첫 어절 금지');
-    expect(g).toContain('관찰 장면');
+    expect(g).toContain('조건+행동');
   });
 
   it('세 상태 모두 보호 자산(어미 배합·행동 지시 목적어·안전 이유)을 유지한다', () => {
@@ -329,9 +343,11 @@ describe('cardStructureLines — 카드 골격 지시(STRUCTURE_VARIETY)', () =>
   it('off 면 줄 수·해시태그 지시가 아예 빠진다(base 프롬프트)', () => {
     expect(cardStructureLines(FIXED_STRUCTURE_SEED, false)).toEqual([]);
   });
-  it('on 이면 시드 값이 그대로 실린다', () => {
+  // 2026-10-05 — 시드 cardLines(2~5)는 블로그와 공유라 범위를 못 바꾼다. 카드 쪽에서 글자 상한(2줄)으로 묶는다.
+  it('on 이면 시드 값이 실리되 본문 줄 수는 상한(2줄)으로 묶인다', () => {
     const lines = cardStructureLines({ ...FIXED_STRUCTURE_SEED, cardLines: 3, hashtags: 11 }, true).join('\n');
-    expect(lines).toContain('3줄');
+    expect(lines).toContain(`${CARD_BODY_MAX_LINES}줄 이내`);
+    expect(lines).not.toContain('3줄');
     expect(lines).toContain('11개');
   });
 });
@@ -351,15 +367,23 @@ describe('ctaSlideIssues — 마무리 장이 행동으로 끝나는가', () => 
   });
 
   it('행동 지시로 끝나면 통과', () => {
-    // 실측(card_06f79a136b)
-    expect(ctaSlideIssues([s('표지'), s('오늘 마당에서 두 팔을 벌려 보세요', '그 폭이 몇 해 뒤 나무 자리입니다')])).toHaveLength(0);
+    expect(ctaSlideIssues([s('표지'), s('심기 전에 두 팔을 벌려 보세요', '그 폭이 몇 해 뒤 나무 자리입니다')])).toHaveLength(0);
+  });
+  // 2026-10-05 — 마무리가 매번 "오늘, ~하세요"로 닫혔다. 행동은 인정하되 '오늘'로 여는 헤드라인만 따로 지적한다.
+  it('행동 지시라도 헤드라인을 "오늘"로 열면 그것만 지적한다(실측 card_06f79a136b)', () => {
+    const out = ctaSlideIssues([s('표지'), s('오늘 마당에서 두 팔을 벌려 보세요', '그 폭이 몇 해 뒤 나무 자리입니다')]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain('"오늘"로 연다');
+    expect(ctaSlideIssues([s('표지'), s('오늘, 흙부터 만져 보세요')])[0]).toContain('"오늘"로 연다');
+    // 헤드라인 중간의 '오늘'·본문의 '오늘'은 대상이 아니다
+    expect(ctaSlideIssues([s('표지'), s('물은 오늘 말고 내일 주세요')])).toHaveLength(0);
   });
   it('헤드라인이 서술문이어도 body 가 행동을 지시하면 통과', () => {
     // 실측(card_b60ec3e1bf) — 헤드라인만 보면 놓친다
     expect(ctaSlideIssues([s('표지'), s('거름과 전정, 지금은 순서가 다릅니다', '잎이 아직 짙다면 거름은 미루세요')])).toHaveLength(0);
   });
   it('다른 청유·명령 어미도 인정한다', () => {
-    for (const t of ['오늘 확인해 보세요', '내일 아침에 살펴보십시오', '함께 정리합시다']) {
+    for (const t of ['심기 전에 확인해 보세요', '내일 아침에 살펴보십시오', '함께 정리합시다']) {
       expect(ctaSlideIssues([s('표지'), s(t)])).toHaveLength(0);
     }
   });
@@ -373,8 +397,9 @@ describe('ctaSlideIssues — 마무리 장이 행동으로 끝나는가', () => 
   });
   it('지적 문구가 무엇을 하라는지 알려준다 — 그대로 수정 라운드 입력이 된다', () => {
     const [msg] = ctaSlideIssues([s('표지'), s('끝입니다')]);
-    expect(msg).toContain('오늘');
+    expect(msg).toContain('구체적인 행동');
     expect(msg).toContain('하세요');
+    expect(msg).not.toContain('오늘·지금'); // 2026-10-05 — '오늘·지금 할 일' 강요가 "오늘," 마무리 지문을 만들었다
   });
 });
 
@@ -410,5 +435,236 @@ describe('buildCardImagePrompt — 수종 앵커(2026-09-06)', () => {
   it('앵커는 전체 톤 바로 뒤에 온다 — 장면 설명보다 앞이라야 종이 먼저 정해진다', () => {
     const p = buildCardImagePrompt({ ...base, subjectLatin: 'Ziziphus jujuba' });
     expect(p.indexOf('[대상 식물')).toBeLessThan(p.indexOf('장면 설명'));
+  });
+});
+
+// ── 2026-10-05 카드뉴스 분석 승인 항목 3 ─────────────────────────────────────────────
+describe('카드 글자 상한 — 휴대폰 폭에서 읽히는 양(cardDensityOver·cardDensityIssues)', () => {
+  const s = (headline: string, body = '') => ({ headline, body });
+  it('상한: 헤드라인 20자, 본문 2줄·36자(공백 포함)', () => {
+    expect([CARD_HEADLINE_MAX_CHARS, CARD_BODY_MAX_LINES, CARD_BODY_MAX_CHARS]).toEqual([20, 2, 36]);
+  });
+  it('상한 안이면 통과 — 경계값 포함', () => {
+    expect(cardDensityOver([s('가'.repeat(20), `${'나'.repeat(18)}\n${'다'.repeat(18)}`)])).toEqual([]);
+  });
+  it('실측 과밀 장(본문 4줄 70자대)을 잡는다 — 장 번호와 사유를 함께', () => {
+    // 실측(phone_size_bodies.jpg 가운데 카드) — 모과/명자 구별 본문
+    const dense = s('줄기 아랫부분 모양이 가장 먼저 알려줍니다', '모과나무는 줄기 하나가\n곧게 올라갑니다\n명자나무는 줄기 아랫부분에서\n여러 대가 올라옵니다');
+    const over = cardDensityOver([s('표지'), dense]);
+    expect(over).toHaveLength(1);
+    expect(over[0]!.no).toBe(2);
+    expect(over[0]!.why).toMatch(/헤드라인 2\d자·본문 4줄/);
+  });
+  it('3줄이면 글자가 적어도 잡는다, 1줄이라도 37자면 잡는다', () => {
+    expect(cardDensityOver([s('h', '가\n나\n다')])).toHaveLength(1);
+    expect(cardDensityOver([s('h', '가'.repeat(37))])).toHaveLength(1);
+  });
+  it('지적은 한 건으로 묶고, 덜어 낸 세부는 캡션으로 보내라고 말한다', () => {
+    const issues = cardDensityIssues([s('가'.repeat(25)), s('h', '가\n나\n다')]);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain('1번(헤드라인 25자)');
+    expect(issues[0]).toContain('2번(본문 3줄');
+    expect(issues[0]).toContain('캡션');
+  });
+});
+
+describe('fitCardDensity — 글자 상한 마지노선(줄 단위로만 덜어 낸다)', () => {
+  const s = (headline: string, body = '') => ({ headline, body });
+  it('넘친 본문은 뒤 줄부터 덜어 2줄·36자에 맞춘다 — 글자 단위로 자르지 않는다', () => {
+    const r = fitCardDensity([s('h', '첫 줄은 남깁니다\n둘째 줄도 들어갑니다\n셋째 줄은 덜어 냅니다')]);
+    expect(r.slides[0]!.body).toBe('첫 줄은 남깁니다\n둘째 줄도 들어갑니다');
+    expect(r.trimmed).toEqual([1]);
+  });
+  it('둘째 문장을 붙이면 36자를 넘으면 첫 문장만 남긴다', () => {
+    const r = fitCardDensity([s('h', `${'가'.repeat(19)}다\n${'나'.repeat(19)}다`)]);
+    expect(r.slides[0]!.body).toBe(`${'가'.repeat(19)}다`);
+  });
+  // 리뷰(2026-10-05) — 줄 단위로 덜면 문장 앞토막이 남았다(최근 120세트 리플레이 242장). 문장 통째로만 남긴다.
+  it('두 줄에 걸친 문장은 함께 남기고, 문장 중간에서 자르지 않는다', () => {
+    const r = fitCardDensity([s('h', '잎이 지고 나서\n심는 게 좋아요\n서리 전이면 됩니다')]);
+    expect(r.slides[0]!.body).toBe('잎이 지고 나서\n심는 게 좋아요');
+  });
+  it('실측 card_9f8d4bb233#6 — 종전엔 "…통째로 돌아가면" 앞토막만 남겼다. 첫 문장이 37자라 이제는 손대지 않는다', () => {
+    const orig = s('h', '흔드는 정도가 아니라 통째로 돌아가면\n새 뿌리가 거의 없다는 뜻이에요\n이 경우는 교체 대상으로 봅니다');
+    const r = fitCardDensity([orig]);
+    expect(r.slides[0]).toBe(orig);
+    expect(r.trimmed).toEqual([]);
+  });
+  it('첫 문장 하나가 상한을 넘으면(실측 "…골라\n…표시해 두세요") 손대지 않는다 — 잔존으로 남긴다', () => {
+    const long = s('h', '마당에서 해 잘 드는 자리 하나를 골라\n다른 품종 한 그루를 심을 위치로 표시해 두세요');
+    const r = fitCardDensity([long]);
+    expect(r.slides[0]).toBe(long);
+    expect(r.trimmed).toEqual([]);
+  });
+  it('한 줄 안의 두 문장은 나눠서 센다', () => {
+    const r = fitCardDensity([s('h', '흙이 마르면 물을 주세요. 아침이 좋아요.\n저녁엔 잎이 젖어 병이 오기 쉬워서 피하는 게 좋습니다')]);
+    expect(r.slides[0]!.body).toBe('흙이 마르면 물을 주세요. 아침이 좋아요.');
+  });
+  it('첫 줄 혼자 넘치거나 헤드라인이 넘치면 손대지 않는다(반쯤 잘린 문장이 그려지는 것보다 낫다)', () => {
+    const long = s('가'.repeat(30), '나'.repeat(40));
+    const r = fitCardDensity([long]);
+    expect(r.slides[0]).toBe(long);
+    expect(r.trimmed).toEqual([]);
+  });
+  it('상한 안의 장은 같은 객체 그대로', () => {
+    const ok = s('h', '한 줄');
+    expect(fitCardDensity([ok]).slides[0]).toBe(ok);
+  });
+});
+
+describe('withCoverKeyword — 표지 키워드를 붙인 뒤에도 글자 상한(리뷰 2026-10-05)', () => {
+  const s = (headline: string, body = '') => ({ headline, body });
+  it('들어가면 "키워드, 본문" 그대로', () => {
+    expect(withCoverKeyword(s('h', '흙부터 보세요'), '대추나무 심는 시기').body).toBe('대추나무 심는 시기, 흙부터 보세요');
+  });
+  it('넘치면 문장 통째로 덜어 낸다 — 36자를 다시 넘지 않는다', () => {
+    const out = withCoverKeyword(s('h', '땅이 풀리면 바로 심으세요\n굳었으면 봄까지 기다리면 됩니다'), '대추나무 심는 시기');
+    expect(out.body).toBe('대추나무 심는 시기, 땅이 풀리면 바로 심으세요');
+    expect(cardDensityOver([out])).toEqual([]);
+  });
+  it('"키워드, 첫 문장"이 넘치면 키워드를 따로 한 줄에 둔다', () => {
+    const body = '땅이 풀린 날 삽이 쑥 들어가면 바로 심으세요'; // 25자 — "키워드, " 를 붙이면 37자
+    const out = withCoverKeyword(s('h', body), '대추나무 심는 시기');
+    expect(out.body).toBe(`대추나무 심는 시기\n${body}`);
+    expect(cardDensityOver([out])).toEqual([]);
+  });
+  it('본문 문장이 하나도 안 들어가면 키워드 한 줄만', () => {
+    const out = withCoverKeyword(s('h', '가'.repeat(30) + '다'), '대추나무 심는 시기');
+    expect(out.body).toBe('대추나무 심는 시기');
+  });
+});
+
+describe('shrunkSlideOk — 줄이기 결과 채택 가드(리뷰 2026-10-05)', () => {
+  const s = (headline: string, body = '') => ({ headline, body });
+  it('본문이 있던 장을 본문 없이 돌려주면 버린다', () => {
+    expect(shrunkSlideOk(s('물 주기', '겉흙이 마르면\n아침에 주세요\n저녁은 피하세요'), s('물 주기', ''))).toBe(false);
+  });
+  it('수치·월이 바뀌면 버리고, 덜어 내기만 했으면 채택', () => {
+    const orig = s('심는 때', '10월 하순부터 11월 초순까지\n땅이 풀린 날 심으세요\n늦으면 봄에');
+    expect(shrunkSlideOk(orig, s('심는 때', '11월 하순까지 심으세요'))).toBe(false);
+    expect(shrunkSlideOk(orig, s('심는 때', '20cm 깊이로 심으세요'))).toBe(false);
+    expect(shrunkSlideOk(orig, s('심는 때', '10월 하순부터 심으세요'))).toBe(true);
+  });
+  it('상한을 넘거나 헤드라인이 비면 버린다', () => {
+    expect(shrunkSlideOk(s('h', 'a'), s('', '짧게'))).toBe(false);
+    expect(shrunkSlideOk(s('h', 'a'), s('h', '가'.repeat(40)))).toBe(false);
+  });
+});
+
+describe('secondCoverIssues — 2번 장은 두 번째 표지', () => {
+  const s = (headline: string, body = '') => ({ headline, body });
+  it('이어 말로 여는 2번 장을 잡는다(실측 "먼저, 흙덩이를 눌러 봅니다")', () => {
+    const out = secondCoverIssues([s('묘목 식재 준비'), s('먼저, 흙덩이를 눌러 봅니다'), s('마무리 하세요')]);
+    expect(out.some((x) => x.includes('이어 말'))).toBe(true);
+  });
+  it('대상 수종이 없으면 잡고, 있으면 통과한다(줄기 "배롱" 도 인정)', () => {
+    const subj = ['배롱나무', '배롱'];
+    expect(secondCoverIssues([s('표지'), s('꽃은 새 가지 끝에만 핀다'), s('끝')], subj).some((x) => x.includes('대상'))).toBe(true);
+    expect(secondCoverIssues([s('표지'), s('배롱나무 꽃은 새 가지 끝에만'), s('끝')], subj)).toEqual([]);
+    expect(secondCoverIssues([s('표지'), s('새 가지 끝에만 핀다', '배롱 꽃눈은 봄에 생겨요'), s('끝')], subj)).toEqual([]);
+  });
+  it('수종을 모르면(빈 배열) 대상 검사는 건너뛴다 · 2장 세트는 2번이 마무리라 보지 않는다', () => {
+    expect(secondCoverIssues([s('표지'), s('꽃은 새 가지 끝에만 핀다'), s('끝')], [])).toEqual([]);
+    expect(secondCoverIssues([s('표지'), s('그래서 지금 하세요')], ['배롱나무'])).toEqual([]);
+  });
+  it('"우선"으로 시작하는 낱말("우선순위")은 이어 말이 아니다 — 어절 경계를 본다', () => {
+    expect(secondCoverIssues([s('표지'), s('우선순위는 뿌리입니다'), s('끝')])).toEqual([]);
+  });
+});
+
+describe('cardVoiceIssues — 블로그와 같은 문장 검사를 카드 문구에', () => {
+  const s = (headline: string, body = '') => ({ headline, body });
+  it("'봅니다'는 세트당 1회까지(실측 헤드라인 \"~부터 봅니다\" 수렴)", () => {
+    expect(cardVoiceIssues([s('사과나무묘목, 접붙인 자리가 먼저라고 봅니다'), s('잎은 나중이 낫다고 봅니다')])
+      .some((x) => x.includes("'봅니다/보입니다' 2회") && x.includes('세트'))).toBe(true);
+    expect(cardVoiceIssues([s('접붙인 자리가 먼저라고 봅니다'), s('잎은 나중에 확인하세요')])).toEqual([]);
+    // 리뷰(2026-10-05) — 살펴보는 동작("~부터 봅니다")은 판단 유보가 아니라 세지 않는다(블로그와 같은 BOMNIDA_RE).
+    expect(cardVoiceIssues([s('접붙인 자리부터 봅니다'), s('잎은 나중에 봅니다')])).toEqual([]);
+  });
+  it('1인칭 주어를 잡는다', () => {
+    expect(cardVoiceIssues([s('저라면 봄까지 기다립니다')]).some((x) => x.includes('1인칭 주어 "저라면"'))).toBe(true);
+  });
+  it('겪지 않은 경험 주장을 잡는다(2026-10-05 대추나무 리비전 "저희가 직접 해 보며")', () => {
+    const out = cardVoiceIssues([s('저희 밭 기준', '저희가 직접 해 보며 세운 기준')]);
+    expect(out.some((x) => x.startsWith('1인칭 주어') && x.includes('저희가'))).toBe(true);
+    expect(out.some((x) => x.startsWith('겪지 않은 경험 주장'))).toBe(true);
+    expect(cardVoiceIssues([s('삽을 꽂아 직접 해 보세요')])).toEqual([]);
+  });
+  it('장끼리 거의 같은 줄을 잡는다(실측 "아직 눈이 뻗고 있다면 …")', () => {
+    const out = cardVoiceIssues([s('표지'), s('기다릴 때', '아직 눈이 뻗고 있다면 며칠 더 기다립니다'), s('마무리', '아직 눈이 뻗고 있다면 며칠 더 지켜보세요')]);
+    expect(out.some((x) => x.startsWith('장끼리 거의 같은 줄 1쌍') && x.includes('2번') && x.includes('3번'))).toBe(true);
+  });
+  it('같은 장 안의 헤드라인·본문 겹침, 수종명만 공유한 짧은 줄은 반복이 아니다', () => {
+    expect(cardVoiceIssues([s('대추나무 심는 때', '대추나무 심는 때는 가을')])).toEqual([]);
+    expect(cardVoiceIssues([s('대추나무 거름은 잎 진 뒤에'), s('대추나무 물은 아침에 주세요')])).toEqual([]);
+  });
+  it('-ㅂ니까 헤드라인·영어 직역·검색어 꼴·보고서 말투를 잡는다', () => {
+    expect(cardVoiceIssues([s('무엇이 다릅니까?')]).some((x) => x.startsWith('딱딱한 질문 헤드라인'))).toBe(true);
+    expect(cardVoiceIssues([s('마지막 가을 창입니다')]).some((x) => x.includes('영어 직역'))).toBe(true);
+    expect(cardVoiceIssues([s('대추나무 심는시기, 지금')], '대추나무 심는시기').some((x) => x.includes('검색어 꼴'))).toBe(true);
+    expect(cardVoiceIssues([s('심는 구간이 짧아요')]).some((x) => x.startsWith('보고서·직역 말투'))).toBe(true);
+  });
+  it('바른 띄어쓰기 키워드·말하는 헤드라인은 통과', () => {
+    expect(cardVoiceIssues([s('대추나무 심는 시기, 언제일까요?'), s('흙이 풀리면 심으세요')], '대추나무 심는시기')).toEqual([]);
+  });
+  it('지적은 4건까지만(수정 라운드 입력이 넘치지 않게)', () => {
+    const out = cardVoiceIssues([
+      s('저는 봅니다'), s('다시 봅니다'), s('무엇이 다릅니까?'), s('마지막 가을 창입니다', '구간 셈법'),
+      s('표지 줄 반복 확인 문장입니다'), s('표지 줄 반복 확인 문장입니다'),
+    ]);
+    expect(out.length).toBe(4);
+  });
+});
+
+describe('buildCardImagePrompt — 본문 글자 크기(휴대폰 폭)', () => {
+  it('본문이 있으면 두 분기 모두 크기 규칙을 싣고, 본문이 없으면 싣지 않는다', () => {
+    for (const preset of ['photorealistic', 'handwritten_poster']) {
+      expect(buildCardImagePrompt({ ...base, index: 1, preset })).toContain('본문 글자 크기');
+      expect(buildCardImagePrompt({ ...base, body: '', index: 1, preset })).not.toContain('본문 글자 크기');
+    }
+  });
+});
+
+// 브랜드 카드 스타일 고정 해제(2026-10-05) — 08-10 a80d314 에서 풀었는데 08-12 데이터 동기화(d7634cf)로 handwritten_poster 가
+// 되살아나, 정보·수치 카드까지 전부 손글씨 포스터로 나갔다. 풀린 상태면 launchCardNewsRun 의 stylePreset 이 undefined →
+// resolveForcedPreset 도 undefined → 디자이너가 주제에 맞게 고른다(손글씨는 선택지로 남는다).
+describe('bionditree 카드 스타일 고정 해제', () => {
+  for (const rel of ['../../data/brands/bionditree.yaml', '../../data/brand.yaml']) {
+    it(`${rel} — 로더로 읽어도 cardStyle 이 없다 → 디자이너 자동 선택`, () => {
+      const file = fileURLToPath(new URL(rel, import.meta.url));
+      if (!fs.existsSync(file)) return;
+      const b = normalizeBrand(YAML.parse(fs.readFileSync(file, 'utf-8')));
+      if (rel.endsWith('/data/brand.yaml') && b?.name !== 'bionditree') return; // 활성 브랜드가 바뀌었으면 해당 없음
+      expect(b?.cardStyle).toBeUndefined();
+      expect(resolveForcedPreset(b?.cardStyle)).toBeUndefined();
+    });
+  }
+  it('손글씨 포스터는 선택지로 남는다', () => {
+    expect(resolveForcedPreset('handwritten_poster')).toBe('handwritten_poster');
+    expect(resolveForcedPreset('손글씨 포스터')).toBe('handwritten_poster');
+  });
+});
+
+// 배선(planCards 가 수정 라운드 입력으로 쓰는 묶음) — 범주마다 하나씩 걸리는 기획안으로 묶음에 빠짐이 없는지 본다.
+describe('cardCopyLintIssues — 카드 문구 결정적 린트 묶음(planCards 수정 라운드 입력)', () => {
+  const s = (headline: string, body = '') => ({ headline, body });
+  it('문체·글자 상한·2번 장·문장 검사가 모두 실린다', () => {
+    const out = cardCopyLintIssues([
+      s('대추나무 심는 시기, 지금이라고 봅니다'),
+      s('그래서 흙이 먼저라고 봅니다', '첫 줄\n둘째 줄\n셋째 줄'),
+      s('구간은 짧습니다'),
+      s('뿌리가 마르면 늦습니다'),
+      s('물은 아침에 줍니다'),
+    ], '대추나무 심는시기', '대추나무 심는시기');
+    expect(out.some((x) => x.includes("3장 연속 '-ㅂ니다'"))).toBe(true);      // cardStyleIssues
+    expect(out.some((x) => x.startsWith('글자 과다'))).toBe(true);              // cardDensityIssues
+    expect(out.some((x) => x.includes('이어 말'))).toBe(true);                  // secondCoverIssues
+    expect(out.some((x) => x.includes("'봅니다/보입니다' 2회"))).toBe(true);    // cardVoiceIssues
+  });
+  it('깨끗한 기획안은 0건', () => {
+    expect(cardCopyLintIssues([
+      s('대추나무 심는 시기, 언제일까요?'), s('대추나무는 땅이 풀리면 심어요', '삽이 쑥 들어가면 됩니다'),
+      s('물은 흙이 마를 때만'), s('심기 전에 삽을 꽂아 보세요'),
+    ], '대추나무 심는시기', '대추나무 심는시기')).toEqual([]);
   });
 });

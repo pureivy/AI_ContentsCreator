@@ -297,6 +297,12 @@ export function editorRulesGuide(b: BrandProfile | null = getBrand()): string {
     + rules.map((r, i) => `${i + 1}. ${r}`).join('\n');
 }
 
+/** 첫머리 굵은 요약 규칙("글 맨 위 … 두 줄로 요약")이 켜져 있는가(순수, 2026-10-05) — 켜진 브랜드는 구조 시드가
+ *  '답 먼저' 도입·도입 직후 인용을 뽑지 않는다(같은 답이 첫머리에 쌓인다 — structureSeed.pickStructureSeed). */
+export function hasBoldSummaryRule(b: BrandProfile | null = getBrand()): boolean {
+  return (b?.editorRules ?? []).some((r) => r.startsWith('글 맨 위') && r.includes('요약'));
+}
+
 /**
  * 어휘 가드(2026-08-08 어휘 감사) — 코퍼스 34편 감사에서 확정된 29건의 원인 대응. 블로그 작가·
  * 카드/쇼츠 기획자·제목 패키저 공용(org.ts 가드들과 달리 output 도 쓰므로 순환 없는 여기에 둔다).

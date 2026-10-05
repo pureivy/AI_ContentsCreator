@@ -48,3 +48,28 @@ describe('scoreSeo — 첫 문단 키워드 = 첫 소제목 앞 글 문단 2개'
     expect(score(ok).checklist).toHaveLength(9);
   });
 });
+
+// 2026-10-05 대추나무 초안 — 키워드 판정이 includes 라 검색어 꼴("대추나무 심는시기")을 그대로 써야 통과했고,
+// 그게 "…대추나무 심는시기의 마지막 가을 창입니다" 같은 문장을 낳았다. 바른 띄어쓰기·조사가 붙은 꼴도 통과해야 한다.
+describe('scoreSeo — 키워드 판정은 띄어쓰기·조사 무시', () => {
+  const kw = '대추나무 심는시기';
+  const run = (title: string, lead: string) => scoreSeo({ title, body: [lead, '도입 문장입니다.', ...tail].join('\n\n'), primaryKeyword: kw, tags, imageSlots: 1 });
+  it('제목·첫 문단에 "대추나무 심는 시기는"이 있으면 통과', () => {
+    const r = run('대추나무 심는 시기는 언제일까, 가을과 봄 비교', '**대추나무 심는 시기는 땅 상태로 정해요.**');
+    expect(check(r, '제목에 핵심 키워드 포함')?.ok).toBe(true);
+    expect(check(r, LABEL)?.ok).toBe(true);
+  });
+  it('토큰 사이 조사("대추나무를 심는 시기")도 통과, 검색어 꼴 그대로도 여전히 통과', () => {
+    expect(check(run('대추나무를 심는 시기, 가을이 나은 이유', '대추나무를 심는 시기는 10월 하순이에요.'), LABEL)?.ok).toBe(true);
+    expect(check(run('대추나무 심는시기, 가을 vs 봄 성공률', '대추나무 심는시기는 땅으로 봅니다.'), '제목에 핵심 키워드 포함')?.ok).toBe(true);
+  });
+  it('키워드가 없으면 여전히 미달', () => {
+    const r = run('가을에 나무 심을 때 확인할 것 세 가지', '땅 상태부터 봅니다.');
+    expect(check(r, '제목에 핵심 키워드 포함')?.ok).toBe(false);
+    expect(check(r, LABEL)?.ok).toBe(false);
+  });
+  it('밀도는 자연스러운 꼴도 센다', () => {
+    const r = run('대추나무 심는 시기, 가을 vs 봄', '대추나무 심는 시기는 가을이에요. 대추나무를 심는 시기는 땅이 정해요.');
+    expect(check(r, '키워드 밀도 0.5~2.5%(과최적화 경계)')?.note).toMatch(/\(2회\)$/);
+  });
+});

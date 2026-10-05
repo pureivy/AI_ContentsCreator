@@ -210,3 +210,21 @@ describe('endingSentenceOf — 마무리 문단 첫 문장 추출', () => {
     expect(endingSentenceOf('')).toBe('');
   });
 });
+
+// 2026-10-05 — 대추나무 런의 채굴 금지어가 "월에·그대로·시간·아직·것은·있다면"이었다. 흔한 말을 막자 작가가 "구간·셈법·
+// ~쪽으로 움직입니다" 같은 우회어를 만들었다. 수치+단위("10월에")·상용어·업종 기본 소재어는 금지어 후보에서 뺀다.
+describe('recentLexemesToAvoid — 상용어·수치 단위 제외(2026-10-05)', () => {
+  const mk = (n: number, line: string): string[] => Array.from({ length: n }, () => `서두 문장. ${line} 마무리 문장.`);
+  it('"10월에"(→월에)·그대로·시간·아직·것은·있다면은 금지어가 되지 않는다', () => {
+    const docs = [
+      ...mk(6, '10월에 그대로 두면 시간이 아직 남은 것은 있다면 좋습니다'),
+      ...mk(4, '전혀 무관한 내용의 글'),
+    ];
+    const out = recentLexemesToAvoid(undefined, { docs, titles: [], minDocs: 5 }).join(' ');
+    for (const w of ['월에', '그대로', '시간', '아직', '것은', '있다면']) expect(out, w).not.toContain(w);
+  });
+  it('진짜 지문(갈리-)은 여전히 잡는다', () => {
+    const docs = [...mk(6, '10월에 결과가 갈린다'), ...mk(4, '전혀 무관한 내용의 글')];
+    expect(recentLexemesToAvoid(undefined, { docs, titles: [], minDocs: 5 }).join(' ')).toMatch(/갈린/);
+  });
+});

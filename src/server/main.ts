@@ -35,6 +35,7 @@ import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appen
 import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView, getYoutubeAccount, setYoutubeToken, getMetaAccount, setMetaToken, setMetaPage, purgeCustomKeysForBrand, purgeBrandAccounts } from '../secrets/store';
 import { collectExistingContent, findSimilarContent, saturatedThemeMatches, type SimilarMatch } from '../content/novelty';
 import { clusterStore, pickNextSibling } from '../content/topicCluster';
+import { naturalKeyword } from '../content/keywordForm';
 import { mineClusterForPiece, filterCandidates } from '../orchestrator/clusterMine';
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
@@ -2957,7 +2958,8 @@ function seoReviseFeedback(runId: string, keyword?: string): string | null {
       ...fails.map((c) => `- ${c.label}${c.note ? ` (현재: ${c.note})` : ''}`),
       // 검색어 규칙 통일(2026-08-27 권고 7) — 종전 "본문 전체에 2~4회"는 작가 지침(org.ts:123 키워드 계층
       // 분리: 첫 문단 1회·소제목 1곳)과 정면으로 어긋나, 리비전이 돌 때마다 본문에 정확 표기를 다시 심었다.
-      ...(keyword ? [`핵심 키워드 "${keyword}" 를 첫 문단에 1회, 소제목 1곳까지만 정확히 이 표기로 — 그 밖에는 조사·어순을 바꾼 변형으로(네이버는 형태소 분석이라 손실 없음) 자연스럽게 포함하라.`] : []),
+      // 2026-10-05 — '정확히 이 표기로'가 리비전마다 검색어 꼴("○○ 심는시기")을 다시 심었다. 바른 띄어쓰기 꼴로(seo 판정은 띄어쓰기·조사 무시).
+      ...(keyword ? [`핵심 키워드 "${keyword}" 를 첫 문단에 1회, 소제목 1곳까지만 바른 띄어쓰기의 자연스러운 꼴("${naturalKeyword(keyword)}", 조사를 붙여도 됨)로 — 그 밖에는 조사·어순을 바꾼 변형으로(네이버는 형태소 분석이라 손실 없음) 자연스럽게 포함하라. 검색어 꼴을 문장 주어나 "~의" 명사구로 세우지 마라.`] : []),
       ...(jargon.length ? [`아울러 다음 말은 일반 독자가 다른 뜻으로 읽거나 모르는 표현이니 풀어 써라: ${jargon.map((j) => `${j.term}→${j.use}`).join(', ')}`] : []),
     ].join('\n');
   } catch { return null; }

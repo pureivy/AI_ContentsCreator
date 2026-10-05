@@ -20,13 +20,13 @@ import { prepareRun } from './prepare';
 import { finalizeRun } from './finalize';
 import { formatterFor } from '../output';
 import type { AssetBundle } from '../output';
-import { parseImagePlan, draftFiles } from '../output/naverBlog';
+import { parseImagePlan, draftFiles, capImageMarkers, countImageMarkers, brandPlaceWords, BLOG_IMAGE_MAX } from '../output/naverBlog';
 import { prepareRealFrame } from './realFrame';
 import { realFrameSceneTags, withRealFrameSlot } from '../content/blogFrames';
 import { naverSerp } from '../grounding/naver_search';
 import { seedKeyword } from '../grounding/naver_common';
 import { getRunSettings } from '../runsettings';
-import { brandContext, activeBrandSlug, getBrand, lexiconGuide, editorRulesGuide } from '../content/brand';
+import { hasBoldSummaryRule, brandContext, activeBrandSlug, getBrand, lexiconGuide, editorRulesGuide } from '../content/brand';
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid, recentBlogEndings } from '../content/priorCoverage';
 import { recentModulesToAvoid, moduleAvoidBlock } from '../content/contentModules';
 import { collectExistingContent } from '../content/novelty';
@@ -36,6 +36,7 @@ import type { FactSupplyResult } from '../content/factSupply';
 import { isLoreTopic } from '../content/loreTopic';
 import { parseBriefVerdict, parseUnresolved, isBlocking, describeVerdict, VERDICT_FORMAT } from './briefVerdict';
 import { blogStyleIssues, styleRevisionReject } from '../content/styleLint';
+import { keywordWritingGuide } from '../content/keywordForm';
 import { readabilityPrompt, acceptReadabilityFixes, applyReadabilityFixes } from '../content/readability';
 import { resolveStructureSeed, inheritStructureSeed, structureBlock, STRUCTURE_KEEP_BLOCK, type TitleForm } from '../content/structureSeed';
 import { factGateBlog, buildEvidence, runFactGateWithRepair, repairSentences, applySentenceRepairs, extractFactCard, FACT_CARD_HEADER, mergeSuppliedFacts, jargonRulesForEvidence } from '../content/factGate';
@@ -86,10 +87,13 @@ export const SELLER_INQUIRY_BAN =
 export const NO_FABRICATED_EXPERIENCE =
   '[겪지 않은 일을 지어내지 마라] 우리에게는 공개된 재배 기록이 없다. '
   + '**실제로 있었던 일처럼 쓰는 구체 서술을 만들어내지 마라** — 연도·시기("지난해", "재작년"), 기간("사흘 사이"), '
-  + '수량("스무 개 넘게"), 특정 개체의 결과, 우리 밭·농장·포장에서 관찰했다는 진술, '
+  + '수량("스무 개 넘게"), 특정 개체의 결과, 우리 밭·농장·포장에서 관찰했다는 진술("저희 밭에서 직접 해 보며 세운 기준", "키워 보니" 같은 경험 주장 — 2026-10-05 대추나무 리비전), '
   + '"문의가 오면 이렇게 답한다" 같은 영업 실태 서술이 여기 해당한다. 브랜드명을 본문에서 자기 지칭으로 끌어들이지도 마라.\n'
-  + '대신 **1인칭 판단과 관점은 그대로 유지하라** — "이럴 땐 자리부터 정합니다", "굵기보다 잔뿌리를 봅니다", '
-  + '"이 경우는 이렇게 봅니다"처럼 우리가 무엇을 어떻게 판단하는지는 단정해서 써라. '
+  // 2026-10-05 — 예문의 "~를 봅니다/이렇게 봅니다"가 '봅니다' 판단 유보 지문(사람 상위글 천 자당 0.02회, 우리 1.3회)의 씨앗이었다.
+  // 판단·관점을 살리는 원칙(판단 떠넘기기 5→32회 재발 방지)은 그대로 두고, 예문만 직접 권하는 말·단정으로 바꾼다.
+  // 2026-10-05 리뷰 — 예문은 자리표시(○○·△△)로만 둔다. 구체 사실이 든 예문("봄까지 기다리면")은 모델이 그대로 베낀다.
+  + '대신 **판단과 관점은 그대로 유지하라** — "이럴 땐 ○○부터 정하세요", "○○보다 △△를 먼저 확인하세요", '
+  + '"이런 경우는 ○○까지 기다리면 됩니다"처럼 무엇을 어떻게 판단하는지는 독자에게 직접 권하거나 단정해서 써라. '
   + '판단을 판매처·기관·독자에게 떠넘기지 말고, 일반적으로 성립하는 사실과 관찰 방법으로 직접 답하라. '
   + '요컨대 **목소리는 우리 것으로, 사건은 지어내지 않는다.**';
 
@@ -125,15 +129,15 @@ const buildBlogBodyGuide = (variety: boolean): string =>
   + '. ②알맹이 없는 빈 수식어("매력적인", "완벽한", "최고의", "엄청난", "다양한") — 구체 사실·수치로 대체한다("매력적인 공간"→"테이블 네 개뿐인 조용한 공간"). ③클리셰 종결("놓치지 마세요", "꼭 한번 ~해보세요", "~하시는 것을 추천드립니다", "기대됩니다") — 구체적 실천 제안으로 맺는다. ④과공손·수동태("~라고 할 수 있습니다", "~되어집니다") — 능동·단정으로. ⑤진부한 연결어("바로 그것은", "함께 살펴보겠습니다"). 문장 길이를 전부 균일하게 맞추지 말고 짧은 문장과 중간 문장을 섞어 리듬을 준다. "3가지/5가지" 식 완벽 대칭 리스트와 단락마다 "핵심→설명→정리"를 기계적으로 반복하는 구조를 피한다.\n' +
   // ── 자연스러움 감사(2026-08-11) 투입분: 고수준 수사·리듬의 반복이 "AI 티"의 본체였다(저수준 상투구는 위에서 이미 차단).
   '- 재정의 수사 쿼터: "X가 아니라 Y", "X보다 Y가 먼저" 문형은 글 전체(제목·요약 포함) 최대 2회 — 이 브랜드 글의 최대 지문이다(실측 한 편 7회). 세 번째부터는 재정의 없이 바로 본론을 단언하거나 다른 진입로("사실은", "다들 X부터 보는데")를 써라.\n' +
-  // 어미 규칙 3차 교정(2026-08-11): 전역 비율(60%)은 추적 불가로 2연속 미달(75%·65%) → 문단 규칙으로
-  // 전환했더니 준수율 85%인데도 66% — "최소 1문장"의 산수가 3~4문장 문단에서 66~75%를 낳았다.
-  // 수량을 문단 길이에 비례시켜 교정한다(2~3문장=1개, 4문장=2개 → 산술상 50~66%).
-  // 2026-10-05 — 편집 확정 규칙(한 문장 한 줄, brand.yaml editorRules)이 들어오며 '문단'이 한 줄=한 문장이 됐다. 그대로 두면
-  // 1문장 문단마다 비-합쇼체 1개를 요구하는 셈이 돼(산술상 100%) 어미 배합이 뒤집힌다 — 셈의 단위를 빈 줄로 나뉜 덩어리로 옮긴다.
-  '- 어미 배합(덩어리 규칙): 빈 줄로 나뉜 각 덩어리(한 문장마다 줄을 바꿔 써도 빈 줄 없이 이어진 줄들은 한 덩어리로 센다)에서 "-ㅂ니다"가 아닌 종결(해요체 -요/-죠/-거든요/-고요, 명사 종결 "결론은 배치.", 질문)로 끝나는 문장을 **2~3문장 덩어리는 1개, 4문장 덩어리는 2개** 넣어라. 같은 어미가 3문장 연속되면 마지막 문장을 바꿔 써라. 바꾸는 법: "물을 줄이는 것이 안전합니다"→"물부터 줄이는 게 안전해요", "확인이 필요합니다"→"한 번 확인해 보세요", "이것이 기준입니다"→"기준은 이거 하나예요". 목표 톤 예시: "나무는 당분을 계속 밀어 넣거든요", "어깨만 검고 아래가 붉으면 아직이에요".\n' +
-  // 주어 생략 확정(사용자 2026-08-12): 시점은 1인칭 판단 그대로 두되 "나는/저는/저희는" 주어 명시는
-  // 뺀다 — 한국어는 주어 없이도 시점이 전달되고, NO_FABRICATED_EXPERIENCE 의 예문 꼴과도 일치한다.
-  '- 1인칭 판단·유보(주어 생략): 글당 최소 2회는 우리의 판단을 단정으로 말하라 — 단 "나는/저는/저희는" 같은 1인칭 주어는 표면에 쓰지 마라. 주어 없이 시점만 남긴다: "다섯 군데를 봅니다", "~라고 봅니다", "이건 심어 봐야 아는 부분입니다", "이럴 땐 자리부터 정합니다". 1~2곳은 "대개", "~인 경우가 많습니다" 수준의 유보를 남겨 모든 주장에 확신 등급을 붙이지 마라. 겪지 않은 사건을 지어내는 것은 계속 금지 — 판단·관점만.\n' +
+  // 어미 규칙 3차 교정(2026-08-11) → 2026-10-05 수량 규칙 폐지. 덩어리마다 비-합쇼체를 N개 넣으라는 셈법이 한 문장 한 줄 규칙과
+  // 만나 2~3줄 덩어리마다 '-요/-고요'를 하나씩 꽂았다(대추나무 초안 "~이고요." 토막 3줄, 사람 상위글 대비 10배).
+  // 사장님 결정(2026-10-05): 바탕은 해요체, 합쇼체를 섞는다(고쳐 쓴 예시 글 결). 합쇼체 과다는 styleLint ⓑ(60% 상한)가 잡는다.
+  '- 말투: 해요체를 바탕으로 쓰고, 단정·안내가 필요한 문장에 합쇼체를 자연스럽게 섞는다("이 나무는 ○○에도 심을 수 있습니다. / △△엔 △월 하순부터 △월 초순까지예요."). 줄마다 어미를 기계적으로 번갈지 말고 말하듯이 쓴다. 앞 문장에 붙어야 할 짧은 꼬리("~이고요.", "~고요.", "~죠.")를 혼자 한 줄로 세우지 마라 — 앞 문장과 한 줄에 잇거나("~이고, ~예요") 접속어(그래서·그런데·-는데·-니까)로 이어라. 바꾸는 법: "물을 줄이는 것이 안전합니다"→"물부터 줄이는 게 안전해요", "확인이 필요합니다"→"한 번 확인해 보세요".\n' +
+  // 주어 생략 확정(사용자 2026-08-12) — 1인칭 주어는 계속 금지(사장님 재확인 2026-10-05).
+  // 2026-10-05 — "글당 최소 2회 … '~라고 봅니다'" 의무를 지웠다. 1인칭 주어를 막은 채 판단을 '봅니다'로 돌려 말하게 했고,
+  // 사실 게이트에서는 그 꼴이 판정 면제라 무근거 주장("…안전한 선택이라고 봅니다")이 그대로 통과했다(대추나무 초안).
+  // 판단 떠넘기기 재발(08-02 실측 5→32회)은 막아야 하므로 '판단은 직접 말하라'는 요구는 남기고 형식만 바꾼다.
+  '- 판단·권고: 결론은 독자에게 직접 권하는 말("~하세요", "~하면 됩니다", "~는 게 좋아요")이나 일반 서술("보통 ~입니다")로 단정하라 — 판단을 판매처·기관·독자에게 떠넘기지 마라. 판단을 감싸는 "~다고/~라고/~로 봅니다", "~로/~처럼/~게 보입니다" 같은 유보 종결은 글당 1회까지("세 군데를 겹쳐 봅니다"처럼 실제로 살펴보는 동작은 해당 없음). "저는/제가/저라면/저희는" 같은 1인칭 주어는 쓰지 않는다. 근거 자료에 없는 주장은 "봅니다"나 유보어로 감싸 남기지 말고 빼라 — "보통/대개"는 원예 통설 수준 일반론에만 붙인다. 겪지 않은 사건을 지어내는 것은 계속 금지.\n' +
   '- 과잉 완결 금지: 모든 문단을 결론 문장으로 닫지 마라 — 글당 2~3개 문단은 관찰만 하고 끝내거나 다음 문단으로 흘려보내라. "~이유입니다/~때문입니다" 클린처는 글당 2회 이하. '
   // 2026-10-02 — 소제목 형식은 시드(headingStyle)가 돌린다. 이 문장이 남으면 '번호·키워드 구' 런과 충돌한다.
   + (variety ? '소제목 형식은 아래 [이번 글 구조] 를 따른다.\n' : '소제목 1~2개는 완결 서술문 대신 구("가시, 흰 수액, 떨어지는 것들")나 질문으로 써라.\n') +
@@ -143,7 +147,13 @@ const buildBlogBodyGuide = (variety: boolean): string =>
   '- 결론 의무(통설 진단 허용): 관찰·구별법을 다뤘으면 각 갈래마다 그것이 대개 무엇을 뜻하는지와 독자가 할 행동을 반드시 말하라. 원예 통설 수준의 인과는 "대개/흔히"를 붙여 단정해도 된다("잎맥 사이만 노란 건 대개 양분 쪽입니다") — 이는 겪지 않은 사건 날조와 다르다. 근거가 정말 갈리는 것만 유보하고, 글의 결론을 다음 편 예고로 통째 미루지 마라.\n' +
   '- 압축 안전선: 표 셀·체크리스트·괄호 안에서도 지시는 조사를 갖춘 문장 꼴로 써라("질소 성분 거름 억제" 금지 → "질소 거름은 줄입니다"). 노하우 문장에서 주어·비교 대상을 떨어내는 초압축 금지("밀리미터보다 옆 가지와 비교해요" 식 — 무엇의 밀리미터인지 재조립이 필요하면 실패).\n' +
   '- 구조: 검색 의도를 바로 충족하는 도입 훅 → H2/H3 소제목으로 나눈 본문 → 핵심 요약·마무리.\n' +
-  '- 키워드 계층 분리: 핵심 키워드의 정확 표기는 첫 문단 1회·소제목 1곳까지만 — 그 밖에는 조사·어순을 바꾼 변형("가을에 묘목을 심을 때는")으로 녹여라. 네이버는 형태소 분석이라 변형이 검색 손실을 만들지 않고, 정확 표기 반복·억지 관형절("입추 직후에 적용하는 가을 묘목 심는 법은," 식)은 과최적화로 오히려 해롭다.\n' +
+  // 2026-10-05 — '정확 표기'가 검색어 꼴(띄어쓰기 빠진 "○○ 심는시기")을 문장 주어로 세우게 했다(대추나무 초안 사장님 지적).
+  // 핵심 키워드는 바른 띄어쓰기의 자연스러운 꼴로 쓴다 — seo.ts 판정이 띄어쓰기·조사를 무시한다(keywordForm.ts).
+  '- 키워드 계층 분리: 핵심 키워드는 첫 문단 1회·소제목 1곳까지만 바른 띄어쓰기의 자연스러운 꼴("○○ 심는 시기" — 검색어 꼴 "○○ 심는시기"가 아니라)로 쓰고, 그 밖에는 조사·어순을 바꾼 변형("가을에 묘목을 심을 때는")으로 녹여라. 검색어 꼴을 문장 주어로 세우거나 "~의"로 잇는 명사구로 쓰지 마라. 네이버는 형태소 분석이라 띄어쓰기·조사·변형이 검색 손실을 만들지 않고, 같은 표기 반복·억지 관형절("입추 직후에 적용하는 가을 묘목 심는 법은," 식)은 과최적화로 오히려 해롭다.\n' +
+  // 2026-10-05 — 영어 직역 말투("가을 식재 창"=window)가 브리프에서 본문·요약까지 옮겨졌다. styleLint.calqueIssues 가 2차 방어.
+  '- 영어를 직역한 말을 쓰지 마라 — 기간을 뜻하는 "창"("가을 식재 창", "마지막 가을 창", window), "윈도우", "~를 가져가다"(take) 대신 "가을에 심을 수 있는 때", "늦어도 △월까지"처럼 일상어로 쓴다("마지막"은 대체어로도 쓰지 마라 — 근거 없는 마감 선언이 된다). 브리프에 그런 말이 있어도 옮겨 적지 마라.\n' +
+  // 2026-10-05 — 브리프 §7-2 템플릿 문장("그해 식재는 접습니다")·"확정 H2(그대로 사용)"가 본문에 글자 그대로 들어갔다. styleLint(브리프 복사)가 2차 방어.
+  '- 브리프는 사실·각도 자료다 — 브리프의 문장·예시 문구·소제목을 옮겨 쓰지 말고 사실만 가져와 독자에게 하는 말로 새로 써라. 소제목은 독자가 실제로 묻는 말로 쓴다.\n' +
   '- 하우투면 번호 단계로, 리뷰면 장단점·비교·총평 구조로 전개한다.\n' +
   // 사실 공급(2026-09-17) — 실측: 사실 카드에 식물 사실 평균 3건이라 작가가 어느 나무에나 맞는 일반론
   // (물 빠짐·잎 진 뒤·첫해 참기·화분은 반)으로 2,000자를 채웠고, 그게 "수종만 바뀐 같은 글"의 뿌리였다.
@@ -153,7 +163,8 @@ const buildBlogBodyGuide = (variety: boolean): string =>
   '- 이모지·이모티콘·장식 특수문자(★✔♥ 등)를 소제목·본문 어디에도 쓰지 마라. 강조는 서식으로만 한다: 핵심 문장·수치는 **굵게**, 용어·미묘한 강조나 인용 뉘앙스는 *이탤릭*(둘 다 남발하지 말고 구조상 중요한 곳에만). 글자 크기·글꼴은 발행기가 가독성에 맞게 자동 처리하니 지정하지 마라.\n' +
   // 2026-10-05 — 한 문장 한 줄(편집 확정 규칙)과 맞물리게 '문단'을 빈 줄 사이 덩어리로 다시 정의한다. 종전 문구("한 문단은 2~4문장")는
   // 한 줄에 여러 문장을 붙여 쓰라는 뜻으로 읽혀 편집 규칙과 정면 충돌했다. STRUCTURE_VARIETY 와 무관한 공통 줄이라 off 지침도 같이 바뀐다.
-  '- 가독성: 빈 줄로 나뉜 덩어리 하나는 2~4문장으로 짧게 끊고, 덩어리와 덩어리 사이에는 빈 줄을 넣어 간격을 둔다(빽빽하게 붙이지 마라). 덩어리 안에서는 한 문장마다 줄을 바꿔 써도 같은 덩어리다.\n' +
+  // 2026-10-05 저녁 — 사장님 결정으로 편집 규칙 1번이 '한 줄에 1~2문장'으로 완화됐다(토막 줄 대응). 덩어리 정의는 그대로.
+  '- 가독성: 빈 줄로 나뉜 덩어리 하나는 2~4문장으로 짧게 끊고, 덩어리와 덩어리 사이에는 빈 줄을 넣어 간격을 둔다(빽빽하게 붙이지 마라). 덩어리 안에서는 한 줄에 1~2문장씩 줄을 바꿔 써도 같은 덩어리다.\n' +
   '- 리치 서식을 글의 성격에 맞게 "필요할 때만" 적절히 활용한다(억지로 넣지 말 것). 발행 시 실제 네이버 서식으로 렌더된다:\n' +
   '  · 인용구 3종 — ">" 깊이가 스타일이다(사용자 확정 2026-08-10). "> "=버티컬라인: 섹션 중간의 핵심 규칙·주의 한 줄(글당 2~3곳). ">> "=따옴표: 글의 중심 명제 한 문장('
   + (variety ? '글당 0~1곳 — 아래 [이번 글 구조] 지시를 따른다' : '글당 1곳, 도입 훅 직후가 최적')
@@ -168,7 +179,10 @@ const buildBlogBodyGuide = (variety: boolean): string =>
   '  · 소스코드: 코드·설정값·명령어는 ```로 감싼 코드블록으로 넣는다(기술 주제에 한함, 아니면 쓰지 마라).\n' +
   '  · 링크: 실제 출처 URL 이 있을 때만 [표시문구](URL) 형식으로 넣는다(없는 링크를 지어내지 마라).\n' +
   '  · 스티커·일정·수식·장소 같은 특수 요소는 사용하지 않는다(정보/하우투·리뷰 본문엔 부적합).\n' +
-  '- 이미지가 어울리는 자리 2~3곳에 [IMAGE: 장면 설명] 마커를 한 줄로 남겨라(소제목 아래 등 글 흐름에 맞게) — 발행 시 그 위치에 이미지가 삽입된다.\n' +
+  // 2026-10-05 대추나무 리비전 — 마커 6개에 이미지 3장이라 빈 자리 3곳이 미리보기·발행에 남았고, 마커 설명이 실사진에서만 지킬 수 있는
+  // 요구("경산 밭 … 2026-10 촬영", "촬영 날짜가 확인되는 캡션")를 적었다. 장수는 코드가 BLOG_IMAGE_MAX 로 다시 맞춘다(capImageMarkers).
+  `- 이미지 자리는 정확히 ${BLOG_IMAGE_MAX}곳 — 어울리는 자리에 [IMAGE: 장면 설명] 마커를 한 줄로 남겨라(소제목 아래 등 글 흐름에 맞게, 더 넣지 마라). 발행 시 그 위치에 이미지가 삽입된다. `
+  + '설명에는 보여 줄 장면(대상·부위·작업)만 쓴다 — 지명·날짜·"촬영"·"직접 찍은"·"캡션에 날짜" 같은 실사진 전용 요구는 쓰지 마라(생성 이미지는 지킬 수 없고, 실사진 자리 설명은 따로 정해진다).\n' +
   '- [네이버 상위 노출 블로그(실측)]이 주어지면, 상위 글들이 답하는 질문·관심사·눈높이에 맞춰 검색 수요가 검증된 방향으로 쓰되 내용은 더 구체적·실용적으로 차별화한다(제목·구성 그대로 베끼기 금지).\n' +
   '- 마크다운으로 작성(## 소제목 2개 이상 필수). 글 제목(# 한 줄)은 포매터가 별도 생성하니 본문만 작성.\n' +
   '- [리서치·SEO 브리프]의 타겟 키워드·검색의도·경쟁 빈틈·소주제를 활용해 차별화된 글을 쓴다.';
@@ -335,10 +349,11 @@ export async function writeBlogBody(a: {
     '[과사용 어휘 교체] 아래 어휘·문형은 최근 글들에 글마다 반복돼 문체 지문이 됐다 — 활용형까지 포함해 이번 글에서 피하고, '
     + '같은 뜻의 자연스러운 일상어로 바꿔 써라(꼭 필요하면 글당 1회 이하). 일상 대화에서 잘 쓰지 않는 어휘를 멋으로 쓰지 마라 — 어색함의 주범이다. '
     + "'갈린다·갈래·갈라진다'(→달라진다·차이가 난다·나뉜다·경우), '대개'(→보통·대체로·흔히, 표 머리글에선 빼도 뜻이 같다), "
-    + "판정을 '~쪽입니다·~쪽이고요'로 맺는 버릇(→~일 가능성이 큽니다, 또는 직접 서술), '판단·판정' 명사 남용(→기준·가늠·보는 법), "
+    // 2026-10-05 — '→가늠'은 읽기 쉬움 검수(가늠→확인하다)와 정면 충돌했고, '→~일 가능성이 큽니다'는 무근거 확률 말투를 불렀다.
+    + "판정을 '~쪽입니다·~쪽이고요'로 맺는 버릇(→직접 서술: '~예요', '~하세요' — '~쪽으로 움직입니다', '~할 확률이 높습니다'로 돌려 말하지도 마라), '판단·판정' 명사 남용(→기준·보는 법·확인하다), "
     + "단락 꼬리 '-고요' 연발(글당 1~2회만), '걷어내다'(→잘라내다·솎다·치우다), '~하는 셈'(→~나 마찬가지, 또는 비유 없이), "
     + "증상 은유 '그림'(→모습·증상), '어긋난다'(→맞지 않다·틀어진다), '훑다'(→살펴보다·둘러보다), 추상 '지점'(→대목·부분·데), "
-    + "'이건 ~해 봐야 아는 부분' 문형, '제 기준으로는'(→저는 ~부터 봅니다)."
+    + "'이건 ~해 봐야 아는 부분' 문형, '제 기준으로는'(→1인칭 없이 '~부터 확인하세요'), '~하는 셈'의 대체어로 '셈법'·'구간'을 쓰지 마라(→'~하면 됩니다', '시기·때')."
     + (ticLexemes.length
       ? ` 최근 본문에서 반복 조짐이 보이는 어휘(기계 채굴 — 소재 어휘가 섞일 수 있다): ${ticLexemes.map((w) => `'${w}'`).join(', ')}. `
         + '이 중 소재상 꼭 필요한 단어는 그대로 쓰되, 습관성 반복이면 다른 표현으로 분산하라.'
@@ -384,7 +399,7 @@ export async function writeBlogBody(a: {
     + '\n[운영 데이터 비공개] 검색량·문서수·자동완성·상위노출 건수 같은 SEO 조사 수치는 글의 방향을 잡는 데만 쓰고 본문에 쓰지 마라 — 독자가 읽을 글이지 운영 보고서가 아니다.';
   // 리비전 컨텍스트(스펙 §3) — voiceGuide 를 리비전에도 넣는다(종전엔 초안+피드백뿐이라 목소리·브리프가 빠졌다).
   // 편집 확정 규칙(2026-10-05)은 리비전에도 — 문체 린트 수정·사람 수정 요청이 한 줄 한 문장·첫머리 요약을 되돌리지 않게.
-  const reviseContext = revise ? [buildReviseContext({ factCard, brief, voiceGuide, baseBody: revise.baseBody, feedback: revise.feedback, structure }), editorRulesGuide()].filter(Boolean).join('\n\n') : '';
+  const reviseContext = revise ? [buildReviseContext({ factCard, brief, voiceGuide, baseBody: revise.baseBody, feedback: revise.feedback, structure }), editorRulesGuide(), keywordWritingGuide(keyword)].filter(Boolean).join('\n\n') : '';
   // 가드 발화 가시화(2026-08-06) — 프롬프트 컨텍스트는 이벤트에 안 남아 "가드가 있는데 왜 뚫렸나"를
   // 사후 판정할 수 없었다(배롱나무 중복 조사에서 실측). 발화 여부만 한 줄 남긴다.
   if (!revise) {
@@ -425,6 +440,7 @@ export async function writeBlogBody(a: {
       voiceGuide,
       lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms), // 어휘 가드(2026-08-08) — 동음이의 한자어·조어·키워드 동사화 방지
       editorRulesGuide(), // 편집 확정 규칙(2026-10-05) — 한 문장 한 줄·첫머리 굵은 요약·쉬운 말(brand.yaml editorRules)
+      keywordWritingGuide(keyword), // 키워드 자연스러운 꼴(2026-10-05) — 검색어 꼴을 주어·'~의' 명사구로 세우지 않게
       serpText ? `[네이버 상위 노출 블로그(실측) — 검색 수요가 검증된 방향·눈높이 참고. 제목·구성 그대로 베끼기 금지]\n${serpText}` : '',
       brief ? `[리서치·SEO 브리프]\n${brief}` : '',
       critiqueText ? `[검수 의견 — 아래는 약점·주의점 목록이다. 발행 판정이 아니다. 지적된 미검증·논쟁 주장은 본문에서 빼고, 나머지는 참고해 품질을 높여라]\n${critiqueText}` : '',
@@ -444,7 +460,7 @@ export async function writeBlogBody(a: {
       // 재집필은 검수 의견을 뺀다(같은 벽에 다시 부딪히지 않게) — 그러나 mustFixBlock 은 **남긴다**.
       // 이건 품질 조언이 아니라 '무근거 기입을 쓰지 마라'는 금지라, 여기서 빠지면 퇴화 재집필 경로가
       // 게이트의 구멍이 된다(브리프에 남은 무근거 주장이 그대로 본문에 실린다).
-      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, moduleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms), editorRulesGuide(), brief ? `[리서치·SEO 브리프]\n${brief}` : '', mustFixBlock].filter(Boolean).join('\n\n'),
+      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, moduleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms), editorRulesGuide(), keywordWritingGuide(keyword), brief ? `[리서치·SEO 브리프]\n${brief}` : '', mustFixBlock].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, groundForFacts: true, maxOutputTokens: 5000, signal,
     });
@@ -798,7 +814,10 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
     // 리서치 런은 집필 자체가 없다(브리프가 곧 산출물) — 게이트가 막을 하류가 없어 건너뛴다.
     const gate = CONFIG.briefGate && opts.mission !== 'research';
     // 게이트 on 이면 판정 표기를 강제한다(파서 앵커와 맞물림). off 면 종전 문구 그대로 — 회귀 0.
+    // 2026-10-05 — 브리프 반려 사유 "H2에 메인 키워드 0개"가 브리프에 소제목 문구·키워드 배치표를 박게 했고, 작가가 그 소제목·
+    // 템플릿 문장을 그대로 옮겼다(대추나무 초안). 브리프 심사는 사실·각도만 본다 — 소제목 키워드·밀도는 본문 seo.ts 의 일이다.
     const criticTask = '각 팀 산출물을 비판적으로 검토하라. 약점·모순·누락을 지적하라.'
+      + (gate ? ' 이 단계는 집필 전 브리프 심사다 — 사실의 근거·각도·검색 의도만 보고, 소제목 문구·소제목 키워드·키워드 밀도·배치 횟수는 요구하거나 반려 사유로 삼지 마라(본문 SEO 점검이 따로 한다).' : '')
       + (gate ? `\n\n${VERDICT_FORMAT}` : '');
     const combinedOf = (): string => usableTeams.map((t) => `## ${t.team.name}\n${t.deliverable}`).join('\n\n');
     const c = await runAgent({
@@ -958,7 +977,9 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
     bus.emit('log', { message: factCardMsg });
   }
   // 구조 시드(2026-08-27 권고 4) — 이 런의 골격을 뽑아 sessions/<runId>/structure.json 에 남긴다(리비전이 승계).
-  const structureSeed = research ? null : resolveStructureSeed(bus.runId);
+  // 첫머리 굵은 요약(편집 확정 규칙)이 켜진 브랜드는 '답 먼저' 도입·도입 직후 중심 명제 인용을 뽑지 않는다(2026-10-05 —
+  // 요약 두 줄 + 답 먼저 도입 + 인용이 같은 답을 첫머리에 세 번 쌓았다).
+  const structureSeed = research ? null : resolveStructureSeed(bus.runId, { boldSummary: hasBoldSummaryRule() });
   if (structureSeed) {
     // 로그는 이 런이 실제로 쓰는 필드만 — cardLines·hashtags·shortsScenes 는 카드·쇼츠 잡이 각자 뽑으므로
     // 여기 값은 저장만 되고 아무 데서도 읽히지 않는다(알리면 세트가 공유하는 것으로 오해된다).
@@ -1031,7 +1052,7 @@ async function packageDesignFinalize(a: {
   if (CONFIG.blogStyleLint && mission !== 'research' && finalDeliverable.trim()
     && finalDeliverable.trim() !== brief.trim() && !signal?.aborted) {
     styleLinted = true;
-    const before = blogStyleIssues(finalDeliverable);
+    const before = blogStyleIssues(finalDeliverable, keyword, brief);
     styleBefore = before.length;
     if (before.length) {
       styleResidual = before;
@@ -1056,7 +1077,7 @@ async function packageDesignFinalize(a: {
         // 완성된 본문이 통째로 그 답변으로 대체됐다. 게다가 린트는 게이트보다 먼저 돌아, 대체된 퇴화 본문이
         // 게이트의 기준 본문이 된다(briefFallback 동일성 검사는 브리프만 보므로 이걸 못 잡는다).
         const reject = styleRevisionReject(finalDeliverable, revised);
-        if (!reject) { finalDeliverable = revised; styleResidual = blogStyleIssues(finalDeliverable); }
+        if (!reject) { finalDeliverable = revised; styleResidual = blogStyleIssues(finalDeliverable, keyword, brief); }
         else { styleVerdict = `수정 폐기: ${reject}`; bus.emit('log', { message: `문체 린트 수정 폐기(${reject}) — 본문 유지` }); }
       } catch (e) {
         styleVerdict = '수정 실패';
@@ -1172,7 +1193,7 @@ async function packageDesignFinalize(a: {
     // 유보 사용을 명시적으로 요구하므로 이 긴장은 제거 대상이 아니다. 다음 5~10편 실측에서 '✍ 문체 N건
     // 잔존'이 ⓒ 로 몰리면, 게이트가 바꾼 문장(bodyBeforeGate 비교로 이미 판별 가능)에 한해 ⓒ 면제를 검토한다.
     if (styleLinted && finalDeliverable !== bodyBeforeGate) {
-      styleResidual = blogStyleIssues(finalDeliverable);
+      styleResidual = blogStyleIssues(finalDeliverable, keyword, brief);
       const rm = `[문체린트] 게이트 후 재계산 — 잔존 ${styleResidual.length}(최종 본문 기준)`;
       bus.emit('log', { message: rm });
       try { writeStyleLint(bus.runId, { issues: styleResidual, before: styleBefore, checkedTs: new Date().toISOString() }); }
@@ -1182,6 +1203,23 @@ async function packageDesignFinalize(a: {
 
   // --- 발행용 초안 포장 — org 본문을 제목·메타·태그·이미지 슬롯·SEO 점수로 포장(재생성 아님). 실패해도 본문은 유지.
   //     리서치 런은 통째로 생략 — draft.json 이 안 생겨 piece 승격·자동 네이버 임시저장이 자연 차단된다. ---
+  // 이미지 마커 상한(2026-10-05 대추나무 리비전 dbb3ea1b6aa6 — 마커 6·이미지 3 → 빈 자리 3) — 포장·디자이너·draft.md/html/json 보다 먼저,
+  // 새 런·리비전 런(검토 탭 수정 요청·SEO 자동 개정 모두 runOrgRevise → 여기) 공통으로 만들어질 장수만큼만 남기고 설명의 실사진 전용 요구를 덜어 낸다.
+  if (mission !== 'research' && finalDeliverable.trim()) {
+    const cap = capImageMarkers(finalDeliverable, BLOG_IMAGE_MAX, brandPlaceWords());
+    if (cap.removed || cap.cleaned) {
+      finalDeliverable = cap.body;
+      const m = `이미지 마커 — ${cap.kept + cap.removed}곳 → ${cap.kept}곳${cap.cleaned ? ` · 실사진 전용 설명 정리 ${cap.cleaned}곳` : ''}`;
+      console.log(`[이미지] ${m}`); bus.emit('log', { message: m });
+      // 문체 잔존(style_lint.json → 검토 알림 '✍ 문체 N건 잔존')은 정리 전 본문으로 셌다 — 이미 고친 마커 지적이 남지 않게 다시 센다
+      // (사실 게이트 뒤 재계산과 같은 패턴, 린트가 실제로 돈 런에서만).
+      if (styleLinted) {
+        styleResidual = blogStyleIssues(finalDeliverable, keyword, brief);
+        try { writeStyleLint(bus.runId, { issues: styleResidual, before: styleBefore, checkedTs: new Date().toISOString() }); }
+        catch (e) { bus.emit('log', { message: `문체 린트 재기록 실패(무해): ${e instanceof Error ? e.message : String(e)}` }); }
+      }
+    }
+  }
   let assets: AssetBundle | undefined;
   if (!signal?.aborted && mission !== 'research') {
     try {
@@ -1208,7 +1246,12 @@ async function packageDesignFinalize(a: {
       log: (m) => { console.log('[실촬영]', m); bus.emit('log', { message: m }); },
     })
     : null;
-  if (assets && designer && CONFIG.openaiApiKey && !signal?.aborted) {
+  // 디자이너가 계획할 생성 장수 — 남긴 마커마다 이미지 한 장(실촬영이 있으면 첫 마커는 실사진이라 하나 덜 계획한다).
+  // 마커가 없으면(렌더가 소제목 아래 배분) 종전 그대로 BLOG_IMAGE_MAX.
+  const markerCount = countImageMarkers(finalDeliverable);
+  const imageTotal = markerCount || BLOG_IMAGE_MAX;
+  const aiSlots = Math.max(0, imageTotal - (realFrame ? 1 : 0));
+  if (assets && designer && CONFIG.openaiApiKey && !signal?.aborted && aiSlots > 0) {
     try {
       const slotLines = assets.draft.imageSlots.map((s, i) => `${i + 1}. ${s.alt} — ${s.prompt}`).join('\n') || '(초안 슬롯 없음)';
       const markers = [...finalDeliverable.matchAll(/\[IMAGE:([^\]]+)\]/g)].map((m) => (m[1] ?? '').trim()).filter(Boolean).slice(0, 6);
@@ -1219,8 +1262,10 @@ async function packageDesignFinalize(a: {
           '각 이미지: alt(대체텍스트, 한국어) · prompt(생성 프롬프트 — 피사체·구도·스타일·조명, 한국 생활 맥락, 텍스트/워터마크/로고 금지, 150자 이내로 간결하게). ' +
           (realFrame
             ? `이미지 1번은 이미 정해졌다 — ${realFrame.species} 실물 사진(우리 농원에서 직접 찍은 영상의 한 장면${realFrameSceneTags(realFrame.tags).length ? `, ${realFrameSceneTags(realFrame.tags).join('·')}` : ''})이 본문 첫 [IMAGE:] 마커 자리에 들어간다. ` +
-              '너는 그다음 마커들에 들어갈 생성 이미지만 계획하라 — 최대 2장. 1번처럼 나무 전체를 보여 주는 장면은 반복하지 말고 본문이 설명하는 작업·부위·상황을 보여 줘라. '
-            : '최대 3장. ') +
+              `너는 그다음 마커들에 들어갈 생성 이미지만 계획하라 — 정확히 ${aiSlots}장(본문 IMAGE 마커 2번부터 순서대로). 1번처럼`
+              + ' 나무 전체를 보여 주는 장면은 반복하지 말고 본문이 설명하는 작업·부위·상황을 보여 줘라. '
+            : `정확히 ${aiSlots}장(본문 IMAGE 마커 순서대로). `) +
+          '지명·날짜·촬영 같은 실사진 전용 요구는 프롬프트에 넣지 마라. ' +
           '협의 코멘트는 1~2문장으로 짧게, 마지막 줄에 JSON 한 줄로 출력: {"images":[{"alt":"...","prompt":"..."}]}',
         context:
           `[작가 최종 카피(발췌)]\n${finalDeliverable.slice(0, 5000)}\n\n` +
@@ -1229,7 +1274,9 @@ async function packageDesignFinalize(a: {
         // 1600 토큰 — 한국어 상세 프롬프트 3개 + 코멘트가 700 에선 잘려 JSON 이 깨졌다(E2E 실측).
         stage: 'work', emitSpawn: true, groundWikiOnly: true, maxOutputTokens: 1600, signal,
       });
-      const slots = parseImagePlan(plan.text, realFrame ? 2 : 3);
+      const planned = parseImagePlan(plan.text, aiSlots);
+      // 디자이너가 덜 계획하면 편집자 슬롯으로 채워 마커마다 이미지가 가게 한다(남는 마커는 아래 정합에서 덜어 낸다).
+      const slots = planned.length ? [...planned, ...assets.draft.imageSlots.slice(planned.length)].slice(0, aiSlots) : [];
       if (slots.length) assets.draft.imageSlots = slots;
       autoImages = true;                               // 슬롯 확정 → finalize 가 실제 이미지 생성
       bus.emit('log', { message: `이미지 기획(${designer.name} 디자이너) — 슬롯 ${assets.draft.imageSlots.length}개 확정${slots.length ? '' : ' (계획 파싱 실패 — 편집자 슬롯 유지)'}` });
@@ -1241,7 +1288,18 @@ async function packageDesignFinalize(a: {
   if (assets && realFrame) {
     assets.draft.imageSlots = withRealFrameSlot(assets.draft.imageSlots, {
       alt: realFrame.alt, prompt: `실촬영 — 보관소 영상 ${realFrame.mediaFile.split('/').pop() ?? ''} @${realFrame.atSec}초(생성하지 않음)`,
-    });
+    }, imageTotal);
+  }
+  // 마커·슬롯 정합(2026-10-05) — 이미지가 실제로 나갈 런에서 슬롯이 마커보다 적으면(계획 파싱 일부 실패 등) 뒤쪽 마커를 덜어
+  // 빈 자리가 남지 않게 한다. draft.md/html/json(draftFiles)과 finalize 본문이 같은 본문을 보게 둘 다 바꾼다.
+  if (assets && (!!realFrame || autoImages || (!!CONFIG.openaiApiKey && CONFIG.blogAutoImage))) {
+    const n = assets.draft.imageSlots.length;
+    if (n > 0 && countImageMarkers(assets.draft.bodyMarkdown) > n) {
+      const cap = capImageMarkers(assets.draft.bodyMarkdown, n);
+      assets.draft.bodyMarkdown = cap.body;
+      finalDeliverable = capImageMarkers(finalDeliverable, n).body;
+      bus.emit('log', { message: `이미지 마커 — 슬롯 ${n}장에 맞춰 ${cap.removed}곳 더 덜어 냄` });
+    }
   }
   // 이미지 실생성이 예정된 런(finalize 게이트와 동일 조건)이면 draft.html 이 생성 파일(images/blog-image-0N.png)을
   // <img> 로 참조하게 재렌더 — 본문 [IMAGE:] 마커 위치에 이미지가 실제로 삽입된 미리보기가 된다.

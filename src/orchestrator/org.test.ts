@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { REVISE_NO_NEW_FACTS, buildReviseContext, BLOG_BODY_GUIDE, blogBodyGuide, buildGenreGuide, FactStarvedError, isFactStarved, shouldThrowStarved, frameOpenerItem } from './org';
+import { REVISE_NO_NEW_FACTS, buildReviseContext, BLOG_BODY_GUIDE, blogBodyGuide, buildGenreGuide, FactStarvedError, isFactStarved, shouldThrowStarved, frameOpenerItem, NO_FABRICATED_EXPERIENCE } from './org';
 import { structureBlock, STRUCTURE_KEEP_BLOCK, FIXED_STRUCTURE_SEED } from '../content/structureSeed';
 import { FACT_CARD_HEADER } from '../content/factGate';
 
@@ -199,18 +199,48 @@ describe('frameOpenerItem — ⑤ 도입 단정 대안', () => {
 
 // 2026-10-05 — 한 문장 한 줄(편집 확정 규칙)과 맞물리게 '문단' 셈을 빈 줄 사이 덩어리로 옮겼다. 두 줄은 STRUCTURE_VARIETY 와
 // 무관한 공통 줄이라 on/off 지침이 함께 바뀐다(off 의 base 동일성 계약은 [이번 글 구조] 위임 문구에 대한 것이다).
-describe('blogBodyGuide — 한 문장 한 줄과 양립하는 어미 배합·가독성(2026-10-05)', () => {
+// 2026-10-05 저녁 — 사장님 결정: 어미 배합 수량 규칙 폐지(덩어리마다 '-요/-고요'를 꽂아 토막 줄을 만들었다) → 해요체 바탕 + 합쇼체 섞기,
+// 한 줄에 1~2문장. 1인칭 주어 금지는 유지하고, '글당 최소 2회 ~라고 봅니다' 의무는 지웠다.
+describe('blogBodyGuide — 말투 결정·판단 권고(2026-10-05 저녁)', () => {
   for (const [name, g] of [['on', blogBodyGuide(true)], ['off', blogBodyGuide(false)]] as const) {
-    it(`${name}: 어미 배합은 덩어리 단위로 센다(줄마다 1개가 아니다)`, () => {
-      expect(g).toContain('어미 배합(덩어리 규칙)');
-      expect(g).toContain('빈 줄 없이 이어진 줄들은 한 덩어리로 센다');
-      expect(g).toContain('**2~3문장 덩어리는 1개, 4문장 덩어리는 2개**');
-      expect(g).not.toContain('2~3문장 문단은 1개');
+    it(`${name}: 어미 수량 규칙 대신 해요체 바탕 + 합쇼체 섞기, 토막 꼬리 금지`, () => {
+      expect(g).not.toContain('어미 배합(덩어리 규칙)');
+      expect(g).not.toContain('2~3문장 덩어리는 1개');
+      expect(g).toContain('해요체를 바탕으로 쓰고, 단정·안내가 필요한 문장에 합쇼체를 자연스럽게 섞는다');
+      expect(g).toContain('혼자 한 줄로 세우지 마라');
     });
-    it(`${name}: 가독성은 덩어리 2~4문장 + 덩어리 안 줄바꿈 허용`, () => {
+    it(`${name}: 가독성은 덩어리 2~4문장 + 한 줄에 1~2문장`, () => {
       expect(g).toContain('빈 줄로 나뉜 덩어리 하나는 2~4문장');
-      expect(g).toContain('한 문장마다 줄을 바꿔 써도 같은 덩어리다');
+      expect(g).toContain('한 줄에 1~2문장씩 줄을 바꿔 써도 같은 덩어리다');
       expect(g).not.toContain('한 문단은 2~4문장');
     });
+    // 리뷰(2026-10-05) — 프롬프트 예문은 자리표시로만(구체 사실 예문은 모델이 그대로 베낀다), '창' 대체어에 '마지막' 금지,
+    // 이미지 자리는 정확히 BLOG_IMAGE_MAX 곳·실사진 전용 요구 금지(대추나무 리비전 dbb3ea1b6aa6).
+    it(`${name}: 예문 자리표시·'마지막' 대체어 금지·이미지 자리 정확히 3곳`, () => {
+      expect(g).not.toContain('1년에 두 번');
+      expect(g).toContain('"이 나무는 ○○에도 심을 수 있습니다.');
+      expect(g).not.toContain('심을 수 있는 마지막 시기');
+      expect(g).toContain('"늦어도 △월까지"');
+      expect(g).toContain('이미지 자리는 정확히 3곳');
+      expect(g).not.toContain('2~3곳에 [IMAGE');
+      expect(g).toContain('지명·날짜·"촬영"·"직접 찍은"·"캡션에 날짜" 같은 실사진 전용 요구는 쓰지 마라');
+    });
+    it(`${name}: '봅니다' 의무 삭제·1인칭 주어 금지 유지·무근거 주장은 빼라`, () => {
+      expect(g).not.toContain('글당 최소 2회');
+      expect(g).not.toContain('"~라고 봅니다", "이건 심어 봐야');
+      expect(g).toContain('판단을 감싸는 "~다고/~라고/~로 봅니다", "~로/~처럼/~게 보입니다" 같은 유보 종결은 글당 1회까지');
+      expect(g).toContain('실제로 살펴보는 동작은 해당 없음'); // 린트(BOMNIDA_RE)와 같은 기준(리뷰 2026-10-05)
+      expect(g).toContain('"저는/제가/저라면/저희는" 같은 1인칭 주어는 쓰지 않는다');
+      expect(g).toContain('겪지 않은 사건을 지어내는 것은 계속 금지');
+      expect(g).toContain('판단을 판매처·기관·독자에게 떠넘기지 마라');
+      expect(g).toContain('브리프의 문장·예시 문구·소제목을 옮겨 쓰지 말고 사실만 가져와');
+    });
   }
+  it('NO_FABRICATED_EXPERIENCE — 날조 금지·판단 유지는 그대로, 예문에서 "봅니다"만 뺐다', () => {
+    expect(NO_FABRICATED_EXPERIENCE).toContain('**실제로 있었던 일처럼 쓰는 구체 서술을 만들어내지 마라**');
+    expect(NO_FABRICATED_EXPERIENCE).toContain('판단을 판매처·기관·독자에게 떠넘기지 말고');
+    expect(NO_FABRICATED_EXPERIENCE).not.toContain('봅니다');
+    expect(NO_FABRICATED_EXPERIENCE).toContain('경험 주장'); // 2026-10-05 대추나무 리비전 "저희가 직접 해 보며 세운 기준"
+    expect(NO_FABRICATED_EXPERIENCE).not.toContain('봄까지 기다리면'); // 예문은 자리표시로만(리뷰 2026-10-05)
+  });
 });

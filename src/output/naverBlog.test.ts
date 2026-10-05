@@ -5,7 +5,9 @@ vi.mock('../orchestrator/agent', async (importOriginal) => ({
   microJSON: vi.fn(),
 }));
 import { microJSON } from '../orchestrator/agent';
-import { stripTrailingTagDump, stripInternalMarkers, packageNaverBlog, titleFormBlock } from './naverBlog';
+import { stripTrailingTagDump, stripInternalMarkers, packageNaverBlog, titleFormBlock, briefAngleForPackaging, bodySummaryForPackaging, capImageMarkers, countImageMarkers, BLOG_IMAGE_MAX } from './naverBlog';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { CONFIG } from '../config';
 
 const mocked = microJSON as unknown as ReturnType<typeof vi.fn>;
@@ -103,6 +105,16 @@ describe('packageNaverBlog — meta 요약투 린트 + 1회 재시도(권고 2)'
     spy.mockRestore();
   });
 
+  it('재시도가 지적을 줄이기만 해도 채택한다(리뷰 2026-10-05 — 종전엔 0건일 때만)', async () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    mocked
+      .mockResolvedValueOnce(pack('가을 식재 창이라 묘목 심는 법을 정리했습니다.', ['1차 제목 후보입니다'])) // 요약투 + 직역 2건
+      .mockResolvedValueOnce(pack('묘목 심는 법을 정리했습니다.', ['재시도 제목 후보입니다']));            // 요약투 1건
+    const b = await packageNaverBlog(input);
+    expect(b.draft.metaDescription).toBe('묘목 심는 법을 정리했습니다.');
+    spy.mockRestore();
+  });
+
   it('재시도 콜이 던져도 1차 결과로 계속 간다(fail-open)', async () => {
     mocked
       .mockResolvedValueOnce(pack('핵심만 담았어요.', ['1차 제목 후보입니다']))
@@ -146,7 +158,7 @@ describe('packageNaverBlog — 제목 형식(titleForm)', () => {
     expect(user).not.toContain('[이번 글 제목 형식');
   });
 
-  it('형식이 오면 1순위에 그 형식을 걸고, 고정 키워드 정확 표기를 못박는다', async () => {
+  it('형식이 오면 1순위에 그 형식을 걸고, 고정 키워드를 바른 띄어쓰기 꼴로 못박는다', async () => {
     mocked.mockResolvedValueOnce(pack(['배롱나무 가지치기, 언제 해야 하나요?']));
     await packageNaverBlog({ ...base, titleForm: 'question' });
     const [, sys, user] = mocked.mock.calls[0] as [string, string, string];
@@ -154,7 +166,7 @@ describe('packageNaverBlog — 제목 형식(titleForm)', () => {
     expect(sys).not.toContain('처서 전에 끝내야 하는 이유');
     expect(sys).toContain('[이번 글 제목 형식]을 따른다');
     expect(user).toContain('[이번 글 제목 형식 — titles 첫 번째 후보(발행 제목)에 반드시 적용] 질문형');
-    expect(user).toContain('핵심 키워드 "배롱나무 가지치기" 표기를');
+    expect(user).toContain('핵심 키워드 "배롱나무 가지치기"를 바른 띄어쓰기의 자연스러운 꼴("배롱나무 가지치기")로');
   });
 
   // 브리프의 '제목 후보'(키워드 앞부분·클릭 유도)와 SERP 제목이 형식 블록 뒤에 오면 마지막에 읽힌 꼴로 끌려간다.
@@ -188,5 +200,119 @@ describe('packageNaverBlog — 제목 형식(titleForm)', () => {
     mocked.mockResolvedValueOnce(pack(['언제 잘라야 하나요?', '배롱나무 가지치기 시기와 방법']));
     const b = await packageNaverBlog(base);
     expect(b.draft.titleCandidates[0]).toBe('언제 잘라야 하나요?');
+  });
+});
+
+// 2026-10-05 대추나무 초안 — 제목 "가을 vs 봄 성공률이 다른 이유"·메타 "…마지막 가을 창입니다"가 본문에 없는 주장이었다.
+// 포장기는 브리프 앞 1,500자(처리 투명성 로그)와 런 주제("…마지막 식재 시즌")를 봤다. 각도·금칙 발췌와 본문 결론을 넘긴다.
+describe('packageNaverBlog — 제목·메타·본문 일관성(2026-10-05)', () => {
+  const fx = (n: string): string => fs.readFileSync(fileURLToPath(new URL(`../content/fixtures/${n}`, import.meta.url)), 'utf-8');
+  const BRIEF = fx('jujube-trashed-brief.md');
+  const BODY = fx('jujube-exemplar-body.md');
+
+  it('briefAngleForPackaging — 휴지통 브리프에서 각도·검색 의도·확정 제목·금칙을 뽑고, 투명성 로그·구성안·밀도 설계는 뺀다', () => {
+    const a = briefAngleForPackaging(BRIEF);
+    expect(a).toContain('## §6. 차별화 각도 3개');
+    expect(a).toContain('## §3. 검색 의도');
+    expect(a).toContain('대추나무 심는시기, 11월에 심어도 되는지 세 가지로 확인하세요');
+    expect(a).toContain('"마지막"류 마감 선언어 금지');
+    expect(a).not.toContain('처리 투명성 로그');
+    expect(a).not.toContain('확정 H2(그대로 사용)');
+    expect(a).not.toContain('키워드 밀도 설계');
+    expect(a).not.toContain('[근거:');
+    expect(a.length).toBeLessThanOrEqual(1801);
+  });
+  it('briefAngleForPackaging — 표준 브리프 꼴("4. 차별화 각도: …") 라벨 줄, 못 찾으면 빈 문자열(앞 N자 폴백 없음)', () => {
+    const std = ['1. 핵심 키워드: 감나무 가지치기', '2. 검색 의도: 정보 — 언제 자르는지', '3. 경쟁 현황: 오래된 글', '4. 차별화 각도: 잎 진 뒤 확인법', '5. 제목 방향·태그 후보: 질문형'].join('\n');
+    const a = briefAngleForPackaging(std);
+    expect(a).toContain('2. 검색 의도: 정보');
+    expect(a).toContain('4. 차별화 각도: 잎 진 뒤 확인법');
+    expect(a).toContain('5. 제목 방향');
+    expect(a).not.toContain('경쟁 현황');
+    expect(briefAngleForPackaging('처리 로그만 있는 브리프입니다.')).toBe('');
+    expect(briefAngleForPackaging(undefined)).toBe('');
+  });
+  it('briefAngleForPackaging — 금칙 절 본문까지 싣는다: "## 6. 금칙" 머리글·"6. 금칙:" 라벨 두 꼴(리뷰 2026-10-05)', () => {
+    const md = briefAngleForPackaging('# 브리프\n## 4. 차별화 각도\n가을 vs 봄 비교\n## 6. 금칙\n- 근거 없는 "마지막" 마감 선언\n- 성공률 수치 단정\n## 7. 섹션 구성안\n- a');
+    expect(md).toContain('## 6. 금칙\n- 근거 없는 "마지막" 마감 선언\n- 성공률 수치 단정');
+    expect(md.indexOf('금칙')).toBeLessThan(md.indexOf('차별화 각도')); // 금칙이 맨 앞(상한에 잘려도 남게)
+    expect(md).not.toContain('섹션 구성안');
+    const std = briefAngleForPackaging('1. 검색 의도: 언제 심나\n4. 차별화 각도: 땅 상태로 판단\n5. 제목 방향·태그 후보\n- 대추나무 심는 시기, 땅부터\n6. 금칙:\n- "마지막" 금지\n- 성공률 금지\n- 품종 등치 단정 금지');
+    expect(std).toContain('6. 금칙:\n- "마지막" 금지\n- 성공률 금지\n- 품종 등치 단정 금지');
+    expect(std).toContain('5. 제목 방향·태그 후보\n- 대추나무 심는 시기, 땅부터'); // 콜론 없는 번호 라벨
+  });
+  it('briefAngleForPackaging — 콜론 없는 라벨은 번호 줄만(본문 목록 "- 제목에 …"은 라벨이 아니다)', () => {
+    expect(briefAngleForPackaging('- 제목에 키워드 넣기\n본문 문장')).toBe('');
+  });
+  it('bodySummaryForPackaging — 굵은 요약·도입과 결론 절을 담는다', () => {
+    const s = bodySummaryForPackaging(BODY);
+    expect(s).toContain('(첫머리)\n**대추나무는 가을에도, 봄에도 심을 수 있어요.**');
+    expect(s).toContain('(결론 절)\n## 가을에 심을까, 봄에 심을까');
+    expect(s).toContain('싹이 늦을 뿐이니 조급하게 뽑지 마세요.');
+    expect(s).not.toContain('[IMAGE:');
+  });
+  it('포장 프롬프트: 런 주제는 참고로 낮추고, [이 글의 결론]과 브리프 발췌를 싣는다(앞 1,500자 아님)', async () => {
+    mocked.mockResolvedValueOnce({ primaryKeyword: '대추나무 심는시기', titles: ['대추나무 심는 시기, 가을과 봄 중 언제가 좋을까요?'], meta: '대추나무는 가을과 봄에 심어요. 땅이 굳었으면 봄에 심으세요.', tags: ['대추나무'], images: [] });
+    await packageNaverBlog({ topic: '대추나무, 11월 지금이 마지막 식재 시즌입니다', body: BODY, model: 'm', keyword: '대추나무 심는시기', researchBrief: BRIEF, titleForm: 'question' });
+    const user = String(mocked.mock.calls[0]![2]);
+    expect(user).toContain('[런 시작 주제 — 참고만. 본문·결론과 다르면 본문을 따른다] 대추나무, 11월 지금이 마지막 식재 시즌입니다');
+    expect(user).toContain('[이 글의 결론 — titles·meta 는 이 말과 같은 주장이어야 한다');
+    expect(user).toContain('(각도·제목 방향·금칙 발췌 — 금칙은 지켜라)');
+    expect(user).not.toContain('처리 투명성 로그');
+    expect(user).toContain('형식은 꼴만 정한다');
+  });
+  it('1순위 제목에 본문에 없는 주장(vs·성공률)이 있으면 근거 있는 키워드 후보로 바꾼다', async () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    mocked.mockResolvedValueOnce({ primaryKeyword: '대추나무 심는시기', titles: ['대추나무 심는시기, 가을 vs 봄 성공률이 다른 이유', '삽 한 번이면 알아요', '대추나무 심는 시기, 지금 심어도 될까요?'],
+      meta: '대추나무는 가을과 봄에 심어요. 땅이 굳었으면 봄에 심으세요.', tags: ['대추나무'], images: [] });
+    const b = await packageNaverBlog({ topic: 't', body: BODY, model: 'm', keyword: '대추나무 심는시기', titleForm: 'compare' });
+    expect(b.draft.titleCandidates[0]).toBe('대추나무 심는 시기, 지금 심어도 될까요?');
+    expect(spy.mock.calls.some((c) => String(c[0]).includes('본문에 없는 주장(vs·성공률)'))).toBe(true);
+    spy.mockRestore();
+  });
+  it('메타에 본문에 없는 주장("마지막"·"생존율")이 있으면 같은 재시도에 지적을 싣는다', async () => {
+    mocked
+      .mockResolvedValueOnce({ primaryKeyword: '대추나무 심는시기', titles: ['대추나무 심는 시기, 지금 심어도 될까요?'], meta: '10월 하순부터 11월 초순이 마지막 시기예요. 늦으면 생존율이 높은 봄에 심으세요.', tags: [], images: [] })
+      .mockResolvedValueOnce({ meta: '대추나무는 가을엔 10월 하순부터, 봄엔 3월 중순부터 심어요. 땅이 굳었으면 봄에 심으세요.' });
+    const b = await packageNaverBlog({ topic: 't', body: BODY, model: 'm', keyword: '대추나무 심는시기' });
+    expect(mocked).toHaveBeenCalledTimes(2);
+    expect(String(mocked.mock.calls[1]![2])).toContain('본문에 없는 주장 "마지막", "생존율"');
+    expect(b.draft.metaDescription).toContain('3월 중순부터');
+  });
+});
+
+// 2026-10-05 대추나무 리비전 dbb3ea1b6aa6 — draft.md 에 [IMAGE:] 6개, 이미지는 3장(실촬영 1 + 생성 2) → 빈 자리 3곳이 미리보기·발행에 남았다.
+describe('capImageMarkers — 마커를 만들어질 이미지 장수로 맞춘다', () => {
+  const md = (n: number) => Array.from({ length: n }, (_, i) => `## 절 ${i + 1}\n본문 ${i + 1}.\n\n[IMAGE: 장면 ${i + 1}]\n`).join('\n');
+  it('6개 → 3개: 첫 마커(실촬영 자리)는 남기고 나머지는 고르게(첫·끝 포함)', () => {
+    const r = capImageMarkers(md(6));
+    expect(r).toMatchObject({ kept: 3, removed: 3 });
+    expect([...r.body.matchAll(/\[IMAGE: ([^\]]+)\]/g)].map((m) => m[1])).toEqual(['장면 1', '장면 4', '장면 6']);
+    expect(r.body).not.toMatch(/\n{3,}/);
+    expect(r.body).toContain('본문 5.'); // 본문은 그대로
+  });
+  it('상한 이하면 그대로, 상한은 BLOG_IMAGE_MAX(3)', () => {
+    expect(BLOG_IMAGE_MAX).toBe(3);
+    const two = md(2);
+    expect(capImageMarkers(two).body).toBe(two);
+    expect(countImageMarkers(capImageMarkers(md(5), 2).body)).toBe(2);
+    expect(countImageMarkers('본문 [IMAGE: 인라인] 문장')).toBe(0); // 렌더와 같은 판정 — 단독 줄만
+  });
+  it('실측 리비전 초안(dbb3ea1b6aa6): 6 → 3, 실사진 전용 설명이 빠진다', () => {
+    const file = fileURLToPath(new URL('../../data/sessions/dbb3ea1b6aa6/draft.json', import.meta.url));
+    if (!fs.existsSync(file)) return; // 세션 정리(janitor)로 지워졌으면 건너뛴다
+    const body = String(JSON.parse(fs.readFileSync(file, 'utf-8')).bodyMarkdown ?? '');
+    expect(countImageMarkers(body)).toBe(6);
+    const r = capImageMarkers(body, BLOG_IMAGE_MAX, ['경북', '경산']);
+    expect(countImageMarkers(r.body)).toBe(3);
+    expect(r.body).not.toMatch(/\[IMAGE:[^\]]*(?:촬영|캡션|경산|2026)/);
+  });
+  it('포장: 본문 마커를 맞추고, 슬롯은 마커 수까지만(고아 이미지 방지)', async () => {
+    mocked.mockResolvedValueOnce({ primaryKeyword: 'k', titles: ['가을 묘목 고르는 기준 한 가지'], meta: '잎이 상한 나무는 9월에 비료를 줘도 소용없습니다.', tags: [],
+      images: [{ alt: 'a', prompt: 'p' }, { alt: 'b', prompt: 'q' }, { alt: 'c', prompt: 'r' }] });
+    const b = await packageNaverBlog({ topic: 't', body: `${md(2)}\n[IMAGE: 2026-10 촬영 사진]\n${md(3)}`.replace(/\[IMAGE: 2026-10 촬영 사진\]/, ''), model: 'm' });
+    expect(countImageMarkers(b.draft.bodyMarkdown)).toBe(3);
+    const b2 = await packageNaverBlog({ topic: 't', body: md(2), model: 'm' });
+    expect(b2.draft.imageSlots.length).toBeLessThanOrEqual(2);
   });
 });

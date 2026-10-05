@@ -17,6 +17,7 @@ import type { TgButton } from './notify';
 import type { FactGateInfo } from '../content/factGate';
 import { platformLabel, type ShortsPlatform } from '../content/shortsPlatform';
 import { readStyleLint, readBriefGate } from '../sessions/digest';
+import { META_LABEL_MD } from '../output/render';
 import type { BriefGateRecord } from '../sessions/digest';
 
 export interface BlogReadyInfo {
@@ -81,7 +82,8 @@ function readDraftExcerpt(runId: string, cap = 350): string {
       const d = JSON.parse(fs.readFileSync(path.join(dir, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
       md = d.bodyMarkdown ?? '';
     }
-    const text = stripMarkdown(md);
+    // 메타 이름표·구분선(2026-10-05 render.renderMarkdown)은 발췌에 넣지 않는다 — 메타 문장 자체는 요약이라 남긴다.
+    const text = stripMarkdown(md.replace(`${META_LABEL_MD} `, '').replace(/^-{3,}\s*$/m, ''));
     return text.length > cap ? `${text.slice(0, cap)}…` : text;
   } catch {
     return '';

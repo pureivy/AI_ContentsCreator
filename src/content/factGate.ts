@@ -58,6 +58,14 @@ function toFirstPass(r: FactGateResult): FactGateInfo & { filtered?: FactGateFil
  *   낱개 먼저/그다음은 조언 꼴("~하는 일이 먼저예요", "~하는 건 그다음입니다")로만 좁힌다.
  *   "낫다고 봅니다" 류는 `다고\s*봅니다` 로 여전히 잡힌다. */
 export const JUDGMENT_RE = /(?:고|다고|라고)\s*(?:봅니다|봐요|보고 있어요|보는 편)|보는 편입니다|편이 (?:정확|안전|낫)|게 안전(?:합니다|해요)|순서가 틀렸|봐야 (?:합니다|해요)|손봐야|(?:일|것|게|쪽)이 먼저(?:예요|입니다)|(?:건|것은|일은) 그다음(?:입니다|이에요)|기록하고 있어요|이어서 기록/;
+/**
+ * 사실 게이트 판정 면제(2026-10-05) — JUDGMENT_RE 에서 '~다고/라고 봅니다'·'편이 안전/낫'·'게 안전합니다'를 뺀 것.
+ * 대추나무 초안 실측: 1차에서 무근거로 걸린 "…안전한 선택이에요"를 표적 수정이 "…안전한 선택이라고 봅니다"로 바꿔
+ * filtered.judgment 로 통과시켰다 — '봅니다'를 붙이면 어떤 사실 주장이든 판정을 피하는 세탁 통로였다. 비교·안전 주장
+ * ("봄에 심는 편이 안전합니다")도 반증 가능한 주장이라 판정기가 본다. 순수 권유·채널 자기서술만 면제로 남긴다.
+ * JUDGMENT_RE 자체는 그대로 둔다 — 쇼츠 트리밍 보호(shorts.ts protectedSentences)가 '판단 문장'을 지키는 데 쓴다.
+ */
+export const FACT_EXEMPT_RE = /보는 편입니다|순서가 틀렸|봐야 (?:합니다|해요)|손봐야|(?:일|것|게|쪽)이 먼저(?:예요|입니다)|(?:건|것은|일은) 그다음(?:입니다|이에요)|기록하고 있어요|이어서 기록/;
 /** 유보어 — '대부분' 포함(실측: "경우가 대부분입니다" 가 무근거 판정됨). shorts.ts 의 HEDGE_RE(낭독용)와 별개.
  * 08-26 fix round 1: JUDGMENT_RE 에서 뺀 낱개 "편입니다" 를 여기로 옮겼다(대개 유보성 일반론 — 판정기가 모순만 걸러낸다). */
 export const HEDGE_RE = /대개|흔히|보통|대체로|대부분|경우가 많|경우가 대부분|수 있|수도 있|가능성|편이|편입니다/;
@@ -88,7 +96,7 @@ export function hasEventMarkers(s: string): boolean {
  * 사건·판단 우선순위는 그대로다(사건 서술과 1인칭 판단은 수치가 있어도 판정 대상이 아니다). */
 export function classifyClaim(c: { text: string; kind: ClaimKind }): 'judgment' | 'hedged' | 'event' | 'claim' {
   if (hasEventMarkers(c.text)) return 'event';
-  if (isJudgmentSentence(c.text)) return 'judgment';
+  if (FACT_EXEMPT_RE.test(c.text)) return 'judgment';
   if (hasHedge(c.text)) return HARD_FACT_RE.test(c.text) ? 'claim' : 'hedged';
   return 'claim';
 }
@@ -211,6 +219,8 @@ export function formatGateFeedback(r: FactGateResult): string {
   const lines = [
     '사실 게이트 검사에서 아래 문장은 [리서치·SEO 브리프]와 제공 근거 자료 어디에도 근거가 없거나 근거와 모순된다.',
     '각 문장을 ①삭제하거나 ②유보어("대개/흔히/보통")를 붙인 일반론으로 낮추거나 ③근거 있는 판단 기준·관찰 방법으로 바꿔라.',
+    // 2026-10-05 — 작가 재작성 경로도 표적 수정과 같은 원칙: 구체·비교·확률 주장은 유보어로 살리지 말고 지우고, '봅니다'로 감싸지 않는다.
+    '②는 원예 통설 수준 일반론에만 — 구체 수치·시기·비교("~보다 성공률이 높다")·확률("살아남을 확률이 높다") 주장은 지워라. "~라고 봅니다"로 바꿔 남기지 마라(판단 꼴로 감싸도 무근거는 그대로다).',
     '**기존 초안과 브리프에 없는 새 사실·수치를 추가하지 마라.** 글의 구조·어조·분량은 유지한다.',
   ];
   if (r.unsupported.length) lines.push('', '[근거 없음]', ...r.unsupported.map((s) => `- ${s}`));
@@ -230,7 +240,10 @@ export async function extractFactClaims(
   const max = opts.max ?? 20;
   const user = [
     '아래 블로그 본문에서 **검증 가능한 사실 주장**을 뽑아라 — 수치·비율, 날짜·시기·절기·월, 수종별 특성(내한성·개화·결실·수형), 병해충 이름·증상·원인, 약제·처치, 법령·제도, 가격, 인용·통계, 1인칭 경험 서술("우리 밭", "지난해", "사흘 만에").',
-    '제외: 상식 수준의 뻔한 문장, 1인칭 판단·관점·권유("~라고 봅니다", "~편입니다", "~게 안전합니다", "~부터 보세요"), 독자에게 권하는 행동 자체, 채널 자기서술("기록하고 있어요").',
+    // 2026-10-05 — "~라고 봅니다"·"~게 안전합니다"를 추출 제외에서 뺐다(무근거 주장이 이 꼴로 판정을 피했다 — FACT_EXEMPT_RE).
+    // 비교·확률 주장("~보다 성공률이 높다", "살아남을 확률이 높다")은 실측상 추출에서 빠져 판정 없이 발행 직전까지 갔다.
+    '비교·확률·안전 주장("~보다 성공률이 높다", "~하는 쪽이 살아남을 확률이 높다", "~하는 게 안전하다"), "~라고 봅니다"로 끝나는 판단 속 사실 주장도 뽑는다.',
+    '제외: 상식 수준의 뻔한 문장, 사실 내용이 없는 권유("~부터 보세요", "물을 주세요"), 독자에게 권하는 행동 자체, 채널 자기서술("기록하고 있어요").',
     'experience 는 겪은 사건 서술(연도·기간·수량·우리 밭/농장 관찰·문의 실태)에만 쓴다 — 관찰 방법·기준 설명은 experience 가 아니다.',
     `최대 ${max}개. text 는 본문 문장을 그대로(요약 금지, 120자 이내로 잘라도 됨). kind 는 number|time|species|pest|treatment|law|price|experience|stat|general 중 하나.`,
     mustInclude.length ? `[반드시 포함할 문장 — 수치·시기가 있어 자동 검출됨]\n${mustInclude.map((s) => `- ${s}`).join('\n')}` : '',
@@ -258,7 +271,8 @@ export async function extractFactClaims(
  */
 export const FACT_CARD_HEADER =
   '[사실 카드 — 브리프에서 근거가 확인된 사실. 이 목록 밖의 사실·수치·시기·약제는 쓰지 말고, '
-  + '꼭 필요하면 유보어("대개/흔히")를 붙인 일반론이나 판단문("~라고 봅니다")으로만 말하라]';
+  // 2026-10-05 — '판단문("~라고 봅니다")으로 말하라'를 뺐다: 무근거 주장을 '봅니다'로 감싸 남기는 통로였다.
+  + '꼭 필요하면 유보어("보통/대개")를 붙인 원예 통설 수준 일반론으로만 말하고, 근거 없는 구체 주장·비교는 쓰지 마라]';
 
 /** 브리프에서 근거 표기가 있는 사실 문장만 뽑아 불릿 카드로 만든다(LLM, micro 1콜). 결과가 비면 null. */
 export async function extractFactCard(
@@ -383,22 +397,25 @@ export async function factGateBlog(a: { model: string; body: string; evidence: s
 /** repairSentences 가 돌려주는 항목 하나. */
 export interface SentenceRepair { index: number; action: 'hedge' | 'judgment' | 'delete'; replacement: string }
 
-const REPAIR_ACTIONS: ReadonlySet<string> = new Set(['hedge', 'judgment', 'delete']);
+/** LLM 이 고를 수 있는 수정 동작 — 2026-10-05 judgment 제외(위 프롬프트 주석). 타입의 'judgment' 는 읽기 쉬움 검수가
+ *  문장 치환기를 재사용할 때만 쓴다(readability.applyReadabilityFixes — 같은 유사도 하한 경로). */
+const REPAIR_ACTIONS: ReadonlySet<string> = new Set(['hedge', 'delete']);
 
-/** 무근거 문장 목록을 LLM 에 보내 유보어/판단문 전환 또는 삭제를 제안받는다(micro 1콜). */
+/** 무근거 문장 목록을 LLM 에 보내 유보어 전환 또는 삭제를 제안받는다(micro 1콜, 2026-10-05 판단문 전환 제외). */
 export async function repairSentences(
   model: string, body: string, unsupported: string[], opts: { signal?: AbortSignal } = {},
 ): Promise<SentenceRepair[] | null> {
   const user = [
     '아래 [본문]에서 [고칠 문장] 각각을 다음 규칙에 따라 고쳐라.',
     '규칙: 새 사실·수치 추가 금지 — 본문에 없던 수치·시기·약제·품종 특성을 넣지 마라. 문장 길이는 원문과 비슷하게 유지한다.',
-    'hedge: "대개/흔히/보통" 같은 유보어를 자연스럽게 넣어 단정을 일반론으로 낮춘다.',
-    'judgment: "~라고 봅니다/~부터 봅니다/~게 안전합니다" 꼴의 1인칭 판단문으로 바꾼다.',
-    'delete: 그 문장이 빠져도 문단이 자연스럽게 이어질 때만 고른다.',
+    // 2026-10-05 — judgment(“~라고 봅니다”로 바꾸기)를 뺐다: 무근거 주장을 판정 면제 꼴로 세탁하는 통로였다(대추나무 초안).
+    'hedge: 원예 통설 수준의 일반론일 때만 "보통/대개" 같은 유보어를 자연스럽게 넣어 단정을 낮춘다. 구체 수치·시기·비교("~보다 성공률이 높다")·확률("살아남을 확률이 높다") 주장은 hedge 하지 말고 delete 하라.',
+    'delete: 근거 없는 구체 주장은 지운다 — 문단이 조금 짧아져도 무근거 주장을 남기는 것보다 낫다.',
+    '"~라고 봅니다/~로 보입니다"로 바꿔 남기지 마라 — 판단 꼴로 감싸도 근거 없는 주장은 그대로다.',
     'replacement 은 완결된 문장(마침표 포함)으로 쓴다 — delete 면 빈 문자열("")로 둔다.',
     `[본문]\n${body.slice(0, 8000)}`,
     `[고칠 문장]\n${unsupported.map((s, i) => `${i + 1}. ${s}`).join('\n')}`,
-    'JSON 형식: {"repairs":[{"index":1,"action":"hedge|judgment|delete","replacement":"..."}]}',
+    'JSON 형식: {"repairs":[{"index":1,"action":"hedge|delete","replacement":"..."}]}',
   ].join('\n\n');
   const j = await microJSON<{ repairs?: Array<{ index?: unknown; action?: unknown; replacement?: unknown } | null> }>(
     model, SYS, user, { maxOutputTokens: Math.min(3000, 300 + unsupported.length * 160), signal: opts.signal },

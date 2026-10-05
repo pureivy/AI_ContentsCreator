@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
-import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug, brandFileSuffixFor, bannedTopicTerms, offBrandTerm, lexiconGuide, editorRulesGuide } from './brand';
+import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug, brandFileSuffixFor, bannedTopicTerms, offBrandTerm, lexiconGuide, editorRulesGuide, hasBoldSummaryRule } from './brand';
 
 // 브랜드 프로필 — 정규화·주입 블록(순수 함수) 회귀 방지.
 describe('normalizeBrand', () => {
@@ -286,5 +286,40 @@ describe('editorRules — 정규화·블록', () => {
     const g = editorRulesGuide(normalizeBrand({ name: 'x', editorRules: ['한 문장마다 줄을 바꾼다.', '글 맨 위에 굵은 요약 두 줄.'] } as never));
     expect(g.split('\n')[0]).toContain('다른 문체 지침과 겹치면 이 규칙이 이긴다');
     expect(g).toContain('\n1. 한 문장마다 줄을 바꾼다.\n2. 글 맨 위에 굵은 요약 두 줄.');
+  });
+});
+
+// 2026-10-05 대추나무 초안 — 실제 brand.yaml 의 새 규칙(키워드 자연스러운 꼴·영어 직역 금지)이 300자 캡에 잘리지 않고 실린다.
+describe('editorRules — 실제 brand.yaml(2026-10-05 키워드 꼴·직역 규칙)', () => {
+  const rules = (rel: string): string[] => {
+    const raw = YAML.parse(fs.readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf-8'));
+    return normalizeBrand(raw)!.editorRules ?? [];
+  };
+  it('요약 줄 규칙은 검색어 꼴 주어·"의"를 금하고, 직역 금지 규칙이 온전히 실린다', () => {
+    const r = rules('../../data/brand.yaml');
+    const summary = r.find((x) => x.startsWith('글 맨 위'))!;
+    expect(summary).toContain('바른 띄어쓰기와 조사로 자연스럽게 담는다');
+    expect(summary).toContain('"○○ 심는시기"');
+    expect(summary.endsWith('요약 문장·날짜를 되풀이하지 않는다.')).toBe(true); // 300자 캡에 안 잘렸다(2026-10-05 저녁: '첫 3문장' 언급 삭제·날짜 추가)
+    const calque = r.find((x) => x.startsWith('영어를 직역한 말'))!;
+    expect(calque).toContain('"가을 식재 창"');
+    expect(calque.endsWith('옮겨 적지 않는다.')).toBe(true);
+    expect(rules('../../data/brands/bionditree.yaml')).toEqual(r);
+  });
+});
+
+describe('hasBoldSummaryRule — 첫머리 굵은 요약 규칙 감지(2026-10-05)', () => {
+  it('실제 brand.yaml 은 켜져 있고, 규칙이 없으면 꺼져 있다', () => {
+    const raw = YAML.parse(fs.readFileSync(fileURLToPath(new URL('../../data/brand.yaml', import.meta.url)), 'utf-8'));
+    expect(hasBoldSummaryRule(normalizeBrand(raw))).toBe(true);
+    expect(hasBoldSummaryRule(normalizeBrand({ name: 'x', editorRules: ['한 줄에 1~2문장.'] } as never))).toBe(false);
+    expect(hasBoldSummaryRule(null)).toBe(false);
+  });
+  it('편집 규칙 1번은 "한 줄에 1~2문장"으로 완화됐다(사장님 결정 2026-10-05 저녁)', () => {
+    const raw = YAML.parse(fs.readFileSync(fileURLToPath(new URL('../../data/brand.yaml', import.meta.url)), 'utf-8'));
+    const first = normalizeBrand(raw)!.editorRules![0]!;
+    expect(first).toContain('한 줄에 1~2문장');
+    expect(first).toContain('혼자 한 줄로 세우지 않는다');
+    expect(first).not.toContain('한 줄에 두 문장을 붙여 쓰지 않는다');
   });
 });

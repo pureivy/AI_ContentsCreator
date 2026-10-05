@@ -4,6 +4,8 @@
  * 기존 단독 이해 검산(standaloneIssues)의 1회 수정 라운드에 얹는 2차 방어다. 전량 fail-open 성격:
  * 검출 결과는 수정 라운드 입력일 뿐 파이프라인을 막지 않는다. 자막·본문 원문에는 손대지 않는다.
  */
+import { naturalKeyword } from './keywordForm';
+import { blogVoiceIssues, bomnidaCount, firstPersonHits, experienceClaimHits, experienceClaimIssue, isStiffQuestion, dice, reportSpeakIssues } from './blogVoiceLint';
 
 /** 문장 분리(대략) — 종결부호 기준. 한국어 구어 대본 검사용이라 정밀할 필요 없다. */
 function splitSentences(text: string): string[] {
@@ -212,6 +214,51 @@ export function cardStyleIssues(slides: Array<{ headline?: string; body?: string
 }
 
 /**
+ * 카드뉴스 문장 린트(순수, 2026-10-05 카드뉴스 분석 승인 항목 3-2) — 블로그 본문에 건 문장 검사 중 짧은 장 문구에 맞는 것만
+ * 카드 문구(헤드라인·본문 줄)에 건다: 영어 직역('창')·검색어 꼴 키워드·보고서 말투·'봅니다' 세트당 1회·1인칭 금지·
+ * 장끼리 거의 같은 줄·'-ㅂ니까' 헤드라인. 실측 — 최근 세트 헤드라인이 "~부터 봅니다"로 수렴했고(플래너 메모리 성과 줄 10건),
+ * 블로그 쪽 린트는 카드에 걸려 있지 않았다. 결과는 기획 수정 라운드(planCards probs) 입력일 뿐이다(fail-open).
+ * 블로그 함수(judgmentHedgeIssues·headingIssues·repetitionIssues)는 마크다운·'## ' 소제목·15자 이상 문장을 전제로 해서
+ * 그대로 쓰지 않고 판정 조각(bomnidaCount·firstPersonHits·isStiffQuestion·dice)만 가져온다.
+ */
+/** 장끼리 거의 같은 줄 — 한 줄이 짧아(본문 줄 p50 17자) 블로그 기준(0.42, 15자 이상)은 수종명 공유만으로도 넘는다.
+ *  과거 216세트 리플레이(2026-10-05): 0.6 이상 쌍이 있는 세트 18(8%) — 표본 12건 전부 실제 되풀이였다
+ *  ("아직 눈이 뻗고 있다면 며칠 더 기다립니다" ≈ "… 지켜보세요", 표지 줄을 마무리 장이 다시 씀). 0.5 로 낮추면 53쌍으로 늘어 비교 문장까지 걸린다.
+ *  같은 리플레이에서 카드 문장 린트 전체 발동은 75세트(35%) — '봅니다' 2회 이상 43·보고서 말투 21·1인칭 6. */
+const CARD_NEAR_DUP_SIM = 0.6;
+const CARD_NEAR_DUP_MIN_CHARS = 8;
+
+export function cardVoiceIssues(slides: ReadonlyArray<{ headline?: string; body?: string }>, keyword?: string): string[] {
+  const clip = (s: string): string => (s.length > 24 ? `${s.slice(0, 24)}…` : s);
+  const lines = slides.flatMap((s, i) => [s.headline ?? '', ...String(s.body ?? '').split('\n')]
+    .map((t) => ({ i, t: t.trim() })).filter((x) => x.t));
+  const text = lines.map((l) => l.t).join('\n');
+  if (!text.trim()) return [];
+  const issues: string[] = [];
+  const bom = bomnidaCount(text);
+  if (bom > 1) issues.push(`'봅니다/보입니다' ${bom}회 — 세트 전체에서 1회까지. 판단은 "~하세요"로 권하거나 "보통 ~입니다"로 쓰라`);
+  const fp = firstPersonHits(text);
+  if (fp.length) issues.push(`1인칭 주어 "${fp.slice(0, 3).join('", "')}" — 쓰지 않는다(사장님 결정). 주어 없이 권하는 말("~하세요")로 바꿔라`);
+  const exp = experienceClaimHits(text);
+  if (exp.length) issues.push(experienceClaimIssue(exp));
+  const long = lines.filter((l) => l.t.replace(/\s+/g, '').length >= CARD_NEAR_DUP_MIN_CHARS);
+  const dups: Array<[{ i: number; t: string }, { i: number; t: string }]> = [];
+  for (let a = 0; a < long.length; a++) {
+    for (let b = a + 1; b < long.length; b++) {
+      if (long[a]!.i !== long[b]!.i && dice(long[a]!.t, long[b]!.t) >= CARD_NEAR_DUP_SIM) dups.push([long[a]!, long[b]!]);
+    }
+  }
+  if (dups.length) {
+    issues.push(`장끼리 거의 같은 줄 ${dups.length}쌍 — 한 장에서만 말하고 다른 장은 새 정보로 바꿔라: `
+      + dups.slice(0, 2).map(([x, y]) => `${x.i + 1}번 "${clip(x.t)}" ≈ ${y.i + 1}번 "${clip(y.t)}"`).join(' / '));
+  }
+  const stiff = slides.map((s, i) => ({ i, h: String(s.headline ?? '').trim() })).filter((x) => isStiffQuestion(x.h));
+  if (stiff.length) issues.push(`딱딱한 질문 헤드라인 — ${stiff.slice(0, 2).map((x) => `${x.i + 1}번 "${clip(x.h)}"`).join(', ')}: "~할까요?/~나요?"처럼 말하듯 써라`);
+  issues.push(...calqueIssues(text), ...keywordFormIssues(text, keyword), ...reportSpeakIssues(text));
+  return issues.slice(0, 4);
+}
+
+/**
  * 요약·설명 메타투 린트(순수, 2026-08-27 말투 감사 권고 2) — 블로그 meta(검색 스니펫)와 쇼츠
  * description(유튜브 설명 = 인스타 캡션에 복제)이 "…를 정리했습니다"·"…에 대해 알아봅니다" 로
  * 끝나 채널 전체가 한 템플릿으로 읽혔다(실측). 요약·설명은 "결론 한 줄 + 조건 한 줄" 꼴이어야 한다.
@@ -230,7 +277,7 @@ export function metaSummaryIssues(text: string): string[] {
  * 본문에도 건다. 검사 4종(실코퍼스 209편 측정으로 경계를 잡았다 — task-3-report.md):
  *   ⓐ 대비문("A가 아니라 B"/"A보다는 B") 3회 이상 — 한 편에서 세 번 넘게 쓰면 하우스 상투로 읽힌다.
  *   ⓑ 합쇼체(습니다/입니다) 종결 비율 60% 초과(산문 20문장 이상일 때만) — 어미 메트로놈.
- *   ⓒ 한 문장에 유보 표현 2개 이상 — "대개 …경우가 많습니다" 꼴로 단정을 두 겹 피하는 문장.
+ *   ⓒ 한 문장에 유보 표현 2개 이상 — "대개 …경우가 많습니다" 꼴로 단정을 두 겹 피하는 문장(가능의 "수 있"은 약하게 센다 — hedgeStacked).
  *   ⓓ 불릿·번호 목록 줄이 서술어 없이 명사로 끝남 — 사람 글은 목록도 말로 끝난다.
  *      (Fix wave 2026-08-27: '>>>' 프레임 줄은 제외 — 프레임 20자 규칙과 충돌. BLOG_LIST_RE 주석 참조.)
  * 검사 전 마크다운 껍데기(표·코드펜스·인용/목록 마커·헤더·강조)를 벗긴다.
@@ -243,6 +290,23 @@ export function metaSummaryIssues(text: string): string[] {
 const CONTRAST_RE = /(?:가|이|은|는|도)\s*아니라|보다\s*(?:는|도)\s*/g;
 /** ⓒ 유보 표현 — 계획서 지정 목록 그대로. factGate.HEDGE_RE(판정 선분류)와는 목적이 달라 별개로 둔다. */
 const BLOG_HEDGE_RE = /대개|보통|흔히|대체로|대부분|경우가 많|수 있|로 봅니다|으로 봅니다|편입니다/g;
+/**
+ * ⓒ 강한 유보(2026-10-05) — 추측을 드러내는 말. 목록(BLOG_HEDGE_RE)에 없던 것이라 따로 센다.
+ * '수도 있'은 '수 있'과 겹치지 않는다(사이에 '도').
+ */
+const BLOG_STRONG_HEDGE_RE = /아마|수도\s*있|것\s*같/g;
+/**
+ * ⓒ 유보 중첩 판정(2026-10-05) — '수 있'은 대개 가능("심을 수 있는 땅", "시간을 벌 수 있어요")이라 약한 유보로 본다.
+ * 오늘 작가 지침이 판단을 "보통 ~입니다"로 쓰라고 하니, "보통 … 수 있어요"를 두 겹 유보로 잡으면 지침과 린트가 싸운다
+ * (사람 편집자 고쳐 쓰기 fixtures/jujube-exemplar-body.md 가 이 꼴 2문장으로 걸렸다).
+ * 걸리는 경우: '수 있'을 뺀 유보가 2개 이상(대개 … 경우가 많 / 아마 … 것 같) 또는 '수 있'까지 합쳐 3개 이상.
+ */
+function hedgeStacked(sentence: string): boolean {
+  const base = sentence.match(BLOG_HEDGE_RE) ?? [];
+  const weak = base.filter((h) => h === '수 있').length;
+  const strong = (sentence.match(BLOG_STRONG_HEDGE_RE) ?? []).length;
+  return base.length - weak + strong >= 2 || base.length + strong >= 3;
+}
 /**
  * ⓓ 검사 대상 목록 줄 — 불릿·번호만. **네이버 인용 체크박스('>>>' 프레임)는 일부러 뺐다**(Fix wave 2026-08-27).
  * 프레임은 '각 줄 공백 포함 20자 이내'가 사용자 확정 규칙(2026-08-10, BLOG_BODY_GUIDE 리치 서식)이라
@@ -261,7 +325,7 @@ const BLOG_NONPROSE_RE = /^\s*(?:[-*]\s+|\d+\.\s+|>{3}\s*)/;
 /** ⓓ 서술어 종결 — 끝 글자가 서술어 어미면 통과(세요·니다는 요·다에 포함되지만 계획서 표기를 그대로 둔다). */
 const PREDICATE_END_RE = /(?:다|요|죠|까|세요|니다)$/;
 
-export function blogStyleIssues(bodyMarkdown: string): string[] {
+export function blogStyleIssues(bodyMarkdown: string, keyword?: string, brief?: string): string[] {
   const src = String(bodyMarkdown ?? '');
   if (!src.trim()) return [];
   const clipLine = (s: string): string => (s.length > 80 ? `${s.slice(0, 80)}…` : s);
@@ -291,8 +355,7 @@ export function blogStyleIssues(bodyMarkdown: string): string[] {
     // 실코퍼스 209편 최대 59% — 60% 초과는 '지금보다 나빠지면 잡는' 상한 가드다(현행 중앙값 31%).
     if (ratio > 0.60) issues.push(`합쇼체 비율 ${Math.round(ratio * 100)}% — 60% 이하로(문단 통째로 말투를 정하라)`);
   }
-  const hedgeStacked = allSentences.filter((s) => (s.match(BLOG_HEDGE_RE) ?? []).length >= 2);
-  issues.push(...hedgeStacked.slice(0, 3).map((s) => `유보 중첩 — "${clipLine(s)}"`));
+  issues.push(...allSentences.filter(hedgeStacked).slice(0, 3).map((s) => `유보 중첩 — "${clipLine(s)}"`));
   const listItems: string[] = [];
   lines.forEach((l) => {
     if (!isList(l)) return;
@@ -303,6 +366,58 @@ export function blogStyleIssues(bodyMarkdown: string): string[] {
   // 길이 상한을 지적에 함께 싣는다 — 안 그러면 수정 라운드가 '서술어를 붙여라'만 읽고 줄을 길게 늘려
   // 목록 규칙('항목 3~5개, 각 1줄로 짧게', BLOG_BODY_GUIDE)과 충돌한다.
   issues.push(...nounEnded.slice(0, 3).map((t) => `명사형 종결 목록 — "${clipLine(t)}"(줄은 한 줄로 짧게 둔 채 서술어로만 맺어라)`));
+  // ⓔ 영어 직역 말투·ⓕ 검색어 꼴 키워드(2026-10-05) — 표·소제목까지 원문 전체를 본다(소제목·표 칸에도 '식재 창'이 선다).
+  issues.push(...calqueIssues(src), ...keywordFormIssues(src, keyword));
+  // ⓖ 말투·반복·일관성(2026-10-05 대추나무 초안 전수 분석) — 브리프 복사·'봅니다' 상한·1인칭·반복·토막 줄·보고서 말투·
+  // 소제목·굵은 요약 근거(blogVoiceLint.ts). 같은 수정 라운드에 싣는다(fail-open).
+  issues.push(...blogVoiceIssues(src, { keyword, brief }));
+  return issues;
+}
+
+/**
+ * 영어 직역 말투 린트(순수, 2026-10-05 사장님 지적 — 대추나무 초안 "대추나무 심는시기의 마지막 가을 창입니다").
+ * '창'은 영어 window(기간)를 옮긴 말이라 우리말 시기 표현이 아니다. 리서치 브리프가 '"10월 말~11월" 창(window)'이라
+ * 적었고 작가가 그대로 옮겨 굵은 요약·메타까지 갔다. 시기·작업어 뒤의 '창'만 잡는다 — '창'은 받침이 있어 조사
+ * 가·는·를이 붙지 않으므로 창가·창고·창문·창작·창업은 뒤 글자 조건에서 저절로 빠진다.
+ * 블로그 본문(blogStyleIssues)과 메타 요약(naverBlog 메타 재시도) 양쪽에 건다.
+ */
+// 리뷰(2026-10-05) — 실내 식물 글의 진짜 창문("겨울 창을 열어", "봄 창 밖", "여름 창가")은 빼야 한다. 창 바로 뒤가
+// 밖·가·문·틀·쪽, 또는 "을/이 열·닫"이면 창문이다(창가·창문은 뒤 글자 조건에서도 빠지지만 "창 밖"·"창을 열어"는 걸렸다).
+const CALQUE_WINDOW_RE =
+  /(?:가을|봄|겨울|여름|시기|식재|심는|심을|심기|파종|이식|수확|전정|가지치기|마지막|짧은|좁은|최적|적기)\s*창(?!\s*(?:밖|가|문|틀|쪽|턱)|[을이]\s*(?:열|닫)|으로\s*(?:들|드))(?=입니다|이에요|이예요|이죠|이다|이고|이라|이|은|을|과|의(?!적)|에|도|만|으로|[\s.,!?…)"'」]|$)/gu;
+/** '~를 가져가다'(take a strategy) — 사물을 옮기는 정상 문장("가져가세요")은 건드리지 않게 추상 명사 뒤만 본다. */
+const CALQUE_TAKE_RE = /(?:전략|방향|접근|방식|흐름|톤|포지션|관점|구조)[을를]\s*가져가/gu;
+
+export function calqueIssues(text: string): string[] {
+  const src = String(text ?? '');
+  const issues: string[] = [];
+  const win = [...new Set(src.match(CALQUE_WINDOW_RE) ?? [])];
+  if (win.length) {
+    issues.push(`영어 직역 "${win.slice(0, 3).join('", "')}" — '창(window)'은 우리말 시기 표현이 아니다. `
+      + '"가을에 심을 수 있는 때", "늦어도 △월까지"처럼 풀어 써라'); // '마지막'을 대체어로 주지 않는다(리뷰 2026-10-05 — 금칙어)
+  }
+  if (/윈도우/.test(src)) issues.push('영어 직역 "윈도우" — "기간", "때", "시기"로 써라');
+  const take = [...new Set(src.match(CALQUE_TAKE_RE) ?? [])];
+  if (take.length) issues.push(`영어 직역 "${take[0]}다" — "~로 간다", "~을 택한다"처럼 우리말로 써라`);
+  return issues;
+}
+
+/**
+ * 검색어 꼴 키워드 린트(순수, 2026-10-05) — "대추나무 심는시기"처럼 띄어쓰기가 빠진 검색어 꼴이 본문에 그대로 들어간 문장.
+ * 띄어쓰기를 지우는 검색어 꼴은 사람이 쓰는 문장이 아니다(실측: "대추나무 심는시기의 마지막 가을 창입니다").
+ * 판정 기준 꼴은 keywordForm.naturalKeyword 와 같다(검색 판정은 seo.ts 가 띄어쓰기·조사를 무시하므로 고쳐도 손실 없음).
+ */
+export function keywordFormIssues(body: string, keyword?: string): string[] {
+  const kw = String(keyword ?? '').trim().replace(/\s+/g, ' ');
+  const src = String(body ?? '').replace(/[*_]/g, '');
+  if (!kw || !src.trim()) return [];
+  const nat = naturalKeyword(kw);
+  const issues: string[] = [];
+  const glued = kw.split(' ').filter((t) => naturalKeyword(t) !== t);
+  const gluedHits = glued.reduce((n, t) => n + src.split(t).length - 1, 0);
+  // 검색어 꼴이 주어("○○ 심는시기는")나 "의" 명사구("○○ 심는시기의 마지막 …")로 서던 실측 — 띄어 쓰면 대개 그 문형도 함께 풀린다.
+  // 바른 꼴 뒤 "의"(라일락 꽃말의 유래)는 정상 한국어라 따로 잡지 않는다.
+  if (gluedHits) issues.push(`검색어 꼴 "${kw}" ${gluedHits}회 — 글에는 바른 띄어쓰기 "${nat}"로 쓰고, 주어나 "~의" 명사구로 세우지 말고 문장에 풀어 써라(검색 손실 없음)`);
   return issues;
 }
 

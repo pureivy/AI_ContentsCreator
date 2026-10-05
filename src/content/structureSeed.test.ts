@@ -176,6 +176,13 @@ describe('structureBlock — 작가 프롬프트 주입 문자열', () => {
     titleForm: 'question', headingStyle: 'numbered', headings: 4, quickAnswer: false,
   };
 
+  // 리뷰(2026-10-05) — 소제목 예시는 자리표시만(실제 주제 구절 "가을과 봄, 언제 심을까"는 모델이 그대로 베낀다).
+  it('주제어 구 소제목 예시는 자리표시(○○·△△)로만', () => {
+    const b = structureBlock({ ...seed, headingStyle: 'keyword' });
+    expect(b).toContain('"○○와 △△, 언제 할까"');
+    expect(b).not.toContain('가을과 봄, 언제 심을까');
+    expect(b).not.toContain('지역별 월동 방법');
+  });
   it('머리표와 다섯 항목(도입·중심 명제·표·체크리스트·예고)을 모두 담는다', () => {
     const b = structureBlock(seed);
     expect(b).toContain('[이번 글 구조]');
@@ -408,5 +415,30 @@ describe('TITLE_FORM_TEXT — 제목 형식 지시', () => {
       expect(t).toContain('○○');
       expect(t).not.toMatch(/\d+월/);
     }
+  });
+});
+
+// 2026-10-05 — 첫머리 굵은 요약(편집 확정 규칙)이 켜진 런은 '답 먼저' 도입·도입 직후 인용을 뽑지 않는다(같은 답이 첫머리에 쌓였다).
+describe('pickStructureSeed — 굵은 요약 런의 첫머리 겹침 방지(2026-10-05)', () => {
+  it('boldSummary 면 answer 도입·after-hook 인용이 나오지 않는다', () => {
+    const rand = lcg(7);
+    const seeds = Array.from({ length: 2000 }, () => pickStructureSeed(rand, { boldSummary: true }));
+    expect(seeds.some((s) => s.openers === 'answer')).toBe(false);
+    expect(seeds.some((s) => s.thesisQuote === 'after-hook')).toBe(false);
+    for (const v of ['scene', 'question', 'claim', 'contrast']) expect(seeds.some((s) => s.openers === v), v).toBe(true);
+    for (const v of ['none', 'mid', 'before-close']) expect(seeds.some((s) => s.thesisQuote === v), v).toBe(true);
+    expect(seeds.every((s) => [s.table, s.checklist, s.teaser, s.quickAnswer].filter(Boolean).length === 2)).toBe(true);
+  });
+  it('끈 런(옵션 없음)은 종전 시드와 같다 — rand 소비 순서 불변', () => {
+    const a = lcg(42); const b = lcg(42);
+    for (let i = 0; i < 50; i++) expect(pickStructureSeed(a, {})).toEqual(pickStructureSeed(b));
+  });
+  it('질문형 소제목은 "~할까요?/~나요?" 꼴, 어느 형식이든 키워드 1곳·수종명 2곳', () => {
+    const s = { ...FIXED_STRUCTURE_SEED, headingStyle: 'question' as const, headings: 4 as const };
+    const block = structureBlock(s);
+    expect(block).toContain('"~할까요?/~나요?/~인가요?"');
+    expect(block).toContain('"~습니까?" 금지');
+    expect(block).toContain('핵심 키워드는 소제목 1곳까지, 수종 이름은 2곳까지');
+    expect(structureBlock({ ...s, headingStyle: 'keyword' })).toContain('수종 이름은 소제목 2곳까지');
   });
 });

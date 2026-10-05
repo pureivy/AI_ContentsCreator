@@ -28,7 +28,9 @@ describe('readabilityPrompt', () => {
     expect(p).toContain('뿌리분(뿌리와 흙이 뭉친 덩어리)');
     expect(p).toContain('"가지치기 시기"');
     expect(p).toMatch(/새 사실/);
-    expect(p).toContain('여러 문장으로 쪼개거나 앞뒤 문장과 합치지 마라');
+    // 2026-10-05 저녁 — 사장님 결정(한 줄에 1~2문장): 쪼개기는 계속 금지, 바로 위 줄과 합치기(토막 줄)만 허용.
+    expect(p).toContain('여러 줄로 쪼개지 마라. 합치기는 ⑨의 바로 위 줄과만');
+    expect(p).toContain('⑨ 앞 문장에 붙어야 할 꼬리가 혼자 한 줄인 토막');
     expect(p).not.toContain('머릿속 문장'); // 상담 블로그 예문은 옮기지 않았다
   });
   it('키워드가 없으면 그 줄이 빠진다', () => {
@@ -138,5 +140,67 @@ describe('applyReadabilityFixes — 뜻 보존 가드(리뷰 2026-10-05)', () =>
     expect(readabilityGuard('이 표가 답을 알려 줍니다.', '표를 보면 답이 보입니다.')).toBeNull();
     expect(readabilityGuard('10월 말 동해를 막으려면 감싸 줘야 합니다.', '10월 말 겨울 추위 피해를 막으려면 감싸 줘야 합니다.')).toBeNull();
     expect(readabilityGuard('뿌리분 안에 물이 고이지 않게 합니다.', '뿌리분(뿌리와 흙이 뭉친 덩어리) 안에 물이 고이지 않게 합니다.')).toBeNull();
+  });
+});
+
+// 2026-10-05 대추나무 초안 — "…대추나무 심는시기의 마지막 가을 창입니다"가 이 검수를 통과했다. 직역 말투를 고칠 대상에 넣고,
+// 키워드 보존은 띄어쓰기·조사를 무시해 본다(검색어 꼴을 바른 꼴로 고치는 치환이 '키워드 누락'으로 버려지지 않게).
+describe('readability — 직역 말투·키워드 자연스러운 꼴(2026-10-05)', () => {
+  it('프롬프트에 "창" 직역 예와 바른 띄어쓰기 꼴이 실린다', () => {
+    const p = readabilityPrompt(BODY, '', '대추나무 심는시기');
+    expect(p).toContain('"가을 식재 창입니다"→"가을에 심을 수 있는 때입니다"');
+    expect(p).toContain('"대추나무 심는 시기"');
+    expect(p).not.toContain('그 표기를 그대로 남겨라');
+  });
+  it('키워드 보존 판정은 띄어쓰기·조사를 무시한다', () => {
+    const kw = '대추나무 심는시기';
+    expect(readabilityGuard('대추나무 심는시기는 땅 상태로 가늠합니다.', '대추나무 심는 시기는 땅 상태로 확인해요.', kw)).toBeNull();
+    expect(readabilityGuard('대추나무 심는시기는 땅 상태로 가늠합니다.', '대추나무를 심는 시기는 땅 상태로 확인해요.', kw)).toBeNull();
+    expect(readabilityGuard('대추나무 심는시기는 땅 상태로 가늠합니다.', '땅 상태로 확인해요.', kw)).toBe('키워드 누락');
+  });
+});
+
+// 2026-10-05 저녁 — 휴지통 대추나무 초안의 토막 줄("봄에 심는다면 3월 중순에서 4월 중순이고요.")은 앞 줄과 합쳐야 고쳐지는데
+// '합치지 마라'와 문장 단위 치환기가 막았다. 바로 위 줄과의 두 줄 합치기만 허용하고, 뜻 보존 가드는 그대로 건다.
+describe('readability — 토막 줄 합치기·"없이" 부정 오인(2026-10-05)', () => {
+  const body = ['가을에 대추나무 묘목을 심는 시기는 10월 하순부터 11월 초순까지입니다.', '봄에 심는다면 3월 중순에서 4월 중순이고요.', '', '## 다음'].join('\n');
+  const merge = { original: '가을에 대추나무 묘목을 심는 시기는 10월 하순부터 11월 초순까지입니다.\n봄에 심는다면 3월 중순에서 4월 중순이고요.',
+    replacement: '가을엔 10월 하순부터 11월 초순까지, 봄엔 3월 중순부터 4월 중순까지 심어요.' };
+  it('인접 두 산문 줄을 한 줄로 합치는 치환을 받아들이고 적용한다', () => {
+    const fixes = acceptReadabilityFixes(body, [merge]);
+    expect(fixes).toHaveLength(1);
+    const r = applyReadabilityFixes(body, fixes);
+    expect(r.applied).toBe(1);
+    expect(r.body.split('\n')[0]).toBe(merge.replacement);
+    expect(r.body).toContain('\n\n## 다음');
+  });
+  it('세 줄 이상·떨어진 줄·인용 줄·결과가 여러 줄인 합치기는 버린다', () => {
+    expect(acceptReadabilityFixes(body, [{ ...merge, original: `${merge.original}\n` + '## 다음' }])).toEqual([]);
+    expect(acceptReadabilityFixes(body, [{ ...merge, replacement: '가을엔 10월 하순부터.\n봄엔 3월 중순부터.' }])).toEqual([]);
+    const q = '> 인용 줄입니다.\n봄에 심는다면 3월 중순에서 4월 중순이고요.';
+    expect(acceptReadabilityFixes(q, [{ original: q, replacement: '인용 줄이고 봄엔 3월 중순에서 4월 중순이에요.' }])).toEqual([]);
+  });
+  it('합치기에도 뜻 보존 가드가 걸린다(월 시점이 바뀌면 거부)', () => {
+    const bad = { ...merge, replacement: '가을엔 10월 초순부터 11월 초순까지, 봄엔 3월 중순부터 4월 중순까지 심어요.' };
+    const r = applyReadabilityFixes(body, acceptReadabilityFixes(body, [bad]));
+    expect(r.applied).toBe(0);
+  });
+  it('"없이"는 부정 표지가 아니다 — 단위결실성 풀이 고침이 통과한다', () => {
+    expect(readabilityGuard('단위결실성이 있다는 말이 이 뜻입니다.', '꽃가루받이 없이도 열매를 맺는 성질(단위결실성)이 있다는 말입니다.')).toBeNull();
+    expect(readabilityGuard('물을 주면 안 됩니다.', '물을 주세요.')).toBe('부정 표지 변경'); // 진짜 부정은 그대로 잡는다
+    expect(readabilityGuard('물이 없으면 시듭니다.', '물이 있으면 시듭니다.')).toBe('부정 표지 변경');
+  });
+  it('프롬프트에 보고서 말투 대체어가 실린다', () => {
+    const p = readabilityPrompt(body, '');
+    expect(p).toContain('"구간"(시기 뜻 → "시기·때")');
+    expect(p).toContain('"그해 심기는 접습니다"(→"올해는 미루세요")'); // 계절을 박지 않는다(리뷰 2026-10-05)
+    expect(p).not.toContain('마지막 시기'); // '창' 대체어가 금칙어 '마지막'을 들이지 않는다
+  });
+  it('original 규칙이 ⑨(두 줄 합치기)와 부딪히지 않는다 · 굵은 요약 줄은 합치지 않는다(리뷰 2026-10-05)', () => {
+    const p = readabilityPrompt(body, '');
+    expect(p).toContain('⑨ 토막 합치기만 두 줄을 줄바꿈으로 이어 적고, 그 밖에는 여러 문장을 묶지 마라');
+    expect(p).not.toContain('여러 문장을 묶지 말고)');
+    const bold = '**가을엔 10월 하순부터 심어요.**\n봄이면 3월이고요.\n\n## 다음';
+    expect(acceptReadabilityFixes(bold, [{ original: '**가을엔 10월 하순부터 심어요.**\n봄이면 3월이고요.', replacement: '**가을엔 10월 하순부터, 봄이면 3월에 심어요.**' }])).toEqual([]);
   });
 });

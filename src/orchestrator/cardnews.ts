@@ -24,8 +24,9 @@ import { notifyCardnewsReady } from '../autonomy/contentNotify';
 import { standaloneIssues, parityIssues, parityToInfo } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue } from '../content/timingParity';
 import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
-import type { FactGateInfo } from '../content/factGate';
-import { cardStyleIssues } from '../content/styleLint';
+import { introducesNewFacts, type FactGateInfo } from '../content/factGate';
+import { cardStyleIssues, cardVoiceIssues } from '../content/styleLint';
+import { naturalKeyword } from '../content/keywordForm';
 import { currentStructureSeed, type StructureSeed } from '../content/structureSeed';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
@@ -235,6 +236,50 @@ async function rewordSlideCopy(s: PlanSlide, problem: string, signal?: AbortSign
   return { ...s, headline, body };
 }
 
+/** 줄인 장 채택 판정(순수, export 는 테스트용) — 헤드라인이 있고 상한 안이어야 한다. 리뷰(2026-10-05): 본문이 있던 장을 본문 없이
+ *  돌려주거나, 줄이며 수치·월·연도를 바꾸면 버린다(원문 유지). 덜어 낸 수치는 괜찮다(줄이기의 목적) — 원문에 없던 값이 새로
+ *  들어온 것만 본다(factGate.introducesNewFacts 한 방향 — "10월"→"11월" 같은 바꿔치기도 새 값이라 잡힌다). */
+export function shrunkSlideOk(orig: { headline: string; body: string }, cand: { headline: string; body: string }): boolean {
+  if (!cand.headline || cardDensityOver([cand]).length) return false;
+  if (bodyLinesOf(orig.body).length && !bodyLinesOf(cand.body).length) return false;
+  const o = `${orig.headline} ${orig.body}`;
+  const c = `${cand.headline} ${cand.body}`;
+  if (introducesNewFacts(o, c)) return false;
+  // 월 값은 같아도 시점이 바뀐 것("11월 초순"→"11월 하순") — 시점을 단 월은 원문에도 같은 꼴로 있어야 한다.
+  const parts = (t: string): string[] => Array.from(t.matchAll(MONTH_PART_SHRINK_RE), (m) => `${m[1]}월${m[2]}`);
+  const op = new Set(parts(o));
+  return parts(c).every((x) => op.has(x));
+}
+const MONTH_PART_SHRINK_RE = /(1[0-2]|[1-9])\s*월\s*(초순|상순|중순|하순|초|중|말)/g;
+
+/** 글자 상한 줄이기(2026-10-05) — 상한(cardDensityOver)을 넘은 장만 모아 한 번에 줄인다. 같은 뜻·같은 말투를 지키고
+ *  덜어 낸 세부는 버린다(캡션은 이미 따로 있다). 상한 안에 든 장만 채택하고, 나머지·실패는 원문 유지(fail-open). */
+async function shortenDenseSlides(slides: PlanSlide[], signal?: AbortSignal): Promise<PlanSlide[]> {
+  const over = cardDensityOver(slides);
+  if (!over.length) return slides;
+  try {
+    const j = await microJSON<{ slides?: Array<{ no?: unknown; headline?: unknown; body?: unknown }> }>(
+      stdModel(),
+      '당신은 인스타그램 카드뉴스 카피 에디터입니다. 요청된 JSON 만 출력합니다.',
+      [
+        `아래 카드 문구가 휴대폰 화면 폭에서 읽히지 않을 만큼 길다. 헤드라인 ${CARD_HEADLINE_MAX_CHARS}자 이내, body ${CARD_BODY_MAX_LINES}줄·${CARD_BODY_MAX_CHARS}자 이내(공백 포함)로 줄여라.`,
+        '규칙: 그 장의 핵심 메시지 하나와 행동 지시(목적어·방향 포함)는 남기고 부연·예시를 덜어라. 사실·수치를 바꾸거나 새로 만들지 마라. 말투(어미)는 원문 그대로. 이모지 금지.',
+        ...over.map((o) => { const s = slides[o.no - 1]!; return `${o.no}번 — 헤드라인 "${s.headline}" / body "${s.body.replace(/\n/g, ' / ')}"`; }),
+        'JSON: {"slides":[{"no":번호,"headline":"...","body":"줄바꿈은 \\n"}]}',
+      ].join('\n'),
+      { maxOutputTokens: 1200, signal },
+    );
+    const out = [...slides];
+    for (const r of j?.slides ?? []) {
+      const no = Number(r?.no);
+      if (!Number.isInteger(no) || no < 1 || no > out.length) continue;
+      const cand = { headline: cleanLine(r?.headline, 40), body: cleanLine(r?.body, 220) };
+      if (shrunkSlideOk(out[no - 1]!, cand)) out[no - 1] = { ...out[no - 1]!, ...cand };
+    }
+    return out;
+  } catch { return slides; }
+}
+
 /** 표지(1번 슬라이드)에 핵심 키워드 정확 표기가 있는지(공백 무시 — "가을채소 흙준비"≈"가을채소흙준비").
  *  결정적 게이트·마지노선 공용(순수, export 는 테스트용). 키워드 없으면 항상 통과. */
 /**
@@ -260,9 +305,171 @@ export function ctaSlideIssues(slides: ReadonlyArray<{ headline: string; body: s
   //  · 독자에게 던지는 질문 — 댓글·자기 점검을 부르므로 마무리로서 유효하다("어디에 해당하나요")
   // 전수 검사(149건)에서 질문형을 빼면 오탐이 생겼다: '네 가지 중 어디에 해당하나요' 같은 정상
   // 마무리가 지적당했다.
-  if (/세요|십시오|합시다/.test(text)) return [];
-  if (/[?？]|나요|까요|가요\s*$/.test(text)) return [];
-  return [`마지막 ${slides.length}번 장이 독자 행동으로 끝나지 않는다("${String(last.headline ?? '').slice(0, 24)}") — 마무리 장은 오늘·지금 할 수 있는 한 가지를 시키는 문장으로 끝내라(조건이 갈리면 "~면 ~하세요" 꼴).`];
+  // '오늘,'로 여는 마무리 헤드라인(2026-10-05 카드뉴스 분석) — 종전 지시·지적이 "오늘·지금 할 일"을 요구해 마지막 장이
+  // 매번 "오늘, ~하세요"로 닫혔다(같은 프롬프트의 '"오늘 ~" 헤드라인은 과용 지문' 금지와도 충돌). 행동은 유지하되 여는 말을 돌린다.
+  const head = String(last.headline ?? '').trim();
+  const todayOpen = /^오늘\s*[,，]|^오늘\s/.test(head)
+    ? [`마지막 ${slides.length}번 장 헤드라인이 "오늘"로 연다("${head.slice(0, 24)}") — 과용된 마무리 지문이다. 행동은 그대로 두고 시점은 주제에 맞게("심기 전에", "잎이 지면", "다음 물 줄 때") 바꾸거나 빼라.`]
+    : [];
+  if (/세요|십시오|합시다/.test(text)) return todayOpen;
+  if (/[?？]|나요|까요|가요\s*$/.test(text)) return todayOpen;
+  return [`마지막 ${slides.length}번 장이 독자 행동으로 끝나지 않는다("${head.slice(0, 24)}") — 마무리 장은 독자가 직접 할 구체적인 행동 한 가지(무엇을·언제)를 시키는 문장으로 끝내라(조건이 갈리면 "~면 ~하세요" 꼴).`];
+}
+
+/**
+ * 카드 글자 상한(2026-10-05 카드뉴스 분석 승인 항목 3-1) — 장당 글자(공백 제외 헤드라인+본문)가 7월 37자 → 10월 69자로
+ * 늘었고, 휴대폰 폭으로 줄인 카드(phone_size_bodies.jpg)에서 본문이 읽히지 않았다. 1080px 카드를 휴대폰 폭(약 390pt)으로
+ * 보면 0.36배라, 본문이 확대 없이 읽히는 크기(14pt 이상 ≈ 캔버스 40px 이상)로는 한 줄에 18자 안팎이 들어간다
+ * (과거 본문 줄 길이 p50 17자·p90 28자, 장당 본문 줄 수 p50 3줄·p90 5줄). 그래서 본문은 2줄·36자, 헤드라인은 20자로 묶는다.
+ * 셈은 공백 포함·줄바꿈 제외 — 이미지 모델이 그리는 폭에 공백도 들어간다.
+ * 근거는 '읽힘'이다 — 상위·하위 도달 세트의 글자 수 차이는 게시 시기(팔로워 증가)와 얽혀 근거로 쓰지 않는다.
+ */
+export const CARD_HEADLINE_MAX_CHARS = 20;
+export const CARD_BODY_MAX_LINES = 2;
+export const CARD_BODY_MAX_CHARS = 36;
+
+const bodyLinesOf = (body: string): string[] => String(body ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+const charsOf = (lines: string[]): number => lines.reduce((n, l) => n + l.length, 0);
+
+/** 글자 상한을 넘은 장 번호와 사유(순수). 빈 배열이면 전부 통과. */
+export function cardDensityOver(slides: ReadonlyArray<{ headline: string; body: string }>): Array<{ no: number; why: string }> {
+  const out: Array<{ no: number; why: string }> = [];
+  slides.forEach((s, i) => {
+    const why: string[] = [];
+    const h = String(s.headline ?? '').trim().length;
+    if (h > CARD_HEADLINE_MAX_CHARS) why.push(`헤드라인 ${h}자`);
+    const lines = bodyLinesOf(s.body);
+    const c = charsOf(lines);
+    if (lines.length > CARD_BODY_MAX_LINES || c > CARD_BODY_MAX_CHARS) why.push(`본문 ${lines.length}줄 ${c}자`);
+    if (why.length) out.push({ no: i + 1, why: why.join('·') });
+  });
+  return out;
+}
+
+/** 글자 상한 지적(순수) — 기획 수정 라운드 입력. 한 건으로 묶는다(장마다 한 줄씩 내면 수정 라운드 지적이 넘친다). */
+export function cardDensityIssues(slides: ReadonlyArray<{ headline: string; body: string }>): string[] {
+  const over = cardDensityOver(slides);
+  if (!over.length) return [];
+  return [`글자 과다 — ${over.slice(0, 6).map((o) => `${o.no}번(${o.why})`).join(', ')}: 휴대폰 폭에서 안 읽힌다. `
+    + `헤드라인 ${CARD_HEADLINE_MAX_CHARS}자, 본문 ${CARD_BODY_MAX_LINES}줄·${CARD_BODY_MAX_CHARS}자(공백 포함) 이내로 줄여라 — 덜어 낸 세부는 캡션으로 옮겨라.`];
+}
+
+/** 문장이 끝나는 줄 끝(카드 문구) — 서술·청유 어미와 문장부호. 이 꼴로 끝나지 않는 줄("~가면", "~받아")은 다음 줄과 한 문장이다. */
+const CARD_SENTENCE_END_RE = /(?:[.!?…]|다|요|죠|까|니다)$/;
+
+/** 본문 줄 → 문장 단위 묶음(순수). 한 줄 안의 여러 문장은 나누고, 문장 끝이 아닌 줄은 다음 줄과 묶는다.
+ *  각 조각은 원래 줄 번호를 기억해 다시 이을 때 줄바꿈을 그대로 살린다. */
+function cardSentences(lines: string[]): Array<Array<{ text: string; line: number }>> {
+  const groups: Array<Array<{ text: string; line: number }>> = [];
+  let cur: Array<{ text: string; line: number }> = [];
+  lines.forEach((l, li) => {
+    for (const seg of l.split(/(?<=[.!?…])\s+/).map((x) => x.trim()).filter(Boolean)) {
+      cur.push({ text: seg, line: li });
+      if (CARD_SENTENCE_END_RE.test(seg)) { groups.push(cur); cur = []; }
+    }
+  });
+  if (cur.length) groups.push(cur);
+  return groups;
+}
+const joinCardSegments = (segs: Array<{ text: string; line: number }>): string =>
+  segs.map((s, i) => (i === 0 ? s.text : `${s.line === segs[i - 1]!.line ? ' ' : '\n'}${s.text}`)).join('');
+
+/**
+ * 글자 상한 마지노선(순수) — 수정 라운드·줄이기 호출이 모두 못 맞췄을 때만. 글자 단위로 자르지 않는다 — 이미지 모델이 본문을
+ * 그대로 그리므로 반쯤 잘린 문장이 그대로 나간다. 리뷰(2026-10-05): 종전엔 줄 단위로 덜어 내 "흔드는 정도가 아니라 통째로 돌아가면"
+ * 같은 문장 앞토막이 남았다(최근 120세트 리플레이 덜어 낸 769장 중 242장). 이제 줄을 문장으로 다시 묶고 첫 문장부터 '문장 통째로'
+ * 2줄·36자 안에 드는 만큼만 남긴다. 첫 문장 하나도 상한을 넘으면 손대지 않는다(호출부가 잔존으로 로그를 남긴다).
+ */
+export function fitCardDensity<T extends { headline: string; body: string }>(slides: T[]): { slides: T[]; trimmed: number[] } {
+  const trimmed: number[] = [];
+  const out = slides.map((s, i) => {
+    const lines = bodyLinesOf(s.body);
+    if (lines.length <= CARD_BODY_MAX_LINES && charsOf(lines) <= CARD_BODY_MAX_CHARS) return s;
+    const sents = cardSentences(lines);
+    const fits = (segs: Array<{ text: string; line: number }>): boolean => {
+      const ls = bodyLinesOf(joinCardSegments(segs));
+      return ls.length <= CARD_BODY_MAX_LINES && charsOf(ls) <= CARD_BODY_MAX_CHARS;
+    };
+    let kept: Array<{ text: string; line: number }> = [];
+    let n = 0;
+    for (const g of sents) {
+      if (!fits([...kept, ...g])) break;
+      kept = [...kept, ...g];
+      n++;
+    }
+    if (!n || n === sents.length) return s; // 첫 문장부터 넘침(잔존) 또는 덜어 낼 것 없음
+    trimmed.push(i + 1);
+    return { ...s, body: joinCardSegments(kept) };
+  });
+  return { slides: out, trimmed };
+}
+
+/**
+ * 표지 키워드 마지노선(순수, 리뷰 2026-10-05) — 종전엔 글자 상한 마지노선 '뒤'에 "키워드, 본문"을 붙여 표지가 다시 36자를 넘었다.
+ * ① "키워드, 본문"을 문장 통째 규칙(fitCardDensity)으로 맞춰 보고 ② 넘치면 키워드를 따로 한 줄에 두고 본문 문장을 앞에서부터
+ * 들어가는 만큼 ③ 그래도 안 되면 키워드 한 줄만. 키워드 한 줄도 넘치면 ①의 결과를 그대로 둔다(호출부 잔존 로그).
+ */
+export function withCoverKeyword<T extends { headline: string; body: string }>(s: T, kwNat: string): T {
+  const within = (body: string): boolean => {
+    const ls = bodyLinesOf(body);
+    return ls.length <= CARD_BODY_MAX_LINES && charsOf(ls) <= CARD_BODY_MAX_CHARS;
+  };
+  const prefixed = { ...s, body: (s.body ? `${kwNat}, ${s.body}` : kwNat).slice(0, 220) };
+  const first = fitCardDensity([prefixed]).slides[0]!;
+  if (within(first.body)) return first;
+  const sents = cardSentences(bodyLinesOf(s.body));
+  for (let n = sents.length; n >= 0; n--) {
+    const body = [kwNat, joinCardSegments(sents.slice(0, n).flat())].filter(Boolean).join('\n');
+    if (within(body)) return { ...s, body };
+  }
+  return first;
+}
+
+/**
+ * 2번 장 = 두 번째 표지(순수, 2026-10-05 카드뉴스 분석 승인 항목 3-1) — 인스타그램은 넘기지 않은 캐러셀을 다시 노출할 때
+ * 2번 장부터 보여 준다. 그 장이 "그래서 …"·"먼저 …" 같은 이어 말이거나 대상이 없으면 처음 보는 사람에겐 무슨 카드인지 안 읽힌다.
+ * 결정적 검사 두 가지: ① 이어 말·지시어로 열지 않는다 ② 대상 수종 이름이 2번 장에 있다(subjects — 호출부가 수종 사전으로
+ * 이름·별칭·'~나무'를 뗀 줄기를 넘긴다. 수종을 모르면 빈 배열이라 ②는 건너뛴다 — 붙여 쓴 검색어("장마철나무관리")를
+ * 토큰으로 쓰면 어떤 문구로도 통과하지 못해 매번 지적이 난다).
+ * 장이 3장 미만이면 2번 장이 곧 마무리 장이라 보지 않는다.
+ */
+const SECOND_COVER_CONNECTIVE_RE = /^(?:그래서|그런데|그러면|그럼|하지만|그리고|게다가|먼저|우선|이때|그때|여기서|이럴\s*땐|이럴\s*때|이것|이게|그게|그것|이렇게|그렇다면)(?![가-힣])/;
+export function secondCoverIssues(slides: ReadonlyArray<{ headline: string; body: string }>, subjects: readonly string[] = []): string[] {
+  if (slides.length < 3) return [];
+  const s2 = slides[1]!;
+  const head = String(s2.headline ?? '').trim();
+  const issues: string[] = [];
+  if (SECOND_COVER_CONNECTIVE_RE.test(head)) {
+    issues.push(`2번 장 헤드라인이 이어 말로 연다("${head.slice(0, 24)}") — 인스타는 넘기지 않은 카드를 2번 장부터 다시 보여 준다. 2번 장은 두 번째 표지다: 앞 장 없이도 대상과 핵심 답이 읽히게 써라.`);
+  }
+  const names = subjects.map((x) => x.replace(/\s+/g, '')).filter((x) => x.length >= 2);
+  const text = `${head} ${s2.body ?? ''}`.replace(/\s+/g, '');
+  if (names.length && !names.some((x) => text.includes(x))) {
+    issues.push(`2번 장에 대상("${names[0]}")이 없다 — 2번 장은 두 번째 표지라 이 장만 봐도 무엇에 관한 어떤 답인지 읽혀야 한다. 헤드라인이나 본문 첫 줄에 대상과 핵심 답을 담아라.`);
+  }
+  return issues;
+}
+
+/**
+ * 카드 문구 결정적 린트 묶음(2026-10-05) — 기획 수정 라운드(planCards probs)에 얹는 결정적·비차단 검사를 한곳에 모은다:
+ * 종결어미 3장 연속 등 "AI 티" 지문(2026-08-11 cardStyleIssues) + 카드뉴스 분석 승인 항목 3 — 글자 상한·2번 장 두 번째 표지·
+ * 블로그와 같은 문장 검사('봅니다' 세트당 1회·1인칭·장끼리 같은 줄·-ㅂ니까 헤드라인·직역·검색어 꼴·보고서 말투).
+ */
+export function cardCopyLintIssues(slides: PlanSlide[], keyword: string | undefined, topic: string): string[] {
+  return [
+    ...cardStyleIssues(slides),
+    ...cardDensityIssues(slides),
+    ...secondCoverIssues(slides, secondCoverSubjects(keyword, topic)),
+    ...cardVoiceIssues(slides, keyword),
+  ];
+}
+
+/** 2번 장 대상어(순수에 가까움 — 수종 사전만 읽는다): 수종 이름·별칭과 '~나무'를 뗀 줄기("대추나무"→"대추"). 모르면 빈 배열. */
+export function secondCoverSubjects(keyword: string | undefined, topic: string): string[] {
+  const sp = findSpecies(`${keyword ?? ''} ${topic}`);
+  if (!sp) return [];
+  const names = [sp.name, ...(sp.aliases ?? [])];
+  return [...new Set([...names, ...names.filter((x) => x.endsWith('나무') && x.length >= 4).map((x) => x.slice(0, -2))])];
 }
 
 export function coverIncludesKeyword(slides: Array<{ headline: string; body: string }>, keyword?: string): boolean {
@@ -339,10 +546,12 @@ function recentEndingsToAvoid(brand: string | undefined, excludeId: string, limi
 export function cardVoiceGuide(rotation: boolean, hasRecentEndings: boolean): string {
   const ending = !rotation
     ? '마무리 장은 권유형("-해 보세요")으로'
-    : '마무리 장 유형은 [권유형 "-해 보세요" / 관찰 장면(손에 잡히는 한 장면) / 결론 단정 / 조건문 "~이면 ~합니다"] 중 최근 5세트에서 쓰지 않은 유형으로'
+    // 유형은 전부 행동을 담는다(2026-10-05) — 종전 메뉴의 관찰 장면·결론 단정·"~이면 ~합니다"는 ctaSlideIssues(행동·질문 요구)가
+    // 매번 지적해 수정 라운드가 되돌리는 충돌이었다. 다양성은 문형으로 내고 행동 의무는 지킨다.
+    : '마무리 장 유형은 [권유형 "~하세요" / 조건+행동 "~면 ~하세요" / 독자 점검 질문 "~인가요?" / 금지 "~는 하지 마세요" / 시점 지정 "~할 때 ~하세요"] 중 최근 5세트에서 쓰지 않은 유형으로'
       + (hasRecentEndings ? ' — 아래 [최근 마무리] 와 같은 문형·같은 첫 어절 금지' : '');
   return `[말맛] 전 장을 "-습니다"로 끝내지 마라 — 본문 중 질문 1장·명사구 종결 1장을 섞고, ${ending}. `
-    + '항목 나열은 같은 문형·같은 길이로 균등 배분하지 말고 중요한 하나만 길게, 나머지는 짧게 묶어라. '
+    + '항목 나열은 같은 문형·같은 길이로 균등 배분하지 말고 중요한 하나를 앞세우고 나머지는 짧게 묶어라(장당 글자 상한 안에서). '
     + '단 행동 지시는 목적어·방향까지 남겨라("손 높이 아래로" 같은 잘린 구 금지 — 뜻이 뒤집히면 실패). '
     + '위험·안전의 이유("~해야 안전합니다" 류)는 세트 전체에서 최소 1회 온전한 문장으로 남겨라.';
 }
@@ -355,12 +564,16 @@ export function cardVoiceGuide(rotation: boolean, hasRecentEndings: boolean): st
 export function cardStructureLines(seed: StructureSeed, variety: boolean): string[] {
   if (!variety) return [];
   return [
-    `본문 장의 body 는 ${seed.cardLines}줄로 쓴다(줄바꿈 \\n 으로 구분, 각 줄은 짧게) — 이번 세트의 카드 밀도다. 정보가 넘치면 줄을 늘리지 말고 장을 늘려라.`,
+    // 시드 cardLines(2~5)는 블로그와 같은 시드라 범위를 못 바꾼다 — 카드 쪽에서 글자 상한(CARD_BODY_MAX_LINES)으로 묶는다(2026-10-05).
+    `본문 장의 body 는 ${Math.min(seed.cardLines, CARD_BODY_MAX_LINES)}줄 이내로 쓴다(줄바꿈 \\n 으로 구분, 각 줄은 짧게) — 이번 세트의 카드 밀도다. 정보가 넘치면 줄을 늘리지 말고 장을 늘리거나 캡션으로 옮겨라.`,
     `해시태그(hashtags)는 ${seed.hashtags}개로 담아라.`,
   ];
 }
 
 async function planCards(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number | null, priorCoverage = '', endingsAvoid = '', seed: StructureSeed = currentStructureSeed(), sourceFlagged: string[] = []): Promise<Plan | null> {
+  // 표지 키워드는 바른 띄어쓰기 꼴로(2026-10-05) — 검색어 꼴("○○ 심는시기")을 그대로 요구하면 카드 문장 린트(keywordFormIssues)가
+  // 매번 지적한다. 표지 게이트(coverIncludesKeyword)는 공백을 무시하므로 손실이 없고, 정확 일치는 첫 해시태그가 맡는다.
+  const kwNat = keyword ? naturalKeyword(keyword) : '';
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 키워드] ${keyword}` : '',
@@ -373,27 +586,36 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     '',
     // 키워드가 있으면 '주제어' 수준이 아니라 정확 표기를 요구(2026-07-31 — 훅 자유는 유지: headline 또는 body 택일 허용).
     keyword
-      ? `독자는 원문 블로그를 본 적이 없다 — 카드 단독으로 완결되게 써라: 표지(headline 또는 body)에 핵심 키워드 '${keyword}' 를 정확히 이 표기 그대로 반드시 포함하고(훅과 병행 — 훅을 위해 키워드를 빼지 말 것), 각 장은 앞 장과 표지만으로 무슨 대상 이야기인지 읽히게 하라. 키워드는 명사구 그대로 문장과 자연스럽게 결합하라 — 키워드에 어미를 붙여 동사화하지 마라("묘목선별하면" 식 금지, 실측 유출). 정확 표기는 표지 1회면 충분하다 — 마무리 장 헤드라인·캡션 본문에 키워드를 반복하지 마라(첫 해시태그가 정확 일치를 담당한다).`
+      ? `독자는 원문 블로그를 본 적이 없다 — 카드 단독으로 완결되게 써라: 표지(headline 또는 body)에 핵심 키워드 '${kwNat}' 를 이 낱말 그대로(바른 띄어쓰기로 — 검색어처럼 붙여 쓰지 말 것) 반드시 포함하고(훅과 병행 — 훅을 위해 키워드를 빼지 말 것), 각 장은 앞 장과 표지만으로 무슨 대상 이야기인지 읽히게 하라. 키워드는 명사구 그대로 문장과 자연스럽게 결합하라 — 키워드에 어미를 붙여 동사화하지 마라("묘목선별하면" 식 금지, 실측 유출). 정확 표기는 표지 1회면 충분하다 — 마무리 장 헤드라인·캡션 본문에 키워드를 반복하지 마라(첫 해시태그가 정확 일치를 담당한다).`
       : '독자는 원문 블로그를 본 적이 없다 — 카드 단독으로 완결되게 써라: 표지(headline 또는 body)에 핵심 주제어(식물명·행위명 등)를 반드시 명시하고(훅과 병행 — 훅을 위해 주제어를 빼지 말 것), 각 장은 앞 장과 표지만으로 무슨 대상 이야기인지 읽히게 하라.',
     // ── 문체 블록(자연스러움 감사 2026-08-11 신설, 같은 날 압축) — 종전엔 기획 프롬프트에 문체 지침이 0줄이라
     //    모델 기본값(격식 평서문 균질 배분)으로 수렴했다(40장 중 36장 "-ㅂ니다" 종결 실측). 초판 4블록은
     //    사고 폭증으로 출력 상한(9000)까지 초과시켜(테스트 런 2연속 실패) 규칙만 남기고 절반으로 압축했다.
     // 이해도 감사(2026-08-11 블라인드 실측) 교훈: 압축·쿼터가 전제("안전")·이유·행동 지시를 깎아 신본이
     // 구본보다 이해 불가(6/10)가 됐다 — 우선순위 선언과 안전선이 문체 블록을 지배한다.
-    '[우선순위] 아래 문체 지침은 표현 방식 지침이다 — 원문에서 추린 방법·이유·위험 근거 문장을 삭제하는 방식으로 이행하지 마라. 문체와 정보가 충돌하면 정보를 남기고 문체를 양보하라.',
+    '[우선순위] 아래 문체 지침은 표현 방식 지침이다 — 원문에서 추린 방법·이유·위험 근거 문장을 삭제하는 방식으로 이행하지 마라. 문체와 정보가 충돌하면 정보를 남기고 문체를 양보하라. 단 [글자 상한]은 문체가 아니라 판형이다 — 상한을 넘는 정보는 장을 늘리거나 캡션으로 옮겨라(지우는 게 아니라 옮기는 것).',
+    // 글자 상한(2026-10-05 카드뉴스 분석 승인 항목 3-1) — 장당 글자가 7월 37자 → 10월 69자로 늘어 휴대폰 폭에서 본문이 안 읽혔다.
+    // 지시만으로는 새므로 cardDensityIssues(수정 라운드)·shortenDenseSlides·fitCardDensity(마지노선)가 결정적으로 잡는다.
+    `[글자 상한] 휴대폰 화면 폭에서 확대 없이 읽혀야 한다 — 헤드라인 ${CARD_HEADLINE_MAX_CHARS}자 이내, body 는 ${CARD_BODY_MAX_LINES}줄·${CARD_BODY_MAX_CHARS}자 이내(공백 포함, 한 줄 18자 안팎). 장당 메시지 하나만 싣고, 이유·수치 세부는 캡션으로 보내라.`,
+    // 2번 장 = 두 번째 표지(같은 승인 항목) — 인스타는 넘기지 않은 캐러셀을 2번 장부터 다시 노출한다.
+    '[2번 장] 2번 장은 두 번째 표지다 — 인스타그램은 넘기지 않은 카드를 2번 장부터 다시 보여 준다. 2번 장만 봐도 대상(식물명)과 이 카드의 핵심 답(무엇을·언제·어떻게)이 읽히게 써라. "그래서·먼저·이때"처럼 앞 장에 기대는 말로 열지 말고, 궁금증만 남기는 장으로 쓰지 마라.',
     // 결론 의무+용어 문턱(사용자 확정 2026-08-12): 실측 — "도장지"를 표지부터 캡션까지 한 번도 안 풀었고,
     // 헤드라인 "다섯 곳"에 본문은 "세 가지"만 제시하는 수치 불일치까지 나왔다.
-    '[결론·용어] 구별·진단 소재면 각 장의 관찰에 그것이 대개 무엇을 뜻하는지(통설 수준 — "대개" 유보로 단정 가능) 또는 무엇을 하라는지를 붙여라 — 보는 법만 나열하고 끝나면 실패. 표지·헤드라인의 핵심어가 전문용어면 반 문장으로 풀어라("도장지(웃자란 가지)"). 헤드라인의 수치·개수는 본문이 실제로 그만큼 채워야 한다.',
+    '[결론·용어] 구별·진단 소재면 각 장의 관찰에 그것이 보통 무엇을 뜻하는지(통설 수준 — "보통" 유보 한 번으로 단정 가능. "대개"는 과사용 어휘라 쓰지 않는다) 또는 무엇을 하라는지를 붙여라 — 보는 법만 나열하고 끝나면 실패. 표지·헤드라인의 핵심어가 전문용어면 반 문장으로 풀어라("도장지(웃자란 가지)"). 헤드라인의 수치·개수는 본문이 실제로 그만큼 채워야 한다.',
     cardVoiceGuide(CONFIG.voiceRotation, !!endingsAvoid),
     endingsAvoid,
-    '[여운·관점] 본문 1장은 결론 없이 다음 장으로 궁금증을 넘기되, 그 답을 반드시 바로 다음 장 첫 줄에서 준다. 본문 1장에는 판단의 표명 한 줄("이럴 땐 이 순서부터 봅니다" — "나는/저는/저라면" 같은 1인칭 주어는 쓰지 마라, 주어 없이도 시점이 전달된다. 사용자 확정 2026-08-12. 겪지 않은 사건·일화 날조는 금지) — 근거·이유 줄을 밀어내고 그 자리를 차지하게 하지 마라, 판단은 근거에 덧붙이는 한 줄이다. "X가 아니라 Y" 대조 훅·"오늘 ~" 헤드라인·"N가지" 골격은 과용된 지문이니 다른 각도로 열고, "가 아니라"는 세트 전체 1회 이하.',
+    // 예시 문구 교체(2026-10-05) — 종전 예시 "이럴 땐 이 순서부터 봅니다"가 '봅니다'를 심어 헤드라인이 "~부터 봅니다"로 수렴했다
+    // (플래너 메모리 성과 줄 10건). '봅니다'는 세트당 1회(cardVoiceIssues). 여운 장은 3번 이후 — 2번 장은 두 번째 표지.
+    '[여운·관점] 3번 이후 본문 1장은 결론 없이 다음 장으로 궁금증을 넘기되, 그 답을 반드시 바로 다음 장 첫 줄에서 준다(2번 장은 여운 장으로 쓰지 마라). 본문 1장에는 판단의 표명 한 줄("이럴 땐 흙부터 확인하세요" — "~봅니다"로 쓰지 말고, "나는/저는/저라면" 같은 1인칭 주어도 쓰지 마라, 주어 없이도 시점이 전달된다. 사용자 확정 2026-08-12. 겪지 않은 사건·일화 날조는 금지) — 근거·이유 줄을 밀어내고 그 자리를 차지하게 하지 마라, 판단은 근거에 덧붙이는 한 줄이다. "X가 아니라 Y" 대조 훅·"오늘 ~" 헤드라인·"N가지" 골격은 과용된 지문이니 다른 각도로 열고, "가 아니라"는 세트 전체 1회 이하.',
     n
       ? `슬라이드 ${n}장(표지 1 + 본문 ${Math.max(1, n - 2)} + 마무리 1)의 카드뉴스를 기획하라.`
       : '슬라이드 수는 스토리라인의 핵심 메시지 개수에 맞게 3~8장 사이에서 스스로 정하라(표지 1 + 본문 여러 장 + 마무리 1). 억지로 채우거나 줄이지 말고 내용 밀도에 맞춰라. 문체 쿼터(질문·명사구·1인칭) 때문에 정보 장이 부족하면 장 수를 늘려서 해결하라 — 정보 장을 빼서 해결하지 마라.',
     '표지와 마무리 장의 body 는 비우거나 한 줄로 짧게. 카드 텍스트에 이모지 금지(캡션에는 허용).',
     // 마무리 장 CTA(2026-09-04) — 종전엔 길이만 규정하고 내용을 안 말해서 결과가 갈렸다(실측 19건 중
     // 4건이 마무리 감상·정보 장). 쇼츠 CTA 씬의 takeaways 규정을 카드뉴스로 옮긴 것.
-    '마무리 장은 반드시 독자가 오늘·지금 할 수 있는 한 가지 행동으로 끝내라 — 감상("~가 시작입니다")이나 정보 한 줄 더("~은 ~입니다")로 끝내지 마라. 조건에 따라 답이 갈리면 "~면 ~하세요" 꼴로 조건과 행동을 함께 준다. 앞 장들에서 이미 말한 내용을 요약하는 자리가 아니라, 읽은 사람이 마당에 나가서 할 일을 짚어 주는 자리다.',
+    // 2026-10-05 — "오늘·지금 할 수 있는"이 위 '"오늘 ~" 헤드라인 금지'와 충돌해 마무리가 매번 "오늘, ~하세요"로 닫혔다.
+    // 행동 의무는 그대로, 시점은 주제에 맞게(ctaSlideIssues 가 '오늘'로 여는 마무리 헤드라인도 지적한다).
+    '마무리 장은 반드시 독자가 직접 할 수 있는 구체적인 행동 한 가지(무엇을·언제)로 끝내라 — 감상("~가 시작입니다")이나 정보 한 줄 더("~은 ~입니다")로 끝내지 마라. 조건에 따라 답이 갈리면 "~면 ~하세요" 꼴로 조건과 행동을 함께 준다. 시점은 주제에 맞게("심기 전에", "잎이 지면", "다음 물 줄 때") — 헤드라인을 "오늘,"로 열지 마라. 앞 장들에서 이미 말한 내용을 요약하는 자리가 아니라, 읽은 사람이 마당에 나가서 할 일을 짚어 주는 자리다.',
     // 골격 다양화(2026-08-27 권고 4) — 세트마다 카드 밀도가 같으면 피드에서 같은 판형으로 읽힌다.
     // 줄 수·해시태그 수는 런별 구조 시드가 정한다(STRUCTURE_VARIETY=off 면 이 두 줄 자체가 빠진다 = base).
     ...cardStructureLines(seed, CONFIG.structureVariety),
@@ -467,11 +689,12 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     const inherited = (sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(plan)) : []).map(formatInherited);
     probs.push(...inherited.slice(0, 2));
     // 문체 결정적 린트(2026-08-11) — 종결어미 3장 연속 등 "AI 티" 지문을 같은 수정 라운드에 얹는다.
-    probs.push(...cardStyleIssues(plan.slides));
+    probs.push(...cardCopyLintIssues(plan.slides, keyword, topic));
     // 표지 키워드 정확 표기 게이트(결정적) — LLM '주제어' 판정과 별개로 [핵심 키워드] 그대로를 요구.
     // 실측 2026-07-31: "블루베리나무화분"이 표지 히어로가 아닌 곳에서도 빠질 뻔한 소프트 유도 보강.
+    // 판정은 공백 무시라 바른 띄어쓰기 꼴(kwNat)을 요구해도 손실이 없다(2026-10-05).
     if (keyword && !coverIncludesKeyword(plan.slides, keyword)) {
-      probs.push(`표지(1번): 핵심 키워드 '${keyword}' 가 headline 또는 body 에 정확히 이 표기로 없음 — 훅은 유지하되 표지에 그대로 포함하라`);
+      probs.push(`표지(1번): 핵심 키워드 '${kwNat}' 가 headline 또는 body 에 없음 — 훅은 유지하되 표지에 이 낱말 그대로(바른 띄어쓰기로) 포함하라`);
     }
     let planChanged = false;
     if (probs.length) {
@@ -509,14 +732,26 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
       if (inheritedResidual.length) { const m5 = `원문 미검증 주장 승계 잔존 ${inheritedResidual.length}건 — 검토 메시지에 표시`; console.log(`[카드뉴스] ${m5}`); io.bus?.emit('log', { message: m5 }); }
     }
   } catch { /* 무해 */ }
+  // 글자 상한 줄이기(2026-10-05) — 수정 라운드 뒤에도 넘친 장만 골라 한 번 더 줄인다(상한 안에 든 장만 채택, fail-open).
+  if (cardDensityOver(plan.slides).length) plan = { ...plan, slides: await shortenDenseSlides(plan.slides, io.signal) };
   // 오탈자 교정 — 수정 라운드가 바꾼 문구까지 포함해 최종 문구를 교열한다.
   const proofed = await proofreadPlan(plan, io.signal);
-  // 키워드 마지노선(결정적) — 반드시 교열 '뒤'에: 교열 LLM 이 합성 키워드를 띄어쓰기·어형 '교정'으로
-  // 변형해도 여기서 정확 표기를 복원한다(리뷰 지적 2026-07-31). 수정 라운드까지 놓친 경우도 동일하게
-  // 표지 보조 줄(body) 앞에 키워드를 그대로 붙인다 — 표지 body 는 이미지에 verbatim 으로 새겨지므로 노출 보장.
+  // 글자 상한 마지노선(결정적) — 교열 뒤에 둔다(교열은 ±50% 길이 변화를 허용해 다시 넘칠 수 있다). 문장 통째로만 덜어 낸다.
+  const fit = fitCardDensity(proofed.slides);
+  proofed.slides = fit.slides;
+  // 키워드 마지노선(결정적) — 반드시 교열·글자 마지노선 '뒤'에: 교열 LLM 이 합성 키워드를 띄어쓰기·어형 '교정'으로
+  // 변형해도 여기서 복원한다(리뷰 지적 2026-07-31). 수정 라운드까지 놓친 경우도 동일하게 표지 보조 줄(body) 앞에
+  // 키워드를 붙인다 — 표지 body 는 이미지에 verbatim 으로 새겨지므로 노출 보장. 붙이는 꼴은 바른 띄어쓰기(kwNat, 2026-10-05).
+  // 붙인 뒤에도 글자 상한을 지킨다(리뷰 2026-10-05 — 붙이고 나서 36자를 다시 넘던 구멍): withCoverKeyword.
   if (keyword && !coverIncludesKeyword(proofed.slides, keyword)) {
     const s0 = proofed.slides[0];
-    if (s0) proofed.slides[0] = { ...s0, body: (s0.body ? `${keyword}, ${s0.body}` : keyword).slice(0, 220) };
+    if (s0) proofed.slides[0] = withCoverKeyword(s0, kwNat);
+  }
+  // 잔존 로그는 실제로 나가는 문구(키워드까지 붙인 뒤) 기준.
+  const residual = cardDensityOver(proofed.slides);
+  if (fit.trimmed.length || residual.length) {
+    const m = `글자 상한 마지노선 — 문장 덜어 냄 ${fit.trimmed.join('·') || '없음'}${residual.length ? ` / 잔존 ${residual.map((o) => `${o.no}번(${o.why})`).join(', ')}` : ''}`;
+    console.log(`[카드뉴스] ${m}`); io.bus?.emit('log', { message: m });
   }
   // proofreadPlan 이 factGate 를 잃을 수 있어 원본에서 복원(표시 전용 필드 유실 방지).
   if (plan.factGate) proofed.factGate = plan.factGate;
@@ -577,7 +812,9 @@ async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalys
     forced
       ? `style_preset 은 반드시 "${forced}" 로 고정한다(사용자 지정). 그 스타일에 어울리는 공통 style 문구(팔레트·질감·조명)와 각 장면을 설계하라.`
       : 'style_preset 선택 가이드 — photorealistic=정보·실용, watercolor=감성·계절, flat_design=가이드·수치, manhwa=향수·음식, handwritten_poster=인사·시즌 인사말·캠페인·행사·감성(실사 사진 위에 큰 손글씨 캘리그래피를 장면에 파묻는 인디 포스터 룩). handwritten_poster 는 정보·수치 카드엔 쓰지 말 것 — 그런 주제는 flat_design.',
-    'style 문구는 배경·장면 전용(팔레트·질감·조명)이다 — 글씨체·타이포 지시는 넣지 마라(서체는 시스템이 붓펜 캘리그래피로 고정한다).',
+    // 서체 문구 정정(2026-10-05) — 붓펜 고정은 handwritten_poster 분기뿐이다. 브랜드 고정(cardStyle)을 풀고 나면 다른 프리셋이
+    // 고르는 대로 나가므로, '붓펜 고정'이라 말하면 디자이너가 손글씨 룩을 전제로 장면을 짠다.
+    'style 문구는 배경·장면 전용(팔레트·질감·조명)이다 — 글씨체·타이포 지시는 넣지 마라(서체는 시스템이 스타일별로 정한다: handwritten_poster=붓펜 캘리그래피, 그 밖=굵은 산세리프).',
     'JSON 형식: {"style_preset":"photorealistic|watercolor|flat_design|manhwa|handwritten_poster","style":"모든 장 공통 스타일 문구(팔레트·질감·조명)","slides":[{"prompt":"장면 묘사(한국어 150자 이내)"}]}',
   ].filter(Boolean).join('\n');
   const j = await callRoleJSON<{ style_preset?: unknown; style?: unknown; slides?: Array<{ prompt?: unknown }> }>(
@@ -601,6 +838,10 @@ async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalys
  * gpt-image-2 가 한글 문구까지 직접 그리므로 '한 글자도 바꾸지 말고/자소 결합 틀리면 실패'를 강하게 못박는다.
  * 이 프로젝트 무이모지 정책 유지, 페이지 번호(1/8·2/3)는 넣지 않는다(사용자 요청 2026-07-22). 순수 함수(생성 없이 프롬프트 검증 가능).
  */
+/** 본문 글자 크기(2026-10-05 카드뉴스 분석) — 휴대폰 폭으로 줄인 카드에서 본문이 깨알 글씨로 그려져 읽히지 않았다(phone_size_bodies.jpg).
+ *  글자 수를 줄인 만큼(CARD_BODY_MAX_CHARS) 크기를 키우게 한다. 두 분기 공통. */
+const CARD_BODY_SIZE_RULE = '본문 글자 크기: 휴대폰 화면 폭으로 줄여 봐도 확대 없이 읽히는 크기 — 1080px 폭 기준 글자 높이 40px 이상으로 새기고, 칸에 맞추려고 작게 줄이지 않는다(본문은 두 줄 이내라 자리가 넉넉하다). 헤드라인의 위계는 그대로 둔다.';
+
 export function buildCardImagePrompt(a: {
   headline: string; body?: string; scene: string; style: string; title: string;
   index: number; total: number; hasRefs: boolean; preset: string;
@@ -633,6 +874,7 @@ export function buildCardImagePrompt(a: {
     // 글씨체까지 끌고 가 서체가 런마다 흘러가던 것을 차단. 톤 질감은 배경·소품 전용으로 명시 격리.
     p.push(`타이포: 굵고 자유분방한 붓펜 캘리그래피 한글 — 진짜 붓으로 쓴 붓글씨(획 끝이 갈라지고 흘림·삐침이 살아있는 획), 살짝 불규칙한 자형, 생동감. 크레용체·색연필체·마커체·둥근 고딕풍 손글씨는 절대 금지. 전체 톤의 질감(크레용·수채 등)은 배경과 소품에만 적용하고 글씨는 반드시 붓펜 캘리그래피로 쓴다. 포스터 제목급 시각 위계. ${isCover ? '헤드라인을 화면을 지배하는 큰 히어로 캘리그래피로 배치한다.' : '헤드라인은 중간 크기 임베드 캘리그래피, 보조 정보는 정갈하고 읽기 쉬운 손글씨로 또렷하게(가독성 우선, 캘리 남발 금지).'}`);
     p.push('손그림 주석: 화살표·별·밑줄·구름·해 같은 작고 귀여운 손그림을 얇고 불완전한 선으로 최소한만 더한다. 여백을 살리고 메인 문구를 방해하지 않는다.');
+    if (body) p.push(CARD_BODY_SIZE_RULE);
     p.push('무드/연출: 인디 페스티벌·청춘 캠페인 키비주얼. 선명하되 네온 아님, 부드러운 자연광·연한 그림자·미세한 필름 그레인. 실사 배경은 믿을 만하되 최종물은 프로가 아트디렉션한 포스터로 보이게.');
     p.push(`카드에 새길 한국어 문구(한 글자도 바꾸지 말 것) — 헤드라인: "${headline}"${body ? `, 본문: "${body.replace(/\n/g, ' / ')}"` : ''}. 정확히 그 표기 그대로 크고 또렷한 한글 손글씨 타이포그래피로 새긴다. 자소(자음·모음) 결합이 틀리면 실패로 간주한다.`);
     p.push('완성 기준: 상업 포스터·인디 뮤직 페스티벌 포스터 마감 수준, 한글 오타 없음. 제외할 것: 평면 텍스트 오버레이·스티커식 타이포·글자와 겉도는 배치·영문/로마자 혼용·깨진 글자·과한 장식·워터마크·로고·QR·UI 요소·페이지 번호/쪽번호(1/8·2/3 같은 표기 금지).');
@@ -642,6 +884,7 @@ export function buildCardImagePrompt(a: {
     p.push(`장면 설명: ${scene}. 한글 헤드라인과 핵심 정보가 전시 포스터처럼 강하게 보이는 구성.`);
     p.push(`구도: 세로 2:3 시야의 상단 2/3에 헤드라인, 하단 1/3에 보조 정보. 그리드 축을 지키고 안전 여백을 확보한다.${i > 0 ? ' 시리즈 내 다른 슬라이드와 구분되는 고유한 구도·시각 모티프를 쓴다.' : ''}`);
     p.push('타이포/레이아웃: 굵고 큰 한글 산세리프 헤드라인 + 정돈된 중간 무게 본문. 자음·모음 결합이 또렷하게 그려져야 하고, 자간·행간은 인쇄 포스터 수준으로 관리한다.');
+    if (body) p.push(CARD_BODY_SIZE_RULE);
     p.push('연출: 종이·잉크 물성이 살짝 느껴지는 인쇄 에디토리얼 질감. 배경은 단색 또는 미세한 텍스처, 타이포 대비를 뚜렷하게(디지털 플랫함 지양).');
     p.push(`카드에 새길 한국어 문구(한 글자도 바꾸지 말 것) — 헤드라인: "${headline}"${body ? `, 본문: "${body.replace(/\n/g, ' / ')}"` : ''}. 정확히 그 표기 그대로 크고 선명한 고대비 한글 타이포그래피로 새긴다. 자소(자음·모음) 결합이 틀리면 실패로 간주한다.`);
     p.push('완성 기준: 인쇄 품질, 한글 오타 없음, 이 한 장만 봐도 의미가 전달될 것. 제외할 것: 영문·로마자 혼용, 손글씨·장식체 과다, 흐릿한 글자, 가독성 낮은 배치, 산만한 장식 요소, 워터마크, 페이지 번호·쪽번호(1/8·2/3 같은 표기 금지).');

@@ -60,3 +60,18 @@ describe('writeBlogBody — 편집 확정 규칙 주입(2026-10-05)', () => {
     expect(ctx.endsWith('[검토자 수정 요청 — 반드시 반영]\nF')).toBe(true);
   });
 });
+
+// 2026-10-05 대추나무 초안 — 작가에게 키워드의 바른 띄어쓰기 꼴과 '주어·"의" 명사구 금지'가 전달된다.
+describe('writeBlogBody — 키워드 쓰는 법 주입(2026-10-05)', () => {
+  it('키워드가 있으면 본 집필·리비전 컨텍스트에 바른 꼴이 실린다', async () => {
+    run.mockResolvedValueOnce({ text: '## 소제목\n본문입니다.' }).mockResolvedValueOnce({ text: '## 소제목\n본문입니다.' });
+    await writeBlogBody({ bus, writer, model: 'm', topic: '대추나무 심는 시기', brief: '브리프', structure: '[이번 글 구조] x', keyword: '대추나무 심는시기' });
+    await writeBlogBody({ bus, writer, model: 'm', topic: '대추나무 심는 시기', brief: '브리프', keyword: '대추나무 심는시기',
+      revise: { baseBody: '## 초안', feedback: 'F' } });
+    for (const call of run.mock.calls) {
+      const ctx = call[0].context as string;
+      expect(ctx).toContain('[핵심 키워드 쓰는 법]');
+      expect(ctx).toContain('"대추나무 심는 시기"');
+    }
+  });
+});

@@ -16,6 +16,7 @@ import { genId } from '../util/ids';
 import type { AssetBundle } from '../output';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { renderHtml } from '../output/render';
+import { BLOG_IMAGE_MAX } from '../output/naverBlog';
 import { mergeRealFrameManifest } from '../content/blogFrames';
 
 /**
@@ -156,7 +157,7 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
         const r = (CONFIG.blogAutoImage || a.autoImages)
           ? await generateImagesForDraft(
             draftPath, imagesDir, manifestPath,
-            { topic: a.topic, imageStyle: 'photorealistic', limit: 3, startIndex: a.realFrame ? 1 : 0 }, a.signal,
+            { topic: a.topic, imageStyle: 'photorealistic', limit: BLOG_IMAGE_MAX, startIndex: a.realFrame ? 1 : 0 }, a.signal,
           )
           : { ok: true, output: '생성 이미지 없음 — 실촬영 컷만' };
         // 매니페스트 복원 — 생성이 도중 중단돼 매니페스트가 안 써졌어도 완성된 images/blog-image-NN.png 를

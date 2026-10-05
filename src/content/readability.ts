@@ -14,6 +14,7 @@
  */
 import { applySentenceRepairs, introducesNewFacts, diceSimilarity } from './factGate';
 import { extractTimingNumbers } from './timingParity';
+import { hasKeyword, naturalKeyword } from './keywordForm';
 
 export interface ReadabilityFix { original: string; replacement: string }
 
@@ -31,21 +32,30 @@ export function readabilityPrompt(body: string, audience: string, keyword?: stri
     '② 문장·줄·표·사물을 주어로 세운 의인화 — "이 표가 답을 알려 줍니다"→"표를 보면 답이 보입니다". 나무가 물을 끌어올리는 것 같은 실제 생장 서술은 고치지 마라.',
     '③ 다른 뜻으로 먼저 읽히거나 짝이 안 맞는 말 — "동해"(바다로 읽힌다 → "겨울 추위 피해"), "갈립니다"(→ "달라져요"), "판가름·가늠"(→ "확인하다").',
     '④ 처음 나오는데 풀이가 없는 원예 용어가 판단·행동 지시 자리에 선 문장 — "뿌리분 가장자리에 꽂으세요"→"뿌리분(뿌리와 흙이 뭉친 덩어리) 가장자리에 꽂으세요". 용어를 빼지 말고 반 문장 풀이를 붙인다.',
-    '⑤ 논문·보고서 말투가 그대로 들어온 문장 — 독자에게 하는 말로 풀어라.',
+    // 2026-10-05 — 대추나무 초안의 보고서·직역 말투(styleLint 보고서 말투 목록과 같은 말). 대체어를 함께 줘야 낯선 동의어로 새지 않는다.
+    '⑤ 논문·보고서 말투가 그대로 들어온 문장 — 독자에게 하는 말로 풀어라. 예: "구간"(시기 뜻 → "시기·때"), "셈법"(→"~하면 됩니다"), '
+      + '"그해 심기는 접습니다"(→"올해는 미루세요"), "묘목을 묻는"(→"심는"), "~이어야 뜻이 있습니다"(→"~이어야 제 역할을 합니다"), '
+      + '"그 주에 끝내는 쪽으로 움직입니다"(→"그 주 안에 끝내세요"), "감안하고 가세요"(→"알고 심으세요").',
     '⑥ 앞뒤 맥락 없이 튀어나와 무슨 얘기인지 모를 문장.',
+    // 2026-10-05 — 대추나무 초안 "…심는시기의 마지막 가을 창입니다"가 이 검수를 그대로 통과했다(창=window 직역, 검색어 꼴 주어).
+    '⑦ 영어를 직역한 말 — 기간을 뜻하는 "창"("가을 식재 창입니다"→"가을에 심을 수 있는 때입니다", "마지막 가을 창"→"늦어도 △월까지"), "윈도우", "방향을 가져가다"(→"방향으로 간다").',
+    '⑧ 띄어쓰기가 빠진 검색어 꼴이 문장 주어나 "~의" 명사구로 선 문장 — "○○ 심는시기의 마지막 …"→"○○는 … 심을 수 있어요"처럼 바른 띄어쓰기로 풀어 쓴다.',
+    // 2026-10-05 — 토막 줄("봄에 심는다면 3월 중순에서 4월 중순이고요.")은 앞 줄과 합쳐야 고쳐지는데 '합치지 마라'가 막았다.
+    // 사장님 결정(한 줄에 1~2문장)으로 바로 위 줄과 합치는 것만 허용한다 — 쪼개기·먼 문장 합치기는 계속 금지.
+    '⑨ 앞 문장에 붙어야 할 꼬리가 혼자 한 줄인 토막("~이고요.", "~고요.", "~죠." 짧은 줄) — 바로 위 줄과 한 줄로 합친다. '
+      + '이때만 original 에 두 줄을 줄바꿈(\\n) 그대로 이어 적고, replacement 는 한 줄(1~2문장)로 쓴다. 굵은 요약 줄(**…**)은 합치지 마라.',
     '규칙: 뜻·사실·수치·품종명·고유명사는 그대로 — 새 사실을 넣지 마라. 문장 길이와 원문의 존댓말 어미 결은 비슷하게. '
-      + '고친 문장도 원문처럼 한 문장이다(여러 문장으로 쪼개거나 앞뒤 문장과 합치지 마라 — 줄 구조가 그대로 남아야 한다). 굵게(**) 표시는 그대로 둔다.',
-    keyword ? `핵심 키워드 "${keyword}"가 든 문장은 고쳐도 그 표기를 그대로 남겨라.` : '',
+      + '고친 문장도 원문처럼 한 줄이다(여러 줄로 쪼개지 마라. 합치기는 ⑨의 바로 위 줄과만). 굵게(**) 표시는 그대로 둔다.',
+    keyword ? `핵심 키워드 "${keyword}"가 든 문장은 고쳐도 키워드(대상+주제어)를 남겨라 — 띄어쓰기는 바르게("${naturalKeyword(keyword)}")·조사는 자연스럽게 바꿔도 된다(검색은 띄어쓰기·조사를 가려 읽는다).` : '',
     '표(| 로 시작하는 줄)·인용 프레임(> 로 시작)은 고치지 마라. 이미 자연스러운 문장은 건드리지 마라 — 고칠 게 없으면 빈 목록.',
-    `original 은 본문에 있는 문장 하나를 글자 그대로(소제목이면 "## " 없이, 여러 문장을 묶지 말고), 최대 ${MAX_FIXES}개.`,
+    // 리뷰(2026-10-05) — "여러 문장을 묶지 말고"가 ⑨(두 줄 합치기)와 정면으로 부딪혔다. 예외를 같은 문장 안에 적는다.
+    `original 은 본문에 있는 문장 하나를 글자 그대로(소제목이면 "## " 없이). ⑨ 토막 합치기만 두 줄을 줄바꿈으로 이어 적고, 그 밖에는 여러 문장을 묶지 마라. 최대 ${MAX_FIXES}개.`,
     `[본문]\n${body.slice(0, 9000)}`,
     'JSON 형식: {"fixes":[{"original":"본문 그대로의 문장","replacement":"고친 문장"}]}',
   ].filter(Boolean).join('\n');
 }
 
-const squash = (s: string): string => s.replace(/\s+/g, '');
-
-/** LLM 치환안 거름(순수) — 본문에 실재, 표·인용 줄 아님, 실제 변경, 키워드 보존. */
+/** LLM 치환안 거름(순수) — 본문에 실재, 표·인용 줄 아님, 실제 변경, 키워드 보존(띄어쓰기·조사 무시 — keywordForm.hasKeyword). */
 export function acceptReadabilityFixes(body: string, raw: unknown, keyword?: string): ReadabilityFix[] {
   if (!Array.isArray(raw)) return [];
   const lines = body.split('\n');
@@ -53,13 +63,23 @@ export function acceptReadabilityFixes(body: string, raw: unknown, keyword?: str
   for (const f of raw) {
     // 소제목 마커는 양쪽에서 뗀다(참고 블로그 실측 2026-10-03: 둘 다 "## "를 달고 와 치환 결과가 "## ## 소제목"이 됐다 —
     // 마커는 치환기가 보존한다).
-    const unmark = (v: unknown): string => (typeof v === 'string' ? v.trim().replace(/^#{1,6}\s+/, '').trim() : '');
+    const unmark = (v: unknown): string => (typeof v === 'string' ? v.trim().replace(/^#{1,6}\s+/, '').replace(/\r\n/g, '\n').trim() : '');
     const original = unmark((f as ReadabilityFix | null)?.original);
     const replacement = unmark((f as ReadabilityFix | null)?.replacement);
     if (!original || !replacement || original === replacement) continue;
-    const line = lines.find((l) => l.includes(original));
-    if (!line || /^\s*(\||>)/.test(line)) continue;
-    if (keyword && squash(original).includes(squash(keyword)) && !squash(replacement).includes(squash(keyword))) continue;
+    // 두 줄 합치기(⑨, 2026-10-05) — original 이 '\n'으로 이은 인접 두 줄이면 본문에 그대로 있어야 하고, 두 줄 모두
+    // 산문(표·인용·소제목·목록 아님)이어야 한다. replacement 는 한 줄. 적용은 applyReadabilityFixes 2차(정확 일치 치환)가 맡는다.
+    if (original.includes('\n')) {
+      const pair = original.split('\n');
+      if (pair.length !== 2 || replacement.includes('\n') || !body.includes(original)) continue;
+      if (pair.some((l) => !l.trim() || /^\s*(\||>|#|[-*]\s|\d+[.)]\s|\[IMAGE:)/.test(l))) continue;
+      // 굵은 요약 줄(**…**)은 합치지 않는다(리뷰 2026-10-05) — 첫머리 요약이 다음 줄과 섞이면 요약 칸이 깨진다.
+      if (pair.some((l) => /^\s*\*\*.*\*\*\s*[.!?…]?\s*$/.test(l))) continue;
+    } else {
+      const line = lines.find((l) => l.includes(original));
+      if (!line || /^\s*(\||>)/.test(line)) continue;
+    }
+    if (keyword && hasKeyword(original, keyword) && !hasKeyword(replacement, keyword)) continue;
     if (out.some((x) => x.original === original)) continue;
     out.push({ original, replacement });
     if (out.length >= MAX_FIXES) break;
@@ -70,7 +90,9 @@ export function acceptReadabilityFixes(body: string, raw: unknown, keyword?: str
 /** 부정·금지 표지(리뷰 2026-10-05) — 읽기 쉬움 치환은 '같은 뜻 다른 말'만 허용한다. 하한 0.2 에서는
  *  "살충제는 쓰지 않아도 됩니다"→"살충제는 꼭 뿌려야 합니다"처럼 뜻이 뒤집힌 문장도 글자 겹침으로 통과했다.
  *  "말"은 "10월 말"과 겹쳐 활용형(말고·말아·마세요)만 본다. "안"은 띄어 쓴 부정("안 돼요")만 — "안에"는 아니다. */
-const NEGATION_RE = /않|(?<![가-힣])안\s|못|없|말고|말아|말라|마세요|마십시오|금지|삼가/g;
+// 2026-10-05 — "없이"(꽃가루받이 없이도)는 부정이 아니라 '~를 빼고'라 세지 않는다: 대추나무 초안의 단위결실성 문장 고침
+// ("꽃가루받이 없이도 열매를 맺는 성질(단위결실성)")이 이 가드에 '부정 표지 변경'으로 막혔다.
+const NEGATION_RE = /않|(?<![가-힣])안\s|못|없(?!이)|말고|말아|말라|마세요|마십시오|금지|삼가/g;
 /** 필요·당위 표지 — 있고 없음이 바뀌면 권고 강도가 뒤집힌 것이다("~해도 됩니다"↔"꼭 ~해야 합니다"). */
 const NECESSITY_RE = /꼭|반드시|필수|필요|[가-힣]야\s*(?:합니다|해요|한다|하죠|돼요|됩니다)/;
 /** 월 뒤 시점(초·중순·말 …) — "10월 초"→"시월 말"은 값(10월)은 같아도 시기가 바뀐다. */
@@ -88,7 +110,7 @@ export function readabilityGuard(original: string, replacement: string, keyword?
   if (monthParts(original) !== monthParts(replacement)) return '월 시점 변경';
   if ((original.match(NEGATION_RE) ?? []).length !== (replacement.match(NEGATION_RE) ?? []).length) return '부정 표지 변경';
   if (NECESSITY_RE.test(original) !== NECESSITY_RE.test(replacement)) return '필요·금지 극성 변경';
-  if (keyword && squash(original).includes(squash(keyword)) && !squash(replacement).includes(squash(keyword))) return '키워드 누락';
+  if (keyword && hasKeyword(original, keyword) && !hasKeyword(replacement, keyword)) return '키워드 누락';
   return null;
 }
 

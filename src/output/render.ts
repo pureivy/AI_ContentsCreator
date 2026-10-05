@@ -17,11 +17,16 @@ export function stripEmoji(s: string): string {
     .replace(/(^#{1,6})\s+/gm, '$1 ');   // 소제목 마커 뒤 공백 1개로 정규화
 }
 
-/** 마크다운 — 제목 + 메타 + 본문 + 태그(+ 제목 후보 주석). [IMAGE:] 마커는 발행 시 삽입 위치 안내로 남긴다. */
+/** draft.md 의 메타 이름표 — 검토 알림 발췌(contentNotify.readDraftExcerpt)가 이 이름표·구분선을 걷어 낸다. */
+export const META_LABEL_MD = '*검색 설명(메타 · 본문 아님):*';
+
+/** 마크다운 — 제목 + 메타 + 본문 + 태그(+ 제목 후보 주석). [IMAGE:] 마커는 발행 시 삽입 위치 안내로 남긴다.
+ *  메타는 본문이 아니다(발행 본문엔 들어가지 않는다 — smarteditor 는 bodyMarkdown 만 쓴다). 2026-10-05 — 종전엔 `> 메타`로
+ *  본문 맨 위 인용처럼 그려져, 사장님이 메타 문장("…마지막 가을 창입니다")을 본문 첫 문장으로 읽었다. 이름표를 단 칸 + 구분선으로 뗀다. */
 export function renderMarkdown(d: BlogDraft): string {
   const parts = [
     `# ${d.titleCandidates[0] ?? d.topic}`,
-    d.metaDescription ? `> ${d.metaDescription}` : '',
+    d.metaDescription ? `${META_LABEL_MD} ${d.metaDescription}\n\n---` : '',
     d.bodyMarkdown.trim(),
     d.imageSlots.length ? `\n---\n**이미지 슬롯(발행 시 삽입):**\n${d.imageSlots.map((s, i) => `${i + 1}. ${s.alt} — _${s.prompt}_`).join('\n')}` : '',
     d.tags.length ? `**태그:** ${d.tags.map((t) => `#${t}`).join(' ')}` : '',
@@ -59,6 +64,7 @@ const PREVIEW_CSS = `
   h1 { font-size: 27px; line-height: 1.45; margin: 0 0 12px; letter-spacing: -0.5px; }
   .lead { margin: 22px 0 40px; padding: 18px 20px; background: #f7f8f9; border-radius: 10px;
     color: #555; font-size: 15px; line-height: 1.8; }
+  .lead-label { display: block; margin-bottom: 4px; color: #999; font-size: 12px; font-weight: 600; letter-spacing: 0.2px; }
   h2 { font-size: 21px; line-height: 1.5; margin: 52px 0 18px; padding-bottom: 10px;
     border-bottom: 2px solid #222; letter-spacing: -0.4px; }
   h3 { font-size: 17.5px; margin: 34px 0 12px; }
@@ -138,7 +144,8 @@ export function renderHtml(d: BlogDraft, opts?: { imagesReady?: boolean; readySl
   const title = d.titleCandidates[0] ?? d.topic;
   const article = [
     `<h1>${inline(title)}</h1>`,
-    d.metaDescription ? `<div class="lead">${inline(d.metaDescription)}</div>` : '',
+    // 메타는 본문이 아니다(2026-10-05) — 이름표를 붙여 검색 설명 칸임을 드러낸다(발행 본문에는 들어가지 않는다).
+    d.metaDescription ? `<div class="lead"><span class="lead-label">검색 설명(메타 · 본문 아님)</span>${inline(d.metaDescription)}</div>` : '',
     ...out,
     d.tags.length ? `<div class="tags">${d.tags.map((t) => `<span>#${esc(t)}</span>`).join('')}</div>` : '',
   ].filter(Boolean).join('\n');
