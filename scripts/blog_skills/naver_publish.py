@@ -1263,24 +1263,54 @@ def _rf_fs16_node(n: dict) -> dict:
     return {**n, "style": st}
 
 
+def _rf_bold_node(n: dict) -> dict:
+    """인용구로 옮기는 요약 줄의 글자 노드 — 굵게만 nodeStyle 로(16pt 는 안 입힌다, 인용구 기본 크기를 쓴다)."""
+    if (n or {}).get("@ctype") != "textNode" or not _rf_node_bold(n):
+        return n
+    st = dict(n.get("style") or {})
+    st["bold"] = True
+    st["@ctype"] = "nodeStyle"
+    return {**n, "style": st}
+
+
+_RF_LIST_RE = re.compile(r"^\s*(?:\d+[.)]|[-•·▪◦])\s")
+
+
+def _rf_empty_para(new_id) -> dict:
+    return {"@ctype": "paragraph", "id": new_id(), "nodes": [{"@ctype": "textNode", "id": new_id(), "value": ""}]}
+
+
 def plan_rich_format(components: list, headings: list, captions: dict, new_id=None) -> tuple:
     """서식 변환(순수 — 입력을 바꾸지 않는다). 반환: (새 컴포넌트 목록, 통계 dict).
     ① 소제목 문단(headings 텍스트와 일치, 문서 순서대로 1회씩 소비) → 네이버 '소제목'(sectionTitle) 컴포넌트
-    ② 본문 text 컴포넌트의 글자 노드 → 16pt  ③ 본문 맨 위에 '이어서' 놓인 전부 굵은 문단(첫머리 요약) → 가운데 정렬
+    ② 본문 text 컴포넌트의 글자 노드 → 16pt
+    ③ 본문 맨 위에 '이어서' 놓인 전부 굵은 문단(첫머리 요약) → 가운데 정렬 **인용구(따옴표형, layout=default)** 한 덩어리
     ④ 이미지 → 사진 설명(alt, 이미 설명이 있으면 그대로). 이미지 컴포넌트의 id·ai 는 건드리지 않는다 — 실촬영 컷의
        AI 표시 해제(set_images_ai skip_ids·convert_quotes_and_ai)가 id·순서로 짝을 맞춘다.
-    ③을 '맨 위 연속 구간'으로 좁힌 이유: 참고 블로그는 '첫 소제목 전 전부 굵은 문단'을 다 가운데로 보냈는데, 우리 편집
-    규칙은 핵심 예시 문장을 굵은 단독 줄로 허용한다 — 도입부에 그런 줄이 있으면 요약도 아닌데 가운데로 간다.
-    인용구·표·구분선·소제목이 나오거나 굵지 않은 글 문단이 나오면 구간이 닫힌다(빈 문단·이미지는 건너뛴다)."""
+    ⑤ 본문 줄과 줄 사이, 소제목 바로 아래에 빈 줄 한 줄 — 휴대폰에서 줄마다 숨 쉴 틈을 둔다(목록 줄끼리는 붙인다).
+
+    ③⑤는 2026-10-06 사장님이 임시저장 글(대추나무 심는 시기)을 손으로 고친 모양 그대로다 — 글자는 하나도 안 바꾸고
+    맨 위 요약 두 줄을 가운데 따옴표 인용구로 옮기고, 본문 줄 사이·소제목 아래에 빈 줄을 넣었다(본문 덩어리마다 빈 줄 3~4개).
+    ③을 '맨 위 연속 구간'으로 좁힌 이유: 우리 편집 규칙은 핵심 예시 문장을 굵은 단독 줄로 허용한다 — 도입부에 그런 줄이
+    있어도 요약이 아니다. 인용구·표·구분선·소제목이 나오거나 굵지 않은 글 문단이 나오면 구간이 닫힌다(빈 문단은 건너뛴다)."""
     new_id = new_id or uid
     hq = {}
     for h in headings or []:
         k = _rf_norm(h.get("text") if isinstance(h, dict) else h)
         if k:
             hq[k] = hq.get(k, 0) + 1
-    stats = {"titles": 0, "fs16": 0, "center": 0, "captions": 0}
+    stats = {"titles": 0, "fs16": 0, "center": 0, "captions": 0, "gaps": 0}
     out = []
-    lead_open = True
+    lead = {"open": True, "paras": []}
+    after_title = [False]
+
+    def close_lead():
+        if lead["open"]:
+            lead["open"] = False
+            if lead["paras"]:
+                out.append({"@ctype": "quotation", "id": new_id(), "layout": "default", "align": "center",
+                            "value": list(lead["paras"]), "source": None})
+
     for c in components or []:
         ct = (c or {}).get("@ctype")
         if ct == "image":
@@ -1290,49 +1320,69 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
                 c = {**c, "caption": [{"@ctype": "paragraph", "id": new_id(),
                                        "nodes": [{"@ctype": "textNode", "id": new_id(), "value": alt}]}]}
                 stats["captions"] += 1
+            if lead["open"] and lead["paras"]:
+                close_lead()
             out.append(c)
+            after_title[0] = False
             continue
         if ct != "text":
             if ct != "documentTitle":
-                lead_open = False
+                close_lead()
             out.append(c)
+            after_title[0] = False
             continue
         buf = []
         chunks = [0]
+        last_nonempty = [False]  # 이 덩어리에서 바로 앞이 글 줄이었나(빈 줄을 넣을지)
+        last_list = [False]
 
         def flush():
             if buf:
                 out.append({**c, "id": c.get("id") if chunks[0] == 0 else new_id(), "value": list(buf)})
                 chunks[0] += 1
                 buf.clear()
+            last_nonempty[0] = False
+            last_list[0] = False
 
         for para in (c.get("value") or []):
             txt = _rf_para_text(para)
             if txt and hq.get(txt, 0) > 0:
                 hq[txt] -= 1
                 flush()
-                lead_open = False
+                close_lead()
                 out.append({"@ctype": "sectionTitle", "id": new_id(), "layout": "default", "title": [para]})
                 stats["titles"] += 1
+                after_title[0] = True
                 continue
             if not txt:
-                buf.append(para)
+                if not lead["open"]:
+                    buf.append(para)
+                    last_nonempty[0] = False
                 continue
+            if lead["open"] and _rf_all_bold(para):
+                flush()
+                lead["paras"].append({**para, "nodes": [_rf_bold_node(n) for n in (para.get("nodes") or [])]})  # 인용구 기본 크기 — 16pt 안 입힘
+                stats["center"] += 1
+                continue
+            close_lead()
             p2 = {**para, "nodes": [_rf_fs16_node(n) for n in (para.get("nodes") or [])]}
             stats["fs16"] += 1
-            if lead_open and _rf_all_bold(para):
-                p2["style"] = {**(para.get("style") or {}), "align": "center", "@ctype": "paragraphStyle"}
-                stats["center"] += 1
-            else:
-                lead_open = False
+            is_list = bool(_RF_LIST_RE.match(txt))
+            if (after_title[0] and not buf) or (last_nonempty[0] and not (is_list and last_list[0])):
+                buf.append(_rf_empty_para(new_id))
+                stats["gaps"] += 1
+            after_title[0] = False
             buf.append(p2)
+            last_nonempty[0] = True
+            last_list[0] = is_list
         flush()
+    close_lead()
     return out, stats
 
 
 def rich_format_summary(stats: dict, n_headings: int) -> str:
     return (f"ok:titles={stats['titles']}/{n_headings},fs16={stats['fs16']},"
-            f"center={stats['center']},captions={stats['captions']}")
+            f"center={stats['center']},captions={stats['captions']},gaps={stats.get('gaps', 0)}")
 
 
 def rich_format_heading_issue(summary: str) -> str:
