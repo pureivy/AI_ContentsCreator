@@ -99,7 +99,7 @@ import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
 import { recordNaverBlogKpis, latestAiCitations, readBlogSearchQueries } from '../analytics/naverBlogKpi';
 import { buildTitleTimingReport } from '../analytics/titleTiming';
-import { promiseStore, choosePromise } from '../content/promises';
+import { promiseStore, choosePromise, promiseSourcesOfDeletedPiece } from '../content/promises';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
 import { shouldArchiveShortsVideo } from '../content/shortsArchive';
 import { runJanitor, type JanitorDeps } from '../autonomy/janitor';
@@ -1001,6 +1001,12 @@ function pieceDeleteHandler(c: Context): Response {
   // 블로그 실촬영 컷 반납(2026-10-02) — 미발행 글이면 그 컷을 다른 글이 쓸 수 있게 원장에 반납 줄을 남긴다.
   // 발행 흔적이 있으면 아무것도 안 한다(카드를 지워도 네이버 글은 남는다). 세션을 휴지통으로 옮기기 전에 부른다.
   releaseBlogFramesOfDeletedPiece(piece, { dataDir: CONFIG.dataDir, sessionsDir: CONFIG.sessionsDir });
+  // 예고 취소(2026-10-06) — 이 글과, 이 글에서 나온 미공개 숏폼·카드가 예약한 예고를 함께 취소한다(promiseSourcesOfDeletedPiece).
+  try {
+    let dropped = 0;
+    for (const src of promiseSourcesOfDeletedPiece(piece, shortsStore().list(), cardNewsStore().list())) dropped += promiseStore().dropBySource(src);
+    if (dropped) console.log(`[발행담당] ${piece.title.slice(0, 30)} — 글 삭제로 예고 ${dropped}건 취소`);
+  } catch { /* 무해 — 예고 정리 실패가 삭제를 막지 않음 */ }
   pieceStore().remove(id);
   // purge=1(성과 대시보드 완전 삭제) — 초안 런 세션·성과 시계열도 휴지통 이동. 기본(무파라미터)은 종전 비파괴 유지.
   if (c.req.query('purge') === '1') {

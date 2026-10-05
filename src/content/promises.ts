@@ -140,6 +140,38 @@ export function sanitizeTopic(raw: string): string {
 const normTopic = (t: string): string => t.replace(/\s+/g, '').toLowerCase();
 const FULFILLED_DEDUP_DAYS = 30;
 
+/**
+ * 글 삭제 때 함께 취소할 예고의 출처 id(순수, 2026-10-06 사장님 요청 "글 지우면 예고도 취소되게").
+ *
+ * 실사고(10-05~06): 대추나무 글을 지우고 새로 썼는데, 지운 글에서 파생된 인스타 숏폼(미발행)이 낭독 전에 예약해 둔
+ * "다음 편: 대추나무 가을 심기 순서"가 대장에 남아, 다음 날 아침 오토런이 그 예고를 갚느라 대추나무 글을 또 썼다.
+ * 숏폼·카드를 직접 지울 때는 dropBySource 가 돌지만, 글을 지울 때는 그 글의 파생물이 남아 예고도 살아 있었다.
+ *
+ * 취소 대상: 그 글 자체(미발행일 때)와, 그 글에서 파생된 숏폼·카드 중 **아직 어디에도 올라가지 않은 것**.
+ * 이미 공개된 파생물의 예고는 남긴다 — 시청자가 이미 "다음 편"을 들었고, 글 카드를 지워도 그 영상은 남아 있다.
+ */
+export function promiseSourcesOfDeletedPiece(
+  piece: { id: string; stage?: string; publishedUrl?: string; privateUrl?: string; publishedTs?: string },
+  shorts: ReadonlyArray<{ id: string; sourcePieceId?: string; youtubeId?: string; igReelId?: string; naverClipNo?: string; naverClipSubmittedTs?: string; fbReelId?: string }>,
+  cards: ReadonlyArray<{ id: string; sourcePieceId?: string; igMediaId?: string; igPermalink?: string }>,
+): string[] {
+  const out: string[] = [];
+  const piecePublished = !!(piece.publishedUrl || piece.privateUrl || piece.publishedTs)
+    || ['published', 'measured', 'reflected'].includes(piece.stage ?? '');
+  if (!piecePublished) out.push(piece.id);
+  for (const s of shorts) {
+    if (s.sourcePieceId !== piece.id) continue;
+    if (s.youtubeId || s.igReelId || s.naverClipNo || s.naverClipSubmittedTs || s.fbReelId) continue;
+    out.push(s.id);
+  }
+  for (const c of cards) {
+    if (c.sourcePieceId !== piece.id) continue;
+    if (c.igMediaId || c.igPermalink) continue;
+    out.push(c.id);
+  }
+  return out;
+}
+
 export class PromiseStore {
   private file: string;
   private items = new Map<string, ContentPromise>();

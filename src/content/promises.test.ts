@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { normalizeWindow, currentOccurrence, nextOccurrence, isDue, sanitizeTopic, PromiseStore, MAX_PENDING, SEASON_WINDOW_DAYS, EXPIRE_AFTER_DAYS, choosePromise, MAX_FULFILL_ATTEMPTS, type ContentPromise } from './promises';
+import { normalizeWindow, currentOccurrence, nextOccurrence, isDue, sanitizeTopic, PromiseStore, MAX_PENDING, SEASON_WINDOW_DAYS, EXPIRE_AFTER_DAYS, choosePromise, MAX_FULFILL_ATTEMPTS, promiseSourcesOfDeletedPiece, type ContentPromise } from './promises';
 
 describe('normalizeWindow', () => {
   it('"N월"과 계절어를 도래 월로 정규화한다', () => {
@@ -243,5 +243,31 @@ describe('이행 재시도 상한(2026-10-02 리뷰)', () => {
       s.reconcile('b', () => 'error');
     }
     expect(s.get(a.id)?.status).toBe('dropped');
+  });
+});
+
+describe('promiseSourcesOfDeletedPiece — 글 삭제 때 함께 취소할 예고 출처(2026-10-06)', () => {
+  const piece = { id: 'piece_a', stage: 'ready' };
+  it('미발행 글 + 미공개 파생 숏폼·카드는 모두 취소 대상 — 10-05 대추나무 사고 모양', () => {
+    const shorts = [
+      { id: 'short_ig', sourcePieceId: 'piece_a' },               // 미발행 인스타 숏폼(예고 예약)
+      { id: 'short_yt', sourcePieceId: 'piece_a' },
+      { id: 'short_other', sourcePieceId: 'piece_b' },
+    ];
+    const cards = [{ id: 'card_a', sourcePieceId: 'piece_a' }];
+    expect(promiseSourcesOfDeletedPiece(piece, shorts, cards)).toEqual(['piece_a', 'short_ig', 'short_yt', 'card_a']);
+  });
+  it('이미 올라간 파생물의 예고는 남긴다 — 시청자가 이미 들었다', () => {
+    const shorts = [
+      { id: 's_yt', sourcePieceId: 'piece_a', youtubeId: 'abc' },
+      { id: 's_ig', sourcePieceId: 'piece_a', igReelId: '1' },
+      { id: 's_clip', sourcePieceId: 'piece_a', naverClipSubmittedTs: '2026-10-05T00:00:00Z' },
+    ];
+    const cards = [{ id: 'c_pub', sourcePieceId: 'piece_a', igMediaId: 'm' }];
+    expect(promiseSourcesOfDeletedPiece(piece, shorts, cards)).toEqual(['piece_a']);
+  });
+  it('발행된 글 자체의 예고는 남긴다(네이버 글은 카드를 지워도 남는다)', () => {
+    expect(promiseSourcesOfDeletedPiece({ id: 'piece_a', stage: 'published' }, [], [])).toEqual([]);
+    expect(promiseSourcesOfDeletedPiece({ id: 'piece_a', stage: 'ready', publishedUrl: 'https://blog.naver.com/x/1' }, [], [])).toEqual([]);
   });
 });
