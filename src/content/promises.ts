@@ -150,15 +150,19 @@ const FULFILLED_DEDUP_DAYS = 30;
  * 취소 대상: 그 글 자체(미발행일 때)와, 그 글에서 파생된 숏폼·카드 중 **아직 어디에도 올라가지 않은 것**.
  * 이미 공개된 파생물의 예고는 남긴다 — 시청자가 이미 "다음 편"을 들었고, 글 카드를 지워도 그 영상은 남아 있다.
  */
+/** 네이버에 올라간 흔적이 있는 글인가(비공개 발행 포함) — 카드를 지워도 그 글은 남는다. */
+export function pieceWasPublished(piece: { stage?: string; publishedUrl?: string; privateUrl?: string; publishedTs?: string }): boolean {
+  return !!(piece.publishedUrl || piece.privateUrl || piece.publishedTs)
+    || ['published', 'measured', 'reflected'].includes(piece.stage ?? '');
+}
+
 export function promiseSourcesOfDeletedPiece(
   piece: { id: string; stage?: string; publishedUrl?: string; privateUrl?: string; publishedTs?: string },
   shorts: ReadonlyArray<{ id: string; sourcePieceId?: string; youtubeId?: string; igReelId?: string; naverClipNo?: string; naverClipSubmittedTs?: string; fbReelId?: string }>,
   cards: ReadonlyArray<{ id: string; sourcePieceId?: string; igMediaId?: string; igPermalink?: string }>,
 ): string[] {
   const out: string[] = [];
-  const piecePublished = !!(piece.publishedUrl || piece.privateUrl || piece.publishedTs)
-    || ['published', 'measured', 'reflected'].includes(piece.stage ?? '');
-  if (!piecePublished) out.push(piece.id);
+  if (!pieceWasPublished(piece)) out.push(piece.id);
   for (const s of shorts) {
     if (s.sourcePieceId !== piece.id) continue;
     if (s.youtubeId || s.igReelId || s.naverClipNo || s.naverClipSubmittedTs || s.fbReelId) continue;
@@ -250,6 +254,23 @@ export class PromiseStore {
     let n = 0;
     for (const p of this.list()) {
       if (p.sourceId === sourceId && p.status === 'pending') { this.update(p.id, { status: 'dropped' }); n++; }
+    }
+    return n;
+  }
+  /**
+   * 이행 글을 사람이 지웠을 때(2026-10-06 사장님 확정) — 그 글이 갚던 약속을 되살리지 않는다.
+   * 종전엔 reconcile 이 '이행 글 유실'로 보고 pending 으로 되돌려, 지운 주제가 다음 오토런에 같은 제목으로 다시 만들어졌다
+   * (실례: 10-05 라일락 겨울눈 글 삭제 → 10-06 17시 같은 주제 재생산). 사람이 지운 건 실패가 아니라 '이 주제는 됐다'는 뜻이다.
+   *  · 미발행 글 → dropped(이 약속은 더 갚지 않는다).
+   *  · 발행된 글 → fulfilled 그대로 두고 fulfilledPieceId 만 뗀다(네이버 글이 남아 약속은 이미 갚았다. reconcile 이 안 본다).
+   * reconcile 의 'missing' 복원은 사람이 지우지 않은 유실(색인 손상 등)용으로 남는다. 반환 = 정리 건수.
+   */
+  settleByDeletedPiece(pieceId: string, published: boolean): number {
+    let n = 0;
+    for (const p of this.list()) {
+      if (p.status !== 'fulfilled' || p.fulfilledPieceId !== pieceId) continue;
+      this.update(p.id, published ? { fulfilledPieceId: undefined } : { status: 'dropped', fulfilledPieceId: undefined });
+      n++;
     }
     return n;
   }

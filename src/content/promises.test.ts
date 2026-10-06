@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { normalizeWindow, currentOccurrence, nextOccurrence, isDue, sanitizeTopic, PromiseStore, MAX_PENDING, SEASON_WINDOW_DAYS, EXPIRE_AFTER_DAYS, choosePromise, MAX_FULFILL_ATTEMPTS, promiseSourcesOfDeletedPiece, type ContentPromise } from './promises';
+import { normalizeWindow, currentOccurrence, nextOccurrence, isDue, sanitizeTopic, PromiseStore, MAX_PENDING, SEASON_WINDOW_DAYS, EXPIRE_AFTER_DAYS, choosePromise, MAX_FULFILL_ATTEMPTS, promiseSourcesOfDeletedPiece, pieceWasPublished, type ContentPromise } from './promises';
 
 describe('normalizeWindow', () => {
   it('"N월"과 계절어를 도래 월로 정규화한다', () => {
@@ -269,5 +269,41 @@ describe('promiseSourcesOfDeletedPiece — 글 삭제 때 함께 취소할 예�
   it('발행된 글 자체의 예고는 남긴다(네이버 글은 카드를 지워도 남는다)', () => {
     expect(promiseSourcesOfDeletedPiece({ id: 'piece_a', stage: 'published' }, [], [])).toEqual([]);
     expect(promiseSourcesOfDeletedPiece({ id: 'piece_a', stage: 'ready', publishedUrl: 'https://blog.naver.com/x/1' }, [], [])).toEqual([]);
+  });
+});
+
+describe('settleByDeletedPiece — 사람이 지운 이행 글의 예고는 되살리지 않는다(2026-10-06)', () => {
+  const store = (): PromiseStore => new PromiseStore(fs.mkdtempSync(path.join(os.tmpdir(), 'promises-del-')));
+  it('미발행 이행 글 삭제 → dropped, 다음 틱 reconcile 이 되살리지 않는다 — 10-05 라일락 겨울눈 사고 모양', () => {
+    const s = store();
+    const a = s.create({ topic: '라일락 겨울눈 크기로 내년 꽃 양 가늠하기', window: '10월', sourceKind: 'shorts', sourceId: 'short_l', brand: 'b' })!;
+    const other = s.create({ topic: '다른 약속', sourceKind: 'shorts', sourceId: 'short_o', brand: 'b' })!;
+    s.update(a.id, { status: 'fulfilled', fulfilledPieceId: 'piece_del' });
+    s.update(other.id, { status: 'fulfilled', fulfilledPieceId: 'piece_keep' });
+    expect(s.settleByDeletedPiece('piece_del', false)).toBe(1);
+    expect(s.reconcile('b', (pid) => (pid === 'piece_del' ? 'missing' : 'ok'))).toBe(0);
+    expect(s.get(a.id)?.status).toBe('dropped');
+    expect(s.dueQueue('b').map((p) => p.topic)).toEqual([]);
+    expect(s.get(other.id)?.status).toBe('fulfilled'); // 다른 글의 약속은 그대로
+  });
+  it('발행된 이행 글 삭제 → 이행 완료로 남고 reconcile 도 안 건드린다', () => {
+    const s = store();
+    const a = s.create({ topic: '갚은 약속', sourceKind: 'shorts', brand: 'b' })!;
+    s.update(a.id, { status: 'fulfilled', fulfilledPieceId: 'piece_pub' });
+    expect(s.settleByDeletedPiece('piece_pub', true)).toBe(1);
+    expect(s.reconcile('b', () => 'missing')).toBe(0);
+    expect(s.get(a.id)?.status).toBe('fulfilled');
+    expect(s.get(a.id)?.fulfilledPieceId).toBeUndefined();
+  });
+  it('pending 약속·다른 글은 건드리지 않는다', () => {
+    const s = store();
+    s.create({ topic: '아직 안 갚은 약속', sourceKind: 'shorts', brand: 'b' });
+    expect(s.settleByDeletedPiece('piece_x', false)).toBe(0);
+    expect(s.dueQueue('b')).toHaveLength(1);
+  });
+  it('pieceWasPublished — 비공개 발행·발행 단계도 발행으로 본다', () => {
+    expect(pieceWasPublished({ stage: 'draft' })).toBe(false);
+    expect(pieceWasPublished({ stage: 'ready', privateUrl: 'https://blog.naver.com/x/1' })).toBe(true);
+    expect(pieceWasPublished({ stage: 'reflected' })).toBe(true);
   });
 });

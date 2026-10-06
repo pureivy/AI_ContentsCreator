@@ -101,7 +101,7 @@ import { discoverPublishedNaver } from '../analytics/naverDiscovery';
 import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
 import { recordNaverBlogKpis, latestAiCitations, readBlogSearchQueries } from '../analytics/naverBlogKpi';
 import { buildTitleTimingReport } from '../analytics/titleTiming';
-import { promiseStore, choosePromise, promiseSourcesOfDeletedPiece } from '../content/promises';
+import { promiseStore, choosePromise, promiseSourcesOfDeletedPiece, pieceWasPublished } from '../content/promises';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
 import { shouldArchiveShortsVideo } from '../content/shortsArchive';
 import { runJanitor, type JanitorDeps } from '../autonomy/janitor';
@@ -1008,6 +1008,9 @@ function pieceDeleteHandler(c: Context): Response {
     let dropped = 0;
     for (const src of promiseSourcesOfDeletedPiece(piece, shortsStore().list(), cardNewsStore().list())) dropped += promiseStore().dropBySource(src);
     if (dropped) console.log(`[발행담당] ${piece.title.slice(0, 30)} — 글 삭제로 예고 ${dropped}건 취소`);
+    // 이 글이 갚던 예고도 되살리지 않는다(2026-10-06) — 안 그러면 reconcile 이 다음 틱에 같은 주제를 다시 만든다.
+    const settled = promiseStore().settleByDeletedPiece(piece.id, pieceWasPublished(piece));
+    if (settled) console.log(`[발행담당] ${piece.title.slice(0, 30)} — 이행 글 삭제로 예고 ${settled}건 ${pieceWasPublished(piece) ? '이행 완료로 고정' : '취소'}`);
   } catch { /* 무해 — 예고 정리 실패가 삭제를 막지 않음 */ }
   pieceStore().remove(id);
   // purge=1(성과 대시보드 완전 삭제) — 초안 런 세션·성과 시계열도 휴지통 이동. 기본(무파라미터)은 종전 비파괴 유지.
