@@ -202,7 +202,7 @@ class PlanRichFormatTest(unittest.TestCase):
         self.assertEqual({k: st[k] for k in ("titles", "fs16", "center", "captions")}, {"titles": 2, "fs16": 4, "center": 2, "captions": 1})
         kinds = [c["@ctype"] for c in out]
         self.assertEqual(kinds, ["documentTitle", "quotation", "text", "sectionTitle", "text", "image", "quotation",
-                                 "sectionTitle", "text", "image"])
+                                 "text", "sectionTitle", "text", "image"])  # 인용구 뒤 소제목 위에 여백 덩어리(2026-10-06)
         # 맨 위 굵은 요약 두 줄 → 가운데 따옴표 인용구(사장님 수정 모양, 2026-10-06).
         q = out[1]
         self.assertEqual((q["layout"], q["align"]), ("default", "center"))
@@ -214,17 +214,31 @@ class PlanRichFormatTest(unittest.TestCase):
         body = out[2]["value"]
         vals = [_v(p) for p in body]
         # 줄과 줄 사이 빈 줄 — "꽃말이…" / (빈 줄) / "핵심 예시…" / (원래 빈 줄)
-        self.assertEqual(vals, ["꽃말이 뭔지 확인하러 오셨나요. 첫사랑입니다.", "", "핵심 예시 문장은 굵은 단독 줄입니다.", ""])
+        self.assertEqual(vals, ["꽃말이 뭔지 확인하러 오셨나요. 첫사랑입니다.", "", "핵심 예시 문장은 굵은 단독 줄입니다.", "", ""])
+        self.assertEqual([p["nodes"][0].get("style", {}).get("fontSizeCode") for p in body[-2:]], ["fs24", "fs24"])  # 소제목 위 24 크기 빈 줄 2개
         self.assertEqual(body[0]["nodes"][0]["style"]["fontSizeCode"], "fs16")
         # 소제목 바로 아래 빈 줄.
         self.assertEqual([_v(p) for p in out[4]["value"]], ["", "꽃말은 두 갈래입니다."])
         real = out[5]
         self.assertEqual((real["id"], real["ai"]), ("img-real", False))
         self.assertEqual(real["caption"][0]["nodes"][0]["value"], "라일락 — 비온디트리 농원에서 직접 촬영")
-        self.assertEqual(out[9]["caption"][0]["nodes"][0]["value"], "이미 있는 설명")
-        self.assertEqual((out[9]["id"], out[9]["ai"]), ("img-ai", True))
+        self.assertEqual(out[10]["caption"][0]["nodes"][0]["value"], "이미 있는 설명")
+        self.assertEqual((out[10]["id"], out[10]["ai"]), ("img-ai", True))
         self.assertEqual(out[6], doc[3])  # 인용구는 그대로
-        self.assertEqual([_v(p) for p in out[8]["value"]], ["", "본문 1) 꽃말 한 줄"])
+        self.assertEqual([_v(p) for p in out[9]["value"]], ["", "본문 1) 꽃말 한 줄"])
+
+    def test_owner_edit_heading_size_and_space(self):
+        """2026-10-06 매실나무 임시저장 수정 — 소제목 24, 소제목 위 엔터 두 번. 맨 처음 소제목엔 여백을 넣지 않는다."""
+        doc = [text_comp(para(node("1) 첫 소제목", True)), para(node("본문."))),
+               {"@ctype": "table", "id": "tb"},
+               text_comp(para(node("2) 둘째 소제목", True)), para(node("본문 둘."))),]
+        out, st = npub.plan_rich_format(doc, [{"text": "1) 첫 소제목"}, {"text": "2) 둘째 소제목"}], {}, new_id=_ids())
+        kinds = [c["@ctype"] for c in out]
+        self.assertEqual(kinds, ["sectionTitle", "text", "table", "text", "sectionTitle", "text"])
+        self.assertEqual(st["spaced"], 1)
+        heads = [c for c in out if c["@ctype"] == "sectionTitle"]
+        self.assertTrue(all(h["title"][0]["nodes"][0]["style"]["fontSizeCode"] == "fs24" for h in heads))
+        self.assertEqual([_v(p) for p in out[3]["value"]], ["", ""])
 
     def test_owner_edit_shape_gaps_and_lists(self):
         """2026-10-06 사장님이 고친 대추나무 임시저장 글 모양 — 줄마다 빈 줄, 목록 줄끼리는 붙인다, 이미 빈 줄이면 겹치지 않는다."""

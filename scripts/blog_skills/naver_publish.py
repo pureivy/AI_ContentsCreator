@@ -1280,6 +1280,30 @@ def _rf_empty_para(new_id) -> dict:
     return {"@ctype": "paragraph", "id": new_id(), "nodes": [{"@ctype": "textNode", "id": new_id(), "value": ""}]}
 
 
+# 소제목 글자 크기(2026-10-06 사장님 수정: 30 → 24) — 소제목 노드에 명시해 편집기 기본(30)을 쓰지 않는다.
+HEADING_FONT_CODE = "fs24"
+# 소제목 위 여백 — 사장님이 소제목마다 위에 엔터 두 번(24 크기 빈 줄 2개)을 넣었다. 같은 높이가 되게 24 크기 빈 줄 2개.
+HEADING_SPACE_LINES = 2
+
+
+def _rf_heading_para(para: dict) -> dict:
+    nodes = []
+    for n in (para.get("nodes") or []):
+        if (n or {}).get("@ctype") != "textNode":
+            nodes.append(n); continue
+        st = dict(n.get("style") or {})
+        st["bold"] = True
+        st["fontSizeCode"] = HEADING_FONT_CODE
+        st["@ctype"] = "nodeStyle"
+        nodes.append({**n, "style": st})
+    return {**para, "nodes": nodes}
+
+
+def _rf_spacer_para(new_id) -> dict:
+    return {"@ctype": "paragraph", "id": new_id(), "nodes": [{"@ctype": "textNode", "id": new_id(), "value": "",
+            "style": {"@ctype": "nodeStyle", "fontSizeCode": HEADING_FONT_CODE}}]}
+
+
 def plan_rich_format(components: list, headings: list, captions: dict, new_id=None) -> tuple:
     """서식 변환(순수 — 입력을 바꾸지 않는다). 반환: (새 컴포넌트 목록, 통계 dict).
     ① 소제목 문단(headings 텍스트와 일치, 문서 순서대로 1회씩 소비) → 네이버 '소제목'(sectionTitle) 컴포넌트
@@ -1288,6 +1312,8 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
     ④ 이미지 → 사진 설명(alt, 이미 설명이 있으면 그대로). 이미지 컴포넌트의 id·ai 는 건드리지 않는다 — 실촬영 컷의
        AI 표시 해제(set_images_ai skip_ids·convert_quotes_and_ai)가 id·순서로 짝을 맞춘다.
     ⑤ 본문 줄과 줄 사이, 소제목 바로 아래에 빈 줄 한 줄 — 휴대폰에서 줄마다 숨 쉴 틈을 둔다(목록 줄끼리는 붙인다).
+    ⑥ 소제목 글자 24(fs24, 굵게), 소제목 위에 24 크기 빈 줄 두 개 — 2026-10-06 사장님이 매실나무 임시저장 글에서
+       소제목을 30→24 로 줄이고 소제목마다 위에 엔터 두 번을 넣은 모양.
 
     ③⑤는 2026-10-06 사장님이 임시저장 글(대추나무 심는 시기)을 손으로 고친 모양 그대로다 — 글자는 하나도 안 바꾸고
     맨 위 요약 두 줄을 가운데 따옴표 인용구로 옮기고, 본문 줄 사이·소제목 아래에 빈 줄을 넣었다(본문 덩어리마다 빈 줄 3~4개).
@@ -1299,7 +1325,7 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
         k = _rf_norm(h.get("text") if isinstance(h, dict) else h)
         if k:
             hq[k] = hq.get(k, 0) + 1
-    stats = {"titles": 0, "fs16": 0, "center": 0, "captions": 0, "gaps": 0}
+    stats = {"titles": 0, "fs16": 0, "center": 0, "captions": 0, "gaps": 0, "spaced": 0}
     out = []
     lead = {"open": True, "paras": []}
     after_title = [False]
@@ -1310,6 +1336,22 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
             if lead["paras"]:
                 out.append({"@ctype": "quotation", "id": new_id(), "layout": "default", "align": "center",
                             "value": list(lead["paras"]), "source": None})
+
+    def add_heading_space():
+        """소제목 위 여백(빈 줄 HEADING_SPACE_LINES 개, 24 크기). 바로 앞이 글 덩어리면 그 끝의 빈 줄을 걷고 붙이고,
+        아니면(사진·인용구·표·구분선 뒤) 빈 줄만 든 글 덩어리를 하나 넣는다. 글 맨 처음 소제목엔 넣지 않는다."""
+        if not any((c or {}).get("@ctype") not in ("documentTitle",) for c in out):
+            return
+        spacers = [_rf_spacer_para(new_id) for _ in range(HEADING_SPACE_LINES)]
+        last = out[-1] if out else None
+        if last and last.get("@ctype") == "text":
+            vals = list(last.get("value") or [])
+            while vals and not _rf_para_text(vals[-1]):
+                vals.pop()
+            out[-1] = {**last, "value": vals + spacers}
+        else:
+            out.append({"@ctype": "text", "id": new_id(), "layout": "default", "value": spacers})
+        stats["spaced"] += 1
 
     for c in components or []:
         ct = (c or {}).get("@ctype")
@@ -1350,7 +1392,8 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
                 hq[txt] -= 1
                 flush()
                 close_lead()
-                out.append({"@ctype": "sectionTitle", "id": new_id(), "layout": "default", "title": [para]})
+                add_heading_space()
+                out.append({"@ctype": "sectionTitle", "id": new_id(), "layout": "default", "title": [_rf_heading_para(para)]})
                 stats["titles"] += 1
                 after_title[0] = True
                 continue
