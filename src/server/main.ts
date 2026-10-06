@@ -2814,11 +2814,12 @@ function autoDeriveSet(id: string, title: string): void {
   }
 }
 
-function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string; auto?: boolean } = {}): NaverDraftStart {
+function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string; auto?: boolean; private?: boolean } = {}): NaverDraftStart {
   const dryRun = opts.dryRun === true;
   // 전체공개는 사람이 누른 발행만(2026-10-01) — 자동 게이트(auto)는 사람 검토 없이 도는 길이라 비공개 그대로.
   // actor 로 가르면 안 된다: 텔레그램 버튼(사람)도 actor 를 싣는다.
-  const wantPublic = CONFIG.naverPublishPublic && !opts.auto;
+  // 사람이 '비공개로' 를 명시하면(private, 2026-10-06) 사람 발행이어도 나만 보기로 올린다.
+  const wantPublic = CONFIG.naverPublishPublic && !opts.auto && opts.private !== true;
   const piece = pieceStore().get(id);
   if (!piece) return { error: 'unknown piece', status: 404 };
   if (!piece.runId) return { error: '초안이 아직 없습니다.', status: 409 };
@@ -2901,13 +2902,13 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
 async function pieceNaverDraftHandler(c: Context): Promise<Response> {
   const id = c.req.param('id') ?? '';
   if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
-  const b = await c.req.json<{ dry_run?: boolean; actor?: string }>().catch(() => ({} as { dry_run?: boolean; actor?: string }));
+  const b = await c.req.json<{ dry_run?: boolean; actor?: string; private?: boolean }>().catch(() => ({} as { dry_run?: boolean; actor?: string; private?: boolean }));
   const dryRun = b.dry_run === true;
   // actor 지정(텔레그램 봇 등 비-UI 트리거) — 설정 시 잡 완료 알림이 발송된다(자동 게이트와 동일 경로).
   const actor = typeof b.actor === 'string' && b.actor.trim() ? b.actor.trim().slice(0, 20) : undefined;
-  const r = startNaverDraftJob(id, { dryRun, actor }); // 가드~잡 등록은 내부에서 동기 처리
+  const r = startNaverDraftJob(id, { dryRun, actor, private: b.private === true }); // 가드~잡 등록은 내부에서 동기 처리
   if ('error' in r) return c.json({ error: r.error }, r.status);
-  return c.json({ ok: true, started: true, dry_run: dryRun });
+  return c.json({ ok: true, started: true, dry_run: dryRun, private: b.private === true });
 }
 function pieceNaverDraftStatusHandler(c: Context): Response {
   const id = c.req.param('id') ?? '';
