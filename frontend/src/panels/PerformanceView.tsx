@@ -266,6 +266,13 @@ export default function PerformanceView() {
               <div className="perf-lbl">블로그 조회</div>
               <div style={subStyle} title="네이버 공감(리액션 총합) 합계 — 블로그 표의 공감 열 합과 일치">💚 공감 {(s?.blogLikes ?? 0).toLocaleString()}{folStat("naver", "이웃")}</div>
             </div>
+            {(clips.length > 0 || latestFollower(followers, "clip") != null) && (
+              <div className="perf-card">
+                <div className="perf-num">{(ch?.summary.clipViews ?? 0).toLocaleString()}</div>
+                <div className="perf-lbl" title="네이버 클립 재생수 합계 — 클립 표의 재생 열 합과 일치">네이버 클립 재생</div>
+                <div style={subStyle} title="네이버 클립 좋아요 합계">👍 {(ch?.summary.clipLikes ?? 0).toLocaleString()}{folStat("clip", "팔로워")}</div>
+              </div>
+            )}
             <div className="perf-card">
               <div className="perf-num">{(ch?.summary.shortsYtViews ?? 0).toLocaleString()}</div>
               <div className="perf-lbl">쇼츠 유튜브 조회</div>
@@ -276,13 +283,6 @@ export default function PerformanceView() {
               <div className="perf-lbl" title="인스타그램 릴스만의 조회 합계 — 페이스북은 합산하지 않고 릴스 표의 페이스북 그룹에서 따로 봅니다">인스타 릴스 조회</div>
               <div style={subStyle} title="인스타 릴스 좋아요 합계 — 쇼츠 표의 인스타 👍 열 합과 일치">👍 {(ch?.summary.reelsLikes ?? 0).toLocaleString()}{folStat("instagram", "팔로워")}</div>
             </div>
-            {(clips.length > 0 || latestFollower(followers, "clip") != null) && (
-              <div className="perf-card">
-                <div className="perf-num">{(ch?.summary.clipViews ?? 0).toLocaleString()}</div>
-                <div className="perf-lbl" title="네이버 클립 재생수 합계 — 클립 표의 재생 열 합과 일치">네이버 클립 재생</div>
-                <div style={subStyle} title="네이버 클립 좋아요 합계">👍 {(ch?.summary.clipLikes ?? 0).toLocaleString()}{folStat("clip", "팔로워")}</div>
-              </div>
-            )}
             <div className="perf-card">
               <div className="perf-num">{(ch?.summary.cardnewsViews ?? 0).toLocaleString()}</div>
               <div className="perf-lbl" title="인스타그램 카드뉴스만의 조회 합계">인스타 카드뉴스 조회</div>
@@ -306,7 +306,7 @@ export default function PerformanceView() {
             {/* 전체 합계 = 화면에 있는 조회 카드 5개의 합(사용자가 눈으로 검산할 수 있게 같은 값에서 계산). */}
             <div className="perf-card total">
               <div className="perf-num">{totalViews.toLocaleString()}</div>
-              <div className="perf-lbl" title="블로그 + 쇼츠 유튜브 + 인스타 릴스 + 인스타 카드뉴스 + 페이스북 릴스 조회의 합계. 좋아요는 단위가 달라 제외됩니다">전체 조회 합계</div>
+              <div className="perf-lbl" title="블로그 + 네이버 클립 + 쇼츠 유튜브 + 인스타 릴스 + 인스타 카드뉴스 + 페이스북 릴스 조회의 합계. 좋아요는 단위가 달라 제외됩니다">전체 조회 합계</div>
             </div>
           </div>
 
@@ -396,6 +396,59 @@ export default function PerformanceView() {
           </div>
 
           {/* 채널별 성과 — 유튜브 쇼츠 / 인스타 릴스 / 카드뉴스 각각 구분(매일 자동 수집). 한 숏폼이 양쪽 발행이면 각 표에 각각. */}
+          <div className="review-section">
+            <h3>네이버 클립 성과 <span className="muted">(재생·좋아요 · 매일 자동 수집)</span></h3>
+            {clips.length > 0 ? (
+              <div className="perf-table-wrap">
+                <table className="perf-table">
+                  <colgroup>
+                    <col className="perf-col-title" /><col className="perf-col-link" />
+                    <col className="perf-col-date perf-grp-start" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" />
+                    <col className="perf-col-act perf-grp-start" />
+                  </colgroup>
+                  <thead>
+                    <tr className="perf-grouprow">
+                      <th className="perf-grp-soft" colSpan={2}>콘텐츠</th>
+                      <th colSpan={4}><span className="perf-grp-in"><PlatformMark name="clip" size={13} /> 네이버 클립</span></th>
+                      <th className="perf-grp-soft perf-grp-edge"></th>
+                    </tr>
+                    <tr>
+                      <th>클립</th>
+                      <th className="perf-c">링크</th>
+                      <th className="perf-c perf-grp-edge">게시일</th>
+                      <th className="perf-c" title="클립 재생수 일별 추이">추이</th>
+                      <th className="perf-r" title="클립 크리에이터의 재생수">재생</th>
+                      <th className="perf-r">👍</th>
+                      <th className="perf-c perf-grp-edge"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {take("clips", clips).map((r) => (
+                      <tr key={r.id}>
+                        <td className="perf-title">
+                          <div className="perf-title-row">
+                            <span className="perf-title-txt" title={r.title}>{r.title}</span>
+                          </div>
+                        </td>
+                        <td className="perf-c">
+                          <span className="perf-links">{linkBadge("clip", r.clip?.url, `네이버 클립 채널 열기${r.clip?.no ? ` (#${r.clip.no})` : ""}`, "클립 미게시")}</span>
+                        </td>
+                        <td className="perf-date perf-c perf-grp-edge">{fmtDate(r.clip?.ts)}</td>
+                        <td className="perf-spark perf-c"><Sparkline data={r.clip?.series ?? []} title={`${r.title} 클립 재생 추이`} /></td>
+                        <td className="perf-r" title={r.clip?.views == null ? "아직 수집 전 — 매일 07:30 또는 새로고침 때 모읍니다" : undefined}>{r.clip ? fmt(r.clip.views) : "—"}</td>
+                        <td className="perf-r">{r.clip ? fmt(r.clip.likes) : "—"}</td>
+                        <td className="perf-c perf-grp-edge"><button className="btn ghost" title="숏폼 삭제 — 산출물·성과 포함(모든 채널 행이 사라짐)" onClick={() => doDeleteShorts(r.id, r.title)}><Ico name="trash" size={12} /></button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {moreBtn("clips", clips.length)}
+              </div>
+            ) : (
+              <p className="muted">네이버 클립에 올린 숏폼이 아직 없습니다.</p>
+            )}
+          </div>
+
           <div className="review-section">
             <h3>유튜브 쇼츠 성과 <span className="muted">(매일 자동 수집)</span></h3>
             {ytShorts.length > 0 ? (
@@ -547,59 +600,6 @@ export default function PerformanceView() {
               </div>
             ) : (
               <p className="muted">인스타그램에 발행된 릴스가 아직 없습니다.</p>
-            )}
-          </div>
-
-          <div className="review-section">
-            <h3>네이버 클립 성과 <span className="muted">(재생·좋아요 · 매일 자동 수집)</span></h3>
-            {clips.length > 0 ? (
-              <div className="perf-table-wrap">
-                <table className="perf-table">
-                  <colgroup>
-                    <col className="perf-col-title" /><col className="perf-col-link" />
-                    <col className="perf-col-date perf-grp-start" /><col className="perf-col-spark" /><col className="perf-col-num" /><col className="perf-col-num" />
-                    <col className="perf-col-act perf-grp-start" />
-                  </colgroup>
-                  <thead>
-                    <tr className="perf-grouprow">
-                      <th className="perf-grp-soft" colSpan={2}>콘텐츠</th>
-                      <th colSpan={4}><span className="perf-grp-in"><PlatformMark name="clip" size={13} /> 네이버 클립</span></th>
-                      <th className="perf-grp-soft perf-grp-edge"></th>
-                    </tr>
-                    <tr>
-                      <th>클립</th>
-                      <th className="perf-c">링크</th>
-                      <th className="perf-c perf-grp-edge">게시일</th>
-                      <th className="perf-c" title="클립 재생수 일별 추이">추이</th>
-                      <th className="perf-r" title="클립 크리에이터의 재생수">재생</th>
-                      <th className="perf-r">👍</th>
-                      <th className="perf-c perf-grp-edge"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {take("clips", clips).map((r) => (
-                      <tr key={r.id}>
-                        <td className="perf-title">
-                          <div className="perf-title-row">
-                            <span className="perf-title-txt" title={r.title}>{r.title}</span>
-                          </div>
-                        </td>
-                        <td className="perf-c">
-                          <span className="perf-links">{linkBadge("clip", r.clip?.url, `네이버 클립 채널 열기${r.clip?.no ? ` (#${r.clip.no})` : ""}`, "클립 미게시")}</span>
-                        </td>
-                        <td className="perf-date perf-c perf-grp-edge">{fmtDate(r.clip?.ts)}</td>
-                        <td className="perf-spark perf-c"><Sparkline data={r.clip?.series ?? []} title={`${r.title} 클립 재생 추이`} /></td>
-                        <td className="perf-r" title={r.clip?.views == null ? "아직 수집 전 — 매일 07:30 또는 새로고침 때 모읍니다" : undefined}>{r.clip ? fmt(r.clip.views) : "—"}</td>
-                        <td className="perf-r">{r.clip ? fmt(r.clip.likes) : "—"}</td>
-                        <td className="perf-c perf-grp-edge"><button className="btn ghost" title="숏폼 삭제 — 산출물·성과 포함(모든 채널 행이 사라짐)" onClick={() => doDeleteShorts(r.id, r.title)}><Ico name="trash" size={12} /></button></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {moreBtn("clips", clips.length)}
-              </div>
-            ) : (
-              <p className="muted">네이버 클립에 올린 숏폼이 아직 없습니다.</p>
             )}
           </div>
 
