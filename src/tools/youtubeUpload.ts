@@ -144,12 +144,10 @@ export async function uploadShortsToYoutube(opts: {
     }
     const id = extractVideoId(j);
     if (!id) return { ok: false, error: '업로드 응답 이형(id 없음)' };
-    // 커스텀 썸네일 설정(best-effort) — 쇼츠는 Data API(thumbnails.set)로 커버 지정이 안 돼 403 이 정상(영상 업로드는 성공).
-    // 쇼츠 커버는 스튜디오/앱의 '동영상 프레임' 선택으로만 지정된다(첫 프레임=디자인 썸네일). 실패는 note 만.
-    // 쇼츠 커버 시험(2026-10-06, YOUTUBE_SHORTS_SET_THUMBNAIL=false) — 공개 직행으로 바꾼 뒤에도 10-05 대추나무 편(s3EFmZEFp0o)은
-    // 10분 넘게 커버가 비어 앱에 중간 장면이 떴고 사장님이 손으로 고쳤다. 우리는 thumbnails.set 이 200(채널 인증)이라 커스텀 커버가
-    // oardefault 로 늦게 붙고, 지정이 안 되는 ok_asis1(403)은 유튜브가 첫 장면을 sardefault 로 바로 잡았다(8/8). 지정을 빼면 우리도
-    // sardefault 첫 장면이 되는지 본다 — 커버 판정(verifyPublicCover)이 sar/oar 둘 다 보므로 결과는 로그로 확인.
+    // 커스텀 썸네일 설정(best-effort) — 우리 채널은 200(채널 인증), 미인증 채널은 403. 실패는 note 만.
+    // 쇼츠 탭 커버(oardefault)에 반영됐다는 증거는 아직 없다 — 10-05·10-06 두 편 모두 사장님이 앱에서 손으로 고쳤다.
+    // 그래서 처리 완료 뒤 한 번 더 지정한다(resetThumbnailAfterProcessing). 지정을 아예 빼면 ok_asis1 처럼 oardefault 가 비어
+    // 쇼츠 탭에 중간 장면이 뜬다(10-06 실측 6/6) — skipThumbnail 은 끄는 스위치로만 남긴다.
     const thumbnailError = opts.skipThumbnail ? undefined : await setThumbnail(access, id, opts.thumbnailPath, signal);
     // 쇼츠 분류는 파일(세로 1080×1920·3분 이하)로 자동 판정 — URL 은 표시용이지만 쇼츠 플레이어로 열리게 /shorts/ 형식.
     return { ok: true, videoId: id, url: `https://youtube.com/shorts/${id}`, thumbnailError };
@@ -315,6 +313,35 @@ export async function publishWhenReady(opts: {
   }
 }
 
+/**
+ * 처리 완료 뒤 커버 재지정(2026-10-06 시험, YOUTUBE_SHORTS_RESET_THUMBNAIL) — 업로드 직후의 thumbnails.set 은 200 인데도
+ * 쇼츠 탭 커버(oardefault)가 비거나 중간 장면이라 사장님이 매번 손으로 고쳤다. 유튜브가 처리를 끝낸 뒤(processingStatus
+ * succeeded) 같은 이미지를 한 번 더 지정해 본다. 결과는 뒤이은 verifyPublicCover 로그로 판정한다. 실패해도 영상은 무관.
+ */
+export async function resetThumbnailAfterProcessing(opts: {
+  slug: string; videoId: string; thumbnailPath?: string; signal?: AbortSignal; pollMs?: number; tries?: number;
+}): Promise<string> {
+  if (!opts.thumbnailPath || !fs.existsSync(opts.thumbnailPath)) return '커버 이미지 없음 — 재지정 생략';
+  try {
+    const access = await youtubeAccessToken(opts.slug, opts.signal);
+    let status = '';
+    for (let i = 0; i < (opts.tries ?? 20) && status !== 'succeeded'; i++) {
+      await sleep(opts.pollMs ?? 15_000, opts.signal);
+      const r = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=processingDetails&id=${opts.videoId}`, {
+        headers: { Authorization: `Bearer ${access}` }, signal: opts.signal,
+      });
+      const j = await r.json().catch(() => ({})) as { items?: Array<{ processingDetails?: { processingStatus?: string } }> };
+      status = String(j.items?.[0]?.processingDetails?.processingStatus ?? '');
+      if (status === 'failed' || status === 'terminated') return `처리 ${status} — 재지정 생략`;
+    }
+    const te = await setThumbnail(access, opts.videoId, opts.thumbnailPath, opts.signal);
+    const when = status === 'succeeded' ? '처리 완료 뒤' : '처리 완료 확인 전(대기 한도)';
+    return te ? `${when} 커버 재지정 실패: ${te.slice(0, 60)}` : `${when} 커버 재지정 200`;
+  } catch (e) {
+    return `커버 재지정 중단(무해): ${e instanceof Error ? e.message.slice(0, 60) : String(e)}`;
+  }
+}
+
 export type CoverState = 'first' | 'middle' | 'missing' | 'unknown';
 export interface CoverOutcome { state: CoverState; note: string }
 /** 커버 확인 결과가 텔레그램 알림감인가(리뷰 2026-10-05) — 확인된 문제(중간 장면·없음)만. unknown(파이썬 없음·조회 실패·
@@ -322,18 +349,12 @@ export interface CoverOutcome { state: CoverState; note: string }
 export const coverNeedsAlert = (s: CoverState): boolean => s === 'middle' || s === 'missing';
 
 /**
- * 공개 업로드 뒤 쇼츠 커버 확인(2026-10-05) — 커버가 영상 첫 장면(디자인 썸네일)인지 그림으로 본다.
+ * 공개 업로드 뒤 쇼츠 커버 확인(2026-10-05, 10-06 정정) — 채널 쇼츠 탭 커버(oardefault)가 첫 장면(디자인 썸네일)인지 그림으로 본다.
  *
- * 왜 바꿨나. 비공개로 올려 공개로 바꾸던 방식(10-01~10-04, 그 전엔 사람이 공개)에서는 유튜브가 쇼츠 커버(oardefault)를
- * **중간 장면**으로 골라, 사장님이 업로드 직후마다 앱에서 맨 앞 프레임으로 손수 고쳤다. 처음부터 공개로 올리는
- * ok_asis1 채널은 커버(sardefault)가 첫 장면으로 생긴다(10-05 두 채널 전수 대조: 우리 28/28 oardefault, ok_asis1 8/8
- * sardefault). 그래서 공개로 바로 올리고, 여기서는 **확인만** 한다 — 비공개로 되돌리는 08-31 복구는 하지 않는다
- * (그 전환이 바로 중간 장면 커버를 만드는 길이었다). 중간 장면이면 사람이 고치도록 알린다.
- * check 는 주입(테스트용) — 기본은 blog_skills.checkYoutubeCover.
- *
- * 리뷰(2026-10-05): 공개 업로드의 커버는 sardefault 로 생긴다. sardefault 가 아직 없고 oardefault(전환식 커버 자리)만
- * 보이는 동안의 '중간 장면'은 잠정이다 — 확정 셈(두 번 연속)에 넣지 않고, 마지막 시도들(끝의 두 번)까지 이어질 때만
- * 중간 장면으로 확정한다. cover 를 모르는 응답(구 출력)은 종전처럼 바로 센다.
+ * 10-06 정정: 판정 대상은 oardefault 하나다. 쇼츠 탭이 이 이미지를 쓰고, 비어 있으면 유튜브가 중간 장면을 대신 보여 준다
+ * (사장님 확인 — ok_asis1 은 sardefault 첫 장면이 늘 있는데도 oardefault 가 비어 쇼츠 탭에 중간 장면). 종전 판정은 sardefault 를
+ * 커버로 쳐서 그 영상들을 '첫 장면'으로 통과시켰다. 그래서 끝까지 비어 있는 것(missing)도 '중간 장면이 보이는 상태'로 알린다.
+ * 비공개로 되돌리는 08-31 복구는 하지 않는다(그 전환이 중간 장면 커버를 만들던 길). check 는 주입(테스트용).
  */
 export async function verifyPublicCover(opts: {
   videoId: string; check: (id: string, signal?: AbortSignal) => Promise<{ state: CoverState; cover?: string }>;
@@ -343,23 +364,16 @@ export async function verifyPublicCover(opts: {
   const tries = opts.tries ?? 20;
   let last: CoverState = 'unknown';
   let middleSeen = 0;
-  let provisional = 0; // oardefault 중간 장면 연속 횟수(잠정)
   for (let i = 0; i < tries; i++) {
     await sleep(pollMs, opts.signal);
-    let cover: string | undefined;
-    try { const r = await opts.check(opts.videoId, opts.signal); last = r.state; cover = r.cover; } catch { last = 'unknown'; }
-    if (last === 'first') return { state: 'first', note: '공개 · 쇼츠 커버가 첫 장면(디자인 썸네일)' };
-    if (last === 'middle' && cover === 'oardefault') { provisional++; middleSeen = 0; continue; }
-    provisional = 0;
+    try { last = (await opts.check(opts.videoId, opts.signal)).state; } catch { last = 'unknown'; }
+    if (last === 'first') return { state: 'first', note: '공개 · 쇼츠 탭 커버가 첫 장면(디자인 썸네일)' };
     // 처리 직후 잠깐 다른 프레임이 걸렸다가 바뀌는지 보려고 중간 장면은 두 번 연속 봐야 확정한다.
     if (last === 'middle' && ++middleSeen >= 2) break;
     if (last !== 'middle') middleSeen = 0;
   }
-  if (last === 'middle' && (provisional === 0 || provisional >= Math.min(2, tries))) {
-    return { state: 'middle', note: '공개됐지만 쇼츠 커버가 중간 장면 — 유튜브 앱/스튜디오에서 커버를 맨 앞 프레임(0초)으로 지정하세요' };
-  }
-  if (last === 'middle') return { state: 'unknown', note: '공개됨 · 커버가 아직 잠정(중간 장면으로 한 번만 보임) — 앱에서 한 번 확인하세요' };
-  if (last === 'missing') return { state: 'missing', note: '공개됐지만 쇼츠 커버가 아직 없음(회색 자리표시) — 잠시 뒤 앱에서 확인하세요' };
+  if (last === 'middle') return { state: 'middle', note: '공개됐지만 쇼츠 탭 커버가 중간 장면 — 유튜브 앱/스튜디오에서 커버를 맨 앞 프레임(0초)으로 지정하세요' };
+  if (last === 'missing') return { state: 'missing', note: '공개됐지만 쇼츠 탭 커버가 비어 있음(유튜브가 중간 장면을 대신 보여 줌) — 앱에서 커버를 맨 앞 프레임(0초)으로 지정하세요' };
   return { state: 'unknown', note: '공개됨 · 커버 판정 불가(이미지 조회 실패) — 앱에서 한 번 확인하세요' };
 }
 

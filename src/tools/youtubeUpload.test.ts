@@ -166,36 +166,16 @@ describe('공개 직행 업로드 — 쇼츠 커버가 첫 장면(2026-10-05)', 
     const boom = async (): Promise<{ state: CoverState }> => { throw new Error('net'); };
     expect((await verifyPublicCover({ videoId: 'x', check: boom, pollMs: 0, tries: 2 })).state).toBe('unknown');
   });
-  // 리뷰(2026-10-05) — 공개 업로드 커버는 sardefault. oardefault 만 보이는 초기의 중간 장면은 잠정.
-  it('oardefault 중간 장면은 잠정 — 확정 셈에 넣지 않고, sardefault 첫 장면이 뜨면 first', async () => {
-    const seqC = (xs: Array<{ state: CoverState; cover?: string }>) => {
-      let i = 0;
-      return async () => xs[Math.min(i++, xs.length - 1)]!;
-    };
-    const o = await verifyPublicCover({ videoId: 'x', pollMs: 0, tries: 6, check: seqC([
-      { state: 'middle', cover: 'oardefault' }, { state: 'middle', cover: 'oardefault' }, { state: 'first', cover: 'sardefault' }]) });
+  // 10-06 정정 — 판정은 쇼츠 탭 커버(oardefault) 하나. sardefault 는 보지 않는다(check 가 oardefault 만 넘긴다).
+  it('중간 장면이 한 번 보였다가 첫 장면으로 바뀌면 first', async () => {
+    const o = await verifyPublicCover({ videoId: 'x', pollMs: 0, tries: 6, check: seq(['missing', 'middle', 'first']) });
     expect(o.state).toBe('first');
   });
-  it('oardefault 중간 장면이 마지막 시도들까지 이어지면 그때 middle 로 확정', async () => {
-    const calls: number[] = [];
-    let n = 0;
-    const check = async () => { calls.push(++n); return { state: 'middle' as CoverState, cover: 'oardefault' }; };
-    const o = await verifyPublicCover({ videoId: 'x', check, pollMs: 0, tries: 4 });
-    expect(o.state).toBe('middle');
-    expect(calls).toHaveLength(4); // 두 번 만에 확정하지 않고 끝까지 본다
-  });
-  it('oardefault 중간 장면이 마지막 한 번뿐이면 확정하지 않는다(unknown — 알림 없음)', async () => {
-    const xs: Array<{ state: CoverState; cover?: string }> = [{ state: 'missing' }, { state: 'missing' }, { state: 'middle', cover: 'oardefault' }];
-    let i = 0;
-    const o = await verifyPublicCover({ videoId: 'x', check: async () => xs[i++]!, pollMs: 0, tries: 3 });
-    expect(o.state).toBe('unknown');
-    expect(o.note).toContain('잠정');
-  });
-  it('sardefault 중간 장면은 종전대로 두 번 연속이면 바로 확정', async () => {
-    let n = 0;
-    const check = async () => { n++; return { state: 'middle' as CoverState, cover: 'sardefault' }; };
-    expect((await verifyPublicCover({ videoId: 'x', check, pollMs: 0, tries: 10 })).state).toBe('middle');
-    expect(n).toBe(2);
+  it('끝까지 비어 있으면 missing — 쇼츠 탭엔 중간 장면이 보이므로 알림 문구가 맨 앞 프레임 지정을 안내한다', async () => {
+    const o = await verifyPublicCover({ videoId: 'x', check: seq(['missing']), pollMs: 0, tries: 3 });
+    expect(o.state).toBe('missing');
+    expect(o.note).toContain('맨 앞 프레임');
+    expect(coverNeedsAlert(o.state)).toBe(true);
   });
   it('알림은 중간 장면·없음만 — unknown(파이썬 없음 등)은 로그만', () => {
     expect(coverNeedsAlert('middle')).toBe(true);

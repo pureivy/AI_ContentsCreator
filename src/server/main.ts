@@ -40,7 +40,7 @@ import { mineClusterForPiece, filterCandidates } from '../orchestrator/clusterMi
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
-import { uploadShortsToYoutube, publishWhenReady, verifyPublicCover, coverNeedsAlert, PUBLISH_SAFETY_MIN, fetchMyChannel, channelOfUploads, decideChannelConnect } from '../tools/youtubeUpload';
+import { uploadShortsToYoutube, publishWhenReady, verifyPublicCover, resetThumbnailAfterProcessing, coverNeedsAlert, PUBLISH_SAFETY_MIN, fetchMyChannel, channelOfUploads, decideChannelConnect } from '../tools/youtubeUpload';
 import { publishCardNewsToMeta, publishShortsToMeta, realPermalink, listIgMedia, matchOrphanReels, GRAPH } from '../tools/metaPublish';
 import { llmWiki, slugify } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
@@ -1902,7 +1902,7 @@ app.post('/shorts/:id/youtube', async (c) => {
       blogUrl: blogUrlForPiece(s.sourcePieceId), // 원본 블로그 링크 — 발행 시점 조회(사용자 확정 2026-07-31)
       thumbnailPath: ytCover ?? undefined,
       publishAt, privacy: direct ? 'public' : 'private',
-      // 공개 직행일 때만 커버 지정을 끈다(시험) — 비공개→공개 경로의 썸네일 복구(publishWhenReady)는 지정이 필요하다.
+      // YOUTUBE_SHORTS_SET_THUMBNAIL=false 면 공개 직행 때 업로드 직후 지정을 끈다(기본 켬 — 10-06 시험 취소).
       ...(direct && !CONFIG.youtubeShortsSetThumbnail ? { skipThumbnail: true } : {}),
     });
     if (!r.ok) return c.json({ error: r.error }, 502);
@@ -1913,7 +1913,12 @@ app.post('/shorts/:id/youtube', async (c) => {
     console.log(`[발행담당] ${ytLabel} — 유튜브 ${direct ? '공개 업로드 완료(커버 확인 중)' : goPublic ? '업로드 완료(처리 확인 뒤 공개 전환)' : '비공개 업로드 완료'} (${publisherName()})`);
     if (direct && r.videoId) {
       // 커버 확인만 한다 — 비공개로 되돌리지 않는다(그 전환이 중간 장면 커버를 만들던 길). 중간 장면·없음이면 알림.
-      void verifyPublicCover({ videoId: r.videoId, check: checkYoutubeCover }).then((o) => {
+      // 확인 전에 처리 완료를 기다려 커버를 한 번 더 지정한다(10-06 시험, YOUTUBE_SHORTS_RESET_THUMBNAIL) — 그 뒤 10분을 본다.
+      const videoId = r.videoId;
+      const reset = CONFIG.youtubeShortsResetThumbnail && ytCover
+        ? resetThumbnailAfterProcessing({ slug: s.brand ?? '', videoId, thumbnailPath: ytCover }).then((m) => console.log(`[발행담당] ${ytLabel} — 유튜브 ${m}`))
+        : Promise.resolve();
+      void reset.then(() => verifyPublicCover({ videoId, check: checkYoutubeCover })).then((o) => {
         console.log(`[발행담당] ${ytLabel} — 유튜브 커버 확인: ${o.note}`);
         // unknown(판정 불가 — 파이썬 없음·이미지 조회 실패·잠정 커버)은 로그만 — 알림은 확인된 문제(중간 장면·없음)만(리뷰 2026-10-05).
         if (coverNeedsAlert(o.state) && notifyConfigured()) {
