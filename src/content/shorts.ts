@@ -63,6 +63,12 @@ export interface Shorts {
   youtubeUrl?: string;
   /** 업로드 성공 시각 — 성과 측정창(SHORTS_PERF_DAYS) 기준점. */
   youtubeTs?: string;
+  /** 채널 쇼츠 탭 커버(Studio 지정) 확인 시각 — 공개 sardefault.jpg 200 으로 판정(tools/studioCover.ts, ok_asis1 이식 2026-10-06).
+   *  있으면 완료. 없으면 스윕이 Studio 자동 지정을 시도한다(시도 횟수·마지막 시도·사유 기록). */
+  ytStudioCoverTs?: string;
+  ytStudioCoverAttempts?: number;
+  ytStudioCoverAttemptTs?: string;
+  ytStudioCoverError?: string;
   /** 성과 강화(1회) 완료 마킹 — 멱등 게이트. */
   perfReflected?: boolean;
   /** 메타 발행 결과(인스타 릴스 미디어 id·퍼머링크, 페북 릴스 video id) — 유튜브 발행과 독립. */

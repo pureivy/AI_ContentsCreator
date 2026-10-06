@@ -202,6 +202,18 @@ export interface Config {
   /** 쇼츠 업로드 때 API 커버 지정(thumbnails.set)을 할지. 기본 켬 — 10-06 '지정 빼기' 시험은 돌기 전에 취소했다:
    *  지정을 안 하는 ok_asis1 은 쇼츠 탭 커버(oardefault)가 늘 비어 중간 장면이 뜬다. */
   readonly youtubeShortsSetThumbnail: boolean;
+  /** 쇼츠 탭 커버를 Studio 에서 자동 지정(옵트인 YT_STUDIO_COVER, ok_asis1 이식 2026-10-06) — `claude -p --chrome` 경유. */
+  readonly ytStudioCover: boolean;
+  /** Studio 조작에 쓸 Chrome(Claude 확장) deviceId — 채널 소유 계정(biondi.tree)이 로그인된 프로필. */
+  readonly ytStudioBrowserId: string;
+  /** 대상 채널 ID(UC…) — 에이전트가 이 채널 Studio 접근을 먼저 확인한다. */
+  readonly ytStudioChannelId: string;
+  /** 이 채널에 올리는 브랜드 slug — 이 브랜드의 쇼츠만 스윕한다. */
+  readonly ytStudioBrand: string;
+  /** 이 시각(ISO) 이후 업로드만 대상 — 켜기 전 영상은 건드리지 않는다. */
+  readonly ytStudioCoverSince: string;
+  /** Studio 커버 에이전트 모델(기본 sonnet — ok_asis1 실측 55초·20턴). */
+  readonly ytStudioCoverModel: string;
   /** 유튜브 처리가 끝난 뒤 커버를 한 번 더 지정 — 기본 끔. ok_asis1 실측(09-30): API 지정은 가로형 화면만 바꾸고 쇼츠 탭은 못 바꾼다. */
   readonly youtubeShortsResetThumbnail: boolean;
   /** 쇼츠 성과 측정창(일) — 업로드 후 이 기간 매일 수집, 경과 시 강화 1회. */
@@ -524,6 +536,13 @@ export const CONFIG: Config = {
   youtubeUploadPublicDirect: envBool('YOUTUBE_UPLOAD_PUBLIC_DIRECT', true),
   youtubeShortsSetThumbnail: envBool('YOUTUBE_SHORTS_SET_THUMBNAIL', true),
   youtubeShortsResetThumbnail: envBool('YOUTUBE_SHORTS_RESET_THUMBNAIL', false),
+  // 쇼츠 탭 커버 자동 지정(2026-10-06 사장님 선택: ok_asis1 방식) — API 로는 그리드 커버가 안 바뀌어 Studio 를 브라우저로 조작.
+  ytStudioCover: envBool('YT_STUDIO_COVER', false),
+  ytStudioBrowserId: env('YT_STUDIO_BROWSER_ID', ''),
+  ytStudioChannelId: env('YT_STUDIO_CHANNEL_ID', ''),
+  ytStudioBrand: env('YT_STUDIO_BRAND', 'bionditree'),
+  ytStudioCoverSince: env('YT_STUDIO_COVER_SINCE', ''),
+  ytStudioCoverModel: env('YT_STUDIO_COVER_MODEL', 'sonnet'),
   shortsPerfDays: Math.max(1, envInt('SHORTS_PERF_DAYS', 7)),
   shortsMaxDurationSec: Math.min(180, Math.max(20, envInt('SHORTS_MAX_DURATION_SEC', 60))),
   shortsScenes: Math.min(8, Math.max(3, envInt('SHORTS_SCENES', 5))),

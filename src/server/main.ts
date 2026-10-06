@@ -40,6 +40,8 @@ import { mineClusterForPiece, filterCandidates } from '../orchestrator/clusterMi
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
+import { ensureShortsCover } from '../tools/shortsCover';
+import { startStudioCoverSweeper } from '../tools/studioCover';
 import { uploadShortsToYoutube, publishWhenReady, verifyPublicCover, resetThumbnailAfterProcessing, coverNeedsAlert, PUBLISH_SAFETY_MIN, fetchMyChannel, channelOfUploads, decideChannelConnect } from '../tools/youtubeUpload';
 import { publishCardNewsToMeta, publishShortsToMeta, realPermalink, listIgMedia, matchOrphanReels, GRAPH } from '../tools/metaPublish';
 import { llmWiki, slugify } from '../wiki/llmwiki';
@@ -1889,7 +1891,10 @@ app.post('/shorts/:id/youtube', async (c) => {
     // 인트로(1.6초=디자인 썸네일) 붙은 영상을 업로드하고, 썸네일은 그 '영상 첫 프레임'으로 지정 —
     // 미지정 시 유튜브가 중간 프레임을 자동 선택해 커버가 엉뚱해짐(실측 2026-07-22, 사용자 방침: 맨 처음이 보이게).
     const ytVideo = (await ensureShortsDownload(ytDir)) ?? path.join(ytDir, 'final.mp4');
-    const ytCover = await extractFirstFrame(ytVideo, path.join(ytDir, 'yt-cover.jpg'));
+    // 업로드 썸네일은 검은 띠 없는 9:16 커버 우선(ok_asis1 이식 2026-10-06), 없으면 종전 첫 프레임.
+    // 같은 파일을 Studio 쇼츠 커버 자동 지정(tools/studioCover)이 쓴다.
+    const ytCover = (await ensureShortsCover(ytDir).catch(() => null))
+      ?? await extractFirstFrame(ytVideo, path.join(ytDir, 'yt-cover.jpg'));
     // 공개 발행(2026-10-01) — 기본은 처음부터 공개로 올린다(2026-10-05 사장님 확정). 비공개로 올려 공개로 바꾸면
     // 유튜브가 쇼츠 커버를 중간 장면으로 골라 사장님이 매번 손으로 고쳤다(ok_asis1 채널은 공개 업로드라 첫 장면).
     // YOUTUBE_UPLOAD_PUBLIC_DIRECT=false 면 종전: 비공개 + 예약 공개 안전망 → 처리 확인 → 공개 전환 → 썸네일 확인.
@@ -5104,6 +5109,15 @@ if (!process.env.VITEST) {
 if (!process.env.VITEST) {
   const warm = setTimeout(() => { void refreshDemandSnapshot().catch(() => {}); }, 20_000);
   if (typeof warm.unref === 'function') warm.unref();
+}
+
+// 쇼츠 탭 커버 자동 지정(옵트인 YT_STUDIO_COVER, ok_asis1 이식 2026-10-06) — 업로드 10분 뒤부터 10분 주기 스윕(tools/studioCover).
+if (!process.env.VITEST) {
+  startStudioCoverSweeper();
+  if (CONFIG.ytStudioCover && CONFIG.ytStudioBrowserId && CONFIG.ytStudioChannelId && CONFIG.youtubePublishPublic) {
+    // eslint-disable-next-line no-console
+    console.log(`[ai-contents-studio] 쇼츠 커버 자동 지정 활성 — 10분 주기 · 업로드 10분 후 Studio 반영(Chrome ${CONFIG.ytStudioBrowserId.slice(0, 8)}… · 채널 ${CONFIG.ytStudioChannelId} · 브랜드 ${CONFIG.ytStudioBrand})`);
+  }
 }
 
 const port = CONFIG.port;
