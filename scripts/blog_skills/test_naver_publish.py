@@ -257,7 +257,50 @@ class PlanRichFormatTest(unittest.TestCase):
 
     def test_summary_string(self):
         self.assertEqual(npub.rich_format_summary({"titles": 3, "fs16": 20, "center": 2, "captions": 3, "gaps": 9}, 3),
-                         "ok:titles=3/3,fs16=20,center=2,captions=3,gaps=9")
+                         "ok:titles=3/3,fs16=20,center=2,captions=3,gaps=9,small=0")
+
+
+class RealPhotoSmallCenterTest(unittest.TestCase):
+    """2026-10-06 사장님 요청 — 실촬영 컷은 PC 에서 작게(540) + 가운데, 생성 이미지는 문서 너비 그대로."""
+
+    def _imgs(self):
+        return [
+            {"@ctype": "image", "id": "real", "fileName": "blog-image-01.png", "ai": False, "contentMode": "fit",
+             "width": 886, "height": 1181, "originalWidth": 1080, "originalHeight": 1440, "widthPercentage": 0},
+            {"@ctype": "image", "id": "gen", "fileName": "blog-image-02.png", "ai": True, "contentMode": "fit",
+             "width": 886, "height": 886, "originalWidth": 1024, "originalHeight": 1024, "widthPercentage": 0},
+        ]
+
+    def test_real_photo_small_and_centered(self):
+        out, st = npub.plan_rich_format(self._imgs(), [], {}, real_photos={"blog-image-01.png"}, photo_width=540)
+        real, gen = out
+        self.assertEqual((real["contentMode"], real["align"], real["width"], real["height"]), ("normal", "center", 540, 720))
+        self.assertEqual((real["id"], real["ai"]), ("real", False))  # AI 표시 짝맞춤(id·ai)은 그대로
+        self.assertEqual((gen["contentMode"], gen["width"]), ("fit", 886))
+        self.assertNotIn("align", gen)
+        self.assertEqual(st["small"], 1)
+
+    def test_off_and_small_source(self):
+        out, st = npub.plan_rich_format(self._imgs(), [], {}, real_photos={"blog-image-01.png"}, photo_width=0)
+        self.assertEqual((out[0]["contentMode"], out[0]["width"], st["small"]), ("fit", 886, 0))
+        tiny = [{"@ctype": "image", "id": "t", "fileName": "a.png", "originalWidth": 400, "originalHeight": 300}]
+        out, _ = npub.plan_rich_format(tiny, [], {}, real_photos={"a.png"}, photo_width=540)
+        self.assertEqual((out[0]["width"], out[0]["height"]), (400, 300))  # 원본보다 크게 늘리지 않는다
+
+    def test_names_and_env(self):
+        names = npub.real_photo_names([
+            {"file_path": "/x/images/blog-image-01.png", "source": "archive_frame"},
+            {"file_path": "/x/images/blog-image-02.png", "ai": False},  # source 없음 = 생성 이미지
+            None,
+        ])
+        self.assertEqual(names, {"blog-image-01.png"})
+        with mock.patch.dict(os.environ, {"NAVER_REAL_PHOTO_WIDTH": "0"}):
+            self.assertEqual(npub.real_photo_width(), 0)
+        with mock.patch.dict(os.environ, {"NAVER_REAL_PHOTO_WIDTH": "abc"}):
+            self.assertEqual(npub.real_photo_width(), 540)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("NAVER_REAL_PHOTO_WIDTH", None)
+            self.assertEqual(npub.real_photo_width(), 540)
 
 
 class _DocPage:
@@ -284,7 +327,7 @@ class ApplyRichFormatTest(unittest.TestCase):
         ]}, "documentId": "d"}
         page = _DocPage(doc)
         r = npub.apply_rich_format(page, [{"text": "1) 소제목"}], {"blog-image-01.png": "라일락 — 비온디트리 농원에서 직접 촬영"})
-        self.assertEqual(r, "ok:titles=1/1,fs16=1,center=1,captions=1,gaps=1")
+        self.assertEqual(r, "ok:titles=1/1,fs16=1,center=1,captions=1,gaps=1,small=0")
         comps = page.sent["document"]["components"]
         self.assertEqual(page.sent["documentId"], "d")  # 문서의 다른 필드는 그대로
         self.assertIn("sectionTitle", [c["@ctype"] for c in comps])

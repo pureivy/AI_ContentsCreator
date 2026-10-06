@@ -130,7 +130,9 @@ def enhance(im: Image.Image) -> Image.Image:
     im = Image.blend(im, auto, 0.6)                      # 자동 대비를 60%만 — 끝까지 펴면 HDR 처럼 보인다
     im = ImageEnhance.Color(im).enhance(1.06)
     im = ImageEnhance.Contrast(im).enhance(1.04)
-    im = im.filter(ImageFilter.UnsharpMask(radius=1.4, percent=55, threshold=3))
+    # 선명화는 약하게(2026-10-06: 55%→30%, 문턱 3→6) — 카톡 전송본(약 3Mbps)의 압축 깍두기까지 세워
+    # PC 에서 화질이 더 나빠 보였다. 문턱을 올려 잎맥·가지 윤곽만 세우고 평평한 면의 잡티는 그대로 둔다.
+    im = im.filter(ImageFilter.UnsharpMask(radius=1.2, percent=30, threshold=6))
     return im
 
 

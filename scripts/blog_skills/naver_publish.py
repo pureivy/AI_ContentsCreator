@@ -1228,6 +1228,33 @@ def image_caption_map(images: list) -> dict:
     return out
 
 
+def real_photo_names(images: list) -> set:
+    """실촬영 컷(is_real_photo)의 파일명 — 에디터 image 컴포넌트의 fileName 과 짝을 맞춘다(plan_rich_format ⑦)."""
+    return {Path(e.get("file_path") or "").name for e in images or [] if is_real_photo(e) and e.get("file_path")}
+
+
+def real_photo_width() -> int:
+    """실촬영 컷의 PC 표시 폭(px, 2026-10-06 사장님 요청) — 기본 540. 0 이면 끈다(종전: 문서 너비 886).
+    보관소 영상은 카톡 전송본(1080x1920·약 3Mbps)이라 문서 너비(886x1181, 세로로 한 화면을 넘는다)로 펴면
+    압축 뭉개짐이 그대로 보인다. 파일은 1080x1440 그대로 올리고 보이는 폭만 절반(540x720)으로 줄인다."""
+    try:
+        return max(0, int(os.environ.get("NAVER_REAL_PHOTO_WIDTH", "540").strip() or 0))
+    except ValueError:
+        return 540
+
+
+def _rf_small_center(c: dict, width: int) -> dict:
+    """에디터 사진 도구막대의 '작게'(contentMode=normal) + 크기 W 입력 + '가운데 정렬'(align=center) 과 같은 값.
+    '작게'만 누르면 왼쪽 정렬이 된다(2026-10-06 편집 화면 실측) — align 을 반드시 함께 넣는다."""
+    ow = c.get("originalWidth") or c.get("width") or 0
+    oh = c.get("originalHeight") or c.get("height") or 0
+    if not (isinstance(ow, (int, float)) and isinstance(oh, (int, float)) and ow > 0 and oh > 0):
+        return {**c, "align": "center"}
+    w = int(min(width, ow))
+    return {**c, "contentMode": "normal", "align": "center", "width": w, "height": int(round(w * oh / ow)),
+            "widthPercentage": 0}
+
+
 def _rf_norm(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
 
@@ -1304,7 +1331,8 @@ def _rf_spacer_para(new_id) -> dict:
             "style": {"@ctype": "nodeStyle", "fontSizeCode": HEADING_FONT_CODE}}]}
 
 
-def plan_rich_format(components: list, headings: list, captions: dict, new_id=None) -> tuple:
+def plan_rich_format(components: list, headings: list, captions: dict, new_id=None,
+                     real_photos: set | None = None, photo_width: int = 0) -> tuple:
     """서식 변환(순수 — 입력을 바꾸지 않는다). 반환: (새 컴포넌트 목록, 통계 dict).
     ① 소제목 문단(headings 텍스트와 일치, 문서 순서대로 1회씩 소비) → 네이버 '소제목'(sectionTitle) 컴포넌트
     ② 본문 text 컴포넌트의 글자 노드 → 16pt
@@ -1314,6 +1342,8 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
     ⑤ 본문 줄과 줄 사이, 소제목 바로 아래에 빈 줄 한 줄 — 휴대폰에서 줄마다 숨 쉴 틈을 둔다(목록 줄끼리는 붙인다).
     ⑥ 소제목 글자 24(fs24, 굵게), 소제목 위에 24 크기 빈 줄 두 개 — 2026-10-06 사장님이 매실나무 임시저장 글에서
        소제목을 30→24 로 줄이고 소제목마다 위에 엔터 두 번을 넣은 모양.
+    ⑦ 실촬영 컷(real_photos 파일명) → PC 표시 폭 photo_width(작게) + 가운데 정렬 — 2026-10-06 사장님 요청(PC 화질).
+       생성 이미지는 문서 너비 그대로. photo_width=0 이면 건너뛴다.
 
     ③⑤는 2026-10-06 사장님이 임시저장 글(대추나무 심는 시기)을 손으로 고친 모양 그대로다 — 글자는 하나도 안 바꾸고
     맨 위 요약 두 줄을 가운데 따옴표 인용구로 옮기고, 본문 줄 사이·소제목 아래에 빈 줄을 넣었다(본문 덩어리마다 빈 줄 3~4개).
@@ -1325,7 +1355,7 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
         k = _rf_norm(h.get("text") if isinstance(h, dict) else h)
         if k:
             hq[k] = hq.get(k, 0) + 1
-    stats = {"titles": 0, "fs16": 0, "center": 0, "captions": 0, "gaps": 0, "spaced": 0}
+    stats = {"titles": 0, "fs16": 0, "center": 0, "captions": 0, "gaps": 0, "spaced": 0, "small": 0}
     out = []
     lead = {"open": True, "paras": []}
     after_title = [False]
@@ -1362,6 +1392,9 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
                 c = {**c, "caption": [{"@ctype": "paragraph", "id": new_id(),
                                        "nodes": [{"@ctype": "textNode", "id": new_id(), "value": alt}]}]}
                 stats["captions"] += 1
+            if photo_width > 0 and (c.get("fileName") or "") in (real_photos or ()):
+                c = _rf_small_center(c, photo_width)
+                stats["small"] += 1
             if lead["open"] and lead["paras"]:
                 close_lead()
             out.append(c)
@@ -1425,7 +1458,8 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
 
 def rich_format_summary(stats: dict, n_headings: int) -> str:
     return (f"ok:titles={stats['titles']}/{n_headings},fs16={stats['fs16']},"
-            f"center={stats['center']},captions={stats['captions']},gaps={stats.get('gaps', 0)}")
+            f"center={stats['center']},captions={stats['captions']},gaps={stats.get('gaps', 0)},"
+            f"small={stats.get('small', 0)}")
 
 
 def rich_format_heading_issue(summary: str) -> str:
@@ -1437,7 +1471,7 @@ def rich_format_heading_issue(summary: str) -> str:
     return ""
 
 
-def apply_rich_format(page, headings: list, captions: dict) -> str:
+def apply_rich_format(page, headings: list, captions: dict, real_photos: set | None = None) -> str:
     """사람(·하이브리드) 경로 — 타이핑·인용구 변환·표 스플라이스가 끝난 문서에 서식을 한 번의 setDocumentData 로 입힌다.
     리뷰(2026-10-05): 어떤 예외도 밖으로 내보내지 않는다 — 새면 사람 경로 바깥 except 가 '사람처럼 입력 실패'로 받아
     이미 타이핑한 본문을 API 일괄 경로(setDocumentData 통째)로 다시 쓴다. 실패는 "error:…"로 돌려주고 본문은 그대로 둔다."""
@@ -1448,7 +1482,8 @@ def apply_rich_format(page, headings: list, captions: dict) -> str:
         }""")
         if not doc or not isinstance(doc.get("document"), dict):
             return "no_ds"
-        comps, stats = plan_rich_format(doc["document"].get("components") or [], headings, captions)
+        comps, stats = plan_rich_format(doc["document"].get("components") or [], headings, captions,
+                                        real_photos=real_photos, photo_width=real_photo_width())
         doc["document"]["components"] = comps
         res = page.evaluate("""(doc) => {
             const ds = window.SE?.launcher?._editors?.blogpc001?._documentService;
@@ -1891,7 +1926,7 @@ def write_post(
                 # ①-c 서식(2026-10-05, NAVER_RICH_FORMAT) — 소제목 컴포넌트·본문 16pt·첫머리 요약 가운데·사진 설명.
                 #     인용구 변환(①)이 이미지 ai 를 맞춘 '뒤'에 돈다 — 변환은 이미지 id·ai 를 그대로 둔다(plan_rich_format).
                 if rich_format_enabled():
-                    rf = apply_rich_format(page, headings, image_caption_map(images))
+                    rf = apply_rich_format(page, headings, image_caption_map(images), real_photo_names(images))
                     log(f"  [서식] {rf}")
                     if not (isinstance(rf, str) and rf.startswith("ok")):
                         issues.append(f"서식 적용 실패(본문은 유지): {rf}")
@@ -2049,7 +2084,8 @@ def write_post(
         if rich_format_enabled():
             api_headings = [{"text": s.get("heading", "")} for s in se_text.get("sections", []) if s.get("heading", "")]
             try:
-                final_comps, rf_stats = plan_rich_format(final_comps, api_headings, image_caption_map(images))
+                final_comps, rf_stats = plan_rich_format(final_comps, api_headings, image_caption_map(images),
+                                                         real_photos=real_photo_names(images), photo_width=real_photo_width())
                 rf = rich_format_summary(rf_stats, len(api_headings))
                 log(f"  [서식] {rf}")
                 if rich_format_heading_issue(rf):
