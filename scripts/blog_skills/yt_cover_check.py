@@ -57,12 +57,16 @@ def main() -> int:
     args = ap.parse_args()
     vid = args.video_id
     out = {"videoId": vid, "state": "missing", "cover": None}
-    # 판정은 oardefault 하나로 한다(2026-10-06 정정). 채널 쇼츠 탭이 쓰는 커버가 이것이고, 비어 있으면 유튜브가 중간 장면을 대신
-    # 보여 준다 — ok_asis1 은 sardefault(첫 장면)가 늘 있는데도 oardefault 가 비어 쇼츠 탭에 중간 장면이 떴다(사장님 확인).
-    # 종전엔 sardefault 를 먼저 봐서 그 영상들을 'first' 로 잘못 통과시켰다. sardefault 는 참고로 있는지만 적는다.
-    cover_name = "oardefault"
-    cover = fetch(vid, cover_name)
-    out["sar"] = fetch(vid, "sardefault") is not None
+    # 쇼츠 탭 커버 = sardefault 가 있으면 그것, 없으면 oardefault(비면 유튜브가 중간 장면 oar2 를 대신 보여 준다).
+    # sardefault 는 Studio(데스크톱)에서 지정한 쇼츠 커버다 — ok_asis1 실측(2026-09-30 studioCover.ts): 지정하면 200 이 되고
+    # 쇼츠 탭 그리드가 그 이미지로 바뀐다. Data API thumbnails.set 은 가로형 화면만 바꾸고 그리드는 못 바꾼다.
+    # 우리 채널은 sardefault 가 없고 사장님이 앱에서 고친 커버가 oardefault 로 남는다(10-06 실측).
+    cover, cover_name = None, None
+    for name in ("sardefault", "oardefault"):
+        cover = fetch(vid, name)
+        if cover is not None:
+            cover_name = name
+            break
     first, mid = fetch(vid, "frame0"), fetch(vid, "oar2")
     if cover is None:
         print("RESULT_JSON: " + json.dumps(out, ensure_ascii=False))

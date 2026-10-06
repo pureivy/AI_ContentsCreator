@@ -349,11 +349,10 @@ export interface CoverOutcome { state: CoverState; note: string }
 export const coverNeedsAlert = (s: CoverState): boolean => s === 'middle' || s === 'missing';
 
 /**
- * 공개 업로드 뒤 쇼츠 커버 확인(2026-10-05, 10-06 정정) — 채널 쇼츠 탭 커버(oardefault)가 첫 장면(디자인 썸네일)인지 그림으로 본다.
+ * 공개 업로드 뒤 쇼츠 커버 확인(2026-10-05, 10-06 정정) — 채널 쇼츠 탭 커버가 첫 장면(디자인 썸네일)인지 그림으로 본다.
  *
- * 10-06 정정: 판정 대상은 oardefault 하나다. 쇼츠 탭이 이 이미지를 쓰고, 비어 있으면 유튜브가 중간 장면을 대신 보여 준다
- * (사장님 확인 — ok_asis1 은 sardefault 첫 장면이 늘 있는데도 oardefault 가 비어 쇼츠 탭에 중간 장면). 종전 판정은 sardefault 를
- * 커버로 쳐서 그 영상들을 '첫 장면'으로 통과시켰다. 그래서 끝까지 비어 있는 것(missing)도 '중간 장면이 보이는 상태'로 알린다.
+ * 쇼츠 탭 커버 = Studio 에서 지정한 sardefault, 없으면 oardefault, 그것도 비면 유튜브가 중간 장면(oar2)을 대신 보여 준다
+ * (ok_asis1 studioCover.ts 실측 09-30). 그래서 끝까지 비어 있는 것(missing)도 '중간 장면이 보이는 상태'로 알린다.
  * 비공개로 되돌리는 08-31 복구는 하지 않는다(그 전환이 중간 장면 커버를 만들던 길). check 는 주입(테스트용).
  */
 export async function verifyPublicCover(opts: {

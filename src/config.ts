@@ -202,7 +202,7 @@ export interface Config {
   /** 쇼츠 업로드 때 API 커버 지정(thumbnails.set)을 할지. 기본 켬 — 10-06 '지정 빼기' 시험은 돌기 전에 취소했다:
    *  지정을 안 하는 ok_asis1 은 쇼츠 탭 커버(oardefault)가 늘 비어 중간 장면이 뜬다. */
   readonly youtubeShortsSetThumbnail: boolean;
-  /** 유튜브 처리가 끝난 뒤 커버를 한 번 더 지정(2026-10-06 시험) — 업로드 직후 지정은 쇼츠 탭에 반영된 증거가 없다. */
+  /** 유튜브 처리가 끝난 뒤 커버를 한 번 더 지정 — 기본 끔. ok_asis1 실측(09-30): API 지정은 가로형 화면만 바꾸고 쇼츠 탭은 못 바꾼다. */
   readonly youtubeShortsResetThumbnail: boolean;
   /** 쇼츠 성과 측정창(일) — 업로드 후 이 기간 매일 수집, 경과 시 강화 1회. */
   readonly shortsPerfDays: number;
@@ -523,7 +523,7 @@ export const CONFIG: Config = {
   // 비공개→공개 전환은 쇼츠 커버를 중간 장면으로 만든다(10-05 진단, ok_asis1 대조) — 기본은 공개로 바로 올린다.
   youtubeUploadPublicDirect: envBool('YOUTUBE_UPLOAD_PUBLIC_DIRECT', true),
   youtubeShortsSetThumbnail: envBool('YOUTUBE_SHORTS_SET_THUMBNAIL', true),
-  youtubeShortsResetThumbnail: envBool('YOUTUBE_SHORTS_RESET_THUMBNAIL', true),
+  youtubeShortsResetThumbnail: envBool('YOUTUBE_SHORTS_RESET_THUMBNAIL', false),
   shortsPerfDays: Math.max(1, envInt('SHORTS_PERF_DAYS', 7)),
   shortsMaxDurationSec: Math.min(180, Math.max(20, envInt('SHORTS_MAX_DURATION_SEC', 60))),
   shortsScenes: Math.min(8, Math.max(3, envInt('SHORTS_SCENES', 5))),
