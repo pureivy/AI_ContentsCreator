@@ -520,6 +520,10 @@ async function gateWrite(role: RoleDef, autonomy: number, actionType: string, su
   // 항상 게이트한다(심층방어 + 사용자 선호: 외부 서비스 결제성 행동은 확인).
   const alwaysGate = actionType === 'run_command' || actionType === 'blog_publish' || actionType === 'image_generate';
   if (!alwaysGate && !CONFIG.enforceAutonomy) return true;
+  // 지식 노트 저장은 직원 자기 메모(내부 파일)라 자율도 2 이상이면 자동 승인(2026-10-07 사장님 "자동화에서 승인 요청하면
+  // 의미가 없다") — 실측: 오토런 리서치 중 오세라(trend_researcher)의 save_note 가 사람 승인을 기다렸다(무응답이면 최대 10분 정지).
+  // 외부·과금 행동(발행·이미지 생성·명령 실행)은 그대로 게이트한다.
+  if (actionType === 'save_note' && autonomy >= 2) return true;
   // blog_publish(외부 초안)·image_generate(유료 과금)는 autonomy≥3 에서도 자동승인하지 않고 항상 승인 요청.
   // (run_command 는 기존대로 ≥3 자동승인 유지.)
   if (autonomy >= 3 && actionType !== 'blog_publish' && actionType !== 'image_generate') return true;

@@ -74,3 +74,22 @@ describe('searchless — 검색 근거 없음(2026-10-07 설중매)', () => {
     expect(searchless(null, 0)).toBe(false);
   });
 });
+
+describe('angleMatches — 비슷한 말도 같은 각도(2026-10-07)', () => {
+  it('전지·가지치기 연관어에 "자를 가지" 제목 — 모과나무 실측', () => {
+    const v = angleVerdict('모과나무', '모과나무 잎과 꽃으로 자를 가지를 먼저 정하세요', ['모과나무 전지하는방법', '모과나무 가지치기', '모과나무 묘목']);
+    expect(v.status).toBe('ok');
+  });
+  it('식재↔심기, 비료↔거름, 월동↔겨울나기', () => {
+    expect(angleMatches('감나무 심을 자리부터', ['식재'])).toEqual(['식재']);
+    expect(angleMatches('대추나무 거름 주는 때', ['비료'])).toEqual(['비료']);
+    expect(angleMatches('무화과 겨울나기', ['월동'])).toEqual(['월동']);
+  });
+  it('넓혀도 엉뚱한 각도는 여전히 밖 — 마가목 신농본초경·소나무 궁궐', () => {
+    expect(angleVerdict('마가목', '마가목 이름이 신농본초경에 남은 이유', ['마가목 열매', '마가목 효능', '마가목 묘목', '마가목 가격']).status).toBe('unverified');
+    expect(angleVerdict('소나무', '소나무가 궁궐·서원에 남은 이유, 관리가 아니라 선택입니다', ['소나무 가격', '소나무 전지', '소나무 종류', '소나무 병충해', '소나무 묘목']).status).toBe('unverified');
+  });
+  it('자르기 묶음이 생장(자라는)을 끌어오지 않는다', () => {
+    expect(angleMatches('호두나무가 잘 자라는 자리', ['가지치기'])).toEqual([]);
+  });
+});

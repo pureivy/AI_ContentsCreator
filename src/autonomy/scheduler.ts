@@ -1338,7 +1338,8 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     // rank 0=비수기, 1=기아 방지 밸브(아래), 2=최근 축, 3=최근 수종.
     // line 은 그 후보의 판정 문구 — 채택 로그가 '조회 없음'으로 새지 않게 함께 들고 간다(기억 경로는
     // 조회 대상에서 빠져 demandRows 에 없다). rotation 은 rank 2·3 의 사유(로그 문구용).
-    const demoted: Array<{ idea: ContentIdea; rank: 0 | 1 | 2 | 3 | 4; line: string; rotation?: string }> = [];
+    // rank 3.5 = 비수기(2026-10-07 사장님 "비시즌 주제는 후순위여도 걸리면 조회수가 안 나온다") — 로테이션 후순위보다 뒤, 각도 밖보다 앞.
+    const demoted: Array<{ idea: ContentIdea; rank: number; line: string; rotation?: string }> = [];
     // 실검색 각도 검증(2026-09-21) — 후보 수종별 자동완성(네이버+유튜브)을 이 라운드에서 한 번씩만 조회한다.
     // 공개 엔드포인트라 키·비용 없음. 실패는 빈 배열(fail-open → 판정 unknown → 통과).
     const angleSuggest = new Map<string, string[]>();
@@ -1585,7 +1586,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
         // 수종 없는 후보는 유사 폴백 자리도 못 잡는다(2026-10-02) — 잡으면 수종 붙은 후순위 후보(rank 1~4)를 이긴다.
         // 자격은 같으므로 최후 보류함에 유사 폴백 서열(0.5)로 넣는다.
         if (noSp && gate.level === 'none' && !demand.relaxed && !recentSp && !recentTh) holdNoSpecies(0.5, demand.line, '유사 폴백 자격');
-        else if (!similarFallback && gate.level === 'none' && !demand.relaxed && !recentSp && !recentTh) {
+        else if (!similarFallback && gate.level === 'none' && demand.verdict !== 'demote' && !recentSp && !recentTh) {   // 비수기도 폴백 자격 없음(2026-10-07)
           similarFallback = { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) };
           similarFallbackLine = demand.line;   // 마지막 라운드에 기억으로 후순위가 된 후보가 여기로 온다(로그가 '조회 없음'으로 새지 않게)
         }
@@ -1631,6 +1632,14 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       // 후순위라 지시 안에 제철 후보가 없으면 결국 이 후보가 채택된다(생산은 안 멈춘다).
       if (demand.verdict === 'demote') {
         if (angleOff(demand.line)) continue;   // 비수기·수요 미달 후순위도 각도 밖이면 rank 4(2026-10-07)
+        // 비수기는 마지막 라운드 전엔 기각(2026-10-07 사장님) — 종전엔 1라운드 끝에 바로 채택돼 2라운드(제철 후보)를 시도조차
+        // 안 했다(실측: "무화과 가지 끝이 마르는 이유" 시즌 0.24 가 1라운드에서 채택). 사유는 노트로 가 2라운드가 제철로 다시 낸다.
+        if (!demand.relaxed && attempt < IDEA_ROUNDS - 1) {
+          console.log(`[auto-cycle] 아이디어 기각(검색 비수기) — "${title}" (${demand.line})`);
+          // 수종 없음이면 한 줄에 같이 적는다(노트 4자리를 한 후보가 두 자리 먹지 않게 — holdNoSpecies 의 합치기 규칙과 같다).
+          rejects.push(`"${title}"=검색 비수기(${demand.line} — 지금 철에 사람들이 찾는 주제로)${noSp ? ` · 수종 없음(키워드 "${keyword ?? title}" — 지금 철 수종 하나에 묶어)` : ''}`);
+          continue;
+        }
         console.log(demand.relaxed
           ? `[auto-cycle] 아이디어 후순위(검색 수요 미달·기아 방지) — "${title}" (${demand.line})`
           : `[auto-cycle] 아이디어 후순위(검색 비수기) — "${title}" (${demand.line})`);
@@ -1644,7 +1653,9 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
         else if (gate.level === 'none') {
           demoted.push({
             idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) },
-            rank: demand.relaxed ? 1 : 0,   // 비수기(0)가 하한 미달(1)보다 항상 낫다 — 소재 자체엔 수요가 있다
+            // 비수기 3.5(2026-10-07) — 종전 0(가장 앞, 유사 폴백도 이김)이었으나 지금 안 찾는 주제는 조회가 안 나온다.
+            // 이제 로테이션 후순위(2·3)와 유사 폴백에 지고, 각도 밖(4)만 이긴다. 하한 미달(1)은 종전 그대로.
+            rank: demand.relaxed ? 1 : 3.5,
             line: demand.line,              // 채택되면 이 실측 줄이 로그에 그대로 간다(기억 경로는 demandRows 에 없다)
           });
         }

@@ -759,3 +759,15 @@ describe('factStarvedRecentlyFor — 예고·클러스터 경로용 사실 부�
     expect(factStarvedRecentlyFor('음나무 자리', 'b')).toBeNull();
   });
 });
+
+describe('비수기 rank 3.5(2026-10-07 사장님 "비시즌은 조회수가 안 나온다")', () => {
+  const e = (title: string, rank: number) => ({ idea: { title }, rank, line: '' });
+  it('로테이션 후순위가 비수기를 이긴다, 각도 밖(4)은 비수기에 진다', () => {
+    expect(pickDemoted([e('비수기', 3.5), e('최근 축', 2)])?.idea.title).toBe('최근 축');
+    expect(pickDemoted([e('각도 밖', 4), e('비수기', 3.5)])?.idea.title).toBe('비수기');
+  });
+  it('유사 폴백이 있으면 비수기보다 폴백', () => {
+    expect(pickRoundAdoption([e('비수기', 3.5)], true)).toEqual({ source: 'fallback' });
+    expect(pickRoundAdoption([e('비수기', 3.5)], false)).toMatchObject({ source: 'demoted' });
+  });
+});

@@ -22,6 +22,7 @@ const h = await vi.hoisted(async () => {
     root,
     rounds: [] as Array<Array<{ title: string; keyword?: string }> | null | { exhausted: true; reason?: string }>, prompts: [] as string[],
     searchAd: false, demandTargets: [] as string[][], volume: {} as Record<string, number>, season: {} as Record<string, number>,
+    suggest: {} as Record<string, string[]>,
   };
 });
 vi.mock('../orchestrator/agent', () => ({
@@ -50,7 +51,9 @@ vi.mock('../analytics/topicDemand', async (orig) => ({
     return new Map(kws.filter((k) => k in h.volume).map((k) => [k, { keyword: k, volume: h.volume[k]!, approx: false, familyMax: h.volume[k]!, seasonIdx: h.season[k] ?? 1 }]));
   },
 }));
-vi.mock('../grounding/naver_autocomplete', () => ({ naverAutocomplete: async () => [] }));
+vi.mock('../grounding/naver_autocomplete', () => ({ naverAutocomplete: async (q: string) => h.suggest[q] ?? [] }));
+// 유튜브 자동완성도 가짜(실검색 각도 통합 테스트가 네트워크에 기대지 않게).
+vi.mock('../analytics/trendSignal', async (orig) => ({ ...(await orig<Record<string, unknown>>()), ytAutocomplete: async () => [] }));
 vi.mock('./notify', () => ({ notify: async () => {} }));
 
 describe('requiredSpeciesOf — 수종 필수 게이트의 눈(실제 수종 사전·카탈로그)', () => {
@@ -181,11 +184,46 @@ describe('proposeContentIdeas — 수종 필수 게이트(통합)', () => {
     fs.writeFileSync(path.join(h.root, 'brand.yaml'), BRAND_YAML, 'utf-8');
     setEnv('ANGLE_CHECK', 'false');      // 자동완성 조회 없음
     setEnv('CONTENT_DIVERSITY', 'off');  // 소재 포화 게이트 없음(빈 코퍼스라 무관하지만 명시)
-    h.rounds = []; h.prompts = []; h.searchAd = false; h.demandTargets = []; h.volume = {}; h.season = {};
+    setEnv('TOPIC_PERF_HINTS', 'false'); // 외부 인기 갱신(검색광고·유튜브 실호출) 없음
+    h.rounds = []; h.prompts = []; h.searchAd = false; h.demandTargets = []; h.volume = {}; h.season = {}; h.suggest = {};
   });
   afterEach(() => {
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     for (const k of Object.keys(saved)) delete saved[k];
+  });
+
+  it('유사 폴백도 실검색 각도를 거친다 — 2026-10-07 마가목 "신농본초경" 사고(각도 밖 유사 후보가 검사 없이 채택)', async () => {
+    setEnv('ANGLE_CHECK', 'true');
+    fs.mkdirSync(path.join(h.root, 'pieces'), { recursive: true });
+    fs.writeFileSync(path.join(h.root, 'pieces', 'index.json'), JSON.stringify([{
+      id: 'piece_old', title: '감나무 이름이 옛 책에 남은 이유', keyword: '감나무 이름', stage: 'published', brand: 'testbrand',
+      createdTs: '2026-09-01T00:00:00Z', updatedTs: '2026-09-01T00:00:00Z', errors: 0,
+    }]), 'utf-8');
+    h.suggest = { 감나무: ['감나무 묘목', '감나무 가지치기', '감나무 열매'] };
+    const mod = await load();
+    h.rounds = [
+      [{ title: '감나무 이름이 옛 책에 남은 까닭', keyword: '감나무 이름' }],   // 기존 글과 유사 + 연관어(묘목·가지치기·열매) 밖
+      [{ title: '감나무 묘목 고르는 법, 접목 자리부터', keyword: '감나무 묘목' }],
+    ];
+    const idea = await mod.proposeContentIdeas();
+    expect(idea?.title).toBe('감나무 묘목 고르는 법, 접목 자리부터');   // 종전이면 1라운드 유사 폴백으로 '까닭'이 채택됐다
+    expect(h.prompts).toHaveLength(2);
+    expect(h.prompts[1]).toContain('실검색 각도 밖(감나무)');
+    expect(h.prompts[1]).toContain('감나무 실검색 연관어');
+  });
+
+  it('1라운드 비수기 후보는 채택하지 않고 2라운드에서 제철 후보를 찾는다(2026-10-07)', async () => {
+    h.searchAd = true;
+    h.volume = { '무화과 가지 마름': 300, '감나무 묘목': 900 };
+    h.season = { '무화과 가지 마름': 0.24 };
+    const mod = await load();
+    h.rounds = [
+      [{ title: '무화과 가지 끝이 마르는 이유', keyword: '무화과 가지 마름' }],
+      [{ title: '감나무 묘목 고르는 법', keyword: '감나무 묘목' }],
+    ];
+    const idea = await mod.proposeContentIdeas();
+    expect(idea?.keyword).toBe('감나무 묘목');
+    expect(h.prompts[1]).toContain('"무화과 가지 끝이 마르는 이유"=검색 비수기(');
   });
 
   it('수종 없는 키워드는 제목의 수종으로 보정해 채택 — 1라운드에서 끝난다', async () => {
@@ -383,8 +421,9 @@ describe('proposeContentIdeas — 수종 필수 게이트(통합)', () => {
     expect(idea?.keyword).toBe('블루베리 물주기');
     const note = h.prompts[1]!;
     expect(note.split('"가을 물주기, 얼마나 자주"=').length - 1).toBe(1);
-    expect(note).toContain('"가을 물주기, 얼마나 자주"=후순위(검색 비수기');
-    expect(note).toContain('시즌 0.05) · 수종 없음(키워드 "가을 물주기 시기"');
+    // 2026-10-07 — 1라운드 비수기는 후순위가 아니라 기각(제철 후보를 2라운드에서 찾게). 수종 없음은 같은 줄에.
+    expect(note).toContain('"가을 물주기, 얼마나 자주"=검색 비수기(');
+    expect(note).toContain('지금 철에 사람들이 찾는 주제로) · 수종 없음(키워드 "가을 물주기 시기"');
   });
 
   it('킬스위치(BLOG_REQUIRE_SPECIES=false) — 종전 동작: 보정·기각 없이 첫 후보 채택, 프롬프트도 종전', async () => {
