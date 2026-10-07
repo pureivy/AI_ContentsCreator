@@ -161,6 +161,14 @@ class TypeBodyHumanTest(unittest.TestCase):
 
 
 class ImageCaptionMapTest(unittest.TestCase):
+    def test_off_by_default(self):
+        """2026-10-07 사장님이 실촬영 설명을 손으로 지움 — 기본은 설명 없음."""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("NAVER_REAL_PHOTO_CAPTION", None)
+            self.assertEqual(npub.image_caption_map([
+                {"file_path": "/x/images/blog-image-01.png", "alt": "감나무 — 비온디트리 농원에서 직접 촬영", "source": "archive_frame"}]), {})
+
+    @mock.patch.dict(os.environ, {"NAVER_REAL_PHOTO_CAPTION": "true"})
     def test_by_file_name(self):
         m = npub.image_caption_map([
             {"file_path": "/x/images/blog-image-01.png", "alt": " 라일락 — 비온디트리 농원에서 직접 촬영 ", "source": "archive_frame"},
@@ -202,43 +210,78 @@ class PlanRichFormatTest(unittest.TestCase):
         self.assertEqual({k: st[k] for k in ("titles", "fs16", "center", "captions")}, {"titles": 2, "fs16": 4, "center": 2, "captions": 1})
         kinds = [c["@ctype"] for c in out]
         self.assertEqual(kinds, ["documentTitle", "quotation", "text", "sectionTitle", "text", "image", "quotation",
-                                 "text", "sectionTitle", "text", "image"])  # 인용구 뒤 소제목 위에 여백 덩어리(2026-10-06)
+                                 "sectionTitle", "text", "image"])  # 여백은 소제목 안에(2026-10-07) — 따로 끼우는 빈 덩어리 없음
         # 맨 위 굵은 요약 두 줄 → 가운데 따옴표 인용구(사장님 수정 모양, 2026-10-06).
         q = out[1]
         self.assertEqual((q["layout"], q["align"]), ("default", "center"))
         self.assertEqual([p["nodes"][0]["value"] for p in q["value"]], ["라일락 꽃말은 첫사랑의 시작입니다", "향은 한두 주면 사라집니다."])
         # 소제목은 title 필드(value 아님), 원 문단 그대로.
-        self.assertEqual(out[3]["title"][0]["nodes"][0]["value"], "1) 꽃말 한 줄")
+        # 글 덩어리 뒤 소제목 — 소제목 안 맨 위 24 크기 빈 줄 하나 + 원 문단(2026-10-07).
+        self.assertEqual([_v(p) for p in out[3]["title"]], ["", "1) 꽃말 한 줄"])
+        self.assertEqual(out[3]["title"][0]["nodes"][0]["style"]["fontSizeCode"], "fs24")
         self.assertNotIn("value", out[3])
         self.assertEqual(out[2]["id"], "t1")  # 첫 글 덩어리는 원 id 유지
         body = out[2]["value"]
         vals = [_v(p) for p in body]
         # 줄과 줄 사이 빈 줄 — "꽃말이…" / (빈 줄) / "핵심 예시…" / (원래 빈 줄)
-        self.assertEqual(vals, ["꽃말이 뭔지 확인하러 오셨나요. 첫사랑입니다.", "", "핵심 예시 문장은 굵은 단독 줄입니다.", "", ""])
-        self.assertEqual([p["nodes"][0].get("style", {}).get("fontSizeCode") for p in body[-2:]], ["fs24", "fs24"])  # 소제목 위 24 크기 빈 줄 2개
+        self.assertEqual(vals, ["꽃말이 뭔지 확인하러 오셨나요. 첫사랑입니다.", "", "핵심 예시 문장은 굵은 단독 줄입니다."])  # 끝 빈 줄은 걷는다
         self.assertEqual(body[0]["nodes"][0]["style"]["fontSizeCode"], "fs16")
         # 소제목 바로 아래 빈 줄.
         self.assertEqual([_v(p) for p in out[4]["value"]], ["", "꽃말은 두 갈래입니다."])
         real = out[5]
         self.assertEqual((real["id"], real["ai"]), ("img-real", False))
         self.assertEqual(real["caption"][0]["nodes"][0]["value"], "라일락 — 비온디트리 농원에서 직접 촬영")
-        self.assertEqual(out[10]["caption"][0]["nodes"][0]["value"], "이미 있는 설명")
-        self.assertEqual((out[10]["id"], out[10]["ai"]), ("img-ai", True))
+        self.assertEqual(out[9]["caption"][0]["nodes"][0]["value"], "이미 있는 설명")
+        self.assertEqual((out[9]["id"], out[9]["ai"]), ("img-ai", True))
         self.assertEqual(out[6], doc[3])  # 인용구는 그대로
-        self.assertEqual([_v(p) for p in out[9]["value"]], ["", "본문 1) 꽃말 한 줄"])
+        self.assertEqual([_v(p) for p in out[7]["title"]], ["2) 이름 이야기"])  # 인용구 바로 뒤 소제목엔 여백 없음
+        self.assertEqual([_v(p) for p in out[8]["value"]], ["", "본문 1) 꽃말 한 줄"])
 
     def test_owner_edit_heading_size_and_space(self):
-        """2026-10-06 매실나무 임시저장 수정 — 소제목 24, 소제목 위 엔터 두 번. 맨 처음 소제목엔 여백을 넣지 않는다."""
+        """2026-10-06 매실나무 — 소제목 24. 2026-10-07 감나무 전정 — 소제목 위 빈 줄은 소제목 안에 하나. 맨 처음 소제목엔 없다."""
         doc = [text_comp(para(node("1) 첫 소제목", True)), para(node("본문."))),
                {"@ctype": "table", "id": "tb"},
                text_comp(para(node("2) 둘째 소제목", True)), para(node("본문 둘."))),]
         out, st = npub.plan_rich_format(doc, [{"text": "1) 첫 소제목"}, {"text": "2) 둘째 소제목"}], {}, new_id=_ids())
         kinds = [c["@ctype"] for c in out]
-        self.assertEqual(kinds, ["sectionTitle", "text", "table", "text", "sectionTitle", "text"])
+        self.assertEqual(kinds, ["sectionTitle", "text", "table", "sectionTitle", "text"])
         self.assertEqual(st["spaced"], 1)
         heads = [c for c in out if c["@ctype"] == "sectionTitle"]
-        self.assertTrue(all(h["title"][0]["nodes"][0]["style"]["fontSizeCode"] == "fs24" for h in heads))
-        self.assertEqual([_v(p) for p in out[3]["value"]], ["", ""])
+        self.assertTrue(all(p["nodes"][0]["style"]["fontSizeCode"] == "fs24" for h in heads for p in h["title"]))
+        self.assertEqual([_v(p) for p in heads[0]["title"]], ["1) 첫 소제목"])          # 맨 처음 소제목 — 여백 없음
+        self.assertEqual([_v(p) for p in heads[1]["title"]], ["", "2) 둘째 소제목"])    # 표 뒤 — 소제목 안 빈 줄 하나
+
+    def test_kaki_pruning_owner_edit_heading_space(self):
+        """2026-10-07 감나무 전정 글 — 사진 뒤 소제목엔 안에 빈 줄, 인용구·구분선 뒤엔 없음. 빈 덩어리를 따로 만들지 않는다."""
+        doc = [text_comp(para(node("본문.")), cid="t0"),
+               {"@ctype": "image", "id": "im", "fileName": "blog-image-02.png"},
+               text_comp(para(node("사진 뒤 소제목", True)), para(node("본문 둘."))),
+               {"@ctype": "quotation", "id": "q", "layout": "quotation_line", "value": [para(node("인용"))]},
+               text_comp(para(node("인용 뒤 소제목", True)), para(node("본문 셋."))),
+               {"@ctype": "horizontalLine", "id": "hr"},
+               text_comp(para(node("구분선 뒤 소제목", True)), para(node("본문 넷."))),
+               text_comp(para(node("글 뒤 소제목", True)))]
+        heads = ["사진 뒤 소제목", "인용 뒤 소제목", "구분선 뒤 소제목", "글 뒤 소제목"]
+        out, st = npub.plan_rich_format(doc, heads, {}, new_id=_ids())
+        titles = {_v(c["title"][-1]): [_v(p) for p in c["title"][:-1]] for c in out if c["@ctype"] == "sectionTitle"}
+        self.assertEqual(titles, {"사진 뒤 소제목": [""], "인용 뒤 소제목": [], "구분선 뒤 소제목": [], "글 뒤 소제목": [""]})
+        self.assertEqual(st["spaced"], 2)
+        self.assertFalse(any(c["@ctype"] == "text" and not any(_v(p) for p in c["value"]) for c in out))  # 빈 덩어리 없음
+
+    def test_frame_boxes_split_by_blank_line_merge(self):
+        """2026-10-07 감나무 전정 글 — 빈 줄로 갈린 확인표(>>>)는 한 상자로. 따옴표(>>)는 따로 둔다. 사람·API 경로 같음."""
+        body = ">>> 전정 전 확인표\n>>> 1) 잎이 다 졌는지\n>>> 2) 눈이 단단한지\n\n>>> 3) 절반 넘게 자르지 않았는지\n\n끝 문단."
+        with mock.patch.object(npub, "uid", _ids()):
+            comps = npub.parse_body_to_comps(body)
+        self.assertEqual([c["@ctype"] for c in comps], ["quotation", "text"])
+        self.assertEqual([_v(p) for p in comps[0]["value"]],
+                         ["전정 전 확인표", "1) 잎이 다 졌는지", "2) 눈이 단단한지", "3) 절반 넘게 자르지 않았는지"])
+        lines = body.split("\n")
+        self.assertEqual(npub.frame_continues_after_blank(lines, 3), 4)
+        self.assertEqual(npub.frame_continues_after_blank(lines, 5), -1)   # 빈 줄 뒤 본문 — 상자 끝
+        with mock.patch.object(npub, "uid", _ids()):
+            two = npub.parse_body_to_comps(">> 첫 인용\n\n>> 둘째 인용")
+        self.assertEqual([c["@ctype"] for c in two], ["quotation", "quotation"])
 
     def test_owner_edit_shape_gaps_and_lists(self):
         """2026-10-06 사장님이 고친 대추나무 임시저장 글 모양 — 줄마다 빈 줄, 목록 줄끼리는 붙인다, 이미 빈 줄이면 겹치지 않는다."""
@@ -359,7 +402,7 @@ class ApiPathTest(unittest.TestCase):
         out, st = npub.plan_rich_format(comps, heads, {}, new_id=_ids())
         self.assertEqual(st["titles"], 2)
         self.assertEqual(st["center"], 2)
-        titles = [c["title"][0]["nodes"][0]["value"] for c in out if c["@ctype"] == "sectionTitle"]
+        titles = [c["title"][-1]["nodes"][0]["value"] for c in out if c["@ctype"] == "sectionTitle"]  # 맨 위는 여백 빈 줄일 수 있다
         self.assertEqual(titles, ["1. 꽃말 한 줄", "꽃이 없는 10월"])
         # 2026-10-06: 맨 위 굵은 요약은 가운데 따옴표 인용구 한 덩어리(사장님이 고친 모양) — 글자 굵게는 유지, 16pt 는 안 입힌다.
         self.assertEqual((out[0]["@ctype"], out[0]["layout"], out[0]["align"]), ("quotation", "default", "center"))
@@ -420,6 +463,7 @@ class ReviewFixesTest(unittest.TestCase):
         self.assertIn("소제목 일부만", msg)
         self.assertEqual(npub.rich_format_heading_issue("error:boom"), "")
 
+    @mock.patch.dict(os.environ, {"NAVER_REAL_PHOTO_CAPTION": "true"})
     def test_caption_only_real_photos(self):
         m = npub.image_caption_map([
             {"file_path": "/x/images/blog-image-01.png", "alt": "라일락 — 비온디트리 농원에서 직접 촬영", "source": "archive_frame"},

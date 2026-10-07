@@ -102,8 +102,37 @@ export function classifyClaim(c: { text: string; kind: ClaimKind }): 'judgment' 
 }
 
 /** 줄 머리 구조 마커(H1~H6·글머리 기호·번호 매기기·인용 `>`+) 하나. `> - ` 처럼 겹친 마커(인용 속 목록)에
- * 대응하려면 이 정규식을 반복 매칭해야 한다(Fix round 2) — stripLeadingMarkers/lineMarkerLen 이 그렇게 한다. */
-const LEADING_MARKER_RE = /^(?:#{1,6}\s*|[-*]\s+|\d+\.\s+|>+\s*)/;
+ * 대응하려면 이 정규식을 반복 매칭해야 한다(Fix round 2) — stripLeadingMarkers/lineMarkerLen 이 그렇게 한다.
+ * 번호는 `1.` 과 `1)` 둘 다(2026-10-07) — 우리 글의 목록은 대개 `1)` 꼴인데 이를 몰라, 목록 첫 문장을 지우면 번호까지
+ * 함께 지워졌다(감나무 전정 글: "2) …2~3개 고릅니다. 같은 높이에서…" → "같은 높이에서…"만 남아 2번이 사라짐). */
+const LEADING_MARKER_RE = /^(?:#{1,6}\s*|[-*]\s+|\d+[.)]\s+|>+\s*)/;
+
+/** 번호 목록 줄(인용 `>` 접두 허용) — [접두, 번호, 구두점]. 줄 통째 삭제 뒤 번호 다시 매기기에 쓴다. */
+const NUMBERED_LINE_RE = /^(\s*(?:>+\s*)?)(\d+)([.)])\s/;
+
+/**
+ * 줄 통째 삭제로 비운 줄을 걷어 내고, 그 줄이 번호 목록 항목이었으면 같은 목록의 뒤 번호를 하나씩 당긴다(순수, 2026-10-07).
+ * 종전엔 빈 줄로 남겨 ① 인용 확인표가 그 자리에서 두 상자로 갈리고(발행기는 빈 줄에서 인용을 끊는다) ② 번호가 1·2·3·5·6 으로 비었다.
+ * 같은 목록 = 삭제 줄 바로 뒤로 이어지는, 같은 접두(인용 깊이)의 비지 않은 줄들. 그 안의 번호 줄만 고친다.
+ */
+function dropRemovedLines(lines: string[], removed: ReadonlyMap<number, string>): string[] {
+  const out = [...lines];
+  for (const idx of [...removed.keys()].sort((a, b) => b - a)) {
+    const m = NUMBERED_LINE_RE.exec(removed.get(idx) ?? '');
+    out.splice(idx, 1);
+    if (!m) continue;
+    const prefix = m[1]!.trim();
+    for (let j = idx; j < out.length; j++) {
+      const line = out[j]!;
+      if (!line.trim()) break;
+      const lead = /^\s*(>*)/.exec(line)![1]!;
+      if (lead !== prefix.replace(/\s+/g, '')) break;
+      const n = NUMBERED_LINE_RE.exec(line);
+      if (n && Number(n[2]) > Number(m[2])) out[j] = line.replace(NUMBERED_LINE_RE, (_all, p: string, d: string, q: string) => `${p}${Number(d) - 1}${q} `);
+    }
+  }
+  return out;
+}
 
 /** 줄 머리 구조 마커를 남은 게 없을 때까지 반복해서 벗긴 나머지 텍스트. */
 function stripLeadingMarkers(line: string): string {
@@ -566,6 +595,7 @@ export function applySentenceRepairs(
   const lines = body.split('\n');
   let applied = 0;
   const missed: string[] = [];
+  const removed = new Map<number, string>(); // 통째 삭제로 비운 줄(원래 내용) — 마지막에 걷어 낸다(dropRemovedLines)
 
   for (let i = 0; i < unsupported.length; i++) {
     const original = unsupported[i]!;
@@ -591,8 +621,9 @@ export function applySentenceRepairs(
 
     let next: string;
     if (r.action === 'delete' && start <= markerLen && loc.end >= line.length) {
-      // 마커 뒤 내용 전체를 지우는 삭제 — 마커만 남기면("## ", "- ") 빈 제목·빈 목록이 되므로 줄 자체를 비운다.
+      // 마커 뒤 내용 전체를 지우는 삭제 — 마커만 남기면("## ", "- ") 빈 제목·빈 목록이 되므로 줄 자체를 걷어 낸다.
       next = '';
+      if (line.trim()) removed.set(loc.lineIdx, line);
     } else {
       next = spliceReplace(line, start, loc.end, replacement);
     }
@@ -600,7 +631,7 @@ export function applySentenceRepairs(
     applied++;
   }
 
-  const out = lines.join('\n').replace(/\n{3,}/g, '\n\n');
+  const out = dropRemovedLines(lines, removed).join('\n').replace(/\n{3,}/g, '\n\n');
   return { body: out, applied, missed };
 }
 

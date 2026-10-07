@@ -610,6 +610,11 @@ def parse_body_to_comps(body: str) -> list:
             quote_buf.append(make_body_para(re.sub(r"^[-*]\s+", "• ", s, count=1)))
             i += 1
             continue
+        if not s and quote_buf and quote_layout == "quotation_corner":
+            j = frame_continues_after_blank(lines, i)
+            if j >= 0:  # 빈 줄 뒤 또 프레임 줄 — 같은 상자로(frame_continues_after_blank)
+                i = j
+                continue
         flush_quote()
         if s:
             # 목록 정돈 — SE 목록 컴포넌트 미지원이라 문단으로 들어간다. 원시 "- " 노출 대신 "• "로
@@ -994,6 +999,10 @@ def type_body_human(page, se_text: dict, images: list, issues: list, ai_flags: l
                 while k < len(body_lines):
                     m2 = re.match(r"^(>{1,3})\s?(.*)$", body_lines[k].strip())
                     if not (m2 and len(m2.group(1)) == depth):
+                        j = frame_continues_after_blank(body_lines, k) if depth == 3 else -1
+                        if j >= 0:
+                            k = j  # 빈 줄 뒤 이어지는 프레임 줄 — 같은 상자로
+                            continue
                         break
                     qlines.append(m2.group(2))
                     k += 1
@@ -1168,6 +1177,20 @@ _FRAME_ITEM_RE = re.compile(r"^(?:\d+[.)]|[-*•])\s+\S")
 _PARA_LIST_LEAD_RE = re.compile(r"^((?:\*\*|__|\*|_)+)(\d+\.|-)\s+")
 
 
+def frame_continues_after_blank(body_lines: list, k: int) -> int:
+    """k 가 빈 줄이고 그 빈 줄(들) 뒤가 바로 또 프레임(>>>) 줄이면 그 줄의 인덱스, 아니면 -1(2026-10-07).
+    프레임 상자 사이에 빈 줄만 있으면 한 상자로 잇는다 — 사장님이 감나무 전정 글에서 둘로 갈린 확인표를 손으로 합쳤다
+    (갈린 원인은 사실 게이트가 지운 항목 자리에 남긴 빈 줄 — factGate.dropRemovedLines 로 막았지만 작가가 띄어 써도 같다).
+    따옴표(>>)·버티컬라인(>)은 잇지 않는다 — 빈 줄로 띄운 두 인용은 따로 쓴 인용이다. 사람·API 두 경로가 같은 규칙을 쓴다."""
+    if k >= len(body_lines) or body_lines[k].strip():
+        return -1
+    j = k
+    while j < len(body_lines) and not body_lines[j].strip():
+        j += 1
+    m = re.match(r"^(>{1,3})(?!>)", body_lines[j].strip()) if j < len(body_lines) else None
+    return j if m and len(m.group(1)) == 3 else -1
+
+
 def absorb_frame_items(body_lines: list, k: int, qlines: list) -> int:
     """>>> 상자 직후 연속된 목록 항목(빈 줄 전까지)을 qlines 에 붙이고 다음 인덱스를 돌려준다.
     작가가 첫 줄에만 >>> 를 달면 "1) …" 항목들이 상자 밖 본문으로 빠진다(참고 블로그 2026-10-04 실측).
@@ -1212,12 +1235,21 @@ def rich_format_enabled() -> bool:
     return os.environ.get("NAVER_RICH_FORMAT", "true").strip().lower() not in ("0", "false", "no", "off")
 
 
+def real_photo_caption_enabled() -> bool:
+    """실촬영 컷 사진 설명 — 기본 끔(2026-10-07 사장님: 감나무 전정 글에서 "…직접 촬영" 설명을 손으로 지움).
+    NAVER_REAL_PHOTO_CAPTION=true 면 종전처럼 단다."""
+    return os.environ.get("NAVER_REAL_PHOTO_CAPTION", "false").strip().lower() in ("1", "true", "yes", "on")
+
+
 def image_caption_map(images: list) -> dict:
     """이미지 파일명 → 사진 설명(alt). 에디터의 image 컴포넌트는 fileName 으로 대응한다.
+    기본은 빈 사전(설명 안 닮) — real_photo_caption_enabled() 가 켜졌을 때만 아래대로 만든다.
     실촬영 컷은 finalize 가 alt 를 "<수종> — 비온디트리 농원에서 직접 촬영"으로 단다(그대로 설명이 된다).
     리뷰(2026-10-05): 실촬영 컷(is_real_photo)에만 단다 — 생성 이미지의 alt 는 "…근접 사진"처럼 읽혀, 설명으로 달면
     AI 이미지가 실사진처럼 보인다(네이버 07-06 스팸 공지 위험)."""
     out = {}
+    if not real_photo_caption_enabled():
+        return out
     for e in images or []:
         if not is_real_photo(e):
             continue
@@ -1309,8 +1341,12 @@ def _rf_empty_para(new_id) -> dict:
 
 # 소제목 글자 크기(2026-10-06 사장님 수정: 30 → 24) — 소제목 노드에 명시해 편집기 기본(30)을 쓰지 않는다.
 HEADING_FONT_CODE = "fs24"
-# 소제목 위 여백 — 사장님이 소제목마다 위에 엔터 두 번(24 크기 빈 줄 2개)을 넣었다. 같은 높이가 되게 24 크기 빈 줄 2개.
-HEADING_SPACE_LINES = 2
+# 소제목 위 여백 — 소제목 컴포넌트 **안** 맨 위에 24 크기 빈 줄 하나(2026-10-07 사장님 감나무 전정 글 수정 모양).
+# 종전(10-06)엔 빈 줄 2개를 소제목 앞 글 덩어리 끝에 붙이거나 빈 줄만 든 글 덩어리로 따로 넣었는데, 앞이 사진·인용구·구분선이면
+# 빈 덩어리가 저장 때 사라져(감나무 전정·깍지벌레 글 실측: 남은 게 0) 사장님이 사진 뒤 소제목 3곳에 손으로 넣었다.
+# 소제목 안의 빈 줄은 저장 뒤에도 남는다. 인용구·구분선 뒤 소제목엔 사장님도 넣지 않았다(그 자체로 띄어 보인다).
+HEADING_SPACE_LINES = 1
+_HEADING_NO_SPACE_AFTER = ("quotation", "horizontalLine")
 
 
 def _rf_heading_para(para: dict) -> dict:
@@ -1340,8 +1376,9 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
     ④ 이미지 → 사진 설명(alt, 이미 설명이 있으면 그대로). 이미지 컴포넌트의 id·ai 는 건드리지 않는다 — 실촬영 컷의
        AI 표시 해제(set_images_ai skip_ids·convert_quotes_and_ai)가 id·순서로 짝을 맞춘다.
     ⑤ 본문 줄과 줄 사이, 소제목 바로 아래에 빈 줄 한 줄 — 휴대폰에서 줄마다 숨 쉴 틈을 둔다(목록 줄끼리는 붙인다).
-    ⑥ 소제목 글자 24(fs24, 굵게), 소제목 위에 24 크기 빈 줄 두 개 — 2026-10-06 사장님이 매실나무 임시저장 글에서
-       소제목을 30→24 로 줄이고 소제목마다 위에 엔터 두 번을 넣은 모양.
+    ⑥ 소제목 글자 24(fs24, 굵게) — 2026-10-06 사장님이 매실나무 임시저장 글에서 30→24 로 줄인 모양. 소제목 위 여백은
+       소제목 컴포넌트 안 맨 위 24 크기 빈 줄 하나(2026-10-07 감나무 전정 글 수정 모양, HEADING_SPACE_LINES 주석).
+       글 맨 처음 소제목과 인용구·구분선 바로 뒤 소제목엔 넣지 않는다.
     ⑦ 실촬영 컷(real_photos 파일명) → PC 표시 폭 photo_width(작게) + 가운데 정렬 — 2026-10-06 사장님 요청(PC 화질).
        생성 이미지는 문서 너비 그대로. photo_width=0 이면 건너뛴다.
 
@@ -1367,21 +1404,24 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
                 out.append({"@ctype": "quotation", "id": new_id(), "layout": "default", "align": "center",
                             "value": list(lead["paras"]), "source": None})
 
-    def add_heading_space():
-        """소제목 위 여백(빈 줄 HEADING_SPACE_LINES 개, 24 크기). 바로 앞이 글 덩어리면 그 끝의 빈 줄을 걷고 붙이고,
-        아니면(사진·인용구·표·구분선 뒤) 빈 줄만 든 글 덩어리를 하나 넣는다. 글 맨 처음 소제목엔 넣지 않는다."""
-        if not any((c or {}).get("@ctype") not in ("documentTitle",) for c in out):
-            return
-        spacers = [_rf_spacer_para(new_id) for _ in range(HEADING_SPACE_LINES)]
+    def heading_spacers() -> list:
+        """소제목 안 맨 위에 넣을 빈 줄(HEADING_SPACE_LINES 개, 24 크기). 바로 앞 글 덩어리 끝의 빈 줄은 걷는다(여백이 겹치지 않게,
+        다 비면 덩어리째 뺀다). 글 맨 처음 소제목, 인용구·구분선 바로 뒤 소제목엔 넣지 않는다."""
         last = out[-1] if out else None
         if last and last.get("@ctype") == "text":
             vals = list(last.get("value") or [])
             while vals and not _rf_para_text(vals[-1]):
                 vals.pop()
-            out[-1] = {**last, "value": vals + spacers}
-        else:
-            out.append({"@ctype": "text", "id": new_id(), "layout": "default", "value": spacers})
+            if vals:
+                out[-1] = {**last, "value": vals}
+            else:
+                out.pop()
+        if not any((c or {}).get("@ctype") not in ("documentTitle",) for c in out):
+            return []
+        if (out[-1] or {}).get("@ctype") in _HEADING_NO_SPACE_AFTER:
+            return []
         stats["spaced"] += 1
+        return [_rf_spacer_para(new_id) for _ in range(HEADING_SPACE_LINES)]
 
     for c in components or []:
         ct = (c or {}).get("@ctype")
@@ -1425,8 +1465,8 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
                 hq[txt] -= 1
                 flush()
                 close_lead()
-                add_heading_space()
-                out.append({"@ctype": "sectionTitle", "id": new_id(), "layout": "default", "title": [_rf_heading_para(para)]})
+                out.append({"@ctype": "sectionTitle", "id": new_id(), "layout": "default",
+                            "title": heading_spacers() + [_rf_heading_para(para)]})
                 stats["titles"] += 1
                 after_title[0] = True
                 continue

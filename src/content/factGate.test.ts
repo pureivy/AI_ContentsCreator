@@ -1016,3 +1016,28 @@ describe('사실 게이트 — 판단 유보 꼴은 판정 면제가 아니다(2
     expect(r.filtered?.judgment).toEqual([]);
   });
 });
+
+describe('applySentenceRepairs — 번호 목록 삭제(2026-10-07 감나무 전정 글)', () => {
+  it('`2)` 목록 첫 문장을 지워도 번호는 남는다', () => {
+    const body = '순서는 이렇게 갑니다.\n\n1) 중심 줄기 하나를 정합니다.\n2) 그 줄기에서 벌어진 가지를 2~3개 고릅니다. 같은 높이에서 겹쳐 나온 것은 하나만 남기세요.\n3) 안쪽으로 파고드는 가지를 자릅니다.';
+    const r = applySentenceRepairs(body, ['그 줄기에서 벌어진 가지를 2~3개 고릅니다.'], [{ index: 1, action: 'delete', replacement: '' }]);
+    expect(r.applied).toBe(1);
+    expect(r.body).toContain('\n2) 같은 높이에서 겹쳐 나온 것은 하나만 남기세요.\n3) ');
+  });
+  it('인용 확인표 항목을 통째로 지우면 줄을 걷고 뒤 번호를 당긴다 — 빈 줄이 남아 상자가 갈리지 않는다', () => {
+    const body = '확인하세요.\n\n>>> 전정 전 확인표\n>>> 1) 잎이 다 졌는지\n>>> 2) 남길 가지 2~3개 골랐는지\n>>> 3) 절반 넘게 자르지 않았는지\n>>> 4) 거름은 전정 뒤에\n\n끝.';
+    const r = applySentenceRepairs(body, ['남길 가지 2~3개 골랐는지'], [{ index: 1, action: 'delete', replacement: '' }]);
+    expect(r.applied).toBe(1);
+    expect(r.body).toBe('확인하세요.\n\n>>> 전정 전 확인표\n>>> 1) 잎이 다 졌는지\n>>> 2) 절반 넘게 자르지 않았는지\n>>> 3) 거름은 전정 뒤에\n\n끝.');
+  });
+  it('두 항목을 지우면 둘만큼 당기고, 목록 밖(빈 줄 너머) 번호는 그대로', () => {
+    const body = '1) 가 항목입니다\n2) 나 항목 3cm 입니다\n3) 다 항목입니다\n4) 라 항목 5cm 입니다\n5) 마 항목입니다\n\n3) 다른 목록';
+    const r = applySentenceRepairs(body, ['나 항목 3cm 입니다', '라 항목 5cm 입니다'],
+      [{ index: 1, action: 'delete', replacement: '' }, { index: 2, action: 'delete', replacement: '' }]);
+    expect(r.body).toBe('1) 가 항목입니다\n2) 다 항목입니다\n3) 마 항목입니다\n\n3) 다른 목록');
+  });
+  it('보통 문장 줄을 통째로 지워도 빈 줄이 겹치지 않는다', () => {
+    const r = applySentenceRepairs('앞 문단.\n\n지울 문장 3cm 입니다.\n\n뒤 문단.', ['지울 문장 3cm 입니다.'], [{ index: 1, action: 'delete', replacement: '' }]);
+    expect(r.body).toBe('앞 문단.\n\n뒤 문단.');
+  });
+});
