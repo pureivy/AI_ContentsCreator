@@ -14,6 +14,7 @@ import { isSafeBrandSlug, activeBrandSlug, getBrand } from '../content/brand';
 import { llmWikiFor } from '../wiki/llmwiki';
 import { appendMemory, appendActivity } from '../agents/workspace';
 import { pieceStore } from '../content/pieces';
+import { viewsAtAge } from './speciesPopularity';
 import { GRAPH, FB_GRAPH } from '../tools/metaPublish';
 // cardnewsPerf ↔ shortsPerf 순환 — 함수 선언만이라 안전(최상위 상호 호출 없음)
 import { cardnewsSignal, parseIgInsights } from './cardnewsPerf';
@@ -571,5 +572,72 @@ export function shortsTopicSignalBlock(slug?: string): string {
       `잘 된 계열(상위):\n${agg.slice(0, 5).map(fmt).join('\n')}\n` +
       `부진 계열(하위):\n${bottom.reverse().map(fmt).join('\n')}\n` +
       `반영 지침: 파생 숏폼까지 잘 되는 글이 좋은 글이다 — 상위 계열의 소재·접근 방식(예: 구별법·원인 진단처럼 결과가 보이는 틀)은 인접 영역으로 확장하고, 하위 계열과 같은 틀의 반복은 줄여라. 소재 범위의 기준은 언제나 [브랜드 컨텍스트]다.\n\n`;
+  } catch { return ''; }
+}
+
+/**
+ * 히트 제목(2026-10-07 사장님 "수종이 아니라 주제에 따라 갈리는 것 아냐?") — 실측으로 확인: 조회 차이는 수종보다 같은 수종
+ * 안의 주제로 갈린다(블루베리 216~9,284 · 수종 없는 "과실나무 전정, 어린 나무 주지 세 개 고르는 법" 인스타 19,505).
+ * 위 계열 블록은 키워드 묶음이라 '어떤 제목 꼴이 터졌나'가 안 보인다 — 채널 중앙값의 몇 배였는지로 상위 제목을 보여 준다.
+ * 고정 나이(게시 7~14일, speciesPopularity.viewsAtAge)로 재 오래된 편이 유리하지 않게. 채널끼리는 배수로 비교한다(눈금이 다르다).
+ */
+export interface HitTitleRow { title: string; channel: 'ig' | 'yt' | 'blog'; views: number }
+export const HIT_MIN_CHANNEL_N = 10;
+export const HIT_MIN_RATIO = 2;
+
+/** 히트 제목 고르기(순수) — 채널 중앙값 대비 배수 상위, 같은 제목은 가장 좋은 채널 하나만. 표본 적은 채널은 뺀다. */
+export function pickHitTitles(rows: readonly HitTitleRow[], n = 6): Array<HitTitleRow & { ratio: number }> {
+  const med = (xs: number[]): number => {
+    const s = [...xs].sort((a, b) => a - b);
+    return s.length ? (s.length % 2 ? s[(s.length - 1) / 2]! : (s[s.length / 2 - 1]! + s[s.length / 2]!) / 2) : 0;
+  };
+  const m = new Map<string, { n: number; med: number }>();
+  for (const ch of ['ig', 'yt', 'blog'] as const) {
+    const xs = rows.filter((r) => r.channel === ch).map((r) => r.views);
+    m.set(ch, { n: xs.length, med: med(xs) });
+  }
+  const best = new Map<string, HitTitleRow & { ratio: number }>();
+  for (const r of rows) {
+    const c = m.get(r.channel)!;
+    const title = (r.title ?? '').trim();
+    if (!title || c.n < HIT_MIN_CHANNEL_N || c.med <= 0) continue;
+    const ratio = Math.round((r.views / c.med) * 10) / 10;
+    if (ratio < HIT_MIN_RATIO) continue;
+    const prev = best.get(title);
+    if (!prev || ratio > prev.ratio) best.set(title, { ...r, title, ratio });
+  }
+  return [...best.values()].sort((a, b) => b.ratio - a.ratio).slice(0, n);
+}
+
+/** 히트 제목 블록 — 표본이 모자라거나 실패하면 빈 문자열(무주입).
+ *  exclude: 지금 코드가 막는 제목(최근 축·축 상한·계열 쿨다운·시기 밖·최근 수종)은 뺀다 — 프롬프트가 코드가 기각할 꼴을
+ *  권하면 1라운드 제안이 통째로 헛돈다(demandSignalBlock 이 최근 수종·쿨다운 행을 빼는 것과 같은 이유). */
+export function hitTitleBlock(slug?: string, now = Date.now(), exclude: (title: string) => boolean = () => false): string {
+  try {
+    const brand = slug ?? activeBrandSlug() ?? '';
+    const rows: HitTitleRow[] = [];
+    for (const s of shortsStore().list()) {
+      if ((s.brand ?? '') !== brand) continue;
+      let samples: MetricSample[];
+      try { samples = readMetrics(s.id); } catch { continue; }
+      const title = s.title ?? s.topic ?? '';
+      const ig = s.igReelId ? viewsAtAge(samples, 'meta:ig', s.metaPublishedTs ?? s.youtubeTs, now) : null;
+      const yt = s.youtubeId ? viewsAtAge(samples, 'youtube:api', s.youtubeTs, now) : null;
+      if (ig !== null) rows.push({ title, channel: 'ig', views: ig });
+      if (yt !== null) rows.push({ title, channel: 'yt', views: yt });
+    }
+    for (const p of pieceStore().list()) {
+      if ((p.brand ?? '') !== brand || !p.publishedTs) continue;
+      let samples: MetricSample[];
+      try { samples = readMetrics(p.id); } catch { continue; }
+      const v = viewsAtAge(samples, 'scrape:naver_advisor', p.publishedTs, now);
+      if (v !== null) rows.push({ title: p.title, channel: 'blog', views: v });
+    }
+    const hits = pickHitTitles(rows, 30).filter((h) => { try { return !exclude(h.title); } catch { return true; } }).slice(0, 6);
+    if (hits.length < 3) return '';
+    const label = { ig: '인스타', yt: '유튜브', blog: '블로그' } as const;
+    return '[히트 제목 — 게시 7~14일 조회가 그 채널 중앙값의 몇 배였나(우리 실측)]\n' +
+      hits.map((h) => `- "${h.title}" (${label[h.channel]} ${h.views.toLocaleString()}회 · ${h.ratio}배)`).join('\n') + '\n' +
+      '반영 지침: 같은 수종이라도 주제에 따라 수십 배 갈린다. 소재를 되풀이하지 말고 제목의 꼴을 빌려라 — 위 제목들처럼 독자가 지금 확인하거나 손댈 대상(어느 가지·어떤 신호·무엇부터)이 제목에 드러나게.\n\n';
   } catch { return ''; }
 }

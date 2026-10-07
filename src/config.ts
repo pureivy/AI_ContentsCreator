@@ -142,6 +142,8 @@ export interface Config {
   readonly moduleRecentPieces: number;
   /** 실검색 각도 검증(2026-09-21) — 후보 수종의 네이버·유튜브 자동완성을 즉석 조회해 제목의 각도가 그 안에 있는지 본다. 없으면 후순위+연관어 노트. off 면 조회·판정 없음. */
   readonly angleCheck: boolean;
+  /** 주제 제안에 반응 실측 참고 블록(2026-10-07) — 히트 제목(채널 중앙값 대비 배수 상위)과 수종 반응 참고표. 참고만, 게이트 아님. */
+  readonly topicPerfHints: boolean;
   /** 블로그 자율 주제 수종 필수(2026-10-02) — 자체 데이터 163편: 메인 키워드에 수종이 있는 글이 14일 ×1.4·30일 ×2.5 조회,
    *  하위 15편은 대부분 수종 없는 일반 주제. on 이면 제안 프롬프트가 수종에 묶고, 일반 키워드는 제목의 수종으로 보정하고,
    *  그래도 없으면 '수종 없음'으로 기각(수종 붙은 후보가 하나도 없는 틱만 최후 채택). off 면 종전 동작. */
@@ -508,6 +510,9 @@ export const CONFIG: Config = {
   shortsLore: envBool('SHORTS_LORE', true),
   // 실검색 각도 검증(2026-09-21) — 호두나무 실사고: 수종 검색량(9,700)만 보고 '흙부터'라는 각도를 두뇌가 지어냈다.
   angleCheck: envBool('ANGLE_CHECK', true),
+  // 히트 제목·수종 반응 참고(2026-10-07 사장님 "인기 있는 수종과 주제로") — 프롬프트 참고 블록만. 갈리는 건 수종보다 주제라
+  // 수종 점수는 정렬·후순위에 안 쓴다(speciesPopularity 머리말의 실측).
+  topicPerfHints: envBool('TOPIC_PERF_HINTS', true),
   blogRequireSpecies: envBool('BLOG_REQUIRE_SPECIES', true),
   // 시기·수치 원문 대조(2026-08-27 권고 1) — 활엽수 실사고: 블로그 "근거 확실치 않다" ↔ 쇼츠 "지금이 적기" + 오버레이 "8월".
   timingParity: envBool('TIMING_PARITY', true),

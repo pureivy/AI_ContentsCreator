@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { angleTokens, angleMatches, angleVerdict, angleNote, gardenSuggestions } from './angleCheck';
+import { angleTokens, angleMatches, angleVerdict, angleNote, gardenSuggestions, inflowSuggestionsFor, searchless } from './angleCheck';
 
 const sug = ['호두나무 심는 시기', '호두나무 열매 안 열리는 이유', '호두나무 가지치기', '호두나무 묘목 가격', '호두나무 키우기', '호두 나무 꽃'];
 
@@ -53,5 +53,24 @@ describe('angleNote', () => {
   it('연관어를 한 줄로, 없으면 빈 문자열', () => {
     expect(angleNote('호두나무', ['심는', '시기'])).toBe('호두나무 실검색 연관어: 심는 · 시기 — 이 중 하나로 각도를 잡아라');
     expect(angleNote('호두나무', [])).toBe('');
+  });
+});
+
+describe('inflowSuggestionsFor — 우리 블로그 유입 검색어(2026-10-07)', () => {
+  it('그 수종(또는 나무 뗀 어간) 유입어만, 중복 없이', () => {
+    const q = ['마가목 묘목 심는 시기', '마가목묘목심는시기', '감나무 깍지벌레 증상', '자두 가지치기', '나무 이식 적기'];
+    expect(inflowSuggestionsFor('마가목', q)).toEqual(['마가목 묘목 심는 시기']);
+    expect(inflowSuggestionsFor('자두나무', q)).toEqual(['자두 가지치기']);
+    expect(inflowSuggestionsFor('', q)).toEqual([]);
+  });
+});
+
+describe('searchless — 검색 근거 없음(2026-10-07 설중매)', () => {
+  it('연관어 없음 + 재배 수요 0 으로 잰 경우만', () => {
+    expect(searchless({ status: 'unknown' }, 0)).toBe(true);
+    expect(searchless({ status: 'unknown' }, undefined)).toBe(false);  // 못 쟀으면 종전대로 통과
+    expect(searchless({ status: 'unknown' }, 560)).toBe(false);
+    expect(searchless({ status: 'ok' }, 0)).toBe(false);
+    expect(searchless(null, 0)).toBe(false);
   });
 });

@@ -95,7 +95,35 @@ export function angleVerdict(species: string, title: string, suggestions: readon
   return { status: matched.length ? 'ok' : 'unverified', matched, angles };
 }
 
+/**
+ * 검색 근거 없음(순수, 2026-10-07) — 연관어가 하나도 없고(unknown) 재배 수요도 0 으로 **잰** 수종. 종전엔 unknown 이 통과라
+ * '아무도 안 찾는 주제'가 '찾는 사람은 있는데 각도만 벗어난 주제'(unverified → 후순위)보다 유리했다(실측: "설중매나무 월동" 채택,
+ * 재배 검색 0·자동완성 없음 — 같은 틱의 무화과·밤나무·호두나무 각도 밖은 기각). 재배 수요를 못 쟀으면(undefined) 종전대로 통과.
+ */
+export function searchless(v: Pick<AngleVerdict, 'status'> | null, cultivation: number | undefined): boolean {
+  return !!v && v.status === 'unknown' && cultivation === 0;
+}
+
 /** 다음 라운드 노트 한 줄(순수) — 두뇌가 이 안에서 각도를 잡게. */
 export function angleNote(species: string, angles: readonly string[]): string {
   return angles.length ? `${species} 실검색 연관어: ${angles.join(' · ')} — 이 중 하나로 각도를 잡아라` : '';
+}
+
+/**
+ * 우리 블로그 유입 검색어 중 그 수종 것(순수, 2026-10-07) — 자동완성은 '남들이 치는 말', 유입어는 '우리 글에 실제로
+ * 들어온 말'이다(예: "마가목 묘목 심는 시기"). 연관어에 함께 넣어 각도 판정의 근거를 넓힌다. 수종명 또는 '나무' 뗀 어간 포함.
+ */
+export function inflowSuggestionsFor(species: string, queries: readonly string[]): string[] {
+  const sp = compact(species);
+  if (!sp) return [];
+  const stem = sp.endsWith('나무') && sp.length >= 4 ? sp.slice(0, -2) : '';
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const q of queries) {
+    const k = compact(q);
+    if (!k || seen.has(k) || !(k.includes(sp) || (stem && k.includes(stem)))) continue;
+    seen.add(k);
+    out.push(String(q).trim());
+  }
+  return out;
 }

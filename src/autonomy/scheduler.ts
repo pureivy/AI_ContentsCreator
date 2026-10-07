@@ -17,11 +17,14 @@ import { microJSON } from '../orchestrator/agent';
 import { asString } from '../util/str';
 import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix, offBrandTerm, getBrand, lintLexicon } from '../content/brand';
 import { titleTypeGuidanceBlock } from '../analytics/titleTiming';
-import { shortsTopicSignalBlock, speciesShortsPerf } from '../analytics/shortsPerf';
+import { shortsTopicSignalBlock, speciesShortsPerf, hitTitleBlock } from '../analytics/shortsPerf';
+import { collectPopularityRows, scoreSpeciesPopularity, naverPrior, speciesPopularityBlock } from '../analytics/speciesPopularity';
+import { readBlogSearchQueries } from '../analytics/naverBlogKpi';
+import { refreshExtTopics, readExtTopicsSnap, extTopicsBlock, extSuggestionsFor, cultivationTotal, cultivationMeasured } from '../analytics/externalTopics';
 import { topicVerdictBlock, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { trendSignalBlock, ytAutocomplete } from '../analytics/trendSignal';
 import { naverAutocomplete } from '../grounding/naver_autocomplete';
-import { angleVerdict, angleNote } from '../analytics/angleCheck';
+import { angleVerdict, angleNote, inflowSuggestionsFor, searchless } from '../analytics/angleCheck';
 import { assessCandidatesDemand, demandSignalBlock, demandRejectBlock, demandRejectFor, rememberDemandReject, rememberDemandRows, demandVerdict, formatDemandLine, normKw, readDemandSnap, familyVolume, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
 import { searchAdEnabled } from '../grounding/naver_searchad';
 import { ytNicheBlock } from '../analytics/ytNiche';
@@ -922,6 +925,11 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
   // 브랜드 슬러그는 여기서 한 번 고정한다 — 프롬프트 조립과 후보 루프가 LLM 왕복(수 초)을 여러 번 건너므로
   // 그 사이 브랜드가 전환되면 기각 기억을 A 로 읽고 B 에 쓰게 된다(아래 ResearchState 의 slug 고정과 같은 버그).
   const slug = activeBrandSlug() || '';
+  // 외부 인기(네이버 재배 수요·유튜브 30일, 2026-10-07) — 하루 한 번 백그라운드 갱신, 이번 틱은 이미 있는 스냅샷을 쓴다.
+  if (CONFIG.topicPerfHints) {
+    void refreshExtTopics(slug, librarySpeciesFor(slug), (t) => findSpeciesLoose(t)?.name, signal, (sp) => findSpecies(sp)?.aliases ?? []).catch(() => {});
+  }
+  const extSnap = (() => { try { return readExtTopicsSnap(slug); } catch { return null; } })();
   const speciesCov = speciesCoverageFor(slug);   // 수종 로테이션(2026-08-27) — 프롬프트 블록·후보 게이트·winners 필터 공용
   // 수종 월 상한에 수요 가중(2026-09-04 사용자 확정) — 수요 큰 수종은 몇 편 더 허용한다.
   // 실측 배분이 어긋나 있었다: 수요 22/월 배롱나무에 6편, 검색 1,085회를 물어다 준 수종엔 3편.
@@ -1058,6 +1066,26 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
   // hard=기각 대상, soft=회피 권고+신호(트렌드·기회) 제외만. 실패는 전부 fail-open(빈 요약).
   await ensureSeriesLabels(activeBrandSlug() || undefined, signal).catch(() => {});
   const cdown = cooldownSummary(activeBrandSlug() || undefined);
+  // 지금 코드가 막는 꼴(2026-10-07) — 참고 블록(히트 제목·수종 반응)이 기각될 것을 권하지 않게 같은 게이트로 걸러 낸다.
+  const speciesBlockedNow = (text: string): boolean =>
+    !!usedRecently(text, speciesRecent, speciesKeyOf) || !!overSpeciesCap(text, speciesCov, getBrand()?.speciesCatalog, speciesCap);
+  const titleBlockedNow = (text: string): boolean =>
+    speciesBlockedNow(text)
+    || !!usedThemeRecently(text, themeRecent, themeKeyOf) || !!overThemeCap(text, themeCov, getBrand()?.topicThemes)
+    || cdown.excludeTokens.some((t) => !!t && text.includes(t))
+    || !!offSeasonSubject(text, getBrand()?.seasonalSubjects);
+  // 수종 반응 참고(2026-10-07) — 프롬프트 참고 표시만, 정렬·후순위·기각엔 안 쓴다(speciesPopularity 머리말의 실측:
+  // 갈리는 건 수종보다 주제). 보관소 지시면 보관소 수종 안에서만 보여 준다.
+  const popularityBlockStr = (() => {
+    if (!CONFIG.topicPerfHints) return '';
+    try {
+      const rows = collectPopularityRows((t) => findSpeciesLoose(t)?.name, slug);
+      const pool = [...new Set([...librarySpeciesFor(slug), ...rows.map((r) => r.species)])];
+      // 사전값은 네이버 '재배' 수요(외부 인기 스냅샷) — 없으면 수종 이름 검색량(먹거리 수요가 섞여 크게 보인다).
+      const pop = scoreSpeciesPopularity(rows, pool, naverPrior(pool, (sp) => cultivationTotal(extSnap, sp) ?? (familyVolume(demandRows, sp).max || undefined)));
+      return speciesPopularityBlock(pop, libGate ? libSpecies : [], speciesBlockedNow);
+    } catch { return ''; }
+  })();
   const seriesScores = seriesScoresFor(activeBrandSlug() || undefined);
   // 여유 시드는 라벨 게이트로 판정(리뷰 지적: 부분문자열 대조는 '심는'≠'심기' 활용형을 놓쳐
   // 쿨다운 계열 시드를 '여유 있는 방향'으로 추천하는 자기모순을 만들었다).
@@ -1109,6 +1137,10 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     // 조회수 감사(2026-08-20) 3종 배선 — 전부 데이터 부족·실패 시 빈 문자열(무주입, fail-open).
     // ① 쇼츠 채널 실측: 파생 숏폼 YT/IG 조회수가 주제 선정에 처음으로 되먹임된다(종전 winners=블로그 전용).
     shortsTopicSignalBlock(activeBrandSlug() || '') +
+    // ①-a 히트 제목·수종 반응 참고(2026-10-07) — 조회는 수종보다 주제로 갈린다. 터진 제목의 꼴을 보여 주고, 수종표는 참고로만.
+    (CONFIG.topicPerfHints ? hitTitleBlock(slug, Date.now(), titleBlockedNow) : '') +
+    (popularityBlockStr ? `${popularityBlockStr}\n` : '') +
+    (CONFIG.topicPerfHints ? extTopicsBlock(extSnap, libGate ? libSpecies : [], speciesBlockedNow) : '') +
     // ② 리서치 실측 판정 역류: 폐기(avoid)·기회(opportunity) 키워드 — 하드 계열의 기회만 주입 제외
     //    (소프트 계열의 검증된 기회는 살린다 — 리뷰 지적: 소프트 제외+정렬 중첩이 준하드로 작동하던 문제).
     topicVerdictBlock(undefined, cdown.excludeTokensHard) +
@@ -1188,6 +1220,14 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     return { ...idea, ...(target ? { target } : {}), ...(directive ? { directive: true } : {}) };
   };
   const IDEA_ROUNDS = 2;   // 마지막 라운드 판정(기아 방지 밸브)이 이 숫자에 매달려 있어 상수로 묶는다
+  // 블로그 유입 검색어(최근 30일) — 실검색 각도 판정의 연관어에 더한다(2026-10-07). 틱당 한 번 읽는다(파일, 비용 0).
+  const blogInflowQueries: string[] = (() => {
+    if (!CONFIG.angleCheck) return [];
+    try {
+      const since = Date.now() - 30 * 86_400_000;
+      return readBlogSearchQueries(slug).filter((r) => Date.parse(r.ts) >= since).flatMap((r) => (r.queries ?? []).map((q) => q.query));
+    } catch { return []; }
+  })();
   for (let attempt = 0; attempt < IDEA_ROUNDS; attempt++) {
     // 실패 사유를 삼키지 않는다 — 실사고 2026-08-31 08:55~10:55: 런처 축소 PATH 로 claude CLI 가
     // ENOENT 였는데 여기서 조용히 null 이 되어, 오토런 틱이 2시간 동안 "처리할 작업 없음"만 남겼다.
@@ -1307,7 +1347,9 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       const spNames = [...new Set(gated.map(({ cand }) => findSpeciesLoose(`${cand.title} ${cand.keyword ?? ''}`)?.name).filter((n): n is string => !!n))];
       await Promise.all(spNames.map(async (sp) => {
         const [nv, yt] = await Promise.all([naverAutocomplete(sp, signal).catch(() => []), ytAutocomplete(sp, signal).catch(() => [])]);
-        angleSuggest.set(sp, [...nv, ...yt]);
+        // 우리 블로그 실제 유입 검색어(2026-10-07)도 연관어로 — 남들이 치는 말 + 우리 글에 들어온 말.
+        // 외부 인기 스냅샷의 네이버 재배 연관어(2026-10-07)도 — 자동완성이 비거나 잡음뿐인 수종을 메운다.
+        angleSuggest.set(sp, [...nv, ...yt, ...inflowSuggestionsFor(sp, blogInflowQueries), ...extSuggestionsFor(extSnap, sp)]);
       }));
     }
     for (const { cand, gate } of gated) {
@@ -1326,6 +1368,45 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
         else rejects.push(`"${title}"=${why}`);
         noSpeciesReserve.push({ idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) }, rank, line });
         noSpRound++;
+      };
+      // 실검색 각도(2026-09-21) — 판정은 후보마다 여기서 한 번, 처리는 **모든 채택·보관 자리**에서 angleOff 로(2026-10-07).
+      // 마가목 사고: 유사 폴백·후순위 보관이 각도 검사보다 앞에서 후보를 잡아, 연관어(열매·효능·가격) 밖인 "마가목 이름이
+      // 신농본초경에 남은 이유"가 검사를 한 번도 안 거치고 채택됐다. 다른 게이트는 그대로 다 거친 뒤 각 자리에서 부른다.
+      const angleSp = CONFIG.angleCheck ? findSpeciesLoose(`${title} ${keyword ?? ''}`)?.name : undefined;
+      const angleV = angleSp ? angleVerdict(angleSp, title, angleSuggest.get(angleSp) ?? []) : null;
+      /** 각도 밖이면 처리하고 true(호출부는 continue). 마지막 라운드 전엔 기각+연관어 노트, 마지막 라운드는 후순위(rank 4)만 —
+       *  어느 자리에서 걸리든 rank 4 라 유사 폴백·비수기·로테이션 후순위보다 항상 뒤다. */
+      const noSearch = !!angleSp && searchless(angleV, cultivationMeasured(extSnap, angleSp));
+      const angleOff = (line: string): boolean => {
+        if (!angleV || !angleSp || !(angleV.status === 'unverified' || noSearch)) return false;
+        if (noSearch) {
+          // 검색 근거 없음(2026-10-07 설중매 사고) — 연관어도 재배 수요도 0. 각도 밖과 같은 대우(기각 → 마지막 라운드 rank 4).
+          rejects.push(`"${title}"=검색 근거 없음(${angleSp} — 연관 검색어·재배 검색량 0, 사람들이 찾는 수종으로)`);
+          if (attempt < IDEA_ROUNDS - 1) {
+            console.log(`[auto-cycle] 아이디어 기각(검색 근거 없음) — "${title}" (${angleSp}: 연관어 0 · 재배 검색 0)`);
+            return true;
+          }
+          console.log(`[auto-cycle] 아이디어 후순위(검색 근거 없음·기아 방지) — "${title}" (${angleSp})`);
+          if (gate.level === 'none' && noSp) holdNoSpecies(4, line, '후순위');
+          else if (gate.level === 'none') {
+            demoted.push({ idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) }, rank: 4, line, rotation: `검색 근거 없음 — ${angleSp}` });
+          }
+          return true;
+        }
+        // 마지막 라운드가 아니면 기각 — 노트의 연관어를 받은 다음 라운드가 그 안에서 다시 내게 한다(첫 실측 2026-09-21:
+        // 1라운드 끝에 후순위 채택이 돌아 연관어 노트가 한 번도 안 쓰인 채 '마가목 명소' 각도가 나갔다).
+        rejects.push(`"${title}"=실검색 각도 밖(${angleSp})`);
+        angleHints.set(angleSp, angleV.angles);
+        if (attempt < IDEA_ROUNDS - 1) {
+          console.log(`[auto-cycle] 아이디어 기각(실검색 각도 밖) — "${title}" (${angleSp} 연관어: ${angleV.angles.join(' · ')})`);
+          return true;
+        }
+        console.log(`[auto-cycle] 아이디어 후순위(실검색 각도 밖·기아 방지) — "${title}" (${angleSp} 연관어: ${angleV.angles.join(' · ')})`);
+        if (gate.level === 'none' && noSp) holdNoSpecies(4, line, '후순위');
+        else if (gate.level === 'none') {
+          demoted.push({ idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) }, rank: 4, line, rotation: `실검색 각도 밖 — ${angleSp}` });
+        }
+        return true;
       };
       if (recentAuto.includes(title)) {
         // 종전엔 여기서 로그 없이 전체 return null — 재탕 제목 하나가 슬롯을 '침묵 좌초'시켰다(08-14 관측).
@@ -1492,6 +1573,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       }
       const sim = findSimilarContent({ title, ...(keyword ? { keyword } : {}) }, existing);
       if (sim.length) {
+        if (angleOff(demand.line)) continue;   // 유사 폴백도 실검색 각도 안이어야 한다(2026-10-07 마가목 사고)
         const top = sim[0]!;
         console.log(`[auto-cycle] 아이디어 유사 감지 — "${title}" ≈ (${top.kind}) "${top.title}" → 새 소재 우선, 없으면 다른 시각으로 채택`);
         // 폴백 자격은 계열 게이트 none 후보만(리뷰 확정: 소프트 후보가 폴백으로 채택되면 창설 사고
@@ -1528,6 +1610,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       // 수종(3)이 축(2)보다 뒤다 — 같은 나무가 또 나오는 것이 같은 축이 또 나오는 것보다 눈에 잘 띈다.
       // 둘 다 유사 폴백에 진다: '안 겹치는 소재의 유사 각도'가 '겹치는 소재의 새 각도'보다 낫다.
       if (recentSp || recentTh) {
+        if (angleOff(demand.line)) continue;   // 로테이션 후순위도 각도 밖이면 rank 4(2026-10-07)
         const why = recentSp
           ? `최근 수종 — ${recentSp.name} ${recentSp.daysAgo}일 전`
           : `최근 축 — ${recentTh!.theme} ${recentTh!.daysAgo}일 전`;
@@ -1547,6 +1630,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       // 지시 중에도 건다(2026-09-17 사용자 확정) — 위 수요 게이트 주석의 이팝나무 실사고. 기각이 아니라
       // 후순위라 지시 안에 제철 후보가 없으면 결국 이 후보가 채택된다(생산은 안 멈춘다).
       if (demand.verdict === 'demote') {
+        if (angleOff(demand.line)) continue;   // 비수기·수요 미달 후순위도 각도 밖이면 rank 4(2026-10-07)
         console.log(demand.relaxed
           ? `[auto-cycle] 아이디어 후순위(검색 수요 미달·기아 방지) — "${title}" (${demand.line})`
           : `[auto-cycle] 아이디어 후순위(검색 비수기) — "${title}" (${demand.line})`);
@@ -1569,28 +1653,8 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       // 실검색 각도 검증(2026-09-21) — 수종 검색량은 통과했어도 제목의 '내용'이 사람들이 실제 치는 연관어 밖이면
       // 후순위(rank 4, 기각 아님). 호두나무 실사고: 연관어는 묘목·재배·가지치기·열매 안 열려요인데 '흙부터'로 나갔다.
       // 노트에 연관어를 실어 다음 라운드가 그 안에서 각도를 잡게 한다. 연관어가 없는 수종은 판정 없이 통과.
-      if (CONFIG.angleCheck) {
-        const sp = findSpeciesLoose(`${title} ${keyword ?? ''}`)?.name;
-        const v = sp ? angleVerdict(sp, title, angleSuggest.get(sp) ?? []) : null;
-        if (v && v.status === 'unverified') {
-          // 마지막 라운드가 아니면 기각 — 노트의 연관어를 받은 다음 라운드가 그 안에서 다시 내게 한다(첫 실측 2026-09-21:
-          // 1라운드 끝에 후순위 채택이 돌아 연관어 노트가 한 번도 안 쓰인 채 '마가목 명소' 각도가 나갔다).
-          // 마지막 라운드만 후순위(rank 4) — 좌초보다는 생산.
-          rejects.push(`"${title}"=실검색 각도 밖(${sp})`);
-          angleHints.set(sp!, v.angles);
-          if (attempt < IDEA_ROUNDS - 1) {
-            console.log(`[auto-cycle] 아이디어 기각(실검색 각도 밖) — "${title}" (${sp} 연관어: ${v.angles.join(' · ')})`);
-            continue;
-          }
-          console.log(`[auto-cycle] 아이디어 후순위(실검색 각도 밖·기아 방지) — "${title}" (${sp} 연관어: ${v.angles.join(' · ')})`);
-          if (gate.level === 'none' && noSp) holdNoSpecies(4, demand.line, '후순위');
-          else if (gate.level === 'none') {
-            demoted.push({ idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) }, rank: 4, line: demand.line, rotation: `실검색 각도 밖 — ${sp}` });
-          }
-          continue;
-        }
-        if (v && v.status === 'ok') console.log(`[auto-cycle] 실검색 각도 일치 — "${title}" (${sp}: ${v.matched.join(' · ')})`);
-      }
+      if (angleOff(demand.line)) continue;
+      if (angleV?.status === 'ok') console.log(`[auto-cycle] 실검색 각도 일치 — "${title}" (${angleSp}: ${angleV.matched.join(' · ')})`);
       // 수종 없음(2026-10-02) — 다른 게이트를 전부 통과한 후보다(종전이면 여기서 채택). 막고 다음 후보로 간다.
       // 1라운드 사유는 rejectNote 로 두뇌에 가서 2라운드가 수종을 붙여 다시 낸다. 최후 보류함이 빈 틱을 막는다.
       if (noSp) { holdNoSpecies(-1, demand.line, '다른 게이트 전부 통과'); continue; }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Shorts } from '../content/shorts';
-import { shortsSignal, parseStatsResponse, shortsPerfDue, shouldRecordMemory, countSamples, shortsMetaPerfDue, parseFbVideoStats, aggregateShortsTopicRows, speciesPerfRatios, pickAnalyticsTargets, lastAnalyticsAt, ANALYTICS_MAX_VIDEOS, ANALYTICS_RECENT_SLOTS } from './shortsPerf';
+import { shortsSignal, parseStatsResponse, shortsPerfDue, shouldRecordMemory, countSamples, shortsMetaPerfDue, parseFbVideoStats, aggregateShortsTopicRows, speciesPerfRatios, pickAnalyticsTargets, lastAnalyticsAt, ANALYTICS_MAX_VIDEOS, ANALYTICS_RECENT_SLOTS, pickHitTitles } from './shortsPerf';
 
 describe('aggregateShortsTopicRows — 키워드 계열 중앙값 랭킹(순수, 2026-08-20 주제 되먹임)', () => {
   it('같은 계열 여러 편은 중앙값으로 묶고, 합산 중앙값 내림차순 정렬한다', () => {
@@ -202,5 +202,22 @@ describe('speciesPerfRatios — 수종별 숏폼 성과 배수(2026-09-17)', () 
 
   it('빈 입력은 빈 지도', () => {
     expect(speciesPerfRatios([]).size).toBe(0);
+  });
+});
+
+describe('pickHitTitles — 채널 중앙값 대비 배수 상위(2026-10-07)', () => {
+  const fill = (ch: 'ig' | 'yt' | 'blog', v: number, n: number) => Array.from({ length: n }, (_, i) => ({ title: `${ch}-보통-${i}`, channel: ch, views: v }));
+  it('채널끼리 배수로 비교하고, 같은 제목은 가장 좋은 채널 하나만', () => {
+    const rows = [...fill('ig', 1000, 12), ...fill('blog', 10, 12),
+      { title: '주지 세 개 고르는 법', channel: 'ig' as const, views: 20_000 },
+      { title: '주지 세 개 고르는 법', channel: 'blog' as const, views: 30 },
+      { title: '잎자루로 가르는 법', channel: 'blog' as const, views: 120 },
+      { title: '그저 그런 글', channel: 'ig' as const, views: 1500 }];
+    const hits = pickHitTitles(rows);
+    expect(hits.map((h) => [h.title, h.channel, h.ratio])).toEqual([['주지 세 개 고르는 법', 'ig', 20], ['잎자루로 가르는 법', 'blog', 12]]);
+  });
+  it('표본이 적은 채널은 빼고(중앙값을 못 믿는다), 2배 미만은 히트가 아니다', () => {
+    const rows = [...fill('yt', 1000, 5), { title: '유튜브 한 편', channel: 'yt' as const, views: 50_000 }];
+    expect(pickHitTitles(rows)).toEqual([]);
   });
 });
