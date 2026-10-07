@@ -69,7 +69,7 @@ import { pickWriter, recentWriterIdsFor, SHORTS_WRITERS } from '../content/short
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts, hookStillFor, siblingPlanFile } from '../orchestrator/shorts';
 import { inheritedSceneImages, inheritedClips } from '../content/shortsInherit';
-import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo } from '../tools/shortsRender';
+import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo, waitForThumbnail } from '../tools/shortsRender';
 import { generateDesignedThumbnail, thumbTextQaFailed } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft, shouldAutoDeriveOnDecision, cadenceBaselineTs, naverJobUrls } from '../content/pieces';
 import { isTransientFailure, transientReason } from '../llm/transientError';
@@ -1869,6 +1869,9 @@ app.post('/shorts/:id/youtube', async (c) => {
   if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
   // 길이 상한 발행 게이트(2026-08-20 하드 캡) — 어떤 경로(수정요청 재조립·구버전 잔존분)로 ready 가 됐든 초과본 발행 차단.
   if ((s.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) return c.json({ error: `길이 상한 초과(${s.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초) — ✍수정요청으로 대본을 줄인 뒤 발행하세요` }, 409);
+  // 디자인 썸네일 생성 중이면 끝날 때까지 기다린다(2026-10-07 밤나무 사고: 생성 중 버튼 → 인트로 없이 업로드). QA 게이트보다 앞 —
+  // QA 결과(thumb-qa-failed.json)도 생성이 끝나야 나온다.
+  await waitForThumbnail(shortsStore().dirFor(id));
   // 썸네일 QA 미해결 게이트(실사고 2026-09-03: 오타 썸네일이 조용히 발행) — 카드뉴스와 동일 방식.
   // 사용자 확인(force) 또는 썸네일 재생성으로 해제된다. 모든 발행 경로가 이 라우트를 지난다.
   {
@@ -2345,6 +2348,8 @@ app.post('/shorts/:id/meta', async (c) => {
   if (!canPublishTo(s.platform, 'instagram')) {
     return c.json({ error: `${platformLabel(s.platform)} 전용 숏폼입니다 — 릴스에는 인스타용 대본을 올리세요` }, 409);
   }
+  // 디자인 썸네일 생성 중이면 끝날 때까지 기다린다(2026-10-07 밤나무 사고: 생성 중 버튼 → 커버 없이 릴스 발행).
+  await waitForThumbnail(shortsStore().dirFor(id));
   // 썸네일 QA 미해결 게이트(실사고 2026-09-03: 오타 썸네일이 조용히 발행) — 카드뉴스와 동일 방식.
   // 사용자 확인(force) 또는 썸네일 재생성으로 해제된다. 모든 발행 경로가 이 라우트를 지난다.
   {

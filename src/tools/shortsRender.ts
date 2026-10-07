@@ -98,6 +98,33 @@ export async function extractFirstFrame(videoPath: string, outPath: string, sign
 }
 
 /**
+ * 썸네일 생성 중 표시(2026-10-07 밤나무 사고) — 숏폼은 ready 직후 디자인 썸네일을 만드는데(한글 QA 재시도로 수 분), 그 사이
+ * 발행 버튼을 누르면 유튜브는 인트로 없이(썸네일 파일 없음 → 원본), 인스타는 커버 없이(cover_url 생략 → 첫 장면) 올라갔다.
+ * 생성 동안 dir/.thumb-pending 을 두고, 발행 라우트는 waitForThumbnail 로 끝날 때까지 기다린다.
+ * 프로세스가 죽어 남은 표시는 THUMB_PENDING_STALE_MS 뒤 무시한다(영원히 막지 않게).
+ */
+export const THUMB_PENDING_FILE = '.thumb-pending';
+export const THUMB_PENDING_STALE_MS = 15 * 60_000;
+export function markThumbPending(dir: string): void {
+  try { fs.writeFileSync(path.join(dir, THUMB_PENDING_FILE), new Date().toISOString(), 'utf-8'); } catch { /* 무해 */ }
+}
+export function clearThumbPending(dir: string): void {
+  try { fs.rmSync(path.join(dir, THUMB_PENDING_FILE), { force: true }); } catch { /* 무해 */ }
+}
+export function thumbPending(dir: string, now = Date.now()): boolean {
+  try { return now - fs.statSync(path.join(dir, THUMB_PENDING_FILE)).mtimeMs < THUMB_PENDING_STALE_MS; } catch { return false; }
+}
+/** 썸네일 생성이 끝날 때까지 기다린다(최대 timeoutMs). 끝났으면 true, 시간이 다 되면 false(호출부는 그대로 진행 — 종전 동작). */
+export async function waitForThumbnail(dir: string, timeoutMs = 300_000, pollMs = 2_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (thumbPending(dir)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  return true;
+}
+
+/**
  * 다운로드용 — 디자인 썸네일을 영상 앞 1.6초 인트로로 붙인 dir/download.mp4(캐시). 썸네일 없으면 원본 그대로.
  * 썸네일(2:3)은 9:16 프레임에 레터박스(검정 여백)로 넣고 인트로 구간은 무음. 원본·썸네일 갱신 시 재생성.
  * 실패하면 원본 final.mp4 경로 반환(인트로 없이 폴백). 오디오는 44100·스테레오·fltp 로 정규화해 concat 안정화.

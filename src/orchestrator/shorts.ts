@@ -33,7 +33,7 @@ import { narrationStyleIssues, hookKeywordLeadIssues, hookLengthIssues, metaSumm
 import { promiseStore, MAX_PENDING } from '../content/promises';
 import { i2vSceneClips, i2vGate } from './shortsSceneClips';
 import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './shortsMotionDirector';
-import { renderShortsVideo, ensureShortsDownload, extractFirstFrame, cutVideoSegment } from '../tools/shortsRender';
+import { renderShortsVideo, ensureShortsDownload, extractFirstFrame, cutVideoSegment, markThumbPending, clearThumbPending } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, thumbTextQaFailed, type ThumbCopy } from './shortsThumbnail';
 import { inheritShortsAssets, inheritedSceneImages, inheritedClips, reviseClipsFor, reviseImagesFor, readSceneImageMap, writeSceneImageMap } from '../content/shortsInherit';
@@ -2264,16 +2264,10 @@ async function finishShortsRun(a: {
     topic: plan.title || short.topic,
   });
   say(`${plan.title.slice(0, 30)} — ${r.durationSec}초 · 씬 ${r.sceneCount}개 완성${fallbacks ? ` (배경 폴백 ${fallbacks}씬)` : ''}`);
-  // 검토 대기 알림(완성 영상 동봉, 50MB 초과 시 텍스트 폴백) — fire-and-forget, 실패 무해.
+  // 검토 대기 알림은 디자인 썸네일을 만든 **뒤**에 보낸다(아래, 2026-10-07 밤나무 사고) — 알림의 발행 버튼이 썸네일보다 먼저
+  // 나가면 인트로·커버 없이 발행된다. 썸네일 생성 중 표시(.thumb-pending)는 지금 세운다 — 대시보드 버튼도 이걸 기다린다.
+  markThumbPending(dir);
   {
-    const done = store.get(id);
-    if (done) {
-      // 발송 정착 후 notifiedTs 기록 — 도중에 프로세스가 죽으면 미기록으로 남아 부팅 복구 스윕이 재발송.
-      void notifyShortsReady({
-        id, topic: done.topic, brand: done.brand, platform: done.platform, durationSec: r.durationSec, scenes: r.sceneCount,
-        sourcePieceId: done.sourcePieceId, writer: done.writer, director: done.director, factGate: done.factGate,
-      }, finalVideoPath).finally(() => { try { store.update(id, { notifiedTs: new Date().toISOString() }); } catch { /* 무해 */ } });
-    }
     // 예고 정합 마감(2026-10-02) — 등록은 낭독 전에 예약했다(위). 렌더 뒤 재감량(fit2)이 예고 문장을 지웠으면
     // 영상에 남은 말이 기준이다 — 예고가 사라졌으면 예약을 취소한다.
     try {
@@ -2295,6 +2289,18 @@ async function finishShortsRun(a: {
     if (ok) store.update(id, {}); // updatedTs 갱신 → 포스터 URL(?v=updatedTs) 캐시버스트, 프레임 폴백본 대신 디자인 썸네일 표시
     say(ok ? '썸네일 생성 완료' : '썸네일 생성 스킵(프레임 폴백)');
   } catch (e) { say(`썸네일 생성 건너뜀(무해): ${e instanceof Error ? e.message.slice(0, 60) : e}`); }
+  finally { clearThumbPending(dir); }
+  // 검토 대기 알림(완성 영상 동봉, 50MB 초과 시 텍스트 폴백) — 썸네일 뒤에 보낸다(위 주석). fire-and-forget, 실패 무해.
+  {
+    const done = store.get(id);
+    if (done) {
+      // 발송 정착 후 notifiedTs 기록 — 도중에 프로세스가 죽으면 미기록으로 남아 부팅 복구 스윕이 재발송.
+      void notifyShortsReady({
+        id, topic: done.topic, brand: done.brand, platform: done.platform, durationSec: r.durationSec, scenes: r.sceneCount,
+        sourcePieceId: done.sourcePieceId, writer: done.writer, director: done.director, factGate: done.factGate,
+      }, finalVideoPath).finally(() => { try { store.update(id, { notifiedTs: new Date().toISOString() }); } catch { /* 무해 */ } });
+    }
+  }
 
   // ready 이후 자동 유튜브 업로드(옵트인) — 비공개 고정. 실패해도 잡은 이미 완성(수동 재시도 가능).
   if (CONFIG.autoYtUpload) {
