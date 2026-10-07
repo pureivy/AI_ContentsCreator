@@ -1332,21 +1332,11 @@ def _rf_bold_node(n: dict) -> dict:
     return {**n, "style": st}
 
 
-_RF_LIST_RE = re.compile(r"^\s*(?:\d+[.)]|[-•·▪◦])\s")
-
-
-def _rf_empty_para(new_id) -> dict:
-    return {"@ctype": "paragraph", "id": new_id(), "nodes": [{"@ctype": "textNode", "id": new_id(), "value": ""}]}
-
-
 # 소제목 글자 크기(2026-10-06 사장님 수정: 30 → 24) — 소제목 노드에 명시해 편집기 기본(30)을 쓰지 않는다.
 HEADING_FONT_CODE = "fs24"
-# 소제목 위 여백 — 소제목 컴포넌트 **안** 맨 위에 24 크기 빈 줄 하나(2026-10-07 사장님 감나무 전정 글 수정 모양).
-# 종전(10-06)엔 빈 줄 2개를 소제목 앞 글 덩어리 끝에 붙이거나 빈 줄만 든 글 덩어리로 따로 넣었는데, 앞이 사진·인용구·구분선이면
-# 빈 덩어리가 저장 때 사라져(감나무 전정·깍지벌레 글 실측: 남은 게 0) 사장님이 사진 뒤 소제목 3곳에 손으로 넣었다.
-# 소제목 안의 빈 줄은 저장 뒤에도 남는다. 인용구·구분선 뒤 소제목엔 사장님도 넣지 않았다(그 자체로 띄어 보인다).
-HEADING_SPACE_LINES = 1
-_HEADING_NO_SPACE_AFTER = ("quotation", "horizontalLine")
+# 소제목 위 구분선(2026-10-07 오후 사장님 감나무 전정 글 재수정 확정) — 소제목마다 바로 위에 기본 구분선 하나.
+# 같은 날 오전엔 '소제목 안 빈 줄'을 넣었으나, 사장님이 그 빈 줄과 본문 줄 사이 빈 줄을 전부 지우고 구분선으로 바꿨다.
+# 이미 구분선 바로 뒤인 소제목(작가가 --- 를 쓴 자리)엔 겹쳐 넣지 않는다. 글 맨 처음(앞에 내용 없음) 소제목에도 넣지 않는다.
 
 
 def _rf_heading_para(para: dict) -> dict:
@@ -1362,11 +1352,6 @@ def _rf_heading_para(para: dict) -> dict:
     return {**para, "nodes": nodes}
 
 
-def _rf_spacer_para(new_id) -> dict:
-    return {"@ctype": "paragraph", "id": new_id(), "nodes": [{"@ctype": "textNode", "id": new_id(), "value": "",
-            "style": {"@ctype": "nodeStyle", "fontSizeCode": HEADING_FONT_CODE}}]}
-
-
 def plan_rich_format(components: list, headings: list, captions: dict, new_id=None,
                      real_photos: set | None = None, photo_width: int = 0) -> tuple:
     """서식 변환(순수 — 입력을 바꾸지 않는다). 반환: (새 컴포넌트 목록, 통계 dict).
@@ -1375,15 +1360,15 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
     ③ 본문 맨 위에 '이어서' 놓인 전부 굵은 문단(첫머리 요약) → 가운데 정렬 **인용구(따옴표형, layout=default)** 한 덩어리
     ④ 이미지 → 사진 설명(alt, 이미 설명이 있으면 그대로). 이미지 컴포넌트의 id·ai 는 건드리지 않는다 — 실촬영 컷의
        AI 표시 해제(set_images_ai skip_ids·convert_quotes_and_ai)가 id·순서로 짝을 맞춘다.
-    ⑤ 본문 줄과 줄 사이, 소제목 바로 아래에 빈 줄 한 줄 — 휴대폰에서 줄마다 숨 쉴 틈을 둔다(목록 줄끼리는 붙인다).
-    ⑥ 소제목 글자 24(fs24, 굵게) — 2026-10-06 사장님이 매실나무 임시저장 글에서 30→24 로 줄인 모양. 소제목 위 여백은
-       소제목 컴포넌트 안 맨 위 24 크기 빈 줄 하나(2026-10-07 감나무 전정 글 수정 모양, HEADING_SPACE_LINES 주석).
-       글 맨 처음 소제목과 인용구·구분선 바로 뒤 소제목엔 넣지 않는다.
+    ⑤ 본문 빈 줄은 모두 뺀다 — 줄 사이·소제목 아래 빈 줄 없음(2026-10-07 사장님 감나무 전정 글 재수정. 10-06 대추나무 때의
+       '줄마다 빈 줄'을 뒤집었다). 빈 줄만 남는 글 덩어리는 통째로 뺀다.
+    ⑥ 소제목 글자 24(fs24, 굵게) — 2026-10-06 매실나무 수정 모양. 소제목 바로 위에 구분선(horizontalLine) — 2026-10-07
+       감나무 전정 글 재수정 모양. 이미 구분선 뒤이거나 글 맨 처음인 소제목엔 넣지 않는다.
     ⑦ 실촬영 컷(real_photos 파일명) → PC 표시 폭 photo_width(작게) + 가운데 정렬 — 2026-10-06 사장님 요청(PC 화질).
        생성 이미지는 문서 너비 그대로. photo_width=0 이면 건너뛴다.
 
-    ③⑤는 2026-10-06 사장님이 임시저장 글(대추나무 심는 시기)을 손으로 고친 모양 그대로다 — 글자는 하나도 안 바꾸고
-    맨 위 요약 두 줄을 가운데 따옴표 인용구로 옮기고, 본문 줄 사이·소제목 아래에 빈 줄을 넣었다(본문 덩어리마다 빈 줄 3~4개).
+    ③은 2026-10-06 사장님이 임시저장 글(대추나무 심는 시기)을 손으로 고친 모양 그대로다 — 글자는 하나도 안 바꾸고
+    맨 위 요약 두 줄을 가운데 따옴표 인용구로 옮겼다.
     ③을 '맨 위 연속 구간'으로 좁힌 이유: 우리 편집 규칙은 핵심 예시 문장을 굵은 단독 줄로 허용한다 — 도입부에 그런 줄이
     있어도 요약이 아니다. 인용구·표·구분선·소제목이 나오거나 굵지 않은 글 문단이 나오면 구간이 닫힌다(빈 문단은 건너뛴다)."""
     new_id = new_id or uid
@@ -1392,10 +1377,9 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
         k = _rf_norm(h.get("text") if isinstance(h, dict) else h)
         if k:
             hq[k] = hq.get(k, 0) + 1
-    stats = {"titles": 0, "fs16": 0, "center": 0, "captions": 0, "gaps": 0, "spaced": 0, "small": 0}
+    stats = {"titles": 0, "fs16": 0, "center": 0, "captions": 0, "dividers": 0, "small": 0}
     out = []
     lead = {"open": True, "paras": []}
-    after_title = [False]
 
     def close_lead():
         if lead["open"]:
@@ -1404,24 +1388,14 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
                 out.append({"@ctype": "quotation", "id": new_id(), "layout": "default", "align": "center",
                             "value": list(lead["paras"]), "source": None})
 
-    def heading_spacers() -> list:
-        """소제목 안 맨 위에 넣을 빈 줄(HEADING_SPACE_LINES 개, 24 크기). 바로 앞 글 덩어리 끝의 빈 줄은 걷는다(여백이 겹치지 않게,
-        다 비면 덩어리째 뺀다). 글 맨 처음 소제목, 인용구·구분선 바로 뒤 소제목엔 넣지 않는다."""
-        last = out[-1] if out else None
-        if last and last.get("@ctype") == "text":
-            vals = list(last.get("value") or [])
-            while vals and not _rf_para_text(vals[-1]):
-                vals.pop()
-            if vals:
-                out[-1] = {**last, "value": vals}
-            else:
-                out.pop()
+    def divider_before_heading():
+        """소제목 바로 위 구분선(⑥). 글 맨 처음 소제목, 이미 구분선 바로 뒤인 소제목엔 넣지 않는다."""
         if not any((c or {}).get("@ctype") not in ("documentTitle",) for c in out):
-            return []
-        if (out[-1] or {}).get("@ctype") in _HEADING_NO_SPACE_AFTER:
-            return []
-        stats["spaced"] += 1
-        return [_rf_spacer_para(new_id) for _ in range(HEADING_SPACE_LINES)]
+            return
+        if (out[-1] or {}).get("@ctype") == "horizontalLine":
+            return
+        out.append({"@ctype": "horizontalLine", "id": new_id(), "layout": "default", "align": "left"})
+        stats["dividers"] += 1
 
     for c in components or []:
         ct = (c or {}).get("@ctype")
@@ -1438,26 +1412,20 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
             if lead["open"] and lead["paras"]:
                 close_lead()
             out.append(c)
-            after_title[0] = False
             continue
         if ct != "text":
             if ct != "documentTitle":
                 close_lead()
             out.append(c)
-            after_title[0] = False
             continue
         buf = []
         chunks = [0]
-        last_nonempty = [False]  # 이 덩어리에서 바로 앞이 글 줄이었나(빈 줄을 넣을지)
-        last_list = [False]
 
         def flush():
             if buf:
                 out.append({**c, "id": c.get("id") if chunks[0] == 0 else new_id(), "value": list(buf)})
                 chunks[0] += 1
                 buf.clear()
-            last_nonempty[0] = False
-            last_list[0] = False
 
         for para in (c.get("value") or []):
             txt = _rf_para_text(para)
@@ -1465,16 +1433,12 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
                 hq[txt] -= 1
                 flush()
                 close_lead()
-                out.append({"@ctype": "sectionTitle", "id": new_id(), "layout": "default",
-                            "title": heading_spacers() + [_rf_heading_para(para)]})
+                divider_before_heading()
+                out.append({"@ctype": "sectionTitle", "id": new_id(), "layout": "default", "title": [_rf_heading_para(para)]})
                 stats["titles"] += 1
-                after_title[0] = True
                 continue
             if not txt:
-                if not lead["open"]:
-                    buf.append(para)
-                    last_nonempty[0] = False
-                continue
+                continue  # 빈 줄은 뺀다(⑤)
             if lead["open"] and _rf_all_bold(para):
                 flush()
                 lead["paras"].append({**para, "nodes": [_rf_bold_node(n) for n in (para.get("nodes") or [])]})  # 인용구 기본 크기 — 16pt 안 입힘
@@ -1483,14 +1447,7 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
             close_lead()
             p2 = {**para, "nodes": [_rf_fs16_node(n) for n in (para.get("nodes") or [])]}
             stats["fs16"] += 1
-            is_list = bool(_RF_LIST_RE.match(txt))
-            if (after_title[0] and not buf) or (last_nonempty[0] and not (is_list and last_list[0])):
-                buf.append(_rf_empty_para(new_id))
-                stats["gaps"] += 1
-            after_title[0] = False
             buf.append(p2)
-            last_nonempty[0] = True
-            last_list[0] = is_list
         flush()
     close_lead()
     return out, stats
@@ -1498,7 +1455,7 @@ def plan_rich_format(components: list, headings: list, captions: dict, new_id=No
 
 def rich_format_summary(stats: dict, n_headings: int) -> str:
     return (f"ok:titles={stats['titles']}/{n_headings},fs16={stats['fs16']},"
-            f"center={stats['center']},captions={stats['captions']},gaps={stats.get('gaps', 0)},"
+            f"center={stats['center']},captions={stats['captions']},dividers={stats.get('dividers', 0)},"
             f"small={stats.get('small', 0)}")
 
 
