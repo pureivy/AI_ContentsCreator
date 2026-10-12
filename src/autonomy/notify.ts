@@ -4,7 +4,10 @@
  * 실패는 무해(전송 실패가 런/브리핑을 막지 않음). 웹훅 URL 은 운영자 본인 설정이라 SSRF 표면 아님(http(s)만 허용).
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { getSecret } from '../secrets/store';
 import { CONFIG } from '../config';
 
@@ -180,8 +183,42 @@ async function fileBlob(p: string, mime: string): Promise<Blob> {
   return new Blob([await fs.promises.readFile(p)], { type: mime });
 }
 
-/** 텔레그램 사진 앨범(1장이면 sendPhoto, 2장~는 sendMediaGroup 최대 10장) + 첫 장 캡션(HTML, 1024자 캡). */
+/**
+ * 텔레그램 재전송용 JPEG 사본(최장변 1280, 품질 q3) — 실패한 PNG 는 null. 2026-10-09 무화과 카드뉴스: 정상 PNG(1024×1536·2.5MB)인데
+ * sendMediaGroup 이 3번째 장에서 IMAGE_PROCESS_FAILED 를 냈고, 글자 폴백만 가서 사장님이 발행 버튼을 놓쳤다. 텔레그램은 JPEG 처리가 안정적이다.
+ */
+async function telegramJpegs(files: readonly string[]): Promise<string[] | null> {
+  try {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-jpeg-'));
+    const out: string[] = [];
+    for (const [i, f] of files.entries()) {
+      const o = path.join(dir, `${String(i + 1).padStart(2, '0')}-${path.basename(f).replace(/\.[^.]+$/, '')}.jpg`);
+      await promisify(execFile)('ffmpeg', ['-nostdin', '-y', '-i', f, '-vf', "scale='min(1280,iw)':-2", '-q:v', '3', o], { timeout: 30_000 });
+      if (!fs.existsSync(o)) return null;
+      out.push(o);
+    }
+    return out;
+  } catch { return null; }
+}
+
+/** 텔레그램 사진 앨범(1장이면 sendPhoto, 2장~는 sendMediaGroup 최대 10장) + 첫 장 캡션(HTML, 1024자 캡).
+ *  실패하면 JPEG 사본으로 한 번 더 보낸다(2026-10-09 — telegramJpegs 주석). */
 export async function sendTelegramPhotos(files: string[], captionHtml: string): Promise<boolean> {
+  if (await sendTelegramPhotosOnce(files, captionHtml)) return true;
+  const list = files.filter((f) => { try { return fs.existsSync(f); } catch { return false; } }).slice(0, 10);
+  if (!telegramCreds() || !list.length || list.every((f) => /\.jpe?g$/i.test(f))) return false;
+  const jpegs = await telegramJpegs(list);
+  if (!jpegs) return false;
+  try {
+    const ok = await sendTelegramPhotosOnce(jpegs, captionHtml, 'image/jpeg');
+    if (ok) console.log(`[알림] 텔레그램 사진 재전송 성공(JPEG 사본 ${jpegs.length}장)`);
+    return ok;
+  } finally {
+    try { fs.rmSync(path.dirname(jpegs[0]!), { recursive: true, force: true }); } catch { /* 무해 */ }
+  }
+}
+
+async function sendTelegramPhotosOnce(files: string[], captionHtml: string, mime = 'image/png'): Promise<boolean> {
   const tg = telegramCreds();
   const list = files.filter((f) => { try { return fs.existsSync(f); } catch { return false; } }).slice(0, 10);
   if (!tg || !list.length) return false;
@@ -192,7 +229,7 @@ export async function sendTelegramPhotos(files: string[], captionHtml: string): 
     if (list.length === 1) {
       fd.append('caption', caption);
       fd.append('parse_mode', 'HTML');
-      fd.append('photo', await fileBlob(list[0]!, 'image/png'), path.basename(list[0]!));
+      fd.append('photo', await fileBlob(list[0]!, mime), path.basename(list[0]!));
       const r = await fetch(`${TG_API}${encodeURIComponent(tg.token)}/sendPhoto`, {
         method: 'POST', body: fd, signal: AbortSignal.timeout(60_000),
       });
@@ -204,7 +241,7 @@ export async function sendTelegramPhotos(files: string[], captionHtml: string): 
       ...(i === 0 ? { caption, parse_mode: 'HTML' } : {}),
     }));
     fd.append('media', JSON.stringify(media));
-    for (const [i, f] of list.entries()) fd.append(`f${i}`, await fileBlob(f, 'image/png'), path.basename(f));
+    for (const [i, f] of list.entries()) fd.append(`f${i}`, await fileBlob(f, mime), path.basename(f));
     const r = await fetch(`${TG_API}${encodeURIComponent(tg.token)}/sendMediaGroup`, {
       method: 'POST', body: fd, signal: AbortSignal.timeout(60_000),
     });
