@@ -2608,7 +2608,8 @@ async function reconcileReels(brand: string): Promise<{ matches: ReturnType<type
     .map((s) => ({ id: s.id, title: s.title ?? s.topic ?? '', igReelId: s.igReelId }));
   const matches = matchOrphanReels(targets, reels);
   for (const m of matches) shortsStore().update(m.shortsId, { igReelId: m.reelId, igPermalink: m.permalink, metaPublishedTs: m.timestamp });
-  for (const m of matches) maybeArchiveShortsVideo(m.shortsId); // 감지 경로로 릴스가 확인된 건도 동일 정리
+  // 원본 정리는 하지 않는다(2026-10-13) — 끊긴 발행은 페북 릴스가 아직이라 원본이 필요하다. 무화과 릴스에서 여기서 정리해
+  // 모션그래픽 원본이 지워졌다. 정리는 다음 발행(페북 마저 올리기)이나 저장공간 정리(발행 14일 뒤)가 맡는다.
   if (matches.length) console.log(`[발행담당] 릴스 재조정 — 브랜드 '${brand || '범용'}': ${matches.length}건 백필(라이브 릴스 ${reels.length}개)`);
   return { matches, reelsOnIg: reels.length };
 }
