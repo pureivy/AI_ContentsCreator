@@ -82,8 +82,16 @@ export async function parityIssuesChecked(kindLabel: string, texts: string[], so
       { maxOutputTokens: 600, signal },
     );
     if (!j) return null;
-    return (j.problems ?? []).map((p) => String(p ?? '').trim()).filter(Boolean).slice(0, 5);
+    return dropSelfCleared((j.problems ?? []).map((p) => String(p ?? '').trim()).filter(Boolean)).slice(0, 5);
   } catch { return null; }
+}
+
+/**
+ * 검수자가 스스로 '문제 아님'이라 적은 항목 걸러 내기(순수, 2026-10-12 자두나무 카드) — "…결론 일치 — 문제 없음",
+ * "…문제 아님 — 보고 생략" 같은 줄이 problems 에 섞여 와 보류(hold)로 집계됐다. 끝맺음이 무혐의 선언인 줄만 뺀다.
+ */
+export function dropSelfCleared(problems: readonly string[]): string[] {
+  return problems.filter((p) => !/(?:문제\s*(?:없음|없다|아님|아니다)|보고\s*(?:생략|하지\s*않음|불필요)|해당\s*없음)\s*[.)]?\s*$/.test(p.trim()));
 }
 
 export function parityToInfo(issues: string[]): FactGateInfo {

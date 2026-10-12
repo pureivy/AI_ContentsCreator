@@ -133,3 +133,14 @@ describe('oneEmoji·toRenderSpec', () => {
     expect(spec.slides[1]!.photo).toBeUndefined();
   });
 });
+
+import { dropSelfCleared } from './standaloneQa';
+describe('dropSelfCleared — 검수자가 스스로 무혐의라 적은 줄은 보류로 세지 않는다(2026-10-12 자두나무 카드)', () => {
+  it('끝이 "문제 없음/아님 — 보고 생략" 인 줄만 뺀다', () => {
+    expect(dropSelfCleared([
+      "6: 원문 절차와 일치하므로 문제 아님 — 보고 생략",
+      "9: '그 아래까지'로 요약, 결론 일치 — 문제 없음",
+      '항목3: 원문에 없는 약제 이름이 들어갔다',
+    ])).toEqual(['항목3: 원문에 없는 약제 이름이 들어갔다']);
+  });
+});

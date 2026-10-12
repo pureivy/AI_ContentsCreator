@@ -245,7 +245,7 @@ export async function rerenderHtmlCard(dir: string, say: Say, signal?: AbortSign
     if (plan.slides.length === saved.slides.length) {
       saved.slides = saved.slides.map((s, i) => {
         const p = plan.slides[i]!;
-        const lead = p.body.replace(/\s*\n+\s*/g, ' ').trim();
+        const lead = p.body.split('\n').map((x) => x.trim()).filter(Boolean).join('\n'); // 기획 줄바꿈 유지(normalizeLayout 과 같게)
         return { ...s, title: p.headline, ...(lead ? { lead } : { lead: undefined }), ...(s.accent && !p.headline.includes(s.accent) ? { accent: undefined } : {}) };
       });
       fs.writeFileSync(path.join(dir, 'layout.json'), JSON.stringify(saved, null, 2), 'utf-8');

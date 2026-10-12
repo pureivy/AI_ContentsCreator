@@ -250,8 +250,8 @@ def slide_html(s, n, total, series, brand):
     end = s.get("end") or {}
     brand_line = " · ".join(x for x in [brand.get("name"), "@" + brand["handle"] if brand.get("handle") else ""] if x)
     return (f'<section class="s paper steps">{run_header(series, n, total, False)}'
-            f'<div class="wrap">{title}<div class="mid">{lead}{steps}</div></div>'
-            f'<div class="end"><div><b>{esc(end.get("title") or "저장해 두고 필요할 때 꺼내 보세요")}</b><small>{esc(brand_line)}</small></div><div class="bm">🔖</div></div></section>')
+            + (f'<div class="wrap">{title}<div class="mid">{lead}{steps}</div></div>' if steps else f'<div class="wrap"><div class="mid">{title}{lead}</div></div>')
+            + f'<div class="end"><div><b>{esc(end.get("title") or "저장해 두고 필요할 때 꺼내 보세요")}</b><small>{esc(brand_line)}</small></div><div class="bm">🔖</div></div></section>')
 
 
 # 넘침 검사 — 글 칸(.wrap)이 제 높이를 넘거나, 칸 안 글이 가로로 삐져나오면 문제.
