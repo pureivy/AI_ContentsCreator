@@ -118,6 +118,21 @@ export function shortsQaPublishBlockReason(thumbQaFailed: boolean, force = false
   return '썸네일 한글 QA가 오타 가능성을 미해결로 남겼습니다 — 썸네일을 확인한 뒤 발행을 확정하거나, 썸네일을 재생성하세요';
 }
 
+/**
+ * 사실 검증 보류(hold) 발행 차단(순수, 2026-10-12 사장님 확정) — 카드뉴스 오타 QA 의 '확인 후 강행' 2단계를 사실 검증에.
+ *
+ * 실측(short_91ca7679e2 모과나무 삽목): hold("겨울 넘기면 살았다고 봐요" 등)가 텔레그램 알림에 경고 줄로만 붙었고,
+ * 🎬 릴스 발행 버튼 한 번에 그대로 나갔다. 이제 첫 버튼은 근거 없는 문장을 되보여 주고, 확인 버튼(forceFact)을 한 번 더 받는다.
+ * 판정 실패(error)는 막지 않는다 — 판정기가 못 돈 것이지 문장이 걸린 게 아니다(알림에 '수동 검토 필요'로 이미 보인다).
+ * 수정 요청(reviseShorts)은 판정을 다시 돌리지 않으므로 고친 뒤에도 이 확인이 한 번 나온다.
+ */
+export function shortsFactHoldBlockReason(fg: FactGateInfo | undefined, forceFact = false): { error: string; items: string[] } | null {
+  if (!fg || fg.status !== 'hold' || forceFact) return null;
+  const items = [...fg.unsupported, ...fg.contradicted];
+  const list = items.length ? items : (fg.timing ?? []);
+  return { error: `사실 검증 보류 ${list.length}건 — 근거 없는 문장을 확인한 뒤 발행을 확정하세요`, items: list.slice(0, 8) };
+}
+
 export interface CreateShortsInput {
   topic: string;
   platform?: ShortsPlatform;

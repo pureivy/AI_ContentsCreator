@@ -17,7 +17,7 @@ import { microJSON, runAgent, extractFirstJson } from './agent';
 import { getCompany } from '../agents/company-loader';
 import { rolesById } from '../agents/company';
 import { stripEmoji } from '../output/render';
-import { shortsStore, type Shorts} from '../content/shorts';
+import { shortsStore, shortsFactHoldBlockReason, type Shorts } from '../content/shorts';
 import { platformPlanGuide, platformLabel, SIBLING_PREVIEW_FILE } from '../content/shortsPlatform';
 import { writerById, writerByName, type ShortsWriter } from '../content/shortsWriters';
 import { notifyShortsReady } from '../autonomy/contentNotify';
@@ -2307,7 +2307,10 @@ async function finishShortsRun(a: {
   }
 
   // ready 이후 자동 유튜브 업로드(옵트인) — 비공개 고정. 실패해도 잡은 이미 완성(수동 재시도 가능).
-  if (CONFIG.autoYtUpload) {
+  // 사실 검증 보류면 자동 업로드를 건너뛴다(2026-10-12) — 이 경로는 발행 라우트의 확인 단계를 거치지 않는다.
+  const factHeld = !!shortsFactHoldBlockReason(store.get(id)?.factGate);
+  if (CONFIG.autoYtUpload && factHeld) say('자동 유튜브 업로드 건너뜀 — 사실 검증 보류(텔레그램에서 확인 후 업로드)');
+  if (CONFIG.autoYtUpload && !factHeld) {
     // 인트로(1.6초=디자인 썸네일) 붙은 영상 업로드 + 썸네일=그 영상 첫 프레임 — 미지정 시 유튜브가
     // 중간 프레임을 자동 선택해 커버가 엉뚱해짐(실측 2026-07-22, 사용자 방침: 맨 처음이 보이게).
     const ytVideo = (await ensureShortsDownload(dir).catch(() => null)) ?? finalVideoPath;

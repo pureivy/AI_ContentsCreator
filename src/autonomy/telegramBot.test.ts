@@ -198,3 +198,37 @@ describe('네이버 클립 버튼', () => {
     expect(out).toContain('final.mp4');
   });
 });
+
+// 2026-10-12 사장님 확정 — 숏폼 사실 검증 보류도 카드뉴스 오타 QA처럼 '확인 후 강행' 2단계.
+describe('사실 검증 보류 — 확인 후 강행 2단계', () => {
+  const hold409 = { ok: false, status: 409, json: { error: '사실 검증 보류 1건', fact_hold: ['겨울 넘기면 살았다고 봐요.'] } };
+  it('콜백 yh·mh·nh 를 채널별 강행으로 읽는다', () => {
+    expect(parseCallback('yh:short_1')).toEqual({ kind: 'shorts_fact_force', id: 'short_1', ch: 'youtube' });
+    expect(parseCallback('mh:short_1')).toEqual({ kind: 'shorts_fact_force', id: 'short_1', ch: 'instagram' });
+    expect(parseCallback('nh:short_1')).toEqual({ kind: 'shorts_fact_force', id: 'short_1', ch: 'clip' });
+  });
+  it('첫 버튼은 문장을 되보여 주고 수정요청·강행 두 버튼을 준다(세 채널)', async () => {
+    for (const [kind, op] of [['shorts_youtube', 'yh'], ['shorts_meta', 'mh'], ['shorts_clip', 'nh']] as const) {
+      const s = stubSend();
+      expect(await runAction({ kind, id: 'short_1' }, async () => hold409, s.send)).toBe('');
+      const g = s.log.find((x) => x.kind === 'html')!;
+      expect(g.text).toContain('사실 검증 보류 1건');
+      expect(g.text).toContain('겨울 넘기면 살았다고 봐요.');
+      expect(JSON.stringify(g.buttons)).toContain('rv:short_1');
+      expect(JSON.stringify(g.buttons)).toContain(`${op}:short_1`);
+    }
+  });
+  it('썸네일 강행(yf) 뒤에 보류가 남으면 이어서 보류 안내', async () => {
+    const s = stubSend();
+    expect(await runAction({ kind: 'shorts_youtube_force', id: 'short_1' }, async () => hold409, s.send)).toBe('');
+    expect(JSON.stringify(s.log[0]!.buttons)).toContain('yh:short_1');
+  });
+  it('강행은 force·forceFact 를 함께 실어 같은 라우트를 부른다', async () => {
+    const seen: Array<[string, unknown]> = [];
+    const call = async (p: string, b?: unknown) => { seen.push([p, b]); return { ok: true, status: 200, json: { igPermalink: 'https://instagram.com/reel/x' } }; };
+    expect(await runAction({ kind: 'shorts_fact_force', id: 'short_1', ch: 'instagram' }, call, stubSend().send)).toContain('사실 검증 확인 강행');
+    expect(seen[0]).toEqual(['/shorts/short_1/meta', { force: true, forceFact: true }]);
+    await runAction({ kind: 'shorts_fact_force', id: 'short_1', ch: 'clip' }, call, stubSend().send);
+    expect(seen[1]![0]).toBe('/shorts/short_1/naver-clip');
+  });
+});

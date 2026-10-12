@@ -54,7 +54,7 @@ import { promisify } from 'node:util';
 import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
-import { shortsStore, shortsQaPublishBlockReason } from '../content/shorts';
+import { shortsStore, shortsQaPublishBlockReason, shortsFactHoldBlockReason } from '../content/shorts';
 import { addMedia, listMedia, updateMedia, removeMedia, mediaDir, matchMedia, matchMediaScored } from '../content/mediaLibrary';
 import { pickRotatedVideo, readMediaHistory, windowSceneSec } from '../content/mediaRotation';
 import { SEGMENT_TAIL_SEC } from '../content/userAssets';
@@ -1873,9 +1873,12 @@ app.post('/shorts/:id/youtube', async (c) => {
   // 썸네일 QA 미해결 게이트(실사고 2026-09-03: 오타 썸네일이 조용히 발행) — 카드뉴스와 동일 방식.
   // 사용자 확인(force) 또는 썸네일 재생성으로 해제된다. 모든 발행 경로가 이 라우트를 지난다.
   {
-    const force = !!(await c.req.json<{ force?: boolean }>().catch(() => ({} as { force?: boolean }))).force;
-    const qaBlock = shortsQaPublishBlockReason(thumbTextQaFailed(shortsStore().dirFor(id)), force);
+    const pub = await c.req.json<{ force?: boolean; forceFact?: boolean }>().catch(() => ({} as { force?: boolean; forceFact?: boolean }));
+    const qaBlock = shortsQaPublishBlockReason(thumbTextQaFailed(shortsStore().dirFor(id)), !!pub.force);
     if (qaBlock) return c.json({ error: qaBlock, thumb_qa_unresolved: true }, 409);
+    // 사실 검증 보류 게이트(2026-10-12 사장님 확정) — 썸네일 QA 다음 관문. 근거 없는 문장을 되보여 주고 확인(forceFact)을 한 번 더 받는다.
+    const hold = shortsFactHoldBlockReason(shortsStore().get(id)?.factGate, !!pub.forceFact);
+    if (hold) return c.json({ error: hold.error, fact_hold: hold.items }, 409);
   }
   if (s.youtubeUrl) return c.json({ error: '이미 업로드됨', url: s.youtubeUrl }, 409); // 중복 영상·쿼터 낭비 방지
   // 채널 게이트(2026-09-03) — 인스타 전용으로 만든 대본을 유튜브에 올리지 않는다(레거시 미지정분은 통과).
@@ -2343,9 +2346,12 @@ app.post('/shorts/:id/meta', async (c) => {
   // 썸네일 QA 미해결 게이트(실사고 2026-09-03: 오타 썸네일이 조용히 발행) — 카드뉴스와 동일 방식.
   // 사용자 확인(force) 또는 썸네일 재생성으로 해제된다. 모든 발행 경로가 이 라우트를 지난다.
   {
-    const force = !!(await c.req.json<{ force?: boolean }>().catch(() => ({} as { force?: boolean }))).force;
-    const qaBlock = shortsQaPublishBlockReason(thumbTextQaFailed(shortsStore().dirFor(id)), force);
+    const pub = await c.req.json<{ force?: boolean; forceFact?: boolean }>().catch(() => ({} as { force?: boolean; forceFact?: boolean }));
+    const qaBlock = shortsQaPublishBlockReason(thumbTextQaFailed(shortsStore().dirFor(id)), !!pub.force);
     if (qaBlock) return c.json({ error: qaBlock, thumb_qa_unresolved: true }, 409);
+    // 사실 검증 보류 게이트(2026-10-12 사장님 확정) — 썸네일 QA 다음 관문. 근거 없는 문장을 되보여 주고 확인(forceFact)을 한 번 더 받는다.
+    const hold = shortsFactHoldBlockReason(shortsStore().get(id)?.factGate, !!pub.forceFact);
+    if (hold) return c.json({ error: hold.error, fact_hold: hold.items }, 409);
   }
   const shortsAcct = getMetaAccount(s.brand ?? '');
   const fbLinked = !!(shortsAcct.pageId && shortsAcct.pageToken); // 발행기와 동일 판정(토큰까지)
@@ -2497,7 +2503,7 @@ function clipSearchMaterial(s: { title?: string; topic: string; sourcePieceId?: 
 app.post('/shorts/:id/naver-clip', async (c) => {
   const id = c.req.param('id') ?? '';
   // 본문을 먼저 읽는다 — 레코드를 읽은 뒤 await 하면 그 사이 다른 요청이 바꾼 상태를 놓친다.
-  const body = await c.req.json<{ force?: boolean; dryRun?: boolean; check?: boolean }>().catch(() => ({} as { force?: boolean; dryRun?: boolean; check?: boolean }));
+  const body = await c.req.json<{ force?: boolean; forceFact?: boolean; dryRun?: boolean; check?: boolean }>().catch(() => ({} as { force?: boolean; forceFact?: boolean; dryRun?: boolean; check?: boolean }));
   const s = shortsStore().get(id);
   if (!s) return c.json({ error: 'unknown shorts' }, 404);
   if (s.naverClipNo) return c.json({ error: '이미 클립에 올라갔습니다', url: s.naverClipUrl ?? clipProfileUrl() }, 409);
@@ -2508,6 +2514,9 @@ app.post('/shorts/:id/naver-clip', async (c) => {
     if (!canPublishClip(s.platform)) return c.json({ error: `${platformLabel(s.platform)} 전용 숏폼입니다 — 클립에는 유튜브용 편을 올리세요` }, 409);
     const qaBlock = shortsQaPublishBlockReason(thumbTextQaFailed(shortsStore().dirFor(id)), !!body.force);
     if (qaBlock) return c.json({ error: qaBlock, thumb_qa_unresolved: true }, 409);
+    // 사실 검증 보류 게이트(2026-10-12 사장님 확정) — 유튜브·릴스 라우트와 같다.
+    const hold = shortsFactHoldBlockReason(s.factGate, !!body.forceFact);
+    if (hold) return c.json({ error: hold.error, fact_hold: hold.items }, 409);
     if (s.naverClipSubmittedTs && !body.dryRun) {
       return c.json({ error: `클립 '등록'을 눌렀지만 공개 확인을 못 한 편입니다(${s.naverClipSubmittedTs.slice(0, 16)}) — '클립 확인'을 누르세요. 두 번 공개되지 않게 다시 올리지 않습니다.`, submitted: true }, 409);
     }

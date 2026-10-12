@@ -29,7 +29,9 @@ export type BotAction =
   | { kind: 'shorts_clip'; id: string }
   | { kind: 'shorts_clip_force'; id: string }
   | { kind: 'shorts_clip_check'; id: string }
-  | { kind: 'shorts_thumb_regen'; id: string };
+  | { kind: 'shorts_thumb_regen'; id: string }
+  // 사실 검증 보류 확인 후 강행(2026-10-12 사장님 확정) — 근거 없는 문장을 보여 준 뒤 한 번 더 받는다(yh·mh·nh).
+  | { kind: 'shorts_fact_force'; id: string; ch: 'youtube' | 'instagram' | 'clip' };
 
 /**
  * 자율런 지시 명령(순수, 2026-09-10) — "자율런 지시: …" 로 설정, "지시 끄기/켜기/상태/삭제". 아니면 null.
@@ -64,7 +66,7 @@ export function describeDirective(d: { text: string; on: boolean; made: number; 
 
 /** 콜백 데이터 파싱(≤64바이트 규격: "<op>:<id>"). 불명이면 null. 순수 — 테스트 대상. */
 export function parseCallback(data: string): BotAction | null {
-  const m = /^(bp|rv|cp|cf|sy|sm|yf|mf|tr|nc|nf|nk):([A-Za-z0-9_]{1,48})$/.exec(data);
+  const m = /^(bp|rv|cp|cf|sy|sm|yf|mf|tr|nc|nf|nk|yh|mh|nh):([A-Za-z0-9_]{1,48})$/.exec(data);
   if (!m) return null;
   const id = m[2]!;
   switch (m[1]) {
@@ -80,6 +82,9 @@ export function parseCallback(data: string): BotAction | null {
     case 'nc': return { kind: 'shorts_clip', id };
     case 'nf': return { kind: 'shorts_clip_force', id };
     case 'nk': return { kind: 'shorts_clip_check', id };
+    case 'yh': return { kind: 'shorts_fact_force', id, ch: 'youtube' };
+    case 'mh': return { kind: 'shorts_fact_force', id, ch: 'instagram' };
+    case 'nh': return { kind: 'shorts_fact_force', id, ch: 'clip' };
     default: return null;
   }
 }
@@ -168,6 +173,7 @@ export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call:
       const r = await call(`/shorts/${a.id}/youtube`);
       if (!r.ok) {
         if (await sendThumbQaGuide(r, a.id, 'youtube', send)) return '';
+        if (await sendFactHoldGuide(r, a.id, 'youtube', send)) return '';
         return errText('유튜브 업로드 실패', r);
       }
       // 라우트가 이미 완료 알림(📺)을 보냈으면 여기선 아무것도 안 보낸다 — 안 그러면 같은 말이
@@ -180,6 +186,7 @@ export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call:
       const r = await call(`/shorts/${a.id}/meta`);
       if (!r.ok) {
         if (await sendThumbQaGuide(r, a.id, 'instagram', send)) return '';
+        if (await sendFactHoldGuide(r, a.id, 'instagram', send)) return '';
         return errText('릴스 발행 실패', r);
       }
       const link = typeof r.json?.igPermalink === 'string' ? `\n${r.json.igPermalink}` : '';
@@ -188,14 +195,20 @@ export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call:
     case 'shorts_youtube_force': {
       // 사용자가 썸네일을 눈으로 확인한 뒤의 강행 업로드 — 라우트의 force 게이트를 통과한다.
       const r = await call(`/shorts/${a.id}/youtube`, { force: true });
-      if (!r.ok) return errText('유튜브 강행 업로드 실패', r);
+      if (!r.ok) {
+        if (await sendFactHoldGuide(r, a.id, 'youtube', send)) return ''; // 썸네일은 확인됐고 사실 검증 보류가 남은 경우
+        return errText('유튜브 강행 업로드 실패', r);
+      }
       if (r.json?.notified === true) return '';
       const url = typeof r.json?.url === 'string' ? r.json.url : typeof r.json?.youtubeUrl === 'string' ? r.json.youtubeUrl : '';
       return `${ytDoneText(r.json)}(썸네일 확인 강행)${url ? `\n${url}` : ''}${ytDoneTail(r.json)}`;
     }
     case 'shorts_meta_force': {
       const r = await call(`/shorts/${a.id}/meta`, { force: true });
-      if (!r.ok) return errText('릴스 강행 발행 실패', r);
+      if (!r.ok) {
+        if (await sendFactHoldGuide(r, a.id, 'instagram', send)) return '';
+        return errText('릴스 강행 발행 실패', r);
+      }
       const link = typeof r.json?.igPermalink === 'string' ? `\n${r.json.igPermalink}` : '';
       return `🎬 인스타 릴스 발행 완료(썸네일 확인 강행)${link}`;
     }
@@ -207,6 +220,7 @@ export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call:
       const r = await call(`/shorts/${a.id}/naver-clip`, force ? { force: true } : {});
       if (!r.ok) {
         if (!force && await sendThumbQaGuide(r, a.id, 'clip', send)) return '';
+        if (await sendFactHoldGuide(r, a.id, 'clip', send)) return '';
         if (r.json?.submitted === true) {
           await send.html(errText('네이버 클립', r), [[{ text: '🔎 클립 확인', callback_data: `nk:${a.id}` }]]);
           return '';
@@ -232,6 +246,26 @@ export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call:
       }
       const url = typeof r.json?.url === 'string' ? `\n${escapeHtml(r.json.url)}` : '';
       return `🟩 네이버 클립 확인 — 공개돼 있어 기록했습니다${url}`;
+    }
+    case 'shorts_fact_force': {
+      // 근거 없는 문장을 보고 확인한 뒤의 강행 — 썸네일 QA 는 이 단계 전에 이미 통과(또는 확인)했다.
+      const both = { force: true, forceFact: true };
+      if (a.ch === 'clip') {
+        const r = await call(`/shorts/${a.id}/naver-clip`, both);
+        if (!r.ok) return errText('네이버 클립 업로드 실패', r);
+        return '🟩 네이버 클립 업로드 시작(사실 검증 확인 강행) — 몇 분 걸립니다. 끝나면 결과를 알려드릴게요.';
+      }
+      if (a.ch === 'instagram') {
+        const r = await call(`/shorts/${a.id}/meta`, both);
+        if (!r.ok) return errText('릴스 강행 발행 실패', r);
+        const link = typeof r.json?.igPermalink === 'string' ? `\n${r.json.igPermalink}` : '';
+        return `🎬 인스타 릴스 발행 완료(사실 검증 확인 강행)${link}`;
+      }
+      const r = await call(`/shorts/${a.id}/youtube`, both);
+      if (!r.ok) return errText('유튜브 강행 업로드 실패', r);
+      if (r.json?.notified === true) return '';
+      const url = typeof r.json?.url === 'string' ? r.json.url : typeof r.json?.youtubeUrl === 'string' ? r.json.youtubeUrl : '';
+      return `${ytDoneText(r.json)}(사실 검증 확인 강행)${url ? `\n${url}` : ''}${ytDoneTail(r.json)}`;
     }
     case 'shorts_thumb_regen': {
       // 썸네일만 다시 만든다(수 분). 통과하면 표식이 지워져 발행 게이트가 열린다.
@@ -276,6 +310,32 @@ async function sendThumbQaGuide(
     [[
       { text: '🖼 썸네일 다시 만들기', callback_data: `tr:${id}` },
       { text: forceLabel, callback_data: `${forceOp}:${id}` },
+    ]],
+  );
+  return true;
+}
+
+/**
+ * 사실 검증 보류(409 fact_hold) 안내(2026-10-12 사장님 확정) — 카드뉴스 오타 QA 처럼 '확인 후 강행' 2단계.
+ * 근거 없는 문장을 다시 보여 주고 ✍ 수정요청과 강행 두 길을 준다. 안내를 보냈으면 true.
+ */
+async function sendFactHoldGuide(
+  r: { status: number; json: Record<string, unknown> | null }, id: string, ch: 'youtube' | 'instagram' | 'clip',
+  send: Senders = REAL_SENDERS,
+): Promise<boolean> {
+  if (r.status !== 409 || !Array.isArray(r.json?.fact_hold)) return false;
+  const items = (r.json!.fact_hold as unknown[]).filter((x): x is string => typeof x === 'string');
+  const op = ch === 'youtube' ? 'yh' : ch === 'clip' ? 'nh' : 'mh';
+  const label = ch === 'instagram' ? '✅ 확인했어요 — 강행 발행' : '✅ 확인했어요 — 강행 업로드';
+  const clip = (t: string): string => escapeHtml(t.length > 90 ? `${t.slice(0, 90)}…` : t);
+  await send.html(
+    `⚠️ 사실 검증 보류 ${items.length}건 — 근거를 찾지 못한 문장입니다.\n`
+    + items.map((t) => `• ${clip(t)}`).join('\n')
+    + '\n\n문장이 맞으면 강행하고, 틀렸으면 ✍ 수정요청으로 고치세요.\n'
+    + `수정요청은 판정을 다시 돌리지 않아, 고친 뒤 발행할 때도 이 확인이 한 번 나옵니다.\n${studioBase()}/`,
+    [[
+      { text: '✍ 수정요청', callback_data: `rv:${id}` },
+      { text: label, callback_data: `${op}:${id}` },
     ]],
   );
   return true;

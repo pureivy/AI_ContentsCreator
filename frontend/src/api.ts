@@ -1216,21 +1216,22 @@ export async function deleteShorts(id: string, opts?: { purge?: boolean }): Prom
     return { ok: true };
   } catch { return { ok: false, error: "network" }; }
 }
-export async function uploadShortsYoutube(id: string): Promise<{ ok: boolean; url?: string; error?: string; thumbnailError?: string }> {
+/** forceFact: 사실 검증 보류(fact_hold 409)를 사용자가 확인한 뒤 발행을 확정할 때만 true(2026-10-12). */
+export async function uploadShortsYoutube(id: string, opts?: { forceFact?: boolean }): Promise<{ ok: boolean; url?: string; error?: string; thumbnailError?: string; fact_hold?: string[] }> {
   try {
-    const r = await fetch(`/shorts/${id}/youtube`, { method: "POST" });
-    const j = await r.json().catch(() => ({} as { url?: string; error?: string }));
-    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `HTTP ${r.status}` };
+    const r = await fetch(`/shorts/${id}/youtube`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts?.forceFact ? { forceFact: true } : {}) });
+    const j = await r.json().catch(() => ({} as { url?: string; error?: string; fact_hold?: string[] }));
+    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `HTTP ${r.status}`, fact_hold: (j as { fact_hold?: string[] }).fact_hold };
     return { ok: true, url: (j as { url?: string }).url };
   } catch { return { ok: false, error: "network" }; }
 }
-export async function publishShortsMeta(id: string): Promise<{ ok?: boolean; igPermalink?: string; fbReelId?: string; error?: string; fbError?: string }> {
-  try { const r = await fetch(`/shorts/${id}/meta`, { method: "POST" }); return await r.json(); }
+export async function publishShortsMeta(id: string, opts?: { forceFact?: boolean }): Promise<{ ok?: boolean; igPermalink?: string; fbReelId?: string; error?: string; fbError?: string; fact_hold?: string[] }> {
+  try { const r = await fetch(`/shorts/${id}/meta`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts?.forceFact ? { forceFact: true } : {}) }); return await r.json(); }
   catch { return { error: "요청 실패" }; }
 }
 // 네이버 클립 — 업로드는 서버 뒤에서 수 분 돈다(202 started). check=true 는 '등록 뒤 미확인' 편을 목록과 대조만 한다.
-export async function publishShortsNaverClip(id: string, opts?: { check?: boolean }): Promise<{ ok?: boolean; started?: boolean; queued?: boolean; note?: string; status?: string; url?: string; error?: string; issues?: string[] }> {
-  try { const r = await fetch(`/shorts/${id}/naver-clip`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts?.check ? { check: true } : {}) }); return await r.json(); }
+export async function publishShortsNaverClip(id: string, opts?: { check?: boolean; forceFact?: boolean }): Promise<{ ok?: boolean; started?: boolean; queued?: boolean; note?: string; status?: string; url?: string; error?: string; issues?: string[]; fact_hold?: string[] }> {
+  try { const r = await fetch(`/shorts/${id}/naver-clip`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts?.check ? { check: true } : opts?.forceFact ? { forceFact: true } : {}) }); return await r.json(); }
   catch { return { error: "요청 실패" }; }
 }
 export async function regenerateShortsThumbnail(id: string): Promise<{ ok?: boolean; error?: string }> {

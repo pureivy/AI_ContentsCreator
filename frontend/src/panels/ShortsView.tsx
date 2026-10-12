@@ -19,6 +19,13 @@ const RUNNING_STAGES = new Set(["planning", "designing", "rendering"]);
 // 파생 소스로 쓸 수 있는 블로그 초안 단계(초안 본문이 존재).
 const DERIVABLE = new Set(["ready", "published", "measured", "reflected"]);
 
+
+/** 사실 검증 보류 확인 창(2026-10-12) — 근거 없는 문장을 보여 주고, 확인했다고 답할 때만 true. */
+function confirmFactHold(error: string | undefined, items: string[]): boolean {
+  const list = items.map((t) => `• ${t.length > 90 ? `${t.slice(0, 90)}…` : t}`).join("\n");
+  return confirm(`${error ?? "사실 검증 보류"}\n\n${list}\n\n문장을 확인했고 이대로 발행할까요? (틀렸으면 취소하고 ✍ 수정요청으로 고치세요)`);
+}
+
 function fmtWhen(iso: string): string {
   const t = new Date(iso).getTime();
   if (isNaN(t)) return "";
@@ -45,7 +52,12 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
   const [ytErr, setYtErr] = useState("");
   const doYoutube = async () => {
     setYtBusy(true); setYtErr("");
-    const r = await uploadShortsYoutube(s.id);
+    let r = await uploadShortsYoutube(s.id);
+    // 사실 검증 보류 게이트(409, 2026-10-12) — 근거 없는 문장을 보여 주고 사용자가 확인할 때만 forceFact 재요청(카드뉴스 오타 QA와 같은 방식).
+    if (!r.ok && r.fact_hold?.length) {
+      if (confirmFactHold(r.error, r.fact_hold)) r = await uploadShortsYoutube(s.id, { forceFact: true });
+      else { setYtBusy(false); return; }
+    }
     setYtBusy(false);
     // 쇼츠 커버는 API 로 지정 불가(thumbnailError 는 정상 — 유튜브 한계) → 오해 메시지 대신 스튜디오 안내를 지속 표시.
     if (r.ok) { onChanged(); setYtErr(""); }
@@ -55,7 +67,11 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
   const [metaErr, setMetaErr] = useState("");
   const doMeta = async () => {
     setMetaBusy(true); setMetaErr("");
-    const r = await publishShortsMeta(s.id);
+    let r = await publishShortsMeta(s.id);
+    if (r.error && r.fact_hold?.length) {
+      if (confirmFactHold(r.error, r.fact_hold)) r = await publishShortsMeta(s.id, { forceFact: true });
+      else { setMetaBusy(false); return; }
+    }
     setMetaBusy(false);
     if (r.error) setMetaErr(r.error);
     else setMetaErr(r.fbError ? `인스타 릴스는 발행됨 / 페북 릴스 실패: ${r.fbError}` : "");
@@ -65,7 +81,11 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
   const [clipErr, setClipErr] = useState("");
   const doClip = async (check = false) => {
     setClipBusy(true); setClipErr("");
-    const r = await publishShortsNaverClip(s.id, { check });
+    let r = await publishShortsNaverClip(s.id, { check });
+    if (!check && r.error && r.fact_hold?.length) {
+      if (confirmFactHold(r.error, r.fact_hold)) r = await publishShortsNaverClip(s.id, { forceFact: true });
+      else { setClipBusy(false); return; }
+    }
     setClipBusy(false);
     if (r.error) setClipErr(r.error);
     else if (r.status === "NOT_FOUND") setClipErr("공개된 클립이 없습니다 — 다시 올릴 수 있습니다");
