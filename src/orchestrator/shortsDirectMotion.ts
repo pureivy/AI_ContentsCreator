@@ -267,6 +267,10 @@ export interface PilotMetrics {
 export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetrics> {
   const log = o.log ?? ((m: string) => console.log(m));
   const t0 = Date.now();
+  // 경로가 셸 스크립트(preview.sh)와 하위 명령에 들어간다 — id·작업 폴더 이름은 안전한 글자만 받는다(보안 검토 2026-10-12).
+  if (!/^[A-Za-z0-9_-]+$/.test(o.id) || !/^[A-Za-z0-9_.-]+$/.test(o.workName ?? 'pilot-direct') || (o.workName ?? '').includes('..')) {
+    throw new Error(`허용되지 않는 id·작업 폴더 이름 — ${o.id} / ${o.workName ?? ''}`);
+  }
   const dir = path.join(CONFIG.dataDir, 'shorts', o.id);
   const work = path.join(dir, o.workName ?? 'pilot-direct');
   fs.mkdirSync(work, { recursive: true });
@@ -420,7 +424,9 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
   writeRO(jobPath, JSON.stringify(job, null, 2), 0o444);
   writeRO(path.join(work, 'job.json'), JSON.stringify(job, null, 2), 0o444);
   fs.copyFileSync(INFO_CARD_REF, path.join(work, 'info-card-ref.html'));
-  const previewSh = `#!/bin/bash\nexec "${py}" "${HARNESS}" "${jobPath}" --preview "$1"\n`;
+  // 셸 인용은 작은따옴표로 — 큰따옴표 안에서는 $()·백틱이 살아난다.
+  const sq = (v: string): string => `'${v.replace(/'/g, `'\\''`)}'`;
+  const previewSh = `#!/bin/bash\nexec ${sq(py)} ${sq(HARNESS)} ${sq(jobPath)} --preview "$1"\n`;
   writeRO(path.join(work, 'preview.sh'), previewSh, 0o555);
 
   // 6) 에이전트(Claude Code 1회 세션) — 씬 조각 작성·미리보기 확인·수정.
