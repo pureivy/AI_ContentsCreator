@@ -316,3 +316,19 @@ describe('capImageMarkers — 마커를 만들어질 이미지 장수로 맞춘�
     expect(b2.draft.imageSlots.length).toBeLessThanOrEqual(2);
   });
 });
+
+// 2026-10-12 사장님 지적 — 작가 마커가 2개뿐이면 이미지도 2장으로 줄었다(단풍나무 씨앗 글).
+import { ensureImageMarkers, countImageMarkers as cim } from './naverBlog';
+describe('ensureImageMarkers — 마커 하한 채우기', () => {
+  const md = ['**요약**', '', '도입', '', '[IMAGE: 첫 장면]', '', '## 받기', '받는 법', '', '---', '', '## 뿌리기', '1. 흙', '2. 씨', '', '[IMAGE: 뿌리기]', '', '## 몇 년', '끝 문단'].join('\n');
+  it('모자란 만큼 마커 없는 절 끝(구분선 앞)에 더한다 — 마무리 절은 뒤 순위', () => {
+    const r = ensureImageMarkers(md, 3);
+    expect(r.added).toBe(1);
+    expect(cim(r.body)).toBe(3);
+    expect(r.body).toContain('받는 법\n\n[IMAGE: 받기 장면]\n\n---');
+    expect(r.body).not.toContain('[IMAGE: 몇 년 장면]');
+  });
+  it('이미 충분하면 그대로', () => {
+    expect(ensureImageMarkers(md, 2)).toEqual({ body: md, added: 0 });
+  });
+});

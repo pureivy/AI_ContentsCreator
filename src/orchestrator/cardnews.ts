@@ -11,7 +11,8 @@
  */
 import fs from 'node:fs';
 import { SELLER_INQUIRY_BAN, NO_FABRICATED_EXPERIENCE } from './org';
-import { lexiconGuide, mediaRulesGuide } from '../content/brand';
+import { lexiconGuide, mediaRulesGuide, varietyGuide } from '../content/brand';
+import { parseSceneMust, mustDesignerGuide, mustPromptLines, type SceneMust } from './sceneMust';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { microJSON, runAgent, extractFirstJson } from './agent';
@@ -596,6 +597,8 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     '[우선순위] 아래 문체 지침은 표현 방식 지침이다 — 원문에서 추린 방법·이유·위험 근거 문장을 삭제하는 방식으로 이행하지 마라. 문체와 정보가 충돌하면 정보를 남기고 문체를 양보하라. 단 [글자 상한]은 문체가 아니라 판형이다 — 상한을 넘는 정보는 장을 늘리거나 캡션으로 옮겨라(지우는 게 아니라 옮기는 것).',
     // 파생 문체 확정 규칙(2026-10-12 사장님 확정) — 모과나무 삽목 카드가 '흙 얕으면 생기는 문제'를 끝내 말하지 않았고 삽수↔가지로 이름이 흔들렸다.
     mediaRulesGuide(),
+    // 판매 품종 표기(2026-10-12 사장님 품종표).
+    varietyGuide(`${topic} ${keyword ?? ''}`),
     // 글자 상한(2026-10-05 카드뉴스 분석 승인 항목 3-1) — 장당 글자가 7월 37자 → 10월 69자로 늘어 휴대폰 폭에서 본문이 안 읽혔다.
     // 지시만으로는 새므로 cardDensityIssues(수정 라운드)·shortenDenseSlides·fitCardDensity(마지노선)가 결정적으로 잡는다.
     `[글자 상한] 휴대폰 화면 폭에서 확대 없이 읽혀야 한다 — 헤드라인 ${CARD_HEADLINE_MAX_CHARS}자 이내, body 는 ${CARD_BODY_MAX_LINES}줄·${CARD_BODY_MAX_CHARS}자 이내(공백 포함, 한 줄 18자 안팎). 장당 메시지 하나만 싣고, 이유·수치 세부는 캡션으로 보내라.`,
@@ -794,7 +797,7 @@ async function analyzeReferences(dir: string, topic: string, signal?: AbortSigna
   } catch { return none; }
 }
 
-async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalysis = '', forcedPreset?: string, keyword?: string): Promise<{ preset: string; style: string; prompts: string[] }> {
+async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalysis = '', forcedPreset?: string, keyword?: string, sourceBody?: string): Promise<{ preset: string; style: string; prompts: string[]; musts: Array<SceneMust | undefined> }> {
   const forced = resolveForcedPreset(forcedPreset);
   // 노지 수종을 화분에 심어 그리지 않게(2026-09-06 실사고) — "대추나무 결실주" 카드에서
   // 디자이너가 "화분에 심긴 어린 대추나무"라고 써 냈다. 결실주는 과수원 나무다.
@@ -811,16 +814,18 @@ async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalys
     ...plan.slides.map((s, i) => `${i + 1}. ${s.headline}${s.body ? ` — ${s.body.replace(/\n/g, ' ').slice(0, 60)}` : ''}`),
     '',
     `각 슬라이드의 배경 이미지 프롬프트를 설계하라. slides 는 정확히 ${plan.slides.length}개.`,
+    // 원문 묘사 반영(2026-10-12 사장님 지시) — 숏폼 디렉터와 같은 규칙(sceneMust.ts).
+    ...mustDesignerGuide(sourceBody, '슬라이드'),
     forced
       ? `style_preset 은 반드시 "${forced}" 로 고정한다(사용자 지정). 그 스타일에 어울리는 공통 style 문구(팔레트·질감·조명)와 각 장면을 설계하라.`
       : 'style_preset 선택 가이드 — photorealistic=정보·실용, watercolor=감성·계절, flat_design=가이드·수치, manhwa=향수·음식, handwritten_poster=인사·시즌 인사말·캠페인·행사·감성(실사 사진 위에 큰 손글씨 캘리그래피를 장면에 파묻는 인디 포스터 룩). handwritten_poster 는 정보·수치 카드엔 쓰지 말 것 — 그런 주제는 flat_design.',
     // 서체 문구 정정(2026-10-05) — 붓펜 고정은 handwritten_poster 분기뿐이다. 브랜드 고정(cardStyle)을 풀고 나면 다른 프리셋이
     // 고르는 대로 나가므로, '붓펜 고정'이라 말하면 디자이너가 손글씨 룩을 전제로 장면을 짠다.
     'style 문구는 배경·장면 전용(팔레트·질감·조명)이다 — 글씨체·타이포 지시는 넣지 마라(서체는 시스템이 스타일별로 정한다: handwritten_poster=붓펜 캘리그래피, 그 밖=굵은 산세리프).',
-    'JSON 형식: {"style_preset":"photorealistic|watercolor|flat_design|manhwa|handwritten_poster","style":"모든 장 공통 스타일 문구(팔레트·질감·조명)","slides":[{"prompt":"장면 묘사(한국어 150자 이내)"}]}',
+    `JSON 형식: {"style_preset":"photorealistic|watercolor|flat_design|manhwa|handwritten_poster","style":"모든 장 공통 스타일 문구(팔레트·질감·조명)","slides":[{"prompt":"장면 묘사(한국어 150자 이내)"${sourceBody ? ',"must_show":["화면에 꼭 보여야 할 사실"],"must_not":["나오면 안 되는 것"]' : ''}}]}`,
   ].filter(Boolean).join('\n');
-  const j = await callRoleJSON<{ style_preset?: unknown; style?: unknown; slides?: Array<{ prompt?: unknown }> }>(
-    io, 'cardnews_designer', '당신은 카드뉴스 배경 프롬프트 디자이너입니다. 요청된 JSON 스키마만 출력합니다.', user, 1600, true,
+  const j = await callRoleJSON<{ style_preset?: unknown; style?: unknown; slides?: Array<{ prompt?: unknown; must_show?: unknown; must_not?: unknown }> }>(
+    io, 'cardnews_designer', '당신은 카드뉴스 배경 프롬프트 디자이너입니다. 요청된 JSON 스키마만 출력합니다.', user, sourceBody ? 2400 : 1600, true,
   );
   const rawPreset = String(j?.style_preset ?? '').trim();
   const preset = forced ?? (PRESETS.has(rawPreset) ? rawPreset : (PRESET_ALIAS[rawPreset] ?? 'photorealistic'));
@@ -829,7 +834,8 @@ async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalys
     const p = String(j?.slides?.[i]?.prompt ?? '').trim().slice(0, 200);
     return p || `${topic} 를 상징하는 한국 생활 장면, ${s.headline} 분위기`; // 디자이너 응답 부족 시 폴백
   });
-  return { preset, style, prompts };
+  const musts = plan.slides.map((_, i) => (sourceBody ? parseSceneMust(j?.slides?.[i]) : undefined));
+  return { preset, style, prompts, musts };
 }
 
 /** 카드뉴스 생성 잡 — create 직후 void 로 호출(백그라운드), 프론트는 GET 폴링.
@@ -849,6 +855,8 @@ export function buildCardImagePrompt(a: {
   index: number; total: number; hasRefs: boolean; preset: string;
   /** 수종 앵커(2026-09-06) — 숏폼이 쓰던 것과 같은 값. 없으면 종전대로 무주입. */
   subject?: string; subjectLatin?: string;
+  /** 원문 묘사(2026-10-12) — 이 장에 꼭 보여야 할 것·나오면 안 되는 것. */
+  must?: SceneMust;
 }): string {
   const { headline, body, style, title, index: i, total, hasRefs, preset } = a;
   const ord = i === 0 ? '표지(1번)' : `${i + 1}번`;
@@ -862,6 +870,7 @@ export function buildCardImagePrompt(a: {
     const head = a.subjectLatin ? `${a.subjectLatin}${a.subject ? ` (${a.subject})` : ''}` : a.subject;
     p.push(`[대상 식물 — 화면의 나무·풀은 반드시 이 종] ${head}. 잎 모양·잎차례·수형을 이 종의 실제 모습대로 그린다. 다른 종으로 대체하거나 일반적인 나무로 뭉개지 마라.`);
   }
+  p.push(...mustPromptLines(a.must));
   if (hasRefs) p.push('[레퍼런스 스타일 차용] 첨부된 레퍼런스 이미지의 색 팔레트·타이포 형식·질감·여백 규칙·대비 감각만 차용한다. 특정 오브젝트·배치·이미지는 복제하지 않고, 이 슬라이드만의 구도와 시각 모티프를 새로 구성한다.');
   if (preset === 'handwritten_poster') {
     // 손글씨 임베드 포스터 — 실사 사진 위에 손글씨 캘리그래피 한글을 깊이·가림(occlusion)·원근으로 장면에
@@ -1232,7 +1241,8 @@ export async function runCardNewsJob(
     // 디자인 단계 내내 오피스가 디자이너를 유휴·배회로 그리고 WORKING 칩도 0 이었다(수선 2026-08-12).
     // emit 은 디자이너 LLM 호출 직전(레퍼런스 분석 뒤) — 스폰 전 '⏳ 대기' 창을 최소화한다.
     opts.bus?.emit('delegation', { team_id: 'cardnews', from: 'cardnews_planner', to: 'cardnews_designer', summary: '배경 프롬프트 디자인' });
-    const design = await designBackgrounds(io, card.topic, plan, refs.analysis, opts.stylePreset, card.keyword);
+    const design = await designBackgrounds(io, card.topic, plan, refs.analysis, opts.stylePreset, card.keyword, opts.sourceBody);
+    { const n = design.musts.filter(Boolean).length; if (n) say(`원문 묘사 — ${n}장에 꼭 보일 것·나오면 안 될 것 지정`); }
     say(`디자인 확정 — ${design.preset} · ${design.style.slice(0, 40)}`);
     checkAbort();
 
@@ -1253,6 +1263,7 @@ export async function runCardNewsJob(
       headline: plan.slides[i]!.headline, body: plan.slides[i]!.body, scene: design.prompts[i] ?? '',
       style: design.style, title: plan.title, index: i, total, hasRefs, preset: design.preset,
       ...(known ? { subject: speciesAnchor(known), subjectLatin: known.latin } : {}),
+      ...(design.musts[i] ? { must: design.musts[i] } : {}),
     });
     const bgDraft = { imageSlots: plan.slides.map((s, i) => ({ alt: s.headline, prompt: cardPrompt(i) })) };
     const bgDraftPath = path.join(dir, 'bg-draft.json');

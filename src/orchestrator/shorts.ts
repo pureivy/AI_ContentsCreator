@@ -10,7 +10,7 @@
  */
 import fs from 'node:fs';
 import { SELLER_INQUIRY_BAN, NO_FABRICATED_EXPERIENCE } from './org';
-import { lexiconGuide, mediaRulesGuide } from '../content/brand';
+import { lexiconGuide, mediaRulesGuide, varietyGuide } from '../content/brand';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { microJSON, runAgent, extractFirstJson } from './agent';
@@ -23,6 +23,8 @@ import { writerById, writerByName, type ShortsWriter } from '../content/shortsWr
 import { notifyShortsReady } from '../autonomy/contentNotify';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
+import { parseSceneMust, mustDesignerGuide, mustPromptLines, type SceneMust } from './sceneMust';
+export { parseSceneMust } from './sceneMust';
 import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues, parityIssues, parityIssuesChecked, parityToInfo, PARITY_SOURCE_CHARS } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue, stripUnsourcedStatOverlays } from '../content/timingParity';
@@ -1509,7 +1511,8 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 원문 핵심 앵커(2026-08-24 실사고) — 블로그는 '화분 크기'가 핵심 축인데 유사주제 가드에 밀린 작가가
     // 그 축을 통째로 빼고 곁가지(겨울 자리)로만 대본을 만들어 세트의 메시지가 어긋났다. 소재 선택은
     // 원문이 이기고, 프레이밍(각도)은 중복 회피가 이긴다는 서열을 명시한다.
-    sourceBody ? '원문 핵심 앵커: 원문 제목·소제목이 힘준 핵심 축 중 최소 1개를 대본의 중심 소재로 삼아라 — 원문이 강조하지 않은 곁가지만으로 대본을 채우면 실패다. 그 핵심 축이 [이미 만든 유사 주제] 목록에서 이미 다뤄진 경우에만 다음 축으로 넘어가고, 전부 다뤄졌다면 소재는 유지하되 다른 독자 상황·글 유형으로 재구성하라(소재 선택은 원문이, 프레이밍은 중복 회피가 이긴다).' : '',
+    // 2026-10-12 사장님 지시("블로그 글에서 핵심 내용만") — 원문 맨 위 굵은 요약 두 줄이 그 글이 고른 핵심이다. 그것을 첫 후보로.
+    sourceBody ? '원문 핵심 앵커: 원문 맨 위 굵은 요약 두 줄(**…**)이 그 글의 핵심 답이다 — 그것을 첫 후보로 삼는다. 원문 제목·소제목이 힘준 핵심 축 중 최소 1개를 대본의 중심 소재로 삼아라 — 원문이 강조하지 않은 곁가지만으로 대본을 채우면 실패다. 그 핵심 축이 [이미 만든 유사 주제] 목록에서 이미 다뤄진 경우에만 다음 축으로 넘어가고, 전부 다뤄졌다면 소재는 유지하되 다른 독자 상황·글 유형으로 재구성하라(소재 선택은 원문이, 프레이밍은 중복 회피가 이긴다).' : '',
     // 매체 전환 선언(2026-08-28 사용자 지적) — 종전 지시는 "문장 복붙 금지"까지였다. 실측(short_b894bf71fb)
     // 유사도는 38~56%라 복붙은 안 했는데도, 씬 순서가 원문 소제목 순서를 그대로 따라가 '요약본'이 됐다:
     // 문제제기→방법→방법→다른주제→목록. 블로그는 훑어 읽으며 필요한 대목만 골라 가는 매체라 병렬 나열이
@@ -1554,6 +1557,8 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     '[우선순위] 아래 문체 지침은 표현 방식 지침이다 — 원문에서 추린 방법·이유·위험 근거 문장을 삭제하는 방식으로 이행하지 마라. 문체와 정보가 충돌하면 정보를 남기고 문체를 양보하라.',
     // 파생 문체 확정 규칙(2026-10-12 사장님 확정) — 모과나무 삽목 숏폼 2편이 원문 경고(봄에 당기지 마라)를 '봄에 바로 보여요'로 뒤집었다.
     mediaRulesGuide(),
+    // 판매 품종 표기(2026-10-12 사장님 품종표) — 이 주제 수종의 품종을 말할 때 쓸 이름.
+    varietyGuide(`${topic} ${keyword ?? ''}`),
     // 결론 의무+낭독 명료성(사용자 확정 2026-08-12): "잎 색 변화" 편 실측 — 보는 법 3갈래를 나열하고
     // 각각이 뭘 뜻하는지 한 번도 안 말해 "무얼 주장하는지 모르겠는" 영상이 됐다.
     guide.conclusion,
@@ -1870,12 +1875,12 @@ function kstMonthNow(now: number = Date.now()): number {
   return new Date(now + 9 * 3600 * 1000).getUTCMonth() + 1;
 }
 
-async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: string): Promise<{ preset: string; style: string; prompts: string[]; subject?: string; subjectLatin?: string; species?: import('../content/species').Species }> {
+async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: string, sourceBody?: string): Promise<{ preset: string; style: string; prompts: string[]; musts: Array<SceneMust | undefined>; subject?: string; subjectLatin?: string; species?: import('../content/species').Species }> {
   const sceneGenreGuide = genreSceneGuide(shortsGenreOf(topic, CONFIG.shortsLore));
   // 훅(0번) 이미지 지침(2026-09-18, SHORTS_HOOK_FOOTAGE) — 실촬영이 훅을 못 채운 편은 이 프롬프트로
   // 생성한 이미지가 그대로 훅 화면이 된다. 넓은 풍경·정면 전경은 스와이프를 안 멈춘다(실측).
   const hookImageGuide = CONFIG.shortsHookFootage
-    ? '씬1(훅)은 첫 2초에 스와이프를 멈추게 하는 화면 — 대비가 큰 클로즈업(가위 앞에서 멈춘 손, 잎 한 장, 열매 단면, 상처 난 줄기). 넓은 풍경·정면 나무 전경·글자 금지. 이야기형은 위 지침이 우선.'
+    ? '씬1(훅)은 첫 2초에 스와이프를 멈추게 하는 화면 — 대비가 큰 클로즈업(잎 한 장, 열매 단면, 상처 난 줄기, 갓 자른 단면). 연장(가위·칼)은 그리지 않는다(2026-10-12 — 예시의 "가위 앞 손"이 연장 금지와 부딪혔다). 넓은 풍경·정면 나무 전경·글자 금지. 이야기형은 위 지침이 우선.'
     : '';
   const user = [
     `[주제] ${topic}`,
@@ -1885,6 +1890,9 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
     '',
     `각 씬의 세로(9:16) 배경 이미지 프롬프트를 설계하라. scenes 는 정확히 ${plan.scenes.length}개.`,
     '이미지 안 글자 금지.',
+    // 원문 묘사 반영(2026-10-12 사장님 지시) — 디렉터가 원문을 못 봐서 모과나무 삽목 편의 삽수가 잎 달린 채·끝이 뭉툭하게,
+    // 확인 장면이 다 자란 나무로 그려졌다(원문: 잎 진 맨가지, 아래 끝을 비스듬히, 깊은 화분, 표식).
+    ...mustDesignerGuide(sourceBody, '씬'),
     // 계절·행동 일치(2026-10-02 숏폼 10편 감사) — 디렉터는 지금이 몇 월인지 몰랐다. 실측: 시월 꽃눈 편 두 개가 봄 개화·꽃봉오리
     // 그림으로 나갔고, "잎이 진 뒤에 자르세요" 씬에 잎 무성한 가지를 가위로 자르는 장면이 나갔다(메시지와 정반대).
     `계절: 지금은 ${kstMonthNow()}월이다. 모든 씬의 잎·꽃·열매 상태는 지금 계절로 그려라. 그 씬 내레이션이 다른 계절의 모습을 직접 말할 때만(예: "봄에 꽃이 피면") 그 계절로 그린다 — 지나간 일을 떠올리는 말("올여름 꽃 핀 자리")은 지금 계절의 흔적(시든 꽃자리·빈 꽃대)으로 그려라.`,
@@ -1904,10 +1912,10 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
     ...(sceneGenreGuide ? [sceneGenreGuide] : []),
     ...(hookImageGuide ? [hookImageGuide] : []),
     'style_preset 은 주제·내용·톤에 어울리게 선택하라 — photorealistic 을 기본값처럼 고르지 말 것. photorealistic=실물 시연·하우투·생활, manhwa=스토리·유머·과장, watercolor=감성·계절·에세이, ink_wash=차분한 전통·사색적 주제, flat_design=정보·정책·경제·비교·수치, retro_poster=이벤트·프로모션·복고.',
-    'JSON 형식: {"style_preset":"photorealistic|manhwa|watercolor|ink_wash|flat_design|retro_poster","style":"모든 씬 공통 스타일 문구(팔레트·질감·조명)","subject_latin":"학명(모르면 빈 문자열)","subject":"한글 이름 — 구별되는 겉모습 한 줄(없으면 빈 문자열)","scenes":[{"prompt":"장면 묘사(한국어 150자 이내)"}]}',
+    `JSON 형식: {"style_preset":"photorealistic|manhwa|watercolor|ink_wash|flat_design|retro_poster","style":"모든 씬 공통 스타일 문구(팔레트·질감·조명)","subject_latin":"학명(모르면 빈 문자열)","subject":"한글 이름 — 구별되는 겉모습 한 줄(없으면 빈 문자열)","scenes":[{"prompt":"장면 묘사(한국어 150자 이내)"${sourceBody ? ',"must_show":["화면에 꼭 보여야 할 사실"],"must_not":["나오면 안 되는 것"]' : ''}}]}`,
   ].join('\n');
-  const j = await callRoleJSON<{ style_preset?: unknown; style?: unknown; subject?: unknown; subject_latin?: unknown; scenes?: Array<{ prompt?: unknown }> }>(
-    io, 'shorts_director', '당신은 숏폼 영상 디렉터입니다. 요청된 JSON 스키마만 출력합니다.', user, 1800, true,
+  const j = await callRoleJSON<{ style_preset?: unknown; style?: unknown; subject?: unknown; subject_latin?: unknown; scenes?: Array<{ prompt?: unknown; must_show?: unknown; must_not?: unknown }> }>(
+    io, 'shorts_director', '당신은 숏폼 영상 디렉터입니다. 요청된 JSON 스키마만 출력합니다.', user, sourceBody ? 2600 : 1800, true,
   );
   const rawPreset = String(j?.style_preset ?? '').trim();
   const preset = PRESETS.has(rawPreset) ? rawPreset : (PRESET_ALIAS[rawPreset] ?? 'photorealistic');
@@ -1916,6 +1924,7 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
     const p = String(j?.scenes?.[i]?.prompt ?? '').trim().slice(0, 200);
     return p || `${topic} 를 상징하는 한국 생활 장면, ${s.narration.slice(0, 30)} 분위기`;
   });
+  const musts = plan.scenes.map((_, i) => (sourceBody ? parseSceneMust(j?.scenes?.[i]) : undefined));
   // 수종 사전이 이긴다(2026-09-04) — LLM 기억보다 표가 정확하다. 표에 없으면 LLM 값을 쓴다.
   const known = findSpecies(`${keyword ?? ''} ${topic}`);
   const subject = known ? speciesAnchor(known) : String(j?.subject ?? '').trim().slice(0, 120);
@@ -1935,7 +1944,7 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
   } else if (keyword) {
     console.log('[숏폼]', `수종 앵커 없음 — 디렉터가 '${keyword}' 겉모습을 못 적었다(화면 수종이 틀릴 수 있음)`);
   }
-  return { preset, style, prompts, ...(subject ? { subject } : {}), ...(subjectLatin ? { subjectLatin } : {}), ...(known ? { species: known } : {}) };
+  return { preset, style, prompts, musts, ...(subject ? { subject } : {}), ...(subjectLatin ? { subjectLatin } : {}), ...(known ? { species: known } : {}) };
 }
 
 /**
@@ -2027,6 +2036,8 @@ export function buildSceneImagePrompt(a: {
   speciesRef?: boolean;
   /** 성장 단계별 실제 크기(2026-09-08, 사전 size) — 없으면 학명으로 가늠하게 한다. */
   subjectSize?: string;
+  /** 원문 묘사(2026-10-12) — 이 씬에 꼭 보여야 할 것·나오면 안 되는 것(designScenes must_show·must_not). */
+  must?: SceneMust;
 }): string {
   const { style, index: i, total, seed, subject, subjectLatin, seasonal } = a;
   const scene = a.scene.trim() || '주제를 상징하는 한국 생활 장면';
@@ -2059,6 +2070,8 @@ export function buildSceneImagePrompt(a: {
   // 연장은 화면에 넣지 않는다(2026-09-06 실사고) — 생활감이 "쓴 자국이 있는 도구"를 부르면
   // 전지가위가 들어오는데, 날과 축의 구조가 물리적으로 불가능하게 그려진다. 손만으로 충분하다.
   p.push('[연장] 전지가위·톱·삽 같은 연장은 화면에 넣지 마라 — 날·축·손잡이 구조가 어긋나게 그려진다. 손은 나무를 짚거나 가리키는 정도로만 쓴다.');
+  // 원문 묘사(2026-10-12 사장님 지시) — 장면 묘사보다 구체적인 사실(사선으로 자른 끝·잎 없는 맨가지·묘목 나이별 크기)을 따로 못박는다.
+  p.push(...mustPromptLines(a.must));
   if (!seed) { // 종전 동작 보존
     p.push(`장면(씬 ${i + 1}/${total}${isHook ? ', 훅' : ''}): ${scene}.${isHook ? HOOK_PUSH[0] : ''}`);
     p.push('구도: 세로 9:16 프레임을 피사체로 자연스럽게 채운다.');
@@ -2897,7 +2910,8 @@ export async function runShortsJob(
     // 디렉터를 engaged 웨이브에 배선 — standby 팀은 org 와 달리 delegation 이벤트가 없어,
     // 디자인 단계 내내 오피스가 디렉터를 유휴·배회로 그리고 WORKING 칩도 0 이었다(수선 2026-08-12).
     opts.bus?.emit('delegation', { team_id: 'shorts', from: 'shorts_writer', to: 'shorts_director', summary: '씬 비주얼 연출' });
-    const design = await designScenes(io, short.topic, plan, short.keyword);
+    const design = await designScenes(io, short.topic, plan, short.keyword, opts.sourceBody);
+    { const n = design.musts.filter(Boolean).length; if (n) say(`원문 묘사 — ${n}씬에 꼭 보일 것·나오면 안 될 것 지정`); }
     say(`디자인 확정 — ${design.preset} · ${design.style.slice(0, 40)}`);
     checkAbort();
 
@@ -2986,7 +3000,9 @@ export async function runShortsJob(
       ...(design.subject ? { subject: design.subject } : {}),
       ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}),
       // 꽃·열매는 그 씬이 실제로 다룰 때만 — 늘 붙이면 꽃 없는 계절 장면에 꽃이 그려진다.
-      ...(design.species ? { seasonal: speciesSeasonalHint(design.species, `${design.prompts[i] ?? ''} ${plan.scenes[i]?.narration ?? ''}`) } : {}),
+      // 2026-10-12 — 내레이션까지 보면 "열매 보려면"이 삽수 장면에 열매 묘사를 끌어왔다. 실제로 그리는 장면 묘사만 본다.
+      ...(design.species ? { seasonal: speciesSeasonalHint(design.species, design.prompts[i] ?? '') } : {}),
+      ...(design.musts[i] ? { must: design.musts[i] } : {}),
     }));
     const slotOf = (i: number): { alt: string; prompt: string } => ({
       alt: plan.scenes[i]!.screenText || plan.scenes[i]!.narration.slice(0, 30),
@@ -3040,6 +3056,7 @@ export async function runShortsJob(
       ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}), // 수종 오식별 검사
       ...(design.species?.size ? { subjectSize: design.species.size } : {}),   // 크기 검사(2026-09-08)
       sceneHints: plan.scenes.map((s) => s.narration),                           // 초점 읽기(2026-09-09)
+      sceneMust: design.musts,                                                   // 원문 묘사 대조(2026-10-12)
       // 실사진 자리는 QA 재생성에서 뺀다 — 사용자가 고른 사진을 우리가 생성본으로 바꾸면 안 된다.
       protectedScenes: new Set(assetPlan.map((a, i) => (a ? i : -1)).filter((i) => i >= 0)),
     });

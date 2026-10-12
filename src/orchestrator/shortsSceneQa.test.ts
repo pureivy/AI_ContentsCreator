@@ -80,3 +80,19 @@ describe('parseFocus — 비전이 보고한 초점을 원본 인덱스로(2026-
     expect(f[1]).toEqual({ x: 0.2, y: 0.2 });
   });
 });
+
+// 2026-10-12 — 원문 묘사 검수 줄(모과나무 삽목 편: 잎 달린 삽수·뭉툭한 끝·다 자란 나무·칼이 검수를 통과했다).
+import { buildMustLines } from './shortsSceneQa';
+describe('buildMustLines — 원문 묘사를 검수 순번으로', () => {
+  it('목록 있는 장만, checked 순번(1부터)으로 다시 매긴다', () => {
+    const must = [undefined, { show: ['잎 없는 맨가지', '아래 끝이 사선으로 잘린 삽수'], not: ['잎 달린 가지'] }, { show: [], not: [] }, { show: [], not: ['칼'] }];
+    const checked = [{ origIndex: 1 }, { origIndex: 2 }, { origIndex: 3 }];
+    expect(buildMustLines(must, checked)).toEqual([
+      '1) 보여야 함: 잎 없는 맨가지 · 아래 끝이 사선으로 잘린 삽수 / 나오면 안 됨: 잎 달린 가지',
+      '3) 나오면 안 됨: 칼',
+    ]);
+  });
+  it('목록이 없으면 빈 배열', () => {
+    expect(buildMustLines(undefined, [{ origIndex: 0 }])).toEqual([]);
+  });
+});

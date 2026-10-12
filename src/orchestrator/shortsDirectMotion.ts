@@ -287,6 +287,8 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
     return null;
   });
   const realFootage = clips.map((c) => !!c && path.basename(c).startsWith('user_'));
+  // 사장님 규칙(2026-10-12) — 모션그래픽 영상에도 실제 촬영 영상이 반드시 하나 들어간다. 실촬영 씬은 pickGraphicScenes 가 그래픽에서 빼므로 원본 그대로 남는다.
+  if (!realFootage.some(Boolean)) throw new Error('실촬영 클립(clips/user_NN.mp4) 없음 — 실제 영상 1개 필수 규칙, 파일럿 대상 아님');
   const frames: number[] = [];
   for (let i = 0; i < plan.scenes.length; i++) {
     const narr = path.join(dir, 'remotion', `narr_${nn(i)}.mp3`);

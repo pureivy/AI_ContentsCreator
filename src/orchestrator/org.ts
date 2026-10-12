@@ -20,13 +20,13 @@ import { prepareRun } from './prepare';
 import { finalizeRun } from './finalize';
 import { formatterFor } from '../output';
 import type { AssetBundle } from '../output';
-import { parseImagePlan, draftFiles, capImageMarkers, countImageMarkers, brandPlaceWords, BLOG_IMAGE_MAX } from '../output/naverBlog';
+import { parseImagePlan, draftFiles, capImageMarkers, countImageMarkers, ensureImageMarkers, brandPlaceWords, BLOG_IMAGE_MAX } from '../output/naverBlog';
 import { prepareRealFrame } from './realFrame';
 import { realFrameSceneTags, withRealFrameSlot } from '../content/blogFrames';
 import { naverSerp } from '../grounding/naver_search';
 import { seedKeyword } from '../grounding/naver_common';
 import { getRunSettings } from '../runsettings';
-import { hasBoldSummaryRule, brandContext, activeBrandSlug, getBrand, lexiconGuide, editorRulesGuide } from '../content/brand';
+import { hasBoldSummaryRule, brandContext, activeBrandSlug, getBrand, lexiconGuide, editorRulesGuide, varietyGuide } from '../content/brand';
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid, recentBlogEndings } from '../content/priorCoverage';
 import { recentModulesToAvoid, moduleAvoidBlock } from '../content/contentModules';
 import { collectExistingContent } from '../content/novelty';
@@ -399,7 +399,7 @@ export async function writeBlogBody(a: {
     + '\n[운영 데이터 비공개] 검색량·문서수·자동완성·상위노출 건수 같은 SEO 조사 수치는 글의 방향을 잡는 데만 쓰고 본문에 쓰지 마라 — 독자가 읽을 글이지 운영 보고서가 아니다.';
   // 리비전 컨텍스트(스펙 §3) — voiceGuide 를 리비전에도 넣는다(종전엔 초안+피드백뿐이라 목소리·브리프가 빠졌다).
   // 편집 확정 규칙(2026-10-05)은 리비전에도 — 문체 린트 수정·사람 수정 요청이 한 줄 한 문장·첫머리 요약을 되돌리지 않게.
-  const reviseContext = revise ? [buildReviseContext({ factCard, brief, voiceGuide, baseBody: revise.baseBody, feedback: revise.feedback, structure }), editorRulesGuide(), keywordWritingGuide(keyword)].filter(Boolean).join('\n\n') : '';
+  const reviseContext = revise ? [buildReviseContext({ factCard, brief, voiceGuide, baseBody: revise.baseBody, feedback: revise.feedback, structure }), editorRulesGuide(), varietyGuide(`${topic} ${keyword ?? ''}`), keywordWritingGuide(keyword)].filter(Boolean).join('\n\n') : '';
   // 가드 발화 가시화(2026-08-06) — 프롬프트 컨텍스트는 이벤트에 안 남아 "가드가 있는데 왜 뚫렸나"를
   // 사후 판정할 수 없었다(배롱나무 중복 조사에서 실측). 발화 여부만 한 줄 남긴다.
   if (!revise) {
@@ -460,7 +460,7 @@ export async function writeBlogBody(a: {
       // 재집필은 검수 의견을 뺀다(같은 벽에 다시 부딪히지 않게) — 그러나 mustFixBlock 은 **남긴다**.
       // 이건 품질 조언이 아니라 '무근거 기입을 쓰지 마라'는 금지라, 여기서 빠지면 퇴화 재집필 경로가
       // 게이트의 구멍이 된다(브리프에 남은 무근거 주장이 그대로 본문에 실린다).
-      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, moduleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms), editorRulesGuide(), keywordWritingGuide(keyword), brief ? `[리서치·SEO 브리프]\n${brief}` : '', mustFixBlock].filter(Boolean).join('\n\n'),
+      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, moduleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms), editorRulesGuide(), varietyGuide(`${topic} ${keyword ?? ''}`), keywordWritingGuide(keyword), brief ? `[리서치·SEO 브리프]\n${brief}` : '', mustFixBlock].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, groundForFacts: true, maxOutputTokens: 5000, signal,
     });
@@ -1248,6 +1248,16 @@ async function packageDesignFinalize(a: {
     : null;
   // 디자이너가 계획할 생성 장수 — 남긴 마커마다 이미지 한 장(실촬영이 있으면 첫 마커는 실사진이라 하나 덜 계획한다).
   // 마커가 없으면(렌더가 소제목 아래 배분) 종전 그대로 BLOG_IMAGE_MAX.
+  // 마커 하한(2026-10-12 사장님 지적) — 작가가 마커를 덜 달면 이미지가 그만큼 줄었다(종전 imageTotal = markerCount || 3).
+  // 이미지가 실제로 나갈 런이면 모자란 마커를 소제목 절 끝에 채워 늘 3장(실촬영 1 + 생성 2)이 되게 한다.
+  if (assets && (!!realFrame || (!!designer && !!CONFIG.openaiApiKey) || (!!CONFIG.openaiApiKey && CONFIG.blogAutoImage))) {
+    const fill = ensureImageMarkers(assets.draft.bodyMarkdown, BLOG_IMAGE_MAX);
+    if (fill.added) {
+      assets.draft.bodyMarkdown = fill.body;
+      finalDeliverable = ensureImageMarkers(finalDeliverable, BLOG_IMAGE_MAX).body;
+      bus.emit('log', { message: `이미지 자리 보충 — 작가 마커가 ${BLOG_IMAGE_MAX - fill.added}개뿐이라 ${fill.added}곳을 소제목 절 끝에 더함` });
+    }
+  }
   const markerCount = countImageMarkers(finalDeliverable);
   const imageTotal = markerCount || BLOG_IMAGE_MAX;
   const aiSlots = Math.max(0, imageTotal - (realFrame ? 1 : 0));

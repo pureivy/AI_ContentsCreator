@@ -87,6 +87,8 @@ export interface BrandProfile {
   /** 파생 문체 확정 규칙(2026-10-12 사장님 확정 — 모과나무 삽목 파생물 점검). 숏폼·카드뉴스 기획과 두 수정 경로 공용(mediaRulesGuide).
    *  블로그 editorRules 의 판형 규칙(굵은 요약·소제목·한 줄)은 씬·카드와 충돌해 문장 원칙만 매체용으로 옮겼다. */
   mediaRules?: string[];
+  /** 판매 품종(2026-10-12 사장님 품종표) — 수종(카탈로그 이름) → 품종 표기. 글이 품종을 말할 때 이 이름을 쓴다(varietyGuide). */
+  varieties?: Record<string, string[]>;
 }
 
 const brandPath = (): string => path.join(CONFIG.dataDir, 'brand.yaml');
@@ -285,6 +287,9 @@ export function normalizeBrand(raw: Partial<BrandProfile> | null | undefined): B
     // 규칙 문장은 예시를 품어 길다 — 300자·20개 캡(참고 블로그와 같은 값, 프롬프트 폭주 방지).
     editorRules: arr(raw?.editorRules, 20, 300),
     mediaRules: arr(raw?.mediaRules, 20, 300),
+    varieties: Object.fromEntries(Object.entries((raw?.varieties && typeof raw.varieties === 'object' ? raw.varieties : {}) as Record<string, unknown>)
+      .map(([k, v]) => [String(k).trim().slice(0, 20), arr(v, 20, 20)] as const)
+      .filter(([k, v]) => k && v.length).slice(0, 80)),
   };
 }
 
@@ -303,6 +308,27 @@ export function editorRulesGuide(b: BrandProfile | null = getBrand()): string {
 
 /** 파생 문체 확정 규칙 블록(순수, 2026-10-12) — 숏폼·카드뉴스 기획(planShorts·planCards)과 수정 요청(reviseShorts·reviseCardNews) 공용.
  *  규칙이 없으면 빈 문자열(종전 동작 그대로). 판형(길이 예산·글자 상한·씬 수)은 이 규칙보다 앞선다 — 문장 규칙만 이긴다. */
+/**
+ * 판매 품종 표기 블록(순수, 2026-10-12) — 글감(주제·키워드)에 걸리는 수종의 판매 품종만 싣는다. 걸리는 수종이 없으면 빈 문자열.
+ * 수종 판별은 카탈로그 이름·별칭 포함으로 한다(대봉→감나무). 품종을 새로 꺼내 나열하게 하지 않는다 — 이름 표기 기준일 뿐이다.
+ */
+export function varietyGuide(text: string, b: BrandProfile | null = getBrand()): string {
+  const v = b?.varieties ?? {};
+  if (!Object.keys(v).length) return '';
+  const t = String(text ?? '');
+  const hits: string[] = [];
+  for (const g of b?.speciesCatalog ?? []) {
+    for (const sp of g.species) {
+      const names = [sp.name, ...(sp.aliases ?? [])].filter((n) => n && n.length >= 2);
+      if (v[sp.name]?.length && names.some((n) => t.includes(n)) && !hits.some((h) => h.startsWith(`${sp.name}:`))) hits.push(`${sp.name}: ${v[sp.name]!.join('·')}`);
+    }
+  }
+  if (!hits.length) return '';
+  return '[판매 품종 표기 — 비온디트리가 파는 품종 이름(사장님 품종표)] 글에서 이 수종의 품종을 말할 때는 아래 표기를 그대로 써라. '
+    + '품종을 말할 필요가 없는 글에 품종을 새로 꺼내 나열하지 마라(광고처럼 읽힌다). 품종의 특성(맛·크기·시기)은 근거 자료에 있을 때만 쓴다 — 이름만으로 특성을 지어내지 마라.\n'
+    + hits.join('\n');
+}
+
 export function mediaRulesGuide(b: BrandProfile | null = getBrand()): string {
   const rules = b?.mediaRules ?? [];
   if (!rules.length) return '';

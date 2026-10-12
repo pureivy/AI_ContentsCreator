@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyShortsRevision, settleNextEpisode, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt, diversifyTitle, titleShape, normalizeLatinName } from './shorts';
+import { applyShortsRevision, settleNextEpisode, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt, diversifyTitle, titleShape, normalizeLatinName, parseSceneMust } from './shorts';
 import { ShortsStore } from '../content/shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
@@ -589,5 +589,20 @@ describe('settleNextEpisode — 예고를 덜어도 CTA 는 행동으로 닫는�
     const base = '가을엔 열매가 더 정확해요. 다음엔 미국산딸나무와 비교해드릴게요.';
     expect(settleNextEpisode({ scenes: [{ narration: '훅' }, { narration: base, screenText: '7m 거리 두세요' }] }, false).plan.scenes[1]!.narration).toBe('가을엔 열매가 더 정확해요.');
     expect(settleNextEpisode({ scenes: [{ narration: '훅' }, { narration: base, screenText: '다음엔 꼭 보세요' }] }, false).plan.scenes[1]!.narration).toBe('가을엔 열매가 더 정확해요.');
+  });
+});
+
+// 2026-10-12 사장님 지시 — 이미지가 블로그 원문 묘사(사선으로 자른 끝·잎 없는 맨가지)를 반영해야 한다.
+describe('원문 묘사 — 디렉터 must 정리와 이미지 프롬프트 블록', () => {
+  it('parseSceneMust: 문자열만·짧게·상한, 비면 undefined', () => {
+    expect(parseSceneMust({ must_show: ['잎 없는 맨가지', '', 3, 'a', 'b', 'c'], must_not: ['칼'] })).toEqual({ show: ['잎 없는 맨가지', '3', 'a', 'b'], not: ['칼'] });
+    expect(parseSceneMust({})).toBeUndefined();
+    expect(parseSceneMust(null)).toBeUndefined();
+  });
+  it('buildSceneImagePrompt: must 가 있으면 보여야 함·나오면 안 됨 블록을 싣는다', () => {
+    const t = buildSceneImagePrompt({ style: 's', scene: '작업대 위 삽수', index: 1, total: 5, seed: 'x', subject: '모과나무', must: { show: ['아래 끝이 사선으로 잘린 삽수'], not: ['잎 달린 가지'] } });
+    expect(t).toContain('[원문 묘사 — 이 장면에 반드시 이렇게 보여야 함] 아래 끝이 사선으로 잘린 삽수');
+    expect(t).toContain('[이 장면에 나오면 안 됨 — 원문과 어긋남] 잎 달린 가지');
+    expect(buildSceneImagePrompt({ style: 's', scene: 'x', index: 1, total: 5, seed: 'x' })).not.toContain('[원문 묘사');
   });
 });

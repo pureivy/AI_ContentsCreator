@@ -668,3 +668,14 @@ describe('cardCopyLintIssues — 카드 문구 결정적 린트 묶음(planCards
     ], '대추나무 심는시기', '대추나무 심는시기')).toEqual([]);
   });
 });
+
+// 2026-10-12 사장님 지시 — 카드 배경도 블로그 원문 묘사(사선으로 자른 끝·잎 없는 맨가지)를 따른다.
+describe('buildCardImagePrompt — 원문 묘사 블록', () => {
+  const base = { headline: 'h', scene: '삽수', style: 's', title: 't', index: 1, total: 5, hasRefs: false, preset: 'photorealistic' };
+  it('must 가 있으면 보여야 함·나오면 안 됨을 싣고, 없으면 무주입', () => {
+    const p = buildCardImagePrompt({ ...base, must: { show: ['잎 없는 맨가지'], not: ['칼'] } });
+    expect(p).toContain('[원문 묘사 — 이 장면에 반드시 이렇게 보여야 함] 잎 없는 맨가지');
+    expect(p).toContain('[이 장면에 나오면 안 됨 — 원문과 어긋남] 칼');
+    expect(buildCardImagePrompt(base)).not.toContain('[원문 묘사');
+  });
+});

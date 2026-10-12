@@ -18,6 +18,7 @@ import { generateImagesForDraft } from '../tools/blog_skills';
 import { renderHtml } from '../output/render';
 import { BLOG_IMAGE_MAX } from '../output/naverBlog';
 import { mergeRealFrameManifest } from '../content/blogFrames';
+import { applyBlogDiagrams } from './blogDiagramsApply';
 
 /**
  * 완성된 blog-image-NN.png 파일명들 → 슬롯 번호(NN) 정렬 매니페스트 images 배열(순수).
@@ -182,6 +183,17 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
             fs.writeFileSync(manifestPath, JSON.stringify(merged, null, 2), 'utf-8');
           } catch (e) {
             a.bus.emit(EventType.log, { message: `실촬영 컷 매니페스트 합치기 실패(무해): ${e instanceof Error ? e.message : String(e)}` });
+          }
+        }
+        // 설명 도표 2장(2026-10-12 사장님 채택) — 사진(실촬영 1 + 생성 2) 뒤에 순서·요약 도표를 본문 자리에 끼우고 파일 번호를 다시 매긴다.
+        if (CONFIG.blogDiagrams && !a.signal?.aborted) {
+          try {
+            const dg = await applyBlogDiagrams(dir, a.assets.draft, {
+              signal: a.signal, log: (m) => a.bus.emit(EventType.log, { message: m }),
+            });
+            if (dg) a.assets.draft = dg.draft;
+          } catch (e) {
+            a.bus.emit(EventType.log, { message: `설명 도표 실패(무해 — 사진만): ${e instanceof Error ? e.message : String(e)}` });
           }
         }
         // 실재 반영 재렌더(실사고 2026-08-31) — 위에서 저장한 draft.html 의 <img> 는 '이 런은 이미지를

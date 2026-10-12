@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
-import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug, brandFileSuffixFor, bannedTopicTerms, offBrandTerm, lexiconGuide, editorRulesGuide, mediaRulesGuide, hasBoldSummaryRule } from './brand';
+import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug, brandFileSuffixFor, bannedTopicTerms, offBrandTerm, lexiconGuide, editorRulesGuide, mediaRulesGuide, varietyGuide, hasBoldSummaryRule } from './brand';
 
 // 브랜드 프로필 — 정규화·주입 블록(순수 함수) 회귀 방지.
 describe('normalizeBrand', () => {
@@ -349,5 +349,29 @@ describe('2026-10-12 문체 규칙 — 실제 brand.yaml', () => {
   it('미설정이면 빈 문자열(숏폼·카드 프롬프트 무변경)', () => {
     expect(mediaRulesGuide(normalizeBrand({ name: 'x' }))).toBe('');
     expect(mediaRulesGuide(null)).toBe('');
+  });
+});
+
+// 2026-10-12 사장님 품종표 — 판매 품종 표기·카탈로그 보강(앵두≠체리, 다래≠참다래).
+describe('판매 품종·카탈로그 보강 — 실제 brand.yaml', () => {
+  const b = normalizeBrand(YAML.parse(fs.readFileSync(fileURLToPath(new URL('../../data/brand.yaml', import.meta.url)), 'utf-8')))!;
+  const names = (b.speciesCatalog ?? []).flatMap((g) => g.species.map((x) => x.name));
+  it('누락 수종이 들어가고 앵두는 체리 별칭에서 빠진다', () => {
+    for (const n of ['앵두나무', '플럼코트', '다래', '삼지닥나무', '유럽분꽃나무', '팥꽃나무', '참죽나무']) expect(names).toContain(n);
+    const cherry = (b.speciesCatalog ?? []).flatMap((g) => g.species).find((x) => x.name === '체리나무')!;
+    expect(cherry.aliases ?? []).not.toContain('앵두');
+  });
+  it('주제에 걸리는 수종의 품종만 싣는다(별칭 포함), 없으면 빈 문자열', () => {
+    const g = varietyGuide('사과나무 전정, 감홍 가지 고르기', b);
+    expect(g).toContain('사과나무: 미야비·감홍·시나노골드');
+    expect(g).not.toContain('감나무:');
+    expect(varietyGuide('대봉 홍시 만들기', b)).toContain('감나무: 대봉·왕대봉');
+    expect(varietyGuide('모과나무 삽목', b)).toBe('');
+    expect(varietyGuide('사과나무', normalizeBrand({ name: 'x' }))).toBe('');
+  });
+  it('판독 불확실 품종은 넣지 않았다', () => {
+    const all = Object.values(b.varieties ?? {}).flat();
+    for (const n of ['미얀마', '승정도후인', '을성2호', '유하노버']) expect(all).not.toContain(n);
+    expect(b.varieties?.['목련']).toEqual(['백목련']);
   });
 });

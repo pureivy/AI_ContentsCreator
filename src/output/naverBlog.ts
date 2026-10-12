@@ -101,6 +101,31 @@ export function countImageMarkers(md: string): number {
 }
 
 /**
+ * 이미지 마커 하한 채우기(순수, 2026-10-12 사장님 지적 "이미지가 2개밖에 없는데") — 작가가 "정확히 3곳" 지시를 어기고 마커 2개만
+ * 달면 이미지 수가 마커 수로 줄었다(imageTotal = markerCount || 3). 모자란 만큼, 마커가 없는 소제목 절의 끝(다음 소제목 앞)에
+ * "[IMAGE: 소제목 장면]" 마커를 더한다. 앞쪽 절부터, 마지막 절(마무리)은 다른 자리가 없을 때만. 이미 n개 이상이면 그대로.
+ */
+export function ensureImageMarkers(md: string, n: number = BLOG_IMAGE_MAX): { body: string; added: number } {
+  const lines = String(md ?? '').split('\n');
+  let have = lines.filter((l) => IMAGE_MARKER_LINE_RE.test(l)).length;
+  if (have >= n) return { body: md, added: 0 };
+  const heads = lines.map((l, i) => (/^##\s+\S/.test(l) ? i : -1)).filter((i) => i >= 0);
+  const sections = heads.map((h, k) => ({ head: h, end: k + 1 < heads.length ? heads[k + 1]! : lines.length }));
+  const free = sections.filter((sec) => !lines.slice(sec.head, sec.end).some((l) => IMAGE_MARKER_LINE_RE.test(l)));
+  const order = free.length > 1 ? [...free.slice(0, -1), free[free.length - 1]!] : free; // 마무리 절은 맨 뒤 후보
+  const picks = order.slice(0, n - have).sort((a, b) => b.head - a.head); // 뒤에서부터 넣어야 앞 인덱스가 안 밀린다
+  for (const sec of picks) {
+    const title = lines[sec.head]!.replace(/^##\s+/, '').replace(/\*\*/g, '').trim().slice(0, 40);
+    let at = sec.end;
+    while (at > sec.head + 1 && !lines[at - 1]!.trim()) at--; // 절 끝의 빈 줄 앞
+    while (at > sec.head + 1 && /^---\s*$/.test(lines[at - 1]!.trim())) { at--; while (at > sec.head + 1 && !lines[at - 1]!.trim()) at--; } // 구분선 앞
+    lines.splice(at, 0, '', `[IMAGE: ${title} 장면]`, '');
+    have++;
+  }
+  return { body: lines.join('\n').replace(/\n{3,}/g, '\n\n'), added: picks.length };
+}
+
+/**
  * 이미지 마커 상한·설명 정리(순수, 2026-10-05 대추나무 리비전 dbb3ea1b6aa6) — 작가가 마커 6개를 달았는데 이미지는 3장(실촬영 1 + 생성 2)이라
  * 빈 자리 3곳이 미리보기·발행에 남았다. 이미지가 만들어질 장수(max)만큼만 남긴다: 첫 마커(실촬영 자리)는 항상 남기고 나머지는 글 전체에
  * 고르게(k·(M−1)/(N−1) 반올림 — 첫·끝 포함). 남긴 마커의 설명에서는 실사진 전용 요구(지명·날짜·촬영·캡션)를 덜어 낸다

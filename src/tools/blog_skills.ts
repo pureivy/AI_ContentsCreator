@@ -189,6 +189,12 @@ export async function generateImagesForDraft(
   return runScript('openai_image.py', args, path.dirname(manifestPath), signal, { timeoutMs });
 }
 
+/** 블로그 설명 도표 렌더(2026-10-12) — spec JSON(문구는 호출부가 본문에서 뽑아 넣는다) → PNG. ok 는 RESULT_JSON ok 로 판정. */
+export async function renderBlogDiagram(specPath: string, signal?: AbortSignal): Promise<{ ok: boolean; output: string }> {
+  const r = await runScript('blog_diagram.py', [specPath], path.dirname(specPath), signal, { timeoutMs: 60_000 });
+  return { ok: r.ok && /RESULT_JSON\s+\{"ok":\s*true/.test(r.output), output: r.output };
+}
+
 /** blog_frame.py 결과(RESULT_JSON) — ok:false 는 품질 거절(다음 후보로), error 는 실행 실패(기록하지 않는다). */
 export interface BlogFrameCapture {
   ok: boolean;
