@@ -32,7 +32,7 @@ import { rolesById } from '../agents/company';
 import type { RoleDef } from '../agents/company';
 import type { RolePatch, MemberBody } from '../agents/company-loader';
 import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appendActivity, ensureScaffold, effectiveAutonomy, appendInjected, injectedLength, clearInjected, INJECTED_CAP } from '../agents/workspace';
-import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView, getYoutubeAccount, setYoutubeToken, getMetaAccount, setMetaToken, setMetaPage, purgeCustomKeysForBrand, purgeBrandAccounts } from '../secrets/store';
+import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView, getYoutubeAccount, setYoutubeToken, getMetaAccount, listMetaAccountSlugs, setMetaToken, setMetaPage, purgeCustomKeysForBrand, purgeBrandAccounts } from '../secrets/store';
 import { collectExistingContent, findSimilarContent, saturatedThemeMatches, type SimilarMatch } from '../content/novelty';
 import { clusterStore, pickNextSibling } from '../content/topicCluster';
 import { naturalKeyword } from '../content/keywordForm';
@@ -2600,11 +2600,8 @@ app.post('/shorts/:id/naver-clip', async (c) => {
 });
 // 릴스 재조정 — 라이브 IG 릴스인데 로컬 영속이 유실된 쇼츠(발행 중 재시작 등)를 캡션=제목 매칭으로 백필.
 // 안전: igReelId 없는 쇼츠만 채우고 재발행하지 않음(중복 공개 방지). 성과 대시보드 누락 복구용.
-app.post('/shorts/meta-reconcile', async (c) => {
-  const brand = c.req.query('brand') ?? '';
-  let media;
-  try { media = await listIgMedia(brand); }
-  catch (e) { return c.json({ error: e instanceof Error ? e.message : String(e) }, 502); }
+async function reconcileReels(brand: string): Promise<{ matches: ReturnType<typeof matchOrphanReels>; reelsOnIg: number }> {
+  const media = await listIgMedia(brand);
   const reels = media.filter((m) => m.type === 'REELS' || m.type === 'VIDEO');
   const targets = shortsStore().list()
     .filter((s) => (s.brand ?? '') === brand)
@@ -2613,7 +2610,14 @@ app.post('/shorts/meta-reconcile', async (c) => {
   for (const m of matches) shortsStore().update(m.shortsId, { igReelId: m.reelId, igPermalink: m.permalink, metaPublishedTs: m.timestamp });
   for (const m of matches) maybeArchiveShortsVideo(m.shortsId); // 감지 경로로 릴스가 확인된 건도 동일 정리
   if (matches.length) console.log(`[발행담당] 릴스 재조정 — 브랜드 '${brand || '범용'}': ${matches.length}건 백필(라이브 릴스 ${reels.length}개)`);
-  return c.json({ ok: true, reconciled: matches.length, reelsOnIg: reels.length, items: matches.map((m) => ({ shortsId: m.shortsId, permalink: m.permalink })) });
+  return { matches, reelsOnIg: reels.length };
+}
+app.post('/shorts/meta-reconcile', async (c) => {
+  const brand = c.req.query('brand') ?? '';
+  try {
+    const { matches, reelsOnIg } = await reconcileReels(brand);
+    return c.json({ ok: true, reconciled: matches.length, reelsOnIg, items: matches.map((m) => ({ shortsId: m.shortsId, permalink: m.permalink })) });
+  } catch (e) { return c.json({ error: e instanceof Error ? e.message : String(e) }, 502); }
 });
 app.get('/shorts/:id/video', shortsVideoHandler); // :id 보다 먼저(구체 경로 우선)
 app.get('/api/shorts/:id/video', shortsVideoHandler);
@@ -3254,6 +3258,8 @@ function performanceHandler(c: Context): Response {
   return c.json({
     refreshBusy: perfRefreshBusy, // 빠른 갱신(유튜브·메타) 진행 여부 — 프론트 폴링 종료 판정
     naverBusy: naverRefreshBusy || !!naverProfileBusy, // 네이버 수집·브라우저 작업 진행 여부(임시저장 대기 안내용)
+    // 인스타·페북·유튜브·클립 발행 진행 수 — 재시작 대기 스크립트가 본다(2026-10-13 릴스 발행 중 재시작으로 기록 유실).
+    publishBusy: metaPublishInFlight.size + ytPublishInFlight.size + naverClipInFlight.size,
     strategy: {
       winners: s.winners.slice(0, 20), subNiches: s.subNiches, measuredPieces: s.measuredPieces,
       // 채널 학습(쇼츠·릴스·카드뉴스) — 키워드 점수표가 아니라 직원 강화가 남긴 교훈 문장(위키 performance
@@ -5117,6 +5123,17 @@ if (!process.env.VITEST) {
 if (!process.env.VITEST) {
   const warm = setTimeout(() => { void refreshDemandSnapshot().catch(() => {}); }, 20_000);
   if (typeof warm.unref === 'function') warm.unref();
+}
+// 부팅 릴스 재조정(2026-10-13 무화과 릴스) — 인스타 공개 14초 뒤 재시작으로 릴스 번호를 저장하지 못해 성과 탭에서 빠졌다.
+// 발행 도중 끊긴 릴스를 캡션=제목으로 다시 찾아 기록한다(재발행 없음). 같은 이유로 60초 지연+unref.
+if (!process.env.VITEST) {
+  const reco = setTimeout(() => {
+    for (const slug of listMetaAccountSlugs()) {
+      if (!getMetaAccount(slug).igUserId) continue;
+      void reconcileReels(slug).catch((e) => console.log(`[발행담당] 부팅 릴스 재조정 실패(무해) — ${e instanceof Error ? e.message : String(e)}`));
+    }
+  }, 60_000);
+  if (typeof reco.unref === 'function') reco.unref();
 }
 
 const port = CONFIG.port;
