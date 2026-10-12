@@ -106,6 +106,8 @@ function scoreMedia(
      * 그대로 둔다(fail-open): 사전에 없다는 이유로 소재를 버리지 않는다.
      */
     canon?: (name: string) => string;
+    /** 지금 연월(연*12+월-1, 기본 KST 현재) — 촬영 월 고르기(pickShootMonth). 테스트가 고정값을 넘긴다. */
+    nowYm?: number;
   },
 ): Array<{ m: MediaItem; s: number; g: number }> {
   const text = String(opts.text ?? '');
@@ -143,11 +145,71 @@ function scoreMedia(
     // 후보에서 통째로 빠져 로테이션이 한 파일에 묶였다(실측: 자두나무 160 vs 150).
     const g = hit ? (primary ? 150 : 100) : 1; // 딱지 없는 범용 소재 — 없는 것보다 낫다(딱지가 있고 안 맞으면 위에서 이미 걸렀다)
     let s = g;
-    for (const t of m.tags ?? []) if (t && text.includes(t)) s += 10;
+    for (const t of m.tags ?? []) if (t && !isShootDateTag(t) && text.includes(t)) s += 10; // 촬영 날짜 태그는 가점 대상 아님(pickShootMonth 가 맡는다)
     if (s > 0) scored.push({ m, s, g });
   }
   scored.sort((a, b) => b.s - a.s || b.m.createdTs.localeCompare(a.m.createdTs));
-  return scored.slice(0, opts.limit ?? 8);
+  return pickShootMonth(scored, opts.nowYm ?? kstYm()).slice(0, opts.limit ?? 8);
+}
+
+/** 지금 연·월(KST) — 연*12+월 꼴의 정수(달 비교·지난달 계산이 한 줄로 끝난다). */
+function kstYm(now: number = Date.now()): number {
+  const d = new Date(now + 9 * 3600_000);
+  return d.getUTCFullYear() * 12 + d.getUTCMonth();
+}
+
+/** 촬영 날짜 태그인가(순수) — "2026년 9월" 또는 "9월". 주제·검색어에 섞지 않는다(보관소 '글 시작'이 "단풍나무 9월 10월"을 주제로 넘겼다). */
+export function isShootDateTag(t: string): boolean {
+  return /^(?:\d{4}년\s*)?(?:1[0-2]|[1-9])월$/.test(String(t ?? '').trim());
+}
+
+/**
+ * 소재의 촬영 연·월(연*12+월-1) — 태그 "2026년 9월"(2026-10-12 사장님: 보관소에 연도를 붙인다) 또는 연도 없는 "9월".
+ * 연도 없는 태그는 올린 날의 연도로 본다(올린 달보다 큰 달이면 작년 — 1월에 올린 "12월" 영상). 촬영 월이 없거나 여럿이면 null.
+ */
+export function shootYmOf(m: Pick<MediaItem, 'tags'> & { createdTs?: string }): number | null {
+  const found: number[] = [];
+  for (const raw of m.tags ?? []) {
+    const t = String(raw).trim();
+    const full = /^(\d{4})년\s*(1[0-2]|[1-9])월$/.exec(t);
+    if (full) { found.push(Number(full[1]) * 12 + Number(full[2]) - 1); continue; }
+    const mo = /^(1[0-2]|[1-9])월$/.exec(t);
+    if (mo) {
+      const up = Date.parse(m.createdTs ?? '');
+      const d = Number.isFinite(up) ? new Date(up + 9 * 3600_000) : new Date(Date.now() + 9 * 3600_000);
+      const month = Number(mo[1]);
+      const year = d.getUTCFullYear() - (month > d.getUTCMonth() + 1 ? 1 : 0);
+      found.push(year * 12 + month - 1);
+    }
+  }
+  const uniq = [...new Set(found)];
+  return uniq.length === 1 ? uniq[0]! : null;
+}
+/** @deprecated 연도 없는 월만 — shootYmOf 를 쓴다. 테스트 호환용. */
+export function shootMonthOf(m: Pick<MediaItem, 'tags'> & { createdTs?: string }): number | null {
+  const ym = shootYmOf(m);
+  return ym === null ? null : (ym % 12) + 1;
+}
+
+/**
+ * 촬영 월 고르기(순수, 2026-10-12 사장님 지시) — 보관소 태그 "2026년 9월"·"2026년 10월"은 촬영 연월이다. 10월 글엔 10월 영상을 쓰려고 단 태그인데,
+ * 종전엔 태그가 주제 문장에 "10월"이 있을 때만 가점(+10)을 받아 사실상 무시됐다(10월 단풍·모과 글이 9월 영상을 썼다).
+ * 같은 수종 등급(g) 안에서: 이번 달 영상이 있으면 이번 달 것만, 없으면 지난달 것만, 둘 다 없으면 그대로("이번 달 우선, 없으면 지난달").
+ * 연도까지 본다 — 내년 10월에 올해 10월 영상을 '이번 달'로 보지 않는다. 한 등급 안에서 두 달을 섞지 않는다. 촬영 월을 모르는 소재는 남긴다.
+ * nowYm: 연*12+(월-1). 테스트가 고정값을 넘긴다.
+ */
+export function pickShootMonth<T extends { m: Pick<MediaItem, 'tags'> & { createdTs?: string }; g: number }>(scored: readonly T[], nowYm: number): T[] {
+  const keep = new Map<number, number | null>(); // 등급 → 남길 촬영 연월(null = 거르지 않음)
+  for (const g of new Set(scored.map((x) => x.g))) {
+    const yms = new Set(scored.filter((x) => x.g === g).map((x) => shootYmOf(x.m)).filter((v): v is number => v !== null));
+    keep.set(g, yms.has(nowYm) ? nowYm : yms.has(nowYm - 1) ? nowYm - 1 : null);
+  }
+  return scored.filter((x) => {
+    const want = keep.get(x.g);
+    if (want === null || want === undefined) return true;
+    const ym = shootYmOf(x.m);
+    return ym === null || ym === want;
+  });
 }
 
 /**

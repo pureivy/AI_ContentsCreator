@@ -116,3 +116,34 @@ describe("matchMedia — 사전이 모르는 딱지도 '나무'를 뗀 어간으
     expect(matchMedia(items, { text: '마당 배수 문제', kind: 'video' })).toEqual([]);
   });
 });
+
+// 2026-10-12 사장님 지시 — 보관소 태그는 촬영 연월("2026년 10월"). 이번 달 우선, 없으면 지난달, 한 등급 안에서 섞지 않는다.
+import { pickShootMonth, shootYmOf, isShootDateTag, matchMediaScored as mms } from './mediaLibrary';
+const YM = (y: number, m: number) => y * 12 + m - 1;
+describe('pickShootMonth — 촬영 연월 고르기', () => {
+  const v = (id: string, species: string, tags: string[], createdTs = '2026-10-05T00:00:00Z') => ({ id, file: `/x/${id}.mp4`, kind: 'video' as const, name: id, bytes: 1, species, tags, createdTs });
+  it('이번 달 영상이 있으면 이번 달 것만(촬영 월 모르는 소재는 남김)', () => {
+    const lib = [v('a', '감나무', ['2026년 9월']), v('b', '감나무', ['2026년 10월']), v('c', '감나무', [])];
+    expect(mms(lib, { species: '감나무', text: '감나무', kind: 'video', nowYm: YM(2026, 10) }).map((x) => x.item.id).sort()).toEqual(['b', 'c']);
+  });
+  it('이번 달이 없으면 지난달 것만 · 작년 같은 달은 이번 달이 아니다', () => {
+    const lib = [v('a', '단풍나무', ['2026년 9월']), v('b', '단풍나무', ['2025년 10월'])];
+    expect(mms(lib, { species: '단풍나무', text: '단풍나무', kind: 'video', nowYm: YM(2026, 10) }).map((x) => x.item.id)).toEqual(['a']);
+  });
+  it('1월의 지난달은 작년 12월', () => {
+    const out = pickShootMonth([{ m: { tags: ['2026년 12월'] }, g: 150 }, { m: { tags: ['2026년 11월'] }, g: 150 }], YM(2027, 1));
+    expect(out).toEqual([{ m: { tags: ['2026년 12월'] }, g: 150 }]);
+  });
+  it('등급마다 따로 고른다', () => {
+    expect(pickShootMonth([{ m: { tags: ['2026년 9월'] }, g: 150 }, { m: { tags: ['2026년 10월'] }, g: 100 }], YM(2026, 10))).toHaveLength(2);
+  });
+  it('shootYmOf — 연도 태그, 연도 없는 태그는 올린 날 기준(올린 달보다 크면 작년)', () => {
+    expect(shootYmOf({ tags: ['2026년 10월'] })).toBe(YM(2026, 10));
+    expect(shootYmOf({ tags: ['10월'], createdTs: '2026-10-12T00:00:00Z' })).toBe(YM(2026, 10));
+    expect(shootYmOf({ tags: ['12월'], createdTs: '2027-01-03T00:00:00Z' })).toBe(YM(2026, 12));
+    expect(shootYmOf({ tags: ['2026년 9월', '2026년 10월'] })).toBeNull();
+    expect(isShootDateTag('2026년 10월')).toBe(true);
+    expect(isShootDateTag('10월')).toBe(true);
+    expect(isShootDateTag('열매')).toBe(false);
+  });
+});

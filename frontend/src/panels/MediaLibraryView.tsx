@@ -113,7 +113,9 @@ export default function MediaLibraryView() {
    * App 이 채우기만 하고 알린다.
    */
   const writeAbout = (r: SpeciesRow) => {
-    const topic = [r.species, ...r.tags].join(" ");
+    // 촬영 날짜 태그("2026년 10월"·"9월")는 주제에 넣지 않는다(2026-10-12 사장님 — "9월 10월을 같이 놓고 글을 작성하면 안돼").
+    // 어느 달 영상을 쓸지는 서버가 촬영 월로 고른다(이번 달 우선, 없으면 지난달).
+    const topic = [r.species, ...r.tags.filter((t) => !/^(?:\d{4}년\s*)?(?:1[0-2]|[1-9])월$/.test(t.trim()))].join(" ");
     window.location.assign(`/?topic=${encodeURIComponent(topic)}&start=1`);
   };
   const toggle = (sp: string) => setOpen((prev) => { const n = new Set(prev); if (n.has(sp)) n.delete(sp); else n.add(sp); return n; });
@@ -138,7 +140,7 @@ export default function MediaLibraryView() {
         {mode === "files" ? (
           <div className="media-upload">
             <input value={species} onChange={(e) => setSpecies(e.target.value)} placeholder="수종 (예: 수국)" />
-            <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="태그 쉼표로 (가을, 열매)" />
+            <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="태그 쉼표로 (2026년 10월, 열매) — 촬영 월은 연도와 함께" />
             <button type="button" disabled={busy} onClick={() => fileRef.current?.click()}>
               <Ico name="plus" size={12} /> {busy ? "올리는 중…" : "사진·영상 올리기"}
             </button>
@@ -207,7 +209,7 @@ export default function MediaLibraryView() {
                           )}
                         </td>
                         <td>{kstDay(r.lastUsedTs)}</td>
-                        <td><button type="button" className="btn ghost" onClick={() => writeAbout(r)} title={`"${[r.species, ...r.tags].join(" ")}" 주제로 사무실에서 바로 시작합니다 (진행 중 런이 있으면 채우기만)`}><Ico name="pencil" size={11} /> 글 시작</button></td>
+                        <td><button type="button" className="btn ghost" onClick={() => writeAbout(r)} title={`"${[r.species, ...r.tags.filter((t) => !/^(?:\d{4}년\s*)?(?:1[0-2]|[1-9])월$/.test(t.trim()))].join(" ")}" 주제로 사무실에서 바로 시작합니다 (진행 중 런이 있으면 채우기만)`}><Ico name="pencil" size={11} /> 글 시작</button></td>
                       </tr>,
                       openUses.has(r.species) ? (
                         <tr key={`${r.species}-uses`} className="media-usage-files">
