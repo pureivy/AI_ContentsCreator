@@ -30,6 +30,27 @@ describe('shouldRetryTelegram — 전송 재시도 판정(전송되지 않았음
     expect(shouldRetryTelegram({ error: err('fetch failed', 'ECONNREFUSED') })).toBe(true);
   });
 
+  // 실사고 ③ 2026-10-12 17:28: 자두나무 글 검토 알림이 소실됐다. v4 연결 대기 시간 초과 + v6 도달 불가 → AggregateError(ETIMEDOUT).
+  // 하위 오류가 모두 connect 단계라 소켓이 열린 적이 없다 — 요청이 안 나갔으니 재시도해도 중복이 없다.
+  it('연결 단계 시간 초과(하위 오류가 모두 connect)는 재시도한다', () => {
+    const e = new TypeError('fetch failed') as Error & { cause?: unknown };
+    e.cause = Object.assign(new AggregateError([
+      Object.assign(new Error('v4'), { code: 'ETIMEDOUT', syscall: 'connect' }),
+      Object.assign(new Error('v6'), { code: 'EHOSTUNREACH', syscall: 'connect' }),
+    ]), { code: 'ETIMEDOUT' });
+    expect(shouldRetryTelegram({ error: e })).toBe(true);
+  });
+
+  it('연결 뒤 단계 오류가 섞이면 재시도하지 않는다', () => {
+    const e = new TypeError('fetch failed') as Error & { cause?: unknown };
+    e.cause = Object.assign(new AggregateError([
+      Object.assign(new Error('a'), { code: 'ETIMEDOUT', syscall: 'connect' }),
+      Object.assign(new Error('b'), { code: 'ECONNRESET', syscall: 'read' }),
+    ]), { code: 'ETIMEDOUT' });
+    expect(shouldRetryTelegram({ error: e })).toBe(false);
+    expect(shouldRetryTelegram({ error: err('fetch failed', 'ETIMEDOUT') })).toBe(false); // 단계 불명
+  });
+
   it('연결 리셋은 재시도하지 않는다 — 요청이 갔을 수 있어 중복 위험', () => {
     expect(shouldRetryTelegram({ error: err('fetch failed', 'ECONNRESET') })).toBe(false);
     expect(shouldRetryTelegram({ error: err('fetch failed', 'UND_ERR_SOCKET') })).toBe(false);

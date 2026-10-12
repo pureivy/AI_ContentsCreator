@@ -121,7 +121,13 @@ export function shouldRetryTelegram(x: { status?: number; error?: unknown }): bo
     const e = x.error as { name?: string; cause?: { code?: unknown } };
     if (e?.name === 'TimeoutError' || e?.name === 'AbortError') return false; // 응답만 못 받았을 수 있다
     const code = typeof e?.cause?.code === 'string' ? e.cause.code : '';
-    return RETRIABLE_CAUSE.has(code); // 사유 불명은 보수적으로 false
+    if (RETRIABLE_CAUSE.has(code)) return true;
+    // 연결 단계 실패(2026-10-12 자두나무 글 알림 유실) — Happy Eyeballs 가 v4·v6 연결을 모두 못 맺으면 AggregateError(ETIMEDOUT)가
+    // 오는데, 하위 오류가 전부 syscall 'connect' 면 소켓이 열린 적이 없다 = 요청이 안 나갔다(확실히 미전송). 재시도해도 중복이 없다.
+    const subs = (e?.cause as { errors?: unknown } | undefined)?.errors;
+    if (Array.isArray(subs) && subs.length && subs.every((x) => (x as { syscall?: unknown })?.syscall === 'connect')) return true;
+    if ((e?.cause as { syscall?: unknown } | undefined)?.syscall === 'connect') return true;
+    return false; // 사유 불명은 보수적으로 false
   }
   if (x.status === undefined) return false;
   return x.status === 429 || x.status >= 500;
