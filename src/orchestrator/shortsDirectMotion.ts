@@ -407,10 +407,21 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
     };
   });
   const job = { fps: 30, workDir: work, out: path.join(work, 'final.mp4'), original, palette, stage, fonts: FONTS, ranges, scenes: jobScenes };
-  const jobPath = path.join(work, 'job.json');
-  fs.writeFileSync(jobPath, JSON.stringify(job, null, 2), 'utf-8');
+  // 보안(2026-10-12 커밋 검토) — 에이전트 입력(낭독·화면 문구)은 웹 조사에서 온 글에서 파생된다. 에이전트가 쓸 수 있는
+  // 작업 폴더 안의 job.json·preview.sh 를 고치면 출력 경로를 바꾸거나 허용된 ./preview.sh 로 임의 명령을 돌릴 수 있다.
+  // 하네스가 실제로 읽는 job 은 작업 폴더 **밖**(cwd 밖은 acceptEdits 자동 승인 대상이 아니다)에 두고,
+  // 작업 폴더의 job.json(안내용 사본)과 preview.sh 는 읽기 전용으로 만든다. 끝난 뒤 preview.sh 변조 여부도 확인한다.
+  const jobPath = `${work}.job.json`;
+  // 읽기 전용 파일은 덮어쓰기가 막히므로(같은 작업 폴더로 다시 돌 때) 지우고 새로 쓴다.
+  const writeRO = (p: string, data: string, mode: number): void => {
+    try { fs.unlinkSync(p); } catch { /* 없음 */ }
+    fs.writeFileSync(p, data, { encoding: 'utf-8', mode });
+  };
+  writeRO(jobPath, JSON.stringify(job, null, 2), 0o444);
+  writeRO(path.join(work, 'job.json'), JSON.stringify(job, null, 2), 0o444);
   fs.copyFileSync(INFO_CARD_REF, path.join(work, 'info-card-ref.html'));
-  fs.writeFileSync(path.join(work, 'preview.sh'), `#!/bin/bash\nexec "${py}" "${HARNESS}" "$(dirname "$0")/job.json" --preview "$1"\n`, { mode: 0o755 });
+  const previewSh = `#!/bin/bash\nexec "${py}" "${HARNESS}" "${jobPath}" --preview "$1"\n`;
+  writeRO(path.join(work, 'preview.sh'), previewSh, 0o555);
 
   // 6) 에이전트(Claude Code 1회 세션) — 씬 조각 작성·미리보기 확인·수정.
   if (!o.skipAgent) {
@@ -438,7 +449,10 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
     saveMetrics();
   }
 
-  // 7) 검사 → 촬영·이어 붙이기.
+  // 7) 검사 → 촬영·이어 붙이기. 미리보기 스크립트가 바뀌었으면(쓰기 금지를 뚫었으면) 결과를 쓰지 않는다.
+  try {
+    if (fs.readFileSync(path.join(work, 'preview.sh'), 'utf-8') !== previewSh) throw new Error('preview.sh 변조 감지 — 이 편 모션그래픽 중단');
+  } catch (e) { throw e instanceof Error && e.message.includes('변조') ? e : new Error('preview.sh 확인 실패'); }
   await phase('check', async () => {
     const c = await runProc(py, [HARNESS, jobPath, '--check-all'], { timeoutMs: 10 * 60_000 });
     fs.writeFileSync(path.join(work, 'check.json'), c.stdout, 'utf-8');
@@ -468,7 +482,13 @@ export async function applyMotionGraphics(id: string, opts: { log?: (m: string) 
   const dir = path.join(CONFIG.dataDir, 'shorts', id);
   const final = path.join(dir, 'final.mp4');
   try {
-    const m = await runDirectMotionPilot({ id, workName: `motion-${Date.now()}`, agentTimeoutMs: 20 * 60_000, log: (x) => console.log('[모션그래픽]', x) });
+    const workName = `motion-${Date.now()}`;
+    const m = await runDirectMotionPilot({ id, workName, agentTimeoutMs: 20 * 60_000, log: (x) => console.log('[모션그래픽]', x) });
+    // 출력 경로는 우리가 만든 작업 폴더의 final.mp4 만 받는다(보안 — 다른 파일을 발행본으로 올리지 않게).
+    if (m.out && path.resolve(m.out) !== path.resolve(dir, workName, 'final.mp4')) {
+      log(`모션그래픽 건너뜀 — 예상 밖 출력 경로(${m.out.slice(0, 80)}) · 원본 영상 유지`);
+      return false;
+    }
     if (!m.out || !fs.existsSync(m.out) || m.check?.ok === false) {
       log(`모션그래픽 건너뜀 — ${m.check?.ok === false ? `검사 불합격(${(m.check.problems ?? []).slice(0, 2).join(' · ')})` : '결과 영상 없음'} · 원본 영상 유지`);
       return false;
