@@ -109,8 +109,16 @@ export function monthMentioned(source: string, m: number): boolean {
   return false;
 }
 
+/** p 가 dir 안의 파일인가(순수, 심볼릭 링크는 실경로로). */
+export function insideDir(p: string, dir: string): boolean {
+  let real = path.resolve(p); let root = path.resolve(dir);
+  try { real = fs.realpathSync(real); root = fs.realpathSync(root); } catch { /* 없는 파일 — 아래 비교 */ }
+  const rel = path.relative(root, real);
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
 /** 사진 자리 정리(순수). 블로그 사진 번호가 없으면 버린다. gen 은 장면 글이 있어야 한다. */
-export function parsePhotoRef(raw: unknown, blogCount: number): PhotoRef | undefined {
+export function parsePhotoRef(raw: unknown, blogCount: number, fileRoot?: string): PhotoRef | undefined {
   const r = (raw ?? {}) as { use?: unknown; n?: unknown; scene?: unknown; must_show?: unknown; must_not?: unknown };
   if (typeof raw === 'string') {
     const m = /^blog:(\d+)$/.exec(raw.trim());
@@ -122,9 +130,9 @@ export function parsePhotoRef(raw: unknown, blogCount: number): PhotoRef | undef
     return n >= 1 && n <= blogCount ? { use: 'blog', n } : undefined;
   }
   if (r.use === 'file') {
-    // 이미 정해진 사진(수정 요청 재렌더) — 카드 폴더 안의 파일만.
+    // 이미 정해진 사진(수정 요청 재렌더) — 카드 폴더 안의 파일만(보안 검토 2026-10-12: LLM 이 낸 임의 경로가 카드에 찍혀 나가지 않게).
     const p = String((raw as { path?: unknown }).path ?? '');
-    return p && fs.existsSync(p) ? { use: 'file', path: p } : undefined;
+    return p && fileRoot && insideDir(p, fileRoot) && fs.existsSync(p) ? { use: 'file', path: path.resolve(p) } : undefined;
   }
   if (r.use === 'gen') {
     const scene = clean(r.scene, CAPS.scene);
@@ -144,6 +152,8 @@ export function normalizeLayout(
   plan: { title: string; slides: ReadonlyArray<{ headline: string; body: string }> },
   source: string,
   blogCount: number,
+  /** 'file' 사진을 받을 폴더(수정 요청 재렌더 때 카드 폴더). 없으면 file 사진은 받지 않는다. */
+  fileRoot?: string,
 ): CardLayout {
   const r = (raw ?? {}) as { series?: unknown; slides?: unknown[] };
   const rs = Array.isArray(r.slides) ? r.slides : [];
@@ -157,7 +167,7 @@ export function normalizeLayout(
     const accentRaw = fitCap(x.accent, CAPS.accent);
     const accent = accentRaw && title.includes(accentRaw) ? accentRaw : undefined;
     const base = { title, ...(accent ? { accent } : {}), ...(lead ? { lead } : {}) };
-    const photo = parsePhotoRef(x.photo, blogCount);
+    const photo = parsePhotoRef(x.photo, blogCount, fileRoot);
     const note = fitCap(x.note, CAPS.note);
     const noteOk = note && ok(note) ? { note } : {};
     let kind = (CARD_KINDS as readonly string[]).includes(String(x.kind)) ? (x.kind as CardKind) : 'photo';
@@ -175,7 +185,7 @@ export function normalizeLayout(
         const o = (it ?? {}) as Record<string, unknown>;
         const t = fitCap(o.title, CAPS.itemTitle); const text = fitCap(o.text, CAPS.itemText);
         if (!t || !text || !ok(`${t} ${text}`) || !ok(text)) return [];
-        const label = fitCap(o.label, CAPS.itemLabel); const emoji = oneEmoji(o.emoji); const ph = parsePhotoRef(o.photo, blogCount);
+        const label = fitCap(o.label, CAPS.itemLabel); const emoji = oneEmoji(o.emoji); const ph = parsePhotoRef(o.photo, blogCount, fileRoot);
         return [{ title: t, text, ...(label ? { label } : {}), ...(emoji ? { emoji } : {}), ...(ph ? { photo: ph } : {}) }];
       });
       return items.length >= 2 ? { kind, ...base, items, ...noteOk } : plain();
@@ -196,7 +206,7 @@ export function normalizeLayout(
     if (kind === 'pair') {
       const photos = (Array.isArray(x.photos) ? x.photos : []).slice(0, 2).flatMap((p) => {
         const o = (p ?? {}) as Record<string, unknown>;
-        const ph = parsePhotoRef(o.photo, blogCount); const label = fitCap(o.label, CAPS.pairLabel);
+        const ph = parsePhotoRef(o.photo, blogCount, fileRoot); const label = fitCap(o.label, CAPS.pairLabel);
         return ph && label ? [{ photo: ph, label }] : [];
       });
       const cards = (Array.isArray(x.cards) ? x.cards : []).slice(0, 2).flatMap((c) => {

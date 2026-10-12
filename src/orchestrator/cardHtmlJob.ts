@@ -18,7 +18,7 @@ import { qaSceneImages } from './shortsSceneQa';
 import { stdModel } from './visionCommon';
 import { microJSON } from './agent';
 import {
-  normalizeLayout, layoutFields, dropFields, parityKeys, layoutPrompt, toRenderSpec, genPhotoPrompt, renderCardSpec,
+  insideDir, normalizeLayout, layoutFields, dropFields, parityKeys, layoutPrompt, toRenderSpec, genPhotoPrompt, renderCardSpec,
   CARD_FONT_DIR, CARD_MAX_GEN, type BlogPhoto, type CardLayout, type LayoutSlide, type PhotoRef,
 } from './cardLayout';
 
@@ -129,7 +129,7 @@ function pinPhotos(l: CardLayout, resolve: (r: PhotoRef | undefined) => string |
 /** 렌더 + 결과 정리 — 기존 slide_NN 을 지우고 새로 찍는다. 넘침 잔존은 로그로. */
 async function renderLayout(dir: string, l: CardLayout, coverNote: string | undefined, say: Say, signal?: AbortSignal): Promise<number> {
   for (const f of fs.readdirSync(dir)) if (/^slide_\d{2}\.png$/.test(f)) fs.unlinkSync(path.join(dir, f));
-  const spec = toRenderSpec(l, (r) => (r?.use === 'file' ? r.path : undefined), {
+  const spec = toRenderSpec(l, (r) => (r?.use === 'file' && insideDir(r.path, dir) ? r.path : undefined), {
     outDir: dir, fontDir: CARD_FONT_DIR,
     brand: brandDisplay(),
     ...(coverNote ? { coverNote } : {}),
@@ -205,7 +205,7 @@ export async function designHtmlCards(o: {
   }
   const resolve = (r: PhotoRef | undefined): string | undefined => {
     if (!r) return undefined;
-    if (r.use === 'file') return fs.existsSync(r.path) ? r.path : undefined;
+    if (r.use === 'file') return insideDir(r.path, dir) && fs.existsSync(r.path) ? r.path : undefined;
     if (r.use === 'blog') return blog.find((b) => b.n === r.n)?.path;
     return genPath.get(r);
   };
@@ -321,7 +321,7 @@ export async function reviseHtmlCard(dir: string, feedback: string, say: Say, si
     });
   }
   if (!changed.size) return null;
-  let layout = normalizeLayout({ series: saved.series, slides: rawSlides }, plan, source, 0);
+  let layout = normalizeLayout({ series: saved.series, slides: rawSlides }, plan, source, 0, dir);
   // normalizeLayout 은 표지·마무리 판을 고정한다 — 기존 판(kind)이 다른 장은 저장본 kind 를 따른다(같은 판으로만 수정).
   layout = await factCheckFields(layout, source, [], say, signal);
   const count = await renderLayout(dir, layout, saved.coverNote, say, signal);

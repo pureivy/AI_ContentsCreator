@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  normalizeLayout, coverage, sourceSentences, extractOk, monthMentioned, parsePhotoRef, layoutFields, dropFields, parityKeys, oneEmoji, toRenderSpec,
+  normalizeLayout, insideDir, coverage, sourceSentences, extractOk, monthMentioned, parsePhotoRef, layoutFields, dropFields, parityKeys, oneEmoji, toRenderSpec,
 } from './cardLayout';
 
 // 감나무 잎 구별 글(2026-10-12)에서 줄인 원문 — 카드 칸은 여기서만 뽑아야 한다.
@@ -52,6 +52,17 @@ describe('parsePhotoRef', () => {
     expect(parsePhotoRef({ use: 'gen', scene: '손바닥 위 매끈한 감나무 잎', must_show: ['톱니 없는 테두리'] }, 0))
       .toEqual({ use: 'gen', scene: '손바닥 위 매끈한 감나무 잎', must: { show: ['톱니 없는 테두리'], not: [] } });
     expect(parsePhotoRef({ use: 'gen', scene: '잎' }, 0)).toBeUndefined();
+  });
+});
+
+describe('file 사진은 카드 폴더 안만 — 보안 검토 2026-10-12', () => {
+  it('폴더 밖·상위 경로는 거부', () => {
+    expect(insideDir('/tmp/card/photos/a.png', '/tmp/card')).toBe(true);
+    expect(insideDir('/etc/passwd', '/tmp/card')).toBe(false);
+    expect(insideDir('/tmp/card/../other/a.png', '/tmp/card')).toBe(false);
+    expect(insideDir('/tmp/card', '/tmp/card')).toBe(false);
+    expect(parsePhotoRef({ use: 'file', path: '/etc/hosts' }, 0, '/tmp/card')).toBeUndefined();
+    expect(parsePhotoRef({ use: 'file', path: '/etc/hosts' }, 0)).toBeUndefined();
   });
 });
 

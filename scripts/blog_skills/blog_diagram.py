@@ -43,7 +43,7 @@ body.steps{background:#faf6ee}
 .e{flex:none;width:150px;height:150px;border-radius:36px;display:grid;place-items:center;font-size:84px;font-family:"Apple Color Emoji",H,sans-serif;color:#2f5d3a}
 .no{display:block;font-family:L,sans-serif;font-size:40px;color:#c2581f;letter-spacing:.04em}
 .c b{display:block;font-weight:400;font-size:66px;line-height:1.28}
-.c small{display:block;font-size:48px;line-height:1.32;color:#6e6859;margin-top:8px}
+.c small{display:block;font-size:58px;line-height:1.3;color:#57524a;margin-top:10px}
 .wa{margin:10px 0 22px;background:#fff0ea;border:4px dashed #e0623a;border-radius:28px;padding:26px 30px;font-size:56px;line-height:1.32;color:#b8431e}
 /* E — 계절 카드(요약 도표) */
 body.points{background:#fffaf3}
