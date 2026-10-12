@@ -126,18 +126,36 @@ function bodySentences(md: string): string[] {
     .map((s) => s.trim()).filter((s) => s.length >= 4);
 }
 
-/** ② 요약 칸 검증(순수) — 본문 문장과 충분히 겹치고(0.35↑) 본문에 없는 수치가 없는 칸만. */
+const bigrams = (s: string): Set<string> => {
+  const t = s.replace(/\s+/g, '');
+  const out = new Set<string>();
+  for (let i = 0; i + 1 < t.length; i++) out.add(t.slice(i, i + 2));
+  return out;
+};
+/** 칸 글자쌍 중 원문 쪽에 있는 비율 — 긴 원문을 줄인 칸은 Dice 가 낮게 나와 따로 본다. */
+const containment = (text: string, src: string): number => {
+  const A = bigrams(text), B = bigrams(src);
+  let n = 0;
+  for (const x of A) if (B.has(x)) n++;
+  return A.size ? n / A.size : 0;
+};
+
+/** ② 요약 칸 검증(순수) — 본문 문장과 충분히 겹치고 본문에 없는 수치가 없는 칸만.
+ *  겹침: 한 문장과 Dice 0.35↑, 또는 이웃 두 문장 안에 칸 글자쌍이 0.4↑(2026-10-13 무화과 글 — 두 문장을 합쳐 줄인
+ *  "화분은 들어서 무게가 가벼워지면 마른 것" 같은 맞는 칸이 떨어져 요약 도표가 통째로 빠졌다. 지어낸 칸은 0.31 이하). */
 export function validateSummaryItems(md: string, items: ReadonlyArray<{ label?: unknown; text?: unknown }>): DiagramItem[] {
   const sents = bodySentences(md);
   const whole = sents.join(' ');
+  const windows = [...sents, ...sents.slice(0, -1).map((s, i) => `${s} ${sents[i + 1]}`)];
   return items.flatMap((it) => {
     const text = clean(String(it?.text ?? '')).slice(0, 48);
     const label = clean(String(it?.label ?? '')).slice(0, 20);
     if (text.length < 4) return [];
     if (introducesNewFacts(whole, `${label} ${text}`)) return [];
-    const best = Math.max(0, ...sents.map((s) => diceSimilarity(s, text)), ...sents.map((s) => (s.includes(text) ? 1 : 0)));
+    const dice = Math.max(0, ...sents.map((s) => diceSimilarity(s, text)), ...sents.map((s) => (s.includes(text) ? 1 : 0)));
+    const contained = Math.max(0, ...windows.map((w) => containment(text, w)));
     const emoji = pickEmoji(text, label);
-    return best >= 0.35 ? [{ ...(label ? { label } : {}), text, ...(emoji ? { emoji } : {}) }] : [];
+    return dice >= 0.35 || contained >= 0.4 ? [{ ...(label ? { label } : {}), text, ...(emoji ? { emoji } : {}) }] : [];
   }).slice(0, 5);
 }
 
@@ -161,7 +179,8 @@ export function summaryPrompt(md: string, kicker: string): string {
     '',
     `위 글을 한 장짜리 요약 도표로 만들 칸 3~5개를 골라라. 주제: ${kicker}.`,
     '칸 순서는 독자가 따라 할 시점·단계 순서(예: 꽂을 때 → 겨울 동안 → 확인할 때)로, 그런 흐름이 없으면 글의 핵심 판단 기준 순서로.',
-    '각 칸: label(시점·단계 이름 2~10자), text(본문 문장을 거의 그대로 줄인 한 줄, 40자 이내).',
+    '각 칸: label(시점·단계 이름 2~10자), text(본문 문장 하나를 거의 그대로 옮겨 줄인 한 줄, 40자 이내).',
+    'text 는 본문 말투 그대로 "~합니다/~세요/~요"로 끝내라 — "~함", "~음", "~것", "~기" 같은 명사형·개조식으로 끝내지 마라.',
     '본문에 없는 사실·수치·품종·조언을 만들지 마라 — 본문 문장에서만 가져와라. 감탄·비유·광고 문구 금지.',
     'title 은 도표 제목 16자 이내(예: "꽂은 뒤 살았는지 보기까지").',
     'steps_title 은 본문의 번호 목록(순서)을 그린 도표의 제목 — "뿌리는 순서", "꽂는 순서"처럼 무엇을 하는 순서인지 12자 이내(번호 목록이 없으면 빈 문자열).',

@@ -33,14 +33,26 @@ export async function applyBlogDiagrams(
   const steps = extractStepsDiagram(body);
   if (steps) specs.push(steps);
   try {
-    const j = await microJSON<{ title?: unknown; steps_title?: unknown; items?: Array<{ label?: unknown; text?: unknown }> }>(
-      stdModel(), '당신은 블로그 요약 도표 편집자입니다. 요청된 JSON 스키마만 출력합니다.', summaryPrompt(body, kicker),
+    type SummaryJSON = { title?: unknown; steps_title?: unknown; items?: Array<{ label?: unknown; text?: unknown }> };
+    const ask = (extra = ''): Promise<SummaryJSON | null> => microJSON<SummaryJSON>(
+      stdModel(), '당신은 블로그 요약 도표 편집자입니다. 요청된 JSON 스키마만 출력합니다.', summaryPrompt(body, kicker) + extra,
       { maxOutputTokens: 700, signal: opts.signal },
     );
-    const items = validateSummaryItems(body, Array.isArray(j?.items) ? j!.items! : []);
+    const first = await ask();
+    let j = first;
+    let items = validateSummaryItems(body, Array.isArray(j?.items) ? j!.items! : []);
+    // 칸이 3개 미만이면 한 번 더(2026-10-13 무화과 글 — 같은 글이 시도마다 4·1·2칸으로 갈렸다). 칸 순서도 도표 내용이라
+    // 두 시도의 칸을 섞지 않고 통과 칸이 많은 쪽을 쓴다.
+    if (items.length < 3 && !opts.signal?.aborted) {
+      const dropped = (j?.items ?? []).map((x) => String(x?.text ?? '').trim())
+        .filter((t) => t && !items.some((o) => o.text === t.replace(/\*\*/g, '').replace(/\s+/g, ' ').trim()));
+      const retry = await ask(`\n\n[다시] 지난 시도에서 본문과 맞지 않다고 걸러진 칸: ${dropped.map((t) => `"${t}"`).join(', ') || '(없음)'}. 본문 문장을 거의 그대로 옮겨라.`).catch(() => null);
+      const items2 = validateSummaryItems(body, Array.isArray(retry?.items) ? retry!.items! : []);
+      if (items2.length > items.length) { j = retry; items = items2; }
+    }
     const title = String(j?.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 20) || '한눈에 보기';
     // 순서 도표 제목 — 소제목 질문("어디에 뿌려야 싹이 나올까요?") 대신 "뿌리는 순서"처럼(2026-10-12 사장님 선택 샘플). 숫자가 섞이면 버린다.
-    const stepsTitle = String(j?.steps_title ?? '').replace(/\s+/g, ' ').trim();
+    const stepsTitle = String((j?.steps_title || first?.steps_title) ?? '').replace(/\s+/g, ' ').trim();
     if (steps && stepsTitle && stepsTitle.length <= 14 && !/\d/.test(stepsTitle)) { steps.title = stepsTitle; steps.alt = `${stepsTitle} 도표`; }
     if (items.length >= 3) specs.push({ kind: 'points', title, items, insertAt: summaryInsertAt(body, steps?.insertAt), alt: `${title} 도표` });
     else log(`요약 도표 생략 — 본문과 맞는 칸 ${items.length}개(3개 미만)`);
