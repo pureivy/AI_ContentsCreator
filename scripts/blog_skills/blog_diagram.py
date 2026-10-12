@@ -29,53 +29,61 @@ def esc(s):
 
 
 CSS = """
-@font-face{font-family:P;src:url("FONTDIR/Pretendard-Bold.woff2");font-weight:700}
-@font-face{font-family:P;src:url("FONTDIR/Pretendard-ExtraBold.woff2");font-weight:800}
-:root{--ink:#22301f;--green:#2f5d3a;--leaf:#5b8a4a;--paper:#f6f3ea;--card:#fff;--line:#d9d3c2;--quince:#d9a62e;--warn:#b5482f;--warnbg:#fbeae4;--muted:#6b6f63}
+@font-face{font-family:H;src:url("FONTDIR/Pretendard-ExtraBold.woff2")}
+@font-face{font-family:B;src:url("FONTDIR/GowunDodum-Regular.ttf")}
+@font-face{font-family:L;src:url("FONTDIR/Pretendard-Bold.woff2")}
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{width:1080px;background:var(--paper);font-family:P,sans-serif;color:var(--ink);font-weight:700}
-.wrap{padding:64px 64px 56px;min-height:1350px;display:flex;flex-direction:column}
-.kicker{font-size:30px;color:var(--leaf)}
-h1{font-size:60px;font-weight:800;line-height:1.2;margin:10px 0 34px;word-break:keep-all}
-.warn{background:var(--warnbg);border:3px solid var(--warn);border-radius:22px;padding:18px 24px;display:flex;gap:16px;align-items:center;font-size:31px;line-height:1.3;margin:0 0 18px;word-break:keep-all}
-.warn b{color:var(--warn);font-weight:800;white-space:nowrap}
-.list{display:flex;flex-direction:column;gap:14px}
-.st{display:flex;align-items:center;gap:22px;background:var(--card);border:2px solid var(--line);border-radius:22px;padding:18px 24px}
-.n{flex:none;width:62px;height:62px;border-radius:50%;background:var(--green);color:#fff;font-size:34px;font-weight:800;display:grid;place-items:center}
-.t{font-size:34px;line-height:1.3;word-break:keep-all}
-.t small{display:block;font-size:26px;color:var(--muted);margin-top:4px}
-.tl{position:relative;padding-left:76px;display:flex;flex-direction:column;gap:30px}
-.tl:before{content:"";position:absolute;left:30px;top:20px;bottom:20px;width:6px;border-radius:3px;background:linear-gradient(var(--leaf),var(--quince))}
-.it{position:relative;background:var(--card);border:2px solid var(--line);border-radius:22px;padding:28px 30px}
-.it:before{content:"";position:absolute;left:-62px;top:24px;width:30px;height:30px;border-radius:50%;background:var(--paper);border:6px solid var(--leaf)}
-.it:last-child:before{border-color:var(--quince)}
-.when{font-size:28px;color:var(--leaf);font-weight:800}
-.what{font-size:36px;line-height:1.3;margin-top:4px;word-break:keep-all}
-.main{flex:1;display:flex;flex-direction:column;justify-content:center;padding-bottom:40px}
-.foot{margin-top:auto;padding-top:40px;font-size:24px;color:var(--muted);display:flex;justify-content:space-between}
+html,body{width:1080px;font-family:B,"Apple Color Emoji",sans-serif;color:#23301f;word-break:keep-all}
+.wrap{padding:62px 60px 56px}
+.k{font-family:H,"Apple Color Emoji",sans-serif;font-size:30px;color:#c2581f}
+h1{font-family:H,"Apple Color Emoji",sans-serif;font-weight:400;font-size:62px;line-height:1.2;margin:6px 0 30px}
+/* A — 이모지 카드(순서 도표) */
+body.steps{background:#faf6ee}
+.c{display:flex;gap:24px;align-items:center;background:#fff;border-radius:28px;padding:22px 26px;margin-bottom:16px;box-shadow:0 6px 18px rgba(80,60,20,.08)}
+.e{flex:none;width:108px;height:108px;border-radius:30px;display:grid;place-items:center;font-size:58px;font-family:"Apple Color Emoji",H,sans-serif;color:#2f5d3a}
+.no{display:block;font-family:L,sans-serif;font-size:24px;color:#c2581f;letter-spacing:.04em}
+.c b{display:block;font-weight:400;font-size:34px;line-height:1.32}
+.c small{display:block;font-size:25px;color:#7a7466;margin-top:4px}
+.wa{margin-top:10px;background:#fff0ea;border:3px dashed #e0623a;border-radius:24px;padding:18px 26px;font-size:30px;color:#b8431e}
+/* E — 계절 카드(요약 도표) */
+body.points{background:#fffaf3}
+.grid{display:flex;flex-direction:column;gap:26px}
+.p{display:flex;gap:26px;align-items:center;border-radius:30px;padding:38px 32px}
+.ic{flex:none;width:120px;height:120px;border-radius:50%;background:#fff;display:grid;place-items:center;font-size:64px;box-shadow:0 6px 16px rgba(0,0,0,.06);font-family:"Apple Color Emoji",H,sans-serif;color:#2f5d3a}
+.lb{display:inline-block;color:#fff;border-radius:999px;padding:5px 20px;font-family:L,sans-serif;font-size:28px;letter-spacing:.02em;margin-bottom:10px}
+.p b{display:block;font-weight:400;font-size:36px;line-height:1.3}
 """
+
+STEP_BG = ["#e9f3e1", "#fff1d6", "#fde3d8", "#dcefff", "#e4ecff", "#f3e6f3", "#fdf2c9", "#e3f0da"]
+POINT_COLORS = [("#f7e3cf", "#c26a26"), ("#e3f0da", "#4f7d3c"), ("#e2ecf8", "#3d6fa8"), ("#f3e6f3", "#8a4f8f"), ("#fdf2c9", "#a0790f")]
 
 
 def build(spec, font_dir):
     kind = spec.get("kind")
-    warn = lambda w: f'<div class="warn"><b>주의</b><span>{esc(w)}</span></div>'
+    items = spec.get("items") or []
+    warn = lambda w: f'<div class="wa">⚠️ {esc(w)}</div>'
     before = "".join(warn(w) for w in spec.get("warnBefore") or [])
     after = "".join(warn(w) for w in spec.get("warnAfter") or [])
-    items = spec.get("items") or []
+    kicker = f'{esc(spec.get("kickerEmoji") or "")} {esc(spec.get("kicker"))}'.strip()
     if kind == "steps":
-        body = '<div class="list">' + "".join(
-            f'<div class="st"><div class="n">{i + 1}</div><div class="t">{esc(it.get("text"))}'
+        body = "".join(
+            f'<div class="c"><div class="e" style="background:{STEP_BG[i % len(STEP_BG)]}">{esc(it.get("emoji") or str(i + 1))}</div>'
+            f'<div><span class="no">STEP {i + 1}</span><b>{esc(it.get("text"))}</b>'
             + (f'<small>{esc(it.get("sub"))}</small>' if it.get("sub") else "") + "</div></div>"
-            for i, it in enumerate(items)) + "</div>"
+            for i, it in enumerate(items))
+        main = f"{before}{body}{after}"
     else:
-        body = '<div class="tl">' + "".join(
-            '<div class="it">' + (f'<div class="when">{esc(it.get("label"))}</div>' if it.get("label") else "")
-            + f'<div class="what">{esc(it.get("text"))}</div></div>' for it in items) + "</div>"
-    after_html = f'<div style="margin-top:18px">{after}</div>' if after else ""
-    return ("<!doctype html><html><head><meta charset='utf-8'><style>" + CSS.replace("FONTDIR", "file://" + font_dir) + "</style></head><body>"
-            f'<div class="wrap"><div class="kicker">{esc(spec.get("kicker"))}</div><h1>{esc(spec.get("title"))}</h1>'
-            f'<div class="main">{before}{body}{after_html}</div>'
-            f'<div class="foot"><span>{esc(spec.get("brand"))}</span><span>{esc(spec.get("handle"))}</span></div></div></body></html>')
+        body = "".join(
+            f'<div class="p" style="background:{POINT_COLORS[i % len(POINT_COLORS)][0]}">'
+            f'<div class="ic">{esc(it.get("emoji") or str(i + 1))}</div><div>'
+            + (f'<div class="lb" style="background:{POINT_COLORS[i % len(POINT_COLORS)][1]}">{esc(it.get("label"))}</div>' if it.get("label") else "")
+            + f'<b>{esc(it.get("text"))}</b></div></div>'
+            for i, it in enumerate(items))
+        main = f'{before}<div class="grid">{body}</div>{after}'
+    return ("<!doctype html><html><head><meta charset='utf-8'><style>" + CSS.replace("FONTDIR", "file://" + font_dir) + "</style></head>"
+            f'<body class="{"steps" if kind == "steps" else "points"}"><div class="wrap"><div class="k">{kicker}</div><h1>{esc(spec.get("title"))}</h1>'
+            # 하단 상호·계정 줄 없음, 높이는 내용에 맞춘다(2026-10-12 사장님 — 아래 베이지 여백을 줄여 달라)
+            f'<div class="main">{main}</div></div></body></html>')
 
 
 def main():
@@ -97,7 +105,7 @@ def main():
             pg.goto("file://" + os.path.abspath(tmp_html))
             pg.evaluate("document.fonts.ready")
             pg.wait_for_timeout(300)
-            h = min(1920, max(1350, int(pg.evaluate("document.querySelector('.wrap').scrollHeight"))))
+            h = min(1920, max(600, int(pg.evaluate("document.querySelector('.wrap').scrollHeight"))))
             pg.set_viewport_size({"width": 1080, "height": h})
             pg.screenshot(path=out)
         finally:

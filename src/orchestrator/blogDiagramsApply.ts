@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { BlogDraft } from '../output/formatter';
 import { draftFiles } from '../output/naverBlog';
-import { extractStepsDiagram, insertDiagramMarkers, summaryInsertAt, summaryPrompt, validateSummaryItems, type DiagramSpec } from '../output/blogDiagrams';
+import { extractStepsDiagram, insertDiagramMarkers, kickerEmoji, summaryInsertAt, summaryPrompt, validateSummaryItems, type DiagramSpec } from '../output/blogDiagrams';
 import { renderBlogDiagram } from '../tools/blog_skills';
 import { microJSON } from './agent';
 import { stdModel } from './visionCommon';
@@ -33,12 +33,15 @@ export async function applyBlogDiagrams(
   const steps = extractStepsDiagram(body);
   if (steps) specs.push(steps);
   try {
-    const j = await microJSON<{ title?: unknown; items?: Array<{ label?: unknown; text?: unknown }> }>(
+    const j = await microJSON<{ title?: unknown; steps_title?: unknown; items?: Array<{ label?: unknown; text?: unknown }> }>(
       stdModel(), '당신은 블로그 요약 도표 편집자입니다. 요청된 JSON 스키마만 출력합니다.', summaryPrompt(body, kicker),
       { maxOutputTokens: 700, signal: opts.signal },
     );
     const items = validateSummaryItems(body, Array.isArray(j?.items) ? j!.items! : []);
     const title = String(j?.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 20) || '한눈에 보기';
+    // 순서 도표 제목 — 소제목 질문("어디에 뿌려야 싹이 나올까요?") 대신 "뿌리는 순서"처럼(2026-10-12 사장님 선택 샘플). 숫자가 섞이면 버린다.
+    const stepsTitle = String(j?.steps_title ?? '').replace(/\s+/g, ' ').trim();
+    if (steps && stepsTitle && stepsTitle.length <= 14 && !/\d/.test(stepsTitle)) { steps.title = stepsTitle; steps.alt = `${stepsTitle} 도표`; }
     if (items.length >= 3) specs.push({ kind: 'points', title, items, insertAt: summaryInsertAt(body, steps?.insertAt), alt: `${title} 도표` });
     else log(`요약 도표 생략 — 본문과 맞는 칸 ${items.length}개(3개 미만)`);
   } catch { log('요약 도표 생략 — 생성 실패'); }
@@ -49,7 +52,7 @@ export async function applyBlogDiagrams(
   for (const [k, spec] of specs.entries()) {
     const file = path.join(imagesDir, `diagram-${k + 1}.png`);
     const specPath = path.join(sessionDir, `diagram-${k + 1}.json`);
-    fs.writeFileSync(specPath, JSON.stringify({ ...spec, kicker, brand: opts.brand ?? '비온디트리', handle: opts.handle ?? 'biondi_tree', out: file, fontDir: FONT_DIR }), 'utf-8');
+    fs.writeFileSync(specPath, JSON.stringify({ ...spec, kicker, kickerEmoji: kickerEmoji(kicker), brand: opts.brand ?? '비온디트리', handle: opts.handle ?? 'biondi_tree', out: file, fontDir: FONT_DIR }), 'utf-8');
     const r = await renderBlogDiagram(specPath, opts.signal);
     if (r.ok && fs.existsSync(file)) rendered.push({ spec, file });
     else log(`도표 렌더 실패(${spec.kind}) — ${r.output.slice(-120)}`);

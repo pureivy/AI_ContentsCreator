@@ -9,3 +9,8 @@ public/ 이 아닌 이유: 이 프로젝트의 publicDir 은 렌더마다 다른
 
 굵기는 700·800 둘만 싣는다 — 컴포넌트가 쓰는 fontWeight 가 600~900 인데, 그 범위는 이 둘로
 합성된다. 굵기를 추가하면 렌더 번들이 굵기당 ~780KB 씩 커진다.
+
+`GowunDodum-Regular.ttf`(고운돋움) — Google Fonts, SIL Open Font License 1.1.
+블로그 설명 도표 전용(scripts/blog_skills/blog_diagram.py — 제목·이름표 프리텐다드, 본문 고운돋움, 2026-10-12 사장님 선택).
+검은고딕은 작은 글씨가 뭉개져 같은 날 프리텐다드로 바꿨다.
+Remotion 번들에는 싣지 않는다.

@@ -11,7 +11,39 @@
  */
 import { diceSimilarity, introducesNewFacts } from '../content/factGate';
 
-export interface DiagramItem { label?: string; text: string; sub?: string }
+export interface DiagramItem { label?: string; text: string; sub?: string; emoji?: string }
+
+// 이모지(2026-10-12 사장님 — "도표가 너무 밋밋해"): 칸 문장의 낱말로 결정적으로 고른다. 맞는 게 없으면 번호만.
+// '눈'(겨울눈·꽃눈)·'뿌리'(뿌리다/뿌리)는 뜻이 갈려 쓰지 않는다.
+const EMOJI_RULES: ReadonlyArray<[RegExp, string]> = [
+  [/주의|하지 마|마세요/, '⚠️'],
+  [/비료|거름/, '🧪'],
+  [/물을|물이|물 주|물주|적시|촉촉|마르면/, '💧'],
+  [/겨울|추위|얼지|얼어|월동|바깥에 두/, '❄️'],
+  [/덮/, '🤲'],
+  [/자르|자른|잘라|전정|가지치기|솎/, '✂️'],
+  [/표식|이름표|라벨|날짜를 적/, '🏷️'],
+  [/확인|살펴|세어|관찰|구부려|긁어|지켜봅|들어 봐/, '🔍'],
+  [/씨앗|씨를|파종|삽수|꽂/, '🌱'],
+  [/흙|화분|상자|용기|통에|두둑|심/, '🪴'],
+  [/누르|눌러|손바닥/, '🤲'],
+  [/햇빛|햇볕|양지|그늘|직사광/, '☀️'],
+  [/받을|받아|고르|고릅|골라|떼/, '🧺'],
+  [/잎/, '🍃'],
+  [/꽃/, '🌸'],
+  [/열매|수확/, '🍎'],
+  [/시기|무렵|월에|해 /, '📅'],
+];
+export function pickEmoji(text: string, label = ''): string | undefined {
+  const t = `${label} ${text}`;
+  return EMOJI_RULES.find(([re]) => re.test(t))?.[1];
+}
+/** 머리줄 수종 이모지(순수) — 수종 낱말이 없으면 나무. */
+export function kickerEmoji(kicker: string): string {
+  const m: ReadonlyArray<[RegExp, string]> = [[/단풍/, '🍁'], [/벚|매화|매실/, '🌸'], [/사과/, '🍎'], [/배나무|돌배/, '🍐'], [/복숭아/, '🍑'],
+    [/체리|앵두/, '🍒'], [/포도|머루/, '🍇'], [/블루베리/, '🫐'], [/밤나무|밤 /, '🌰'], [/키위|다래/, '🥝'], [/레몬|유자/, '🍋'], [/소나무|측백|향나무|편백|주목/, '🌲']];
+  return m.find(([re]) => re.test(kicker))?.[1] ?? '🌳';
+}
 export interface DiagramSpec {
   kind: 'steps' | 'points';
   title: string;
@@ -54,7 +86,11 @@ export function extractStepsDiagram(md: string): DiagramSpec | null {
     const title = head >= 0 ? clean(lines[head]!.replace(/^##\s+/, '')).slice(0, 30) : '순서';
     const items = lines.slice(i, j).map((l) => {
       const { head: h, rest } = firstSentence(clean(l.replace(/^\d+[.)]\s+/, '')));
-      return { text: h.slice(0, 44), ...(rest ? { sub: rest.slice(0, 48) } : {}) };
+      // 작은 글씨는 나머지의 첫 문장만 — 글자 수로 자르면 문장 중간에서 끊겼다(2026-10-12 단풍나무 씨앗 "…봄이 와"). 길면 뺀다.
+      const sub = firstSentence(rest).head;
+      const text = h.slice(0, 44);
+      const emoji = pickEmoji(text);
+      return { text, ...(sub && sub.length <= 52 ? { sub } : {}), ...(emoji ? { emoji } : {}) };
     });
     // 같은 절의 경고(인용 줄 또는 "~마세요" 문장) — 목록 앞이면 앞, 뒤면 뒤. 각 절에서 첫 문장만, 둘까지.
     const secStart = head >= 0 ? head + 1 : 0;
@@ -68,7 +104,9 @@ export function extractStepsDiagram(md: string): DiagramSpec | null {
     const warnBefore = warnOf(secStart, i);
     const warnAfter = warnOf(j, secEnd).filter((w) => !warnBefore.includes(w));
     return {
-      kind: 'steps', title, items, insertAt: sectionEnd(lines, Math.max(head, 0)), alt: `${title} 도표`,
+      // 자리는 번호 목록 바로 뒤(2026-10-12 사장님 점검) — 종전엔 절 끝이라 단풍나무 씨앗 글에서 목록과 도표 사이에
+      // 설명 두 줄·인용·사진이 끼었고 사진과 도표가 붙었다. 목록 바로 뒤에 같은 단계를 그림으로 이어 보여 준다.
+      kind: 'steps', title, items, insertAt: j, alt: `${title} 도표`,
       ...(warnBefore.length ? { warnBefore } : {}), ...(warnAfter.length ? { warnAfter } : {}),
     };
   }
@@ -98,7 +136,8 @@ export function validateSummaryItems(md: string, items: ReadonlyArray<{ label?: 
     if (text.length < 4) return [];
     if (introducesNewFacts(whole, `${label} ${text}`)) return [];
     const best = Math.max(0, ...sents.map((s) => diceSimilarity(s, text)), ...sents.map((s) => (s.includes(text) ? 1 : 0)));
-    return best >= 0.35 ? [{ ...(label ? { label } : {}), text }] : [];
+    const emoji = pickEmoji(text, label);
+    return best >= 0.35 ? [{ ...(label ? { label } : {}), text, ...(emoji ? { emoji } : {}) }] : [];
   }).slice(0, 5);
 }
 
@@ -125,7 +164,8 @@ export function summaryPrompt(md: string, kicker: string): string {
     '각 칸: label(시점·단계 이름 2~10자), text(본문 문장을 거의 그대로 줄인 한 줄, 40자 이내).',
     '본문에 없는 사실·수치·품종·조언을 만들지 마라 — 본문 문장에서만 가져와라. 감탄·비유·광고 문구 금지.',
     'title 은 도표 제목 16자 이내(예: "꽂은 뒤 살았는지 보기까지").',
-    'JSON: {"title":"...","items":[{"label":"...","text":"..."}]}',
+    'steps_title 은 본문의 번호 목록(순서)을 그린 도표의 제목 — "뿌리는 순서", "꽂는 순서"처럼 무엇을 하는 순서인지 12자 이내(번호 목록이 없으면 빈 문자열).',
+    'JSON: {"title":"...","steps_title":"...","items":[{"label":"...","text":"..."}]}',
   ].join('\n');
 }
 
