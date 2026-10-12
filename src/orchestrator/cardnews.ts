@@ -11,7 +11,7 @@
  */
 import fs from 'node:fs';
 import { SELLER_INQUIRY_BAN, NO_FABRICATED_EXPERIENCE } from './org';
-import { lexiconGuide } from '../content/brand';
+import { lexiconGuide, mediaRulesGuide } from '../content/brand';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { microJSON, runAgent, extractFirstJson } from './agent';
@@ -594,6 +594,8 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     // 이해도 감사(2026-08-11 블라인드 실측) 교훈: 압축·쿼터가 전제("안전")·이유·행동 지시를 깎아 신본이
     // 구본보다 이해 불가(6/10)가 됐다 — 우선순위 선언과 안전선이 문체 블록을 지배한다.
     '[우선순위] 아래 문체 지침은 표현 방식 지침이다 — 원문에서 추린 방법·이유·위험 근거 문장을 삭제하는 방식으로 이행하지 마라. 문체와 정보가 충돌하면 정보를 남기고 문체를 양보하라. 단 [글자 상한]은 문체가 아니라 판형이다 — 상한을 넘는 정보는 장을 늘리거나 캡션으로 옮겨라(지우는 게 아니라 옮기는 것).',
+    // 파생 문체 확정 규칙(2026-10-12 사장님 확정) — 모과나무 삽목 카드가 '흙 얕으면 생기는 문제'를 끝내 말하지 않았고 삽수↔가지로 이름이 흔들렸다.
+    mediaRulesGuide(),
     // 글자 상한(2026-10-05 카드뉴스 분석 승인 항목 3-1) — 장당 글자가 7월 37자 → 10월 69자로 늘어 휴대폰 폭에서 본문이 안 읽혔다.
     // 지시만으로는 새므로 cardDensityIssues(수정 라운드)·shortenDenseSlides·fitCardDensity(마지노선)가 결정적으로 잡는다.
     `[글자 상한] 휴대폰 화면 폭에서 확대 없이 읽혀야 한다 — 헤드라인 ${CARD_HEADLINE_MAX_CHARS}자 이내, body 는 ${CARD_BODY_MAX_LINES}줄·${CARD_BODY_MAX_CHARS}자 이내(공백 포함, 한 줄 18자 안팎). 장당 메시지 하나만 싣고, 이유·수치 세부는 캡션으로 보내라.`,
@@ -993,6 +995,8 @@ export async function reviseCardNews(
       (plan.hashtags ?? []).length ? `[해시태그] ${(plan.hashtags ?? []).join(' ')}` : '',
       `[수정 요청] ${feedback}`,
       '규칙: 의미·톤 유지 범위에서 요청을 빠짐없이 반영, 각 줄 길이는 원문과 비슷하게, 이모지 금지, 본문 줄바꿈은 \\n.',
+      // 수정 경로에도 같은 문장 원칙(2026-10-12).
+      mediaRulesGuide(),
       'JSON 형식: {"slides":[{"index":슬라이드번호,"headline":"...","body":"..."}],"title":"...","caption":"...","hashtags":["#..."]} — 바뀌는 필드만 포함.',
     ].filter(Boolean).join('\n'),
     { maxOutputTokens: 1600, signal: opts.signal },

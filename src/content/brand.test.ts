@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
-import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug, brandFileSuffixFor, bannedTopicTerms, offBrandTerm, lexiconGuide, editorRulesGuide, hasBoldSummaryRule } from './brand';
+import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug, brandFileSuffixFor, bannedTopicTerms, offBrandTerm, lexiconGuide, editorRulesGuide, mediaRulesGuide, hasBoldSummaryRule } from './brand';
 
 // 브랜드 프로필 — 정규화·주입 블록(순수 함수) 회귀 방지.
 describe('normalizeBrand', () => {
@@ -321,5 +321,32 @@ describe('hasBoldSummaryRule — 첫머리 굵은 요약 규칙 감지(2026-10-0
     expect(first).toContain('한 줄에 1~2문장');
     expect(first).toContain('혼자 한 줄로 세우지 않는다');
     expect(first).not.toContain('한 줄에 두 문장을 붙여 쓰지 않는다');
+  });
+});
+
+// 2026-10-12 사장님 확정 — 모과나무 삽목 글 재작성본 채택: 블로그 규칙 12~14 + 숏폼·카드 파생 규칙.
+describe('2026-10-12 문체 규칙 — 실제 brand.yaml', () => {
+  const load = (rel: string) => normalizeBrand(YAML.parse(fs.readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf-8')))!;
+  it('블로그 규칙(이유/방법·주의 위치·예고 회수)이 잘리지 않고 실리고, 활성·레지스트리 두 파일이 같다', () => {
+    for (const rel of ['../../data/brand.yaml', '../../data/brands/bionditree.yaml']) {
+      const r = load(rel).editorRules ?? [];
+      expect(r.some((x) => x.startsWith('이유(왜 그런지)와 방법') && x.endsWith('내세우지 않는다.'))).toBe(true);
+      expect(r.some((x) => x.startsWith('주의할 점은') && x.endsWith('두지 않는다.'))).toBe(true);
+      expect(r.some((x) => x.startsWith('뒤에서 말하겠다고 예고한') && x.endsWith('무관하다.'))).toBe(true);
+    }
+    expect(load('../../data/brand.yaml').mediaRules).toEqual(load('../../data/brands/bionditree.yaml').mediaRules);
+  });
+  it('파생 규칙 6개가 잘리지 않고, 블록은 판형 우선 머리말 + 번호 목록', () => {
+    const b = load('../../data/brand.yaml');
+    expect(b.mediaRules).toHaveLength(6);
+    for (const r of b.mediaRules ?? []) expect(r.length).toBeLessThan(300);
+    const g = mediaRulesGuide(b);
+    expect(g.split('\n')[0]).toContain('판형 지시는 그대로 지키고');
+    expect(g).toContain('봄에 바로 보여요');
+    expect(g).toContain('\n6. 단정 수위는 원문만큼');
+  });
+  it('미설정이면 빈 문자열(숏폼·카드 프롬프트 무변경)', () => {
+    expect(mediaRulesGuide(normalizeBrand({ name: 'x' }))).toBe('');
+    expect(mediaRulesGuide(null)).toBe('');
   });
 });

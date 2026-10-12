@@ -84,6 +84,9 @@ export interface BrandProfile {
    *  블로그 글의 형식·말투를 사람이 확정한 문장 목록 그대로 블로그 작가·리비전·제목 포장에 건다(editorRulesGuide).
    *  업종·채널 취향이라 브랜드별로 둔다(미설정=프롬프트 무변경, 종전 동작). 쇼츠·카드에는 걸지 않는다(줄바꿈·요약 줄은 블로그 서식). */
   editorRules?: string[];
+  /** 파생 문체 확정 규칙(2026-10-12 사장님 확정 — 모과나무 삽목 파생물 점검). 숏폼·카드뉴스 기획과 두 수정 경로 공용(mediaRulesGuide).
+   *  블로그 editorRules 의 판형 규칙(굵은 요약·소제목·한 줄)은 씬·카드와 충돌해 문장 원칙만 매체용으로 옮겼다. */
+  mediaRules?: string[];
 }
 
 const brandPath = (): string => path.join(CONFIG.dataDir, 'brand.yaml');
@@ -281,6 +284,7 @@ export function normalizeBrand(raw: Partial<BrandProfile> | null | undefined): B
     cardStyle: s(raw?.cardStyle, 40),
     // 규칙 문장은 예시를 품어 길다 — 300자·20개 캡(참고 블로그와 같은 값, 프롬프트 폭주 방지).
     editorRules: arr(raw?.editorRules, 20, 300),
+    mediaRules: arr(raw?.mediaRules, 20, 300),
   };
 }
 
@@ -294,6 +298,15 @@ export function editorRulesGuide(b: BrandProfile | null = getBrand()): string {
   const rules = b?.editorRules ?? [];
   if (!rules.length) return '';
   return '[편집 확정 규칙 — 운영자가 확정한 이 블로그의 글 형식·말투다. 다른 문체 지침과 겹치면 이 규칙이 이긴다]\n'
+    + rules.map((r, i) => `${i + 1}. ${r}`).join('\n');
+}
+
+/** 파생 문체 확정 규칙 블록(순수, 2026-10-12) — 숏폼·카드뉴스 기획(planShorts·planCards)과 수정 요청(reviseShorts·reviseCardNews) 공용.
+ *  규칙이 없으면 빈 문자열(종전 동작 그대로). 판형(길이 예산·글자 상한·씬 수)은 이 규칙보다 앞선다 — 문장 규칙만 이긴다. */
+export function mediaRulesGuide(b: BrandProfile | null = getBrand()): string {
+  const rules = b?.mediaRules ?? [];
+  if (!rules.length) return '';
+  return '[파생 문체 확정 규칙 — 운영자가 확정한 숏폼·카드뉴스 문장 원칙이다. 길이·글자 상한·장면 수 같은 판형 지시는 그대로 지키고, 문장 지침끼리 겹치면 이 규칙이 이긴다]\n'
     + rules.map((r, i) => `${i + 1}. ${r}`).join('\n');
 }
 

@@ -10,7 +10,7 @@
  */
 import fs from 'node:fs';
 import { SELLER_INQUIRY_BAN, NO_FABRICATED_EXPERIENCE } from './org';
-import { lexiconGuide } from '../content/brand';
+import { lexiconGuide, mediaRulesGuide } from '../content/brand';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { microJSON, runAgent, extractFirstJson } from './agent';
@@ -209,6 +209,8 @@ export async function reviseShorts(
         ...(artCopy ? [`[상단 캘리 문구(영상 오버레이·썸네일 공용)] 1줄(키워드 라벨): ${artCopy.line1}${artCopy.line2 ? ` / 2줄(훅): ${artCopy.line2}` : ''}${artCopy.points.length ? ` / 포인트: ${artCopy.points.join(' · ')}` : ''}`] : []),
         `[수정 요청] ${feedback}`,
         '규칙: 의미·톤 유지 범위에서 요청을 빠짐없이 반영, 내레이션 길이는 원문과 비슷하게(재생 시간 유지), 이모지 금지.',
+        // 수정 경로에도 같은 문장 원칙(2026-10-12) — 기획에만 걸면 사람 수정 요청이 다시 어긋나게 만든다.
+        ...(mediaRulesGuide() ? [mediaRulesGuide()] : []),
         '배경 그림 자체를 바꿔야 하는 요청(장면·소품·구도)이면 그 씬에 "regen_image":true 와 "image_note":"무엇을 어떻게"를 넣어라. 문구만 바뀌면 넣지 마라(배경은 무텍스트).',
         ...(artCopy ? ['상단 캘리 문구를 바꿔야 하는 요청이면 "titleArt" 에 바뀐 필드만 넣어라 — 1줄은 핵심 키워드 라벨(정확 표기 유지), 2줄은 짧은 훅. 캘리 문구와 무관한 요청이면 titleArt 를 넣지 마라.'] : []),
         '인용구(quote) 씬의 문구·출처를 바꾸는 요청이면 해당 씬에 "quote":{"text":"...","source":"..."}(바뀐 필드만)를 넣어라 — quote 씬이 아니면 넣지 마라. source 는 실제 원문에 있는 출처만 적어라(지어내지 마라).',
@@ -1550,6 +1552,8 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 이해도 감사(2026-08-11 블라인드 실측) 교훈: 문체 지침이 정의·이유 문장을 밀어내면 파생물이 원문 없이
     // 이해 불가가 된다 — 아래 우선순위 선언이 문체 블록 전체를 지배한다.
     '[우선순위] 아래 문체 지침은 표현 방식 지침이다 — 원문에서 추린 방법·이유·위험 근거 문장을 삭제하는 방식으로 이행하지 마라. 문체와 정보가 충돌하면 정보를 남기고 문체를 양보하라.',
+    // 파생 문체 확정 규칙(2026-10-12 사장님 확정) — 모과나무 삽목 숏폼 2편이 원문 경고(봄에 당기지 마라)를 '봄에 바로 보여요'로 뒤집었다.
+    mediaRulesGuide(),
     // 결론 의무+낭독 명료성(사용자 확정 2026-08-12): "잎 색 변화" 편 실측 — 보는 법 3갈래를 나열하고
     // 각각이 뭘 뜻하는지 한 번도 안 말해 "무얼 주장하는지 모르겠는" 영상이 됐다.
     guide.conclusion,
