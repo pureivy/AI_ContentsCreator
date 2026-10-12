@@ -331,7 +331,7 @@ describe('2026-10-12 문체 규칙 — 실제 brand.yaml', () => {
     for (const rel of ['../../data/brand.yaml', '../../data/brands/bionditree.yaml']) {
       const r = load(rel).editorRules ?? [];
       expect(r.some((x) => x.startsWith('이유(왜 그런지)와 방법') && x.endsWith('내세우지 않는다.'))).toBe(true);
-      expect(r.some((x) => x.startsWith('주의할 점은') && x.endsWith('두지 않는다.'))).toBe(true);
+      expect(r.some((x) => x.startsWith('주의할 점은') && x.endsWith('두지 않는다.') && !x.includes('뿌리'))).toBe(true);
       expect(r.some((x) => x.startsWith('뒤에서 말하겠다고 예고한') && x.endsWith('무관하다.'))).toBe(true);
     }
     expect(load('../../data/brand.yaml').mediaRules).toEqual(load('../../data/brands/bionditree.yaml').mediaRules);
@@ -342,7 +342,8 @@ describe('2026-10-12 문체 규칙 — 실제 brand.yaml', () => {
     for (const r of b.mediaRules ?? []) expect(r.length).toBeLessThan(300);
     const g = mediaRulesGuide(b);
     expect(g.split('\n')[0]).toContain('판형 지시는 그대로 지키고');
-    expect(g).toContain('봄에 바로 보여요');
+    expect(g).toContain('반대로 읽히는 말');
+    expect(g).not.toContain('뿌리가 끊'); // 규칙 예시가 본문 내용으로 새지 않게 내용 없는 꼴만(2026-10-12)
     expect(g).toContain('\n6. 단정 수위는 원문만큼');
   });
   it('미설정이면 빈 문자열(숏폼·카드 프롬프트 무변경)', () => {

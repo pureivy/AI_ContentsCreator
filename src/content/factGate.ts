@@ -438,7 +438,10 @@ export async function repairSentences(
     '아래 [본문]에서 [고칠 문장] 각각을 다음 규칙에 따라 고쳐라.',
     '규칙: 새 사실·수치 추가 금지 — 본문에 없던 수치·시기·약제·품종 특성을 넣지 마라. 문장 길이는 원문과 비슷하게 유지한다.',
     // 2026-10-05 — judgment(“~라고 봅니다”로 바꾸기)를 뺐다: 무근거 주장을 판정 면제 꼴로 세탁하는 통로였다(대추나무 초안).
-    'hedge: 원예 통설 수준의 일반론일 때만 "보통/대개" 같은 유보어를 자연스럽게 넣어 단정을 낮춘다. 구체 수치·시기·비교("~보다 성공률이 높다")·확률("살아남을 확률이 높다") 주장은 hedge 하지 말고 delete 하라.',
+    // 2026-10-12 — 종전 예시 "보통/대개"의 '대개'는 작가 과사용 어휘 목록에 있는 말이라 수정이 금지어를 되심었다(모과나무 삽목 글 "대개 간격을 두고").
+    'hedge: 원예 통설 수준의 일반론일 때만 "보통" 같은 유보어를 자연스럽게 넣어 단정을 낮춘다("대개"는 쓰지 마라). 구체 수치·시기·비교("~보다 성공률이 높다")·확률("살아남을 확률이 높다") 주장은 hedge 하지 말고 delete 하라.',
+    // 2026-10-12 — "봄에 가지를 당겨서 확인하지 마세요"가 "확인하지 않는 게 보통 좋습니다"로 흐려져 경고가 힘을 잃고 뒤 문장("막 난 뿌리가 끊깁니다")과도 어긋났다.
+    '명령·금지문("~하세요", "~하지 마세요")을 hedge 할 때는 행동 지시를 흐리지 마라 — "~하지 않는 게 보통 좋습니다"처럼 바꾸지 말고, 이유·결과 쪽에 유보를 붙이거나("~할 수 있으니 ~하지 마세요") 근거가 전혀 없으면 delete 하라.',
     'delete: 근거 없는 구체 주장은 지운다 — 문단이 조금 짧아져도 무근거 주장을 남기는 것보다 낫다.',
     '"~라고 봅니다/~로 보입니다"로 바꿔 남기지 마라 — 판단 꼴로 감싸도 근거 없는 주장은 그대로다.',
     'replacement 은 완결된 문장(마침표 포함)으로 쓴다 — delete 면 빈 문자열("")로 둔다.',
@@ -596,6 +599,7 @@ export function applySentenceRepairs(
   let applied = 0;
   const missed: string[] = [];
   const removed = new Map<number, string>(); // 통째 삭제로 비운 줄(원래 내용) — 마지막에 걷어 낸다(dropRemovedLines)
+  const dropped = new Set<string>(); // 적용된 수정이 지운 수치 토큰 — 끝에서 확인표 동기화에 쓴다
 
   for (let i = 0; i < unsupported.length; i++) {
     const original = unsupported[i]!;
@@ -629,10 +633,35 @@ export function applySentenceRepairs(
     }
     lines[loc.lineIdx] = next;
     applied++;
+    const kept = numericTokens(replacement);
+    for (const t of numericTokens(original)) if (!kept.has(t)) dropped.add(t);
   }
 
+  // 확인표 동기화(2026-10-12) — 본문 문장에서 수치를 지웠는데 끝의 확인표(>>>)가 같은 수치를 그대로 들고 있으면
+  // 그 줄이 다음 판정에서 새 보류가 된다(모과나무 삽목 글: 본문 "2주쯤 간격"은 고쳤는데 ">>> 7) 2주 간격으로 다시 보기"가 남아 hold).
+  // 본문(확인표 밖) 어디에도 더는 없는 수치를 든 확인표 줄만 걷어 낸다 — 다른 곳에 근거가 남은 수치는 건드리지 않는다.
+  if (dropped.size) {
+    const isFrame = (l: string): boolean => /^\s*>{3}/.test(l);
+    const rest = lines.filter((l, i) => !removed.has(i) && !isFrame(l)).join('\n');
+    const gone = [...dropped].filter((t) => !numericTokens(rest).has(t));
+    if (gone.length) {
+      lines.forEach((l, i) => {
+        if (!removed.has(i) && isFrame(l) && gone.some((t) => numericTokens(l).has(t))) removed.set(i, l);
+      });
+    }
+  }
   const out = dropRemovedLines(lines, removed).join('\n').replace(/\n{3,}/g, '\n\n');
   return { body: out, applied, missed };
+}
+
+/** 문장 속 수치 토큰(정규화) 집합 — 확인표 동기화용(2026-10-12). introducesNewFacts 와 같은 정규식·정규화. */
+function numericTokens(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const re of [UNIT_RE, MONTH_RE, YEAR_RE]) {
+    const reG = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+    for (const m of text.matchAll(reG)) out.add(normalizeNumericToken(m[0]));
+  }
+  return out;
 }
 
 /** 마크다운 H2+ 소제목 개수 — 표적 수정이 헤더 마커를 깨뜨렸는지 판별하는 구조 가드(Fix round 1)에 쓴다. */

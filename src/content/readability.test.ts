@@ -33,10 +33,11 @@ describe('readabilityPrompt', () => {
     expect(p).toContain('⑨ 앞 문장에 붙어야 할 꼬리가 혼자 한 줄인 토막');
     expect(p).not.toContain('머릿속 문장'); // 상담 블로그 예문은 옮기지 않았다
   });
-  it('⑩ 가리킬 대상 없는 지시어·이름 흔들림을 고치되 대상을 지어내지 않는다(2026-10-12)', () => {
+  it('⑩ 가리킬 대상 없는 지시어만 고치고, 이름 맞추기·새 지시어는 금지(2026-10-12)', () => {
     const p = readabilityPrompt(BODY, '');
     expect(p).toContain('⑩ 앞 문장에 가리킬 대상이 없는 지시어');
-    expect(p).toContain('다시 "가지"로 부르지 않는다');
+    expect(p).toContain('"그것·이것·그거" 같은 지시어를 새로 만들지 마라');
+    expect(p).toContain('다른 이름으로 부른 문장(삽수↔가지 등)은 고치지 마라');
     expect(p).toContain('대상이 본문 어디에도 없으면 고치지 마라');
   });
   it('키워드가 없으면 그 줄이 빠진다', () => {

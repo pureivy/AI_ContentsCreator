@@ -513,6 +513,38 @@ describe('repairSentences — 프롬프트·검증', () => {
   });
 });
 
+// 2026-10-12 — 첫 새 규칙 글(모과나무 삽목 겨울나기)에서 드러난 표적 수정 흔적 두 가지.
+describe('표적 수정 — 금지문 흐리기 금지·확인표 동기화(2026-10-12)', () => {
+  it('프롬프트: "대개" 금지, 금지문은 행동 지시를 흐리지 않는다', async () => {
+    mocked.mockResolvedValueOnce({ repairs: [] });
+    await repairSentences('m', 'body', ['s1']);
+    const user = String(mocked.mock.calls.at(-1)![2]);
+    expect(user).toContain('("대개"는 쓰지 마라)');
+    expect(user).toContain('"~하지 않는 게 보통 좋습니다"처럼 바꾸지 말고');
+  });
+  const body = [
+    '## 확인',
+    '겨울에 한 번, 땅이 풀린 뒤 한 번, 그 뒤 2주쯤 간격으로 다시 보면 됩니다.',
+    '꽃은 보통 5년 뒤에 핍니다.',
+    '',
+    '>>> 1) 뽑지 말고 구부려 확인',
+    '>>> 2) 2주 간격으로 다시 보기',
+    '>>> 3) 꽃은 5년 뒤',
+  ].join('\n');
+  it('본문에서 지운 수치를 든 확인표 줄은 걷어 내고 번호를 당긴다', () => {
+    const s = '겨울에 한 번, 땅이 풀린 뒤 한 번, 그 뒤 2주쯤 간격으로 다시 보면 됩니다.';
+    const r = applySentenceRepairs(body, [s], [{ index: 1, action: 'hedge', replacement: '겨울에 한 번, 땅이 풀린 뒤 한 번, 그 뒤 보통 간격을 두고 다시 보면 됩니다.' }]);
+    expect(r.applied).toBe(1);
+    expect(r.body).not.toContain('2주');
+    expect(r.body).toContain('>>> 1) 뽑지 말고 구부려 확인\n>>> 2) 꽃은 5년 뒤');
+  });
+  it('본문 다른 곳에 근거가 남은 수치는 확인표에서 지우지 않는다', () => {
+    const b2 = body.replace('꽃은 보통 5년 뒤에 핍니다.', '꽃은 보통 5년 뒤에 핍니다. 열매는 5년 뒤부터 봅니다.');
+    const r = applySentenceRepairs(b2, ['꽃은 보통 5년 뒤에 핍니다.'], [{ index: 1, action: 'delete', replacement: '' }]);
+    expect(r.body).toContain('>>> 3) 꽃은 5년 뒤');
+  });
+});
+
 describe('runFactGateWithRepair — 표적 수정 우선', () => {
   const R = (status: 'pass' | 'hold', unsupported: string[] = []): FactGateResult => ({ status, claims: [], unsupported, contradicted: [], unverified: [], repaired: false, checkedTs: 't' });
   it('표적 수정이 적용되면 작가 재작성 없이 2차 판정', async () => {
