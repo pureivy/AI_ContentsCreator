@@ -108,6 +108,8 @@ export interface Config {
   readonly blogRealFrame: boolean;
   /** 블로그 설명 도표 2장(2026-10-12 사장님 채택) — 순서 도표(번호 목록 그대로)·요약 도표(본문 문장만). 끄면 종전 3장. */
   readonly blogDiagrams: boolean;
+  /** 숏폼 직접 제작 모션그래픽(2026-10-12 사장님 결정, 두 채널) — 정보 카드 씬만 HTML/CSS/SVG 모션으로. 끄면 종전 카드. */
+  readonly shortsMotionGraphics: boolean;
   /** ready 도달 시 자동 네이버 임시저장 — SEO 점수가 기준(naverDraftSeoMin) 이상일 때만. 발행은 여전히 사람 수동. */
   readonly autoNaverDraft: boolean;
   /**
@@ -487,6 +489,7 @@ export const CONFIG: Config = {
   blogAutoImage: envBool('BLOG_AUTO_IMAGE', false),
   blogRealFrame: envBool('BLOG_REAL_FRAME', true),
   blogDiagrams: envBool('BLOG_DIAGRAMS', true),
+  shortsMotionGraphics: envBool('SHORTS_MOTION_GRAPHICS', true),
   // 2026-08-27 사용자 확정 — 기본 off. 근거 유무와 무관하게 모든 블로그 글은 수동 검토 후 버튼으로 임시저장한다
   // (SEO 자동 리비전은 그대로 유지 — 꺼지는 건 임시저장 '호출'뿐).
   autoNaverDraft: envBool('AUTO_NAVER_DRAFT', false),

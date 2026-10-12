@@ -23,6 +23,7 @@ import { writerById, writerByName, type ShortsWriter } from '../content/shortsWr
 import { notifyShortsReady } from '../autonomy/contentNotify';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages } from './shortsSceneQa';
+import { applyMotionGraphics } from './shortsDirectMotion';
 import { parseSceneMust, mustDesignerGuide, mustPromptLines, type SceneMust } from './sceneMust';
 export { parseSceneMust } from './sceneMust';
 import { qaSceneClips } from './shortsClipQa';
@@ -350,6 +351,8 @@ export async function reviseShorts(
     if (!revisedVideoPath) return fail('재조립 실패 — 결과 영상 경로 없음');
     const caption = [plan.title, '', plan.description, '', plan.hashtags.join(' ')].filter((x, i) => x || i === 1 || i === 3).join('\n');
     fs.writeFileSync(path.join(dir, 'caption.txt'), caption, 'utf-8');
+    // 수정 재조립도 모션그래픽을 다시 입힌다(2026-10-12) — 안 그러면 수정요청 한 번에 원본 카드로 되돌아간다.
+    if (CONFIG.shortsMotionGraphics && !opts.signal?.aborted) await applyMotionGraphics(id, { log: say });
     store.update(id, { stage: 'ready', scenes: r.sceneCount, durationSec: r.durationSec, topic: plan.title });
     say(`수정 완료 — ${plan.title.slice(0, 30)} · ${r.durationSec}초`);
     // 썸네일 — 제목/캘리 문구/배경이 바뀐 경우 재생성(문구 일치 유지). 실패 무해.
@@ -2275,6 +2278,12 @@ async function finishShortsRun(a: {
   // 캡션 파일(업로드 편의) — 제목·설명·해시태그.
   const caption = [plan.title, '', plan.description, '', plan.hashtags.join(' ')].filter((x, i) => x || i === 1 || i === 3).join('\n');
   fs.writeFileSync(path.join(dir, 'caption.txt'), caption, 'utf-8');
+  // 직접 제작 모션그래픽(2026-10-12 사장님 결정 "두 채널 모두 적용") — '완성' 표시 전에 바꾼다(발행 버튼이 원본을 집지 않게).
+  // 실촬영 씬은 원본 그대로, 정보 카드 씬만. 실패·대상 아님이면 원본 영상 그대로 진행.
+  if (CONFIG.shortsMotionGraphics && !opts.signal?.aborted) {
+    store.update(id, { stage: 'rendering' });
+    await applyMotionGraphics(id, { log: say });
+  }
 
   store.update(id, {
     stage: 'ready', scenes: r.sceneCount, durationSec: r.durationSec, bgFallbacks: fallbacks,

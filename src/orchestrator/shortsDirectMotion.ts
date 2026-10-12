@@ -1,9 +1,9 @@
 /**
  * 직접 제작 모션그래픽 — 파일럿 전용(2026-10-05 사장님 요청: "B 방식을 우리 숏폼 1~2편에 시험해 원본과 나란히 비교").
  *
- * 매일 제작 경로(runShortsJob·reviseShorts)는 이 모듈을 import 하지 않는다 — 설정 스위치도 없다. 실행은
- * src/bench/pilotDirect.ts 로만 하고, 결과는 data/shorts/<id>/pilot-direct/ 에만 쓴다(원본 final.mp4·plan.json·
- * 쇼츠 저장소 레코드는 읽기만 한다).
+ * 2026-10-12 사장님 결정("두 채널 모두 적용")으로 매일 제작에 연결했다 — runShortsJob·reviseShorts 가 렌더 직후
+ * applyMotionGraphics 를 부른다(SHORTS_MOTION_GRAPHICS, 기본 켬). 시범 CLI(src/bench/pilotDirect.ts)는 그대로 남는다.
+ * 원본은 final.basic.mp4 로 남기고 결과를 final.mp4 로 올린다. 실패·대상 아님(실촬영 없음·정보 카드 없음)이면 원본 그대로.
  *
  * 원본(Biz_Contents_Creator src/orchestrator/shortsDirectMotion.ts, 2026-10-01 매일 제작 확정본)의 방식:
  *   Claude Code 가 씬마다 HTML/CSS/SVG 애니메이션을 직접 짜고, 미리보기 프레임을 스스로 보며 고치고,
@@ -456,4 +456,34 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
   });
   saveMetrics();
   return m;
+}
+
+/**
+ * 매일 제작 연결(2026-10-12) — 정보 카드 씬만 직접 제작 모션그래픽으로 바꾼 영상을 final.mp4 로 올린다.
+ * 작업 폴더는 매번 새로(motion-<시각>) — 바탕판(bg-nocards.mp4)이 폴더에 남아 있으면 그대로 다시 쓰여 수정 전 문구가 나간다
+ * (모과나무 시범 2회째에서 확인). 원본은 final.basic.mp4 로 보관. 어떤 실패든 false — 원본 영상으로 진행한다.
+ */
+export async function applyMotionGraphics(id: string, opts: { log?: (m: string) => void } = {}): Promise<boolean> {
+  const log = opts.log ?? ((m: string) => console.log(m));
+  const dir = path.join(CONFIG.dataDir, 'shorts', id);
+  const final = path.join(dir, 'final.mp4');
+  try {
+    const m = await runDirectMotionPilot({ id, workName: `motion-${Date.now()}`, agentTimeoutMs: 20 * 60_000, log: (x) => console.log('[모션그래픽]', x) });
+    if (!m.out || !fs.existsSync(m.out) || m.check?.ok === false) {
+      log(`모션그래픽 건너뜀 — ${m.check?.ok === false ? `검사 불합격(${(m.check.problems ?? []).slice(0, 2).join(' · ')})` : '결과 영상 없음'} · 원본 영상 유지`);
+      return false;
+    }
+    fs.copyFileSync(final, path.join(dir, 'final.basic.mp4'));
+    fs.copyFileSync(m.out, final);
+    // 작업 폴더의 무거운 중간 영상만 걷는다(편마다 ~100MB) — 장면 HTML·검사·지표는 사후 확인용으로 남긴다.
+    const work = path.dirname(m.out);
+    for (const f of fs.readdirSync(work)) {
+      if (/^(?:bg-nocards|final(?:\.auto)?|seg_\d+)\.mp4$/.test(f)) { try { fs.unlinkSync(path.join(work, f)); } catch { /* 무해 */ } }
+    }
+    log(`모션그래픽 적용 — 씬 ${m.graphicScenes.join('·')} · ${Math.round(m.wallSec)}초${m.agent?.costUsd ? ` · $${m.agent.costUsd.toFixed(2)}` : ''}`);
+    return true;
+  } catch (e) {
+    log(`모션그래픽 건너뜀 — ${e instanceof Error ? e.message.slice(0, 120) : String(e)} · 원본 영상 유지`);
+    return false;
+  }
 }
