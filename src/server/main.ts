@@ -55,6 +55,7 @@ import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
 import { shortsStore, shortsQaPublishBlockReason, shortsFactHoldBlockReason } from '../content/shorts';
+import { stripDiagramMarkers } from '../output/blogDiagrams';
 import { addMedia, listMedia, updateMedia, removeMedia, mediaDir, matchMedia, matchMediaScored } from '../content/mediaLibrary';
 import { pickRotatedVideo, readMediaHistory, windowSceneSec } from '../content/mediaRotation';
 import { SEGMENT_TAIL_SEC } from '../content/userAssets';
@@ -2733,7 +2734,7 @@ async function pieceReviseHandler(c: Context): Promise<Response> {
   let baseBody = '';
   try {
     const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, piece.runId ?? '', 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
-    baseBody = (d.bodyMarkdown ?? '').trim();
+    baseBody = stripDiagramMarkers(d.bodyMarkdown ?? '').trim(); // 도표 자리는 빼고 넘긴다 — finalize 가 새로 넣는다(2026-10-12)
   } catch { /* 아래에서 거절 */ }
   if (!baseBody) return c.json({ error: '기존 초안 본문을 찾을 수 없습니다.' }, 404);
   const runId = launchRun(piece.title, { pieceId: piece.id, keyword: piece.keyword, revise: { baseBody, feedback: feedback.slice(0, 4000), baseRunId: piece.runId } });
@@ -3043,7 +3044,7 @@ function maybeAutoNaverDraft(pieceId: string): boolean {
   let baseBody = '';
   try {
     const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
-    baseBody = (d.bodyMarkdown ?? '').trim();
+    baseBody = stripDiagramMarkers(d.bodyMarkdown ?? '').trim(); // 도표 자리는 빼고 넘긴다 — finalize 가 새로 넣는다(2026-10-12)
   } catch { /* 아래에서 중단 */ }
   const feedback = seoReviseFeedback(runId, piece.keyword);
   if (!baseBody || !feedback) return false; // 본문·체크리스트 없이는 리비전 품질을 보장할 수 없다 — 수동으로

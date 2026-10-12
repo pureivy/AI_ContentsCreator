@@ -75,6 +75,12 @@ export function extractStepsDiagram(md: string): DiagramSpec | null {
   return null;
 }
 
+/** 도표 마커 걷어 내기(순수, 2026-10-12) — 리비전 런은 기존 본문을 기준으로 다시 쓰고 사진·도표를 새로 만든다.
+ *  "[IMAGE: … 도표]" 줄이 남아 있으면 사진 자리로 계획돼 도표 자리에 AI 사진이 그려진다. 도표는 finalize 가 다시 넣는다. */
+export function stripDiagramMarkers(md: string): string {
+  return String(md ?? '').split('\n').filter((l) => !/^\s*\[IMAGE:[^\]]*\s도표\]\s*$/.test(l)).join('\n').replace(/\n{3,}/g, '\n\n');
+}
+
 /** 본문 문장들(순수) — 요약 칸 검증의 대조군. */
 function bodySentences(md: string): string[] {
   return String(md ?? '').split('\n').filter((l) => !MARKER_RE.test(l) && !/^\|?\s*-{3,}/.test(l))

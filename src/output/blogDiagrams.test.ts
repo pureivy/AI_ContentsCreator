@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractStepsDiagram, insertDiagramMarkers, summaryInsertAt, validateSummaryItems } from './blogDiagrams';
+import { extractStepsDiagram, insertDiagramMarkers, summaryInsertAt, validateSummaryItems, stripDiagramMarkers } from './blogDiagrams';
 
 // 2026-10-12 사장님 채택 — 글마다 설명 도표 2장(단풍나무 씨앗 글이 이미지 2장뿐이었다).
 const MD = [
@@ -49,5 +49,12 @@ describe('insertDiagramMarkers — 마커 끼우기와 이미지 순서', () => 
     expect(r.body).toContain('[IMAGE: 받은 씨앗은 어디에 뿌려야 할까요? 도표]');
     // 순서 도표가 마지막 절 바로 앞이라 요약 도표는 마지막 절 끝으로(두 도표가 붙지 않게)
     expect(r.body.indexOf('[IMAGE: 요약 도표]')).toBeGreaterThan(r.body.indexOf('끝 문단입니다.'));
+  });
+});
+
+describe('stripDiagramMarkers — 리비전 런에 도표 자리를 넘기지 않는다', () => {
+  it('"… 도표" 마커만 걷어 내고 사진 마커는 둔다', () => {
+    const md = 'a\n\n[IMAGE: 첫 장면]\n\nb\n\n[IMAGE: 뿌리는 순서 도표]\n\nc';
+    expect(stripDiagramMarkers(md)).toBe('a\n\n[IMAGE: 첫 장면]\n\nb\n\nc');
   });
 });
