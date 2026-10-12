@@ -35,23 +35,23 @@ CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{width:1080px;font-family:B,"Apple Color Emoji",sans-serif;color:#23301f;word-break:keep-all}
 .wrap{padding:62px 60px 56px}
-.k{font-family:H,"Apple Color Emoji",sans-serif;font-size:30px;color:#c2581f}
-h1{font-family:H,"Apple Color Emoji",sans-serif;font-weight:400;font-size:62px;line-height:1.2;margin:6px 0 30px}
+.k{font-family:H,"Apple Color Emoji",sans-serif;font-size:44px;color:#c2581f}
+h1{font-family:H,"Apple Color Emoji",sans-serif;font-weight:400;font-size:84px;line-height:1.18;margin:8px 0 36px}
 /* A — 이모지 카드(순서 도표) */
 body.steps{background:#faf6ee}
-.c{display:flex;gap:24px;align-items:center;background:#fff;border-radius:28px;padding:22px 26px;margin-bottom:16px;box-shadow:0 6px 18px rgba(80,60,20,.08)}
-.e{flex:none;width:108px;height:108px;border-radius:30px;display:grid;place-items:center;font-size:58px;font-family:"Apple Color Emoji",H,sans-serif;color:#2f5d3a}
-.no{display:block;font-family:L,sans-serif;font-size:24px;color:#c2581f;letter-spacing:.04em}
-.c b{display:block;font-weight:400;font-size:34px;line-height:1.32}
-.c small{display:block;font-size:25px;color:#7a7466;margin-top:4px}
-.wa{margin-top:10px;background:#fff0ea;border:3px dashed #e0623a;border-radius:24px;padding:18px 26px;font-size:30px;color:#b8431e}
+.c{display:flex;gap:28px;align-items:center;background:#fff;border-radius:32px;padding:30px 30px;margin-bottom:22px;box-shadow:0 6px 18px rgba(80,60,20,.08)}
+.e{flex:none;width:150px;height:150px;border-radius:36px;display:grid;place-items:center;font-size:84px;font-family:"Apple Color Emoji",H,sans-serif;color:#2f5d3a}
+.no{display:block;font-family:L,sans-serif;font-size:40px;color:#c2581f;letter-spacing:.04em}
+.c b{display:block;font-weight:400;font-size:66px;line-height:1.28}
+.c small{display:block;font-size:48px;line-height:1.32;color:#6e6859;margin-top:8px}
+.wa{margin:10px 0 22px;background:#fff0ea;border:4px dashed #e0623a;border-radius:28px;padding:26px 30px;font-size:56px;line-height:1.32;color:#b8431e}
 /* E — 계절 카드(요약 도표) */
 body.points{background:#fffaf3}
-.grid{display:flex;flex-direction:column;gap:26px}
-.p{display:flex;gap:26px;align-items:center;border-radius:30px;padding:38px 32px}
-.ic{flex:none;width:120px;height:120px;border-radius:50%;background:#fff;display:grid;place-items:center;font-size:64px;box-shadow:0 6px 16px rgba(0,0,0,.06);font-family:"Apple Color Emoji",H,sans-serif;color:#2f5d3a}
-.lb{display:inline-block;color:#fff;border-radius:999px;padding:5px 20px;font-family:L,sans-serif;font-size:28px;letter-spacing:.02em;margin-bottom:10px}
-.p b{display:block;font-weight:400;font-size:36px;line-height:1.3}
+.grid{display:flex;flex-direction:column;gap:30px}
+.p{display:flex;gap:30px;align-items:center;border-radius:34px;padding:42px 34px}
+.ic{flex:none;width:150px;height:150px;border-radius:50%;background:#fff;display:grid;place-items:center;font-size:84px;box-shadow:0 6px 16px rgba(0,0,0,.06);font-family:"Apple Color Emoji",H,sans-serif;color:#2f5d3a}
+.lb{display:inline-block;color:#fff;border-radius:999px;padding:8px 28px;font-family:L,sans-serif;font-size:56px;letter-spacing:.01em;margin-bottom:14px}
+.p b{display:block;font-weight:400;font-size:70px;line-height:1.28}
 """
 
 STEP_BG = ["#e9f3e1", "#fff1d6", "#fde3d8", "#dcefff", "#e4ecff", "#f3e6f3", "#fdf2c9", "#e3f0da"]
@@ -82,7 +82,8 @@ def build(spec, font_dir):
         main = f'{before}<div class="grid">{body}</div>{after}'
     return ("<!doctype html><html><head><meta charset='utf-8'><style>" + CSS.replace("FONTDIR", "file://" + font_dir) + "</style></head>"
             f'<body class="{"steps" if kind == "steps" else "points"}"><div class="wrap"><div class="k">{kicker}</div><h1>{esc(spec.get("title"))}</h1>'
-            # 하단 상호·계정 줄 없음, 높이는 내용에 맞춘다(2026-10-12 사장님 — 아래 베이지 여백을 줄여 달라)
+            # 하단 상호·계정 줄 없음, 높이는 내용에 맞춘다(2026-10-12 사장님 — 아래 베이지 여백을 줄여 달라).
+            # 글자 2배(같은 날 사장님 — 휴대폰에서 본문·라벨이 안 보인다). 휴대폰은 1080 폭을 약 1/3로 줄여 보여 준다.
             f'<div class="main">{main}</div></div></body></html>')
 
 
@@ -105,7 +106,7 @@ def main():
             pg.goto("file://" + os.path.abspath(tmp_html))
             pg.evaluate("document.fonts.ready")
             pg.wait_for_timeout(300)
-            h = min(1920, max(600, int(pg.evaluate("document.querySelector('.wrap').scrollHeight"))))
+            h = min(4000, max(600, int(pg.evaluate("document.querySelector('.wrap').scrollHeight"))))
             pg.set_viewport_size({"width": 1080, "height": h})
             pg.screenshot(path=out)
         finally:

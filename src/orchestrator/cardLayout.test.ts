@@ -1,0 +1,124 @@
+import { describe, it, expect } from 'vitest';
+import {
+  normalizeLayout, coverage, sourceSentences, extractOk, monthMentioned, parsePhotoRef, layoutFields, dropFields, parityKeys, oneEmoji, toRenderSpec,
+} from './cardLayout';
+
+// 감나무 잎 구별 글(2026-10-12)에서 줄인 원문 — 카드 칸은 여기서만 뽑아야 한다.
+const SRC = [
+  '## 산감나무, 돌감나무는 다른 나무인가요?',
+  '같은 나무입니다. 열매 크기와 자란 자리가 달라서 부르는 말이 나뉜 것이고, 종이 갈라지지는 않아요.',
+  '- **잎**: 크고 넓으며 가장자리에 톱니가 없고, 녹색 광택이 납니다.',
+  '- **수피(나무껍질)**: 흑회색으로 코르크처럼 되어 잘게 갈라지고, 숨구멍 자리인 피목이 많습니다.',
+  '다 자라면 키가 10~15m까지 올라가는 낙엽성 교목이라, 산에 선 감나무는 생각보다 큽니다.',
+  '꽃은 5~6월에 이미 지나갔어요. 지금은 10월, 열매가 등황색으로 물드는 시기입니다.',
+].join('\n');
+const PLAN = {
+  title: '감나무 잎 구별',
+  slides: [
+    { headline: '산길의 작은 감, 감나무일까요?', body: '잎 테두리부터 보면 됩니다' },
+    { headline: '세 군데로 알아봅니다', body: '' },
+    { headline: '산에 선 감나무는 큽니다', body: '' },
+    { headline: '이번 주말 이 순서로', body: '' },
+  ],
+};
+
+describe('coverage·extractOk — 칸 글은 원문 문장에서 뽑은 것만', () => {
+  const sents = sourceSentences(SRC);
+  it('원문을 줄인 칸은 통과', () => {
+    expect(coverage('톱니가 없고 광택이 나요', sents)).toBeGreaterThanOrEqual(0.5);
+    expect(extractOk('흑회색, 잘게 갈라져요', SRC, sents)).toBe(true);
+  });
+  it('원문에 없는 내용·숫자는 탈락', () => {
+    expect(extractOk('가을에 붉은 단풍이 아름다워요', SRC, sents)).toBe(false);
+    expect(extractOk('키가 20m까지 자라요', SRC, sents)).toBe(false);
+  });
+});
+
+describe('monthMentioned — 달력 칸은 원문이 말한 달만', () => {
+  it('범위와 단일 월을 모두 읽는다', () => {
+    expect(monthMentioned(SRC, 5)).toBe(true);
+    expect(monthMentioned(SRC, 6)).toBe(true);
+    expect(monthMentioned(SRC, 10)).toBe(true);
+    expect(monthMentioned(SRC, 7)).toBe(false);
+    expect(monthMentioned(SRC, 1)).toBe(false); // "10월"·"15m" 의 1 에 걸리지 않는다
+  });
+});
+
+describe('parsePhotoRef', () => {
+  it('블로그 번호는 범위 안만, gen 은 장면이 있어야', () => {
+    expect(parsePhotoRef({ use: 'blog', n: 2 }, 3)).toEqual({ use: 'blog', n: 2 });
+    expect(parsePhotoRef({ use: 'blog', n: 5 }, 3)).toBeUndefined();
+    expect(parsePhotoRef('blog:1', 3)).toEqual({ use: 'blog', n: 1 });
+    expect(parsePhotoRef({ use: 'gen', scene: '손바닥 위 매끈한 감나무 잎', must_show: ['톱니 없는 테두리'] }, 0))
+      .toEqual({ use: 'gen', scene: '손바닥 위 매끈한 감나무 잎', must: { show: ['톱니 없는 테두리'], not: [] } });
+    expect(parsePhotoRef({ use: 'gen', scene: '잎' }, 0)).toBeUndefined();
+  });
+});
+
+describe('normalizeLayout — 장 수·판 고정·칸 검증', () => {
+  const raw = {
+    series: '산길 나무 구별 노트',
+    slides: [
+      { kind: 'points', accent: '감나무', kicker: '🍊 감나무 편' }, // 1번은 cover 로 고정
+      { kind: 'points', items: [
+        { emoji: '🍃', label: 'CHECK 1', title: '잎', text: '톱니가 없고 광택이 나요' },
+        { emoji: '🪵', label: 'CHECK 2', title: '수피', text: '흑회색, 잘게 갈라져요' },
+        { emoji: '🌸', label: 'CHECK 3', title: '꽃', text: '봄에 분홍 꽃이 핍니다' }, // 원문에 없음 → 버림
+      ] },
+      { kind: 'numbers', stats: [{ value: '10~15m', label: '다 자란 키' }, { value: '30m', label: '최대 키' }],
+        calendar: [{ months: [5, 6], label: '5~6월 꽃' }, { months: [7], label: '7월 장마' }] },
+      { kind: 'photo' }, // 마지막은 steps 로 고정
+    ],
+  };
+  const l = normalizeLayout(raw, PLAN, SRC, 2);
+  it('표지·마무리 판을 고정하고 제목·본문은 기획 문구 그대로', () => {
+    expect(l.slides.map((s) => s.kind)).toEqual(['cover', 'points', 'numbers', 'steps']);
+    expect(l.slides[0]!.title).toBe(PLAN.slides[0]!.headline);
+    expect(l.slides[0]!.lead).toBe('잎 테두리부터 보면 됩니다');
+    expect(l.slides[0]!.accent).toBe('감나무');
+    expect(l.series).toBe('산길 나무 구별 노트');
+  });
+  it('원문에 없는 칸은 버린다', () => {
+    expect(l.slides[1]!.items!.map((x) => x.title)).toEqual(['잎', '수피']);
+    expect(l.slides[2]!.stats!.map((x) => x.value)).toEqual(['10~15m']);
+    expect(l.slides[2]!.calendar!.map((x) => x.months)).toEqual([[5, 6]]);
+  });
+  it('칸이 모자라면 photo 판으로 내린다', () => {
+    const l2 = normalizeLayout({ slides: [{}, { kind: 'points', items: [{ title: '잎', text: '톱니가 없고 광택이 나요' }] }, { kind: 'facts', rows: [] }, {}] }, PLAN, SRC, 0);
+    expect(l2.slides.map((s) => s.kind)).toEqual(['cover', 'photo', 'photo', 'steps']);
+  });
+  it('제목에 없는 강조어는 버린다', () => {
+    const l3 = normalizeLayout({ slides: [{ accent: '없는말' }] }, PLAN, SRC, 0);
+    expect(l3.slides[0]!.accent).toBeUndefined();
+  });
+});
+
+describe('칸 사실 대조 — 걸린 칸 지우기', () => {
+  const l = normalizeLayout({ slides: [{}, { kind: 'points', items: [
+    { title: '잎', text: '톱니가 없고 광택이 나요' }, { title: '수피', text: '흑회색, 잘게 갈라져요' },
+  ] }, {}, {}] }, PLAN, SRC, 0);
+  const fields = layoutFields(l);
+  it('parity "항목N" 을 칸 주소로', () => {
+    expect(fields.map((f) => f.key)).toEqual(['1.items.0', '1.items.1']);
+    expect([...parityKeys(['항목2: 원문은 …'], fields)]).toEqual(['1.items.1']);
+  });
+  it('지워서 항목이 1개가 되면 photo 판으로', () => {
+    const d = dropFields(l, new Set(['1.items.1']));
+    expect(d.slides[1]!.kind).toBe('photo');
+    expect(d.slides[1]!.title).toBe('세 군데로 알아봅니다');
+  });
+});
+
+describe('oneEmoji·toRenderSpec', () => {
+  it('이모지 한 글자만', () => {
+    expect(oneEmoji('🍃 잎')).toBe('🍃');
+    expect(oneEmoji('잎')).toBeUndefined();
+  });
+  it('사진 자리를 경로로, 표지에 촬영 꼬리표', () => {
+    const l = normalizeLayout({ slides: [{ photo: { use: 'blog', n: 1 } }, {}, {}, {}] }, PLAN, SRC, 1);
+    const spec = toRenderSpec(l, (r) => (r?.use === 'blog' ? '/x/blog-01.png' : undefined), { outDir: '/o', fontDir: '/f', brand: { name: 'B' }, coverNote: '📷 실제 촬영' }) as { slides: Array<{ photo?: string; photoNote?: string }> };
+    expect(spec.slides[0]!.photo).toBe('/x/blog-01.png');
+    expect(spec.slides[0]!.photoNote).toBe('📷 실제 촬영');
+    expect(spec.slides[1]!.photo).toBeUndefined();
+  });
+});

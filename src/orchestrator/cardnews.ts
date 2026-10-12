@@ -36,6 +36,7 @@ import { pruneByPrefix, humanBytes } from '../util/prune';
 import { stdModel, visionCapable } from './visionCommon';
 import { findSpecies, speciesAnchor } from '../content/species';
 import { isContainerTopic } from '../analytics/igAxis';
+import { designHtmlCards, isHtmlCard, rerenderHtmlCard, reviseHtmlCard } from './cardHtmlJob';
 
 const RUNNING = new Set<string>();
 export function isCardNewsRunning(id: string): boolean { return RUNNING.has(id); }
@@ -601,7 +602,7 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     varietyGuide(`${topic} ${keyword ?? ''}`),
     // 글자 상한(2026-10-05 카드뉴스 분석 승인 항목 3-1) — 장당 글자가 7월 37자 → 10월 69자로 늘어 휴대폰 폭에서 본문이 안 읽혔다.
     // 지시만으로는 새므로 cardDensityIssues(수정 라운드)·shortenDenseSlides·fitCardDensity(마지노선)가 결정적으로 잡는다.
-    `[글자 상한] 휴대폰 화면 폭에서 확대 없이 읽혀야 한다 — 헤드라인 ${CARD_HEADLINE_MAX_CHARS}자 이내, body 는 ${CARD_BODY_MAX_LINES}줄·${CARD_BODY_MAX_CHARS}자 이내(공백 포함, 한 줄 18자 안팎). 장당 메시지 하나만 싣고, 이유·수치 세부는 캡션으로 보내라.`,
+    `[글자 상한] 휴대폰 화면 폭에서 확대 없이 읽혀야 한다 — 헤드라인 ${CARD_HEADLINE_MAX_CHARS}자 이내, body 는 ${CARD_BODY_MAX_LINES}줄·${CARD_BODY_MAX_CHARS}자 이내(공백 포함, 한 줄 18자 안팎). 장당 메시지 하나만 싣고, 이유·수치 세부는 ${CONFIG.cardnewsHtml ? '다음 단계(판형 디자이너)가 원문에서 목록·비교·수치 칸으로 채운다 — 헤드라인·body 에 욱여넣지 마라' : '캡션으로 보내라'}.`,
     // 2번 장 = 두 번째 표지(같은 승인 항목) — 인스타는 넘기지 않은 캐러셀을 2번 장부터 다시 노출한다.
     '[2번 장] 2번 장은 두 번째 표지다 — 인스타그램은 넘기지 않은 카드를 2번 장부터 다시 보여 준다. 2번 장만 봐도 대상(식물명)과 이 카드의 핵심 답(무엇을·언제·어떻게)이 읽히게 써라. "그래서·먼저·이때"처럼 앞 장에 기대는 말로 열지 말고, 궁금증만 남기는 장으로 쓰지 마라.',
     // 결론 의무+용어 문턱(사용자 확정 2026-08-12): 실측 — "도장지"를 표지부터 캡션까지 한 번도 안 풀었고,
@@ -614,7 +615,9 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     '[여운·관점] 3번 이후 본문 1장은 결론 없이 다음 장으로 궁금증을 넘기되, 그 답을 반드시 바로 다음 장 첫 줄에서 준다(2번 장은 여운 장으로 쓰지 마라). 본문 1장에는 판단의 표명 한 줄("이럴 땐 흙부터 확인하세요" — "~봅니다"로 쓰지 말고, "나는/저는/저라면" 같은 1인칭 주어도 쓰지 마라, 주어 없이도 시점이 전달된다. 사용자 확정 2026-08-12. 겪지 않은 사건·일화 날조는 금지) — 근거·이유 줄을 밀어내고 그 자리를 차지하게 하지 마라, 판단은 근거에 덧붙이는 한 줄이다. "X가 아니라 Y" 대조 훅·"오늘 ~" 헤드라인·"N가지" 골격은 과용된 지문이니 다른 각도로 열고, "가 아니라"는 세트 전체 1회 이하.',
     n
       ? `슬라이드 ${n}장(표지 1 + 본문 ${Math.max(1, n - 2)} + 마무리 1)의 카드뉴스를 기획하라.`
-      : '슬라이드 수는 스토리라인의 핵심 메시지 개수에 맞게 3~8장 사이에서 스스로 정하라(표지 1 + 본문 여러 장 + 마무리 1). 억지로 채우거나 줄이지 말고 내용 밀도에 맞춰라. 문체 쿼터(질문·명사구·1인칭) 때문에 정보 장이 부족하면 장 수를 늘려서 해결하라 — 정보 장을 빼서 해결하지 마라.',
+      : CONFIG.cardnewsHtml
+        ? '슬라이드 수는 스토리라인에 맞게 6~9장 사이에서 스스로 정하라(표지 1 + 본문 여러 장 + 마무리 1). 장마다 한 가지 설명(특징·이유·비교·수치·순서·이야기)을 맡겨라 — 같은 말을 두 장에 나누지 마라.'
+        : '슬라이드 수는 스토리라인의 핵심 메시지 개수에 맞게 3~8장 사이에서 스스로 정하라(표지 1 + 본문 여러 장 + 마무리 1). 억지로 채우거나 줄이지 말고 내용 밀도에 맞춰라. 문체 쿼터(질문·명사구·1인칭) 때문에 정보 장이 부족하면 장 수를 늘려서 해결하라 — 정보 장을 빼서 해결하지 마라.',
     '표지와 마무리 장의 body 는 비우거나 한 줄로 짧게. 카드 텍스트에 이모지 금지(캡션에는 허용).',
     // 마무리 장 CTA(2026-09-04) — 종전엔 길이만 규정하고 내용을 안 말해서 결과가 갈렸다(실측 19건 중
     // 4건이 마무리 감상·정보 장). 쇼츠 CTA 씬의 takeaways 규정을 카드뉴스로 옮긴 것.
@@ -645,7 +648,7 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
   }
   if (!usable(j)) return null;
   const toPlan = (raw: PlannerRaw & { slides: PlannerSlide[] }): Plan | null => {
-    const slides = raw.slides.slice(0, 8).map((s) => ({
+    const slides = raw.slides.slice(0, CONFIG.cardnewsHtml ? 9 : 8).map((s) => ({
       headline: cleanLine(s?.headline, 40),
       body: cleanLine(s?.body, 220),
     })).filter((s) => s.headline);
@@ -989,6 +992,21 @@ export async function reviseCardNews(
   if (RUNNING.has(id)) return fail('생성/수선 작업이 이미 진행 중입니다');
   const say = (m: string): void => { console.log(`[카드뉴스] ${m}`); opts.bus?.emit('log', { message: m }); };
   const dir = store.dirFor(id);
+  // HTML 판(2026-10-12) — 제목·본문·칸 글·사진 장면을 판형 JSON 에서 고쳐 다시 렌더한다.
+  // 칸에서 바꿀 게 없으면(캡션·해시태그 요청 등) 아래 종전 경로로 넘어간다 — 그 경로의 슬라이드 재생성은 HTML 판에선 다시 찍기다.
+  if (isHtmlCard(dir)) {
+    RUNNING.add(id);
+    let r: Awaited<ReturnType<typeof reviseHtmlCard>> = null;
+    try { r = await reviseHtmlCard(dir, feedback, say, opts.signal); } finally { RUNNING.delete(id); }
+    if (r) {
+      const n = fs.readdirSync(dir).filter((f) => /^slide_\d{2}\.png$/.test(f)).length;
+      store.update(id, { slides: n, qaUnresolved: undefined });
+      say(`수정 요청 반영(HTML 판) — ${r.changed.join(',')}번 장`);
+      const done = store.get(id);
+      if (done) void notifyCardnewsReady({ id, topic: done.topic, brand: done.brand, slides: n, sourcePieceId: done.sourcePieceId, planner: done.planner, designer: done.designer, factGate: done.factGate }, dir).catch(() => { /* 무해 */ });
+      return { ok: true, changedSlides: r.changed, fixed: r.changed, stillBad: [], metaChanged: false };
+    }
+  }
   let plan: Plan;
   try { plan = JSON.parse(fs.readFileSync(path.join(dir, 'plan.json'), 'utf-8')) as Plan; }
   catch { return fail('plan.json 없음 — 수정 불가'); }
@@ -1115,6 +1133,12 @@ export async function repairCardNewsSlides(
   const say = (m: string): void => { console.log(`[카드뉴스] ${m}`); opts.bus?.emit('log', { message: m }); };
   try {
     const dir = store.dirFor(id);
+    // HTML 판(2026-10-12) — 글자를 HTML 이 그리므로 '그림 오타 재생성'은 저장된 판형으로 다시 찍기만 하면 된다.
+    if (isHtmlCard(dir)) {
+      const n = await rerenderHtmlCard(dir, say, opts.signal);
+      store.update(id, { slides: n, qaUnresolved: undefined });
+      return { ok: n > 0, fixed: [], stillBad: [], ...(n > 0 ? {} : { error: '다시 렌더 실패' }) };
+    }
     let plan: Plan;
     try { plan = JSON.parse(fs.readFileSync(path.join(dir, 'plan.json'), 'utf-8')) as Plan; }
     catch { return fail('plan.json 없음 — 수선 불가'); }
@@ -1209,7 +1233,7 @@ export async function runCardNewsJob(
   try {
     fs.mkdirSync(path.join(dir, 'bg'), { recursive: true });
     // 장수: 지정(3~8)이면 그 수로 고정, 미지정·0(자동)이면 null → 기획자가 스토리라인에 맞게 3~8장 정함.
-    const n = opts.slideCount && opts.slideCount > 0 ? Math.min(Math.max(3, opts.slideCount), 8) : null;
+    const n = opts.slideCount && opts.slideCount > 0 ? Math.min(Math.max(3, opts.slideCount), CONFIG.cardnewsHtml ? 9 : 8) : null;
 
     // 1) 기획 — 슬라이드 구성·카피·캡션
     store.update(id, { stage: 'planning' });
@@ -1235,144 +1259,157 @@ export async function runCardNewsJob(
 
     // 2) 디자인 — 레퍼런스 트렌드 분석(fail-open) 후 배경 프롬프트(전 장 일관 스타일 + 장면 변주)
     store.update(id, { stage: 'designing', caption: plan.caption, hashtags: plan.hashtags, ...(plan.factGate ? { factGate: plan.factGate } : {}) });
-    const refs = await analyzeReferences(dir, card.topic, opts.signal);
-    if (refs.analysis) say(`레퍼런스 ${refs.refPaths.length}장 분석 반영 — ${refs.analysis.slice(0, 60)}…`);
-    // 디자이너를 engaged 웨이브에 배선 — standby 팀은 org 와 달리 delegation 이벤트가 없어,
-    // 디자인 단계 내내 오피스가 디자이너를 유휴·배회로 그리고 WORKING 칩도 0 이었다(수선 2026-08-12).
-    // emit 은 디자이너 LLM 호출 직전(레퍼런스 분석 뒤) — 스폰 전 '⏳ 대기' 창을 최소화한다.
-    opts.bus?.emit('delegation', { team_id: 'cardnews', from: 'cardnews_planner', to: 'cardnews_designer', summary: '배경 프롬프트 디자인' });
-    const design = await designBackgrounds(io, card.topic, plan, refs.analysis, opts.stylePreset, card.keyword, opts.sourceBody);
-    { const n = design.musts.filter(Boolean).length; if (n) say(`원문 묘사 — ${n}장에 꼭 보일 것·나오면 안 될 것 지정`); }
-    say(`디자인 확정 — ${design.preset} · ${design.style.slice(0, 40)}`);
-    checkAbort();
-
-    // 3) 카드 생성 — gpt-image-2 가 한국어 텍스트까지 포함한 완성 카드를 직접 그린다(Pillow 미사용).
-    //    문구는 코드가 따옴표로 정확히 지정(디자이너 프롬프트에 위임하지 않음 — 오타 리스크 최소화).
-    store.update(id, { stage: 'rendering' });
-    opts.bus?.emit('phase', { team_id: 'cardnews', phase: 'integrate' });
-    say(`카드 생성 시작 — gpt-image-2 ${plan.slides.length}장`);
-    const total = plan.slides.length;
-    // 카드 이미지 프롬프트 — card-news-maker 의 에디토리얼 포스터 템플릿 이식(실무팀 합의·구도·타이포·
-    // 자소 정확도·완성 기준). gpt-image-2 가 한글 문구까지 직접 그리므로 '한 글자도 바꾸지 말고/자소
-    // 결합 틀리면 실패'를 강하게 명시(이 프로젝트 무이모지 정책 유지, 페이지 번호는 넣지 않음).
-    const hasRefs = refs.refPaths.length > 0;
-    // 수종 사전 조회(2026-09-06) — 숏폼과 같은 근거를 카드뉴스도 쓴다.
-    const known = findSpecies(`${card.keyword ?? ''} ${plan.title}`);
-    if (known) say(`수종 사전 적중 — ${known.name} (${known.latin})${known.verified ? '' : ' · 형태 묘사 미검토'}`);
-    const cardPrompt = (i: number): string => buildCardImagePrompt({
-      headline: plan.slides[i]!.headline, body: plan.slides[i]!.body, scene: design.prompts[i] ?? '',
-      style: design.style, title: plan.title, index: i, total, hasRefs, preset: design.preset,
-      ...(known ? { subject: speciesAnchor(known), subjectLatin: known.latin } : {}),
-      ...(design.musts[i] ? { must: design.musts[i] } : {}),
-    });
-    const bgDraft = { imageSlots: plan.slides.map((s, i) => ({ alt: s.headline, prompt: cardPrompt(i) })) };
-    const bgDraftPath = path.join(dir, 'bg-draft.json');
-    const bgManifestPath = path.join(dir, 'bg-manifest.json');
-    fs.writeFileSync(bgDraftPath, JSON.stringify(bgDraft, null, 2), 'utf-8');
-    const r = await generateImagesForDraft(bgDraftPath, path.join(dir, 'bg'), bgManifestPath,
-      // 텍스트 포함 완성 카드는 장당 생성이 배경보다 느리다(~100초+) — 기본 예산(90초/장)이
-      // 5장에서 마지막 장을 SIGKILL(풀체인 E2E 실측) → 150초/장으로 상향.
-      { imageStyle: design.preset, limit: total, refImages: refs.refPaths, allowText: true, size: '1024x1536', timeoutMs: 150_000 * total }, opts.signal);
-    // 매니페스트 복원 — 생성이 도중 중단(타임아웃 등)돼도 완성된 배경 파일은 살려 쓴다(폴백 최소화).
-    // 파일명 blog-image-NN 의 NN 이 슬롯 번호 — 압축하지 않고 NN-1 인덱스에 배치해야 중간 슬롯 실패 시
-    // 배경이 다음 슬라이드로 밀리지 않는다(빈 슬롯 null 은 렌더러가 장별 그라데이션 폴백으로 처리).
-    if (!fs.existsSync(bgManifestPath)) {
-      try {
-        const done = fs.readdirSync(path.join(dir, 'bg')).filter((f) => /^blog-image-\d{2}\.png$/.test(f));
-        const images: Array<{ file_path: string } | null> = Array.from({ length: plan.slides.length }, () => null);
-        for (const f of done) {
-          const nb = Number(f.slice(11, 13));
-          if (nb >= 1 && nb <= images.length) images[nb - 1] = { file_path: path.join(dir, 'bg', f) };
-        }
-        fs.writeFileSync(bgManifestPath, JSON.stringify({ images }, null, 2), 'utf-8');
-      } catch { /* 렌더러가 전 장 그라데이션 폴백 */ }
-    }
-
-    // 4) 슬라이드 확정 — 생성 카드가 곧 슬라이드. 슬롯 정렬 매니페스트에서 성공 장만 순서대로
-    //    slide_NN.png 로 복사(실패 장은 건너뛰고 번호 압축 — 스토리 순서는 유지, 폴백 렌더 없음).
-    let bm: { images?: Array<{ file_path?: string; error?: string } | null>; dry_run?: boolean } = {};
-    try { bm = JSON.parse(fs.readFileSync(bgManifestPath, 'utf-8')) as typeof bm; } catch { /* 아래에서 실패 처리 */ }
-    // slideMap[k] = slide_(k+1).png 가 온 기획 슬라이드 번호(1-base) — QA 문구 대조·재생성용.
-    const slideMap: number[] = [];
-    for (const [i, im] of (bm.images ?? []).entries()) {
-      const fp = im?.file_path ? String(im.file_path) : '';
-      if (!fp || im?.error || !fs.existsSync(fp)) continue;
-      fs.copyFileSync(fp, path.join(dir, `slide_${String(slideMap.length + 1).padStart(2, '0')}.png`));
-      slideMap.push(i + 1);
-    }
-    if (!slideMap.length || bm.dry_run) throw new Error(`카드 생성 실패 — ${r.output.slice(-300)}`);
-    let ok = slideMap.length;
-    const count = plan.slides.length;
-    // 수선(repair)용 디자인 영속 — 완성 후 특정 슬라이드만 재생성(repairCardNewsSlides)할 때
-    // 스타일·장면·slide_NN↔기획 매핑이 필요하다(이전엔 bg-draft 프롬프트에만 묻혀 있어 추출 의존).
-    try {
-      fs.writeFileSync(path.join(dir, 'design.json'),
-        JSON.stringify({ preset: design.preset, style: design.style, prompts: design.prompts, slideMap }, null, 2), 'utf-8');
-    } catch { /* 무해 — 구 카드와 동일하게 bg-draft 추출로 수선 가능 */ }
-
-    // 5) 품질 검증(시각 QA) — gpt-image 직접 렌더링의 최대 리스크인 '한글 오타·깨진 글자'를 기획 문구와
-    //    대조 검수. 장당 개별 비전 호출(전 장 일괄 호출은 주의력 분산으로 자모 오타를 통과시킴 — 2026-07-30
-    //    실측 유출) + 불량 장은 최대 2라운드 재생성하되 교체 전 재검수(불량 교체본 맹교체 방지).
-    //    실패해도 무해(완성본 유지).
+    let ok = 0; let count = plan.slides.length;
     let qaUnresolvedSlides: number[] = []; // 미해결 슬라이드 — 레코드에 영속해 발행 게이트가 소비(로그만으론 게이트가 못 봄)
-    try {
-      const slidePaths = slideMap.map((_, k) => path.join(dir, `slide_${String(k + 1).padStart(2, '0')}.png`));
-      if (visionCapable() && slidePaths.length) {
-        const slideOf = (k: number): PlanSlide => plan.slides[slideMap[k - 1]! - 1]!; // k = slide_NN 순번(1-base)
-        const verdicts = await Promise.all(slidePaths.map((p, i) => qaSlide(p, slideOf(i + 1), opts.signal)));
-        let bad = verdicts.flatMap((v, i) => (v.ok ? [] : [i + 1]));
-        const problems = new Map<number, string>(); // slide_NN 순번 → 최신 판정 상세(표적 교정·리워딩 재료)
-        for (const [i, v] of verdicts.entries()) if (!v.ok && v.problem) problems.set(i + 1, v.problem);
-        // 전장 불량 판정은 재생성해도 같은 결과일 확률이 높아 스킵(과금 폭주 방지) — 일부 장만 교정.
-        if (bad.length && bad.length < slideMap.length) {
-          // 1~2차: 판정 상세를 교정 지시로 주입한 재생성. 3차: 문구 우회(리워딩) — 교정 지시로도 반복되는
-          // 오타는 글자 조합이 모델 습관에 걸린 것이라 같은 뜻 다른 표기로 회피(기획·QA 대조 기준 동반 이동).
-          for (let round = 1; round <= 3 && bad.length; round++) {
-            if (round === 3) {
-              let reworded = 0;
-              for (const k of bad) {
-                const rw = await rewordSlideCopy(slideOf(k), problems.get(k) ?? '', opts.signal);
-                if (rw) { plan.slides[slideMap[k - 1]! - 1] = rw; reworded++; }
-              }
-              if (!reworded) break; // 리워딩 실패 — 남은 슬라이드는 게이트(발행 확인)로
-              fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ title: plan.title, slides: plan.slides }, null, 2), 'utf-8');
-              say(`QA — 슬라이드 ${bad.join(',')} 문구 우회(리워딩) 후 재생성(3차)`);
-            } else {
-              say(`QA — 슬라이드 ${bad.join(',')} 재생성(오타/품질, ${round}차)`);
-            }
-            const fixNote = (k: number): string => (round < 3 && problems.get(k)
-              ? `\n[직전 생성본 오타 교정 — 최우선] ${problems.get(k)} — 기대 문구를 자모(초성·중성·종성) 하나도 틀리지 않게 그려라. 별·해·서명·화살표 등 낙서 요소는 넣지 마라.`
-              : '\n[문구 정확도 — 최우선] 위 한국어 문구를 자모(초성·중성·종성) 하나도 틀리지 않게 그려라. 별·해·서명·화살표 등 낙서 요소는 넣지 마라.');
-            const retryDraft = {
-              imageSlots: bad.map((k) => ({ alt: slideOf(k).headline, prompt: cardPrompt(slideMap[k - 1]! - 1) + fixNote(k) })),
-            };
-            const retryDraftPath = path.join(dir, 'bg-retry-draft.json');
-            const retryManifestPath = path.join(dir, 'bg-retry-manifest.json');
-            fs.writeFileSync(retryDraftPath, JSON.stringify(retryDraft, null, 2), 'utf-8');
-            const rr = await generateImagesForDraft(retryDraftPath, path.join(dir, `bg-retry${round}`), retryManifestPath,
-              { imageStyle: design.preset, limit: bad.length, refImages: refs.refPaths, allowText: true, size: '1024x1536', timeoutMs: 150_000 * bad.length }, opts.signal);
-            if (!rr.ok) { say('QA — 재생성 스크립트 실패(기존 완성본 유지)'); break; }
-            const rem = JSON.parse(fs.readFileSync(retryManifestPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string }> };
-            const stillBad: number[] = [];
-            for (const [idx, k] of bad.entries()) {
-              const fp = rem.images?.[idx]?.file_path;
-              const okFile = fp && !rem.images?.[idx]?.error && fs.existsSync(String(fp));
-              // 교체 전 재검수 — 재생성본도 같은 확률로 오타가 난다. 통과본만 교체, 실패본은 다음 라운드로.
-              const v2 = okFile ? await qaSlide(String(fp), slideOf(k), opts.signal) : { ok: false, problem: '' };
-              if (okFile && v2.ok) {
-                fs.copyFileSync(String(fp), slidePaths[k - 1]!);
-              } else {
-                stillBad.push(k);
-                if (v2.problem) problems.set(k, v2.problem);
-              }
-            }
-            if (bad.length - stillBad.length) say(`QA — ${bad.length - stillBad.length}장 교정 완료`);
-            bad = stillBad;
+    if (CONFIG.cardnewsHtml) {
+      // HTML 판형(2026-10-12 사장님 결정) — 글자는 HTML 이 그려 오타 검수가 필요 없다. 사진은 블로그 재사용·글자 없는 생성.
+      opts.bus?.emit('delegation', { team_id: 'cardnews', from: 'cardnews_planner', to: 'cardnews_designer', summary: '카드 판형 디자인' });
+      store.update(id, { stage: 'rendering' });
+      const hr = await designHtmlCards({
+        dir, plan, topic: card.topic, keyword: card.keyword, sourceBody: opts.sourceBody, sourcePieceId: card.sourcePieceId,
+        sourceFlagged: opts.sourceFlagged ?? [], say, signal: opts.signal,
+        callJSON: <T>(sys: string, user: string, budget: number) => callRoleJSON<T>(io, 'cardnews_designer', sys, user, budget, true),
+      });
+      ok = hr.count; count = hr.layout.slides.length;
+    } else {
+      const refs = await analyzeReferences(dir, card.topic, opts.signal);
+      if (refs.analysis) say(`레퍼런스 ${refs.refPaths.length}장 분석 반영 — ${refs.analysis.slice(0, 60)}…`);
+      // 디자이너를 engaged 웨이브에 배선 — standby 팀은 org 와 달리 delegation 이벤트가 없어,
+      // 디자인 단계 내내 오피스가 디자이너를 유휴·배회로 그리고 WORKING 칩도 0 이었다(수선 2026-08-12).
+      // emit 은 디자이너 LLM 호출 직전(레퍼런스 분석 뒤) — 스폰 전 '⏳ 대기' 창을 최소화한다.
+      opts.bus?.emit('delegation', { team_id: 'cardnews', from: 'cardnews_planner', to: 'cardnews_designer', summary: '배경 프롬프트 디자인' });
+      const design = await designBackgrounds(io, card.topic, plan, refs.analysis, opts.stylePreset, card.keyword, opts.sourceBody);
+      { const n = design.musts.filter(Boolean).length; if (n) say(`원문 묘사 — ${n}장에 꼭 보일 것·나오면 안 될 것 지정`); }
+      say(`디자인 확정 — ${design.preset} · ${design.style.slice(0, 40)}`);
+      checkAbort();
+
+      // 3) 카드 생성 — gpt-image-2 가 한국어 텍스트까지 포함한 완성 카드를 직접 그린다(Pillow 미사용).
+      //    문구는 코드가 따옴표로 정확히 지정(디자이너 프롬프트에 위임하지 않음 — 오타 리스크 최소화).
+      store.update(id, { stage: 'rendering' });
+      opts.bus?.emit('phase', { team_id: 'cardnews', phase: 'integrate' });
+      say(`카드 생성 시작 — gpt-image-2 ${plan.slides.length}장`);
+      const total = plan.slides.length;
+      // 카드 이미지 프롬프트 — card-news-maker 의 에디토리얼 포스터 템플릿 이식(실무팀 합의·구도·타이포·
+      // 자소 정확도·완성 기준). gpt-image-2 가 한글 문구까지 직접 그리므로 '한 글자도 바꾸지 말고/자소
+      // 결합 틀리면 실패'를 강하게 명시(이 프로젝트 무이모지 정책 유지, 페이지 번호는 넣지 않음).
+      const hasRefs = refs.refPaths.length > 0;
+      // 수종 사전 조회(2026-09-06) — 숏폼과 같은 근거를 카드뉴스도 쓴다.
+      const known = findSpecies(`${card.keyword ?? ''} ${plan.title}`);
+      if (known) say(`수종 사전 적중 — ${known.name} (${known.latin})${known.verified ? '' : ' · 형태 묘사 미검토'}`);
+      const cardPrompt = (i: number): string => buildCardImagePrompt({
+        headline: plan.slides[i]!.headline, body: plan.slides[i]!.body, scene: design.prompts[i] ?? '',
+        style: design.style, title: plan.title, index: i, total, hasRefs, preset: design.preset,
+        ...(known ? { subject: speciesAnchor(known), subjectLatin: known.latin } : {}),
+        ...(design.musts[i] ? { must: design.musts[i] } : {}),
+      });
+      const bgDraft = { imageSlots: plan.slides.map((s, i) => ({ alt: s.headline, prompt: cardPrompt(i) })) };
+      const bgDraftPath = path.join(dir, 'bg-draft.json');
+      const bgManifestPath = path.join(dir, 'bg-manifest.json');
+      fs.writeFileSync(bgDraftPath, JSON.stringify(bgDraft, null, 2), 'utf-8');
+      const r = await generateImagesForDraft(bgDraftPath, path.join(dir, 'bg'), bgManifestPath,
+        // 텍스트 포함 완성 카드는 장당 생성이 배경보다 느리다(~100초+) — 기본 예산(90초/장)이
+        // 5장에서 마지막 장을 SIGKILL(풀체인 E2E 실측) → 150초/장으로 상향.
+        { imageStyle: design.preset, limit: total, refImages: refs.refPaths, allowText: true, size: '1024x1536', timeoutMs: 150_000 * total }, opts.signal);
+      // 매니페스트 복원 — 생성이 도중 중단(타임아웃 등)돼도 완성된 배경 파일은 살려 쓴다(폴백 최소화).
+      // 파일명 blog-image-NN 의 NN 이 슬롯 번호 — 압축하지 않고 NN-1 인덱스에 배치해야 중간 슬롯 실패 시
+      // 배경이 다음 슬라이드로 밀리지 않는다(빈 슬롯 null 은 렌더러가 장별 그라데이션 폴백으로 처리).
+      if (!fs.existsSync(bgManifestPath)) {
+        try {
+          const done = fs.readdirSync(path.join(dir, 'bg')).filter((f) => /^blog-image-\d{2}\.png$/.test(f));
+          const images: Array<{ file_path: string } | null> = Array.from({ length: plan.slides.length }, () => null);
+          for (const f of done) {
+            const nb = Number(f.slice(11, 13));
+            if (nb >= 1 && nb <= images.length) images[nb - 1] = { file_path: path.join(dir, 'bg', f) };
           }
-          if (bad.length) { qaUnresolvedSlides = bad; say(`QA — 슬라이드 ${bad.join(',')} 미해결(오타 가능성 — 발행 전 확인 권장)`); }
-        }
+          fs.writeFileSync(bgManifestPath, JSON.stringify({ images }, null, 2), 'utf-8');
+        } catch { /* 렌더러가 전 장 그라데이션 폴백 */ }
       }
-    } catch { /* QA 실패 무해 — 기존 완성본 유지 */ }
+
+      // 4) 슬라이드 확정 — 생성 카드가 곧 슬라이드. 슬롯 정렬 매니페스트에서 성공 장만 순서대로
+      //    slide_NN.png 로 복사(실패 장은 건너뛰고 번호 압축 — 스토리 순서는 유지, 폴백 렌더 없음).
+      let bm: { images?: Array<{ file_path?: string; error?: string } | null>; dry_run?: boolean } = {};
+      try { bm = JSON.parse(fs.readFileSync(bgManifestPath, 'utf-8')) as typeof bm; } catch { /* 아래에서 실패 처리 */ }
+      // slideMap[k] = slide_(k+1).png 가 온 기획 슬라이드 번호(1-base) — QA 문구 대조·재생성용.
+      const slideMap: number[] = [];
+      for (const [i, im] of (bm.images ?? []).entries()) {
+        const fp = im?.file_path ? String(im.file_path) : '';
+        if (!fp || im?.error || !fs.existsSync(fp)) continue;
+        fs.copyFileSync(fp, path.join(dir, `slide_${String(slideMap.length + 1).padStart(2, '0')}.png`));
+        slideMap.push(i + 1);
+      }
+      if (!slideMap.length || bm.dry_run) throw new Error(`카드 생성 실패 — ${r.output.slice(-300)}`);
+      ok = slideMap.length;
+      count = plan.slides.length;
+      // 수선(repair)용 디자인 영속 — 완성 후 특정 슬라이드만 재생성(repairCardNewsSlides)할 때
+      // 스타일·장면·slide_NN↔기획 매핑이 필요하다(이전엔 bg-draft 프롬프트에만 묻혀 있어 추출 의존).
+      try {
+        fs.writeFileSync(path.join(dir, 'design.json'),
+          JSON.stringify({ preset: design.preset, style: design.style, prompts: design.prompts, slideMap }, null, 2), 'utf-8');
+      } catch { /* 무해 — 구 카드와 동일하게 bg-draft 추출로 수선 가능 */ }
+
+      // 5) 품질 검증(시각 QA) — gpt-image 직접 렌더링의 최대 리스크인 '한글 오타·깨진 글자'를 기획 문구와
+      //    대조 검수. 장당 개별 비전 호출(전 장 일괄 호출은 주의력 분산으로 자모 오타를 통과시킴 — 2026-07-30
+      //    실측 유출) + 불량 장은 최대 2라운드 재생성하되 교체 전 재검수(불량 교체본 맹교체 방지).
+      //    실패해도 무해(완성본 유지).
+      try {
+        const slidePaths = slideMap.map((_, k) => path.join(dir, `slide_${String(k + 1).padStart(2, '0')}.png`));
+        if (visionCapable() && slidePaths.length) {
+          const slideOf = (k: number): PlanSlide => plan.slides[slideMap[k - 1]! - 1]!; // k = slide_NN 순번(1-base)
+          const verdicts = await Promise.all(slidePaths.map((p, i) => qaSlide(p, slideOf(i + 1), opts.signal)));
+          let bad = verdicts.flatMap((v, i) => (v.ok ? [] : [i + 1]));
+          const problems = new Map<number, string>(); // slide_NN 순번 → 최신 판정 상세(표적 교정·리워딩 재료)
+          for (const [i, v] of verdicts.entries()) if (!v.ok && v.problem) problems.set(i + 1, v.problem);
+          // 전장 불량 판정은 재생성해도 같은 결과일 확률이 높아 스킵(과금 폭주 방지) — 일부 장만 교정.
+          if (bad.length && bad.length < slideMap.length) {
+            // 1~2차: 판정 상세를 교정 지시로 주입한 재생성. 3차: 문구 우회(리워딩) — 교정 지시로도 반복되는
+            // 오타는 글자 조합이 모델 습관에 걸린 것이라 같은 뜻 다른 표기로 회피(기획·QA 대조 기준 동반 이동).
+            for (let round = 1; round <= 3 && bad.length; round++) {
+              if (round === 3) {
+                let reworded = 0;
+                for (const k of bad) {
+                  const rw = await rewordSlideCopy(slideOf(k), problems.get(k) ?? '', opts.signal);
+                  if (rw) { plan.slides[slideMap[k - 1]! - 1] = rw; reworded++; }
+                }
+                if (!reworded) break; // 리워딩 실패 — 남은 슬라이드는 게이트(발행 확인)로
+                fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ title: plan.title, slides: plan.slides }, null, 2), 'utf-8');
+                say(`QA — 슬라이드 ${bad.join(',')} 문구 우회(리워딩) 후 재생성(3차)`);
+              } else {
+                say(`QA — 슬라이드 ${bad.join(',')} 재생성(오타/품질, ${round}차)`);
+              }
+              const fixNote = (k: number): string => (round < 3 && problems.get(k)
+                ? `\n[직전 생성본 오타 교정 — 최우선] ${problems.get(k)} — 기대 문구를 자모(초성·중성·종성) 하나도 틀리지 않게 그려라. 별·해·서명·화살표 등 낙서 요소는 넣지 마라.`
+                : '\n[문구 정확도 — 최우선] 위 한국어 문구를 자모(초성·중성·종성) 하나도 틀리지 않게 그려라. 별·해·서명·화살표 등 낙서 요소는 넣지 마라.');
+              const retryDraft = {
+                imageSlots: bad.map((k) => ({ alt: slideOf(k).headline, prompt: cardPrompt(slideMap[k - 1]! - 1) + fixNote(k) })),
+              };
+              const retryDraftPath = path.join(dir, 'bg-retry-draft.json');
+              const retryManifestPath = path.join(dir, 'bg-retry-manifest.json');
+              fs.writeFileSync(retryDraftPath, JSON.stringify(retryDraft, null, 2), 'utf-8');
+              const rr = await generateImagesForDraft(retryDraftPath, path.join(dir, `bg-retry${round}`), retryManifestPath,
+                { imageStyle: design.preset, limit: bad.length, refImages: refs.refPaths, allowText: true, size: '1024x1536', timeoutMs: 150_000 * bad.length }, opts.signal);
+              if (!rr.ok) { say('QA — 재생성 스크립트 실패(기존 완성본 유지)'); break; }
+              const rem = JSON.parse(fs.readFileSync(retryManifestPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string }> };
+              const stillBad: number[] = [];
+              for (const [idx, k] of bad.entries()) {
+                const fp = rem.images?.[idx]?.file_path;
+                const okFile = fp && !rem.images?.[idx]?.error && fs.existsSync(String(fp));
+                // 교체 전 재검수 — 재생성본도 같은 확률로 오타가 난다. 통과본만 교체, 실패본은 다음 라운드로.
+                const v2 = okFile ? await qaSlide(String(fp), slideOf(k), opts.signal) : { ok: false, problem: '' };
+                if (okFile && v2.ok) {
+                  fs.copyFileSync(String(fp), slidePaths[k - 1]!);
+                } else {
+                  stillBad.push(k);
+                  if (v2.problem) problems.set(k, v2.problem);
+                }
+              }
+              if (bad.length - stillBad.length) say(`QA — ${bad.length - stillBad.length}장 교정 완료`);
+              bad = stillBad;
+            }
+            if (bad.length) { qaUnresolvedSlides = bad; say(`QA — 슬라이드 ${bad.join(',')} 미해결(오타 가능성 — 발행 전 확인 권장)`); }
+          }
+        }
+      } catch { /* QA 실패 무해 — 기존 완성본 유지 */ }
+    } // 종전 gpt-image 경로 끝
 
     // 캡션 파일(다운로드 편의) — 캡션 + 해시태그.
     const captionText = [plan.caption, plan.hashtags.join(' ')].filter(Boolean).join('\n\n');

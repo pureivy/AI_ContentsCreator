@@ -110,6 +110,8 @@ export interface Config {
   readonly blogDiagrams: boolean;
   /** 숏폼 직접 제작 모션그래픽(2026-10-12 사장님 결정, 두 채널) — 정보 카드 씬만 HTML/CSS/SVG 모션으로. 끄면 종전 카드. */
   readonly shortsMotionGraphics: boolean;
+  /** 카드뉴스 HTML 판형(2026-10-12 사장님 결정) — 사진 + HTML 판 8가지, 본문 1.5배. 끄면 종전 gpt-image 글자 카드. */
+  readonly cardnewsHtml: boolean;
   /** ready 도달 시 자동 네이버 임시저장 — SEO 점수가 기준(naverDraftSeoMin) 이상일 때만. 발행은 여전히 사람 수동. */
   readonly autoNaverDraft: boolean;
   /**
@@ -490,6 +492,7 @@ export const CONFIG: Config = {
   blogRealFrame: envBool('BLOG_REAL_FRAME', true),
   blogDiagrams: envBool('BLOG_DIAGRAMS', true),
   shortsMotionGraphics: envBool('SHORTS_MOTION_GRAPHICS', true),
+  cardnewsHtml: envBool('CARDNEWS_HTML', true),
   // 2026-08-27 사용자 확정 — 기본 off. 근거 유무와 무관하게 모든 블로그 글은 수동 검토 후 버튼으로 임시저장한다
   // (SEO 자동 리비전은 그대로 유지 — 꺼지는 건 임시저장 '호출'뿐).
   autoNaverDraft: envBool('AUTO_NAVER_DRAFT', false),
