@@ -107,7 +107,10 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
     setThumbBusy(false);
     if (r.error) setThumbErr(r.error); else onChanged(); // updatedTs 갱신 → 포스터 새로고침
   };
-  const running = RUNNING_STAGES.has(s.stage);
+  // 수정 요청 반영 중 — stage 는 ready 그대로라 '완성'으로만 보였다(2026-10-13 배나무 인스타용, 검토 탭은 '생성 중').
+  const revising = s.stage === "ready" && !!s.running;
+  const running = RUNNING_STAGES.has(s.stage) || revising;
+  const stageLabel = revising ? { icon: "pencil" as IcoName, label: "수정 중" } : STAGE_LABEL[s.stage];
   // 채널 분리(2026-09-03) — 이 편이 어느 채널용인지에 따라 발행 버튼을 가린다.
   // 레거시(platform 없음)는 종전대로 양쪽 다 — 기존 108편의 발행 경로를 막지 않는다.
   const canYt = !s.platform || s.platform === "youtube";
@@ -121,7 +124,7 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
   return (
     <div className="review-section">
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <span className="badge">{STAGE_LABEL[s.stage] ? <><Ico name={STAGE_LABEL[s.stage].icon} size={10} /> {STAGE_LABEL[s.stage].label}</> : s.stage}</span>
+        <span className="badge">{stageLabel ? <><Ico name={stageLabel.icon} size={10} /> {stageLabel.label}</> : s.stage}</span>
         <strong>{s.title ?? s.topic}</strong>
         {platformChip && <span className="chip" title="이 편은 이 채널 전용으로 기획됐습니다 — 다른 채널 발행은 막혀 있습니다">{platformChip}</span>}
         {s.keyword && <span className="chip"><Ico name="location" size={11} /> {s.keyword}</span>}
@@ -161,7 +164,8 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
         </div>
       )}
       <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-        {s.stage === "ready" && (
+        {/* 수정 중엔 발행·다운로드를 감춘다 — 고치기 전 영상이 나간다(검토 탭과 같은 규칙) */}
+        {s.stage === "ready" && !revising && (
           <>
             <a className="btn start" href={`/shorts/${s.id}/download`} download={`shorts-${s.id}.mp4`}
               title="썸네일을 앞 1.6초 인트로로 붙인 MP4 (첫 다운로드는 인코딩으로 잠시 걸릴 수 있음)">MP4</a>

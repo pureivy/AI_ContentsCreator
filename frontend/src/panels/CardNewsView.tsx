@@ -50,7 +50,10 @@ function CardRow({ card, onDelete, metaReady, fbReady, onChanged }: {
     else if (r.fbError) alert(`인스타는 발행됐지만 페이스북 페이지 게시는 실패했습니다:\n${r.fbError}`);
     onChanged(); // 부분 성공도 링크가 바로 보이게 즉시 재조회(폴링 8초 대기 없이)
   };
-  const running = RUNNING_STAGES.has(card.stage);
+  // 수정 요청 반영 중 — stage 는 ready 그대로라 '완성'으로만 보였다(2026-10-13, 검토 탭은 '생성 중').
+  const revising = card.stage === "ready" && !!card.running;
+  const running = RUNNING_STAGES.has(card.stage) || revising;
+  const stageLabel = revising ? { icon: "pencil" as IcoName, label: "수정 중" } : STAGE_LABEL[card.stage];
   const captionFull = [card.caption, (card.hashtags ?? []).join(" ")].filter(Boolean).join("\n\n");
   const copyCaption = async () => {
     try { await navigator.clipboard.writeText(captionFull); setCopied(true); setTimeout(() => setCopied(false), 1500); }
@@ -59,7 +62,7 @@ function CardRow({ card, onDelete, metaReady, fbReady, onChanged }: {
   return (
     <div className="review-section">
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <span className="badge">{STAGE_LABEL[card.stage] ? <><Ico name={STAGE_LABEL[card.stage].icon} size={10} /> {STAGE_LABEL[card.stage].label}</> : card.stage}</span>
+        <span className="badge">{stageLabel ? <><Ico name={stageLabel.icon} size={10} /> {stageLabel.label}</> : card.stage}</span>
         <strong>{card.topic}</strong>
         {card.keyword && <span className="chip"><Ico name="location" size={11} /> {card.keyword}</span>}
         {card.sourcePieceId && <span className="chip" title="블로그 초안에서 파생"><Ico name="document" size={11} /> 블로그 파생</span>}
@@ -82,7 +85,8 @@ function CardRow({ card, onDelete, metaReady, fbReady, onChanged }: {
         </>
       )}
       <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-        {card.stage === "ready" && (
+        {/* 수정 중엔 발행 버튼을 감춘다 — 고치기 전 슬라이드가 나간다(검토 탭과 같은 규칙) */}
+        {card.stage === "ready" && !revising && (
           <>
             <a className="btn start" href={`/cardnews/${card.id}/zip`} download>전체 zip</a>
             {captionFull && <button className="btn ghost" onClick={copyCaption}>{copied ? "복사됨!" : "캡션 복사"}</button>}
