@@ -409,8 +409,15 @@ async function handleUpdate(u: TgUpdate, chatId: string, bootTs: number): Promis
     // 발행류는 수 초~수 분 — 폴 루프를 막지 않게 비동기로 돌리고 끝나면 결과를 새 메시지로 push.
     // 실패(타임아웃·재시작 중 ECONNREFUSED 등)도 반드시 사용자에게 알린다 — '접수'만 보고 무소식이면 안 됨.
     void runAction(action)
-      .then((msg) => { if (msg) void sendTelegramHtml(msg); }) // ''=QA 안내처럼 액션이 직접 전송한 경우
-      .catch((e: unknown) => sendTelegramHtml(`⚠️ 처리 실패 — ${escapeHtml(e instanceof Error ? e.message : String(e))}`));
+      .then((msg) => {
+        // 실패 결과는 서버 로그에도 — 텔레그램 답장만 남기면 사유를 나중에 찾을 수 없었다(2026-10-13 배나무 카드뉴스).
+        if (msg.startsWith('⚠️')) console.log(`[텔레그램] 버튼 실패 — ${action.kind} ${action.id}: ${msg.slice(0, 300)}`);
+        if (msg) void sendTelegramHtml(msg); // ''=QA 안내처럼 액션이 직접 전송한 경우
+      })
+      .catch((e: unknown) => {
+        console.log(`[텔레그램] 버튼 처리 실패 — ${action.kind} ${action.id}: ${e instanceof Error ? e.message : String(e)}`);
+        return sendTelegramHtml(`⚠️ 처리 실패 — ${escapeHtml(e instanceof Error ? e.message : String(e))}`);
+      });
     return;
   }
   // ── 텍스트 메시지 ──

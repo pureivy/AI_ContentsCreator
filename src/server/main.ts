@@ -2283,7 +2283,10 @@ app.post('/cardnews/:id/publish', async (c) => {
     if (r.fbPostId) { patch.fbPostId = r.fbPostId; if (!card.fbPostTs) patch.fbPostTs = new Date().toISOString(); }
     if ((r.igMediaId || r.fbPostId) && !card.publishedTs) patch.publishedTs = new Date().toISOString();
     if (Object.keys(patch).length) cardNewsStore().update(id, patch);
-    if (!r.ok) return c.json({ error: r.error, ...patch }, 502);
+    if (!r.ok) {
+      console.log(`[발행담당] 카드뉴스 "${card.topic.slice(0, 30)}" 발행 실패 — ${r.error ?? ''}`);
+      return c.json({ error: r.error, ...patch }, 502);
+    }
     const fbNote = r.fbError ? ' / 페북 실패' : r.fbPostId ? ' + 페북 페이지' : '';
     console.log(`[발행담당] 카드뉴스 "${card.topic.slice(0, 30)}" — 인스타 ${wasPublished ? '퍼머링크 보강' : '발행 완료'}${fbNote}`);
     if (r.fbError) console.log(`[발행담당] 페북 게시 실패 사유: ${r.fbError}`);
