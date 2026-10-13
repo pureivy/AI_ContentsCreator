@@ -4,7 +4,8 @@ import {
   coverIncludesKeyword, extractDesignFromDraftPrompt, findSlidesWithChars, parseSlideNosFromFeedback,
   resolveForcedPreset, stripForDiff, formatRecentEndings, cardVoiceGuide, cardStructureLines, ctaSlideIssues,
   CARD_HEADLINE_MAX_CHARS, CARD_BODY_MAX_LINES, CARD_BODY_MAX_CHARS, cardDensityOver, cardDensityIssues, fitCardDensity, withCoverKeyword, shrunkSlideOk,
-  secondCoverIssues, cardCopyLintIssues } from './cardnews';
+  secondCoverIssues, cardCopyLintIssues, mergeCardFix } from './cardnews';
+import { preNotifyProblems, preNotifyAccept } from '../content/factGate';
 import { FIXED_STRUCTURE_SEED } from '../content/structureSeed';
 import { cardVoiceIssues } from '../content/styleLint';
 import { normalizeBrand } from '../content/brand';
@@ -677,5 +678,35 @@ describe('buildCardImagePrompt — 원문 묘사 블록', () => {
     expect(p).toContain('[원문 묘사 — 이 장면에 반드시 이렇게 보여야 함] 잎 없는 맨가지');
     expect(p).toContain('[이 장면에 나오면 안 됨 — 원문과 어긋남] 칼');
     expect(buildCardImagePrompt(base)).not.toContain('[원문 묘사');
+  });
+});
+
+describe('보내기 전 추가 수정 — 카드 병합·문제 목록·채택 판정(2026-10-14)', () => {
+  const plan = { title: 't', caption: '캡션', hashtags: [], slides: [
+    { headline: '표지', body: '' }, { headline: '둘째', body: '본문2' }, { headline: '셋째', body: '본문3' },
+  ] };
+  it('지목된 장과 캡션만 바꾸고, 범위 밖·빈 헤드라인·그대로인 장은 버린다', () => {
+    const r = mergeCardFix(plan, { slides: [
+      { no: 3, headline: '셋째 고침', body: '원문대로' }, { no: 9, headline: 'x', body: '' },
+      { no: 2, headline: '', body: '빈 헤드라인' }, { no: 1, headline: '표지', body: '' },
+    ], caption: '새 캡션' });
+    expect(r.changed).toEqual([3]); expect(r.captionChanged).toBe(true);
+    expect(r.plan.slides.map((s) => s.headline)).toEqual(['표지', '둘째', '셋째 고침']);
+    expect(r.plan.caption).toBe('새 캡션'); expect(plan.slides[2]!.headline).toBe('셋째'); // 원본 불변
+  });
+  it('응답이 없으면 바뀐 것 없음', () => {
+    const r = mergeCardFix(plan, null);
+    expect(r.changed).toEqual([]); expect(r.captionChanged).toBe(false); expect(r.plan.caption).toBe('캡션');
+  });
+  it('문제 목록은 hold 의 무근거 + 시기·수치 줄, 판정 실패(error)의 무근거는 빼고', () => {
+    expect(preNotifyProblems(undefined)).toEqual([]);
+    expect(preNotifyProblems({ status: 'hold', unsupported: ['a'], contradicted: [], timing: ['t'], checkedTs: '' })).toEqual(['a', 't']);
+    expect(preNotifyProblems({ status: 'error', unsupported: ['a'], contradicted: [], checkedTs: '' })).toEqual([]);
+    expect(preNotifyProblems({ status: 'pass', unsupported: [], contradicted: [], timing: ['t'], checkedTs: '' })).toEqual(['t']);
+  });
+  it('채택은 남은 문제가 엄격히 줄고 린트가 늘지 않을 때만', () => {
+    expect(preNotifyAccept(2, 1, 0, 0)).toBe(true);
+    expect(preNotifyAccept(2, 2, 0, 0)).toBe(false);
+    expect(preNotifyAccept(2, 0, 0, 1)).toBe(false);
   });
 });

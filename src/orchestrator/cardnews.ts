@@ -22,10 +22,10 @@ import type { EventBus } from '../events/bus';
 import { stripEmoji } from '../output/render';
 import { cardNewsStore } from '../content/cardnews';
 import { notifyCardnewsReady } from '../autonomy/contentNotify';
-import { standaloneIssues, parityIssues, parityToInfo } from './standaloneQa';
+import { standaloneIssues, parityIssues, parityToInfo, PARITY_SOURCE_CHARS } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue } from '../content/timingParity';
 import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
-import { introducesNewFacts, type FactGateInfo } from '../content/factGate';
+import { introducesNewFacts, preNotifyProblems, preNotifyAccept, type FactGateInfo } from '../content/factGate';
 import { cardStyleIssues, cardVoiceIssues } from '../content/styleLint';
 import { naturalKeyword } from '../content/keywordForm';
 import { currentStructureSeed, type StructureSeed } from '../content/structureSeed';
@@ -65,6 +65,53 @@ interface Plan {
 
 /** 잡 입출력 컨텍스트 — 버스가 있으면 오피스 뷰/활동 피드/타임라인이 실시간 연동된다. */
 interface JobIO { bus?: EventBus; signal?: AbortSignal }
+
+/** 보내기 전 추가 수정 프롬프트(순수, 2026-10-14) — 지목된 장·캡션만 원문대로 고치게 한다. 응답은 mergeCardFix 가 병합. */
+export function cardFixPrompt(cur: { slides: PlanSlide[]; caption: string }, problems: readonly string[], sourceBody: string): string {
+  return [
+    '아래 인스타그램 카드뉴스에 원문 블로그와 어긋난 문제가 남았다. 카드 전체를 다시 쓰지 마라 — 문제가 지목한 장(과 캡션)만 고쳐 돌려줘라. 돌려주지 않은 장은 지금 그대로 쓴다.',
+    '',
+    '[현재 카드 — 번호=장]',
+    ...cur.slides.map((s, i) => `${i + 1}. ${s.headline}${s.body ? ` — ${s.body.replace(/\n/g, ' / ')}` : ''}`),
+    `[캡션] ${cur.caption.replace(/\n/g, ' / ')}`,
+    '',
+    `[남은 문제]\n${problems.map((x) => `- ${x}`).join('\n')}`,
+    '',
+    '[고치는 규칙]',
+    '· 사실·수치·시기는 아래 원문에 있는 것만. 원문에 없는 수치·시기는 지우거나 원문 표현으로 바꿔라. 원문이 유보한 것("대개/흔히/~수 있어요/~봐요")은 유보로 써라. 원문 결론의 방향을 뒤집지 마라.',
+    '· 원문이 근거 미확인으로 둔 주장은 단정하지 말고 빼거나 유보로 써라.',
+    `· 장 수·순서는 그대로. 헤드라인 ${CARD_HEADLINE_MAX_CHARS}자 이내, body ${CARD_BODY_MAX_LINES}줄·${CARD_BODY_MAX_CHARS}자 이내. 말투는 지금 카드와 같게, 이모지 금지(캡션은 허용).`,
+    '· 캡션에 문제가 없으면 caption 은 생략하라.',
+    '',
+    `[원문 블로그]\n${sourceBody.slice(0, PARITY_SOURCE_CHARS)}`,
+    '',
+    'JSON 형식: {"slides":[{"no":3,"headline":"...","body":"줄바꿈은 \\n"}],"caption":"(고쳤을 때만)"}',
+  ].join('\n');
+}
+
+/**
+ * 보내기 전 추가 수정 응답 병합(순수, 2026-10-14) — 지목된 장(no, 1-base)과 캡션만 바꾸고 나머지는 그대로 둔다.
+ * 장 수는 바꾸지 않는다(범위 밖 no·빈 헤드라인은 버림). 바뀐 장 번호와 캡션 변경 여부를 함께 돌려준다.
+ */
+export function mergeCardFix<P extends { slides: PlanSlide[]; caption: string }>(
+  plan: P, j: { slides?: Array<{ no?: unknown; headline?: unknown; body?: unknown }>; caption?: unknown } | null,
+): { plan: P; changed: number[]; captionChanged: boolean } {
+  const slides = plan.slides.map((x) => ({ ...x }));
+  const changed: number[] = [];
+  for (const r of j?.slides ?? []) {
+    const no = typeof r?.no === 'number' ? r.no : Number(r?.no);
+    if (!Number.isInteger(no) || no < 1 || no > slides.length) continue;
+    const headline = cleanLine(r?.headline, 40);
+    if (!headline) continue;
+    const body = cleanLine(r?.body, 220);
+    if (headline === slides[no - 1]!.headline && body === slides[no - 1]!.body) continue;
+    slides[no - 1] = { headline, body };
+    if (!changed.includes(no)) changed.push(no);
+  }
+  const cap = typeof j?.caption === 'string' ? j.caption.trim().slice(0, 1000) : '';
+  const captionChanged = !!cap && cap !== plan.caption;
+  return { plan: { ...plan, slides, ...(captionChanged ? { caption: cap } : {}) }, changed: changed.sort((a, b) => a - b), captionChanged };
+}
 
 /**
  * 역할 LLM 호출(JSON) — 버스가 있으면 runAgent 로 호출해 오피스 뷰에 스폰·작업 애니메이션·
@@ -738,6 +785,44 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
       if (factGate.status === 'hold') { const m2 = `원문 정합 잔존 ${factGate.unsupported.length}건 — 검토 메시지에 표시`; console.log(`[카드뉴스] ${m2}`); io.bus?.emit('log', { message: m2 }); }
       if (timingResidual.length) { const m4 = `시기·수치 원문 불일치 잔존 ${timingResidual.length}건 — 검토 메시지에 표시`; console.log(`[카드뉴스] ${m4}`); io.bus?.emit('log', { message: m4 }); }
       if (inheritedResidual.length) { const m5 = `원문 미검증 주장 승계 잔존 ${inheritedResidual.length}건 — 검토 메시지에 표시`; console.log(`[카드뉴스] ${m5}`); io.bus?.emit('log', { message: m5 }); }
+    }
+    // 보내기 전 추가 수정(2026-10-14 사장님 확정, PRE_NOTIFY_RESOLVE) — 정합 보류·시기·수치·승계 줄이 남으면 텔레그램에
+    // "확인해 달라"고 넘기기 전에 지목된 장·캡션만 최대 2번 더 고치고 다시 대조한다. 슬라이드 렌더 전이라 이미지 재생성 비용이 없다.
+    // 채택은 남은 문제가 엄격히 줄고 문체 린트가 늘지 않을 때만 — 아니면 앞 판본 그대로.
+    if (CONFIG.preNotifyResolve && sourceBody && !io.signal?.aborted) {
+      const say = (t: string): void => { console.log(`[카드뉴스] ${t}`); io.bus?.emit('log', { message: t }); };
+      const label = '인스타그램 카드뉴스(장별 카피, 1번=표지)';
+      const texts = (p: Plan): string[] => p.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / '));
+      const lint = (p: Plan): number => cardCopyLintIssues(p.slides, keyword, topic).length + ctaSlideIssues(p.slides).length
+        + (keyword && !coverIncludesKeyword(p.slides, keyword) ? 1 : 0);
+      let cur: Plan = plan;
+      for (let round = 1; round <= 2; round++) {
+        const problems = preNotifyProblems(cur.factGate);
+        if (!problems.length) break;
+        const fixJ = await microJSON<{ slides?: Array<{ no?: unknown; headline?: unknown; body?: unknown }>; caption?: unknown }>(
+          stdModel(), sys,
+          cardFixPrompt(cur, problems, sourceBody),
+          { maxOutputTokens: 1400, signal: io.signal },
+        ).catch(() => null);
+        const merged = mergeCardFix(cur, fixJ);
+        if (!merged.changed.length && !merged.captionChanged) { say(`보내기 전 추가 수정 ${round}회 — 고친 장 없음(잔존 ${problems.length}건 그대로)`); break; }
+        const out = merged.plan;
+        const issues = CONFIG.factGate ? await parityIssues(label, texts(out), sourceBody, io.signal).catch(() => null) : [];
+        if (!issues) { say(`보내기 전 추가 수정 ${round}회 — 재대조 실패, 앞 판본 유지`); break; }
+        const display = [
+          ...timingParityIssues(sourceBody, timingFields(out)).map(formatTimingIssue),
+          ...(sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(out)) : []).map(formatInherited),
+        ];
+        const after = issues.length + display.length;
+        if (!preNotifyAccept(problems.length, after, lint(cur), lint(out))) {
+          say(`보내기 전 추가 수정 ${round}회 — 잔존 ${problems.length}→${after}건, 린트 ${lint(cur)}→${lint(out)} · 앞 판본 유지`);
+          break;
+        }
+        const base = parityToInfo(issues);
+        cur = { ...out, factGate: display.length ? { ...base, timing: display } : base };
+        say(`보내기 전 추가 수정 ${round}회 — 잔존 ${problems.length}→${after}건 채택(${merged.changed.length ? `${merged.changed.join(',')}번 장` : ''}${merged.changed.length && merged.captionChanged ? ' · ' : ''}${merged.captionChanged ? '캡션' : ''})`);
+      }
+      plan = cur;
     }
   } catch { /* 무해 */ }
   // 글자 상한 줄이기(2026-10-05) — 수정 라운드 뒤에도 넘친 장만 골라 한 번 더 줄인다(상한 안에 든 장만 채택, fail-open).

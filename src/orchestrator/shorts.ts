@@ -30,7 +30,7 @@ import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues, parityIssues, parityIssuesChecked, parityToInfo, PARITY_SOURCE_CHARS } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue, stripUnsourcedStatOverlays } from '../content/timingParity';
 import type { FactGateInfo } from '../content/factGate';
-import { isJudgmentSentence } from '../content/factGate';
+import { isJudgmentSentence, preNotifyProblems, preNotifyAccept } from '../content/factGate';
 import type { ShortsPlatform } from '../content/shortsPlatform';
 import { narrationStyleIssues, hookKeywordLeadIssues, hookLengthIssues, metaSummaryIssues, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs, closingSceneIssues, announcesNextEpisode, stripNextEpisode, mentionsNextEpisode, screenTextAnnounces, isPromiseSentence } from '../content/styleLint';
 import { promiseStore, MAX_PENDING } from '../content/promises';
@@ -2882,6 +2882,54 @@ export async function runShortsJob(
         say(r.remaining.length
           ? `최종 원문 대조 — 잔존 ${r.remaining.length}건 보류(검토 메시지에 표시): ${r.remaining[0]!.slice(0, 50)}`
           : `최종 원문 대조 — 잔존 없음${r.reverted.length ? '(되돌림 뒤)' : ''}`);
+      }
+    }
+    // 보내기 전 추가 수정(2026-10-14 사장님 확정, PRE_NOTIFY_RESOLVE) — 위 단계까지 거치고도 원문 정합 보류·시기·수치·승계 줄이
+    // 남으면, 텔레그램에 "확인해 달라"고 넘기기 전에 그 문장만 최대 2번 더 고치고 다시 대조한다. 낭독·렌더 전이라 영상 재생성 비용이 없다.
+    // 채택은 남은 문제가 엄격히 줄고 린트가 늘지 않을 때만(preNotifyAccept) — 아니면 앞 판본 그대로. 원문 대조를 받은 수정만 남는다.
+    if (CONFIG.preNotifyResolve && sourceForGates && !io.signal?.aborted) {
+      const label = '유튜브 숏폼 대본(씬 내레이션)';
+      const lint = (p: Plan): number => compressionRelintProbs(p.scenes, short.keyword).length;
+      for (let round = 1; round <= 2; round++) {
+        const problems = preNotifyProblems(plan.factGate);
+        if (!problems.length) break;
+        try {
+          const hookEditable = problemsTargetHook(problems);
+          const j = await callRoleJSON<PartialFix>(io, writerRole, '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.',
+            partialFixPrompt({
+              scenes: plan.scenes, problems, budgets, stage: 'plan', hookEditable, description: plan.description,
+              sourceExcerpt: sourceForGates.slice(0, PARITY_SOURCE_CHARS),
+              ...(opts.sourceFlagged?.length ? { flagged: opts.sourceFlagged } : {}),
+              ...(hookRule ? { hookRule } : {}), ...(short.keyword ? { keyword: short.keyword } : {}),
+            }), 1600, false).catch(() => null);
+          const merged = mergePartialFix(plan, j, {
+            hookEditable, budgets, budgetChars: budget, fixScreen: screenMonth,
+            ...(short.keyword ? { keyword: short.keyword } : {}), ...(hookConflict ? { hookReject: FOOTAGE_DEICTIC_RE } : {}),
+          });
+          if (!merged.changed.length && !merged.descriptionChanged) { say(`보내기 전 추가 수정 ${round}회 — 고친 씬 없음(잔존 ${problems.length}건 그대로)`); break; }
+          let out = restoreLostHedges(plan, merged.plan).plan;
+          // 되돌림 경로와 같은 결정적 뒷정리 — 원문에 없는 오버레이 수치·출처 라벨, 길이 예산, 예고 정리.
+          const st = stripUnsourcedStatOverlays(out.scenes, sourceForGates);
+          if (st.removed.length) out = { ...out, scenes: st.scenes };
+          out = pruneQuoteSources(out, sourceForGates).plan;
+          if (shortsNarrationChars(out) > budget) out = trimPlanToBudget(out, budget, CONFIG.shortsScenes).plan;
+          const se = settleNextEpisode(out, promiseRoom.room);
+          if (se.note) out = se.plan;
+          const issues = CONFIG.factGate ? await parityIssuesChecked(label, sceneTextsWithScreen(out), sourceForGates, io.signal).catch(() => null) : [];
+          if (!issues) { say(`보내기 전 추가 수정 ${round}회 — 재대조 실패, 앞 판본 유지`); break; }
+          const display = [
+            ...timingParityIssues(sourceForGates, timingFields(out)).map(formatTimingIssue),
+            ...(opts.sourceFlagged?.length ? inheritedClaims(opts.sourceFlagged, timingFields(out)) : []).map(formatInherited),
+          ];
+          const after = issues.length + display.length;
+          if (!preNotifyAccept(problems.length, after, lint(plan), lint(out))) {
+            say(`보내기 전 추가 수정 ${round}회 — 잔존 ${problems.length}→${after}건, 린트 ${lint(plan)}→${lint(out)} · 앞 판본 유지`);
+            break;
+          }
+          plan = { ...out, factGate: finalFactGate(plan.factGate, { remaining: issues, display }) };
+          trace = traceMarkParity(traceRecord(trace, plan.scenes, '보내기 전 추가 수정', { llm: true }), issues);
+          say(`보내기 전 추가 수정 ${round}회 — 잔존 ${problems.length}→${after}건 채택(씬 ${merged.changed.join(',') || '설명'})`);
+        } catch { say(`보내기 전 추가 수정 ${round}회 — 실패, 앞 판본 유지`); break; }
       }
     }
     // 빈 연출 메우기(2026-09-04) — kind 만 오고 내용이 빈 씬은 화면에 아무것도 못 그린다.

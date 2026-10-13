@@ -743,3 +743,48 @@ export async function runFactGateWithRepair(
   const second = await a.gate(repaired);
   return { body: repaired, result: { ...second, repaired: true, firstPass: toFirstPass(first) }, targeted: targetedInfo };
 }
+
+/**
+ * 보내기 전 추가 수정(2026-10-14 사장님 확정, 순수·의존성 주입) — runFactGateWithRepair 뒤에도 hold 면 남은 무근거 문장만
+ * 표적 수정을 한 번 더 하고 재판정한다. 사장님 말씀: "확인해 달라고 보내지 말고 보내기 전에 확인 절차를 거쳐라".
+ * 채택 조건: 표적 수정이 1문장 이상 적용 · 소제목 수 유지 · 재판정이 error 아님 · 남은 보류(무근거+모순)가 엄격히 줄었다.
+ * 그 밖(예외 포함)은 앞 본문·판정 그대로. 모순만 남은 hold 는 표적 수정이 손댈 문장이 없어 건너뛴다.
+ */
+export async function resolveResidualHold(
+  a: {
+    gate: (body: string) => Promise<FactGateResult>;
+    targeted: (body: string, unsupported: string[]) => Promise<{ body: string; applied: number; missed: string[] }>;
+  },
+  body: string, result: FactGateResult,
+): Promise<{ body: string; result: FactGateResult; note?: string }> {
+  if (result.status !== 'hold' || !result.unsupported.length) return { body, result };
+  const left = (r: FactGateResult): number => r.unsupported.length + r.contradicted.length;
+  const before = left(result);
+  try {
+    const t = await a.targeted(body, result.unsupported);
+    if (t.applied <= 0) return { body, result, note: `잔존 ${before}건 — 고칠 문장을 못 찾음` };
+    if (h2Count(t.body) < h2Count(body)) return { body, result, note: `잔존 ${before}건 — 소제목이 줄어 버림` };
+    const second = await a.gate(t.body);
+    if (second.status === 'error') return { body, result, note: `잔존 ${before}건 — 재판정 실패로 버림` };
+    const after = left(second);
+    if (after >= before) return { body, result, note: `잔존 ${before}→${after}건 — 줄지 않아 버림` };
+    return {
+      body: t.body,
+      result: { ...second, repaired: true, ...(result.firstPass ? { firstPass: result.firstPass } : {}) },
+      note: `잔존 ${before}→${after}건 — 채택(${t.applied}문장)`,
+    };
+  } catch { return { body, result, note: `잔존 ${before}건 — 수정 실패` }; }
+}
+
+/**
+ * 보내기 전 추가 수정의 문제 목록(순수, 2026-10-14 사장님 확정, 숏폼·카드뉴스 공용) — 남은 원문 정합 보류(hold 일 때의 unsupported)와
+ * 시기·수치·승계 표시 줄(timing). 판정 실패(error)의 unsupported 는 지적이 아니라 빈 목록이다.
+ */
+export function preNotifyProblems(fg: FactGateInfo | undefined): string[] {
+  if (!fg) return [];
+  return [...(fg.status === 'hold' ? fg.unsupported : []), ...(fg.timing ?? [])];
+}
+/** 보내기 전 추가 수정 채택 판정(순수) — 남은 문제 수가 엄격히 줄고 문체·훅 린트가 늘지 않을 때만. */
+export function preNotifyAccept(before: number, after: number, lintBefore: number, lintAfter: number): boolean {
+  return after < before && lintAfter <= lintBefore;
+}

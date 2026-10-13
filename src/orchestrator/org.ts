@@ -39,7 +39,7 @@ import { blogStyleIssues, styleRevisionReject } from '../content/styleLint';
 import { keywordWritingGuide } from '../content/keywordForm';
 import { readabilityPrompt, acceptReadabilityFixes, applyReadabilityFixes } from '../content/readability';
 import { resolveStructureSeed, inheritStructureSeed, structureBlock, STRUCTURE_KEEP_BLOCK, type TitleForm } from '../content/structureSeed';
-import { factGateBlog, buildEvidence, runFactGateWithRepair, repairSentences, applySentenceRepairs, extractFactCard, FACT_CARD_HEADER, mergeSuppliedFacts, jargonRulesForEvidence } from '../content/factGate';
+import { factGateBlog, buildEvidence, runFactGateWithRepair, resolveResidualHold, repairSentences, applySentenceRepairs, extractFactCard, FACT_CARD_HEADER, mergeSuppliedFacts, jargonRulesForEvidence } from '../content/factGate';
 import type { FactGateResult } from '../content/factGate';
 import { readInjected, readVerified } from '../agents/workspace';
 import { llmWiki } from '../wiki/llmwiki';
@@ -1161,6 +1161,13 @@ async function packageDesignFinalize(a: {
           bus.emit('log', { message: tm });
         }
         finalDeliverable = r.body; gateResult = r.result;
+        // 보내기 전 추가 수정(2026-10-14 사장님 확정) — 첫 수정 라운드 뒤에도 무근거 문장이 남으면 그 문장만 한 번 더
+        // 고치고 재판정한다. 남은 보류가 줄 때만 채택. 블로그 보류가 줄면 파생 숏폼·카드의 '승계' 줄도 함께 준다.
+        if (CONFIG.preNotifyResolve && gateResult.status === 'hold' && !signal?.aborted) {
+          const x = await resolveResidualHold({ gate, targeted }, finalDeliverable, gateResult);
+          finalDeliverable = x.body; gateResult = x.result;
+          if (x.note) { const m = `보내기 전 추가 수정 — ${x.note}`; console.log(`[사실게이트] ${m}`); bus.emit('log', { message: m }); }
+        }
       } catch (e) {
         gateResult = { status: 'error', claims: [], unsupported: [], contradicted: [], unverified: [], repaired: false, error: e instanceof Error ? e.message : String(e), checkedTs: new Date().toISOString() };
       }

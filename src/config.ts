@@ -317,6 +317,10 @@ export interface Config {
    *  스위치 밖(항상 켬): 씬 수 넘침 시 CTA 보존(fitSceneCount)·씬별 자수 예산 지시·트리밍 판정 문장 보호·HEDGE_RE·
    *  검색 키워드 린트·훅 화면 어긋남 처리·최종 원문 대조(FACT_GATE 가 가른다)·형제 대본 미리보기 파일. */
   readonly shortsPartialFix: boolean;
+  /** 보내기 전 추가 수정(2026-10-14 사장님 확정) — 블로그·숏폼·카드뉴스가 첫 수정 라운드 뒤에도 사실 보류·시기·수치 잔존을
+   *  갖고 있으면, 텔레그램 검토 알림 전에 남은 문장만 한 번 더 고치고 다시 대조한다. 잔존이 줄 때만 채택(늘거나 같으면 앞 판본).
+   *  숏폼·카드는 낭독·렌더 전이라 영상·슬라이드 재생성 비용이 없다. PRE_NOTIFY_RESOLVE=false 면 종전대로 첫 라운드 뒤 잔존을 그대로 보낸다. */
+  readonly preNotifyResolve: boolean;
   /** 최종 대본 흐름 점검(2026-10-05) — 감량·트리밍 뒤 LLM 1회로 씬 이음새를 보고 끊긴 이음 문장만 고친다(예산 안에서만,
    *  훅·마지막 씬 제외, 화면 글자 유지). SHORTS_FLOW_CHECK=false 면 그 단계만 건너뛴다. 흐름 점검이 바꾼 씬의 원문 대조는
    *  이 스위치가 아니라 최종 원문 대조(FACT_GATE)가 맡는다. */
@@ -610,6 +614,7 @@ export const CONFIG: Config = {
   shortsCaptions: envBool('SHORTS_CAPTIONS', true),
   shortsTeaser: envBool('SHORTS_TEASER', true),
   shortsPartialFix: envBool('SHORTS_PARTIAL_FIX', true),
+  preNotifyResolve: envBool('PRE_NOTIFY_RESOLVE', true),
   shortsFlowCheck: envBool('SHORTS_FLOW_CHECK', true),
   shortsMidcut: envBool('SHORTS_MIDCUT', true),
   shortsMediaRotate: envBool('SHORTS_MEDIA_ROTATE', true),

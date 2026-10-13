@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../orchestrator/agent', () => ({ microJSON: vi.fn() }));
 import { microJSON } from '../orchestrator/agent';
-import {
+import { resolveResidualHold,
   splitBodySentences, numericClaimSentences, buildEvidence, gateVerdict, formatGateFeedback, toFactGateInfo,
   extractFactClaims, judgeClaims, factGateBlog, runFactGateWithRepair,
   isJudgmentSentence, hasHedge, hasEventMarkers, classifyClaim, FACT_EXEMPT_RE,
@@ -1071,5 +1071,39 @@ describe('applySentenceRepairs — 번호 목록 삭제(2026-10-07 감나무 전
   it('보통 문장 줄을 통째로 지워도 빈 줄이 겹치지 않는다', () => {
     const r = applySentenceRepairs('앞 문단.\n\n지울 문장 3cm 입니다.\n\n뒤 문단.', ['지울 문장 3cm 입니다.'], [{ index: 1, action: 'delete', replacement: '' }]);
     expect(r.body).toBe('앞 문단.\n\n뒤 문단.');
+  });
+});
+
+describe('resolveResidualHold — 보내기 전 추가 수정(2026-10-14)', () => {
+  const R = (status: 'pass' | 'hold' | 'error', unsupported: string[] = [], contradicted: string[] = []): FactGateResult =>
+    ({ status, claims: [], unsupported, contradicted, unverified: [], repaired: false, checkedTs: 't' });
+  const fixed = { body: '## 고침\n문장', applied: 1, missed: [] as string[] };
+  it('hold 가 아니면 아무것도 안 한다', async () => {
+    const targeted = vi.fn();
+    const r = await resolveResidualHold({ gate: vi.fn(), targeted }, '## 원본', R('pass'));
+    expect(r.body).toBe('## 원본'); expect(targeted).not.toHaveBeenCalled();
+  });
+  it('남은 보류가 줄면 채택하고 1차 요약을 지킨다', async () => {
+    const first = { ...R('hold', ['a', 'b']), firstPass: { status: 'hold' as const, unsupported: ['x'], contradicted: [], checkedTs: 't0' } };
+    const r = await resolveResidualHold({ gate: async () => R('hold', ['b']), targeted: async () => fixed }, '## 원본', first);
+    expect(r.body).toBe('## 고침\n문장'); expect(r.result.unsupported).toEqual(['b']); expect(r.result.repaired).toBe(true);
+    expect(r.result.firstPass?.unsupported).toEqual(['x']); expect(r.note).toContain('2→1');
+  });
+  it('줄지 않거나(같음·늘어남) 재판정이 error 면 앞 판본 그대로', async () => {
+    for (const second of [R('hold', ['c']), R('hold', ['c', 'd']), R('error')]) {
+      const r = await resolveResidualHold({ gate: async () => second, targeted: async () => fixed }, '## 원본', R('hold', ['a']));
+      expect(r.body).toBe('## 원본'); expect(r.result.unsupported).toEqual(['a']);
+    }
+  });
+  it('소제목이 줄면 재판정 없이 버린다', async () => {
+    const gate = vi.fn();
+    const r = await resolveResidualHold({ gate, targeted: async () => ({ body: '문장만', applied: 1, missed: [] }) }, '## 원본\n## 둘', R('hold', ['a']));
+    expect(r.body).toBe('## 원본\n## 둘'); expect(gate).not.toHaveBeenCalled();
+  });
+  it('모순만 남은 hold·표적 수정 예외는 그대로', async () => {
+    const targeted = vi.fn(async () => { throw new Error('x'); });
+    expect((await resolveResidualHold({ gate: vi.fn(), targeted }, '## 원본', R('hold', [], ['m']))).body).toBe('## 원본');
+    expect(targeted).not.toHaveBeenCalled();
+    expect((await resolveResidualHold({ gate: vi.fn(), targeted }, '## 원본', R('hold', ['a']))).result.unsupported).toEqual(['a']);
   });
 });
