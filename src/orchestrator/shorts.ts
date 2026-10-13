@@ -164,6 +164,30 @@ export function applyShortsRevision(
   };
 }
 
+/** 수정 요청·재검산용 원문 묶음 — 원문 블로그 본문, 원문 게이트가 미확인으로 둔 문장, 이야기 사실(재배 편 훅 소재). */
+export interface ShortsSource { body: string; flagged?: string[]; lore?: string[] }
+
+/**
+ * 수정 요청 뒤 사실 검증 다시 계산(2026-10-14 사장님 요청) — 사람이 지적 문장을 고쳐도 옛 보류(factGate)가 그대로 남아
+ * 발행 때 확인을 또 받던 구멍. 생성 때와 같은 원문(이야기 사실 포함)·같은 세 축(원문 정합·시기·수치·승계)으로 다시 잰다.
+ * 판정 실패면 null — 호출부는 옛 값을 그대로 둔다(실패를 '통과'로 읽지 않는다). 사람 수정은 자동으로 고쳐 쓰지 않는다.
+ */
+export async function recheckShortsFactGate(plan: Plan, topic: string, src: ShortsSource, signal?: AbortSignal): Promise<FactGateInfo | null> {
+  const loreSrc = CONFIG.shortsLore && shortsGenreOf(topic, CONFIG.shortsLore) === 'howto' ? loreHookSource(src.lore ?? []) : '';
+  const body = loreSrc ? `${src.body}\n\n${loreSrc}` : src.body;
+  const texts = plan.scenes.map((s) => `${s.narration}${s.screenText ? ` (자막: ${s.screenText})` : ''}`
+    + (s.takeaways?.length ? ` (결론: ${s.takeaways.map((t) => `${t.when} → ${t.then}`).join(', ')})` : '')
+    + (s.items?.length ? ` (목록: ${s.items.join(', ')})` : ''));
+  const issues = CONFIG.factGate ? await parityIssuesChecked('유튜브 숏폼 대본(씬 내레이션)', texts, body, signal) : [];
+  if (!issues) return null;
+  const display = [
+    ...timingParityIssues(body, timingFields(plan)).map(formatTimingIssue),
+    ...(src.flagged?.length ? inheritedClaims(src.flagged, timingFields(plan)) : []).map(formatInherited),
+  ];
+  const base = parityToInfo(issues);
+  return display.length ? { ...base, timing: display } : base;
+}
+
 /**
  * 숏폼 수정 요청(검토 탭) — 피드백을 LLM 이 해석해 대본(내레이션·화면텍스트)·제목·설명·상단 캘리 문구를
  * 개정하고, 이미지 재생성이 필요한 씬만 다시 그린 뒤 재조립한다. 재사용: 무변경 씬 배경·I2V 클립·제목 캘리
@@ -172,7 +196,7 @@ export function applyShortsRevision(
  */
 export async function reviseShorts(
   id: string, feedback: string,
-  opts: { bus?: EventBus; signal?: AbortSignal } = {},
+  opts: { bus?: EventBus; signal?: AbortSignal; source?: ShortsSource } = {},
 ): Promise<{ ok: boolean; error?: string; changedScenes: number[]; regenScenes: number[]; titleChanged: boolean; titleArtChanged: boolean }> {
   const store = shortsStore();
   const short = store.get(id);
@@ -224,8 +248,18 @@ export async function reviseShorts(
     const applied = applyShortsRevision(plan, j, artCopy);
     if (!applied) return fail('수정 요청에서 반영할 변경을 찾지 못했습니다 — 요청을 더 구체적으로 써 주세요');
     plan = applied.plan;
+    // 사실 검증 다시(2026-10-14) — 대본이 바뀌었으면 옛 보류를 새 대본 기준으로 갈아 끼운다. 판정 실패면 옛 값 유지.
+    let factGate = short.factGate;
+    if (opts.source?.body && (applied.changedScenes.length || applied.titleChanged)) {
+      const fg = await recheckShortsFactGate(plan, short.topic, opts.source, opts.signal).catch(() => null);
+      if (fg) {
+        const n = (g: FactGateInfo | undefined): number => (g?.status === 'hold' ? g.unsupported.length : 0) + (g?.timing?.length ?? 0);
+        say(`사실 검증 다시 — 남은 지적 ${n(short.factGate)}→${n(fg)}건`);
+        factGate = fg; plan = { ...plan, factGate: fg };
+      } else say('사실 검증 다시 — 판정 실패, 이전 결과 유지');
+    }
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
-    store.update(id, { title: plan.title, topic: plan.title, description: plan.description, hashtags: plan.hashtags });
+    store.update(id, { title: plan.title, topic: plan.title, description: plan.description, hashtags: plan.hashtags, ...(factGate ? { factGate } : {}) });
     say(`수정 요청 반영 — 씬 ${applied.changedScenes.join(',') || '없음'}${applied.regenScenes.length ? ` · 배경 재생성 ${applied.regenScenes.join(',')}` : ''}${applied.titleChanged ? ' · 제목' : ''}${applied.titleArtCopy ? ' · 캘리 문구' : ''}`);
 
     // 씬 배경 재구성(2026-09-18 수정) — 씬 인덱스 지도(scene-images.json)가 진실, 없으면 매니페스트

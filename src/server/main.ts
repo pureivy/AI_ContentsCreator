@@ -1405,6 +1405,20 @@ function loreFactsFor(runId: string | undefined): string[] {
   try { return pickLoreHooks(readFactSupply(runId)?.facts); } catch { return []; }
 }
 
+/**
+ * 파생물 수정 요청의 원문 묶음(2026-10-14) — 수정 뒤 사실 검증을 생성 때와 같은 원문으로 다시 재기 위해.
+ * 원문 글이 없거나(직접 생성 편) 초안을 못 읽으면 undefined — 그때는 재검산 없이 옛 결과를 둔다.
+ */
+function pieceSourceFor(pieceId: string | undefined): { body: string; flagged: string[]; lore: string[] } | undefined {
+  const piece = pieceId ? pieceStore().get(pieceId) : undefined;
+  if (!piece?.runId) return undefined;
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, piece.runId, 'draft.json'), 'utf-8')) as { bodyMarkdown?: string };
+    const body = (d.bodyMarkdown ?? '').trim();
+    return body ? { body, flagged: sourceFlaggedClaims(piece.runId), lore: loreFactsFor(piece.runId) } : undefined;
+  } catch { return undefined; }
+}
+
 function sourceFlaggedClaims(runId: string | undefined): string[] {
   if (!runId) return [];
   try {
@@ -1820,7 +1834,7 @@ async function shortsReviseHandler(c: Context): Promise<Response> {
   const feedback = (b.feedback ?? '').trim();
   if (!feedback) return c.json({ error: '수정 요청 내용이 비었습니다.' }, 400);
   console.log(`[발행담당] 숏폼 수정 요청 접수 — ${id}: ${feedback.slice(0, 80)}`); // 유실 추적용(카드와 동일)
-  const r = await reviseShorts(id, feedback);
+  const r = await reviseShorts(id, feedback, { source: pieceSourceFor(shortsStore().get(id)?.sourcePieceId) });
   if (!r.ok) { console.log(`[발행담당] 숏폼 수정 요청 기각 — ${id}: ${r.error ?? ''}`); return c.json({ error: r.error, ...r }, 409); }
   console.log(`[발행담당] 숏폼 수정 요청 반영 — ${id} 씬 ${r.changedScenes.join(',') || '문구없음'}${r.regenScenes.length ? ` · 배경 ${r.regenScenes.join(',')}` : ''}${r.titleChanged ? ' · 제목' : ''}${r.titleArtChanged ? ' · 캘리' : ''}`);
   return c.json(r);
@@ -2306,7 +2320,7 @@ async function cardnewsReviseHandler(c: Context): Promise<Response> {
   // 접수 즉시 로그 — 수 분짜리 동기 처리라 서버 재시작에 요청이 통째로 죽으면 흔적이 없었다
   // (실사고 2026-08-14: 배포 재시작에 사용자 수정 요청 유실, 피드백 내용도 복구 불가).
   console.log(`[발행담당] 카드뉴스 수정 요청 접수 — ${id}: ${feedback.slice(0, 80)}`);
-  const r = await reviseCardNews(id, feedback);
+  const r = await reviseCardNews(id, feedback, { source: pieceSourceFor(cardNewsStore().get(id)?.sourcePieceId) });
   // 기각도 접수처럼 로그 — 조용한 409 는 사용자에겐 '반영 안 됨'으로만 보이고 서버엔 흔적이 없었다
   // (실사고 2026-08-18: 같은 카드 수정 요청 4회 연속 침묵 기각, 원인 추적에 로그 부재).
   if (!r.ok) { console.log(`[발행담당] 카드뉴스 수정 요청 기각 — ${id}: ${r.error ?? ''}`); return c.json({ error: r.error, ...r }, 409); }

@@ -22,7 +22,7 @@ import type { EventBus } from '../events/bus';
 import { stripEmoji } from '../output/render';
 import { cardNewsStore } from '../content/cardnews';
 import { notifyCardnewsReady } from '../autonomy/contentNotify';
-import { standaloneIssues, parityIssues, parityToInfo, PARITY_SOURCE_CHARS } from './standaloneQa';
+import { standaloneIssues, parityIssues, parityIssuesChecked, parityToInfo, PARITY_SOURCE_CHARS } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue } from '../content/timingParity';
 import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
 import { introducesNewFacts, preNotifyProblems, preNotifyAccept, type FactGateInfo } from '../content/factGate';
@@ -1059,6 +1059,30 @@ export function applyCardRevision(
   return { plan: out, changedSlides: [...new Set(changed)].sort((a, b) => a - b), metaChanged };
 }
 
+/** 수정 요청 재검산용 원문 묶음 — 원문 블로그 본문과 원문 게이트가 미확인으로 둔 문장. */
+export interface CardSource { body: string; flagged?: string[] }
+
+/**
+ * 수정 요청 뒤 사실 검증 다시 계산(2026-10-14 사장님 요청) — 사람이 지적 문장을 고쳐도 옛 보류·시기 줄이 남아
+ * 검토 알림에 그대로 다시 실리던 구멍. 생성 때와 같은 세 축(원문 정합·시기·수치·승계)으로 다시 잰다.
+ * 판정 실패면 null — 호출부는 옛 값을 그대로 둔다.
+ */
+export async function recheckCardFactGate(plan: { slides: PlanSlide[] }, caption: string, src: CardSource, signal?: AbortSignal): Promise<FactGateInfo | null> {
+  const texts = plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / '));
+  const issues = CONFIG.factGate ? await parityIssuesChecked('인스타그램 카드뉴스(장별 카피, 1번=표지)', texts, src.body, signal) : [];
+  if (!issues) return null;
+  const fields = [
+    ...plan.slides.map((s, i) => ({ field: `${i + 1}번 카드`, text: s.body ? `${s.headline} ${s.body}` : s.headline })),
+    ...(caption ? [{ field: '캡션', text: caption }] : []),
+  ];
+  const display = [
+    ...timingParityIssues(src.body, fields).map(formatTimingIssue),
+    ...(src.flagged?.length ? inheritedClaims(src.flagged, fields) : []).map(formatInherited),
+  ];
+  const base = parityToInfo(issues);
+  return display.length ? { ...base, timing: display } : base;
+}
+
 /**
  * 카드뉴스 수정 요청(검토 탭) — 블로그 revise 와 같은 UX. 피드백을 카피 에디터 LLM 이 해석해
  * '바뀐 슬라이드 문구/캡션'만 개정하고, 바뀐 슬라이드는 표적 재생성(repairCardNewsSlides — 블라인드
@@ -1066,7 +1090,7 @@ export function applyCardRevision(
  */
 export async function reviseCardNews(
   id: string, feedback: string,
-  opts: { bus?: EventBus; signal?: AbortSignal } = {},
+  opts: { bus?: EventBus; signal?: AbortSignal; source?: CardSource } = {},
 ): Promise<{ ok: boolean; error?: string; changedSlides: number[]; fixed: number[]; stillBad: number[]; metaChanged: boolean }> {
   const store = cardNewsStore();
   const card = store.get(id);
@@ -1077,6 +1101,17 @@ export async function reviseCardNews(
   if (RUNNING.has(id)) return fail('생성/수선 작업이 이미 진행 중입니다');
   const say = (m: string): void => { console.log(`[카드뉴스] ${m}`); opts.bus?.emit('log', { message: m }); };
   const dir = store.dirFor(id);
+  // 사실 검증 다시(2026-10-14) — 원문은 서버가 넘긴 것, 없으면 카드 폴더의 source.md(HTML 판). 판정 실패면 옛 값 유지.
+  const src: CardSource | undefined = opts.source?.body ? opts.source
+    : (() => { try { const b = fs.readFileSync(path.join(dir, 'source.md'), 'utf-8'); return b.trim() ? { body: b } : undefined; } catch { return undefined; } })();
+  const refreshFactGate = async (p: { slides: PlanSlide[] }, caption: string): Promise<void> => {
+    if (!src) return;
+    const fg = await recheckCardFactGate(p, caption, src, opts.signal).catch(() => null);
+    if (!fg) { say('사실 검증 다시 — 판정 실패, 이전 결과 유지'); return; }
+    const n = (g: FactGateInfo | undefined): number => (g?.status === 'hold' ? g.unsupported.length : 0) + (g?.timing?.length ?? 0);
+    say(`사실 검증 다시 — 남은 지적 ${n(store.get(id)?.factGate)}→${n(fg)}건`);
+    store.update(id, { factGate: fg });
+  };
   // HTML 판(2026-10-12) — 제목·본문·칸 글·사진 장면을 판형 JSON 에서 고쳐 다시 렌더한다.
   // 칸에서 바꿀 게 없으면(캡션·해시태그 요청 등) 아래 종전 경로로 넘어간다 — 그 경로의 슬라이드 재생성은 HTML 판에선 다시 찍기다.
   if (isHtmlCard(dir)) {
@@ -1087,6 +1122,7 @@ export async function reviseCardNews(
       const n = fs.readdirSync(dir).filter((f) => /^slide_\d{2}\.png$/.test(f)).length;
       store.update(id, { slides: n, qaUnresolved: undefined });
       say(`수정 요청 반영(HTML 판) — ${r.changed.join(',')}번 장`);
+      await refreshFactGate(r.plan, store.get(id)?.caption ?? '');
       const done = store.get(id);
       if (done) void notifyCardnewsReady({ id, topic: done.topic, brand: done.brand, slides: n, sourcePieceId: done.sourcePieceId, planner: done.planner, designer: done.designer, factGate: done.factGate }, dir).catch(() => { /* 무해 */ });
       return { ok: true, changedSlides: r.changed, fixed: r.changed, stillBad: [], metaChanged: false };
@@ -1161,6 +1197,7 @@ export async function reviseCardNews(
     if (captionText) { try { fs.writeFileSync(path.join(dir, 'caption.txt'), captionText, 'utf-8'); } catch { /* 무해 */ } }
   }
   say(`수정 요청 반영 — 슬라이드 ${applied.changedSlides.join(',') || '없음'}${applied.metaChanged ? ' · 캡션/메타' : ''}`);
+  await refreshFactGate(plan, plan.caption || (store.get(id)?.caption ?? ''));
   // 바뀐 기획 슬라이드 → slide_NN 번호(생성 실패 장이 있으면 slideMap 역참조)로 표적 재생성.
   let fixed: number[] = []; let stillBad: number[] = [];
   if (applied.changedSlides.length) {
