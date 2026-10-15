@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
-import { ensureNeutralCwd, diagnoseCliFailure } from './claudeCli';
+import { ensureNeutralCwd, diagnoseCliFailure, isNoResultFailure } from './claudeCli';
 
 // 실사고(2026-08-10 13:21): 상주 서버 가동 중 macOS 임시폴더 청소가 중립 cwd 를 지워 이후 모든
 // claude spawn 이 ENOENT 로 죽었다 — Node 는 cwd 부재도 실행 파일 부재와 같은 "spawn claude ENOENT"
@@ -85,5 +85,19 @@ describe('diagnoseCliFailure — 결과 줄 없는 종료의 첫 갈래', () => 
   });
   it('전부 정상인데 결과 줄만 없으면 원인 미상으로 명시', () => {
     expect(diagnoseCliFailure(base)).toContain('원인 미상');
+  });
+});
+
+// 실사고(2026-10-15): 유튜브 숏폼 대본이 944자 받은 뒤 결과 줄 없이 끝나 편 전체가 실패 — 이런 실패만 한 번 다시 부른다.
+describe('isNoResultFailure — 다시 부를 실패만 고른다', () => {
+  it('결과 줄 없이 정상 종료(exit=0)는 대상', () => {
+    expect(isNoResultFailure(new Error('Claude CLI claude-sonnet-5: 결과 없음(exit=0) 본문 944자 수신 후 0초 무응답'))).toBe(true);
+    expect(isNoResultFailure(new Error('Claude CLI claude-opus-5: 결과 없음(exit=0) 수신 없음'))).toBe(true);
+  });
+  it('시그널 종료·타임아웃·중단·한도는 대상이 아니다', () => {
+    expect(isNoResultFailure(new Error('Claude CLI claude-sonnet-5: 결과 없음(exit=null) 수신 없음'))).toBe(false);
+    expect(isNoResultFailure(new Error('Claude CLI claude-sonnet-5: 타임아웃(600000ms)'))).toBe(false);
+    expect(isNoResultFailure(new Error('Claude CLI claude-sonnet-5: 중단됨(abort)'))).toBe(false);
+    expect(isNoResultFailure(new Error("Claude CLI claude-haiku-4-5: success — You've hit your session limit"))).toBe(false);
   });
 });

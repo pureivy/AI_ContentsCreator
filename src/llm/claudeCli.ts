@@ -155,9 +155,26 @@ interface CliResult {
 }
 
 
+/**
+ * 결과 줄 없이 정상 종료(exit=0)한 실패인가(순수) — 한 번 다시 부를 대상.
+ * 2026-10-15 실사고: 유튜브 숏폼 대본 기획이 944자 받은 뒤 결과 줄 없이 끝나 편 전체가 실패했다(인스타 형제 편은 정상).
+ * 같은 호출을 다시 돌리면 정상이라는 게 09-15부터의 관측이라, 부분 텍스트 회수(위 decide 주석에서 접은 안) 대신
+ * 처음부터 한 번 더 부른다. 시그널 종료(exit=null)·타임아웃·중단은 대상이 아니다.
+ */
+export function isNoResultFailure(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  return /: 결과 없음\(exit=0\)/.test(msg);
+}
+
 export class ClaudeCliClient {
   async chat(params: ChatParams): Promise<ChatResult> {
-    return SLOT.run(() => this._chat(params));
+    try {
+      return await SLOT.run(() => this._chat(params));
+    } catch (e) {
+      if (!isNoResultFailure(e) || params.signal?.aborted) throw e;
+      console.log('[claude-cli]', `결과 줄 없이 종료 — 한 번 다시 부름(${params.model})`);
+      return SLOT.run(() => this._chat(params));
+    }
   }
 
   private _chat(params: ChatParams): Promise<ChatResult> {
