@@ -49,7 +49,8 @@ export async function realPhotoMismatches(layout: CardLayout, blog: readonly Blo
   const items = slots.map((x) => ({ ...x, path: pathOf(x.n) })).filter((x): x is { slide: number; n: number; path: string } => !!x.path && fs.existsSync(x.path));
   if (!items.length) return [];
   try {
-    const j = await microJSON<{ mismatches?: Array<{ k?: unknown; why?: unknown }> }>(stdModel(),
+    // 응답을 못 받으면 한 번 더 — 종전엔 판정 실패가 '전부 맞음'과 같은 빈 배열로 조용히 지나갔다(card_c968068183: 7번 장 수관 사진 통과).
+    const ask = (): Promise<{ mismatches?: Array<{ k?: unknown; why?: unknown }> } | null> => microJSON<{ mismatches?: Array<{ k?: unknown; why?: unknown }> }>(stdModel(),
       '당신은 카드뉴스 사진 검수자입니다. 사진을 직접 보고 요청된 JSON 스키마만 출력합니다.',
       [
         `사진 ${items.length}장과 그 사진이 들어갈 카드 장의 글이다(순번 같음). 각 사진이 그 글이 말하는 장면·부위·나무 단계를 보여 주는지 판정하라.`,
@@ -59,8 +60,11 @@ export async function realPhotoMismatches(layout: CardLayout, blog: readonly Blo
         'JSON 형식: {"mismatches":[{"k":순번,"why":"한 줄"}]} — 맞는 장은 빼라. 다 맞으면 빈 배열.',
       ].join('\n'),
       { maxOutputTokens: 600, visionPaths: items.map((x) => x.path), signal },
-    );
-    return (j?.mismatches ?? []).flatMap((m) => {
+    ).catch(() => null);
+    const j = (await ask()) ?? (await ask());
+    if (!j || !Array.isArray(j.mismatches)) { say(`카드 실촬영 내용 대조 — 판정 실패(${items.length}칸), 그대로`); return []; }
+    if (!j.mismatches.length) say(`카드 실촬영 내용 대조 — ${items.length}칸 모두 맞음`);
+    return j.mismatches.flatMap((m) => {
       const k = Math.floor(Number(m?.k));
       return k >= 1 && k <= items.length ? [{ slide: items[k - 1]!.slide, why: String(m?.why ?? '').slice(0, 80) }] : [];
     });
