@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import fs from 'node:fs';
 import { audio } from './audio';
 import { CONFIG } from '../config';
-import { synthesize, listKoreanVoices, injectPauseBreaks, injectHookBreak } from './tts';
+import { synthesize, listKoreanVoices, injectPauseBreaks, injectHookBreak, injectBreaks } from './tts';
 
 // CONFIG 는 런타임 가변 객체(readonly 는 타입 힌트일 뿐) — 테스트에서 제공자/키를 강제하고 복원한다.
 const cfg = CONFIG as unknown as { ttsProvider: string; openaiApiKey: string; elevenLabsApiKey: string };
@@ -104,13 +104,31 @@ describe('injectPauseBreaks', () => {
 });
 
 describe('injectHookBreak — 훅 첫 구절 뒤 쉼(2026-09-18)', () => {
-  it('쉼표가 없으면 첫 어절 뒤', () => {
+  it('첫 쉼표나 첫 문장 끝 뒤 — 둘 중 앞선 쪽', () => {
     expect(injectHookBreak('가위 든 손이 멈추는 가지, 꼭 하나씩 있죠.')).toBe('가위 든 손이 멈추는 가지, <break time="0.4s" /> 꼭 하나씩 있죠.');
-    expect(injectHookBreak('블루베리 색 반은 거짓말이에요.')).toBe('블루베리 <break time="0.4s" /> 색 반은 거짓말이에요.');
+    expect(injectHookBreak('잎이 졌어요. 그래도 살아 있어요, 정말로.')).toBe('잎이 졌어요. <break time="0.4s" /> 그래도 살아 있어요, 정말로.');
+  });
+  // 2026-10-16 — 종전엔 경계가 없으면 첫 어절 뒤에 넣어 말 중간을 끊었다("잎 … 떨어진 지금").
+  it('구절 경계가 없으면 넣지 않는다', () => {
+    expect(injectHookBreak('블루베리 색 반은 거짓말이에요.')).toBe('블루베리 색 반은 거짓말이에요.');
+    expect(injectHookBreak('잎 떨어진 지금 가지로 봅니다')).toBe('잎 떨어진 지금 가지로 봅니다');
   });
   it('이미 break 가 있거나 어절이 하나면 그대로', () => {
     expect(injectHookBreak('잠깐, <break time="0.2s" /> 멈춰요')).toContain('0.2s');
     expect(injectHookBreak('잠깐')).toBe('잠깐');
+  });
+});
+
+describe('injectBreaks — 훅 쉼과 문장·쉼표 쉼 합치기(2026-10-16)', () => {
+  it('훅 쉼 뒤 구간에 문장·쉼표 쉼을 더한다(상한 3에 훅 쉼 포함)', () => {
+    const t = injectBreaks('이 감나무, 품종은 뭘까요. 열매로는 못 가려요. 잎도 봐요. 끝.', { hook: true, pause: true });
+    expect(t.startsWith('이 감나무, <break time="0.4s" /> 품종은 뭘까요. <break time="0.3s" /> 열매로는 못 가려요. <break time="0.3s" /> 잎도 봐요.')).toBe(true);
+    expect((t.match(/<break/g) ?? []).length).toBe(3);
+  });
+  it('훅 쉼 자리가 없으면 문장·쉼표 쉼 그대로, pause 꺼지면 훅 쉼만', () => {
+    expect(injectBreaks('잎 떨어진 지금 봅니다', { hook: true, pause: true })).toBe('잎 떨어진 지금 봅니다');
+    expect(injectBreaks('하나, 둘. 셋', { hook: true, pause: false })).toBe('하나, <break time="0.4s" /> 둘. 셋');
+    expect(injectBreaks('하나. 둘', { pause: true })).toBe(injectPauseBreaks('하나. 둘'));
   });
 });
 

@@ -82,19 +82,33 @@ export function injectPauseBreaks(text: string, maxBreaks = 3): string {
   return t;
 }
 
+const HOOK_BREAK = '<break time="0.4s" /> ';
+
 /**
  * 훅(0번) 씬 전용 — 첫 구절 뒤에 0.4초 쉼을 줘서 도입부를 몰아 읽지 않게 한다(2026-09-18).
- * 이미 break 태그가 있으면 그대로 둔다. 첫 쉼표가 있으면 injectPauseBreaks 와 같은 자리(쉼표 뒤)에,
- * 없으면 첫 어절(첫 공백) 뒤에 삽입한다 — 어절이 하나뿐이면 자를 자리가 없으므로 그대로 둔다.
+ * 이미 break 태그가 있으면 그대로 둔다. 첫 구절 경계(쉼표 또는 문장 끝 — 둘 중 앞선 쪽) 뒤에만 넣고, 경계가 없으면 그대로 둔다
+ * (2026-10-16 ADLER 쪽 수정 이식 — 종전엔 쉼표가 없으면 첫 어절 뒤에 넣어 "잎 … 떨어진 지금"처럼 말 중간을 끊었다).
  */
 export function injectHookBreak(text: string): string {
   if (!text || text.includes('<break')) return text;
-  if (/,\s+(?=\S)/.test(text)) {
-    return text.replace(/,\s+(?=\S)/, ', <break time="0.4s" /> ');
-  }
-  const idx = text.indexOf(' ');
-  if (idx === -1) return text;
-  return `${text.slice(0, idx)} <break time="0.4s" /> ${text.slice(idx + 1)}`;
+  const m = /(,|[.!?…]+)\s+(?=\S)/.exec(text);
+  if (!m) return text;
+  return `${text.slice(0, m.index)}${m[1]} ${HOOK_BREAK}${text.slice(m.index + m[0].length)}`;
+}
+
+/**
+ * 쉼 태그 합치기(순수, 2026-10-16 ADLER 쪽 수정 이식) — 종전엔 hookBreak 가 pauseBreaks 를 통째로 대신해, 훅 씬은 SHORTS_TTS_BREAKS 와
+ * 무관하게 첫 구절 쉼 하나만 받았다(훅이 두 문장이면 문장 사이 쉼이 빠짐). 이제 훅 쉼(0.4초)을 먼저 넣고, pause 가 켜져 있으면 그 뒤
+ * 구간에 문장·쉼표 쉼을 넣는다(호출당 상한 maxBreaks 에 훅 쉼 포함). 훅 쉼 자리가 없으면 종전 문장·쉼표 쉼 그대로.
+ */
+export function injectBreaks(text: string, o: { hook?: boolean; pause?: boolean }, maxBreaks = 3): string {
+  if (!text || text.includes('<break')) return text;
+  const hooked = o.hook ? injectHookBreak(text) : text;
+  if (!o.pause) return hooked;
+  const at = hooked.indexOf(HOOK_BREAK);
+  if (at < 0) return injectPauseBreaks(text, maxBreaks);
+  const cut = at + HOOK_BREAK.length;
+  return hooked.slice(0, cut) + injectPauseBreaks(hooked.slice(cut), maxBreaks - 1);
 }
 
 /**
@@ -121,7 +135,7 @@ async function synthesizeElevenLabs(
   const url = `${ELEVENLABS_TTS_URL}/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`;
   // 낭독 속도 — voice_settings.speed(1.0 기본, >1.0 빠르게). 1.0 이면 생략(음성 기본 설정 유지).
   const body: Record<string, unknown> = {
-    text: opts.hookBreak ? injectHookBreak(text) : (opts.pauseBreaks ? injectPauseBreaks(text) : text),
+    text: injectBreaks(text, { hook: opts.hookBreak, pause: opts.pauseBreaks }),
     model_id: CONFIG.elevenLabsModel,
   };
   if (opts.previousText) body.previous_text = opts.previousText;

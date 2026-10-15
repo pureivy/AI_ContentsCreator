@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { audio } from './audio';
 import {
-  missingNames, decideTake, synthesizeChecked, transcribeTake, ttsCheckNote,
+  missingNames, decideTake, synthesizeChecked, transcribeTake, ttsCheckNote, hardToHear,
   TTS_CHECK_STT_TIMEOUT_MS, type CheckedTake,
 } from './ttsCheck';
 
@@ -162,5 +162,22 @@ describe('ttsCheckNote — 로그 한 줄', () => {
       .toBe('씬4 발음 확인 실패(STT 어휘) — "이팝나무" 3회 미검출(받아쓰기 "이팟나무는 5월에") → 1번째 유지');
     expect(ttsCheckNote(1, { ...base, outcome: 'stt-error', heard: null })).toBe('씬1 발음 확인 STT 실패 — 1번째 테이크 그대로 사용');
     expect(ttsCheckNote(3, { ...base, outcome: 'tts-error', missing: ['배롱나무'], takes: 2 })).toBe('씬3 발음 재합성 실패(TTS) — "배롱나무" 미검출인 1번째 유지');
+  });
+});
+
+// 2026-10-16 ADLER 쪽 수정 이식 — 빈 받아쓰기는 STT 실패, 재합성으로야 들린 이름도 나머지 씬 확인 생략.
+describe('빈 받아쓰기·잘 안 들리는 이름', () => {
+  it('빈 받아쓰기는 STT 실패 — 다시 합성하지 않고 그 테이크를 쓴다', async () => {
+    const synth = vi.fn(async () => Buffer.from('take1'));
+    const stt = vi.fn(async () => '   ');
+    const r = await synthesizeChecked(synth, N, { stt });
+    expect(r.outcome).toBe('stt-error');
+    expect(synth).toHaveBeenCalledTimes(1);
+  });
+  it('hardToHear — miss·recovered 만', () => {
+    expect(hardToHear({ outcome: 'recovered', missing: ['배롱나무'] })).toEqual(['배롱나무']);
+    expect(hardToHear({ outcome: 'miss', missing: ['이팝나무'] })).toEqual(['이팝나무']);
+    expect(hardToHear({ outcome: 'pass', missing: [] })).toEqual([]);
+    expect(hardToHear({ outcome: 'stt-error', missing: [] })).toEqual([]);
   });
 });

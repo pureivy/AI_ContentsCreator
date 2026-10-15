@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { synthesize } from '../voice/tts';
 import { sttAvailable } from '../voice/stt';
-import { synthesizeChecked, ttsCheckNote } from '../voice/ttsCheck';
+import { synthesizeChecked, ttsCheckNote, hardToHear } from '../voice/ttsCheck';
 import { speciesNamesIn } from '../content/species';
 import { CONFIG } from '../config';
 import { MIN_CLIP_COVERAGE } from '../content/userAssets';
@@ -540,7 +540,7 @@ export async function prepareScenes(
         if (note) console.log(`[숏폼] ${note}`);
         // 받아쓰기가 한 번 실패하면 이 편 나머지 씬은 확인 없이 간다 — 씬마다 상한(45초)까지 기다리지 않게.
         if (checked.outcome === 'stt-error') sttOk = false;
-        if (checked.outcome === 'miss') for (const n of checked.missing) sttDeaf.add(n);
+        for (const n of hardToHear(checked)) sttDeaf.add(n); // 미검출·재합성으로야 들린 이름(2026-10-16 — recovered 포함)
         mp3 = checked.mp3;
       } else mp3 = await synth();
       audioPath = path.join(workDir, `narr_${nn}.mp3`);

@@ -88,12 +88,21 @@ export async function synthesizeChecked(
     return { mp3: takes[take]!, take, outcome, missing: heard === null ? [] : missingNames(names, heard), heard, takes: takes.length };
   };
   for (;;) {
-    transcripts.push(await stt(takes[takes.length - 1]!, opts.signal).catch(() => null));
+    // 빈 받아쓰기(결과 파일 없음 등)는 STT 실패로 친다(2026-10-16 ADLER 쪽 수정 이식) — 종전엔 '이름 미검출'로 읽혀 재합성 2회(TTS 글자 3배)를 태웠다.
+    transcripts.push(await stt(takes[takes.length - 1]!, opts.signal).then((t) => (String(t ?? '').trim() ? t : null), () => null));
     const d = decideTake(names, transcripts, opts.maxTakes);
     if (d.done) return result(d.take, d.outcome);
     if (opts.signal?.aborted) return result(0, 'aborted');
     try { takes.push(await synth()); } catch { return result(0, opts.signal?.aborted ? 'aborted' : 'tts-error'); }
   }
+}
+
+/**
+ * 잘 안 들리는 이름(순수, 2026-10-16 ADLER 쪽 수정 이식) — 끝까지 미검출(miss)이거나 재합성으로야 들린(recovered) 이름. 이 편 나머지 씬에서는
+ * 확인하지 않는다(같은 이름이 씬마다 다시 3회 합성을 태우지 않게). 1번째 통과·STT 실패 등은 빈 목록.
+ */
+export function hardToHear(r: Pick<CheckedTake, 'outcome' | 'missing'>): string[] {
+  return r.outcome === 'miss' || r.outcome === 'recovered' ? [...r.missing] : [];
 }
 
 /** 로그 한 줄(순수) — 1번째 통과면 null(조용히). scene 은 1부터. */
