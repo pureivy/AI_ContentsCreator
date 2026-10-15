@@ -856,6 +856,13 @@ export function scriptForEdit(scenes: readonly ShortsScene[]): string {
  * 전체 대본 스키마로 끝나 통째 재집필을 부른다(실측 94%). 대신 현 대본·문제·씬별 상한·원문 발췌·훅 규칙만 준다.
  * 길이는 참고 프로젝트의 교열 방식(원문 대비 1.2배 이내)을 따른다.
  */
+/**
+ * 한 줄기 규칙(2026-10-15 사장님 지적 — 감나무 인스타 편이 묘목 확인을 잘 풀다가 마지막에 "품종은 추위 한계부터"로 닫혔다).
+ * 작가 첫 원고는 원문의 여러 축 중 하나(묘목 확인)를 골라 썼는데, 원문 문장 옮기기가 블로그의 다른 축(품종) 결론 문장을 마지막 씬에
+ * 넣었다. 고치는 단계도 대본이 고른 줄기 안에서만 고친다 — 원문의 다른 갈래는 이 편이 버린 것이지 빠뜨린 것이 아니다.
+ */
+export const SAME_THREAD_RULE = '· 이 대본은 원문의 여러 갈래 중 하나만 골라 쓴 것이다. 훅과 씬2가 세운 대상·질문 안에서만 고쳐라 — 대본에 없던 원문의 다른 갈래(예: 묘목 확인 편에 품종 고르기)를 끌어오지 마라. 지적이 그 갈래를 빠뜨렸다고 해도 끌어오지 말고, 지적된 말을 덜어내거나 이 줄기 안의 원문 문장으로 바꿔라.';
+
 export function partialFixPrompt(a: {
   scenes: readonly ShortsScene[]; problems: readonly string[]; budgets: ReturnType<typeof sceneCharBudgets>;
   stage: 'plan' | 'compressed'; sourceExcerpt?: string; flagged?: readonly string[]; hookRule?: string; keyword?: string;
@@ -891,6 +898,7 @@ export function partialFixPrompt(a: {
       ? '· 내레이션을 고친 씬에 자막·결론 카드·목록이 있으면 새 내레이션에 맞춰 함께 돌려줘라(그대로 맞으면 그대로 옮겨 적어라). 돌려주지 않은 결론 카드·목록은 그대로 남는다 — 단 새 내레이션이 그 카드가 되받던 말을 지우면 카드도 지워진다.'
       : '· 내레이션을 고친 씬에 자막·결론 카드·목록이 있으면 새 내레이션에 맞춰 함께 돌려줘라(그대로 맞으면 그대로 옮겨 적어라). 돌려주지 않은 결론 카드·목록은 지워진다 — 화면에 옛 주장이 남는 것보다 낫기 때문이다.',
     '· 사실·수치·시기는 아래 원문에 있는 것만. 원문 결론의 방향을 뒤집지 마라. 유보어("대개/흔히/~일 수 있어요/~봐요")는 남겨라. 구어체 존댓말, 숫자는 한글 낭독, 이모지 금지.',
+    SAME_THREAD_RULE,
     a.keyword ? `· 핵심 키워드 "${a.keyword}" 의 대상 이름이 든 구절은 고쳐도 그 이름을 남겨라.` : '',
     a.hookRule ?? '',
     a.flagged?.length ? `[원문에서 근거가 확인되지 않은 주장 — 쓰지 마라]\n${a.flagged.slice(0, 6).map((c) => `- ${c}`).join('\n')}` : '',
@@ -1053,6 +1061,8 @@ export function literalFixPrompt(a: { scenes: readonly ShortsScene[]; targets: r
     '[규칙]',
     '· 지적과 관련된 원문 문장 1~2개를 골라 **거의 그대로** 옮겨라 — 어미만 구어체 존댓말(~요)로 바꾸고, 길면 덜 중요한 수식어만 뺀다. 코드가 원문과 글자 단위로 대조한다.',
     '· 원문의 조건("~이면", "~일 때"), 유보("보통", "대개", "~할 수 있어요"), 예외는 반드시 남긴다. 원문에 없는 말·연결·결론을 더하지 마라.',
+    SAME_THREAD_RULE,
+    '· 이 줄기 안에 지적과 맞는 원문 문장이 없으면 그 씬은 출력하지 마라({"scenes":[]}) — 다른 갈래 문장으로 채우는 것보다 지금 대본이 낫다.',
     `· 길이: ${a.targets.map((k) => `씬${k} ${a.caps[k]}자`).join(' · ')} 이내. 숫자는 읽는 꼴의 한글로("3~4m" → "삼사 미터").`,
     '· screenText 는 새 내레이션의 핵심을 6~14자로. 앞뒤 씬과 이어지게 첫머리 접속어("그래서", "다만")는 써도 된다.',
     a.keyword ? `· 지금 씬에 "${keywordTokens(a.keyword).head}"(대상 이름)가 있으면 새 문장에도 남겨라 — 원문 문장 앞에 주어로 붙여도 된다.` : '',
@@ -3108,6 +3118,13 @@ export async function runShortsJob(
           say(`보내기 전 추가 수정 ${round}회 — 잔존 ${problems.length}→${after}건 채택(씬 ${merged.changed.join(',') || '설명'})`);
         } catch { say(`보내기 전 추가 수정 ${round}회 — 실패, 앞 판본 유지`); break; }
       }
+      // 원문 문장 옮기기 뒤 이음새 — 바꾼 씬이 걸린 끊김만(판정 실패는 끊김 없음으로 본다 — 앞 단계가 이미 대조를 통과했다).
+      const literalFlowCut = async (p: Plan, changed: readonly number[]): Promise<Array<{ at: number; why: string }>> => {
+        const j = await microJSON<{ transitions?: unknown; breaks?: unknown }>(stdModel(), '당신은 숏폼 대본 에디터입니다. 요청된 JSON 스키마만 출력합니다.',
+          flowCheckPrompt({ scenes: p.scenes, budgets, ...(short.keyword ? { keyword: short.keyword } : {}) }),
+          { maxOutputTokens: 900, signal: io.signal }).catch(() => null);
+        return flowBreaks(j).filter((b) => changed.includes(b.at) || changed.includes(b.at + 1));
+      };
       // 남는 왜곡은 원문 문장으로(2026-10-15 사장님 선택 "원문 문장으로 바꾸기") — 수정을 다 거쳤는데도 원문 정합 보류가 남으면
       // 두 번 더 판정해 세 번 중 두 번 이상 지목된 씬만(판정 흔들림 제외) 원문 문장을 거의 그대로 옮긴 문장으로 바꾼다.
       // 옮겼는지는 코드가 원문과 글자 단위로 대조하고(isNearLiteral), 바꾼 뒤 다시 판정해 그 씬 지적이 사라질 때만 채택한다.
@@ -3146,8 +3163,13 @@ export async function runShortsJob(
                 ...hookScreenIssues(out),
               ];
               const before = cur.length + (plan.factGate.timing?.length ?? 0);
+              // 줄어들 때만(2026-10-15 감나무 인스타 — 잔존 1→1인데 채택돼 마지막 씬이 블로그의 다른 갈래 문장으로 바뀌었다).
+              // 고친 씬의 이음새도 다시 본다 — 원문 문장은 대본의 앞 씬을 모르고 쓰인 문장이라 줄기에서 벗어나기 쉽다.
+              const improved = !!issues && left === 0 && issues.length + display.length < before && lint(out) <= lint(plan);
+              const cut = improved && CONFIG.shortsFlowCheck ? await literalFlowCut(out, merged.changed) : [];
               if (!issues) say('원문 문장 옮기기 — 재대조 실패, 앞 판본 유지');
-              else if (left === 0 && issues.length + display.length <= before && lint(out) <= lint(plan)) {
+              else if (cut.length) say(`원문 문장 옮기기 — 씬 ${merged.changed.join(',')} 이음새 끊김(${cut.map((b) => `${b.at}→${b.at + 1}: ${b.why.slice(0, 40)}`).join(' / ')}), 앞 판본 유지`);
+              else if (improved) {
                 plan = { ...out, factGate: finalFactGate(plan.factGate, { remaining: issues, display }) };
                 trace = traceMarkParity(traceRecord(trace, plan.scenes, '원문 문장 옮기기', { llm: true }), issues);
                 say(`원문 문장 옮기기 — 씬 ${merged.changed.join(',')} 채택 · 잔존 ${cur.length}→${issues.length}건`);

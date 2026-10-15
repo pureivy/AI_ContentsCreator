@@ -5,7 +5,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   fitSceneCount, sceneCharBudgets, sceneBudgetAt, trimPlanToBudget, protectedSentences, HEDGE_RE, restoreLostHedges,
-  mergePartialFix, partialFixVerdict, structuralProblems, problemsTargetHook, footageContradictsTopic, FOOTAGE_DEICTIC_RE, hookContradictsFootage, hookFootageIssues, stableProblemScenes, isNearLiteral, literalFixPrompt,
+  mergePartialFix, partialFixVerdict, structuralProblems, problemsTargetHook, footageContradictsTopic, FOOTAGE_DEICTIC_RE, hookContradictsFootage, hookFootageIssues, stableProblemScenes, isNearLiteral, literalFixPrompt, SAME_THREAD_RULE,
   keywordEarlyIssues, partialFixPrompt, flowCheckPrompt, flowFixScenes, flowBreaks, scriptForEdit, assertiveHookRule, SIBLING_ANGLE_RULE,
   lostCards, chooseFixedPlan, traceStart, traceRecord, traceMarkParity, traceNeedsParity, finalParityRevert, finalFactGate, writeSiblingPreview, siblingPlanFile, mergeNarrationOnly,
 } from './shorts';
@@ -597,6 +597,14 @@ describe('남는 왜곡은 원문 문장으로(2026-10-15)', () => {
     expect(t).toContain('[바꿀 씬] 2');
     expect(t).toContain('씬2 71자');
     expect(t).toMatch(/조건.*유보.*반드시 남긴다/);
+  });
+  // 2026-10-15 감나무 인스타 — 원문 문장 옮기기가 묘목 확인 편 마지막 씬을 블로그의 품종 결론 문장으로 바꿨다.
+  it('한 줄기 규칙 — 원문 문장 옮기기·부분 수정 모두 대본에 없던 갈래를 끌어오지 말라고 한다', () => {
+    const lit = literalFixPrompt({ scenes: [{ narration: '훅' }, { narration: '둘' }] as never, targets: [2], problems: ['2: x'], source: src, caps: { 2: 60 } });
+    expect(lit).toContain(SAME_THREAD_RULE);
+    expect(lit).toContain('그 씬은 출력하지 마라');
+    const pf = partialFixPrompt({ scenes: [{ narration: '훅' }, { narration: '둘' }] as never, problems: ['항목2: x'], budgets: sceneCharBudgets(212, 2), stage: 'plan', hookEditable: false });
+    expect(pf).toContain(SAME_THREAD_RULE);
   });
   it('mergePartialFix slackChars — 사실 수정은 씬 상한을 넘겨도 받는다', () => {
     const plan = { title: 't', scenes: [{ narration: '훅입니다' }, { narration: '가지 끝을 손으로 구부려 보세요. 휘다가 되돌아오면 뿌리는 살아 있어요.' }] } as never;
