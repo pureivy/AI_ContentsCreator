@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
   briefCopyIssues, judgmentHedgeIssues, repetitionIssues, orphanFragmentIssues, reportSpeakIssues, headingIssues,
   summaryCoherenceIssues, unsupportedClaimTokens, blogVoiceIssues, cleanImageMarkerDesc, imageMarkerIssues,
+  notButIssues, emDashIssues,
 } from './blogVoiceLint';
 import { blogStyleIssues } from './styleLint';
 
@@ -246,5 +247,34 @@ describe('⑧ 이미지 마커 설명 — 실사진 전용 요구(지명·날짜
     // 구도 지시는 장면 설명이다(최근 40편 리플레이 오탐) — "근접 촬영", "가까이 찍은 접사"
     expect(imageMarkerIssues('[IMAGE: 붉게 물이 오르기 시작한 대추 열매가 달린 가지 근접 촬영]\n[IMAGE: 라일락 가지 끝, 마주 붙은 눈 두 개를 가까이 찍은 접사]')).toEqual([]);
     expect(cleanImageMarkerDesc('대추 열매가 달린 가지 근접 촬영')).toBe('대추 열매가 달린 가지 근접 촬영');
+  });
+});
+
+// 2026-10-16 AI 티 실측(네이버 2022년 이전 글 52편 대비) — "X가 아니라 Y" 72% vs 31%, em dash 32% vs 4%. 실제 문장으로 고정.
+describe('⑨ AI 티 — "X가 아니라 Y" 틀·긴 줄표', () => {
+  it('"X가 아니라 Y"는 한 번까지 괜찮고 두 번부터 잡는다(소제목 포함)', () => {
+    const one = '## 묘목 고르기\n\n판단 기준은 키가 아니라 줄기 굵기와 뿌리 양의 비율입니다.\n\n줄기만 길면 겨울에 상합니다.';
+    expect(notButIssues(one)).toEqual([]);
+    const two = `${one}\n\n## 지금 할 일은 자르는 게 아니라 표시해 두기\n\n잎이 붙어 있는 동안 표시합니다.`;
+    const r = notButIssues(two);
+    expect(r).toHaveLength(1);
+    expect(r[0]).toContain('2번');
+    expect(r[0]).toContain('지금 할 일은 자르는 게 아니라');
+  });
+  it("'뿐(만) 아니라'(첨가)는 세지 않는다", () => {
+    expect(notButIssues('잎뿐 아니라 가지도 봅니다. 뿌리뿐만 아니라 흙도 봅니다. 크기가 아니라 굵기입니다.')).toEqual([]);
+  });
+  it('소제목·목록 이름표의 긴 줄표를 잡는다', () => {
+    const md = '## 2. 몇 년생을 사야 하나 — 연차에 따라 달라지는 것\n\n- 경쟁 줄기 — 한 자리에서 둘이 나란히 굵어집니다\n- 처진 가지: 아래로 휘어 땅에 닿습니다';
+    const r = emDashIssues(md);
+    expect(r).toHaveLength(1);
+    expect(r[0]).toContain('2곳');
+    expect(emDashIssues('- 처진 가지: 아래로 휘어 땅에 닿습니다\n\n3~4월에 심습니다.')).toEqual([]);
+  });
+  it('blogVoiceIssues 에 함께 실린다', () => {
+    const md = '## 고르기\n\n기준은 키가 아니라 굵기입니다. 볼 건 나무가 아니라 땅입니다.\n\n- 경쟁 줄기 — 둘이 굵어집니다';
+    const all = blogVoiceIssues(md).join('\n');
+    expect(all).toContain('"X가 아니라 Y" 틀 2번');
+    expect(all).toContain('긴 줄표(—) 1곳');
   });
 });

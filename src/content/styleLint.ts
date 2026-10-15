@@ -5,7 +5,7 @@
  * 검출 결과는 수정 라운드 입력일 뿐 파이프라인을 막지 않는다. 자막·본문 원문에는 손대지 않는다.
  */
 import { naturalKeyword } from './keywordForm';
-import { blogVoiceIssues, bomnidaCount, firstPersonHits, experienceClaimHits, experienceClaimIssue, isStiffQuestion, dice, reportSpeakIssues } from './blogVoiceLint';
+import { blogVoiceIssues, notButIssues, bomnidaCount, firstPersonHits, experienceClaimHits, experienceClaimIssue, isStiffQuestion, dice, reportSpeakIssues } from './blogVoiceLint';
 
 /** 문장 분리(대략) — 종결부호 기준. 한국어 구어 대본 검사용이라 정밀할 필요 없다. */
 function splitSentences(text: string): string[] {
@@ -349,7 +349,8 @@ export function blogStyleIssues(bodyMarkdown: string, keyword?: string, brief?: 
 
   const issues: string[] = [];
   const contrast = (bodyLines.map(plain).join('\n').match(CONTRAST_RE) ?? []).length;
-  if (contrast >= 3) issues.push(`대비문("A가 아니라 B") ${contrast}회 — 2회 이하로`);
+  // "X가 아니라 Y"가 2번 이상이면 ⑨(blogVoiceLint.notButIssues, 2026-10-16 — 한 번까지)가 예시와 함께 잡는다. 같은 지적을 두 번 싣지 않는다.
+  if (contrast >= 3 && !notButIssues(src).length) issues.push(`대비문("A가 아니라 B"/"A보다는 B") ${contrast}회 — 2회 이하로`);
   if (proseSentences.length >= 20) {
     const ratio = proseSentences.filter((s) => /(?:습니다|입니다)[.!?…]*$/.test(s)).length / proseSentences.length;
     // 실코퍼스 209편 최대 59% — 60% 초과는 '지금보다 나빠지면 잡는' 상한 가드다(현행 중앙값 31%).

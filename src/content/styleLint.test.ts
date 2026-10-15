@@ -139,27 +139,35 @@ describe('blogStyleIssues — 블로그 본문 문체 4종(2026-08-27 권고 3)'
   it('ⓐ 대비문 3회 이상을 검출한다', () => {
     const md = [
       '뿌리가 문제가 아니라 자리가 문제입니다.',
-      '굵기가 아니라 잔뿌리를 봅니다.',
-      '물의 양이 아니라 간격이 정합니다.',
+      '굵기보다는 잔뿌리를 봅니다.',
+      '물의 양보다는 간격이 정합니다.',
     ].join('\n');
     const issues = blogStyleIssues(md);
     expect(issues.some((i) => i.includes('대비문'))).toBe(true);
     expect(issues.some((i) => i.includes('3회'))).toBe(true);
   });
 
+  // 2026-10-16 — "X가 아니라 Y"는 ⑨가 2번부터 잡는다(사람 글 31% vs 우리 72%). ⓐ는 '~보다는'이 섞인 3회 이상만.
   it("ⓐ 2회 이하는 통과하고, 조사 없는 비교('원줄기보다 굵어지면')는 대비문으로 세지 않는다", () => {
     const md = [
       '뿌리가 문제가 아니라 자리가 문제입니다.',
-      '굵기가 아니라 잔뿌리를 봅니다.',
+      '전체를 짧게 치기보다는 안쪽 가지를 솎습니다.',
       '가지가 원줄기보다 굵어지면 잘라 냅니다.',
     ].join('\n');
     expect(blogStyleIssues(md)).toEqual([]);
   });
 
+  it('"X가 아니라 Y" 2번은 ⑨가 한 번만 잡는다(ⓐ와 겹치지 않게)', () => {
+    const md = ['뿌리가 문제가 아니라 자리가 문제입니다.', '굵기가 아니라 잔뿌리를 봅니다.', '물의 양이 아니라 간격이 정합니다.'].join('\n');
+    const issues = blogStyleIssues(md);
+    expect(issues.filter((i) => i.includes('아니라')).length).toBe(1);
+    expect(issues.some((i) => i.includes('"X가 아니라 Y" 틀 3번'))).toBe(true);
+  });
+
   it("ⓐ 조사가 붙은 대비('~보다는')는 대비문으로 센다", () => {
     const md = [
       '뿌리가 문제가 아니라 자리가 문제입니다.',
-      '굵기가 아니라 잔뿌리를 봅니다.',
+      '물을 자주 주기보다는 깊게 줍니다.',
       '전체를 짧게 치기보다는 안쪽 가지를 솎습니다.',
     ].join('\n');
     expect(blogStyleIssues(md).some((i) => i.includes('대비문'))).toBe(true);

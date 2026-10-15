@@ -426,6 +426,31 @@ export function imageMarkerIssues(body: string): string[] {
     + bad.slice(0, 2).map((d) => `"${clip(d, 40)}"`).join(', ')];
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ⑨ AI 티(2026-10-16 사장님 요청 — humanizer 공통 항목을 한글로 옮겨 실측). 기준선은 네이버 2022년 이전 글 52편(생성형 AI 이전).
+//    · "X가 아니라 Y" 틀: 우리 블로그 25편 중 72%·천 자당 0.38, 사람 31%·0.12 — 핵심 문장마다 이 틀로 답을 세운다. 한 번은 사람도 쓴다.
+//    · em dash(—): 우리 32%(8편, 거의 소제목·목록 이름표 "경쟁 줄기 — …"), 사람 4%.
+//    · 과장·홍보 수식어·번역투·셋 나열은 사람보다 적어 잡지 않는다(금지어를 늘리면 우회어가 생긴다 — ⑤ 주석).
+// ─────────────────────────────────────────────────────────────────────────────
+/** "X가 아니라 Y" 틀 — '뿐(만) 아니라'(첨가)는 다른 뜻이라 뺀다. */
+const NOT_BUT_RE = /(?<!뿐\s?만?\s?)아니라(?=\s)/;
+export const NOT_BUT_MAX = 1;
+export function notButIssues(body: string): string[] {
+  const lines = mdLines(body).filter((l) => l.kind !== 'other' && l.kind !== 'table' && l.kind !== 'blank');
+  const hits = lines.flatMap((l) => (l.kind === 'heading' ? [l.text] : splitSents(l.text))).filter((s) => NOT_BUT_RE.test(s));
+  if (hits.length <= NOT_BUT_MAX) return [];
+  return [`"X가 아니라 Y" 틀 ${hits.length}번 — 글 전체에서 ${NOT_BUT_MAX}번까지. 가장 중요한 한 곳만 남기고 나머지는 Y를 바로 말하라`
+    + `(예: "기준은 키가 아니라 굵기입니다" → "기준은 줄기 굵기입니다. 키는 덜 중요해요"): ${hits.slice(0, 3).map((s) => `"${clip(s, 40)}"`).join(', ')}`];
+}
+/** 긴 줄표(—, ―) — 소제목·목록 이름표의 "A — B" 꼴. */
+const DASH_RE = /\s[—―]\s?|[—―]/;
+export function emDashIssues(body: string): string[] {
+  const hits = mdLines(body).filter((l) => l.kind !== 'other' && l.kind !== 'table' && DASH_RE.test(l.text)).map((l) => l.text);
+  if (!hits.length) return [];
+  return [`긴 줄표(—) ${hits.length}곳 — 쓰지 마라. 소제목은 한 마디로 줄이고, 목록 이름표는 "경쟁 줄기: ~"나 "경쟁 줄기는 ~"처럼, 문장 안이면 쉼표나 두 문장으로: `
+    + hits.slice(0, 3).map((s) => `"${clip(s, 40)}"`).join(', ')];
+}
+
 /** 블로그 본문 신규 린트 묶음 — styleLint.blogStyleIssues 가 덧붙인다. */
 export function blogVoiceIssues(body: string, opts: { keyword?: string; brief?: string } = {}): string[] {
   const src = String(body ?? '');
@@ -439,5 +464,7 @@ export function blogVoiceIssues(body: string, opts: { keyword?: string; brief?: 
     ...headingIssues(src, opts.keyword),
     ...summaryCoherenceIssues(src),
     ...imageMarkerIssues(src),
+    ...notButIssues(src),
+    ...emDashIssues(src),
   ];
 }
