@@ -210,6 +210,12 @@ export interface Config {
   /** 쇼츠 업로드 때 API 커버 지정(thumbnails.set)을 할지. 기본 켬 — 10-06 '지정 빼기' 시험은 돌기 전에 취소했다:
    *  지정을 안 하는 ok_asis1 은 쇼츠 탭 커버(oardefault)가 늘 비어 중간 장면이 뜬다. */
   readonly youtubeShortsSetThumbnail: boolean;
+  /** 업로드 카테고리(2026-10-15 사장님 결정: 26 노하우/스타일, 종전 22 인물/블로그 고정). YOUTUBE_CATEGORY_ID. */
+  readonly youtubeCategoryId: string;
+  /** 재생목록 자동 정리(2026-10-15) — 작업별·수종별 재생목록에 영상을 넣고, 옛 영상 카테고리도 맞춘다. YT_PLAYLISTS=false 킬스위치. */
+  readonly ytPlaylists: boolean;
+  /** 위 정리가 하루에 쓸 유튜브 쿼터(단위). 하루 한도 10,000 중 업로드(편당 ~1,600) 몫을 남긴다. YT_MAINT_DAILY_UNITS. */
+  readonly ytMaintDailyUnits: number;
   /** 쇼츠 탭 커버를 Studio 에서 자동 지정(옵트인 YT_STUDIO_COVER, ok_asis1 이식 2026-10-06) — `claude -p --chrome` 경유. */
   readonly ytStudioCover: boolean;
   /** Studio 조작에 쓸 Chrome(Claude 확장) deviceId — 채널 소유 계정(biondi.tree)이 로그인된 프로필. */
@@ -553,6 +559,9 @@ export const CONFIG: Config = {
   // 비공개→공개 전환은 쇼츠 커버를 중간 장면으로 만든다(10-05 진단, ok_asis1 대조) — 기본은 공개로 바로 올린다.
   youtubeUploadPublicDirect: envBool('YOUTUBE_UPLOAD_PUBLIC_DIRECT', true),
   youtubeShortsSetThumbnail: envBool('YOUTUBE_SHORTS_SET_THUMBNAIL', true),
+  youtubeCategoryId: env('YOUTUBE_CATEGORY_ID', '26'),
+  ytPlaylists: envBool('YT_PLAYLISTS', true),
+  ytMaintDailyUnits: Math.max(0, envInt('YT_MAINT_DAILY_UNITS', 4000)),
   youtubeShortsResetThumbnail: envBool('YOUTUBE_SHORTS_RESET_THUMBNAIL', false),
   // 쇼츠 탭 커버 자동 지정(2026-10-06 사장님 선택: ok_asis1 방식) — API 로는 그리드 커버가 안 바뀌어 Studio 를 브라우저로 조작.
   ytStudioCover: envBool('YT_STUDIO_COVER', false),

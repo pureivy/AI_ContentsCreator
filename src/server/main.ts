@@ -40,6 +40,7 @@ import { mineClusterForPiece, filterCandidates } from '../orchestrator/clusterMi
 import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law·dart·custom) + mcpServers 노출
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
+import { addUploadedToPlaylists, runYoutubeMaintenance, youtubeItemsFrom, writeMaintLog } from '../tools/youtubePlaylists';
 import { uploadShortsToYoutube, publishWhenReady, verifyPublicCover, coverNeedsAlert, PUBLISH_SAFETY_MIN, fetchMyChannel, channelOfUploads, decideChannelConnect } from '../tools/youtubeUpload';
 import { publishCardNewsToMeta, publishShortsToMeta, realPermalink, listIgMedia, matchOrphanReels, GRAPH } from '../tools/metaPublish';
 import { llmWiki, slugify } from '../wiki/llmwiki';
@@ -1931,6 +1932,8 @@ app.post('/shorts/:id/youtube', async (c) => {
     });
     if (!r.ok) return c.json({ error: r.error }, 502);
     shortsStore().update(id, { youtubeId: r.videoId, youtubeUrl: r.url, youtubeTs: new Date().toISOString() });
+    // 재생목록(2026-10-15) — 공개 업로드면 바로 넣는다. 실패해도 발행과 무관(fail-open), 다음 날 정리 잡이 다시 본다.
+    if (direct && r.videoId) addUploadedToPlaylists(s.brand ?? '', r.videoId, youtubeItemsFrom(shortsStore().list(), s.brand ?? ''), getBrand()?.speciesCatalog);
     maybeArchiveShortsVideo(id); // 릴스도 이미 올라갔으면 여기서 원본 정리
     const ytLabel = (s.title ?? s.topic).slice(0, 30);
     if (r.thumbnailError) console.log(`[발행담당] ${ytLabel.slice(0, 24)} — 썸네일 미적용: ${r.thumbnailError}`);
@@ -4943,6 +4946,17 @@ async function syncPerformance(opts?: { force?: boolean }): Promise<void> {
   }
   } finally { naverProfileBusy = null; }
 }
+// 유튜브 채널 정리(2026-10-15) — 재생목록 채우기 + 옛 영상 카테고리(26 노하우/스타일). 하루 예산(YT_MAINT_DAILY_UNITS)만큼만,
+// 남은 건 다음 날. 첫 정리는 쿼터 때문에 며칠에 걸친다(재생목록 ~210건 + 카테고리 187건 × 50단위).
+async function runYoutubeChannelMaintenance(): Promise<void> {
+  const slug = activeBrandSlug();
+  if (!CONFIG.ytPlaylists || !slug) return;
+  try {
+    const r = await runYoutubeMaintenance({ slug, items: youtubeItemsFrom(shortsStore().list(), slug), catalog: getBrand()?.speciesCatalog, log: (m) => console.log('[유튜브정리]', m) });
+    writeMaintLog(slug, r);
+    console.log(`[유튜브정리] 재생목록 추가 ${r.added}건 · 카테고리 변경 ${r.recategorized}건 · 남음 ${r.pendingAdds}+${r.pendingCategory}건${r.stoppedBy ? ` (${r.stoppedBy === 'quota' ? '쿼터 소진' : '오늘 예산 소진'})` : ''}${r.errors.length ? ` · 오류 ${r.errors.length}` : ''}`);
+  } catch (e) { console.log('[유튜브정리] 실패(무해) —', e instanceof Error ? e.message : String(e)); }
+}
 const stopPerfSync = startDaily({
   time: CONFIG.performanceSyncTime,
   key: 'perf-sync',
@@ -4953,7 +4967,7 @@ const stopPerfSync = startDaily({
   // 설정 비어 있음 + 스냅샷 07-31 에서 정지). 브리핑 설정 여부와 팔로워 추적은 서로 묶일 이유가 없다.
   // 조회수 감사(2026-08-20) 일일 배선 — 리서치 판정 수확 + 자동완성 트렌드 스냅샷(둘 다 fail-open, 주제 두뇌가 소비).
   // 검색 수요 스냅샷(2026-08-26)도 여기 합류 — 시드 키워드의 절대 검색량·시즌 지수(하루 ~6콜, 킬스위치 off 면 0콜).
-  run: () => { void maintainIgTokens().catch(() => {}); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void syncShortsClipPerformance(); void recordFollowersSnapshot().catch(() => {}); void recordNaverBlogKpis(activeBrandSlug() || '').catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void refreshDemandSnapshot().catch(() => {}); void refreshYtNicheSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); }, // 전부 순수 API — 프로필 락 무관. 네이버는 아래 새벽 잡으로 분리(2026-08-31).
+  run: () => { void maintainIgTokens().catch(() => {}); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void syncShortsClipPerformance(); void recordFollowersSnapshot().catch(() => {}); void recordNaverBlogKpis(activeBrandSlug() || '').catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void refreshDemandSnapshot().catch(() => {}); void refreshYtNicheSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); void runYoutubeChannelMaintenance(); }, // 전부 순수 API — 프로필 락 무관. 네이버는 아래 새벽 잡으로 분리(2026-08-31).
   log: (m) => console.log('[perf-sync]', m),
 });
 if (CONFIG.performanceSyncTime) {

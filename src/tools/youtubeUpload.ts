@@ -9,6 +9,7 @@
  */
 import fs from 'node:fs';
 import { getSecret, getYoutubeAccount } from '../secrets/store';
+import { CONFIG } from '../config';
 
 export interface YtUploadResult { ok: boolean; videoId?: string; url?: string; error?: string; thumbnailError?: string }
 
@@ -23,7 +24,7 @@ export function buildVideoMeta(title: string, description: string, hashtags: str
   const desc = clean([description.trim(), linkLine, tagLine].filter(Boolean).join('\n\n')).slice(0, 5000);
   const tags = hashtags.map((h) => clean(h.replace(/^#/, '')).trim().slice(0, 30)).filter(Boolean).slice(0, 15);
   return {
-    snippet: { title: t, description: desc, tags, categoryId: '22' },
+    snippet: { title: t, description: desc, tags, categoryId: CONFIG.youtubeCategoryId },
     // containsSyntheticMedia: 스튜디오의 'AI 사용(변형·합성 콘텐츠) 공개 — 예' 체크와 동일.
     // 쇼츠는 전량 AI 생성(스크립트·TTS 음성·AI 배경/클립)이라 상시 true — 유튜브 공개 의무 준수.
     // 예약 공개(publishAt)는 비공개일 때만 유효하다 — 공개 업로드에 실으면 유튜브가 거절한다.

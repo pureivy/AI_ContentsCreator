@@ -21,7 +21,7 @@ describe('buildVideoMeta — 캡·해시태그 합성·private·AI 공개 고정
     expect(m.snippet.title).toBe('제목 b테스트/b');
     expect(m.snippet.description).toBe('설명\n\n#shorts #화분');
     expect(m.snippet.tags).toEqual(['shorts', '화분']);
-    expect(m.snippet.categoryId).toBe('22');
+    expect(m.snippet.categoryId).toBe('26'); // 2026-10-15 노하우/스타일(YOUTUBE_CATEGORY_ID)
     expect(m.status.privacyStatus).toBe('private');
     expect(m.status.selfDeclaredMadeForKids).toBe(false);
     // AI 사용 공개('예') — 쇼츠는 전량 AI 생성(스크립트·TTS·배경)이라 상시 선언(유튜브 정책 의무).
