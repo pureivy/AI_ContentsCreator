@@ -88,7 +88,7 @@ function solarTermIsFalsePositive(term: string, before: string, after: string): 
 }
 
 /** 숫자+단위 — 긴 단위를 먼저 둬야 '2주일'이 '2주'로, '50ml'이 '50m'로 잘리지 않는다. */
-const UNITS = ['주일', '개월', '리터', 'cm', 'kg', 'ml', 'm', 'g', '일', '주', '년', '회', '번', '배', '도', '℃', '원', '%'] as const;
+const UNITS = ['주일', '개월', '리터', 'cm', 'mm', 'kg', 'ml', 'm', 'g', '일', '주', '년', '회', '번', '배', '도', '℃', '원', '%'] as const;
 const UNIT_ALT = UNITS.join('|');
 const NUM = String.raw`\d+(?:[.,]\d+)?`;
 /**
@@ -115,11 +115,18 @@ const normUnit = (u: string): string => (u === '℃' ? '도' : u);
  */
 const THOUSANDS_RE = /(\d),(?=\d{3}(?:\D|$))/g;
 /**
+ * 한글 단위 → 기호(2026-10-15). 원문 "3~4미터"·"7미터 이상"을 못 읽어 숏폼 "3~4m"가 '원문에 없는 4m'로 걸렸다
+ * (short_3453ecc1fd 소나무). 숫자 바로 뒤에서만 바꾼다 — '미터기' 같은 낱말은 건드리지 않게 긴 단위부터.
+ */
+const KO_UNITS: Record<string, string> = { 센티미터: 'cm', 센티: 'cm', 밀리미터: 'mm', 밀리리터: 'ml', 미터: 'm', 킬로그램: 'kg', 그램: 'g' };
+const KO_UNIT_RE = new RegExp(`(\\d)(${SP})(센티미터|센티|밀리미터|밀리리터|미터|킬로그램|그램)`, 'g');
+/**
  * 원문·파생에 **같은** 정규화를 먹인다 — 한쪽만 바꾸면 없던 불일치가 생긴다.
  * 천 단위 쉼표 제거 + 고유어 월 → 숫자월(그러면 아래 월 정규식 하나로 둘 다 잡힌다).
  */
 function normalizeForMatch(s: string): string {
   return s.replace(THOUSANDS_RE, '$1')
+    .replace(KO_UNIT_RE, (_w, n: string, sp: string, u: string) => `${n}${sp}${KO_UNITS[u] ?? u}`)
     .replace(NATIVE_MONTH_RE, (w) => `${NATIVE_MONTHS.find(([k]) => k === w)![1]}월`);
 }
 

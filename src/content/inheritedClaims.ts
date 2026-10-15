@@ -23,6 +23,7 @@
  *
  * 킬스위치: INHERITED_CLAIMS=off.
  */
+import { CONFIG } from '../config';
 
 /** 승계 판정 결과 — 어느 원문 주장이 어느 파생 필드에 재등장했는가. */
 export interface InheritedClaim {
@@ -85,10 +86,21 @@ export function inheritedClaims(
   flagged: string[],
   fields: Array<{ field: string; text: string }>,
   limit = 5,
+  /** 원문 본문(2026-10-15) — 주면 걸린 문장을 뺀 나머지 문장들(writerSource)과도 견준다. 겹친 토큰을 **전부** 품은
+   *  남은 원문 문장이 하나라도 있으면 그 문장에서 온 것으로 보고 승계로 치지 않는다(필드 전체가 아니라 겹친 토큰만 본다 —
+   *  여러 문장짜리 설명란에서 다른 문장 덕에 베낀 문장이 묻히지 않게).
+   *  실측(무화과): 대본이 근거 확인된 "겨울 최저 극기온 영하 8도 이상인 곳"을 옮겼는데 '영하·겨울·노지'가 겹쳐
+   *  근거 미확인 "영하 8도 아래가 해마다 몇 번씩…"의 재등장으로 잡혔다. 16회 재기획 실험에서 종전 25건 중 진짜 베낌 1건.
+   *  이미지 표시 줄([IMAGE: …])은 주장이 아니라 설명 근거로 치지 않는다.
+   *  킬스위치: INHERITED_CLEAN_SOURCE=off(종전 판정). */
+  sourceBody?: string,
 ): InheritedClaim[] {
   if (process.env.INHERITED_CLAIMS === 'off') return [];
   const out: InheritedClaim[] = [];
   const claimTokens = flagged.map((c) => ({ claim: c, tokens: salientTokens(c) }));
+  const clean = sourceBody && process.env.INHERITED_CLEAN_SOURCE !== 'off'
+    ? writerSource(sourceBody, flagged, true).body.split(/\n+/).filter((l) => !/^\s*\[[A-Z가-힣 ]+:/.test(l)).flatMap((l) => l.split(SENT_SPLIT)).map(salientTokens).filter((t) => t.size >= MIN_SHARED)
+    : [];
   for (const f of fields) {
     if (!f.text?.trim()) continue;
     const ft = salientTokens(f.text);
@@ -96,7 +108,7 @@ export function inheritedClaims(
       // 원문 주장 자체의 토큰이 빈약하면(예: "그렇습니다") 어떤 텍스트와도 우연히 엮인다 — 건너뛴다.
       if (c.tokens.size < MIN_SHARED) continue;
       const hit = shared(c.tokens, ft);
-      if (hit.length >= MIN_SHARED) {
+      if (hit.length >= MIN_SHARED && !clean.some((t) => hit.every((h) => t.has(h)))) {
         out.push({ claim: c.claim, field: f.field, tokens: hit });
         if (out.length >= limit) return out;
       }
@@ -109,4 +121,45 @@ export function inheritedClaims(
 export function formatInherited(i: InheritedClaim): string {
   const claim = i.claim.length > 60 ? `${i.claim.slice(0, 60)}…` : i.claim;
   return `${i.field}: 원문에서 근거 미확인으로 분류된 주장이 다시 나온다 — "${claim}" (${i.tokens.slice(0, 3).join('·')})`;
+}
+
+/**
+ * 작가용 원문(2026-10-15 사장님 결정 — "경고를 줄이는 게 아니라 경고가 될 내용을 안 넣는 게 중요") — 원문 게이트가 건
+ * 문장(unsupported + unverified)을 블로그 본문에서 지운 판본. 숏폼·카드뉴스 작가 입력에만 쓴다(발행물이 아니다).
+ *
+ * 왜: 금지 목록만 주고 본문에는 그대로 두면 작가가 옮겨 쓴다 — 10-08 이후 숏폼 25편 중 12편이 승계 표시(33줄)를 달았고,
+ * 무화과 두 편은 근거 미확인인 "영하 8도 아래가 해마다…"를 대본의 중심으로 삼았다. 재료를 빼면 작가는 다른 축으로 짠다.
+ * 판정(원문 정합·시기수치·승계)은 계속 원문 전체로 본다 — 작가가 같은 말을 다른 경로로 써도 잡히게.
+ *
+ * 찾기: 걸린 주장을 문장으로 쪼개(두 문장짜리 주장이 흔하다) 공백·굵게 표시를 무시하고, 그 조각을 품은 본문 문장을
+ * 통째로 뺀다(주장이 문장 뒷부분만인 경우 — "…까닭은, 줄기가 휘는 쪽으로…"). 소제목 줄은 지우지 않는다. 표의 줄은
+ * 행 전체를 뺀다. 10-08~14 원문 14편 실측: 문장 단위 일치만으로는 51개 중 39개, 이 방식으로 전부.
+ * 킬스위치: STRIP_FLAGGED_SOURCE=false.
+ */
+const SENT_SPLIT = /(?<=[.!?。](?:\*\*)?)\s+/; // 굵은 머리말 "**…끊습니다.** 배나무는…" 도 두 문장
+const squash = (t: string): string => t.normalize('NFC').replace(/\*\*|__/g, '').replace(/\s+/g, '');
+
+export function writerSource(body: string, flagged: readonly string[], on: boolean = CONFIG.stripFlaggedSource): { body: string; removed: number } {
+  if (!on || !body || !flagged.length) return { body, removed: 0 };
+  const parts = flagged.flatMap((c) => c.split(SENT_SPLIT)).map(squash).filter((p) => p.length >= 10);
+  if (!parts.length) return { body, removed: 0 };
+  const hit = (sentence: string): boolean => {
+    const q = squash(sentence);
+    return q.length > 0 && parts.some((p) => q.includes(p) || (q.length >= 10 && p.includes(q)));
+  };
+  let removed = 0;
+  const out: string[] = [];
+  for (const line of body.split('\n')) {
+    if (/^\s*#{1,6}\s/.test(line)) { out.push(line); continue; }
+    if (/^\s*\|/.test(line)) { if (hit(line.replace(/\|/g, ' '))) { removed++; continue; } out.push(line); continue; }
+    const m = /^(\s*(?:>+|[-*+]|\d+[.)])?\s*)([\s\S]*)$/.exec(line)!;
+    const sents = m[2]!.split(SENT_SPLIT);
+    const keep = sents.filter((x) => !hit(x));
+    if (keep.length === sents.length) { out.push(line); continue; }
+    removed += sents.length - keep.length;
+    let text = keep.join(' ').trim();
+    if ((text.match(/\*\*/g) ?? []).length % 2) text = text.replace(/\*\*/g, ''); // 굵게가 문장 둘에 걸쳐 있다 한쪽만 빠진 경우
+    if (squash(text)) out.push(m[1] + text);
+  }
+  return { body: out.join('\n').replace(/\n{3,}/g, '\n\n'), removed };
 }

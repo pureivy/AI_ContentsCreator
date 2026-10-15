@@ -41,6 +41,9 @@ import { readabilityPrompt, acceptReadabilityFixes, applyReadabilityFixes } from
 import { resolveStructureSeed, inheritStructureSeed, structureBlock, STRUCTURE_KEEP_BLOCK, type TitleForm } from '../content/structureSeed';
 import { factGateBlog, buildEvidence, runFactGateWithRepair, resolveResidualHold, repairSentences, applySentenceRepairs, extractFactCard, FACT_CARD_HEADER, mergeSuppliedFacts, jargonRulesForEvidence } from '../content/factGate';
 import type { FactGateResult } from '../content/factGate';
+import { resolveUnverifiedClaims } from '../content/claimVerify';
+import { speciesInText } from '../content/speciesRotation';
+import { findSpeciesLoose } from '../content/species';
 import { readInjected, readVerified } from '../agents/workspace';
 import { llmWiki } from '../wiki/llmwiki';
 import type { RunOptions, RunOutcome } from './run';
@@ -1167,6 +1170,17 @@ async function packageDesignFinalize(a: {
           const x = await resolveResidualHold({ gate, targeted }, finalDeliverable, gateResult);
           finalDeliverable = x.body; gateResult = x.result;
           if (x.note) { const m = `보내기 전 추가 수정 — ${x.note}`; console.log(`[사실게이트] ${m}`); bus.emit('log', { message: m }); }
+        }
+        // 근거 미확인 사전 확인(2026-10-15 사장님 선택) — 남은 무근거·참고 문장을 지식백과·농사로·공공기관 문서와 대조해
+        // 확인되면 출처를 남기고 목록에서 빼고, 확인 못 하면 그 문장만 유보어로 낮춘다(지우기는 공식 자료와 어긋난 문장만). 파생 숏폼·카드는 이 목록을
+        // '원문 근거 미확인'으로 승계하므로(sourceFlaggedClaims) 여기서 줄어야 파생 경고도 준다.
+        if (CONFIG.claimVerify && gateResult.status !== 'error' && !signal?.aborted) {
+          const species = speciesInText(topic, getBrand()?.speciesCatalog) ?? findSpeciesLoose(topic)?.name ?? null;
+          const v = await resolveUnverifiedClaims({ body: finalDeliverable, result: gateResult, species, model: assign.standard, signal }).catch(() => null);
+          if (v) {
+            finalDeliverable = v.body; gateResult = v.result;
+            console.log(`[사실게이트] ${v.note}`); bus.emit('log', { message: v.note });
+          }
         }
       } catch (e) {
         gateResult = { status: 'error', claims: [], unsupported: [], contradicted: [], unverified: [], repaired: false, error: e instanceof Error ? e.message : String(e), checkedTs: new Date().toISOString() };

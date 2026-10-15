@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyShortsRevision, settleNextEpisode, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt, diversifyTitle, titleShape, normalizeLatinName, parseSceneMust } from './shorts';
+import { applyShortsRevision, settleNextEpisode, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt, isYoungHero, diversifyTitle, titleShape, normalizeLatinName, parseSceneMust } from './shorts';
 import { ShortsStore } from '../content/shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
@@ -604,5 +604,38 @@ describe('원문 묘사 — 디렉터 must 정리와 이미지 프롬프트 블�
     expect(t).toContain('[원문 묘사 — 이 장면에 반드시 이렇게 보여야 함] 아래 끝이 사선으로 잘린 삽수');
     expect(t).toContain('[이 장면에 나오면 안 됨 — 원문과 어긋남] 잎 달린 가지');
     expect(buildSceneImagePrompt({ style: 's', scene: 'x', index: 1, total: 5, seed: 'x' })).not.toContain('[원문 묘사');
+  });
+});
+
+describe('주인공 나무 — 씬 이미지 지시(2026-10-15 사장님 지적)', () => {
+  const base = { style: '자연광', scene: '가지를 구부리는 손', index: 2, total: 5, seed: 's', subjectLatin: 'Juglans regia', subject: '호두나무 — 깃꼴겹잎', speciesRef: true };
+  const hero = '올봄 심은 1년생 묘목, 키 약 1m, 줄기는 엄지 굵기, 잎이 지는 중';
+  it('주인공 씬에는 같은 나무 한 줄을 싣고, 참조 사진은 잎·수피 모양에만 쓰게 한다', () => {
+    const p = buildSceneImagePrompt({ ...base, hero });
+    expect(p).toContain(`[주인공 나무 — 이 영상의 장면들은 같은 한 그루] ${hero}`);
+    expect(p).toMatch(/사진 속 나무의 크기·줄기 굵기·수형은 따르지 마라/);
+    expect(p).toMatch(/\[나무 크기\] 위 주인공 나무/);
+    expect(p).not.toContain('첫 번째 첨부');
+  });
+  it('이어 그린 씬은 첫 번째 첨부가 주인공 그림이라고 밝힌다', () => {
+    const p = buildSceneImagePrompt({ ...base, hero, heroChained: true });
+    expect(p).toContain('[첫 번째 첨부 사진 — 주인공 나무]');
+    expect(p).toContain('(두 번째부터)');
+  });
+  it('주인공이 없으면 종전 문구 그대로', () => {
+    const p = buildSceneImagePrompt(base);
+    expect(p).not.toContain('주인공');
+    expect(p).toContain('[첨부 참조 사진 — 이 종의 실물] 첨부한 사진은 바로 이 종을 찍은 실물이다');
+  });
+  it('isYoungHero — 묘목·1년생·올봄 심은 나무는 어리다, 성목은 아니다', () => {
+    expect(isYoungHero(hero)).toBe(true);
+    expect(isYoungHero('2년생 접목묘, 키 1.5m')).toBe(true);
+    expect(isYoungHero('심은 지 15년 된 성목, 줄기 지름 30cm')).toBe(false);
+    expect(isYoungHero('13년생 성목, 키 6m')).toBe(false);
+  });
+  it('성목 주인공(가지치기 전후)은 참조 사진을 수형 근거로 그대로 쓴다 — 크기 제한 문구는 어린 나무만', () => {
+    const p = buildSceneImagePrompt({ ...base, hero: '심은 지 12년 된 성목 배나무, 키 4m' });
+    expect(p).toContain('[주인공 나무');
+    expect(p).not.toMatch(/사진 속 나무의 크기·줄기 굵기·수형은 따르지 마라/);
   });
 });

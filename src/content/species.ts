@@ -128,8 +128,10 @@ export function findSpeciesLoose(text: string, list = loadSpecies()): Species | 
  * 수종 → 이미지 앵커 문구(순수). buildSceneImagePrompt 의 subject 자리에 그대로 들어간다.
  * 형태 정보가 많을수록 길어지므로 화면에 실제로 보이는 것 위주로 추린다.
  */
-export function speciesAnchor(sp: Species): string {
-  const parts = [sp.type, sp.leaf, sp.form].filter(Boolean);
+export function speciesAnchor(sp: Species, opts: { young?: boolean } = {}): string {
+  // 어린 나무 편(2026-10-15 사장님 지적) — 수형(form)은 성목 설명이다("굵은 줄기에서 가지가 넓게 퍼지는 큰 교목").
+  // 1년생 묘목 활착 편의 모든 씬에 이 줄이 들어가 씬3~5 가 아름드리 성목으로 그려졌다. 어린 주인공이면 수형을 뺀다.
+  const parts = [sp.type, sp.leaf, opts.young ? '' : sp.form].filter(Boolean);
   return `${sp.name} — ${parts.join(', ')}`.slice(0, 200);
 }
 
@@ -298,4 +300,9 @@ export function appendSpeciesAlias(
     resetSpeciesCache();
     return true;
   } catch { return false; }
+}
+
+/** 주인공 나무가 어린 나무인가(순수) — 그러면 수종 수형(성목 설명)을 빼고 참조 사진은 잎·수피 모양에만 쓴다. */
+export function isYoungHero(hero: string): boolean {
+  return /묘목|유목|어린|(?<!\d)[1-3]\s*년생|한\s*해|두\s*해|삽수|삽목|접목묘|실생|올봄\s*심은|올해\s*심은|새로\s*심은/.test(hero);
 }

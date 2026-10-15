@@ -106,6 +106,14 @@ describe('timingParityIssues — 원문 대조', () => {
     expect(timingParityIssues(src, [{ field: '본문', text: '25cm 깊이' }])).toEqual([]);
     expect(timingParityIssues(src, [{ field: '본문', text: '40cm 깊이' }])[0]?.token).toBe('40cm');
   });
+  it('원문 한글 단위(미터·센티)와 파생 기호(m·cm)는 같은 값이다 — 2026-10-15 소나무 숏폼 오탐', () => {
+    const pine = '심을 자리는 3~4미터를 비워 두세요. 7미터 이상이면 두 그루를 띄워 심어도 됩니다. 구덩이는 50센티 깊이.';
+    expect(timingParityIssues(pine, [{ field: '씬5 자막', text: '3~4m 한 그루, 7m 두 그루' }])).toEqual([]);
+    expect(timingParityIssues(pine, [{ field: '씬3 자막', text: '50cm 깊이' }])).toEqual([]);
+    expect(timingParityIssues(pine, [{ field: '씬5 자막', text: '9m 두 그루' }])[0]?.token).toBe('9m');
+    // 'mm' 가 'm' 로 잘리지 않는다
+    expect(timingParityIssues('간격 5m', [{ field: '자막', text: '5mm 깊이' }])[0]?.token).toBe('5mm');
+  });
   it('여러 파생 필드를 각각 대조하고 같은 field·token 중복은 접는다', () => {
     const issues = timingParityIssues(src, [
       { field: '씬1', text: '8월입니다. 8월이요.' },

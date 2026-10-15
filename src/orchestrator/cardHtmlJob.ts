@@ -9,21 +9,36 @@ import { CONFIG } from '../config';
 import { pieceStore } from '../content/pieces';
 import { listMedia, shootYmOf } from '../content/mediaLibrary';
 import { getBrand } from '../content/brand';
-import { findSpecies, speciesAnchor } from '../content/species';
+import { findSpecies, speciesAnchor, isYoungHero } from '../content/species';
 import { timingParityIssues } from '../content/timingParity';
-import { inheritedClaims } from '../content/inheritedClaims';
+import { inheritedClaims, writerSource } from '../content/inheritedClaims';
 import { parityIssues } from './standaloneQa';
 import { generateImagesForDraft } from '../tools/blog_skills';
+import { cardRealFrames } from './cardFrames';
 import { qaSceneImages } from './shortsSceneQa';
 import { stdModel } from './visionCommon';
 import { microJSON } from './agent';
+
+/** 작가용 원문(근거 미확인 문장을 뺀 판본, 2026-10-15) — 판형 생성 때 쓰고 수정 요청이 다시 읽는다. */
+const WRITER_SOURCE_FILE = 'source.writer.md';
 import {
   insideDir, normalizeLayout, layoutFields, dropFields, parityKeys, layoutPrompt, toRenderSpec, genPhotoPrompt, renderCardSpec,
-  CARD_FONT_DIR, CARD_MAX_GEN, type BlogPhoto, type CardLayout, type LayoutSlide, type PhotoRef,
+  CARD_FONT_DIR, CARD_MAX_GEN, CARD_EXTRA_FRAMES, dedupeBlogPhotos, type BlogPhoto, type CardLayout, type LayoutSlide, type PhotoRef,
 } from './cardLayout';
 
 type Say = (m: string) => void;
 type PlanLike = { title: string; slides: Array<{ headline: string; body: string }> };
+
+/** 블로그 실촬영 사진(보관소 영상 프레임) 경로 — 카드 표지에 나가는 사진. 없으면 undefined(2026-10-15, 표지 문구 대조용). */
+export function realBlogPhoto(pieceId: string | undefined): string | undefined {
+  const runId = pieceId ? pieceStore().get(pieceId)?.runId : undefined;
+  if (!runId) return undefined;
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(CONFIG.sessionsDir, runId, 'image_manifest.json'), 'utf-8')) as { images?: Array<{ file_path?: string; source?: string }> };
+    const fp = m.images?.find((im) => im?.source === 'archive_frame' && im.file_path && fs.existsSync(im.file_path))?.file_path;
+    return fp ? String(fp) : undefined;
+  } catch { return undefined; }
+}
 
 /** 블로그 사진 후보(세션 image_manifest, 도표 제외) — 원본은 정리 대상이라 카드 폴더 photos/ 로 복사해 둔다. */
 export function blogPhotosFor(pieceId: string | undefined, cardDir: string): BlogPhoto[] {
@@ -72,7 +87,7 @@ async function factCheckFields(layout: CardLayout, source: string, flagged: read
     for (const k of parityKeys(parity, fields)) drop.add(k);
     const asKey = fields.map((f) => ({ field: f.key, text: f.text }));
     for (const t of timingParityIssues(source, asKey)) drop.add(t.field);
-    if (flagged.length) for (const c of inheritedClaims([...flagged], asKey)) drop.add(c.field);
+    if (flagged.length) for (const c of inheritedClaims([...flagged], asKey, 5, source)) drop.add(c.field);
     if (!drop.size) return l;
     say(`카드 칸 사실 대조 — ${drop.size}칸 지움(${[...parity].slice(0, 1).join('').slice(0, 50)})`);
     l = dropFields(l, drop);
@@ -155,14 +170,27 @@ export async function designHtmlCards(o: {
   const source = o.sourceBody ?? '';
   fs.writeFileSync(path.join(dir, 'source.md'), source, 'utf-8'); // 수정 요청이 같은 원문으로 칸을 검증한다
   const blog = blogPhotosFor(o.sourcePieceId, dir);
+  // 추가 실촬영 컷(2026-10-15 사장님 제안) — 같은 수종 보관소 영상의 다른 순간. 같은 사진 반복·생성 사진(나무가 달라짐)을 줄인다.
+  if (CARD_EXTRA_FRAMES > 0) {
+    const real0 = blog.find((b) => b.real);
+    const extra = await cardRealFrames({
+      topic: o.topic, ...(o.keyword ? { keyword: o.keyword } : {}), cardDir: dir, count: CARD_EXTRA_FRAMES,
+      avoid: real0 ? [real0.path] : [], ...(o.signal ? { signal: o.signal } : {}), log: say,
+    });
+    for (const f of extra) blog.push({ n: blog.length + 1, path: f.path, alt: f.alt, real: true });
+  }
   say(`카드 판형 — 블로그 사진 ${blog.length}장(실촬영 ${blog.filter((b) => b.real).length}) · 새 사진 상한 ${CARD_MAX_GEN}장`);
 
   const sys = '당신은 인스타그램 카드뉴스 디자이너입니다. 요청된 JSON 스키마만 출력합니다.';
-  const user = layoutPrompt({ plan, source, blog, maxGen: CARD_MAX_GEN, flagged: o.sourceFlagged ?? [] });
+  // 칸 글은 근거 미확인 문장을 뺀 원문에서만 뽑는다(2026-10-15) — 칸 검사(normalizeLayout)도 같은 판본으로 봐서 그 문장을 옮긴 칸은 버려진다.
+  // 사실 대조(factCheckFields)와 source.md(수정 요청·재검증)는 원문 전체.
+  const writerSrc = writerSource(source, o.sourceFlagged ?? []).body;
+  try { fs.writeFileSync(path.join(dir, WRITER_SOURCE_FILE), writerSrc, 'utf-8'); } catch { /* 없으면 수정 요청이 source.md 를 쓴다 */ }
+  const user = layoutPrompt({ plan, source: writerSrc, blog, maxGen: CARD_MAX_GEN, flagged: o.sourceFlagged ?? [] });
   let raw = await o.callJSON<unknown>(sys, user, 3000);
   if (!raw) raw = await o.callJSON<unknown>(sys, `${user}\n\n반드시 완결된 JSON 하나만 출력하라.`, 3000);
   try { fs.writeFileSync(path.join(dir, 'layout-raw.json'), JSON.stringify(raw, null, 2), 'utf-8'); } catch { /* 진단용 */ }
-  let layout = normalizeLayout(raw, plan, source, blog.length);
+  let layout = normalizeLayout(raw, plan, writerSrc, blog.length);
   say(`카드 판형 — ${layout.slides.map((s) => s.kind).join('·')}`);
   layout = await factCheckFields(layout, source, o.sourceFlagged ?? [], say, o.signal);
 
@@ -174,18 +202,24 @@ export async function designHtmlCards(o: {
   const coverNote = s0.photo?.use === 'blog' && s0.photo.n === real?.n ? coverNoteFor(real, brandDisplay().name) : undefined;
 
   // 새 사진 — 글자 없는 실사 + 원문 묘사 검수(숏폼 장면 검수와 같은 함수, 2026-10-12 사장님 "카드뉴스에도 원문 묘사 대조 검수").
+  const deduped = dedupeBlogPhotos(layout, CARD_MAX_GEN);
+  if (deduped) say(`카드 사진 반복 — 이미 쓴 블로그 사진 ${deduped}자리를 새 사진으로`);
   const gen = collectGen(layout, CARD_MAX_GEN);
   const genPath = new Map<Extract<PhotoRef, { use: 'gen' }>, string>();
   if (gen.length) {
     const known = findSpecies(`${o.keyword ?? ''} ${plan.title}`);
-    const subject = known ? speciesAnchor(known) : undefined;
-    const prompts = gen.map((g) => genPhotoPrompt(g.ref.scene, g.ref.must, subject));
+    // 어린 나무 주제(활착·묘목·삽목)면 수종 수형(성목 설명 "큰 교목")을 뺀다(2026-10-15, 숏폼 주인공 나무와 같은 규칙).
+    const young = isYoungHero(`${o.keyword ?? ''} ${plan.title}`) || /활착/.test(`${o.keyword ?? ''} ${plan.title}`);
+    const subject = known ? speciesAnchor(known, { young }) : undefined;
+    // 같은 세트 사진을 참조로(실촬영 먼저, 최대 3장) — 새 사진이 블로그 사진과 다른 나무로 그려지지 않게.
+    const setRefs = CONFIG.shortsHeroTree ? [...blog].sort((a, b) => Number(b.real) - Number(a.real)).map((b) => b.path).filter((p) => fs.existsSync(p)).slice(0, 3) : [];
+    const prompts = gen.map((g) => genPhotoPrompt(g.ref.scene, g.ref.must, subject, { setRefs: setRefs.length > 0, young }));
     const draftPath = path.join(dir, 'photos-gen-draft.json');
     const manPath = path.join(dir, 'photos-gen-manifest.json');
     fs.writeFileSync(draftPath, JSON.stringify({ imageSlots: gen.map((g, k) => ({ alt: `slide ${g.slide + 1} photo ${k + 1}`, prompt: prompts[k] })) }, null, 2), 'utf-8');
     say(`카드 사진 생성 — ${gen.length}장(글자 없는 실사)`);
     const r = await generateImagesForDraft(draftPath, path.join(dir, 'photos-gen'), manPath,
-      { imageStyle: 'photorealistic', limit: gen.length, size: '1024x1536', timeoutMs: 150_000 * gen.length }, o.signal);
+      { imageStyle: 'photorealistic', limit: gen.length, size: '1024x1536', timeoutMs: 150_000 * gen.length, ...(setRefs.length ? { refImages: setRefs } : {}) }, o.signal);
     let imgs: Array<string | null> = gen.map(() => null);
     try {
       const man = JSON.parse(fs.readFileSync(manPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string } | null> };
@@ -194,6 +228,7 @@ export async function designHtmlCards(o: {
     if (imgs.some(Boolean)) {
       const qa = await qaSceneImages({
         dir, images: imgs, scenePrompts: prompts, preset: 'photorealistic', signal: o.signal,
+        ...(setRefs.length ? { refImages: setRefs } : {}), // 다시 그릴 때도 같은 세트 사진을 참조로
         ...(known ? { subject, subjectLatin: known.latin } : {}),
         sceneHints: gen.map((g) => plan.slides[g.slide]?.headline ?? ''),
         sceneMust: gen.map((g) => g.ref.must),
@@ -263,6 +298,9 @@ export async function reviseHtmlCard(dir: string, feedback: string, say: Say, si
   const plan = JSON.parse(fs.readFileSync(path.join(dir, 'plan.json'), 'utf-8')) as PlanLike;
   let source = '';
   try { source = fs.readFileSync(path.join(dir, 'source.md'), 'utf-8'); } catch { /* 원문 없는 카드 — 칸 검증 생략 */ }
+  // 칸 글을 뽑을 원문은 근거 미확인 문장을 뺀 판본(2026-10-15) — 수정 요청이 그 문장을 칸으로 되살리지 않게. 옛 카드는 source.md.
+  const fullSource = source; // 사실 대조는 원문 전체
+  try { source = fs.readFileSync(path.join(dir, WRITER_SOURCE_FILE), 'utf-8') || source; } catch { /* 옛 카드 */ }
   const view = saved.slides.map((s, i) => ({ index: i + 1, ...s, photo: s.photo ? '(사진)' : undefined, items: s.items?.map((it) => ({ ...it, photo: it.photo ? '(사진)' : undefined })), photos: s.photos?.map((p) => ({ label: p.label })) }));
   const j = await microJSON<{ slides?: Array<Record<string, unknown> & { index?: unknown }>; photo_regen?: Array<{ index?: unknown; scene?: unknown; must_show?: unknown; must_not?: unknown }> }>(
     stdModel(), '당신은 카드뉴스 편집자입니다. 요청된 JSON 스키마만 출력합니다.',
@@ -323,7 +361,7 @@ export async function reviseHtmlCard(dir: string, feedback: string, say: Say, si
   if (!changed.size) return null;
   let layout = normalizeLayout({ series: saved.series, slides: rawSlides }, plan, source, 0, dir);
   // normalizeLayout 은 표지·마무리 판을 고정한다 — 기존 판(kind)이 다른 장은 저장본 kind 를 따른다(같은 판으로만 수정).
-  layout = await factCheckFields(layout, source, [], say, signal);
+  layout = await factCheckFields(layout, fullSource, [], say, signal);
   const count = await renderLayout(dir, layout, saved.coverNote, say, signal);
   if (!count) return null;
   fs.writeFileSync(path.join(dir, 'layout.json'), JSON.stringify({ ...layout, coverNote: saved.coverNote }, null, 2), 'utf-8');

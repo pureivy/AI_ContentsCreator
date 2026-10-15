@@ -5,7 +5,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   fitSceneCount, sceneCharBudgets, sceneBudgetAt, trimPlanToBudget, protectedSentences, HEDGE_RE, restoreLostHedges,
-  mergePartialFix, partialFixVerdict, structuralProblems, problemsTargetHook, footageContradictsTopic, FOOTAGE_DEICTIC_RE,
+  mergePartialFix, partialFixVerdict, structuralProblems, problemsTargetHook, footageContradictsTopic, FOOTAGE_DEICTIC_RE, hookContradictsFootage, hookFootageIssues, stableProblemScenes, isNearLiteral, literalFixPrompt,
   keywordEarlyIssues, partialFixPrompt, flowCheckPrompt, flowFixScenes, flowBreaks, scriptForEdit, assertiveHookRule, SIBLING_ANGLE_RULE,
   lostCards, chooseFixedPlan, traceStart, traceRecord, traceMarkParity, traceNeedsParity, finalParityRevert, finalFactGate, writeSiblingPreview, siblingPlanFile, mergeNarrationOnly,
 } from './shorts';
@@ -556,5 +556,68 @@ describe('킬스위치 — SHORTS_PARTIAL_FIX · SHORTS_FLOW_CHECK', () => {
     if (keep.a === undefined) delete process.env.SHORTS_PARTIAL_FIX; else process.env.SHORTS_PARTIAL_FIX = keep.a;
     if (keep.b === undefined) delete process.env.SHORTS_FLOW_CHECK; else process.env.SHORTS_FLOW_CHECK = keep.b;
     vi.resetModules();
+  });
+});
+
+describe('hookContradictsFootage — 작가가 쓴 훅이 훅 화면과 어긋나는가(2026-10-15)', () => {
+  const summer = '맑은 하늘 아래 호두나무 가지와 잎, 열매를 아래에서 올려다본 모습';
+  it('실측: 잎·열매가 아직 달린 10월 초 촬영 영상에 "잎 다 떨어진 이 나무" — 어긋남', () => {
+    expect(hookContradictsFootage('잎 다 떨어진 이 나무, 죽은 걸까요 잎이 다 졌어요', summer)).toContain('잎');
+    expect(hookFootageIssues({ narration: '잎 다 떨어진 이 나무, 죽은 걸까요', screenText: '잎이 다 졌어요' }, summer)[0]).toMatch(/^씬1:/);
+    expect(problemsTargetHook(hookFootageIssues({ narration: '잎 다 떨어진 이 나무', screenText: '' }, summer))).toBe(true);
+  });
+  it('화면에 맞는 훅·화면이 잎 없음이라 적은 판독은 통과', () => {
+    expect(hookContradictsFootage('이 호두나무, 뿌리는 잘 내렸을까요', summer)).toBe('');
+    expect(hookContradictsFootage('잎 다 떨어진 이 나무, 죽은 걸까요', '잎이 다 떨어진 앙상한 호두나무 가지')).toBe('');
+    expect(hookContradictsFootage('잎 다 떨어진 이 나무', undefined)).toBe('');
+  });
+});
+
+describe('남는 왜곡은 원문 문장으로(2026-10-15)', () => {
+  it('stableProblemScenes — 세 판정 중 두 번 이상 지목된 씬만, 번호 없는 지적·실패 판정은 뺀다', () => {
+    expect(stableProblemScenes([['항목3: a', '5번: b'], ['3: c'], null], 5)).toEqual([3]);
+    expect(stableProblemScenes([['항목3: a'], ['항목4: b'], ['원문과 다름']], 5)).toEqual([]);
+    expect(stableProblemScenes([['항목9: a'], ['9: b']], 5)).toEqual([]);
+  });
+  const src = '가지 끝을 손으로 구부려 보세요. 휘었다가 되돌아오면 산 가지입니다. 반대로 밑동 바로 위까지 전부 부러지면 봄을 기다릴 이유가 없습니다.';
+  it('isNearLiteral — 어미만 바꾼 원문은 통과, 작가식 재작성은 걸린다(호두 활착 실측)', () => {
+    expect(isNearLiteral('휘었다가 되돌아오면 산 가지예요.', src)).toBe(true);
+    expect(isNearLiteral('그래서 휘었다가 되돌아오면 산 가지예요. 밑동 바로 위까지 전부 부러지면 봄을 기다릴 이유가 없어요.', src)).toBe(true);
+    expect(isNearLiteral('가지 끝을 손으로 구부려 보세요. 휘다가 되돌아오면 뿌리는 살아 있을 가능성이 커요.', src)).toBe(false);
+  });
+  it('isNearLiteral — 작가용 원문(근거 미확인 문장을 뺀 판본)과 대조하면 뺀 문장을 옮겨 와도 통과 못 한다', async () => {
+    const { writerSource } = await import('../content/inheritedClaims');
+    const flagged = ['반대로 밑동 바로 위까지 전부 부러지면 봄을 기다릴 이유가 없습니다.'];
+    const ws = writerSource(src, flagged, true).body;
+    expect(isNearLiteral('밑동 바로 위까지 전부 부러지면 봄을 기다릴 이유가 없어요.', src)).toBe(true);
+    expect(isNearLiteral('밑동 바로 위까지 전부 부러지면 봄을 기다릴 이유가 없어요.', ws)).toBe(false);
+  });
+  it('literalFixPrompt — 바꿀 씬·씬별 길이·조건 보존 규칙을 싣는다', () => {
+    const t = literalFixPrompt({ scenes: [{ narration: '훅' }, { narration: '둘' }, { narration: '셋' }] as never, targets: [2], problems: ['2: 유보를 단정으로'], source: src, caps: { 2: 71 } });
+    expect(t).toContain('[바꿀 씬] 2');
+    expect(t).toContain('씬2 71자');
+    expect(t).toMatch(/조건.*유보.*반드시 남긴다/);
+  });
+  it('mergePartialFix slackChars — 사실 수정은 씬 상한을 넘겨도 받는다', () => {
+    const plan = { title: 't', scenes: [{ narration: '훅입니다' }, { narration: '가지 끝을 손으로 구부려 보세요. 휘다가 되돌아오면 뿌리는 살아 있어요.' }] } as never;
+    const budgets = sceneCharBudgets(212, 2);
+    const long = '가지 끝을 손으로 구부려 보세요. 휘었다가 되돌아오면 산 가지예요. 밑동 위까지 다 부러지면 포기할 때예요.';
+    const cand = { scenes: [{ index: 2, narration: long }] };
+    const tight = mergePartialFix(plan, cand, { hookEditable: false, budgets: { ...budgets, premise: 40, body: 40, cta: 40 } });
+    expect(tight.changed).toEqual([]);
+    const slack = mergePartialFix(plan, cand, { hookEditable: false, budgets: { ...budgets, premise: 40, body: 40, cta: 40 }, slackChars: 21 });
+    expect(slack.changed).toEqual([2]);
+  });
+});
+
+describe('hookFootageIssues — 다른 씬이 지금 나무 상태를 실촬영과 다르게 말하면(2026-10-15 사장님 지적)', () => {
+  const oct = '맑은 날 하늘을 배경으로 호두나무 가지와 잎, 초록 열매';
+  it('실측: 첫 장면 10월 초 실촬영(잎 달림) + 씬2 "잎이 진 지금" — 씬2 지적', () => {
+    const r = hookFootageIssues({ narration: '이 잎, 색이 벌써 다릅니다' }, oct, [{ narration: '호두나무 활착은 잎보다 가지로 확인해요. 잎이 진 지금, 가지를 만져 보면 됩니다.' }, { narration: '가지 끝을 구부려 보세요.' }]);
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatch(/^씬2:/);
+  });
+  it('"지금" 없이 일반론으로 말하면("가을에 잎이 지는 건 정상") 지적하지 않는다', () => {
+    expect(hookFootageIssues({ narration: '이 잎, 색이 벌써 다릅니다' }, oct, [{ narration: '잎이 지는 건 가을이라 정상이에요.' }])).toEqual([]);
   });
 });

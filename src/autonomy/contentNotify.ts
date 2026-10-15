@@ -112,12 +112,17 @@ export function factGateLines(info: FactGateInfo | undefined, maxItems: number, 
   const timingBlock = timing.length
     ? [`⚠ 원문과 다른 시기·수치 ${timing.length}건`, ...timing.slice(0, 2).map((s) => `• ${clip(s)}`)].join('\n')
     : '';
-  const withTiming = (s: string): string => [s, timingBlock].filter(Boolean).join('\n');
+  // 근거 미확인 사전 확인(블로그, 2026-10-15) — 무엇을 공식 자료로 확인했고 몇 문장을 낮추거나 지웠는지 한 줄.
+  const v = info.verify;
+  const verifyLine = v && v.verified + v.repaired + v.kept > 0
+    ? `🔎 근거 확인 — 공식 자료 확인 ${v.verified} · 낮춤/삭제 ${v.repaired}${v.kept ? ` · 미적용 ${v.kept}` : ''}`
+    : '';
+  const withTiming = (s: string): string => [verifyLine, s, timingBlock].filter(Boolean).join('\n');
   if (info.status === 'error') return withTiming(`⚠ ${label} 판정 실패 — 수동 검토 필요`);
   // 참고(unverified) — 근거는 없지만 보류시키지 않은 일반 상식 문장(2026-08-27 지시 ①). 구 데이터는 필드가 없다.
   const soft = info.unverified ?? [];
   if (info.status !== 'hold') {
-    if (!soft.length) return timingBlock;
+    if (!soft.length) return withTiming('');
     return withTiming([`✅ ${label} 통과 · 근거 미확인(참고) ${soft.length}건`, ...soft.slice(0, maxItems).map((s) => `• 참고: ${clip(s)}`)].join('\n'));
   }
   const items = [...info.unsupported, ...info.contradicted].slice(0, maxItems).map((s) => `• ${clip(s)}`);

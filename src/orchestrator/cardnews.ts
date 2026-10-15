@@ -24,7 +24,7 @@ import { cardNewsStore } from '../content/cardnews';
 import { notifyCardnewsReady } from '../autonomy/contentNotify';
 import { standaloneIssues, parityIssues, parityIssuesChecked, parityToInfo, PARITY_SOURCE_CHARS } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue } from '../content/timingParity';
-import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
+import { inheritedClaims, formatInherited, writerSource } from '../content/inheritedClaims';
 import { introducesNewFacts, preNotifyProblems, preNotifyAccept, type FactGateInfo } from '../content/factGate';
 import { cardStyleIssues, cardVoiceIssues } from '../content/styleLint';
 import { naturalKeyword } from '../content/keywordForm';
@@ -36,7 +36,9 @@ import { pruneByPrefix, humanBytes } from '../util/prune';
 import { stdModel, visionCapable } from './visionCommon';
 import { findSpecies, speciesAnchor } from '../content/species';
 import { isContainerTopic } from '../analytics/igAxis';
-import { designHtmlCards, isHtmlCard, rerenderHtmlCard, reviseHtmlCard } from './cardHtmlJob';
+import { designHtmlCards, isHtmlCard, rerenderHtmlCard, reviseHtmlCard, realBlogPhoto } from './cardHtmlJob';
+import { describeUserMedia } from './shortsMediaBrief';
+import { cardPhotoIssues } from '../content/footageState';
 
 const RUNNING = new Set<string>();
 export function isCardNewsRunning(id: string): boolean { return RUNNING.has(id); }
@@ -619,19 +621,25 @@ export function cardStructureLines(seed: StructureSeed, variety: boolean): strin
   ];
 }
 
-async function planCards(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number | null, priorCoverage = '', endingsAvoid = '', seed: StructureSeed = currentStructureSeed(), sourceFlagged: string[] = []): Promise<Plan | null> {
+async function planCards(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number | null, priorCoverage = '', endingsAvoid = '', seed: StructureSeed = currentStructureSeed(), sourceFlagged: string[] = [],
+  /** 표지 실촬영 판독(2026-10-15) — 표지에 나갈 블로그 실촬영 사진의 비전 묘사. 표지 문구·'지금' 상태 문장을 이것과 대조한다. */
+  coverPhoto?: string): Promise<Plan | null> {
   // 표지 키워드는 바른 띄어쓰기 꼴로(2026-10-05) — 검색어 꼴("○○ 심는시기")을 그대로 요구하면 카드 문장 린트(keywordFormIssues)가
   // 매번 지적한다. 표지 게이트(coverIncludesKeyword)는 공백을 무시하므로 손실이 없고, 정확 일치는 첫 해시태그가 맡는다.
   const kwNat = keyword ? naturalKeyword(keyword) : '';
+  // 작가가 받는 원문(2026-10-15) — 근거 미확인 문장을 뺀 판본. 판정(원문 정합·시기수치·승계)은 sourceBody 전체로 본다.
+  const ws = writerSource(sourceBody ?? '', sourceFlagged);
+  if (ws.removed) { const m = `작가용 원문에서 근거 미확인 문장 ${ws.removed}개 뺌`; console.log(`[카드뉴스] ${m}`); io.bus?.emit('log', { message: m }); }
   const user = [
     `[주제] ${topic}`,
     keyword ? `[핵심 키워드] ${keyword}` : '',
     priorCoverage,
-    sourceBody ? `[블로그 초안 본문 — 핵심과 그것이 성립하는 이유(전제 인과)를 함께 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${sourceBody.slice(0, 4000)}` : '',
+    sourceBody ? `[블로그 초안 본문 — 핵심과 그것이 성립하는 이유(전제 인과)를 함께 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${ws.body.slice(0, 4000)}` : '',
     // 원문 미검증 주장 예방(2026-08-28 처방 C) — 숏폼과 동일 사상. 카드는 문장이 짧아 조건·유보가 먼저
     // 잘려 나가므로, 근거 없는 주장이 단정문 표지·헤드라인으로 굳기 더 쉽다.
     sourceFlagged.length ? `[원문에서 근거가 확인되지 않은 주장 — 원문 본문에 적혀 있어도 카드 어디에도 쓰지 마라. 사실 게이트가 근거를 못 찾은 문장들이다]\n${sourceFlagged.slice(0, 8).map((c, i) => `${i + 1}. ${c}`).join('\n')}\n바꿔 말하거나 수치·시기만 떼어 싣는 것도 금지다. 이 소재를 꼭 다뤄야 하면 단정 대신 조건·한계를 밝혀 쓰고 숫자는 적지 마라.` : '',
     sourceBody ? '[주제]는 블로그 SEO 제목이다 — 제목의 수사(앵글)를 표지에 그대로 옮기지 말고, 표지는 대상(무엇에 관한 카드인지)을 앞세워 재작성하라.' : '',
+    coverPhoto ? `[표지 사진 — 이 실촬영 사진이 1번 카드(표지) 배경으로 나간다] ${coverPhoto}\n표지 문구는 이 사진 위에 얹힌다 — 사진과 다른 잎·꽃·열매 상태를 단정하지 마라(사진에 잎이 있는데 "잎이 다 떨어졌다" 금지). 다른 장에서도 "지금" 나무 상태를 이 사진과 다르게 단정하지 마라.` : '',
     '',
     // 키워드가 있으면 '주제어' 수준이 아니라 정확 표기를 요구(2026-07-31 — 훅 자유는 유지: headline 또는 body 택일 허용).
     keyword
@@ -741,8 +749,10 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     probs.push(...timing.slice(0, 3));
     // 원문 미검증 주장 승계(2026-08-28 처방 C, 결정적·비차단) — 기존 두 축은 "원문에 충실한가"만 본다.
     // 이 축은 "원문이 애초에 믿을 만한가"를 본다. 숏폼과 같은 몫(≤2)으로 수정 라운드에 얹는다.
-    const inherited = (sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(plan)) : []).map(formatInherited);
+    const inherited = (sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(plan), 5, sourceBody) : []).map(formatInherited);
     probs.push(...inherited.slice(0, 2));
+    // 표지 실촬영 대조(2026-10-15, 결정적) — 숏폼 훅 화면 검사와 같은 판정.
+    probs.push(...cardPhotoIssues(plan.slides, coverPhoto));
     // 문체 결정적 린트(2026-08-11) — 종결어미 3장 연속 등 "AI 티" 지문을 같은 수정 라운드에 얹는다.
     probs.push(...cardCopyLintIssues(plan.slides, keyword, topic));
     // 표지 키워드 정확 표기 게이트(결정적) — LLM '주제어' 판정과 별개로 [핵심 키워드] 그대로를 요구.
@@ -769,7 +779,10 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     // 수정본 불량(planChanged=false) 은 카드 문구가 1차 판정 때와 바이트 동일 — LLM 재호출 없이 1차 parity 를 그대로 잔존으로 재사용한다.
     // 시기·수치만 잔존해도 factGate 를 붙인다(텔레그램 줄이 나가야 하므로) — status 는 정합 판정이 정한다:
     // 결정적 비차단 린트가 보류(hold)를 만들어서는 안 된다.
-    const inheritedResidual = (sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(plan)) : []).map(formatInherited);
+    const inheritedResidual = [
+      ...(sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(plan), 5, sourceBody) : []).map(formatInherited),
+      ...cardPhotoIssues(plan.slides, coverPhoto),
+    ];
     if ((parity.length || timingResidual.length || inheritedResidual.length) && sourceBody) {
       const base = parity.length
         ? (planChanged
@@ -801,7 +814,7 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
         if (!problems.length) break;
         const fixJ = await microJSON<{ slides?: Array<{ no?: unknown; headline?: unknown; body?: unknown }>; caption?: unknown }>(
           stdModel(), sys,
-          cardFixPrompt(cur, problems, sourceBody),
+          cardFixPrompt(cur, problems, ws.body),
           { maxOutputTokens: 1400, signal: io.signal },
         ).catch(() => null);
         const merged = mergeCardFix(cur, fixJ);
@@ -811,7 +824,8 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
         if (!issues) { say(`보내기 전 추가 수정 ${round}회 — 재대조 실패, 앞 판본 유지`); break; }
         const display = [
           ...timingParityIssues(sourceBody, timingFields(out)).map(formatTimingIssue),
-          ...(sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(out)) : []).map(formatInherited),
+          ...(sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(out), 5, sourceBody) : []).map(formatInherited),
+          ...cardPhotoIssues(out.slides, coverPhoto),
         ];
         const after = issues.length + display.length;
         if (!preNotifyAccept(problems.length, after, lint(cur), lint(out))) {
@@ -1077,7 +1091,7 @@ export async function recheckCardFactGate(plan: { slides: PlanSlide[] }, caption
   ];
   const display = [
     ...timingParityIssues(src.body, fields).map(formatTimingIssue),
-    ...(src.flagged?.length ? inheritedClaims(src.flagged, fields) : []).map(formatInherited),
+    ...(src.flagged?.length ? inheritedClaims(src.flagged, fields, 5, src.body) : []).map(formatInherited),
   ];
   const base = parityToInfo(issues);
   return display.length ? { ...base, timing: display } : base;
@@ -1373,7 +1387,14 @@ export async function runCardNewsJob(
     // 골격 다양화(2026-08-27 권고 4) — 본문 줄 수·해시태그 수를 런별 시드에서 받는다(off 면 4줄·12개 고정).
     const seed = currentStructureSeed();
     say(`기획 가드 — 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 마무리 로테이션 ${endingsAvoid ? '주입' : '해당없음'} · 골격 ${seed.cardLines}줄·태그 ${seed.hashtags}개`);
-    const plan = await planCards(io, card.topic, card.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), endingsAvoid, seed, opts.sourceFlagged ?? []);
+    // 표지 실촬영 판독(2026-10-15 사장님 선택) — HTML 판형은 블로그 실촬영을 표지에 깐다. 그 사진의 잎·꽃·열매 상태를 기획 전에 읽어
+    // 표지 문구가 사진과 어긋나게 단정하지 않게 한다(호두 활착: 10-04 촬영, 잎 달린 나무 위에 "잎 다 떨어졌는데").
+    const realPhoto = CONFIG.cardnewsHtml ? realBlogPhoto(card.sourcePieceId) : undefined;
+    const coverPhoto = realPhoto
+      ? (await describeUserMedia([{ file: realPhoto, kind: 'image' }], { topic: card.topic, ...(card.keyword ? { keyword: card.keyword } : {}), ...(opts.signal ? { signal: opts.signal } : {}) }).catch(() => []))[0]?.what
+      : undefined;
+    if (coverPhoto) say(`표지 실촬영 판독 — ${coverPhoto.slice(0, 50)}`);
+    const plan = await planCards(io, card.topic, card.keyword, opts.sourceBody, n, [priorCoverage, phraseBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), endingsAvoid, seed, opts.sourceFlagged ?? [], coverPhoto);
     if (!plan) throw new Error('기획 실패 — 기획자 JSON 응답을 해석할 수 없습니다');
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ title: plan.title, slides: plan.slides }, null, 2), 'utf-8');
     say(`기획 완료 — ${plan.title.slice(0, 30)} · 슬라이드 ${plan.slides.length}장`);

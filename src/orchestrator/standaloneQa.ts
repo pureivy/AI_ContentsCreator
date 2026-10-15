@@ -92,7 +92,8 @@ export async function parityIssuesChecked(kindLabel: string, texts: string[], so
  */
 export function dropSelfCleared(problems: readonly string[]): string[] {
   // 2026-10-14 감나무 숏폼 — "…단순화했으나 사실 왜곡은 없음" 도 무혐의 끝맺음(왜곡·오류·이상 없음).
-  return problems.filter((p) => !/(?:문제\s*(?:없음|없다|아님|아니다)|보고\s*(?:생략|하지\s*않음|불필요)|해당\s*없음|(?:사실\s*)?(?:왜곡|오류|이상)\s*(?:은|는|이)?\s*(?:없음|없다))\s*[.)]?\s*$/.test(p.trim()));
+  // 2026-10-15 소나무 숏폼 — "…명확한 왜곡은 없음 — 보고 생략 가능".
+  return problems.filter((p) => !/(?:문제\s*(?:없음|없다|아님|아니다)|보고\s*(?:생략(?:\s*가능)?|하지\s*않음|불필요)|해당\s*없음|(?:사실\s*)?(?:왜곡|오류|이상)\s*(?:은|는|이)?\s*(?:없음|없다))\s*[.)]?\s*$/.test(p.trim()));
 }
 
 export function parityToInfo(issues: string[]): FactGateInfo {

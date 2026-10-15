@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  normalizeLayout, insideDir, coverage, sourceSentences, extractOk, monthMentioned, parsePhotoRef, layoutFields, dropFields, parityKeys, oneEmoji, toRenderSpec,
+  normalizeLayout, insideDir, coverage, sourceSentences, extractOk, monthMentioned, parsePhotoRef, layoutFields, dropFields, parityKeys, oneEmoji, toRenderSpec, genPhotoPrompt, dedupeBlogPhotos,
 } from './cardLayout';
 
 // 감나무 잎 구별 글(2026-10-12)에서 줄인 원문 — 카드 칸은 여기서만 뽑아야 한다.
@@ -143,6 +143,12 @@ describe('dropSelfCleared — 검수자가 스스로 무혐의라 적은 줄은 
       '항목3: 원문에 없는 약제 이름이 들어갔다',
     ])).toEqual(['항목3: 원문에 없는 약제 이름이 들어갔다']);
   });
+  it('"보고 생략 가능"으로 끝나는 줄도 뺀다(2026-10-15 소나무 숏폼)', () => {
+    expect(dropSelfCleared([
+      "항목3: 텍스트는 목록에서 '좌우 2미터 미만'을 제시하면서도 명확한 왜곡은 없음 — 보고 생략 가능",
+      '항목2: 원문에 없는 문턱 기준을 새로 단정함',
+    ])).toEqual(['항목2: 원문에 없는 문턱 기준을 새로 단정함']);
+  });
   it('"사실 왜곡은 없음"으로 끝나는 줄도 뺀다, 중간에 "없음"이 있는 진짜 지적은 남긴다(2026-10-14 감나무 숏폼)', () => {
     expect(dropSelfCleared([
       "항목4: 원문은 수피 근거 세 가지를 제시했는데, 텍스트는 '잘게 갈라짐'만 언급하여 단순화했으나 사실 왜곡은 없음",
@@ -152,5 +158,39 @@ describe('dropSelfCleared — 검수자가 스스로 무혐의라 적은 줄은 
       "항목5: 원문은 세 가지 확인을 제시했는데, 텍스트는 '두 가지만 맞으면 감나무'라고 단정하여 하나를 누락",
       '항목2: 원문에 없음 — 근거 없는 수치 "10~15m"가 들어갔다',
     ]);
+  });
+});
+
+describe('genPhotoPrompt — 같은 세트 사진 잇기(2026-10-15)', () => {
+  it('세트 사진을 참조로 받으면 같은 나무·같은 밭으로 그리라고 한다, 어린 나무면 그 단계를 지키라고 덧붙인다', () => {
+    const p = genPhotoPrompt('가지를 구부리는 손', undefined, '호두나무 — 깃꼴겹잎', { setRefs: true, young: true });
+    expect(p).toContain('[첨부 사진 — 이 카드뉴스의 다른 장 사진]');
+    expect(p).toContain('이 글의 나무는 어린 나무다');
+  });
+  it('참조가 없으면 종전 문구 그대로', () => {
+    expect(genPhotoPrompt('장면', undefined, '호두나무')).not.toContain('첨부 사진');
+  });
+});
+
+describe('dedupeBlogPhotos — 같은 블로그 사진은 세트에서 한 번만(2026-10-15)', () => {
+  const L = () => ({ series: 's', slides: [
+    { kind: 'cover', title: '표지', photo: { use: 'blog', n: 1 } },
+    { kind: 'photo', title: '가지 끝을 구부려 보기', lead: '탄력 있으면\n살아 있어요', photo: { use: 'blog', n: 2 } },
+    { kind: 'photo', title: '밑동을 흔들어 보기', photo: { use: 'blog', n: 2 } },
+    { kind: 'photo', title: '흙을 다지기', photo: { use: 'blog', n: 1 } },
+  ] }) as never;
+  it('두 번째 쓰임부터 새 사진(gen)으로 — 장면은 그 장의 제목·내용', () => {
+    const l = L() as { slides: Array<{ photo?: { use: string; scene?: string; n?: number } }> };
+    expect(dedupeBlogPhotos(l as never, 6)).toBe(2);
+    expect(l.slides[0]!.photo).toEqual({ use: 'blog', n: 1 });
+    expect(l.slides[1]!.photo).toEqual({ use: 'blog', n: 2 });
+    expect(l.slides[2]!.photo!.use).toBe('gen');
+    expect(l.slides[2]!.photo!.scene).toContain('밑동을 흔들어 보기');
+    expect(l.slides[3]!.photo!.use).toBe('gen');
+  });
+  it('새 사진 몫을 다 쓰면 반복을 그대로 둔다', () => {
+    const l = L() as { slides: Array<{ photo?: { use: string } }> };
+    expect(dedupeBlogPhotos(l as never, 1)).toBe(1);
+    expect(l.slides[3]!.photo!.use).toBe('blog');
   });
 });

@@ -30,7 +30,8 @@ import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues, parityIssues, parityIssuesChecked, parityToInfo, PARITY_SOURCE_CHARS } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue, stripUnsourcedStatOverlays } from '../content/timingParity';
 import type { FactGateInfo } from '../content/factGate';
-import { isJudgmentSentence, preNotifyProblems, preNotifyAccept } from '../content/factGate';
+import { isJudgmentSentence, preNotifyProblems, preNotifyAccept, diceSimilarity } from '../content/factGate';
+import { SOURCE_ANCHOR_GUIDE, anchorsOf, anchorIssues, withAnchor, anchorOn } from '../content/sourceAnchor';
 import type { ShortsPlatform } from '../content/shortsPlatform';
 import { narrationStyleIssues, hookKeywordLeadIssues, hookLengthIssues, metaSummaryIssues, screenTextLabelIssues, monthWordOutsideNarration, compressionRelintProbs, closingSceneIssues, announcesNextEpisode, stripNextEpisode, mentionsNextEpisode, screenTextAnnounces, isPromiseSentence } from '../content/styleLint';
 import { promiseStore, MAX_PENDING } from '../content/promises';
@@ -41,7 +42,10 @@ import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, thumbTextQaFailed, type ThumbCopy } from './shortsThumbnail';
 import { inheritShortsAssets, inheritedSceneImages, inheritedClips, reviseClipsFor, reviseImagesFor, readSceneImageMap, writeSceneImageMap } from '../content/shortsInherit';
 import { SOURCES_FILE, type UsageSource } from '../content/mediaUsage';
-import { findSpecies, findSpeciesLoose, speciesNamesIn, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom, normalizeLatinName } from '../content/species';
+import { FOOTAGE_PARTS, NOW_RE, hookContradictsFootage } from '../content/footageState';
+export { hookContradictsFootage };
+import { findSpecies, findSpeciesLoose, speciesNamesIn, speciesAnchor, speciesSeasonalHint, appendSpecies, speciesNameFrom, normalizeLatinName, isYoungHero } from '../content/species';
+export { isYoungHero };
 import { isContainerTopic } from '../analytics/igAxis';
 import { shortsGenreOf, genreGuide, genreSceneGuide, loreHookGuide, loreHookSource, type ShortsGenre } from '../content/shortsGenre';
 import { planAssetScenes, styleRefs, planVideoSegments, orderAssetsByAssignment, SEGMENT_TAIL_SEC, type VideoSegment } from '../content/userAssets';
@@ -54,7 +58,7 @@ import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
 import { normalizeSceneKind, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, cutAtWordBoundary, probeDuration, teaserFor, teaserSceneIndex, sceneFrames, midcutAt, planSpareClips, FPS } from '../tools/shortsCommon';
-import { inheritedClaims, formatInherited } from '../content/inheritedClaims';
+import { inheritedClaims, formatInherited, writerSource } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
 import type { EventBus } from '../events/bus';
 
@@ -78,6 +82,8 @@ interface Plan {
   next?: { topic: string; window?: string };
   /** 원문 정합 잔존(스펙 §2-4) — 정합 문제로 수정 라운드를 돌았을 때만 재판정해 채운다. 표시 전용. */
   factGate?: FactGateInfo;
+  /** 씬별 원문 근거 문장(2026-10-15, SHORTS_SOURCE_ANCHOR) — 작가가 짚은 원문 문장. 원문 대조 판정에 씬과 나란히 싣는다. */
+  anchors?: string[];
 }
 
 interface JobIO { bus?: EventBus; signal?: AbortSignal }
@@ -182,7 +188,7 @@ export async function recheckShortsFactGate(plan: Plan, topic: string, src: Shor
   if (!issues) return null;
   const display = [
     ...timingParityIssues(body, timingFields(plan)).map(formatTimingIssue),
-    ...(src.flagged?.length ? inheritedClaims(src.flagged, timingFields(plan)) : []).map(formatInherited),
+    ...(src.flagged?.length ? inheritedClaims(src.flagged, timingFields(plan), 5, src.body) : []).map(formatInherited),
   ];
   const base = parityToInfo(issues);
   return display.length ? { ...base, timing: display } : base;
@@ -764,14 +770,29 @@ export function footageContradictsTopic(topic: string, footage: string | undefin
   if (!footage) return '';
   const t = topic.replace(/\s+/g, ' ');
   const f = footage.replace(/\s+/g, ' ');
-  const parts: Array<{ name: string; absent: RegExp; full: RegExp }> = [
-    { name: '잎', absent: /(?:잎|싹|새순)[이가은는]?\s*(?:다\s*)?(?:안\s|안나|못\s|없|떨어|진\s|지고|말라|마르|시들|누렇|갈변)/, full: /(?:잎|잎사귀)[이가]?\s*(?:무성|가득|풍성|빽빽|싱싱|무럭)|(?:초록|푸른|무성한|싱그러운)\s*잎|잎이\s*달린|잎\s*달린/ },
-    { name: '꽃', absent: /꽃[이은]?\s*(?:안\s|안피|못\s|없)|개화\s*(?:안|불량|실패)/, full: /꽃[이가]?\s*(?:만개|활짝|가득|피어|핀\s)|만개|꽃\s*핀/ },
-    { name: '열매', absent: /(?:열매|호두|감|대추|사과|배)[가이는은]?\s*(?:안\s|안열|못\s|없|안\s*달)|결실\s*(?:안|불량)/, full: /(?:열매|호두|감|대추)[가이]?\s*(?:주렁|가득|달려|맺혀|달린)|주렁주렁/ },
-  ];
-  for (const p of parts) if (p.absent.test(t) && p.full.test(f)) return `주제는 ${p.name}이 없거나 상한 상태인데 훅 화면은 ${p.name}이 가득한 장면`;
+  for (const p of FOOTAGE_PARTS) if (p.absent.test(t) && p.full.test(f)) return `주제는 ${p.name}이 없거나 상한 상태인데 훅 화면은 ${p.name}이 가득한 장면`;
   if (/(?:고사|죽어|죽은|말라\s*죽|시들)/.test(t) && /(?:싱싱|무성|건강|푸르게)/.test(f)) return '주제는 고사·시듦인데 훅 화면은 싱싱한 나무';
   return '';
+}
+
+
+/**
+ * 실촬영 화면 어긋남을 수정 라운드·검토 메시지 줄로(순수).
+ *  씬1(훅) — 화면 위에서 말하므로 무엇이든 대조한다(씬1 지목이라 훅 수정이 열린다, problemsTargetHook).
+ *  다른 씬(2026-10-15 사장님 지적) — "잎이 진 지금"처럼 **지금** 나무 상태를 단정하면 대조한다. 실측: 10-04 촬영 호두나무(잎 달림)를
+ *  첫 장면에 보여 주고 씬2 가 "잎이 진 지금"이라 했다 — 블로그 요약 줄("잎이 진 지금, 손으로 만져 보면 됩니다")을 옮긴 것.
+ */
+export function hookFootageIssues(scene: { narration: string; screenText?: string } | undefined, footage: string | undefined, rest: ReadonlyArray<{ narration: string; screenText?: string }> = []): string[] {
+  const out: string[] = [];
+  const why = scene ? hookContradictsFootage(`${scene.narration} ${scene.screenText ?? ''}`, footage) : '';
+  if (why) out.push(`씬1: 훅이 실촬영 화면과 어긋난다 — ${why}. 화면에 실제로 보이는 것만 말하거나, 화면을 가리키지 않는 단정 선언으로 바꿔라(자막도 함께)`);
+  rest.forEach((s, i) => {
+    const t = `${s.narration} ${s.screenText ?? ''}`;
+    if (!NOW_RE.test(t)) return;
+    const w = hookContradictsFootage(t, footage);
+    if (w) out.push(`씬${i + 2}: 지금 나무 상태를 실촬영과 다르게 말한다 — ${w.replace(/^훅은/, '이 씬은')}. 첫 장면 실촬영은 이번 달 실제 나무다 — "지금 ~가 졌다" 같은 단정을 빼거나 "지기 시작하면", "잎이 지고 나면"처럼 조건으로 바꿔라`);
+  });
+  return out;
 }
 
 /** 화면을 가리키는 훅(장면 지목형) — 훅 화면이 주제와 어긋난 편에서 수정·흐름 단계가 이런 훅을 되살리면 거절한다. */
@@ -839,6 +860,8 @@ export function partialFixPrompt(a: {
   scenes: readonly ShortsScene[]; problems: readonly string[]; budgets: ReturnType<typeof sceneCharBudgets>;
   stage: 'plan' | 'compressed'; sourceExcerpt?: string; flagged?: readonly string[]; hookRule?: string; keyword?: string;
   hookEditable: boolean; description?: string;
+  /** 사실 수정 여유(2026-10-15 사장님 선택 "사실 수정에만 여유 3초") — 원문 조건·유보를 되살리느라 길어지는 몫(자). 보내기 전 수정만 준다. */
+  factSlack?: number;
 }): string {
   const n = a.scenes.length;
   const b = a.budgets;
@@ -860,7 +883,9 @@ export function partialFixPrompt(a: {
     a.hookEditable
       ? `· 씬1(훅)은 문제가 씬1 을 지목했으니 고쳐도 된다 — ${b.hook}자 이내 한 문장, 키워드로 열지 마라.`
       : '· 씬1(훅)은 고치지 마라(문제가 훅을 지목하지 않았다).',
-    `· 길이: 고친 씬은 지금 길이의 1.2배 이내, 씬별 상한 훅 ${b.hook}자 · 씬2 ${b.premise}자 · 본문 ${b.body}자 · 마지막 씬 ${b.cta}자. 대본 전체 ${b.total}자 이내. 늘려야 하면 같은 씬의 덜 중요한 말을 바꿔 말해 자리를 만든다.`,
+    a.factSlack
+      ? `· 길이: 원문의 조건·유보·예외를 되살리는 게 먼저다 — 그 때문에 길어지는 건 고친 씬당 ${a.factSlack}자, 대본 전체 ${b.total + a.factSlack}자까지 괜찮다(씬별 기준 훅 ${b.hook}자 · 씬2 ${b.premise}자 · 본문 ${b.body}자 · 마지막 씬 ${b.cta}자). 조건을 빼서 짧게 맞추지 마라.`
+      : `· 길이: 고친 씬은 지금 길이의 1.2배 이내, 씬별 상한 훅 ${b.hook}자 · 씬2 ${b.premise}자 · 본문 ${b.body}자 · 마지막 씬 ${b.cta}자. 대본 전체 ${b.total}자 이내. 늘려야 하면 같은 씬의 덜 중요한 말을 바꿔 말해 자리를 만든다.`,
     a.stage === 'compressed'
       // 감량 뒤 수정은 카드를 지키는 쪽(2026-10-05 리뷰) — 병합이 cards:'keepUnlessDiverged' 로 돈다. 프롬프트도 그 규칙대로 말한다.
       ? '· 내레이션을 고친 씬에 자막·결론 카드·목록이 있으면 새 내레이션에 맞춰 함께 돌려줘라(그대로 맞으면 그대로 옮겨 적어라). 돌려주지 않은 결론 카드·목록은 그대로 남는다 — 단 새 내레이션이 그 카드가 되받던 말을 지우면 카드도 지워진다.'
@@ -908,7 +933,9 @@ function screenTextStillFits(screenText: string, narration: string): boolean {
  */
 export function mergePartialFix(
   plan: Plan, cand: PartialFix | null | undefined,
-  opts: { hookEditable: boolean; budgets: ReturnType<typeof sceneCharBudgets>; keyword?: string; hookReject?: RegExp; budgetChars?: number; onlyScenes?: readonly number[]; fixScreen?: (s: string) => string; cards?: 'drop' | 'keep' | 'keepUnlessDiverged' } ,
+  opts: { hookEditable: boolean; budgets: ReturnType<typeof sceneCharBudgets>; keyword?: string; hookReject?: RegExp; budgetChars?: number; onlyScenes?: readonly number[]; fixScreen?: (s: string) => string; cards?: 'drop' | 'keep' | 'keepUnlessDiverged';
+    /** 씬 상한 여유(자, 2026-10-15) — 사실 수정 단계만. 대본 전체 여유는 budgetChars 에 호출부가 더해 준다. */
+    slackChars?: number } ,
 ): { plan: Plan; changed: number[]; rejected: string[]; droppedCards: number[]; descriptionChanged: boolean } {
   const cardMode = opts.cards ?? 'drop';
   /** 옛 내레이션에 걸려 있던 카드가 새 내레이션에선 걸 데가 없다 — 'keepUnlessDiverged' 의 어긋남 판정(대략). 카드 = 칸 묶음. */
@@ -929,7 +956,7 @@ export function mergePartialFix(
     if (!narration) continue;
     if (idx === 1 && !opts.hookEditable && narration !== cur.narration) { rejected.push('씬1: 훅 수정 불가'); continue; }
     if (idx === 1 && opts.hookReject?.test(narration)) { rejected.push('씬1: 화면 지목 훅'); continue; }
-    const cap = Math.max(Math.ceil(plan.scenes[idx - 1]!.narration.length * 1.2) + 4, sceneBudgetAt(opts.budgets, idx - 1, n));
+    const cap = Math.max(Math.ceil(plan.scenes[idx - 1]!.narration.length * 1.2) + 4, sceneBudgetAt(opts.budgets, idx - 1, n)) + (opts.slackChars ?? 0);
     if (narration.length > cap) { rejected.push(`씬${idx}: ${narration.length}자 > 상한 ${cap}자`); continue; }
     if (head && plan.scenes[idx - 1]!.narration.replace(/\s+/g, '').includes(head) && !narration.replace(/\s+/g, '').includes(head)) { rejected.push(`씬${idx}: 키워드 대상 삭제`); continue; }
     const next: ShortsScene = { ...cur, narration };
@@ -996,6 +1023,55 @@ const problemScene = (p: string): number | null => {
   const m = p.trim().match(/^(?:항목\s*|씬\s*)?(\d+)/);
   return m ? Number(m[1]) : null;
 };
+
+/**
+ * 남는 왜곡은 원문 문장으로(2026-10-15 사장님 선택 "원문 문장으로 바꾸기").
+ * 실측: 보류 16편 중 12편은 같은 대본을 세 번 판정해 두 번 이상 같은 지적이 나왔다(진짜 왜곡). 보내기 전 수정을 다 거친 뒤에도
+ * 남는 그런 씬은 작가식 재작성 대신 원문 문장을 거의 그대로(어미만 구어체) 옮긴다 — 말맛보다 원문과 어긋나지 않는 게 먼저다.
+ */
+/** 세 판정 중 두 번 이상 지목된 씬 번호(순수). 씬 번호 없는 지적은 셀 수 없어 뺀다. */
+export function stableProblemScenes(judgments: ReadonlyArray<readonly string[] | null>, sceneCount: number, min = 2): number[] {
+  const votes = new Map<number, number>();
+  for (const list of judgments) {
+    if (!list) continue;
+    for (const sc of new Set(list.map(problemScene).filter((x): x is number => x !== null))) votes.set(sc, (votes.get(sc) ?? 0) + 1);
+  }
+  return [...votes].filter(([k, v]) => v >= min && k >= 1 && k <= sceneCount).map(([k]) => k).sort((a, b) => a - b);
+}
+
+/** 원문 문장 옮기기 프롬프트(순수). */
+export function literalFixPrompt(a: { scenes: readonly ShortsScene[]; targets: readonly number[]; problems: readonly string[]; source: string; caps: Record<number, number>; keyword?: string }): string {
+  return [
+    '아래 숏폼 대본에서 지목한 씬은 원문과 어긋난다는 지적이 거듭 나왔다. 그 씬의 내레이션을 원문 문장으로 바꿔라.',
+    '',
+    `[현재 대본 — 씬 ${a.scenes.length}개]`,
+    scriptForEdit(a.scenes),
+    '',
+    `[바꿀 씬] ${a.targets.join(', ')}`,
+    `[지적]\n${a.problems.map((p) => `- ${p}`).join('\n')}`,
+    '',
+    '[규칙]',
+    '· 지적과 관련된 원문 문장 1~2개를 골라 **거의 그대로** 옮겨라 — 어미만 구어체 존댓말(~요)로 바꾸고, 길면 덜 중요한 수식어만 뺀다. 코드가 원문과 글자 단위로 대조한다.',
+    '· 원문의 조건("~이면", "~일 때"), 유보("보통", "대개", "~할 수 있어요"), 예외는 반드시 남긴다. 원문에 없는 말·연결·결론을 더하지 마라.',
+    `· 길이: ${a.targets.map((k) => `씬${k} ${a.caps[k]}자`).join(' · ')} 이내. 숫자는 읽는 꼴의 한글로("3~4m" → "삼사 미터").`,
+    '· screenText 는 새 내레이션의 핵심을 6~14자로. 앞뒤 씬과 이어지게 첫머리 접속어("그래서", "다만")는 써도 된다.',
+    a.keyword ? `· 지금 씬에 "${keywordTokens(a.keyword).head}"(대상 이름)가 있으면 새 문장에도 남겨라 — 원문 문장 앞에 주어로 붙여도 된다.` : '',
+    '',
+    `[원문 블로그]\n${a.source}`,
+    '',
+    'JSON 형식: {"scenes":[{"index":씬번호,"narration":"...","screenText":"..."}]} — 지목한 씬만.',
+  ].filter((x) => x !== '').join('\n');
+}
+
+const litNorm = (t: string): string => t.normalize('NFC').replace(/\*\*|__|[`#>|\[\]()]/g, '').replace(/[\s.,!?~·:;"'“”‘’…-]/g, '');
+/** 내레이션이 원문 문장을 거의 그대로 옮겼는가(순수) — 내레이션 문장마다 원문 문장(또는 이웃 두 문장)과 글자쌍 유사도 ≥ floor.
+ *  어미를 구어체로 바꾼 정도는 통과하고(실측 0.6~0.8), 작가식 재작성은 걸린다(0.2~0.4). 첫머리 접속어는 떼고 본다. */
+export function isNearLiteral(narration: string, source: string, floor = 0.5): boolean {
+  const src = source.split(/\n+/).flatMap((l) => l.split(/(?<=[.!?。](?:\*\*)?)\s+/)).map(litNorm).filter((x) => x.length >= 6);
+  const windows = [...src, ...src.slice(1).map((x, i) => src[i]! + x)];
+  const sents = narration.split(/(?<=[.!?。요다])\s+/).map((x) => litNorm(x.replace(/^(?:그래서|다만|그러니|그런데|또|그리고)\s*,?\s*/, ''))).filter((x) => x.length >= 4);
+  return sents.length > 0 && sents.every((n) => windows.some((w) => diceSimilarity(n, w) >= floor || (w.includes(n) && n.length >= 8)));
+}
 
 /**
  * 부분 수정 채택 판정(순수) — "나아지지 않았으면 첫 원고를 둔다"(사장님 승인 정의: 문제가 늘었거나 새 건너뜀이 생김).
@@ -1516,13 +1592,15 @@ function sourceCoreOf(topic: string, sourceBody: string | undefined): string | u
     : undefined;
 }
 
-async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형'], sourceFlagged: string[] = [], writerRole = 'shorts_writer', recentMainTitles: string[] = [], loreFacts: string[] = [],
+export async function planShorts(io: JobIO, topic: string, keyword: string | undefined, sourceBody: string | undefined, n: number, priorCoverage = '', titleTypes: string[] = ['정보형', '후킹형', '질문형'], sourceFlagged: string[] = [], writerRole = 'shorts_writer', recentMainTitles: string[] = [], loreFacts: string[] = [],
   /** promiseRoom: 예고 대장에 자리가 있는가(없으면 예고 금지) · hookFootage: 씬1(훅)에 그대로 나갈 실촬영 영상의 비전 묘사.
    *  hookConflict: 훅 실촬영이 주제와 어긋난 사유(footageContradictsTopic) — 있으면 hookFootage 대신 단정형 훅을 강제한다.
    *  platform: 채널 — 유튜브는 씬2 에 '키워드+답' 한 문장(2026-10-05).
    *  trace: 씬별 출처 출력 칸(2026-10-05) — 돌려준 대본의 씬마다 어느 단계가 바꿨고 원문 대조를 받았는지. 최종 원문 대조(runShortsJob)가 쓴다. */
-  extra: { promiseRoom?: boolean; hookFootage?: string; hookConflict?: string; platform?: ShortsPlatform; trace?: { value?: SceneTrace } } = {}): Promise<Plan | null> {
+  extra: { promiseRoom?: boolean; hookFootage?: string; hookConflict?: string; platform?: ShortsPlatform; trace?: { value?: SceneTrace }; anchor?: boolean } = {}): Promise<Plan | null> {
   const capSec = CONFIG.shortsMaxDurationSec;
+  // 원문 근거 짚기(2026-10-15) — 파생 편만. extra.anchor 는 시험용 강제(켜기·끄기).
+  const anchored = !!sourceBody && (extra.anchor ?? anchorOn(CONFIG.shortsSourceAnchor, extra.platform));
   const promiseRoom = extra.promiseRoom !== false;
   const hookRule = extra.hookConflict ? assertiveHookRule(extra.hookConflict) : '';
   // 장르 분기(2026-09-18) — 원본 제목이 이야기 축이면 하우투 전용 네 줄(결론·기본형·takeaways·뽑을 것)을 이야기형으로.
@@ -1533,6 +1611,11 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
   const hooks = CONFIG.shortsLore && genre === 'howto' ? loreFacts : [];
   const hookSource = loreHookSource(hooks);
   const sourceForGates = sourceBody && hookSource ? `${sourceBody}\n\n${hookSource}` : sourceBody;
+  // 작가가 받는 원문(2026-10-15) — 근거 미확인 문장을 뺀 판본. 판정은 위 sourceForGates(원문 전체)로 계속 본다.
+  const ws = writerSource(sourceBody ?? '', sourceFlagged);
+  if (ws.removed) { const m = `작가용 원문에서 근거 미확인 문장 ${ws.removed}개 뺌`; console.log(`[숏폼] ${m}`); io.bus?.emit('log', { message: m }); }
+  const writerBody = sourceBody ? ws.body : undefined;
+  const sourceForWriter = writerBody && hookSource ? `${writerBody}\n\n${hookSource}` : writerBody;
   // 제목 후보 유형(권고 5) — 스키마 예시와 유형 설명이 같은 목록을 가리켜야 작가가 순서대로 채운다.
   const titlesJson = titleTypes.map((t) => `"${t}"`).join(',');
   const budgetChars = Math.floor((capSec - 5) * SHORTS_TTS_CPS);
@@ -1544,7 +1627,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     `[주제] ${topic}`,
     keyword ? `[핵심 키워드] ${keyword}` : '',
     priorCoverage,
-    sourceBody ? `[블로그 초안 본문 — 핵심 1~2개와 그것이 성립하는 이유(전제 인과 한 줄)를 함께 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${sourceBody.slice(0, 4000)}` : '',
+    writerBody ? `[블로그 초안 본문 — 핵심 1~2개와 그것이 성립하는 이유(전제 인과 한 줄)를 함께 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${writerBody.slice(0, 4000)}` : '',
     // 원문 핵심 앵커(2026-08-24 실사고) — 블로그는 '화분 크기'가 핵심 축인데 유사주제 가드에 밀린 작가가
     // 그 축을 통째로 빼고 곁가지(겨울 자리)로만 대본을 만들어 세트의 메시지가 어긋났다. 소재 선택은
     // 원문이 이기고, 프레이밍(각도)은 중복 회피가 이긴다는 서열을 명시한다.
@@ -1641,9 +1724,10 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       ? `[최근 대표 제목 — 구조가 겹치면 안 된다]\n${recentMainTitles.map((t) => `· ${t}`).join('\n')}\n대표 제목(title)은 위 제목들과 다른 문장 구조로 써라. 특히 "<키워드 구>, <행동>" 쉼표 두 토막 꼴이 위에 이미 많으면 이번엔 쓰지 마라. 쓸 수 있는 꼴: 쉼표 없이 한 문장으로 잇기("~는 ~부터 봅니다"), 결론 먼저("~은 ~입니다"), 질문("~면 어떻게 될까요"), 조건절("~할 때 ~하세요"), 장면 제시("~앞에서 손이 멈춘다면"). 단, 핵심 키워드를 앞쪽에 두라는 위 규칙이 이 규칙보다 우선한다 — 구조를 바꾸느라 키워드를 빼거나 뒤로 밀지 마라.`
       : '',
     shortsTitleTypeGuide(titleTypes, CONFIG.voiceRotation),
+    anchored ? `${SOURCE_ANCHOR_GUIDE}\n각 scene 객체에 "src":"원문 문장 그대로" 키를 넣어라.` : '',
     `JSON 형식: {"title":"대표 제목","titles":[${titlesJson}],"scenes":[{"narration":"...","screenText":"...","kind":"hook|stat|list|quote|chart|compare|cta(선택)","stat":{"value":42,"unit":"%","label":"라벨"},"items":["항목"],"quote":{"text":"인용","source":"출처"},"chart":{"series":[{"label":"봄","value":90},{"label":"가을","value":70}],"unit":"%","highlight":0},"takeaways":[{"when":"허리 높이","then":"회양목"}],"compare":{"bad":{"label":"웃자란 가지","note":"꽃눈이 안 앉아요"},"good":{"label":"짧은 곁가지","note":"여기 열매가 달려요"}}}],"description":"2~3줄","hashtags":["#니치","#범용","#shorts"],"next":{"topic":"다음 편 주제(예고했을 때만)","window":"9월"}}`,
   ].filter(Boolean).join('\n');
-  type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown; chart?: unknown; compare?: unknown; takeaways?: unknown }>; description?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
+  type PlanRaw = { title?: unknown; titles?: unknown[]; scenes?: Array<{ narration?: unknown; screenText?: unknown; kind?: unknown; stat?: unknown; items?: unknown; quote?: unknown; chart?: unknown; compare?: unknown; takeaways?: unknown; src?: unknown }>; description?: unknown; hashtags?: unknown; next?: { topic?: unknown; window?: unknown } };
   // 역할 프롬프트가 없을 때만 쓰이는 폴백(callRoleJSON: role.systemPrompt || fallback).
   const sys = '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.';
   // 고유어 월은 내레이션(TTS) 전용 — 화면·검색 필드는 숫자 월로 되돌린다(권고 5, 결정적).
@@ -1657,11 +1741,15 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     if (!j || !Array.isArray(j.scenes) || !j.scenes.length) return null;
     // 여기서 n 개로 자르지 않는다(2026-10-05) — 앞에서 자르면 넘친 원고의 마지막 CTA 가 떨어진다(호두 인스타 7씬 → 결론 없이 끝남).
     // 씬 수는 호출부가 맞춘다: 첫 원고는 재요청, 그래도 넘치면 fitSceneCount(앞 n-1 + CTA). 12 는 폭주 방지 상한일 뿐이다.
-    const scenes = j.scenes.slice(0, 12).map((s) => ({
+    const rawScenes = j.scenes.slice(0, 12);
+    const rawAnchors = anchorsOf(rawScenes);
+    const pairs = rawScenes.map((s, i) => ({ scene: {
       narration: cleanNarration(s?.narration),
       screenText: numMonth(stripEmoji(String(s?.screenText ?? '')).trim()).slice(0, 20),
       ...normalizeSceneKind(s), // 불량 페이로드는 {} 강등 — 기본 씬으로 렌더
-    })).filter((s) => s.narration);
+    }, src: rawAnchors[i] ?? '' })).filter((x) => x.scene.narration);
+    const scenes = pairs.map((x) => x.scene);
+    const anchors = anchored ? pairs.map((x) => x.src) : undefined;
     if (scenes.length < 3) return null;
     const titles = (Array.isArray(j.titles) ? j.titles : []).map((t) => numMonth(stripEmoji(String(t ?? '')).trim())).filter(Boolean).slice(0, 3);
     const next = j.next && typeof j.next.topic === 'string' && j.next.topic.trim()
@@ -1688,6 +1776,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
       description: numMonth(String(j.description ?? '').trim()).slice(0, 500),
       hashtags: normalizeHashtags((Array.isArray(j.hashtags) ? j.hashtags : []).map((t) => numMonth(String(t ?? '')))),
       ...(next ? { next } : {}),
+      ...(anchors ? { anchors } : {}),
     };
   };
   // 예산 3000(CLI 상한 ×3=9000) — 문체 제약 투입(2026-08-11) 후 사고량 증가로 종전 2200(6600)이
@@ -1708,7 +1797,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     else if (plan.scenes.length > n) {
       // 넘친 채로 남으면 앞 n-1 + 마지막 씬(CTA)으로 맞춘다(2026-10-05) — 종전엔 앞 n 개로 잘려 CTA 가 떨어졌다.
       io.bus?.emit('log', { message: `기획 씬 수 넘침 유지 — ${plan.scenes.length}개 → 앞 ${n - 1}개 + 마지막 씬(CTA)` });
-      plan = { ...plan, scenes: fitSceneCount(plan.scenes, n) };
+      plan = { ...plan, scenes: fitSceneCount(plan.scenes, n), ...(plan.anchors ? { anchors: fitSceneCount(plan.anchors, n) } : {}) };
     } else io.bus?.emit('log', { message: `기획 씬 수 불일치 유지 — ${plan.scenes.length}개로 진행` });
   }
   if (!plan) return null;
@@ -1722,8 +1811,14 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     // 원문 정합(스펙 §2-4) — 파생물이 원문에 없는 사실을 새로 지어내거나 원문 결론을 뒤집는지 대조(fail-open).
     // 결론 카드를 함께 싣는다(2026-08-28) — 사용자 확정 분업에서 답은 화면에만 있다. 내레이션만 보여 주면
     // 정합 판정이 '답이 없는 대본'을 보게 되고, 화면의 답은 아무 검사도 받지 않는다.
-    const sceneTexts = (p: Plan): string[] => p.scenes.map((s) => `${s.narration}${s.screenText ? ` (자막: ${s.screenText})` : ''}`
-      + (s.takeaways?.length ? ` (결론: ${s.takeaways.map((t) => `${t.when} → ${t.then}`).join(', ')})` : ''));
+    // 원문 근거 짚기(2026-10-15) — 작가가 짚은 원문 문장(원문에 실제로 있는 것만)을 씬 옆에 싣는다: 판정이 씬을 그 문장과 대조한다.
+    const sceneTexts = (p: Plan): string[] => p.scenes.map((s, i) => withAnchor(`${s.narration}${s.screenText ? ` (자막: ${s.screenText})` : ''}`
+      + (s.takeaways?.length ? ` (결론: ${s.takeaways.map((t) => `${t.when} → ${t.then}`).join(', ')})` : ''), p.anchors?.[i], sourceForGates ?? ''));
+    if (plan.anchors && sourceForGates) {
+      const ai = anchorIssues(plan.anchors, plan.scenes.length, sourceForGates);
+      const am = `원문 근거 짚기 — 씬 ${plan.scenes.length}개 중 근거 문제 ${ai.length}건${ai.length ? `: ${ai.slice(0, 3).join(' / ')}` : ''}`;
+      console.log('[숏폼]', am); io.bus?.emit('log', { message: am });
+    }
     // FACT_GATE=off 면 LLM 정합 1차·잔존 판정을 통째로 건너뛴다(킬스위치가 실제로 꺼져야 한다 — 2026-08-26 최종 리뷰 F1):
     // parity 가 빈 배열이면 정합 지적이 수정 라운드 입력에서도 빠지고, 아래 소스별 캡의 'parity ≤2' 몫이
     // 비어 상한이 13 이 된다(다른 소스는 그대로).
@@ -1765,12 +1860,14 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
         // 마무리 씬(2026-10-02, 결정적) — 대장 만석 예고·next 없는 예고·cta 아닌 마지막 씬. 위 캡 합 주석의 총계 밖 ≤2.
         ...closingSceneIssues(p.scenes, { promiseRoom, hasNext: !!p.next }).slice(0, 2),
         // 훅 화면 어긋남(2026-10-05) — 단정형 훅을 지시했는데도 화면 지목 훅이 나오면 되돌려 보낸다. 총계 밖 ≤1.
+        // 훅 글 ↔ 훅 화면(2026-10-15) — 작가가 화면에 있는 잎을 "다 졌다"고 쓴 실측. 총계 밖 ≤1.
+        ...(!extra.hookConflict ? hookFootageIssues(p.scenes[0], extra.hookFootage, p.scenes.slice(1)) : []),
         ...(extra.hookConflict && FOOTAGE_DEICTIC_RE.test(narrs[0] ?? '') ? [`항목1: 훅이 실촬영 화면을 가리킨다 — 그 화면은 이 편 주제의 장면이 아니다(${extra.hookConflict}). 화면 묘사 없이 단정 선언·숫자형으로 바꿔라`] : []),
         // 검색 키워드·답 앞세우기(2026-10-05) — 유튜브는 씬1~2, 인스타는 내레이션 어딘가. 총계 밖 ≤1.
         ...keywordEarlyIssues(p.scenes, keyword, extra.platform),
         ...timingFor(p).slice(0, 3),
         // 승계 지적(처방 C) — 소스별 예약 캡 원칙 그대로 몫을 준다(≤2). 위 캡 합 주석의 총계에 포함.
-        ...(sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(p)) : []).map(formatInherited).slice(0, 2),
+        ...(sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(p), 5, sourceBody) : []).map(formatInherited).slice(0, 2),
         // 설명 요약투(2026-08-27 권고 2, 결정적) — description 은 유튜브 설명이자 인스타 캡션이다.
         // 새 콜을 만들지 않고 기존 수정 라운드에 얹는다(= 플랜이 말하는 "1회 재생성").
         // META_SUMMARY_LINT 게이트(Fix wave 소견 4) — 블로그 meta 재시도와 같은 레버로 함께 꺼진다.
@@ -1827,7 +1924,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
         const j = await callRoleJSON<PartialFix>(io, writerRole, sys, partialFixPrompt({
           scenes: plan.scenes, problems: probs, budgets, stage: 'plan', hookEditable, description: plan.description,
           // 원문 창은 정합 판정과 같은 길이(2026-10-05 리뷰) — 수정이 못 본 원문 뒤쪽 사실을 판정이 '없는 사실'로 잡지 않게.
-          ...(sourceForGates ? { sourceExcerpt: sourceForGates.slice(0, PARITY_SOURCE_CHARS) } : {}),
+          ...(sourceForWriter ? { sourceExcerpt: sourceForWriter.slice(0, PARITY_SOURCE_CHARS) } : {}),
           ...(sourceFlagged.length ? { flagged: sourceFlagged } : {}),
           ...(hookRule ? { hookRule } : {}), ...(keyword ? { keyword } : {}),
         }), 1600, false).catch(() => null);
@@ -1863,7 +1960,7 @@ async function planShorts(io: JobIO, topic: string, keyword: string | undefined,
     const timingResidual = sourceForGates ? timingParityIssues(sourceForGates, timingFields(plan)).map(formatTimingIssue) : [];
     // 승계 잔존(처방 C) — 수정 라운드 뒤 재계산. 원문 게이트가 hold 로 사람을 세운 사안을 파생물에서도
     // 보이게 하는 것이 이 축의 목적이라, 잔존이 있으면 검토 알림까지 반드시 나가야 한다.
-    const inheritedResidual = (sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(plan)) : []).map(formatInherited);
+    const inheritedResidual = (sourceFlagged.length ? inheritedClaims(sourceFlagged, timingFields(plan), 5, sourceBody) : []).map(formatInherited);
     // 설명 요약투 잔존(권고 2) — 수정 라운드 뒤 최종 description 기준. 로그만(발행 차단 없음).
     if (metaSummaryIssues(plan.description).length) console.log(`[메타] 요약투 잔존 — "${plan.description.slice(0, 60)}"`);
     // 원문 정합 잔존(스펙 §2-4) — 정합 문제로 수정 라운드가 돌았을 때만 1회 재판정(비용). 표시 전용.
@@ -1912,7 +2009,7 @@ function kstMonthNow(now: number = Date.now()): number {
   return new Date(now + 9 * 3600 * 1000).getUTCMonth() + 1;
 }
 
-async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: string, sourceBody?: string): Promise<{ preset: string; style: string; prompts: string[]; musts: Array<SceneMust | undefined>; subject?: string; subjectLatin?: string; species?: import('../content/species').Species }> {
+async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: string, sourceBody?: string): Promise<{ preset: string; style: string; prompts: string[]; musts: Array<SceneMust | undefined>; subject?: string; subjectLatin?: string; species?: import('../content/species').Species; hero?: string; heroScenes?: number[] }> {
   const sceneGenreGuide = genreSceneGuide(shortsGenreOf(topic, CONFIG.shortsLore));
   // 훅(0번) 이미지 지침(2026-09-18, SHORTS_HOOK_FOOTAGE) — 실촬영이 훅을 못 채운 편은 이 프롬프트로
   // 생성한 이미지가 그대로 훅 화면이 된다. 넓은 풍경·정면 전경은 스와이프를 안 멈춘다(실측).
@@ -1948,10 +2045,13 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
     // 이야기형 편(2026-09-18) — 재배 시연이 아니라 그 나무가 선 자리·풍경. 하우투는 빈 문자열(종전 그대로).
     ...(sceneGenreGuide ? [sceneGenreGuide] : []),
     ...(hookImageGuide ? [hookImageGuide] : []),
+    // 주인공 나무(2026-10-15 사장님 선택) — 호두나무 활착 편: 씬2 는 1년생 묘목, 씬3~5 는 아름드리 성목으로 그려졌다. 씬마다 지시가
+    // 따로라 '이 영상이 따라가는 한 그루'가 없었다. 한 그루를 따라가는 편이면 그 나무를 한 줄로 정하고 나오는 씬을 표시하게 한다.
+    ...(CONFIG.shortsHeroTree ? ['주인공 나무: 이 영상이 한 그루를 따라가면(활착 확인·가지치기 전후·한 나무의 상태 진단 등) hero 에 그 나무를 한 줄로 적어라 — 나이(몇 년생)·키·줄기 굵기·지금 상태(잎·가지)를 원문과 주제에 맞게(예: "올봄 심은 1년생 묘목, 키 약 1m, 줄기는 엄지 굵기, 잎이 지는 중"). 그 나무가 나오는 씬은 hero:true 로 표시하고, 그 씬의 prompt 에도 같은 나무로 묘사하라(크기·굵기를 바꾸지 마라). 여러 나무를 비교하거나 따라가는 한 그루가 없으면 hero 는 빈 문자열.'] : []),
     'style_preset 은 주제·내용·톤에 어울리게 선택하라 — photorealistic 을 기본값처럼 고르지 말 것. photorealistic=실물 시연·하우투·생활, manhwa=스토리·유머·과장, watercolor=감성·계절·에세이, ink_wash=차분한 전통·사색적 주제, flat_design=정보·정책·경제·비교·수치, retro_poster=이벤트·프로모션·복고.',
-    `JSON 형식: {"style_preset":"photorealistic|manhwa|watercolor|ink_wash|flat_design|retro_poster","style":"모든 씬 공통 스타일 문구(팔레트·질감·조명)","subject_latin":"학명(모르면 빈 문자열)","subject":"한글 이름 — 구별되는 겉모습 한 줄(없으면 빈 문자열)","scenes":[{"prompt":"장면 묘사(한국어 150자 이내)"${sourceBody ? ',"must_show":["화면에 꼭 보여야 할 사실"],"must_not":["나오면 안 되는 것"]' : ''}}]}`,
+    `JSON 형식: {"style_preset":"photorealistic|manhwa|watercolor|ink_wash|flat_design|retro_poster","style":"모든 씬 공통 스타일 문구(팔레트·질감·조명)","subject_latin":"학명(모르면 빈 문자열)","subject":"한글 이름 — 구별되는 겉모습 한 줄(없으면 빈 문자열)",${CONFIG.shortsHeroTree ? '"hero":"주인공 나무 한 줄(없으면 빈 문자열)",' : ''}"scenes":[{"prompt":"장면 묘사(한국어 150자 이내)"${CONFIG.shortsHeroTree ? ',"hero":true' : ''}${sourceBody ? ',"must_show":["화면에 꼭 보여야 할 사실"],"must_not":["나오면 안 되는 것"]' : ''}}}]}`,
   ].join('\n');
-  const j = await callRoleJSON<{ style_preset?: unknown; style?: unknown; subject?: unknown; subject_latin?: unknown; scenes?: Array<{ prompt?: unknown; must_show?: unknown; must_not?: unknown }> }>(
+  const j = await callRoleJSON<{ style_preset?: unknown; style?: unknown; subject?: unknown; subject_latin?: unknown; hero?: unknown; scenes?: Array<{ prompt?: unknown; hero?: unknown; must_show?: unknown; must_not?: unknown }> }>(
     io, 'shorts_director', '당신은 숏폼 영상 디렉터입니다. 요청된 JSON 스키마만 출력합니다.', user, sourceBody ? 2600 : 1800, true,
   );
   const rawPreset = String(j?.style_preset ?? '').trim();
@@ -1964,7 +2064,10 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
   const musts = plan.scenes.map((_, i) => (sourceBody ? parseSceneMust(j?.scenes?.[i]) : undefined));
   // 수종 사전이 이긴다(2026-09-04) — LLM 기억보다 표가 정확하다. 표에 없으면 LLM 값을 쓴다.
   const known = findSpecies(`${keyword ?? ''} ${topic}`);
-  const subject = known ? speciesAnchor(known) : String(j?.subject ?? '').trim().slice(0, 120);
+  const hero = CONFIG.shortsHeroTree ? String(j?.hero ?? '').replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+  const heroScenes = hero ? plan.scenes.map((_, i) => i).filter((i) => j?.scenes?.[i]?.hero === true) : [];
+  if (hero) console.log('[숏폼]', `주인공 나무 — ${hero} · 씬 ${heroScenes.map((i) => i + 1).join(',') || '(표시 없음)'}`);
+  const subject = known ? speciesAnchor(known, { young: !!hero && isYoungHero(hero) }) : String(j?.subject ?? '').trim().slice(0, 120);
   const subjectLatin = known ? known.latin : normalizeLatinName(String(j?.subject_latin ?? ''));
   if (known) {
     console.log('[숏폼]', `수종 사전 적중 — ${known.name} (${known.latin})${known.verified ? '' : ' · 형태 묘사 미검토'}`);
@@ -1981,8 +2084,10 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
   } else if (keyword) {
     console.log('[숏폼]', `수종 앵커 없음 — 디렉터가 '${keyword}' 겉모습을 못 적었다(화면 수종이 틀릴 수 있음)`);
   }
-  return { preset, style, prompts, musts, ...(subject ? { subject } : {}), ...(subjectLatin ? { subjectLatin } : {}), ...(known ? { species: known } : {}) };
+  return { preset, style, prompts, musts, ...(subject ? { subject } : {}), ...(subjectLatin ? { subjectLatin } : {}), ...(known ? { species: known } : {}),
+    ...(hero && heroScenes.length ? { hero, heroScenes } : {}) };
 }
+
 
 /**
  * 학명 정규화(순수) — 속명+종소명 두 낱말만 통과시킨다.
@@ -2075,6 +2180,10 @@ export function buildSceneImagePrompt(a: {
   subjectSize?: string;
   /** 원문 묘사(2026-10-12) — 이 씬에 꼭 보여야 할 것·나오면 안 되는 것(designScenes must_show·must_not). */
   must?: SceneMust;
+  /** 주인공 나무(2026-10-15) — 이 씬에 나오는 그 한 그루(나이·키·굵기·상태). 주인공이 나오는 씬에만 준다. */
+  hero?: string;
+  /** 이 씬이 주인공 첫 그림을 첫 번째 첨부로 받는가(SHORTS_HERO_CHAIN) — 문구만 바꾼다, 파일은 생성기가 붙인다. */
+  heroChained?: boolean;
 }): string {
   const { style, index: i, total, seed, subject, subjectLatin, seasonal } = a;
   const scene = a.scene.trim() || '주제를 상징하는 한국 생활 장면';
@@ -2094,12 +2203,24 @@ export function buildSceneImagePrompt(a: {
   // 종 레퍼런스(2026-09-06) — 글자로 적은 형태를 모델이 못 옮긴다. 실측: 위 앵커가 "잎맥 세 개",
   // "지그재그 수형"을 다 적었는데도 깃꼴 잎맥의 매끈한 나무가 나왔다. 사장님이 찍은 그 수종
   // 프레임 한 장을 붙이자 한 번에 맞았다. 참조는 팔레트가 아니라 '이 종의 실물'로 못박는다.
+  // 주인공 나무(2026-10-15 사장님 선택) — 이 씬의 나무는 영상이 따라가는 바로 그 한 그루다. 참조 사진(보관소 영상 프레임)은 대개
+  // 사장님 밭의 큰 나무라, 크기·굵기까지 따라가면 묘목 편이 성목으로 그려진다 — 잎·수피 모양에만 쓰게 한다.
+  if (a.hero) {
+    p.push(`[주인공 나무 — 이 영상의 장면들은 같은 한 그루] ${a.hero}. 이 장면의 나무는 바로 이 나무다 — 나이·키·줄기 굵기·가지 수를 바꾸지 마라. 가까이 찍어도 줄기·가지 굵기는 이 나무 기준이다.`);
+  }
+  if (a.heroChained) {
+    p.push('[첫 번째 첨부 사진 — 주인공 나무] 첫 번째 첨부는 앞 장면에서 그린 바로 그 나무다. 같은 나무로 이어지게 줄기 굵기·키·가지 배치·수피를 맞추고, 각도·거리·손 동작만 이 장면에 맞게 바꿔라. 두 번째부터의 첨부는 이 종의 실물 참조다.');
+  }
   if (a.speciesRef) {
-    p.push('[첨부 참조 사진 — 이 종의 실물] 첨부한 사진은 바로 이 종을 찍은 실물이다. 잎 모양·잎맥이 뻗는 방향·잎 가장자리·수피 질감·가지가 갈라지는 방식을 이 사진과 같게 그린다. 다만 구도·배치·피사체는 복제하지 말고 이 씬만의 장면으로 새로 구성한다.');
+    p.push(a.hero && isYoungHero(a.hero)
+      ? `[첨부 참조 사진 — 이 종의 실물${a.heroChained ? '(두 번째부터)' : ''}] 이 종의 잎 모양·잎맥·잎 가장자리·수피 질감만 이 사진과 같게 그린다. 사진 속 나무의 크기·줄기 굵기·수형은 따르지 마라 — 이 장면의 나무는 위 주인공 나무다. 구도·배치·피사체도 복제하지 마라.`
+      : '[첨부 참조 사진 — 이 종의 실물] 첨부한 사진은 바로 이 종을 찍은 실물이다. 잎 모양·잎맥이 뻗는 방향·잎 가장자리·수피 질감·가지가 갈라지는 방식을 이 사진과 같게 그린다. 다만 구도·배치·피사체는 복제하지 말고 이 씬만의 장면으로 새로 구성한다.');
   }
   // 나무 크기(2026-09-08 사용자 지시) — 실측: 공작단풍(성목 2~3m) 마지막 씬이 사람 팔 위로 까마득히 솟은 거목으로 그려졌다.
   // 장면이 가리키는 성장 단계의 실제 크기로 그리고, 사람·손·화분 같은 비례 기준이 있으면 그것에 맞춘다.
-  if (subjectLatin || subject) {
+  if (a.hero) {
+    p.push('[나무 크기] 위 주인공 나무 묘사의 나이·키·굵기 그대로 그린다. 사람·손이 함께 나오면 그 비례로 크기를 잡아라 — 다른 씬보다 크거나 굵게 그리지 마라.');
+  } else if (subjectLatin || subject) {
     p.push(a.subjectSize
       ? `[나무 크기 — 성장 단계에 맞게] 이 종의 실제 크기: ${a.subjectSize}. 장면 묘사가 가리키는 단계(묘목/유목/성목)의 크기로 그리고 성목 최대를 넘기지 마라. 사람·손·화분·도구가 함께 나오면 그 비례로 크기를 잡아라 — 사람 머리 위로 까마득히 솟는 거목으로 그리지 마라.`
       : `[나무 크기 — 성장 단계에 맞게] ${subjectLatin ?? subject}의 실제 성장 단계별 크기(묘목→유목→성목의 높이와 폭)를 가늠해 장면 묘사가 가리키는 단계의 크기로 그리고, 이 종의 실제 최대 크기를 넘기지 마라. 사람·손·화분·도구가 함께 나오면 그 비례로 크기를 잡아라.`);
@@ -2734,9 +2855,13 @@ export async function runShortsJob(
     // 원문 정합 대조용 원문 — planShorts 의 sourceForGates 와 같은 값(재배 편은 이야기 사실 줄을 덧붙인다 — 훅 소재가 '원문에 없는 사실'로 안 잡히게).
     const loreSrc = CONFIG.shortsLore && shortsGenreOf(short.topic, CONFIG.shortsLore) === 'howto' ? loreHookSource(opts.loreFacts ?? []) : '';
     const sourceForGates = opts.sourceBody && loreSrc ? `${opts.sourceBody}\n\n${loreSrc}` : opts.sourceBody;
+    // 고치는 작가에게 주는 발췌는 근거 미확인 문장을 뺀 판본(2026-10-15, planShorts 와 같은 규칙) — 판정은 sourceForGates.
+    const writerBody = opts.sourceBody ? writerSource(opts.sourceBody, opts.sourceFlagged ?? []).body : undefined;
+    const sourceForWriter = writerBody && loreSrc ? `${writerBody}\n\n${loreSrc}` : writerBody;
     const budget = Math.floor((CONFIG.shortsMaxDurationSec - 5) * SHORTS_TTS_CPS);
     const budgets = sceneCharBudgets(budget, plan.scenes.length);
     const hookRule = hookConflict ? assertiveHookRule(hookConflict) : '';
+    const hookScreenIssues = (p: Plan): string[] => (hookFootage && !hookConflict ? hookFootageIssues(p.scenes[0], hookFootage, p.scenes.slice(1)) : []);
     const sceneTextsWithScreen = (p: Plan): string[] => p.scenes.map((s) => `${s.narration}${s.screenText ? ` (자막: ${s.screenText})` : ''}`
       + (s.takeaways?.length ? ` (결론: ${s.takeaways.map((t) => `${t.when} → ${t.then}`).join(', ')})` : '')
       + (s.items?.length ? ` (목록: ${s.items.join(', ')})` : ''));
@@ -2803,7 +2928,7 @@ export async function runShortsJob(
             const j = await callRoleJSON<PartialFix>(io, writerRole, '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.',
               partialFixPrompt({
                 scenes: plan.scenes, problems: relintProbs, budgets, stage: 'compressed', hookEditable,
-                ...(sourceForGates ? { sourceExcerpt: sourceForGates.slice(0, PARITY_SOURCE_CHARS) } : {}),
+                ...(sourceForWriter ? { sourceExcerpt: sourceForWriter.slice(0, PARITY_SOURCE_CHARS) } : {}),
                 ...(opts.sourceFlagged?.length ? { flagged: opts.sourceFlagged } : {}),
                 ...(hookRule ? { hookRule } : {}), ...(short.keyword ? { keyword: short.keyword } : {}),
               }), 1600, false).catch(() => null);
@@ -2852,7 +2977,7 @@ export async function runShortsJob(
           flowCheckPrompt({
             scenes: plan.scenes, budgets, ...(short.keyword ? { keyword: short.keyword } : {}), ...(hookRule ? { hookRule } : {}),
             // 짧은 원문 발췌(2026-10-05 리뷰) — 이음 말을 고를 때 원문 밖 말을 지어내지 않게. 판정은 아래 최종 원문 대조가 한다.
-            ...(sourceForGates ? { sourceExcerpt: sourceForGates.slice(0, 1500) } : {}),
+            ...(sourceForWriter ? { sourceExcerpt: sourceForWriter.slice(0, 1500) } : {}),
           }),
           { maxOutputTokens: 1400, signal: io.signal });
         const breaks = flowBreaks(j);
@@ -2909,7 +3034,8 @@ export async function runShortsJob(
         // 시기·수치·승계 잔존도 최종 대본으로 다시 센다(결정적) — planShorts 의 값은 감량 전 대본 기준이다.
         const display = [
           ...timingParityIssues(sourceForGates, timingFields(plan)).map(formatTimingIssue),
-          ...(opts.sourceFlagged?.length ? inheritedClaims(opts.sourceFlagged, timingFields(plan)) : []).map(formatInherited),
+          ...(opts.sourceFlagged?.length ? inheritedClaims(opts.sourceFlagged, timingFields(plan), 5, opts.sourceBody) : []).map(formatInherited),
+          ...hookScreenIssues(plan),
         ];
         const fg = finalFactGate(plan.factGate, { remaining: r.remaining, display });
         if (fg) plan = { ...plan, factGate: fg };
@@ -2921,6 +3047,20 @@ export async function runShortsJob(
     // 보내기 전 추가 수정(2026-10-14 사장님 확정, PRE_NOTIFY_RESOLVE) — 위 단계까지 거치고도 원문 정합 보류·시기·수치·승계 줄이
     // 남으면, 텔레그램에 "확인해 달라"고 넘기기 전에 그 문장만 최대 2번 더 고치고 다시 대조한다. 낭독·렌더 전이라 영상 재생성 비용이 없다.
     // 채택은 남은 문제가 엄격히 줄고 린트가 늘지 않을 때만(preNotifyAccept) — 아니면 앞 판본 그대로. 원문 대조를 받은 수정만 남는다.
+    // 훅 글 ↔ 훅 화면(2026-10-15) — 감량·흐름·되돌림을 거친 최종 훅이 실촬영과 어긋나면 검토 줄로 싣는다(아래 보내기 전 수정이 씬1 을 고친다).
+    {
+      const hs = hookScreenIssues(plan);
+      const prev = plan.factGate?.timing ?? [];
+      if (hs.length && !prev.some((x) => hs.includes(x))) {
+        plan = { ...plan, factGate: { ...(plan.factGate ?? parityToInfo([])), timing: [...prev, ...hs] } };
+        say(`훅 화면 어긋남 — ${hs[0]!.slice(0, 70)}`);
+      }
+    }
+    // 사실 수정 여유(2026-10-15 사장님 선택 "사실 수정에만 여유 3초") — 재현 실측: 보류 8편 중 5편에서 작가가 원문 조건을 되살린
+    // 옳은 수정이 '예산 초과·상한 초과'로 버려졌다(대본이 이미 212자 예산에 꽉 차 있다). 이 단계는 원문 대조 문제만 고치므로
+    // 씬 상한·대본 예산을 낭독 3초 몫만큼 넓힌다 — 35초 상한 안(예산은 상한 −5초에서 잡는다).
+    const FACT_SLACK = Math.round(3 * SHORTS_TTS_CPS);
+    const factBudget = budget + FACT_SLACK;
     if (CONFIG.preNotifyResolve && sourceForGates && !io.signal?.aborted) {
       const label = '유튜브 숏폼 대본(씬 내레이션)';
       const lint = (p: Plan): number => compressionRelintProbs(p.scenes, short.keyword).length;
@@ -2931,29 +3071,30 @@ export async function runShortsJob(
           const hookEditable = problemsTargetHook(problems);
           const j = await callRoleJSON<PartialFix>(io, writerRole, '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.',
             partialFixPrompt({
-              scenes: plan.scenes, problems, budgets, stage: 'plan', hookEditable, description: plan.description,
-              sourceExcerpt: sourceForGates.slice(0, PARITY_SOURCE_CHARS),
+              scenes: plan.scenes, problems, budgets, stage: 'plan', hookEditable, description: plan.description, factSlack: FACT_SLACK,
+              sourceExcerpt: (sourceForWriter ?? sourceForGates).slice(0, PARITY_SOURCE_CHARS),
               ...(opts.sourceFlagged?.length ? { flagged: opts.sourceFlagged } : {}),
               ...(hookRule ? { hookRule } : {}), ...(short.keyword ? { keyword: short.keyword } : {}),
             }), 1600, false).catch(() => null);
           const merged = mergePartialFix(plan, j, {
-            hookEditable, budgets, budgetChars: budget, fixScreen: screenMonth,
+            hookEditable, budgets, budgetChars: factBudget, slackChars: FACT_SLACK, fixScreen: screenMonth,
             ...(short.keyword ? { keyword: short.keyword } : {}), ...(hookConflict ? { hookReject: FOOTAGE_DEICTIC_RE } : {}),
           });
-          if (!merged.changed.length && !merged.descriptionChanged) { say(`보내기 전 추가 수정 ${round}회 — 고친 씬 없음(잔존 ${problems.length}건 그대로)`); break; }
+          if (!merged.changed.length && !merged.descriptionChanged) { say(`보내기 전 추가 수정 ${round}회 — 고친 씬 없음(잔존 ${problems.length}건 그대로${merged.rejected.length ? ` · 거절 ${merged.rejected.slice(0, 2).join(' / ')}` : ''})`); break; }
           let out = restoreLostHedges(plan, merged.plan).plan;
-          // 되돌림 경로와 같은 결정적 뒷정리 — 원문에 없는 오버레이 수치·출처 라벨, 길이 예산, 예고 정리.
+          // 되돌림 경로와 같은 결정적 뒷정리 — 원문에 없는 오버레이 수치·출처 라벨, 길이 예산(사실 여유 포함), 예고 정리.
           const st = stripUnsourcedStatOverlays(out.scenes, sourceForGates);
           if (st.removed.length) out = { ...out, scenes: st.scenes };
           out = pruneQuoteSources(out, sourceForGates).plan;
-          if (shortsNarrationChars(out) > budget) out = trimPlanToBudget(out, budget, CONFIG.shortsScenes).plan;
+          if (shortsNarrationChars(out) > factBudget) out = trimPlanToBudget(out, factBudget, CONFIG.shortsScenes).plan;
           const se = settleNextEpisode(out, promiseRoom.room);
           if (se.note) out = se.plan;
           const issues = CONFIG.factGate ? await parityIssuesChecked(label, sceneTextsWithScreen(out), sourceForGates, io.signal).catch(() => null) : [];
           if (!issues) { say(`보내기 전 추가 수정 ${round}회 — 재대조 실패, 앞 판본 유지`); break; }
           const display = [
             ...timingParityIssues(sourceForGates, timingFields(out)).map(formatTimingIssue),
-            ...(opts.sourceFlagged?.length ? inheritedClaims(opts.sourceFlagged, timingFields(out)) : []).map(formatInherited),
+            ...(opts.sourceFlagged?.length ? inheritedClaims(opts.sourceFlagged, timingFields(out), 5, opts.sourceBody) : []).map(formatInherited),
+            ...hookScreenIssues(out),
           ];
           const after = issues.length + display.length;
           if (!preNotifyAccept(problems.length, after, lint(plan), lint(out))) {
@@ -2964,6 +3105,54 @@ export async function runShortsJob(
           trace = traceMarkParity(traceRecord(trace, plan.scenes, '보내기 전 추가 수정', { llm: true }), issues);
           say(`보내기 전 추가 수정 ${round}회 — 잔존 ${problems.length}→${after}건 채택(씬 ${merged.changed.join(',') || '설명'})`);
         } catch { say(`보내기 전 추가 수정 ${round}회 — 실패, 앞 판본 유지`); break; }
+      }
+      // 남는 왜곡은 원문 문장으로(2026-10-15 사장님 선택 "원문 문장으로 바꾸기") — 수정을 다 거쳤는데도 원문 정합 보류가 남으면
+      // 두 번 더 판정해 세 번 중 두 번 이상 지목된 씬만(판정 흔들림 제외) 원문 문장을 거의 그대로 옮긴 문장으로 바꾼다.
+      // 옮겼는지는 코드가 원문과 글자 단위로 대조하고(isNearLiteral), 바꾼 뒤 다시 판정해 그 씬 지적이 사라질 때만 채택한다.
+      if (CONFIG.factGate && plan.factGate?.status === 'hold' && plan.factGate.unsupported.length && !io.signal?.aborted) {
+        try {
+          const cur = plan.factGate.unsupported;
+          const more = await Promise.all([0, 1].map(() => parityIssuesChecked(label, sceneTextsWithScreen(plan), sourceForGates, io.signal).catch(() => null)));
+          const targets = stableProblemScenes([cur, ...more], plan.scenes.length);
+          if (!targets.length) say('원문 문장 옮기기 — 세 판정 중 두 번 이상 같은 씬 지적 없음(판정 흔들림), 건너뜀');
+          else {
+            const caps = Object.fromEntries(targets.map((k) => [k, sceneBudgetAt(budgets, k - 1, plan.scenes.length) + FACT_SLACK]));
+            const probs = [...new Set([cur, ...more].flatMap((l) => l ?? []).filter((x) => targets.includes(problemScene(x) ?? -1)))].slice(0, 6);
+            const j = await callRoleJSON<PartialFix>(io, writerRole, '당신은 유튜브 숏폼 작가입니다. 요청된 JSON 스키마만 출력합니다.',
+              literalFixPrompt({ scenes: plan.scenes, targets, problems: probs, source: (sourceForWriter ?? sourceForGates).slice(0, PARITY_SOURCE_CHARS), caps, ...(short.keyword ? { keyword: short.keyword } : {}) }), 1200, false).catch(() => null);
+            const cand = (j?.scenes ?? []).filter((x): x is NonNullable<typeof x> => !!x && targets.includes(Number(x.index)) && typeof x.narration === 'string');
+            // 작가용 원문(근거 미확인 문장을 뺀 판본)과 대조 — 원문 전체와 대조하면 뺀 문장을 다시 옮겨 와도 '원문 일치'로 통과한다.
+            const lit = cand.filter((x) => isNearLiteral(String(x.narration), sourceForWriter ?? sourceForGates));
+            const merged = mergePartialFix(plan, { scenes: lit }, {
+              hookEditable: targets.includes(1), budgets, budgetChars: factBudget, slackChars: FACT_SLACK, fixScreen: screenMonth, onlyScenes: targets,
+              ...(short.keyword ? { keyword: short.keyword } : {}), ...(hookConflict ? { hookReject: FOOTAGE_DEICTIC_RE } : {}),
+            });
+            const why = [cand.length > lit.length ? `원문과 거리 먼 답 ${cand.length - lit.length}` : '', ...merged.rejected.slice(0, 2)].filter(Boolean).join(' · ');
+            if (!merged.changed.length) say(`원문 문장 옮기기 — 씬 ${targets.join(',')} 바꾸지 못함${why ? ` (${why})` : ''}`);
+            else {
+              let out = merged.plan;
+              const st = stripUnsourcedStatOverlays(out.scenes, sourceForGates);
+              if (st.removed.length) out = { ...out, scenes: st.scenes };
+              out = pruneQuoteSources(out, sourceForGates).plan;
+              if (shortsNarrationChars(out) > factBudget) out = trimPlanToBudget(out, factBudget, CONFIG.shortsScenes).plan;
+              const issues = await parityIssuesChecked(label, sceneTextsWithScreen(out), sourceForGates, io.signal).catch(() => null);
+              const left = issues ? issues.filter((x) => merged.changed.includes(problemScene(x) ?? -1)).length : -1;
+              // 채택 비교는 원문 정합 + 표시 줄(시기·수치·승계·훅 화면) 합계 — 옮긴 문장이 승계·훅 줄을 새로 만들면 안 된다.
+              const display = [
+                ...timingParityIssues(sourceForGates, timingFields(out)).map(formatTimingIssue),
+                ...(opts.sourceFlagged?.length ? inheritedClaims(opts.sourceFlagged, timingFields(out), 5, opts.sourceBody) : []).map(formatInherited),
+                ...hookScreenIssues(out),
+              ];
+              const before = cur.length + (plan.factGate.timing?.length ?? 0);
+              if (!issues) say('원문 문장 옮기기 — 재대조 실패, 앞 판본 유지');
+              else if (left === 0 && issues.length + display.length <= before && lint(out) <= lint(plan)) {
+                plan = { ...out, factGate: finalFactGate(plan.factGate, { remaining: issues, display }) };
+                trace = traceMarkParity(traceRecord(trace, plan.scenes, '원문 문장 옮기기', { llm: true }), issues);
+                say(`원문 문장 옮기기 — 씬 ${merged.changed.join(',')} 채택 · 잔존 ${cur.length}→${issues.length}건`);
+              } else say(`원문 문장 옮기기 — 씬 ${merged.changed.join(',')} 지적 ${left}건 남음·잔존 ${before}→${issues.length + display.length}건, 앞 판본 유지`);
+            }
+          }
+        } catch { say('원문 문장 옮기기 — 실패, 앞 판본 유지'); }
       }
     }
     // 빈 연출 메우기(2026-09-04) — kind 만 오고 내용이 빈 씬은 화면에 아무것도 못 그린다.
@@ -3075,13 +3264,15 @@ export async function runShortsJob(
     if (userAssetFiles.length || userVideoFiles.length) {
       say(`실촬영 배정 — 사진 ${assetPlan.filter(Boolean).length}씬 · 영상 ${videoPlan.filter(Boolean).length}씬${covered.size ? ` · 이미지 ${covered.size}장 생성 안 함` : ''}`);
     }
-    say(`씬 이미지 생성 시작 — gpt-image-2 세로 ${slotScenes.length}장${covered.size ? ` (전체 ${plan.scenes.length}씬 중 ${covered.size}씬은 실촬영)` : ''}`);
+    say(`씬 이미지 생성 시작 — ${CONFIG.openaiImageModel} 세로 ${slotScenes.length}장${covered.size ? ` (전체 ${plan.scenes.length}씬 중 ${covered.size}씬은 실촬영)` : ''}`);
     // 프롬프트는 '씬 번호대로' 한 벌 만든다 — 이 배열이 여러 곳의 기준이다.
     //  · bg-draft.json 은 전 씬을 담는다. 수정요청 재생성이 slots[씬번호-1] 로 읽고(위 applyRevision),
     //    씬 QA 재생성도 scenePrompts[원본 씬번호] 로 읽는다. 여기서 슬롯을 줄이면 그 둘이 어긋나
     //    엉뚱한 씬의 프롬프트로 좋은 이미지를 덮어쓴다.
     //  · 생성에 넘기는 draft 만 따로(bg-gen.json) 축약한다 — 실촬영 씬은 만들지 않는다.
-    const scenePromptsAll = plan.scenes.map((_, i) => buildSceneImagePrompt({
+    // 주인공 나무(2026-10-15 사장님 선택) — 디렉터가 표시한 씬에만 같은 나무 한 줄을 싣는다.
+    const heroSet = new Set(design.heroScenes ?? []);
+    const promptFor = (i: number, chained = false): string => buildSceneImagePrompt({
       // seed=쇼츠 id — 촬영 지시(조명·심도·앵글·생활감)가 편마다 갈린다. 재생성해도 같은 지시가 나온다.
       style: design.style, scene: design.prompts[i] ?? '', index: i, total: plan.scenes.length, seed: id,
       // 화분 소품은 화분·실내 주제일 때만 — 노지 수종에 넣으면 종 자체가 틀어진다(2026-09-06 실사고)
@@ -3094,55 +3285,92 @@ export async function runShortsJob(
       // 2026-10-12 — 내레이션까지 보면 "열매 보려면"이 삽수 장면에 열매 묘사를 끌어왔다. 실제로 그리는 장면 묘사만 본다.
       ...(design.species ? { seasonal: speciesSeasonalHint(design.species, design.prompts[i] ?? '') } : {}),
       ...(design.musts[i] ? { must: design.musts[i] } : {}),
-    }));
-    const slotOf = (i: number): { alt: string; prompt: string } => ({
-      alt: plan.scenes[i]!.screenText || plan.scenes[i]!.narration.slice(0, 30),
-      prompt: scenePromptsAll[i]!,
+      ...(design.hero && heroSet.has(i) ? { hero: design.hero } : {}),
+      ...(chained ? { heroChained: true } : {}),
     });
+    const scenePromptsAll = plan.scenes.map((_, i) => promptFor(i));
+    const altOf = (i: number): string => plan.scenes[i]!.screenText || plan.scenes[i]!.narration.slice(0, 30);
+    const slotOf = (i: number): { alt: string; prompt: string } => ({ alt: altOf(i), prompt: scenePromptsAll[i]! });
     const bgDraft = { imageSlots: plan.scenes.map((_, i) => slotOf(i)) };
     const bgDraftPath = path.join(dir, 'bg-draft.json');
     const bgGenPath = path.join(dir, 'bg-gen.json');
     const bgManifestPath = path.join(dir, 'bg-manifest.json');
     fs.writeFileSync(bgDraftPath, JSON.stringify(bgDraft, null, 2), 'utf-8');
     fs.writeFileSync(bgGenPath, JSON.stringify({ imageSlots: slotScenes.map(slotOf) }, null, 2), 'utf-8');
-    const genRes = slotScenes.length ? await generateImagesForDraft(bgGenPath, path.join(dir, 'scenes'), bgManifestPath,
-      {
-        imageStyle: design.preset, limit: slotScenes.length, size: '1024x1536',
-        timeoutMs: 150_000 * slotScenes.length,
-        // 첨부 사진·실물 프레임을 레퍼런스로 — 종 레퍼런스가 있으면 맨 앞에 온다(형태의 근거).
-        ...(genRefs.length ? { refImages: genRefs } : {}),
-      },
-      opts.signal) : null;
+    type GenItem = { file_path?: string; error?: string } | null;
+    /** 씬 묶음 한 번 생성 — 묶음마다 지시 파일·출력 폴더·매니페스트를 따로 쓴다(파일 이름이 묶음 안 순번이라 겹친다). */
+    const runGen = async (idxs: number[], tag: string, refs: readonly string[], chained: boolean): Promise<{ idx: number[]; images: GenItem[]; ok: boolean; output: string }> => {
+      if (!idxs.length) return { idx: [], images: [], ok: true, output: '' };
+      const genPath = path.join(dir, `bg-gen-${tag}.json`);
+      const manPath = path.join(dir, `bg-manifest-${tag}.json`);
+      fs.writeFileSync(genPath, JSON.stringify({ imageSlots: idxs.map((i) => ({ alt: altOf(i), prompt: chained ? promptFor(i, true) : scenePromptsAll[i]! })) }, null, 2), 'utf-8');
+      fs.writeFileSync(manPath, '{}', 'utf-8'); // 지난 실행의 매니페스트를 오독하지 않게
+      const r = await generateImagesForDraft(genPath, path.join(dir, 'scenes', ...(tag === 'main' ? [] : [tag])), manPath, // 묶음 폴더는 scenes/ 안 — 물려받기 복사·저장공간 정리가 scenes/ 를 통째로 다룬다
+        {
+          imageStyle: design.preset, limit: idxs.length, size: '1024x1536', timeoutMs: 150_000 * idxs.length,
+          // 첨부 사진·실물 프레임을 레퍼런스로 — 종 레퍼런스가 있으면 맨 앞에 온다(형태의 근거). 이어 그리기 묶음은 주인공 첫 그림이 맨 앞.
+          ...(refs.length ? { refImages: [...refs] } : {}),
+        }, opts.signal);
+      let ims: GenItem[] = [];
+      try { ims = (JSON.parse(fs.readFileSync(manPath, 'utf-8')) as { images?: GenItem[] }).images ?? []; } catch { /* 실패 — 아래에서 빈 자리 */ }
+      return { idx: idxs, images: ims, ok: r.ok, output: r.output };
+    };
+    // 주인공 나무 이어 그리기(2026-10-15 사장님 선택, SHORTS_HERO_CHAIN) — 주인공 첫 씬을 먼저 그리고, 나머지 주인공 씬은 그 그림을
+    // 첫 참조로 붙여 같은 개체로 잇는다. 주인공이 안 나오는 씬은 그와 동시에 그린다. 기준 그림이 실패하면 따로 그린다.
+    const heroSlots = slotScenes.filter((i) => heroSet.has(i));
+    const chainHero = CONFIG.shortsHeroChain && !!design.hero && heroSlots.length >= 2;
+    let heroRef: string | null = null;
+    const genOuts: Array<{ idx: number[]; images: GenItem[]; ok: boolean; output: string }> = [];
+    if (chainHero) {
+      const first = heroSlots[0]!;
+      const g1 = await runGen([first], 'hero1', genRefs, false);
+      genOuts.push(g1);
+      const fp = g1.images[0]?.file_path ? String(g1.images[0]!.file_path) : '';
+      heroRef = fp && !g1.images[0]?.error && fs.existsSync(fp) ? fp : null;
+      say(heroRef
+        ? `주인공 나무 이어 그리기 — 씬${first + 1} 그림을 기준으로 씬 ${heroSlots.slice(1).map((i) => i + 1).join(',')}`
+        : '주인공 나무 이어 그리기 — 기준 그림 실패, 나머지는 따로 그림');
+      const chained = heroRef ? heroSlots.slice(1) : [];
+      const rest = slotScenes.filter((i) => i !== first && !chained.includes(i));
+      genOuts.push(...await Promise.all([
+        runGen(chained, 'hero', heroRef ? [heroRef, ...genRefs].slice(0, 4) : genRefs, true),
+        runGen(rest, 'rest', genRefs, false),
+      ]));
+    } else if (slotScenes.length) {
+      genOuts.push(await runGen(slotScenes, 'main', genRefs, false));
+    }
+    const chainedSet = new Set(heroRef ? heroSlots.slice(1) : []);
+    // 실제로 쓴 지시(이어 그린 씬은 '첫 번째 첨부 = 주인공' 문구 포함) — 씬 QA 재생성이 같은 지시·같은 첨부로 다시 그린다.
+    const scenePromptsUsed = plan.scenes.map((_, i) => (chainedSet.has(i) ? promptFor(i, true) : scenePromptsAll[i]!));
+    const refsFor = (i: number): string[] => (chainedSet.has(i) && heroRef ? [heroRef, ...genRefs].slice(0, 4) : genRefs);
+    // 합친 매니페스트(슬롯 순서) — 수정 요청 재구성(reviseImagesFor)이 bg-manifest.json 을 슬롯 순서로 읽는다.
+    const bySlot = new Map<number, GenItem>();
+    for (const g of genOuts) g.idx.forEach((sc, k) => bySlot.set(sc, g.images[k] ?? null));
+    fs.writeFileSync(bgManifestPath, JSON.stringify({ images: slotScenes.map((sc) => bySlot.get(sc) ?? null) }, null, 2), 'utf-8');
     // 실패를 소리 내어 남긴다(2026-09-09) — 종전엔 결과를 버려서 429(잔액 없음)가 '배경 폴백'으로만 보였다.
-    if (genRes && !genRes.ok) say(`씬 이미지 스크립트 실패 — ${genRes.output.split('\n').filter(Boolean).slice(-1)[0]?.slice(0, 160) ?? ''}`);
-    try {
-      const gm = JSON.parse(fs.readFileSync(bgManifestPath, 'utf-8')) as { images?: Array<{ error?: string } | null> };
-      const errs = (gm.images ?? []).map((x) => String(x?.error ?? '')).filter(Boolean);
-      if (errs.length) say(`씬 이미지 생성 실패 ${errs.length}/${slotScenes.length}장 — ${errs[0]!.replace(/\s+/g, ' ').slice(0, 160)}`);
-    } catch { /* 매니페스트 없음 — 아래 슬롯 정렬이 전 씬 폴백으로 처리 */ }
+    for (const g of genOuts) if (!g.ok) say(`씬 이미지 스크립트 실패 — ${g.output.split('\n').filter(Boolean).slice(-1)[0]?.slice(0, 160) ?? ''}`);
+    const errs = slotScenes.map((sc) => String(bySlot.get(sc)?.error ?? '')).filter(Boolean);
+    if (errs.length) say(`씬 이미지 생성 실패 ${errs.length}/${slotScenes.length}장 — ${errs[0]!.replace(/\s+/g, ' ').slice(0, 160)}`);
     // 슬롯 정렬 이미지 목록 — 실패 씬은 null(렌더러가 그라데이션 폴백, 순서 보존)
     let images: Array<string | null> = plan.scenes.map(() => null);
-    try {
-      const m = JSON.parse(fs.readFileSync(bgManifestPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string } | null>; dry_run?: boolean };
-      if (!m.dry_run) {
-        // 슬롯 k 는 slotScenes[k] 번 씬이다 — 실촬영 씬을 빼고 생성했으므로 번호가 밀린다.
-        slotScenes.forEach((sceneIdx, k) => {
-          const im = m.images?.[k];
-          const fp = im?.file_path ? String(im.file_path) : '';
-          images[sceneIdx] = fp && !im?.error && fs.existsSync(fp) ? fp : null;
-        });
-      }
-    } catch { /* 전 씬 폴백 */ }
+    slotScenes.forEach((sceneIdx) => {
+      const im = bySlot.get(sceneIdx);
+      const fp = im?.file_path ? String(im.file_path) : '';
+      images[sceneIdx] = fp && !im?.error && fs.existsSync(fp) ? fp : null;
+    });
     // 실사진이 생성본을 이긴다 — 배정된 씬은 사용자가 올린 사진을 쓴다.
     images = images.map((g, i) => assetPlan[i] ?? g);
 
     // 3-b) 씬 배경 비전 QA — 잡글자·구도·왜곡 불량만 재생성(claude 비전, fail-open, 엔진 독립).
     const qa = await qaSceneImages({
       // 씬 번호대로인 배열이어야 한다 — QA 는 images 의 원본 인덱스로 이 배열을 찾는다.
-      dir, images, scenePrompts: scenePromptsAll,
+      dir, images, scenePrompts: scenePromptsUsed,
       preset: design.preset, signal: opts.signal,
-      // 재생성도 같은 레퍼런스를 받아야 한다 — 안 주면 종 근거 없이 다시 그려 또 틀린다(2026-09-06)
+      // 재생성도 같은 레퍼런스를 받아야 한다 — 안 주면 종 근거 없이 다시 그려 또 틀린다(2026-09-06).
+      // 이어 그린 주인공 씬은 주인공 첫 그림을 맨 앞에(2026-10-15).
       ...(genRefs.length ? { refImages: genRefs } : {}),
+      refImagesFor: refsFor,
+      ...(design.hero && heroSet.size ? { hero: design.hero, heroScenes: heroSet } : {}),
       ...(design.subject ? { subject: design.subject } : {}),
       ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}), // 수종 오식별 검사
       ...(design.species?.size ? { subjectSize: design.species.size } : {}),   // 크기 검사(2026-09-08)

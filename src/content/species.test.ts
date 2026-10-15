@@ -110,6 +110,13 @@ describe('speciesAnchor — 앵커 문구', () => {
     expect(a).toContain('깃꼴겹잎');
     expect(a.length).toBeLessThanOrEqual(200);
   });
+  it('어린 주인공이면 수형(성목 설명)을 뺀다 — 호두나무 묘목 편이 "큰 교목"으로 그려진 실측(2026-10-15)', () => {
+    const sp = findSpecies('호두나무')!;
+    expect(sp.form).toBeTruthy();
+    expect(speciesAnchor(sp)).toContain(sp.form!);
+    expect(speciesAnchor(sp, { young: true })).not.toContain(sp.form!);
+    expect(speciesAnchor(sp, { young: true })).toContain(sp.leaf!);
+  });
   it('실사고 재현 — 남천이 손바닥잎으로 안 나온다', () => {
     expect(speciesAnchor(findSpecies('남천')!)).not.toContain('손바닥');
   });

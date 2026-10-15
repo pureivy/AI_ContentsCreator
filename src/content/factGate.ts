@@ -26,6 +26,8 @@ export interface FactGateResult {
   firstPass?: FactGateInfo & { filtered?: FactGateFiltered };
   /** 판정기에 보내지 않고 코드가 선분류로 걸러낸 문장(판단문 제외·유보문 통과). */
   filtered?: FactGateFiltered;
+  /** 근거 미확인 사전 확인 기록(2026-10-15, claimVerify.resolveUnverifiedClaims) — 공식 자료 확인·낮춤/삭제 내역. */
+  claimVerify?: import('./claimVerify').ClaimVerifySummary;
 }
 /** 선분류로 걸러낸 문장 텍스트(개수 = 배열 길이). Fix round 4: 개수만 남기면 게이트가 무엇을 왜 뺐는지
  * 사후에 되짚을 수 없어 과차단(C1 같은 정규식 과잉)을 실측으로 잡아낼 방법이 없었다. */
@@ -33,14 +35,18 @@ export interface FactGateFiltered { judgment: string[]; hedged: string[] }
 /** piece·카드·쇼츠 레코드에 남기는 요약(claims 제외). unverified 는 구 데이터 호환으로 선택 — 없으면 [] 로 읽는다. */
 /** timing 은 파생물(카드·쇼츠) 전용 — 결정적 시기·수치 대조(timingParity.ts)의 잔존 지적. 비차단 표시용이라
  *  status 에 영향을 주지 않는다(status 는 LLM 정합 판정이 정한다). 구 데이터는 필드가 없다. */
-export interface FactGateInfo { status: 'pass' | 'hold' | 'error'; unsupported: string[]; contradicted: string[]; unverified?: string[]; timing?: string[]; checkedTs: string }
+export interface FactGateInfo { status: 'pass' | 'hold' | 'error'; unsupported: string[]; contradicted: string[]; unverified?: string[]; timing?: string[]; checkedTs: string;
+  /** 근거 미확인 사전 확인 건수(블로그만, 2026-10-15) — 알림 한 줄용. */
+  verify?: { verified: number; repaired: number; kept: number; opinion: number } }
 
 const KINDS: ReadonlySet<string> = new Set(['number', 'time', 'species', 'pest', 'treatment', 'law', 'price', 'experience', 'stat', 'general']);
 const STATUSES: ReadonlySet<string> = new Set(['supported', 'hedged_general', 'unsupported', 'contradicted']);
 
 export function toFactGateInfo(r: FactGateResult): FactGateInfo {
   // unverified 는 ?? [] — 이 커밋 이전에 기록된 fact_gate.json 을 readFactGate 로 되읽어 오면 필드가 없다.
-  return { status: r.status, unsupported: r.unsupported, contradicted: r.contradicted, unverified: r.unverified ?? [], checkedTs: r.checkedTs };
+  const v = r.claimVerify;
+  return { status: r.status, unsupported: r.unsupported, contradicted: r.contradicted, unverified: r.unverified ?? [], checkedTs: r.checkedTs,
+    ...(v ? { verify: { verified: v.verified.length, repaired: v.repaired.length, kept: v.kept.length, opinion: v.opinion.length } } : {}) };
 }
 
 /** 1차 판정 보존용 요약 — 선분류 텍스트(filtered)까지 함께 남긴다(Fix round 4, C3). 2차 결과의 filtered 는

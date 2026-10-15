@@ -307,6 +307,11 @@ export interface Config {
   /** 훅(0번) 씬에 실촬영(사진·영상)을 우선 배정 — 첫 화면이 실사면 채널 인상이 달라진다(2026-09-18).
    *  종전엔 훅을 아예 비웠다(정지 화면이 커버로 필요하다는 이유). SHORTS_HOOK_FOOTAGE=false 킬스위치. */
   readonly shortsHookFootage: boolean;
+  /** 주인공 나무(2026-10-15 사장님 선택) — 한 그루를 따라가는 편은 디렉터가 그 나무(나이·키·굵기·상태)를 한 줄로 정하고 그 나무가
+   *  나오는 씬마다 같은 문장을 싣는다. 어린 나무면 수종 수형 문구를 빼고 참조 사진은 잎·수피 모양에만 쓴다. SHORTS_HERO_TREE. */
+  readonly shortsHeroTree: boolean;
+  /** 주인공 나무 이어 그리기(2026-10-15) — 주인공 첫 씬을 먼저 그리고 나머지 주인공 씬은 그 그림을 첫 참조로 붙여 그린다. SHORTS_HERO_CHAIN. */
+  readonly shortsHeroChain: boolean;
   /** 본문 씬 구절 자막(2026-09-18) — 내레이션을 4~14자 구절로 나눠 글자 수 비례 타이밍으로 하단에 띄운다.
    *  릴스·쇼츠는 무음 자동재생이라 첫 시청에서 낭독이 안 들린다 — 화면 글자가 내용을 대신해야 한다. SHORTS_CAPTIONS=false 킬스위치. */
   readonly shortsCaptions: boolean;
@@ -327,6 +332,13 @@ export interface Config {
    *  갖고 있으면, 텔레그램 검토 알림 전에 남은 문장만 한 번 더 고치고 다시 대조한다. 잔존이 줄 때만 채택(늘거나 같으면 앞 판본).
    *  숏폼·카드는 낭독·렌더 전이라 영상·슬라이드 재생성 비용이 없다. PRE_NOTIFY_RESOLVE=false 면 종전대로 첫 라운드 뒤 잔존을 그대로 보낸다. */
   readonly preNotifyResolve: boolean;
+  /** 블로그 근거 미확인 문장 사전 확인(2026-10-15 사장님 선택) — 지식백과·공공기관 문서와 대조, 확인 못 하면 낮추거나 삭제. CLAIM_VERIFY. */
+  readonly claimVerify: boolean;
+  /** 숏폼 원문 근거 짚기(2026-10-15) — off·instagram·all. 씬마다 근거 원문 문장을 적게 하고 원문 대조에 나란히 싣는다. SHORTS_SOURCE_ANCHOR. */
+  readonly shortsSourceAnchor: string;
+  /** 작가용 원문에서 근거 미확인 문장 빼기(2026-10-15 사장님 선택) — 숏폼·카드뉴스 작가가 받는 블로그 본문에서 원문 게이트가 건
+   *  문장을 지우고 넘긴다. 판정은 원문 전체로 본다. STRIP_FLAGGED_SOURCE=false 면 종전(금지 목록만). */
+  readonly stripFlaggedSource: boolean;
   /** 최종 대본 흐름 점검(2026-10-05) — 감량·트리밍 뒤 LLM 1회로 씬 이음새를 보고 끊긴 이음 문장만 고친다(예산 안에서만,
    *  훅·마지막 씬 제외, 화면 글자 유지). SHORTS_FLOW_CHECK=false 면 그 단계만 건너뛴다. 흐름 점검이 바꾼 씬의 원문 대조는
    *  이 스위치가 아니라 최종 원문 대조(FACT_GATE)가 맡는다. */
@@ -620,10 +632,15 @@ export const CONFIG: Config = {
   shortsHookVoice: envBool('SHORTS_HOOK_VOICE', true),
   shortsTtsSttCheck: envBool('SHORTS_TTS_STT_CHECK', true),
   shortsHookFootage: envBool('SHORTS_HOOK_FOOTAGE', true),
+  shortsHeroTree: envBool('SHORTS_HERO_TREE', true),
+  shortsHeroChain: envBool('SHORTS_HERO_CHAIN', true),
   shortsCaptions: envBool('SHORTS_CAPTIONS', true),
   shortsTeaser: envBool('SHORTS_TEASER', true),
   shortsPartialFix: envBool('SHORTS_PARTIAL_FIX', true),
   preNotifyResolve: envBool('PRE_NOTIFY_RESOLVE', true),
+  claimVerify: envBool('CLAIM_VERIFY', true),
+  shortsSourceAnchor: env('SHORTS_SOURCE_ANCHOR', 'off'),
+  stripFlaggedSource: envBool('STRIP_FLAGGED_SOURCE', true),
   shortsFlowCheck: envBool('SHORTS_FLOW_CHECK', true),
   shortsMidcut: envBool('SHORTS_MIDCUT', true),
   shortsMediaRotate: envBool('SHORTS_MEDIA_ROTATE', true),

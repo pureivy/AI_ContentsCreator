@@ -347,9 +347,9 @@ export function layoutPrompt(a: {
     '',
     '[사진]',
     a.blog.length
-      ? `블로그 사진(재사용 우선 — {"use":"blog","n":번호}). 한 사진은 두 번까지:\n${a.blog.map((b) => `${b.n}. ${b.alt}${b.real ? ' (실제 촬영)' : ''}`).join('\n')}`
+      ? `블로그 사진(재사용 우선 — {"use":"blog","n":번호}). "(실제 촬영)" 사진을 먼저 써라 — 농원에서 찍은 실제 나무다. 한 사진은 세트에서 한 번만 — 다 쓰였으면 새로 그린다(gen):\n${a.blog.map((b) => `${b.n}. ${b.alt}${b.real ? ' (실제 촬영)' : ''}`).join('\n')}`
       : '블로그 사진 없음.',
-    `맞는 블로그 사진이 없을 때만 새로 그린다 — {"use":"gen","scene":"장면 묘사 160자(글자 없는 사진)","must_show":["원문이 말한 모습"],"must_not":["나오면 안 되는 것"]}. 새로 그리는 사진은 세트 전체에서 ${a.maxGen}장 이하. 사진이 필요 없는 판(points 의 emoji 칸·facts·steps)은 사진을 넣지 마라.`,
+    `맞는 블로그 사진이 없거나 이미 쓰였을 때 새로 그린다 — {"use":"gen","scene":"장면 묘사 160자(글자 없는 사진)","must_show":["원문이 말한 모습"],"must_not":["나오면 안 되는 것"]}. 새로 그리는 사진은 세트 전체에서 ${a.maxGen}장 이하. 사진이 필요 없는 판(points 의 emoji 칸·facts·steps)은 사진을 넣지 마라.`,
     '사진이 들어가는 판(cover·photo·compare·pair·numbers)은 사진을 반드시 넣어라 — 맞는 블로그 사진이 없으면 gen 으로. 사진 없이 글만 있는 photo 판은 빈 화면처럼 보인다. 같은 블로그 사진을 연달아 쓰지 마라.',
     '장면 묘사·must_show 는 원문이 말한 모습대로(삽수는 잎 없는 맨가지, 묘목은 원문이 말한 나이·크기). 칼·가위·톱은 그리지 마라.',
     '',
@@ -374,10 +374,44 @@ export function toRenderSpec(l: CardLayout, resolve: (r: PhotoRef | undefined) =
   };
 }
 
+/**
+ * 같은 블로그 사진 반복 걷어 내기(순수, 2026-10-15 사장님 "사진 상한 늘려") — 세트에서 이미 쓴 블로그 사진이 또 나오면 그 자리를
+ * 새로 그릴 사진(gen)으로 바꾼다. 장면은 그 장의 제목·내용에서 잡는다(새 사진은 같은 세트 사진을 참조로 받아 같은 나무로 그린다).
+ * 새 사진 몫(maxGen)을 다 쓰면 반복을 그대로 둔다 — 사진 판이 빈 화면이 되는 것보다 낫다. 표지(0번 장)는 건드리지 않는다.
+ * 반환: 바꾼 자리 수. layout 을 제자리에서 고친다.
+ */
+export function dedupeBlogPhotos(layout: CardLayout, maxGen: number): number {
+  const used = new Set<number>();
+  let gens = 0;
+  const count = (r: PhotoRef | undefined): void => { if (r?.use === 'gen') gens++; };
+  layout.slides.forEach((s) => { count(s.photo); s.items?.forEach((it) => count(it.photo)); s.photos?.forEach((p) => count(p.photo)); });
+  let changed = 0;
+  const sceneOf = (s: LayoutSlide, label?: string): string =>
+    fitCap(`${label ? `${label} — ` : ''}${s.title}${s.lead ? ` — ${s.lead.replace(/\s*\n\s*/g, ' ')}` : ''} 를 보여 주는 장면(앞 장 사진과 다른 각도·거리)`, CAPS.scene) ?? s.title;
+  const visit = (r: PhotoRef | undefined, s: LayoutSlide, isCover: boolean, label?: string): PhotoRef | undefined => {
+    if (r?.use !== 'blog') return r;
+    if (!used.has(r.n)) { used.add(r.n); return r; }
+    if (isCover || gens >= maxGen) return r;
+    gens++; changed++;
+    return { use: 'gen', scene: sceneOf(s, label) };
+  };
+  layout.slides.forEach((s, i) => {
+    s.photo = visit(s.photo, s, i === 0);
+    s.items?.forEach((it) => { it.photo = visit(it.photo, s, false, it.title); });
+    s.photos?.forEach((p) => { p.photo = visit(p.photo, s, false, p.label) ?? p.photo; });
+  });
+  return changed;
+}
+
 /** 글자 없는 사진 프롬프트(순수) — 카드 사진 칸용. */
-export function genPhotoPrompt(scene: string, must: SceneMust | undefined, subject?: string): string {
+export function genPhotoPrompt(scene: string, must: SceneMust | undefined, subject?: string, opts: { setRefs?: boolean; young?: boolean } = {}): string {
   return [
     subject ? `[대상 식물 — 화면의 나무·풀은 반드시 이 종] ${subject}. 잎 모양·잎차례·수형을 이 종의 실제 모습대로.` : '',
+    // 같은 세트 사진 잇기(2026-10-15 사장님 지적 — 숏폼 활착 편의 씬마다 다른 나무, 카드에도 같은 구조) — 새 사진은 같은 카드의
+    // 다른 장에 쓰인 블로그 사진을 참조로 받는다. 어린 나무 주제면 참조의 크기가 아니라 이 글의 나무 단계를 따른다.
+    opts.setRefs
+      ? `[첨부 사진 — 이 카드뉴스의 다른 장 사진] 같은 세트로 이어지게 같은 나무·같은 밭으로 그린다 — 나무 나이·키·줄기 굵기·흙과 주변을 첨부 사진과 맞추고, 구도·각도만 이 장면에 맞게 새로 잡는다.${opts.young ? ' 이 글의 나무는 어린 나무다 — 첨부 사진에 큰 나무가 섞여 있어도 이 장면은 어린 나무로 그린다.' : ''}`
+      : '',
     `장면: ${scene}`,
     ...mustPromptLines(must),
     '세로 사진(2:3). 자연광 실사 사진, 피사체가 화면 가운데에서 또렷하게. 글자·숫자·간판·워터마크·로고 없음. 칼·가위·톱 같은 연장 없음.',
@@ -398,4 +432,7 @@ export async function renderCardSpec(specPath: string, signal?: AbortSignal): Pr
 /** 폰트 폴더(Remotion 과 공유). */
 export const CARD_FONT_DIR = path.resolve('remotion/fonts');
 /** 세트당 새로 그리는 사진 상한(비용). */
-export const CARD_MAX_GEN = Math.max(0, Math.min(8, Number(process.env.CARDNEWS_HTML_MAX_GEN ?? 4) || 0));
+// 2026-10-15 사장님 "사진 상한 늘려" — 4→6. 사진 칸 6~8개를 블로그 사진 3장으로 채우느라 같은 사진이 2~3번씩 나왔다.
+export const CARD_MAX_GEN = Math.max(0, Math.min(8, Number(process.env.CARDNEWS_HTML_MAX_GEN ?? 6) || 0));
+/** 카드용 추가 실촬영 컷 수(2026-10-15 사장님 제안) — 같은 수종 보관소 영상의 다른 순간. 0 이면 끈다. CARDNEWS_EXTRA_FRAMES. */
+export const CARD_EXTRA_FRAMES = Math.max(0, Math.min(6, Number(process.env.CARDNEWS_EXTRA_FRAMES ?? 4) || 0));

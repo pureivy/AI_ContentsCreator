@@ -103,6 +103,11 @@ export async function qaSceneImages(opts: {
   protectedScenes?: ReadonlySet<number>;
   /** 씬별 원문 묘사(2026-10-12, 원본 인덱스 정렬) — 꼭 보여야 할 것·나오면 안 되는 것. 어긋난 장은 재생성 대상. */
   sceneMust?: ReadonlyArray<{ show: readonly string[]; not: readonly string[] } | undefined>;
+  /** 씬별 재생성 참조(2026-10-15) — 이어 그린 주인공 씬은 주인공 첫 그림을 맨 앞에 받는다. 없으면 refImages. */
+  refImagesFor?: (origIndex: number) => string[];
+  /** 주인공 나무(2026-10-15) — 이 씬들(0-base)은 같은 한 그루여야 한다. 나이·굵기가 눈에 띄게 다르면 문제. */
+  hero?: string;
+  heroScenes?: ReadonlySet<number>;
 }): Promise<SceneQaResult> {
   const out: SceneQaResult = { images: opts.images.slice(), regenerated: 0, issues: [], focus: opts.images.map(() => null) };
   try {
@@ -135,6 +140,13 @@ export async function qaSceneImages(opts: {
           : '',
         // 원문 묘사(2026-10-12 사장님 지시) — 모과나무 삽목 편: 원문은 '잎 진 맨가지·아래 끝 사선'인데 잎 달린·끝 뭉툭한 삽수,
         // 다 자란 나무·칼이 나왔고 기존 1~5번 항목은 하나도 못 잡았다. 장별 목록을 주고 하나라도 어긋나면 문제로 보고하게 한다.
+        // 주인공 나무(2026-10-15 사장님 지적) — 호두나무 활착 편: 1년생 묘목 씬 뒤로 아름드리 성목 씬들이 이어졌다.
+        opts.hero && opts.heroScenes?.size
+          ? (() => {
+              const ks = checked.map((c, k) => (opts.heroScenes!.has(c.origIndex) ? k + 1 : 0)).filter(Boolean);
+              return ks.length ? `7) 주인공 나무(중요): ${ks.join(', ')}번 장은 같은 한 그루("${opts.hero}")여야 한다. 그 장의 나무가 이 묘사보다 눈에 띄게 크거나 굵거나(예: 묘목인데 아름드리 줄기) 서로 다른 나무로 보이면 문제로 보고하라.` : '';
+            })()
+          : '',
         mustLines.length
           ? `6) 원문 묘사(중요): 아래 장은 블로그 글이 말한 모습이 있다. "보여야 함"이 화면에 안 보이거나 "나오면 안 됨"이 보이면 문제로 보고하고, problem 에 어긋난 항목을 그대로 적어라.\n${mustLines.join('\n')}`
           : '',
@@ -160,25 +172,36 @@ export async function qaSceneImages(opts: {
     const retryDraftPath = path.join(opts.dir, 'scenes-retry-draft.json');
     const retryManifestPath = path.join(opts.dir, 'scenes-retry-manifest.json');
     const origIdxs = mapBadToOrig(bad, checked);
-    const retryDraft = {
-      imageSlots: origIdxs.map((orig, j) => ({
-        alt: `scene ${orig + 1}`,
-        // bad[j] 는 checked 기준 순번 — rawIssues 도 같은 기준이라 그대로 대조한다
-        prompt: buildRetryPrompt(opts.scenePrompts[orig] ?? '', reasonFor(rawIssues, bad[j])),
-      })),
-    };
-    fs.writeFileSync(retryDraftPath, JSON.stringify(retryDraft, null, 2), 'utf-8');
-    const rr = await generateImagesForDraft(retryDraftPath, retryDir, retryManifestPath,
-      { imageStyle: opts.preset, limit: bad.length, refImages: opts.refImages ?? [], size: '1024x1536', timeoutMs: 150_000 * bad.length },
-      opts.signal);
-    if (!rr.ok) return out; // 재생성 스크립트 실패 — 스테일 매니페스트 오독 방지, 원본 유지
+    // 참조가 같은 씬끼리 묶어 다시 그린다(2026-10-15) — 이어 그린 주인공 씬은 주인공 첫 그림을 맨 앞에 받는다.
+    const refsOf = (orig: number): string[] => opts.refImagesFor?.(orig) ?? opts.refImages ?? [];
+    const groups = new Map<string, number[]>(); // 참조 목록 → origIdxs 안의 위치들
+    origIdxs.forEach((orig, j) => { const key = JSON.stringify(refsOf(orig)); groups.set(key, [...(groups.get(key) ?? []), j]); });
+    let g = 0;
+    for (const [key, js] of groups) {
+      const suffix = groups.size > 1 ? `-${++g}` : '';
+      const draftPath = retryDraftPath.replace(/\.json$/, `${suffix}.json`);
+      const manifestPath = retryManifestPath.replace(/\.json$/, `${suffix}.json`);
+      const retryDraft = {
+        imageSlots: js.map((j) => ({
+          alt: `scene ${origIdxs[j]! + 1}`,
+          // bad[j] 는 checked 기준 순번 — rawIssues 도 같은 기준이라 그대로 대조한다
+          prompt: buildRetryPrompt(opts.scenePrompts[origIdxs[j]!] ?? '', reasonFor(rawIssues, bad[j]!)),
+        })),
+      };
+      fs.writeFileSync(draftPath, JSON.stringify(retryDraft, null, 2), 'utf-8');
+      const rr = await generateImagesForDraft(draftPath, suffix ? path.join(retryDir, String(g)) : retryDir, manifestPath, // 묶음 폴더는 scenes-retry/ 안
+        { imageStyle: opts.preset, limit: js.length, refImages: JSON.parse(key) as string[], size: '1024x1536', timeoutMs: 150_000 * js.length },
+        opts.signal);
+      if (!rr.ok) continue; // 재생성 스크립트 실패 — 스테일 매니페스트 오독 방지, 원본 유지
 
-    const rm = JSON.parse(fs.readFileSync(retryManifestPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string }> };
-    origIdxs.forEach((orig, j) => {
-      const im = rm.images?.[j];
-      const fp = im?.file_path ? String(im.file_path) : '';
-      if (fp && !im?.error && fs.existsSync(fp)) { out.images[orig] = fp; out.regenerated++; out.focus[orig] = null; } // 새 그림 — 옛 좌표는 무효
-    });
+      const rm = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string }> };
+      js.forEach((j, k) => {
+        const orig = origIdxs[j]!;
+        const im = rm.images?.[k];
+        const fp = im?.file_path ? String(im.file_path) : '';
+        if (fp && !im?.error && fs.existsSync(fp)) { out.images[orig] = fp; out.regenerated++; out.focus[orig] = null; } // 새 그림 — 옛 좌표는 무효
+      });
+    }
   } catch { /* fail-open — 원본 유지 */ }
   return out;
 }
