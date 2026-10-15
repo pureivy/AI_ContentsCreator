@@ -11,19 +11,19 @@ import { listMedia, shootYmOf } from '../content/mediaLibrary';
 import { getBrand } from '../content/brand';
 import { findSpecies, speciesAnchor, isYoungHero } from '../content/species';
 import { timingParityIssues } from '../content/timingParity';
-import { inheritedClaims, writerSource } from '../content/inheritedClaims';
+import { inheritedClaims, writerSource, flaggedForPrompt } from '../content/inheritedClaims';
 import { parityIssues } from './standaloneQa';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { cardRealFrames } from './cardFrames';
 import { qaSceneImages } from './shortsSceneQa';
-import { stdModel } from './visionCommon';
+import { stdModel, visionCapable } from './visionCommon';
 import { microJSON } from './agent';
 
 /** 작가용 원문(근거 미확인 문장을 뺀 판본, 2026-10-15) — 판형 생성 때 쓰고 수정 요청이 다시 읽는다. */
 const WRITER_SOURCE_FILE = 'source.writer.md';
 import {
   insideDir, normalizeLayout, layoutFields, dropFields, parityKeys, layoutPrompt, toRenderSpec, genPhotoPrompt, renderCardSpec,
-  CARD_FONT_DIR, CARD_MAX_GEN, CARD_EXTRA_FRAMES, dedupeBlogPhotos, type BlogPhoto, type CardLayout, type LayoutSlide, type PhotoRef,
+  CARD_FONT_DIR, CARD_MAX_GEN, CARD_EXTRA_FRAMES, dedupeBlogPhotos, realPhotoSlots, type BlogPhoto, type CardLayout, type LayoutSlide, type PhotoRef,
 } from './cardLayout';
 
 type Say = (m: string) => void;
@@ -41,6 +41,32 @@ export function realBlogPhoto(pieceId: string | undefined): string | undefined {
 }
 
 /** 블로그 사진 후보(세션 image_manifest, 도표 제외) — 원본은 정리 대상이라 카드 폴더 photos/ 로 복사해 둔다. */
+/** 표지 밖 실촬영 칸 중 그 장 글과 안 맞는 칸(비전 1회, fail-open — 실패하면 빈 배열). */
+export async function realPhotoMismatches(layout: CardLayout, blog: readonly BlogPhoto[], say: Say, signal?: AbortSignal): Promise<Array<{ slide: number; why: string }>> {
+  const slots = realPhotoSlots(layout, blog);
+  if (!slots.length || !visionCapable()) return [];
+  const pathOf = (n: number): string | undefined => blog.find((b) => b.n === n)?.path;
+  const items = slots.map((x) => ({ ...x, path: pathOf(x.n) })).filter((x): x is { slide: number; n: number; path: string } => !!x.path && fs.existsSync(x.path));
+  if (!items.length) return [];
+  try {
+    const j = await microJSON<{ mismatches?: Array<{ k?: unknown; why?: unknown }> }>(stdModel(),
+      '당신은 카드뉴스 사진 검수자입니다. 사진을 직접 보고 요청된 JSON 스키마만 출력합니다.',
+      [
+        `사진 ${items.length}장과 그 사진이 들어갈 카드 장의 글이다(순번 같음). 각 사진이 그 글이 말하는 장면·부위·나무 단계를 보여 주는지 판정하라.`,
+        '안 맞음의 예: 글은 밑동·흙·접목 자리를 말하는데 사진은 나무 윗부분만 보인다 / 글은 어린 묘목인데 사진은 큰 나무다 / 글은 가지를 구부리는 동작인데 사진엔 손이 닿을 가지가 안 보인다.',
+        '분위기·배경으로 무난한 정도로는 맞음이 아니다 — 글이 가리키는 것이 사진에 보여야 맞음이다.',
+        ...items.map((x, k) => { const sl = layout.slides[x.slide]!; return `${k + 1}) ${sl.title}${sl.lead ? ` — ${sl.lead.replace(/\s*\n\s*/g, ' ')}` : ''}`; }),
+        'JSON 형식: {"mismatches":[{"k":순번,"why":"한 줄"}]} — 맞는 장은 빼라. 다 맞으면 빈 배열.',
+      ].join('\n'),
+      { maxOutputTokens: 600, visionPaths: items.map((x) => x.path), signal },
+    );
+    return (j?.mismatches ?? []).flatMap((m) => {
+      const k = Math.floor(Number(m?.k));
+      return k >= 1 && k <= items.length ? [{ slide: items[k - 1]!.slide, why: String(m?.why ?? '').slice(0, 80) }] : [];
+    });
+  } catch { say('카드 실촬영 내용 대조 실패(무해) — 그대로'); return []; }
+}
+
 export function blogPhotosFor(pieceId: string | undefined, cardDir: string): BlogPhoto[] {
   if (!pieceId) return [];
   const runId = pieceStore().get(pieceId)?.runId;
@@ -186,7 +212,7 @@ export async function designHtmlCards(o: {
   // 사실 대조(factCheckFields)와 source.md(수정 요청·재검증)는 원문 전체.
   const writerSrc = writerSource(source, o.sourceFlagged ?? []).body;
   try { fs.writeFileSync(path.join(dir, WRITER_SOURCE_FILE), writerSrc, 'utf-8'); } catch { /* 없으면 수정 요청이 source.md 를 쓴다 */ }
-  const user = layoutPrompt({ plan, source: writerSrc, blog, maxGen: CARD_MAX_GEN, flagged: o.sourceFlagged ?? [] });
+  const user = layoutPrompt({ plan, source: writerSrc, blog, maxGen: CARD_MAX_GEN, flagged: flaggedForPrompt(o.sourceFlagged ?? []) });
   let raw = await o.callJSON<unknown>(sys, user, 3000);
   if (!raw) raw = await o.callJSON<unknown>(sys, `${user}\n\n반드시 완결된 JSON 하나만 출력하라.`, 3000);
   try { fs.writeFileSync(path.join(dir, 'layout-raw.json'), JSON.stringify(raw, null, 2), 'utf-8'); } catch { /* 진단용 */ }
@@ -204,6 +230,22 @@ export async function designHtmlCards(o: {
   // 새 사진 — 글자 없는 실사 + 원문 묘사 검수(숏폼 장면 검수와 같은 함수, 2026-10-12 사장님 "카드뉴스에도 원문 묘사 대조 검수").
   const deduped = dedupeBlogPhotos(layout, CARD_MAX_GEN);
   if (deduped) say(`카드 사진 반복 — 이미 쓴 블로그 사진 ${deduped}자리를 새 사진으로`);
+  // 실촬영 내용 대조(2026-10-15 사장님 "첫 장은 괜찮고 나머지는 내용 우선") — 실측: 호두 활착 카드(card_605e40a1c9)에서 큰 나무
+  // 수관을 올려다본 컷 위에 "밑동 주변이 꺼져 있나요"가 얹혔다. 표지 밖 실촬영 칸을 비전으로 보고, 그 장 글이 말하는 장면을
+  // 보여 주지 않으면 그 칸은 새로 그린다(새 사진 몫 안에서).
+  const mism = await realPhotoMismatches(layout, blog, say, o.signal);
+  if (mism.length) {
+    let gens = 0;
+    layout.slides.forEach((sl) => { if (sl.photo?.use === 'gen') gens++; sl.items?.forEach((it) => { if (it.photo?.use === 'gen') gens++; }); sl.photos?.forEach((p) => { if (p.photo?.use === 'gen') gens++; }); });
+    const swapped: number[] = [];
+    for (const m of mism) {
+      if (gens >= CARD_MAX_GEN) break;
+      const sl = layout.slides[m.slide]!;
+      sl.photo = { use: 'gen', scene: (`${sl.title}${sl.lead ? ` — ${sl.lead.replace(/\s*\n\s*/g, ' ')}` : ''} 를 그대로 보여 주는 장면`).slice(0, 160) };
+      gens++; swapped.push(m.slide + 1);
+    }
+    say(`카드 실촬영 내용 대조 — ${mism.map((m) => `${m.slide + 1}번 장(${m.why.slice(0, 24)})`).join(', ')}${swapped.length ? ` → ${swapped.join(',')}번 장 새로 그림` : ' · 새 사진 몫 소진, 그대로'}`);
+  }
   const gen = collectGen(layout, CARD_MAX_GEN);
   const genPath = new Map<Extract<PhotoRef, { use: 'gen' }>, string>();
   if (gen.length) {

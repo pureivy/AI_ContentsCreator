@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  normalizeLayout, insideDir, coverage, sourceSentences, extractOk, monthMentioned, parsePhotoRef, layoutFields, dropFields, parityKeys, oneEmoji, toRenderSpec, genPhotoPrompt, dedupeBlogPhotos,
+  normalizeLayout, insideDir, coverage, sourceSentences, extractOk, monthMentioned, parsePhotoRef, layoutFields, dropFields, parityKeys, oneEmoji, toRenderSpec, genPhotoPrompt, dedupeBlogPhotos, realPhotoSlots,
 } from './cardLayout';
 
 // 감나무 잎 구별 글(2026-10-12)에서 줄인 원문 — 카드 칸은 여기서만 뽑아야 한다.
@@ -192,5 +192,18 @@ describe('dedupeBlogPhotos — 같은 블로그 사진은 세트에서 한 번�
     const l = L() as { slides: Array<{ photo?: { use: string } }> };
     expect(dedupeBlogPhotos(l as never, 1)).toBe(1);
     expect(l.slides[3]!.photo!.use).toBe('blog');
+  });
+});
+
+describe('realPhotoSlots — 표지 밖 실촬영 칸만 내용 대조(2026-10-15 사장님 "첫 장은 괜찮고 나머지는 내용 우선")', () => {
+  it('표지는 빼고, 실촬영 블로그 사진 칸만 고른다', () => {
+    const layout = { series: 's', slides: [
+      { kind: 'cover', title: '표지', photo: { use: 'blog', n: 1 } },
+      { kind: 'photo', title: '밑동', photo: { use: 'blog', n: 2 } },
+      { kind: 'photo', title: '접목', photo: { use: 'blog', n: 3 } },
+      { kind: 'photo', title: '새 사진', photo: { use: 'gen', scene: 'x' } },
+    ] } as never;
+    const blog = [{ n: 1, path: 'a', alt: '', real: true }, { n: 2, path: 'b', alt: '', real: true }, { n: 3, path: 'c', alt: '', real: false }];
+    expect(realPhotoSlots(layout, blog)).toEqual([{ slide: 1, n: 2 }]);
   });
 });

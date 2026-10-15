@@ -347,7 +347,7 @@ export function layoutPrompt(a: {
     '',
     '[사진]',
     a.blog.length
-      ? `블로그 사진(재사용 우선 — {"use":"blog","n":번호}). "(실제 촬영)" 사진을 먼저 써라 — 농원에서 찍은 실제 나무다. 한 사진은 세트에서 한 번만 — 다 쓰였으면 새로 그린다(gen):\n${a.blog.map((b) => `${b.n}. ${b.alt}${b.real ? ' (실제 촬영)' : ''}`).join('\n')}`
+      ? `블로그 사진(재사용 우선 — {"use":"blog","n":번호}). 표지(1번 장)는 "(실제 촬영)" 사진을 쓴다. 나머지 장은 내용이 먼저다 — 그 장이 말하는 부위·상태(밑동·접목 자리·어린 묘목·자른 단면 등)가 사진 설명에 보일 때만 그 사진을 쓰고, 아니면 새로 그린다(gen). 한 사진은 세트에서 한 번만:\n${a.blog.map((b) => `${b.n}. ${b.alt}${b.real ? ' (실제 촬영)' : ''}`).join('\n')}`
       : '블로그 사진 없음.',
     `맞는 블로그 사진이 없거나 이미 쓰였을 때 새로 그린다 — {"use":"gen","scene":"장면 묘사 160자(글자 없는 사진)","must_show":["원문이 말한 모습"],"must_not":["나오면 안 되는 것"]}. 새로 그리는 사진은 세트 전체에서 ${a.maxGen}장 이하. 사진이 필요 없는 판(points 의 emoji 칸·facts·steps)은 사진을 넣지 마라.`,
     '사진이 들어가는 판(cover·photo·compare·pair·numbers)은 사진을 반드시 넣어라 — 맞는 블로그 사진이 없으면 gen 으로. 사진 없이 글만 있는 photo 판은 빈 화면처럼 보인다. 같은 블로그 사진을 연달아 쓰지 마라.',
@@ -401,6 +401,12 @@ export function dedupeBlogPhotos(layout: CardLayout, maxGen: number): number {
     s.photos?.forEach((p) => { p.photo = visit(p.photo, s, false, p.label) ?? p.photo; });
   });
   return changed;
+}
+
+/** 내용 대조할 실촬영 칸(순수, 2026-10-15 사장님 "첫 장은 괜찮고 나머지는 내용 우선") — 표지(0번 장)를 뺀 장의 실촬영 블로그 사진. */
+export function realPhotoSlots(layout: CardLayout, blog: readonly BlogPhoto[]): Array<{ slide: number; n: number }> {
+  const real = new Set(blog.filter((b) => b.real).map((b) => b.n));
+  return layout.slides.flatMap((s, i) => (i > 0 && s.photo?.use === 'blog' && real.has(s.photo.n) ? [{ slide: i, n: s.photo.n }] : []));
 }
 
 /** 글자 없는 사진 프롬프트(순수) — 카드 사진 칸용. */

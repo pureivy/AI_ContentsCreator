@@ -24,7 +24,7 @@ import { cardNewsStore } from '../content/cardnews';
 import { notifyCardnewsReady } from '../autonomy/contentNotify';
 import { standaloneIssues, parityIssues, parityIssuesChecked, parityToInfo, PARITY_SOURCE_CHARS } from './standaloneQa';
 import { timingParityIssues, formatTimingIssue } from '../content/timingParity';
-import { inheritedClaims, formatInherited, writerSource } from '../content/inheritedClaims';
+import { inheritedClaims, formatInherited, writerSource, STRIPPED_FLAGGED_NOTE } from '../content/inheritedClaims';
 import { introducesNewFacts, preNotifyProblems, preNotifyAccept, type FactGateInfo } from '../content/factGate';
 import { cardStyleIssues, cardVoiceIssues } from '../content/styleLint';
 import { naturalKeyword } from '../content/keywordForm';
@@ -637,7 +637,8 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     sourceBody ? `[블로그 초안 본문 — 핵심과 그것이 성립하는 이유(전제 인과)를 함께 추려 재구성하라(문장 복붙 금지, 사실·수치는 원문에 있는 것만)]\n${ws.body.slice(0, 4000)}` : '',
     // 원문 미검증 주장 예방(2026-08-28 처방 C) — 숏폼과 동일 사상. 카드는 문장이 짧아 조건·유보가 먼저
     // 잘려 나가므로, 근거 없는 주장이 단정문 표지·헤드라인으로 굳기 더 쉽다.
-    sourceFlagged.length ? `[원문에서 근거가 확인되지 않은 주장 — 원문 본문에 적혀 있어도 카드 어디에도 쓰지 마라. 사실 게이트가 근거를 못 찾은 문장들이다]\n${sourceFlagged.slice(0, 8).map((c, i) => `${i + 1}. ${c}`).join('\n')}\n바꿔 말하거나 수치·시기만 떼어 싣는 것도 금지다. 이 소재를 꼭 다뤄야 하면 단정 대신 조건·한계를 밝혀 쓰고 숫자는 적지 마라.` : '',
+    sourceFlagged.length && CONFIG.stripFlaggedSource ? STRIPPED_FLAGGED_NOTE : '', // 원문에서 뺐으면 문장 목록 대신 안내만(2026-10-15)
+    sourceFlagged.length && !CONFIG.stripFlaggedSource ? `[원문에서 근거가 확인되지 않은 주장 — 원문 본문에 적혀 있어도 카드 어디에도 쓰지 마라. 사실 게이트가 근거를 못 찾은 문장들이다]\n${sourceFlagged.slice(0, 8).map((c, i) => `${i + 1}. ${c}`).join('\n')}\n바꿔 말하거나 수치·시기만 떼어 싣는 것도 금지다. 이 소재를 꼭 다뤄야 하면 단정 대신 조건·한계를 밝혀 쓰고 숫자는 적지 마라.` : '',
     sourceBody ? '[주제]는 블로그 SEO 제목이다 — 제목의 수사(앵글)를 표지에 그대로 옮기지 말고, 표지는 대상(무엇에 관한 카드인지)을 앞세워 재작성하라.' : '',
     coverPhoto ? `[표지 사진 — 이 실촬영 사진이 1번 카드(표지) 배경으로 나간다] ${coverPhoto}\n표지 문구는 이 사진 위에 얹힌다 — 사진과 다른 잎·꽃·열매 상태를 단정하지 마라(사진에 잎이 있는데 "잎이 다 떨어졌다" 금지). 다른 장에서도 "지금" 나무 상태를 이 사진과 다르게 단정하지 마라.` : '',
     '',

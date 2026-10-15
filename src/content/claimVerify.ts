@@ -14,6 +14,7 @@
  *
  * 결과는 fact_gate.json 에 그대로 반영된다 — 파생 숏폼·카드는 거기서 '근거 미확인' 목록을 읽는다(sourceFlaggedClaims).
  */
+import { lookup as dnsLookup } from 'node:dns/promises';
 import { naverEncyc, type EncycResult } from '../grounding/naver_encyc';
 import { getSecret } from '../secrets/store';
 import { stripTags } from '../grounding/naver_common';
@@ -134,11 +135,57 @@ export function decodeHtml(buf: ArrayBuffer, contentType: string): string {
   return txt;
 }
 
+/** 사설·루프백·링크로컬·예약 주소인가(순수) — IPv4·IPv6. 검증 문서 가져오기가 내부망으로 새지 않게(2026-10-15 보안 검토). */
+export function isPrivateAddress(ip: string): boolean {
+  const v = ip.toLowerCase().replace(/^\[|\]$/g, '');
+  const m4 = /^(?:::ffff:)?(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(v);
+  if (m4) {
+    const [a, b] = [Number(m4[1]), Number(m4[2])];
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  }
+  return v === '::' || v === '::1' || /^f[cd]/.test(v) || /^fe[89ab]/.test(v);
+}
+
+/** 이 주소로 요청해도 되는가(순수) — http(s)·허용 호스트(지식백과·*.go.kr)·IP 직접 표기 금지. */
+export function fetchAllowed(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+    if (/^[\d.]+$/.test(u.hostname) || u.hostname.includes(':') || u.hostname.startsWith('[')) return false;
+    return AUTHORITATIVE_HOST_RE.test(u.hostname);
+  } catch { return false; }
+}
+
+/**
+ * 검증 문서 가져오기(SSRF 방지, 2026-10-15 커밋 보안 검토) — 리다이렉트를 직접 따라가며 매 단계 주소를 다시 검사하고,
+ * 호스트가 사설·루프백 주소로 풀리면 거절한다. 종전엔 첫 주소만 보고 redirect:'follow' 였다 — 공공기관 사이트의 열린
+ * 리다이렉트가 서버 자신(127.0.0.1:8787)이나 내부망을 가리키면 그대로 요청했다.
+ */
+async function safeFetch(url: string, signal?: AbortSignal, hops = 5): Promise<Response> {
+  let cur = url;
+  for (let i = 0; i <= hops; i++) {
+    if (!fetchAllowed(cur)) throw new Error('허용 밖 주소');
+    const host = new URL(cur).hostname;
+    const addrs = await dnsLookup(host, { all: true });
+    if (!addrs.length || addrs.some((a) => isPrivateAddress(a.address))) throw new Error('내부 주소');
+    const r = await fetch(cur, { headers: { 'User-Agent': UA }, redirect: 'manual', signal: withTimeout(signal) });
+    if (r.status >= 300 && r.status < 400) {
+      const loc = r.headers.get('location');
+      if (!loc) throw new Error(`HTTP ${r.status}`);
+      cur = new URL(loc, cur).toString();
+      continue;
+    }
+    return r;
+  }
+  throw new Error('리다이렉트 과다');
+}
+
 export const defaultVerifyDeps: VerifyDeps = {
   encyc: naverEncyc,
   web: naverWeb,
   fetchText: async (url, focus, signal) => {
-    const r = await fetch(url, { headers: { 'User-Agent': UA }, redirect: 'follow', signal: withTimeout(signal) });
+    const r = await safeFetch(url, signal);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const ct = r.headers.get('content-type') ?? '';
     if (!/text\/html|application\/xhtml/i.test(ct)) throw new Error(`문서 아님(${ct || '형식 없음'})`); // PDF·한글 첨부는 못 읽는다

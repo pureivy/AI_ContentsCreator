@@ -58,7 +58,7 @@ import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
 import { normalizeSceneKind, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, cutAtWordBoundary, probeDuration, teaserFor, teaserSceneIndex, sceneFrames, midcutAt, planSpareClips, FPS } from '../tools/shortsCommon';
-import { inheritedClaims, formatInherited, writerSource } from '../content/inheritedClaims';
+import { inheritedClaims, formatInherited, writerSource, flaggedForPrompt, STRIPPED_FLAGGED_NOTE } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
 import type { EventBus } from '../events/bus';
 
@@ -1640,7 +1640,9 @@ export async function planShorts(io: JobIO, topic: string, keyword: string | und
     // 이 지시는 '구성'의 문제다 — 원문에서 가져올 것은 사실이지 순서가 아니다.
     // 원문 미검증 주장 예방(2026-08-28 처방 C) — 사후 검출(inheritedClaims)의 짝. 작가가 애초에 안 쓰는 게
     // 가장 싸다. 원문에 '있으니까 안전하다'는 판단을 여기서 무너뜨린다 — 원문에 있어도 근거는 없는 문장들이다.
-    sourceFlagged.length ? `[원문에서 근거가 확인되지 않은 주장 — 원문 본문에 적혀 있어도 대본·자막·화면 어디에도 쓰지 마라. 사실 게이트가 근거를 못 찾은 문장들이다]\n${sourceFlagged.slice(0, 8).map((c, i) => `${i + 1}. ${c}`).join('\n')}\n이 주장들을 바꿔 말하거나 요약해서 싣는 것도 금지다(수치·시기만 떼어 목록에 넣는 것 포함). 이 소재를 꼭 다뤄야 하면 단정 대신 조건·한계를 밝혀 쓰고 숫자는 적지 마라.` : '',
+    // 원문에서 뺐으면 문장 목록 대신 안내만(2026-10-15) — 목록이 작가가 그 문장을 보는 유일한 자리가 된다.
+    sourceFlagged.length && CONFIG.stripFlaggedSource ? STRIPPED_FLAGGED_NOTE : '',
+    sourceFlagged.length && !CONFIG.stripFlaggedSource ? `[원문에서 근거가 확인되지 않은 주장 — 원문 본문에 적혀 있어도 대본·자막·화면 어디에도 쓰지 마라. 사실 게이트가 근거를 못 찾은 문장들이다]\n${sourceFlagged.slice(0, 8).map((c, i) => `${i + 1}. ${c}`).join('\n')}\n이 주장들을 바꿔 말하거나 요약해서 싣는 것도 금지다(수치·시기만 떼어 목록에 넣는 것 포함). 이 소재를 꼭 다뤄야 하면 단정 대신 조건·한계를 밝혀 쓰고 숫자는 적지 마라.` : '',
     sourceBody ? '[매체 전환 — 요약본이 아니라 새 대본] 원문에서 가져오는 것은 **사실과 근거**이지 구성이 아니다. 원문의 소제목 순서를 그대로 따라가지 마라 — 블로그는 필요한 대목만 골라 읽는 매체라 여러 갈래를 나란히 둬도 되지만, 숏폼은 되감기가 없어 한 줄기로만 끝까지 간다. 원문의 여러 축 중 **하나만 골라** 그 축으로 끝까지 밀고, 나머지는 통째로 버려라(다 담으면 아무것도 안 남는다). 고른 축은 훅에서 던진 문제와 마지막 씬의 답이 같은 줄기로 이어져야 한다.' : '',
     '',
     `씬 ${n}개의 유튜브 숏폼 대본을 기획하라. 씬1=훅 — 유형은 ① 장면 지목(청자가 지금 겪는 한 장면: 가위 앞에서 멈춘 손, 옆집 창, 콩알 열매) ② 단정 선언 ③ 숫자 제시. ①이 기본값이다(인스타 상위 8편 중 5편이 ①, 실측 2026-09-18). [최근 숏폼의 훅] 목록에 ①이 연달아 있으면 ②③으로. 씬2=전제(이 영상이 무엇에 대한 이야기이고 왜 문제/중요한지를 못박는다 — 원문의 핵심 인과 한 줄), 마지막 씬=CTA.`,
@@ -1925,7 +1927,7 @@ export async function planShorts(io: JobIO, topic: string, keyword: string | und
           scenes: plan.scenes, problems: probs, budgets, stage: 'plan', hookEditable, description: plan.description,
           // 원문 창은 정합 판정과 같은 길이(2026-10-05 리뷰) — 수정이 못 본 원문 뒤쪽 사실을 판정이 '없는 사실'로 잡지 않게.
           ...(sourceForWriter ? { sourceExcerpt: sourceForWriter.slice(0, PARITY_SOURCE_CHARS) } : {}),
-          ...(sourceFlagged.length ? { flagged: sourceFlagged } : {}),
+          ...(flaggedForPrompt(sourceFlagged).length ? { flagged: sourceFlagged } : {}),
           ...(hookRule ? { hookRule } : {}), ...(keyword ? { keyword } : {}),
         }), 1600, false).catch(() => null);
         const merged = mergePartialFix(plan, j, {
@@ -2929,7 +2931,7 @@ export async function runShortsJob(
               partialFixPrompt({
                 scenes: plan.scenes, problems: relintProbs, budgets, stage: 'compressed', hookEditable,
                 ...(sourceForWriter ? { sourceExcerpt: sourceForWriter.slice(0, PARITY_SOURCE_CHARS) } : {}),
-                ...(opts.sourceFlagged?.length ? { flagged: opts.sourceFlagged } : {}),
+                ...(flaggedForPrompt(opts.sourceFlagged ?? []).length ? { flagged: opts.sourceFlagged } : {}),
                 ...(hookRule ? { hookRule } : {}), ...(short.keyword ? { keyword: short.keyword } : {}),
               }), 1600, false).catch(() => null);
             const merged = mergePartialFix(plan, j, {
@@ -3073,7 +3075,7 @@ export async function runShortsJob(
             partialFixPrompt({
               scenes: plan.scenes, problems, budgets, stage: 'plan', hookEditable, description: plan.description, factSlack: FACT_SLACK,
               sourceExcerpt: (sourceForWriter ?? sourceForGates).slice(0, PARITY_SOURCE_CHARS),
-              ...(opts.sourceFlagged?.length ? { flagged: opts.sourceFlagged } : {}),
+              ...(flaggedForPrompt(opts.sourceFlagged ?? []).length ? { flagged: opts.sourceFlagged } : {}),
               ...(hookRule ? { hookRule } : {}), ...(short.keyword ? { keyword: short.keyword } : {}),
             }), 1600, false).catch(() => null);
           const merged = mergePartialFix(plan, j, {

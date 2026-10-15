@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 const micro = vi.hoisted(() => ({ next: null as unknown }));
 vi.mock('../orchestrator/agent', () => ({ microJSON: async () => micro.next }));
 
-import { restoreBold, isAuthoritative, quoteBacksClaim, decodeHtml, densestAt, extractDocText, verifyClaims, resolveUnverifiedClaims, hedgeUnconfirmed, type VerifyDeps } from './claimVerify';
+import { restoreBold, isAuthoritative, isPrivateAddress, fetchAllowed, quoteBacksClaim, decodeHtml, densestAt, extractDocText, verifyClaims, resolveUnverifiedClaims, hedgeUnconfirmed, type VerifyDeps } from './claimVerify';
 
 describe('isAuthoritative — 지식백과·공공기관만', () => {
   it('terms.naver.com·*.go.kr 은 근거, 블로그·위키는 아니다', () => {
@@ -145,5 +145,21 @@ describe('restoreBold — 교정이 벗긴 굵은 글씨를 되살린다', () =>
     const body = '**물이 부족할 때**는 잎 끝부터 마릅니다. **과습일 때**는 아래 잎부터.';
     expect(restoreBold('물이 부족할 때는 잎 끝부터 마르는 경우가 많습니다.', body)).toBe('**물이 부족할 때**는 잎 끝부터 마르는 경우가 많습니다.');
     expect(restoreBold('**과습일 때**는 그대로.', body)).toBe('**과습일 때**는 그대로.');
+  });
+});
+
+describe('SSRF 방지 — 검증 문서 가져오기(2026-10-15 보안 검토)', () => {
+  it('fetchAllowed — 허용 호스트의 http(s)만, IP 직접 표기·다른 스킴·호스트 위장은 거절', () => {
+    expect(fetchAllowed('https://terms.naver.com/entry.naver?docId=1')).toBe(true);
+    expect(fetchAllowed('http://www.nongsaro.go.kr/portal/x')).toBe(true);
+    expect(fetchAllowed('http://127.0.0.1:8787/runs')).toBe(false);
+    expect(fetchAllowed('http://[::1]/')).toBe(false);
+    expect(fetchAllowed('file:///etc/passwd')).toBe(false);
+    expect(fetchAllowed('https://evil.go.kr.example.com/')).toBe(false);
+    expect(fetchAllowed('https://localhost/')).toBe(false);
+  });
+  it('isPrivateAddress — 사설·루프백·링크로컬·IPv6 내부 주소', () => {
+    for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.0.5', '169.254.169.254', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:127.0.0.1', '100.64.0.1']) expect(isPrivateAddress(ip)).toBe(true);
+    for (const ip of ['211.252.140.10', '8.8.8.8', '2001:4860:4860::8888']) expect(isPrivateAddress(ip)).toBe(false);
   });
 });
