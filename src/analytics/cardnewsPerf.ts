@@ -5,7 +5,7 @@
  * perfReflected 멱등). 전량 fail-open — shortsPerf.ts 의 사촌(스펙 §7).
  */
 import { CONFIG } from '../config';
-import { fetchTimeout } from '../util/fetch';
+import { fetchTimeout, fetchTimeoutRetry, fetchErrorDetail } from '../util/fetch';
 import { getMetaAccount } from '../secrets/store';
 import { GRAPH, FB_GRAPH } from '../tools/metaPublish';
 import { appendMetrics, readMetrics, type MetricSample } from './performance';
@@ -128,7 +128,7 @@ export async function syncCardnewsPerformance(opts: { force?: boolean } = {}): P
         if (card.igMediaId && acct.pageAccessToken) {
           try {
             const qs = `access_token=${encodeURIComponent(acct.pageAccessToken)}`;
-            const ir = await fetchTimeout(`${GRAPH}/${card.igMediaId}/insights?metric=views,reach,saved,shares,likes,comments&${qs}`, {});
+            const ir = await fetchTimeoutRetry(`${GRAPH}/${card.igMediaId}/insights?metric=views,reach,saved,shares,likes,comments&${qs}`, {});
             if (!ir.ok) throw new Error(`IG insights HTTP ${ir.status}`);
             const ig = parseIgInsights(await ir.json());
             igSample = {
@@ -137,7 +137,7 @@ export async function syncCardnewsPerformance(opts: { force?: boolean } = {}): P
               likes: ig.likes ?? 0, comments: ig.comments ?? 0, searchInflow: [], source: 'meta:ig',
             };
             appendMetrics(card.id, igSample);
-          } catch (e) { console.log('[perf-sync]', `카드뉴스 ${card.id} IG 수집 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+          } catch (e) { console.log('[perf-sync]', `카드뉴스 ${card.id} IG 수집 실패(무해): ${fetchErrorDetail(e)}`); }
         }
         // FB 는 부가 채널 — 호스트·토큰이 IG 와 완전히 다르다(graph.facebook.com + 페이지 액세스 토큰).
         if (card.fbPostId && acct.pageToken) {
