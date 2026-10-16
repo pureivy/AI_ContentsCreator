@@ -506,7 +506,8 @@ export async function applyMotionGraphics(id: string, opts: { log?: (m: string) 
   const final = path.join(dir, 'final.mp4');
   try {
     const workName = `motion-${Date.now()}`;
-    const m = await runDirectMotionPilot({ id, workName, agentTimeoutMs: 20 * 60_000, log: (x) => console.log('[모션그래픽]', x) });
+    // 에이전트 제한 60분(2026-10-16 사장님 요청, 종전 20분) — 디테일 지시를 켠 뒤 시범 한 편이 16.7분까지 걸려 20분이 빠듯했다.
+    const m = await runDirectMotionPilot({ id, workName, agentTimeoutMs: 60 * 60_000, log: (x) => console.log('[모션그래픽]', x) });
     // 출력 경로는 우리가 만든 작업 폴더의 final.mp4 만 받는다(보안 — 다른 파일을 발행본으로 올리지 않게).
     if (m.out && path.resolve(m.out) !== path.resolve(dir, workName, 'final.mp4')) {
       log(`모션그래픽 건너뜀 — 예상 밖 출력 경로(${m.out.slice(0, 80)}) · 원본 영상 유지`);
