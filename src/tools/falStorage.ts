@@ -9,6 +9,12 @@ import path from 'node:path';
 import { CONFIG } from '../config';
 
 const FAL_INITIATE = 'https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn';
+/**
+ * 보관 기간 하루(2026-10-16 사장님 결정) — 인스타·페북은 발행할 때 파일을 받아 가 자기 서버에 둔다. fal 쪽 파일은 그 뒤 필요 없는데,
+ * 기간을 안 정하면 계정 기본값만큼 공개 상태로 남는다(문서에 기본값·저장 요금 언급 없음). 발행 재시도 여유로 하루를 둔다.
+ */
+export const FAL_UPLOAD_TTL_SEC = 86_400;
+export const falLifecycleHeader = (sec = FAL_UPLOAD_TTL_SEC): string => JSON.stringify({ expiration_duration_seconds: sec });
 
 /** fal.media 호스트만 허용(응답 이형·SSRF 방지). */
 function isFalMedia(u: string): boolean {
@@ -21,7 +27,7 @@ export async function uploadToFalStorage(filePath: string, contentType: string, 
   if (!fs.existsSync(filePath)) throw new Error('업로드 대상 파일 없음');
   const init = await fetch(FAL_INITIATE, {
     method: 'POST', signal,
-    headers: { Authorization: `Key ${CONFIG.falKey}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Key ${CONFIG.falKey}`, 'Content-Type': 'application/json', 'X-Fal-Object-Lifecycle-Preference': falLifecycleHeader() },
     body: JSON.stringify({ content_type: contentType, file_name: path.basename(filePath) }),
   });
   if (!init.ok) throw new Error(`fal 스토리지 initiate 실패 HTTP ${init.status}`);

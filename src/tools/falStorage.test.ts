@@ -25,6 +25,21 @@ describe('uploadToFalStorage', () => {
     expect(calls[1]!.method).toBe('PUT');
     expect(calls[1]!.url).toContain('v3.fal.media/upload');
   });
+  // 2026-10-16 — 발행 뒤 필요 없는 파일이 계정 기본값만큼 공개로 남지 않게 하루 보관을 요청한다.
+  it('initiate 에 보관 기간 하루(86400초)를 실어 보낸다', async () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('x'));
+    const heads: Array<Record<string, string>> = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      heads.push(((init as RequestInit | undefined)?.headers ?? {}) as Record<string, string>);
+      if (String(url).includes('/storage/upload/initiate')) {
+        return new Response(JSON.stringify({ file_url: 'https://v3.fal.media/files/x.png', upload_url: 'https://v3.fal.media/upload/x?sig=1' }), { status: 200 });
+      }
+      return new Response('', { status: 200 });
+    });
+    await uploadToFalStorage('/a/slide.png', 'image/png');
+    expect(JSON.parse(heads[0]!['X-Fal-Object-Lifecycle-Preference']!)).toEqual({ expiration_duration_seconds: 86400 });
+  });
   it('fal.media 아닌 호스트 응답 → 이형 throw(SSRF/이형 가드, PUT 미도달)', async () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
