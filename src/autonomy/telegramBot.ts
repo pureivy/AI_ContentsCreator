@@ -8,6 +8,7 @@
  * 주의: 폴러 가동 중 같은 토큰으로 수동 getUpdates 를 호출하면 409 충돌이 난다(진단 시 폴러 먼저 내릴 것).
  */
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { getSecret } from '../secrets/store';
@@ -111,6 +112,35 @@ async function api(pathname: string, body?: unknown, timeoutMs = 600_000): Promi
   try { json = await r.json() as Record<string, unknown>; } catch { /* 비 JSON 응답 — 상태코드로만 판정 */ }
   return { ok: r.ok, status: r.status, json };
 }
+
+/** 긴 동기 라우트(카드뉴스·숏폼 수정 요청) 전용 자기 서버 호출 — fetch(undici)는 응답 머리를 5분(headersTimeout 기본값)
+ *  넘게 못 기다려 'fetch failed' 로 끊는다. 수정 재조립에 모션그래픽까지 붙으면서 10~30분이 걸려, 서버는 계속 만드는데
+ *  텔레그램엔 '수정 요청 실패'가 먼저 갔다(2026-10-17 사장님 제보). node:http 는 그런 기본 제한이 없어 우리 timeoutMs 만 쓴다. */
+function apiLong(pathname: string, body: unknown, timeoutMs: number): Promise<{ ok: boolean; status: number; json: Record<string, unknown> | null }> {
+  const payload = JSON.stringify(body ?? {});
+  const headers: Record<string, string | number> = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) };
+  const tok = (getSecret('AUTH_TOKEN') || '').trim();
+  if (tok) headers.Authorization = `Bearer ${tok}`;
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: CONFIG.port, path: pathname, method: 'POST', headers }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (d: Buffer) => chunks.push(d));
+      res.on('end', () => {
+        clearTimeout(timer);
+        let json: Record<string, unknown> | null = null;
+        try { json = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as Record<string, unknown>; } catch { /* 비 JSON 응답 — 상태코드로만 판정 */ }
+        const status = res.statusCode ?? 0;
+        resolve({ ok: status >= 200 && status < 300, status, json });
+      });
+      res.on('error', (e) => { clearTimeout(timer); reject(e); });
+    });
+    const timer = setTimeout(() => req.destroy(new Error(`${Math.round(timeoutMs / 60_000)}분 안에 끝나지 않음`)), timeoutMs);
+    req.on('error', (e) => { clearTimeout(timer); reject(e); });
+    req.end(payload);
+  });
+}
+/** 수정 요청 대기 한도 — 재조립 + 모션그래픽(에이전트 60분·검사 10분·렌더 20분)을 다 덮는다. */
+const DERIVED_REVISE_TIMEOUT_MS = 120 * 60_000;
 
 // 오류 본문은 업스트림(구글·그래프 API) 문자열이 섞일 수 있어 이스케이프 필수 — 안 하면 parse_mode HTML 이
 // 거부해 실패 메시지조차 사용자에게 못 간다(이중 침묵).
@@ -434,8 +464,8 @@ async function handleUpdate(u: TgUpdate, chatId: string, bootTs: number): Promis
       const ep = reviseEndpointFor(pending.targetId);
       if (ep.derived) {
         // 카드뉴스·숏폼 revise 는 수 분짜리 동기 라우트 — 폴 루프를 막지 않게 비동기 실행 후 결과 push.
-        void sendTelegramHtml(`✍ ${ep.label} 수정 반영 중… (부분 재생성 — 수 분 소요)`);
-        void api(ep.path, { feedback: text })
+        void sendTelegramHtml(`✍ ${ep.label} 수정 반영 중… (부분 재생성 — ${ep.label === '숏폼' ? '모션그래픽까지 10~30분' : '수 분'} 소요)`);
+        void apiLong(ep.path, { feedback: text }, DERIVED_REVISE_TIMEOUT_MS)
           .then((r) => sendTelegramHtml(r.ok ? `✍ ${ep.label} 수정 반영 완료 — 갱신본 알림을 확인하세요.` : errText(`${ep.label} 수정 요청 실패`, r)))
           .catch((e: unknown) => sendTelegramHtml(`⚠️ ${ep.label} 수정 요청 실패 — ${escapeHtml(e instanceof Error ? e.message : String(e))}`));
       } else {
