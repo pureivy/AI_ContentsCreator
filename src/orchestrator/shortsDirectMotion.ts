@@ -174,7 +174,19 @@ export interface JobScene {
 }
 
 /** 에이전트 지시문(순수) — B agentPrompt 의 확정 스타일(classic) 갈래를 우리 화면 배치·농원 규칙으로 옮김. */
-export function agentPrompt(topic: string, job: { scenes: JobScene[]; stage: { top: number; height: number } }): string {
+/**
+ * 디테일 지시(2026-10-16) — HyperFrames 시범 4편에서 사장님이 짚은 장점(감나무 흙 편: 기존은 "구덩이" 계획을 네모 통으로 그려
+ * 양동이 물이 오르내리는 것처럼 보였고, HyperFrames 판은 지면선 아래 파인 단면으로 그려 바로 읽혔다). 도구보다 다듬은 정도의
+ * 차이로 보여 지시로 옮겼다. 같은 두 편 비교에서 기존 방식 + 이 지시가 HyperFrames 보다 디테일이 많고 비용은 적었다(감나무 흙 $5.70 vs $9.94,
+ * 호두 $4.48 vs $6.90 · 지시 전 $2.6~2.8). 사장님 결정으로 매일 제작에 켬(CONFIG.mgDetailRules, MG_DETAIL_RULES=false 킬스위치).
+ */
+export const MG_DETAIL_RULES = [
+  '- 그림은 내레이션이 말하는 대상이 한눈에 알아보이는 모양으로 그린다 — 구덩이면 지면선 아래로 파인 단면(흙 표면 선 + 움푹한 구덩이 + 그 안의 물), 양동이면 손잡이 달린 통, 가지면 휘는 선. 네모 상자·막대처럼 무엇인지 모를 도형으로 대신하지 않는다. 미리보기에서 "이 그림만 보고 무엇인지 알겠는가"를 확인한다.',
+  '- 목록·단계 카드는 내레이션이 그 항목을 말하는 순간에 맞춰 그 줄을 강조색으로 짚는다(강조가 줄을 따라 옮겨 간다).',
+  '- 상황→행동, 틀림→맞음은 화살표가 그려지며 두 쪽을 잇게 해 흐름을 보여 준다.',
+].join('\n');
+
+export function agentPrompt(topic: string, job: { scenes: JobScene[]; stage: { top: number; height: number } }, opts: { detailRules?: boolean } = {}): string {
   const { top, height } = job.stage;
   const bottom = top + height;
   const g = job.scenes;
@@ -201,6 +213,7 @@ export function agentPrompt(topic: string, job: { scenes: JobScene[]; stage: { t
     '- 정보 카드 모양은 이 폴더의 info-card-ref.html 을 먼저 Read 해서 그대로 따른다("유리 + 알약": 흐린 유리 카드 + ✕ 흰 알약 / ✓ 강조색 알약 대비, 상황 흰 알약 → 화살표 → 행동 강조색 알약, 번호 원 + 알약 목록). 선택자 접두만 .sNN 으로 바꾸고, 등장 애니메이션은 자유. 카드 맨 위에는 짧은 머리글 한 줄(그 씬 내레이션·라벨의 핵심 구)을 둔다.',
     '- 글자: 그 씬의 내레이션·라벨·정보에 있는 표현만. 새 사실·숫자·시기·조언을 보태지 않는다(사실 검증을 통과한 대본이다). 라벨과 같은 문장을 그대로 크게 반복하지 말고, 핵심 단어·구조를 시각화한다.',
     '- 디자인: 템플릿처럼 같은 카드 반복 대신, 씬 내용의 논리(대비·순서·조건→답)에 맞는 연출을 고른다.',
+    ...((opts.detailRules ?? CONFIG.mgDetailRules) ? [MG_DETAIL_RULES] : []),
     `- 크기·강도: 숏폼에서 한눈에 읽히게 — 머리글 52~80px 굵은 글자, 주 카드 폭 860~1000px, 아이콘 90~160px, 선·화살표 두께 6~12px. 단 구역 높이가 ${height}px 뿐이라 카드 전체 높이가 그 안에 들어가야 한다. 움직임은 분명하게(튀어나오기·그려지기·강조 펄스).`,
     '- 카드 스타일 통일: 모든 카드·말풍선·라벨 상자는 info-card-ref.html 의 유리 카드(background: rgba(255,255,255,.30); backdrop-filter: blur(28px) saturate(1.3); 2px 흰 테두리; 그림자)로 만든다. 불투명 흰 카드 금지 — 자동 검사가 "유리 아님"으로 표시한다. 씬 그림의 핵심 피사체(나무 줄기·열매·가지)는 가급적 피해서 배치하되, 피하려고 그래픽을 작게 만들지는 않는다.',
     '',
@@ -250,6 +263,8 @@ export interface PilotOptions {
   skipAgent?: boolean;
   /** 에이전트 시간 상한(기본 30분 — B 와 같다). */
   agentTimeoutMs?: number;
+  /** 디테일 지시를 이 편에만 켠다(시범 비교용, 2026-10-16). 미지정이면 CONFIG.mgDetailRules. */
+  detailRules?: boolean;
   log?: (m: string) => void;
 }
 
@@ -274,7 +289,9 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
   const dir = path.join(CONFIG.dataDir, 'shorts', o.id);
   const work = path.join(dir, o.workName ?? 'pilot-direct');
   fs.mkdirSync(work, { recursive: true });
-  const original = path.join(dir, 'final.mp4');
+  // 발행 뒤 final.mp4 가 저화질 사본으로 바뀐 편도 시범할 수 있게(2026-10-16) — 모션그래픽 전 원본(final.basic.mp4)이 남아 있으면 그것을 쓴다.
+  // 비그래픽 구간은 두 파일이 같다. 매일 제작(applyMotionGraphics)은 final.mp4 가 늘 있어 종전과 같다.
+  const original = [path.join(dir, 'final.mp4'), path.join(dir, 'final.basic.mp4')].find((p) => fs.existsSync(p)) ?? path.join(dir, 'final.mp4');
   if (!fs.existsSync(original)) throw new Error(`원본 final.mp4 없음(보관 정리로 저화질 사본만 남은 편) — ${dir}`);
   const plan = JSON.parse(fs.readFileSync(path.join(dir, 'plan.json'), 'utf-8')) as { title: string; scenes: ShortsScene[] };
   const record = (JSON.parse(fs.readFileSync(path.join(CONFIG.dataDir, 'shorts', 'index.json'), 'utf-8')) as Array<{ id: string; keyword?: string }>).find((x) => x.id === o.id);
@@ -432,7 +449,7 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
   // 6) 에이전트(Claude Code 1회 세션) — 씬 조각 작성·미리보기 확인·수정.
   if (!o.skipAgent) {
     await phase('agent', async () => {
-      const prompt = agentPrompt(plan.title, job);
+      const prompt = agentPrompt(plan.title, job, o.detailRules != null ? { detailRules: o.detailRules } : {});
       fs.writeFileSync(path.join(work, 'agent-prompt.txt'), prompt, 'utf-8');
       const args = ['-p', '--model', CONFIG.cloudTierModels.heavy, '--setting-sources', '', '--no-session-persistence', '--max-turns', '90',
         '--permission-mode', 'acceptEdits', '--disallowedTools', 'AskUserQuestion',

@@ -7,6 +7,7 @@
  *   --no-styleframes    : 시안 이미지(gpt-image) 생략
  *   --skip-agent        : 이미 있는 scene_NN.html 로 검사·촬영만(에이전트 재실행 없이)
  *   --agent-min N       : 에이전트 시간 상한(분, 기본 30)
+ *   --detail            : 디테일 지시(MG_DETAIL_RULES)를 이 편에만 켠다
  */
 import { runDirectMotionPilot } from '../orchestrator/shortsDirectMotion';
 
@@ -20,6 +21,7 @@ async function main(): Promise<void> {
     ...(argVal('--work') ? { workName: argVal('--work') } : {}),
     noStyleframes: process.argv.includes('--no-styleframes'),
     skipAgent: process.argv.includes('--skip-agent'),
+    ...(process.argv.includes('--detail') ? { detailRules: true } : {}),
     ...(mins > 0 ? { agentTimeoutMs: mins * 60_000 } : {}),
   });
   console.log('[결과]', JSON.stringify(m));

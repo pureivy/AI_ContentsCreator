@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hasInfoCard, pickGraphicScenes, stripCards, sceneInfo, stageBox, sceneRanges, agentEnv, agentPrompt, type JobScene } from './shortsDirectMotion';
+import { hasInfoCard, pickGraphicScenes, stripCards, sceneInfo, stageBox, sceneRanges, agentEnv, agentPrompt, MG_DETAIL_RULES, type JobScene } from './shortsDirectMotion';
 import type { ShortsScene } from '../tools/shortsCommon';
 
 const compare: ShortsScene = { narration: '명자나무로 오해해요. 모과는 향이 퍼져요.', screenText: '향으로 구분해요', kind: 'compare', compare: { bad: { label: '명자나무로 오해', note: '작고 비슷해 보여서' }, good: { label: '모과나무는 향 퍼짐' } } };
@@ -69,5 +69,14 @@ describe('agentPrompt — 우리 구역·농원 규칙', () => {
     expect(p).toContain('반드시 보여줄 정보: 대비: ✕ 명자나무로 오해');
     expect(p).toContain('수종 형태');
     expect(p).not.toContain('스타일 프레임 씬');
+  });
+});
+
+// 2026-10-16 HyperFrames 시범 — 감나무 흙 편 "구덩이"가 네모 통으로 그려졌다. 디테일 지시는 켤 때만 실린다.
+describe('agentPrompt — 디테일 지시', () => {
+  const s = { index: 2, frames: 150, duration: 5, fragment: 'scene_03.html', bgFrames: '/x', narration: '구덩이에 물을 붓고 자리를 뜨세요.', label: '물 붓고 기다리기', source: '' } as JobScene;
+  it('detailRules:true 면 싣고, false 면 싣지 않는다', () => {
+    expect(agentPrompt('감나무', { scenes: [s], stage: { top: 534, height: 607 } }, { detailRules: true })).toContain(MG_DETAIL_RULES);
+    expect(agentPrompt('감나무', { scenes: [s], stage: { top: 534, height: 607 } }, { detailRules: false })).not.toContain('지면선 아래로 파인 단면');
   });
 });
