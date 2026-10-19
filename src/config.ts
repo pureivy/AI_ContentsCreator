@@ -424,6 +424,11 @@ export interface Config {
   readonly demandFloorSpeciesExempt: boolean;
   /** 시즌 지수(0~1) 하한 — 이 미만이면 비수기로 후순위(기각 아님). 0~1 로 클램프. */
   readonly topicDemandMinSeason: number;
+  /** 수종 이름 시즌 하한(2026-10-20 사장님 확정 0.10) — 하한 면제 수종 키워드에 자기 시즌 지수가 없을 때만 수종 이름의 시즌으로
+   *  대신 본다(이 미만이면 비수기 후순위). 수종 이름 시즌은 꽃·열매 철에 몰린 거친 근사라 일반 하한(0.25)보다 낮게 — 10월 실측으로
+   *  0.25 면 15종 중 7종(자두 0.13·배롱 0.11 등 제철 관리 글까지)이 밀리고, 0.10 이면 겹벚 0.05·이팝 0.03·자엽안개 0.07 만 걸린다.
+   *  0 이면 끔(조회도 안 함). */
+  readonly topicDemandSpeciesSeasonMin: number;
   /**
    * 최근 사용 수종 제외 창(일, 2026-09-17 사용자 확정 30일 → 같은 날 10일로 하향) — 이 기간 안에 다룬
    * 수종은 어떤 각도로도 다시 안 잡는다. 종전 규칙은 '30일 누적 N편'(카운트)뿐이라 6일·3일 간격
@@ -696,6 +701,7 @@ export const CONFIG: Config = {
   demandFloorSpeciesExempt: envBool('DEMAND_FLOOR_SPECIES_EXEMPT', true),
   // 1 초과 값은 모든 후보를 비수기로 만든다(0 미만은 게이트 무효) — 오설정이 사이클을 굶기지 않게 클램프.
   topicDemandMinSeason: Math.min(Math.max(0, envFloat('TOPIC_DEMAND_MIN_SEASON', 0.25)), 1),
+  topicDemandSpeciesSeasonMin: Math.min(Math.max(0, envFloat('TOPIC_DEMAND_SPECIES_SEASON_MIN', 0.10)), 1),
   // 상한 90일 — 카탈로그 79종에 하루 ~1.7편이 수종 글이라 그 이상은 후보가 구조적으로 마른다.
   speciesRecentDays: Math.min(90, Math.max(0, envInt('SPECIES_RECENT_DAYS', 2))),
   // 상한 30일 — 축 24개에 하루 ~2.5편이면 한 바퀴가 ~10일이라 그 이상은 후보가 마른다.

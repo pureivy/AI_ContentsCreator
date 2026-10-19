@@ -25,7 +25,7 @@ import { topicVerdictBlock, avoidVerdictFor, consumeOpportunityVerdict } from '.
 import { trendSignalBlock, ytAutocomplete } from '../analytics/trendSignal';
 import { naverAutocomplete } from '../grounding/naver_autocomplete';
 import { angleVerdict, angleNote, inflowSuggestionsFor, searchless } from '../analytics/angleCheck';
-import { assessCandidatesDemand, demandSignalBlock, demandRejectBlock, demandRejectFor, rememberDemandReject, rememberDemandRows, demandVerdict, formatDemandLine, normKw, readDemandSnap, familyVolume, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
+import { assessCandidatesDemand, speciesSeasons, demandSignalBlock, demandRejectBlock, demandRejectFor, rememberDemandReject, rememberDemandRows, demandVerdict, formatDemandLine, normKw, readDemandSnap, familyVolume, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
 import { searchAdEnabled } from '../grounding/naver_searchad';
 import { ytNicheBlock } from '../analytics/ytNiche';
 import { ensureSeriesLabels, classifyCandidates, seriesScoresFor, gateForLabels, fillLabelsFromKnown, cooldownSummary } from '../analytics/seriesLedger';
@@ -787,12 +787,19 @@ export function speciesRequiredBlock(floorExempt: boolean): string {
  * 기각하지 않고 시즌 지수만 본다(통과 또는 비수기 demote, `exempted: true`, 줄 끝에 '수종 키워드 하한 면제'). 행이 없으면(미조회·
  * 조회 실패) 종전과 같은 unknown — 면제가 '모름'을 통과로 바꾸는 일은 없다(원래 통과다). 기억된 기각도 보지 않는다:
  * 면제 전 하한으로 쌓인 기억이 30일 동안 그 키워드를 계속 막는다.
+ *
+ * opts.speciesSeason(2026-10-20): 면제 키워드 행에 시즌 지수가 없으면(10미만/월이라 데이터랩에도 없음 — 면제 50건 중 41건)
+ * '시즌만 본다'가 아무것도 안 보는 통과가 됐다(10월 "화분 겹벚나무" 5월 꽃 글 실사고). 그때만 수종 이름의 시즌으로 대신 보고,
+ * cfg.minSpeciesSeason 미만이면 비수기 demote. 줄에 '수종 "○○" 시즌 0.05' 를 붙여 대체 판정이 얼마나 도는지 로그로 센다.
  */
 export function demandGateDecision(
   rows: Map<string, DemandRow>,
   keyword: string | undefined,
-  cfg: { minVolume: number; minSeason: number },
-  opts: { relax?: boolean; remembered?: { line: string }; floorExempt?: (keyword: string) => boolean } = {},
+  cfg: { minVolume: number; minSeason: number; minSpeciesSeason?: number },
+  opts: {
+    relax?: boolean; remembered?: { line: string }; floorExempt?: (keyword: string) => boolean;
+    speciesSeason?: (keyword: string) => { name: string; idx: number } | undefined;
+  } = {},
 ): { verdict: DemandVerdict; line: string; relaxed?: boolean; exempted?: boolean } {
   const exempt = !!keyword && (opts.floorExempt ?? ((k: string) => speciesFloorExempt(k)))(keyword);
   // 기억된 기각은 rows 보다 먼저 본다 — 이 후보는 조회하지 않았으니 rows 에 없고(unknown = fail-open),
@@ -811,7 +818,14 @@ export function demandGateDecision(
   const line = row ? formatDemandLine(row) : '';
   const verdict = demandVerdict(row, cfg);
   // 하한만 뺀다(minVolume 0) — 시즌 지수 판정은 그대로라 비수기 수종 키워드는 종전처럼 후순위다.
-  if (exempt && verdict === 'reject') return { verdict: demandVerdict(row, { ...cfg, minVolume: 0 }), line: `${line} · 수종 키워드 하한 면제`, exempted: true };
+  if (exempt && verdict === 'reject') {
+    let v = demandVerdict(row, { ...cfg, minVolume: 0 });
+    // 시즌 지수가 없을 때만 수종 이름 시즌으로 대신 본다(행이 없으면 위에서 이미 unknown — 여기 오지 않는다).
+    const sp = row && row.seasonIdx === undefined && cfg.minSpeciesSeason ? opts.speciesSeason?.(keyword!) : undefined;
+    if (sp && v === 'pass' && sp.idx < cfg.minSpeciesSeason!) v = 'demote';
+    const spLine = sp ? ` · 수종 "${sp.name}" 시즌 ${sp.idx.toFixed(2)}` : '';
+    return { verdict: v, line: `${line}${spLine} · 수종 키워드 하한 면제`, exempted: true };
+  }
   if (opts.relax && verdict === 'reject') return { verdict: 'demote', line, relaxed: true };
   return { verdict, line };
 }
@@ -1280,7 +1294,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     // 검색광고 자격이 없으면(키 미설정) 조회도 로그도 하지 않는다 — '조회 실패'가 아니라 '측정 안 함'이고,
     // 그 상태에서 "조회 없음 채택" 같은 줄을 남기면 하지도 않은 측정을 했다고 로그가 주장하게 된다.
     const demandOn = CONFIG.topicDemandGate && searchAdEnabled();
-    const demandCfg = { minVolume: CONFIG.topicDemandMinVolume, minSeason: CONFIG.topicDemandMinSeason };
+    const demandCfg = { minVolume: CONFIG.topicDemandMinVolume, minSeason: CONFIG.topicDemandMinSeason, minSpeciesSeason: CONFIG.topicDemandSpeciesSeasonMin };
     // 기억된 기각 키워드는 조회 대상에서 뺀다(2026-08-27) — 판정은 기억으로 이미 나 있으므로 조회 비용 0.
     // 하한 면제 수종 키워드(2026-10-02)는 기억이 있어도 다시 조회한다 — 기억은 면제 전 하한으로 쌓인 것이라 판정에 안 쓰고,
     // 새 행이 있어야 시즌 지수(비수기 후순위)를 본다.
@@ -1302,6 +1316,26 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     // 실측 누적(2026-09-17 사용자 확정 "표를 키운다") — 이미 받아 둔 숫자라 추가 비용 0. 종전엔 기각분만
     // 30일 기억에 남고 통과분은 버려져, 두뇌가 보는 표가 시드 조회분(오늘 26행)에 머물렀다.
     if (demandRows.size) rememberDemandRows(demandRows.values(), slug || undefined);
+    // 수종 이름 시즌(2026-10-20) — 하한 면제 키워드인데 자기 시즌 지수가 없는 후보의 수종만 데이터랩에 묻는다(라운드당 0~2콜).
+    // 표(rememberDemandRows)에는 싣지 않는다 — 키워드 실측이 아니라 판정용 근사라, 행에 섞으면 표가 키워드 시즌이라고 주장한다.
+    // 묻는 이름은 키워드에 적힌 표기 그대로(speciesSurfaceIn) — 대표명으로 물으면 '매실'이 아무도 안 치는 '설중매나무'의 시즌이 된다.
+    const seasonNameOf = (kw: string): string | null => speciesSurfaceIn(kw) ?? requiredSpeciesOf(kw);
+    const speciesSeasonBy = await (async (): Promise<Map<string, number>> => {
+      if (!demandRows.size || !(CONFIG.topicDemandSpeciesSeasonMin > 0)) return new Map();
+      const names = new Set<string>();
+      for (const c of cands) {
+        if (!c.keyword || !speciesFloorExempt(c.keyword)) continue;
+        const row = demandRows.get(c.keyword) ?? [...demandRows.values()].find((r) => normKw(r.keyword) === normKw(c.keyword!));
+        const sp = row && row.seasonIdx === undefined ? seasonNameOf(c.keyword) : null;
+        if (sp) names.add(sp);
+      }
+      return names.size ? speciesSeasons([...names], signal).catch(() => new Map<string, number>()) : new Map();
+    })();
+    const speciesSeasonOf = (kw: string): { name: string; idx: number } | undefined => {
+      const name = seasonNameOf(kw);
+      const idx = name ? speciesSeasonBy.get(name) : undefined;
+      return name && idx !== undefined ? { name, idx } : undefined;
+    };
     // 채택 시 수요 실측을 한 줄 남긴다(세 채택 경로 공용) — 나중에 '왜 이 주제였나'를 로그만으로 재구성하려면
     // 기각뿐 아니라 통과한 후보의 숫자도 있어야 한다. 게이트 off 면 아무 말도 하지 않는다(무주입 원칙).
     // 판정 line 을 아는 호출부는 그대로 넘긴다 — 기억으로 기각됐다가 밸브·폴백으로 되살아난 후보는
@@ -1309,7 +1343,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     // 엄연히 있는데도 '조회 없음 채택'이라고 로그가 주장하게 된다(위 무주입 원칙의 대칭 사고).
     const logDemandAdopt = (title: string, keyword?: string, known?: string): void => {
       if (!demandOn) return;
-      const line = known || demandGateDecision(demandRows, keyword, demandCfg).line;
+      const line = known || demandGateDecision(demandRows, keyword, demandCfg, { speciesSeason: speciesSeasonOf }).line;
       console.log(`[auto-cycle] 수요 게이트 — "${title}" ${line || '조회 없음'} 채택${target ? ` · 채널 목표 ${platformLabel(target)}` : ''}`);
     };
     // 후보의 실측 검색량(정확 일치 우선, 없으면 정규화 대조) — 정렬 2차 키. 조회 대상 밖이면 undefined.
@@ -1519,6 +1553,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       const tg = demandGateForTarget(target, attempt === IDEA_ROUNDS - 1);
       const demand = demandGateDecision(demandRows, keyword, demandCfg, {
         relax: tg.relax,
+        speciesSeason: speciesSeasonOf,
         ...(remembered ? { remembered: { line: remembered.line } } : {}),
       });
       // 기억은 '실측 결과'이지 '채택 자격'이 아니다 — 판정이 난 자리에서 바로 기록한다. 아래 게이트

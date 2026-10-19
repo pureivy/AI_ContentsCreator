@@ -23,6 +23,8 @@ const h = await vi.hoisted(async () => {
     rounds: [] as Array<Array<{ title: string; keyword?: string }> | null | { exhausted: true; reason?: string }>, prompts: [] as string[],
     searchAd: false, demandTargets: [] as string[][], volume: {} as Record<string, number>, season: {} as Record<string, number>,
     suggest: {} as Record<string, string[]>,
+    // 수종 이름 시즌(2026-10-20) — 키워드 시즌을 비울 키워드와, 수종 이름별 시즌·물어본 수종 기록.
+    noSeason: [] as string[], speciesSeason: {} as Record<string, number>, speciesAsked: [] as string[][],
   };
 });
 vi.mock('../orchestrator/agent', () => ({
@@ -48,7 +50,14 @@ vi.mock('../analytics/topicDemand', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   assessCandidatesDemand: async (kws: string[]) => {
     h.demandTargets.push([...kws]);
-    return new Map(kws.filter((k) => k in h.volume).map((k) => [k, { keyword: k, volume: h.volume[k]!, approx: false, familyMax: h.volume[k]!, seasonIdx: h.season[k] ?? 1 }]));
+    return new Map(kws.filter((k) => k in h.volume).map((k) => [k, {
+      keyword: k, volume: h.volume[k]!, approx: false, familyMax: h.volume[k]!,
+      ...(h.noSeason.includes(k) ? {} : { seasonIdx: h.season[k] ?? 1 }),
+    }]));
+  },
+  speciesSeasons: async (names: string[]) => {
+    h.speciesAsked.push([...names]);
+    return new Map(names.filter((n) => n in h.speciesSeason).map((n) => [n, h.speciesSeason[n]!]));
   },
 }));
 vi.mock('../grounding/naver_autocomplete', () => ({ naverAutocomplete: async (q: string) => h.suggest[q] ?? [] }));
@@ -186,6 +195,7 @@ describe('proposeContentIdeas — 수종 필수 게이트(통합)', () => {
     setEnv('CONTENT_DIVERSITY', 'off');  // 소재 포화 게이트 없음(빈 코퍼스라 무관하지만 명시)
     setEnv('TOPIC_PERF_HINTS', 'false'); // 외부 인기 갱신(검색광고·유튜브 실호출) 없음
     h.rounds = []; h.prompts = []; h.searchAd = false; h.demandTargets = []; h.volume = {}; h.season = {}; h.suggest = {};
+    h.noSeason = []; h.speciesSeason = {}; h.speciesAsked = [];
   });
   afterEach(() => {
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
@@ -224,6 +234,40 @@ describe('proposeContentIdeas — 수종 필수 게이트(통합)', () => {
     const idea = await mod.proposeContentIdeas();
     expect(idea?.keyword).toBe('감나무 묘목');
     expect(h.prompts[1]).toContain('"무화과 가지 끝이 마르는 이유"=검색 비수기(');
+  });
+
+  it('시즌 없는 하한 면제 키워드는 수종 이름 시즌으로 판정 — 비수기 수종이면 1라운드에서 기각되고 2라운드가 돈다(2026-10-20 겹벚나무)', async () => {
+    h.searchAd = true;
+    h.volume = { '화분 겹벚나무': 0, '감나무 묘목': 900 };
+    h.noSeason = ['화분 겹벚나무'];
+    h.speciesSeason = { 겹벚나무: 0.05 };
+    h.suggest = { 겹벚나무: ['겹벚나무 화분', '겹벚나무 키우기'] };
+    const mod = await load();
+    h.rounds = [
+      [{ title: '화분 겹벚나무, 베란다에서 봄꽃까지 키우기', keyword: '화분 겹벚나무' }],
+      [{ title: '감나무 묘목 고르는 법', keyword: '감나무 묘목' }],
+    ];
+    const idea = await mod.proposeContentIdeas();
+    expect(idea?.keyword).toBe('감나무 묘목');   // 종전이면 1라운드에서 '화분 겹벚나무'가 판정 없이 채택됐다
+    expect(h.speciesAsked[0]).toEqual(['겹벚나무']);
+    expect(h.prompts[1]).toContain('"화분 겹벚나무, 베란다에서 봄꽃까지 키우기"=검색 비수기(');
+    expect(h.prompts[1]).toContain('수종 "겹벚나무" 시즌 0.05');
+  });
+
+  it('수종 이름 시즌이 하한(0.10) 이상이면 종전처럼 1라운드 채택 — 키워드 시즌이 있는 후보는 수종을 묻지 않는다', async () => {
+    h.searchAd = true;
+    h.volume = { '자두나무 상처': 0, '감나무 깍지벌레': 0 };
+    h.noSeason = ['자두나무 상처'];
+    h.speciesSeason = { 자두나무: 0.13 };
+    const mod = await load();
+    h.rounds = [[
+      { title: '자두나무 상처, 약 바를 크기 정하기', keyword: '자두나무 상처' },
+      { title: '감나무 깍지벌레, 겨울 전에 볼 곳', keyword: '감나무 깍지벌레' },
+    ]];
+    const idea = await mod.proposeContentIdeas();
+    expect(idea?.keyword).toBe('자두나무 상처');
+    expect(h.prompts).toHaveLength(1);
+    expect(h.speciesAsked).toEqual([['자두나무']]);
   });
 
   it('수종 없는 키워드는 제목의 수종으로 보정해 채택 — 1라운드에서 끝난다', async () => {
@@ -499,6 +543,38 @@ describe('demandGateDecision — 수종 키워드 하한 면제(순수)', () => 
     expect(demandGateDecision(r, '감나무 깍지벌레', cfg, { floorExempt: off })).toEqual({ verdict: 'reject', line: expect.any(String) });
     expect(demandGateDecision(r, '감나무 깍지벌레', cfg, { floorExempt: off, relax: true })).toMatchObject({ verdict: 'demote', relaxed: true });
     expect(demandGateDecision(new Map(), '감나무 깍지벌레', cfg, { floorExempt: off, remembered: { line: 'L' } })).toEqual({ verdict: 'reject', line: 'L' });
+  });
+
+  // 수종 이름 시즌 대체(2026-10-20) — 10월 "화분 겹벚나무"(10미만, 시즌 없음)가 아무 판정 없이 1라운드 채택된 실사고.
+  describe('시즌 지수가 없는 면제 키워드 — 수종 이름 시즌으로 대신 판정', () => {
+    const cfgSp = { ...cfg, minSpeciesSeason: 0.10 };
+    const sp = (idx: number) => () => ({ name: '겹벚나무', idx });
+    it('수종 시즌이 하한(0.10) 미만이면 비수기 demote — 줄에 수종 시즌 표기', () => {
+      const d = demandGateDecision(rows(row('화분 겹벚나무', 0)), '화분 겹벚나무', cfgSp, { floorExempt: on, speciesSeason: sp(0.05) });
+      expect(d).toMatchObject({ verdict: 'demote', exempted: true });
+      expect(d.relaxed).toBeUndefined();
+      expect(d.line).toContain('수종 "겹벚나무" 시즌 0.05');
+      expect(d.line).toContain('수종 키워드 하한 면제');
+    });
+    it('수종 시즌이 하한 이상이면 통과 — 일반 하한(0.25)보다 낮아도(0.13) 통과', () => {
+      const d = demandGateDecision(rows(row('자두나무 상처', 0)), '자두나무 상처', cfgSp, { floorExempt: on, speciesSeason: sp(0.13) });
+      expect(d.verdict).toBe('pass');
+      expect(d.line).toContain('시즌 0.13');
+    });
+    it('키워드 자기 시즌이 있으면 그것만 본다 — 수종 시즌은 묻지도 않는다', () => {
+      const asked = vi.fn(sp(0.01));
+      const d = demandGateDecision(rows(row('감나무 깍지벌레', 0, 0.8)), '감나무 깍지벌레', cfgSp, { floorExempt: on, speciesSeason: asked });
+      expect(d.verdict).toBe('pass');
+      expect(asked).not.toHaveBeenCalled();
+      expect(d.line).not.toContain('수종 "');
+    });
+    it('수종 시즌을 모르거나(조회 실패) 스위치가 0 이면 종전 통과', () => {
+      expect(demandGateDecision(rows(row('화분 겹벚나무', 0)), '화분 겹벚나무', cfgSp, { floorExempt: on, speciesSeason: () => undefined }).verdict).toBe('pass');
+      expect(demandGateDecision(rows(row('화분 겹벚나무', 0)), '화분 겹벚나무', { ...cfg, minSpeciesSeason: 0 }, { floorExempt: on, speciesSeason: sp(0.05) }).verdict).toBe('pass');
+    });
+    it('면제 아닌 일반 키워드는 대체 판정 없이 종전 하한 기각', () => {
+      expect(demandGateDecision(rows(row('가을 물주기 시기', 0)), '가을 물주기 시기', cfgSp, { floorExempt: on, speciesSeason: sp(0.9) }).verdict).toBe('reject');
+    });
   });
 });
 

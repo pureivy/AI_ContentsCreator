@@ -259,6 +259,32 @@ export async function assessCandidatesDemand(keywords: string[], signal?: AbortS
   return out;
 }
 
+/**
+ * 수종 이름 시즌 지수(2026-10-20) — 하한 면제 수종 키워드(scheduler speciesFloorExempt)의 시즌 대체 판정 재료.
+ * 면제 키워드는 대부분 10미만/월이라 데이터랩에도 잡히지 않아 시즌 지수가 비고(로그 면제 50건 중 41건), 그러면 '시즌만 본다'던
+ * 면제가 아무것도 안 보고 통과시켰다 — 실사고 10-20 06시: 10월에 "화분 겹벚나무"(5월 꽃) 글이 1라운드에서 채택돼 2라운드가
+ * 돌지 않았다. 수종 이름 자체의 시즌은 꽃·열매 철에 몰린 거친 근사라 판정 기준은 따로 낮게 둔다(CONFIG.topicDemandSpeciesSeasonMin).
+ * 데이터랩 MAX_TREND 씩 나눠 부른다. 실패·미설정은 빈 Map(판정 생략 = 종전 동작).
+ */
+export async function speciesSeasons(names: string[], signal?: AbortSignal): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const uniq = [...new Set((names ?? []).map((n) => (n || '').trim()).filter(Boolean))];
+  if (!uniq.length || !datalabEnabled()) return out;
+  const byNorm = new Map(uniq.map((n) => [normKw(n), n]));
+  try {
+    for (let i = 0; i < uniq.length; i += MAX_TREND) {
+      for (const t of await datalabTrend(uniq.slice(i, i + MAX_TREND), 13, signal)) {
+        const name = byNorm.get(normKw(t.keyword));
+        const s = seasonIndex(t.points);
+        if (name && s !== undefined) out.set(name, s);
+      }
+    }
+  } catch (e) {
+    console.log(`[demand] 수종 시즌 조회 실패 — 대체 판정 생략(${errMsg(e)})`);
+  }
+  return out;
+}
+
 function snapPath(slug?: string): string {
   const s = slug ?? activeBrandSlug();
   return path.join(CONFIG.dataDir, 'analytics', s ? `demand-${s}.json` : 'demand.json');
