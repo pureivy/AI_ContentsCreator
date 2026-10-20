@@ -27,6 +27,8 @@ export interface Shorts {
   /** 주제(독립 생성) 또는 원본 블로그 제목(파생). */
   topic: string;
   keyword?: string;
+  /** 유튜브 쇼츠 기획 참고 근거(2026-10-20 SHORTS_YT_REF) — 작가에게 보여 준 같은 소재 쇼츠 조회 상위의 요약. 분석용 기록. */
+  ytRef?: { ts: string; keyword: string; topViews: number; count: number };
   /** 블로그 초안에서 파생된 경우 원본 piece id. */
   sourcePieceId?: string;
   /** 자율 사이클이 만든 것인지(수동 생성과 카덴스 쿼터 분리용). */

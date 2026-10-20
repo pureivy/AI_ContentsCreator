@@ -60,6 +60,8 @@ import type { ShortsScene } from '../tools/shortsRender';
 import { normalizeSceneKind, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, cutAtWordBoundary, probeDuration, teaserFor, teaserSceneIndex, sceneFrames, midcutAt, planSpareClips, FPS } from '../tools/shortsCommon';
 import { inheritedClaims, formatInherited, writerSource, flaggedForPrompt, STRIPPED_FLAGGED_NOTE } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
+import { getShortsRef, buildShortsRefBlock } from '../analytics/ytShortsRef';
+import { youtubeEnabled } from '../grounding/youtube';
 import type { EventBus } from '../events/bus';
 
 const RUNNING = new Set<string>();
@@ -2831,8 +2833,21 @@ export async function runShortsJob(
     if (hookConflict) say(`훅 화면 어긋남 — ${hookConflict} · 묘사 없이 단정형 훅으로`);
     const planBriefs = hookConflict ? briefs.filter((b) => b.what !== hookFootage) : briefs;
     say(`기획 가드 — 채널 ${platformLabel(short.platform)} · 작가 ${writerProfile?.name ?? short.writer ?? '미지정'} · 유사주제 ${priorCoverage ? '주입' : '해당없음'} · 반복표현 ${ticPhrases.length}건 · 훅/CTA 로테이션 ${hooksBlock ? '주입' : '해당없음'} · 형제 대본 ${siblingGuide ? '주입' : '없음'} · 제목 유형 ${titleTypes.join('·')} · 장르 ${shortsGenreOf(short.topic, CONFIG.shortsLore) === 'lore' ? '이야기형' : '하우투'} · 훅 소재 ${shortsGenreOf(short.topic, CONFIG.shortsLore) === 'howto' && CONFIG.shortsLore ? (opts.loreFacts ?? []).length : 0}건`);
+    // 유튜브 쇼츠 참고(2026-10-20 사장님 "참고만") — 같은 소재 쇼츠 조회 상위를 작가에게 보여 주고 근거를 숏폼에 남긴다. 기각·게이트 없음.
+    // 하루 1회 캐시라 같은 날 재실행은 API 를 안 쓴다. 수정 요청(reviseShorts)·고정 기획(chooseFixedPlan)은 이 블록을 받지 않는다(의도).
+    let ytRefBlock = '';
+    if (CONFIG.shortsYtRef && youtubeEnabled() && short.platform === 'youtube') {
+      const refKw = (short.keyword || short.topic).trim();
+      try {
+        const refVids = await getShortsRef(refKw, short.brand, opts.signal);
+        ytRefBlock = buildShortsRefBlock(refKw, refVids);
+        const topViews = refVids.reduce((m, v) => Math.max(m, v.views), 0);
+        store.update(id, { ytRef: { ts: new Date().toISOString(), keyword: refKw, topViews, count: refVids.length } });
+        say(`유튜브 참고 — "${refKw}" ${refVids.length ? `쇼츠 ${refVids.length}편 · 최고 ${topViews.toLocaleString('ko-KR')}회` : '없음'}`);
+      } catch { /* 참고 자료는 보조 — 실패해도 기획은 그대로 */ }
+    }
     const traceBox: { value?: SceneTrace } = {};
-    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, siblingGuide, mediaPlanGuide(planBriefs), priorCoverage, phraseBlock, hooksBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? [], writerRole,
+    const planned = await planShorts(io, short.topic, short.keyword, opts.sourceBody, n, [platformGuide, siblingGuide, mediaPlanGuide(planBriefs), priorCoverage, phraseBlock, hooksBlock, ytRefBlock, OVERUSED_LEXEME_GUIDE].filter(Boolean).join('\n\n'), titleTypes, opts.sourceFlagged ?? [], writerRole,
       recentShortsMainTitles(short.brand, short.id), opts.loreFacts ?? [], // 대표 제목 구조 수렴 차단 · 훅 소재(이야기 사실)
       // 예고 대장 자리 · 훅 화면(2026-10-02) — 보관소 영상이 정확히 1개면 hookFirst 가 그걸 씬1에 놓는다. 여럿이면 어느 게
       // 훅이 될지 기획 시점엔 모르므로 묘사를 주지 않는다(종전 mediaPlanGuide 만).

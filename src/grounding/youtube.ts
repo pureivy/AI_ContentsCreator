@@ -13,11 +13,20 @@ const KEY = 'YOUTUBE_API_KEY';
 export function youtubeEnabled(): boolean { return !!getSecret(KEY); }
 
 export interface YtVideo {
+  videoId: string;
   title: string;
   channel: string;
   publishedAt: string;   // YYYY-MM-DD
   views: number;
   durationMin: number;   // 분(반올림, 1분 미만은 1)
+  durationSec: number;   // 초(쇼츠 판별용, 파싱 실패·통계 실패는 0)
+}
+
+/** ISO8601 duration → 초. 파싱 실패·빈값은 0. */
+export function parseIsoDurationSec(iso: string): number {
+  const m = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(iso || '');
+  if (!m) return 0;
+  return Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0);
 }
 
 /** ISO8601 duration(PT1H2M3S) → 분. 파싱 실패·빈값은 0(표기 생략용). */
@@ -30,10 +39,14 @@ export function parseIsoDurationMin(iso: string): number {
 
 /** 상위 영상 조회 — search.list(관련도순, 한국) + videos.list(조회수·길이) 2단 호출. 실패 시 []. */
 export async function youtubeTop(keyword: string, signal?: AbortSignal): Promise<YtVideo[]> {
+  return searchVideos(keyword, '', signal);
+}
+
+async function searchVideos(keyword: string, extraQuery: string, signal?: AbortSignal): Promise<YtVideo[]> {
   const kw = keyword.trim();
   const key = getSecret(KEY);
   if (!kw || !key) return [];
-  const sUrl = 'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8'
+  const sUrl = 'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8' + extraQuery
     + `&regionCode=KR&relevanceLanguage=ko&q=${encodeURIComponent(kw)}&key=${encodeURIComponent(key)}`;
   const sr = await fetchTimeout(sUrl, {}, signal);
   if (!sr.ok) return [];
@@ -44,7 +57,7 @@ export async function youtubeTop(keyword: string, signal?: AbortSignal): Promise
   if (!items.length) return [];
 
   // 통계·길이는 보조 신호 — videos.list 실패해도 제목·채널만으로 주입한다(fail-open).
-  const stats = new Map<string, { views: number; durationMin: number }>();
+  const stats = new Map<string, { views: number; durationMin: number; durationSec: number }>();
   try {
     const ids = items.map((it) => it.id!.videoId!).join(',');
     const vr = await fetchTimeout(`https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id=${ids}&key=${encodeURIComponent(key)}`, {}, signal);
@@ -57,21 +70,42 @@ export async function youtubeTop(keyword: string, signal?: AbortSignal): Promise
         stats.set(v.id, {
           views: Number(v.statistics?.viewCount ?? 0) || 0,
           durationMin: parseIsoDurationMin(v.contentDetails?.duration ?? ''),
+          durationSec: parseIsoDurationSec(v.contentDetails?.duration ?? ''),
         });
       }
     }
   } catch { /* 통계 없이 진행 */ }
 
   return items.map((it) => {
-    const s = stats.get(it.id!.videoId!) ?? { views: 0, durationMin: 0 };
+    const s = stats.get(it.id!.videoId!) ?? { views: 0, durationMin: 0, durationSec: 0 };
     return {
+      videoId: it.id!.videoId!,
       title: stripTags(it.snippet?.title ?? ''),
       channel: it.snippet?.channelTitle ?? '',
       publishedAt: (it.snippet?.publishedAt ?? '').slice(0, 10),
       views: s.views,
       durationMin: s.durationMin,
+      durationSec: s.durationSec,
     };
   });
+}
+
+export const SHORTS_MAX_SEC = 180;
+
+/** 검색 결과 → 쇼츠(길이 ≤180초·조회>0)만 조회 내림차순 상위 n(순수, 테스트 대상). */
+export function pickTopShorts(vids: YtVideo[], n = 5): YtVideo[] {
+  return vids.filter((v) => v.durationSec > 0 && v.durationSec <= SHORTS_MAX_SEC && v.views > 0)
+    .sort((a, b) => b.views - a.views).slice(0, n);
+}
+
+/**
+ * 같은 소재의 유튜브 쇼츠 조회 상위 5편(2026-10-20 "참고만") — search.list(videoDuration=short, 관련도순) 후
+ * 길이·조회 후처리. 101유닛/회라 호출부(ytShortsRef)가 키워드당 하루 1회로 캐시한다. 실패 시 [].
+ */
+export async function youtubeShortsTop(keyword: string, signal?: AbortSignal): Promise<YtVideo[]> {
+  try {
+    return pickTopShorts(await searchVideos(keyword, '&videoDuration=short', signal));
+  } catch { return []; }
 }
 
 /** 조회 결과 → 주입 블록 텍스트(네트워크와 분리해 단위 테스트 가능). 결과 없으면 ''. */
