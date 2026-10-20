@@ -42,14 +42,17 @@ export async function youtubeTop(keyword: string, signal?: AbortSignal): Promise
   return searchVideos(keyword, '', signal);
 }
 
-async function searchVideos(keyword: string, extraQuery: string, signal?: AbortSignal): Promise<YtVideo[]> {
+/** strict(쇼츠 참고, 2026-10-20) — 키 없음·HTTP 실패·통계 실패를 빈 결과가 아니라 예외로 올린다. 호출부가 '결과 없음'만
+ *  캐시하고 실패(쿼터 초과 등)는 캐시하지 않게 하려는 것. 기본(false)은 종전 fail-open 그대로. */
+async function searchVideos(keyword: string, extraQuery: string, signal?: AbortSignal, strict = false): Promise<YtVideo[]> {
   const kw = keyword.trim();
   const key = getSecret(KEY);
-  if (!kw || !key) return [];
+  if (!kw) return [];
+  if (!key) { if (strict) throw new Error('no key'); return []; }
   const sUrl = 'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8' + extraQuery
     + `&regionCode=KR&relevanceLanguage=ko&q=${encodeURIComponent(kw)}&key=${encodeURIComponent(key)}`;
   const sr = await fetchTimeout(sUrl, {}, signal);
-  if (!sr.ok) return [];
+  if (!sr.ok) { if (strict) throw new Error(`search HTTP ${sr.status}`); return []; }
   const sj = await sr.json() as {
     items?: Array<{ id?: { videoId?: string }; snippet?: { title?: string; channelTitle?: string; publishedAt?: string } }>;
   };
@@ -61,6 +64,7 @@ async function searchVideos(keyword: string, extraQuery: string, signal?: AbortS
   try {
     const ids = items.map((it) => it.id!.videoId!).join(',');
     const vr = await fetchTimeout(`https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id=${ids}&key=${encodeURIComponent(key)}`, {}, signal);
+    if (!vr.ok && strict) throw new Error(`videos HTTP ${vr.status}`);
     if (vr.ok) {
       const vj = await vr.json() as {
         items?: Array<{ id?: string; statistics?: { viewCount?: string }; contentDetails?: { duration?: string } }>;
@@ -74,7 +78,7 @@ async function searchVideos(keyword: string, extraQuery: string, signal?: AbortS
         });
       }
     }
-  } catch { /* 통계 없이 진행 */ }
+  } catch (e) { if (strict) throw e; /* 통계 없이 진행 */ }
 
   return items.map((it) => {
     const s = stats.get(it.id!.videoId!) ?? { views: 0, durationMin: 0, durationSec: 0 };
@@ -102,10 +106,11 @@ export function pickTopShorts(vids: YtVideo[], n = 5): YtVideo[] {
  * 같은 소재의 유튜브 쇼츠 조회 상위 5편(2026-10-20 "참고만") — search.list(videoDuration=short, 관련도순) 후
  * 길이·조회 후처리. 101유닛/회라 호출부(ytShortsRef)가 키워드당 하루 1회로 캐시한다. 실패 시 [].
  */
-export async function youtubeShortsTop(keyword: string, signal?: AbortSignal): Promise<YtVideo[]> {
+/** null = 조회 실패(키 없음·쿼터 초과·네트워크) — '결과 없음([])'과 갈라 호출부가 실패를 캐시하지 않게 한다. */
+export async function youtubeShortsTop(keyword: string, signal?: AbortSignal): Promise<YtVideo[] | null> {
   try {
-    return pickTopShorts(await searchVideos(keyword, '&videoDuration=short', signal));
-  } catch { return []; }
+    return pickTopShorts(await searchVideos(keyword, '&videoDuration=short', signal, true));
+  } catch { return null; }
 }
 
 /** 조회 결과 → 주입 블록 텍스트(네트워크와 분리해 단위 테스트 가능). 결과 없으면 ''. */

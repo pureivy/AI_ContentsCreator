@@ -58,7 +58,7 @@ describe('쇼츠 조회 상위', () => {
       v('c', 300, 59), v('d', 50, 10), v('e', 10, 10), v('f', 5, 10)]);
     expect(out.map((x) => x.videoId)).toEqual(['b', 'c', 'a', 'd', 'e']);
   });
-  it('youtubeShortsTop — videoDuration=short 로 검색하고 후처리, 실패는 []', async () => {
+  it('youtubeShortsTop — videoDuration=short 로 검색하고 후처리, 실패(네트워크·HTTP)는 null — 결과 없음([])과 구분', async () => {
     vi.spyOn(secrets, 'getSecret').mockReturnValue('KEY');
     const urls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (u: string) => {
@@ -70,9 +70,13 @@ describe('쇼츠 조회 상위', () => {
     }));
     const r = await youtubeShortsTop('모과');
     expect(urls[0]).toContain('videoDuration=short');
-    expect(r.map((x) => x.videoId)).toEqual(['x1']);
+    expect(r!.map((x) => x.videoId)).toEqual(['x1']);
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('net'); }));
-    expect(await youtubeShortsTop('모과')).toEqual([]);
+    expect(await youtubeShortsTop('모과')).toBeNull();
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403, json: async () => ({}) })));
+    expect(await youtubeShortsTop('모과')).toBeNull();   // 쿼터 초과 403
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ items: [] }) })));
+    expect(await youtubeShortsTop('모과')).toEqual([]);   // 진짜 결과 없음
     vi.unstubAllGlobals();
   });
 });
