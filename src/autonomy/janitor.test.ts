@@ -34,10 +34,11 @@ describe('janitor 순수 판정(2026-09-10 저장공간 정리)', () => {
   });
   it('shortPruneTargets — 참조·캐시·렌더 잔여는 항상, 씬·클립·낭독은 발행 14일 뒤에만. sources.json 은 대상이 아니다', () => {
     const a = shortPruneTargets(false, null, 14);
-    expect(a).toEqual(['refs', 'scenes/_refnorm', 'download.mp4', 'remotion/bundle', 'remotion/public']);
+    expect(a).toEqual(['refs', 'scenes/_refnorm', 'download.mp4', 'remotion/bundle', 'remotion/public',
+      'motion-*/bgframes', 'motion-*/.remotion', 'motion-*/preview', 'motion-*/bg-nocards.mp4']);
     expect(shortPruneTargets(true, 13, 14)).toEqual(a);
     const b = shortPruneTargets(true, 14, 14);
-    for (const t of ['scenes', 'scenes-retry', 'clips/*.mp4', 'remotion']) expect(b).toContain(t);
+    for (const t of ['scenes', 'scenes-retry', 'clips/*.mp4', 'remotion', 'motion-*', 'pilot-*', 'final.basic.mp4']) expect(b).toContain(t);
     expect(b).not.toContain('clips');
     expect(b).not.toContain('final.mp4');
     expect(b).not.toContain('preview.mp4');
@@ -60,8 +61,16 @@ describe('runJanitor — 임시 data 디렉터리에서 실제 이동·삭제(fa
     w('shorts/short_pub/scenes/blog-image-01.png', 100); w('shorts/short_pub/clips/user_02.mp4', 100); w('shorts/short_pub/clips/sources.json', 5);
     w('shorts/short_pub/remotion/narr_01.mp3', 50); w('shorts/short_pub/refs/species-ref.jpg', 30); w('shorts/short_pub/download.mp4', 200);
     w('shorts/short_pub/preview.mp4', 40); w('shorts/short_pub/plan.json', 5); w('shorts/short_pub/thumbnail.jpg', 5);
+    // 모션그래픽(2026-10-22) — 발행 20일: 작업 폴더·시범 폴더·모션그래픽 전 원본까지
+    w('shorts/short_pub/motion-1/scene_02.html', 5); w('shorts/short_pub/motion-1/bgframes/scene_02/0001.jpg', 100);
+    w('shorts/short_pub/pilot-direct/metrics.json', 5); w('shorts/short_pub/final.basic.mp4', 300);
     // 발행 3일 된 쇼츠 — 참조·캐시만
     w('shorts/short_new/scenes/blog-image-01.png', 100); w('shorts/short_new/refs/x.jpg', 30); w('shorts/short_new/final.mp4', 300);
+    // 모션그래픽 — 발행 3일: 무거운 중간물만, 장면 HTML·시범 폴더·원본은 남는다
+    w('shorts/short_new/motion-1/scene_02.html', 5); w('shorts/short_new/motion-1/bgframes/scene_02/0001.jpg', 100);
+    w('shorts/short_new/motion-1/.remotion/bundle/b.js', 50); w('shorts/short_new/motion-1/preview/scene_02_t0.5.png', 40);
+    w('shorts/short_new/motion-2/bg-nocards.mp4', 200); w('shorts/short_new/pilot-direct/bgframes/scene_02/0001.jpg', 100);
+    w('shorts/short_new/final.basic.mp4', 300);
     // 미발행 40일 ready — 색인에서 빼고 통째로 휴지통
     w('shorts/short_stale/final.mp4', 300); w('shorts/short_stale/plan.json', 5);
     // 고아 폴더
@@ -127,6 +136,19 @@ describe('runJanitor — 임시 data 디렉터리에서 실제 이동·삭제(fa
     expect(exists(root, 'shorts/short_new/refs')).toBe(false);
     expect(exists(root, 'shorts/short_new/scenes/blog-image-01.png')).toBe(true);
     expect(r.archived).toEqual({ n: 1, bytes: 225 });
+    // 모션그래픽 — 발행 3일: 바탕 프레임·번들·미리보기·바탕판만, 장면 HTML·시범 캐시·원본은 유지
+    expect(exists(root, 'shorts/short_new/motion-1/bgframes')).toBe(false);
+    expect(exists(root, 'shorts/short_new/motion-1/.remotion')).toBe(false);
+    expect(exists(root, 'shorts/short_new/motion-1/preview')).toBe(false);
+    expect(exists(root, 'shorts/short_new/motion-2/bg-nocards.mp4')).toBe(false);
+    expect(exists(root, 'shorts/short_new/motion-1/scene_02.html')).toBe(true);
+    expect(exists(root, 'shorts/short_new/pilot-direct/bgframes/scene_02/0001.jpg')).toBe(true);
+    expect(exists(root, 'shorts/short_new/final.basic.mp4')).toBe(true);
+    expect(exists(root, '.trash/janitor-20260910/shorts-intermediates/short_new/motion-1/bgframes/scene_02/0001.jpg')).toBe(true);
+    // 모션그래픽 — 발행 20일: 폴더 통째·시범 폴더·모션그래픽 전 원본
+    expect(exists(root, 'shorts/short_pub/motion-1')).toBe(false);
+    expect(exists(root, 'shorts/short_pub/pilot-direct')).toBe(false);
+    expect(exists(root, 'shorts/short_pub/final.basic.mp4')).toBe(false);
     // 미발행 40일: 색인 제거 + 통째 휴지통
     expect(removed).toEqual(['short_stale']);
     expect(exists(root, 'shorts/short_stale')).toBe(false);

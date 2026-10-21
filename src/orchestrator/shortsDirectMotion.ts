@@ -504,8 +504,8 @@ export async function applyMotionGraphics(id: string, opts: { log?: (m: string) 
   const log = opts.log ?? ((m: string) => console.log(m));
   const dir = path.join(CONFIG.dataDir, 'shorts', id);
   const final = path.join(dir, 'final.mp4');
+  const workName = `motion-${Date.now()}`;
   try {
-    const workName = `motion-${Date.now()}`;
     // 에이전트 제한 60분(2026-10-16 사장님 요청, 종전 20분) — 디테일 지시를 켠 뒤 시범 한 편이 16.7분까지 걸려 20분이 빠듯했다.
     const m = await runDirectMotionPilot({ id, workName, agentTimeoutMs: 60 * 60_000, log: (x) => console.log('[모션그래픽]', x) });
     // 출력 경로는 우리가 만든 작업 폴더의 final.mp4 만 받는다(보안 — 다른 파일을 발행본으로 올리지 않게).
@@ -519,15 +519,28 @@ export async function applyMotionGraphics(id: string, opts: { log?: (m: string) 
     }
     fs.copyFileSync(final, path.join(dir, 'final.basic.mp4'));
     fs.copyFileSync(m.out, final);
-    // 작업 폴더의 무거운 중간 영상만 걷는다(편마다 ~100MB) — 장면 HTML·검사·지표는 사후 확인용으로 남긴다.
-    const work = path.dirname(m.out);
-    for (const f of fs.readdirSync(work)) {
-      if (/^(?:bg-nocards|final(?:\.auto)?|seg_\d+)\.mp4$/.test(f)) { try { fs.unlinkSync(path.join(work, f)); } catch { /* 무해 */ } }
-    }
     log(`모션그래픽 적용 — 씬 ${m.graphicScenes.join('·')} · ${Math.round(m.wallSec)}초${m.agent?.costUsd ? ` · $${m.agent.costUsd.toFixed(2)}` : ''}`);
     return true;
   } catch (e) {
     log(`모션그래픽 건너뜀 — ${e instanceof Error ? e.message.slice(0, 120) : String(e)} · 원본 영상 유지`);
     return false;
+  } finally {
+    pruneMotionWork(path.join(dir, workName));
+  }
+}
+
+/** 모션그래픽 작업 폴더에서 다시 안 쓰는 무거운 중간물(정규식 — 테스트 대상). 장면 HTML·시안·검사·지표·에이전트 기록은 사후 확인용으로 남긴다. */
+export const MOTION_WORK_HEAVY = /^(?:bgframes|\.remotion|preview|(?:bg-nocards|final(?:\.auto)?|seg_\d+)\.mp4)$/;
+
+/**
+ * 성공·실패 모두 작업 폴더의 무거운 중간물을 걷는다(2026-10-22) — 편마다 ~150MB(바탕 프레임 JPG 수백 장·렌더 번들·미리보기)가
+ * 10-12 매일 제작 뒤 하루 ~1.5GB씩 쌓였다. 작업 폴더는 매번 새로 만들어(motion-<시각>) 다시 쓰지 않으므로 잃는 것이 없다.
+ * 시범 CLI(pilot-*)는 같은 폴더를 이어 쓰는 캐시라 여기서 지우지 않는다(applyMotionGraphics 에서만 부른다).
+ */
+export function pruneMotionWork(work: string): void {
+  let entries: string[] = [];
+  try { entries = fs.readdirSync(work); } catch { return; }
+  for (const f of entries) {
+    if (MOTION_WORK_HEAVY.test(f)) { try { fs.rmSync(path.join(work, f), { recursive: true, force: true }); } catch { /* 무해 — 새벽 정리가 다시 본다 */ } }
   }
 }

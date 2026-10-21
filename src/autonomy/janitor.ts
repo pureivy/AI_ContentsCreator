@@ -9,8 +9,8 @@
  *
  * 규칙(전부 data/.trash 를 거쳐 trashDays 뒤 영구 삭제 — 삭제 핸들러의 trashContentFiles 와 같은 원칙):
  *  1) 즉시·손실 없음: 색인에 없는 고아 폴더 / 참조 사본(refs·_refnorm) / 다운로드 캐시(download.mp4, 누르면 다시 만든다) /
- *     렌더 잔여(remotion/bundle·public).
- *  2) 발행 keepDays 뒤: 씬 이미지·클립·낭독 mp3·세그먼트(쇼츠), 배경·레퍼런스(카드뉴스), 매니페스트에 없는 후보 이미지·
+ *     렌더 잔여(remotion/bundle·public) / 모션그래픽 작업 중간물(motion-*의 바탕 프레임·번들·미리보기, 2026-10-22).
+ *  2) 발행 keepDays 뒤: 씬 이미지·클립·낭독 mp3·세그먼트·모션그래픽 작업 폴더·모션그래픽 전 원본(쇼츠), 배경·레퍼런스(카드뉴스), 매니페스트에 없는 후보 이미지·
  *     스크린샷(블로그 세션). 수정요청 재조립이 발행 뒤엔 안 쓰이는 것들이다. clips/sources.json 은 남긴다(보관소 사용 현황이 읽는다).
  *  3) 미발행 staleDays 이상 쇼츠(ready·error): 버린 편으로 보고 색인에서 빼고 폴더는 휴지통으로(사용자 확정 "30일 넘은 쇼츠 버린 것").
  *  4) 글과 연결 안 된 세션 staleDays 이상: 통째로 휴지통(사용자 확정 "지워도 됨").
@@ -109,9 +109,12 @@ export function isStaleUnpublishedShort(s: JanitorShort, now: Date, staleDays: n
  * always 는 발행 여부와 무관, afterKeep 은 발행 뒤 keepDays 가 지났을 때만.
  */
 export function shortPruneTargets(published: boolean, publishedAgeDays: number | null, keepDays: number): string[] {
-  const out = ['refs', 'scenes/_refnorm', 'download.mp4', 'remotion/bundle', 'remotion/public'];
+  // motion-*(2026-10-22) — 모션그래픽 작업 폴더. 바탕 프레임·렌더 번들·미리보기는 다시 안 쓰는 중간물이라 항상,
+  // 폴더 통째·시범 폴더(pilot-*)·모션그래픽 전 원본(final.basic.mp4)은 발행 keepDays 뒤(씬·낭독이 빠지면 다시 입힐 수도 없다).
+  const out = ['refs', 'scenes/_refnorm', 'download.mp4', 'remotion/bundle', 'remotion/public',
+    'motion-*/bgframes', 'motion-*/.remotion', 'motion-*/preview', 'motion-*/bg-nocards.mp4'];
   if (published && publishedAgeDays !== null && publishedAgeDays >= keepDays) {
-    out.push('scenes', 'scenes-retry', 'revise-imgs', 'segments', 'remotion', 'clips/*.mp4');
+    out.push('scenes', 'scenes-retry', 'revise-imgs', 'segments', 'remotion', 'clips/*.mp4', 'motion-*', 'pilot-*', 'final.basic.mp4');
   }
   return out;
 }
@@ -168,10 +171,16 @@ export async function runJanitor(deps: JanitorDeps, opts: JanitorOpts = {}): Pro
       report.errors.push(`${label} ${rel}: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
-  /** 폴더 기준 타깃 목록 적용 — 'clips/*.mp4' 꼴은 그 폴더의 mp4 파일만. */
+  /** 폴더 기준 타깃 목록 적용 — 'clips/*.mp4' 꼴은 그 폴더의 mp4 파일만, 'motion-*' 꼴(첫 마디 접두 글롭)은 그 접두의 폴더마다. */
   const applyTargets = (base: string, id: string, targets: string[], label: string): void => {
     for (const t of targets) {
-      if (t.endsWith('/*.mp4')) {
+      const [head, ...rest] = t.split('/');
+      if (head!.endsWith('-*')) {
+        for (const d of listDirs(base, new RegExp(`^${head!.slice(0, -1).replace(/[.+?^${}()|[\]\\]/g, '\\$&')}`))) {
+          const rel = path.join(d, ...rest);
+          trash(path.join(base, rel), label, path.join(id, rel));
+        }
+      } else if (t.endsWith('/*.mp4')) {
         const d = path.join(base, t.slice(0, -'/*.mp4'.length));
         let files: string[] = [];
         try { files = fs.readdirSync(d).filter((f) => /\.mp4$/i.test(f)); } catch { continue; }
