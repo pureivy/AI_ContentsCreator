@@ -72,6 +72,18 @@ describe('ytShortsRef', () => {
     const saved = JSON.parse(fs.readFileSync(file(), 'utf-8')) as { entries: Record<string, { videos: unknown[] }> };
     expect(saved.entries['화분 겹벚나무']?.videos.length).toBe(7);
   });
+  it('판매·광고 제목은 수종이 들어 있어도 뺀다', async () => {
+    const { isAdTitle, getShortsRef } = await import('./ytShortsRef');
+    for (const t of ['“화려한 겹벚나무 묘목, 지금 ‘할인가’로 가져가세요!“/#묘목판매', '겹벚나무 분묘 판매/ #정원수/ 옥천 나무시장',
+      '겹벚나무 추천, 따끈따끈 신상~! 가성비 TOP5', '겹벚나무 1주 15,000원', '겹벚나무 특가 무료 배송',
+      '왜성체리나무 묘목 9종 입고 #라핀', '국내 최대 규모 블루베리 묘목 전문 농장', '전국 최대 묘목농장 상주천봉산농원']) expect(isAdTitle(t)).toBe(true);
+    for (const t of ['겹벚꽃이 자연발아 되어 있어요~ 냉큼 보고 심어보세요', '봄꽃 끝판왕 겹벚나무! 돈되는 나무 만드는 방법 3가지 공개!',
+      '겹벚꽃나무와 왕벚나무의 구분 특징', '겹벚나무 묘목 구입 요령', '100원짜리 동전만 한 꽃',
+      '체리 열매가 왜 안 달려요?? #체리묘목 #경산묘목 #우리농원', '블루베리 농장 주말농장에서 키우기']) expect(isAdTitle(t)).toBe(false);
+    top.mockResolvedValue([vid('겹벚나무 할인가 판매', 99_000), vid('겹벚나무 키우기', 1_000)]);
+    const got = await getShortsRef('겹벚나무', undefined, undefined, new Date('2026-10-21T10:00:00'), ['겹벚나무', '겹벚']);
+    expect(got.map((v) => v.title)).toEqual(['겹벚나무 키우기']);
+  });
   it('검색어에 수종이 없으면 조회하지 않는다', async () => {
     const { getShortsRef } = await import('./ytShortsRef');
     expect(await getShortsRef('가을 물주기', undefined, undefined, undefined, [])).toEqual([]);

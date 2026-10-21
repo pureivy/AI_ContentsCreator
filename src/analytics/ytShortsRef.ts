@@ -53,6 +53,14 @@ export function speciesTermsOf(keyword: string, list?: readonly Species[], catal
   return [...terms];
 }
 
+/**
+ * 판매·광고 제목인가(순수, 2026-10-21 사장님 "묘목 할인 광고는 빼야 해") — 수종이 들어 있어도 파는 영상은 소재 검증이 아니다.
+ * 실측 예: "화려한 겹벚나무 묘목, 지금 '할인가'로 가져가세요!", "겹벚나무 분묘 판매/ #정원수/ 옥천 나무시장",
+ * "겹벚나무 추천, 따끈따끈 신상~! 가성비 TOP5", "묘목 9종 입고 #라핀", "국내 최대 규모 블루베리 묘목 전문 농장". '구매·구입·가격'은 정보 글("묘목 구입 요령")에도 흔해서 넣지 않는다.
+ */
+const AD_WORDS = /할인|특가|세일|판매|분양|최저가|가성비|신상|쿠폰|무료\s*배송|재입고|주문|구매\s*문의|문의\s*주세요|스마트\s*스토어|쇼핑|입고(?=\s|$|#|[!.,~])|묘목\s*(?:전문\s*)?(?:농장|농원)|\d[\d,]*\s*원(?![가-힣])/;
+export const isAdTitle = (title: string): boolean => AD_WORDS.test(String(title ?? '').normalize('NFC'));
+
 /** 제목에 수종 표기가 하나라도 있는가(순수) — 띄어 쓴 "감 나무"도 잡게 공백을 지우고 본다. */
 export const titleHasSpecies = (title: string, terms: string[]): boolean => {
   const t = compact(title);
@@ -78,13 +86,13 @@ function readCache(f: string): RefCache {
   return { date: '', entries: {} };
 }
 
-/** 키워드의 쇼츠 조회 상위 — 제목에 검색 수종이 든 영상만, 최대 5편. 오늘 캐시가 있으면 API 없이 반환. 실패·수종 없음은 []. */
+/** 키워드의 쇼츠 조회 상위 — 제목에 검색 수종이 든 영상만(판매·광고 제목 제외), 최대 5편. 오늘 캐시가 있으면 API 없이 반환. 실패·수종 없음은 []. */
 export async function getShortsRef(
   keyword: string, slug?: string, signal?: AbortSignal, now = new Date(), terms: string[] = speciesTermsOf(keyword),
 ): Promise<ShortsRefVideo[]> {
   const kw = normKeyword(keyword);
   if (!kw || !terms.length) return [];
-  const pick = (vs: ShortsRefVideo[]): ShortsRefVideo[] => vs.filter((v) => titleHasSpecies(v.title, terms)).slice(0, TOP_N);
+  const pick = (vs: ShortsRefVideo[]): ShortsRefVideo[] => vs.filter((v) => titleHasSpecies(v.title, terms) && !isAdTitle(v.title)).slice(0, TOP_N);
   try {
     const f = cachePath(slug);
     const cache = readCache(f);
