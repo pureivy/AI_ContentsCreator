@@ -44,12 +44,12 @@ export async function youtubeTop(keyword: string, signal?: AbortSignal): Promise
 
 /** strict(쇼츠 참고, 2026-10-20) — 키 없음·HTTP 실패·통계 실패를 빈 결과가 아니라 예외로 올린다. 호출부가 '결과 없음'만
  *  캐시하고 실패(쿼터 초과 등)는 캐시하지 않게 하려는 것. 기본(false)은 종전 fail-open 그대로. */
-async function searchVideos(keyword: string, extraQuery: string, signal?: AbortSignal, strict = false): Promise<YtVideo[]> {
+async function searchVideos(keyword: string, extraQuery: string, signal?: AbortSignal, strict = false, maxResults = 8): Promise<YtVideo[]> {
   const kw = keyword.trim();
   const key = getSecret(KEY);
   if (!kw) return [];
   if (!key) { if (strict) throw new Error('no key'); return []; }
-  const sUrl = 'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8' + extraQuery
+  const sUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=${maxResults}` + extraQuery
     + `&regionCode=KR&relevanceLanguage=ko&q=${encodeURIComponent(kw)}&key=${encodeURIComponent(key)}`;
   const sr = await fetchTimeout(sUrl, {}, signal);
   if (!sr.ok) { if (strict) throw new Error(`search HTTP ${sr.status}`); return []; }
@@ -103,13 +103,15 @@ export function pickTopShorts(vids: YtVideo[], n = 5): YtVideo[] {
 }
 
 /**
- * 같은 소재의 유튜브 쇼츠 조회 상위 5편(2026-10-20 "참고만") — search.list(videoDuration=short, 관련도순) 후
- * 길이·조회 후처리. 101유닛/회라 호출부(ytShortsRef)가 키워드당 하루 1회로 캐시한다. 실패 시 [].
+ * 같은 소재의 유튜브 쇼츠 조회순(2026-10-20 "참고만") — search.list(videoDuration=short, 관련도순) 후
+ * 길이·조회 후처리. 101유닛/회라 호출부(ytShortsRef)가 키워드당 하루 1회로 캐시한다.
  */
-/** null = 조회 실패(키 없음·쿼터 초과·네트워크) — '결과 없음([])'과 갈라 호출부가 실패를 캐시하지 않게 한다. */
+/** null = 조회 실패(키 없음·쿼터 초과·네트워크) — '결과 없음([])'과 갈라 호출부가 실패를 캐시하지 않게 한다.
+ *  10-21: 상위 5편으로 자르지 않고 25편까지 조회순으로 넘긴다 — 호출부가 제목에 수종이 든 영상만 남긴 뒤 5편을 고른다
+ *  (search.list 는 maxResults 와 상관없이 100유닛, videos.list 도 50개까지 1유닛이라 쿼터는 그대로). */
 export async function youtubeShortsTop(keyword: string, signal?: AbortSignal): Promise<YtVideo[] | null> {
   try {
-    return pickTopShorts(await searchVideos(keyword, '&videoDuration=short', signal, true));
+    return pickTopShorts(await searchVideos(keyword, '&videoDuration=short', signal, true, 25), 25);
   } catch { return null; }
 }
 

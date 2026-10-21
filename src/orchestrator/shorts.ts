@@ -60,7 +60,7 @@ import type { ShortsScene } from '../tools/shortsRender';
 import { normalizeSceneKind, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, cutAtWordBoundary, probeDuration, teaserFor, teaserSceneIndex, sceneFrames, midcutAt, planSpareClips, FPS } from '../tools/shortsCommon';
 import { inheritedClaims, formatInherited, writerSource, flaggedForPrompt, STRIPPED_FLAGGED_NOTE } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
-import { getShortsRef, buildShortsRefBlock } from '../analytics/ytShortsRef';
+import { getShortsRef, buildShortsRefBlock, speciesTermsOf } from '../analytics/ytShortsRef';
 import { youtubeEnabled } from '../grounding/youtube';
 import type { EventBus } from '../events/bus';
 
@@ -2838,8 +2838,11 @@ export async function runShortsJob(
     let ytRefBlock = '';
     if (CONFIG.shortsYtRef && youtubeEnabled() && short.platform === 'youtube') {
       const refKw = (short.keyword || short.topic).trim();
-      try {
-        const refVids = await getShortsRef(refKw, short.brand, opts.signal);
+      const refTerms = speciesTermsOf(refKw);
+      // 10-21: 제목에 검색 수종이 든 쇼츠만 참고한다 — 수종 없는 검색어는 걸러 낼 기준이 없어 조회도 기록도 하지 않는다.
+      if (!refTerms.length) say(`유튜브 참고 — "${refKw}" 검색어에 수종 없음, 건너뜀`);
+      else try {
+        const refVids = await getShortsRef(refKw, short.brand, opts.signal, undefined, refTerms);
         ytRefBlock = buildShortsRefBlock(refKw, refVids);
         const topViews = refVids.reduce((m, v) => Math.max(m, v.views), 0);
         store.update(id, { ytRef: { ts: new Date().toISOString(), keyword: refKw, topViews, count: refVids.length } });
