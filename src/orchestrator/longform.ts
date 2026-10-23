@@ -256,7 +256,7 @@ async function produce(rec: LongformRecord, topic: TopicChoice, d: LongformDeps,
     saveEpisodeScript(dir, script);
     fs.writeFileSync(path.join(dir, 'script.txt'), scriptText(script));
     if (fact.record.final.issues.length) throw new Error(`대본 검사 문제 ${fact.record.final.issues.length}건 — ${fact.record.final.issues.slice(0, 3).join(' / ')}`);
-    // 짧은 편(주제 v2, targetMinutes < 10)은 하한도 같은 비율로 — 6분 편이면 1,500자.
+    // 짧은 편(주제 v2, targetMinutes < 10)은 하한도 같은 비율로 — 8분 편이면 2,000자.
     const minChars = Math.round(MIN_CHARS_AFTER_FACT * Math.min(1, (topic.targetMinutes ?? 10) / 10));
     if (fact.record.final.chars < minChars) throw new Error(`사실 확인 뒤 대본이 ${fact.record.final.chars}자로 짧아짐(최소 ${minChars})`);
     abortCheck();

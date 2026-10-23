@@ -99,7 +99,7 @@ const SEASON_IDX_IN = 0.7;
 /** 10분 편이 되는 한 질문 글 수(기둥 포함). 미만이면 짧은 편. */
 export const V2_FULL_MIN_POSTS = 3;
 export const FULL_TARGET_MINUTES = 10;
-export const SHORT_TARGET_MINUTES = 6;
+export const SHORT_TARGET_MINUTES = 8; // 10-23 사장님: 모자라면 8분 편(처음 안은 6분)
 /**
  * 작업 달력(새 가정 — 로컬 데이터에 작업별 달이 없다, 2026-10-23). 가지치기 = 겨울 전정(잎 진 뒤~눈 트기 전).
  * 심기는 brand seasonalSubjects 의 '… 식재' 달(봄 식재·가을 식재)을 쓴다. 병충해·관리·꽃열매·구별은 철이 일정하지 않아 모름(중립).

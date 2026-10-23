@@ -66,6 +66,7 @@ describe('목표 길이(롱폼 주제 v2 짧은 편, 2026-10-23)', () => {
   it('lengthSpec — 10분은 종전 상수 그대로, 6분은 비율로 줄이고 장 4~6개', () => {
     expect(lengthSpec()).toEqual({ minutes: 10, target: TARGET_CHARS, min: CHARS_MIN, max: CHARS_MAX, chMin: 6, chMax: 8, segments: 95 });
     expect(lengthSpec(6)).toEqual({ minutes: 6, target: 2000, min: 1800, max: 2200, chMin: 4, chMax: 6, segments: 57 });
+    expect(lengthSpec(8)).toMatchObject({ minutes: 8, target: 2700, chMin: 5, chMax: 7, segments: 76 });
   });
   it('scriptProblems — 6분 기준이면 5장·약 2,000자가 통과, 10분 기준이면 걸린다', () => {
     const s = normalizeScript(raw(5, 7, 58), ctx);

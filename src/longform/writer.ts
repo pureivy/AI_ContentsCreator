@@ -30,7 +30,8 @@ export function lengthSpec(minutes = 10): LengthSpec {
   if (!(minutes < 10)) return { minutes: 10, target: TARGET_CHARS, min: CHARS_MIN, max: CHARS_MAX, chMin: 6, chMax: 8, segments: 95 };
   const k = Math.max(3, minutes) / 10;
   const r50 = (n: number) => Math.round((n * k) / 50) * 50;
-  return { minutes: Math.max(3, minutes), target: r50(TARGET_CHARS), min: r50(CHARS_MIN), max: r50(CHARS_MAX), chMin: 4, chMax: 6, segments: Math.round(95 * k) };
+  const ch = minutes >= 8 ? { chMin: 5, chMax: 7 } : { chMin: 4, chMax: 6 };
+  return { minutes: Math.max(3, minutes), target: r50(TARGET_CHARS), min: r50(CHARS_MIN), max: r50(CHARS_MAX), ...ch, segments: Math.round(95 * k) };
 }
 
 export type LlmJSON = <T>(model: string, system: string, user: string, opts: { maxOutputTokens?: number; signal?: AbortSignal }) => Promise<T | null>;
