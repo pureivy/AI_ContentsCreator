@@ -17,6 +17,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { streamSSE } from 'hono/streaming';
 import { secureHeaders } from 'hono/secure-headers';
 import net from 'node:net';
+import { Readable } from 'node:stream';
 import { CONFIG } from '../config';
 import { getLlmSetting, setLlmSetting, resolveAssignment } from '../llm/setting';
 import { getRunSettings, setRunSettings } from '../runsettings';
@@ -41,7 +42,7 @@ import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law�
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
 import { addUploadedToPlaylists, runYoutubeMaintenance, youtubeItemsFrom, writeMaintLog } from '../tools/youtubePlaylists';
-import { uploadShortsToYoutube, publishWhenReady, verifyPublicCover, coverNeedsAlert, PUBLISH_SAFETY_MIN, fetchMyChannel, channelOfUploads, decideChannelConnect } from '../tools/youtubeUpload';
+import { uploadShortsToYoutube, uploadLongformToYoutube, publishWhenReady, verifyPublicCover, coverNeedsAlert, PUBLISH_SAFETY_MIN, fetchMyChannel, channelOfUploads, decideChannelConnect } from '../tools/youtubeUpload';
 import { publishCardNewsToMeta, publishShortsToMeta, realPermalink, listIgMedia, matchOrphanReels, GRAPH } from '../tools/metaPublish';
 import { llmWiki, slugify } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
@@ -56,6 +57,8 @@ import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
 import { shortsStore, shortsQaPublishBlockReason, shortsFactHoldBlockReason } from '../content/shorts';
+import { longformStore, longformRange } from '../content/longform';
+import { generateLongformThumbnail, longformThumbStateOf } from '../orchestrator/longformThumbnail';
 import { stripDiagramMarkers } from '../output/blogDiagrams';
 import { addMedia, listMedia, updateMedia, removeMedia, mediaDir, matchMedia, matchMediaScored } from '../content/mediaLibrary';
 import { pickRotatedVideo, readMediaHistory, windowSceneSec } from '../content/mediaRotation';
@@ -67,7 +70,8 @@ import { learnSpeciesLabel } from '../content/speciesLearn';
 import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, autoDailyCapFor, autoCapApplies, pickTopicTarget, shouldStartSecondRun, SIBLING_PLAN_WAIT_MS, type ShortsPlatform } from '../content/shortsPlatform';
 import { pickWriter, recentWriterIdsFor, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
-import { runShortsJob, isShortsRunning, reviseShorts, hookStillFor, siblingPlanFile } from '../orchestrator/shorts';
+import { runShortsJob, isShortsRunning, shortsRunningCount, reviseShorts, hookStillFor, siblingPlanFile } from '../orchestrator/shorts';
+import { beginLongformEpisode, runLongformEpisode, longformEpisodeRunning } from '../orchestrator/longform';
 import { inheritedSceneImages, inheritedClips } from '../content/shortsInherit';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo, waitForThumbnail } from '../tools/shortsRender';
 import { generateDesignedThumbnail, thumbTextQaFailed } from '../orchestrator/shortsThumbnail';
@@ -114,7 +118,7 @@ import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
 import { maintainIgTokens, checkIgToken } from '../tools/igToken';
 import { igTokenExpiresAt } from '../secrets/store';
-import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, notifyYoutubeUploaded, notifyNaverClipDone, notifyNaverClipNudge, youtubeUploadNotifies, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
+import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, notifyYoutubeUploaded, notifyLongformYoutubeDone, notifyNaverClipDone, notifyNaverClipNudge, youtubeUploadNotifies, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
 import { startTelegramBot } from '../autonomy/telegramBot';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
@@ -161,9 +165,13 @@ interface RunHandle {
   pieceId?: string;
   /** 시작 시점의 활성 브랜드 슬러그 — 기록·누적 토론의 브랜드 필터 기준(범용은 undefined). */
   brand?: string;
+  /** 롱폼 한 편(2026-10-23) — 오피스 뷰용으로 런에 올리지만 몇 시간짜리라 블로그·자율런 '진행 중' 게이트(busyRun)에서는 뺀다. */
+  longform?: boolean;
 }
 
 const RUNS = new Map<string, RunHandle>();
+/** 블로그·자율런 게이트가 보는 '진행 중' — 롱폼 편 런은 빠진다(종전처럼 롱폼이 오토런을 막지 않고, 롱폼의 무거운 단계만 longformBusyReason 으로 기다린다). */
+const busyRun = (h: RunHandle): boolean => h.status === 'running' && !h.longform;
 const RUNS_CAP = 200;
 // 마지막 자율 사이클 런(있으면) — /autonomy/status 표출용.
 let lastAutoRun: { ts: string; topic: string } | null = null;
@@ -434,7 +442,7 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
   // 유휴 게이트 원자성 — 자율런은 진행 중 사용자 런이 하나라도 있으면 아예 띄우지 않는다(JS 단일스레드라
   // 스케줄러의 proposeTask await 동안 들어온 사용자 런이 이 동기 체크에 보여 레이스가 닫힌다).
   if (opts.auto) {
-    if ([...RUNS.values()].some((h) => !h.auto && h.status === 'running')) return '';
+    if ([...RUNS.values()].some((h) => !h.auto && busyRun(h))) return '';
   } else {
     yieldRunningAutos(); // 사용자 런 도착 → 진행 중 자율런 양보(단일 KV 슬롯·체감속도 우선)
   }
@@ -677,7 +685,7 @@ async function startHandler(c: Context): Promise<Response> {
   if (!body.agent && isAutorunDirective(topic)) {
     // busy 시 조용히 소멸하던 함정(실사고 2026-08-18) — 지속 실행으로 런 종료를 기다렸다 시작하고,
     // 응답 문구도 현재 상태에 맞게(막연한 '곧 시작' 약속이 무산되면 "작동 안함"으로 체감된다).
-    const busyNow = [...RUNS.values()].some((h) => h.status === 'running');
+    const busyNow = [...RUNS.values()].some(busyRun);
     void stopAutoCycle.runNowPersistent({ label: '오토런 지시', userTriggered: true });
     return c.json({ ok: true, autorun_tick: true, note: busyNow
       ? '오토런 지시로 인식 — 지금은 다른 런이 진행 중이라, 종료되는 대로 콘텐츠 1건을 자율 선정해 시작합니다(자동 재시도, 사무실 탭에서 관전).'
@@ -2707,6 +2715,250 @@ app.get('/shorts/:id', shortsGetHandler);
 app.get('/api/shorts/:id', shortsGetHandler);
 app.delete('/shorts/:id', shortsDeleteHandler);
 app.delete('/api/shorts/:id', shortsDeleteHandler);
+
+// ── 롱폼(2026-10-22) — 10분 가로 영상. 1단계는 발행 경로(시범을 1호 레코드로): 목록·미리보기·썸네일·유튜브 공개.
+// 409 는 error 에 코드(not_ready·already_uploaded·in_flight·thumb_qa_unresolved), message 에 한국어 —
+// 제작실(frontend/api.ts)과 텔레그램(lfErrText)이 같은 계약을 읽는다.
+// 업로드 in-flight 락 — youtubeId 는 업로드가 '끝난 뒤'에야 남아서 그것만으로는 이중 탭(웹·텔레그램)이 두 번 올린다.
+// publishBusy 에 센다(재시작 대기 스크립트가 본다 — 1GB 업로드 도중 재시작하면 처음부터 다시 올려야 한다).
+const longformYtInFlight = new Set<string>();
+const longformThumbInFlight = new Set<string>();
+const lfConflict = (c: Context, code: string, message: string, extra: Record<string, unknown> = {}): Response =>
+  c.json({ error: code, message, ...extra }, 409);
+const lfMissing = (c: Context): Response => c.json({ error: 'unknown_longform', message: '롱폼을 찾을 수 없습니다' }, 404);
+// 부팅 정리 — 재시작으로 끊긴 업로드(uploading)·썸네일 생성(pending)이 영원히 '진행 중'으로 보이지 않게.
+// 재개형 업로드 세션은 서버 메모리에만 있어 이어 올릴 수 없다 — 실패로 바꿔 다시 누르게 한다(영상은 완료 전엔 생기지 않는다).
+// 테스트(vitest)도 이 모듈을 불러온다 — 운영 index.json 을 건드리지 않게 테스트에선 건너뛴다.
+if (!process.env.VITEST) for (const x of longformStore().list()) {
+  if (x.youtubeState === 'uploading' || x.youtubeState === 'processing') {
+    longformStore().update(x.id, { youtubeState: x.youtubeId ? 'done' : 'failed', progress: undefined, ...(x.youtubeId ? {} : { youtubeError: '서버 재시작으로 업로드가 끊겼습니다 — 다시 올리세요' }) });
+  }
+  const d = longformStore().absDir(x);
+  if (x.thumbState === 'pending' && d) longformStore().update(x.id, { thumbState: longformThumbStateOf(d) });
+  // 제작 중(producing)이던 편 — 제작은 이 프로세스 메모리에서만 돈다. 새 프로세스엔 살아 있는 제작이 없으니 실패로 닫는다
+  // (안 닫으면 제작실에 영원히 '만드는 중'으로 남는다). 낭독·클립은 캐시라 다시 만들면 그 단계는 비용 없이 지나간다.
+  if (x.stage === 'producing') longformStore().update(x.id, { stage: 'error', error: `서버 재시작으로 제작이 끊겼습니다${x.progress ? `(${x.progress})` : ''} — 다시 만드세요`, progress: undefined });
+}
+function longformListHandler(c: Context): Response {
+  return c.json({ longform: longformStore().list().filter(brandMatch) });
+}
+function longformGetHandler(c: Context): Response {
+  const x = longformStore().get(c.req.param('id') ?? '');
+  return x ? c.json(x) : lfMissing(c);
+}
+/** 롱폼 산출물 파일(절대 경로) — 레코드·폴더·파일이 다 있어야. */
+function longformFile(id: string, name: string): string | null {
+  const x = longformStore().get(id);
+  const d = x ? longformStore().absDir(x) : null;
+  const fp = d ? path.join(d, name) : '';
+  return fp && fs.existsSync(fp) ? fp : null;
+}
+// 영상 서빙 — 스트림 + Range. 쇼츠 핸들러처럼 범위를 Buffer 로 잡으면 'bytes=0-' 한 번에 1GB 를 메모리에 올린다.
+// 열린 범위는 8MiB 씩만 답한다(longformRange). 클라이언트가 끊으면 읽기 스트림도 닫는다.
+function longformVideoHandler(c: Context): Response {
+  const id = c.req.param('id') ?? '';
+  if (!longformStore().get(id)) return lfMissing(c);
+  const fp = longformFile(id, 'final.mp4');
+  let size = 0;
+  try { if (!fp) throw new Error('no file'); size = fs.statSync(fp).size; } catch { return c.json({ error: 'video_not_found', message: '영상 파일(final.mp4)이 없습니다' }, 404); }
+  const r = longformRange(c.req.header('range'), size);
+  if (r === 'invalid') return c.body(null, 416, { 'Content-Range': `bytes */${size}` });
+  const stream = r ? fs.createReadStream(fp!, { start: r.start, end: r.end }) : fs.createReadStream(fp!);
+  c.req.raw.signal?.addEventListener('abort', () => stream.destroy(), { once: true });
+  const body = Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>;
+  if (!r) return c.body(body, 200, { 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes', 'Content-Length': String(size) });
+  return c.body(body, 206, {
+    'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes',
+    'Content-Range': `bytes ${r.start}-${r.end}/${size}`, 'Content-Length': String(r.end - r.start + 1),
+  });
+}
+function longformThumbnailHandler(c: Context): Response {
+  const id = c.req.param('id') ?? '';
+  if (!longformStore().get(id)) return lfMissing(c);
+  const fp = longformFile(id, 'thumbnail.jpg');
+  let buf: Buffer;
+  try { if (!fp) throw new Error('no file'); buf = fs.readFileSync(fp); } catch { return c.json({ error: 'thumbnail_not_found', message: '썸네일이 아직 없습니다' }, 404); }
+  // 재생성으로 같은 주소의 그림이 바뀐다 — 캐시하지 않는다(제작실은 updatedTs 로도 깨지만 텔레그램 미리보기 등 대비).
+  return c.body(new Uint8Array(buf), 200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-cache' });
+}
+/** 롱폼 업로드 본체(뒤에서 돈다) — 진행률은 2% 단위로만 기록(16MiB 청크마다 index.json 을 다시 쓰지 않게). */
+async function runLongformUpload(id: string, videoPath: string, thumbnailPath: string | undefined): Promise<void> {
+  const rec = longformStore().get(id);
+  if (!rec) return;
+  const title = rec.ytTitle || rec.title;
+  const label = title.slice(0, 30);
+  let lastPct = -1;
+  try {
+    console.log(`[발행담당] 롱폼 ${label} — 유튜브 업로드 시작(${humanBytes(fs.statSync(videoPath).size)}, 처음부터 공개)`);
+    const r = await uploadLongformToYoutube({
+      slug: rec.brand, videoPath, title, description: rec.ytDescription ?? '', tags: rec.ytTags ?? [], thumbnailPath,
+      onProgress: (sent, total) => {
+        const pct = Math.floor((sent * 100) / Math.max(1, total));
+        if (pct - lastPct < 2 && pct < 100) return;
+        lastPct = pct;
+        longformStore().update(id, { progress: `업로드 ${pct}%` });
+      },
+    });
+    if (!r.ok || !r.videoId) {
+      const error = r.error ?? '업로드 실패(사유 불명)';
+      longformStore().update(id, { youtubeState: 'failed', youtubeError: error, progress: undefined });
+      console.log(`[발행담당] 롱폼 ${label} — 유튜브 업로드 실패: ${error}`);
+      await notifyLongformYoutubeDone({ id, title, brand: rec.brand, error });
+      return;
+    }
+    const thumbnailError = r.thumbnailError ?? (thumbnailPath ? undefined : '썸네일 없이 올렸습니다 — 유튜브가 자동 프레임을 씁니다');
+    longformStore().update(id, {
+      youtubeState: 'done', youtubeId: r.videoId, youtubeUrl: r.url, youtubeTs: new Date().toISOString(),
+      youtubeError: undefined, progress: undefined,
+    });
+    console.log(`[발행담당] 롱폼 ${label} — 유튜브 공개 완료 ${r.url ?? ''} (${publisherName()})${thumbnailError ? ` · ${thumbnailError}` : ''}`);
+    await notifyLongformYoutubeDone({ id, title, brand: rec.brand, url: r.url, thumbnailError });
+  } catch (e) {
+    const error = e instanceof Error ? e.message.slice(0, 160) : String(e);
+    longformStore().update(id, { youtubeState: 'failed', youtubeError: error, progress: undefined });
+    console.log(`[발행담당] 롱폼 ${label} — 유튜브 업로드 중단: ${error}`);
+    await notifyLongformYoutubeDone({ id, title, brand: rec.brand, error });
+  }
+}
+/**
+ * 롱폼 유튜브 공개 발행 — 사람이 누른 버튼(제작실·텔레그램 ly/lf)만 온다. 게이트를 다 지나면 202 로 바로 답하고 뒤에서 올린다
+ * (1GB 는 수 분~수십 분 — 기다리면 텔레그램 쪽 fetch 가 5분에 끊겨 '실패'로 알린다, 클립 업로드와 같은 이유).
+ * 쇼츠 하루 상한(YOUTUBE_DAILY_CAP)·채널 게이트(platform)는 쇼츠 규칙이라 적용하지 않는다.
+ */
+async function longformYoutubeHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  const rec = longformStore().get(id);
+  if (!rec) return lfMissing(c);
+  if (rec.stage !== 'ready') return lfConflict(c, 'not_ready', '아직 완성(ready) 상태가 아닙니다');
+  if (rec.youtubeId) return lfConflict(c, 'already_uploaded', '이미 유튜브에 올라간 롱폼입니다', { url: rec.youtubeUrl });
+  if (longformYtInFlight.has(id)) return lfConflict(c, 'in_flight', '이미 업로드 중입니다 — 끝나면 알려 드립니다');
+  const b = await c.req.json<{ force?: boolean }>().catch(() => ({} as { force?: boolean }));
+  // 썸네일을 만드는 중이면 끝날 때까지(최대 3분) 기다린다 — 쇼츠 밤나무 사고(10-07: 생성 중 버튼 → 썸네일 없이 업로드)와 같은 방어.
+  const deadline = Date.now() + 180_000;
+  while ((longformThumbInFlight.has(id) || longformStore().get(id)?.thumbState === 'pending') && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  if (longformThumbInFlight.has(id) || longformStore().get(id)?.thumbState === 'pending') {
+    return lfConflict(c, 'not_ready', '썸네일을 만드는 중입니다 — 끝난 뒤 다시 누르세요');
+  }
+  const video = longformFile(id, 'final.mp4');
+  if (!video) return lfConflict(c, 'not_ready', '영상 파일(final.mp4)이 없습니다');
+  const dir = longformStore().absDir(rec)!;
+  // 손글씨 썸네일 없이는 올리지 않는다(10-22 사장님 요구) — 공개는 되돌릴 수 없고, 유튜브 자동 프레임은 자막·도해가 구워진 장면이다.
+  if (!longformFile(id, 'thumbnail.jpg')) {
+    return lfConflict(c, 'no_thumbnail', '썸네일이 아직 없습니다 — 썸네일을 먼저 만든 뒤 발행하세요');
+  }
+  // 썸네일 한글 QA 미해결 게이트 — 쇼츠·카드뉴스와 같은 '확인 후 강행'(force). 재생성이 통과하면 표식이 지워진다.
+  if ((thumbTextQaFailed(dir) || longformStore().get(id)?.thumbState === 'qa_failed') && !b.force) {
+    return lfConflict(c, 'thumb_qa_unresolved', '썸네일 한글 QA가 오타 가능성을 미해결로 남겼습니다 — 썸네일을 확인한 뒤 그대로 발행하거나 다시 만드세요');
+  }
+  // 기다리는 사이 다른 요청이 먼저 시작했거나 끝냈을 수 있다 — 락은 여기서 동기로 잡는다.
+  if (longformYtInFlight.has(id)) return lfConflict(c, 'in_flight', '이미 업로드 중입니다 — 끝나면 알려 드립니다');
+  const now = longformStore().get(id);
+  if (now?.youtubeId) return lfConflict(c, 'already_uploaded', '이미 유튜브에 올라간 롱폼입니다', { url: now.youtubeUrl });
+  longformYtInFlight.add(id);
+  longformStore().update(id, { youtubeState: 'uploading', youtubeError: undefined, progress: '업로드 0%' });
+  const thumb = longformFile(id, 'thumbnail.jpg') ?? undefined;
+  void runLongformUpload(id, video, thumb).finally(() => longformYtInFlight.delete(id));
+  return c.json({ ok: true, started: true }, 202);
+}
+/** 가로 손글씨 썸네일 재생성(gpt-image — 돈이 든다, 사람 버튼만). 상한 4분(쇼츠 재생성과 같다). */
+async function longformThumbRegenHandler(c: Context): Promise<Response> {
+  const id = c.req.param('id') ?? '';
+  const rec = longformStore().get(id);
+  if (!rec) return lfMissing(c);
+  if (!CONFIG.openaiApiKey) return c.json({ error: 'no_image_key', message: 'OPENAI_API_KEY 미설정 — 손글씨 썸네일은 이미지 생성 키가 필요합니다' }, 400);
+  if (rec.youtubeId) return lfConflict(c, 'already_uploaded', '이미 올라간 롱폼입니다 — 썸네일은 유튜브 스튜디오에서 바꾸세요', { url: rec.youtubeUrl });
+  if (longformYtInFlight.has(id)) return lfConflict(c, 'in_flight', '업로드 중에는 썸네일을 바꿀 수 없습니다');
+  if (longformThumbInFlight.has(id)) return lfConflict(c, 'in_flight', '이미 썸네일을 만드는 중입니다');
+  const dir = longformStore().absDir(rec);
+  if (!dir || !fs.existsSync(dir)) return c.json({ error: 'dir_not_found', message: '롱폼 산출물 폴더가 없습니다' }, 404);
+  longformThumbInFlight.add(id);
+  longformStore().update(id, { thumbState: 'pending' });
+  try {
+    const out = await generateLongformThumbnail({
+      dir, title: rec.ytTitle || rec.title, description: rec.ytDescription ?? '', signal: AbortSignal.timeout(240_000),
+    });
+    longformStore().update(id, { thumbState: out.state });
+    console.log(`[발행담당] 롱폼 ${(rec.ytTitle || rec.title).slice(0, 30)} — 썸네일 재생성 ${out.generated ? (out.state === 'qa_failed' ? '완료(한글 QA 미해결)' : '완료') : '실패(기존 유지)'}`);
+    if (!out.generated) return c.json({ error: 'thumb_failed', message: '썸네일 생성 실패(기존 유지)', thumbState: out.state }, 502);
+    return c.json({ ok: true, thumbState: out.state });
+  } catch (e) {
+    longformStore().update(id, { thumbState: longformThumbStateOf(dir) });
+    return c.json({ error: 'thumb_failed', message: `썸네일 생성 실패 — ${e instanceof Error ? e.message.slice(0, 80) : String(e)}` }, 502);
+  } finally {
+    longformThumbInFlight.delete(id);
+  }
+}
+// 롱폼 지금 만들기(2단계 수동 실행, 2026-10-22) — 주제 선정·레코드 생성까지 하고 202, 나머지는 뒤에서(수십 분).
+// 본문 {pieceIds?: string[]} 를 주면 그 글들로(첫 글이 중심), 없으면 조회 합산 상위 주제. 한 번에 한 편(409 busy).
+/** 롱폼 무거운 단계(낭독·렌더) 대기 사유 — 블로그 런·숏폼 생성이 돌면 그 이름, 아니면 null. */
+function longformBusyReason(): string | null {
+  if ([...RUNS.values()].some(busyRun)) return '블로그 런 진행 중';
+  if (shortsRunningCount() > 0) return '숏폼 생성 중';
+  return null;
+}
+/**
+ * 롱폼 한 편을 '런'으로 등록(2026-10-23) — 롱폼팀(한서윤·차민혁)과 거드는 직원(이수민·윤소이·정하람)의 스폰·작업이 오피스 뷰에 흐르고,
+ * 런 취소 → abort 로 편 제작이 멈춘다(launchShortsRun 과 같은 패턴). 블로그·자율런 게이트에서는 빠진다(busyRun).
+ * 시작 실패(주제 없음·이미 제작 중)면 런을 지운다 — 아무 일도 안 한 빈 런이 기록에 남지 않게.
+ */
+function openLongformRun(): { bus: EventBus; signal: AbortSignal; started: (recId: string) => void; finish: (r: { ok: boolean; id: string; error?: string }) => void } {
+  const id = runId();
+  const bus = createBus(id);
+  const abort = new AbortController();
+  const handle: RunHandle = { status: 'running', abort, topic: '롱폼: 주제 선정 중', created_ts: new Date().toISOString(), auto: false, longform: true };
+  handle.brand = activeBrandSlug() || undefined;
+  RUNS.set(id, handle);
+  evictRuns();
+  bus.emit(EventType.run_started, { topic: handle.topic });
+  const titleOf = (recId: string) => longformStore().get(recId)?.title;
+  return {
+    bus, signal: abort.signal,
+    started: (recId) => { const t = titleOf(recId); if (t) handle.topic = `롱폼: ${t}`.slice(0, 80); },
+    finish: (r) => {
+      if (!r.id) { RUNS.delete(id); disposeBus(id); return; } // 시작도 못 함(주제 없음·이미 제작 중)
+      const rec = longformStore().get(r.id);
+      if (rec?.title) handle.topic = `롱폼: ${rec.title}`.slice(0, 80);
+      if (abort.signal.aborted) { handle.status = 'cancelled'; bus.emit(EventType.run_done, { status: 'cancelled' }); }
+      else if (r.ok) {
+        handle.status = 'done';
+        handle.deliverable = [`롱폼 ${rec?.durationSec ?? 0}초 완성 — ${rec?.ytTitle ?? rec?.title ?? r.id}`, rec?.ytDescription ?? ''].filter(Boolean).join('\n\n');
+        bus.emit(EventType.run_done, { status: 'done' });
+      } else {
+        handle.status = 'error';
+        bus.emit(EventType.error, { message: r.error ?? '롱폼 제작 실패' });
+        bus.emit(EventType.run_done, { status: 'error' });
+      }
+      persistEvents(id, bus); persistRunMeta(id, handle);
+    },
+  };
+}
+async function longformRunHandler(c: Context): Promise<Response> {
+  const b = await c.req.json().catch(() => ({})) as { pieceIds?: unknown };
+  const pieceIds = Array.isArray(b.pieceIds) ? b.pieceIds.filter((x): x is string => typeof x === 'string' && /^piece_[\w-]+$/.test(x)).slice(0, 8) : undefined;
+  if (longformEpisodeRunning()) return lfConflict(c, 'busy', `이미 롱폼을 만드는 중입니다(${longformEpisodeRunning()})`);
+  const run = openLongformRun();
+  const r = await beginLongformEpisode({ brand: activeBrandSlug() || 'bionditree', ...(pieceIds?.length ? { pieceIds } : {}), signal: run.signal, bus: run.bus, deps: { isBusy: longformBusyReason } });
+  if (!r.ok) { run.finish({ ok: false, id: '' }); return r.error === 'busy' ? lfConflict(c, 'busy', r.message) : c.json({ error: r.error, message: r.message }, 422); }
+  run.started(r.id);
+  void r.done.then(run.finish, (e: unknown) => run.finish({ ok: false, id: r.id, error: e instanceof Error ? e.message : String(e) }));
+  return c.json({ ok: true, id: r.id }, 202);
+}
+app.post('/longform/run', longformRunHandler);
+app.post('/api/longform/run', longformRunHandler);
+app.get('/longform', longformListHandler);
+app.get('/api/longform', longformListHandler);
+app.get('/longform/:id/video', longformVideoHandler); // :id 보다 먼저(구체 경로 우선)
+app.get('/api/longform/:id/video', longformVideoHandler);
+app.get('/longform/:id/thumbnail', longformThumbnailHandler);
+app.get('/api/longform/:id/thumbnail', longformThumbnailHandler);
+app.post('/longform/:id/youtube', longformYoutubeHandler);
+app.post('/api/longform/:id/youtube', longformYoutubeHandler);
+app.post('/longform/:id/thumbnail/regenerate', longformThumbRegenHandler);
+app.post('/api/longform/:id/thumbnail/regenerate', longformThumbRegenHandler);
+app.get('/longform/:id', longformGetHandler);
+app.get('/api/longform/:id', longformGetHandler);
 app.post('/pieces/:id/published', piecePublishedHandler);
 app.post('/api/pieces/:id/published', piecePublishedHandler);
 app.post('/pieces/:id/metrics', pieceMetricsPostHandler);
@@ -3280,7 +3532,7 @@ function performanceHandler(c: Context): Response {
     refreshBusy: perfRefreshBusy, // 빠른 갱신(유튜브·메타) 진행 여부 — 프론트 폴링 종료 판정
     naverBusy: naverRefreshBusy || !!naverProfileBusy, // 네이버 수집·브라우저 작업 진행 여부(임시저장 대기 안내용)
     // 인스타·페북·유튜브·클립 발행 진행 수 — 재시작 대기 스크립트가 본다(2026-10-13 릴스 발행 중 재시작으로 기록 유실).
-    publishBusy: metaPublishInFlight.size + ytPublishInFlight.size + naverClipInFlight.size,
+    publishBusy: metaPublishInFlight.size + ytPublishInFlight.size + naverClipInFlight.size + longformYtInFlight.size,
     strategy: {
       winners: s.winners.slice(0, 20), subNiches: s.subNiches, measuredPieces: s.measuredPieces,
       // 채널 학습(쇼츠·릴스·카드뉴스) — 키워드 점수표가 아니라 직원 강화가 남긴 교훈 문장(위키 performance
@@ -4793,7 +5045,7 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
 const stopAutoCycle = startAutoCycle<AutoWork>({
   intervalMs: CONFIG.autoCycleMinutes * 60_000,
   isEnabled: autoRunEnabled, // 사용자 토글(대시보드 '자율' 칩 클릭) — 꺼짐이면 틱이 조용히 통과
-  isBusy: () => [...RUNS.values()].some((h) => h.status === 'running'), // 자율런 포함 — 동시 1런만(단일 KV 슬롯 불변식).
+  isBusy: () => [...RUNS.values()].some(busyRun), // 자율런 포함 — 동시 1런만(단일 KV 슬롯 불변식). 롱폼 편 런은 제외(busyRun).
   pickWork: (signal, force, userTriggered) => pickAutoWork(signal, force, userTriggered),
   launch: (w) => {
     if (w.kind === 'research') {
@@ -4833,7 +5085,7 @@ void stopAutoCycle; // 프로세스 생존 동안 유지(unref 타이머라 종�
 // 수동 즉시 실행 — 30분 타이머를 기다리지 않고 지금 한 틱(pickAutoWork→launch). 토글 무시, isBusy·재진입 가드는 유지.
 app.post('/autonomy/tick', async (c) => {
   // 진행 중 런이 있어도 409 로 끝내지 않는다 — 지속 실행이 종료를 기다렸다 시작(오토런 지시 게이트와 동일 UX).
-  const busyNow = [...RUNS.values()].some((h) => h.status === 'running');
+  const busyNow = [...RUNS.values()].some(busyRun);
   // 수동 틱도 사용자 촉발 — 웹 UI 버튼이든 "자율런" 지시문이든 사람이 시킨 것은 쿼터에서 뺀다(2026-08-29).
   void stopAutoCycle.runNowPersistent({ label: '수동 틱', userTriggered: true }); // 비동기 기동 — 즉시 응답, 진행은 사무실/기록 탭에서.
   return c.json({ ok: true, note: busyNow
@@ -5007,6 +5259,9 @@ function janitorDeps(): JanitorDeps {
       return freed;
     },
     scratchDirs: [path.resolve('out')], // pnpm preview·기법 스틸 산출 — 코드가 읽지 않는다
+    // 롱폼(2026-10-22) — 렌더 잔여는 항상, 낭독·클립·그림 작업물은 유튜브 발행 keepDays 뒤. 제작 중인 편은 건너뛴다.
+    longform: () => longformStore().list(),
+    isLongformRunning: (id) => longformEpisodeRunning() === id,
     log: (m) => console.log('[janitor]', m),
   };
 }
@@ -5026,6 +5281,23 @@ void stopJanitor;
 if (CONFIG.janitorTime) {
   // eslint-disable-next-line no-console
   console.log(`[ai-contents-studio] 저장공간 정리 — 매일 ${CONFIG.janitorTime}(발행 ${CONFIG.janitorKeepDays}일 뒤 중간물 · 미발행 ${CONFIG.janitorStaleDays}일 · 휴지통 ${CONFIG.janitorTrashDays}일)`);
+}
+// 롱폼 매주 제작(2026-10-22 사장님 결정) — 일요일 24:00(=월요일 00:00) 제작 시작 → 완성되면 텔레그램 검토 알림(발행 버튼).
+// 발행은 사람이 누를 때만. 스위치 LONGFORM_WEEKLY(기본 off — 첫 편을 사장님이 보고 켠다). 서버가 꺼져 있다 켜지면 그날(월요일) 안에 따라잡는다.
+if (CONFIG.longformWeekly) {
+  const stopLongform = startDaily({
+    time: CONFIG.longformTime, weekday: CONFIG.longformWeekday, key: 'longform-weekly',
+    run: () => {
+      if (longformEpisodeRunning()) { console.log('[롱폼]', `이미 만드는 중 — 이번 주 시작 건너뜀(${longformEpisodeRunning()})`); return; }
+      const run = openLongformRun();
+      void runLongformEpisode({ brand: activeBrandSlug() || 'bionditree', signal: run.signal, bus: run.bus, deps: { isBusy: longformBusyReason } })
+        .then(run.finish, (e: unknown) => run.finish({ ok: false, id: '', error: e instanceof Error ? e.message : String(e) }));
+    },
+    log: (m) => console.log('[롱폼]', m),
+  });
+  void stopLongform;
+  // eslint-disable-next-line no-console
+  console.log(`[ai-contents-studio] 롱폼 매주 제작 — ${['일', '월', '화', '수', '목', '금', '토'][CONFIG.longformWeekday]}요일 ${CONFIG.longformTime} 시작(완성 뒤 텔레그램 검토 · 발행은 버튼)`);
 }
 // 수요 게이트 상태 1줄(2026-08-26 리뷰 M2) — 켜져 있어도 검색광고 키가 없으면 전량 fail-open 이라
 // 아무 판정도 일어나지 않는다. 그 '조용한 무동작'이 부팅 로그에서 바로 보이게 한다.

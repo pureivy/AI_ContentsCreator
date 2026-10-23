@@ -1238,6 +1238,42 @@ export async function regenerateShortsThumbnail(id: string): Promise<{ ok?: bool
   try { const r = await fetch(`/shorts/${id}/thumbnail/regenerate`, { method: "POST" }); return await r.json(); }
   catch { return { error: "요청 실패" }; }
 }
+// ── 롱폼(주간 10분 가로 영상) ──
+export interface LongformInfo {
+  id: string; brand: string; title: string; dir: string;
+  stage: "producing" | "ready" | "error"; progress?: string; error?: string;
+  createdTs: string; updatedTs?: string; durationSec?: number; topicReason?: string; sourcePieceIds?: string[];
+  ytTitle?: string; ytDescription?: string; ytTags?: string[];
+  thumbState?: "pending" | "ok" | "qa_failed" | "none";
+  youtubeState?: "uploading" | "processing" | "done" | "failed";
+  youtubeError?: string; youtubeId?: string; youtubeUrl?: string; youtubeTs?: string;
+  notifiedTs?: string; costUsd?: number;
+}
+export async function fetchLongform(): Promise<LongformInfo[]> {
+  try { const r = await fetch("/longform"); if (!r.ok) return []; return (await r.json()).longform ?? []; }
+  catch { return []; }
+}
+/** 409 코드: already_uploaded | in_flight | thumb_qa_unresolved | not_ready. 업로드는 서버 뒤에서 돈다(202) — 목록 폴링으로 진행 확인. */
+export async function uploadLongformYoutube(id: string, opts?: { force?: boolean }): Promise<{ ok: boolean; started?: boolean; code?: string; error?: string }> {
+  try {
+    const r = await fetch(`/longform/${id}/youtube`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts?.force ? { force: true } : {}) });
+    const j = await r.json().catch(() => ({} as { error?: string; message?: string }));
+    if (!r.ok) return { ok: false, code: j.error, error: j.message || j.error || `HTTP ${r.status}` };
+    return { ok: true, started: !!j.started };
+  } catch { return { ok: false, error: "network" }; }
+}
+export async function regenerateLongformThumbnail(id: string): Promise<{ ok?: boolean; thumbState?: string; error?: string }> {
+  try { const r = await fetch(`/longform/${id}/thumbnail/regenerate`, { method: "POST" }); return await r.json(); }
+  catch { return { error: "요청 실패" }; }
+}
+export async function runLongform(): Promise<{ ok: boolean; id?: string; error?: string }> {
+  try {
+    const r = await fetch("/longform/run", { method: "POST" });
+    if (r.status === 404) return { ok: false, error: "아직 준비 중" };
+    const j = await r.json().catch(() => ({} as { id?: string; error?: string; message?: string }));
+    return r.ok ? { ok: true, id: j.id } : { ok: false, error: j.message || j.error || `HTTP ${r.status}` };
+  } catch { return { ok: false, error: "network" }; }
+}
 export async function fetchYoutubeStatus(): Promise<{ client: boolean; connected: boolean }> {
   try { const r = await fetch("/youtube/status"); return await r.json() as { client: boolean; connected: boolean }; }
   catch { return { client: false, connected: false }; }

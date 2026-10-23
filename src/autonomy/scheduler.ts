@@ -342,6 +342,9 @@ export interface DailyDeps {
   /** 발동 이력 영속 키(파일명). 주면 프로세스 재기동에도 '오늘 이미 돌았음'이 유지되고,
    *  예정 시각을 지나 부팅해도 그날 몫을 따라잡는다. 미지정이면 종전(메모리 전용) 동작. */
   key?: string;
+  /** 요일(0=일~6=토, JS getDay) — 주면 그 요일에만(매주 1회, 2026-10-22 롱폼). 따라잡기도 그 요일 안에서만
+   *  (월 00:00 을 서버가 꺼져 놓쳤으면 월요일 낮에 켜질 때 돈다 — 화요일로 밀리지 않는다). 미지정이면 매일. */
+  weekday?: number;
 }
 
 /**
@@ -352,8 +355,9 @@ export interface DailyDeps {
  * 재기동하므로 그 창을 놓치면 그날 팔로워 스냅샷·성과 동기화가 통째로 사라진다 — 실측 2026-08-02:
  * followers 스냅샷이 07-31 에서 멈춰 08-01 하루가 비었다.
  */
-export function dailyDue(now: Date, hh: number, mm: number, today: string, lastFired: string): boolean {
+export function dailyDue(now: Date, hh: number, mm: number, today: string, lastFired: string, weekday?: number): boolean {
   if (today === lastFired) return false; // 당일 1회만
+  if (weekday !== undefined && now.getDay() !== weekday) return false; // 매주 그 요일만 — 다음 날로 넘어가면 다음 주까지 기다린다
   return now.getHours() > hh || (now.getHours() === hh && now.getMinutes() >= mm);
 }
 
@@ -376,11 +380,13 @@ export function startDaily(deps: DailyDeps): () => void {
   if (!m) return () => {};
   const hh = Number(m[1]); const mm = Number(m[2]);
   if (hh > 23 || mm > 59) return () => {};
+  const weekday = deps.weekday !== undefined && Number.isInteger(deps.weekday) && deps.weekday >= 0 && deps.weekday <= 6 ? deps.weekday : undefined;
+  if (deps.weekday !== undefined && weekday === undefined) return () => {}; // 요일 오설정 — 매일로 새지 않게 no-op
   let lastFired = deps.key ? readLastFired(deps.key) : '';
   const tick = (): void => {
     const now = new Date();
     const today = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
-    if (!dailyDue(now, hh, mm, today, lastFired)) return;
+    if (!dailyDue(now, hh, mm, today, lastFired, weekday)) return;
     lastFired = today;
     if (deps.key) writeLastFired(deps.key, today); // 재기동해도 같은 날 다시 안 돌게
     try { deps.log?.(`일일 브리핑 발송(${deps.time})`); deps.run(); }

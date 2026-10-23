@@ -11,7 +11,7 @@ import { execFile } from 'node:child_process';
 import { CONFIG } from '../config';
 import {
   notifyConfigured, notifyWebhookOnly, telegramCreds,
-  sendTelegramHtml, sendTelegramPhotos, sendTelegramVideo,
+  sendTelegramHtml, sendTelegramPhotos, sendTelegramVideo, sendTelegramPhoto,
 } from './notify';
 import type { TgButton } from './notify';
 import type { FactGateInfo } from '../content/factGate';
@@ -19,6 +19,7 @@ import { platformLabel, type ShortsPlatform } from '../content/shortsPlatform';
 import { readStyleLint, readBriefGate } from '../sessions/digest';
 import { META_LABEL_MD } from '../output/render';
 import type { BriefGateRecord } from '../sessions/digest';
+import { longformStore, type LongformRecord } from '../content/longform';
 
 export interface BlogReadyInfo {
   id: string; title?: string; keyword?: string; seoScore?: number; brand?: string;
@@ -430,5 +431,98 @@ export async function notifyShortsReady(s: ShortsReadyInfo, videoPath: string): 
       title: `🎬 쇼츠 검토 대기${brandTag(s.brand)} · ${s.topic}`,
       body: `검토: ${reviewLink(s.sourcePieceId)}`,
     });
+  } catch { /* 무해 */ }
+}
+
+// ── 롱폼(2026-10-22) ──
+// 영상은 1GB 라 텔레그램(50MB)으로 못 보낸다 — 썸네일 사진에 발행 버튼을 달고, 미리보기는 웹 제작실 롱폼 탭에서.
+
+/** 길이 m:ss(순수). 없으면 빈 문자열. */
+export function fmtMinSec(sec?: number): string {
+  if (typeof sec !== 'number' || !Number.isFinite(sec) || sec <= 0) return '';
+  const t = Math.round(sec);
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+}
+/** 유튜브 설명의 챕터 줄(0:00 …)만 앞에서 max 개(순수). */
+export function chapterLines(desc: string | undefined, max = 8): string[] {
+  return (desc ?? '').split('\n').map((l) => l.trim()).filter((l) => /^\d{1,2}:\d{2}(:\d{2})?\s/.test(l)).slice(0, max);
+}
+/** 롱폼 검토 대기 캡션(HTML, 썸네일 사진에 부착 — 1024자 안). 순수 — 테스트 대상. */
+export function longformCaptionHtml(r: Pick<LongformRecord, 'title' | 'ytTitle' | 'brand' | 'durationSec' | 'topicReason' | 'ytDescription'>): string {
+  const len = fmtMinSec(r.durationSec);
+  const chapters = chapterLines(r.ytDescription);
+  return [
+    escapeHtml(`🎞 롱폼 검토 대기${brandTag(r.brand)}`),
+    `<b>${escapeHtml(clip(r.ytTitle || r.title, 120))}</b>`,
+    len ? escapeHtml(`길이 ${len}`) : '',
+    r.topicReason ? escapeHtml(`고른 이유: ${clip(r.topicReason, 160)}`) : '',
+    chapters.length ? escapeHtml(['챕터', ...chapters.map((l) => clip(l, 48))].join('\n')) : '',
+    escapeHtml(`미리보기: 제작실 → 롱폼 탭 ${studioBase()}/`),
+  ].filter(Boolean).join('\n');
+}
+/** 롱폼 발행 버튼 — callback_data 규격은 telegramBot.parseCallback 과 한 쌍(ly·lt·lf). */
+export const longformButtons = (id: string): TgButton[][] => [[
+  { text: '▶️ 유튜브 공개 발행', callback_data: `ly:${id}` },
+  { text: '🖼 썸네일 다시', callback_data: `lt:${id}` },
+]];
+
+/**
+ * 롱폼 ready → 썸네일 사진 + 캡션 + 버튼(썸네일 없으면 글자만). 보냈으면 notifiedTs 를 남기고 true.
+ * reply=true 는 버튼에 대한 답(썸네일 다시 만든 뒤 재전송)이라 '새 콘텐츠 알림' 설정과 무관하게 보낸다.
+ * 절대 throw 하지 않는다(알림이 제작·발행을 막지 않는다).
+ */
+export async function notifyLongformReady(rec: LongformRecord, opts: { reply?: boolean } = {}): Promise<boolean> {
+  try {
+    if (!opts.reply && !contentReadyNotifyEnabled()) return false;
+    if (!telegramCreds()) return false;
+    const caption = longformCaptionHtml(rec);
+    const dir = longformStore().absDir(rec);
+    const thumb = dir ? path.join(dir, 'thumbnail.jpg') : '';
+    let sent = false;
+    if (thumb && fs.existsSync(thumb)) {
+      // 썸네일(1280x720 jpg ≤2MB)은 텔레그램 사진 한도(10MB) 안이다 — 실패하면 글자로 폴백.
+      sent = await sendTelegramPhoto(thumb, caption, longformButtons(rec.id));
+    }
+    if (!sent) sent = await sendTelegramHtml(`${caption}\n${escapeHtml('(썸네일 없음 — 🖼 썸네일 다시로 만들 수 있습니다)')}`, longformButtons(rec.id));
+    if (sent) longformStore().update(rec.id, { notifiedTs: new Date().toISOString() });
+    // 문장 그림 대조표(2026-10-22) — 장면마다 55% 스틸 바둑판. 버튼 없는 둘째 사진(검토용), 실패해도 무해.
+    const contact = dir ? path.join(dir, 'scenes', 'contact.jpg') : '';
+    if (sent && !opts.reply && contact && fs.existsSync(contact)) {
+      let n = '';
+      try { n = ` ${(JSON.parse(fs.readFileSync(path.join(dir!, 'scenes', 'report.json'), 'utf8')) as { built?: number }).built ?? ''}개`; } catch { /* 숫자 없이 */ }
+      await sendTelegramPhoto(contact, escapeHtml(`🎨 문장 그림${n} 대조표 — ${rec.ytTitle || rec.title}`)).catch(() => false);
+    }
+    if (!opts.reply) await notifyWebhookOnly({ title: `🎞 롱폼 검토 대기${brandTag(rec.brand)} · ${rec.ytTitle || rec.title}`, body: `${studioBase()}/` });
+    return sent;
+  } catch { return false; }
+}
+
+/** 롱폼 업로드 결과 알림 본문(순수) — 성공은 주소, 실패는 사유와 다시 누를 버튼. */
+export function longformYoutubeDoneHtml(r: { id: string; title: string; brand?: string; url?: string; error?: string; thumbnailError?: string }): { html: string; buttons?: TgButton[][] } {
+  if (r.url) {
+    return {
+      html: [
+        escapeHtml(`📺 롱폼 유튜브 공개${brandTag(r.brand)}`),
+        `<b>${escapeHtml(clip(r.title, 120))}</b>`,
+        escapeHtml(r.url),
+        r.thumbnailError ? escapeHtml(`⚠ ${clip(r.thumbnailError, 160)}`) : '',
+      ].filter(Boolean).join('\n'),
+    };
+  }
+  return {
+    html: [
+      escapeHtml(`⚠️ 롱폼 유튜브 업로드 실패${brandTag(r.brand)}`),
+      `<b>${escapeHtml(clip(r.title, 120))}</b>`,
+      escapeHtml(clip(r.error ?? '사유 불명', 300)),
+    ].join('\n'),
+    buttons: [[{ text: '▶️ 다시 올리기', callback_data: `ly:${r.id}` }]],
+  };
+}
+/** 전송 — 버튼에 대한 답이라 '새 콘텐츠 알림' 설정과 무관하게 텔레그램이 있으면 보낸다("끝나면 알려 드립니다" 뒤 침묵 금지). */
+export async function notifyLongformYoutubeDone(r: Parameters<typeof longformYoutubeDoneHtml>[0]): Promise<void> {
+  try {
+    const m = longformYoutubeDoneHtml(r);
+    if (telegramCreds()) await sendTelegramHtml(m.html, m.buttons);
+    await notifyWebhookOnly({ title: r.url ? `📺 롱폼 유튜브 공개 · ${r.title}` : `⚠️ 롱폼 유튜브 업로드 실패 · ${r.title}`, body: r.url ?? r.error ?? '' });
   } catch { /* 무해 */ }
 }

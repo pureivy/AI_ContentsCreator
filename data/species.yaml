@@ -721,3 +721,13 @@ species:
     leaf: "손가락처럼 갈라진 큰 손모양 겹잎(작은잎 5~7장), 넓게 퍼지는 큰 수형, 가을에 굵고 넓은 낙엽이 많이 떨어짐"
     auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
     verified: false
+
+  만병초:
+    latin: Rhododendron brachycarpum
+    type: "상록 관목 또는 소교목"
+    leaf: "어긋나기, 긴 타원형의 두꺼운 가죽질 잎, 뒷면에 갈색 털이 밀생"
+    form: "둥근 수형의 상록성 관목"
+    flower: "5~7월, 흰색 또는 연한 분홍색, 가지 끝에 공 모양으로 모여 피는 종 모양 꽃송이"
+    fruit: "9~10월, 갈색의 긴 타원형 목질 열매(삭과)"
+    auto: true      # 디렉터가 기억에서 쓴 값 — 사람 검토 전
+    verified: false

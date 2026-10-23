@@ -351,3 +351,35 @@ describe('naverClipNudgeHtml — 클립 올리기 권유', () => {
     expect(naverClipNudgeHtml({ id: 'short_1', title: 'a<b>&' }).html).toContain('<b>a&lt;b&gt;&amp;</b>');
   });
 });
+
+// 2026-10-22 롱폼 — 영상은 50MB 초과라 썸네일 사진 + 캡션 + 버튼.
+describe('롱폼 알림 본문(순수)', () => {
+  const desc = '요약 한 줄.\n\n챕터\n0:00 시작\n0:43 원가지 고르기\n3:55 매실\n4:52 자두\n5:42 감\n7:18 블루베리\n8:21 자르면 안 되는 가지\n9:30 여덟째\n9:59 아홉째\n\n#가지치기';
+  it('m:ss·챕터 8줄·고른 이유·롱폼 탭 안내, 버튼 규격은 parseCallback 과 한 쌍', async () => {
+    const { longformCaptionHtml, longformButtons, chapterLines, fmtMinSec } = await import('./contentNotify');
+    expect(fmtMinSec(627)).toBe('10:27');
+    expect(fmtMinSec(undefined)).toBe('');
+    expect(chapterLines(desc)).toHaveLength(8);
+    expect(chapterLines(desc)[0]).toBe('0:00 시작');
+    const html = longformCaptionHtml({ title: 't', ytTitle: '과일나무 <겨울> 가지치기', brand: 'bionditree', durationSec: 627, topicReason: '조회 합산 1위', ytDescription: desc });
+    expect(html).toContain('🎞 롱폼 검토 대기 · bionditree');
+    expect(html).toContain('<b>과일나무 &lt;겨울&gt; 가지치기</b>');
+    expect(html).toContain('길이 10:27');
+    expect(html).toContain('고른 이유: 조회 합산 1위');
+    expect(html).toContain('8:21 자르면 안 되는 가지');
+    expect(html).not.toContain('9:59 아홉째');
+    expect(html).toContain('제작실 → 롱폼 탭');
+    expect(html.length).toBeLessThan(1000);
+    for (const row of longformButtons('long_pilot20261019')) for (const b of row) expect(parseCallback(b.callback_data)).not.toBeNull();
+  });
+  it('업로드 결과 — 성공은 📺 주소, 실패는 사유와 다시 올리기(ly) 버튼', async () => {
+    const { longformYoutubeDoneHtml } = await import('./contentNotify');
+    const ok = longformYoutubeDoneHtml({ id: 'long_1', title: '제목', url: 'https://www.youtube.com/watch?v=abc' });
+    expect(ok.html).toContain('📺 롱폼 유튜브 공개');
+    expect(ok.html).toContain('watch?v=abc');
+    expect(ok.buttons).toBeUndefined();
+    const bad = longformYoutubeDoneHtml({ id: 'long_1', title: '제목', error: '유튜브 일일 쿼터 초과 — 내일 재시도' });
+    expect(bad.html).toContain('쿼터 초과');
+    expect(bad.buttons?.[0]?.[0]?.callback_data).toBe('ly:long_1');
+  });
+});

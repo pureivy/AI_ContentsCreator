@@ -68,6 +68,7 @@ const TEAM_REGION: Record<string, Region> = {
   secretariat: ROOMS.secretariat,
   cardnews: ROOMS.planning, // 카드뉴스팀 — 우측 상단 사무실(사용자 지정). 콘텐츠팀과 같은 방, 우측 구역 좌석.
   shorts: ROOMS.pantry,     // 숏폼팀 — 우중(탕비실 옆 카페 테이블 구역). 빈 방 중 우측 라인 유지.
+  longform: ROOMS.pantry,   // 롱폼팀(2026-10-23) — 숏폼팀 옆. 같은 방이라 집합 대열이 서로의 좌석을 피한다(avoidPts).
 };
 const regionCx = (r: Region): number => r.x + r.w / 2;
 // 팀장 자리 오버라이드(방 모양 보정) — 기획팀(planning)은 책상이 창측 '상단 띠'라 범용 앵커(상단 18%)가
@@ -76,12 +77,18 @@ const TEAM_LEAD_SPOT: Record<string, { fx: number; fy: number }> = {
   content: { fx: 0.28, fy: 0.62 },
   cardnews: { fx: 0.78, fy: 0.62 }, // 같은 방 우측 구역 — 콘텐츠팀(좌측 0.28/0.62)과 겹침 방지
   shorts: { fx: 0.32, fy: 0.60 },   // 탕비실 좌측 바닥(카페 바 앞)
+  // 롱폼 작가 — 바 오른쪽 끝 앞 바닥(x≈90.6·y≈53.1). 숏폼 디렉터(83.4·49.2)와 가로 7.2 떨어져 안 겹치고,
+  // 오른쪽 화분 오클루더(plant_6, x≥94)·잡담 구역(PANTRY_ZONE y≤46) 밖.
+  longform: { fx: 0.78, fy: 0.81 },
 };
 // 팀별 멤버 좌석 오버라이드 — 기획팀 멤버(이미지 디자이너)는 팀장 우측 바닥(창측 데스크 앞).
 const TEAM_MEMBER_SEATS: Record<string, Seat[]> = {
   content: [{ fx: 0.5, fy: 0.68, face: "down" }, { fx: 0.62, fy: 0.68, face: "down" }],
   cardnews: [{ fx: 0.9, fy: 0.68, face: "down" }],
   shorts: [{ fx: 0.58, fy: 0.66, face: "down" }], // 카페 테이블 쪽
+  // 롱폼 모션 디자이너 — 왼쪽 카페 테이블 옆(x≈76.9·y≈59.6, 방 아래 띠 바로 밑 러그 위). 숏폼 디렉터와 가로 6.5,
+  // 숏폼 작가(74.0·47.6)와 세로 12 떨어져 안 겹친다. 서재 자료 찾기 구역(READING_ZONE y≥66) 위.
+  longform: [{ fx: 0.40, fy: 1.06, face: "down" }],
 };
 const roomStyle = (r: Region) =>
   ({ left: `${r.x}%`, top: `${r.y}%`, width: `${r.w}%`, height: `${r.h}%` });
@@ -431,7 +438,7 @@ function layout(
       } else if (engaged && ph === "decompose") {  // 팀장 분해 중 → 자기 자리에서 대기
         pos = desk; bubble = ""; thinking = false;
       } else if (rendering) {                        // 카드뉴스 🎨 / 숏폼 🎬 — 산출물 렌더링 중
-        pos = desk; bubble = tid === "shorts" ? "🎬 렌더링 중" : "🎨 렌더링 중"; thinking = true;
+        pos = desk; bubble = tid === "shorts" ? "🎬 렌더링 중" : tid === "longform" ? "🎞 그림 그리는 중" : "🎨 렌더링 중"; thinking = true;
       } else if (engaged && ph) {                    // idle 등 → 자기 자리
         pos = desk; bubble = statusText(m, running); thinking = st === "thinking";
       } else if (!engaged) {                         // 미선발(placeholder) → 자기 자리(free면 ambient가 덮음)

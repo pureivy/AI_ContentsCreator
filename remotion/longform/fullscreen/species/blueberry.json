@@ -1,0 +1,69 @@
+{
+  "id": "blueberry",
+  "nameKo": "블루베리",
+  "latin": "Vaccinium corymbosum",
+  "sources": [
+    "국가생물종지식정보시스템·농촌진흥청 블루베리 형태 기술(하이부시)"
+  ],
+  "habit": {
+    "form": "shrub",
+    "branchAngle": 28,
+    "apical": 0.3,
+    "crownWH": 1,
+    "heightM": [
+      1.5,
+      2.5
+    ],
+    "stems": 5,
+    "bark": "smooth"
+  },
+  "leaf": {
+    "shape": "elliptic",
+    "margin": "entire",
+    "venation": "pinnate",
+    "arrangement": "alternate",
+    "widthRatio": 0.48,
+    "tip": "acute",
+    "base": "cuneate",
+    "petiole": 0.05,
+    "sizeCm": [
+      3,
+      7
+    ],
+    "veins": 5,
+    "glossy": false,
+    "droop": 0.2,
+    "peak": 0.5
+  },
+  "flower": {
+    "petals": 5,
+    "shape": "urceolate",
+    "calyx": "small",
+    "stamens": "hidden",
+    "inflorescence": "raceme",
+    "position": "tip",
+    "sizeCm": 0.9,
+    "months": [
+      4,
+      5
+    ],
+    "nodding": true
+  },
+  "fruit": {
+    "type": "berry",
+    "ratio": 0.85,
+    "sizeCm": [
+      1,
+      1.8
+    ],
+    "bearing": "cluster",
+    "clusterN": 7,
+    "months": [
+      6,
+      7,
+      8
+    ]
+  },
+  "leafOutMonth": 4,
+  "leafFallMonth": 11
+}

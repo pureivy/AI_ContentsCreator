@@ -272,14 +272,15 @@ export function deleteSkill(id: string, slug: string): boolean {
 }
 // 스킬 플레이북 주입 — 로컬 프리필 비용 통제를 위해 스킬당 600자·총 1500자로 캡(긴 절차서는
 // 앞부분만 주입, 전문은 스킬 파일·직원 탭에서 참조). 격상된 system_prompt 가 주 식별자.
-function readSkills(id: string, maxTotal = 1500): string {
+// perSkill — 스킬 하나 상한. 롱폼 장면 세션(Claude Code)은 프리필 비용 제약이 없어 전문을 싣는다(designerBrief, 2026-10-23 — 600자 자름에 '사람 손 금지'가 잘려 나갔다).
+export function readSkills(id: string, maxTotal = 1500, perSkill = 600): string {
   const parts: string[] = [];
   let used = 0;
   for (const s of skillNames(id)) {
     if (used >= maxTotal) break;
     const body = read(path.join(skillsDirOf(id), `${s}.md`)).trim();
     if (!body) continue;
-    const slice = body.length > 600 ? body.slice(0, 600).trimEnd() + ' …(상세는 스킬 파일)' : body;
+    const slice = body.length > perSkill ? body.slice(0, perSkill).trimEnd() + ' …(상세는 스킬 파일)' : body;
     parts.push(slice);
     used += slice.length;
   }

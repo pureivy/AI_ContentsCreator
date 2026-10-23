@@ -66,6 +66,8 @@ import type { EventBus } from '../events/bus';
 
 const RUNNING = new Set<string>();
 export function isShortsRunning(id: string): boolean { return RUNNING.has(id); }
+/** 지금 생성·수정 중인 숏폼 수 — 롱폼 제작이 무거운 단계(낭독·렌더) 전에 본다(2026-10-22). */
+export function shortsRunningCount(): number { return RUNNING.size; }
 
 const PRESETS = new Set(['photorealistic', 'manhwa', 'watercolor', 'ink_wash', 'flat_design', 'retro_poster']);
 const PRESET_ALIAS: Record<string, string> = {

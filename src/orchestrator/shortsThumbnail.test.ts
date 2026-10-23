@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { repeatedlyWrong, applyCopySwap, splitTwoLines, derivePoints, ensureKeywordInCopy, buildThumbnailPrompt } from './shortsThumbnail';
+import { repeatedlyWrong, applyCopySwap, splitTwoLines, derivePoints, ensureKeywordInCopy, buildThumbnailPrompt, landscapeJpgArgs, LANDSCAPE_JPG_QUALITIES, YT_THUMB_MAX_BYTES } from './shortsThumbnail';
 
 describe('splitTwoLines', () => {
   it('단어(공백) 경계에서만 분할 — 어떤 단어도 중간에서 쪼개지 않음', () => {
@@ -47,6 +47,44 @@ describe('buildThumbnailPrompt — 밑줄 위계', () => {
     expect(p).toContain('2줄(노랑) 아래에만');
     expect(p).toContain('1줄(크림 화이트 라벨 줄) 아래에는 긋지 않는다');
     expect(p).toContain("'블루베리나무화분'");
+  });
+});
+
+// 2026-10-22 롱폼 가로 썸네일 — 쇼츠 세로 프롬프트는 한 글자도 바뀌지 않아야 한다.
+describe('buildThumbnailPrompt — 가로(롱폼)', () => {
+  const copy = { line1: '과일나무 가지치기', line2: '겨울 총정리', points: ['수종별 시기', '자르면 안 되는 가지'] };
+  it('기본(세로)은 종전과 같고, portrait 명시도 같다', () => {
+    const p = buildThumbnailPrompt(copy);
+    expect(p.startsWith('세로 유튜브/인스타 썸네일.')).toBe(true);
+    expect(buildThumbnailPrompt(copy, 'portrait')).toBe(p);
+  });
+  it('가로는 16:9 썸네일·왼쪽 글자·오른쪽 사진·잘림 대비 상하 여백', () => {
+    const p = buildThumbnailPrompt(copy, 'landscape');
+    expect(p.startsWith('가로 유튜브 썸네일(16:9).')).toBe(true);
+    expect(p).not.toContain('세로');
+    expect(p).toContain("1줄 '과일나무 가지치기'");
+    expect(p).toContain("2줄 '겨울 총정리'");
+    expect(p).toContain("'수종별 시기', '자르면 안 되는 가지'");
+    expect(p).toContain('상단 15%, 하단 15%');
+    expect(p).toContain('오른쪽 40%');
+    expect(p).toContain('붓펜 캘리그래피');
+  });
+  it('한 줄 제목도 가로 배치 문구로', () => {
+    const p = buildThumbnailPrompt({ line1: '가지치기', line2: '', points: [] }, 'landscape');
+    expect(p).toContain("제목 '가지치기' 를 한 줄로");
+    expect(p).not.toContain('핵심 0줄');
+  });
+});
+
+describe('landscapeJpgArgs — 1280x720 자르기(순수)', () => {
+  it('꽉 채운 뒤 가운데 자르기, 품질 인자', () => {
+    expect(landscapeJpgArgs('/a/in.png', '/a/out.jpg', 4)).toEqual([
+      '-nostdin', '-y', '-i', '/a/in.png', '-vf', 'scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720', '-q:v', '4', '/a/out.jpg',
+    ]);
+  });
+  it('품질 사다리는 고화질부터 낮아지고, 상한은 2MB', () => {
+    expect([...LANDSCAPE_JPG_QUALITIES]).toEqual([...LANDSCAPE_JPG_QUALITIES].sort((a, b) => a - b));
+    expect(YT_THUMB_MAX_BYTES).toBe(2 * 1024 * 1024);
   });
 });
 

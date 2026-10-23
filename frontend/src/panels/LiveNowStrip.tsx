@@ -140,7 +140,7 @@ export default function LiveNowStrip({ names }: { names: Record<string, string> 
                 // 1줄 현황으로 뽑는다. 스트림·최근활동 대신 단계 라벨로 고정(오피스뷰
                 // '🎨/🎬 렌더링 중' 버블과 일치).
                 l1 = phaseDoing;
-                l2 = g.key === "shorts" ? "영상 합성 중" : "카드 이미지 생성 중";
+                l2 = g.key === "shorts" ? "영상 합성 중" : g.key === "longform" ? "문장 그림 장면 제작 중" : "카드 이미지 생성 중";
               } else {
                 if (stream.trim()) {
                   const gi = debateGist(stream);

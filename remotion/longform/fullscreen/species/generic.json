@@ -1,0 +1,62 @@
+{
+  "id": "generic",
+  "nameKo": "일반 활엽수",
+  "latin": "-",
+  "sources": [
+    "일반형 — 형태 근거 없음"
+  ],
+  "habit": {
+    "form": "round",
+    "branchAngle": 40,
+    "apical": 0.5,
+    "crownWH": 1,
+    "heightM": [
+      5,
+      10
+    ],
+    "bark": "furrowed"
+  },
+  "leaf": {
+    "shape": "elliptic",
+    "margin": "serrate",
+    "venation": "pinnate",
+    "arrangement": "alternate",
+    "widthRatio": 0.5,
+    "tip": "acute",
+    "base": "rounded",
+    "petiole": 0.15,
+    "sizeCm": [
+      6,
+      10
+    ],
+    "veins": 6,
+    "droop": 0.3
+  },
+  "flower": {
+    "petals": 5,
+    "shape": "open",
+    "petalShape": "oval",
+    "calyx": "small",
+    "stamens": "many",
+    "inflorescence": "corymb",
+    "position": "tip",
+    "sizeCm": 2.5,
+    "months": [
+      4
+    ]
+  },
+  "fruit": {
+    "type": "drupe",
+    "ratio": 1,
+    "sizeCm": [
+      2,
+      3
+    ],
+    "bearing": "single",
+    "months": [
+      7
+    ]
+  },
+  "leafOutMonth": 4,
+  "leafFallMonth": 11
+}

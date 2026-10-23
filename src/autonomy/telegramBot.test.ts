@@ -232,3 +232,59 @@ describe('사실 검증 보류 — 확인 후 강행 2단계', () => {
     expect(seen[1]![0]).toBe('/shorts/short_1/naver-clip');
   });
 });
+
+// 2026-10-22 롱폼 — 썸네일 사진 알림의 버튼(ly·lt·lf). 라우트는 error 에 코드, message 에 한국어를 싣는다.
+describe('롱폼 버튼(ly·lt·lf)', () => {
+  it('콜백 파싱', () => {
+    expect(parseCallback('ly:long_pilot20261019')).toEqual({ kind: 'longform_youtube', id: 'long_pilot20261019' });
+    expect(parseCallback('lf:long_pilot20261019')).toEqual({ kind: 'longform_youtube_force', id: 'long_pilot20261019' });
+    expect(parseCallback('lt:long_pilot20261019')).toEqual({ kind: 'longform_thumb_regen', id: 'long_pilot20261019' });
+    expect(parseCallback('lx:long_pilot20261019')).toBeNull();
+  });
+  it('ly — 202 면 업로드 시작 안내(결과는 서버가 따로 알린다)', async () => {
+    const seen: Array<[string, unknown]> = [];
+    const out = await runAction({ kind: 'longform_youtube', id: 'long_t1' }, async (p, b) => { seen.push([p, b]); return { ok: true, status: 202, json: { ok: true, started: true } }; }, stubSend().send);
+    expect(out).toContain('업로드 시작');
+    expect(out).toContain('끝나면 알려 드립니다');
+    expect(seen[0]).toEqual(['/longform/long_t1/youtube', {}]);
+  });
+  it('ly — 썸네일 QA 미해결이면 다시 만들기·그대로 발행(lf) 버튼 안내', async () => {
+    const s = stubSend();
+    const r409 = { ok: false, status: 409, json: { error: 'thumb_qa_unresolved', message: '썸네일 한글 QA 미해결' } };
+    expect(await runAction({ kind: 'longform_youtube', id: 'long_t1' }, async () => r409, s.send)).toBe('');
+    const btn = JSON.stringify(s.log.at(-1)!.buttons);
+    expect(btn).toContain('lf:long_t1');
+    expect(btn).toContain('lt:long_t1');
+  });
+  it('lf — force 를 싣고, 이미 올림·업로드 중은 그에 맞게 답한다', async () => {
+    const seen: unknown[] = [];
+    const out = await runAction({ kind: 'longform_youtube_force', id: 'long_t1' }, async (_p, b) => { seen.push(b); return { ok: true, status: 202, json: { started: true } }; }, stubSend().send);
+    expect(seen[0]).toEqual({ force: true });
+    expect(out).toContain('강행');
+    const already = { ok: false, status: 409, json: { error: 'already_uploaded', message: '이미 업로드됨', url: 'https://www.youtube.com/watch?v=abc' } };
+    expect(await runAction({ kind: 'longform_youtube', id: 'long_t1' }, async () => already, stubSend().send)).toContain('watch?v=abc');
+    const busy = { ok: false, status: 409, json: { error: 'in_flight', message: '이미 업로드 중' } };
+    expect(await runAction({ kind: 'longform_youtube', id: 'long_t1' }, async () => busy, stubSend().send)).toContain('이미 업로드 중');
+  });
+  it('기타 실패는 한국어 message 를 보인다(코드가 아니라)', async () => {
+    const r = { ok: false, status: 409, json: { error: 'not_ready', message: '아직 완성되지 않았습니다' } };
+    const out = await runAction({ kind: 'longform_youtube', id: 'long_t1' }, async () => r, stubSend().send);
+    expect(out).toContain('아직 완성되지 않았습니다');
+    expect(out).not.toContain('not_ready');
+  });
+  it('lt — 재생성 뒤 검토 알림을 다시 보내면 빈 문자열, 못 보내면 완료 문구', async () => {
+    const s = stubSend();
+    const resent: string[] = [];
+    const send = { ...s.send, longformReady: async (id: string) => { resent.push(id); return true; } };
+    const seen: Array<[string, number | undefined]> = [];
+    const call = async (p: string, _b?: unknown, t?: number) => { seen.push([p, t]); return { ok: true, status: 200, json: { ok: true, thumbState: 'ok' } }; };
+    expect(await runAction({ kind: 'longform_thumb_regen', id: 'long_t1' }, call, send)).toBe('');
+    expect(resent).toEqual(['long_t1']);
+    expect(seen[0]![0]).toBe('/longform/long_t1/thumbnail/regenerate');
+    expect(seen[0]![1]).toBeGreaterThanOrEqual(5 * 60_000);
+    const qa = await runAction({ kind: 'longform_thumb_regen', id: 'long_t1' }, async () => ({ ok: true, status: 200, json: { thumbState: 'qa_failed' } }), stubSend().send);
+    expect(qa).toContain('오타 의심');
+    const fail = await runAction({ kind: 'longform_thumb_regen', id: 'long_t1' }, async () => ({ ok: false, status: 502, json: { error: 'thumb_failed', message: '썸네일 생성 실패' } }), stubSend().send);
+    expect(fail).toContain('썸네일 생성 실패');
+  });
+});

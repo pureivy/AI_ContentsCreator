@@ -21,13 +21,16 @@ const ROLE_SPRITE: Record<string, string> = {
   // 숏폼 작가 3인(2026-09-03) — 편마다 번갈아 배정되고 각자 다른 목소리로 읽는다.
   shorts_writer_b: "shortswriter2",  // 임태윤 (남 20대 후반, 안경·니트 — gen_shorts_writer_sprites.mjs)
   shorts_director: "shortsdirector", // 서준영 (남, 숏폼 영상 디렉터 — gpt-image 생성 2포즈 세트)
+  // 롱폼팀(2026-10-23) — gen_longform_sprites.mjs 2포즈 세트.
+  longform_writer: "longformwriter",     // 한서윤 (여 30대 중반, 셔츠·원고 바인더·연필)
+  longform_designer: "longformdesigner", // 차민혁 (남 30대 초반, 목 헤드폰·드로잉 태블릿, 올리브 셔츠재킷 — 서준영과 구별)
   jarvis: "jarvis",             // 자비스 — 2포즈 스프라이트(jarvis_stand/jarvis_sit_front) 사용(TWO_POSE_CHARS).
                                 //   두 파일이 모두 없을 때만 '얼굴+SVG 정장' 폴백(OfficeView TwoPoseFigure).
   secretary: "jarvis",          // 자비스 로스터 정식 id — Avatar(직원 탭·타임라인)는 id 만으로 해석하므로 id 매핑 필수
 };
 
 /** 2포즈(stand/sit_front) 축약 캐릭터 — 9포즈 풀세트 없이 생성된 아바타. OfficeView 가 포즈를 둘로 접는다. */
-export const TWO_POSE_CHARS = new Set(["jarvis", "cardplanner", "carddesigner", "shortswriter", "shortswriter2", "shortswriter3", "shortsdirector"]);
+export const TWO_POSE_CHARS = new Set(["jarvis", "cardplanner", "carddesigner", "shortswriter", "shortswriter2", "shortswriter3", "shortsdirector", "longformwriter", "longformdesigner"]);
 
 /** 역할 id/레벨/직무 → 스프라이트 캐릭터. 매칭 없으면 null(이모지 폴백). */
 export function spriteFor(id = "", level = "", title = ""): string | null {

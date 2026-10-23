@@ -274,6 +274,51 @@ describe('dailyDue — 예정 시각 이후 부팅해도 그날 몫을 따라잡
   });
 });
 
+// 롱폼 매주 제작(2026-10-22) — 일요일 24:00 = 월요일 00:00. 서버가 꺼져 월 00:00 을 놓치면 월요일 안에 따라잡고, 화요일로 밀리지 않는다.
+describe('dailyDue — 요일(weekday) 지정', () => {
+  const day = (d: number, h: number, m: number) => new Date(2026, 9, d, h, m); // 2026-10-25 일 · 26 월 · 27 화
+  it('월요일 00:00 정각에 발동', () => {
+    expect(day(26, 0, 0).getDay()).toBe(1);
+    expect(dailyDue(day(26, 0, 0), 0, 0, 'MON', '', 1)).toBe(true);
+  });
+  it('월 00:00 을 놓쳤어도 월요일 낮에 따라잡는다', () => {
+    expect(dailyDue(day(26, 15, 0), 0, 0, 'MON', '', 1)).toBe(true);
+  });
+  it('일요일 23:59·화요일은 발동 안 함(다음 주까지)', () => {
+    expect(dailyDue(day(25, 23, 59), 0, 0, 'SUN', '', 1)).toBe(false);
+    expect(dailyDue(day(27, 9, 0), 0, 0, 'TUE', '', 1)).toBe(false);
+  });
+  it('그 월요일에 이미 돌았으면 다시 안 돈다', () => {
+    expect(dailyDue(day(26, 9, 0), 0, 0, 'MON', 'MON', 1)).toBe(false);
+  });
+  it('요일 미지정은 종전처럼 매일', () => {
+    expect(dailyDue(day(27, 9, 0), 0, 0, 'TUE', 'MON')).toBe(true);
+  });
+});
+
+describe('startDaily — 요일 지정(롱폼 매주)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it('일요일 23:59 → 월 00:00 에 한 번, 화요일에는 안 돈다', () => {
+    vi.setSystemTime(new Date(2026, 9, 25, 23, 59, 0));
+    const run = vi.fn();
+    const stop = startDaily({ time: '00:00', weekday: 1, run });
+    vi.advanceTimersByTime(60_000); // → 월 00:00
+    expect(run).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(36 * 60 * 60_000); // → 화 12:00
+    expect(run).toHaveBeenCalledTimes(1);
+    stop();
+  });
+  it('요일 값이 잘못되면 no-op(매일로 새지 않는다)', () => {
+    vi.setSystemTime(new Date(2026, 9, 26, 0, 0, 0));
+    const run = vi.fn();
+    const stop = startDaily({ time: '00:00', weekday: 9, run });
+    vi.advanceTimersByTime(3 * 86_400_000);
+    expect(run).not.toHaveBeenCalled();
+    stop();
+  });
+});
+
 // 주제창 지시문 함정(실측 3회: "자율런 실행"·"오토런 실행해줘"×2) — 오토런 지시가 콘텐츠 런이 되어
 // 지시문 제목의 글이 검토함에 쌓였다. 지시문이면 런 대신 자율 틱으로 라우팅하기 위한 판별식.
 describe('isAutorunDirective — 오토런 지시문 판별(순수)', () => {

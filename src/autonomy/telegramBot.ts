@@ -13,7 +13,8 @@ import path from 'node:path';
 import { CONFIG } from '../config';
 import { getSecret } from '../secrets/store';
 import { telegramCreds, tgApiUrl, sendTelegramHtml, sendTelegramPhotos, type TgButton } from './notify';
-import { studioBase, escapeHtml, naverPublishLabel } from './contentNotify';
+import { studioBase, escapeHtml, naverPublishLabel, notifyLongformReady } from './contentNotify';
+import { longformStore } from '../content/longform';
 
 export type BotAction =
   | { kind: 'naver_draft'; id: string }
@@ -32,7 +33,11 @@ export type BotAction =
   | { kind: 'shorts_clip_check'; id: string }
   | { kind: 'shorts_thumb_regen'; id: string }
   // 사실 검증 보류 확인 후 강행(2026-10-12 사장님 확정) — 근거 없는 문장을 보여 준 뒤 한 번 더 받는다(yh·mh·nh).
-  | { kind: 'shorts_fact_force'; id: string; ch: 'youtube' | 'instagram' | 'clip' };
+  | { kind: 'shorts_fact_force'; id: string; ch: 'youtube' | 'instagram' | 'clip' }
+  // 롱폼(2026-10-22) — 유튜브 공개 발행(ly), 썸네일 다시(lt), 썸네일 한글 QA 확인 후 강행(lf).
+  | { kind: 'longform_youtube'; id: string }
+  | { kind: 'longform_youtube_force'; id: string }
+  | { kind: 'longform_thumb_regen'; id: string };
 
 /**
  * 자율런 지시 명령(순수, 2026-09-10) — "자율런 지시: …" 로 설정, "지시 끄기/켜기/상태/삭제". 아니면 null.
@@ -67,7 +72,7 @@ export function describeDirective(d: { text: string; on: boolean; made: number; 
 
 /** 콜백 데이터 파싱(≤64바이트 규격: "<op>:<id>"). 불명이면 null. 순수 — 테스트 대상. */
 export function parseCallback(data: string): BotAction | null {
-  const m = /^(bp|rv|cp|cf|sy|sm|yf|mf|tr|nc|nf|nk|yh|mh|nh):([A-Za-z0-9_]{1,48})$/.exec(data);
+  const m = /^(bp|rv|cp|cf|sy|sm|yf|mf|tr|nc|nf|nk|yh|mh|nh|ly|lt|lf):([A-Za-z0-9_]{1,48})$/.exec(data);
   if (!m) return null;
   const id = m[2]!;
   switch (m[1]) {
@@ -86,6 +91,9 @@ export function parseCallback(data: string): BotAction | null {
     case 'yh': return { kind: 'shorts_fact_force', id, ch: 'youtube' };
     case 'mh': return { kind: 'shorts_fact_force', id, ch: 'instagram' };
     case 'nh': return { kind: 'shorts_fact_force', id, ch: 'clip' };
+    case 'ly': return { kind: 'longform_youtube', id };
+    case 'lf': return { kind: 'longform_youtube_force', id };
+    case 'lt': return { kind: 'longform_thumb_regen', id };
     default: return null;
   }
 }
@@ -150,9 +158,26 @@ const errText = (label: string, r: { status: number; json: Record<string, unknow
 /** 버튼 액션 실행 → 사용자에게 보낼 결과 문구. revise 는 답장 유도라 여기 없음. */
 /** 액션 실행기가 쓰는 HTTP 호출 — 테스트가 갈아끼울 수 있게 인자로 뺀다(이 파일의 순수/부수 분리). */
 export type ApiCall = (pathname: string, body?: unknown, timeoutMs?: number) => Promise<{ ok: boolean; status: number; json: Record<string, unknown> | null }>;
-/** 사용자에게 직접 보내는 통로(사진·본문) — 테스트가 갈아끼울 수 있게 인자로 뺀다(ApiCall 과 같은 사상). */
-export interface Senders { photos: typeof sendTelegramPhotos; html: typeof sendTelegramHtml }
-const REAL_SENDERS: Senders = { photos: sendTelegramPhotos, html: sendTelegramHtml };
+/** 사용자에게 직접 보내는 통로(사진·본문) — 테스트가 갈아끼울 수 있게 인자로 뺀다(ApiCall 과 같은 사상).
+ *  longformReady: 롱폼 검토 알림(썸네일 사진+버튼) 재전송 — 썸네일을 다시 만든 뒤 쓴다. 보냈으면 true. */
+export interface Senders { photos: typeof sendTelegramPhotos; html: typeof sendTelegramHtml; longformReady?: (id: string) => Promise<boolean> }
+const REAL_SENDERS: Senders = {
+  photos: sendTelegramPhotos, html: sendTelegramHtml,
+  longformReady: async (id) => { const rec = longformStore().get(id); return rec ? notifyLongformReady(rec, { reply: true }) : false; },
+};
+
+/** 롱폼 라우트 오류 문구 — 롱폼 라우트는 error 에 코드(already_uploaded 등)를, message 에 한국어를 싣는다(프론트와 같은 계약). */
+const lfErrText = (label: string, r: { status: number; json: Record<string, unknown> | null }): string => {
+  const msg = typeof r.json?.message === 'string' ? r.json.message : typeof r.json?.error === 'string' ? r.json.error : `HTTP ${r.status}`;
+  return `⚠️ ${label} — ${escapeHtml(msg)}`;
+};
+/** 이 롱폼의 썸네일 파일 경로(있으면). */
+function longformThumbPath(id: string): string | null {
+  const rec = longformStore().get(id);
+  const dir = rec ? longformStore().absDir(rec) : null;
+  const p = dir ? path.join(dir, 'thumbnail.jpg') : '';
+  try { return p && fs.existsSync(p) ? p : null; } catch { return null; }
+}
 
 // 유튜브 업로드 완료 문구 — 공개 발행(2026-10-01, 라우트의 public_pending)이면 자동 공개 예정, 아니면 종전 비공개 안내.
 // 바로 공개(public_direct, 2026-10-05)는 이미 공개 — '공개 예정'·'비공개'로 쓰면 사람이 스튜디오에서 또 손댄다.
@@ -297,6 +322,46 @@ export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call:
       const url = typeof r.json?.url === 'string' ? r.json.url : typeof r.json?.youtubeUrl === 'string' ? r.json.youtubeUrl : '';
       return `${ytDoneText(r.json)}(사실 검증 확인 강행)${url ? `\n${url}` : ''}${ytDoneTail(r.json)}`;
     }
+    case 'longform_youtube':
+    case 'longform_youtube_force': {
+      // 1GB 업로드는 수 분~수십 분 — 라우트가 202 로 바로 답하고 뒤에서 돈다. 결과(📺 주소·실패 사유)는 서버가 따로 알린다.
+      const force = a.kind === 'longform_youtube_force';
+      const r = await call(`/longform/${a.id}/youtube`, force ? { force: true } : {});
+      if (r.ok) return `▶️ 롱폼 유튜브 업로드 시작${force ? '(썸네일 확인 강행)' : ''} — 끝나면 알려 드립니다.`;
+      const code = typeof r.json?.error === 'string' ? r.json.error : '';
+      if (r.status === 409 && code === 'thumb_qa_unresolved' && !force) {
+        // 쇼츠와 같은 '확인 후 강행' 2단계 — 썸네일을 보여 주고 다시 만들기·그대로 발행 두 길을 준다.
+        const thumb = longformThumbPath(a.id);
+        if (thumb) await send.photos([thumb], '⚠️ 롱폼 썸네일 한글 오타 의심');
+        await send.html(
+          '⚠️ 롱폼 썸네일 한글 QA 미해결 — 위 이미지의 글자를 확인하세요.\n'
+          + `문구가 정상이면 그대로 발행하고, 글자가 깨졌으면 썸네일을 다시 만드세요(수 분).\n${studioBase()}/`,
+          [[
+            { text: '🖼 썸네일 다시', callback_data: `lt:${a.id}` },
+            { text: '✅ 그대로 발행', callback_data: `lf:${a.id}` },
+          ]],
+        );
+        return '';
+      }
+      if (code === 'no_thumbnail') {
+        await send.html('🖼 롱폼 썸네일이 아직 없습니다 — 먼저 만든 뒤 발행하세요(수 분).', [[{ text: '🖼 썸네일 만들기', callback_data: `lt:${a.id}` }]]);
+        return '';
+      }
+      if (code === 'already_uploaded') {
+        const url = typeof r.json?.url === 'string' ? `\n${escapeHtml(r.json.url)}` : '';
+        return `📺 이미 유튜브에 올라간 롱폼입니다${url}`;
+      }
+      if (code === 'in_flight') return '⏳ 이미 업로드 중입니다 — 끝나면 알려 드립니다.';
+      return lfErrText('롱폼 유튜브 업로드 실패', r);
+    }
+    case 'longform_thumb_regen': {
+      // 가로 썸네일 재생성(라우트 상한 4분). 끝나면 검토 알림(사진+버튼)을 다시 보내 이어서 발행하게 한다.
+      const r = await call(`/longform/${a.id}/thumbnail/regenerate`, {}, 6 * 60_000);
+      if (!r.ok) return lfErrText('롱폼 썸네일 재생성 실패', r);
+      if (send.longformReady && await send.longformReady(a.id)) return '';
+      const qa = r.json?.thumbState === 'qa_failed' ? ' — 한글 오타 의심, 확인 필요' : '';
+      return `🖼 롱폼 썸네일 재생성 완료${qa}\n제작실 → 롱폼 탭에서 확인하세요: ${studioBase()}/`;
+    }
     case 'shorts_thumb_regen': {
       // 썸네일만 다시 만든다(수 분). 통과하면 표식이 지워져 발행 게이트가 열린다.
       const r = await call(`/shorts/${a.id}/thumbnail/regenerate`, {}, 300_000);
@@ -438,7 +503,9 @@ async function handleUpdate(u: TgUpdate, chatId: string, bootTs: number): Promis
     }
     // 발행류는 수 초~수 분 — 폴 루프를 막지 않게 비동기로 돌리고 끝나면 결과를 새 메시지로 push.
     // 실패(타임아웃·재시작 중 ECONNREFUSED 등)도 반드시 사용자에게 알린다 — '접수'만 보고 무소식이면 안 됨.
-    void runAction(action)
+    // 롱폼 썸네일 재생성은 수 분 동기 라우트 — fetch(undici)의 응답 머리 5분 제한을 피해 node:http(apiLong)로 부른다.
+    const call: ApiCall = action.kind === 'longform_thumb_regen' ? (p, b, t) => apiLong(p, b, t ?? 6 * 60_000) : api;
+    void runAction(action, call)
       .then((msg) => {
         // 실패 결과는 서버 로그에도 — 텔레그램 답장만 남기면 사유를 나중에 찾을 수 없었다(2026-10-13 배나무 카드뉴스).
         if (msg.startsWith('⚠️')) console.log(`[텔레그램] 버튼 실패 — ${action.kind} ${action.id}: ${msg.slice(0, 300)}`);

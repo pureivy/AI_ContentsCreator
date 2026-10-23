@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { appendBlogFrame, blogFrameLedgerPath, readBlogFrameReleases } from '../content/blogFrames';
-import { daysSince, isShortPublished, shortPublishedTs, isStaleUnpublishedShort, shortPruneTargets, cardPruneTargets, trashEntryExpired, runJanitor, type JanitorDeps } from './janitor';
+import { daysSince, isShortPublished, shortPublishedTs, isStaleUnpublishedShort, shortPruneTargets, cardPruneTargets, longformPruneTargets, trashEntryExpired, runJanitor, type JanitorDeps } from './janitor';
 
 const NOW = new Date('2026-09-10T03:30:00+09:00');
 const ago = (days: number): string => new Date(NOW.getTime() - days * 86_400_000).toISOString();
@@ -245,5 +245,56 @@ describe('runJanitor — 미연결 세션을 치우기 전 실촬영 컷 반납(
     fs.writeFileSync(path.join(t.root, 'pieces', 'index.json'), JSON.stringify([{ id: 'P', runId: 'eeeeeeee5555', stage: 'published', publishedUrl: 'https://n/1' }]));
     await runJanitor({ ...t.deps, pieces: () => [{ id: 'P', runId: 'eeeeeeee5555', publishedUrl: 'https://n/1' }] }, { now: NOW });
     expect(t.releases()).toEqual([]);
+  });
+});
+
+describe('janitor 롱폼(2026-10-22)', () => {
+  it('longformPruneTargets — 렌더 잔여·스틸은 항상, 낭독·클립·그림 작업물·remotion 은 유튜브 발행 14일 뒤. 완성 영상·대본은 대상이 아니다', () => {
+    // 전체 화면 렌더(2026-10-23 기본값)의 번들·스테이징·대조표 스틸도 항상.
+    const always = ['remotion/bundle', 'remotion/public', 'stills', 'scenes/work', 'scenes/stills', 'scenes/.render', 'remotion-full/bundle', 'remotion-full/public', 'remotion-full/stills'];
+    expect(longformPruneTargets(false, null, 14)).toEqual(always);
+    expect(longformPruneTargets(true, 13, 14)).toEqual(always);
+    const b = longformPruneTargets(true, 14, 14);
+    for (const t of ['audio', 'clips', 'mg', 'scenes', 'remotion', 'remotion-entry', 'remotion-entry-full', 'remotion-full', 'refs']) expect(b).toContain(t);
+    for (const keep of ['final.mp4', 'thumbnail.jpg', 'script.json', 'timeline.json', 'subtitles.srt', 'youtube.txt', 'sources.md', 'contact.jpg', 'species']) expect(b).not.toContain(keep);
+  });
+
+  it('runJanitor — 발행 20일 편은 재료까지, 미발행 편은 렌더 잔여만, 제작 중인 편은 건드리지 않는다', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'janitor-lf-'));
+    const w = (rel: string, size = 10): void => { const p = path.join(root, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, Buffer.alloc(size)); };
+    for (const d of ['2026-08-17-prune', '2026-09-07-plant', '2026-09-10-care']) {
+      for (const f of ['final.mp4', 'thumbnail.jpg', 'script.json', 'timeline.json', 'subtitles.srt', 'youtube.txt', 'sources.md', 'audio/intro-01.mp3', 'clips/intro-01.mp4', 'mg/s01.png', 'remotion/bundle/b.js', 'remotion/public/a.mp3', 'stills/f1.png',
+        'remotion-full/bundle/b.js', 'remotion-full/public/a.mp3', 'remotion-entry-full/index.ts', 'refs/감나무/01.jpg', 'species/index.json', 'contact.jpg']) w(`longform/${d}/${f}`);
+    }
+    const deps: JanitorDeps = {
+      dataDir: root, sessionsDir: path.join(root, 'sessions'),
+      shorts: () => [], cards: () => [], pieces: () => [],
+      removeShort: () => {}, isShortRunning: () => false, isSessionRunning: () => false, archiveShort: async () => 0,
+      longform: () => [
+        { id: 'long_a', dir: '2026-08-17-prune', stage: 'ready', youtubeId: 'y', youtubeTs: ago(20) },
+        { id: 'long_b', dir: '2026-09-07-plant', stage: 'ready' },
+        { id: 'long_c', dir: '2026-09-10-care', stage: 'producing' },
+        { id: 'long_bad', dir: '../shorts', stage: 'ready', youtubeId: 'y', youtubeTs: ago(30) },
+      ],
+      isLongformRunning: () => false,
+    };
+    const r = await runJanitor(deps, { now: NOW });
+    const ex = (rel: string) => fs.existsSync(path.join(root, 'longform', rel));
+    for (const gone of ['audio', 'clips', 'mg', 'remotion', 'stills', 'remotion-full', 'remotion-entry-full', 'refs']) expect(ex(`2026-08-17-prune/${gone}`)).toBe(false);
+    for (const keep of ['final.mp4', 'thumbnail.jpg', 'script.json', 'timeline.json', 'subtitles.srt', 'youtube.txt', 'sources.md', 'contact.jpg', 'species/index.json']) expect(ex(`2026-08-17-prune/${keep}`)).toBe(true);
+    // 미발행 편 — 렌더 잔여·스틸만, 다시 렌더할 재료는 남는다
+    expect(ex('2026-09-07-plant/remotion/bundle')).toBe(false);
+    expect(ex('2026-09-07-plant/stills')).toBe(false);
+    expect(ex('2026-09-07-plant/audio/intro-01.mp3')).toBe(true);
+    expect(ex('2026-09-07-plant/clips/intro-01.mp4')).toBe(true);
+    expect(ex('2026-09-07-plant/remotion-full/bundle')).toBe(false);
+    expect(ex('2026-09-07-plant/remotion-full/public')).toBe(false);
+    expect(ex('2026-09-07-plant/remotion-entry-full/index.ts')).toBe(true);
+    expect(ex('2026-09-07-plant/refs/감나무/01.jpg')).toBe(true);
+    // 제작 중 — 그대로
+    expect(ex('2026-09-10-care/remotion/bundle/b.js')).toBe(true);
+    expect(ex('2026-09-10-care/stills/f1.png')).toBe(true);
+    expect(r.moved['longform-intermediates']?.n).toBeGreaterThan(0);
+    expect(r.errors).toEqual([]);
   });
 });

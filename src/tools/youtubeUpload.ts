@@ -162,6 +162,15 @@ export async function uploadShortsToYoutube(opts: {
  * 쇼츠 커버는 스튜디오/앱의 '동영상 프레임' 선택으로만 지정된다(첫 프레임=디자인 썸네일). 실패 사유 문자열, 성공·생략은 undefined.
  */
 async function setThumbnail(access: string, id: string, thumbnailPath: string | undefined, signal?: AbortSignal): Promise<string | undefined> {
+  const r = await postThumbnail(access, id, thumbnailPath, signal);
+  if (!r) return undefined;
+  if (r.error !== undefined) return r.error;
+  // 403 forbidden 은 채널 미인증뿐 아니라 토큰·권한 문제일 수도 있어 사유를 그대로 노출(영상은 업로드됨).
+  return `쇼츠 커버는 API 지정 불가(사유 ${r.reason}) — 스튜디오/앱에서 '동영상 프레임' 맨 앞(0초=디자인 썸네일)으로 지정`;
+}
+
+/** thumbnails.set 원시 호출 — 성공·생략은 undefined, API 거절은 {reason}, 예외는 {error}(문구는 부르는 쪽이 채널에 맞게 짓는다). */
+async function postThumbnail(access: string, id: string, thumbnailPath: string | undefined, signal?: AbortSignal): Promise<{ reason?: string; error?: string } | undefined> {
   if (!thumbnailPath || !fs.existsSync(thumbnailPath)) return undefined;
   try {
     const tr = await fetch(`https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${id}`, {
@@ -171,10 +180,196 @@ async function setThumbnail(access: string, id: string, thumbnailPath: string | 
     });
     if (tr.ok) return undefined;
     const tj: unknown = await tr.json().catch(() => ({}));
-    const reason = (tj as { error?: { errors?: Array<{ reason?: string }> } })?.error?.errors?.[0]?.reason ?? String(tr.status);
-    // 403 forbidden 은 채널 미인증뿐 아니라 토큰·권한 문제일 수도 있어 사유를 그대로 노출(영상은 업로드됨).
-    return `쇼츠 커버는 API 지정 불가(사유 ${reason}) — 스튜디오/앱에서 '동영상 프레임' 맨 앞(0초=디자인 썸네일)으로 지정`;
-  } catch (te) { return te instanceof Error ? te.message.slice(0, 80) : String(te); }
+    return { reason: (tj as { error?: { errors?: Array<{ reason?: string }> } })?.error?.errors?.[0]?.reason ?? String(tr.status) };
+  } catch (te) { return { error: te instanceof Error ? te.message.slice(0, 80) : String(te) }; }
+}
+
+/**
+ * 롱폼 메타데이터(순수, 2026-10-22) — 쇼츠 buildVideoMeta 와 같은 정리 규칙(꺾쇠 제거·제목 100자·설명 5000자·
+ * 태그 15개·30자)에 처음부터 공개. 설명은 챕터 줄(0:00 …)과 해시태그를 이미 담고 와서 덧붙이지 않는다 —
+ * 쇼츠처럼 해시태그 줄을 또 붙이면 같은 태그가 두 번 나온다. 빈 제목 폴백은 '영상'(쇼츠가 아니다).
+ */
+export function buildLongformMeta(title: string, description: string, tags: string[]): Record<string, unknown> {
+  const clean = (s: string): string => s.replace(/[<>]/g, '');
+  const t = clean(title).trim().slice(0, 100) || '영상';
+  const desc = clean(description.trim()).slice(0, 5000);
+  const tg = tags.map((h) => clean(h.replace(/^#/, '')).trim().slice(0, 30)).filter(Boolean).slice(0, 15);
+  return {
+    snippet: { title: t, description: desc, tags: tg, categoryId: CONFIG.youtubeCategoryId },
+    // 롱폼도 TTS 낭독·AI 도해·모션그래픽이 들어가 AI 사용 공개(예)를 상시 건다 — 쇼츠와 같은 정책.
+    status: { privacyStatus: 'public', selfDeclaredMadeForKids: false, containsSyntheticMedia: true },
+  };
+}
+
+/** 재개형 업로드 응답의 Range("bytes=0-N") → 다음에 보낼 바이트 위치(순수). Range 가 없으면 받은 바이트가 없다는 뜻이라 0. */
+export function nextOffsetFromRange(range: string | null | undefined): number {
+  const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
+  return m ? Number(m[2]) + 1 : 0;
+}
+
+/** 재개형 업로드 기본값 — 16MiB 청크(256KiB 배수 필수), 청크당 5분, 청크 재시도 3회(2s·8s·20s). */
+export const RESUMABLE_CHUNK_BYTES = 16 * 1024 * 1024;
+const RESUMABLE_CHUNK_TIMEOUT_MS = 5 * 60_000;
+const RESUMABLE_RETRY_DELAYS_MS = [2_000, 8_000, 20_000];
+
+type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * 유튜브 재개형 업로드(resumable) 청크 루프 — 1GB 롱폼용(2026-10-22).
+ *
+ * 왜 따로 만드나. 쇼츠 업로드(uploadShortsToYoutube)는 파일을 통째로 읽어 multipart 한 번에 보내고 전체에 180초를 건다.
+ * 10분 가로 영상은 1GB 가까이라 메모리에 통째로 올리면 서버가 휘청이고, 180초 안에 끝나지도 않는다.
+ * 그래서 세션을 연 뒤(POST → Location) 16MiB씩 파일에서 읽어 PUT 한다 — 시간 제한은 청크마다 건다.
+ *
+ * 끊김 처리: 5xx·네트워크 오류면 잠시 쉬고 빈 PUT(Content-Range 에 총길이만)으로 서버가 받은 위치를 물어 거기서 잇는다(청크당 3회까지).
+ * 308(Resume Incomplete)의 Range 가 다음 시작점이다 — 보낸 청크 일부만 받았을 수 있어 늘 Range 를 따른다.
+ * 401 은 액세스 토큰(1시간)이 업로드 도중 만료된 것 — 세션 주소는 토큰과 무관해 토큰만 새로 받아 잇는다.
+ * fetch 는 주입(테스트용) — 실제 구글을 치지 않고 청크 루프를 검증한다.
+ */
+export async function resumableUpload(o: {
+  access: string; videoPath: string; meta: Record<string, unknown>;
+  signal?: AbortSignal; onProgress?: (sent: number, total: number) => void;
+  refreshAccess?: () => Promise<string>;
+  fetchImpl?: FetchLike; chunkBytes?: number; chunkTimeoutMs?: number; retryDelaysMs?: number[];
+}): Promise<{ ok: true; videoId: string } | { ok: false; error: string }> {
+  const f: FetchLike = o.fetchImpl ?? ((u, i) => fetch(u, i));
+  const chunk = o.chunkBytes ?? RESUMABLE_CHUNK_BYTES;
+  const delays = o.retryDelaysMs ?? RESUMABLE_RETRY_DELAYS_MS;
+  const sig = (): AbortSignal => {
+    const t = AbortSignal.timeout(o.chunkTimeoutMs ?? RESUMABLE_CHUNK_TIMEOUT_MS);
+    return o.signal ? AbortSignal.any([o.signal, t]) : t;
+  };
+  const failText = (j: unknown, status: number): string => {
+    const reason = apiReason(j, status);
+    return reason === 'quotaExceeded' ? '유튜브 일일 쿼터 초과 — 내일 재시도' : `업로드 실패(${reason})`;
+  };
+  let access = o.access;
+  const total = (await fs.promises.stat(o.videoPath)).size;
+  if (total <= 0) return { ok: false, error: '영상 파일이 비어 있음' };
+
+  // 1) 세션 열기 — 메타데이터만 보내고 업로드 주소(Location)를 받는다. 쿼터 초과는 여기서 난다.
+  const init = async (): Promise<Response> => f('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
+    method: 'POST', signal: sig(),
+    headers: {
+      Authorization: `Bearer ${access}`, 'Content-Type': 'application/json; charset=UTF-8',
+      'X-Upload-Content-Length': String(total), 'X-Upload-Content-Type': 'video/mp4',
+    },
+    body: JSON.stringify(o.meta),
+  });
+  let r0 = await init();
+  if (r0.status === 401 && o.refreshAccess) { access = await o.refreshAccess(); r0 = await init(); }
+  if (!r0.ok) return { ok: false, error: failText(await r0.json().catch(() => ({})), r0.status) };
+  const session = r0.headers.get('location');
+  if (!session) return { ok: false, error: '업로드 세션 주소(Location) 없음' };
+
+  const done = async (r: Response): Promise<{ ok: true; videoId: string } | { ok: false; error: string }> => {
+    const id = extractVideoId(await r.json().catch(() => ({})));
+    return id ? { ok: true, videoId: id } : { ok: false, error: '업로드 응답 이형(id 없음)' };
+  };
+  // 서버가 받은 위치 묻기 — 받은 게 끝까지면 200/201(완료), 아니면 308 + Range.
+  const queryStatus = async (): Promise<Response> => f(session, {
+    method: 'PUT', signal: sig(),
+    headers: { Authorization: `Bearer ${access}`, 'Content-Length': '0', 'Content-Range': `bytes */${total}` },
+  });
+
+  const fh = await fs.promises.open(o.videoPath, 'r');
+  try {
+    let offset = 0;
+    let failures = 0;
+    while (offset < total) {
+      if (o.signal?.aborted) return { ok: false, error: '업로드 중단됨' };
+      const end = Math.min(offset + chunk, total) - 1;
+      const buf = Buffer.alloc(end - offset + 1);
+      const { bytesRead } = await fh.read(buf, 0, buf.length, offset);
+      if (bytesRead !== buf.length) return { ok: false, error: '영상 파일 읽기 실패(길이 불일치)' };
+      let r: Response | null = null;
+      try {
+        r = await f(session, {
+          method: 'PUT', signal: sig(),
+          headers: { Authorization: `Bearer ${access}`, 'Content-Length': String(buf.length), 'Content-Range': `bytes ${offset}-${end}/${total}` },
+          body: new Uint8Array(buf.buffer, buf.byteOffset, buf.length),
+        });
+      } catch (e) {
+        if (o.signal?.aborted) return { ok: false, error: '업로드 중단됨' };
+        r = null; // 네트워크 오류·청크 시간 초과 — 아래 재개 절차로
+        if (failures >= delays.length) return { ok: false, error: `업로드 끊김 — 재시도 ${delays.length}회 실패(${e instanceof Error ? e.message.slice(0, 60) : String(e)})` };
+      }
+      if (r && (r.status === 200 || r.status === 201)) return await done(r);
+      if (r && r.status === 308) {
+        offset = nextOffsetFromRange(r.headers.get('range'));
+        failures = 0;
+        o.onProgress?.(offset, total);
+        continue;
+      }
+      if (r && r.status === 401 && o.refreshAccess && failures < delays.length) {
+        failures++;
+        access = await o.refreshAccess(); // 토큰 만료 — 세션은 살아 있으니 토큰만 갈고 같은 위치에서 다시
+        continue;
+      }
+      if (r && !(r.status >= 500 && r.status < 600)) {
+        if (r.status === 404 || r.status === 410) return { ok: false, error: '업로드 세션 만료 — 처음부터 다시 올리세요' };
+        return { ok: false, error: failText(await r.json().catch(() => ({})), r.status) };
+      }
+      // 5xx·네트워크 오류 — 쉬었다가 서버가 받은 위치를 물어 거기서 잇는다.
+      if (failures >= delays.length) return { ok: false, error: `업로드 실패 — 서버 오류로 재시도 ${delays.length}회 소진(${r?.status ?? '네트워크'})` };
+      await sleep(delays[failures] ?? 0, o.signal).catch(() => undefined);
+      failures++;
+      if (o.signal?.aborted) return { ok: false, error: '업로드 중단됨' };
+      try {
+        const q = await queryStatus();
+        if (q.status === 200 || q.status === 201) return await done(q);
+        if (q.status === 308) { offset = nextOffsetFromRange(q.headers.get('range')); o.onProgress?.(offset, total); }
+        // 그 외(5xx 등)는 위치를 모르는 채로 같은 청크를 다시 보낸다 — 실패 횟수는 이미 셌다.
+      } catch { /* 위치 조회 실패 — 같은 청크 재전송 */ }
+    }
+    // 마지막 청크가 308 로 끝났는데 offset==total 이면 완료 응답을 못 받은 것 — 위치를 한 번 더 묻는다.
+    const q = await queryStatus();
+    if (q.status === 200 || q.status === 201) return await done(q);
+    return { ok: false, error: `업로드 완료 확인 실패(${q.status})` };
+  } finally {
+    await fh.close().catch(() => undefined);
+  }
+}
+
+/**
+ * 롱폼 유튜브 업로드(2026-10-22) — 재개형 업로드로 처음부터 공개, 끝나면 썸네일(thumbnails.set) 지정.
+ * 쇼츠와 달리 가로 영상은 API 썸네일이 그대로 커버가 된다(oardefault 판정·비공개 전환 복구 없음).
+ * 명시 실패 반환 — 사람이 누른 발행이라 실패 사유를 그대로 돌려준다. 썸네일 실패는 영상과 별개(thumbnailError).
+ */
+export async function uploadLongformToYoutube(opts: {
+  slug: string; videoPath: string; title: string; description: string; tags: string[];
+  thumbnailPath?: string; signal?: AbortSignal;
+  onProgress?: (sent: number, total: number) => void;
+  /** 테스트용 주입 — 기본은 전역 fetch·16MiB 청크. */
+  fetchImpl?: FetchLike; chunkBytes?: number; retryDelaysMs?: number[];
+}): Promise<YtUploadResult> {
+  try {
+    const clientId = getSecret('YOUTUBE_OAUTH_CLIENT_ID') ?? '';
+    const clientSecret = getSecret('YOUTUBE_OAUTH_CLIENT_SECRET') ?? '';
+    if (!clientId || !clientSecret) return { ok: false, error: '유튜브 OAuth 클라이언트 미설정 — 키 탭에서 입력하세요' };
+    const { refreshToken } = getYoutubeAccount(opts.slug);
+    if (!refreshToken) return { ok: false, error: '유튜브 채널 미연결 — 채널 연결을 먼저 하세요' };
+    if (!fs.existsSync(opts.videoPath)) return { ok: false, error: '영상 파일 없음' };
+    const tokenSignal = (): AbortSignal => (opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000));
+    const fresh = (): Promise<string> => refreshAccessToken(clientId, clientSecret, refreshToken, tokenSignal());
+    const access = await fresh();
+    const up = await resumableUpload({
+      access, videoPath: opts.videoPath, meta: buildLongformMeta(opts.title, opts.description, opts.tags),
+      signal: opts.signal, onProgress: opts.onProgress, refreshAccess: fresh,
+      fetchImpl: opts.fetchImpl, chunkBytes: opts.chunkBytes, retryDelaysMs: opts.retryDelaysMs,
+    });
+    if (!up.ok) return { ok: false, error: up.error };
+    const id = up.videoId;
+    // 업로드가 길어 처음 토큰이 만료됐을 수 있다 — 썸네일은 새 토큰으로(실패하면 처음 토큰으로 시도).
+    const thumbAccess = await fresh().catch(() => access);
+    const tr = await postThumbnail(thumbAccess, id, opts.thumbnailPath, tokenSignal());
+    const thumbnailError = !tr ? undefined
+      : tr.error !== undefined ? `썸네일 지정 실패(${tr.error}) — 유튜브 스튜디오에서 썸네일을 직접 올리세요`
+        : `썸네일 지정 거절(사유 ${tr.reason}) — 유튜브 스튜디오에서 썸네일을 직접 올리세요`;
+    return { ok: true, videoId: id, url: `https://www.youtube.com/watch?v=${id}`, thumbnailError };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message.slice(0, 120) : String(e) };
+  }
 }
 
 const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((resolve, reject) => {

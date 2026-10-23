@@ -1,0 +1,68 @@
+{
+  "id": "persimmon",
+  "nameKo": "감나무",
+  "latin": "Diospyros kaki",
+  "sources": [
+    "국가생물종지식정보시스템 감나무 형태 기술",
+    "보관소 감나무 실촬영 media_566818441e·media_9bcf76942a·media_57e7747031·media_0372ccb979 프레임 대조(2026-10-23)",
+    "잎꼴 B4(2026-10-23): 넓은 타원~도란형, 가장 넓은 자리 가운데~조금 위, 밑 둥긂, 짧고 갑자기 빠지는 끝, 길이:폭 ≈ 1.6~1.8 — 실촬영 media_57e7747031 대조"
+  ],
+  "habit": {
+    "form": "round",
+    "branchAngle": 42,
+    "apical": 0.55,
+    "crownWH": 1.08,
+    "heightM": [
+      6,
+      14
+    ],
+    "bark": "blocky"
+  },
+  "leaf": {
+    "shape": "elliptic",
+    "margin": "entire",
+    "venation": "pinnate",
+    "arrangement": "alternate",
+    "widthRatio": 0.6,
+    "tip": "acuminate",
+    "base": "rounded",
+    "petiole": 0.1,
+    "sizeCm": [
+      7,
+      17
+    ],
+    "veins": 6,
+    "glossy": true,
+    "droop": 0.45,
+    "peak": 0.55
+  },
+  "flower": {
+    "petals": 4,
+    "shape": "urceolate",
+    "calyx": "large",
+    "stamens": "hidden",
+    "inflorescence": "solitary",
+    "position": "axil",
+    "sizeCm": 1.6,
+    "months": [
+      5,
+      6
+    ],
+    "nodding": true
+  },
+  "fruit": {
+    "type": "persimmon",
+    "ratio": 0.82,
+    "sizeCm": [
+      5,
+      8
+    ],
+    "bearing": "single",
+    "months": [
+      10,
+      11
+    ]
+  },
+  "leafOutMonth": 4,
+  "leafFallMonth": 11
+}

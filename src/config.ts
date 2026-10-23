@@ -409,6 +409,27 @@ export interface Config {
   readonly janitorKeepDays: number;
   readonly janitorStaleDays: number;
   readonly janitorTrashDays: number;
+  /** 롱폼 매주 제작(2026-10-22) — 스위치(기본 off: 첫 편을 사장님이 보고 켠다) · 시작 시각 "HH:MM" · 요일(0=일~6=토, JS getDay). 기본 월 00:00 = 일요일 24:00. */
+  readonly longformWeekly: boolean;
+  readonly longformTime: string;
+  readonly longformWeekday: number;
+  /** 롱폼 문장 그림 장면 단계(2026-10-22) — 동시 묶음(세션) 수 · 편당 에이전트 비용 상한(USD, 넘으면 새 묶음을 안 띄운다) · 세션 최대 턴 · 묶음 시간 한도(분). */
+  readonly longformSceneConcurrency: number;
+  readonly longformSceneBudgetUsd: number;
+  readonly longformSceneMaxTurns: number;
+  readonly longformSceneTimeoutMin: number;
+  /** 롱폼 완성 장면 검토(2026-10-23) — 리뷰어(정하람)가 장면 스틸을 보고 다시 그릴 장면(최대 10개)을 고르면 디자이너가 한 묶음으로 다시 그린다. 실패해도 그대로 진행(fail-open). */
+  readonly longformReview: boolean;
+  /** 롱폼 렌더 crf(2026-10-23) — 숏폼 18 그대로면 10분 410MB. 연필 선화·종이 바탕이라 22 에서 눈으로 차이가 없다(유튜브가 어차피 재인코딩). */
+  readonly longformCrf: number;
+  /**
+   * 롱폼 화면 꼴(2026-10-23 사장님 결정) — full = 전체 화면 모션그래픽 + 실촬영은 장면 안 끼움 카드(기본), panel = 종전 왼쪽 실촬영 + 오른쪽 그림 칸.
+   * 스타일(전체 화면만) — B = 연필 선화 + 포인트 색 하나(기본), A = 세밀화 + 원예 도해.
+   */
+  readonly longformLayout: 'full' | 'panel';
+  readonly longformStyle: 'A' | 'B';
+  /** 전체 화면 롱폼 진행자 '비온이'(2026-10-23 견본, LONGFORM_PRESENTER) — 왼쪽 아래 화분 마스코트가 낭독에 맞춰 입을 움직이고 몸짓한다. 기본 꺼짐. */
+  readonly longformPresenter: boolean;
   /** 발행 후 성과 측정까지 대기일 — 네이버 트래픽이 축적될 시간(콜드스타트 지연). 이 창 도달 전 piece 는 측정 안 함. */
   readonly performanceWindowDays: number;
   /** 주입 지식(injected.md) 반영 한도(자 수) — 에이전트 매 런 시스템프롬프트에 들어가는 양. 초과분은 최신 우선(tail)로 잘림. */
@@ -696,6 +717,18 @@ export const CONFIG: Config = {
   janitorKeepDays: Math.max(1, envInt('JANITOR_KEEP_DAYS', 14)),
   janitorStaleDays: Math.max(7, envInt('JANITOR_STALE_DAYS', 30)),
   janitorTrashDays: Math.max(1, envInt('JANITOR_TRASH_DAYS', 7)),
+  longformWeekly: envBool('LONGFORM_WEEKLY', false),
+  longformTime: env('LONGFORM_TIME', '00:00').trim(),
+  longformWeekday: Math.min(6, Math.max(0, envInt('LONGFORM_WEEKDAY', 1))),
+  longformSceneConcurrency: Math.min(6, Math.max(1, envInt('LONGFORM_SCENE_CONCURRENCY', 3))),
+  longformSceneBudgetUsd: Math.max(0, envFloat('LONGFORM_SCENE_BUDGET_USD', 60)),
+  longformSceneMaxTurns: Math.max(20, envInt('LONGFORM_SCENE_MAX_TURNS', 90)),
+  longformSceneTimeoutMin: Math.max(5, envInt('LONGFORM_SCENE_TIMEOUT_MIN', 40)),
+  longformReview: envBool('LONGFORM_REVIEW', true),
+  longformCrf: Math.min(30, Math.max(16, envInt('LONGFORM_CRF', 22))),
+  longformLayout: env('LONGFORM_LAYOUT', 'full').trim().toLowerCase() === 'panel' ? 'panel' : 'full',
+  longformStyle: env('LONGFORM_STYLE', 'B').trim().toUpperCase() === 'A' ? 'A' : 'B',
+  longformPresenter: envBool('LONGFORM_PRESENTER', false),
   performanceWindowDays: Math.max(0, envInt('PERFORMANCE_WINDOW_DAYS', 14)),
   injectedKnowledgeCap: Math.max(500, envInt('INJECTED_KNOWLEDGE_CAP', 10000)),
   topicDemandGate: envBool('TOPIC_DEMAND_GATE', true),

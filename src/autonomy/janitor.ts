@@ -15,6 +15,8 @@
  *  3) 미발행 staleDays 이상 쇼츠(ready·error): 버린 편으로 보고 색인에서 빼고 폴더는 휴지통으로(사용자 확정 "30일 넘은 쇼츠 버린 것").
  *  4) 글과 연결 안 된 세션 staleDays 이상: 통째로 휴지통(사용자 확정 "지워도 됨").
  *  5) 발행 끝난 쇼츠의 final.mp4 → preview.mp4 교체(shortsArchive 정책)를 여기서도 돈다 — 채널 분리 뒤 조건이 안 맞아 멈춰 있던 것.
+ *  6) 롱폼(2026-10-22): 렌더 잔여(remotion/bundle·public)·스틸·장면 에이전트 작업물(scenes/work·stills·.render)은 항상,
+ *     유튜브 발행 keepDays 뒤엔 낭독(audio)·클립(clips)·그림(mg·scenes)·remotion·remotion-entry 폴더. final.mp4·thumbnail.jpg·script.json·timeline.json·subtitles.srt·youtube.txt·sources.md·기록 json 은 남긴다. 제작 중인 편은 건너뛴다.
  *
  * 남기는 것: 발행 편의 미리보기 영상·슬라이드·썸네일·대본·기록(json/srt/txt), 보관소 원본(data/media), 성과 시계열.
  * 진행 중인 런·생성 중인 편은 건드리지 않는다. 전 구간 fail-open — 한 항목이 실패해도 나머지는 계속한다.
@@ -33,6 +35,8 @@ export interface JanitorShort {
 }
 export interface JanitorCard { id: string; stage: string; igMediaId?: string; fbPostId?: string; metaPublishedTs?: string; createdTs: string; updatedTs?: string }
 export interface JanitorPiece { id: string; runId?: string; publishedTs?: string; publishedUrl?: string }
+/** 롱폼 레코드(2026-10-22) — dir 은 data/longform/ 기준 폴더 이름. */
+export interface JanitorLongform { id: string; dir: string; stage: string; youtubeId?: string; youtubeTs?: string }
 
 export interface JanitorDeps {
   dataDir: string;
@@ -48,6 +52,9 @@ export interface JanitorDeps {
   archiveShort: (id: string) => Promise<number>;
   /** 미리보기·스틸 같은 작업 산출 폴더(예: out/) — keepDays 지난 항목은 휴지통으로. 코드가 읽지 않는 스크래치다(2026-09-10). */
   scratchDirs?: string[];
+  /** 롱폼 레코드(없으면 롱폼 정리 안 함) · 지금 만드는 편인가. */
+  longform?: () => JanitorLongform[];
+  isLongformRunning?: (id: string) => boolean;
   log?: (m: string) => void;
 }
 
@@ -116,6 +123,19 @@ export function shortPruneTargets(published: boolean, publishedAgeDays: number |
   if (published && publishedAgeDays !== null && publishedAgeDays >= keepDays) {
     out.push('scenes', 'scenes-retry', 'revise-imgs', 'segments', 'remotion', 'clips/*.mp4', 'motion-*', 'pilot-*', 'final.basic.mp4');
   }
+  return out;
+}
+
+/**
+ * 롱폼 폴더에서 치울 항목(순수, 2026-10-22). 렌더 잔여·스틸은 항상(렌더할 때마다 다시 만든다), 유튜브 발행 keepDays 뒤엔
+ * 다시 렌더할 재료(낭독·클립·그림 작업물·remotion). 완성 영상·썸네일·대본·타임라인·자막·올릴 글·원문은 대상이 아니다.
+ */
+export function longformPruneTargets(published: boolean, publishedAgeDays: number | null, keepDays: number): string[] {
+  // 장면 에이전트 작업물(scenes/work: agent.jsonl·미리보기 PNG, scenes/stills·.render)은 장면을 다 만든 뒤엔 안 쓴다 — 항상.
+  // 전체 화면 렌더(2026-10-23 기본값)의 번들·스테이징·대조표 스틸(remotion-full/bundle·public·stills)도 렌더할 때마다 다시 만든다 — 항상.
+  // scenes/sNNN.tsx·registry·remotion-entry(-full)·실물 대조용 사진(refs)은 다시 렌더·다시 그릴 때 필요해 발행 뒤에만.
+  const out = ['remotion/bundle', 'remotion/public', 'stills', 'scenes/work', 'scenes/stills', 'scenes/.render', 'remotion-full/bundle', 'remotion-full/public', 'remotion-full/stills'];
+  if (published && publishedAgeDays !== null && publishedAgeDays >= keepDays) out.push('audio', 'clips', 'mg', 'scenes', 'remotion', 'remotion-entry', 'remotion-entry-full', 'remotion-full', 'refs');
   return out;
 }
 
@@ -230,6 +250,15 @@ export async function runJanitor(deps: JanitorDeps, opts: JanitorOpts = {}): Pro
     const published = !!(c.igMediaId || c.fbPostId);
     const age = daysSince(c.metaPublishedTs || (published ? c.updatedTs : undefined), now);
     applyTargets(path.join(cardsRoot, c.id), c.id, cardPruneTargets(published, age, keepDays), 'cardnews-intermediates');
+  }
+
+  // ── 롱폼(2026-10-22) — 색인에 있는 편만. 제작 중(producing·지금 만드는 편)은 건드리지 않는다.
+  const longformRoot = path.join(deps.dataDir, 'longform');
+  for (const lf of deps.longform?.() ?? []) {
+    if (lf.stage === 'producing' || deps.isLongformRunning?.(lf.id)) continue;
+    if (!lf.dir || lf.dir !== path.basename(lf.dir) || lf.dir === '.' || lf.dir === '..') continue; // 폴더 밖으로 나가는 이름은 거른다
+    const published = !!(lf.youtubeId ?? '').trim();
+    applyTargets(path.join(longformRoot, lf.dir), lf.dir, longformPruneTargets(published, daysSince(lf.youtubeTs, now), keepDays), 'longform-intermediates');
   }
 
   // ── 블로그 세션

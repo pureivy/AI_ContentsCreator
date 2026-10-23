@@ -259,6 +259,32 @@ async function sendTelegramPhotosOnce(files: string[], captionHtml: string, mime
   }
 }
 
+/**
+ * 사진 한 장 + 캡션(HTML) + 인라인 버튼(2026-10-22 롱폼) — sendTelegramPhotos 는 앨범용이라 버튼을 못 단다.
+ * 롱폼은 영상이 1GB 라 텔레그램(50MB)으로 못 보내서, 썸네일 사진에 발행 버튼을 붙인다. 실패하면 false(호출측이 글자로 폴백).
+ */
+export async function sendTelegramPhoto(file: string, captionHtml: string, buttons?: TgButton[][]): Promise<boolean> {
+  const tg = telegramCreds();
+  if (!tg) return false;
+  try {
+    if (!fs.existsSync(file)) return false;
+    const fd = new FormData();
+    fd.append('chat_id', tg.chatId);
+    fd.append('caption', captionHtml.slice(0, 1000));
+    fd.append('parse_mode', 'HTML');
+    if (buttons?.length) fd.append('reply_markup', JSON.stringify({ inline_keyboard: buttons }));
+    fd.append('photo', await fileBlob(file, 'image/jpeg'), path.basename(file));
+    const r = await fetch(`${TG_API}${encodeURIComponent(tg.token)}/sendPhoto`, {
+      method: 'POST', body: fd, signal: AbortSignal.timeout(60_000),
+    });
+    if (!r.ok) await logTgFailure('sendPhoto', r);
+    return r.ok;
+  } catch (e) {
+    logTgError('sendPhoto', e);
+    return false;
+  }
+}
+
 /** 텔레그램 봇 업로드 한도(50MB) — 초과 영상은 호출측이 텍스트로 폴백. */
 export const TELEGRAM_VIDEO_MAX_BYTES = 49 * 1024 * 1024;
 
