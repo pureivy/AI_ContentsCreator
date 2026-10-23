@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { COHERE_ANCHORS, coherenceLlm, evaluateTopics, fmtViews, rankPieces, selectCoherentTopic, selectTopic, shortViewsOf, titleSimilarity, TOPIC_COOLDOWN_DAYS, type TopicDeps } from './topic';
+import { COHERE_ANCHORS, coherenceLlm, coherencePrompt, evaluateTopics, fmtViews, plantMonths, rankPieces, SALES_MULT, SALES_SEASON_MULT, SEASON_MULT, seasonMonthsOf, seasonPhase, selectCoherentTopic, selectTopic, SHORT_TARGET_MINUTES, shortViewsOf, titleSimilarity, TOPIC_COOLDOWN_DAYS, v2Score, V2_MIN_DAYS, type TopicDeps } from './topic';
 
 const NOW = new Date('2026-10-26T00:00:00+09:00');
 const ago = (days: number) => new Date(NOW.getTime() - days * 86_400_000).toISOString();
@@ -148,5 +148,110 @@ describe('selectCoherentTopic — LLM 묶음 일관성(가짜 LLM)', () => {
     expect(pick).toEqual({ theme: '감나무 묘목', pieceIds: ['a4', 'a5'], why: 'w' });
     expect((raw.mock.calls[0] as unknown[])[0]).toBe('std-model');
     expect(String((raw.mock.calls[0] as unknown[])[2])).toContain('a2 | 하스카프베리 묘목 라벨 확인');
+  });
+});
+
+describe('v2 점수(2026-10-23) — 블로그 하루 조회 × 제철 앞당김 × 판매', () => {
+  const SUBJ = [{ term: '월동', months: [11, 12, 1, 2] }, { term: '봄 식재', months: [2, 3, 4] }, { term: '가을 식재', months: [9, 10, 11] }];
+  const base = { title: '감나무 거름 주기', topic: 'care', species: '감나무', blogViews: 70 };
+  const ctx = { seasonalSubjects: [] as typeof SUBJ, now: NOW };
+
+  it(`하루 조회 — 경과일 하한 ${V2_MIN_DAYS}일(갓 발행 글이 튀지 않게), 잰 때가 있으면 그때까지`, () => {
+    expect(v2Score({ ...base, publishedTs: ago(2) }, ctx).perDay).toBe(10); // 70 / 7
+    expect(v2Score({ ...base, publishedTs: ago(70) }, ctx).perDay).toBeCloseTo(1);
+    expect(v2Score({ ...base, publishedTs: ago(70), measuredAt: ago(35) }, ctx).perDay).toBeCloseTo(2);
+    expect(v2Score(base, ctx).ageDays).toBe(30); // 발행일 모름 → 30일로 본다
+  });
+
+  it('작업 철 — 제목(시기 소재·N월·계절) 먼저, 없으면 작업 달력, 모르면 null', () => {
+    expect(seasonMonthsOf('감나무 가지치기, 잎이 진 뒤에', 'prune', SUBJ)).toEqual({ months: [12, 1, 2], what: '전정' });
+    expect(seasonMonthsOf('배롱나무 겨울전정', 'prune', SUBJ)).toEqual({ months: [12, 1, 2], what: '겨울 전정' });
+    expect(seasonMonthsOf('블루베리 전정, 9월엔 새 줄기만', 'prune', SUBJ)).toEqual({ months: [9], what: '9월 전정' });
+    expect(seasonMonthsOf('무화과 월동 준비', 'care', SUBJ)!.what).toBe('월동');
+    expect(seasonMonthsOf('사과나무 묘목 심는 깊이', 'plant', SUBJ)).toEqual({ months: [2, 3, 4, 9, 10, 11], what: '심기' });
+    expect(seasonMonthsOf('감나무 품종, 겨울 전에 꼭 볼 것', 'plant', SUBJ)!.what).toBe('심기'); // '겨울 전에' = 지금
+    expect(seasonMonthsOf('참나무 구별법', 'lore', SUBJ)).toBeNull();
+    expect(plantMonths(SUBJ)).toEqual([2, 3, 4, 9, 10, 11]);
+  });
+
+  it('철 단계 — 이번 달 in, 다음 철 첫날까지 14~42일 lead, 14일 미만 soon, 그 너머 none', () => {
+    expect(seasonPhase([12, 1, 2], NOW)).toEqual({ phase: 'lead', days: 36 });
+    expect(seasonPhase([11], NOW).phase).toBe('soon');
+    expect(seasonPhase([10, 11], NOW).phase).toBe('in');
+    expect(seasonPhase([3, 4], NOW).phase).toBe('none');
+  });
+
+  it('제철 가점 — 겨울 전정은 5주 뒤 lead, 지금 철은 살짝, 달을 모르면 수종 검색 시즌이 높을 때만 살짝, 아니면 중립', () => {
+    const lead = v2Score({ ...base, title: '감나무 가지치기', topic: 'prune', publishedTs: ago(70) }, ctx);
+    expect(lead.season).toEqual({ phase: 'lead', mult: SEASON_MULT.lead, label: '5주 뒤 전정 철' });
+    expect(lead.score).toBeCloseTo(SEASON_MULT.lead);
+    expect(v2Score({ ...base, title: '감나무 10월 거름', publishedTs: ago(70) }, ctx).season.mult).toBe(SEASON_MULT.in);
+    expect(v2Score({ ...base, topic: 'lore', title: '감나무 이야기' }, { ...ctx, seasonOf: () => 0.9 }).season).toMatchObject({ phase: 'in', label: '감나무 검색 철' });
+    expect(v2Score({ ...base, topic: 'lore', title: '감나무 이야기' }, { ...ctx, seasonOf: () => 0.3 }).season.mult).toBe(1);
+  });
+
+  it('판매 수종 가점 — 품종표 수종만, 심기(구매) 철이 지금·곧이면 더 크게, 표 밖은 중립', () => {
+    const sales = new Set(['감나무']);
+    expect(v2Score(base, { ...ctx, sales, seasonalSubjects: SUBJ }).sales).toEqual({ mult: SALES_SEASON_MULT, label: '판매 수종·심기 철' });
+    expect(v2Score(base, { ...ctx, sales, seasonalSubjects: [{ term: '봄 식재', months: [3, 4] }] }).sales).toEqual({ mult: SALES_MULT, label: '판매 수종' });
+    expect(v2Score({ ...base, species: '모과나무' }, { ...ctx, sales, seasonalSubjects: SUBJ }).sales.mult).toBe(1);
+  });
+
+  // 블로그 누적은 큰데 오래된 글(p1) vs 누적은 작아도 최근에 하루 조회가 큰 글(p2) — 숏폼은 p1 이 훨씬 크다.
+  const v2deps = (over: Partial<TopicDeps> = {}) => deps({
+    mode: 'v2',
+    pieces: () => [
+      piece('p1', '사과나무 묘목 심는 깊이', { publishedTs: ago(100) }),
+      piece('p2', '배나무 묘목 심을 자리', { publishedTs: ago(10) }),
+      piece('p3', '자두나무 묘목 고르는 법', { publishedTs: ago(10) }),
+      piece('p4', '매실나무 묘목 옮겨심기', { publishedTs: ago(10) }),
+    ],
+    blogViews: (id) => ({ p1: 500, p2: 200, p3: 100, p4: 100 } as Record<string, number>)[id] ?? 0,
+    shorts: () => [{ id: 's1', sourcePieceId: 'p1', brand: 'b' }, { id: 's4', sourcePieceId: 'p4', brand: 'b' }],
+    shortViews: (id) => ({ s1: 50_000, s4: 900 } as Record<string, number>)[id] ?? 0,
+    ...over,
+  });
+
+  it('순위 — 하루 조회가 이긴다(숏폼 5만은 무시), 숏폼은 같은 점수일 때만 순서를 정한다', () => {
+    expect(rankPieces(deps()).map((p) => p.id)[0]).toBe('p2'); // views 모드(종전)는 그대로
+    const r = rankPieces(v2deps());
+    expect(r.map((p) => p.id)).toEqual(['p2', 'p4', 'p3', 'p1']); // p3·p4 같은 점수 → 숏폼 많은 p4 먼저
+    expect(r[0]!.v2!.perDay).toBe(20);
+  });
+
+  it('깊이 — v2 는 기둥 포함 3편이면 10분 편, 이유에 점수 근거', () => {
+    const t = selectTopic(v2deps({ sales: new Set(['배나무']), seasonalSubjects: SUBJ }))!;
+    expect(t.anchor.id).toBe('p2');
+    expect(t.targetMinutes).toBe(10);
+    expect(t.pieces.length).toBeGreaterThanOrEqual(3);
+    expect(t.reason).toContain("v2 점수 1위 '배나무 묘목 심을 자리'(블로그 하루 20회 · 지금 심기 철 · 판매 수종·심기 철)");
+  });
+
+  it('깊이 부족 — 3편이 안 되면 views 는 null, v2 는 1~2편 짧은 편(목표 6분)으로', () => {
+    const two = { pieces: () => [piece('a', '사과나무 묘목 심는 깊이', { publishedTs: ago(30) }), piece('b', '배나무 묘목 심을 자리', { publishedTs: ago(30) })] };
+    expect(selectTopic(deps(two))).toBeNull();
+    const t = selectTopic(v2deps(two))!;
+    expect(t.targetMinutes).toBe(SHORT_TARGET_MINUTES);
+    expect(t.pieces.map((p) => p.id)).toEqual(['a', 'b']);
+    expect(t.reason).toContain(`짧은 편(목표 ${SHORT_TARGET_MINUTES}분)`);
+    // 기존 보호(같은 키·쓴 글)는 짧은 편에도 — 둘 다 막히면 null.
+    const used = { records: () => [{ dir: 'd', createdTs: ago(60), topicKey: 'plant:사과나무', sourcePieceIds: ['b'], title: 'x', stage: 'ready' as const }] };
+    expect(selectTopic(v2deps({ ...two, ...used }))).toBeNull();
+  });
+
+  it('LLM 묶음(v2) — 관련 2편이면 10분 편, 지시문도 2편부터; 1편뿐이면 그 1편과 짧은 편', async () => {
+    const two = vi.fn(async (o: { candidates: Array<{ id: string }>; minRelated?: number }) => ({ theme: '묘목 심기', pieceIds: o.candidates.slice(0, 2).map((c) => c.id), why: 'w' }));
+    const full = (await selectCoherentTopic(v2deps(), two))!;
+    expect(two.mock.calls[0]![0].minRelated).toBe(2);
+    expect(full.pieces).toHaveLength(3);
+    expect(full.targetMinutes).toBe(10);
+    const one = vi.fn(async (o: { candidates: Array<{ id: string }> }) => ({ theme: '묘목', pieceIds: [o.candidates[0]!.id], why: '' }));
+    const short = (await selectCoherentTopic(v2deps(), one))!;
+    expect(short.targetMinutes).toBe(SHORT_TARGET_MINUTES);
+    expect(short.anchor.id).toBe('p2');
+    expect(short.pieces).toHaveLength(2);
+    expect(short.reason).toContain('짧은 편');
+    expect(coherencePrompt(short.anchor, short.pieces, 2).user).toContain('후보에서 2~5편 골라라');
+    expect(coherencePrompt(short.anchor, short.pieces).user).toContain('후보에서 3~5편 골라라'); // views 지시문은 종전 그대로
   });
 });

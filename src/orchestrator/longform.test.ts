@@ -288,6 +288,21 @@ export default function Scene({ durationInFrames, footage }: FullSceneProps) {
     expect(notes[1]![1]).toContain('사실 확인 단계');
   });
 
+  it('짧은 편(주제 v2 targetMinutes 6) — 대본은 6분 기준으로 묻고, 사실 확인 뒤 하한도 같은 비율(약 2,000자 대본이 통과)', async () => {
+    const shortJSON = () => ({ ...writerJSON(), chapters: writerJSON().chapters.slice(0, 5).map((c) => ({ ...c, segments: c.segments.slice(0, 11) })) });
+    const short = setup({ selectTopic: () => ({ ...TOPIC, targetMinutes: 6 }), llmJSON: vi.fn(async () => shortJSON()) as unknown as LlmJSON });
+    const r = await runLongformEpisode({ brand: 'b', deps: short.deps });
+    expect(r.ok).toBe(true);
+    const call = (short.deps.llmJSON as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(String(call[1])).toContain('6분짜리');
+    expect(String(call[2])).toContain('장 4~6개');
+    // 같은 대본이 10분 편이면 하한(2,500자)에 걸린다.
+    const full = setup({ llmJSON: vi.fn(async () => shortJSON()) as unknown as LlmJSON });
+    const r2 = await runLongformEpisode({ brand: 'b', deps: full.deps });
+    expect(r2.ok).toBe(false);
+    expect(full.store.get(r2.id)!.error).toContain('짧아짐');
+  });
+
   it('고를 주제가 없으면 레코드를 만들지 않고 알린다', async () => {
     const { store, deps, notifyFail } = setup({ selectTopic: () => null });
     const r = await runLongformEpisode({ brand: 'b', deps });

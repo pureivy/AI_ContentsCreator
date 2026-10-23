@@ -24,6 +24,15 @@ const TITLE_MAX = 40;
 const CHAPTER_TITLE_MAX = 20;
 const WRITER_RETRIES = 2;
 
+/** 분량 기준(2026-10-23 롱폼 주제 v2 짧은 편) — 목표 분 → 낭독 글자·장 수·세그먼트 수. 10분 이상이면 종전 상수 그대로. */
+export interface LengthSpec { minutes: number; target: number; min: number; max: number; chMin: number; chMax: number; segments: number }
+export function lengthSpec(minutes = 10): LengthSpec {
+  if (!(minutes < 10)) return { minutes: 10, target: TARGET_CHARS, min: CHARS_MIN, max: CHARS_MAX, chMin: 6, chMax: 8, segments: 95 };
+  const k = Math.max(3, minutes) / 10;
+  const r50 = (n: number) => Math.round((n * k) / 50) * 50;
+  return { minutes: Math.max(3, minutes), target: r50(TARGET_CHARS), min: r50(CHARS_MIN), max: r50(CHARS_MAX), chMin: 4, chMax: 6, segments: Math.round(95 * k) };
+}
+
 export type LlmJSON = <T>(model: string, system: string, user: string, opts: { maxOutputTokens?: number; signal?: AbortSignal }) => Promise<T | null>;
 export const defaultLlmJSON: LlmJSON = (model, system, user, opts) => microJSON(model, system, user, opts);
 
@@ -86,19 +95,19 @@ export function normalizeScript(raw: RawScript | null, ctx: { inventory: Record<
 }
 
 /** 분량·검사 문제(순수) — 다시 묻기 사유. 빈 배열 = 통과. */
-export function scriptProblems(s: LongformScript, sourceText: string): string[] {
+export function scriptProblems(s: LongformScript, sourceText: string, len: LengthSpec = lengthSpec()): string[] {
   const out: string[] = [];
   const chars = scriptChars(s);
-  if (chars < CHARS_MIN || chars > CHARS_MAX) out.push(`낭독 ${chars}자(공백 제외) — ${CHARS_MIN.toLocaleString()}~${CHARS_MAX.toLocaleString()}자(목표 ${TARGET_CHARS.toLocaleString()}자)로`);
-  if (s.chapters.length < 6 || s.chapters.length > 8) out.push(`장 ${s.chapters.length}개 — 6~8개로`);
+  if (chars < len.min || chars > len.max) out.push(`낭독 ${chars}자(공백 제외) — ${len.min.toLocaleString()}~${len.max.toLocaleString()}자(목표 ${len.target.toLocaleString()}자)로`);
+  if (s.chapters.length < len.chMin || s.chapters.length > len.chMax) out.push(`장 ${s.chapters.length}개 — ${len.chMin}~${len.chMax}개로`);
   if (!s.title || s.title === '롱폼') out.push('제목 없음');
   return [...out, ...validateScript(s, sourceText)];
 }
 
-function writerPrompt(o: { topicLabel: string; anchorTitle: string; theme?: string; sources: SourcePiece[]; inventory: Record<string, number>; month: number }): { system: string; user: string } {
+function writerPrompt(o: { topicLabel: string; anchorTitle: string; theme?: string; sources: SourcePiece[]; inventory: Record<string, number>; month: number }, len: LengthSpec = lengthSpec()): { system: string; user: string } {
   const inv = Object.entries(o.inventory).filter(([, s]) => s > 0).sort((a, b) => b[1] - a[1]).map(([sp, s]) => `- ${sp}: ${Math.round(s)}초`).join('\n');
   const system = [
-    '너는 나무 정원 채널의 10분짜리 가로 유튜브 영상 대본 작가다. 블로그 글 여러 편을 한 편의 다큐 내레이션으로 엮는다.',
+    `너는 나무 정원 채널의 ${len.minutes}분짜리 가로 유튜브 영상 대본 작가다. 블로그 글 여러 편을 한 편의 다큐 내레이션으로 엮는다.`,
     sharedGuidance(),
   ].join('\n\n');
   const user = `[이번 편]
@@ -112,10 +121,10 @@ ${o.sources.map((s, i) => `### 글 ${i + 1}: ${s.title}\n${s.body.slice(0, 7000)
 ${inv || '(없음)'}
 
 [대본 규칙]
-1. 낭독 합계 공백 제외 약 ${TARGET_CHARS.toLocaleString()}자(${CHARS_MIN.toLocaleString()}~${CHARS_MAX.toLocaleString()}자) — 낭독 6자/초라 10분이 된다. 세그먼트(문장) 약 95개.
+1. 낭독 합계 공백 제외 약 ${len.target.toLocaleString()}자(${len.min.toLocaleString()}~${len.max.toLocaleString()}자) — 낭독 6자/초라 ${len.minutes}분이 된다. 세그먼트(문장) 약 ${len.segments}개.
 2. 세그먼트 하나 = 한 문장, 공백 포함 ${SEGMENT_MAX}자 이하. 다큐 내레이션 존댓말(~습니다·~요). 화면 자막으로도 그대로 나간다.
 3. 사실·수치·월·시기는 원문 글에 있는 것만. 원문에 없는 월·날짜·숫자를 새로 만들지 마라. 원문 문장을 줄여 쓰고, 새 문장은 장 연결·도입·마무리만.
-4. 장 6~8개. 첫 장은 도입(무엇을 왜 보는지), 마지막 장은 정리. 장 id 는 영문 소문자(예: intro, outro, 수종 영문 이름). 장 title 은 화면 제목 ${CHAPTER_TITLE_MAX}자 이하, ytLabel 은 유튜브 챕터용 검색어 꼴 이름.
+4. 장 ${len.chMin}~${len.chMax}개. 첫 장은 도입(무엇을 왜 보는지), 마지막 장은 정리. 장 id 는 영문 소문자(예: intro, outro, 수종 영문 이름). 장 title 은 화면 제목 ${CHAPTER_TITLE_MAX}자 이하, ytLabel 은 유튜브 챕터용 검색어 꼴 이름.
 5. 수종 장(한 수종만 다루는 장)은 species 에 재고표의 수종 이름을 그대로 적는다. 재고표에 없는 수종은 수종 장을 만들지 마라(화면에 그 수종 영상이 없다). 여러 수종을 아우르는 일반 장은 species 를 빈 배열로.
 6. 문장이 특정 수종을 말하면 footage 에 그 수종(재고표 이름)을 적는다. 아니면 생략.
 7. "A가 아니라 B" 꼴은 대본 전체 3번 이하.
@@ -128,9 +137,11 @@ ${inv || '(없음)'}
 
 export interface WriteResult { script: LongformScript; attempts: number; problems: string[] }
 
-/** 대본 쓰기 — 분량(3,000~3,700자)·장 수·검사 문제가 있으면 문제를 짚어 다시 묻는다(최대 2번). 가장 문제가 적은 판을 돌려준다. */
+/** 대본 쓰기 — 분량(3,000~3,700자, targetMinutes 면 lengthSpec)·장 수·검사 문제가 있으면 문제를 짚어 다시 묻는다(최대 2번). 가장 문제가 적은 판을 돌려준다. */
 export async function writeScript(o: {
   topicLabel: string; anchorTitle: string; theme?: string; sources: SourcePiece[]; inventory: Record<string, number>; month: number;
+  /** 목표 길이(분) — 없으면 10분(주제 v2 짧은 편이면 6). */
+  targetMinutes?: number;
   llmJSON?: LlmJSON; model?: string; signal?: AbortSignal; log?: (m: string) => void;
 }): Promise<WriteResult> {
   const llm = o.llmJSON ?? defaultLlmJSON;
@@ -138,14 +149,15 @@ export async function writeScript(o: {
   const log = o.log ?? (() => {});
   const sourceText = o.sources.map((s) => s.body).join('\n\n');
   const ctx = { inventory: o.inventory, sourcePieceIds: o.sources.map((s) => s.pieceId), sourceText };
-  const { system, user } = writerPrompt(o);
+  const len = lengthSpec(o.targetMinutes);
+  const { system, user } = writerPrompt(o, len);
   let best: WriteResult | null = null;
   let ask = user;
   for (let attempt = 1; attempt <= 1 + WRITER_RETRIES; attempt++) {
     if (o.signal?.aborted) throw new Error('취소됨');
     const raw = await llm<RawScript>(model, system, ask, { maxOutputTokens: 16000, signal: o.signal });
     const script = normalizeScript(raw, ctx);
-    const problems = script.chapters.length ? scriptProblems(script, sourceText) : ['대본 JSON 없음'];
+    const problems = script.chapters.length ? scriptProblems(script, sourceText, len) : ['대본 JSON 없음'];
     log(`[대본] ${attempt}차 — 장 ${script.chapters.length} · 세그먼트 ${script.chapters.flatMap((c) => c.segments).length} · ${scriptChars(script)}자 · 문제 ${problems.length}`);
     if (script.chapters.length && (!best || problems.length < best.problems.length)) best = { script, attempts: attempt, problems };
     if (!problems.length) break;

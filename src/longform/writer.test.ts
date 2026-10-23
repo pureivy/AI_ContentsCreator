@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FactGateResult } from '../content/factGate';
-import { applyRevisions, CHARS_MIN, factCheckScript, normalizeScript, rewordForPronunciation, scriptProblems, segmentsForClaims, writeScript, type LlmJSON, type RawScript } from './writer';
+import { applyRevisions, CHARS_MAX, CHARS_MIN, factCheckScript, lengthSpec, TARGET_CHARS, normalizeScript, rewordForPronunciation, scriptProblems, segmentsForClaims, writeScript, type LlmJSON, type RawScript } from './writer';
 import { scriptChars, type LongformScript } from './script';
 
 const INV = { 사과나무: 40, 배나무: 12 };
@@ -59,6 +59,28 @@ describe('writeScript — 분량 밖이면 문제를 짚어 다시 묻는다', (
     const p = scriptProblems(normalizeScript(raw(4, 2, 30), ctx), SRC);
     expect(p.some((x) => x.includes('장 4개'))).toBe(true);
     expect(p.some((x) => x.includes('자(공백 제외)'))).toBe(true);
+  });
+});
+
+describe('목표 길이(롱폼 주제 v2 짧은 편, 2026-10-23)', () => {
+  it('lengthSpec — 10분은 종전 상수 그대로, 6분은 비율로 줄이고 장 4~6개', () => {
+    expect(lengthSpec()).toEqual({ minutes: 10, target: TARGET_CHARS, min: CHARS_MIN, max: CHARS_MAX, chMin: 6, chMax: 8, segments: 95 });
+    expect(lengthSpec(6)).toEqual({ minutes: 6, target: 2000, min: 1800, max: 2200, chMin: 4, chMax: 6, segments: 57 });
+  });
+  it('scriptProblems — 6분 기준이면 5장·약 2,000자가 통과, 10분 기준이면 걸린다', () => {
+    const s = normalizeScript(raw(5, 7, 58), ctx);
+    const lenProblem = (ps: string[]) => ps.filter((x) => x.includes('자(공백 제외)') || x.startsWith('장 '));
+    expect(lenProblem(scriptProblems(s, SRC, lengthSpec(6)))).toEqual([]);
+    expect(lenProblem(scriptProblems(s, SRC)).length).toBe(2);
+  });
+  it('writeScript(targetMinutes 6) — 지시문 길이·장 수가 6분 기준', async () => {
+    const calls: Array<{ system: string; user: string }> = [];
+    const llm = vi.fn(async (_m: string, system: string, user: string) => { calls.push({ system, user }); return raw(5, 7, 58) as never; }) as unknown as LlmJSON;
+    const r = await writeScript({ topicLabel: '묘목·심기', anchorTitle: '사과나무', sources: [{ pieceId: 'piece_a', title: 'a', body: SRC }], inventory: INV, month: 10, llmJSON: llm, targetMinutes: 6 });
+    expect(calls[0]!.system).toContain('6분짜리');
+    expect(calls[0]!.user).toContain('약 2,000자(1,800~2,200자)');
+    expect(calls[0]!.user).toContain('장 4~6개');
+    expect(r.problems.filter((x) => x.includes('자(공백 제외)') || x.startsWith('장 '))).toEqual([]);
   });
 });
 

@@ -237,7 +237,7 @@ async function produce(rec: LongformRecord, topic: TopicChoice, d: LongformDeps,
     const inventory = footageInventory(brandMedia);
     const w = await writeScript({
       topicLabel: topicLabel(topic.topic), anchorTitle: topic.anchor.title, ...(topic.theme ? { theme: topic.theme } : {}), sources, inventory, month: d.now().getMonth() + 1,
-      llmJSON: writerLlm, signal, log: d.log,
+      llmJSON: writerLlm, signal, log: d.log, ...(topic.targetMinutes ? { targetMinutes: topic.targetMinutes } : {}),
     });
     let script: LongformScript = w.script;
     // 편 주인공 수종(2026-10-23) — 주제 기준 글 수종(재고 있으면) → 장 수종 최다. 일반 장 화면·끼움 카드는 이 수종만.
@@ -256,7 +256,9 @@ async function produce(rec: LongformRecord, topic: TopicChoice, d: LongformDeps,
     saveEpisodeScript(dir, script);
     fs.writeFileSync(path.join(dir, 'script.txt'), scriptText(script));
     if (fact.record.final.issues.length) throw new Error(`대본 검사 문제 ${fact.record.final.issues.length}건 — ${fact.record.final.issues.slice(0, 3).join(' / ')}`);
-    if (fact.record.final.chars < MIN_CHARS_AFTER_FACT) throw new Error(`사실 확인 뒤 대본이 ${fact.record.final.chars}자로 짧아짐(최소 ${MIN_CHARS_AFTER_FACT})`);
+    // 짧은 편(주제 v2, targetMinutes < 10)은 하한도 같은 비율로 — 6분 편이면 1,500자.
+    const minChars = Math.round(MIN_CHARS_AFTER_FACT * Math.min(1, (topic.targetMinutes ?? 10) / 10));
+    if (fact.record.final.chars < minChars) throw new Error(`사실 확인 뒤 대본이 ${fact.record.final.chars}자로 짧아짐(최소 ${minChars})`);
     abortCheck();
 
     // ── 낭독(발음 확인·바꿔 쓰기)

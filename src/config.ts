@@ -28,6 +28,8 @@ const envBool = (k: string, d: boolean): boolean => {
 const ROOT = path.resolve(env('GEPA_DATA_DIR', path.join(process.cwd(), 'data')));
 
 export type Termination = 'adaptive' | 'fixed';
+/** 롱폼 주제 순위 방식(LONGFORM_TOPIC_MODE). */
+export type TopicMode = 'views' | 'v2';
 
 export interface Config {
   // --- 서버 ---
@@ -430,6 +432,8 @@ export interface Config {
   readonly longformStyle: 'A' | 'B';
   /** 전체 화면 롱폼 진행자 '비온이'(2026-10-23 견본, LONGFORM_PRESENTER) — 왼쪽 아래 화분 마스코트가 낭독에 맞춰 입을 움직이고 몸짓한다. 기본 꺼짐. */
   readonly longformPresenter: boolean;
+  /** 롱폼 주제 순위(2026-10-23, LONGFORM_TOPIC_MODE) — views = 블로그+숏폼 조회 합산(종전), v2 = 블로그 하루 조회 × 제철 앞당김 × 판매 수종(longform/topic.ts). 비교 확인 전까지 기본 views. */
+  readonly longformTopicMode: TopicMode;
   /** 발행 후 성과 측정까지 대기일 — 네이버 트래픽이 축적될 시간(콜드스타트 지연). 이 창 도달 전 piece 는 측정 안 함. */
   readonly performanceWindowDays: number;
   /** 주입 지식(injected.md) 반영 한도(자 수) — 에이전트 매 런 시스템프롬프트에 들어가는 양. 초과분은 최신 우선(tail)로 잘림. */
@@ -729,6 +733,7 @@ export const CONFIG: Config = {
   longformLayout: env('LONGFORM_LAYOUT', 'full').trim().toLowerCase() === 'panel' ? 'panel' : 'full',
   longformStyle: env('LONGFORM_STYLE', 'B').trim().toUpperCase() === 'A' ? 'A' : 'B',
   longformPresenter: envBool('LONGFORM_PRESENTER', false),
+  longformTopicMode: env('LONGFORM_TOPIC_MODE', 'views').trim().toLowerCase() === 'v2' ? 'v2' : 'views',
   performanceWindowDays: Math.max(0, envInt('PERFORMANCE_WINDOW_DAYS', 14)),
   injectedKnowledgeCap: Math.max(500, envInt('INJECTED_KNOWLEDGE_CAP', 10000)),
   topicDemandGate: envBool('TOPIC_DEMAND_GATE', true),
