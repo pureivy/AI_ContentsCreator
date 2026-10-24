@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { sanitizeForTts, parseSayVoices } from './audio';
+import { heardScore } from '../longform/pron';
 
 describe('sanitizeForTts', () => {
   it('마크다운/링크/이모지를 제거하고 공백을 정리한다', () => {
@@ -10,6 +11,18 @@ describe('sanitizeForTts', () => {
     expect(out).toContain('굵게');
     expect(out).toContain('링크');
     expect(out).toContain('다음줄');
+  });
+
+  // 숫자 범위·단위(2026-10-25 대추나무 롱폼) — 물결이 마크다운 기호로 지워져 "10 15m" 로 읽혔다. 실측 6/6 "10에서 15미터".
+  it('숫자 범위는 "에서", 숫자 뒤 단위 기호는 한글로 — 문장 끝 물결·날짜 하이픈은 그대로', () => {
+    expect(sanitizeForTts('자료에는 10~15m까지, 흔히 5~8m 정도')).toBe('자료에는 10에서 15미터까지, 흔히 5에서 8미터 정도');
+    expect(sanitizeForTts('2~3시간뿐')).toBe('2에서 3시간뿐');
+    expect(sanitizeForTts('3월 중순~4월 중순')).toBe('3월 중순에서 4월 중순');
+    expect(sanitizeForTts('10m~15m, 깊이 30cm, 1.5m, 20%, 0∼5℃')).toBe('10미터에서 15미터, 깊이 30센티미터, 1.5미터, 20퍼센트, 0에서 5도');
+    expect(sanitizeForTts('좋아요~ 2026-10-25')).toBe('좋아요 2026-10-25');
+  });
+  it('heardScore 도 같은 표기로 맞춘다 — 고친 낭독이 원문(10~15m)과 다르다고 벌점받지 않게', () => {
+    expect(heardScore('10~15m까지 자랍니다', '10에서 15미터까지 자랍니다')).toBe(1);
   });
 
   it('maxLen 으로 길이를 자른다', () => {

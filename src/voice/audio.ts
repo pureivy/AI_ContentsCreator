@@ -38,9 +38,28 @@ export const audio = {
   },
 };
 
+/** 숫자 뒤 단위 기호 → 한글 읽기(긴 것 먼저 — mm 이 m 보다 앞). */
+const TTS_UNITS: Array<[RegExp, string]> = [
+  [/㎜|mm(?![A-Za-z])/g, '밀리미터'], [/㎝|cm(?![A-Za-z])/g, '센티미터'], [/㎞|km(?![A-Za-z])/g, '킬로미터'],
+  [/㎏|kg(?![A-Za-z])/g, '킬로그램'], [/㎖|ml(?![A-Za-z])/g, '밀리리터'], [/℃|°C(?![A-Za-z])/g, '도'],
+  [/m(?![A-Za-z])/g, '미터'], [/g(?![A-Za-z])/g, '그램'], [/%/g, '퍼센트'],
+];
+
+/**
+ * 숫자 범위·단위 낭독 표기(순수, 2026-10-25 대추나무 롱폼 사장님 제보) — "10~15m" 가 아래 마크다운 정리에서 물결이 지워져
+ * "10 15m" 로 들어가 "10신모니 PA"·"5b8m" 으로 읽혔다. 사장님 규칙: 5~10m = "오에서 십 미터".
+ * 숫자 바로 뒤 단위 기호는 한글로, 숫자 앞 물결(~∼～–)은 "에서"로. 문장 끝 물결(요~)은 숫자가 뒤따르지 않아 그대로. 자막·본문은 원문 유지.
+ */
+export function spellNumbersForTts(text: string): string {
+  let t = text;
+  for (const [re, ko] of TTS_UNITS) t = t.replace(new RegExp(`(\\d)\\s?(?:${re.source})`, 'g'), `$1${ko}`);
+  // 숫자(+단위) 뒤는 띄어 써도 범위, 한글 낱말(중순~4월) 뒤는 붙여 쓸 때만 — '좋아요~ 2026' 같은 말끝 물결은 그대로.
+  return t.replace(/(?<=\d[가-힣]*)\s*[~∼～–]\s*(?=\d)|(?<=[가-힣])[~∼～–](?=\d)/g, '에서 ');
+}
+
 /** TTS 낭독용 텍스트 정제: 마크다운/링크/이모지 제거, 공백 정리, 길이 상한. */
 export function sanitizeForTts(text: string, maxLen = 4000): string {
-  let t = text ?? '';
+  let t = spellNumbersForTts(text ?? '');
   t = t.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');           // [라벨](url) -> 라벨
   t = t.replace(/[*_`#>~|]/g, ' ');                          // 마크다운 기호
   t = t.replace(/https?:\/\/\S+/g, ' ');                     // 남은 URL
