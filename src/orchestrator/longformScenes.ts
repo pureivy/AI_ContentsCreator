@@ -11,6 +11,8 @@
  *     'Scene' 컴포지션으로 20·55·90% 스틸(던지면 탈락) → 최종 등록표. 탈락·누락 장면은 장면 없이(실촬영+자막) — report.json 에 사유.
  *  4) 55% 스틸 바둑판(scenes/contact.jpg — 사장님 검토용, 텔레그램 둘째 사진) · timeline.json·script.json 에 scene 키.
  * 비용: CLI 가 보고한 total_cost_usd 합. 상한(LONGFORM_SCENE_BUDGET_USD)을 넘으면 새 묶음을 띄우지 않는다(남은 장면은 폴백).
+ * 구독 세션 한도(2026-10-25 대추나무 편 — 새벽 b13~b16 이 "hit your session limit · resets 3am" 로 죽어 7·8장 24장면이 비었다):
+ *   한 묶음이 한도에 걸리면 남은 묶음을 띄우지 않고, 풀리는 시각까지 기다렸다가(최대 LIMIT_WAIT_MAX_MS) 빠진 장면만 다시 그린다.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -50,7 +52,35 @@ export interface SceneDeps {
   activity?: (line: string) => void;
   /** 완성 장면 검토(정하람, LONGFORM_REVIEW) — 다시 그릴 장면을 고르면 한 묶음(r01)으로 다시 그린다. 없으면 검토 없음. */
   review?: SceneReviewFn;
+  /** 세션 한도 대기(테스트가 바꿔 끼운다). 없으면 실제 시계·setTimeout. */
+  now?: () => Date;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
+
+/** 한도가 풀린 뒤 여유 · 한 번에 기다리는 최대 · 기다렸다 다시 그리는 횟수. */
+export const LIMIT_GRACE_MS = 3 * 60_000;
+export const LIMIT_WAIT_MAX_MS = 6 * 3_600_000;
+export const LIMIT_ROUNDS = 2;
+
+/**
+ * 구독 세션 한도 문구 → 풀리는 시각(순수). 한도 문구가 아니면 null.
+ * "You've hit your session limit · resets 3am (Asia/Seoul)" — 시각은 서버 로컬(서울)로 보고 다음 그 시각. 시각을 못 읽으면 한 시간 뒤.
+ */
+export function sessionLimitReset(tail: string | undefined, now: Date): Date | null {
+  if (!tail || !/hit your (?:\w+ )?limit|usage limit reached/i.test(tail)) return null;
+  const m = /resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i.exec(tail);
+  if (!m) return new Date(now.getTime() + 3_600_000);
+  const h = (Number(m[1]) % 12) + (m[3]!.toLowerCase() === 'pm' ? 12 : 0);
+  const at = new Date(now); at.setHours(h, Number(m[2] ?? 0), 0, 0);
+  if (at.getTime() <= now.getTime()) at.setDate(at.getDate() + 1);
+  return at;
+}
+
+const sleepAbortable = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((res) => {
+  const t = setTimeout(done, ms);
+  function done() { clearTimeout(t); signal?.removeEventListener('abort', done); res(); }
+  signal?.addEventListener('abort', done, { once: true });
+});
 
 /** 검토에 넘기는 장면 하나 — 문장·장·55% 스틸(있으면)·화면 라벨(장면 파일의 const L… 상수, 글로 된 설명 폴백)·그 장면 수종(실물 대조용). */
 export interface ReviewItem { key: string; narration: string; chapterTitle: string; still?: string; labels: string[]; species?: string[] }
@@ -221,7 +251,8 @@ async function pool<T>(items: T[], n: number, canStart: () => string | null, run
   await Promise.all(Array.from({ length: Math.max(1, Math.min(n, items.length)) }, worker));
 }
 
-export async function buildScenes(dir: string, segments: TimedSegment[], signal?: AbortSignal, over: Partial<SceneDeps> = {}, mode?: SceneStageMode): Promise<ScenesResult> {
+/** resume = 이미 있는 장면 파일은 두고 빠진 장면만 그린다(그림이 빈 편 고치기 — 검사·스틸·대조표는 전부 다시). */
+export async function buildScenes(dir: string, segments: TimedSegment[], signal?: AbortSignal, over: Partial<SceneDeps> = {}, mode?: SceneStageMode, opts: { resume?: boolean } = {}): Promise<ScenesResult> {
   const full = mode?.stage === 'full' ? mode : undefined;
   const deps: SceneDeps = { ...defaultSceneDeps(), ...over };
   const sceneDir = path.join(dir, SCENE_DIR);
@@ -251,9 +282,10 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
     // 렌더(renderEpisodeFull)가 같은 배정을 쓰게 남긴다 — 빌려 온 클립까지.
     fs.writeFileSync(path.join(sceneDir, 'insets.json'), JSON.stringify(Object.fromEntries([...plan.footage].map(([k, f]) => [k, { src: f.src, startFrom: f.startFrom, durationInFrames: f.durationInFrames, species: f.species, ...(f.borrowed ? { borrowed: f.borrowed } : {}) }])), null, 2));
   }
-  // 지난 실행의 장면 파일은 지운다(이번 세션이 다시 쓰지 않은 장면이 검사 없이 남지 않게).
-  for (const s of specs) { try { fs.unlinkSync(path.join(sceneDir, s.file)); } catch { /* 없음 */ } }
-  const batches = planBatches(specs);
+  // 지난 실행의 장면 파일은 지운다(이번 세션이 다시 쓰지 않은 장면이 검사 없이 남지 않게). resume 은 남긴다 — 아래 사후 검사가 다시 본다.
+  const hasFile = (s: SceneSpec) => fs.existsSync(path.join(sceneDir, s.file));
+  if (!opts.resume) for (const s of specs) { try { fs.unlinkSync(path.join(sceneDir, s.file)); } catch { /* 없음 */ } }
+  const batches = planBatches(opts.resume ? specs.filter((s) => !hasFile(s)) : specs);
   const kitApi = kitForPresenter(fs.readFileSync(full ? (full.kitApiPath ?? path.join(deps.repo, 'remotion', 'longform', 'fullscreen', `KIT_API_${full.style}.md`)) : path.join(deps.repo, 'remotion', 'longform', 'scenes', 'KIT_API.md'), 'utf8'),
     full?.presenter ? fs.readFileSync(path.join(deps.repo, 'remotion', 'longform', 'fullscreen', 'KIT_API_BIONEE.md'), 'utf8') : undefined);
   const borrowed = plan ? Object.fromEntries([...plan.footage].filter(([, f]) => f.borrowed).map(([k, f]) => [k, f.borrowed!])) : {};
@@ -266,26 +298,46 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
   const nameOf = (i: number) => `b${String(i + 1).padStart(2, '0')}`;
   deps.log(`장면 ${specs.length}개 · 묶음 ${batches.length}개 · 동시 ${deps.concurrency} · 상한 $${deps.budgetUsd}`);
 
-  await pool(batches, deps.concurrency,
-    () => (signal?.aborted ? '취소됨' : report.costUsd >= deps.budgetUsd ? `비용 상한 $${deps.budgetUsd} 도달` : null),
-    async (b, i) => {
-      const name = nameOf(i);
-      try {
-        const r = await runBatch(name, b, { sceneDir, kitApi, ...(title ? { title } : {}), deps, ...(signal ? { signal } : {}), ...(full ? { mode: full, clipsDir, species: speciesForBatch(b) } : {}) });
-        report.costUsd += r.run?.costUsd ?? 0;
-        report.perBatch[name] = { keys: b.map((s) => s.key), ...(r.run ? { turns: r.run.turns, costUsd: r.run.costUsd, durationSec: r.run.durationSec, exit: r.run.exit, tail: r.run.tail } : {}) };
-        for (const s of b) if (!r.moved.includes(s.key)) fail.set(s.key, r.problem ?? (r.run?.aborted ? '세션 시간 초과·취소로 파일 없음' : '에이전트가 파일을 쓰지 않음'));
-        deps.activity?.(`[롱폼 그림] ${name} ${b[0]!.key}~${b[b.length - 1]!.key}(${b[0]!.chapterTitle}) — 파일 ${r.moved.length}/${b.length} · 턴 ${r.run?.turns ?? '?'} · $${(r.run?.costUsd ?? 0).toFixed(2)}${r.problem ? ` · ${r.problem}` : ''}`);
-      } catch (e) {
-        const why = `묶음 실패: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`;
-        report.perBatch[name] = { keys: b.map((s) => s.key), skipped: why };
-        for (const s of b) fail.set(s.key, why);
-      }
-    },
+  const now = deps.now ?? (() => new Date());
+  let limitUntil: Date | null = null;
+  const runOne = async (b: SceneSpec[], name: string): Promise<void> => {
+    try {
+      const r = await runBatch(name, b, { sceneDir, kitApi, ...(title ? { title } : {}), deps, ...(signal ? { signal } : {}), ...(full ? { mode: full, clipsDir, species: speciesForBatch(b) } : {}) });
+      report.costUsd += r.run?.costUsd ?? 0;
+      report.perBatch[name] = { keys: b.map((s) => s.key), ...(r.run ? { turns: r.run.turns, costUsd: r.run.costUsd, durationSec: r.run.durationSec, exit: r.run.exit, tail: r.run.tail } : {}) };
+      const reset = sessionLimitReset(r.run?.tail, now());
+      if (reset && (!limitUntil || reset > limitUntil)) limitUntil = reset;
+      for (const s of b) if (!r.moved.includes(s.key)) fail.set(s.key, r.problem ?? (reset ? '구독 세션 한도로 파일 없음' : r.run?.aborted ? '세션 시간 초과·취소로 파일 없음' : '에이전트가 파일을 쓰지 않음'));
+      deps.activity?.(`[롱폼 그림] ${name} ${b[0]!.key}~${b[b.length - 1]!.key}(${b[0]!.chapterTitle}) — 파일 ${r.moved.length}/${b.length} · 턴 ${r.run?.turns ?? '?'} · $${(r.run?.costUsd ?? 0).toFixed(2)}${r.problem ? ` · ${r.problem}` : ''}`);
+    } catch (e) {
+      const why = `묶음 실패: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`;
+      report.perBatch[name] = { keys: b.map((s) => s.key), skipped: why };
+      for (const s of b) fail.set(s.key, why);
+    }
+  };
+  const drawAll = (bs: SceneSpec[][], nameOfB: (i: number) => string) => pool(bs, deps.concurrency,
+    () => (signal?.aborted ? '취소됨' : report.costUsd >= deps.budgetUsd ? `비용 상한 $${deps.budgetUsd} 도달` : limitUntil ? `구독 세션 한도 — ${limitUntil.getHours()}시에 풀림` : null),
+    (b, i) => runOne(b, nameOfB(i)),
     (b, i, why) => {
-      report.perBatch[nameOf(i)] = { keys: b.map((s) => s.key), skipped: why };
+      report.perBatch[nameOfB(i)] = { keys: b.map((s) => s.key), skipped: why };
       for (const s of b) fail.set(s.key, why);
     });
+  await drawAll(batches, nameOf);
+  // 세션 한도 — 풀릴 때까지 기다렸다가 빠진 장면만 다시(묶음 이름 wNN). 너무 멀면(주간 한도 등) 기다리지 않고 폴백.
+  for (let round = 1; round <= LIMIT_ROUNDS && limitUntil && !signal?.aborted; round++) {
+    const until: Date = limitUntil;
+    const waitMs = until.getTime() - now().getTime() + LIMIT_GRACE_MS;
+    const missing = specs.filter((s) => !hasFile(s));
+    if (!missing.length) break;
+    if (waitMs > LIMIT_WAIT_MAX_MS) { deps.log(`구독 세션 한도 — ${until.toLocaleString('ko-KR')} 에 풀려 너무 멀다, 빠진 ${missing.length}장면은 장면 없이`); break; }
+    deps.log(`구독 세션 한도 — ${until.getHours()}시 ${String(until.getMinutes()).padStart(2, '0')}분까지 기다렸다가 빠진 ${missing.length}장면을 다시 그린다(${round}/${LIMIT_ROUNDS})`);
+    deps.activity?.(`[롱폼 그림] 구독 세션 한도 — ${until.getHours()}시까지 대기 뒤 ${missing.length}장면 다시`);
+    await (deps.sleep ?? sleepAbortable)(Math.max(0, waitMs), signal);
+    if (signal?.aborted) break;
+    limitUntil = null;
+    const again = planBatches(missing);
+    await drawAll(again, (i) => `w${round}${String(i + 1).padStart(2, '0')}`);
+  }
 
   const finish = (pass: string[], extra: { entryPoint?: string; contact?: string } = {}): ScenesResult => {
     const keyBySeg = new Map(specs.filter((s) => pass.includes(s.key)).map((s) => [s.segId, s.key]));
