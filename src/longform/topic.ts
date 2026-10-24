@@ -9,6 +9,7 @@
  * topicKey = `${작업}:${기둥 수종}`(수종이 없으면 general). 이미 만든 롱폼과 겹치는 것은 셋으로 막는다:
  *   ① 같은 topicKey(영구) ② 이미 롱폼 원문으로 쓴 글(영구 — 같은 글을 두 번 영상으로 만들지 않는다)
  *   ③ 같은 작업 주제를 최근 TOPIC_COOLDOWN_DAYS 안에 만들었으면(두 주 연속 가지치기 같은 반복 방지).
+ *      10-24 사장님 결정으로 운영은 끔(LONGFORM_TOPIC_COOLDOWN_DAYS 기본 0 — 제철 심기 편을 11월 하순까지 묶어 둬서). ①②는 그대로.
  * 제철: 기둥 제목의 시기 소재(brand seasonalSubjects — offSeasonSubject)와 수종 검색 시즌 지수(수요 스냅샷 로컬 파일)로 판정.
  * 모르면 통과(fail-open) — 오토런 수종 선정(inSeasonSpecies)과 같은 원칙.
  *
@@ -82,6 +83,8 @@ export interface TopicDeps {
   sales?: ReadonlySet<string>;
   /** 블로그 조회 표본을 잰 때(ISO) — 하루 조회의 분모 끝. 없으면 now. */
   blogMeasuredAt?: (pieceId: string) => string | undefined;
+  /** 같은 작업 주제 쉬는 기간(일) — 없으면 TOPIC_COOLDOWN_DAYS, 0 이면 끔(10-24 사장님: 운영은 LONGFORM_TOPIC_COOLDOWN_DAYS 기본 0). */
+  cooldownDays?: number;
 }
 
 /** v2 상수(2026-10-23). 하루 조회 분모 하한 — 갓 발행한 글이 하루 이틀 조회로 튀지 않게. */
@@ -139,6 +142,7 @@ export function defaultTopicDeps(now = new Date()): TopicDeps {
     minSeason: CONFIG.topicDemandMinSeason,
     now,
     mode: CONFIG.longformTopicMode,
+    cooldownDays: CONFIG.longformTopicCooldownDays,
     sales,
     blogMeasuredAt: (id) => latestMetrics(id)?.measuredAt,
   };
@@ -302,7 +306,7 @@ export interface TopicCandidate {
 const minRelatedOf = (mode: TopicMode | undefined): number => (mode === 'v2' ? V2_FULL_MIN_POSTS - 1 : RELATED_MIN);
 
 /** 이미 만든 롱폼 — 쓴 글 id·topicKey·최근 작업 주제. 시범 레코드(키·원문 목록 없음)는 원문 고정 목록·제목 분류로 채운다. */
-function usedOf(d: Pick<TopicDeps, 'records' | 'now' | 'catalog'>): { pieces: Set<string>; keys: Set<string>; recentTopics: Set<string> } {
+function usedOf(d: Pick<TopicDeps, 'records' | 'now' | 'catalog' | 'cooldownDays'>): { pieces: Set<string>; keys: Set<string>; recentTopics: Set<string> } {
   const pieces = new Set<string>(), keys = new Set<string>(), recentTopics = new Set<string>();
   for (const r of d.records()) {
     if (r.stage === 'error') continue; // 실패한 편은 주제를 쓰지 않은 것
@@ -313,7 +317,7 @@ function usedOf(d: Pick<TopicDeps, 'records' | 'now' | 'catalog'>): { pieces: Se
     if (!key) continue;
     keys.add(key);
     const age = (d.now.getTime() - Date.parse(r.createdTs)) / 86_400_000;
-    if (age < TOPIC_COOLDOWN_DAYS) recentTopics.add(key.split(':')[0]!);
+    if (age < (d.cooldownDays ?? TOPIC_COOLDOWN_DAYS)) recentTopics.add(key.split(':')[0]!);
   }
   return { pieces, keys, recentTopics };
 }
@@ -343,7 +347,7 @@ export function evaluateTopics(d: TopicDeps): TopicCandidate[] {
     if (base) return { piece: p, rank: i + 1, ok: false, why: base };
     const key = `${p.topic}:${p.species ?? 'general'}`;
     if (used.keys.has(key)) return { piece: p, rank: i + 1, ok: false, why: `이미 만든 주제(${key})` };
-    if (used.recentTopics.has(p.topic!)) return { piece: p, rank: i + 1, ok: false, why: `최근 ${TOPIC_COOLDOWN_DAYS}일 안에 같은 작업 주제(${topicLabel(p.topic)})` };
+    if (used.recentTopics.has(p.topic!)) return { piece: p, rank: i + 1, ok: false, why: `최근 ${d.cooldownDays ?? TOPIC_COOLDOWN_DAYS}일 안에 같은 작업 주제(${topicLabel(p.topic)})` };
     // 묶음 후보 풀(LLM 모드) — 같은 작업 주제 조회 큰 순 최대 COHERE_POOL + 같은 수종 다른 작업 최대 COHERE_SPECIES_EXTRA.
     const pool: TopicPiece[] = [];
     let extra = 0;

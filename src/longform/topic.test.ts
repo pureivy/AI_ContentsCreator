@@ -68,6 +68,11 @@ describe('selectTopic', () => {
     expect(all.find((c) => c.piece.id === 'p2')!.why).toContain('최근');
     expect(all.every((c) => !c.ok || c.piece.topic !== 'plant')).toBe(true);
   });
+  it('쉬는 기간 0 이면 최근 같은 작업 주제도 기둥이 된다(10-24 끔) — 쓴 글 금지는 그대로', () => {
+    const all = evaluateTopics(deps({ cooldownDays: 0, records: () => [{ dir: 'x', createdTs: ago(3), topicKey: 'plant:감나무', sourcePieceIds: ['p3'], title: '감나무 묘목 심기 총정리', stage: 'ready' }] }));
+    expect(all.find((c) => c.piece.id === 'p2')!.ok).toBe(true);
+    expect(all.find((c) => c.piece.id === 'p3')!.why).toBe('이미 롱폼 원문으로 쓴 글');
+  });
   it('실패한 편(error)은 주제를 쓰지 않은 것', () => {
     const t = selectTopic(deps({ records: () => [{ dir: 'x', createdTs: ago(1), topicKey: 'plant:사과나무', sourcePieceIds: ['p2'], title: 'x', stage: 'error' }] }))!;
     expect(t.anchor.id).toBe('p2');

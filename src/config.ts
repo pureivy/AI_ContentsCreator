@@ -434,6 +434,8 @@ export interface Config {
   readonly longformPresenter: boolean;
   /** 롱폼 주제 순위(2026-10-23, LONGFORM_TOPIC_MODE) — views = 블로그+숏폼 조회 합산(종전), v2 = 블로그 하루 조회 × 제철 앞당김 × 판매 수종(longform/topic.ts). 비교 확인 전까지 기본 views. */
   readonly longformTopicMode: TopicMode;
+  /** 롱폼 같은 작업 주제 쉬는 기간(일, LONGFORM_TOPIC_COOLDOWN_DAYS) — 10-24 사장님: 없앰(기본 0). 되살리려면 28. 쓴 글·같은 작업+수종 금지는 그대로. */
+  readonly longformTopicCooldownDays: number;
   /** 발행 후 성과 측정까지 대기일 — 네이버 트래픽이 축적될 시간(콜드스타트 지연). 이 창 도달 전 piece 는 측정 안 함. */
   readonly performanceWindowDays: number;
   /** 주입 지식(injected.md) 반영 한도(자 수) — 에이전트 매 런 시스템프롬프트에 들어가는 양. 초과분은 최신 우선(tail)로 잘림. */
@@ -734,6 +736,7 @@ export const CONFIG: Config = {
   longformStyle: env('LONGFORM_STYLE', 'B').trim().toUpperCase() === 'A' ? 'A' : 'B',
   longformPresenter: envBool('LONGFORM_PRESENTER', false),
   longformTopicMode: env('LONGFORM_TOPIC_MODE', 'views').trim().toLowerCase() === 'v2' ? 'v2' : 'views',
+  longformTopicCooldownDays: Math.max(0, envInt('LONGFORM_TOPIC_COOLDOWN_DAYS', 0)),
   performanceWindowDays: Math.max(0, envInt('PERFORMANCE_WINDOW_DAYS', 14)),
   injectedKnowledgeCap: Math.max(500, envInt('INJECTED_KNOWLEDGE_CAP', 10000)),
   topicDemandGate: envBool('TOPIC_DEMAND_GATE', true),
