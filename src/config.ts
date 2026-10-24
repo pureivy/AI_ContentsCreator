@@ -411,7 +411,7 @@ export interface Config {
   readonly janitorKeepDays: number;
   readonly janitorStaleDays: number;
   readonly janitorTrashDays: number;
-  /** 롱폼 매주 제작(2026-10-22) — 스위치(기본 off: 첫 편을 사장님이 보고 켠다) · 시작 시각 "HH:MM" · 요일(0=일~6=토, JS getDay). 기본 월 00:00 = 일요일 24:00. */
+  /** 롱폼 매주 제작(2026-10-22) — 스위치(기본 off: 첫 편을 사장님이 보고 켠다) · 시작 시각 "HH:MM" · 요일(0=일~6=토, JS getDay). 기본 일 00:00 = 토요일 24:00(10-24 사장님: 일요일→토요일). */
   readonly longformWeekly: boolean;
   readonly longformTime: string;
   readonly longformWeekday: number;
@@ -723,7 +723,7 @@ export const CONFIG: Config = {
   janitorTrashDays: Math.max(1, envInt('JANITOR_TRASH_DAYS', 7)),
   longformWeekly: envBool('LONGFORM_WEEKLY', false),
   longformTime: env('LONGFORM_TIME', '00:00').trim(),
-  longformWeekday: Math.min(6, Math.max(0, envInt('LONGFORM_WEEKDAY', 1))),
+  longformWeekday: Math.min(6, Math.max(0, envInt('LONGFORM_WEEKDAY', 0))),
   longformSceneConcurrency: Math.min(6, Math.max(1, envInt('LONGFORM_SCENE_CONCURRENCY', 3))),
   longformSceneBudgetUsd: Math.max(0, envFloat('LONGFORM_SCENE_BUDGET_USD', 60)),
   longformSceneMaxTurns: Math.max(20, envInt('LONGFORM_SCENE_MAX_TURNS', 90)),

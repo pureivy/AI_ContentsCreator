@@ -5282,8 +5282,8 @@ if (CONFIG.janitorTime) {
   // eslint-disable-next-line no-console
   console.log(`[ai-contents-studio] 저장공간 정리 — 매일 ${CONFIG.janitorTime}(발행 ${CONFIG.janitorKeepDays}일 뒤 중간물 · 미발행 ${CONFIG.janitorStaleDays}일 · 휴지통 ${CONFIG.janitorTrashDays}일)`);
 }
-// 롱폼 매주 제작(2026-10-22 사장님 결정) — 일요일 24:00(=월요일 00:00) 제작 시작 → 완성되면 텔레그램 검토 알림(발행 버튼).
-// 발행은 사람이 누를 때만. 스위치 LONGFORM_WEEKLY(기본 off — 첫 편을 사장님이 보고 켠다). 서버가 꺼져 있다 켜지면 그날(월요일) 안에 따라잡는다.
+// 롱폼 매주 제작(2026-10-22 사장님 결정) — 토요일 24:00(=일요일 00:00, 10-24 일요일에서 옮김) 제작 시작 → 완성되면 텔레그램 검토 알림(발행 버튼).
+// 발행은 사람이 누를 때만. 스위치 LONGFORM_WEEKLY(기본 off — 첫 편을 사장님이 보고 켠다). 서버가 꺼져 있다 켜지면 그날(일요일) 안에 따라잡는다.
 if (CONFIG.longformWeekly) {
   const stopLongform = startDaily({
     time: CONFIG.longformTime, weekday: CONFIG.longformWeekday, key: 'longform-weekly',

@@ -1,5 +1,5 @@
 /**
- * 롱폼 한 편 제작(2026-10-22 사장님 결정 — 매주 일요일 24:00 시작, 완성되면 텔레그램 검토 알림, 발행은 사람 버튼).
+ * 롱폼 한 편 제작(2026-10-22 사장님 결정 — 매주 토요일 24:00 시작(10-24 일요일에서 옮김), 완성되면 텔레그램 검토 알림, 발행은 사람 버튼).
  *
  * 단계(레코드 progress 에 한국어로): 주제 선정 → 대본 작성 → 사실 확인 → 낭독 → 실촬영 배정 → 그림 → 렌더 → 썸네일 → 완성.
  * 산출물은 data/longform/<yyyy-mm-dd>-<작업 주제>/ (시범과 같은 꼴: script.json·sources.md·factgate.json·pron.json·audio/·clips/·
@@ -147,7 +147,7 @@ let running: string | null = null;
 /** 지금 만드는 편 id(없으면 null) — 라우트 409·janitor 건너뛰기·재시작 대기가 본다. */
 export function longformEpisodeRunning(): string | null { return running; }
 
-/** 편 폴더 이름(순수) — `yyyy-mm-dd-<작업 주제>`, 겹치면 -2·-3. 로컬 날짜(일요일 24:00 = 월요일 날짜). */
+/** 편 폴더 이름(순수) — `yyyy-mm-dd-<작업 주제>`, 겹치면 -2·-3. 로컬 날짜(토요일 24:00 = 일요일 날짜). */
 export function episodeDirName(now: Date, topic: string, exists: (name: string) => boolean): string {
   const d = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const slug = topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'episode';
