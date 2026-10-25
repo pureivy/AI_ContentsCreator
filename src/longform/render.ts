@@ -233,7 +233,7 @@ export const PRESENTER_SCENE_SCALE = 1;
 /**
  * 진행자 준비(LONGFORM_PRESENTER, 2026-10-23 코드 리그) — 세그먼트마다 비온이 신호와 입 열림(낭독 mp3 → ffmpeg 모노 PCM → 프레임당 0~9).
  * 신호 = 장면 파일의 `export const bioneeCues = [...]`(장면 담당이 문장마다 고름 — 빈 배열이면 그 문장은 가만히), 없거나 못 읽으면 자동(autoBioneeCues).
- * 계절 = 대본 제목·요약의 계절 낱말, 없으면 지금 달. 입 PCM 은 work/presenter 에 남긴다(janitor 가 remotion-full 째 치운다).
+ * 계절 = 대본 제목의 계절 낱말, 없으면 지금 달. 요약(ytKeyLine)은 보지 않는다 — 2026-10-25 대추나무 10월 편이 요약의 '봄까지 미뤄도'로 봄 비온이가 됐다. 입 PCM 은 work/presenter 에 남긴다(janitor 가 remotion-full 째 치운다).
  */
 export async function buildPresenter(dir: string, tl: Timeline, keys: readonly string[], o: {
   ffmpeg: RenderDeps['ffmpeg']; text: string; month?: number; sceneScale?: number; log?: (m: string) => void;
@@ -297,7 +297,7 @@ export async function renderEpisodeFull(dir: string, opts: {
   // 등록할 장면 — timeline 의 scene 키 중 파일이 있는 것만(정리된 장면은 종이 바탕 + 카드로 대신).
   const keys = [...new Set(tl.segments.map((s) => s.scene).filter((k): k is string => !!k && fs.existsSync(path.join(dir, SCENE_DIR, `${k}.tsx`))))];
   const tlR: Timeline = { ...tl, segments: tl.segments.map((s) => { if (!s.scene || keys.includes(s.scene)) return s; const { scene: _drop, ...rest } = s; return rest; }) };
-  const presenter = opts.presenter ? await buildPresenter(dir, tlR, keys, { ffmpeg: deps.ffmpeg, text: `${script.title} ${script.ytKeyLine ?? ''}`, log }) : undefined;
+  const presenter = opts.presenter ? await buildPresenter(dir, tlR, keys, { ffmpeg: deps.ffmpeg, text: script.title, log }) : undefined;
   const props = toFullProps(script.title, tlR, { style: opts.style, footage, ...(opts.chapterTotal ? { chapterTotal: opts.chapterTotal } : {}), ...(script.keywords?.length ? { keywords: script.keywords } : {}), ...(presenter ? { presenter } : {}) });
   for (const s of tl.segments) stage(path.join(dir, 'audio', s.audio), path.join(publicDir, s.audio));
   for (const f of new Set([...footage.values()].map((x) => x.src))) stage(path.join(dir, 'clips', f), path.join(publicDir, f));

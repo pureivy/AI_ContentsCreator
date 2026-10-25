@@ -21,7 +21,7 @@ export const CUE_HOLD_SEC = 2.2;
 const WARN_RX = /안\s?됩니다|안\s?돼|금지|주의|위험|죽/;
 const TIP_RX = /요령|정리|기억|됩니다|확인/;
 
-/** 계절(순수) — 대본 제목·요약에 계절 낱말이 있으면 그것, 없으면 렌더 시점 달(3–5 봄, 6–8 여름, 9–11 가을, 12–2 겨울). */
+/** 계절(순수) — 대본 제목에 계절 낱말이 있으면 그것, 없으면 렌더 시점 달(3–5 봄, 6–8 여름, 9–11 가을, 12–2 겨울). */
 export function presenterSeason(text: string, month: number): PresenterSeason {
   const hit = (/(봄|여름|가을|겨울)/.exec(text) ?? [])[1];
   if (hit) return ({ 봄: 'spring', 여름: 'summer', 가을: 'autumn', 겨울: 'winter' } as const)[hit as '봄'];

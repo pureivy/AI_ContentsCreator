@@ -16,6 +16,7 @@ describe('presenterSeason', () => {
     expect(presenterSeason('묘목 고르기', 10)).toBe('autumn');
     expect(presenterSeason('묘목 고르기', 12)).toBe('winter');
     expect(presenterSeason('묘목 고르기', 2)).toBe('winter');
+    expect(presenterSeason('대추나무 심는 시기와 활착 확인, 10월 묘목부터', 10)).toBe('autumn'); // 제목만 — 요약의 '봄까지' 는 넘기지 않는다
   });
 });
 
