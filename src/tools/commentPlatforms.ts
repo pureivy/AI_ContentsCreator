@@ -131,8 +131,9 @@ export async function fetchInstagramComments(token: string, maxAgeMs: number, no
     out.push(...parseIgComments(j, { id: m.id, permalink: m.permalink }, me.username ?? ''));
   }
   // 댓글 권한이 없으면 오류 대신 빈 목록이 온다(2026-10-25 실측: comments_count 1 인데 data []) — 댓글 수가 있는 게시물이
-  // 있는데 하나도 못 읽었으면 권한 문제로 본다.
-  if (counted > 0 && out.length === 0) throw new CommentScopeError('인스타 댓글을 읽을 권한이 없습니다 — 메타를 다시 연결해 주세요(댓글 관리 권한 추가)');
+  // 있는데 하나도 못 읽었으면 권한 문제로 본다. 10-26 실측: 재연결로 권한을 받아도 메타 앱이 '개발 중' 모드면
+  // 앱 역할이 없는 사람(일반 고객)의 댓글은 똑같이 빈 목록으로 온다 — 재연결만 안내하면 사장님이 헛돈다.
+  if (counted > 0 && out.length === 0) throw new CommentScopeError('인스타 댓글이 API 에서 비어 옵니다 — 메타 앱이 \'개발 중\' 모드면 고객 댓글이 걸러집니다(앱 라이브 전환·댓글 관리 권한 검수 필요). 권한을 추가하기 전 연결이면 메타를 다시 연결해 주세요');
   return out;
 }
 
