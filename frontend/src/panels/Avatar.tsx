@@ -8,7 +8,7 @@ import { useState } from "react";
 import { spriteFor } from "./officeSprites";
 
 // 스프라이트/얼굴 파일 갱신 시 브라우저 캐시 무효화용.
-const AVATAR_VERSION = 14; // 롱폼팀(longformwriter·longformdesigner) face 추가
+const AVATAR_VERSION = 15; // 댓글 담당(commentmanager) face 추가
 
 export default function Avatar({
   id,
