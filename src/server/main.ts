@@ -134,6 +134,7 @@ import { transcribe, sttAvailable } from '../voice/stt';
 import { synthesize, listKoreanVoices, ttsAvailable } from '../voice/tts';
 import { getVoiceSettings, setVoiceSettings } from '../voice/setting';
 import { jarvisChat } from '../jarvis/chat';
+import { checkImageCredit, deferForCredit, imageCreditOut, onImageCreditBack, type CreditDeferred } from '../tools/imageCredit';
 
 // 시간 기준 = 대한민국 표준시(KST). 스크립트(package.json)가 TZ 를 주지만, 직접 실행 대비 방어적으로
 // 고정한다(이미 설정돼 있으면 존중). 로컬시간 기반 코드(nowDate·스케줄러)가 호스트 OS 와 무관하게 KST.
@@ -1839,11 +1840,12 @@ const ytPublishInFlight = new Set<string>();
  *  발행(유튜브·릴스) 후엔 파일 교체 불가라 거절. 재조립 포함 수 분 동기 호출. */
 async function shortsReviseHandler(c: Context): Promise<Response> {
   const id = c.req.param('id') ?? '';
-  const b = await c.req.json<{ feedback?: string }>().catch(() => ({} as { feedback?: string }));
+  const b = await c.req.json<{ feedback?: string; rebuild?: boolean }>().catch(() => ({} as { feedback?: string; rebuild?: boolean }));
   const feedback = (b.feedback ?? '').trim();
-  if (!feedback) return c.json({ error: '수정 요청 내용이 비었습니다.' }, 400);
-  console.log(`[발행담당] 숏폼 수정 요청 접수 — ${id}: ${feedback.slice(0, 80)}`); // 유실 추적용(카드와 동일)
-  const r = await reviseShorts(id, feedback, { source: pieceSourceFor(shortsStore().get(id)?.sourcePieceId) });
+  const rebuild = b.rebuild === true; // 대본 그대로 지금 씬 그림 지도로 다시 조립(그림을 손으로 바꿔 넣은 편)
+  if (!feedback && !rebuild) return c.json({ error: '수정 요청 내용이 비었습니다.' }, 400);
+  console.log(`[발행담당] 숏폼 수정 요청 접수 — ${id}: ${rebuild ? '(다시 조립)' : feedback.slice(0, 80)}`); // 유실 추적용(카드와 동일)
+  const r = await reviseShorts(id, feedback, { source: pieceSourceFor(shortsStore().get(id)?.sourcePieceId), rebuild });
   if (!r.ok) { console.log(`[발행담당] 숏폼 수정 요청 기각 — ${id}: ${r.error ?? ''}`); return c.json({ error: r.error, ...r }, 409); }
   console.log(`[발행담당] 숏폼 수정 요청 반영 — ${id} 씬 ${r.changedScenes.join(',') || '문구없음'}${r.regenScenes.length ? ` · 배경 ${r.regenScenes.join(',')}` : ''}${r.titleChanged ? ' · 제목' : ''}${r.titleArtChanged ? ' · 캘리' : ''}`);
   return c.json(r);
@@ -3116,6 +3118,12 @@ function autoDeriveSet(id: string, title: string): void {
     // 승계(SHORTS_SIBLING_INHERIT=1)일 때: 유튜브가 상한으로 빠지면 인스타가 원편이 된다 — 그러지 않으면
     // 인스타 생산이 통째로 멈춘다. 기본(2026-09-08, 승계 끔)은 채널마다 독립 런 — 대본부터 따로, 동시 출발.
     // 승계 상태의 실측: 8쌍 전부 나레이션 5/5 씬 동일 — 채널 지침(platformPlanGuide)이 형제편에 닿지 않았다.
+    // 이미지 잔액 소진 중이면 만들지 않고 미룬다(2026-10-25) — 이 훅은 글당 한 번이라, 건너뛰기만 하면 그 글의 숏폼이 영영 빠진다.
+    if (need.length && imageCreditOut()) {
+      for (const platform of need) deferForCredit({ pieceId: id, platform, auto: capped, title });
+      console.log(`[숏폼] 자동 파생 미룸 — OpenAI 이미지 잔액 소진 · ${title.slice(0, 25)} (${need.map(platformLabel).join('·')}, 충전 확인 뒤 다시 만듦)`);
+      return;
+    }
     let primaryId = '';
     for (const platform of need) {
       const prev = primaryId || undefined;
@@ -3133,6 +3141,42 @@ function autoDeriveSet(id: string, title: string): void {
       if (!primaryId) primaryId = ds.short.id;
     }
   }
+}
+
+/** 잔액 충전 확인 뒤 — 멈췄던·미뤘던 숏폼을 같은 글·같은 채널로 다시 만든다(2026-10-25). 채널 순서·앞 채널 대본 대기는 autoDeriveSet 과 같다.
+ *  이미 다른 편이 있는(사람이 그새 만든) 채널은 건너뛰고, 상한 적용 편은 오늘 몫이 찼으면 건너뛴다(평소 규칙 그대로). */
+function replayCreditDeferred(list: readonly CreditDeferred[]): CreditDeferred[] {
+  const made: CreditDeferred[] = [];
+  const byPiece = new Map<string, CreditDeferred[]>();
+  for (const d of list) if (d.pieceId) byPiece.set(d.pieceId, [...(byPiece.get(d.pieceId) ?? []), d]);
+  for (const [pieceId, ds] of byPiece) {
+    const piece = pieceStore().get(pieceId);
+    if (!piece) continue;
+    // 그새 브랜드를 바꿨으면 건너뛴다 — 파생 편은 생성 시점의 활성 브랜드로 찍힌다(다른 브랜드 채널로 섞이지 않게).
+    if ((piece.brand ?? '') !== (activeBrandSlug() || '')) { console.log(`[숏폼] 잔액 회복 뒤 다시 만들기 건너뜀 — 브랜드가 바뀜 · ${piece.title.slice(0, 25)}`); continue; }
+    let prev = '';
+    const order = [...SHORTS_PLATFORMS, undefined] as Array<ShortsPlatform | undefined>;
+    for (const platform of order) {
+      const d = ds.find((x) => (x.platform ?? undefined) === platform);
+      if (!d) continue;
+      // 자율 편은 지금도 자율 제작이 켜져 있을 때만(소진 중에 사장님이 끌 수 있다).
+      if (d.auto && (!autoRunEnabled() || (platform ? !CONFIG.autoShorts : CONFIG.autoShortsPerDay <= 0))) continue;
+      const mine = shortsStore().list().filter((x) => x.sourcePieceId === pieceId && x.platform === platform);
+      if (mine.some((x) => x.stage !== 'error')) continue;
+      if (d.auto && platform && platformQuotaCommitted(shortsStore().list(), Date.now(), autoDailyCapFor(platform, CONFIG.shortsAutoDailyCap), platform)) {
+        console.log(`[숏폼] 잔액 회복 뒤 다시 만들기 건너뜀(${platformLabel(platform)}) — 오늘 몫 소진 · ${piece.title.slice(0, 25)}`);
+        continue;
+      }
+      const inheritFrom = CONFIG.shortsSiblingInherit && prev ? prev : undefined;
+      const waitFor = !CONFIG.shortsSiblingInherit && prev ? prev : undefined;
+      const ds2 = deriveShortsFromPiece(pieceId, undefined, !!d.auto, platform, inheritFrom, waitFor);
+      if ('error' in ds2) { console.log(`[숏폼] 잔액 회복 뒤 다시 만들기 실패${platform ? `(${platformLabel(platform)})` : ''} — ${piece.title.slice(0, 25)}: ${ds2.error}`); continue; }
+      console.log(`[숏폼] 잔액 회복 뒤 다시 만들기${platform ? `(${platformLabel(platform)})` : ''} — ${piece.title.slice(0, 30)} (${ds2.short.id})`);
+      made.push(d);
+      if (!prev) prev = ds2.short.id;
+    }
+  }
+  return made;
 }
 
 function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string; auto?: boolean; private?: boolean } = {}): NaverDraftStart {
@@ -5042,7 +5086,8 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
   const derivable = pieces
     .filter((p) => (p.brand ?? '') === tickBrand && p.runId && ['ready', 'published', 'measured', 'reflected'].includes(p.stage))
     .sort((a, b) => b.updatedTs.localeCompare(a.updatedTs));
-  if (CONFIG.autoShortsPerDay > 0) {
+  // 이미지 잔액 소진 중엔 숏폼을 고르지 않는다(2026-10-25) — 기록을 안 만드니 충전 뒤 틱이 같은 글을 다시 고른다.
+  if (CONFIG.autoShortsPerDay > 0 && !imageCreditOut()) {
     const all = shortsStore().list().filter((s) => (s.brand ?? '') === tickBrand);
     // error 제외(2026-08-20 하드 캡 리뷰) — 실패 건이 케이던스 슬롯을 소진하거나 소스 글을 영구 점유하지 않게.
     // 같은 글 실패 2회부터는 재파생 중단(폭주 방지) — 네이버 저장 훅의 파생 게이트와 동일 규약.
@@ -5335,6 +5380,15 @@ if (CONFIG.longformWeekly) {
 // 롱폼 검토 알림 유실 복구(2026-10-25) — 완성됐는데 알림(발행 버튼)이 안 나간 편을 부팅 60초 뒤·매일 09:00 다시 보낸다.
 // 사장님은 이 버튼으로만 발행한다 — '새 콘텐츠 알림' 설정과 무관. 7일 안·아직 안 올린 편만(시범 편처럼 올린 편·옛 편은 제외).
 // notifiedTs 는 보낸 뒤에 남는다(실패하면 다음 번에 다시 본다).
+// OpenAI 이미지 잔액 소진(2026-10-25) — 표시 중이면 10분마다(부팅 60초 뒤 첫 번) 잔액을 확인한다. 돌아오면 재개 알림을 보내고
+// 멈췄던·미뤘던 숏폼을 같은 글·같은 채널로 다시 만든다. 아직이면 6시간마다 다시 알린다(checkImageCredit).
+onImageCreditBack((list) => replayCreditDeferred(list));
+if (!process.env.VITEST) {
+  const credit = () => { if (imageCreditOut()) void checkImageCredit().catch(() => {}); };
+  const t0 = setTimeout(credit, 60_000);
+  if (typeof t0.unref === 'function') t0.unref();
+  setInterval(credit, 10 * 60_000).unref();
+}
 if (!process.env.VITEST) {
   const resendLf = () => { void resendLongformNotices({ store: longformStore(), now: new Date(), send: (rec) => notifyLongformReady(rec), log: (m) => console.log('[롱폼]', m) }).catch(() => {}); };
   const t = setTimeout(resendLf, 60_000);

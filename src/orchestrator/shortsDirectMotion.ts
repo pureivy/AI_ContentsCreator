@@ -28,6 +28,7 @@ import type { ShortsScene, PreparedScene } from '../tools/shortsCommon';
 import { RENDER_OPTS, stageAndBuildProps } from '../tools/shortsRenderRemotion';
 import { microJSON } from './agent';
 import { agentEnv, lastJson, runProc } from './cliProc';
+import { isCreditExhausted, markImageCreditOut } from '../tools/imageCredit';
 
 const HARNESS = path.resolve('scripts/mg_direct/render_frames.py');
 const SF_SCRIPT = path.resolve('scripts/mg_direct/styleframe.py');
@@ -354,6 +355,7 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
           { timeoutMs: 300_000, env: { ...process.env, ...(CONFIG.openaiApiKey ? { OPENAI_API_KEY: CONFIG.openaiApiKey } : {}) } });
         const res = lastJson<{ ok: boolean; error?: string }>(r.stdout);
         if (res?.ok) m.calls.gptImageOk++;
+        else if (isCreditExhausted(res?.error ?? r.stderr)) markImageCreditOut('motion-styleframe'); // 시안 없이도 그래픽은 만든다 — 표시만
         log(`[시안] 씬${i + 1} ${res?.ok ? 'ok' : (res?.error ?? r.stderr.slice(-160))}`);
       }));
     });

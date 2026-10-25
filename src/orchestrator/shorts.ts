@@ -63,6 +63,7 @@ import { classifyTitleType } from '../analytics/titleTiming';
 import { getShortsRef, buildShortsRefBlock, speciesTermsOf } from '../analytics/ytShortsRef';
 import { youtubeEnabled } from '../grounding/youtube';
 import type { EventBus } from '../events/bus';
+import { ImageCreditError, checkImageCredit, deferForCredit, isCreditExhausted } from '../tools/imageCredit';
 
 const RUNNING = new Set<string>();
 export function isShortsRunning(id: string): boolean { return RUNNING.has(id); }
@@ -206,7 +207,12 @@ export async function recheckShortsFactGate(plan: Plan, topic: string, src: Shor
  */
 export async function reviseShorts(
   id: string, feedback: string,
-  opts: { bus?: EventBus; signal?: AbortSignal; source?: ShortsSource } = {},
+  opts: {
+    bus?: EventBus; signal?: AbortSignal; source?: ShortsSource;
+    /** 대본은 그대로, 지금 씬 그림 지도(scene-images.json)로 다시 조립만(2026-10-25) — 그림을 손으로 바꿔 넣은 편.
+     *  10-25 인스타 무화과 편: 잔액 소진으로 그림 4장이 비어 같은 글 유튜브 편 그림을 옮겨 넣었다. 수정 LLM 을 안 부른다. */
+    rebuild?: boolean;
+  } = {},
 ): Promise<{ ok: boolean; error?: string; changedScenes: number[]; regenScenes: number[]; titleChanged: boolean; titleArtChanged: boolean }> {
   const store = shortsStore();
   const short = store.get(id);
@@ -235,7 +241,7 @@ export async function reviseShorts(
         };
       }
     } catch { /* 캘리 카피 없음 — titleArt 경로 비활성 */ }
-    const j = await microJSON<ShortsRevision>(
+    const j = opts.rebuild ? null : await microJSON<ShortsRevision>(
       stdModel(),
       '당신은 숏폼 대본 에디터입니다. 요청된 JSON 스키마만 출력합니다.',
       [
@@ -255,7 +261,9 @@ export async function reviseShorts(
       ].join('\n'),
       { maxOutputTokens: 1600, signal: opts.signal },
     ).catch(() => null);
-    const applied = applyShortsRevision(plan, j, artCopy);
+    const applied = opts.rebuild
+      ? { plan, changedScenes: [] as number[], regenScenes: [] as number[], imageNotes: new Map<number, string>(), titleChanged: false, metaChanged: false, titleArtCopy: null }
+      : applyShortsRevision(plan, j, artCopy);
     if (!applied) return fail('수정 요청에서 반영할 변경을 찾지 못했습니다 — 요청을 더 구체적으로 써 주세요');
     plan = applied.plan;
     // 사실 검증 다시(2026-10-14) — 대본이 바뀌었으면 옛 보류를 새 대본 기준으로 갈아 끼운다. 판정 실패면 옛 값 유지.
@@ -286,6 +294,11 @@ export async function reviseShorts(
       });
     } catch { /* 매니페스트 없음 — 지도만 본다 */ }
     const images: Array<string | null> = reviseImagesFor(readSceneImageMap(dir, plan.scenes.length), manifestImages, plan.scenes.length);
+    // 다시 조립 — 바꿔 넣은 그림이라 옛 초점 좌표는 무효(그림이 없던 씬에 잡힌 값일 수도 있다).
+    if (opts.rebuild) {
+      plan.scenes.forEach((sc, i) => { if (images[i]) delete sc.focus; });
+      fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
+    }
     if (applied.regenScenes.length) {
       let slots: Array<{ prompt?: string }> = [];
       try { slots = (JSON.parse(fs.readFileSync(path.join(dir, 'bg-draft.json'), 'utf-8')) as { imageSlots?: Array<{ prompt?: string }> }).imageSlots ?? []; } catch { /* 프롬프트 없음 */ }
@@ -402,7 +415,7 @@ export async function reviseShorts(
     // 썸네일 — 제목/캘리 문구/배경이 바뀐 경우 재생성(문구 일치 유지). 실패 무해.
     // 한글 QA 미해결 표식이 남아 있으면 무엇을 고쳤든 다시 만든다(2026-09-16 사용자 제보) — 종전엔 대본만
     // 고치는 수정요청에서 썸네일을 건드리지 않아, 발행할 때마다 같은 '오타 가능성 미해결' 경고가 되돌아왔다.
-    if (applied.titleChanged || applied.titleArtCopy || applied.regenScenes.length || thumbTextQaFailed(dir)) {
+    if (opts.rebuild || applied.titleChanged || applied.titleArtCopy || applied.regenScenes.length || thumbTextQaFailed(dir)) {
       try {
         const hook = await hookStillFor(images, clips, dir, opts.signal);
         const ok = await generateDesignedThumbnail({
@@ -2718,6 +2731,10 @@ export async function runShortsJob(
     // 채널별 씬 수 차등은 폐기(2026-09-03) — 대본을 공유하므로 채널마다 다를 수 없다.
     const n = Math.min(Math.max(3, opts.sceneCount ?? CONFIG.shortsScenes), 8);
 
+    // 0) 이미지 잔액 소진 중이면 대본부터 쓰지 않는다(2026-10-25) — 그림 단계에서 어차피 멈춘다. 표시 중이면 잔액을 다시 확인한다.
+    //    승계 편은 그림을 새로 그리지 않으니 제외.
+    if (!opts.inheritFrom && !(await checkImageCredit())) throw new ImageCreditError();
+
     // 1-a) 형제편 승계(2026-09-03) — 원편이 만든 자산을 물려받고 낭독만 이 편 작가 목소리로 새로 뜬다.
     //      기획·디자인·이미지·씬QA·I2V 를 건너뛴다. 승계가 실패하면(원편 대본 없음) 일반 생성으로 돌아간다.
     const inheritedFrom = opts.inheritFrom ? store.get(opts.inheritFrom) : undefined;
@@ -3395,6 +3412,9 @@ export async function runShortsJob(
     for (const g of genOuts) if (!g.ok) say(`씬 이미지 스크립트 실패 — ${g.output.split('\n').filter(Boolean).slice(-1)[0]?.slice(0, 160) ?? ''}`);
     const errs = slotScenes.map((sc) => String(bySlot.get(sc)?.error ?? '')).filter(Boolean);
     if (errs.length) say(`씬 이미지 생성 실패 ${errs.length}/${slotScenes.length}장 — ${errs[0]!.replace(/\s+/g, ' ').slice(0, 160)}`);
+    // 잔액 소진이면 여기서 멈춘다(2026-10-25) — 그라데이션 배경으로 끝까지 만들면 모션그래픽 비용까지 쓰고 못 쓰는 편이 검토로 간다.
+    // 출력도 본다 — 스크립트가 잔액 오류를 찍고 시간 초과로 죽으면 매니페스트는 미리 써 둔 '{}' 그대로다.
+    if (errs.some(isCreditExhausted) || genOuts.some((g) => isCreditExhausted(g.output))) throw new ImageCreditError();
     // 슬롯 정렬 이미지 목록 — 실패 씬은 null(렌더러가 그라데이션 폴백, 순서 보존)
     let images: Array<string | null> = plan.scenes.map(() => null);
     slotScenes.forEach((sceneIdx) => {
@@ -3520,6 +3540,13 @@ export async function runShortsJob(
   } catch (e) {
     const msg = opts.signal?.aborted ? '취소됨' : e instanceof Error ? e.message.slice(0, 300) : String(e);
     store.update(id, { stage: 'error', error: msg });
+    // 잔액 소진으로 멈춘 편 — 충전 확인 뒤 같은 글·같은 채널로 다시 만든다(서버가 onImageCreditBack 으로 받는다).
+    if (e instanceof ImageCreditError && !opts.signal?.aborted) {
+      deferForCredit({
+        ...(short.sourcePieceId ? { pieceId: short.sourcePieceId } : {}), shortId: id,
+        ...(short.platform ? { platform: short.platform } : {}), auto: !!short.auto, title: short.topic,
+      });
+    }
     // 낭독 전에 예약한 예고를 되돌린다 — 실패한 편은 아무에게도 약속하지 않았다(2026-10-02).
     try { if (promiseStore().dropBySource(id)) say('예고 예약 취소 — 실패한 편'); } catch { /* 무해 */ }
     say(`${short.topic.slice(0, 30)} — 실패: ${msg}`);

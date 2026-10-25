@@ -19,6 +19,7 @@ import { getNaverAccount } from '../secrets/store';
 import { coerceBlogDraft, draftToFinalContent } from '../output/smarteditor';
 import type { BlogDraft } from '../output/formatter';
 import { statInflowPeriods, periodsArg, parseRefererDump } from '../analytics/naverReferer';
+import { isCreditExhausted, markImageCreditOut, noteImageOk } from './imageCredit';
 
 export interface BlogSkillResult { ok: boolean; output: string }
 
@@ -157,6 +158,7 @@ export async function runImageGenerate(roleId: string, arg: string, signal?: Abo
   const cwd = sandboxDir(roleId);
   const args = buildImageArgs(parseImagePayload(arg), cwd);
   const r = await runScript('openai_image.py', args, cwd, signal);
+  if (isCreditExhausted(r.output)) markImageCreditOut(`image_generate:${roleId}`);
   return r.output;
 }
 
@@ -186,7 +188,20 @@ export async function generateImagesForDraft(
   // finalize 는 세션 dir 를 cwd 로(샌드박스 무관 — 경로는 인자로 절대지정).
   // 타임아웃은 장수 비례 — 고품질 1장에 ~1분이라 기본 3분은 5장에서 SIGKILL 됐다(카드뉴스 E2E 실측).
   const timeoutMs = opts.timeoutMs ?? Math.max(BLOG_TIMEOUT_MS, 90_000 * limit);
-  return runScript('openai_image.py', args, path.dirname(manifestPath), signal, { timeoutMs });
+  const startedMs = Date.now();
+  const r = await runScript('openai_image.py', args, path.dirname(manifestPath), signal, { timeoutMs });
+  // 잔액 소진 표시(2026-10-25) — 스크립트는 전 장 실패여도 exit 0 이라 매니페스트 error·출력으로 본다. 모든 호출부가 이 길을 지난다.
+  // 매니페스트는 이번 실행이 쓴 것만(지난 실행의 오류를 다시 읽어 충전 뒤에 또 멈추지 않게).
+  let manifestText = '';
+  try { if (fs.statSync(manifestPath).mtimeMs >= startedMs - 1000) manifestText = fs.readFileSync(manifestPath, 'utf-8'); } catch { /* 매니페스트 없음 — 출력만 */ }
+  if (isCreditExhausted(r.output) || isCreditExhausted(manifestText)) markImageCreditOut(path.basename(path.dirname(manifestPath)));
+  else {
+    // 실제로 그림이 나왔으면 소진 표시를 푼다 — 잔액 확인 호출이 막혀 있어도 숏폼이 영영 멈추지 않게.
+    let made = 0;
+    try { const m = JSON.parse(manifestText || '{}') as { ok?: number; dry_run?: boolean }; made = m.dry_run ? 0 : Number(m.ok) || 0; } catch { /* 무해 */ }
+    if (made > 0) noteImageOk();
+  }
+  return r;
 }
 
 /** 블로그 설명 도표 렌더(2026-10-12) — spec JSON(문구는 호출부가 본문에서 뽑아 넣는다) → PNG. ok 는 RESULT_JSON ok 로 판정. */
