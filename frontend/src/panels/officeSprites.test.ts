@@ -31,3 +31,11 @@ describe('롱폼팀 스프라이트(2026-10-23)', () => {
     expect(TWO_POSE_CHARS.has('longformdesigner')).toBe(true);
   });
 });
+
+describe('고객소통팀 스프라이트(2026-10-25)', () => {
+  it('강예린(댓글 담당)은 id 만으로 2포즈 캐릭터로 해석된다(팀장 폴백 wiki-ingest 로 새지 않게)', () => {
+    expect(spriteFor('comment_manager')).toBe('commentmanager');
+    expect(spriteFor('comment_manager', 'lead', '댓글 담당')).toBe('commentmanager');
+    expect(TWO_POSE_CHARS.has('commentmanager')).toBe(true);
+  });
+});

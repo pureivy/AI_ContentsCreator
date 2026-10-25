@@ -691,6 +691,40 @@ export async function publishShortsToNaverClip(opts: NaverClipOpts, signal?: Abo
     ?? { status: 'ERROR', error: '클립 결과 파일 없음 — 스크립트 출력 참조', issues: [], output: r.output };
 }
 
+export type NaverReplyStatus = 'POSTED' | 'SUBMITTED' | 'DRY_RUN' | 'LOGIN_REQUIRED' | 'NOT_FOUND' | 'FAILED' | 'ERROR';
+export interface NaverReplyResult { status: NaverReplyStatus; error?: string; output: string }
+
+/**
+ * 네이버 블로그·클립 댓글에 답글을 단다(댓글 담당, 2026-10-25) — 사람이 텔레그램 [올리기]를 누른 신뢰 경로만 부른다.
+ * 블로그 발행과 같은 브랜드 프로필을 쓰므로 호출부(라우트)가 naverProfileBusy 뮤텍스를 쥐고 부른다.
+ */
+export async function replyNaverComment(
+  opts: { slug: string; kind: 'blog' | 'clip'; url: string; commentNo: string; text: string; runDir: string; dryRun?: boolean },
+  signal?: AbortSignal,
+): Promise<NaverReplyResult> {
+  const { slug } = opts;
+  if (slug && !isSafeBrandSlug(slug)) return { status: 'ERROR', error: `무효한 브랜드 슬러그: ${slug}`, output: '' };
+  try { fs.mkdirSync(opts.runDir, { recursive: true }); } catch { /* 스크립트 실패로 드러난다 */ }
+  const resultPath = path.join(opts.runDir, `reply-${opts.commentNo}.json`);
+  const textPath = path.join(opts.runDir, `reply-${opts.commentNo}.txt`);
+  try { fs.rmSync(resultPath, { force: true }); } catch { /* 없음 */ }
+  fs.writeFileSync(textPath, opts.text, 'utf-8');
+  const args = ['--kind', opts.kind, '--url', opts.url, '--comment-no', opts.commentNo, '--text-file', textPath, '--result-file', resultPath];
+  if (naverPublishCreds(slug).headless) args.push('--headless');
+  if (opts.dryRun) args.push('--dry-run');
+  const profileDir = naverProfileDir(slug);
+  const env: Record<string, string> = {};
+  if (profileDir) env.NAVER_PROFILE_DIR = profileDir;
+  const r = await runScript('naver_comment_reply.py', args, opts.runDir, signal, { timeoutMs: 3 * 60_000, env });
+  pruneNaverProfileCache(profileDir);
+  try {
+    const j = JSON.parse(fs.readFileSync(resultPath, 'utf-8')) as { status?: NaverReplyStatus; error?: string };
+    return { status: j.status ?? 'ERROR', error: j.error, output: r.output };
+  } catch {
+    return { status: 'ERROR', error: '답글 결과 파일 없음 — 스크립트 출력 참조', output: r.output };
+  }
+}
+
 // ====================== 성과 자동 수집(네이버 통계 스크레이프) ======================
 
 export interface CollectedMetrics {

@@ -288,3 +288,17 @@ describe('롱폼 버튼(ly·lt·lf)', () => {
     expect(fail).toContain('썸네일 생성 실패');
   });
 });
+
+describe('댓글 담당 버튼(2026-10-25)', () => {
+  it('ca·ce·cs 를 해석한다', () => {
+    expect(parseCallback('ca:cmt_0123456789')).toEqual({ kind: 'comment_post', id: 'cmt_0123456789' });
+    expect(parseCallback('ce:cmt_0123456789')).toEqual({ kind: 'comment_revise', id: 'cmt_0123456789' });
+    expect(parseCallback('cs:cmt_0123456789')).toEqual({ kind: 'comment_skip', id: 'cmt_0123456789' });
+  });
+  it('올리기 결과 문구를 이스케이프해 돌려준다', async () => {
+    const ok = await runAction({ kind: 'comment_post', id: 'cmt_1' }, async () => ({ ok: true, status: 200, json: { message: '✅ 답글을 올렸습니다 — 블로그 「<a>」' } }));
+    expect(ok).toBe('✅ 답글을 올렸습니다 — 블로그 「&lt;a&gt;」');
+    const bad = await runAction({ kind: 'comment_post', id: 'cmt_1' }, async () => ({ ok: false, status: 409, json: { message: '이미 올린 답글입니다' } }));
+    expect(bad).toBe('⚠️ 이미 올린 답글입니다');
+  });
+});

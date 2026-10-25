@@ -69,6 +69,7 @@ const TEAM_REGION: Record<string, Region> = {
   cardnews: ROOMS.planning, // 카드뉴스팀 — 우측 상단 사무실(사용자 지정). 콘텐츠팀과 같은 방, 우측 구역 좌석.
   shorts: ROOMS.pantry,     // 숏폼팀 — 우중(탕비실 옆 카페 테이블 구역). 빈 방 중 우측 라인 유지.
   longform: ROOMS.pantry,   // 롱폼팀(2026-10-23) — 숏폼팀 옆. 같은 방이라 집합 대열이 서로의 좌석을 피한다(avoidPts).
+  community: ROOMS.secretariat, // 고객소통팀(댓글 담당, 2026-10-25) — 손님을 맞는 리셉션. 자비스 자리(SECRETARY_DESK)와 떨어진 왼쪽.
 };
 const regionCx = (r: Region): number => r.x + r.w / 2;
 // 팀장 자리 오버라이드(방 모양 보정) — 기획팀(planning)은 책상이 창측 '상단 띠'라 범용 앵커(상단 18%)가
@@ -80,6 +81,7 @@ const TEAM_LEAD_SPOT: Record<string, { fx: number; fy: number }> = {
   // 롱폼 작가 — 바 오른쪽 끝 앞 바닥(x≈90.6·y≈53.1). 숏폼 디렉터(83.4·49.2)와 가로 7.2 떨어져 안 겹치고,
   // 오른쪽 화분 오클루더(plant_6, x≥94)·잡담 구역(PANTRY_ZONE y≤46) 밖.
   longform: { fx: 0.78, fy: 0.81 },
+  community: { fx: 0.3, fy: 0.8 },
 };
 // 팀별 멤버 좌석 오버라이드 — 기획팀 멤버(이미지 디자이너)는 팀장 우측 바닥(창측 데스크 앞).
 const TEAM_MEMBER_SEATS: Record<string, Seat[]> = {
@@ -157,6 +159,7 @@ function glyphFor(level?: string, id = "", title = ""): string {
   if (/(perf|성과|분석)/.test(k)) return "📊";
   if (/(발행|publish)/.test(k)) return "📮"; // content 규칙보다 먼저(content_mN id 가로채임 방지)
   if (/(content|작가|카피)/.test(k)) return "✍️";
+  if (/(comment|댓글)/.test(k)) return "💬";
   if (level === "lead") return "🧑‍💼";
   return "🧑‍💻";
 }
@@ -473,7 +476,7 @@ function Sprite({ char, pose, flip, glyph, working }: {
   if (err || !char) {
     return <div className="office-portrait office-glyph" style={{ fontSize: 32, lineHeight: 1 }}>{glyph}</div>;
   }
-  if (TWO_POSE_CHARS.has(char)) return <TwoPoseFigure char={char} pose={pose} working={working} />;
+  if (TWO_POSE_CHARS.has(char)) return <TwoPoseFigure char={char} pose={pose} working={working} glyph={glyph} />;
   return (
     <img
       className={`office-sprite${working ? " working" : ""}`}
@@ -488,7 +491,7 @@ function Sprite({ char, pose, flip, glyph, working }: {
 // 2포즈 피규어(자비스·카드뉴스팀) — 9포즈 풀세트 없이 stand/sit_front 2장으로 모든 포즈를 접는다.
 // 우선순위: ① 생성 스프라이트(/sprites/<char>_{stand,sit_front}.png — scripts/gen_*_sprite*.mjs,
 // OPENAI_API_KEY 필요) ② 둘 다 없으면 '얼굴 + (자비스 한정) SVG 정장 몸통' 폴백.
-function TwoPoseFigure({ char, pose, working }: { char: string; pose: string; working: boolean }) {
+function TwoPoseFigure({ char, pose, working, glyph }: { char: string; pose: string; working: boolean; glyph: string }) {
   const [failed, setFailed] = useState<Record<string, boolean>>({});
   const want = pose === "sit_front" || pose === "sit_right" || pose === "lounge" ? "sit_front" : "stand";
   const cand = !failed[want] ? want : want !== "stand" && !failed.stand ? "stand" : null;
@@ -504,11 +507,16 @@ function TwoPoseFigure({ char, pose, working }: { char: string; pose: string; wo
     );
   }
   // 신규 캐릭터 폴백: face 헤드샷 원형(정장 SVG 는 자비스 전용 복장이라 재사용하지 않음).
+  // 얼굴까지 없으면(아직 생성 전 — 2026-10-25 댓글 담당은 이미지 잔액 충전 뒤 생성) 역할 이모지.
+  if (char !== "jarvis" && failed.face) {
+    return <div className="office-portrait office-glyph" style={{ fontSize: 32, lineHeight: 1 }}>{glyph}</div>;
+  }
   if (char !== "jarvis") {
     return (
       <div className={`office-sprite${working ? " working" : ""}`} style={{ display: "flex", justifyContent: "center" }}>
         <img
           src={`/sprites/${char}_face.png`} alt="" draggable={false}
+          onError={() => setFailed((f) => ({ ...f, face: true }))}
           style={{ height: 56, width: 56, borderRadius: "50%", objectFit: "cover",
                    border: "2px solid rgba(255,255,255,.7)", boxShadow: "0 2px 8px rgba(0,0,0,.25)" }}
         />

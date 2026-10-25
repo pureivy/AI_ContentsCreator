@@ -37,7 +37,11 @@ export type BotAction =
   // 롱폼(2026-10-22) — 유튜브 공개 발행(ly), 썸네일 다시(lt), 썸네일 한글 QA 확인 후 강행(lf).
   | { kind: 'longform_youtube'; id: string }
   | { kind: 'longform_youtube_force'; id: string }
-  | { kind: 'longform_thumb_regen'; id: string };
+  | { kind: 'longform_thumb_regen'; id: string }
+  // 댓글 담당(2026-10-25) — 답글 초안 올리기(ca)·고치기(ce, 답장 유도)·건너뛰기(cs). id = cmt_… (우리 쪽 키).
+  | { kind: 'comment_post'; id: string }
+  | { kind: 'comment_revise'; id: string }
+  | { kind: 'comment_skip'; id: string };
 
 /**
  * 자율런 지시 명령(순수, 2026-09-10) — "자율런 지시: …" 로 설정, "지시 끄기/켜기/상태/삭제". 아니면 null.
@@ -72,7 +76,7 @@ export function describeDirective(d: { text: string; on: boolean; made: number; 
 
 /** 콜백 데이터 파싱(≤64바이트 규격: "<op>:<id>"). 불명이면 null. 순수 — 테스트 대상. */
 export function parseCallback(data: string): BotAction | null {
-  const m = /^(bp|rv|cp|cf|sy|sm|yf|mf|tr|nc|nf|nk|yh|mh|nh|ly|lt|lf):([A-Za-z0-9_]{1,48})$/.exec(data);
+  const m = /^(bp|rv|cp|cf|sy|sm|yf|mf|tr|nc|nf|nk|yh|mh|nh|ly|lt|lf|ca|ce|cs):([A-Za-z0-9_]{1,48})$/.exec(data);
   if (!m) return null;
   const id = m[2]!;
   switch (m[1]) {
@@ -94,6 +98,9 @@ export function parseCallback(data: string): BotAction | null {
     case 'ly': return { kind: 'longform_youtube', id };
     case 'lf': return { kind: 'longform_youtube_force', id };
     case 'lt': return { kind: 'longform_thumb_regen', id };
+    case 'ca': return { kind: 'comment_post', id };
+    case 'ce': return { kind: 'comment_revise', id };
+    case 'cs': return { kind: 'comment_skip', id };
     default: return null;
   }
 }
@@ -188,7 +195,7 @@ const ytDoneTail = (j: Record<string, unknown> | null): string =>
   (j?.public_direct === true ? '\n커버가 첫 장면이 아니면 따로 알려 드립니다.'
     : j?.public_pending === true ? '\n썸네일까지 확인하고, 안 뜨면 따로 알려 드립니다.' : '\n공개 전환은 유튜브 스튜디오에서.');
 
-export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call: ApiCall = api, send: Senders = REAL_SENDERS): Promise<string> {
+export async function runAction(a: Exclude<BotAction, { kind: 'revise' } | { kind: 'comment_revise' }>, call: ApiCall = api, send: Senders = REAL_SENDERS): Promise<string> {
   switch (a.kind) {
     case 'naver_draft': {
       const r = await call(`/pieces/${a.id}/naver-draft`, { actor: '텔레그램' }, 30_000);
@@ -354,6 +361,19 @@ export async function runAction(a: Exclude<BotAction, { kind: 'revise' }>, call:
       if (code === 'in_flight') return '⏳ 이미 업로드 중입니다 — 끝나면 알려 드립니다.';
       return lfErrText('롱폼 유튜브 업로드 실패', r);
     }
+    case 'comment_post': {
+      // 네이버 답글은 브라우저 조작(최대 3분) + 프로필이 바쁘면 최대 8분 기다린다.
+      // 버튼 id = cmt_…_r<초안 번호> — 고친 뒤 옛 카드의 [올리기]는 라우트가 409 로 막는다.
+      const m = /^(cmt_[0-9a-f]+)_r(\d+)$/.exec(a.id);
+      const r = await call(`/comments/${m ? m[1] : a.id}/post`, m ? { rev: Number(m[2]) } : {}, 12 * 60_000);
+      const msg = typeof r.json?.message === 'string' ? r.json.message : '';
+      return r.ok ? escapeHtml(msg || '✅ 답글을 올렸습니다') : `⚠️ ${escapeHtml(msg || (typeof r.json?.error === 'string' ? r.json.error : `HTTP ${r.status}`))}`;
+    }
+    case 'comment_skip': {
+      const r = await call(`/comments/${a.id}/skip`, {}, 15_000);
+      const msg = typeof r.json?.message === 'string' ? r.json.message : '';
+      return r.ok ? escapeHtml(msg || '⏭ 건너뛰었습니다') : `⚠️ ${escapeHtml(msg || `HTTP ${r.status}`)}`;
+    }
     case 'longform_thumb_regen': {
       // 가로 썸네일 재생성(라우트 상한 4분). 끝나면 검토 알림(사진+버튼)을 다시 보내 이어서 발행하게 한다.
       const r = await call(`/longform/${a.id}/thumbnail/regenerate`, {}, 6 * 60_000);
@@ -491,6 +511,15 @@ async function handleUpdate(u: TgUpdate, chatId: string, bootTs: number): Promis
     const action = cq.data ? parseCallback(cq.data) : null;
     void tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: action ? '접수 — 처리 중…' : '알 수 없는 버튼' });
     if (!action) return;
+    if (action.kind === 'comment_revise') {
+      const res = await tgCall('sendMessage', {
+        chat_id: chatId, text: '✍ 답글을 어떻게 고칠지 이 메시지에 답장(Reply)으로 보내주세요.\n직접 쓴 답글을 그대로 올리려면 "그대로: 답글 내용" 으로 보내세요.',
+        reply_markup: { force_reply: true },
+      });
+      const mid = (res?.result as { message_id?: number } | undefined)?.message_id;
+      if (typeof mid === 'number') { pendingRevise.set(mid, { targetId: action.id, ts: Date.now() }); prunePendingRevise(); }
+      return;
+    }
     if (action.kind === 'revise') {
       // 답장 유도 — 답장 텍스트가 도착하면 아래 message 분기가 /revise 로 잇는다.
       const res = await tgCall('sendMessage', {
@@ -504,7 +533,8 @@ async function handleUpdate(u: TgUpdate, chatId: string, bootTs: number): Promis
     // 발행류는 수 초~수 분 — 폴 루프를 막지 않게 비동기로 돌리고 끝나면 결과를 새 메시지로 push.
     // 실패(타임아웃·재시작 중 ECONNREFUSED 등)도 반드시 사용자에게 알린다 — '접수'만 보고 무소식이면 안 됨.
     // 롱폼 썸네일 재생성은 수 분 동기 라우트 — fetch(undici)의 응답 머리 5분 제한을 피해 node:http(apiLong)로 부른다.
-    const call: ApiCall = action.kind === 'longform_thumb_regen' ? (p, b, t) => apiLong(p, b, t ?? 6 * 60_000) : api;
+    // 댓글 답글 올리기도 — 네이버 프로필 대기(최대 8분)+브라우저(최대 3분)라 5분을 넘길 수 있다(넘기면 거짓 실패 → 손으로 중복 답글).
+    const call: ApiCall = action.kind === 'longform_thumb_regen' || action.kind === 'comment_post' ? (p, b, t) => apiLong(p, b, t ?? 6 * 60_000) : api;
     void runAction(action, call)
       .then((msg) => {
         // 실패 결과는 서버 로그에도 — 텔레그램 답장만 남기면 사유를 나중에 찾을 수 없었다(2026-10-13 배나무 카드뉴스).
@@ -528,6 +558,13 @@ async function handleUpdate(u: TgUpdate, chatId: string, bootTs: number): Promis
     const pending = pendingRevise.get(replyTo);
     if (pending) {
       pendingRevise.delete(replyTo);
+      if (pending.targetId.startsWith('cmt_')) {
+        // 댓글 답글 고치기 — 라우트가 새 초안 카드(버튼 포함)를 직접 보낸다. 실패만 여기서 알린다.
+        void api(`/comments/${pending.targetId}/revise`, { feedback: text }, 180_000)
+          .then((r) => { if (!r.ok) void sendTelegramHtml(`⚠️ 답글 고치기 실패 — ${escapeHtml(typeof r.json?.message === 'string' ? r.json.message : `HTTP ${r.status}`)}`); })
+          .catch((e: unknown) => sendTelegramHtml(`⚠️ 답글 고치기 실패 — ${escapeHtml(e instanceof Error ? e.message : String(e))}`));
+        return;
+      }
       const ep = reviseEndpointFor(pending.targetId);
       if (ep.derived) {
         // 카드뉴스·숏폼 revise 는 수 분짜리 동기 라우트 — 폴 루프를 막지 않게 비동기 실행 후 결과 push.

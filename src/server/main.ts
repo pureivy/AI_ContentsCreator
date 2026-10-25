@@ -135,6 +135,8 @@ import { synthesize, listKoreanVoices, ttsAvailable } from '../voice/tts';
 import { getVoiceSettings, setVoiceSettings } from '../voice/setting';
 import { jarvisChat } from '../jarvis/chat';
 import { checkImageCredit, deferForCredit, imageCreditOut, onImageCreditBack, type CreditDeferred } from '../tools/imageCredit';
+import { postCommentReply, reviseCommentReply, runCommentCycle, skipCommentReply } from '../autonomy/commentDesk';
+import { loadCommentState, sweepPostingComments } from '../content/comments';
 
 // 시간 기준 = 대한민국 표준시(KST). 스크립트(package.json)가 TZ 를 주지만, 직접 실행 대비 방어적으로
 // 고정한다(이미 설정돼 있으면 존중). 로컬시간 기반 코드(nowDate·스케줄러)가 호스트 OS 와 무관하게 KST.
@@ -1996,7 +1998,8 @@ const META_HTTPS_PORT = Number(process.env.META_HTTPS_PORT) || (CONFIG.port + 1)
 const META_REDIRECT = `https://localhost:${META_HTTPS_PORT}/meta/oauth/callback`;
 // 인스타그램 로그인 방식(2026-07-20 전환) — instagram.com/oauth 는 instagram_business_* 만 받는다
 // (pages_* 는 페북 로그인 전용이라 넣으면 Invalid Scopes). 인스타 앱 ID/시크릿(페북 앱과 별개)을 쓴다.
-const META_SCOPES = 'instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights';
+// instagram_business_manage_comments(2026-10-25) — 댓글 담당이 댓글을 읽고 답글을 단다. 기존 연결엔 없어 한 번 다시 연결해야 한다.
+const META_SCOPES = 'instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights,instagram_business_manage_comments';
 interface MetaPage { id: string; name: string; access_token: string; tasks?: string[]; instagram_business_account?: { id: string } }
 const META_OAUTH_PENDING = new Map<string, { brand: string; exp: number; pages?: MetaPage[] }>();
 // 그래프 호스트·버전은 metaPublish.GRAPH 단일 선언을 재사용(전역 제약). dialog URL 만 www.facebook.com 호스트.
@@ -3075,6 +3078,31 @@ const NAVER_DRAFT_JOBS = new Map<string, NaverDraftJob>();
 // 일일동기화)를 열면 두 번째 launch_persistent_context 가 프로필 락으로 실패한다. 셋을 단일 뮤텍스로
 // 직렬화한다. dry-run 은 브라우저를 열지 않으므로 점유 대상이 아니다.
 let naverProfileBusy: string | null = null;
+
+// 댓글 담당(2026-10-25) — 답글 올리기·고치기·건너뛰기는 텔레그램 버튼(사람)만 부른다. 주기 작업은 읽기·초안·알림만.
+// 네이버(블로그·클립) 답글은 같은 브라우저 프로필을 쓰므로 뮤텍스 안에서 — 바쁘면 최대 8분 기다렸다가 연다.
+async function withNaverProfileForComment<T>(label: string, fn: () => Promise<T>): Promise<T | 'busy'> {
+  for (let i = 0; i < 32 && (naverProfileBusy || naverRefreshBusy); i++) await new Promise((r) => setTimeout(r, 15_000));
+  if (naverProfileBusy || naverRefreshBusy) return 'busy';
+  naverProfileBusy = label; // ── 검사와 획득 사이 await 없음
+  try { return await fn(); } finally { naverProfileBusy = null; }
+}
+app.get('/comments', (c) => c.json({ items: loadCommentState().items.slice(-100).reverse() }));
+app.post('/comments/poll', async (c) => c.json(await runCommentCycle()));
+app.post('/comments/:id/post', async (c) => {
+  const body = await c.req.json().catch(() => ({})) as { rev?: unknown };
+  const r = await postCommentReply(c.req.param('id'), { withNaver: withNaverProfileForComment }, typeof body.rev === 'number' ? body.rev : undefined);
+  return c.json({ ok: r.ok, message: r.message }, r.status as 200);
+});
+app.post('/comments/:id/revise', async (c) => {
+  const body = await c.req.json().catch(() => ({})) as { feedback?: unknown };
+  const r = await reviseCommentReply(c.req.param('id'), typeof body.feedback === 'string' ? body.feedback : '');
+  return c.json({ ok: r.ok, message: r.message }, r.status as 200);
+});
+app.post('/comments/:id/skip', (c) => {
+  const r = skipCommentReply(c.req.param('id'));
+  return c.json({ ok: r.ok, message: r.message }, r.status as 200);
+});
 
 // 임시저장 잡 기동(공용) — 검토 탭 버튼(pieceNaverDraftHandler)과 자동 게이트(maybeAutoNaverDraft)가
 // 같은 가드·프로필 뮤텍스를 공유한다. 잡 등록(set)까지 동기 — await 금지(TOCTOU 차단: 이중 기동 방지).
@@ -5404,6 +5432,17 @@ void stopPerfSync;
 // 텔레그램 봇 수신 폴러 — 검토 대기 알림의 발행 버튼(callback)·수정요청 답장 처리.
 // 자격(TELEGRAM_BOT_TOKEN/CHAT_ID) 미설정이면 내부에서 유휴 대기(설정 즉시 자동 재개).
 if (CONFIG.telegramBot && !process.env.VITEST) startTelegramBot();
+
+// 댓글 담당 — 부팅 2분 뒤 첫 확인, 그 뒤 COMMENT_POLL_MIN 분마다. 재시작에 끊긴 '올리는 중'은 실패로 돌려 사장님이 확인하게.
+if (CONFIG.commentDesk && !process.env.VITEST) {
+  const swept = sweepPostingComments();
+  if (swept) console.log(`[댓글담당] 재시작에 끊긴 답글 ${swept}건 — 채널에서 올라갔는지 확인 필요`);
+  const poll = () => { void runCommentCycle().then((r) => { if (r.added) console.log(`[댓글담당] 새 댓글 ${r.added}건 — 텔레그램으로 초안 보냄`); }).catch((e: unknown) => console.log('[댓글담당] 확인 실패', e instanceof Error ? e.message : e)); };
+  const t0 = setTimeout(poll, 120_000);
+  if (typeof t0.unref === 'function') t0.unref();
+  setInterval(poll, CONFIG.commentPollMin * 60_000).unref();
+  console.log(`[ai-contents-studio] 댓글 담당 — ${CONFIG.commentPollMin}분마다 ${CONFIG.commentDeskChannels} 확인(올리기는 텔레그램 버튼)`);
+}
 
 // 부팅 복구 스윕 — 카드뉴스/숏폼 잡의 '진행 중'은 in-memory RUNNING 에만 있고 디스크에는
 // stage(planning/designing/rendering)만 남는다. 렌더링 도중 서버가 재시작되면(tsx watch 의
