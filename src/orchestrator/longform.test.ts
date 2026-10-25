@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { LongformStore, type LongformRecord } from '../content/longform';
 import type { FactGateResult } from '../content/factGate';
 import type { LongformDeps } from './longform';
-import { beginLongformEpisode, episodeDirName, longformEpisodeRunning, runLongformEpisode } from './longform';
+import { beginLongformEpisode, episodeDirName, interruptedNotice, longformEpisodeRunning, resendLongformNotices, resumeLongformEpisode, runLongformEpisode, sweepInterruptedLongform } from './longform';
 import type { TopicChoice } from '../longform/topic';
 import type { LlmJSON } from '../longform/writer';
 import { buildScenes, type AgentRunInput, type SceneDeps } from './longformScenes';
@@ -309,6 +309,139 @@ export default function Scene({ durationInFrames, footage }: FullSceneProps) {
     expect(r.ok).toBe(false);
     expect(store.list()).toEqual([]);
     expect(notifyFail).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 2026-10-25 — 검토 알림 경고·알림 실패 대체·취소·주간 건너뜀 알림·끊긴 편 이어 만들기.
+describe('품질 경고·알림·재시도', () => {
+  it('경고 재료를 레코드에 — 장면 수/문장 수, 받아쓰기 실패 0, 사실 확인 ok', async () => {
+    const { store, deps } = setup({ buildScenes: vi.fn(async () => ({ built: 90 })) });
+    const r = await runLongformEpisode({ brand: 'b', deps });
+    const rec = store.get(r.id)!;
+    expect(rec).toMatchObject({ stage: 'ready', sceneBuilt: 90, sceneTotal: 98, sttFailed: 0, sttTotal: 98, pronSuspectCount: 0, factState: { status: 'ok' } });
+  });
+
+  it('받아쓰기가 전부 실패하고 판정기도 두 번 실패해도 편은 끝까지 — 경고만 남긴다', async () => {
+    const synth = vi.fn(async (text: string) => Buffer.from(text));
+    const factGate = vi.fn(async (): Promise<FactGateResult> => ({ ...pass(), status: 'error', error: '주장 판정 실패(LLM 무응답)' }));
+    const { store, deps } = setup({
+      factGate,
+      assets: async () => ({ synth, stt: async () => { throw new Error('mlx_whisper 없음'); }, probe: async () => 4, cut: async (_s: string, _a: number, _b: number, out: string) => { fs.writeFileSync(out, 'clip'); } }),
+    });
+    const r = await runLongformEpisode({ brand: 'b', deps });
+    expect(r.ok).toBe(true);
+    expect(factGate).toHaveBeenCalledTimes(2); // 한 번 더 판정
+    expect(synth).toHaveBeenCalledTimes(98); // 문장마다 한 번(재녹음·바꿔 쓰기 없음)
+    expect(store.get(r.id)).toMatchObject({ stage: 'ready', sttFailed: 98, sttTotal: 98, factState: { status: 'error' } });
+  });
+
+  it('검토 알림이 안 나가면(false) 글자 알림으로 대신한다', async () => {
+    const { deps, notifyFail } = setup({ notifyReady: vi.fn(async () => false) });
+    const r = await runLongformEpisode({ brand: 'b', deps });
+    expect(r.ok).toBe(true);
+    expect(notifyFail).toHaveBeenCalledTimes(1);
+    expect(String((notifyFail.mock.calls[0] as unknown[])[0])).toContain('검토 알림 전송 실패');
+  });
+
+  it('사람이 취소하면 "제작 실패"가 아니라 "제작 취소됨"', async () => {
+    const ac = new AbortController();
+    const { deps, notifyFail } = setup({ loadSources: async (ids) => { ac.abort(); return ids.map((id) => ({ pieceId: id, title: id, body: SOURCE })); } });
+    const r = await runLongformEpisode({ brand: 'b', deps, signal: ac.signal });
+    expect(r.ok).toBe(false);
+    const title = String((notifyFail.mock.calls[0] as unknown[])[0]);
+    expect(title).toContain('롱폼 제작 취소됨');
+    expect(title).not.toContain('실패');
+  });
+
+  it('주간 실행 — trigger 기록·onStarted 로 런 제목, 이미 만드는 중이면 사유를 알린다', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((res) => { release = res; });
+    const a = setup({ loadSources: async (ids) => { await gate; return ids.map((id) => ({ pieceId: id, title: id, body: SOURCE })); } });
+    const onStarted = vi.fn();
+    const pa = runLongformEpisode({ brand: 'b', deps: a.deps, trigger: 'weekly', onStarted });
+    await new Promise((res) => setTimeout(res, 0));
+    const b = setup();
+    const rb = await runLongformEpisode({ brand: 'b', deps: b.deps, trigger: 'weekly' });
+    expect(rb.ok).toBe(false);
+    expect(b.notifyFail).toHaveBeenCalledWith('🎞 롱폼 이번 주 건너뜀', expect.stringContaining('이미 롱폼을 만드는 중'));
+    release();
+    const ra = await pa;
+    expect(onStarted).toHaveBeenCalledWith(ra.id);
+    expect(a.store.get(ra.id)!.trigger).toBe('weekly');
+  });
+
+  it('끊긴 편 이어 만들기 — 같은 폴더·같은 대본(작가·사실 확인·낭독 다시 안 함), 장면은 resume, autoRetried', async () => {
+    const synth = vi.fn(async (text: string) => Buffer.from(text));
+    const assets = async () => ({ synth, stt: async (mp3: Buffer) => mp3.toString(), probe: async () => 4, cut: async (_s: string, _a: number, _b: number, out: string) => { fs.writeFileSync(out, 'clip'); } });
+    // 1차: 그림 단계에서 끊긴다(재시작 흉내 — 레코드는 producing 으로 남은 것처럼 되돌린다)
+    // 수종 형태 — 1차가 index.json·_species.ts 를 남긴다(재시도는 그대로 써야 EP_SPECIES id 가 안 바뀐다)
+    const species1 = vi.fn(async (o: { dir: string }) => {
+      const idx = { at: 't', species: [{ nameKo: '감나무', source: 'episode' as const, id: 'gam_ep', use: 'species={EP_SPECIES.gam_ep}', refs: [] }] };
+      fs.mkdirSync(path.join(o.dir, 'species'), { recursive: true });
+      fs.writeFileSync(path.join(o.dir, 'species', 'index.json'), JSON.stringify(idx));
+      fs.mkdirSync(path.join(o.dir, 'scenes'), { recursive: true });
+      fs.writeFileSync(path.join(o.dir, 'scenes', '_species.ts'), 'export const EP_SPECIES = { gam_ep: {} };');
+      return idx;
+    });
+    const first = setup({ assets, species: species1, spendUsd: () => 1.25, buildScenes: vi.fn(async () => { throw new Error('프로세스 죽음'); }) });
+    const r1 = await runLongformEpisode({ brand: 'b', deps: first.deps, trigger: 'weekly' });
+    expect(r1.ok).toBe(false);
+    const cost1 = first.store.get(r1.id)!.costUsd!;
+    expect(cost1).toBeGreaterThan(0);
+    first.store.update(r1.id, { stage: 'producing', progress: '그림', error: undefined });
+    const dir = path.join(first.root, first.store.get(r1.id)!.dir);
+    expect(fs.existsSync(path.join(dir, 'topic.json'))).toBe(true);
+    synth.mockClear();
+    const llmJSON = vi.fn(async () => writerJSON()) as unknown as LlmJSON;
+    const factGate = vi.fn(async () => pass());
+    const buildScenes = vi.fn(async () => ({ built: 98, costUsd: 2 }));
+    const species2 = vi.fn(async () => ({ at: '', species: [] }));
+    const b = await resumeLongformEpisode({ id: r1.id, deps: { ...first.deps, llmJSON, factGate, buildScenes, species: species2 } });
+    expect(b.ok).toBe(true);
+    if (b.ok) expect((await b.done).ok).toBe(true);
+    const rec = first.store.get(r1.id)!;
+    expect(rec).toMatchObject({ stage: 'ready', autoRetried: true, sceneBuilt: 98 });
+    expect(rec.dir).toBe(path.basename(dir)); // 같은 폴더
+    expect(llmJSON).not.toHaveBeenCalled(); // 대본 다시 안 씀
+    expect(factGate).not.toHaveBeenCalled();
+    expect(synth).not.toHaveBeenCalled(); // 낭독 캐시
+    expect((buildScenes.mock.calls[0] as unknown[])[4]).toEqual({ resume: true });
+    expect(species2).not.toHaveBeenCalled(); // 지난 수종 형태 그대로
+    expect(fs.readFileSync(path.join(dir, 'scenes', '_species.ts'), 'utf8')).toContain('gam_ep');
+    expect(rec.costUsd).toBeCloseTo(cost1 + 2, 2); // 앞 실행 비용 + 이번 장면 비용(가짜 원장은 그대로라 0)
+    expect(first.store.list()).toHaveLength(1);
+  });
+
+  it('부팅 정리 — 오늘 주간 편은 재시도 대상으로 producing 유지, 나머지(수동·이미 재시도함)는 error 로 닫는다', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lf-sweep-'));
+    const store = new LongformStore(root);
+    const weekly = store.create({ title: '주간', patch: { trigger: 'weekly', progress: '그림' } });
+    const manual = store.create({ title: '수동', patch: { progress: '낭독' } });
+    const again = store.create({ title: '또 끊김', patch: { trigger: 'weekly', autoRetried: true, progress: '렌더 40%' } });
+    const done = store.create({ title: '완성', stage: 'ready' });
+    const r = sweepInterruptedLongform(store, new Date());
+    expect(r.retry.map((x) => x.id)).toEqual([weekly.id]);
+    expect(r.closed.map((x) => x.id).sort()).toEqual([manual.id, again.id].sort());
+    expect(store.get(weekly.id)!.stage).toBe('producing');
+    expect(store.get(manual.id)!).toMatchObject({ stage: 'error', progress: undefined });
+    expect(store.get(manual.id)!.error).toContain('(낭독)');
+    expect(store.get(done.id)!.stage).toBe('ready');
+    const n = interruptedNotice(r.closed.find((x) => x.id === again.id)!, false);
+    expect(n.title).toBe('⚠️ 롱폼 제작이 서버 재시작으로 끊겼습니다 · 또 끊김 (렌더 40%)');
+    expect(n.body).toContain('자동 재시도도 끊겨');
+    expect(interruptedNotice(weekly, true).body).toContain('다시 시작합니다');
+  });
+
+  it('유실된 검토 알림 재발송 — 완성·알림 없음·안 올림만(유튜브에 올린 시범 편은 보내지 않는다)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lf-resend-'));
+    const store = new LongformStore(root);
+    store.create({ id: 'long_pilot20261019', dir: 'pilot-2026-10-19', title: '시범', stage: 'ready', patch: { youtubeId: 'e2Ujk0GuQyo', youtubeUrl: 'https://www.youtube.com/watch?v=e2Ujk0GuQyo', youtubeState: 'done' } });
+    const lost = store.create({ title: '유실', stage: 'ready' });
+    store.create({ title: '보냄', stage: 'ready', patch: { notifiedTs: new Date().toISOString() } });
+    const send = vi.fn(async () => true);
+    expect(await resendLongformNotices({ store, now: new Date(), send })).toBe(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect((send.mock.calls[0] as unknown[])[0]).toMatchObject({ id: lost.id });
   });
 });
 

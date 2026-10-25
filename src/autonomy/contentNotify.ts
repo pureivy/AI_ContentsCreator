@@ -448,18 +448,40 @@ export function fmtMinSec(sec?: number): string {
 export function chapterLines(desc: string | undefined, max = 8): string[] {
   return (desc ?? '').split('\n').map((l) => l.trim()).filter((l) => /^\d{1,2}:\d{2}(:\d{2})?\s/.test(l)).slice(0, max);
 }
-/** 롱폼 검토 대기 캡션(HTML, 썸네일 사진에 부착 — 1024자 안). 순수 — 테스트 대상. */
-export function longformCaptionHtml(r: Pick<LongformRecord, 'id' | 'title' | 'ytTitle' | 'brand' | 'durationSec' | 'topicReason' | 'ytDescription'>): string {
+type LongformWarnFields = 'sceneBuilt' | 'sceneTotal' | 'sttFailed' | 'sttTotal' | 'pronSuspect' | 'pronSuspectCount' | 'factState';
+/**
+ * 롱폼 품질 경고 줄(순수, 2026-10-25) — 발행 버튼이 바로 공개로 올리는데 캡션에 결함이 안 보여 그대로 나갔다. 경고만(발행은 막지 않는다).
+ * 빠진 장면·받아쓰기 실패·발음 의심(앞 3개 id·짧은 글)·사실 확인 실패/근거 없는 주장.
+ */
+export function longformWarnings(r: Pick<LongformRecord, LongformWarnFields>): string[] {
+  const out: string[] = [];
+  if (r.sceneTotal && (r.sceneBuilt ?? 0) < r.sceneTotal) out.push(`⚠ 장면 ${r.sceneBuilt ?? 0}/${r.sceneTotal} (빠진 장면 ${r.sceneTotal - (r.sceneBuilt ?? 0)})`);
+  if (r.sttFailed) out.push(`⚠ 받아쓰기 확인 실패 ${r.sttFailed}문장${r.sttTotal && r.sttFailed * 2 > r.sttTotal ? ` / ${r.sttTotal} — 절반 넘게 발음 확인 못 함` : ''}`);
+  const nPron = r.pronSuspectCount ?? r.pronSuspect?.length ?? 0;
+  if (nPron) out.push([`⚠ 발음 의심 ${nPron}문장`, ...(r.pronSuspect ?? []).slice(0, 3).map((x) => `· ${x.id} "${clip(x.text, 22)}"${x.mismatch ? ` (${clip(x.mismatch, 24)})` : ''}`)].join('\n'));
+  if (r.factState?.status === 'error') out.push('⚠ 사실 확인 실패 — 판정기가 답하지 않아 근거 대조를 못 했습니다');
+  else if (r.factState?.status === 'residual') out.push(`⚠ 근거 없는 주장 ${r.factState.residual ?? 0}건 — factgate.json 확인`);
+  return out;
+}
+/** 텔레그램 사진 캡션 한도(1024) 안 여유(이 값 미만) — 넘치면 챕터 줄부터, 그래도 넘치면 고른 이유를 뺀다(경고는 끝까지 남긴다). */
+export const LONGFORM_CAPTION_MAX = 1000;
+/** 롱폼 검토 대기 캡션(HTML, 썸네일 사진에 부착 — 1024자 안). 경고는 제목 바로 아래(눈에 띄게). 순수 — 테스트 대상. */
+export function longformCaptionHtml(r: Pick<LongformRecord, 'id' | 'title' | 'ytTitle' | 'brand' | 'durationSec' | 'topicReason' | 'ytDescription'> & Partial<Pick<LongformRecord, LongformWarnFields>>): string {
   const len = fmtMinSec(r.durationSec);
-  const chapters = chapterLines(r.ytDescription);
-  return [
+  const warn = longformWarnings(r);
+  const build = (chapters: string[], reason = true) => [
     escapeHtml(`🎞 롱폼 검토 대기${brandTag(r.brand)}`),
     `<b>${escapeHtml(clip(r.ytTitle || r.title, 120))}</b>`,
+    warn.length ? `<b>${escapeHtml(warn.join('\n'))}</b>` : '',
     len ? escapeHtml(`길이 ${len}`) : '',
-    r.topicReason ? escapeHtml(`고른 이유: ${clip(r.topicReason, 160)}`) : '',
+    reason && r.topicReason ? escapeHtml(`고른 이유: ${clip(r.topicReason, 160)}`) : '',
     chapters.length ? escapeHtml(['챕터', ...chapters.map((l) => clip(l, 48))].join('\n')) : '',
     escapeHtml(`▶ 미리보기(바로 재생): ${studioBase()}/api/longform/${encodeURIComponent(r.id)}/video`),
   ].filter(Boolean).join('\n');
+  const chapters = chapterLines(r.ytDescription);
+  let html = build(chapters);
+  while (html.length >= LONGFORM_CAPTION_MAX && chapters.length) { chapters.pop(); html = build(chapters); }
+  return html.length >= LONGFORM_CAPTION_MAX ? build([], false) : html;
 }
 /** 롱폼 발행 버튼 — callback_data 규격은 telegramBot.parseCallback 과 한 쌍(ly·lt·lf). */
 export const longformButtons = (id: string): TgButton[][] => [[
@@ -469,12 +491,12 @@ export const longformButtons = (id: string): TgButton[][] => [[
 
 /**
  * 롱폼 ready → 썸네일 사진 + 캡션 + 버튼(썸네일 없으면 글자만). 보냈으면 notifiedTs 를 남기고 true.
- * reply=true 는 버튼에 대한 답(썸네일 다시 만든 뒤 재전송)이라 '새 콘텐츠 알림' 설정과 무관하게 보낸다.
+ * '새 콘텐츠 알림'(NOTIFY_CONTENT_READY) 설정과 무관하게 보낸다(2026-10-25 — 롱폼 발행은 이 알림의 버튼으로만 한다, 끄면 편이 묻힌다).
+ * reply=true 는 버튼에 대한 답(썸네일 다시 만든 뒤 재전송) — 대조표·웹훅은 다시 안 보낸다.
  * 절대 throw 하지 않는다(알림이 제작·발행을 막지 않는다).
  */
 export async function notifyLongformReady(rec: LongformRecord, opts: { reply?: boolean } = {}): Promise<boolean> {
   try {
-    if (!opts.reply && !contentReadyNotifyEnabled()) return false;
     if (!telegramCreds()) return false;
     const caption = longformCaptionHtml(rec);
     const dir = longformStore().absDir(rec);

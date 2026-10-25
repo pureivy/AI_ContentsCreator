@@ -16,11 +16,15 @@
  *
  * 무거운 단계(낭독·렌더)는 오토런 블로그 런·숏폼 생성이 돌고 있으면 끝날 때까지 기다린다(60초 간격, 최대 3시간 — 넘으면 그냥 간다).
  * 한 번에 한 편만(모듈 잠금). 돈 드는 부품은 전부 deps 로 바꿔 끼운다 — 테스트는 전부 가짜.
+ *
+ * 검토 알림 경고(2026-10-25) — 빠진 장면·받아쓰기 실패·발음 의심·사실 확인 실패/잔여 주장을 레코드에 남겨 캡션 맨 위에 싣는다(발행은 막지 않는다).
+ * 재시작으로 끊긴 주간 편은 같은 폴더로 한 번 자동 재시도(resumeLongformEpisode — 사실 확인까지 끝난 대본·낭독·클립·장면 파일 재사용).
+ *   수종 형태(species/index.json·scenes/_species.ts)가 있으면 그대로 쓰고, 비용은 앞 실행 레코드 costUsd 에 이어 센다.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
-import { LongformStore, longformStore, type LongformRecord } from '../content/longform';
+import { LongformStore, longformResendDue, longformRetryDue, longformStore, type LongformRecord } from '../content/longform';
 import { factGateBlog } from '../content/factGate';
 import { monthSpendUsd } from '../llm/cost';
 import { notify } from '../autonomy/notify';
@@ -28,11 +32,12 @@ import { notifyLongformReady } from '../autonomy/contentNotify';
 import { generateLongformThumbnail } from './longformThumbnail';
 import { coherenceLlm, defaultTopicDeps, selectCoherentTopic, selectTopic, topicLabel, type TopicChoice } from '../longform/topic';
 import { loadSources, type SourcePiece } from '../longform/source';
-import { footageInventory, loadMediaVideos, saveEpisodeScript, scriptText } from '../longform/episode';
-import { factCheckScript, rewordForPronunciation, writeScript, defaultLlmJSON, type LlmJSON } from '../longform/writer';
+import { footageInventory, loadEpisodeScript, loadMediaVideos, saveEpisodeScript, scriptText } from '../longform/episode';
+import { factCheckScript, rewordForPronunciation, writeScript, defaultLlmJSON, type FactRecord, type LlmJSON } from '../longform/writer';
 import { assembleTimeline, defaultAssetDeps, synthesizeAll, type AssetDeps } from '../longform/assets';
 import { defaultRenderDeps, renderEpisode, renderEpisodeFull, type RenderDeps } from '../longform/render';
-import { prepareSpecies, type SpeciesIndex } from '../longform/speciesPreset';
+import { loadSpeciesIndex, prepareSpecies, type SpeciesIndex } from '../longform/speciesPreset';
+import { SCENE_DIR, SPECIES_MODULE } from '../longform/sceneFiles';
 import type { SceneStageMode } from './longformScenes';
 import type { FullStyle } from '../longform/fullProps';
 import { execFile } from 'node:child_process';
@@ -70,7 +75,7 @@ export interface LongformDeps {
   /** 화면 꼴 — 전체 화면(스타일)·종전 칸 나눔. 운영은 CONFIG(LONGFORM_LAYOUT·LONGFORM_STYLE). */
   layout: { stage: 'full'; style: FullStyle; presenter?: boolean } | { stage: 'panel' };
   /** 문장 그림 장면 단계 — 만든 장면 수, 에이전트 비용(USD, CLI 보고), 편 전용 진입점(장면이 있을 때만), 검토(정하람) 결과. mode = 전체 화면이면 그 옵션. */
-  buildScenes: (dir: string, segments: TimedSegment[], signal?: AbortSignal, mode?: SceneStageMode) => Promise<{ built: number; costUsd?: number; entryPoint?: string; contact?: string; review?: { redo: number; redone: number; skipped?: string } }>;
+  buildScenes: (dir: string, segments: TimedSegment[], signal?: AbortSignal, mode?: SceneStageMode, opts?: { resume?: boolean }) => Promise<{ built: number; costUsd?: number; entryPoint?: string; contact?: string; review?: { redo: number; redone: number; skipped?: string } }>;
   /** 수종 형태 단계(전체 화면만) — 편 수종 프리셋(키트 내장·서다인 작성·일반형)·실물 대조용 사진. 실패해도 편은 간다. */
   species: (o: { dir: string; script: LongformScript; media: MediaItem[]; sourceText: string; signal?: AbortSignal }) => Promise<SpeciesIndex>;
   /** 보관소 영상 id → 수종(전체 화면 렌더의 끼움 카드 배정 폴백). */
@@ -115,11 +120,11 @@ export function defaultLongformDeps(bus?: EventBus): LongformDeps {
     assets: defaultAssetDeps,
     render: defaultRenderDeps,
     layout: CONFIG.longformLayout === 'panel' ? { stage: 'panel' } : { stage: 'full', style: CONFIG.longformStyle, ...(CONFIG.longformPresenter ? { presenter: true } : {}) },
-    buildScenes: (dir, segments, signal, mode) => buildScenes(dir, segments, signal, {
+    buildScenes: (dir, segments, signal, mode, sceneOpts) => buildScenes(dir, segments, signal, {
       designerBrief: () => designerBrief(),
       activity: (line) => appendActivity(LF_DESIGNER, line),
       ...(CONFIG.longformReview ? { review: sceneReviewer({ ...opt, activity: (line) => appendActivity('reviewer', line) }) } : {}),
-    }, mode),
+    }, mode, sceneOpts),
     species: (o) => prepareSpecies({
       ...o, repo: path.resolve('.'), model: CONFIG.cloudTierModels.heavy, log: (m) => console.log('[롱폼]', m),
       llm: staffLlm('research_lead', { ...opt, fallback: defaultLlmJSON, summary: '롱폼 수종 형태 프리셋' }),
@@ -179,7 +184,7 @@ export interface EpisodeResult { ok: boolean; id: string; error?: string }
  * 시작 — 잠금·주제 선정(LLM 한 번, 수 초)·레코드 생성까지 기다린다(라우트가 id 를 바로 돌려준다), 나머지는 done 이 끝날 때까지 뒤에서.
  * 이미 만드는 편이 있으면 busy, 고를 주제가 없으면 no_topic. 잠금은 첫 await 전에 잡는다(동시 두 요청이 같이 통과하지 않게).
  */
-export async function beginLongformEpisode(o: { brand: string; pieceIds?: string[]; signal?: AbortSignal; bus?: EventBus; deps?: Partial<LongformDeps> }): Promise<BeginResult | BeginError> {
+export async function beginLongformEpisode(o: { brand: string; pieceIds?: string[]; signal?: AbortSignal; bus?: EventBus; deps?: Partial<LongformDeps>; trigger?: LongformRecord['trigger'] }): Promise<BeginResult | BeginError> {
   if (running) return { ok: false, error: 'busy', message: `이미 롱폼을 만드는 중입니다(${running})` };
   const d: LongformDeps = { ...defaultLongformDeps(o.bus), ...o.deps };
   running = '주제 선정';
@@ -191,33 +196,121 @@ export async function beginLongformEpisode(o: { brand: string; pieceIds?: string
   const rec = d.store.create({
     dir: dirName, brand: o.brand, stage: 'producing',
     title: topic.theme || `${topicLabel(topic.topic)} — ${topic.anchor.title}`,
-    patch: { progress: '주제 선정', topicReason: topic.reason, topicKey: topic.topicKey, sourcePieceIds: topic.pieces.map((p) => p.id), thumbState: 'none' },
+    patch: { progress: '주제 선정', topicReason: topic.reason, topicKey: topic.topicKey, sourcePieceIds: topic.pieces.map((p) => p.id), thumbState: 'none', ...(o.trigger ? { trigger: o.trigger } : {}) },
   });
   running = rec.id;
   const done = produce(rec, topic, d, o.signal, o.bus).finally(() => { running = null; });
   return { ok: true, id: rec.id, done };
 }
 
-/** 한 편 끝까지(스케줄러용) — 시작 실패는 그대로 결과로. */
-export async function runLongformEpisode(o: { brand: string; pieceIds?: string[]; signal?: AbortSignal; bus?: EventBus; deps?: Partial<LongformDeps> }): Promise<EpisodeResult> {
+/** 한 편 끝까지(스케줄러용) — 시작 실패는 그대로 결과로. onStarted = 레코드가 생기면(런 제목을 편 제목으로). */
+export async function runLongformEpisode(o: { brand: string; pieceIds?: string[]; signal?: AbortSignal; bus?: EventBus; deps?: Partial<LongformDeps>; trigger?: LongformRecord['trigger']; onStarted?: (id: string) => void }): Promise<EpisodeResult> {
   const b = await beginLongformEpisode(o);
   if (!b.ok) {
     const d = { ...defaultLongformDeps(), ...o.deps };
     d.log(`시작 안 함 — ${b.message}`);
-    // 주간 자동 실행이 조용히 건너뛰지 않게 — 주제가 없을 때만 알린다(이미 만드는 중이면 그 편이 알린다).
-    if (b.error === 'no_topic') await d.notifyFail('🎞 롱폼 이번 주 건너뜀', b.message).catch(() => {});
+    // 주간 자동 실행이 조용히 건너뛰지 않게 — 주제 없음·이미 만드는 중 모두 사유와 함께 알린다(2026-10-25 — 종전엔 만드는 중이면 조용히 건너뛰었다).
+    await d.notifyFail('🎞 롱폼 이번 주 건너뜀', b.message).catch(() => {});
     return { ok: false, id: '', error: b.message };
   }
+  try { o.onStarted?.(b.id); } catch { /* 표시만 잃는다 */ }
   return b.done;
 }
 
-async function produce(rec: LongformRecord, topic: TopicChoice, d: LongformDeps, signal?: AbortSignal, bus?: EventBus): Promise<EpisodeResult> {
+/** 편 폴더의 주제(topic.json) — 재시도가 같은 주제·같은 글로 잇는다. 없거나 깨지면 null. */
+function readTopic(dir: string): TopicChoice | null {
+  try { const t = JSON.parse(fs.readFileSync(path.join(dir, 'topic.json'), 'utf8')) as TopicChoice; return t?.topicKey && Array.isArray(t.pieces) && t.anchor ? t : null; } catch { return null; }
+}
+
+/**
+ * 끊긴 편 이어 만들기(2026-10-25 — 재시작으로 끊긴 주간 편 자동 재시도). 같은 레코드·같은 폴더: 사실 확인까지 끝난 대본이 있으면 그대로 쓰고
+ * (낭독 mp3·클립은 문장 키 캐시라 비용 0), 그림은 buildScenes resume(있는 장면 파일은 두고 빠진 것만). autoRetried 를 먼저 남긴다 —
+ * 이 재시도가 또 끊기면 다음 부팅은 재시도하지 않는다(재시작 고리에서 돈을 계속 쓰지 않게).
+ */
+export async function resumeLongformEpisode(o: { id: string; signal?: AbortSignal; bus?: EventBus; deps?: Partial<LongformDeps> }): Promise<BeginResult | BeginError> {
+  if (running) return { ok: false, error: 'busy', message: `이미 롱폼을 만드는 중입니다(${running})` };
+  const d: LongformDeps = { ...defaultLongformDeps(o.bus), ...o.deps };
+  const rec = d.store.get(o.id);
+  const dir = rec ? d.store.absDir(rec) : null;
+  if (!rec || !dir) return { ok: false, error: 'unknown_longform', message: `이어 만들 롱폼이 없습니다(${o.id})` };
+  running = rec.id;
+  d.store.update(rec.id, { stage: 'producing', autoRetried: true, error: undefined, progress: '재시도 — 주제 확인' });
+  // topic.json 이 없는 옛 편은 같은 글로 다시 고른다(수동 지정 경로 — 결정적).
+  let topic = readTopic(dir);
+  if (!topic && rec.sourcePieceIds?.length) { try { topic = await d.selectTopic(rec.sourcePieceIds, o.signal); } catch { topic = null; } }
+  if (!topic) {
+    running = null;
+    d.store.update(rec.id, { stage: 'error', error: '재시도 실패: 주제를 다시 찾지 못했습니다 — 다시 만드세요', progress: undefined });
+    return { ok: false, error: 'no_topic', message: '이어 만들 주제를 찾지 못했습니다' };
+  }
+  const done = produce(d.store.get(rec.id)!, topic, d, o.signal, o.bus, { resume: true }).finally(() => { running = null; });
+  return { ok: true, id: rec.id, done };
+}
+
+/**
+ * 부팅 정리(2026-10-25) — 제작은 이 프로세스 메모리에서만 돈다. 새 프로세스엔 살아 있는 제작이 없으니 제작 중(producing) 편을 본다:
+ * 자동 재시도 대상(longformRetryDue — 오늘 주간 자동 실행으로 시작, 아직 재시도 전)은 producing 으로 둔다(호출부가 잠시 뒤 resumeLongformEpisode —
+ * 재시작이 잇따르면 다음 부팅이 다시 본다). 나머지는 error 로 닫는다(안 닫으면 제작실에 영원히 '만드는 중'). 반환은 알림용(닫기 전 progress 그대로).
+ */
+export function sweepInterruptedLongform(store: LongformStore, now: Date): { closed: LongformRecord[]; retry: LongformRecord[] } {
+  const closed: LongformRecord[] = [], retry: LongformRecord[] = [];
+  for (const x of store.list()) {
+    if (x.stage !== 'producing') continue;
+    if (longformRetryDue(x, now)) { retry.push(x); continue; }
+    store.update(x.id, { stage: 'error', error: `서버 재시작으로 제작이 끊겼습니다${x.progress ? `(${x.progress})` : ''} — 다시 만드세요`, progress: undefined });
+    closed.push(x);
+  }
+  return { closed, retry };
+}
+
+/** 끊긴 편 알림 문구(순수). retrying = 같은 폴더로 한 번 다시 시작함. */
+export function interruptedNotice(x: Pick<LongformRecord, 'title' | 'progress' | 'autoRetried'>, retrying: boolean): { title: string; body: string } {
+  return {
+    title: `⚠️ 롱폼 제작이 서버 재시작으로 끊겼습니다 · ${x.title}${x.progress ? ` (${x.progress})` : ''}`,
+    body: retrying ? '같은 폴더로 한 번 자동으로 다시 시작합니다 — 끝난 낭독·클립·장면은 다시 만들지 않습니다.'
+      : `${x.autoRetried ? '자동 재시도도 끊겨 더 시도하지 않습니다. ' : ''}제작실 롱폼 탭에서 다시 만드세요.`,
+  };
+}
+
+/**
+ * 유실된 검토 알림 다시 보내기(2026-10-25 — 부팅·하루 한 번). longformResendDue(완성·알림 없음·아직 안 올림·7일 안)만.
+ * notifyLongformReady 가 보내면 notifiedTs 를 남기므로 실패한 것은 다음 번에 다시 본다. 보낸 수.
+ */
+export async function resendLongformNotices(o: { store: LongformStore; now: Date; send: (rec: LongformRecord) => Promise<boolean>; log?: (m: string) => void }): Promise<number> {
+  let n = 0;
+  for (const x of o.store.list()) {
+    if (!longformResendDue(x, o.now)) continue;
+    const ok = await o.send(x).catch(() => false);
+    o.log?.(`유실된 검토 알림 재발송 ${ok ? '성공' : '실패'} — ${x.title.slice(0, 30)}`);
+    if (ok) n++;
+  }
+  return n;
+}
+
+/** 사실 확인 상태(순수) — 판정기 재시도도 실패면 error, 문장에 안 붙어 남은 주장이 있으면 residual. */
+export function factStateOf(r: Pick<FactRecord, 'final'>): NonNullable<LongformRecord['factState']> {
+  if (r.final.status === 'error') return { status: 'error' };
+  const n = r.final.residual?.length ?? 0;
+  return n ? { status: 'residual', residual: n } : { status: 'ok' };
+}
+
+/** 재시도 — 사실 확인까지 끝난 대본(factgate.json 은 사실 확인 직후, script.json 은 그 뒤 낭독 바꿔 쓰기까지 반영). 없으면 null. */
+function savedFactScript(dir: string): { script: LongformScript; record: FactRecord } | null {
+  try {
+    const record = JSON.parse(fs.readFileSync(path.join(dir, 'factgate.json'), 'utf8')) as FactRecord;
+    return record?.final ? { script: loadEpisodeScript(dir), record } : null;
+  } catch { return null; }
+}
+
+async function produce(rec: LongformRecord, topic: TopicChoice, d: LongformDeps, signal?: AbortSignal, bus?: EventBus, opts: { resume?: boolean } = {}): Promise<EpisodeResult> {
   const id = rec.id;
   const dir = d.store.absDir(rec);
   const spend0 = d.spendUsd();
+  // 재시도 — 앞 실행 비용을 잃지 않게 이어 센다(장면 비용은 buildScenes 가 이번 실행분만 돌려준다 — 겹치지 않는다).
+  const priorUsd = opts.resume ? rec.costUsd ?? 0 : 0;
   let ttsChars = 0;
   let sceneUsd = 0; // 장면 에이전트(Claude Code CLI 보고 비용 — LLM 원장 밖)
-  const cost = () => Math.round(((d.spendUsd() - spend0) + ttsChars * LF_TTS_USD_PER_CHAR + sceneUsd) * 100) / 100;
+  const cost = () => Math.round((priorUsd + (d.spendUsd() - spend0) + ttsChars * LF_TTS_USD_PER_CHAR + sceneUsd) * 100) / 100;
   const stage = (progress: string, patch: Partial<LongformRecord> = {}) => { d.store.update(id, { progress, ...patch }); d.log(`${id} ${progress}`); bus?.emit('log', { message: `롱폼 ${progress}` }); };
   // 직원 배선(2026-10-23) — 대본·고쳐 쓰기는 한서윤, 썸네일 문구는 윤소이. 버스가 없으면 d.llmJSON(테스트는 가짜)에 역할 system 만 붙는다.
   const staff = (roleId: string, summary: string) => staffLlm(roleId, { ...(bus ? { bus } : {}), fallback: d.llmJSON, summary });
@@ -227,34 +320,51 @@ async function produce(rec: LongformRecord, topic: TopicChoice, d: LongformDeps,
   try {
     if (!dir) throw new Error(`폴더 이름이 안전하지 않음: ${rec.dir}`);
     fs.mkdirSync(dir, { recursive: true });
+    // 재시도(resume)가 같은 주제로 잇게 남긴다.
+    if (!opts.resume) fs.writeFileSync(path.join(dir, 'topic.json'), JSON.stringify(topic, null, 2));
+    // 재시도 — 사실 확인까지 끝난 대본이 있으면 대본 작성·사실 확인을 건너뛴다(같은 문장이어야 낭독·클립·장면 캐시가 맞는다).
+    const saved = opts.resume ? savedFactScript(dir) : null;
 
     // ── 대본 작성
-    stage('대본 작성');
+    stage(saved ? '대본 이어 쓰기' : '대본 작성');
     const sources = await d.loadSources(topic.pieces.map((p) => p.id));
     fs.writeFileSync(path.join(dir, 'sources.md'), sources.map((s) => `# ${s.title} (${s.pieceId})\n\n${s.body}\n`).join('\n---\n\n'));
     const sourceText = sources.map((s) => s.body).join('\n\n');
     const brandMedia = d.media(rec.brand);
     const inventory = footageInventory(brandMedia);
-    const w = await writeScript({
-      topicLabel: topicLabel(topic.topic), anchorTitle: topic.anchor.title, ...(topic.theme ? { theme: topic.theme } : {}), sources, inventory, month: d.now().getMonth() + 1,
-      llmJSON: writerLlm, signal, log: d.log, ...(topic.targetMinutes ? { targetMinutes: topic.targetMinutes } : {}),
-    });
-    let script: LongformScript = w.script;
-    // 편 주인공 수종(2026-10-23) — 주제 기준 글 수종(재고 있으면) → 장 수종 최다. 일반 장 화면·끼움 카드는 이 수종만.
-    const hero = script.heroSpecies ?? pickHeroSpecies(topic.anchor.species ?? undefined, script, inventory);
-    if (hero) script = { ...script, heroSpecies: hero };
-    saveEpisodeScript(dir, script);
-    d.store.update(id, { title: script.title });
-    abortCheck();
+    let script: LongformScript;
+    let fact: { script: LongformScript; record: FactRecord };
+    if (saved) {
+      d.log(`${id} 재시도 — 사실 확인까지 끝난 대본을 그대로 씁니다`);
+      fact = saved;
+      script = saved.script;
+      d.store.update(id, { title: script.title });
+    } else {
+      const w = await writeScript({
+        topicLabel: topicLabel(topic.topic), anchorTitle: topic.anchor.title, ...(topic.theme ? { theme: topic.theme } : {}), sources, inventory, month: d.now().getMonth() + 1,
+        llmJSON: writerLlm, signal, log: d.log, ...(topic.targetMinutes ? { targetMinutes: topic.targetMinutes } : {}),
+      });
+      script = w.script;
+      // 편 주인공 수종(2026-10-23) — 주제 기준 글 수종(재고 있으면) → 장 수종 최다. 일반 장 화면·끼움 카드는 이 수종만.
+      const hero = script.heroSpecies ?? pickHeroSpecies(topic.anchor.species ?? undefined, script, inventory);
+      if (hero) script = { ...script, heroSpecies: hero };
+      saveEpisodeScript(dir, script);
+      d.store.update(id, { title: script.title });
+      abortCheck();
 
-    // ── 사실 확인
-    stage('사실 확인');
-    // 걸린 문장 고쳐 쓰기는 작가(한서윤) — 숏폼도 원문 정합 수정은 작가(writerRole)가 한다. 판정(factGateBlog)은 그대로.
-    const fact = await factCheckScript({ script, sourceText, gate: d.factGate, llmJSON: writerLlm, signal, log: d.log });
-    script = fact.script;
-    fs.writeFileSync(path.join(dir, 'factgate.json'), JSON.stringify({ ...fact.record, writer: { attempts: w.attempts, problems: w.problems } }, null, 2));
-    saveEpisodeScript(dir, script);
-    fs.writeFileSync(path.join(dir, 'script.txt'), scriptText(script));
+      // ── 사실 확인
+      stage('사실 확인');
+      // 걸린 문장 고쳐 쓰기는 작가(한서윤) — 숏폼도 원문 정합 수정은 작가(writerRole)가 한다. 판정(factGateBlog)은 그대로.
+      fact = await factCheckScript({ script, sourceText, gate: d.factGate, llmJSON: writerLlm, signal, log: d.log });
+      script = fact.script;
+      fs.writeFileSync(path.join(dir, 'factgate.json'), JSON.stringify({ ...fact.record, writer: { attempts: w.attempts, problems: w.problems } }, null, 2));
+      saveEpisodeScript(dir, script);
+      fs.writeFileSync(path.join(dir, 'script.txt'), scriptText(script));
+    }
+    // 판정 실패·남은 주장은 편을 멈추지 않는다 — 검토 알림 경고로.
+    const factState = factStateOf(fact.record);
+    d.store.update(id, { factState });
+    if (factState.status !== 'ok') d.log(`${id} 사실 확인 경고 — ${factState.status === 'error' ? '판정 실패' : `남은 주장 ${factState.residual}건`}`);
     if (fact.record.final.issues.length) throw new Error(`대본 검사 문제 ${fact.record.final.issues.length}건 — ${fact.record.final.issues.slice(0, 3).join(' / ')}`);
     // 짧은 편(주제 v2, targetMinutes < 10)은 하한도 같은 비율로 — 8분 편이면 2,000자.
     const minChars = Math.round(MIN_CHARS_AFTER_FACT * Math.min(1, (topic.targetMinutes ?? 10) / 10));
@@ -274,6 +384,12 @@ async function produce(rec: LongformRecord, topic: TopicChoice, d: LongformDeps,
     });
     script = syn.script;
     ttsChars += syn.ttsChars;
+    d.store.update(id, {
+      sttFailed: syn.sttFailed.length, sttTotal: syn.segmentCount, pronSuspectCount: syn.suspects.length,
+      pronSuspect: syn.suspects.slice(0, 5).map((x) => ({ id: x.id, text: x.text.slice(0, 40), score: Math.round(x.score * 1000) / 1000, ...(x.mismatch ? { mismatch: x.mismatch } : {}) })),
+    });
+    // 받아쓰기가 절반 넘게 실패해도 편은 끝까지 간다(발음 확인만 못 한 것) — 검토 알림 경고로.
+    if (syn.sttFailed.length * 2 > syn.segmentCount) d.log(`${id} 받아쓰기 실패 ${syn.sttFailed.length}/${syn.segmentCount}문장 — 발음 확인 없이 진행`);
     if (syn.rewordCount) fs.writeFileSync(path.join(dir, 'script.txt'), scriptText(script));
     abortCheck();
 
@@ -290,7 +406,10 @@ async function produce(rec: LongformRecord, topic: TopicChoice, d: LongformDeps,
     if (full) {
       stage('수종 형태');
       try {
-        const sx = await d.species({ dir, script, media: brandMedia, sourceText, ...(signal ? { signal } : {}) });
+        // 재시도 — 지난 실행의 수종 표·_species.ts 가 있으면 그대로(다시 쓰면 EP_SPECIES id·모양이 바뀌어 이미 그린 장면이 깨진다).
+        const prev = saved && fs.existsSync(path.join(dir, SCENE_DIR, SPECIES_MODULE)) ? loadSpeciesIndex(dir) : null;
+        if (prev) d.log(`${id} 재시도 — 지난 수종 형태를 그대로 씁니다`);
+        const sx = prev ?? await d.species({ dir, script, media: brandMedia, sourceText, ...(signal ? { signal } : {}) });
         speciesNote = sx.species.map((e) => `${e.nameKo} ${e.source === 'builtin' ? '내장' : e.source === 'episode' ? '새 프리셋' : '일반형'}·사진 ${e.refs.length}${e.commons?.length ? `·도감 ${e.commons.length}` : ''}`).join(', ');
         d.log(`${id} 수종 형태 — ${speciesNote || '수종 없음'}`);
       } catch (e) { d.log(`${id} 수종 형태 실패(일반형으로 진행): ${e instanceof Error ? e.message : String(e)}`); }
@@ -302,8 +421,13 @@ async function produce(rec: LongformRecord, topic: TopicChoice, d: LongformDeps,
     // 오피스: 차민혁이 그림 단계 내내 '렌더링 중'(팀 phase integrate) — 장면은 Claude Code 세션이 그리므로 runAgent 스폰이 없다.
     const designer = bus ? staffRole(LF_DESIGNER) : undefined;
     if (bus && designer) { emitStaffSpawn(bus, designer, CONFIG.cloudTierModels.heavy); staffOfficeStart(bus, designer, { phase: 'integrate', summary: '문장 그림' }); }
-    const sc = full ? await d.buildScenes(dir, asm.timeline.segments, signal, { stage: 'full', style: full.style, ...(full.presenter ? { presenter: true } : {}) }) : await d.buildScenes(dir, asm.timeline.segments, signal);
+    // 재시도는 이미 그린 장면 파일을 두고 빠진 것만(buildScenes resume — 대본을 그대로 이어 써서 문장이 같다).
+    const sceneOpts = saved ? { resume: true } : undefined;
+    const fullMode: SceneStageMode | undefined = full ? { stage: 'full', style: full.style, ...(full.presenter ? { presenter: true } : {}) } : undefined;
+    const segs = asm.timeline.segments;
+    const sc = sceneOpts ? await d.buildScenes(dir, segs, signal, fullMode, sceneOpts) : fullMode ? await d.buildScenes(dir, segs, signal, fullMode) : await d.buildScenes(dir, segs, signal);
     sceneUsd += sc.costUsd ?? 0;
+    d.store.update(id, { sceneBuilt: sc.built, sceneTotal: asm.timeline.segments.length });
     sceneNote = `장면 ${sc.built}/${asm.timeline.segments.length}${sc.review ? ` · 검토 다시 그림 ${sc.review.redone}/${sc.review.redo}${sc.review.skipped ? `(${sc.review.skipped.slice(0, 40)})` : ''}` : ''}`;
     d.log(`${id} 그림 ${sceneNote}${sc.costUsd ? ` · $${sc.costUsd}` : ''}`);
     if (bus && designer) { staffSay(bus, LF_DESIGNER, `롱폼 그림 ${sceneNote}`); bus.emit('phase', { team_id: LF_TEAM, phase: 'work' }); }
@@ -332,7 +456,11 @@ async function produce(rec: LongformRecord, topic: TopicChoice, d: LongformDeps,
     noteEnd(d, `[롱폼 완성] ${script.title.slice(0, 30)} — ${Math.floor(r.durationSec / 60)}분 ${r.durationSec % 60}초 · ${full ? `전체 화면 ${full.style} · ` : ''}${sceneNote || '장면 없음'}${speciesNote ? ` · 수종 ${speciesNote}` : ''} · 사실 확인 고침 ${fact.record.revised.length}·뺌 ${fact.record.dropped.length} · 비용 약 $${done.costUsd}`);
     if (bus) bus.emit('phase', { team_id: LF_TEAM, phase: 'idle' });
     pruneEpisodeWork(dir, d.log);
-    await d.notifyReady(done).catch(() => false);
+    // 검토 알림(발행 버튼)이 안 나가면 글자 알림으로라도 — 부팅·하루 한 번 재발송(resendLongformNotices)이 버튼 알림을 다시 시도한다.
+    if (!(await d.notifyReady(done).catch(() => false))) {
+      d.log(`${id} 검토 알림 전송 실패 — 글자 알림으로 대신`);
+      await d.notifyFail(`🎞 롱폼 완성 — 검토 알림 전송 실패 · ${script.title}`, '썸네일·발행 버튼 알림을 보내지 못했습니다. 제작실 롱폼 탭에서 확인하세요(곧 다시 보냅니다).').catch(() => {});
+    }
     return { ok: true, id };
   } catch (e) {
     const error = (e instanceof Error ? e.message : String(e)).slice(0, 300);
@@ -341,7 +469,9 @@ async function produce(rec: LongformRecord, topic: TopicChoice, d: LongformDeps,
     d.log(`${id} 실패 — ${error}`);
     noteEnd(d, `[롱폼 실패] ${(cur?.title ?? id).slice(0, 30)} — ${cur?.progress ?? ''} 단계: ${error.slice(0, 120)}${sceneNote ? ` · ${sceneNote}` : ''} · 비용 약 $${cost()}`);
     if (bus) bus.emit('phase', { team_id: LF_TEAM, phase: 'idle' });
-    await d.notifyFail(`⚠️ 롱폼 제작 실패 · ${cur?.title ?? id}`, `${cur?.progress ?? ''} 단계에서 멈췄습니다: ${error}\n고른 이유: ${topic.reason}`).catch(() => {});
+    // 사람이 취소한 것은 실패가 아니다 — 짧게만.
+    if (signal?.aborted) await d.notifyFail(`🎞 롱폼 제작 취소됨 · ${cur?.title ?? id}`, `${cur?.progress ?? ''} 단계에서 취소했습니다.`).catch(() => {});
+    else await d.notifyFail(`⚠️ 롱폼 제작 실패 · ${cur?.title ?? id}`, `${cur?.progress ?? ''} 단계에서 멈췄습니다: ${error}\n고른 이유: ${topic.reason}`).catch(() => {});
     return { ok: false, id, error };
   }
 }

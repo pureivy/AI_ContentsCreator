@@ -71,7 +71,7 @@ import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, pl
 import { pickWriter, recentWriterIdsFor, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, shortsRunningCount, reviseShorts, hookStillFor, siblingPlanFile } from '../orchestrator/shorts';
-import { beginLongformEpisode, runLongformEpisode, longformEpisodeRunning } from '../orchestrator/longform';
+import { beginLongformEpisode, runLongformEpisode, longformEpisodeRunning, resumeLongformEpisode, sweepInterruptedLongform, interruptedNotice, resendLongformNotices } from '../orchestrator/longform';
 import { inheritedSceneImages, inheritedClips } from '../content/shortsInherit';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo, waitForThumbnail } from '../tools/shortsRender';
 import { generateDesignedThumbnail, thumbTextQaFailed } from '../orchestrator/shortsThumbnail';
@@ -118,7 +118,7 @@ import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
 import { maintainIgTokens, checkIgToken } from '../tools/igToken';
 import { igTokenExpiresAt } from '../secrets/store';
-import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, notifyYoutubeUploaded, notifyLongformYoutubeDone, notifyNaverClipDone, notifyNaverClipNudge, youtubeUploadNotifies, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
+import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, notifyYoutubeUploaded, notifyLongformYoutubeDone, notifyNaverClipDone, notifyNaverClipNudge, youtubeUploadNotifies, contentReadyNotifyEnabled, studioBase, notifyLongformReady } from '../autonomy/contentNotify';
 import { startTelegramBot } from '../autonomy/telegramBot';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
@@ -2735,9 +2735,35 @@ if (!process.env.VITEST) for (const x of longformStore().list()) {
   }
   const d = longformStore().absDir(x);
   if (x.thumbState === 'pending' && d) longformStore().update(x.id, { thumbState: longformThumbStateOf(d) });
-  // 제작 중(producing)이던 편 — 제작은 이 프로세스 메모리에서만 돈다. 새 프로세스엔 살아 있는 제작이 없으니 실패로 닫는다
-  // (안 닫으면 제작실에 영원히 '만드는 중'으로 남는다). 낭독·클립은 캐시라 다시 만들면 그 단계는 비용 없이 지나간다.
-  if (x.stage === 'producing') longformStore().update(x.id, { stage: 'error', error: `서버 재시작으로 제작이 끊겼습니다${x.progress ? `(${x.progress})` : ''} — 다시 만드세요`, progress: undefined });
+}
+// 제작 중(producing)이던 편(2026-10-25) — 제작은 이 프로세스 메모리에서만 돈다. 종전엔 조용히 실패로 닫았고, '다시 만들기'는 새 폴더·새 대본이라
+// 낭독·클립 캐시(문장 키)도 맞지 않았다. 이제: 닫는 편은 바로 알리고, 오늘 주간 자동 실행으로 시작한 편은 60초 뒤(tsx 연쇄 재시작 정착) 같은 폴더로
+// 한 번 자동 재시도(resumeLongformEpisode — 사실 확인까지 끝난 대본·낭독·클립·장면 파일 재사용). 재시도도 끊기면 다음 부팅은 닫고 알리기만.
+if (!process.env.VITEST) {
+  const lfSweep = sweepInterruptedLongform(longformStore(), new Date());
+  for (const x of lfSweep.closed) void notify(interruptedNotice(x, false));
+  if (lfSweep.retry.length) {
+    const t = setTimeout(() => { for (const x of lfSweep.retry) retryInterruptedLongform(x.id); }, 60_000);
+    if (typeof t.unref === 'function') t.unref();
+  }
+}
+/** 끊긴 주간 편 자동 재시도 한 번 — 그 사이 다른 편이 돌거나 시작을 못 하면 닫고 알린다. */
+function retryInterruptedLongform(id: string): void {
+  const x = longformStore().get(id);
+  if (!x || x.stage !== 'producing') return;
+  const close = (why: string) => {
+    longformStore().update(id, { stage: 'error', error: `서버 재시작으로 제작이 끊겼습니다${x.progress ? `(${x.progress})` : ''} — ${why}`, progress: undefined });
+    void notify({ ...interruptedNotice(x, false), body: `${why} — 제작실 롱폼 탭에서 다시 만드세요.` });
+  };
+  if (longformEpisodeRunning()) { close(`자동 재시도 못 함(이미 만드는 중: ${longformEpisodeRunning()})`); return; }
+  const run = openLongformRun();
+  void resumeLongformEpisode({ id, signal: run.signal, bus: run.bus, deps: { isBusy: longformBusyReason } }).then((r) => {
+    if (!r.ok) { run.finish({ ok: false, id: '' }); if (longformStore().get(id)?.stage === 'producing') close(`자동 재시도 못 함(${r.message})`); else void notify({ ...interruptedNotice(x, false), body: r.message }); return; }
+    console.log('[롱폼]', `재시작으로 끊긴 편 자동 재시도 — ${x.title.slice(0, 30)} (${x.progress ?? ''})`);
+    void notify(interruptedNotice(x, true));
+    run.started(r.id);
+    void r.done.then(run.finish, (e: unknown) => run.finish({ ok: false, id: r.id, error: e instanceof Error ? e.message : String(e) }));
+  }, (e: unknown) => { run.finish({ ok: false, id: '' }); close(`자동 재시도 실패(${e instanceof Error ? e.message : String(e)})`); });
 }
 function longformListHandler(c: Context): Response {
   return c.json({ longform: longformStore().list().filter(brandMatch) });
@@ -5288,9 +5314,16 @@ if (CONFIG.longformWeekly) {
   const stopLongform = startDaily({
     time: CONFIG.longformTime, weekday: CONFIG.longformWeekday, key: 'longform-weekly',
     run: () => {
-      if (longformEpisodeRunning()) { console.log('[롱폼]', `이미 만드는 중 — 이번 주 시작 건너뜀(${longformEpisodeRunning()})`); return; }
+      // 이미 만드는 편이 있으면 이번 주 몫은 건너뛴다 — 조용히 넘어가지 않게 사유를 알린다(2026-10-25, 하루 한 번 발동이라 한 번만 나간다).
+      if (longformEpisodeRunning()) {
+        console.log('[롱폼]', `이미 만드는 중 — 이번 주 시작 건너뜀(${longformEpisodeRunning()})`);
+        const cur = longformStore().get(longformEpisodeRunning() ?? '');
+        void notify({ title: '🎞 롱폼 이번 주 건너뜀', body: `이미 만드는 편이 있어 이번 주 자동 제작을 시작하지 않았습니다 — ${cur ? `${cur.title}${cur.progress ? ` (${cur.progress})` : ''}` : longformEpisodeRunning()}` });
+        return;
+      }
       const run = openLongformRun();
-      void runLongformEpisode({ brand: activeBrandSlug() || 'bionditree', signal: run.signal, bus: run.bus, deps: { isBusy: longformBusyReason } })
+      // trigger=weekly — 재시작으로 끊기면 부팅이 같은 폴더로 한 번 자동 재시도한다(sweepInterruptedLongform). 수동 실행과 같이 런 제목을 편 제목으로(run.started).
+      void runLongformEpisode({ brand: activeBrandSlug() || 'bionditree', signal: run.signal, bus: run.bus, deps: { isBusy: longformBusyReason }, trigger: 'weekly', onStarted: run.started })
         .then(run.finish, (e: unknown) => run.finish({ ok: false, id: '', error: e instanceof Error ? e.message : String(e) }));
     },
     log: (m) => console.log('[롱폼]', m),
@@ -5298,6 +5331,15 @@ if (CONFIG.longformWeekly) {
   void stopLongform;
   // eslint-disable-next-line no-console
   console.log(`[ai-contents-studio] 롱폼 매주 제작 — ${['일', '월', '화', '수', '목', '금', '토'][CONFIG.longformWeekday]}요일 ${CONFIG.longformTime} 시작(완성 뒤 텔레그램 검토 · 발행은 버튼)`);
+}
+// 롱폼 검토 알림 유실 복구(2026-10-25) — 완성됐는데 알림(발행 버튼)이 안 나간 편을 부팅 60초 뒤·매일 09:00 다시 보낸다.
+// 사장님은 이 버튼으로만 발행한다 — '새 콘텐츠 알림' 설정과 무관. 7일 안·아직 안 올린 편만(시범 편처럼 올린 편·옛 편은 제외).
+// notifiedTs 는 보낸 뒤에 남는다(실패하면 다음 번에 다시 본다).
+if (!process.env.VITEST) {
+  const resendLf = () => { void resendLongformNotices({ store: longformStore(), now: new Date(), send: (rec) => notifyLongformReady(rec), log: (m) => console.log('[롱폼]', m) }).catch(() => {}); };
+  const t = setTimeout(resendLf, 60_000);
+  if (typeof t.unref === 'function') t.unref();
+  void startDaily({ time: '09:00', key: 'longform-notify-resend', run: resendLf, log: (m) => console.log('[롱폼]', m) });
 }
 // 수요 게이트 상태 1줄(2026-08-26 리뷰 M2) — 켜져 있어도 검색광고 키가 없으면 전량 fail-open 이라
 // 아무 판정도 일어나지 않는다. 그 '조용한 무동작'이 부팅 로그에서 바로 보이게 한다.

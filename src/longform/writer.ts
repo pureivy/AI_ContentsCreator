@@ -240,14 +240,16 @@ export interface FactRecord {
   first: { status: string; unsupported: string[]; contradicted: string[]; issues: string[] };
   revised: Array<{ id: string; from: string; to: string }>;
   dropped: Array<{ id: string; narration: string }>;
-  final: { status: string; unsupported: string[]; contradicted: string[]; issues: string[]; chars: number };
+  /** residual = 마지막 판정에서 걸렸지만 어느 문장에도 붙지 않아 고치지도 빼지도 못한 주장(대본에 남았을 수 있다 — 검토 알림 경고). */
+  final: { status: string; unsupported: string[]; contradicted: string[]; issues: string[]; chars: number; residual?: string[] };
 }
 
 type Gate = (a: { model: string; body: string; evidence: string; signal?: AbortSignal; maxClaims?: number; strict?: boolean }) => Promise<FactGateResult>;
 
 /**
  * 사실 확인 — factGateBlog strict + validateScript. 걸린 문장은 한 번 고쳐 쓰고 다시 확인, 그래도 걸리면 뺀다.
- * 판정 실패(error)는 고칠 문장을 모르는 것이라 그대로 기록만 하고 넘어간다(사람 검토가 마지막 관문).
+ * 판정 실패(error)는 한 번 더 판정한다(2026-10-25 — 종전엔 조용히 통과). 그래도 실패면 고칠 문장을 모르는 것이라 기록만 하고 넘어간다
+ * (final.status 'error' — 오케스트레이터가 검토 알림에 '사실 확인 실패'로 싣는다, 사람 검토가 마지막 관문).
  */
 export async function factCheckScript(o: {
   script: LongformScript; sourceText: string; gate: Gate; llmJSON?: LlmJSON; model?: string; signal?: AbortSignal; log?: (m: string) => void;
@@ -256,17 +258,22 @@ export async function factCheckScript(o: {
   const model = o.model ?? CONFIG.cloudTierModels.standard;
   const run = async (s: LongformScript) => {
     const body = s.chapters.flatMap((c) => c.segments).map((g) => g.narration).join('\n');
-    const r = await o.gate({ model, body, evidence: o.sourceText, maxClaims: 80, strict: true, signal: o.signal });
+    const ask = () => o.gate({ model, body, evidence: o.sourceText, maxClaims: 80, strict: true, signal: o.signal });
+    let r = await ask();
+    if (r.status === 'error') { log(`[사실] 판정 실패(${r.error ?? '사유 없음'}) — 한 번 더`); r = await ask(); }
     const issues = validateScript(s, o.sourceText);
     const flagged = segmentsForClaims(s, [...r.unsupported, ...r.contradicted]);
+    // 어느 문장에도 붙지 않은 주장 — 고칠 수도 뺄 수도 없어 남는다.
+    const attached = new Set([...flagged.values()].flat());
+    const residual = [...r.unsupported, ...r.contradicted].filter((c) => !attached.has(c));
     for (const [id, why] of segmentsForIssues(s, issues)) flagged.set(id, [...(flagged.get(id) ?? []), ...why]);
-    return { r, issues, flagged };
+    return { r, issues, flagged, residual };
   };
   let script = o.script;
   const first = await run(script);
   const record: FactRecord = {
     first: { status: first.r.status, unsupported: first.r.unsupported, contradicted: first.r.contradicted, issues: first.issues },
-    revised: [], dropped: [], final: { status: first.r.status, unsupported: first.r.unsupported, contradicted: first.r.contradicted, issues: first.issues, chars: scriptChars(script) },
+    revised: [], dropped: [], final: { status: first.r.status, unsupported: first.r.unsupported, contradicted: first.r.contradicted, issues: first.issues, chars: scriptChars(script), residual: first.residual },
   };
   log(`[사실] 1차 ${first.r.status} · 근거 없음 ${first.r.unsupported.length} · 모순 ${first.r.contradicted.length} · 검사 문제 ${first.issues.length} → 문장 ${first.flagged.size}`);
   if (!first.flagged.size) return { script, record };
@@ -285,7 +292,7 @@ export async function factCheckScript(o: {
     script = applyRevisions(script, new Map([...second.flagged.keys()].map((id) => [id, ''])));
   }
   const issues = validateScript(script, o.sourceText);
-  record.final = { status: second.r.status, unsupported: second.r.unsupported, contradicted: second.r.contradicted, issues, chars: scriptChars(script) };
+  record.final = { status: second.r.status, unsupported: second.r.unsupported, contradicted: second.r.contradicted, issues, chars: scriptChars(script), residual: second.residual };
   log(`[사실] 고침 ${record.revised.length} · 뺌 ${record.dropped.length} · 남은 검사 문제 ${issues.length} · ${record.final.chars}자`);
   return { script, record };
 }

@@ -372,6 +372,38 @@ describe('롱폼 알림 본문(순수)', () => {
     expect(html.length).toBeLessThan(1000);
     for (const row of longformButtons('long_pilot20261019')) for (const b of row) expect(parseCallback(b.callback_data)).not.toBeNull();
   });
+  it('품질 경고(2026-10-25) — 빠진 장면·받아쓰기 실패·발음 의심·사실 확인을 제목 바로 아래에, 결함 없으면 경고 없음', async () => {
+    const { longformCaptionHtml } = await import('./contentNotify');
+    const base = { id: 'long_1', title: 't', ytTitle: '감나무 가지치기', brand: 'bionditree', durationSec: 627, topicReason: '조회 합산 1위', ytDescription: desc };
+    const clean = longformCaptionHtml({ ...base, sceneBuilt: 98, sceneTotal: 98, sttFailed: 0, sttTotal: 98, pronSuspectCount: 0, factState: { status: 'ok' } });
+    expect(clean).not.toContain('⚠');
+    const html = longformCaptionHtml({
+      ...base, sceneBuilt: 74, sceneTotal: 98, sttFailed: 60, sttTotal: 98, pronSuspectCount: 4,
+      pronSuspect: [{ id: 'ch2-03', text: '이 시기에는 절대 가지를 자르면 안 됩니다.', score: 0.94, mismatch: '부정 안 1↔0' }, { id: 'ch3-01', text: '꽃눈은 3월에 부풉니다.', score: 0.9 }, { id: 'ch4-02', text: 'x', score: 0.8 }, { id: 'ch5-01', text: 'y', score: 0.8 }],
+      factState: { status: 'residual', residual: 2 },
+    });
+    expect(html).toContain('⚠ 장면 74/98 (빠진 장면 24)');
+    expect(html).toContain('⚠ 받아쓰기 확인 실패 60문장 / 98 — 절반 넘게');
+    expect(html).toContain('⚠ 발음 의심 4문장');
+    expect(html).toContain('ch2-03');
+    expect(html).not.toContain('ch5-01'); // 앞 3개만
+    expect(html).toContain('⚠ 근거 없는 주장 2건');
+    expect(html.indexOf('⚠')).toBeLessThan(html.indexOf('길이 10:27')); // 위쪽에
+    expect(longformCaptionHtml({ ...base, factState: { status: 'error' } })).toContain('⚠ 사실 확인 실패');
+  });
+  it('경고가 다 있어도 캡션은 1000자 안 — 넘치면 챕터부터 뺀다(경고는 남긴다)', async () => {
+    const { longformCaptionHtml } = await import('./contentNotify');
+    const longDesc = Array.from({ length: 8 }, (_, i) => `${i}:00 ${'아주 긴 챕터 이름 '.repeat(6)}`).join('\n');
+    const html = longformCaptionHtml({
+      id: 'long_1', title: 't', ytTitle: '가'.repeat(200), brand: 'bionditree', durationSec: 627, topicReason: '나'.repeat(300), ytDescription: longDesc,
+      sceneBuilt: 1, sceneTotal: 98, sttFailed: 98, sttTotal: 98, pronSuspectCount: 90,
+      pronSuspect: Array.from({ length: 5 }, (_, i) => ({ id: `ch${i}-01`, text: '<다>'.repeat(30), score: 0.5, mismatch: '숫자 0.5 ↔ 5 · 부정 안 1↔0' })),
+      factState: { status: 'residual', residual: 12 },
+    });
+    expect(html.length).toBeLessThan(1000);
+    expect(html).toContain('⚠ 근거 없는 주장 12건');
+    expect(html).toContain('/api/longform/long_1/video');
+  });
   it('업로드 결과 — 성공은 📺 주소, 실패는 사유와 다시 올리기(ly) 버튼', async () => {
     const { longformYoutubeDoneHtml } = await import('./contentNotify');
     const ok = longformYoutubeDoneHtml({ id: 'long_1', title: '제목', url: 'https://www.youtube.com/watch?v=abc' });

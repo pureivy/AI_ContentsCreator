@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { LongformStore, isSafeLongformDir, longformRange, LONGFORM_RANGE_CAP } from './longform';
+import { LongformStore, isSafeLongformDir, longformRange, longformResendDue, longformRetryDue, LONGFORM_RANGE_CAP } from './longform';
 
 const tmpRoot = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'longform-store-'));
 
@@ -96,5 +96,27 @@ describe('longformRange — 영상 Range 해석(순수)', () => {
     expect(longformRange('bytes=10-5', size)).toBe('invalid');
     expect(longformRange('bytes=-0', size)).toBe('invalid');
     expect(longformRange('bytes=0-', 0)).toBe('invalid');
+  });
+});
+
+// 2026-10-25 — 재시작으로 끊긴 주간 편 자동 재시도·유실된 검토 알림 재발송 판정.
+describe('longformRetryDue / longformResendDue', () => {
+  const now = new Date(2026, 9, 25, 9, 0);
+  const today = new Date(2026, 9, 25, 0, 1).toISOString();
+  it('재시도 — 오늘 주간 자동 실행으로 시작한 제작 중 편, 한 번만', () => {
+    expect(longformRetryDue({ stage: 'producing', trigger: 'weekly', createdTs: today }, now)).toBe(true);
+    expect(longformRetryDue({ stage: 'producing', trigger: 'weekly', createdTs: today, autoRetried: true }, now)).toBe(false);
+    expect(longformRetryDue({ stage: 'producing', createdTs: today }, now)).toBe(false); // 수동 실행
+    expect(longformRetryDue({ stage: 'producing', trigger: 'weekly', createdTs: new Date(2026, 9, 24, 23, 0).toISOString() }, now)).toBe(false); // 어제
+    expect(longformRetryDue({ stage: 'ready', trigger: 'weekly', createdTs: today }, now)).toBe(false);
+  });
+  it('재발송 — 완성·알림 없음·안 올림·7일 안만. 시범 편(유튜브 올림, notifiedTs 없음)은 제외', () => {
+    expect(longformResendDue({ stage: 'ready', createdTs: today }, now)).toBe(true);
+    // data/longform/index.json 의 시범 편 꼴
+    expect(longformResendDue({ stage: 'ready', createdTs: '2026-10-22T08:03:02.259Z', youtubeId: 'e2Ujk0GuQyo', youtubeUrl: 'https://www.youtube.com/watch?v=e2Ujk0GuQyo', youtubeState: 'done' }, now)).toBe(false);
+    expect(longformResendDue({ stage: 'ready', createdTs: today, notifiedTs: today }, now)).toBe(false);
+    expect(longformResendDue({ stage: 'ready', createdTs: today, youtubeState: 'uploading' }, now)).toBe(false);
+    expect(longformResendDue({ stage: 'ready', createdTs: new Date(2026, 9, 17, 9, 0).toISOString() }, now)).toBe(false); // 8일 전
+    expect(longformResendDue({ stage: 'error', createdTs: today }, now)).toBe(false);
   });
 });

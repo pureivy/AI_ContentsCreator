@@ -113,6 +113,34 @@ describe('사실 확인', () => {
     expect(r.record.dropped.map((x) => x.id)).toEqual(['b-01']);
     expect(r.script.chapters.flatMap((c) => c.segments).map((x) => x.id)).toEqual(['a-01', 'a-02']);
   });
+  it('판정 실패(error)는 한 번 더 판정한다 — 두 번째가 통과면 그대로 ok', async () => {
+    const err: FactGateResult = { ...gate([]), status: 'error', error: '주장 판정 실패(LLM 무응답)' };
+    let n = 0;
+    const g = vi.fn(async () => (n++ === 0 ? err : gate([])));
+    const r = await factCheckScript({ script: script(), sourceText: SRC, gate: g });
+    expect(g).toHaveBeenCalledTimes(2);
+    expect(r.record.final.status).toBe('pass');
+    expect(r.record.final.residual).toEqual([]);
+  });
+  it('두 번 다 실패면 final.status error 로 남긴다(편은 멈추지 않는다)', async () => {
+    const g = vi.fn(async (): Promise<FactGateResult> => ({ ...gate([]), status: 'error' }));
+    const r = await factCheckScript({ script: script(), sourceText: SRC, gate: g });
+    expect(g).toHaveBeenCalledTimes(2);
+    expect(r.record.final.status).toBe('error');
+  });
+  it('어느 문장에도 붙지 않는 주장은 residual 로 — 고치지도 빼지도 못해 남는다', async () => {
+    const g = vi.fn(async () => gate(['무화과는 영하 20도에서도 얼지 않는다']));
+    const r = await factCheckScript({ script: script(), sourceText: SRC, gate: g });
+    expect(r.record.final.residual).toEqual(['무화과는 영하 20도에서도 얼지 않는다']);
+    // 2차에서 문장에 붙은 주장은 그 문장을 빼므로 남지 않는다(final.unsupported 에는 그대로 있어도 residual 은 0)
+    let n = 0;
+    const g2 = vi.fn(async () => (n++ === 0 ? gate(['사과나무에 하루 물 세 번']) : gate(['사과나무는 잎이 진 뒤 물을 준다'])));
+    const llm = (async () => ({ revisions: [{ id: 'a-02', narration: '사과나무는 잎이 진 뒤 물을 줍니다.' }] })) as unknown as LlmJSON;
+    const r2 = await factCheckScript({ script: script(), sourceText: SRC, gate: g2, llmJSON: llm });
+    expect(r2.record.dropped.map((x) => x.id)).toEqual(['a-02']);
+    expect(r2.record.final.unsupported).toHaveLength(1);
+    expect(r2.record.final.residual).toEqual([]);
+  });
   it('걸린 문장이 없으면 한 번만 확인', async () => {
     const g = vi.fn(async () => gate([]));
     const r = await factCheckScript({ script: script(), sourceText: SRC, gate: g });

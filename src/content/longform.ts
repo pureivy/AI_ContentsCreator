@@ -51,6 +51,38 @@ export interface LongformRecord {
   /** 검토 대기 알림 발송 시각. */
   notifiedTs?: string;
   costUsd?: number;
+  // ── 품질 경고(2026-10-25) — 검토 알림 캡션 맨 위에 싣는다. 발행은 막지 않는다(사람이 보고 누른다).
+  /** 그림 단계 — 만든 장면 수 / 문장 수. built < total 이면 빠진 장면은 실촬영+자막. */
+  sceneBuilt?: number;
+  sceneTotal?: number;
+  /** 낭독 받아쓰기 실패 문장 수 / 문장 수 — 그 문장은 발음 확인 없이 첫 녹음 그대로. */
+  sttFailed?: number;
+  sttTotal?: number;
+  /** 발음 의심(숫자·부정이 다르게 들렸거나 점수 0.9 미만) — 앞 몇 개만. pronSuspectCount 는 전체 수. */
+  pronSuspect?: Array<{ id: string; text: string; score: number; mismatch?: string }>;
+  pronSuspectCount?: number;
+  /** 사실 확인 — ok · error(판정기 재시도도 실패) · residual(근거 없는/모순 주장이 문장에 안 붙어 남음, residual = 건수). */
+  factState?: { status: 'ok' | 'error' | 'residual'; residual?: number };
+  /** 누가 시작했나 — weekly(매주 자동). 재시작으로 끊긴 주간 편만 자동 재시도한다. */
+  trigger?: 'weekly' | 'manual';
+  /** 재시작으로 끊겨 한 번 자동 재시도했다(같은 폴더) — 두 번째로 끊기면 재시도하지 않는다(재시작 고리에서 돈을 계속 쓰지 않게). */
+  autoRetried?: boolean;
+}
+
+/** 로컬 날짜 yyyy-mm-dd(순수). */
+const localDay = (d: Date): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/** 재시작으로 끊긴 편을 자동으로 한 번 다시 만들까(순수) — 오늘 주간 자동 실행으로 시작했고 아직 재시도 전인 제작 중 편만. */
+export function longformRetryDue(r: Pick<LongformRecord, 'stage' | 'trigger' | 'autoRetried' | 'createdTs'>, now: Date): boolean {
+  return r.stage === 'producing' && r.trigger === 'weekly' && !r.autoRetried && localDay(new Date(r.createdTs)) === localDay(now);
+}
+
+/** 검토 알림 다시 보낼까(순수) — 완성됐는데 알림이 안 나갔고 아직 안 올린 7일 안 편(시범 편은 올렸으니 제외). */
+export const LONGFORM_RESEND_DAYS = 7;
+export function longformResendDue(r: Pick<LongformRecord, 'stage' | 'notifiedTs' | 'youtubeId' | 'youtubeUrl' | 'youtubeState' | 'createdTs'>, now: Date): boolean {
+  if (r.stage !== 'ready' || r.notifiedTs || r.youtubeId || r.youtubeUrl || r.youtubeState) return false;
+  const age = now.getTime() - new Date(r.createdTs).getTime();
+  return Number.isFinite(age) && age >= 0 && age < LONGFORM_RESEND_DAYS * 86_400_000;
 }
 
 export interface CreateLongformInput {
