@@ -89,7 +89,7 @@ export const SCENE_RESERVE_USD = 8;
  * 변조 감지 지문 폴더(저장소 기준) — 장면 번들이 import 하는 키트(remotion/longform)와 하네스 진입점(scripts/longform/scene_check*·scene_preview*).
  * 10-25 리뷰: src/longform·문서·견본까지 mtime 으로 보면 개발 중 저장 한 번·.DS_Store 하나에 동시 묶음이 다 버려졌다.
  */
-export const TAMPER_ROOTS = ['remotion/longform', 'scripts/longform'];
+export const TAMPER_ROOTS = ['remotion/longform', 'scripts/longform', 'scripts/render'];
 /** 견본·실험 폴더 — 키트가 import 하지 않는다(주석에만 나온다). */
 const TAMPER_SKIP_DIRS = new Set(['node_modules', 'gallery', 'examples', 'example', 'mgspike', 'stylespike']);
 /** 지문에 넣을 파일(순수) — root 기준 상대 경로. .ts·.tsx 만(시험·숨김 빼고), scripts/longform 은 하네스 진입점만. */
@@ -97,6 +97,7 @@ export function tamperTracked(root: string, rel: string): boolean {
   const parts = rel.split(/[\\/]/);
   const name = parts[parts.length - 1]!;
   if (parts.some((x) => x.startsWith('.')) || parts.slice(0, -1).some((x) => TAMPER_SKIP_DIRS.has(x))) return false;
+  if (path.basename(path.resolve(root)) === 'render' && path.basename(path.dirname(path.resolve(root))) === 'scripts') return /^chrome_netbox\.(?:sh|sb)$/.test(name); // 렌더 브라우저 네트워크 상자
   if (!/\.tsx?$/.test(name) || /\.test\.tsx?$/.test(name)) return false;
   return path.basename(path.dirname(path.resolve(root))) === 'scripts' ? /^scene_(?:check|preview)/.test(name) : true;
 }

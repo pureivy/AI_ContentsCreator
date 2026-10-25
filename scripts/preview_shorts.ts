@@ -110,7 +110,7 @@ async function main(): Promise<void> {
   const serveUrl = await bundle({ entryPoint: path.resolve('remotion/index.ts'), publicDir, outDir: path.join(work, 'bundle') });
   console.log(`번들 ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
-  const composition = await selectComposition({ serveUrl, id: 'AutoShorts', inputProps });
+  const composition = await selectComposition({ serveUrl, id: 'AutoShorts', inputProps, browserExecutable: RENDER_OPTS.browserExecutable });
   console.log(`컴포지션 ${composition.width}x${composition.height} · ${composition.durationInFrames}프레임 · ${composition.fps}fps`);
 
   let last = -1;

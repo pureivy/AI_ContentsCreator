@@ -12,6 +12,7 @@ import { prepareScenes, buildSrt, resolveClipSrc, defaultSceneFx, fxSeed, FPS, p
 import type { ShortsScene, ShortsRenderResult, PreparedScene } from './shortsCommon';
 import { cardHeaderFor, cardElements, cardBeats, probeSpeechTimeline, alignSegments, titleBottomPx } from './shortsCardSync';
 import { CONFIG } from '../config';
+import { renderBrowserExecutable } from './renderSandbox';
 
 /**
  * 렌더 품질·환경 옵션 — 종전엔 codec 만 넘기고 나머지를 전부 Remotion 기본값에 맡겼다.
@@ -37,6 +38,8 @@ export const RENDER_OPTS = {
   // delayRender 대기 상한 — 기본 30초. 씬 이미지 로딩(<Img>)에 폰트 로딩(loadFonts.ts)이 더해져
   // 여유를 둔다. 넘치면 폰트가 아니라 렌더 전체가 죽으므로 넉넉한 편이 안전하다.
   timeoutInMilliseconds: 90_000,
+  // 네트워크 상자(2026-10-25) — AI 가 쓴 장면 코드가 밖·로컬 서버로 못 나가게. 렌더를 띄우는 모든 곳(openBrowser·selectComposition·renderStill)에 같이 넘긴다.
+  get browserExecutable(): string | null { return renderBrowserExecutable(); },
 };
 
 
@@ -228,7 +231,7 @@ export async function renderShortsVideoRemotion(
   const videoPath = path.join(dir, 'final.mp4');
   try {
     const serveUrl = await bundle({ entryPoint: entry, publicDir, outDir: path.join(work, 'bundle') });
-    const composition = await selectComposition({ serveUrl, id: 'AutoShorts', inputProps });
+    const composition = await selectComposition({ serveUrl, id: 'AutoShorts', inputProps, browserExecutable: RENDER_OPTS.browserExecutable });
     const { cancelSignal, cancel } = makeCancelSignal();
     if (opts.signal?.aborted) cancel();
     opts.signal?.addEventListener('abort', () => cancel());

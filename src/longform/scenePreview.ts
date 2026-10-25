@@ -36,7 +36,7 @@ export async function renderSceneStills(o: { entryPoint: string; outDir: string;
     try { fs.linkSync(src, dst); } catch { fs.copyFileSync(src, dst); }
   }
   const serveUrl = await bundle({ entryPoint: o.entryPoint, publicDir, outDir: path.join(o.outDir, 'bundle'), enableCaching: o.cache ?? false });
-  const browser = await openBrowser('chrome', { chromiumOptions: RENDER_OPTS.chromiumOptions });
+  const browser = await openBrowser('chrome', { chromiumOptions: RENDER_OPTS.chromiumOptions, browserExecutable: RENDER_OPTS.browserExecutable });
   const res = new Map<string, string | null>();
   try {
     for (const it of o.items) {

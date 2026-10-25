@@ -307,7 +307,7 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
         ...(fs.existsSync(titleArt) ? { title: { imagePath: titleArt, topPct: lay.titleTopPct, widthPct: lay.titleWidthPct } } : {}),
       });
       const serveUrl = await bundle({ entryPoint: path.resolve('remotion/index.ts'), publicDir, outDir: path.join(rwork, 'bundle') });
-      const composition = await selectComposition({ serveUrl, id: 'AutoShorts', inputProps });
+      const composition = await selectComposition({ serveUrl, id: 'AutoShorts', inputProps, browserExecutable: RENDER_OPTS.browserExecutable });
       await renderMedia({ serveUrl, composition, codec: 'h264', outputLocation: bgVideo, inputProps, ...RENDER_OPTS });
     });
     log(`[바탕판] ${bgVideo} (${m.phasesSec.bgRender}초)`);

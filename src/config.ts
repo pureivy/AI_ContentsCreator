@@ -424,6 +424,8 @@ export interface Config {
   readonly longformReview: boolean;
   /** 롱폼 렌더 crf(2026-10-23) — 숏폼 18 그대로면 10분 410MB. 연필 선화·종이 바탕이라 22 에서 눈으로 차이가 없다(유튜브가 어차피 재인코딩). */
   readonly longformCrf: number;
+  /** 렌더 브라우저 네트워크 상자(2026-10-25) — AI 가 쓴 장면 코드를 돌리는 headless Chrome 의 나가는 연결을 Remotion 번들 서버로만(src/tools/renderSandbox.ts). */
+  readonly renderNetSandbox: boolean;
   /**
    * 롱폼 화면 꼴(2026-10-23 사장님 결정) — full = 전체 화면 모션그래픽 + 실촬영은 장면 안 끼움 카드(기본), panel = 종전 왼쪽 실촬영 + 오른쪽 그림 칸.
    * 스타일(전체 화면만) — B = 연필 선화 + 포인트 색 하나(기본), A = 세밀화 + 원예 도해.
@@ -732,6 +734,7 @@ export const CONFIG: Config = {
   longformSceneTimeoutMin: Math.max(5, envInt('LONGFORM_SCENE_TIMEOUT_MIN', 40)),
   longformReview: envBool('LONGFORM_REVIEW', true),
   longformCrf: Math.min(30, Math.max(16, envInt('LONGFORM_CRF', 22))),
+  renderNetSandbox: envBool('RENDER_NET_SANDBOX', true),
   longformLayout: env('LONGFORM_LAYOUT', 'full').trim().toLowerCase() === 'panel' ? 'panel' : 'full',
   longformStyle: env('LONGFORM_STYLE', 'B').trim().toUpperCase() === 'A' ? 'A' : 'B',
   longformPresenter: envBool('LONGFORM_PRESENTER', false),

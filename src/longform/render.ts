@@ -49,7 +49,7 @@ export async function defaultRenderDeps(): Promise<RenderDeps> {
     // 웹팩 캐시는 끈다 — 진입점·설정 해시마다 수백 MB 씩 node_modules/.cache 에 쌓였다(10-23 1.9GB). 번들은 수 초라 손해가 작다.
     bundle: (o) => bundle({ ...o, enableCaching: false }),
     renderMedia: async (o) => {
-      const composition = await selectComposition({ serveUrl: o.serveUrl, id: o.composition ?? 'LongForm', inputProps: o.inputProps });
+      const composition = await selectComposition({ serveUrl: o.serveUrl, id: o.composition ?? 'LongForm', inputProps: o.inputProps, browserExecutable: RENDER_OPTS.browserExecutable });
       const { cancelSignal, cancel } = makeCancelSignal();
       if (o.signal?.aborted) cancel();
       o.signal?.addEventListener('abort', () => cancel());
@@ -59,8 +59,8 @@ export async function defaultRenderDeps(): Promise<RenderDeps> {
       });
     },
     renderStill: async (o) => {
-      const composition = await selectComposition({ serveUrl: o.serveUrl, id: o.composition ?? 'LongForm', inputProps: o.inputProps });
-      await renderStill({ serveUrl: o.serveUrl, composition, inputProps: o.inputProps, frame: o.frame, output: o.output, chromiumOptions: RENDER_OPTS.chromiumOptions, timeoutInMilliseconds: RENDER_OPTS.timeoutInMilliseconds });
+      const composition = await selectComposition({ serveUrl: o.serveUrl, id: o.composition ?? 'LongForm', inputProps: o.inputProps, browserExecutable: RENDER_OPTS.browserExecutable });
+      await renderStill({ serveUrl: o.serveUrl, composition, inputProps: o.inputProps, frame: o.frame, output: o.output, chromiumOptions: RENDER_OPTS.chromiumOptions, browserExecutable: RENDER_OPTS.browserExecutable, timeoutInMilliseconds: RENDER_OPTS.timeoutInMilliseconds });
     },
     ffmpeg: async (args) => { await execFileP('ffmpeg', args, { timeout: 120_000 }); },
     probe: probeDuration,

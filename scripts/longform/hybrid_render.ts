@@ -58,7 +58,7 @@ fs.writeFileSync(path.join(dir, 'props-h.json'), JSON.stringify(props, null, 2))
 const [{ bundle }, { renderMedia, renderStill, selectComposition, openBrowser }] = await Promise.all([import('@remotion/bundler'), import('@remotion/renderer')]);
 const t0 = Date.now();
 const serveUrl = await bundle({ entryPoint: path.join(dir, ENTRY_DIR_H, 'index.ts'), publicDir: pub, outDir: path.join(work, 'bundle'), enableCaching: false });
-const browser = await openBrowser('chrome', { chromiumOptions: RENDER_OPTS.chromiumOptions });
+const browser = await openBrowser('chrome', { chromiumOptions: RENDER_OPTS.chromiumOptions, browserExecutable: RENDER_OPTS.browserExecutable });
 const errors: string[] = [];
 try {
   const composition = await selectComposition({ serveUrl, id: 'LongFormHybrid', inputProps: props, puppeteerInstance: browser });

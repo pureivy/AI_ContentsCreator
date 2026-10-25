@@ -65,11 +65,11 @@ async function main(): Promise<void> {
   const serveUrl = await bundle({ entryPoint: path.resolve('remotion/index.ts'), publicDir, outDir: path.join(outDir, 'bundle') });
   for (const { t, seed, at } of picks) {
     const inputProps = { ...baseProps, driftSeed: seed };
-    const composition = await selectComposition({ serveUrl, id: 'AutoShorts', inputProps });
+    const composition = await selectComposition({ serveUrl, id: 'AutoShorts', inputProps, browserExecutable: RENDER_OPTS.browserExecutable });
     const frames = t === '줌 스루 전환' ? [at * FR - 3, at * FR + 3] : [at * FR + 24];
     for (const frame of frames) {
       const output = path.join(outDir, `${t.replace(/\s+/g, '_')}-${frame}.png`);
-      await renderStill({ serveUrl, composition, inputProps, frame, output, chromiumOptions: RENDER_OPTS.chromiumOptions, timeoutInMilliseconds: RENDER_OPTS.timeoutInMilliseconds });
+      await renderStill({ serveUrl, composition, inputProps, frame, output, chromiumOptions: RENDER_OPTS.chromiumOptions, browserExecutable: RENDER_OPTS.browserExecutable, timeoutInMilliseconds: RENDER_OPTS.timeoutInMilliseconds });
       console.log(`${t} — 씬 ${at + 1} · 프레임 ${frame} → ${path.relative(process.cwd(), output)}`);
     }
   }
