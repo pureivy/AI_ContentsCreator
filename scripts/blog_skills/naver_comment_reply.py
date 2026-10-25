@@ -92,7 +92,7 @@ def run(args, res: Result, text: str) -> int:
     from playwright.sync_api import sync_playwright
 
     profile_dir = Path(os.environ["NAVER_PROFILE_DIR"]) if os.environ.get("NAVER_PROFILE_DIR") else (Path.home() / ".naver-blog-profiles" / "cli")
-    profile_dir.mkdir(parents=True, exist_ok=True)
+    profile_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     cookies_file = profile_dir / "naver_cookies.json"
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(
@@ -120,8 +120,11 @@ def run(args, res: Result, text: str) -> int:
             return drive(page, args, res, text, submitted)
         finally:
             try:
-                with open(cookies_file, "w", encoding="utf-8") as f:
+                # 로그인 쿠키 — 주인만 읽게(0600). 이미 있던 파일 권한도 좁힌다.
+                fd = os.open(cookies_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(context.cookies(), f, ensure_ascii=False, indent=2)
+                os.chmod(cookies_file, 0o600)
             except Exception:
                 pass
             try:
