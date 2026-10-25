@@ -44,7 +44,8 @@ import type { Timeline, TimedSegment } from '../longform/timeline';
 
 /** repo·sceneDir = 세션 읽기 허용 범위(키트 소스·이 편 장면) — 없으면 cwd·workDir 에서 미룬다. */
 export interface AgentRunInput { batch: string; workDir: string; prompt: string; timeoutMs: number; maxTurns: number; signal?: AbortSignal; repo?: string; sceneDir?: string }
-export interface AgentRun { exit: number; aborted: boolean; turns?: number; costUsd?: number; durationSec: number; tail?: string }
+/** log = 세션 stream-json 기록(하네스가 받은 stdout 사본) — 변조 판정은 이것만 본다(작업 폴더의 파일은 세션이 고칠 수 있다). */
+export interface AgentRun { exit: number; aborted: boolean; turns?: number; costUsd?: number; durationSec: number; tail?: string; log?: string }
 
 export interface SceneDeps {
   repo: string;
@@ -227,22 +228,23 @@ export function sceneAgentArgs(o: { model: string; maxTurns: number; repo: strin
     '--allowedTools', allow.join(','), '--output-format', 'stream-json', '--verbose'];
 }
 
-/** 실제 Claude Code 세션(구독 로그인 환경) — stream-json 로그를 agent.jsonl 에 남기고 result 줄에서 턴·비용을 읽는다. */
+/** 실제 Claude Code 세션(구독 로그인 환경) — stream-json 로그를 작업 폴더 밖(work/bNN.agent.jsonl — 세션은 cwd 에만 쓴다)에 남기고 result 줄에서 턴·비용을 읽는다. */
 async function claudeAgent(o: AgentRunInput): Promise<AgentRun> {
   const args = sceneAgentArgs({ model: CONFIG.cloudTierModels.heavy, maxTurns: o.maxTurns, repo: o.repo ?? path.resolve('.'), sceneDir: o.sceneDir ?? path.dirname(path.dirname(o.workDir)) });
-  const logFile = path.join(o.workDir, 'agent.jsonl');
+  const logFile = path.join(path.dirname(o.workDir), `${path.basename(o.workDir)}.agent.jsonl`);
+  const chunks: Buffer[] = [];
   const agentLog = fs.createWriteStream(logFile);
   agentLog.on('error', () => { /* 로그만 잃는다 */ });
   const t0 = Date.now();
-  const r = await runProc(CONFIG.claudeCliPath, args, { cwd: o.workDir, env: sceneAgentEnv(process.env), timeoutMs: o.timeoutMs, stdin: o.prompt, onStdout: (d) => agentLog.write(d), ...(o.signal ? { signal: o.signal } : {}) });
+  const r = await runProc(CONFIG.claudeCliPath, args, { cwd: o.workDir, env: sceneAgentEnv(process.env), timeoutMs: o.timeoutMs, stdin: o.prompt, onStdout: (d) => { chunks.push(Buffer.from(d)); agentLog.write(d); }, ...(o.signal ? { signal: o.signal } : {}) });
   await new Promise<void>((res) => agentLog.end(() => res()));
-  const jsonl = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
+  const jsonl = Buffer.concat(chunks).toString('utf8'); // 메모리 사본 — 파일은 사람이 볼 기록일 뿐
   const result = agentResultOf(jsonl);
   const tail = agentTail(result?.result, r.stderr, jsonl);
   return {
     exit: r.code, aborted: r.aborted, durationSec: Math.round((Date.now() - t0) / 1000),
     ...(result?.num_turns != null ? { turns: result.num_turns } : {}), ...(result?.total_cost_usd != null ? { costUsd: result.total_cost_usd } : {}),
-    ...(tail ? { tail } : {}),
+    ...(tail ? { tail } : {}), log: jsonl,
   };
 }
 
@@ -385,9 +387,8 @@ async function runBatch(name: string, specs: SceneSpec[], o: { sceneDir: string;
     const changed = fingerprintDiff(fpBefore, treeFingerprint(o.tamperRoots!));
     if (changed.length) {
       const rel = (xs: readonly string[], n: number) => xs.slice(0, n).map((f) => path.relative(deps.repo, f)).join(', ');
-      let jsonl = '';
-      try { jsonl = fs.readFileSync(path.join(work, 'agent.jsonl'), 'utf8'); } catch { /* 기록 없음 */ }
-      const touched = agentTouched(jsonl, changed, { repo: deps.repo, workDir: work });
+      // 세션 기록은 runAgent 가 돌려준 사본만 — 작업 폴더의 agent.jsonl 은 세션이 지울 수 있어 믿지 않는다(10-25 보안 검토).
+      const touched = agentTouched(run.log ?? '', changed, { repo: deps.repo, workDir: work });
       if (touched.length) {
         deps.log(`⚠⚠ ${name} — 세션이 저장소 소스를 고침(${touched.length}개: ${rel(touched, 5)}) — 이 묶음 장면을 버린다. 되돌리지 않았으니 git status 로 확인할 것`);
         deps.activity?.(`[롱폼 그림] ⚠ ${name} 저장소 소스 변조 감지 — ${rel(touched, 3)}`);

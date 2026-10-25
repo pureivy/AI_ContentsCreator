@@ -215,6 +215,13 @@ export function sceneSafety(src: string): string[] {
     else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) out.add('동적 import() 금지');
     else if (ts.isMetaProperty(n)) out.add('import.meta 금지');
     else if (ts.isPropertyAccessExpression(n) && BANNED_PROPS.has(n.name.text)) out.add(`속성 접근 금지: .${n.name.text}`);
+    // 구조 분해로 꺼내기(const { constructor: C } = []·({ constructor: C } = x)·{ [k]: C }) — 점 접근과 같은 구멍(10-25 보안 검토).
+    else if (ts.isBindingElement(n) && ts.isObjectBindingPattern(n.parent)) {
+      const key = n.propertyName ?? n.name;
+      if (ts.isComputedPropertyName(key)) out.add(`구조 분해 계산 키 금지: ${key.getText().slice(0, 40)}`);
+      else if (ts.isIdentifier(key) && BANNED_PROPS.has(key.text)) out.add(`구조 분해 금지: ${key.text}`); // 키는 그 객체의 속성 — 전역 이름(frames 등)은 해당 없음
+    } else if ((ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n)) && ts.isIdentifier(n.name) && BANNED_PROPS.has(n.name.text)
+      && ts.isObjectLiteralExpression(n.parent) && ts.isBinaryExpression(n.parent.parent) && n.parent.parent.left === n.parent) out.add(`구조 분해 금지: ${n.name.text}`);
     else if (ts.isElementAccessExpression(n)) {
       const k = n.argumentExpression;
       const lit = ts.isStringLiteral(k) || ts.isNoSubstitutionTemplateLiteral(k) ? k.text : undefined;

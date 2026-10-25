@@ -32,7 +32,9 @@ function deps(over: Partial<SceneDeps> & { write?: (job: SceneJob, o: AgentRunIn
     const job = JSON.parse(fs.readFileSync(path.join(o.workDir, 'job.json'), 'utf8')) as SceneJob;
     if (over.write) over.write(job, o);
     else for (const s of job.scenes) fs.writeFileSync(path.join(o.workDir, s.file), goodScene(s.key));
-    return { exit: 0, aborted: false, turns: 20, costUsd: 2.5, durationSec: 60 };
+    // 가짜 세션의 stream-json 기록 = 시험이 work 의 sessionLog 에 둔 것(실제 세션은 하네스가 받은 stdout 사본).
+    const lf = path.join(o.workDir, '.session-log');
+    return { exit: 0, aborted: false, turns: 20, costUsd: 2.5, durationSec: 60, ...(fs.existsSync(lf) ? { log: fs.readFileSync(lf, 'utf8') } : {}) };
   });
   return {
     repo: REPO,
@@ -658,7 +660,7 @@ describe('세션 격리 — 권한 인자·저장소 소스 변조·통과 뒤 �
     let n = 0;
     const d = deps({ tamperRoots: [root], write: (job, o) => {
       for (const s of job.scenes) fs.writeFileSync(path.join(o.workDir, s.file), goodScene(s.key));
-      if (n++ === 0) { fs.writeFileSync(kit, 'export const A = 2; // evil'); fs.writeFileSync(path.join(o.workDir, 'agent.jsonl'), toolUse('Write', { file_path: kit, content: 'x' })); }
+      if (n++ === 0) { fs.writeFileSync(kit, 'export const A = 2; // evil'); fs.writeFileSync(path.join(o.workDir, '.session-log'), toolUse('Write', { file_path: kit, content: 'x' })); fs.writeFileSync(path.join(o.workDir, 'agent.jsonl'), toolUse('Read', { file_path: kit })); } // 작업 폴더 기록을 지워도 소용없다
     } });
     const r = await buildScenes(dir, segments, undefined, d);
     expect(d.agent.mock.calls.map((c) => (c[0] as AgentRunInput).batch)).toEqual(['b01', 't01']);
@@ -674,7 +676,7 @@ describe('세션 격리 — 권한 인자·저장소 소스 변조·통과 뒤 �
     const d = deps({ tamperRoots: [root], log: (m) => logs.push(m), write: (job, o) => {
       for (const s of job.scenes) fs.writeFileSync(path.join(o.workDir, s.file), goodScene(s.key));
       fs.writeFileSync(kit, 'export const A = 2; // 사람이 고침');
-      fs.writeFileSync(path.join(o.workDir, 'agent.jsonl'), toolUse('Read', { file_path: kit }));
+      fs.writeFileSync(path.join(o.workDir, '.session-log'), toolUse('Read', { file_path: kit }));
     } });
     const r = await buildScenes(dir, segments, undefined, d);
     expect(d.agent).toHaveBeenCalledTimes(1);

@@ -106,6 +106,14 @@ describe('사람 손 금지(2026-10-23, 전체 화면 장면)', () => {
 
 // 보안 구문 검사(2026-10-25) — 글자 정규식을 빠져나간 탐침 장면(scratchpad/lintprobe)이 이제 떨어져야 한다.
 describe('sceneSafety — 전역·네트워크·외부 주소 우회', () => {
+  it('구조 분해로 꺼내는 금지 속성·계산 키도 막는다(10-25 보안 검토)', () => {
+    const p = (body: string) => sceneSafety(`import React from 'react';\nexport default function Scene() { ${body} return <g />; }`);
+    expect(p('const { constructor: C } = [];').join(' ')).toContain('구조 분해 금지: constructor');
+    expect(p('const { constructor } = [];').join(' ')).toContain('구조 분해 금지: constructor');
+    expect(p("const k = 'a'; const { [k]: C } = [];").join(' ')).toContain('구조 분해 계산 키 금지');
+    expect(p('let C; ({ constructor: C } = []);').join(' ')).toContain('구조 분해 금지: constructor');
+    expect(p('const { x, y } = { x: 1, y: 2 }; const [a, b] = [x, y]; const o = { prototype2: a + b };')).toEqual([]);
+  });
   const PROBE = `import React from 'react';
 import { FullStage, type FullSceneProps } from './_kit';
 const K = 'abc123SECRET';
