@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentEnv, agentResultOf, runProc } from './cliProc';
+import { agentEnv, agentResultOf, runProc, sceneAgentEnv } from './cliProc';
 
 describe('cliProc', () => {
   it('runProc — 취소 신호가 오면 프로세스 그룹을 죽이고 aborted', async () => {
@@ -15,6 +15,10 @@ describe('cliProc', () => {
     const r = await runProc('bash', ['-c', 'echo hi'], { timeoutMs: 10_000 });
     expect(r).toMatchObject({ code: 0, aborted: false });
     expect(r.stdout.trim()).toBe('hi');
+  });
+  it('sceneAgentEnv — 허용 목록만(.env 토큰·API 키·바깥 세션 표식 없음, 로캘 LC_* 는 둔다)', () => {
+    expect(sceneAgentEnv({ PATH: '/bin', HOME: '/h', USER: 'u', LC_ALL: 'ko_KR.UTF-8', TELEGRAM_BOT_TOKEN: 't', NAVER_PW: 'p', ANTHROPIC_API_KEY: 'k', CLAUDECODE: '1', CLAUDE_CODE_X: 'y', NODE_OPTIONS: '--require x' }))
+      .toEqual({ PATH: '/bin', HOME: '/h', USER: 'u', LC_ALL: 'ko_KR.UTF-8' });
   });
   it('agentEnv — API 키·바깥 세션 표식을 뺀다', () => {
     expect(agentEnv({ PATH: '/bin', ANTHROPIC_API_KEY: 'k', CLAUDECODE: '1', CLAUDE_CODE_X: 'y' })).toEqual({ PATH: '/bin' });

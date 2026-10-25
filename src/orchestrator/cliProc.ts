@@ -61,6 +61,18 @@ export function agentEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return env;
 }
 
+/**
+ * 장면 세션 전용 환경(허용 목록, 2026-10-25) — agentEnv 는 process.env 를 통째로 넘겨(config 가 .env 를 싣는다) 텔레그램·네이버·유튜브 토큰이
+ * 장면 세션과 그 check.sh·preview.sh 에 보였다. 장면 세션은 구독 로그인(macOS 키체인 — HOME·USER 로 찾는다)·PATH·로캘만 있으면 된다
+ * (env -i 로 실측). 하네스 스크립트는 저장소로 cd 해 config 가 .env 를 스스로 읽는다.
+ */
+const SCENE_ENV_KEEP = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'TMPDIR', 'SHELL', 'TERM', 'TZ', 'CLAUDE_CONFIG_DIR', '__CF_USER_TEXT_ENCODING', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy', 'NODE_EXTRA_CA_CERTS']);
+export function sceneAgentEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(base)) if (v !== undefined && (SCENE_ENV_KEEP.has(k) || k.startsWith('LC_'))) env[k] = v;
+  return env;
+}
+
 /** stream-json 로그(agent.jsonl)의 마지막 result 줄 — 턴·시간·비용. */
 export type AgentResultLine = { type?: string; result?: string; num_turns?: number; duration_ms?: number; total_cost_usd?: number };
 export function agentResultOf(jsonl: string): AgentResultLine | null {

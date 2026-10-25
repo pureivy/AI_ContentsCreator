@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { RENDER_OPTS } from '../tools/shortsRenderRemotion';
 import { importPath, writeIfChanged } from './sceneFiles';
 import type { Word } from './sceneRules';
-import { lintScene } from './sceneLint';
+import { SAFETY_NO_RENDER, lintScene } from './sceneLint';
 import type { SceneJob } from './sceneJob';
 import { isInternalRef } from './speciesCommons';
 
@@ -94,6 +94,7 @@ export async function previewScene(job: SceneJob, key: string): Promise<{ ok: bo
   const file = path.join(job.workDir, sc.file);
   if (!fs.existsSync(file)) return { ok: false, key, problems: [`파일 없음: ${sc.file}`], stills: [] };
   const problems = lintScene(fs.readFileSync(file, 'utf8'), key, sc.narration);
+  if (problems.some((x) => x.startsWith('보안:'))) return { ok: false, key, problems: [...problems, SAFETY_NO_RENDER], stills: [] };
   const entryPoint = writePreviewEntry(job.workDir, key, job.repo);
   const out = path.join(job.workDir, 'preview');
   const items: StillItem[] = PREVIEW_AT.map((r) => ({

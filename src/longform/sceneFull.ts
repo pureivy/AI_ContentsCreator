@@ -9,14 +9,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lintScene, type LintOpts } from './sceneLint';
+import { SAFETY_NO_RENDER, lintScene, type LintOpts } from './sceneLint';
 import { typecheckScenes } from './sceneCheck';
 import { importPath, writeIfChanged } from './sceneFiles';
 import { PREVIEW_AT, frameAt, renderSceneStills, tileStills, type StillItem } from './scenePreview';
 import { LABEL_MAX_KO, LABEL_MAX_NUMERIC, MAX_LABELS } from './sceneRules';
 import { footageOf, type FullFootage } from './fullProps';
 import { pickHeroSpecies, type LongformScript } from './script';
-import type { SceneJob, SceneSpec } from './sceneJob';
+import { sandboxRule, type SceneJob, type SceneSpec } from './sceneJob';
 import type { TimedSegment } from './timeline';
 import { PART_KO } from './speciesCommons';
 
@@ -193,6 +193,8 @@ export async function previewSceneFull(job: SceneJob, key: string): Promise<{ ok
   if (!fs.existsSync(file)) return { ok: false, key, problems: [`파일 없음: ${sc.file}`], stills: [] };
   const style = job.style ?? 'A';
   const problems = lintScene(fs.readFileSync(file, 'utf8'), key, sc.narration, fullLintOpts(sc));
+  // 보안 검사에 걸린 장면은 브라우저에서 돌리지 않는다(미리보기 렌더도 장면 코드를 실행한다 — 2026-10-25).
+  if (problems.some((x) => x.startsWith('보안:'))) return { ok: false, key, problems: [...problems, SAFETY_NO_RENDER], stills: [] };
   const entryPoint = writePreviewEntryFull(job.workDir, key, job.repo);
   const out = path.join(job.workDir, 'preview');
   const items: StillItem[] = PREVIEW_AT.flatMap((r) => [false, true].map((probe) => ({
@@ -216,7 +218,7 @@ export async function previewSceneFull(job: SceneJob, key: string): Promise<{ ok
 }
 
 /** 에이전트 지시문(순수, 한국어) — 전체 화면 키트 문서(KIT_API_A/B.md) + 이 파이프라인의 규칙·절차. */
-export function scenePromptFull(job: Pick<SceneJob, 'scenes' | 'style' | 'species'>, kitApi: string, o: { episodeTitle?: string } = {}): string {
+export function scenePromptFull(job: Pick<SceneJob, 'scenes' | 'style' | 'species'> & { repo?: string }, kitApi: string, o: { episodeTitle?: string } = {}): string {
   const g = job.scenes;
   const keys = g.map((s) => s.key).join(', ');
   const styleName = job.style === 'B' ? '스타일 B(연필 선화 + 포인트 색 하나)' : '스타일 A(세밀화 + 원예 도해)';
@@ -244,6 +246,7 @@ export function scenePromptFull(job: Pick<SceneJob, 'scenes' | 'style' | 'specie
     '',
     '[이 파이프라인의 규칙 — 아래 키트 문서보다 우선]',
     "- import 는 `./_kit`(키트 전부 + FullStage·FootageInset·박자 도우미·FullSceneProps), `react`, `remotion` 만. _kit.ts·job.json·check.sh·preview.sh 는 고치지 않는다.",
+    sandboxRule(job.repo),
     '- 파일 하나 = 기본 내보내기 컴포넌트 하나(export default function Scene({ durationInFrames, words, footage }: FullSceneProps)), <FullStage frames={durationInFrames} …> 무대 안에 그린다.',
     `- 화면 글자는 그 문장에 나온 말만(요약·새 사실·다른 문장의 말 금지). 라벨 ${MAX_LABELS}개 이하, 한글 라벨 ${LABEL_MAX_KO}자·숫자 라벨 ${LABEL_MAX_NUMERIC}자 이하(공백 제외). 라벨의 숫자는 문장에 나온 숫자만. 라벨은 맨 위 상수(const L1 = '…')로, 키트 라벨 부품으로 labels 층에만. <text> 직접 쓰기 금지.`,
     '- 좌표는 화면 픽셀(1920×1080). 그림·라벨은 안전 상자 x 90~1830, y 120~860 안. 끼움 카드도 카드 아래 끝(y + h/2 + 9)이 860 을 넘지 않게.',

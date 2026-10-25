@@ -5,6 +5,7 @@
  * 문자열·JSX 글자에서 한글만 남겨 글자 두 개 묶음 겹침이 0.5 미만이면 '문장 밖 문구'. 숫자·단위·기호는 겹침에서 빼고,
  * 라벨의 숫자는 문장에 나온 숫자여야 한다. 주석은 먼저 걷어 낸다(장면 머리 주석에 문장을 적어 두는 게 관례).
  */
+import ts from 'typescript';
 import { LABEL_MAX_KO, LABEL_MAX_NUMERIC, MAX_LABELS, labelLen } from './sceneRules';
 import { sceneBioneeCues, stripBioneeCues } from './bioneeCues';
 
@@ -124,8 +125,133 @@ export function sceneTexts(src: string): SceneText[] {
  */
 export interface LintOpts { stage?: string; urlPrefixes?: readonly string[]; noRawText?: boolean; insetRequired?: boolean; noFootage?: boolean; /** 사람 손 부품(Hand) 금지 — 2026-10-23 사장님 금지('피노키오 손가락') */ noHands?: boolean }
 
+/**
+ * 보안 구문 검사(순수, 2026-10-25) — 글자 정규식(FORBIDDEN)은 `(self as any)['fe'+'tch']`·`[].constructor.constructor`·
+ * `<image href={'//…'+K}/>`·`url(//…)` 를 못 잡았다. TypeScript 구문 트리로 허용 목록 쪽에서 본다(장면은 SVG 도형 + 키트 부품뿐):
+ * 전역 객체·네트워크·문자열 실행 이름(이 파일에서 선언한 이름은 예외), .constructor·__proto__, 문자열을 만들어 쓰는 계산 키,
+ * 외부 주소처럼 보이는 문자열 조각('//'·http·url( 뒤가 # 아님), href·src 는 '#…' 글자만, 안전한 SVG·HTML 태그만.
+ * 리뷰 보강(같은 날 — 헛경보): 글자 이어 붙이기('M 0 0 ' + 'L 10 10')·템플릿은 금지 대신 이어 붙인 결과를 본다(금지 이름·외부 주소),
+ *   url(${G}) 는 G 가 '#…' const 면 된다, <use>·<textPath> 는 href '#…' 로, 계산 키의 수 함수(xs[clamp(i)]·xs[Number(s)])는 된다
+ *   (문자열 메서드·String()·태그 템플릿은 여전히 금지), '//' 는 속성·스타일 값(JSX 속성·객체 속성) 자리와 '//호스트' 꼴만.
+ */
+const BANNED_NAMES = new Set(['self', 'top', 'parent', 'frames', 'opener', 'globalThis', 'window', 'document', 'navigator', 'location', 'fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'Worker', 'SharedWorker', 'Image', 'Audio', 'Request', 'eval', 'Function', 'Reflect', 'Proxy', 'require', 'process', 'global', 'module', 'importScripts', 'setTimeout', 'setInterval', 'setImmediate', 'atob', 'btoa', 'unescape', 'escape', 'decodeURI', 'decodeURIComponent', 'localStorage', 'sessionStorage', 'indexedDB', 'caches']);
+const BANNED_PROPS = new Set(['constructor', '__proto__', 'prototype', 'fromCharCode', 'fromCodePoint', 'createElement', 'cloneElement', 'createPortal', 'sendBeacon', 'innerHTML', 'outerHTML', 'insertAdjacentHTML', 'dangerouslySetInnerHTML']);
+const SAFE_TAGS = new Set(['svg', 'g', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'defs', 'clipPath', 'mask', 'linearGradient', 'radialGradient', 'stop', 'pattern', 'text', 'tspan', 'textPath', 'use', 'title', 'desc', 'marker', 'div', 'span']);
+const URL_ATTRS = new Set(['href', 'xlinkHref', 'xlink:href', 'src', 'srcSet']);
+/** 태그(소문자)에서만 주소 속성 — 키트 부품의 action(비온이 동작)·data 는 다른 뜻이다. */
+const TAG_URL_ATTRS = new Set([...URL_ATTRS, 'poster', 'action', 'formAction', 'data', 'background', 'ping']);
+/** attr = 속성·스타일 값 자리 — 거기선 '//' 어디든, 밖에선 '//호스트' 로 시작할 때만(라벨 글자 '물 // 거름' 은 된다). */
+const urlish = (s: string, attr = true): boolean => {
+  const t = s.replace(/http:\/\/www\.w3\.org\/[\w/.-]*/g, '');
+  return /https?:|url\((?!\s*#)|@import|javascript:|image-set\(|cross-fade\(/i.test(t) || (attr ? /\/\//.test(t) : /^\s*\/\/[\w.\u0001-]/.test(t));
+};
+/** 이어 붙여 만든 금지 이름('con' + 'structor'·`${'fe'}tch`) — 한 글자 그대로는 BANNED_PROPS 만 본다. */
+const BUILT_BANNED = /constructor|__proto__|prototype|fromCharCode|fromCodePoint|innerHTML|outerHTML|sendBeacon|fetch|eval|Function|XMLHttpRequest|WebSocket|globalThis|importScripts/;
+/** 계산 키에서 문자열을 만드는 호출(메서드) — 수 함수(Math.*·Number·지역 clamp…)는 된다. */
+const STRING_METHODS = new Set(['concat', 'join', 'toString', 'slice', 'substring', 'substr', 'replace', 'replaceAll', 'padStart', 'padEnd', 'repeat', 'charAt', 'at', 'toLowerCase', 'toUpperCase', 'toLocaleLowerCase', 'toLocaleUpperCase', 'trim', 'trimStart', 'trimEnd', 'normalize', 'raw', 'reduce', 'reduceRight', 'map', 'flat', 'flatMap', 'reverse', 'split']);
+const PLACE = '\u0001';
+const isStringy = (e: ts.Expression): boolean => ts.isStringLiteral(e) || ts.isTemplateExpression(e) || ts.isNoSubstitutionTemplateLiteral(e)
+  || (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken && (isStringy(e.left) || isStringy(e.right)))
+  || (ts.isParenthesizedExpression(e) && isStringy(e.expression));
+
+/** 보안 검사에 걸린 장면은 미리보기 렌더(브라우저에서 장면 코드 실행)를 하지 않는다. */
+export const SAFETY_NO_RENDER = '보안 검사에 걸려 미리보기를 렌더하지 않았다 — 위 보안 문제를 먼저 고친다';
+
+export function sceneSafety(src: string): string[] {
+  const sf = ts.createSourceFile('scene.tsx', src, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX);
+  const out = new Set<string>();
+  const declared = new Set<string>();
+  // '#…' 글자로만 선언된 const 이름(url(${G})·href={G} 허용) — 같은 이름이 다른 값으로도 선언되면 뺀다.
+  const hashDecl = new Map<string, boolean>();
+  const startsHash = (e: ts.Expression | undefined): boolean => !!e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) ? e.text.startsWith('#') : ts.isTemplateExpression(e) ? e.head.text.startsWith('#') : false);
+  const bind = (n: ts.BindingName, hash = false): void => {
+    if (ts.isIdentifier(n)) { declared.add(n.text); hashDecl.set(n.text, (hashDecl.get(n.text) ?? true) && hash); }
+    else for (const el of n.elements) if (!ts.isOmittedExpression(el)) bind(el.name);
+  };
+  const collect = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && n.name) bind(n.name, ts.isIdentifier(n.name) && !!(ts.getCombinedNodeFlags(n) & ts.NodeFlags.Const) && startsHash(n.initializer));
+    else if ((ts.isParameter(n) || ts.isBindingElement(n)) && n.name) bind(n.name);
+    else if ((ts.isFunctionDeclaration(n) || ts.isClassDeclaration(n) || ts.isFunctionExpression(n)) && n.name) declared.add(n.name.text);
+    else if (ts.isImportSpecifier(n) || ts.isImportClause(n) || ts.isNamespaceImport(n)) { if (n.name) declared.add(n.name.text); }
+    ts.forEachChild(n, collect);
+  };
+  collect(sf);
+  // 이름이 값으로 쓰인 자리인가(속성 이름·JSX 속성 이름·타입·선언 이름은 아니다)
+  const isRef = (id: ts.Identifier): boolean => {
+    const p = id.parent;
+    if ((ts.isPropertyAccessExpression(p) && p.name === id) || (ts.isQualifiedName(p) && p.right === id)) return false;
+    if ((ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p) || ts.isPropertyDeclaration(p) || ts.isPropertySignature(p) || ts.isPropertyAccessExpression(p) || ts.isGetAccessor(p) || ts.isSetAccessor(p)) && p.name === id) return false;
+    if (ts.isBindingElement(p) && p.propertyName === id) return false;
+    if (ts.isJsxAttribute(p) || ts.isJsxNamespacedName(p) || ts.isTypeReferenceNode(p) || ts.isTypeQueryNode(p) || ts.isImportSpecifier(p) || ts.isExportSpecifier(p) || ts.isLabeledStatement(p)) return false;
+    return true;
+  };
+  const propName = (n: ts.Node): string | undefined => (ts.isIdentifier(n) || ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) ? n.text : ts.isJsxNamespacedName(n) ? `${n.namespace.text}:${n.name.text}` : undefined);
+  const hashConst = (e: ts.Node): boolean => ts.isIdentifier(e) && hashDecl.get(e.text) === true;
+  const hashOnly = (e: ts.Node | undefined): boolean => !!e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) ? e.text.startsWith('#') : ts.isJsxExpression(e) ? hashOnly(e.expression) : ts.isTemplateExpression(e) ? e.head.text.startsWith('#') : hashConst(e));
+  /** 이어 붙인 글자(+ 사슬·템플릿)를 한 글자로 — 글자 조각은 그대로, '#…' const 는 '#', 그 밖의 값은 PLACE. 다룬 조각은 covered(따로 다시 보지 않는다). */
+  const covered = new Set<ts.Node>();
+  const flatten = (e: ts.Expression): string => {
+    covered.add(e);
+    if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return e.text;
+    if (ts.isParenthesizedExpression(e)) return part(e.expression);
+    if (ts.isTemplateExpression(e)) {
+      covered.add(e.head);
+      return e.head.text + e.templateSpans.map((sp) => { covered.add(sp.literal); return part(sp.expression) + sp.literal.text; }).join('');
+    }
+    if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken) return part(e.left) + part(e.right);
+    return PLACE;
+  };
+  const part = (e: ts.Expression): string => (hashConst(e) ? '#' : isStringy(e) || ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) ? flatten(e) : PLACE);
+  const isPlus = (n: ts.Node): boolean => ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken;
+  /** 속성·스타일 값 자리(JSX 속성·객체 속성)인가 — 함수·문장 경계에서 멈춘다. */
+  const inAttr = (n: ts.Node): boolean => {
+    for (let p: ts.Node | undefined = n.parent; p && !ts.isSourceFile(p) && !ts.isBlock(p) && !ts.isFunctionLike(p) && !ts.isVariableStatement(p); p = p.parent) {
+      if (ts.isJsxAttribute(p) || ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p) || ts.isJsxSpreadAttribute(p)) return true;
+    }
+    return false;
+  };
+  const visit = (n: ts.Node): void => {
+    if (ts.isIdentifier(n) && BANNED_NAMES.has(n.text) && !declared.has(n.text) && isRef(n)) out.add(`전역·네트워크 이름 금지: ${n.text}`);
+    else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) out.add('동적 import() 금지');
+    else if (ts.isMetaProperty(n)) out.add('import.meta 금지');
+    else if (ts.isPropertyAccessExpression(n) && BANNED_PROPS.has(n.name.text)) out.add(`속성 접근 금지: .${n.name.text}`);
+    else if (ts.isElementAccessExpression(n)) {
+      const k = n.argumentExpression;
+      const lit = ts.isStringLiteral(k) || ts.isNoSubstitutionTemplateLiteral(k) ? k.text : undefined;
+      if (lit !== undefined && BANNED_PROPS.has(lit)) out.add(`속성 접근 금지: ['${lit}']`);
+      // 문자열을 만들어 쓰는 키('fe'+'tch'·`${a}b`·x.concat(…)·String(…)·태그 템플릿)만 — arr[i]·arr[i + 1]·pts[Math.min(…)]·xs[clamp(i)]·xs[Number(s)] 는 된다.
+      else if (lit === undefined && (isStringy(k) || ts.isTaggedTemplateExpression(k) || (ts.isCallExpression(k) && (
+        (ts.isIdentifier(k.expression) && k.expression.text === 'String')
+        || (ts.isPropertyAccessExpression(k.expression) && STRING_METHODS.has(k.expression.name.text))
+        || ts.isElementAccessExpression(k.expression))))) out.add(`만든 문자열로 속성 접근 금지: [${k.getText().slice(0, 40)}]`);
+    } else if (!covered.has(n) && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateExpression(n) || (isPlus(n) && isStringy(n as ts.Expression)))) {
+      // 글자 하나·이어 붙인 사슬 하나(맨 위에서만 — 안쪽 조각은 covered)를 한 글자로 본다.
+      const one = ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n);
+      const text = flatten(n as ts.Expression);
+      const show = text.replace(/\u0001/g, '…').slice(0, 40);
+      if (urlish(text, inAttr(n))) out.add(`외부 주소 같은 문자열 금지: "${show}"`);
+      if (one ? BANNED_PROPS.has(text) : BUILT_BANNED.test(text.replace(/\u0001/g, ''))) out.add(`금지 이름 글자 금지: "${show}"`);
+    } else if (ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) {
+      const tag = n.tagName.getText();
+      const intrinsic = /^[a-z]/.test(tag);
+      if (intrinsic && !SAFE_TAGS.has(tag)) out.add(`<${tag}> 금지 — SVG 도형·그룹·그라데이션·키트 부품만`);
+      for (const a of n.attributes.properties) {
+        const nm = ts.isJsxAttribute(a) ? propName(a.name) : undefined;
+        if (nm && ts.isJsxAttribute(a) && (intrinsic ? TAG_URL_ATTRS : URL_ATTRS).has(nm) && !hashOnly(a.initializer)) out.add(`${nm} 는 '#…' 글자만`);
+      }
+    } else if (ts.isPropertyAssignment(n)) {
+      const nm = propName(n.name);
+      if (nm && URL_ATTRS.has(nm) && !hashOnly(n.initializer)) out.add(`${nm} 는 '#…' 글자만`);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return [...out];
+}
+
 export function lintScene(src: string, key: string, sentence: string, opts: LintOpts = {}): string[] {
   const problems: string[] = [];
+  for (const p of sceneSafety(src)) problems.push(`보안: ${p}`);
   // 진행자 비온이 신호(2026-10-23) — 있으면 리터럴·동작·팻말 글자(이 문장 낱말, 6자)를 검사
   const host = sceneBioneeCues(src, { narration: sentence });
   for (const p of host.problems) problems.push(`비온이 신호: ${p}`);

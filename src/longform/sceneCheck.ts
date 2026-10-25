@@ -32,7 +32,7 @@ export function parseTscOutput(out: string, files: readonly string[], cwd: strin
   return res;
 }
 
-/** 타입 검사 — 파일별 오류(빈 배열 = 통과). tsc 가 아예 못 돌면 모든 파일에 그 사유. */
+/** 타입 검사 — 파일별 오류(빈 배열 = 통과). tsc 가 아예 못 돌면 모든 파일에 그 사유 — '인프라:' 머리(장면 탓이 아니다 — 사후 검사가 고치기 세션에 넣지 않는다). */
 export async function typecheckScenes(files: readonly string[], repo: string, o: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<Map<string, string[]>> {
   if (!files.length) return new Map();
   const tsc = path.join(repo, 'node_modules', '.bin', 'tsc');
@@ -40,7 +40,7 @@ export async function typecheckScenes(files: readonly string[], repo: string, o:
   const res = parseTscOutput(r.stdout, files, repo);
   const counted = [...res.values()].reduce((n, v) => n + v.length, 0);
   if (r.aborted || (r.code !== 0 && counted === 0)) {
-    const why = r.aborted ? 'tsc 시간 초과·취소' : `tsc 실패: ${(r.stderr || r.stdout).slice(-200)}`;
+    const why = r.aborted ? '인프라: tsc 시간 초과·취소' : `인프라: tsc 실패: ${(r.stderr || r.stdout).slice(-200)}`;
     for (const f of files) res.set(path.resolve(f), [why]);
   }
   return res;

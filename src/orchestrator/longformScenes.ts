@@ -14,13 +14,22 @@
  * 구독 세션 한도(2026-10-25 대추나무 편 — 새벽 b13~b16 이 "hit your session limit · resets 3am" 로 죽어 7·8장 24장면이 비었다):
  *   한 묶음이 한도에 걸리면 남은 묶음을 띄우지 않고, 풀리는 시각까지 기다렸다가(최대 LIMIT_WAIT_MAX_MS) 빠진 장면만 다시 그린다.
  * 턴 상한(같은 날 대추나무 편 고치기 —8장면 묶음 셋이 모두 91/90턴에서 끊겨 6장면이 빠졌다. 2·4장면 묶음은 50~71턴):
- *   그래도 파일이 없는 장면은 절반 크기 묶음(REDO_BATCH_MAX, 이름 tNN)으로 한 번 더 그린다. 변조로 버린 묶음은 다시 안 그린다.
- * 사후 검사 탈락(같은 고치기 때 s081 — _kit 에 없는 random 을 써 타입 오류): 지금 파일과 오류를 깔아 주고 fNN 묶음으로 한 번 고치게 한다.
+ *   그래도 파일이 없는 장면은 절반 크기 묶음(REDO_BATCH_MAX, 이름 tNN)으로 한 번 더 그린다. 하네스 파일 변조(TAMPERED)로 버린 묶음은 다시 안 그린다
+ *   (저장소 소스 변조 TAMPERED_REPO 는 그 세션 탓이 확실할 때만 버리고, 장면은 tNN 으로 다시 그린다).
+ * 사후 검사 탈락(같은 고치기 때 s081 — _kit 에 없는 random 을 써 타입 오류): 지금 파일과 오류를 깔아 주고 fNN 묶음으로 한 번 고치게 한다(편당 FIX_MAX 장면).
+ *   인프라 탈락(tsc 시간 초과·브라우저가 죽음 — 모든 파일에 같은 사유)은 장면 탓이 아니라 fNN 에 넣지 않고 사후 검사만 한 번 더 한다.
+ * 한도 대기는 첫 그림·tNN·fNN 판 모두 같은 도우미(drawRound)로 — 대기 횟수 LIMIT_ROUNDS·대기 합 LIMIT_WAIT_MAX_MS 는 편 전체에서 한 번 센다. 검토 다시 그리기(r01)는 한도 중이면 건너뛴다.
+ * 비용(2026-10-25): result 줄이 없는 세션(죽인 946초 세션 등)은 이번 실행 완료 묶음의 초당 비용 중앙값(없으면 SCENE_COST_PER_MIN_USD)으로 어림하고,
+ *   새 묶음은 진행 중 묶음마다 예상 비용을 잡아 둔 채 상한을 본다. resume 은 지난 report.json 비용을 priorCostUsd 로 이어 적는다(상한은 이번 실행분).
+ * 세션 격리(2026-10-25): 허용 목록 환경(sceneAgentEnv — .env 토큰 없음), 쓰기는 작업 폴더만·읽기는 작업 폴더 + 키트 소스(remotion/longform/**)·
+ *   이 편 장면 폴더(이웃 장면·다른 묶음 작업 중 장면)만(sceneAgentArgs, haiku 탐침으로 실측). 묶음 앞뒤로 저장소 키트·하네스 소스 지문(sha256)을 비교해
+ *   바뀌었고 그 묶음 agent.jsonl 에 그 파일을 건드린 Write·Edit·Bash 가 있으면 그 묶음을 버린다(없으면 경고만 — 개발 중 저장·git checkout 은 세션 탓이 아니다).
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
-import { agentEnv, agentResultOf, runProc } from './cliProc';
+import { agentResultOf, runProc, sceneAgentEnv } from './cliProc';
 import { loadEpisodeScript, loadMediaVideos, saveEpisodeScript } from '../longform/episode';
 import { lintScene } from '../longform/sceneLint';
 import { typecheckScenes } from '../longform/sceneCheck';
@@ -33,7 +42,8 @@ import { BATCH_MAX, planBatches, scenePrompt, sceneSpecs, type SceneJob, type Sc
 import { CONTACT_AT, PREVIEW_AT, frameAt, renderSceneStills, tileStills, type StillItem } from '../longform/scenePreview';
 import type { Timeline, TimedSegment } from '../longform/timeline';
 
-export interface AgentRunInput { batch: string; workDir: string; prompt: string; timeoutMs: number; maxTurns: number; signal?: AbortSignal }
+/** repo·sceneDir = 세션 읽기 허용 범위(키트 소스·이 편 장면) — 없으면 cwd·workDir 에서 미룬다. */
+export interface AgentRunInput { batch: string; workDir: string; prompt: string; timeoutMs: number; maxTurns: number; signal?: AbortSignal; repo?: string; sceneDir?: string }
 export interface AgentRun { exit: number; aborted: boolean; turns?: number; costUsd?: number; durationSec: number; tail?: string }
 
 export interface SceneDeps {
@@ -58,6 +68,8 @@ export interface SceneDeps {
   /** 세션 한도 대기(테스트가 바꿔 끼운다). 없으면 실제 시계·setTimeout. */
   now?: () => Date;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** 묶음 앞뒤 지문을 비교할 저장소 폴더(변조 감지 — 파일 고르기는 tamperTracked). 없으면 실제 세션(claudeAgent)일 때만 TAMPER_ROOTS, 가짜 세션이면 보지 않는다. */
+  tamperRoots?: string[];
 }
 
 /** 한도가 풀린 뒤 여유 · 한 번에 기다리는 최대 · 기다렸다 다시 그리는 횟수. */
@@ -66,20 +78,94 @@ export const LIMIT_WAIT_MAX_MS = 6 * 3_600_000;
 export const LIMIT_ROUNDS = 2;
 /** 빠진 장면 한 번 더 그리기 묶음 크기 — 첫 묶음(BATCH_MAX)의 절반. */
 export const REDO_BATCH_MAX = Math.ceil(BATCH_MAX / 2);
+/** 사후 검사 탈락 고치기(fNN) 장면 상한(편당) — 넘는 장면은 장면 없이(인프라 탈락 폭주가 세션 25개로 번지던 것). */
+export const FIX_MAX = 12;
+/** result 줄이 없는 세션의 비용 어림(완료 묶음이 없을 때) — 대추나무 편 실측 $4.67/618초·$8.15/830초·$6.85/745초 ≈ 분당 $0.45~0.59. */
+export const SCENE_COST_PER_MIN_USD = 0.6;
+/** 진행 중 묶음 하나에 잡아 두는 예상 비용(완료 묶음이 없을 때) — 8장면 묶음 실측 $5~12. */
+export const SCENE_RESERVE_USD = 8;
+/**
+ * 변조 감지 지문 폴더(저장소 기준) — 장면 번들이 import 하는 키트(remotion/longform)와 하네스 진입점(scripts/longform/scene_check*·scene_preview*).
+ * 10-25 리뷰: src/longform·문서·견본까지 mtime 으로 보면 개발 중 저장 한 번·.DS_Store 하나에 동시 묶음이 다 버려졌다.
+ */
+export const TAMPER_ROOTS = ['remotion/longform', 'scripts/longform'];
+/** 견본·실험 폴더 — 키트가 import 하지 않는다(주석에만 나온다). */
+const TAMPER_SKIP_DIRS = new Set(['node_modules', 'gallery', 'examples', 'example', 'mgspike', 'stylespike']);
+/** 지문에 넣을 파일(순수) — root 기준 상대 경로. .ts·.tsx 만(시험·숨김 빼고), scripts/longform 은 하네스 진입점만. */
+export function tamperTracked(root: string, rel: string): boolean {
+  const parts = rel.split(/[\\/]/);
+  const name = parts[parts.length - 1]!;
+  if (parts.some((x) => x.startsWith('.')) || parts.slice(0, -1).some((x) => TAMPER_SKIP_DIRS.has(x))) return false;
+  if (!/\.tsx?$/.test(name) || /\.test\.tsx?$/.test(name)) return false;
+  return path.basename(path.dirname(path.resolve(root))) === 'scripts' ? /^scene_(?:check|preview)/.test(name) : true;
+}
 const TAMPERED = '하네스 파일 변조 감지 — 이 묶음 장면을 버림';
+const TAMPERED_REPO = '저장소 키트·하네스 소스 변조 감지(이 세션이 고침) — 이 묶음 장면을 버림';
+/** 다시 그리지 않을 탈락 — 작업 폴더 하네스 변조만. 저장소 소스 변조(TAMPERED_REPO)는 장면을 tNN·wNN 으로 다시 그린다. */
+const isTamper = (why: string | undefined): boolean => why === TAMPERED;
+const LIMIT_RX = /hit your (?:\w+ )?limit|usage limit reached/i;
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 /**
  * 구독 세션 한도 문구 → 풀리는 시각(순수). 한도 문구가 아니면 null.
  * "You've hit your session limit · resets 3am (Asia/Seoul)" — 시각은 서버 로컬(서울)로 보고 다음 그 시각. 시각을 못 읽으면 한 시간 뒤.
+ * 주간 한도("resets Oct 29, 3am"·'weekly limit')는 그 날짜로(날짜가 없으면 8일 뒤) — LIMIT_WAIT_MAX_MS 가 기다리지 않게 한다.
  */
 export function sessionLimitReset(tail: string | undefined, now: Date): Date | null {
-  if (!tail || !/hit your (?:\w+ )?limit|usage limit reached/i.test(tail)) return null;
+  if (!tail || !LIMIT_RX.test(tail)) return null;
+  const ep = /\|(\d{10})\b/.exec(tail); // "Claude AI usage limit reached|1761328800" — 풀리는 시각(epoch 초)
+  if (ep) return new Date(Number(ep[1]) * 1000);
+  const md = /resets\s+([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2})(?:,?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm))?/i.exec(tail);
+  const mon = md ? MONTHS.indexOf(md[1]!.toLowerCase()) : -1;
+  if (md && mon >= 0) {
+    const h = md[3] ? (Number(md[3]) % 12) + (md[5]!.toLowerCase() === 'pm' ? 12 : 0) : 0;
+    const at = new Date(now.getFullYear(), mon, Number(md[2]), h, Number(md[4] ?? 0), 0, 0);
+    if (at.getTime() <= now.getTime()) at.setFullYear(at.getFullYear() + 1);
+    return at;
+  }
+  if (/\bweek/i.test(tail)) return new Date(now.getTime() + 8 * 24 * 3_600_000);
   const m = /resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i.exec(tail);
   if (!m) return new Date(now.getTime() + 3_600_000);
   const h = (Number(m[1]) % 12) + (m[3]!.toLowerCase() === 'pm' ? 12 : 0);
   const at = new Date(now); at.setHours(h, Number(m[2] ?? 0), 0, 0);
   if (at.getTime() <= now.getTime()) at.setDate(at.getDate() + 1);
   return at;
+}
+
+/**
+ * 세션 끝 한 줄(순수) — result 글 → stderr 의 마지막 빈 줄 아닌 줄(종전 slice(-200).split.pop() 은 끝 줄바꿈이면 '' 였다).
+ * 한도 문구는 result·stderr·agent.jsonl 끝 몇 KB(JSON 아닌 줄·assistant 글) 어디에 있든 그 줄을 먼저 — sessionLimitReset 이 읽는다.
+ */
+export function agentTail(resultText: string | undefined, stderr: string, jsonl: string): string | undefined {
+  const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean);
+  const cands = [...lines(resultText ?? ''), ...lines(stderr)];
+  const tailKb = jsonl.slice(-8192);
+  for (const [i, l] of tailKb.split('\n').entries()) {
+    if (i === 0 && tailKb.length < jsonl.length) continue; // 잘린 첫 줄
+    try {
+      const j = JSON.parse(l) as { type?: string; message?: { content?: Array<{ type?: string; text?: string }> } };
+      if (j.type === 'assistant') for (const c of j.message?.content ?? []) if (c.type === 'text' && c.text) cands.push(...lines(c.text));
+    } catch { if (l.trim()) cands.push(l.trim()); }
+  }
+  const limit = cands.filter((x) => LIMIT_RX.test(x)).pop();
+  return (limit ?? lines(resultText ?? '').pop() ?? lines(stderr).pop())?.slice(0, 300);
+}
+
+/** 인프라 탈락 문구 — tsc 가 못 돎(sceneCheck 가 '인프라:' 를 붙인다)·브라우저가 죽음·스틸이 아예 없음. */
+export const INFRA_RX = /^인프라:|Target closed|Protocol error|Session closed|browser has disconnected|Browser (?:was )?closed|Navigation failed because browser|ECONNRESET|socket hang up|ENOMEM|Failed to launch|^스틸 없음$/i;
+/**
+ * 인프라 탈락 고르기(순수) — msgs = 탈락 장면 → 첫 오류, total = 검사한 장면 수. 장면 탓이 아닌 것:
+ * INFRA_RX 문구, 또는 같은 문구가 3장면 이상·검사한 장면 절반 이상(파일 위치·TS 코드·장면 키가 든 문구는 장면 오류라 빼고).
+ */
+export function infraKeys(msgs: ReadonlyMap<string, string>, total: number): Set<string> {
+  const count = new Map<string, number>();
+  for (const m of msgs.values()) count.set(m, (count.get(m) ?? 0) + 1);
+  const out = new Set<string>();
+  for (const [k, m] of msgs) {
+    const n = count.get(m) ?? 0;
+    if (INFRA_RX.test(m) || (n >= 3 && n * 2 >= total && !/\bTS\d{3,5}\b|s\d{3}\.tsx/.test(m))) out.add(k);
+  }
+  return out;
 }
 
 const sleepAbortable = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((res) => {
@@ -108,9 +194,11 @@ export interface ScenesResult { built: number; costUsd: number; entryPoint?: str
 /** 전체 화면 장면 옵션(2026-10-23 견본, 옵트인) — 없으면 종전 장면 단계 그대로. chapterTotal = 장 번호 분모(편 일부면 원래 장 수). */
 export type SceneStageMode = FullMode & { chapterTotal?: number };
 export interface SceneReport {
-  built: number; total: number; costUsd: number;
+  /** costUsd = 이번 실행분(상한도 이것으로 본다). priorCostUsd = resume 앞 실행들 합, totalCostUsd = 둘의 합. */
+  built: number; total: number; costUsd: number; priorCostUsd?: number; totalCostUsd?: number;
   failed: Array<{ key: string; reason: string }>;
-  perBatch: Record<string, { keys: string[]; turns?: number; costUsd?: number; durationSec?: number; exit?: number; skipped?: string; tail?: string }>;
+  /** costEstimated = 결과 줄이 없어 어림한 비용. */
+  perBatch: Record<string, { keys: string[]; turns?: number; costUsd?: number; costEstimated?: true; durationSec?: number; exit?: number; skipped?: string; tail?: string }>;
   /** 전체 화면 — 자막 띠·장 이름 자리 침범(55% 검사 스틸, 비율). */
   zone?: Record<string, { caption: number; chapter: number }>;
   /** 전체 화면 — 장마다 실촬영 지정 장면. */
@@ -121,22 +209,40 @@ export interface SceneReport {
   insetBorrowed?: Record<string, string>;
 }
 
+/**
+ * 장면 세션 CLI 인자(순수) — 2026-10-25 haiku 탐침 실측(scratchpad permprobe):
+ *  종전 `--allowedTools Read,Write,Edit,…` 은 맨 이름이라 저장소 .env 읽기·작업 폴더 밖 쓰기·키트 kit.tsx 고치기가 모두 됐다.
+ *  지금: --tools 로 도구를 여섯으로(없으면 Grep·Glob 이 아예 없다), 쓰기는 acceptEdits 의 cwd(작업 폴더) 범위만, 읽기는 cwd + 아래 허용 경로만,
+ *  .env 는 거부 규칙. Bash 는 ./check.sh·./preview.sh 만(읽기 전용 명령도 cwd 밖은 막힌다).
+ */
+export function sceneAgentArgs(o: { model: string; maxTurns: number; repo: string; sceneDir: string }): string[] {
+  const abs = (p: string) => `/${path.resolve(p)}`; // 권한 규칙의 절대 경로는 //…
+  const deny = ['AskUserQuestion', 'WebFetch', 'WebSearch', `Read(${abs(path.join(o.repo, '.env'))})`, 'Read(**/.env*)',
+    ...['src', 'scripts', 'remotion', 'node_modules'].map((d) => `Edit(${abs(path.join(o.repo, d))}/**)`)];
+  // 장면 폴더는 읽기만 — 세션이 Glob scenes/**/*.tsx 로 이웃·다른 묶음 작업 중 장면을 본다(10-25 리뷰). 쓰기는 acceptEdits 의 cwd 뿐이다.
+  const allow = [`Read(${abs(path.join(o.repo, 'remotion', 'longform'))}/**)`, `Read(${abs(path.join(o.sceneDir, '_species.ts'))})`, `Read(${abs(o.sceneDir)}/*.tsx)`,
+    `Read(${abs(path.join(o.sceneDir, 'work'))}/*/s*.tsx)`, `Read(${abs(o.sceneDir)}/**)`, 'Bash(./preview.sh:*)', 'Bash(./check.sh:*)'];
+  return ['-p', '--model', o.model, '--setting-sources', '', '--no-session-persistence', '--max-turns', String(o.maxTurns),
+    '--permission-mode', 'acceptEdits', '--tools', 'Read,Write,Edit,Glob,Grep,Bash', '--disallowedTools', deny.join(','),
+    '--allowedTools', allow.join(','), '--output-format', 'stream-json', '--verbose'];
+}
+
 /** 실제 Claude Code 세션(구독 로그인 환경) — stream-json 로그를 agent.jsonl 에 남기고 result 줄에서 턴·비용을 읽는다. */
 async function claudeAgent(o: AgentRunInput): Promise<AgentRun> {
-  const args = ['-p', '--model', CONFIG.cloudTierModels.heavy, '--setting-sources', '', '--no-session-persistence', '--max-turns', String(o.maxTurns),
-    '--permission-mode', 'acceptEdits', '--disallowedTools', 'AskUserQuestion',
-    '--allowedTools', 'Read,Write,Edit,Glob,Bash(./preview.sh:*),Bash(./check.sh:*)', '--output-format', 'stream-json', '--verbose'];
+  const args = sceneAgentArgs({ model: CONFIG.cloudTierModels.heavy, maxTurns: o.maxTurns, repo: o.repo ?? path.resolve('.'), sceneDir: o.sceneDir ?? path.dirname(path.dirname(o.workDir)) });
   const logFile = path.join(o.workDir, 'agent.jsonl');
   const agentLog = fs.createWriteStream(logFile);
   agentLog.on('error', () => { /* 로그만 잃는다 */ });
   const t0 = Date.now();
-  const r = await runProc(CONFIG.claudeCliPath, args, { cwd: o.workDir, env: agentEnv(process.env), timeoutMs: o.timeoutMs, stdin: o.prompt, onStdout: (d) => agentLog.write(d), ...(o.signal ? { signal: o.signal } : {}) });
+  const r = await runProc(CONFIG.claudeCliPath, args, { cwd: o.workDir, env: sceneAgentEnv(process.env), timeoutMs: o.timeoutMs, stdin: o.prompt, onStdout: (d) => agentLog.write(d), ...(o.signal ? { signal: o.signal } : {}) });
   await new Promise<void>((res) => agentLog.end(() => res()));
-  const result = agentResultOf(fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '');
+  const jsonl = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
+  const result = agentResultOf(jsonl);
+  const tail = agentTail(result?.result, r.stderr, jsonl);
   return {
     exit: r.code, aborted: r.aborted, durationSec: Math.round((Date.now() - t0) / 1000),
     ...(result?.num_turns != null ? { turns: result.num_turns } : {}), ...(result?.total_cost_usd != null ? { costUsd: result.total_cost_usd } : {}),
-    tail: (result?.result ?? r.stderr.slice(-200)).split('\n').pop()?.slice(0, 300),
+    ...(tail ? { tail } : {}),
   };
 }
 
@@ -174,8 +280,66 @@ export function harnessScript(repo: string, script: string, jobPath: string): st
   return `#!/bin/bash\ncd ${sq(repo)} || exit 1\nexec ${sq(process.execPath)} ${sq(tsx)} ${sq(path.join(repo, 'scripts', 'longform', script))} ${sq(jobPath)} "$1"\n`;
 }
 
+/** sha256 캐시(경로 → 크기·mtime·해시) — 안 바뀐 파일은 다시 읽지 않는다. */
+const shaCache = new Map<string, { size: number; mtimeMs: number; sha: string }>();
+/**
+ * 폴더 지문(부작용: 파일 읽기) — tamperTracked 파일의 내용 sha256(링크는 가리키는 곳). 바뀐 파일 이름을 알리려고 목록 그대로 돌려준다.
+ * 10-25 리뷰: mtime 만 보면 git checkout·같은 내용 다시 저장도 변조였다 — 내용으로 본다(크기·mtime 이 같으면 캐시).
+ */
+export function treeFingerprint(roots: readonly string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const walk = (root: string, dir: string): void => {
+    let ents: fs.Dirent[];
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { if (!e.name.startsWith('.') && !TAMPER_SKIP_DIRS.has(e.name)) walk(root, p); continue; }
+      if (!tamperTracked(root, path.relative(root, p))) continue;
+      try {
+        const st = fs.lstatSync(p);
+        if (st.isSymbolicLink()) { out.set(p, `l:${fs.readlinkSync(p)}`); continue; }
+        const c = shaCache.get(p);
+        if (c && c.size === st.size && c.mtimeMs === st.mtimeMs) { out.set(p, `f:${c.sha}`); continue; }
+        const h = crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+        shaCache.set(p, { size: st.size, mtimeMs: st.mtimeMs, sha: h });
+        out.set(p, `f:${h}`);
+      } catch { /* 사라짐 */ }
+    }
+  };
+  for (const r of roots) walk(r, r);
+  return out;
+}
+const fingerprintDiff = (a: Map<string, string>, b: Map<string, string>): string[] => [...new Set([...a.keys(), ...b.keys()])].filter((k) => a.get(k) !== b.get(k));
+const sha = (file: string): string | null => { try { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'); } catch { return null; } };
+
+const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash']);
+/**
+ * 세션이 바뀐 파일을 건드렸나(순수) — agent.jsonl 의 assistant tool_use 중 쓰는 도구(Write·Edit·MultiEdit·NotebookEdit·Bash) 입력이
+ * 바뀐 파일(절대·저장소 상대·작업 폴더 상대 경로, file_path 는 작업 폴더 기준으로 풀어서, Bash 는 파일 이름까지)을 가리키면 그 파일들.
+ */
+export function agentTouched(jsonl: string, changed: readonly string[], o: { repo: string; workDir: string }): string[] {
+  const hit = new Set<string>();
+  for (const line of jsonl.split('\n')) {
+    if (!line.includes('tool_use')) continue;
+    let j: { type?: string; message?: { content?: Array<{ type?: string; name?: string; input?: Record<string, unknown> }> } };
+    try { j = JSON.parse(line); } catch { continue; }
+    if (j.type !== 'assistant') continue;
+    for (const c of j.message?.content ?? []) {
+      if (c.type !== 'tool_use' || !c.name || !WRITE_TOOLS.has(c.name)) continue;
+      const text = JSON.stringify(c.input ?? {});
+      const target = typeof c.input?.file_path === 'string' ? c.input.file_path : typeof c.input?.notebook_path === 'string' ? c.input.notebook_path : undefined;
+      const resolved = target ? path.resolve(o.workDir, target) : undefined;
+      for (const f of changed) {
+        const names = [f, path.relative(o.repo, f), path.relative(o.workDir, f), ...(c.name === 'Bash' ? [path.basename(f)] : [])];
+        if (resolved === path.resolve(f) || names.some((x) => x && text.includes(JSON.stringify(x).slice(1, -1)))) hit.add(f);
+      }
+    }
+  }
+  return [...hit];
+}
+
 /** 묶음 하나 — 작업 폴더 준비 → 세션 → 변조 확인 → 장면 파일을 scenes/ 로. 돌려주는 keys = 옮긴 장면. */
-async function runBatch(name: string, specs: SceneSpec[], o: { sceneDir: string; kitApi: string; title?: string; deps: SceneDeps; signal?: AbortSignal; mode?: SceneStageMode; clipsDir?: string; note?: string; seed?: ReadonlyArray<{ file: string; content: string }>; species?: SceneJob['species'] }): Promise<{ moved: string[]; run?: AgentRun; problem?: string }> {
+async function runBatch(name: string, specs: SceneSpec[], o: { sceneDir: string; kitApi: string; title?: string; deps: SceneDeps; signal?: AbortSignal; mode?: SceneStageMode; clipsDir?: string; note?: string; seed?: ReadonlyArray<{ file: string; content: string }>; species?: SceneJob['species']; tamperRoots?: readonly string[] }): Promise<{ moved: string[]; run?: AgentRun; problem?: string }> {
   const { deps } = o;
   const workRoot = path.join(o.sceneDir, 'work');
   const work = path.join(workRoot, name);
@@ -212,8 +376,26 @@ async function runBatch(name: string, specs: SceneSpec[], o: { sceneDir: string;
   const prompt = [base, brief, o.note ?? ''].filter(Boolean).join('\n\n');
   fs.writeFileSync(path.join(work, 'agent-prompt.txt'), prompt);
 
-  const run = await deps.runAgent({ batch: name, workDir: work, prompt, timeoutMs: deps.batchTimeoutMs, maxTurns: deps.maxTurns, ...(o.signal ? { signal: o.signal } : {}) });
-  deps.log(`${name} 세션 끝 — exit ${run.exit}${run.aborted ? '(시간 초과·취소)' : ''} · 턴 ${run.turns ?? '?'} · $${(run.costUsd ?? 0).toFixed(2)} · ${run.durationSec}초`);
+  const fpBefore = o.tamperRoots?.length ? treeFingerprint(o.tamperRoots) : null;
+  const run = await deps.runAgent({ batch: name, workDir: work, prompt, timeoutMs: deps.batchTimeoutMs, maxTurns: deps.maxTurns, repo: deps.repo, sceneDir: o.sceneDir, ...(o.signal ? { signal: o.signal } : {}) });
+  deps.log(`${name} 세션 끝 — exit ${run.exit}${run.aborted ? '(시간 초과·취소)' : ''} · 턴 ${run.turns ?? '?'} · $${run.costUsd != null ? run.costUsd.toFixed(2) : '?(결과 줄 없음)'} · ${run.durationSec}초`);
+  // 저장소 키트·하네스 소스 — 권한(sceneAgentArgs)이 막지만 한 겹 더. 내용이 바뀌었고 이 세션 기록에 그 파일을 쓴 도구 호출이 있을 때만 버린다
+  //   (동시 묶음·개발 중 저장·git checkout 으로 바뀐 것은 경고만 — 종전엔 겹친 묶음이 다 버려지고 tNN 에서도 빠져 장면을 영영 잃었다).
+  if (fpBefore) {
+    const changed = fingerprintDiff(fpBefore, treeFingerprint(o.tamperRoots!));
+    if (changed.length) {
+      const rel = (xs: readonly string[], n: number) => xs.slice(0, n).map((f) => path.relative(deps.repo, f)).join(', ');
+      let jsonl = '';
+      try { jsonl = fs.readFileSync(path.join(work, 'agent.jsonl'), 'utf8'); } catch { /* 기록 없음 */ }
+      const touched = agentTouched(jsonl, changed, { repo: deps.repo, workDir: work });
+      if (touched.length) {
+        deps.log(`⚠⚠ ${name} — 세션이 저장소 소스를 고침(${touched.length}개: ${rel(touched, 5)}) — 이 묶음 장면을 버린다. 되돌리지 않았으니 git status 로 확인할 것`);
+        deps.activity?.(`[롱폼 그림] ⚠ ${name} 저장소 소스 변조 감지 — ${rel(touched, 3)}`);
+        return { moved: [], run, problem: TAMPERED_REPO };
+      }
+      deps.log(`⚠ ${name} — 세션 중에 저장소 소스가 바뀜(${changed.length}개: ${rel(changed, 5)}) — 이 세션 기록엔 고친 흔적이 없어 장면은 받는다(git status 로 확인할 것)`);
+    }
+  }
   const same = (f: string, want: string) => { try { return fs.readFileSync(path.join(work, f), 'utf8') === want; } catch { return false; } };
   const speciesTampered = !!speciesModule && (() => { try { return fs.readFileSync(speciesModule, 'utf8') !== speciesText; } catch { return true; } })();
   if (speciesTampered) writeIfChanged(speciesModule!, speciesText!); // 원래대로 — 다른 묶음 장면이 같은 파일을 쓴다
@@ -295,62 +477,112 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
   const kitApi = kitForPresenter(fs.readFileSync(full ? (full.kitApiPath ?? path.join(deps.repo, 'remotion', 'longform', 'fullscreen', `KIT_API_${full.style}.md`)) : path.join(deps.repo, 'remotion', 'longform', 'scenes', 'KIT_API.md'), 'utf8'),
     full?.presenter ? fs.readFileSync(path.join(deps.repo, 'remotion', 'longform', 'fullscreen', 'KIT_API_BIONEE.md'), 'utf8') : undefined);
   const borrowed = plan ? Object.fromEntries([...plan.footage].filter(([, f]) => f.borrowed).map(([k, f]) => [k, f.borrowed!])) : {};
+  // resume — 지난 실행 비용을 잃지 않게 이어 적는다(이번 실행 비용·상한은 따로).
+  let priorCostUsd = 0;
+  if (opts.resume) { try { const old = JSON.parse(fs.readFileSync(path.join(sceneDir, 'report.json'), 'utf8')) as Partial<SceneReport>; priorCostUsd = old.totalCostUsd ?? old.costUsd ?? 0; } catch { /* 지난 보고 없음 */ } }
   const report: SceneReport = {
     built: 0, total: specs.length, costUsd: 0, failed: [], perBatch: {},
+    ...(priorCostUsd ? { priorCostUsd } : {}),
     ...(full ? { zone: {}, insetKeys: specs.filter((s) => s.full?.insetRequired).map((s) => s.key), insetMissing: plan?.missing ?? [], ...(Object.keys(borrowed).length ? { insetBorrowed: borrowed } : {}) } : {}),
   };
   if (plan?.missing.length) deps.log(`끼움 카드 없는 장: ${plan.missing.map((m) => `${m.chapter}(${m.why})`).join(', ')}`);
   const fail = new Map<string, string>();
   const nameOf = (i: number) => `b${String(i + 1).padStart(2, '0')}`;
-  deps.log(`장면 ${specs.length}개 · 묶음 ${batches.length}개 · 동시 ${deps.concurrency} · 상한 $${deps.budgetUsd}`);
+  deps.log(`장면 ${specs.length}개 · 묶음 ${batches.length}개 · 동시 ${deps.concurrency} · 상한 $${deps.budgetUsd}${priorCostUsd ? ` · 지난 실행 $${priorCostUsd}` : ''}`);
 
   const now = deps.now ?? (() => new Date());
+  const tamperRoots = deps.tamperRoots ?? (deps.runAgent === claudeAgent ? TAMPER_ROOTS.map((r) => path.join(deps.repo, r)) : []);
   let limitUntil: Date | null = null;
+  /** 지금도 한도 중인가(순수 판정) — 풀린 시각(+여유)이 지났으면 아니다(대기 횟수를 다 쓴 뒤에도 늦은 판이 영영 건너뛰지 않게, 10-25 리뷰). */
+  const limitActive = (): Date | null => (limitUntil && limitUntil.getTime() + LIMIT_GRACE_MS > now().getTime() ? limitUntil : null);
+  let wSeq = 0; // wNN 이름 — 기다리지 않고(이미 풀림) 다시 그린 판도 이름이 겹치지 않게
+  // 한도 대기는 편 전체에서 센다(판마다 새로 세면 tNN·fNN 판이 또 몇 시간씩 기다린다).
+  let waitRounds = 0;
+  let waitedMs = 0;
+  const limited = new Set<string>(); // 이번 판에서 한도로 못 그렸거나 띄우지 못한 장면
+  // 비용 — 결과 줄이 있는 완료 묶음(비용·초). 결과 줄 없는 세션의 어림과 진행 중 묶음 예상의 바탕.
+  const known: Array<{ usd: number; sec: number }> = [];
+  const median = (xs: number[]): number | undefined => { if (!xs.length) return undefined; const a = [...xs].sort((x, y) => x - y); const m = a.length >> 1; return a.length % 2 ? a[m]! : (a[m - 1]! + a[m]!) / 2; };
+  const costOf = (run: AgentRun | undefined): { usd: number; estimated?: true } => {
+    if (!run) return { usd: 0 };
+    if (run.costUsd != null) { if (run.costUsd > 0 && run.durationSec > 0) known.push({ usd: run.costUsd, sec: run.durationSec }); return { usd: run.costUsd }; }
+    const perSec = median(known.map((k) => k.usd / k.sec)) ?? SCENE_COST_PER_MIN_USD / 60;
+    return { usd: Math.round(perSec * run.durationSec * 100) / 100, estimated: true };
+  };
+  let inflight = 0;
+  const reserved = (): number => inflight * (median(known.map((k) => k.usd)) ?? SCENE_RESERVE_USD);
+  const limitWhy = (u: Date) => `구독 세션 한도 — ${u.getHours()}시에 풀림`;
   const runOne = async (b: SceneSpec[], name: string, fix?: { note: string; seed: Array<{ file: string; content: string }> }): Promise<void> => {
+    inflight++; // await 전에 — 풀이 다음 묶음을 띄울지 볼 때 이 묶음 예상 비용이 잡혀 있게
     try {
-      const r = await runBatch(name, b, { sceneDir, kitApi, ...(title ? { title } : {}), deps, ...(signal ? { signal } : {}), ...(full ? { mode: full, clipsDir, species: speciesForBatch(b) } : {}), ...(fix ?? {}) });
-      report.costUsd += r.run?.costUsd ?? 0;
-      report.perBatch[name] = { keys: b.map((s) => s.key), ...(r.run ? { turns: r.run.turns, costUsd: r.run.costUsd, durationSec: r.run.durationSec, exit: r.run.exit, tail: r.run.tail } : {}) };
+      const r = await runBatch(name, b, { sceneDir, kitApi, ...(title ? { title } : {}), deps, ...(signal ? { signal } : {}), ...(full ? { mode: full, clipsDir, species: speciesForBatch(b) } : {}), ...(fix ?? {}), tamperRoots });
+      const cost = costOf(r.run);
+      report.costUsd += cost.usd;
+      report.perBatch[name] = { keys: b.map((s) => s.key), ...(r.run ? { turns: r.run.turns, costUsd: cost.usd, ...(cost.estimated ? { costEstimated: true as const } : {}), durationSec: r.run.durationSec, exit: r.run.exit, tail: r.run.tail } : {}) };
+      if (cost.estimated) deps.log(`${name} 결과 줄 없음 — 비용 어림 $${cost.usd.toFixed(2)}(${r.run!.durationSec}초)`);
       const reset = sessionLimitReset(r.run?.tail, now());
       if (reset && (!limitUntil || reset > limitUntil)) limitUntil = reset;
+      if (reset) for (const s of b) limited.add(s.key);
       const capped = (r.run?.turns ?? 0) >= deps.maxTurns; // CLI 는 상한 90 에 91 을 보고한다
       for (const s of b) if (!r.moved.includes(s.key)) fail.set(s.key, r.problem ?? (reset ? '구독 세션 한도로 파일 없음' : r.run?.aborted ? '세션 시간 초과·취소로 파일 없음' : capped ? `턴 상한 ${deps.maxTurns} 소진으로 파일 없음` : '에이전트가 파일을 쓰지 않음'));
-      deps.activity?.(`[롱폼 그림] ${name} ${b[0]!.key}~${b[b.length - 1]!.key}(${b[0]!.chapterTitle}) — 파일 ${r.moved.length}/${b.length} · 턴 ${r.run?.turns ?? '?'} · $${(r.run?.costUsd ?? 0).toFixed(2)}${r.problem ? ` · ${r.problem}` : ''}`);
+      deps.activity?.(`[롱폼 그림] ${name} ${b[0]!.key}~${b[b.length - 1]!.key}(${b[0]!.chapterTitle}) — 파일 ${r.moved.length}/${b.length} · 턴 ${r.run?.turns ?? '?'} · $${cost.usd.toFixed(2)}${cost.estimated ? '(어림)' : ''}${r.problem ? ` · ${r.problem}` : ''}`);
     } catch (e) {
       const why = `묶음 실패: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`;
       report.perBatch[name] = { keys: b.map((s) => s.key), skipped: why };
       for (const s of b) fail.set(s.key, why);
-    }
+    } finally { inflight--; }
   };
-  const drawAll = (bs: SceneSpec[][], nameOfB: (i: number) => string, fixOf?: (b: SceneSpec[]) => { note: string; seed: Array<{ file: string; content: string }> }) => pool(bs, deps.concurrency,
-    () => (signal?.aborted ? '취소됨' : report.costUsd >= deps.budgetUsd ? `비용 상한 $${deps.budgetUsd} 도달` : limitUntil ? `구독 세션 한도 — ${limitUntil.getHours()}시에 풀림` : null),
+  type FixOf = (b: SceneSpec[]) => { note: string; seed: Array<{ file: string; content: string }> };
+  const drawAll = (bs: SceneSpec[][], nameOfB: (i: number) => string, fixOf?: FixOf) => pool(bs, deps.concurrency,
+    () => { const lim = limitActive(); return signal?.aborted ? '취소됨' : report.costUsd + reserved() >= deps.budgetUsd ? `비용 상한 $${deps.budgetUsd} 도달${inflight ? `(진행 중 ${inflight}묶음 예상 포함)` : ''}` : lim ? limitWhy(lim) : null; },
     (b, i) => runOne(b, nameOfB(i), fixOf?.(b)),
     (b, i, why) => {
       report.perBatch[nameOfB(i)] = { keys: b.map((s) => s.key), skipped: why };
-      for (const s of b) fail.set(s.key, why);
+      for (const s of b) { fail.set(s.key, why); if (limitActive()) limited.add(s.key); }
     });
-  await drawAll(batches, nameOf);
-  // 세션 한도 — 풀릴 때까지 기다렸다가 빠진 장면만 다시(묶음 이름 wNN). 너무 멀면(주간 한도 등) 기다리지 않고 폴백.
-  for (let round = 1; round <= LIMIT_ROUNDS && limitUntil && !signal?.aborted; round++) {
-    const until: Date = limitUntil;
-    const waitMs = until.getTime() - now().getTime() + LIMIT_GRACE_MS;
-    const missing = specs.filter((s) => !hasFile(s));
-    if (!missing.length) break;
-    if (waitMs > LIMIT_WAIT_MAX_MS) { deps.log(`구독 세션 한도 — ${until.toLocaleString('ko-KR')} 에 풀려 너무 멀다, 빠진 ${missing.length}장면은 장면 없이`); break; }
-    deps.log(`구독 세션 한도 — ${until.getHours()}시 ${String(until.getMinutes()).padStart(2, '0')}분까지 기다렸다가 빠진 ${missing.length}장면을 다시 그린다(${round}/${LIMIT_ROUNDS})`);
-    deps.activity?.(`[롱폼 그림] 구독 세션 한도 — ${until.getHours()}시까지 대기 뒤 ${missing.length}장면 다시`);
-    await (deps.sleep ?? sleepAbortable)(Math.max(0, waitMs), signal);
-    if (signal?.aborted) break;
+  /** 한도가 걸려 있으면 풀릴 때까지 기다린다 — 횟수(LIMIT_ROUNDS)·합(LIMIT_WAIT_MAX_MS)을 넘거나 취소면 false(기다리지 않음). */
+  const waitLimit = async (n: number): Promise<boolean> => {
+    if (!limitUntil) return true;
+    const until = limitActive();
+    if (!until) { limitUntil = null; return true; } // 이미 풀렸다 — 기다리지 않고(횟수도 안 셈) 바로
+    const waitMs = Math.max(0, until.getTime() - now().getTime() + LIMIT_GRACE_MS);
+    if (waitRounds >= LIMIT_ROUNDS || waitedMs + waitMs > LIMIT_WAIT_MAX_MS) {
+      deps.log(`구독 세션 한도 — ${until.toLocaleString('ko-KR')} 에 풀려 ${waitRounds >= LIMIT_ROUNDS ? `대기 ${LIMIT_ROUNDS}번을 다 썼다` : '너무 멀다'}, ${n}장면은 장면 없이`);
+      return false;
+    }
+    waitRounds++;
+    deps.log(`구독 세션 한도 — ${until.getHours()}시 ${String(until.getMinutes()).padStart(2, '0')}분까지 기다렸다가 ${n}장면을 다시 그린다(${waitRounds}/${LIMIT_ROUNDS})`);
+    deps.activity?.(`[롱폼 그림] 구독 세션 한도 — ${until.getHours()}시까지 대기 뒤 ${n}장면 다시`);
+    await (deps.sleep ?? sleepAbortable)(waitMs, signal);
+    if (signal?.aborted) return false;
+    waitedMs += waitMs;
     limitUntil = null;
-    const again = planBatches(missing);
-    await drawAll(again, (i) => `w${round}${String(i + 1).padStart(2, '0')}`);
-  }
-  // 턴 상한·시간 초과 등으로 파일이 없는 장면 — 절반 크기 묶음으로 한 번 더(묶음 이름 tNN). 한도가 안 풀렸거나 상한·취소면 건너뛴다.
-  const leftover = specs.filter((s) => !hasFile(s) && fail.get(s.key) !== TAMPERED);
-  if (leftover.length && !signal?.aborted && !limitUntil && report.costUsd < deps.budgetUsd) {
+    return true;
+  };
+  /**
+   * 한 판 그리기(첫 그림 bNN·빠진 장면 tNN·검사 탈락 fNN 이 같이 쓴다) — 한도에 걸리면 풀릴 때까지 기다렸다가 그 판에서 한도로 못 그린 장면만
+   * 다시(wNN). pending = 아직 안 된 장면(bNN·tNN: 파일 없음, fNN: 깔아 준 그대로). 하네스 변조(TAMPERED)로 버린 묶음은 다시 안 그린다.
+   */
+  const drawRound = async (bs: SceneSpec[][], nameOfB: (i: number) => string, pending: (s: SceneSpec) => boolean, size: number, fixOf?: FixOf): Promise<void> => {
+    if (!(await waitLimit(bs.flat().length))) return;
+    limited.clear();
+    await drawAll(bs, nameOfB, fixOf);
+    // 이 판에서 한도에 걸렸으면(limitUntil — 풀린 시각이 지났어도) 그 장면만 다시. 이미 풀린 한도는 횟수를 안 세므로 판 수로도 막는다.
+    for (let guard = 0; limitUntil && !signal?.aborted && guard <= LIMIT_ROUNDS; guard++) {
+      const redo = bs.flat().filter((s) => limited.has(s.key) && pending(s) && !isTamper(fail.get(s.key)));
+      if (!redo.length || !(await waitLimit(redo.length))) break;
+      limited.clear();
+      const w = (wSeq = Math.max(wSeq + 1, waitRounds));
+      await drawAll(planBatches(redo, size), (i) => `w${w}${String(i + 1).padStart(2, '0')}`, fixOf);
+    }
+  };
+  await drawRound(batches, nameOf, (s) => !hasFile(s), BATCH_MAX);
+  // 턴 상한·시간 초과 등으로 파일이 없는 장면 — 절반 크기 묶음으로 한 번 더(묶음 이름 tNN). 상한·취소면 건너뛴다(한도는 drawRound 가 기다린다).
+  const leftover = specs.filter((s) => !hasFile(s) && !isTamper(fail.get(s.key)));
+  if (leftover.length && !signal?.aborted && report.costUsd < deps.budgetUsd) {
     deps.log(`빠진 ${leftover.length}장면을 ${REDO_BATCH_MAX}개씩 묶어 한 번 더 그린다`);
     deps.activity?.(`[롱폼 그림] 빠진 ${leftover.length}장면 다시(${REDO_BATCH_MAX}개씩)`);
-    await drawAll(planBatches(leftover, REDO_BATCH_MAX), (i) => `t${String(i + 1).padStart(2, '0')}`);
+    await drawRound(planBatches(leftover, REDO_BATCH_MAX), (i) => `t${String(i + 1).padStart(2, '0')}`, (s) => !hasFile(s), REDO_BATCH_MAX);
   }
 
   const finish = (pass: string[], extra: { entryPoint?: string; contact?: string } = {}): ScenesResult => {
@@ -358,9 +590,10 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
     writeSceneKeys(dir, keyBySeg);
     report.built = pass.length;
     report.costUsd = Math.round(report.costUsd * 100) / 100;
+    report.totalCostUsd = Math.round((priorCostUsd + report.costUsd) * 100) / 100;
     report.failed = specs.filter((s) => !pass.includes(s.key)).map((s) => ({ key: s.key, reason: fail.get(s.key) ?? '알 수 없음' }));
     fs.writeFileSync(path.join(sceneDir, 'report.json'), JSON.stringify(report, null, 2));
-    deps.log(`장면 ${pass.length}/${specs.length}개 통과 · 비용 $${report.costUsd}${report.failed.length ? ` · 탈락 ${report.failed.length}` : ''}`);
+    deps.log(`장면 ${pass.length}/${specs.length}개 통과 · 비용 $${report.costUsd}${priorCostUsd ? `(지난 실행 포함 $${report.totalCostUsd})` : ''}${report.failed.length ? ` · 탈락 ${report.failed.length}` : ''}`);
     return { built: pass.length, costUsd: report.costUsd, ...extra };
   };
   if (signal?.aborted) return finish([]);
@@ -370,12 +603,17 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
   const byKey = new Map(specs.map((s) => [s.key, s]));
   const writeEntry = (keys: readonly string[]) => (full ? writeEpisodeEntryFull(dir, keys, deps.repo, full.style) : writeEpisodeEntry(dir, keys, deps.repo));
   const stillDir = path.join(sceneDir, 'stills');
+  const fileOf = (k: string) => path.join(sceneDir, byKey.get(k)!.file);
+  /** 통과한 순간의 파일 지문 — 최종 등록표 직전에 다시 대 본다(통과 뒤 바뀐 파일은 뺀다). */
+  const passSha = new Map<string, string | null>();
   /**
    * 사후 검사 한 벌 — 첫 그림(전부)과 검토 뒤 다시 그린 장면(일부)이 같이 쓴다. keys 를 검사하고, 등록표에는 keep(이미 통과한 장면) + keys 를 싣는다.
    * 스틸은 outDir 에(`<key>_<pct>.png`, 침범 검사는 outDir/.probe). bundle = 번들 실패(그때 keys 전부 탈락).
+   * infra = 장면 탓이 아닌 탈락(tsc 가 못 돎·브라우저가 죽음 — infraKeys) — 사유 '인프라: …'(fNN 에 넣지 않는다).
    */
-  const postCheck = async (keys: readonly string[], keep: readonly string[], outDir: string): Promise<{ pass: string[]; bundle?: true }> => {
+  const postCheck = async (keys: readonly string[], keep: readonly string[], outDir: string): Promise<{ pass: string[]; bundle?: true; infra: string[] }> => {
     let pass: string[] = [];
+    const infra: string[] = [];
     for (const k of keys) {
       const sp = byKey.get(k)!;
       const file = path.join(sceneDir, sp.file);
@@ -385,14 +623,17 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
       else pass.push(sp.key);
     }
     if (pass.length) {
-      const tc = await deps.typecheck(pass.map((k) => path.join(sceneDir, byKey.get(k)!.file)), signal);
+      const tc = await deps.typecheck(pass.map(fileOf), signal);
+      const errOf = (k: string) => tc.get(path.resolve(fileOf(k))) ?? [];
+      const bad = infraKeys(new Map(pass.filter((k) => errOf(k).length).map((k) => [k, errOf(k)[0]!])), pass.length);
       pass = pass.filter((k) => {
-        const errs = tc.get(path.resolve(path.join(sceneDir, byKey.get(k)!.file))) ?? [];
-        if (errs.length) fail.set(k, `타입: ${errs.slice(0, 2).join(' / ')}`);
+        const errs = errOf(k);
+        if (errs.length) fail.set(k, bad.has(k) ? `인프라: ${errs[0]!.replace(/^인프라:\s*/, '')}` : `타입: ${errs.slice(0, 2).join(' / ')}`);
+        if (bad.has(k)) infra.push(k);
         return !errs.length;
       });
     }
-    if (!pass.length || signal?.aborted) return { pass: [] };
+    if (!pass.length || signal?.aborted) return { pass: [], infra };
     const entryPoint = writeEntry([...keep, ...pass]);
     const items: StillItem[] = pass.flatMap((k) => {
       const s = byKey.get(k)!;
@@ -405,7 +646,7 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
     catch (e) {
       const why = `번들 실패: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`;
       for (const k of pass) fail.set(k, why);
-      return { pass: [], bundle: true };
+      return { pass: [], bundle: true, infra };
     }
     if (full) {
       // 침범이 크면(자막 띠 2% 넘게) 탈락 — 무대가 잘라 내 화면엔 안 보이지만 그림이 잘린다. 작은 침범은 기록만.
@@ -418,28 +659,45 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
         } catch { /* 측정 실패는 넘어간다 */ }
       }
     }
+    const errOf = (k: string) => PREVIEW_AT.map((r) => { const v = stills.get(`${k}@${r}`); return v === undefined ? '스틸 없음' : v; }).filter((x): x is string => x !== null);
+    const bad = infraKeys(new Map(pass.filter((k) => errOf(k).length).map((k) => [k, errOf(k)[0]!])), pass.length);
     return {
       pass: pass.filter((k) => {
-        const errs = PREVIEW_AT.map((r) => { const v = stills.get(`${k}@${r}`); return v === undefined ? '스틸 없음' : v; }).filter((x): x is string => x !== null);
-        if (errs.length) fail.set(k, `렌더 오류: ${errs[0]}`);
+        const errs = errOf(k);
+        if (errs.length) fail.set(k, bad.has(k) ? `인프라: 렌더 ${errs[0]}` : `렌더 오류: ${errs[0]}`);
+        else passSha.set(k, sha(fileOf(k)));
+        if (bad.has(k)) infra.push(k);
         return !errs.length;
       }),
+      infra,
     };
   };
 
-  const first = await postCheck(specs.map((s) => s.key), [], stillDir);
+  let first = await postCheck(specs.map((s) => s.key), [], stillDir);
+  // 인프라 탈락(번들 실패·tsc 가 못 돎·브라우저가 죽음) — 장면 탓이 아니다. 세션을 띄우지 않고 사후 검사만 한 번 더.
+  if (!signal?.aborted && (first.bundle || first.infra.length)) {
+    const again = first.bundle ? specs.map((s) => s.key) : first.infra;
+    deps.log(`⚠ 사후 검사 인프라 탈락 ${again.length}장면 — ${first.bundle ? fail.get(again.find((k) => fail.has(k)) ?? '') ?? '번들 실패' : fail.get(again[0]!)} — 사후 검사만 한 번 더`);
+    const kept = first.bundle ? [] : first.pass;
+    const re = await postCheck(again, kept, stillDir);
+    first = re.bundle ? re : { pass: specs.map((s) => s.key).filter((k) => kept.includes(k) || re.pass.includes(k)), infra: re.infra };
+    if (re.infra.length) deps.log(`⚠ 다시 해도 인프라 탈락 ${re.infra.length}장면 — 장면 없이(고치기 세션에 넣지 않는다)`);
+  }
   if (first.bundle) { writeEntry([]); return finish([]); }
   let pass = first.pass;
   if (signal?.aborted) return finish([]);
 
-  // ── 사후 검사 탈락(빠른 검사·타입·렌더) — 지금 파일과 오류를 깔아 주고 REDO_BATCH_MAX 개씩 한 번 고치게 한다(묶음 이름 fNN).
-  //    고친 파일만 다시 검사해 통과하면 넣는다. 못 고치면 종전처럼 장면 없이.
-  const broken = specs.filter((s) => !pass.includes(s.key) && hasFile(s) && /^(검사|타입|렌더 오류):/.test(fail.get(s.key) ?? ''));
-  if (broken.length && !limitUntil && report.costUsd < deps.budgetUsd) {
+  // ── 사후 검사 탈락(빠른 검사·타입·렌더) — 지금 파일과 오류를 깔아 주고 REDO_BATCH_MAX 개씩 한 번 고치게 한다(묶음 이름 fNN, 편당 FIX_MAX 장면).
+  //    고친 파일만 다시 검사해 통과하면 넣는다. 못 고치면 종전처럼 장면 없이. 인프라 탈락('인프라:')은 넣지 않는다.
+  const brokenAll = specs.filter((s) => !pass.includes(s.key) && hasFile(s) && /^(검사|타입|렌더 오류):/.test(fail.get(s.key) ?? ''));
+  const broken = brokenAll.slice(0, FIX_MAX);
+  if (brokenAll.length > broken.length) deps.log(`검사 탈락 ${brokenAll.length}장면 — 고치기 상한 ${FIX_MAX}, 나머지 ${brokenAll.length - broken.length}장면(${brokenAll.slice(FIX_MAX).map((s) => s.key).join(', ')})은 장면 없이`);
+  if (broken.length && report.costUsd < deps.budgetUsd) {
     deps.log(`검사에서 떨어진 ${broken.length}장면(${broken.map((s) => s.key).join(', ')})을 오류를 붙여 한 번 더 고친다`);
     deps.activity?.(`[롱폼 그림] 검사 탈락 ${broken.length}장면 고치기`);
     const seeds = new Map(broken.map((s) => [s.key, fs.readFileSync(path.join(sceneDir, s.file), 'utf8')]));
-    await drawAll(planBatches(broken, REDO_BATCH_MAX), (i) => `f${String(i + 1).padStart(2, '0')}`, (b) => ({
+    const unchanged = (s: SceneSpec) => { try { return fs.readFileSync(path.join(sceneDir, s.file), 'utf8') === seeds.get(s.key); } catch { return false; } };
+    await drawRound(planBatches(broken, REDO_BATCH_MAX), (i) => `f${String(i + 1).padStart(2, '0')}`, unchanged, REDO_BATCH_MAX, (b) => ({
       seed: b.map((s) => ({ file: s.file, content: seeds.get(s.key)! })),
       note: [
         '────────── 하네스 사후 검사 탈락 — 이 묶음은 고치기다 ──────────',
@@ -448,7 +706,7 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
       ].join('\n'),
     }));
     if (signal?.aborted) return finish([]);
-    const changed = broken.filter((s) => { try { return fs.readFileSync(path.join(sceneDir, s.file), 'utf8') !== seeds.get(s.key); } catch { return false; } }).map((s) => s.key);
+    const changed = broken.filter((s) => hasFile(s) && !unchanged(s)).map((s) => s.key);
     if (changed.length) {
       const fixDir = path.join(stillDir, 'fix');
       const pc = await postCheck(changed, pass, fixDir);
@@ -471,13 +729,22 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
       ...(e.commons ?? []).map((c) => ({ nameKo: e.nameKo, file: path.join(dir, c.file), part: c.part })),
     ]);
     const rv = await reviewAndRedo(pass, {
-      deps, specs, byKey, sceneDir, stillDir, kitApi, report, fail, postCheck, ...(title ? { title } : {}), ...(signal ? { signal } : {}),
+      deps, specs, byKey, sceneDir, stillDir, kitApi, report, fail, postCheck, costOf, tamperRoots, ...(title ? { title } : {}), ...(signal ? { signal } : {}),
+      limitNote: () => { const lim = limitActive(); return lim ? limitWhy(lim) : null; },
       ...(full ? { mode: full, clipsDir, speciesOf: speciesOfSpec, speciesForBatch, ...(refs.length ? { refs } : {}) } : {}),
     });
     reviewOut = rv;
     if (signal?.aborted) return finish([]);
   }
 
+  // 통과 뒤 바뀐 파일은 뺀다(통과본만 등록표에 — 다시 검사하지 않는다).
+  const drifted = pass.filter((k) => sha(fileOf(k)) !== passSha.get(k));
+  if (drifted.length) {
+    deps.log(`⚠ 통과 뒤 파일이 바뀐 장면 ${drifted.length}개(${drifted.join(', ')}) — 등록표에서 뺀다`);
+    for (const k of drifted) fail.set(k, '통과 뒤 파일이 바뀜 — 뺌');
+    pass = pass.filter((k) => !drifted.includes(k));
+    if (!pass.length) { writeEntry([]); return finish([]); }
+  }
   const finalEntry = writeEntry(pass);
   let contact: string | undefined;
   try {
@@ -502,6 +769,8 @@ async function reviewAndRedo(pass: string[], o: {
   deps: SceneDeps; specs: SceneSpec[]; byKey: Map<string, SceneSpec>; sceneDir: string; stillDir: string; kitApi: string; title?: string;
   report: SceneReport; fail: Map<string, string>; signal?: AbortSignal; mode?: SceneStageMode; clipsDir?: string;
   postCheck: (keys: readonly string[], keep: readonly string[], outDir: string) => Promise<{ pass: string[]; bundle?: true }>;
+  /** 세션 비용(결과 줄 없으면 어림)·변조 감지 폴더·구독 한도 중이면 그 사유(다시 그리지 않는다). */
+  costOf: (run: AgentRun | undefined) => { usd: number; estimated?: true }; tamperRoots: readonly string[]; limitNote: () => string | null;
   /** 전체 화면 — 장면 수종(실물 대조)·묶음 수종 표·실물 사진. */
   speciesOf?: (sp: SceneSpec) => string[]; speciesForBatch?: (b: readonly SceneSpec[]) => SceneJob['species']; refs?: ReviewRef[];
 }): Promise<NonNullable<ScenesResult['review']>> {
@@ -536,8 +805,10 @@ async function reviewAndRedo(pass: string[], o: {
     rec.redo = redo.map((r) => ({ key: r.key, reason: r.reason.slice(0, 200), result: 'kept' as const }));
     deps.log(`검토 — ${v.checked}장면 확인(${v.mode}) · 다시 그릴 장면 ${redo.length}개${redo.length ? `: ${redo.map((r) => r.key).join(', ')}` : ''}`);
     if (!redo.length) { save(); return { redo: 0, redone: 0 }; }
-    if (o.report.costUsd >= deps.budgetUsd) {
-      rec.skipped = `비용 상한 $${deps.budgetUsd} 도달 — 다시 그리지 않음`;
+    // 구독 한도 중이면 기다리지 않고 건너뛴다 — 검토 다시 그리기는 다듬기(fail-open)라 몇 시간 붙잡을 값이 없다.
+    const held = o.report.costUsd >= deps.budgetUsd ? `비용 상한 $${deps.budgetUsd} 도달` : o.limitNote();
+    if (held) {
+      rec.skipped = `${held} — 다시 그리지 않음`;
       for (const r of rec.redo) r.why = rec.skipped;
       save(); return { redo: redo.length, redone: 0, skipped: rec.skipped };
     }
@@ -550,11 +821,12 @@ async function reviewAndRedo(pass: string[], o: {
       '이 폴더의 sNNN.tsx 는 이미 만든 장면이다. 아래 지적을 고쳐 같은 파일에 다시 쓴다(Edit 로 고치거나 새로 Write). 지적이 없는 부분의 좋은 점은 살린다. 고친 뒤 check → preview 절차는 같다.',
       ...redo.map((r) => `- ${r.key}: ${r.reason}`),
     ].join('\n');
-    const run = await runBatch('r01', specsR, { sceneDir, kitApi: o.kitApi, ...(o.title ? { title: o.title } : {}), deps, ...(o.signal ? { signal: o.signal } : {}), ...(o.mode ? { mode: o.mode } : {}), ...(o.clipsDir ? { clipsDir: o.clipsDir } : {}), ...(o.speciesForBatch ? { species: o.speciesForBatch(specsR) } : {}), note, seed });
-    o.report.costUsd += run.run?.costUsd ?? 0;
-    o.report.perBatch.r01 = { keys: specsR.map((s) => s.key), ...(run.run ? { turns: run.run.turns, costUsd: run.run.costUsd, durationSec: run.run.durationSec, exit: run.run.exit, tail: run.run.tail } : {}) };
-    rec.costUsd = run.run?.costUsd; rec.durationSec = Math.round((Date.now() - t0) / 1000);
-    deps.activity?.(`[롱폼 다시 그리기] 검토 지적 ${redo.length}장면 → 세션 ${run.run?.turns ?? '?'}턴 · $${(run.run?.costUsd ?? 0).toFixed(2)}`);
+    const run = await runBatch('r01', specsR, { sceneDir, kitApi: o.kitApi, ...(o.title ? { title: o.title } : {}), deps, ...(o.signal ? { signal: o.signal } : {}), ...(o.mode ? { mode: o.mode } : {}), ...(o.clipsDir ? { clipsDir: o.clipsDir } : {}), ...(o.speciesForBatch ? { species: o.speciesForBatch(specsR) } : {}), note, seed, tamperRoots: o.tamperRoots });
+    const cost = o.costOf(run.run);
+    o.report.costUsd += cost.usd;
+    o.report.perBatch.r01 = { keys: specsR.map((s) => s.key), ...(run.run ? { turns: run.run.turns, costUsd: cost.usd, ...(cost.estimated ? { costEstimated: true as const } : {}), durationSec: run.run.durationSec, exit: run.run.exit, tail: run.run.tail } : {}) };
+    rec.costUsd = run.run ? cost.usd : undefined; rec.durationSec = Math.round((Date.now() - t0) / 1000);
+    deps.activity?.(`[롱폼 다시 그리기] 검토 지적 ${redo.length}장면 → 세션 ${run.run?.turns ?? '?'}턴 · $${cost.usd.toFixed(2)}${cost.estimated ? '(어림)' : ''}`);
     // 바뀐 장면만 사후 검사 — 안 바뀐 것은 원래대로(검사 통과본).
     const changed = run.moved.filter((k) => seed.find((x) => x.file === byKey.get(k)!.file)?.content !== fs.readFileSync(path.join(sceneDir, byKey.get(k)!.file), 'utf8'));
     for (const r of rec.redo) {

@@ -79,7 +79,13 @@ export function planBatches(specs: readonly SceneSpec[], max = BATCH_MAX): Scene
 }
 
 /** 에이전트 지시문(순수, 한국어) — KIT_API.md 전문 + 이 파이프라인의 규칙·절차. */
-export function scenePrompt(job: Pick<SceneJob, 'scenes'>, kitApi: string, o: { episodeTitle?: string } = {}): string {
+/** 세션 도구 범위(2026-10-25 — 권한을 작업 폴더·키트 소스로 좁혔다) 한 줄. 막힌 Bash·Grep 시도로 턴을 버리지 않게 미리 알린다. */
+export function sandboxRule(repo?: string): string {
+  const kit = repo ? `${repo}/remotion/longform/` : '저장소의 remotion/longform/';
+  return `- 도구 범위: Bash 는 \`./check.sh sNNN\`·\`./preview.sh sNNN\` 만 된다(cd·작업 폴더 밖 경로는 막힌다). 쓰기는 이 폴더 안만. 키트 소스는 Read·Grep·Glob 에 절대 경로(${kit}…)로, 이 편 scenes/_species.ts·이웃 장면(scenes/sNNN.tsx)도 절대 경로로 읽는다. 그 밖(저장소 src·scripts·설정 파일·다른 편)은 읽을 수 없다.`;
+}
+
+export function scenePrompt(job: Pick<SceneJob, 'scenes'> & { repo?: string }, kitApi: string, o: { episodeTitle?: string } = {}): string {
   const g = job.scenes;
   const keys = g.map((s) => s.key).join(', ');
   return [
@@ -97,6 +103,7 @@ export function scenePrompt(job: Pick<SceneJob, 'scenes'>, kitApi: string, o: { 
     '',
     '[이 파이프라인의 규칙 — 아래 키트 문서보다 우선]',
     "- import 는 `./_kit`(키트 전부 + SceneStage·SceneProps), `react`, `remotion` 만. 키트 문서의 `../SceneStage`·`../../illus/Kit2` 대신 `import { SceneStage, type SceneProps, Planter, … } from './_kit';` 한 줄로. _kit.ts·job.json·check.sh·preview.sh 는 고치지 않는다.",
+    sandboxRule(job.repo),
     '- 파일 하나 = 기본 내보내기 컴포넌트 하나(export default function Scene({ durationInFrames, words }: SceneProps)), SceneStage 무대 안에 그린다.',
     `- 화면 글자는 그 문장에 나온 말만(요약·새 사실·다른 문장의 말 금지). 라벨 ${MAX_LABELS}개 이하(숫자 눈금 별개), 한글 라벨 ${LABEL_MAX_KO}자·숫자 라벨 ${LABEL_MAX_NUMERIC}자 이하(공백 제외). 라벨의 숫자는 문장에 나온 숫자만. 라벨은 맨 위 상수(const L1 = '…')로.`,
     '- SVG id·부품 id 는 장면 키 접두사: s007 장면이면 `s007-glow`, `s007-pot`. url(#…) 은 그 접두사나 공용 kit-·k2- 만.',
