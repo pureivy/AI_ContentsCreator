@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, orderCandidates, shouldRememberDemandReject, factStarvedItems, factStarvedRecentlyFor, starvedHit } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, rotationDemoteRank, orderCandidates, shouldRememberDemandReject, factStarvedItems, factStarvedRecentlyFor, starvedHit } from './scheduler';
 import type { DemandRow } from '../analytics/topicDemand';
 import { CONFIG } from '../config';
 
@@ -513,6 +513,26 @@ describe('pickDemoted — 후순위 후보 선택(순수)', () => {
   it('비어 있으면 undefined(폴백 없음)', () => {
     expect(pickDemoted([])).toBeUndefined();
     expect(pickDemoted([e('유일', 1)])?.idea.title).toBe('유일');
+  });
+});
+
+// 로테이션 후순위 × 비수기(2026-10-26 체리 사고) — "체리나무 열매 따는 타이밍"(시즌 0.22↓, 수확은 6~7월)이
+// 최근 축 rank 2 로만 보관돼 비수기 3.5 를 건너뛰고 10월 말에 채택됐다. 겹치면 더 나쁜 쪽을 따른다.
+describe('rotationDemoteRank — 로테이션 후순위에 비수기가 겹칠 때(순수)', () => {
+  it('비수기가 아니면 종전대로 축 2·수종 3', () => {
+    expect(rotationDemoteRank(false, { verdict: 'pass' })).toBe(2);
+    expect(rotationDemoteRank(true, { verdict: 'pass' })).toBe(3);
+  });
+  it('비수기가 겹치면 3.5 — 비수기 아닌 최근 축 후보(배나무 2)에 진다', () => {
+    const cherry = { title: '체리', rank: rotationDemoteRank(false, { verdict: 'demote' }) };
+    const pear = { title: '배', rank: rotationDemoteRank(false, { verdict: 'pass' }) };
+    expect(cherry.rank).toBe(3.5);
+    expect(rotationDemoteRank(true, { verdict: 'demote' })).toBe(3.5);
+    expect(pickDemoted([cherry, pear])?.title).toBe('배');
+  });
+  it('하한 미달 밸브(relaxed demote, 1)는 로테이션 순위를 바꾸지 않는다', () => {
+    expect(rotationDemoteRank(false, { verdict: 'demote', relaxed: true })).toBe(2);
+    expect(rotationDemoteRank(true, { verdict: 'demote', relaxed: true })).toBe(3);
   });
 });
 

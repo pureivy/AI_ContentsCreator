@@ -898,6 +898,17 @@ export function pickDemoted<T extends { rank: number }>(list: readonly T[]): T |
 }
 
 /**
+ * 로테이션 후순위(최근 축 2·최근 수종 3)의 보관 순위(순수, 2026-10-26). 로테이션 분기가 비수기 분기보다 먼저
+ * continue 해서, 둘이 겹친 후보가 비수기 3.5 를 건너뛰고 2·3 으로 보관됐다 — "체리나무 열매 따는 타이밍"
+ * (시즌 0.22↓, 수확은 6~7월)이 10월 말에 채택된 사고. 겹치면 더 나쁜 쪽(3.5)을 따른다. 하한 미달 밸브
+ * (relaxed demote = 1)는 로테이션보다 앞 순위라 그대로 둔다.
+ */
+export function rotationDemoteRank(recentSpecies: boolean, demand: { verdict: DemandVerdict; relaxed?: boolean }): number {
+  const base = recentSpecies ? 3 : 2;
+  return demand.verdict === 'demote' && !demand.relaxed ? Math.max(base, 3.5) : base;
+}
+
+/**
  * 라운드 끝 채택 경합(순수) — 후순위 보관함 vs 유사 폴백. 어느 쪽이 이기는지만 돌려주고 로그·조립은
  * 호출부가 한다(경로별 로그 문구를 그대로 유지하기 위해).
  *
@@ -1656,13 +1667,15 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
         const why = recentSp
           ? `최근 수종 — ${recentSp.name} ${recentSp.daysAgo}일 전`
           : `최근 축 — ${recentTh!.theme} ${recentTh!.daysAgo}일 전`;
-        console.log(`[auto-cycle] 아이디어 후순위(${recentSp ? '최근 수종' : '최근 축'}·기아 방지) — "${title}" (${why.split(' — ')[1]})`);
-        rejects.push(`"${title}"=후순위(${why})`);
-        if (gate.level === 'none' && noSp) holdNoSpecies(recentSp ? 3 : 2, demand.line, '후순위');
+        const rotRank = rotationDemoteRank(!!recentSp, demand);
+        const offSeason = rotRank === 3.5 ? ' · 검색 비수기' : '';
+        console.log(`[auto-cycle] 아이디어 후순위(${recentSp ? '최근 수종' : '최근 축'}${offSeason}·기아 방지) — "${title}" (${why.split(' — ')[1]}${offSeason ? ` · ${demand.line}` : ''})`);
+        rejects.push(`"${title}"=후순위(${why}${offSeason})`);
+        if (gate.level === 'none' && noSp) holdNoSpecies(rotRank, demand.line, '후순위');
         else if (gate.level === 'none') {
           demoted.push({
             idea: { title, ...(keyword ? { keyword } : {}), ...(cand.subNiche ? { subNiche: cand.subNiche } : {}) },
-            rank: recentSp ? 3 : 2,
+            rank: rotRank,
             line: demand.line,
             rotation: why,
           });
