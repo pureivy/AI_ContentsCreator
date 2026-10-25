@@ -15,6 +15,7 @@
  *   한 묶음이 한도에 걸리면 남은 묶음을 띄우지 않고, 풀리는 시각까지 기다렸다가(최대 LIMIT_WAIT_MAX_MS) 빠진 장면만 다시 그린다.
  * 턴 상한(같은 날 대추나무 편 고치기 —8장면 묶음 셋이 모두 91/90턴에서 끊겨 6장면이 빠졌다. 2·4장면 묶음은 50~71턴):
  *   그래도 파일이 없는 장면은 절반 크기 묶음(REDO_BATCH_MAX, 이름 tNN)으로 한 번 더 그린다. 변조로 버린 묶음은 다시 안 그린다.
+ * 사후 검사 탈락(같은 고치기 때 s081 — _kit 에 없는 random 을 써 타입 오류): 지금 파일과 오류를 깔아 주고 fNN 묶음으로 한 번 고치게 한다.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -305,9 +306,9 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
 
   const now = deps.now ?? (() => new Date());
   let limitUntil: Date | null = null;
-  const runOne = async (b: SceneSpec[], name: string): Promise<void> => {
+  const runOne = async (b: SceneSpec[], name: string, fix?: { note: string; seed: Array<{ file: string; content: string }> }): Promise<void> => {
     try {
-      const r = await runBatch(name, b, { sceneDir, kitApi, ...(title ? { title } : {}), deps, ...(signal ? { signal } : {}), ...(full ? { mode: full, clipsDir, species: speciesForBatch(b) } : {}) });
+      const r = await runBatch(name, b, { sceneDir, kitApi, ...(title ? { title } : {}), deps, ...(signal ? { signal } : {}), ...(full ? { mode: full, clipsDir, species: speciesForBatch(b) } : {}), ...(fix ?? {}) });
       report.costUsd += r.run?.costUsd ?? 0;
       report.perBatch[name] = { keys: b.map((s) => s.key), ...(r.run ? { turns: r.run.turns, costUsd: r.run.costUsd, durationSec: r.run.durationSec, exit: r.run.exit, tail: r.run.tail } : {}) };
       const reset = sessionLimitReset(r.run?.tail, now());
@@ -321,9 +322,9 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
       for (const s of b) fail.set(s.key, why);
     }
   };
-  const drawAll = (bs: SceneSpec[][], nameOfB: (i: number) => string) => pool(bs, deps.concurrency,
+  const drawAll = (bs: SceneSpec[][], nameOfB: (i: number) => string, fixOf?: (b: SceneSpec[]) => { note: string; seed: Array<{ file: string; content: string }> }) => pool(bs, deps.concurrency,
     () => (signal?.aborted ? '취소됨' : report.costUsd >= deps.budgetUsd ? `비용 상한 $${deps.budgetUsd} 도달` : limitUntil ? `구독 세션 한도 — ${limitUntil.getHours()}시에 풀림` : null),
-    (b, i) => runOne(b, nameOfB(i)),
+    (b, i) => runOne(b, nameOfB(i), fixOf?.(b)),
     (b, i, why) => {
       report.perBatch[nameOfB(i)] = { keys: b.map((s) => s.key), skipped: why };
       for (const s of b) fail.set(s.key, why);
@@ -430,6 +431,35 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
   if (first.bundle) { writeEntry([]); return finish([]); }
   let pass = first.pass;
   if (signal?.aborted) return finish([]);
+
+  // ── 사후 검사 탈락(빠른 검사·타입·렌더) — 지금 파일과 오류를 깔아 주고 REDO_BATCH_MAX 개씩 한 번 고치게 한다(묶음 이름 fNN).
+  //    고친 파일만 다시 검사해 통과하면 넣는다. 못 고치면 종전처럼 장면 없이.
+  const broken = specs.filter((s) => !pass.includes(s.key) && hasFile(s) && /^(검사|타입|렌더 오류):/.test(fail.get(s.key) ?? ''));
+  if (broken.length && !limitUntil && report.costUsd < deps.budgetUsd) {
+    deps.log(`검사에서 떨어진 ${broken.length}장면(${broken.map((s) => s.key).join(', ')})을 오류를 붙여 한 번 더 고친다`);
+    deps.activity?.(`[롱폼 그림] 검사 탈락 ${broken.length}장면 고치기`);
+    const seeds = new Map(broken.map((s) => [s.key, fs.readFileSync(path.join(sceneDir, s.file), 'utf8')]));
+    await drawAll(planBatches(broken, REDO_BATCH_MAX), (i) => `f${String(i + 1).padStart(2, '0')}`, (b) => ({
+      seed: b.map((s) => ({ file: s.file, content: seeds.get(s.key)! })),
+      note: [
+        '────────── 하네스 사후 검사 탈락 — 이 묶음은 고치기다 ──────────',
+        '이 폴더의 sNNN.tsx 는 이미 만든 장면인데, 끝난 뒤 하네스 검사에서 아래 오류로 떨어졌다. 오류를 고쳐 같은 파일에 다시 쓴다(Edit 로 고치거나 새로 Write). 그림의 좋은 점은 살린다. check → preview 절차는 같다 — ./check.sh 가 통과해야 끝난다.',
+        ...b.map((s) => `- ${s.key}: ${fail.get(s.key)}`),
+      ].join('\n'),
+    }));
+    if (signal?.aborted) return finish([]);
+    const changed = broken.filter((s) => { try { return fs.readFileSync(path.join(sceneDir, s.file), 'utf8') !== seeds.get(s.key); } catch { return false; } }).map((s) => s.key);
+    if (changed.length) {
+      const fixDir = path.join(stillDir, 'fix');
+      const pc = await postCheck(changed, pass, fixDir);
+      for (const k of pc.pass) for (const r of PREVIEW_AT.map((x) => Math.round(x * 100))) {
+        try { fs.copyFileSync(path.join(fixDir, `${k}_${r}.png`), path.join(stillDir, `${k}_${r}.png`)); } catch { /* 스틸 없음 */ }
+      }
+      pass = specs.map((s) => s.key).filter((k) => pass.includes(k) || pc.pass.includes(k));
+      deps.log(`검사 탈락 고치기 — ${pc.pass.length}/${broken.length}개 통과`);
+    }
+    if (signal?.aborted) return finish([]);
+  }
   if (!pass.length) { writeEntry([]); return finish([]); }
 
   // ── 완성 장면 검토(정하람) → 다시 그리기 한 묶음(차민혁). 무엇이 실패해도 첫 그림 그대로 간다(fail-open).

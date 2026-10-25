@@ -65,11 +65,12 @@ describe('buildScenes — 묶음·세션·사후 검사·등록표', () => {
       renderStills: async (o) => new Map(o.items.map((it) => [it.id, it.sceneKey === 's003' && it.id.endsWith('0.9') ? 'boom' : null] as [string, string | null])),
     });
     const r = await buildScenes(dir, segments, undefined, d);
-    expect(d.agent).toHaveBeenCalledTimes(3);
+    expect(d.agent).toHaveBeenCalledTimes(4);
     const batchKeys = d.agent.mock.calls.map((c) => readJson(path.join((c[0] as AgentRunInput).workDir, 'job.json')).scenes.map((s: { key: string }) => s.key));
-    expect(batchKeys).toEqual([['s000', 's001', 's002', 's003', 's004', 's005'], ['s006', 's007', 's008', 's009'], ['s004']]); // 빠진 s004 한 번 더(t01)
+    // 빠진 s004 한 번 더(t01) · 검사 탈락 s001~s003 고치기(f01 — 가짜 에이전트가 안 바꿔 그대로 탈락)
+    expect(batchKeys).toEqual([['s000', 's001', 's002', 's003', 's004', 's005'], ['s006', 's007', 's008', 's009'], ['s004'], ['s001', 's002', 's003']]);
     expect(r.built).toBe(6);
-    expect(r.costUsd).toBe(7.5); // 2묶음 + t01
+    expect(r.costUsd).toBe(10); // 2묶음 + t01 + f01
     expect(r.entryPoint).toBe(path.join(dir, 'remotion-entry', 'index.ts'));
     const report = readJson(path.join(dir, 'scenes', 'report.json'));
     const why = Object.fromEntries(report.failed.map((f: { key: string; reason: string }) => [f.key, f.reason]));
@@ -396,6 +397,29 @@ describe('구독 세션 한도 — 기다렸다 빠진 장면만 다시', () => 
     await buildScenes(e2.dir, e2.segments, undefined, d2);
     expect(d2.runAgent).toHaveBeenCalledTimes(2);
     expect(readJson(path.join(e2.dir, 'scenes', 'report.json')).failed[0].reason).toBe('턴 상한 90 소진으로 파일 없음');
+  });
+  it('검사에서 떨어진 장면은 지금 파일·오류를 깔아 fNN 으로 한 번 고치고, 고친 것만 다시 검사해 넣는다', async () => {
+    const { dir, segments } = episode([['a', 4]]);
+    const bad = (k: string) => goodScene(k).replace('return <', 'const r = Math.random();\n  return <');
+    const d = deps({ concurrency: 1 });
+    d.runAgent = vi.fn(async (o: AgentRunInput) => {
+      const job = JSON.parse(fs.readFileSync(path.join(o.workDir, 'job.json'), 'utf8')) as SceneJob;
+      if (o.batch.startsWith('f')) { // 고치기 — 깔린 파일이 있고 지시문에 오류가 붙는다. s002 만 고친다.
+        for (const sc of job.scenes) expect(fs.readFileSync(path.join(o.workDir, sc.file), 'utf8')).toBe(bad(sc.key));
+        expect(o.prompt).toContain('사후 검사 탈락');
+        expect(o.prompt).toContain('s001: 검사:');
+        fs.writeFileSync(path.join(o.workDir, 's002.tsx'), goodScene('s002'));
+      } else for (const sc of job.scenes) fs.writeFileSync(path.join(o.workDir, sc.file), sc.key === 's001' || sc.key === 's002' ? bad(sc.key) : goodScene(sc.key));
+      return { exit: 0, aborted: false, turns: 20, costUsd: 2.5, durationSec: 60 };
+    });
+    const r = await buildScenes(dir, segments, undefined, d);
+    expect((d.runAgent as ReturnType<typeof vi.fn>).mock.calls.map((c) => (c[0] as AgentRunInput).batch)).toEqual(['b01', 'f01']);
+    expect(r.built).toBe(3);
+    const rep = readJson(path.join(dir, 'scenes', 'report.json'));
+    expect(rep.failed.map((f: { key: string }) => f.key)).toEqual(['s001']);
+    expect(fs.readFileSync(path.join(dir, 'scenes', 'registry.ts'), 'utf8')).toContain('= { s000, s002, s003 };');
+    expect(readJson(path.join(dir, 'timeline.json')).segments.map((x: { scene?: string }) => x.scene ?? null)).toEqual(['s000', null, 's002', 's003']);
+    expect(fs.existsSync(path.join(dir, 'scenes', 'stills', 's002_55.png'))).toBe(true);
   });
   it('비용 상한이면 빠진 장면을 다시 그리지 않는다', async () => {
     const { dir, segments } = episode([['a', 4]]);
