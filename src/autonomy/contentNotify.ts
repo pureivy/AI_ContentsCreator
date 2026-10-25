@@ -435,7 +435,8 @@ export async function notifyShortsReady(s: ShortsReadyInfo, videoPath: string): 
 }
 
 // ── 롱폼(2026-10-22) ──
-// 영상은 1GB 라 텔레그램(50MB)으로 못 보낸다 — 썸네일 사진에 발행 버튼을 달고, 미리보기는 웹 제작실 롱폼 탭에서.
+// 영상은 1GB 라 텔레그램(50MB)으로 못 보낸다 — 썸네일 사진에 발행 버튼을 달고, 미리보기는 영상 주소(/api/longform/:id/video, 구간 요청 지원)를 바로 연다.
+// 2026-10-25 사장님 제보: 제작실 주소(/)는 홈만 열려 롱폼 탭을 다시 찾아야 했다.
 
 /** 길이 m:ss(순수). 없으면 빈 문자열. */
 export function fmtMinSec(sec?: number): string {
@@ -448,7 +449,7 @@ export function chapterLines(desc: string | undefined, max = 8): string[] {
   return (desc ?? '').split('\n').map((l) => l.trim()).filter((l) => /^\d{1,2}:\d{2}(:\d{2})?\s/.test(l)).slice(0, max);
 }
 /** 롱폼 검토 대기 캡션(HTML, 썸네일 사진에 부착 — 1024자 안). 순수 — 테스트 대상. */
-export function longformCaptionHtml(r: Pick<LongformRecord, 'title' | 'ytTitle' | 'brand' | 'durationSec' | 'topicReason' | 'ytDescription'>): string {
+export function longformCaptionHtml(r: Pick<LongformRecord, 'id' | 'title' | 'ytTitle' | 'brand' | 'durationSec' | 'topicReason' | 'ytDescription'>): string {
   const len = fmtMinSec(r.durationSec);
   const chapters = chapterLines(r.ytDescription);
   return [
@@ -457,7 +458,7 @@ export function longformCaptionHtml(r: Pick<LongformRecord, 'title' | 'ytTitle' 
     len ? escapeHtml(`길이 ${len}`) : '',
     r.topicReason ? escapeHtml(`고른 이유: ${clip(r.topicReason, 160)}`) : '',
     chapters.length ? escapeHtml(['챕터', ...chapters.map((l) => clip(l, 48))].join('\n')) : '',
-    escapeHtml(`미리보기: 제작실 → 롱폼 탭 ${studioBase()}/`),
+    escapeHtml(`▶ 미리보기(바로 재생): ${studioBase()}/api/longform/${encodeURIComponent(r.id)}/video`),
   ].filter(Boolean).join('\n');
 }
 /** 롱폼 발행 버튼 — callback_data 규격은 telegramBot.parseCallback 과 한 쌍(ly·lt·lf). */

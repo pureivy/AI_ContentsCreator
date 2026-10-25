@@ -361,14 +361,14 @@ describe('롱폼 알림 본문(순수)', () => {
     expect(fmtMinSec(undefined)).toBe('');
     expect(chapterLines(desc)).toHaveLength(8);
     expect(chapterLines(desc)[0]).toBe('0:00 시작');
-    const html = longformCaptionHtml({ title: 't', ytTitle: '과일나무 <겨울> 가지치기', brand: 'bionditree', durationSec: 627, topicReason: '조회 합산 1위', ytDescription: desc });
+    const html = longformCaptionHtml({ id: 'long_pilot20261019', title: 't', ytTitle: '과일나무 <겨울> 가지치기', brand: 'bionditree', durationSec: 627, topicReason: '조회 합산 1위', ytDescription: desc });
     expect(html).toContain('🎞 롱폼 검토 대기 · bionditree');
     expect(html).toContain('<b>과일나무 &lt;겨울&gt; 가지치기</b>');
     expect(html).toContain('길이 10:27');
     expect(html).toContain('고른 이유: 조회 합산 1위');
     expect(html).toContain('8:21 자르면 안 되는 가지');
     expect(html).not.toContain('9:59 아홉째');
-    expect(html).toContain('제작실 → 롱폼 탭');
+    expect(html).toContain('/api/longform/long_pilot20261019/video'); // 홈이 아니라 영상을 바로 연다
     expect(html.length).toBeLessThan(1000);
     for (const row of longformButtons('long_pilot20261019')) for (const b of row) expect(parseCallback(b.callback_data)).not.toBeNull();
   });
