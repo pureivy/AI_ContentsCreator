@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { buildScenes, sessionLimitReset, type AgentRunInput, type SceneDeps } from './longformScenes';
+import { REDO_BATCH_MAX, buildScenes, sessionLimitReset, type AgentRunInput, type SceneDeps } from './longformScenes';
 import type { SceneJob } from '../longform/sceneJob';
 import type { TimedSegment } from '../longform/timeline';
 
@@ -65,11 +65,11 @@ describe('buildScenes — 묶음·세션·사후 검사·등록표', () => {
       renderStills: async (o) => new Map(o.items.map((it) => [it.id, it.sceneKey === 's003' && it.id.endsWith('0.9') ? 'boom' : null] as [string, string | null])),
     });
     const r = await buildScenes(dir, segments, undefined, d);
-    expect(d.agent).toHaveBeenCalledTimes(2);
+    expect(d.agent).toHaveBeenCalledTimes(3);
     const batchKeys = d.agent.mock.calls.map((c) => readJson(path.join((c[0] as AgentRunInput).workDir, 'job.json')).scenes.map((s: { key: string }) => s.key));
-    expect(batchKeys).toEqual([['s000', 's001', 's002', 's003', 's004', 's005'], ['s006', 's007', 's008', 's009']]);
+    expect(batchKeys).toEqual([['s000', 's001', 's002', 's003', 's004', 's005'], ['s006', 's007', 's008', 's009'], ['s004']]); // 빠진 s004 한 번 더(t01)
     expect(r.built).toBe(6);
-    expect(r.costUsd).toBe(5);
+    expect(r.costUsd).toBe(7.5); // 2묶음 + t01
     expect(r.entryPoint).toBe(path.join(dir, 'remotion-entry', 'index.ts'));
     const report = readJson(path.join(dir, 'scenes', 'report.json'));
     const why = Object.fromEntries(report.failed.map((f: { key: string; reason: string }) => [f.key, f.reason]));
@@ -368,6 +368,42 @@ describe('구독 세션 한도 — 기다렸다 빠진 장면만 다시', () => 
     expect(sleep).not.toHaveBeenCalled();
     expect(r.built).toBe(0);
     expect(readJson(path.join(dir, 'scenes', 'report.json')).failed[0].reason).toBe('구독 세션 한도로 파일 없음');
+  });
+  it('턴 상한으로 빠진 장면은 절반 크기 묶음(tNN)으로 한 번 더, 또 빠지면 사유는 턴 상한', async () => {
+    const { dir, segments } = episode([['a', 8]]);
+    const d = deps({ concurrency: 1 });
+    d.runAgent = vi.fn(async (o: AgentRunInput) => {
+      const job = JSON.parse(fs.readFileSync(path.join(o.workDir, 'job.json'), 'utf8')) as SceneJob;
+      if (job.scenes.length === 8) { // 첫 묶음 — 앞 2장만 쓰고 턴 소진
+        for (const sc of job.scenes.slice(0, 2)) fs.writeFileSync(path.join(o.workDir, sc.file), goodScene(sc.key));
+        return { exit: 1, aborted: false, turns: 91, costUsd: 12, durationSec: 900 };
+      }
+      for (const sc of job.scenes) if (sc.key !== 's007') fs.writeFileSync(path.join(o.workDir, sc.file), goodScene(sc.key));
+      return { exit: 0, aborted: false, turns: 50, costUsd: 4, durationSec: 600 };
+    });
+    const r = await buildScenes(dir, segments, undefined, d);
+    const calls = (d.runAgent as ReturnType<typeof vi.fn>).mock.calls.map((c) => readJson(path.join((c[0] as AgentRunInput).workDir, 'job.json')).scenes.map((x: { key: string }) => x.key));
+    expect(REDO_BATCH_MAX).toBe(4);
+    expect(calls).toEqual([['s000', 's001', 's002', 's003', 's004', 's005', 's006', 's007'], ['s002', 's003', 's004'], ['s005', 's006', 's007']]);
+    expect(r.built).toBe(7);
+    const rep = readJson(path.join(dir, 'scenes', 'report.json'));
+    expect(Object.keys(rep.perBatch)).toEqual(['b01', 't01', 't02']);
+    expect(rep.failed).toEqual([{ key: 's007', reason: '에이전트가 파일을 쓰지 않음' }]);
+    // 다시 그린 묶음도 턴 상한이면 사유가 턴 상한
+    const e2 = episode([['a', 3]]);
+    const d2 = deps({ concurrency: 1 });
+    d2.runAgent = vi.fn(async () => ({ exit: 1, aborted: false, turns: 91, costUsd: 1, durationSec: 60 }));
+    await buildScenes(e2.dir, e2.segments, undefined, d2);
+    expect(d2.runAgent).toHaveBeenCalledTimes(2);
+    expect(readJson(path.join(e2.dir, 'scenes', 'report.json')).failed[0].reason).toBe('턴 상한 90 소진으로 파일 없음');
+  });
+  it('비용 상한이면 빠진 장면을 다시 그리지 않는다', async () => {
+    const { dir, segments } = episode([['a', 4]]);
+    const d = deps({ budgetUsd: 10 });
+    d.runAgent = vi.fn(async () => ({ exit: 1, aborted: false, turns: 91, costUsd: 12, durationSec: 900 }));
+    const r = await buildScenes(dir, segments, undefined, d);
+    expect(d.runAgent).toHaveBeenCalledTimes(1);
+    expect(r.built).toBe(0);
   });
   it('resume — 있는 장면 파일은 두고 빠진 장면만 그리고, 검사·키 기록은 전부', async () => {
     const { dir, segments } = episode([['a', 6], ['b', 4]]);

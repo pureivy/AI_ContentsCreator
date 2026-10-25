@@ -13,6 +13,8 @@
  * 비용: CLI 가 보고한 total_cost_usd 합. 상한(LONGFORM_SCENE_BUDGET_USD)을 넘으면 새 묶음을 띄우지 않는다(남은 장면은 폴백).
  * 구독 세션 한도(2026-10-25 대추나무 편 — 새벽 b13~b16 이 "hit your session limit · resets 3am" 로 죽어 7·8장 24장면이 비었다):
  *   한 묶음이 한도에 걸리면 남은 묶음을 띄우지 않고, 풀리는 시각까지 기다렸다가(최대 LIMIT_WAIT_MAX_MS) 빠진 장면만 다시 그린다.
+ * 턴 상한(같은 날 대추나무 편 고치기 —8장면 묶음 셋이 모두 91/90턴에서 끊겨 6장면이 빠졌다. 2·4장면 묶음은 50~71턴):
+ *   그래도 파일이 없는 장면은 절반 크기 묶음(REDO_BATCH_MAX, 이름 tNN)으로 한 번 더 그린다. 변조로 버린 묶음은 다시 안 그린다.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -26,7 +28,7 @@ import { fullExtra, fullLintOpts, fullPublicFiles, fullSpecs, insetSpecies, plan
 import { kitForPresenter } from '../longform/presenter';
 import { batchSpecies, loadSpeciesIndex, type SpeciesIndex } from '../longform/speciesPreset';
 import type { RefPart } from '../longform/speciesCommons';
-import { planBatches, scenePrompt, sceneSpecs, type SceneJob, type SceneSpec } from '../longform/sceneJob';
+import { BATCH_MAX, planBatches, scenePrompt, sceneSpecs, type SceneJob, type SceneSpec } from '../longform/sceneJob';
 import { CONTACT_AT, PREVIEW_AT, frameAt, renderSceneStills, tileStills, type StillItem } from '../longform/scenePreview';
 import type { Timeline, TimedSegment } from '../longform/timeline';
 
@@ -61,6 +63,9 @@ export interface SceneDeps {
 export const LIMIT_GRACE_MS = 3 * 60_000;
 export const LIMIT_WAIT_MAX_MS = 6 * 3_600_000;
 export const LIMIT_ROUNDS = 2;
+/** 빠진 장면 한 번 더 그리기 묶음 크기 — 첫 묶음(BATCH_MAX)의 절반. */
+export const REDO_BATCH_MAX = Math.ceil(BATCH_MAX / 2);
+const TAMPERED = '하네스 파일 변조 감지 — 이 묶음 장면을 버림';
 
 /**
  * 구독 세션 한도 문구 → 풀리는 시각(순수). 한도 문구가 아니면 null.
@@ -212,7 +217,7 @@ async function runBatch(name: string, specs: SceneSpec[], o: { sceneDir: string;
   const speciesTampered = !!speciesModule && (() => { try { return fs.readFileSync(speciesModule, 'utf8') !== speciesText; } catch { return true; } })();
   if (speciesTampered) writeIfChanged(speciesModule!, speciesText!); // 원래대로 — 다른 묶음 장면이 같은 파일을 쓴다
   if (!same('check.sh', checkSh) || !same('preview.sh', previewSh) || !same(KIT_SHIM, kit) || fs.readFileSync(jobPath, 'utf8') !== jobText || speciesTampered) {
-    return { moved: [], run, problem: '하네스 파일 변조 감지 — 이 묶음 장면을 버림' };
+    return { moved: [], run, problem: TAMPERED };
   }
   const moved: string[] = [];
   for (const s of specs) {
@@ -307,7 +312,8 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
       report.perBatch[name] = { keys: b.map((s) => s.key), ...(r.run ? { turns: r.run.turns, costUsd: r.run.costUsd, durationSec: r.run.durationSec, exit: r.run.exit, tail: r.run.tail } : {}) };
       const reset = sessionLimitReset(r.run?.tail, now());
       if (reset && (!limitUntil || reset > limitUntil)) limitUntil = reset;
-      for (const s of b) if (!r.moved.includes(s.key)) fail.set(s.key, r.problem ?? (reset ? '구독 세션 한도로 파일 없음' : r.run?.aborted ? '세션 시간 초과·취소로 파일 없음' : '에이전트가 파일을 쓰지 않음'));
+      const capped = (r.run?.turns ?? 0) >= deps.maxTurns; // CLI 는 상한 90 에 91 을 보고한다
+      for (const s of b) if (!r.moved.includes(s.key)) fail.set(s.key, r.problem ?? (reset ? '구독 세션 한도로 파일 없음' : r.run?.aborted ? '세션 시간 초과·취소로 파일 없음' : capped ? `턴 상한 ${deps.maxTurns} 소진으로 파일 없음` : '에이전트가 파일을 쓰지 않음'));
       deps.activity?.(`[롱폼 그림] ${name} ${b[0]!.key}~${b[b.length - 1]!.key}(${b[0]!.chapterTitle}) — 파일 ${r.moved.length}/${b.length} · 턴 ${r.run?.turns ?? '?'} · $${(r.run?.costUsd ?? 0).toFixed(2)}${r.problem ? ` · ${r.problem}` : ''}`);
     } catch (e) {
       const why = `묶음 실패: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`;
@@ -337,6 +343,13 @@ export async function buildScenes(dir: string, segments: TimedSegment[], signal?
     limitUntil = null;
     const again = planBatches(missing);
     await drawAll(again, (i) => `w${round}${String(i + 1).padStart(2, '0')}`);
+  }
+  // 턴 상한·시간 초과 등으로 파일이 없는 장면 — 절반 크기 묶음으로 한 번 더(묶음 이름 tNN). 한도가 안 풀렸거나 상한·취소면 건너뛴다.
+  const leftover = specs.filter((s) => !hasFile(s) && fail.get(s.key) !== TAMPERED);
+  if (leftover.length && !signal?.aborted && !limitUntil && report.costUsd < deps.budgetUsd) {
+    deps.log(`빠진 ${leftover.length}장면을 ${REDO_BATCH_MAX}개씩 묶어 한 번 더 그린다`);
+    deps.activity?.(`[롱폼 그림] 빠진 ${leftover.length}장면 다시(${REDO_BATCH_MAX}개씩)`);
+    await drawAll(planBatches(leftover, REDO_BATCH_MAX), (i) => `t${String(i + 1).padStart(2, '0')}`);
   }
 
   const finish = (pass: string[], extra: { entryPoint?: string; contact?: string } = {}): ScenesResult => {
