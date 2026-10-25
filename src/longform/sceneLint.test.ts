@@ -111,7 +111,13 @@ describe('sceneSafety — 전역·네트워크·외부 주소 우회', () => {
     expect(p('const { constructor: C } = [];').join(' ')).toContain('구조 분해 금지: constructor');
     expect(p('const { constructor } = [];').join(' ')).toContain('구조 분해 금지: constructor');
     expect(p("const k = 'a'; const { [k]: C } = [];").join(' ')).toContain('구조 분해 계산 키 금지');
-    expect(p('let C; ({ constructor: C } = []);').join(' ')).toContain('구조 분해 금지: constructor');
+    expect(p('let C; ({ constructor: C } = []);').join(' ')).toContain('금지 속성 이름 키: constructor');
+    expect(p('let C; [{ constructor: C }] = [[]];').join(' ')).toContain('금지 속성 이름 키: constructor');
+    expect(p('let C; ({ a: { constructor: C } } = { a: [] });').join(' ')).toContain('금지 속성 이름 키: constructor');
+    expect(p('let C; for ({ constructor: C } of [[]]) {}').join(' ')).toContain('금지 속성 이름 키: constructor');
+    expect(p("let C; const k = 'a'; [{ [k]: C }] = [[]];").join(' ')).toContain('구조 분해 계산 키 금지');
+    expect(p("const o = { __proto__: null };").join(' ')).toContain('금지 속성 이름 키: __proto__');
+    expect(p("const k = 'w'; const st = { [k]: 1 };")).toEqual([]); // 보통 객체의 계산 키는 그대로
     expect(p('const { x, y } = { x: 1, y: 2 }; const [a, b] = [x, y]; const o = { prototype2: a + b };')).toEqual([]);
   });
   const PROBE = `import React from 'react';

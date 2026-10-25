@@ -210,6 +210,17 @@ export function sceneSafety(src: string): string[] {
     }
     return false;
   };
+  /** 대입 꼴 구조 분해 자리인가 — 객체·배열 리터럴·펼침·괄호·속성을 거슬러 올라가 '=' 왼쪽이나 for…of/in 머리에 닿으면. */
+  const inAssignPattern = (lit: ts.Node): boolean => {
+    let c: ts.Node = lit;
+    for (let p = c.parent; p; c = p, p = p.parent) {
+      if (ts.isObjectLiteralExpression(p) || ts.isArrayLiteralExpression(p) || ts.isSpreadElement(p) || ts.isParenthesizedExpression(p) || ts.isPropertyAssignment(p) || ts.isSpreadAssignment(p)) continue;
+      if (ts.isBinaryExpression(p)) return p.operatorToken.kind === ts.SyntaxKind.EqualsToken && p.left === c;
+      if (ts.isForOfStatement(p) || ts.isForInStatement(p)) return p.initializer === c;
+      return false;
+    }
+    return false;
+  };
   const visit = (n: ts.Node): void => {
     if (ts.isIdentifier(n) && BANNED_NAMES.has(n.text) && !declared.has(n.text) && isRef(n)) out.add(`전역·네트워크 이름 금지: ${n.text}`);
     else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) out.add('동적 import() 금지');
@@ -220,9 +231,11 @@ export function sceneSafety(src: string): string[] {
       const key = n.propertyName ?? n.name;
       if (ts.isComputedPropertyName(key)) out.add(`구조 분해 계산 키 금지: ${key.getText().slice(0, 40)}`);
       else if (ts.isIdentifier(key) && BANNED_PROPS.has(key.text)) out.add(`구조 분해 금지: ${key.text}`); // 키는 그 객체의 속성 — 전역 이름(frames 등)은 해당 없음
-    } else if ((ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n)) && ts.isIdentifier(n.name) && BANNED_PROPS.has(n.name.text)
-      && ts.isObjectLiteralExpression(n.parent) && ts.isBinaryExpression(n.parent.parent) && n.parent.parent.left === n.parent) out.add(`구조 분해 금지: ${n.name.text}`);
-    else if (ts.isElementAccessExpression(n)) {
+    } else if ((ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n)) && ts.isIdentifier(n.name) && BANNED_PROPS.has(n.name.text)) {
+      out.add(`금지 속성 이름 키: ${n.name.text}`); // 자리 무관 — [{ constructor: C }] = [[]]·for ({ constructor: C } of …) 같은 대입 꼴 구조 분해도, __proto__ 리터럴도
+    } else if (ts.isPropertyAssignment(n) && ts.isComputedPropertyName(n.name) && ts.isObjectLiteralExpression(n.parent) && inAssignPattern(n.parent)) {
+      out.add(`구조 분해 계산 키 금지: ${n.name.getText().slice(0, 40)}`);
+    } else if (ts.isElementAccessExpression(n)) {
       const k = n.argumentExpression;
       const lit = ts.isStringLiteral(k) || ts.isNoSubstitutionTemplateLiteral(k) ? k.text : undefined;
       if (lit !== undefined && BANNED_PROPS.has(lit)) out.add(`속성 접근 금지: ['${lit}']`);
