@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, rotationDemoteRank, orderCandidates, shouldRememberDemandReject, factStarvedItems, factStarvedRecentlyFor, starvedHit } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, rotationDemoteRank, orderCandidates, shouldRememberDemandReject, factStarvedItems, factStarvedRecentlyFor, starvedHit, beforeAutorunSlot } from './scheduler';
 import type { DemandRow } from '../analytics/topicDemand';
 import { CONFIG } from '../config';
 
@@ -143,6 +143,20 @@ describe('startAutoCycle — runNow 결과값·runNowPersistent 재시도(슬롯
     await vi.advanceTimersByTimeAsync(1000); // 재시도 → launch
     expect(await p).toBe('launched');
     expect(launch).toHaveBeenCalledWith('w');
+    stop();
+  });
+  it('runNowPersistent 대기 중엔 타이머 틱이 쉰다 — 슬롯 대기 틈에 force 없는 틱이 조사런을 띄워 슬롯을 밀지 않게(2026-10-26)', async () => {
+    const launch = vi.fn();
+    let busy = true;
+    const picks: Array<boolean | undefined> = [];
+    const stop = startAutoCycle({ intervalMs: 500, isBusy: () => busy, pickWork: async (_s, force) => { picks.push(force); return 'w'; }, launch });
+    const p = stop.runNowPersistent({ retryMs: 1000, maxAttempts: 5 }); // 1차 busy → 1000ms 대기
+    busy = false;                              // 막던 런이 끝남 — 이제 타이머 틱(500ms)이 먼저 온다
+    await vi.advanceTimersByTimeAsync(600);
+    expect(picks).toEqual([]);                 // 타이머 틱은 대기 중이라 쉬었다
+    await vi.advanceTimersByTimeAsync(500);    // 슬롯 재시도
+    expect(await p).toBe('launched');
+    expect(picks).toEqual([true]);             // 슬롯(force)만 골랐다
     stop();
   });
   it('runNowPersistent — 상시 busy 면 maxAttempts 소진 후 포기, 중복 대기는 1건만', async () => {
@@ -834,5 +848,26 @@ describe('비수기 rank 3.5(2026-10-07 사장님 "비시즌은 조회수가 안
   it('유사 폴백이 있으면 비수기보다 폴백', () => {
     expect(pickRoundAdoption([e('비수기', 3.5)], true)).toEqual({ source: 'fallback' });
     expect(pickRoundAdoption([e('비수기', 3.5)], false)).toMatchObject({ source: 'demoted' });
+  });
+});
+
+describe('beforeAutorunSlot — 정각 오토런 앞 60분은 조사런을 시작하지 않는다(순수)', () => {
+  const kst = (hhmm: string) => Date.parse(`2026-10-26T${hhmm}:00+09:00`);
+  it('06:00 슬롯 앞 05:00~05:59 는 막고, 06:00 이후·04:59 는 열어 둔다', () => {
+    expect(beforeAutorunSlot(kst('05:30'), '06:00')).toBe(true);
+    expect(beforeAutorunSlot(kst('05:00'), '06:00')).toBe(true);
+    expect(beforeAutorunSlot(kst('05:59'), '06:00')).toBe(true);
+    expect(beforeAutorunSlot(kst('04:59'), '06:00')).toBe(false);
+    expect(beforeAutorunSlot(kst('06:00'), '06:00')).toBe(false);
+    expect(beforeAutorunSlot(kst('06:10'), '06:00')).toBe(false);
+  });
+  it('슬롯이 여럿이면 각 슬롯 앞을 막는다 — 공백·자정 넘김도', () => {
+    expect(beforeAutorunSlot(kst('16:30'), '06:00, 17:00')).toBe(true);
+    expect(beforeAutorunSlot(kst('12:00'), '06:00, 17:00')).toBe(false);
+    expect(beforeAutorunSlot(kst('23:40'), '00:20')).toBe(true);
+  });
+  it('슬롯이 없거나 잘못 쓰였으면 막지 않는다', () => {
+    expect(beforeAutorunSlot(kst('05:30'), '')).toBe(false);
+    expect(beforeAutorunSlot(kst('05:30'), 'abc')).toBe(false);
   });
 });

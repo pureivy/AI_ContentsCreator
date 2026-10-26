@@ -198,10 +198,11 @@ describe('autoCapApplies — 상한을 걸 대상 판정(순수)', () => {
   });
 });
 
-describe('pickTopicTarget — 오늘 자율 생산분의 채널 목표를 번갈아 고른다(순수)', () => {
+describe('pickTopicTarget — 어제·오늘 자율 생산분의 채널 목표를 번갈아 고른다(순수)', () => {
   const now = Date.parse('2026-09-08T09:00:00Z'); // KST 09-08 18:00
   const today = '2026-09-08T00:30:00Z';           // KST 09-08 09:30
   const yesterday = '2026-09-07T10:00:00Z';       // KST 09-07 19:00
+  const twoDaysAgo = '2026-09-06T10:00:00Z';      // KST 09-06 19:00
   it('오늘 아무것도 안 골랐으면 유튜브부터', () => {
     expect(pickTopicTarget([], now, 'b')).toBe('youtube');
   });
@@ -214,9 +215,31 @@ describe('pickTopicTarget — 오늘 자율 생산분의 채널 목표를 번갈
       { auto: true, shortsTarget: 'instagram', createdTs: today, brand: 'b' },
     ], now, 'b')).toBe('youtube');
   });
-  it('어제 것·수동·사용자 촉발·다른 브랜드는 세지 않는다', () => {
+  it('하루 1편(06:00 슬롯만)이면 날마다 번갈린다 — 어제 유튜브면 오늘 인스타, 어제 인스타면 오늘 유튜브', () => {
+    const morning = Date.parse('2026-09-07T21:00:00Z'); // KST 09-08 06:00
+    expect(pickTopicTarget([{ auto: true, shortsTarget: 'youtube', createdTs: yesterday, brand: 'b' }], morning, 'b')).toBe('instagram');
+    expect(pickTopicTarget([
+      { auto: true, shortsTarget: 'youtube', createdTs: twoDaysAgo, brand: 'b' },
+      { auto: true, shortsTarget: 'instagram', createdTs: yesterday, brand: 'b' },
+    ], morning, 'b')).toBe('youtube');
+  });
+  it('하루 2편이면 종전대로 — 어제 1:1 이면 아침 유튜브, 아침 유튜브 뒤 저녁 인스타', () => {
+    const pair = [
+      { auto: true, shortsTarget: 'youtube' as const, createdTs: '2026-09-06T21:30:00Z', brand: 'b' },  // KST 09-07 06:30
+      { auto: true, shortsTarget: 'instagram' as const, createdTs: yesterday, brand: 'b' },
+    ];
+    expect(pickTopicTarget(pair, Date.parse('2026-09-07T21:00:00Z'), 'b')).toBe('youtube');
+    expect(pickTopicTarget([...pair, { auto: true, shortsTarget: 'youtube', createdTs: today, brand: 'b' }], now, 'b')).toBe('instagram');
+  });
+  it('사실 부족·실패로 닫힌 편은 세지 않는다 — 인스타 차례가 실패하면 다음 틱도 인스타', () => {
     expect(pickTopicTarget([
       { auto: true, shortsTarget: 'youtube', createdTs: yesterday, brand: 'b' },
+      { auto: true, shortsTarget: 'instagram', createdTs: today, brand: 'b', stage: 'error' },
+    ], now, 'b')).toBe('instagram');
+  });
+  it('그제 것·수동·사용자 촉발·다른 브랜드는 세지 않는다', () => {
+    expect(pickTopicTarget([
+      { auto: true, shortsTarget: 'youtube', createdTs: twoDaysAgo, brand: 'b' },
       { auto: false, shortsTarget: 'youtube', createdTs: today, brand: 'b' },
       { auto: true, userTriggered: true, shortsTarget: 'youtube', createdTs: today, brand: 'b' },
       { auto: true, shortsTarget: 'youtube', createdTs: today, brand: 'other' },

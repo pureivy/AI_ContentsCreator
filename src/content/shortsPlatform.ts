@@ -231,23 +231,26 @@ export function demandGateForTarget(
 // ============================================================
 
 /**
- * 이번 틱의 채널 목표(순수) — 오늘(KST) 자율 생산분이 어느 채널 목표로 몇 편 나왔는지 세어 적은 쪽.
- * 동률이면 유튜브 먼저(아침 슬롯이 유튜브·저녁 슬롯이 인스타 — 인스타는 시간대 효과가 없어 어느 쪽이든 같다).
+ * 이번 틱의 채널 목표(순수) — 어제·오늘(KST) 자율 생산분이 어느 채널 목표로 몇 편 나왔는지 세어 적은 쪽.
+ * 동률이면 유튜브 먼저(하루 2편이면 아침 유튜브·저녁 인스타 — 인스타는 시간대 효과가 없어 어느 쪽이든 같다).
+ * 어제까지 세는 이유(2026-10-26 하루 1편 06:00 으로 축소): 오늘만 세면 슬롯이 하나일 때 매일 0:0 동률이라
+ * 인스타 목표 틱이 영영 안 온다. 어제를 넣으면 하루 1편은 날마다 번갈고, 하루 2편은 종전과 같다.
  * 상한이 아니라 편수로 번갈아야 한다 — 상한 기준이면 유튜브 상한을 2로 올리는 순간 인스타 목표 틱이 영영 안 온다.
  * 목표 미기록 자율 편(예고 이행·클러스터 형제 경로)은 **유튜브로 센다** — 검색어·예고 유래라 유튜브 성격이고,
  * 세지 않으면 아침 틱이 예고를 갚은 날 저녁 틱이 다시 유튜브가 되어 그날 인스타 목표 틱이 안 온다.
  * 사용자 촉발분(userTriggered)은 뺀다 — 케이던스와 같은 기준(사용자가 "지금 하나 더" 한 것이 번갈기를 밀면 안 된다).
  */
 export function pickTopicTarget(
-  pieces: ReadonlyArray<{ auto?: boolean; userTriggered?: boolean; shortsTarget?: ShortsPlatform; createdTs?: string; brand?: string }>,
+  pieces: ReadonlyArray<{ auto?: boolean; userTriggered?: boolean; shortsTarget?: ShortsPlatform; createdTs?: string; brand?: string; stage?: string }>,
   now: number, brand: string,
 ): ShortsPlatform {
-  const today = kstDate(now);
+  const days = new Set([kstDate(now), kstDate(now - 86_400_000)]); // KST 는 서머타임이 없어 24h 전 = 어제
   const count = { youtube: 0, instagram: 0 };
   for (const p of pieces) {
-    if (!p.auto || p.userTriggered || (p.brand ?? '') !== brand) continue;
+    // 사실 부족·실패로 닫힌 편(stage 'error')은 생산되지 않았으니 세지 않는다 — 세면 그 채널 차례가 실물 없이 지나간다.
+    if (!p.auto || p.userTriggered || p.stage === 'error' || (p.brand ?? '') !== brand) continue;
     const t = Date.parse(p.createdTs ?? '');
-    if (!Number.isFinite(t) || kstDate(t) !== today) continue;
+    if (!Number.isFinite(t) || !days.has(kstDate(t))) continue;
     count[p.shortsTarget ?? 'youtube'] += 1;
   }
   return count.instagram < count.youtube ? 'instagram' : 'youtube';

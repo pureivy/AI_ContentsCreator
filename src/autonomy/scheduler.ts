@@ -100,9 +100,15 @@ export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): AutoCycleCon
       ticking = false;
     }
   };
+  // busy(런 충돌) 시 포기하지 않는 실행 — 정각 슬롯·사용자 오토런 지시가 진행 중 런에 밀려 조용히
+  // 소멸하던 실사고(2026-08-18: 30분 유휴 틱의 리서치 런이 18:00 슬롯을 삼킴) 봉합. 동시 대기는 1건만.
+  let persistentWaiting = false;
   const timer = (deps.intervalMs > 0)
     ? setInterval(() => {
         if (deps.isEnabled && !deps.isEnabled()) return; // 오토런 오프 — 타이머 틱만 조용히 통과(수동 runNow 는 무관)
+        // 슬롯·지시가 재시도 대기 중이면 쉰다(2026-10-26) — 막던 런이 끝난 틈에 force 없는 틱이 조사런을 띄우면
+        // 대기 중인 슬롯이 다시 밀려 그날 몫을 놓친다. 대기 루프가 스스로 다시 틱하므로 이 틱은 할 일이 없다.
+        if (persistentWaiting) return;
         void core();
       }, deps.intervalMs)
     : null;
@@ -111,9 +117,6 @@ export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): AutoCycleCon
   // 수동 즉시 실행(사용자 '자율런 돌려줘') — 토글 무시, isBusy·재진입 가드 유지.
   // force=true: 사용자 지시는 케이던스를 기다리지 않고 즉시 생산(사용자 결정 2026-08-09).
   stop.runNow = () => core(true, true); // 수동 즉시 실행 = 사용자 촉발
-  // busy(런 충돌) 시 포기하지 않는 실행 — 정각 슬롯·사용자 오토런 지시가 진행 중 런에 밀려 조용히
-  // 소멸하던 실사고(2026-08-18: 30분 유휴 틱의 리서치 런이 18:00 슬롯을 삼킴) 봉합. 동시 대기는 1건만.
-  let persistentWaiting = false;
   stop.runNowPersistent = async (opts = {}) => {
     const { label = '자율 틱', retryMs = 180_000, maxAttempts = 10, respectToggle = false, userTriggered = false } = opts;
     if (persistentWaiting) { deps.log?.(`${label} — 이미 재시도 대기 중(중복 요청 무시)`); return 'busy'; }
@@ -1798,6 +1801,19 @@ function writeResearchState(st: ResearchState, slug?: string): void {
     fs.mkdirSync(path.dirname(researchStatePath(slug)), { recursive: true });
     fs.writeFileSync(researchStatePath(slug), JSON.stringify(st, null, 2), 'utf-8');
   } catch { /* 무해 — 기록 실패 시 다음 틱에 리서치가 한 번 더 뜰 뿐 */ }
+}
+
+/** 정각 오토런 슬롯 앞 windowMin 분 안인가(KST, 순수) — 그 구간엔 조사런을 시작하지 않는다(2026-10-26 사장님).
+ *  05:30 에 뜬 조사런(실측 30~40분)이 06:00 슬롯을 막으면 슬롯은 30분(3분×10회)만 기다리다 그날 몫을 놓친다.
+ *  times 는 AUTORUN_TIMES 형식("06:00, 17:00"). 잘못된 값은 무시(막지 않음). */
+export function beforeAutorunSlot(now: number, times: string, windowMin = 60): boolean {
+  const nowMin = Math.floor(now / 60_000 + 9 * 60) % 1440; // KST 는 서머타임 없음
+  return times.split(',').some((t) => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(t.trim());
+    if (!m) return false;
+    const until = (Number(m[1]) * 60 + Number(m[2]) - nowMin + 1440) % 1440;
+    return until > 0 && until <= windowMin;
+  });
 }
 
 /** 마지막 리서치 런 이후 주기(시간)가 지났는가 — 자율 사이클의 리서치/콘텐츠 분기 게이트. 0=off. */

@@ -50,7 +50,7 @@ import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
 import { claudeCliProblem } from '../llm/claudeCli';
-import { startAutoCycle, proposeContentIdeas, activeDirective, autorunDirective, setAutorunDirective, clearAutorunDirective, directiveExhaustedWithin, directiveWantsLibrary, librarySpeciesFor, offLibrarySpecies, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision, speciesCoverageFor, usedRecentlyFor, usedThemeRecentlyFor, factStarvedRecentlyFor, requiredSpeciesOf, bindSpeciesKeyword, rememberedDemandReject } from '../autonomy/scheduler';
+import { startAutoCycle, proposeContentIdeas, activeDirective, autorunDirective, setAutorunDirective, clearAutorunDirective, directiveExhaustedWithin, directiveWantsLibrary, librarySpeciesFor, offLibrarySpecies, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision, speciesCoverageFor, usedRecentlyFor, usedThemeRecentlyFor, factStarvedRecentlyFor, requiredSpeciesOf, bindSpeciesKeyword, rememberedDemandReject, beforeAutorunSlot } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
@@ -4954,16 +4954,17 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
   // 브랜드는 틱 시작 시점에 고정 — 제안 LLM 대기(수 초) 중 브랜드가 전환돼도 상태·기록이 갈리지 않게.
   // force(사용자 직접 실행) 땐 리서치 분기 생략 — 사용자가 원한 건 '지금 콘텐츠 생산'(사용자 결정 2026-08-09).
   const tickBrand = activeBrandSlug() || '';
-  if (!force && researchDue(CONFIG.researchCycleHours, tickBrand)) {
+  // 정각 오토런 앞 60분은 조사를 띄우지 않는다 — 슬롯과 충돌하면 그날 생산분을 놓친다(2026-10-26). 슬롯 뒤 틱에서 다시 본다.
+  if (!force && researchDue(CONFIG.researchCycleHours, tickBrand) && !beforeAutorunSlot(Date.now(), CONFIG.autorunTimes)) {
     const title = await proposeResearchMission(signal, tickBrand);
     if (title) return { kind: 'research', title, brand: tickBrand };
   }
   if (canGenerateNew(pieces, force)) {  // 케이던스/백로그 초과면 신규 블로그 보류 → 아래 파생 케이던스로 폴백.
-    // 채널 목표(2026-09-08 사용자 확정 "채널별로 따로, 비용 불문") — 오늘 어느 채널 목표로 몇 편 골렸는지 세어
-    // 적은 쪽. 아침 슬롯 유튜브(검색 표 출발) · 저녁 슬롯 인스타(축×제철 출발). 예고 이행은 채널과 무관하게
+    // 채널 목표(2026-09-08 사용자 확정 "채널별로 따로, 비용 불문") — 어제·오늘 어느 채널 목표로 몇 편 골렸는지 세어
+    // 적은 쪽(어제·오늘 합산). 유튜브는 검색 표 출발 · 인스타는 축×제철 출발 — 하루 1편(06:00)이면 날마다 번갈린다. 예고 이행은 채널과 무관하게
     // 먼저 갚고, 검색 유래 공급로(클러스터 형제)는 인스타 목표 틱엔 건너뛴다 — 자동완성 형제는 유튜브 성격이다.
     const topicTarget = pickTopicTarget(pieces, Date.now(), tickBrand);
-    console.log(`[auto-cycle] 채널 목표 — ${platformLabel(topicTarget)} (오늘 자율 생산분 기준 번갈기${topicTarget === 'instagram' ? ' · 클러스터 형제 공급로 건너뜀' : ''})`);
+    console.log(`[auto-cycle] 채널 목표 — ${platformLabel(topicTarget)} (어제·오늘 자율 생산분 기준 번갈기${topicTarget === 'instagram' ? ' · 클러스터 형제 공급로 건너뜀' : ''})`);
     // 예고 이행 우선 — 콘텐츠가 시청자에게 한 "다음 편" 약속은 신규 아이디어보다 먼저 갚는다
     // (사용자 지적 2026-07-30: 예고만 하고 안 지키면 신뢰 역효과). 2026-10-02 부터 시기와 무관하게 다음 틱에서
     // 등록순으로 갚는다(아래 choosePromise). 이행 piece 가 ready 되면 기존 자동 파생이 카드뉴스·쇼츠까지

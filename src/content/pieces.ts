@@ -68,7 +68,7 @@ export interface Piece {
   /**
    * 주제를 고를 때 본 채널(2026-09-08) — 'youtube' 는 검색 수요 표에서, 'instagram' 은 인스타 소재 축 ×
    * 제철에서 골랐다는 뜻. 파생은 그대로 양 채널이다(유튜브 피드는 주제를 안 보므로 인스타 주제 글의
-   * 유튜브편도 공짜 조회). 하루 안에서 번갈아 고르는 근거(pickTopicTarget)이자 성과 귀속의 라벨.
+   * 유튜브편도 공짜 조회). 어제·오늘 편수로 번갈아 고르는 근거(pickTopicTarget)이자 성과 귀속의 라벨.
    * 미기록 = 레거시·예고·클러스터 경로.
    */
   shortsTarget?: 'youtube' | 'instagram';
