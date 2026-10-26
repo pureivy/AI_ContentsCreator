@@ -287,6 +287,100 @@ export function fixMonthNames(s: string): string {
   return (s ?? '').replace(/십월/g, '시월').replace(/육월/g, '유월');
 }
 
+/** 낭독 소수점 교정(순수, 2026-10-27 배나무 편) — 작가가 19.5m 를 "십구point오미터"로 써서 영어로 읽혔다. 한글 수 사이의 point·포인트 → " 점 ". */
+export function fixSpokenDecimals(s: string): string {
+  return (s ?? '').replace(/([영일이삼사오육륙칠팔구십백천만])\s*(?:point|포인트)\s*(?=[영일이삼사오육륙칠팔구])/gi, '$1 점 ');
+}
+
+// ── 자막 숫자 표기(2026-10-27 사장님 결정 "자막은 아라비아 숫자") ─────────────────────
+// 낭독은 한글 수로 쓰고(TTS 오독 방지) 자막은 그 낭독 대본에서 나온다 — 그래서 자막에 "이백오십 년"이 그대로 찍혔다.
+// 자막에 보일 때만 숫자로 바꾼다(타이밍·TTS 는 한글 원문 기준). 단위가 뒤따를 때만 바꾼다 — 이 시기·오래·사과처럼
+// 수 글자로 시작하는 낱말을 건드리지 않게. 한 글자 수(이·사·오…)는 길이·비율·연·개월처럼 낱말과 안 겹치는 단위 앞에서만.
+// 고유어 수(두 그루·한 해)는 그대로 둔다.
+const SINO_DIGIT: Record<string, number> = { 영: 0, 일: 1, 이: 2, 삼: 3, 사: 4, 오: 5, 육: 6, 륙: 6, 칠: 7, 팔: 8, 구: 9 };
+const SINO_MULT: Record<string, number> = { 십: 10, 백: 100, 천: 1000 };
+/** 화면 표기 — 길이·무게·비율은 기호로, 나머지는 단위 그대로. */
+const DISPLAY_UNIT: Record<string, string> = {
+  센티미터: 'cm', 밀리미터: 'mm', 킬로미터: 'km', 킬로그램: 'kg', 밀리리터: 'mL', 퍼센트: '%', 미터: 'm', 센티: 'cm', 그램: 'g', 리터: 'L',
+  개월: '개월', 년생: '년생', 년차: '년차', 년: '년', 주일: '주일',
+  시간: '시간', 그루: '그루', 포기: '포기', 송이: '송이', 가지: '가지', 마리: '마리', 일: '일', 주: '주', 분: '분', 초: '초',
+  도: '도', 배: '배', 개: '개', 살: '살', 평: '평', 번: '번', 회: '회', 명: '명', 원: '원', 층: '층', 종: '종',
+};
+/** 한 글자 수도 바꾸는 단위 — '이 시간·이 번·이 가지·이 배'처럼 지시어와 겹치는 단위는 뺀다. */
+const STRONG_UNITS = new Set(['센티미터', '밀리미터', '킬로미터', '킬로그램', '밀리리터', '퍼센트', '미터', '센티', '그램', '리터', '개월', '년생', '년차', '년', '주일']);
+const LENGTH_UNITS = new Set(['센티미터', '밀리미터', '킬로미터', '미터', '센티']);
+/** 짧은 단위(일·분·도·배…) 뒤가 한글이면 조사일 때만 — '이십 배나무'·'삼십 분재'·'십 도시'를 단위로 읽지 않게. */
+const PARTICLE_START = /^(?:$|[^가-힣]|[이가은는을를의에도만부까쯤짜째씩로으와과엔예])/;
+const SINO_RUN = '[영일이삼사오육륙칠팔구십백천만]+';
+const UNIT_ALT = Object.keys(DISPLAY_UNIT).sort((a, b) => b.length - a.length).join('|');
+const DISPLAY_NUM_RE = new RegExp(`(?<![가-힣])(${SINO_RUN})(?:\\s?점\\s?([영일이삼사오육륙칠팔구]+))?\\s?(${UNIT_ALT})(\\s?반(?=$|[^가-힣]|[이은을의에쯤까정으]))?`, 'g');
+const MONTH_END = '(?=$|[^가-힣]|[에은는도부까의말초중순쯤경이을로과엔])';
+const MONTH_NUM: Record<string, number> = { 십이: 12, 십일: 11, 시: 10, 유: 6, 일: 1, 이: 2, 삼: 3, 사: 4, 오: 5, 칠: 7, 팔: 8, 구: 9 };
+const MONTH_RE = new RegExp(`(?<![가-힣])(${Object.keys(MONTH_NUM).join('|')})월${MONTH_END}`, 'g');
+/** 띄어 쓴 이웃 수(일 이 미터 = 1~2m) — 긴 단위 앞에서만 붙여 범위로 읽힌다. */
+const SPACED_PAIR_RE = new RegExp(`(?<![가-힣])([일이삼사오육칠팔])\\s([이삼사오육칠팔구])(?=\\s?(?:${[...STRONG_UNITS].sort((a, b) => b.length - a.length).join('|')}))`, 'g');
+/** 1000 이상은 천 단위 쉼표(24,000명). */
+const fmtNum = (n: number): string => (n >= 1000 ? n.toLocaleString('en-US') : String(n));
+const MONTH_PAIR_RE = new RegExp(`(?<![가-힣])(?:구시|([이삼사오육칠팔])([삼사오육칠팔구]))월${MONTH_END}`, 'g');
+
+/** 한자어 수 낱말 → 정수(순수). 자릿값 순서가 어긋나면(삼사·사이·십백) null — 낱말이지 수가 아니다. */
+export function parseSinoNumber(w: string): number | null {
+  let total = 0, section = 0, digit: number | null = null, lastMult = Infinity;
+  for (const ch of w) {
+    if (ch in SINO_DIGIT) {
+      if (digit !== null) return null;
+      digit = SINO_DIGIT[ch]!;
+    } else if (ch in SINO_MULT) {
+      const m = SINO_MULT[ch]!;
+      if (m >= lastMult || digit === 0) return null;
+      section += (digit ?? 1) * m; digit = null; lastMult = m;
+    } else if (ch === '만') {
+      if (total || digit === 0) return null;
+      total = (section + (digit ?? 0) || 1) * 10_000; section = 0; digit = null; lastMult = Infinity;
+    } else return null;
+  }
+  if (w.length > 1 && w.includes('영')) return null; // 영은 홀로(영 점 오)만
+  return total + section + (digit ?? 0);
+}
+
+/**
+ * 자막용 숫자 표기(순수) — "수령 이백오십 년, 키가 십구 점 오 미터예요" → "수령 250년, 키가 19.5m예요".
+ * 이웃한 한 자리 수 둘은 범위(삼사 미터 → 3~4m, 사오월 → 4~5월), "오에서 십 미터" → "5~10m". 바꿀 수 없으면 원문 그대로.
+ */
+export function numeralsForDisplay(s: string): string {
+  let t = (s ?? '')
+    .replace(MONTH_PAIR_RE, (m, a?: string, b?: string) => {
+      if (!a) return '9~10월';
+      return SINO_DIGIT[b!]! === SINO_DIGIT[a]! + 1 ? `${SINO_DIGIT[a]}~${SINO_DIGIT[b!]}월` : m;
+    })
+    .replace(MONTH_RE, (_m, w: string) => `${MONTH_NUM[w]}월`)
+    .replace(SPACED_PAIR_RE, (m, a: string, b: string) => (SINO_DIGIT[b]! === SINO_DIGIT[a]! + 1 ? `${a}${b}` : m));
+  t = t.replace(DISPLAY_NUM_RE, (m: string, num: string, dec: string | undefined, unit: string, half: string | undefined, offset: number, all: string) => {
+    if (!STRONG_UNITS.has(unit) && !PARTICLE_START.test(all.slice(offset + m.length))) return m;
+    const shown = DISPLAY_UNIT[unit]!;
+    const tail = half && !LENGTH_UNITS.has(unit) ? half : '';
+    if (num === '일' && unit === '주일') return m; // 일주일은 낱말
+    // 이웃한 한 자리 수 둘 = 범위(오륙도 같은 고유명은 도·배 앞이라 뺀다, 일이는 '일이 많다'와 겹쳐 긴 단위 앞에서만)
+    if (!dec && num.length === 2 && (num[0] !== '일' || STRONG_UNITS.has(unit)) && unit !== '도' && unit !== '배') {
+      const a = SINO_DIGIT[num[0]!], b = SINO_DIGIT[num[1]!];
+      if (a !== undefined && b !== undefined && b === a + 1) return `${a}~${b}${shown}${tail}`;
+    }
+    const n = parseSinoNumber(num);
+    if (n === null) return m;
+    if (num.length === 1 && num in SINO_DIGIT && !dec && !STRONG_UNITS.has(unit)) return m; // 이 시간·이 번·오 분
+    let value = fmtNum(n);
+    if (dec) value += '.' + [...dec].map((c) => SINO_DIGIT[c]).join('');
+    else if (half && LENGTH_UNITS.has(unit)) value += '.5';
+    return `${value}${shown}${tail}`;
+  });
+  // 범위 앞 수 — "오에서 10m" → "5~10m"(앞 수는 단위 없이 온다). 한 글자 '일'은 '일에서(일터에서)'와 겹쳐 뺀다.
+  return t.replace(new RegExp(`(?<![가-힣])(${SINO_RUN})\\s?에서\\s?(?=\\d)`, 'g'), (m, num: string) => {
+    if (num === '일') return m;
+    const n = parseSinoNumber(num);
+    return n === null ? m : `${fmtNum(n)}~`;
+  });
+}
+
 // ── 구절 자막(2026-09-18) ────────────────────────────────────────────────────
 // 인스타 릴스·유튜브 쇼츠는 무음 자동재생으로 시작한다 — 첫 시청에서 낭독은 안 들린다. 종전 화면 글자는
 // 씬당 15자 라벨(screenText)뿐이라, 소리를 켜기 전엔 무슨 얘긴지 알 수 없었다. 내레이션을 4~14자 구절로
@@ -364,7 +458,7 @@ export function captionsFor(narration: string, durationInFrames: number, fps = F
   phrases.forEach((text, i) => {
     acc += weights[i]!;
     const end = i === phrases.length - 1 ? durationInFrames : Math.round((spoken * acc) / total);
-    out.push({ text, startFrame: start, endFrame: end });
+    out.push({ text: numeralsForDisplay(text), startFrame: start, endFrame: end }); // 표기만 숫자로 — 시각 배분(weights)은 낭독 한글 기준
     start = end;
   });
   return out;
@@ -451,7 +545,7 @@ export function buildSrt(scenes: { narration: string; durationSec: number; capti
     const end = clockFrames / FPS;
     const cues = sc.captions?.length
       ? sc.captions.map((c) => ({ from: Math.min(end, clock + c.startFrame / FPS), to: Math.min(end, clock + c.endFrame / FPS), text: c.text }))
-      : [{ from: clock, to: end, text: sc.narration }];
+      : [{ from: clock, to: end, text: numeralsForDisplay(sc.narration) }];
     for (const c of cues) lines.push(`${++n}`, `${fmtSrtTime(c.from)} --> ${fmtSrtTime(c.to)}`, c.text, '');
   }
   return lines.join('\n');
@@ -504,6 +598,12 @@ export async function prepareScenes(
   const issues: string[] = [];
   const prepared: PreparedScene[] = [];
   let startFrame = 0;
+  // 낭독 소수점(2026-10-27) — 대본을 고치는 경로가 여럿이라 TTS·자막이 모두 지나는 여기서 한 번 더 교정한다.
+  scenes = scenes.map((sc) => {
+    const narration = fixSpokenDecimals(sc.narration);
+    if (/[A-Za-z]/.test(narration)) console.log(`[숏폼] ⚠ 낭독에 영어 글자 — TTS 가 영어로 읽습니다: ${narration.slice(0, 60)}`);
+    return narration === sc.narration ? sc : { ...sc, narration };
+  });
   // 수종명 발음 확인(2026-10-02) — STT 가용성은 수종명이 나온 첫 씬에서 한 번만 본다(which 셸 호출).
   let sttOk: boolean | undefined;
   // 받아쓰기가 끝내 못 적은 이름(2026-10-02 리뷰) — 이팝나무처럼 STT 어휘 밖인 이름은 발음이 맞아도 매번 3회 합성이 된다.

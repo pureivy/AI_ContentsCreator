@@ -14,9 +14,13 @@ import type { FactClaim, FactGateResult } from './factGate';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
+import { CONFIG } from '../config';
 
 const mocked = microJSON as unknown as ReturnType<typeof vi.fn>;
 beforeEach(() => mocked.mockReset());
+// 운영 .env 의 FACT_HEDGE_HARD_TIMING(10-26 켬)이 기본값 테스트를 흔들지 않게 끈 상태로 고정 — 켠 경우는 인자로 따로 검증한다.
+const cfg = CONFIG as unknown as { factHedgeHardTiming: boolean };
+beforeEach(() => { cfg.factHedgeHardTiming = false; });
 
 describe('splitBodySentences — 마크다운 본문을 판정 단위 문장으로', () => {
   it('소제목·표 행·목록을 문장으로 살리고 [IMAGE:]·코드펜스는 버린다', () => {

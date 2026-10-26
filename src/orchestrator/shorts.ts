@@ -57,7 +57,7 @@ import { blogUrlForPiece } from '../content/pieces';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import type { ShortsScene } from '../tools/shortsRender';
-import { normalizeSceneKind, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, cutAtWordBoundary, probeDuration, teaserFor, teaserSceneIndex, sceneFrames, midcutAt, planSpareClips, FPS } from '../tools/shortsCommon';
+import { normalizeSceneKind, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, fxSeed, varyLayout, fixMonthNames, fixSpokenDecimals, cutAtWordBoundary, probeDuration, teaserFor, teaserSceneIndex, sceneFrames, midcutAt, planSpareClips, FPS } from '../tools/shortsCommon';
 import { inheritedClaims, formatInherited, writerSource, flaggedForPrompt, STRIPPED_FLAGGED_NOTE } from '../content/inheritedClaims';
 import { classifyTitleType } from '../analytics/titleTiming';
 import { getShortsRef, buildShortsRefBlock, speciesTermsOf } from '../analytics/ytShortsRef';
@@ -517,12 +517,12 @@ async function callRoleJSON<T>(
   return microJSON<T>(stdModel(), sys, task, { maxOutputTokens, signal: io.signal });
 }
 
-/** 내레이션 위생 — 이모지·괄호 지문 제거(TTS 가 읽어버림), 월 이름 고유어 교정(십월→시월), 길이 캡. */
+/** 내레이션 위생 — 이모지·괄호 지문 제거(TTS 가 읽어버림), 월 이름 고유어 교정(십월→시월), 소수점 point→점, 길이 캡. */
 function cleanNarration(s: unknown, cap = 120): string {
-  return fixMonthNames(stripEmoji(String(s ?? ''))
+  return fixSpokenDecimals(fixMonthNames(stripEmoji(String(s ?? ''))
     .replace(/[()（）[\]]/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim()).slice(0, cap);
+    .trim())).slice(0, cap);
 }
 
 function normalizeHashtags(v: unknown): string[] {
@@ -972,7 +972,7 @@ export function partialFixPrompt(a: {
       // 감량 뒤 수정은 카드를 지키는 쪽(2026-10-05 리뷰) — 병합이 cards:'keepUnlessDiverged' 로 돈다. 프롬프트도 그 규칙대로 말한다.
       ? '· 내레이션을 고친 씬에 자막·결론 카드·목록이 있으면 새 내레이션에 맞춰 함께 돌려줘라(그대로 맞으면 그대로 옮겨 적어라). 돌려주지 않은 결론 카드·목록은 그대로 남는다 — 단 새 내레이션이 그 카드가 되받던 말을 지우면 카드도 지워진다.'
       : '· 내레이션을 고친 씬에 자막·결론 카드·목록이 있으면 새 내레이션에 맞춰 함께 돌려줘라(그대로 맞으면 그대로 옮겨 적어라). 돌려주지 않은 결론 카드·목록은 지워진다 — 화면에 옛 주장이 남는 것보다 낫기 때문이다.',
-    '· 사실·수치·시기는 아래 원문에 있는 것만. 원문 결론의 방향을 뒤집지 마라. 유보어("대개/흔히/~일 수 있어요/~봐요")는 남겨라. 구어체 존댓말, 숫자는 한글 낭독, 이모지 금지.',
+    '· 사실·수치·시기는 아래 원문에 있는 것만. 원문 결론의 방향을 뒤집지 마라. 유보어("대개/흔히/~일 수 있어요/~봐요")는 남겨라. 구어체 존댓말, 숫자는 한글 낭독(소수점은 "점" — "십구 점 오 미터"), 이모지 금지.',
     SAME_THREAD_RULE,
     a.keyword ? `· 핵심 키워드 "${a.keyword}" 의 대상 이름이 든 구절은 고쳐도 그 이름을 남겨라.` : '',
     a.hookRule ?? '',
@@ -1138,7 +1138,7 @@ export function literalFixPrompt(a: { scenes: readonly ShortsScene[]; targets: r
     '· 원문의 조건("~이면", "~일 때"), 유보("보통", "대개", "~할 수 있어요"), 예외는 반드시 남긴다. 원문에 없는 말·연결·결론을 더하지 마라.',
     SAME_THREAD_RULE,
     '· 이 줄기 안에 지적과 맞는 원문 문장이 없으면 그 씬은 출력하지 마라({"scenes":[]}) — 다른 갈래 문장으로 채우는 것보다 지금 대본이 낫다.',
-    `· 길이: ${a.targets.map((k) => `씬${k} ${a.caps[k]}자`).join(' · ')} 이내. 숫자는 읽는 꼴의 한글로("3~4m" → "삼사 미터").`,
+    `· 길이: ${a.targets.map((k) => `씬${k} ${a.caps[k]}자`).join(' · ')} 이내. 숫자는 읽는 꼴의 한글로("3~4m" → "삼사 미터"), 소수점은 '점'으로("19.5m" → "십구 점 오 미터").`,
     '· screenText 는 새 내레이션의 핵심을 6~14자로. 앞뒤 씬과 이어지게 첫머리 접속어("그래서", "다만")는 써도 된다.',
     a.keyword ? `· 지금 씬에 "${keywordTokens(a.keyword).head}"(대상 이름)가 있으면 새 문장에도 남겨라 — 원문 문장 앞에 주어로 붙여도 된다.` : '',
     '',
@@ -1504,7 +1504,7 @@ async function fitShortsPlanToDuration(io: JobIO, plan: Plan, budgetCharsOverrid
       // 빼는 순서(2026-10-05 숏폼 11편 분석) — 압축이 "산딸기랑 자주 헷갈리는데" 같은 이음 문장과 "개화주란" 정의부터 지워
       // 씬 사이가 끊긴 4건이 나왔다. 이음·정의·판정은 문장 수는 적어도 흐름의 뼈대라 맨 나중에 뺀다.
       '빼는 순서: 먼저 수식어·예시·같은 말 되풀이 → 그다음 덧붙인 부연 → 맨 나중에야 ① 앞 씬을 받아 잇는 이음 문장("그래서/그런데/그럼 ~" 류, 앞 씬의 질문에 답하는 첫 문장) ② 뒤 씬이 쓰는 말의 정의 문장 ③ 판정 문장("~면 ~예요/~하세요"). 이 셋을 지우면 씬 사이가 끊긴다 — 줄여야 하면 지우지 말고 짧게 바꿔 말하라.',
-      '규칙: 사실·수치·결론과 씬별 "무엇을+왜"는 유지하고 군더더기·중복 표현만 깎아라. 조사·주어를 떨어낸 초압축은 감량이 아니라 훼손이다("이 시기 질소 거름 주면" 금지 → "이 시기엔 질소 거름을 주면"). 구어체 존댓말·숫자 한글 낭독 등 원문 문체 유지, 이모지 금지. 유보어("대개/흔히/보통/~일 수 있다/~봐요/가능성")는 군더더기가 아니다 — 남겨라. 원문 결론의 방향("미루라/하지 마라")을 뒤집지 마라.',
+      '규칙: 사실·수치·결론과 씬별 "무엇을+왜"는 유지하고 군더더기·중복 표현만 깎아라. 조사·주어를 떨어낸 초압축은 감량이 아니라 훼손이다("이 시기 질소 거름 주면" 금지 → "이 시기엔 질소 거름을 주면"). 구어체 존댓말·숫자 한글 낭독(소수점은 "점") 등 원문 문체 유지, 이모지 금지. 유보어("대개/흔히/보통/~일 수 있다/~봐요/가능성")는 군더더기가 아니다 — 남겨라. 원문 결론의 방향("미루라/하지 마라")을 뒤집지 마라.',
       '마지막 씬(CTA)·결론 카드가 되받는 앞 씬의 사물·이름·근거(예: 결론이 "옹이부터 보라"면 옹이가 처음 나오는 문장)는 지우지 마라 — 지우면 결론이 허공에 뜬다(실측).',
       'JSON 형식: {"scenes":[{"index":씬번호,"narration":"..."}]} — 전 씬 포함.',
     ].join('\n'),
@@ -1758,7 +1758,7 @@ export async function planShorts(io: JobIO, topic: string, keyword: string | und
     promiseRoom
       ? '다음 편 예고를 CTA 에 넣었으면 JSON 의 next 필드에 그 주제를 선언하라 — 예고는 시스템이 약속으로 기록해 **다음 자율 제작(보통 반나절~하루 뒤)에 바로** 블로그 글과 숏폼으로 만든다. 그러니 지금 계절에 바로 할 수 있는 주제만 예고하라. next.topic 에는 대상 수종명을 반드시 넣어라("심는 구덩이 크기" 처럼 대상 없는 주제 금지 — 그대로 다음 글 제목이 된다). window 는 지금 달("N월"). 예고를 안 했으면 next 를 생략하라.'
       : '이번 편은 다음 편 예고 금지 — 예고 대장이 가득 차 지킬 수 없는 약속이 된다. "다음엔/다음 편에" 문장도, 자막의 \'예고\' 딱지도 쓰지 말고 팔로우할 가치 한 구절로 닫아라. next 필드는 생략하라.',
-    '내레이션은 TTS 낭독용: 구어체 존댓말, 숫자는 한글로("30%"→"삼십 퍼센트") — 단 월 이름은 고유어로("10월"→"시월", "6월"→"유월") — 고유어 월은 내레이션에만 쓰고 title·titles·description·screenText·hashtags 에는 숫자 월("9월")을 쓴다. 이모지·괄호 지문 금지. 발음이 헷갈려 뜻이 뒤집히는 표현은 풀어 써라 — "새 가지"는 숫자 "세 가지"로 들리니 "새로 난 가지"처럼, 희귀 활용형("아뭅니다" 류)은 평이한 꼴("잘 아물어요")로.',
+    '내레이션은 TTS 낭독용: 구어체 존댓말, 숫자는 한글로("30%"→"삼십 퍼센트"), 소수점은 "점"으로("19.5m"→"십구 점 오 미터" — "미터 반"·영어 point 금지, 2026-10-27 배나무 편) — 단 월 이름은 고유어로("10월"→"시월", "6월"→"유월") — 고유어 월은 내레이션에만 쓰고 title·titles·description·screenText·hashtags 에는 숫자 월("9월")을 쓴다. 이모지·괄호 지문 금지. 발음이 헷갈려 뜻이 뒤집히는 표현은 풀어 써라 — "새 가지"는 숫자 "세 가지"로 들리니 "새로 난 가지"처럼, 희귀 활용형("아뭅니다" 류)은 평이한 꼴("잘 아물어요")로.',
     // 이해도 감사(2026-08-11 블라인드 실측) 교훈: 문체 지침이 정의·이유 문장을 밀어내면 파생물이 원문 없이
     // 이해 불가가 된다 — 아래 우선순위 선언이 문체 블록 전체를 지배한다.
     '[우선순위] 아래 문체 지침은 표현 방식 지침이다 — 원문에서 추린 방법·이유·위험 근거 문장을 삭제하는 방식으로 이행하지 마라. 문체와 정보가 충돌하면 정보를 남기고 문체를 양보하라.',
