@@ -23,7 +23,7 @@ import path from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { selectComposition, renderMedia, makeCancelSignal } from '@remotion/renderer';
 import { CONFIG } from '../config';
-import { probeDuration, sceneDurationSec, sceneFrames, captionsForScene, varyLayout, W, H } from '../tools/shortsCommon';
+import { probeDuration, sceneDurationSec, sceneFrames, captionsForScene, varyLayout, statSpoken, W, H } from '../tools/shortsCommon';
 import type { ShortsScene, PreparedScene } from '../tools/shortsCommon';
 import { RENDER_OPTS, stageAndBuildProps } from '../tools/shortsRenderRemotion';
 import { microJSON } from './agent';
@@ -49,7 +49,7 @@ export function hasInfoCard(sc: ShortsScene): boolean {
     case 'compare': return !!sc.compare;
     case 'list': return !!sc.items?.length;
     case 'cta': return !!sc.takeaways?.length;
-    case 'stat': return !!sc.stat && Number.isFinite(sc.stat.value);
+    case 'stat': return !!sc.stat && Number.isFinite(sc.stat.value) && statSpoken(sc.narration, sc.stat.value); // 말하지 않은 수치 카드는 렌더에서도 빠진다(dropUnspokenStat)
     case 'quote': return !!sc.quote?.text;
     case 'chart': return !!sc.chart?.series?.length;
     default: return false;

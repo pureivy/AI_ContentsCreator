@@ -57,9 +57,21 @@ export function spellNumbersForTts(text: string): string {
   return t.replace(/(?<=\d[가-힣]*)\s*[~∼～–]\s*(?=\d)|(?<=[가-힣])[~∼～–](?=\d)/g, '에서 ');
 }
 
+/** 소수점 단위 — 한글 수 소수(십구 점 오)는 이 단위 앞에서만 쩜으로 바꾼다('이 점 오해하면'을 건드리지 않게). */
+const DECIMAL_UNIT = '(?:미터|센티|밀리|킬로|그램|리터|퍼센트|배|도|년|개월|시간|평)';
+/**
+ * 소수점은 [쩜]으로 읽게(순수, 2026-10-27 사장님 — "십구점오미터는 십구쩜오미터로") — TTS 입력에만. 대본·자막은 '점'·19.5 그대로.
+ * 숫자 소수(1.8)는 점 하나짜리만(날짜 2026.10.27·버전 같은 점 둘 이상은 그대로).
+ */
+export function readDecimalAsJjeom(text: string): string {
+  return (text ?? '')
+    .replace(new RegExp(`([영일이삼사오육륙칠팔구십백천만])\\s?점\\s?(?=[영일이삼사오육륙칠팔구]+\\s?${DECIMAL_UNIT})`, 'g'), '$1쩜')
+    .replace(/(?<![\d.])(\d+)\.(\d+)(?![\d.])/g, '$1쩜$2');
+}
+
 /** TTS 낭독용 텍스트 정제: 마크다운/링크/이모지 제거, 공백 정리, 길이 상한. */
 export function sanitizeForTts(text: string, maxLen = 4000): string {
-  let t = spellNumbersForTts(text ?? '');
+  let t = readDecimalAsJjeom(spellNumbersForTts(text ?? ''));
   t = t.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');           // [라벨](url) -> 라벨
   t = t.replace(/[*_`#>~|]/g, ' ');                          // 마크다운 기호
   t = t.replace(/https?:\/\/\S+/g, ' ');                     // 남은 URL

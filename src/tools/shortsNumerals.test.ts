@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { numeralsForDisplay, parseSinoNumber, fixSpokenDecimals, captionsFor, buildSrt } from './shortsCommon';
+import { numeralsForDisplay, parseSinoNumber, fixSpokenDecimals, captionsFor, buildSrt, statSpoken, dropUnspokenStat } from './shortsCommon';
+import { hasInfoCard } from '../orchestrator/shortsDirectMotion';
 
 describe('fixSpokenDecimals — 낭독 소수점(2026-10-27 배나무 편)', () => {
   it('한글 수 사이 point·포인트 → 점', () => {
@@ -77,5 +78,28 @@ describe('자막에만 적용 — 시각 배분은 낭독 기준', () => {
   });
   it('구절 자막이 없는 씬(훅·CTA)의 SRT 도 숫자로', () => {
     expect(buildSrt([{ narration: '수령 이백오십 년이에요.', durationSec: 3 }])).toContain('수령 250년이에요.');
+  });
+});
+
+describe('statSpoken·dropUnspokenStat — 숫자 카드는 그 씬에서 말한 수치만(2026-10-27 배나무 편)', () => {
+  const scene2 = { narration: '마을 어귀 큰 배나무는 자리가 좋았던 나무예요. 품종보다 터가 더 크게 갑니다.', screenText: '답은 자리예요', kind: 'stat' as const, stat: { value: 250, unit: '년', label: '천연기념물 배나무 수령' } };
+  it('이번 사고 — 씬2 는 250 을 말하지 않는다', () => {
+    expect(statSpoken(scene2.narration, 250)).toBe(false);
+    const out = dropUnspokenStat(scene2);
+    expect(out.kind).toBeUndefined();
+    expect(out.stat).toBeUndefined();
+    expect(out.screenText).toBe('답은 자리예요');
+    expect(hasInfoCard(scene2)).toBe(false);
+  });
+  it('한자어·고유어·숫자·소수로 말하면 카드 유지', () => {
+    expect(statSpoken('정읍 청실배나무는 수령 이백오십 년이에요.', 250)).toBe(true);
+    expect(statSpoken('키 십구 점 오 미터예요.', 19.5)).toBe(true);
+    expect(statSpoken('키 십구point오미터예요.', 19.5)).toBe(true);
+    expect(statSpoken('조건은 세 가지예요.', 3)).toBe(true);
+    expect(statSpoken('개화 원인의 구십 퍼센트가 볕 부족이에요.', 90)).toBe(true);
+    expect(statSpoken('한 달에 2만 4천 명이 찾아요.', 24000)).toBe(true);
+    const ok = { ...scene2, narration: '수령 이백오십 년 된 나무예요.' };
+    expect(dropUnspokenStat(ok)).toBe(ok);
+    expect(hasInfoCard(ok)).toBe(true);
   });
 });

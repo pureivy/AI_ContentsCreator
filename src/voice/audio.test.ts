@@ -18,7 +18,7 @@ describe('sanitizeForTts', () => {
     expect(sanitizeForTts('자료에는 10~15m까지, 흔히 5~8m 정도')).toBe('자료에는 10에서 15미터까지, 흔히 5에서 8미터 정도');
     expect(sanitizeForTts('2~3시간뿐')).toBe('2에서 3시간뿐');
     expect(sanitizeForTts('3월 중순~4월 중순')).toBe('3월 중순에서 4월 중순');
-    expect(sanitizeForTts('10m~15m, 깊이 30cm, 1.5m, 20%, 0∼5℃')).toBe('10미터에서 15미터, 깊이 30센티미터, 1.5미터, 20퍼센트, 0에서 5도');
+    expect(sanitizeForTts('10m~15m, 깊이 30cm, 1.5m, 20%, 0∼5℃')).toBe('10미터에서 15미터, 깊이 30센티미터, 1쩜5미터, 20퍼센트, 0에서 5도');
     expect(sanitizeForTts('좋아요~ 2026-10-25')).toBe('좋아요 2026-10-25');
   });
   it('heardScore 도 같은 표기로 맞춘다 — 고친 낭독이 원문(10~15m)과 다르다고 벌점받지 않게', () => {
@@ -122,5 +122,23 @@ describe('parseSayVoices', () => {
     expect(v).toContain('Yuna');
     expect(v).toContain('Eddy');
     expect(v).not.toContain('Alex');
+  });
+});
+
+describe('readDecimalAsJjeom — 소수점은 쩜으로(2026-10-27 사장님, TTS 입력 전용)', () => {
+  it('한글 소수·숫자 소수 모두 쩜', () => {
+    expect(sanitizeForTts('키 십구 점 오 미터예요.')).toBe('키 십구쩜오 미터예요.');
+    expect(sanitizeForTts('줄기 지름 1.8m까지')).toBe('줄기 지름 1쩜8미터까지');
+    expect(sanitizeForTts('pH 영 점 오 배')).toContain('영쩜오 배');
+  });
+  it('소수가 아닌 점·점 둘 이상은 그대로', () => {
+    expect(sanitizeForTts('이 점 오해하지 마세요')).toBe('이 점 오해하지 마세요');
+    expect(sanitizeForTts('2026.10.27 기준')).toBe('2026.10.27 기준');
+    expect(sanitizeForTts('이 점이 중요해요')).toBe('이 점이 중요해요');
+    // 낱말 속 점(사장님 지적) — 점수·점점·만점·'오 점 차이'는 소수가 아니다
+    for (const s of ['점수가 점점 올라요', '십 점 만점에 구 점이에요', '이 점수는 오 점 차이', '오 점 만점']) expect(sanitizeForTts(s)).toBe(s);
+  });
+  it('받아쓰기 대조는 쩜·점·소수점을 같게 본다', () => {
+    expect(heardScore('줄기 지름 1.8m까지', '줄기 지름 1쩜8미터까지')).toBe(1);
   });
 });

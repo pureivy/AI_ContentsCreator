@@ -8,7 +8,7 @@ import path from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { pruneDir, humanBytes } from '../util/prune';
 import { selectComposition, renderMedia, makeCancelSignal } from '@remotion/renderer';
-import { prepareScenes, buildSrt, resolveClipSrc, defaultSceneFx, fxSeed, FPS, probeDuration, probeImageSize, coverFocus, midcutAt, planSpareClips } from './shortsCommon';
+import { prepareScenes, buildSrt, resolveClipSrc, dropUnspokenStat, defaultSceneFx, fxSeed, FPS, probeDuration, probeImageSize, coverFocus, midcutAt, planSpareClips } from './shortsCommon';
 import type { ShortsScene, ShortsRenderResult, PreparedScene } from './shortsCommon';
 import { cardHeaderFor, cardElements, cardBeats, probeSpeechTimeline, alignSegments, titleBottomPx } from './shortsCardSync';
 import { CONFIG } from '../config';
@@ -211,6 +211,12 @@ export async function renderShortsVideoRemotion(
     spareClips?: string[];
   } = {},
 ): Promise<ShortsRenderResult> {
+  // 말하지 않은 숫자 카드는 그리지 않는다(2026-10-27) — 화면이 낭독보다 앞서 나간다.
+  scenes = scenes.map((sc, i) => {
+    const out = dropUnspokenStat(sc);
+    if (out !== sc) console.log(`[숏폼] 씬${i + 1} 숫자 카드 뺌 — ${sc.stat?.value}${sc.stat?.unit ?? ''} 을 그 씬 낭독에서 말하지 않음`);
+    return out;
+  });
   const entry = path.resolve('remotion/index.ts');
   if (!fs.existsSync(entry)) return { ok: false, issues: ['remotion 엔트리 부재'] };
 

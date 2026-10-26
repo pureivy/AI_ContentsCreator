@@ -12,6 +12,7 @@ import { synthesizeChecked, ttsCheckNote, hardToHear } from '../voice/ttsCheck';
 import { speciesNamesIn } from '../content/species';
 import { CONFIG } from '../config';
 import { MIN_CLIP_COVERAGE } from '../content/userAssets';
+import { numberTokens } from '../longform/pron';
 
 const execFileP = promisify(execFile);
 
@@ -322,6 +323,23 @@ const SPACED_PAIR_RE = new RegExp(`(?<![가-힣])([일이삼사오육칠팔])\\s
 /** 1000 이상은 천 단위 쉼표(24,000명). */
 const fmtNum = (n: number): string => (n >= 1000 ? n.toLocaleString('en-US') : String(n));
 const MONTH_PAIR_RE = new RegExp(`(?<![가-힣])(?:구시|([이삼사오육칠팔])([삼사오육칠팔구]))월${MONTH_END}`, 'g');
+
+/**
+ * 숫자 카드의 값을 그 씬에서 말하나(순수, 2026-10-27 배나무 편) — 씬2 카드에 '250년'을 띄웠는데 낭독은 씬3에서야 말했다.
+ * 작가 규칙("내레이션에서도 그 수치를 말해라")을 어긴 카드는 화면이 소리보다 앞서 나간다. 한자어(이백오십 년)·고유어(세 가지)·숫자 모두 센다.
+ */
+export function statSpoken(narration: string, value: number): boolean {
+  const n = fixSpokenDecimals(narration ?? '').replace(/(\d)([만천])\s+(?=\d)/g, '$1$2'); // 2만 4천 → 2만4천(numberTokens 가 한 덩어리로)
+  const shown = (numeralsForDisplay(n).match(/\d[\d,]*(?:\.\d+)?/g) ?? []).map((x) => Number(x.replace(/,/g, '')));
+  return [...shown, ...numberTokens(n).map(Number)].some((x) => Math.abs(x - value) < 1e-9);
+}
+
+/** 말하지 않은 숫자 카드는 빼고 일반 씬으로(순수) — 라벨(screenText)·자막은 그대로. Remotion 렌더와 모션그래픽 대상 판정이 같이 쓴다. */
+export function dropUnspokenStat<T extends ShortsScene>(sc: T): T {
+  if (sc.kind !== 'stat' || !sc.stat || statSpoken(sc.narration, sc.stat.value)) return sc;
+  const { stat: _stat, kind: _kind, ...rest } = sc;
+  return rest as T;
+}
 
 /** 한자어 수 낱말 → 정수(순수). 자릿값 순서가 어긋나면(삼사·사이·십백) null — 낱말이지 수가 아니다. */
 export function parseSinoNumber(w: string): number | null {

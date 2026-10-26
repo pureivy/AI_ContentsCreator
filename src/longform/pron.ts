@@ -15,7 +15,7 @@ const NUM_WORDS: Array<[RegExp, string]> = [
 ];
 
 /** 소수점 → '점'(1.8 → 1점8), 천 단위 쉼표 제거(1,000 → 1000) — 문장부호 지우기 전에. */
-const keepDecimal = (s: string): string => s.replace(/(\d),(?=\d{3}(?!\d))/g, '$1').replace(/(\d)\.(?=\d)/g, '$1점');
+const keepDecimal = (s: string): string => s.replace(/(\d),(?=\d{3}(?!\d))/g, '$1').replace(/(\d)\.(?=\d)/g, '$1점').replace(/쩜/g, '점');
 
 function norm(s: string): string {
   let t = keepDecimal(spellNumbersForTts(s)).replace(/[^가-힣0-9]/g, '');
@@ -80,7 +80,7 @@ export function numberTokens(s: string): string[] {
     .replace(MONTH_RE, (_m, w: string) => `${MONTH_MAP.get(w)}월`)
     .replace(SINO_TEN_RE, (_m, a: string | undefined, b: string | undefined, one: string | undefined) => String(one ? SINO.get(one)! : (a ? SINO.get(a)! : 1) * 10 + (b ? SINO.get(b)! : 0)))
     .replace(NATIVE_RE, (w: string) => NATIVE_MAP.get(w) ?? w)
-    .replace(/(\d)\s?점\s?(?=\d)/g, '$1.')
+    .replace(/(\d)\s?[점쩜]\s?(?=\d)/g, '$1.')
     .replace(/\d+(?:[만천백]\d*)+/g, unitNumber);
   return t.match(/\d+(?:\.\d+)?/g) ?? [];
 }
