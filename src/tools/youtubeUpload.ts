@@ -117,6 +117,20 @@ export async function uploadShortsToYoutube(opts: {
   /** API 커버 지정(thumbnails.set)을 건너뛴다(2026-10-06 시험, YOUTUBE_SHORTS_SET_THUMBNAIL=false). */
   skipThumbnail?: boolean;
 }): Promise<YtUploadResult> {
+  // 업로드 요청을 보낸 뒤의 실패는 '안 올라갔다'가 아니다(2026-10-26) — 구글이 파일을 다 받고 응답만 끊기면(180초 시간 초과·
+  // 응답 본문 깨짐) 공개 영상은 있는데 기록이 없고, 재시도가 같은 영상을 한 번 더 공개한다. 그래서 요청을 보낸 뒤 실패하면
+  // 채널 업로드 목록에서 방금 올린 영상(같은 제목 + 업로드 시작 뒤)을 찾아 기록한다.
+  let access: string | undefined;
+  let uploadStartMs = 0;
+  let sentTitle = '';
+  const recover = async (why: string): Promise<YtUploadResult | null> => {
+    if (!access || !uploadStartMs) return null;
+    const id = await recoverRecentUpload(opts.slug, access, sentTitle, Math.max(uploadStartMs - 60_000, Date.now() - RECOVER_WINDOW_MS));
+    if (!id) return null;
+    console.log(`[youtube] 업로드 응답 유실(${why}) — 채널 업로드 목록에서 회수: ${id}`);
+    const thumbnailError = opts.skipThumbnail ? undefined : await setThumbnail(access, id, opts.thumbnailPath, AbortSignal.timeout(60_000));
+    return { ok: true, videoId: id, url: `https://youtube.com/shorts/${id}`, thumbnailError };
+  };
   try {
     const clientId = getSecret('YOUTUBE_OAUTH_CLIENT_ID') ?? '';
     const clientSecret = getSecret('YOUTUBE_OAUTH_CLIENT_SECRET') ?? '';
@@ -127,12 +141,13 @@ export async function uploadShortsToYoutube(opts: {
 
     const timeout = AbortSignal.timeout(180_000);
     const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
-    const access = await refreshAccessToken(clientId, clientSecret, refreshToken, signal);
+    access = await refreshAccessToken(clientId, clientSecret, refreshToken, signal);
 
     const boundary = `yt-${Date.now().toString(36)}-gepa`;
-    const body = buildMultipartBody(
-      buildVideoMeta(opts.title, opts.description, opts.hashtags, opts.blogUrl, opts.publishAt, opts.privacy ?? 'private'),
-      fs.readFileSync(opts.videoPath), boundary);
+    const meta = buildVideoMeta(opts.title, opts.description, opts.hashtags, opts.blogUrl, opts.publishAt, opts.privacy ?? 'private');
+    sentTitle = String((meta.snippet as { title?: unknown }).title ?? '');
+    const body = buildMultipartBody(meta, fs.readFileSync(opts.videoPath), boundary);
+    uploadStartMs = Date.now();
     const r = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status', {
       method: 'POST', signal,
       headers: { Authorization: `Bearer ${access}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
@@ -140,11 +155,13 @@ export async function uploadShortsToYoutube(opts: {
     });
     const j: unknown = await r.json().catch(() => ({}));
     if (!r.ok) {
+      // 5xx 는 구글이 받고도 응답만 실패했을 수 있다 — 회수부터. 4xx(쿼터 초과 등)는 올라가지 않은 것.
+      if (r.status >= 500) { const rec = await recover(`HTTP ${r.status}`); if (rec) return rec; }
       const reason = (j as { error?: { errors?: Array<{ reason?: string }> } })?.error?.errors?.[0]?.reason ?? String(r.status);
       return { ok: false, error: reason === 'quotaExceeded' ? '유튜브 일일 쿼터 초과 — 내일 재시도' : `업로드 실패(${reason})` };
     }
     const id = extractVideoId(j);
-    if (!id) return { ok: false, error: '업로드 응답 이형(id 없음)' };
+    if (!id) return (await recover('id 없음')) ?? { ok: false, error: '업로드 응답 이형(id 없음) — 채널에 올라갔는지 확인 후 재시도하세요' };
     // 커스텀 썸네일 설정(best-effort) — 우리 채널은 200(채널 인증), 미인증 채널은 403. 실패는 note 만.
     // 쇼츠 탭 커버(oardefault)에 반영됐다는 증거는 아직 없다 — 10-05·10-06 두 편 모두 사장님이 앱에서 손으로 고쳤다.
     // 그래서 처리 완료 뒤 한 번 더 지정한다(resetThumbnailAfterProcessing). 지정을 아예 빼면 ok_asis1 처럼 oardefault 가 비어
@@ -153,8 +170,77 @@ export async function uploadShortsToYoutube(opts: {
     // 쇼츠 분류는 파일(세로 1080×1920·3분 이하)로 자동 판정 — URL 은 표시용이지만 쇼츠 플레이어로 열리게 /shorts/ 형식.
     return { ok: true, videoId: id, url: `https://youtube.com/shorts/${id}`, thumbnailError };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message.slice(0, 120) : String(e) };
+    const why = e instanceof Error ? e.message.slice(0, 120) : String(e);
+    // 업로드 요청을 보낸 뒤의 예외(시간 초과·연결 끊김)면 올라갔는지 먼저 확인한다 — 보내기 전 예외는 recover 가 그냥 null.
+    const rec = await recover(why.slice(0, 60)).catch(() => null);
+    if (rec) return rec;
+    return { ok: false, error: uploadStartMs ? `${why} — 채널에 올라갔는지 확인 후 재시도하세요` : why };
   }
+}
+
+/** 업로드 회수 창(2026-10-26) — 업로드 목록에서 이보다 오래된 항목은 방금 올린 영상으로 보지 않는다(같은 제목 옛 영상 오매칭 방지). */
+const RECOVER_WINDOW_MS = 5 * 60_000;
+
+/**
+ * 채널 업로드 목록에서 방금 올린 영상 매칭(순수, 2026-10-26) — 제목이 **정확히** 같고 publishedAt 이 sinceMs 이후
+ * (시계 차 1분 허용해 nowMs+1분 이전)인 항목. 시간 창이 없으면 같은 제목의 옛 영상(재시도로 생긴 중복 포함)을 붙인다.
+ * 둘 이상이면 어느 것인지 모르니 null — 엉뚱한 영상을 기록하느니 실패로 두고 사람이 본다.
+ */
+export function matchRecentUpload(
+  items: ReadonlyArray<{ snippet?: { title?: string; publishedAt?: string; resourceId?: { videoId?: string } } }>,
+  title: string, sinceMs: number, nowMs: number,
+): string | null {
+  if (!title.trim()) return null;
+  const hits = items.filter((it) => {
+    const s = it.snippet;
+    const at = Date.parse(s?.publishedAt ?? '');
+    return !!s?.resourceId?.videoId && s.title === title && Number.isFinite(at) && at >= sinceMs && at <= nowMs + 60_000;
+  });
+  return hits.length === 1 ? hits[0]!.snippet!.resourceId!.videoId! : null;
+}
+
+/** 브랜드별 업로드 재생목록 id 캐시 — channels.list 를 회수 때마다 부르지 않게.
+ *  6시간 TTL + 채널 재연결 때 비움(2026-10-26 검토) — 종전엔 영영 안 비워, 다른 채널로 다시 연결하면 회수가 옛 채널 목록을 봤다. */
+const uploadsPlaylistCache = new Map<string, { pl: string; ts: number }>();
+const UPLOADS_PLAYLIST_TTL_MS = 6 * 3600_000;
+/** 브랜드 채널 토큰이 바뀌었을 때(OAuth 콜백) 부른다 — slug 미지정이면 전부. */
+export function clearUploadsPlaylistCache(slug?: string): void {
+  if (slug === undefined) uploadsPlaylistCache.clear(); else uploadsPlaylistCache.delete(slug);
+}
+
+/**
+ * 응답이 유실된 업로드 회수(2026-10-26) — channels.list(contentDetails, 1단위)로 업로드 재생목록을 찾고
+ * playlistItems.list(1단위)에서 matchRecentUpload. 원래 요청의 signal 은 이미 끊겼을 수 있어(그게 원인일 수 있다)
+ * 호출마다 새 15초 시간 제한을 쓴다. 목록 반영이 몇 초 늦을 수 있어 못 찾으면 한 번 더 본다. 실패는 null(원래 오류 유지).
+ */
+export async function recoverRecentUpload(
+  slug: string, access: string, title: string, sinceMs: number,
+  o: { fetchImpl?: FetchLike; retryDelayMs?: number; now?: () => number } = {},
+): Promise<string | null> {
+  const f: FetchLike = o.fetchImpl ?? ((u, i) => fetch(u, i));
+  const now = o.now ?? Date.now;
+  const get = async (url: string): Promise<unknown> => {
+    const r = await f(url, { headers: { Authorization: `Bearer ${access}` }, signal: AbortSignal.timeout(15_000) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  };
+  try {
+    const hit = uploadsPlaylistCache.get(slug);
+    let pl = hit && now() - hit.ts < UPLOADS_PLAYLIST_TTL_MS ? hit.pl : undefined;
+    if (!pl) {
+      const j = await get('https://www.googleapis.com/youtube/v3/channels?part=contentDetails&mine=true') as { items?: Array<{ contentDetails?: { relatedPlaylists?: { uploads?: string } } }> };
+      pl = j.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
+      if (!pl) return null;
+      uploadsPlaylistCache.set(slug, { pl, ts: now() });
+    }
+    for (let i = 0; i < 2; i++) {
+      if (i > 0) await sleep(o.retryDelayMs ?? 5_000);
+      const j = await get(`https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=5&playlistId=${encodeURIComponent(pl)}`) as { items?: Array<{ snippet?: { title?: string; publishedAt?: string; resourceId?: { videoId?: string } } }> };
+      const id = matchRecentUpload(j.items ?? [], title, sinceMs, Date.now());
+      if (id) return id;
+    }
+    return null;
+  } catch { return null; }
 }
 
 /**
@@ -230,6 +316,8 @@ export async function resumableUpload(o: {
   access: string; videoPath: string; meta: Record<string, unknown>;
   signal?: AbortSignal; onProgress?: (sent: number, total: number) => void;
   refreshAccess?: () => Promise<string>;
+  /** 완료 응답에 id 가 없을 때 채널 업로드 목록에서 방금 올린 영상을 찾는다(2026-10-26) — 못 찾으면 null. */
+  recover?: () => Promise<string | null>;
   fetchImpl?: FetchLike; chunkBytes?: number; chunkTimeoutMs?: number; retryDelaysMs?: number[];
 }): Promise<{ ok: true; videoId: string } | { ok: false; error: string }> {
   const f: FetchLike = o.fetchImpl ?? ((u, i) => fetch(u, i));
@@ -262,15 +350,30 @@ export async function resumableUpload(o: {
   const session = r0.headers.get('location');
   if (!session) return { ok: false, error: '업로드 세션 주소(Location) 없음' };
 
-  const done = async (r: Response): Promise<{ ok: true; videoId: string } | { ok: false; error: string }> => {
-    const id = extractVideoId(await r.json().catch(() => ({})));
-    return id ? { ok: true, videoId: id } : { ok: false, error: '업로드 응답 이형(id 없음)' };
-  };
   // 서버가 받은 위치 묻기 — 받은 게 끝까지면 200/201(완료), 아니면 308 + Range.
   const queryStatus = async (): Promise<Response> => f(session, {
     method: 'PUT', signal: sig(),
     headers: { Authorization: `Bearer ${access}`, 'Content-Length': '0', 'Content-Range': `bytes */${total}` },
   });
+  // 완료(200/201)인데 본문을 못 읽으면(2026-10-26) 영상은 이미 채널에 있다 — 실패로 돌리면 기록 없는 공개 영상 + 재시도 중복.
+  // 위치 조회를 한 번 더 해 본문을 다시 받고, 그래도 없으면 업로드 목록에서 회수(o.recover)한다.
+  const done = async (r: Response | null): Promise<{ ok: true; videoId: string } | { ok: false; error: string }> => {
+    const id = r ? extractVideoId(await r.json().catch(() => ({}))) : null;
+    if (id) return { ok: true, videoId: id };
+    try {
+      const q = await queryStatus();
+      if (q.status === 200 || q.status === 201) {
+        const id2 = extractVideoId(await q.json().catch(() => ({})));
+        if (id2) return { ok: true, videoId: id2 };
+      }
+    } catch { /* 조회 실패 — 업로드 목록 회수로 */ }
+    const rec = await o.recover?.().catch(() => null);
+    if (rec) {
+      console.log(`[youtube] 롱폼 완료 응답 이형 — 채널 업로드 목록에서 회수: ${rec}`);
+      return { ok: true, videoId: rec };
+    }
+    return { ok: false, error: '업로드 응답 이형(id 없음) — 업로드는 끝났을 수 있으니 채널을 확인한 뒤 재시도하세요' };
+  };
 
   const fh = await fs.promises.open(o.videoPath, 'r');
   try {
@@ -323,8 +426,9 @@ export async function resumableUpload(o: {
       } catch { /* 위치 조회 실패 — 같은 청크 재전송 */ }
     }
     // 마지막 청크가 308 로 끝났는데 offset==total 이면 완료 응답을 못 받은 것 — 위치를 한 번 더 묻는다.
-    const q = await queryStatus();
-    if (q.status === 200 || q.status === 201) return await done(q);
+    // 이 조회가 끊겨도(2026-10-26) 바이트는 다 갔다 — 예외로 던지지 말고 done 의 회수 절차(재조회·업로드 목록)를 탄다.
+    const q = await queryStatus().catch(() => null);
+    if (!q || q.status === 200 || q.status === 201) return await done(q);
     return { ok: false, error: `업로드 완료 확인 실패(${q.status})` };
   } finally {
     await fh.close().catch(() => undefined);
@@ -353,9 +457,14 @@ export async function uploadLongformToYoutube(opts: {
     const tokenSignal = (): AbortSignal => (opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000));
     const fresh = (): Promise<string> => refreshAccessToken(clientId, clientSecret, refreshToken, tokenSignal());
     const access = await fresh();
+    const meta = buildLongformMeta(opts.title, opts.description, opts.tags);
+    const sentTitle = String((meta.snippet as { title?: unknown }).title ?? '');
+    // 회수 창은 업로드 시작 기준(1분 여유) — 롱폼은 업로드에만 수십 분이 걸려 '지금부터 5분'으로는 놓칠 수 있다.
+    const startMs = Date.now();
     const up = await resumableUpload({
-      access, videoPath: opts.videoPath, meta: buildLongformMeta(opts.title, opts.description, opts.tags),
+      access, videoPath: opts.videoPath, meta,
       signal: opts.signal, onProgress: opts.onProgress, refreshAccess: fresh,
+      recover: async () => recoverRecentUpload(opts.slug, await fresh().catch(() => access), sentTitle, startMs - 60_000, { fetchImpl: opts.fetchImpl }),
       fetchImpl: opts.fetchImpl, chunkBytes: opts.chunkBytes, retryDelaysMs: opts.retryDelaysMs,
     });
     if (!up.ok) return { ok: false, error: up.error };

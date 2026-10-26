@@ -6,7 +6,7 @@ import { resolveResidualHold,
   splitBodySentences, numericClaimSentences, buildEvidence, gateVerdict, formatGateFeedback, toFactGateInfo,
   extractFactClaims, judgeClaims, factGateBlog, runFactGateWithRepair,
   isJudgmentSentence, hasHedge, hasEventMarkers, classifyClaim, FACT_EXEMPT_RE,
-  isHardClaim, HARD_CLAIM_KINDS,
+  isHardClaim, HARD_CLAIM_KINDS, HARD_TIMING_RE,
   applySentenceRepairs, repairSentences,
   extractFactCard, FACT_CARD_HEADER, mergeSuppliedFacts, jargonRulesForEvidence,
 } from './factGate';
@@ -1105,5 +1105,63 @@ describe('resolveResidualHold — 보내기 전 추가 수정(2026-10-14)', () =
     expect((await resolveResidualHold({ gate: vi.fn(), targeted }, '## 원본', R('hold', [], ['m']))).body).toBe('## 원본');
     expect(targeted).not.toHaveBeenCalled();
     expect((await resolveResidualHold({ gate: vi.fn(), targeted }, '## 원본', R('hold', ['a']))).result.unsupported).toEqual(['a']);
+  });
+});
+
+describe('FACT_HEDGE_HARD_TIMING — 유보어 붙은 시기·수치 문장(2026-10-26)', () => {
+  const cases = [
+    '접목은 보통 3월 하순에 합니다.',
+    '발아율은 대개 70% 정도입니다.',
+    '접목묘가 실생묘보다 2년 빨리 열매를 맺는 편입니다.',
+    '꺾꽂이 뒤 보통 20일쯤 지나면 뿌리가 나옵니다.',
+  ];
+  it('끄면 종전대로 hedged(무판정 통과)', () => {
+    for (const s of cases) expect(classifyClaim({ text: s, kind: 'time' }, false), s).toBe('hedged');
+  });
+  it('켜면 claim 으로 판정 대상', () => {
+    for (const s of cases) expect(classifyClaim({ text: s, kind: 'time' }, true), s).toBe('claim');
+  });
+  it('년생·cm 서술 수치와 수치 없는 유보문은 켜도 hedged', () => {
+    for (const s of [
+      '3년생 묘목은 보통 뿌리가 넓게 퍼져 있습니다.',
+      '심은 지 1~2년 된 묘목이라면 보통 거의 손대지 않는 게 맞습니다.',
+      '높이 30cm 안팎의 묘목은 대개 화분에서도 잘 자랍니다.',
+      '물빠짐이 나쁜 땅에서는 뿌리가 썩을 수 있습니다.',
+      '열매가 많은 해는 다음 해에 적게 맺는 편입니다.',
+    ]) expect(classifyClaim({ text: s, kind: 'general' }, true), s).toBe('hedged');
+  });
+  it('사건·판단 우선순위는 그대로(켜도)', () => {
+    expect(classifyClaim({ text: '지난해 우리 밭에서는 보통 3월 하순에 접목했습니다.', kind: 'experience' }, true)).toBe('event');
+    expect(classifyClaim({ text: '3월 하순에는 접목 순서가 틀렸는지 봐야 합니다.', kind: 'general' }, true)).toBe('judgment');
+  });
+  it('HARD_TIMING_RE — 11월·12월·2~3년·상순 매칭, 년생 비매칭', () => {
+    for (const s of ['11월에 옮깁니다', '12월', '2~3년 걸립니다', '4월 상순', '중순쯤', '30퍼센트']) expect(HARD_TIMING_RE.test(s), s).toBe(true);
+    for (const s of ['2년생 묘목', '10년생', '1~2년 된 나무', '높이 30cm']) expect(HARD_TIMING_RE.test(s), s).toBe(false);
+  });
+
+  const body = '## 접목\n\n접목은 3월 하순에 합니다. 접붙인 자리는 묶어 둡니다.';
+  const hedge = [{ index: 1, action: 'hedge' as const, replacement: '접목은 보통 3월 하순에 합니다.' }];
+  it('applySentenceRepairs — 끄면 시기 문장 hedge 도 적용(종전)', () => {
+    const r = applySentenceRepairs(body, ['접목은 3월 하순에 합니다.'], hedge, undefined, false);
+    expect(r.applied).toBe(1);
+    expect(r.body).toContain('접목은 보통 3월 하순에 합니다.');
+  });
+  it('applySentenceRepairs — 켜면 시기·경성 수치 문장 hedge 는 missed(세탁 통로 차단)', () => {
+    const r = applySentenceRepairs(body, ['접목은 3월 하순에 합니다.'], hedge, undefined, true);
+    expect(r.applied).toBe(0);
+    expect(r.missed).toEqual(['접목은 3월 하순에 합니다.']);
+    expect(r.body).toBe(body);
+    const h2 = applySentenceRepairs('물은 1000배로 희석해 씁니다.', ['물은 1000배로 희석해 씁니다.'],
+      [{ index: 1, action: 'hedge', replacement: '물은 보통 1000배로 희석해 씁니다.' }], undefined, true);
+    expect(h2.applied).toBe(0);
+  });
+  it('applySentenceRepairs — 켜도 delete 와 수치 없는 문장 hedge 는 적용(claimVerify 낮추기 경로 보존)', () => {
+    const d = applySentenceRepairs(body, ['접목은 3월 하순에 합니다.'], [{ index: 1, action: 'delete', replacement: '' }], undefined, true);
+    expect(d.applied).toBe(1);
+    expect(d.body).not.toContain('3월 하순');
+    const s = '접붙인 자리는 묶어 둡니다.';
+    const h = applySentenceRepairs(body, [s], [{ index: 1, action: 'hedge', replacement: '접붙인 자리는 보통 묶어 둡니다.' }], undefined, true);
+    expect(h.applied).toBe(1);
+    expect(h.body).toContain('접붙인 자리는 보통 묶어 둡니다.');
   });
 });

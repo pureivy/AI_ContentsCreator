@@ -1114,6 +1114,18 @@ export async function reviseCardNews(
   if (card.stage !== 'ready') return fail('완성(ready) 상태가 아닙니다');
   if (card.igMediaId) return fail('이미 인스타에 발행됨 — 발행물 이미지는 교체할 수 없습니다');
   if (RUNNING.has(id)) return fail('생성/수선 작업이 이미 진행 중입니다');
+  // 잠금은 맨 앞에서(2026-10-26) — 종전엔 HTML 판만 잠그고 종전 경로는 잠금 없이 plan.json 을 고쳐, 같은 카드의 생성·수선과 겹칠 수 있었다.
+  // 표적 재생성(repairCardNewsSlides)은 제 잠금을 스스로 잡으므로 부르기 직전에 놓아 준다(await 없이 바로 넘긴다).
+  RUNNING.add(id);
+  try { return await reviseCardNewsLocked(id, feedback, opts, card, store, fail); }
+  finally { RUNNING.delete(id); }
+}
+
+async function reviseCardNewsLocked(
+  id: string, feedback: string, opts: { bus?: EventBus; signal?: AbortSignal; source?: CardSource },
+  card: NonNullable<ReturnType<ReturnType<typeof cardNewsStore>['get']>>, store: ReturnType<typeof cardNewsStore>,
+  fail: (error: string) => { ok: false; error: string; changedSlides: number[]; fixed: number[]; stillBad: number[]; metaChanged: boolean },
+): Promise<{ ok: boolean; error?: string; changedSlides: number[]; fixed: number[]; stillBad: number[]; metaChanged: boolean }> {
   const say = (m: string): void => { console.log(`[카드뉴스] ${m}`); opts.bus?.emit('log', { message: m }); };
   const dir = store.dirFor(id);
   // 사실 검증 다시(2026-10-14) — 원문은 서버가 넘긴 것, 없으면 카드 폴더의 source.md(HTML 판). 판정 실패면 옛 값 유지.
@@ -1130,14 +1142,17 @@ export async function reviseCardNews(
   // HTML 판(2026-10-12) — 제목·본문·칸 글·사진 장면을 판형 JSON 에서 고쳐 다시 렌더한다.
   // 칸에서 바꿀 게 없으면(캡션·해시태그 요청 등) 아래 종전 경로로 넘어간다 — 그 경로의 슬라이드 재생성은 HTML 판에선 다시 찍기다.
   if (isHtmlCard(dir)) {
-    RUNNING.add(id);
     let r: Awaited<ReturnType<typeof reviseHtmlCard>> = null;
-    try { r = await reviseHtmlCard(dir, feedback, say, opts.signal); } finally { RUNNING.delete(id); }
+    try { r = await reviseHtmlCard(dir, feedback, say, opts.signal); }
+    catch (e) { return fail(opts.signal?.aborted ? '취소됨' : `다시 렌더 실패 — ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`); }
+    if (!r && opts.signal?.aborted) return fail('취소됨');
     if (r) {
+      // 다시 렌더가 끝났으면(장은 이미 바뀌었다) 취소여도 장 수는 맞춰 둔다 — 알림만 아래에서 건너뛴다.
       const n = fs.readdirSync(dir).filter((f) => /^slide_\d{2}\.png$/.test(f)).length;
       store.update(id, { slides: n, qaUnresolved: undefined });
       say(`수정 요청 반영(HTML 판) — ${r.changed.join(',')}번 장`);
       await refreshFactGate(r.plan, store.get(id)?.caption ?? '');
+      if (opts.signal?.aborted) return fail('취소됨 — 수정은 반영됨(알림 생략)');
       const done = store.get(id);
       if (done) void notifyCardnewsReady({ id, topic: done.topic, brand: done.brand, slides: n, sourcePieceId: done.sourcePieceId, planner: done.planner, designer: done.designer, factGate: done.factGate }, dir).catch(() => { /* 무해 */ });
       return { ok: true, changedSlides: r.changed, fixed: r.changed, stillBad: [], metaChanged: false };
@@ -1194,9 +1209,10 @@ export async function reviseCardNews(
       const slideNos = [...new Set([...mapped, ...named])].sort((a, b) => a - b);
       if (slideNos.length) {
         say(`수정 요청 → 렌더 오타 신고로 판정 — ${chars.length ? `'${chars.join('·')}' 포함 ` : ''}${named.length ? `지목 ${named.join(',')}번 ` : ''}슬라이드 ${slideNos.join(',')} 표적 재생성`);
+        RUNNING.delete(id); // 표적 재생성이 제 잠금을 잡는다(위 주석)
         const r = await repairCardNewsSlides(id, slideNos, opts);
         const done2 = store.get(id);
-        if (r.ok && done2) {
+        if (r.ok && done2 && !opts.signal?.aborted) {
           void notifyCardnewsReady({ id, topic: done2.topic, brand: done2.brand, slides: done2.slides ?? plan.slides.length, sourcePieceId: done2.sourcePieceId, planner: done2.planner, designer: done2.designer, factGate: done2.factGate }, dir).catch(() => { /* 무해 */ });
         }
         return { ok: r.ok, ...(r.error ? { error: r.error } : {}), changedSlides: [], fixed: r.fixed, stillBad: r.stillBad, metaChanged: false };
@@ -1222,11 +1238,13 @@ export async function reviseCardNews(
     if (!slideMap) return { ok: false, error: '슬라이드 매핑 불명 — 문구는 반영됐으나 이미지 재생성 불가', changedSlides: applied.changedSlides, fixed: [], stillBad: [], metaChanged: applied.metaChanged };
     const slideNos = applied.changedSlides
       .map((planIdx) => slideMap!.findIndex((v) => v === planIdx) + 1).filter((k) => k >= 1);
+    RUNNING.delete(id); // 표적 재생성이 제 잠금을 잡는다(위 주석)
     const r = await repairCardNewsSlides(id, slideNos, opts);
     if (!r.ok) return { ok: false, error: r.error, changedSlides: applied.changedSlides, fixed: r.fixed, stillBad: r.stillBad, metaChanged: applied.metaChanged };
     fixed = r.fixed; stillBad = r.stillBad;
   }
-  // 갱신 알림(슬라이드 앨범 재발송) — 사용자가 수정 결과를 바로 검수하도록. 실패 무해.
+  // 갱신 알림(슬라이드 앨범 재발송) — 사용자가 수정 결과를 바로 검수하도록. 실패 무해. 취소된 수정은 알림을 보내지 않는다(2026-10-26).
+  if (opts.signal?.aborted) return { ok: false, error: '취소됨 — 문구는 반영됨(알림 생략)', changedSlides: applied.changedSlides, fixed, stillBad, metaChanged: applied.metaChanged };
   const done = store.get(id);
   if (done) {
     void notifyCardnewsReady({ id, topic: done.topic, brand: done.brand, slides: done.slides ?? plan.slides.length, sourcePieceId: done.sourcePieceId, planner: done.planner, designer: done.designer, factGate: done.factGate }, dir).catch(() => { /* 무해 */ });
@@ -1273,7 +1291,8 @@ export async function repairCardNewsSlides(
     // HTML 판(2026-10-12) — 글자를 HTML 이 그리므로 '그림 오타 재생성'은 저장된 판형으로 다시 찍기만 하면 된다.
     if (isHtmlCard(dir)) {
       const n = await rerenderHtmlCard(dir, say, opts.signal);
-      store.update(id, { slides: n, qaUnresolved: undefined });
+      // 0장 = 새 장이 하나도 안 나옴 — 옛 장은 그대로 남아 있으니(renderLayout 이 성공 때만 바꾼다) 장 수를 0 으로 쓰지 않는다(2026-10-26).
+      if (n > 0) store.update(id, { slides: n, qaUnresolved: undefined });
       return { ok: n > 0, fixed: [], stillBad: [], ...(n > 0 ? {} : { error: '다시 렌더 실패' }) };
     }
     let plan: Plan;
@@ -1559,6 +1578,8 @@ export async function runCardNewsJob(
     const captionText = [plan.caption, plan.hashtags.join(' ')].filter(Boolean).join('\n\n');
     if (captionText) fs.writeFileSync(path.join(dir, 'caption.txt'), captionText, 'utf-8');
 
+    // 취소(2026-10-26) — HTML 판·이미지 경로 모두 중간 단계가 취소를 삼키고(null) 이어 갈 수 있다. 취소된 런이 ready·발행 버튼으로 끝나지 않게.
+    checkAbort();
     // qaUnresolved 는 빈값도 명시 기록(undefined) — 재실행에서 이전 미해결 잔재가 새 완성본을 계속 막지 않게.
     store.update(id, { stage: 'ready', slides: ok, topic: plan.title || card.topic, qaUnresolved: qaUnresolvedSlides.length ? qaUnresolvedSlides : undefined });
     say(`${plan.title.slice(0, 30)} — ${ok}/${count}장 완성${ok < count ? ` (생성 실패 ${count - ok}장 건너뜀)` : ''}`);

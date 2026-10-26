@@ -251,7 +251,7 @@ export function fold(state: UIState, ev: EventEnvelope): UIState {
       if (!aid) return next;
       const decided = state.approvals.find((x) => x.approval_id === aid);
       const moved: ApprovalItem | null = decided
-        ? { ...decided, status: p.approved ? "approved" : "rejected", decided_by: p.decided_by }
+        ? { ...decided, status: p.approved ? "approved" : p.decided_by === "abort" ? "cancelled" : "rejected", decided_by: p.decided_by } // 런 취소로 정산된 승인(decided_by abort)은 거절과 구분(2026-10-26)
         : null;
       return {
         ...next,

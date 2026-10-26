@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyShortsRevision, settleNextEpisode, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt, isYoungHero, diversifyTitle, titleShape, normalizeLatinName, parseSceneMust } from './shorts';
+import { applyShortsRevision, backupFiles, realignSceneAssets, settleNextEpisode, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt, isYoungHero, diversifyTitle, titleShape, normalizeLatinName, parseSceneMust } from './shorts';
 import { ShortsStore } from '../content/shorts';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
@@ -637,5 +637,68 @@ describe('주인공 나무 — 씬 이미지 지시(2026-10-15 사장님 지적)
     const p = buildSceneImagePrompt({ ...base, hero: '심은 지 12년 된 성목 배나무, 키 4m' });
     expect(p).toContain('[주인공 나무');
     expect(p).not.toMatch(/사진 속 나무의 크기·줄기 굵기·수형은 따르지 마라/);
+  });
+});
+
+describe('재조립 되돌림·씬 자산 다시 맞춤(2026-10-26)', () => {
+  const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'shorts-fix-'));
+  it('backupFiles — restore 는 바뀐 파일을 되돌리고 새로 생긴 파일은 지운다, drop 은 사본만 지운다', () => {
+    const d = tmp();
+    fs.writeFileSync(path.join(d, 'plan.json'), '옛 대본');
+    fs.writeFileSync(path.join(d, 'final.mp4'), '옛 영상');
+    const b = backupFiles(d, ['plan.json', 'final.mp4', 'scene-images.json'], 'revise');
+    fs.writeFileSync(path.join(d, 'plan.json'), '새 대본');
+    fs.writeFileSync(path.join(d, 'final.mp4'), '반쯤 쓴');
+    fs.writeFileSync(path.join(d, 'scene-images.json'), '[]');
+    b.restore();
+    b.restore(); // 두 번 불러도 무해
+    expect(fs.readFileSync(path.join(d, 'plan.json'), 'utf-8')).toBe('옛 대본');
+    expect(fs.readFileSync(path.join(d, 'final.mp4'), 'utf-8')).toBe('옛 영상');
+    expect(fs.existsSync(path.join(d, 'scene-images.json'))).toBe(false);
+    const b2 = backupFiles(d, ['final.mp4'], 'cap');
+    fs.writeFileSync(path.join(d, 'final.mp4'), '새 영상');
+    b2.drop();
+    expect(fs.readFileSync(path.join(d, 'final.mp4'), 'utf-8')).toBe('새 영상');
+    expect(fs.readdirSync(d).filter((f) => f.endsWith('.bak'))).toEqual([]);
+    fs.rmSync(d, { recursive: true, force: true });
+  });
+  it('realignSceneAssets — 씬 3이 빠지면 user_04 가 user_03 이 되고, 빠진 씬 클립은 지운다(지도·sources.json 도)', () => {
+    const d = tmp();
+    const c = path.join(d, 'clips');
+    fs.mkdirSync(c, { recursive: true });
+    fs.mkdirSync(path.join(d, 'scenes'), { recursive: true });
+    for (const f of ['user_01.mp4', 'user_03.mp4', 'user_04.mp4', 'clip_05.mp4', 'spare_01.mp4']) fs.writeFileSync(path.join(c, f), f);
+    fs.writeFileSync(path.join(d, 'clips', 'sources.json'), JSON.stringify([{ scene: 1, file: 'a' }, { scene: 3, file: 'b' }, { scene: 4, file: 'c' }]));
+    const img = (n: number): string => { const p = path.join(d, 'scenes', `blog-image-0${n}.png`); fs.writeFileSync(p, 'x'); return p; };
+    const images = [null, img(2), null, null, img(5)];
+    const clips = [path.join(c, 'user_01.mp4'), null, path.join(c, 'user_03.mp4'), path.join(c, 'user_04.mp4'), path.join(c, 'clip_05.mp4')];
+    const r = realignSceneAssets(d, [0, 1, 3, 4], images, clips);
+    expect(fs.readdirSync(c).sort()).toEqual(['clip_04.mp4', 'sources.json', 'spare_01.mp4', 'user_01.mp4', 'user_03.mp4']);
+    expect(fs.readFileSync(path.join(c, 'user_03.mp4'), 'utf-8')).toBe('user_04.mp4'); // 옛 씬4 클립
+    expect(fs.readFileSync(path.join(c, 'clip_04.mp4'), 'utf-8')).toBe('clip_05.mp4');
+    expect(r.clips).toEqual([path.join(c, 'user_01.mp4'), null, path.join(c, 'user_03.mp4'), path.join(c, 'clip_04.mp4')]);
+    expect(r.images).toEqual([null, images[1], null, images[4]]);
+    expect(JSON.parse(fs.readFileSync(path.join(d, 'scene-images.json'), 'utf-8'))).toEqual([null, 'scenes/blog-image-02.png', null, 'scenes/blog-image-05.png']);
+    expect(JSON.parse(fs.readFileSync(path.join(c, 'sources.json'), 'utf-8'))).toEqual([{ scene: 1, file: 'a' }, { scene: 3, file: 'c' }]);
+    fs.rmSync(d, { recursive: true, force: true });
+  });
+  it('realignSceneAssets — 번호가 안 맞는 클립 경로는 살아있을 때만 돌려주고, 빠진 번호 밖 user_NN 은 지우지 않는다', () => {
+    const d = tmp();
+    const c = path.join(d, 'clips');
+    fs.mkdirSync(c, { recursive: true });
+    for (const f of ['user_02.mp4', 'user_09.mp4']) fs.writeFileSync(path.join(c, f), f);
+    const gone = path.join(d, 'elsewhere', 'gone.mp4'); // 이미 없는 파일
+    const r = realignSceneAssets(d, [0, 2], [null, null, gone], [null, path.join(c, 'user_02.mp4'), gone]);
+    expect(r.clips).toEqual([null, null]);
+    expect(fs.existsSync(path.join(c, 'user_02.mp4'))).toBe(false); // 빠진 씬 2
+    expect(fs.existsSync(path.join(c, 'user_09.mp4'))).toBe(true); // 씬 범위 밖 번호는 그대로
+    fs.rmSync(d, { recursive: true, force: true });
+  });
+  it('realignSceneAssets — 빠진 씬이 없으면 파일을 건드리지 않는다', () => {
+    const d = tmp();
+    const r = realignSceneAssets(d, [0, 1], ['a', null], [null, 'b']);
+    expect(r).toEqual({ images: ['a', null], clips: [null, 'b'] });
+    expect(fs.readdirSync(d)).toEqual([]);
+    fs.rmSync(d, { recursive: true, force: true });
   });
 });

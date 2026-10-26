@@ -3,6 +3,7 @@ import {
   fetchShorts, createShorts, createShortsFromPiece, deleteShorts,
   fetchPieces, ShortsInfo, PieceInfo, uploadShortsYoutube, fetchYoutubeStatus,
   publishShortsMeta, fetchMetaStatus, regenerateShortsThumbnail, igReconnectNeeded, publishShortsNaverClip,
+  similarConfirmText,
 } from "../api";
 import Avatar from "./Avatar";
 import Ico, { type IcoName } from "./Ico";
@@ -24,6 +25,11 @@ const DERIVABLE = new Set(["ready", "published", "measured", "reflected"]);
 function confirmFactHold(error: string | undefined, items: string[]): boolean {
   const list = items.map((t) => `• ${t.length > 90 ? `${t.slice(0, 90)}…` : t}`).join("\n");
   return confirm(`${error ?? "사실 검증 보류"}\n\n${list}\n\n문장을 확인했고 이대로 발행할까요? (틀렸으면 취소하고 ✍ 수정요청으로 고치세요)`);
+}
+
+/** 썸네일 한글 QA 미해결 확인 창 — 롱폼·카드뉴스와 같은 단계. 확인했다고 답할 때만 true(force 재요청). */
+function confirmThumbQa(error: string | undefined): boolean {
+  return confirm(`${error ?? "썸네일 한글 확인이 필요합니다"}\n\n썸네일을 확인했고 그대로 발행할까요? (오타면 취소하고 🖼 썸네일 생성으로 다시 만드세요)`);
 }
 
 function fmtWhen(iso: string): string {
@@ -53,9 +59,16 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
   const doYoutube = async () => {
     setYtBusy(true); setYtErr("");
     let r = await uploadShortsYoutube(s.id);
+    // 썸네일 한글 QA 미해결 게이트(409) — 서버가 사실 보류보다 먼저 막는다. 확인하면 force 로 재요청.
+    let force = false;
+    if (!r.ok && r.thumb_qa_unresolved) {
+      if (confirmThumbQa(r.error)) { force = true; r = await uploadShortsYoutube(s.id, { force }); }
+      else { setYtBusy(false); return; }
+    }
     // 사실 검증 보류 게이트(409, 2026-10-12) — 근거 없는 문장을 보여 주고 사용자가 확인할 때만 forceFact 재요청(카드뉴스 오타 QA와 같은 방식).
+    // force 를 함께 실어야 썸네일 QA 관문에 다시 걸리지 않는다.
     if (!r.ok && r.fact_hold?.length) {
-      if (confirmFactHold(r.error, r.fact_hold)) r = await uploadShortsYoutube(s.id, { forceFact: true });
+      if (confirmFactHold(r.error, r.fact_hold)) r = await uploadShortsYoutube(s.id, { force, forceFact: true });
       else { setYtBusy(false); return; }
     }
     setYtBusy(false);
@@ -68,8 +81,13 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
   const doMeta = async () => {
     setMetaBusy(true); setMetaErr("");
     let r = await publishShortsMeta(s.id);
+    let force = false;
+    if (r.error && r.thumb_qa_unresolved) {
+      if (confirmThumbQa(r.error)) { force = true; r = await publishShortsMeta(s.id, { force }); }
+      else { setMetaBusy(false); return; }
+    }
     if (r.error && r.fact_hold?.length) {
-      if (confirmFactHold(r.error, r.fact_hold)) r = await publishShortsMeta(s.id, { forceFact: true });
+      if (confirmFactHold(r.error, r.fact_hold)) r = await publishShortsMeta(s.id, { force, forceFact: true });
       else { setMetaBusy(false); return; }
     }
     setMetaBusy(false);
@@ -82,8 +100,13 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
   const doClip = async (check = false) => {
     setClipBusy(true); setClipErr("");
     let r = await publishShortsNaverClip(s.id, { check });
+    let force = false;
+    if (!check && r.error && r.thumb_qa_unresolved) {
+      if (confirmThumbQa(r.error)) { force = true; r = await publishShortsNaverClip(s.id, { force }); }
+      else { setClipBusy(false); return; }
+    }
     if (!check && r.error && r.fact_hold?.length) {
-      if (confirmFactHold(r.error, r.fact_hold)) r = await publishShortsNaverClip(s.id, { forceFact: true });
+      if (confirmFactHold(r.error, r.fact_hold)) r = await publishShortsNaverClip(s.id, { force, forceFact: true });
       else { setClipBusy(false); return; }
     }
     setClipBusy(false);
@@ -91,14 +114,9 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
     else if (r.status === "NOT_FOUND") setClipErr("공개된 클립이 없습니다 — 다시 올릴 수 있습니다");
     onChanged();
   };
-  // 업로드는 서버 뒤에서 수 분 돈다 — 진행 중이면 목록을 주기적으로 다시 읽어 결과(번호·실패 사유)를 반영한다.
-  // 대기 중(네이버 수집·발행이 프로필을 쓰는 중)도 같다 — 서버가 이어서 올리면 '올리는 중'으로 넘어간다.
+  // 업로드는 서버 뒤에서 수 분 돈다 — 결과(번호·실패 사유)·대기→올리는 중 전환은 부모(ShortsSection)의
+  // 8초 목록 폴링이 반영한다. 여기 따로 두던 15초 타이머는 onChanged 가 렌더마다 새 함수라 매번 리셋돼 한 번도 돌지 않았다.
   const clipQueued = !!s.naverClipQueuedTs;
-  useEffect(() => {
-    if (!s.clipRunning && !clipQueued) return;
-    const t = setInterval(onChanged, 15_000);
-    return () => clearInterval(t);
-  }, [s.clipRunning, clipQueued, onChanged]);
   const [thumbBusy, setThumbBusy] = useState(false);
   const [thumbErr, setThumbErr] = useState("");
   const doThumbnail = async () => {
@@ -289,10 +307,13 @@ export default function ShortsSection() {
     if (!t) return;
     setBusy(true); setErr("");
     // 채널 미선택 = 둘 다(유튜브 원편 + 인스타 승계) — 블로그 파생과 같은 계약.
-    const r = await createShorts({
-      topic: t, keyword: keyword.trim() || undefined, scenes,
-      ...(platform ? { platform } : {}),
-    });
+    const body = { topic: t, keyword: keyword.trim() || undefined, scenes, ...(platform ? { platform } : {}) };
+    let r = await createShorts(body);
+    // 신규성 가드(409) — 기존 글·숏폼·카드와 유사하면 근거를 보여 주고, 의도한 재도전일 때만 force 로 재요청.
+    if (!r.ok && r.similar?.length) {
+      if (confirm(similarConfirmText(r.error, r.similar))) r = await createShorts({ ...body, force: true });
+      else { setBusy(false); return; }
+    }
     setBusy(false);
     if (r.ok) { setTopic(""); setKeyword(""); load(); } else setErr(r.error || "생성 실패");
   };

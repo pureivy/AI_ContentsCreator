@@ -146,6 +146,8 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
     setSel(id); selRef.current = id;
     setData(null); setDraftMissing(false); setBrief(""); setPreviewHtml(""); setMsg(""); setPubUrl(""); setCopied(""); setFeedback(""); setView("md");
     setNaverBusy(false); setNaverMsg(""); setCollectBusy(false); setCollectMsg("");
+    // 파생 수정 폼은 직전 글의 카드뉴스·숏폼 id 를 들고 있다 — 남겨 두면 다른 글 화면에서 그 편으로 유료 재생성이 나간다.
+    setDRev(null); setDRevText("");
     const d = await fetchPieceDraft(id);
     if (selRef.current !== id) return; // 로딩 중 다른 초안 선택 시 stale 갱신 방지
     if (d && "draft" in d) {           // 정상 초안 — 편집·발행 화면
@@ -245,11 +247,19 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
     }
   };
 
-  const doNaverDraft = async () => {
+  // republish — 이미 네이버에 올라간 글(publishedUrl·privateUrl)을 새 글로 한 번 더 올린다. 서버는 이 플래그 없이는 409 로 막는다.
+  const doNaverDraft = async (republish = false) => {
     if (!sel || naverBusy) return;
+    // 본문 편집은 화면에만 있다 — 발행은 서버에 저장된 초안(draft.json)을 올리므로 고친 내용이 조용히 빠진다.
+    if (data && body !== (data.draft.bodyMarkdown ?? data.md ?? "")
+      && !confirm("본문을 고친 내용은 저장되지 않습니다 — 네이버에는 고치기 전 원래 초안이 올라갑니다.\n\n고친 내용을 올리려면 취소하고, 수정 요청으로 반영하거나 발행 뒤 네이버에서 직접 고치세요.\n\n원래 초안으로 발행할까요?")) return;
+    if (republish) {
+      const old = data?.piece.publishedUrl || data?.piece.privateUrl || "";
+      if (!confirm(`이 글은 이미 네이버에 ${data?.piece.publishedUrl ? "발행" : "비공개로 발행"}돼 있습니다${old ? `\n(${old})` : ""}.\n\n다시 발행하면 기존 글을 고치는 게 아니라 같은 내용의 새 글이 하나 더 생깁니다(중복 글).\n먼저 네이버에서 기존 글을 지운 뒤 진행하세요.\n\n기존 글을 지웠고, 새 글로 다시 발행할까요?`)) return;
+    }
     setNaverBusy(true);
     setNaverMsg("네이버에 저장 중… (처음엔 열린 브라우저 창에서 네이버 로그인이 필요할 수 있어요)");
-    const r = await startNaverDraft(sel);
+    const r = await startNaverDraft(sel, republish ? { republish: true } : undefined);
     if (!r.ok) { setNaverBusy(false); setNaverMsg(`✗ 시작 실패: ${r.error ?? ""}`); return; }
     void pollNaver(sel);
   };
@@ -529,13 +539,28 @@ export default function DraftReview({ initialPieceId }: { initialPieceId?: strin
               <div className="review-section">
                 <h3>발행</h3>
                 {data.piece.publishedUrl ? (
-                  <p className="muted"><Ico name="circle-check" size={12} /> 발행됨 — <a href={data.piece.publishedUrl} target="_blank" rel="noreferrer">{data.piece.publishedUrl}</a></p>
+                  <>
+                    <p className="muted"><Ico name="circle-check" size={12} /> 발행됨 — <a href={data.piece.publishedUrl} target="_blank" rel="noreferrer">{data.piece.publishedUrl}</a></p>
+                    <div className="review-inline">
+                      <button className="btn ghost" disabled={naverBusy} onClick={() => doNaverDraft(true)} title="기존 글을 고치지 않고 새 글을 하나 더 올립니다(중복 글) — 네이버에서 기존 글을 먼저 지우세요.">
+                        {naverBusy ? "네이버에 발행 중…" : "다시 발행(새 글 생성)"}
+                      </button>
+                    </div>
+                    {naverMsg && <p className="review-msg">{naverMsg}</p>}
+                  </>
                 ) : (
                   <>
                     <div className="review-inline">
-                      <button className="btn start" disabled={naverBusy} onClick={doNaverDraft} title="전체공개로 발행 — 댓글·공감·검색·외부 공유 허용, 블로그/카페 공유는 링크만. 설정 확인에 실패하면 비공개로 발행합니다.">
-                        {naverBusy ? "네이버에 발행 중…" : "네이버 발행(자동)"}
-                      </button>
+                      {data.piece.privateUrl ? (
+                        /* 비공개로 이미 올라간 글 — 같은 버튼을 다시 누르면 중복 글이 생겨 서버가 막는다(409). 일부러 새 글로 올릴 때만. */
+                        <button className="btn ghost" disabled={naverBusy} onClick={() => doNaverDraft(true)} title="이미 비공개로 올라간 글입니다 — 기존 글을 고치지 않고 새 글을 하나 더 올립니다(중복 글). 네이버에서 기존 글을 먼저 지우세요.">
+                          {naverBusy ? "네이버에 발행 중…" : "다시 발행(새 글 생성)"}
+                        </button>
+                      ) : (
+                        <button className="btn start" disabled={naverBusy} onClick={() => doNaverDraft()} title="전체공개로 발행 — 댓글·공감·검색·외부 공유 허용, 블로그/카페 공유는 링크만. 설정 확인에 실패하면 비공개로 발행합니다.">
+                          {naverBusy ? "네이버에 발행 중…" : "네이버 발행(자동)"}
+                        </button>
+                      )}
                       {data.piece.naverDraftUrl && (
                         /* 실제 발행(전체공개·비공개)이면 진짜 글 주소(logNo=…), 임시저장 폴백이면 postwrite 편집기 URL — 링크 문구를 갈라 쓴다. */
                         <a className="muted" href={data.piece.naverDraftUrl} target="_blank" rel="noreferrer"><Ico name="external-link" size={11} /> {data.piece.privateUrl ? "네이버에서 글 열기" : "네이버 글쓰기 열기(임시저장 불러오기)"}</a>

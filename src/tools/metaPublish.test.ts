@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildIgCaption, extractId, parsePermalink, realPermalink, graphError, metaLimitHint, matchRecentPublish, matchRecentFbPost, matchOrphanReels, publishCardNewsToMeta, publishShortsToMeta, isMetaFetchTimeout, withMetaRetry } from './metaPublish';
+import { buildIgCaption, extractId, parsePermalink, realPermalink, graphError, metaLimitHint, matchRecentPublish, matchRecentFbPost, matchOrphanReels, matchOrphanCards, matchFbReelRecovery, publishCardNewsToMeta, publishShortsToMeta, isMetaFetchTimeout, withMetaRetry } from './metaPublish';
 import { uploadToFalStorage } from './falStorage';
 import { getMetaAccount } from '../secrets/store';
 import fs from 'node:fs';
@@ -110,14 +110,37 @@ describe('matchOrphanReels', () => {
     ]);
   });
   it('한 릴스가 여러 쇼츠에 중복 매칭되지 않음(선점)', () => {
-    const shorts = [{ id: 's1', title: '같은 제목', igReelId: undefined }, { id: 's2', title: '같은 제목', igReelId: undefined }];
-    const reels = [{ id: 'R1', permalink: 'p', timestamp: 't', caption: '같은 제목 뒤' }];
+    const shorts = [{ id: 's1', title: '같은 제목의 두 쇼츠', igReelId: undefined }, { id: 's2', title: '같은 제목의 두 쇼츠', igReelId: undefined }];
+    const reels = [{ id: 'R1', permalink: 'p', timestamp: 't', caption: '같은 제목의 두 쇼츠 뒤' }];
     const m = matchOrphanReels(shorts, reels);
     expect(m.length).toBe(1);
     expect(m[0]!.shortsId).toBe('s1');
   });
   it('빈 제목 쇼츠는 매칭 안 함(무분별 매칭 방지)', () => {
     expect(matchOrphanReels([{ id: 's1', title: '  ', igReelId: undefined }], [{ id: 'R1', permalink: 'p', timestamp: 't', caption: '아무거나' }])).toEqual([]);
+  });  // 오매칭 가드(2026-10-26) — 유튜브 전용 편·편 생성 전 릴스·짧은 제목은 붙이지 않는다.
+  describe('오매칭 가드(2026-10-26)', () => {
+    const reel = { id: 'R1', permalink: 'https://www.instagram.com/reel/a/', timestamp: '2026-10-20T07:40:44+0000', caption: '모과나무 삽목 이렇게 하면 뿌리 나요\n\n본문' };
+    const base = { id: 's1', title: '모과나무 삽목 이렇게 하면', igReelId: undefined };
+    it('IG 타임스탬프(+0000) 형식은 읽힌다 — 시각 조건이 실제로 작동하는 전제', () => {
+      expect(Number.isFinite(Date.parse(reel.timestamp))).toBe(true);
+    });
+    it('인스타 편·레거시(platform 없음)이고 릴스가 편 생성 뒤면 매칭', () => {
+      expect(matchOrphanReels([{ ...base, platform: 'instagram', createdTs: '2026-10-20T07:00:00.000Z' }], [reel])).toHaveLength(1);
+      expect(matchOrphanReels([{ ...base, createdTs: '2026-10-20T07:00:00.000Z' }], [reel])).toHaveLength(1);
+    });
+    it('유튜브 전용 편은 인스타 릴스와 매칭하지 않는다', () => {
+      expect(matchOrphanReels([{ ...base, platform: 'youtube', createdTs: '2026-10-20T07:00:00.000Z' }], [reel])).toEqual([]);
+    });
+    it('릴스가 그 편을 만들기 전이면(같은 제목 옛 릴스) 매칭하지 않는다', () => {
+      expect(matchOrphanReels([{ ...base, platform: 'instagram', createdTs: '2026-10-21T00:00:00.000Z' }], [reel])).toEqual([]);
+    });
+    it('생성 시각이 깨져 있으면 시각 조건을 못 지키니 건너뛴다', () => {
+      expect(matchOrphanReels([{ ...base, platform: 'instagram', createdTs: 'not-a-date' }], [reel])).toEqual([]);
+    });
+    it('8자 미만 제목은 매칭하지 않는다', () => {
+      expect(matchOrphanReels([{ id: 's1', title: '모과나무', igReelId: undefined }], [reel])).toEqual([]);
+    });
   });
 });
 
@@ -556,5 +579,170 @@ describe('메타 가져오기 시간 초과 재시도(2026-09-10)', () => {
     n = 0;
     await expect(withMetaRetry(async () => { n++; throw new Error('code 4 rate limit'); }, 't', [0, 0])).rejects.toThrow('code 4');
     expect(n).toBe(1);
+  });
+});
+
+// 발행 응답 유실 회수(2026-10-26) — 행동차단(2207051)뿐 아니라 시간 초과·5xx·연결 끊김에도, 그리고 발행 런의 signal 이
+// 이미 끊겨 있어도 회수 조회는 새 시간 제한으로 돈다. FB 릴스 finish 유실도 페이지 릴스 목록에서 회수한다.
+describe('발행 응답 유실 회수(2026-10-26)', () => {
+  const recent = (): string => new Date().toISOString();
+  it('카드뉴스 media_publish 가 500 이어도 실제로 올라가 있으면 회수(행동차단 아님)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T', pageToken: '' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url); const method = (init as RequestInit | undefined)?.method;
+      if (u.includes('/me/media_publish')) return new Response(JSON.stringify({ error: { message: 'An unexpected error has occurred', code: 2 } }), { status: 500 });
+      if (u.includes('/me/media?fields=id,caption')) return new Response(JSON.stringify({ data: [{ id: 'IGREC', caption: '감나무 전정 언제 하나요 본문', timestamp: recent(), media_type: 'IMAGE' }] }), { status: 200 });
+      const json = u.includes('fields=permalink') ? { permalink: 'https://www.instagram.com/p/rec/' }
+        : u.includes('fields=status_code') ? { status_code: 'FINISHED' }
+        : u.includes('/me/media') && method === 'POST' ? { id: 'IMG1' } : {};
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const r = await publishCardNewsToMeta({ slug: '', slidePaths: ['/a/slide_01.png'], caption: '감나무 전정 언제 하나요 본문', hashtags: [] });
+    expect(r).toMatchObject({ ok: true, igMediaId: 'IGREC', recovered: true });
+  });
+  it('발행 런의 signal 이 끊겨(그게 실패 원인) 있어도 회수 조회는 새 시간 제한으로 돈다', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T', pageToken: '' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    const ctl = new AbortController();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url); const sig = (init as RequestInit | undefined)?.signal;
+      if (sig?.aborted) throw Object.assign(new Error('This operation was aborted'), { name: 'AbortError' });
+      if (u.includes('/me/media_publish')) { ctl.abort(); throw Object.assign(new Error('This operation was aborted'), { name: 'AbortError' }); }
+      if (u.includes('/me/media?fields=id,caption')) return new Response(JSON.stringify({ data: [{ id: 'REELREC', caption: '모과나무 삽목 이렇게 본문', timestamp: recent(), media_type: 'VIDEO' }] }), { status: 200 });
+      const json = u.includes('fields=status_code') ? { status_code: 'FINISHED' } : u.includes('/me/media') ? { id: 'CT1' } : {};
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const r = await publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: '모과나무 삽목 이렇게 본문', hashtags: [], signal: ctl.signal });
+    expect(r.igReelId).toBe('REELREC');
+    expect(r.recovered).toBe(true);
+    expect(r.ok).toBe(true);
+  });
+  it('회수 목록에 없으면 원래 오류 유지(성공 위장 금지)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: '', igUserId: 'IG', pageAccessToken: 'T', pageToken: '' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('/me/media_publish')) throw new TypeError('fetch failed');
+      if (u.includes('/me/media?fields=id,caption')) return new Response(JSON.stringify({ data: [{ id: 'OLD', caption: '모과나무 삽목 이렇게 본문', timestamp: '2026-01-01T00:00:00+0000', media_type: 'VIDEO' }] }), { status: 200 });
+      const json = u.includes('fields=status_code') ? { status_code: 'FINISHED' } : u.includes('/me/media') ? { id: 'CT1' } : {};
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const r = await publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: '모과나무 삽목 이렇게 본문', hashtags: [] });
+    expect(r.ok).toBe(false);
+    expect(r.igReelId).toBeUndefined();
+    expect(r.error).toContain('fetch failed');
+  });
+  it('FB 릴스 finish 응답이 끊겨도 페이지 릴스 목록에 있으면 회수(재시도 중복 공개 방지)', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: '', pageAccessToken: '', pageToken: 'PGTOK' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
+    const urls: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url); urls.push(u);
+      const body = String((init as RequestInit | undefined)?.body ?? '');
+      if (u.includes('UPLOAD_URL')) return new Response(JSON.stringify({ success: true }), { status: 200 });
+      if (u.includes('/PG/video_reels') && body.includes('upload_phase=start')) return new Response(JSON.stringify({ video_id: 'FBV1', upload_url: 'https://rupload.facebook.com/UPLOAD_URL' }), { status: 200 });
+      if (u.includes('/PG/video_reels') && body.includes('upload_phase=finish')) throw new TypeError('fetch failed');
+      if (u.includes('/PG/video_reels?fields=id,description,created_time')) {
+        return new Response(JSON.stringify({ data: [{ id: 'FBV1', description: '모과나무 삽목 이렇게 하면 뿌리 나요', created_time: recent() }] }), { status: 200 });
+      }
+      return new Response('{}', { status: 200 });
+    });
+    const r = await publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: '모과나무 삽목 이렇게 하면 뿌리 나요', hashtags: [] });
+    expect(r).toMatchObject({ ok: true, fbReelId: 'FBV1', recovered: true });
+    expect(r.fbError).toBeUndefined();
+    expect(urls.every((u) => !u.startsWith('https://graph.instagram.com/'))).toBe(true); // 회수 조회도 FB 호스트
+  });
+  it('FB 릴스 목록에 설명이 다른(또는 3분 넘은) 릴스만 있으면 회수하지 않고 fbError', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: '', pageAccessToken: '', pageToken: 'PGTOK' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url);
+      const body = String((init as RequestInit | undefined)?.body ?? '');
+      if (u.includes('UPLOAD_URL')) return new Response(JSON.stringify({ success: true }), { status: 200 });
+      if (u.includes('/PG/video_reels') && body.includes('upload_phase=start')) return new Response(JSON.stringify({ video_id: 'FBV2', upload_url: 'https://rupload.facebook.com/UPLOAD_URL' }), { status: 200 });
+      if (u.includes('/PG/video_reels') && body.includes('upload_phase=finish')) return new Response(JSON.stringify({ error: { message: 'Service temporarily unavailable', code: 2 } }), { status: 503 });
+      if (u.includes('/PG/video_reels?fields=')) {
+        return new Response(JSON.stringify({ data: [
+          { id: 'X1', description: '완전히 다른 릴스 설명입니다 여기', created_time: recent() },
+          { id: 'X2', description: '모과나무 삽목 이렇게 하면 뿌리 나요', created_time: '2026-01-01T00:00:00+0000' },
+        ] }), { status: 200 });
+      }
+      return new Response('{}', { status: 200 });
+    });
+    const r = await publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: '모과나무 삽목 이렇게 하면 뿌리 나요', hashtags: [] });
+    expect(r.ok).toBe(false);
+    expect(r.fbReelId).toBeUndefined();
+    expect(r.fbError).toContain('temporarily');
+  });
+  it('FB 릴스 3분 창은 start 시각 기준 — 업로드가 길어 회수 시점엔 3분이 넘었어도 start 뒤에 생긴 릴스면 회수', async () => {
+    vi.mocked(getMetaAccount).mockReturnValue({ pageId: 'PG', igUserId: '', pageAccessToken: '', pageToken: 'PGTOK' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('mp4'));
+    let startedAt = 0;
+    let shift = 0; // 업로드에 5분 걸린 것처럼 Date.now 를 민다
+    const realNow = Date.now.bind(Date);
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + shift);
+    const run = async (createdOffsetMs: number) => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+        const u = String(url);
+        const body = String((init as RequestInit | undefined)?.body ?? '');
+        if (u.includes('UPLOAD_URL')) { shift = 5 * 60_000; return new Response(JSON.stringify({ success: true }), { status: 200 }); }
+        if (u.includes('/PG/video_reels') && body.includes('upload_phase=start')) { startedAt = Date.now(); return new Response(JSON.stringify({ video_id: 'FBV5', upload_url: 'https://rupload.facebook.com/UPLOAD_URL' }), { status: 200 }); }
+        if (u.includes('/PG/video_reels') && body.includes('upload_phase=finish')) throw new TypeError('fetch failed');
+        if (u.includes('/PG/video_reels?fields=')) {
+          return new Response(JSON.stringify({ data: [{ id: 'FBV5', description: '모과나무 삽목 이렇게 하면 뿌리 나요', created_time: new Date(startedAt + createdOffsetMs).toISOString() }] }), { status: 200 });
+        }
+        return new Response('{}', { status: 200 });
+      });
+      shift = 0;
+      return publishShortsToMeta({ slug: '', videoPath: '/a/final.mp4', caption: '모과나무 삽목 이렇게 하면 뿌리 나요', hashtags: [] });
+    };
+    const ok = await run(1_000);                 // start 1초 뒤 생성, 회수는 5분 뒤 — 회수돼야 한다
+    expect(ok).toMatchObject({ ok: true, fbReelId: 'FBV5', recovered: true });
+    const old = await run(-4 * 60_000);          // start 보다 4분 앞선(옛) 릴스 — 회수하면 안 된다
+    expect(old.ok).toBe(false);
+    expect(old.fbReelId).toBeUndefined();
+  });
+});
+
+// FB 릴스 회수는 우리 start 가 받은 video_id 만(2026-10-26 검토) — 교차 게시된 IG 릴스(같은 설명)를 오인하지 않게.
+describe('matchFbReelRecovery', () => {
+  const desc = '모과나무 삽목 이렇게 하면 뿌리가 잘 내립니다 — 비온디트리';
+  const start = Date.parse('2026-10-26T01:00:00Z');
+  const ts = new Date(start + 60_000).toISOString();
+  it('같은 설명이라도 video_id 가 다르면(교차 게시) 잡지 않는다', () => {
+    const reels = [{ id: 'IGX', description: desc, created_time: ts }, { id: 'V1', description: desc, created_time: ts }];
+    expect(matchFbReelRecovery(reels, desc, start, 'V1')).toBe('V1');
+    expect(matchFbReelRecovery([reels[0]!], desc, start, 'V1')).toBeNull();
+  });
+  it('video_id 를 모르면(start 실패) 회수하지 않는다, 설명이 아직 없으면(finish 전) 못 잡는다', () => {
+    expect(matchFbReelRecovery([{ id: 'V1', description: desc, created_time: ts }], desc, start, undefined)).toBeNull();
+    expect(matchFbReelRecovery([{ id: 'V1', created_time: ts }], desc, start, 'V1')).toBeNull();
+  });
+});
+
+describe('matchOrphanCards — 카드뉴스 재조정(순수)', () => {
+  const cap = '감나무 가지치기, 지금 하면 내년 열매가 달라집니다\n\n본문';
+  const post = { id: 'M1', permalink: 'https://www.instagram.com/p/M1/', timestamp: '2026-10-20T08:00:00+0000', caption: `${cap}\n\n#감나무`, mediaType: 'CAROUSEL_ALBUM' };
+  const card = { id: 'c1', caption: cap, createdTs: '2026-10-20T07:00:00.000Z', stage: 'ready' };
+  it('캡션 앞머리·시각이 맞는 캐러셀을 붙인다(공백 차이 무시)', () => {
+    expect(matchOrphanCards([{ ...card, caption: cap.replace('\n\n', '\n') }], [post])).toEqual([
+      { cardId: 'c1', mediaId: 'M1', permalink: post.permalink, timestamp: '2026-10-20T08:00:00.000Z' }, // IG +0000 → ISO Z 로 맞춰 적는다
+    ]);
+  });
+  it('이미 기록된 카드·완성 전 카드·짧은 캡션·카드보다 앞선 게시물·릴스는 건너뛴다', () => {
+    expect(matchOrphanCards([{ ...card, igMediaId: 'X' }], [post])).toEqual([]);
+    expect(matchOrphanCards([{ ...card, stage: 'rendering' }], [post])).toEqual([]);
+    expect(matchOrphanCards([{ ...card, caption: '감나무' }], [{ ...post, caption: '감나무 이야기' }])).toEqual([]);
+    expect(matchOrphanCards([{ ...card, createdTs: '2026-10-21T00:00:00.000Z' }], [post])).toEqual([]);
+    expect(matchOrphanCards([card], [{ ...post, mediaType: 'VIDEO' }])).toEqual([]);
+  });
+  it('후보가 모호하면 붙이지 않는다(카드 둘이 한 게시물에 맞음), 다른 카드가 이미 쓴 게시물은 못 쓴다', () => {
+    expect(matchOrphanCards([card, { ...card, id: 'c2' }], [post])).toEqual([]);
+    expect(matchOrphanCards([card], [post, { ...post, id: 'M2' }])).toEqual([]); // 게시물 둘이 한 카드에 맞아도 건너뜀
+    expect(matchOrphanCards([{ ...card, id: 'c3', igMediaId: 'M1', stage: 'ready' }, card], [post])).toEqual([]);
   });
 });

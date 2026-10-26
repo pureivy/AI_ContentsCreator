@@ -9,6 +9,9 @@ export interface RunHandle {
   detach: () => void;
 }
 
+// 재시도해도 소용없는 응답(404 unknown run 등) — onerror 가 다시 던져 라이브러리 재시도를 멈춘다.
+class FatalSseError extends Error {}
+
 // Connect to an existing run's SSE stream and fold its events. The server replays the
 // backlog from Last-Event-ID first, then tails live — so a fresh OR resumed/late viewer
 // reconstructs full history, then follows along. Uses fetch-event-source (not native
@@ -21,6 +24,9 @@ export function watchRun(
   run_id: string,
   onEvent: (ev: EventEnvelope) => void,
   getLastSeq: () => number,
+  // 스트림을 영영 못 여는 응답(4xx — 예: 서버 재시작으로 bus 가 사라진 런의 404)일 때 1회 호출.
+  // 없으면 종전엔 1초마다 무한 재시도하며 status 가 'running' 에 갇혔다.
+  onFatal?: () => void,
 ): RunHandle {
   const ctrl = new AbortController();
 
@@ -43,8 +49,17 @@ export function watchRun(
       if (last > 0) headers.set("Last-Event-ID", String(last));
       return fetch(input, { ...init, headers });
     },
+    // 기본 onopen 은 content-type 이 틀리면 일반 오류를 던져 재시도만 반복한다 — 4xx 는 재시도해도
+    // 같은 답이므로 치명 오류로 끊는다. 5xx·네트워크 끊김(서버 재시작 중)은 종전대로 재시도.
+    async onopen(res) {
+      if (res.status >= 400 && res.status < 500) throw new FatalSseError(`SSE ${res.status}`);
+      if (!res.ok || !res.headers.get("content-type")?.startsWith("text/event-stream")) {
+        throw new Error(`SSE unexpected response: ${res.status}`);
+      }
+    },
     onerror(err) {
       // returning lets the lib retry with backoff; throw to stop.
+      if (err instanceof FatalSseError) { onFatal?.(); throw err; }
       console.warn("SSE error, will retry:", err);
     },
   }).catch((e) => console.warn("SSE closed:", e));

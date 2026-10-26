@@ -40,7 +40,7 @@ import { directSceneMotion, detectSubjectScenes, selectI2vScenes } from './short
 import { renderShortsVideo, ensureShortsDownload, extractFirstFrame, cutVideoSegment, markThumbPending, clearThumbPending } from '../tools/shortsRender';
 import { renderShortsVideoRemotion } from '../tools/shortsRenderRemotion';
 import { generateDesignedThumbnail, thumbTextQaFailed, type ThumbCopy } from './shortsThumbnail';
-import { inheritShortsAssets, inheritedSceneImages, inheritedClips, reviseClipsFor, reviseImagesFor, readSceneImageMap, writeSceneImageMap } from '../content/shortsInherit';
+import { inheritShortsAssets, inheritedSceneImages, inheritedClips, reviseClipsFor, reviseImagesFor, readSceneImageMap, writeSceneImageMap, SCENE_IMAGE_MAP } from '../content/shortsInherit';
 import { SOURCES_FILE, type UsageSource } from '../content/mediaUsage';
 import { FOOTAGE_PARTS, NOW_RE, hookContradictsFootage } from '../content/footageState';
 export { hookContradictsFootage };
@@ -223,11 +223,20 @@ export async function reviseShorts(
   if (RUNNING.has(id)) return fail('생성/수정 작업이 이미 진행 중입니다');
   RUNNING.add(id);
   const say = (m: string): void => { console.log(`[숏폼] ${m}`); opts.bus?.emit('log', { message: m }); };
+  const checkAbort = (): void => { if (opts.signal?.aborted) throw new Error('취소됨'); };
+  // 되돌림(2026-10-26) — 종전엔 plan.json·제목·설명·해시태그·사실 검증을 렌더 전에 저장해, 재조립이 실패·취소되면 ready 인 채로
+  // 새 메타가 옛(또는 반쯤 쓴) 영상에 붙었다. 바꾸기 전 파일·레코드를 떠 두고, 새 영상이 다 나오기 전(committed 전)에 끝나면 되돌린다.
+  let bak: ReturnType<typeof backupFiles> | null = null;
+  const before = { title: short.title, topic: short.topic, description: short.description, hashtags: short.hashtags, factGate: short.factGate };
+  // 이 수정이 레코드에 실제로 쓴 값 — 되돌릴 때 '아직 그 값인 필드'만 되돌려, 그 사이 사람이 고친 제목·설명을 덮지 않는다(2026-10-26).
+  let wrote: Partial<typeof before> | null = null;
+  let committed = false;
   try {
     const dir = store.dirFor(id);
     let plan: Plan;
     try { plan = JSON.parse(fs.readFileSync(path.join(dir, 'plan.json'), 'utf-8')) as Plan; }
     catch { return fail('plan.json 없음 — 수정 불가'); }
+    bak = backupFiles(dir, ['plan.json', SCENE_IMAGE_MAP, 'title-art.png', 'title-copy.json', 'final.mp4', 'final.basic.mp4', 'subtitles.srt'], 'revise');
     const cur = plan.scenes.map((s, i) => `${i + 1}. [내레이션] ${s.narration}${s.screenText ? ` [화면텍스트] ${s.screenText}` : ''}`).join('\n');
     // 상단 캘리 카피 — 수정 LLM 입력에 포함해야 '캘리 문구만 있는 단어'(예: 훅 줄의 표현)를 겨냥한
     // 요청이 좌초하지 않는다(대본에 없는 단어라 씬 매칭 0 → 무변경 재조립 '수정 완료' 오보고 사고).
@@ -261,6 +270,7 @@ export async function reviseShorts(
       ].join('\n'),
       { maxOutputTokens: 1600, signal: opts.signal },
     ).catch(() => null);
+    checkAbort(); // 취소된 LLM 호출이 '변경을 찾지 못했습니다'로 위장되지 않게
     const applied = opts.rebuild
       ? { plan, changedScenes: [] as number[], regenScenes: [] as number[], imageNotes: new Map<number, string>(), titleChanged: false, metaChanged: false, titleArtCopy: null }
       : applyShortsRevision(plan, j, artCopy);
@@ -277,7 +287,8 @@ export async function reviseShorts(
       } else say('사실 검증 다시 — 판정 실패, 이전 결과 유지');
     }
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
-    store.update(id, { title: plan.title, topic: plan.title, description: plan.description, hashtags: plan.hashtags, ...(factGate ? { factGate } : {}) });
+    wrote = { title: plan.title, topic: plan.title, description: plan.description, hashtags: plan.hashtags, ...(factGate ? { factGate } : {}) };
+    store.update(id, wrote);
     say(`수정 요청 반영 — 씬 ${applied.changedScenes.join(',') || '없음'}${applied.regenScenes.length ? ` · 배경 재생성 ${applied.regenScenes.join(',')}` : ''}${applied.titleChanged ? ' · 제목' : ''}${applied.titleArtCopy ? ' · 캘리 문구' : ''}`);
 
     // 씬 배경 재구성(2026-09-18 수정) — 씬 인덱스 지도(scene-images.json)가 진실, 없으면 매니페스트
@@ -313,7 +324,9 @@ export async function reviseShorts(
         const rmPath = path.join(dir, 'revise-manifest.json');
         fs.writeFileSync(rdPath, JSON.stringify(rd, null, 2), 'utf-8');
         say(`씬 배경 재생성 — ${applied.regenScenes.join(',')}`);
-        const rr = await generateImagesForDraft(rdPath, path.join(dir, 'revise-imgs'), rmPath,
+        // 수정마다 새 하위 폴더(2026-10-26) — 종전 고정 revise-imgs/ 는 다음 수정이 같은 파일명(blog-image-01.png)으로 덮어,
+        // 앞 수정의 새 그림을 가리키던 지도가 엉뚱한 그림을 집었다. revise-imgs/ 아래라 승계(INHERITED_DIRS)·정리(janitor)는 그대로.
+        const rr = await generateImagesForDraft(rdPath, path.join(dir, 'revise-imgs', String(Date.now())), rmPath,
           { limit: rd.imageSlots.length, size: '1024x1536', timeoutMs: 150_000 * rd.imageSlots.length }, opts.signal);
         if (rr.ok) {
           try {
@@ -323,6 +336,9 @@ export async function reviseShorts(
               if (fp && !rm.images?.[i]?.error && fs.existsSync(fp)) { images[k - 1] = fp; delete plan.scenes[k - 1]?.focus; } // 새 그림 — 옛 초점 무효
             });
           } catch { /* 기존 배경 유지 */ }
+          // 지도에도 쓴다(2026-10-26) — 종전엔 메모리에만 넣어, 모션그래픽 바탕판(지도로 다시 렌더)과 다음 수정이 옛 그림을 집었다.
+          // 재조립이 실패하면 위 되돌림(bak)이 옛 지도로 돌린다.
+          writeSceneImageMap(dir, images);
         } else say('씬 배경 재생성 실패 — 기존 배경 유지');
       } else say('씬 프롬프트 원본 없음(bg-draft) — 배경 재생성 생략');
     }
@@ -377,7 +393,9 @@ export async function reviseShorts(
       }
       return rr;
     };
+    checkAbort();
     let r = await reassemble(plan, images, clips);
+    checkAbort();
     if (!r.ok || !r.videoPath) return fail(`재조립 실패 — ${r.issues.join(' · ').slice(0, 200)}`);
     // 길이 상한 집행(2026-08-20) — 잡 경로와 패리티. 수정요청이 내레이션을 늘려 상한을 넘기면 실측 속도
     // 재감량(LLM+결정적 트리밍)→재조립. 잔여 초과여도 수정 자체는 완료로 낸다(생성·완료 우선) —
@@ -388,36 +406,63 @@ export async function reviseShorts(
       const chars = shortsNarrationChars(plan);
       const cps = chars / Math.max(1, (r.durationSec ?? 1) - 2);
       const fit2 = await fitShortsPlanToDuration(io2, plan, Math.floor((CONFIG.shortsMaxDurationSec - 5) * cps));
+      checkAbort(); // 취소된 감량(LLM 실패를 삼킨 결정적 트리밍)으로 대본을 덮지 않게
       if (!fit2.compressed) { say(`길이 상한 재감량 무변화(${round}/2) — 이미 최소 구성`); break; }
+      const prevPlan = plan; const prevIdx = liveIdx;
       liveIdx = fit2.keptScenes.map((k) => liveIdx[k]!);
       plan = fit2.plan;
       fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
+      const roundBak = backupFiles(dir, ['final.mp4', 'subtitles.srt'], 'cap');
       try {
         const rdir = path.join(dir, 'remotion');
         for (const f of fs.readdirSync(rdir)) if (/^narr_\d+\.mp3$/.test(f)) fs.unlinkSync(path.join(rdir, f)); // 구 대본 TTS 소거
       } catch { /* 무해 */ }
       say(`길이 상한 초과 ${r.durationSec}초 — 재감량 ${fit2.beforeChars}→${fit2.afterChars}자${liveIdx.length < images.length ? ` · 씬 ${liveIdx.length}개로 축소` : ''}, 재조립(${round}/2)`);
-      const r2 = await reassemble(plan, liveIdx.map((i) => images[i] ?? null), liveIdx.map((i) => clips[i] ?? null));
-      if (!r2.ok || !r2.videoPath) break;
+      // 재조립이 throw 해도 사본(.cap.bak)이 새지 않게 finally 에서 되돌린다(2026-10-26)
+      let r2: Awaited<ReturnType<typeof reassemble>>;
+      try { r2 = await reassemble(plan, liveIdx.map((i) => images[i] ?? null), liveIdx.map((i) => clips[i] ?? null)); }
+      catch (e) { roundBak.restore(); dropNarrationCache(dir); throw e; }
+      if (!r2.ok || !r2.videoPath) {
+        // 재조립 실패 — 첫 수정본 영상·대본으로 되돌린다(finishShortsRun 과 같은 이유).
+        roundBak.restore();
+        plan = prevPlan; liveIdx = prevIdx;
+        try { fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8'); } catch { /* 무해 */ }
+        dropNarrationCache(dir);
+        checkAbort();
+        say(`길이 상한 재조립 실패(${round}/2) — 직전 수정본·대본 유지`);
+        break;
+      }
+      roundBak.drop();
       r = r2;
     }
+    checkAbort();
     if ((r.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) {
       say(`⚠ 길이 상한 잔여 초과 — ${r.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초. 수정은 완료로 처리 — 발행 게이트가 초과본을 막으니 대본 감량 수정을 한 번 더 요청해 주세요`);
     }
     const revisedVideoPath = r.videoPath; // 루프 재대입으로 풀린 내로잉 재확립
     if (!revisedVideoPath) return fail('재조립 실패 — 결과 영상 경로 없음');
+    // 여기서 확정 — 새 영상·대본·메타가 서로 맞는다. 이 뒤의 취소는 모션그래픽·알림만 건너뛴다(되돌리지 않는다).
+    checkAbort();
+    committed = true;
+    bak.drop();
+    let keptImages = images; let keptClips = clips;
+    if (liveIdx.length < images.length) {
+      ({ images: keptImages, clips: keptClips } = realignSceneAssets(dir, liveIdx, images, clips));
+      say(`씬 자산 다시 맞춤 — 살아남은 씬 ${liveIdx.map((i) => i + 1).join(',')} → 1~${liveIdx.length}`);
+    }
     const caption = [plan.title, '', plan.description, '', plan.hashtags.join(' ')].filter((x, i) => x || i === 1 || i === 3).join('\n');
     fs.writeFileSync(path.join(dir, 'caption.txt'), caption, 'utf-8');
-    // 수정 재조립도 모션그래픽을 다시 입힌다(2026-10-12) — 안 그러면 수정요청 한 번에 원본 카드로 되돌아간다.
-    if (CONFIG.shortsMotionGraphics && !opts.signal?.aborted) await applyMotionGraphics(id, { log: say });
     store.update(id, { stage: 'ready', scenes: r.sceneCount, durationSec: r.durationSec, topic: plan.title });
+    // 수정 재조립도 모션그래픽을 다시 입힌다(2026-10-12) — 안 그러면 수정요청 한 번에 원본 카드로 되돌아간다.
+    if (CONFIG.shortsMotionGraphics && !opts.signal?.aborted) await applyMotionGraphics(id, { log: say, ...(opts.signal ? { signal: opts.signal } : {}) });
+    if (opts.signal?.aborted) return fail('취소됨 — 수정 영상·대본은 반영됨(모션그래픽·알림 생략)');
     say(`수정 완료 — ${plan.title.slice(0, 30)} · ${r.durationSec}초`);
     // 썸네일 — 제목/캘리 문구/배경이 바뀐 경우 재생성(문구 일치 유지). 실패 무해.
     // 한글 QA 미해결 표식이 남아 있으면 무엇을 고쳤든 다시 만든다(2026-09-16 사용자 제보) — 종전엔 대본만
     // 고치는 수정요청에서 썸네일을 건드리지 않아, 발행할 때마다 같은 '오타 가능성 미해결' 경고가 되돌아왔다.
     if (opts.rebuild || applied.titleChanged || applied.titleArtCopy || applied.regenScenes.length || thumbTextQaFailed(dir)) {
       try {
-        const hook = await hookStillFor(images, clips, dir, opts.signal);
+        const hook = await hookStillFor(keptImages, keptClips, dir, opts.signal);
         const ok = await generateDesignedThumbnail({
           dir, title: plan.title, description: plan.description, titles: plan.titles, keyword: short.keyword, hookImage: hook, signal: opts.signal,
           ...(titleArt ? { copy: titleArt.copy } : {}),
@@ -425,6 +470,7 @@ export async function reviseShorts(
         say(ok ? '썸네일 재생성 완료' : '썸네일 재생성 스킵');
       } catch { /* 무해 */ }
     }
+    if (opts.signal?.aborted) return fail('취소됨 — 수정 영상·대본은 반영됨(알림 생략)');
     // 갱신 알림(완성 영상 재발송) — 사용자가 수정 결과를 바로 검수. 실패 무해.
     const done = store.get(id);
     if (done) {
@@ -432,8 +478,20 @@ export async function reviseShorts(
     }
     return { ok: true, changedScenes: applied.changedScenes, regenScenes: applied.regenScenes, titleChanged: applied.titleChanged, titleArtChanged: !!applied.titleArtCopy };
   } catch (e) {
-    return fail(e instanceof Error ? e.message.slice(0, 200) : String(e));
+    return fail(opts.signal?.aborted ? '취소됨' : e instanceof Error ? e.message.slice(0, 200) : String(e));
   } finally {
+    if (!committed && bak) {
+      bak.restore();
+      dropNarrationCache(store.dirFor(id)); // 새 대본으로 만든 낭독 캐시(narr_NN.mp3)는 되돌린 plan.json 과 안 맞는다
+      try {
+        const cur = store.get(id) as Record<string, unknown> | undefined;
+        const revert: Record<string, unknown> = {};
+        if (cur && wrote) for (const k of Object.keys(wrote) as Array<keyof typeof before>) {
+          if (JSON.stringify(cur[k]) === JSON.stringify(wrote[k])) revert[k] = before[k];
+        }
+        if (Object.keys(revert).length) store.update(id, revert);
+      } catch { /* 무해 */ }
+    }
     RUNNING.delete(id);
   }
 }
@@ -1919,7 +1977,9 @@ export async function planShorts(io: JobIO, topic: string, keyword: string | und
           `${user}\n\n[단독 이해·문체 검산 실패 — 아래 문제를 고쳐 같은 JSON 스키마로 완결 출력하라(설명 금지)]\n${probs.map((p) => `- ${p}`).join('\n')}`, 3400, false));
         if (!raw) return null;
         // 씬 수가 어긋나도 뒤를 자르지 않는다 — 앞 n-1 + 마지막 씬(CTA)(2026-10-05, fitSceneCount 주석).
-        const fixed = raw.scenes.length > maxScenes ? { ...raw, scenes: fitSceneCount(raw.scenes, maxScenes) } : raw;
+        // 앵커(씬별 원문 근거)도 같이 맞춘다(2026-10-26) — 첫 원고 경로(위 씬 수 재요청)는 둘 다 줄이는데 여기만 씬만 줄여,
+        // 마지막 씬(CTA)이 잘린 앵커 자리(옛 n번째 씬의 근거)를 물려받았다.
+        const fixed = raw.scenes.length > maxScenes ? { ...raw, scenes: fitSceneCount(raw.scenes, maxScenes), ...(raw.anchors ? { anchors: fitSceneCount(raw.anchors, maxScenes) } : {}) } : raw;
         // 수정본 파싱 실패 시 원본 유지. 수정 라운드가 대본만 고치고 메타(제목 후보·설명·해시태그)를
         // 빠뜨려도 원본 것을 승계(무손실 병합 — parsePlan 의 [topic] 폴백 제목이 원본을 덮지 않게).
         return {
@@ -2332,6 +2392,103 @@ export async function hookStillFor(
 }
 
 /**
+ * 되돌림용 사본(2026-10-26) — 재조립(Remotion·ffmpeg 폴백 모두 dir/final.mp4 에 바로 쓴다)이 실패·취소되면 그 자리에 반쯤 쓴 영상이
+ * 남는데, 종전 코드는 '직전 완성본 유지'라며 그대로 ready 로 냈다. 바꾸기 전 파일을 같은 폴더 숨은 사본으로 떠 두고 실패면 되돌린다.
+ * COPYFILE_FICLONE — APFS 에선 복제(즉시·공간 0), 안 되면 보통 복사. 없던 파일은 되돌릴 때 지운다(새로 생긴 것이므로).
+ */
+export function backupFiles(dir: string, names: readonly string[], tag: string): { restore: () => void; drop: () => void } {
+  const items = names.map((n) => {
+    const src = path.join(dir, n);
+    const bak = path.join(dir, `.${n}.${tag}.bak`);
+    let state: 'copied' | 'absent' | 'unknown' = 'unknown';
+    try {
+      if (!fs.existsSync(src)) state = 'absent';
+      else { fs.copyFileSync(src, bak, fs.constants.COPYFILE_FICLONE); state = 'copied'; }
+    } catch { /* 사본 실패 — 이 파일은 되돌리지 않는다 */ }
+    return { src, bak, state };
+  });
+  let done = false;
+  return {
+    restore: () => {
+      if (done) return; done = true;
+      for (const it of items) {
+        try {
+          if (it.state === 'copied') fs.renameSync(it.bak, it.src);
+          else if (it.state === 'absent') fs.rmSync(it.src, { force: true });
+        } catch { /* 무해 — 남은 파일 그대로 */ }
+      }
+    },
+    drop: () => {
+      if (done) return; done = true;
+      for (const it of items) if (it.state === 'copied') { try { fs.rmSync(it.bak, { force: true }); } catch { /* 무해 */ } }
+    },
+  };
+}
+
+/**
+ * 길이 상한 감량이 씬을 뺀 뒤 씬 번호로 찾는 자산을 새 대본에 맞춘다(2026-10-26).
+ * 종전엔 scene-images.json·clips/user_NN·clip_NN.mp4 를 감량 전에 써 둔 채로 두어, 씬이 빠지면 plan.json 과 한 칸씩 어긋났다 —
+ * 모션그래픽(applyMotionGraphics 가 지도로 바탕판을 다시 렌더하고 user_NN 으로 실촬영 씬을 고른다)·수정요청·형제편 승계가 엉뚱한 그림·클립을 집는다.
+ * liveIdx[j] = 새 씬 j 의 옛 씬 번호(0-base, 오름차순). 클립은 두 단계로 옮긴다(살아남은 것 → 임시 이름, 빠진 씬 것 삭제, 임시 → 새 번호) —
+ * 한 번에 옮기면 앞 번호로 당겨지는 파일이 아직 안 옮긴 파일을 덮는다. clips/sources.json(보관소 사용 현황)의 씬 번호도 같이 맞춘다.
+ * 반환: 새 대본 순서의 그림·클립 경로(옮긴 클립은 새 경로).
+ */
+export function realignSceneAssets(
+  dir: string, liveIdx: readonly number[], images: ReadonlyArray<string | null>, clips: ReadonlyArray<string | null>,
+): { images: Array<string | null>; clips: Array<string | null> } {
+  const keptImages = liveIdx.map((i) => images[i] ?? null);
+  let keptClips = liveIdx.map((i) => clips[i] ?? null);
+  if (liveIdx.length === images.length && liveIdx.every((i, j) => i === j)) return { images: keptImages, clips: keptClips };
+  writeSceneImageMap(dir, keptImages);
+  const nn = (i: number): string => String(i + 1).padStart(2, '0');
+  const cdir = path.join(dir, 'clips');
+  const indexed = /^(user|clip)_(\d{2})\.mp4$/;
+  try {
+    if (fs.existsSync(cdir)) {
+      const moved: Array<[string, string]> = [];
+      liveIdx.forEach((old, j) => {
+        for (const kind of ['user', 'clip']) {
+          const from = path.join(cdir, `${kind}_${nn(old)}.mp4`);
+          if (!fs.existsSync(from)) continue;
+          const tmp = path.join(cdir, `.realign-${kind}_${nn(j)}.mp4`);
+          fs.renameSync(from, tmp);
+          moved.push([tmp, path.join(cdir, `${kind}_${nn(j)}.mp4`)]);
+        }
+      });
+      // 빠진 씬의 클립 — 살아남은 번호가 아닌 `${kind}_${nn(idx)}` 만 정확히 지운다(2026-10-26). 패턴째 지우면 번호 밖 파일까지 날아간다.
+      for (let idx = 0; idx < Math.max(images.length, clips.length); idx++) {
+        if (liveIdx.includes(idx)) continue;
+        for (const kind of ['user', 'clip']) fs.rmSync(path.join(cdir, `${kind}_${nn(idx)}.mp4`), { force: true });
+      }
+      for (const [tmp, to] of moved) fs.renameSync(tmp, to);
+      keptClips = liveIdx.map((old, j) => {
+        const c = clips[old] ?? null;
+        const m = c ? path.basename(c).match(indexed) : null;
+        // 번호가 안 맞는 경로는 옛 경로를 돌려주면 이미 지워졌을 수 있다 — 살아있는 파일이 아니면 null
+        if (c && m && path.resolve(path.dirname(c)) === path.resolve(cdir) && m[2] === nn(old)) return path.join(cdir, `${m[1]}_${nn(j)}.mp4`);
+        return c && fs.existsSync(c) ? c : null;
+      });
+      const srcFile = path.join(dir, SOURCES_FILE);
+      if (fs.existsSync(srcFile)) {
+        const rows = JSON.parse(fs.readFileSync(srcFile, 'utf-8')) as Array<{ scene?: number } & Record<string, unknown>>;
+        const out = rows.flatMap((r) => { const j = liveIdx.indexOf(Number(r?.scene) - 1); return j >= 0 ? [{ ...r, scene: j + 1 }] : []; });
+        fs.writeFileSync(srcFile, JSON.stringify(out, null, 2), 'utf-8');
+      }
+    }
+  } catch { /* 무해 — 지도는 이미 맞췄다. 클립이 어긋나면 모션그래픽은 실촬영 규칙에서 건너뛴다 */ }
+  return { images: keptImages, clips: keptClips };
+}
+
+/** 길이 상한 재조립 한 판이 실패한 뒤 정리(2026-10-26) — 낭독 캐시(narr_NN.mp3)는 이미 감량본으로 바뀌어 되돌린 옛 대본과 안 맞는다.
+ *  남겨 두면 모션그래픽이 옛 대본 + 새 낭독 길이로 바탕판을 만든다. 지워 두면 '낭독 파일 없음'으로 모션그래픽만 건너뛴다. */
+function dropNarrationCache(dir: string): void {
+  try {
+    const rdir = path.join(dir, 'remotion');
+    for (const f of fs.readdirSync(rdir)) if (/^narr_\d+\.mp3$/.test(f)) fs.unlinkSync(path.join(rdir, f));
+  } catch { /* 무해 */ }
+}
+
+/**
  * 4) 조립~마무리 — 대본·이미지·클립이 준비된 뒤의 공통 경로.
  *
  * runShortsJob 본문에서 떼어냈다(2026-09-03). 형제편은 자산을 승계해 1~3단계를 통째로 건너뛰는데,
@@ -2348,7 +2505,8 @@ async function finishShortsRun(a: {
   /** 여분 실촬영(2026-09-18, SHORTS_MIDCUT) — normalizeSpareClips 가 구운 clips/spare_NN.mp4. 5초 넘는 클립 씬의 뒷 절반을 이걸로 바꾼다. */
   spareClips?: string[];
 }): Promise<void> {
-  const { id, store, dir, short, images, clips, opts, say, checkAbort, lookOffset, spareClips } = a;
+  const { id, store, dir, short, opts, say, checkAbort, lookOffset, spareClips } = a;
+  let { images, clips } = a; // 길이 상한 감량이 씬을 빼면 새 대본 순서로 바뀐다(realignSceneAssets)
   let plan = a.plan;
   // 낭독 직전 예고 재확인·자리 예약(2026-10-02) — 기획 시점엔 자리가 있었어도 형제 채널 런이 그 사이 예고했을 수 있다.
   // 등록을 렌더 뒤에 하면 둘 다 확인을 통과하고 뒤엣것만 거절돼 '낭독은 했는데 등록은 없는' 편이 생긴다(리뷰 지적) —
@@ -2437,10 +2595,14 @@ async function finishShortsRun(a: {
     const chars = shortsNarrationChars(plan);
     const cps = chars / Math.max(1, (r.durationSec ?? 1) - 2); // 인트로(1.6초)·여백 보정한 실측 자/초
     const fit2 = await fitShortsPlanToDuration(io, plan, Math.floor((CONFIG.shortsMaxDurationSec - 5) * cps));
+    // 취소(2026-10-26) — 취소된 감량은 LLM 실패를 삼키고 결정적 트리밍만 한 대본이라, 그걸 plan.json 에 쓰기 전에 끝낸다.
+    checkAbort();
     if (!fit2.compressed) { say(`길이 상한 재감량 무변화(${round}/2) — 이미 최소 구성`); break; }
+    const prevPlan = plan; const prevIdx = liveIdx;
     liveIdx = fit2.keptScenes.map((k) => liveIdx[k]!);
     plan = fit2.plan;
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8'); // 수정요청 재조립이 같은 대본을 보게
+    const roundBak = backupFiles(dir, ['final.mp4', 'subtitles.srt'], 'cap');
     // 구 대본 TTS 잔존 소거 — 재조립 라운드에서 씬 TTS 가 실패하면 ffmpeg 폴백이 감량 전 mp3 를
     // 재사용해 자막(신 대본)·오디오(구 대본) 불일치 영상이 될 수 있다(리뷰 지적). 대본이 바뀌었으니 캐시 무효.
     try {
@@ -2448,9 +2610,29 @@ async function finishShortsRun(a: {
       for (const f of fs.readdirSync(rdir)) if (/^narr_\d+\.mp3$/.test(f)) fs.unlinkSync(path.join(rdir, f));
     } catch { /* 디렉토리 없음 등 — 무해 */ }
     say(`길이 상한 초과 ${r.durationSec}초 — 실측 ${cps.toFixed(1)}자/초 기준 재감량 ${fit2.beforeChars}→${fit2.afterChars}자${liveIdx.length < images.length ? ` · 씬 ${liveIdx.length}개로 축소` : ''}, 재조립(${round}/2)`);
-    const r2 = await assemble(plan, liveIdx.map((i) => images[i] ?? null), liveIdx.map((i) => clips[i] ?? null));
-    if (!r2.ok || !r2.videoPath) break; // 재조립 실패 — 직전 완성본 유지(생성 우선)
+    // 조립이 throw 해도 사본(.cap.bak)이 새지 않게 되돌린다(2026-10-26)
+    let r2: Awaited<ReturnType<typeof assemble>>;
+    try { r2 = await assemble(plan, liveIdx.map((i) => images[i] ?? null), liveIdx.map((i) => clips[i] ?? null)); }
+    catch (e) { roundBak.restore(); dropNarrationCache(dir); throw e; }
+    if (!r2.ok || !r2.videoPath) {
+      // 재조립 실패 — 직전 완성본 유지(생성 우선). 렌더가 final.mp4 에 바로 써서 반쯤 쓴 파일이 남을 수 있어 사본으로 되돌리고,
+      // 대본·씬 번호도 그 영상의 것으로 되돌린다(2026-10-26 — 종전엔 감량본 plan.json 이 옛 영상과 함께 남았다).
+      roundBak.restore();
+      plan = prevPlan; liveIdx = prevIdx;
+      try { fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan, null, 2), 'utf-8'); } catch { /* 무해 */ }
+      dropNarrationCache(dir);
+      checkAbort();
+      say(`길이 상한 재조립 실패(${round}/2) — 직전 완성본·대본 유지`);
+      break;
+    }
+    roundBak.drop();
     r = r2;
+  }
+  checkAbort();
+  // 씬이 빠졌으면 씬 번호로 찾는 자산(그림 지도·실촬영 클립)을 살아남은 씬 순서로 다시 쓴다 — 모션그래픽이 디스크에서 읽는다.
+  if (liveIdx.length < images.length) {
+    ({ images, clips } = realignSceneAssets(dir, liveIdx, images, clips));
+    say(`씬 자산 다시 맞춤 — 살아남은 씬 ${liveIdx.map((i) => i + 1).join(',')} → 1~${liveIdx.length}`);
   }
   if ((r.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) {
     say(`⚠ 길이 상한 잔여 초과 — ${r.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초. 생성은 완료(생성 우선 원칙) — 발행 게이트가 초과본을 막으니 ✍수정요청으로 감량 후 발행`);
@@ -2466,9 +2648,11 @@ async function finishShortsRun(a: {
   // 실촬영 씬은 원본 그대로, 정보 카드 씬만. 실패·대상 아님이면 원본 영상 그대로 진행.
   if (CONFIG.shortsMotionGraphics && !opts.signal?.aborted) {
     store.update(id, { stage: 'rendering' });
-    await applyMotionGraphics(id, { log: say });
+    await applyMotionGraphics(id, { log: say, ...(opts.signal ? { signal: opts.signal } : {}) });
   }
 
+  // 취소(2026-10-26) — 모션그래픽은 실패를 삼켜 false 로 끝나므로(취소도 같다) 여기서 다시 본다. 취소된 런이 ready·발행 버튼으로 끝나지 않게.
+  checkAbort();
   store.update(id, {
     stage: 'ready', scenes: r.sceneCount, durationSec: r.durationSec, bgFallbacks: fallbacks,
     topic: plan.title || short.topic,
@@ -2501,6 +2685,7 @@ async function finishShortsRun(a: {
   } catch (e) { say(`썸네일 생성 건너뜀(무해): ${e instanceof Error ? e.message.slice(0, 60) : e}`); }
   finally { clearThumbPending(dir); }
   // 검토 대기 알림(완성 영상 동봉, 50MB 초과 시 텍스트 폴백) — 썸네일 뒤에 보낸다(위 주석). fire-and-forget, 실패 무해.
+  checkAbort(); // 썸네일 중 취소 — 발행 버튼을 보내지 않는다(runShortsJob 이 '취소됨'으로 닫는다)
   {
     const done = store.get(id);
     if (done) {

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   fetchCardNews, createCardNews, createCardNewsFromPiece, deleteCardNews,
   fetchPieces, CardNewsInfo, PieceInfo, publishCardNews, fetchMetaStatus, igReconnectNeeded,
-  fetchBrand, saveBrandCardStyle,
+  fetchBrand, saveBrandCardStyle, similarConfirmText,
 } from "../api";
 import Avatar from "./Avatar";
 import Ico, { type IcoName } from "./Ico";
@@ -167,7 +167,13 @@ export default function CardNewsSection() {
     const t = topic.trim();
     if (!t) return;
     setBusy(true); setErr("");
-    const r = await createCardNews({ topic: t, keyword: keyword.trim() || undefined, slides, style: style === "auto" ? undefined : style });
+    const body = { topic: t, keyword: keyword.trim() || undefined, slides, style: style === "auto" ? undefined : style };
+    let r = await createCardNews(body);
+    // 신규성 가드(409) — 기존 콘텐츠와 유사하면 근거를 보여 주고, 의도한 재도전일 때만 force 로 재요청.
+    if (!r.ok && r.similar?.length) {
+      if (confirm(similarConfirmText(r.error, r.similar))) r = await createCardNews({ ...body, force: true });
+      else { setBusy(false); return; }
+    }
     setBusy(false);
     if (r.ok) { setTopic(""); setKeyword(""); load(); } else setErr(r.error || "생성 실패");
   };

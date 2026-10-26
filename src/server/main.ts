@@ -22,7 +22,7 @@ import { CONFIG } from '../config';
 import { getLlmSetting, setLlmSetting, resolveAssignment } from '../llm/setting';
 import { getRunSettings, setRunSettings } from '../runsettings';
 import { EventType } from '../events/types';
-import { createBus, getBus, disposeBus } from '../events/bus';
+import { createBus, getBus, disposeBus, scheduleDisposeIfUnwatched } from '../events/bus';
 import type { EventBus } from '../events/bus';
 import { runId } from '../util/ids';
 import { startRun } from '../orchestrator/index';
@@ -33,7 +33,7 @@ import { rolesById } from '../agents/company';
 import type { RoleDef } from '../agents/company';
 import type { RolePatch, MemberBody } from '../agents/company-loader';
 import { agentDetail, writeGoal, writeCapabilities, addSkill, deleteSkill, appendActivity, ensureScaffold, effectiveAutonomy, appendInjected, injectedLength, clearInjected, INJECTED_CAP } from '../agents/workspace';
-import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, setNaverAccount, naverAccountView, getYoutubeAccount, setYoutubeToken, getMetaAccount, listMetaAccountSlugs, setMetaToken, setMetaPage, purgeCustomKeysForBrand, purgeBrandAccounts } from '../secrets/store';
+import { listKeys, setKey, addCustom, deleteKey, hiddenKeys, restoreKey, getSecret, isAllowedCustomKeyName, isAppCredentialKey, isReservedEnvKey, setNaverAccount, naverAccountView, getYoutubeAccount, setYoutubeToken, getMetaAccount, listMetaAccountSlugs, setMetaToken, setMetaPage, purgeCustomKeysForBrand, purgeBrandAccounts } from '../secrets/store';
 import { collectExistingContent, findSimilarContent, saturatedThemeMatches, type SimilarMatch } from '../content/novelty';
 import { clusterStore, pickNextSibling } from '../content/topicCluster';
 import { naturalKeyword } from '../content/keywordForm';
@@ -42,15 +42,15 @@ import { connectors } from '../grounding'; // 그라운딩 커넥터 등록(law�
 import { listCustomConfigs, saveCustomConfig, deleteCustomConfig, runCustomConnector, autoConfigConnector, type CustomConnectorCfg } from '../grounding/custom';
 import { webSearch } from '../tools/web_search';
 import { addUploadedToPlaylists, runYoutubeMaintenance, youtubeItemsFrom, writeMaintLog } from '../tools/youtubePlaylists';
-import { uploadShortsToYoutube, uploadLongformToYoutube, publishWhenReady, verifyPublicCover, coverNeedsAlert, PUBLISH_SAFETY_MIN, fetchMyChannel, channelOfUploads, decideChannelConnect } from '../tools/youtubeUpload';
-import { publishCardNewsToMeta, publishShortsToMeta, realPermalink, listIgMedia, matchOrphanReels, GRAPH } from '../tools/metaPublish';
+import { uploadShortsToYoutube, uploadLongformToYoutube, publishWhenReady, verifyPublicCover, coverNeedsAlert, PUBLISH_SAFETY_MIN, fetchMyChannel, channelOfUploads, decideChannelConnect, clearUploadsPlaylistCache } from '../tools/youtubeUpload';
+import { publishCardNewsToMeta, publishShortsToMeta, realPermalink, listIgMedia, matchOrphanReels, matchOrphanCards, GRAPH } from '../tools/metaPublish';
 import { llmWiki, slugify } from '../wiki/llmwiki';
 import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
 import { claudeCliProblem } from '../llm/claudeCli';
-import { startAutoCycle, proposeContentIdeas, activeDirective, autorunDirective, setAutorunDirective, clearAutorunDirective, directiveExhaustedWithin, directiveWantsLibrary, librarySpeciesFor, offLibrarySpecies, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision, speciesCoverageFor, usedRecentlyFor, usedThemeRecentlyFor, factStarvedRecentlyFor, requiredSpeciesOf, bindSpeciesKeyword, rememberedDemandReject, beforeAutorunSlot } from '../autonomy/scheduler';
+import { startAutoCycle, proposeContentIdeas, activeDirective, autorunDirective, setAutorunDirective, clearAutorunDirective, directiveExhaustedWithin, directiveWantsLibrary, librarySpeciesFor, offLibrarySpecies, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision, speciesCoverageFor, usedRecentlyFor, usedThemeRecentlyFor, factStarvedRecentlyFor, requiredSpeciesOf, bindSpeciesKeyword, rememberedDemandReject, nearAutorunSlot, autorunSlotUnsettled, autorunDailyKey } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
@@ -109,6 +109,7 @@ import { promiseStore, choosePromise, promiseSourcesOfDeletedPiece, pieceWasPubl
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
 import { shouldArchiveShortsVideo } from '../content/shortsArchive';
 import { runJanitor, type JanitorDeps } from '../autonomy/janitor';
+import { corruptStoreFiles } from '../util/jsonStore';
 import { humanBytes } from '../util/prune';
 import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor, appendMetrics, naverTrackingDue, topInflow, latestDwell, latestLikes, latestTouch, sameKstDay } from '../analytics/performance';
 import { fetchBlogSympathy } from '../analytics/naverSympathy';
@@ -192,6 +193,7 @@ function evictRuns(): void {
   for (const [id] of finished) {
     if (RUNS.size <= RUNS_CAP) break;
     RUNS.delete(id);
+    disposeBus(id); // 런을 지우면 버스도 — 남기면 맵에서 못 찾는 버스가 이벤트 버퍼를 쥔 채 남는다(2026-10-26, 멱등)
   }
 }
 const app = new Hono();
@@ -245,13 +247,22 @@ app.use('*', secureHeaders({
   strictTransportSecurity: false, // 로컬 http — HSTS 부적합
 }));
 
+/**
+ * AUTH_TOKEN 면제 경로 — **정확히 이 경로만**(2026-10-26 보안 검토: 접두 일치는 '/meta/fb/pickX' 같은 이름도 면제한다).
+ * OAuth 콜백은 외부(구글·메타)가 되돌려 보내는 주소라 쿠키가 없다(메타는 https://localhost — 127.0.0.1 쿠키와 다른 호스트).
+ * 셋 다 서버가 만든 1회용 state(10분)를 검사하고 쓰면 지운다. 페이지 선택(/meta/fb/pick)은 state 에 더해 콜백 화면이 심은
+ * HttpOnly 쿠키(fb_pick)까지 맞아야 한다 — 주소만 손에 넣은 사람은 못 누른다(fbPickCookieMatches).
+ */
+export const AUTH_EXEMPT_PATHS: ReadonlySet<string> = new Set([
+  '/youtube/oauth/callback', '/meta/oauth/callback', '/meta/fb/oauth/callback', '/meta/fb/pick',
+]);
 // 선택적 접근 토큰(#12) — AUTH_TOKEN 시크릿이 설정된 경우에만 활성(기본은 게이트 없음, 기존 동작 유지).
 // 프론트의 401→토큰입력→studio_token 쿠키 부트스트랩과 정합. OAuth 콜백(외부 리디렉션)·정적 에셋은 면제.
 app.use('*', async (c, next) => {
   const expected = getSecret('AUTH_TOKEN') || process.env.AUTH_TOKEN || '';
   if (!expected) return next(); // 미설정 = 게이트 off
   const p = c.req.path;
-  if (p.startsWith('/youtube/oauth/callback') || p.startsWith('/meta/oauth/callback') || p.startsWith('/assets/')) return next();
+  if (AUTH_EXEMPT_PATHS.has(p) || p.startsWith('/assets/')) return next();
   const cookie = /(?:^|;\s*)studio_token=([^;]+)/.exec(c.req.header('cookie') ?? '')?.[1];
   const bearer = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '');
   const tok = decodeURIComponent(cookie ?? '') || bearer;
@@ -282,6 +293,8 @@ app.use('*', async (c, next) => {
 });
 
 // 런 종료 시 이벤트 스트림을 디스크로 영속화 — 버스 폐기(30s)·재시작 후에도 replay 가능.
+// 영속 직후 scheduleDisposeIfUnwatched(60s, 2026-10-26) — SSE 를 안 보는 런(자율·텔레그램)의 버스가 이벤트 최대 1만 개를
+// 프로세스 종료까지 쥐고 있었다. 보는 사람이 있으면 SSE 끊김 타이머(eventsHandler)가 따로 폐기하고, 늦게 연 화면은 events.jsonl 로 다시 본다.
 function persistEvents(id: string, busRef?: EventBus): void {
   // 클로저로 받은 버스 참조 우선 — eventsHandler 가 SSE 끊김 30초 뒤 disposeBus 로 맵에서
   // 제거해도(런 완료가 그 뒤면 getBus 가 null), 살아있는 객체로 항상 영속한다.
@@ -387,8 +400,15 @@ function advancePieceReady(pieceId: string, runId: string, deliverable: string, 
   const draft = readDraftMeta(runId);
   if (!draft && !deliverable.trim()) { pieceStore().recordError(pieceId); return false; }
   const gate = readFactGate(runId);
+  // 이미 발행된 글의 수정(리비전)은 stage 를 되돌리지 않는다(2026-10-26 검토) — 종전엔 'ready' 로 덮어 publishedUrl 이 남은 채
+  // 성과 추적에서 빠지고 미발행 초안 상한(CONTENT_READY_CAP)을 먹었다. 초안(runId·제목·점수)만 새 런으로 바꾼다.
+  // stage 가 'ready' 가 아니면 자동 임시저장 게이트(planAutoNaverDraft)도 저절로 건너뛴다.
+  const prevStage = pieceStore().get(pieceId);
+  const keepStage = revised && !!prevStage?.publishedUrl;
+  // 발행된 글이 앞선 리비전 실패로 'error' 가 됐으면, 성공한 리비전은 'published' 로 되돌린다(최종 검토 2026-10-26).
+  const keptStage = keepStage ? (prevStage!.stage === 'error' ? 'published' : prevStage!.stage) : 'ready';
   pieceStore().update(pieceId, {
-    runId, stage: 'ready',
+    runId, stage: keptStage,
     ...(draft?.title ? { title: draft.title } : {}),
     ...(typeof draft?.seoScore === 'number' ? { seoScore: draft.seoScore } : {}),
     ...(draft?.keyword ? { keyword: draft.keyword } : {}),
@@ -397,6 +417,13 @@ function advancePieceReady(pieceId: string, runId: string, deliverable: string, 
     // update 는 { ...p, ...patch } 라 undefined 도 키로 실려 실제로 덮어쓰고, 영속 시 JSON 이 떨군다.
     factGate: gate ? toFactGateInfo(gate) : undefined,
   });
+  // 발행 잡 도중 리비전이 끼어 파생을 미뤘던 글(deriveDeferred) — 이제 본문이 확정됐으니 세트를 만든다(최종 검토 2026-10-26).
+  // 미루기만 하고 잇지 않으면 그 글은 재발행 가드에 막혀 파생이 영영 안 생긴다. autoDeriveSet 내부 가드가 중복을 막는다.
+  const afterReady = pieceStore().get(pieceId);
+  if (afterReady?.deriveDeferred) {
+    pieceStore().update(pieceId, { deriveDeferred: undefined });
+    try { autoDeriveSet(pieceId, afterReady.title); } catch { /* 무해 — 수동 파생 경로는 남아 있다 */ }
+  }
   // ready 도달 → 자동 네이버 임시저장 게이트(SEO 기준 통과 시 발행 담당이 저장, 미달 시 자동 리비전 1회).
   // 알림보다 먼저 실행 — 리비전이 뜨면 이 초안은 곧 대체되므로 낡은 '검토 대기' 푸시를 만들지 않는다(리비전 완료가 다시 여기로 와 알림).
   let revisionLaunched = false;
@@ -503,6 +530,15 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
       });
     })
     .then((outcome) => {
+      // 취소된 런이 끝까지 돌고 정상 종료로 돌아온 경우(2026-10-26) — 종전엔 여기서 'done' 으로 덮고 ready 전진·알림까지 했다.
+      // 카드뉴스·숏폼 런과 같게 '취소됨'으로 닫고 아무것도 전진시키지 않는다. 나머지 정리는 catch 의 취소 분기와 같다.
+      if (abort.signal.aborted) {
+        handle.status = 'cancelled';
+        if (opts.mission === 'research') { try { rollbackResearchLaunch(topic, handle.brand ?? ''); } catch { /* 무해 */ } }
+        bus.emit(EventType.run_done, { status: 'cancelled' });
+        if (opts.pieceId && opts.revise) restoreDeferredReadyNotify(opts.pieceId);
+        return;
+      }
       handle.status = 'done';
       handle.deliverable = outcome.deliverable;
       handle.positions = outcome.positions;
@@ -588,7 +624,7 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
       // (실사고 2026-08-18: SEO 미달 자동 리비전이 CLI 세션 한도로 실패 → "텔레그램 왜 안 와" 신고).
       if (opts.pieceId && opts.revise) restoreDeferredReadyNotify(opts.pieceId);
     })
-    .finally(() => { persistEvents(id, bus); persistRunMeta(id, handle); });
+    .finally(() => { persistEvents(id, bus); persistRunMeta(id, handle); scheduleDisposeIfUnwatched(id, 60_000); });
 
   return id;
 }
@@ -723,12 +759,36 @@ async function startHandler(c: Context): Promise<Response> {
   return c.json({ run_id: id });
 }
 
+/** 취소 뒤 런이 멈추길 기다리는 상한(2026-10-26 검토) — 중단 신호를 무시하는 런이 busyRun 을 영영 쥐면 자율 틱·정각 슬롯이 끝없이 막힌다. */
+const CANCEL_WATCHDOG_MS = 5 * 60_000;
+const _cancelWatchdogs = new Set<string>();
+function armCancelWatchdog(id: string, h: RunHandle): void {
+  if (!id || _cancelWatchdogs.has(id)) return; // 취소를 여러 번 눌러도 감시는 하나
+  _cancelWatchdogs.add(id);
+  const t = setTimeout(() => {
+    _cancelWatchdogs.delete(id);
+    if (h.status !== 'running') return; // 정상적으로 멈췄다
+    // 강제로 닫는다 — 런 본체는 뒤에서 계속 돌 수 있다(끝나면 자기 종료 처리가 다시 '취소됨'으로 적는다). 여기서 영속·run_done 까지
+    // 해 둔다: 그 종료 처리가 끝내 안 오면 기록·화면이 'running' 에 갇힌다.
+    h.status = 'cancelled';
+    const msg = `[런] ⚠ 취소 ${CANCEL_WATCHDOG_MS / 60_000}분 뒤에도 안 멈춤 — 강제로 '취소됨' 처리(뒤에서 계속 돌 수 있음): ${id} "${h.topic.slice(0, 40)}"`;
+    console.error(msg);
+    const bus = getBus(id);
+    if (bus) { bus.emit(EventType.run_done, { status: 'cancelled' }); persistEvents(id, bus); scheduleDisposeIfUnwatched(id, 60_000); }
+    persistRunMeta(id, h);
+    if (notifyConfigured()) void notify({ title: '⚠️ 취소한 런이 멈추지 않아 강제로 닫았습니다', body: `"${h.topic.slice(0, 60)}" — 취소 ${CANCEL_WATCHDOG_MS / 60_000}분 뒤에도 돌고 있었습니다. 다음 런은 이제 시작할 수 있지만, 뒤에서 CLI 가 계속 돌 수 있으니 서버 로그를 확인하세요.` }).catch(() => { /* 무해 */ });
+  }, CANCEL_WATCHDOG_MS);
+  if (typeof t.unref === 'function') t.unref();
+}
 function cancelHandler(c: Context): Response {
   const h = RUNS.get(c.req.param('id') ?? '');
   if (!h) return c.json({ error: 'unknown run' }, 404);
   h.abort.abort();
-  h.status = 'cancelled';
-  return c.json({ ok: true });
+  // 상태는 런이 실제로 멈출 때 각 런의 종료 처리가 'cancelled' 로 바꾼다(2026-10-26). 종전엔 여기서 바로 바꿔
+  // busyRun 이 풀렸고, CLI 가 아직 도는 사이 다음 런이 떠 '한 번에 한 런' 불변식이 깨졌다. 화면의 '취소됨'은 run_done 이벤트로 온다.
+  if (h.status !== 'running') return c.json({ ok: true, status: h.status, note: '이미 끝난 런입니다.' });
+  armCancelWatchdog(c.req.param('id') ?? '', h);
+  return c.json({ ok: true, status: 'running', cancel_requested: true, note: '취소를 요청했습니다 — 런이 멈추면 취소됨으로 바뀝니다(보통 수 초).' });
 }
 
 // 런 id 경로 조작 가드 — 슬래시·상위경로 포함 id 는 data/sessions 밖 파일을 읽게 하므로 즉시 거부(순수).
@@ -1180,7 +1240,7 @@ function launchCardNewsRun(cardId: string, topic: string, opts: { sourceBody?: s
       if (!abort.signal.aborted) bus.emit(EventType.error, { message: e instanceof Error ? e.message : String(e) });
       bus.emit(EventType.run_done, { status: handle.status });
     })
-    .finally(() => { persistEvents(id, bus); persistRunMeta(id, handle); });
+    .finally(() => { persistEvents(id, bus); persistRunMeta(id, handle); scheduleDisposeIfUnwatched(id, 60_000); });
   return id;
 }
 
@@ -1353,7 +1413,7 @@ function launchShortsRun(shortsId: string, topic: string, opts: {
       if (!abort.signal.aborted) bus.emit(EventType.error, { message: e instanceof Error ? e.message : String(e) });
       bus.emit(EventType.run_done, { status: handle.status });
     })
-    .finally(() => { persistEvents(id, bus); persistRunMeta(id, handle); });
+    .finally(() => { persistEvents(id, bus); persistRunMeta(id, handle); scheduleDisposeIfUnwatched(id, 60_000); });
   return id;
 }
 
@@ -1831,6 +1891,7 @@ app.get('/youtube/oauth/callback', async (c) => {
       return done(`⛔ 연결 거절: ${verdict.message}. (채널을 정말 바꾸려는 거라면 이 주소로: http://127.0.0.1:${CONFIG.port}/youtube/oauth/start?brand=${encodeURIComponent(brand)}&change_channel=1)`);
     }
     setYoutubeToken(brand, j.refresh_token, me);
+    clearUploadsPlaylistCache(brand); // 채널이 바뀌었을 수 있다(2026-10-26) — 업로드 회수가 옛 채널 재생목록을 보지 않게
     console.log(`[발행담당] 유튜브 채널 연결 — 브랜드 '${brand || '범용'}' · ${verdict.message}`);
     return done(`✅ 채널 연결 완료 (브랜드: ${brand || '범용'} · ${verdict.message})`);
   } catch (e) { return done(`연결 실패: ${e instanceof Error ? e.message.slice(0, 120) : e}`); }
@@ -1888,9 +1949,21 @@ async function shortsTitleHandler(c: Context): Promise<Response> {
 }
 app.post('/shorts/:id/title', shortsTitleHandler);
 app.post('/api/shorts/:id/title', shortsTitleHandler);
+/**
+ * 하루 상한 계산용 업로드 목록(2026-10-26) — 같은 브랜드의 기록 + 지금 올리는 중인 편. youtubeTs 는 업로드가 끝난 뒤에야
+ * 적혀서, 두 편을 거의 같이 누르면 둘 다 '오늘 0편'으로 상한을 통과했다. 올리는 중인 편은 지금 시각으로 하나씩 센다
+ * (이미 youtubeTs 가 적힌 편은 기록으로 이미 세었다).
+ */
+export function youtubeCapUploads<T extends { id: string; brand?: string; youtubeTs?: string }>(
+  list: readonly T[], inFlight: ReadonlySet<string>, brand: string, nowIso: string,
+): Array<{ youtubeTs?: string }> {
+  const mine = list.filter((x) => (x.brand ?? '') === brand);
+  const pending = mine.filter((x) => inFlight.has(x.id) && !x.youtubeTs).map(() => ({ youtubeTs: nowIso }));
+  return [...mine, ...pending];
+}
 app.post('/shorts/:id/youtube', async (c) => {
   const id = c.req.param('id');
-  const s = shortsStore().get(id);
+  let s = shortsStore().get(id);
   if (!s) return c.json({ error: 'unknown shorts' }, 404);
   if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
   // 길이 상한 발행 게이트(2026-08-20 하드 캡) — 어떤 경로(수정요청 재조립·구버전 잔존분)로 ready 가 됐든 초과본 발행 차단.
@@ -1908,6 +1981,11 @@ app.post('/shorts/:id/youtube', async (c) => {
     const hold = shortsFactHoldBlockReason(shortsStore().get(id)?.factGate, !!pub.forceFact);
     if (hold) return c.json({ error: hold.error, fact_hold: hold.items }, 409);
   }
+  // 썸네일 대기(최대 5분) 뒤엔 기록을 다시 읽는다(2026-10-26) — 그 사이 다른 버튼(텔레그램·스튜디오)이 올렸으면
+  // 처음 읽은 s 에는 youtubeUrl 이 없어 같은 영상이 한 번 더 올라간다. 여기부터 in-flight 등록까지는 await 가 없다.
+  s = shortsStore().get(id);
+  if (!s) return c.json({ error: 'unknown shorts' }, 404);
+  if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409); // 대기 중 수정 요청으로 재조립에 들어갔을 수 있다
   if (s.youtubeUrl) return c.json({ error: '이미 업로드됨', url: s.youtubeUrl }, 409); // 중복 영상·쿼터 낭비 방지
   // 채널 게이트(2026-09-03) — 인스타 전용으로 만든 대본을 유튜브에 올리지 않는다(레거시 미지정분은 통과).
   if (!canPublishTo(s.platform, 'youtube')) {
@@ -1915,11 +1993,12 @@ app.post('/shorts/:id/youtube', async (c) => {
   }
   // 하루 상한(사용자 확정 2026-09-03: 1편) — 대량생산 신호를 줄이는 게 목적이라 발행 지점에서 막는다.
   // 브랜드별 채널이므로 같은 브랜드 업로드만 센다. 인스타(메타)에는 적용하지 않는다.
+  // 처리 중 판정을 상한보다 먼저(최종 검토 2026-10-26) — 상한 계산이 올리는 중인 자기 자신을 '오늘 1편'으로 세서 엉뚱한 사유가 나갔다.
+  if (ytPublishInFlight.has(id)) return c.json({ error: '이미 업로드 처리 중입니다' }, 409);
   const capBlock = youtubeDailyCapBlock(
-    shortsStore().list().filter((x) => (x.brand ?? '') === (s.brand ?? '')), Date.now(), CONFIG.youtubeDailyCap,
+    youtubeCapUploads(shortsStore().list(), ytPublishInFlight, s.brand ?? '', new Date().toISOString()), Date.now(), CONFIG.youtubeDailyCap,
   );
   if (capBlock) return c.json({ error: capBlock }, 409);
-  if (ytPublishInFlight.has(id)) return c.json({ error: '이미 업로드 처리 중입니다' }, 409);
   ytPublishInFlight.add(id);
   try {
     const ytDir = shortsStore().dirFor(id);
@@ -2077,7 +2156,7 @@ app.get('/meta/oauth/callback', async (c) => {
   const done = (msg: string): Response => c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">${esc(msg)} — 이 창을 닫으세요.</body>`);
   const state = c.req.query('state') ?? '';
   const pending = META_OAUTH_PENDING.get(state);
-  if (!pending || pending.exp < Date.now()) return done('연결 실패: 유효하지 않거나 만료된 연결 요청 — 메타 연결을 다시 시작하세요');
+  if (!pending || pending.exp < Date.now() || pending.pages) return done('연결 실패: 유효하지 않거나 만료된 연결 요청 — 메타 연결을 다시 시작하세요');
   META_OAUTH_PENDING.delete(state);
   const code = c.req.query('code') ?? '';
   if (!code) return done(`연결 실패: ${c.req.query('error_description') ?? c.req.query('error') ?? '인증 코드 없음'}`);
@@ -2140,7 +2219,8 @@ app.get('/meta/fb/oauth/callback', async (c) => {
   const done = (msg: string): Response => c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">${esc(msg)} — 이 창을 닫으세요.</body>`);
   const state = c.req.query('state') ?? '';
   const pending = META_OAUTH_PENDING.get(state);
-  if (!pending || pending.exp < Date.now()) return done('연결 실패: 유효하지 않거나 만료된 연결 요청 — 페이스북 연결을 다시 시작하세요');
+  // 페이지 선택용 값(pages 보유)은 콜백 state 로 받지 않는다(2026-10-26) — 두 종류가 한 맵을 쓰므로 용도를 가른다.
+  if (!pending || pending.exp < Date.now() || pending.pages) return done('연결 실패: 유효하지 않거나 만료된 연결 요청 — 페이스북 연결을 다시 시작하세요');
   META_OAUTH_PENDING.delete(state);
   const code = c.req.query('code') ?? '';
   if (!code) return done(`연결 실패: ${c.req.query('error_description') ?? c.req.query('error') ?? '인증 코드 없음'}`);
@@ -2165,6 +2245,10 @@ app.get('/meta/fb/oauth/callback', async (c) => {
     const pick = randomBytes(16).toString('hex');
     META_OAUTH_PENDING.set(pick, { brand: pending.brand, exp: Date.now() + 10 * 60_000, pages });
     const rows = pages.map((p) => `<li><a href="/meta/fb/pick?state=${pick}&page=${encodeURIComponent(p.id)}">${esc(p.name || p.id)}</a></li>`).join('');
+    // 선택 링크는 이 브라우저에서만 통하게(2026-10-26 보안 검토) — 같은 1회용 값을 HttpOnly 쿠키로 심고 pick 이 둘을 대조한다.
+    // 주소(state)만 새어 나가도(기록·화면 공유) 다른 곳에서는 페이지를 못 바꾼다. 경로를 좁히고 10분 뒤 사라진다.
+    // 쿠키 이름에 state 앞머리를 붙인다 — 두 브랜드 연결을 동시에 열어도 나중 콜백이 먼저 연 탭의 쿠키를 덮지 않게(최종 검토 2026-10-26).
+    c.header('Set-Cookie', `${fbPickCookieName(pick)}=${pick}; Path=/meta/fb/pick; Max-Age=600; HttpOnly; SameSite=Strict`);
     return c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px"><p>발행할 페이지를 고르세요 (브랜드: ${esc(pending.brand || '범용')})</p><ul>${rows}</ul></body>`);
   } catch (e) { return done(`연결 실패: ${e instanceof Error ? e.message.slice(0, 120) : e}`); }
 });
@@ -2253,14 +2337,25 @@ function saveFbPage(brand: string, page: MetaPage): string {
   console.log(`[발행담당] 페이스북 페이지 연결 — 브랜드 '${brand || '범용'}' (page ${page.id})`);
   return `✅ 페이스북 페이지 연결 완료: ${page.name || page.id} (브랜드: ${brand || '범용'})`;
 }
+/** 연결 시도마다 다른 쿠키 이름(fb_pick_<state 앞 8자>) — 동시 연결이 서로의 쿠키를 덮지 않게. */
+export function fbPickCookieName(state: string): string { return `fb_pick_${state.replace(/[^0-9a-f]/gi, '').slice(0, 8)}`; }
+/** 페이지 선택 요청이 콜백 화면을 받은 그 브라우저에서 왔나(순수) — 그 시도의 fb_pick 쿠키 = state(상수 시간 비교). */
+export function fbPickCookieMatches(cookieHeader: string | undefined, state: string): boolean {
+  if (!state) return false;
+  const name = fbPickCookieName(state);
+  const v = new RegExp(`(?:^|;\\s*)${name}=([0-9a-f]+)`).exec(cookieHeader ?? '')?.[1] ?? '';
+  return !!v && safeEqual(v, state);
+}
 app.get('/meta/fb/pick', (c) => {
   const esc = (x: string): string => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   const state = c.req.query('state') ?? '';
   const pending = META_OAUTH_PENDING.get(state);
   if (!pending || pending.exp < Date.now() || !pending.pages) return c.text('만료된 선택 요청 — 페이스북 연결을 다시 시작하세요', 400);
+  if (!fbPickCookieMatches(c.req.header('cookie'), state)) return c.text('이 브라우저에서 시작한 연결이 아닙니다 — 페이스북 연결을 다시 시작하세요', 403);
   const page = pending.pages.find((p) => p.id === (c.req.query('page') ?? ''));
   if (!page) return c.text('알 수 없는 페이지', 400);
   META_OAUTH_PENDING.delete(state);
+  c.header('Set-Cookie', `${fbPickCookieName(state)}=; Path=/meta/fb/pick; Max-Age=0; HttpOnly; SameSite=Strict`); // 1회용 — 쓰고 지운다
   return c.html(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">${esc(saveFbPage(pending.brand, page))} — 이 창을 닫으세요.</body>`);
 });
 /** 페이스북 페이지 연결 해제 — IG 연결은 보존(브랜드별). */
@@ -2364,7 +2459,7 @@ app.post('/api/cardnews/:id/repair', async (c) => {
 });
 app.post('/shorts/:id/meta', async (c) => {
   const id = c.req.param('id') ?? '';
-  const s = shortsStore().get(id);
+  let s = shortsStore().get(id);
   if (!s) return c.json({ error: 'unknown shorts' }, 404);
   if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
   // 길이 상한 발행 게이트(2026-08-20 하드 캡) — 유튜브 핸들러와 동일. 초과본은 어떤 경로로도 발행 불가.
@@ -2387,6 +2482,11 @@ app.post('/shorts/:id/meta', async (c) => {
     const hold = shortsFactHoldBlockReason(shortsStore().get(id)?.factGate, !!pub.forceFact);
     if (hold) return c.json({ error: hold.error, fact_hold: hold.items }, 409);
   }
+  // 썸네일 대기(최대 5분) 뒤엔 기록을 다시 읽는다(2026-10-26) — 처음 읽은 s 로 '이미 발행됨'을 판정하면, 그 사이 다른 버튼이
+  // 올린 릴스를 모르고 한 번 더 공개 발행한다. 여기부터 in-flight 등록까지는 await 가 없다(유튜브 라우트와 같다).
+  s = shortsStore().get(id);
+  if (!s) return c.json({ error: 'unknown shorts' }, 404);
+  if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409); // 대기 중 수정 요청으로 재조립에 들어갔을 수 있다
   const shortsAcct = getMetaAccount(s.brand ?? '');
   const fbLinked = !!(shortsAcct.pageId && shortsAcct.pageToken); // 발행기와 동일 판정(토큰까지)
   const metaDir = shortsStore().dirFor(id);
@@ -2399,13 +2499,15 @@ app.post('/shorts/:id/meta', async (c) => {
     return c.json({ error: '이미 발행됨', igPermalink: s.igPermalink }, 409);
   }
   if (metaPublishInFlight.has(id)) return c.json({ error: '이미 발행 처리 중입니다' }, 409); // 동시/이중 제출 → 중복 공개 발행 차단
-  // fal 스토리지 단건 한도 초과분(실측 2026-08-13: 93초 I2V 편성 102MB → HTTP 413)은
-  // CRF 재인코딩 사본으로 업로드 — 인트로 없는 릴스 원본 유지, 한도 이하면 원본 그대로.
-  const videoPath = await ensureMetaVideo(metaDir);
-  if (!videoPath) return c.json({ error: '영상 파일 없음' }, 409);
-  const wasPublished = !!s.igReelId;
+  // 확인 바로 다음에 잡는다(2026-10-26) — 종전엔 아래 재인코딩(95MB 초과면 최대 10분) 뒤에 잡아서, 그동안 두 번째 요청도
+  // 확인을 통과해 같은 릴스가 두 번 공개됐다. 여기서부터의 모든 반환은 finally 가 풀어 준다.
   metaPublishInFlight.add(id);
   try {
+    // fal 스토리지 단건 한도 초과분(실측 2026-08-13: 93초 I2V 편성 102MB → HTTP 413)은
+    // CRF 재인코딩 사본으로 업로드 — 인트로 없는 릴스 원본 유지, 한도 이하면 원본 그대로.
+    const videoPath = await ensureMetaVideo(metaDir);
+    if (!videoPath) return c.json({ error: '영상 파일 없음' }, 409);
+    const wasPublished = !!s.igReelId;
     const r = await publishShortsToMeta({
       slug: s.brand ?? '', videoPath,
       caption: [s.title ?? s.topic, s.description ?? ''].filter(Boolean).join('\n\n'),
@@ -2455,7 +2557,8 @@ setInterval(() => {
   if (!next) return;
   shortsStore().update(next.id, { naverClipQueuedTs: undefined });
   void Promise.resolve(app.request(`/shorts/${next.id}/naver-clip`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next.force ? { force: true } : {}),
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...(next.force ? { force: true } : {}), ...(next.forceFact ? { forceFact: true } : {}) }),
   })).then(async (r: Response) => {
     const j = await r.json().catch(() => ({})) as { error?: string; queued?: boolean };
     if (j.queued) return; // 그 사이 다른 작업이 프로필을 잡았다 — 라우트가 다시 대기열에 넣었다
@@ -2566,7 +2669,7 @@ app.post('/shorts/:id/naver-clip', async (c) => {
     const why = naverProfileBusy ? `네이버 브라우저 작업이 진행 중입니다(${naverProfileBusy})` : '네이버 성과 수집이 진행 중입니다';
     if (check || body.dryRun) return c.json({ error: `${why} — 끝난 뒤 다시 시도하세요.` }, 409);
     if (!naverClipQueue.some((e) => e.id === id)) {
-      naverClipQueue.push({ id, queuedAt: Date.now(), force: !!body.force });
+      naverClipQueue.push({ id, queuedAt: Date.now(), force: !!body.force, forceFact: !!body.forceFact });
       shortsStore().update(id, { naverClipQueuedTs: new Date().toISOString(), naverClipError: undefined });
       console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 네이버 클립 대기(${why}) — 끝나면 자동으로 올림`);
     }
@@ -2638,13 +2741,33 @@ async function reconcileReels(brand: string): Promise<{ matches: ReturnType<type
   const reels = media.filter((m) => m.type === 'REELS' || m.type === 'VIDEO');
   const targets = shortsStore().list()
     .filter((s) => (s.brand ?? '') === brand)
-    .map((s) => ({ id: s.id, title: s.title ?? s.topic ?? '', igReelId: s.igReelId }));
+    .map((s) => ({ id: s.id, title: s.title ?? s.topic ?? '', igReelId: s.igReelId, platform: s.platform, createdTs: s.createdTs })); // 채널·시각 가드(2026-10-26) — 유튜브 전용 편·옛 릴스에 잘못 붙지 않게
   const matches = matchOrphanReels(targets, reels);
-  for (const m of matches) shortsStore().update(m.shortsId, { igReelId: m.reelId, igPermalink: m.permalink, metaPublishedTs: m.timestamp });
+  // IG 원문 시각(+0000)을 다른 기록과 같은 ISO(Z)로 맞춰 적는다 — 문자열 정렬·비교가 어긋나지 않게(2026-10-26).
+  const iso = (t: string): string => { const n = Date.parse(t); return Number.isFinite(n) ? new Date(n).toISOString() : t; };
+  for (const m of matches) shortsStore().update(m.shortsId, { igReelId: m.reelId, igPermalink: m.permalink, metaPublishedTs: iso(m.timestamp) });
   // 원본 정리는 하지 않는다(2026-10-13) — 끊긴 발행은 페북 릴스가 아직이라 원본이 필요하다. 무화과 릴스에서 여기서 정리해
   // 모션그래픽 원본이 지워졌다. 정리는 다음 발행(페북 마저 올리기)이나 저장공간 정리(발행 14일 뒤)가 맡는다.
   if (matches.length) console.log(`[발행담당] 릴스 재조정 — 브랜드 '${brand || '범용'}': ${matches.length}건 백필(라이브 릴스 ${reels.length}개)`);
   return { matches, reelsOnIg: reels.length };
+}
+// 카드뉴스 재조정(2026-10-26) — 릴스와 같은 구멍: 인스타 발행 응답 직후 재시작하면 igMediaId 를 못 적어 성과 탭에서 빠지고,
+// 버튼이 '미발행'으로 남아 다시 누르면 같은 카드가 두 번 공개된다. 캡션 앞머리로 라이브 게시물을 찾아 기록만 한다(재발행 없음).
+// publishedTs 는 비어 있을 때만 게시 시각으로 — 성과 측정 창(cardnewsPerfDue)이 이 시각을 기준으로 돈다.
+async function reconcileCards(brand: string): Promise<{ matches: ReturnType<typeof matchOrphanCards>; postsOnIg: number }> {
+  const media = await listIgMedia(brand);
+  const targets = cardNewsStore().list()
+    .filter((x) => (x.brand ?? '') === brand)
+    .map((x) => ({ id: x.id, caption: x.caption ?? x.topic, igMediaId: x.igMediaId, createdTs: x.createdTs, stage: x.stage }));
+  const matches = matchOrphanCards(targets, media);
+  for (const m of matches) {
+    const cur = cardNewsStore().get(m.cardId);
+    if (!cur || cur.igMediaId) continue; // 조회하는 사이 발행 라우트가 적었다
+    cardNewsStore().update(m.cardId, { igMediaId: m.mediaId, ...(m.permalink ? { igPermalink: m.permalink } : {}), ...(cur.publishedTs ? {} : { publishedTs: m.timestamp }) });
+  }
+  const posts = media.filter((m) => m.mediaType === 'CAROUSEL_ALBUM' || m.mediaType === 'IMAGE').length;
+  if (matches.length) console.log(`[발행담당] 카드뉴스 재조정 — 브랜드 '${brand || '범용'}': ${matches.length}건 백필(라이브 게시물 ${posts}개)`);
+  return { matches, postsOnIg: posts };
 }
 app.post('/shorts/meta-reconcile', async (c) => {
   const brand = c.req.query('brand') ?? '';
@@ -2961,7 +3084,7 @@ function openLongformRun(): { bus: EventBus; signal: AbortSignal; started: (recI
         bus.emit(EventType.error, { message: r.error ?? '롱폼 제작 실패' });
         bus.emit(EventType.run_done, { status: 'error' });
       }
-      persistEvents(id, bus); persistRunMeta(id, handle);
+      persistEvents(id, bus); persistRunMeta(id, handle); scheduleDisposeIfUnwatched(id, 60_000);
     },
   };
 }
@@ -3071,6 +3194,8 @@ interface NaverDraftJob {
   publicPublished?: boolean;
   /** 자동 게이트가 기동한 잡의 담당자 표기(발행 담당) — 수동(검토 탭 버튼) 잡은 비움. */
   actor?: string;
+  /** 발행 버튼은 눌렸는데 글 주소를 못 받았다(2026-10-26) — 알림 제목이 '완료' 대신 '확인 필요'. */
+  unconfirmed?: boolean;
 }
 const NAVER_DRAFT_JOBS = new Map<string, NaverDraftJob>();
 
@@ -3106,7 +3231,7 @@ app.post('/comments/:id/skip', (c) => {
 
 // 임시저장 잡 기동(공용) — 검토 탭 버튼(pieceNaverDraftHandler)과 자동 게이트(maybeAutoNaverDraft)가
 // 같은 가드·프로필 뮤텍스를 공유한다. 잡 등록(set)까지 동기 — await 금지(TOCTOU 차단: 이중 기동 방지).
-type NaverDraftStart = { ok: true } | { error: string; status: 400 | 404 | 409 };
+type NaverDraftStart = { ok: true; queued?: boolean; note?: string } | { error: string; status: 400 | 404 | 409 };
 /** 블로그 본문 확정 → 카드뉴스·숏폼 자동 파생(piece당 각 1회, AUTO_CARDNEWS / AUTO_SHORTS 로 켜고 끔).
  *  호출 지점: 네이버 임시저장 성공 훅 + 자동 임시저장 off 시 ready 확정(maybeAutoNaverDraft). 가드가 멱등을 보장. */
 function autoDeriveSet(id: string, title: string): void {
@@ -3207,7 +3332,63 @@ function replayCreditDeferred(list: readonly CreditDeferred[]): CreditDeferred[]
   return made;
 }
 
-function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string; auto?: boolean; private?: boolean } = {}): NaverDraftStart {
+/**
+ * 이미 네이버에 올라간 글을 또 올리려는가(순수, 2026-10-26) — 막을 사유 문장 또는 null.
+ * 이 라우트는 '수정'이 아니라 새 글을 하나 더 쓴다. 그런데 옛 텔레그램 알림의 발행 버튼(bp)은 언제든 다시 눌리고,
+ * 비공개 발행분은 검토 탭 버튼도 그대로 남아 같은 글이 전체공개로 한 번 더 올라갈 수 있었다. 진짜 글 주소
+ * (publishedUrl·privateUrl)가 있으면 막는다. naverDraftUrl 만 있는 건 임시저장 폴백이라 다시 저장해 마무리하는 게
+ * 정상 경로다(막지 않는다). 시험 실행(dryRun)은 아무것도 올리지 않으므로 통과. 일부러 다시 올리는 길은 republish:true 뿐이다
+ * (예: 비공개 발행 뒤 수정 요청으로 본문이 바뀐 글) — 지금 이 플래그를 싣는 화면 버튼은 없다.
+ */
+export function naverRepublishBlock(
+  p: { publishedUrl?: string; privateUrl?: string; naverPublishUnconfirmedTs?: string },
+  o: { dryRun?: boolean; republish?: boolean } = {},
+): string | null {
+  if (o.dryRun || o.republish) return null;
+  const url = p.publishedUrl || p.privateUrl;
+  // 발행 버튼은 눌렸는데 주소를 확인 못 한 글(2026-10-26 검토) — 주소가 없어 종전 검사는 통과했고, 옛 텔레그램 버튼이
+  // 같은 글을 하나 더 올렸다. 실제로 올라갔을 수 있으니 네이버에서 먼저 보게 한다.
+  if (!url && p.naverPublishUnconfirmedTs) {
+    return `발행 버튼은 눌렸지만 글 주소를 확인하지 못한 글입니다(${p.naverPublishUnconfirmedTs.slice(0, 16)}) — 네이버에 이미 올라갔을 수 있어 막았습니다. `
+      + '네이버 블로그에서 먼저 확인하세요. 올라가 있으면 그대로 두면 됩니다(공개 글은 새벽 발행 감지가 주소를 채웁니다). '
+      + '정말 안 올라갔으면 스튜디오에서 다시 발행(republish:true)을 명시해 요청하세요.';
+  }
+  if (!url) return null;
+  return `이미 네이버에 ${p.publishedUrl ? '발행된' : '비공개로 발행된'} 글입니다(${url}) — 다시 누르면 같은 글이 하나 더 올라가서 막았습니다. `
+    + '고칠 게 있으면 네이버에서 그 글을 직접 수정하세요. 일부러 새 글로 다시 올려야 하면(수정 요청으로 본문이 바뀐 경우 등) '
+    + '네이버에서 기존 글을 먼저 지우고, 스튜디오에서 다시 발행(republish:true)을 명시해 요청하세요.';
+}
+
+/**
+ * 네이버 발행 잡 결과 → 조각에 적을 주소 패치(순수, 2026-10-26 검토).
+ * - 발행 버튼이 눌렸는데(privatePublished·publicPublished) 진짜 글 주소가 없으면 '확인 필요'(unconfirmed) — 시각을 찍어
+ *   naverRepublishBlock 이 다시 발행을 막게 한다. 주소가 확인되면 그 표시를 지운다. 임시저장 폴백은 표시를 건드리지 않는다.
+ * - republish(옛 글을 지우고 일부러 새로 올림): 새 글 주소로 바꾼다. 새 주소를 못 얻었으면 옛 주소를 지운다 — 옛 글은 지웠다는
+ *   전제라 남겨 두면 파생 캡션이 지운 글을 가리키고, 옛 publishedUrl 때문에 RSS 감지가 새 글을 영영 건너뛴다.
+ *   전체공개 새 주소(publicNow)는 호출부가 setPublished 로 덮는다.
+ */
+export function naverPublishPatch(
+  r: { privatePublished: boolean; publicPublished: boolean; draftUrl?: string },
+  prev: { publishedUrl?: string; privateUrl?: string },
+  o: { republish?: boolean; nowIso: string },
+): { patch: Partial<Pick<Piece, 'privateUrl' | 'publishedUrl' | 'naverPublishUnconfirmedTs'>>; publicNow?: string; unconfirmed: boolean } {
+  const { privateUrl: privateNow, publishedUrl: publicNow } = naverJobUrls(r);
+  const clicked = r.privatePublished || r.publicPublished;
+  const unconfirmed = clicked && !privateNow;
+  const patch: Partial<Pick<Piece, 'privateUrl' | 'publishedUrl' | 'naverPublishUnconfirmedTs'>> = {};
+  if (privateNow) patch.privateUrl = privateNow;
+  if (clicked) patch.naverPublishUnconfirmedTs = unconfirmed ? o.nowIso : undefined;
+  if (o.republish && clicked) {
+    if (!privateNow && prev.privateUrl) patch.privateUrl = undefined;
+    if (!publicNow && prev.publishedUrl) patch.publishedUrl = undefined;
+  }
+  return { patch, ...(publicNow ? { publicNow } : {}), unconfirmed };
+}
+
+/** 성과 수집이 끝나길 기다리는 사람 발행(2026-10-26) — 대기 중 같은 글을 또 누르면 '이미 대기 중'으로 답한다. */
+const NAVER_PUBLISH_WAITING = new Set<string>();
+
+function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string; auto?: boolean; private?: boolean; republish?: boolean } = {}): NaverDraftStart {
   const dryRun = opts.dryRun === true;
   // 전체공개는 사람이 누른 발행만(2026-10-01) — 자동 게이트(auto)는 사람 검토 없이 도는 길이라 비공개 그대로.
   // actor 로 가르면 안 된다: 텔레그램 버튼(사람)도 actor 를 싣는다.
@@ -3217,6 +3398,37 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
   if (!piece) return { error: 'unknown piece', status: 404 };
   if (!piece.runId) return { error: '초안이 아직 없습니다.', status: 409 };
   if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') return { error: '이미 네이버 비공개 발행이 진행 중입니다.', status: 409 };
+  const already = naverRepublishBlock(piece, { dryRun, republish: opts.republish });
+  if (already) return { error: already, status: 409 };
+  // 수집 검사를 프로필 검사보다 먼저 본다(2026-10-26) — 수집은 앞쪽 RSS 감지 뒤 프로필(일일동기화)을 잡으므로, 순서가 반대면
+  // 수집 중 누른 텔레그램 발행이 대기열에 못 들어가고 '브라우저 작업 진행 중'으로 바로 거절된다.
+  // 성과 수집(naverRefreshBusy)도 같은 프로필을 쓴다 — 클립·댓글 라우트와 같은 가드(2026-10-26). 수집은 앞쪽 발행 감지(RSS)
+  // 동안 naverProfileBusy 를 안 잡아서, 그 틈에 발행이 프로필을 잡으면 사람이 누른 수집이 조용히 건너뛰어졌다.
+  if (!dryRun && naverRefreshBusy) {
+    // 사람이 텔레그램에서 누른 발행은 거절하지 않고 수집이 끝나길 기다린다(2026-10-26 검토) — 수동 수집은 최대 30분이라,
+    // 종전엔 그동안 누른 발행이 '시작 실패'로 끝나 사람이 다시 눌러야 했다. 자동 게이트(auto)·화면 버튼(actor 없음)은 종전대로 409
+    // — 화면은 상태를 폴링하는데 대기 중엔 잡이 없어 '끝남'으로 보이고, 자동 게이트는 다음 기회에 다시 돈다.
+    if (!opts.actor || opts.auto) return { error: '네이버 성과 수집이 진행 중입니다 — 끝난 뒤 다시 시도하세요.', status: 409 };
+    if (NAVER_PUBLISH_WAITING.has(id)) return { ok: true, queued: true, note: '이미 수집 끝나길 기다리는 중입니다 — 끝나는 대로 시작합니다.' };
+    NAVER_PUBLISH_WAITING.add(id);
+    const actor = opts.actor;
+    console.log(`[네이버] ${piece.title.slice(0, 30)} — 성과 수집 중이라 발행 대기(${actor}) — 끝나는 대로 시작`);
+    if (notifyConfigured()) void notify({ title: `📗 ${actor} — 네이버 성과 수집 중 · 끝나는 대로 발행을 시작합니다`, body: piece.title.slice(0, 60) }).catch(() => { /* 무해 */ });
+    void (async () => {
+      // 40분 상한 — 수동 수집 실측 최장(~30분)을 덮는다. 넘기면 몰래 이어 올리지 않고 알린다.
+      for (let i = 0; i < 160 && naverRefreshBusy; i++) await new Promise((r) => setTimeout(r, 15_000));
+      NAVER_PUBLISH_WAITING.delete(id);
+      // 다시 처음부터 같은 검사를 받는다(이미 발행됨·다른 잡·런 실행 중 등) — 기다리는 동안 상태가 바뀌었을 수 있다.
+      const r: NaverDraftStart = naverRefreshBusy
+        ? { error: '네이버 성과 수집이 40분 넘게 끝나지 않아 발행을 시작하지 않았습니다 — 수집이 끝난 뒤 다시 눌러 주세요.', status: 409 }
+        : startNaverDraftJob(id, opts);
+      if ('error' in r) {
+        console.log(`[네이버] ${piece.title.slice(0, 30)} — 수집 대기 뒤 발행 시작 실패: ${r.error}`);
+        if (notifyConfigured()) void notify({ title: `📗 ${actor} — 네이버 발행 시작 못 함 · ${piece.title.slice(0, 40)}`, body: r.error }).catch(() => { /* 무해 */ });
+      }
+    })().catch(() => { NAVER_PUBLISH_WAITING.delete(id); });
+    return { ok: true, queued: true, note: '네이버 성과 수집이 진행 중입니다 — 수집 끝나는 대로 시작합니다(완료되면 알림).' };
+  }
   // 실런은 브라우저를 여니 프로필 뮤텍스 필요 — 수집·타 임시저장·일일동기화와 상호 배제.
   if (!dryRun && naverProfileBusy) {
     return { error: `네이버 브라우저 작업이 진행 중입니다(${naverProfileBusy}) — 완료 후 다시 시도하세요.`, status: 409 };
@@ -3247,30 +3459,39 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
     if (r.ok) {
       job.status = 'saved'; job.url = r.draftUrl; job.adminUrl = r.adminUrl; job.privatePublished = r.privatePublished; job.publicPublished = r.publicPublished;
       if (r.issues.length) job.error = r.issues.join(' · '); // PARTIAL — 저장은 됐지만 일부 문제(이미지 누락 등)
-      // 잡 도는 사이 리비전으로 runId 가 바뀌었다면 이 결과는 옛 내용 — 현재 초안의 기록으로 남기지 않는다.
-      if (!dryRun && pieceStore().get(id)?.runId === runIdAtStart) {
+      const cur = dryRun ? undefined : pieceStore().get(id);
+      if (cur) {
         // 비공개 발행(2026-08-28 수선) — 파이썬 기본 모드는 임시저장이 아니라 '비공개 발행'이라 진짜 글
         // 주소(logNo=…)가 나온다. 종전엔 publish_mode 를 안 읽어 그 URL 이 naverDraftUrl 로만 들어갔고,
         // publishedUrl 이 비어 파생물 캡션의 원본 블로그 링크가 끝내 안 붙었다(사용자 제보).
         // 임시저장 폴백일 때는 URL 이 postwrite 라 절대 publishedUrl 로 쓰지 않는다.
-        const { privateUrl: privateNow, publishedUrl: publicNow } = naverJobUrls(r);
+        // privateUrl 로 넣는다(2026-08-29 수선) — publishedUrl 에 넣었더니 RSS 발행 감지가 이 조각을
+        // '이미 처리됨'으로 보고 건너뛰어, 사람이 전체공개로 바꿔도 발행이 잡히지 않았다(실측 5건). 공개 판정은 publishedUrl 한 곳만 한다.
+        const { patch, publicNow, unconfirmed } = naverPublishPatch(r, cur, { republish: opts.republish, nowIso: job.endedTs });
+        job.unconfirmed = unconfirmed;
+        // 잡 도는 사이 리비전으로 runId 가 바뀌었으면 본문은 옛 내용 — 그래도 글 주소는 **항상** 적는다(2026-10-26 검토).
+        // 종전엔 통째로 건너뛰어 네이버엔 진짜 글이 있는데 재발행 가드가 비어, 리비전 완료 뒤 자동 게이트·버튼이 같은 글을
+        // 하나 더 올렸다. naverDraftTs 도 항상 — RSS 발행 감지가 이 시각을 기준으로 찾는다(없으면 비공개 글이 공개돼도 못 잡는다).
+        // 편집기 주소(naverDraftUrl)·파생만 현재 초안일 때(아래).
+        const sameRun = cur.runId === runIdAtStart;
         pieceStore().update(id, {
-          naverDraftUrl: r.draftUrl ?? r.adminUrl, naverDraftTs: job.endedTs,
-          // privateUrl 로 넣는다(2026-08-29 수선) — publishedUrl 에 넣었더니 RSS 발행 감지가 이 조각을
-          // '이미 처리됨'으로 보고 건너뛰어, 사람이 전체공개로 바꿔도 발행이 잡히지 않았다(실측 5건).
-          // 공개 판정은 publishedUrl 한 곳만 한다.
-          ...(privateNow ? { privateUrl: privateNow } : {}),
+          naverDraftTs: job.endedTs,
+          ...(sameRun ? { naverDraftUrl: r.draftUrl ?? r.adminUrl } : {}),
+          ...patch,
         });
         // 실제 발행 글 주소는 privateUrl 에 적는다(비공개·전체공개 공통). 비공개는 publishedUrl 을 RSS 감지에 맡기고,
         // 전체공개는 아래에서 바로 발행됨으로 넘긴다(naverJobUrls).
-        if (privateNow) console.log(`[네이버] ${r.publicPublished ? '전체공개' : '비공개'} 발행 — ${privateNow.slice(0, 80)}`);
+        if (patch.privateUrl) console.log(`[네이버] ${r.publicPublished ? '전체공개' : '비공개'} 발행 — ${patch.privateUrl.slice(0, 80)}${sameRun ? '' : ' (잡 도중 리비전 — 옛 본문으로 올라감)'}`);
+        if (unconfirmed) console.log(`[네이버] ⚠ ${piece.title.slice(0, 30)} — 발행 버튼은 눌렸지만 글 주소 확인 못 함 → 재발행 차단 표시(naverPublishUnconfirmedTs)`);
         // 전체공개면 바로 '발행됨'(2026-10-02) — 수동 '발행 등록'·RSS 감지와 같은 setPublished. 미발행 초안 상한에서 즉시 빠진다.
         if (publicNow) { pieceStore().setPublished(id, publicNow); nudgeNaverClipsForPiece(id); }
         // 저장 성공 = 본문 확정 + 블로그 주소 확보 → 카드뉴스·숏폼 자동 파생(주제 하나 → 세트).
         // 2026-08-28 사용자 확정으로 이 훅이 파생의 **단일 경로**가 됐다 — 사람이 검토 탭·텔레그램
         // 버튼으로 저장한 글도 같은 훅을 타므로 전량 수동 검토 운영에서도 세트는 정상 생성된다.
         // autoDeriveSet 내부 가드가 중복 파생을 막는다(같은 piece 로 두 번 저장해도 no-op).
-        autoDeriveSet(id, piece.title);
+        // 리비전으로 바뀐 초안이면 파생하지 않는다 — 파생은 현재 본문을 읽는데, 올라간 글은 옛 본문이다.
+        if (sameRun) autoDeriveSet(id, piece.title);
+        else pieceStore().update(id, { deriveDeferred: true }); // 리비전이 ready 에 닿을 때 파생(advancePieceReady)
       }
     } else {
       job.status = 'failed';
@@ -3284,8 +3505,10 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
     // 자동(발행 담당) 잡 종료 알림 — 채널 설정 시에만. 수동 잡은 사용자가 화면에서 폴링하므로 제외.
     if (opts.actor && !dryRun && notifyConfigured()) {
       void notify({
-        title: `📗 ${opts.actor} — 네이버 ${job.publicPublished ? '전체공개 발행' : job.privatePublished ? '비공개 발행' : '임시저장'} ${job.status === 'saved' ? '완료' : '실패'} · ${piece.title.slice(0, 40)}`,
-        body: job.url ?? job.adminUrl ?? job.error ?? '',
+        // 주소 확인 못 한 발행은 '완료'가 아니라 '발행 확인 필요'(2026-10-26 검토) — 사람이 네이버에서 직접 봐야 한다.
+        title: `📗 ${opts.actor} — 네이버 ${job.publicPublished ? '전체공개 발행' : job.privatePublished ? '비공개 발행' : '임시저장'} ${job.status !== 'saved' ? '실패' : job.unconfirmed ? '확인 필요(글 주소 못 받음 — 다시 누르지 마세요)' : '완료'} · ${piece.title.slice(0, 40)}`,
+        // 주소가 있어도 문제(issues)는 붙인다(2026-10-26) — '발행은 눌렸지만 주소 확인 못 함 — 다시 발행하지 마세요' 경고가 텔레그램에 닿게.
+        body: [job.url ?? job.adminUrl, job.error].filter(Boolean).join('\n') || '',
       });
     }
   });
@@ -3295,12 +3518,14 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
 async function pieceNaverDraftHandler(c: Context): Promise<Response> {
   const id = c.req.param('id') ?? '';
   if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
-  const b = await c.req.json<{ dry_run?: boolean; actor?: string; private?: boolean }>().catch(() => ({} as { dry_run?: boolean; actor?: string; private?: boolean }));
+  const b = await c.req.json<{ dry_run?: boolean; actor?: string; private?: boolean; republish?: boolean }>().catch(() => ({} as { dry_run?: boolean; actor?: string; private?: boolean; republish?: boolean }));
   const dryRun = b.dry_run === true;
   // actor 지정(텔레그램 봇 등 비-UI 트리거) — 설정 시 잡 완료 알림이 발송된다(자동 게이트와 동일 경로).
   const actor = typeof b.actor === 'string' && b.actor.trim() ? b.actor.trim().slice(0, 20) : undefined;
-  const r = startNaverDraftJob(id, { dryRun, actor, private: b.private === true }); // 가드~잡 등록은 내부에서 동기 처리
+  // republish — 이미 올라간 글을 일부러 새 글로 다시 올릴 때만(naverRepublishBlock). 텔레그램 버튼은 싣지 않는다.
+  const r = startNaverDraftJob(id, { dryRun, actor, private: b.private === true, republish: b.republish === true }); // 가드~잡 등록은 내부에서 동기 처리
   if ('error' in r) return c.json({ error: r.error }, r.status);
+  if (r.queued) return c.json({ ok: true, started: false, queued: true, note: r.note, dry_run: dryRun, private: b.private === true }, 202);
   return c.json({ ok: true, started: true, dry_run: dryRun, private: b.private === true });
 }
 function pieceNaverDraftStatusHandler(c: Context): Response {
@@ -3315,6 +3540,7 @@ function pieceNaverDraftStatusHandler(c: Context): Response {
     status: job.status, url: job.url ?? piece.naverDraftUrl, admin_url: job.adminUrl,
     error: job.error, dry_run: job.dryRun, started_ts: job.startedTs, ended_ts: job.endedTs,
     actor: job.actor, private_published: !!job.privatePublished, public_published: !!job.publicPublished,
+    unconfirmed: !!job.unconfirmed,
   });
 }
 
@@ -4436,13 +4662,41 @@ app.get('/connectors', (c) => c.json({ connectors: listCustomConfigs() }));
 app.post('/connectors', async (c) => {
   const cfg = await c.req.json<CustomConnectorCfg>().catch(() => null);
   if (!cfg) return c.json({ ok: false, error: '잘못된 설정' }, 400);
+  // 저장도 시험과 같은 키 검사(2026-10-26) — 저장된 커넥터는 그라운딩 때마다 키 값을 그 주소로 보낸다. 시험만 막으면 저장으로 우회된다.
+  const keyBlock = connectorTestKeyBlock(String(cfg.keyName ?? ''), connectorKeySets());
+  if (keyBlock) return c.json({ ok: false, error: keyBlock }, 400);
   return c.json(saveCustomConfig(cfg));
 });
 app.delete('/connectors/:id', (c) => c.json(deleteCustomConfig(c.req.param('id') ?? '')));
 // 테스트 — 설정 + 검색어로 실제 호출해 추출 결과 미리보기(저장 전 검증). 키는 시크릿에서 읽음.
+/**
+ * 커넥터 시험이 읽을 수 있는 키인가(순수, 2026-10-26 검토) — 막을 사유 또는 null. 이 라우트는 keyName 의 값을 {key} 로 사용자가 적은
+ * 주소에 실어 보낸다. 종전엔 아무 이름이나 받아 AUTH_TOKEN·텔레그램 봇 토큰 같은 앱 자체 비밀도 외부 주소로 내보낼 수 있었다.
+ * 허용: 코드 커넥터(법령·DART 등)가 선언한 키, 사용자 키 꼴(isAllowedCustomKeyName) 중 앱 자체 자격 증명이 아닌 것,
+ * 이미 저장된 사용자 커넥터가 쓰던 키(savedKeys — 꼴 규칙 전에 만든 'KOSIS_API' 같은 이름이 시험·재저장에서 막히지 않게. 단 앱 자격 증명은 아님).
+ */
+export function connectorTestKeyBlock(name: string, o: { staticKeys: ReadonlySet<string>; savedKeys: ReadonlySet<string> }): string | null {
+  if (!name) return 'keyName 필요';
+  if (o.staticKeys.has(name)) return null;
+  if (isAppCredentialKey(name)) return `${name} 은(는) 앱이 직접 쓰는 자격 증명이라 사용자 커넥터에 실을 수 없습니다.`;
+  if (o.savedKeys.has(name) && !isReservedEnvKey(name)) return null;
+  if (!isAllowedCustomKeyName(name)) return `${name} 은(는) 커넥터 키 이름으로 쓸 수 없습니다 — _API_KEY·_KEY·_TOKEN·_SECRET·_PASSWORD·_ID 로 끝나는 사용자 키 이름만 됩니다.`;
+  return null;
+}
+/** 코드 커넥터(설정 파일 기반 사용자 커넥터 제외)가 선언한 키 이름 — 사용자 커넥터가 같은 이름을 선언해도 여기 끼지 않는다. 저장된 사용자 커넥터 키도 함께. */
+function connectorKeySets(): { staticKeys: Set<string>; savedKeys: Set<string> } {
+  const saved = listCustomConfigs();
+  const customIds = new Set(saved.map((x) => x.id));
+  return {
+    staticKeys: new Set(connectors().filter((x) => !customIds.has(x.id)).flatMap((x) => (x.keyDefs ?? [x.keyDef]).map((d) => d.key))),
+    savedKeys: new Set(saved.map((x) => x.keyName).filter(Boolean)),
+  };
+}
 app.post('/connectors/test', async (c) => {
   const b = await c.req.json<{ cfg?: CustomConnectorCfg; query?: string }>().catch(() => ({}) as { cfg?: CustomConnectorCfg; query?: string });
   if (!b.cfg) return c.json({ ok: false, error: 'cfg 필요' }, 400);
+  const keyBlock = connectorTestKeyBlock(String(b.cfg.keyName ?? ''), connectorKeySets());
+  if (keyBlock) return c.json({ ok: false, error: keyBlock }, 400);
   const keySet = !!getSecret(b.cfg.keyName);
   if (!keySet) return c.json({ ok: false, error: `${b.cfg.keyName} 키가 설정되지 않았습니다(API키 화면에서 입력).` });
   const preview = await runCustomConnector(b.cfg, b.query?.trim() || '테스트', c.req.raw.signal);
@@ -4570,13 +4824,22 @@ app.get('/media/file/:id', (c) => {
   const root = path.resolve(mediaDir());
   const real = path.resolve(hit.file);
   if (!real.startsWith(root + path.sep)) return c.json({ error: 'forbidden' }, 403);
-  try {
-    const buf = fs.readFileSync(real);
-    const ext = path.extname(real).toLowerCase();
-    const type = ext === '.mp4' || ext === '.m4v' ? 'video/mp4' : ext === '.mov' ? 'video/quicktime'
-      : ext === '.webm' ? 'video/webm' : ext === '.png' ? 'image/png' : 'image/jpeg';
-    return new Response(new Uint8Array(buf), { headers: { 'content-type': type, 'cache-control': 'private, max-age=86400' } });
-  } catch { return c.json({ error: 'read failed' }, 500); }
+  // 스트리밍 + Range(2026-10-26 검토) — 종전엔 readFileSync 로 영상 전체(보관소 1.1GB, 한 편 수백 MB)를 메모리에 올렸고 Range 가
+  // 없어 아이폰 사파리는 재생 자체를 못 했다(사파리는 bytes=0-1 부터 묻는다). 롱폼 영상 라우트(longformVideoHandler)와 같은 방식.
+  let size = 0;
+  try { size = fs.statSync(real).size; } catch { return c.json({ error: 'read failed' }, 500); }
+  const ext = path.extname(real).toLowerCase();
+  const type = ext === '.mp4' || ext === '.m4v' ? 'video/mp4' : ext === '.mov' ? 'video/quicktime'
+    : ext === '.webm' ? 'video/webm' : ext === '.png' ? 'image/png' : 'image/jpeg';
+  const r = longformRange(c.req.header('range'), size);
+  if (r === 'invalid') return c.body(null, 416, { 'Content-Range': `bytes */${size}` });
+  const stream = r ? fs.createReadStream(real, { start: r.start, end: r.end }) : fs.createReadStream(real);
+  stream.on('error', () => { /* 읽는 중 파일이 정리되면 응답만 끊긴다 — 프로세스는 살린다 */ });
+  c.req.raw.signal?.addEventListener('abort', () => stream.destroy(), { once: true });
+  const body = Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>;
+  const common = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=86400' };
+  if (!r) return c.body(body, 200, { ...common, 'Content-Length': String(size) });
+  return c.body(body, 206, { ...common, 'Content-Range': `bytes ${r.start}-${r.end}/${size}`, 'Content-Length': String(r.end - r.start + 1) });
 });
 
 app.post('/sources', async (c) => {
@@ -4736,12 +4999,16 @@ async function reviseHandler(c: Context): Promise<Response> {
   evictRuns();
 
   runRevise(bus, { topic: parent.topic, positions: parent.positions, priorDeliverable: parent.deliverable ?? '', feedback, signal: abort.signal })
-    .then((o) => { handle.status = 'done'; handle.deliverable = o.deliverable; handle.positions = o.positions; handle.subproblems = o.subproblems; })
+    .then((o) => {
+      // 취소 뒤 정상 종료로 돌아와도 '취소됨'(2026-10-26) — 이제 cancelHandler 가 상태를 바꾸지 않으므로 여기서 닫는다.
+      if (abort.signal.aborted) { handle.status = 'cancelled'; bus.emit(EventType.run_done, { status: 'cancelled' }); return; }
+      handle.status = 'done'; handle.deliverable = o.deliverable; handle.positions = o.positions; handle.subproblems = o.subproblems;
+    })
     .catch((e: unknown) => {
       if (abort.signal.aborted || isAbort(e)) { handle.status = 'cancelled'; bus.emit(EventType.run_done, { status: 'cancelled' }); }
       else { handle.status = 'error'; bus.emit(EventType.error, { message: e instanceof Error ? e.message : String(e) }); bus.emit(EventType.run_done, { status: 'error' }); }
     })
-    .finally(() => { persistEvents(id, bus); persistRunMeta(id, handle); });
+    .finally(() => { persistEvents(id, bus); persistRunMeta(id, handle); scheduleDisposeIfUnwatched(id, 60_000); });
 
   return c.json({ run_id: id, version });
 }
@@ -4955,7 +5222,10 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
   // force(사용자 직접 실행) 땐 리서치 분기 생략 — 사용자가 원한 건 '지금 콘텐츠 생산'(사용자 결정 2026-08-09).
   const tickBrand = activeBrandSlug() || '';
   // 정각 오토런 앞 60분은 조사를 띄우지 않는다 — 슬롯과 충돌하면 그날 생산분을 놓친다(2026-10-26). 슬롯 뒤 틱에서 다시 본다.
-  if (!force && researchDue(CONFIG.researchCycleHours, tickBrand) && !beforeAutorunSlot(Date.now(), CONFIG.autorunTimes)) {
+  // 슬롯 뒤 5분·오늘 슬롯이 아직 결과 전(대기 표식·일일 틱 전)인 동안도 막는다(2026-10-26 검토) — 06:00:xx 에 일반 틱이
+  // 일일 틱보다 먼저 돌면 조사런이 떠 슬롯을 밀었다.
+  const slotGuard = nearAutorunSlot(Date.now(), CONFIG.autorunTimes) || autorunSlotUnsettled(CONFIG.autorunTimes);
+  if (!force && researchDue(CONFIG.researchCycleHours, tickBrand) && !slotGuard) {
     const title = await proposeResearchMission(signal, tickBrand);
     if (title) return { kind: 'research', title, brand: tickBrand };
   }
@@ -5144,6 +5414,9 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
 
 const stopAutoCycle = startAutoCycle<AutoWork>({
   intervalMs: CONFIG.autoCycleMinutes * 60_000,
+  // 부팅 3분 뒤 첫 틱(2026-10-26) — 하루 ~10회 재시작마다 끊긴 조각 재개가 주기(60분)만큼 밀렸다. 3분은 부팅 복구 스윕
+  // (15~60초 지연)이 끝난 뒤이고, 연쇄 재시작 버스트는 타이머가 프로세스와 함께 사라져 한 번으로 접힌다. 테스트에선 끈다.
+  firstDelayMs: process.env.VITEST ? undefined : 180_000,
   isEnabled: autoRunEnabled, // 사용자 토글(대시보드 '자율' 칩 클릭) — 꺼짐이면 틱이 조용히 통과
   isBusy: () => [...RUNS.values()].some(busyRun), // 자율런 포함 — 동시 1런만(단일 KV 슬롯 불변식). 롱폼 편 런은 제외(busyRun).
   pickWork: (signal, force, userTriggered) => pickAutoWork(signal, force, userTriggered),
@@ -5200,10 +5473,24 @@ app.post('/api/autonomy/tick', (c) => c.redirect('/autonomy/tick', 307));
 // 30분 타이머 틱(24h 간격 케이던스)은 슬롯 유실 시(런 충돌 등) 따라잡기 폴백으로 남는다.
 for (const t of CONFIG.autorunTimes.split(',').map((s) => s.trim()).filter(Boolean)) {
   startDaily({
-    time: t, key: `autorun-${t.replace(':', '')}`,
+    time: t, key: autorunDailyKey(t), // 조사런 가드(autorunSlotUnsettled)와 같은 키
     // 지속 실행 — 슬롯 발화 순간 다른 런(유휴 틱 리서치 등)이 돌고 있으면 종료를 기다렸다 생산
     // (실사고 2026-08-18: 18:00 슬롯이 리서치 런에 밀려 소멸, 30분 폴백 틱은 케이던스 게이트에 막힘).
-    run: () => { if (autoRunEnabled()) void stopAutoCycle.runNowPersistent({ label: `정각 슬롯(${t})`, respectToggle: true }); },
+    // runSettled(2026-10-26) — 결과가 나온 뒤에야 그날을 '돌았음'으로 적는다. 대기(최대 30분) 중 재시작하면 부팅 뒤 다시 돈다.
+    // queue — 다른 대기(수동 틱·사실 부족 재시도)가 먼저 잡혀 있어도 버려지지 않고 그 뒤에 한 번 더 시도한다.
+    runSettled: async () => {
+      if (!autoRunEnabled()) return 'idle';
+      const r = await stopAutoCycle.runNowPersistent({ label: `정각 슬롯(${t})`, respectToggle: true, queue: true });
+      // 포기·오류는 사장님께 알린다(2026-10-26) — 종전엔 로그 한 줄뿐이라 그날 글이 왜 안 나왔는지 아무도 몰랐다.
+      if ((r === 'busy' || r === 'error') && notifyConfigured()) {
+        const blockers = [...RUNS.values()].filter(busyRun).map((h) => `"${h.topic.slice(0, 40)}"${h.auto ? '(자율)' : ''}`);
+        const why = r === 'error' ? '주제 고르기 중 오류가 났습니다(서버 로그 [auto-cycle] 확인).'
+          : blockers.length ? `진행 중 런이 끝나지 않았습니다: ${blockers.join(', ')}`
+          : '다른 재시도 대기가 이미 잡혀 있었습니다.';
+        void notify({ title: `⏰ 정각 슬롯(${t}) 놓침 — 오늘 이 슬롯 글은 안 나갑니다`, body: `${why}\n필요하면 스튜디오에서 '자율런'을 직접 실행하세요.` }).catch(() => { /* 무해 */ });
+      }
+      return r;
+    },
     log: (m) => console.log('[정각 오토런]', m),
   });
 }
@@ -5335,7 +5622,8 @@ const stopNaverSync = startDaily({
   time: CONFIG.naverSyncTime,
   key: 'naver-sync',
   // 발행 감지(공개 RSS)가 publishedUrl 을 채운 뒤 성과 수집 — 순서 의존이라 then 으로 잇는다.
-  run: () => { void discoverPublishedNaver().then((ids) => { ids.forEach(nudgeNaverClipsForPiece); return syncPerformance(); }); },
+  // 끝의 catch(2026-10-26) — 이 사슬은 처리기 없이 버려져, 감지·수집이 던지면 프로세스 전체가 죽었다(Node 22).
+  run: () => { void discoverPublishedNaver().then((ids) => { ids.forEach(nudgeNaverClipsForPiece); return syncPerformance(); }).catch((e: unknown) => console.log('[naver-sync]', `발행 감지·성과 수집 실패(무해): ${e instanceof Error ? e.message : String(e)}`)); },
   log: (m) => console.log('[naver-sync]', m),
 });
 void stopNaverSync;
@@ -5362,19 +5650,28 @@ function janitorDeps(): JanitorDeps {
     // 롱폼(2026-10-22) — 렌더 잔여는 항상, 낭독·클립·그림 작업물은 유튜브 발행 keepDays 뒤. 제작 중인 편은 건너뛴다.
     longform: () => longformStore().list(),
     isLongformRunning: (id) => longformEpisodeRunning() === id,
+    // 색인이 깨진 채 떴는지(2026-10-26) — 깨진 색인은 빈 목록으로 보여 모든 폴더가 '고아'가 된다. 정리기가 그 범주를 건너뛴다.
+    storeCorrupt: () => ({ shorts: shortsStore().corrupt, cards: cardNewsStore().corrupt, pieces: pieceStore().corrupt }),
     log: (m) => console.log('[janitor]', m),
   };
+}
+/** 고아 정리 안전장치가 멈췄으면 알린다(2026-10-26) — 로그 한 줄로는 아무도 모른다. 멈춘 범주는 그날 정리가 안 돼 디스크가 찬다. */
+function notifyJanitorGuard(r: Awaited<ReturnType<typeof runJanitor>>): void {
+  if (!r.orphanGuard.length || !notifyConfigured()) return;
+  const lines = r.orphanGuard.map((g) => `· ${g.category}: ${g.reason} (후보 ${g.candidates}/폴더 ${g.folders})`);
+  void notify({ title: `🧹 저장공간 정리 — 고아 폴더 정리를 멈췄습니다${r.dryRun ? '(시험 실행)' : ''}`, body: `${lines.join('\n')}\n색인(index.json)이 비었거나 깨졌을 수 있습니다 — 그 범주는 하나도 옮기지 않았습니다. 서버 로그 [janitor] 확인.` }).catch(() => { /* 무해 */ });
 }
 const janitorOpts = () => ({ keepDays: CONFIG.janitorKeepDays, staleDays: CONFIG.janitorStaleDays, trashDays: CONFIG.janitorTrashDays });
 app.post('/maintenance/janitor', async (c) => {
   const dryRun = c.req.query('dry') === '1';
   const r = await runJanitor(janitorDeps(), { ...janitorOpts(), dryRun });
+  notifyJanitorGuard(r);
   return c.json(r);
 });
 const stopJanitor = startDaily({
   time: CONFIG.janitorTime,
   key: 'janitor',
-  run: () => { void runJanitor(janitorDeps(), janitorOpts()).catch((e) => console.log('[janitor]', `실패: ${e instanceof Error ? e.message : String(e)}`)); },
+  run: () => { void runJanitor(janitorDeps(), janitorOpts()).then(notifyJanitorGuard).catch((e) => console.log('[janitor]', `실패: ${e instanceof Error ? e.message : String(e)}`)); },
   log: (m) => console.log('[janitor]', m),
 });
 void stopJanitor;
@@ -5564,19 +5861,92 @@ if (!process.env.VITEST) {
   const warm = setTimeout(() => { void refreshDemandSnapshot().catch(() => {}); }, 20_000);
   if (typeof warm.unref === 'function') warm.unref();
 }
+// 깨진 저장소 알림(2026-10-26) — jsonStore 가 깨진 색인을 .corrupt-<시각> 으로 옮기고 빈 채로 띄우되 저장을 막는다. 로그만으로는
+// 사장님이 모른 채 하루를 보낸다(그동안 그 저장소의 새 기록은 전부 거절된다). 저장소는 처음 쓸 때 읽히므로(지연 생성) 여기서 한 번씩
+// 깨워 판정을 끝낸 뒤 목록을 본다. 5초 지연+unref — 연쇄 재시작 버스트에 알림이 겹치지 않게.
+if (!process.env.VITEST) {
+  const corruptCheck = setTimeout(() => {
+    try {
+      pieceStore(); shortsStore(); cardNewsStore(); longformStore(); promiseStore(); clusterStore(); listMedia(); loadCommentState();
+    } catch { /* 읽기는 던지지 않지만, 혹시 몰라 — 알림은 아래에서 있는 만큼만 */ }
+    // 승인 대기 파일은 따로 — 깨진 파일 하나를 옮겨 둘 뿐 저장을 막지 않는다(최종 검토 2026-10-26: '저장이 막힘'이라 알리면 사실과 다르다).
+    const all = corruptStoreFiles();
+    const approvalsDir = path.resolve(CONFIG.approvalsDir);
+    const quarantinedApprovals = all.filter((b) => b.file.startsWith(approvalsDir + path.sep));
+    if (quarantinedApprovals.length) console.error(`[저장소] 깨진 승인 대기 파일 ${quarantinedApprovals.length}개를 옮겨 두었습니다(저장은 막지 않음): ${quarantinedApprovals.map((b) => path.basename(b.file)).join(', ')}`);
+    const bad = all.filter((b) => !b.file.startsWith(approvalsDir + path.sep));
+    if (!bad.length) return;
+    const rel = (f: string): string => path.relative(CONFIG.dataDir, f) || f;
+    const lines = bad.map((b) => `· ${rel(b.file)}${b.quarantined ? ` → ${path.basename(b.quarantined)}` : ' (옮기기 실패)'}`);
+    console.error(`[저장소] ⚠ 깨진 색인 ${bad.length}개 — 이번 실행 동안 저장을 막습니다:\n${lines.join('\n')}`);
+    if (notifyConfigured()) {
+      void notify({
+        title: `🛑 저장소 색인 ${bad.length}개가 깨졌습니다 — 이번 실행 동안 저장이 막힙니다`,
+        body: `${lines.join('\n')}\n깨진 파일은 .corrupt-<시각> 으로 옮겨 두었고(지우지 않음), 마지막 정상본은 .bak.pre-corrupt-<시각> 으로 따로 떠 두었습니다. 그 저장소의 새 기록은 재시작 전까지 거절됩니다 — .bak.pre-corrupt 또는 .corrupt 로 복구한 뒤 재시작하세요(복구 없이 재시작하면 빈 목록으로 다시 시작합니다).`,
+      }).catch(() => { /* 무해 */ });
+    }
+  }, 5_000);
+  if (typeof corruptCheck.unref === 'function') corruptCheck.unref();
+}
 // 부팅 릴스 재조정(2026-10-13 무화과 릴스) — 인스타 공개 14초 뒤 재시작으로 릴스 번호를 저장하지 못해 성과 탭에서 빠졌다.
 // 발행 도중 끊긴 릴스를 캡션=제목으로 다시 찾아 기록한다(재발행 없음). 같은 이유로 60초 지연+unref.
 if (!process.env.VITEST) {
   const reco = setTimeout(() => {
     for (const slug of listMetaAccountSlugs()) {
       if (!getMetaAccount(slug).igUserId) continue;
-      void reconcileReels(slug).catch((e) => console.log(`[발행담당] 부팅 릴스 재조정 실패(무해) — ${e instanceof Error ? e.message : String(e)}`));
+      void reconcileReels(slug).catch((e) => console.log(`[발행담당] 부팅 릴스 재조정 실패(무해) — ${e instanceof Error ? e.message : String(e)}`))
+        // 카드뉴스도 이어서(2026-10-26) — 같은 목록 API 라 릴스 다음에 차례로(동시 호출로 한도를 겹쳐 쓰지 않게).
+        .then(() => reconcileCards(slug))
+        .catch((e) => console.log(`[발행담당] 부팅 카드뉴스 재조정 실패(무해) — ${e instanceof Error ? e.message : String(e)}`));
     }
   }, 60_000);
   if (typeof reco.unref === 'function') reco.unref();
 }
 
 const port = CONFIG.port;
+/**
+ * 처리 안 된 rejection 보고기(2026-10-26) — Node 22 는 처리기가 없으면 rejection 하나에 프로세스를 끝낸다. 그러면 발행·대기 중이던
+ * 일(네이버 발행·릴스 업로드·정각 슬롯 대기)이 통째로 끊기고 launchd 재기동만 남는다. 로그를 남기고 사장님께 알리되,
+ * 알림은 10분에 한 번만 — 알림 자체가 실패해 또 rejection 을 내도 돌고 돌지 않게. 이 함수는 절대 던지지 않는다.
+ */
+/**
+ * 오류 문장 속 비밀 가리기(순수, 2026-10-26 검토) — fetch 오류는 요청 주소를 통째로 싣는 일이 잦다(그래프 API 는 access_token 을
+ * 쿼리로 보낸다). 그대로 로그·텔레그램으로 내보내면 토큰이 채팅 기록에 남는다. 쿼리(…token=·…key=·secret=·password=),
+ * Authorization 의 Bearer, JSON 의 "access_token":"…" 꼴을 가린다. 이름은 남겨 무슨 값이었는지는 보이게.
+ */
+export function redactSecrets(text: string): string {
+  return text
+    .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 ***')
+    .replace(/\b([A-Za-z_]*(?:token|key|secret|password))=([^&\s"'<>]+)/gi, '$1=***')
+    .replace(/("[A-Za-z_]*(?:token|key|secret|password)"\s*:\s*")[^"]*"/gi, '$1***"');
+}
+export function unhandledRejectionReporter(
+  send: (m: { title: string; body: string }) => Promise<unknown>,
+  o: { gapMs?: number; now?: () => number; log?: (msg: string) => void } = {},
+): (reason: unknown) => void {
+  const gapMs = o.gapMs ?? 600_000;
+  const now = o.now ?? Date.now;
+  const log = o.log ?? ((m: string) => console.error(m));
+  let lastSent = -Infinity;
+  return (reason) => {
+    try {
+      // 가린 뒤에만 로그·알림으로 내보낸다(2026-10-26) — 로그 파일(/private/tmp/aicc-server.log)도 남이 읽을 수 있다.
+      const text = redactSecrets(reason instanceof Error ? (reason.stack ?? reason.message) : String(reason));
+      log(`[process] 처리 안 된 rejection — 서버는 계속 돈다: ${text}`);
+      const t = now();
+      if (t - lastSent < gapMs) return;
+      lastSent = t;
+      void send({ title: '⚠️ 서버 처리 안 된 오류(rejection)', body: `서버는 계속 돕니다. 같은 오류가 이어지면 로그를 확인하세요.\n${text.slice(0, 600)}` })
+        .catch(() => { /* 알림 실패 무해 — 다음 알림은 간격 뒤 */ });
+    } catch { /* 보고기 자체 실패도 삼킨다 — 여기서 던지면 처리기가 없는 것과 같다 */ }
+  };
+}
+// 테스트에선 걸지 않는다 — vitest 가 보고하는 rejection 을 삼키고 실제 텔레그램으로 알림이 나간다.
+// uncaughtException 은 걸지 않는다 — 동기 예외 뒤 상태는 믿을 수 없어 종전처럼 죽고 launchd 가 다시 띄우는 편이 안전하다.
+if (!process.env.VITEST) {
+  process.on('unhandledRejection', unhandledRejectionReporter((m) => (notifyConfigured() ? notify(m) : Promise.resolve(0))));
+}
+
 if (!process.env.VITEST) serve({ fetch: app.fetch, hostname: CONFIG.host, port }, (info) => {
   // eslint-disable-next-line no-console
   console.log(`[ai-contents-studio] http://${CONFIG.host}:${info.port}  (backend=claude)  · React=/ · lite=/lite`);

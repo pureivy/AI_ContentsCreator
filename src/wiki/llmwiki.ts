@@ -209,6 +209,25 @@ export function provenanceLabel(p: Pick<WikiPage, 'type' | 'sources'>): string {
 }
 // 집필용 forFacts 질의에서 제외할 타입 — 성과 수치·토론 종합·개요·교훈은 방향 참고일 뿐 인용 가능한 사실이 아니다.
 const FACT_EXCLUDED_TYPES: ReadonlySet<PageType> = new Set(['performance', 'debate', 'overview', 'lesson']);
+/** 순환 근거 차단(2026-10-26, WIKI_FACT_EXCLUDE_RUN_SOURCES) — forFacts 질의에서 뺄 출처 라벨. 우리 글 요약(finalize 가 발행 본문을
+ *  sources:[run:…] 로 적재)·LLM 기억 스텁(maintain:auto)·출처 미상은 사실 판정의 근거가 아니다(우리 글이 우리 글을 지지한다). */
+const FACT_EXCLUDED_PROVENANCE: ReadonlySet<string> = new Set(['런 산출 요약', 'LLM 생성 스텁', '출처 미상']);
+
+/** 같은 디렉터리 임시 파일에 쓰고 rename 으로 바꿔 끼운다(2026-10-26) — 쓰다 죽어도 반쯤 쓴 페이지·인덱스가 남지 않는다.
+ *  임시 이름은 .md 로 끝나지 않게 한다(페이지 목록은 *.md 만 읽는다). */
+function writeFileAtomic(fp: string, data: string): void {
+  const tmp = `${fp}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    fs.writeFileSync(tmp, data, 'utf-8');
+    fs.renameSync(tmp, fp);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* 임시 파일 없음 */ }
+    throw e;
+  }
+}
+
+/** query/semanticQuery 옵션. excludeRunSources 는 forFacts 일 때만 뜻이 있고, 비우면 CONFIG.wikiFactExcludeRunSources(테스트·측정용 덮어쓰기). */
+export interface WikiQueryOpts { forFacts?: boolean; excludeRunSources?: boolean }
 
 export class LlmWiki {
   readonly dir: string;
@@ -262,7 +281,7 @@ export class LlmWiki {
         if (path.resolve(dst) !== path.resolve(fp) && fs.existsSync(dst)) continue; // 충돌 — 기존 페이지 보존
         if (canonical !== page.slug) renamed.set(page.slug, canonical);
         page.slug = canonical;
-        fs.writeFileSync(dst, serialize(page), 'utf-8');
+        writeFileAtomic(dst, serialize(page));
         if (path.resolve(dst) !== path.resolve(fp)) fs.unlinkSync(fp);
       }
       // rebuts 재매핑 — 실존하면 유지, 개명 맵 → 캡 폴백 순으로 복원, 자기참조 제거. 진짜 미존재
@@ -398,7 +417,7 @@ export class LlmWiki {
 
   // ---- 쓰기(페이지 머지) ----
   private writePage(p: WikiPage): void {
-    fs.writeFileSync(this.pagePath(p.slug), serialize(p), 'utf-8');
+    writeFileAtomic(this.pagePath(p.slug), serialize(p));
   }
   /** 같은 슬러그가 있으면 본문에 '갱신' 섹션을 덧대고 메타 합집합(Karpathy: kept current). */
   upsertPage(input: {
@@ -739,7 +758,7 @@ export class LlmWiki {
     const md =
       `# 📇 LLM Wiki 인덱스\n\n> 페이지 ${ps.length}개 · 갱신 ${nowDate()} · Karpathy LLM Wiki 패턴\n` +
       (Object.keys(INDEX_SECTIONS) as PageType[]).map((t) => sect(INDEX_SECTIONS[t], byType.get(t) ?? [])).join('');
-    fs.writeFileSync(path.join(this.dir, 'index.md'), md, 'utf-8');
+    writeFileAtomic(path.join(this.dir, 'index.md'), md);
   }
 
   // ---- INGEST (LLM 주도): 소스/산출물 → 요약 + 엔티티/개념 페이지 + 인덱스 + 로그 ----
@@ -876,11 +895,13 @@ export class LlmWiki {
   }
 
   // ---- QUERY (인덱스 우선): 질의 관련 페이지 본문을 그라운딩 컨텍스트로 반환 ----
-  query(question: string, limit = 4, opts: { forFacts?: boolean } = {}): { hits: WikiPage[]; context: string } {
+  query(question: string, limit = 4, opts: WikiQueryOpts = {}): { hits: WikiPage[]; context: string } {
     const qt = tokenize(question);
     if (!qt.length) return { hits: [], context: '' };
+    const exclProv = !!opts.forFacts && (opts.excludeRunSources ?? CONFIG.wikiFactExcludeRunSources);
     const scored = this.allPages()
       .filter((p) => !opts.forFacts || !FACT_EXCLUDED_TYPES.has(p.type)) // 집필용 사실 조회 — 성과·토론·개요·교훈 제외(스펙 §4)
+      .filter((p) => !exclProv || !FACT_EXCLUDED_PROVENANCE.has(provenanceLabel(p))) // 순환 근거 차단(스위치, 기본 off)
       .map((p) => {
         const title = p.title; const a = tokenize(p.aliases.join(' ')); const b = new Set(tokenize(p.body));
         let s = 0;
@@ -940,7 +961,7 @@ export class LlmWiki {
     return extra.length ? [...hits, ...extra] : hits;
   }
 
-  async semanticQuery(question: string, limit = 4, _signal?: AbortSignal, opts: { forFacts?: boolean } = {}): Promise<{ hits: WikiPage[]; context: string }> {
+  async semanticQuery(question: string, limit = 4, _signal?: AbortSignal, opts: WikiQueryOpts = {}): Promise<{ hits: WikiPage[]; context: string }> {
     // 인사·직무 의도면 표 자료(업무분장표 등) 앵커로 질의 확장 — recall·발췌 모두 확장질의 기준.
     // Ollama 임베딩 rerank 는 백엔드 제거(2026-07-06)와 함께 삭제 — 휴리스틱 랭킹 단일 경로.
     // (query() 휴리스틱이 이미 출처 가중 raw/×2·run:×0.5 로 1차 원문을 우대한다.)

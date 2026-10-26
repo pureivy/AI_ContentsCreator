@@ -192,12 +192,16 @@ export async function beginLongformEpisode(o: { brand: string; pieceIds?: string
   try { topic = await d.selectTopic(o.pieceIds?.length ? o.pieceIds : undefined, o.signal); }
   catch (e) { running = null; return { ok: false, error: 'no_topic', message: `주제 선정 실패: ${e instanceof Error ? e.message : String(e)}` }; }
   if (!topic) { running = null; return { ok: false, error: 'no_topic', message: '고를 주제가 없습니다 — 이미 만든 주제·제철 아님·한 질문으로 묶이는 글 부족' }; }
-  const dirName = episodeDirName(d.now(), topic.topic, (n) => fs.existsSync(path.join(d.root, n)) || d.store.list().some((r) => r.dir === n));
-  const rec = d.store.create({
-    dir: dirName, brand: o.brand, stage: 'producing',
-    title: topic.theme || `${topicLabel(topic.topic)} — ${topic.anchor.title}`,
-    patch: { progress: '주제 선정', topicReason: topic.reason, topicKey: topic.topicKey, sourcePieceIds: topic.pieces.map((p) => p.id), thumbState: 'none', ...(o.trigger ? { trigger: o.trigger } : {}) },
-  });
+  // 레코드 만들기가 던지면(폴더 이름·저장 실패) 잠금을 풀고 돌려준다(2026-10-26) — 종전엔 running='주제 선정'이 남아 서버를 다시 켤 때까지 늘 busy 였다.
+  let rec: LongformRecord;
+  try {
+    const dirName = episodeDirName(d.now(), topic.topic, (n) => fs.existsSync(path.join(d.root, n)) || d.store.list().some((r) => r.dir === n));
+    rec = d.store.create({
+      dir: dirName, brand: o.brand, stage: 'producing',
+      title: topic.theme || `${topicLabel(topic.topic)} — ${topic.anchor.title}`,
+      patch: { progress: '주제 선정', topicReason: topic.reason, topicKey: topic.topicKey, sourcePieceIds: topic.pieces.map((p) => p.id), thumbState: 'none', ...(o.trigger ? { trigger: o.trigger } : {}) },
+    });
+  } catch (e) { running = null; return { ok: false, error: 'create_failed', message: `편 만들기 실패: ${e instanceof Error ? e.message : String(e)}` }; }
   running = rec.id;
   const done = produce(rec, topic, d, o.signal, o.bus).finally(() => { running = null; });
   return { ok: true, id: rec.id, done };

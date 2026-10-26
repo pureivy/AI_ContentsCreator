@@ -9,7 +9,7 @@ import Ico from "./Ico";
 const KINDS = [
   { key: "cardnews", icon: "cards", label: "카드뉴스", desc: "인스타그램용 정사각 슬라이드 — gpt-image-2가 텍스트까지 그리고, 비전 QA가 한글 오타를 검수합니다." },
   { key: "shorts", icon: "play", label: "숏폼", desc: "유튜브 숏폼(세로 MP4) — 대본·씬 이미지는 AI, 내레이션은 TTS, 자막·조립은 코드가 담당합니다." },
-  { key: "longform", icon: "play", label: "롱폼", desc: "유튜브 롱폼(가로 10분 MP4) — 매주 일요일 24:00 자동 제작, 검토 후 유튜브 공개 발행은 버튼으로." },
+  { key: "longform", icon: "play", label: "롱폼", desc: "유튜브 롱폼(가로 10분 MP4) — 매주 토요일 24:00(일요일 00:00) 자동 제작, 검토 후 유튜브 공개 발행은 버튼으로." },
 ] as const;
 type Kind = (typeof KINDS)[number]["key"];
 

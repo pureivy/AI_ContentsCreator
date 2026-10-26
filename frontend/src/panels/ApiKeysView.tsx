@@ -237,7 +237,7 @@ export default function ApiKeysView() {
               <b>API 키 추가</b>
               <div className="apikey-desc">
                 사용자 정의 키 등록 — <b>{brands.find((b) => b.slug === (kbrand ?? ""))?.name ?? "공용 (기본)"}</b>에 저장됩니다.
-                이름은 대문자로 시작, 대문자/숫자/밑줄만 (예: MY_API_KEY).
+                이름은 대문자로 시작, 대문자/숫자/밑줄만 쓰고 _API_KEY·_KEY·_TOKEN·_SECRET·_PASSWORD·_ID 중 하나로 끝나야 합니다 (예: MY_API_KEY).
               </div>
             </div>
           </div>

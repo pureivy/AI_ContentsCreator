@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseEnvText, upsertEnvText, maskSecret, getYoutubeAccount, setYoutubeToken, parseMetaTokens } from './store';
+import { parseEnvText, upsertEnvText, maskSecret, getYoutubeAccount, setYoutubeToken, parseMetaTokens, isReservedEnvKey, isAllowedCustomKeyName } from './store';
 
 // .env 가 '단일 값 저장소'가 되면서 UI 편집이 파일을 직접 고쳐 쓴다 — 손으로 관리하던
 // 주석/빈 줄/모르는 키를 절대 훼손하지 않아야 한다(실 .env 엔 커밋 금지 실키가 있음).
@@ -281,7 +281,7 @@ describe('purgeCustomKeysForBrand — 브랜드 삭제 시 커스텀 키 동반 
     fs.writeFileSync(tmpEnv, '', { mode: 0o600 });
     process.env.GEPA_ENV_FILE = tmpEnv;
     process.env.GEPA_DATA_DIR = tmpData;
-    for (const k of ['KEY_A', 'KEY_B', 'KEY_COMMON']) delete process.env[k];
+    for (const k of ['A_KEY', 'B_KEY', 'COMMON_KEY']) delete process.env[k];
     vi.resetModules();
     mod = await import('./store');
   });
@@ -290,26 +290,26 @@ describe('purgeCustomKeysForBrand — 브랜드 삭제 시 커스텀 키 동반 
     try { fs.rmSync(tmpData, { recursive: true, force: true }); } catch { /* 이미 없음 */ }
     delete process.env.GEPA_ENV_FILE;
     delete process.env.GEPA_DATA_DIR;
-    for (const k of ['KEY_A', 'KEY_B', 'KEY_COMMON']) delete process.env[k];
+    for (const k of ['A_KEY', 'B_KEY', 'COMMON_KEY']) delete process.env[k];
   });
 
   it('해당 브랜드 정의·값만 제거, 타 브랜드·공용은 보존', () => {
-    mod.addCustom('KEY_A', '', '', 'va', 'cafe-a');
-    mod.addCustom('KEY_B', '', '', 'vb', 'cafe-b');
-    mod.addCustom('KEY_COMMON', '', '', 'vc', '');
+    mod.addCustom('A_KEY', '', '', 'va', 'cafe-a');
+    mod.addCustom('B_KEY', '', '', 'vb', 'cafe-b');
+    mod.addCustom('COMMON_KEY', '', '', 'vc', '');
     expect(mod.purgeCustomKeysForBrand('cafe-a')).toBe(1);
     const customs = mod.listKeys().filter((k) => !k.builtin).map((k) => k.key);
-    expect(customs.sort()).toEqual(['KEY_B', 'KEY_COMMON']);
+    expect(customs.sort()).toEqual(['B_KEY', 'COMMON_KEY']);
     const txt = fs.readFileSync(tmpEnv, 'utf-8');
-    expect(txt).not.toContain('KEY_A');
-    expect(txt).toMatch(/^KEY_B=vb$/m);
-    expect(txt).toMatch(/^KEY_COMMON=vc$/m);
+    expect(txt).not.toContain('A_KEY');
+    expect(txt).toMatch(/^B_KEY=vb$/m);
+    expect(txt).toMatch(/^COMMON_KEY=vc$/m);
     // 제거 후 같은 이름을 다른 브랜드에서 재사용 가능(점유 해제)
-    expect(mod.addCustom('KEY_A', '', '', 'v2', 'cafe-b').ok).toBe(true);
+    expect(mod.addCustom('A_KEY', '', '', 'v2', 'cafe-b').ok).toBe(true);
   });
 
   it('빈 슬러그는 no-op(공용 키 대량 삭제 방지) — 0 반환', () => {
-    mod.addCustom('KEY_COMMON', '', '', 'vc', '');
+    mod.addCustom('COMMON_KEY', '', '', 'vc', '');
     expect(mod.purgeCustomKeysForBrand('')).toBe(0);
     expect(mod.listKeys().filter((k) => !k.builtin)).toHaveLength(1);
   });
@@ -450,5 +450,85 @@ describe('setKey — 개행·제어문자 주입 거부', () => {
   });
   it('정상 값은 통과', () => {
     expect(mod.setKey('ANTHROPIC_API_KEY', 'sk-ant-valid123').ok).toBe(true);
+  });
+});
+
+describe('2026-10-26 보안 감사 — 예약 이름·줄 끝 주석', () => {
+  it('parseEnvText — Node loadEnvFile 과 같게: 따옴표 밖 # 이후는 주석, 따옴표 안 # 는 값', () => {
+    const t = 'A=3 # 메모\nB=abc#d\nC="x y" # c\nD=\'q # r\'\nE=  v  \nG=#x\nH="unterminated # c\nI=`tick` # c\nJ="a\\"b"\n';
+    expect(parseEnvText(t)).toEqual({ A: '3', B: 'abc', C: 'x y', D: 'q # r', E: 'v', G: '', I: 'tick', J: 'a"b' });
+  });
+  it('parseEnvText — Node 와 같은 결과(이스케이프 없는 값)', async () => {
+    const util = await import('node:util');
+    const t = 'A=3 # 메모\nB=abc#d\nC="x y" # c\nD=\'q # r\'\nE=  v  \nG=#x\nK=plain\n';
+    expect(parseEnvText(t)).toEqual(util.parseEnv(t));
+  });
+  it('upsert 로 쓴 # 든 값은 그대로 되읽힌다(quoteEnv 대칭)', () => {
+    expect(parseEnvText(upsertEnvText('', 'K', 'a#b "c"')).K).toBe('a#b "c"');
+  });
+  it('isReservedEnvKey — 실행 환경·앱 설정 이름은 막고, 평범한 자격 증명 이름은 둔다', () => {
+    for (const k of ['BLOG_PYTHON', 'CLAUDE_CLI_PATH', 'NODE_OPTIONS', 'AUTH_TOKEN', 'PATH', 'HOME', 'SHELL', 'DYLD_INSERT_LIBRARIES', 'LD_PRELOAD', 'PYTHONPATH', 'NPM_CONFIG_PREFIX', 'GEPA_DATA_DIR', 'ANTHROPIC_BASE_URL', 'META_TOKENS', 'YOUTUBE_TOKENS', 'NAVER_LOGIN_PW', 'SHORTS_RENDERER']) {
+      expect(isReservedEnvKey(k), k).toBe(true);
+    }
+    for (const k of ['MY_API_KEY', 'FAL_KEY', 'ELEVENLABS_API_KEY', 'YOUTUBE_API_KEY', 'YOUTUBE_CLIENT_SECRET', 'NAVER_CLIENT_ID']) expect(isReservedEnvKey(k), k).toBe(false);
+  });
+  it('보안 후속 — 셸·인터프리터 기동 변수도 예약', () => {
+    for (const k of ['BASH_ENV', 'BASH_FUNC_X', 'ENV', 'SHELLOPTS', 'PS4', 'PROMPT_COMMAND', 'IFS', 'CDPATH', 'GLOBIGNORE', 'PERL5OPT', 'PERLLIB', 'RUBYOPT', 'RUBYLIB', 'GCONV_PATH', 'JAVA_TOOL_OPTIONS', 'JDK_JAVA_OPTIONS', 'SSLKEYLOGFILE', 'CURL_CA_BUNDLE', 'WGETRC', 'GEM_HOME']) {
+      expect(isReservedEnvKey(k), k).toBe(true);
+    }
+  });
+  it('isAllowedCustomKeyName — 자격 증명 꼴만 받고, 꼴이 맞아도 예약 이름은 거부. 기존 사용자 키는 통과', () => {
+    for (const k of ['YOUTUBE_API_KEY', 'YOUTUBE_CHANNEL_ID', 'YOUTUBE_CLIENT_SECRET', 'YOUTUBE_CLIENT_ID', 'FAL_KEY', 'ELEVENLABS_API_KEY', 'MY_TEST_KEY', 'SHOP_ADMIN_PASSWORD', 'SLACK_BOT_TOKEN']) {
+      expect(isAllowedCustomKeyName(k), k).toBe(true);
+    }
+    for (const k of ['MY_SETTING', 'SOMETHING', 'AUTH_TOKEN', 'INJECT_TOKEN', 'ELEVENLABS_VOICE_ID', 'META_FB_CONFIG_ID', 'NODE_AUTH_TOKEN', 'CLAUDE_API_KEY', 'KEY', '_KEY']) {
+      expect(isAllowedCustomKeyName(k), k).toBe(false);
+    }
+  });
+  it('config.ts 가 읽는 이름은 전부 막혀 있다(자격 증명 이름 제외) — 새 설정을 추가하면 store.ts 목록도 늘려야 한다', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'config.ts'), 'utf-8');
+    const names = [...src.matchAll(/env(?:Int|Bool|Float)?\('([A-Z0-9_]+)'/g)].map((m) => m[1]!);
+    expect(names.length).toBeGreaterThan(100);
+    const missing = [...new Set(names)].filter((k) => !isReservedEnvKey(k) && !/_(API_KEY|KEY|SECRET)$/.test(k));
+    expect(missing).toEqual([]);
+  });
+});
+
+describe('addCustom·setKey — 예약 이름 거부(2026-10-26)', () => {
+  let tmpEnv: string;
+  let tmpData: string;
+  let mod: typeof import('./store');
+  beforeEach(async () => {
+    tmpEnv = path.join(os.tmpdir(), `reserved-keys-store-test-${process.pid}.env`);
+    tmpData = fs.mkdtempSync(path.join(os.tmpdir(), 'reserved-keys-data-'));
+    fs.writeFileSync(tmpEnv, '', { mode: 0o600 });
+    process.env.GEPA_ENV_FILE = tmpEnv;
+    process.env.GEPA_DATA_DIR = tmpData;
+    vi.resetModules();
+    mod = await import('./store');
+  });
+  afterEach(() => {
+    try { fs.rmSync(tmpEnv); } catch { /* 이미 없음 */ }
+    try { fs.rmSync(tmpData, { recursive: true, force: true }); } catch { /* 이미 없음 */ }
+    delete process.env.GEPA_ENV_FILE;
+    delete process.env.GEPA_DATA_DIR;
+  });
+  it('BLOG_PYTHON·NODE_OPTIONS 는 .env·process.env 에 쓰지 않는다', () => {
+    const before = process.env.NODE_OPTIONS;
+    expect(mod.addCustom('BLOG_PYTHON', '', '', '/tmp/evil', '').ok).toBe(false);
+    expect(mod.addCustom('NODE_OPTIONS', '', '', '--require /tmp/x.js', '').ok).toBe(false);
+    expect(fs.readFileSync(tmpEnv, 'utf-8')).toBe('');
+    expect(process.env.NODE_OPTIONS).toBe(before);
+    expect(mod.setKey('BLOG_PYTHON', '/tmp/evil').ok).toBe(false);
+    // 허용 목록 — 금지 목록에 없는 이름이라도 자격 증명 꼴이 아니면 거부
+    const r = mod.addCustom('SOME_NEW_RUNTIME_KNOB', '', '', 'x', '');
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('자격 증명 꼴');
+    expect(fs.readFileSync(tmpEnv, 'utf-8')).toBe('');
+  });
+  it('평범한 사용자 키는 그대로 된다', () => {
+    expect(mod.addCustom('MY_RESERVED_TEST_API_KEY', '', '', 'v1', '').ok).toBe(true);
+    expect(parseEnvText(fs.readFileSync(tmpEnv, 'utf-8')).MY_RESERVED_TEST_API_KEY).toBe('v1');
+    delete process.env.MY_RESERVED_TEST_API_KEY;
   });
 });

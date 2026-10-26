@@ -3,7 +3,7 @@ import {
   fetchLongform, uploadLongformYoutube, regenerateLongformThumbnail, runLongform, LongformInfo,
 } from "../api";
 
-// 롱폼 탭 — 매주 일요일 24:00 자동 제작되는 가로 10분 MP4. 검토 후 사람이 버튼으로 유튜브 공개 발행.
+// 롱폼 탭 — 매주 토요일 24:00(일요일 00:00) 자동 제작되는 가로 10분 MP4. 검토 후 사람이 버튼으로 유튜브 공개 발행.
 // 영상은 ~1GB 라 <video preload="metadata"> 로만 — blob 으로 받지 않는다. 진행은 8초 폴링(숏폼과 동일).
 const LONGFORM_RUN_ENABLED = true; // 2단계(수동 '지금 만들기') — POST /longform/run (2026-10-22)
 
@@ -46,7 +46,8 @@ function LongformRow({ r, onChanged }: { r: LongformInfo; onChanged: () => void 
     setThumbBusy(true); setThumbErr("");
     const res = await regenerateLongformThumbnail(r.id);
     setThumbBusy(false);
-    if (res.error || res.ok === false) setThumbErr(res.error || "썸네일 생성 실패");
+    // error 는 코드(thumb_failed 등) — 서버가 함께 보내는 한국어 message 를 우선 보여 준다.
+    if (res.error || res.ok === false) setThumbErr(res.message || res.error || "썸네일 생성 실패");
     setThumbOk(true); onChanged();
   };
   const copyDesc = async () => {
@@ -164,7 +165,7 @@ export default function LongformSection() {
         </div>
       )}
       {items && items.length === 0 && (
-        <p className="muted">아직 롱폼이 없습니다. 매주 일요일 24:00에 자동으로 만들어집니다.</p>
+        <p className="muted">아직 롱폼이 없습니다. 매주 토요일 24:00(일요일 00:00)에 자동으로 만들어집니다.</p>
       )}
       {(items ?? []).map((r) => <LongformRow key={r.id} r={r} onChanged={load} />)}
     </>

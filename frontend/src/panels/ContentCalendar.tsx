@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchPieces, createPiece, runPiece, deletePiece, PieceInfo, PieceStage } from "../api";
+import { fetchPieces, createPiece, runPiece, deletePiece, similarConfirmText, PieceInfo, PieceStage } from "../api";
 import Ico, { type IcoName } from "./Ico";
 
 // 지금 실행 가능한(초안이 아직 없는) 스테이지 — idea·research·draft·error.
@@ -126,7 +126,13 @@ export default function ContentCalendar() {
     const t = title.trim();
     if (!t) return;
     setBusy(true); setErr("");
-    const r = await createPiece({ title: t, keyword: keyword.trim() || undefined });
+    const body = { title: t, keyword: keyword.trim() || undefined };
+    let r = await createPiece(body);
+    // 신규성 가드(409) — 기존 콘텐츠와 유사하면 근거를 보여 주고, 의도한 재도전일 때만 force 로 재요청.
+    if (!r.ok && r.similar?.length) {
+      if (confirm(similarConfirmText(r.error, r.similar))) r = await createPiece({ ...body, force: true });
+      else { setBusy(false); return; }
+    }
     if (r.ok && r.id) { await runPiece(r.id); }
     setBusy(false);
     if (r.ok) { setTitle(""); setKeyword(""); load(); }

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus, hookVoiceSettings, splitPhrases, captionsFor, captionsForScene, teaserFor, teaserSceneIndex, midcutAt, planSpareClips } from './shortsCommon';
+import { FPS, sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout, coverFocus, hookVoiceSettings, splitPhrases, captionsFor, captionsForScene, teaserFor, teaserSceneIndex, midcutAt, planSpareClips } from './shortsCommon';
 import { CONFIG } from '../config';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
@@ -28,6 +28,12 @@ describe('fmtSrtTime — SRT 타임코드', () => {
   });
 });
 describe('buildSrt — 누적 타이밍', () => {
+  it('8씬 누적 드리프트 없음 — SRT 시작은 영상 씬 시작(반올림 프레임 누적)과 일치(2026-10-26)', () => {
+    const scenes = Array.from({ length: 8 }, () => ({ narration: 'x', durationSec: 3.3 + 0.0166 })); // 99.498프레임 → 99
+    const starts = [...buildSrt(scenes).matchAll(/(\d\d:\d\d:\d\d,\d{3}) -->/g)].map((m) => m[1]!);
+    let frames = 0;
+    scenes.forEach((sc, i) => { expect(starts[i]).toBe(fmtSrtTime(frames / FPS)); frames += sceneFrames(sc.durationSec); });
+  });
   it('씬 순서대로 누적 시작/끝', () => {
     expect(buildSrt([
       { narration: '첫 씬', durationSec: 3 },
@@ -54,8 +60,9 @@ describe('buildSrt — 누적 타이밍', () => {
       expect(c.to).toBeGreaterThanOrEqual(c.from);
       if (i > 0) expect(c.from).toBeGreaterThanOrEqual(cues[i - 1]!.to); // 단조·비겹침
     });
-    expect(cues[2]!.to).toBe(9983);   // 마지막 구절은 씬 끝(clock + durationSec)에 맞춘다
-    expect(cues[3]!.from).toBe(9983);
+    // 씬 시계는 정수 프레임 누적(150 + round(149.499)=149 = 299프레임) — 영상 씬 시작과 같다(2026-10-26)
+    expect(cues[2]!.to).toBe(9967);   // 마지막 구절은 씬 끝(누적 프레임/FPS)에 맞춘다
+    expect(cues[3]!.from).toBe(9967);
     expect(srt.split('\n').filter((l) => /-->/.test(l))[1]).toBe('00:00:05,000 --> 00:00:07,667'); // 앞 구절은 프레임/FPS 그대로
   });
 });

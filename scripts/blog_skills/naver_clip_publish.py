@@ -496,8 +496,11 @@ def run(args, res: Result, description: str, upload, run_dir: Path) -> int:
             return drive(page, args, res, description, upload, run_dir, captured)
         finally:
             try:
-                with open(cookies_file, "w", encoding="utf-8") as f:
+                # 로그인 쿠키 — 주인만 읽게(0600, 2026-10-26 — naver_comment_reply.py 와 같은 방식). 이미 있던 파일 권한도 좁힌다.
+                fd = os.open(cookies_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(context.cookies(), f, ensure_ascii=False, indent=2)
+                os.chmod(cookies_file, 0o600)
             except Exception:
                 pass
             try:

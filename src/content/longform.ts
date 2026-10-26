@@ -13,6 +13,7 @@ import path from 'node:path';
 import { CONFIG } from '../config';
 import { activeBrandSlug } from './brand';
 import { genId } from '../util/ids';
+import { isStoreFileCorrupt, readJsonArray, writeJsonAtomic } from '../util/jsonStore';
 
 export type LongformStage = 'producing' | 'ready' | 'error';
 /** 썸네일 상태 — pending=생성 중 · ok=QA 통과 · qa_failed=한글 QA 미해결(발행 게이트) · none=아직 없음. */
@@ -132,19 +133,23 @@ export class LongformStore {
     this.file = path.join(root, 'index.json');
     this.load();
   }
+  /** 색인이 깨져(ENOENT 아닌 읽기·파싱 실패) 이번 실행 동안 저장을 막고 있나(2026-10-26) — 정리기가 이 목록을 믿지 않게 한다. */
+  get corrupt(): boolean { return isStoreFileCorrupt(this.file); }
   private load(): void {
-    try {
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf-8')) as LongformRecord[];
-      if (Array.isArray(raw)) for (const s of raw) if (s && s.id) this.items.set(s.id, s);
-    } catch { /* 없으면 빈 스토어 */ }
+    // 없으면 빈 스토어, 깨졌으면 .corrupt-<시각> 으로 옮기고 빈 채로 뜨되 저장은 막는다(util/jsonStore).
+    const r = readJsonArray<LongformRecord>(this.file, '롱폼(longform)');
+    for (const s of r.value ?? []) if (s && s.id) this.items.set(s.id, s);
   }
+  private persistWarned = false;
   private persist(): void {
     try {
-      fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      const tmp = `${this.file}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify([...this.items.values()], null, 2), 'utf-8');
-      fs.renameSync(tmp, this.file); // 원자적 교체 — 부분 쓰기로 인덱스 오염 방지.
-    } catch { /* 영속 실패 무해(다음 변경에서 재시도) */ }
+      writeJsonAtomic(this.file, [...this.items.values()], { backup: true }); // tmp+fsync+rename, 직전 판은 .bak
+    } catch (e) {
+      // 영속 실패는 다음 변경에서 재시도 — 다만 깨진 색인으로 막힌 경우는 한 번만 크게 남긴다(매 변경마다 로그 홍수 방지).
+      if (this.corrupt && this.persistWarned) return;
+      if (this.corrupt) this.persistWarned = true;
+      console.error(`[저장소] 롱폼(longform) 저장 실패 — ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
   /** 레코드 산출물 폴더(절대). dir 이 안전하지 않으면 null — 라우트가 파일을 서빙하기 전에 반드시 거친다. */
   absDir(rec: Pick<LongformRecord, 'dir'>): string | null {

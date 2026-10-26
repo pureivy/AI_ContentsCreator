@@ -2,7 +2,9 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { extractVerifiedClaims, rejectVerifiedLine, acceptVerifiedSource } from './workspace';
+import { extractVerifiedClaims, rejectVerifiedLine, acceptVerifiedSource, archiveMemory, appendMemory, readMemory } from './workspace';
+import { llm } from '../llm/client';
+import { CONFIG } from '../config';
 
 describe('extractVerifiedClaims (검증 지식 Self-RAG)', () => {
   it('[근거: 출처] 태그가 붙은 주장만 추출한다', () => {
@@ -86,5 +88,26 @@ describe('verified 승격 정직화(스펙 §5)', () => {
     expect(acceptVerifiedSource('산성 토양', '위키 - 블루베리나무', entries)).toBe(false);
     expect(acceptVerifiedSource('산성 토양', '농촌진흥청', entries)).toBe(false);
     expect(acceptVerifiedSource('산성 토양', '동일', entries)).toBe(false);
+  });
+});
+
+describe('archiveMemory — 요약 대기 중 추가된 줄 보존(2026-10-26)', () => {
+  it('LLM 요약을 기다리는 동안 appendMemory 로 붙은 줄이 살아남는다', async () => {
+    const dirTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-'));
+    const cfg = CONFIG as unknown as { agentsDir: string };
+    const orig = cfg.agentsDir; cfg.agentsDir = dirTmp;
+    try {
+      for (let i = 0; i < 70; i++) appendMemory('tester', `교훈${i}`);
+      vi.spyOn(llm, 'chat').mockImplementation(async () => {
+        appendMemory('tester', '요약 중에 붙은 교훈');
+        return { text: '- 요약' } as never;
+      });
+      expect(await archiveMemory('tester', 'm')).toBe(true);
+      const m = readMemory('tester', 100_000);
+      expect(m).toContain('요약 중에 붙은 교훈');
+      expect(m).toContain('교훈69');
+      expect(m).not.toMatch(/교훈0$/m);
+      expect(fs.readdirSync(path.join(dirTmp, 'tester')).some((n) => n.includes('.tmp-'))).toBe(false);
+    } finally { cfg.agentsDir = orig; vi.restoreAllMocks(); fs.rmSync(dirTmp, { recursive: true, force: true }); }
   });
 });

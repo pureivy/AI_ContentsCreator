@@ -16,6 +16,16 @@ afterEach(() => {
 });
 
 describe('synthesize', () => {
+  it('외부 호출에 타임아웃 signal 이 실린다(2026-10-26 — 무응답 정체 방지)', async () => {
+    cfg.ttsProvider = 'openai';
+    cfg.openaiApiKey = 'sk-test';
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(Buffer.from([0xFF, 0xF3, 0x00]), { status: 200 }) as unknown as Response,
+    );
+    await synthesize('안녕하세요');
+    expect((fetchSpy.mock.calls[0]![1] as RequestInit).signal).toBeDefined();
+  });
+
   it('OpenAI 경로: /v1/audio/speech 를 호출하고 mp3 버퍼를 반환한다(텍스트 정제·instructions 전달)', async () => {
     cfg.ttsProvider = 'openai';
     cfg.openaiApiKey = 'sk-test'; // getSecret 이 비어도 CONFIG 폴백으로 키 존재

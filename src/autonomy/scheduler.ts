@@ -51,6 +51,9 @@ import { findSpecies, findSpeciesLoose } from '../content/species';
 export interface AutoCycleDeps<T = string> {
   /** 사이클 주기(ms). ≤0 이면 스케줄러는 no-op. */
   intervalMs: number;
+  /** 부팅 뒤 첫 틱까지(ms, 2026-10-26) — 주면 첫 주기를 기다리지 않고 이만큼 뒤에 한 번 돈다. 하루 ~10회 재시작하는데
+   *  주기가 60분이라 끊긴 조각 재개가 매번 한 시간씩 밀렸다. 토글·대기 가드는 주기 틱과 같다. 미지정·≤0 = 종전(주기만). */
+  firstDelayMs?: number;
   /** 사용자/기존 런이 진행 중인가(유휴 게이트). true 면 이번 틱을 건너뛴다. */
   isBusy: () => boolean;
   /** 오토런 스위치(사용자 토글) — false 면 틱이 조용히 아무 일도 하지 않는다(타이머는 유지). 미지정 = 항상 온. */
@@ -72,7 +75,7 @@ export type AutoTickOutcome = 'launched' | 'idle' | 'busy' | 'overlap' | 'error'
 /** 정지 함수 + runNow(수동 즉시 1틱) + runNowPersistent(busy 시 재시도 — 슬롯·지시 침묵 소멸 방지). */
 export type AutoCycleControl = (() => void) & {
   runNow: () => Promise<AutoTickOutcome>;
-  runNowPersistent: (opts?: { label?: string; retryMs?: number; maxAttempts?: number; respectToggle?: boolean; userTriggered?: boolean }) => Promise<AutoTickOutcome>;
+  runNowPersistent: (opts?: { label?: string; retryMs?: number; maxAttempts?: number; respectToggle?: boolean; userTriggered?: boolean; queue?: boolean }) => Promise<AutoTickOutcome>;
 };
 
 export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): AutoCycleControl {
@@ -103,25 +106,38 @@ export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): AutoCycleCon
   // busy(런 충돌) 시 포기하지 않는 실행 — 정각 슬롯·사용자 오토런 지시가 진행 중 런에 밀려 조용히
   // 소멸하던 실사고(2026-08-18: 30분 유휴 틱의 리서치 런이 18:00 슬롯을 삼킴) 봉합. 동시 대기는 1건만.
   let persistentWaiting = false;
-  const timer = (deps.intervalMs > 0)
-    ? setInterval(() => {
-        if (deps.isEnabled && !deps.isEnabled()) return; // 오토런 오프 — 타이머 틱만 조용히 통과(수동 runNow 는 무관)
-        // 슬롯·지시가 재시도 대기 중이면 쉰다(2026-10-26) — 막던 런이 끝난 틈에 force 없는 틱이 조사런을 띄우면
-        // 대기 중인 슬롯이 다시 밀려 그날 몫을 놓친다. 대기 루프가 스스로 다시 틱하므로 이 틱은 할 일이 없다.
-        if (persistentWaiting) return;
-        void core();
-      }, deps.intervalMs)
-    : null;
+  let currentWait: Promise<AutoTickOutcome> | null = null; // 진행 중 대기 루프 — 줄 선 요청(queue)이 끝나기를 기다린다
+  let queued = false; // 줄 선 요청은 1건만
+  const timerTick = (): void => {
+    if (deps.isEnabled && !deps.isEnabled()) return; // 오토런 오프 — 타이머 틱만 조용히 통과(수동 runNow 는 무관)
+    // 슬롯·지시가 재시도 대기 중이면 쉰다(2026-10-26) — 막던 런이 끝난 틈에 force 없는 틱이 조사런을 띄우면
+    // 대기 중인 슬롯이 다시 밀려 그날 몫을 놓친다. 대기 루프가 스스로 다시 틱하므로 이 틱은 할 일이 없다.
+    if (persistentWaiting) return;
+    void core();
+  };
+  const timer = (deps.intervalMs > 0) ? setInterval(timerTick, deps.intervalMs) : null;
   if (timer && typeof timer.unref === 'function') timer.unref(); // 프로세스 종료를 막지 않게
-  const stop = (() => { if (timer) clearInterval(timer); }) as AutoCycleControl;
+  // 부팅 첫 틱(2026-10-26) — 주기 틱과 같은 함수라 토글 오프·슬롯 대기 중이면 똑같이 쉰다.
+  const first = (timer && (deps.firstDelayMs ?? 0) > 0) ? setTimeout(timerTick, deps.firstDelayMs) : null;
+  if (first && typeof first.unref === 'function') first.unref();
+  const stop = (() => { if (timer) clearInterval(timer); if (first) clearTimeout(first); }) as AutoCycleControl;
   // 수동 즉시 실행(사용자 '자율런 돌려줘') — 토글 무시, isBusy·재진입 가드 유지.
   // force=true: 사용자 지시는 케이던스를 기다리지 않고 즉시 생산(사용자 결정 2026-08-09).
   stop.runNow = () => core(true, true); // 수동 즉시 실행 = 사용자 촉발
   stop.runNowPersistent = async (opts = {}) => {
-    const { label = '자율 틱', retryMs = 180_000, maxAttempts = 10, respectToggle = false, userTriggered = false } = opts;
-    if (persistentWaiting) { deps.log?.(`${label} — 이미 재시도 대기 중(중복 요청 무시)`); return 'busy'; }
+    const { label = '자율 틱', retryMs = 180_000, maxAttempts = 10, respectToggle = false, userTriggered = false, queue = false } = opts;
+    if (persistentWaiting) {
+      // 줄 서기(queue, 2026-10-26 정각 슬롯) — 다른 대기(수동 틱·사실 부족 재시도)가 먼저 돌고 있으면 슬롯 요청이
+      // '중복'으로 버려져 그날 몫이 조용히 사라졌다. 슬롯은 그 대기가 끝난 뒤 자기 차례를 한 번 더 받는다(1건만).
+      if (!queue || queued) { deps.log?.(`${label} — 이미 재시도 대기 중(중복 요청 무시)`); return 'busy'; }
+      queued = true;
+      deps.log?.(`${label} — 다른 재시도 대기가 진행 중, 끝나면 이어서 실행`);
+      try { while (persistentWaiting && currentWait) await currentWait.catch(() => 'error' as const); }
+      finally { queued = false; }
+      if (persistentWaiting) { deps.log?.(`${label} — 앞선 대기 뒤에도 다른 대기가 잡혀 있음(중복 요청 무시)`); return 'busy'; }
+    }
     persistentWaiting = true;
-    try {
+    const loop = (async (): Promise<AutoTickOutcome> => {
       for (let i = 1; ; i++) {
         if (respectToggle && deps.isEnabled && !deps.isEnabled()) return 'idle'; // 대기 중 토글 오프 존중
         const r = await core(true, userTriggered);
@@ -130,8 +146,13 @@ export function startAutoCycle<T = string>(deps: AutoCycleDeps<T>): AutoCycleCon
         deps.log?.(`${label} — 진행 중 런 종료 대기, ${Math.max(1, Math.round(retryMs / 60_000))}분 후 재시도(${i}/${maxAttempts})`);
         await new Promise<void>((resolve) => setTimeout(resolve, retryMs));
       }
+    })();
+    currentWait = loop;
+    try {
+      return await loop;
     } finally {
       persistentWaiting = false;
+      if (currentWait === loop) currentWait = null;
     }
   };
   return stop;
@@ -151,6 +172,15 @@ export function derivedContentDue(perDay: number, lastCreatedTs: string | undefi
 // ── 오토런 온/오프 토글(사용자 요청 2026-07-16) — 앱 전역 스위치(브랜드 무관), 재시작에도 유지 ──
 // AUTO_CYCLE_MINUTES(주기 설정)와 별개다: 주기는 기능의 존재, 토글은 사용자의 일시 정지 스위치.
 const autorunFile = (): string => path.join(CONFIG.dataDir, '_shared', 'autorun.json');
+
+/** 상태 파일 원자 쓰기(2026-10-26) — 임시 파일에 쓰고 rename(telegramBot saveOffset 과 같은 방식). 하루 ~10회 재시작하는데
+ *  writeFileSync 도중 끊기면 반쯤 쓴 JSON 이 남고, 읽는 쪽은 깨진 파일을 '없음'으로 본다(토글 꺼짐이 켜짐으로, 지시가 통째로 사라짐). */
+function writeFileAtomic(f: string, data: string): void {
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  const tmp = `${f}.tmp`;
+  fs.writeFileSync(tmp, data, 'utf-8');
+  fs.renameSync(tmp, f);
+}
 
 /**
  * 자율런 지시(2026-09-10 사용자 확정) — "보관소의 수종별 수확 후 전정 및 거름주는 방법"처럼 사람이 준 테마 안에서만
@@ -185,10 +215,8 @@ function autorunState(): AutorunState {
   return _autorunState;
 }
 function writeAutorunState(): void {
-  try {
-    fs.mkdirSync(path.dirname(autorunFile()), { recursive: true });
-    fs.writeFileSync(autorunFile(), JSON.stringify(autorunState()));
-  } catch { /* 영속 실패해도 런타임 값은 유효(다음 재시작에 기본값) */ }
+  try { writeFileAtomic(autorunFile(), JSON.stringify(autorunState())); }
+  catch { /* 영속 실패해도 런타임 값은 유효(다음 재시작에 기본값) */ }
 }
 /** 오토런 켜짐 여부 — 파일 없음/깨짐은 온(기존 동작 불변). 1회 읽고 캐시(틱마다 디스크 안 침). */
 export function autoRunEnabled(): boolean { return autorunState().enabled !== false; }
@@ -340,7 +368,15 @@ export function isAutorunDirective(topic: string): boolean {
 export interface DailyDeps {
   /** "HH:MM" 로컬 시각. 형식 불일치면 no-op. */
   time: string;
-  run: () => void;
+  run?: () => void;
+  /**
+   * 끝을 기다리는 실행(2026-10-26 정각 오토런 슬롯) — 주면 run 대신 이것을 부르고, 결과가 나온 뒤에야 그날을 '돌았음'으로 적는다.
+   * 슬롯은 진행 중 런을 최대 30분 기다리는데, 종전처럼 부르기 전에 적으면 그 사이 재시작이 그날 몫을 지웠다(부팅 따라잡기는
+   * '오늘 이미 돌았음'을 보고, 주기 틱은 7일 케이던스에 막힌다). 대기 중엔 key.pending 표식이 남아 부팅 때 다시 돈다.
+   * 결과가 무엇이든(busy 포기·error 포함) 그날은 끝난 것으로 적는다 — 안 적으면 1분 틱이 곧바로 다시 불러 30분 대기와
+   * 포기 알림이 하루 종일 되풀이된다. 포기·오류는 호출부가 알린다. run 을 쓰는 다른 일일 잡은 종전 그대로다.
+   */
+  runSettled?: () => Promise<AutoTickOutcome>;
   log?: (msg: string) => void;
   /** 발동 이력 영속 키(파일명). 주면 프로세스 재기동에도 '오늘 이미 돌았음'이 유지되고,
    *  예정 시각을 지나 부팅해도 그날 몫을 따라잡는다. 미지정이면 종전(메모리 전용) 동작. */
@@ -365,16 +401,26 @@ export function dailyDue(now: Date, hh: number, mm: number, today: string, lastF
 }
 
 const dailyStateFile = (key: string): string => path.join(CONFIG.dataDir, '_shared', `daily-${key}.json`);
+const dailyPendingFile = (key: string): string => path.join(CONFIG.dataDir, '_shared', `daily-${key}.pending`);
 function readLastFired(key: string): string {
   try { return String((JSON.parse(fs.readFileSync(dailyStateFile(key), 'utf-8')) as { lastFired?: unknown }).lastFired ?? ''); }
   catch { return ''; }
 }
 function writeLastFired(key: string, day: string): void {
-  try {
-    const f = dailyStateFile(key);
-    fs.mkdirSync(path.dirname(f), { recursive: true });
-    fs.writeFileSync(f, JSON.stringify({ lastFired: day }), 'utf-8');
-  } catch { /* 영속 실패 무해 — 최악의 경우 재기동 시 한 번 더 돈다 */ }
+  try { writeFileAtomic(dailyStateFile(key), JSON.stringify({ lastFired: day })); }
+  catch { /* 영속 실패 무해 — 최악의 경우 재기동 시 한 번 더 돈다 */ }
+}
+/** 대기 중 표식(runSettled) — 그날 실행이 시작됐지만 아직 결과가 안 났다. 재시작으로 끊기면 남아 부팅 때 다시 돈다. */
+function readPending(key: string): string {
+  try { return String((JSON.parse(fs.readFileSync(dailyPendingFile(key), 'utf-8')) as { day?: unknown }).day ?? ''); }
+  catch { return ''; }
+}
+function writePending(key: string, day: string): void {
+  try { writeFileAtomic(dailyPendingFile(key), JSON.stringify({ day, ts: new Date().toISOString() })); }
+  catch { /* 무해 — 표식이 없어도 lastFired 를 결과 뒤에 적으므로 부팅 따라잡기는 그대로 돈다 */ }
+}
+function clearPending(key: string): void {
+  try { fs.unlinkSync(dailyPendingFile(key)); } catch { /* 없음 */ }
 }
 
 /** 매일 지정 시각(로컬)에 1회 run() 호출 — 1분 간격 체크 + 당일 1회 가드. 정지 함수 반환. */
@@ -386,13 +432,36 @@ export function startDaily(deps: DailyDeps): () => void {
   const weekday = deps.weekday !== undefined && Number.isInteger(deps.weekday) && deps.weekday >= 0 && deps.weekday <= 6 ? deps.weekday : undefined;
   if (deps.weekday !== undefined && weekday === undefined) return () => {}; // 요일 오설정 — 매일로 새지 않게 no-op
   let lastFired = deps.key ? readLastFired(deps.key) : '';
+  const dayOf = (d: Date): string => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  if (deps.key && deps.runSettled) {
+    // 끊긴 대기 표식 — lastFired 를 결과 뒤에 적으므로 오늘 표식이면 dailyDue 가 알아서 다시 돌린다(여기선 로그만). 다른 날 표식은 지운다.
+    const pend = readPending(deps.key);
+    if (pend && pend === dayOf(new Date()) && pend !== lastFired) deps.log?.(`재시작으로 끊긴 오늘 실행(${deps.time}) — 다시 돈다`);
+    else if (pend) clearPending(deps.key);
+  }
   const tick = (): void => {
     const now = new Date();
-    const today = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+    const today = dayOf(now);
     if (!dailyDue(now, hh, mm, today, lastFired, weekday)) return;
-    lastFired = today;
+    lastFired = today; // 메모리엔 바로 — 대기(최대 30분) 중 1분 틱이 다시 부르지 않게
+    if (deps.runSettled) {
+      const key = deps.key;
+      if (key) writePending(key, today);
+      deps.log?.(`일일 실행 시작(${deps.time}) — 결과가 나오면 기록`);
+      const settle = (r: AutoTickOutcome): void => {
+        if (key) { writeLastFired(key, today); clearPending(key); }
+        deps.log?.(`일일 실행 결과(${deps.time}): ${r}`);
+      };
+      let p: Promise<AutoTickOutcome>;
+      try { p = deps.runSettled(); } catch (e) { p = Promise.reject(e); }
+      void p.then(settle, (e: unknown) => {
+        deps.log?.(`일일 실행 오류: ${e instanceof Error ? e.message : String(e)}`);
+        settle('error');
+      });
+      return;
+    }
     if (deps.key) writeLastFired(deps.key, today); // 재기동해도 같은 날 다시 안 돌게
-    try { deps.log?.(`일일 브리핑 발송(${deps.time})`); deps.run(); }
+    try { deps.log?.(`일일 브리핑 발송(${deps.time})`); deps.run?.(); }
     catch (e) { deps.log?.(`일일 브리핑 오류: ${e instanceof Error ? e.message : String(e)}`); }
   };
   const timer = setInterval(tick, 60_000);
@@ -1797,10 +1866,8 @@ function readResearchState(slug?: string): ResearchState {
   try { return JSON.parse(readSafe(researchStatePath(slug))) as ResearchState; } catch { return {}; }
 }
 function writeResearchState(st: ResearchState, slug?: string): void {
-  try {
-    fs.mkdirSync(path.dirname(researchStatePath(slug)), { recursive: true });
-    fs.writeFileSync(researchStatePath(slug), JSON.stringify(st, null, 2), 'utf-8');
-  } catch { /* 무해 — 기록 실패 시 다음 틱에 리서치가 한 번 더 뜰 뿐 */ }
+  try { writeFileAtomic(researchStatePath(slug), JSON.stringify(st, null, 2)); }
+  catch { /* 무해 — 기록 실패 시 다음 틱에 리서치가 한 번 더 뜰 뿐 */ }
 }
 
 /** 정각 오토런 슬롯 앞 windowMin 분 안인가(KST, 순수) — 그 구간엔 조사런을 시작하지 않는다(2026-10-26 사장님).
@@ -1813,6 +1880,40 @@ export function beforeAutorunSlot(now: number, times: string, windowMin = 60): b
     if (!m) return false;
     const until = (Number(m[1]) * 60 + Number(m[2]) - nowMin + 1440) % 1440;
     return until > 0 && until <= windowMin;
+  });
+}
+
+/** 정각 오토런 슬롯 주변 [슬롯-beforeMin, 슬롯+afterMin] 안인가(KST, 순수, 2026-10-26 검토) — 슬롯 정각 분(06:00:xx)도 포함한다.
+ *  beforeAutorunSlot 은 슬롯 '앞'만 봐서(until>0), 06:00:xx 에 일반 틱(부팅 3분 첫 틱 포함)이 일일 슬롯 틱보다 먼저 돌면 조사런이 떠
+ *  슬롯을 밀었다. 슬롯 뒤 afterMin 분은 일일 틱(1분 간격)이 슬롯을 집을 여유다. */
+export function nearAutorunSlot(now: number, times: string, beforeMin = 60, afterMin = 5): boolean {
+  const nowMin = Math.floor(now / 60_000 + 9 * 60) % 1440;
+  return times.split(',').some((t) => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(t.trim());
+    if (!m) return false;
+    const slot = Number(m[1]) * 60 + Number(m[2]);
+    const until = (slot - nowMin + 1440) % 1440; // 0 = 슬롯 정각 분
+    const since = (nowMin - slot + 1440) % 1440;
+    return until <= beforeMin || since <= afterMin;
+  });
+}
+
+/** 정각 오토런 일일 키(startDaily key) — main 의 슬롯 등록과 같은 규칙. */
+export const autorunDailyKey = (t: string): string => `autorun-${t.trim().replace(':', '')}`;
+
+/**
+ * 오늘 슬롯이 시각은 지났는데 아직 결과가 안 났는가(읽기 전용, 2026-10-26) — 대기 중(.pending)이거나 일일 틱이 아직 못 집은 상태.
+ * 슬롯은 막는 런을 최대 30분 기다리는데, 그 사이 조사런이 뜨면 슬롯이 또 밀린다. startDaily(runSettled)는 결과가 나온 뒤에야
+ * lastFired 를 적으므로 '시각 지남 && lastFired ≠ 오늘'이 곧 미정착이다. 날짜 꼴은 startDaily 의 dayOf 와 같다(월 0부터).
+ */
+export function autorunSlotUnsettled(times: string, now = new Date()): boolean {
+  const today = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  return times.split(',').map((t) => t.trim()).filter(Boolean).some((t) => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(t);
+    if (!m) return false;
+    const key = autorunDailyKey(t);
+    if (readPending(key) === today) return true;
+    return dailyDue(now, Number(m[1]), Number(m[2]), today, readLastFired(key));
   });
 }
 

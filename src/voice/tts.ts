@@ -9,9 +9,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { getSecret } from '../secrets/store';
+import { fetchTimeout } from '../util/fetch';
 import { audio, sanitizeForTts, parseSayVoices } from './audio';
 import { getVoiceSettings } from './setting';
 
+/** TTS 외부 호출 1회 상한 — 클립 단위 정체 방지. */
+export const TTS_FETCH_TIMEOUT_MS = 90_000;
 const OPENAI_TTS_URL = 'https://api.openai.com/v1/audio/speech';
 const ELEVENLABS_TTS_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 
@@ -54,12 +57,12 @@ async function synthesizeOpenAI(
     response_format: 'mp3',
   };
   if (opts.instructions) body.instructions = opts.instructions; // 톤·속도·감정 지시(모델이 무시해도 무해)
-  const r = await fetch(OPENAI_TTS_URL, {
+  // 90초 상한(2026-10-26) — 응답이 멈추면 run signal 만으로는 클립당 ~300초씩 막혔다.
+  const r = await fetchTimeout(OPENAI_TTS_URL, {
     method: 'POST',
     headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
-    signal: opts.signal,
-  });
+  }, opts.signal, TTS_FETCH_TIMEOUT_MS);
   if (!r.ok) throw new Error(`OpenAI TTS ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
   return Buffer.from(await r.arrayBuffer());
 }
@@ -144,12 +147,11 @@ async function synthesizeElevenLabs(
   const vs: Record<string, number> = { ...(opts.voiceSettings ?? {}) };
   if (CONFIG.elevenLabsSpeed !== 1.0) vs.speed = CONFIG.elevenLabsSpeed;
   if (Object.keys(vs).length) body.voice_settings = vs;
-  const r = await fetch(url, {
+  const r = await fetchTimeout(url, {
     method: 'POST',
     headers: { 'xi-api-key': key, 'content-type': 'application/json', accept: 'audio/mpeg' },
     body: JSON.stringify(body),
-    signal: opts.signal,
-  });
+  }, opts.signal, TTS_FETCH_TIMEOUT_MS);
   if (!r.ok) throw new Error(`ElevenLabs TTS ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
   return Buffer.from(await r.arrayBuffer());
 }

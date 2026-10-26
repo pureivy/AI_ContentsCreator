@@ -141,6 +141,32 @@ describe('사실 확인', () => {
     expect(r2.record.final.unsupported).toHaveLength(1);
     expect(r2.record.final.residual).toEqual([]);
   });
+  it('고쳐 쓰기 답이 없으면(응답 null·잘린 JSON) 문장을 지우지 않는다 — 2차에서도 걸린 것만 뺀다(2026-10-26)', async () => {
+    let n = 0;
+    const g = vi.fn(async () => (n++ === 0 ? gate(['사과나무에 하루 물 세 번', '배나무도 같다']) : gate(['배나무도 같다'])));
+    const llm = (async () => null) as unknown as LlmJSON;
+    const r = await factCheckScript({ script: script(), sourceText: SRC, gate: g, llmJSON: llm });
+    expect(r.record.revised).toEqual([]);
+    expect(r.record.dropped.map((x) => x.id)).toEqual(['b-01']); // 2차에서도 걸린 문장만
+    expect(r.script.chapters.flatMap((c) => c.segments).map((x) => x.id)).toEqual(['a-01', 'a-02']);
+  });
+  it('빈 문자열로 답한 문장만 1차에서 뺀다 — 답에 없는 id·너무 긴 고침은 원문장 유지', async () => {
+    let n = 0;
+    const g = vi.fn(async () => (n++ === 0 ? gate(['사과나무에 하루 물 세 번', '배나무도 같다']) : gate([])));
+    const llm = (async () => ({ revisions: [{ id: 'b-01', narration: '' }, { id: 'a-02', narration: '가'.repeat(200) }] })) as unknown as LlmJSON;
+    const r = await factCheckScript({ script: script(), sourceText: SRC, gate: g, llmJSON: llm });
+    expect(r.record.dropped.map((x) => x.id)).toEqual(['b-01']);
+    expect(r.script.chapters.flatMap((c) => c.segments).map((x) => x.narration)).toEqual(['사과나무는 잎이 진 뒤 심습니다.', '사과나무는 하루에 물을 세 번 줍니다.']);
+  });
+  it('2차에서 처음 걸린 문장(1차 통과·고친 적 없음)은 빼지 않고 residual 경고로', async () => {
+    let n = 0;
+    const g = vi.fn(async () => (n++ === 0 ? gate(['사과나무에 하루 물 세 번']) : gate(['배나무도 같다'])));
+    const llm = (async () => ({ revisions: [{ id: 'a-02', narration: '사과나무는 잎이 진 뒤 물을 줍니다.' }] })) as unknown as LlmJSON;
+    const r = await factCheckScript({ script: script(), sourceText: SRC, gate: g, llmJSON: llm });
+    expect(r.record.dropped).toEqual([]);
+    expect(r.script.chapters.flatMap((c) => c.segments).map((x) => x.id)).toEqual(['a-01', 'a-02', 'b-01']);
+    expect(r.record.final.residual).toEqual(['배나무도 같다']);
+  });
   it('걸린 문장이 없으면 한 번만 확인', async () => {
     const g = vi.fn(async () => gate([]));
     const r = await factCheckScript({ script: script(), sourceText: SRC, gate: g });

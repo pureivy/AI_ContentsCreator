@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseCallback, reviseEndpointFor, runAction, parseDirectiveCommand, describeDirective, type Senders } from './telegramBot';
+import { parseCallback, reviseEndpointFor, runAction, parseDirectiveCommand, describeDirective, preBootDisposition, usesLongCall, type Senders } from './telegramBot';
 
 /** 테스트용 발신부 — 실제 텔레그램을 치지 않는다. */
 const stubSend = (log: Array<{ kind: 'photo' | 'html'; text: string; buttons?: unknown }> = []): { send: Senders; log: typeof log } => ({
@@ -300,5 +300,23 @@ describe('댓글 담당 버튼(2026-10-25)', () => {
     expect(ok).toBe('✅ 답글을 올렸습니다 — 블로그 「&lt;a&gt;」');
     const bad = await runAction({ kind: 'comment_post', id: 'cmt_1' }, async () => ({ ok: false, status: 409, json: { message: '이미 올린 답글입니다' } }));
     expect(bad).toBe('⚠️ 이미 올린 답글입니다');
+  });
+});
+
+describe('재시작·긴 호출(2026-10-26)', () => {
+  const boot = 1_761_400_000;
+  it('preBootDisposition — 부팅 전 답장·지시는 안내, 잡담만 버린다. 부팅 뒤는 live', () => {
+    expect(preBootDisposition({ date: boot, text: '더 짧게' }, boot)).toBe('live');
+    expect(preBootDisposition({ date: boot - 5, text: '더 짧게', reply_to_message: { message_id: 77 } }, boot)).toBe('reply');
+    expect(preBootDisposition({ date: boot - 5, text: '자율런 지시: 감나무만' }, boot)).toBe('directive');
+    expect(preBootDisposition({ date: boot - 5, text: '안녕' }, boot)).toBe('drop');
+    expect(preBootDisposition({ date: boot - 5, text: '  ', reply_to_message: { message_id: 77 } }, boot)).toBe('drop');
+    expect(preBootDisposition({ text: '자율런 지시: 감나무만' }, boot)).toBe('directive'); // date 없음 = 옛 메시지로 본다
+  });
+  it('usesLongCall — 발행 버튼(강행 포함)은 node:http, 짧은 버튼은 fetch', () => {
+    for (const k of ['cardnews_publish', 'cardnews_force', 'shorts_meta', 'shorts_meta_force', 'shorts_youtube', 'shorts_youtube_force', 'shorts_fact_force', 'longform_thumb_regen', 'comment_post'] as const) {
+      expect(usesLongCall(k)).toBe(true);
+    }
+    for (const k of ['naver_draft', 'comment_skip', 'shorts_clip', 'shorts_clip_check', 'longform_youtube'] as const) expect(usesLongCall(k)).toBe(false);
   });
 });

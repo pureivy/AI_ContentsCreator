@@ -226,12 +226,15 @@ export async function reviseUnsupported(o: {
       + '출력: {"revisions":[{"id":"…","narration":"…"}]}',
     { maxOutputTokens: 4000, signal: o.signal },
   );
+  // 돌려받은 것만 담는다(2026-10-26) — 빈 문자열은 LLM 이 '근거 없음, 뺀다'고 답한 문장뿐이다. 답에 없는 id(응답 null·잘린 JSON)와
+  // 너무 긴 고침은 담지 않는다 — 원문장을 두고 2차 판정이 다시 본다(종전엔 호출부가 없는 id 를 ''로 봐 걸린 문장을 전부 지웠다).
   const out = new Map<string, string>();
   for (const r of raw?.revisions ?? []) {
     const id = str(r?.id);
-    if (!o.flagged.has(id)) continue;
-    const n = cleanNarration(r?.narration);
-    out.set(id, n.length > SEGMENT_MAX ? '' : n);
+    if (!o.flagged.has(id) || typeof r?.narration !== 'string') continue;
+    const n = cleanNarration(r.narration);
+    if (n.length > SEGMENT_MAX) continue;
+    out.set(id, n);
   }
   return out;
 }
@@ -240,7 +243,8 @@ export interface FactRecord {
   first: { status: string; unsupported: string[]; contradicted: string[]; issues: string[] };
   revised: Array<{ id: string; from: string; to: string }>;
   dropped: Array<{ id: string; narration: string }>;
-  /** residual = 마지막 판정에서 걸렸지만 어느 문장에도 붙지 않아 고치지도 빼지도 못한 주장(대본에 남았을 수 있다 — 검토 알림 경고). */
+  /** residual = 마지막 판정에서 걸렸지만 어느 문장에도 붙지 않아 고치지도 빼지도 못한 주장 + 2차에서 처음 걸려 빼지 않은 문장의 지적(2026-10-26)
+   *  (대본에 남았을 수 있다 — 검토 알림 경고). */
   final: { status: string; unsupported: string[]; contradicted: string[]; issues: string[]; chars: number; residual?: string[] };
 }
 
@@ -279,20 +283,26 @@ export async function factCheckScript(o: {
   if (!first.flagged.size) return { script, record };
   const segText = (s: LongformScript, id: string) => s.chapters.flatMap((c) => c.segments).find((g) => g.id === id)?.narration ?? '';
   const rev = await reviseUnsupported({ script, flagged: first.flagged, sourceText: o.sourceText, llmJSON: o.llmJSON, model, signal: o.signal });
-  for (const id of first.flagged.keys()) {
-    const to = rev.get(id) ?? '';
+  const untouched = [...first.flagged.keys()].filter((id) => !rev.has(id));
+  if (untouched.length) log(`[사실] 고쳐 쓰기 답 없음 ${untouched.length}문장 — 원문장 두고 2차 판정`);
+  for (const [id, to] of rev) {
     if (to) record.revised.push({ id, from: segText(script, id), to });
     else record.dropped.push({ id, narration: segText(script, id) });
   }
-  script = applyRevisions(script, new Map([...first.flagged.keys()].map((id) => [id, rev.get(id) ?? ''])));
+  script = applyRevisions(script, rev); // rev 에 없는 문장은 그대로
   const second = await run(script);
-  // 고쳐도 걸리는 문장은 뺀다 — 한 번만(무한 고리 없음).
-  if (second.flagged.size) {
-    for (const id of second.flagged.keys()) record.dropped.push({ id, narration: segText(script, id) });
-    script = applyRevisions(script, new Map([...second.flagged.keys()].map((id) => [id, ''])));
+  // 고쳐도 걸리는 문장은 뺀다 — 한 번만(무한 고리 없음). 1차에 걸렸던 문장만(2026-10-26) — 1차를 통과해 고친 적 없는 문장이
+  // 2차에서 처음 걸렸다고 빼면 판정 흔들림만으로 멀쩡한 문장이 사라진다. 새로 걸린 문장은 남기고 경고(residual)로 싣는다.
+  const again = [...second.flagged.keys()].filter((id) => first.flagged.has(id));
+  const fresh = [...second.flagged].filter(([id]) => !first.flagged.has(id));
+  if (again.length) {
+    for (const id of again) record.dropped.push({ id, narration: segText(script, id) });
+    script = applyRevisions(script, new Map(again.map((id) => [id, ''])));
   }
+  if (fresh.length) log(`[사실] 2차에서 처음 걸린 문장 ${fresh.length} — 빼지 않고 경고로`);
+  const residual = [...new Set([...second.residual, ...fresh.flatMap(([, why]) => why)])];
   const issues = validateScript(script, o.sourceText);
-  record.final = { status: second.r.status, unsupported: second.r.unsupported, contradicted: second.r.contradicted, issues, chars: scriptChars(script), residual: second.residual };
+  record.final = { status: second.r.status, unsupported: second.r.unsupported, contradicted: second.r.contradicted, issues, chars: scriptChars(script), residual };
   log(`[사실] 고침 ${record.revised.length} · 뺌 ${record.dropped.length} · 남은 검사 문제 ${issues.length} · ${record.final.chars}자`);
   return { script, record };
 }

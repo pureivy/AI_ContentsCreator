@@ -102,8 +102,11 @@ def uid() -> str:
 
 # ── 쿠키 관리 ─────────────────────────────────────────────────────────────
 def save_cookies(context, cookies_file: Path):
-    with open(cookies_file, "w", encoding="utf-8") as f:
+    # 로그인 쿠키 — 주인만 읽게(0600, 2026-10-26 — naver_comment_reply.py 와 같은 방식). 이미 있던 파일 권한도 좁힌다.
+    fd = os.open(cookies_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(context.cookies(), f, ensure_ascii=False, indent=2)
+    os.chmod(cookies_file, 0o600)
     log("  [쿠키 저장] 다음 실행부터 자동 로그인됩니다.")
 
 
@@ -1719,7 +1722,13 @@ def publish_with_tags(page, tags: list, run_dir: str, issues: list, want_public:
     하나라도 어긋나면 **비공개로** 발행한다(글 주소·태그·파생은 그대로 살고, 사람이 네이버에서 공개로 바꾸면 된다).
     [하드 세이프가드] 비공개로 갈 땐 비공개 라디오(input#open_private)가 checked 로 확인될 때만 확정 발행한다 —
     확인 실패 시 발행을 취소하고 None(호출부가 임시저장으로 폴백). 뜻하지 않은 전체공개를 원천 차단.
-    반환: 'public' | 'private' | None(발행 안 함)."""
+    반환: 'public' | 'private' | None(발행 안 함).
+    [확정 클릭 뒤](2026-10-26) 확정 버튼을 누른 뒤의 예외는 '발행 안 됨'이 아니다 — 발행 직후 페이지가 넘어가며
+    page.evaluate 가 "Execution context was destroyed" 로 죽으면, 종전엔 None 으로 임시저장 폴백해 글은 공개됐는데
+    결과가 draft_saved 로 남고 Node 가 글 주소를 기록하지 못했다. 이제 누른 뒤엔 절대 None 을 돌려주지 않는다 —
+    글 주소(logNo)를 기다려 확인하고, 확인 못 하면 issues 에 '확인 필요'를 남긴 채 그 공개 범위를 돌려준다."""
+    visibility = None
+    before_url = ""
     try:
         # 1) 발행 레이어 열기 — 우상단 '발행' 버튼(publish_btn). 확정(confirm_btn) 아님.
         opened = page.evaluate("""() => {
@@ -1790,25 +1799,61 @@ def publish_with_tags(page, tags: list, run_dir: str, issues: list, want_public:
                 return None
 
         # 6) 확정 발행 — 레이어 하단 '발행'(confirm_btn). 공개설정 검증 통과 후에만 도달.
-        confirmed = page.evaluate("""() => {
-            const b = [...document.querySelectorAll('button')].find(
-                x => /confirm_btn/.test(x.className) && x.textContent.trim() === '발행');
-            if (b) { b.click(); return true; } return false; }""")
+        before_url = page.url or ""
+        try:
+            confirmed = page.evaluate("""() => {
+                const b = [...document.querySelectorAll('button')].find(
+                    x => /confirm_btn/.test(x.className) && x.textContent.trim() === '발행');
+                if (b) { b.click(); return true; } return false; }""")
+        except Exception as e:
+            # 클릭이 곧바로 페이지를 넘기면 이 evaluate 자체가 컨텍스트 소멸로 죽는다 — 눌린 것으로 본다(아래에서 주소로 확인).
+            # 그런 예외만 '눌림'으로 본다(2026-10-26 검토) — 종전엔 모든 예외를 눌림으로 봐서, 버튼을 찾기도 전에 난
+            # 오류(타임아웃·브라우저 끊김 등)도 '발행 확인 필요'로 남아 임시저장 폴백을 못 탔다. 그 밖의 예외는 클릭 전으로 보고 폴백.
+            msg = str(e)
+            if not re.search(r"context was destroyed|navigat|Target closed|Execution context", msg, re.I):
+                log(f"  확정 클릭 중 예외(페이지 전환 아님) — 임시저장 폴백: {msg[:80]}")
+                issues.append(f"발행 실패(임시저장 폴백): {msg[:80]}")
+                try: page.keyboard.press("Escape")
+                except Exception: pass
+                return None
+            log(f"  확정 클릭 중 페이지 전환 예외 — 눌린 것으로 보고 글 주소 확인: {msg[:60]}")
+            confirmed = True
         if not confirmed:
             log("  확정 발행 버튼(confirm_btn) 못 찾음 — 임시저장 폴백")
             try: page.keyboard.press("Escape")
             except Exception: pass
             return None
-        time.sleep(4)  # 발행 처리·네비게이션 대기
-        dismiss_editor_popup(page)
-        log(f"  {'전체공개' if visibility == 'public' else '비공개'} 발행 완료 — {page.url}")
-        return visibility
+        # 여기까지 오면 눌렸다(clicked) — 아래 except 는 클릭 전 예외만 받는다.
     except Exception as e:
         log(f"  발행 중 예외 — 임시저장 폴백: {str(e)[:80]}")
         issues.append(f"발행 실패(임시저장 폴백): {str(e)[:80]}")
         try: page.keyboard.press("Escape")
         except Exception: pass
         return None
+
+    # ── 확정 클릭 뒤 — 여기서부터 예외는 전부 삼킨다(발행됐을 수 있으니 임시저장 폴백 금지). ──
+    label = '전체공개' if visibility == 'public' else '비공개'
+    post_url_re = re.compile(r"logNo=|/\d{6,}")  # Node naverJobUrls(pieces.ts)와 같은 판정
+    try:
+        page.wait_for_url(post_url_re, timeout=20000)
+    except Exception:
+        pass
+    time.sleep(1)
+    try:
+        dismiss_editor_popup(page)
+    except Exception:
+        pass
+    url = ""
+    try:
+        url = page.url or ""
+    except Exception:
+        pass
+    if post_url_re.search(url) and url != before_url:
+        log(f"  {label} 발행 완료 — {url}")
+    else:
+        log(f"  ⚠ 확정 발행은 눌렀지만 글 주소(logNo) 확인 못 함 — 임시저장 폴백 안 함(중복 발행 방지): {url[:80]}")
+        issues.append(f"{label} 발행 버튼은 눌렸지만 글 주소 확인 못 함 — 네이버 블로그에서 발행 여부를 확인하세요(다시 발행하지 마세요)")
+    return visibility
 
 
 def write_post(
@@ -2210,11 +2255,19 @@ def write_post(
     published_visibility = None  # 'public' | 'private' | None
     # 기본: 비공개 발행(태그를 발행 레이어에서 확실히 저장). public_publish 면 전체공개(설정 확인 실패 시 비공개).
     # 검증 실패·오류 시 임시저장으로 폴백.
-    if publish_mode() != 'draft' and tags:
+    # 사람이 누른 전체공개 발행(public_publish — 검토 탭 신뢰 경로만 넘긴다)은 태그가 없어도 발행한다(2026-10-26).
+    # 종전엔 'and tags' 때문에 태그 0개면 말없이 임시저장으로 빠지고 ok 로 끝나, 사람은 발행된 줄 알았다.
+    # 비공개 기본(private_publish)은 태그 저장이 목적이라 종전대로 태그 있을 때만 — 자율 경로 동작은 그대로.
+    if publish_mode() == 'public_publish' or (publish_mode() != 'draft' and tags):
         want_public = publish_mode() == 'public_publish'
+        if not tags:
+            log("  ⚠ 태그 0개 — 태그 없이 발행")
         log("\n[STEP 10] " + ("전체공개 발행(태그·발행 설정 포함)" if want_public
                                else "비공개 발행(태그 포함) — 검토 후 사람이 전체공개로 전환"))
         published_visibility = publish_with_tags(page, tags, run_dir, issues, want_public=want_public)
+        # '태그 없이 발행' 안내는 실제로 발행됐을 때만(2026-10-26 검토) — 임시저장 폴백이면 발행한 게 아니라 틀린 안내가 된다.
+        if published_visibility and not tags:
+            issues.append("태그 0개 — 태그 없이 발행했습니다(네이버에서 태그를 추가하세요)")
         if published_visibility:
             saved = True
             published_private = True  # '실제 글로 발행됨'(임시저장 아님) — 아래 임시저장 로직 건너뜀

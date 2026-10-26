@@ -577,3 +577,43 @@ describe('query — forFacts 필터·스텁 감가·라벨 머리말', () => {
     expect(stubHits[0]).toBe('배롱나무 전정 참고'); // 원문 발췌 스텁(×0.5)도 출처 미상(감가 없음)보다 뒤
   });
 });
+
+describe('query — WIKI_FACT_EXCLUDE_RUN_SOURCES 순환 근거 차단(2026-10-26)', () => {
+  const seed = (w: LlmWiki): void => {
+    w.upsertPage({ title: '모과나무 삽목 원문', type: 'source', body: '모과나무 삽목 시기 원문', sources: ['raw/2026-10-01/a.md'] });
+    w.upsertPage({ title: '모과나무 삽목 발췌', type: 'entity', body: '모과나무 삽목 발췌', sources: ['stub:source'] });
+    w.upsertPage({ title: '모과나무 삽목 글', type: 'source', body: '모과나무 삽목 우리 글', sources: ['run:r1'] });
+    w.upsertPage({ title: '모과나무 삽목 스텁', type: 'concept', body: '모과나무 삽목 일반 정의', sources: ['maintain:auto'] });
+    w.upsertPage({ title: '모과나무 삽목 메모', type: 'concept', body: '모과나무 삽목 메모', sources: [] });
+  };
+  const titles = (r: { hits: Array<{ title: string }> }): string[] => r.hits.map((p) => p.title).sort();
+  it('forFacts + 켬 — 런 산출 요약·LLM 생성 스텁·출처 미상 제외, 원문·원문 발췌 스텁은 남김', () => {
+    const w = new LlmWiki(dir); seed(w);
+    const r = w.query('모과나무 삽목', 10, { forFacts: true, excludeRunSources: true });
+    expect(titles(r)).toEqual(['모과나무 삽목 발췌', '모과나무 삽목 원문']);
+    expect(r.context).not.toContain('[런 산출 요약]');
+  });
+  it('끄면(forFacts) 종전대로 다섯 쪽 모두, forFacts 아닌 질의는 켜도 그대로', () => {
+    const w = new LlmWiki(dir); seed(w);
+    expect(titles(w.query('모과나무 삽목', 10, { forFacts: true, excludeRunSources: false }))).toHaveLength(5);
+    expect(titles(w.query('모과나무 삽목', 10, { forFacts: true }))).toHaveLength(5); // 기본 CONFIG off
+    expect(titles(w.query('모과나무 삽목', 10, { excludeRunSources: true }))).toHaveLength(5);
+  });
+  it('semanticQuery 도 같은 필터를 탄다', async () => {
+    const w = new LlmWiki(dir); seed(w);
+    const r = await w.semanticQuery('모과나무 삽목', 10, undefined, { forFacts: true, excludeRunSources: true });
+    expect(titles(r)).toEqual(['모과나무 삽목 발췌', '모과나무 삽목 원문']);
+  });
+});
+
+describe('원자적 쓰기 — 페이지·index.md(2026-10-26)', () => {
+  it('쓰기 뒤 임시 파일이 남지 않고 내용이 온전하다', () => {
+    const w = new LlmWiki(dir);
+    w.upsertPage({ title: '감나무 전정', type: 'concept', body: '감나무 전정 본문', sources: [] });
+    w.rebuildIndex();
+    const files = fs.readdirSync(dir);
+    expect(files.some((f) => f.includes('.tmp-'))).toBe(false);
+    expect(fs.readFileSync(path.join(dir, 'index.md'), 'utf-8')).toContain('[[감나무 전정]]');
+    expect(w.getPage(slugify('감나무 전정'))?.body).toContain('감나무 전정 본문');
+  });
+});

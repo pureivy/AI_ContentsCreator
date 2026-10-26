@@ -103,7 +103,7 @@ export interface ApprovalItem {
   action_type: string;
   summary: string;
   autonomy?: number;
-  status: "pending" | "approved" | "rejected";
+  status: "pending" | "approved" | "rejected" | "cancelled";
   decided_by?: string;
 }
 

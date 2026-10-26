@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hasInfoCard, pickGraphicScenes, stripCards, sceneInfo, stageBox, sceneRanges, agentEnv, agentPrompt, MG_DETAIL_RULES, pruneMotionWork, type JobScene } from './shortsDirectMotion';
+import { hasInfoCard, pickGraphicScenes, stripCards, sceneInfo, stageBox, sceneRanges, agentEnv, agentPrompt, MG_DETAIL_RULES, pruneMotionWork, swapInFinal, type JobScene } from './shortsDirectMotion';
 import type { ShortsScene } from '../tools/shortsCommon';
 
 const compare: ShortsScene = { narration: '명자나무로 오해해요. 모과는 향이 퍼져요.', screenText: '향으로 구분해요', kind: 'compare', compare: { bad: { label: '명자나무로 오해', note: '작고 비슷해 보여서' }, good: { label: '모과나무는 향 퍼짐' } } };
@@ -95,5 +95,27 @@ describe('작업 폴더 정리(2026-10-22) — 무거운 중간물만 걷고 사
     expect(fs.readdirSync(work).sort()).toEqual(['agent.jsonl', 'check.json', 'job.json', 'metrics.json', 'scene_02.html', 'styleframes']);
     pruneMotionWork(path.join(work, '없는-폴더')); // 없는 폴더는 조용히 넘어간다
     fs.rmSync(work, { recursive: true, force: true });
+  });
+});
+
+describe('swapInFinal — 원본 보관 + 결과 올리기(2026-10-26)', () => {
+  it('원본은 final.basic.mp4 로, 결과는 final.mp4 로 — 임시 파일은 남지 않는다', () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'mg-swap-'));
+    fs.writeFileSync(path.join(d, 'final.mp4'), '원본');
+    fs.mkdirSync(path.join(d, 'motion-1'));
+    fs.writeFileSync(path.join(d, 'motion-1', 'final.mp4'), '모션그래픽');
+    swapInFinal(d, path.join(d, 'motion-1', 'final.mp4'));
+    expect(fs.readFileSync(path.join(d, 'final.mp4'), 'utf-8')).toBe('모션그래픽');
+    expect(fs.readFileSync(path.join(d, 'final.basic.mp4'), 'utf-8')).toBe('원본');
+    expect(fs.readdirSync(d).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+    fs.rmSync(d, { recursive: true, force: true });
+  });
+  it('결과 파일을 못 읽으면 던지고 final.mp4 는 원본 그대로', () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'mg-swap-'));
+    fs.writeFileSync(path.join(d, 'final.mp4'), '원본');
+    expect(() => swapInFinal(d, path.join(d, '없는.mp4'))).toThrow();
+    expect(fs.readFileSync(path.join(d, 'final.mp4'), 'utf-8')).toBe('원본');
+    expect(fs.readdirSync(d).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+    fs.rmSync(d, { recursive: true, force: true });
   });
 });

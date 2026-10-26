@@ -91,7 +91,10 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
       approval_id: approval.id, agent_id: approval.agent_id,
       action_type: approval.action_type, summary: approval.summary, autonomy: approval.autonomy,
     });
-    const decision = await decided;
+    // 런 취소 신호로 승인을 'cancelled' 정산(2026-10-26) — 안 하면 취소된 런이 타임아웃 자동승인으로 기록되고 발행 쪽으로 흘렀다.
+    const onAbort = (): void => { approvalStore().cancel(approval.id); };
+    if (a.signal?.aborted) onAbort(); else a.signal?.addEventListener('abort', onAbort, { once: true });
+    const decision = await decided.finally(() => a.signal?.removeEventListener('abort', onAbort));
     a.bus.emit(EventType.approval_decided, {
       approval_id: approval.id, approved: decision.approved, decided_by: decision.by, note: decision.note,
     });

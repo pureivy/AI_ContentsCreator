@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, rotationDemoteRank, orderCandidates, shouldRememberDemandReject, factStarvedItems, factStarvedRecentlyFor, starvedHit, beforeAutorunSlot } from './scheduler';
+import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, rotationDemoteRank, orderCandidates, shouldRememberDemandReject, factStarvedItems, factStarvedRecentlyFor, starvedHit, beforeAutorunSlot, nearAutorunSlot } from './scheduler';
 import type { DemandRow } from '../analytics/topicDemand';
 import { CONFIG } from '../config';
 
@@ -180,6 +180,157 @@ describe('startAutoCycle — runNow 결과값·runNowPersistent 재시도(슬롯
     await vi.advanceTimersByTimeAsync(1000);
     expect(await p).toBe('idle');
     expect(launch).not.toHaveBeenCalled();
+    stop();
+  });
+});
+
+// 부팅 첫 틱·줄 서기(2026-10-26) — 재시작마다 재개가 주기(60분)만큼 밀리던 것, 대기 중 슬롯 요청이 '중복'으로 버려지던 것.
+describe('startAutoCycle — firstDelayMs 부팅 첫 틱', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it('주기를 기다리지 않고 firstDelayMs 뒤에 한 번 돈다', async () => {
+    const launch = vi.fn();
+    const stop = startAutoCycle({ intervalMs: 60_000, firstDelayMs: 1_000, isBusy: () => false, pickWork: async () => 'w', launch });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(launch).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(launch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(58_000); // 다음은 주기(60s)에
+    expect(launch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(launch).toHaveBeenCalledTimes(2);
+    stop();
+  });
+  it('첫 틱도 토글 오프·슬롯 대기 중이면 쉰다', async () => {
+    const launch = vi.fn();
+    const off = startAutoCycle({ intervalMs: 60_000, firstDelayMs: 1_000, isEnabled: () => false, isBusy: () => false, pickWork: async () => 'w', launch });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(launch).not.toHaveBeenCalled();
+    off();
+    let busy = true;
+    const picks: Array<boolean | undefined> = [];
+    const stop = startAutoCycle({ intervalMs: 60_000, firstDelayMs: 1_000, isBusy: () => busy, pickWork: async (_s, force) => { picks.push(force); return 'w'; }, launch });
+    const p = stop.runNowPersistent({ retryMs: 2_000, maxAttempts: 3 }); // 대기 시작
+    busy = false;
+    await vi.advanceTimersByTimeAsync(1_000); // 첫 틱 — 대기 중이라 쉼
+    expect(picks).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1_000); // 대기 재시도
+    expect(await p).toBe('launched');
+    expect(picks).toEqual([true]);
+    stop();
+  });
+  it('intervalMs<=0 이면 firstDelayMs 도 no-op, stop 은 첫 틱을 지운다', async () => {
+    const launch = vi.fn();
+    const a = startAutoCycle({ intervalMs: 0, firstDelayMs: 1_000, isBusy: () => false, pickWork: async () => 'w', launch });
+    await vi.advanceTimersByTimeAsync(2_000);
+    a();
+    const b = startAutoCycle({ intervalMs: 60_000, firstDelayMs: 1_000, isBusy: () => false, pickWork: async () => 'w', launch });
+    b();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(launch).not.toHaveBeenCalled();
+  });
+});
+
+describe('startAutoCycle — runNowPersistent queue(정각 슬롯 줄 서기)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it('다른 대기가 진행 중이면 queue 요청은 버려지지 않고 그 뒤에 돈다 — 줄은 1건만', async () => {
+    const launch = vi.fn();
+    let busy = true;
+    const stop = startAutoCycle({ intervalMs: 0, isBusy: () => busy, pickWork: async () => 'w', launch });
+    const manual = stop.runNowPersistent({ label: '수동 틱', retryMs: 1_000, maxAttempts: 2 }); // 먼저 잡힌 대기 → 결국 포기
+    const slot = stop.runNowPersistent({ label: '정각 슬롯', retryMs: 1_000, maxAttempts: 5, queue: true });
+    const extra = stop.runNowPersistent({ label: '또 다른 슬롯', queue: true });
+    expect(await extra).toBe('busy'); // 줄은 이미 찼다
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await manual).toBe('busy'); // 앞선 대기 포기(2회) — 슬롯은 곧바로 자기 대기를 시작(1차 busy)
+    busy = false;                       // 막던 런 종료
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await slot).toBe('launched'); // 슬롯은 자기 차례를 받았다
+    expect(launch).toHaveBeenCalledTimes(1);
+    stop();
+  });
+  it('queue 없으면 종전대로 중복 요청은 busy', async () => {
+    const stop = startAutoCycle({ intervalMs: 0, isBusy: () => true, pickWork: async () => 'w', launch: vi.fn() });
+    const p = stop.runNowPersistent({ retryMs: 1_000, maxAttempts: 1 });
+    expect(await stop.runNowPersistent({})).toBe('busy');
+    expect(await p).toBe('busy');
+    stop();
+  });
+});
+
+// 정각 슬롯 재시작 내구(2026-10-26) — runSettled 는 결과 뒤에야 lastFired 를 적고, 대기 중 재시작이면 부팅 뒤 다시 돈다.
+describe('startDaily — runSettled(결과 뒤 기록·끊긴 대기 따라잡기)', () => {
+  let tmp = '';
+  beforeEach(async () => {
+    const os = await import('node:os');
+    const fs = await import('node:fs');
+    const pathm = await import('node:path');
+    tmp = fs.mkdtempSync(pathm.join(os.tmpdir(), 'daily-settled-'));
+    process.env.GEPA_DATA_DIR = tmp;
+    vi.resetModules();
+  });
+  afterEach(async () => {
+    vi.useRealTimers();
+    const fs = await import('node:fs');
+    delete process.env.GEPA_DATA_DIR;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+  const files = async () => {
+    const fs = await import('node:fs');
+    const pathm = await import('node:path');
+    const dir = pathm.join(tmp, '_shared');
+    return fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
+  };
+  it('대기 중엔 pending 표식만, 결과가 나오면 lastFired 기록·표식 삭제·같은 날 재발화 없음', async () => {
+    const mod = await import('./scheduler');
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 9, 26, 6, 0, 30));
+    let settle: (r: 'launched') => void = () => {};
+    const runSettled = vi.fn(() => new Promise<'launched'>((r) => { settle = r; }));
+    const stop = mod.startDaily({ time: '06:00', key: 'autorun-0600', runSettled });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runSettled).toHaveBeenCalledTimes(1);
+    expect(await files()).toEqual(['daily-autorun-0600.pending']); // lastFired 는 아직 없다
+    await vi.advanceTimersByTimeAsync(5 * 60_000); // 대기 중 1분 틱 — 다시 부르지 않는다
+    expect(runSettled).toHaveBeenCalledTimes(1);
+    settle('launched');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await files()).toEqual(['daily-autorun-0600.json']); // 원자 쓰기 — .tmp 잔재 없음
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(runSettled).toHaveBeenCalledTimes(1);
+    stop();
+  });
+  it('대기 중 재시작 → 부팅 뒤 같은 날 다시 돈다(종전엔 그날 몫 소실)', async () => {
+    let mod = await import('./scheduler');
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 9, 26, 6, 0, 30));
+    const first = vi.fn(() => new Promise<'launched'>(() => { /* 재시작으로 끝나지 않음 */ }));
+    let stop = mod.startDaily({ time: '06:00', key: 'autorun-0600', runSettled: first });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(first).toHaveBeenCalledTimes(1);
+    stop(); // 재시작
+    vi.resetModules();
+    mod = await import('./scheduler');
+    const logs: string[] = [];
+    const second = vi.fn(async () => 'busy' as const);
+    stop = mod.startDaily({ time: '06:00', key: 'autorun-0600', runSettled: second, log: (m) => logs.push(m) });
+    expect(logs.some((l) => l.includes('재시작으로 끊긴'))).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(second).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await files()).toEqual(['daily-autorun-0600.json']); // busy(포기)도 그날은 끝 — 1분마다 다시 30분 대기하지 않게
+    stop();
+  });
+  it('run(종전 방식)은 그대로 — 부르기 전에 기록', async () => {
+    const mod = await import('./scheduler');
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 9, 26, 8, 0, 30));
+    const run = vi.fn();
+    const stop = mod.startDaily({ time: '08:00', key: 'briefing', run });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(await files()).toEqual(['daily-briefing.json']);
     stop();
   });
 });
@@ -869,5 +1020,59 @@ describe('beforeAutorunSlot — 정각 오토런 앞 60분은 조사런을 시�
   it('슬롯이 없거나 잘못 쓰였으면 막지 않는다', () => {
     expect(beforeAutorunSlot(kst('05:30'), '')).toBe(false);
     expect(beforeAutorunSlot(kst('05:30'), 'abc')).toBe(false);
+  });
+});
+
+// 조사런 슬롯 가드 확장(2026-10-26 검토) — 슬롯 정각 분·뒤 5분, 오늘 슬롯 미정착(대기 표식·일일 틱 전)도 막는다.
+describe('nearAutorunSlot — 슬롯 앞 60분 + 정각 + 뒤 5분(순수)', () => {
+  const kst = (hhmm: string) => Date.parse(`2026-10-26T${hhmm}:00+09:00`);
+  it('06:00 정각·06:04·06:05 는 막고 06:06 부터 연다, 앞쪽은 beforeAutorunSlot 과 같다', () => {
+    expect(nearAutorunSlot(kst('06:00'), '06:00')).toBe(true);
+    expect(nearAutorunSlot(kst('06:00') + 45_000, '06:00')).toBe(true); // 06:00:45 — 일반 틱이 일일 틱보다 먼저 도는 순간
+    expect(nearAutorunSlot(kst('06:04'), '06:00')).toBe(true);
+    expect(nearAutorunSlot(kst('06:05'), '06:00')).toBe(true);
+    expect(nearAutorunSlot(kst('06:06'), '06:00')).toBe(false);
+    expect(nearAutorunSlot(kst('05:00'), '06:00')).toBe(true);
+    expect(nearAutorunSlot(kst('04:59'), '06:00')).toBe(false);
+  });
+  it('자정 넘김·여러 슬롯·잘못된 값', () => {
+    expect(nearAutorunSlot(kst('00:03'), '23:59')).toBe(true);
+    expect(nearAutorunSlot(kst('17:02'), '06:00, 17:00')).toBe(true);
+    expect(nearAutorunSlot(kst('12:00'), '06:00, 17:00')).toBe(false);
+    expect(nearAutorunSlot(kst('06:00'), 'abc')).toBe(false);
+  });
+});
+
+describe('autorunSlotUnsettled — 오늘 슬롯이 시각은 지났는데 결과 전인가(파일 읽기만)', () => {
+  let tmp = '';
+  beforeEach(async () => {
+    const os = await import('node:os');
+    const fs = await import('node:fs');
+    const pathm = await import('node:path');
+    tmp = fs.mkdtempSync(pathm.join(os.tmpdir(), 'slot-unsettled-'));
+    process.env.GEPA_DATA_DIR = tmp;
+    vi.resetModules();
+  });
+  afterEach(async () => {
+    const fs = await import('node:fs');
+    delete process.env.GEPA_DATA_DIR;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+  it('시각 전 false → 시각 뒤·기록 없음 true → 결과 기록(lastFired=오늘) 뒤 false → 대기 표식이면 true', async () => {
+    const fs = await import('node:fs');
+    const pathm = await import('node:path');
+    const mod = await import('./scheduler');
+    const before = new Date(2026, 9, 26, 5, 59, 0);
+    const after = new Date(2026, 9, 26, 6, 10, 0);
+    const today = `${after.getFullYear()}-${after.getMonth()}-${after.getDate()}`;
+    expect(mod.autorunSlotUnsettled('06:00', before)).toBe(false);
+    expect(mod.autorunSlotUnsettled('06:00', after)).toBe(true);
+    const dir = pathm.join(tmp, '_shared');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(pathm.join(dir, `daily-${mod.autorunDailyKey('06:00')}.json`), JSON.stringify({ lastFired: today }));
+    expect(mod.autorunSlotUnsettled('06:00', after)).toBe(false);
+    fs.writeFileSync(pathm.join(dir, `daily-${mod.autorunDailyKey('06:00')}.pending`), JSON.stringify({ day: today }));
+    expect(mod.autorunSlotUnsettled('06:00', after)).toBe(true);
+    expect(mod.autorunSlotUnsettled('', after)).toBe(false);
   });
 });

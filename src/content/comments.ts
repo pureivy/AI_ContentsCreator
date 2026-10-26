@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { genId } from '../util/ids';
+import { readJsonFile, writeJsonAtomic } from '../util/jsonStore';
 
 export type CommentPlatform = 'blog' | 'clip' | 'youtube' | 'instagram';
 export const COMMENT_PLATFORMS: readonly CommentPlatform[] = ['blog', 'clip', 'youtube', 'instagram'];
@@ -84,19 +85,18 @@ function defaultFile(): string {
     : path.join(CONFIG.dataDir, 'comments', 'index.json');
 }
 
+/** 읽기 — 없으면 빈 상태. 깨졌으면(2026-10-26) .corrupt-<시각> 으로 옮기고 빈 상태를 주되 이번 실행 동안 저장은 막힌다
+ *  (종전엔 빈 상태로 읽혀 다음 저장이 담은 댓글·본 댓글 키를 다 덮어, 이미 답한 댓글이 다시 담겼다). */
 export function loadCommentState(file = defaultFile()): CommentState {
-  try {
-    const j = JSON.parse(fs.readFileSync(file, 'utf-8')) as Partial<CommentState>;
-    return { ...j, items: Array.isArray(j.items) ? j.items : [], since: j.since ?? {} };
-  } catch { return { items: [], since: {} }; }
+  const r = readJsonFile<Partial<CommentState>>(file, '댓글(comments)', (v) => !!v && typeof v === 'object' && !Array.isArray(v));
+  const j = r.value ?? {};
+  return { ...j, items: Array.isArray(j.items) ? j.items : [], since: j.since ?? {} };
 }
 
-/** 저장 — 실패하면 던진다. 올리기 잠금(posting)이 디스크에 안 남은 채 진행되면 두 번 누를 때 두 번 올라간다(검토 2026-10-25). */
+/** 저장 — 실패하면 던진다. 올리기 잠금(posting)이 디스크에 안 남은 채 진행되면 두 번 누를 때 두 번 올라간다(검토 2026-10-25).
+ *  깨진 색인이면 저장이 거부돼 던지므로 올리기(claimForPost)도 '기록을 저장하지 못해 올리지 않았습니다'로 멈춘다(fail-closed). */
 export function saveCommentState(s: CommentState, file = defaultFile()): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(s, null, 2), 'utf-8');
-  fs.renameSync(tmp, file);
+  writeJsonAtomic(file, s, { backup: true });
 }
 
 const keyOf = (p: CommentPlatform, externalId: string): string => `${p}:${externalId}`;

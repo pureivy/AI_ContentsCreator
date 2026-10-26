@@ -663,6 +663,16 @@ export default function App() {
       runId,
       (ev) => apply(ev),
       () => useStore.getState().lastSeq,
+      // 스트림이 4xx(서버에 bus 가 없는 런 — 재시작 등)면 재시도를 멈추고 기록 다시 보기로 우회한다.
+      // 기록도 없으면(loadPast 가 URL 만 정리) 'running' 에 갇혀 자동 관전이 막히지 않게 idle 로 내린다.
+      () => {
+        const st = useStore.getState();
+        if (st.runId !== runId || st.status !== "running") return; // 그새 떠났거나 이미 끝난 런은 그대로
+        void loadPast(runId).catch(() => {}).then(() => { // fetchRunLog 는 404 면 던진다 — 그때도 idle 로
+          const now = useStore.getState();
+          if (now.runId === runId && now.status === "running" && now.mode === "live") clearToIdle();
+        });
+      },
     );
   };
 

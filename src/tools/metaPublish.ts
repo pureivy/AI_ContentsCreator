@@ -16,6 +16,7 @@ import { promisify } from 'node:util';
 import { CONFIG } from '../config';
 import { getMetaAccount } from '../secrets/store';
 import { uploadToFalStorage } from './falStorage';
+import { canPublishTo, type ShortsPlatform } from '../content/shortsPlatform';
 
 // 'AI 정보' 라벨 자기 공개(META_AI_LABEL, 기본 on) — IG 는 컨테이너 생성 파라미터 is_ai_generated(2026-06-22
 // 공식 도입, 캐러셀은 부모에만 — 자식에 넣으면 에러), FB 릴스는 video_reels 레퍼런스의 동명 파라미터.
@@ -156,6 +157,9 @@ async function waitContainer(containerId: string, token: string, signal?: AbortS
   throw new Error('IG 컨테이너 처리 시간 초과 — 잠시 후 재시도하세요');
 }
 
+/** 발행 회수 조회의 시간 제한 — 호출마다 새로 건다(공유 signal 재사용 금지, 2026-10-26). */
+const RECOVER_TIMEOUT_MS = 15_000;
+
 /** 최근 미디어 목록에서 방금 올린 것 매칭(순수) — 캡션 프리픽스(24자)+미디어 타입 일치+nowMs 기준 3분 이내. */
 export function matchRecentPublish(
   posts: Array<{ id?: string; caption?: string; timestamp?: string; media_type?: string }>,
@@ -176,9 +180,10 @@ export function matchRecentPublish(
  * 정확히 1건만 게시 — 중복 아님). 그 경우 최근 내 미디어에서 방금 올린 것을 회수해 id 를 돌려준다 — '발행됐는데 미기록'
  * 으로 버튼이 안 바뀌고 재시도 중복을 유발하던 것을 막는다. 실패 시 null(원래 에러 유지).
  */
-async function recoverPublishedId(token: string, caption: string, mediaType: string, signal?: AbortSignal): Promise<string | null> {
+async function recoverPublishedId(token: string, caption: string, mediaType: string): Promise<string | null> {
   try {
-    const j = await graphJson(`${GRAPH}/me/media?fields=id,caption,timestamp,media_type&limit=5&${tokenQs(token)}`, { signal }, '최근 미디어');
+    // 새 시간 제한(2026-10-26) — 발행 런의 signal 은 이미 끊겼을 수 있다(시간 초과가 바로 그 실패 원인일 수 있다).
+    const j = await graphJson(`${GRAPH}/me/media?fields=id,caption,timestamp,media_type&limit=5&${tokenQs(token)}`, { signal: AbortSignal.timeout(RECOVER_TIMEOUT_MS) }, '최근 미디어');
     const posts = (j as { data?: Array<{ id?: string; caption?: string; timestamp?: string; media_type?: string }> }).data ?? [];
     return matchRecentPublish(posts, caption, mediaType, Date.now());
   } catch { return null; }
@@ -243,11 +248,42 @@ export function matchRecentFbPost(
 }
 
 /** /feed 실패 후 실제로 게시됐는지 확인해 id 회수(실패 시 null — 원래 에러 유지). */
-async function recoverFbPostId(pageId: string, token: string, message: string, signal?: AbortSignal): Promise<string | null> {
+async function recoverFbPostId(pageId: string, token: string, message: string): Promise<string | null> {
   try {
-    const j = await graphJson(`${FB_GRAPH}/${pageId}/feed?fields=id,message,created_time&limit=5&${tokenQs(token)}`, { signal }, '최근 페이지 게시물');
+    const j = await graphJson(`${FB_GRAPH}/${pageId}/feed?fields=id,message,created_time&limit=5&${tokenQs(token)}`, { signal: AbortSignal.timeout(RECOVER_TIMEOUT_MS) }, '최근 페이지 게시물');
     const posts = (j as { data?: Array<{ id?: string; message?: string; created_time?: string }> }).data ?? [];
     return matchRecentFbPost(posts, message, Date.now());
+  } catch { return null; }
+}
+
+/**
+ * FB 릴스 회수 매칭(순수, 2026-10-26 검토) — 우리 start 호출이 받은 video_id 인 릴스만 본다. 설명 프리픽스만으로 찾으면
+ * 인스타 릴스가 페이지로 교차 게시된 같은 설명의 릴스를 '방금 올린 것'으로 집어, FB 릴스는 실제로 없는데 있다고 기록했다.
+ * video_id 를 모르면(start 자체가 실패) 우리가 만든 릴스가 없으므로 null. 설명은 finish 때 붙으므로 프리픽스까지 맞아야 '공개됨'.
+ */
+export function matchFbReelRecovery(
+  reels: Array<{ id?: string; description?: string; created_time?: string }>,
+  description: string, startMs: number, videoId: string | undefined,
+): string | null {
+  if (!videoId) return null;
+  const mine = reels.filter((r) => r.id === videoId);
+  return matchRecentFbPost(mine.map((r) => ({ id: r.id, message: r.description, created_time: r.created_time })), description, startMs);
+}
+
+/**
+ * FB 릴스 finish 응답 유실 회수(2026-10-26) — 재시도는 start 부터 새 video_id 를 만들어 같은 릴스를 두 번 공개한다.
+ * 페이지 릴스 목록에서 matchRecentFbPost 규칙(설명 프리픽스 24자 + 3분 이내)으로 방금 올린 것을 찾는다.
+ * 3분의 기준은 회수 시각이 아니라 start 시각(startMs)이다 — 영상 노드의 created_time 은 start 때 찍히는데 업로드·인코딩이
+ * 3분을 넘기기 쉬워, 지금 기준이면 방금 올린 릴스를 놓친다. start 보다 3분 넘게 앞선 릴스는 여전히 거른다.
+ * 설명이 붙는 건 finish 때라, start 만 되고 끝나지 않은 릴스는 프리픽스가 안 맞아 잡히지 않는다. 실패 시 null.
+ * 우리 start 가 받은 video_id 로만 찾는다(matchFbReelRecovery) — 목록 조회 전에 끊어 API 호출도 아낀다.
+ */
+async function recoverFbReelId(pageId: string, token: string, description: string, startMs: number, videoId: string | undefined): Promise<string | null> {
+  if (!videoId) return null;
+  try {
+    const j = await graphJson(`${FB_GRAPH}/${pageId}/video_reels?fields=id,description,created_time&limit=5&${tokenQs(token)}`, { signal: AbortSignal.timeout(RECOVER_TIMEOUT_MS) }, '최근 페이지 릴스');
+    const reels = (j as { data?: Array<{ id?: string; description?: string; created_time?: string }> }).data ?? [];
+    return matchFbReelRecovery(reels, description, startMs, videoId);
   } catch { return null; }
 }
 
@@ -338,15 +374,14 @@ export async function publishCardNewsToMeta(opts: {
           body: new URLSearchParams({ creation_id: carId, access_token: token }),
         }, 'IG 발행');
         out.igMediaId = extractId(pub) ?? undefined;
+        if (!out.igMediaId) throw new Error('IG 발행 응답 이형(id 없음)');
       } catch (e) {
-        // 행동차단(2207051)은 발행을 처리하고도 403(id 없음)을 반환할 수 있다 — 방금 올린 게시물을 회수해 기록.
-        if (/2207051|행동이 차단/i.test(e instanceof Error ? e.message : String(e))) {
-          const rec = await recoverPublishedId(token, message, imageUrls.length === 1 ? 'IMAGE' : 'CAROUSEL_ALBUM', signal);
-          if (rec) { out.igMediaId = rec; out.recovered = true; }
-        }
+        // 발행 요청의 어떤 실패든(2026-10-26) 실제로는 게시됐을 수 있다 — 행동차단(2207051)의 403(id 없음)만이 아니라
+        // 시간 초과·5xx·연결 끊김·이형 응답도. 방금 올린 게시물을 회수해 기록(재시도 중복 공개 방지).
+        const rec = await recoverPublishedId(token, message, imageUrls.length === 1 ? 'IMAGE' : 'CAROUSEL_ALBUM');
+        if (rec) { out.igMediaId = rec; out.recovered = true; }
         if (!out.igMediaId) throw e; // 회복 못 하면 원래 에러(메시지 힌트 유지)
       }
-      if (!out.igMediaId) throw new Error('IG 발행 응답 이형(id 없음)');
     }
     // 퍼머링크 보강 — 발행됐고(미디어 id) 아직 실제 링크 없으면 조회. 일시 실패 시 undefined(홈 URL 폴백 없음) → 다음 재시도가 채움.
     if (igLinked && out.igMediaId && !out.igPermalink) {
@@ -363,7 +398,7 @@ export async function publishCardNewsToMeta(opts: {
       } catch (fe) {
         // 게시는 됐는데 응답만 유실된 경우가 있다(IG 의 2207051 사례와 같은 부류) → 최근 게시물에서 회수.
         // 회수 못 하면 사유 보고. 회수 성공은 recovered 로 표시(재시도가 두 번째 공개 게시를 만들지 않게).
-        const rec = await recoverFbPostId(acct.pageId, acct.pageToken, message, signal);
+        const rec = await recoverFbPostId(acct.pageId, acct.pageToken, message);
         if (rec) { out.fbPostId = rec; out.recovered = true; }
         else {
           out.fbError = fbFailHint(fe instanceof Error ? fe.message.slice(0, 200) : String(fe));
@@ -420,12 +455,17 @@ async function uploadVideoBinary(uploadUrl: string, token: string, videoPath: st
  * FB 릴스 3단계 — start(video_id·upload_url) → 바이너리 → finish(PUBLISHED). video_id 반환.
  * 호스트는 FB_GRAPH, 토큰은 페이지 액세스 토큰(pageToken) — IG 호스트·IG 토큰으로는 동작하지 않는다.
  */
-export async function publishFbReel(pageId: string, token: string, videoPath: string, description: string, signal?: AbortSignal): Promise<string> {
+export async function publishFbReel(
+  pageId: string, token: string, videoPath: string, description: string, signal?: AbortSignal,
+  /** start 가 video_id 를 받은 순간 알린다(2026-10-26) — 뒤 단계에서 던져도 호출부가 그 id 로만 회수하게. */
+  onStarted?: (videoId: string) => void,
+): Promise<string> {
   const start = await graphJson(`${FB_GRAPH}/${pageId}/video_reels`, {
     method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ upload_phase: 'start', access_token: token }),
   }, 'FB 릴스 시작') as { video_id?: string; upload_url?: string };
   if (!start.video_id || !start.upload_url) throw new Error('FB 릴스 시작 응답 이형');
+  onStarted?.(start.video_id);
   await uploadVideoBinary(start.upload_url, token, videoPath, 'FB 릴스 업로드', signal);
   const fin = await graphJson(`${FB_GRAPH}/${pageId}/video_reels`, {
     method: 'POST', signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -497,15 +537,13 @@ export async function publishShortsToMeta(opts: {
           body: new URLSearchParams({ creation_id: cid, access_token: token }),
         }, 'IG 릴스 발행');
         out.igReelId = extractId(pub) ?? undefined;
+        if (!out.igReelId) throw new Error('IG 릴스 발행 응답 이형(id 없음)');
       } catch (e) {
-        // 행동차단(2207051)은 릴스도 발행하고 403(id 없음)을 반환할 수 있다 — 방금 올린 영상을 회수해 기록.
-        if (/2207051|행동이 차단/i.test(e instanceof Error ? e.message : String(e))) {
-          const rec = await recoverPublishedId(token, message, 'VIDEO', signal);
-          if (rec) { out.igReelId = rec; out.recovered = true; }
-        }
+        // 어떤 발행 실패든(2026-10-26 — 2207051 만이 아니라 시간 초과·5xx·연결 끊김·이형) 실제로는 올라갔을 수 있다 — 회수해 기록.
+        const rec = await recoverPublishedId(token, message, 'VIDEO');
+        if (rec) { out.igReelId = rec; out.recovered = true; }
         if (!out.igReelId) throw e;
       }
-      if (!out.igReelId) throw new Error('IG 릴스 발행 응답 이형(id 없음)');
     }
     // 퍼머링크 보강 — 발행됐고(릴스 id) 아직 실제 링크 없으면 조회. 일시 실패 시 undefined(홈 URL 폴백 없음) → 다음 재시도가 채움.
     if (igLinked && out.igReelId && !out.igPermalink) {
@@ -515,15 +553,21 @@ export async function publishShortsToMeta(opts: {
 
     // ② FB 릴스 — 페이지 연결(pageId+페이지토큰) 있을 때만. 기발행이면 스킵(멱등).
     // 실패해도 throw 하지 않는다: IG 릴스는 이미 공개됐으므로 취소 불가 — 사유만 fbError 로 보고.
-    // 알려진 한계: finish 응답만 유실된 경우의 id 회수는 카드뉴스(/feed)에만 있다. 릴스는 재시도가
-    // start 부터 새 video_id 를 만들어 중복 공개가 될 수 있다 — 실패 후 재시도 전 페이지를 눈으로 확인할 것.
+    // finish 응답만 유실되면 릴스는 공개됐는데 기록이 없고, 재시도가 start 부터 새 video_id 를 만들어 중복 공개한다 —
+    // 실패하면 페이지 릴스 목록에서 회수한다(2026-10-26, recoverFbReelId). 회수 못 하면 재시도 전 페이지를 눈으로 확인할 것.
     out.fbReelId = opts.existing?.fbReelId;
     if (fbLinked && !out.fbReelId) {
+      const fbStartMs = Date.now();
+      let fbVideoId: string | undefined; // 우리 start 가 받은 id — 회수는 이것만 본다(교차 게시된 IG 릴스 오인 방지)
       try {
-        out.fbReelId = await publishFbReel(acct.pageId, acct.pageToken, opts.videoPath, message, signal);
+        out.fbReelId = await publishFbReel(acct.pageId, acct.pageToken, opts.videoPath, message, signal, (v) => { fbVideoId = v; });
       } catch (fe) {
-        out.fbError = fbFailHint(fe instanceof Error ? fe.message.slice(0, 200) : String(fe));
-        console.log('[meta] FB 릴스 실패(IG 성공 유지) — ' + out.fbError.slice(0, 160));
+        const rec = await recoverFbReelId(acct.pageId, acct.pageToken, message, fbStartMs, fbVideoId);
+        if (rec) { out.fbReelId = rec; out.recovered = true; console.log(`[meta] FB 릴스 응답 유실 — 페이지 릴스 목록에서 회수: ${rec}`); }
+        else {
+          out.fbError = fbFailHint(fe instanceof Error ? fe.message.slice(0, 200) : String(fe));
+          console.log('[meta] FB 릴스 실패(IG 성공 유지) — ' + out.fbError.slice(0, 160));
+        }
       }
     }
 
@@ -554,7 +598,13 @@ export async function publishShortsToMeta(opts: {
   }
 }
 
-export interface IgMediaItem { id: string; permalink: string; timestamp: string; caption: string; type: string; }
+export interface IgMediaItem {
+  id: string; permalink: string; timestamp: string; caption: string;
+  /** media_product_type 우선(REELS·FEED·STORY), 없으면 media_type — 릴스 재조정이 이걸 본다. */
+  type: string;
+  /** media_type 그대로(IMAGE·VIDEO·CAROUSEL_ALBUM, 2026-10-26) — 피드 게시물은 type 이 'FEED' 라 캐러셀을 가를 수 없다. */
+  mediaType: string;
+}
 
 /**
  * 계정의 IG 미디어 목록(페이지네이션) — 재조정(reconcile)용. 발행 중 서버 재시작 등으로 로컬 영속이 유실돼도
@@ -569,7 +619,7 @@ export async function listIgMedia(slug: string): Promise<IgMediaItem[]> {
   for (let guard = 0; url && guard < 20; guard++) {
     const j = await graphJson(url, {}, 'IG 미디어 목록') as { data?: Array<Record<string, string>>; paging?: { next?: string } };
     for (const m of j.data ?? []) {
-      out.push({ id: m.id ?? '', permalink: m.permalink ?? '', timestamp: m.timestamp ?? '', caption: m.caption ?? '', type: m.media_product_type ?? m.media_type ?? '' });
+      out.push({ id: m.id ?? '', permalink: m.permalink ?? '', timestamp: m.timestamp ?? '', caption: m.caption ?? '', type: m.media_product_type ?? m.media_type ?? '', mediaType: m.media_type ?? '' });
     }
     const next = j.paging?.next;
     url = next && /^https:\/\/graph\.instagram\.com\//.test(next) ? next : null;
@@ -580,21 +630,67 @@ export async function listIgMedia(slug: string): Promise<IgMediaItem[]> {
 /**
  * 라이브 IG 릴스를 미추적 쇼츠에 매칭(순수) — 캡션이 쇼츠 제목으로 시작하면 동일 콘텐츠로 본다.
  * igReelId 이미 있는 쇼츠는 건너뛰고, 한 릴스 id 는 한 쇼츠에만 선점(중복 매칭 방지). 재조정 백필용.
+ * 오매칭 방지(2026-10-26) — 제목 접두만으로는 유튜브 전용 편(인스타에 안 올림)이나 같은 제목으로 시작하는 옛 릴스를
+ * 붙였다. 인스타에 올릴 수 있는 편만(canPublishTo), 릴스 시각이 그 편을 만든 뒤일 때만, 제목 8자 이상만 매칭한다.
+ * platform·createdTs 는 넘겨줄 때만 본다(미지정 레코드는 종전대로).
  */
 export function matchOrphanReels(
-  shorts: Array<{ id: string; title: string; igReelId?: string }>,
+  shorts: Array<{ id: string; title: string; igReelId?: string; platform?: ShortsPlatform; createdTs?: string }>,
   reels: Array<{ id: string; permalink: string; timestamp: string; caption: string }>,
 ): Array<{ shortsId: string; reelId: string; permalink: string; timestamp: string }> {
   const claimed = new Set(shorts.map((s) => s.igReelId).filter((x): x is string => !!x));
   const matches: Array<{ shortsId: string; reelId: string; permalink: string; timestamp: string }> = [];
   for (const s of shorts) {
     if (s.igReelId) continue;
+    if (!canPublishTo(s.platform, 'instagram')) continue;
     const title = s.title.trim();
-    if (!title) continue;
-    const m = reels.find((r) => !claimed.has(r.id) && r.caption.trim().startsWith(title));
+    if (title.length < 8) continue; // 짧은 제목은 남의 캡션 앞머리와도 겹친다
+    const born = s.createdTs ? Date.parse(s.createdTs) : NaN;
+    if (s.createdTs && !Number.isFinite(born)) continue; // 생성 시각을 못 읽으면 시각 조건을 못 지킨다 — 건너뜀
+    const m = reels.find((r) => !claimed.has(r.id) && r.caption.trim().startsWith(title)
+      && (!s.createdTs || Date.parse(r.timestamp) >= born));
     if (!m) continue;
     claimed.add(m.id);
     matches.push({ shortsId: s.id, reelId: m.id, permalink: m.permalink, timestamp: m.timestamp });
+  }
+  return matches;
+}
+
+/**
+ * 라이브 IG 피드 게시물(캐러셀·단일 이미지)을 미추적 카드뉴스에 매칭(순수, 2026-10-26) — 릴스 재조정(matchOrphanReels)의 카드뉴스 판.
+ * 발행 응답 직후 재시작으로 igMediaId 를 못 적은 카드는 성과 탭에서 빠지고, 버튼이 '미발행'으로 남아 다시 누르면 두 번 공개된다.
+ * 캡션이 그 카드 캡션(발행 때 앞머리에 그대로 들어간다 — buildIgCaption)으로 시작하는 게시물을 찾는다. 가드는 릴스와 같은 결:
+ * 완성(ready) 카드만, 정규화한 캡션 앞머리 8자 이상, 게시 시각 ≥ 카드 생성 시각, 이미지형만(릴스·영상 제외), 한 게시물은 한 카드에만.
+ * 비교는 앞 60자 — 캡션 전체는 해시태그·블로그 줄과 붙어 2200자 예산으로 잘릴 수 있다.
+ */
+export function matchOrphanCards(
+  cards: Array<{ id: string; caption: string; igMediaId?: string; createdTs?: string; stage?: string }>,
+  media: Array<{ id: string; permalink: string; timestamp: string; caption: string; mediaType: string }>,
+): Array<{ cardId: string; mediaId: string; permalink: string; timestamp: string }> {
+  const norm = (t: string): string => t.replace(/\s+/g, ' ').trim();
+  const posts = media.filter((m) => m.mediaType === 'CAROUSEL_ALBUM' || m.mediaType === 'IMAGE');
+  const claimed = new Set(cards.map((c) => c.igMediaId).filter((x): x is string => !!x));
+  const matches: Array<{ cardId: string; mediaId: string; permalink: string; timestamp: string }> = [];
+  // 후보가 양쪽 모두 정확히 하나일 때만 붙인다(최종 검토 2026-10-26) — 앞 60자가 같은 카드가 둘이면 목록 순서로
+  // 엉뚱한 카드에 붙을 수 있다. 모호하면 건너뛰는 쪽이 안전하다(재발행이 아니라 기록 복구라 놓쳐도 사람이 고칠 수 있다).
+  const eligible = cards.flatMap((c) => {
+    if (c.igMediaId || c.stage !== 'ready') return [];
+    const head = norm(c.caption).slice(0, 60);
+    if (head.length < 8) return []; // 짧은 캡션은 남의 게시물 앞머리와도 겹친다
+    const born = c.createdTs ? Date.parse(c.createdTs) : NaN;
+    if (c.createdTs && !Number.isFinite(born)) return [];
+    return [{ c, head, born }];
+  });
+  const fits = (e: (typeof eligible)[number], p: (typeof posts)[number]): boolean =>
+    !claimed.has(p.id) && norm(p.caption).startsWith(e.head) && (!e.c.createdTs || Date.parse(p.timestamp) >= e.born);
+  for (const e of eligible) {
+    const cand = posts.filter((p) => fits(e, p));
+    if (cand.length !== 1) continue;
+    const m = cand[0]!;
+    if (eligible.filter((o) => fits(o, m)).length !== 1) continue;
+    claimed.add(m.id);
+    const ts = Date.parse(m.timestamp);
+    matches.push({ cardId: e.c.id, mediaId: m.id, permalink: m.permalink, timestamp: Number.isFinite(ts) ? new Date(ts).toISOString() : m.timestamp });
   }
   return matches;
 }

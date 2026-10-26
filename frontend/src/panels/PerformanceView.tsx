@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchPerformance, fetchFollowers, refreshPerformance, refreshNaverPerformance, deletePiece, deleteShorts, deleteCardNews, PerfData, FollowersData } from "../api";
 import Ico, { type IcoName } from "./Ico";
 import PlatformMark, { type Platform } from "./PlatformMark";
@@ -58,6 +58,13 @@ export default function PerformanceView() {
 
   const load = () => { setLoading(true); return fetchPerformance().then((d) => { setData(d); setLoading(false); }); };
   useEffect(() => { void load(); void fetchFollowers().then(setFollowers); }, []);
+  // 아래 두 수집 폴링 루프(최대 5분·45분)의 언마운트 탈출구 — 탭을 떠나도 계속 돌던 좀비 폴링 방지.
+  // 본문에서 true 로 되돌리는 이유: StrictMode(dev)의 언마운트 시뮬레이션이 false 로 고정하지 않게.
+  const aliveRef = useRef(true);
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
+  // 루프 중복 방지 — state(refreshing·naverRunning)는 빠른 연타 때 클로저가 옛 값을 봐 두 번째 루프가 쌓인다.
+  const refreshLoopRef = useRef(false);
+  const naverLoopRef = useRef(false);
 
   // 새로고침 = 순수 API 채널(쇼츠 유튜브·릴스·카드뉴스) 즉시 재수집 후 재조회 — 실측 96초.
   // 종전엔 저장값 재조회뿐이라 숫자가 안 변해 '죽은 버튼'으로 보였다(2026-07-20 사용자 보고).
@@ -66,10 +73,15 @@ export default function PerformanceView() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState("");
   const doRefresh = async () => {
-    if (refreshing) return;
+    if (refreshing || refreshLoopRef.current) return;
+    refreshLoopRef.current = true;
+    try { await runRefresh(); } finally { refreshLoopRef.current = false; }
+  };
+  const runRefresh = async () => {
     setRefreshing(true);
     setRefreshMsg("⏳ 재수집 중…");
     const r = await refreshPerformance(); // 서버는 즉시 응답(백그라운드 수집) — 진행 중이었으면 그 수집에 합류
+    if (!aliveRef.current) return;
     if (!r.ok) {
       await load(); // 시작 실패해도 표시는 최신 저장값으로 갱신
       void fetchFollowers().then(setFollowers);
@@ -82,12 +94,14 @@ export default function PerformanceView() {
     // 팔로워도 폴링 안에서 같이 읽는다 — 먼저 끝난 값이 화면에 바로 뜨게(신고 2026-08-02).
     void fetchFollowers().then(setFollowers);
     let d = await fetchPerformance();
-    while (d?.refreshBusy && Date.now() < deadline) {
+    while (aliveRef.current && d?.refreshBusy && Date.now() < deadline) {
       setData(d);
       await new Promise((res) => setTimeout(res, 5000));
+      if (!aliveRef.current) return;
       d = await fetchPerformance();
       void fetchFollowers().then(setFollowers);
     }
+    if (!aliveRef.current) return;
     if (d) setData(d);
     await fetchFollowers().then(setFollowers);
     setRefreshing(false);
@@ -101,10 +115,15 @@ export default function PerformanceView() {
   const [naverRunning, setNaverRunning] = useState(false);
   const [naverMsg, setNaverMsg] = useState("");
   const doNaverCollect = async () => {
-    if (naverRunning) return;
+    if (naverRunning || naverLoopRef.current) return;
+    naverLoopRef.current = true;
+    try { await runNaverCollect(); } finally { naverLoopRef.current = false; }
+  };
+  const runNaverCollect = async () => {
     setNaverRunning(true);
     setNaverMsg("⏳ 네이버 수집 중… 글마다 통계를 읽어 수 분~30분 걸립니다. 그동안 임시저장은 대기합니다.");
     const r = await refreshNaverPerformance();
+    if (!aliveRef.current) return;
     if (!r.ok) {
       setNaverRunning(false);
       setNaverMsg(`⚠ ${r.note || r.error || "시작 실패"}`);
@@ -113,11 +132,13 @@ export default function PerformanceView() {
     // 완료까지 폴링(최대 45분 — 글 수에 비례, 실측 98건 ≈ 14분). 도중에도 표를 계속 갱신.
     const deadline = Date.now() + 45 * 60_000;
     let d = await fetchPerformance();
-    while (d?.naverBusy && Date.now() < deadline) {
+    while (aliveRef.current && d?.naverBusy && Date.now() < deadline) {
       setData(d);
       await new Promise((res) => setTimeout(res, 10_000));
+      if (!aliveRef.current) return;
       d = await fetchPerformance();
     }
+    if (!aliveRef.current) return;
     if (d) setData(d);
     setNaverRunning(false);
     const t = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });

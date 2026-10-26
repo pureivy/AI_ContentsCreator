@@ -442,14 +442,17 @@ export function fmtSrtTime(sec: number): string {
  */
 export function buildSrt(scenes: { narration: string; durationSec: number; captions?: Caption[] }[]): string {
   const lines: string[] = [];
-  let clock = 0, n = 0;
+  // 영상 씬 시작은 씬마다 round(durationSec·FPS) 프레임을 누적한다(sceneFrames). SRT 도 같은 정수 프레임 시계를 쓴다 —
+  // 반올림 전 초를 누적하면 8씬쯤에서 ~0.1초 어긋났다(2026-10-26).
+  let clockFrames = 0, n = 0;
   for (const sc of scenes) {
-    const end = clock + sc.durationSec;
+    const clock = clockFrames / FPS;
+    clockFrames += sceneFrames(sc.durationSec);
+    const end = clockFrames / FPS;
     const cues = sc.captions?.length
       ? sc.captions.map((c) => ({ from: Math.min(end, clock + c.startFrame / FPS), to: Math.min(end, clock + c.endFrame / FPS), text: c.text }))
       : [{ from: clock, to: end, text: sc.narration }];
     for (const c of cues) lines.push(`${++n}`, `${fmtSrtTime(c.from)} --> ${fmtSrtTime(c.to)}`, c.text, '');
-    clock = end;
   }
   return lines.join('\n');
 }

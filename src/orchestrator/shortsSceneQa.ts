@@ -168,7 +168,9 @@ export async function qaSceneImages(opts: {
     if (!bad.length || (bad.length >= checked.length && !mustLines.length)) return out;
 
     // 불량 씬만 재생성(강화 프롬프트).
-    const retryDir = path.join(opts.dir, 'scenes-retry');
+    // 검수마다 새 하위 폴더(2026-10-26) — 종전 고정 scenes-retry/ 는 다음 검수(카드 수정 요청의 사진 다시 그리기 등)가 같은 파일명으로 덮어,
+    // layout.json 이 고정해 둔 다른 장 사진(cardHtmlJob pinPhotos)이 바뀌었다. scenes-retry/ 아래라 승계(INHERITED_DIRS)·정리(janitor)는 그대로.
+    const retryDir = path.join(opts.dir, 'scenes-retry', String(Date.now()));
     const retryDraftPath = path.join(opts.dir, 'scenes-retry-draft.json');
     const retryManifestPath = path.join(opts.dir, 'scenes-retry-manifest.json');
     const origIdxs = mapBadToOrig(bad, checked);

@@ -80,6 +80,15 @@ export const HEDGE_RE = /대개|흔히|보통|대체로|대부분|경우가 많|
  * 통과했다 — 희석배수·살포횟수·내한온도는 틀리면 나무가 죽는 값이라 유보어로 가릴 수 있는 일반론이 아니다.
  * cm·년생 같은 서술 수치는 일부러 넣지 않았다(유보 일반론에 흔해 과판정이 된다). */
 export const HARD_FACT_RE = /\d+\s*배|\d+\s*회|\d+\s*(?:℃|도)|\d+\s*ppm|수확\s*\d+\s*일|\d+(?:[.,]\d+)?\s*(?:ml|g|kg|l|리터)\b/i;
+/** 유보어가 붙어도 판정할 시기·비율·기간·비교 수치(2026-10-26, CONFIG.factHedgeHardTiming 일 때만) — 실측 무판정 통과:
+ * "접목은 보통 3월 하순에 합니다"·"발아율은 대개 70% 정도입니다"·"접목묘가 실생묘보다 2년 빨리 열매를 맺는 편입니다".
+ * 월·상중하순·%·N년(년생·"N년 된"은 나이 서술 수치라 뺀다 — HARD_FACT_RE 와 같은 이유, 실측 "심은 지 1~2년 된 묘목은 보통…")·N일·"~보다 N".
+ * cm 는 여전히 넣지 않는다. */
+export const HARD_TIMING_RE = /(?:^|[^\d])(?:1[0-2]|[1-9])\s*월|상순|중순|하순|\d+(?:[.,]\d+)?\s*(?:%|퍼센트)|\d+\s*년(?!생|\s*된)|\d+\s*일|보다[^.。]{0,12}\d/;
+/** 유보어로 가릴 수 없는 경성·시기 수치 문장인가(스위치 켬일 때 HARD_TIMING_RE 까지). */
+function isHardFactSentence(s: string, hedgeHardTiming: boolean): boolean {
+  return HARD_FACT_RE.test(s) || (hedgeHardTiming && HARD_TIMING_RE.test(s));
+}
 /** 08-26 fix round 1: 1인칭 없는 사건 표지(연도·지난 계절·우리 밭 등) — 이것만으로 사건 확정. */
 const PERSON_EVENT_RE = /지난해|작년|재작년|올해 초|지난\s*(?:봄|여름|가을|겨울)|(?:우리|저희)\s*(?:밭|농장|포장|하우스|묘목장)|문의가 오면|주문이 들어오면|기록에 따르면|기록을 보면/;
 /** 08-26 fix round 1: 기간 표지 — '동안'(관찰법에도 흔함) 제거, 숫자는 반드시 '일' 단위여야 한다(cm·도 등 다른 수치 오탐 방지).
@@ -100,10 +109,12 @@ export function hasEventMarkers(s: string): boolean {
 /** 선분류 우선순위: 사건 서술(금지) > 판단문(제외) > 유보문(통과) > 일반 주장(판정).
  * Fix round 4(C2): 유보어가 붙어도 경성 수치(HARD_FACT_RE)가 있으면 판정 대상으로 되돌린다 —
  * 사건·판단 우선순위는 그대로다(사건 서술과 1인칭 판단은 수치가 있어도 판정 대상이 아니다). */
-export function classifyClaim(c: { text: string; kind: ClaimKind }): 'judgment' | 'hedged' | 'event' | 'claim' {
+export function classifyClaim(
+  c: { text: string; kind: ClaimKind }, hedgeHardTiming: boolean = CONFIG.factHedgeHardTiming,
+): 'judgment' | 'hedged' | 'event' | 'claim' {
   if (hasEventMarkers(c.text)) return 'event';
   if (FACT_EXEMPT_RE.test(c.text)) return 'judgment';
-  if (hasHedge(c.text)) return HARD_FACT_RE.test(c.text) ? 'claim' : 'hedged';
+  if (hasHedge(c.text)) return isHardFactSentence(c.text, hedgeHardTiming) ? 'claim' : 'hedged';
   return 'claim';
 }
 
@@ -595,6 +606,9 @@ export function applySentenceRepairs(
   /** 유사도 하한(2026-10-05) — 사실 교정은 0.4(기본, 종전 그대로). 읽기 쉬움 검수는 비유를 풀어 써 글자 겹침이 크게
    *  줄어 0.2 를 넘긴다(readability.ts READABILITY_SIM_FLOOR — 참고 블로그 2026-10-03 같은 변경). */
   simFloor: number = REPLACEMENT_SIM_FLOOR,
+  /** 2026-10-26(FACT_HEDGE_HARD_TIMING) — 켜면 경성·시기 수치 문장을 hedge 로 낮춘 제안은 받지 않는다(missed). 유보어만 붙여
+   *  "적용됨"으로 세던 세탁 통로 — repairSentences 프롬프트도 이런 주장은 hedge 말고 delete 하라고 한다. */
+  hedgeHardTiming: boolean = CONFIG.factHedgeHardTiming,
 ): { body: string; applied: number; missed: string[] } {
   if (!Array.isArray(repairs)) return { body, applied: 0, missed: [...unsupported] };
 
@@ -614,6 +628,7 @@ export function applySentenceRepairs(
     if (introducesNewFacts(original, r.replacement)) { missed.push(original); continue; }
     // Fix round 4(I4) — 원문과 너무 안 닮은 치환은 교정이 아니라 다른 문장이다(하한 미만이면 미적용).
     if (r.action !== 'delete' && diceSimilarity(original, r.replacement) < simFloor) { missed.push(original); continue; }
+    if (hedgeHardTiming && r.action === 'hedge' && isHardFactSentence(original, true)) { missed.push(original); continue; }
     const loc = locateSentence(lines, original);
     if (!loc) { missed.push(original); continue; }
 

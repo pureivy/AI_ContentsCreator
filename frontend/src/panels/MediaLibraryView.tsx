@@ -262,7 +262,8 @@ export default function MediaLibraryView() {
               <div className="media-thumb">
                 {m.kind === "image"
                   ? <img src={`/media/file/${m.id}`} alt={m.name} loading="lazy" />
-                  : <video src={`/media/file/${m.id}`} muted preload="metadata" />}
+                  /* preload="none" — metadata 도 받으면 격자가 보관소 영상 전부(1GB+)를 서버에서 읽는다. 썸네일 경로가 없어 포스터 없이 둔다. */
+                  : <video src={`/media/file/${m.id}`} muted preload="none" />}
                 <span className="media-kind">{m.kind === "video" ? `영상 ${m.seconds ? `${m.seconds.toFixed(1)}초` : ""}` : "사진"}</span>
               </div>
               <div className="media-meta">

@@ -393,12 +393,17 @@ export async function postCommentReply(id: string, deps: PostDeps, rev?: number)
     if (answered === null && i.prevStatus === 'failed') return back(409, UNKNOWN_AFTER_FAIL, 'failed');
     return null;
   };
+  // 올리기 호출을 시작했나(2026-10-26) — 시작한 뒤의 예외(응답 시간 초과·연결 끊김)는 채널에 이미 올라갔을 수 있다.
+  // 종전엔 이것도 'pending' 으로 되돌려, 다음 [올리기]가 '이미 답했나 모름(null)' 판정에서 멈추지 않고 다시 올렸다(중복 답글).
+  // 'failed' 로 남기면 위 gate 가 모름일 때 자동으로 다시 올리지 않는다.
+  let postStarted = false;
   try {
     if (i.platform === 'youtube') {
       const access = await youtubeAccessToken(i.brand);
       const channelId = getYoutubeAccount(i.brand).channelId || (await fetchMyChannel(access))?.id || '';
       const g = gate(channelId ? await youtubeAlreadyAnswered(access, channelId, i.externalId) : null);
       if (g) return g;
+      postStarted = true;
       await postYoutubeReply(access, i.externalId, i.draft);
       return done();
     }
@@ -407,6 +412,7 @@ export async function postCommentReply(id: string, deps: PostDeps, rev?: number)
       if (!token) return back(409, '인스타 연결이 없습니다');
       const g = gate(await instagramAlreadyAnswered(token, i.externalId));
       if (g) return g;
+      postStarted = true;
       await postInstagramReply(token, i.externalId, i.draft);
       return done();
     }
@@ -428,6 +434,7 @@ export async function postCommentReply(id: string, deps: PostDeps, rev?: number)
     const g = gate(await naverAlreadyAnswered(i.platform, ids, i.externalId));
     if (g) return g;
     let answeredMeanwhile = false;
+    postStarted = true;
     const r = await deps.withNaver(`댓글:${cut(i.contentTitle, 16)}`, async () => {
       // 프로필을 기다리는 사이(최대 8분) 사장님이 손으로 답했을 수 있다 — 뮤텍스를 쥔 뒤 한 번 더 본다.
       if (await naverAlreadyAnswered(i.platform as 'blog' | 'clip', ids, i.externalId) === true) { answeredMeanwhile = true; return { status: 'POSTED', output: '' } as NaverReplyResult; }
@@ -443,7 +450,12 @@ export async function postCommentReply(id: string, deps: PostDeps, rev?: number)
     if (r.status !== 'LOGIN_REQUIRED' && r.status !== 'NOT_FOUND') console.log(`[댓글담당] 네이버 답글 스크립트 출력 끝: ${r.output.slice(-300)}`);
     return back(r.status === 'NOT_FOUND' ? 404 : 500, `답글을 못 올렸습니다 — ${r.error ?? r.status}`, r.status === 'NOT_FOUND' ? 'failed' : 'pending');
   } catch (e) {
-    return back(500, `답글을 못 올렸습니다 — ${e instanceof Error ? e.message : String(e)}`);
+    const why = e instanceof Error ? e.message : String(e);
+    if (postStarted) {
+      console.log(`[댓글담당] 올리는 도중 예외 — ${label} ${i.author}: ${why}`);
+      return back(500, `올리는 도중 끊겼습니다(${why}) — 답글이 올라갔을 수 있으니 채널에서 확인해 주세요. 없으면 [고치기]에 "그대로: 답글"로 보내고 새 카드의 [올리기]를 눌러 주세요`, 'failed');
+    }
+    return back(500, `답글을 못 올렸습니다 — ${why}`);
   }
 }
 

@@ -125,7 +125,7 @@ export default function McpView() {
             </div>
           )}
           <div className="apikey-field"><label>시크릿 키 이름</label>
-            <input value={keyName} onChange={(e) => setKeyName(e.target.value)} placeholder="예: KOSIS_API (API 키 화면에 등록한 이름)" /></div>
+            <input value={keyName} onChange={(e) => setKeyName(e.target.value)} placeholder="예: KOSIS_API_KEY (API 키 화면에 등록한 이름 — _API_KEY·_KEY·_TOKEN 등으로 끝남)" /></div>
           <div className="apikey-field"><label>API 이름</label>
             <input value={apiName} onChange={(e) => setApiName(e.target.value)} placeholder="예: KOSIS 국가통계포털 OpenAPI" /></div>
           <div className="apikey-field">

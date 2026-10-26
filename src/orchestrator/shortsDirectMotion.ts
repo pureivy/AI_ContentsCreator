@@ -21,13 +21,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { bundle } from '@remotion/bundler';
-import { selectComposition, renderMedia } from '@remotion/renderer';
+import { selectComposition, renderMedia, makeCancelSignal } from '@remotion/renderer';
 import { CONFIG } from '../config';
 import { probeDuration, sceneDurationSec, sceneFrames, captionsForScene, varyLayout, W, H } from '../tools/shortsCommon';
 import type { ShortsScene, PreparedScene } from '../tools/shortsCommon';
 import { RENDER_OPTS, stageAndBuildProps } from '../tools/shortsRenderRemotion';
 import { microJSON } from './agent';
-import { agentEnv, lastJson, runProc } from './cliProc';
+import { agentEnv, lastJson, runProc, sceneAgentEnv } from './cliProc';
+import { sceneAgentArgs } from './longformScenes';
 import { isCreditExhausted, markImageCreditOut } from '../tools/imageCredit';
 
 const HARNESS = path.resolve('scripts/mg_direct/render_frames.py');
@@ -113,8 +114,8 @@ export function sceneRanges(frames: readonly number[], graphic: readonly number[
 export { agentEnv };
 
 /** 촬영기·팔레트용 python3(플레이라이트·PIL 이 깔린 시스템 파이썬). */
-async function systemPython(): Promise<string> {
-  const r = await runProc('bash', ['-lc', 'command -v python3'], { timeoutMs: 15_000 });
+async function systemPython(signal?: AbortSignal): Promise<string> {
+  const r = await runProc('bash', ['-lc', 'command -v python3'], { timeoutMs: 15_000, ...(signal ? { signal } : {}) });
   const p = r.stdout.trim().split('\n').pop()?.trim() ?? '';
   return p && fs.existsSync(p) ? p : 'python3';
 }
@@ -216,6 +217,8 @@ export interface PilotOptions {
   agentTimeoutMs?: number;
   /** 디테일 지시를 이 편에만 켠다(시범 비교용, 2026-10-16). 미지정이면 CONFIG.mgDetailRules. */
   detailRules?: boolean;
+  /** 취소(2026-10-26) — 에이전트 세션·바탕판 렌더·촬영 runProc 를 모두 죽이고 '취소됨'으로 던진다. */
+  signal?: AbortSignal;
   log?: (m: string) => void;
 }
 
@@ -233,6 +236,11 @@ export interface PilotMetrics {
 export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetrics> {
   const log = o.log ?? ((m: string) => console.log(m));
   const t0 = Date.now();
+  // 취소(2026-10-26) — 종전엔 신호가 없어 취소된 런에서도 60분 에이전트·렌더·촬영이 끝까지 돌았다. runProc 는 신호가 오면
+  // 던지지 않고 aborted 로 끝나므로, 단계 사이마다 여기서 던져 다음 단계(검사·촬영)가 빈 결과로 이어 가지 않게 한다.
+  const sig = o.signal;
+  const sigOpt = sig ? { signal: sig } : {};
+  const checkAbort = (): void => { if (sig?.aborted) throw new Error('취소됨'); };
   // 경로가 셸 스크립트(preview.sh)와 하위 명령에 들어간다 — id·작업 폴더 이름은 안전한 글자만 받는다(보안 검토 2026-10-12).
   if (!/^[A-Za-z0-9_-]+$/.test(o.id) || !/^[A-Za-z0-9_.-]+$/.test(o.workName ?? 'pilot-direct') || (o.workName ?? '').includes('..')) {
     throw new Error(`허용되지 않는 id·작업 폴더 이름 — ${o.id} / ${o.workName ?? ''}`);
@@ -308,8 +316,18 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
         ...(fs.existsSync(titleArt) ? { title: { imagePath: titleArt, topPct: lay.titleTopPct, widthPct: lay.titleWidthPct } } : {}),
       });
       const serveUrl = await bundle({ entryPoint: path.resolve('remotion/index.ts'), publicDir, outDir: path.join(rwork, 'bundle') });
+      checkAbort();
       const composition = await selectComposition({ serveUrl, id: 'AutoShorts', inputProps, browserExecutable: RENDER_OPTS.browserExecutable });
-      await renderMedia({ serveUrl, composition, codec: 'h264', outputLocation: bgVideo, inputProps, ...RENDER_OPTS });
+      checkAbort();
+      // 렌더 취소 — shortsRenderRemotion 과 같은 방식(bundle·selectComposition 은 취소를 못 받는다).
+      const { cancelSignal, cancel } = makeCancelSignal();
+      const onAbort = (): void => cancel();
+      sig?.addEventListener('abort', onAbort, { once: true });
+      try { await renderMedia({ serveUrl, composition, codec: 'h264', outputLocation: bgVideo, inputProps, cancelSignal, ...RENDER_OPTS }); }
+      catch (e) {
+        try { fs.unlinkSync(bgVideo); } catch { /* 없음 */ } // 반쯤 쓴 바탕판이 다음 시범(같은 작업 폴더)에서 캐시로 쓰이지 않게
+        throw sig?.aborted ? new Error('취소됨') : e;
+      } finally { sig?.removeEventListener('abort', onAbort); }
     });
     log(`[바탕판] ${bgVideo} (${m.phasesSec.bgRender}초)`);
   }
@@ -321,17 +339,20 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
       if (fs.existsSync(path.join(out, `${String(frames[i]).padStart(4, '0')}.jpg`))) continue;
       fs.mkdirSync(out, { recursive: true });
       const r = await runProc('ffmpeg', ['-nostdin', '-y', '-loglevel', 'error', '-i', bgVideo, '-vf', `trim=start_frame=${ranges[i]!.start}:end_frame=${ranges[i]!.start + frames[i]!},setpts=PTS-STARTPTS`,
-        '-q:v', '2', '-start_number', '1', path.join(out, '%04d.jpg')], { timeoutMs: 120_000 });
+        '-q:v', '2', '-start_number', '1', path.join(out, '%04d.jpg')], { timeoutMs: 120_000, ...sigOpt });
+      checkAbort();
       if (r.code !== 0) throw new Error(`바탕 프레임 추출 실패 씬${i + 1}: ${r.stderr.slice(-200)}`);
     }
   });
 
+  checkAbort();
   // 3) 팔레트 — 씬 그림 + 제목 캘리에서(B palette.py 그대로).
-  const py = await systemPython();
+  const py = await systemPython(sig);
   const palette = await phase('palette', async () => {
-    const r = await runProc(py, [PALETTE_SCRIPT, '--images', ...images.filter((x): x is string => !!x), ...(fs.existsSync(titleArt) ? ['--title', titleArt] : [])], { timeoutMs: 60_000 });
+    const r = await runProc(py, [PALETTE_SCRIPT, '--images', ...images.filter((x): x is string => !!x), ...(fs.existsSync(titleArt) ? ['--title', titleArt] : [])], { timeoutMs: 60_000, ...sigOpt });
     return lastJson<{ ok?: boolean; palette?: Record<string, string> }>(r.stdout)?.palette ?? null;
   }) ?? { bg: '#F4F1E8', bg2: '#DCE3D2', ink: '#1F2A1C', accent: '#3E7D3A', accent2: '#B5832E', card: '#FFFFFF' };
+  checkAbort();
   log(`[팔레트] ${JSON.stringify(palette)}`);
 
   // 4) 시안(스타일 프레임) — LLM 1회로 프롬프트 → 씬 그림 위 compose(gpt-image). 결과는 styleframes/ 캐시.
@@ -343,7 +364,8 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
       if (!need.length) return;
       m.calls.microJSON++;
       const user = styleframeUserPrompt(plan.title, need.map((i) => ({ n: i + 1, narration: plan.scenes[i]!.narration, label: plan.scenes[i]!.screenText ?? '', info: sceneInfo(plan.scenes[i]!) })), palette as { accent: string; accent2: string; ink: string; card: string });
-      const j = await microJSON<{ frames?: Array<{ n?: unknown; prompt?: unknown }> }>(CONFIG.cloudTierModels.heavy, '당신은 모션그래픽 아트 디렉터입니다. 요청된 JSON 스키마만 출력합니다.', user, { maxOutputTokens: 1500 }).catch(() => null);
+      const j = await microJSON<{ frames?: Array<{ n?: unknown; prompt?: unknown }> }>(CONFIG.cloudTierModels.heavy, '당신은 모션그래픽 아트 디렉터입니다. 요청된 JSON 스키마만 출력합니다.', user, { maxOutputTokens: 1500, ...sigOpt }).catch(() => null);
+      checkAbort();
       const prompts: Record<number, string> = {};
       for (const f of j?.frames ?? []) { const n = Number(f?.n); const p = String(f?.prompt ?? '').trim(); if (Number.isInteger(n) && p) prompts[n - 1] = p.slice(0, 600); }
       await Promise.all(need.map(async (i) => {
@@ -352,7 +374,7 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
         fs.writeFileSync(path.join(sfDir, `frame_${nn(i)}.prompt.txt`), p, 'utf-8');
         m.calls.gptImageCompose++;
         const r = await runProc(CONFIG.blogPython || 'python3', [SF_SCRIPT, 'compose', '--in', images[i]!, '--prompt', p, '--out', path.join(sfDir, `frame_${nn(i)}.png`)],
-          { timeoutMs: 300_000, env: { ...process.env, ...(CONFIG.openaiApiKey ? { OPENAI_API_KEY: CONFIG.openaiApiKey } : {}) } });
+          { timeoutMs: 300_000, env: { ...process.env, ...(CONFIG.openaiApiKey ? { OPENAI_API_KEY: CONFIG.openaiApiKey } : {}) }, ...sigOpt });
         const res = lastJson<{ ok: boolean; error?: string }>(r.stdout);
         if (res?.ok) m.calls.gptImageOk++;
         else if (isCreditExhausted(res?.error ?? r.stderr)) markImageCreditOut('motion-styleframe'); // 시안 없이도 그래픽은 만든다 — 표시만
@@ -360,11 +382,12 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
       }));
     });
   }
+  checkAbort();
 
   // 5) 촬영 잡.
   const titleAspect = await (async () => {
     if (!fs.existsSync(titleArt)) return null;
-    const r = await runProc('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', titleArt], { timeoutMs: 15_000 });
+    const r = await runProc('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', titleArt], { timeoutMs: 15_000, ...sigOpt });
     const [w, h] = r.stdout.trim().split(',').map(Number);
     return w && h ? h / w : null;
   })();
@@ -403,13 +426,14 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
     await phase('agent', async () => {
       const prompt = agentPrompt(plan.title, job, o.detailRules != null ? { detailRules: o.detailRules } : {});
       fs.writeFileSync(path.join(work, 'agent-prompt.txt'), prompt, 'utf-8');
-      const args = ['-p', '--model', CONFIG.cloudTierModels.heavy, '--setting-sources', '', '--no-session-persistence', '--max-turns', '90',
-        '--permission-mode', 'acceptEdits', '--disallowedTools', 'AskUserQuestion',
-        '--allowedTools', 'Read,Write,Edit,Glob,Bash(./preview.sh:*)', '--output-format', 'stream-json', '--verbose'];
+      // 세션 격리(2026-10-26) — 종전엔 agentEnv(process.env)로 .env 토큰(텔레그램·네이버·유튜브)이 세션과 preview.sh 에 보였고,
+      // 맨 이름 --allowedTools(Read·Write·Edit)라 저장소 .env 읽기·작업 폴더 밖 쓰기가 됐다. 롱폼 장면 세션(2026-10-25)과 같은
+      // 허용 목록 환경·권한 규칙을 쓴다 — 쓰기는 acceptEdits 의 cwd(작업 폴더)만, 읽기는 작업 폴더(+ 키트 소스), .env 거부.
+      const args = sceneAgentArgs({ model: CONFIG.cloudTierModels.heavy, maxTurns: 90, repo: path.resolve('.'), sceneDir: work });
       const agentLog = fs.createWriteStream(path.join(work, 'agent.jsonl'));
       agentLog.on('error', () => { /* 로그만 잃는다 */ });
       m.calls.claudeCode++;
-      const r = await runProc(CONFIG.claudeCliPath, args, { cwd: work, env: agentEnv(process.env), timeoutMs: o.agentTimeoutMs ?? 30 * 60_000, stdin: prompt, onStdout: (d) => agentLog.write(d) });
+      const r = await runProc(CONFIG.claudeCliPath, args, { cwd: work, env: sceneAgentEnv(process.env), timeoutMs: o.agentTimeoutMs ?? 30 * 60_000, stdin: prompt, onStdout: (d) => agentLog.write(d), ...sigOpt });
       await new Promise<void>((res) => agentLog.end(() => res()));
       const lines = fs.readFileSync(path.join(work, 'agent.jsonl'), 'utf-8').trim().split('\n');
       type AgentResult = { type?: string; result?: string; num_turns?: number; duration_ms?: number; total_cost_usd?: number };
@@ -419,9 +443,10 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
         exit: r.code, ...(result?.num_turns != null ? { turns: result.num_turns } : {}), ...(result?.duration_ms != null ? { durationMs: result.duration_ms } : {}),
         ...(result?.total_cost_usd != null ? { costUsd: result.total_cost_usd } : {}), tail: (result?.result ?? r.stderr.slice(-200)).split('\n').pop()?.slice(0, 300),
       };
-      log(`[에이전트] exit=${r.code}${r.aborted ? '(시간 초과)' : ''} 턴 ${result?.num_turns ?? '?'} ${m.agent.tail ?? ''}`);
+      log(`[에이전트] exit=${r.code}${r.aborted ? (sig?.aborted ? '(취소)' : '(시간 초과)') : ''} 턴 ${result?.num_turns ?? '?'} ${m.agent.tail ?? ''}`);
     });
     saveMetrics();
+    checkAbort();
   }
 
   // 7) 검사 → 촬영·이어 붙이기. 미리보기 스크립트가 바뀌었으면(쓰기 금지를 뚫었으면) 결과를 쓰지 않는다.
@@ -429,7 +454,8 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
     if (fs.readFileSync(path.join(work, 'preview.sh'), 'utf-8') !== previewSh) throw new Error('preview.sh 변조 감지 — 이 편 모션그래픽 중단');
   } catch (e) { throw e instanceof Error && e.message.includes('변조') ? e : new Error('preview.sh 확인 실패'); }
   await phase('check', async () => {
-    const c = await runProc(py, [HARNESS, jobPath, '--check-all'], { timeoutMs: 10 * 60_000 });
+    const c = await runProc(py, [HARNESS, jobPath, '--check-all'], { timeoutMs: 10 * 60_000, ...sigOpt });
+    checkAbort();
     fs.writeFileSync(path.join(work, 'check.json'), c.stdout, 'utf-8');
     try {
       const j = JSON.parse(c.stdout) as { ok: boolean; scenes: Array<{ scene: number; ok: boolean; problems: string[] }> };
@@ -438,7 +464,8 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
     log(`[검사] ${m.check.ok ? '전 씬 통과' : m.check.problems.join(' | ')}`);
   });
   await phase('render', async () => {
-    const r = await runProc(py, [HARNESS, jobPath, '--render'], { timeoutMs: 20 * 60_000 });
+    const r = await runProc(py, [HARNESS, jobPath, '--render'], { timeoutMs: 20 * 60_000, ...sigOpt });
+    checkAbort();
     const rr = r.code === 0 ? lastJson<{ ok?: boolean; out?: string }>(r.stdout) : null;
     if (rr?.ok && rr.out) m.out = rr.out;
     log(`[촬영] ${rr?.ok ? r.stdout.trim() : `실패 ${r.stderr.slice(-400)}`}`);
@@ -452,14 +479,15 @@ export async function runDirectMotionPilot(o: PilotOptions): Promise<PilotMetric
  * 작업 폴더는 매번 새로(motion-<시각>) — 바탕판(bg-nocards.mp4)이 폴더에 남아 있으면 그대로 다시 쓰여 수정 전 문구가 나간다
  * (모과나무 시범 2회째에서 확인). 원본은 final.basic.mp4 로 보관. 어떤 실패든 false — 원본 영상으로 진행한다.
  */
-export async function applyMotionGraphics(id: string, opts: { log?: (m: string) => void } = {}): Promise<boolean> {
+export async function applyMotionGraphics(id: string, opts: { log?: (m: string) => void; signal?: AbortSignal } = {}): Promise<boolean> {
   const log = opts.log ?? ((m: string) => console.log(m));
   const dir = path.join(CONFIG.dataDir, 'shorts', id);
-  const final = path.join(dir, 'final.mp4');
   const workName = `motion-${Date.now()}`;
   try {
     // 에이전트 제한 60분(2026-10-16 사장님 요청, 종전 20분) — 디테일 지시를 켠 뒤 시범 한 편이 16.7분까지 걸려 20분이 빠듯했다.
-    const m = await runDirectMotionPilot({ id, workName, agentTimeoutMs: 60 * 60_000, log: (x) => console.log('[모션그래픽]', x) });
+    const m = await runDirectMotionPilot({ id, workName, agentTimeoutMs: 60 * 60_000, log: (x) => console.log('[모션그래픽]', x), ...(opts.signal ? { signal: opts.signal } : {}) });
+    // 취소된 런은 결과가 있어도 올리지 않는다(2026-10-26) — 부르는 쪽이 이어서 '취소됨'으로 끝낸다.
+    if (opts.signal?.aborted) { log('모션그래픽 중단 — 취소됨 · 원본 영상 유지'); return false; }
     // 출력 경로는 우리가 만든 작업 폴더의 final.mp4 만 받는다(보안 — 다른 파일을 발행본으로 올리지 않게).
     if (m.out && path.resolve(m.out) !== path.resolve(dir, workName, 'final.mp4')) {
       log(`모션그래픽 건너뜀 — 예상 밖 출력 경로(${m.out.slice(0, 80)}) · 원본 영상 유지`);
@@ -469,8 +497,7 @@ export async function applyMotionGraphics(id: string, opts: { log?: (m: string) 
       log(`모션그래픽 건너뜀 — ${m.check?.ok === false ? `검사 불합격(${(m.check.problems ?? []).slice(0, 2).join(' · ')})` : '결과 영상 없음'} · 원본 영상 유지`);
       return false;
     }
-    fs.copyFileSync(final, path.join(dir, 'final.basic.mp4'));
-    fs.copyFileSync(m.out, final);
+    swapInFinal(dir, m.out);
     log(`모션그래픽 적용 — 씬 ${m.graphicScenes.join('·')} · ${Math.round(m.wallSec)}초${m.agent?.costUsd ? ` · $${m.agent.costUsd.toFixed(2)}` : ''}`);
     return true;
   } catch (e) {
@@ -479,6 +506,21 @@ export async function applyMotionGraphics(id: string, opts: { log?: (m: string) 
   } finally {
     pruneMotionWork(path.join(dir, workName));
   }
+}
+
+/**
+ * 원본 보관 + 결과 올리기(2026-10-26) — 종전엔 final.mp4 위에 바로 copyFileSync 해서, 복사 도중 프로세스가 죽으면(재시작·취소 뒤 종료)
+ * 반쯤 쓴 final.mp4 가 발행본으로 남았다. 같은 폴더 임시 파일에 다 쓴 뒤 rename(원자적)으로 바꾼다 — 실패하면 원본이 그대로다.
+ */
+export function swapInFinal(dir: string, out: string): void {
+  const final = path.join(dir, 'final.mp4');
+  const put = (src: string, dst: string): void => {
+    const tmp = `${dst}.tmp`;
+    try { fs.copyFileSync(src, tmp); fs.renameSync(tmp, dst); }
+    catch (e) { try { fs.unlinkSync(tmp); } catch { /* 없음 */ } throw e; }
+  };
+  put(final, path.join(dir, 'final.basic.mp4'));
+  put(out, final);
 }
 
 /** 모션그래픽 작업 폴더에서 다시 안 쓰는 무거운 중간물(정규식 — 테스트 대상). 장면 HTML·시안·검사·지표·에이전트 기록은 사후 확인용으로 남긴다. */

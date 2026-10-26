@@ -21,6 +21,16 @@ import { microJSON } from './agent';
 
 /** 작가용 원문(근거 미확인 문장을 뺀 판본, 2026-10-15) — 판형 생성 때 쓰고 수정 요청이 다시 읽는다. */
 const WRITER_SOURCE_FILE = 'source.writer.md';
+/** 원문 사실 게이트가 건 주장(2026-10-26) — 판형 생성 때 쓰고 수정 요청의 칸 사실 대조가 다시 읽는다(종전엔 수정 때 빈 목록이라 승계 검사가 꺼졌다). */
+const SOURCE_FLAGGED_FILE = 'source.flagged.json';
+
+/** 저장된 원문 지적 목록(옛 카드·깨진 파일은 빈 목록). */
+export function readSourceFlagged(dir: string): string[] {
+  try {
+    const v = JSON.parse(fs.readFileSync(path.join(dir, SOURCE_FLAGGED_FILE), 'utf-8')) as unknown;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch { return []; }
+}
 import {
   insideDir, normalizeLayout, layoutFields, dropFields, parityKeys, layoutPrompt, toRenderSpec, genPhotoPrompt, renderCardSpec,
   CARD_FONT_DIR, CARD_MAX_GEN, CARD_EXTRA_FRAMES, dedupeBlogPhotos, realPhotoSlots, type BlogPhoto, type CardLayout, type LayoutSlide, type PhotoRef,
@@ -171,21 +181,43 @@ function pinPhotos(l: CardLayout, resolve: (r: PhotoRef | undefined) => string |
   };
 }
 
-/** 렌더 + 결과 정리 — 기존 slide_NN 을 지우고 새로 찍는다. 넘침 잔존은 로그로. */
+const SLIDE_PNG = /^slide_\d{2}\.png$/;
+
+/**
+ * 새로 찍은 장(tmp)을 카드 폴더로 올린다(순수 파일 작업, 2026-10-26) — 새 장이 하나라도 있을 때만 옛 slide_NN 을 지우고 옮긴다.
+ * 없으면 옛 장을 그대로 두고 0 을 돌려준다. tmp 는 끝에 지운다.
+ */
+export function commitRenderedSlides(dir: string, tmp: string, expected?: number): number {
+  try {
+    const fresh = fs.existsSync(tmp) ? fs.readdirSync(tmp).filter((f) => SLIDE_PNG.test(f)) : [];
+    // 일부만 찍힌 렌더(only 등)면 옛 장을 지우지 않는다 — expected 가 있으면 전부 찍힌 때만 바꾼다(2026-10-26)
+    if (!fresh.length || (expected !== undefined && fresh.length !== expected)) return 0;
+    for (const f of fs.readdirSync(dir)) if (SLIDE_PNG.test(f)) fs.unlinkSync(path.join(dir, f));
+    for (const f of fresh) fs.renameSync(path.join(tmp, f), path.join(dir, f));
+    return fresh.length;
+  } finally {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 무해 */ }
+  }
+}
+
+/**
+ * 렌더 + 결과 정리 — 넘침 잔존은 로그로. 임시 폴더에 찍고 성공했을 때만 옛 slide_NN 과 바꾼다(2026-10-26) —
+ * 종전엔 먼저 다 지우고 찍어, card_render.py 가 실패·시간 초과(취소 포함)하면 ready 카드가 0장으로 남았다(수선 경로는 slides:0 까지 기록).
+ */
 async function renderLayout(dir: string, l: CardLayout, coverNote: string | undefined, say: Say, signal?: AbortSignal): Promise<number> {
-  for (const f of fs.readdirSync(dir)) if (/^slide_\d{2}\.png$/.test(f)) fs.unlinkSync(path.join(dir, f));
+  const tmp = path.join(dir, `.render-${Date.now()}`);
   const spec = toRenderSpec(l, (r) => (r?.use === 'file' && insideDir(r.path, dir) ? r.path : undefined), {
-    outDir: dir, fontDir: CARD_FONT_DIR,
+    outDir: tmp, fontDir: CARD_FONT_DIR,
     brand: brandDisplay(),
     ...(coverNote ? { coverNote } : {}),
   });
   const specPath = path.join(dir, 'render-spec.json');
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2), 'utf-8');
   const r = await renderCardSpec(specPath, signal);
-  if (!r) throw new Error('카드 렌더 실패 — card_render.py');
+  if (!r || signal?.aborted) { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 무해 */ } throw new Error(signal?.aborted ? '취소됨' : '카드 렌더 실패 — card_render.py'); }
   const left = r.slides.filter((s) => s.issues.length);
   if (left.length) say(`카드 렌더 — 넘침 잔존 ${left.map((s) => `${s.n}번(${s.issues[0]})`).join(', ')}`);
-  return fs.readdirSync(dir).filter((f) => /^slide_\d{2}\.png$/.test(f)).length;
+  return commitRenderedSlides(dir, tmp, l.slides.length);
 }
 
 export interface HtmlCardResult { count: number; layout: CardLayout }
@@ -216,6 +248,7 @@ export async function designHtmlCards(o: {
   // 사실 대조(factCheckFields)와 source.md(수정 요청·재검증)는 원문 전체.
   const writerSrc = writerSource(source, o.sourceFlagged ?? []).body;
   try { fs.writeFileSync(path.join(dir, WRITER_SOURCE_FILE), writerSrc, 'utf-8'); } catch { /* 없으면 수정 요청이 source.md 를 쓴다 */ }
+  try { fs.writeFileSync(path.join(dir, SOURCE_FLAGGED_FILE), JSON.stringify(o.sourceFlagged ?? []), 'utf-8'); } catch { /* 없으면 수정 요청은 빈 목록 */ }
   const user = layoutPrompt({ plan, source: writerSrc, blog, maxGen: CARD_MAX_GEN, flagged: flaggedForPrompt(o.sourceFlagged ?? []) });
   let raw = await o.callJSON<unknown>(sys, user, 3000);
   if (!raw) raw = await o.callJSON<unknown>(sys, `${user}\n\n반드시 완결된 JSON 하나만 출력하라.`, 3000);
@@ -407,7 +440,7 @@ export async function reviseHtmlCard(dir: string, feedback: string, say: Say, si
   if (!changed.size) return null;
   let layout = normalizeLayout({ series: saved.series, slides: rawSlides }, plan, source, 0, dir);
   // normalizeLayout 은 표지·마무리 판을 고정한다 — 기존 판(kind)이 다른 장은 저장본 kind 를 따른다(같은 판으로만 수정).
-  layout = await factCheckFields(layout, fullSource, [], say, signal);
+  layout = await factCheckFields(layout, fullSource, readSourceFlagged(dir), say, signal); // 생성 때와 같은 지적 목록
   const count = await renderLayout(dir, layout, saved.coverNote, say, signal);
   if (!count) return null;
   fs.writeFileSync(path.join(dir, 'layout.json'), JSON.stringify({ ...layout, coverNote: saved.coverNote }, null, 2), 'utf-8');

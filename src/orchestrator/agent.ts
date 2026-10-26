@@ -528,7 +528,8 @@ async function gateWrite(role: RoleDef, autonomy: number, actionType: string, su
   // (run_command 는 기존대로 ≥3 자동승인 유지.)
   if (autonomy >= 3 && actionType !== 'blog_publish' && actionType !== 'image_generate') return true;
   if (autonomy < 2 || signal?.aborted) return false;
-  const { approval, decided } = approvalStore().request({ agent_id: role.id, action_type: actionType, summary, autonomy });
+  // blog_publish 는 아래에서 타임아웃을 거부로 뒤집는다 — 승인 기록도 같은 결과(타임아웃 거부)로 남게 넘긴다(2026-10-26).
+  const { approval, decided } = approvalStore().request({ agent_id: role.id, action_type: actionType, summary, autonomy }, undefined, actionType !== 'blog_publish');
   bus.emit(EventType.approval_requested, {
     approval_id: approval.id, agent_id: approval.agent_id,
     action_type: approval.action_type, summary: approval.summary, autonomy: approval.autonomy,
@@ -538,6 +539,8 @@ async function gateWrite(role: RoleDef, autonomy: number, actionType: string, su
     if (signal) signal.addEventListener('abort', () => resolve({ approved: false, by: 'abort', note: '취소됨' }), { once: true });
   });
   const d = await Promise.race([decided, onAbort]);
+  // 취소가 이겼으면 승인 건을 'cancelled' 로 정산한다(2026-10-26) — 안 하면 대기 목록에 남았다가 타이머가 '타임아웃 자동승인'으로 적는다.
+  if (d.by === 'abort') approvalStore().cancel(approval.id);
   // blog_publish(외부 네이버 초안 생성)는 타임아웃 fail-open(자동승인)을 거부로 뒤집어 fail-closed 로 만든다 —
   // 무인 런에서 사람 확인 없이 외부 초안이 저장되지 않게. (run_command 등 기존 액션의 타임아웃 자동승인은 보존.)
   const approved = actionType === 'blog_publish' && d.by === 'timeout' ? false : d.approved;

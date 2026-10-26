@@ -111,6 +111,28 @@ function applyExtract(raw: string, ex: ExtractRule): string {
   return raw.replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
+/**
+ * 리다이렉트를 직접 따라가며 매 단계 assertPublicHttpsUrl 로 재검사하는 GET(2026-10-26 SSRF 보강).
+ * 종전엔 첫 URL 만 검사하고 redirect:'follow' 라, 공개 호스트의 30x 가 127.0.0.1:8787·내부망을 가리키면 그대로 요청했다.
+ * (claimVerify.safeFetch 는 지식백과·*.go.kr 허용목록 전용이라 재사용하지 않는다.)
+ */
+export async function fetchPublicFollow(url: string, signal?: AbortSignal, hops = 5): Promise<Response> {
+  let cur = url;
+  for (let i = 0; i <= hops; i++) {
+    const safe = await assertPublicHttpsUrl(cur);
+    if (!safe.ok) throw new Error(`허용 밖 주소: ${safe.reason}`);
+    const r = await fetchTimeout(cur, { method: 'GET', redirect: 'manual' }, signal);
+    if (r.status >= 300 && r.status < 400) {
+      const loc = r.headers.get('location');
+      if (!loc) throw new Error(`HTTP ${r.status}`);
+      cur = new URL(loc, cur).toString();
+      continue;
+    }
+    return r;
+  }
+  throw new Error('리다이렉트 과다');
+}
+
 const _groundCache = new Map<string, string>();
 /** 설정 1건 실행 — 키·쿼리 치환 → fetch → 추출. 미설정·실패 시 ''. */
 export async function runCustomConnector(cfg: CustomConnectorCfg, query: string, signal?: AbortSignal): Promise<string> {
@@ -127,7 +149,7 @@ export async function runCustomConnector(cfg: CustomConnectorCfg, query: string,
     // SSRF·시크릿 유출 가드 — {key}(시크릿)가 URL 에 실리므로, https 공개 호스트가 아니면 fetch 자체를 막는다.
     const safe = await assertPublicHttpsUrl(url);
     if (!safe.ok) { _groundCache.set(ck, ''); return ''; }
-    const r = await fetchTimeout(url, { method: 'GET' }, signal);
+    const r = await fetchPublicFollow(url, signal);
     const raw = (await r.text()).slice(0, 20000);
     text = applyExtract(raw, cfg.extract);
   } catch { text = ''; }
@@ -179,7 +201,7 @@ export async function autoConfigConnector(
     try {
       const safe = await assertPublicHttpsUrl(input.docsUrl); // SSRF 가드 — 내부망·평문 문서 URL 차단
       if (safe.ok) {
-        const r = await fetchTimeout(input.docsUrl, {}, input.signal);
+        const r = await fetchPublicFollow(input.docsUrl, input.signal);
         docs = htmlToText(await r.text()).slice(0, 5000);
       }
     } catch { /* 문서 없이도 진행 */ }

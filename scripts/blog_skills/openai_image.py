@@ -41,6 +41,8 @@ STYLE_PRESETS = {
     "calligraphy":    "bold Korean brush-pen calligraphy lettering on a pure solid black background, crisp clean flat strokes, no glow, no halo, no gradient, no shadow, graphic sticker style",
 }
 DEFAULT_STYLE = "photorealistic"
+# gpt-image 품질 단계(2.5 기준 low~max) — 그 밖의 값은 auto 로 돌린다.
+QUALITIES = {"low", "medium", "high", "xhigh", "max", "auto"}
 
 
 def eprint(*a):
@@ -140,12 +142,22 @@ def main() -> int:
                     help="참조 이미지 경로들 — 있으면 images.edit 로 참조 스타일 기반 생성(최대 4장 사용)")
     ap.add_argument("--allow-text", action="store_true",
                     help="프롬프트에 명시된 문구의 이미지 내 렌더링 허용(카드뉴스 완성 카드) — 기본은 no-text")
+    ap.add_argument("--quality", default="",
+                    help="low|medium|high|xhigh|max|auto — 비우면 글자 이미지(--allow-text)는 OPENAI_IMAGE_QUALITY_TEXT, 나머지는 OPENAI_IMAGE_QUALITY")
     ap.add_argument("--dry-run", action="store_true", help="API 미호출(키 불필요) — 매니페스트만 계획대로 기록")
     # 블로그 실촬영 컷(2026-10-02) — 슬롯 앞 N개는 이미 채워져 있다(보관소 영상 프레임). 그 슬롯은 건너뛰고
     # 나머지만 생성하되, 파일 번호·index 는 원래 슬롯 번호를 그대로 쓴다(blog-image-02.png 부터, index 1 부터).
     # 번호를 당기면 발행이 매니페스트 index 로 본문 마커에 꽂으므로 실촬영 자리에 AI 그림이 들어간다.
     ap.add_argument("--start-index", type=int, default=0, help="앞 N개 슬롯 건너뜀(이미 채워진 슬롯) — 번호는 원래 슬롯 번호 유지")
     args = ap.parse_args()
+    # 품질(2026-10-26 사장님 결정 "글자 high·사진 medium") — 종전엔 quality 를 아예 안 넘겨 API 기본 auto 였다.
+    # 한글이 들어가는 썸네일·카드(--allow-text)는 글자 깨짐이 곧 불량이라 high, 글자 없는 씬·블로그 사진은
+    # 웹·모바일 크기에서 medium 과 high 가 거의 구분되지 않아(장당 약 4배 차이) medium. 잘못된 값은 auto 로 둔다.
+    quality = (args.quality or (os.environ.get("OPENAI_IMAGE_QUALITY_TEXT", "high") if args.allow_text
+                                 else os.environ.get("OPENAI_IMAGE_QUALITY", "medium"))).strip().lower()
+    if quality not in QUALITIES:
+        eprint(f"알 수 없는 이미지 품질 '{quality}' — auto 로 생성")
+        quality = "auto"
 
     # 참조 이미지 검증 — 존재하는 파일만, 캡 4장(요청 크기 폭주 방지). 전부 무효면 일반 생성으로 폴백.
     ref_paths = [Path(p) for p in args.ref_images if p and Path(p).is_file()][:4]
@@ -211,10 +223,10 @@ def main() -> int:
                     )
                     with ExitStack() as stack:
                         refs = [stack.enter_context(open(p, "rb")) for p in ref_paths]
-                        resp = client.images.edit(model=args.model, image=refs, prompt=edit_prompt, size=args.size, n=1)
+                        resp = client.images.edit(model=args.model, image=refs, prompt=edit_prompt, size=args.size, n=1, quality=quality)
                     entry["ref_count"] = len(ref_paths)
                 else:
-                    resp = client.images.generate(model=args.model, prompt=prompt, size=args.size, n=1)
+                    resp = client.images.generate(model=args.model, prompt=prompt, size=args.size, n=1, quality=quality)
                 b64 = resp.data[0].b64_json  # gpt-image-* 는 항상 base64 반환
                 file_path.write_bytes(base64.b64decode(b64))
             except Exception as e:  # noqa: BLE001
@@ -224,11 +236,11 @@ def main() -> int:
 
     ok = sum(1 for e in images if "error" not in e and (args.dry_run or Path(e["file_path"]).exists()))
     manifest = {"images": images, "count": len(images), "ok": ok,
-                "model": args.model, "style": args.image_style, "dry_run": args.dry_run}
+                "model": args.model, "quality": quality, "style": args.image_style, "dry_run": args.dry_run}
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     mode = "DRY-RUN(계획)" if args.dry_run else "생성"
-    print(f"이미지 {mode}: {ok}/{len(images)}장 · 모델 {args.model} · 매니페스트 {manifest_path}")
+    print(f"이미지 {mode}: {ok}/{len(images)}장 · 모델 {args.model} · 품질 {quality} · 매니페스트 {manifest_path}")
     return 0
 
 

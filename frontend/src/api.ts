@@ -872,11 +872,18 @@ export async function fetchPieces(): Promise<PieceInfo[]> {
   try { const r = await fetch("/pieces"); if (!r.ok) return []; return (await r.json()).pieces ?? []; }
   catch { return []; }
 }
-export async function createPiece(body: { title: string; keyword?: string; subNiche?: string }): Promise<{ ok: boolean; id?: string; error?: string }> {
+/** 신규성 가드(409) 근거 — 서버 src/content/novelty.ts SimilarMatch 와 같은 모양. kind 는 서버가 붙인 한글 라벨. */
+export interface SimilarMatch { title: string; kind: string; score: number; via: "keyword" | "title" }
+/** 신규성 가드 409 확인 창 문구 — 호출부가 confirm 으로 묻고, 의도한 재도전이라고 답할 때만 force 로 재요청한다. */
+export function similarConfirmText(error: string | undefined, similar: SimilarMatch[]): string {
+  const list = similar.map((m) => `• [${m.kind}] ${m.title} (${m.via === "keyword" ? "키워드" : "주제"} 유사)`).join("\n");
+  return `${error ?? "기존 콘텐츠와 주제가 유사합니다"}\n\n${list}\n\n그래도 이 주제로 만들까요? (의도한 재도전일 때만 확인)`;
+}
+export async function createPiece(body: { title: string; keyword?: string; subNiche?: string; force?: boolean }): Promise<{ ok: boolean; id?: string; error?: string; similar?: SimilarMatch[] }> {
   try {
     const r = await fetch("/pieces", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const j = await r.json().catch(() => ({} as { piece?: { id: string }; error?: string }));
-    if (!r.ok) return { ok: false, error: j.error };
+    const j = await r.json().catch(() => ({} as { piece?: { id: string }; error?: string; similar?: SimilarMatch[] }));
+    if (!r.ok) return { ok: false, error: j.error, similar: j.similar };
     return { ok: true, id: j.piece?.id };
   } catch { return { ok: false, error: "network" }; }
 }
@@ -935,9 +942,11 @@ export interface NaverDraftStatus {
   /** 전체공개로 발행됐는가(2026-10-01). */
   public_published?: boolean;
 }
-export async function startNaverDraft(id: string, dryRun = false): Promise<{ ok: boolean; error?: string }> {
+/** republish: 이미 네이버에 올라간 글(publishedUrl·privateUrl)을 일부러 새 글로 한 번 더 올릴 때만 true —
+ *  없으면 서버가 409 로 막는다(naverRepublishBlock, 2026-10-26). 첫 발행은 싣지 않는다. */
+export async function startNaverDraft(id: string, opts?: { dryRun?: boolean; republish?: boolean }): Promise<{ ok: boolean; error?: string }> {
   try {
-    const r = await fetch(`/pieces/${id}/naver-draft`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dry_run: dryRun }) });
+    const r = await fetch(`/pieces/${id}/naver-draft`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dry_run: !!opts?.dryRun, ...(opts?.republish ? { republish: true } : {}) }) });
     if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
     return { ok: true };
   } catch { return { ok: false, error: "network" }; }
@@ -1130,11 +1139,11 @@ export async function fetchCardNews(): Promise<CardNewsInfo[]> {
   try { const r = await fetch("/cardnews"); if (!r.ok) return []; return (await r.json()).cards ?? []; }
   catch { return []; }
 }
-export async function createCardNews(body: { topic: string; keyword?: string; slides?: number; style?: string }): Promise<{ ok: boolean; id?: string; error?: string }> {
+export async function createCardNews(body: { topic: string; keyword?: string; slides?: number; style?: string; force?: boolean }): Promise<{ ok: boolean; id?: string; error?: string; similar?: SimilarMatch[] }> {
   try {
     const r = await fetch("/cardnews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const j = await r.json().catch(() => ({} as { card?: { id: string }; error?: string }));
-    return r.ok ? { ok: true, id: j.card?.id } : { ok: false, error: j.error };
+    const j = await r.json().catch(() => ({} as { card?: { id: string }; error?: string; similar?: SimilarMatch[] }));
+    return r.ok ? { ok: true, id: j.card?.id } : { ok: false, error: j.error, similar: j.similar };
   } catch { return { ok: false, error: "network" }; }
 }
 export async function createCardNewsFromPiece(pieceId: string, slides?: number, style?: string): Promise<{ ok: boolean; id?: string; error?: string }> {
@@ -1195,11 +1204,11 @@ export async function fetchShorts(): Promise<ShortsInfo[]> {
   try { const r = await fetch("/shorts"); if (!r.ok) return []; return (await r.json()).shorts ?? []; }
   catch { return []; }
 }
-export async function createShorts(body: { topic: string; keyword?: string; scenes?: number; platform?: "youtube" | "instagram" }): Promise<{ ok: boolean; id?: string; error?: string }> {
+export async function createShorts(body: { topic: string; keyword?: string; scenes?: number; platform?: "youtube" | "instagram"; force?: boolean }): Promise<{ ok: boolean; id?: string; error?: string; similar?: SimilarMatch[] }> {
   try {
     const r = await fetch("/shorts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const j = await r.json().catch(() => ({} as { short?: { id: string }; error?: string }));
-    return r.ok ? { ok: true, id: j.short?.id } : { ok: false, error: j.error };
+    const j = await r.json().catch(() => ({} as { short?: { id: string }; error?: string; similar?: SimilarMatch[] }));
+    return r.ok ? { ok: true, id: j.short?.id } : { ok: false, error: j.error, similar: j.similar };
   } catch { return { ok: false, error: "network" }; }
 }
 export async function createShortsFromPiece(pieceId: string, scenes?: number): Promise<{ ok: boolean; id?: string; error?: string }> {
@@ -1216,22 +1225,26 @@ export async function deleteShorts(id: string, opts?: { purge?: boolean }): Prom
     return { ok: true };
   } catch { return { ok: false, error: "network" }; }
 }
-/** forceFact: 사실 검증 보류(fact_hold 409)를 사용자가 확인한 뒤 발행을 확정할 때만 true(2026-10-12). */
-export async function uploadShortsYoutube(id: string, opts?: { forceFact?: boolean }): Promise<{ ok: boolean; url?: string; error?: string; thumbnailError?: string; fact_hold?: string[] }> {
+/** 숏폼 발행 본문 — force: 썸네일 한글 QA 미해결(thumb_qa_unresolved 409)을 사용자가 확인했을 때,
+ *  forceFact: 사실 검증 보류(fact_hold 409, 2026-10-12)를 확인했을 때만 true. 서버는 썸네일 QA → 사실 보류 순으로 막는다. */
+type ShortsPublishOpts = { force?: boolean; forceFact?: boolean };
+const shortsPublishBody = (o?: ShortsPublishOpts): string =>
+  JSON.stringify({ ...(o?.force ? { force: true } : {}), ...(o?.forceFact ? { forceFact: true } : {}) });
+export async function uploadShortsYoutube(id: string, opts?: ShortsPublishOpts): Promise<{ ok: boolean; url?: string; error?: string; thumbnailError?: string; fact_hold?: string[]; thumb_qa_unresolved?: boolean }> {
   try {
-    const r = await fetch(`/shorts/${id}/youtube`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts?.forceFact ? { forceFact: true } : {}) });
-    const j = await r.json().catch(() => ({} as { url?: string; error?: string; fact_hold?: string[] }));
-    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `HTTP ${r.status}`, fact_hold: (j as { fact_hold?: string[] }).fact_hold };
+    const r = await fetch(`/shorts/${id}/youtube`, { method: "POST", headers: { "Content-Type": "application/json" }, body: shortsPublishBody(opts) });
+    const j = await r.json().catch(() => ({} as { url?: string; error?: string; fact_hold?: string[]; thumb_qa_unresolved?: boolean }));
+    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `HTTP ${r.status}`, fact_hold: (j as { fact_hold?: string[] }).fact_hold, thumb_qa_unresolved: (j as { thumb_qa_unresolved?: boolean }).thumb_qa_unresolved };
     return { ok: true, url: (j as { url?: string }).url };
   } catch { return { ok: false, error: "network" }; }
 }
-export async function publishShortsMeta(id: string, opts?: { forceFact?: boolean }): Promise<{ ok?: boolean; igPermalink?: string; fbReelId?: string; error?: string; fbError?: string; fact_hold?: string[] }> {
-  try { const r = await fetch(`/shorts/${id}/meta`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts?.forceFact ? { forceFact: true } : {}) }); return await r.json(); }
+export async function publishShortsMeta(id: string, opts?: ShortsPublishOpts): Promise<{ ok?: boolean; igPermalink?: string; fbReelId?: string; error?: string; fbError?: string; fact_hold?: string[]; thumb_qa_unresolved?: boolean }> {
+  try { const r = await fetch(`/shorts/${id}/meta`, { method: "POST", headers: { "Content-Type": "application/json" }, body: shortsPublishBody(opts) }); return await r.json(); }
   catch { return { error: "요청 실패" }; }
 }
 // 네이버 클립 — 업로드는 서버 뒤에서 수 분 돈다(202 started). check=true 는 '등록 뒤 미확인' 편을 목록과 대조만 한다.
-export async function publishShortsNaverClip(id: string, opts?: { check?: boolean; forceFact?: boolean }): Promise<{ ok?: boolean; started?: boolean; queued?: boolean; note?: string; status?: string; url?: string; error?: string; issues?: string[]; fact_hold?: string[] }> {
-  try { const r = await fetch(`/shorts/${id}/naver-clip`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts?.check ? { check: true } : opts?.forceFact ? { forceFact: true } : {}) }); return await r.json(); }
+export async function publishShortsNaverClip(id: string, opts?: { check?: boolean } & ShortsPublishOpts): Promise<{ ok?: boolean; started?: boolean; queued?: boolean; note?: string; status?: string; url?: string; error?: string; issues?: string[]; fact_hold?: string[]; thumb_qa_unresolved?: boolean }> {
+  try { const r = await fetch(`/shorts/${id}/naver-clip`, { method: "POST", headers: { "Content-Type": "application/json" }, body: opts?.check ? JSON.stringify({ check: true }) : shortsPublishBody(opts) }); return await r.json(); }
   catch { return { error: "요청 실패" }; }
 }
 export async function regenerateShortsThumbnail(id: string): Promise<{ ok?: boolean; error?: string }> {
@@ -1262,7 +1275,8 @@ export async function uploadLongformYoutube(id: string, opts?: { force?: boolean
     return { ok: true, started: !!j.started };
   } catch { return { ok: false, error: "network" }; }
 }
-export async function regenerateLongformThumbnail(id: string): Promise<{ ok?: boolean; thumbState?: string; error?: string }> {
+/** 실패 시 error 는 코드(thumb_failed·in_flight 등), message 가 한국어 안내다. */
+export async function regenerateLongformThumbnail(id: string): Promise<{ ok?: boolean; thumbState?: string; error?: string; message?: string }> {
   try { const r = await fetch(`/longform/${id}/thumbnail/regenerate`, { method: "POST" }); return await r.json(); }
   catch { return { error: "요청 실패" }; }
 }

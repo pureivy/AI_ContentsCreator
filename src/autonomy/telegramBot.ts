@@ -157,6 +157,33 @@ function apiLong(pathname: string, body: unknown, timeoutMs: number): Promise<{ 
 /** 수정 요청 대기 한도 — 재조립 + 모션그래픽(에이전트 60분·검사 10분·렌더 20분)을 다 덮는다. */
 const DERIVED_REVISE_TIMEOUT_MS = 120 * 60_000;
 
+/**
+ * node:http(apiLong)로 불러야 하는 버튼(순수, 테스트 대상) — 응답이 5분(undici 응답 머리 제한)을 넘길 수 있는 동기 라우트.
+ * 롱폼 썸네일 재생성·댓글 올리기에 더해(2026-10-26) 카드뉴스·릴스·유튜브 발행과 그 강행 버튼: 릴스 발행이 컨테이너 처리
+ * 대기로 270초를 넘기면 서버는 발행에 성공했는데 텔레그램엔 '처리 실패 — fetch failed'가 갔다(누르면 중복 발행 위험).
+ */
+const LONG_CALL_KINDS: ReadonlySet<BotAction['kind']> = new Set<BotAction['kind']>([
+  'longform_thumb_regen', 'comment_post',
+  'cardnews_publish', 'cardnews_force', 'shorts_meta', 'shorts_meta_force', 'shorts_youtube', 'shorts_youtube_force', 'shorts_fact_force',
+]);
+export const usesLongCall = (kind: BotAction['kind']): boolean => LONG_CALL_KINDS.has(kind);
+/** 긴 호출의 기본 대기 — 라우트가 시간을 따로 주지 않은 발행 버튼용(종전 api 기본 10분보다 넉넉히). */
+const LONG_CALL_DEFAULT_MS = 15 * 60_000;
+
+/**
+ * 부팅 전에 온 메시지(재시작 중 입력)의 처리(순수, 2026-10-26) — 종전엔 date < bootTs 를 전부 조용히 버려,
+ * 재시작 중에 보낸 수정 지시 답장·자율런 지시가 흔적 없이 사라졌다(만료 안내도 이 경우만 안 갔다).
+ * 답장·지시 명령이면 '다시 보내 주세요' 안내, 그 밖의 잡담만 버린다. 부팅 뒤 메시지는 'live'.
+ */
+export function preBootDisposition(m: { date?: number; text?: string; reply_to_message?: { message_id?: number } }, bootTs: number): 'live' | 'reply' | 'directive' | 'drop' {
+  if ((m.date ?? 0) >= bootTs) return 'live';
+  const text = (m.text ?? '').trim();
+  if (!text) return 'drop';
+  if (typeof m.reply_to_message?.message_id === 'number') return 'reply';
+  if (parseDirectiveCommand(text)) return 'directive';
+  return 'drop';
+}
+
 // 오류 본문은 업스트림(구글·그래프 API) 문자열이 섞일 수 있어 이스케이프 필수 — 안 하면 parse_mode HTML 이
 // 거부해 실패 메시지조차 사용자에게 못 간다(이중 침묵).
 const errText = (label: string, r: { status: number; json: Record<string, unknown> | null }): string =>
@@ -199,6 +226,8 @@ export async function runAction(a: Exclude<BotAction, { kind: 'revise' } | { kin
   switch (a.kind) {
     case 'naver_draft': {
       const r = await call(`/pieces/${a.id}/naver-draft`, { actor: '텔레그램' }, 30_000);
+      // 202 queued(성과 수집 중 대기) — 서버가 '수집 끝나는 대로 발행' 알림을 직접 보내므로 여기선 겹쳐 말하지 않는다(2026-10-26).
+      if (r.ok && r.json?.queued === true) return '';
       return r.ok ? `📗 ${naverPublishLabel()} 시작 — 완료되면 알림이 옵니다.` : errText(`${naverPublishLabel()} 시작 실패`, r);
     }
     case 'cardnews_publish': {
@@ -534,7 +563,8 @@ async function handleUpdate(u: TgUpdate, chatId: string, bootTs: number): Promis
     // 실패(타임아웃·재시작 중 ECONNREFUSED 등)도 반드시 사용자에게 알린다 — '접수'만 보고 무소식이면 안 됨.
     // 롱폼 썸네일 재생성은 수 분 동기 라우트 — fetch(undici)의 응답 머리 5분 제한을 피해 node:http(apiLong)로 부른다.
     // 댓글 답글 올리기도 — 네이버 프로필 대기(최대 8분)+브라우저(최대 3분)라 5분을 넘길 수 있다(넘기면 거짓 실패 → 손으로 중복 답글).
-    const call: ApiCall = action.kind === 'longform_thumb_regen' || action.kind === 'comment_post' ? (p, b, t) => apiLong(p, b, t ?? 6 * 60_000) : api;
+    // 카드뉴스·릴스·유튜브 발행(강행 포함)도 같은 이유로 apiLong(2026-10-26, usesLongCall).
+    const call: ApiCall = usesLongCall(action.kind) ? (p, b, t) => apiLong(p, b, t ?? LONG_CALL_DEFAULT_MS) : api;
     void runAction(action, call)
       .then((msg) => {
         // 실패 결과는 서버 로그에도 — 텔레그램 답장만 남기면 사유를 나중에 찾을 수 없었다(2026-10-13 배나무 카드뉴스).
@@ -550,7 +580,17 @@ async function handleUpdate(u: TgUpdate, chatId: string, bootTs: number): Promis
   // ── 텍스트 메시지 ──
   const m = u.message;
   if (!m || String(m.chat?.id ?? '') !== chatId) return;
-  if ((m.date ?? 0) < bootTs) return; // 부팅 이전 잔여 메시지 — 조용히 드레인
+  // 부팅 이전 잔여 메시지 — 잡담은 조용히 드레인, 수정 지시 답장·자율런 지시는 버려졌음을 알린다(2026-10-26).
+  const pre = preBootDisposition(m, bootTs);
+  if (pre === 'drop') return;
+  if (pre === 'reply') {
+    void sendTelegramHtml('⏳ 서버가 다시 시작되는 사이에 보내신 답장이라 처리하지 못했습니다 — 알림 메시지의 ✍ 수정요청 버튼을 다시 누르고 지시를 다시 보내 주세요.');
+    return;
+  }
+  if (pre === 'directive') {
+    void sendTelegramHtml('⏳ 서버가 다시 시작되는 사이에 보내신 자율런 지시라 적용하지 않았습니다 — 같은 지시를 다시 보내 주세요.');
+    return;
+  }
   const text = (m.text ?? '').trim();
   if (!text) return;
   const replyTo = m.reply_to_message?.message_id;

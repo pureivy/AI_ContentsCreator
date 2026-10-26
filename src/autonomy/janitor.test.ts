@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { appendBlogFrame, blogFrameLedgerPath, readBlogFrameReleases } from '../content/blogFrames';
-import { daysSince, isShortPublished, shortPublishedTs, isStaleUnpublishedShort, shortPruneTargets, cardPruneTargets, longformPruneTargets, trashEntryExpired, runJanitor, type JanitorDeps } from './janitor';
+import { daysSince, isShortPublished, shortPublishedTs, isStaleUnpublishedShort, shortPruneTargets, cardPruneTargets, longformPruneTargets, trashEntryExpired, runJanitor, orphanGuardReason, isShortBackupLeftover, isRealignLeftover, isCardRenderLeftover, type JanitorDeps } from './janitor';
 
 const NOW = new Date('2026-09-10T03:30:00+09:00');
 const ago = (days: number): string => new Date(NOW.getTime() - days * 86_400_000).toISOString();
@@ -214,7 +214,8 @@ describe('runJanitor — 미연결 세션을 치우기 전 실촬영 컷 반납(
     fs.utimesSync(path.join(dir, 'run.json'), old, old);
     appendBlogFrame(blogFrameLedgerPath(root), { ts: ago(40), runId: run, mediaId: 'a', file: '/m/a.mp4', kind: 'video', atSec: 8.5, species: '감나무', status: 'used' });
     const deps: JanitorDeps = {
-      dataDir: root, sessionsDir: path.join(root, 'sessions'), shorts: () => [], cards: () => [], pieces: () => [],
+      // 글 색인이 비면 2026-10-26 안전장치가 '색인 사고'로 보고 미연결 세션 정리를 멈춘다 — 다른 런에 연결된 글 하나를 둔다.
+      dataDir: root, sessionsDir: path.join(root, 'sessions'), shorts: () => [], cards: () => [], pieces: () => [{ id: 'p_other', runId: 'ffffffff6666' }],
       removeShort: () => {}, isShortRunning: () => false, isSessionRunning: () => false, archiveShort: async () => 0,
     };
     return { root, run, dir, deps, releases: () => readBlogFrameReleases(blogFrameLedgerPath(root)) };
@@ -296,5 +297,87 @@ describe('janitor 롱폼(2026-10-22)', () => {
     expect(ex('2026-09-10-care/stills/f1.png')).toBe(true);
     expect(r.moved['longform-intermediates']?.n).toBeGreaterThan(0);
     expect(r.errors).toEqual([]);
+  });
+});
+
+describe('janitor 고아 규칙 안전장치·크래시 잔여물(2026-10-26)', () => {
+  it('orphanGuardReason — 깨짐·빈 색인+폴더·20% 초과는 멈춤, 3개 이하는 몫과 무관하게 허용', () => {
+    expect(orphanGuardReason({ corrupt: false, indexSize: 300, folders: 300, candidates: 0 })).toBeNull();
+    expect(orphanGuardReason({ corrupt: true, indexSize: 0, folders: 300, candidates: 300 })).toContain('깨져');
+    expect(orphanGuardReason({ corrupt: false, indexSize: 0, folders: 300, candidates: 300 })).toContain('비었는데');
+    expect(orphanGuardReason({ corrupt: false, indexSize: 200, folders: 300, candidates: 100 })).toContain('20%');
+    expect(orphanGuardReason({ corrupt: false, indexSize: 280, folders: 300, candidates: 20 })).toBeNull();
+    expect(orphanGuardReason({ corrupt: false, indexSize: 2, folders: 5, candidates: 3 })).toBeNull();
+  });
+  it('잔여물 이름 — 앞 점으로 고정(색인 index.json.bak·.corrupt 증거는 절대 해당 없음)', () => {
+    expect(isShortBackupLeftover('.final.mp4.revise.bak')).toBe(true);
+    expect(isShortBackupLeftover('.subtitles.srt.cap.bak')).toBe(true);
+    expect(isShortBackupLeftover('index.json.bak')).toBe(false);
+    expect(isShortBackupLeftover('final.mp4')).toBe(false);
+    expect(isRealignLeftover('.realign-user_02.mp4')).toBe(true);
+    expect(isRealignLeftover('user_02.mp4')).toBe(false);
+    expect(isCardRenderLeftover('.render-1761400000000')).toBe(true);
+    expect(isCardRenderLeftover('render-spec.json')).toBe(false);
+  });
+
+  const mk = () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'janitor-guard-'));
+    const w = (rel: string): string => { const p = path.join(root, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, 'x'); return p; };
+    const old = (p: string): void => { const t = new Date(NOW.getTime() - 3 * 86_400_000); fs.utimesSync(p, t, t); };
+    for (let i = 0; i < 10; i++) w(`shorts/short_${i}/final.mp4`);
+    for (let i = 0; i < 10; i++) w(`cardnews/card_${i}/slide_01.png`);
+    for (let i = 0; i < 10; i++) { const p = w(`sessions/abcdef0${i}/run.json`); const t = new Date(NOW.getTime() - 40 * 86_400_000); fs.utimesSync(p, t, t); }
+    const base = (over: Partial<JanitorDeps> = {}): JanitorDeps => ({
+      dataDir: root, sessionsDir: path.join(root, 'sessions'),
+      shorts: () => Array.from({ length: 10 }, (_, i) => ({ id: `short_${i}`, stage: 'ready', createdTs: ago(1) })),
+      cards: () => Array.from({ length: 10 }, (_, i) => ({ id: `card_${i}`, stage: 'ready', createdTs: ago(1) })),
+      pieces: () => Array.from({ length: 10 }, (_, i) => ({ id: `p${i}`, runId: `abcdef0${i}` })),
+      removeShort: () => {}, isShortRunning: () => false, isSessionRunning: () => false, archiveShort: async () => 0,
+      ...over,
+    });
+    return { root, w, old, base, ex: (rel: string) => fs.existsSync(path.join(root, rel)) };
+  };
+
+  it('빈 색인(깨짐·유실) + 폴더 있음 → 고아 정리를 통째로 멈추고 보고한다', async () => {
+    const t = mk();
+    const r = await runJanitor(t.base({ shorts: () => [], cards: () => [], pieces: () => [] }), { now: NOW });
+    expect(r.orphanGuard.map((g) => g.category).sort()).toEqual(['orphan-cardnews', 'orphan-shorts', 'unlinked-sessions']);
+    expect(r.moved).toEqual({});
+    expect(t.ex('shorts/short_0/final.mp4') && t.ex('cardnews/card_0/slide_01.png') && t.ex('sessions/abcdef00/run.json')).toBe(true);
+  });
+  it('깨짐 표시가 오면 색인이 남아 있어도 멈춘다', async () => {
+    const t = mk();
+    const r = await runJanitor(t.base({ shorts: () => [{ id: 'short_0', stage: 'ready', createdTs: ago(1) }], storeCorrupt: () => ({ shorts: true }) }), { now: NOW });
+    expect(r.orphanGuard).toEqual([expect.objectContaining({ category: 'orphan-shorts', candidates: 9, folders: 10 })]);
+    expect(t.ex('shorts/short_5')).toBe(true);
+  });
+  it('20% 초과면 멈추고, 이하면 종전처럼 치운다', async () => {
+    const t = mk();
+    const half = await runJanitor(t.base({ cards: () => Array.from({ length: 5 }, (_, i) => ({ id: `card_${i}`, stage: 'ready', createdTs: ago(1) })) }), { now: NOW, dryRun: true });
+    expect(half.orphanGuard).toEqual([expect.objectContaining({ category: 'orphan-cardnews', candidates: 5 })]);
+    const r = await runJanitor(t.base({ cards: () => Array.from({ length: 8 }, (_, i) => ({ id: `card_${i}`, stage: 'ready', createdTs: ago(1) })) }), { now: NOW });
+    expect(r.orphanGuard).toEqual([]);
+    expect(r.moved['orphan-cardnews']?.n).toBe(2);
+    expect(t.ex('cardnews/card_9')).toBe(false);
+  });
+  it('크래시 잔여물 — 2일 지난 것만 치우고, 최근 것·만드는 중인 편은 둔다', async () => {
+    const t = mk();
+    const oldBak = t.w('shorts/short_1/.final.mp4.revise.bak'); t.old(oldBak);
+    t.w('shorts/short_1/.plan.json.revise.bak'); // 방금 생긴 것 — 재조립 중일 수 있다
+    const oldCap = t.w('shorts/short_2/.subtitles.srt.cap.bak'); t.old(oldCap);
+    const oldRealign = t.w('shorts/short_1/clips/.realign-user_02.mp4'); t.old(oldRealign);
+    const runBak = t.w('shorts/short_3/.final.mp4.revise.bak'); t.old(runBak);
+    const render = t.w('cardnews/card_1/.render-1761000000000/slide_01.png'); t.old(render); t.old(path.dirname(render));
+    t.w('cardnews/card_2/.render-1761400000000/slide_01.png');
+    const r = await runJanitor(t.base({ isShortRunning: (id) => id === 'short_3' }), { now: NOW });
+    expect(r.moved['crash-leftovers']?.n).toBe(4);
+    expect(t.ex('shorts/short_1/.final.mp4.revise.bak')).toBe(false);
+    expect(t.ex('shorts/short_1/.plan.json.revise.bak')).toBe(true);
+    expect(t.ex('shorts/short_2/.subtitles.srt.cap.bak')).toBe(false);
+    expect(t.ex('shorts/short_1/clips/.realign-user_02.mp4')).toBe(false);
+    expect(t.ex('shorts/short_3/.final.mp4.revise.bak')).toBe(true);
+    expect(t.ex('cardnews/card_1/.render-1761000000000')).toBe(false);
+    expect(t.ex('cardnews/card_2/.render-1761400000000')).toBe(true);
+    expect(t.ex('shorts/short_1/final.mp4')).toBe(true);
   });
 });

@@ -112,7 +112,8 @@ const MEMORY_ARCHIVE_LINES = 60;
 export async function archiveMemory(id: string, microModel: string, signal?: AbortSignal): Promise<boolean> {
   if (!safeId(id)) return false;
   const p = memoryFile(id);
-  const cur = read(p).trim();
+  const snapshot = read(p);
+  const cur = snapshot.trim();
   if (!cur) return false;
   const lines = cur.split('\n').filter((l) => l.trim());
   if (lines.length <= MEMORY_ARCHIVE_LINES) return false;
@@ -133,7 +134,15 @@ export async function archiveMemory(id: string, microModel: string, signal?: Abo
     summary = res.text.trim();
   } catch { /* 요약 실패해도 원본은 archive 에 보존됨 */ }
   const head = summary ? `## 이전 학습 요약 (${kstDate()})\n${summary}\n` : '';
-  write(p, [head, recent.join('\n')].filter(Boolean).join('\n') + '\n');
+  // 요약(LLM)을 기다리는 동안 appendMemory 가 붙인 줄을 잃지 않게(2026-10-26) — 다시 읽어 스냅숏 이후 늘어난 꼬리를 이어 붙이고,
+  // 재읽기~쓰기 사이에 await 를 두지 않는다. 임시파일 + rename 으로 원자적으로 교체.
+  const fresh = read(p);
+  const appended = fresh.startsWith(snapshot) ? fresh.slice(snapshot.length) : '';
+  const body = [head, recent.join('\n'), appended.trim()].filter(Boolean).join('\n') + '\n';
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const tmp = `${p}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, body, 'utf-8');
+  fs.renameSync(tmp, p);
   return true;
 }
 // --- 검증 지식(Self-RAG, Connect AI verified.md 벤치마킹) ---

@@ -18,6 +18,8 @@ export interface ClipQueueEntry {
   readonly id: string;
   readonly queuedAt: number;
   readonly force: boolean;
+  /** 사실 검증 보류를 사람이 확인하고 누른 업로드(2026-10-26) — 대기 뒤 다시 보낼 때 빠지면 같은 라우트가 보류 409 로 되돌려 대기가 헛돈다. */
+  readonly forceFact?: boolean;
 }
 
 /** 대기 상한 — 성과 수집 최장 실측(98건 ≈ 14분)과 UI 폴링 상한(45분)을 넉넉히 덮고, 반나절 묵히지는 않는다. */

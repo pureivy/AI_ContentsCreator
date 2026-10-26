@@ -252,6 +252,17 @@ export default function Scene({ durationInFrames, footage }: FullSceneProps) {
     expect(longformEpisodeRunning()).toBeNull();
   });
 
+  it('레코드 만들기가 던지면 잠금을 푼다(2026-10-26) — 다음 요청이 busy 로 막히지 않는다', async () => {
+    const { store, deps } = setup();
+    const broken = Object.assign(Object.create(Object.getPrototypeOf(store)), store, { create: () => { throw new Error('디스크 가득'); } }) as LongformStore;
+    const a = await beginLongformEpisode({ brand: 'b', deps: { ...deps, store: broken } });
+    expect(a).toMatchObject({ ok: false, error: 'create_failed' });
+    expect(longformEpisodeRunning()).toBeNull();
+    const b = await beginLongformEpisode({ brand: 'b', deps });
+    expect(b.ok).toBe(true);
+    if (b.ok) await b.done;
+  });
+
   it('단계가 실패하면 stage=error·error 기록·실패 알림, 잠금은 풀린다', async () => {
     const { store, deps, notifyFail, notifyReady } = setup({ factGate: async () => { throw new Error('판정기 죽음'); } });
     const r = await runLongformEpisode({ brand: 'b', deps });

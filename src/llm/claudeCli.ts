@@ -151,7 +151,7 @@ interface CliResult {
   is_error?: boolean;
   result?: string;
   stop_reason?: string | null;
-  usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
+  usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
 }
 
 
@@ -168,16 +168,21 @@ export function isNoResultFailure(err: unknown): boolean {
 
 export class ClaudeCliClient {
   async chat(params: ChatParams): Promise<ChatResult> {
+    let t0 = Date.now(); // 슬롯을 받은 뒤부터 잰다(대기 시간은 예산에서 제외)
     try {
-      return await SLOT.run(() => this._chat(params));
+      return await SLOT.run(() => { t0 = Date.now(); return this._chat(params); });
     } catch (e) {
       if (!isNoResultFailure(e) || params.signal?.aborted) throw e;
+      // 재시도(2026-10-26): ① onDelta 를 다시 넘기면 이미 흘려보낸 본문이 처음부터 또 흘러 UI 에 두 번 보인다 → 빼고,
+      // ② 새 600초를 주면 최악 20분이므로 첫 시도가 쓰고 남은 시간만 준다(최소 30초).
+      const left = Math.max(30_000, CONFIG.requestTimeoutMs - (Date.now() - t0));
       console.log('[claude-cli]', `결과 줄 없이 종료 — 한 번 다시 부름(${params.model})`);
-      return SLOT.run(() => this._chat(params));
+      const { onDelta: _drop, ...rest } = params;
+      return SLOT.run(() => this._chat(rest, left));
     }
   }
 
-  private _chat(params: ChatParams): Promise<ChatResult> {
+  private _chat(params: ChatParams, timeoutMs: number = CONFIG.requestTimeoutMs): Promise<ChatResult> {
     const model = params.model;
     const isHaiku = /haiku/i.test(model);
     const maxTokens = Math.min(Math.max(1, params.maxOutputTokens ?? CONFIG.maxOutputTokens), 64_000);
@@ -251,7 +256,7 @@ export class ClaudeCliClient {
         reject(new Error(`Claude CLI ${model}: ${msg}`));
       };
 
-      const timer = setTimeout(() => fail(`타임아웃(${CONFIG.requestTimeoutMs}ms)`), CONFIG.requestTimeoutMs);
+      const timer = setTimeout(() => fail(`타임아웃(${timeoutMs}ms)`), timeoutMs);
       const onAbort = () => fail('중단됨(abort)');
       if (params.signal) {
         if (params.signal.aborted) { clearTimeout(timer); return fail('중단됨(abort)'); }
@@ -328,7 +333,7 @@ export class ClaudeCliClient {
             settled = true;
             const inTok = result.usage?.input_tokens ?? 0;
             const outTok = result.usage?.output_tokens ?? 0;
-            recordUsage(model, inTok, outTok, result.usage?.cache_read_input_tokens ?? 0);
+            recordUsage(model, inTok, outTok, result.usage?.cache_read_input_tokens ?? 0, result.usage?.cache_creation_input_tokens ?? 0);
             return resolve({
               text: deltaText.trim(), model,
               promptEvalCount: inTok, evalCount: outTok,
@@ -342,7 +347,7 @@ export class ClaudeCliClient {
         const inTok = result.usage?.input_tokens ?? 0;
         const outTok = result.usage?.output_tokens ?? 0;
         const cacheRead = result.usage?.cache_read_input_tokens ?? 0;
-        recordUsage(model, inTok, outTok, cacheRead);
+        recordUsage(model, inTok, outTok, cacheRead, result.usage?.cache_creation_input_tokens ?? 0);
         const stopReason = result.stop_reason ?? '';
         resolve({
           text: (result.result ?? deltaText).trim(),

@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { genId } from '../util/ids';
+import { isStoreFileCorrupt, readJsonArray, writeJsonAtomic } from '../util/jsonStore';
 
 export type MediaKind = 'image' | 'video';
 
@@ -41,15 +42,16 @@ export interface MediaItem {
 const MEDIA_DIR = (): string => path.join(CONFIG.dataDir, 'media');
 const INDEX = (): string => path.join(MEDIA_DIR(), 'index.json');
 
+// 깨진 색인(2026-10-26) — 종전엔 파싱 실패를 [] 로 삼켜 addMedia 가 [새 항목] 하나만 써서 보관소 목록 전체를 덮었다.
+// 이제 깨지면 .corrupt-<시각> 으로 옮기고 이번 실행 동안 쓰기를 막는다(writeAll 이 던져 추가·수정·삭제가 실패로 드러난다).
 function readAll(): MediaItem[] {
-  try { return JSON.parse(fs.readFileSync(INDEX(), 'utf-8')) as MediaItem[]; } catch { return []; }
+  return readJsonArray<MediaItem>(INDEX(), '보관소(media)').value ?? [];
 }
 function writeAll(rows: MediaItem[]): void {
-  fs.mkdirSync(MEDIA_DIR(), { recursive: true });
-  const tmp = `${INDEX()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(rows, null, 2), 'utf-8');
-  fs.renameSync(tmp, INDEX()); // 원자적 교체 — 쓰기 도중 죽어도 목록이 깨지지 않는다
+  writeJsonAtomic(INDEX(), rows, { backup: true }); // 원자적 교체(tmp+fsync+rename) — 쓰기 도중 죽어도 목록이 깨지지 않는다
 }
+/** 보관소 색인이 깨져 저장을 막고 있나. */
+export const mediaIndexCorrupt = (): boolean => isStoreFileCorrupt(INDEX());
 
 export const mediaDir = MEDIA_DIR;
 

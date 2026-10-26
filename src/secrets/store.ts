@@ -53,11 +53,19 @@ const connDefs = (): BuiltinDef[] =>
   connectorKeyDefs().map((d) => ({ key: d.key, label: d.label, icon: d.icon, desc: d.desc, placeholder: d.placeholder, needs_restart: false }));
 const builtinDefs = (): BuiltinDef[] => [...BUILTIN, ...connDefs()];
 const isBuiltinKey = (k: string): boolean => builtinDefs().some((b) => b.key === k);
+/** 앱 자체 자격 증명(텔레그램·OAuth 시크릿 등 BUILTIN, 커넥터 키 제외)인가(2026-10-26) — 커넥터 시험이 이 값을 임의 주소로 보내지 않게. */
+export const isAppCredentialKey = (k: string): boolean => BUILTIN.some((b) => b.key === k);
 
 // ── .env 파싱/편집 (순수 텍스트 변환 — 테스트 대상) ─────────────────────────
 const ENV_LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/;
 
-/** .env 텍스트 → 값 맵. 주석 무시, 따옴표 제거, 같은 키 중복 시 마지막 값. */
+/**
+ * .env 텍스트 → 값 맵. 주석 무시, 따옴표 제거, 같은 키 중복 시 마지막 값.
+ * 부팅 때 값을 넣는 Node loadEnvFile 과 같게 읽는다(2026-10-26) — 종전엔 따옴표 없는 값의 줄 끝 주석(`A=3 # 메모`)을 값에 넣어
+ * 화면·getSecret 이 본 값('3 # 메모')과 process.env('3')가 갈렸다. Node 규칙: 따옴표 없으면 첫 '#' 부터 버림(공백 없어도),
+ * 따옴표('·"·`)면 닫는 따옴표까지가 값이고 그 뒤(주석 포함)는 버림, 닫는 따옴표가 없으면 그 줄은 값이 아님.
+ * 이중따옴표 안의 \" · \\ 는 작성 쪽 quoteEnv 와 대칭으로 푼다.
+ */
 export function parseEnvText(text: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const line of text.split(/\r?\n/)) {
@@ -66,11 +74,20 @@ export function parseEnvText(text: string): Record<string, string> {
     const k = m?.[1], raw = m?.[2];
     if (!k || raw === undefined) continue;
     let v = raw.trim();
-    if (v.length >= 2 && ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))) {
-      const dq = v.startsWith('"');
-      v = v.slice(1, -1);
-      // 이중따옴표만 이스케이프 해제(작성 시 quoteEnv 와 대칭)
-      if (dq) v = v.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    const q = v[0];
+    if (q === '"' || q === "'" || q === '`') {
+      // 닫는 따옴표 찾기 — 이중따옴표는 \ 이스케이프를 건너뛴다(quoteEnv 가 \" 로 쓴다).
+      let end = -1;
+      for (let i = 1; i < v.length; i++) {
+        if (q === '"' && v[i] === '\\') { i++; continue; }
+        if (v[i] === q) { end = i; break; }
+      }
+      if (end < 0) continue; // 닫히지 않은 따옴표 — Node 도 이 줄을 값으로 안 넣는다
+      v = v.slice(1, end);
+      if (q === '"') v = v.replace(/\\(["\\])/g, '$1');
+    } else {
+      const hash = v.indexOf('#');
+      if (hash >= 0) v = v.slice(0, hash).trim();
     }
     out[k] = v;
   }
@@ -149,6 +166,78 @@ export function maskFor(key: string, v: string): string {
 }
 function validKeyName(k: string): boolean { return /^[A-Z][A-Z0-9_]{1,48}$/.test(k); }
 
+/**
+ * 사용자 키로 쓰면 안 되는 이름(2026-10-26 보안 감사) — 사용자 키 추가(addCustom)는 인증 없는 로컬 API 로도 닿는데, 이름 검사가
+ * 대문자 정규식뿐이라 BLOG_PYTHON·CLAUDE_CLI_PATH(실행 파일 경로)·NODE_OPTIONS·AUTH_TOKEN·PATH 를 .env 와 process.env 에 바로 쓸 수 있었다.
+ *  1) 앱 설정이 읽는 이름(src/config.ts 의 env('…')·envInt·envBool·envFloat) — 자격 증명(_API_KEY·_KEY·_SECRET)은 빼고. store.test 가 config.ts 와 대조해 빠짐을 잡는다.
+ *  2) config 밖에서 process.env 로 읽는 이름·이 저장소가 관리하는 묶음 키(토큰·계정 blob).
+ *  3) 런타임·셸이 해석하는 이름(접두 포함).
+ */
+const CONFIG_ENV_KEYS = `
+  AGENT_MAX_TOOL_CALLS AGENT_SHELL AGENT_SHELL_TIMEOUT_MS AGENT_THINKING AGENT_TOOL_LOOP ANGLE_CHECK ANTHROPIC_CONCURRENCY APPROVAL_TIMEOUT_S
+  AUTO_CARDNEWS AUTO_CARDNEWS_PER_DAY AUTO_CYCLE_MINUTES AUTO_NAVER_DRAFT AUTO_SHORTS AUTO_SHORTS_PER_DAY AUTO_YT_UPLOAD AUTORUN_TIMES BLOG_AUTO_IMAGE
+  BLOG_DIAGRAMS BLOG_PYTHON BLOG_READABILITY BLOG_REAL_FRAME BLOG_REQUIRE_SPECIES BLOG_SCRIPTS_DIR BLOG_STYLE_LINT BRIEF_GATE BRIEF_GATE_ROUNDS
+  CARDNEWS_HTML CHOREO_PAUSE_MS CLAIM_VERIFY CLAUDE_CLI_PATH CLOUD_HEAVY_MODEL CLOUD_MICRO_MODEL CLOUD_STANDARD_MODEL COMMENT_DESK
+  COMMENT_DESK_CHANNELS COMMENT_POLL_MIN CONCURRENCY CONTENT_CADENCE_PER_WEEK CONTENT_READY_CAP DAILY_BRIEFING_TIME DEBATE_ROUNDS DEBATE_ROUNDS_CAP
+  DEFAULT_AUTONOMY DEMAND_FLOOR_SPECIES_EXEMPT ELEVENLABS_MODEL ELEVENLABS_SPEED ELEVENLABS_VOICE_ID ENFORCE_AUTONOMY EVOLVE_EMPLOYEES FACT_GATE
+  FACT_GATE_MAX_CLAIMS FACT_GATE_STRICT FACT_MIN_LORE FACT_MIN_SPECIFIC FACT_STARVED_DAYS FACT_SUPPLY FACT_SUPPLY_RETRY FB_AS_CHANNEL GEPA_DATA_DIR
+  GROUNDING_TIMEOUT_MS HOST INJECTED_KNOWLEDGE_CAP INSTAGRAM_AUTO_DAILY_CAP INTEGRATION_MAX_OUTPUT_TOKENS JANITOR_KEEP_DAYS JANITOR_STALE_DAYS
+  JANITOR_TIME JANITOR_TRASH_DAYS LOCAL_LLM_INTEGRATION_MAX_OUTPUT_TOKENS LOCAL_LLM_MAX_OUTPUT_TOKENS LOCAL_LLM_TIMEOUT_MS LONGFORM_CRF LONGFORM_LAYOUT
+  LONGFORM_PRESENTER LONGFORM_REVIEW LONGFORM_SCENE_BUDGET_USD LONGFORM_SCENE_CONCURRENCY LONGFORM_SCENE_MAX_TURNS LONGFORM_SCENE_TIMEOUT_MIN
+  LONGFORM_STYLE LONGFORM_TIME LONGFORM_TOPIC_COOLDOWN_DAYS LONGFORM_TOPIC_MODE LONGFORM_WEEKDAY LONGFORM_WEEKLY MAX_OUTPUT_TOKENS MAX_SPECIALISTS
+  MAX_TURNS_PER_AGENT META_AI_LABEL META_SUMMARY_LINT MG_DETAIL_RULES MIN_SPECIALISTS MODULE_RECENT_PIECES MODULE_ROTATION MONTHLY_BUDGET_USD
+  NAVER_CLIP_PLAYLIST NAVER_CLIP_WAIT_DAYS NAVER_DRAFT_SEO_MIN NAVER_PUBLISH_PUBLIC NAVER_SESSION_FILE NAVER_STATS_HEADLESS NAVER_SYNC_TIME
+  NOTIFY_AUTO_CYCLE NOTIFY_CONTENT_READY OPENAI_IMAGE_MODEL OPENAI_TTS_MODEL OPENAI_TTS_VOICE ORG_DEBATE_ROUNDS PERFORMANCE_SYNC_TIME
+  PERFORMANCE_WINDOW_DAYS PORT PRE_NOTIFY_RESOLVE RENDER_NET_SANDBOX REQUEST_TIMEOUT_MS REQUIRE_APPROVAL RESEARCH_CYCLE_HOURS RUN_MODE
+  SHORTS_AUTO_DAILY_CAP SHORTS_CAPTION_BOTTOM_PCT SHORTS_CAPTION_FONT_PX SHORTS_CAPTION_HOOK_FONT_PX SHORTS_CAPTION_KEYWORD SHORTS_CAPTION_OUTLINE
+  SHORTS_CAPTIONS SHORTS_CARD_MOTION_V2 SHORTS_FLOW_CHECK SHORTS_HERO_CHAIN SHORTS_HERO_TREE SHORTS_HOOK_FOOTAGE SHORTS_HOOK_VOICE SHORTS_I2V
+  SHORTS_I2V_MAX_CLIPS SHORTS_I2V_MODEL SHORTS_I2V_SUBJECT_SCENES SHORTS_LABEL_COLOR SHORTS_LORE SHORTS_MAX_DURATION_SEC SHORTS_MEDIA_ROTATE
+  SHORTS_MIDCUT SHORTS_MOTION_GRAPHICS SHORTS_PARTIAL_FIX SHORTS_PERF_DAYS SHORTS_RENDERER SHORTS_SCENES SHORTS_SIBLING_INHERIT SHORTS_SOURCE_ANCHOR
+  SHORTS_TEASER SHORTS_TITLE_OVERLAY SHORTS_TITLE_TOP_PCT SHORTS_TITLE_WIDTH_PCT SHORTS_TTS_BREAKS SHORTS_TTS_STITCH SHORTS_TTS_STT_CHECK SHORTS_YT_REF
+  SPECIES_MONTHLY_CAP SPECIES_RECENT_DAYS SSE_PING_SECONDS STRIP_FLAGGED_SOURCE STRUCTURE_VARIETY STUDIO_BASE_URL TEAM_PARALLEL TELEGRAM_BOT
+  TERMINATION THEME_RECENT_DAYS TIMING_PARITY TOKEN_COALESCE_MS TOPIC_DEMAND_GATE TOPIC_DEMAND_MIN_SEASON TOPIC_DEMAND_MIN_VOLUME
+  TOPIC_DEMAND_SPECIES_SEASON_MIN TOPIC_PERF_HINTS TTS_PROVIDER VOICE_ROTATION VOICE_STT_MODEL VOICE_TTS_VOICE WEB_SEARCH WRITE_SESSION_DIGEST
+  YOUTUBE_AUTO_DAILY_CAP YOUTUBE_CATEGORY_ID YOUTUBE_DAILY_CAP YOUTUBE_PUBLISH_PUBLIC YOUTUBE_SHORTS_RESET_THUMBNAIL YOUTUBE_SHORTS_SET_THUMBNAIL
+  YOUTUBE_UPLOAD_PUBLIC_DIRECT YT_MAINT_DAILY_UNITS YT_PLAYLISTS YT_STUDIO_BRAND YT_STUDIO_BROWSER_ID YT_STUDIO_CHANNEL_ID YT_STUDIO_COVER
+  YT_STUDIO_COVER_MODEL YT_STUDIO_COVER_SINCE
+`.trim().split(/\s+/);
+const OTHER_RESERVED_KEYS = [
+  // config 밖 process.env 읽기
+  'AGENT_MAX_TOOL_CALLS', 'AGENT_SHELL', 'AGENT_TOOL_LOOP', 'ALLOWED_HOSTS', 'AUTH_TOKEN', 'INJECT_TOKEN', 'CARD_BRAND_HANDLE', 'CARD_BRAND_NAME',
+  'CARDNEWS_EXTRA_FRAMES', 'CARDNEWS_HTML_MAX_GEN', 'CONTENT_DIVERSITY', 'DERIVE_ON_READY', 'ENFORCE_AUTONOMY', 'GEPA_DATA_DIR', 'GEPA_ENV_FILE',
+  'HWP5HTML', 'INHERITED_CLAIMS', 'INHERITED_CLEAN_SOURCE', 'META_FB_CONFIG_ID', 'META_FB_SCOPES', 'META_HTTPS_PORT', 'NAVER_PUBLISH_HEADLESS',
+  'NAVER_PUBLISH_MODE', 'NAVER_PUBLISH_TIMEOUT_MS', 'SHORTS_FLOW_CHECK', 'SHORTS_PARTIAL_FIX', 'TOPIC_CLUSTER', 'WEB_SEARCH', 'WRITER_STYLE_DIVERGE',
+  // 이 저장소가 전용 화면으로 관리하는 키 — 사용자 키로 덮으면 연결 토큰·계정이 날아간다
+  'NAVER_ACCOUNTS', 'NAVER_BLOG_ID', 'NAVER_LOGIN_ID', 'NAVER_LOGIN_PW', 'YOUTUBE_TOKENS', 'META_TOKENS',
+  // 셸·런타임
+  'PATH', 'HOME', 'SHELL', 'USER', 'LOGNAME', 'PWD', 'TMPDIR', 'TMP', 'TEMP', 'TZ', 'LANG', 'EDITOR', 'VISUAL', 'CI', 'VITEST',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'BROWSER', 'DISPLAY',
+  // 셸·인터프리터가 기동 때 해석하는 이름(보안 후속 2026-10-26)
+  'ENV', 'SHELLOPTS', 'PS4', 'PROMPT_COMMAND', 'IFS', 'CDPATH', 'GLOBIGNORE', 'GCONV_PATH',
+  'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'SSLKEYLOGFILE', 'WGETRC',
+  // config.ts 에 새로 생긴 설정(2026-10-26 다른 작업분) — 목록 대조 테스트가 잡았다
+  'FACT_HEDGE_HARD_TIMING', 'WIKI_FACT_EXCLUDE_RUN_SOURCES',
+];
+const RESERVED_KEYS: ReadonlySet<string> = new Set([...CONFIG_ENV_KEYS, ...OTHER_RESERVED_KEYS]);
+/** 런타임·도구가 접두로 해석하는 이름 — NODE_OPTIONS·DYLD_INSERT_LIBRARIES·PYTHONPATH·npm_config_*·CLAUDE_CODE_*·ANTHROPIC_BASE_URL 등. */
+const RESERVED_PREFIX = /^(NODE_|NPM_|DYLD_|LD_|PYTHON|GEPA_|CLAUDE_|ANTHROPIC_|OPENAI_|BUN_|DENO_|UV_|PIP_|GIT_|SSL_|TSX_|VITEST_|LC_|PLAYWRIGHT_|PUPPETEER_|ELECTRON_|BASH_|PERL|RUBY|CURL_|GEM_)/;
+/** 사용자 키 이름으로 막는 이름인가(순수, 테스트 대상). 내장 키(OPENAI_API_KEY 등)는 별도로 '기본 키와 중복'으로 막힌다. */
+export function isReservedEnvKey(k: string): boolean {
+  return RESERVED_KEYS.has(k) || RESERVED_PREFIX.test(k);
+}
+const RESERVED_MSG = '앱 설정·실행 환경이 쓰는 이름이라 사용자 키로 쓸 수 없습니다(.env 를 직접 고치세요).';
+/**
+ * 사용자 키 이름 허용 목록(보안 후속 2026-10-26) — 금지 목록은 본질적으로 빈틈이 생긴다(새 런타임 변수·새 설정). 사용자 키는
+ * 외부 서비스 자격 증명을 넣는 칸이므로 자격 증명 꼴 접미(_API_KEY·_KEY·_TOKEN·_SECRET·_PASSWORD·_ID)만 받는다. 금지 목록은 그 위에 그대로 건다
+ * (AUTH_TOKEN·ELEVENLABS_VOICE_ID 처럼 꼴은 맞아도 앱이 읽는 이름). 기존 사용자 키(YOUTUBE_API_KEY·YOUTUBE_CHANNEL_ID·YOUTUBE_CLIENT_ID·
+ * YOUTUBE_CLIENT_SECRET·FAL_KEY·ELEVENLABS_API_KEY)는 모두 이 꼴이다.
+ */
+const CUSTOM_KEY_SHAPE = /^[A-Z][A-Z0-9_]*_(API_KEY|KEY|TOKEN|SECRET|PASSWORD|ID)$/;
+/** 사용자 키 이름으로 받을 수 있나(순수, 테스트 대상) — 꼴(허용 목록) + 예약 이름 아님. */
+export function isAllowedCustomKeyName(k: string): boolean {
+  return validKeyName(k) && CUSTOM_KEY_SHAPE.test(k) && !isReservedEnvKey(k);
+}
+
 export function listKeys(): ApiKeyInfo[] {
   const meta = readMeta();
   const vals = readEnvValues();
@@ -167,6 +256,8 @@ export function listKeys(): ApiKeyInfo[] {
 export function setKey(key: string, value: string): { ok: boolean; error?: string } {
   const meta = readMeta();
   if (!isBuiltinKey(key) && !meta.custom.some((c) => c.key === key)) return { ok: false, error: '알 수 없는 키입니다.' };
+  // 감사 전(2026-10-26)에 만들어진 예약 이름 사용자 키가 있어도 값은 못 쓰게 — 정의만 있고 값이 막히면 카드 삭제로 정리하면 된다.
+  if (!isBuiltinKey(key) && isReservedEnvKey(key)) return { ok: false, error: RESERVED_MSG };
   if (typeof value !== 'string' || !value.trim()) return { ok: false, error: '값이 비었습니다.' };
   // 개행·제어문자 거부 — 값에 '\nOTHER_KEY=evil' 을 넣어 .env 에 임의 env 라인을 주입하는 것 차단(보안점검).
   if (/[\x00-\x1f]/.test(value)) return { ok: false, error: '값에 줄바꿈·제어문자를 넣을 수 없습니다.' };
@@ -176,6 +267,8 @@ export function setKey(key: string, value: string): { ok: boolean; error?: strin
 export function addCustom(key: string, label: string, icon: string, value: string, brand = ''): { ok: boolean; error?: string } {
   if (!validKeyName(key)) return { ok: false, error: '키 이름은 대문자·숫자·밑줄만 가능합니다(예: MY_API_KEY).' };
   if (isBuiltinKey(key)) return { ok: false, error: '기본 키와 중복됩니다.' };
+  if (isReservedEnvKey(key)) return { ok: false, error: RESERVED_MSG };
+  if (!isAllowedCustomKeyName(key)) return { ok: false, error: '사용자 키 이름은 자격 증명 꼴이어야 합니다 — 끝이 _API_KEY·_KEY·_TOKEN·_SECRET·_PASSWORD·_ID (예: MY_SERVICE_API_KEY).' };
   const meta = readMeta();
   const existing = meta.custom.find((c) => c.key === key);
   // 값은 .env 평면 키(브랜드 무관 단일 이름)라, 다른 브랜드의 동명 추가를 허용하면 그 브랜드

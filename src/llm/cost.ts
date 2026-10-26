@@ -20,14 +20,18 @@ function priceFor(model: string): Price {
   return { input: 3, output: 15 };
 }
 
-/** 캐시 읽기는 입력가의 ~0.1×. cacheRead 는 inTok 에 포함된 값(중복 차감). */
-export function estCostUsd(model: string, inTok: number, outTok: number, cacheReadTok = 0): number {
+/**
+ * 비용 추정(2026-10-26 수정) — Anthropic usage 의 input_tokens 는 캐시 읽기·캐시 생성을 '이미 제외'한 신규 입력이다.
+ * 종전엔 inTok 에서 cacheRead 를 또 빼서 신규 입력이 0 으로 눌렸고, cache_creation 은 아예 세지 않았다(원장 과소 계상).
+ * 신규 입력 ×1.0 + 캐시 생성 ×1.25 + 캐시 읽기 ×0.1 + 출력.
+ */
+export function estCostUsd(model: string, inTok: number, outTok: number, cacheReadTok = 0, cacheCreateTok = 0): number {
   const p = priceFor(model);
-  const freshIn = Math.max(0, inTok - cacheReadTok);
-  return (freshIn * p.input + cacheReadTok * p.input * 0.1 + outTok * p.output) / 1_000_000;
+  const freshIn = Math.max(0, inTok);
+  return (freshIn * p.input + cacheCreateTok * p.input * 1.25 + cacheReadTok * p.input * 0.1 + outTok * p.output) / 1_000_000;
 }
 
-interface MonthLedger { calls: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; costUsd: number }
+interface MonthLedger { calls: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens?: number; costUsd: number }
 type Ledger = Record<string, MonthLedger>; // key: 'YYYY-MM'
 
 const ledgerFile = (): string => path.join(CONFIG.dataDir, 'llm_usage.json');
@@ -36,23 +40,34 @@ let _ledger: Ledger | null = null;
 function load(): Ledger {
   if (_ledger) return _ledger;
   try { _ledger = JSON.parse(fs.readFileSync(ledgerFile(), 'utf-8')) as Ledger; }
-  catch { _ledger = {}; }
+  catch (e) {
+    _ledger = {};
+    // 파일이 없는 것(ENOENT)만 정상 시작. 읽기·파싱 실패는 원본을 치워 두어야 첫 기록이 월 누적 전체를 덮어쓰지 않는다.
+    if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      try { fs.renameSync(ledgerFile(), `${ledgerFile()}.corrupt-${Date.now()}`); } catch { /* 보존 실패 무해 */ }
+    }
+  }
   return _ledger!;
 }
+/** 테스트용 — 메모리 캐시 비움. */
+export function _resetLedgerForTest(): void { _ledger = null; }
 function monthKey(d = new Date()): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
 /** 호출 usage 를 월별 원장에 누적하고 이번 호출의 추정 비용($)을 반환. */
-export function recordUsage(model: string, inTok: number, outTok: number, cacheReadTok = 0): number {
-  const cost = estCostUsd(model, inTok, outTok, cacheReadTok);
+export function recordUsage(model: string, inTok: number, outTok: number, cacheReadTok = 0, cacheCreateTok = 0): number {
+  const cost = estCostUsd(model, inTok, outTok, cacheReadTok, cacheCreateTok);
   const led = load();
   const k = monthKey();
   const m = led[k] ?? (led[k] = { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0 });
-  m.calls++; m.inputTokens += inTok; m.outputTokens += outTok; m.cacheReadTokens += cacheReadTok; m.costUsd += cost;
+  m.calls++; m.inputTokens += inTok; m.outputTokens += outTok; m.cacheReadTokens += cacheReadTok; m.cacheCreationTokens = (m.cacheCreationTokens ?? 0) + cacheCreateTok; m.costUsd += cost;
   try {
     fs.mkdirSync(CONFIG.dataDir, { recursive: true });
-    fs.writeFileSync(ledgerFile(), JSON.stringify(led, null, 2), 'utf-8');
+    // 원자적 저장 — 쓰는 도중 크래시로 반쯤 쓴 JSON 이 남으면 다음 부팅 때 원장이 통째로 사라진다.
+    const tmp = `${ledgerFile()}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(led, null, 2), 'utf-8');
+    fs.renameSync(tmp, ledgerFile());
   } catch { /* 원장 영속 실패는 무해 */ }
   return cost;
 }

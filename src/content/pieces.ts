@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { genId } from '../util/ids';
+import { isStoreFileCorrupt, readJsonArray, writeJsonAtomic } from '../util/jsonStore';
 import type { FactGateInfo } from './factGate';
 
 export type PieceStage =
@@ -42,6 +43,13 @@ export interface Piece {
   privateUrl?: string;
   /** 네이버 임시저장 성공 시 편집기 URL(발행 아님 — 사람이 네이버에서 확인 후 발행). */
   naverDraftUrl?: string;
+  /**
+   * 발행 버튼은 눌렸는데 글 주소(logNo)를 확인 못 한 시각(2026-10-26) — 실제로 올라갔을 수 있어 다시 발행을 막는다
+   * (naverRepublishBlock). 주소가 확인된 발행이 오면 지워진다. RSS 감지가 publishedUrl 을 채우면 그쪽이 막는다.
+   */
+  naverPublishUnconfirmedTs?: string;
+  /** 네이버 발행 잡 도중 리비전으로 초안이 바뀌어 파생(카드·숏폼)을 미룬 글 — 리비전이 ready 에 닿으면 그때 파생한다(2026-10-26). */
+  deriveDeferred?: boolean;
   /** 마지막 네이버 임시저장 시각(ISO). */
   naverDraftTs?: string;
   /** 네이버 발행 성공 시각(ISO) — 성과 대시보드 '발행일'·날짜 정렬 기준(2026-07-20). 최초 발행 1회 기록. */
@@ -97,19 +105,23 @@ export class PieceStore {
     this.file = path.join(dir, 'index.json');
     this.load();
   }
+  /** 색인이 깨져(ENOENT 아닌 읽기·파싱 실패) 이번 실행 동안 저장을 막고 있나(2026-10-26) — 정리기가 이 목록을 믿지 않게 한다. */
+  get corrupt(): boolean { return isStoreFileCorrupt(this.file); }
   private load(): void {
-    try {
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf-8')) as Piece[];
-      if (Array.isArray(raw)) for (const p of raw) if (p && p.id) this.items.set(p.id, p);
-    } catch { /* 없으면 빈 스토어 */ }
+    // 없으면 빈 스토어, 깨졌으면 .corrupt-<시각> 으로 옮기고 빈 채로 뜨되 저장은 막는다(util/jsonStore).
+    const r = readJsonArray<Piece>(this.file, '글(pieces)');
+    for (const p of r.value ?? []) if (p && p.id) this.items.set(p.id, p);
   }
+  private persistWarned = false;
   private persist(): void {
     try {
-      fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      const tmp = `${this.file}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify([...this.items.values()], null, 2), 'utf-8');
-      fs.renameSync(tmp, this.file); // 원자적 교체 — 부분 쓰기로 인덱스 오염 방지.
-    } catch { /* 영속 실패 무해(다음 변경에서 재시도) */ }
+      writeJsonAtomic(this.file, [...this.items.values()], { backup: true }); // tmp+fsync+rename, 직전 판은 .bak
+    } catch (e) {
+      // 영속 실패는 다음 변경에서 재시도 — 다만 깨진 색인으로 막힌 경우는 한 번만 크게 남긴다(매 변경마다 로그 홍수 방지).
+      if (this.corrupt && this.persistWarned) return;
+      if (this.corrupt) this.persistWarned = true;
+      console.error(`[저장소] 글(pieces) 저장 실패 — ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
   create(input: CreatePieceInput): Piece {
     const now = new Date().toISOString();

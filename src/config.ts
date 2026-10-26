@@ -131,6 +131,13 @@ export interface Config {
   /** 엄격 모드(2026-08-27 복귀 스위치) — on 이면 무근거 주장을 종류와 무관하게 전부 보류(구 동작).
    * 기본 off: 수치·시기·약제·법령·가격·통계·경험 주장만 보류하고, 일반 상식 문장은 참고(unverified)로 통과. */
   readonly factGateStrict: boolean;
+  /** 유보어 붙은 시기·수치 문장도 판정(2026-10-26, 기본 off) — "보통 3월 하순"·"대개 70%"·"2년 빨리"처럼 월·순·%·N년(년생 제외)·N일·
+   *  "~보다 N" 이 든 유보문을 판정 대상(claim)으로 되돌리고, 표적 수정이 그런 문장을 hedge 로 낮춘 것은 미적용(missed)으로 본다.
+   *  FACT_HEDGE_HARD_TIMING=false 면 종전(HARD_FACT_RE 만). */
+  readonly factHedgeHardTiming: boolean;
+  /** 사실 조회(forFacts)에서 우리 글 요약·LLM 스텁·출처 미상 위키 페이지 빼기(2026-10-26, 기본 off) — 순환 근거 차단.
+   *  provenanceLabel 이 '런 산출 요약'·'LLM 생성 스텁'·'출처 미상'인 페이지를 후보에서 뺀다. WIKI_FACT_EXCLUDE_RUN_SOURCES. */
+  readonly wikiFactExcludeRunSources: boolean;
   /** 브리프 게이트(2026-08-28) — 팩트체커 판정(REVISION_NEEDED)을 기계 판독해 재작업 1라운드를 돌리고
    * 미해소 지적을 작가에게 '필수 반영'으로 주입한다. off 면 판독·재작업·주입 모두 중단(구 동작). */
   readonly briefGate: boolean;
@@ -568,6 +575,8 @@ export const CONFIG: Config = {
   factGate: envBool('FACT_GATE', true),
   factGateMaxClaims: Math.min(Math.max(5, envInt('FACT_GATE_MAX_CLAIMS', 20)), 40),
   factGateStrict: envBool('FACT_GATE_STRICT', false),
+  factHedgeHardTiming: envBool('FACT_HEDGE_HARD_TIMING', false),
+  wikiFactExcludeRunSources: envBool('WIKI_FACT_EXCLUDE_RUN_SOURCES', false),
   // 브리프 게이트(2026-08-28) — 팩트체커 반려가 아무것도 막지 못하던 실측(런 ba522a39fa7d: REVISION_NEEDED
   // 43/70 판정 62초 뒤 집필 착수) 대응. 판정을 읽어 재작업을 돌리고, 남은 지적은 작가에게 필수 반영으로 넘긴다.
   briefGate: envBool('BRIEF_GATE', true),

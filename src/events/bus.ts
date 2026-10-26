@@ -102,6 +102,10 @@ export class EventBus {
     return () => this.listeners.delete(listener);
   }
 
+  get listenerCount(): number {
+    return this.listeners.size;
+  }
+
   get currentSeq(): number {
     return this.seq;
   }
@@ -120,7 +124,29 @@ export function getBus(runId: string): EventBus | undefined {
   return _buses.get(runId);
 }
 
+/** 멱등 — 이미 없거나 두 번 불려도 안전. 대기 중인 지연 폐기 타이머도 함께 취소한다. */
 export function disposeBus(runId: string): void {
+  const t = _disposeTimers.get(runId);
+  if (t) { clearTimeout(t); _disposeTimers.delete(runId); }
   _buses.get(runId)?.flushAll();
   _buses.delete(runId);
+}
+
+const _disposeTimers = new Map<string, NodeJS.Timeout>();
+
+/**
+ * 런 종료 뒤 구독자(SSE)가 없으면 delayMs 후 버스를 폐기한다(2026-10-26).
+ * SSE 를 안 보는 런(자동 런·텔레그램)의 버스가 이벤트 최대 1만 개를 프로세스 종료까지 쥐고 있었다.
+ * 지연 시점에 구독자가 붙어 있으면 건드리지 않는다(SSE 끊김 타이머가 따로 폐기). 같은 runId 를 다시 걸면 이전 예약은 교체.
+ */
+export function scheduleDisposeIfUnwatched(runId: string, delayMs: number): void {
+  const prev = _disposeTimers.get(runId);
+  if (prev) clearTimeout(prev);
+  const timer = setTimeout(() => {
+    _disposeTimers.delete(runId);
+    const bus = _buses.get(runId);
+    if (bus && bus.listenerCount === 0) disposeBus(runId);
+  }, Math.max(0, delayMs));
+  if (typeof timer.unref === 'function') timer.unref();
+  _disposeTimers.set(runId, timer);
 }

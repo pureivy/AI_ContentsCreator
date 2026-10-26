@@ -25,6 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { humanBytes } from '../util/prune';
 import { releaseBlogFramesOfRemovedRun } from '../content/blogFrames';
+import { isStoreFileCorrupt } from '../util/jsonStore';
 
 export interface JanitorShort {
   id: string; stage: string; platform?: string;
@@ -55,6 +56,11 @@ export interface JanitorDeps {
   /** 롱폼 레코드(없으면 롱폼 정리 안 함) · 지금 만드는 편인가. */
   longform?: () => JanitorLongform[];
   isLongformRunning?: (id: string) => boolean;
+  /**
+   * 색인이 깨졌나(2026-10-26) — 깨진 색인은 빈 목록으로 뜨므로 고아 규칙이 폴더를 통째로 휴지통에 보낸다.
+   * 안 주면 util/jsonStore 의 깨짐 기억을 기본 경로(dataDir/{shorts,cardnews,pieces}/index.json)로 본다.
+   */
+  storeCorrupt?: () => { shorts?: boolean; cards?: boolean; pieces?: boolean };
   log?: (m: string) => void;
 }
 
@@ -80,12 +86,44 @@ export interface JanitorReport {
   archived: { n: number; bytes: number };
   /** 색인에서 뺀 미발행 쇼츠 id. */
   deletedShorts: string[];
+  /**
+   * 고아 규칙 안전장치가 멈춘 범주(2026-10-26) — 비어 있지 않으면 사람에게 알릴 일이다(색인 깨짐·대량 삭제 직전).
+   * category: orphan-shorts | orphan-cardnews | unlinked-sessions.
+   */
+  orphanGuard: Array<{ category: string; reason: string; candidates: number; folders: number }>;
   errors: string[];
   /** 이번 실행으로 돌려받는(또는 계획) 총 바이트 = moved + purged + archived. */
   totalBytes: number;
 }
 
 const DAY = 86_400_000;
+
+/** 고아 규칙 한 번에 치울 수 있는 폴더 몫(2026-10-26) — 넘으면 색인 쪽 사고로 보고 그 범주를 통째로 멈춘다. */
+export const ORPHAN_MAX_SHARE = 0.2;
+/** 이 개수까지는 몫과 무관하게 치운다 — 폴더가 몇 개 없는 범주(새 브랜드·시험 데이터)에서 고아 1~2개가 영영 안 치워지지 않게. */
+export const ORPHAN_MIN_ALLOWED = 3;
+/** 크래시 잔여물(되돌림 사본·임시 렌더·클립 재배열 임시 파일)을 남겨 두는 일수 — 만드는 중인 작업의 것을 치우지 않게. */
+export const LEFTOVER_DAYS = 2;
+
+/**
+ * 고아 규칙 안전장치(순수, 2026-10-26) — 멈출 이유(사람용 문장) 또는 null.
+ * 색인이 깨졌거나, 비었는데 폴더가 있거나, 한 번에 몫(20%)·최소 허용(3개)을 넘게 치우게 되면 멈춘다.
+ * 정상 운영에선 하루 고아가 몇 개뿐이라(재시작·삭제 버튼 직후) 몫을 넘는 건 색인 쪽 사고다.
+ */
+export function orphanGuardReason(o: { corrupt: boolean; indexSize: number; folders: number; candidates: number }): string | null {
+  if (o.candidates <= 0) return null;
+  if (o.corrupt) return '색인이 깨져 이번 실행 동안 믿을 수 없음';
+  if (o.indexSize === 0 && o.folders > 0) return `색인이 비었는데 폴더가 ${o.folders}개 있음`;
+  if (o.candidates > Math.max(ORPHAN_MIN_ALLOWED, o.folders * ORPHAN_MAX_SHARE)) return `한 번에 ${o.candidates}/${o.folders}개(${Math.round(ORPHAN_MAX_SHARE * 100)}% 초과)를 치우게 됨`;
+  return null;
+}
+
+/** 쇼츠 폴더의 크래시 잔여물(순수) — 이름이 되돌림 사본(.<파일>.revise.bak·.cap.bak, orchestrator/shorts backupFiles)인가. */
+export const isShortBackupLeftover = (name: string): boolean => /^\.[^/]+\.(revise|cap)\.bak$/.test(name);
+/** clips/ 의 재배열 임시 파일(.realign-user_02.mp4 등, orchestrator/shorts 씬 재배열). */
+export const isRealignLeftover = (name: string): boolean => /^\.realign-.+\.mp4$/.test(name);
+/** 카드뉴스 폴더의 임시 렌더 폴더(.render-<ms>, orchestrator/cardHtmlJob renderLayout). */
+export const isCardRenderLeftover = (name: string): boolean => /^\.render-\d+$/.test(name);
 
 /** ts 로부터 지난 일수(순수). 파싱 실패면 null. */
 export function daysSince(ts: string | undefined, now: Date): number | null {
@@ -167,7 +205,7 @@ export async function runJanitor(deps: JanitorDeps, opts: JanitorOpts = {}): Pro
   const keepDays = opts.keepDays ?? 14;
   const staleDays = opts.staleDays ?? 30;
   const trashDays = opts.trashDays ?? 7;
-  const report: JanitorReport = { dryRun, moved: {}, purged: { n: 0, bytes: 0 }, archived: { n: 0, bytes: 0 }, deletedShorts: [], errors: [], totalBytes: 0 };
+  const report: JanitorReport = { dryRun, moved: {}, purged: { n: 0, bytes: 0 }, archived: { n: 0, bytes: 0 }, deletedShorts: [], orphanGuard: [], errors: [], totalBytes: 0 };
   const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
   const trashRoot = path.join(deps.dataDir, '.trash');
   const trashDir = path.join(trashRoot, `janitor-${stamp}`);
@@ -213,18 +251,44 @@ export async function runJanitor(deps: JanitorDeps, opts: JanitorOpts = {}): Pro
   const listDirs = (root: string, re: RegExp): string[] => {
     try { return fs.readdirSync(root).filter((f) => re.test(f) && fs.statSync(path.join(root, f)).isDirectory()); } catch { return []; }
   };
+  const corrupt = deps.storeCorrupt?.() ?? {
+    shorts: isStoreFileCorrupt(path.join(deps.dataDir, 'shorts', 'index.json')),
+    cards: isStoreFileCorrupt(path.join(deps.dataDir, 'cardnews', 'index.json')),
+    pieces: isStoreFileCorrupt(path.join(deps.dataDir, 'pieces', 'index.json')),
+  };
+  /** 고아 후보를 안전장치에 통과시킨다 — 멈추면 기록·로그하고 false(그 범주는 이번에 하나도 안 옮긴다). dryRun 도 같은 판정을 보여 준다. */
+  const orphanAllowed = (category: string, o: { corrupt: boolean; indexSize: number; folders: number; candidates: number }): boolean => {
+    const reason = orphanGuardReason(o);
+    if (!reason) return true;
+    report.orphanGuard.push({ category, reason, candidates: o.candidates, folders: o.folders });
+    log(`⚠️ ${category} 정리 멈춤 — ${reason}(후보 ${o.candidates} / 폴더 ${o.folders}). 색인을 확인하세요.`);
+    return false;
+  };
+  /** 크래시 잔여물 — LEFTOVER_DAYS 지난 것만(만드는 중인 작업의 사본·임시 파일은 건드리지 않는다). */
+  const trashLeftovers = (base: string, id: string, match: (name: string) => boolean, sub = ''): void => {
+    const d = sub ? path.join(base, sub) : base;
+    let names: string[] = [];
+    try { names = fs.readdirSync(d).filter(match); } catch { return; }
+    for (const n of names) {
+      try { if (now.getTime() - fs.lstatSync(path.join(d, n)).mtimeMs < LEFTOVER_DAYS * DAY) continue; } catch { continue; }
+      trash(path.join(d, n), 'crash-leftovers', path.join(id, sub, n));
+    }
+  };
 
   // ── 쇼츠
   const shortsRoot = path.join(deps.dataDir, 'shorts');
   const shorts = deps.shorts();
   const shortIds = new Set(shorts.map((s) => s.id));
-  for (const id of listDirs(shortsRoot, /^short_/)) {
-    if (shortIds.has(id) || deps.isShortRunning(id)) continue;
-    trash(path.join(shortsRoot, id), 'orphan-shorts', id); // 규칙 1 — 고아 폴더
+  const shortDirs = listDirs(shortsRoot, /^short_/);
+  const orphanShorts = shortDirs.filter((id) => !shortIds.has(id) && !deps.isShortRunning(id));
+  if (orphanAllowed('orphan-shorts', { corrupt: !!corrupt.shorts, indexSize: shorts.length, folders: shortDirs.length, candidates: orphanShorts.length })) {
+    for (const id of orphanShorts) trash(path.join(shortsRoot, id), 'orphan-shorts', id); // 규칙 1 — 고아 폴더
   }
   for (const s of shorts) {
     if (deps.isShortRunning(s.id)) continue;
     const dir = path.join(shortsRoot, s.id);
+    trashLeftovers(dir, s.id, isShortBackupLeftover); // 재조립 중 죽어 남은 되돌림 사본(2026-10-26)
+    trashLeftovers(dir, s.id, isRealignLeftover, 'clips');
     if (isStaleUnpublishedShort(s, now, staleDays)) { // 규칙 3
       if (!dryRun) { try { deps.removeShort(s.id); } catch (e) { report.errors.push(`remove ${s.id}: ${e instanceof Error ? e.message : String(e)}`); continue; } }
       report.deletedShorts.push(s.id);
@@ -245,8 +309,13 @@ export async function runJanitor(deps: JanitorDeps, opts: JanitorOpts = {}): Pro
   const cardsRoot = path.join(deps.dataDir, 'cardnews');
   const cards = deps.cards();
   const cardIds = new Set(cards.map((c) => c.id));
-  for (const id of listDirs(cardsRoot, /^card_/)) if (!cardIds.has(id)) trash(path.join(cardsRoot, id), 'orphan-cardnews', id);
+  const cardDirs = listDirs(cardsRoot, /^card_/);
+  const orphanCards = cardDirs.filter((id) => !cardIds.has(id));
+  if (orphanAllowed('orphan-cardnews', { corrupt: !!corrupt.cards, indexSize: cards.length, folders: cardDirs.length, candidates: orphanCards.length })) {
+    for (const id of orphanCards) trash(path.join(cardsRoot, id), 'orphan-cardnews', id);
+  }
   for (const c of cards) {
+    trashLeftovers(path.join(cardsRoot, c.id), c.id, isCardRenderLeftover); // 렌더 중 죽어 남은 임시 폴더(2026-10-26)
     const published = !!(c.igMediaId || c.fbPostId);
     const age = daysSince(c.metaPublishedTs || (published ? c.updatedTs : undefined), now);
     applyTargets(path.join(cardsRoot, c.id), c.id, cardPruneTargets(published, age, keepDays), 'cardnews-intermediates');
@@ -265,21 +334,29 @@ export async function runJanitor(deps: JanitorDeps, opts: JanitorOpts = {}): Pro
   const pieces = deps.pieces();
   const linked = new Map<string, JanitorPiece>();
   for (const p of pieces) if (p.runId) linked.set(p.runId, p);
-  for (const runId of listDirs(deps.sessionsDir, /^[0-9a-f]{8,}$/i)) {
+  const sessionDirs = listDirs(deps.sessionsDir, /^[0-9a-f]{8,}$/i);
+  // 규칙 4 — 글과 연결 안 된 세션. 후보를 먼저 다 모아 안전장치(글 색인 깨짐·비어 있음·대량)에 통과시킨 뒤에 옮긴다.
+  const unlinked: string[] = [];
+  for (const runId of sessionDirs) {
+    if (deps.isSessionRunning(runId) || linked.has(runId)) continue;
+    const dir = path.join(deps.sessionsDir, runId);
+    let mtime = 0;
+    try { mtime = fs.statSync(fs.existsSync(path.join(dir, 'run.json')) ? path.join(dir, 'run.json') : dir).mtimeMs; } catch { continue; }
+    if (now.getTime() - mtime >= staleDays * DAY) unlinked.push(runId);
+  }
+  if (orphanAllowed('unlinked-sessions', { corrupt: !!corrupt.pieces, indexSize: pieces.length, folders: sessionDirs.length, candidates: unlinked.length })) {
+    for (const runId of unlinked) {
+      // 블로그 실촬영 컷 반납(2026-10-02 2차 리뷰) — 초안 없는 미연결 런의 컷은 세션이 있을 때 이미 풀려 있었다. 세션을 치우면
+      // 그 판정 근거가 사라져 다시 막히므로 옮기기 전에 반납 줄로 굳혀 둔다(조건·발행 글 보호는 함수 안). 계획(dryRun)이면 안 쓴다.
+      if (!dryRun) releaseBlogFramesOfRemovedRun(runId, { dataDir: deps.dataDir, sessionsDir: deps.sessionsDir }, 'janitor-unlinked');
+      trash(path.join(deps.sessionsDir, runId), 'unlinked-sessions', runId);
+    }
+  }
+  for (const runId of sessionDirs) {
     if (deps.isSessionRunning(runId)) continue;
     const dir = path.join(deps.sessionsDir, runId);
     const p = linked.get(runId);
-    if (!p) { // 규칙 4 — 글과 연결 안 된 세션
-      let mtime = 0;
-      try { mtime = fs.statSync(fs.existsSync(path.join(dir, 'run.json')) ? path.join(dir, 'run.json') : dir).mtimeMs; } catch { continue; }
-      if (now.getTime() - mtime >= staleDays * DAY) {
-        // 블로그 실촬영 컷 반납(2026-10-02 2차 리뷰) — 초안 없는 미연결 런의 컷은 세션이 있을 때 이미 풀려 있었다. 세션을 치우면
-        // 그 판정 근거가 사라져 다시 막히므로 옮기기 전에 반납 줄로 굳혀 둔다(조건·발행 글 보호는 함수 안). 계획(dryRun)이면 안 쓴다.
-        if (!dryRun) releaseBlogFramesOfRemovedRun(runId, { dataDir: deps.dataDir, sessionsDir: deps.sessionsDir }, 'janitor-unlinked');
-        trash(dir, 'unlinked-sessions', runId);
-      }
-      continue;
-    }
+    if (!p) continue; // 미연결은 위에서 처리
     const age = daysSince(p.publishedTs, now);
     if (!(p.publishedUrl && age !== null && age >= keepDays)) continue;
     trash(path.join(dir, 'screenshots'), 'session-intermediates', path.join(runId, 'screenshots'));
@@ -319,6 +396,6 @@ export async function runJanitor(deps: JanitorDeps, opts: JanitorOpts = {}): Pro
   const movedBytes = Object.values(report.moved).reduce((a, m) => a + m.bytes, 0);
   report.totalBytes = movedBytes + report.purged.bytes + report.archived.bytes;
   const parts = Object.entries(report.moved).map(([k, v]) => `${k} ${v.n}건 ${humanBytes(v.bytes)}`);
-  log(`${dryRun ? '계획' : '정리'} — 휴지통 이동 ${humanBytes(movedBytes)}(${parts.join(' · ') || '없음'}) · 영구 삭제 ${report.purged.n}건 ${humanBytes(report.purged.bytes)} · 원본 교체 ${report.archived.n}건 ${humanBytes(report.archived.bytes)} · 미발행 정리 ${report.deletedShorts.length}편${report.errors.length ? ` · 오류 ${report.errors.length}` : ''}`);
+  log(`${dryRun ? '계획' : '정리'} — 휴지통 이동 ${humanBytes(movedBytes)}(${parts.join(' · ') || '없음'}) · 영구 삭제 ${report.purged.n}건 ${humanBytes(report.purged.bytes)} · 원본 교체 ${report.archived.n}건 ${humanBytes(report.archived.bytes)} · 미발행 정리 ${report.deletedShorts.length}편${report.orphanGuard.length ? ` · 고아 정리 멈춤 ${report.orphanGuard.map((g) => g.category).join('·')}` : ''}${report.errors.length ? ` · 오류 ${report.errors.length}` : ''}`);
   return report;
 }
