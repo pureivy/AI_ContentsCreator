@@ -3,10 +3,10 @@ title: bionditree
 slug: bionditree
 type: entity
 aliases: ["Bionditree"]
-sources: ["run:5f8fdbdbc749","run:454af6786863","run:1b0ac6e2c23d","run:c3e5764f4952","run:fba7cb9c1259","run:c7e946f4a7f5","run:7c7f86ccfb8b","run:00c426ce4d94","run:cd31dfe38bcb","run:aa4fe8e34aec","run:909af9050326","run:40013e4226f9","run:e3bc4c0237fd","run:724688ce9c46","run:bddcc69e9b08","run:174fb5c622ff","run:9da85ca41ecd"]
+sources: ["run:5f8fdbdbc749","run:454af6786863","run:1b0ac6e2c23d","run:c3e5764f4952","run:fba7cb9c1259","run:c7e946f4a7f5","run:7c7f86ccfb8b","run:00c426ce4d94","run:cd31dfe38bcb","run:aa4fe8e34aec","run:909af9050326","run:40013e4226f9","run:e3bc4c0237fd","run:724688ce9c46","run:bddcc69e9b08","run:174fb5c622ff","run:9da85ca41ecd","run:252ac90443a9"]
 contributors: ["한지원","리서치·SEO팀","이수민","배도윤"]
-updated: 2026-09-12
-summary: 이 콘텐츠 브리프의 대상 브랜드로, 나무 병충해 관리 관련 정보를 제공. 배롱나무, 사과나무 등 조경수와 유실수 라인업을 핵심 품목으로 운영. 증상 역방향 색인과 실패 기록 서술을 통해 초보자와 경험자 모두를 대상으
+updated: 2026-10-03
+summary: 사과, 자두, 복숭아, 블루베리 등 25종 유실수와 배롱나무, 단풍, 회양목 등의 조경수를 취급하는 온라인 묘목 판매 브랜드. 본 콘텐츠 브리프의 대상 브랜드이다.
 ---
 여름철 텃밭·베란다 가드닝 초보자를 타겟하는 식물 생활용품 브랜드. 모종·나무 등 라인업을 보유하고 있으며, 2026년 6~8월 여름 성수기를 중심으로 한여름 폭염철 화분 수분 관리 콘텐츠를 기획·발행하는 리서치·SEO팀을 운영한다. 자동완성 실수요 검증과 상위글 빈틈 분석을 통해 '물 부족 vs 과습 신호 구분'을 차별화 포인트로 삼는다.
 
@@ -141,3 +141,6 @@ summary: 이 콘텐츠 브리프의 대상 브랜드로, 나무 병충해 관리
 ## 관련
 - [[배롱나무병충해]]
 - [[나무월동준비]]
+
+## 갱신 (2026-10-03)
+사과, 자두, 복숭아, 블루베리 등 25종 유실수와 배롱나무, 단풍, 회양목 등의 조경수를 취급하는 온라인 묘목 판매 브랜드. 본 콘텐츠 브리프의 대상 브랜드이다.
