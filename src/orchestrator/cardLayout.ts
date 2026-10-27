@@ -30,6 +30,8 @@ export interface LayoutSlide {
   items?: Array<{ emoji?: string; label?: string; title: string; text: string; photo?: PhotoRef }>;
   tags?: string[]; note?: string;
   bad?: { label: string; text: string }; good?: { label: string; text: string };
+  /** 비교 판(2026-10-27) — neutral = 맞고 틀림이 없는 두 갈래(✕·✓ 없이 같은 색 칸), swap = 사진 좌우에 맞춰 good 칸을 왼쪽에(alignCompareSides). */
+  tone?: 'neutral'; swap?: boolean;
   photos?: Array<{ photo: PhotoRef; label: string }>;
   cards?: Array<{ label: string; text: string }>;
   stats?: Array<{ value: string; label: string }>;
@@ -201,7 +203,7 @@ export function normalizeLayout(
         return label && text && ok(text) ? { label, text } : undefined;
       };
       const bad = side(x.bad); const good = side(x.good);
-      return bad && good ? { kind, ...base, bad, good, ...(photo ? { photo } : {}) } : plain();
+      return bad && good ? { kind, ...base, bad, good, ...(x.tone === 'neutral' ? { tone: 'neutral' as const } : {}), ...(photo ? { photo } : {}) } : plain();
     }
     if (kind === 'pair') {
       const photos = (Array.isArray(x.photos) ? x.photos : []).slice(0, 2).flatMap((p) => {
@@ -332,7 +334,7 @@ export function layoutPrompt(a: {
     '- cover(1번 장 고정): kicker(12자, 이모지 1개 + 짧은 꼬리말, 예 "🍊 감나무 편"), photo',
     '- points: items 2~4개 {emoji, label(10자, 예 "CHECK 1"), title(10자), text(24자), photo(선택 — 작은 사진)}, note(선택 34자 — 그 장의 정리 한 줄)',
     '- photo: photo(큰 사진), tags 1~3개(10자 — 사진에서 볼 곳), note(선택)',
-    '- compare: bad{label 12자, text 12자}(틀린 쪽/다른 것), good{label, text}(맞는 쪽/이 나무), photo(선택)',
+    '- compare: bad{label 12자, text 12자}, good{label, text}, tone(선택), photo(선택) — 한쪽이 틀린 것·피할 것이면 bad=틀린 쪽(✕로 그림), good=맞는 쪽(✓). 맞고 틀림이 없는 두 갈래(품종 계열·시기·크기·이름 차이)면 "tone":"neutral" 을 넣어라 — ✕·✓ 없이 같은 색 칸으로 그린다(배나무 카드: 개량종에 ✕가 붙어 틀린 것처럼 읽혔다).',
     '- pair: photos 정확히 2개 {photo, label 6자}, cards 정확히 2개 {label 8자, text 28자}, note(선택)',
     '- numbers: stats 1~3개 {value 9자(원문 수치 그대로, 예 "10~15m"), label 18자}, calendar 0~3줄 {months:[원문에 나온 달 숫자], label 22자}, photo(선택)',
     '- facts(어두운 판 — 이름·역사·기록 같은 읽을거리): rows 2~4개 {big 6자, small 8자, text 24자}',

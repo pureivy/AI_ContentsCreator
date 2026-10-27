@@ -81,6 +81,35 @@ export async function realPhotoMismatches(layout: CardLayout, blog: readonly Blo
   } catch { say('카드 실촬영 내용 대조 실패(무해) — 그대로'); return []; }
 }
 
+/**
+ * 비교 판 좌우 맞추기(2026-10-27 배나무 카드 4번 장) — 사진 왼쪽은 작은 재래 배, 오른쪽은 큰 재배 배인데 칸은 왼쪽 '개량종'·오른쪽 '옛 품종'이었다.
+ * 칸은 bad 왼쪽·good 오른쪽 고정이고 기획은 사진을 보지 않는다. 사진에 두 대상이 좌우로 갈려 보이고 반대면 칸 순서를 바꾼다(swap).
+ * 판정 실패·한쪽만 보임·위아래 배치면 그대로.
+ */
+export async function alignCompareSides(layout: CardLayout, say: Say, signal?: AbortSignal): Promise<CardLayout> {
+  if (!visionCapable()) return layout;
+  const slides = [...layout.slides];
+  for (const [i, sl] of layout.slides.entries()) {
+    if (sl.kind !== 'compare' || !sl.bad || !sl.good || sl.photo?.use !== 'file' || !fs.existsSync(sl.photo.path)) continue;
+    const j = await microJSON<{ left?: unknown }>(stdModel(),
+      '당신은 카드뉴스 사진 검수자입니다. 사진을 직접 보고 요청된 JSON 스키마만 출력합니다.',
+      [
+        '사진 속 두 대상 중 어느 쪽이 화면 왼쪽에 있는지 판정하라.',
+        `A: ${sl.bad.label} — ${sl.bad.text}`,
+        `B: ${sl.good.label} — ${sl.good.text}`,
+        '왼쪽에 A, 오른쪽에 B가 보이면 "A". 왼쪽에 B, 오른쪽에 A가 보이면 "B". 두 대상이 좌우로 갈려 보이지 않으면(한쪽만·섞임·위아래) 또는 모르겠으면 "none".',
+        'JSON 형식: {"left":"A"|"B"|"none"}',
+      ].join('\n'),
+      { maxOutputTokens: 60, visionPaths: [sl.photo.path], signal },
+    ).catch(() => null);
+    if (String(j?.left ?? '').trim().toUpperCase() === 'B') {
+      slides[i] = { ...sl, swap: true };
+      say(`카드 비교 좌우 — ${i + 1}번 장 사진 왼쪽이 '${sl.good.text}'라 칸 순서를 사진에 맞춤`);
+    }
+  }
+  return { ...layout, slides };
+}
+
 export function blogPhotosFor(pieceId: string | undefined, cardDir: string): BlogPhoto[] {
   if (!pieceId) return [];
   const runId = pieceStore().get(pieceId)?.runId;
@@ -337,6 +366,7 @@ export async function designHtmlCards(o: {
     });
   }
   layout = pinPhotos(layout, resolve);
+  layout = await alignCompareSides(layout, say, o.signal);
 
   const count = await renderLayout(dir, layout, coverNote, say, o.signal);
   if (!count) throw new Error('카드 렌더 결과 없음');

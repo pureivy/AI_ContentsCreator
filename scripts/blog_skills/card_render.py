@@ -118,6 +118,9 @@ html,body{width:1080px;height:1350px;overflow:hidden;font-family:B,"Apple Color 
 .compare .cell b{display:block;font-family:H;font-weight:400;font-size:calc(48px*var(--k));line-height:1.25;margin-top:12px}
 .compare .cell.x b{border-bottom:5px dashed #d64a3a;padding-bottom:10px}
 .compare .cell.o b{border-bottom:5px solid rgba(255,255,255,.85);padding-bottom:10px}
+.compare .cell.n{background:#fff}
+.compare .cell.n .t i{background:var(--leaf);width:18px;height:18px}
+.compare .cell.n b{border-bottom:5px solid var(--leaf);padding-bottom:10px}
 
 /* pair */
 .pair .duo{position:relative;flex:1 1 auto;min-height:440px;display:grid;grid-template-columns:1fr 1fr;gap:8px;background:var(--paper)}
@@ -207,8 +210,14 @@ def slide_html(s, n, total, series, brand):
     if kind == "compare":
         bad, good = s.get("bad") or {}, s.get("good") or {}
         top = f'<div class="top"><img src="{photo}"></div>' if photo else ""
-        cmp = (f'<div class="cmp"><div class="cell x"><span class="t"><i>✕</i>{esc(bad.get("label"))}</span><b>{esc(bad.get("text"))}</b></div>'
-               f'<div class="cell o"><span class="t"><i>✓</i>{esc(good.get("label"))}</span><b>{esc(good.get("text"))}</b></div></div>')
+        # neutral(2026-10-27) = 맞고 틀림 없는 두 갈래 — ✕·✓ 없이 같은 색 칸. swap = 사진 좌우에 맞춰 good 칸을 왼쪽에.
+        neutral = s.get("tone") == "neutral"
+        cell_bad = (f'<div class="cell {"n" if neutral else "x"}"><span class="t"><i>{"" if neutral else "✕"}</i>{esc(bad.get("label"))}</span>'
+                    f'<b>{esc(bad.get("text"))}</b></div>')
+        cell_good = (f'<div class="cell {"n" if neutral else "o"}"><span class="t"><i>{"" if neutral else "✓"}</i>{esc(good.get("label"))}</span>'
+                     f'<b>{esc(good.get("text"))}</b></div>')
+        cells = cell_good + cell_bad if s.get("swap") else cell_bad + cell_good
+        cmp = f'<div class="cmp">{cells}</div>'
         return (f'<section class="s paper compare{" fx" if photo else " nophoto"}">{top}{run_header(series, n, total, bool(photo))}'
                 f'<div class="wrap">{cmp}{title}{lead}</div></section>')
     if kind == "pair":
