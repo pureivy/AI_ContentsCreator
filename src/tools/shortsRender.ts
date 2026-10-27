@@ -69,6 +69,15 @@ export async function cutVideoSegment(
  * 숏폼 썸네일 — final.mp4 의 훅 프레임(≈1s, 페이드인 이후·제목이 이미 구워진 첫 장면)을 dir/thumbnail.jpg 로 1장 추출.
  * 이미 있으면 그대로 반환. 영상 없으면 null. 스튜디오 카드 포스터·다운로드용(발행엔 미사용). best-effort — 실패는 null.
  */
+/**
+ * 영상 장면으로 만든 대체 썸네일 표식(2026-10-27 배나무 인스타 편) — 디자인 썸네일 생성이 실패한 편은 아래 폴백이 thumbnail.jpg 를
+ * 영상 1초 장면으로 채워, '파일이 있으니 디자인 썸네일'로 오인한 발행이 장면 커버로 나갔다. 디자인 썸네일이 쓰이면 지운다(toThumbnailJpg).
+ */
+export const THUMB_FRAME_FILE = '.thumb-frame';
+export function isFrameThumbnail(dir: string): boolean { return fs.existsSync(path.join(dir, THUMB_FRAME_FILE)); }
+/** 디자인 썸네일이 있나 — 파일이 없거나 영상 장면 대체본이면 false. */
+export function hasDesignThumbnail(dir: string): boolean { return fs.existsSync(path.join(dir, 'thumbnail.jpg')) && !isFrameThumbnail(dir); }
+
 export async function ensureShortsThumbnail(dir: string, signal?: AbortSignal): Promise<string | null> {
   const thumb = path.join(dir, 'thumbnail.jpg');
   // 이미 있으면 그대로 사용 — 디자인 썸네일(완성부 gpt-image)을 프레임으로 덮어쓰지 않는다.
@@ -78,6 +87,7 @@ export async function ensureShortsThumbnail(dir: string, signal?: AbortSignal): 
   if (!fs.existsSync(video)) return null;
   try {
     await ff(['-ss', '1', '-i', video, '-frames:v', '1', '-vf', 'scale=-2:720', '-q:v', '4', thumb], 20_000, signal);
+    if (fs.existsSync(thumb)) try { fs.writeFileSync(path.join(dir, THUMB_FRAME_FILE), new Date().toISOString(), 'utf-8'); } catch { /* 무해 */ }
     return fs.existsSync(thumb) ? thumb : null;
   } catch { return fs.existsSync(thumb) ? thumb : null; } // 렌더 폴백처럼 무해 — 없으면 포스터 없이 진행
 }

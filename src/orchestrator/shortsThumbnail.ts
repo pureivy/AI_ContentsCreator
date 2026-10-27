@@ -5,6 +5,7 @@
  * AI 가 한글을 그리므로 오타 위험 → 비전 QA 로 검수하고 1회 재생성으로 커버(카드뉴스와 동일 원리).
  */
 import fs from 'node:fs';
+import { THUMB_FRAME_FILE } from '../tools/shortsRender';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -257,6 +258,7 @@ async function toThumbnailJpg(pngPath: string, dir: string, signal?: AbortSignal
     await execFileP('ffmpeg', ['-nostdin', '-y', '-i', pngPath, '-q:v', '3', tmp], { timeout: 20_000, signal });
   }
   fs.renameSync(tmp, path.join(dir, 'thumbnail.jpg')); // 같은 파일시스템 → 원자적 교체
+  try { fs.rmSync(path.join(dir, THUMB_FRAME_FILE), { force: true }); } catch { /* 무해 */ } // 이제 디자인 썸네일이다
 }
 
 /** 매니페스트 첫 이미지 — 슬롯 error(생성 실패)면 남아있는 stale 파일이라도 무시(형제 shorts.ts 가드와 동일).

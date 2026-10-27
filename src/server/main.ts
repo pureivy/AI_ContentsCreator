@@ -73,7 +73,7 @@ import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, shortsRunningCount, reviseShorts, hookStillFor, siblingPlanFile } from '../orchestrator/shorts';
 import { beginLongformEpisode, runLongformEpisode, longformEpisodeRunning, resumeLongformEpisode, sweepInterruptedLongform, interruptedNotice, resendLongformNotices } from '../orchestrator/longform';
 import { inheritedSceneImages, inheritedClips } from '../content/shortsInherit';
-import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo, waitForThumbnail } from '../tools/shortsRender';
+import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo, waitForThumbnail, hasDesignThumbnail, markThumbPending, clearThumbPending } from '../tools/shortsRender';
 import { generateDesignedThumbnail, thumbTextQaFailed } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft, shouldAutoDeriveOnDecision, cadenceBaselineTs, naverJobUrls } from '../content/pieces';
 import { isTransientFailure, transientReason } from '../llm/transientError';
@@ -2821,6 +2821,11 @@ async function shortsThumbnailRegenHandler(c: Context): Promise<Response> {
 /** 디자인 썸네일 만들기(공용) — 재생성 버튼과 발행 직전 보강(ensureDesignThumbnailBeforePublish)이 같이 쓴다. 락·키 확인은 호출부. */
 async function regenShortsThumbnail(id: string, s: Shorts, signal: AbortSignal): Promise<{ ok: true } | { error: string; status: 409 | 502 }> {
   const dir = shortsStore().dirFor(id);
+  // 만드는 동안 발행이 기다리게(waitForThumbnail) — 10-27 배나무 인스타 편은 재생성 중 누른 릴스가 옛 장면 커버로 나갔다.
+  markThumbPending(dir);
+  try { return await regenShortsThumbnailInner(id, s, dir, signal); } finally { clearThumbPending(dir); }
+}
+async function regenShortsThumbnailInner(id: string, s: Shorts, dir: string, signal: AbortSignal): Promise<{ ok: true } | { error: string; status: 409 | 502 }> {
   // 훅 정지 화면 — 완성 런과 같은 hookStillFor(2026-09-18). 종전엔 scenes/ 이름순 첫 파일을 집었는데,
   // 훅이 실촬영으로 덮인 편(SHORTS_HOOK_FOOTAGE)은 scenes/ 에 훅 그림이 없어 2번 씬 그림으로 만들었다.
   // 씬 수는 plan.json(레코드의 scenes 는 옛 편에 없다) — 지도·클립을 씬 순서로 읽어 images[0] 이 훅이 되게 한다.
@@ -2848,7 +2853,7 @@ async function regenShortsThumbnail(id: string, s: Shorts, signal: AbortSignal):
 async function ensureDesignThumbnailBeforePublish(id: string): Promise<void> {
   const s = shortsStore().get(id);
   const dir = shortsStore().dirFor(id);
-  if (!s || fs.existsSync(path.join(dir, 'thumbnail.jpg')) || !CONFIG.openaiApiKey || thumbGenInFlight.has(id) || isShortsRunning(id)) return;
+  if (!s || hasDesignThumbnail(dir) || !CONFIG.openaiApiKey || thumbGenInFlight.has(id) || isShortsRunning(id)) return;
   thumbGenInFlight.add(id);
   try {
     console.log(`[발행담당] ${(s.topic ?? id).slice(0, 30)} — 디자인 썸네일이 없어 발행 전에 먼저 만듭니다`);
