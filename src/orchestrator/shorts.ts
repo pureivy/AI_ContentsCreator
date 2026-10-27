@@ -460,7 +460,8 @@ export async function reviseShorts(
     // 썸네일 — 제목/캘리 문구/배경이 바뀐 경우 재생성(문구 일치 유지). 실패 무해.
     // 한글 QA 미해결 표식이 남아 있으면 무엇을 고쳤든 다시 만든다(2026-09-16 사용자 제보) — 종전엔 대본만
     // 고치는 수정요청에서 썸네일을 건드리지 않아, 발행할 때마다 같은 '오타 가능성 미해결' 경고가 되돌아왔다.
-    if (opts.rebuild || applied.titleChanged || applied.titleArtCopy || applied.regenScenes.length || thumbTextQaFailed(dir)) {
+    // 썸네일 파일이 아예 없으면(완성 때 생성 실패 — 2026-10-27 배나무 편, 폐기된 키) 대본만 고친 수정이어도 만든다 — 이 뒤 알림의 발행 버튼이 커버 없이 올리지 않게.
+    if (opts.rebuild || applied.titleChanged || applied.titleArtCopy || applied.regenScenes.length || thumbTextQaFailed(dir) || !fs.existsSync(path.join(dir, 'thumbnail.jpg'))) {
       try {
         const hook = await hookStillFor(keptImages, keptClips, dir, opts.signal);
         const ok = await generateDesignedThumbnail({

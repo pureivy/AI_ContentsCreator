@@ -1971,6 +1971,7 @@ app.post('/shorts/:id/youtube', async (c) => {
   // 디자인 썸네일 생성 중이면 끝날 때까지 기다린다(2026-10-07 밤나무 사고: 생성 중 버튼 → 인트로 없이 업로드). QA 게이트보다 앞 —
   // QA 결과(thumb-qa-failed.json)도 생성이 끝나야 나온다.
   await waitForThumbnail(shortsStore().dirFor(id));
+  await ensureDesignThumbnailBeforePublish(id); // 생성 실패로 썸네일이 아예 없으면 한 번 만든다(2026-10-27)
   // 썸네일 QA 미해결 게이트(실사고 2026-09-03: 오타 썸네일이 조용히 발행) — 카드뉴스와 동일 방식.
   // 사용자 확인(force) 또는 썸네일 재생성으로 해제된다. 모든 발행 경로가 이 라우트를 지난다.
   {
@@ -2472,6 +2473,7 @@ app.post('/shorts/:id/meta', async (c) => {
   }
   // 디자인 썸네일 생성 중이면 끝날 때까지 기다린다(2026-10-07 밤나무 사고: 생성 중 버튼 → 커버 없이 릴스 발행).
   await waitForThumbnail(shortsStore().dirFor(id));
+  await ensureDesignThumbnailBeforePublish(id); // 생성 실패로 썸네일이 아예 없으면 한 번 만든다(2026-10-27)
   // 썸네일 QA 미해결 게이트(실사고 2026-09-03: 오타 썸네일이 조용히 발행) — 카드뉴스와 동일 방식.
   // 사용자 확인(force) 또는 썸네일 재생성으로 해제된다. 모든 발행 경로가 이 라우트를 지난다.
   {
@@ -2809,30 +2811,51 @@ async function shortsThumbnailRegenHandler(c: Context): Promise<Response> {
   // 완성 잡이 아직 실행 중이면 그 잡의 자동 썸네일 생성과 겹쳐 이중 과금·작업물 충돌 → 완료 후 재시도 안내(락 공유 효과).
   if (isShortsRunning(id)) return c.json({ error: '생성이 진행 중입니다 — 완료 후 다시 시도하세요' }, 409);
   if (thumbGenInFlight.has(id)) return c.json({ error: '이미 썸네일 생성 중입니다' }, 409);
-  const dir = shortsStore().dirFor(id);
   thumbGenInFlight.add(id);
   try {
     // 클라이언트 이탈해도 작업·락이 무한 점유되지 않게 상한(4분) — generateDesignedThumbnail 은 예외를 던지지 않음.
-    const signal = AbortSignal.timeout(240_000);
-    // 훅 정지 화면 — 완성 런과 같은 hookStillFor(2026-09-18). 종전엔 scenes/ 이름순 첫 파일을 집었는데,
-    // 훅이 실촬영으로 덮인 편(SHORTS_HOOK_FOOTAGE)은 scenes/ 에 훅 그림이 없어 2번 씬 그림으로 만들었다.
-    // 씬 수는 plan.json(레코드의 scenes 는 옛 편에 없다) — 지도·클립을 씬 순서로 읽어 images[0] 이 훅이 되게 한다.
-    // 둘 다 없으면 scenes/ 파일 수(종전 동작 범위 유지 — 이름순 첫 파일).
-    const sceneCount = (() => {
-      try { return (JSON.parse(fs.readFileSync(path.join(dir, 'plan.json'), 'utf-8')) as { scenes?: unknown[] }).scenes?.length ?? 0; } catch { return 0; }
-    })() || s.scenes || (() => {
-      try { return fs.readdirSync(path.join(dir, 'scenes')).filter((x) => /\.(png|jpe?g)$/i.test(x)).length; } catch { return 0; }
-    })();
-    const hook = sceneCount > 0 ? await hookStillFor(inheritedSceneImages(dir, sceneCount), inheritedClips(dir, sceneCount), dir, signal) : null;
-    if (!hook) return c.json({ error: '훅 씬 이미지가 없어 디자인 썸네일을 만들 수 없습니다(영상 프레임만 가능)' }, 409);
-    // 영상 상단 캘리와 같은 카피 재사용(title-copy.json) — 재생성 썸네일이 영상 속 제목과 문구가 어긋나지 않게.
-    const savedCopy = (() => {
-      try { return JSON.parse(fs.readFileSync(path.join(dir, 'title-copy.json'), 'utf-8')) as { line1: string; line2: string; points: string[] }; } catch { return undefined; }
-    })();
-    const ok = await generateDesignedThumbnail({ dir, title: s.title ?? s.topic, description: s.description ?? '', titles: s.titles, keyword: s.keyword, hookImage: hook, signal, ...(savedCopy?.line1 ? { copy: savedCopy } : {}) });
-    if (!ok) return c.json({ error: '썸네일 생성 실패(무해 — 기존 유지)' }, 502);
-    shortsStore().update(id, {}); // updatedTs 갱신 → 포스터 캐시버스트
-    return c.json({ ok: true });
+    const r = await regenShortsThumbnail(id, s, AbortSignal.timeout(240_000));
+    return 'error' in r ? c.json({ error: r.error }, r.status) : c.json({ ok: true });
+  } finally { thumbGenInFlight.delete(id); }
+}
+/** 디자인 썸네일 만들기(공용) — 재생성 버튼과 발행 직전 보강(ensureDesignThumbnailBeforePublish)이 같이 쓴다. 락·키 확인은 호출부. */
+async function regenShortsThumbnail(id: string, s: Shorts, signal: AbortSignal): Promise<{ ok: true } | { error: string; status: 409 | 502 }> {
+  const dir = shortsStore().dirFor(id);
+  // 훅 정지 화면 — 완성 런과 같은 hookStillFor(2026-09-18). 종전엔 scenes/ 이름순 첫 파일을 집었는데,
+  // 훅이 실촬영으로 덮인 편(SHORTS_HOOK_FOOTAGE)은 scenes/ 에 훅 그림이 없어 2번 씬 그림으로 만들었다.
+  // 씬 수는 plan.json(레코드의 scenes 는 옛 편에 없다) — 지도·클립을 씬 순서로 읽어 images[0] 이 훅이 되게 한다.
+  // 둘 다 없으면 scenes/ 파일 수(종전 동작 범위 유지 — 이름순 첫 파일).
+  const sceneCount = (() => {
+    try { return (JSON.parse(fs.readFileSync(path.join(dir, 'plan.json'), 'utf-8')) as { scenes?: unknown[] }).scenes?.length ?? 0; } catch { return 0; }
+  })() || s.scenes || (() => {
+    try { return fs.readdirSync(path.join(dir, 'scenes')).filter((x) => /\.(png|jpe?g)$/i.test(x)).length; } catch { return 0; }
+  })();
+  const hook = sceneCount > 0 ? await hookStillFor(inheritedSceneImages(dir, sceneCount), inheritedClips(dir, sceneCount), dir, signal) : null;
+  if (!hook) return { error: '훅 씬 이미지가 없어 디자인 썸네일을 만들 수 없습니다(영상 프레임만 가능)', status: 409 };
+  // 영상 상단 캘리와 같은 카피 재사용(title-copy.json) — 재생성 썸네일이 영상 속 제목과 문구가 어긋나지 않게.
+  const savedCopy = (() => {
+    try { return JSON.parse(fs.readFileSync(path.join(dir, 'title-copy.json'), 'utf-8')) as { line1: string; line2: string; points: string[] }; } catch { return undefined; }
+  })();
+  const ok = await generateDesignedThumbnail({ dir, title: s.title ?? s.topic, description: s.description ?? '', titles: s.titles, keyword: s.keyword, hookImage: hook, signal, ...(savedCopy?.line1 ? { copy: savedCopy } : {}) });
+  if (!ok) return { error: '썸네일 생성 실패(무해 — 기존 유지)', status: 502 };
+  shortsStore().update(id, {}); // updatedTs 갱신 → 포스터 캐시버스트
+  return { ok: true };
+}
+/**
+ * 발행 직전 디자인 썸네일 보강(2026-10-27 배나무 유튜브 편) — 완성 때 썸네일 생성이 실패한 채(thumbnail.jpg 없음, 그날은 폐기된 API 키)
+ * 발행 버튼을 누르면 인트로·커버 없이 올라가 쇼츠 탭 커버가 첫 장면이 됐다. 한 번 만들어 보고, 못 만들면 종전대로(영상 프레임) 올린다.
+ */
+async function ensureDesignThumbnailBeforePublish(id: string): Promise<void> {
+  const s = shortsStore().get(id);
+  const dir = shortsStore().dirFor(id);
+  if (!s || fs.existsSync(path.join(dir, 'thumbnail.jpg')) || !CONFIG.openaiApiKey || thumbGenInFlight.has(id) || isShortsRunning(id)) return;
+  thumbGenInFlight.add(id);
+  try {
+    console.log(`[발행담당] ${(s.topic ?? id).slice(0, 30)} — 디자인 썸네일이 없어 발행 전에 먼저 만듭니다`);
+    const r = await regenShortsThumbnail(id, s, AbortSignal.timeout(240_000));
+    console.log(`[발행담당] ${(s.topic ?? id).slice(0, 30)} — 발행 전 썸네일 ${'error' in r ? `못 만듦(${r.error}) — 영상 프레임 커버로 발행` : '완료'}`);
+  } catch (e) {
+    console.log(`[발행담당] 발행 전 썸네일 보강 예외(무해): ${e instanceof Error ? e.message.slice(0, 80) : e}`);
   } finally { thumbGenInFlight.delete(id); }
 }
 app.post('/shorts/:id/thumbnail/regenerate', shortsThumbnailRegenHandler);
