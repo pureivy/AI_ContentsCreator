@@ -202,7 +202,10 @@ export function speciesRotationBlock(
     }
     if (fresh.length) freshGroups.push(`  · ${g.group}: ${fresh.join(', ')}`);
   }
-  const lines = [`[수종 로테이션 — 최근 ${SPECIES_WINDOW_DAYS}일 블로그 기준, 수종당 상한 ${cap}편]`];
+  // 함수형 cap 이면 기본 상한 + 보너스 안내(2026-10-30) — 종전엔 `${cap}` 이 함수 소스를 그대로 찍어 두뇌가
+  // "수종당 상한 (name) => …편"을 읽었다.
+  const capLabel = typeof cap === 'function' ? `${SPECIES_MONTHLY_CAP}편(검색량·성과 좋은 수종은 +1~2편)` : `${cap}편`;
+  const lines = [`[수종 로테이션 — 최근 ${SPECIES_WINDOW_DAYS}일 블로그 기준, 수종당 상한 ${capLabel}]`];
   if (capped.length) lines.push(`- 상한 도달 → 제안 금지(코드가 기각한다): ${capped.join(', ')}`);
   if (recent.length) lines.push(`- 최근 다룸 → 가급적 피함: ${recent.join(', ')}`);
   if (freshGroups.length) lines.push(`- 아직 안 다룬 수종 → 우선(후보 중 최소 ${minFresh}개는 여기서):`, ...freshGroups);

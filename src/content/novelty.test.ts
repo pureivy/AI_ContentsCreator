@@ -141,3 +141,17 @@ describe('saturatedThemeMatches — 합성어 어간이 기각 검사에도 적�
     expect(saturatedThemeMatches({ title: '배롱나무 가을 식재법' }, ex, 3, STEMS)).toHaveLength(0);
   });
 });
+
+describe('findSimilarContent — 수종명 키워드 면제(2026-10-30)', () => {
+  const ex: ExistingContent[] = [{ title: '배롱나무 꽃 안 피는 이유', keyword: '배롱나무', kind: '블로그' }];
+  const isSubj = (k: string) => k.replace(/\s+/g, '') === '배롱나무';
+  it('면제 없으면 종전대로 키워드 동치 = 유사', () => {
+    expect(findSimilarContent({ title: '배롱나무 겨울 전정 시기', keyword: '배롱나무' }, ex)).toHaveLength(1);
+  });
+  it('수종명 키워드면 제목만 본다 — 다른 각도는 신규', () => {
+    expect(findSimilarContent({ title: '배롱나무 겨울 전정 시기', keyword: '배롱나무' }, ex, { isSubjectKeyword: isSubj })).toHaveLength(0);
+  });
+  it('제목이 비슷하면 여전히 유사', () => {
+    expect(findSimilarContent({ title: '배롱나무 꽃 안 피는 이유 정리', keyword: '배롱나무' }, ex, { isSubjectKeyword: isSubj })).toHaveLength(1);
+  });
+});

@@ -60,6 +60,11 @@ describe('speciesRotationBlock — 제안 금지·피함·우선 목록', () => 
     expect(b).toContain('최소 5개');
   });
   it('카탈로그 없으면 빈 문자열', () => { expect(speciesRotationBlock(undefined, new Map())).toBe(''); });
+  it('함수형 상한이면 기본 상한 숫자를 보여 준다 — 함수 소스를 찍지 않는다(2026-10-30)', () => {
+    const b = speciesRotationBlock(CAT, new Map(), (n: string) => (n === '배롱나무' ? 7 : SPECIES_MONTHLY_CAP));
+    expect(b).toContain(`수종당 상한 ${SPECIES_MONTHLY_CAP}편(`);
+    expect(b).not.toContain('=>');
+  });
 });
 
 describe('speciesCapFor — 수요 가중 월 상한(순수, 2026-09-04)', () => {

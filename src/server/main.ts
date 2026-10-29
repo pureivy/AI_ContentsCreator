@@ -66,6 +66,7 @@ import { SEGMENT_TAIL_SEC } from '../content/userAssets';
 import { buildMediaUsage, SOURCES_FILE, type UsageSource } from '../content/mediaUsage';
 import { probeDuration } from '../tools/shortsCommon';
 import { findSpecies, findSpeciesLoose, loadSpecies, appendSpecies, appendSpeciesAlias } from '../content/species';
+import { findStoryRepeat, collectStoryPriors } from '../content/storyRepeat';
 import { learnSpeciesLabel } from '../content/speciesLearn';
 import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, autoDailyCapFor, autoCapApplies, pickTopicTarget, shouldStartSecondRun, SIBLING_PLAN_WAIT_MS, type ShortsPlatform } from '../content/shortsPlatform';
 import { pickWriter, recentWriterIdsFor, SHORTS_WRITERS } from '../content/shortsWriters';
@@ -5357,6 +5358,9 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
           const recentThCl = (off || avoided || dupWhy || sat.length || cooledCl || recentCl) ? null : usedThemeRecentlyFor(`${cand.title} ${clKeyword}`, tickBrand || undefined);
           // 사실 부족 수종 게이트(최종 리뷰 I1) — 예고 경로와 같은 이유로 여기도 복사(보류·pending 유지).
           const starvedCl = (off || avoided || dupWhy || sat.length || cooledCl || recentCl || recentThCl) ? null : factStarvedRecentlyFor(`${cand.title} ${clKeyword}`, tickBrand || undefined);
+          // 같은 수종 같은 이야기(2026-10-30) — 형제 소진도 후보 루프를 우회하는 공급로라 여기도 복사(보류·pending 유지, 60일 지나면 풀림).
+          const storyCl = (off || avoided || dupWhy || sat.length || cooledCl || recentCl || recentThCl || starvedCl || !CONFIG.topicStoryGate) ? null
+            : findStoryRepeat({ title: cand.title, species: findSpeciesLoose(`${cand.title} ${clKeyword}`)?.name }, collectStoryPriors(tickBrand || '', (t) => findSpeciesLoose(t)?.name));
           if (off || avoided || dupWhy) {
             clusterStore().update(cand.id, { status: 'dropped' });
             console.log(`[auto-cycle] 클러스터 기각 — "${clKeyword}" (${off ? `소재 "${off}"` : avoided ? `리서치 폐기 판정(${avoided.reason.slice(0, 40)})` : dupWhy}) → dropped`);
@@ -5370,6 +5374,8 @@ async function pickAutoWork(signal?: AbortSignal, force = false, userTriggered =
             console.log(`[auto-cycle] 클러스터 보류(최근 축) — "${clKeyword}" (${recentThCl.theme} ${recentThCl.daysAgo}일 전) → 신규 아이디어로 폴백`);
           } else if (starvedCl) {
             console.log(`[auto-cycle] 클러스터 보류(사실 부족 수종) — "${clKeyword}" (${starvedCl.name} ${starvedCl.daysAgo}일 전) → 신규 아이디어로 폴백`);
+          } else if (storyCl) {
+            console.log(`[auto-cycle] 클러스터 보류(같은 이야기) — "${cand.title}" ≈ ${storyCl.daysAgo}일 전 "${storyCl.prior.title}" (${storyCl.prior.species} · ${storyCl.subject}) → 신규 아이디어로 폴백`);
           } else {
             // 검색 수요 게이트(2026-08-26 리뷰 C1) — 형제는 자동완성 유래라 약한 자연 방어가 있지만
             // 검색량 자체는 검증된 적이 없다. 미달이면 리서치 폐기 소급과 같은 메커니즘(dropped)으로

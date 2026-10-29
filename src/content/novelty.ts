@@ -73,14 +73,23 @@ export function titleSimilar(a: string, b: string): boolean {
   return bigramJaccard(a, b) >= TITLE_JACCARD || sharedTokenCount(a, b) >= TITLE_SHARED_TOKENS;
 }
 
-/** 후보(제목·키워드)를 기존 콘텐츠와 대조 — 유사 근거를 점수 내림차순으로 반환(빈 배열 = 신규). */
+/**
+ * 후보(제목·키워드)를 기존 콘텐츠와 대조 — 유사 근거를 점수 내림차순으로 반환(빈 배열 = 신규).
+ *
+ * isSubjectKeyword(2026-10-30): 키워드가 수종명 한 어절이면 키워드 규칙을 건너뛰고 제목만 본다. 두뇌가 키워드를 수종명으로
+ * 쓰니(scheduler IDEA_SYSTEM) 같은 수종이면 어떤 각도든 '유사'가 되어 잘 된 수종이 다시 못 나왔다. 같은 이야기인지는
+ * storyRepeat(같은 수종·같은 소재)이 따로 판정한다. 안 넘기면 종전 그대로.
+ */
 export function findSimilarContent(
   cand: { title: string; keyword?: string },
   existing: ExistingContent[],
+  opts: { isSubjectKeyword?: (kw: string) => boolean } = {},
 ): SimilarMatch[] {
   const out: SimilarMatch[] = [];
+  const subj = opts.isSubjectKeyword;
+  const candSubj = !!(subj && cand.keyword && subj(cand.keyword));
   for (const e of existing) {
-    if (cand.keyword && e.keyword && keywordSimilar(cand.keyword, e.keyword)) {
+    if (cand.keyword && e.keyword && !candSubj && !(subj && subj(e.keyword)) && keywordSimilar(cand.keyword, e.keyword)) {
       out.push({ title: e.title, kind: e.kind, score: bigramJaccard(cand.keyword, e.keyword), via: 'keyword' });
       continue;
     }

@@ -19,6 +19,8 @@ import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, br
 import { titleTypeGuidanceBlock } from '../analytics/titleTiming';
 import { shortsTopicSignalBlock, speciesShortsPerf, hitTitleBlock } from '../analytics/shortsPerf';
 import { collectPopularityRows, scoreSpeciesPopularity, naverPrior, speciesPopularityBlock } from '../analytics/speciesPopularity';
+import { collectIgTopicRows, igTopicScorer } from '../analytics/igTopicScore';
+import { findStoryRepeat, collectStoryPriors, storySubjectOf, STORY_WINDOW_DAYS } from '../content/storyRepeat';
 import { readBlogSearchQueries } from '../analytics/naverBlogKpi';
 import { refreshExtTopics, readExtTopicsSnap, extTopicsBlock, extSuggestionsFor, cultivationTotal, cultivationMeasured } from '../analytics/externalTopics';
 import { topicVerdictBlock, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
@@ -1179,6 +1181,8 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     || !!offSeasonSubject(text, getBrand()?.seasonalSubjects);
   // 수종 반응 참고(2026-10-07) — 프롬프트 참고 표시만, 정렬·후순위·기각엔 안 쓴다(speciesPopularity 머리말의 실측:
   // 갈리는 건 수종보다 주제). 보관소 지시면 보관소 수종 안에서만 보여 준다.
+  // 인스타 날 잘 된 수종 재등장(2026-10-30) — 순위·같은 이야기 게이트가 둘 다 켜져 있을 때만.
+  const igReentry = igTarget && CONFIG.topicIgRank && CONFIG.topicStoryGate && CONFIG.topicPerfHints;
   const popularityBlockStr = (() => {
     if (!CONFIG.topicPerfHints) return '';
     try {
@@ -1186,9 +1190,29 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       const pool = [...new Set([...librarySpeciesFor(slug), ...rows.map((r) => r.species)])];
       // 사전값은 네이버 '재배' 수요(외부 인기 스냅샷) — 없으면 수종 이름 검색량(먹거리 수요가 섞여 크게 보인다).
       const pop = scoreSpeciesPopularity(rows, pool, naverPrior(pool, (sp) => cultivationTotal(extSnap, sp) ?? (familyVolume(demandRows, sp).max || undefined)));
-      return speciesPopularityBlock(pop, libGate ? libSpecies : [], speciesBlockedNow);
+      const b = speciesPopularityBlock(pop, libGate ? libSpecies : [], speciesBlockedNow);
+      // 인스타 목표일(2026-10-30 채널별 신호 혼합) — 잘 된 수종의 재등장을 허용한다고 두뇌에게 말한다. 같은 소재 반복은 코드가 막는다.
+      // '반응 좋은 수종' 줄이 있을 때만 — 없는 목록을 가리키지 않게. 수종 로테이션 블록의 신규 최소 개수는 인스타 날 3으로 낮춘다(아래).
+      return b.includes('반응 좋은 수종:') && igReentry
+        ? `${b}· 인스타 목표일: 위 '반응 좋은 수종'은 지난 글과 다른 소재(심기·전정·월동·병해충·품종 등)로 다시 써도 된다 — 후보 2~3개는 여기서. 같은 수종·같은 소재는 ${STORY_WINDOW_DAYS}일 안에 코드가 기각한다.\n`
+        : b;
     } catch { return ''; }
   })();
+  // 인스타 목표일 정렬(2026-10-30 사장님 "채널별 신호 혼합") — 2차 키를 검색량에서 우리 인스타 실적(축×수종)으로.
+  // 블로그(유튜브 목표일)는 검색량 그대로다 — 블로그 조회의 원천이 검색이라서. 실패하면 null(종전 검색량 정렬).
+  const igScore = (() => {
+    if (!igTarget || !CONFIG.topicIgRank) return null;
+    try { return igTopicScorer(collectIgTopicRows(slug, (t) => findSpeciesLoose(t)?.name)); }
+    catch { return null; }
+  })();
+  // 같은 수종 같은 이야기(2026-10-30, storyRepeat) — 블로그 글(파생 숏폼·카드는 원본을 따라가므로 글만) 수종·제목·시각.
+  const storyPriors = CONFIG.topicStoryGate ? collectStoryPriors(slug, (t) => findSpeciesLoose(t)?.name) : [];
+  // 키워드가 수종명 한 어절인가 — 그렇다면 키워드 유사는 '같은 수종'이라는 뜻일 뿐이라 유사 판정에서 뺀다(novelty 주석).
+  const isSubjectKeyword = (kw: string): boolean => {
+    const sp = findSpeciesLoose(kw);
+    const k = kw.replace(/\s+/g, '');
+    return !!sp && [sp.name, ...(sp.aliases ?? [])].some((n) => n.replace(/\s+/g, '') === k);
+  };
   const seriesScores = seriesScoresFor(activeBrandSlug() || undefined);
   // 여유 시드는 라벨 게이트로 판정(리뷰 지적: 부분문자열 대조는 '심는'≠'심기' 활용형을 놓쳐
   // 쿨다운 계열 시드를 '여유 있는 방향'으로 추천하는 자기모순을 만들었다).
@@ -1211,7 +1235,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
     (() => { const b = themeRecentBlock(themeRecent, CONFIG.themeRecentDays); return b ? `${b}\n` : ''; })() +
     // 수종 로테이션 블록은 '제안 불가'를 말한다 — 지시 중엔 코드가 수종 월 상한을 통과시키므로 지시끼리
     // 충돌하지 않게 뺀다(최근 수종 창은 위 블록이 따로 말한다).
-    (directive ? '' : (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov, speciesCap); return b ? `${b}\n\n` : ''; })()) +
+    (directive ? '' : (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov, speciesCap, igReentry ? 3 : undefined); return b ? `${b}\n\n` : ''; })()) +
     // 축 로테이션 블록은 지시 중에도 넣는다(2026-09-17) — 축 상한은 더 이상 지시로 통과되지 않고,
     // 이 블록은 '적게 다룬 축'을 이름으로 지목해 후보를 그쪽으로 보내는 유일한 장치다.
     // 지시가 보관소를 가리키면 예시도 그 수종으로 적는다(2026-09-29 실사고) — 적게 다룬 축은 수종이
@@ -1447,8 +1471,18 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
         gate: gateForLabels(fillLabelsFromKnown(`${cand.title} ${cand.keyword ?? ''}`, candLabels[i]!, seriesScores), seriesScores),
       })),
       (e) => e.gate.level,
-      (e) => volumeOf(e.cand.keyword),
+      igScore
+        ? (e) => igScore(`${e.cand.title} ${e.cand.keyword ?? ''}`, findSpeciesLoose(`${e.cand.title} ${e.cand.keyword ?? ''}`)?.name).score
+        : (e) => volumeOf(e.cand.keyword),
     );
+    if (igScore) {
+      // 왜 이 순서였나를 로그만으로 재구성할 수 있게 — 라운드마다 한 줄.
+      console.log(`[auto-cycle] 인스타 순위(우리 실적) — ${gated.map(({ cand }) => {
+        const t = `${cand.title} ${cand.keyword ?? ''}`;
+        const r = igScore(t, findSpeciesLoose(t)?.name);
+        return `"${cand.title}" ${r.score}(${r.axis} ×${r.axisMult}·수종 ×${r.speciesMult}/${r.speciesN}편)`;
+      }).join(' > ')}`);
+    }
     const rejects: string[] = [];
     let noSpRound = 0;   // 이번 라운드 '수종 없음' 수 — 라운드 끝 노트에 '버리지 말고 수종에 묶어라' 줄을 붙일지
     // 유사 폴백(사용자 원칙 개정 2026-08-14) — 기존과 유사한 후보는 기각이 아니라 '다른 시각 생성'
@@ -1696,7 +1730,21 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
         rejects.push(`"${title}"=꽃말·유래 주제인데 수종명(○○나무) 앵커 없음`);
         continue;
       }
-      const sim = findSimilarContent({ title, ...(keyword ? { keyword } : {}) }, existing);
+      // 같은 수종 같은 이야기(하드, 비용 0, 2026-10-30 사장님 "이전에 작성된 내용과 다른 이야기") — 수종이 같아도 소재가 다르면
+      // 통과, 같은 소재를 60일 안에 다시 쓰면 기각. 기각이라 뒤 게이트를 건너뛰는 채택 경로가 생기지 않는다.
+      if (CONFIG.topicStoryGate) {
+        const rep = findStoryRepeat({ title, species: findSpeciesLoose(`${title} ${keyword ?? ''}`)?.name }, storyPriors);
+        if (rep) {
+          console.log(`[auto-cycle] 아이디어 기각(같은 이야기) — "${title}" ≈ ${rep.daysAgo}일 전 "${rep.prior.title}" (${rep.prior.species} · ${rep.subject})`);
+          rejects.push(`"${title}"=같은 이야기(${rep.prior.species} ${rep.subject} — ${rep.daysAgo}일 전 "${rep.prior.title}". 이 수종이면 다른 소재로)`);
+          continue;
+        }
+      }
+      // 수종명 키워드 유사 면제는 같은 이야기 판정이 실제로 난 후보만(소재가 잡힘) — 소재 없는 제목은 판정이 없으니 종전 키워드 규칙을
+      // 그대로 둔다. 최근 수종(2일 창) 후보도 면제하지 않는다 — 면제하면 유사로 사라지던 어제 수종이 마지막 라운드 후순위로 살아나
+      // '이틀 연속 금지'가 느슨해진다(리뷰 2026-10-30).
+      const subjExempt = CONFIG.topicStoryGate && !recentSp && !!storySubjectOf(title);
+      const sim = findSimilarContent({ title, ...(keyword ? { keyword } : {}) }, existing, subjExempt ? { isSubjectKeyword } : {});
       if (sim.length) {
         if (angleOff(demand.line)) continue;   // 유사 폴백도 실검색 각도 안이어야 한다(2026-10-07 마가목 사고)
         const top = sim[0]!;

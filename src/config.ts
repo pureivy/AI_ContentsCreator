@@ -161,6 +161,8 @@ export interface Config {
   readonly angleCheck: boolean;
   /** 주제 제안에 반응 실측 참고 블록(2026-10-07) — 히트 제목(채널 중앙값 대비 배수 상위)과 수종 반응 참고표. 참고만, 게이트 아님. */
   readonly topicPerfHints: boolean;
+  readonly topicIgRank: boolean;
+  readonly topicStoryGate: boolean;
   /** 블로그 자율 주제 수종 필수(2026-10-02) — 자체 데이터 163편: 메인 키워드에 수종이 있는 글이 14일 ×1.4·30일 ×2.5 조회,
    *  하위 15편은 대부분 수종 없는 일반 주제. on 이면 제안 프롬프트가 수종에 묶고, 일반 키워드는 제목의 수종으로 보정하고,
    *  그래도 없으면 '수종 없음'으로 기각(수종 붙은 후보가 하나도 없는 틱만 최후 채택). off 면 종전 동작. */
@@ -598,6 +600,12 @@ export const CONFIG: Config = {
   // 히트 제목·수종 반응 참고(2026-10-07 사장님 "인기 있는 수종과 주제로") — 프롬프트 참고 블록만. 갈리는 건 수종보다 주제라
   // 수종 점수는 정렬·후순위에 안 쓴다(speciesPopularity 머리말의 실측).
   topicPerfHints: envBool('TOPIC_PERF_HINTS', true),
+  // 채널별 신호 혼합(2026-10-30 사장님 확정) — 인스타 목표일만 후보 정렬 2차 키를 검색량 → 우리 인스타 실적(축×수종, igTopicScore).
+  // 블로그(유튜브 목표일)는 검색량 그대로. 끄면 종전(양쪽 다 검색량).
+  topicIgRank: envBool('TOPIC_IG_RANK', true),
+  // 같은 수종 같은 이야기 기각 + 수종명 키워드 유사 면제(2026-10-30, storyRepeat) — 잘 된 수종은 다른 소재로 다시 나올 수 있고,
+  // 같은 수종·같은 소재는 60일 안에 다시 못 나온다. 끄면 종전(키워드 유사 → 유사 폴백).
+  topicStoryGate: envBool('TOPIC_STORY_GATE', true),
   blogRequireSpecies: envBool('BLOG_REQUIRE_SPECIES', true),
   // 시기·수치 원문 대조(2026-08-27 권고 1) — 활엽수 실사고: 블로그 "근거 확실치 않다" ↔ 쇼츠 "지금이 적기" + 오버레이 "8월".
   timingParity: envBool('TIMING_PARITY', true),
