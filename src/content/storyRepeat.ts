@@ -17,8 +17,10 @@ import { pieceStore } from './pieces';
 export const STORY_WINDOW_DAYS = 60;
 
 /** 소재 — 앞에서부터 먼저 걸리는 것(구체적인 것을 앞에). '꽃이'·'자리'처럼 넓은 말은 뒤에 둔다.
- *  리뷰 반영(2026-10-30): '고르'는 '자리 고르는 법'을 품종으로 잘못 잡아 '품종 고르·묘목 고르'로 좁혔고, '한 그루'(심는 법에도
- *  나옴)·'영양'(영양 성분)·'밑동'(밑동 굵기)·'솎'(열매 솎기)은 다른 이야기를 같은 소재로 묶어 뺐거나 좁혔다. */
+ *  리뷰 반영(2026-10-30): '고르'는 '자리 고르는 법'을 품종으로 잘못 잡아 '묘목 고르'로 좁혔고, '한 그루'(심는 법에도
+ *  나옴)·'영양'(영양 성분)·'밑동'(밑동 굵기)·'솎'(열매 솎기)은 다른 이야기를 같은 소재로 묶어 뺐거나 좁혔다.
+ *  첫 운영 보정(2026-10-30 09시 틱): "블루베리 화분 키우기, …수확합니다"가 '수확'으로, "단풍나무 종류별로 물드는 때"가
+ *  '품종'으로 잡혀 다른 이야기를 막았다 — 화분·단풍을 결실·수확·품종보다 앞으로, 품종(무엇을 살까)과 구별(무엇인지 알아보기)을 갈랐다. */
 export const STORY_SUBJECTS: ReadonlyArray<readonly [string, RegExp]> = [
   ['병해충', /깍지벌레|진딧물|응애|벌레|해충|병해|병충|탄저|흰가루|썩음|부란|노균|곰팡이/],
   ['삽목·접목', /삽목|꺾꽂이|꽂기|접목|접붙|대목/],
@@ -26,20 +28,23 @@ export const STORY_SUBJECTS: ReadonlyArray<readonly [string, RegExp]> = [
   ['월동', /월동|겨울나기|동해|얼기|얼어|보온|밑동 ?덮/],
   ['거름', /거름|비료|시비|퇴비/],
   ['물', /물주기|물 ?주|물 ?간격|관수|과습|배수/],
+  ['화분', /화분|분갈이|베란다|실내/],
+  ['단풍·잎', /단풍|물드|잎 ?색|낙엽/],
   ['활착', /활착|몸살/],
   ['결실', /열매가? ?안|열매 안|결실|낙과|수정|꽃가루|자가|두 품종/],
   ['개화', /꽃 ?(안|이 적|색|눈)|개화|꽃이/],
   ['수확', /수확|따는|익는|당도/],
-  ['품종·구별', /품종|구별|종류|구분|묘목 ?고르/],
+  ['구별', /구별|구분|가려내|가르는|알아보/],
+  ['품종', /품종|종류|묘목 ?고르/],
   ['심기·자리', /심기|심는|심을|식재|이식|옮겨|자리|간격|생울타리|울타리/],
-  ['화분', /화분|분갈이|베란다|실내/],
-  ['단풍·잎', /단풍|물드|잎 ?색|낙엽/],
 ];
 
-/** 제목의 소재(순수). 이야기 글이거나 어느 소재에도 안 걸리면 undefined. */
-export function storySubjectOf(title: string): string | undefined {
-  const t = String(title ?? '');
-  if (!t.trim() || LORE_TOPIC_RE.test(t)) return undefined;
+/** 제목의 소재(순수). 이야기 글이거나 어느 소재에도 안 걸리면 undefined.
+ *  species 를 주면 제목에서 그 이름을 지우고 본다 — '단풍나무'가 '단풍' 소재로 잡히지 않게(2026-10-30 실측). */
+export function storySubjectOf(title: string, species?: string): string | undefined {
+  const raw = String(title ?? '');
+  if (!raw.trim() || LORE_TOPIC_RE.test(raw)) return undefined;
+  const t = species ? raw.split(species).join(' ') : raw;
   return STORY_SUBJECTS.find(([, re]) => re.test(t))?.[0];
 }
 
@@ -51,7 +56,7 @@ export function findStoryRepeat(
   cand: { title: string; species?: string }, priors: readonly StoryPrior[], now = Date.now(), windowDays = STORY_WINDOW_DAYS,
 ): StoryRepeat | null {
   if (!cand.species) return null;
-  const subject = storySubjectOf(cand.title);
+  const subject = storySubjectOf(cand.title, cand.species);
   if (!subject) return null;
   let best: StoryRepeat | null = null;
   for (const p of priors) {
@@ -60,7 +65,7 @@ export function findStoryRepeat(
     if (!Number.isFinite(at)) continue;
     const daysAgo = Math.floor((now - at) / 86_400_000);
     if (daysAgo < 0 || daysAgo >= windowDays) continue;
-    if (storySubjectOf(p.title) !== subject) continue;
+    if (storySubjectOf(p.title, p.species) !== subject) continue;
     if (!best || daysAgo < best.daysAgo) best = { subject, prior: p, daysAgo };
   }
   return best;

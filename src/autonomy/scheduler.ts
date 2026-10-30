@@ -1743,7 +1743,7 @@ export async function proposeContentIdeas(signal?: AbortSignal, opts: { target?:
       // 수종명 키워드 유사 면제는 같은 이야기 판정이 실제로 난 후보만(소재가 잡힘) — 소재 없는 제목은 판정이 없으니 종전 키워드 규칙을
       // 그대로 둔다. 최근 수종(2일 창) 후보도 면제하지 않는다 — 면제하면 유사로 사라지던 어제 수종이 마지막 라운드 후순위로 살아나
       // '이틀 연속 금지'가 느슨해진다(리뷰 2026-10-30).
-      const subjExempt = CONFIG.topicStoryGate && !recentSp && !!storySubjectOf(title);
+      const subjExempt = CONFIG.topicStoryGate && !recentSp && !!storySubjectOf(title, findSpeciesLoose(`${title} ${keyword ?? ''}`)?.name);
       const sim = findSimilarContent({ title, ...(keyword ? { keyword } : {}) }, existing, subjExempt ? { isSubjectKeyword } : {});
       if (sim.length) {
         if (angleOff(demand.line)) continue;   // 유사 폴백도 실검색 각도 안이어야 한다(2026-10-07 마가목 사고)

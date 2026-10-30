@@ -13,6 +13,12 @@ describe('storySubjectOf', () => {
     expect(storySubjectOf('하스카프베리 열매 안 달리는 이유, 두 품종이 답이다')).toBe('결실');
     expect(storySubjectOf('측백나무 생울타리, 몇 그루 필요한지')).toBe('심기·자리');
   });
+  it('첫 운영 보정 — 화분·단풍이 수확·품종보다 먼저, 품종과 구별은 다른 소재(2026-10-30)', () => {
+    expect(storySubjectOf('블루베리 화분 키우기, 마당 없어도 열매를 수확합니다')).toBe('화분');
+    expect(storySubjectOf('단풍나무 종류별로 물드는 때가 이렇게 다릅니다', '단풍나무')).toBe('단풍·잎');
+    expect(storySubjectOf('좁은 마당에 단풍나무, 크기 별 품종 고르기', '단풍나무')).toBe('품종');
+    expect(storySubjectOf('음나무 가시 위치로 겨울에 구별하기')).toBe('구별');
+  });
   it('이야기 글·소재 없는 제목은 판정하지 않는다', () => {
     expect(storySubjectOf('회화나무가 선비의 나무가 된 이유')).toBeUndefined();
     expect(storySubjectOf('')).toBeUndefined();
@@ -25,7 +31,7 @@ describe('storySubjectOf', () => {
     expect(storySubjectOf('모과나무 밑동 굵기')).toBeUndefined();
     expect(storySubjectOf('감나무밑동덮기, 뿌리가 얼기 전에')).toBe('월동');
     expect(storySubjectOf('사과나무 열매가 안 열리는 이유')).toBe('결실');
-    expect(storySubjectOf('사과나무 묘목 고르는 법')).toBe('품종·구별');
+    expect(storySubjectOf('사과나무 묘목 고르는 법')).toBe('품종');
   });
 });
 
