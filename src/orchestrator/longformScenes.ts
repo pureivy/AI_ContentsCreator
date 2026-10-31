@@ -105,7 +105,8 @@ const TAMPERED = '하네스 파일 변조 감지 — 이 묶음 장면을 버림
 const TAMPERED_REPO = '저장소 키트·하네스 소스 변조 감지(이 세션이 고침) — 이 묶음 장면을 버림';
 /** 다시 그리지 않을 탈락 — 작업 폴더 하네스 변조만. 저장소 소스 변조(TAMPERED_REPO)는 장면을 tNN·wNN 으로 다시 그린다. */
 const isTamper = (why: string | undefined): boolean => why === TAMPERED;
-const LIMIT_RX = /hit your (?:\w+ )?limit|usage limit reached/i;
+// '5-hour limit'(2026-11-01 밤나무 편 — 하이픈이 \w 에 안 걸려 기다리지 않고 19장면을 비웠다)까지 [\w-].
+const LIMIT_RX = /hit your (?:[\w-]+ )?limit|usage limit reached/i;
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 /**

@@ -23,7 +23,7 @@
  * 쌓여 사람 눈에 띄는 편이 맞다.
  */
 const TRANSIENT_RE = [
-  /hit your (?:session|usage) limit/i,
+  /hit your (?:[\w-]+ )?limit/i, // session·usage·weekly·'5-hour'(2026-11-01 실측)
   /session limit .*reset/i,
   /rate[_\s-]?limit/i,
   /\b429\b/,
@@ -43,7 +43,7 @@ export function isTransientFailure(err: unknown): boolean {
 export function transientReason(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err ?? '');
   const reset = /resets?\s+([^·\n]+)/i.exec(msg);
-  if (/hit your (?:session|usage) limit|usage limit reached/i.test(msg)) {
+  if (/hit your (?:[\w-]+ )?limit|usage limit reached/i.test(msg)) {
     return `LLM 사용 한도${reset ? ` — 해제 ${reset[1]!.trim()}` : ''}`;
   }
   if (/rate[_\s-]?limit|\b429\b|overloaded/i.test(msg)) return 'LLM 혼잡(재시도로 해소)';

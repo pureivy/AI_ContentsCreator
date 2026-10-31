@@ -333,6 +333,9 @@ describe('구독 세션 한도 — 기다렸다 빠진 장면만 다시', () => 
     expect(sessionLimitReset(LIMIT, new Date(2026, 9, 25, 4, 0))).toEqual(new Date(2026, 9, 26, 3, 0));
     expect(sessionLimitReset("You've hit your limit · resets 11:30pm", new Date(2026, 9, 25, 20, 0))).toEqual(new Date(2026, 9, 25, 23, 30));
     expect(sessionLimitReset("You've hit your session limit", new Date(2026, 9, 25, 2, 0))).toEqual(new Date(2026, 9, 25, 3, 0));
+    // 2026-11-01 밤나무 편 실측 문구 — 하이픈 낀 한도 이름
+    expect(sessionLimitReset("You've hit your 5-hour limit · resets 5am (Asia/Seoul)", new Date(2026, 10, 1, 1, 30))).toEqual(new Date(2026, 10, 1, 5, 0));
+    expect(agentTail(undefined, "You've hit your 5-hour limit · resets 5am (Asia/Seoul)\n", '')).toBe("You've hit your 5-hour limit · resets 5am (Asia/Seoul)");
     expect(sessionLimitReset('{"ok":true}', new Date())).toBeNull();
     expect(sessionLimitReset(undefined, new Date())).toBeNull();
   });

@@ -13,6 +13,8 @@ describe('isTransientFailure — 시간이 풀어 주는 실패', () => {
 
   it.each([
     ['사용량 한도', 'usage limit reached · resets 3pm'],
+    ['5시간 한도', "You've hit your 5-hour limit · resets 5am (Asia/Seoul)"],
+    ['주간 한도', "You've hit your weekly limit · resets Nov 5, 3am"],
     ['429', 'HTTP 429 Too Many Requests'],
     ['혼잡', 'Error: overloaded_error'],
     ['rate limit', 'rate_limit_error'],
