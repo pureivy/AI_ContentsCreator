@@ -165,6 +165,35 @@ async function factCheckFields(layout: CardLayout, source: string, flagged: read
   return l;
 }
 
+/**
+ * 겹침 미달 칸 글 뜻 대조(2026-11-03) — 바이그램 포함률은 어미·조사·동의어가 바뀌면 크게 떨어진다
+ * ("땅에 심은 나무는 비와 눈으로 어느 정도 해결됩니다" → "노지는 비·눈으로 해결돼요" 0.40). 블루베리 겨울 카드에서
+ * 원문을 줄인 칸 15개가 이 이유로 버려져 7장 중 6장이 사진 판으로 내려갔다. 원문 한 문장을 줄인 것뿐인 칸만 살린다.
+ * 살린 칸도 뒤의 칸 사실 대조(factCheckFields)를 그대로 거친다. 실패하면 빈 집합(종전대로 버림).
+ */
+export async function rescueFields(texts: readonly string[], source: string, signal?: AbortSignal): Promise<Set<string>> {
+  const list = texts.slice(0, 30);
+  if (!list.length || !source.trim()) return new Set();
+  const j = await microJSON<{ ok?: unknown }>(stdModel(),
+    '당신은 카드뉴스 칸 글 검수자입니다. 요청된 JSON 스키마만 출력합니다.',
+    [
+      `[블로그 원문]\n${source.slice(0, 6000)}`,
+      '',
+      '[칸 글]',
+      ...list.map((t, i) => `${i + 1}. ${t}`),
+      '',
+      '각 칸 글이 원문의 한 문장(또는 붙어 있는 두 문장)을 줄이거나 어미·낱말만 바꿔 말한 것인지 판정하라.',
+      '통과: 원문이 말한 사실 그대로(동의어 바꿈·어미 바꿈·생략 가능 — 예 "땅에 심은 나무"→"노지", "됩니다"→"돼요").',
+      '탈락: 원문에 없는 사실·이유·결과·조건을 더함, 원문의 유보("보통", "~할 수 있다", "경우가 많다")를 단정으로 바꿈, 원문과 뜻이 다름, 원문 여러 곳을 엮어 새 주장을 만듦.',
+      '짧은 꼬리말(예 "거실 금지", "가지 탄력")은 원문이 그 내용을 말하면 통과.',
+      'JSON 형식: {"ok":[통과한 칸 번호들]}',
+    ].join('\n'),
+    { maxOutputTokens: 200, signal },
+  ).catch(() => null);
+  const nums = Array.isArray(j?.ok) ? j.ok.map((x) => Math.floor(Number(x))) : [];
+  return new Set(nums.filter((k) => k >= 1 && k <= list.length).map((k) => list[k - 1]!));
+}
+
 /** 사진 자리 모으기 — 장 순서대로 PhotoRef 를 꺼낸다(gen 은 상한까지만 남기고 나머지는 지운다). */
 function collectGen(l: CardLayout, max: number): Array<{ ref: Extract<PhotoRef, { use: 'gen' }>; slide: number }> {
   const out: Array<{ ref: Extract<PhotoRef, { use: 'gen' }>; slide: number }> = [];
@@ -282,7 +311,13 @@ export async function designHtmlCards(o: {
   let raw = await o.callJSON<unknown>(sys, user, 3000);
   if (!raw) raw = await o.callJSON<unknown>(sys, `${user}\n\n반드시 완결된 JSON 하나만 출력하라.`, 3000);
   try { fs.writeFileSync(path.join(dir, 'layout-raw.json'), JSON.stringify(raw, null, 2), 'utf-8'); } catch { /* 진단용 */ }
-  let layout = normalizeLayout(raw, plan, writerSrc, blog.length);
+  const rejected = new Set<string>();
+  let layout = normalizeLayout(raw, plan, writerSrc, blog.length, undefined, { rejected });
+  const approved = await rescueFields([...rejected], writerSrc, o.signal);
+  if (approved.size) {
+    layout = normalizeLayout(raw, plan, writerSrc, blog.length, undefined, { approved });
+    say(`카드 칸 원문 뜻 대조 — 겹침 미달 ${rejected.size}칸 중 ${approved.size}칸 살림`);
+  } else if (rejected.size) say(`카드 칸 원문 뜻 대조 — 겹침 미달 ${rejected.size}칸, 살린 칸 없음`);
   say(`카드 판형 — ${layout.slides.map((s) => s.kind).join('·')}`);
   layout = await factCheckFields(layout, source, o.sourceFlagged ?? [], say, o.signal);
 
@@ -311,6 +346,28 @@ export async function designHtmlCards(o: {
       gens++; swapped.push(m.slide + 1);
     }
     say(`카드 실촬영 내용 대조 — ${mism.map((m) => `${m.slide + 1}번 장(${m.why.slice(0, 24)})`).join(', ')}${swapped.length ? ` → ${swapped.join(',')}번 장 새로 그림` : ' · 새 사진 몫 소진, 그대로'}`);
+  }
+  // 판이 내려가 사진 없이 남은 photo 판 — 안 쓴 블로그 사진, 그다음 새 사진(상한 안에서)으로 먼저 채운다(2026-11-03).
+  // 실측: 블루베리 겨울 카드(card_734fb18f1d)는 칸 원문 대조로 7장 중 6장이 photo 판으로 내려갔는데 새 사진은 1장만 그렸고
+  // (상한 6장), 빈 장은 생성 뒤에야 블로그 사진 3장을 두 번씩 돌려 채워 같은 사진이 두 번 나오고 8번 장은 글만 남았다.
+  {
+    const used = new Map<number, number>();
+    const mark = (r: PhotoRef | undefined): void => { if (r?.use === 'blog') used.set(r.n, (used.get(r.n) ?? 0) + 1); };
+    let gens = 0;
+    layout.slides.forEach((s) => {
+      mark(s.photo); s.items?.forEach((it) => mark(it.photo)); s.photos?.forEach((p) => mark(p.photo));
+      if (s.photo?.use === 'gen') gens++; s.items?.forEach((it) => { if (it.photo?.use === 'gen') gens++; }); s.photos?.forEach((p) => { if (p.photo?.use === 'gen') gens++; });
+    });
+    const filled: number[] = [];
+    layout.slides.forEach((s, i) => {
+      if (s.kind !== 'photo' || s.photo) return;
+      const fresh = blog.find((b) => !used.get(b.n));
+      if (fresh) { s.photo = { use: 'blog', n: fresh.n }; used.set(fresh.n, 1); return; }
+      if (gens >= CARD_MAX_GEN) return;
+      s.photo = { use: 'gen', scene: (`${s.title}${s.lead ? ` — ${s.lead.replace(/\s*\n\s*/g, ' ')}` : ''} 를 그대로 보여 주는 장면`).slice(0, 160) };
+      gens++; filled.push(i + 1);
+    });
+    if (filled.length) say(`카드 빈 사진 판 — ${filled.join(',')}번 장 새로 그림`);
   }
   const gen = collectGen(layout, CARD_MAX_GEN);
   const genPath = new Map<Extract<PhotoRef, { use: 'gen' }>, string>();

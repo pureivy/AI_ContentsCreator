@@ -149,6 +149,30 @@ export function parsePhotoRef(raw: unknown, blogCount: number, fileRoot?: string
  * 판형 정리·검증(순수, 테스트 대상) — LLM 이 낸 판형을 기획 장 수에 맞추고, 원문에서 뽑지 않은 칸은 버리고,
  * 칸이 모자란 판은 한 단계 단순한 판으로 내린다. 제목·본문은 기획 문구 그대로(이미 사실 게이트를 거쳤다).
  */
+/**
+ * 판형 응답을 기획 장에 맞춘다(순수, 2026-11-03). 블루베리 겨울 카드(card_734fb18f1d)는 6번 장부터 칸이 한 장씩 밀려
+ * "한파 뒤 세 곳" 체크 칸이 7번 장, 9번 장 내용(끝가지·밑동 새순)이 8번 장에 붙었다.
+ * 응답 장마다 "for"(기획 제목)를 받아 그 제목의 장으로 옮긴다. 제목이 안 맞는 장은 빈 판(→ photo 판, 사진은 뒤에서 채운다).
+ * "for" 가 절반 미만이면 종전대로 순서로 맞춘다. (칸 글 겹침으로 엉뚱한 장을 거르는 안은 지난 카드 39편 중 3편에서 걸렸는데
+ * 대추나무 4번 장처럼 앞 장 낱말을 이어 쓴 정상 칸까지 버려 기각.)
+ */
+export function alignRawSlides(rs: readonly unknown[], plan: ReadonlyArray<{ headline: string; body: string }>): Array<Record<string, unknown>> {
+  const norm = (t: string): string => t.replace(/[\s.,·!?~'"“”‘’:;…-]/g, '');
+  const raw = plan.map((_, i) => ((rs[i] ?? {}) as Record<string, unknown>));
+  const all = rs.map((x) => (x ?? {}) as Record<string, unknown>);
+  const tagged = all.map((x) => norm(String(x.for ?? '')));
+  if (tagged.filter(Boolean).length < Math.ceil(plan.length / 2)) return raw;
+  const out: Array<Record<string, unknown> | undefined> = plan.map(() => undefined);
+  const placed = new Set<number>();
+  all.forEach((x, j) => {
+    const i = tagged[j] ? plan.findIndex((p) => norm(p.headline) === tagged[j]) : -1;
+    if (i >= 0 && !out[i]) { out[i] = x; placed.add(j); }
+  });
+  // 제목이 안 맞는 장(제목을 조금 바꿔 적음·for 없음)은 비어 있는 제자리로 — 제목이 다른 장을 가리켜 이미 놓였으면 버린다.
+  all.forEach((x, j) => { if (!placed.has(j) && j < plan.length && !out[j] && (!tagged[j] || !plan.some((p) => norm(p.headline) === tagged[j]))) out[j] = x; });
+  return out.map((x) => x ?? {});
+}
+
 export function normalizeLayout(
   raw: unknown,
   plan: { title: string; slides: ReadonlyArray<{ headline: string; body: string }> },
@@ -156,14 +180,25 @@ export function normalizeLayout(
   blogCount: number,
   /** 'file' 사진을 받을 폴더(수정 요청 재렌더 때 카드 폴더). 없으면 file 사진은 받지 않는다. */
   fileRoot?: string,
+  /** 원문 겹침 판정 보조(2026-11-03) — approved: 겹침은 모자라도 뜻 대조로 원문 그대로라고 확인된 칸 글.
+   *  rejected: 겹침 미달로 버린 칸 글을 모은다(원문에 없는 수치·월이 든 글은 빼고) — 뜻 대조에 넘길 후보. */
+  check?: { approved?: ReadonlySet<string>; rejected?: Set<string> },
 ): CardLayout {
   const r = (raw ?? {}) as { series?: unknown; slides?: unknown[] };
   const rs = Array.isArray(r.slides) ? r.slides : [];
   const sents = sourceSentences(source);
-  const ok = (t: string): boolean => !source.trim() || extractOk(t, source, sents);
+  const ok = (t: string): boolean => {
+    if (!source.trim()) return true;
+    const tt = t.trim();
+    if (tt && check?.approved?.has(tt)) return true;
+    const pass = extractOk(tt, source, sents);
+    if (!pass && tt && check?.rejected && !introducesNewFacts(source, tt)) check.rejected.add(tt);
+    return pass;
+  };
   const total = plan.slides.length;
+  const aligned = alignRawSlides(rs, plan.slides);
   const slides = plan.slides.map((ps, i): LayoutSlide => {
-    const x = (rs[i] ?? {}) as Record<string, unknown>;
+    const x = aligned[i] ?? {};
     const title = ps.headline;
     const lead = ps.body.split('\n').map((x) => x.trim()).filter(Boolean).join('\n') || undefined;
     const accentRaw = fitCap(x.accent, CAPS.accent);
@@ -186,7 +221,8 @@ export function normalizeLayout(
       const items = (Array.isArray(x.items) ? x.items : []).slice(0, 4).flatMap((it) => {
         const o = (it ?? {}) as Record<string, unknown>;
         const t = fitCap(o.title, CAPS.itemTitle); const text = fitCap(o.text, CAPS.itemText);
-        if (!t || !text || !ok(`${t} ${text}`) || !ok(text)) return [];
+        const both = [ok(`${t} ${text}`), ok(text)]; // 둘 다 본다 — 겹침 미달 후보(rejected)에 낱 글도 올라가야 뜻 대조로 살릴 수 있다
+        if (!t || !text || !both.every(Boolean)) return [];
         const label = fitCap(o.label, CAPS.itemLabel); const emoji = oneEmoji(o.emoji); const ph = parsePhotoRef(o.photo, blogCount, fileRoot);
         return [{ title: t, text, ...(label ? { label } : {}), ...(emoji ? { emoji } : {}), ...(ph ? { photo: ph } : {}) }];
       });
@@ -208,7 +244,10 @@ export function normalizeLayout(
     if (kind === 'pair') {
       const photos = (Array.isArray(x.photos) ? x.photos : []).slice(0, 2).flatMap((p) => {
         const o = (p ?? {}) as Record<string, unknown>;
-        const ph = parsePhotoRef(o.photo, blogCount, fileRoot); const label = fitCap(o.label, CAPS.pairLabel);
+        // 사진 자리를 한 겹 펴서 내는 경우도 받는다 — {"use":"gen","photo":"장면","label"} · {"use":"blog","n":2,"label"}(블루베리 겨울 카드 2026-11-03, 판이 통째로 버려졌다).
+        const flat = o.use !== undefined && (o.photo === undefined || typeof o.photo === 'string')
+          ? { ...o, ...(o.use === 'gen' && o.scene === undefined && typeof o.photo === 'string' ? { scene: o.photo } : {}) } : o.photo;
+        const ph = parsePhotoRef(flat, blogCount, fileRoot); const label = fitCap(o.label, CAPS.pairLabel);
         return ph && label ? [{ photo: ph, label }] : [];
       });
       const cards = (Array.isArray(x.cards) ? x.cards : []).slice(0, 2).flatMap((c) => {
@@ -355,7 +394,7 @@ export function layoutPrompt(a: {
     '사진이 들어가는 판(cover·photo·compare·pair·numbers)은 사진을 반드시 넣어라 — 맞는 블로그 사진이 없으면 gen 으로. 사진 없이 글만 있는 photo 판은 빈 화면처럼 보인다. 같은 블로그 사진을 연달아 쓰지 마라.',
     '장면 묘사·must_show 는 원문이 말한 모습대로(삽수는 잎 없는 맨가지, 묘목은 원문이 말한 나이·크기). 칼·가위·톱은 그리지 마라.',
     '',
-    `JSON 형식: {"series":"카드 상단 머리말 12자(예 \\"산길 나무 구별 노트\\")","slides":[{"kind":"cover","accent":"제목 안에서 강조할 낱말(제목에 있는 그대로)","kicker":"...","photo":{...}}, ...]} — slides 는 정확히 ${n}개, 순서대로.`,
+    `JSON 형식: {"series":"카드 상단 머리말 12자(예 \\"산길 나무 구별 노트\\")","slides":[{"for":"1번 장 기획 제목 그대로","kind":"cover","accent":"제목 안에서 강조할 낱말(제목에 있는 그대로)","kicker":"...","photo":{...}}, ...]} — slides 는 정확히 ${n}개, 순서대로. 장마다 "for" 에 그 장 기획 제목을 그대로 적고, 칸은 그 장 제목·본문을 설명하는 것만 — 다음 장 내용을 앞당기거나 두 장을 한 장에 합치지 마라.`,
   ].filter(Boolean).join('\n');
 }
 

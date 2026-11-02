@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  normalizeLayout, insideDir, coverage, sourceSentences, extractOk, monthMentioned, parsePhotoRef, layoutFields, dropFields, parityKeys, oneEmoji, toRenderSpec, genPhotoPrompt, dedupeBlogPhotos, realPhotoSlots,
+  normalizeLayout, alignRawSlides, insideDir, coverage, sourceSentences, extractOk, monthMentioned, parsePhotoRef, layoutFields, dropFields, parityKeys, oneEmoji, toRenderSpec, genPhotoPrompt, dedupeBlogPhotos, realPhotoSlots,
 } from './cardLayout';
 
 // 감나무 잎 구별 글(2026-10-12)에서 줄인 원문 — 카드 칸은 여기서만 뽑아야 한다.
@@ -205,5 +205,43 @@ describe('realPhotoSlots — 표지 밖 실촬영 칸만 내용 대조(2026-10-1
     ] } as never;
     const blog = [{ n: 1, path: 'a', alt: '', real: true }, { n: 2, path: 'b', alt: '', real: true }, { n: 3, path: 'c', alt: '', real: false }];
     expect(realPhotoSlots(layout, blog)).toEqual([{ slide: 1, n: 2 }]);
+  });
+});
+
+describe('칸 글 장 맞춤·뜻 대조 후보·pair 사진 형식 — 블루베리 겨울 카드 2026-11-03', () => {
+  it('for(기획 제목)로 밀린 장을 제자리로, 제목을 조금 바꿔 적은 장은 제자리 유지', () => {
+    const a = alignRawSlides([
+      { for: '산길의 작은 감, 감나무일까요?', kind: 'cover' },
+      { for: '산에 선 감나무는 큽니다', note: 'B' }, // 3번 장 내용이 2번 자리에
+      { for: '세 군데로 알아봅니다', note: 'A' },
+      { for: '이번 주말, 이 순서로!', kind: 'steps' }, // 문장부호만 다름
+    ], PLAN.slides);
+    expect(a.map((x) => x.note ?? x.kind)).toEqual(['cover', 'A', 'B', 'steps']);
+  });
+  it('for 가 절반 미만이면 순서대로', () => {
+    const a = alignRawSlides([{}, { note: 'X' }, { note: 'Y' }, {}], PLAN.slides);
+    expect(a.map((x) => x.note)).toEqual([undefined, 'X', 'Y', undefined]);
+  });
+  it('겹침 미달 칸은 rejected 에 모이고(제목+글·낱 글 모두), approved 면 살아난다', () => {
+    const raw = { slides: [{}, { kind: 'points', items: [
+      { title: '잎 테두리', text: '가장자리가 매끈해요' }, { title: '껍질', text: '흑회색, 잘게 갈라져요' },
+    ] }, {}, {}] };
+    const rejected = new Set<string>();
+    expect(normalizeLayout(raw, PLAN, SRC, 0, undefined, { rejected }).slides[1]!.kind).toBe('photo');
+    expect(rejected.has('가장자리가 매끈해요')).toBe(true);
+    const l = normalizeLayout(raw, PLAN, SRC, 0, undefined, { approved: rejected });
+    expect(l.slides[1]!.kind).toBe('points');
+  });
+  it('원문에 없는 수치가 든 칸은 뜻 대조 후보에도 올리지 않는다', () => {
+    const rejected = new Set<string>();
+    normalizeLayout({ slides: [{}, { kind: 'compare', bad: { label: '키', text: '20m까지 자라요' }, good: { label: '잎', text: '광택' } }, {}, {}] }, PLAN, SRC, 0, undefined, { rejected });
+    expect([...rejected].some((t) => t.includes('20m'))).toBe(false);
+  });
+  it('pair 사진 자리를 한 겹 펴서 낸 응답도 받는다', () => {
+    const l = normalizeLayout({ slides: [{}, { kind: 'pair',
+      photos: [{ use: 'gen', photo: '손바닥 위 매끈한 감나무 잎 한 장', label: '잎' }, { use: 'blog', n: 1, label: '껍질' }],
+      cards: [{ label: '잎', text: '톱니가 없고 광택이 나요' }, { label: '껍질', text: '흑회색, 잘게 갈라져요' }] }, {}, {}] }, PLAN, SRC, 1);
+    expect(l.slides[1]!.kind).toBe('pair');
+    expect(l.slides[1]!.photos?.[0]!.photo).toMatchObject({ use: 'gen', scene: '손바닥 위 매끈한 감나무 잎 한 장' });
   });
 });
