@@ -147,6 +147,9 @@ export interface Config {
   readonly factSupply: boolean;
   /** 고유 사실 하한 — 자율 런이 이 미만이면 집필 보류·주제 교체(사용자 런은 표시만). */
   readonly factMinSpecific: number;
+  /** 수종 특성 조언(2026-11-03) — 사실 공급에 주제 질의 2개, 같은 수종 최근 글에 쓴 도감 사실 빼기, 작가 지침,
+   *  초안의 '수종 이름만 바꿔도 맞는 조언' 검사와 수정 1회. off 면 종전(주제 질의 포함 전부 끔). */
+  readonly speciesAdvice: boolean;
   /** 60분 창 안의 사실 부족 재시도 상한 — 창 안에서 N번째까지 즉시 다음 주제로 재시도하고, 그 뒤는 그 주기를 건너뛴다(알림은 창당 1회). */
   readonly factSupplyRetry: number;
   /** 사실 부족 수종 재제안 금지 창(일). */
@@ -586,6 +589,7 @@ export const CONFIG: Config = {
   // 사실 공급(2026-09-17) — 사실 카드에 식물 사실이 평균 3건(9편은 0건)이라 작가가 일반론으로 채우던 실측 대응.
   factSupply: envBool('FACT_SUPPLY', true),
   factMinSpecific: Math.min(Math.max(1, envInt('FACT_MIN_SPECIFIC', 5)), 20),
+  speciesAdvice: envBool('SPECIES_ADVICE', true),
   factSupplyRetry: Math.min(Math.max(0, envInt('FACT_SUPPLY_RETRY', 2)), 5),
   factStarvedDays: Math.min(Math.max(0, envInt('FACT_STARVED_DAYS', 14)), 90),
   // 이야기 사실 하한(2026-09-18) — 마가목 실측: 총 20건이라 통과했지만 이야기 3건뿐(설화 0건)이라 '설화' 딱지만 붙은 재배 글이 됐다.

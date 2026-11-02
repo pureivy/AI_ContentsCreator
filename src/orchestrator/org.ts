@@ -30,7 +30,8 @@ import { hasBoldSummaryRule, brandContext, activeBrandSlug, getBrand, lexiconGui
 import { priorCoverageBrief, recentStyleToAvoid, recentPhrasesToAvoid, recentLexemesToAvoid, recentBlogEndings } from '../content/priorCoverage';
 import { recentModulesToAvoid, moduleAvoidBlock } from '../content/contentModules';
 import { collectExistingContent } from '../content/novelty';
-import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard, writeBriefGate, writeFactSupply, writeReadability } from '../sessions/digest';
+import { writeResearchBrief, readResearchBrief, readResearchBriefWithFallback, writeFactGate, writeStyleLint, writeFactCard, readFactCard, writeBriefGate, writeFactSupply, writeReadability, writeSpeciesAdvice, readFactSupply } from '../sessions/digest';
+import { recentSpeciesBodies, factsUsedIn, speciesAdviceGuide, speciesAdviceNeed, speciesAdvicePrompt, parseSpeciesAdvice, speciesAdviceFeedback } from '../content/speciesAdvice';
 import { supplyFacts, factSupplyBlock } from '../content/factSupply';
 import type { FactSupplyResult } from '../content/factSupply';
 import { isLoreTopic } from '../content/loreTopic';
@@ -292,9 +293,11 @@ export async function writeBlogBody(a: {
   /** 이번 런 구조 시드의 예고 온오프 — true 면 genreGuide 의 '예고로 닫지 마라'를 빼 structure 블록과의 충돌을 막는다.
    *  골격을 유지만 하는 라운드(문체 린트·사실 게이트 수정, 리비전)는 넘기지 않는다 — 금지 문장이 그대로 살아 있는 편이 맞다. */
   teaser?: boolean;
+  /** 수종 특성 조언 지침(2026-11-03) — 새 집필 때만 컨텍스트에 붙는다(mustFix 는 '쓰지 마라' 반려 블록이라 따로 둔다). */
+  speciesGuide?: string;
   signal?: AbortSignal;
 }): Promise<string> {
-  const { bus, writer, model, topic, brief, critiqueText, mustFix, serpText, revise, personaGuide, keyword, microModel, factCard, structure = '', teaser, signal } = a;
+  const { bus, writer, model, topic, brief, critiqueText, mustFix, serpText, revise, personaGuide, keyword, microModel, factCard, structure = '', teaser, speciesGuide, signal } = a;
   const brandSlug = activeBrandSlug() || undefined;
   // 같은 주제 기존 글이 있으면 '관점을 완전히 다르게' 지시를 주입(revise 는 자기 초안 개정이라 제외).
   let priorCoverage = revise ? '' : priorCoverageBrief('블로그', topic, keyword, { brandSlug });
@@ -463,7 +466,7 @@ export async function writeBlogBody(a: {
       // 재집필은 검수 의견을 뺀다(같은 벽에 다시 부딪히지 않게) — 그러나 mustFixBlock 은 **남긴다**.
       // 이건 품질 조언이 아니라 '무근거 기입을 쓰지 마라'는 금지라, 여기서 빠지면 퇴화 재집필 경로가
       // 게이트의 구멍이 된다(브리프에 남은 무근거 주장이 그대로 본문에 실린다).
-      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, moduleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms), editorRulesGuide(), varietyGuide(`${topic} ${keyword ?? ''}`), keywordWritingGuide(keyword), brief ? `[리서치·SEO 브리프]\n${brief}` : '', mustFixBlock].filter(Boolean).join('\n\n'),
+      context: revise ? reviseContext : [factCard ? `${FACT_CARD_HEADER}\n${factCard}` : '', structure, priorCoverage, styleAvoid, moduleAvoid, phraseAvoid, lexemeAvoid, lexiconGuide(getBrand()?.avoidJargon, getBrand()?.keepTerms), editorRulesGuide(), varietyGuide(`${topic} ${keyword ?? ''}`), keywordWritingGuide(keyword), speciesGuide ? `[수종 특성 조언]\n${speciesGuide}` : '', brief ? `[리서치·SEO 브리프]\n${brief}` : '', mustFixBlock].filter(Boolean).join('\n\n'),
       stage: 'synthesis', emitSpawn: false, blockId: 'ceo-synth', systemExtra: personaGuide,
       groundQuery: topic, groundWikiOnly: true, groundLimit: 3, groundForFacts: true, maxOutputTokens: 5000, signal,
     });
@@ -920,6 +923,9 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   // 사실을 브리프 끝에 붙이고, 자율 런은 기준 미만이면 집필하지 않는다(주제 교체는 main.ts·scheduler 몫).
   // writeResearchBrief 앞이어야 한다 — 리비전이 research_brief.md 를 재주입하므로 블록이 파일에 함께 남아야 한다.
   let factSupply: FactSupplyResult | null = null;   // 사실 카드 병합(아래)이 다시 본다
+  let supplyBlock = '';                             // 브리프·사실 카드가 같은 블록을 본다(최근 글 도감 사실 빼기 반영)
+  let speciesGuide = '';
+  let evidenceExtra = '';                           // 뺀 도감 사실 — 작가에겐 안 주되 사실 게이트 근거에는 남긴다(코드 리뷰 2026-11-03)
   if (CONFIG.factSupply && !research && brief.trim()) {
     const fsr = await supplyFacts({ topic, keyword: opts.keyword, model: assign.standard, signal });
     factSupply = fsr;
@@ -932,7 +938,22 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
       : `사실 공급 — "${fsr.subject}" 고유 사실 ${fsr.specificCount}건(재배 ${cult}·이야기 ${lore}) / 검색 결과 ${fsr.resultCount}건 / 질의 ${fsr.queries.length}개`;
     console.log(`[사실공급] ${line}`);
     bus.emit('log', { message: line });
-    const block = fsr.status === 'ok' ? factSupplyBlock(fsr) : '';
+    // 수종 특성 조언(2026-11-03) — 같은 수종 최근 60일 글에 이미 쓴 도감 사실은 작가에게 다시 주지 않는다(주제 고유 사실은 예외).
+    let skip: Set<string> | undefined;
+    if (fsr.status === 'ok' && CONFIG.speciesAdvice && fsr.species) {
+      const aliases = [...(findSpeciesLoose(fsr.species)?.aliases ?? [])];
+      skip = factsUsedIn(
+        fsr.facts.filter((f) => f.specific && !f.topical).map((f) => f.text),
+        recentSpeciesBodies(fsr.species, { aliases, brand: activeBrandSlug() || undefined, excludeRunId: bus.runId }),
+        0.6, [fsr.species, ...aliases],
+      );
+      evidenceExtra = factSupplyBlock({ ...fsr, facts: fsr.facts.filter((f) => skip!.has(f.text)) }).split('\n').slice(1).join('\n');
+      const topical = fsr.facts.filter((f) => f.specific && f.topical).length;
+      bus.emit('log', { message: `수종 특성 — 주제 "${fsr.angle ?? ''}" 고유 사실 ${topical}건 · 최근 같은 수종 글에 쓴 도감 사실 ${skip.size}건은 빼고 넘김` });
+      speciesGuide = speciesAdviceGuide(fsr.species, fsr.angle);
+    }
+    const block = fsr.status === 'ok' ? factSupplyBlock(fsr, skip) : '';
+    supplyBlock = block;
     if (block) brief = `${brief}\n\n${block}`;
     if (fsr.status === 'ok' && fsr.specificCount < CONFIG.factMinSpecific) {
       // 수종 없는 소재는 엄격 런이라도 던지지 않는다(최종 리뷰 I3) — 표시만 하고 집필한다.
@@ -967,7 +988,7 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
     factCard = extracted.card;
     // 공급 사실은 카드에 그대로(최종 리뷰 I2) — 브리프 끝의 블록은 게이트 근거 절단(12K자) 밖에 놓이기 일쑤고, LLM 카드는
     // 25줄 상한에 출처를 의역·URL 을 떨어뜨린다. 결정적으로 덧붙여 영속 카드·작가·게이트 근거가 같은 줄을 본다.
-    const supplied = factSupply?.status === 'ok' ? factSupplyBlock(factSupply).split('\n').slice(1) : [];   // 헤더 제외
+    const supplied = supplyBlock ? supplyBlock.split('\n').slice(1) : [];   // 헤더 제외
     factCard = mergeSuppliedFacts(factCard, supplied);
     if (factCard) {
       try { writeFactCard(bus.runId, factCard); }
@@ -991,7 +1012,14 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
   // 킬스위치는 '뽑기'만이 아니라 '주입'까지 지배한다(Fix wave 소견 2) — off 면 블록을 아예 넣지 않고
   // 작가 지침도 base 문구로 돌아간다(blogBodyGuide). 시드 영속화는 그대로 둔다(리비전 승계 계약 불변).
   const structure = structureSeed && CONFIG.structureVariety ? structureBlock(structureSeed) : '';
-  const body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, mustFix, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, microModel: assign.micro, factCard: factCard || undefined, structure, teaser: structureSeed?.teaser, signal });
+  let body = research ? '' : await writeBlogBody({ bus, writer, model: writerModel, topic, brief, critiqueText: critiqueText || undefined, mustFix, serpText, personaGuide: personaPrompt(opts.persona, opts.personaText), keyword: opts.keyword, microModel: assign.micro, factCard: factCard || undefined, structure, teaser: structureSeed?.teaser, speciesGuide: speciesGuide || undefined, signal });
+  if (body && body.trim() !== brief.trim() && CONFIG.speciesAdvice && factSupply?.status === 'ok' && factSupply.species && !signal?.aborted) {
+    body = await reviseForSpeciesAdvice({
+      bus, writer, model: writerModel, checkModel: assign.standard, topic, brief, keyword: opts.keyword, factCard: factCard || undefined,
+      personaGuide: personaPrompt(opts.persona, opts.personaText), species: factSupply.species,
+      factLines: supplyBlock.split('\n').slice(1).filter((l) => /^- \[(이 주제|재배)\]/.test(l)), body, signal,
+    });
+  }
   const finalDeliverable = body || brief || usableTeams.map((t) => t.deliverable).join('\n\n');
 
   return packageDesignFinalize({
@@ -1000,8 +1028,45 @@ export async function runOrg(bus: EventBus, opts: RunOptions): Promise<RunOutcom
     // 제목 형식(2026-10-02) — 블록 주입과 같은 조건(킬스위치 off 면 넘기지 않아 포장 프롬프트가 종전 그대로).
     titleForm: structureSeed && CONFIG.structureVariety ? structureSeed.titleForm : undefined,
     mission: opts.mission, writer, personaGuide: personaPrompt(opts.persona, opts.personaText), factCard: factCard || undefined,
+    evidenceExtra: evidenceExtra || undefined,
     pieceId: opts.pieceId, signal,
   });
+}
+
+/**
+ * 수종 특성 조언 검사·수정 1회(2026-11-03) — 초안의 조언 중 수종 이름을 바꾸면 달라지는 것이 2개 미만이면, 공급 사실
+ * 안에서 수종 특성 조언으로 바꾸라고 작가에게 한 번 돌려보낸다. 구조·분량 가드(styleRevisionReject)에 걸리면 원문 유지.
+ * 비차단·fail-open — 검사 실패는 원문 그대로. 문체 린트·사실 게이트는 이 뒤에 돈다(바뀐 본문을 판정).
+ */
+async function reviseForSpeciesAdvice(a: {
+  bus: EventBus; writer: Parameters<typeof runAgent>[0]['role']; model: string; checkModel: string; topic: string; brief: string;
+  keyword?: string; factCard?: string; personaGuide?: string; species: string; factLines: string[]; body: string; signal?: AbortSignal;
+}): Promise<string> {
+  const check = async (b: string) => parseSpeciesAdvice(await microJSON<unknown>(a.checkModel,
+    '당신은 원예 콘텐츠 편집자입니다. 요청된 JSON 스키마만 출력합니다.', speciesAdvicePrompt(b, a.species),
+    { maxOutputTokens: 1500, signal: a.signal }).catch(() => null));
+  const before = await check(a.body);
+  if (!before) { a.bus.emit('log', { message: '수종 특성 조언 검사 실패(무해) — 본문 유지' }); return a.body; }
+  // 기준 — 2개 이상이면서 조언의 30% 이상(16편 평균 28%). 대추 활착 글(15개 중 3개)이 2개 기준으론 그냥 통과했다.
+  const NEED = speciesAdviceNeed(before.items.length);
+  let body = a.body; let after = before; let verdict = '통과';
+  if (before.specific < NEED && a.factLines.length) {
+    try {
+      const revised = await writeBlogBody({
+        bus: a.bus, writer: a.writer, model: a.model, topic: a.topic, brief: a.brief, personaGuide: a.personaGuide, keyword: a.keyword, factCard: a.factCard,
+        structure: CONFIG.structureVariety ? STRUCTURE_KEEP_BLOCK : '',
+        revise: { baseBody: a.body, feedback: speciesAdviceFeedback(a.species, before, a.factLines, NEED) },
+        signal: a.signal,
+      });
+      const reject = styleRevisionReject(a.body, revised);
+      if (reject) verdict = `수정 폐기: ${reject}`;
+      else { body = revised; verdict = '수정 1회'; const re = await check(body); if (re) after = re; else verdict = '수정 1회 · 재검사 실패'; }
+    } catch (e) { verdict = `수정 실패: ${e instanceof Error ? e.message : String(e)}`; }
+  } else if (before.specific < NEED) verdict = '쓸 수종 사실 없음 — 그대로';
+  const m = `[수종특성] 블로그 — 수종 고유 조언 ${before.specific}/${before.items.length} → ${after.specific}/${after.items.length}(기준 ${NEED} · ${verdict})`;
+  console.log(m); a.bus.emit('log', { message: m });
+  try { writeSpeciesAdvice(a.bus.runId, { species: a.species, before, after, verdict, checkedTs: new Date().toISOString() }); } catch { /* 무해 */ }
+  return body;
 }
 
 /**
@@ -1034,6 +1099,8 @@ async function packageDesignFinalize(a: {
   factCard?: string;
   /** 이번 런 구조 시드의 제목 형식(2026-10-02) — 포장(formatterFor)에 넘겨 제목 후보 1순위에 건다. 없으면 종전 포장 프롬프트. */
   titleForm?: TitleForm;
+  /** 사실 게이트 근거에만 더하는 줄(2026-11-03) — 같은 수종 최근 글에 쓴 도감 사실(작가에겐 안 줬지만 사실이다). */
+  evidenceExtra?: string;
   /** 연결된 piece — 블로그 실촬영 컷 원장(같은 글은 자기 컷을 다시 쓴다). */
   pieceId?: string;
   /** 리비전 런의 원 런 — 실촬영 컷을 원 런 세션에서 복사해 온다. */
@@ -1138,7 +1205,7 @@ async function packageDesignFinalize(a: {
       try {
         const wiki = await llmWiki().semanticQuery(topic, 3, signal, { forFacts: true }).catch(() => ({ hits: [], context: '' }));
         const evidence = buildEvidence({
-          factCard, brief, critiqueText, wikiGrounding: wiki.context,
+          factCard: [factCard, a.evidenceExtra].filter(Boolean).join('\n') || undefined, brief, critiqueText, wikiGrounding: wiki.context,
           injected: readInjected(writer.id, 4000), verified: readVerified(writer.id, 3000),
           editorRules: jargonRulesForEvidence(getBrand()?.editorRules), // 규칙이 시킨 용어 풀이만 — 예시 문장은 근거가 아니다(2026-10-05 리뷰)
         });
@@ -1437,6 +1504,8 @@ async function runOrgRevise(bus: EventBus, opts: RunOptions, company: NonNullabl
   return packageDesignFinalize({
     bus, topic, company, assign, subproblems: [], teams: [],
     critic: null, critiqueText: '', writerTeam, finalDeliverable, brief, factCard: factCard || undefined,
+    // 원 런 공급 사실 전부(최근 글과 겹쳐 작가에게 안 줬던 것 포함)를 게이트 근거로 — 원 런 본문에 이미 있을 수 있다.
+    evidenceExtra: (() => { const r = revise.baseRunId ? readFactSupply(revise.baseRunId) : null; return r?.status === 'ok' ? factSupplyBlock(r).split('\n').slice(1).join('\n') || undefined : undefined; })(),
     serpText: await serpPopularBrief(topic, signal), // 제목 재패키징도 인기 패턴 참고(fail-open)
     keyword: opts.keyword, writer,
     // 제목 형식도 원 런 시드를 승계한다 — 구 기록(필드 없음)이면 undefined → 종전 포장(재포장이 제목 꼴을 바꾸지 않게).

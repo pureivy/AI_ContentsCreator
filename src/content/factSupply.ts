@@ -8,6 +8,7 @@
  * 원칙: 코드가 검색하고 LLM 은 추출만 한다. 질의는 결정적, 출처 URL 은 검색 결과에 실제로 있던 것만
  * (ref 번호로 대조) — 날조 URL 이 결정적으로 막힌다. "어느 나무에나 맞는 말"은 고유 사실이 아니다.
  */
+import { CONFIG } from '../config';
 import { findSpeciesLoose } from './species';
 import { currentPlaceNames, obsoletePlacesIn } from './placeNames';
 import { speciesInText, type SpeciesGroup } from './speciesRotation';
@@ -18,12 +19,18 @@ import { microJSON } from '../orchestrator/agent';
 
 export type FactKind = 'cultivation' | 'lore';
 export interface SearchHit { title: string; url: string; snippet: string }
-export interface SuppliedFact { text: string; kind: FactKind; source: string; url: string; specific: boolean }
+export interface SuppliedFact {
+  text: string; kind: FactKind; source: string; url: string; specific: boolean;
+  /** 이 글 주제(angle)에서 이 수종만 다른 점(2026-11-03) — 고유 사실 중 주제에 직접 걸린 것. */
+  topical?: boolean;
+}
 export interface FactSupplyResult {
   status: 'ok' | 'skipped' | 'error';
   subject: string;
   species?: string;
   queries: string[];
+  /** 주제 각도(2026-11-03) — 키워드·제목에서 수종 이름을 뗀 말("활착", "전정시기"). 수종 주제 질의 2개가 이걸로 붙는다. */
+  angle?: string;
   resultCount: number;
   facts: SuppliedFact[];
   /** specific && URL 유효 — 임계 판정의 기준. */
@@ -31,7 +38,7 @@ export interface FactSupplyResult {
   error?: string;
   checkedTs: string;
 }
-export interface RawFact { text?: unknown; ref?: unknown; kind?: unknown; specific?: unknown }
+export interface RawFact { text?: unknown; ref?: unknown; kind?: unknown; specific?: unknown; topical?: unknown }
 
 export const FACT_SUPPLY_HEADER = '## 재배·이야기 사실 조사(자동 수집)';
 
@@ -68,12 +75,30 @@ export function factSubjectOf(
   return { subject: first || kw || topic.trim(), aliases: [] };
 }
 
-/** 결정적 질의 — 수종이면 재배 5 + 이야기 3, 아니면 재배·특성·주의 3. */
-export function factQueriesFor(subject: string, species?: string): string[] {
+/**
+ * 주제 각도(순수, 2026-11-03) — 키워드(없으면 제목 첫 마디)에서 수종 이름·별칭을 떼고 앞 세 어절.
+ * 왜: 질의가 수종마다 고정이라 활착 글이든 전정 글이든 같은 도감 사실(키·원산지·껍질 색)만 받았다. 블로그 16편 검토에서
+ * 수종 특성에서 나온 조언은 28%였고, 공급 사실에 있던 "대추나무는 새싹이 아주 늦게 튼다"도 활착 글에 쓰이지 않았다.
+ */
+export function factAngleOf(topic: string, keyword: string | undefined, names: readonly string[]): string {
+  // 긴 이름부터 뗀다 — 짧은 별칭을 먼저 떼면 "목백일홍"이 "목"으로, "태추단감"이 "태추"로 남는다(코드 리뷰 2026-11-03).
+  const ordered = [...new Set(names.filter(Boolean))].sort((a, b) => b.length - a.length);
+  const strip = (t: string): string => ordered
+    .reduce((acc, n) => acc.split(n).join(' '), t.normalize('NFC'))
+    .replace(/[,.?!·:;()"'“”‘’~\-—–/|]/g, ' ').replace(/\s+/g, ' ').trim();
+  // 수종 이름을 떼면 남는 조사("음나무가 잘 자라는" → "가 잘 자라는")를 앞에서 뗀다.
+  const pick = (t: string): string => t.replace(/^(?:에서|으로|[가이은는을를의도와과에로])(?:\s|$)/, '').split(' ').filter(Boolean).slice(0, 3).join(' ');
+  return pick(strip(keyword ?? '')) || pick(strip(topic.split(/[,?]/)[0] ?? ''));
+}
+
+/** 결정적 질의 — 수종이면 [주제 2 +] 재배 5 + 이야기 3, 아니면 재배·특성·주의 3. 주제 질의를 앞에 둔다(결과 상한에 잘리지 않게). */
+export function factQueriesFor(subject: string, species?: string, angle?: string): string[] {
   const s = subject.trim();
   const base = [`${s} 재배`, `${s} 특성 자생지`];
   if (!species) return [...base, `${s} 주의 문제`];
+  const a = (angle ?? '').trim();
   return [
+    ...(a ? [`${s} ${a}`, `${s} ${a} 방법 주의`] : []),
     ...base,
     `${s} 심는 시기 토양`, `${s} 전정 시기`, `${s} 병해충`,
     `${s} 전설 설화 유래`, `${s} 꽃말 상징`, `${s} 쓰임 역사`,
@@ -121,16 +146,22 @@ export function attachRefs(
     out.push({
       text, kind, url: hit.url, source: hit.title.trim() || hostOf(hit.url),
       specific: isSpecificFact(text, hit.title, species, f?.specific === true, aliases),
+      ...(f?.topical === true ? { topical: true } : {}),
     });
     if (out.length >= max) break;
   }
   return out;
 }
 
-/** 브리프 끝에 붙는 블록 — 고유 사실만, extractFactCard 가 URL 붙은 줄을 그대로 집어간다. */
-export function factSupplyBlock(r: FactSupplyResult): string {
-  const lines = r.facts.filter((f) => f.specific)
-    .map((f) => `- [${f.kind === 'lore' ? '이야기' : '재배'}] ${f.text} (근거: ${f.source}, ${f.url})`);
+/**
+ * 브리프 끝에 붙는 블록 — 고유 사실만, extractFactCard 가 URL 붙은 줄을 그대로 집어간다.
+ * 주제 고유 사실([이 주제])을 맨 앞에. skip: 같은 수종 최근 글에 이미 쓴 사실(2026-11-03) — 주제 고유 사실은 빼지 않는다.
+ */
+export function factSupplyBlock(r: FactSupplyResult, skip?: ReadonlySet<string>): string {
+  const tag = (f: SuppliedFact): string => (f.topical ? '이 주제' : f.kind === 'lore' ? '이야기' : '재배');
+  const lines = r.facts.filter((f) => f.specific && (f.topical || !skip?.has(f.text)))
+    .sort((a, b) => Number(!!b.topical) - Number(!!a.topical))
+    .map((f) => `- [${tag(f)}] ${f.text} (근거: ${f.source}, ${f.url})`);
   if (!lines.length) return '';
   return [FACT_SUPPLY_HEADER, ...lines].join('\n');
 }
@@ -176,10 +207,12 @@ export async function supplyFacts(
 ): Promise<FactSupplyResult> {
   const checkedTs = new Date().toISOString();
   const { subject, species, aliases } = factSubjectOf(a.topic, a.keyword, getBrand()?.speciesCatalog);
-  const queries = factQueriesFor(subject, species);
-  const base = { subject, ...(species ? { species } : {}), queries, checkedTs };
+  const angle = species && CONFIG.speciesAdvice ? factAngleOf(a.topic, a.keyword, [subject, species, ...aliases]) : '';
+  const queries = factQueriesFor(subject, species, angle);
+  const base = { subject, ...(species ? { species } : {}), ...(angle ? { angle } : {}), queries, checkedTs };
   try {
-    const hits = await collectSearchResults(queries, deps, a.signal);
+    // 주제 질의 2개가 늘어 상한도 8건 늘린다(질의마다 백과 5·웹 5 중 중복 제거 뒤).
+    const hits = await collectSearchResults(queries, deps, a.signal, angle ? 48 : 40);
     // 결과 0건은 '사실 사막'이 아니라 커넥터 장애다(최종 리뷰 C2) — 백과·웹 양쪽이 8개 질의에 URL 하나도 못 주는
     // 수종은 없다. 커넥터 실패는 []로 삼켜지므로 여기서 구분이 안 되고, fail-open(error → 보류 없이 종전 집필)을 택한다.
     if (!hits.length) return { ...base, status: 'error', resultCount: 0, facts: [], specificCount: 0, error: 'no results' };
@@ -190,9 +223,12 @@ export async function supplyFacts(
       '- kind: "cultivation"(자생지·내한성·토양·볕·수형·생장·개화 결실·전정 시기·병해충·번식·주의) 또는 "lore"(전설·설화·이름 유래·꽃말·상징·역사·문화·쓰임새·문학·명소).',
       '- specific: 그 대상에만 해당하면 true, 어느 나무에나 통하는 일반론("물 빠짐이 좋아야 한다")이면 false.',
       '- ref: 그 사실이 적힌 결과 번호(1부터). 한 사실에 하나.',
+      ...(angle ? [
+        `- 이 글의 주제는 "${angle}"다. 이 주제에서 ${subject}가 다른 나무와 다른 점(시기·방법·판단 기준·주의가 달라지는 이유가 되는 성질)을 먼저 찾아 topical: true 로 표시하라. 키·원산지·분류·학명·껍질 색 같은 도감 소개는 topical 이 아니다.`,
+      ] : []),
       '- 각 사실은 한 문장, 최대 20개.',
       `[검색 결과]\n${numbered}`,
-      'JSON 형식: {"facts":[{"text":"...","ref":1,"kind":"cultivation","specific":true}]}',
+      `JSON 형식: {"facts":[{"text":"...","ref":1,"kind":"cultivation","specific":true${angle ? ',"topical":false' : ''}}]}`,
     ].join('\n\n');
     const json = await deps.llm(a.model, SYS, user, { maxOutputTokens: 2400, signal: a.signal });
     if (!json) return { ...base, status: 'error', resultCount: hits.length, facts: [], specificCount: 0, error: 'llm null' };

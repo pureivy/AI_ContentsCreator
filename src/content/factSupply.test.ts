@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { factSubjectOf, factQueriesFor, isSpecificFact, attachRefs, factSupplyBlock, FACT_SUPPLY_HEADER, collectSearchResults, supplyFacts, shouldHoldForFacts } from './factSupply';
+import { factSubjectOf, factQueriesFor, factAngleOf, isSpecificFact, attachRefs, factSupplyBlock, FACT_SUPPLY_HEADER, collectSearchResults, supplyFacts, shouldHoldForFacts } from './factSupply';
 import type { SearchHit, FactSupplyResult, FactSupplyDeps } from './factSupply';
 
 describe('shouldHoldForFacts — 사실 부족 보류 대상(최종 리뷰 C1)', () => {
@@ -147,7 +147,9 @@ describe('collectSearchResults / supplyFacts — 수집·추출(의존성 주입
     const r = await supplyFacts({ topic: '음나무가 잘 자라는 자리', model: 'm' }, deps());
     expect(r.status).toBe('ok');
     expect(r.species).toBe('음나무');
-    expect(r.queries).toHaveLength(8);
+    expect(r.queries).toHaveLength(10); // 주제 질의 2 + 재배 5 + 이야기 3(2026-11-03)
+    expect(r.angle).toBe('잘 자라는 자리');
+    expect(r.queries.slice(0, 2)).toEqual(['음나무 잘 자라는 자리', '음나무 잘 자라는 자리 방법 주의']);
     expect(r.resultCount).toBe(2);
     expect(r.specificCount).toBe(2);
     expect(r.facts[1]!.url).toBe('https://web/1');
@@ -184,5 +186,34 @@ describe('collectSearchResults / supplyFacts — 수집·추출(의존성 주입
     const r = await supplyFacts({ topic: '음나무 자리', model: 'm' }, deps({ encyc: async () => [], web: async () => [] }));
     expect(r.status).toBe('error');
     expect(r.error).toBe('no results');
+  });
+});
+
+describe('주제 각도·주제 고유 사실 — 수종 특성 조언 2026-11-03', () => {
+  it('키워드에서 수종 이름을 떼고, 없으면 제목 첫 마디에서', () => {
+    expect(factAngleOf('호두나무 활착, 상강 앞두고', '호두나무 활착', ['호두나무'])).toBe('활착');
+    expect(factAngleOf('감나무 전정 시기', '감나무전정시기', ['감나무'])).toBe('전정시기');
+    expect(factAngleOf('무화과 심을 자리부터 정하세요, 월동이', '무화과', ['무화과'])).toBe('심을 자리부터 정하세요');
+    expect(factAngleOf('블루베리', '블루베리', ['블루베리'])).toBe('');
+    expect(factAngleOf('목백일홍 전정', '목백일홍 전정 시기', ['배롱나무', '백일홍', '목백일홍'])).toBe('전정 시기'); // 긴 이름부터
+    expect(factAngleOf('대추나무 활착 — 새순이', '', ['대추나무'])).toBe('활착 새순이');
+  });
+  it('각도가 있으면 주제 질의 2개가 맨 앞, 없으면 종전 8개', () => {
+    expect(factQueriesFor('대추나무', '대추나무', '활착').slice(0, 2)).toEqual(['대추나무 활착', '대추나무 활착 방법 주의']);
+    expect(factQueriesFor('대추나무', '대추나무')).toHaveLength(8);
+  });
+  it('블록 — 주제 고유 사실을 맨 앞 [이 주제], 최근 글에 쓴 사실은 빼되 주제 고유 사실은 남긴다', () => {
+    const r: FactSupplyResult = {
+      status: 'ok', subject: '대추나무', species: '대추나무', queries: [], resultCount: 3, specificCount: 3, checkedTs: '',
+      facts: [
+        { text: '대추나무는 높이 10~15m에 달한다', kind: 'cultivation', source: 'a', url: 'u1', specific: true },
+        { text: '대추나무는 새싹이 아주 늦게 튼다', kind: 'cultivation', source: 'b', url: 'u2', specific: true, topical: true },
+        { text: '대추나무는 가시가 있다', kind: 'lore', source: 'c', url: 'u3', specific: true },
+      ],
+    };
+    const lines = factSupplyBlock(r, new Set(['대추나무는 높이 10~15m에 달한다', '대추나무는 새싹이 아주 늦게 튼다'])).split('\n');
+    expect(lines[1]).toContain('[이 주제] 대추나무는 새싹이 아주 늦게 튼다');
+    expect(lines.join('\n')).not.toContain('10~15m');
+    expect(lines.join('\n')).toContain('[이야기] 대추나무는 가시가 있다');
   });
 });

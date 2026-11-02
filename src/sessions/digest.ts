@@ -89,6 +89,8 @@ export function writeFactCard(runId: string, card: string): void { writeSessionF
 export function readFactCard(runId: string): string {
   try { return fs.readFileSync(sessionFile(runId, 'fact_card.md'), 'utf-8'); } catch { return ''; }
 }
+/** 수종 특성 조언 검사(2026-11-03) — 수정 전후 수종 고유 조언 수. */
+export function writeSpeciesAdvice(runId: string, r: unknown): void { writeSessionFile(runId, 'species_advice.json', JSON.stringify(r, null, 2)); }
 /** 사실 공급 결과(2026-09-17) — 검토 알림·리포트가 고유 사실 수를 읽는다. */
 export function writeFactSupply(runId: string, r: FactSupplyResult): void { writeSessionFile(runId, 'fact_supply.json', JSON.stringify(r, null, 2)); }
 export function readFactSupply(runId: string): FactSupplyResult | null {
