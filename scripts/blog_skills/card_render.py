@@ -219,7 +219,7 @@ def slide_html(s, n, total, series, brand):
         cells = cell_good + cell_bad if s.get("swap") else cell_bad + cell_good
         cmp = f'<div class="cmp">{cells}</div>'
         return (f'<section class="s paper compare{" fx" if photo else " nophoto"}">{top}{run_header(series, n, total, bool(photo))}'
-                f'<div class="wrap">{cmp}{title}{lead}</div></section>')
+                + (f'<div class="wrap">{cmp}{title}{lead}</div></section>' if photo else f'<div class="wrap"><div class="mid">{cmp}{title}{lead}</div></div></section>'))
     if kind == "pair":
         ps = (s.get("photos") or [])[:2]
         duo = "".join(f'<div class="p">' + (f'<img src="{img(p.get("photo"))}">' if img(p.get("photo")) else "")

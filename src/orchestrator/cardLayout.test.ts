@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  normalizeLayout, alignRawSlides, insideDir, coverage, sourceSentences, extractOk, monthMentioned, parsePhotoRef, layoutFields, dropFields, parityKeys, oneEmoji, toRenderSpec, genPhotoPrompt, dedupeBlogPhotos, realPhotoSlots,
+  normalizeLayout, alignRawSlides, insideDir, coverage, sourceSentences, extractOk, monthMentioned, numericSource, parsePhotoRef, layoutFields, dropFields, parityKeys, oneEmoji, toRenderSpec, genPhotoPrompt, dedupeBlogPhotos, realPhotoSlots,
 } from './cardLayout';
 
 // 감나무 잎 구별 글(2026-10-12)에서 줄인 원문 — 카드 칸은 여기서만 뽑아야 한다.
@@ -41,6 +41,33 @@ describe('monthMentioned — 달력 칸은 원문이 말한 달만', () => {
     expect(monthMentioned(SRC, 10)).toBe(true);
     expect(monthMentioned(SRC, 7)).toBe(false);
     expect(monthMentioned(SRC, 1)).toBe(false); // "10월"·"15m" 의 1 에 걸리지 않는다
+  });
+  it('말로 쓴 범위 "5월에서 7월"도 읽는다(석류나무 카드)', () => {
+    const s = '석류나무 꽃은 5월에서 7월 사이에 피고, 열매는 10월에 익습니다.';
+    expect([5, 6, 7, 10].map((m) => monthMentioned(s, m))).toEqual([true, true, true, true]);
+    expect(monthMentioned(s, 8)).toBe(false);
+  });
+});
+
+describe('numericSource — 한글 수·말 범위를 숫자 꼴로 덧붙인다', () => {
+  it('"한 개에서 다섯 개" → 1~5개, 원문은 그대로 앞에 둔다', () => {
+    const s = '가지 끝에 한 개에서 다섯 개씩 달려요.';
+    const n = numericSource(s);
+    expect(n.startsWith(s)).toBe(true);
+    expect(n).toContain('1~5개');
+  });
+  it('숫자 꼴이 없으면 원문 그대로, "열매"의 열은 수로 읽지 않는다', () => {
+    const s = '열매가 많이 달립니다.';
+    expect(numericSource(s)).toBe(s);
+  });
+  it('수치 판: 원문이 한글 수로 쓴 범위도 수치 칸으로 남는다', () => {
+    const src = '석류나무 꽃은 가지 끝에 한 개에서 다섯 개씩 달려요. 꽃은 5월에서 7월 사이에 핍니다.';
+    const plan = { title: 't', slides: [{ headline: '표지', body: '' }, { headline: '꽃 수', body: '' }, { headline: '끝', body: '' }] };
+    const raw = { slides: [{ kind: 'cover' }, { kind: 'numbers', stats: [{ value: '1~5개', label: '가지 끝에 달려요' }], calendar: [{ months: [5, 6, 7], label: '꽃 피는 때' }] }, { kind: 'steps' }] };
+    const l = normalizeLayout(raw, plan, src, 0);
+    expect(l.slides[1]!.kind).toBe('numbers');
+    expect(l.slides[1]!.stats?.[0]?.value).toBe('1~5개');
+    expect(l.slides[1]!.calendar?.[0]?.months).toEqual([5, 6, 7]);
   });
 });
 

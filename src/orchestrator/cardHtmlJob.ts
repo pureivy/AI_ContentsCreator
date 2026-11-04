@@ -359,14 +359,18 @@ export async function designHtmlCards(o: {
       if (s.photo?.use === 'gen') gens++; s.items?.forEach((it) => { if (it.photo?.use === 'gen') gens++; }); s.photos?.forEach((p) => { if (p.photo?.use === 'gen') gens++; });
     });
     const filled: number[] = [];
-    layout.slides.forEach((s, i) => {
-      if (s.kind !== 'photo' || s.photo) return;
+    // photo 판 먼저, 그다음 비교·숫자 판(2026-11-05) — 석류나무 카드(card_f170bba5e0) 6번 비교 판은 사진 없이 위 칸만 그려져
+    // 아래 절반이 비었다(판형 지시는 "사진 넣어라"지만 응답이 빠뜨림). 사진 자리가 있는 판은 모두 채운다.
+    const order = layout.slides.map((s, i) => ({ s, i })).filter(({ s }) => !s.photo && (s.kind === 'photo' || s.kind === 'compare' || s.kind === 'numbers'))
+      .sort((a, b) => Number(a.s.kind !== 'photo') - Number(b.s.kind !== 'photo'));
+    order.forEach(({ s, i }) => {
       const fresh = blog.find((b) => !used.get(b.n));
       if (fresh) { s.photo = { use: 'blog', n: fresh.n }; used.set(fresh.n, 1); return; }
       if (gens >= CARD_MAX_GEN) return;
       s.photo = { use: 'gen', scene: (`${s.title}${s.lead ? ` — ${s.lead.replace(/\s*\n\s*/g, ' ')}` : ''} 를 그대로 보여 주는 장면`).slice(0, 160) };
       gens++; filled.push(i + 1);
     });
+    filled.sort((a, b) => a - b);
     if (filled.length) say(`카드 빈 사진 판 — ${filled.join(',')}번 장 새로 그림`);
   }
   const gen = collectGen(layout, CARD_MAX_GEN);

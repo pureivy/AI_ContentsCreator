@@ -100,8 +100,23 @@ export function extractOk(text: string, source: string, sents: readonly string[]
   return coverage(t, sents) >= (bigrams(t).length <= 4 ? 0.3 : 0.5);
 }
 
-/** 원문이 이 달을 말하나(순수) — "10월", "5~6월"(5·6 모두), "5-6월". */
+/**
+ * 원문의 한글 수·말로 쓴 범위를 숫자 꼴로 덧붙인다(순수, 2026-11-05) — 수치·달력 칸 대조용.
+ * 실측: 석류나무 카드(card_f170bba5e0) 원문 "5월에서 7월 사이", "한 개에서 다섯 개씩"을 대조가 못 읽어
+ * "1~5개" 수치 칸과 5~7월 꽃 달력이 빠지고 숫자 판이 반쯤 비었다.
+ */
+export function numericSource(source: string): string {
+  const KO: Record<string, number> = { 한: 1, 두: 2, 세: 3, 네: 4, 다섯: 5, 여섯: 6, 일곱: 7, 여덟: 8, 아홉: 9, 열: 10 };
+  const COUNTER = '개|그루|번|송이|포기|가지|달';
+  let t = source.replace(new RegExp(`(?<![가-힣])(한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\\s*(${COUNTER})`, 'g'),
+    (_, k: string, u: string) => `${KO[k]}${u}`);
+  t = t.replace(new RegExp(`(\\d+)\\s*(${COUNTER}|월)\\s*(?:에서|부터)\\s*(\\d+)\\s*\\2`, 'g'), (_, a: string, u: string, b: string) => `${a}~${b}${u}`);
+  return t === source ? source : `${source}\n${t}`;
+}
+
+/** 원문이 이 달을 말하나(순수) — "10월", "5~6월"(5·6 모두), "5-6월", "5월에서 7월". */
 export function monthMentioned(source: string, m: number): boolean {
+  source = numericSource(source);
   if (new RegExp(`(?:^|[^\\d])${m}\\s*월`).test(source)) return true;
   const re = /(\d{1,2})\s*[~∼\-–]\s*(\d{1,2})\s*월/g;
   for (let x = re.exec(source); x; x = re.exec(source)) {
@@ -260,19 +275,20 @@ export function normalizeLayout(
       return distinct && cards.length === 2 ? { kind, ...base, photos, cards, ...noteOk } : plain();
     }
     if (kind === 'numbers') {
+      const numSrc = numericSource(source);
       const stats = (Array.isArray(x.stats) ? x.stats : []).slice(0, 3).flatMap((s) => {
         const o = (s ?? {}) as Record<string, unknown>;
         const value = fitCap(o.value, CAPS.statValue); const label = fitCap(o.label, CAPS.statLabel);
         // 수치 칸은 원문에 그 수치가 그대로 있어야 한다(숫자만 떼어 비교).
         const digits = value.match(/\d+(?:[.,]\d+)?/g) ?? [];
-        return value && label && digits.length && digits.every((d) => source.includes(d)) && !introducesNewFacts(source, `${value} ${label}`) && ok(label)
+        return value && label && digits.length && digits.every((d) => numSrc.includes(d)) && !introducesNewFacts(numSrc, `${value} ${label}`) && ok(label)
           ? [{ value, label }] : [];
       });
       const calendar = (Array.isArray(x.calendar) ? x.calendar : []).slice(0, 3).flatMap((c) => {
         const o = (c ?? {}) as Record<string, unknown>;
         const months = (Array.isArray(o.months) ? o.months : []).map((m) => Math.floor(Number(m))).filter((m) => m >= 1 && m <= 12);
         const label = fitCap(o.label, CAPS.calLabel);
-        return months.length && label && months.every((m) => monthMentioned(source, m)) && !introducesNewFacts(source, label)
+        return months.length && label && months.every((m) => monthMentioned(source, m)) && !introducesNewFacts(numSrc, label)
           ? [{ months: [...new Set(months)], label }] : [];
       });
       return stats.length || calendar.length
