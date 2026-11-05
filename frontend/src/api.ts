@@ -1288,6 +1288,33 @@ export async function runLongform(): Promise<{ ok: boolean; id?: string; error?:
     return r.ok ? { ok: true, id: j.id } : { ok: false, error: j.message || j.error || `HTTP ${r.status}` };
   } catch { return { ok: false, error: "network" }; }
 }
+// ── 웹툰 숏폼(2026-11-05, 1단계 시범) — 제작실 웹툰 탭. 서버가 SHORT_marker 를 불러 만든다.
+export type WebtoonStage = "writing" | "checking" | "drawing" | "review" | "producing" | "ready" | "error" | "cancelled";
+export interface WebtoonJob {
+  id: string; pieceId: string; topic: string; keyword?: string; project: string; stage: WebtoonStage;
+  hook?: string; scenes?: Array<{ id: string; narration: string; motion?: string }>;
+  factGate?: { status: "pass" | "hold" | "error"; unsupported: string[] };
+  redraws?: Record<string, number>; shortId?: string; durationSec?: number;
+  wallSec?: { writing?: number; drawing?: number; producing?: number };
+  log?: string[]; error?: string; quiet?: boolean; createdTs: string; updatedTs: string;
+}
+export interface WebtoonList { enabled: boolean; busy: number; jobs: WebtoonJob[]; pieces: Array<{ id: string; title: string; publishedTs?: string }> }
+export async function fetchWebtoon(): Promise<WebtoonList | null> {
+  try { const r = await fetch("/api/webtoon"); return r.ok ? await r.json() as WebtoonList : null; } catch { return null; }
+}
+async function webtoonPost(url: string, body?: unknown): Promise<{ ok: boolean; id?: string; error?: string }> {
+  try {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
+    const j = await r.json().catch(() => ({} as { id?: string; error?: string }));
+    return r.ok ? { ok: true, id: j.id } : { ok: false, error: j.error || `HTTP ${r.status}` };
+  } catch { return { ok: false, error: "network" }; }
+}
+export const runWebtoon = (pieceId: string) => webtoonPost("/api/webtoon/run", { pieceId });
+export const approveWebtoon = (id: string) => webtoonPost(`/api/webtoon/${id}/approve`);
+export const resumeWebtoon = (id: string) => webtoonPost(`/api/webtoon/${id}/resume`);
+export const cancelWebtoon = (id: string) => webtoonPost(`/api/webtoon/${id}/cancel`);
+export const redrawWebtoon = (id: string, scenes: string[]) => webtoonPost(`/api/webtoon/${id}/redraw`, { scenes });
+
 export async function fetchYoutubeStatus(): Promise<{ client: boolean; connected: boolean }> {
   try { const r = await fetch("/youtube/status"); return await r.json() as { client: boolean; connected: boolean }; }
   catch { return { client: false, connected: false }; }

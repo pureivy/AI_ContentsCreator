@@ -25,6 +25,11 @@ export interface Shorts {
    * (그 이전 108편)로 양 채널 겸용이며 발행 게이트도 열어 둔다.
    */
   platform?: ShortsPlatform;
+  /** 만든 방식(2026-11-05) — 'webtoon' = SHORT_marker 웹툰 숏폼(제작실 웹툰 탭). 없으면 종전 숏폼 파이프라인.
+   *  웹툰 편은 숏폼 수정 요청(재조립)을 받지 않는다 — 우리 렌더러로 다시 만들면 다른 영상이 된다. */
+  format?: 'webtoon';
+  /** 웹툰 작업 id(data/webtoon) — format 'webtoon' 일 때. */
+  webtoonId?: string;
   /** 주제(독립 생성) 또는 원본 블로그 제목(파생). */
   topic: string;
   keyword?: string;
@@ -139,6 +144,8 @@ export function shortsFactHoldBlockReason(fg: FactGateInfo | undefined, forceFac
 export interface CreateShortsInput {
   topic: string;
   platform?: ShortsPlatform;
+  format?: 'webtoon';
+  webtoonId?: string;
   writerId?: string;
   keyword?: string;
   sourcePieceId?: string;
@@ -181,6 +188,7 @@ export class ShortsStore {
       brand: activeBrandSlug() || undefined, topic: input.topic.trim(),
       keyword: input.keyword?.trim() || undefined,
       sourcePieceId: input.sourcePieceId, auto: input.auto, platform: input.platform,
+      ...(input.format ? { format: input.format } : {}), ...(input.webtoonId ? { webtoonId: input.webtoonId } : {}),
       writer: input.writer, writerId: input.writerId, director: input.director,
       stage: 'planning', createdTs: now, updatedTs: now,
     };

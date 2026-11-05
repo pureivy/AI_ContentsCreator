@@ -72,6 +72,8 @@ import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, pl
 import { pickWriter, recentWriterIdsFor, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, shortsRunningCount, reviseShorts, hookStillFor, siblingPlanFile } from '../orchestrator/shorts';
+import { approveWebtoon, beginWebtoon, cancelWebtoon, redrawWebtoon, resumeWebtoon, webtoonBusy, webtoonImagePath } from '../orchestrator/webtoonShorts';
+import { markInterruptedWebtoon, webtoonStore } from '../content/webtoon';
 import { beginLongformEpisode, runLongformEpisode, longformEpisodeRunning, resumeLongformEpisode, sweepInterruptedLongform, interruptedNotice, resendLongformNotices } from '../orchestrator/longform';
 import { inheritedSceneImages, inheritedClips } from '../content/shortsInherit';
 import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo, waitForThumbnail, hasDesignThumbnail, markThumbPending, clearThumbPending } from '../tools/shortsRender';
@@ -2855,6 +2857,7 @@ async function ensureDesignThumbnailBeforePublish(id: string): Promise<void> {
   const s = shortsStore().get(id);
   const dir = shortsStore().dirFor(id);
   if (!s || hasDesignThumbnail(dir) || !CONFIG.openaiApiKey || thumbGenInFlight.has(id) || isShortsRunning(id)) return;
+  if (s.format === 'webtoon') return; // 웹툰 편 커버는 영상 첫 화면(2026-11-05 사장님 결정) — gpt-image 썸네일을 그리지 않는다
   thumbGenInFlight.add(id);
   try {
     console.log(`[발행담당] ${(s.topic ?? id).slice(0, 30)} — 디자인 썸네일이 없어 발행 전에 먼저 만듭니다`);
@@ -2896,6 +2899,11 @@ if (!process.env.VITEST) for (const x of longformStore().list()) {
 // 제작 중(producing)이던 편(2026-10-25) — 제작은 이 프로세스 메모리에서만 돈다. 종전엔 조용히 실패로 닫았고, '다시 만들기'는 새 폴더·새 대본이라
 // 낭독·클립 캐시(문장 키)도 맞지 않았다. 이제: 닫는 편은 바로 알리고, 오늘 주간 자동 실행으로 시작한 편은 60초 뒤(tsx 연쇄 재시작 정착) 같은 폴더로
 // 한 번 자동 재시도(resumeLongformEpisode — 사실 확인까지 끝난 대본·낭독·클립·장면 파일 재사용). 재시도도 끊기면 다음 부팅은 닫고 알리기만.
+// 웹툰 숏폼 — 돌던 단계(SHORT_marker 프로세스)는 서버와 함께 끝났다. '중단됨'으로 두고 이어서 만들기는 사람이(캐시로 이어 간다).
+if (!process.env.VITEST) {
+  const wt = markInterruptedWebtoon();
+  if (wt.length) console.log(`[웹툰] 서버 재시작으로 중단된 작업 ${wt.length}건 — 제작실 웹툰 탭에서 이어서 만들기`);
+}
 if (!process.env.VITEST) {
   const lfSweep = sweepInterruptedLongform(longformStore(), new Date());
   for (const x of lfSweep.closed) void notify(interruptedNotice(x, false));
@@ -3142,6 +3150,44 @@ app.post('/longform/:id/thumbnail/regenerate', longformThumbRegenHandler);
 app.post('/api/longform/:id/thumbnail/regenerate', longformThumbRegenHandler);
 app.get('/longform/:id', longformGetHandler);
 app.get('/api/longform/:id', longformGetHandler);
+
+// ── 웹툰 숏폼(2026-11-05, 1단계 시범) — SHORT_marker 를 불러 만든다(orchestrator/webtoonShorts). 제작실 웹툰 탭이 쓴다.
+function webtoonListHandler(c: Context): Response {
+  const brand = activeBrandSlug() || undefined;
+  const jobs = webtoonStore().list().filter((j) => (j.brand ?? undefined) === brand).slice(0, 40);
+  // 고를 수 있는 블로그 글 — 발행된 글 최근 30편(이야기형으로 풀 글은 사람이 고른다).
+  const pieces = pieceStore().list().filter((p) => p.stage === 'published' && p.runId && (p.brand ?? undefined) === brand)
+    .sort((a, b) => (b.publishedTs ?? '').localeCompare(a.publishedTs ?? '')).slice(0, 30)
+    .map((p) => ({ id: p.id, title: p.title, publishedTs: p.publishedTs }));
+  return c.json({ enabled: CONFIG.webtoonShorts, busy: webtoonBusy(), jobs, pieces });
+}
+function webtoonAct(c: Context, r: { ok: true } | { ok: false; status: 404 | 409 | 422; error: string }): Response {
+  return r.ok ? c.json({ ok: true }, 202) : c.json({ error: r.error }, r.status);
+}
+app.get('/api/webtoon', webtoonListHandler);
+app.post('/api/webtoon/run', async (c) => {
+  const b = await c.req.json().catch(() => ({})) as { pieceId?: unknown; project?: unknown; quiet?: unknown };
+  if (typeof b.pieceId !== 'string' || !/^piece_[\w-]+$/.test(b.pieceId)) return c.json({ error: '블로그 글을 고르세요' }, 422);
+  const r = beginWebtoon({ pieceId: b.pieceId, ...(typeof b.project === 'string' && b.project ? { project: b.project } : {}), ...(b.quiet === true ? { quiet: true } : {}) });
+  return r.ok ? c.json({ ok: true, id: r.id }, 202) : c.json({ error: r.error }, r.status);
+});
+app.get('/api/webtoon/:id', (c) => {
+  const j = webtoonStore().get(c.req.param('id'));
+  return j ? c.json({ job: j, busy: webtoonBusy() }) : c.json({ error: '모르는 웹툰 작업' }, 404);
+});
+app.get('/api/webtoon/:id/image/:sid', (c) => {
+  const p = webtoonImagePath(c.req.param('id'), c.req.param('sid'));
+  if (!p) return c.json({ error: '그림 없음' }, 404);
+  return c.body(fs.readFileSync(p), 200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
+});
+app.post('/api/webtoon/:id/approve', (c) => webtoonAct(c, approveWebtoon(c.req.param('id'))));
+app.post('/api/webtoon/:id/resume', (c) => webtoonAct(c, resumeWebtoon(c.req.param('id'))));
+app.post('/api/webtoon/:id/cancel', (c) => webtoonAct(c, cancelWebtoon(c.req.param('id'))));
+app.post('/api/webtoon/:id/redraw', async (c) => {
+  const b = await c.req.json().catch(() => ({})) as { scenes?: unknown };
+  const ids = Array.isArray(b.scenes) ? b.scenes.filter((x): x is string => typeof x === 'string' && /^s\d{2}$/.test(x)).slice(0, 12) : [];
+  return webtoonAct(c, redrawWebtoon(c.req.param('id'), ids));
+});
 app.post('/pieces/:id/published', piecePublishedHandler);
 app.post('/api/pieces/:id/published', piecePublishedHandler);
 app.post('/pieces/:id/metrics', pieceMetricsPostHandler);
@@ -3886,6 +3932,8 @@ function performanceHandler(c: Context): Response {
     naverBusy: naverRefreshBusy || !!naverProfileBusy, // 네이버 수집·브라우저 작업 진행 여부(임시저장 대기 안내용)
     // 인스타·페북·유튜브·클립 발행 진행 수 — 재시작 대기 스크립트가 본다(2026-10-13 릴스 발행 중 재시작으로 기록 유실).
     publishBusy: metaPublishInFlight.size + ytPublishInFlight.size + naverClipInFlight.size + longformYtInFlight.size,
+    // 웹툰 숏폼 단계(SHORT_marker 프로세스)가 도는 중 — 재시작하면 그 단계가 끊긴다(이어서 만들기는 캐시로 이어 간다).
+    webtoonBusy: webtoonBusy(),
     strategy: {
       winners: s.winners.slice(0, 20), subNiches: s.subNiches, measuredPieces: s.measuredPieces,
       // 채널 학습(쇼츠·릴스·카드뉴스) — 키워드 점수표가 아니라 직원 강화가 남긴 교훈 문장(위키 performance
@@ -5793,6 +5841,11 @@ if (!process.env.VITEST) {
   // tsx 지연 중복 재시작(23:23, mtime 변화 없이 발화)이 렌더 중 잡을 죽여 error 로 좌초. 재개 캡 2회
   // (크래시 루프 방지), 15초 정착 지연(tsx 는 1변경에 수 초 간격 연쇄 재시작하는 습성이 실측됨 — 즉시
   // 재개하면 그 버스트에 복구 횟수가 다 탄다. 지연 중 또 재시작하면 카운터 소모 없이 다음 부팅이 이어받는다).
+  // 웹툰 편(format 'webtoon')은 SHORT_marker 가 만든 영상이라 우리 파이프라인으로 재개하지 않는다(2026-11-05 리뷰) —
+  // 등록이 도중에 끊긴 기록은 실패로 닫는다(웹툰 탭의 '이어서 만들기'가 다시 등록한다).
+  for (const x of shortsStore().list()) {
+    if (x.format === 'webtoon' && x.stage !== 'ready' && x.stage !== 'error') shortsStore().update(x.id, { stage: 'error', error: '웹툰 등록이 중단됐습니다 — 제작실 웹툰 탭에서 이어서 만들기' });
+  }
   const orphanShorts = shortsStore().list().filter((x) => x.stage !== 'ready' && x.stage !== 'error');
   const recoverIds = orphanShorts.filter((x) => (x.recoveries ?? 0) < 2).map((x) => x.id);
   for (const x of orphanShorts) {

@@ -220,6 +220,8 @@ export async function reviseShorts(
   if (!short) return fail('unknown shorts');
   if (short.stage !== 'ready') return fail('완성(ready) 상태가 아닙니다');
   if (short.youtubeUrl || short.igReelId) return fail('이미 업로드/발행됨 — 발행물 영상은 교체할 수 없습니다(새 파생 생성 필요)');
+  // 웹툰 편(2026-11-05)은 SHORT_marker 가 만든 영상 — 우리 렌더러로 재조립하면 전혀 다른 영상이 된다.
+  if (short.format === 'webtoon') return fail('웹툰 숏폼은 여기서 고칠 수 없습니다 — 제작실 웹툰 탭에서 장면을 다시 그리세요');
   if (RUNNING.has(id)) return fail('생성/수정 작업이 이미 진행 중입니다');
   RUNNING.add(id);
   const say = (m: string): void => { console.log(`[숏폼] ${m}`); opts.bus?.emit('log', { message: m }); };
