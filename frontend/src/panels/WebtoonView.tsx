@@ -58,6 +58,13 @@ function JobRow({ j, onChanged }: { j: WebtoonJob; onChanged: () => void }) {
         <p className="muted" style={{ marginTop: 6, fontFamily: "monospace", fontSize: 12 }}>{j.log[j.log.length - 1]}</p>
       )}
 
+      {/* 완성 영상 미리보기(2026-11-06 사장님 "제작실 웹툰에 만들어진 영상이 없네") — 숏폼 탭과 같은 경로·재생 시에만 로드. */}
+      {j.stage === "ready" && j.shortId && (
+        <video key={`${j.shortId}-${j.updatedTs}`} controls preload="none"
+          poster={`/shorts/${j.shortId}/thumbnail?v=${encodeURIComponent(j.updatedTs)}`}
+          src={`/shorts/${j.shortId}/video`}
+          style={{ display: "block", width: 220, aspectRatio: "9/16", borderRadius: 10, background: "#000", objectFit: "contain", marginTop: 10 }} />
+      )}
       {(j.stage === "review" || j.stage === "ready" || j.stage === "drawing") && j.scenes && j.scenes.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10, marginTop: 10 }}>
           {j.scenes.map((s) => (
