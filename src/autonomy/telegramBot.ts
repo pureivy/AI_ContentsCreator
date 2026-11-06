@@ -41,7 +41,10 @@ export type BotAction =
   // 댓글 담당(2026-10-25) — 답글 초안 올리기(ca)·고치기(ce, 답장 유도)·건너뛰기(cs). id = cmt_… (우리 쪽 키).
   | { kind: 'comment_post'; id: string }
   | { kind: 'comment_revise'; id: string }
-  | { kind: 'comment_skip'; id: string };
+  | { kind: 'comment_skip'; id: string }
+  // 웹툰 그림 확인(2026-11-06 사장님) — 승인(wa)·장면 다시 그리기(wr, 번호를 답장으로). id = webtoon_…
+  | { kind: 'webtoon_approve'; id: string }
+  | { kind: 'webtoon_redraw'; id: string };
 
 /**
  * 자율런 지시 명령(순수, 2026-09-10) — "자율런 지시: …" 로 설정, "지시 끄기/켜기/상태/삭제". 아니면 null.
@@ -76,7 +79,7 @@ export function describeDirective(d: { text: string; on: boolean; made: number; 
 
 /** 콜백 데이터 파싱(≤64바이트 규격: "<op>:<id>"). 불명이면 null. 순수 — 테스트 대상. */
 export function parseCallback(data: string): BotAction | null {
-  const m = /^(bp|rv|cp|cf|sy|sm|yf|mf|tr|nc|nf|nk|yh|mh|nh|ly|lt|lf|ca|ce|cs):([A-Za-z0-9_]{1,48})$/.exec(data);
+  const m = /^(bp|rv|cp|cf|sy|sm|yf|mf|tr|nc|nf|nk|yh|mh|nh|ly|lt|lf|ca|ce|cs|wa|wr):([A-Za-z0-9_]{1,48})$/.exec(data);
   if (!m) return null;
   const id = m[2]!;
   switch (m[1]) {
@@ -101,8 +104,21 @@ export function parseCallback(data: string): BotAction | null {
     case 'ca': return { kind: 'comment_post', id };
     case 'ce': return { kind: 'comment_revise', id };
     case 'cs': return { kind: 'comment_skip', id };
+    case 'wa': return { kind: 'webtoon_approve', id };
+    case 'wr': return { kind: 'webtoon_redraw', id };
     default: return null;
   }
+}
+
+/** 웹툰 다시 그릴 장면 번호(순수) — "3, 7"·"3번 7번"·"s03" → ['s03','s07']. 범위 밖·중복은 버린다. */
+export function parseSceneNumbers(text: string, count: number): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/\d+/g)) {
+    const n = Number(m[0]);
+    const id = `s${String(n).padStart(2, '0')}`;
+    if (n >= 1 && n <= count && !out.includes(id)) out.push(id);
+  }
+  return out;
 }
 
 /** 수정요청 답장의 대상 라우트(순수, 테스트 대상) — 파생(card_/short_)은 자기 revise 라우트(수 분 동기),
@@ -222,7 +238,7 @@ const ytDoneTail = (j: Record<string, unknown> | null): string =>
   (j?.public_direct === true ? '\n커버가 첫 장면이 아니면 따로 알려 드립니다.'
     : j?.public_pending === true ? '\n썸네일까지 확인하고, 안 뜨면 따로 알려 드립니다.' : '\n공개 전환은 유튜브 스튜디오에서.');
 
-export async function runAction(a: Exclude<BotAction, { kind: 'revise' } | { kind: 'comment_revise' }>, call: ApiCall = api, send: Senders = REAL_SENDERS): Promise<string> {
+export async function runAction(a: Exclude<BotAction, { kind: 'revise' } | { kind: 'comment_revise' } | { kind: 'webtoon_redraw' }>, call: ApiCall = api, send: Senders = REAL_SENDERS): Promise<string> {
   switch (a.kind) {
     case 'naver_draft': {
       const r = await call(`/pieces/${a.id}/naver-draft`, { actor: '텔레그램' }, 30_000);
@@ -398,6 +414,10 @@ export async function runAction(a: Exclude<BotAction, { kind: 'revise' } | { kin
       const msg = typeof r.json?.message === 'string' ? r.json.message : '';
       return r.ok ? escapeHtml(msg || '✅ 답글을 올렸습니다') : `⚠️ ${escapeHtml(msg || (typeof r.json?.error === 'string' ? r.json.error : `HTTP ${r.status}`))}`;
     }
+    case 'webtoon_approve': {
+      const r = await call(`/api/webtoon/${a.id}/approve`, {}, 30_000);
+      return r.ok ? '✅ 웹툰 승인 — 장면 영상을 만듭니다(약 45분~1시간). 완성되면 영상과 발행 버튼이 옵니다.' : errText('웹툰 승인 실패', r);
+    }
     case 'comment_skip': {
       const r = await call(`/comments/${a.id}/skip`, {}, 15_000);
       const msg = typeof r.json?.message === 'string' ? r.json.message : '';
@@ -549,6 +569,15 @@ async function handleUpdate(u: TgUpdate, chatId: string, bootTs: number): Promis
       if (typeof mid === 'number') { pendingRevise.set(mid, { targetId: action.id, ts: Date.now() }); prunePendingRevise(); }
       return;
     }
+    if (action.kind === 'webtoon_redraw') {
+      const res = await tgCall('sendMessage', {
+        chat_id: chatId, text: '✏️ 다시 그릴 장면 번호를 이 메시지에 답장(Reply)으로 보내주세요. 예: 3, 7',
+        reply_markup: { force_reply: true },
+      });
+      const mid = (res?.result as { message_id?: number } | undefined)?.message_id;
+      if (typeof mid === 'number') { pendingRevise.set(mid, { targetId: action.id, ts: Date.now() }); prunePendingRevise(); }
+      return;
+    }
     if (action.kind === 'revise') {
       // 답장 유도 — 답장 텍스트가 도착하면 아래 message 분기가 /revise 로 잇는다.
       const res = await tgCall('sendMessage', {
@@ -598,6 +627,14 @@ async function handleUpdate(u: TgUpdate, chatId: string, bootTs: number): Promis
     const pending = pendingRevise.get(replyTo);
     if (pending) {
       pendingRevise.delete(replyTo);
+      if (pending.targetId.startsWith('webtoon_')) {
+        // 웹툰 장면 다시 그리기 — 번호만 읽는다. 다 그리면 서버가 새 그림과 버튼을 다시 보낸다.
+        const scenes = parseSceneNumbers(text, 30);
+        if (!scenes.length) { void sendTelegramHtml('⚠️ 장면 번호를 못 읽었습니다 — ✏️ 버튼을 다시 누르고 "3, 7"처럼 보내 주세요.'); return; }
+        const r = await api(`/api/webtoon/${pending.targetId}/redraw`, { scenes }, 30_000);
+        void sendTelegramHtml(r.ok ? `🖌 ${scenes.map((x) => Number(x.slice(1))).join(', ')}번 장면 다시 그리는 중 — 끝나면 새 그림을 보내 드립니다.` : errText('웹툰 다시 그리기 실패', r));
+        return;
+      }
       if (pending.targetId.startsWith('cmt_')) {
         // 댓글 답글 고치기 — 라우트가 새 초안 카드(버튼 포함)를 직접 보낸다. 실패만 여기서 알린다.
         void api(`/comments/${pending.targetId}/revise`, { feedback: text }, 180_000)

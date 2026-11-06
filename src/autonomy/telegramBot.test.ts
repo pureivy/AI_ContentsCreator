@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseCallback, reviseEndpointFor, runAction, parseDirectiveCommand, describeDirective, preBootDisposition, usesLongCall, type Senders } from './telegramBot';
+import { parseCallback, parseSceneNumbers, reviseEndpointFor, runAction, parseDirectiveCommand, describeDirective, preBootDisposition, usesLongCall, type Senders } from './telegramBot';
 
 /** 테스트용 발신부 — 실제 텔레그램을 치지 않는다. */
 const stubSend = (log: Array<{ kind: 'photo' | 'html'; text: string; buttons?: unknown }> = []): { send: Senders; log: typeof log } => ({
@@ -318,5 +318,18 @@ describe('재시작·긴 호출(2026-10-26)', () => {
       expect(usesLongCall(k)).toBe(true);
     }
     for (const k of ['naver_draft', 'comment_skip', 'shorts_clip', 'shorts_clip_check', 'longform_youtube'] as const) expect(usesLongCall(k)).toBe(false);
+  });
+});
+
+describe('웹툰 그림 확인 버튼(2026-11-06)', () => {
+  it('wa·wr 콜백', () => {
+    expect(parseCallback('wa:webtoon_ba22250a70')).toEqual({ kind: 'webtoon_approve', id: 'webtoon_ba22250a70' });
+    expect(parseCallback('wr:webtoon_ba22250a70')).toEqual({ kind: 'webtoon_redraw', id: 'webtoon_ba22250a70' });
+  });
+  it('장면 번호 답장 — 쉼표·번·sNN, 범위 밖·중복은 버림', () => {
+    expect(parseSceneNumbers('3, 7', 9)).toEqual(['s03', 's07']);
+    expect(parseSceneNumbers('3번이랑 7번 그리고 3번', 9)).toEqual(['s03', 's07']);
+    expect(parseSceneNumbers('s09 12 0', 9)).toEqual(['s09']);
+    expect(parseSceneNumbers('다시', 9)).toEqual([]);
   });
 });

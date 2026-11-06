@@ -18,10 +18,12 @@ import { pieceStore } from '../content/pieces';
 import { shortsStore } from '../content/shorts';
 import { webtoonStore, type WebtoonJob, type WebtoonScene } from '../content/webtoon';
 import type { FactGateInfo } from '../content/factGate';
-import { notifyShortsReady } from '../autonomy/contentNotify';
+import { escapeHtml, notifyShortsReady, studioBase } from '../autonomy/contentNotify';
+import { sendTelegramHtml, sendTelegramPhotos } from '../autonomy/notify';
 import { parityIssuesChecked, parityToInfo } from './standaloneQa';
 import { THUMB_FRAME_FILE } from '../tools/shortsRender';
-import { generateDesignedThumbnail } from './shortsThumbnail';
+import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
+import { generateTitleArt } from './shortsTitleArt';
 import { produce, projectDir, SM_EXIT_TEXT, shortMarkerReady, writeShotlist, type SmResult } from '../tools/shortMarker';
 
 const execFileP = promisify(execFile);
@@ -138,6 +140,7 @@ async function draftAndDraw(id: string, signal: AbortSignal, say: (l: string) =>
   const cur = store.get(id)!;
   store.update(id, { stage: 'review', wallSec: { ...cur.wallSec, drawing: Math.round((Date.now() - t1) / 1000) } });
   console.log(`[웹툰] ${cur.topic.slice(0, 30)} — 그림 ${scenes.length}장 준비, 제작실 확인 대기`);
+  notifyWebtoonReview(id);
 }
 
 /** 새 작업 시작 — 202 용. project 를 주면 그 SHORT_marker 프로젝트(장면 목록이 이미 있으면 그대로)로 — 시험용. */
@@ -181,8 +184,37 @@ export function redrawWebtoon(id: string, sceneIds: readonly string[]): Act {
     const r = await produce({ project: job.project, imagesOnly: true, signal, onLine: say });
     if (!r.ok) throw new Error(`그림 — ${fail(r)}`);
     webtoonStore().update(id, { stage: 'review' });
+    notifyWebtoonReview(id, bumped);
   });
   return { ok: true };
+}
+
+/**
+ * 그림 확인 알림(2026-11-06 사장님 "그림+승인 버튼") — 장면 그림 묶음 + 낭독 목록 + [승인]·[장면 다시 그리기].
+ * 다시 그리기 뒤에는 바뀐 장면만 보낸다. 시험 실행(quiet)은 보내지 않는다. 실패는 무해(제작실 탭에서 그대로 할 수 있다).
+ */
+export function notifyWebtoonReview(id: string, only?: readonly string[]): void {
+  const job = webtoonStore().get(id);
+  if (!job || job.quiet || !job.scenes?.length) return;
+  const all = job.scenes;
+  const shown = only?.length ? all.filter((s) => only.includes(s.id)) : all;
+  const files = shown.map((s) => webtoonImagePath(id, s.id)).filter((p): p is string => !!p);
+  const title = escapeHtml(job.hook || job.topic);
+  const head = only?.length ? `🖌 웹툰 장면 다시 그림 — ${shown.map((s) => all.indexOf(s) + 1).join(', ')}번` : `🖌 웹툰 그림 확인 — ${all.length}장면`;
+  const fg = job.factGate;
+  const fact = !fg ? '' : fg.status === 'pass' ? '원문 대조: 이상 없음' : fg.status === 'hold'
+    ? `원문 대조: 확인 필요 ${fg.unsupported.length}건\n${fg.unsupported.map((u) => `· ${escapeHtml(u)}`).join('\n')}` : '원문 대조: 판정 실패 — 낭독을 직접 확인하세요';
+  const body = [
+    `${head}\n<b>${title}</b>`,
+    all.map((s, i) => `${i + 1}. ${escapeHtml(s.narration)}`).join('\n'),
+    fact,
+    `사진 순서가 장면 번호입니다. 승인하면 장면 영상을 만듭니다(약 45분~1시간).\n제작실 → 웹툰 탭: ${studioBase()}/`,
+  ].filter(Boolean).join('\n\n');
+  const buttons = [[{ text: '✅ 승인 — 영상 만들기', callback_data: `wa:${id}` }, { text: '✏️ 장면 다시 그리기', callback_data: `wr:${id}` }]];
+  void (async () => {
+    if (files.length) await sendTelegramPhotos(files.slice(0, 10), `${head} — ${title}`);
+    await sendTelegramHtml(body, buttons);
+  })().catch((e: unknown) => console.log(`[웹툰] 그림 확인 알림 실패(무해) — ${e instanceof Error ? e.message.slice(0, 80) : e}`));
 }
 
 /** 그림 승인 → 영상 → 숏폼 기록 등록. */
@@ -193,6 +225,7 @@ export function approveWebtoon(id: string): Act {
   webtoonStore().update(id, { stage: 'producing', error: undefined, failedStage: undefined });
   runStage(id, async (signal, say) => {
     const t0 = Date.now();
+    await ensureTitleArt(id, say, signal);
     const r = await produce({ project: job.project, signal, onLine: say });
     if (!r.ok || !r.mp4) throw new Error(`영상 — ${fail(r)}`);
     const cur = webtoonStore().get(id)!;
@@ -200,6 +233,22 @@ export function approveWebtoon(id: string): Act {
     await registerShorts(id, r);
   });
   return { ok: true };
+}
+
+/** 영상 상단 제목 캘리(2026-11-06 사장님 "기존 숏폼 영상 제목처럼") — 숏폼과 같은 함수로 썸네일 카피를 정하고 투명 캘리를 굽는다.
+ *  SHORT_marker 는 프로젝트 폴더에 title-art.png 가 있으면 노란 훅 상자 대신 영상 끝까지 상단에 고정한다.
+ *  카피는 title-copy.json — 등록 때 디자인 썸네일이 같은 문구를 쓴다. 이미 있으면(이어서 만들기) 다시 만들지 않는다. 실패하면 종전 노란 상자. */
+async function ensureTitleArt(id: string, say: (l: string) => void, signal: AbortSignal): Promise<void> {
+  const job = webtoonStore().get(id);
+  if (!job || job.quiet) return;
+  const dir = projectDir(job.project);
+  if (fs.existsSync(path.join(dir, 'title-art.png'))) return;
+  say('제목 캘리 만드는 중(숏폼과 같은 상단 제목)');
+  const art = await generateTitleArt({
+    dir, title: job.hook || job.topic, description: (job.scenes ?? []).map((s) => s.narration).join(' '), titles: job.hook ? [job.hook] : [],
+    ...(job.keyword ? { keyword: job.keyword } : {}), signal,
+  });
+  say(art ? `제목 캘리 — ${[art.copy.line1, art.copy.line2].filter(Boolean).join(' / ')}` : '제목 캘리 못 만듦 — 노란 제목 상자로 만듭니다');
 }
 
 /** 실패·중단·취소된 작업 이어서 — 장면 목록이 있으면 그림부터(캐시라 다 그린 장면은 건너뛴다). */
@@ -268,11 +317,18 @@ async function registerShorts(id: string, r: SmResult): Promise<void> {
     // 발행 직전 보강 ensureDesignThumbnailBeforePublish 가 한 번 더 그려 본다).
     await webtoonCover(path.join(dir, 'final.mp4'), path.join(dir, 'thumbnail.jpg'));
     if (fs.existsSync(path.join(dir, 'thumbnail.jpg'))) fs.writeFileSync(path.join(dir, THUMB_FRAME_FILE), new Date().toISOString(), 'utf-8');
+    // 영상 상단 캘리와 같은 카피(title-copy.json) — 썸네일 문구가 영상 속 제목과 같게(숏폼과 같은 규칙). 수동 재생성도 이 파일을 읽는다.
+    let copy: ThumbCopy | undefined;
+    for (const f of ['title-copy.json', 'title-art.png']) {
+      const src = path.join(projectDir(job.project), f);
+      if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dir, f));
+    }
+    try { copy = JSON.parse(fs.readFileSync(path.join(dir, 'title-copy.json'), 'utf-8')) as ThumbCopy; } catch { /* 캘리 없이 만든 편 — 썸네일이 카피를 새로 정한다 */ }
     if (!job.quiet) {
       const hook = path.join(dir, 'scenes', 'scene-01.png');
       const ok = await generateDesignedThumbnail({
         dir, title: meta.title, description: meta.description, titles: [meta.title], hookImage: fs.existsSync(hook) ? hook : null,
-        ...(job.keyword ? { keyword: job.keyword } : {}), signal: AbortSignal.timeout(240_000),
+        ...(job.keyword ? { keyword: job.keyword } : {}), ...(copy?.line1 ? { copy } : {}), signal: AbortSignal.timeout(240_000),
       }).catch(() => false);
       console.log(`[웹툰] 디자인 썸네일 ${ok ? '완료' : '못 만듦 — 영상 1초 화면을 커버로 두고 발행 직전에 한 번 더 그린다'}`);
     }
