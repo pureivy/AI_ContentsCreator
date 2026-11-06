@@ -463,6 +463,11 @@ export async function rerenderHtmlCard(dir: string, say: Say, signal?: AbortSign
  * 수정 요청(HTML 판) — 제목·본문·칸 글을 고치고, 필요하면 사진 장면을 다시 그린다. 고친 칸은 원문 겹침·사실 대조를 다시 거친다.
  * 반환: 바뀐 장 번호(1부터). 바뀐 게 없으면 null.
  */
+/** 수정 요청 재렌더 — 바뀐 장만 새로 거른 판을 쓰고, 나머지 장은 저장본 그대로(이미 검사·렌더된 판). */
+export function keepUnchangedSlides(saved: CardLayout, next: CardLayout, changed: ReadonlySet<number>): CardLayout {
+  return { ...next, slides: next.slides.map((s, i) => (changed.has(i + 1) || !saved.slides[i] ? s : saved.slides[i]!)) };
+}
+
 export async function reviseHtmlCard(dir: string, feedback: string, say: Say, signal?: AbortSignal): Promise<{ changed: number[]; plan: PlanLike } | null> {
   const saved = JSON.parse(fs.readFileSync(path.join(dir, 'layout.json'), 'utf-8')) as CardLayout & { coverNote?: string };
   const plan = JSON.parse(fs.readFileSync(path.join(dir, 'plan.json'), 'utf-8')) as PlanLike;
@@ -529,9 +534,20 @@ export async function reviseHtmlCard(dir: string, feedback: string, say: Say, si
     });
   }
   if (!changed.size) return null;
-  let layout = normalizeLayout({ series: saved.series, slides: rawSlides }, plan, source, 0, dir);
-  // normalizeLayout 은 표지·마무리 판을 고정한다 — 기존 판(kind)이 다른 장은 저장본 kind 를 따른다(같은 판으로만 수정).
-  layout = await factCheckFields(layout, fullSource, readSourceFlagged(dir), say, signal); // 생성 때와 같은 지적 목록
+  // 바뀐 장만 다시 거른다(2026-11-06 대봉감 card_bcdc42340a) — 전에는 9장 전부를 겹침 검사로 다시 걸러, 만들 때 뜻 대조로 살린
+  // 칸 10개가 버려졌다(2·7·9장 글만 남음, 7장은 요청대로 다시 그린 사진까지 잃음). 바뀐 장은 만들 때처럼 뜻 대조로 살린다.
+  const rawLayout = { series: saved.series, slides: rawSlides };
+  const rejected = new Set<string>();
+  let norm = normalizeLayout(rawLayout, plan, source, 0, dir, { rejected });
+  const changedText = JSON.stringify(rawSlides.filter((_, i) => changed.has(i + 1)));
+  const candidates = [...rejected].filter((t) => changedText.includes(JSON.stringify(t).slice(1, -1))); // JSON 안 글(줄바꿈은 \n)로 비교
+  const approved = candidates.length ? await rescueFields(candidates, source, signal) : new Set<string>();
+  if (approved.size) {
+    norm = normalizeLayout(rawLayout, plan, source, 0, dir, { approved });
+    say(`카드 칸 원문 뜻 대조(수정) — 겹침 미달 ${candidates.length}칸 중 ${approved.size}칸 살림`);
+  }
+  let layout = keepUnchangedSlides(saved, norm, changed);
+  layout = keepUnchangedSlides(saved, await factCheckFields(layout, fullSource, readSourceFlagged(dir), say, signal), changed); // 생성 때와 같은 지적 목록
   const count = await renderLayout(dir, layout, saved.coverNote, say, signal);
   if (!count) return null;
   fs.writeFileSync(path.join(dir, 'layout.json'), JSON.stringify({ ...layout, coverNote: saved.coverNote }, null, 2), 'utf-8');

@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { commitRenderedSlides, readSourceFlagged } from './cardHtmlJob';
+import { commitRenderedSlides, keepUnchangedSlides, readSourceFlagged } from './cardHtmlJob';
+import { normalizeLayout } from './cardLayout';
 
 const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'card-html-'));
 
@@ -50,5 +51,33 @@ describe('readSourceFlagged — 수정 요청 칸 사실 대조가 생성 때 �
     fs.writeFileSync(path.join(d, 'source.flagged.json'), '{깨짐');
     expect(readSourceFlagged(d)).toEqual([]);
     fs.rmSync(d, { recursive: true, force: true });
+  });
+});
+
+describe('keepUnchangedSlides — 수정 요청은 바뀐 장만 다시 거른다(2026-11-06 대봉감 카드)', () => {
+  const plan = { title: '대봉감', slides: [
+    { headline: '표지', body: '' },
+    { headline: '기준은 셋', body: '이 셋으로 정해요' },
+    { headline: '셋 다 맞으면', body: '지금 심어요' },
+    { headline: '심은 뒤', body: '지지대와 덮기' },
+  ] };
+  const raw = { slides: [
+    { kind: 'cover' },
+    { kind: 'points', items: [{ title: '묘목 굵기', text: '줄기 굵은지 가는지 봐요' }, { title: '심을 자리', text: '바람과 물빠짐 봐요' }] },
+    { kind: 'compare', bad: { label: '가늘면', text: '봄까지 미뤄요' }, good: { label: '굵으면', text: '지금 심어요' } },
+    { kind: 'steps', steps: [{ title: '지지대 세우기', text: '흔들리지 않게 고정해요' }, { title: '밑동 덮기', text: '왕겨 낙엽으로 덮어요' }] },
+  ] };
+  const source = '대봉감나무는 묘목이 굵으면 가을에 심고 가늘면 봄까지 미뤄요. 심은 뒤 지지대를 세우고 밑동을 덮어요.';
+  it('겹침 검사만 다시 돌리면 뜻 대조로 살린 칸이 사라진다 — 바뀌지 않은 장은 저장본 그대로', () => {
+    const rejected = new Set<string>();
+    normalizeLayout(raw, plan, source, 0, undefined, { rejected });
+    const saved = normalizeLayout(raw, plan, source, 0, undefined, { approved: rejected }); // 만들 때 뜻 대조로 다 살림
+    expect(saved.slides[1]!.kind).toBe('points');
+    const recheck = normalizeLayout(raw, plan, source, 0); // 옛 수정 경로: 뜻 대조 없이 전부 다시
+    expect(recheck.slides[1]!.kind).toBe('photo');
+    const out = keepUnchangedSlides(saved, recheck, new Set([3]));
+    expect(out.slides[1]).toEqual(saved.slides[1]);
+    expect(out.slides[3]).toEqual(saved.slides[3]);
+    expect(out.slides[2]).toEqual(recheck.slides[2]);
   });
 });
