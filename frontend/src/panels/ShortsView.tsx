@@ -49,7 +49,7 @@ function fmtCount(n: number): string {
   return String(n);
 }
 
-function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
+export function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
   s: ShortsInfo; onDelete: (id: string) => void;
   yt: { client: boolean; connected: boolean }; metaReady: boolean; fbReady: boolean; onChanged: () => void;
 }) {
@@ -288,7 +288,7 @@ export default function ShortsSection() {
   const [igReconnect, setIgReconnect] = useState<{ expired: boolean; daysLeft?: number } | null>(null);
 
   const load = () => {
-    fetchShorts().then(setItems); fetchPieces().then(setPieces); fetchYoutubeStatus().then(setYt);
+    fetchShorts().then((xs) => setItems(xs.filter((x) => x.format !== "webtoon"))); // 웹툰 편은 제작실 웹툰 탭에서(2026-11-06 사장님) fetchPieces().then(setPieces); fetchYoutubeStatus().then(setYt);
     fetchMetaStatus().then((m) => { setMetaReady(m.client && m.connected); setFbReady(!!m.fbClient && !!m.fbConnected); setIgReconnect(igReconnectNeeded(m) ? { expired: !!m.igExpired, daysLeft: m.igDaysLeft } : null); });
   };
   useEffect(() => {

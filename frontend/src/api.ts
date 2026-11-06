@@ -1165,6 +1165,8 @@ export async function deleteCardNews(id: string, opts?: { purge?: boolean }): Pr
 export type ShortsStage = "planning" | "designing" | "rendering" | "ready" | "error";
 export interface ShortsInfo {
   id: string;
+  /** 웹툰 편(2026-11-05) — 숏폼 탭에는 넣지 않고 제작실 웹툰 탭에서 본다(2026-11-06 사장님). */
+  format?: "webtoon";
   /** 발행 대상 채널(2026-09-03 분리) — 없으면 레거시(양 채널 겸용). */
   platform?: "youtube" | "instagram";
   topic: string;

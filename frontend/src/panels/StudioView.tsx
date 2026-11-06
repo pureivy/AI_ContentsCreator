@@ -11,7 +11,7 @@ const KINDS = [
   { key: "cardnews", icon: "cards", label: "카드뉴스", desc: "인스타그램용 정사각 슬라이드 — gpt-image-2가 텍스트까지 그리고, 비전 QA가 한글 오타를 검수합니다." },
   { key: "shorts", icon: "play", label: "숏폼", desc: "유튜브 숏폼(세로 MP4) — 대본·씬 이미지는 AI, 내레이션은 TTS, 자막·조립은 코드가 담당합니다." },
   { key: "longform", icon: "play", label: "롱폼", desc: "유튜브 롱폼(가로 10분 MP4) — 매주 토요일 24:00(일요일 00:00) 자동 제작, 검토 후 유튜브 공개 발행은 버튼으로." },
-  { key: "webtoon", icon: "play", label: "웹툰", desc: "웹툰 나레이션 숏폼(시범, 인스타) — Mac Studio ComfyUI(SHORT_marker)가 그림·낭독·영상을 만듭니다. 그림을 확인·승인하면 영상을 만들고, 완성본은 숏폼 검토·발행 버튼으로 갑니다. 한 편 약 30~60분." },
+  { key: "webtoon", icon: "play", label: "웹툰", desc: "웹툰 나레이션 숏폼(시범) — Mac Studio ComfyUI(SHORT_marker)가 그림·낭독·영상을 만듭니다. 그림을 확인·승인하면 영상과 디자인 썸네일을 만들고, 완성본은 이 탭에서 MP4 받기·유튜브·릴스·클립 발행을 합니다(숏폼 탭에는 넣지 않음). 한 편 약 1시간~1시간 반." },
 ] as const;
 type Kind = (typeof KINDS)[number]["key"];
 
@@ -30,7 +30,7 @@ export default function StudioView() {
         </h1>
         <p className="apikeys-sub">
           블로그와 별개의 독립 주제로 만들거나, 전체 산출물을 보관·다운로드합니다
-          (블로그 파생물은 검토 탭에서 초안과 세트로도 확인됩니다). {cur.desc} 발행은 없고 다운로드까지만.
+          (블로그 파생물은 검토 탭에서 초안과 세트로도 확인됩니다). {cur.desc}{cur.key !== "webtoon" && " 발행은 없고 다운로드까지만."}
         </p>
       </div>
       {/* key 로 섹션 전환 시 상태(폼 입력·폴링) 초기화 — 두 섹션이 같은 폼 구조라 잔상 방지 */}

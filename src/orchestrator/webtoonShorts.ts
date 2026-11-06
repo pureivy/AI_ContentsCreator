@@ -20,6 +20,8 @@ import { webtoonStore, type WebtoonJob, type WebtoonScene } from '../content/web
 import type { FactGateInfo } from '../content/factGate';
 import { notifyShortsReady } from '../autonomy/contentNotify';
 import { parityIssuesChecked, parityToInfo } from './standaloneQa';
+import { THUMB_FRAME_FILE } from '../tools/shortsRender';
+import { generateDesignedThumbnail } from './shortsThumbnail';
 import { produce, projectDir, SM_EXIT_TEXT, shortMarkerReady, writeShotlist, type SmResult } from '../tools/shortMarker';
 
 const execFileP = promisify(execFile);
@@ -247,7 +249,7 @@ async function registerShorts(id: string, r: SmResult): Promise<void> {
   if (prev?.igReelId || prev?.youtubeId) throw new Error('이미 발행된 숏폼 기록입니다 — 다시 등록하지 않습니다');
   const short = prev ?? ss.create({
     topic: job.topic, ...(job.keyword ? { keyword: job.keyword } : {}), sourcePieceId: job.pieceId,
-    platform: 'instagram', format: 'webtoon', webtoonId: id, writer: '웹툰(SHORT_marker)', director: '웹툰(SHORT_marker)',
+    format: 'webtoon', webtoonId: id, writer: '웹툰(SHORT_marker)', director: '웹툰(SHORT_marker)',
   });
   if (!prev) store.update(id, { shortId: short.id });
   const dir = ss.dirFor(short.id);
@@ -261,8 +263,19 @@ async function registerShorts(id: string, r: SmResult): Promise<void> {
     });
     fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify({ title: meta.title, format: 'webtoon', webtoonId: id, scenes: scenes.map((s) => ({ narration: s.narration })) }, null, 2), 'utf-8');
     fs.writeFileSync(path.join(dir, 'caption.txt'), [meta.title, '', meta.description, '', meta.hashtags.join(' ')].join('\n'), 'utf-8');
-    // 릴스 커버 = 영상 첫 화면(2026-11-05 사장님 결정) — SHORT_marker 가 제목을 이미 얹은 1초 화면. 디자인 썸네일(gpt-image)을 새로 그리지 않는다.
+    // 릴스 커버(2026-11-06 사장님 결정 — 11-05 '영상 첫 화면'을 바꿈): 다른 릴스와 같은 디자인 썸네일(gpt-image)을 첫 장면 그림으로.
+    // 첫 화면은 제목 상자가 작고 자막 조각이 걸려 프로필 격자에서 웹툰만 밋밋했다. 영상 1초 화면은 실패 때 대체본(.thumb-frame 표식 —
+    // 발행 직전 보강 ensureDesignThumbnailBeforePublish 가 한 번 더 그려 본다).
     await webtoonCover(path.join(dir, 'final.mp4'), path.join(dir, 'thumbnail.jpg'));
+    if (fs.existsSync(path.join(dir, 'thumbnail.jpg'))) fs.writeFileSync(path.join(dir, THUMB_FRAME_FILE), new Date().toISOString(), 'utf-8');
+    if (!job.quiet) {
+      const hook = path.join(dir, 'scenes', 'scene-01.png');
+      const ok = await generateDesignedThumbnail({
+        dir, title: meta.title, description: meta.description, titles: [meta.title], hookImage: fs.existsSync(hook) ? hook : null,
+        ...(job.keyword ? { keyword: job.keyword } : {}), signal: AbortSignal.timeout(240_000),
+      }).catch(() => false);
+      console.log(`[웹툰] 디자인 썸네일 ${ok ? '완료' : '못 만듦 — 영상 1초 화면을 커버로 두고 발행 직전에 한 번 더 그린다'}`);
+    }
   } catch (e) {
     // planning 기록이 남지 않게 — 실패로 닫는다(부팅 복구도 웹툰 기록은 재개하지 않는다).
     ss.update(short.id, { stage: 'error', error: `웹툰 등록 실패 — ${e instanceof Error ? e.message.slice(0, 120) : String(e)}` });

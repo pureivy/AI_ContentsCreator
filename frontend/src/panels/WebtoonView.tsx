@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
 import {
   fetchWebtoon, runWebtoon, approveWebtoon, resumeWebtoon, cancelWebtoon, redrawWebtoon, WebtoonJob, WebtoonList,
+  fetchShorts, deleteShorts, fetchYoutubeStatus, fetchMetaStatus, ShortsInfo,
 } from "../api";
+import { ShortRow } from "./ShortsView";
+
+/** 완성 편 발행 칸(2026-11-06 사장님) — 숏폼 탭에는 웹툰을 넣지 않으니 여기서 숏폼 카드(MP4·zip·캡션·썸네일·유튜브·릴스·클립)를 그대로 쓴다. */
+interface Publish {
+  shorts: Map<string, ShortsInfo>; yt: { client: boolean; connected: boolean }; metaReady: boolean; fbReady: boolean;
+  reload: () => void; onDelete: (id: string) => void;
+}
 
 // 웹툰 탭(2026-11-05, 1단계 시범) — 블로그 글을 골라 시작 → 장면 목록·원문 대조·그림(자동) → 그림 확인(승인·장면 다시 그리기)
 // → 영상(자동) → 완성본은 숏폼 기록으로 등록돼 검토 탭·텔레그램 발행 버튼으로 간다. 진행은 8초 폴링(롱폼과 같다).
@@ -19,7 +27,7 @@ function fmtWhen(iso?: string): string {
 }
 function fmtMin(sec?: number): string { return typeof sec === "number" ? `${Math.max(1, Math.round(sec / 60))}분` : ""; }
 
-function JobRow({ j, onChanged }: { j: WebtoonJob; onChanged: () => void }) {
+function JobRow({ j, onChanged, pub }: { j: WebtoonJob; onChanged: () => void; pub: Publish }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [pick, setPick] = useState<Set<string>>(new Set());
@@ -58,12 +66,10 @@ function JobRow({ j, onChanged }: { j: WebtoonJob; onChanged: () => void }) {
         <p className="muted" style={{ marginTop: 6, fontFamily: "monospace", fontSize: 12 }}>{j.log[j.log.length - 1]}</p>
       )}
 
-      {/* 완성 영상 미리보기(2026-11-06 사장님 "제작실 웹툰에 만들어진 영상이 없네") — 숏폼 탭과 같은 경로·재생 시에만 로드. */}
-      {j.stage === "ready" && j.shortId && (
-        <video key={`${j.shortId}-${j.updatedTs}`} controls preload="none"
-          poster={`/shorts/${j.shortId}/thumbnail?v=${encodeURIComponent(j.updatedTs)}`}
-          src={`/shorts/${j.shortId}/video`}
-          style={{ display: "block", width: 220, aspectRatio: "9/16", borderRadius: 10, background: "#000", objectFit: "contain", marginTop: 10 }} />
+      {/* 완성 편 — 숏폼 탭과 같은 카드(미리보기·MP4·발행 버튼). 웹툰 편은 유튜브·릴스 둘 다(채널 전용 표시를 뗀다). */}
+      {j.stage === "ready" && j.shortId && pub.shorts.get(j.shortId) && (
+        <ShortRow s={{ ...pub.shorts.get(j.shortId)!, platform: undefined }} onDelete={pub.onDelete}
+          yt={pub.yt} metaReady={pub.metaReady} fbReady={pub.fbReady} onChanged={pub.reload} />
       )}
       {(j.stage === "review" || j.stage === "ready" || j.stage === "drawing") && j.scenes && j.scenes.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10, marginTop: 10 }}>
@@ -98,8 +104,8 @@ function JobRow({ j, onChanged }: { j: WebtoonJob; onChanged: () => void }) {
         {(ACTIVE.has(j.stage) || j.stage === "review") && (
           <button className="btn ghost" disabled={busy} onClick={() => { if (confirm("이 웹툰 작업을 멈출까요?")) void act(() => cancelWebtoon(j.id)); }}>멈추기</button>
         )}
-        {j.stage === "ready" && j.shortId && (
-          <span className="muted">숏폼 {j.shortId}로 등록됨 — 검토 탭·텔레그램에서 발행하세요(인스타)</span>
+        {j.stage === "ready" && j.shortId && !pub.shorts.get(j.shortId) && (
+          <span className="muted">숏폼 {j.shortId} 기록을 찾을 수 없습니다(삭제됨?)</span>
         )}
         {err && <span className="muted" style={{ color: "var(--con)" }}>{err}</span>}
       </div>
@@ -113,7 +119,22 @@ export default function WebtoonSection() {
   const [piece, setPiece] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const load = () => { fetchWebtoon().then(setData); };
+  const [shorts, setShorts] = useState<Map<string, ShortsInfo>>(new Map());
+  const [yt, setYt] = useState<{ client: boolean; connected: boolean }>({ client: false, connected: false });
+  const [metaReady, setMetaReady] = useState(false);
+  const [fbReady, setFbReady] = useState(false);
+  const loadShorts = () => { fetchShorts().then((xs) => setShorts(new Map(xs.filter((x) => x.format === "webtoon").map((x) => [x.id, x])))); };
+  const load = () => { fetchWebtoon().then(setData); loadShorts(); };
+  useEffect(() => {
+    fetchYoutubeStatus().then(setYt);
+    fetchMetaStatus().then((m) => { setMetaReady(m.client && m.connected); setFbReady(!!m.fbClient && !!m.fbConnected); });
+  }, []);
+  const onDelete = async (id: string) => {
+    if (!confirm("이 웹툰 숏폼을 삭제할까요?\n(영상 파일은 남고 목록에서만 제거됩니다)")) return;
+    const r = await deleteShorts(id);
+    if (r.ok) load(); else alert(r.error || "삭제 실패");
+  };
+  const pub: Publish = { shorts, yt, metaReady, fbReady, reload: load, onDelete };
   useEffect(() => { load(); const t = setInterval(load, 8000); return () => clearInterval(t); }, []);
 
   const start = async () => {
@@ -142,7 +163,7 @@ export default function WebtoonSection() {
         <p className="muted" style={{ marginTop: 6 }}>장면 목록·그림은 자동으로 만들고, 그림을 확인한 뒤 승인하면 영상을 만듭니다. Mac Studio 한 대라 한 번에 한 편.</p>
       </div>
       {data.jobs.length === 0 && <p className="muted">아직 웹툰 숏폼이 없습니다.</p>}
-      {data.jobs.map((j) => <JobRow key={j.id} j={j} onChanged={load} />)}
+      {data.jobs.map((j) => <JobRow key={j.id} j={j} onChanged={load} pub={pub} />)}
     </>
   );
 }

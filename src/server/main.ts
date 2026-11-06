@@ -2857,7 +2857,7 @@ async function ensureDesignThumbnailBeforePublish(id: string): Promise<void> {
   const s = shortsStore().get(id);
   const dir = shortsStore().dirFor(id);
   if (!s || hasDesignThumbnail(dir) || !CONFIG.openaiApiKey || thumbGenInFlight.has(id) || isShortsRunning(id)) return;
-  if (s.format === 'webtoon') return; // 웹툰 편 커버는 영상 첫 화면(2026-11-05 사장님 결정) — gpt-image 썸네일을 그리지 않는다
+  // 웹툰 편도 디자인 썸네일(2026-11-06 사장님 결정) — 등록 때 못 그렸으면 여기서 첫 장면 그림(scenes/)으로 한 번 더.
   thumbGenInFlight.add(id);
   try {
     console.log(`[발행담당] ${(s.topic ?? id).slice(0, 30)} — 디자인 썸네일이 없어 발행 전에 먼저 만듭니다`);
