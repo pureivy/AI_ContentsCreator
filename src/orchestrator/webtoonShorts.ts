@@ -46,6 +46,13 @@ export function pinI2vEngine(s: Shotlist, engine: string): { shotlist: Shotlist;
   return { shotlist: { ...s, i2v_engine: engine }, changed: true };
 }
 
+/** 그림 모델 고정(순수) — t2i_model 도 character.model 도 없을 때만 t2i_model 을 적는다(SHORT_marker 는 character.model 을 먼저 본다). */
+export function pinT2iModel(s: Shotlist, model: string): { shotlist: Shotlist; changed: boolean } {
+  const ch = s.character as { model?: unknown } | undefined;
+  if ((typeof s.t2i_model === 'string' && s.t2i_model) || (ch && typeof ch.model === 'string' && ch.model)) return { shotlist: s, changed: false };
+  return { shotlist: { ...s, t2i_model: model }, changed: true };
+}
+
 /** 장면 다시 그리기(순수) — 고른 장면의 redraw 를 1 올린다(SHORT_marker 가 그 장면만 새 시드로 그린다). 모르는 장면 id 는 무시. */
 export function bumpRedraw(s: Shotlist, ids: readonly string[]): { shotlist: Shotlist; bumped: string[] } {
   const want = new Set(ids);
@@ -130,11 +137,13 @@ async function draftAndDraw(id: string, signal: AbortSignal, say: (l: string) =>
     job = store.update(id, { wallSec: { ...job.wallSec, writing: Math.round((Date.now() - t0) / 1000) } })!;
   }
   // 영상 엔진(2026-11-07) — SHORT_marker 기본값이 바뀌어도 웹툰은 사장님이 고른 엔진으로 만든다. 그림만 먼저 그리지만 캐시 키에 안 들어가니 여기서 적어도 된다.
+  // 그림 모델(2026-11-07) — 같은 이유로 사장님이 고른 모델(기본 Qwen Image 2.1). 그리기 전에 적어야 캐시 키가 맞는다.
   const pinned = pinI2vEngine(sl, CONFIG.webtoonI2vEngine);
-  if (pinned.changed) {
-    sl = pinned.shotlist;
+  const pinnedImg = pinT2iModel(pinned.shotlist, CONFIG.webtoonT2iModel);
+  if (pinned.changed || pinnedImg.changed) {
+    sl = pinnedImg.shotlist;
     fs.writeFileSync(path.join(projectDir(job.project), 'shotlist.json'), JSON.stringify(sl, null, 2), 'utf-8');
-    say(`영상 엔진 — ${CONFIG.webtoonI2vEngine}`);
+    say(`모델 — 그림 ${String(sl.character && (sl.character as { model?: string }).model || sl.t2i_model)} · 영상 ${String(sl.i2v_engine)}`);
   }
   const scenes = shotlistScenes(sl);
   store.update(id, { stage: 'checking', hook: sl.hook, scenes });

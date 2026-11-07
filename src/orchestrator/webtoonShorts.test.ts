@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { bumpRedraw, pinI2vEngine, shotlistScenes, webtoonShortsMeta } from './webtoonShorts';
+import { bumpRedraw, pinI2vEngine, pinT2iModel, shotlistScenes, webtoonShortsMeta } from './webtoonShorts';
 import { isProgressLine, parseSmResult } from '../tools/shortMarker';
 import { WebtoonStore, markInterruptedWebtoon } from '../content/webtoon';
 
@@ -98,5 +98,15 @@ describe('pinI2vEngine', () => {
     const b = pinI2vEngine({ ...base, i2v_engine: 'ltx' }, 'minimax_pika');
     expect(b.changed).toBe(false);
     expect(b.shotlist.i2v_engine).toBe('ltx');
+  });
+});
+
+describe('pinT2iModel', () => {
+  it('없으면 t2i_model 을 적고, t2i_model 이나 character.model 이 있으면 그대로', () => {
+    const a = pinT2iModel({ id: 'x', scenes: [], character: { prompt: 'p' } }, 'qwen21');
+    expect(a.changed).toBe(true);
+    expect(a.shotlist.t2i_model).toBe('qwen21');
+    expect(pinT2iModel({ id: 'x', scenes: [], t2i_model: 'flux2klein' }, 'qwen21').changed).toBe(false);
+    expect(pinT2iModel({ id: 'x', scenes: [], character: { prompt: 'p', model: 'zimage' } }, 'qwen21').changed).toBe(false);
   });
 });
