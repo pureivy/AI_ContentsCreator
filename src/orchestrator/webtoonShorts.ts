@@ -40,6 +40,12 @@ export function shotlistScenes(s: Shotlist): WebtoonScene[] {
   return (s.scenes ?? []).map((sc) => ({ id: sc.id, narration: String(sc.narration ?? ''), ...(sc.motion ? { motion: sc.motion } : {}) }));
 }
 
+/** 영상 엔진 고정(순수) — 장면 목록에 i2v_engine 이 없을 때만 적는다(이미 적힌 옛 프로젝트는 캐시 그대로). 바뀌었으면 changed. */
+export function pinI2vEngine(s: Shotlist, engine: string): { shotlist: Shotlist; changed: boolean } {
+  if (typeof s.i2v_engine === 'string' && s.i2v_engine) return { shotlist: s, changed: false };
+  return { shotlist: { ...s, i2v_engine: engine }, changed: true };
+}
+
 /** 장면 다시 그리기(순수) — 고른 장면의 redraw 를 1 올린다(SHORT_marker 가 그 장면만 새 시드로 그린다). 모르는 장면 id 는 무시. */
 export function bumpRedraw(s: Shotlist, ids: readonly string[]): { shotlist: Shotlist; bumped: string[] } {
   const want = new Set(ids);
@@ -122,6 +128,13 @@ async function draftAndDraw(id: string, signal: AbortSignal, say: (l: string) =>
     sl = readShotlist(job.project);
     if (!sl) throw new Error('장면 목록 파일을 읽을 수 없습니다');
     job = store.update(id, { wallSec: { ...job.wallSec, writing: Math.round((Date.now() - t0) / 1000) } })!;
+  }
+  // 영상 엔진(2026-11-07) — SHORT_marker 기본값이 바뀌어도 웹툰은 사장님이 고른 엔진으로 만든다. 그림만 먼저 그리지만 캐시 키에 안 들어가니 여기서 적어도 된다.
+  const pinned = pinI2vEngine(sl, CONFIG.webtoonI2vEngine);
+  if (pinned.changed) {
+    sl = pinned.shotlist;
+    fs.writeFileSync(path.join(projectDir(job.project), 'shotlist.json'), JSON.stringify(sl, null, 2), 'utf-8');
+    say(`영상 엔진 — ${CONFIG.webtoonI2vEngine}`);
   }
   const scenes = shotlistScenes(sl);
   store.update(id, { stage: 'checking', hook: sl.hook, scenes });

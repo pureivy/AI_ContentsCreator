@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { bumpRedraw, shotlistScenes, webtoonShortsMeta } from './webtoonShorts';
+import { bumpRedraw, pinI2vEngine, shotlistScenes, webtoonShortsMeta } from './webtoonShorts';
 import { isProgressLine, parseSmResult } from '../tools/shortMarker';
 import { WebtoonStore, markInterruptedWebtoon } from '../content/webtoon';
 
@@ -85,5 +85,18 @@ describe('markInterruptedWebtoon — 재시작 때 돌던 단계는 중단됨', 
     expect(st.get(c.id)!.failedStage).toBe('producing');
     expect(st.get(b.id)!.stage).toBe('review');
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('pinI2vEngine', () => {
+  it('없으면 적고, 이미 적힌 엔진은 그대로 둔다', () => {
+    const base = { id: 'x', scenes: [] };
+    const a = pinI2vEngine(base, 'minimax_pika');
+    expect(a.changed).toBe(true);
+    expect(a.shotlist.i2v_engine).toBe('minimax_pika');
+    expect(base).not.toHaveProperty('i2v_engine');
+    const b = pinI2vEngine({ ...base, i2v_engine: 'ltx' }, 'minimax_pika');
+    expect(b.changed).toBe(false);
+    expect(b.shotlist.i2v_engine).toBe('ltx');
   });
 });

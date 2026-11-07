@@ -156,6 +156,8 @@ export interface Config {
   readonly shortMarkerDir: string;
   /** 웹툰 한 단계(장면 목록·그림·영상) 시간 제한(분) — 넘으면 프로세스를 멈추고 실패로 둔다. */
   readonly webtoonTimeoutMin: number;
+  /** 웹툰 장면 영상 엔진(2026-11-07 사장님) — 장면 목록에 i2v_engine 이 없으면 이 값으로 적는다. MiniMax H3 는 비온디트리 명의 사용 허가(11-07 메일). ltx | wan14 | minimax_pika. */
+  readonly webtoonI2vEngine: string;
   /** 60분 창 안의 사실 부족 재시도 상한 — 창 안에서 N번째까지 즉시 다음 주제로 재시도하고, 그 뒤는 그 주기를 건너뛴다(알림은 창당 1회). */
   readonly factSupplyRetry: number;
   /** 사실 부족 수종 재제안 금지 창(일). */
@@ -599,6 +601,7 @@ export const CONFIG: Config = {
   webtoonShorts: envBool('WEBTOON_SHORTS', false),
   shortMarkerDir: env('SHORT_MARKER_DIR', path.join(os.homedir(), 'AI_Factory', 'SHORT_marker')),
   webtoonTimeoutMin: Math.min(Math.max(10, envInt('WEBTOON_TIMEOUT_MIN', 120)), 360),
+  webtoonI2vEngine: ['ltx', 'wan14', 'minimax_pika'].includes(env('WEBTOON_I2V_ENGINE', 'minimax_pika')) ? env('WEBTOON_I2V_ENGINE', 'minimax_pika') : 'minimax_pika',
   factSupplyRetry: Math.min(Math.max(0, envInt('FACT_SUPPLY_RETRY', 2)), 5),
   factStarvedDays: Math.min(Math.max(0, envInt('FACT_STARVED_DAYS', 14)), 90),
   // 이야기 사실 하한(2026-09-18) — 마가목 실측: 총 20건이라 통과했지만 이야기 3건뿐(설화 0건)이라 '설화' 딱지만 붙은 재배 글이 됐다.
