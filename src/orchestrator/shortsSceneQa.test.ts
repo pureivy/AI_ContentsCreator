@@ -50,6 +50,9 @@ describe('reasonFor — 씬별 사유 꺼내기(순수)', () => {
     expect(reasonFor(issues, 2)).toBe('수형이 다름');
     expect(reasonFor(issues, 4)).toBe('글자 있음');
   });
+  it('한 장에 사유가 여럿이면 모두 잇는다(계절·손이 같이 걸린 장)', () => {
+    expect(reasonFor([{ scene: 3, problem: '계절: 단풍 잎으로' }, { scene: 1, problem: 'x' }, { scene: 3, problem: '손: 엄지 없음' }], 3)).toBe('계절: 단풍 잎으로 / 손: 엄지 없음');
+  });
   it('없는 씬·잘못된 입력은 undefined', () => {
     expect(reasonFor(issues, 3)).toBeUndefined();
     expect(reasonFor(issues, undefined)).toBeUndefined();

@@ -3628,6 +3628,7 @@ export async function runShortsJob(
       ...(design.species?.size ? { subjectSize: design.species.size } : {}),   // 크기 검사(2026-09-08)
       sceneHints: plan.scenes.map((s) => s.narration),                           // 초점 읽기(2026-09-09)
       sceneMust: design.musts,                                                   // 원문 묘사 대조(2026-10-12)
+      month: kstMonthNow(),                                                      // 계절 섞임 검사(2026-11-09)
       // 실사진 자리는 QA 재생성에서 뺀다 — 사용자가 고른 사진을 우리가 생성본으로 바꾸면 안 된다.
       protectedScenes: new Set(assetPlan.map((a, i) => (a ? i : -1)).filter((i) => i >= 0)),
     });
