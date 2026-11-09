@@ -164,7 +164,7 @@ export interface Config {
   readonly webtoonDrawQa: boolean;
   /** 자료실 → 수종 정답 사진(2026-11-09 사장님) — 올린 사진·영상을 수종 태그대로 data/species-refs 에 넣어 그림 검수 비교에 쓴다. */
   readonly speciesRefsArchive: boolean;
-  /** 웹툰 그림 모델(2026-11-07 사장님) — 장면 목록에 그림 모델이 없으면 이 값으로 적는다. qwen21(Qwen Image 2.1, 기본) | flux2klein | qwen2511 | zimage. */
+  /** 웹툰 그림 모델(2026-11-09 사장님: FLUX.3 klein 기본) — 장면 목록에 그림 모델이 없으면 이 값으로 적는다. flux3klein(기본, FLUX Kommunity: 연매출 500만 달러 미만 결과물 상업 사용) | flux2klein(Apache-2.0, 약 4배 빠름) | qwen2511 | zimage | qwen21(연구용 라이선스 — 수익화 금지). */
   readonly webtoonT2iModel: string;
   /** 60분 창 안의 사실 부족 재시도 상한 — 창 안에서 N번째까지 즉시 다음 주제로 재시도하고, 그 뒤는 그 주기를 건너뛴다(알림은 창당 1회). */
   readonly factSupplyRetry: number;
@@ -613,7 +613,7 @@ export const CONFIG: Config = {
   blogImageQa: envBool('BLOG_IMAGE_QA', true),
   webtoonDrawQa: envBool('WEBTOON_DRAW_QA', true),
   speciesRefsArchive: envBool('SPECIES_REFS_ARCHIVE', true),
-  webtoonT2iModel: ['qwen21', 'flux2klein', 'qwen2511', 'zimage'].includes(env('WEBTOON_T2I_MODEL', 'qwen21')) ? env('WEBTOON_T2I_MODEL', 'qwen21') : 'qwen21',
+  webtoonT2iModel: ['flux3klein', 'flux2klein', 'qwen2511', 'zimage', 'qwen21'].includes(env('WEBTOON_T2I_MODEL', 'flux3klein')) ? env('WEBTOON_T2I_MODEL', 'flux3klein') : 'flux3klein',
   factSupplyRetry: Math.min(Math.max(0, envInt('FACT_SUPPLY_RETRY', 2)), 5),
   factStarvedDays: Math.min(Math.max(0, envInt('FACT_STARVED_DAYS', 14)), 90),
   // 이야기 사실 하한(2026-09-18) — 마가목 실측: 총 20건이라 통과했지만 이야기 3건뿐(설화 0건)이라 '설화' 딱지만 붙은 재배 글이 됐다.
