@@ -40,6 +40,11 @@ export function parseFocus(
   return out;
 }
 
+/** 지금 달(KST, 1~12) — 계절 기준. 서버 TZ 와 무관하게 서울 기준(숏폼 디렉터·그림 검수 공용). */
+export function kstMonthNow(now: number = Date.now()): number {
+  return new Date(now + 9 * 3600 * 1000).getUTCMonth() + 1;
+}
+
 /** 잎 계절 상태(2026-11-09) — 장마다 비전이 하나로 고른다. '판단불가'는 비교에서 뺀다. */
 export const LEAF_STATES = ['새순', '초록', '단풍', '맨가지'] as const;
 export type LeafState = typeof LEAF_STATES[number];

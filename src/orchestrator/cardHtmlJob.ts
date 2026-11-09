@@ -15,7 +15,7 @@ import { inheritedClaims, writerSource, flaggedForPrompt } from '../content/inhe
 import { parityIssues } from './standaloneQa';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { cardRealFrames } from './cardFrames';
-import { qaSceneImages } from './shortsSceneQa';
+import { qaSceneImages, kstMonthNow } from './shortsSceneQa';
 import { stdModel, visionCapable } from './visionCommon';
 import { microJSON } from './agent';
 
@@ -401,6 +401,7 @@ export async function designHtmlCards(o: {
         ...(known ? { subject, subjectLatin: known.latin } : {}),
         sceneHints: gen.map((g) => plan.slides[g.slide]?.headline ?? ''),
         sceneMust: gen.map((g) => g.ref.must),
+        month: kstMonthNow(), // 계절 섞임 검사(2026-11-09 사장님 "카드뉴스에도")
       });
       if (qa.regenerated || qa.issues.length) say(`카드 사진 검수 — 다시 그림 ${qa.regenerated}장${qa.issues.length ? ` · ${qa.issues.slice(0, 2).join(' / ')}` : ''}`);
       imgs = qa.images;
@@ -521,7 +522,7 @@ export async function reviseHtmlCard(dir: string, feedback: string, say: Say, si
     try {
       const man = JSON.parse(fs.readFileSync(manPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string } | null> };
       imgs = regen.map((_, k) => { const im = man.images?.[k]; return im?.file_path && !im.error && fs.existsSync(im.file_path) ? im.file_path : null; });
-      const qa = await qaSceneImages({ dir, images: imgs, scenePrompts: prompts, preset: 'photorealistic', signal, sceneMust: regen.map((g) => g.must) });
+      const qa = await qaSceneImages({ dir, images: imgs, scenePrompts: prompts, preset: 'photorealistic', signal, sceneMust: regen.map((g) => g.must), month: kstMonthNow() });
       imgs = qa.images;
     } catch { /* 사진 교체 실패 — 기존 사진 유지 */ }
     regen.forEach((g, k) => {

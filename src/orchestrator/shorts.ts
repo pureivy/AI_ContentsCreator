@@ -22,7 +22,7 @@ import { platformPlanGuide, platformLabel, SIBLING_PREVIEW_FILE } from '../conte
 import { writerById, writerByName, type ShortsWriter } from '../content/shortsWriters';
 import { notifyShortsReady } from '../autonomy/contentNotify';
 import { generateImagesForDraft } from '../tools/blog_skills';
-import { qaSceneImages } from './shortsSceneQa';
+import { qaSceneImages, kstMonthNow } from './shortsSceneQa';
 import { applyMotionGraphics } from './shortsDirectMotion';
 import { parseSceneMust, mustDesignerGuide, mustPromptLines, type SceneMust } from './sceneMust';
 export { parseSceneMust } from './sceneMust';
@@ -2094,11 +2094,6 @@ export async function planShorts(io: JobIO, topic: string, keyword: string | und
   } catch { /* fail-open */ }
   if (extra.trace) extra.trace.value = trace;
   return plan;
-}
-
-/** 지금 달(KST, 1~12) — 디렉터 프롬프트의 계절 기준. 서버 TZ 와 무관하게 서울 기준. */
-function kstMonthNow(now: number = Date.now()): number {
-  return new Date(now + 9 * 3600 * 1000).getUTCMonth() + 1;
 }
 
 async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: string, sourceBody?: string): Promise<{ preset: string; style: string; prompts: string[]; musts: Array<SceneMust | undefined>; subject?: string; subjectLatin?: string; species?: import('../content/species').Species; hero?: string; heroScenes?: number[] }> {
