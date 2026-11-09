@@ -19,7 +19,9 @@ import { renderHtml } from '../output/render';
 import { BLOG_IMAGE_MAX } from '../output/naverBlog';
 import { mergeRealFrameManifest } from '../content/blogFrames';
 import { applyBlogDiagrams } from './blogDiagramsApply';
-import { qaSceneImages } from './shortsSceneQa';
+import { qaSceneImages, kstMonthNow } from './shortsSceneQa';
+import { blogSlotMusts } from './blogImageMust';
+import { handFreeModel, handFreeSlots } from './blogHandFree';
 import { findSpecies, speciesAnchor, isYoungHero } from '../content/species';
 
 /**
@@ -160,6 +162,20 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
       if (fs.existsSync(draftPath)) {
         // 실촬영 컷이 슬롯 1번을 차지한다 — 생성은 2번부터, 파일 번호도 02 부터(번호를 당기면 발행이 매니페스트
         // index 로 마커에 꽂아 실촬영 자리에 생성 그림이 들어간다). 총 장수는 그대로 3(실촬영 1 + 생성 2).
+        // FLUX 로 그릴 때 손 빼기(2026-11-10 사장님) — 손·사람 칸을 결과·상태 장면으로 바꿔 쓰고 손 금지를 붙인다. 실촬영 칸(앞)은 그대로.
+        if ((CONFIG.blogAutoImage || a.autoImages) && handFreeModel()) {
+          try {
+            const from = a.realFrame ? 1 : 0;
+            const all = a.assets.draft.imageSlots;
+            const hf = await handFreeSlots(all.slice(from), String(a.assets.draft.bodyMarkdown ?? ''), a.signal);
+            a.assets.draft = { ...a.assets.draft, imageSlots: [...all.slice(0, from), ...hf.slots] };
+            const dj = JSON.parse(fs.readFileSync(draftPath, 'utf-8')) as Record<string, unknown>;
+            fs.writeFileSync(draftPath, JSON.stringify({ ...dj, imageSlots: a.assets.draft.imageSlots }, null, 2), 'utf-8');
+            if (hf.rewritten) a.bus.emit(EventType.log, { message: `FLUX 손 빼기 — 사진 ${hf.rewritten}칸을 손 없는 장면으로` });
+          } catch (e) {
+            a.bus.emit(EventType.log, { message: `FLUX 손 빼기 실패(무해): ${e instanceof Error ? e.message : String(e)}` });
+          }
+        }
         const r = (CONFIG.blogAutoImage || a.autoImages)
           ? await generateImagesForDraft(
             draftPath, imagesDir, manifestPath,
@@ -192,10 +208,13 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
             if (imgs.some(Boolean)) {
               const known = findSpecies(a.topic);
               const young = isYoungHero(a.topic);
+              // 원문 대조 목록(2026-11-10) — 블로그엔 sceneMust 가 없어 원문 대조가 안 돌았다(감나무 편: 흔들어 보기 사진에 지주, 8자 아닌 결속).
+              const musts = await blogSlotMusts(String(a.assets.draft.bodyMarkdown ?? ''), slots, a.signal);
               // 전부 틀려도 다시 그린다(2026-11-09 사장님). 판정은 qaSceneImages 가 한 장씩 따로 한다.
               const qa = await qaSceneImages({
                 dir, images: imgs, scenePrompts: slots.map((x) => String(x.prompt ?? '')), preset: 'photorealistic', size: '1024x1024',
                 sceneHints: slots.map((x) => String(x.alt ?? '')), signal: a.signal, retryAllBad: true,
+                sceneMust: musts, month: kstMonthNow(), // 계절 섞임(2026-11-10) — 블로그 사진끼리 잎 상태 비교
                 ...(known ? { subject: speciesAnchor(known, { young }), subjectLatin: known.latin } : {}),
                 ...(young ? { subjectAge: '어린 나무(묘목)' } : {}),
               });

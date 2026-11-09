@@ -16,6 +16,9 @@ import { parityIssues } from './standaloneQa';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { cardRealFrames } from './cardFrames';
 import { qaSceneImages, kstMonthNow } from './shortsSceneQa';
+import { handFreeScenes, handFreeModel, withNoHands } from './blogHandFree';
+/** FLUX 면 최종 지시문 끝에도 손 금지(장면 문구가 genPhotoPrompt 안에서 잘려도 남게). */
+const withHandRule = (p: string): string => (handFreeModel() ? withNoHands(p) : p);
 import { stdModel, visionCapable } from './visionCommon';
 import { microJSON } from './agent';
 
@@ -382,7 +385,10 @@ export async function designHtmlCards(o: {
     const subject = known ? speciesAnchor(known, { young }) : undefined;
     // 같은 세트 사진을 참조로(실촬영 먼저, 최대 3장) — 새 사진이 블로그 사진과 다른 나무로 그려지지 않게.
     const setRefs = CONFIG.shortsHeroTree ? [...blog].sort((a, b) => Number(b.real) - Number(a.real)).map((b) => b.path).filter((p) => fs.existsSync(p)).slice(0, 3) : [];
-    const prompts = gen.map((g) => genPhotoPrompt(g.ref.scene, g.ref.must, subject, { setRefs: setRefs.length > 0, young }));
+    // FLUX 로 그릴 때 손 빼기(2026-11-10 사장님) — 손·사람 장면을 결과·상태 장면으로. GPT 면 그대로.
+    const hf = await handFreeScenes(gen.map((g) => g.ref.scene), plan.slides.map((x) => `${x.headline} ${x.body}`).join('\n'), o.signal);
+    if (hf.rewritten) say(`FLUX 손 빼기 — 카드 사진 ${hf.rewritten}장을 손 없는 장면으로`);
+    const prompts = gen.map((g, k) => withHandRule(genPhotoPrompt(hf.scenes[k] ?? g.ref.scene, g.ref.must, subject, { setRefs: setRefs.length > 0, young })));
     const draftPath = path.join(dir, 'photos-gen-draft.json');
     const manPath = path.join(dir, 'photos-gen-manifest.json');
     fs.writeFileSync(draftPath, JSON.stringify({ imageSlots: gen.map((g, k) => ({ alt: `slide ${g.slide + 1} photo ${k + 1}`, prompt: prompts[k] })) }, null, 2), 'utf-8');
@@ -512,7 +518,8 @@ export async function reviseHtmlCard(dir: string, feedback: string, say: Say, si
     return i >= 0 && i < rawSlides.length && scene.length >= 6 ? [{ i, scene: scene.slice(0, 160), must: { show: (Array.isArray(x.must_show) ? x.must_show : []).map(String).slice(0, 4), not: (Array.isArray(x.must_not) ? x.must_not : []).map(String).slice(0, 3) } }] : [];
   }).slice(0, 3);
   if (regen.length) {
-    const prompts = regen.map((g) => genPhotoPrompt(g.scene, g.must));
+    const hf = await handFreeScenes(regen.map((g) => g.scene), '', signal);
+    const prompts = regen.map((g, k) => withHandRule(genPhotoPrompt(hf.scenes[k] ?? g.scene, g.must)));
     const draftPath = path.join(dir, 'photos-regen-draft.json');
     const manPath = path.join(dir, 'photos-regen-manifest.json');
     const outDir = path.join(dir, `photos-regen-${Date.now()}`);

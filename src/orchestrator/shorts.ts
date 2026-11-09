@@ -25,6 +25,7 @@ import { generateImagesForDraft } from '../tools/blog_skills';
 import { qaSceneImages, kstMonthNow } from './shortsSceneQa';
 import { applyMotionGraphics } from './shortsDirectMotion';
 import { parseSceneMust, mustDesignerGuide, mustPromptLines, type SceneMust } from './sceneMust';
+import { handFreeScenes } from './blogHandFree';
 export { parseSceneMust } from './sceneMust';
 import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues, parityIssues, parityIssuesChecked, parityToInfo, PARITY_SOURCE_CHARS } from './standaloneQa';
@@ -2144,10 +2145,14 @@ async function designScenes(io: JobIO, topic: string, plan: Plan, keyword?: stri
   const rawPreset = String(j?.style_preset ?? '').trim();
   const preset = PRESETS.has(rawPreset) ? rawPreset : (PRESET_ALIAS[rawPreset] ?? 'photorealistic');
   const style = String(j?.style ?? '').trim().slice(0, 200) || '밝고 깔끔한 한국 생활 사진풍, 부드러운 자연광';
-  const prompts = plan.scenes.map((s, i) => {
+  const prompts0 = plan.scenes.map((s, i) => {
     const p = String(j?.scenes?.[i]?.prompt ?? '').trim().slice(0, 200);
     return p || `${topic} 를 상징하는 한국 생활 장면, ${s.narration.slice(0, 30)} 분위기`;
   });
+  // FLUX 로 그릴 때 손 빼기(2026-11-10 사장님) — 손·사람 장면을 결과·상태 장면으로 바꿔 쓰고 손 금지를 붙인다. GPT 면 그대로.
+  const hf = await handFreeScenes(prompts0, sourceBody ?? plan.scenes.map((s) => s.narration).join(' '));
+  if (hf.rewritten) console.log('[숏폼]', `FLUX 손 빼기 — ${hf.rewritten}개 장면을 손 없는 장면으로`);
+  const prompts = hf.scenes;
   const musts = plan.scenes.map((_, i) => (sourceBody ? parseSceneMust(j?.scenes?.[i]) : undefined));
   // 수종 사전이 이긴다(2026-09-04) — LLM 기억보다 표가 정확하다. 표에 없으면 LLM 값을 쓴다.
   const known = findSpecies(`${keyword ?? ''} ${topic}`);
