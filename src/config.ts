@@ -158,6 +158,12 @@ export interface Config {
   readonly webtoonTimeoutMin: number;
   /** 웹툰 장면 영상 엔진(2026-11-07 사장님) — 장면 목록에 i2v_engine 이 없으면 이 값으로 적는다. MiniMax H3 는 비온디트리 명의 사용 허가(11-07 메일). ltx | wan14 | minimax_pika. */
   readonly webtoonI2vEngine: string;
+  /** 블로그 AI 사진 검수(2026-11-09 사장님) — 그린 직후 Claude 비전이 수종·나이·글자를 보고 틀린 장만 한 번 다시 그린다. */
+  readonly blogImageQa: boolean;
+  /** 웹툰 그림 수종·나이 검수(2026-11-09 사장님) — 그린 뒤 비전 검수, 틀린 장면은 학명을 붙여 한 번 다시 그린다. */
+  readonly webtoonDrawQa: boolean;
+  /** 자료실 → 수종 정답 사진(2026-11-09 사장님) — 올린 사진·영상을 수종 태그대로 data/species-refs 에 넣어 그림 검수 비교에 쓴다. */
+  readonly speciesRefsArchive: boolean;
   /** 웹툰 그림 모델(2026-11-07 사장님) — 장면 목록에 그림 모델이 없으면 이 값으로 적는다. qwen21(Qwen Image 2.1, 기본) | flux2klein | qwen2511 | zimage. */
   readonly webtoonT2iModel: string;
   /** 60분 창 안의 사실 부족 재시도 상한 — 창 안에서 N번째까지 즉시 다음 주제로 재시도하고, 그 뒤는 그 주기를 건너뛴다(알림은 창당 1회). */
@@ -604,6 +610,9 @@ export const CONFIG: Config = {
   shortMarkerDir: env('SHORT_MARKER_DIR', path.join(os.homedir(), 'AI_Factory', 'SHORT_marker')),
   webtoonTimeoutMin: Math.min(Math.max(10, envInt('WEBTOON_TIMEOUT_MIN', 120)), 360),
   webtoonI2vEngine: ['ltx', 'wan14', 'minimax_pika'].includes(env('WEBTOON_I2V_ENGINE', 'minimax_pika')) ? env('WEBTOON_I2V_ENGINE', 'minimax_pika') : 'minimax_pika',
+  blogImageQa: envBool('BLOG_IMAGE_QA', true),
+  webtoonDrawQa: envBool('WEBTOON_DRAW_QA', true),
+  speciesRefsArchive: envBool('SPECIES_REFS_ARCHIVE', true),
   webtoonT2iModel: ['qwen21', 'flux2klein', 'qwen2511', 'zimage'].includes(env('WEBTOON_T2I_MODEL', 'qwen21')) ? env('WEBTOON_T2I_MODEL', 'qwen21') : 'qwen21',
   factSupplyRetry: Math.min(Math.max(0, envInt('FACT_SUPPLY_RETRY', 2)), 5),
   factStarvedDays: Math.min(Math.max(0, envInt('FACT_STARVED_DAYS', 14)), 90),

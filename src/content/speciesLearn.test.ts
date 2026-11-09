@@ -301,3 +301,23 @@ describe('learnSpeciesLabel — 세 갈래 처리(주입 의존)', () => {
     expect(asked).toBe(0);
   });
 });
+
+describe('사전에 없는 종의 다른 이름(2026-11-09 박테기나무)', () => {
+  it('alias 인데 표준명이 사전에 없고 학명이 있으면 new(표준명 of 포함)', () => {
+    const v = readVerdict({ kind: 'alias', of: '박태기나무', latin: 'Cercis chinensis', leaf: '어긋나기, 심장형 홑잎' }, LIST);
+    expect(v).toMatchObject({ kind: 'new', latin: 'Cercis chinensis', of: '박태기나무' });
+    expect(readVerdict({ kind: 'alias', of: '박태기나무' }, LIST)).toEqual({ kind: 'unknown' });
+  });
+  it('표준명으로 등재하고 적힌 이름은 별칭으로', async () => {
+    const added: string[] = []; const aliases: string[] = [];
+    const msg = await learnSpeciesLabel('박테기나무', {
+      list: () => LIST, known: () => false,
+      ask: async () => ({ kind: 'new', of: '박태기나무', latin: 'Cercis chinensis' }),
+      addAlias: (sp, al) => { aliases.push(`${sp}<-${al}`); return true; },
+      addSpecies: (e) => { added.push(e.name); return true; },
+    });
+    expect(added).toEqual(['박태기나무']);
+    expect(aliases).toEqual(['박태기나무<-박테기나무']);
+    expect(msg).toContain("'박테기나무' 은 별칭");
+  });
+});

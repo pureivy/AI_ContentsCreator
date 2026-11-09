@@ -110,3 +110,15 @@ describe('pinT2iModel', () => {
     expect(pinT2iModel({ id: 'x', scenes: [], character: { prompt: 'p', model: 'zimage' } }, 'qwen21').changed).toBe(false);
   });
 });
+
+describe('anchorScenes(2026-11-09 그림 검수)', () => {
+  it('걸린 장면 그림 지시에 학명 문구를 한 번만 붙인다', async () => {
+    const { anchorScenes } = await import('./webtoonShorts');
+    const sl = { id: 'x', scenes: [{ id: 's01', narration: 'a', image: 'a vine' }, { id: 's02', narration: 'b', image: 'a girl' }] };
+    const once = anchorScenes(sl, ['s01'], 'Akebia quinata', true);
+    expect(once.scenes[0]!.image).toBe('a vine Botanically accurate Akebia quinata, drawn as a young sapling (thin stem, few branches).');
+    expect(once.scenes[1]!.image).toBe('a girl');
+    expect(anchorScenes(once, ['s01'], 'Akebia quinata', true).scenes[0]!.image).toBe(once.scenes[0]!.image);
+    expect(/[가-힣]/.test(String(once.scenes[0]!.image))).toBe(false);
+  });
+});

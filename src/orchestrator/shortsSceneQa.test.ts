@@ -96,3 +96,20 @@ describe('buildMustLines — 원문 묘사를 검수 순번으로', () => {
     expect(buildMustLines(undefined, [{ origIndex: 0 }])).toEqual([]);
   });
 });
+
+describe('ageHint·buildAgeLines(2026-11-09 나이 검수)', () => {
+  it('한글·영어 나이 표현을 뽑는다', async () => {
+    const { ageHint } = await import('./shortsSceneQa');
+    expect(ageHint('작은 으름나무 어린 묘목 옆에 3년생 묘목')).toBe('어린 묘목 · 3년생 · 묘목');
+    expect(ageHint('2~3년생 나무와 성목 비교')).toBe('2~3년생 · 성목');
+    expect(ageHint('a 1-year-old sapling next to a mature tree')).toBe('1-year-old · sapling · mature tree');
+    expect(ageHint('잎이 무성한 가지')).toBe('');
+    expect(ageHint('밑동의 묵은 줄기에 색끈')).toBe('묵은 줄기');
+    expect(ageHint('one thick old stem marked')).toBe('old stem');
+  });
+  it('나이 말이 있는 장만 checked 순번으로 매긴다', async () => {
+    const { buildAgeLines } = await import('./shortsSceneQa');
+    const lines = buildAgeLines(['1년생 묘목', '흙과 삽', '성목 수형'], [{ origIndex: 0 }, { origIndex: 2 }]);
+    expect(lines).toEqual(['1) 1년생 · 묘목', '2) 성목']);
+  });
+});

@@ -60,7 +60,8 @@ import { shortsStore, shortsQaPublishBlockReason, shortsFactHoldBlockReason } fr
 import { longformStore, longformRange } from '../content/longform';
 import { generateLongformThumbnail, longformThumbStateOf } from '../orchestrator/longformThumbnail';
 import { stripDiagramMarkers } from '../output/blogDiagrams';
-import { addMedia, listMedia, updateMedia, removeMedia, mediaDir, matchMedia, matchMediaScored } from '../content/mediaLibrary';
+import { addMedia, listMedia, updateMedia, removeMedia, mediaDir, matchMedia, matchMediaScored, type MediaItem } from '../content/mediaLibrary';
+import { addArchiveRef, removeArchiveRef, collectRefsForSpecies } from '../content/speciesRefsArchive';
 import { pickRotatedVideo, readMediaHistory, windowSceneSec } from '../content/mediaRotation';
 import { SEGMENT_TAIL_SEC } from '../content/userAssets';
 import { buildMediaUsage, SOURCES_FILE, type UsageSource } from '../content/mediaUsage';
@@ -1579,10 +1580,10 @@ function startAfterSiblingPlan(siblingId: string, selfId: string, start: () => v
  * 기다리지 않는다. 업로드 응답은 바로 나가고 학습은 뒤에서 돈다 — 사전은 다음 런에 쓰이지,
  * 이 응답에 쓰이지 않는다. 실패는 learnSpeciesLabel 안에서 전부 삼킨다.
  */
-function learnMediaLabel(label: string | undefined): void {
+function learnMediaLabel(label: string | undefined): Promise<void> {
   const name = String(label ?? '').trim();
-  if (!name) return;
-  void learnSpeciesLabel(name, {
+  if (!name) return Promise.resolve();
+  return learnSpeciesLabel(name, {
     list: () => loadSpecies(),
     known: (n) => !!findSpecies(n),
     addAlias: (sp, alias) => appendSpeciesAlias(sp, alias),
@@ -1599,7 +1600,12 @@ function learnMediaLabel(label: string | undefined): void {
       });
       return firstJson<unknown>(res.text ?? '');
     },
-  }).then((msg) => { if (msg) console.log('[보관소]', msg); });
+  }).then(async (msg) => {
+    if (msg) console.log('[보관소]', msg);
+    // 새로 등재된 수종(2026-11-09) — 위키미디어 정답 사진도 모아 둔다(그림 검수 비교용). 실패는 무해.
+    const sp = msg?.startsWith('수종 사전 추가') ? findSpecies(name) : undefined;
+    if (sp?.latin) console.log('[보관소]', `정답 사진 모으기 — ${name}: ${await collectRefsForSpecies(sp.name, sp.latin).catch((e: unknown) => `실패 ${String(e).slice(0, 60)}`)}`);
+  }).catch(() => undefined);
 }
 
 function mediaForTopic(opts: {
@@ -4849,7 +4855,15 @@ app.post('/media', async (c) => {
     }));
   }
   if (!added.length) return c.json({ error: '보관할 파일이 없습니다', skipped }, 400);
-  learnMediaLabel(species); // 딱지가 사전에 없는 이름이면 배워 둔다 — 다음 런부터 이 소재가 걸린다
+  // 딱지가 사전에 없는 이름이면 배워 둔다(다음 런부터 이 소재가 걸린다). 그다음 정답 사진(2026-11-09 사장님) — 올린 사진·영상을
+  // 그 수종의 검수 비교 사진으로도 넣는다. 등재가 끝난 뒤라야 새 수종도 들어간다. 응답은 기다리지 않는다.
+  void (async () => {
+    await learnMediaLabel(species);
+    for (const m of added as MediaItem[]) {
+      const r = await addArchiveRef(m).catch((e: unknown) => `실패 — ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
+      console.log(`[보관소] 정답 사진 ${m.name.slice(0, 30)}: ${r}`);
+    }
+  })();
   return c.json({ ok: true, added, skipped });
 });
 app.get('/media', (c) => c.json({ media: listMedia(activeBrandSlug() || undefined) }));
@@ -4888,12 +4902,21 @@ app.patch('/media/:id', async (c) => {
     ...(b.tags !== undefined ? { tags: b.tags } : {}),
     ...(b.note !== undefined ? { note: b.note || undefined } : {}),
   });
-  if (up && b.species) learnMediaLabel(b.species); // 나중에 딱지를 고쳐 붙일 때도 같은 학습
+  // 나중에 딱지를 고쳐 붙일 때도 같은 학습 → 정답 사진도 옛 수종에서 빼고 새 수종으로(2026-11-09). 태그를 지우면 빼기만.
+  if (up && b.species !== undefined) {
+    void (b.species ? learnMediaLabel(b.species) : Promise.resolve())
+      .then(() => removeArchiveRef(up.id)).then(() => (up.species ? addArchiveRef(up) : '태그 없음 — 뺌'))
+      .then((r) => console.log(`[보관소] 정답 사진 ${up.name.slice(0, 30)}: ${r}`))
+      .catch((e: unknown) => console.log(`[보관소] 정답 사진 갱신 실패(무해) — ${e instanceof Error ? e.message.slice(0, 80) : e}`));
+  }
   return up ? c.json({ ok: true, item: up }) : c.json({ error: 'unknown media' }, 404);
 });
-app.delete('/media/:id', (c) => (removeMedia(c.req.param('id') ?? '')
-  ? c.json({ ok: true })
-  : c.json({ error: 'unknown media' }, 404)));
+app.delete('/media/:id', (c) => {
+  const id = c.req.param('id') ?? '';
+  if (!removeMedia(id)) return c.json({ error: 'unknown media' }, 404);
+  void removeArchiveRef(id).catch(() => 0); // 지운 자료는 정답 사진에서도 뺀다(파일은 휴지통)
+  return c.json({ ok: true });
+});
 // 파일 서빙 — 목록 썸네일·미리보기용. 보관소 밖 경로는 절대 안 내보낸다(경로 주입 방지).
 app.get('/media/file/:id', (c) => {
   const hit = listMedia().find((m) => m.id === c.req.param('id'));

@@ -254,3 +254,43 @@ describe('findSpeciesLoose — 보관소 매칭용 느슨한 찾기(순수)', ()
   });
   it('빈 문자열은 undefined', () => { expect(findSpeciesLoose('', list)).toBeUndefined(); });
 });
+
+describe('speciesRefPhotos(2026-11-09 수종 정답 사진)', () => {
+  it('학명 폴더의 refs.json 에서 잎 먼저, 있는 파일만, max 장', async () => {
+    const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+    const { speciesRefPhotos, speciesRefId } = await import('./species');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sprefs-'));
+    const dir = path.join(root, speciesRefId('Akebia quinata'));
+    fs.mkdirSync(dir);
+    for (const f of ['h.jpg', 'l.jpg', 'a.jpg']) fs.writeFileSync(path.join(dir, f), 'x');
+    fs.writeFileSync(path.join(dir, 'refs.json'), JSON.stringify({ photos: [{ file: 'h.jpg', role: 'habit', use: 'any' }, { file: 'gone.jpg', role: 'leaf' }, { file: 'a.jpg', role: 'archive', use: 'any' }, { file: 'l.jpg', role: 'leaf', use: 'qa' }] }));
+    expect(speciesRefId('Akebia quinata')).toBe('akebia-quinata');
+    expect(speciesRefPhotos('Akebia quinata', 2, root).map((p) => path.basename(p))).toEqual(['l.jpg', 'a.jpg']);
+    expect(speciesRefPhotos('Akebia quinata', 3, root, 'draw').map((p) => path.basename(p))).toEqual(['a.jpg', 'h.jpg']);
+    expect(speciesRefPhotos('Nope nope', 3, root)).toEqual([]);
+    expect(speciesRefPhotos(undefined, 3, root)).toEqual([]);
+  });
+});
+
+describe('정답 사진 꽃·열매(2026-11-09)', () => {
+  it('장면이 말한 부위를 먼저 — 공용 role 과 농원 사진 태그로', async () => {
+    const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+    const { speciesRefPhotos, speciesRefId, refPartsWanted, refPartOf } = await import('./species');
+    expect(refPartsWanted('가을에 익은 열매를 따는 손')).toEqual(['fruit']);
+    expect(refPartsWanted('4월 개화, 흰 꽃')).toEqual(['flower']);
+    expect(refPartsWanted('가지치기 자리')).toEqual([]);
+    expect(refPartOf({ role: 'archive', tags: ['2026년 9월', '열매'] })).toBe('fruit');
+    expect(refPartOf({ role: 'flower' })).toBe('flower');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sprefs-'));
+    const dir = path.join(root, speciesRefId('Malus domestica'));
+    fs.mkdirSync(dir);
+    for (const f of ['l.jpg', 'fl.jpg', 'fr.jpg', 'm1.jpg', 'h.jpg']) fs.writeFileSync(path.join(dir, f), 'x');
+    fs.writeFileSync(path.join(dir, 'refs.json'), JSON.stringify({ photos: [
+      { file: 'l.jpg', role: 'leaf', use: 'qa' }, { file: 'fl.jpg', role: 'flower', use: 'qa' }, { file: 'h.jpg', role: 'habit', use: 'any' },
+      { file: 'm1.jpg', role: 'archive', use: 'any', tags: ['열매'], added: '2026-11-09' }, { file: 'fr.jpg', role: 'fruit', use: 'qa' },
+    ] }));
+    expect(speciesRefPhotos('Malus domestica', 4, root, 'qa', ['fruit']).map((p) => path.basename(p))).toEqual(['m1.jpg', 'l.jpg', 'h.jpg']);
+    expect(speciesRefPhotos('Malus domestica', 4, root, 'qa', ['flower', 'fruit']).map((p) => path.basename(p))).toEqual(['fl.jpg', 'm1.jpg', 'l.jpg', 'h.jpg']);
+    expect(speciesRefPhotos('Malus domestica', 4, root).map((p) => path.basename(p))).toEqual(['l.jpg', 'm1.jpg', 'h.jpg']);
+  });
+});

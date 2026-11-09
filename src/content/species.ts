@@ -121,8 +121,16 @@ export function findSpeciesLoose(text: string, list = loadSpecies()): Species | 
     }
   }
   stems.sort((a, b) => b.key.length - a.key.length);
-  return stems.find((k) => t.includes(k.key))?.sp;
+  return stems.find((k) => (STEM_GUARD[k.key] ? STEM_GUARD[k.key]!.test(t) : t.includes(k.key)))?.sp;
 }
+
+/**
+ * 동음이의어 어간(2026-11-09) — 자료실에서 '주목나무'가 사전에 들어오자 어간 '주목'이 '주목할 만한·주목받는·지주목'까지 수종으로 읽었다.
+ * 이 어간들은 정규식으로만 맞춘다(앞뒤 글자로 거른다). 새 수종이 사전에 들어와 같은 일이 생기면 여기에 더한다.
+ */
+const STEM_GUARD: Record<string, RegExp> = {
+  주목: /(?<!지)주목(?![할받하했되됐을])/,
+};
 
 /**
  * 수종 → 이미지 앵커 문구(순수). buildSceneImagePrompt 의 subject 자리에 그대로 들어간다.
@@ -305,4 +313,56 @@ export function appendSpeciesAlias(
 /** 주인공 나무가 어린 나무인가(순수) — 그러면 수종 수형(성목 설명)을 빼고 참조 사진은 잎·수피 모양에만 쓴다. */
 export function isYoungHero(hero: string): boolean {
   return /묘목|유목|어린|(?<!\d)[1-3]\s*년생|한\s*해|두\s*해|삽수|삽목|접목묘|실생|올봄\s*심은|올해\s*심은|새로\s*심은/.test(hero);
+}
+
+/** 참조 사진 폴더 id(순수) — 학명 소문자·영숫자 외는 '-'. scripts/species_refs.py 와 같은 규칙. */
+export function speciesRefId(latin: string): string {
+  return String(latin ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+export type RefPart = 'flower' | 'fruit';
+
+/** 장면이 말하는 부위(순수, 2026-11-09) — 꽃·열매 장면이면 그 부위 정답 사진을 먼저 붙인다. */
+export function refPartsWanted(text: string): RefPart[] {
+  const t = String(text ?? '');
+  const out: RefPart[] = [];
+  if (/꽃|개화|꽃봉오리|꽃눈|flower|blossom|bloom|inflorescence/i.test(t)) out.push('flower');
+  if (/열매|과실|결실|수확|익은|fruit|berr|harvest|nut\b|acorn|cone/i.test(t)) out.push('fruit');
+  return out;
+}
+
+/** 정답 사진 한 장의 부위(순수) — 공용 사진은 role, 농원 사진은 태그(꽃·열매)로. */
+export function refPartOf(p: { role?: string; tags?: readonly string[] }): string {
+  if (p.role !== 'archive') return p.role ?? '';
+  const tags = (p.tags ?? []).join(' ');
+  return /꽃|개화/.test(tags) ? 'flower' : /열매|과실|결실|수확/.test(tags) ? 'fruit' : 'archive';
+}
+
+/**
+ * 수종 정답 사진(2026-11-09 사장님) — data/species-refs/<id>/refs.json 에서 고른 사진 경로(최대 max장).
+ * 고르는 순서: 장면이 말한 부위(꽃·열매) 1장씩 → 잎 1 → 농원 실촬영(최신) 1 → 잎 1 → 수형 1.
+ * 보관소 실촬영(자료실 업로드 포함, speciesRefsArchive) + 위키미디어 공용(사진 대조에서 이 종이 아니라고 걸린 사진 제외).
+ * purpose 'qa'(검수 비교)는 CC BY-SA 포함, 'draw'(그리기 보조)는 use:'any'(보관소·CC0·CC BY·퍼블릭 도메인)만.
+ * 검수(qaSceneImages)가 판정 대상 옆에 놓고 비교한다. 폴더가 없으면 빈 배열(종전처럼 문구로만 판정).
+ */
+export function speciesRefPhotos(latin: string | undefined, max = 4, root = path.join(process.env.GEPA_DATA_DIR || 'data', 'species-refs'), purpose: 'qa' | 'draw' = 'qa', parts: readonly RefPart[] = []): string[] {
+  if (!latin) return [];
+  try {
+    const dir = path.join(root, speciesRefId(latin));
+    const j = JSON.parse(fs.readFileSync(path.join(dir, 'refs.json'), 'utf-8')) as { photos?: Array<{ file?: string; role?: string; use?: string; tags?: string[]; added?: string }> };
+    const pool = (j.photos ?? [])
+      .filter((x) => x.file && fs.existsSync(path.join(dir, x.file)) && (purpose === 'qa' || x.use === 'any')) // 그리기 보조는 CC BY-SA 제외
+      .sort((a, b) => String(b.added ?? '').localeCompare(String(a.added ?? ''))); // 최신 농원 사진 먼저
+    const picked: string[] = [];
+    const take = (pred: (x: (typeof pool)[number]) => boolean): void => {
+      const hit = pool.find((x) => !picked.includes(x.file!) && pred(x));
+      if (hit) picked.push(hit.file!);
+    };
+    for (const part of parts) take((x) => refPartOf(x) === part);
+    take((x) => x.role === 'leaf');
+    take((x) => x.role === 'archive');
+    take((x) => x.role === 'leaf');
+    take((x) => x.role === 'habit');
+    return picked.slice(0, max).map((f) => path.join(dir, f));
+  } catch { return []; }
 }

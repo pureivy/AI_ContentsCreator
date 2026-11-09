@@ -19,6 +19,8 @@ import { renderHtml } from '../output/render';
 import { BLOG_IMAGE_MAX } from '../output/naverBlog';
 import { mergeRealFrameManifest } from '../content/blogFrames';
 import { applyBlogDiagrams } from './blogDiagramsApply';
+import { qaSceneImages } from './shortsSceneQa';
+import { findSpecies, speciesAnchor, isYoungHero } from '../content/species';
 
 /**
  * 완성된 blog-image-NN.png 파일명들 → 슬롯 번호(NN) 정렬 매니페스트 images 배열(순수).
@@ -175,6 +177,35 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
             recovered = images.filter(Boolean).length;
             if (recovered) fs.writeFileSync(manifestPath, JSON.stringify({ images }, null, 2), 'utf-8');
           } catch { /* 복원 실패는 무해 — 텍스트만 발행 */ }
+        }
+        // 블로그 AI 사진 검수(2026-11-09 사장님) — 종전엔 그린 사진을 아무도 안 봤다(으름 편: 홑잎·관목으로 그려진 채 발행).
+        // 카드·숏폼과 같은 비전 검수(수종·나이·글자·원문). 틀린 장만 한 번 다시 그려 같은 파일 이름으로 바꿔 넣는다. 실패는 무해.
+        if (CONFIG.blogImageQa && (CONFIG.blogAutoImage || a.autoImages) && fs.existsSync(manifestPath) && !a.signal?.aborted) {
+          try {
+            const man = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as { images?: Array<{ index?: number; file_path?: string; error?: string } | null> };
+            const slots = (JSON.parse(fs.readFileSync(draftPath, 'utf-8')) as { imageSlots?: Array<{ prompt?: string; alt?: string }> }).imageSlots ?? [];
+            const imgs: Array<string | null> = slots.map(() => null);
+            for (const e of man.images ?? []) {
+              const i = Number(e?.index);
+              if (Number.isInteger(i) && i >= 0 && i < imgs.length && e?.file_path && !e.error && fs.existsSync(e.file_path)) imgs[i] = e.file_path;
+            }
+            if (imgs.some(Boolean)) {
+              const known = findSpecies(a.topic);
+              const young = isYoungHero(a.topic);
+              // 전부 틀려도 다시 그린다(2026-11-09 사장님). 판정은 qaSceneImages 가 한 장씩 따로 한다.
+              const qa = await qaSceneImages({
+                dir, images: imgs, scenePrompts: slots.map((x) => String(x.prompt ?? '')), preset: 'photorealistic', size: '1024x1024',
+                sceneHints: slots.map((x) => String(x.alt ?? '')), signal: a.signal, retryAllBad: true,
+                ...(known ? { subject: speciesAnchor(known, { young }), subjectLatin: known.latin } : {}),
+                ...(young ? { subjectAge: '어린 나무(묘목)' } : {}),
+              });
+              let swapped = 0;
+              qa.images.forEach((p, i) => { const orig = imgs[i]; if (p && orig && p !== orig) { fs.copyFileSync(p, orig); swapped++; } });
+              if (qa.issues.length || swapped) a.bus.emit(EventType.log, { message: `블로그 사진 검수 — 다시 그림 ${swapped}장${qa.issues.length ? ` · ${qa.issues.slice(0, 3).join(' / ')}` : ''}` });
+            }
+          } catch (e) {
+            a.bus.emit(EventType.log, { message: `블로그 사진 검수 실패(무해): ${e instanceof Error ? e.message : String(e)}` });
+          }
         }
         // 실촬영 컷을 매니페스트 맨 앞에(index 0, source archive_frame, ai:false). 복원 매니페스트도 여기를 지난다 —
         // 복원은 표시 없이 blog-image-01.png 를 집어 오므로, 다시 표시하지 않으면 발행이 실사진에 'AI 활용'을 단다.

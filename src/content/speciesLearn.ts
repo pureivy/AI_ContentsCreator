@@ -110,7 +110,10 @@ export function labelQuestion(label: string, list: readonly Species[]): string {
     '',
     '판정 기준',
     `- "${label}" 이 위 목록에 있는 나무를 부르는 다른 이름(이명·상품명·지역명)이면 kind="alias", of=그 나무의 표준명.`,
-    '- 위 목록에 없는 별개의 식물이면 kind="new" 로 하고 학명과 형태를 적어라.',
+    '- 위 목록에 없는 별개의 식물이면 kind="new" 로 하고 학명과 형태를 적어라. 이름이 오타·품종명이라 표준 국명이 따로 있으면 of 에 그 표준 국명(예: 박태기나무)을 적어라.',
+    // 2026-11-09 — '박테기나무'(박태기 오타)·'화이트핑크셀렉스나무'(삼색버드나무 품종)·'문그로우'(향나무 품종)를 '모르겠다'로 보류했다.
+    '- 사장님이 손으로 적은 이름이라 오타·띄어쓰기·"나무" 붙임·외래 품종명의 한글 표기 흔들림이 있다(예: 박테기나무=박태기나무, 셀렉스=셀릭스=Salix). 그런 흔들림은 바로잡아 판단하라.',
+    '- 원예 품종명·상품명(예: 문그로우, 화이트핑크셀릭스)이면 그 품종이 속한 종으로 판단하라. 그 품종의 겉모습(꽃 색·잎 색·무늬·수형)이 사전의 그 종 설명과 뚜렷이 다르면 kind="new" 로 하고 형태는 그 품종 기준으로 적어라. 같은 모습이면 kind="alias".',
     '- 무슨 식물인지 확신이 없으면 kind="unknown". 추측하지 마라.',
     '',
     '형태를 적을 때는 긍정문만 써라. "손바닥 모양이 아니다" 같은 부정문은 쓰지 마라 —',
@@ -134,15 +137,16 @@ export function readVerdict(raw: unknown, list: readonly Species[]): LabelVerdic
     const of = str('of');
     // 사전에 실제로 있는 수종이어야 한다 — LLM 이 지어낸 표준명에 별칭을 붙이면 안 된다
     if (of && list.some((s) => s.name === of)) return { kind: 'alias', of };
-    return { kind: 'unknown' };
+    // 사전에 없는 종의 다른 이름(2026-11-09 '박테기나무'=박태기나무) — 학명까지 적었으면 새 수종으로 등재한다(아래 new 와 같은 검사).
+    if (!normalizeLatinName(str('latin') ?? '')) return { kind: 'unknown' };
   }
-  if (kind === 'new') {
+  if (kind === 'new' || kind === 'alias') {
     // LLM 은 "Citrus japonica (Fortunella japonica)" 처럼 이명을 괄호로 덧붙인다(실측 2026-09-06).
     // 이 값이 그대로 이미지 프롬프트의 종 앵커가 되므로 여기서 '속명 종소명'으로 좁힌다.
     const latin = normalizeLatinName(str('latin') ?? '');
     if (!latin) return { kind: 'unknown' }; // 학명 없이는 앵커 값이 없다
     return {
-      kind: 'new', latin,
+      kind: 'new', latin, ...(str('of') ? { of: str('of') } : {}),
       ...(str('type') ? { type: str('type') } : {}),
       ...(str('leaf') ? { leaf: str('leaf') } : {}),
       ...(str('form') ? { form: str('form') } : {}),
@@ -194,6 +198,12 @@ export async function learnSpeciesLabel(
     }
 
     if (v.kind === 'new' && v.latin) {
+      // 표준 국명이 따로 있으면(오타·품종명) 표준명으로 등재하고 적힌 이름은 별칭으로 — 다음에 정확한 이름으로 올려도 같은 수종이 된다.
+      const std = v.of && v.of !== name && !list.some((s) => s.name === v.of) ? v.of : undefined;
+      if (std && deps.addSpecies({ name: std, latin: v.latin, ...(v.type ? { type: v.type } : {}), ...(v.leaf ? { leaf: v.leaf } : {}), ...(v.form ? { form: v.form } : {}), ...(v.flower ? { flower: v.flower } : {}), ...(v.fruit ? { fruit: v.fruit } : {}) })) {
+        deps.addAlias(std, name);
+        return `수종 사전 추가 — ${std} (${v.latin}) · '${name}' 은 별칭 · 형태 미검토`;
+      }
       if (deps.addSpecies({ name, latin: v.latin, ...(v.type ? { type: v.type } : {}), ...(v.leaf ? { leaf: v.leaf } : {}), ...(v.form ? { form: v.form } : {}), ...(v.flower ? { flower: v.flower } : {}), ...(v.fruit ? { fruit: v.fruit } : {}) })) {
         return `수종 사전 추가 — ${name} (${v.latin}) · 형태 미검토`;
       }

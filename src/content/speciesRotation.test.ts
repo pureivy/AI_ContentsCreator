@@ -202,5 +202,7 @@ describe('실제 브랜드 카탈로그(data/brands/bionditree.yaml) — 농원 
   it("'주목'은 동음이의어 — 단독으로는 수종이 아니다(주목할 만한·주목받는)", () => {
     expect(keyOf('주목할 만한 가을 정원 관리')).toBeNull();
     expect(keyOf('요즘 주목받는 정원 트렌드')).toBeNull();
+    expect(keyOf('나무지주목 설치방법')).toBeNull(); // 받침대(지주목) — 2026-11-09 주목나무가 사전에 들어온 뒤
+    expect(keyOf('주목 열매 독성')).toBe('주목나무');
   });
 });

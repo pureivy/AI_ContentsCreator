@@ -24,6 +24,8 @@ import { parityIssuesChecked, parityToInfo } from './standaloneQa';
 import { THUMB_FRAME_FILE } from '../tools/shortsRender';
 import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { generateTitleArt } from './shortsTitleArt';
+import { qaSceneImages } from './shortsSceneQa';
+import { findSpecies, speciesAnchor, isYoungHero } from '../content/species';
 import { produce, projectDir, SM_EXIT_TEXT, shortMarkerReady, writeShotlist, type SmResult } from '../tools/shortMarker';
 
 const execFileP = promisify(execFile);
@@ -33,7 +35,7 @@ const registering = new Set<string>();
 /** 웹툰 단계가 도는 중인가 — /api/performance webtoonBusy(재시작 전 확인). */
 export function webtoonBusy(): number { return running.size; }
 
-interface Shotlist { id: string; hook?: string; scenes: Array<{ id: string; narration: string; motion?: string; redraw?: number }>; [k: string]: unknown }
+interface Shotlist { id: string; hook?: string; scenes: Array<{ id: string; narration: string; image?: string; motion?: string; redraw?: number }>; [k: string]: unknown }
 
 /** 장면 목록 요약(순수). */
 export function shotlistScenes(s: Shotlist): WebtoonScene[] {
@@ -51,6 +53,18 @@ export function pinT2iModel(s: Shotlist, model: string): { shotlist: Shotlist; c
   const ch = s.character as { model?: unknown } | undefined;
   if ((typeof s.t2i_model === 'string' && s.t2i_model) || (ch && typeof ch.model === 'string' && ch.model)) return { shotlist: s, changed: false };
   return { shotlist: { ...s, t2i_model: model }, changed: true };
+}
+
+/** 검수에 걸린 장면의 그림 지시에 학명 고정 문구를 붙인다(순수, 한 번만). 그림 필드는 영어만(SHORT_marker lint). */
+export function anchorScenes(s: Shotlist, ids: readonly string[], latin: string, young: boolean): Shotlist {
+  const tag = `Botanically accurate ${latin}${young ? ', drawn as a young sapling (thin stem, few branches)' : ''}.`;
+  return {
+    ...s,
+    scenes: s.scenes.map((sc) => {
+      const cur = String(sc.image ?? '');
+      return ids.includes(sc.id) && !cur.includes(tag) ? { ...sc, image: `${cur} ${tag}`.trim() } : sc;
+    }),
+  };
 }
 
 /** 장면 다시 그리기(순수) — 고른 장면의 redraw 를 1 올린다(SHORT_marker 가 그 장면만 새 시드로 그린다). 모르는 장면 id 는 무시. */
@@ -159,10 +173,50 @@ async function draftAndDraw(id: string, signal: AbortSignal, say: (l: string) =>
   const t1 = Date.now();
   const r = await produce({ project: job.project, imagesOnly: true, signal, onLine: say });
   if (!r.ok) throw new Error(`그림 — ${fail(r)}`);
+  await drawQa(id, signal, say, true);
   const cur = store.get(id)!;
   store.update(id, { stage: 'review', wallSec: { ...cur.wallSec, drawing: Math.round((Date.now() - t1) / 1000) } });
   console.log(`[웹툰] ${cur.topic.slice(0, 30)} — 그림 ${scenes.length}장 준비, 제작실 확인 대기`);
   notifyWebtoonReview(id);
+}
+
+/**
+ * 그림 수종·나이 검수(2026-11-09 사장님) — 웹툰 그림체는 그대로 두고, 나온 식물이 그 종·그 나이로 보이는지만 비전으로 본다.
+ * redraw=true 면 걸린 장면에 학명 문구를 붙여 SHORT_marker 로 한 번 다시 그리고 다시 본다. 남은 문제는 job.drawQa 로(알림·제작실에 보인다).
+ * 실패는 무해(검수 없이 진행).
+ */
+async function drawQa(id: string, signal: AbortSignal, say: (l: string) => void, redraw: boolean): Promise<void> {
+  if (!CONFIG.webtoonDrawQa) return;
+  try {
+    const job = webtoonStore().get(id); const sl = job && readShotlist(job.project);
+    if (!job || !sl) return;
+    const known = findSpecies(`${job.keyword ?? ''} ${job.topic}`);
+    if (!known) return; // 수종을 모르는 글 — 판정 기준이 없다
+    const young = isYoungHero(`${job.keyword ?? ''} ${job.topic}`);
+    const check = async (shot: Shotlist) => qaSceneImages({
+      dir: jobDir(id), images: shot.scenes.map((sc) => webtoonImagePath(id, sc.id)),
+      scenePrompts: shot.scenes.map((sc) => String(sc.image ?? '')),
+      sceneHints: shot.scenes.map((sc) => sc.narration), preset: 'webtoon', signal, checkOnly: true, medium: 'illustration',
+      subject: speciesAnchor(known, { young }), subjectLatin: known.latin, ...(young ? { subjectAge: '어린 나무(묘목)' } : {}),
+    });
+    let qa = await check(sl);
+    const bad = (qa.bad ?? []).map((i) => sl.scenes[i]?.id).filter((x): x is string => !!x);
+    if (bad.length && redraw && !signal.aborted) {
+      say(`그림 검수 — ${bad.join(', ')} 다시 그림(${qa.issues.slice(0, 2).join(' / ')})`);
+      const { shotlist, bumped } = bumpRedraw(anchorScenes(sl, bad, known.latin, young), bad);
+      fs.writeFileSync(path.join(projectDir(job.project), 'shotlist.json'), JSON.stringify(shotlist, null, 2), 'utf-8');
+      const redraws = { ...job.redraws }; for (const b of bumped) redraws[b] = (redraws[b] ?? 0) + 1;
+      webtoonStore().update(id, { redraws });
+      const r = await produce({ project: job.project, imagesOnly: true, signal, onLine: say });
+      if (!r.ok) throw new Error(`그림 — ${fail(r)}`);
+      qa = await check(shotlist);
+    }
+    webtoonStore().update(id, { drawQa: qa.issues });
+    say(`그림 검수 — ${qa.issues.length ? `남은 문제 ${qa.issues.length}건` : '이상 없음'}`);
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith('그림 —')) throw e; // 다시 그리기 실패는 단계 실패
+    say(`그림 검수 실패(무해) — ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
+  }
 }
 
 /** 새 작업 시작 — 202 용. project 를 주면 그 SHORT_marker 프로젝트(장면 목록이 이미 있으면 그대로)로 — 시험용. */
@@ -205,6 +259,7 @@ export function redrawWebtoon(id: string, sceneIds: readonly string[]): Act {
     say(`장면 다시 그리기 — ${bumped.join(', ')}`);
     const r = await produce({ project: job.project, imagesOnly: true, signal, onLine: say });
     if (!r.ok) throw new Error(`그림 — ${fail(r)}`);
+    await drawQa(id, signal, say, false); // 사람이 고른 다시 그리기 — 검수만(결과는 알림에)
     webtoonStore().update(id, { stage: 'review' });
     notifyWebtoonReview(id, bumped);
   });
@@ -226,10 +281,13 @@ export function notifyWebtoonReview(id: string, only?: readonly string[]): void 
   const fg = job.factGate;
   const fact = !fg ? '' : fg.status === 'pass' ? '원문 대조: 이상 없음' : fg.status === 'hold'
     ? `원문 대조: 확인 필요 ${fg.unsupported.length}건\n${fg.unsupported.map((u) => `· ${escapeHtml(u)}`).join('\n')}` : '원문 대조: 판정 실패 — 낭독을 직접 확인하세요';
+  const dq = job.drawQa;
+  const draw = !dq ? '' : dq.length ? `그림 검수(수종·나이): 확인 필요 ${dq.length}건\n${dq.map((u) => `· ${escapeHtml(u.replace(/^씬/, '장면 '))}`).join('\n')}` : '그림 검수(수종·나이): 이상 없음';
   const body = [
     `${head}\n<b>${title}</b>`,
     all.map((s, i) => `${i + 1}. ${escapeHtml(s.narration)}`).join('\n'),
     fact,
+    draw,
     `사진 순서가 장면 번호입니다. 승인하면 장면 영상을 만듭니다(약 45분~1시간).\n제작실 → 웹툰 탭: ${studioBase()}/`,
   ].filter(Boolean).join('\n\n');
   const buttons = [[{ text: '✅ 승인 — 영상 만들기', callback_data: `wa:${id}` }, { text: '✏️ 장면 다시 그리기', callback_data: `wr:${id}` }]];

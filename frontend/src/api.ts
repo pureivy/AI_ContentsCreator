@@ -1296,6 +1296,7 @@ export interface WebtoonJob {
   id: string; pieceId: string; topic: string; keyword?: string; project: string; stage: WebtoonStage;
   hook?: string; scenes?: Array<{ id: string; narration: string; motion?: string }>;
   factGate?: { status: "pass" | "hold" | "error"; unsupported: string[] };
+  drawQa?: string[];
   redraws?: Record<string, number>; shortId?: string; durationSec?: number;
   wallSec?: { writing?: number; drawing?: number; producing?: number };
   log?: string[]; error?: string; quiet?: boolean; createdTs: string; updatedTs: string;

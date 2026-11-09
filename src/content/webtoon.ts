@@ -45,6 +45,8 @@ export interface WebtoonJob {
   failedStage?: WebtoonStage | 'registering';
   /** 시험 실행 — 텔레그램 검토 알림을 보내지 않는다. */
   quiet?: boolean;
+  /** 그림 검수(2026-11-09) — 수종·나이 비전 검수에서 자동 다시 그리기 뒤에도 남은 문제. 비면 이상 없음. */
+  drawQa?: string[];
   createdTs: string;
   updatedTs: string;
 }

@@ -61,6 +61,12 @@ function JobRow({ j, onChanged, pub }: { j: WebtoonJob; onChanged: () => void; p
           {fg.unsupported.map((u, i) => <div key={i}>· {u}</div>)}
         </div>
       )}
+      {j.drawQa && j.drawQa.length > 0 && (
+        <div className="muted" style={{ marginTop: 6, color: "var(--con)" }}>
+          그림 검수(수종·나이) — 확인 필요 {j.drawQa.length}건
+          {j.drawQa.map((u, i) => <div key={i}>· {u.replace(/^씬/, "장면 ")}</div>)}
+        </div>
+      )}
       {j.stage === "error" && j.error && <p className="muted" style={{ color: "var(--con)", marginTop: 6 }}>{j.error}</p>}
       {ACTIVE.has(j.stage) && j.log && j.log.length > 0 && (
         <p className="muted" style={{ marginTop: 6, fontFamily: "monospace", fontSize: 12 }}>{j.log[j.log.length - 1]}</p>
