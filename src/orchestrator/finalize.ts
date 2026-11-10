@@ -19,9 +19,11 @@ import { renderHtml } from '../output/render';
 import { BLOG_IMAGE_MAX } from '../output/naverBlog';
 import { mergeRealFrameManifest } from '../content/blogFrames';
 import { applyBlogDiagrams } from './blogDiagramsApply';
-import { qaSceneImages, kstMonthNow } from './shortsSceneQa';
+import { qaSceneImages, kstMonthNow, seasonPromptLine } from './shortsSceneQa';
 import { blogSlotMusts } from './blogImageMust';
 import { handFreeModel, handFreeSlots } from './blogHandFree';
+/** 블로그 사진 위 덧그림 금지 줄(2026-11-10). */
+const NO_OVERLAY = 'No speech bubbles, callouts, arrows, labels, captions or text overlays anywhere in the image — a plain photograph.';
 import { ageSizePrompt } from '../content/treeAgeSize';
 import { findSpecies, speciesAnchor, isYoungHero } from '../content/species';
 
@@ -184,7 +186,14 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
             const youngTopic = isYoungHero(a.topic);
             const slots = a.assets.draft.imageSlots.map((x) => {
               const line = ageSizePrompt(`${x.alt} ${x.prompt}`, sp) || (youngTopic ? ageSizePrompt('묘목', sp) : '');
-              return line && !x.prompt.includes('[Tree size for its age') ? { ...x, prompt: `${x.prompt}\n${line}` } : x;
+              // 계절(2026-11-10 사장님) — 칸이 계절을 말하지 않으면 지금 달 모습으로.
+              const season = seasonPromptLine(kstMonthNow(), `${x.alt} ${x.prompt}`, /상록/.test(sp?.type ?? ''));
+              const add = [
+                line && !x.prompt.includes('[Tree size for its age') ? line : '', season && !x.prompt.includes('[Season') ? season : '',
+                // 말풍선 금지(2026-11-10 사장님 "블로그 이미지에 말풍선은 들어가면 안됨") — 사진 위 설명 표시는 본문·도표가 한다.
+                x.prompt.includes(NO_OVERLAY) ? '' : NO_OVERLAY,
+              ].filter(Boolean);
+              return add.length ? { ...x, prompt: `${x.prompt}\n${add.join('\n')}` } : x;
             });
             a.assets.draft = { ...a.assets.draft, imageSlots: slots };
             const dj = JSON.parse(fs.readFileSync(draftPath, 'utf-8')) as Record<string, unknown>;
@@ -229,7 +238,7 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
               const qa = await qaSceneImages({
                 dir, images: imgs, scenePrompts: slots.map((x) => String(x.prompt ?? '')), preset: 'photorealistic', size: '1024x1024',
                 sceneHints: slots.map((x) => String(x.alt ?? '')), signal: a.signal, retryAllBad: true,
-                sceneMust: musts, month: kstMonthNow(), // 계절 섞임(2026-11-10) — 블로그 사진끼리 잎 상태 비교
+                noHands: handFreeModel(), sceneMust: musts, month: kstMonthNow(), // 계절 섞임(2026-11-10) — 블로그 사진끼리 잎 상태 비교
                 ...(known ? { subject: speciesAnchor(known, { young }), subjectLatin: known.latin } : {}),
                 ...(young ? { subjectAge: '어린 나무(묘목)' } : {}),
               });

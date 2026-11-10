@@ -88,11 +88,14 @@ export function ageRows(group: TreeGroup, age: { lo: number; hi: number }): Row[
 
 /**
  * 비례 기준(2026-11-10 사장님 "주변 대상과 비례해서 그려야") — 크기는 화면 안 다른 물건과의 비례로 정해진다.
- * FLUX 손 빼기로 사람·손이 빠진 장면엔 비교 대상이 없으니, 크기를 아는 생활 물건을 하나 두게 한다(지주·끈은 장면에 있을 때만).
+ * 사람·손이 없는 장면은 원래 있을 법한 배경(울타리·처마·화분·지주)으로 크기를 잡는다(지주·끈은 장면에 있을 때만).
  */
-export const SCALE_RULE = 'Draw the tree in true proportion to the things around it (people, hands, stakes, pots, fence, house). '
-  + 'If no person is in the frame, place one everyday object of known size near the base for scale — a watering can (about 40 cm tall) or a red brick for close views, '
-  + 'a garden fence (about 1.2 m) or single-story house eaves (about 2.5 m) for whole-tree views — and keep the trunk thickness and height consistent with it. '
+// 비교 물건 강제 뺌(2026-11-10 사장님 감나무 시험) — '사람 없으면 물뿌리개·벽돌을 두라'고 하니 흙 위에 일부러 놓은 벽돌·물뿌리개가
+// 장마다 들어가 연출 티가 났다. 크기는 장면에 원래 있을 법한 배경(울타리·처마·화분·지주)으로 잡고, 크기만을 위한 소품은 넣지 않는다.
+export const SCALE_RULE = 'Draw the tree in true proportion to what is naturally in the scene. '
+  + 'Judge its size against background that would really be there — a garden fence (about 1.2 m), single-story house eaves (about 2.5 m), '
+  + 'a pot or a stake the scene already describes — and keep the trunk thickness and height consistent with it. '
+  + 'Do not add props just for scale (no watering cans, bricks or tools placed on the ground). '
   + 'Do not add stakes or ties unless the scene describes them. In close-ups the trunk keeps its real thickness relative to nearby objects (a thumb-thick trunk stays thumb-thick). '
   + 'Never draw it older, taller or thicker than this.';
 

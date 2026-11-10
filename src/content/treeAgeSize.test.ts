@@ -51,7 +51,8 @@ describe('비례 기준', () => {
   it('그림 지시는 주변 물건 비례와 비교 물건 규칙을 싣는다', () => {
     const p = ageSizePrompt('2~3년생 감나무', { name: '감나무', latin: 'Diospyros kaki', type: '활엽 교목' });
     expect(p).toContain("adult's thumb or a broom handle");
-    expect(p).toContain('watering can');
+    expect(p).toContain('garden fence');
+    expect(p).toContain('Do not add props just for scale');
     expect(p).toContain('Do not add stakes or ties unless');
   });
 });

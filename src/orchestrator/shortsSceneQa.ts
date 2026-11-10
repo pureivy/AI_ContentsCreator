@@ -52,31 +52,93 @@ export type LeafState = typeof LEAF_STATES[number];
 /** 달마다 맞는 잎 상태(앞이 우선) — 동수일 때 기준을 고르는 데만 쓴다. */
 const MONTH_LEAF: Record<number, LeafState[]> = {
   1: ['맨가지'], 2: ['맨가지'], 3: ['새순', '맨가지'], 4: ['새순', '초록'], 5: ['초록', '새순'], 6: ['초록'], 7: ['초록'], 8: ['초록'],
-  9: ['초록', '단풍'], 10: ['단풍', '초록'], 11: ['단풍', '맨가지', '초록'], 12: ['맨가지', '단풍'],
+  // 11월 초록 뺌(2026-11-10 사장님 감나무 시험) — 초록을 맞는 상태로 두니 11월 연두 새잎 사진이 통과했다. 상록수는 seasonOutliers 가 초록을 더한다.
+  9: ['초록', '단풍'], 10: ['단풍', '초록'], 11: ['단풍', '맨가지'], 12: ['맨가지', '단풍'],
 };
-/** 내레이션이 다른 계절을 직접 말하는 장 — 일부러 다른 계절로 그린 장이라 계절 비교에서 뺀다. */
+/** 계절을 말하는 낱말(어느 계절이든). 계절 검수·그림 지시에서 빼는 판단은 otherSeasonMentioned — 지금과 '다른' 계절만 뺀다. */
 export const SEASON_WORDS = /봄|여름|가을|겨울|새순|새싹|움트|단풍|낙엽|잎이? ?지|잎 ?진|맨가지|꽃이? ?피|개화|(?:1[0-2]|[1-9]) ?월/;
 
+type Season = '봄' | '여름' | '가을' | '겨울';
+/** 달마다 지금 계절(경계 달은 둘). */
+const MONTH_SEASONS: Record<number, Season[]> = {
+  1: ['겨울'], 2: ['겨울'], 3: ['봄', '겨울'], 4: ['봄'], 5: ['봄', '여름'], 6: ['여름'], 7: ['여름'], 8: ['여름'],
+  9: ['여름', '가을'], 10: ['가을'], 11: ['가을', '겨울'], 12: ['겨울'],
+};
+const SEASON_OF_WORD: Array<[RegExp, Season]> = [
+  [/봄|새순|새싹|움트|꽃이? ?피|개화|\bspring\b|\bblossoms?\b|\bnew leaves\b/i, '봄'],
+  [/여름|\bsummer\b/i, '여름'],
+  [/가을|단풍|낙엽|\bautumn\b|fall foliage/i, '가을'],
+  [/겨울|맨가지|잎이? ?지|잎 ?진|\bwinter\b|leafless|bare (?:branches|twigs|tree)|\bsnow\b/i, '겨울'],
+];
+
 /**
- * 계절 섞임(순수, 2026-11-09 사장님 "숏폼 계절 섞임도 검수에") — FLUX.3 시험 숏폼에서 2·5번 장은 노란 잎, 3·4번 장은 초록 잎이었다.
- * 한 장씩 판정하면 장끼리 비교가 안 되므로, 장마다 잎 상태만 받고 여기서 비교한다.
- * 기준 = 비교 대상 장의 다수 상태. 동수면 이 달에 맞는 상태(MONTH_LEAF 순서). 기준과 다른 장을 돌려준다(입력 순번, 0부터).
- * 비교 대상이 2장 미만이거나 모두 같으면 빈 배열.
+ * 지금과 다른 계절을 말하는가(순수, 2026-11-10 사장님 "지금 계절과 다른 계절을 말할 때만 빼기").
+ * 종전엔 계절 낱말이 하나라도 있으면 뺐다 — '감나무 겨울 지지대'(11월)의 '겨울'에 걸려 계절 지시·검수가 통째로 빠져 초록 잎이 나왔다.
+ * 이제 지금 계절(MONTH_SEASONS)에 없는 계절 낱말이나 그런 달('3월에')을 말할 때만 true.
  */
-export function seasonOutliers(states: ReadonlyArray<string | null | undefined>, intentional: ReadonlyArray<boolean>, month: number): { base: LeafState | null; outliers: number[] } {
+export function otherSeasonMentioned(text: string, month: number): boolean {
+  const t = String(text ?? '');
+  const now = new Set<Season>(MONTH_SEASONS[month] ?? []);
+  if (!now.size) return false;
+  for (const [re, season] of SEASON_OF_WORD) if (re.test(t) && !now.has(season)) return true;
+  for (const m of t.matchAll(/(?<!\d)(1[0-2]|[1-9]) ?월/g)) {
+    const main = MONTH_SEASONS[Number(m[1])]?.[0]; // 말한 달은 그 달의 주 계절로(3월=봄 — 11월의 '겨울'과 겹친다고 보지 않는다)
+    if (main && !now.has(main)) return true;
+  }
+  return false;
+}
+
+/**
+ * 계절 검수(순수) — 2026-11-09 섞임(FLUX.3 시험 숏폼 2·5번 노란 잎, 3·4번 초록 잎) + 2026-11-10 이 달 대조(사장님 "나무도 계절을 반영해야지").
+ * 종전엔 장끼리 비교만 해서 모든 장이 똑같이 틀리면(11월에 전부 여름 초록) 통과했다. 이제 이 달에 맞는 상태(MONTH_LEAF)만 기준이 될 수 있다.
+ * 기준 = 이 달에 맞는 상태 중 다수(동수면 MONTH_LEAF 순서). 맞는 장이 하나도 없으면 이 달의 첫 상태. 기준과 다른 장을 돌려준다(0부터).
+ * 상록수는 초록이 늘 맞다. 일부러 다른 계절을 그린 장(intentional)·판단불가는 뺀다.
+ */
+export function seasonOutliers(
+  states: ReadonlyArray<string | null | undefined>, intentional: ReadonlyArray<boolean>, month: number, evergreen = false,
+): { base: LeafState | null; outliers: number[]; offMonth: number[] } {
+  const none = { base: null, outliers: [] as number[], offMonth: [] as number[] };
   const idx = states.map((s, i) => ((LEAF_STATES as readonly string[]).includes(String(s)) && !intentional[i] ? i : -1)).filter((i) => i >= 0);
-  if (idx.length < 2) return { base: null, outliers: [] };
+  if (!idx.length) return none;
+  const pref: LeafState[] = evergreen ? ['초록', ...(MONTH_LEAF[month] ?? []).filter((x) => x !== '초록')] : (MONTH_LEAF[month] ?? []);
+  if (!pref.length) return none;
+  const ok = new Set<string>(pref);
   const count = new Map<string, number>();
-  for (const i of idx) count.set(states[i]!, (count.get(states[i]!) ?? 0) + 1);
-  if (count.size < 2) return { base: null, outliers: [] };
-  const top = Math.max(...count.values());
-  const leaders = [...count.keys()].filter((k) => count.get(k) === top);
-  const pref = MONTH_LEAF[month] ?? [];
-  const base = (leaders.length === 1 ? leaders[0] : leaders.sort((a, b) => {
-    const ra = pref.indexOf(a as LeafState), rb = pref.indexOf(b as LeafState);
-    return (ra < 0 ? 99 : ra) - (rb < 0 ? 99 : rb);
-  })[0]) as LeafState;
-  return { base, outliers: idx.filter((i) => states[i] !== base) };
+  for (const i of idx) if (ok.has(states[i]!)) count.set(states[i]!, (count.get(states[i]!) ?? 0) + 1);
+  let base: LeafState;
+  if (!count.size) base = pref[0]!;
+  else {
+    const top = Math.max(...count.values());
+    base = [...count.keys()].filter((k) => count.get(k) === top).sort((a, b) => pref.indexOf(a as LeafState) - pref.indexOf(b as LeafState))[0] as LeafState;
+  }
+  const outliers = idx.filter((i) => states[i] !== base);
+  return { base, outliers, offMonth: outliers.filter((i) => !ok.has(states[i]!)) };
+}
+
+/** 잎 상태 → 그림 지시 영어(순수). */
+const MONTH_SCENE: Record<number, string> = {
+  1: 'mid-winter: deciduous trees completely bare, dormant buds, no leaves',
+  2: 'late winter: deciduous trees bare, buds just swelling, no leaves',
+  3: 'early spring: buds breaking, only tiny first leaves on some twigs, mostly bare',
+  4: 'spring: fresh light-green new leaves, spring blossoms where the species flowers now',
+  5: 'late spring: fresh green leaves filling out',
+  6: 'early summer: full green foliage', 7: 'summer: full deep-green foliage', 8: 'late summer: full deep-green foliage',
+  9: 'early autumn: leaves still green, just beginning to fade',
+  10: 'autumn: leaves turning yellow, orange or red, some fallen leaves on the ground',
+  11: 'late autumn: deciduous trees mostly bare with a few dry brown or colored leaves left, fallen dry leaves on the ground, no green or new leaves',
+  12: 'early winter: deciduous trees bare, no leaves, dry fallen leaves on the ground',
+};
+
+/**
+ * 계절 그림 지시 줄(순수, 2026-11-10 사장님) — 카드·블로그 사진 지시엔 계절이 없어 글쓴이가 적은 칸만 맞았다.
+ * 장면 글이 지금과 다른 계절을 말하면(otherSeasonMentioned) 그 장면을 따르고 이 줄은 뺀다. 상록수는 잎을 단 채로.
+ */
+export function seasonPromptLine(month: number, sceneText: string, evergreen = false): string {
+  const t = String(sceneText ?? '');
+  if (otherSeasonMentioned(t, month)) return '';
+  const m = MONTH_SCENE[month];
+  if (!m) return '';
+  return `[Season — it is now ${month} in Korea] ${evergreen ? 'This species is evergreen and keeps its leaves; surrounding deciduous plants follow the season: ' : 'Draw the plants as they look now — '}${m}.`;
 }
 
 /** 비전 이슈 배열 → 불량 씬 순번 — parseBadIndices('scene') 위임(기존 소비 호환 유지). */
@@ -261,6 +323,8 @@ export async function qaSceneImages(opts: {
   refPhotos?: string[];
   /** 지금 달(1~12, 2026-11-09) — 주면 계절 섞임 검사를 켠다(장마다 잎 상태 → seasonOutliers). */
   month?: number;
+  /** 손·사람 금지(2026-11-10 사장님, FLUX 그림) — 손 모양이 아니라 손·사람이 보이는 것 자체가 문제. 감나무 시험 숏폼에 장갑 낀 손·삽 든 사람이 통과했다. */
+  noHands?: boolean;
 }): Promise<SceneQaResult> {
   const out: SceneQaResult = { images: opts.images.slice(), regenerated: 0, issues: [], focus: opts.images.map(() => null) };
   try {
@@ -301,6 +365,7 @@ export async function qaSceneImages(opts: {
           // 계절 섞임(2026-11-09) — 장끼리 비교는 코드(seasonOutliers)가 한다. 여기선 장마다 잎 상태만 받는다.
           opts.month ? '잎 상태: 각 장의 대상 식물 잎 상태를 leaf 로 하나만 고르라 — "새순"(막 돋은 연한 새잎)·"초록"(다 자란 푸른 잎)·"단풍"(노랗거나 붉게 물든 잎)·"맨가지"(잎이 거의 없음)·"판단불가". 계절이 틀렸는지는 판정하지 말고 보이는 대로만.' : '',
           '손: 사람 손이 보이는 장은 손마다 손을 감싸는 상자를 hands 로 보고하라(x0,y0,x1,y1 — 왼쪽 위 0, 오른쪽 아래 1 비율, 손가락 끝과 손목까지 포함). 손이 없으면 생략.',
+          ...(opts.noHands ? ['사람 금지: 이 그림엔 사람·손·팔·장갑이 하나도 나오면 안 된다. 사람(몸 일부라도)·손·팔·장갑 낀 손이 조금이라도 보이면 그 장을 문제로 보고하고 problem 을 \'사람:\' 으로 시작하라.'] : []),
           // 수종 오식별(2026-09-03 실사고) — "측백나무 생울타리" 편의 4씬 중 3씬이 활엽수로 나왔다.
           // 측백나무는 침엽수다. 원예 채널에서 화면의 종이 틀리면 신뢰가 직접 깎인다.
           opts.subject || opts.subjectLatin
@@ -349,7 +414,13 @@ export async function qaSceneImages(opts: {
         try { results[j] = await judge(subs[j]!); } catch { results[j] = null; }
         // 손 판정(2026-11-09) — 손 상자가 있으면 잘라서 따로 본다. 실패는 무해(손 판정 없이 진행).
         const r = results[j];
-        if (r && Array.isArray(r.hands) && r.hands.length) {
+        // 손·사람 금지면 손 상자만 와도 문제 — 모양 판정(judgeHands)은 필요 없다.
+        if (r && opts.noHands && Array.isArray(r.hands) && r.hands.length) {
+          const iss = Array.isArray(r.issues) ? r.issues : [];
+          const has = (k: number) => iss.some((x) => Math.floor(Number(x?.scene)) === k && /^\s*(사람|손)\s*:/.test(String(x?.problem ?? '')));
+          const ks = [...new Set(r.hands.map((h) => Math.floor(Number(h?.scene))).filter((k) => k >= 1 && k <= subs[j]!.length))];
+          r.issues = [...iss, ...ks.filter((k) => !has(k)).map((k) => ({ scene: k, problem: '사람: 손이 보임 — 손·사람 없이 결과·상태만 보이게' }))];
+        } else if (r && Array.isArray(r.hands) && r.hands.length) {
           try {
             const hs = await judgeHands(subs[j]!, r.hands, opts);
             if (hs.length) r.issues = [...(Array.isArray(r.issues) ? r.issues : []), ...hs];
@@ -363,10 +434,15 @@ export async function qaSceneImages(opts: {
       for (const x of subs.flatMap((sub, j) => renumber(results[j]?.leaf, sub))) {
         const k = Math.floor(Number(x?.scene)); if (k >= 1 && k <= checked.length) states[k - 1] = String(x?.state ?? '');
       }
-      const intentional = checked.map((c) => SEASON_WORDS.test(String(opts.sceneHints?.[c.origIndex] ?? '')));
-      const so = seasonOutliers(states, intentional, opts.month);
+      const intentional = checked.map((c) => otherSeasonMentioned(String(opts.sceneHints?.[c.origIndex] ?? ''), opts.month!));
+      const evergreen = /상록/.test(speciesByLatin(opts.subjectLatin)?.type ?? '');
+      const so = seasonOutliers(states, intentional, opts.month, evergreen);
       // 계절 사유를 맨 앞에 — 재생성 프롬프트(reasonFor)는 그 장의 첫 사유를 쓴다.
-      for (const i of so.outliers) rawIssues.unshift({ scene: i + 1, problem: `계절: 다른 장은 ${so.base} 잎인데 이 장만 ${states[i]} — ${so.base} 잎으로` });
+      for (const i of so.outliers) {
+        rawIssues.unshift({ scene: i + 1, problem: so.offMonth.includes(i)
+          ? `계절: 지금은 ${opts.month}월인데 ${states[i]} 잎 — ${so.base} 상태로 (${MONTH_SCENE[opts.month] ?? ''})`
+          : `계절: 다른 장은 ${so.base} 잎인데 이 장만 ${states[i]} — ${so.base} 잎으로` });
+      }
     }
     const mustLines = buildMustLines(opts.sceneMust, checked); // 아래 전량 불량 규칙용
     out.focus = parseFocus(subs.flatMap((sub, j) => renumber(results[j]?.focus, sub)), checked, opts.images.length);

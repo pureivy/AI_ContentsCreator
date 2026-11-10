@@ -15,7 +15,7 @@ import { inheritedClaims, writerSource, flaggedForPrompt } from '../content/inhe
 import { parityIssues } from './standaloneQa';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { cardRealFrames } from './cardFrames';
-import { qaSceneImages, kstMonthNow } from './shortsSceneQa';
+import { qaSceneImages, kstMonthNow, seasonPromptLine } from './shortsSceneQa';
 import { handFreeScenes, handFreeModel, withNoHands } from './blogHandFree';
 import { ageSizePrompt } from '../content/treeAgeSize';
 /** FLUX 면 최종 지시문 끝에도 손 금지(장면 문구가 genPhotoPrompt 안에서 잘려도 남게). */
@@ -36,7 +36,7 @@ export function readSourceFlagged(dir: string): string[] {
   } catch { return []; }
 }
 import {
-  insideDir, normalizeLayout, layoutFields, dropFields, parityKeys, layoutPrompt, toRenderSpec, genPhotoPrompt, renderCardSpec,
+  insideDir, dropHandTags, normalizeLayout, layoutFields, dropFields, parityKeys, layoutPrompt, toRenderSpec, genPhotoPrompt, renderCardSpec,
   CARD_FONT_DIR, CARD_MAX_GEN, CARD_EXTRA_FRAMES, dedupeBlogPhotos, realPhotoSlots, type BlogPhoto, type CardLayout, type LayoutSlide, type PhotoRef,
 } from './cardLayout';
 
@@ -324,6 +324,11 @@ export async function designHtmlCards(o: {
   } else if (rejected.size) say(`카드 칸 원문 뜻 대조 — 겹침 미달 ${rejected.size}칸, 살린 칸 없음`);
   say(`카드 판형 — ${layout.slides.map((s) => s.kind).join('·')}`);
   layout = await factCheckFields(layout, source, o.sourceFlagged ?? [], say, o.signal);
+  if (handFreeModel()) { // FLUX 는 손을 빼고 그린다 — 손을 가리키는 사진 표시도 뺀다(2026-11-10)
+    const isReal = (r?: PhotoRef): boolean => (r?.use === 'blog' ? !!blog[r.n - 1]?.real : r?.use === 'file' ? /(^|\/)frame-/.test(r.path) : false);
+    const h = dropHandTags(layout, isReal);
+    if (h.dropped) { layout = h.layout; say(`카드 사진 표시 — 손·사람 칸 ${h.dropped}개 뺌(손 없는 그림)`); }
+  }
 
   // 표지 — 실촬영이 있으면 그것, 없으면 기획대로(없으면 첫 블로그 사진).
   const real = blog.find((b) => b.real);
@@ -392,7 +397,7 @@ export async function designHtmlCards(o: {
     // 나이별 크기(2026-11-10) — 장면·원문 묘사가 말한 나이, 없으면 어린 나무 주제일 때 '묘목' 기준.
     const ageOf = (g: (typeof gen)[number]): string => ageSizePrompt(`${g.ref.scene} ${(g.ref.must?.show ?? []).join(' ')}`, known)
       || (young ? ageSizePrompt('묘목', known) : '');
-    const prompts = gen.map((g, k) => withHandRule(genPhotoPrompt(hf.scenes[k] ?? g.ref.scene, g.ref.must, subject, { setRefs: setRefs.length > 0, young, ageSize: ageOf(g) })));
+    const prompts = gen.map((g, k) => withHandRule(genPhotoPrompt(hf.scenes[k] ?? g.ref.scene, g.ref.must, subject, { setRefs: setRefs.length > 0, young, ageSize: ageOf(g), season: seasonPromptLine(kstMonthNow(), `${g.ref.scene} ${(g.ref.must?.show ?? []).join(' ')}`, /상록/.test(known?.type ?? '')) })));
     const draftPath = path.join(dir, 'photos-gen-draft.json');
     const manPath = path.join(dir, 'photos-gen-manifest.json');
     fs.writeFileSync(draftPath, JSON.stringify({ imageSlots: gen.map((g, k) => ({ alt: `slide ${g.slide + 1} photo ${k + 1}`, prompt: prompts[k] })) }, null, 2), 'utf-8');
@@ -412,6 +417,7 @@ export async function designHtmlCards(o: {
         sceneHints: gen.map((g) => plan.slides[g.slide]?.headline ?? ''),
         sceneMust: gen.map((g) => g.ref.must),
         month: kstMonthNow(), // 계절 섞임 검사(2026-11-09 사장님 "카드뉴스에도")
+        noHands: handFreeModel(), // FLUX 그림은 손·사람이 보이면 탈락(2026-11-10)
       });
       if (qa.regenerated || qa.issues.length) say(`카드 사진 검수 — 다시 그림 ${qa.regenerated}장${qa.issues.length ? ` · ${qa.issues.slice(0, 2).join(' / ')}` : ''}`);
       imgs = qa.images;
@@ -523,7 +529,7 @@ export async function reviseHtmlCard(dir: string, feedback: string, say: Say, si
   }).slice(0, 3);
   if (regen.length) {
     const hf = await handFreeScenes(regen.map((g) => g.scene), '', signal);
-    const prompts = regen.map((g, k) => withHandRule(genPhotoPrompt(hf.scenes[k] ?? g.scene, g.must)));
+    const prompts = regen.map((g, k) => withHandRule(genPhotoPrompt(hf.scenes[k] ?? g.scene, g.must, undefined, { season: seasonPromptLine(kstMonthNow(), `${g.scene} ${g.must.show.join(' ')}`) })));
     const draftPath = path.join(dir, 'photos-regen-draft.json');
     const manPath = path.join(dir, 'photos-regen-manifest.json');
     const outDir = path.join(dir, `photos-regen-${Date.now()}`);
@@ -533,7 +539,7 @@ export async function reviseHtmlCard(dir: string, feedback: string, say: Say, si
     try {
       const man = JSON.parse(fs.readFileSync(manPath, 'utf-8')) as { images?: Array<{ file_path?: string; error?: string } | null> };
       imgs = regen.map((_, k) => { const im = man.images?.[k]; return im?.file_path && !im.error && fs.existsSync(im.file_path) ? im.file_path : null; });
-      const qa = await qaSceneImages({ dir, images: imgs, scenePrompts: prompts, preset: 'photorealistic', signal, sceneMust: regen.map((g) => g.must), month: kstMonthNow() });
+      const qa = await qaSceneImages({ dir, images: imgs, scenePrompts: prompts, preset: 'photorealistic', signal, sceneMust: regen.map((g) => g.must), month: kstMonthNow(), noHands: handFreeModel() });
       imgs = qa.images;
     } catch { /* 사진 교체 실패 — 기존 사진 유지 */ }
     regen.forEach((g, k) => {
@@ -559,6 +565,10 @@ export async function reviseHtmlCard(dir: string, feedback: string, say: Say, si
     say(`카드 칸 원문 뜻 대조(수정) — 겹침 미달 ${candidates.length}칸 중 ${approved.size}칸 살림`);
   }
   let layout = keepUnchangedSlides(saved, norm, changed);
+  if (handFreeModel()) { // 수정 때도 손 표시 빼기(2026-11-10) — 다시 정리한 칸 글이 '줄기 잡는 손'을 되살리지 않게
+    const h = dropHandTags(layout, (r) => r?.use === 'file' && /(^|\/)frame-/.test(r.path));
+    if (h.dropped) { layout = h.layout; say(`카드 사진 표시 — 손·사람 칸 ${h.dropped}개 뺌(손 없는 그림)`); }
+  }
   layout = keepUnchangedSlides(saved, await factCheckFields(layout, fullSource, readSourceFlagged(dir), say, signal), changed); // 생성 때와 같은 지적 목록
   const count = await renderLayout(dir, layout, saved.coverNote, say, signal);
   if (!count) return null;

@@ -22,10 +22,10 @@ import { platformPlanGuide, platformLabel, SIBLING_PREVIEW_FILE } from '../conte
 import { writerById, writerByName, type ShortsWriter } from '../content/shortsWriters';
 import { notifyShortsReady } from '../autonomy/contentNotify';
 import { generateImagesForDraft } from '../tools/blog_skills';
-import { qaSceneImages, kstMonthNow } from './shortsSceneQa';
+import { qaSceneImages, kstMonthNow, seasonPromptLine } from './shortsSceneQa';
 import { applyMotionGraphics } from './shortsDirectMotion';
 import { parseSceneMust, mustDesignerGuide, mustPromptLines, type SceneMust } from './sceneMust';
-import { handFreeScenes } from './blogHandFree';
+import { handFreeScenes, handFreeModel } from './blogHandFree';
 import { ageSizePrompt } from '../content/treeAgeSize';
 export { parseSceneMust } from './sceneMust';
 import { qaSceneClips } from './shortsClipQa';
@@ -2250,6 +2250,8 @@ const TEXTURE_POTTED: readonly string[] = [
   '흙이 묻은 손과 손톱',
   '오래 써 길이 든 장갑과 앞치마',
 ];
+/** 손·사람을 부르는 촬영 지시(손 없는 그림에서 뺀다). */
+const HAND_PROP = /손|장갑|앞치마|어깨|사람/;
 const HOOK_PUSH: readonly string[] = [
   ' 첫 3초에 스크롤을 멈출, 가장 시선을 끄는 강렬한 장면으로 연출한다.',
   ' 첫 화면이다 — 무슨 일이 벌어지기 직전의 순간을 잡아 다음이 궁금해지게 한다.',
@@ -2279,8 +2281,19 @@ export function buildSceneImagePrompt(a: {
   heroChained?: boolean;
   /** 나이별 크기(2026-11-10 사장님 확인 기준표) — 장면·내레이션·주인공 묘사가 말한 나이의 근원경·키. 없으면 ''. */
   ageSize?: string;
+  /** 계절(2026-11-10 사장님) — 장면이 계절을 말하지 않으면 지금 달 모습. 없으면 ''. */
+  season?: string;
+  /** 손·사람 없이(2026-11-10 사장님 "숏폼·카드 사진에도 손이 들어가면 안됨") — FLUX 로 그릴 때. 공통 지시의 손 문구·손 소품을 뺀다.
+   *  감나무 시험: 장면 글은 손을 뺐는데 공통 지시('손은 나무를 짚거나…'·'손 동작만 바꿔라'·생활감 '장갑')가 손을 불러 장갑 낀 손이 나왔다. */
+  noHands?: boolean;
 }): string {
   const { style, index: i, total, seed, subject, subjectLatin, seasonal } = a;
+  const nh = !!a.noHands;
+  const handLess = <T extends string>(list: readonly T[]): readonly T[] => {
+    if (!nh) return list;
+    const f = list.filter((x) => !HAND_PROP.test(x));
+    return f.length ? f : list;
+  };
   const scene = a.scene.trim() || '주제를 상징하는 한국 생활 장면';
   const isHook = i === 0;
   const p: string[] = [];
@@ -2304,7 +2317,7 @@ export function buildSceneImagePrompt(a: {
     p.push(`[주인공 나무 — 이 영상의 장면들은 같은 한 그루] ${a.hero}. 이 장면의 나무는 바로 이 나무다 — 나이·키·줄기 굵기·가지 수를 바꾸지 마라. 가까이 찍어도 줄기·가지 굵기는 이 나무 기준이다.`);
   }
   if (a.heroChained) {
-    p.push('[첫 번째 첨부 사진 — 주인공 나무] 첫 번째 첨부는 앞 장면에서 그린 바로 그 나무다. 같은 나무로 이어지게 줄기 굵기·키·가지 배치·수피를 맞추고, 각도·거리·손 동작만 이 장면에 맞게 바꿔라. 두 번째부터의 첨부는 이 종의 실물 참조다.');
+    p.push(`[첫 번째 첨부 사진 — 주인공 나무] 첫 번째 첨부는 앞 장면에서 그린 바로 그 나무다. 같은 나무로 이어지게 줄기 굵기·키·가지 배치·수피를 맞추고, 각도·거리${nh ? '' : '·손 동작'}만 이 장면에 맞게 바꿔라. 두 번째부터의 첨부는 이 종의 실물 참조다.${nh ? ' 첨부에 사람·손이 있어도 이 장면엔 그리지 마라.' : ''}`);
   }
   if (a.speciesRef) {
     p.push(a.hero && isYoungHero(a.hero)
@@ -2314,34 +2327,35 @@ export function buildSceneImagePrompt(a: {
   // 나무 크기(2026-09-08 사용자 지시) — 실측: 공작단풍(성목 2~3m) 마지막 씬이 사람 팔 위로 까마득히 솟은 거목으로 그려졌다.
   // 장면이 가리키는 성장 단계의 실제 크기로 그리고, 사람·손·화분 같은 비례 기준이 있으면 그것에 맞춘다.
   if (a.hero) {
-    p.push('[나무 크기] 위 주인공 나무 묘사의 나이·키·굵기 그대로 그린다. 사람·손이 함께 나오면 그 비례로 크기를 잡아라 — 다른 씬보다 크거나 굵게 그리지 마라.');
+    p.push(`[나무 크기] 위 주인공 나무 묘사의 나이·키·굵기 그대로 그린다. ${nh ? '지주·울타리·집처럼 장면에 원래 있는 것' : '사람·손이 함께 나오면 그'}의 비례로 크기를 잡아라 — 다른 씬보다 크거나 굵게 그리지 마라.`);
   } else if (subjectLatin || subject) {
     p.push(a.subjectSize
-      ? `[나무 크기 — 성장 단계에 맞게] 이 종의 실제 크기: ${a.subjectSize}. 장면 묘사가 가리키는 단계(묘목/유목/성목)의 크기로 그리고 성목 최대를 넘기지 마라. 사람·손·화분·도구가 함께 나오면 그 비례로 크기를 잡아라 — 사람 머리 위로 까마득히 솟는 거목으로 그리지 마라.`
-      : `[나무 크기 — 성장 단계에 맞게] ${subjectLatin ?? subject}의 실제 성장 단계별 크기(묘목→유목→성목의 높이와 폭)를 가늠해 장면 묘사가 가리키는 단계의 크기로 그리고, 이 종의 실제 최대 크기를 넘기지 마라. 사람·손·화분·도구가 함께 나오면 그 비례로 크기를 잡아라.`);
+      ? `[나무 크기 — 성장 단계에 맞게] 이 종의 실제 크기: ${a.subjectSize}. 장면 묘사가 가리키는 단계(묘목/유목/성목)의 크기로 그리고 성목 최대를 넘기지 마라. ${nh ? '지주·울타리·집·화분' : '사람·손·화분·도구'}가 함께 나오면 그 비례로 크기를 잡아라 — 사람 머리 위로 까마득히 솟는 거목으로 그리지 마라.`
+      : `[나무 크기 — 성장 단계에 맞게] ${subjectLatin ?? subject}의 실제 성장 단계별 크기(묘목→유목→성목의 높이와 폭)를 가늠해 장면 묘사가 가리키는 단계의 크기로 그리고, 이 종의 실제 최대 크기를 넘기지 마라. ${nh ? '지주·울타리·집·화분' : '사람·손·화분·도구'}가 함께 나오면 그 비례로 크기를 잡아라.`);
   }
   if (a.ageSize) p.push(a.ageSize);
+  if (a.season) p.push(a.season);
   // 연장은 화면에 넣지 않는다(2026-09-06 실사고) — 생활감이 "쓴 자국이 있는 도구"를 부르면
   // 전지가위가 들어오는데, 날과 축의 구조가 물리적으로 불가능하게 그려진다. 손만으로 충분하다.
-  p.push('[연장] 전지가위·톱·삽 같은 연장은 화면에 넣지 마라 — 날·축·손잡이 구조가 어긋나게 그려진다. 손은 나무를 짚거나 가리키는 정도로만 쓴다.');
+  p.push(`[연장] 전지가위·톱·삽 같은 연장은 화면에 넣지 마라 — 날·축·손잡이 구조가 어긋나게 그려진다. ${nh ? '사람·손·팔·장갑도 화면에 넣지 마라 — 동작 대신 그 결과나 상태를 보여 준다.' : '손은 나무를 짚거나 가리키는 정도로만 쓴다.'}`);
   // 원문 묘사(2026-10-12 사장님 지시) — 장면 묘사보다 구체적인 사실(사선으로 자른 끝·잎 없는 맨가지·묘목 나이별 크기)을 따로 못박는다.
   p.push(...mustPromptLines(a.must));
   if (!seed) { // 종전 동작 보존
     p.push(`장면(씬 ${i + 1}/${total}${isHook ? ', 훅' : ''}): ${scene}.${isHook ? HOOK_PUSH[0] : ''}`);
     p.push('구도: 세로 9:16 프레임을 피사체로 자연스럽게 채운다.');
     p.push('시네마토그래피: 얕은 심도와 부드러운 조명으로 피사체를 또렷하게. 이전 씬과 구분되는 앵글·피사체·범위로 변주하되, 전 씬 공통 팔레트·질감·조명을 동일하게 유지해 시리즈 일관성을 낸다.');
-    p.push('금지: 이미지 안에 글자·자막·숫자·로고·워터마크·간판 텍스트를 넣지 않는다(자막은 렌더러가 따로 얹는다). 손·손가락 왜곡과 어색한 합성을 피한다.');
+    p.push(`금지: 이미지 안에 글자·자막·숫자·로고·워터마크·간판 텍스트를 넣지 않는다(자막은 렌더러가 따로 얹는다). ${nh ? '사람·손·손가락·팔이 화면 어디에도 없게 한다. 어색한 합성을 피한다.' : '손·손가락 왜곡과 어색한 합성을 피한다.'}`);
     return p.join('\n');
   }
   const vid = fxSeed(seed);                      // 편 단위 — 씬이 바뀌어도 같다
   const sc = fxSeed(`${seed}@${i}`);             // 씬 단위
   const at = <T,>(list: readonly T[], n: number, axis: number): T => list[fxSeed(`${n}#${axis}`) % list.length]!;
   p.push(`장면(씬 ${i + 1}/${total}${isHook ? ', 훅' : ''}): ${scene}.${isHook ? at(HOOK_PUSH, vid, 0) : ''}`);
-  p.push(`구도: 세로 9:16. ${at(ANGLE, sc, 1)} ${at(DISTANCE, sc, 2)} 담는다.`);
+  p.push(`구도: 세로 9:16. ${at(handLess(ANGLE), sc, 1)} ${at(handLess(DISTANCE), sc, 2)} 담는다.`);
   p.push(`빛과 심도(전 씬 동일): ${at(LIGHTING, vid, 3)}. ${at(DEPTH, vid, 4)}.`);
-  p.push(`생활감: ${at(a.potted ? TEXTURE_POTTED : TEXTURE, sc, 5)} — 새것처럼 말끔하게 정돈된 연출은 피한다.`);
+  p.push(`생활감: ${at(handLess(a.potted ? TEXTURE_POTTED : TEXTURE), sc, 5)} — 새것처럼 말끔하게 정돈된 연출은 피한다.`);
   p.push('씬 변주: 이전 씬과 구분되는 앵글·피사체·범위를 쓰되, 전 씬 공통 팔레트·질감·조명은 동일하게 유지해 시리즈 일관성을 낸다.');
-  p.push('금지: 이미지 안에 글자·자막·숫자·로고·워터마크·간판 텍스트를 넣지 않는다(자막은 렌더러가 따로 얹는다). 손·손가락 왜곡과 어색한 합성을 피한다.');
+  p.push(`금지: 이미지 안에 글자·자막·숫자·로고·워터마크·간판 텍스트를 넣지 않는다(자막은 렌더러가 따로 얹는다). ${nh ? '사람·손·손가락·팔이 화면 어디에도 없게 한다. 어색한 합성을 피한다.' : '손·손가락 왜곡과 어색한 합성을 피한다.'}`);
   return p.join('\n');
 }
 
@@ -3535,6 +3549,8 @@ export async function runShortsJob(
       ...(design.subject ? { subject: design.subject } : {}),
       ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}),
       ageSize: ageSizePrompt(`${design.prompts[i] ?? ''} ${plan.scenes[i]?.narration ?? ''} ${heroSet.has(i) ? design.hero ?? '' : ''}`, design.species),
+      noHands: handFreeModel(),
+      season: seasonPromptLine(kstMonthNow(), `${design.prompts[i] ?? ''} ${plan.scenes[i]?.narration ?? ''}`, /상록/.test(design.species?.type ?? '')),
       // 꽃·열매는 그 씬이 실제로 다룰 때만 — 늘 붙이면 꽃 없는 계절 장면에 꽃이 그려진다.
       // 2026-10-12 — 내레이션까지 보면 "열매 보려면"이 삽수 장면에 열매 묘사를 끌어왔다. 실제로 그리는 장면 묘사만 본다.
       ...(design.species ? { seasonal: speciesSeasonalHint(design.species, design.prompts[i] ?? '') } : {}),
@@ -3623,6 +3639,7 @@ export async function runShortsJob(
       // 씬 번호대로인 배열이어야 한다 — QA 는 images 의 원본 인덱스로 이 배열을 찾는다.
       dir, images, scenePrompts: scenePromptsUsed,
       preset: design.preset, signal: opts.signal,
+      noHands: handFreeModel(), // FLUX 그림은 손·사람이 보이면 탈락(2026-11-10)
       // 재생성도 같은 레퍼런스를 받아야 한다 — 안 주면 종 근거 없이 다시 그려 또 틀린다(2026-09-06).
       // 이어 그린 주인공 씬은 주인공 첫 그림을 맨 앞에(2026-10-15).
       ...(genRefs.length ? { refImages: genRefs } : {}),

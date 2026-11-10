@@ -467,7 +467,26 @@ export function realPhotoSlots(layout: CardLayout, blog: readonly BlogPhoto[]): 
 }
 
 /** 글자 없는 사진 프롬프트(순수) — 카드 사진 칸용. */
-export function genPhotoPrompt(scene: string, must: SceneMust | undefined, subject?: string, opts: { setRefs?: boolean; young?: boolean; ageSize?: string } = {}): string {
+/** 손·사람을 가리키는 칸 글(순수). 손상·손질·손실 같은 낱말은 뺀다(shortsMotionDirector SUBJECT_RISK 와 같은 결). */
+const HAND_TAG = /손(?!상|실|해|쉽|질)|사람|장갑|농부/;
+/**
+ * 사진 위 표시(tags)에서 손·사람 칸 빼기(순수, 2026-11-10 감나무 시험) — FLUX 는 손을 빼고 그리는데 판 글은 원래 기획대로 남아
+ * '① 줄기 잡는 손'이 손 없는 사진을 가리켰다. isReal 인 사진(실촬영)은 손이 실제로 있을 수 있어 그대로 둔다.
+ */
+export function dropHandTags(layout: CardLayout, isReal: (ref: PhotoRef | undefined) => boolean): { layout: CardLayout; dropped: number } {
+  let dropped = 0;
+  const slides = layout.slides.map((s) => {
+    if (!s.tags?.length || isReal(s.photo)) return s;
+    const tags = s.tags.filter((t) => !HAND_TAG.test(t));
+    dropped += s.tags.length - tags.length;
+    if (tags.length === s.tags.length) return s;
+    const { tags: _t, ...rest } = s;
+    return tags.length ? { ...rest, tags } : rest;
+  });
+  return { layout: { ...layout, slides }, dropped };
+}
+
+export function genPhotoPrompt(scene: string, must: SceneMust | undefined, subject?: string, opts: { setRefs?: boolean; young?: boolean; ageSize?: string; season?: string } = {}): string {
   return [
     subject ? `[대상 식물 — 화면의 나무·풀은 반드시 이 종] ${subject}. 잎 모양·잎차례·수형을 이 종의 실제 모습대로.` : '',
     // 같은 세트 사진 잇기(2026-10-15 사장님 지적 — 숏폼 활착 편의 씬마다 다른 나무, 카드에도 같은 구조) — 새 사진은 같은 카드의
@@ -478,6 +497,7 @@ export function genPhotoPrompt(scene: string, must: SceneMust | undefined, subje
     `장면: ${scene}`,
     ...mustPromptLines(must),
     opts.ageSize ?? '', // 나이별 크기(2026-11-10 사장님 확인 기준표)
+    opts.season ?? '', // 계절(2026-11-10 사장님) — 장면이 계절을 말하지 않으면 지금 달
     '세로 사진(2:3). 자연광 실사 사진, 피사체가 화면 가운데에서 또렷하게. 글자·숫자·간판·워터마크·로고 없음. 칼·가위·톱 같은 연장 없음.',
   ].filter(Boolean).join('\n');
 }

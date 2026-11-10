@@ -32,6 +32,20 @@ async function extractMidFrame(clip: string, outPath: string, signal?: AbortSign
   } catch { return null; }
 }
 
+/**
+ * 탈락 클립 치우기(2026-11-10 감나무 시험) — 강등은 메모리 배열만 바꾸고 clips/clip_NN.mp4 파일은 남아 있었다.
+ * 모션그래픽판(shortsDirectMotion)·형제편 승계(inheritedClips)는 폴더에서 clip_NN.mp4 를 다시 집어, 검수가 버린 클립(손이 끈을 바싹
+ * 조이는 장면)이 기본판엔 없는데 모션그래픽판에 들어갔다. 파일 이름을 clip_NN.rejected.mp4 로 바꿔 아무도 다시 집지 않게 한다(지우지 않음).
+ */
+export function retireClip(file: string): void {
+  try {
+    if (!/^clip_\d+\.mp4$/.test(path.basename(file)) || !fs.existsSync(file)) return;
+    let dest = file.replace(/\.mp4$/, '.rejected.mp4');
+    if (fs.existsSync(dest)) dest = file.replace(/\.mp4$/, `.rejected-${Date.now()}.mp4`);
+    fs.renameSync(file, dest);
+  } catch { /* 실패는 무해 — 강등은 메모리에서 이미 됨 */ }
+}
+
 export async function qaSceneClips(opts: {
   dir: string; clips: Array<string | null>;
   /** 씬 내레이션 — 화면-내레이션 모순(예: '물 주지 마라' 씬의 물 붓는 장면) 검출용. */
@@ -70,7 +84,8 @@ export async function qaSceneClips(opts: {
     // 못한 잔여 결함이 있더라도 붕괴 클립보다는 항상 낫다. 붕괴 클립을 내보내는 비용이 비전 오판
     // (과잉 강등) 비용보다 훨씬 크다(실측 36% 불량).
     for (const orig of mapBadToOrig(bad, checked)) {
-      if (out.clips[orig]) { out.clips[orig] = null; out.dropped++; }
+      const f = out.clips[orig];
+      if (f) { out.clips[orig] = null; out.dropped++; retireClip(f); }
     }
     const seen = new Set<number>(); // 같은 씬 중복 보고는 표시 1회만(강등 카운트는 위에서 이미 정확)
     out.issues = rawIssues
