@@ -34,7 +34,7 @@ export function pinTreeSize(s: WtShotlist, sp?: Pick<Species, 'name' | 'latin' |
   if (!t) return { shotlist: s, changed: false };
   const cur = String(t.prop.prompt ?? '');
   if (cur.includes('[Tree size for its age')) return { shotlist: s, changed: false };
-  const line = ageSizePrompt(cur, sp);
+  const line = ageSizePrompt(cur, sp, { english: true }); // 그림 필드는 영어만(lint)
   if (!line) return { shotlist: s, changed: false };
   return { shotlist: { ...s, props: { ...s.props, [t.key]: { ...t.prop, prompt: `${cur} ${line}` } } }, changed: true };
 }

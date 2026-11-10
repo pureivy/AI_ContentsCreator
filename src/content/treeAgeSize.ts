@@ -102,12 +102,15 @@ export const SCALE_RULE = 'Draw the tree in true proportion to what is naturally
   + 'Never draw it older, taller or thicker than this.';
 
 /** 그림 지시 줄(순수, 영어) — 나이가 없으면 ''. 사전 size 가 있으면 함께 싣는다(사전이 우선). */
-export function ageSizePrompt(text: string, sp?: Pick<Species, 'name' | 'latin' | 'type' | 'size'>): string {
+export function ageSizePrompt(text: string, sp?: Pick<Species, 'name' | 'latin' | 'type' | 'size'>, o: { english?: boolean } = {}): string {
   const age = parseTreeAge(text);
   if (!age) return '';
   const rows = ageRows(treeGroup(sp, text), age);
   if (!rows.length) return '';
-  return `[Tree size for its age — follow exactly] ${rows.map((r) => `${r.label}: ${r.en}`).join(' / ')}.${sp?.size ? ` Species size data (takes priority): ${sp.size}.` : ''} ${SCALE_RULE}`;
+  // english(2026-11-10) — 웹툰 장면 목록 그림 필드는 영어만(SHORT_marker lint 가 한글을 막는다). 라벨은 나이 숫자로, 사전 size(한글)는 뺀다.
+  const label = (r: Row): string => (o.english ? (r.lo <= 1 && r.hi <= 1 ? '1 year old' : `${Math.max(1, r.lo)}-${r.hi} years old`) : r.label);
+  const size = sp?.size && !o.english ? ` Species size data (takes priority): ${sp.size}.` : '';
+  return `[Tree size for its age — follow exactly] ${rows.map((r) => `${label(r)}: ${r.en}`).join(' / ')}.${size} ${SCALE_RULE}`;
 }
 
 /** 검수 줄(순수, 한국어) — 그 나이의 기준 크기. 나이가 없으면 ''. */

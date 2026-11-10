@@ -29,6 +29,7 @@ describe('webtoonDrawQa', () => {
     const a = pinTreeSize(sl, kaki);
     expect(a.changed).toBe(true);
     expect(a.shotlist.props!.persimmon_sapling!.prompt).toContain('[Tree size for its age');
+    expect(a.shotlist.props!.persimmon_sapling!.prompt).not.toMatch(/[가-힣]/); // SHORT_marker lint — 그림 필드 한글 금지
     expect(pinTreeSize(a.shotlist, kaki).changed).toBe(false);
     expect(treeAgeCriterion(sl, kaki)).toContain('1년생');
     expect(treeAgeCriterion(sl, kaki)).toContain('1~1.5cm');
