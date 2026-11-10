@@ -467,7 +467,7 @@ export function realPhotoSlots(layout: CardLayout, blog: readonly BlogPhoto[]): 
 }
 
 /** 글자 없는 사진 프롬프트(순수) — 카드 사진 칸용. */
-export function genPhotoPrompt(scene: string, must: SceneMust | undefined, subject?: string, opts: { setRefs?: boolean; young?: boolean } = {}): string {
+export function genPhotoPrompt(scene: string, must: SceneMust | undefined, subject?: string, opts: { setRefs?: boolean; young?: boolean; ageSize?: string } = {}): string {
   return [
     subject ? `[대상 식물 — 화면의 나무·풀은 반드시 이 종] ${subject}. 잎 모양·잎차례·수형을 이 종의 실제 모습대로.` : '',
     // 같은 세트 사진 잇기(2026-10-15 사장님 지적 — 숏폼 활착 편의 씬마다 다른 나무, 카드에도 같은 구조) — 새 사진은 같은 카드의
@@ -477,6 +477,7 @@ export function genPhotoPrompt(scene: string, must: SceneMust | undefined, subje
       : '',
     `장면: ${scene}`,
     ...mustPromptLines(must),
+    opts.ageSize ?? '', // 나이별 크기(2026-11-10 사장님 확인 기준표)
     '세로 사진(2:3). 자연광 실사 사진, 피사체가 화면 가운데에서 또렷하게. 글자·숫자·간판·워터마크·로고 없음. 칼·가위·톱 같은 연장 없음.',
   ].filter(Boolean).join('\n');
 }

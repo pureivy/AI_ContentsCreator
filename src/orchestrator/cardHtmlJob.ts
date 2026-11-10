@@ -17,6 +17,7 @@ import { generateImagesForDraft } from '../tools/blog_skills';
 import { cardRealFrames } from './cardFrames';
 import { qaSceneImages, kstMonthNow } from './shortsSceneQa';
 import { handFreeScenes, handFreeModel, withNoHands } from './blogHandFree';
+import { ageSizePrompt } from '../content/treeAgeSize';
 /** FLUX 면 최종 지시문 끝에도 손 금지(장면 문구가 genPhotoPrompt 안에서 잘려도 남게). */
 const withHandRule = (p: string): string => (handFreeModel() ? withNoHands(p) : p);
 import { stdModel, visionCapable } from './visionCommon';
@@ -388,7 +389,10 @@ export async function designHtmlCards(o: {
     // FLUX 로 그릴 때 손 빼기(2026-11-10 사장님) — 손·사람 장면을 결과·상태 장면으로. GPT 면 그대로.
     const hf = await handFreeScenes(gen.map((g) => g.ref.scene), plan.slides.map((x) => `${x.headline} ${x.body}`).join('\n'), o.signal);
     if (hf.rewritten) say(`FLUX 손 빼기 — 카드 사진 ${hf.rewritten}장을 손 없는 장면으로`);
-    const prompts = gen.map((g, k) => withHandRule(genPhotoPrompt(hf.scenes[k] ?? g.ref.scene, g.ref.must, subject, { setRefs: setRefs.length > 0, young })));
+    // 나이별 크기(2026-11-10) — 장면·원문 묘사가 말한 나이, 없으면 어린 나무 주제일 때 '묘목' 기준.
+    const ageOf = (g: (typeof gen)[number]): string => ageSizePrompt(`${g.ref.scene} ${(g.ref.must?.show ?? []).join(' ')}`, known)
+      || (young ? ageSizePrompt('묘목', known) : '');
+    const prompts = gen.map((g, k) => withHandRule(genPhotoPrompt(hf.scenes[k] ?? g.ref.scene, g.ref.must, subject, { setRefs: setRefs.length > 0, young, ageSize: ageOf(g) })));
     const draftPath = path.join(dir, 'photos-gen-draft.json');
     const manPath = path.join(dir, 'photos-gen-manifest.json');
     fs.writeFileSync(draftPath, JSON.stringify({ imageSlots: gen.map((g, k) => ({ alt: `slide ${g.slide + 1} photo ${k + 1}`, prompt: prompts[k] })) }, null, 2), 'utf-8');

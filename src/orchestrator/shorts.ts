@@ -26,6 +26,7 @@ import { qaSceneImages, kstMonthNow } from './shortsSceneQa';
 import { applyMotionGraphics } from './shortsDirectMotion';
 import { parseSceneMust, mustDesignerGuide, mustPromptLines, type SceneMust } from './sceneMust';
 import { handFreeScenes } from './blogHandFree';
+import { ageSizePrompt } from '../content/treeAgeSize';
 export { parseSceneMust } from './sceneMust';
 import { qaSceneClips } from './shortsClipQa';
 import { standaloneIssues, parityIssues, parityIssuesChecked, parityToInfo, PARITY_SOURCE_CHARS } from './standaloneQa';
@@ -2276,6 +2277,8 @@ export function buildSceneImagePrompt(a: {
   hero?: string;
   /** 이 씬이 주인공 첫 그림을 첫 번째 첨부로 받는가(SHORTS_HERO_CHAIN) — 문구만 바꾼다, 파일은 생성기가 붙인다. */
   heroChained?: boolean;
+  /** 나이별 크기(2026-11-10 사장님 확인 기준표) — 장면·내레이션·주인공 묘사가 말한 나이의 근원경·키. 없으면 ''. */
+  ageSize?: string;
 }): string {
   const { style, index: i, total, seed, subject, subjectLatin, seasonal } = a;
   const scene = a.scene.trim() || '주제를 상징하는 한국 생활 장면';
@@ -2317,6 +2320,7 @@ export function buildSceneImagePrompt(a: {
       ? `[나무 크기 — 성장 단계에 맞게] 이 종의 실제 크기: ${a.subjectSize}. 장면 묘사가 가리키는 단계(묘목/유목/성목)의 크기로 그리고 성목 최대를 넘기지 마라. 사람·손·화분·도구가 함께 나오면 그 비례로 크기를 잡아라 — 사람 머리 위로 까마득히 솟는 거목으로 그리지 마라.`
       : `[나무 크기 — 성장 단계에 맞게] ${subjectLatin ?? subject}의 실제 성장 단계별 크기(묘목→유목→성목의 높이와 폭)를 가늠해 장면 묘사가 가리키는 단계의 크기로 그리고, 이 종의 실제 최대 크기를 넘기지 마라. 사람·손·화분·도구가 함께 나오면 그 비례로 크기를 잡아라.`);
   }
+  if (a.ageSize) p.push(a.ageSize);
   // 연장은 화면에 넣지 않는다(2026-09-06 실사고) — 생활감이 "쓴 자국이 있는 도구"를 부르면
   // 전지가위가 들어오는데, 날과 축의 구조가 물리적으로 불가능하게 그려진다. 손만으로 충분하다.
   p.push('[연장] 전지가위·톱·삽 같은 연장은 화면에 넣지 마라 — 날·축·손잡이 구조가 어긋나게 그려진다. 손은 나무를 짚거나 가리키는 정도로만 쓴다.');
@@ -3530,6 +3534,7 @@ export async function runShortsJob(
       ...(design.species?.size ? { subjectSize: design.species.size } : {}),
       ...(design.subject ? { subject: design.subject } : {}),
       ...(design.subjectLatin ? { subjectLatin: design.subjectLatin } : {}),
+      ageSize: ageSizePrompt(`${design.prompts[i] ?? ''} ${plan.scenes[i]?.narration ?? ''} ${heroSet.has(i) ? design.hero ?? '' : ''}`, design.species),
       // 꽃·열매는 그 씬이 실제로 다룰 때만 — 늘 붙이면 꽃 없는 계절 장면에 꽃이 그려진다.
       // 2026-10-12 — 내레이션까지 보면 "열매 보려면"이 삽수 장면에 열매 묘사를 끌어왔다. 실제로 그리는 장면 묘사만 본다.
       ...(design.species ? { seasonal: speciesSeasonalHint(design.species, design.prompts[i] ?? '') } : {}),

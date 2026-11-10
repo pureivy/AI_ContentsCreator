@@ -8,7 +8,8 @@ import path from 'node:path';
 import { microJSON } from './agent';
 import { generateImagesForDraft } from '../tools/blog_skills';
 import { stdModel, visionCapable, parseBadIndices } from './visionCommon';
-import { speciesRefPhotos, refPartsWanted } from '../content/species';
+import { speciesRefPhotos, refPartsWanted, loadSpecies, type Species } from '../content/species';
+import { ageSizeCheck, ageSizeTable } from '../content/treeAgeSize';
 
 export interface SceneQaResult {
   images: Array<string | null>; regenerated: number; issues: string[];
@@ -122,9 +123,23 @@ export function ageHint(text: string): string {
 
 /** 장별 나이 줄(순수) — checked 순번(1부터)으로 다시 매긴다. 나이 말이 없는 장은 뺀다. */
 export function buildAgeLines(
-  texts: ReadonlyArray<string | undefined>, checked: ReadonlyArray<{ origIndex: number }>,
+  texts: ReadonlyArray<string | undefined>, checked: ReadonlyArray<{ origIndex: number }>, sp?: Species,
 ): string[] {
-  return checked.flatMap((c, k) => { const h = ageHint(texts[c.origIndex] ?? ''); return h ? [`${k + 1}) ${h}`] : []; });
+  // 나이별 크기 기준표(2026-11-10 사장님 확인) — 장마다 그 나이의 기준 크기를 같이 싣는다.
+  return checked.flatMap((c, k) => {
+    const t = texts[c.origIndex] ?? '';
+    const h = ageHint(t);
+    if (!h) return [];
+    const size = ageSizeCheck(t, sp);
+    return [`${k + 1}) ${h}${size ? ` → 기준 크기: ${size}` : ''}`];
+  });
+}
+
+/** 학명으로 사전 수종 찾기(fail-open). */
+function speciesByLatin(latin?: string): Species | undefined {
+  if (!latin) return undefined;
+  const l = latin.trim().toLowerCase();
+  return loadSpecies().find((x) => x.latin.toLowerCase() === l);
 }
 
 /** 원문 묘사 검수 줄(순수, 2026-10-12) — checked 순번(1부터)으로 다시 매긴다. 목록 없는 장은 뺀다. */
@@ -268,7 +283,9 @@ export async function qaSceneImages(opts: {
         ? sub.map((c, k) => { const h = String(opts.sceneHints![c.origIndex] ?? '').trim(); return h ? `${k + 1}) ${h.slice(0, 80)}` : ''; }).filter(Boolean)
         : [];
       const mustLines = buildMustLines(opts.sceneMust, sub);
-      const ageLines = buildAgeLines(opts.images.map((_, i) => `${opts.scenePrompts[i] ?? ''} ${opts.sceneHints?.[i] ?? ''}`), sub);
+      const sp = speciesByLatin(opts.subjectLatin);
+      const ageLines = buildAgeLines(opts.images.map((_, i) => `${opts.scenePrompts[i] ?? ''} ${opts.sceneHints?.[i] ?? ''}`), sub, sp);
+      const subjectAgeSize = opts.subjectAge ? ageSizeCheck(opts.subjectAge, sp) : '';
       const qa = await microJSON<Raw>(
         stdModel(),
         opts.medium === 'illustration'
@@ -303,7 +320,7 @@ export async function qaSceneImages(opts: {
             : '',
           // 나무 나이(2026-11-09 사장님 지시) — 1년생·2~3년생·성목을 맞게 그렸는지. 종전엔 주인공 나무 일관성(7)과 크기 비례(5)로만 간접 확인했다.
           ageLines.length || opts.subjectAge
-            ? `8) 나무 나이(중요): ${ageLines.length ? `아래 장은 묘사가 나이·성장 단계를 말한다 — 그 장은 이 나이로 판정하라(글 전체 기준보다 우선):\n${ageLines.join('\n')}\n` : ''}${opts.subjectAge ? `나이 말이 없는 장은 글 전체 기준 "${opts.subjectAge}" 로 판정하라. ` : ''}화면 나무의 줄기 굵기·가지 수·키·껍질이 그 나이와 눈에 띄게 다르면 문제로 보고하고 problem 에 '나이:' 로 시작해 적어라. 대략 기준(수종마다 다름): 1년생 묘목 = 줄기 연필~볼펜 굵기·곁가지 0~2개·무릎~허리 높이·매끈한 껍질 / 2~3년생 = 손가락~엄지 굵기·곁가지 여럿·허리~사람 키 / 성목 = 손목 이상 굵기·거친 껍질·수관이 갖춰짐(덩굴은 굵은 목질 원줄기가 여러 해 감김). 한 장에 나이가 다른 나무를 비교하라고 했으면 둘의 차이가 보여야 한다.`
+            ? `8) 나무 나이(중요): ${ageLines.length ? `아래 장은 묘사가 나이·성장 단계를 말한다 — 그 장은 이 나이로 판정하라(글 전체 기준보다 우선):\n${ageLines.join('\n')}\n` : ''}${opts.subjectAge ? `나이 말이 없는 장은 글 전체 기준 "${opts.subjectAge}"${subjectAgeSize ? `(기준 크기: ${subjectAgeSize})` : ''} 로 판정하라. ` : ''}화면 나무의 근원경(땅 닿는 곳 줄기 지름)·키·가지 수가 기준 크기 범위를 눈에 띄게 벗어나면(특히 더 크고 굵으면) 문제로 보고하고 problem 에 '나이:' 로 시작해 기준과 화면 크기를 함께 적어라. 크기는 화면 안 다른 대상과의 비례로 가늠하라 — 사람(어른 키 약 1.7m)·손가락·손목·지주·화분·물뿌리개(약 40cm)·벽돌·울타리(약 1.2m)·단층집 처마(약 2.5m). 비교 대상과 견줘 나무가 기준보다 크거나 굵으면 문제다. 기준표 — ${ageSizeTable(sp, opts.subject ?? '')}. 한 장에 나이가 다른 나무를 비교하라고 했으면 둘의 차이가 보여야 한다.`
             : '',
           mustLines.length
             ? `6) 원문 묘사(중요): 아래 장은 블로그 글이 말한 모습이 있다. "보여야 함"이 화면에 안 보이거나 "나오면 안 됨"이 보이면 문제로 보고하고, problem 에 어긋난 항목을 그대로 적어라.\n${mustLines.join('\n')}`

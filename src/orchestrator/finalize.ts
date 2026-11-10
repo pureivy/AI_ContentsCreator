@@ -22,6 +22,7 @@ import { applyBlogDiagrams } from './blogDiagramsApply';
 import { qaSceneImages, kstMonthNow } from './shortsSceneQa';
 import { blogSlotMusts } from './blogImageMust';
 import { handFreeModel, handFreeSlots } from './blogHandFree';
+import { ageSizePrompt } from '../content/treeAgeSize';
 import { findSpecies, speciesAnchor, isYoungHero } from '../content/species';
 
 /**
@@ -175,6 +176,20 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
           } catch (e) {
             a.bus.emit(EventType.log, { message: `FLUX 손 빼기 실패(무해): ${e instanceof Error ? e.message : String(e)}` });
           }
+        }
+        // 나이별 크기(2026-11-10 사장님 확인 기준표) — 사진 칸 설명·지시가 말한 나이(없으면 어린 나무 주제면 묘목)의 근원경·키를 지시에 붙인다.
+        if (CONFIG.blogAutoImage || a.autoImages) {
+          try {
+            const sp = findSpecies(a.topic);
+            const youngTopic = isYoungHero(a.topic);
+            const slots = a.assets.draft.imageSlots.map((x) => {
+              const line = ageSizePrompt(`${x.alt} ${x.prompt}`, sp) || (youngTopic ? ageSizePrompt('묘목', sp) : '');
+              return line && !x.prompt.includes('[Tree size for its age') ? { ...x, prompt: `${x.prompt}\n${line}` } : x;
+            });
+            a.assets.draft = { ...a.assets.draft, imageSlots: slots };
+            const dj = JSON.parse(fs.readFileSync(draftPath, 'utf-8')) as Record<string, unknown>;
+            fs.writeFileSync(draftPath, JSON.stringify({ ...dj, imageSlots: slots }, null, 2), 'utf-8');
+          } catch { /* 무해 — 크기 줄 없이 그린다 */ }
         }
         const r = (CONFIG.blogAutoImage || a.autoImages)
           ? await generateImagesForDraft(

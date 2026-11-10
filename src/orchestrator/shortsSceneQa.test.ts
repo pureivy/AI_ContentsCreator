@@ -113,6 +113,8 @@ describe('ageHint·buildAgeLines(2026-11-09 나이 검수)', () => {
   it('나이 말이 있는 장만 checked 순번으로 매긴다', async () => {
     const { buildAgeLines } = await import('./shortsSceneQa');
     const lines = buildAgeLines(['1년생 묘목', '흙과 삽', '성목 수형'], [{ origIndex: 0 }, { origIndex: 2 }]);
-    expect(lines).toEqual(['1) 1년생 · 묘목', '2) 성목']);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^1\) 1년생 · 묘목 → 기준 크기: 1년생 = 줄기가 연필 굵기/);
+    expect(lines[1]).toMatch(/^2\) 성목 → 기준 크기: 10년 안팎/);
   });
 });
