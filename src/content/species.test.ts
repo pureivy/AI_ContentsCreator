@@ -11,7 +11,8 @@ describe('수종 사전 — 데이터 무결성', () => {
     expect(LIST.length).toBeGreaterThan(20);
     // 이명식 학명 + 사람이 확인한 변종·아종 표기(var./subsp./f.)까지 허용 — 공작단풍 'Acer palmatum var. dissectum'(2026-09-08).
     // 자동 학습 경로는 normalizeLatinName 이 여전히 이명식으로 자르므로, 변종 표기는 사람이 적은 항목에만 나타난다.
-    for (const s of LIST) expect(s.latin).toMatch(/^[A-Z][a-z]+ [a-z-]+( (var|subsp|f)\. [a-z-]+)?$/);
+    // 교잡종 표기(×)도 허용 — 홍가시 레드로빈 'Photinia × fraseri'(2026-11-11 사장님 확인).
+    for (const s of LIST) expect(s.latin).toMatch(/^[A-Z][a-z]+ (× )?[a-z-]+( (var|subsp|f)\. [a-z-]+)?$/);
   });
   it('이름·별칭이 겹치지 않는다 — 겹치면 매칭이 엉킨다', () => {
     const keys: string[] = [];
