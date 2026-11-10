@@ -42,7 +42,25 @@ export function pinTreeSize(s: WtShotlist, sp?: Pick<Species, 'name' | 'latin' |
 const FIX = /\s*Must fix: .*$/s;
 /** 고칠 점 붙이기(순수) — 앞서 붙인 "Must fix:" 는 바꾼다(쌓이지 않게). 그림 필드는 영어지만 사유는 한국어여도 그림 모델이 읽는다. */
 export function withFix(text: string, reason: string): string {
-  return `${String(text ?? '').replace(FIX, '').trim()} Must fix: ${reason.replace(/\s+/g, ' ').slice(0, 220)}`;
+  // 그림 필드는 영어만(SHORT_marker lint) — 번역(englishFixes)을 못 거친 한글 사유는 일반 문구로 바꾼다(2026-11-10 으름 웹툰 실패).
+  const r = /[가-힣]/.test(reason) ? 'match the described size, thickness, form and Korean setting exactly' : reason;
+  return `${String(text ?? '').replace(FIX, '').trim()} Must fix: ${r.replace(/\s+/g, ' ').slice(0, 240)}`;
+}
+
+/**
+ * 검수 사유(한국어) → 그림 모델에 줄 영어 고칠 점(2026-11-10). 한 번에 묶어 번역한다. 실패하면 원문 그대로(withFix 가 일반 문구로 바꾼다).
+ * 예: "기준은 손가락 굵기인데 팔뚝 굵기, 흰 바탕이 아니라 마당" → "the stem must be finger-thin, not forearm-thick; plain white background, no yard".
+ */
+export async function englishFixes(reasons: Record<string, string>, signal?: AbortSignal): Promise<Record<string, string>> {
+  const keys = Object.keys(reasons);
+  if (!keys.length || !visionCapable()) return reasons;
+  const r = await microJSON<Record<string, unknown>>(stdModel(), 'You turn Korean image-review findings into short English drawing corrections.',
+    ['Rewrite each finding as ONE short English instruction for an image model saying what the picture MUST look like (the target, not the mistake), keeping sizes and comparisons (finger-thin, chest-high, plain white background, Korean stone wall). No Korean characters. Max 30 words each.',
+      JSON.stringify(reasons), 'JSON: {"<same key>": "instruction"}'].join('\n'),
+    { maxOutputTokens: 600, ...(signal ? { signal } : {}) }).catch(() => null);
+  const out: Record<string, string> = { ...reasons };
+  for (const k of keys) { const v = r?.[k]; if (typeof v === 'string' && v.trim() && !/[가-힣]/.test(v)) out[k] = v.trim(); }
+  return out;
 }
 
 /** 탈락 장면에 사유 붙이기(순수). */

@@ -35,10 +35,12 @@ describe('webtoonDrawQa', () => {
     expect(treeAgeCriterion(sl, kaki)).toContain('1~1.5cm');
   });
   it('고칠 점은 바꿔 붙이고 쌓지 않는다', () => {
-    const t = withFix(withFix('scene', '줄기가 너무 굵다'), '가지가 많다');
-    expect(t).toBe('scene Must fix: 가지가 많다');
-    const f = fixScenes(sl, { s01: '줄기가 손목 굵기' });
-    expect(f.scenes[0]!.image).toContain('Must fix: 줄기가 손목 굵기');
+    const t = withFix(withFix('scene', 'too thick'), 'too many branches');
+    expect(t).toBe('scene Must fix: too many branches');
+    const f = fixScenes(sl, { s01: 'the trunk must be finger-thin' });
+    expect(f.scenes[0]!.image).toContain('Must fix: the trunk must be finger-thin');
+    // 번역 못 한 한글 사유는 일반 영어 문구로(SHORT_marker lint — 그림 필드 한글 금지)
+    expect(fixScenes(sl, { s01: '줄기가 손목 굵기' }).scenes[0]!.image).not.toMatch(/[가-힣]/);
     expect(f.scenes[1]!.image).not.toContain('Must fix');
     const p = fixProp(sl, 'persimmon_sapling', '굵다');
     expect(p.props!.persimmon_sapling!.seed).toBe(12);

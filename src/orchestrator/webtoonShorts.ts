@@ -25,7 +25,7 @@ import { THUMB_FRAME_FILE } from '../tools/shortsRender';
 import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { generateTitleArt } from './shortsTitleArt';
 import { qaSceneImages } from './shortsSceneQa';
-import { findProp, fixProp, fixScenes, judgeRef, judgeTreeConsistency, pinTreeSize, sceneMusts, STAKE_PROP, TREE_PROP, treeAgeCriterion, type WtShotlist } from './webtoonDrawQa';
+import { englishFixes, findProp, fixProp, fixScenes, judgeRef, judgeTreeConsistency, pinTreeSize, sceneMusts, STAKE_PROP, TREE_PROP, treeAgeCriterion, type WtShotlist } from './webtoonDrawQa';
 import { findSpecies, speciesAnchor, isYoungHero } from '../content/species';
 import { produce, projectDir, SM_EXIT_TEXT, shortMarkerReady, writeShotlist, type SmResult } from '../tools/shortMarker';
 
@@ -214,7 +214,8 @@ async function refQa(project: string, topicText: string, signal: AbortSignal, sa
     } catch { return; }
     if (!bad.length) { say(`참조 그림 검수 — 이상 없음${round ? `(${round}번 고쳐 그림)` : ''}`); return; }
     say(`참조 그림 검수 — ${bad.map(([k, p]) => `${k}: ${p}`).join(' / ')} → 다시 그림`);
-    for (const [k, p] of bad) sl = fixProp(sl, k, p);
+    const en = await englishFixes(Object.fromEntries(bad), signal); // 그림 필드는 영어만
+    for (const [k] of bad) sl = fixProp(sl, k, en[k] ?? '');
     saveShotlist(project, sl);
   }
 }
@@ -269,7 +270,7 @@ async function drawQa(id: string, signal: AbortSignal, say: (l: string) => void,
     for (let round = 1; round <= 2 && redraw && Object.keys(qa.reasons).length && !signal.aborted; round++) {
       const bad = Object.keys(qa.reasons);
       say(`그림 검수 ${round}차 — ${bad.join(', ')} 다시 그림(${Object.values(qa.reasons).slice(0, 2).join(' / ').slice(0, 160)})`);
-      const fixed = fixScenes(known ? anchorScenes(sl, bad, known.latin, young) as WtShotlist : sl as WtShotlist, qa.reasons) as Shotlist;
+      const fixed = fixScenes(known ? anchorScenes(sl, bad, known.latin, young) as WtShotlist : sl as WtShotlist, await englishFixes(qa.reasons, signal)) as Shotlist;
       const { shotlist, bumped } = bumpRedraw(fixed, bad);
       saveShotlist(job.project, shotlist);
       const cur = webtoonStore().get(id)!;
