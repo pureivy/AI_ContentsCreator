@@ -55,7 +55,7 @@ export async function englishFixes(reasons: Record<string, string>, signal?: Abo
   const keys = Object.keys(reasons);
   if (!keys.length || !visionCapable()) return reasons;
   const r = await microJSON<Record<string, unknown>>(stdModel(), 'You turn Korean image-review findings into short English drawing corrections.',
-    ['Rewrite each finding as ONE short English instruction for an image model saying what the picture MUST look like (the target, not the mistake), keeping sizes and comparisons (finger-thin, chest-high, plain white background, Korean stone wall). No Korean characters. Max 30 words each.',
+    ['Rewrite each finding as ONE short English instruction for an image model saying what the picture MUST look like (the target, not the mistake), keeping the sizes and comparisons the finding states (e.g. finger-thin, chest-high, plain white background). Add nothing the finding does not say — no new setting, wall or object (2026-11-10: an example \"Korean stone wall\" leaked into a white-background fix). No Korean characters. Max 30 words each.',
       JSON.stringify(reasons), 'JSON: {"<same key>": "instruction"}'].join('\n'),
     { maxOutputTokens: 600, ...(signal ? { signal } : {}) }).catch(() => null);
   const out: Record<string, string> = { ...reasons };

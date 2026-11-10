@@ -55,4 +55,10 @@ describe('비례 기준', () => {
     expect(p).toContain('Do not add props just for scale');
     expect(p).toContain('Do not add stakes or ties unless');
   });
+  it('덩굴은 혼자 서지 못하는 모양 줄을 붙인다 — 나무엔 안 붙인다', () => {
+    const vine = ageSizePrompt('2년생 으름', { name: '으름', latin: 'Akebia quinata', type: '활엽 덩굴' }, { english: true });
+    expect(vine).toContain('not a tree');
+    expect(vine).not.toMatch(/[가-힣]/);
+    expect(ageSizePrompt('2년생 감나무', { name: '감나무', latin: 'Diospyros kaki', type: '낙엽 교목' }, { english: true })).not.toContain('climbing vine');
+  });
 });

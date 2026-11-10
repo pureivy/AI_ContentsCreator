@@ -101,6 +101,12 @@ export const SCALE_RULE = 'Draw the tree in true proportion to what is naturally
   + 'Do not add stakes or ties unless the scene describes them. In close-ups the trunk keeps its real thickness relative to nearby objects (a thumb-thick trunk stays thumb-thick). '
   + 'Never draw it older, taller or thicker than this.';
 
+// 덩굴 모양(2026-11-10 으름 재시도) — 덩굴에 '원줄기 손가락 굵기'만 주니 FLUX 가 혼자 선 나무(굵은 밑동·퍼진 뿌리)로 그렸다.
+// 덩굴은 줄기가 혼자 서지 못하고 지주를 감는다는 모양 자체를 글로 못박는다.
+export const VINE_FORM = 'It is a climbing vine, not a tree or shrub: it has no trunk and cannot stand up on its own. '
+  + 'Its stems are thin, flexible and twining, about the same thickness from the base to the tip, winding around a support or lying loosely; '
+  + 'no flared roots, no swollen base, no woody tree trunk.';
+
 /** 그림 지시 줄(순수, 영어) — 나이가 없으면 ''. 사전 size 가 있으면 함께 싣는다(사전이 우선). */
 export function ageSizePrompt(text: string, sp?: Pick<Species, 'name' | 'latin' | 'type' | 'size'>, o: { english?: boolean } = {}): string {
   const age = parseTreeAge(text);
@@ -110,7 +116,8 @@ export function ageSizePrompt(text: string, sp?: Pick<Species, 'name' | 'latin' 
   // english(2026-11-10) — 웹툰 장면 목록 그림 필드는 영어만(SHORT_marker lint 가 한글을 막는다). 라벨은 나이 숫자로, 사전 size(한글)는 뺀다.
   const label = (r: Row): string => (o.english ? (r.lo <= 1 && r.hi <= 1 ? '1 year old' : `${Math.max(1, r.lo)}-${r.hi} years old`) : r.label);
   const size = sp?.size && !o.english ? ` Species size data (takes priority): ${sp.size}.` : '';
-  return `[Tree size for its age — follow exactly] ${rows.map((r) => `${label(r)}: ${r.en}`).join(' / ')}.${size} ${SCALE_RULE}`;
+  const form = treeGroup(sp, text) === 'vine' ? ` ${VINE_FORM}` : '';
+  return `[Tree size for its age — follow exactly] ${rows.map((r) => `${label(r)}: ${r.en}`).join(' / ')}.${size}${form} ${SCALE_RULE}`;
 }
 
 /** 검수 줄(순수, 한국어) — 그 나이의 기준 크기. 나이가 없으면 ''. */
