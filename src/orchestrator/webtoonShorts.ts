@@ -37,11 +37,11 @@ const registering = new Set<string>();
 /** 웹툰 단계가 도는 중인가 — /api/performance webtoonBusy(재시작 전 확인). */
 export function webtoonBusy(): number { return running.size; }
 
-interface Shotlist { id: string; hook?: string; scenes: Array<{ id: string; narration: string; image?: string; motion?: string; redraw?: number }>; [k: string]: unknown }
+interface Shotlist { id: string; hook?: string; scenes: Array<{ id: string; narration: string; image?: string; motion?: string; redraw?: number; speaker?: string }>; [k: string]: unknown }
 
 /** 장면 목록 요약(순수). */
 export function shotlistScenes(s: Shotlist): WebtoonScene[] {
-  return (s.scenes ?? []).map((sc) => ({ id: sc.id, narration: String(sc.narration ?? ''), ...(sc.motion ? { motion: sc.motion } : {}) }));
+  return (s.scenes ?? []).map((sc) => ({ id: sc.id, narration: String(sc.narration ?? ''), ...(sc.motion ? { motion: sc.motion } : {}), ...(sc.speaker === 'mentor' ? { speaker: 'mentor' as const } : {}) }));
 }
 
 /** 영상 엔진 고정(순수) — 장면 목록에 i2v_engine 이 없을 때만 적는다(이미 적힌 옛 프로젝트는 캐시 그대로). 바뀌었으면 changed. */
@@ -366,7 +366,7 @@ export function notifyWebtoonReview(id: string, only?: readonly string[]): void 
   const draw = !dq ? '' : dq.length ? `그림 검수(수종·나이): 확인 필요 ${dq.length}건\n${dq.map((u) => `· ${escapeHtml(u.replace(/^씬/, '장면 '))}`).join('\n')}` : '그림 검수(수종·나이): 이상 없음';
   const body = [
     `${head}\n<b>${title}</b>`,
-    all.map((s, i) => `${i + 1}. ${escapeHtml(s.narration)}`).join('\n'),
+    all.map((s, i) => `${i + 1}. ${s.speaker === 'mentor' ? '(사장님) ' : ''}${escapeHtml(s.narration)}`).join('\n'),
     fact,
     draw,
     `사진 순서가 장면 번호입니다. 승인하면 장면 영상을 만듭니다(약 45분~1시간).\n제작실 → 웹툰 탭: ${studioBase()}/`,

@@ -15,7 +15,7 @@ import type { FactGateInfo } from './factGate';
 export type WebtoonStage = 'writing' | 'checking' | 'drawing' | 'review' | 'producing' | 'ready' | 'error' | 'cancelled';
 export const WEBTOON_ACTIVE: readonly WebtoonStage[] = ['writing', 'checking', 'drawing', 'producing'];
 
-export interface WebtoonScene { id: string; narration: string; motion?: string }
+export interface WebtoonScene { id: string; narration: string; motion?: string; speaker?: 'mentor' }
 
 export interface WebtoonJob {
   id: string;
