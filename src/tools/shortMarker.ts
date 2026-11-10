@@ -73,15 +73,17 @@ async function runSm(mod: string, args: string[], o: { signal?: AbortSignal; onL
 /** 장면 목록 쓰기 — 원문 블로그를 파일로 넘긴다(SHORT_marker 가 원문 사실만 쓰게).
  *  장면 영상은 기본으로 모든 장면(사장님 2026-11-05) — maxI2v 를 줄 때만 상한을 건다. */
 export function writeShotlist(a: { topic: string; project: string; sourceFile: string; scenes?: number; maxI2v?: number; force?: boolean; signal?: AbortSignal; onLine?: (l: string) => void }): Promise<SmResult> {
-  const args = [a.topic, '--id', a.project, '--source', a.sourceFile, '--scenes', String(a.scenes ?? 9)];
+  // 12장면(2026-11-10 사장님 — 참고 쇼츠처럼 속도감: 장면당 약 2.5초, 낭독 짧게). 종전 9.
+  const args = [a.topic, '--id', a.project, '--source', a.sourceFile, '--scenes', String(a.scenes ?? 12)];
   if (a.maxI2v !== undefined) args.push('--max-i2v', String(a.maxI2v));
   if (a.force) args.push('--force');
   return runSm('write_shotlist', args, { ...(a.signal ? { signal: a.signal } : {}), ...(a.onLine ? { onLine: a.onLine } : {}) });
 }
 
 /** 그림만(검토용) 또는 전체(TTS·BGM·핵심 장면 영상·렌더). 캐시 덕분에 다시 부르면 바뀐 것만 만든다. */
-export function produce(a: { project: string; imagesOnly?: boolean; signal?: AbortSignal; onLine?: (l: string) => void }): Promise<SmResult> {
+export function produce(a: { project: string; imagesOnly?: boolean; refsOnly?: boolean; signal?: AbortSignal; onLine?: (l: string) => void }): Promise<SmResult> {
   const args = [path.join('projects', a.project, 'shotlist.json')];
   if (a.imagesOnly) args.push('--images-only');
+  if (a.refsOnly) args.push('--refs-only'); // 참조 그림만(2026-11-10 — 장면보다 먼저 검수)
   return runSm('produce', args, { ...(a.signal ? { signal: a.signal } : {}), ...(a.onLine ? { onLine: a.onLine } : {}) });
 }

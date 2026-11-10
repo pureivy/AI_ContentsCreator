@@ -25,6 +25,7 @@ import { THUMB_FRAME_FILE } from '../tools/shortsRender';
 import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { generateTitleArt } from './shortsTitleArt';
 import { qaSceneImages } from './shortsSceneQa';
+import { findProp, fixProp, fixScenes, judgeRef, judgeTreeConsistency, pinTreeSize, sceneMusts, STAKE_PROP, TREE_PROP, treeAgeCriterion, type WtShotlist } from './webtoonDrawQa';
 import { findSpecies, speciesAnchor, isYoungHero } from '../content/species';
 import { produce, projectDir, SM_EXIT_TEXT, shortMarkerReady, writeShotlist, type SmResult } from '../tools/shortMarker';
 
@@ -171,6 +172,7 @@ async function draftAndDraw(id: string, signal: AbortSignal, say: (l: string) =>
   if (signal.aborted) throw new Error('취소됨');
   store.update(id, { stage: 'drawing', factGate });
   const t1 = Date.now();
+  await refQa(job.project, `${job.keyword ?? ''} ${job.topic}`, signal, say); // ① 참조 그림 먼저(2026-11-10)
   const r = await produce({ project: job.project, imagesOnly: true, signal, onLine: say });
   if (!r.ok) throw new Error(`그림 — ${fail(r)}`);
   await drawQa(id, signal, say, true);
@@ -180,39 +182,106 @@ async function draftAndDraw(id: string, signal: AbortSignal, say: (l: string) =>
   notifyWebtoonReview(id);
 }
 
+const saveShotlist = (project: string, sl: Shotlist | WtShotlist): void =>
+  fs.writeFileSync(path.join(projectDir(project), 'shotlist.json'), JSON.stringify(sl, null, 2), 'utf-8');
+
 /**
- * 그림 수종·나이 검수(2026-11-09 사장님) — 웹툰 그림체는 그대로 두고, 나온 식물이 그 종·그 나이로 보이는지만 비전으로 본다.
- * redraw=true 면 걸린 장면에 학명 문구를 붙여 SHORT_marker 로 한 번 다시 그리고 다시 본다. 남은 문제는 job.drawQa 로(알림·제작실에 보인다).
- * 실패는 무해(검수 없이 진행).
+ * ① 참조 그림 먼저(2026-11-10 사장님 "철저한 검수") — 나무·지주 참조만 그려서 본다. 나무 참조엔 나이별 크기 기준표 줄을 먼저 붙인다.
+ * 틀리면 사유를 붙이고 시드를 바꿔 최대 2번 다시. 실패는 무해(그대로 진행) — 단, 그리기 실패는 단계 실패.
+ */
+async function refQa(project: string, topicText: string, signal: AbortSignal, say: (l: string) => void): Promise<void> {
+  if (!CONFIG.webtoonDrawQa) return;
+  let sl = readShotlist(project) as WtShotlist | null;
+  if (!sl) return;
+  const known = findSpecies(topicText);
+  const pinned = pinTreeSize(sl, known);
+  if (pinned.changed) { sl = pinned.shotlist; saveShotlist(project, sl); say('나무 참조 — 나이별 크기 기준표 반영'); }
+  const tree = findProp(sl, TREE_PROP);
+  const stake = findProp(sl, STAKE_PROP, TREE_PROP);
+  if (!tree && !stake) return;
+  const criterion = treeAgeCriterion(sl, known);
+  for (let round = 0; round <= 2 && !signal.aborted; round++) {
+    const r = await produce({ project, refsOnly: true, signal, onLine: say });
+    if (!r.ok) throw new Error(`그림 — 참조 ${fail(r)}`);
+    if (round === 2) break; // 두 번 고쳐 그린 뒤엔 더 보지 않고 장면 검수에 맡긴다
+    const bad: Array<[string, string]> = [];
+    try {
+      for (const [x, kind] of [[tree, 'tree'], [stake, 'stake']] as const) {
+        if (!x) continue;
+        const p = await judgeRef(path.join(projectDir(project), 'assets', `prop_${x.key}.png`), kind, String(x.prop.prompt ?? ''), kind === 'tree' ? criterion : '', signal);
+        if (p) bad.push([x.key, p]);
+      }
+    } catch { return; }
+    if (!bad.length) { say(`참조 그림 검수 — 이상 없음${round ? `(${round}번 고쳐 그림)` : ''}`); return; }
+    say(`참조 그림 검수 — ${bad.map(([k, p]) => `${k}: ${p}`).join(' / ')} → 다시 그림`);
+    for (const [k, p] of bad) sl = fixProp(sl, k, p);
+    saveShotlist(project, sl);
+  }
+}
+
+/**
+ * 그림 검수(2026-11-09 수종·나이 → 2026-11-10 철저 검수) — 그림체는 그대로 두고:
+ *  ② 장마다 수종·정확한 나이 기준(나무 소품 묘사의 나이 → 기준표)·한국 배경·둥근 지주·글자 없음
+ *  ③ 참조 + 나무 장면을 한 번에 놓고 크기·모양이 튀는 장
+ *  ④ 걸린 장은 사유를 지시에 붙여 다시(최대 2번). 남은 문제는 job.drawQa 로(알림·제작실에 보인다). 실패는 무해.
  */
 async function drawQa(id: string, signal: AbortSignal, say: (l: string) => void, redraw: boolean): Promise<void> {
   if (!CONFIG.webtoonDrawQa) return;
   try {
-    const job = webtoonStore().get(id); const sl = job && readShotlist(job.project);
+    const job = webtoonStore().get(id); let sl = job && readShotlist(job.project);
     if (!job || !sl) return;
     const known = findSpecies(`${job.keyword ?? ''} ${job.topic}`);
-    if (!known) return; // 수종을 모르는 글 — 판정 기준이 없다
     const young = isYoungHero(`${job.keyword ?? ''} ${job.topic}`);
-    const check = async (shot: Shotlist) => qaSceneImages({
-      dir: jobDir(id), images: shot.scenes.map((sc) => webtoonImagePath(id, sc.id)),
-      scenePrompts: shot.scenes.map((sc) => String(sc.image ?? '')),
-      sceneHints: shot.scenes.map((sc) => sc.narration), preset: 'webtoon', signal, checkOnly: true, medium: 'illustration',
-      subject: speciesAnchor(known, { young }), subjectLatin: known.latin, ...(young ? { subjectAge: '어린 나무(묘목)' } : {}),
-    });
+    const tree = findProp(sl as WtShotlist, TREE_PROP);
+    const stake = findProp(sl as WtShotlist, STAKE_PROP, TREE_PROP);
+    const treeDesc = String(tree?.prop.prompt ?? '').replace(/\s*\[Tree size for its age[^]*$/, '').replace(/\s*Must fix: .*$/s, '');
+    const criterion = treeAgeCriterion(sl as WtShotlist, known);
+    const treeScenes = (shot: Shotlist) => new Set(shot.scenes.map((sc, i) => (tree && ((sc as { props?: string[] }).props ?? []).includes(tree.key) ? i : -1)).filter((i) => i >= 0));
+    const check = async (shot: Shotlist): Promise<{ issues: string[]; reasons: Record<string, string> }> => {
+      const qa = await qaSceneImages({
+        dir: jobDir(id), images: shot.scenes.map((sc) => webtoonImagePath(id, sc.id)),
+        scenePrompts: shot.scenes.map((sc) => String(sc.image ?? '').replace(/\s*Must fix: .*$/s, '')),
+        sceneHints: shot.scenes.map((sc) => sc.narration), preset: 'webtoon', signal, checkOnly: true, medium: 'illustration',
+        sceneMust: sceneMusts(shot as WtShotlist, stake?.key),
+        ...(known ? { subject: speciesAnchor(known, { young }), subjectLatin: known.latin } : {}),
+        // 정확한 나이(2026-11-10) — '어린 나무' 대략 기준이 아니라 나무 소품 묘사의 나이(예: one-year-old → 1년생 기준표 줄).
+        ...(criterion ? { subjectAge: treeDesc.slice(0, 200) } : young ? { subjectAge: '어린 나무(묘목)' } : {}),
+        ...(treeDesc ? { hero: treeDesc.slice(0, 300), heroScenes: treeScenes(shot) } : {}),
+      });
+      const reasons: Record<string, string> = {};
+      for (const i of qa.bad ?? []) {
+        const sid = shot.scenes[i]?.id; if (!sid) continue;
+        // issues 는 '씬N: 사유'(N = 검수한 장 순번 — 웹툰은 전 장이 있어 원본 순번+1). 한 장에 사유가 여럿이면 잇는다.
+        const why = qa.issues.filter((x) => x.startsWith(`씬${i + 1}:`)).map((x) => x.replace(/^씬\d+:\s*/, '')).join(' / ');
+        reasons[sid] = why || '지시와 다름';
+      }
+      // ③ 같은 나무 비교 — 참조 + 나무 장면 한 번에
+      const ts = [...treeScenes(shot)];
+      if (tree && ts.length >= 2) {
+        const files = ts.map((i) => ({ i, file: webtoonImagePath(id, shot.scenes[i]!.id) ?? '', hint: String(shot.scenes[i]!.narration ?? '') })).filter((x) => x.file);
+        const odd = await judgeTreeConsistency(path.join(projectDir(job.project), 'assets', `prop_${tree.key}.png`), files, treeDesc, criterion, signal);
+        for (const [k, p] of odd) { const sid = shot.scenes[files[k]!.i]!.id; reasons[sid] = reasons[sid] ? `${reasons[sid]} / ${p}` : p; }
+        if (odd.size) qa.issues.push(...[...odd].map(([k, p]) => `${shot.scenes[files[k]!.i]!.id} ${p}`));
+      }
+      return { issues: qa.issues, reasons };
+    };
     let qa = await check(sl);
-    const bad = (qa.bad ?? []).map((i) => sl.scenes[i]?.id).filter((x): x is string => !!x);
-    if (bad.length && redraw && !signal.aborted) {
-      say(`그림 검수 — ${bad.join(', ')} 다시 그림(${qa.issues.slice(0, 2).join(' / ')})`);
-      const { shotlist, bumped } = bumpRedraw(anchorScenes(sl, bad, known.latin, young), bad);
-      fs.writeFileSync(path.join(projectDir(job.project), 'shotlist.json'), JSON.stringify(shotlist, null, 2), 'utf-8');
-      const redraws = { ...job.redraws }; for (const b of bumped) redraws[b] = (redraws[b] ?? 0) + 1;
+    for (let round = 1; round <= 2 && redraw && Object.keys(qa.reasons).length && !signal.aborted; round++) {
+      const bad = Object.keys(qa.reasons);
+      say(`그림 검수 ${round}차 — ${bad.join(', ')} 다시 그림(${Object.values(qa.reasons).slice(0, 2).join(' / ').slice(0, 160)})`);
+      const fixed = fixScenes(known ? anchorScenes(sl, bad, known.latin, young) as WtShotlist : sl as WtShotlist, qa.reasons) as Shotlist;
+      const { shotlist, bumped } = bumpRedraw(fixed, bad);
+      saveShotlist(job.project, shotlist);
+      const cur = webtoonStore().get(id)!;
+      const redraws = { ...cur.redraws }; for (const b of bumped) redraws[b] = (redraws[b] ?? 0) + 1;
       webtoonStore().update(id, { redraws });
       const r = await produce({ project: job.project, imagesOnly: true, signal, onLine: say });
       if (!r.ok) throw new Error(`그림 — ${fail(r)}`);
-      qa = await check(shotlist);
+      sl = shotlist;
+      qa = await check(sl);
     }
     webtoonStore().update(id, { drawQa: qa.issues });
-    say(`그림 검수 — ${qa.issues.length ? `남은 문제 ${qa.issues.length}건` : '이상 없음'}`);
+    say(`그림 검수 — ${qa.issues.length ? `남은 문제 ${qa.issues.length}건(사람 확인)` : '이상 없음'}`);
   } catch (e) {
     if (e instanceof Error && e.message.startsWith('그림 —')) throw e; // 다시 그리기 실패는 단계 실패
     say(`그림 검수 실패(무해) — ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);

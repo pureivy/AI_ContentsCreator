@@ -9,6 +9,7 @@
  * 글자는 HTML 이 그리므로 오타 검수(qaSlide)가 필요 없다. 제목·본문(lead)은 기획 문구를 그대로 쓴다 — 칸만 새로 채운다.
  */
 import fs from 'node:fs';
+import { koreaSettingLine } from '../content/koreaSetting';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -498,6 +499,7 @@ export function genPhotoPrompt(scene: string, must: SceneMust | undefined, subje
     ...mustPromptLines(must),
     opts.ageSize ?? '', // 나이별 크기(2026-11-10 사장님 확인 기준표)
     opts.season ?? '', // 계절(2026-11-10 사장님) — 장면이 계절을 말하지 않으면 지금 달
+    koreaSettingLine(scene), // 배경은 한국(2026-11-10 사장님)
     '세로 사진(2:3). 자연광 실사 사진, 피사체가 화면 가운데에서 또렷하게. 글자·숫자·간판·워터마크·로고 없음. 칼·가위·톱 같은 연장 없음.',
   ].filter(Boolean).join('\n');
 }

@@ -2,6 +2,7 @@
  * 런 마무리 — 세션 다이제스트 + 위키 적재 + run_done. debate·org 모드가 공유.
  */
 import fs from 'node:fs';
+import { koreaSettingLine } from '../content/koreaSetting';
 import path from 'node:path';
 import { CONFIG } from '../config';
 import { EventType } from '../events/types';
@@ -192,6 +193,8 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
                 line && !x.prompt.includes('[Tree size for its age') ? line : '', season && !x.prompt.includes('[Season') ? season : '',
                 // 말풍선 금지(2026-11-10 사장님 "블로그 이미지에 말풍선은 들어가면 안됨") — 사진 위 설명 표시는 본문·도표가 한다.
                 x.prompt.includes(NO_OVERLAY) ? '' : NO_OVERLAY,
+                // 배경은 한국(2026-11-10 사장님 "특별한 언급이 없는 한 한국이 배경")
+                x.prompt.includes('[배경 — 한국]') ? '' : koreaSettingLine(`${x.alt} ${x.prompt}`),
               ].filter(Boolean);
               return add.length ? { ...x, prompt: `${x.prompt}\n${add.join('\n')}` } : x;
             });

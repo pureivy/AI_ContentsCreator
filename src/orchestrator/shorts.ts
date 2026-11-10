@@ -9,6 +9,7 @@
  * 직원 프롬프트는 회사 로스터(company.yaml)의 system_prompt 를 그대로 사용.
  */
 import fs from 'node:fs';
+import { koreaSettingLine } from '../content/koreaSetting';
 import { SELLER_INQUIRY_BAN, NO_FABRICATED_EXPERIENCE } from './org';
 import { lexiconGuide, mediaRulesGuide, varietyGuide } from '../content/brand';
 import path from 'node:path';
@@ -2335,6 +2336,7 @@ export function buildSceneImagePrompt(a: {
   }
   if (a.ageSize) p.push(a.ageSize);
   if (a.season) p.push(a.season);
+  { const ko = koreaSettingLine(`${style} ${scene}`); if (ko) p.push(ko); } // 배경은 한국(2026-11-10 사장님)
   // 연장은 화면에 넣지 않는다(2026-09-06 실사고) — 생활감이 "쓴 자국이 있는 도구"를 부르면
   // 전지가위가 들어오는데, 날과 축의 구조가 물리적으로 불가능하게 그려진다. 손만으로 충분하다.
   p.push(`[연장] 전지가위·톱·삽 같은 연장은 화면에 넣지 마라 — 날·축·손잡이 구조가 어긋나게 그려진다. ${nh ? '사람·손·팔·장갑도 화면에 넣지 마라 — 동작 대신 그 결과나 상태를 보여 준다.' : '손은 나무를 짚거나 가리키는 정도로만 쓴다.'}`);

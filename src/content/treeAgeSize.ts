@@ -60,9 +60,11 @@ const AGE_PATTERNS: RegExp[] = [
   new RegExp(String.raw`${N}\s*(?:[~∼-]\s*${N}\s*)?년\s*(?:생|된|차|째|묵은|짜리)`),
   new RegExp(String.raw`심은\s*지\s*${N}\s*(?:[~∼-]\s*${N}\s*)?(?:년|해)`),
   new RegExp(String.raw`${N}\s*(?:[~∼-]\s*${N}\s*)?(?:년|해)\s*(?:전에?|동안|만에|지난|지킨|키운|자란)`),
-  /\b(\d+)(?:\s*(?:-|to)\s*(\d+))?[- ]year[- ]old\b/i,
+  /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|twenty)(?:\s*(?:-|to)\s*(\d+|one|two|three|four|five|six|seven|eight|nine|ten|twenty))?[- ]years?[- ]old\b/i,
 ];
-const num = (s?: string): number | undefined => (s === undefined ? undefined : /^\d+$/.test(s) ? Number(s) : KNUM[s]);
+// 영어 숫자 말(2026-11-10) — 웹툰 장면 목록은 영어로 'a one-year-old sapling' 이라 쓴다.
+const ENUM: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twenty: 20 };
+const num = (s?: string): number | undefined => (s === undefined ? undefined : /^\d+$/.test(s) ? Number(s) : KNUM[s] ?? ENUM[s.toLowerCase()]);
 
 /** 글에서 나무 나이(년)를 뽑는다(순수). 숫자가 없고 '묘목·어린 나무'만 있으면 1~3, '당년생·삽수'는 0~1. 없으면 null. */
 export function parseTreeAge(text: string): { lo: number; hi: number } | null {
