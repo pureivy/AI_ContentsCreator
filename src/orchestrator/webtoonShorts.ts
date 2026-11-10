@@ -26,7 +26,7 @@ import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { generateTitleArt } from './shortsTitleArt';
 import { qaSceneImages } from './shortsSceneQa';
 import { englishFixes, findProp, fixProp, fixScenes, judgeRef, judgeTreeConsistency, pinTreeSize, sceneMusts, STAKE_PROP, TREE_PROP, treeAgeCriterion, type WtShotlist } from './webtoonDrawQa';
-import { findSpecies, speciesAnchor, isYoungHero } from '../content/species';
+import { findSpecies, speciesAnchor, isYoungHero, speciesRefPhotos } from '../content/species';
 import { produce, projectDir, SM_EXIT_TEXT, shortMarkerReady, writeShotlist, type SmResult } from '../tools/shortMarker';
 
 const execFileP = promisify(execFile);
@@ -199,20 +199,28 @@ async function refQa(project: string, topicText: string, signal: AbortSignal, sa
   const tree = findProp(sl, TREE_PROP);
   const stake = findProp(sl, STAKE_PROP, TREE_PROP);
   if (!tree && !stake) return;
+  // 실물 사진 참고(2026-11-10 사장님 선택) — 그림 모델이 모르는 수종(으름)이 굵은 관목·홑잎으로 나왔다. 그리기에 쓸 수 있는 사진만(CC0·CC BY·농원).
+  const photo = known ? speciesRefPhotos(known.latin, 1, undefined, 'draw')[0] : undefined;
+  if (tree && photo && !tree.prop.ref_photo) {
+    sl = { ...sl, props: { ...sl.props, [tree.key]: { ...tree.prop, ref_photo: path.resolve(photo) } } };
+    saveShotlist(project, sl); say(`나무 참조 — 실물 사진 참고(${path.basename(photo)})`);
+  }
+  const truth = known ? speciesRefPhotos(known.latin, 2, undefined, 'qa').map((p) => path.resolve(p)) : [];
   const criterion = treeAgeCriterion(sl, known);
   for (let round = 0; round <= 2 && !signal.aborted; round++) {
     const r = await produce({ project, refsOnly: true, signal, onLine: say });
     if (!r.ok) throw new Error(`그림 — 참조 ${fail(r)}`);
-    if (round === 2) break; // 두 번 고쳐 그린 뒤엔 더 보지 않고 장면 검수에 맡긴다
     const bad: Array<[string, string]> = [];
     try {
-      for (const [x, kind] of [[tree, 'tree'], [stake, 'stake']] as const) {
+      for (const [x, kind] of [[findProp(sl, TREE_PROP), 'tree'], [findProp(sl, STAKE_PROP, TREE_PROP), 'stake']] as const) {
         if (!x) continue;
-        const p = await judgeRef(path.join(projectDir(project), 'assets', `prop_${x.key}.png`), kind, String(x.prop.prompt ?? ''), kind === 'tree' ? criterion : '', signal);
+        const p = await judgeRef(path.join(projectDir(project), 'assets', `prop_${x.key}.png`), kind, String(x.prop.prompt ?? '').replace(/\s*\[Tree size for its age[^]*$/, ''), kind === 'tree' ? criterion : '', signal, kind === 'tree' ? truth : []);
         if (p) bad.push([x.key, p]);
       }
     } catch { return; }
     if (!bad.length) { say(`참조 그림 검수 — 이상 없음${round ? `(${round}번 고쳐 그림)` : ''}`); return; }
+    // 두 번 고쳐도 틀리면 장면 12장을 그리지 않는다(2026-11-10 사장님) — 틀린 참조를 12장이 다 따라가 시간만 든다.
+    if (round === 2) throw new Error(`그림 — 참조 그림이 두 번 고쳐도 기준과 달라 멈춤: ${bad.map(([k, p]) => `${k}: ${p}`).join(' / ').slice(0, 300)}`);
     say(`참조 그림 검수 — ${bad.map(([k, p]) => `${k}: ${p}`).join(' / ')} → 다시 그림`);
     const en = await englishFixes(Object.fromEntries(bad), signal); // 그림 필드는 영어만
     for (const [k] of bad) sl = fixProp(sl, k, en[k] ?? '');

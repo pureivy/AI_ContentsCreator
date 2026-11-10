@@ -97,7 +97,7 @@ export function treeAgeCriterion(s: WtShotlist, sp?: Pick<Species, 'name' | 'lat
 type Verdict = { ok?: unknown; problem?: unknown };
 
 /** ① 참조 그림 한 장 판정 — 나무: 기준 크기·흰 배경 단독·퍼진 뿌리 없음 / 지주: 둥근 얇은 지주. 실패·판정 불가는 통과(무해). */
-export async function judgeRef(file: string, kind: 'tree' | 'stake', desc: string, criterion: string, signal?: AbortSignal): Promise<string | null> {
+export async function judgeRef(file: string, kind: 'tree' | 'stake', desc: string, criterion: string, signal?: AbortSignal, truth: readonly string[] = []): Promise<string | null> {
   if (!visionCapable() || !fs.existsSync(file)) return null;
   const lines = kind === 'tree'
     ? [
@@ -105,6 +105,7 @@ export async function judgeRef(file: string, kind: 'tree' | 'stake', desc: strin
       criterion ? `나이별 기준 크기(이것으로 판정): ${criterion}` : '',
       '판정 항목: 1) 줄기 굵기가 기준보다 눈에 띄게 굵은가(예: 손가락 굵기여야 하는데 손목 굵기) 2) 가지 수·모양이 기준과 다른가(외줄기여야 하는데 가지가 여럿) 3) 밑동에 노목처럼 퍼진 뿌리·부푼 밑동이 있는가 4) 배경이 흰 바탕이 아니라 마당·울타리·집이 그려졌는가 5) 나무가 한 그루가 아닌가.',
       '흰 바탕이라 키는 줄기 굵기 대비 길이(가늘고 긴 외줄기인지)로 가늠하라.',
+      truth.length ? `첨부 2번째부터는 이 수종의 실물 사진(판정 대상 아님)이다. 6) 잎 모양·작은잎 수·잎차례가 실물과 다른가(예: 겹잎이어야 하는데 홑잎). 실물 사진의 꽃·열매·배경·크기를 베껴 그렸으면 그것도 문제다.` : '',
     ]
     : [
       `이 그림은 어린 나무 지주 참조 그림이다. 의도: "${desc.slice(0, 300)}"`,
@@ -112,7 +113,7 @@ export async function judgeRef(file: string, kind: 'tree' | 'stake', desc: strin
     ];
   const r = await microJSON<Verdict>(stdModel(), '너는 그림 검수자다. 기준에 어긋나는 것만 짧게 지적한다.',
     [...lines.filter(Boolean), '하나라도 어긋나면 ok=false, problem 에 무엇이 어떻게 다른지(기준과 그림 비교) 한 줄. 모두 맞으면 ok=true. JSON: {"ok":true|false,"problem":"..."}'].join('\n'),
-    { maxOutputTokens: 300, visionPaths: [file], ...(signal ? { signal } : {}) }).catch(() => null);
+    { maxOutputTokens: 300, visionPaths: [file, ...truth], ...(signal ? { signal } : {}) }).catch(() => null);
   if (!r || r.ok !== false) return null;
   return String(r.problem ?? '기준과 다름').slice(0, 200);
 }
