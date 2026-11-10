@@ -121,4 +121,10 @@ describe('anchorScenes(2026-11-09 그림 검수)', () => {
     expect(anchorScenes(once, ['s01'], 'Akebia quinata', true).scenes[0]!.image).toBe(once.scenes[0]!.image);
     expect(/[가-힣]/.test(String(once.scenes[0]!.image))).toBe(false);
   });
+  it('덩굴은 sapling 대신 덩굴 문구를 붙인다', async () => {
+    const { anchorScenes } = await import('./webtoonShorts');
+    const v = anchorScenes({ id: 'x', scenes: [{ id: 's01', narration: 'a', image: 'a vine' }] }, ['s01'], 'Akebia quinata', true, true);
+    expect(v.scenes[0]!.image).toContain('climbing vine');
+    expect(v.scenes[0]!.image).not.toContain('sapling');
+  });
 });

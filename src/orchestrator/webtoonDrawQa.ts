@@ -51,15 +51,19 @@ export function withFix(text: string, reason: string): string {
  * 검수 사유(한국어) → 그림 모델에 줄 영어 고칠 점(2026-11-10). 한 번에 묶어 번역한다. 실패하면 원문 그대로(withFix 가 일반 문구로 바꾼다).
  * 예: "기준은 손가락 굵기인데 팔뚝 굵기, 흰 바탕이 아니라 마당" → "the stem must be finger-thin, not forearm-thick; plain white background, no yard".
  */
+const TEXT_FINDING = /잡글자|글자|간판|팻말|표지/;
+export const NO_SIGN = 'No signs, signboards, plaques, labels or writing anywhere in the scene; walls, posts and fences are plain.';
 export async function englishFixes(reasons: Record<string, string>, signal?: AbortSignal): Promise<Record<string, string>> {
   const keys = Object.keys(reasons);
   if (!keys.length || !visionCapable()) return reasons;
   const r = await microJSON<Record<string, unknown>>(stdModel(), 'You turn Korean image-review findings into short English drawing corrections.',
-    ['Rewrite each finding as ONE short English instruction for an image model saying what the picture MUST look like (the target, not the mistake), keeping the sizes and comparisons the finding states (e.g. finger-thin, chest-high, plain white background). Add nothing the finding does not say — no new setting, wall or object (2026-11-10: an example \"Korean stone wall\" leaked into a white-background fix). No Korean characters. Max 30 words each.',
+    ['Rewrite each finding as ONE short English instruction for an image model saying what the picture MUST look like (the target, not the mistake), keeping the sizes and comparisons the finding states (e.g. finger-thin, chest-high, plain white background). Add nothing the finding does not say — no new setting, wall or object (2026-11-10: an example \"Korean stone wall\" leaked into a white-background fix). For a text or signboard finding never ask for a sign (not even a blank one) — say there are no signs, signboards, plaques or writing anywhere. No Korean characters. Max 30 words each.',
       JSON.stringify(reasons), 'JSON: {"<same key>": "instruction"}'].join('\n'),
     { maxOutputTokens: 600, ...(signal ? { signal } : {}) }).catch(() => null);
   const out: Record<string, string> = { ...reasons };
   for (const k of keys) { const v = r?.[k]; if (typeof v === 'string' && v.trim() && !/[가-힣]/.test(v)) out[k] = v.trim(); }
+  // 잡글자 지적(2026-11-10 으름 s06) — 번역이 'Show a plain sign with no visible text' 로 팻말을 오히려 그리게 시켰다. 고정 문구를 붙인다.
+  for (const k of keys) if (TEXT_FINDING.test(reasons[k]!) && !out[k]!.includes(NO_SIGN)) out[k] = `${out[k]!.replace(/[^.;]*\bsign\b[^.;]*[.;]?/gi, '').trim()} ${NO_SIGN}`.trim();
   return out;
 }
 

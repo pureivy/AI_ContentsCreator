@@ -27,6 +27,7 @@ import { generateTitleArt } from './shortsTitleArt';
 import { qaSceneImages } from './shortsSceneQa';
 import { englishFixes, findProp, fixProp, fixScenes, judgeRef, judgeTreeConsistency, pinTreeSize, sceneMusts, STAKE_PROP, TREE_PROP, treeAgeCriterion, type WtShotlist } from './webtoonDrawQa';
 import { findSpecies, speciesAnchor, isYoungHero, speciesRefPhotos } from '../content/species';
+import { treeGroup } from '../content/treeAgeSize';
 import { produce, projectDir, SM_EXIT_TEXT, shortMarkerReady, writeShotlist, type SmResult } from '../tools/shortMarker';
 
 const execFileP = promisify(execFile);
@@ -57,8 +58,10 @@ export function pinT2iModel(s: Shotlist, model: string): { shotlist: Shotlist; c
 }
 
 /** 검수에 걸린 장면의 그림 지시에 학명 고정 문구를 붙인다(순수, 한 번만). 그림 필드는 영어만(SHORT_marker lint). */
-export function anchorScenes(s: Shotlist, ids: readonly string[], latin: string, young: boolean): Shotlist {
-  const tag = `Botanically accurate ${latin}${young ? ', drawn as a young sapling (thin stem, few branches)' : ''}.`;
+export function anchorScenes(s: Shotlist, ids: readonly string[], latin: string, young: boolean, vine = false): Shotlist {
+  // 덩굴(2026-11-10 으름)에 'young sapling' 을 붙이면 혼자 선 나무로 그린다 — 덩굴은 덩굴 문구로.
+  const kind = vine ? ', drawn as a young climbing vine (thin flexible twining stems, no trunk)' : ', drawn as a young sapling (thin stem, few branches)';
+  const tag = `Botanically accurate ${latin}${young ? kind : ''}.`;
   return {
     ...s,
     scenes: s.scenes.map((sc) => {
@@ -278,7 +281,7 @@ async function drawQa(id: string, signal: AbortSignal, say: (l: string) => void,
     for (let round = 1; round <= 2 && redraw && Object.keys(qa.reasons).length && !signal.aborted; round++) {
       const bad = Object.keys(qa.reasons);
       say(`그림 검수 ${round}차 — ${bad.join(', ')} 다시 그림(${Object.values(qa.reasons).slice(0, 2).join(' / ').slice(0, 160)})`);
-      const fixed = fixScenes(known ? anchorScenes(sl, bad, known.latin, young) as WtShotlist : sl as WtShotlist, await englishFixes(qa.reasons, signal)) as Shotlist;
+      const fixed = fixScenes(known ? anchorScenes(sl, bad, known.latin, young, treeGroup(known) === 'vine') as WtShotlist : sl as WtShotlist, await englishFixes(qa.reasons, signal)) as Shotlist;
       const { shotlist, bumped } = bumpRedraw(fixed, bad);
       saveShotlist(job.project, shotlist);
       const cur = webtoonStore().get(id)!;
