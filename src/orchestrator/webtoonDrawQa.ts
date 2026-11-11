@@ -7,7 +7,6 @@
  *  ④ 이유를 붙여 다시 — 탈락 사유를 그 장(또는 참조) 지시에 "Must fix:" 로 붙여 다시 그린다(호출부가 최대 2번).
  */
 import fs from 'node:fs';
-import path from 'node:path';
 import { microJSON } from './agent';
 import { stdModel, visionCapable } from './visionCommon';
 import { ageSizeCheck, ageSizePrompt } from '../content/treeAgeSize';
@@ -220,4 +219,44 @@ export async function judgeTreeConsistency(refFile: string, scenes: ReadonlyArra
     if (k >= 0 && k < list.length && !out.has(k)) out.set(k, `나무 일관성: ${String(x?.problem ?? '참조와 다름').slice(0, 180)}`);
   }
   return out;
+}
+
+/**
+ * 장면 속 나무 크기 관찰(2026-11-11 감나무 시험 편) — 공용 장면 검수의 '나이' 항목이 종아리~허벅지 경계의 줄기를 15건 중 9건
+ * '허벅지 굵기'로 떨어뜨려 멀쩡한 장면을 두 번씩 다시 그렸다. 웹툰은 사람 몸에 견준 굵기 단계만 관찰값으로 받고,
+ * 나이 기준과 두 단계 이상 다를 때만(두 번 다) 문제로 본다. 밑동은 두 번 다 strong 일 때만.
+ */
+export const TRUNK_STEPS = ['finger', 'thumb', 'wrist', 'forearm_calf', 'thigh', 'torso'] as const;
+const STEP_KO: Record<string, string> = { finger: '손가락', thumb: '엄지', wrist: '손목', forearm_calf: '팔뚝~종아리', thigh: '허벅지', torso: '몸통' };
+/** 나이(년, 범위 위쪽) → 기대 굵기 단계(순수) — treeAgeSize 기준표의 과수·조경수 줄과 같은 경계. */
+export function expectedTrunkStep(ageHi: number): number {
+  return ageHi <= 1 ? 0 : ageHi <= 3 ? 1 : ageHi <= 5 ? 2 : ageHi <= 14 ? 3 : 4;
+}
+export type TrunkObs = { trunk?: unknown; flare?: unknown; visible?: unknown };
+/** 두 번 관찰 → 문제 한 줄 또는 null(순수). 굵기는 둘 다 같은 쪽으로 2단계 이상 벗어날 때만. */
+export function trunkVerdict(obs: readonly TrunkObs[], expected: number): string | null {
+  const seen = obs.filter((o) => o.visible !== false && TRUNK_STEPS.includes(o.trunk as never));
+  if (seen.length < 2) return null;
+  const idx = seen.map((o) => TRUNK_STEPS.indexOf(o.trunk as (typeof TRUNK_STEPS)[number]));
+  const bad: string[] = [];
+  const want = STEP_KO[TRUNK_STEPS[expected]!]!;
+  if (idx.every((i) => i - expected >= 2)) bad.push(`나이: 줄기가 ${STEP_KO[TRUNK_STEPS[Math.min(...idx)]!]} 굵기 이상(기준 ${want})`);
+  else if (idx.every((i) => expected - i >= 2)) bad.push(`나이: 줄기가 ${STEP_KO[TRUNK_STEPS[Math.max(...idx)]!]} 굵기 이하(기준 ${want})`);
+  if (seen.every((o) => o.flare === 'strong')) bad.push('나이: 밑동에 노목처럼 퍼진 뿌리');
+  return bad.length ? bad.join(' / ') : null;
+}
+/** 장면 한 장의 나무 줄기 관찰 두 번(실패는 빈 배열 — 판정 없음). */
+export async function observeTrunk(file: string, desc: string, signal?: AbortSignal): Promise<TrunkObs[]> {
+  if (!visionCapable() || !fs.existsSync(file)) return [];
+  const prompt = [
+    `웹툰 장면 그림이다. 주인공 나무: "${desc.slice(0, 200)}"`,
+    '보이는 것만 관찰해 적어라(판정하지 마라).',
+    `trunk: 땅 닿는 곳 줄기 굵기를 화면 속 사람 몸에 견줘 하나 — ${TRUNK_STEPS.join(' / ')} (forearm_calf = 어른 팔뚝~종아리, thigh = 어른 허벅지, torso = 어른 몸통). 사람이 없으면 집 처마·돌담·장독에 견줘 어림하라.`,
+    'flare: 밑동 — "none"(곧게 들어감) / "slight"(살짝 넓어짐) / "strong"(뿌리가 문어발처럼 사방으로 퍼짐).',
+    'visible: 그 나무 줄기 밑동이 화면에 보이면 true, 잘렸거나 나무가 없으면 false.',
+    'JSON: {"trunk":"forearm_calf","flare":"none","visible":true}',
+  ].join('\n');
+  const one = (): Promise<TrunkObs | null> => microJSON<TrunkObs>(stdModel(), '너는 그림을 보고 관찰값만 적는 검수 보조다.', prompt,
+    { maxOutputTokens: 120, visionPaths: [file], ...(signal ? { signal } : {}) }).catch(() => null);
+  return (await Promise.all([one(), one()])).filter((o): o is TrunkObs => !!o);
 }

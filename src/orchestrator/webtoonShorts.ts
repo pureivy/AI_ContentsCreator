@@ -25,9 +25,9 @@ import { THUMB_FRAME_FILE } from '../tools/shortsRender';
 import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { generateTitleArt } from './shortsTitleArt';
 import { qaSceneImages } from './shortsSceneQa';
-import { englishFixes, findProp, fixProp, fixScenes, judgeRef, judgeTreeConsistency, pinTreeSize, sceneMusts, STAKE_PROP, summarizeDrawQa, TREE_PROP, treeAgeCriterion, type WtShotlist } from './webtoonDrawQa';
+import { englishFixes, findProp, fixProp, fixScenes, expectedTrunkStep, judgeRef, judgeTreeConsistency, observeTrunk, trunkVerdict, pinTreeSize, sceneMusts, STAKE_PROP, summarizeDrawQa, TREE_PROP, treeAgeCriterion, type WtShotlist } from './webtoonDrawQa';
 import { findSpecies, speciesAnchor, isYoungHero, speciesRefPhotos } from '../content/species';
-import { treeGroup } from '../content/treeAgeSize';
+import { parseTreeAge, treeGroup } from '../content/treeAgeSize';
 import { produce, projectDir, SM_EXIT_TEXT, shortMarkerReady, writeShotlist, type SmResult } from '../tools/shortMarker';
 
 const execFileP = promisify(execFile);
@@ -259,9 +259,7 @@ async function drawQa(id: string, signal: AbortSignal, say: (l: string) => void,
         sceneHints: shot.scenes.map((sc) => sc.narration), preset: 'webtoon', signal, checkOnly: true, medium: 'illustration',
         sceneMust: sceneMusts(shot as WtShotlist, stake?.key),
         ...(known ? { subject: speciesAnchor(known, { young }), subjectLatin: known.latin } : {}),
-        // 정확한 나이(2026-11-10) — '어린 나무' 대략 기준이 아니라 나무 소품 묘사의 나이(예: one-year-old → 1년생 기준표 줄).
-        ...(criterion ? { subjectAge: treeDesc.slice(0, 200) } : young ? { subjectAge: '어린 나무(묘목)' } : {}),
-        ...(treeDesc ? { hero: treeDesc.slice(0, 300), heroScenes: treeScenes(shot) } : {}),
+        // 나이·주인공 나무 크기는 공용 판정에서 빼고 아래 관찰값(observeTrunk)으로 본다(2026-11-11 — 종아리~허벅지 경계를 15건 중 9건 탈락).
       });
       const reasons: Record<string, string> = {};
       for (const i of qa.bad ?? []) {
@@ -270,11 +268,26 @@ async function drawQa(id: string, signal: AbortSignal, say: (l: string) => void,
         const why = qa.issues.filter((x) => x.startsWith(`씬${i + 1}:`)).map((x) => x.replace(/^씬\d+:\s*/, '')).join(' / ');
         reasons[sid] = why || '지시와 다름';
       }
-      // ③ 같은 나무 비교 — 참조 + 나무 장면 한 번에
+      // ② 나무 크기 — 장면마다 사람 몸에 견준 줄기 굵기 관찰 두 번, 나이 기준과 두 단계 이상(둘 다)일 때만.
       const ts = [...treeScenes(shot)];
+      const age = parseTreeAge(treeDesc) ?? (young ? { lo: 1, hi: 3 } : null);
+      if (tree && age) {
+        const want = expectedTrunkStep(age.hi);
+        const seen = await Promise.all(ts.map(async (i) => {
+          const f = webtoonImagePath(id, shot.scenes[i]!.id);
+          return [i, f ? trunkVerdict(await observeTrunk(f, treeDesc, signal), want) : null] as const;
+        }));
+        for (const [i, p] of seen) {
+          if (!p) continue;
+          const sid = shot.scenes[i]!.id;
+          reasons[sid] = reasons[sid] ? `${reasons[sid]} / ${p}` : p;
+          qa.issues.push(`씬${i + 1}: ${p}`);
+        }
+      }
+      // ③ 같은 나무 비교 — 참조 + 나무 장면 한 번에(크기 기준은 ②가 본다 — 여기선 참조와 다른 나무로 보이는지만)
       if (tree && ts.length >= 2) {
         const files = ts.map((i) => ({ i, file: webtoonImagePath(id, shot.scenes[i]!.id) ?? '', hint: String(shot.scenes[i]!.narration ?? '') })).filter((x) => x.file);
-        const odd = await judgeTreeConsistency(path.join(projectDir(job.project), 'assets', `prop_${tree.key}.png`), files, treeDesc, criterion, signal);
+        const odd = await judgeTreeConsistency(path.join(projectDir(job.project), 'assets', `prop_${tree.key}.png`), files, treeDesc, '', signal);
         for (const [k, p] of odd) { const sid = shot.scenes[files[k]!.i]!.id; reasons[sid] = reasons[sid] ? `${reasons[sid]} / ${p}` : p; }
         if (odd.size) qa.issues.push(...[...odd].map(([k, p]) => `${shot.scenes[files[k]!.i]!.id} ${p}`));
       }

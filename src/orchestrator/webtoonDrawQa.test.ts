@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findProp, fixProp, fixScenes, pinTreeSize, sceneMusts, STAKE_PROP, summarizeDrawQa, mergeTreeObs, treeRefVerdict, TREE_PROP, treeAgeCriterion, withFix } from './webtoonDrawQa';
+import { findProp, fixProp, fixScenes, pinTreeSize, sceneMusts, STAKE_PROP, summarizeDrawQa, mergeTreeObs, treeRefVerdict, expectedTrunkStep, trunkVerdict, TREE_PROP, treeAgeCriterion, withFix } from './webtoonDrawQa';
 import { parseTreeAge } from '../content/treeAgeSize';
 
 // 2026-11-10 감나무 샘플 — 묘목 참조가 손목 굵기로 그려졌고, 검수는 '어린 나무' 대략 기준이었다.
@@ -86,5 +86,25 @@ describe('나무 참조 관찰값 판정', () => {
   it('외줄기 나무에 줄기 둘은 탈락, 관목은 괜찮다', () => {
     expect(treeRefVerdict({ flare: 'none', stems: 2 }, desc)).toContain('줄기 2개');
     expect(treeRefVerdict({ flare: 'none', stems: 3 }, 'a 3-year-old multi-stem shrub')).toBeNull();
+  });
+});
+
+// 2026-11-11 감나무 시험 편 — 공용 '나이' 판정이 종아리~허벅지 경계를 9건 탈락. 두 단계 이상·두 번 다일 때만.
+describe('장면 줄기 관찰 판정', () => {
+  it('10년생(팔뚝~종아리)에 허벅지는 한 단계라 통과, 몸통은 탈락', () => {
+    const want = expectedTrunkStep(10);
+    expect(trunkVerdict([{ trunk: 'thigh', flare: 'slight' }, { trunk: 'thigh', flare: 'slight' }], want)).toBeNull();
+    expect(trunkVerdict([{ trunk: 'torso', flare: 'none' }, { trunk: 'torso', flare: 'none' }], want)).toContain('몸통');
+  });
+  it('1년생에 손목은 두 단계 굵어 탈락, 두 관찰이 갈리면 통과', () => {
+    const want = expectedTrunkStep(1);
+    expect(trunkVerdict([{ trunk: 'wrist' }, { trunk: 'wrist' }], want)).toContain('손목');
+    expect(trunkVerdict([{ trunk: 'wrist' }, { trunk: 'thumb' }], want)).toBeNull();
+  });
+  it('밑동은 두 번 다 strong 일 때만, 밑동이 안 보이면 판정 없음', () => {
+    const want = expectedTrunkStep(10);
+    expect(trunkVerdict([{ trunk: 'forearm_calf', flare: 'strong' }, { trunk: 'forearm_calf', flare: 'strong' }], want)).toContain('퍼진 뿌리');
+    expect(trunkVerdict([{ trunk: 'forearm_calf', flare: 'strong' }, { trunk: 'forearm_calf', flare: 'slight' }], want)).toBeNull();
+    expect(trunkVerdict([{ trunk: 'torso', visible: false }, { trunk: 'torso', visible: false }], want)).toBeNull();
   });
 });
