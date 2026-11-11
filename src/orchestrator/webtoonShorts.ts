@@ -25,7 +25,7 @@ import { THUMB_FRAME_FILE } from '../tools/shortsRender';
 import { generateDesignedThumbnail, type ThumbCopy } from './shortsThumbnail';
 import { generateTitleArt } from './shortsTitleArt';
 import { qaSceneImages } from './shortsSceneQa';
-import { englishFixes, findProp, fixProp, fixScenes, judgeRef, judgeTreeConsistency, pinTreeSize, sceneMusts, STAKE_PROP, TREE_PROP, treeAgeCriterion, type WtShotlist } from './webtoonDrawQa';
+import { englishFixes, findProp, fixProp, fixScenes, judgeRef, judgeTreeConsistency, pinTreeSize, sceneMusts, STAKE_PROP, summarizeDrawQa, TREE_PROP, treeAgeCriterion, type WtShotlist } from './webtoonDrawQa';
 import { findSpecies, speciesAnchor, isYoungHero, speciesRefPhotos } from '../content/species';
 import { treeGroup } from '../content/treeAgeSize';
 import { produce, projectDir, SM_EXIT_TEXT, shortMarkerReady, writeShotlist, type SmResult } from '../tools/shortMarker';
@@ -152,6 +152,9 @@ async function draftAndDraw(id: string, signal: AbortSignal, say: (l: string) =>
     if (!r.ok) throw new Error(`장면 목록 — ${fail(r)}`);
     sl = readShotlist(job.project);
     if (!sl) throw new Error('장면 목록 파일을 읽을 수 없습니다');
+    // 그림 지시 2판(2026-11-11 감나무) — 밑동 긍정 묘사·실외 한국 집 줄(SHORT_marker produce). 새로 쓴 목록에만 — 옛 목록은 캐시가 바뀌면
+    // 검토를 마친 그림이 승인 때 전부 다시 그려진다.
+    if (CONFIG.webtoonPromptV2) { sl = { ...sl, prompt_v: 2 }; fs.writeFileSync(path.join(projectDir(job.project), 'shotlist.json'), JSON.stringify(sl, null, 2), 'utf-8'); }
     job = store.update(id, { wallSec: { ...job.wallSec, writing: Math.round((Date.now() - t0) / 1000) } })!;
   }
   // 영상 엔진(2026-11-07) — SHORT_marker 기본값이 바뀌어도 웹툰은 사장님이 고른 엔진으로 만든다. 그림만 먼저 그리지만 캐시 키에 안 들어가니 여기서 적어도 된다.
@@ -278,7 +281,23 @@ async function drawQa(id: string, signal: AbortSignal, say: (l: string) => void,
       return { issues: qa.issues, reasons };
     };
     let qa = await check(sl);
+    let refRedone = false;
     for (let round = 1; round <= 2 && redraw && Object.keys(qa.reasons).length && !signal.aborted; round++) {
+      // 원인으로 돌아가기(2026-11-11 감나무) — 나무 장면 11장 중 대부분이 같은 '나이·판근'으로 걸렸는데 장면만 두 번 다시 그려 그대로였다.
+      // 장면들이 따라 그리는 참조 나무가 틀린 것이다. 나무 장면 절반 이상이 크기·밑동으로 걸리면 참조부터 고쳐 다시 판정한다(한 번만).
+      const ts = [...treeScenes(sl)].map((i) => sl!.scenes[i]!.id);
+      const ageBad = ts.filter((sid) => /나이|판근|뿌리|굵기|밑동|일관성/.test(qa.reasons[sid] ?? ''));
+      // 새 판(prompt_v 2) 목록만 — 옛 목록에서 참조를 다시 그리면 해시가 바뀌어 승인 때 검토 안 한 장면이 전부 다시 그려진다.
+      if (tree && !refRedone && (sl as { prompt_v?: number }).prompt_v === 2 && ts.length >= 3 && ageBad.length * 2 >= ts.length) {
+        refRedone = true;
+        say(`그림 검수 — 나무 장면 ${ageBad.length}/${ts.length}장이 크기·밑동으로 걸려 참조 나무부터 다시 그림`);
+        // 크기·밑동 조각만 — 같은 장의 손·배경 사유가 흰 바탕 참조 지시에 섞이면 참조에 집이 그려진다.
+        const why = ageBad.flatMap((sid) => qa.reasons[sid]!.split(' / ').filter((x) => /나이|판근|뿌리|굵기|밑동|일관성/.test(x))).join(' / ').slice(0, 300);
+        const en = await englishFixes({ [tree.key]: why }, signal);
+        saveShotlist(job.project, fixProp(sl as WtShotlist, tree.key, en[tree.key] ?? ''));
+        await refQa(job.project, `${job.keyword ?? ''} ${job.topic}`, signal, say);
+        sl = readShotlist(job.project) ?? sl;
+      }
       const bad = Object.keys(qa.reasons);
       say(`그림 검수 ${round}차 — ${bad.join(', ')} 다시 그림(${Object.values(qa.reasons).slice(0, 2).join(' / ').slice(0, 160)})`);
       const fixed = fixScenes(known ? anchorScenes(sl, bad, known.latin, young, treeGroup(known) === 'vine') as WtShotlist : sl as WtShotlist, await englishFixes(qa.reasons, signal)) as Shotlist;
@@ -363,7 +382,9 @@ export function notifyWebtoonReview(id: string, only?: readonly string[]): void 
   const fact = !fg ? '' : fg.status === 'pass' ? '원문 대조: 이상 없음' : fg.status === 'hold'
     ? `원문 대조: 확인 필요 ${fg.unsupported.length}건\n${fg.unsupported.map((u) => `· ${escapeHtml(u)}`).join('\n')}` : '원문 대조: 판정 실패 — 낭독을 직접 확인하세요';
   const dq = job.drawQa;
-  const draw = !dq ? '' : dq.length ? `그림 검수(수종·나이): 확인 필요 ${dq.length}건\n${dq.map((u) => `· ${escapeHtml(u.replace(/^씬/, '장면 '))}`).join('\n')}` : '그림 검수(수종·나이): 이상 없음';
+  // 요약만(2026-11-11 사장님 "검수가 필요하면 니가 해야지 텔레그램으로 다 쏘면 되겠어?") — 18줄을 그대로 보냈다. 스스로 고친 뒤
+  // 남은 것만 종류별 장 수로 한 줄. 장면별 내용은 제작실 웹툰 탭에 그대로 있다.
+  const draw = !dq ? '' : dq.length ? `그림 검수: 스스로 고쳐 그린 뒤 남은 문제 — ${escapeHtml(summarizeDrawQa(dq))} (장면별 내용은 제작실)` : '그림 검수: 이상 없음';
   const body = [
     `${head}\n<b>${title}</b>`,
     all.map((s, i) => `${i + 1}. ${s.speaker === 'mentor' ? '(사장님) ' : ''}${escapeHtml(s.narration)}`).join('\n'),

@@ -162,6 +162,8 @@ export interface Config {
   readonly blogImageQa: boolean;
   /** 웹툰 그림 수종·나이 검수(2026-11-09 사장님) — 그린 뒤 비전 검수, 틀린 장면은 학명을 붙여 한 번 다시 그린다. */
   readonly webtoonDrawQa: boolean;
+  /** 웹툰 그림 지시 2판(2026-11-11) — 새 장면 목록에 prompt_v:2 → SHORT_marker 가 밑동 긍정 묘사·실외 한국 집 줄. 끄면 옛 문구. */
+  readonly webtoonPromptV2: boolean;
   /** 자료실 → 수종 정답 사진(2026-11-09 사장님) — 올린 사진·영상을 수종 태그대로 data/species-refs 에 넣어 그림 검수 비교에 쓴다. */
   readonly speciesRefsArchive: boolean;
   /** 웹툰 그림 모델(2026-11-09 사장님: FLUX.3 klein 기본) — 장면 목록에 그림 모델이 없으면 이 값으로 적는다. flux3klein(기본, FLUX Kommunity: 연매출 500만 달러 미만 결과물 상업 사용) | flux2klein(Apache-2.0, 약 4배 빠름) | qwen2511 | zimage | qwen21(연구용 라이선스 — 수익화 금지). */
@@ -612,6 +614,7 @@ export const CONFIG: Config = {
   webtoonI2vEngine: ['ltx', 'wan14', 'minimax_pika'].includes(env('WEBTOON_I2V_ENGINE', 'minimax_pika')) ? env('WEBTOON_I2V_ENGINE', 'minimax_pika') : 'minimax_pika',
   blogImageQa: envBool('BLOG_IMAGE_QA', true),
   webtoonDrawQa: envBool('WEBTOON_DRAW_QA', true),
+  webtoonPromptV2: envBool('WEBTOON_PROMPT_V2', true),
   speciesRefsArchive: envBool('SPECIES_REFS_ARCHIVE', true),
   webtoonT2iModel: ['flux3klein', 'flux2klein', 'qwen2511', 'zimage', 'qwen21'].includes(env('WEBTOON_T2I_MODEL', 'flux3klein')) ? env('WEBTOON_T2I_MODEL', 'flux3klein') : 'flux3klein',
   factSupplyRetry: Math.min(Math.max(0, envInt('FACT_SUPPLY_RETRY', 2)), 5),

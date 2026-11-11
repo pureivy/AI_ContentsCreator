@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findProp, fixProp, fixScenes, pinTreeSize, sceneMusts, STAKE_PROP, TREE_PROP, treeAgeCriterion, withFix } from './webtoonDrawQa';
+import { findProp, fixProp, fixScenes, pinTreeSize, sceneMusts, STAKE_PROP, summarizeDrawQa, mergeTreeObs, treeRefVerdict, TREE_PROP, treeAgeCriterion, withFix } from './webtoonDrawQa';
 import { parseTreeAge } from '../content/treeAgeSize';
 
 // 2026-11-10 감나무 샘플 — 묘목 참조가 손목 굵기로 그려졌고, 검수는 '어린 나무' 대략 기준이었다.
@@ -51,5 +51,40 @@ describe('webtoonDrawQa', () => {
     expect(m[0]!.not.join()).not.toContain('각목');
     expect(m[1]!.not.join()).toContain('각목');
     expect(m[2]!.not.join()).not.toContain('한국이 아닌 배경');
+  });
+});
+
+// 2026-11-11 사장님 "텔레그램으로 다 쏘면 작업이 되겠어?" — 18줄 대신 종류별 장 수 한 줄.
+describe('summarizeDrawQa', () => {
+  it('같은 장면의 여러 사유는 종류마다 한 장으로 센다', () => {
+    const s = summarizeDrawQa([
+      '씬1: 나이: 기준과 달리 판근', '씬3: 나이: 밑동이 굵음', '씬3: 손: 엄지가 보이지 않음', '씬4: 배경 집이 일본식 2층 주택',
+      '씬8: 잎이 좁고 길쭉해 감잎과 다름', 's02 나무 일관성: 줄기가 손목 굵기', 's03 나무 일관성: 너무 가늘다',
+    ]);
+    expect(s).toBe('나무 크기·나이 3장 · 손 1장 · 배경 1장 · 잎·수종 모양 1장');
+  });
+  it('손목 굵기는 손 문제가 아니다', () => {
+    expect(summarizeDrawQa(['씬2: 나이: 줄기가 손목 굵기'])).toBe('나무 크기·나이 1장');
+  });
+});
+
+// 2026-11-11 감나무 보정 — 옛 참조(문어발 뿌리)는 3번 중 2번만 strong, 고친 참조는 늘 slight. 잎·배경 오탐은 한 번씩.
+describe('나무 참조 관찰값 판정', () => {
+  const desc = 'a 10-year-old persimmon tree, a single gray-brown trunk about 15 cm thick';
+  it('밑동은 두 번 다 strong 일 때만 탈락(한 번은 곧은 묘목에도 나왔다)', () => {
+    const one = mergeTreeObs([{ flare: 'slight', stems: 1 }, { flare: 'strong', stems: 1 }]);
+    expect(treeRefVerdict(one, desc)).toBeNull();
+    const two = mergeTreeObs([{ flare: 'strong', stems: 1 }, { flare: 'strong', stems: 1 }]);
+    expect(treeRefVerdict(two, desc)).toContain('퍼진 뿌리');
+  });
+  it('slight 는 통과, 잎·배경 지적은 두 번 다일 때만', () => {
+    const m = mergeTreeObs([{ flare: 'slight', stems: 1, background: 'scene', trees: 1, leafType: 'wrong' }, { flare: 'slight', stems: 1, background: 'white', trees: 1, leafType: 'ok' }]);
+    expect(treeRefVerdict(m, desc)).toBeNull();
+    const w = mergeTreeObs([{ flare: 'none', leafType: 'wrong', note: '겹잎' }, { flare: 'none', leafType: 'wrong' }]);
+    expect(treeRefVerdict(w, desc)).toContain('잎 모양');
+  });
+  it('외줄기 나무에 줄기 둘은 탈락, 관목은 괜찮다', () => {
+    expect(treeRefVerdict({ flare: 'none', stems: 2 }, desc)).toContain('줄기 2개');
+    expect(treeRefVerdict({ flare: 'none', stems: 3 }, 'a 3-year-old multi-stem shrub')).toBeNull();
   });
 });
