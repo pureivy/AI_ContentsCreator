@@ -45,6 +45,10 @@ export interface WebtoonJob {
   failedStage?: WebtoonStage | 'registering';
   /** 시험 실행 — 텔레그램 검토 알림을 보내지 않는다. */
   quiet?: boolean;
+  /** 이야기 구조(2026-11-12) — 'lore' 수종 전설·꽃말·유래 액자 이야기(길이는 작가가 고름), 'why' 종전 "왜" 구조(12장면). 없으면 'why'(옛 작업). */
+  story?: 'lore' | 'why';
+  /** 이야기 모드에서 이야기 자료가 빈약해 "왜" 구조로 넘어간 사유. */
+  storyNote?: string;
   /** 그림 검수(2026-11-09) — 수종·나이 비전 검수에서 자동 다시 그리기 뒤에도 남은 문제. 비면 이상 없음. */
   drawQa?: string[];
   createdTs: string;
@@ -64,13 +68,13 @@ export class WebtoonStore {
       console.error(`[저장소] 웹툰(webtoon) 저장 실패 — ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  create(input: { pieceId: string; topic: string; keyword?: string; project?: string; quiet?: boolean }): WebtoonJob {
+  create(input: { pieceId: string; topic: string; keyword?: string; project?: string; quiet?: boolean; story?: 'lore' | 'why' }): WebtoonJob {
     const now = new Date().toISOString();
     const id = genId('webtoon');
     const j: WebtoonJob = {
       id, brand: activeBrandSlug() || undefined, pieceId: input.pieceId, topic: input.topic.trim(),
       ...(input.keyword ? { keyword: input.keyword } : {}), project: input.project || id,
-      ...(input.quiet ? { quiet: true } : {}), stage: 'writing', createdTs: now, updatedTs: now,
+      ...(input.quiet ? { quiet: true } : {}), ...(input.story ? { story: input.story } : {}), stage: 'writing', createdTs: now, updatedTs: now,
     };
     this.items.set(id, j);
     this.persist();

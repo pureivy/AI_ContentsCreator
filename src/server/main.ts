@@ -3165,16 +3165,16 @@ function webtoonListHandler(c: Context): Response {
   const pieces = pieceStore().list().filter((p) => p.stage === 'published' && p.runId && (p.brand ?? undefined) === brand)
     .sort((a, b) => (b.publishedTs ?? '').localeCompare(a.publishedTs ?? '')).slice(0, 30)
     .map((p) => ({ id: p.id, title: p.title, publishedTs: p.publishedTs }));
-  return c.json({ enabled: CONFIG.webtoonShorts, busy: webtoonBusy(), jobs, pieces });
+  return c.json({ enabled: CONFIG.webtoonShorts, busy: webtoonBusy(), story: CONFIG.webtoonStory, jobs, pieces });
 }
 function webtoonAct(c: Context, r: { ok: true } | { ok: false; status: 404 | 409 | 422; error: string }): Response {
   return r.ok ? c.json({ ok: true }, 202) : c.json({ error: r.error }, r.status);
 }
 app.get('/api/webtoon', webtoonListHandler);
 app.post('/api/webtoon/run', async (c) => {
-  const b = await c.req.json().catch(() => ({})) as { pieceId?: unknown; project?: unknown; quiet?: unknown };
+  const b = await c.req.json().catch(() => ({})) as { pieceId?: unknown; project?: unknown; quiet?: unknown; story?: unknown };
   if (typeof b.pieceId !== 'string' || !/^piece_[\w-]+$/.test(b.pieceId)) return c.json({ error: '블로그 글을 고르세요' }, 422);
-  const r = beginWebtoon({ pieceId: b.pieceId, ...(typeof b.project === 'string' && b.project ? { project: b.project } : {}), ...(b.quiet === true ? { quiet: true } : {}) });
+  const r = beginWebtoon({ pieceId: b.pieceId, ...(typeof b.project === 'string' && b.project ? { project: b.project } : {}), ...(b.quiet === true ? { quiet: true } : {}), ...(b.story === 'lore' || b.story === 'why' ? { story: b.story } : {}) });
   return r.ok ? c.json({ ok: true, id: r.id }, 202) : c.json({ error: r.error }, r.status);
 });
 app.get('/api/webtoon/:id', (c) => {

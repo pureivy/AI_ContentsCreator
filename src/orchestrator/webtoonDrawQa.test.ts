@@ -107,4 +107,14 @@ describe('장면 줄기 관찰 판정', () => {
     expect(trunkVerdict([{ trunk: 'forearm_calf', flare: 'strong' }, { trunk: 'forearm_calf', flare: 'slight' }], want)).toBeNull();
     expect(trunkVerdict([{ trunk: 'torso', visible: false }, { trunk: 'torso', visible: false }], want)).toBeNull();
   });
+
+  it('전설 장면은 현대 한국 마당 기준 대신 옛 시대 기준(이야기 모드 2026-11-12)', () => {
+    const m = sceneMusts({ scenes: [
+      { id: 's01', image: 'she stands in the nursery yard' },
+      { id: 's02', image: 'a maiden in a Joseon village yard', legend: true },
+    ] });
+    expect(m[0]!.not.join(' ')).toContain('한국이 아닌 배경');
+    expect(m[1]!.not.join(' ')).not.toContain('한국이 아닌 배경');
+    expect(m[1]!.not.join(' ')).toContain('현대 건물');
+  });
 });

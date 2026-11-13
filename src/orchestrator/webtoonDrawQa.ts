@@ -85,7 +85,9 @@ export function sceneMusts(s: WtShotlist, stakeKey?: string): Array<{ show: stri
   return s.scenes.map((sc) => {
     const img = String(sc.image ?? '');
     const not: string[] = [];
-    if (OUTDOOR.test(img)) not.push('한국이 아닌 배경 — 판자 울타리, 일본식 집·툇마루, 서양 교외 주택(배경은 한국 시골: 돌담·블록담, 함석·기와 지붕 단층집, 장독대)');
+    // 전설 장면(이야기 모드 2026-11-12)은 전설의 시대·장소가 배경이다 — 현대 한국 시골 기준으로 탈락시키지 않는다.
+    if ((sc as { legend?: boolean }).legend) not.push('현대 건물·현대 옷·현대 물건(전설 속 옛 시대 장면)');
+    else if (OUTDOOR.test(img)) not.push('한국이 아닌 배경 — 판자 울타리, 일본식 집·툇마루, 서양 교외 주택(배경은 한국 시골: 돌담·블록담, 함석·기와 지붕 단층집, 장독대)');
     if ((stakeKey && (sc.props ?? []).includes(stakeKey)) || /\bstake\b/i.test(img)) not.push('네모난 각목·대패질한 나무 기둥 지주(지주는 엄지 굵기의 둥근 초록 피복 쇠 지주대나 대나무)');
     not.push('글자·숫자·간판·화살표 글씨');
     return { show: [], not };

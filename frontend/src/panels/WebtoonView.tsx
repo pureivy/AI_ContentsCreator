@@ -52,9 +52,10 @@ function JobRow({ j, onChanged, pub }: { j: WebtoonJob; onChanged: () => void; p
         <span className="muted" style={{ marginLeft: "auto" }}>{fmtWhen(j.createdTs)}</span>
       </div>
       <p className="muted" style={{ marginTop: 6 }}>
-        원문: {j.topic}
+        {j.story === "lore" ? "수종 이야기 · " : ""}원문: {j.topic}
         {(wall.writing || wall.drawing || wall.producing) ? ` · 걸린 시간 ${[wall.writing && `장면 ${fmtMin(wall.writing)}`, wall.drawing && `그림 ${fmtMin(wall.drawing)}`, wall.producing && `영상 ${fmtMin(wall.producing)}`].filter(Boolean).join(" · ")}` : ""}
       </p>
+      {j.storyNote && <p className="muted" style={{ marginTop: 6 }}>{j.storyNote}</p>}
       {fg && fg.status !== "pass" && (
         <div className="muted" style={{ marginTop: 6, color: fg.status === "hold" ? "var(--con)" : undefined }}>
           {fg.status === "hold" ? `원문 대조 — 확인 필요 ${fg.unsupported.length}건(발행 때 한 번 더 확인)` : "원문 대조 판정 실패 — 낭독 문장을 직접 확인하세요"}
@@ -123,6 +124,7 @@ function JobRow({ j, onChanged, pub }: { j: WebtoonJob; onChanged: () => void; p
 export default function WebtoonSection() {
   const [data, setData] = useState<WebtoonList | null>(null);
   const [piece, setPiece] = useState("");
+  const [story, setStory] = useState<"" | "lore" | "why">(""); // 비면 서버 기본(WEBTOON_STORY)
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [shorts, setShorts] = useState<Map<string, ShortsInfo>>(new Map());
@@ -146,7 +148,7 @@ export default function WebtoonSection() {
   const start = async () => {
     if (!piece) return;
     setBusy(true); setErr("");
-    const r = await runWebtoon(piece);
+    const r = await runWebtoon(piece, story || data?.story);
     setBusy(false);
     if (r.ok) { setPiece(""); load(); } else setErr(r.error || "시작 실패");
   };
@@ -160,6 +162,11 @@ export default function WebtoonSection() {
           <select value={piece} onChange={(e) => setPiece(e.target.value)} disabled={!data.enabled || busy} style={{ minWidth: 280, maxWidth: "100%" }}>
             <option value="">발행된 블로그 글 고르기…</option>
             {data.pieces.map((p) => <option key={p.id} value={p.id}>{p.title}{p.publishedTs ? ` (${fmtWhen(p.publishedTs)})` : ""}</option>)}
+          </select>
+          <select value={story || data.story || "lore"} onChange={(e) => setStory(e.target.value as "lore" | "why")} disabled={!data.enabled || busy}
+            title="이야기 구조 — 수종 이야기는 전설·꽃말·유래를 액자 이야기로(길이는 내용에 맞게 약 50~95초), 왜 구조는 종전 12장면">
+            <option value="lore">수종 이야기(전설·꽃말·유래)</option>
+            <option value="why">왜 구조(재배 이유, 12장면)</option>
           </select>
           <button className="btn start" disabled={!data.enabled || busy || !piece || data.busy > 0} onClick={start}>
             {busy ? "시작 중…" : data.busy > 0 ? "다른 작업 도는 중" : "웹툰 만들기"}

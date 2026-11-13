@@ -127,4 +127,11 @@ describe('anchorScenes(2026-11-09 그림 검수)', () => {
     expect(v.scenes[0]!.image).toContain('climbing vine');
     expect(v.scenes[0]!.image).not.toContain('sapling');
   });
+  it('전설 장면엔 학명만 — 어린 묘목 문구 없음(이야기 모드 2026-11-12)', async () => {
+    const { anchorScenes } = await import('./webtoonShorts');
+    const sl = { id: 'x', scenes: [{ id: 's01', narration: 'a', image: 'an old grove', legend: true }, { id: 's02', narration: 'b', image: 'a sapling' }] };
+    const r = anchorScenes(sl, ['s01', 's02'], 'Castanea crenata', true);
+    expect(r.scenes[0]!.image).toBe('an old grove Botanically accurate Castanea crenata.');
+    expect(r.scenes[1]!.image).toContain('young sapling');
+  });
 });

@@ -47,13 +47,14 @@ export function shortMarkerReady(dir = CONFIG.shortMarkerDir): string | null {
 
 export function projectDir(project: string, dir = CONFIG.shortMarkerDir): string { return path.join(dir, 'projects', project); }
 
-async function runSm(mod: string, args: string[], o: { signal?: AbortSignal; onLine?: (l: string) => void }): Promise<SmResult> {
+async function runSm(mod: string, args: string[], o: { timeoutMin?: number; signal?: AbortSignal; onLine?: (l: string) => void }): Promise<SmResult> {
+  const limitMin = Math.max(CONFIG.webtoonTimeoutMin, o.timeoutMin ?? 0);
   const dir = CONFIG.shortMarkerDir;
   const bad = shortMarkerReady(dir);
   if (bad) return { ok: false, code: 1, error: bad };
   let buf = ''; let all = '';
   const r = await runProc('python3', ['-m', `pipeline.${mod}`, ...args, '--json'], {
-    cwd: dir, timeoutMs: CONFIG.webtoonTimeoutMin * 60_000,
+    cwd: dir, timeoutMs: limitMin * 60_000,
     // 허용 목록 환경(롱폼 장면 세션과 같은 규약) — .env 의 텔레그램·네이버·유튜브 토큰을 SHORT_marker 와 그 claude -p 에 넘기지 않는다.
     // claude 구독 로그인은 HOME·USER(키체인)로 찾는다. 런처 축소 PATH 는 보강한다.
     env: { ...sceneAgentEnv(process.env), PATH: cliSearchPath(), PYTHONUNBUFFERED: '1', ...(process.env.COMFY_HOST ? { COMFY_HOST: process.env.COMFY_HOST } : {}) },
@@ -65,25 +66,27 @@ async function runSm(mod: string, args: string[], o: { signal?: AbortSignal; onL
     },
   });
   const res = parseSmResult(all);
-  if (r.aborted) return { ok: false, code: o.signal?.aborted ? 1 : 4, error: o.signal?.aborted ? '취소됨' : `시간 초과(${CONFIG.webtoonTimeoutMin}분)` };
+  if (r.aborted) return { ok: false, code: o.signal?.aborted ? 1 : 4, error: o.signal?.aborted ? '취소됨' : `시간 초과(${limitMin}분)` };
   if (res) return res;
   return { ok: false, code: r.code || 1, error: `결과 줄 없음(exit ${r.code}) ${r.stderr.slice(-300)}` };
 }
 
 /** 장면 목록 쓰기 — 원문 블로그를 파일로 넘긴다(SHORT_marker 가 원문 사실만 쓰게).
  *  장면 영상은 기본으로 모든 장면(사장님 2026-11-05) — maxI2v 를 줄 때만 상한을 건다. */
-export function writeShotlist(a: { topic: string; project: string; sourceFile: string; scenes?: number; maxI2v?: number; force?: boolean; signal?: AbortSignal; onLine?: (l: string) => void }): Promise<SmResult> {
+export function writeShotlist(a: { topic: string; project: string; sourceFile: string; scenes?: number; maxI2v?: number; story?: 'lore' | 'why'; force?: boolean; signal?: AbortSignal; onLine?: (l: string) => void }): Promise<SmResult> {
   // 12장면(2026-11-10 사장님 — 참고 쇼츠처럼 속도감: 장면당 약 2.5초, 낭독 짧게). 종전 9.
+  // 이야기 모드(2026-11-12)는 장면 수를 작가가 16~28 안에서 고른다(30초 제한 없음) — --scenes 는 무시된다.
   const args = [a.topic, '--id', a.project, '--source', a.sourceFile, '--scenes', String(a.scenes ?? 12)];
+  if (a.story === 'lore') args.push('--mode', 'lore');
   if (a.maxI2v !== undefined) args.push('--max-i2v', String(a.maxI2v));
   if (a.force) args.push('--force');
   return runSm('write_shotlist', args, { ...(a.signal ? { signal: a.signal } : {}), ...(a.onLine ? { onLine: a.onLine } : {}) });
 }
 
 /** 그림만(검토용) 또는 전체(TTS·BGM·핵심 장면 영상·렌더). 캐시 덕분에 다시 부르면 바뀐 것만 만든다. */
-export function produce(a: { project: string; imagesOnly?: boolean; refsOnly?: boolean; signal?: AbortSignal; onLine?: (l: string) => void }): Promise<SmResult> {
+export function produce(a: { project: string; imagesOnly?: boolean; refsOnly?: boolean; timeoutMin?: number; signal?: AbortSignal; onLine?: (l: string) => void }): Promise<SmResult> {
   const args = [path.join('projects', a.project, 'shotlist.json')];
   if (a.imagesOnly) args.push('--images-only');
   if (a.refsOnly) args.push('--refs-only'); // 참조 그림만(2026-11-10 — 장면보다 먼저 검수)
-  return runSm('produce', args, { ...(a.signal ? { signal: a.signal } : {}), ...(a.onLine ? { onLine: a.onLine } : {}) });
+  return runSm('produce', args, { ...(a.timeoutMin ? { timeoutMin: a.timeoutMin } : {}), ...(a.signal ? { signal: a.signal } : {}), ...(a.onLine ? { onLine: a.onLine } : {}) });
 }

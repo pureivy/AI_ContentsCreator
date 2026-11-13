@@ -1299,9 +1299,9 @@ export interface WebtoonJob {
   drawQa?: string[];
   redraws?: Record<string, number>; shortId?: string; durationSec?: number;
   wallSec?: { writing?: number; drawing?: number; producing?: number };
-  log?: string[]; error?: string; quiet?: boolean; createdTs: string; updatedTs: string;
+  log?: string[]; error?: string; quiet?: boolean; story?: "lore" | "why"; storyNote?: string; createdTs: string; updatedTs: string;
 }
-export interface WebtoonList { enabled: boolean; busy: number; jobs: WebtoonJob[]; pieces: Array<{ id: string; title: string; publishedTs?: string }> }
+export interface WebtoonList { enabled: boolean; busy: number; story?: "lore" | "why"; jobs: WebtoonJob[]; pieces: Array<{ id: string; title: string; publishedTs?: string }> }
 export async function fetchWebtoon(): Promise<WebtoonList | null> {
   try { const r = await fetch("/api/webtoon"); return r.ok ? await r.json() as WebtoonList : null; } catch { return null; }
 }
@@ -1312,7 +1312,7 @@ async function webtoonPost(url: string, body?: unknown): Promise<{ ok: boolean; 
     return r.ok ? { ok: true, id: j.id } : { ok: false, error: j.error || `HTTP ${r.status}` };
   } catch { return { ok: false, error: "network" }; }
 }
-export const runWebtoon = (pieceId: string) => webtoonPost("/api/webtoon/run", { pieceId });
+export const runWebtoon = (pieceId: string, story?: "lore" | "why") => webtoonPost("/api/webtoon/run", { pieceId, ...(story ? { story } : {}) });
 export const approveWebtoon = (id: string) => webtoonPost(`/api/webtoon/${id}/approve`);
 export const resumeWebtoon = (id: string) => webtoonPost(`/api/webtoon/${id}/resume`);
 export const cancelWebtoon = (id: string) => webtoonPost(`/api/webtoon/${id}/cancel`);

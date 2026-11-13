@@ -28,6 +28,8 @@ import { qaSceneImages } from './shortsSceneQa';
 import { englishFixes, findProp, fixProp, fixScenes, expectedTrunkStep, judgeRef, judgeTreeConsistency, observeTrunk, trunkVerdict, pinTreeSize, sceneMusts, STAKE_PROP, summarizeDrawQa, TREE_PROP, treeAgeCriterion, type WtShotlist } from './webtoonDrawQa';
 import { findSpecies, speciesAnchor, isYoungHero, speciesRefPhotos } from '../content/species';
 import { parseTreeAge, treeGroup } from '../content/treeAgeSize';
+import { collectLore, loreMarkdown, type LoreDossier } from '../content/webtoonLore';
+import { stdModel } from './visionCommon';
 import { produce, projectDir, SM_EXIT_TEXT, shortMarkerReady, writeShotlist, type SmResult } from '../tools/shortMarker';
 
 const execFileP = promisify(execFile);
@@ -66,7 +68,9 @@ export function anchorScenes(s: Shotlist, ids: readonly string[], latin: string,
     ...s,
     scenes: s.scenes.map((sc) => {
       const cur = String(sc.image ?? '');
-      return ids.includes(sc.id) && !cur.includes(tag) ? { ...sc, image: `${cur} ${tag}`.trim() } : sc;
+      // 전설 장면(이야기 모드 2026-11-12)은 옛날 나무라 '어린 묘목' 기준을 붙이지 않는다 — 밤나무 편에서 숲 장면까지 묘목으로 고쳐 그렸다.
+      const t = (sc as { legend?: boolean }).legend ? `Botanically accurate ${latin}.` : tag;
+      return ids.includes(sc.id) && !cur.includes(t) ? { ...sc, image: `${cur} ${t}`.trim() } : sc;
     }),
   };
 }
@@ -146,9 +150,12 @@ async function draftAndDraw(id: string, signal: AbortSignal, say: (l: string) =>
     store.update(id, { stage: 'writing', error: undefined });
     const dir = jobDir(id); fs.mkdirSync(dir, { recursive: true });
     const sourceFile = path.join(dir, 'source.md');
-    fs.writeFileSync(sourceFile, src.body, 'utf-8');
+    // 이야기 모드(2026-11-12) — 수종 전설·꽃말·유래 자료(출처 있는 것만)를 앞에, 블로그 본문을 뒤에. 빈약하면 "왜" 구조로.
+    const lore = job.story === 'lore' ? await loreSource(id, signal, say) : null;
+    job = store.get(id)!;
+    fs.writeFileSync(sourceFile, lore ? `${lore}\n\n# 블로그 글(같은 수종 — 참고)\n${src.body.slice(0, 6000)}` : src.body, 'utf-8');
     const t0 = Date.now();
-    const r = await writeShotlist({ topic: job.topic, project: job.project, sourceFile, signal, onLine: say, force: rewrite || fs.existsSync(path.join(projectDir(job.project), 'shotlist.json')) });
+    const r = await writeShotlist({ topic: job.topic, project: job.project, sourceFile, ...(lore ? { story: 'lore' as const } : {}), signal, onLine: say, force: rewrite || fs.existsSync(path.join(projectDir(job.project), 'shotlist.json')) });
     if (!r.ok) throw new Error(`장면 목록 — ${fail(r)}`);
     sl = readShotlist(job.project);
     if (!sl) throw new Error('장면 목록 파일을 읽을 수 없습니다');
@@ -172,7 +179,9 @@ async function draftAndDraw(id: string, signal: AbortSignal, say: (l: string) =>
   // 판정 실패는 'error'(발행은 막지 않되 검토에 '수동 확인'으로 보인다). 막는 건 발행 단계의 확인 한 번(shortsFactHoldBlockReason).
   // 훅은 제목·캡션 첫 줄이 된다 — 낭독과 함께 대조한다(1번 항목).
   const texts = [...(sl.hook ? [`(제목) ${sl.hook}`] : []), ...scenes.map((s) => s.narration)];
-  const issues = CONFIG.factGate ? await parityIssuesChecked('웹툰 숏폼 제목·낭독(장면 내레이션)', texts, src.body, signal) : [];
+  // 원문 = 작가가 받은 그 파일(이야기 모드면 이야기 자료 + 블로그). 옛 작업은 파일이 없거나 본문과 같다.
+  const evidence = (() => { try { return fs.readFileSync(path.join(jobDir(id), 'source.md'), 'utf-8'); } catch { return src.body; } })();
+  const issues = CONFIG.factGate ? await parityIssuesChecked('웹툰 숏폼 제목·낭독(장면 내레이션)', texts, evidence, signal) : [];
   const factGate: FactGateInfo = issues ? parityToInfo(issues) : { status: 'error', unsupported: [], contradicted: [], checkedTs: new Date().toISOString() };
   say(`원문 대조 — ${factGate.status === 'pass' ? '이상 없음' : factGate.status === 'hold' ? `확인 필요 ${factGate.unsupported.length}건` : '판정 실패(수동 확인)'}`);
   if (signal.aborted) throw new Error('취소됨');
@@ -258,7 +267,8 @@ async function drawQa(id: string, signal: AbortSignal, say: (l: string) => void,
         scenePrompts: shot.scenes.map((sc) => String(sc.image ?? '').replace(/\s*Must fix: .*$/s, '')),
         sceneHints: shot.scenes.map((sc) => sc.narration), preset: 'webtoon', signal, checkOnly: true, medium: 'illustration',
         sceneMust: sceneMusts(shot as WtShotlist, stake?.key),
-        ...(known ? { subject: speciesAnchor(known, { young }), subjectLatin: known.latin } : {}),
+        // 전설 장면이 있으면(이야기 모드) 수종만 보고 나이는 묻지 않는다 — 현재 묘목 크기는 아래 관찰값(나무 소품 장면만)이 본다.
+        ...(known ? { subject: speciesAnchor(known, { young: young && !shot.scenes.some((sc) => (sc as { legend?: boolean }).legend) }), subjectLatin: known.latin } : {}),
         // 나이·주인공 나무 크기는 공용 판정에서 빼고 아래 관찰값(observeTrunk)으로 본다(2026-11-11 — 종아리~허벅지 경계를 15건 중 9건 탈락).
       });
       const reasons: Record<string, string> = {};
@@ -332,8 +342,37 @@ async function drawQa(id: string, signal: AbortSignal, say: (l: string) => void,
   }
 }
 
+/**
+ * 이야기 자료(2026-11-12) — 작업 폴더 lore.json 이 있으면 그대로(이어서 만들기·다시 쓰기에 다시 검색하지 않는다), 없으면 모은다.
+ * 수종을 못 찾거나 자료가 빈약하면 null — 호출부가 "왜" 구조로 쓴다(지어낸 전설 금지). 사유는 작업 기록 storyNote 에 남긴다.
+ */
+async function loreSource(id: string, signal: AbortSignal, say: (l: string) => void): Promise<string | null> {
+  const job = webtoonStore().get(id)!;
+  const file = path.join(jobDir(id), 'lore.json');
+  let d: LoreDossier | null = null;
+  try { d = JSON.parse(fs.readFileSync(file, 'utf-8')) as LoreDossier; } catch { /* 처음 */ }
+  if (!d) {
+    const sp = findSpecies(`${job.keyword ?? ''} ${job.topic}`);
+    if (!sp) {
+      webtoonStore().update(id, { story: 'why', storyNote: '수종을 찾지 못해 "왜" 구조로 만듦' });
+      say('이야기 자료 — 수종을 찾지 못해 "왜" 구조로 만듭니다');
+      return null;
+    }
+    say(`이야기 자료 — ${sp.name} 전설·꽃말·유래 검색`);
+    d = await collectLore({ name: sp.name, ...(sp.aliases?.length ? { aliases: sp.aliases } : {}), model: stdModel(), signal });
+    if (signal.aborted) throw new Error('취소됨');
+    if (d.status !== 'error') fs.writeFileSync(file, JSON.stringify(d, null, 2), 'utf-8');
+  }
+  say(`이야기 자료 — 전설 ${d.legends.length}편 · 이야기 사실 ${d.facts.length}건${d.status === 'ok' ? '' : ` (${d.status === 'thin' ? '빈약' : `실패: ${d.error ?? ''}`})`}`);
+  if (d.status !== 'ok') {
+    webtoonStore().update(id, { story: 'why', storyNote: d.status === 'thin' ? `${d.species} 이야기 자료가 빈약해(전설 0·사실 ${d.facts.length}건) "왜" 구조로 만듦` : `이야기 자료 수집 실패(${(d.error ?? '').slice(0, 80)}) — "왜" 구조로 만듦` });
+    return null;
+  }
+  return loreMarkdown(d);
+}
+
 /** 새 작업 시작 — 202 용. project 를 주면 그 SHORT_marker 프로젝트(장면 목록이 이미 있으면 그대로)로 — 시험용. */
-export function beginWebtoon(a: { pieceId: string; project?: string; quiet?: boolean }): { ok: true; id: string } | { ok: false; status: 409 | 422; error: string } {
+export function beginWebtoon(a: { pieceId: string; project?: string; quiet?: boolean; story?: 'lore' | 'why' }): { ok: true; id: string } | { ok: false; status: 409 | 422; error: string } {
   if (!CONFIG.webtoonShorts) return { ok: false, status: 409, error: '웹툰 숏폼이 꺼져 있습니다(WEBTOON_SHORTS)' };
   const bad = shortMarkerReady();
   if (bad) return { ok: false, status: 422, error: bad };
@@ -341,7 +380,7 @@ export function beginWebtoon(a: { pieceId: string; project?: string; quiet?: boo
   const src = sourceBodyFor(a.pieceId);
   if ('error' in src) return { ok: false, status: 422, error: src.error };
   if (a.project && !/^[\w-]{1,64}$/.test(a.project)) return { ok: false, status: 422, error: '프로젝트 이름은 영문·숫자·_- 만' };
-  const job = webtoonStore().create({ pieceId: a.pieceId, topic: src.topic, ...(src.keyword ? { keyword: src.keyword } : {}), ...(a.project ? { project: a.project } : {}), ...(a.quiet ? { quiet: true } : {}) });
+  const job = webtoonStore().create({ pieceId: a.pieceId, topic: src.topic, ...(src.keyword ? { keyword: src.keyword } : {}), ...(a.project ? { project: a.project } : {}), ...(a.quiet ? { quiet: true } : {}), story: a.story ?? CONFIG.webtoonStory });
   console.log(`[웹툰] 시작 — ${src.topic.slice(0, 40)} (${job.id}${a.project ? ` · 프로젝트 ${a.project}` : ''})`);
   runStage(job.id, (signal, say) => draftAndDraw(job.id, signal, say));
   return { ok: true, id: job.id };
@@ -403,11 +442,14 @@ export function notifyWebtoonReview(id: string, only?: readonly string[]): void 
     all.map((s, i) => `${i + 1}. ${s.speaker === 'mentor' ? '(사장님) ' : ''}${escapeHtml(s.narration)}`).join('\n'),
     fact,
     draw,
-    `사진 순서가 장면 번호입니다. 승인하면 장면 영상을 만듭니다(약 45분~1시간).\n제작실 → 웹툰 탭: ${studioBase()}/`,
+    `${job.storyNote ? `${escapeHtml(job.storyNote)}\n` : ''}사진 순서가 장면 번호입니다. 승인하면 장면 영상을 만듭니다(약 ${Math.max(45, Math.round(all.length * 5.5 / 10) * 10)}분).\n제작실 → 웹툰 탭: ${studioBase()}/`,
   ].filter(Boolean).join('\n\n');
   const buttons = [[{ text: '✅ 승인 — 영상 만들기', callback_data: `wa:${id}` }, { text: '✏️ 장면 다시 그리기', callback_data: `wr:${id}` }]];
   void (async () => {
-    if (files.length) await sendTelegramPhotos(files.slice(0, 10), `${head} — ${title}`);
+    // 텔레그램 묶음은 10장까지 — 이야기 모드는 16~28장면이라 10장씩 나눠 보낸다(2026-11-12).
+    for (let k = 0; k < files.length; k += 10) {
+      await sendTelegramPhotos(files.slice(k, k + 10), `${head} — ${title}${files.length > 10 ? ` (${k + 1}~${Math.min(files.length, k + 10)})` : ''}`);
+    }
     await sendTelegramHtml(body, buttons);
   })().catch((e: unknown) => console.log(`[웹툰] 그림 확인 알림 실패(무해) — ${e instanceof Error ? e.message.slice(0, 80) : e}`));
 }
@@ -421,7 +463,9 @@ export function approveWebtoon(id: string): Act {
   runStage(id, async (signal, say) => {
     const t0 = Date.now();
     await ensureTitleArt(id, say, signal);
-    const r = await produce({ project: job.project, signal, onLine: say });
+    // 장면 수에 비례한 시간 제한(2026-11-12 이야기 모드 16~28장면 — 장면 영상 하나에 약 5~6분, 120분 고정이면 20장면 안팎에서 끊긴다).
+    const n = readShotlist(job.project)?.scenes?.length ?? 12;
+    const r = await produce({ project: job.project, timeoutMin: Math.min(600, n * 8 + 40), signal, onLine: say });
     if (!r.ok || !r.mp4) throw new Error(`영상 — ${fail(r)}`);
     const cur = webtoonStore().get(id)!;
     webtoonStore().update(id, { wallSec: { ...cur.wallSec, producing: Math.round((Date.now() - t0) / 1000) }, ...(r.duration_sec ? { durationSec: r.duration_sec } : {}) });
