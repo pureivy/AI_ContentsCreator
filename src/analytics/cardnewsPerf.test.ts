@@ -52,3 +52,14 @@ describe('cardnewsPerfDue', () => {
     expect(cardnewsPerfDue({ igMediaId: 'm', publishedTs: at(30) }, now, 7)).toBe(false);
   });
 });
+
+describe('holdCumulativeViews — 메타가 누적 조회만 0 으로 돌려줄 때(2026-11-13)', () => {
+  it('직전의 절반 미만이면 직전 값 유지, 아니면 새 값', async () => {
+    const { holdCumulativeViews } = await import('./performance');
+    expect(holdCumulativeViews(22632, 0)).toEqual({ views: 22632, held: true });
+    expect(holdCumulativeViews(22632, 23674)).toEqual({ views: 23674, held: false });
+    expect(holdCumulativeViews(108, 100)).toEqual({ views: 100, held: false });
+    expect(holdCumulativeViews(null, 0)).toEqual({ views: 0, held: false });
+    expect(holdCumulativeViews(0, 5)).toEqual({ views: 5, held: false });
+  });
+});

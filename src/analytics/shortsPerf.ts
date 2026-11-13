@@ -8,7 +8,7 @@
 import { CONFIG } from '../config';
 import { getSecret, getMetaAccount } from '../secrets/store';
 import { fetchTimeout, fetchTimeoutRetry, fetchErrorDetail } from '../util/fetch';
-import { appendMetrics, readMetrics, topInflow, type MetricSample, type SearchInflow } from './performance';
+import { appendMetrics, holdCumulativeViews, lastViews, readMetrics, topInflow, type MetricSample, type SearchInflow } from './performance';
 import { shortsStore, type Shorts } from '../content/shorts';
 import { isSafeBrandSlug, activeBrandSlug, getBrand } from '../content/brand';
 import { llmWikiFor } from '../wiki/llmwiki';
@@ -402,9 +402,11 @@ export async function syncShortsMetaPerformance(opts: { force?: boolean } = {}):
             const r = await fetchTimeoutRetry(`${GRAPH}/${s.igReelId}/insights?metric=views,reach,likes,comments,saved,shares&access_token=${encodeURIComponent(acct.pageAccessToken)}`, {});
             if (!r.ok) throw new Error(`IG insights HTTP ${r.status}`);
             const ig = parseIgInsights(await r.json());
+            const hv = holdCumulativeViews(lastViews(s.id, 'meta:ig'), ig.views ?? 0);
+            if (hv.held) console.log('[perf-sync]', `릴스 ${s.id} IG 조회 ${ig.views ?? 0} — 직전 ${hv.views} 보다 크게 줄어 직전 값 유지(메타 일시 오류)`);
             sample = {
               measuredAt: new Date().toISOString(),
-              views: ig.views ?? 0, reach: ig.reach ?? 0, saved: ig.saved ?? 0, shares: ig.shares ?? 0,
+              views: hv.views, reach: ig.reach ?? 0, saved: ig.saved ?? 0, shares: ig.shares ?? 0,
               likes: ig.likes ?? 0, comments: ig.comments ?? 0, searchInflow: [], source: 'meta:ig',
             };
             appendMetrics(s.id, sample);

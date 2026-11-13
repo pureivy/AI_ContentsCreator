@@ -8,7 +8,7 @@ import { CONFIG } from '../config';
 import { fetchTimeout, fetchTimeoutRetry, fetchErrorDetail } from '../util/fetch';
 import { getMetaAccount } from '../secrets/store';
 import { GRAPH, FB_GRAPH } from '../tools/metaPublish';
-import { appendMetrics, readMetrics, type MetricSample } from './performance';
+import { appendMetrics, holdCumulativeViews, lastViews, readMetrics, type MetricSample } from './performance';
 import { shouldRecordMemory } from './shortsPerf';
 import { cardNewsStore, type CardNews } from '../content/cardnews';
 import { isSafeBrandSlug } from '../content/brand';
@@ -131,9 +131,11 @@ export async function syncCardnewsPerformance(opts: { force?: boolean } = {}): P
             const ir = await fetchTimeoutRetry(`${GRAPH}/${card.igMediaId}/insights?metric=views,reach,saved,shares,likes,comments&${qs}`, {});
             if (!ir.ok) throw new Error(`IG insights HTTP ${ir.status}`);
             const ig = parseIgInsights(await ir.json());
+            const hv = holdCumulativeViews(lastViews(card.id, 'meta:ig'), ig.views ?? 0);
+            if (hv.held) console.log('[perf-sync]', `카드뉴스 ${card.id} IG 조회 ${ig.views ?? 0} — 직전 ${hv.views} 보다 크게 줄어 직전 값 유지(메타 일시 오류)`);
             igSample = {
               measuredAt: new Date().toISOString(),
-              views: ig.views ?? 0, reach: ig.reach ?? 0, saved: ig.saved ?? 0, shares: ig.shares ?? 0,
+              views: hv.views, reach: ig.reach ?? 0, saved: ig.saved ?? 0, shares: ig.shares ?? 0,
               likes: ig.likes ?? 0, comments: ig.comments ?? 0, searchInflow: [], source: 'meta:ig',
             };
             appendMetrics(card.id, igSample);

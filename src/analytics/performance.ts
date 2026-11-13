@@ -45,6 +45,21 @@ export function appendMetrics(pieceId: string, sample: MetricSample): void {
     fs.appendFileSync(metricsFile(pieceId), JSON.stringify(sample) + '\n', 'utf-8');
   } catch { /* 영속 실패 무해 */ }
 }
+/**
+ * 누적 조회수 지키기(순수, 2026-11-13) — 인스타 인사이트 views 는 평생 누적이라 줄 수 없는데, 메타가 가끔 views 만 0 을
+ * 돌려준다(11-13 08:55 수집 한 번에 릴스 70편 0 · 같은 응답의 도달·좋아요는 정상, 몇 분 뒤 재조회는 정상).
+ * 직전 같은 출처 표본의 절반 미만으로 떨어지면 직전 값을 그대로 쓴다. held 면 호출부가 로그를 남긴다.
+ */
+export function holdCumulativeViews(prev: number | null | undefined, next: number): { views: number; held: boolean } {
+  if (prev && prev > 0 && next < prev * 0.5) return { views: prev, held: true };
+  return { views: next, held: false };
+}
+/** 같은 출처의 마지막 표본 조회수(없으면 null). */
+export function lastViews(pieceId: string, source: string): number | null {
+  const all = readMetrics(pieceId);
+  for (let i = all.length - 1; i >= 0; i--) if (all[i]!.source === source) return all[i]!.views;
+  return null;
+}
 export function readMetrics(pieceId: string): MetricSample[] {
   try {
     return fs.readFileSync(metricsFile(pieceId), 'utf-8').split('\n').filter(Boolean)
